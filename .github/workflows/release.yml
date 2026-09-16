@@ -46,6 +46,9 @@ jobs:
       - name: Install app
         working-directory: apps/electron
         run: npm ci
+      - name: Restore Node ABI for tests
+        working-directory: packages/database
+        run: npm rebuild better-sqlite3
       - name: Validate
         working-directory: apps/electron
         run: npm run typecheck && npm run lint && npm run test:run
