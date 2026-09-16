@@ -1,0 +1,15 @@
+node_modules/
+dist/
+out/
+coverage/
+logs/
+*.log
+.env
+.env.*
+!.env.example
+.venv*/
+__pycache__/
+*.tsbuildinfo
+.DS_Store
+/docs/assets/*-raw.png
+.playwright-cli/

@@ -1,0 +1,17 @@
+{
+  "name": "hidock-next-2",
+  "version": "2.0.0",
+  "private": true,
+  "description": "HiDock Next 2.0 — a private, local-first knowledge workspace for HiDock recordings and connected information.",
+  "license": "MIT",
+  "scripts": {
+    "install:app": "npm --prefix apps/electron ci",
+    "dev": "npm --prefix apps/electron run dev",
+    "build": "npm --prefix apps/electron run build",
+    "build:win": "npm --prefix apps/electron run build:win",
+    "typecheck": "npm --prefix apps/electron run typecheck",
+    "lint": "npm --prefix apps/electron run lint",
+    "test": "npm --prefix apps/electron run test:run"
+  }
+}
+

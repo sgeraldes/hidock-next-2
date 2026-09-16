@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            apps/electron/package-lock.json
+            packages/*/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Reject unreviewed secrets
+        shell: bash
+        run: |
+          python -m pip install detect-secrets
+          git grep -Il -e . -- . | grep -v '^.secrets.baseline$' | xargs -n 100 detect-secrets-hook --baseline .secrets.baseline
+      - name: Install and build shared packages
+        run: |
+          for n in ai-providers calendar-sync connectors connectors-slack database jensen-protocol knowledge-graph transcription; do
+            (cd "packages/$n" && npm ci --ignore-scripts && npm run build --if-present)
+          done
+          (cd packages/database && npm rebuild better-sqlite3)
+          (cd packages/knowledge-graph && npm rebuild better-sqlite3)
+      - name: Test shared packages
+        run: |
+          for n in ai-providers calendar-sync connectors connectors-slack database jensen-protocol knowledge-graph transcription; do
+            (cd "packages/$n" && npm test)
+          done
+      - name: Install app
+        working-directory: apps/electron
+        run: npm ci
+      - name: Validate
+        working-directory: apps/electron
+        run: npm run typecheck && npm run lint && npm run test:run
+      - name: Build Windows installer
+        working-directory: apps/electron
+        run: npm run build:win
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hidock-next-windows
+          path: |
+            apps/electron/dist/*-setup.exe
+            apps/electron/dist/*-setup.exe.blockmap
+            apps/electron/dist/latest.yml
+          if-no-files-found: error
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: hidock-next-windows
+          path: release-assets
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true
