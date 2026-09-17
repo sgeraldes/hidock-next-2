@@ -82,6 +82,7 @@ describe('JensenDevice (transport-agnostic core)', () => {
 
   it('USB_PRODUCT_IDS maps known models', () => {
     expect(USB_PRODUCT_IDS.H1).toBe(0xaf0c)
+    expect(USB_PRODUCT_IDS.H1_NEW).toBe(0xb00c)
     expect(USB_PRODUCT_IDS.H1E).toBe(0xb00d)
     expect(USB_PRODUCT_IDS.P1).toBe(0xb00e)
     expect(USB_PRODUCT_IDS.P1_MINI).toBe(0xaf0f)

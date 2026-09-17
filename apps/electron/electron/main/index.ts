@@ -10,6 +10,7 @@ const USB_VENDOR_IDS = [
 ]
 const USB_PRODUCT_IDS = [
   0xaf0c,  // H1
+  0xb00c,  // H1 (newer firmware/hardware PID)
   0xaf0d,  // H1E
   0xb00d,  // H1E (alternate)
   0xaf0e,  // P1
