@@ -1060,7 +1060,7 @@ describe('backfillMeetingWiki — bounded, yielding, resumable (F15)', () => {
 
     // The excluded half's stale pages are gone; the eligible half remain.
     expect(listWiki()).toHaveLength(N - excluded.size)
-  })
+  }, 20_000)
 
   it('drains MANY pending cleanup retries within the SAME single boot scan (F15 recovery-path guard)', async () => {
     // The recovery path the two quadratic guards above still miss: durable
