@@ -13,13 +13,11 @@ import {
   updateVectorStartupProgress,
 } from './vector-startup-state'
 import {
-  cacheFingerprint,
   cancelVectorCacheWrites,
   readVectorCacheAsync,
   waitForVectorCacheWrites,
   writeVectorCacheAsync,
   VECTOR_CACHE_FILENAME,
-  type CacheGroupInfo,
 } from './vector-cache'
 import {
   filterEligibleRecordingIds,
@@ -316,6 +314,21 @@ class VectorStore {
   /** Chunk buffers backing the cache-loaded Float32Array views (kept alive). */
   private cacheBuffers: Buffer[] | null = null
 
+  /**
+   * Single contiguous arena backing the DB-loaded Float32Array views, when the
+   * partition has a uniform dimension. Every document's `embedding` is a
+   * `subarray` into this, so the reference keeps it alive; dropping documents
+   * does NOT reclaim its bytes until the whole store is reloaded. That is the
+   * intended trade: one ~1 GB allocation instead of 125k fragmenting ones.
+   */
+  private partitionArena: Float32Array | null = null
+
+  /** True when this boot's embeddings are views over one contiguous arena
+   *  rather than per-row allocations (diagnostics/tests). */
+  isArenaBacked(): boolean {
+    return this.partitionArena !== null
+  }
+
   /** True when this boot's embeddings are zero-copy views over the binary
    *  cache buffer (diagnostics/tests). */
   isCacheBacked(): boolean {
@@ -349,8 +362,8 @@ class VectorStore {
   /**
    * Boot accelerator: load metadata from SQL (no blobs) + embeddings as
    * zero-copy views over the binary cache. Valid ONLY when the live table's
-   * (provider, dims, count) fingerprint matches the cache's AND every row id
-   * resolves positionally — any mutation since the cache was written falls
+   * provider count matches the cache AND every row id/provider/dimension
+   * matches during paged metadata validation — mismatches fall
    * back to the SQL load (false). Unknown-provider rows are unservable by
    * design and excluded from BOTH the cache and its fingerprint.
    */
@@ -359,31 +372,23 @@ class VectorStore {
     onProgress?: (loaded: number, total: number) => void
   ): Promise<boolean> {
     const db = getDatabase()
-    const groupRows = db.exec(
-      `SELECT embed_provider, embed_dims, COUNT(*)
-       FROM vector_embeddings
-       WHERE embed_provider = ? AND embed_dims IS NOT NULL
-       GROUP BY embed_provider, embed_dims`,
+    // Count through the provider index, without reading the multi-GB vector
+    // table for a dimensions GROUP BY. Verify dimensions per row below.
+    const countRows = db.exec(
+      'SELECT COUNT(*) FROM vector_embeddings WHERE embed_provider = ?',
       [activeProvider]
     )
-    if (groupRows.length === 0 || groupRows[0].values.length === 0) return false
-    const liveGroups: CacheGroupInfo[] = groupRows[0].values.map(([p, d, c]) => ({
-      provider: p as string,
-      dims: d as number,
-      count: c as number,
-    }))
+    const liveCount = Number(countRows[0]?.values[0]?.[0] ?? 0)
+    if (liveCount === 0) return false
 
     const cachePath = this.vectorCachePath()
     await waitForVectorCacheWrites(cachePath)
     const cache = await readVectorCacheAsync(cachePath, activeProvider)
     if (!cache) return false
-    const cachedActiveGroups = cache.groups
-      .filter((group) => group.provider === activeProvider)
-      .map(({ provider, dims, count }) => ({ provider, dims, count }))
-    if (cacheFingerprint(cachedActiveGroups) !== cacheFingerprint(liveGroups)) return false
+    if (cache.rows.length !== liveCount) return false
 
     const byId = new Map(cache.rows.map((r) => [r.id, r]))
-    const BATCH = 10000
+    const BATCH = 128
     let loaded = 0
     let afterId = ''
     let matched = 0
@@ -400,7 +405,7 @@ class VectorStore {
       for (const row of rows[0].values) {
         const id = row[0] as string
         const cached = byId.get(id)
-        if (!cached) {
+        if (!cached || cached.provider !== row[9] || cached.dims !== row[10]) {
           // Table changed between the fingerprint and the row scan — do not
           // serve a half-fresh store; fall back to the authoritative SQL load.
           this.documents.clear()
@@ -554,24 +559,101 @@ class VectorStore {
     }
   }
 
+  /**
+   * Column order for the partition load. Explicit rather than `SELECT *` so the
+   * per-row index lookup is a constant, and so adding a column to the table
+   * never silently widens what boot pulls into RAM.
+   */
+  private static readonly LOAD_COLUMNS = [
+    'id',
+    'content',
+    'embedding',
+    'meeting_id',
+    'recording_id',
+    'chunk_index',
+    'timestamp',
+    'subject',
+    'source_type',
+    'capture_id',
+    'embed_provider',
+    'embed_dims'
+  ] as const
+
   private async loadFromDatabase(
     activeProvider: string,
     onProgress?: (loaded: number, total: number) => void
   ): Promise<void> {
     const db = getDatabase()
-    const totalRes = db.exec('SELECT COUNT(*) FROM vector_embeddings WHERE embed_provider = ?', [activeProvider])
-    const total = totalRes.length > 0 ? (totalRes[0].values[0][0] as number) : 0
+    // One round trip for both numbers: the row count sizes the arena and the
+    // dimension makes every row's offset arithmetic, not a per-row allocation.
+    // MIN/MAX disagree only on a corrupt partition, which falls back below.
+    const statsRes = db.exec(
+      `SELECT COUNT(*), MIN(embed_dims), MAX(embed_dims)
+         FROM vector_embeddings WHERE embed_provider = ?`,
+      [activeProvider]
+    )
+    const stats = statsRes.length > 0 ? statsRes[0].values[0] : null
+    const total = (stats?.[0] as number | undefined) ?? 0
+    const minDims = (stats?.[1] as number | null | undefined) ?? null
+    const maxDims = (stats?.[2] as number | null | undefined) ?? null
+
+    // PERF (the 2026-09 OOM): the previous loader called blobToEmbedding per
+    // row, and that does `bytes.buffer.slice(...)` — a FRESH ArrayBuffer for
+    // every row. At 125k rows × 2048 dims that is 125k separate ~8 KB native
+    // allocations, each with malloc overhead, fragmenting the native heap. The
+    // live vectors are ~1 GB; the process was committing 8.4 GB.
+    //
+    // A uniform partition instead gets ONE contiguous arena and every document
+    // holds a `subarray` VIEW into it. Same bytes, one allocation, no
+    // fragmentation. A partition with mixed or unknown dimensions keeps the
+    // old per-row path — correctness first, and it is the rare case.
+    const uniformDims =
+      minDims !== null && maxDims !== null && minDims === maxDims && minDims > 0 ? minDims : null
+    let arena: Float32Array | null = null
+    let arenaOffset = 0
+    if (uniformDims !== null && total > 0) {
+      try {
+        arena = new Float32Array(total * uniformDims)
+        this.partitionArena = arena
+      } catch (e) {
+        // A single allocation this large can fail where many small ones would
+        // not. Degrade to the per-row path rather than failing the boot.
+        console.warn(
+          `[VectorStore] contiguous arena (${total}×${uniformDims}) allocation failed, using per-row load:`,
+          e
+        )
+        arena = null
+        this.partitionArena = null
+      }
+    }
+
+    const cols = VectorStore.LOAD_COLUMNS
+    const columnList = cols.join(', ')
+    const I = {
+      id: 0,
+      content: 1,
+      embedding: 2,
+      meetingId: 3,
+      recordingId: 4,
+      chunkIndex: 5,
+      timestamp: 6,
+      subject: 7,
+      sourceType: 8,
+      captureId: 9,
+      embedProvider: 10,
+      embedDims: 11
+    }
 
     // Batched load with event-loop yields: a single SELECT of 110k+ rows (and
     // the blob→float parse loop) blocks the main process for seconds at boot
-    // (BootScheduler SLOW-task warnings). 5k-row pages keep the UI responsive
-    // while the store fills.
-    const BATCH = 5000
+    // (BootScheduler SLOW-task warnings). Bound each page to roughly 1.5 MB
+    // for 3072-dim vectors rather than copying ~60 MB before each yield.
+    const BATCH = 128
     let loaded = 0
     let afterId = ''
     for (;;) {
       const rows = db.exec(
-        `SELECT * FROM vector_embeddings
+        `SELECT ${columnList} FROM vector_embeddings
          WHERE embed_provider = ? AND id > ?
          ORDER BY id
          LIMIT ?`,
@@ -579,39 +661,72 @@ class VectorStore {
       )
       if (rows.length === 0 || rows[0].values.length === 0) break
 
-      const columns = rows[0].columns
       for (const row of rows[0].values) {
-      const doc: Record<string, unknown> = {}
-      columns.forEach((col, i) => {
-        doc[col] = row[i]
-      })
+        // No intermediate `Record<string, unknown>` per row: the old loader
+        // built a throwaway 13-key object 125k times purely to index it by
+        // name. Fixed indices read straight off the row tuple.
+        const embedding = this.readEmbeddingInto(row[I.embedding], uniformDims, arena, arenaOffset)
+        if (embedding.usedArena) arenaOffset += uniformDims as number
 
-      const vectorDoc: VectorDocument = {
-        id: doc['id'] as string,
-        content: doc['content'] as string,
-        embedding: blobToEmbedding(doc['embedding']),
-        metadata: {
-          meetingId: doc['meeting_id'] as string | undefined,
-          recordingId: doc['recording_id'] as string | undefined,
-          chunkIndex: doc['chunk_index'] as number,
-          timestamp: doc['timestamp'] as string | undefined,
-          subject: doc['subject'] as string | undefined,
-          sourceType: (doc['source_type'] as string | undefined) || undefined,
-          captureId: (doc['capture_id'] as string | undefined) || undefined,
-          embedProvider: (doc['embed_provider'] as string | undefined) || undefined,
-          embedDims: (doc['embed_dims'] as number | undefined) || undefined
-        }
-      }
-
-        this.documents.set(vectorDoc.id, vectorDoc)
+        this.documents.set(row[I.id] as string, {
+          id: row[I.id] as string,
+          content: row[I.content] as string,
+          embedding: embedding.vector,
+          metadata: {
+            meetingId: (row[I.meetingId] as string | undefined) || undefined,
+            recordingId: (row[I.recordingId] as string | undefined) || undefined,
+            chunkIndex: row[I.chunkIndex] as number,
+            timestamp: (row[I.timestamp] as string | undefined) || undefined,
+            subject: (row[I.subject] as string | undefined) || undefined,
+            sourceType: (row[I.sourceType] as string | undefined) || undefined,
+            captureId: (row[I.captureId] as string | undefined) || undefined,
+            embedProvider: (row[I.embedProvider] as string | undefined) || undefined,
+            embedDims: (row[I.embedDims] as number | undefined) || undefined
+          }
+        })
       }
 
       loaded += rows[0].values.length
-      afterId = rows[0].values[rows[0].values.length - 1][columns.indexOf('id')] as string
+      afterId = rows[0].values[rows[0].values.length - 1][I.id] as string
       onProgress?.(Math.min(loaded, total), total)
       if (rows[0].values.length < BATCH) break
       await new Promise((resolve) => setImmediate(resolve))
     }
+  }
+
+  /**
+   * Place one stored BLOB into the partition arena and return a view over it.
+   *
+   * Falls back to the standalone per-row decode when there is no arena, when
+   * the arena is full (rows inserted after the COUNT that sized it), or when
+   * this row's byte length disagrees with the partition dimension. The caller
+   * advances the arena offset only when `usedArena` is true, so a fallback row
+   * never leaves a hole or shifts every later row.
+   */
+  private readEmbeddingInto(
+    value: unknown,
+    dims: number | null,
+    arena: Float32Array | null,
+    offset: number
+  ): { vector: number[] | Float32Array; usedArena: boolean } {
+    if (arena === null || dims === null || offset + dims > arena.length) {
+      return { vector: blobToEmbedding(value), usedArena: false }
+    }
+    const bytes =
+      value instanceof Uint8Array ? value : Buffer.isBuffer(value) ? (value as Buffer) : null
+    if (!bytes || Math.floor(bytes.byteLength / 4) !== dims) {
+      return { vector: blobToEmbedding(value), usedArena: false }
+    }
+    // Byte-wise copy into the arena, then hand back a view over it.
+    //
+    // This deliberately does NOT build a Float32Array over the source buffer:
+    // Node hands out Buffers carved from a shared pool, so `bytes.byteOffset`
+    // is rarely 4-byte aligned and `new Float32Array(buf, offset, dims)` would
+    // throw RangeError on most rows. Uint8Array has no alignment requirement,
+    // and both sides are little-endian, so the copy is byte-exact.
+    const dst = new Uint8Array(arena.buffer, arena.byteOffset + offset * 4, dims * 4)
+    dst.set(bytes.subarray(0, dims * 4))
+    return { vector: arena.subarray(offset, offset + dims), usedArena: true }
   }
 
   /**
