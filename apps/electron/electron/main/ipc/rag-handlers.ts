@@ -273,7 +273,9 @@ export function registerRAGHandlers(): void {
     async (_event, { query, limit = 5 }: { query: string; limit?: number }) => {
       const results = await vectorStore.search(query, limit)
       return results.map((r) => ({
-        content: r.document.content,
+        // search() hydrates its results; '' only if the row was deleted between
+        // the score and the read.
+        content: r.document.content ?? '',
         meetingId: r.document.metadata.meetingId,
         subject: r.document.metadata.subject,
         score: r.score
@@ -284,9 +286,17 @@ export function registerRAGHandlers(): void {
   // Get all chunks (for viewer)
   ipcMain.handle('rag:get-chunks', async () => {
     const documents = vectorStore.getAllDocuments()
+    // The index holds no chunk text any more, and this viewer shows it, so the
+    // text is read back here EXPLICITLY. This is the one caller that hydrates
+    // the whole index: on the 237k-chunk library that is ~200 MB of strings
+    // built per invocation, and the renderer then serializes all of it over
+    // IPC. It was equally expensive before, just paid once at boot and held
+    // for the whole session instead. Paginating this handler is the fix; it is
+    // out of scope for the memory work and tracked separately.
+    vectorStore.hydrateContent(documents)
     return documents.map((doc) => ({
       id: doc.id,
-      content: doc.content,
+      content: doc.content ?? '',
       meetingId: doc.metadata.meetingId,
       recordingId: doc.metadata.recordingId,
       chunkIndex: doc.metadata.chunkIndex,

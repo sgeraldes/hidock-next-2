@@ -204,6 +204,63 @@ describe('VectorStore contiguous arena', () => {
     expect(hits[0].score).toBeGreaterThan(0.9)
   })
 
+  it('does NOT keep chunk text resident after the load', async () => {
+    for (let i = 0; i < 5; i++) {
+      insertRow(`row-${i}`, 'local-onnx-embed', makeVector(i, DIMS), DIMS)
+    }
+    const store = await loadFromDb()
+    // The whole point of the change: 237k chunks' worth of strings stay in
+    // SQLite. A doc handed out by the index carries no text until hydrated.
+    for (const doc of store.getAllDocuments()) {
+      expect(doc.content).toBeUndefined()
+    }
+  })
+
+  it('hydrateContent() fills text in place and leaves deleted rows undefined', async () => {
+    insertRow('row-0', 'local-onnx-embed', makeVector(0, DIMS), DIMS)
+    insertRow('row-1', 'local-onnx-embed', makeVector(1, DIMS), DIMS)
+    const store = await loadFromDb()
+
+    // A row deleted from the table AFTER the index loaded: hydration must not
+    // throw and must not invent text for it.
+    dbInstance!.run("DELETE FROM vector_embeddings WHERE id = 'row-1'")
+
+    const docs = store.getAllDocuments()
+    const returned = store.hydrateContent(docs)
+    expect(returned).toBe(docs) // mutates in place, returns the same array
+
+    const byId = new Map(docs.map((d) => [d.id, d]))
+    expect(byId.get('row-0')!.content).toBe('content of row-0')
+    expect(byId.get('row-1')!.content).toBeUndefined()
+  })
+
+  it('search() hands back hydrated documents', async () => {
+    const aligned = new Float32Array(DIMS)
+    aligned[0] = 1
+    insertRow('row-0', 'local-onnx-embed', aligned, DIMS)
+    const store = await loadFromDb()
+
+    // Before the search the index holds no text...
+    expect(store.getAllDocuments()[0].content).toBeUndefined()
+    // ...and the caller still gets it, because search() hydrates its top-K.
+    const hits = await store.search('anything', 5)
+    expect(hits[0].document.content).toBe('content of row-0')
+  })
+
+  it('hydrates past the SQLite bind-parameter limit', async () => {
+    // One meeting's chunks can exceed SQLite's 999-parameter default, so the
+    // IN(...) is chunked. A single oversized query would throw instead.
+    const n = 1200
+    for (let i = 0; i < n; i++) {
+      insertRow(`row-${i}`, 'local-onnx-embed', makeVector(i, DIMS), DIMS)
+    }
+    const store = await loadFromDb()
+    const docs = store.hydrateContent(store.getAllDocuments())
+    expect(docs.length).toBe(n)
+    expect(docs.every((d) => typeof d.content === 'string')).toBe(true)
+    expect(docs.find((d) => d.id === 'row-1199')!.content).toBe('content of row-1199')
+  })
+
   it('ignores rows from other partitions when sizing the arena', async () => {
     insertRow('row-0', 'local-onnx-embed', makeVector(0, DIMS), DIMS)
     insertRow('row-1', 'local-onnx-embed', makeVector(1, DIMS), DIMS)

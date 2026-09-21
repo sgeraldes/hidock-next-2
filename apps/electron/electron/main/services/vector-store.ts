@@ -28,7 +28,21 @@ import { getEmbeddingsService } from './embeddings'
 
 interface VectorDocument {
   id: string
-  content: string
+  /**
+   * Chunk text. ABSENT on documents straight out of the index.
+   *
+   * The boot load holds 237,920 chunks; their text is ~98 MB on disk and ~206 MB
+   * as JS strings, resident for the whole session to serve the handful of chunks
+   * a search actually returns. It is no longer loaded: `search()`,
+   * `searchByMeeting()` and `getChunkNeighbors()` hydrate the documents they are
+   * about to hand out, and anything else asks {@link VectorStore.hydrateContent}.
+   *
+   * Optional ON PURPOSE. Making it `string` and filling in '' would let a
+   * consumer that forgot to hydrate read empty text and silently return an
+   * answer with no evidence in it. As `string | undefined`, the compiler stops
+   * at every read and forces the decision.
+   */
+  content?: string
   /** Float32Array for DB-loaded docs (zero-copy view, no 338M-value boxing);
    *  number[] for freshly embedded docs. Both are indexable array-likes. */
   embedding: number[] | Float32Array
@@ -329,6 +343,49 @@ class VectorStore {
     return this.partitionArena !== null
   }
 
+  /**
+   * Fill in `content` for the given documents, reading it from SQLite.
+   *
+   * The index holds no chunk text (see {@link VectorDocument.content}); this is
+   * how a caller about to USE documents gets it. Intended for bounded sets —
+   * a search's top-K, one meeting's chunks, a chunk's neighbours. Handing it
+   * the whole index re-materializes the ~206 MB this change removed, which is
+   * a legitimate thing to do deliberately and a bug to do by accident.
+   *
+   * Mutates the documents in place and returns the same array, so a caller can
+   * `return this.hydrateContent(results)`. A row that no longer exists (deleted
+   * between the search and this read) leaves `content` undefined rather than
+   * throwing — the caller already has to handle an absent value.
+   */
+  hydrateContent<T extends { id: string; content?: string }>(docs: T[]): T[] {
+    const missing = docs.filter((d) => d.content === undefined)
+    if (missing.length === 0) return docs
+
+    const db = getDatabase()
+    // Chunked IN(...) — SQLite's default parameter limit is 999, and a caller
+    // may legitimately pass more than that (one long meeting's chunks).
+    const CHUNK = 500
+    const text = new Map<string, string>()
+    for (let i = 0; i < missing.length; i += CHUNK) {
+      const slice = missing.slice(i, i + CHUNK)
+      const placeholders = slice.map(() => '?').join(',')
+      const rows = db.exec(
+        `SELECT id, content FROM vector_embeddings WHERE id IN (${placeholders})`,
+        slice.map((d) => d.id)
+      )
+      if (rows.length === 0) continue
+      for (const row of rows[0].values) {
+        text.set(row[0] as string, (row[1] as string | null) ?? '')
+      }
+    }
+
+    for (const doc of missing) {
+      const found = text.get(doc.id)
+      if (found !== undefined) doc.content = found
+    }
+    return docs
+  }
+
   /** True when this boot's embeddings are zero-copy views over the binary
    *  cache buffer (diagnostics/tests). */
   isCacheBacked(): boolean {
@@ -394,7 +451,9 @@ class VectorStore {
     let matched = 0
     for (;;) {
       const rows = db.exec(
-        `SELECT id, content, meeting_id, recording_id, chunk_index, timestamp, subject, source_type, capture_id, embed_provider, embed_dims
+        // `content` is NOT selected — see the VectorDocument.content docs. The
+        // cache path skipped it too and still paid for it here.
+        `SELECT id, meeting_id, recording_id, chunk_index, timestamp, subject, source_type, capture_id, embed_provider, embed_dims
          FROM vector_embeddings
          WHERE embed_provider = ? AND embed_dims IS NOT NULL AND id > ?
          ORDER BY id
@@ -405,7 +464,7 @@ class VectorStore {
       for (const row of rows[0].values) {
         const id = row[0] as string
         const cached = byId.get(id)
-        if (!cached || cached.provider !== row[9] || cached.dims !== row[10]) {
+        if (!cached || cached.provider !== row[8] || cached.dims !== row[9]) {
           // Table changed between the fingerprint and the row scan — do not
           // serve a half-fresh store; fall back to the authoritative SQL load.
           this.documents.clear()
@@ -413,16 +472,15 @@ class VectorStore {
         }
         this.documents.set(id, {
           id,
-          content: row[1] as string,
           embedding: cached.vector,
           metadata: {
-            meetingId: (row[2] as string | undefined) || undefined,
-            recordingId: (row[3] as string | undefined) || undefined,
-            chunkIndex: row[4] as number,
-            timestamp: (row[5] as string | undefined) || undefined,
-            subject: (row[6] as string | undefined) || undefined,
-            sourceType: (row[7] as string | undefined) || undefined,
-            captureId: (row[8] as string | undefined) || undefined,
+            meetingId: (row[1] as string | undefined) || undefined,
+            recordingId: (row[2] as string | undefined) || undefined,
+            chunkIndex: row[3] as number,
+            timestamp: (row[4] as string | undefined) || undefined,
+            subject: (row[5] as string | undefined) || undefined,
+            sourceType: (row[6] as string | undefined) || undefined,
+            captureId: (row[7] as string | undefined) || undefined,
             embedProvider: cached.provider,
             embedDims: cached.dims,
           },
@@ -566,7 +624,6 @@ class VectorStore {
    */
   private static readonly LOAD_COLUMNS = [
     'id',
-    'content',
     'embedding',
     'meeting_id',
     'recording_id',
@@ -629,19 +686,19 @@ class VectorStore {
 
     const cols = VectorStore.LOAD_COLUMNS
     const columnList = cols.join(', ')
+    // `content` is deliberately absent — see the VectorDocument.content docs.
     const I = {
       id: 0,
-      content: 1,
-      embedding: 2,
-      meetingId: 3,
-      recordingId: 4,
-      chunkIndex: 5,
-      timestamp: 6,
-      subject: 7,
-      sourceType: 8,
-      captureId: 9,
-      embedProvider: 10,
-      embedDims: 11
+      embedding: 1,
+      meetingId: 2,
+      recordingId: 3,
+      chunkIndex: 4,
+      timestamp: 5,
+      subject: 6,
+      sourceType: 7,
+      captureId: 8,
+      embedProvider: 9,
+      embedDims: 10
     }
 
     // Batched load with event-loop yields: a single SELECT of 110k+ rows (and
@@ -670,7 +727,6 @@ class VectorStore {
 
         this.documents.set(row[I.id] as string, {
           id: row[I.id] as string,
-          content: row[I.content] as string,
           embedding: embedding.vector,
           metadata: {
             meetingId: (row[I.meetingId] as string | undefined) || undefined,
@@ -759,7 +815,11 @@ class VectorStore {
 
     const doc: VectorDocument = {
       id,
-      content,
+      // No `content`: the in-memory index does not hold chunk text (see
+      // VectorDocument.content). Keeping it here only for freshly inserted
+      // rows would make a backfill re-accumulate exactly what the boot load
+      // stopped holding — a 125k-chunk reindex would end at the old figure.
+      // The text is in the row being written a few lines below.
       embedding,
       metadata: { ...metadata, embedProvider: partition, embedDims: embedding.length }
     }
@@ -888,7 +948,9 @@ class VectorStore {
       const id = `${chunkMeta.recordingId || 'doc'}_${i}_${partition ?? 'unknown'}_${Date.now()}`
       const doc: VectorDocument = {
         id,
-        content: chunks[i],
+        // No `content` — see addDocument. This is the path a full backfill
+        // takes, so holding the text here is exactly what would undo the
+        // change: 125k chunks reindexed would rebuild the ~206 MB.
         embedding,
         metadata: { ...chunkMeta, chunkIndex: i, embedProvider: partition, embedDims: embedding.length }
       }
@@ -1007,7 +1069,12 @@ class VectorStore {
     // Sort by score descending, then apply light diversity reranking so a few
     // near-duplicate screenshot descriptions cannot evict all meeting evidence.
     results.sort((a, b) => b.score - a.score)
-    return diversifyResults(results, topK)
+    const top = diversifyResults(results, topK)
+    // Hydrate only the survivors: topK is single digits in every caller, so
+    // this is a handful of rows read against the ~206 MB the index no longer
+    // keeps resident for all 237k chunks.
+    this.hydrateContent(top.map((r) => r.document))
+    return top
   }
 
   /**
@@ -1112,12 +1179,15 @@ class VectorStore {
       wanted.add(i - 1)
       wanted.add(i + 1)
     }
-    return this.filterEligibleDocs(
-      Array.from(this.documents.values()).filter(
-        (d) =>
-          d.metadata.recordingId === recordingId &&
-          wanted.has(d.metadata.chunkIndex) &&
-          (!providerId || d.metadata.embedProvider === providerId)
+    // Bounded by the neighbours of the chunks asked for; callers read the text.
+    return this.hydrateContent(
+      this.filterEligibleDocs(
+        Array.from(this.documents.values()).filter(
+          (d) =>
+            d.metadata.recordingId === recordingId &&
+            wanted.has(d.metadata.chunkIndex) &&
+            (!providerId || d.metadata.embedProvider === providerId)
+        )
       )
     )
   }
@@ -1128,11 +1198,13 @@ class VectorStore {
     // PROVIDER PARTITION (see search()) — the re-ranker's query embedding is
     // only comparable within the active provider's model.
     const activeProvider = await getEmbeddingsService().activeProviderId()
-    return this.filterEligibleDocs(
+    const docs = this.filterEligibleDocs(
       Array.from(this.documents.values()).filter(
         (d) => d.metadata.meetingId === meetingId && d.metadata.embedProvider === activeProvider
       )
     ).sort((a, b) => a.metadata.chunkIndex - b.metadata.chunkIndex)
+    // Bounded by one meeting's chunks — the callers read the text.
+    return this.hydrateContent(docs)
   }
 
   async deleteByRecording(recordingId: string): Promise<number> {
