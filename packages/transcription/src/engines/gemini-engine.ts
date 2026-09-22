@@ -1636,6 +1636,24 @@ Calendar and meeting context are spelling hints only; never invent speech from t
       responseSchema: TRANSCRIPT_RESPONSE_SCHEMA,
     }
 
+    /**
+     * gemini-3.8-flash answers `thinkingLevel: MINIMAL` with a 400:
+     * "Thinking level MINIMAL is not supported for this model."
+     *
+     * The first call already handled that by retrying without the field, but
+     * the two RETRIES below rebuilt the request from `baseConfig` and asked for
+     * it again. Measured on a real 34-minute recording on 2026-09-22: the first
+     * call failed, the plain retry produced a transcript the shape check
+     * rejected, the repair retry asked for MINIMAL thinking again, and the 400
+     * came back uncaught and failed the whole recording.
+     *
+     * So the refusal is remembered for the rest of this call. It also saves a
+     * wasted round trip on every later chunk.
+     */
+    let thinkingRejected = false
+    const mainConfig = (): GenerateContentConfig =>
+      thinkingRejected ? baseConfigWithoutThinking : baseConfig
+
     const transcribeChunk = async (chunk: AudioChunk & { part?: Part }, index: number, previousTail: string): Promise<string> => {
       // Recheck at the START of EACH chunk — an exclusion committed while a
       // previous chunk was in flight must stop this chunk before any provider call.
@@ -1685,11 +1703,12 @@ Return ONLY the schema-constrained JSON, with no markdown or additional commenta
       // Recheck immediately before the FIRST generation call for this chunk.
       assertStillEligible(shouldGenerate)
       try {
-        res = await attempt(baseConfig)
+        res = await attempt(mainConfig())
       } catch (err) {
         if (err instanceof TranscriptionCancelledError) throw err
         // If the model rejects thinkingConfig or the token cap, retry plain.
         if (String(err).includes('INVALID_ARGUMENT') || String(err).includes('thinking')) {
+          thinkingRejected = true
           // Recheck before the plain-config RETRY (a fresh provider call).
           assertStillEligible(shouldGenerate)
           res = await attempt(baseConfigWithoutThinking)
@@ -1705,7 +1724,7 @@ Return ONLY the schema-constrained JSON, with no markdown or additional commenta
         // Recheck before the MAX_TOKENS RETRY (another fresh provider call).
         assertStillEligible(shouldGenerate)
         try {
-          const retry = await attempt(baseConfig)
+          const retry = await attempt(mainConfig())
           if (retry.text && retry.finishReason !== 'MAX_TOKENS') res = retry
         } catch {
           // Ignore retry failure; the truncation check below surfaces it.
@@ -1724,10 +1743,7 @@ Return ONLY the schema-constrained JSON, with no markdown or additional commenta
         assertStillEligible(shouldGenerate)
         const repairPrompt = `${prompt}
 IMPORTANT TRANSCRIPT REPAIR: Your previous response had missing/repeated timing or collapsed minutes of conversation into an oversized speaker item. Re-listen to the audio. Return truthful increasing timestamps, split every voice change into its own segments item, and split a continuing speaker at least every 30 seconds. No content value may exceed 120 words.`
-        const retry = await attempt(
-          baseConfig,
-          repairPrompt
-        )
+        const retry = await attempt(mainConfig(), repairPrompt)
         if (
           !retry.text ||
           retry.finishReason === 'MAX_TOKENS' ||

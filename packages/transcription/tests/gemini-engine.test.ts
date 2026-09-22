@@ -34,6 +34,7 @@ import {
   toGeminiLanguageCodes,
   nativeCoverageShortfall,
   halveChunk,
+  NativeAudioNotSplittableError,
 } from '../src/engines/gemini-engine.js'
 import { NoSpeechDetectedError, TranscriptionCancelledError } from '../src/engines/engine-interface.js'
 
@@ -1117,23 +1118,48 @@ describe('GeminiEngine native Transcribe subdivision', () => {
     expect(mockGenerateContentStream).toHaveBeenCalled()
   })
 
-  it('does NOT fall back when the model simply could not finish a cuttable interval', async () => {
-    // The whole point of the subdivision work: a model falling short is fixed
-    // by asking it for less, not by handing the recording to another model.
+  it('separates the two walls: same failure, cuttable audio keeps the model', async () => {
+    // The distinction IS the fix, so one test exercises both sides of it with
+    // the identical provider answer. Asserting the error TYPE is what makes
+    // this fail against the pre-fix code, where there was only one wall.
     mockInteractionsCreate.mockResolvedValue(incomplete)
     const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
 
-    await expect(collect(engine.transcribe(wav(120), { source: 'mic', durationSeconds: 120 })))
-      .rejects.toThrow(/could not produce a complete, reliable transcript/)
+    // Cuttable: the model has answered at the floor, nothing left to ask.
+    const cuttable = await collect(engine.transcribe(wav(120), { source: 'mic', durationSeconds: 120 }))
+      .then(() => null, (error) => error)
+    expect(cuttable).toBeInstanceOf(Error)
+    expect(cuttable).not.toBeInstanceOf(NativeAudioNotSplittableError)
+    expect(cuttable.message).toMatch(/could not produce a complete, reliable transcript/)
     expect(mockGenerateContentStream).not.toHaveBeenCalled()
+
+    // Uncuttable: same answer from the model, but OUR limit, so it falls back.
+    mockGenerateContentStream.mockResolvedValue(streamResponse('[00:00] Speaker 1: hola'))
+    const fell = await collect(engine.transcribe(m4a, { source: 'mic', durationSeconds: 900 }))
+    expect(fell).toHaveLength(1)
+    expect(mockGenerateContentStream).toHaveBeenCalled()
   })
 
-  it('does NOT fall back on silence or cancellation', async () => {
+  it('does NOT fall back on silence', async () => {
     mockInteractionsCreate.mockResolvedValue(silence)
     const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
 
     await expect(collect(engine.transcribe(m4a, { source: 'mic', durationSeconds: 900 })))
       .rejects.toBeInstanceOf(NoSpeechDetectedError)
+    expect(mockGenerateContentStream).not.toHaveBeenCalled()
+  })
+
+  it('does NOT fall back on cancellation', async () => {
+    // An exclusion committed mid-flight must stop the recording, and a
+    // fallback that outran it would send the audio to a provider anyway.
+    mockInteractionsCreate.mockResolvedValue(incomplete)
+    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+
+    await expect(collect(engine.transcribe(m4a, {
+      source: 'mic',
+      durationSeconds: 900,
+      shouldGenerate: () => false,
+    }))).rejects.toBeInstanceOf(TranscriptionCancelledError)
     expect(mockGenerateContentStream).not.toHaveBeenCalled()
   })
 
@@ -1170,6 +1196,46 @@ describe('GeminiEngine native Transcribe subdivision', () => {
     await collect(engine.transcribe(wav(600), { source: 'mic', durationSeconds: 600 }))
 
     expect(mockFilesDelete).toHaveBeenCalledTimes(3)
+  })
+})
+
+// Measured against the live API on 2026-09-22 with a 34-minute recording:
+// gemini-3.8-flash answers `thinkingLevel: MINIMAL` with a 400. The first call
+// already retried without the field, but the repair retry rebuilt the request
+// from the same config and asked for it again, and that 400 was not caught. The
+// recording failed with "Thinking level MINIMAL is not supported for this
+// model" after a transcript had already come back.
+describe('GeminiEngine thinking-level refusal', () => {
+  const thinking400 = Object.assign(
+    new Error('{"error":{"code":400,"message":"Thinking level MINIMAL is not supported for this model.","status":"INVALID_ARGUMENT"}}'),
+    { name: 'ApiError' }
+  )
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('stops asking for a thinking level the model refused, including on the repair retry', async () => {
+    const configs: unknown[] = []
+    // 1: refused. 2: plain, but a shape the checker rejects. 3: the repair.
+    mockGenerateContentStream.mockImplementation(async (req: any) => {
+      configs.push(req.config)
+      if (configs.length === 1) throw thinking400
+      if (configs.length === 2) {
+        return streamResponse('Speaker 1: uno Speaker 2: dos Speaker 1: tres')
+      }
+      return streamResponse('[00:00] Speaker 1: uno [00:04] Speaker 2: dos [00:08] Speaker 1: tres')
+    })
+
+    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.8-flash' })
+    const segments = await collect(engine.transcribe(oneSecond, { source: 'mic' }))
+
+    expect(segments).toHaveLength(3)
+    expect(configs).toHaveLength(3)
+    expect((configs[0] as any).thinkingConfig).toBeDefined()
+    // Both retries after the refusal go out without it.
+    expect((configs[1] as any).thinkingConfig).toBeUndefined()
+    expect((configs[2] as any).thinkingConfig).toBeUndefined()
   })
 })
 
