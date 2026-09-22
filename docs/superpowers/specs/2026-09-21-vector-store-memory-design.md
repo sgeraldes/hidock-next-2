@@ -133,6 +133,18 @@ Cambia el tipo de `VectorDocument.content` de `string` a un getter perezoso.
 - `getAllDocuments()` es el único que hoy podría devolver 125k documentos con
   su texto. Revisar sus llamadores: si nadie necesita `content`, no se hidrata.
 
+  **Revisado y cerrado.** `getAllDocuments()` quedó libre de texto: no hidrata.
+  Su único llamador que mostraba el texto era el visor de chunks
+  (`rag:get-chunks`), que hidrataba el índice entero — 237.920 filas, ~200 MB de
+  strings por invocación — para mostrar una pantalla. Ahora pagina:
+  `getDocumentPage(offset, limit)` aplica el filtro de elegibilidad sobre el
+  corpus completo, recorta, y recién ahí hidrata, sobre copias superficiales
+  para que `hydrateContent` no vuelva a dejar el texto residente en el índice.
+  El techo de página son 500 filas y lo impone el proceso principal. El orden es
+  por `id` y no por orden de inserción del `Map`, memoizado por revisión del
+  corpus, para que dos páginas consecutivas coincidan; la página informa esa
+  revisión y el visor avisa cuando el índice cambió mientras se paginaba.
+
 Resultado esperado: ~206 MB menos. Con C, deja el total en el rango del giga.
 
 **Riesgo.** Un consumidor que lea `.content` sin pasar por el camino de
@@ -153,8 +165,10 @@ OOM del índice no se lleva puesta la ventana.
 - El store vive en un `utilityProcess` de Electron, se habla por `MessagePort`.
 - **Rompe interfaces**: `getChunkNeighbors()`, `getDocumentCount()`,
   `getEligibleDocumentCount()`, `getEligibleMeetingCount()`, `getMeetingCount()`,
-  `dropByRecordingFromMemory()`, `isCacheBacked()` y `getAllDocuments()` son
-  síncronos hoy y pasan a ser `Promise`. Toca los 13 archivos consumidores.
+  `dropByRecordingFromMemory()`, `isCacheBacked()`, `getAllDocuments()` y
+  `getDocumentPage()` son síncronos hoy y pasan a ser `Promise`. Toca los 13
+  archivos consumidores. `getDocumentPage()` es el que mejor cruza el límite:
+  devuelve una página acotada en vez del corpus entero.
 - Los vectores viajan como `SharedArrayBuffer` para no duplicarlos al cruzar
   el límite de proceso.
 

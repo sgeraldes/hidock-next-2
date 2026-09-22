@@ -116,6 +116,25 @@ interface SearchResult {
   score: number
 }
 
+/** One slice of the eligible corpus — see {@link VectorStore.getDocumentPage}. */
+interface DocumentPage {
+  /** Eligible documents in the whole corpus, not in this page. */
+  total: number
+  /** The offset actually served, after clamping into [0, total]. */
+  offset: number
+  /** The page size actually served. */
+  limit: number
+  /**
+   * The corpus revision this page was cut from. It changes whenever a document
+   * is added or removed, which is what shifts the offsets a caller is paging
+   * by; a caller comparing it across pages can tell that its traversal spans a
+   * changed corpus instead of silently skipping or repeating a row.
+   */
+  revision: number
+  /** Shallow copies of the page's documents, hydrated. */
+  documents: VectorDocument[]
+}
+
 // Cosine similarity between two vectors (any indexable array-like)
 function cosineSimilarity(a: number[] | Float32Array, b: number[] | Float32Array): number {
   if (a.length !== b.length) return 0
@@ -337,6 +356,18 @@ class VectorStore {
    */
   private partitionArena: Float32Array | null = null
 
+  /**
+   * Bumped on every add/remove in {@link documents}. It invalidates
+   * {@link stableOrderCache} and is handed to callers on a
+   * {@link DocumentPage} so they can tell a paging traversal spanned a corpus
+   * that changed under them. Incremented per mutation rather than per batch so
+   * a future mutation site cannot forget to invalidate.
+   */
+  private corpusRevision = 0
+
+  /** Memoized {@link documentsInStableOrder} result for one corpus revision. */
+  private stableOrderCache: { revision: number; documents: VectorDocument[] } | null = null
+
   /** True when this boot's embeddings are views over one contiguous arena
    *  rather than per-row allocations (diagnostics/tests). */
   isArenaBacked(): boolean {
@@ -473,8 +504,10 @@ class VectorStore {
           // Table changed between the fingerprint and the row scan — do not
           // serve a half-fresh store; fall back to the authoritative SQL load.
           this.documents.clear()
+          this.corpusRevision++
           return false
         }
+        this.corpusRevision++
         this.documents.set(id, {
           id,
           embedding: cached.vector,
@@ -500,6 +533,7 @@ class VectorStore {
     }
     if (matched !== cache.rows.length) {
       this.documents.clear()
+      this.corpusRevision++
       return false
     }
     this.cacheBuffers = cache.buffers
@@ -730,6 +764,7 @@ class VectorStore {
         const embedding = this.readEmbeddingInto(row[I.embedding], uniformDims, arena, arenaOffset)
         if (embedding.usedArena) arenaOffset += uniformDims as number
 
+        this.corpusRevision++
         this.documents.set(row[I.id] as string, {
           id: row[I.id] as string,
           embedding: embedding.vector,
@@ -830,6 +865,7 @@ class VectorStore {
     }
 
     // Store in memory
+    this.corpusRevision++
     this.documents.set(id, doc)
 
     // Persist to database
@@ -959,6 +995,7 @@ class VectorStore {
         embedding,
         metadata: { ...chunkMeta, chunkIndex: i, embedProvider: partition, embedDims: embedding.length }
       }
+      this.corpusRevision++
       this.documents.set(id, doc)
       db.run(
         `INSERT OR REPLACE INTO vector_embeddings
@@ -1272,6 +1309,7 @@ class VectorStore {
     for (const [id, doc] of this.documents.entries()) {
       if (doc.metadata.recordingId !== recordingId) continue
       this.documents.delete(id)
+      this.corpusRevision++
       deleted++
     }
     return deleted
@@ -1363,6 +1401,68 @@ class VectorStore {
     // full document set inherit the fail-closed eligibility boundary here.
     return this.filterEligibleDocs(Array.from(this.documents.values()))
   }
+
+  /**
+   * One page of the eligible document set, with chunk text hydrated for THAT
+   * PAGE only.
+   *
+   * The chunk viewer (rag:get-chunks) used to take {@link getAllDocuments} and
+   * hydrate all of it: on the 237,920-chunk library that is ~200 MB of strings
+   * built per invocation, then serialized over IPC to the renderer. It only
+   * ever shows a screenful, so only a screenful is read back.
+   *
+   * The page carries SHALLOW COPIES, not the index's own documents:
+   * {@link hydrateContent} returns copies, so the viewer cannot re-grow the
+   * resident chunk text one page at a time until the whole index is back in
+   * memory — the exact cost the index stopped paying (see
+   * {@link VectorDocument.content}).
+   *
+   * Eligibility is unchanged: the SAME fail-closed boundary getAllDocuments
+   * applies runs over the whole corpus BEFORE the slice, so `total` counts
+   * eligible documents and paging can never walk past the boundary into an
+   * excluded one. `offset` is clamped into [0, total] and `limit` to >= 0; both
+   * are echoed back so the caller pages from what it actually got.
+   */
+  getDocumentPage(offset: number, limit: number): DocumentPage {
+    const eligible = this.filterEligibleDocs(this.documentsInStableOrder())
+    const total = eligible.length
+    const start = Math.min(Math.max(Math.trunc(offset) || 0, 0), total)
+    const size = Math.max(Math.trunc(limit) || 0, 0)
+    // hydrateContent returns shallow copies, so the page never aliases the
+    // index's own documents and the index stays text-free.
+    const documents = this.hydrateContent(eligible.slice(start, start + size))
+    return { total, offset: start, limit: size, revision: this.corpusRevision, documents }
+  }
+
+  /**
+   * Every document, in a TOTAL ORDER that does not depend on insertion history.
+   *
+   * Offset paging is only coherent if two requests agree on the order. The
+   * backing Map iterates in insertion order, so a chunk deleted and reindexed
+   * (a retranscribe, a provider switch) moves to the end and can be served
+   * twice while another row is never served at all. Sorting by `id` — immutable
+   * for the life of a chunk — makes a document's position depend on the corpus
+   * CONTENTS rather than on the order it happened to arrive in.
+   *
+   * Sorting 237,920 rows costs ~0.5 s, which is not something to pay on every
+   * Prev/Next, so the order is cached and rebuilt only when the corpus changes
+   * ({@link corpusRevision}). The cache holds references, not text.
+   *
+   * What this does NOT do is make a traversal atomic: a document removed BEFORE
+   * the caller's current offset still shifts the rest left by one. That is
+   * inherent to paging by offset over a live corpus, which is why the page
+   * carries {@link DocumentPage.revision} so the caller can see it happened.
+   */
+  private documentsInStableOrder(): VectorDocument[] {
+    if (this.stableOrderCache?.revision === this.corpusRevision) {
+      return this.stableOrderCache.documents
+    }
+    const documents = Array.from(this.documents.values()).sort((a, b) =>
+      a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+    )
+    this.stableOrderCache = { revision: this.corpusRevision, documents }
+    return documents
+  }
 }
 
 // Singleton instance
@@ -1376,4 +1476,4 @@ export function getVectorStore(): VectorStore {
 }
 
 export { VectorStore, chunkText, cosineSimilarity, diversifyResults }
-export type { VectorDocument, SearchResult }
+export type { VectorDocument, SearchResult, DocumentPage }
