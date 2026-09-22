@@ -706,6 +706,28 @@ export interface ElectronAPI {
     getItems: (status?: string) => Promise<any[]>
   }
 
+  /**
+   * The HiDock Model Host: the machine with the GPU, lending its diarization
+   * worker over the LAN. Only Settings talks to it; the decision to use it or
+   * to diarize here is made in the main process.
+   */
+  modelHost: {
+    check: (request: { url: string }) => Promise<{
+      success: boolean
+      error?: string
+      health?: {
+        version: string
+        state: 'stopped' | 'ready' | 'paused' | 'busy'
+        capabilities: string[]
+        acceleration: 'cuda' | 'cpu'
+        gpu: { name: string; vramMiB: number | null; driver: string } | null
+        reason?: string
+      }
+    }>
+    pair: (request: { url: string; code: string }) => Promise<{ success: boolean; error?: string }>
+    forget: () => Promise<{ success: boolean }>
+  }
+
   // Knowledge Captures
   knowledge: {
     getAll: (options?: { limit?: number; offset?: number; status?: string }) => Promise<KnowledgeCapture[]>
@@ -1604,6 +1626,12 @@ const electronAPI: ElectronAPI = {
 
   queue: {
     getItems: (status) => callIPC('db:get-queue', status)
+  },
+
+  modelHost: {
+    check: (request) => callIPC('model-host:check', request),
+    pair: (request) => callIPC('model-host:pair', request),
+    forget: () => callIPC('model-host:forget')
   },
 
   knowledge: {

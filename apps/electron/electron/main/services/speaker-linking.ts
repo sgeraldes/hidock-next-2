@@ -6,6 +6,7 @@ import { availableParallelism } from 'os'
 import ffmpegPath from 'ffmpeg-static'
 import { getConfig } from './config'
 import { queryAll, queryOne, runInTransaction, runNoSave } from './database'
+import { diarizeOnModelHost, ModelHostUnavailableError } from './model-host-client'
 
 /** Default share of logical CPUs when the config does not say. */
 const DEFAULT_DIARIZATION_CPU_PERCENT = 40
@@ -265,6 +266,65 @@ function resolveWorkerPath(configured: string): string {
     if (existsSync(packaged)) return packaged
   }
   return join(process.cwd(), 'resources', 'speaker-linking', 'worker.py')
+}
+
+/**
+ * Say the host is unavailable once, not once per recording.
+ *
+ * A backlog of two hundred recordings draining against a host that is switched
+ * off would otherwise print two hundred identical lines and bury everything
+ * else in the log.
+ */
+let lastModelHostComplaint = ''
+
+/** Exported so a test can watch the same recording twice in one run. */
+export function resetModelHostComplaint(): void {
+  lastModelHostComplaint = ''
+}
+
+/**
+ * Diarize on the model host when there is one, and here when there is not.
+ *
+ * Every reason the host does not produce a result — no host, not paired, off,
+ * paused, busy, unreachable, the worker failed there — comes back as
+ * ModelHostUnavailableError and ends in the local worker. The recording is
+ * never failed because of the host.
+ */
+export async function diarize(
+  audioPath: string,
+  shouldContinue: () => boolean,
+  audioDurationSeconds?: number | null,
+  deps: {
+    local?: typeof runWorker
+    remote?: typeof diarizeOnModelHost
+  } = {}
+): Promise<AcousticWorkerResult> {
+  const local = deps.local || runWorker
+  const remote = deps.remote || diarizeOnModelHost
+  const config = getConfig().transcription
+  const url = config.modelHostUrl?.trim()
+  if (!url) return local(audioPath, shouldContinue, audioDurationSeconds)
+
+  try {
+    const result = await remote(
+      audioPath,
+      { url, token: config.modelHostToken || '' },
+      {
+        timeoutMs: speakerLinkingTimeoutMs(config.speakerLinkingTimeoutSeconds, audioDurationSeconds),
+        shouldContinue
+      }
+    )
+    lastModelHostComplaint = ''
+    console.log(`[SpeakerLinking] diarized on the model host (${result.device})`)
+    return result
+  } catch (error) {
+    if (!(error instanceof ModelHostUnavailableError)) throw error
+    if (lastModelHostComplaint !== error.message) {
+      lastModelHostComplaint = error.message
+      console.warn(`[SpeakerLinking] ${error.message} Diarizing here instead.`)
+    }
+    return local(audioPath, shouldContinue, audioDurationSeconds)
+  }
 }
 
 function runWorker(
@@ -534,7 +594,7 @@ export async function runSpeakerLinkingPreflight(
       reason: 'disabled in transcription settings'
     }
   }
-  const result = await runWorker(audioPath, shouldContinue, audioDurationSeconds)
+  const result = await diarize(audioPath, shouldContinue, audioDurationSeconds)
   if (!shouldContinue()) throw new Error('speaker-linking cancelled because recording became ineligible')
   const matches = persistMatches(recordingId, result)
   return {
