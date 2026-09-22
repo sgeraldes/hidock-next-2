@@ -449,21 +449,36 @@ describe('GeminiLiveTranscriptionService with two channels', () => {
     const before = h.sessions.length
     h.tick(9 * 60 * 1000 + 1)
 
+    // Three packets with DIFFERENT payloads, so the assertion can name which
+    // one went missing instead of counting to eight.
     await Promise.all([
-      h.service.acceptDevicePacket(tone(9000, 9000, 5)),
-      h.service.acceptDevicePacket(tone(9000, 9000, 5)),
-      h.service.acceptDevicePacket(tone(9000, 9000, 5)),
+      h.service.acceptDevicePacket(tone(1111, 1111, 5)),
+      h.service.acceptDevicePacket(tone(2222, 2222, 5)),
+      h.service.acceptDevicePacket(tone(3333, 3333, 5)),
     ])
 
     // One rotation per channel, not one per packet: three concurrent sends do
     // not open three new sessions. Both channels carry the same tone, so both
     // rotate, which is two new sessions and not six.
     expect(h.sessions.length).toBe(before + 2)
-    const audioSends = h.sessions
+
+    // Every payload reached a session, whichever one. Counting sends would
+    // pass if a packet were dropped and another re-sent in its place.
+    const delivered = h.sessions
       .flatMap((session) => session.sendRealtimeInput.mock.calls)
-      .filter((call) => (call[0] as { audio?: unknown }).audio).length
-    // Four packets, two channels each.
-    expect(audioSends).toBe(8)
+      .map((call) => (call[0] as { audio?: { data?: string } }).audio?.data)
+      .filter((data): data is string => Boolean(data))
+    const firstSampleOf = (base64: string) => {
+      // byteOffset and byteLength on purpose: Node hands out Buffers carved
+      // from a shared pool, so `.buffer` is the pool and reading from offset 0
+      // reads somebody else's bytes. The same trap the vector store hit.
+      const bytes = Buffer.from(base64, 'base64')
+      return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getInt16(0, true)
+    }
+    const samples = delivered.map(firstSampleOf)
+    for (const expected of [9000, 1111, 2222, 3333]) {
+      expect(samples).toContain(expected)
+    }
     await h.service.stop()
   })
 

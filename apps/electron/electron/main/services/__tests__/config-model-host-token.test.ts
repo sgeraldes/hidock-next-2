@@ -87,12 +87,24 @@ describe('the model host pairing token', () => {
     expect(getConfig().transcription.modelHostToken).toBe('a-real-pairing-token')
   })
 
-  it('leaves an empty token alone rather than encrypting nothing', async () => {
-    // Forgetting a host writes an empty string on purpose, because the
-    // deep-merge in saveConfig drops undefined. An encrypted empty string would
-    // read back as a token that is there.
+  it('forgetting a host leaves nothing behind, not an encrypted nothing', async () => {
+    // Forgetting writes an empty string on purpose, because the deep-merge in
+    // saveConfig drops undefined. What matters is that the round trip gives
+    // back an empty token: a marker with nothing in it would read as a token
+    // that is there, and the client would try to pair with it.
+    await saveConfig({ transcription: { modelHostToken: 'a-real-pairing-token' } } as never)
     await saveConfig({ transcription: { modelHostToken: '' } } as never)
+    onDisk = written[written.length - 1]
+
+    await initializeConfig()
+
     expect(lastWrite().transcription.modelHostToken).toBe('')
+    expect(getConfig().transcription.modelHostToken).toBe('')
+  })
+
+  it('never writes the marker without a token behind it', async () => {
+    await saveConfig({ transcription: { modelHostToken: '' } } as never)
+    expect(lastWrite().transcription.modelHostToken).not.toMatch(/^__enc__/)
   })
 
   it('still saves the token when the platform has no encryption', async () => {

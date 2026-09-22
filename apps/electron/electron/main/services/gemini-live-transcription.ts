@@ -107,9 +107,12 @@ export const MONO_PACKETS_BEFORE_DEGRADING = 5
  * its neighbour.
  */
 export function monoPayload(packet: RealtimeData): Uint8Array {
-  return packet.muted || packet.data.length <= 8
-    ? new Uint8Array(0)
-    : packet.data.subarray(8)
+  if (packet.muted || packet.data.length <= 8) return new Uint8Array(0)
+  const payload = packet.data.subarray(8)
+  // A dangling byte shifts every sample after it by one, and PCM16 read half a
+  // sample out is noise. `splitRealtimeChannels` already trims to whole frames;
+  // this trims to whole samples, for the same reason.
+  return payload.length % 2 === 0 ? payload : payload.subarray(0, payload.length - 1)
 }
 
 export function splitRealtimeChannels(packet: RealtimeData): [RealtimeChannel, RealtimeChannel] | null {
@@ -493,6 +496,11 @@ export class GeminiLiveTranscriptionService {
     if (!this.active) return
     const key = resolveGeminiApiKey()
     if (!key) return
+    // Every other entry point checks the generation; this one did not. A packet
+    // still in flight across a stop/start would then send into sessions the
+    // stop already closed. `send` and `stop` are idempotent so nothing broke,
+    // but "nothing broke because the callee is defensive" is not a contract.
+    const generation = this.generation
 
     // One channel on the wire: the two-session design has nothing to split, so
     // it degrades to the single session it already has for a failed second
@@ -501,6 +509,7 @@ export class GeminiLiveTranscriptionService {
       this.monoRun += 1
       if (this.monoRun >= MONO_PACKETS_BEFORE_DEGRADING && !this.monoSession) {
         await this.degradeToMono()
+        if (generation !== this.generation) return
       }
       if (this.monoSession) {
         await this.monoSession.send(monoPayload(packet), key)
@@ -532,6 +541,7 @@ export class GeminiLiveTranscriptionService {
       if (channels[index].rms >= SILENCE_RMS) this.lastVoiceAt[index] = now
       else if (now - this.lastVoiceAt[index] >= SILENCE_HANGOVER_MS) continue
       await this.sessions[index].send(channels[index].pcm, key)
+      if (generation !== this.generation) return
     }
   }
 

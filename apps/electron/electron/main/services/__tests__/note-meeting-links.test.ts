@@ -27,7 +27,7 @@ vi.mock('../vector-store', () => ({
 }))
 
 import { meetingHappeningNow, suggestMeetings } from '../note-intelligence'
-import { createNote } from '../notes'
+import { createNote, getNote } from '../notes'
 import { closeDatabase, getDatabase, initializeDatabase } from '../database'
 
 const DURING = '2026-09-22T10:30:00.000Z'
@@ -154,15 +154,42 @@ describe('suggesting a meeting afterwards', () => {
     expect(await suggestMeetings(note.id)).toEqual([])
   })
 
-  it('links nothing by itself', async () => {
+  it('the strongest candidate is still only a candidate', async () => {
+    // suggestMeetings is a read, so asserting it wrote nothing proves nothing.
+    // What this pins is that the note comes back UNLINKED even when one
+    // candidate is the meeting it was written during — the moment where a
+    // "helpful" auto-link would be most tempting to add.
     const note = createNote({ content: 'algo' })
     getDatabase().run('UPDATE notes SET created_at = ? WHERE id = ?', [DURING, note.id])
 
-    await suggestMeetings(note.id)
+    const suggestions = await suggestMeetings(note.id)
+    expect(suggestions[0].meetingId).toBe('m-now')
 
-    // Not even the strongest candidate writes itself in.
-    const row = getDatabase()
-      .exec('SELECT meeting_id, link_source FROM notes WHERE id = ?', [note.id])[0]
-    expect(row.values[0]).toEqual([null, null])
+    const after = getNote(note.id)
+    expect(after?.meetingId).toBe(null)
+    expect(after?.linkSource).toBe(null)
+  })
+
+  it('the same-day list follows the person’s day, not the UTC one', async () => {
+    // Argentina is UTC-3, so a note written at 21:30 local is already the next
+    // day in UTC. Comparing UTC dates offered tomorrow's meetings for a note
+    // written this evening.
+    const localEvening = new Date('2026-09-22T00:30:00.000Z') // 21:30 del 21-sep en AR
+    const note = createNote({ content: 'algo que no se parece a nada' })
+    getDatabase().run('UPDATE notes SET created_at = ? WHERE id = ?', [
+      localEvening.toISOString(),
+      note.id,
+    ])
+
+    const suggestions = await suggestMeetings(note.id)
+    const offset = -localEvening.getTimezoneOffset() / 60
+    if (offset >= 0) {
+      // On a UTC or eastern machine that note is already the 22nd locally too,
+      // so there is nothing to tell apart and the case does not apply.
+      expect(Array.isArray(suggestions)).toBe(true)
+      return
+    }
+    // The meetings in the fixture are on the 22nd; locally the note is the 21st.
+    expect(suggestions).toEqual([])
   })
 })

@@ -328,9 +328,14 @@ export async function suggestMeetings(noteId: string, limit = 5): Promise<Meetin
   // choosing by hand, and it is the only way to link a note to a meeting the
   // calendar and the transcript both failed to connect it to.
   if (byId.size < limit) {
+    // `localtime` on BOTH sides, because "the same day" is the person's day.
+    // Meetings and notes are both stored as ISO UTC (measured: all 2,563 rows
+    // end in Z), and comparing UTC dates puts a note written after 21:00 in
+    // Argentina on the next day, so the list would offer tomorrow's meetings
+    // for a note written this evening.
     const sameDay = queryAll<{ id: string; subject: string; start_time: string }>(
       `SELECT id, subject, start_time FROM meetings
-       WHERE date(start_time) = date(?)
+       WHERE date(start_time, 'localtime') = date(?, 'localtime')
        ORDER BY start_time DESC LIMIT ?`,
       [note.createdAt, limit]
     )

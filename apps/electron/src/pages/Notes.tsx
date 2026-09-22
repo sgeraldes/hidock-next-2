@@ -64,7 +64,9 @@ export default function Notes(): React.ReactElement {
   // this machine is a rule, not a preference.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'n') {
+      // `code`, not `key`: on a layout where that physical key produces a
+      // non-Latin character, `key` is that character and the shortcut dies.
+      if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.code === 'KeyN') {
         event.preventDefault()
         void startNote()
       }
