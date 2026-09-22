@@ -148,3 +148,67 @@ Semantic search and RAG. Those need the vector store and an embedder, which is e
 this design exists to avoid loading. The structured reads above are what the bridge actually does
 today. If semantic recall is wanted later it belongs in the app, where the vectors already live, and
 the brain can proxy to it when the app happens to be up.
+
+## Should the app use the service as its backend? No — and here is the measurement
+
+The question is whether the headless process should be the data layer and the app a client of it,
+which would make the two-layer split real instead of having the service stand down when the app
+opens.
+
+**The app makes 1,527 synchronous database calls in its main process** (1,004 `run(`, 293
+`queryOne<`, 230 `queryAll<`), on a `better-sqlite3` engine whose entire contract is synchronous —
+`get`, `all`, `run` return values, not promises. Putting HTTP between the app and its own database
+means converting all 1,527 call sites to async, adding a round trip to every read the UI does, and
+introducing a process that can be down while the app is up. An earlier design in this repo already
+took the opposite constraint as a requirement: "los 8 métodos síncronos quedan síncronos, 11 call
+sites intactos."
+
+**The model-host precedent does not transfer.** That service is headless for a physical reason: the
+GPU is on another machine, this one has an AMD card, and every `cuda:0` in the diarization worker
+needs hardware that is not here. The layering buys access to something otherwise unreachable. A
+SQLite file sitting on the same disk as the app offers nothing in return for the same split.
+
+So the two-layer split is refused on cost, not on taste.
+
+### But the concern behind the question is right
+
+If the service and the app each write their own version of "meetings since this date", they drift,
+and the brain starts answering differently depending on which one happened to be up. That is a real
+defect waiting to happen, and it is the actual risk in the design above.
+
+**The fix for duplication is a shared module, not a shared process.**
+
+- `packages/brain-queries` holds the read queries as plain SQL against the schema. One
+  implementation.
+- The app serves the API from its own process, importing that package, with no HTTP in between.
+- The headless service serves the same routes from the same package when the app is closed.
+- Divergence becomes impossible because there is only one copy to diverge from.
+
+### What the gamestation pattern is worth copying
+
+Not the process split — the **hardened local-service skeleton**. `apps/model-host/src/auth.mjs` is
+117 lines that already solve pairing codes, long tokens, constant-time comparison, the attempt
+limit, and the Host-header check against DNS rebinding, all reviewed on 2026-09-22. Three things now
+need exactly that: the model host, the brain service, and the app's own API.
+
+`packages/local-service` takes it, and all three import it. That is the part of the pattern that
+earns its keep: one copy of the security code, reviewed once.
+
+## Stepping down when the app opens
+
+The service exists because the app is closed. The moment the app serves the API, the service is
+redundant and goes away, leaving the app fully responsible.
+
+Two independent paths, so neither is a single point of failure:
+
+1. **Told.** The app claims the lock file and calls the service's authenticated `/step-down`. The
+   service stops accepting connections, finishes the requests already in flight, and exits.
+2. **Noticed.** The service re-reads the lock on a timer and on every request. If the owner is now
+   `app`, it steps down on its own. This covers the app failing to reach it.
+
+**Ties go to the app.** Both starting at once is resolved by an atomic create of the lock file
+(`wx`), and if the service wins that race the app takes ownership anyway and the service steps down.
+The app is never the one that yields, because the app is the one a person is looking at.
+
+**In-flight requests are never dropped.** Stepping down drains; a client mid-question gets its
+answer, and the next question goes to the app.
