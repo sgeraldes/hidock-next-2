@@ -35,6 +35,11 @@ vi.mock('../database', () => ({
   markRecordingDownloaded: vi.fn(),
   addSyncedFile: vi.fn(),
   isFileSynced: (filename: string) => mockIsFileSynced(filename),
+  getSyncedFile: (filename: string) =>
+    mockIsFileSynced(filename)
+      ? { original_filename: filename, local_filename: filename, file_path: '/mock/synced-on-disk/' + filename }
+      : undefined,
+  removeSyncedFile: vi.fn(),
   isFilePurged: () => false,
   getRecordingByFilename: vi.fn(() => null),
   getSyncedFilenames: vi.fn(() => new Set()),
@@ -59,8 +64,10 @@ vi.mock('fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('fs')>()
   return {
     ...actual,
-    default: { ...actual, existsSync: vi.fn(() => false) },
-    existsSync: vi.fn(() => false)
+    // A file "in synced_files" is only synced while its audio is present (D-022),
+    // so the sentinel path the mocked row points at must read as existing.
+    default: { ...actual, existsSync: (p: unknown) => String(p).startsWith('/mock/synced-on-disk/') },
+    existsSync: (p: unknown) => String(p).startsWith('/mock/synced-on-disk/')
   }
 })
 

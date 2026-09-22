@@ -32,6 +32,11 @@ vi.mock('../database', () => ({
   markRecordingDownloaded: vi.fn(),
   addSyncedFile: vi.fn(),
   isFileSynced: (filename: string) => mockIsFileSynced(filename),
+  getSyncedFile: (filename: string) =>
+    mockIsFileSynced(filename)
+      ? { original_filename: filename, local_filename: filename, file_path: '/mock/synced-on-disk/' + filename }
+      : undefined,
+  removeSyncedFile: vi.fn(),
   isFilePurged: () => false,
   getRecordingByFilename: (filename: string) => mockGetRecordingByFilename(filename),
   upsertRecordingFromDevice: vi.fn((file: DeviceFile) => ({
@@ -75,8 +80,10 @@ vi.mock('fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('fs')>()
   return {
     ...actual,
-    default: { ...actual, existsSync: (p: string) => mockExistsSync(p) },
-    existsSync: (p: string) => mockExistsSync(p)
+    // The sentinel backs a mocked synced_files row (D-022); everything else
+    // stays under the test's own mockExistsSync control.
+    default: { ...actual, existsSync: (p: string) => String(p).startsWith('/mock/synced-on-disk/') || mockExistsSync(p) },
+    existsSync: (p: string) => String(p).startsWith('/mock/synced-on-disk/') || mockExistsSync(p)
   }
 })
 

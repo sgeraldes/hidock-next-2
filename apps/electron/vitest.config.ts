@@ -29,7 +29,15 @@ export default defineConfig({
         test: {
           name: 'renderer',
           include: ['src/**/__tests__/**/*.test.ts', 'src/**/__tests__/**/*.test.tsx'],
-          setupFiles: ['./src/test/setup.ts']
+          setupFiles: ['./src/test/setup.ts'],
+          // The heavier page suites render a full Library and drive it through
+          // Testing Library's async queries. That is a few seconds alone and far
+          // more when four workers share the machine: on 2026-09-22 a full-suite
+          // run failed Library.trash.test.tsx with "Test timed out in 5000ms"
+          // while the same file passed 27/27 on its own. The 5s default measures
+          // how busy the runner is, not whether the UI works. A test that really
+          // hangs still fails.
+          testTimeout: 30000
         }
       },
       {
