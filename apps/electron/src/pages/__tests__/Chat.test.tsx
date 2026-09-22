@@ -619,10 +619,11 @@ describe('Chat Component', () => {
     const PAGE = 100
 
     /** A page response shaped like rag:get-chunks returns it. */
-    function pageOf(total: number, offset: number): {
+    function pageOf(total: number, offset: number, revision = 1): {
       total: number
       offset: number
       limit: number
+      revision: number
       chunks: Array<{ id: string; content: string; chunkIndex: number; embeddingDimensions: number }>
     } {
       const size = Math.min(PAGE, Math.max(total - offset, 0))
@@ -630,6 +631,7 @@ describe('Chat Component', () => {
         total,
         offset,
         limit: PAGE,
+        revision,
         chunks: Array.from({ length: size }, (_, i) => ({
           id: `chunk-${offset + i}`,
           content: `text of chunk ${offset + i}`,
@@ -693,6 +695,28 @@ describe('Chat Component', () => {
       await screen.findByText('Indexed Chunks (101–150 of 150)')
       // The tail is short; there is nothing after it to ask for.
       expect(screen.getByLabelText('Next page of chunks')).toHaveProperty('disabled', true)
+    })
+
+    it('warns when the index changed mid-traversal, and clears the warning on Refresh', async () => {
+      const getChunks = window.electronAPI.rag.getChunks as ReturnType<typeof vi.fn>
+      // The corpus gains a chunk between the two pages, so the offsets the user
+      // is paging by no longer line up with the rows behind them.
+      let revision = 1
+      getChunks.mockImplementation(async (offset = 0) => pageOf(250, offset, revision))
+
+      await openViewer()
+      await screen.findByText('Indexed Chunks (1–100 of 250)')
+      expect(screen.queryByText(/index changed while you were paging/i)).toBeNull()
+
+      revision = 2
+      fireEvent.click(screen.getByLabelText('Next page of chunks'))
+      await screen.findByText(/index changed while you were paging/i)
+
+      // Refresh rebases the traversal on the current index, so the warning goes.
+      fireEvent.click(screen.getByText('Refresh'))
+      await waitFor(() =>
+        expect(screen.queryByText(/index changed while you were paging/i)).toBeNull()
+      )
     })
 
     it('keeps the empty-index message when there is nothing indexed', async () => {

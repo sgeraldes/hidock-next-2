@@ -42,7 +42,7 @@ vi.mock('../../services/vector-store', () => ({
     getEligibleMeetingCount: vi.fn(() => 0),
     search: vi.fn(),
     getAllDocuments: vi.fn(() => []),
-    getDocumentPage: vi.fn(() => ({ total: 0, offset: 0, limit: 0, documents: [] }))
+    getDocumentPage: vi.fn(() => ({ total: 0, offset: 0, limit: 0, revision: 0, documents: [] }))
   }))
 }))
 

@@ -249,6 +249,11 @@ export function Chat() {
   const [chunks, setChunks] = useState<VectorChunk[]>([])
   const [chunkOffset, setChunkOffset] = useState(0)
   const [chunkTotal, setChunkTotal] = useState(0)
+  /** Corpus revision of the page currently shown, and of the page the current
+   *  traversal started from. They diverge when indexing or a deletion lands
+   *  mid-paging, which is when offsets stop lining up between pages. */
+  const [chunkRevision, setChunkRevision] = useState<number | null>(null)
+  const [chunkBaseRevision, setChunkBaseRevision] = useState<number | null>(null)
   const [showChunks, setShowChunks] = useState(false)
   const [loadingChunks, setLoadingChunks] = useState(false)
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -592,7 +597,7 @@ export function Chat() {
     }
   }
 
-  const loadChunks = async (offset = 0) => {
+  const loadChunks = async (offset = 0, restartTraversal = false) => {
     setLoadingChunks(true)
     try {
       const page = await window.electronAPI.rag.getChunks(offset, CHUNK_PAGE_SIZE)
@@ -602,6 +607,10 @@ export function Chat() {
       // leaving the controls pointing at an empty one.
       setChunkOffset(page.offset)
       setChunkTotal(page.total)
+      setChunkRevision(page.revision)
+      // Starting fresh (opening the panel, or Refresh) rebases the traversal;
+      // stepping Prev/Next keeps the base so a mid-paging change stays visible.
+      if (restartTraversal) setChunkBaseRevision(page.revision)
     } catch (error) {
       console.error('Failed to load chunks:', error)
     } finally {
@@ -613,7 +622,7 @@ export function Chat() {
     const newShowChunks = !showChunks
     setShowChunks(newShowChunks)
     if (newShowChunks && chunks.length === 0) {
-      loadChunks(0)
+      loadChunks(0, true)
     }
   }
 
@@ -1377,12 +1386,18 @@ export function Chat() {
                   >
                     <ChevronRight className="h-3 w-3" />
                   </Button>
-                  <Button variant="ghost" size="sm" onClick={() => loadChunks(chunkOffset)} disabled={loadingChunks}>
+                  <Button variant="ghost" size="sm" onClick={() => loadChunks(chunkOffset, true)} disabled={loadingChunks}>
                     <RefreshCw className={cn('h-3 w-3 mr-1', loadingChunks && 'animate-spin')} />
                     Refresh
                   </Button>
                 </div>
               </div>
+              {chunkRevision !== null && chunkBaseRevision !== null && chunkRevision !== chunkBaseRevision && (
+                <div className="mb-3 text-xs text-muted-foreground">
+                  The index changed while you were paging, so page boundaries have shifted. Refresh to
+                  start over.
+                </div>
+              )}
               {loadingChunks ? (
                 <div className="flex items-center justify-center py-8">
                   <RefreshCw className="h-5 w-5 animate-spin text-muted-foreground" />

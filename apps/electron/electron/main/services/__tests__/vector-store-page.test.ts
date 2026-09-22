@@ -13,7 +13,10 @@
  *     corpus cannot re-grow the resident text one page at a time,
  *   - `total` counts the ELIGIBLE corpus and the boundary is applied BEFORE the
  *     slice, so paging cannot walk past it into an excluded recording,
- *   - out-of-range offsets and limits clamp instead of throwing.
+ *   - out-of-range offsets and limits clamp instead of throwing,
+ *   - pages are ordered by id rather than by Map insertion order, so a chunk
+ *     deleted and reindexed cannot jump to the end and be served twice,
+ *   - the reported revision moves when the corpus does, and only then.
  *
  * @vitest-environment node
  */
@@ -57,6 +60,19 @@ vi.mock('../recording-eligibility', () => ({
         }),
   isRecordingEligible: (id: string) =>
     deps.eligibleRecordings === null || deps.eligibleRecordings.has(id),
+}))
+
+// The binary vector cache is irrelevant here and actively harmful: initialize()
+// schedules an ASYNCHRONOUS cache write, and beforeEach removes the cache
+// directory without waiting for it, so a write can land mid-rename and print an
+// ENOENT the production code swallows. Paging does not read the cache, so stub
+// the module out and let each case start from a clean SQL load.
+vi.mock('../vector-cache', () => ({
+  VECTOR_CACHE_FILENAME: 'vectors.bin',
+  cancelVectorCacheWrites: () => {},
+  waitForVectorCacheWrites: async () => {},
+  writeVectorCacheAsync: () => {},
+  readVectorCacheAsync: async () => null,
 }))
 
 let dbInstance: import('sql.js').Database | null = null
@@ -221,6 +237,47 @@ describe('VectorStore.getDocumentPage', () => {
   it('reports a total of 0 and an empty page on an empty index', async () => {
     const store = await loadFromDb()
     const page = store.getDocumentPage(0, 100)
-    expect(page).toEqual({ total: 0, offset: 0, limit: 100, documents: [] })
+    expect(page).toEqual({ total: 0, offset: 0, limit: 100, revision: 0, documents: [] })
+  })
+
+  it('orders pages by id, not by the order rows arrived in', async () => {
+    // Seeded so insertion order and id order disagree: a Map-order slice would
+    // hand back row-9 first, an id-ordered one row-0.
+    for (const i of [9, 3, 7, 1, 5, 0, 8, 2, 6, 4]) insertRow(`row-${i}`, i)
+    const store = await loadFromDb()
+
+    const ids = store.getDocumentPage(0, 10).documents.map((d) => d.id)
+    expect(ids).toEqual([...ids].sort())
+    expect(ids[0]).toBe('row-0')
+  })
+
+  it('rebuilds the page order after a deletion instead of serving a stale one', async () => {
+    // The order is memoized per corpus revision, so a mutation that does not
+    // invalidate it would keep serving a removed chunk — worse than the Map
+    // ordering it replaced.
+    for (let i = 0; i < 6; i++) insertRow(`row-${i}`, i, i === 2 ? 'rec-solo' : 'rec-1')
+    const store = await loadFromDb()
+    expect(store.getDocumentPage(0, 6).documents.map((d) => d.id)).toEqual([
+      'row-0', 'row-1', 'row-2', 'row-3', 'row-4', 'row-5'
+    ])
+
+    store.dropByRecordingFromMemory('rec-solo')
+
+    const after = store.getDocumentPage(0, 6)
+    expect(after.total).toBe(5)
+    expect(after.documents.map((d) => d.id)).toEqual(['row-0', 'row-1', 'row-3', 'row-4', 'row-5'])
+  })
+
+  it('changes the reported revision when the corpus changes, and not otherwise', async () => {
+    for (let i = 0; i < 4; i++) insertRow(`row-${i}`, i)
+    const store = await loadFromDb()
+
+    const first = store.getDocumentPage(0, 2).revision
+    // Reading does not move it, so a caller paging a static corpus sees one
+    // revision across the whole traversal.
+    expect(store.getDocumentPage(2, 2).revision).toBe(first)
+
+    store.dropByRecordingFromMemory('rec-1')
+    expect(store.getDocumentPage(0, 2).revision).not.toBe(first)
   })
 })

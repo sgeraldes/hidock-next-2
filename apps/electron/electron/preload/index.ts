@@ -899,6 +899,8 @@ export interface ElectronAPI {
       total: number
       offset: number
       limit: number
+      /** Corpus revision; a change between pages means the index moved. */
+      revision: number
       chunks: Array<{
         id: string
         content: string

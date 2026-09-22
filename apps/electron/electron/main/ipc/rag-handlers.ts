@@ -314,6 +314,9 @@ export function registerRAGHandlers(): void {
       total: page.total,
       offset: page.offset,
       limit: page.limit,
+      // Changes whenever the corpus gains or loses a chunk, so a renderer paging
+      // through can tell its traversal spanned a corpus that moved under it.
+      revision: page.revision,
       chunks: page.documents.map((doc) => ({
         id: doc.id,
         content: doc.content ?? '',
