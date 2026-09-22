@@ -1290,7 +1290,7 @@ export function SourceReader({
           =================================================================== */}
       <div
         ref={pins.scrollRef}
-        className="min-h-0 flex-1 overflow-y-auto bg-background"
+        className="min-h-0 flex-1 overflow-y-auto bg-background pb-6"
         data-testid="reader-scroll-body"
       >
         {!maximizedSection && (
@@ -1906,11 +1906,15 @@ export function SourceReader({
           </ReaderSection>
         )}
         {showLowerWorkspace && (
-        <div className="pb-6">
+        // Box-less while the reading area is showing sections: a sticky header
+        // cannot escape an ancestor's box, so everything between a section and
+        // reader-scroll-body has to generate none. The padding this used to
+        // carry now lives on the scroller itself.
+        <div className={cn(readingAreaHasSections ? 'contents' : 'pb-6')}>
           {/* Transcript / Artifact Content. The section branch supplies its own
               horizontal padding (ReaderSection), so the reading area only pads
               itself when it is showing one of the non-section states. */}
-          <div className={cn(!readingAreaHasSections && 'p-6')}>
+          <div className={cn(readingAreaHasSections ? 'contents' : 'p-6')}>
             {isDeviceOnly(recording) ? (
               <div className="flex items-start gap-3 rounded-lg bg-muted/35 px-4 py-3">
                 <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-orange-500/10 text-orange-600 dark:text-orange-300">
@@ -1939,7 +1943,9 @@ export function SourceReader({
                 </p>
               </div>
             ) : effectiveTranscript ? (
-              <div className="space-y-4 pt-2">
+              // Box-less for the same reason; the sections' own vertical
+              // padding carries the rhythm that space-y-4 used to.
+              <div className="contents">
                 {sectionIsVisible('summary') && (
                   <ReaderSection
                     section="summary"

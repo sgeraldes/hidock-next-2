@@ -2,13 +2,23 @@
  * ReaderSection — one section of the reader's single scrolling column.
  *
  * Three parts, in this order:
- *   1. A sentinel: absolutely positioned at the section's top edge, SENTINEL_H
- *      tall, out of the flow. Its crossings are what `useStickySectionPins`
- *      observes, and its height is the hysteresis band.
+ *   1. A sentinel: SENTINEL_H tall with an equal negative bottom margin, so it
+ *      covers the section's first SENTINEL_H pixels and adds no height of its
+ *      own. Its crossings are what `useStickySectionPins` observes, and its
+ *      height is the hysteresis band.
  *   2. The header strip: `position: sticky` at this section's place in the
  *      pinned stack, fixed height, and the ONLY thing that changes appearance
  *      when the section pins.
  *   3. The body, which keeps scrolling under the strip.
+ *
+ * The wrapper is `display: contents`, which is what makes the stacking work at
+ * all. A sticky element cannot leave its containing block, so a header inside a
+ * section box pins only while that box is on screen and then leaves with it —
+ * measured in the running app on 2026-09-22, four of the five strips sat at
+ * -1138, -1106, -863 and -716 pixels while the design called for 0, 32, 64 and
+ * 96. With no box of its own, each header's containing block becomes the scroll
+ * body and the strips pile up as intended. Every ancestor between here and
+ * `reader-scroll-body` has to stay box-less for the same reason.
  *
  * Pinning deliberately does NOT collapse the body. Collapsing it would delete
  * the height it occupied, the browser would clamp scrollTop, the page would jump
@@ -49,6 +59,7 @@ interface ReaderSectionProps {
    */
   keepBodyWhenCompact?: boolean
   children?: ReactNode
+  /** Extra classes for the body. The wrapper has no box to put them on. */
   className?: string
 }
 
@@ -72,7 +83,7 @@ export function ReaderSection({
 
   return (
     <section
-      className={cn('relative', className)}
+      className="contents"
       aria-label={label}
       data-testid={`reader-section-${section}`}
       data-pinned={pinned ? 'true' : 'false'}
@@ -80,8 +91,12 @@ export function ReaderSection({
       <div
         ref={sentinelRef}
         aria-hidden="true"
-        className="pointer-events-none absolute left-0 top-0 w-px"
-        style={{ height: SENTINEL_H }}
+        // In flow rather than absolute: `display: contents` on the wrapper
+        // leaves nothing to position against. The negative margin cancels the
+        // height again, so the band sits over the section's first pixels
+        // without moving anything below it.
+        className="pointer-events-none w-px"
+        style={{ height: SENTINEL_H, marginBottom: -SENTINEL_H }}
         data-testid={`reader-sentinel-${section}`}
       />
       <div
@@ -115,7 +130,7 @@ export function ReaderSection({
         {headerExtra}
       </div>
       {open && (
-        <div id={`reader-${section}-content`} className="px-4 pb-3 pt-1">
+        <div id={`reader-${section}-content`} className={cn('px-4 pb-3 pt-1', className)}>
           {children}
         </div>
       )}

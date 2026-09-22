@@ -196,20 +196,53 @@ describe('SourceReader — one scrolling column', () => {
     expect(screen.queryByTestId('reader-compact-header')).not.toBeInTheDocument()
   })
 
-  it('gives every section a sentinel that is out of flow and one hysteresis band tall', () => {
+  it('gives every section a sentinel that adds no height and is one hysteresis band tall', () => {
     // jsdom has no layout, so no test here can prove the 12px band actually
     // debounces a real scroll. What it CAN hold is the contract the band depends
-    // on: the sentinel takes no space (absolute, no pointer events) and is
-    // exactly SENTINEL_H tall. Both are load-bearing — a sentinel in the flow
-    // would add height to every section, and a zero-height one removes the
-    // hysteresis entirely.
+    // on: the sentinel is exactly SENTINEL_H tall and cancels that height again,
+    // so it costs the section nothing. Both are load-bearing — a sentinel that
+    // kept its height would push every section down, and a zero-height one
+    // removes the hysteresis entirely.
+    //
+    // It cancels with a negative margin rather than `absolute` because the
+    // wrapper it used to position against no longer generates a box.
     render(<SourceReader recording={makeRecording()} transcript={TRANSCRIPT} />)
     for (const section of ['player', 'metadata', 'moments']) {
       const el = sentinel(section)
-      expect(el).toHaveStyle({ height: `${SENTINEL_H}px` })
-      expect(el.className).toContain('absolute')
+      expect(el).toHaveStyle({ height: `${SENTINEL_H}px`, marginBottom: `${-SENTINEL_H}px` })
       expect(el.className).toContain('pointer-events-none')
+      expect(el.className).not.toContain('absolute')
       expect(el.className).not.toContain('hidden')
+    }
+  })
+
+  it('leaves no box between a section header and the scrolling column', () => {
+    // The whole feature rests on this. A sticky element cannot leave its
+    // containing block, so a header inside a section box pins only while that
+    // box is on screen and then scrolls away with it. Measured in the running
+    // app on 2026-09-22, four of the five strips sat at -1138, -1106, -863 and
+    // -716 pixels when the design called for 0, 32, 64 and 96 — every one of
+    // them trapped in its own <section>, and summary and transcript in three
+    // more wrappers on top of that.
+    //
+    // jsdom computes no layout, so this cannot watch them stack. What it can
+    // hold is the structural precondition: every element between a header and
+    // reader-scroll-body generates no box.
+    render(<SourceReader recording={makeRecording()} transcript={TRANSCRIPT} />)
+    const column = screen.getByTestId('reader-scroll-body')
+
+    for (const section of ['player', 'metadata', 'moments', 'summary', 'transcript']) {
+      const el = screen.queryByTestId(`reader-section-${section}`)
+      if (!el) continue
+      const header = el.querySelector('[class*="sticky"], [class*="relative"]')
+      expect(header, `${section} has no header strip`).not.toBeNull()
+
+      for (let node = header!.parentElement; node && node !== column; node = node.parentElement) {
+        expect(
+          node.className.toString().split(/\s+/),
+          `${section}: ${node.tagName}.${node.className} would trap the sticky header`
+        ).toContain('contents')
+      }
     }
   })
 
