@@ -246,7 +246,7 @@ const DEFAULT_CONFIG: AppConfig = {
   },
   chat: {
     provider: 'gemini',
-    geminiModel: 'gemini-3.5-flash',
+    geminiModel: 'gemini-3.8-flash',
     ollamaModel: 'llama3.2',
     maxContextChunks: 10
   },
@@ -305,15 +305,25 @@ export const RETIRED_GEMINI_MODELS = new Set([
   'gemini-2.0-flash',
   'gemini-2.5-flash',
   'gemini-3-pro-preview',
+  // Superseded by 3.8 Flash (2026-09-22, Sebastián: "ya se puede usar 3.8 en
+  // lugar de 3.5 para flash, mejores resultados"). Same price class, better
+  // results on the analysis prompts this app sends. A saved config still naming
+  // one of these migrates on load rather than sitting on an older model.
+  'gemini-3-flash-preview',
+  'gemini-3.1-flash-lite',
+  'gemini-3.5-flash',
+  'gemini-3.5-flash-lite',
+  'gemini-3.6-flash',
+  'gemini-3.7-flash',
 ])
 export const CURRENT_GEMINI_TRANSCRIPTION_MODEL = 'gemini-3.5-transcribe'
-export const CURRENT_GEMINI_CHAT_MODEL = 'gemini-3.5-flash'
+export const CURRENT_GEMINI_CHAT_MODEL = 'gemini-3.8-flash'
 /** Backward-compatible alias used by general Gemini analysis code. */
 export const CURRENT_GEMINI_MODEL = CURRENT_GEMINI_CHAT_MODEL
 
 const LEGACY_GEMINI_TRANSCRIPTION_MODELS = new Set([
   ...RETIRED_GEMINI_MODELS,
-  'gemini-3.5-flash',
+  'gemini-3.8-flash',
   'gemini-flash-latest',
   'gemini-flash-lite-latest',
   'gemini-3.1-flash-lite',

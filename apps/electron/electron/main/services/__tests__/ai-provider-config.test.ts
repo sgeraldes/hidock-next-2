@@ -24,7 +24,7 @@ describe('getProviderConfigFromSettings', () => {
 
   it('returns a google ProviderConfig when chat.provider is gemini and a geminiApiKey is set', async () => {
     mockGetConfig.mockReturnValue({
-      chat: { provider: 'gemini', geminiModel: 'gemini-3.5-flash' },
+      chat: { provider: 'gemini', geminiModel: 'gemini-3.8-flash' },
       transcription: { geminiApiKey: 'test-key-123' } // pragma: allowlist secret
     })
 
@@ -33,12 +33,12 @@ describe('getProviderConfigFromSettings', () => {
 
     expect(config).toEqual({
       provider: 'google',
-      model: 'gemini-3.5-flash',
+      model: 'gemini-3.8-flash',
       apiKey: 'test-key-123' // pragma: allowlist secret
     })
   })
 
-  it('falls back to the gemini-3.5-flash default when chat.geminiModel is empty', async () => {
+  it('falls back to the current flash default when chat.geminiModel is empty', async () => {
     mockGetConfig.mockReturnValue({
       chat: { provider: 'gemini', geminiModel: '' },
       transcription: { geminiApiKey: 'test-key-123' } // pragma: allowlist secret
@@ -49,7 +49,7 @@ describe('getProviderConfigFromSettings', () => {
 
     expect(config).toEqual({
       provider: 'google',
-      model: 'gemini-3.5-flash',
+      model: 'gemini-3.8-flash',
       apiKey: 'test-key-123' // pragma: allowlist secret
     })
   })
@@ -68,7 +68,7 @@ describe('getProviderConfigFromSettings', () => {
 
   it('returns null when no geminiApiKey is set', async () => {
     mockGetConfig.mockReturnValue({
-      chat: { provider: 'gemini', geminiModel: 'gemini-3.5-flash' },
+      chat: { provider: 'gemini', geminiModel: 'gemini-3.8-flash' },
       transcription: { geminiApiKey: '' }
     })
 
@@ -78,7 +78,7 @@ describe('getProviderConfigFromSettings', () => {
 
   it('returns null when chat.provider is not gemini (e.g. ollama)', async () => {
     mockGetConfig.mockReturnValue({
-      chat: { provider: 'ollama', geminiModel: 'gemini-3.5-flash', ollamaModel: 'llama3.2' },
+      chat: { provider: 'ollama', geminiModel: 'gemini-3.8-flash', ollamaModel: 'llama3.2' },
       transcription: { geminiApiKey: 'test-key-123' } // pragma: allowlist secret
     })
 

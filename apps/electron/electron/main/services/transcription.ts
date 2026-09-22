@@ -91,7 +91,7 @@ function spawnStreaming(
     })
   })
 }
-import { getConfig } from './config'
+import { getConfig, CURRENT_GEMINI_CHAT_MODEL } from './config'
 import { isFeatureEnabled } from './feature-gate'
 import {
   addToQueue,
@@ -905,6 +905,11 @@ async function transcribeWithGemini(
     // richer than the string-returning AIBrain.analyzeAudio contract.
     apiKey: resolveGeminiApiKey(),
     model: modelName,
+    // Only reached when the Transcribe model gets a container the splitters
+    // cannot cut (an imported .m4a/.ogg/.flac). The user's chat model decides,
+    // so the default is whatever CURRENT_GEMINI_CHAT_MODEL is today rather than
+    // a version frozen inside the transcription package.
+    fallbackModel: config.chat?.geminiModel || CURRENT_GEMINI_CHAT_MODEL,
     language: config.transcription.language || 'unknown'
   })
 
@@ -1224,7 +1229,7 @@ async function analyzeTranscriptWithGemini(
   // don't fit the string-returning AIBrain.generate contract, so this analysis
   // path keeps its direct SDK usage — full delegation is deferred to a later phase.
   const genAI = new GoogleGenerativeAI(resolveGeminiApiKey())
-  const model = genAI.getGenerativeModel({ model: config.chat?.geminiModel || 'gemini-3.5-flash' })
+  const model = genAI.getGenerativeModel({ model: config.chat?.geminiModel || 'gemini-3.8-flash' })
 
   let meetingSelectionSection = ''
   if (candidateMeetings.length > 1) {
@@ -1675,7 +1680,7 @@ export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
         stage: 'summary',
         provider: reanalysisHasGemini ? 'gemini' : 'hidock-next',
         tool: reanalysisHasGemini ? 'gemini-analysis' : 'local-fallback',
-        model: reanalysisHasGemini ? (reanalysisConfig.chat?.geminiModel || 'gemini-3.5-flash') : null,
+        model: reanalysisHasGemini ? (reanalysisConfig.chat?.geminiModel || 'gemini-3.8-flash') : null,
         execution: reanalysisHasGemini ? 'cloud' : 'local'
       })
       let analysis: TranscriptAnalysis
@@ -1717,7 +1722,7 @@ export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
         stage: 'title',
         provider: reanalysisHasGemini ? 'gemini' : 'hidock-next',
         tool: reanalysisHasGemini ? 'gemini-analysis' : 'local-fallback',
-        model: reanalysisHasGemini ? (reanalysisConfig.chat?.geminiModel || 'gemini-3.5-flash') : null,
+        model: reanalysisHasGemini ? (reanalysisConfig.chat?.geminiModel || 'gemini-3.8-flash') : null,
         execution: reanalysisHasGemini ? 'cloud' : 'local',
         parentRunIds: [summaryRun.id]
       })
@@ -2209,7 +2214,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   progressCallback?.('analyzing', 50) // spec-014: progress reporting
   const hasGeminiAnalysis = !!resolveGeminiApiKey()
   const analysisProvider = hasGeminiAnalysis ? 'gemini' : 'hidock-next'
-  const analysisModel = hasGeminiAnalysis ? (config.chat?.geminiModel || 'gemini-3.5-flash') : null
+  const analysisModel = hasGeminiAnalysis ? (config.chat?.geminiModel || 'gemini-3.8-flash') : null
   const summaryRun = createProcessingRun({
     recordingId,
     stage: 'summary',
@@ -2473,7 +2478,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     stage: 'actionable-detection',
     provider: resolveGeminiApiKey() ? 'gemini' : 'hidock-next',
     tool: resolveGeminiApiKey() ? 'gemini-analysis' : 'eligibility-gate',
-    model: resolveGeminiApiKey() ? (config.chat?.geminiModel || 'gemini-3.5-flash') : null,
+    model: resolveGeminiApiKey() ? (config.chat?.geminiModel || 'gemini-3.8-flash') : null,
     execution: resolveGeminiApiKey() ? 'cloud' : 'local',
     parentRunIds: [summaryRun.id]
   })
@@ -2585,7 +2590,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     stage: 'timeline-analysis',
     provider: resolveGeminiApiKey() ? 'gemini' : 'hidock-next',
     tool: resolveGeminiApiKey() ? 'sentiment+local-markers' : 'local-markers',
-    model: resolveGeminiApiKey() ? (config.chat?.geminiModel || 'gemini-3.5-flash') : null,
+    model: resolveGeminiApiKey() ? (config.chat?.geminiModel || 'gemini-3.8-flash') : null,
     execution: resolveGeminiApiKey() ? 'provider-managed' : 'local',
     parentRunIds: [summaryRun.id, actionableRun.id]
   })

@@ -33,6 +33,8 @@ import {
   normalizeGeminiTranscriptResponse,
   toGeminiLanguageCodes,
   nativeCoverageShortfall,
+  halveChunk,
+  NativeAudioNotSplittableError,
 } from '../src/engines/gemini-engine.js'
 import { NoSpeechDetectedError, TranscriptionCancelledError } from '../src/engines/engine-interface.js'
 
@@ -915,24 +917,34 @@ describe('GeminiEngine diarization prompt + end-to-end recovery', () => {
   })
 })
 
-// 2026-09-21: two recordings failed the same day with gemini-3.5-transcribe —
-// one interaction came back `incomplete`, one completed with word timings that
-// stopped 964 s before the recording ended. The engine had no fallback for the
-// Transcribe model: the queue retried the identical call three times and gave
-// up. These pin that the chunked generateContent path takes over, and that the
-// two outcomes that are answers rather than failures (silence, cancellation)
-// still propagate untouched.
-describe('GeminiEngine native Transcribe fallback', () => {
-  const nativeFile = { name: 'files/native-fb', state: 'ACTIVE', mimeType: 'audio/wav', uri: 'files://native-fb' }
-  const wordsTo = (endSec: number) => ({
+// 2026-09-21: two recordings failed the same day with gemini-3.5-transcribe.
+// One interaction came back `incomplete`; one came back `completed` with word
+// timings that stopped 964 s before the audio ended. Both threw, the queue
+// retried the identical request three times, and both recordings were
+// cancelled. Google documents no remedy for `incomplete`, but the engine's own
+// prompt-based range path already had one — halve the interval and retry
+// (`splitRange`) — so the native path does the same now. The recording stays on
+// gemini-3.5-transcribe: routing it to a text model was the wrong answer.
+//
+// Docs consulted 2026-09-22: unary transcription takes up to 1 h per request,
+// 30 min when diarization or word timestamps are on (this app enables both, and
+// chunks at 20 min, inside the limit).
+// https://ai.google.dev/gemini-api/docs/models/gemini-3.5-transcribe
+describe('GeminiEngine native Transcribe subdivision', () => {
+  const nativeFile = { name: 'files/native-sub', state: 'ACTIVE', mimeType: 'audio/wav', uri: 'files://native-sub' }
+  // A WAV whose byteRate makes the arithmetic readable: 100 bytes/s, so 60,000
+  // bytes of data is 600 s and halveChunk can really cut it.
+  const BYTE_RATE = 100
+  const wav = (seconds: number) => buildWav(seconds * BYTE_RATE, BYTE_RATE)
+  /** A completed interaction whose words span [from, to] seconds of the chunk. */
+  const words = (from: number, to: number) => ({
     status: 'completed',
     steps: [{ content: [{ annotations: [
-      { type: 'word_info', text: 'Hola', speaker: 'spk_0', start_offset: '0.10s', end_offset: '0.40s' },
-      { type: 'word_info', text: 'chau', speaker: 'spk_0', start_offset: `${(endSec - 0.3).toFixed(2)}s`, end_offset: `${endSec.toFixed(2)}s` },
+      { type: 'word_info', text: 'hola', speaker: 'spk_0', start_offset: from.toFixed(2) + 's', end_offset: to.toFixed(2) + 's' },
     ] }] }],
   })
-  const chunkedReply = (content: string) =>
-    streamResponse(JSON.stringify({ segments: [{ timestamp: '00:00', speaker: 'Speaker 1', content }] }))
+  const incomplete = { status: 'incomplete', steps: [] }
+  const silence = { status: 'completed', steps: [{ content: [{ annotations: [] }] }] }
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -940,67 +952,365 @@ describe('GeminiEngine native Transcribe fallback', () => {
     mockFilesDelete.mockResolvedValue(undefined)
   })
 
-  it('falls back to the chunked text model when the interaction does not complete', async () => {
-    mockInteractionsCreate.mockResolvedValue(interactionResponse({}, 'fb-1', 'incomplete'))
-    mockGenerateContentStream.mockReturnValue(chunkedReply('texto completo por el camino de trozos'))
+  it('halves an incomplete interval and keeps the recording on the same model', async () => {
+    // 600 s chunk: incomplete, then each 300 s half returns words.
+    mockInteractionsCreate
+      .mockResolvedValueOnce(incomplete)
+      .mockResolvedValueOnce(words(0, 300))
+      .mockResolvedValueOnce(words(0, 300))
     const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
 
-    const segments = await collect(engine.transcribe(oneSecond, { source: 'mic', durationSeconds: 1 }))
+    const segments = await collect(engine.transcribe(wav(600), { source: 'mic', durationSeconds: 600 }))
+
+    expect(mockInteractionsCreate).toHaveBeenCalledTimes(3)
+    // Every call went to the Transcribe model; nothing fell back to a text model.
+    for (const call of mockInteractionsCreate.mock.calls) {
+      expect(call[0].model).toBe('gemini-3.5-transcribe')
+    }
+    expect(mockGenerateContentStream).not.toHaveBeenCalled()
+    // Both halves contributed, and the second half's times are absolute.
+    expect(segments).toHaveLength(2)
+    expect(segments[1].startTime).toBeGreaterThanOrEqual(300)
+  })
+
+  it('halves a completed interval whose timings stop early', async () => {
+    // 600 s chunk, last word at 1 s: 0% coverage, the shape Rec26 had.
+    mockInteractionsCreate
+      .mockResolvedValueOnce(words(0, 1))
+      .mockResolvedValueOnce(words(0, 300))
+      .mockResolvedValueOnce(words(0, 300))
+    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+
+    const segments = await collect(engine.transcribe(wav(600), { source: 'mic', durationSeconds: 600 }))
+
+    expect(mockInteractionsCreate).toHaveBeenCalledTimes(3)
+    expect(segments).toHaveLength(2)
+  })
+
+  it('keeps absolute times through two levels of subdivision', async () => {
+    // The classic bug in a recursive splitter is a right-hand part reporting
+    // times relative to itself. 1200 s -> 600+600, the first 600 -> 300+300.
+    mockInteractionsCreate
+      .mockResolvedValueOnce(incomplete)      // 0-1200
+      .mockResolvedValueOnce(incomplete)      // 0-600
+      .mockResolvedValueOnce(words(10, 290))  // 0-300
+      .mockResolvedValueOnce(words(10, 290))  // 300-600
+      .mockResolvedValueOnce(words(10, 590))  // 600-1200
+    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+
+    const segments = await collect(engine.transcribe(wav(1200), { source: 'mic', durationSeconds: 1200 }))
+
+    expect(segments.map((s) => [s.startTime, s.endTime])).toEqual([
+      [10, 290],
+      [310, 590],
+      [610, 1190],
+    ])
+  })
+
+  it('keeps a transcript that reaches the end of its interval', async () => {
+    mockInteractionsCreate.mockResolvedValue(words(0, 599))
+    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+
+    const segments = await collect(engine.transcribe(wav(600), { source: 'mic', durationSeconds: 600 }))
 
     expect(mockInteractionsCreate).toHaveBeenCalledTimes(1)
-    expect(mockGenerateContentStream).toHaveBeenCalledTimes(1)
-    expect(mockGenerateContentStream.mock.calls[0][0].model).toBe('gemini-3.5-flash')
-    expect(segments.map((s) => s.text)).toEqual(['texto completo por el camino de trozos'])
+    expect(segments).toHaveLength(1)
   })
 
-  it('falls back when a completed transcript stops far before the recording ends', async () => {
-    // 600 s recording, last timed word at 0.9 s: 0.15% coverage. Rec26's shape.
-    mockInteractionsCreate.mockResolvedValue(wordsTo(0.9))
-    mockGenerateContentStream.mockReturnValue(chunkedReply('cobertura completa'))
+  it('fails honestly once the interval is too small to halve again', async () => {
+    // 30 s is under NATIVE_MIN_SPLIT_SECONDS: there is nothing left to try.
+    mockInteractionsCreate.mockResolvedValue(incomplete)
     const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
 
-    const segments = await collect(engine.transcribe(oneSecond, { source: 'mic', durationSeconds: 600 }))
-
-    expect(mockGenerateContentStream).toHaveBeenCalledTimes(1)
-    expect(segments.map((s) => s.text)).toEqual(['cobertura completa'])
+    await expect(collect(engine.transcribe(wav(30), { source: 'mic', durationSeconds: 30 })))
+      .rejects.toThrow(/could not produce a complete, reliable transcript/)
+    expect(mockInteractionsCreate).toHaveBeenCalledTimes(1)
   })
 
-  it('keeps the native transcript when it reaches the end of the recording', async () => {
-    mockInteractionsCreate.mockResolvedValue(wordsTo(0.9))
+  it('keeps a transcript whose speaker simply stopped talking', async () => {
+    // 240 s recording, one utterance in the first 20 s, then quiet. Coverage is
+    // 8%, which the ratio alone calls a shortfall — but there is nothing to
+    // recover, and halving keeps the ratio while shrinking the interval. Until
+    // 2026-09-22 this recursed to the 60 s floor and threw
+    // "covers 54% of the 37s recording", failing a recording whose transcript
+    // was complete. It now splits while the unaccounted tail is worth a
+    // request and then accepts the answer.
+    mockInteractionsCreate
+      .mockResolvedValueOnce(words(0, 20))  // 0-240: tail 220 s, worth splitting
+      .mockResolvedValueOnce(words(0, 20))  // 0-120: tail 100 s, worth splitting
+      .mockResolvedValueOnce(words(0, 20))  // 0-60:  tail 40 s, accepted
+      .mockResolvedValueOnce(silence)       // 60-120
+      .mockResolvedValueOnce(silence)       // 120-240
     const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
 
-    const segments = await collect(engine.transcribe(oneSecond, { source: 'mic', durationSeconds: 1 }))
+    const segments = await collect(engine.transcribe(wav(240), { source: 'mic', durationSeconds: 240 }))
 
+    expect(segments).toHaveLength(1)
+    expect(segments[0].startTime).toBe(0)
+    expect(mockInteractionsCreate).toHaveBeenCalledTimes(5)
+  })
+
+  it('releases a chunk file before its subdivisions upload their own', async () => {
+    // Recursing while the parent's file was still open kept one uploaded file
+    // per ancestor alive for the whole subtree — a 20-minute WAV per level of
+    // Files API quota, held for audio nobody reads again.
+    const order: string[] = []
+    mockFilesUpload.mockImplementation(async () => { order.push('upload'); return nativeFile })
+    mockFilesDelete.mockImplementation(async () => { order.push('delete') })
+    mockInteractionsCreate
+      .mockResolvedValueOnce(incomplete)
+      .mockResolvedValueOnce(words(0, 300))
+      .mockResolvedValueOnce(words(0, 300))
+    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+
+    await collect(engine.transcribe(wav(600), { source: 'mic', durationSeconds: 600 }))
+
+    expect(order).toEqual(['upload', 'delete', 'upload', 'delete', 'upload', 'delete'])
+  })
+
+  // The splitters only understand WAV and MP3, so an imported .m4a/.ogg/.flac
+  // reaches the model whole and cannot be retried smaller. That is a different
+  // wall from "the interval is already at the floor": at the floor the model
+  // has answered and there is nothing left to ask, while bytes we cannot cut
+  // are OUR limit, and another model reads those bytes fine. `main` sent them
+  // to the chunked generateContent path; PR #6 removed that and left every
+  // imported .m4a permanently untranscribable. It goes back, narrowed to this
+  // one case so a model that merely fell short is still not routed around.
+  const m4a = Buffer.from('ftypM4A  not something the splitters can cut')
+
+  it('falls back to the chunked path for a container it cannot cut', async () => {
+    mockInteractionsCreate.mockResolvedValue(incomplete)
+    mockGenerateContentStream.mockResolvedValue(
+      streamResponse('[00:00] Speaker 1: hola [00:04] Speaker 2: buenas')
+    )
+    const engine = new GeminiEngine({
+      apiKey: 'x',
+      model: 'gemini-3.5-transcribe',
+      fallbackModel: 'gemini-3.8-flash',
+    })
+
+    const segments = await collect(
+      engine.transcribe(m4a, { source: 'mic', durationSeconds: 900 })
+    )
+
+    expect(segments.map((segment) => segment.speaker)).toEqual(['Speaker 1', 'Speaker 2'])
+    // The fallback calls the TEXT model. Sending the Transcribe model to
+    // generateContent would call an API it does not serve.
+    expect(mockGenerateContentStream).toHaveBeenCalled()
+    for (const call of mockGenerateContentStream.mock.calls) {
+      expect(call[0].model).toBe('gemini-3.8-flash')
+    }
+  })
+
+  it('falls back for a container over the 30-minute native limit', async () => {
+    // Unary transcription with diarization is documented at 30 min. Bytes we
+    // cannot cut to fit are the same wall, so they take the same exit instead
+    // of failing the recording outright.
+    mockGenerateContentStream.mockResolvedValue(streamResponse('[00:00] Speaker 1: hola'))
+    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+
+    const segments = await collect(
+      engine.transcribe(m4a, { source: 'mic', durationSeconds: 40 * 60 })
+    )
+
+    expect(segments).toHaveLength(1)
+    expect(mockInteractionsCreate).not.toHaveBeenCalled()
+    expect(mockGenerateContentStream).toHaveBeenCalled()
+  })
+
+  it('separates the two walls: same failure, cuttable audio keeps the model', async () => {
+    // The distinction IS the fix, so one test exercises both sides of it with
+    // the identical provider answer. Asserting the error TYPE is what makes
+    // this fail against the pre-fix code, where there was only one wall.
+    mockInteractionsCreate.mockResolvedValue(incomplete)
+    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+
+    // Cuttable: the model has answered at the floor, nothing left to ask.
+    const cuttable = await collect(engine.transcribe(wav(120), { source: 'mic', durationSeconds: 120 }))
+      .then(() => null, (error) => error)
+    expect(cuttable).toBeInstanceOf(Error)
+    expect(cuttable).not.toBeInstanceOf(NativeAudioNotSplittableError)
+    expect(cuttable.message).toMatch(/could not produce a complete, reliable transcript/)
     expect(mockGenerateContentStream).not.toHaveBeenCalled()
-    expect(segments.length).toBeGreaterThan(0)
+
+    // Uncuttable: same answer from the model, but OUR limit, so it falls back.
+    mockGenerateContentStream.mockResolvedValue(streamResponse('[00:00] Speaker 1: hola'))
+    const fell = await collect(engine.transcribe(m4a, { source: 'mic', durationSeconds: 900 }))
+    expect(fell).toHaveLength(1)
+    expect(mockGenerateContentStream).toHaveBeenCalled()
   })
 
-  it('honours a configured fallback model', async () => {
-    mockInteractionsCreate.mockResolvedValue(interactionResponse({}, 'fb-2', 'incomplete'))
-    mockGenerateContentStream.mockReturnValue(chunkedReply('ok'))
-    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe', fallbackModel: 'gemini-3.5-flash-lite' })
-
-    await collect(engine.transcribe(oneSecond, { source: 'mic', durationSeconds: 1 }))
-
-    expect(mockGenerateContentStream.mock.calls[0][0].model).toBe('gemini-3.5-flash-lite')
-  })
-
-  it('does not fall back on silence: no speech is an answer', async () => {
-    mockInteractionsCreate.mockResolvedValue({ status: 'completed', steps: [{ content: [{ annotations: [] }] }] })
+  it('does NOT fall back on silence', async () => {
+    mockInteractionsCreate.mockResolvedValue(silence)
     const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
 
-    await expect(collect(engine.transcribe(oneSecond, { source: 'mic', durationSeconds: 1 })))
+    await expect(collect(engine.transcribe(m4a, { source: 'mic', durationSeconds: 900 })))
       .rejects.toBeInstanceOf(NoSpeechDetectedError)
     expect(mockGenerateContentStream).not.toHaveBeenCalled()
   })
 
-  it('does not fall back on errors that would fail on any model', async () => {
-    mockInteractionsCreate.mockRejectedValue(new Error('API key not valid. Please pass a valid API key.'))
+  it('does NOT fall back on cancellation', async () => {
+    // An exclusion committed mid-flight must stop the recording, and a
+    // fallback that outran it would send the audio to a provider anyway.
+    mockInteractionsCreate.mockResolvedValue(incomplete)
     const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
 
-    await expect(collect(engine.transcribe(oneSecond, { source: 'mic', durationSeconds: 1 })))
-      .rejects.toThrow(/API key not valid/)
+    await expect(collect(engine.transcribe(m4a, {
+      source: 'mic',
+      durationSeconds: 900,
+      shouldGenerate: () => false,
+    }))).rejects.toBeInstanceOf(TranscriptionCancelledError)
     expect(mockGenerateContentStream).not.toHaveBeenCalled()
+  })
+
+  it('does not subdivide silence: no speech is an answer', async () => {
+    mockInteractionsCreate.mockResolvedValue(silence)
+    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+
+    await expect(collect(engine.transcribe(wav(600), { source: 'mic', durationSeconds: 600 })))
+      .rejects.toBeInstanceOf(NoSpeechDetectedError)
+    expect(mockInteractionsCreate).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports progress over the ORIGINAL chunks, not the subdivisions', async () => {
+    mockInteractionsCreate
+      .mockResolvedValueOnce(incomplete)
+      .mockResolvedValueOnce(words(0, 300))
+      .mockResolvedValueOnce(words(0, 300))
+    const progress = vi.fn()
+    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+
+    await collect(engine.transcribe(wav(600), { source: 'mic', durationSeconds: 600, onProgress: progress }))
+
+    expect(progress).toHaveBeenCalledTimes(1)
+    expect(progress).toHaveBeenLastCalledWith(1, 1)
+  })
+
+  it('deletes the uploaded file for every attempt, including the ones it retries', async () => {
+    mockInteractionsCreate
+      .mockResolvedValueOnce(incomplete)
+      .mockResolvedValueOnce(words(0, 300))
+      .mockResolvedValueOnce(words(0, 300))
+    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+
+    await collect(engine.transcribe(wav(600), { source: 'mic', durationSeconds: 600 }))
+
+    expect(mockFilesDelete).toHaveBeenCalledTimes(3)
+  })
+})
+
+// Measured against the live API on 2026-09-22 with a 34-minute recording:
+// gemini-3.8-flash answers `thinkingLevel: MINIMAL` with a 400. The first call
+// already retried without the field, but the repair retry rebuilt the request
+// from the same config and asked for it again, and that 400 was not caught. The
+// recording failed with "Thinking level MINIMAL is not supported for this
+// model" after a transcript had already come back.
+describe('GeminiEngine thinking-level refusal', () => {
+  const thinking400 = Object.assign(
+    new Error('{"error":{"code":400,"message":"Thinking level MINIMAL is not supported for this model.","status":"INVALID_ARGUMENT"}}'),
+    { name: 'ApiError' }
+  )
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('stops asking for a thinking level the model refused, including on the repair retry', async () => {
+    const configs: unknown[] = []
+    // 1: refused. 2: plain, but a shape the checker rejects. 3: the repair.
+    mockGenerateContentStream.mockImplementation(async (req: any) => {
+      configs.push(req.config)
+      if (configs.length === 1) throw thinking400
+      if (configs.length === 2) {
+        return streamResponse('Speaker 1: uno Speaker 2: dos Speaker 1: tres')
+      }
+      return streamResponse('[00:00] Speaker 1: uno [00:04] Speaker 2: dos [00:08] Speaker 1: tres')
+    })
+
+    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.8-flash' })
+    const segments = await collect(engine.transcribe(oneSecond, { source: 'mic' }))
+
+    expect(segments).toHaveLength(3)
+    expect(configs).toHaveLength(3)
+    expect((configs[0] as any).thinkingConfig).toBeDefined()
+    // Both retries after the refusal go out without it.
+    expect((configs[1] as any).thinkingConfig).toBeUndefined()
+    expect((configs[2] as any).thinkingConfig).toBeUndefined()
+  })
+})
+
+describe('halveChunk', () => {
+  const BYTE_RATE = 100
+  it('splits a WAV chunk in two and keeps the parent offset', () => {
+    const halves = halveChunk({
+      data: buildWav(600 * BYTE_RATE, BYTE_RATE),
+      mimeType: 'audio/wav',
+      startSec: 1200,
+      durationSec: 600,
+    })
+    expect(halves).toHaveLength(2)
+    expect(halves![0].startSec).toBe(1200)
+    expect(halves![1].startSec).toBeGreaterThan(1200)
+    // No audio is lost: the halves cover the parent's span.
+    const covered = halves!.reduce((sum, h) => sum + h.durationSec, 0)
+    expect(covered).toBeCloseTo(600, 0)
+  })
+
+  it('splits an odd duration into exactly two parts, with no runt tail', () => {
+    // A floored target left a third part of whatever did not divide evenly —
+    // 601 s came back as 300/300/1, and that 1-second part cost an upload and
+    // a request to transcribe nothing.
+    for (const seconds of [601, 121, 999, 1201]) {
+      const halves = halveChunk({
+        data: buildWav(seconds * BYTE_RATE, BYTE_RATE),
+        mimeType: 'audio/wav',
+        startSec: 1200,
+        durationSec: seconds,
+      })
+      expect(halves).toHaveLength(2)
+      // The two parts cover the parent exactly, end to end, and each one is
+      // strictly shorter than the parent so the recursion keeps shrinking.
+      expect(halves![0].startSec).toBe(1200)
+      expect(halves![1].startSec).toBeCloseTo(1200 + halves![0].durationSec, 5)
+      expect(halves![0].durationSec + halves![1].durationSec).toBeCloseTo(seconds, 5)
+      for (const half of halves!) expect(half.durationSec).toBeLessThan(seconds)
+    }
+  })
+
+  it('halves an MP3 chunk without dropping a frame', () => {
+    const frameCount = 400
+    const mp3 = buildMp3(frameCount)
+    const total = frameCount * MP3_FRAME_DUR
+    const halves = halveChunk({ data: mp3, mimeType: 'audio/mp3', startSec: 60, durationSec: total })
+    expect(halves).not.toBeNull()
+    // Every byte of the parent survives, in order, across the parts.
+    expect(Buffer.concat(halves!.map((h) => h.data)).equals(mp3)).toBe(true)
+    expect(halves!.reduce((sum, h) => sum + h.durationSec, 0)).toBeCloseTo(total, 5)
+    expect(halves![0].startSec).toBe(60)
+    for (const half of halves!) expect(half.durationSec).toBeLessThan(total)
+  })
+
+  it('refuses a duration it cannot trust instead of cutting per second', () => {
+    // With 0, a negative or NaN the target floored to 1 and the splitters
+    // returned ONE PART PER SECOND — 600 uploads and 600 requests out of a
+    // single 600 s chunk.
+    for (const durationSec of [0, -5, 1, Number.NaN]) {
+      expect(halveChunk({
+        data: buildWav(600 * BYTE_RATE, BYTE_RATE),
+        mimeType: 'audio/wav',
+        startSec: 0,
+        durationSec,
+      })).toBeNull()
+    }
+  })
+
+  it('returns null for bytes it cannot cut', () => {
+    expect(halveChunk({
+      data: Buffer.from('not audio at all'),
+      mimeType: 'audio/wav',
+      startSec: 0,
+      durationSec: 600,
+    })).toBeNull()
   })
 })
 
@@ -1019,5 +1329,20 @@ describe('nativeCoverageShortfall', () => {
   it('accepts a transcript that reaches within five minutes of the end', () => {
     expect(nativeCoverageShortfall([{ endTime: 3400 }], 3600)).toBeNull()
     expect(nativeCoverageShortfall([{ endTime: 0.9 }], 1)).toBeNull()
+  })
+  it('ignores a tail shorter than the smallest interval worth requesting', () => {
+    // 54% of 37 s is 17 s unaccounted. Splitting cannot recover 17 s, so this
+    // is a speaker who stopped talking, not a truncated transcript.
+    expect(nativeCoverageShortfall([{ endTime: 20 }], 37)).toBeNull()
+    expect(nativeCoverageShortfall([{ endTime: 20 }], 75)).toBeNull()
+    // One second past the floor it is worth one more request.
+    expect(nativeCoverageShortfall([{ endTime: 20 }], 81)).toMatch(/covers 25%/)
+  })
+  it('clamps segments that fall outside the interval being judged', () => {
+    // Times are absolute; a segment before the interval must not read as
+    // negative coverage, and one past its end must not read as extra.
+    expect(nativeCoverageShortfall([{ endTime: 5 }], 600, 600)).toMatch(/covers 0%/)
+    expect(nativeCoverageShortfall([{ endTime: -50 }], 600)).toMatch(/covers 0%/)
+    expect(nativeCoverageShortfall([{ endTime: 5000 }], 600)).toBeNull()
   })
 })
