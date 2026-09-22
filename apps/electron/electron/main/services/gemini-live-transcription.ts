@@ -73,6 +73,45 @@ export interface RealtimeChannel {
  * Returns null when there is nothing usable (muted, header only, or a payload
  * that is not a whole number of stereo frames' worth of samples to read).
  */
+/**
+ * True when this packet's payload is not a whole number of stereo frames.
+ *
+ * A stereo frame is 4 bytes, so a real stereo packet's payload is always a
+ * multiple of 4. A payload that is a multiple of 2 and not of 4 is a stream of
+ * single 16-bit samples: one channel.
+ *
+ * One such packet proves nothing — a truncated read looks identical — so this
+ * is a signal, not a verdict. MONO_PACKETS_BEFORE_DEGRADING is what turns a run
+ * of them into a decision.
+ */
+export function looksMono(packet: RealtimeData): boolean {
+  const length = packet.data.length - 8
+  return length > 0 && length % 2 === 0 && length % 4 !== 0
+}
+
+/**
+ * How many odd packets in a row mean the firmware is sending one channel.
+ *
+ * Firmware that sends mono sends it every packet; a truncated USB read is an
+ * accident and does not repeat. Degrading on the first one would throw away
+ * speaker attribution for the rest of the session over a single glitch, and
+ * five packets is half a second.
+ */
+export const MONO_PACKETS_BEFORE_DEGRADING = 5
+
+/**
+ * The payload of a one-channel packet, as it already is.
+ *
+ * `hidockRealtimeToMonoPcm` averages two channels; there is nothing to average
+ * here, and running it over single samples would fold every other sample into
+ * its neighbour.
+ */
+export function monoPayload(packet: RealtimeData): Uint8Array {
+  return packet.muted || packet.data.length <= 8
+    ? new Uint8Array(0)
+    : packet.data.subarray(8)
+}
+
 export function splitRealtimeChannels(packet: RealtimeData): [RealtimeChannel, RealtimeChannel] | null {
   if (packet.muted || packet.data.length <= 8) return null
   const input = packet.data.subarray(8)
@@ -370,6 +409,8 @@ export class GeminiLiveTranscriptionService {
   private sessions: [ChannelSession, ChannelSession] | null = null
   /** Set when only one session could be used: the stream is mono, unattributed. */
   private monoSession: ChannelSession | null = null
+  /** Consecutive packets whose payload is not whole stereo frames. */
+  private monoRun = 0
   private identifier = new MicChannelIdentifier()
   private persistedChannel = false
   private sender: LiveTranscriptionSender | null = null
@@ -423,6 +464,26 @@ export class GeminiLiveTranscriptionService {
     }
   }
 
+  /**
+   * The device is sending one channel. Keep the first session, drop the second.
+   *
+   * Said once, like the failed-connection case, and for the same reason: this
+   * is a property of the firmware on the other end of the cable, not of any
+   * one packet, so repeating it every 100 ms would bury the log.
+   */
+  private async degradeToMono(): Promise<void> {
+    if (this.monoSession) return
+    const open = this.sessions
+    this.sessions = null
+    this.emit('transcription-live:error', {
+      error:
+        'The device is sending a single audio channel, so this transcript will not be split by speaker.',
+    })
+    if (!open) return
+    this.monoSession = open[0]
+    await open[1].stop()
+  }
+
   /** A start that lost a race owns its own sessions; nothing else will close them. */
   private async discard(...sessions: ChannelSession[]): Promise<void> {
     for (const session of sessions) await session.stop()
@@ -432,6 +493,22 @@ export class GeminiLiveTranscriptionService {
     if (!this.active) return
     const key = resolveGeminiApiKey()
     if (!key) return
+
+    // One channel on the wire: the two-session design has nothing to split, so
+    // it degrades to the single session it already has for a failed second
+    // connection, labelled `speaker` because nothing says which voice it is.
+    if (looksMono(packet)) {
+      this.monoRun += 1
+      if (this.monoRun >= MONO_PACKETS_BEFORE_DEGRADING && !this.monoSession) {
+        await this.degradeToMono()
+      }
+      if (this.monoSession) {
+        await this.monoSession.send(monoPayload(packet), key)
+        return
+      }
+    } else {
+      this.monoRun = 0
+    }
 
     const channels = splitRealtimeChannels(packet)
     if (!channels) return
@@ -474,6 +551,7 @@ export class GeminiLiveTranscriptionService {
     const sessions = this.allSessions()
     this.sessions = null
     this.monoSession = null
+    this.monoRun = 0
     for (const session of sessions) await session.stop()
     this.emit('transcription-live:status', { status: 'stopped' })
     this.sender = null

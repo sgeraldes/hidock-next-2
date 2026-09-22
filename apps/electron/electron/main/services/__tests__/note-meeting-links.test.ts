@@ -79,7 +79,7 @@ describe('suggesting a meeting afterwards', () => {
 
     const suggestions = await suggestMeetings(note.id)
 
-    expect(suggestions).toHaveLength(1)
+    // First, above the same-day meetings offered so the person can pick by hand.
     expect(suggestions[0].meetingId).toBe('m-now')
     expect(suggestions[0].reason).toMatch(/while that meeting was happening/)
   })
@@ -93,7 +93,7 @@ describe('suggesting a meeting afterwards', () => {
 
     const suggestions = await suggestMeetings(note.id)
 
-    expect(suggestions.map((s) => s.meetingId)).toEqual(['m-later'])
+    expect(suggestions[0].meetingId).toBe('m-later')
     expect(suggestions[0].reason).toMatch(/same things/)
   })
 
@@ -106,8 +106,10 @@ describe('suggesting a meeting afterwards', () => {
 
     const suggestions = await suggestMeetings(note.id)
 
-    expect(suggestions).toHaveLength(1)
-    // The stronger reason wins: being there beats sounding similar.
+    // Once, not twice, and with the stronger reason: being there beats
+    // sounding similar.
+    expect(suggestions.filter((s) => s.meetingId === 'm-now')).toHaveLength(1)
+    expect(suggestions[0].meetingId).toBe('m-now')
     expect(suggestions[0].reason).toMatch(/while that meeting was happening/)
   })
 
@@ -118,15 +120,38 @@ describe('suggesting a meeting afterwards', () => {
       { document: { id: 'c1', metadata: { meetingId: 'm-deleted' } }, score: 0.9 },
     ])
 
-    expect(await suggestMeetings(note.id)).toEqual([])
+    // The chunk contributes nothing; only the same-day list is left.
+    const suggestions = await suggestMeetings(note.id)
+    expect(suggestions.map((s) => s.meetingId)).not.toContain('m-deleted')
+    expect(suggestions.every((s) => /same day/.test(s.reason))).toBe(true)
   })
 
-  it('suggests nothing for an empty note and never asks the index', async () => {
+  it('never asks the index for an empty note', async () => {
     const note = createNote()
     getDatabase().run('UPDATE notes SET created_at = ? WHERE id = ?', [AFTER, note.id])
 
-    expect(await suggestMeetings(note.id)).toEqual([])
+    await suggestMeetings(note.id)
     expect(search).not.toHaveBeenCalled()
+  })
+
+  it('offers the meetings of that day so a note can be linked by hand', async () => {
+    // Two signals that both come up empty is not an answer. Picking one off a
+    // list IS choosing by hand, and it is the only way to link a note the
+    // calendar and the transcript both failed to connect.
+    const note = createNote({ content: 'algo que no se parece a nada' })
+    getDatabase().run('UPDATE notes SET created_at = ? WHERE id = ?', [AFTER, note.id])
+
+    const suggestions = await suggestMeetings(note.id)
+
+    expect(suggestions.map((s) => s.meetingId).sort()).toEqual(['m-later', 'm-now'])
+    expect(suggestions.every((s) => /Pick it if it is the right one/.test(s.reason))).toBe(true)
+  })
+
+  it('offers nothing for a day with no meetings at all', async () => {
+    const note = createNote({ content: 'algo' })
+    getDatabase().run('UPDATE notes SET created_at = ? WHERE id = ?', ['2026-01-05T10:00:00.000Z', note.id])
+
+    expect(await suggestMeetings(note.id)).toEqual([])
   })
 
   it('links nothing by itself', async () => {
@@ -135,6 +160,7 @@ describe('suggesting a meeting afterwards', () => {
 
     await suggestMeetings(note.id)
 
+    // Not even the strongest candidate writes itself in.
     const row = getDatabase()
       .exec('SELECT meeting_id, link_source FROM notes WHERE id = ?', [note.id])[0]
     expect(row.values[0]).toEqual([null, null])

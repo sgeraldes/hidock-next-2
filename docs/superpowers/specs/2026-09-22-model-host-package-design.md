@@ -1,8 +1,10 @@
 # El paquete de la gamestation: instalar las herramientas y prestarlas por la red
 
 Fecha: 2026-09-22
-Estado: spec aprobado, en implementación
-Feature 3 de 4 de la cola del 22-sep. PR propio, revisión adversarial antes del merge.
+Estado: construido y mergeado en `main` ([PR #9](https://github.com/sgeraldes/hidock-next-2/pull/9)),
+sin instalar todavía en la gamestation.
+Feature 3 de 4 de la cola del 22-sep. Corregido el 22-sep contra el código tras un QA
+que leyó este documento afirmación por afirmación.
 
 ## El pedido
 
@@ -36,7 +38,7 @@ probado en `apps/electron/resources/speaker-linking/worker.py`.
 
 | Pieza | Qué hace |
 |---|---|
-| Instalador `HiDock-Model-Host-<version>-Setup.exe` | NSIS, per-user, sin consola. Copia el host, el worker y un Python embebido. |
+| Instalador `HiDock-Model-Host-<version>-Setup.exe` | NSIS, per-user, sin consola. Lleva el host, el worker y una copia de Node. **El Python lo baja el asistente**, no el instalador: son 2,5 GB de torch y bajarlos dentro de un instalador sin forma de pausar es peor que pedirlos una vez con la barra a la vista. Sin internet en la primera corrida, el asistente no puede terminar. |
 | Asistente de primera corrida | Detecta GPU y driver de verdad, instala torch CUDA desde el índice de PyTorch, baja el modelo de pyannote con el token del usuario, y corre una prueba sintética antes de decir que anda. |
 | Servicio del host | HTTP sobre la LAN, autenticado con un token de pareo. Un solo trabajo pesado a la vez. |
 | Panel de control | Una página en `http://localhost:<puerto>` con Iniciar, Pausar y Detener. |
@@ -55,7 +57,7 @@ Tres rutas, nada más:
 | Ruta | Qué devuelve |
 |---|---|
 | `GET /health` | versión, capacidades verificadas, estado (stopped/ready/paused/busy), GPU detectada |
-| `POST /pair` | canjea un código de 8 dígitos que muestra la bandeja por un token permanente |
+| `POST /pair` | canjea un código de 8 dígitos que muestra el panel de control por un token permanente |
 | `POST /jobs/diarize` | recibe el audio, devuelve el mismo JSON que produce hoy el worker local |
 
 El audio viaja por el cuerpo de la petición y el host lo borra al terminar el
@@ -101,9 +103,13 @@ Unit, sin la gamestation:
 - El cliente elige host o local según salud, y cae a local ante error de red,
   host pausado, timeout y respuesta con forma inesperada.
 - El aviso de caída sale una vez por sesión, no por grabación.
-- El token de pareo se guarda cifrado y no aparece en logs.
-- El host rechaza una petición sin token, con token vencido y con token de otro
-  cliente.
+- El token de pareo se guarda cifrado en el cliente (`safeStorage`, igual que la
+  URL del calendario) y no aparece en logs. Del lado del host, `tokens.json` no
+  está cifrado: lo protege el permiso del archivo (0600), y el token de Hugging
+  Face va en un archivo aparte con la ACL cerrada a la cuenta que instaló.
+- El host rechaza una petición sin token y con un token que nunca emitió. **Los
+  tokens del host no vencen**; lo que vence es el código de pareo, a los cinco
+  minutos, y muere también a los cinco intentos errados.
 - El host acepta un solo trabajo pesado y responde 429 al segundo.
 - El audio temporal se borra al terminar el trabajo, también cuando falla.
 

@@ -34,6 +34,7 @@ import {
   MicChannelIdentifier,
   hidockRealtimeToMonoPcm,
   splitRealtimeChannels,
+  MONO_PACKETS_BEFORE_DEGRADING,
 } from '../gemini-live-transcription'
 
 /** Build a realtime packet: 8-byte header, then interleaved L/R PCM16LE. */
@@ -378,6 +379,109 @@ describe('GeminiLiveTranscriptionService with two channels', () => {
     expect(errors).toHaveLength(1)
     expect(String(errors[0][1].error)).toMatch(/not be split by speaker/)
     await service.stop()
+  })
+
+  it('keeps two sessions through a single odd packet', async () => {
+    // A truncated USB read looks exactly like a mono payload. Throwing away
+    // speaker attribution for the rest of the session over one glitch is worse
+    // than reading its whole frames and ignoring the stray tail.
+    const h = harness()
+    await h.service.start(h.sender)
+    const odd = { rest: 0, muted: false, data: new Uint8Array(8 + 6) }
+    new DataView(odd.data.buffer).setInt16(8, 9000, true)
+    await h.service.acceptDevicePacket(odd)
+    await h.service.acceptDevicePacket(tone(9000, 9000, 5))
+
+    expect(h.sessions).toHaveLength(2)
+    expect(events(h.sender, 'transcription-live:error')).toHaveLength(0)
+    await h.service.stop()
+  })
+
+  it('degrades to one session when the device keeps sending a single channel', async () => {
+    // Firmware that sends mono sends it every packet. Five in a row is half a
+    // second, which no truncated read survives.
+    const h = harness()
+    await h.service.start(h.sender)
+    const mono = () => {
+      const data = new Uint8Array(8 + 6)
+      const view = new DataView(data.buffer)
+      view.setInt16(8, 9000, true)
+      view.setInt16(10, -9000, true)
+      view.setInt16(12, 9000, true)
+      return { rest: 0, muted: false, data }
+    }
+    for (let i = 0; i < MONO_PACKETS_BEFORE_DEGRADING; i++) {
+      await h.service.acceptDevicePacket(mono())
+    }
+
+    const errors = events(h.sender, 'transcription-live:error')
+    expect(errors).toHaveLength(1)
+    expect(String(errors[0].error)).toMatch(/single audio channel/)
+    expect(h.sessions[1].close).toHaveBeenCalled()
+    // The surviving session got the payload as it is, not an average of it
+    // with itself.
+    const sent = h.sessions[0].sendRealtimeInput.mock.calls.at(-1)?.[0] as
+      | { audio?: { data?: string } }
+      | undefined
+    expect(sent?.audio?.data).toBeTruthy()
+    await h.service.stop()
+  })
+
+  it('says the device is mono once, not on every packet', async () => {
+    const h = harness()
+    await h.service.start(h.sender)
+    const data = new Uint8Array(8 + 6)
+    new DataView(data.buffer).setInt16(8, 9000, true)
+    for (let i = 0; i < MONO_PACKETS_BEFORE_DEGRADING + 20; i++) {
+      await h.service.acceptDevicePacket({ rest: 0, muted: false, data })
+    }
+    expect(events(h.sender, 'transcription-live:error')).toHaveLength(1)
+    await h.service.stop()
+  })
+
+  it('delivers every packet that arrives during a rotation', async () => {
+    // The spec claimed this was verified with three concurrent packets and it
+    // was not. Three sends are started without awaiting the first, while the
+    // rotation window has already passed, so all three race the reconnect.
+    const h = harness()
+    await h.service.start(h.sender)
+    await h.service.acceptDevicePacket(tone(9000, 9000, 5))
+    const before = h.sessions.length
+    h.tick(9 * 60 * 1000 + 1)
+
+    await Promise.all([
+      h.service.acceptDevicePacket(tone(9000, 9000, 5)),
+      h.service.acceptDevicePacket(tone(9000, 9000, 5)),
+      h.service.acceptDevicePacket(tone(9000, 9000, 5)),
+    ])
+
+    // One rotation per channel, not one per packet: three concurrent sends do
+    // not open three new sessions. Both channels carry the same tone, so both
+    // rotate, which is two new sessions and not six.
+    expect(h.sessions.length).toBe(before + 2)
+    const audioSends = h.sessions
+      .flatMap((session) => session.sendRealtimeInput.mock.calls)
+      .filter((call) => (call[0] as { audio?: unknown }).audio).length
+    // Four packets, two channels each.
+    expect(audioSends).toBe(8)
+    await h.service.stop()
+  })
+
+  it('keeps the other channel alive when one session drops mid-run', async () => {
+    const h = harness()
+    await h.service.start(h.sender)
+    await h.service.acceptDevicePacket(tone(9000, 9000, 5))
+
+    // Channel 1 closes on its own, the way a dropped socket does.
+    h.sessions[1].callbacks.onclose?.({ reason: 'socket closed' })
+    await h.service.acceptDevicePacket(tone(9000, 9000, 5))
+
+    // Channel 0 never stopped receiving audio.
+    const channelZeroAudio = h.sessions[0].sendRealtimeInput.mock.calls.filter(
+      (call) => (call[0] as { audio?: unknown }).audio
+    ).length
+    expect(channelZeroAudio).toBeGreaterThanOrEqual(2)
+    await h.service.stop()
   })
 
   it('closes both sessions when two starts overlap', async () => {

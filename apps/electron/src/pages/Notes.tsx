@@ -6,7 +6,7 @@
  * adds sits to the side of the writing rather than in front of it.
  */
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Plus, Sparkles, Trash2, Link2, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -43,6 +43,36 @@ export default function Notes(): React.ReactElement {
     return () => clearTimeout(timer)
   }, [search, refresh])
 
+  /**
+   * Start a note, and say it was started now.
+   *
+   * `live: true` is not a claim that a recording is running — the renderer
+   * cannot know that, and a renderer clock can be wrong. It tells the main
+   * process to look at the calendar for a meeting covering this moment and
+   * attach the note to it. No meeting covering now means no link, not a guess.
+   *
+   * Every new note goes through here, because "I am writing this during the
+   * meeting" is the case that cannot be reconstructed afterwards, and asking
+   * the person to say so is exactly the friction this feature exists to avoid.
+   */
+  const startNote = useCallback(async () => {
+    await create({ live: true })
+  }, [create])
+
+  // Ctrl+N / Cmd+N while the notes page is open. Not a system-wide accelerator:
+  // one of those would pull focus out of whatever the person is doing, which on
+  // this machine is a rule, not a preference.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'n') {
+        event.preventDefault()
+        void startNote()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [startNote])
+
   const withBusy = async (fn: () => Promise<{ success: boolean; error?: string }>, failure: string) => {
     setBusy(true)
     try {
@@ -64,7 +94,12 @@ export default function Notes(): React.ReactElement {
             aria-label="Search notes"
             onChange={(event) => setSearch(event.target.value)}
           />
-          <Button size="icon" aria-label="New note" onClick={() => void create()}>
+          <Button
+            size="icon"
+            aria-label="New note"
+            title="New note (Ctrl+N). A note started during a meeting is attached to it."
+            onClick={() => void startNote()}
+          >
             <Plus className="h-4 w-4" />
           </Button>
         </div>
@@ -73,7 +108,7 @@ export default function Notes(): React.ReactElement {
             <li className="p-4 text-sm text-muted-foreground">
               {search
                 ? 'No note matches that.'
-                : 'No notes yet. The plus button opens one with the cursor already in it.'}
+                : 'No notes yet. The plus button, or Ctrl+N, opens one with the cursor already in it.'}
             </li>
           )}
           {notes.map((note) => (
@@ -196,6 +231,31 @@ export default function Notes(): React.ReactElement {
                 </section>
               )}
 
+              {selected.meetingId && (
+                <section>
+                  <h2 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">
+                    Meeting
+                  </h2>
+                  <p className="text-xs text-muted-foreground">
+                    {selected.linkSource === 'live'
+                      ? 'Attached while that meeting was happening.'
+                      : selected.linkSource === 'user'
+                        ? 'You chose this one.'
+                        : 'You accepted a suggestion.'}
+                  </p>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="mt-2"
+                    onClick={() =>
+                      void patch(selected.id, { meetingId: null, linkSource: null })
+                    }
+                  >
+                    Unlink
+                  </Button>
+                </section>
+              )}
+
               {suggestions.length > 0 && (
                 <section>
                   <h2 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">
@@ -213,7 +273,10 @@ export default function Notes(): React.ReactElement {
                           onClick={() =>
                             void patch(selected.id, {
                               meetingId: suggestion.meetingId,
-                              linkSource: 'suggested',
+                              // Picking one off a list IS choosing by hand. The
+                              // only link this app calls 'suggested' is one it
+                              // made itself, and it never makes one.
+                              linkSource: 'user',
                             })
                           }
                         >

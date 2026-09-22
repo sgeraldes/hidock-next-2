@@ -1,8 +1,9 @@
 # Notas: escribirlas acá en vez del notepad, y que sirvan después
 
 Fecha: 2026-09-22
-Estado: spec aprobado, en implementación
-Feature 4 de 4 de la cola del 22-sep. PR propio, revisión adversarial antes del merge.
+Estado: construido y mergeado en `main` ([PR #10](https://github.com/sgeraldes/hidock-next-2/pull/10)).
+Feature 4 de 4 de la cola del 22-sep. Corregido el 22-sep contra el código tras un QA
+que leyó este documento afirmación por afirmación.
 
 ## El pedido
 
@@ -61,6 +62,7 @@ notes
   link_source       TEXT          -- 'live' | 'user' | 'suggested'
   ai_status         TEXT          -- 'none' | 'pending' | 'ready' | 'failed'
   ai_error          TEXT
+  ai_content_hash   TEXT          -- huella del texto que leyó el último análisis
   created_at, updated_at, deleted_at
 ```
 
@@ -72,12 +74,16 @@ en esta app y costó una revisión adversarial entera; se copia en vez de reinve
 ### 2. Escribir
 
 Una superficie nueva, `apps/electron/src/features/notes/`. Lista a la izquierda,
-editor a la derecha, y un atajo global que abre una nota nueva con el foco ya en
-el cuerpo.
+editor a la derecha, y **Ctrl+N dentro de la página** abre una nota nueva con el
+foco ya en el cuerpo.
 
-- **Guardado solo.** A los 800 ms de dejar de tipear, y al salir. Nada de botón
-  Guardar: el notepad tampoco lo tiene y perder una nota por no apretarlo sería
-  peor que cualquier cosa que este feature agregue.
+El atajo es de la app, no del sistema. Un acelerador global traería la ventana al
+frente desde cualquier cosa que estés haciendo, y robar el foco en esta máquina es
+una regla, no una preferencia.
+
+- **Guardado solo.** A los 800 ms de dejar de tipear, al cambiar de nota y al
+  salir. Nada de botón Guardar: el notepad tampoco lo tiene y perder una nota por
+  no apretarlo sería peor que cualquier cosa que este feature agregue.
 - **Markdown crudo.** Se tipea markdown y se ve markdown. Un editor enriquecido
   es otro proyecto y pelea con pegar texto de cualquier lado.
 - **El título es opcional.** La primera línea se muestra como título mientras no
@@ -86,22 +92,34 @@ el cuerpo.
 
 ### 3. Asociar con lo que está pasando
 
-Si hay una grabación en curso cuando se crea la nota, la nota queda atada a esa
-grabación con `link_source='live'`, sin preguntar. Es el caso que el pedido nombra
-primero y el único que no se puede reconstruir después: en el momento se sabe, más
-tarde hay que adivinar.
+Toda nota nueva se crea diciendo "esto lo estoy escribiendo ahora", y el proceso
+principal mira el calendario: si hay una reunión que cubre este instante, la nota
+queda atada **a esa reunión** con `link_source='live'`, sin preguntar. Si no hay
+ninguna, no queda atada a nada; nunca se elige la más cercana.
+
+**A la reunión, no a la grabación.** El dispositivo no tiene un id de grabación
+hasta que su archivo se descarga, así que en el momento no hay a qué apuntar. La
+reunión sí está, y es lo que no se puede reconstruir después: en el momento el
+calendario lo sabe, más tarde hay que adivinar.
+
+El renderer no decide nada de esto. No puede saber si el dispositivo está
+grabando, y su reloj puede estar mal.
 
 A posteriori hay dos caminos, los dos explícitos:
 
-| Camino | Qué hace |
-|---|---|
-| Elegir la reunión a mano | `link_source='user'`, gana siempre |
-| Aceptar una sugerencia | `link_source='suggested'` |
+Un solo camino, y es a mano: la lista de candidatas, con el motivo de cada una
+escrito al lado, y un botón por candidata. Elegir una escribe `link_source='user'`,
+porque **elegir de una lista es elegir a mano**. `'suggested'` queda reservado para
+un vínculo que la app se hiciera sola, y no se hace ninguno.
 
-Las sugerencias salen de dos señales que ya están: la reunión del calendario que
+Las candidatas salen de dos señales que ya están —la reunión del calendario que
 cubre el momento en que se escribió la nota, y el parecido semántico entre la nota
-y el transcript. Se muestran con el motivo escrito ("se escribió durante esta
-reunión", "menciona lo mismo que este transcript"), nunca como un vínculo ya hecho.
+y el transcript— y, cuando esas dos dan poco, de **las reuniones de ese mismo día**,
+para que siempre haya de dónde elegir. Cada una dice por qué está ahí: "se escribió
+durante esta reunión", "dice lo mismo que ese transcript", "fue ese día, elegila si
+es la correcta". Ninguna se aplica sola.
+
+Una nota ya vinculada muestra de dónde vino el vínculo y se puede desvincular.
 
 ### 4. Lo que hace la IA, y cuándo
 
@@ -112,7 +130,7 @@ tipeo:
 |---|---|
 | Categorizar | `category` y `tags` |
 | Resumir | `summary` y `suggested_title` |
-| Cruzar | una lista de notas, transcripts y reuniones parecidas |
+| Cruzar | una lista de notas y transcripts parecidos (una reunión aparece por su transcript, no como fila propia) |
 | Asociar | reuniones candidatas, con el motivo |
 
 Las dos primeras corren juntas en una sola llamada, porque pedir categoría y
@@ -152,8 +170,11 @@ encontrarla.
 - Precedencia: el título del usuario le gana al sugerido; una categoría corregida
   a mano sobrevive a un reanálisis; `category_source` lo decide.
 - Guardado solo: dos ediciones seguidas escriben una vez, salir escribe siempre.
-- Atado en vivo: con grabación en curso queda `link_source='live'`; sin grabación
-  queda sin vínculo.
+- Atado en vivo: con una reunión cubriendo el momento queda `link_source='live'`
+  apuntando a esa reunión; sin reunión que lo cubra queda sin vínculo, y nunca se
+  elige la más cercana.
+- El botón de nota nueva y Ctrl+N pasan por ese camino, o sea el vínculo en vivo
+  se puede disparar desde la app y no sólo desde el IPC.
 - Sugerencias: se muestran con motivo y no se aplican solas.
 - IA: no corre con cada guardado, corre a los 30 s de quietud, no corre dos veces
   sobre el mismo texto, y una falla deja `ai_status='failed'` con el motivo sin
