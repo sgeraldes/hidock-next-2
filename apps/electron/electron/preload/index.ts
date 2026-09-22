@@ -156,6 +156,7 @@ import type {
   Person
 } from '../../src/types/knowledge'
 import type { PipelineState } from '../main/types/device-pipeline'
+import type { Note, NoteRelatedItem, NoteMeetingSuggestion } from '../../src/types/notes'
 
 /** A Context Graph node with its degree + click-through ids (mirrors the service DTO). */
 interface ContextGraphNode {
@@ -704,6 +705,31 @@ export interface ElectronAPI {
   // Database - Queue
   queue: {
     getItems: (status?: string) => Promise<any[]>
+  }
+
+  /**
+   * Hand-written notes. Create, edit and search need nothing but this machine;
+   * analyze/related/meetingSuggestions return an error result when there is no
+   * AI provider, and the editor carries on without them.
+   */
+  notes: {
+    create: (request?: { content?: string; live?: boolean }) => Promise<{ success: boolean; note?: Note; error?: string }>
+    list: (request?: { limit?: number; offset?: number; search?: string }) => Promise<{ success: boolean; notes?: Note[]; error?: string }>
+    get: (request: { id: string }) => Promise<{ success: boolean; note?: Note; error?: string }>
+    update: (request: {
+      id: string
+      content?: string
+      title?: string | null
+      category?: string | null
+      tags?: string[]
+      meetingId?: string | null
+      recordingId?: string | null
+      linkSource?: 'live' | 'user' | 'suggested' | null
+    }) => Promise<{ success: boolean; note?: Note; error?: string }>
+    delete: (request: { id: string }) => Promise<{ success: boolean }>
+    analyze: (request: { id: string; force?: boolean }) => Promise<{ success: boolean; note?: Note; error?: string }>
+    related: (request: { id: string }) => Promise<{ success: boolean; items?: NoteRelatedItem[]; error?: string }>
+    meetingSuggestions: (request: { id: string }) => Promise<{ success: boolean; suggestions?: NoteMeetingSuggestion[]; error?: string }>
   }
 
   // Knowledge Captures
@@ -1604,6 +1630,17 @@ const electronAPI: ElectronAPI = {
 
   queue: {
     getItems: (status) => callIPC('db:get-queue', status)
+  },
+
+  notes: {
+    create: (request) => callIPC('notes:create', request ?? {}),
+    list: (request) => callIPC('notes:list', request ?? {}),
+    get: (request) => callIPC('notes:get', request),
+    update: (request) => callIPC('notes:update', request),
+    delete: (request) => callIPC('notes:delete', request),
+    analyze: (request) => callIPC('notes:analyze', request),
+    related: (request) => callIPC('notes:related', request),
+    meetingSuggestions: (request) => callIPC('notes:meetingSuggestions', request)
   },
 
   knowledge: {

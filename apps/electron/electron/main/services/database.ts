@@ -13,7 +13,7 @@ import { getEventBus } from './event-bus'
 import { isCancelledMeetingSubject, scoreMeetingCandidates } from './recording-match-scoring'
 import type { QualityRating } from '@/types/knowledge'
 
-const SCHEMA_VERSION = 54
+const SCHEMA_VERSION = 55
 
 const SCHEMA = `
 -- Calendar events from ICS
@@ -2976,7 +2976,63 @@ const MIGRATIONS: Record<number, () => void> = {
     }
     console.log('Migration v54 complete')
   },
+  55: () => {
+    console.log('Running migration to schema v55: hand-written notes')
+    const database = getDatabase()
+    // A note is not a knowledge capture. A capture is audio: it owns
+    // audio_sources, transcripts, diarization and a quality rating, and a note
+    // has none of those. Putting notes in that table would make every library
+    // query filter out the rows that are not recordings. One table costs less
+    // than that condition in every caller.
+    database.run(NOTES_TABLE_DDL)
+    console.log('Migration v55 complete')
+  },
 }
+
+/**
+ * Notes, hand-written. Single source of truth for the DDL: migration 55 and the
+ * fresh-install schema both use it, so the two can never drift.
+ *
+ * The suggested_title / category_source pair repeats the shape that
+ * knowledge_captures already uses for user_title and quality_source: what the
+ * AI produced and what the person decided live in different columns, so a
+ * re-analysis can refresh its own guess and can never overwrite a correction.
+ * That rule was broken once in this app and cost a whole adversarial review, so
+ * it is copied rather than reinvented.
+ */
+const NOTES_TABLE_DDL = `
+  CREATE TABLE IF NOT EXISTS notes (
+    id TEXT PRIMARY KEY,
+    -- What the person typed as a title. Empty until they type one.
+    title TEXT,
+    -- What the AI proposed. Never overwrites title.
+    suggested_title TEXT,
+    content TEXT NOT NULL DEFAULT '',
+    summary TEXT,
+    category TEXT,
+    category_source TEXT CHECK(category_source IN ('ai', 'user')),
+    tags TEXT,
+    meeting_id TEXT,
+    recording_id TEXT,
+    -- How the link happened: while the recording was running, by hand, or by
+    -- accepting a suggestion. A live link is the only one that cannot be
+    -- reconstructed later, so it is worth recording which it was.
+    link_source TEXT CHECK(link_source IN ('live', 'user', 'suggested')),
+    ai_status TEXT CHECK(ai_status IN ('none', 'pending', 'ready', 'failed')) DEFAULT 'none',
+    ai_error TEXT,
+    -- Hash of the content the last successful analysis read, so an edit that
+    -- changed nothing does not pay for another call.
+    ai_content_hash TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TEXT,
+    FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE SET NULL,
+    FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE SET NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(deleted_at, updated_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_notes_meeting ON notes(meeting_id);
+  CREATE INDEX IF NOT EXISTS idx_notes_recording ON notes(recording_id);
+`
 
 /** Single source of truth for the v43 ledger DDL — used by repairPhase and migration 43. */
 const OBSERVATIONS_TABLE_DDL = `
@@ -3492,6 +3548,15 @@ function repairPhase(): void {
     console.warn('[Database] project_discovery_observations create skipped:', (e as Error).message)
   }
   ensureObservationsTableUsable(database, '[Database] repairPhase')
+
+  // Notes (v55). A fresh install never runs migration 55, and repairPhase runs
+  // on every boot before migrations, so this is what actually creates the table
+  // on a new database. Idempotent, and the same DDL the migration uses.
+  try {
+    database.run(NOTES_TABLE_DDL)
+  } catch (e) {
+    console.warn('[Database] notes create skipped:', (e as Error).message)
+  }
 
   // Repair transcript_speakers (v25): a new table has no columns to ALTER, but
   // force-create it here so an older on-disk DB that skipped the migration still

@@ -7,6 +7,7 @@ import {
   Calendar,
   CloudDownload,
   BookOpen,
+  NotebookPen,
   Bot,
   Compass,
   ListTodo,
@@ -51,6 +52,7 @@ const navigationSections: NavigationSection[] = [
     items: [
       { name: 'Today', href: '/today', icon: Sun },
       { name: 'Library', href: '/library', icon: BookOpen },
+      { name: 'Notes', href: '/notes', icon: NotebookPen },
       { name: 'Assistant', href: '/assistant', icon: Bot },
       { name: 'Explore', href: '/explore', icon: Compass },
       { name: 'Context Graph', href: '/context-graph', icon: Network }
