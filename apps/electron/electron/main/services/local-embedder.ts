@@ -1,240 +1,170 @@
-/**
- * Local in-process embedding service (Nemotron-3-Embed via ONNX Runtime).
- *
- * Runs NVIDIA's Nemotron-3-Embed-1B (2048-dim, RTEB #1-class retrieval)
- * DIRECTLY inside the Electron main process — no Python, no sidecar, no
- * server, no network. Validated bit-exact against NVIDIA's reference
- * sentence-transformers stack (cosine = 1.000000).
- *
- * Architecture (spike-validated 2026-07-19):
- * - `@huggingface/transformers` AutoTokenizer for the model's tokenizer.
- * - `onnxruntime-node` InferenceSession on the exported ONNX graph
- *   (scripts/embeddings/export-nemotron-embed.py converts the HF safetensors
- *   checkpoint; bidirectional attention + mean pooling semantics are baked
- *   into the graph at export time).
- * - Execution provider: WebGPU first (~26 ms/query + ~17 ms/chunk batched on
- *   an RTX 4090 — a full 110k-chunk reindex ≈ 30 min), CPU fallback
- *   (~100-400 ms/chunk — fine for query-time + incremental indexing).
- * - JS-side attention-masked mean pooling + L2 normalization.
- *
- * The model is ASYMMETRIC: queries must be prefixed `query:` and documents
- * `passage:` (see the model card). The `purpose` argument drives this — the
- * vector store passes 'passage' when indexing and 'query' when searching.
- *
- * Model files live at `<dataPath>/models/nemotron-3-embed-1b/`:
- *   config.json, tokenizer.json, tokenizer_config.json, onnx/model.onnx
- *   (+ onnx/model.onnx.data external weights).
- * `isModelPresent()` is the cheap local fs check the brain's authStatus uses
- * (no network probe, so the router may call it anywhere).
- */
-
 import { existsSync } from 'fs'
 import { join } from 'path'
-import { getDataPath } from './config'
+import { freemem, totalmem } from 'os'
+import { getConfig, getDataPath } from './config'
+import { LocalEmbedderService as Runtime, type EmbedderDeps, type EmbedPurpose } from './local-embedder-runtime'
+export { meanPoolNormalize } from './local-embedder-runtime'
+export type { EmbedderDeps, EmbedPurpose, EmbedSession, EmbedTokenizer } from './local-embedder-runtime'
 
-export type EmbedPurpose = 'query' | 'passage'
+const modelDirectory = () => join(getDataPath(), 'models', 'nemotron-3-embed-1b')
 
-const MODEL_DIR_NAME = 'nemotron-3-embed-1b'
-const MAX_SEQ_LENGTH = 512
-const BATCH_SIZE = 16
-const EMBEDDING_DIMS = 2048
-
-const PREFIXES: Record<EmbedPurpose, string> = {
-  query: 'query: ',
-  passage: 'passage: ',
+// Injectable algorithm seam; production uses a separate process.
+export class LocalEmbedderService extends Runtime {
+  constructor(deps?: EmbedderDeps) { super(deps, modelDirectory()) }
 }
 
-// Structural types for the two runtime deps — keeps the service testable with
-// plain fakes and avoids importing the (heavy) modules at type level only.
-export interface EmbedTokenizer {
-  (
-    texts: string[],
-    options: { padding: boolean; truncation: boolean; max_length: number }
-  ): Promise<{ input_ids: { data: ArrayLike<number>; dims: number[] }; attention_mask: { data: ArrayLike<number>; dims: number[] } }>
-}
+type Embedder = Pick<LocalEmbedderService, 'isModelPresent' | 'embed'> & { isPaused?: () => boolean }
+let instance: Embedder | null = null
 
-export interface EmbedSession {
-  inputNames: string[]
-  run(feeds: Record<string, unknown>): Promise<Record<string, { data: ArrayLike<number>; dims: number[] }>>
-}
+/**
+ * How long the worker may sit with no request in flight before it is released.
+ *
+ * The worker holds Nemotron-3-Embed-1B: a billion parameters, ~4 GB resident
+ * as ONNX fp32. Indexing needs it; an idle app does not, and before this the
+ * process lived until quit — measured at 4.2 GB working set hours after the
+ * last chunk was embedded. Releasing it costs one model reload (a few seconds)
+ * the next time something needs a vector, against 4 GB back for everything
+ * else on the machine in between.
+ */
+const IDLE_TEARDOWN_MS = 60_000
 
-/** Injectable factories — tests substitute fakes; production wires the real modules. */
-export interface EmbedderDeps {
-  loadTokenizer: (modelDir: string) => Promise<EmbedTokenizer>
-  createSession: (onnxPath: string, provider: 'webgpu' | 'cpu') => Promise<EmbedSession>
-  createTensor: (data: BigInt64Array, dims: number[]) => unknown
-}
-
-async function defaultLoadTokenizer(modelDir: string): Promise<EmbedTokenizer> {
-  const { AutoTokenizer, env } = await import('@huggingface/transformers')
-  // Local model only — never fall back to a silent HF download in the app.
-  env.allowRemoteModels = false
-  const tokenizer = await AutoTokenizer.from_pretrained(modelDir)
-  return tokenizer as unknown as EmbedTokenizer
-}
-
-async function defaultCreateSession(onnxPath: string, provider: 'webgpu' | 'cpu'): Promise<EmbedSession> {
-  const ort = await import('onnxruntime-node')
-  const executionProviders = provider === 'webgpu' ? ['webgpu', 'cpu'] : ['cpu']
-  const session = await ort.InferenceSession.create(onnxPath, { executionProviders })
-  return session as unknown as EmbedSession
-}
-
-async function defaultCreateTensor(data: BigInt64Array, dims: number[]): Promise<unknown> {
-  const { Tensor } = await import('onnxruntime-node')
-  return new Tensor('int64', data, dims)
-}
-
-/** Attention-masked mean pooling + L2 normalization (matches the reference stack bit-for-bit). */
-export function meanPoolNormalize(
-  hidden: ArrayLike<number>,
-  dims: number[],
-  mask: ArrayLike<number>
-): number[][] {
-  const [batch, seq, hid] = dims
-  const out: number[][] = []
-  for (let b = 0; b < batch; b++) {
-    const vec = new Array<number>(hid).fill(0)
-    let count = 0
-    for (let s = 0; s < seq; s++) {
-      if (!mask[b * seq + s]) continue
-      count++
-      for (let h = 0; h < hid; h++) vec[h] += hidden[(b * seq + s) * hid + h]
-    }
-    let norm = 0
-    for (let h = 0; h < hid; h++) {
-      vec[h] /= Math.max(count, 1)
-      norm += vec[h] * vec[h]
-    }
-    norm = Math.sqrt(norm) || 1
-    for (let h = 0; h < hid; h++) vec[h] /= norm
-    out.push(vec)
-  }
-  return out
-}
-
-class LocalEmbedderService {
-  private tokenizer: EmbedTokenizer | null = null
-  private session: EmbedSession | null = null
-  private loading: Promise<boolean> | null = null
-  private backend: 'webgpu' | 'cpu' | null = null
-  /** Serializes session runs (batched reindex + query-time calls share one session). */
+class IsolatedEmbedder implements Embedder {
+  private child: Electron.UtilityProcess | null = null
+  private nextId = 0
+  private pending = new Map<number, { resolve: (value: number[][] | null) => void; timer: NodeJS.Timeout }>()
+  private stopped = false
+  private memoryMonitor: NodeJS.Timeout | null = null
+  private idleTimer: NodeJS.Timeout | null = null
   private queue: Promise<unknown> = Promise.resolve()
 
-  constructor(
-    private readonly deps: EmbedderDeps = {
-      loadTokenizer: defaultLoadTokenizer,
-      createSession: defaultCreateSession,
-      createTensor: defaultCreateTensor,
-    }
-  ) {}
+  isModelPresent(): boolean { return existsSync(join(modelDirectory(), 'onnx', 'model.onnx')) }
+  isPaused(): boolean { return this.stopped }
 
-  modelDir(): string {
-    return join(getDataPath(), 'models', MODEL_DIR_NAME)
-  }
-
-  /** Cheap local fs check — safe for authStatus / router selection (no probe). */
-  isModelPresent(): boolean {
-    return existsSync(join(this.modelDir(), 'onnx', 'model.onnx'))
-  }
-
-  /** Which execution provider the loaded session is using (null until loaded). */
-  activeBackend(): 'webgpu' | 'cpu' | null {
-    return this.backend
-  }
-
-  embeddingDims(): number {
-    return EMBEDDING_DIMS
-  }
-
-  async initialize(): Promise<boolean> {
-    if (this.session) return true
-    if (this.loading) return this.loading
-    this.loading = (async () => {
-      if (!this.isModelPresent()) return false
-      const dir = this.modelDir()
-      try {
-        this.tokenizer = await this.deps.loadTokenizer(dir)
-        try {
-          this.session = await this.deps.createSession(join(dir, 'onnx', 'model.onnx'), 'webgpu')
-          this.backend = 'webgpu'
-        } catch (gpuErr) {
-          console.warn('[LocalEmbedder] WebGPU session failed, falling back to CPU:', gpuErr)
-          this.session = await this.deps.createSession(join(dir, 'onnx', 'model.onnx'), 'cpu')
-          this.backend = 'cpu'
-        }
-        console.log(`[LocalEmbedder] Nemotron-3-Embed loaded (${this.backend} backend)`)
-        return true
-      } catch (e) {
-        console.error('[LocalEmbedder] Initialization failed:', e)
-        this.session = null
-        this.tokenizer = null
-        this.backend = null
-        return false
-      } finally {
-        this.loading = null
-      }
-    })()
-    return this.loading
+  private clearIdleTimer(): void {
+    if (this.idleTimer) clearTimeout(this.idleTimer)
+    this.idleTimer = null
   }
 
   /**
-   * Embed texts with the model's asymmetric prefixes. Returns one 2048-dim
-   * L2-normalized vector per input text. Returns null when the model is
-   * absent/unloadable (the brain adapter treats that as "provider
-   * unavailable"). Throws never — session errors yield null.
+   * Arm the idle release. Called whenever the last in-flight request settles.
+   * Releasing goes through reset(), which nulls `this.child` BEFORE killing it,
+   * so the child's 'exit' handler sees a stale reference and does not flip
+   * `stopped` — an idle release must leave the embedder able to respawn,
+   * unlike a crash or a blown memory budget.
    */
-  async embed(texts: string[], purpose: EmbedPurpose = 'passage'): Promise<number[][] | null> {
-    if (texts.length === 0) return []
-    if (!(await this.initialize())) return null
+  private scheduleIdleTeardown(): void {
+    this.clearIdleTimer()
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = null
+      if (this.stopped || !this.child || this.pending.size > 0) return
+      console.info('[LocalEmbedder] Idle for ' + IDLE_TEARDOWN_MS / 1000 + 's; releasing worker so the model unloads')
+      this.reset()
+    }, IDLE_TEARDOWN_MS)
+    this.idleTimer.unref()
+  }
 
-    const work = async (): Promise<number[][] | null> => {
-      const prefix = PREFIXES[purpose]
-      const out: number[][] = []
-      for (let i = 0; i < texts.length; i += BATCH_SIZE) {
-        const batch = texts.slice(i, i + BATCH_SIZE).map((t) => prefix + t)
-        try {
-          const enc = await this.tokenizer!(batch, {
-            padding: true,
-            truncation: true,
-            max_length: MAX_SEQ_LENGTH,
-          })
-          const [b, seq] = enc.input_ids.dims
-          const toI64 = (src: ArrayLike<number>) => {
-            const dst = new BigInt64Array(src.length)
-            for (let k = 0; k < src.length; k++) dst[k] = BigInt(src[k])
-            return dst
-          }
-          const results = await this.session!.run({
-            input_ids: await this.deps.createTensor(toI64(enc.input_ids.data), [b, seq]),
-            attention_mask: await this.deps.createTensor(toI64(enc.attention_mask.data), [b, seq]),
-          })
-          const hidden = results['last_hidden_state']
-          out.push(...meanPoolNormalize(hidden.data, hidden.dims, enc.attention_mask.data))
-        } catch (e) {
-          console.error(`[LocalEmbedder] embed failed on batch ${i / BATCH_SIZE}:`, e)
-          return null
-        }
-      }
-      return out
+  private reset(): void {
+    const child = this.child
+    this.child = null
+    this.clearIdleTimer()
+    if (this.memoryMonitor) clearInterval(this.memoryMonitor)
+    this.memoryMonitor = null
+    child?.kill()
+    for (const { resolve, timer } of this.pending.values()) {
+      clearTimeout(timer)
+      resolve(null)
     }
+    this.pending.clear()
+  }
 
-    const run = this.queue.then(work)
-    this.queue = run.catch(() => undefined)
-    return run
+  embed(texts: string[], purpose: EmbedPurpose = 'passage'): Promise<number[][] | null> {
+    // Queue wait does not spend another request's execution deadline.
+    const work = this.queue.then(() => this.runEmbed(texts, purpose))
+    this.queue = work.catch(() => undefined)
+    return work
+  }
+
+  private async runEmbed(texts: string[], purpose: EmbedPurpose): Promise<number[][] | null> {
+    if (!texts.length) return []
+    if (this.stopped || !this.isModelPresent()) return null
+    if (!this.child) {
+      const { app, utilityProcess } = await import('electron')
+      const { getStartupState } = await import('../startup-state')
+      if (this.stopped) return null
+      if (!this.child) {
+        const runtimeDir = getStartupState().runtimeDir
+        if (!runtimeDir) throw new Error('Local embedding worker requested before startup initialization')
+        const workerPath = join(runtimeDir, 'local-embedder-worker.js')
+        const configured = Number(getConfig().embeddings.localCpuPercent ?? 50)
+        const cpuPercent = Number.isFinite(configured) ? Math.max(10, Math.min(75, configured)) : 50
+        // Leave at least half of currently free RAM available to other apps.
+        const memoryBudget = Math.min(8 * 1024 ** 3, totalmem() * 0.125, freemem() * 0.5)
+        const child = utilityProcess.fork(workerPath, [modelDirectory(), String(cpuPercent)], {
+          serviceName: 'HiDock local embeddings'
+        })
+        this.child = child
+        this.memoryMonitor = setInterval(() => {
+          const metrics = app.getAppMetrics().find(metric => metric.pid === child.pid)
+          const workingSet = (metrics?.memory.workingSetSize ?? 0) * 1024
+          if (workingSet > memoryBudget || freemem() < Math.min(totalmem() * 0.08, 2 * 1024 ** 3)) {
+            console.error('[LocalEmbedder] Memory budget reached; stopped without retry')
+            this.stopped = true
+            this.reset()
+          }
+        }, 1000)
+        this.memoryMonitor.unref()
+        child.on('message', (message: { id: number; vectors: number[][] | null; error?: string;
+          backend?: string; cpuThreads?: number; type?: string; name?: string; elapsedMs?: number }) => {
+          if (message.type === 'timing') {
+            console.info('[LocalEmbedder] Worker timing ' + JSON.stringify({
+              name: message.name, elapsedMs: message.elapsedMs
+            }))
+            return
+          }
+          const pending = this.pending.get(message.id)
+          if (!pending) return
+          clearTimeout(pending.timer)
+          this.pending.delete(message.id)
+          if (message.error) console.error('[LocalEmbedder] Worker failed:', message.error)
+          if (message.vectors?.length) console.info('[LocalEmbedder] Worker completed ' + JSON.stringify({
+            vectors: message.vectors.length, dims: message.vectors[0].length,
+            backend: message.backend, cpuThreads: message.cpuThreads
+          }))
+          pending.resolve(message.vectors)
+          if (this.pending.size === 0) this.scheduleIdleTeardown()
+        })
+        child.on('exit', () => {
+          if (this.child === child) {
+            this.stopped = true
+            this.reset()
+          }
+        })
+        app.once('before-quit', () => { this.stopped = true; this.reset() })
+      }
+    }
+    const id = ++this.nextId
+    // New work: the worker is needed again, so it must not be released under us.
+    this.clearIdleTimer()
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        console.error('[LocalEmbedder] Worker exceeded 90 seconds; stopped without retry')
+        this.stopped = true
+        this.reset()
+      }, 90000)
+      this.pending.set(id, { resolve, timer })
+      try { this.child!.postMessage({ id, texts, purpose }) } catch {
+        this.stopped = true
+        this.reset()
+      }
+    })
   }
 }
 
-let instance: LocalEmbedderService | null = null
-
-export function getLocalEmbedder(): LocalEmbedderService {
-  if (!instance) instance = new LocalEmbedderService()
+export function getLocalEmbedder(): Embedder {
+  if (!instance) instance = new IsolatedEmbedder()
   return instance
 }
 
-/** Test helper: install a service with fake deps and/or drop the singleton. */
 export function setLocalEmbedderForTests(service: LocalEmbedderService | null): void {
   instance = service
 }
-
-export { LocalEmbedderService }

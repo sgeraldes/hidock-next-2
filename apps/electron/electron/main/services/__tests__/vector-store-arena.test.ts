@@ -216,7 +216,7 @@ describe('VectorStore contiguous arena', () => {
     }
   })
 
-  it('hydrateContent() fills text in place and leaves deleted rows undefined', async () => {
+  it('hydrateContent() returns copies with text and leaves deleted rows undefined', async () => {
     insertRow('row-0', 'local-onnx-embed', makeVector(0, DIMS), DIMS)
     insertRow('row-1', 'local-onnx-embed', makeVector(1, DIMS), DIMS)
     const store = await loadFromDb()
@@ -226,12 +226,26 @@ describe('VectorStore contiguous arena', () => {
     dbInstance!.run("DELETE FROM vector_embeddings WHERE id = 'row-1'")
 
     const docs = store.getAllDocuments()
-    const returned = store.hydrateContent(docs)
-    expect(returned).toBe(docs) // mutates in place, returns the same array
+    const hydrated = store.hydrateContent(docs)
 
-    const byId = new Map(docs.map((d) => [d.id, d]))
+    const byId = new Map(hydrated.map((d) => [d.id, d]))
     expect(byId.get('row-0')!.content).toBe('content of row-0')
     expect(byId.get('row-1')!.content).toBeUndefined()
+    // The copy shares the arena view; only the text is new.
+    expect(byId.get('row-0')!.embedding).toBe(docs.find((d) => d.id === 'row-0')!.embedding)
+  })
+
+  it('hydration never writes text back into the index', async () => {
+    // The first hydrateContent mutated the indexed documents, so every chunk a
+    // search or the chunk viewer ever touched stayed resident for the session
+    // — one rag:get-chunks call put all the text back for good.
+    insertRow('row-0', 'local-onnx-embed', makeVector(0, DIMS), DIMS)
+    const store = await loadFromDb()
+
+    store.hydrateContent(store.getAllDocuments())
+    await store.search('anything', 5)
+
+    for (const doc of store.getAllDocuments()) expect(doc.content).toBeUndefined()
   })
 
   it('search() hands back hydrated documents', async () => {

@@ -33,7 +33,7 @@ const CAPABILITIES: ReadonlySet<BrainCapability> = new Set<BrainCapability>(['em
 
 export class LocalOnnxEmbedBrain implements AIBrain {
   readonly id = 'local-onnx-embed' as const
-  readonly label = 'Local Nemotron Embed (in-process)'
+  readonly label = 'Local Nemotron Embed'
 
   capabilities(): ReadonlySet<BrainCapability> {
     return CAPABILITIES
@@ -46,7 +46,7 @@ export class LocalOnnxEmbedBrain implements AIBrain {
       return {
         configured: present,
         method: 'none',
-        detail: present ? 'model present (in-process ONNX)' : 'model not downloaded — see Settings → Embeddings',
+        detail: present ? 'model present (isolated CPU worker)' : 'model not downloaded — see Settings → Embeddings',
       }
     } catch {
       return { configured: false, method: 'none', detail: 'model check failed' }
@@ -65,6 +65,8 @@ export class LocalOnnxEmbedBrain implements AIBrain {
   async embed(texts: string[], opts: EmbedOptions = {}): Promise<(number[] | null)[]> {
     if (texts.length === 0) return []
     const embedder = getLocalEmbedder()
+    // A resource stop is an abort, not permission to spend on a cloud fallback.
+    if (embedder.isPaused?.()) return texts.map(() => null)
     if (!embedder.isModelPresent()) {
       // Config error, not an abort — let the router try the next fallback.
       throw new Error('[LocalOnnxEmbed] model files not present')
@@ -73,6 +75,7 @@ export class LocalOnnxEmbedBrain implements AIBrain {
       return texts.map(() => null)
     }
     const vectors = await embedder.embed(texts, opts.purpose ?? 'passage')
+    if (embedder.isPaused?.()) return texts.map(() => null)
     if (!vectors) {
       throw new Error('[LocalOnnxEmbed] embedding session failed')
     }

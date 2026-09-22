@@ -223,6 +223,8 @@ export interface AppConfig {
     speakerLinkingMatchMargin: number
     speakerLinkingMinSpeechSeconds: number
     speakerLinkingTimeoutSeconds: number
+    /** Share of logical CPUs the diarization worker may use, 1-100. */
+    speakerLinkingCpuPercent?: number
     autoTranscribe: boolean
     language: string
     /** F16/spec-001 kill-switch (main-process config.ts) — mirrored here only
@@ -234,6 +236,7 @@ export interface AppConfig {
   }
   embeddings: {
     provider: 'ollama'
+    localCpuPercent?: number
     ollamaBaseUrl: string
     ollamaModel: string
     chunkSize: number

@@ -32,6 +32,7 @@ import {
   hasReliableTurnStructure,
   normalizeGeminiTranscriptResponse,
   toGeminiLanguageCodes,
+  nativeCoverageShortfall,
 } from '../src/engines/gemini-engine.js'
 import { NoSpeechDetectedError, TranscriptionCancelledError } from '../src/engines/engine-interface.js'
 
@@ -911,5 +912,112 @@ describe('GeminiEngine diarization prompt + end-to-end recovery', () => {
     expect(mockGenerateContentStream).toHaveBeenCalledTimes(2)
     expect(segments.map((segment) => segment.speaker)).toEqual(['Speaker 1', 'Speaker 2', 'Speaker 1'])
     expect(segments.map((segment) => segment.startTime)).toEqual([22, 28, 32])
+  })
+})
+
+// 2026-09-21: two recordings failed the same day with gemini-3.5-transcribe —
+// one interaction came back `incomplete`, one completed with word timings that
+// stopped 964 s before the recording ended. The engine had no fallback for the
+// Transcribe model: the queue retried the identical call three times and gave
+// up. These pin that the chunked generateContent path takes over, and that the
+// two outcomes that are answers rather than failures (silence, cancellation)
+// still propagate untouched.
+describe('GeminiEngine native Transcribe fallback', () => {
+  const nativeFile = { name: 'files/native-fb', state: 'ACTIVE', mimeType: 'audio/wav', uri: 'files://native-fb' }
+  const wordsTo = (endSec: number) => ({
+    status: 'completed',
+    steps: [{ content: [{ annotations: [
+      { type: 'word_info', text: 'Hola', speaker: 'spk_0', start_offset: '0.10s', end_offset: '0.40s' },
+      { type: 'word_info', text: 'chau', speaker: 'spk_0', start_offset: `${(endSec - 0.3).toFixed(2)}s`, end_offset: `${endSec.toFixed(2)}s` },
+    ] }] }],
+  })
+  const chunkedReply = (content: string) =>
+    streamResponse(JSON.stringify({ segments: [{ timestamp: '00:00', speaker: 'Speaker 1', content }] }))
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockFilesUpload.mockResolvedValue(nativeFile)
+    mockFilesDelete.mockResolvedValue(undefined)
+  })
+
+  it('falls back to the chunked text model when the interaction does not complete', async () => {
+    mockInteractionsCreate.mockResolvedValue(interactionResponse({}, 'fb-1', 'incomplete'))
+    mockGenerateContentStream.mockReturnValue(chunkedReply('texto completo por el camino de trozos'))
+    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+
+    const segments = await collect(engine.transcribe(oneSecond, { source: 'mic', durationSeconds: 1 }))
+
+    expect(mockInteractionsCreate).toHaveBeenCalledTimes(1)
+    expect(mockGenerateContentStream).toHaveBeenCalledTimes(1)
+    expect(mockGenerateContentStream.mock.calls[0][0].model).toBe('gemini-3.5-flash')
+    expect(segments.map((s) => s.text)).toEqual(['texto completo por el camino de trozos'])
+  })
+
+  it('falls back when a completed transcript stops far before the recording ends', async () => {
+    // 600 s recording, last timed word at 0.9 s: 0.15% coverage. Rec26's shape.
+    mockInteractionsCreate.mockResolvedValue(wordsTo(0.9))
+    mockGenerateContentStream.mockReturnValue(chunkedReply('cobertura completa'))
+    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+
+    const segments = await collect(engine.transcribe(oneSecond, { source: 'mic', durationSeconds: 600 }))
+
+    expect(mockGenerateContentStream).toHaveBeenCalledTimes(1)
+    expect(segments.map((s) => s.text)).toEqual(['cobertura completa'])
+  })
+
+  it('keeps the native transcript when it reaches the end of the recording', async () => {
+    mockInteractionsCreate.mockResolvedValue(wordsTo(0.9))
+    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+
+    const segments = await collect(engine.transcribe(oneSecond, { source: 'mic', durationSeconds: 1 }))
+
+    expect(mockGenerateContentStream).not.toHaveBeenCalled()
+    expect(segments.length).toBeGreaterThan(0)
+  })
+
+  it('honours a configured fallback model', async () => {
+    mockInteractionsCreate.mockResolvedValue(interactionResponse({}, 'fb-2', 'incomplete'))
+    mockGenerateContentStream.mockReturnValue(chunkedReply('ok'))
+    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe', fallbackModel: 'gemini-3.5-flash-lite' })
+
+    await collect(engine.transcribe(oneSecond, { source: 'mic', durationSeconds: 1 }))
+
+    expect(mockGenerateContentStream.mock.calls[0][0].model).toBe('gemini-3.5-flash-lite')
+  })
+
+  it('does not fall back on silence: no speech is an answer', async () => {
+    mockInteractionsCreate.mockResolvedValue({ status: 'completed', steps: [{ content: [{ annotations: [] }] }] })
+    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+
+    await expect(collect(engine.transcribe(oneSecond, { source: 'mic', durationSeconds: 1 })))
+      .rejects.toBeInstanceOf(NoSpeechDetectedError)
+    expect(mockGenerateContentStream).not.toHaveBeenCalled()
+  })
+
+  it('does not fall back on errors that would fail on any model', async () => {
+    mockInteractionsCreate.mockRejectedValue(new Error('API key not valid. Please pass a valid API key.'))
+    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+
+    await expect(collect(engine.transcribe(oneSecond, { source: 'mic', durationSeconds: 1 })))
+      .rejects.toThrow(/API key not valid/)
+    expect(mockGenerateContentStream).not.toHaveBeenCalled()
+  })
+})
+
+describe('nativeCoverageShortfall', () => {
+  it('is null when the duration is unknown or there are no segments', () => {
+    expect(nativeCoverageShortfall([{ endTime: 5 }], undefined)).toBeNull()
+    expect(nativeCoverageShortfall([{ endTime: 5 }], 0)).toBeNull()
+    expect(nativeCoverageShortfall([], 600)).toBeNull()
+  })
+  it('flags under 55% coverage', () => {
+    expect(nativeCoverageShortfall([{ endTime: 100 }], 600)).toMatch(/covers 17%/)
+  })
+  it('flags more than five minutes missing even above 55% coverage', () => {
+    expect(nativeCoverageShortfall([{ endTime: 3000 }], 3600)).toMatch(/ends 600s before/)
+  })
+  it('accepts a transcript that reaches within five minutes of the end', () => {
+    expect(nativeCoverageShortfall([{ endTime: 3400 }], 3600)).toBeNull()
+    expect(nativeCoverageShortfall([{ endTime: 0.9 }], 1)).toBeNull()
   })
 })

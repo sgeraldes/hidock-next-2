@@ -383,10 +383,13 @@ class VectorStore {
    * the whole index re-materializes the ~206 MB this change removed, which is
    * a legitimate thing to do deliberately and a bug to do by accident.
    *
-   * Mutates the documents in place and returns the same array, so a caller can
-   * `return this.hydrateContent(results)`. A row that no longer exists (deleted
-   * between the search and this read) leaves `content` undefined rather than
-   * throwing — the caller already has to handle an absent value.
+   * Returns NEW document objects; the indexed documents are never touched.
+   * The first version mutated them in place, which quietly undid the whole
+   * change: every hydrated chunk stayed resident in the index for the rest of
+   * the session, and one `rag:get-chunks` call put all ~100 MB of text back
+   * for good. Callers must use the returned array. A row that no longer
+   * exists (deleted between the search and this read) leaves `content`
+   * undefined rather than throwing — callers already handle an absent value.
    */
   hydrateContent<T extends { id: string; content?: string }>(docs: T[]): T[] {
     const missing = docs.filter((d) => d.content === undefined)
@@ -410,11 +413,13 @@ class VectorStore {
       }
     }
 
-    for (const doc of missing) {
+    return docs.map((doc) => {
+      if (doc.content !== undefined) return doc
       const found = text.get(doc.id)
-      if (found !== undefined) doc.content = found
-    }
-    return docs
+      // Shallow copy: `embedding` stays a view into the shared arena and
+      // `metadata` is shared; only the text lives on the copy.
+      return found === undefined ? doc : { ...doc, content: found }
+    })
   }
 
   /** True when this boot's embeddings are zero-copy views over the binary
@@ -1108,10 +1113,11 @@ class VectorStore {
     results.sort((a, b) => b.score - a.score)
     const top = diversifyResults(results, topK)
     // Hydrate only the survivors: topK is single digits in every caller, so
-    // this is a handful of rows read against the ~206 MB the index no longer
-    // keeps resident for all 237k chunks.
-    this.hydrateContent(top.map((r) => r.document))
-    return top
+    // this is a handful of rows read against the ~100 MB the index no longer
+    // keeps resident for all 237k chunks. hydrateContent returns copies; the
+    // indexed documents stay text-free.
+    const hydrated = this.hydrateContent(top.map((r) => r.document))
+    return top.map((r, i) => ({ ...r, document: hydrated[i] }))
   }
 
   /**
@@ -1244,6 +1250,45 @@ class VectorStore {
     return this.hydrateContent(docs)
   }
 
+  /**
+   * Score ONE meeting's chunks against a query and return the best `topK`.
+   *
+   * This lived in rag.ts as a hand-rolled cosine loop over `doc.embedding`,
+   * a second implementation of {@link cosineSimilarity} that happened to agree
+   * with this one. Scoring belongs next to the vectors: it is the only reason
+   * anything outside this file needed to read a raw embedding, and once the
+   * vectors move to their own process a caller could not read them anyway.
+   *
+   * Matches the old rag.ts behaviour exactly, including its fallbacks: a
+   * missing query embedding, or a chunk whose dimension disagrees with it,
+   * scores 0.5 so the meeting's chunks are still returned in a sensible order
+   * rather than disappearing from a meeting-scoped chat.
+   */
+  async searchWithinMeeting(
+    meetingId: string,
+    query: string,
+    topK = 5
+  ): Promise<SearchResult[]> {
+    const docs = await this.searchByMeeting(meetingId)
+    const queryEmbedding = await getEmbeddingsService().generateEmbedding(query, {
+      purpose: 'query'
+    })
+
+    if (!queryEmbedding) {
+      return docs.slice(0, topK).map((document) => ({ document, score: 0.5 }))
+    }
+
+    const scored = docs.map((document) => ({
+      document,
+      score:
+        document.embedding.length === queryEmbedding.length
+          ? cosineSimilarity(queryEmbedding, document.embedding)
+          : 0.5
+    }))
+    scored.sort((a, b) => b.score - a.score)
+    return scored.slice(0, topK)
+  }
+
   async deleteByRecording(recordingId: string): Promise<number> {
     const deleted = this.dropByRecordingFromMemory(recordingId)
     const db = getDatabase()
@@ -1366,11 +1411,11 @@ class VectorStore {
    * built per invocation, then serialized over IPC to the renderer. It only
    * ever shows a screenful, so only a screenful is read back.
    *
-   * The page carries SHALLOW COPIES, not the index's own documents.
-   * {@link hydrateContent} fills text in place, so hydrating the stored objects
-   * would let the viewer re-grow the resident chunk text one page at a time
-   * until the whole index was back in memory — the exact cost the index stopped
-   * paying (see {@link VectorDocument.content}).
+   * The page carries SHALLOW COPIES, not the index's own documents:
+   * {@link hydrateContent} returns copies, so the viewer cannot re-grow the
+   * resident chunk text one page at a time until the whole index is back in
+   * memory — the exact cost the index stopped paying (see
+   * {@link VectorDocument.content}).
    *
    * Eligibility is unchanged: the SAME fail-closed boundary getAllDocuments
    * applies runs over the whole corpus BEFORE the slice, so `total` counts
@@ -1383,8 +1428,9 @@ class VectorStore {
     const total = eligible.length
     const start = Math.min(Math.max(Math.trunc(offset) || 0, 0), total)
     const size = Math.max(Math.trunc(limit) || 0, 0)
-    const documents = eligible.slice(start, start + size).map((doc) => ({ ...doc }))
-    this.hydrateContent(documents)
+    // hydrateContent returns shallow copies, so the page never aliases the
+    // index's own documents and the index stays text-free.
+    const documents = this.hydrateContent(eligible.slice(start, start + size))
     return { total, offset: start, limit: size, revision: this.corpusRevision, documents }
   }
 

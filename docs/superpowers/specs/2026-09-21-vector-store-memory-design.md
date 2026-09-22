@@ -1,7 +1,14 @@
 # Memoria del vector store: sacar los gigas del proceso principal
 
 Fecha: 2026-09-21
-Estado: aprobado, pendiente de implementación
+Estado: **C y A implementados y medidos** (rama `perf/vector-store-arena`, PR #5). **B pendiente**,
+con el diseño replanteado abajo: se parte por datos, no por API. La misma rama sacó ademas el
+embedder local a un `utilityProcess` con liberacion por inactividad; eso no es B — B es el vector
+store — y esta documentado en el commit `feat(embeddings)` y en `docs/performance/`.
+
+Medido con la rama contra la biblioteca real (2026-09-21 22:30 AR): proceso principal 1.345 MB
+(antes 2.900 de working set), renderer 423 MB, boot 6,0 s (antes 17,0). En reposo la app queda en
+~1,9 GB; el piso son los 977 MB de la particion activa en el main, que es lo que B mueve.
 
 ## El problema, medido
 

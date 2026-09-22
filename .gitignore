@@ -13,3 +13,5 @@ __pycache__/
 .DS_Store
 /docs/assets/*-raw.png
 .playwright-cli/
+# Local performance captures include private database/profile snapshots.
+/artifacts/startup-*/

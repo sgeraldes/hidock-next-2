@@ -264,6 +264,39 @@ describe('VectorStore provider partitions', () => {
     expect(store2.getDocumentCount()).toBe(store.getDocumentCount())
   })
 
+  it('allows event-loop work to run before a multi-page SQL restore finishes', async () => {
+    const seed = new VectorStore()
+    seed.ensureSchema()
+    const insert = dbInstance!.prepare(
+      'INSERT INTO vector_embeddings (id, content, embedding, embed_provider, embed_dims) VALUES (?, ?, ?, ?, ?)'
+    )
+    for (let i = 0; i < 385; i++) {
+      insert.run([String(i).padStart(5, '0'), 'test', '[1,0,0]', 'gemini-api', 3])
+    }
+    insert.free()
+    const restored = new VectorStore()
+    const observed: number[] = []
+    await restored.initialize((loaded) => {
+      if (loaded < 385) setImmediate(() => observed.push(restored.getDocumentCount()))
+    })
+    expect(restored.getDocumentCount()).toBe(385)
+    expect(observed.some((count) => count > 0 && count < 385)).toBe(true)
+  })
+
+  it('rejects cached dimensions that changed without changing row count or ids', async () => {
+    const store = await freshStore()
+    await store.indexTranscript('dimension change', { recordingId: 'rec-dims' })
+    for (let i = 0; i < 100 && !existsSync(CACHE_FILE); i++) {
+      await new Promise((r) => setTimeout(r, 10))
+    }
+    expect(existsSync(CACHE_FILE)).toBe(true)
+    dbInstance!.run('UPDATE vector_embeddings SET embed_dims = 2')
+    const restored = new VectorStore()
+    await restored.initialize()
+    expect(restored.isCacheBacked()).toBe(false)
+    expect(restored.getDocumentCount()).toBe(store.getDocumentCount())
+  })
+
   it('backfill is a no-op when NO provider is usable', async () => {
     deps.activeProvider = null
     dbInstance!.run(`

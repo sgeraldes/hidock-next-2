@@ -123,7 +123,9 @@ export function registerRAGHandlers(): void {
         if (filter) {
           const parsedFilter = RAGFilterSchema.safeParse(filter)
           if (!parsedFilter.success) {
-            return error('VALIDATION_ERROR', 'Invalid filter', parsedFilter.error.format())
+            // zod 4 deprecates ZodError.format(); the issues array is the
+            // stable shape and carries path + message per problem.
+            return error('VALIDATION_ERROR', 'Invalid filter', parsedFilter.error.issues)
           }
 
           // Extract meeting ID(s) from filter

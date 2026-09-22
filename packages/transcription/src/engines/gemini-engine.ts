@@ -39,6 +39,39 @@ export interface GeminiEngineOptions {
   apiKey: string
   model?: string
   language?: string
+  /**
+   * Text model for the chunked generateContent path when the dedicated
+   * Transcribe model returns an incomplete result. Only consulted when `model`
+   * is `gemini-3.5-transcribe`; the other models already run that path.
+   */
+  fallbackModel?: string
+}
+
+/**
+ * Why a completed native transcript is still treated as incomplete.
+ *
+ * `gemini-3.5-transcribe` can return `status: 'completed'` with word timings
+ * that stop well before the recording does. The app's own audio grounding
+ * rejected two such transcripts on 2026-09-21 (one ended 964 s early, one
+ * covered under 55%) and the queue retried the identical call until it gave
+ * up. The thresholds mirror that grounding check so the engine falls back
+ * BEFORE the app has to fail the recording: under 55% coverage, or more than
+ * five minutes of recording after the last timed word. Returns null when the
+ * transcript reaches the end or the duration is unknown.
+ */
+export function nativeCoverageShortfall(
+  segments: ReadonlyArray<{ endTime: number }>,
+  durationSeconds: number | undefined
+): string | null {
+  if (!durationSeconds || !Number.isFinite(durationSeconds) || durationSeconds <= 0) return null
+  if (segments.length === 0) return null
+  let lastEnd = 0
+  for (const segment of segments) if (segment.endTime > lastEnd) lastEnd = segment.endTime
+  const coverage = lastEnd / durationSeconds
+  if (coverage < 0.55) return `covers ${Math.round(coverage * 100)}% of the ${Math.round(durationSeconds)}s recording`
+  const missing = durationSeconds - lastEnd
+  if (missing > 300) return `ends ${Math.round(missing)}s before the end of the recording`
+  return null
 }
 
 interface NativeWordInfo {
@@ -848,6 +881,7 @@ export class GeminiEngine implements TranscriptionEngine {
   private readonly apiKey: string
   private readonly model: string
   private readonly language: string
+  private readonly fallbackModel: string
 
   constructor(options: GeminiEngineOptions) {
     this.apiKey = options.apiKey
@@ -855,6 +889,7 @@ export class GeminiEngine implements TranscriptionEngine {
     // package fallback compatible for callers that have not migrated yet.
     this.model = options.model ?? 'gemini-3.5-flash'
     this.language = options.language ?? 'unknown'
+    this.fallbackModel = options.fallbackModel ?? 'gemini-3.5-flash'
   }
 
   async isAvailable(): Promise<boolean> {
@@ -1353,13 +1388,49 @@ Calendar and meeting context are spelling hints only; never invent speech from t
 
     const genAI = new GoogleGenAI({ apiKey: this.apiKey })
 
+    // The model the chunked generateContent path below will call. Stays
+    // `this.model` unless the dedicated Transcribe model fell short, in which
+    // case the text fallback takes over for the rest of this call.
+    let generationModel = this.model
+    let fellBack = false
+
     if (this.model === 'gemini-3.5-transcribe') {
-      const segments = await this.transcribeWithNativeModel(genAI, audio, mimeType, options)
-      for (const segment of segments) yield segment
-      return
+      // Before 2026-09-21 this was the whole method for the Transcribe model:
+      // no fallback. An interaction that came back `incomplete`, or one that
+      // completed with timings stopping minutes before the recording ends, was
+      // thrown to the app, which retried the identical call and then failed
+      // the recording. The chunked path a few lines down already handles long
+      // audio, truncation and replayed turns for every other model; it is the
+      // fallback now.
+      let shortfall: string | null = null
+      try {
+        const segments = await this.transcribeWithNativeModel(genAI, audio, mimeType, options)
+        shortfall = nativeCoverageShortfall(segments, options.durationSeconds)
+        if (shortfall === null) {
+          for (const segment of segments) yield segment
+          return
+        }
+      } catch (error) {
+        // Silence and cancellation are answers, not failures to route around.
+        if (error instanceof NoSpeechDetectedError || error instanceof TranscriptionCancelledError) throw error
+        const message = error instanceof Error ? error.message : String(error)
+        // Only the "interaction did not complete" class falls back. Auth, quota
+        // and unsupported-audio errors would fail the same way on any model.
+        if (!/^Gemini native transcription /.test(message)) throw error
+        shortfall = message
+      }
+      console.warn(
+        `[GeminiEngine] ${this.model} ${shortfall}; retrying with chunked ${this.fallbackModel}`
+      )
+      generationModel = this.fallbackModel
+      fellBack = true
     }
 
+    // The interactions path below reads this.model, which is still the
+    // Transcribe model during a fallback — the API that just fell short. A
+    // fallback always takes the chunked generateContent path.
     if (
+      !fellBack &&
       /^gemini-(?:3(?:\.|$)|[4-9])/i.test(this.model) &&
       filePath &&
       options.durationSeconds &&
@@ -1432,7 +1503,7 @@ Return ONLY the schema-constrained JSON, with no markdown or additional commenta
 
       const attempt = async (config: GenerateContentConfig, promptText = prompt) => {
         const stream = await genAI.models.generateContentStream({
-          model: this.model,
+          model: generationModel,
           contents: [{ role: 'user', parts: [part, { text: promptText }] }],
           config,
         })

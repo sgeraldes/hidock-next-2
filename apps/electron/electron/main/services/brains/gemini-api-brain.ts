@@ -85,7 +85,7 @@ export class GeminiApiBrain implements AIBrain {
     const config = getConfig()
     const genAI = new GoogleGenerativeAI(apiKey)
     const model = genAI.getGenerativeModel({
-      model: opts.model || config.transcription.geminiModel || DEFAULT_MODEL,
+      model: opts.model || config.chat.geminiModel || DEFAULT_MODEL,
       ...(opts.systemPrompt ? { systemInstruction: opts.systemPrompt } : {}),
     })
 
