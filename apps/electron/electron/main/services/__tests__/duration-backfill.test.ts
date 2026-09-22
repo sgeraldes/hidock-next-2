@@ -424,20 +424,63 @@ describe('backfillRecordingDurations — measured from the audio file', () => {
     // capture it already rated, so the correction has to hand it back.
     seedWithFile('rerate', writeAudio('rerate.wav', 1000), 9)
     seedCapture('cap-rerate', 'rerate')
-    run("UPDATE knowledge_captures SET quality_rating = 'garbage', quality_source = 'ai' WHERE id = ?", [
-      'cap-rerate',
-    ])
+    run(
+      `UPDATE knowledge_captures
+          SET quality_rating = 'garbage', quality_source = 'ai', quality_method = 'duration',
+              quality_confidence = 1, quality_assessed_at = '2026-09-22T10:00:00Z'
+        WHERE id = ?`,
+      ['cap-rerate']
+    )
 
     const result = backfillRecordingDurations()
 
     expect(result.rerateable).toBe(1)
     expect(durationOf('rerate')).toBe(36)
-    const q = queryOne<{ quality_rating: string; quality_source: string | null }>(
-      'SELECT quality_rating, quality_source FROM knowledge_captures WHERE id = ?',
+    const q = queryOne<{
+      quality_rating: string
+      quality_source: string | null
+      quality_method: string | null
+      quality_confidence: number | null
+      quality_assessed_at: string | null
+    }>(
+      `SELECT quality_rating, quality_source, quality_method, quality_confidence, quality_assessed_at
+         FROM knowledge_captures WHERE id = ?`,
       ['cap-rerate']
     )
     expect(q?.quality_rating).toBe('unrated')
     expect(q?.quality_source).toBeNull()
+    expect(q?.quality_method).toBeNull()
+    // Nothing left behind that would read as "this was assessed".
+    expect(q?.quality_confidence).toBeNull()
+    expect(q?.quality_assessed_at).toBeNull()
+  })
+
+  it('never touches a judgement the model made after reading the transcript', () => {
+    // Both automatic raters used to stamp 'ai', so undoing a stopwatch verdict
+    // could throw away a content judgement — and the reset to a NULL source put
+    // the row in the "legacy rating, never touch" class, so it did not even get
+    // re-rated afterwards. The gate stamps 'duration' precisely so this row is
+    // out of reach.
+    seedWithFile('model-rated', writeAudio('model-rated.wav', 1000), 9)
+    seedCapture('cap-model', 'model-rated')
+    run(
+      `UPDATE knowledge_captures
+          SET quality_rating = 'low-value', quality_source = 'ai', quality_method = 'content',
+              quality_reasons = '["personal_family"]'
+        WHERE id = ?`,
+      ['cap-model']
+    )
+
+    const result = backfillRecordingDurations()
+
+    expect(result.rerateable).toBe(0)
+    const q = queryOne<{ quality_rating: string; quality_source: string | null; quality_reasons: string | null }>(
+      'SELECT quality_rating, quality_source, quality_reasons FROM knowledge_captures WHERE id = ?',
+      ['cap-model']
+    )
+    expect(q?.quality_rating).toBe('low-value')
+    expect(q?.quality_source).toBe('ai')
+    expect(q?.quality_reasons).toBe('["personal_family"]')
   })
 
   it('leaves a rating a person set alone, however wrong the old length was', () => {
@@ -461,9 +504,10 @@ describe('backfillRecordingDurations — measured from the audio file', () => {
     // 9 s on record, 9 s of audio: nothing about the verdict has changed.
     seedWithFile('still-short', writeAudio('still-short.wav', 250), 3)
     seedCapture('cap-short', 'still-short')
-    run("UPDATE knowledge_captures SET quality_rating = 'garbage', quality_source = 'ai' WHERE id = ?", [
-      'cap-short',
-    ])
+    run(
+      "UPDATE knowledge_captures SET quality_rating = 'garbage', quality_source = 'ai', quality_method = 'duration' WHERE id = ?",
+      ['cap-short']
+    )
 
     const result = backfillRecordingDurations()
 

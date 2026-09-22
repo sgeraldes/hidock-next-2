@@ -83,10 +83,18 @@ function parseFrame(buffer: Buffer, offset: number): MpegFrame | null {
   if (!kbps || !hz) return null
 
   const bits = kbps * 1000
+  // Samples per frame decide the coefficient. Layer I is 384 (and counts in
+  // 4-byte slots), Layer II is 1152 in every version, and Layer III is 1152
+  // under MPEG 1 but 576 under MPEG 2 and 2.5. Keying the halving on version
+  // alone would halve Layer II too, and a frame length that is half the real
+  // one makes findFrame's confirming sync land mid-frame and reject a stream
+  // it should have read.
+  const layerThree = layer === 1
+  const coefficient = layerThree && version !== 3 ? 72 : 144
   const bytes =
     layer === 3
-      ? (Math.floor((12 * bits) / hz) + padding) * 4 // Layer I counts 4-byte slots
-      : Math.floor(((version === 3 ? 144 : 72) * bits) / hz) + padding
+      ? (Math.floor((12 * bits) / hz) + padding) * 4
+      : Math.floor((coefficient * bits) / hz) + padding
   return { kbps, hz, bytes }
 }
 

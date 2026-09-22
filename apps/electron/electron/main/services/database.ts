@@ -15,7 +15,7 @@ import { isCancelledMeetingSubject, scoreMeetingCandidates } from './recording-m
 import { DURATION_LOW_VALUE_MAX_SECONDS, isImpossibleTranscriptDensity } from './value-thresholds'
 import type { QualityRating } from '@/types/knowledge'
 
-const SCHEMA_VERSION = 56
+const SCHEMA_VERSION = 57
 
 const SCHEMA = `
 -- Calendar events from ICS
@@ -112,6 +112,10 @@ CREATE TABLE IF NOT EXISTS knowledge_captures (
     -- rating the user set by hand, see applyCaptureValueClassification.
     quality_reasons TEXT,
     quality_source TEXT CHECK(quality_source IN ('ai', 'user')),
+    -- Which automatic rater wrote it (v57), read only when quality_source is
+    -- 'ai': 'content' for the model that read the transcript, 'duration' for
+    -- the stopwatch. Undoing one must never undo the other.
+    quality_method TEXT,
 
     -- Storage tier and retention
     storage_tier TEXT CHECK(storage_tier IN ('hot', 'cold', 'expiring', 'deleted')) DEFAULT 'hot',
@@ -3006,6 +3010,20 @@ const MIGRATIONS: Record<number, () => void> = {
     }
     console.log('Migration v56 complete')
   },
+  57: () => {
+    console.log('Running migration to schema v57: which rater wrote a quality rating')
+    const database = getDatabase()
+    // A column rather than a wider CHECK on quality_source: SQLite cannot alter
+    // a constraint, and rebuilding knowledge_captures — a protected table — to
+    // change one is not worth it. Existing rows stay NULL, which reads as
+    // "unknown rater" and is exactly right: before this, nothing recorded it.
+    try {
+      database.run('ALTER TABLE knowledge_captures ADD COLUMN quality_method TEXT')
+    } catch {
+      // Already present on a database repaired before this migration ran.
+    }
+    console.log('Migration v57 complete')
+  },
 }
 
 /**
@@ -3454,7 +3472,10 @@ function repairPhase(): void {
     // embed the column name itself or the ALTER becomes `ADD COLUMN TEXT`
     // (syntax error, silently swallowed by the try/catch below).
     { name: 'quality_reasons', def: 'quality_reasons TEXT' },
-    { name: 'quality_source', def: "quality_source TEXT CHECK(quality_source IN ('ai','user'))" }
+    { name: 'quality_source', def: "quality_source TEXT CHECK(quality_source IN ('ai','user'))" },
+    // v57 rater provenance — force-add so the duration gate can be undone
+    // without touching a content judgement on an older on-disk schema.
+    { name: 'quality_method', def: 'TEXT' }
   ]
   if (capCols.length > 0) {
     for (const col of knowledgeRepairs) {
@@ -6472,16 +6493,27 @@ export function maxTranscriptSegmentEnd(speakersJson: string | null | undefined)
  *
  * So when a measurement lifts a recording from under the gate's threshold to
  * over it, the verdict below goes back to `unrated` and the next pass decides
- * again on the real length. Only an automatic rating is cleared — a rating a
- * person set, and a legacy rating with no source at all, are left exactly as
- * they are, which is the same rule applyCaptureValueClassification follows.
+ * again on the real length.
+ *
+ * Only the stopwatch's own verdicts are cleared, which is why the gate records
+ * `quality_method = 'duration'` beside the `'ai'` both automatic raters write.
+ * Under one name this could not tell them apart, and a judgement the model made
+ * after reading a transcript would be thrown away by a correction that says
+ * nothing about content. A rating a person set, a rating the model made, and a
+ * legacy rating with no method recorded are all left alone.
+ *
+ * The confidence and the assessment timestamp go with the rating. Leaving them
+ * behind would hand the next reader a row that is `unrated` and still looks
+ * assessed.
  */
 function clearStopwatchVerdict(recordingId: string): number {
   run(
     `UPDATE knowledge_captures
-        SET quality_rating = 'unrated', quality_reasons = NULL, quality_source = NULL
+        SET quality_rating = 'unrated', quality_reasons = NULL, quality_source = NULL,
+            quality_method = NULL, quality_confidence = NULL, quality_assessed_at = NULL
       WHERE source_recording_id = ?
         AND quality_source = 'ai'
+        AND quality_method = 'duration'
         AND quality_rating IN ('garbage', 'low-value')`,
     [recordingId]
   )

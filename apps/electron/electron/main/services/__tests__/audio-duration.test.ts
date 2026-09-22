@@ -122,6 +122,28 @@ describe('readAudioDuration', () => {
     expect(result?.how).toBe('pcm 16000Hz/1ch')
   })
 
+  it('reads an MPEG-2 Layer II stream, whose frames do not halve', () => {
+    // Layer II carries 1152 samples per frame in every MPEG version; only
+    // Layer III halves to 576 under MPEG 2 and 2.5. Keying the coefficient on
+    // version alone computed 104-byte frames for this stream instead of 208,
+    // so the confirming sync landed mid-frame and the file read as unreadable.
+    //
+    // 0xFF 0xF5: sync, MPEG 2, Layer II, no CRC. 0x40: bitrate index 4
+    // (32 kbps for MPEG-2 Layer II), rate index 0 (22050 Hz), no padding.
+    // Frame length is floor(144 * 32000 / 22050) = 208 bytes.
+    const FRAME = Buffer.from([0xff, 0xf5, 0x40, 0xc4])
+    const BYTES = 208
+    const frames = 5
+    const data = Buffer.alloc(frames * BYTES)
+    for (let i = 0; i < frames; i++) FRAME.copy(data, i * BYTES)
+
+    const result = readAudioDuration(write('layer2.mp3', data))
+
+    expect(result?.how).toBe('mpeg 32kbps/22050Hz')
+    // 1040 bytes at 4000 bytes per second.
+    expect(result?.seconds).toBeCloseTo(0.26, 3)
+  })
+
   it('returns null for a file it cannot read', () => {
     expect(readAudioDuration(join(dir, 'does-not-exist.wav'))).toBeNull()
     expect(readAudioDuration(write('empty.wav', Buffer.alloc(0)))).toBeNull()
