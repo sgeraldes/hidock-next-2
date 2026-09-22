@@ -93,14 +93,20 @@ function wipeData(): void {
 
 function seedRecording(
   id: string,
-  opts: { filename?: string; durationSeconds?: number | null; personal?: 0 | 1; deletedAt?: string | null } = {}
+  opts: {
+    filename?: string
+    durationSeconds?: number | null
+    fileSize?: number | null
+    personal?: 0 | 1
+    deletedAt?: string | null
+  } = {}
 ): void {
   run(
     `INSERT INTO recordings
        (id, filename, file_path, date_recorded, status, location,
         transcription_status, on_device, on_local, source, is_imported, personal,
-        duration_seconds, deleted_at)
-     VALUES (?, ?, ?, ?, 'none', 'local-only', 'none', 0, 1, 'hidock', 0, ?, ?, ?)`,
+        duration_seconds, file_size, deleted_at)
+     VALUES (?, ?, ?, ?, 'none', 'local-only', 'none', 0, 1, 'hidock', 0, ?, ?, ?, ?)`,
     [
       id,
       opts.filename ?? `${id}.wav`,
@@ -108,6 +114,9 @@ function seedRecording(
       '2026-01-01T10:00:00.000Z',
       opts.personal ?? 0,
       opts.durationSeconds ?? null,
+      // Default: a file whose size matches the device rate of 8,000 B/s, so
+      // the duration is never contradicted unless a test says so.
+      opts.fileSize === undefined ? (opts.durationSeconds ?? 0) * 8000 || null : opts.fileSize,
       opts.deletedAt ?? null
     ]
   )
@@ -1065,6 +1074,26 @@ describe('classifyCaptureValueRaw duration gate', () => {
 
     expect(raw.skipped).toBeUndefined()
     expect(raw.classification.value).toBe('none')
+    expect(raw.providerCalled).toBe(false)
+    expect(mockComplete).not.toHaveBeenCalled()
+  })
+
+  it('refuses the duration verdict when the file size contradicts the duration', async () => {
+    // A four-minute recording whose transcription stopped after the first
+    // utterance: backfillRecordingDurations wrote the transcript's last
+    // segment end, 8s, onto a 1.92 MB file. Judging that as garbage would
+    // bury a real meeting.
+    seedRecording('rec-dur-6', { durationSeconds: 8, fileSize: 240 * 8000 })
+    seedTranscript('rec-dur-6', { fullText: 'So the first thing we agreed was the July date.' })
+    seedCapture('cap-dur-6', 'rec-dur-6')
+    mockComplete.mockResolvedValue('{"value":"high","value_reasons":[],"value_confidence":0.9}')
+
+    const raw = await classifyCaptureValueRaw('cap-dur-6')
+
+    // Falls through to the content judgement rather than the stopwatch.
+    expect(raw.classification.value).toBe('high')
+    expect(raw.providerCalled).toBe(true)
+    expect(applyCaptureValueClassification('cap-dur-6', raw.classification).rating).toBe('unrated')
   })
 
   it('still calls the provider for a 30s+ recording', async () => {
@@ -1123,7 +1152,7 @@ describe('applyDurationValueGate (sweep)', () => {
 
     const result = applyDurationValueGate()
 
-    expect(result).toEqual({ scanned: 2, marked: 2 })
+    expect(result).toEqual({ candidates: 2, marked: 2 })
     expect(getCaptureRow('cap-sw-1')?.quality_rating).toBe('garbage')
     expect(getCaptureRow('cap-sw-2')?.quality_rating).toBe('low-value')
     expect(getCaptureRow('cap-sw-3')?.quality_rating).toBe('unrated')
@@ -1154,7 +1183,7 @@ describe('applyDurationValueGate (sweep)', () => {
     // never even reaches the writer that would also have refused it.
     const result = applyDurationValueGate()
 
-    expect(result).toEqual({ scanned: 0, marked: 0 })
+    expect(result).toEqual({ candidates: 0, marked: 0 })
     expect(getCaptureRow('cap-sw-6')?.quality_rating).toBe('valuable')
     expect(getCaptureRow('cap-sw-7')?.quality_rating).toBe('unrated')
     expect(getCaptureRow('cap-sw-7')?.quality_source).toBe('user')
@@ -1174,18 +1203,30 @@ describe('applyDurationValueGate (sweep)', () => {
     seedRecording('rec-sw-10', { durationSeconds: 5, deletedAt: '2026-01-02T00:00:00.000Z' })
     seedCapture('cap-sw-10', 'rec-sw-10')
 
-    expect(applyDurationValueGate()).toEqual({ scanned: 0, marked: 0 })
+    expect(applyDurationValueGate()).toEqual({ candidates: 0, marked: 0 })
     expect(getCaptureRow('cap-sw-9')?.quality_rating).toBe('unrated')
     expect(getCaptureRow('cap-sw-10')?.quality_rating).toBe('unrated')
+  })
+
+  it('leaves a short capture alone when its file is too big for its duration', () => {
+    // The sweep must not rate a recording whose duration_seconds came out of
+    // a truncated transcript. It drops out of the candidate set entirely, so
+    // it costs nothing on every later mount either.
+    seedRecording('rec-sw-12', { durationSeconds: 8, fileSize: 240 * 8000 })
+    seedCapture('cap-sw-12', 'rec-sw-12')
+
+    expect(applyDurationValueGate()).toEqual({ candidates: 0, marked: 0 })
+    expect(getCaptureRow('cap-sw-12')?.quality_rating).toBe('unrated')
+    expect(getCaptureRow('cap-sw-12')?.quality_source).toBeNull()
   })
 
   it('is idempotent - a second sweep finds nothing left to do', () => {
     seedRecording('rec-sw-11', { durationSeconds: 5 })
     seedCapture('cap-sw-11', 'rec-sw-11')
 
-    expect(applyDurationValueGate()).toEqual({ scanned: 1, marked: 1 })
+    expect(applyDurationValueGate()).toEqual({ candidates: 1, marked: 1 })
     const first = getCaptureRow('cap-sw-11')
-    expect(applyDurationValueGate()).toEqual({ scanned: 0, marked: 0 })
+    expect(applyDurationValueGate()).toEqual({ candidates: 0, marked: 0 })
     expect(getCaptureRow('cap-sw-11')).toEqual(first)
   })
 })

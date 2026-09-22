@@ -52,7 +52,12 @@ import {
 import { complete } from '@hidock/ai-providers'
 import { getProviderConfigFromSettings } from './ai-provider-config'
 import { getConfig } from './config'
-import { classifyByDuration, DURATION_LOW_VALUE_MAX_SECONDS } from './value-thresholds'
+import {
+  classifyByDuration,
+  isDurationContradictedByFileSize,
+  DURATION_LOW_VALUE_MAX_SECONDS,
+  MAX_PLAUSIBLE_BYTES_PER_SECOND
+} from './value-thresholds'
 import type { QualityRating } from '@/types/knowledge'
 
 export type CaptureValue = 'high' | 'normal' | 'low' | 'none'
@@ -138,7 +143,9 @@ export {
   DURATION_GARBAGE_MAX_SECONDS,
   DURATION_LOW_VALUE_MAX_SECONDS,
   IMPOSSIBLE_WORDS_PER_SECOND,
+  MAX_PLAUSIBLE_BYTES_PER_SECOND,
   isImpossibleTranscriptDensity,
+  isDurationContradictedByFileSize,
   classifyByDuration
 } from './value-thresholds'
 
@@ -249,6 +256,7 @@ interface CaptureForClassification {
   transcript_full_text: string | null
   meeting_subject: string | null
   duration_seconds: number | null
+  file_size: number | null
 }
 
 // Bound the value-only prompt's token budget regardless of recording length —
@@ -410,7 +418,8 @@ export async function classifyCaptureValueRaw(captureId: string): Promise<RawCla
             kc.summary AS summary,
             t.full_text AS transcript_full_text,
             m.subject AS meeting_subject,
-            r.duration_seconds AS duration_seconds
+            r.duration_seconds AS duration_seconds,
+            r.file_size AS file_size
        FROM knowledge_captures kc
        LEFT JOIN transcripts t ON t.recording_id = kc.source_recording_id
        LEFT JOIN recordings r ON r.id = kc.source_recording_id
@@ -445,7 +454,7 @@ export async function classifyCaptureValueRaw(captureId: string): Promise<RawCla
   // that was never transcribed (or whose transcript is blank) still gets a
   // verdict instead of sitting `unrated` forever. providerCalled stays false —
   // no throttle slot is billed for a stopwatch reading.
-  const durationVerdict = classifyByDuration(row.duration_seconds)
+  const durationVerdict = classifyByDuration(row.duration_seconds, row.file_size)
   if (durationVerdict) {
     return { classification: durationVerdict, currentRating: 'unrated', providerCalled: false }
   }
@@ -534,13 +543,20 @@ export async function classifyCaptureValue(captureId: string): Promise<CaptureVa
  * and drops out of the next sweep's candidate set.
  *
  * Personal and soft-deleted recordings are out of scope, matching the
- * backfill's own privacy predicate.
+ * backfill's own privacy predicate. So is a recording whose file is too big
+ * to hold its stored duration, which means the duration is understated rather
+ * than the recording short (see isDurationContradictedByFileSize).
+ *
+ * `candidates` counts the rows this sweep considered, not the rows any other
+ * backfill scanned — backfillRecordingDurations, which the same IPC handler
+ * calls first, reports its own separate count of rows with a missing
+ * duration.
  */
-export function applyDurationValueGate(): { scanned: number; marked: number } {
-  let rows: { id: string; duration_seconds: number | null }[]
+export function applyDurationValueGate(): { candidates: number; marked: number } {
+  let rows: { id: string; duration_seconds: number | null; file_size: number | null }[]
   try {
-    rows = queryAll<{ id: string; duration_seconds: number | null }>(
-      `SELECT kc.id AS id, r.duration_seconds AS duration_seconds
+    rows = queryAll<{ id: string; duration_seconds: number | null; file_size: number | null }>(
+      `SELECT kc.id AS id, r.duration_seconds AS duration_seconds, r.file_size AS file_size
          FROM knowledge_captures kc
          JOIN recordings r ON r.id = kc.source_recording_id
         WHERE (kc.quality_rating = 'unrated' OR kc.quality_rating IS NULL)
@@ -550,23 +566,39 @@ export function applyDurationValueGate(): { scanned: number; marked: number } {
           AND COALESCE(r.personal, 0) = 0
           AND r.duration_seconds IS NOT NULL
           AND r.duration_seconds > 0
-          AND r.duration_seconds < ?`,
-      [DURATION_LOW_VALUE_MAX_SECONDS]
+          AND r.duration_seconds < ?
+          AND NOT (
+            r.file_size IS NOT NULL
+            AND r.file_size > 0
+            AND r.file_size > r.duration_seconds * ?
+          )`,
+      [DURATION_LOW_VALUE_MAX_SECONDS, MAX_PLAUSIBLE_BYTES_PER_SECOND]
     )
   } catch (e) {
     console.warn('[ValueClassification] duration gate sweep query failed:', e instanceof Error ? e.message : e)
-    return { scanned: 0, marked: 0 }
+    return { candidates: 0, marked: 0 }
   }
 
   let marked = 0
+  let contradicted = 0
   for (const row of rows) {
-    const verdict = classifyByDuration(row.duration_seconds)
+    // Belt and braces: the SQL already excluded these, and classifyByDuration
+    // checks again. Counted separately so the log distinguishes "nothing to
+    // do" from "refused to judge a broken duration".
+    if (isDurationContradictedByFileSize(row.file_size, row.duration_seconds)) {
+      contradicted++
+      continue
+    }
+    const verdict = classifyByDuration(row.duration_seconds, row.file_size)
     if (!verdict) continue
     if (applyCaptureValueClassification(row.id, verdict).applied) marked++
   }
 
-  if (marked > 0) {
-    console.log(`[ValueClassification] duration gate rated ${marked}/${rows.length} short capture(s)`)
+  if (marked > 0 || contradicted > 0) {
+    console.log(
+      `[ValueClassification] duration gate rated ${marked}/${rows.length} short capture(s)` +
+        (contradicted > 0 ? `, skipped ${contradicted} whose file size contradicts the duration` : '')
+    )
   }
-  return { scanned: rows.length, marked }
+  return { candidates: rows.length, marked }
 }

@@ -1775,12 +1775,13 @@ export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
             // re-analysis that comes back 'normal' maps to 'unrated' and
             // would RESET a short clip the duration gate had already called
             // garbage, since the guard lets an AI-set rating be refreshed.
-            const durationRow = queryOne<{ duration_seconds: number | null }>(
-              'SELECT duration_seconds FROM recordings WHERE id = ?',
+            const durationRow = queryOne<{ duration_seconds: number | null; file_size: number | null }>(
+              'SELECT duration_seconds, file_size FROM recordings WHERE id = ?',
               [row.recording_id]
             )
             const cls =
-              classifyByDuration(durationRow?.duration_seconds) ?? parseValueClassification(analysis)
+              classifyByDuration(durationRow?.duration_seconds, durationRow?.file_size) ??
+              parseValueClassification(analysis)
             applyCaptureValueClassification(captureId, cls)
           }
         } catch (e) {
@@ -2453,7 +2454,9 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
       // where transcribers hallucinate (one 13-second clip produced 508
       // words). classifyByDuration returns null above its band, leaving the
       // model's judgement in charge of everything long enough to judge.
-      const cls = classifyByDuration(recording.duration_seconds) ?? parseValueClassification(analysis)
+      const cls =
+        classifyByDuration(recording.duration_seconds, recording.file_size) ??
+        parseValueClassification(analysis)
       const applied = applyCaptureValueClassification(captureId, cls)
       if (applied.applied && (applied.rating === 'low-value' || applied.rating === 'garbage')) {
         const { getEventBus } = await import('./event-bus')
