@@ -31,6 +31,7 @@ import { registerSelfIdentificationHandlers } from './self-identification-handle
 import { registerTurnSpeakersHandlers } from './turn-speakers-handlers'
 import { registerRecordingDeletionHandlers } from './recording-deletion-handlers'
 import { registerTranscriptionHandlers } from './transcription-handlers'
+import { registerModelHostHandlers } from './model-host-handlers'
 import { registerReDiarizeHandlers } from './re-diarize-handlers'
 import { registerTimelineHandlers } from './timeline-handlers'
 import { registerClipboardCaptureHandlers } from './clipboard-capture-handlers'
@@ -92,6 +93,7 @@ export function registerIpcHandlers(): void {
   registerTurnSpeakersHandlers()
   registerRecordingDeletionHandlers()
   registerTranscriptionHandlers()
+  registerModelHostHandlers()
   registerReDiarizeHandlers()
   registerTimelineHandlers()
   registerClipboardCaptureHandlers()

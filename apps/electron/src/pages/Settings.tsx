@@ -30,6 +30,7 @@ import { HealthCheck } from '@/components/HealthCheck'
 import { ConnectorsSettings } from '@/components/settings/ConnectorsSettings'
 import { AIBrainsSettings } from '@/components/settings/AIBrainsSettings'
 import { FeaturesSettings } from '@/components/settings/FeaturesSettings'
+import { ModelHostSettings } from '@/components/settings/ModelHostSettings'
 import { toast } from '@/components/ui/toaster'
 import { LEGACY_GRAPH_DISCLOSURE } from '@/features/library/utils/deletionCopy'
 import type { StorageInfo, AppConfig } from '@/types'
@@ -1341,6 +1342,8 @@ export function Settings() {
               </Button>
             </CardContent>
           </Card>
+
+          <ModelHostSettings />
 
           {/* Library value classification (F16/spec-003) */}
           <Card>

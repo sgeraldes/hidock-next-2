@@ -732,6 +732,29 @@ export interface ElectronAPI {
     meetingSuggestions: (request: { id: string }) => Promise<{ success: boolean; suggestions?: NoteMeetingSuggestion[]; error?: string }>
   }
 
+  /**
+   * The HiDock Model Host: the machine with the GPU, lending its diarization
+   * worker over the LAN. Only Settings talks to it; the decision to use it or
+   * to diarize here is made in the main process.
+   */
+  modelHost: {
+    check: (request: { url: string }) => Promise<{
+      success: boolean
+      error?: string
+      health?: {
+        version: string
+        state: 'stopped' | 'ready' | 'paused' | 'busy'
+        capabilities: string[]
+        /** Absent until this machine is paired: a stranger is not told. */
+        acceleration?: 'cuda' | 'cpu'
+        gpu?: { name: string; vramMiB: number | null; driver: string } | null
+        reason?: string
+      }
+    }>
+    pair: (request: { url: string; code: string }) => Promise<{ success: boolean; error?: string }>
+    forget: () => Promise<{ success: boolean }>
+  }
+
   // Knowledge Captures
   knowledge: {
     getAll: (options?: { limit?: number; offset?: number; status?: string }) => Promise<KnowledgeCapture[]>
@@ -1641,6 +1664,12 @@ const electronAPI: ElectronAPI = {
     analyze: (request) => callIPC('notes:analyze', request),
     related: (request) => callIPC('notes:related', request),
     meetingSuggestions: (request) => callIPC('notes:meetingSuggestions', request)
+  },
+
+  modelHost: {
+    check: (request) => callIPC('model-host:check', request),
+    pair: (request) => callIPC('model-host:pair', request),
+    forget: () => callIPC('model-host:forget')
   },
 
   knowledge: {
