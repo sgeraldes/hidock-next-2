@@ -440,7 +440,12 @@ export function Library() {
     void (async () => {
       try {
         const result = await window.electronAPI.recordings.backfillDurations()
-        if (result?.success && ((result.updated ?? 0) > 0 || (result.markedLowValue ?? 0) > 0)) {
+        if (
+          result?.success &&
+          ((result.updated ?? 0) > 0 ||
+            (result.markedLowValue ?? 0) > 0 ||
+            (result.markedByDuration ?? 0) > 0)
+        ) {
           await refresh(false)
         }
       } catch (e) {

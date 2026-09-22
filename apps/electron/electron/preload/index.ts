@@ -426,7 +426,14 @@ export interface ElectronAPI {
     updateRecordingStatus: (id: string, status: string) => Promise<{ success: boolean; data?: any; error?: string }>
     updateTranscriptionStatus: (id: string, status: string) => Promise<{ success: boolean; data?: any; error?: string }>
     updateDuration: (id: string, durationSeconds: number) => Promise<{ success: boolean; error?: string }>
-    backfillDurations: () => Promise<{ success: boolean; scanned?: number; updated?: number; markedLowValue?: number; error?: string }>
+    backfillDurations: () => Promise<{
+      success: boolean
+      scanned?: number
+      updated?: number
+      markedLowValue?: number
+      markedByDuration?: number
+      error?: string
+    }>
     linkToMeeting: (recordingId: string, meetingId: string, confidence: number, method: string) => Promise<any>
     // Privacy source-deletion (v38)
     markPersonal: (id: string, personal: boolean) => Promise<{ success: boolean; personal?: boolean; error?: string }>

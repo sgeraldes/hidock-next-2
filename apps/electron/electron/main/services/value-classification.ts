@@ -1,10 +1,16 @@
 /**
  * Content-based VALUE classification for knowledge_captures (F16 / spec-001).
  *
- * Every transcribed capture should get an LLM judgement of how much LASTING,
- * USEFUL KNOWLEDGE it holds — independent of metadata heuristics (duration,
- * meeting link, word count), which can't tell a real work call apart from an
- * accidentally-recorded 30-minute kitchen conversation. This module owns:
+ * Every transcribed capture long enough to hold content gets an LLM judgement
+ * of how much LASTING, USEFUL KNOWLEDGE it holds. Metadata heuristics can't
+ * tell a real work call apart from an accidentally-recorded 30-minute kitchen
+ * conversation, so above the duration gate the content decides.
+ *
+ * Below it, duration decides on its own (value-thresholds.ts, re-exported
+ * here): a clip under 30 seconds is judged for free, with no transcript and
+ * no provider call, because nothing that short can hold knowledge. That gate
+ * runs FIRST everywhere value is applied — the live path, the re-analysis
+ * path, the backfill, and the Library-mount sweep. This module owns:
  *
  *  - the pure parse/map logic (parseValueClassification, mapValueToRating) —
  *    no DB, no network, fully unit-testable.
@@ -36,6 +42,7 @@
  */
 
 import {
+  queryAll,
   queryOne,
   run,
   getRowsModified,
@@ -45,6 +52,7 @@ import {
 import { complete } from '@hidock/ai-providers'
 import { getProviderConfigFromSettings } from './ai-provider-config'
 import { getConfig } from './config'
+import { classifyByDuration, DURATION_LOW_VALUE_MAX_SECONDS } from './value-thresholds'
 import type { QualityRating } from '@/types/knowledge'
 
 export type CaptureValue = 'high' | 'normal' | 'low' | 'none'
@@ -118,6 +126,21 @@ export function mapValueToRating(value: CaptureValue): QualityRating | null {
   if (value === 'low') return 'low-value'
   return null
 }
+
+// ---------------------------------------------------------------------------
+// Duration gate — see value-thresholds.ts for the numbers and the evidence
+// behind them. Re-exported here so every caller keeps importing value
+// classification from one place; the definitions live one module lower
+// because database.ts needs them too and cannot import this file.
+// ---------------------------------------------------------------------------
+
+export {
+  DURATION_GARBAGE_MAX_SECONDS,
+  DURATION_LOW_VALUE_MAX_SECONDS,
+  IMPOSSIBLE_WORDS_PER_SECOND,
+  isImpossibleTranscriptDensity,
+  classifyByDuration
+} from './value-thresholds'
 
 export interface ApplyResult {
   applied: boolean
@@ -225,6 +248,7 @@ interface CaptureForClassification {
   summary: string | null
   transcript_full_text: string | null
   meeting_subject: string | null
+  duration_seconds: number | null
 }
 
 // Bound the value-only prompt's token budget regardless of recording length —
@@ -385,9 +409,11 @@ export async function classifyCaptureValueRaw(captureId: string): Promise<RawCla
             kc.quality_source AS quality_source,
             kc.summary AS summary,
             t.full_text AS transcript_full_text,
-            m.subject AS meeting_subject
+            m.subject AS meeting_subject,
+            r.duration_seconds AS duration_seconds
        FROM knowledge_captures kc
        LEFT JOIN transcripts t ON t.recording_id = kc.source_recording_id
+       LEFT JOIN recordings r ON r.id = kc.source_recording_id
        LEFT JOIN meetings m ON m.id = kc.meeting_id
       WHERE kc.id = ?`,
     [captureId]
@@ -395,10 +421,10 @@ export async function classifyCaptureValueRaw(captureId: string): Promise<RawCla
 
   const emptyClassification: ValueClassification = { value: 'normal', reasons: [], confidence: 0 }
 
-  if (!row || !row.transcript_full_text || row.transcript_full_text.trim() === '') {
+  if (!row) {
     return {
       classification: emptyClassification,
-      currentRating: (row?.quality_rating as QualityRating | null) ?? 'unrated',
+      currentRating: 'unrated',
       skipped: 'no-transcript',
       providerCalled: false
     }
@@ -410,6 +436,25 @@ export async function classifyCaptureValueRaw(captureId: string): Promise<RawCla
       classification: emptyClassification,
       currentRating: (row.quality_rating as QualityRating | null) ?? 'unrated',
       skipped: 'already-rated',
+      providerCalled: false
+    }
+  }
+
+  // Duration decides the bottom end BEFORE the transcript is even looked at:
+  // a clip too short to hold knowledge is judged for free, and a short clip
+  // that was never transcribed (or whose transcript is blank) still gets a
+  // verdict instead of sitting `unrated` forever. providerCalled stays false —
+  // no throttle slot is billed for a stopwatch reading.
+  const durationVerdict = classifyByDuration(row.duration_seconds)
+  if (durationVerdict) {
+    return { classification: durationVerdict, currentRating: 'unrated', providerCalled: false }
+  }
+
+  if (!row.transcript_full_text || row.transcript_full_text.trim() === '') {
+    return {
+      classification: emptyClassification,
+      currentRating: 'unrated',
+      skipped: 'no-transcript',
       providerCalled: false
     }
   }
@@ -468,4 +513,60 @@ export async function classifyCaptureValue(captureId: string): Promise<CaptureVa
     confidence: raw.classification.confidence,
     changed: applied.applied
   }
+}
+
+/**
+ * Sweep every already-stored capture whose recording is short enough for the
+ * duration gate and rate it — no transcript read, no provider call, no cost.
+ *
+ * This is the path that repairs history. The LLM backfill
+ * (value-backfill.ts) only ever runs because the user pressed a button in
+ * Settings, and on the owner's real database it had never run once:
+ * value_backfill_state was empty while 111 of his 122 sub-minute recordings
+ * sat at `unrated` with no quality_source at all. A stopwatch verdict needs
+ * no permission and no budget, so it runs on Library mount alongside the
+ * duration backfill that populates the very column it reads.
+ *
+ * Every write goes through applyCaptureValueClassification, the single
+ * writer, so the never-downgrade guard applies unchanged: a rating the user
+ * set by hand, and a legacy rating with no quality_source, are never touched.
+ * Idempotent — a capture the gate has already rated is no longer `unrated`
+ * and drops out of the next sweep's candidate set.
+ *
+ * Personal and soft-deleted recordings are out of scope, matching the
+ * backfill's own privacy predicate.
+ */
+export function applyDurationValueGate(): { scanned: number; marked: number } {
+  let rows: { id: string; duration_seconds: number | null }[]
+  try {
+    rows = queryAll<{ id: string; duration_seconds: number | null }>(
+      `SELECT kc.id AS id, r.duration_seconds AS duration_seconds
+         FROM knowledge_captures kc
+         JOIN recordings r ON r.id = kc.source_recording_id
+        WHERE (kc.quality_rating = 'unrated' OR kc.quality_rating IS NULL)
+          AND COALESCE(kc.quality_source, '') != 'user'
+          AND kc.deleted_at IS NULL
+          AND r.deleted_at IS NULL
+          AND COALESCE(r.personal, 0) = 0
+          AND r.duration_seconds IS NOT NULL
+          AND r.duration_seconds > 0
+          AND r.duration_seconds < ?`,
+      [DURATION_LOW_VALUE_MAX_SECONDS]
+    )
+  } catch (e) {
+    console.warn('[ValueClassification] duration gate sweep query failed:', e instanceof Error ? e.message : e)
+    return { scanned: 0, marked: 0 }
+  }
+
+  let marked = 0
+  for (const row of rows) {
+    const verdict = classifyByDuration(row.duration_seconds)
+    if (!verdict) continue
+    if (applyCaptureValueClassification(row.id, verdict).applied) marked++
+  }
+
+  if (marked > 0) {
+    console.log(`[ValueClassification] duration gate rated ${marked}/${rows.length} short capture(s)`)
+  }
+  return { scanned: rows.length, marked }
 }

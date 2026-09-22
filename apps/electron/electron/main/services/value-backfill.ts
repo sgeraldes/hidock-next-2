@@ -48,7 +48,12 @@
 import type { BrowserWindow } from 'electron'
 import { randomUUID } from 'crypto'
 import { queryAll, queryOne, run, runInTransaction } from './database'
-import { classifyCaptureValueRaw, applyCaptureValueClassification, type RawClassificationResult } from './value-classification'
+import {
+  classifyCaptureValueRaw,
+  applyCaptureValueClassification,
+  DURATION_LOW_VALUE_MAX_SECONDS,
+  type RawClassificationResult
+} from './value-classification'
 import { getProviderConfigFromSettings } from './ai-provider-config'
 
 // ---------------------------------------------------------------------------
@@ -168,13 +173,25 @@ let cancelled = false
 
 /** Not soft-deleted, not user-rated (an explicit user rating/clear is
  *  authoritative and out of scope for both eligibility and status), owning
- *  recording not personal/deleted, and a non-blank transcript exists. */
+ *  recording not personal/deleted, and the capture is judgeable: either a
+ *  non-blank transcript exists (the model can read it) or the recording is
+ *  short enough for the duration gate to decide it outright.
+ *
+ *  The duration arm is what brings a short, never-transcribed capture into
+ *  scope. It costs nothing to serve: classifyCaptureValueRaw returns the
+ *  stopwatch verdict without calling the provider at all. Interpolated
+ *  rather than bound because it is a module-level numeric constant, which
+ *  keeps both consumers' parameter lists unchanged. */
 const VALUE_BACKFILL_PRIVACY_WHERE = `kc.deleted_at IS NULL
         AND COALESCE(kc.quality_source, '') != 'user'
         AND COALESCE(r.personal, 0) = 0
         AND r.deleted_at IS NULL
-        AND t.full_text IS NOT NULL
-        AND TRIM(t.full_text) != ''`
+        AND (
+          (t.full_text IS NOT NULL AND TRIM(t.full_text) != '')
+          OR (r.duration_seconds IS NOT NULL
+              AND r.duration_seconds > 0
+              AND r.duration_seconds < ${DURATION_LOW_VALUE_MAX_SECONDS})
+        )`
 
 /** Durable retry cap exhausted — applies identically to a terminally-'failed'
  *  row and a crashed-and-never-finalized 'in_progress' row (AR-3 / Opus review
@@ -209,7 +226,7 @@ function getEligibleCaptureIds(order: 'newest' | 'oldest'): string[] {
   const rows = queryAll<{ id: string }>(
     `SELECT kc.id AS id
        FROM knowledge_captures kc
-       JOIN transcripts t ON t.recording_id = kc.source_recording_id
+       LEFT JOIN transcripts t ON t.recording_id = kc.source_recording_id
        LEFT JOIN recordings r ON r.id = kc.source_recording_id
       WHERE ${VALUE_BACKFILL_PRIVACY_WHERE}
         AND kc.quality_rating = 'unrated'
@@ -706,7 +723,7 @@ export function getValueBackfillStatus(): ValueBackfillStatus {
                                  AND vbs.result_rating IN ('low-value', 'garbage') THEN kc.id END) AS marked,
             COUNT(DISTINCT CASE WHEN ${VALUE_BACKFILL_PARKED_PREDICATE} THEN kc.id END) AS failed
        FROM knowledge_captures kc
-       JOIN transcripts t ON t.recording_id = kc.source_recording_id
+       LEFT JOIN transcripts t ON t.recording_id = kc.source_recording_id
        LEFT JOIN recordings r ON r.id = kc.source_recording_id
        LEFT JOIN value_backfill_state vbs ON vbs.capture_id = kc.id
       WHERE ${VALUE_BACKFILL_PRIVACY_WHERE}

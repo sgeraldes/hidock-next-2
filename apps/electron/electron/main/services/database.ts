@@ -11,6 +11,7 @@ import { DatabaseEngine, getTableColumns, type SqlJsDatabase } from '@hidock/dat
 import { normalizeName, isGenericSpeakerLabel, detectAmbiguousName } from './entity-normalize'
 import { getEventBus } from './event-bus'
 import { isCancelledMeetingSubject, scoreMeetingCandidates } from './recording-match-scoring'
+import { isImpossibleTranscriptDensity } from './value-thresholds'
 import type { QualityRating } from '@/types/knowledge'
 
 const SCHEMA_VERSION = 55
@@ -6494,9 +6495,20 @@ export function backfillRecordingDurations(): { scanned: number; updated: number
  * Deliberately narrow to avoid mislabeling anything the user might want: a
  * capture is marked `low-value` ONLY when its source recording is very short
  * (< 20s, after the duration backfill) AND it carries no meaningful transcript
- * (missing, or fewer than 20 words) AND it isn't linked to a calendar meeting.
- * Everything ambiguous stays `unrated`. Never downgrades a rating the user set
- * (only touches rows still at the default `unrated`). Idempotent.
+ * (missing, fewer than 20 words, or physically impossible to have been spoken
+ * in that many seconds) AND it isn't linked to a calendar meeting. Everything
+ * ambiguous stays `unrated`. Idempotent.
+ *
+ * Never downgrades a rating the user set: rows at a non-`unrated` rating are
+ * out of the candidate query, and a row the user explicitly CLEARED back to
+ * `unrated` (quality_source='user') is excluded too — clearing a rating is a
+ * decision, not an absence of one, and re-marking it would overwrite the
+ * user (2026-09-22).
+ *
+ * Since v53 this runs alongside applyDurationValueGate(), which covers
+ * everything under 30 seconds regardless of transcript. What is left to this
+ * classifier is the 20-to-30-second overlap and the historical shape it was
+ * written for.
  *
  * Returns the number of captures newly marked low-value. `valuable` is left to
  * explicit user/AI action — we don't over-claim value automatically.
@@ -6518,6 +6530,7 @@ export function classifyLowValueCaptures(): { scanned: number; markedLowValue: n
      JOIN recordings r ON r.id = kc.source_recording_id
      LEFT JOIN transcripts t ON t.recording_id = kc.source_recording_id
      WHERE kc.quality_rating = 'unrated'
+       AND COALESCE(kc.quality_source, '') != 'user'
        AND kc.deleted_at IS NULL
        AND COALESCE(r.personal, 0) = 0`
   )
@@ -6528,7 +6541,12 @@ export function classifyLowValueCaptures(): { scanned: number; markedLowValue: n
     const duration = row.duration_seconds ?? 0
     const words = row.word_count ?? 0
     const isShort = duration > 0 && duration < 20
-    const negligibleTranscript = row.has_transcript === 0 || words < 20
+    // A transcript denser than any human can speak is a hallucination, not
+    // content: it must not buy a clip its way out of the "no meaningful
+    // transcript" test. One 13-second recording in the owner's DB carries a
+    // 508-word transcript (39 words per second).
+    const negligibleTranscript =
+      row.has_transcript === 0 || words < 20 || isImpossibleTranscriptDensity(words, duration)
     const linkedToMeeting = !!row.meeting_id
 
     if (isShort && negligibleTranscript && !linkedToMeeting) {
@@ -6539,7 +6557,7 @@ export function classifyLowValueCaptures(): { scanned: number; markedLowValue: n
       run(
         `UPDATE knowledge_captures
          SET quality_rating = 'low-value', quality_confidence = 0.6, quality_assessed_at = ?, quality_source = 'ai'
-         WHERE id = ? AND quality_rating = 'unrated'`,
+         WHERE id = ? AND quality_rating = 'unrated' AND COALESCE(quality_source, '') != 'user'`,
         [new Date().toISOString(), row.id]
       )
       marked++
