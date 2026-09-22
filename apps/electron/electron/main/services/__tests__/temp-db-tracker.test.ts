@@ -20,7 +20,7 @@ import Database from 'better-sqlite3'
 import { existsSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { sweepTempDbs } from '../../../../src/test/temp-db-tracker'
+import { sweepTempDbs, tempDbFileOps, trackDatabases } from '../../../../src/test/temp-db-tracker'
 
 function tempDbPath(tag: string): string {
   return join(tmpdir(), `hidock-tracker-test-${tag}-${process.pid}-${Date.now()}.sqlite`)
@@ -73,6 +73,46 @@ describe('temp-db-tracker (via the setup-db better-sqlite3 shim)', () => {
     db.close()
     rmSync(p, { force: true })
 
+    expect(() => sweepTempDbs()).not.toThrow()
+    expect(existsSync(p)).toBe(false)
+  })
+
+  it('fails loudly and retains an entry when closing its handle fails', () => {
+    let closeAttempts = 0
+    class FailingDatabase {
+      open = true
+
+      close(): void {
+        closeAttempts++
+        throw new Error('stable close failure')
+      }
+    }
+    const TrackedFailingDatabase = trackDatabases(FailingDatabase)
+    const failing = new TrackedFailingDatabase()
+
+    expect(() => sweepTempDbs()).toThrow('close failed')
+    expect(closeAttempts).toBe(1)
+
+    failing.close = () => undefined
+    expect(() => sweepTempDbs()).not.toThrow()
+    expect(closeAttempts).toBe(1)
+  })
+
+  it('fails loudly and retains an entry when deleting its database fails', () => {
+    const p = tempDbPath('delete-failure')
+    const db = new Database(p)
+    db.exec('CREATE TABLE t (x)')
+    const originalRmSync = tempDbFileOps.rmSync
+    tempDbFileOps.rmSync = ((path: string, options?: Parameters<typeof rmSync>[1]) => {
+      if (path === p) throw new Error('stable delete failure')
+      return originalRmSync(path, options)
+    }) as typeof rmSync
+
+    expect(() => sweepTempDbs()).toThrow('delete failed')
+    expect(db.open).toBe(false)
+    expect(() => sweepTempDbs()).toThrow('delete failed')
+
+    tempDbFileOps.rmSync = originalRmSync
     expect(() => sweepTempDbs()).not.toThrow()
     expect(existsSync(p)).toBe(false)
   })

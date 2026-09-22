@@ -41,9 +41,9 @@ vi.mock('better-sqlite3', async () => {
 })
 
 // Temp-DB hygiene: this setup module is evaluated once per test FILE. The
-// tracker owns all handles, so it can close them before deleting their files
-// without waiting for an event-loop turn. That keeps cleanup deterministic
-// when a busy runner delays, or a suite replaces, setImmediate.
+// tracker owns all handles, so it closes them before deleting their files
+// without waiting for an event-loop turn. Cleanup errors fail the hook and
+// retain their entries for a later sweep.
 afterAll(async () => {
   const { sweepTempDbs } = await import('./temp-db-tracker')
   sweepTempDbs()

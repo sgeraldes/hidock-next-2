@@ -49,6 +49,17 @@ const tracked: TrackedDb[] = (globalStore[GLOBAL_KEY] ??= [])
 /** Files better-sqlite3/SQLite may create next to a database file. */
 const DB_FILE_SUFFIXES = ['', '-wal', '-shm', '-journal']
 
+export const tempDbFileOps = {
+  existsSync,
+  readdirSync,
+  rmSync,
+}
+
+function cleanupError(operation: string, path: string, error: unknown): Error {
+  const detail = error instanceof Error ? error.message : String(error)
+  return new Error(`${operation} ${path}: ${detail}`)
+}
+
 /**
  * Wrap the better-sqlite3 constructor so every instance (and the file it
  * opens) is recorded for the end-of-file sweep. Plain calls are routed
@@ -72,38 +83,54 @@ export function trackDatabases<T extends object>(Database: T): T {
 
 /**
  * Close every tracked handle that is still open, then delete the tracked
- * temp DB files (and their -wal/-shm/-journal siblings). Returns counts so
- * the wiring can be asserted in tests. Handles a test already closed and
- * files a test already removed are fine; files outside os.tmpdir() are
- * never deleted.
+ * temp DB files (and their -wal/-shm/-journal siblings). Failed entries stay
+ * tracked for the next sweep and failures are thrown after every cleanup
+ * attempt. Returns counts so the wiring can be asserted in tests. Handles a
+ * test already closed and files a test already removed are fine; files
+ * outside os.tmpdir() are never deleted.
  */
 export function sweepTempDbs(): { closed: number; deleted: number } {
   const tempRoot = resolve(tmpdir()) + sep
   let closed = 0
   let deleted = 0
-  const files: string[] = []
-  for (const db of tracked.splice(0)) {
+  const errors: Error[] = []
+  const fileReady = new Map<string, boolean>()
+  const completed = new Set<TrackedDb>()
+
+  for (const db of tracked) {
+    let closeFailed = false
     try {
       if (db.handle.open) {
         db.handle.close()
         closed++
       }
-    } catch {
-      /* best-effort: per-file deletion below stays guarded */
+    } catch (error) {
+      closeFailed = true
+      errors.push(cleanupError('close failed for', db.file || ':memory:', error))
     }
-    if (db.file !== '' && db.file.startsWith(tempRoot) && !files.includes(db.file)) files.push(db.file)
+
+    if (db.file === '' || !db.file.startsWith(tempRoot)) {
+      if (!closeFailed) completed.add(db)
+      continue
+    }
+
+    fileReady.set(db.file, (fileReady.get(db.file) ?? true) && !closeFailed)
   }
 
+  const files = [...fileReady.keys()]
+  const deleteFailed = new Set<string>()
   for (const file of files) {
+    if (!fileReady.get(file)) continue
     for (const suffix of DB_FILE_SUFFIXES) {
       const sibling = file + suffix
       try {
-        if (existsSync(sibling)) {
-          rmSync(sibling, { force: true })
+        if (tempDbFileOps.existsSync(sibling)) {
+          tempDbFileOps.rmSync(sibling, { force: true })
           deleted++
         }
-      } catch {
-        /* e.g. a concurrent worker still holds this file open — leave it */
+      } catch (error) {
+        deleteFailed.add(file)
+        errors.push(cleanupError('delete failed for', sibling, error))
       }
     }
   }
@@ -112,29 +139,49 @@ export function sweepTempDbs(): { closed: number; deleted: number } {
   // pre-existing DB before reopening it. The suffix is date-stamped, so match
   // by prefix — one readdir per parent dir, not one per tracked file (%TEMP%
   // can hold tens of thousands of entries).
-  const bakPrefixesByDir = new Map<string, string[]>()
+  const bakFilesByDir = new Map<string, string[]>()
   for (const file of files) {
-    const dir = dirname(file)
-    const prefixes = bakPrefixesByDir.get(dir) ?? []
-    prefixes.push(`${basename(file)}.bak-`)
-    bakPrefixesByDir.set(dir, prefixes)
+    if (!fileReady.get(file) || deleteFailed.has(file)) continue
+    const entries = bakFilesByDir.get(dirname(file)) ?? []
+    entries.push(file)
+    bakFilesByDir.set(dirname(file), entries)
   }
-  for (const [dir, prefixes] of bakPrefixesByDir) {
+  for (const [dir, dbFiles] of bakFilesByDir) {
     let names: string[]
     try {
-      names = readdirSync(dir)
-    } catch {
+      names = tempDbFileOps.readdirSync(dir)
+    } catch (error) {
+      for (const file of dbFiles) deleteFailed.add(file)
+      errors.push(cleanupError('read directory failed for', dir, error))
       continue
     }
     for (const name of names) {
-      if (!prefixes.some((prefix) => name.startsWith(prefix))) continue
+      const file = dbFiles.find((candidate) => name.startsWith(`${basename(candidate)}.bak-`))
+      if (!file) continue
       try {
-        rmSync(join(dir, name), { force: true })
+        tempDbFileOps.rmSync(join(dir, name), { force: true })
         deleted++
-      } catch {
-        /* best-effort */
+      } catch (error) {
+        deleteFailed.add(file)
+        errors.push(cleanupError('delete failed for', join(dir, name), error))
       }
     }
+  }
+
+  for (const db of tracked) {
+    if (db.file !== '' && db.file.startsWith(tempRoot) && fileReady.get(db.file) && !deleteFailed.has(db.file)) {
+      completed.add(db)
+    }
+  }
+  for (let index = tracked.length - 1; index >= 0; index--) {
+    if (completed.has(tracked[index])) tracked.splice(index, 1)
+  }
+
+  if (errors.length > 0) {
+    throw new AggregateError(
+      errors,
+      `Temp database cleanup failed; failed entries remain tracked for the next sweep: ${errors.map((error) => error.message).join('; ')}`,
+    )
   }
   return { closed, deleted }
 }
