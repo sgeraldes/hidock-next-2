@@ -99,7 +99,7 @@ Section "Uninstall"
   StrCpy $R0 "$INSTDIR" ${NSIS_MAX_STRLEN} -17
   StrCmp $R0 "${PRODUCT}" 0 refuse_program_directory
   StrCpy $R0 "$INSTDIR" 1 -18
-  StrCmp $R0 "\" remove_program refuse_program_directory
+  StrCmp $R0 "\" 0 refuse_program_directory
 
   System::Call 'kernel32::GetFileAttributes(t "$INSTDIR") i .r0'
   IntCmp $0 -1 refuse_program_directory
