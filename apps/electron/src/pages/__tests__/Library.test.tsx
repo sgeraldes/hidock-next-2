@@ -3,6 +3,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import { Library } from '../Library'
 
+/**
+ * Rows are located by the text the row shows. Since 2026-09-22 an unassigned
+ * source shows its title when it has one; the filename moved to the second
+ * line's tooltip. Fixtures unchanged, locators follow the row.
+ */
+
 // Shared harness for the "reveal opened source" behavior: a STABLE scrollToIndex
 // spy (so we can assert across renders) and a mutable selectedSourceId the store
 // mock reads at call time. Defaults keep existing tests unaffected.
@@ -391,7 +397,7 @@ describe('Library', () => {
 
       renderLibrary()
 
-      await waitFor(() => expect(screen.getByText('rec-0.wav')).toBeInTheDocument())
+      await waitFor(() => expect(screen.getByText('Recording 0')).toBeInTheDocument())
       expect(scrollHarness.scrollToIndex).not.toHaveBeenCalled()
     })
   })

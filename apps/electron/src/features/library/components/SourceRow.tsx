@@ -18,6 +18,7 @@ import type { DownloadStatus } from '@/store/useAppStore'
 import { StatusIcon } from './StatusIcon'
 import { TranscriptionStatusBadge } from './TranscriptionStatusBadge'
 import { useLibraryStore } from '@/store/useLibraryStore'
+import { useConfigStore } from '@/store/domain/useConfigStore'
 import { getDisplayTitle } from '@/features/library/utils/getDisplayTitle'
 import { highlightText } from '@/features/library/utils/highlightText'
 import { getRowMeta } from '@/features/library/utils/rowMeta'
@@ -96,6 +97,8 @@ interface SourceRowProps {
       existing callers keep type-checking; no longer drives any UI. */
   anySelected?: boolean
   searchQuery?: string
+  /** Called after an in-place rename commits, so the list can update without a refetch. */
+  onRenamed?: (id: string, userTitle: string | undefined) => void
   /** Row-level checkbox selection was removed; kept for caller compatibility. */
   onSelectionChange?: (id: string, shiftKey: boolean) => void
   onClick?: () => void
@@ -148,17 +151,50 @@ export const SourceRow = memo(function SourceRow({
   isDownloading = false,
   downloadProgress,
   downloadStatus,
-  deviceConnected = false
+  deviceConnected = false,
+  onRenamed
 }: SourceRowProps) {
   const error = useLibraryStore((state) => state.recordingErrors.get(recording.id))
   const [actionMenuOpen, setActionMenuOpen] = useState(false)
   const [contextMenuAnchor, setContextMenuAnchor] = useState<{ x: number; y: number } | null>(null)
 
-  // Smart title
-  const { primaryText, source: titleSource } = getDisplayTitle(recording, meeting, transcript)
+  // Smart title. The preference decides whether an unassigned source shows its
+  // AI-suggested title or its filename; a title the user typed wins either way.
+  const unassignedTitleSource = useConfigStore(
+    (state) => state.config?.ui?.unassignedTitleSource ?? 'suggested'
+  )
+  const { primaryText, source: titleSource } = getDisplayTitle(
+    recording,
+    meeting,
+    transcript,
+    unassignedTitleSource
+  )
   // The machine filename is noise in the prime space — it lives in the row's
   // hover tooltip and the expanded row, never on the always-visible second line.
   const titleIsFilename = titleSource === 'filename'
+
+  // Rename in place. The reader has had this for a while; the list did not, so
+  // renaming meant opening a source just to retitle it. Same IPC, no new
+  // backend. Without a capture there is nowhere to store the title, so the
+  // affordance is withheld rather than failing on save.
+  const canRename = Boolean(recording.knowledgeCaptureId)
+  const [renaming, setRenaming] = useState(false)
+  const [draftTitle, setDraftTitle] = useState('')
+
+  const commitRename = async () => {
+    const trimmed = draftTitle.trim()
+    setRenaming(false)
+    if (trimmed === (recording.userTitle?.trim() ?? '')) return
+    try {
+      // Empty clears the user title and falls back to the suggestion.
+      await window.electronAPI.knowledge.update(recording.knowledgeCaptureId!, {
+        userTitle: trimmed || null,
+      })
+      onRenamed?.(recording.id, trimmed || undefined)
+    } catch (e) {
+      console.error('[SourceRow] rename failed:', e)
+    }
+  }
 
   const handleRowClick = (e: React.MouseEvent) => {
     if (isDeleting) return
@@ -235,9 +271,35 @@ export const SourceRow = memo(function SourceRow({
               right cluster so the title starts flush-left with no wasted gutter. */}
           <div className="flex-1 min-w-0">
             <div className="flex items-start gap-1.5 min-w-0">
-              <p className={`font-medium text-sm ${compact ? 'truncate' : 'line-clamp-2'} text-foreground leading-tight min-w-0`} title={primaryText}>
-                {searchQuery ? highlightText(primaryText, searchQuery) : primaryText}
-              </p>
+              {renaming ? (
+                <input
+                  autoFocus
+                  aria-label="Rename source"
+                  className="min-w-0 flex-1 rounded border border-input bg-background px-1 py-0.5 text-sm font-medium leading-tight"
+                  value={draftTitle}
+                  onChange={(e) => setDraftTitle(e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  onBlur={() => void commitRename()}
+                  onKeyDown={(e) => {
+                    e.stopPropagation()
+                    if (e.key === 'Enter') void commitRename()
+                    if (e.key === 'Escape') setRenaming(false)
+                  }}
+                />
+              ) : (
+                <p
+                  className={`font-medium text-sm ${compact ? 'truncate' : 'line-clamp-2'} text-foreground leading-tight min-w-0`}
+                  title={canRename ? `${primaryText} — double-click to rename` : primaryText}
+                  onDoubleClick={(e) => {
+                    if (!canRename) return
+                    e.stopPropagation()
+                    setDraftTitle(recording.userTitle?.trim() || primaryText)
+                    setRenaming(true)
+                  }}
+                >
+                  {searchQuery ? highlightText(primaryText, searchQuery) : primaryText}
+                </p>
+              )}
               {/* Personal ("ignored") badge — this recording is kept but pulled out of
                   all AI processing and default surfaces (v38). */}
               {recording.personal && (

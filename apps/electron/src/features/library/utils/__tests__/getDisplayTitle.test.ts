@@ -43,7 +43,7 @@ describe('getDisplayTitle — authoritative source identity', () => {
     expect(result).toEqual({ primaryText: 'REC0001.WAV', source: 'filename' })
   })
 
-  it('keeps user and AI content titles independent from source identity', () => {
+  it('falls back to the filename when there is no title worth showing', () => {
     const result = getDisplayTitle(
       { ...baseRecording, userTitle: '' },
       undefined,
@@ -71,5 +71,59 @@ describe('getDisplayTitle — authoritative source identity', () => {
     expect(getDisplayTitle(recording)).toEqual({
       primaryText: 'Sync Arturo-Seba', source: 'meeting-subject'
     })
+  })
+})
+
+// 2026-09-22: an unassigned source used to show its filename, always. 945 of
+// 2,131 sources have no meeting, so the library was 945 rows of
+// `2026Sep21-170242-Rec32.hda` while the title describing each one was already
+// stored. The product owner reversed that; these pin the new order and, just as
+// importantly, that the calendar still wins when there IS a meeting.
+describe('getDisplayTitle — unassigned sources', () => {
+  const suggested = { ...baseRecording, title: 'Alineación técnica Antamina' }
+
+  it('prefers the suggested title over the filename by default', () => {
+    expect(getDisplayTitle(suggested)).toEqual({
+      primaryText: 'Alineación técnica Antamina',
+      source: 'suggested',
+    })
+  })
+
+  it('prefers a title the user typed over the suggestion', () => {
+    expect(getDisplayTitle({ ...suggested, userTitle: 'Antamina, la buena' })).toEqual({
+      primaryText: 'Antamina, la buena',
+      source: 'user-title',
+    })
+  })
+
+  it('shows the filename when the preference says so', () => {
+    expect(getDisplayTitle(suggested, undefined, undefined, 'filename')).toEqual({
+      primaryText: 'REC0001.WAV',
+      source: 'filename',
+    })
+  })
+
+  it('still honours a typed title under the filename preference', () => {
+    // The setting turns off the GUESS, not the user's own words.
+    expect(getDisplayTitle(
+      { ...suggested, userTitle: 'Mía' },
+      undefined,
+      undefined,
+      'filename'
+    )).toEqual({ primaryText: 'Mía', source: 'user-title' })
+  })
+
+  it('ignores whitespace-only titles', () => {
+    expect(getDisplayTitle({ ...baseRecording, userTitle: '   ', title: '  ' }).source).toBe('filename')
+  })
+
+  it('never lets either title displace an assigned meeting subject', () => {
+    const result = getDisplayTitle(
+      { ...suggested, userTitle: 'Mía', meetingSubject: 'Weekly Engineering' },
+      undefined,
+      undefined,
+      'suggested'
+    )
+    expect(result).toEqual({ primaryText: 'Weekly Engineering', source: 'meeting-subject' })
   })
 })

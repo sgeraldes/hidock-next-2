@@ -258,6 +258,8 @@ export interface AppConfig {
   // selects a named feature-set; `flags` are sparse per-feature overrides.
   features?: FeaturesConfig
   ui: {
+    /** Library title for sources with no calendar event. */
+    unassignedTitleSource?: 'suggested' | 'filename'
     theme: 'light' | 'dark' | 'system'
     defaultView: 'week' | 'month'
     startOfWeek: number

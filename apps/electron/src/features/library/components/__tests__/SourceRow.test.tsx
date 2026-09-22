@@ -91,8 +91,10 @@ describe('SourceRow meeting provenance chip', () => {
 describe('SourceRow never renders blank (title + dated second line always present)', () => {
   it('shows a human title AND a date carrying the year AND the duration', () => {
     render(<SourceRow {...defaultProps} />)
-    // Title is visible (regression guard for the "blank rows" bug).
-    expect(screen.getByText('2026Jul08-190246-Rec49.hda')).toBeInTheDocument()
+    // Title is visible (regression guard for the "blank rows" bug). Since
+    // 2026-09-22 a title the user typed outranks the filename, which moves to
+    // the second line's tooltip — the case above asserts it is still there.
+    expect(screen.getByText('Quarterly planning')).toBeInTheDocument()
     // Second line shows the YEAR (a year-old capture must not read like this week's)
     // + the real duration, not blank / "Unknown".
     const line = screen.getByText((c) => /2026/.test(c) && /Jul 8/.test(c) && /44m/.test(c))

@@ -14,6 +14,13 @@ import { SourceReader } from '../SourceReader'
 import type { UnifiedRecording } from '@/types/unified-recording'
 import type { Meeting } from '@/types'
 
+/**
+ * Since 2026-09-22 a user title is also the source's display title, so it
+ * renders in the reader header AND in the metadata field. These assertions take
+ * the first match: what they are checking is that the value is shown, not how
+ * many places show it.
+ */
+
 // ---------------------------------------------------------------------------
 // Mock electronAPI
 // ---------------------------------------------------------------------------
@@ -200,7 +207,7 @@ describe('SourceReader — metadata editing', () => {
     const rec = makeRecording({ userTitle: 'My Recording Title', knowledgeCaptureId: 'kc-1' })
     render(<SourceReader recording={rec} />)
 
-    expect(screen.getByText('My Recording Title')).toBeInTheDocument()
+    expect(screen.getAllByText('My Recording Title')[0]).toBeInTheDocument()
     expect(screen.queryByRole('textbox', { name: /recording title/i })).not.toBeInTheDocument()
   })
 
@@ -399,7 +406,7 @@ describe('SourceReader — metadata editing', () => {
     rerender(<SourceReader recording={rec2} />)
 
     expect(screen.queryByRole('textbox', { name: /recording title/i })).not.toBeInTheDocument()
-    expect(screen.getByText('Title 2')).toBeInTheDocument()
+    expect(screen.getAllByText('Title 2')[0]).toBeInTheDocument()
   })
 
   // 12. Meeting card shows Change/Remove when meeting linked
