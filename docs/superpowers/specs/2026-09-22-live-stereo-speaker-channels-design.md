@@ -67,26 +67,43 @@ Sin diarización, sin heurística: la atribución la da el cable.
 **Costo.** Son dos sesiones simultáneas en vez de una: el doble de minutos de
 Live API mientras grabás. Se acota con la puerta de energía del punto 4.
 
-### 3. Identificación de canal por energía, en caliente
+### 3. Identificación de canal por piso de ruido, en caliente
 
-Sobre los primeros paquetes de cada sesión se acumula el RMS de cada canal. El
-canal del micrófono es, sistemáticamente, el más caliente cuando el dueño del
-dispositivo habla, y el que capta el ruido de manipulación del equipo.
+**Corregido en la revisión del 22-sep.** La primera versión comparaba energía
+acumulada: el canal más caliente era el micrófono. Eso falla en el caso más
+común que hay — en una llamada la contraparte llega a nivel de línea y suele
+sonar más fuerte que el dueño del equipo, así que "gana el más fuerte" le pone
+`you` al otro. Medido: 210 paquetes de dueño a 3000 contra contraparte a 9000, la
+regla de energía elegía el canal 1.
+
+Lo que separa los dos canales es el **piso**, no el pico. El micrófono escucha la
+sala todo el tiempo: entre turnos sigue leyendo siseo, respiración y manipulación.
+El canal de la contraparte es audio digital del otro lado de un códec y entre
+turnos cae a casi cero. Entonces el micrófono es el canal cuyos momentos
+callados suenan más alto, hable fuerte quien hable. Se mide como percentil 20 del
+RMS por paquete.
 
 - Ventana: los primeros **10 s** de audio no silencioso, o 200 paquetes, lo que
   llegue primero.
-- Resultado: `micChannel: 0 | 1`, persistido en la config
-  (`transcription.liveMicChannel`) para que la próxima sesión arranque ya
-  sabiendo, y logueado con los dos RMS para que quede evidencia.
+- Resultado: `micChannel: 0 | 1`, persistido en
+  `transcription.liveMicChannelMeasured` — **no** en `liveMicChannel`, que es el
+  pin del usuario. Escribir la medición en el mismo campo convertía el "Medir
+  automáticamente" elegido por el usuario en un pin a sus espaldas, y el control
+  de Settings no podía deshacerlo.
 - Mientras la ventana no cierra, las dos sesiones se etiquetan `speaker-1` /
-  `speaker-2`; al cerrar, se renombran en la UI. Un transcript nunca dice "you"
-  antes de que la medición lo respalde.
-- Si los dos canales quedan a menos de 3 dB, la medición **no concluye**: se
-  quedan `speaker-1`/`speaker-2`, que es honesto, en vez de tirar una moneda.
+  `speaker-2`; al cerrar se renombran en la UI, incluidos los turnos ya en
+  pantalla (la UI guarda el canal, no la etiqueta). Un transcript nunca dice
+  "you" antes de que la medición lo respalde.
+- Si los dos pisos quedan a menos de 3 dB, la medición **no concluye**: se quedan
+  `speaker-1`/`speaker-2`, que es honesto, en vez de tirar una moneda.
+
+Límite conocido: si la contraparte no hace ninguna pausa en la ventana, los dos
+canales miden piso alto y la medición puede errar. Para eso está el override.
 
 `transcription.liveMicChannel` se expone en Settings con tres valores: `auto`
-(default, lo de arriba), `0`, `1`. Una medición equivocada se corrige a mano sin
-tocar código.
+(default, lo de arriba), `0`, `1`. El pin del usuario siempre gana sobre lo
+medido, y elegir `auto` borra los dos valores (se guarda `null`, no `undefined`,
+porque el deep-merge de `saveConfig` descarta `undefined`).
 
 ### 4. Puerta de energía por canal
 
@@ -98,8 +115,19 @@ debajo del piso, ese canal no entra a su sesión. Esto:
 - evita que la VAD de Gemini gaste turno en silencio;
 - **no** sustituye al `audioStreamEnd`: las sesiones se cierran igual al parar.
 
-Piso: RMS por debajo de `-45 dBFS` sostenido. Configurable no; medido y fijo,
-con el valor justificado en el código.
+Piso: **-55 dBFS** (RMS 58 de 32768), con **1 s de hangover** por canal.
+Configurable no; medido y fijo, con el valor justificado en el código.
+
+**Corregido en la revisión del 22-sep.** El piso original era -45 dBFS (RMS 184)
+sin hangover, y eso perdía audio real: un paquete de voz a -50 dBFS mide RMS 73 y
+quedaba afuera entero, y sin hangover se cortan los huecos entre palabras y la
+cola de la última consonante. El RMS además se calcula **sin componente de
+continua**: un conversor con offset fijo en 400 medía 400 de "volumen" y pagaba
+una sesión Live por una línea recta.
+
+El ahorro que esto da es menor que lo que decía el diseño: con bleed de la
+contraparte a -40 dB el canal callado mide RMS 60 y pasa igual. La puerta corta
+el silencio de verdad, no el crosstalk.
 
 ### 5. Degradación, explícita
 
@@ -112,6 +140,13 @@ con el valor justificado en el código.
 
 La rotación de sesión a los 9 minutos (el límite documentado es 10) se aplica a
 **cada** sesión por separado, con su propio reloj: hoy hay un solo `openedAt`.
+Los paquetes que llegan mientras una sesión rota esperan a que abra la nueva, no
+se tiran (verificado con tres paquetes concurrentes durante una rotación: los
+tres se entregan).
+
+Dos `start()` superpuestos —el botón de reanudar tocado dos veces— dejaban un par
+de sesiones Live abiertas sin nada que las apuntara. Cada `start()` ahora lleva
+un número de generación y el que pierde la carrera cierra las suyas.
 
 ## Lo que no entra
 

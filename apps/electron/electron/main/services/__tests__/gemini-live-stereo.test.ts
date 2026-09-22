@@ -47,9 +47,15 @@ function packet(frames: Array<[number, number]>, muted = false) {
   return { rest: 0, muted, data }
 }
 
-/** n frames where the left channel is `l` and the right is `r`. */
+/**
+ * n frames of a square wave at amplitude `l` on the left and `r` on the right.
+ *
+ * It alternates sign so the packet has no DC component: the levels the service
+ * measures are DC-free (a steady offset is not loudness), and a constant-value
+ * fixture would measure as silence.
+ */
 const tone = (l: number, r: number, n = 400) =>
-  packet(Array.from({ length: n }, () => [l, r] as [number, number]))
+  packet(Array.from({ length: n }, (_, i) => (i % 2 ? [-l, -r] : [l, r]) as [number, number]))
 
 const read = (pcm: Uint8Array, frame: number) =>
   new DataView(pcm.buffer, pcm.byteOffset, pcm.byteLength).getInt16(frame * 2, true)
@@ -82,6 +88,43 @@ describe('splitRealtimeChannels', () => {
     expect(splitRealtimeChannels({ rest: 0, muted: false, data: new Uint8Array(3) })).toBeNull()
   })
 
+  it('reads through a view with a non-zero byteOffset', () => {
+    // Node hands out pooled Buffers, so `data.buffer` is usually a shared 8 KiB
+    // arena and `data.byteOffset` is not zero. A DataView built on `.buffer`
+    // without passing the offset reads someone else's bytes.
+    const src = packet([[1000, 3000], [-2000, 1000]]).data
+    const arena = new Uint8Array(200)
+    arena.set(src, 37)
+    const view = arena.subarray(37, 37 + src.length)
+    expect(view.byteOffset).toBe(37)
+    const channels = splitRealtimeChannels({ rest: 0, muted: false, data: view })!
+    expect(read(channels[0].pcm, 0)).toBe(1000)
+    expect(read(channels[0].pcm, 1)).toBe(-2000)
+    expect(read(channels[1].pcm, 0)).toBe(3000)
+    expect(read(channels[1].pcm, 1)).toBe(1000)
+  })
+
+  it('reads a real pooled Node Buffer', () => {
+    const buffer = Buffer.from(packet([[500, -700]]).data)
+    const channels = splitRealtimeChannels({ rest: 0, muted: false, data: buffer })!
+    expect(read(channels[0].pcm, 0)).toBe(500)
+    expect(read(channels[1].pcm, 0)).toBe(-700)
+  })
+
+  it('returns null rather than reading past a 9-byte or 11-byte payload', () => {
+    expect(splitRealtimeChannels({ rest: 0, muted: false, data: new Uint8Array(9) })).toBeNull()
+    expect(splitRealtimeChannels({ rest: 0, muted: false, data: new Uint8Array(11) })).toBeNull()
+    expect(splitRealtimeChannels({ rest: 0, muted: false, data: new Uint8Array(0) })).toBeNull()
+    expect(() => splitRealtimeChannels({ rest: 0, muted: false, data: new Uint8Array(13) })).not.toThrow()
+  })
+
+  it('measures loudness with the DC component removed', () => {
+    // A converter sitting at a steady 400 is not making any sound. Plain RMS
+    // reports 400 and bills a Live session for a flat line.
+    const flat = packet(Array.from({ length: 400 }, () => [400, 400] as [number, number]))
+    expect(splitRealtimeChannels(flat)![0].rms).toBe(0)
+  })
+
   it('never reads past a payload that is not a whole number of frames', () => {
     // 8-byte header + 6 bytes: one full stereo frame and two stray bytes.
     const data = new Uint8Array(8 + 6)
@@ -110,7 +153,7 @@ describe('MicChannelIdentifier', () => {
     for (let i = 0; i < 210; i++) id.observe(splitRealtimeChannels(tone(l, r))!, 100)
   }
 
-  it('picks the louder channel as the microphone', () => {
+  it('picks the channel with the steadier floor when one is plainly quieter', () => {
     const left = new MicChannelIdentifier()
     feed(left, 9000, 200)
     expect(left.settled).toBe(true)
@@ -141,13 +184,37 @@ describe('MicChannelIdentifier', () => {
     expect(id.settled).toBe(false)
   })
 
+  it('picks the channel with the higher floor, not the louder speaker', () => {
+    // The real shape of a call: turns alternate. Channel 0 is the microphone —
+    // quieter when its owner talks (3000), but never silent, because it keeps
+    // hearing the room (250). Channel 1 is the far side: hotter when they talk
+    // (9000) and near digital silence when they do not (20).
+    const id = new MicChannelIdentifier()
+    for (let i = 0; i < 210; i++) {
+      const owner = i % 2 === 0
+      id.observe(splitRealtimeChannels(owner ? tone(3000, 20) : tone(250, 9000))!, 100)
+    }
+    expect(id.settled).toBe(true)
+    // Summing energy picks 1 here (4510 against 1625) and calls the other
+    // person `you`. The floor picks the microphone.
+    expect(id.micChannel).toBe(0)
+  })
+
+  it('treats a channel that is digitally silent between turns as the far side', () => {
+    const id = new MicChannelIdentifier()
+    for (let i = 0; i < 210; i++) {
+      id.observe(splitRealtimeChannels(i % 2 === 0 ? tone(0, 9000) : tone(0, 60))!, 100)
+    }
+    expect(id.micChannel).toBe(1)
+  })
+
   it('honours a channel pinned in Settings without measuring', () => {
     const pinned = new MicChannelIdentifier(1)
     expect(pinned.settled).toBe(true)
     expect(pinned.micChannel).toBe(1)
   })
 
-  it('carries the energies that justify the choice', () => {
+  it('carries the floors that justify the choice', () => {
     const id = new MicChannelIdentifier()
     feed(id, 9000, 200)
     expect(id.evidence.left).toBeGreaterThan(id.evidence.right)
@@ -215,6 +282,21 @@ describe('GeminiLiveTranscriptionService with two channels', () => {
     await h.service.stop()
   })
 
+  it('keeps sending a channel through the hangover, then stops', async () => {
+    const h = harness()
+    await h.service.start(h.sender)
+    await h.service.acceptDevicePacket(tone(9000, 9000))
+    // Both spoke. A quiet packet 300 ms later is the gap inside a sentence and
+    // still goes; the same packet two seconds later is silence and does not.
+    h.tick(300)
+    await h.service.acceptDevicePacket(tone(9000, 5))
+    expect(h.sessions[1].sendRealtimeInput).toHaveBeenCalledTimes(2)
+    h.tick(2000)
+    await h.service.acceptDevicePacket(tone(9000, 5))
+    expect(h.sessions[1].sendRealtimeInput).toHaveBeenCalledTimes(2)
+    await h.service.stop()
+  })
+
   it('labels turns speaker-1/speaker-2 until the measurement settles', async () => {
     const h = harness()
     await h.service.start(h.sender)
@@ -243,7 +325,7 @@ describe('GeminiLiveTranscriptionService with two channels', () => {
     expect(finals.at(-2)).toMatchObject({ text: 'mio', speaker: 'you' })
     expect(finals.at(-1)).toMatchObject({ text: 'suyo', speaker: 'them' })
     expect(events(h.sender, 'transcription-live:channels')[0]).toMatchObject({ micChannel: 0 })
-    expect(deps.saved).toEqual([{ liveMicChannel: 0 }])
+    expect(deps.saved).toEqual([{ liveMicChannelMeasured: 0 }])
     await h.service.stop()
   })
 
@@ -296,6 +378,15 @@ describe('GeminiLiveTranscriptionService with two channels', () => {
     expect(errors).toHaveLength(1)
     expect(String(errors[0][1].error)).toMatch(/not be split by speaker/)
     await service.stop()
+  })
+
+  it('closes both sessions when two starts overlap', async () => {
+    const h = harness()
+    await Promise.all([h.service.start(h.sender), h.service.start(h.sender)])
+    await h.service.stop()
+    // Four sessions were opened; the losing pair must not be left running.
+    expect(h.sessions.length).toBeGreaterThanOrEqual(2)
+    for (const s of h.sessions) expect(s.close).toHaveBeenCalled()
   })
 
   it('ends both streams on pause and closes both on stop', async () => {

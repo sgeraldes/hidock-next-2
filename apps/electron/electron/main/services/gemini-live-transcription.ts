@@ -459,6 +459,11 @@ export class GeminiLiveTranscriptionService {
   }
 
   pause(): void {
+    // A `getRealtimeData` poll already in flight when the user hits pause lands
+    // after this, and pushing audio into a stream we just closed with
+    // `audioStreamEnd` is not something the API promises anything about.
+    // Resuming goes through `start()` again, so nothing is lost by refusing.
+    this.active = false
     for (const session of this.allSessions()) session.endStream()
     this.emit('transcription-live:status', { status: 'paused' })
   }
