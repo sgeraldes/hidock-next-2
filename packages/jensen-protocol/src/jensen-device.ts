@@ -2654,11 +2654,14 @@ export class JensenDevice {
       const result = await this.sendCommand<ResponseMessage | null>(
         new JensenMessage(CMD.REALTIME_READ_SETTING), timeout, 'getRealtimeSettings')
       if (!result) return null
+      // Only `enabled` comes from the device. The format fields used to be
+      // filled in with 16000/1/16, which was invented: the reply's layout past
+      // byte 0 is undocumented, HiNotes never calls this command at all, and
+      // `channels: 1` contradicted the realtime stream, which is stereo (see
+      // RealtimeData). Reporting them as absent is the honest answer, and it
+      // stops a caller from sizing buffers off a number nobody measured.
       return {
         enabled: result.body && result.body.length > 0 ? result.body[0] === 1 : false,
-        sampleRate: 16000,
-        channels: 1,
-        bitDepth: 16
       }
     } catch {
       return null
