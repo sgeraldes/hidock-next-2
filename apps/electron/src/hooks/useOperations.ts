@@ -239,11 +239,27 @@ export function useOperations() {
       requestScopedDownloads([recording.deviceFilename])
       // Defect C: a single explicit download jumps ahead of the recency-ordered backlog.
       markDownloadPriority([recording.deviceFilename])
-      await window.electronAPI.downloadService.queueDownloads([{
+      const { queued, skipped } = await window.electronAPI.downloadService.queueDownloads([{
         filename: recording.deviceFilename,
         size: recording.size,
         dateCreated: recording.dateRecorded.toISOString()
       }])
+      // D-022: an empty queued list is not success. The service refused this
+      // file for a reason it can now state, so state it rather than claiming
+      // a download that will never happen.
+      if (queued.length === 0) {
+        // Nothing will download, so drop the scope/priority claim registered
+        // above; leaving it would keep the orchestrator holding a slot for a
+        // file that is never coming.
+        releaseDownloadBookkeeping(recording.deviceFilename)
+        const refusal = skipped[0]
+        toast({
+          title: refusal?.skip === 'already-synced' ? 'Already downloaded' : 'Not queued',
+          description: refusal?.reason ?? 'The download service did not queue this file',
+          variant: refusal?.skip === 'already-synced' ? 'default' : 'error'
+        })
+        return false
+      }
       // A restored pending row may already exist in the main-process queue while
       // the renderer's explicit-request scope was lost during restart. Re-registering
       // above plus an explicit drain makes the visible Download/Start action actually
@@ -265,7 +281,7 @@ export function useOperations() {
     try {
       // Slice 1: explicit scope = exactly the requested recordings.
       requestScopedDownloads(eligible.map((r) => r.deviceFilename))
-      await window.electronAPI.downloadService.queueDownloads(
+      const { queued, skipped } = await window.electronAPI.downloadService.queueDownloads(
         eligible.map((r) => ({
           filename: r.deviceFilename,
           size: r.size,
@@ -273,8 +289,23 @@ export function useOperations() {
         }))
       )
       drainDownloadQueue()
-      toast({ title: `${eligible.length} download${eligible.length > 1 ? 's' : ''} queued` })
-      return eligible.length
+      // D-022: report the real count, and account for the rest.
+      if (queued.length === 0) {
+        for (const r of eligible) releaseDownloadBookkeeping(r.deviceFilename)
+        toast({
+          title: 'Nothing queued',
+          description: skipped[0]?.reason ?? 'All selected files were skipped',
+          variant: 'default'
+        })
+        return 0
+      }
+      toast({
+        title: `${queued.length} download${queued.length > 1 ? 's' : ''} queued`,
+        description: skipped.length > 0
+          ? `${skipped.length} skipped: ${skipped[0].reason}`
+          : undefined
+      })
+      return queued.length
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Unknown error'
       toast({ title: 'Downloads failed', description: msg, variant: 'error' })

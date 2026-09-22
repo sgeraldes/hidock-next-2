@@ -140,6 +140,18 @@ class IntegrityService {
       console.error('[IntegrityService] Error repairing empty meeting links:', error)
     }
 
+    try {
+      // 5. D-022: re-link recordings whose audio is on disk but whose file_path
+      // was cleared. They are invisible everywhere else — the download service
+      // refuses them and transcription rejects them — so nothing but this check
+      // brings them back.
+      const relinkResult = this.relinkLocalRecordings()
+      issuesFound += relinkResult.found
+      issuesFixed += relinkResult.fixed
+    } catch (error) {
+      console.error('[IntegrityService] Error re-linking local recordings:', error)
+    }
+
     console.log(`[IntegrityService] Startup checks complete: ${issuesFound} issues found, ${issuesFixed} fixed`)
     return { issuesFound, issuesFixed }
   }
@@ -169,6 +181,107 @@ class IntegrityService {
   }
 
   /**
+   * D-022 — find the audio for a recording, whatever it ended up being called.
+   *
+   * Two sources, in order of authority:
+   *   1. the synced_files row, which is the download path's own record of where
+   *      it put the file (it survives a move of the recordings directory);
+   *   2. the canonical name variants in the CURRENT recordings directory, for
+   *      when that row was lost or never written.
+   *
+   * .hda is checked last but is checked: 89 recordings legitimately point at
+   * one. Returns null only when the audio is genuinely not here.
+   */
+  private locateLocalAudio(filename: string): string | null {
+    const row = getSyncedFile(filename)
+    if (row?.file_path && existsSync(row.file_path)) return row.file_path
+
+    const base = filename.replace(/\.(hda|wav|mp3|m4a|flac)$/i, '')
+    const dir = getRecordingsPath()
+    for (const ext of ['.wav', '.mp3', '.m4a', '.flac', '.hda']) {
+      const candidate = join(dir, base + ext)
+      if (existsSync(candidate)) return candidate
+    }
+    return null
+  }
+
+  /**
+   * D-022 — is this file already spoken for by a different recording?
+   *
+   * Duplicate shadow rows are common (the .hda twin of a take downloaded as
+   * .wav). Pointing a second row at the same audio would show the take twice in
+   * the Library and let it be transcribed twice, at full provider cost. Merging
+   * duplicates belongs to the org-reconciler; repair just declines to create one.
+   */
+  private audioClaimedByAnother(filePath: string, recordingId: string): boolean {
+    // Stored paths and path.join() output can disagree on the separator, and two
+    // spellings of one file are still one file. Ask for both.
+    const backslashed = filePath.replace(/\//g, '\\')
+    const forwardSlashed = filePath.replace(/\\/g, '/')
+    try {
+      return queryAll<{ id: string }>(
+        `SELECT id FROM recordings
+         WHERE (file_path = ? OR file_path = ?) AND id != ? AND deleted_at IS NULL
+         LIMIT 1`,
+        [backslashed, forwardSlashed, recordingId]
+      ).length > 0
+    } catch {
+      // A lookup we cannot complete is not permission to duplicate.
+      return true
+    }
+  }
+
+  /**
+   * D-022 — re-link recordings whose audio is on disk but whose pointer is gone.
+   *
+   * These rows are invisible by construction: the Library shows them as
+   * device-only, the download service refuses to fetch them (a synced_files row
+   * says they are already here), and transcription rejects them for having no
+   * local file. Nothing else in the app looks for a recording that has no path
+   * but does have a file, so this check is the only way back for them.
+   */
+  relinkLocalRecordings(): { found: number; fixed: number } {
+    const stranded = queryAll<Recording>(`
+      SELECT * FROM recordings
+      WHERE (file_path IS NULL OR file_path = '')
+        AND deleted_at IS NULL
+    `)
+
+    if (stranded.length === 0) return { found: 0, fixed: 0 }
+
+    let fixed = 0
+    for (const rec of stranded) {
+      if (!rec.filename) continue
+      const located = this.locateLocalAudio(rec.filename)
+      if (!located) continue // genuinely device-only — leave it alone
+      if (this.audioClaimedByAnother(located, rec.id)) continue // duplicate row; let the merge own it
+
+      try {
+        run(
+          `UPDATE recordings SET file_path = ?, on_local = 1, location =
+             CASE WHEN on_device = 1 THEN 'both' ELSE 'local' END
+           WHERE id = ?`,
+          [located, rec.id]
+        )
+        // Keep synced_files agreeing with what we just proved.
+        addSyncedFile(rec.filename, basename(located), located)
+        fixed++
+      } catch (error) {
+        console.error(`[IntegrityService] Failed to re-link ${rec.filename}:`, error)
+      }
+    }
+
+    if (fixed > 0) {
+      saveDatabase()
+      console.log(
+        `[IntegrityService] Re-linked ${fixed} recording(s) whose audio was on disk but whose ` +
+        'file_path had been cleared — they were invisible to download AND transcription'
+      )
+    }
+    return { found: stranded.length, fixed }
+  }
+
+  /**
    * Reset downloads that are stuck in 'downloading' status
    * This happens when the app crashes during a download
    *
@@ -195,18 +308,41 @@ class IntegrityService {
     // Batch categorize: files that exist vs files that are missing
     const existingFileIds: string[] = []
     const missingFileIds: string[] = []
+    let relinkedCount = 0
 
     for (const rec of stuckRecordings) {
       if (!rec.file_path) continue
 
       if (existsSync(rec.file_path)) {
         existingFileIds.push(rec.id)
-      } else {
-        missingFileIds.push(rec.id)
+        continue
       }
+
+      // D-022 — the stored path is dead, but that is not the same as the audio
+      // being gone. This branch used to go straight to `file_path = NULL`, which
+      // is how 133 recordings lost the only pointer they had while their files
+      // sat on disk. Look for the file before discarding the reference.
+      const relocated = rec.filename ? this.locateLocalAudio(rec.filename) : null
+      if (relocated && !this.audioClaimedByAnother(relocated, rec.id)) {
+        try {
+          run(
+            `UPDATE recordings SET file_path = ?, on_local = 1, location =
+               CASE WHEN on_device = 1 THEN 'both' ELSE 'local' END
+             WHERE id = ?`,
+            [relocated, rec.id]
+          )
+          addSyncedFile(rec.filename, basename(relocated), relocated)
+          relinkedCount++
+          continue
+        } catch (error) {
+          console.error(`[IntegrityService] Failed to re-link ${rec.filename}:`, error)
+        }
+      }
+
+      missingFileIds.push(rec.id)
     }
 
-    let fixed = 0
+    let fixed = relinkedCount
 
     // Batch update: files that exist - set on_local = 1
     if (existingFileIds.length > 0) {
@@ -264,7 +400,10 @@ class IntegrityService {
       saveDatabase()
     }
 
-    console.log(`[IntegrityService] Orphaned downloads: ${stuckRecordings.length} checked, ${fixed} fixed (${existingFileIds.length} files exist, ${missingFileIds.length} missing)`)
+    console.log(
+      `[IntegrityService] Orphaned downloads: ${stuckRecordings.length} checked, ${fixed} fixed ` +
+      `(${existingFileIds.length} files exist, ${relinkedCount} re-linked after moving, ${missingFileIds.length} missing)`
+    )
     return { found: stuckRecordings.length, fixed }
   }
 
@@ -921,7 +1060,21 @@ class IntegrityService {
       return { issueId: issue.id, success: false, action: 'repair', error: 'No filename' }
     }
 
-    // Remove from synced_files since the file doesn't exist
+    const relocated = this.locateLocalAudio(issue.filename)
+    const recordingToRelink = relocated ? getRecordingByFilename(issue.filename) : null
+    if (relocated && recordingToRelink && !this.audioClaimedByAnother(relocated, recordingToRelink.id)) {
+      run(
+        `UPDATE recordings SET file_path = ?, on_local = 1, location =
+           CASE WHEN on_device = 1 THEN 'both' ELSE 'local' END
+         WHERE id = ?`,
+        [relocated, recordingToRelink.id]
+      )
+      addSyncedFile(issue.filename, basename(relocated), relocated)
+      saveDatabase()
+      return { issueId: issue.id, success: true, action: `Re-linked to ${relocated}` }
+    }
+
+    // Genuinely gone: drop the tracking.
     removeSyncedFile(issue.filename)
 
     // Also update recording if it exists
@@ -1052,6 +1205,21 @@ class IntegrityService {
       return { issueId: issue.id, success: false, action: 'repair', error: 'No filename' }
     }
 
+    const relocated = this.locateLocalAudio(issue.filename)
+    const recordingToRelink = relocated ? getRecordingByFilename(issue.filename) : null
+    if (relocated && recordingToRelink && !this.audioClaimedByAnother(relocated, recordingToRelink.id)) {
+      run(
+        `UPDATE recordings SET file_path = ?, on_local = 1, location =
+           CASE WHEN on_device = 1 THEN 'both' ELSE 'local' END
+         WHERE id = ?`,
+        [relocated, recordingToRelink.id]
+      )
+      addSyncedFile(issue.filename, basename(relocated), relocated)
+
+      return { issueId: issue.id, success: true, action: `Re-linked to ${relocated}` }
+    }
+
+    // Genuinely gone: drop the tracking.
     removeSyncedFile(issue.filename)
 
     const recording = getRecordingByFilename(issue.filename)

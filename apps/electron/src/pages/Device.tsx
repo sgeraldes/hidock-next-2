@@ -538,7 +538,7 @@ export function Device() {
       // Slice 1: Sync is an explicit "download all to-sync" action — register the full
       // scope so the orchestrator downloads exactly these (works regardless of autoDownload).
       requestScopedDownloads(toSync.map(f => f.filename))
-      const queuedIds = await window.electronAPI.downloadService.queueDownloads(
+      const { queued: queuedIds, skipped } = await window.electronAPI.downloadService.queueDownloads(
         toSync.map(f => ({
           filename: f.filename,
           size: f.size,
@@ -556,9 +556,12 @@ export function Device() {
           variant: 'default'
         })
       } else {
+        const refusals = skipped.filter((s) => s.skip !== 'already-synced')
         toast({
           title: 'Nothing to sync',
-          description: 'All files are already queued or downloaded',
+          description: refusals.length > 0
+            ? `${refusals.length} file${refusals.length === 1 ? '' : 's'} skipped: ${refusals[0].reason}`
+            : 'All files are already downloaded',
           variant: 'default'
         })
         setDeviceSyncState({ deviceSyncing: false })

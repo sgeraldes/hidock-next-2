@@ -1008,7 +1008,14 @@ export interface ElectronAPI {
     isFileSynced: (filename: string) => Promise<{ synced: boolean; reason: string }>
     getFilesToSync: (files: Array<{ filename: string; size: number; duration: number; dateCreated: Date }>) => Promise<Array<{ filename: string; size: number; duration: number; dateCreated: Date; skipReason?: string }>>
     getPurgedFilenames: () => Promise<string[]>
-    queueDownloads: (files: Array<{ filename: string; size: number; dateCreated?: string }>) => Promise<string[]>
+    queueDownloads: (files: Array<{ filename: string; size: number; dateCreated?: string }>) => Promise<{
+      queued: string[]
+      skipped: Array<{
+        filename: string
+        skip: 'already-synced' | 'already-queued' | 'user-cancelled'
+        reason: string
+      }>
+    }>
     startSession: (files: Array<{ filename: string; size: number; dateCreated?: string }>) => Promise<{
       id: string
       totalFiles: number

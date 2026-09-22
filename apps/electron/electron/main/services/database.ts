@@ -4025,7 +4025,7 @@ export function remapOccurrenceIdsToExisting<T extends { id: string; start_time:
   const existingIds = new Set(existing.map((e) => e.id))
   // (baseUid, start_time) → canonical existing id. Prefer a bare-uid row as the
   // canonical target so this matches the cleanup keeper preference and converges.
-  const SEP = ' '
+  const SEP = '\u0000'
   const canonicalBySlot = new Map<string, string>()
   const existingByBase = new Map<string, Array<{ id: string; start_time: string }>>()
   for (const e of existing) {
