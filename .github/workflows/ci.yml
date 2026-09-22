@@ -36,10 +36,10 @@ jobs:
           done
           (cd packages/database && npm rebuild better-sqlite3)
           (cd packages/knowledge-graph && npm rebuild better-sqlite3)
-      - name: Test shared packages
+      - name: Lint and test shared packages
         run: |
           for n in ai-providers calendar-sync connectors connectors-slack database jensen-protocol knowledge-graph transcription; do
-            (cd "packages/$n" && npm test)
+            (cd "packages/$n" && npm run lint --if-present && npm test)
           done
       - name: Install app
         working-directory: apps/electron
