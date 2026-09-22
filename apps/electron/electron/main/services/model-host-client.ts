@@ -21,8 +21,8 @@ const HEALTH_TIMEOUT_MS = 2000
 
 /**
  * A 15 s answer covers a burst of backlog jobs without making pause changes wait
- * through a diarization: cancellation is checked every second, while each job
- * has a 600 s minimum budget. The job endpoint remains authoritative between
+ * through a diarization: cancellation is checked every second, while every job
+ * has at least a 30 s budget. The job endpoint remains authoritative between
  * refreshes and returns its own pause/busy reason.
  */
 export const MODEL_HOST_HEALTH_CACHE_MS = 15_000
@@ -89,15 +89,18 @@ function normalizeBase(url: string): string {
  */
 export async function checkModelHost(
   settings: ModelHostSettings,
-  fetchFn: typeof fetch = fetch
+  fetchFn: typeof fetch = fetch,
+  options: { forceRefresh?: boolean } = {}
 ): Promise<ModelHostHealth | null> {
   const base = normalizeBase(settings.url)
   if (!base) return null
 
   const key = `${base}\n${settings.token}`
   const now = Date.now()
-  if (cachedHealth?.key === key && cachedHealth.expiresAt > now) return cachedHealth.health
-  if (pendingHealth?.key === key) return pendingHealth.result
+  if (!options.forceRefresh && cachedHealth?.key === key && cachedHealth.expiresAt > now) {
+    return cachedHealth.health
+  }
+  if (!options.forceRefresh && pendingHealth?.key === key) return pendingHealth.result
 
   const result = (async () => {
     let health: ModelHostHealth | null = null

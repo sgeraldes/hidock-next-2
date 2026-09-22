@@ -42,7 +42,7 @@ probado en `apps/electron/resources/speaker-linking/worker.py`.
 | Asistente de primera corrida | Detecta GPU y driver de verdad, instala torch CUDA desde el índice de PyTorch, baja el modelo de pyannote con el token del usuario, y corre una prueba sintética antes de decir que anda. |
 | Servicio del host | HTTP sobre la LAN, autenticado con un token de pareo. Un solo trabajo pesado a la vez. |
 | Panel de control | Una página en `http://localhost:<puerto>` con Iniciar, Pausar y Detener. |
-| Cliente | Un ajuste con la dirección del host. Guarda el último `/health` por 15 segundos para no consultar una vez por cada grabación del backlog. Si un job falla, descarta ese estado y el siguiente vuelve a consultar. Si el host no contesta, diariza local como hoy. |
+| Cliente | Un ajuste con la dirección del host. Las grabaciones del backlog guardan el último `/health` por 15 segundos para no consultarlo una vez por cada grabación. El botón Comprobar siempre hace una consulta nueva. Si un job falla, descarta ese estado y el siguiente vuelve a consultar. Si el host no contesta, diariza local como hoy. |
 
 El spec grande pide una **bandeja de Windows** y esta rebanada entrega una página
 local en su lugar. Una bandeja necesita un toolkit gráfico, y la única forma de

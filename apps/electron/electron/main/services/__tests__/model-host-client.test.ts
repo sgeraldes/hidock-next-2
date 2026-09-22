@@ -79,6 +79,36 @@ describe('checkModelHost', () => {
     const fetchFn = vi.fn(async () => jsonResponse({ hello: 'from some other server' }))
     expect(await checkModelHost({ url: 'http://x:1', token: 't' }, fetchFn as never)).toBe(null)
   })
+
+  it('refreshes a cached unavailable host when a person checks again', async () => {
+    const fetchFn = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({}, 503))
+      .mockResolvedValueOnce(jsonResponse(HEALTHY))
+    const settings = { url: 'http://x:1', token: 't' }
+
+    expect(await checkModelHost(settings, fetchFn as never)).toBe(null)
+    await expect(checkModelHost(settings, fetchFn as never, { forceRefresh: true })).resolves.toEqual(HEALTHY)
+    expect(fetchFn).toHaveBeenCalledTimes(2)
+  })
+
+  it('shares an in-flight health request among concurrent checks', async () => {
+    let resolveHealth!: (response: Response) => void
+    const healthResponse = new Promise<Response>((resolve) => {
+      resolveHealth = resolve
+    })
+    const fetchFn = vi.fn(() => healthResponse)
+    const settings = { url: 'http://x:1', token: 't' }
+
+    const checks = Promise.all([
+      checkModelHost(settings, fetchFn as never),
+      checkModelHost(settings, fetchFn as never),
+      checkModelHost(settings, fetchFn as never),
+    ])
+    expect(fetchFn).toHaveBeenCalledTimes(1)
+
+    resolveHealth(jsonResponse(HEALTHY))
+    await expect(checks).resolves.toEqual([HEALTHY, HEALTHY, HEALTHY])
+  })
 })
 
 describe('pairing from the client', () => {
@@ -183,6 +213,23 @@ describe('diarizeOnModelHost', () => {
       )
     })
   }
+
+  it('caches an unavailable health answer across a recording backlog', async () => {
+    const fetchFn = vi.fn(async (url: string) =>
+      String(url).endsWith('/health') ? jsonResponse({}, 503) : jsonResponse(RESULT)
+    )
+    const recordings = 20
+
+    for (let index = 0; index < recordings; index += 1) {
+      await expect(
+        diarizeOnModelHost(audioPath, { url: 'http://gamestation:8765', token: 'tok' }, { timeoutMs: 5000 }, fetchFn as never)
+      ).rejects.toThrow('The model host did not answer.')
+    }
+
+    const healthCalls = calls(fetchFn).filter(([url]) => url.endsWith('/health'))
+    expect(healthCalls.length).toBeLessThan(recordings)
+    expect(healthCalls).toHaveLength(1)
+  })
 
   it('shares one fresh health answer across a recording backlog', async () => {
     const fetchFn = vi.fn(async (url: string) =>
