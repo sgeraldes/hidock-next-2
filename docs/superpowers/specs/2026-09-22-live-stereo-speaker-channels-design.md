@@ -180,6 +180,8 @@ Verificación real (requiere el dispositivo y hablar):
 
 ## Criterio de éxito
 
-Con el dispositivo grabando, el panel en vivo muestra dos columnas de turnos
-atribuidas al canal correcto, la atribución la respalda una medición logueada, y
-el costo de Live API no se duplica en silencio.
+Con el dispositivo grabando, el panel en vivo muestra los turnos en una sola
+lista cronológica, cada uno con la etiqueta de su canal (una conversación se lee
+mejor intercalada que en dos columnas paralelas; lo que importa es que la
+etiqueta sea la correcta, no la geometría). La atribución la respalda una
+medición logueada, y el costo de Live API no se duplica en silencio.
