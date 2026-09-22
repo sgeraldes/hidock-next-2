@@ -1,4 +1,6 @@
 import { app } from 'electron'
+import { existsSync } from 'fs'
+import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { getStartupState } from './startup-state'
 
@@ -12,6 +14,16 @@ export function configureEarlyStartup(): void {
   if (devUserDataOverride) {
     app.setPath('userData', devUserDataOverride)
     console.warn(`[DEV] userData overridden to ${devUserDataOverride}`)
+  } else {
+    // Keep the established profile across the 2.0 package/product rename.
+    // This must happen before the single-instance lock, Chromium session,
+    // configuration, credentials, and database are initialized. Reuse the
+    // entire profile so encrypted credentials and browser state stay together.
+    const existingProfile = join(app.getPath('appData'), 'hidock-universal-knowledge-hub')
+    if (existsSync(join(existingProfile, 'config.json'))) {
+      app.setPath('userData', existingProfile)
+      console.info(`[Startup] Using existing HiDock profile: ${existingProfile}`)
+    }
   }
 
   // Electron/Chromium device access switches must be registered before ready.
