@@ -58,6 +58,21 @@ function packet(frames: Array<[number, number]>, muted = false) {
 const tone = (l: number, r: number, n = 400) =>
   packet(Array.from({ length: n }, (_, i) => (i % 2 ? [-l, -r] : [l, r]) as [number, number]))
 
+/**
+ * Hand the service one packet and wait for it to reach the provider.
+ *
+ * `acceptDevicePacket` returns the moment the packet is queued — that is the
+ * feature. A test that wants to assert on what the provider received has to
+ * wait for the queue, which is what `flush` is for.
+ */
+const deliver = async (
+  service: GeminiLiveTranscriptionService,
+  data: ReturnType<typeof packet>
+) => {
+  service.acceptDevicePacket(data)
+  await service.flush()
+}
+
 const read = (pcm: Uint8Array, frame: number) =>
   new DataView(pcm.buffer, pcm.byteOffset, pcm.byteLength).getInt16(frame * 2, true)
 
@@ -264,7 +279,7 @@ describe('GeminiLiveTranscriptionService with two channels', () => {
   it('routes each channel to its own session', async () => {
     const h = harness()
     await h.service.start(h.sender)
-    await h.service.acceptDevicePacket(tone(9000, 8000))
+    await deliver(h.service, tone(9000, 8000))
     expect(h.sessions[0].sendRealtimeInput).toHaveBeenCalledTimes(1)
     expect(h.sessions[1].sendRealtimeInput).toHaveBeenCalledTimes(1)
     // Different audio reached each one.
@@ -277,7 +292,7 @@ describe('GeminiLiveTranscriptionService with two channels', () => {
   it('does not send a silent channel', async () => {
     const h = harness()
     await h.service.start(h.sender)
-    await h.service.acceptDevicePacket(tone(9000, 5))
+    await deliver(h.service, tone(9000, 5))
     expect(h.sessions[0].sendRealtimeInput).toHaveBeenCalledTimes(1)
     expect(h.sessions[1].sendRealtimeInput).not.toHaveBeenCalled()
     await h.service.stop()
@@ -286,14 +301,14 @@ describe('GeminiLiveTranscriptionService with two channels', () => {
   it('keeps sending a channel through the hangover, then stops', async () => {
     const h = harness()
     await h.service.start(h.sender)
-    await h.service.acceptDevicePacket(tone(9000, 9000))
+    await deliver(h.service, tone(9000, 9000))
     // Both spoke. A quiet packet 300 ms later is the gap inside a sentence and
     // still goes; the same packet two seconds later is silence and does not.
     h.tick(300)
-    await h.service.acceptDevicePacket(tone(9000, 5))
+    await deliver(h.service, tone(9000, 5))
     expect(h.sessions[1].sendRealtimeInput).toHaveBeenCalledTimes(2)
     h.tick(2000)
-    await h.service.acceptDevicePacket(tone(9000, 5))
+    await deliver(h.service, tone(9000, 5))
     expect(h.sessions[1].sendRealtimeInput).toHaveBeenCalledTimes(2)
     await h.service.stop()
   })
@@ -301,7 +316,7 @@ describe('GeminiLiveTranscriptionService with two channels', () => {
   it('labels turns speaker-1/speaker-2 until the measurement settles', async () => {
     const h = harness()
     await h.service.start(h.sender)
-    await h.service.acceptDevicePacket(tone(9000, 8000))
+    await deliver(h.service, tone(9000, 8000))
     h.sessions[0].callbacks.onmessage?.({
       serverContent: { inputTranscription: { text: 'hola' } },
     } as never)
@@ -315,7 +330,7 @@ describe('GeminiLiveTranscriptionService with two channels', () => {
   it('labels you/them once the measurement settles, and persists the channel', async () => {
     const h = harness()
     await h.service.start(h.sender)
-    for (let i = 0; i < 210; i++) await h.service.acceptDevicePacket(tone(9000, 300))
+    for (let i = 0; i < 210; i++) await deliver(h.service, tone(9000, 300))
     h.sessions[0].callbacks.onmessage?.({
       serverContent: { inputTranscription: { text: 'mio' } },
     } as never)
@@ -334,7 +349,7 @@ describe('GeminiLiveTranscriptionService with two channels', () => {
     deps.liveMicChannel = 1
     const h = harness()
     await h.service.start(h.sender)
-    await h.service.acceptDevicePacket(tone(9000, 8000))
+    await deliver(h.service, tone(9000, 8000))
     h.sessions[1].callbacks.onmessage?.({
       serverContent: { interimInputTranscription: { text: 'ya' } },
     } as never)
@@ -350,9 +365,9 @@ describe('GeminiLiveTranscriptionService with two channels', () => {
     await h.service.start(h.sender)
     // Only channel 0 carries audio, so only its clock should ever advance past
     // the rotation window. A shared clock would recycle the quiet session too.
-    await h.service.acceptDevicePacket(tone(9000, 5))
+    await deliver(h.service, tone(9000, 5))
     h.tick(9 * 60 * 1000 + 1)
-    await h.service.acceptDevicePacket(tone(9000, 5))
+    await deliver(h.service, tone(9000, 5))
     expect(h.connect).toHaveBeenCalledTimes(3)
     expect(h.sessions[0].close).toHaveBeenCalled()
     expect(h.sessions[1].close).not.toHaveBeenCalled()
@@ -371,7 +386,7 @@ describe('GeminiLiveTranscriptionService with two channels', () => {
     const service = new GeminiLiveTranscriptionService(() => ({ live: { connect } }) as never, () => 0)
 
     await service.start(sender)
-    await service.acceptDevicePacket(tone(9000, 8000))
+    await deliver(service, tone(9000, 8000))
 
     expect(sessions).toHaveLength(1)
     expect(sessions[0].sendRealtimeInput).toHaveBeenCalledTimes(1)
@@ -389,8 +404,8 @@ describe('GeminiLiveTranscriptionService with two channels', () => {
     await h.service.start(h.sender)
     const odd = { rest: 0, muted: false, data: new Uint8Array(8 + 6) }
     new DataView(odd.data.buffer).setInt16(8, 9000, true)
-    await h.service.acceptDevicePacket(odd)
-    await h.service.acceptDevicePacket(tone(9000, 9000, 5))
+    await deliver(h.service, odd)
+    await deliver(h.service, tone(9000, 9000, 5))
 
     expect(h.sessions).toHaveLength(2)
     expect(events(h.sender, 'transcription-live:error')).toHaveLength(0)
@@ -411,7 +426,7 @@ describe('GeminiLiveTranscriptionService with two channels', () => {
       return { rest: 0, muted: false, data }
     }
     for (let i = 0; i < MONO_PACKETS_BEFORE_DEGRADING; i++) {
-      await h.service.acceptDevicePacket(mono())
+      await deliver(h.service, mono())
     }
 
     const errors = events(h.sender, 'transcription-live:error')
@@ -433,7 +448,7 @@ describe('GeminiLiveTranscriptionService with two channels', () => {
     const data = new Uint8Array(8 + 6)
     new DataView(data.buffer).setInt16(8, 9000, true)
     for (let i = 0; i < MONO_PACKETS_BEFORE_DEGRADING + 20; i++) {
-      await h.service.acceptDevicePacket({ rest: 0, muted: false, data })
+      await deliver(h.service, { rest: 0, muted: false, data })
     }
     expect(events(h.sender, 'transcription-live:error')).toHaveLength(1)
     await h.service.stop()
@@ -445,17 +460,17 @@ describe('GeminiLiveTranscriptionService with two channels', () => {
     // rotation window has already passed, so all three race the reconnect.
     const h = harness()
     await h.service.start(h.sender)
-    await h.service.acceptDevicePacket(tone(9000, 9000, 5))
+    await deliver(h.service, tone(9000, 9000, 5))
     const before = h.sessions.length
     h.tick(9 * 60 * 1000 + 1)
 
     // Three packets with DIFFERENT payloads, so the assertion can name which
-    // one went missing instead of counting to eight.
-    await Promise.all([
-      h.service.acceptDevicePacket(tone(1111, 1111, 5)),
-      h.service.acceptDevicePacket(tone(2222, 2222, 5)),
-      h.service.acceptDevicePacket(tone(3333, 3333, 5)),
-    ])
+    // one went missing instead of counting to eight. All three are queued while
+    // the rotation window has already passed, so they race the reconnect.
+    h.service.acceptDevicePacket(tone(1111, 1111, 5))
+    h.service.acceptDevicePacket(tone(2222, 2222, 5))
+    h.service.acceptDevicePacket(tone(3333, 3333, 5))
+    await h.service.flush()
 
     // One rotation per channel, not one per packet: three concurrent sends do
     // not open three new sessions. Both channels carry the same tone, so both
@@ -485,11 +500,11 @@ describe('GeminiLiveTranscriptionService with two channels', () => {
   it('keeps the other channel alive when one session drops mid-run', async () => {
     const h = harness()
     await h.service.start(h.sender)
-    await h.service.acceptDevicePacket(tone(9000, 9000, 5))
+    await deliver(h.service, tone(9000, 9000, 5))
 
     // Channel 1 closes on its own, the way a dropped socket does.
     h.sessions[1].callbacks.onclose?.({ reason: 'socket closed' })
-    await h.service.acceptDevicePacket(tone(9000, 9000, 5))
+    await deliver(h.service, tone(9000, 9000, 5))
 
     // Channel 0 never stopped receiving audio.
     const channelZeroAudio = h.sessions[0].sendRealtimeInput.mock.calls.filter(

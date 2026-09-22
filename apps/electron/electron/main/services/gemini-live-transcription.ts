@@ -283,6 +283,33 @@ function noiseFloor(levels: number[]): number {
 const bytesToMs = (byteLength: number): number => (byteLength / 32_000) * 1000
 
 /**
+ * How many device packets may wait for the provider before audio is dropped.
+ *
+ * The numbers this comes from: the device streams 16 kHz stereo PCM16, which is
+ * 64,000 bytes per second, and the renderer polls every 100 ms, or every 50 ms
+ * while the device reports a backlog (`rest > 1`, Device.tsx). So a packet is
+ * 3-6 KB and carries 50-100 ms of audio.
+ *
+ * 200 packets is 10 seconds of audio at the fast cadence, 20 at the slow one,
+ * and about 1.3 MB of memory. Ten seconds covers every stall this code can
+ * produce on purpose: a Live session rotation at the 9 minute mark is one
+ * WebSocket handshake, and both channels rotating at once is two. A provider
+ * that has not accepted a byte in ten seconds is not slow, it is gone, and
+ * holding more of its backlog only delays the transcript further.
+ */
+export const MAX_QUEUED_PACKETS = 200
+
+/**
+ * How long `stop()` waits for a parked drain before returning anyway.
+ *
+ * Long enough that the ordinary case — a send already handed to the SDK —
+ * finishes and `stop()` still returns having drained cleanly. Short enough that
+ * a user who pressed Stop gets the UI back while a dead socket is still timing
+ * out somewhere underneath.
+ */
+export const STOP_DRAIN_GRACE_MS = 250
+
+/**
  * One Live session bound to one audio channel.
  *
  * Each session owns its own rotation clock. The previous single-session code
@@ -322,7 +349,17 @@ class ChannelSession {
     })
   }
 
+  /**
+   * End the input stream and accept no more audio.
+   *
+   * The flag matters as much as the message. A packet parked on a reconnect
+   * when the user hits pause would otherwise resume, find a freshly opened
+   * session, and push audio into a stream that was ended — or into a session
+   * opened *after* the pause. Resuming goes through `start()`, which builds new
+   * `ChannelSession`s, so nothing needs this one to accept audio again.
+   */
   endStream(): void {
+    this.stopped = true
     try { this.session?.sendRealtimeInput({ audioStreamEnd: true }) } catch { /* already closed */ }
   }
 
@@ -422,6 +459,24 @@ export class GeminiLiveTranscriptionService {
   private generation = 0
   /** Per channel, when that channel last carried audio above the silence gate. */
   private lastVoiceAt: [number, number] = [-Infinity, -Infinity]
+  /**
+   * Packets read from USB and not yet handed to the provider, oldest first.
+   *
+   * This is what keeps provider latency off the USB path. `acceptDevicePacket`
+   * used to await the send, so the renderer's poll loop — the only thing that
+   * drains the device's own finite buffer — ran at the speed of a WebSocket.
+   * A slow provider made `rest` grow on the device and packets were lost there,
+   * where nothing can recover them.
+   */
+  private readonly queue: RealtimeData[] = []
+  /** The single in-flight drain, so packets can never be sent out of order. */
+  private draining: Promise<void> | null = null
+  /** Packets dropped in the current overflow episode. Reset when it ends. */
+  private dropped = 0
+  /** True once this episode has been reported, so it is said once, not per packet. */
+  private overflowReported = false
+  /** True while sends are failing, so the reason is logged on the transition only. */
+  private sendFailing = false
 
   constructor(
     private readonly createClient: (apiKey: string) => LiveClient = (apiKey) => new GoogleGenAI({ apiKey }),
@@ -474,8 +529,11 @@ export class GeminiLiveTranscriptionService {
    * is a property of the firmware on the other end of the cable, not of any
    * one packet, so repeating it every 100 ms would bury the log.
    */
-  private async degradeToMono(): Promise<void> {
-    if (this.monoSession) return
+  private async degradeToMono(generation: number): Promise<void> {
+    // The caller snapshots the generation before this call; a stop between the
+    // two would otherwise put "the device is sending a single audio channel" on
+    // screen for a session the user already ended.
+    if (this.monoSession || generation !== this.generation) return
     const open = this.sessions
     this.sessions = null
     this.emit('transcription-live:error', {
@@ -492,7 +550,136 @@ export class GeminiLiveTranscriptionService {
     for (const session of sessions) await session.stop()
   }
 
-  async acceptDevicePacket(packet: RealtimeData): Promise<void> {
+  /**
+   * Take one packet off the USB path and return.
+   *
+   * Deliberately not `async`: there is no await between the `active` check and
+   * the push, so a `stop()` can never land in the middle of an enqueue and
+   * leave a packet behind that belongs to a session already closed.
+   */
+  acceptDevicePacket(packet: RealtimeData): void {
+    if (!this.active) return
+    if (this.queue.length >= MAX_QUEUED_PACKETS) {
+      // Drop the OLDEST, not the newest. This is a live transcript: dropping
+      // the newest freezes the queue at the moment of the stall and refuses
+      // every packet after it, so the transcript stops at that second and never
+      // catches up. Dropping the oldest keeps the stream anchored to now — one
+      // hole while the provider was away, and speech resumes the moment it is
+      // back. The provider's own VAD also works on recent audio, so feeding it
+      // ten second old speech after the fact is worth less than the silence.
+      this.queue.shift()
+      this.reportBackpressure()
+    }
+    this.queue.push(packet)
+    void this.drain()
+  }
+
+  /** How much audio is waiting for the provider. For logs and tests. */
+  get queuedPackets(): number {
+    return this.queue.length
+  }
+
+  /** Report an overflow episode once, with the tally when it ends. */
+  private reportBackpressure(): void {
+    this.dropped += 1
+    if (this.overflowReported) return
+    this.overflowReported = true
+    console.warn(
+      `[LiveTranscription] send queue full at ${MAX_QUEUED_PACKETS} packets; dropping the oldest audio`
+    )
+    this.emit('transcription-live:error', {
+      error:
+        'Live transcription is falling behind the audio coming from the device; the oldest audio is being dropped.',
+    })
+  }
+
+  /**
+   * Send queued packets, one at a time, oldest first, until the queue is empty.
+   *
+   * One loop at a time is the whole ordering guarantee: `processPacket` awaits
+   * the provider, and two loops would interleave their awaits and deliver audio
+   * out of order, which is worse for a transcript than delivering it late.
+   *
+   * The generation is read once at the top and checked every iteration, so a
+   * `stop()` or a superseded `start()` ends the loop instead of pushing audio
+   * into sessions that are already closed. `stop()` also empties the queue and
+   * closes the sessions, so this check is the backstop rather than the first
+   * line: it is what keeps a future reordering of `stop()` from resurrecting
+   * the bug. A session rotation is not a
+   * generation change: the loop keeps awaiting through the reconnect, so the
+   * packets waiting when a session rotates at 9 minutes are delivered, not lost.
+   */
+  private drain(): Promise<void> {
+    if (this.draining) return this.draining
+    const generation = this.generation
+    this.draining = (async () => {
+      while (this.queue.length > 0 && generation === this.generation) {
+        try {
+          await this.processPacket(this.queue.shift()!)
+          this.sendFailing = false
+        } catch (error) {
+          // A failed send must not end the loop. If it did, the queue would
+          // fill behind the dead loop and every packet after the first failure
+          // would be dropped — the exact failure this queue exists to prevent,
+          // reached by another road. Said on the transition, not per packet.
+          if (!this.sendFailing) {
+            this.sendFailing = true
+            console.warn('[LiveTranscription] packet could not be sent:', error)
+          }
+        }
+      }
+      if (this.dropped > 0 && generation === this.generation) {
+        console.warn(
+          `[LiveTranscription] caught up after dropping ${this.dropped} packets of audio`
+        )
+        this.dropped = 0
+        this.overflowReported = false
+      }
+    })().finally(() => {
+      this.draining = null
+    })
+    return this.draining
+  }
+
+  /**
+   * Wait for the queue to drain.
+   *
+   * Nothing on the device path calls this — that is the point of the queue.
+   * `stop()` uses it to make sure no send outlives the session, and the tests
+   * use it to observe what the provider received.
+   */
+  async flush(): Promise<void> {
+    while (this.draining) await this.draining
+  }
+
+  /**
+   * Wait for the drain, but not forever.
+   *
+   * A drain parked inside `live.connect` is suspended on a promise nobody can
+   * cancel: the SDK takes no AbortSignal, so `ChannelSession.stop()` can latch
+   * the session closed but cannot make the handshake return. Without a deadline
+   * `stop()` inherits that wait, and `jensen:stopRealtime` inherits it in turn,
+   * so a stalled reconnect at the 9 minute mark leaves the Stop button hanging
+   * on a socket.
+   *
+   * Abandoning the drain is safe, which is why a deadline is enough: the
+   * sessions are already closed and latched, and the loop checks the generation
+   * before every packet, so when the handshake finally settles the loop finds a
+   * stale generation, exits, and the session it opened is closed unused.
+   */
+  private async flushWithin(ms: number): Promise<void> {
+    if (!this.draining) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    await Promise.race([
+      this.flush(),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, ms)
+      }),
+    ])
+    if (timer) clearTimeout(timer)
+  }
+
+  private async processPacket(packet: RealtimeData): Promise<void> {
     if (!this.active) return
     const key = resolveGeminiApiKey()
     if (!key) return
@@ -508,7 +695,7 @@ export class GeminiLiveTranscriptionService {
     if (looksMono(packet)) {
       this.monoRun += 1
       if (this.monoRun >= MONO_PACKETS_BEFORE_DEGRADING && !this.monoSession) {
-        await this.degradeToMono()
+        await this.degradeToMono(generation)
         if (generation !== this.generation) return
       }
       if (this.monoSession) {
@@ -551,6 +738,10 @@ export class GeminiLiveTranscriptionService {
     // `audioStreamEnd` is not something the API promises anything about.
     // Resuming goes through `start()` again, so nothing is lost by refusing.
     this.active = false
+    // Queued packets belong to the stream this call is about to end. Sending
+    // them after `audioStreamEnd` is the same thing pause exists to prevent,
+    // only delayed by however deep the queue was.
+    this.queue.length = 0
     for (const session of this.allSessions()) session.endStream()
     this.emit('transcription-live:status', { status: 'paused' })
   }
@@ -558,11 +749,24 @@ export class GeminiLiveTranscriptionService {
   async stop(): Promise<void> {
     this.active = false
     this.generation += 1
+    this.queue.length = 0
+    this.dropped = 0
+    this.overflowReported = false
+    this.sendFailing = false
     const sessions = this.allSessions()
     this.sessions = null
     this.monoSession = null
     this.monoRun = 0
+    // Close the sessions before waiting on the queue, not after. A drain that
+    // is parked on a reconnect resumes into a `ChannelSession` that already
+    // knows it is stopped, so the packet it was carrying is dropped instead of
+    // written to a socket this call is closing. Flushing first would let that
+    // one packet through, because nothing had told the session to stop yet.
     for (const session of sessions) await session.stop()
+    // And only then wait for the loop to unwind, so no send outlives `stop()`.
+    // Bounded, because that wait can be a WebSocket handshake that nobody can
+    // cancel, and Stop has to return either way.
+    await this.flushWithin(STOP_DRAIN_GRACE_MS)
     this.emit('transcription-live:status', { status: 'stopped' })
     this.sender = null
   }

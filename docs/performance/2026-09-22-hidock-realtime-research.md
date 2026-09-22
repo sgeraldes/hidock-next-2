@@ -387,6 +387,21 @@ drenaje del buffer del dispositivo, que es donde `rest` crece y se pierden
 paquetes. La cola es unas veinte líneas y saca la latencia del proveedor del
 camino del USB.
 
+**Hecho el 22-sep-2026.** `acceptDevicePacket` ya no es `async`: encola y vuelve,
+y un único lazo de drenaje manda de a un paquete por vez, en orden de llegada.
+La cola tiene tope de 200 paquetes (`MAX_QUEUED_PACKETS`), que a 16 kHz estéreo
+son entre 10 y 20 segundos de audio y cerca de 1,3 MB. Cuando se llena **descarta
+el más viejo**, porque descartar el más nuevo congelaría la transcripción en el
+instante de la demora y no volvería nunca. El primer descarte de cada episodio
+sale por log y por `transcription-live:error`; el resto no, para no tapar el log.
+`pause()` vacía la cola y `stop()` la vacía, cierra las sesiones y recién ahí
+espera el drenaje, así ningún envío sobrevive a la sesión que lo generó. Esa
+espera tiene tope de 250 ms (`STOP_DRAIN_GRACE_MS`): el SDK no acepta
+`AbortSignal`, así que un handshake colgado no se puede cancelar, y sin tope el
+botón Stop se quedaba esperando un socket muerto. Abandonar el drenaje es seguro
+porque las sesiones ya están cerradas y el lazo compara la generación antes de
+cada paquete.
+
 **4. Agregar H1 Lite y arreglar `getRealtimeSettings`.** Dos defectos concretos
 que salieron de comparar con el vendor:
 
@@ -422,6 +437,42 @@ uno; lo que falta y conviene sumar es `start_ms` como clave —- pegar por
 `(start_ms, speaker)` en vez de por el último párrafo evita el problema de párrafos
 que se parten cuando llegan finales fuera de orden, que es justamente para lo que
 el vendor lo usa.
+
+## Addendum: H1 Lite USB identification
+
+The current vendor bundle identifies the H1 Lite with WebUSB product ID `260` (`0x0104`). The
+constructs below were located by searching the bundle text for their contents. Vendor redeploys
+change byte offsets, so an offset is not recorded as a stable locator.
+
+The complete product-ID resolver is:
+
+```js
+function v2(H2){return H2==45068?"hidock-h1":H2==45069?"hidock-h1e":H2==45070?"hidock-p1":H2==45071?"hidock-p1:mini":H2==256?"hidock-h1":H2==257?"hidock-h1e":H2==258?"hidock-h1":H2==259?"hidock-h1e":H2==8256?"hidock-p1":H2==8257?"hidock-p1:mini":H2==260?"hidock-h1:lite":"unknown"}
+```
+
+Its argument is the WebUSB device's `productId`. The surrounding setup code claims the interface
+and assigns the model from that product ID:
+
+```js
+await Qa.selectConfiguration(1),await Qa.claimInterface(0),await Qa.selectAlternateInterface(0,0),r2=Qa.productId,p2.model=v2(Qa.productId),Logger$1.info(p2.identifier(),"connect","device pid: "+Qa.productId)
+```
+
+The complete live `SUPPORTED_DEVICES` object literal in the bundle is named
+`LIVE_SUPPORTED_DEVICES`:
+
+```js
+LIVE_SUPPORTED_DEVICES={"hidock-h1":{minVersion:328448,label:"H1"},"hidock-h1e":{minVersion:393984,label:"H1E"},"hidock-p1":{minVersion:66312,label:"P1"},"hidock-p1:mini":{minVersion:131840,label:"P1 Mini"},"hidock-h1:lite":{minVersion:196864,label:"H1L"}}
+```
+
+`196864` is `0x030100`. The decoder in
+`packages/jensen-protocol/src/jensen-device.ts:1800-1806` reads the four firmware bytes in
+big-endian order and omits the first byte when it forms `versionCode`, so this value is version
+`3.1.0`. The same `196864` floor also appears for `hidock-h1:lite` in the vendor tables named
+`recordingControlMinVersions` and `RECORDING_STATUS_MIN_VERSIONS`. All three tables agree.
+
+The Lite has one flat firmware floor. The vendor defines no C1-style second version line for the
+Lite. The H1 IDs `45068`, `256`, and `258` remain distinct from `260`, which resolves only to
+`hidock-h1:lite`.
 
 ## Fuentes
 
