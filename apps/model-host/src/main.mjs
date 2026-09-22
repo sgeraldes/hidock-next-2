@@ -11,7 +11,7 @@ import { fileURLToPath } from 'url'
 import { createHostServer } from './server.mjs'
 import { HostState, READY } from './state.mjs'
 import { PairingStore } from './auth.mjs'
-import { DEFAULTS, detectGpu, loadConfig, loadTokens, paths, saveTokens } from './config.mjs'
+import { DEFAULTS, detectGpu, loadConfig, loadSecrets, loadTokens, paths, saveTokens } from './config.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -43,7 +43,12 @@ export async function start(options = {}) {
     mkdirSync(dir, { recursive: true })
   }
 
-  const config = { ...DEFAULTS, ...loadConfig(dirs.config), ...(options.overrides || {}) }
+  const config = {
+    ...DEFAULTS,
+    ...loadConfig(dirs.config),
+    ...loadSecrets(join(dirs.root, 'secrets.json')),
+    ...(options.overrides || {}),
+  }
   const pythonPath = resolvePython(config.pythonPath, dirs)
   const workerPath = resolveWorker(config.workerPath)
   const gpu = await detectGpu()
@@ -63,7 +68,11 @@ export async function start(options = {}) {
     state,
     pairing,
     capabilities: () => ({
-      capabilities: existsSync(workerPath) ? ['diarize'] : [],
+      // Both have to be true. The file being there says the program was
+      // installed; `validated` says the model actually ran on this machine.
+      // Advertising on the first alone is how a host ends up refusing every
+      // job while claiming it can do them.
+      capabilities: existsSync(workerPath) && config.validated ? ['diarize'] : [],
       gpu,
       // Say it plainly rather than letting a green light imply acceleration
       // that is not there.

@@ -6,11 +6,13 @@ import { PairingStore, secretsMatch, PAIRING_CODE_TTL_MS } from '../src/auth.mjs
 import { threadEnv, parseWorkerOutput, runDiarization } from '../src/diarize.mjs'
 
 /** A request that looks enough like http.IncomingMessage for the handler. */
-function request({ method = 'GET', url = '/', headers = {}, body = '', local = true } = {}) {
+function request({ method = 'GET', url = '/', headers = {}, body = '', local = true, host = 'localhost:8765' } = {}) {
   const req = new EventEmitter()
   req.method = method
   req.url = url
-  req.headers = { ...headers }
+  // Every real request carries a Host header, and the control page now checks
+  // it, so the fake has to carry one too.
+  req.headers = { host, ...headers }
   req.socket = { remoteAddress: local ? '127.0.0.1' : '192.168.1.40' }
   req.destroy = () => req.emit('error', new Error('destroyed'))
   queueMicrotask(() => {
@@ -106,6 +108,19 @@ describe('pairing', () => {
     const code = store.openPairing()
     expect(store.redeem('00000000').ok).toBe(false)
     expect(store.redeem(code).ok).toBe(true)
+  })
+
+  it('a run of wrong codes does burn it', () => {
+    // Eight digits is plenty against a person and nothing against a machine on
+    // the same network guessing for the five minutes the code is open.
+    const store = new PairingStore()
+    const code = store.openPairing()
+    for (let i = 0; i < 4; i++) expect(store.redeem('00000000').ok).toBe(false)
+    const fifth = store.redeem('00000000')
+    expect(fifth.ok).toBe(false)
+    expect(fifth.reason).toMatch(/Too many wrong codes/)
+    // The real code is worthless now, which is the point.
+    expect(store.redeem(code).ok).toBe(false)
   })
 
   it('a code expires', () => {
@@ -227,6 +242,44 @@ describe('routes', () => {
     expect(firstRes.statusCode).toBe(200)
   })
 
+  it('admits ONE job even when both arrive while the first is still uploading', async () => {
+    // The lane used to be taken after `await readBody`, so a second request
+    // reaching the admission check while the first was still reading its body
+    // found the lane free and was admitted too. Two pyannote workers then
+    // fought over the same GPU. This request never emits 'end', so it stays in
+    // readBody exactly the way a real upload does.
+    const { token } = deps.pairing.redeem(deps.pairing.openPairing())
+    await deps.state.apply('start')
+    let started = 0
+    deps.diarize = async () => {
+      started += 1
+      return WORKER_RESULT
+    }
+    const handler = createHandler(deps)
+
+    const stalled = new EventEmitter()
+    stalled.method = 'POST'
+    stalled.url = '/jobs/diarize'
+    stalled.headers = { host: 'localhost:8765', authorization: `Bearer ${token}` }
+    stalled.socket = { remoteAddress: '127.0.0.1' }
+    stalled.destroy = () => {}
+    const firstRes = response()
+    const first = handler(stalled, firstRes)
+    await new Promise((r) => setTimeout(r, 10))
+
+    const secondRes = response()
+    await handler(
+      request({ method: 'POST', url: '/jobs/diarize', headers: { authorization: `Bearer ${token}` }, body: 'audio' }),
+      secondRes
+    )
+    expect(secondRes.statusCode).toBe(429)
+
+    stalled.emit('data', Buffer.from('audio'))
+    stalled.emit('end')
+    await first
+    expect(started).toBe(1)
+  })
+
   it('frees the lane when the job fails', async () => {
     const { token } = deps.pairing.redeem(deps.pairing.openPairing())
     await deps.state.apply('start')
@@ -245,6 +298,86 @@ describe('routes', () => {
     const res = response()
     await createHandler(deps)(request({ url: '/', local: false }), res)
     expect(res.statusCode).toBe(403)
+  })
+
+  it('keeps the control page away from a rebound name that resolves here', async () => {
+    // DNS rebinding: a page in a browser ON this machine is pointed at an
+    // attacker domain that resolves to 127.0.0.1, so its POST arrives from
+    // loopback like any other. The Host header is what it cannot forge.
+    const res = response()
+    await createHandler(deps)(
+      request({ method: 'POST', url: '/control', body: 'action=stop', host: 'evil.example.com' }),
+      res
+    )
+    expect(res.statusCode).toBe(403)
+    expect(deps.state.state).toBe('stopped')
+  })
+
+  it('refuses a container extension that would escape the temp directory', async () => {
+    // The body is whatever the caller sent and `ext` reaches a filename, so an
+    // unchecked value writes those bytes wherever the host can write. The
+    // cleanup would not even remove it: it deletes the temp directory, and the
+    // file would be outside it.
+    const { token } = deps.pairing.redeem(deps.pairing.openPairing())
+    await deps.state.apply('start')
+    let seenExtension = null
+    deps.diarize = async (_audio, options) => {
+      seenExtension = options.extension
+      return WORKER_RESULT
+    }
+    const res = response()
+    await createHandler(deps)(
+      request({
+        method: 'POST',
+        url: '/jobs/diarize?ext=' + encodeURIComponent('../../../Startup/run.cmd'),
+        headers: { authorization: `Bearer ${token}` },
+        body: 'audio',
+      }),
+      res
+    )
+    expect(res.statusCode).toBe(200)
+    expect(seenExtension).toBe('')
+  })
+
+  it('keeps a real extension', async () => {
+    const { token } = deps.pairing.redeem(deps.pairing.openPairing())
+    await deps.state.apply('start')
+    let seenExtension = null
+    deps.diarize = async (_audio, options) => {
+      seenExtension = options.extension
+      return WORKER_RESULT
+    }
+    await createHandler(deps)(
+      request({
+        method: 'POST',
+        url: '/jobs/diarize?ext=.flac',
+        headers: { authorization: `Bearer ${token}` },
+        body: 'audio',
+      }),
+      response()
+    )
+    expect(seenExtension).toBe('.flac')
+  })
+
+  it('does not hand the GPU and the client count to a stranger', async () => {
+    const res = response()
+    await createHandler(deps)(request({ url: '/health', local: false, host: 'gamestation:8765' }), res)
+    const body = JSON.parse(res.body)
+    expect(body.state).toBe('stopped')
+    expect(body.gpu).toBeUndefined()
+    expect(body.paired).toBeUndefined()
+  })
+
+  it('tells a paired client everything', async () => {
+    const { token } = deps.pairing.redeem(deps.pairing.openPairing())
+    const res = response()
+    await createHandler(deps)(
+      request({ url: '/health', local: false, host: 'gamestation:8765', headers: { authorization: `Bearer ${token}` } }),
+      res
+    )
+    const body = JSON.parse(res.body)
+    expect(body.acceleration).toBe('cpu')
+    expect(body.paired).toBe(1)
   })
 
   it('serves the control page on this machine', async () => {

@@ -44,9 +44,35 @@ export const DEFAULTS = {
   /** An hour: long enough for a long meeting on CPU, short enough to give up. */
   timeoutMs: 60 * 60 * 1000,
   hfToken: '',
+  /**
+   * True only after setup ran the model once on this machine. The host
+   * advertises `diarize` only when this is set, so a setup that installed the
+   * runtime and then failed validation does not leave a host claiming a
+   * capability it never demonstrated.
+   */
+  validated: false,
   pythonPath: '',
   workerPath: '',
   ffmpegPath: '',
+}
+
+/**
+ * The Hugging Face token, kept out of config.json.
+ *
+ * config.json is written with default ACLs and is read by anything that can
+ * read the folder. A token that grants repository access does not belong
+ * there, so setup writes it to its own file with the ACL narrowed to the
+ * installing account.
+ */
+export function loadSecrets(file = join(hostRoot(), 'secrets.json')) {
+  if (!existsSync(file)) return { hfToken: '' }
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8'))
+    return { hfToken: typeof parsed.hfToken === 'string' ? parsed.hfToken : '' }
+  } catch {
+    console.warn('[host] secrets.json could not be read')
+    return { hfToken: '' }
+  }
 }
 
 export function loadConfig(file = paths().config) {

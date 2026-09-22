@@ -109,9 +109,11 @@ export function ModelHostSettings(): React.ReactElement {
               {health.reason ? `. ${health.reason}` : ''}
             </p>
             <p className="text-muted-foreground">
-              {health.gpu
-                ? `${health.gpu.name}, driver ${health.gpu.driver}`
-                : 'No NVIDIA driver answered there; work would run on its CPU.'}
+              {health.gpu === undefined
+                ? 'Pair with this host to see what hardware it has.'
+                : health.gpu === null
+                  ? 'No NVIDIA driver answered there; work would run on its CPU.'
+                  : `${health.gpu.name}, driver ${health.gpu.driver}`}
             </p>
             {health.capabilities.length === 0 && (
               <p className="text-muted-foreground">

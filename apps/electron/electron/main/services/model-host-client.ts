@@ -29,8 +29,13 @@ export interface ModelHostHealth {
   version: string
   state: 'stopped' | 'ready' | 'paused' | 'busy'
   capabilities: string[]
-  acceleration: 'cuda' | 'cpu'
-  gpu: { name: string; vramMiB: number | null; driver: string } | null
+  /**
+   * The GPU, when the host was willing to say. `null` means it looked and
+   * found no NVIDIA driver; absent means this machine is not paired yet and
+   * was not told. Those are different sentences to the person.
+   */
+  gpu?: { name: string; vramMiB: number | null; driver: string } | null
+  acceleration?: 'cuda' | 'cpu'
   reason?: string
 }
 
@@ -62,6 +67,10 @@ export async function checkModelHost(
   if (!base) return null
   try {
     const response = await fetchFn(`${base}/health`, {
+      // A stranger gets only the version and the state. The GPU, its driver
+      // and how many clients are paired are reconnaissance, so the host hands
+      // them to a paired client and nobody else.
+      headers: settings.token ? { authorization: `Bearer ${settings.token}` } : {},
       signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
     })
     if (!response.ok) return null

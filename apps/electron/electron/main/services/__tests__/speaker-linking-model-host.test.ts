@@ -124,6 +124,46 @@ describe('where a recording gets diarized', () => {
     expect(warn).toHaveBeenCalledTimes(2)
   })
 
+  it('says it once even when recordings overlap', async () => {
+    // A backlog drains in parallel, so the sequential version of this test
+    // proved nothing about the case that actually happens.
+    config.transcription.modelHostUrl = 'gamestation:8765'
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const local = vi.fn(async () => LOCAL)
+    const remote = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      throw new ModelHostUnavailableError('The model host did not answer.')
+    })
+    await Promise.all(
+      Array.from({ length: 6 }, (_unused, i) =>
+        diarize(`rec${i}.wav`, () => true, 100, { local, remote: remote as never })
+      )
+    )
+    expect(local).toHaveBeenCalledTimes(6)
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('one recording succeeding does not un-say a failure still in flight', async () => {
+    config.transcription.modelHostUrl = 'gamestation:8765'
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const local = vi.fn(async () => LOCAL)
+    let call = 0
+    const remote = vi.fn(async () => {
+      const mine = call++
+      // First and third fail slowly, second succeeds fast in between.
+      await new Promise((resolve) => setTimeout(resolve, mine === 1 ? 1 : 20))
+      if (mine === 1) return REMOTE
+      throw new ModelHostUnavailableError('The model host did not answer.')
+    })
+    await Promise.all([
+      diarize('a.wav', () => true, 100, { local, remote: remote as never }),
+      diarize('b.wav', () => true, 100, { local, remote: remote as never }),
+      diarize('c.wav', () => true, 100, { local, remote: remote as never }),
+    ])
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
   it('stops complaining once the host comes back', async () => {
     config.transcription.modelHostUrl = 'gamestation:8765'
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})

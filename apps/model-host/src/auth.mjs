@@ -12,6 +12,15 @@ import { randomBytes, timingSafeEqual } from 'crypto'
 const TOKEN_BYTES = 32
 /** A person reads this off a screen and types it on another machine. */
 const CODE_DIGITS = 8
+/**
+ * Wrong guesses allowed before the code is thrown away.
+ *
+ * Eight digits is 10^8, which is plenty against a person and nothing against a
+ * machine on the same network firing guesses for the five minutes the code is
+ * open. A typo still costs nothing, and the sixth wrong guess costs the
+ * attacker the whole window.
+ */
+const MAX_WRONG_ATTEMPTS = 5
 /** Short window: the code only has to survive walking to the other machine. */
 export const PAIRING_CODE_TTL_MS = 5 * 60 * 1000
 
@@ -49,7 +58,7 @@ export class PairingStore {
     const code = Array.from(randomBytes(CODE_DIGITS))
       .map((byte) => String(byte % 10))
       .join('')
-    this.pending = { code, expiresAt: this.now() + PAIRING_CODE_TTL_MS }
+    this.pending = { code, expiresAt: this.now() + PAIRING_CODE_TTL_MS, wrong: 0 }
     return code
   }
 
@@ -69,8 +78,17 @@ export class PairingStore {
       return { ok: false, reason: 'That code expired. Open pairing on the host again.' }
     }
     if (!secretsMatch(String(code ?? ''), this.pending.code)) {
-      // A wrong code does NOT burn the pending one: a typo would otherwise send
-      // the person back to the other machine for a new code.
+      // A typo does not burn the code, because that would send the person back
+      // to the other machine for a new one. A run of them does: past a handful
+      // this is not a person typing.
+      this.pending.wrong += 1
+      if (this.pending.wrong >= MAX_WRONG_ATTEMPTS) {
+        this.pending = null
+        return {
+          ok: false,
+          reason: 'Too many wrong codes. Show a new one on the host.',
+        }
+      }
       return { ok: false, reason: 'That code does not match.' }
     }
     const token = randomBytes(TOKEN_BYTES).toString('hex')

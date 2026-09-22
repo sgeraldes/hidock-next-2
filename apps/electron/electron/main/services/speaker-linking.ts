@@ -276,10 +276,20 @@ function resolveWorkerPath(configured: string): string {
  * else in the log.
  */
 let lastModelHostComplaint = ''
+/**
+ * How many recordings are trying the host right now.
+ *
+ * Without this, one recording succeeding clears the complaint while another is
+ * still failing, and the next failure prints the same line again. Two
+ * recordings draining a backlog in parallel is the normal case, so the counter
+ * is what makes "say it once" true rather than true-when-sequential.
+ */
+let remoteAttemptsInFlight = 0
 
 /** Exported so a test can watch the same recording twice in one run. */
 export function resetModelHostComplaint(): void {
   lastModelHostComplaint = ''
+  remoteAttemptsInFlight = 0
 }
 
 /**
@@ -305,6 +315,7 @@ export async function diarize(
   const url = config.modelHostUrl?.trim()
   if (!url) return local(audioPath, shouldContinue, audioDurationSeconds)
 
+  remoteAttemptsInFlight += 1
   try {
     const result = await remote(
       audioPath,
@@ -314,7 +325,9 @@ export async function diarize(
         shouldContinue
       }
     )
-    lastModelHostComplaint = ''
+    // Only the last one out clears it. Clearing while another recording is
+    // still failing would make the next failure repeat a line already said.
+    if (remoteAttemptsInFlight === 1) lastModelHostComplaint = ''
     console.log(`[SpeakerLinking] diarized on the model host (${result.device})`)
     return result
   } catch (error) {
@@ -324,6 +337,8 @@ export async function diarize(
       console.warn(`[SpeakerLinking] ${error.message} Diarizing here instead.`)
     }
     return local(audioPath, shouldContinue, audioDurationSeconds)
+  } finally {
+    remoteAttemptsInFlight -= 1
   }
 }
 

@@ -61,10 +61,38 @@ function sendJson(res, status, body) {
   res.end(payload)
 }
 
-/** True when the request came from this machine. */
+/**
+ * The container extension a client asked for, or nothing.
+ *
+ * This value reaches a filename, and the request body is whatever the caller
+ * sent, so an unchecked `ext` is an arbitrary file write: `?ext=../../../..`
+ * plus a batch-file body lands the caller's bytes in the Startup folder, and
+ * the job's own cleanup does not remove it because it is outside the temp
+ * directory it deletes. Only a short plain extension survives this.
+ */
+export function safeExtension(raw) {
+  const value = String(raw ?? '')
+  return /^\.[a-z0-9]{1,8}$/i.test(value) ? value.toLowerCase() : ''
+}
+
+/**
+ * True when the request came from this machine AND addressed it as this
+ * machine.
+ *
+ * The socket check alone is beaten by DNS rebinding: a page in a browser ON
+ * this machine can be pointed at an attacker domain that resolves to
+ * 127.0.0.1, and its POST then arrives from loopback like any other. The Host
+ * header is what that attack cannot forge, so it is checked too.
+ */
 export function isLocalRequest(req) {
   const address = req.socket?.remoteAddress || ''
-  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'
+  const fromLoopback =
+    address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'
+  if (!fromLoopback) return false
+
+  const host = String(req.headers?.host ?? '').toLowerCase()
+  const name = host.replace(/:\d+$/, '').replace(/^\[|\]$/g, '')
+  return name === 'localhost' || name === '127.0.0.1' || name === '::1'
 }
 
 function controlPage(state, pairingCode) {
@@ -116,11 +144,17 @@ export function createHandler(deps) {
 
     try {
       if (req.method === 'GET' && path === '/health') {
+        // An unpaired stranger learns that a host exists and whether it is
+        // running. The GPU model, its driver version and how many clients are
+        // paired are reconnaissance, and a paired client is the only one with
+        // a reason to see them.
+        const known =
+          deps.pairing.accepts(req.headers.authorization) || isLocalRequest(req)
         sendJson(res, 200, {
           version: VERSION,
           state: deps.state.publicState(),
           reason: deps.state.reason || undefined,
-          ...deps.capabilities(),
+          ...(known ? deps.capabilities() : { capabilities: deps.capabilities().capabilities }),
         })
         return
       }
@@ -182,12 +216,11 @@ export function createHandler(deps) {
           return
         }
 
-        const audio = await readBody(req)
-        if (audio.length === 0) {
-          sendJson(res, 400, { error: 'no audio in the request body' })
-          return
-        }
-
+        // Take the lane HERE, in the same tick as the check above.
+        // Reserving it after `await readBody` left a window the length of an
+        // upload: a second request reaching the check while the first was
+        // still reading its body found the lane free and was admitted too, and
+        // two pyannote workers then fought over the GPU.
         const controller = new AbortController()
         deps.state.activeJob = controller
         // A client that hangs up has no use for the answer, and the job would
@@ -196,9 +229,14 @@ export function createHandler(deps) {
         const onDisconnect = () => controller.abort()
         res.on?.('close', onDisconnect)
         try {
+          const audio = await readBody(req)
+          if (audio.length === 0) {
+            sendJson(res, 400, { error: 'no audio in the request body' })
+            return
+          }
           const result = await diarize(audio, {
             ...deps.jobOptions(),
-            extension: url.searchParams.get('ext') || '.wav',
+            extension: safeExtension(url.searchParams.get('ext')),
             signal: controller.signal,
           })
           sendJson(res, 200, result)

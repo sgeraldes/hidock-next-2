@@ -57,10 +57,28 @@ if (-not $gpuName) {
   Say 'and run this setup again. Setup will not install a display driver for you.'
 }
 
-$freeGiB = [math]::Round((Get-PSDrive -Name ($HostRoot.Substring(0,1))).Free / 1GB, 1)
-Say "Free disk on $($HostRoot.Substring(0,1)): : $freeGiB GiB"
-if ($freeGiB -lt 12) {
-  throw "Setup needs about 12 GiB free and this drive has $freeGiB GiB. Free some space and run it again."
+# The first character of a path is not a drive. On a UNC path it is a
+# backslash, and Get-PSDrive then throws under ErrorActionPreference Stop,
+# killing setup before anything is installed — in a script whose whole job is
+# to fail gracefully.
+$freeGiB = $null
+try {
+  New-Item -ItemType Directory -Force -Path $HostRoot | Out-Null
+  $drive = (Get-Item -LiteralPath $HostRoot).PSDrive
+  if ($drive -and $null -ne $drive.Free) {
+    $freeGiB = [math]::Round($drive.Free / 1GB, 1)
+  }
+} catch {
+  $freeGiB = $null
+}
+
+if ($null -eq $freeGiB) {
+  Say 'Could not read the free space for that location; skipping the check.'
+} else {
+  Say "Free disk where the host will live: $freeGiB GiB"
+  if ($freeGiB -lt 12) {
+    throw "Setup needs about 12 GiB free and that location has $freeGiB GiB. Free some space and run it again."
+  }
 }
 
 Step 'Private Python'
@@ -108,25 +126,49 @@ if (-not $HuggingFaceToken) {
 }
 
 New-Item -ItemType Directory -Force -Path $ModelsDir | Out-Null
-$config = @{
-  port = 8765
-  cpuPercent = 50
-  model = 'pyannote/speaker-diarization-community-1'
-  fallbackModel = 'pyannote/speaker-diarization-3.1'
-  minSpeechSeconds = 1.5
-  timeoutMs = 3600000
-  hfToken = $HuggingFaceToken
-  pythonPath = $PythonExe
-  workerPath = (Join-Path $InstallDir 'resources\speaker-linking\worker.py')
-  ffmpegPath = ''
+
+# The Hugging Face token is a real credential and it does NOT go in
+# config.json, which is written with default ACLs. It gets its own file,
+# readable by this account only, the same treatment tokens.json gets.
+function Write-Secrets($token) {
+  $secretsFile = Join-Path $HostRoot 'secrets.json'
+  @{ hfToken = $token } | ConvertTo-Json | Set-Content -LiteralPath $secretsFile -Encoding utf8
+  $acl = Get-Acl -LiteralPath $secretsFile
+  $acl.SetAccessRuleProtection($true, $false)
+  $acl.Access | ForEach-Object { $acl.RemoveAccessRule($_) | Out-Null }
+  $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+    [System.Security.Principal.WindowsIdentity]::GetCurrent().Name, 'FullControl', 'Allow')))
+  Set-Acl -LiteralPath $secretsFile -AclObject $acl
+  Say "Wrote $secretsFile, readable by this account only"
 }
-$config | ConvertTo-Json | Set-Content -LiteralPath $ConfigFile -Encoding utf8
-Say "Wrote $ConfigFile"
+
+# config.json is written only after the model has actually run. A config on
+# disk is what makes the host advertise that it can diarize, and writing it
+# before validation is exactly the green light that never ran the model.
+function Write-HostConfig {
+  $config = @{
+    port = 8765
+    cpuPercent = 50
+    model = 'pyannote/speaker-diarization-community-1'
+    fallbackModel = 'pyannote/speaker-diarization-3.1'
+    minSpeechSeconds = 1.5
+    timeoutMs = 3600000
+    pythonPath = $PythonExe
+    workerPath = (Join-Path $InstallDir 'resources\speaker-linking\worker.py')
+    ffmpegPath = ''
+    validated = $true
+  }
+  $config | ConvertTo-Json | Set-Content -LiteralPath $ConfigFile -Encoding utf8
+  Say "Wrote $ConfigFile"
+}
+
+if ($HuggingFaceToken) { Write-Secrets $HuggingFaceToken }
 
 if ($SkipValidation -or -not $HuggingFaceToken) {
   Step 'Not validated'
-  Say 'Setup finished without running the model once.'
-  Say 'Start the host and diarize one recording before trusting it.'
+  Say 'Setup finished without running the model once, so the host will not'
+  Say 'advertise that it can diarize. Run this setup again with a token to'
+  Say 'finish, or diarize one recording locally in the meantime.'
   exit 0
 }
 
@@ -167,6 +209,7 @@ if ($code -ne 0) {
 
 try {
   $result = $output | ConvertFrom-Json
+  Write-HostConfig
   Say "Model: $($result.model) $($result.modelVersion)"
   Say "Device: $($result.device)"
   Say "Turns found on the test clip: $($result.segments.Count)"

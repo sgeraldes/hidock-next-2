@@ -72,7 +72,13 @@ export function parseWorkerOutput(stdout) {
 export async function runDiarization(audio, options) {
   const spawnFn = options.spawnFn || spawn
   const dir = await mkdtemp(join(tmpdir(), 'hidock-host-'))
-  const audioPath = join(dir, `job${options.extension || '.wav'}`)
+  // Second line of defence for the same thing server.mjs checks. This function
+  // writes attacker-supplied bytes to this path, so the name is rebuilt from
+  // an allow-list here too rather than trusted from the caller.
+  const extension = /^\.[a-z0-9]{1,8}$/i.test(String(options.extension ?? ''))
+    ? String(options.extension).toLowerCase()
+    : '.wav'
+  const audioPath = join(dir, `job${extension}`)
   try {
     await writeFile(audioPath, audio)
     return await new Promise((resolve, reject) => {

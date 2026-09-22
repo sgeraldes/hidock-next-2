@@ -63,23 +63,39 @@ found, then type the code and press **Pair**.
 
 | Route | What it is |
 |---|---|
-| `GET /health` | version, state, capabilities, GPU, acceleration |
-| `POST /pair` | trades a code for a token |
+| `GET /health` | version and state to anyone; GPU, driver and paired count only to a paired client |
+| `POST /pair` | trades a code for a token, five wrong guesses and the code dies |
 | `POST /jobs/diarize` | audio in the body, the worker's result back |
 
-`/` and `/control` answer only on the host's own machine.
+`/` and `/control` answer only from this machine, checked on both the socket
+address and the `Host` header. The address alone is beaten by DNS rebinding: a
+page in a browser here can be pointed at an attacker domain that resolves to
+127.0.0.1, and its POST then arrives from loopback like any other.
 
-One heavy job at a time; a second gets 429 so the client goes local rather than
-queueing behind something it cannot see. Audio is written to a temp file and
-deleted when the job ends, including when it fails, times out or is cancelled. A
-client that hangs up aborts the job instead of holding the lane for an hour.
+The `ext` query parameter on a job is matched against `^\.[a-z0-9]{1,8}$` and
+dropped otherwise, in the route and again where the file is written. It reaches
+a filename and the body is whatever the caller sent, so an unchecked value is an
+arbitrary file write, and the job's own cleanup would not remove the result
+because it would land outside the temp directory that gets deleted.
+
+One heavy job at a time. The lane is taken in the same tick as the admission
+check, before the body is read, so two clients uploading at once cannot both be
+admitted; the second gets 429 and goes local rather than queueing behind
+something it cannot see. Audio is written to a temp file and deleted when the
+job ends, including when it fails, times out or is cancelled. A client that
+hangs up aborts the job instead of holding the lane for an hour.
+
+The host advertises `diarize` only after setup has run the model once on that
+machine. A runtime that installed and then failed validation leaves a host that
+says it cannot diarize, rather than one that accepts every job and fails it.
 
 ## Where things live
 
 | Path | What |
 |---|---|
 | `%LOCALAPPDATA%\Programs\HiDock Model Host` | the program |
-| `%LOCALAPPDATA%\HiDock Model Host\config.json` | port, CPU share, model, token |
+| `%LOCALAPPDATA%\HiDock Model Host\config.json` | port, CPU share, model, validated flag |
+| `%LOCALAPPDATA%\HiDock Model Host\secrets.json` | the Hugging Face token, ACL narrowed to the installing account |
 | `%LOCALAPPDATA%\HiDock Model Host\runtime` | private Python and torch |
 | `%LOCALAPPDATA%\HiDock Model Host\models` | downloaded weights |
 | `%LOCALAPPDATA%\HiDock Model Host\tokens.json` | paired clients |
@@ -103,6 +119,9 @@ its first slice. Not in it:
 - Signed pack manifests, resumable model downloads, atomic activation.
 - A durable job queue, gaming mode that survives a reboot, start with Windows.
 - Code signing.
+- A pairing window that is hard rather than merely expensive to brute-force.
+  Eight digits, five wrong guesses and five minutes is a home-LAN threat model,
+  written down here so it is a decision rather than an oversight.
 
 ## Tests
 

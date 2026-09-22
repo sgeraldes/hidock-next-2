@@ -719,8 +719,9 @@ export interface ElectronAPI {
         version: string
         state: 'stopped' | 'ready' | 'paused' | 'busy'
         capabilities: string[]
-        acceleration: 'cuda' | 'cpu'
-        gpu: { name: string; vramMiB: number | null; driver: string } | null
+        /** Absent until this machine is paired: a stranger is not told. */
+        acceleration?: 'cuda' | 'cpu'
+        gpu?: { name: string; vramMiB: number | null; driver: string } | null
         reason?: string
       }
     }>
