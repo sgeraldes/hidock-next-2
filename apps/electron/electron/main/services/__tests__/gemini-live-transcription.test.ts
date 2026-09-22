@@ -60,9 +60,12 @@ describe('Gemini live transcription', () => {
     const frames = 400
     const packet = new Uint8Array(8 + frames * 4)
     const view = new DataView(packet.buffer)
+    // A square wave, not a constant: levels are measured DC-free, so a flat
+    // value reads as silence and would never be sent.
     for (let i = 0; i < frames; i++) {
-      view.setInt16(8 + i * 4, 6000, true)
-      view.setInt16(8 + i * 4 + 2, 5000, true)
+      const sign = i % 2 ? -1 : 1
+      view.setInt16(8 + i * 4, 6000 * sign, true)
+      view.setInt16(8 + i * 4 + 2, 5000 * sign, true)
     }
     await service.acceptDevicePacket({ rest: 0, muted: false, data: packet })
     expect(session.sendRealtimeInput).toHaveBeenCalledWith({
@@ -76,10 +79,12 @@ describe('Gemini live transcription', () => {
     expect(sender.send).toHaveBeenCalledWith('transcription-live:interim', {
       text: 'hola',
       speaker: expect.stringMatching(/^speaker-[12]$/),
+      channel: expect.any(Number),
     })
     expect(sender.send).toHaveBeenCalledWith('transcription-live:final', {
       text: 'hola mundo',
       speaker: expect.stringMatching(/^speaker-[12]$/),
+      channel: expect.any(Number),
     })
   })
 })
