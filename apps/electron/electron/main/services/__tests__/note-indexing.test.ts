@@ -73,7 +73,7 @@ describe('indexNote', () => {
     expect(metadata.subject).toBe('Presupuesto')
   })
 
-  it('removes the old vectors before adding the new ones', async () => {
+  it('removes the old vectors once the new one has landed', async () => {
     // addDocument builds its row id from Date.now(), so without the delete an
     // edited note would sit in the index twice and the assistant would quote a
     // sentence the person had removed.
@@ -121,5 +121,21 @@ describe('indexNote', () => {
     const note = createNote({ content: 'algo' })
 
     expect(await indexNote(note.id)).toBe(false)
+  })
+
+  it('keeps the previous version findable when the embedder fails', async () => {
+    // Deleting first would take the note out of semantic search entirely, and
+    // nothing would put it back until the next edit. Older text of a note that
+    // still exists beats no text at all.
+    const note = createNote({ content: 'segunda versión' })
+    getDatabase().run(
+      `INSERT INTO vector_embeddings (id, content, embedding, source_type, capture_id, chunk_index)
+       VALUES ('old', 'primera versión', '[]', 'note', ?, 0)`,
+      [note.id]
+    )
+    addDocument.mockResolvedValue(null as never)
+
+    expect(await indexNote(note.id)).toBe(false)
+    expect(queryAll(`SELECT id FROM vector_embeddings WHERE id = 'old'`)).toHaveLength(1)
   })
 })

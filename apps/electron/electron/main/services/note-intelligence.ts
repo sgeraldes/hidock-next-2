@@ -120,16 +120,24 @@ export async function analyzeNote(
  * Put the note in the semantic index, replacing whatever was there for it.
  *
  * addDocument builds its row id from Date.now(), so indexing the same note
- * twice would leave both versions in the index and the assistant would quote
- * a sentence the person deleted.
+ * twice would leave both versions in the index and the assistant would quote a
+ * sentence the person deleted. So the old rows have to go.
+ *
+ * They go AFTER the new one lands, not before. Deleting first means an
+ * embedder that is missing, busy or broken takes the note out of semantic
+ * search entirely and nothing puts it back until the next edit. Deleting after
+ * means a failed index leaves the previous version findable, which is the older
+ * text of a note that still exists — worse than fresh, much better than gone.
  */
 export async function indexNote(noteId: string): Promise<boolean> {
   const note = getNote(noteId)
   if (!note || !note.content.trim()) return false
 
-  getDatabase().run(`DELETE FROM vector_embeddings WHERE source_type = 'note' AND capture_id = ?`, [
-    noteId,
-  ])
+  const db = getDatabase()
+  const previous = queryAll<{ id: string }>(
+    `SELECT id FROM vector_embeddings WHERE source_type = 'note' AND capture_id = ?`,
+    [noteId]
+  ).map((row) => row.id)
 
   const id = await getVectorStore().addDocument(note.content.slice(0, MAX_ANALYSIS_CHARS), {
     chunkIndex: 0,
@@ -140,7 +148,13 @@ export async function indexNote(noteId: string): Promise<boolean> {
     subject: note.title || note.suggestedTitle || undefined,
     timestamp: note.updatedAt,
   })
-  return id !== null
+  if (id === null) return false
+
+  for (const old of previous) {
+    if (old === id) continue
+    db.run('DELETE FROM vector_embeddings WHERE id = ?', [old])
+  }
+  return true
 }
 
 export interface RelatedItem {
