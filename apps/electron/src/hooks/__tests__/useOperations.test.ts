@@ -316,6 +316,38 @@ describe('useOperations', () => {
       expect(drainDownloadQueue).toHaveBeenCalledOnce()
     })
 
+    it('drains an already-queued file instead of releasing the work that still has to run', async () => {
+      // 'already-queued' means the download EXISTS and is pending. Releasing the
+      // scope here would leave it stranded forever with auto-download off.
+      const { drainDownloadQueue, releaseDownloadBookkeeping } = await import('@/hooks/useDownloadOrchestrator')
+      mockQueueDownloads.mockResolvedValueOnce({
+        queued: [],
+        skipped: [{ filename: 'REC0007.WAV', skip: 'already-queued', reason: 'Already in the download queue' }]
+      })
+      const { result } = renderHook(() => useOperations())
+
+      const deviceOnly = {
+        id: 'rec-7',
+        filename: 'REC0007.WAV',
+        deviceFilename: 'REC0007.WAV',
+        location: 'device-only' as const,
+        syncStatus: 'device-only' as const,
+        transcriptionStatus: 'none' as const,
+        size: 2048,
+        duration: 60,
+        dateRecorded: new Date()
+      }
+
+      let success: boolean | undefined
+      await act(async () => {
+        success = await result.current.queueDownload(deviceOnly as any)
+      })
+
+      expect(success).toBe(true)
+      expect(drainDownloadQueue).toHaveBeenCalled()
+      expect(releaseDownloadBookkeeping).not.toHaveBeenCalledWith('REC0007.WAV')
+    })
+
     it('reports a refusal instead of claiming a download that will never happen', async () => {
       // D-022: the service used to answer with an empty list and the UI said
       // "Download queued" anyway, so a file it had silently refused looked

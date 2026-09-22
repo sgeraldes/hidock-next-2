@@ -10,7 +10,7 @@
  */
 
 import { existsSync, readdirSync, statSync, unlinkSync, utimesSync } from 'fs'
-import { join, basename, extname } from 'path'
+import { join, basename, dirname, extname } from 'path'
 import {
   getDatabase,
   queryAll,
@@ -193,16 +193,75 @@ class IntegrityService {
    * one. Returns null only when the audio is genuinely not here.
    */
   private locateLocalAudio(filename: string): string | null {
-    const row = getSyncedFile(filename)
-    if (row?.file_path && existsSync(row.file_path)) return row.file_path
-
     const base = filename.replace(/\.(hda|wav|mp3|m4a|flac)$/i, '')
+    const extensions = ['.wav', '.mp3', '.m4a', '.flac', '.hda']
+
+    // synced_files is keyed by the DEVICE-NATIVE name (.hda), while a local
+    // recordings row is often named .wav or .mp3. Looking the row up under the
+    // recording's own name alone would miss the authoritative path for exactly
+    // those rows, so try every variant.
+    for (const candidateName of [filename, ...extensions.map((ext) => base + ext)]) {
+      const row = getSyncedFile(candidateName)
+      if (row?.file_path && existsSync(row.file_path)) return row.file_path
+    }
+
     const dir = getRecordingsPath()
-    for (const ext of ['.wav', '.mp3', '.m4a', '.flac', '.hda']) {
+    for (const ext of extensions) {
       const candidate = join(dir, base + ext)
       if (existsSync(candidate)) return candidate
     }
     return null
+  }
+
+  /**
+   * D-022 — is this path's own directory unreachable?
+   *
+   * The recordings sit on an external drive. "The file was deleted" and "the
+   * volume is not mounted" are the same observation from a single existsSync,
+   * and every repair below treats the first as licence to destroy something. A
+   * missing file whose FOLDER is also missing is not evidence of deletion.
+   */
+  private volumeUnreachable(filePath: string | null | undefined): boolean {
+    return !!filePath && !existsSync(dirname(filePath))
+  }
+
+  /**
+   * D-022 — the single decision every repair path needs: given a recording
+   * whose stored path does not resolve, what is actually true?
+   *
+   *   'relinked'    the audio was found elsewhere and the row now points at it
+   *   'unreachable' the volume is offline; change nothing and retry later
+   *   'claimed'     another recording already owns that audio (duplicate shadow
+   *                 row) — leave it to the org-reconciler's merge
+   *   'gone'        the storage is readable and the audio is genuinely absent
+   *
+   * Only 'gone' may lead to erasing anything.
+   */
+  private resolveRelink(
+    filename: string | undefined,
+    recordingId: string,
+    storedPath?: string | null
+  ): 'relinked' | 'unreachable' | 'claimed' | 'gone' {
+    if (this.volumeUnreachable(storedPath)) return 'unreachable'
+    if (!filename) return 'gone'
+
+    const located = this.locateLocalAudio(filename)
+    if (!located) {
+      // No audio found — but if the recordings directory itself cannot be read,
+      // that is an unmounted drive, not a deletion.
+      return existsSync(getRecordingsPath()) ? 'gone' : 'unreachable'
+    }
+    if (this.audioClaimedByAnother(located, recordingId)) return 'claimed'
+
+    run(
+      `UPDATE recordings SET file_path = ?, on_local = 1, location =
+         CASE WHEN on_device = 1 THEN 'both' ELSE 'local' END
+       WHERE id = ?`,
+      [located, recordingId]
+    )
+    // Keep synced_files agreeing with what we just proved.
+    addSyncedFile(filename, basename(located), located)
+    return 'relinked'
   }
 
   /**
@@ -251,21 +310,10 @@ class IntegrityService {
 
     let fixed = 0
     for (const rec of stranded) {
-      if (!rec.filename) continue
-      const located = this.locateLocalAudio(rec.filename)
-      if (!located) continue // genuinely device-only — leave it alone
-      if (this.audioClaimedByAnother(located, rec.id)) continue // duplicate row; let the merge own it
-
       try {
-        run(
-          `UPDATE recordings SET file_path = ?, on_local = 1, location =
-             CASE WHEN on_device = 1 THEN 'both' ELSE 'local' END
-           WHERE id = ?`,
-          [located, rec.id]
-        )
-        // Keep synced_files agreeing with what we just proved.
-        addSyncedFile(rec.filename, basename(located), located)
-        fixed++
+        // 'unreachable' (drive offline), 'claimed' (duplicate shadow row) and
+        // 'gone' (genuinely device-only) all mean: change nothing.
+        if (this.resolveRelink(rec.filename, rec.id) === 'relinked') fixed++
       } catch (error) {
         console.error(`[IntegrityService] Failed to re-link ${rec.filename}:`, error)
       }
@@ -309,6 +357,7 @@ class IntegrityService {
     const existingFileIds: string[] = []
     const missingFileIds: string[] = []
     let relinkedCount = 0
+    let unresolvedCount = 0
 
     for (const rec of stuckRecordings) {
       if (!rec.file_path) continue
@@ -320,23 +369,23 @@ class IntegrityService {
 
       // D-022 — the stored path is dead, but that is not the same as the audio
       // being gone. This branch used to go straight to `file_path = NULL`, which
-      // is how 133 recordings lost the only pointer they had while their files
-      // sat on disk. Look for the file before discarding the reference.
-      const relocated = rec.filename ? this.locateLocalAudio(rec.filename) : null
-      if (relocated && !this.audioClaimedByAnother(relocated, rec.id)) {
-        try {
-          run(
-            `UPDATE recordings SET file_path = ?, on_local = 1, location =
-               CASE WHEN on_device = 1 THEN 'both' ELSE 'local' END
-             WHERE id = ?`,
-            [relocated, rec.id]
-          )
-          addSyncedFile(rec.filename, basename(relocated), relocated)
-          relinkedCount++
-          continue
-        } catch (error) {
-          console.error(`[IntegrityService] Failed to re-link ${rec.filename}:`, error)
-        }
+      // is how recordings lost the only pointer they had while their files sat
+      // on disk. Establish what is actually true before discarding anything.
+      let outcome: ReturnType<typeof this.resolveRelink>
+      try {
+        outcome = this.resolveRelink(rec.filename, rec.id, rec.file_path)
+      } catch (error) {
+        console.error(`[IntegrityService] Failed to re-link ${rec.filename}:`, error)
+        outcome = 'unreachable' // an error is not proof the file is gone
+      }
+
+      if (outcome === 'relinked') {
+        relinkedCount++
+        continue
+      }
+      if (outcome === 'unreachable' || outcome === 'claimed') {
+        unresolvedCount++
+        continue // keep the pointer; this is not evidence of deletion
       }
 
       missingFileIds.push(rec.id)
@@ -402,7 +451,8 @@ class IntegrityService {
 
     console.log(
       `[IntegrityService] Orphaned downloads: ${stuckRecordings.length} checked, ${fixed} fixed ` +
-      `(${existingFileIds.length} files exist, ${relinkedCount} re-linked after moving, ${missingFileIds.length} missing)`
+      `(${existingFileIds.length} files exist, ${relinkedCount} re-linked after moving, ` +
+      `${unresolvedCount} left alone (offline volume or duplicate), ${missingFileIds.length} missing)`
     )
     return { found: stuckRecordings.length, fixed }
   }
@@ -1041,6 +1091,32 @@ class IntegrityService {
     }
 
     try {
+      // D-022 — this deletes a recordings row outright, taking its meeting link
+      // and history with it, on the strength of one existsSync. That check is
+      // also false for a drive that is merely unplugged and for audio that has
+      // simply moved, so establish what is true first. Only 'gone' may delete.
+      const outcome = this.resolveRelink(issue.filename, issue.recordingId, issue.filePath)
+      if (outcome === 'relinked') {
+        saveDatabase()
+        return { issueId: issue.id, success: true, action: 'Re-linked the recording to its audio' }
+      }
+      if (outcome === 'unreachable') {
+        return {
+          issueId: issue.id,
+          success: false,
+          action: 'repair',
+          error: 'The storage holding this recording is unreachable — leaving it untouched'
+        }
+      }
+      if (outcome === 'claimed') {
+        return {
+          issueId: issue.id,
+          success: false,
+          action: 'repair',
+          error: 'Another recording already owns that audio — left for duplicate merging'
+        }
+      }
+
       // Delete the orphaned recording record - the file is already gone
       // When device reconnects, a fresh record will be created with correct filename
       console.log('[IntegrityService] Deleting orphaned recording:', issue.recordingId, issue.filename)
@@ -1060,25 +1136,38 @@ class IntegrityService {
       return { issueId: issue.id, success: false, action: 'repair', error: 'No filename' }
     }
 
-    const relocated = this.locateLocalAudio(issue.filename)
-    const recordingToRelink = relocated ? getRecordingByFilename(issue.filename) : null
-    if (relocated && recordingToRelink && !this.audioClaimedByAnother(relocated, recordingToRelink.id)) {
-      run(
-        `UPDATE recordings SET file_path = ?, on_local = 1, location =
-           CASE WHEN on_device = 1 THEN 'both' ELSE 'local' END
-         WHERE id = ?`,
-        [relocated, recordingToRelink.id]
-      )
-      addSyncedFile(issue.filename, basename(relocated), relocated)
+    const recording = getRecordingByFilename(issue.filename)
+    const outcome = this.resolveRelink(issue.filename, recording?.id ?? '', issue.filePath)
+
+    if (outcome === 'relinked') {
       saveDatabase()
-      return { issueId: issue.id, success: true, action: `Re-linked to ${relocated}` }
+      return { issueId: issue.id, success: true, action: 'Re-linked to the audio on disk' }
+    }
+    // D-022 — an offline volume and a duplicate shadow row are both reasons to
+    // leave everything alone. Falling through here would delete the synced_files
+    // row that knows where the audio is, which is the erasure this fix exists
+    // to stop.
+    if (outcome === 'unreachable') {
+      return {
+        issueId: issue.id,
+        success: false,
+        action: 'repair',
+        error: 'The storage holding this file is unreachable — leaving the tracking in place'
+      }
+    }
+    if (outcome === 'claimed') {
+      return {
+        issueId: issue.id,
+        success: false,
+        action: 'repair',
+        error: 'Another recording already owns that audio — left for duplicate merging'
+      }
     }
 
     // Genuinely gone: drop the tracking.
     removeSyncedFile(issue.filename)
 
     // Also update recording if it exists
-    const recording = getRecordingByFilename(issue.filename)
     if (recording) {
       run(`UPDATE recordings SET file_path = NULL, on_local = 0, location =
         CASE WHEN on_device = 1 THEN 'device-only' ELSE 'deleted' END
@@ -1192,6 +1281,24 @@ class IntegrityService {
     }
 
     try {
+      // D-022 — same rule as the single-issue path: a row is deleted only once
+      // the storage is readable and the audio is genuinely not there. "Repair
+      // all" against an unplugged drive used to delete every recording row.
+      const outcome = this.resolveRelink(issue.filename, issue.recordingId, issue.filePath)
+      if (outcome === 'relinked') {
+        return { issueId: issue.id, success: true, action: 'Re-linked the recording to its audio' }
+      }
+      if (outcome === 'unreachable' || outcome === 'claimed') {
+        return {
+          issueId: issue.id,
+          success: false,
+          action: 'repair',
+          error: outcome === 'unreachable'
+            ? 'The storage holding this recording is unreachable — leaving it untouched'
+            : 'Another recording already owns that audio — left for duplicate merging'
+        }
+      }
+
       run(`DELETE FROM recordings WHERE id = ?`, [issue.recordingId])
       return { issueId: issue.id, success: true, action: 'Deleted orphaned recording record' }
     } catch (error) {
@@ -1205,24 +1312,26 @@ class IntegrityService {
       return { issueId: issue.id, success: false, action: 'repair', error: 'No filename' }
     }
 
-    const relocated = this.locateLocalAudio(issue.filename)
-    const recordingToRelink = relocated ? getRecordingByFilename(issue.filename) : null
-    if (relocated && recordingToRelink && !this.audioClaimedByAnother(relocated, recordingToRelink.id)) {
-      run(
-        `UPDATE recordings SET file_path = ?, on_local = 1, location =
-           CASE WHEN on_device = 1 THEN 'both' ELSE 'local' END
-         WHERE id = ?`,
-        [relocated, recordingToRelink.id]
-      )
-      addSyncedFile(issue.filename, basename(relocated), relocated)
+    const recording = getRecordingByFilename(issue.filename)
+    const outcome = this.resolveRelink(issue.filename, recording?.id ?? '', issue.filePath)
 
-      return { issueId: issue.id, success: true, action: `Re-linked to ${relocated}` }
+    if (outcome === 'relinked') {
+      return { issueId: issue.id, success: true, action: 'Re-linked to the audio on disk' }
+    }
+    if (outcome === 'unreachable' || outcome === 'claimed') {
+      return {
+        issueId: issue.id,
+        success: false,
+        action: 'repair',
+        error: outcome === 'unreachable'
+          ? 'The storage holding this file is unreachable — leaving the tracking in place'
+          : 'Another recording already owns that audio — left for duplicate merging'
+      }
     }
 
     // Genuinely gone: drop the tracking.
     removeSyncedFile(issue.filename)
 
-    const recording = getRecordingByFilename(issue.filename)
     if (recording) {
       run(`UPDATE recordings SET file_path = NULL, on_local = 0, location =
         CASE WHEN on_device = 1 THEN 'device-only' ELSE 'deleted' END

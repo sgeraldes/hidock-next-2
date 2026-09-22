@@ -248,11 +248,18 @@ export function useOperations() {
       // file for a reason it can now state, so state it rather than claiming
       // a download that will never happen.
       if (queued.length === 0) {
-        // Nothing will download, so drop the scope/priority claim registered
-        // above; leaving it would keep the orchestrator holding a slot for a
-        // file that is never coming.
-        releaseDownloadBookkeeping(recording.deviceFilename)
         const refusal = skipped[0]
+        // 'already-queued' means the work EXISTS and still has to run — keep the
+        // scope/priority claim and drain, or with auto-download off that pending
+        // item would sit there forever. Every other refusal means there is no
+        // work, so release the claim instead of holding a slot for a file that
+        // is never coming.
+        if (refusal?.skip === 'already-queued') {
+          drainDownloadQueue()
+          toast({ title: 'Already in the download queue', description: recording.filename })
+          return true
+        }
+        releaseDownloadBookkeeping(recording.deviceFilename)
         toast({
           title: refusal?.skip === 'already-synced' ? 'Already downloaded' : 'Not queued',
           description: refusal?.reason ?? 'The download service did not queue this file',
@@ -291,13 +298,21 @@ export function useOperations() {
       drainDownloadQueue()
       // D-022: report the real count, and account for the rest.
       if (queued.length === 0) {
-        for (const r of eligible) releaseDownloadBookkeeping(r.deviceFilename)
+        // Release only the files with no work left to run: an 'already-queued'
+        // file still has a pending download that needs this scope to be picked
+        // up when auto-download is off.
+        const stillPending = new Set(
+          skipped.filter((s) => s.skip === 'already-queued').map((s) => s.filename)
+        )
+        for (const r of eligible) {
+          if (!stillPending.has(r.deviceFilename)) releaseDownloadBookkeeping(r.deviceFilename)
+        }
         toast({
-          title: 'Nothing queued',
+          title: stillPending.size > 0 ? 'Already in the download queue' : 'Nothing queued',
           description: skipped[0]?.reason ?? 'All selected files were skipped',
           variant: 'default'
         })
-        return 0
+        return stillPending.size > 0 ? stillPending.size : 0
       }
       toast({
         title: `${queued.length} download${queued.length > 1 ? 's' : ''} queued`,

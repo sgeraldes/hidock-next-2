@@ -550,9 +550,16 @@ export function Device() {
         // Refresh synced filenames to update button count
         await refreshSyncedFilenames()
 
+        // D-022: a partial sync is the normal case, and the files it refused are
+        // exactly what used to disappear silently. Report both halves.
+        const refused = skipped.filter((s) => s.skip !== 'already-synced')
         toast({
           title: 'Sync started',
-          description: `Queued ${queuedIds.length} recording${queuedIds.length !== 1 ? 's' : ''} for download`,
+          description:
+            `Queued ${queuedIds.length} recording${queuedIds.length !== 1 ? 's' : ''} for download` +
+            (refused.length > 0
+              ? ` — ${refused.length} skipped: ${refused[0].reason}`
+              : ''),
           variant: 'default'
         })
       } else {

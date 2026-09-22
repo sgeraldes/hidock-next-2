@@ -166,6 +166,8 @@ describe('repairIssue(missing_file) — relinks before it erases', () => {
       file_path: 'F:/Old-Location/2026Jul06-122307-Rec35.wav'
     })
     // The audio is in the current recordings folder, not where the row says.
+    filesOnDisk.add('F:/Old-Location')
+    filesOnDisk.add('/mock/recordings')
     filesOnDisk.add('/mock/recordings/2026Jul06-122307-Rec35.wav')
     const { getRecordingByFilename } = await import('../database')
     vi.mocked(getRecordingByFilename).mockReturnValue(recordingRows[0] as never)
@@ -185,12 +187,69 @@ describe('repairIssue(missing_file) — relinks before it erases', () => {
   })
 })
 
+describe('an unreachable volume is never treated as a deletion', () => {
+  it('resetOrphanedDownloads keeps the pointer when the drive is not mounted', () => {
+    recordingRows = [
+      { id: 'rec-7', filename: '2026Sep22-085950-Rec35.hda', file_path: 'F:/HiDock-Next-Audios/2026Sep22-085950-Rec35.wav', on_local: 0 }
+    ]
+    // F: is gone entirely — neither the file nor its folder resolves, and the
+    // recordings directory is unreachable too.
+
+    getIntegrityService().resetOrphanedDownloads()
+
+    const blanked = executed.some((e) => /SET file_path = NULL/.test(e.sql) && e.params.includes('rec-7'))
+    expect(blanked).toBe(false)
+  })
+
+  it('repairOrphanedDownload refuses to delete the recording row when the drive is not mounted', async () => {
+    recordingRows = [
+      { id: 'rec-8', filename: '2026Sep22-085950-Rec35.hda', file_path: 'F:/HiDock-Next-Audios/2026Sep22-085950-Rec35.wav' }
+    ]
+
+    const service = getIntegrityService()
+    const report = await service.runFullScan()
+    const orphan = report.issues.find((i) => i.type === 'orphaned_download')
+    expect(orphan).toBeDefined()
+
+    const result = await service.repairIssue(orphan!.id)
+
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/unreachable/i)
+    const deleted = executed.some((e) => /DELETE FROM recordings/.test(e.sql) && e.params.includes('rec-8'))
+    expect(deleted).toBe(false)
+  })
+
+  it('repairMissingFile keeps the synced_files row when the drive is not mounted', async () => {
+    recordingRows = [{ id: 'rec-9', filename: '2026Jul06-122307-Rec35.hda', file_path: '' }]
+    syncedRows.set('2026Jul06-122307-Rec35.hda', {
+      id: 'sf-9',
+      original_filename: '2026Jul06-122307-Rec35.hda',
+      local_filename: '2026Jul06-122307-Rec35.wav',
+      file_path: 'F:/HiDock-Next-Audios/2026Jul06-122307-Rec35.wav'
+    })
+
+    const service = getIntegrityService()
+    const report = await service.runFullScan()
+    const missing = report.issues.find((i) => i.type === 'missing_file')
+    expect(missing).toBeDefined()
+
+    const result = await service.repairIssue(missing!.id)
+
+    expect(result.success).toBe(false)
+    // The row that knows where the audio lives must survive.
+    expect(syncedRows.has('2026Jul06-122307-Rec35.hda')).toBe(true)
+  })
+})
+
 describe('resetOrphanedDownloads — relinks before it erases', () => {
   it('re-points a recording whose stored path moved, instead of nulling it', () => {
     recordingRows = [
       { id: 'rec-4', filename: '2026Aug26-125032-Rec35.hda', file_path: 'F:/Old-Location/2026Aug26-125032-Rec35.wav', on_local: 0 }
     ]
-    // The stored path is dead, but the audio is in the current recordings folder.
+    // The stored path is dead but its volume is mounted, and the audio is in
+    // the current recordings folder.
+    filesOnDisk.add('F:/Old-Location')
+    filesOnDisk.add('/mock/recordings')
     filesOnDisk.add('/mock/recordings/2026Aug26-125032-Rec35.wav')
 
     getIntegrityService().resetOrphanedDownloads()
@@ -207,7 +266,9 @@ describe('resetOrphanedDownloads — relinks before it erases', () => {
     recordingRows = [
       { id: 'rec-5', filename: '2026Aug27-090000-Rec40.hda', file_path: 'F:/Old-Location/2026Aug27-090000-Rec40.wav', on_local: 0 }
     ]
-    // Nothing on disk.
+    // Both volumes are readable; the audio itself is simply not there.
+    filesOnDisk.add('F:/Old-Location')
+    filesOnDisk.add('/mock/recordings')
 
     getIntegrityService().resetOrphanedDownloads()
 
