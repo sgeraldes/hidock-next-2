@@ -21,6 +21,13 @@ const playerRenders: Array<{
   speakerRanges?: any[]
 }> = []
 const viewerRenders: Array<{ showActionItems?: boolean; actionItems?: string[] }> = []
+// The event-list moved out of the player into its own reader section, so the
+// detail rows and their inline editing are captured here, not on the player.
+const eventListRenders: Array<{
+  events?: any[]
+  eventDetails?: Record<string, any>
+  onEventUpdate?: (event: any, patch: any) => Promise<boolean>
+}> = []
 
 vi.mock('../WaveformPlayer', () => ({
   WaveformPlayer: (props: any) => {
@@ -46,6 +53,16 @@ vi.mock('../TranscriptViewer', () => ({
         ) : null}
       </div>
     )
+  },
+}))
+vi.mock('../TimelineEventList', () => ({
+  TimelineEventList: (props: any) => {
+    eventListRenders.push({
+      events: props.events,
+      eventDetails: props.eventDetails,
+      onEventUpdate: props.onEventUpdate,
+    })
+    return <div data-testid="timeline-event-list" />
   },
 }))
 vi.mock('@radix-ui/react-portal', () => ({ Portal: ({ children }: any) => <>{children}</> }))
@@ -127,6 +144,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   playerRenders.length = 0
   viewerRenders.length = 0
+  eventListRenders.length = 0
   useUIStore.setState({ waveformLoadedForId: null, waveformLoadingId: null, playbackDuration: 0 })
   useLibraryStore.setState({ waveformPinned: false })
   updateExtractedItem.mockResolvedValue({ success: true })
@@ -165,15 +183,18 @@ describe('SourceReader — H3: action items have ONE home (the timeline event-li
     expect(viewerRenders.every((v) => v.showActionItems === false)).toBe(true)
     expect(screen.queryByTestId('viewer-action-items')).not.toBeInTheDocument()
 
-    // The timeline event-list (player.events) IS the home — synthesized from the
-    // action items when no analysis markers exist.
+    // The event-list section IS the home — synthesized from the action items
+    // when no analysis markers exist. The player still receives the same events
+    // because they are also the waveform markers.
     const full = playerRenders.filter((p) => p.mode === 'full').at(-1)
-    expect(full?.events?.length).toBe(2)
+    const list = eventListRenders.at(-1)
     expect(full?.events?.map((e) => e.label)).toEqual(['Send the deck', 'Decision: ship QA first'])
+    expect(list?.events?.length).toBe(2)
+    expect(list?.events?.map((e) => e.label)).toEqual(['Send the deck', 'Decision: ship QA first'])
     // Transcript-derived markers retain their array index, making the detail row
     // editable through transcripts:updateExtractedItem.
-    expect(full?.events?.map((e) => e.refId)).toEqual(['txa_0', 'txa_1'])
-    expect(full?.eventDetails?.txa_0).toMatchObject({
+    expect(list?.events?.map((e) => e.refId)).toEqual(['txa_0', 'txa_1'])
+    expect(list?.eventDetails?.txa_0).toMatchObject({
       kind: 'action',
       fullText: 'Send the deck',
       editable: true,
@@ -181,7 +202,7 @@ describe('SourceReader — H3: action items have ONE home (the timeline event-li
 
     let saved = false
     await act(async () => {
-      saved = await full!.onEventUpdate!(full!.events![0], { content: 'Send the revised deck' })
+      saved = await list!.onEventUpdate!(list!.events![0], { content: 'Send the revised deck' })
     })
     expect(saved).toBe(true)
     expect(updateExtractedItem).toHaveBeenCalledWith({
@@ -191,12 +212,12 @@ describe('SourceReader — H3: action items have ONE home (the timeline event-li
       content: 'Send the revised deck',
     })
     await waitFor(() => {
-      const updated = playerRenders.filter((p) => p.mode === 'full').at(-1)
+      const updated = eventListRenders.at(-1)
       expect(updated?.events?.[0]?.label).toBe('Send the revised deck')
       expect(updated?.eventDetails?.txa_0?.fullText).toBe('Send the revised deck')
     })
 
     // Decision hint is classified.
-    expect(full?.events?.find((e) => e.label.startsWith('Decision'))?.kind).toBe('decision')
+    expect(list?.events?.find((e) => e.label.startsWith('Decision'))?.kind).toBe('decision')
   })
 })
