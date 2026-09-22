@@ -1112,6 +1112,11 @@ ${text}` })
           (x) => x.recordingId === n.metadata.recordingId && x.chunkIndex === n.metadata.chunkIndex
         )
         if (alreadySelected) continue
+        // getChunkNeighbors hydrates, but a neighbour deleted between the
+        // index read and the text read has no content. It is skipped: the
+        // template literal would otherwise put the word "undefined" into the
+        // context handed to the model, and TypeScript does not flag it.
+        if (!n.content) continue
         const nDate = n.metadata.timestamp ? ` (${new Date(n.metadata.timestamp).toLocaleDateString()})` : ''
         contextParts.push(`[Adjacent context: ${n.metadata.subject ?? 'meeting'}${nDate}]\n${n.content}`)
         neighborCount++
@@ -1332,7 +1337,9 @@ ${text}` })
     }
 
     // Combine chunks
-    const transcript = docs.map((d) => d.content).join('\n\n')
+    // Only chunks that have text: a chunk whose row vanished between the index
+    // read and hydration would otherwise contribute an empty block.
+    const transcript = docs.map((d) => d.content).filter((t): t is string => !!t).join('\n\n')
 
     // Get meeting info
     const db = getDatabase()
@@ -1378,7 +1385,9 @@ ${transcript.substring(0, 8000)}` // Limit context size
       return 'No meeting transcripts found.'
     }
 
-    const transcript = docs.map((d) => d.content).join('\n\n')
+    // Only chunks that have text: a chunk whose row vanished between the index
+    // read and hydration would otherwise contribute an empty block.
+    const transcript = docs.map((d) => d.content).filter((t): t is string => !!t).join('\n\n')
 
     const prompt = `Extract all action items, tasks, and follow-ups from these meeting transcripts. For each item include:
 - What needs to be done

@@ -118,7 +118,9 @@ export function registerRAGHandlers(): void {
         if (filter) {
           const parsedFilter = RAGFilterSchema.safeParse(filter)
           if (!parsedFilter.success) {
-            return error('VALIDATION_ERROR', 'Invalid filter', parsedFilter.error.format())
+            // zod 4 deprecates ZodError.format(); the issues array is the
+            // stable shape and carries path + message per problem.
+            return error('VALIDATION_ERROR', 'Invalid filter', parsedFilter.error.issues)
           }
 
           // Extract meeting ID(s) from filter
@@ -293,8 +295,8 @@ export function registerRAGHandlers(): void {
     // IPC. It was equally expensive before, just paid once at boot and held
     // for the whole session instead. Paginating this handler is the fix; it is
     // out of scope for the memory work and tracked separately.
-    vectorStore.hydrateContent(documents)
-    return documents.map((doc) => ({
+    const hydrated = vectorStore.hydrateContent(documents)
+    return hydrated.map((doc) => ({
       id: doc.id,
       content: doc.content ?? '',
       meetingId: doc.metadata.meetingId,

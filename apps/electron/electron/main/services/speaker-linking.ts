@@ -2,7 +2,7 @@ import { spawn } from 'child_process'
 import { existsSync } from 'fs'
 import { join, isAbsolute } from 'path'
 import { randomUUID } from 'crypto'
-import { cpus } from 'os'
+import { availableParallelism } from 'os'
 import ffmpegPath from 'ffmpeg-static'
 import { getConfig } from './config'
 import { queryAll, queryOne, runInTransaction, runNoSave } from './database'
@@ -24,7 +24,11 @@ const DEFAULT_DIARIZATION_CPU_PERCENT = 40
  * makes OpenMP fall back to "all cores", the exact thing this prevents).
  */
 export function diarizationThreadEnv(cpuPercent?: number): Record<string, string> {
-  const total = Math.max(1, cpus().length)
+  // availableParallelism, not cpus().length: it honours the process's CPU
+  // affinity, so a host pinned to a subset of cores (the perf harness does
+  // exactly that) budgets against what it can actually run on. Same call the
+  // embedder worker uses.
+  const total = Math.max(1, availableParallelism())
   const pct = Number.isFinite(cpuPercent) && (cpuPercent as number) > 0
     ? Math.min(100, cpuPercent as number)
     : DEFAULT_DIARIZATION_CPU_PERCENT

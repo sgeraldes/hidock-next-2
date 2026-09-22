@@ -352,10 +352,13 @@ class VectorStore {
    * the whole index re-materializes the ~206 MB this change removed, which is
    * a legitimate thing to do deliberately and a bug to do by accident.
    *
-   * Mutates the documents in place and returns the same array, so a caller can
-   * `return this.hydrateContent(results)`. A row that no longer exists (deleted
-   * between the search and this read) leaves `content` undefined rather than
-   * throwing — the caller already has to handle an absent value.
+   * Returns NEW document objects; the indexed documents are never touched.
+   * The first version mutated them in place, which quietly undid the whole
+   * change: every hydrated chunk stayed resident in the index for the rest of
+   * the session, and one `rag:get-chunks` call put all ~100 MB of text back
+   * for good. Callers must use the returned array. A row that no longer
+   * exists (deleted between the search and this read) leaves `content`
+   * undefined rather than throwing — callers already handle an absent value.
    */
   hydrateContent<T extends { id: string; content?: string }>(docs: T[]): T[] {
     const missing = docs.filter((d) => d.content === undefined)
@@ -379,11 +382,13 @@ class VectorStore {
       }
     }
 
-    for (const doc of missing) {
+    return docs.map((doc) => {
+      if (doc.content !== undefined) return doc
       const found = text.get(doc.id)
-      if (found !== undefined) doc.content = found
-    }
-    return docs
+      // Shallow copy: `embedding` stays a view into the shared arena and
+      // `metadata` is shared; only the text lives on the copy.
+      return found === undefined ? doc : { ...doc, content: found }
+    })
   }
 
   /** True when this boot's embeddings are zero-copy views over the binary
@@ -1071,10 +1076,11 @@ class VectorStore {
     results.sort((a, b) => b.score - a.score)
     const top = diversifyResults(results, topK)
     // Hydrate only the survivors: topK is single digits in every caller, so
-    // this is a handful of rows read against the ~206 MB the index no longer
-    // keeps resident for all 237k chunks.
-    this.hydrateContent(top.map((r) => r.document))
-    return top
+    // this is a handful of rows read against the ~100 MB the index no longer
+    // keeps resident for all 237k chunks. hydrateContent returns copies; the
+    // indexed documents stay text-free.
+    const hydrated = this.hydrateContent(top.map((r) => r.document))
+    return top.map((r, i) => ({ ...r, document: hydrated[i] }))
   }
 
   /**

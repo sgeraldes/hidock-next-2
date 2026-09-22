@@ -16,7 +16,9 @@ import { describe, it, expect, vi } from 'vitest'
 
 vi.mock('os', async (importOriginal) => ({
   ...(await importOriginal<typeof import('os')>()),
-  cpus: () => new Array(24).fill({}),
+  // The budget follows the process's effective affinity, not the machine's
+  // CPU count — this is what the perf harness restricts.
+  availableParallelism: () => 24,
 }))
 vi.mock('../database', () => ({
   queryAll: vi.fn(), queryOne: vi.fn(), runInTransaction: vi.fn(), runNoSave: vi.fn(),
