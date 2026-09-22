@@ -24,7 +24,7 @@ export function getProviderConfigFromSettings(): ProviderConfig | null {
   if (cfg.chat.provider === 'gemini' && cfg.transcription.geminiApiKey) {
     return {
       provider: 'google',
-      model: cfg.chat.geminiModel || 'gemini-3.5-flash',
+      model: cfg.chat.geminiModel || 'gemini-3.8-flash',
       apiKey: cfg.transcription.geminiApiKey,
     }
   }

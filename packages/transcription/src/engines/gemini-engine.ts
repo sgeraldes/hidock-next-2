@@ -39,34 +39,31 @@ export interface GeminiEngineOptions {
   apiKey: string
   model?: string
   language?: string
-  /**
-   * Text model for the chunked generateContent path when the dedicated
-   * Transcribe model returns an incomplete result. Only consulted when `model`
-   * is `gemini-3.5-transcribe`; the other models already run that path.
-   */
-  fallbackModel?: string
 }
 
 /**
- * Why a completed native transcript is still treated as incomplete.
+ * Why a `completed` native transcript is still treated as incomplete.
  *
  * `gemini-3.5-transcribe` can return `status: 'completed'` with word timings
- * that stop well before the recording does. The app's own audio grounding
- * rejected two such transcripts on 2026-09-21 (one ended 964 s early, one
- * covered under 55%) and the queue retried the identical call until it gave
- * up. The thresholds mirror that grounding check so the engine falls back
- * BEFORE the app has to fail the recording: under 55% coverage, or more than
- * five minutes of recording after the last timed word. Returns null when the
- * transcript reaches the end or the duration is unknown.
+ * that stop well before the audio does. Two recordings hit this on 2026-09-21:
+ * one ended 964 s early, one covered under 55%, and the app's own audio
+ * grounding rejected both. The thresholds mirror that grounding check so the
+ * engine notices before the app has to fail the recording: under 55% coverage,
+ * or more than five minutes of audio after the last timed word. Returns null
+ * when the transcript reaches the end or the duration is unknown.
  */
 export function nativeCoverageShortfall(
   segments: ReadonlyArray<{ endTime: number }>,
-  durationSeconds: number | undefined
+  durationSeconds: number | undefined,
+  startSec = 0
 ): string | null {
   if (!durationSeconds || !Number.isFinite(durationSeconds) || durationSeconds <= 0) return null
   if (segments.length === 0) return null
-  let lastEnd = 0
+  // Segment times are absolute in the recording; `startSec` brings them back to
+  // the interval being judged, so one chunk can be checked on its own.
+  let lastEnd = startSec
   for (const segment of segments) if (segment.endTime > lastEnd) lastEnd = segment.endTime
+  lastEnd -= startSec
   const coverage = lastEnd / durationSeconds
   if (coverage < 0.55) return `covers ${Math.round(coverage * 100)}% of the ${Math.round(durationSeconds)}s recording`
   const missing = durationSeconds - lastEnd
@@ -349,6 +346,25 @@ function parseMp3FrameHeader(audio: Buffer, p: number): Mp3FrameHeader | null {
   if (frameLen < 4) return null
   const samplesPerFrame = mpeg1 ? 1152 : 576
   return { frameLen, frameDurationSec: samplesPerFrame / sampleRate }
+}
+
+/**
+ * Halve one chunk, reusing whichever splitter its bytes support.
+ *
+ * The splitters cut on container boundaries (RIFF data for WAV, frame headers
+ * for MP3) and report `startSec` relative to the buffer they were given, so
+ * the parent's offset is added back. Returns null when the bytes cannot be cut
+ * — an unsplittable chunk has to fail rather than be retried identically.
+ */
+export function halveChunk(chunk: AudioChunk): AudioChunk[] | null {
+  const target = Math.max(1, Math.floor(chunk.durationSec / 2))
+  const parts =
+    splitWavIntoChunks(chunk.data, target) ?? splitMp3IntoChunks(chunk.data, target)
+  if (!parts || parts.length < 2) return null
+  return parts.map((part) => ({
+    ...part,
+    startSec: chunk.startSec + part.startSec,
+  }))
 }
 
 /**
@@ -878,18 +894,23 @@ export class GeminiEngine implements TranscriptionEngine {
    * are carried forward to preserve speaker-label and conversational context. */
   static readonly ROLLING_CHUNK_SECONDS = 20 * 60
 
+  /**
+   * Floor for splitting a native-transcription chunk. Below this, a chunk the
+   * model still cannot finish is a failure worth surfacing rather than a
+   * reason to keep halving. Same value the prompt-based range path uses.
+   */
+  static readonly NATIVE_MIN_SPLIT_SECONDS = 60
+
   private readonly apiKey: string
   private readonly model: string
   private readonly language: string
-  private readonly fallbackModel: string
 
   constructor(options: GeminiEngineOptions) {
     this.apiKey = options.apiKey
     // Electron config supplies the dedicated Transcribe model. Keep the
     // package fallback compatible for callers that have not migrated yet.
-    this.model = options.model ?? 'gemini-3.5-flash'
+    this.model = options.model ?? 'gemini-3.8-flash'
     this.language = options.language ?? 'unknown'
-    this.fallbackModel = options.fallbackModel ?? 'gemini-3.5-flash'
   }
 
   async isAvailable(): Promise<boolean> {
@@ -986,9 +1007,22 @@ export class GeminiEngine implements TranscriptionEngine {
       }
     }
 
-    for (let index = 0; index < chunks.length; index++) {
+    /**
+     * Transcribe one chunk, SUBDIVIDING it when the model cannot finish it.
+     *
+     * Before 2026-09-22 an `incomplete` interaction threw, and a `completed`
+     * one whose timings stopped early was returned as-is: the queue retried the
+     * identical request three times and cancelled the recording (Rec26, Rec29
+     * on 2026-09-21). Halving the interval is what the prompt-based range path
+     * already did for the same signal (`splitRange`), and it keeps the
+     * recording on its own model instead of routing it to a different one.
+     */
+    const runChunk = async (
+      chunk: AudioChunk,
+      index: number,
+      depth: number
+    ): Promise<TranscriptSegment[]> => {
       assertStillEligible(shouldGenerate)
-      const chunk = chunks[index]
       const common = {
         chunkIndex: index + 1,
         chunkCount: chunks.length,
@@ -997,6 +1031,27 @@ export class GeminiEngine implements TranscriptionEngine {
       }
       const chunkStartedAt = Date.now()
       trace({ phase: 'chunk', status: 'started', ...common })
+
+      /** Halve and retry, or fail when there is nothing left to try. */
+      const subdivide = async (why: string): Promise<TranscriptSegment[]> => {
+        const halves =
+          chunk.durationSec > GeminiEngine.NATIVE_MIN_SPLIT_SECONDS ? halveChunk(chunk) : null
+        if (!halves) {
+          throw new Error(
+            'Gemini could not produce a complete, reliable transcript for ' +
+              formatTimestamp(chunk.startSec) + '-' +
+              formatTimestamp(chunk.startSec + chunk.durationSec) + ' (' + why + ')'
+          )
+        }
+        console.warn(
+          '[GeminiEngine] ' + formatTimestamp(chunk.startSec) + '-' +
+            formatTimestamp(chunk.startSec + chunk.durationSec) + ': ' + why +
+            '; splitting into ' + halves.length
+        )
+        const out: TranscriptSegment[] = []
+        for (const half of halves) out.push(...(await runChunk(half, index, depth + 1)))
+        return out
+      }
 
       const uploadStartedAt = Date.now()
       trace({ phase: 'upload', status: 'started', ...common })
@@ -1051,8 +1106,10 @@ export class GeminiEngine implements TranscriptionEngine {
           throw error
         }
 
+        // The model ran out of room for this interval: a smaller one fits.
+        if (interaction.status === 'incomplete') return await subdivide('interaction incomplete')
         if (interaction.status !== 'completed') {
-          throw new Error(`Gemini native transcription ${interaction.status}`)
+          throw new Error('Gemini native transcription ' + interaction.status)
         }
         const parseStartedAt = Date.now()
         trace({ phase: 'parse', status: 'started', ...common })
@@ -1065,9 +1122,17 @@ export class GeminiEngine implements TranscriptionEngine {
           speakerNames
         )
         trace({ phase: 'parse', status: 'completed', elapsedMs: Date.now() - parseStartedAt, ...common })
-        allSegments.push(...segments)
-        options.onProgress?.(index + 1, chunks.length)
+
+        // `completed` with timings that stop early is the other shape of the
+        // same problem, and the one the app's grounding check rejected.
+        // Silence is not a shortfall: an interval with no speech returns none.
+        const shortfall = segments.length
+          ? nativeCoverageShortfall(segments, chunk.durationSec, chunk.startSec)
+          : null
+        if (shortfall) return await subdivide(shortfall)
+
         trace({ phase: 'chunk', status: 'completed', elapsedMs: Date.now() - chunkStartedAt, ...common })
+        return segments
       } catch (error) {
         trace({
           phase: 'chunk',
@@ -1089,6 +1154,13 @@ export class GeminiEngine implements TranscriptionEngine {
           trace({ phase: 'cleanup', status: 'failed', elapsedMs: Date.now() - cleanupStartedAt, ...common })
         }
       }
+    }
+
+    for (let index = 0; index < chunks.length; index++) {
+      allSegments.push(...(await runChunk(chunks[index], index, 0)))
+      // Progress counts the ORIGINAL chunks: a subdivision is the engine
+      // working harder on one of them, not extra work the caller asked for.
+      options.onProgress?.(index + 1, chunks.length)
     }
     if (allSegments.length === 0) throw new NoSpeechDetectedError()
     return allSegments
@@ -1388,49 +1460,13 @@ Calendar and meeting context are spelling hints only; never invent speech from t
 
     const genAI = new GoogleGenAI({ apiKey: this.apiKey })
 
-    // The model the chunked generateContent path below will call. Stays
-    // `this.model` unless the dedicated Transcribe model fell short, in which
-    // case the text fallback takes over for the rest of this call.
-    let generationModel = this.model
-    let fellBack = false
-
     if (this.model === 'gemini-3.5-transcribe') {
-      // Before 2026-09-21 this was the whole method for the Transcribe model:
-      // no fallback. An interaction that came back `incomplete`, or one that
-      // completed with timings stopping minutes before the recording ends, was
-      // thrown to the app, which retried the identical call and then failed
-      // the recording. The chunked path a few lines down already handles long
-      // audio, truncation and replayed turns for every other model; it is the
-      // fallback now.
-      let shortfall: string | null = null
-      try {
-        const segments = await this.transcribeWithNativeModel(genAI, audio, mimeType, options)
-        shortfall = nativeCoverageShortfall(segments, options.durationSeconds)
-        if (shortfall === null) {
-          for (const segment of segments) yield segment
-          return
-        }
-      } catch (error) {
-        // Silence and cancellation are answers, not failures to route around.
-        if (error instanceof NoSpeechDetectedError || error instanceof TranscriptionCancelledError) throw error
-        const message = error instanceof Error ? error.message : String(error)
-        // Only the "interaction did not complete" class falls back. Auth, quota
-        // and unsupported-audio errors would fail the same way on any model.
-        if (!/^Gemini native transcription /.test(message)) throw error
-        shortfall = message
-      }
-      console.warn(
-        `[GeminiEngine] ${this.model} ${shortfall}; retrying with chunked ${this.fallbackModel}`
-      )
-      generationModel = this.fallbackModel
-      fellBack = true
+      const segments = await this.transcribeWithNativeModel(genAI, audio, mimeType, options)
+      for (const segment of segments) yield segment
+      return
     }
 
-    // The interactions path below reads this.model, which is still the
-    // Transcribe model during a fallback — the API that just fell short. A
-    // fallback always takes the chunked generateContent path.
     if (
-      !fellBack &&
       /^gemini-(?:3(?:\.|$)|[4-9])/i.test(this.model) &&
       filePath &&
       options.durationSeconds &&
@@ -1503,7 +1539,7 @@ Return ONLY the schema-constrained JSON, with no markdown or additional commenta
 
       const attempt = async (config: GenerateContentConfig, promptText = prompt) => {
         const stream = await genAI.models.generateContentStream({
-          model: generationModel,
+          model: this.model,
           contents: [{ role: 'user', parts: [part, { text: promptText }] }],
           config,
         })

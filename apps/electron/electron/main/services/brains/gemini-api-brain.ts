@@ -27,7 +27,7 @@ import type {
 } from './types'
 import { eligibleToGenerate } from './eligibility'
 
-const DEFAULT_MODEL = 'gemini-3.5-flash'
+const DEFAULT_MODEL = 'gemini-3.8-flash'
 const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001'
 const GEMINI_BATCH_LIMIT = 100
 
