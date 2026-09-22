@@ -102,10 +102,11 @@ describe('GeminiApiBrain', () => {
       await expect(brain.generate([{ role: 'user', content: 'hi' }])).rejects.toThrow(/not configured/)
     })
 
-    it('uses the transcription model by default and omits generationConfig when no opts', async () => {
+    it('uses the chat model even when transcription uses the dedicated speech model', async () => {
+      mockConfig.transcription.geminiModel = 'gemini-3.5-transcribe'
       await brain.generate([{ role: 'user', content: 'hi' }], { systemPrompt: 'sys' })
       expect(mockGetGenerativeModel).toHaveBeenCalledWith(
-        expect.objectContaining({ model: 'gemini-3.5-flash', systemInstruction: 'sys' })
+        expect.objectContaining({ model: 'gemini-chat-model', systemInstruction: 'sys' })
       )
       const req = mockGenerateContent.mock.calls[0][0]
       expect(req.contents).toEqual([{ role: 'user', parts: [{ text: 'hi' }] }])
