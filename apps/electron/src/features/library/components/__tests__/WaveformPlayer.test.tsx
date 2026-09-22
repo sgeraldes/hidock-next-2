@@ -257,125 +257,10 @@ describe('WaveformPlayer', () => {
     expect(screen.getByRole('button', { name: /jump to marker 1/i })).toHaveAttribute('aria-pressed', 'true')
   })
 
-  it('renders a cross-linked event list that seeks from the TIMESTAMP chip', () => {
-    const seek = vi.fn()
-    ;(window as any).__audioControls.seek = seek
-    useUIStore.setState({ currentlyPlayingId: 'rec-1', playbackDuration: 100 })
-    render(
-      <WaveformPlayer
-        mode="full"
-        recordingId="rec-1"
-        filePath="/a.wav"
-        events={[{ id: 'e1', timeSec: 25, index: 1, label: 'Kickoff', kind: 'action' }]}
-      />
-    )
-    const list = screen.getByTestId('timeline-events')
-    // The timestamp chip is the seek affordance (the text click expands details).
-    fireEvent.click(within(list).getByTitle('Seek to 0:25'))
-    expect(seek).toHaveBeenCalledWith(25)
-  })
+  // The event-list tests moved to TimelineEventList.test.tsx on 2026-09-22,
+  // with the list itself. What stays here is the graph: the numbered markers
+  // on the sentiment curve and the seek they trigger.
 
-  it('shows the FULL event text wrapped (no truncation) when details are provided', () => {
-    useUIStore.setState({ currentlyPlayingId: 'rec-1', playbackDuration: 100 })
-    const longText = 'Exportar todas las tareas de Cantata a un archivo de Excel para luego filtrar y clasificar por responsable antes del viernes'
-    render(
-      <WaveformPlayer
-        mode="full"
-        recordingId="rec-1"
-        filePath="/a.wav"
-        events={[{ id: 'e1', timeSec: 25, index: 1, label: 'Exportar todas las tareas de Cantata a un archivo de Ex…', kind: 'action', refId: 'row-1' }]}
-        eventDetails={{ 'row-1': { kind: 'action', fullText: longText, editable: true, status: 'pending', assignee: 'Camilo' } }}
-      />
-    )
-    const text = screen.getByText(longText)
-    expect(text).toBeInTheDocument()
-    expect(text.className).not.toContain('truncate')
-    expect(text.className).toContain('whitespace-normal')
-  })
-
-  it('clicking the row text EXPANDS the detail panel (does not seek)', () => {
-    const seek = vi.fn()
-    ;(window as any).__audioControls.seek = seek
-    useUIStore.setState({ currentlyPlayingId: 'rec-1', playbackDuration: 100 })
-    render(
-      <WaveformPlayer
-        mode="full"
-        recordingId="rec-1"
-        filePath="/a.wav"
-        events={[{ id: 'e1', timeSec: 25, index: 1, label: 'Kickoff', kind: 'action', refId: 'row-1' }]}
-        eventDetails={{ 'row-1': { kind: 'action', fullText: 'Kickoff', editable: true, status: 'pending', assignee: 'Ana', priority: 'high' } }}
-      />
-    )
-    fireEvent.click(screen.getByText('Kickoff'))
-    expect(seek).not.toHaveBeenCalled()
-    const detail = screen.getByTestId('event-detail-e1')
-    expect(within(detail).getByText(/Ana/)).toBeInTheDocument()
-    expect(within(detail).getByText(/pending/i)).toBeInTheDocument()
-    // Collapse again.
-    fireEvent.click(screen.getByText('Kickoff'))
-    expect(screen.queryByTestId('event-detail-e1')).not.toBeInTheDocument()
-  })
-
-  it('edit mode saves the new content via onEventUpdate', async () => {
-    const onEventUpdate = vi.fn().mockResolvedValue(true)
-    useUIStore.setState({ currentlyPlayingId: 'rec-1', playbackDuration: 100 })
-    render(
-      <WaveformPlayer
-        mode="full"
-        recordingId="rec-1"
-        filePath="/a.wav"
-        events={[{ id: 'e1', timeSec: 25, index: 1, label: 'Old text', kind: 'action', refId: 'row-1' }]}
-        eventDetails={{ 'row-1': { kind: 'action', fullText: 'Old text', editable: true, status: 'pending' } }}
-        onEventUpdate={onEventUpdate}
-      />
-    )
-    fireEvent.click(screen.getByText('Old text'))
-    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }))
-    const draft = screen.getByLabelText(/edit item 1 text/i)
-    fireEvent.change(draft, { target: { value: 'Corrected action text' } })
-    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
-    await vi.waitFor(() => expect(onEventUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'e1' }),
-      { content: 'Corrected action text' }
-    ))
-  })
-
-  it('mark complete toggles the action status via onEventUpdate', async () => {
-    const onEventUpdate = vi.fn().mockResolvedValue(true)
-    useUIStore.setState({ currentlyPlayingId: 'rec-1', playbackDuration: 100 })
-    render(
-      <WaveformPlayer
-        mode="full"
-        recordingId="rec-1"
-        filePath="/a.wav"
-        events={[{ id: 'e1', timeSec: 25, index: 1, label: 'Do it', kind: 'action', refId: 'row-1' }]}
-        eventDetails={{ 'row-1': { kind: 'action', fullText: 'Do it', editable: true, status: 'pending' } }}
-        onEventUpdate={onEventUpdate}
-      />
-    )
-    fireEvent.click(screen.getByText('Do it'))
-    fireEvent.click(screen.getByRole('button', { name: /mark complete/i }))
-    await vi.waitFor(() => expect(onEventUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'e1' }),
-      { status: 'completed' }
-    ))
-  })
-
-  it('read-only events (editable:false) show full text but no edit affordance', () => {
-    useUIStore.setState({ currentlyPlayingId: 'rec-1', playbackDuration: 100 })
-    render(
-      <WaveformPlayer
-        mode="full"
-        recordingId="rec-1"
-        filePath="/a.wav"
-        events={[{ id: 'txa_0', timeSec: 25, index: 1, label: 'Short…', kind: 'action', refId: 'txa_0' }]}
-        eventDetails={{ txa_0: { kind: 'action', fullText: 'Complete read-only text', editable: false } }}
-      />
-    )
-    fireEvent.click(screen.getByText('Complete read-only text'))
-    expect(screen.getByText(/read-only item/i)).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /^edit$/i })).not.toBeInTheDocument()
-  })
 
   it('does NOT render an in-player speaker-name legend (names live in Participants chips)', () => {
     useUIStore.setState({ currentlyPlayingId: 'rec-1', playbackDuration: 100 })
@@ -410,9 +295,11 @@ describe('WaveformPlayer', () => {
         ]}
       />
     )
-    // Marker + list row (axis-positioned) render even though live duration is 0.
+    // The marker (axis-positioned) renders even though live duration is 0. The
+    // list it used to cross-link with is its own section now and is asserted in
+    // TimelineEventList.test.tsx.
     expect(screen.getByRole('button', { name: /jump to marker 1/i })).toBeInTheDocument()
-    expect(screen.getByTestId('timeline-events')).toBeInTheDocument()
+    expect(screen.queryByTestId('timeline-events')).not.toBeInTheDocument()
     expect(screen.getByTestId('sentiment-curve')).toBeInTheDocument()
   })
 

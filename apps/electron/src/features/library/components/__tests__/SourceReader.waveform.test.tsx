@@ -109,7 +109,7 @@ beforeEach(() => {
   useUIStore.setState({ waveformLoadedForId: null, waveformLoadingId: null, playbackDuration: 0 })
   useLibraryStore.setState({
     waveformPinned: false,
-    readerSectionModes: { player: 'expanded', metadata: 'expanded', summary: 'expanded', transcript: 'expanded' },
+    readerSectionModes: { player: 'expanded', metadata: 'expanded', moments: 'expanded', summary: 'expanded', transcript: 'expanded' },
     readerVerticalSizes: [64, 36],
     listCollapsed: false
   })
@@ -198,11 +198,15 @@ describe('SourceReader — docked small player', () => {
 
     expect(useLibraryStore.getState().listCollapsed).toBe(true)
     expect(screen.getByRole('button', { name: 'Return Player to reader' })).toBeInTheDocument()
-    expect(screen.queryByTestId('reader-scroll-body')).not.toBeInTheDocument()
+    // The reader is ONE scrolling column since 2026-09-22, so the column itself
+    // always exists. What maximizing removes is every OTHER section.
+    expect(screen.getByTestId('reader-scroll-body')).toBeInTheDocument()
+    expect(screen.queryByTestId('reader-section-transcript')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('reader-section-metadata')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Return Player to reader' }))
     expect(useLibraryStore.getState().listCollapsed).toBe(false)
-    expect(screen.getByTestId('reader-scroll-body')).toBeInTheDocument()
+    expect(screen.getByTestId('reader-section-metadata')).toBeInTheDocument()
   })
 })
 
