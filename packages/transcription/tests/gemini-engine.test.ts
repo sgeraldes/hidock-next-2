@@ -1067,6 +1067,20 @@ describe('GeminiEngine native Transcribe subdivision', () => {
     expect(order).toEqual(['upload', 'delete', 'upload', 'delete', 'upload', 'delete'])
   })
 
+  it('tells the user a container it cannot cut is the blocker', async () => {
+    // The splitters only understand WAV and MP3, so an imported .m4a/.ogg/.flac
+    // reaches the model whole and cannot be retried smaller. That is a
+    // different wall from "the interval is already at the floor", and the only
+    // one the user can do something about.
+    mockInteractionsCreate.mockResolvedValue(incomplete)
+    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+
+    await expect(collect(engine.transcribe(
+      Buffer.from('ftypM4A  not something the splitters can cut'),
+      { source: 'mic', durationSeconds: 900 }
+    ))).rejects.toThrow(/convert it to WAV or MP3/)
+  })
+
   it('does not subdivide silence: no speech is an answer', async () => {
     mockInteractionsCreate.mockResolvedValue(silence)
     const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })

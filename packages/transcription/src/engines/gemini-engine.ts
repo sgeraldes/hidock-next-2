@@ -1086,10 +1086,22 @@ export class GeminiEngine implements TranscriptionEngine {
             ? halveChunk(chunk)
             : null
         if (!halves) {
+          // Say WHICH wall we hit. An interval already at the floor is the
+          // model's limit and there is nothing the user can do; bytes we cannot
+          // cut is the container's limit, and converting the file to WAV or MP3
+          // lets the same recording through. The splitters only understand
+          // those two, so an imported .m4a/.ogg/.flac lands here whole.
+          const unsplittable =
+            chunk.durationSec > GeminiEngine.NATIVE_MIN_SPLIT_SECONDS &&
+            depth < GeminiEngine.NATIVE_MAX_SPLIT_DEPTH
           throw new Error(
             'Gemini could not produce a complete, reliable transcript for ' +
               formatTimestamp(chunk.startSec) + '-' +
-              formatTimestamp(chunk.startSec + chunk.durationSec) + ' (' + why + ')'
+              formatTimestamp(chunk.startSec + chunk.durationSec) + ' (' + why + ')' +
+              (unsplittable
+                ? '. This audio could not be split into smaller intervals to retry; ' +
+                  'convert it to WAV or MP3 and transcribe it again.'
+                : '')
           )
         }
         console.warn(
