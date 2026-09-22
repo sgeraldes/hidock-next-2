@@ -89,11 +89,27 @@ Section "Uninstall"
   Delete "$SMPROGRAMS\${PRODUCT}\Uninstall.lnk"
   RMDir "$SMPROGRAMS\${PRODUCT}"
 
-  Delete "$INSTDIR\uninstall.exe"
-  RMDir /r "$INSTDIR"
+  ; $INSTDIR comes from a per-user registry value. Only delete it when it
+  ; still names the directory that this installer conventionally owns.
+  StrCpy $R0 "$INSTDIR" ${NSIS_MAX_STRLEN} -17
+  StrCmp $R0 "${PRODUCT}" 0 refuse_program_directory
+  StrCpy $R0 "$INSTDIR" 1 -18
+  StrCmp $R0 "\" remove_program refuse_program_directory
 
-  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_KEY}"
-  DeleteRegKey HKCU "Software\${PRODUCT_KEY}"
+  remove_program:
+    Delete "$INSTDIR\uninstall.exe"
+    RMDir /r "$INSTDIR"
+    Goto deregister
+
+  refuse_program_directory:
+    MessageBox MB_OK|MB_ICONEXCLAMATION \
+      "The program directory was left in place because '$INSTDIR' does not end with '${PRODUCT}'. Remove that path by hand if it is safe to delete."
+
+  ; Deregister in both cases. The program directory may need manual removal,
+  ; but its shortcuts and Add/Remove Programs entry must not remain active.
+  deregister:
+    DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_KEY}"
+    DeleteRegKey HKCU "Software\${PRODUCT_KEY}"
 
   ; The models and the paired token are the person's, not the program's. They
   ; are named here so an uninstall can say what it is leaving behind.

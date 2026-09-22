@@ -102,7 +102,9 @@ says it cannot diarize, rather than one that accepts every job and fails it.
 
 Uninstalling removes the program and leaves the second group, because a 2.5 GB
 download and a paired token are the person's, not the installer's. The
-uninstaller says so and names the folder.
+uninstaller says so and names the folder. If the stored installation path does
+not end in `HiDock Model Host`, it leaves that directory for manual removal and
+still removes the shortcuts and uninstall registration.
 
 ## What is not here yet
 
