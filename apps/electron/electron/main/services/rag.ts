@@ -998,6 +998,15 @@ ${text}` })
 
       const { document: doc, score } = result
 
+      // The index no longer keeps chunk text resident; search() hydrates the
+      // results it returns. A chunk still missing text here was deleted between
+      // the search and the read, so it is DROPPED rather than contributed as an
+      // empty excerpt — and never interpolated raw, which would have put the
+      // literal string "undefined" into the context handed to the model.
+      const chunkText = doc.content
+      if (chunkText === undefined || chunkText === '') continue
+      const excerpt = chunkText.substring(0, 200) + (chunkText.length > 200 ? '...' : '')
+
       const dateInfo = doc.metadata.timestamp
         ? ` (${new Date(doc.metadata.timestamp).toLocaleDateString()})`
         : ''
@@ -1008,11 +1017,11 @@ ${text}` })
       if (doc.metadata.sourceType === 'image') {
         const desc = doc.metadata.subject || 'Screenshot'
         vectorParts.push({
-          part: `[Screenshot: ${desc}${dateInfo}]\n${doc.content}`,
+          part: `[Screenshot: ${desc}${dateInfo}]\n${chunkText}`,
           captureId: doc.metadata.captureId,
           chunkIndex: doc.metadata.chunkIndex,
           source: {
-            content: doc.content.substring(0, 200) + (doc.content.length > 200 ? '...' : ''),
+            content: excerpt,
             subject: doc.metadata.subject,
             timestamp: doc.metadata.timestamp,
             score,
@@ -1030,13 +1039,13 @@ ${text}` })
           : 'Unknown meeting'
 
       vectorParts.push({
-        part: `[${meetingInfo}${dateInfo}]\n${doc.content}`,
+        part: `[${meetingInfo}${dateInfo}]\n${chunkText}`,
         // capture-backed chunks set captureId; transcript chunks set recordingId.
         captureId: doc.metadata.captureId,
         recordingId: doc.metadata.captureId ? undefined : doc.metadata.recordingId,
         chunkIndex: doc.metadata.chunkIndex,
         source: {
-          content: doc.content.substring(0, 200) + (doc.content.length > 200 ? '...' : ''),
+          content: excerpt,
           meetingId: doc.metadata.meetingId,
           subject: doc.metadata.subject,
           timestamp: doc.metadata.timestamp,

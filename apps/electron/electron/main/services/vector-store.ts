@@ -13,13 +13,11 @@ import {
   updateVectorStartupProgress,
 } from './vector-startup-state'
 import {
-  cacheFingerprint,
   cancelVectorCacheWrites,
   readVectorCacheAsync,
   waitForVectorCacheWrites,
   writeVectorCacheAsync,
   VECTOR_CACHE_FILENAME,
-  type CacheGroupInfo,
 } from './vector-cache'
 import {
   filterEligibleRecordingIds,
@@ -30,7 +28,21 @@ import { getEmbeddingsService } from './embeddings'
 
 interface VectorDocument {
   id: string
-  content: string
+  /**
+   * Chunk text. ABSENT on documents straight out of the index.
+   *
+   * The boot load holds 237,920 chunks; their text is ~98 MB on disk and ~206 MB
+   * as JS strings, resident for the whole session to serve the handful of chunks
+   * a search actually returns. It is no longer loaded: `search()`,
+   * `searchByMeeting()` and `getChunkNeighbors()` hydrate the documents they are
+   * about to hand out, and anything else asks {@link VectorStore.hydrateContent}.
+   *
+   * Optional ON PURPOSE. Making it `string` and filling in '' would let a
+   * consumer that forgot to hydrate read empty text and silently return an
+   * answer with no evidence in it. As `string | undefined`, the compiler stops
+   * at every read and forces the decision.
+   */
+  content?: string
   /** Float32Array for DB-loaded docs (zero-copy view, no 338M-value boxing);
    *  number[] for freshly embedded docs. Both are indexable array-likes. */
   embedding: number[] | Float32Array
@@ -102,6 +114,25 @@ function blobToEmbedding(value: unknown): number[] | Float32Array {
 interface SearchResult {
   document: VectorDocument
   score: number
+}
+
+/** One slice of the eligible corpus — see {@link VectorStore.getDocumentPage}. */
+interface DocumentPage {
+  /** Eligible documents in the whole corpus, not in this page. */
+  total: number
+  /** The offset actually served, after clamping into [0, total]. */
+  offset: number
+  /** The page size actually served. */
+  limit: number
+  /**
+   * The corpus revision this page was cut from. It changes whenever a document
+   * is added or removed, which is what shifts the offsets a caller is paging
+   * by; a caller comparing it across pages can tell that its traversal spans a
+   * changed corpus instead of silently skipping or repeating a row.
+   */
+  revision: number
+  /** Shallow copies of the page's documents, hydrated. */
+  documents: VectorDocument[]
 }
 
 // Cosine similarity between two vectors (any indexable array-like)
@@ -316,6 +347,76 @@ class VectorStore {
   /** Chunk buffers backing the cache-loaded Float32Array views (kept alive). */
   private cacheBuffers: Buffer[] | null = null
 
+  /**
+   * Single contiguous arena backing the DB-loaded Float32Array views, when the
+   * partition has a uniform dimension. Every document's `embedding` is a
+   * `subarray` into this, so the reference keeps it alive; dropping documents
+   * does NOT reclaim its bytes until the whole store is reloaded. That is the
+   * intended trade: one ~1 GB allocation instead of 125k fragmenting ones.
+   */
+  private partitionArena: Float32Array | null = null
+
+  /**
+   * Bumped on every add/remove in {@link documents}. It invalidates
+   * {@link stableOrderCache} and is handed to callers on a
+   * {@link DocumentPage} so they can tell a paging traversal spanned a corpus
+   * that changed under them. Incremented per mutation rather than per batch so
+   * a future mutation site cannot forget to invalidate.
+   */
+  private corpusRevision = 0
+
+  /** Memoized {@link documentsInStableOrder} result for one corpus revision. */
+  private stableOrderCache: { revision: number; documents: VectorDocument[] } | null = null
+
+  /** True when this boot's embeddings are views over one contiguous arena
+   *  rather than per-row allocations (diagnostics/tests). */
+  isArenaBacked(): boolean {
+    return this.partitionArena !== null
+  }
+
+  /**
+   * Fill in `content` for the given documents, reading it from SQLite.
+   *
+   * The index holds no chunk text (see {@link VectorDocument.content}); this is
+   * how a caller about to USE documents gets it. Intended for bounded sets —
+   * a search's top-K, one meeting's chunks, a chunk's neighbours. Handing it
+   * the whole index re-materializes the ~206 MB this change removed, which is
+   * a legitimate thing to do deliberately and a bug to do by accident.
+   *
+   * Mutates the documents in place and returns the same array, so a caller can
+   * `return this.hydrateContent(results)`. A row that no longer exists (deleted
+   * between the search and this read) leaves `content` undefined rather than
+   * throwing — the caller already has to handle an absent value.
+   */
+  hydrateContent<T extends { id: string; content?: string }>(docs: T[]): T[] {
+    const missing = docs.filter((d) => d.content === undefined)
+    if (missing.length === 0) return docs
+
+    const db = getDatabase()
+    // Chunked IN(...) — SQLite's default parameter limit is 999, and a caller
+    // may legitimately pass more than that (one long meeting's chunks).
+    const CHUNK = 500
+    const text = new Map<string, string>()
+    for (let i = 0; i < missing.length; i += CHUNK) {
+      const slice = missing.slice(i, i + CHUNK)
+      const placeholders = slice.map(() => '?').join(',')
+      const rows = db.exec(
+        `SELECT id, content FROM vector_embeddings WHERE id IN (${placeholders})`,
+        slice.map((d) => d.id)
+      )
+      if (rows.length === 0) continue
+      for (const row of rows[0].values) {
+        text.set(row[0] as string, (row[1] as string | null) ?? '')
+      }
+    }
+
+    for (const doc of missing) {
+      const found = text.get(doc.id)
+      if (found !== undefined) doc.content = found
+    }
+    return docs
+  }
+
   /** True when this boot's embeddings are zero-copy views over the binary
    *  cache buffer (diagnostics/tests). */
   isCacheBacked(): boolean {
@@ -349,8 +450,8 @@ class VectorStore {
   /**
    * Boot accelerator: load metadata from SQL (no blobs) + embeddings as
    * zero-copy views over the binary cache. Valid ONLY when the live table's
-   * (provider, dims, count) fingerprint matches the cache's AND every row id
-   * resolves positionally — any mutation since the cache was written falls
+   * provider count matches the cache AND every row id/provider/dimension
+   * matches during paged metadata validation — mismatches fall
    * back to the SQL load (false). Unknown-provider rows are unservable by
    * design and excluded from BOTH the cache and its fingerprint.
    */
@@ -359,37 +460,31 @@ class VectorStore {
     onProgress?: (loaded: number, total: number) => void
   ): Promise<boolean> {
     const db = getDatabase()
-    const groupRows = db.exec(
-      `SELECT embed_provider, embed_dims, COUNT(*)
-       FROM vector_embeddings
-       WHERE embed_provider = ? AND embed_dims IS NOT NULL
-       GROUP BY embed_provider, embed_dims`,
+    // Count through the provider index, without reading the multi-GB vector
+    // table for a dimensions GROUP BY. Verify dimensions per row below.
+    const countRows = db.exec(
+      'SELECT COUNT(*) FROM vector_embeddings WHERE embed_provider = ?',
       [activeProvider]
     )
-    if (groupRows.length === 0 || groupRows[0].values.length === 0) return false
-    const liveGroups: CacheGroupInfo[] = groupRows[0].values.map(([p, d, c]) => ({
-      provider: p as string,
-      dims: d as number,
-      count: c as number,
-    }))
+    const liveCount = Number(countRows[0]?.values[0]?.[0] ?? 0)
+    if (liveCount === 0) return false
 
     const cachePath = this.vectorCachePath()
     await waitForVectorCacheWrites(cachePath)
     const cache = await readVectorCacheAsync(cachePath, activeProvider)
     if (!cache) return false
-    const cachedActiveGroups = cache.groups
-      .filter((group) => group.provider === activeProvider)
-      .map(({ provider, dims, count }) => ({ provider, dims, count }))
-    if (cacheFingerprint(cachedActiveGroups) !== cacheFingerprint(liveGroups)) return false
+    if (cache.rows.length !== liveCount) return false
 
     const byId = new Map(cache.rows.map((r) => [r.id, r]))
-    const BATCH = 10000
+    const BATCH = 128
     let loaded = 0
     let afterId = ''
     let matched = 0
     for (;;) {
       const rows = db.exec(
-        `SELECT id, content, meeting_id, recording_id, chunk_index, timestamp, subject, source_type, capture_id, embed_provider, embed_dims
+        // `content` is NOT selected — see the VectorDocument.content docs. The
+        // cache path skipped it too and still paid for it here.
+        `SELECT id, meeting_id, recording_id, chunk_index, timestamp, subject, source_type, capture_id, embed_provider, embed_dims
          FROM vector_embeddings
          WHERE embed_provider = ? AND embed_dims IS NOT NULL AND id > ?
          ORDER BY id
@@ -400,24 +495,25 @@ class VectorStore {
       for (const row of rows[0].values) {
         const id = row[0] as string
         const cached = byId.get(id)
-        if (!cached) {
+        if (!cached || cached.provider !== row[8] || cached.dims !== row[9]) {
           // Table changed between the fingerprint and the row scan — do not
           // serve a half-fresh store; fall back to the authoritative SQL load.
           this.documents.clear()
+          this.corpusRevision++
           return false
         }
+        this.corpusRevision++
         this.documents.set(id, {
           id,
-          content: row[1] as string,
           embedding: cached.vector,
           metadata: {
-            meetingId: (row[2] as string | undefined) || undefined,
-            recordingId: (row[3] as string | undefined) || undefined,
-            chunkIndex: row[4] as number,
-            timestamp: (row[5] as string | undefined) || undefined,
-            subject: (row[6] as string | undefined) || undefined,
-            sourceType: (row[7] as string | undefined) || undefined,
-            captureId: (row[8] as string | undefined) || undefined,
+            meetingId: (row[1] as string | undefined) || undefined,
+            recordingId: (row[2] as string | undefined) || undefined,
+            chunkIndex: row[3] as number,
+            timestamp: (row[4] as string | undefined) || undefined,
+            subject: (row[5] as string | undefined) || undefined,
+            sourceType: (row[6] as string | undefined) || undefined,
+            captureId: (row[7] as string | undefined) || undefined,
             embedProvider: cached.provider,
             embedDims: cached.dims,
           },
@@ -432,6 +528,7 @@ class VectorStore {
     }
     if (matched !== cache.rows.length) {
       this.documents.clear()
+      this.corpusRevision++
       return false
     }
     this.cacheBuffers = cache.buffers
@@ -554,24 +651,100 @@ class VectorStore {
     }
   }
 
+  /**
+   * Column order for the partition load. Explicit rather than `SELECT *` so the
+   * per-row index lookup is a constant, and so adding a column to the table
+   * never silently widens what boot pulls into RAM.
+   */
+  private static readonly LOAD_COLUMNS = [
+    'id',
+    'embedding',
+    'meeting_id',
+    'recording_id',
+    'chunk_index',
+    'timestamp',
+    'subject',
+    'source_type',
+    'capture_id',
+    'embed_provider',
+    'embed_dims'
+  ] as const
+
   private async loadFromDatabase(
     activeProvider: string,
     onProgress?: (loaded: number, total: number) => void
   ): Promise<void> {
     const db = getDatabase()
-    const totalRes = db.exec('SELECT COUNT(*) FROM vector_embeddings WHERE embed_provider = ?', [activeProvider])
-    const total = totalRes.length > 0 ? (totalRes[0].values[0][0] as number) : 0
+    // One round trip for both numbers: the row count sizes the arena and the
+    // dimension makes every row's offset arithmetic, not a per-row allocation.
+    // MIN/MAX disagree only on a corrupt partition, which falls back below.
+    const statsRes = db.exec(
+      `SELECT COUNT(*), MIN(embed_dims), MAX(embed_dims)
+         FROM vector_embeddings WHERE embed_provider = ?`,
+      [activeProvider]
+    )
+    const stats = statsRes.length > 0 ? statsRes[0].values[0] : null
+    const total = (stats?.[0] as number | undefined) ?? 0
+    const minDims = (stats?.[1] as number | null | undefined) ?? null
+    const maxDims = (stats?.[2] as number | null | undefined) ?? null
+
+    // PERF (the 2026-09 OOM): the previous loader called blobToEmbedding per
+    // row, and that does `bytes.buffer.slice(...)` — a FRESH ArrayBuffer for
+    // every row. At 125k rows × 2048 dims that is 125k separate ~8 KB native
+    // allocations, each with malloc overhead, fragmenting the native heap. The
+    // live vectors are ~1 GB; the process was committing 8.4 GB.
+    //
+    // A uniform partition instead gets ONE contiguous arena and every document
+    // holds a `subarray` VIEW into it. Same bytes, one allocation, no
+    // fragmentation. A partition with mixed or unknown dimensions keeps the
+    // old per-row path — correctness first, and it is the rare case.
+    const uniformDims =
+      minDims !== null && maxDims !== null && minDims === maxDims && minDims > 0 ? minDims : null
+    let arena: Float32Array | null = null
+    let arenaOffset = 0
+    if (uniformDims !== null && total > 0) {
+      try {
+        arena = new Float32Array(total * uniformDims)
+        this.partitionArena = arena
+      } catch (e) {
+        // A single allocation this large can fail where many small ones would
+        // not. Degrade to the per-row path rather than failing the boot.
+        console.warn(
+          `[VectorStore] contiguous arena (${total}×${uniformDims}) allocation failed, using per-row load:`,
+          e
+        )
+        arena = null
+        this.partitionArena = null
+      }
+    }
+
+    const cols = VectorStore.LOAD_COLUMNS
+    const columnList = cols.join(', ')
+    // `content` is deliberately absent — see the VectorDocument.content docs.
+    const I = {
+      id: 0,
+      embedding: 1,
+      meetingId: 2,
+      recordingId: 3,
+      chunkIndex: 4,
+      timestamp: 5,
+      subject: 6,
+      sourceType: 7,
+      captureId: 8,
+      embedProvider: 9,
+      embedDims: 10
+    }
 
     // Batched load with event-loop yields: a single SELECT of 110k+ rows (and
     // the blob→float parse loop) blocks the main process for seconds at boot
-    // (BootScheduler SLOW-task warnings). 5k-row pages keep the UI responsive
-    // while the store fills.
-    const BATCH = 5000
+    // (BootScheduler SLOW-task warnings). Bound each page to roughly 1.5 MB
+    // for 3072-dim vectors rather than copying ~60 MB before each yield.
+    const BATCH = 128
     let loaded = 0
     let afterId = ''
     for (;;) {
       const rows = db.exec(
-        `SELECT * FROM vector_embeddings
+        `SELECT ${columnList} FROM vector_embeddings
          WHERE embed_provider = ? AND id > ?
          ORDER BY id
          LIMIT ?`,
@@ -579,39 +752,72 @@ class VectorStore {
       )
       if (rows.length === 0 || rows[0].values.length === 0) break
 
-      const columns = rows[0].columns
       for (const row of rows[0].values) {
-      const doc: Record<string, unknown> = {}
-      columns.forEach((col, i) => {
-        doc[col] = row[i]
-      })
+        // No intermediate `Record<string, unknown>` per row: the old loader
+        // built a throwaway 13-key object 125k times purely to index it by
+        // name. Fixed indices read straight off the row tuple.
+        const embedding = this.readEmbeddingInto(row[I.embedding], uniformDims, arena, arenaOffset)
+        if (embedding.usedArena) arenaOffset += uniformDims as number
 
-      const vectorDoc: VectorDocument = {
-        id: doc['id'] as string,
-        content: doc['content'] as string,
-        embedding: blobToEmbedding(doc['embedding']),
-        metadata: {
-          meetingId: doc['meeting_id'] as string | undefined,
-          recordingId: doc['recording_id'] as string | undefined,
-          chunkIndex: doc['chunk_index'] as number,
-          timestamp: doc['timestamp'] as string | undefined,
-          subject: doc['subject'] as string | undefined,
-          sourceType: (doc['source_type'] as string | undefined) || undefined,
-          captureId: (doc['capture_id'] as string | undefined) || undefined,
-          embedProvider: (doc['embed_provider'] as string | undefined) || undefined,
-          embedDims: (doc['embed_dims'] as number | undefined) || undefined
-        }
-      }
-
-        this.documents.set(vectorDoc.id, vectorDoc)
+        this.corpusRevision++
+        this.documents.set(row[I.id] as string, {
+          id: row[I.id] as string,
+          embedding: embedding.vector,
+          metadata: {
+            meetingId: (row[I.meetingId] as string | undefined) || undefined,
+            recordingId: (row[I.recordingId] as string | undefined) || undefined,
+            chunkIndex: row[I.chunkIndex] as number,
+            timestamp: (row[I.timestamp] as string | undefined) || undefined,
+            subject: (row[I.subject] as string | undefined) || undefined,
+            sourceType: (row[I.sourceType] as string | undefined) || undefined,
+            captureId: (row[I.captureId] as string | undefined) || undefined,
+            embedProvider: (row[I.embedProvider] as string | undefined) || undefined,
+            embedDims: (row[I.embedDims] as number | undefined) || undefined
+          }
+        })
       }
 
       loaded += rows[0].values.length
-      afterId = rows[0].values[rows[0].values.length - 1][columns.indexOf('id')] as string
+      afterId = rows[0].values[rows[0].values.length - 1][I.id] as string
       onProgress?.(Math.min(loaded, total), total)
       if (rows[0].values.length < BATCH) break
       await new Promise((resolve) => setImmediate(resolve))
     }
+  }
+
+  /**
+   * Place one stored BLOB into the partition arena and return a view over it.
+   *
+   * Falls back to the standalone per-row decode when there is no arena, when
+   * the arena is full (rows inserted after the COUNT that sized it), or when
+   * this row's byte length disagrees with the partition dimension. The caller
+   * advances the arena offset only when `usedArena` is true, so a fallback row
+   * never leaves a hole or shifts every later row.
+   */
+  private readEmbeddingInto(
+    value: unknown,
+    dims: number | null,
+    arena: Float32Array | null,
+    offset: number
+  ): { vector: number[] | Float32Array; usedArena: boolean } {
+    if (arena === null || dims === null || offset + dims > arena.length) {
+      return { vector: blobToEmbedding(value), usedArena: false }
+    }
+    const bytes =
+      value instanceof Uint8Array ? value : Buffer.isBuffer(value) ? (value as Buffer) : null
+    if (!bytes || Math.floor(bytes.byteLength / 4) !== dims) {
+      return { vector: blobToEmbedding(value), usedArena: false }
+    }
+    // Byte-wise copy into the arena, then hand back a view over it.
+    //
+    // This deliberately does NOT build a Float32Array over the source buffer:
+    // Node hands out Buffers carved from a shared pool, so `bytes.byteOffset`
+    // is rarely 4-byte aligned and `new Float32Array(buf, offset, dims)` would
+    // throw RangeError on most rows. Uint8Array has no alignment requirement,
+    // and both sides are little-endian, so the copy is byte-exact.
+    const dst = new Uint8Array(arena.buffer, arena.byteOffset + offset * 4, dims * 4)
+    dst.set(bytes.subarray(0, dims * 4))
+    return { vector: arena.subarray(offset, offset + dims), usedArena: true }
   }
 
   /**
@@ -644,12 +850,17 @@ class VectorStore {
 
     const doc: VectorDocument = {
       id,
-      content,
+      // No `content`: the in-memory index does not hold chunk text (see
+      // VectorDocument.content). Keeping it here only for freshly inserted
+      // rows would make a backfill re-accumulate exactly what the boot load
+      // stopped holding — a 125k-chunk reindex would end at the old figure.
+      // The text is in the row being written a few lines below.
       embedding,
       metadata: { ...metadata, embedProvider: partition, embedDims: embedding.length }
     }
 
     // Store in memory
+    this.corpusRevision++
     this.documents.set(id, doc)
 
     // Persist to database
@@ -773,10 +984,13 @@ class VectorStore {
       const id = `${chunkMeta.recordingId || 'doc'}_${i}_${partition ?? 'unknown'}_${Date.now()}`
       const doc: VectorDocument = {
         id,
-        content: chunks[i],
+        // No `content` — see addDocument. This is the path a full backfill
+        // takes, so holding the text here is exactly what would undo the
+        // change: 125k chunks reindexed would rebuild the ~206 MB.
         embedding,
         metadata: { ...chunkMeta, chunkIndex: i, embedProvider: partition, embedDims: embedding.length }
       }
+      this.corpusRevision++
       this.documents.set(id, doc)
       db.run(
         `INSERT OR REPLACE INTO vector_embeddings
@@ -892,7 +1106,12 @@ class VectorStore {
     // Sort by score descending, then apply light diversity reranking so a few
     // near-duplicate screenshot descriptions cannot evict all meeting evidence.
     results.sort((a, b) => b.score - a.score)
-    return diversifyResults(results, topK)
+    const top = diversifyResults(results, topK)
+    // Hydrate only the survivors: topK is single digits in every caller, so
+    // this is a handful of rows read against the ~206 MB the index no longer
+    // keeps resident for all 237k chunks.
+    this.hydrateContent(top.map((r) => r.document))
+    return top
   }
 
   /**
@@ -997,12 +1216,15 @@ class VectorStore {
       wanted.add(i - 1)
       wanted.add(i + 1)
     }
-    return this.filterEligibleDocs(
-      Array.from(this.documents.values()).filter(
-        (d) =>
-          d.metadata.recordingId === recordingId &&
-          wanted.has(d.metadata.chunkIndex) &&
-          (!providerId || d.metadata.embedProvider === providerId)
+    // Bounded by the neighbours of the chunks asked for; callers read the text.
+    return this.hydrateContent(
+      this.filterEligibleDocs(
+        Array.from(this.documents.values()).filter(
+          (d) =>
+            d.metadata.recordingId === recordingId &&
+            wanted.has(d.metadata.chunkIndex) &&
+            (!providerId || d.metadata.embedProvider === providerId)
+        )
       )
     )
   }
@@ -1013,11 +1235,13 @@ class VectorStore {
     // PROVIDER PARTITION (see search()) — the re-ranker's query embedding is
     // only comparable within the active provider's model.
     const activeProvider = await getEmbeddingsService().activeProviderId()
-    return this.filterEligibleDocs(
+    const docs = this.filterEligibleDocs(
       Array.from(this.documents.values()).filter(
         (d) => d.metadata.meetingId === meetingId && d.metadata.embedProvider === activeProvider
       )
     ).sort((a, b) => a.metadata.chunkIndex - b.metadata.chunkIndex)
+    // Bounded by one meeting's chunks — the callers read the text.
+    return this.hydrateContent(docs)
   }
 
   async deleteByRecording(recordingId: string): Promise<number> {
@@ -1040,6 +1264,7 @@ class VectorStore {
     for (const [id, doc] of this.documents.entries()) {
       if (doc.metadata.recordingId !== recordingId) continue
       this.documents.delete(id)
+      this.corpusRevision++
       deleted++
     }
     return deleted
@@ -1131,6 +1356,67 @@ class VectorStore {
     // full document set inherit the fail-closed eligibility boundary here.
     return this.filterEligibleDocs(Array.from(this.documents.values()))
   }
+
+  /**
+   * One page of the eligible document set, with chunk text hydrated for THAT
+   * PAGE only.
+   *
+   * The chunk viewer (rag:get-chunks) used to take {@link getAllDocuments} and
+   * hydrate all of it: on the 237,920-chunk library that is ~200 MB of strings
+   * built per invocation, then serialized over IPC to the renderer. It only
+   * ever shows a screenful, so only a screenful is read back.
+   *
+   * The page carries SHALLOW COPIES, not the index's own documents.
+   * {@link hydrateContent} fills text in place, so hydrating the stored objects
+   * would let the viewer re-grow the resident chunk text one page at a time
+   * until the whole index was back in memory — the exact cost the index stopped
+   * paying (see {@link VectorDocument.content}).
+   *
+   * Eligibility is unchanged: the SAME fail-closed boundary getAllDocuments
+   * applies runs over the whole corpus BEFORE the slice, so `total` counts
+   * eligible documents and paging can never walk past the boundary into an
+   * excluded one. `offset` is clamped into [0, total] and `limit` to >= 0; both
+   * are echoed back so the caller pages from what it actually got.
+   */
+  getDocumentPage(offset: number, limit: number): DocumentPage {
+    const eligible = this.filterEligibleDocs(this.documentsInStableOrder())
+    const total = eligible.length
+    const start = Math.min(Math.max(Math.trunc(offset) || 0, 0), total)
+    const size = Math.max(Math.trunc(limit) || 0, 0)
+    const documents = eligible.slice(start, start + size).map((doc) => ({ ...doc }))
+    this.hydrateContent(documents)
+    return { total, offset: start, limit: size, revision: this.corpusRevision, documents }
+  }
+
+  /**
+   * Every document, in a TOTAL ORDER that does not depend on insertion history.
+   *
+   * Offset paging is only coherent if two requests agree on the order. The
+   * backing Map iterates in insertion order, so a chunk deleted and reindexed
+   * (a retranscribe, a provider switch) moves to the end and can be served
+   * twice while another row is never served at all. Sorting by `id` — immutable
+   * for the life of a chunk — makes a document's position depend on the corpus
+   * CONTENTS rather than on the order it happened to arrive in.
+   *
+   * Sorting 237,920 rows costs ~0.5 s, which is not something to pay on every
+   * Prev/Next, so the order is cached and rebuilt only when the corpus changes
+   * ({@link corpusRevision}). The cache holds references, not text.
+   *
+   * What this does NOT do is make a traversal atomic: a document removed BEFORE
+   * the caller's current offset still shifts the rest left by one. That is
+   * inherent to paging by offset over a live corpus, which is why the page
+   * carries {@link DocumentPage.revision} so the caller can see it happened.
+   */
+  private documentsInStableOrder(): VectorDocument[] {
+    if (this.stableOrderCache?.revision === this.corpusRevision) {
+      return this.stableOrderCache.documents
+    }
+    const documents = Array.from(this.documents.values()).sort((a, b) =>
+      a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+    )
+    this.stableOrderCache = { revision: this.corpusRevision, documents }
+    return documents
+  }
 }
 
 // Singleton instance
@@ -1144,4 +1430,4 @@ export function getVectorStore(): VectorStore {
 }
 
 export { VectorStore, chunkText, cosineSimilarity, diversifyResults }
-export type { VectorDocument, SearchResult }
+export type { VectorDocument, SearchResult, DocumentPage }

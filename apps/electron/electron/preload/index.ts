@@ -889,16 +889,29 @@ export interface ElectronAPI {
       subject?: string
       score: number
     }>>
-    getChunks: () => Promise<Array<{
-      id: string
-      content: string
-      meetingId?: string
-      recordingId?: string
-      chunkIndex: number
-      subject?: string
-      timestamp?: string
-      embeddingDimensions: number
-    }>>
+    /**
+     * One page of indexed chunks. Paged on purpose: the whole index is 237k+
+     * chunks with their text, which is neither renderable nor cheap to
+     * serialize. `total` is the eligible chunk count; `offset`/`limit` are the
+     * ones actually served after main clamps them (limit caps at 500).
+     */
+    getChunks: (offset?: number, limit?: number) => Promise<{
+      total: number
+      offset: number
+      limit: number
+      /** Corpus revision; a change between pages means the index moved. */
+      revision: number
+      chunks: Array<{
+        id: string
+        content: string
+        meetingId?: string
+        recordingId?: string
+        chunkIndex: number
+        subject?: string
+        timestamp?: string
+        embeddingDimensions: number
+      }>
+    }>
     globalSearch: (query: string, limit?: number) => Promise<Result<{
       knowledge: any[]
       people: any[]
@@ -1787,7 +1800,7 @@ const electronAPI: ElectronAPI = {
     clearSession: (sessionId) => callIPC('rag:clear-session', sessionId),
     stats: () => callIPC('rag:stats'),
     search: (query, limit) => callIPC('rag:search', { query, limit }),
-    getChunks: () => callIPC('rag:get-chunks'),
+    getChunks: (offset, limit) => callIPC('rag:get-chunks', { offset, limit }),
     globalSearch: (query, limit) => callIPC('rag:globalSearch', { query, limit })
   },
 
