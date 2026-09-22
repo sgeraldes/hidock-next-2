@@ -39,7 +39,20 @@ export interface GeminiEngineOptions {
   apiKey: string
   model?: string
   language?: string
+  /**
+   * Model for the chunked generateContent path when the Transcribe model gets
+   * audio it cannot cut. The Transcribe model itself only speaks Interactions,
+   * so falling through with it would call an API it does not serve.
+   */
+  fallbackModel?: string
 }
+
+/**
+ * Smallest interval worth asking the model for. Below it, halving again cannot
+ * change the answer, so a chunk the model still cannot finish is a failure to
+ * surface rather than a reason to keep splitting.
+ */
+const MIN_NATIVE_SPLIT_SECONDS = 60
 
 /**
  * Why a `completed` native transcript is still treated as incomplete.
@@ -51,7 +64,36 @@ export interface GeminiEngineOptions {
  * engine notices before the app has to fail the recording: under 55% coverage,
  * or more than five minutes of audio after the last timed word. Returns null
  * when the transcript reaches the end or the duration is unknown.
+ *
+ * Both thresholds also require at least MIN_NATIVE_SPLIT_SECONDS of audio after
+ * the last timed word. Coverage is a ratio, and a ratio says nothing on a short
+ * interval: a speaker who says one sentence and then goes quiet leaves the same
+ * 30% coverage in a 20-minute chunk and in the 40-second chunk it halves down
+ * to, so without the absolute floor the caller recursed to the split floor and
+ * failed a recording whose transcript was complete (measured 2026-09-22: a
+ * 1200 s interval with speech only in its first 20 s threw after six paid
+ * calls). A tail shorter than the smallest interval we would ever request
+ * cannot be recovered by splitting, so it is not a shortfall.
  */
+/**
+ * The native path gave up because the AUDIO cannot be cut, not because the
+ * model cannot finish the interval.
+ *
+ * The splitters understand WAV and MP3. An imported .m4a/.ogg/.flac arrives
+ * whole, so when the Transcribe model returns something incomplete there is no
+ * smaller interval to retry with. `main` sent those recordings to the chunked
+ * generateContent path, and removing that left them permanently unusable —
+ * which was never the point: the point was to stop routing around a model that
+ * could be fixed. This error is what lets `transcribe()` tell the two cases
+ * apart.
+ */
+export class NativeAudioNotSplittableError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'NativeAudioNotSplittableError'
+  }
+}
+
 export function nativeCoverageShortfall(
   segments: ReadonlyArray<{ endTime: number }>,
   durationSeconds: number | undefined,
@@ -59,14 +101,18 @@ export function nativeCoverageShortfall(
 ): string | null {
   if (!durationSeconds || !Number.isFinite(durationSeconds) || durationSeconds <= 0) return null
   if (segments.length === 0) return null
+  const offset = Number.isFinite(startSec) ? startSec : 0
   // Segment times are absolute in the recording; `startSec` brings them back to
   // the interval being judged, so one chunk can be checked on its own.
-  let lastEnd = startSec
+  let lastEnd = offset
   for (const segment of segments) if (segment.endTime > lastEnd) lastEnd = segment.endTime
-  lastEnd -= startSec
+  // Clamp into the interval: a segment before it contributes nothing, and one
+  // past its end does not buy extra coverage.
+  lastEnd = Math.min(Math.max(lastEnd - offset, 0), durationSeconds)
+  const missing = durationSeconds - lastEnd
+  if (missing <= MIN_NATIVE_SPLIT_SECONDS) return null
   const coverage = lastEnd / durationSeconds
   if (coverage < 0.55) return `covers ${Math.round(coverage * 100)}% of the ${Math.round(durationSeconds)}s recording`
-  const missing = durationSeconds - lastEnd
   if (missing > 300) return `ends ${Math.round(missing)}s before the end of the recording`
   return null
 }
@@ -357,7 +403,17 @@ function parseMp3FrameHeader(audio: Buffer, p: number): Mp3FrameHeader | null {
  * — an unsplittable chunk has to fail rather than be retried identically.
  */
 export function halveChunk(chunk: AudioChunk): AudioChunk[] | null {
-  const target = Math.max(1, Math.floor(chunk.durationSec / 2))
+  // A duration we cannot trust makes the target meaningless: with 0 or a
+  // fraction the target floors to 1 and the splitters return one part PER
+  // SECOND (measured: 600 parts out of a 600 s chunk), each one a paid upload
+  // and a paid request. Refuse instead.
+  if (!Number.isFinite(chunk.durationSec) || chunk.durationSec < 2) return null
+  // Round the target UP. Rounding down leaves a runt third part — 601 s split
+  // at 300 s gives 300/300/1, and that 1-second part costs an upload and a
+  // request to transcribe nothing. Rounding up gives exactly two parts for any
+  // duration, and the larger one is still strictly shorter than the parent, so
+  // the caller's recursion keeps shrinking.
+  const target = Math.ceil(chunk.durationSec / 2)
   const parts =
     splitWavIntoChunks(chunk.data, target) ?? splitMp3IntoChunks(chunk.data, target)
   if (!parts || parts.length < 2) return null
@@ -522,6 +578,9 @@ function clockMatchToSeconds(match: RegExpMatchArray): number {
 }
 
 function formatTimestamp(seconds: number): string {
+  // A duration the caller could not determine reaches here as NaN, and
+  // `NaN:NaN` in an error message the user reads is worse than saying unknown.
+  if (!Number.isFinite(seconds)) return '??:??'
   const whole = Math.max(0, Math.floor(seconds))
   const hours = Math.floor(whole / 3600)
   const minutes = Math.floor((whole % 3600) / 60)
@@ -899,17 +958,27 @@ export class GeminiEngine implements TranscriptionEngine {
    * model still cannot finish is a failure worth surfacing rather than a
    * reason to keep halving. Same value the prompt-based range path uses.
    */
-  static readonly NATIVE_MIN_SPLIT_SECONDS = 60
+  static readonly NATIVE_MIN_SPLIT_SECONDS = MIN_NATIVE_SPLIT_SECONDS
+
+  /**
+   * Hard stop on how deep the native subdivision may recurse. The floor above
+   * is what normally ends the descent; this bounds the damage if a splitter
+   * ever returns a part that is not shorter than its parent. 20 min halved to
+   * the 60 s floor is five levels, so ten leaves room without hiding a bug.
+   */
+  static readonly NATIVE_MAX_SPLIT_DEPTH = 10
 
   private readonly apiKey: string
   private readonly model: string
   private readonly language: string
+  private readonly fallbackModel: string
 
   constructor(options: GeminiEngineOptions) {
     this.apiKey = options.apiKey
     // Electron config supplies the dedicated Transcribe model. Keep the
     // package fallback compatible for callers that have not migrated yet.
     this.model = options.model ?? 'gemini-3.8-flash'
+    this.fallbackModel = options.fallbackModel ?? 'gemini-3.8-flash'
     this.language = options.language ?? 'unknown'
   }
 
@@ -989,7 +1058,7 @@ export class GeminiEngine implements TranscriptionEngine {
     // request. Refuse an unsplittable longer container instead of silently
     // sending an unsupported request or reverting to prompt-based range repair.
     if (chunks.length === 1 && durationSeconds > 30 * 60) {
-      throw new Error(
+      throw new NativeAudioNotSplittableError(
         'Gemini 3.5 Transcribe requires recordings over 30 minutes to be valid WAV or MP3 audio so they can be safely chunked'
       )
     }
@@ -1034,14 +1103,36 @@ export class GeminiEngine implements TranscriptionEngine {
 
       /** Halve and retry, or fail when there is nothing left to try. */
       const subdivide = async (why: string): Promise<TranscriptSegment[]> => {
+        // Every interval is strictly shorter than its parent and the floor
+        // stops the descent, so the depth cap can only be reached if a splitter
+        // ever stops shrinking. Cheaper to assert it than to let a future
+        // change spend an unbounded number of uploads finding out.
         const halves =
-          chunk.durationSec > GeminiEngine.NATIVE_MIN_SPLIT_SECONDS ? halveChunk(chunk) : null
+          depth < GeminiEngine.NATIVE_MAX_SPLIT_DEPTH &&
+          chunk.durationSec > GeminiEngine.NATIVE_MIN_SPLIT_SECONDS
+            ? halveChunk(chunk)
+            : null
         if (!halves) {
-          throw new Error(
+          // Say WHICH wall we hit. An interval already at the floor is the
+          // model's limit and there is nothing the user can do; bytes we cannot
+          // cut is the container's limit, and converting the file to WAV or MP3
+          // lets the same recording through. The splitters only understand
+          // those two, so an imported .m4a/.ogg/.flac lands here whole.
+          const unsplittable =
+            chunk.durationSec > GeminiEngine.NATIVE_MIN_SPLIT_SECONDS &&
+            depth < GeminiEngine.NATIVE_MAX_SPLIT_DEPTH
+          const detail =
             'Gemini could not produce a complete, reliable transcript for ' +
-              formatTimestamp(chunk.startSec) + '-' +
-              formatTimestamp(chunk.startSec + chunk.durationSec) + ' (' + why + ')'
-          )
+            formatTimestamp(chunk.startSec) + '-' +
+            formatTimestamp(chunk.startSec + chunk.durationSec) + ' (' + why + ')'
+          if (unsplittable) {
+            // Not a dead end: the caller retries this recording on the chunked
+            // generateContent path, which takes the bytes as they are.
+            throw new NativeAudioNotSplittableError(
+              detail + '. This audio could not be split into smaller intervals to retry.'
+            )
+          }
+          throw new Error(detail)
         }
         console.warn(
           '[GeminiEngine] ' + formatTimestamp(chunk.startSec) + '-' +
@@ -1053,6 +1144,17 @@ export class GeminiEngine implements TranscriptionEngine {
         return out
       }
 
+      /**
+       * One pass over this exact interval. Returns the segments, or the reason
+       * the interval has to be split — deliberately NOT the split itself, so
+       * this chunk's uploaded file is deleted by the `finally` below before any
+       * subdivision uploads its own. Recursing inside the `try` kept every
+       * ancestor's file alive for the whole subtree (a 20-minute WAV per level),
+       * which is Files API quota spent on audio nobody is reading any more.
+       */
+      const attempt = async (): Promise<
+        { segments: TranscriptSegment[] } | { splitBecause: string }
+      > => {
       const uploadStartedAt = Date.now()
       trace({ phase: 'upload', status: 'started', ...common })
       let uploaded: { name: string; uri: string; mimeType: string }
@@ -1107,7 +1209,7 @@ export class GeminiEngine implements TranscriptionEngine {
         }
 
         // The model ran out of room for this interval: a smaller one fits.
-        if (interaction.status === 'incomplete') return await subdivide('interaction incomplete')
+        if (interaction.status === 'incomplete') return { splitBecause: 'interaction incomplete' }
         if (interaction.status !== 'completed') {
           throw new Error('Gemini native transcription ' + interaction.status)
         }
@@ -1129,10 +1231,10 @@ export class GeminiEngine implements TranscriptionEngine {
         const shortfall = segments.length
           ? nativeCoverageShortfall(segments, chunk.durationSec, chunk.startSec)
           : null
-        if (shortfall) return await subdivide(shortfall)
+        if (shortfall) return { splitBecause: shortfall }
 
         trace({ phase: 'chunk', status: 'completed', elapsedMs: Date.now() - chunkStartedAt, ...common })
-        return segments
+        return { segments }
       } catch (error) {
         trace({
           phase: 'chunk',
@@ -1154,6 +1256,10 @@ export class GeminiEngine implements TranscriptionEngine {
           trace({ phase: 'cleanup', status: 'failed', elapsedMs: Date.now() - cleanupStartedAt, ...common })
         }
       }
+      }
+
+      const outcome = await attempt()
+      return 'segments' in outcome ? outcome.segments : await subdivide(outcome.splitBecause)
     }
 
     for (let index = 0; index < chunks.length; index++) {
@@ -1460,13 +1566,33 @@ Calendar and meeting context are spelling hints only; never invent speech from t
 
     const genAI = new GoogleGenAI({ apiKey: this.apiKey })
 
+    // Which model the chunked generateContent path below will call. It stays
+    // `this.model` unless the Transcribe model got audio it cannot cut.
+    let generationModel = this.model
+    let fellBack = false
+
     if (this.model === 'gemini-3.5-transcribe') {
-      const segments = await this.transcribeWithNativeModel(genAI, audio, mimeType, options)
-      for (const segment of segments) yield segment
-      return
+      try {
+        const segments = await this.transcribeWithNativeModel(genAI, audio, mimeType, options)
+        for (const segment of segments) yield segment
+        return
+      } catch (error) {
+        // Only the container wall falls through. Everything else — silence,
+        // cancellation, auth, quota, an interval the model cannot finish even
+        // at the floor — belongs to the caller, and routing those to another
+        // model is what this change exists to stop doing.
+        if (!(error instanceof NativeAudioNotSplittableError)) throw error
+        console.warn(
+          '[GeminiEngine] ' + error.message +
+            ' Retrying on chunked ' + this.fallbackModel + ', which takes these bytes as they are.'
+        )
+        generationModel = this.fallbackModel
+        fellBack = true
+      }
     }
 
     if (
+      !fellBack &&
       /^gemini-(?:3(?:\.|$)|[4-9])/i.test(this.model) &&
       filePath &&
       options.durationSeconds &&
@@ -1510,6 +1636,24 @@ Calendar and meeting context are spelling hints only; never invent speech from t
       responseSchema: TRANSCRIPT_RESPONSE_SCHEMA,
     }
 
+    /**
+     * gemini-3.8-flash answers `thinkingLevel: MINIMAL` with a 400:
+     * "Thinking level MINIMAL is not supported for this model."
+     *
+     * The first call already handled that by retrying without the field, but
+     * the two RETRIES below rebuilt the request from `baseConfig` and asked for
+     * it again. Measured on a real 34-minute recording on 2026-09-22: the first
+     * call failed, the plain retry produced a transcript the shape check
+     * rejected, the repair retry asked for MINIMAL thinking again, and the 400
+     * came back uncaught and failed the whole recording.
+     *
+     * So the refusal is remembered for the rest of this call. It also saves a
+     * wasted round trip on every later chunk.
+     */
+    let thinkingRejected = false
+    const mainConfig = (): GenerateContentConfig =>
+      thinkingRejected ? baseConfigWithoutThinking : baseConfig
+
     const transcribeChunk = async (chunk: AudioChunk & { part?: Part }, index: number, previousTail: string): Promise<string> => {
       // Recheck at the START of EACH chunk — an exclusion committed while a
       // previous chunk was in flight must stop this chunk before any provider call.
@@ -1539,7 +1683,7 @@ Return ONLY the schema-constrained JSON, with no markdown or additional commenta
 
       const attempt = async (config: GenerateContentConfig, promptText = prompt) => {
         const stream = await genAI.models.generateContentStream({
-          model: this.model,
+          model: generationModel,
           contents: [{ role: 'user', parts: [part, { text: promptText }] }],
           config,
         })
@@ -1559,11 +1703,12 @@ Return ONLY the schema-constrained JSON, with no markdown or additional commenta
       // Recheck immediately before the FIRST generation call for this chunk.
       assertStillEligible(shouldGenerate)
       try {
-        res = await attempt(baseConfig)
+        res = await attempt(mainConfig())
       } catch (err) {
         if (err instanceof TranscriptionCancelledError) throw err
         // If the model rejects thinkingConfig or the token cap, retry plain.
         if (String(err).includes('INVALID_ARGUMENT') || String(err).includes('thinking')) {
+          thinkingRejected = true
           // Recheck before the plain-config RETRY (a fresh provider call).
           assertStillEligible(shouldGenerate)
           res = await attempt(baseConfigWithoutThinking)
@@ -1579,7 +1724,7 @@ Return ONLY the schema-constrained JSON, with no markdown or additional commenta
         // Recheck before the MAX_TOKENS RETRY (another fresh provider call).
         assertStillEligible(shouldGenerate)
         try {
-          const retry = await attempt(baseConfig)
+          const retry = await attempt(mainConfig())
           if (retry.text && retry.finishReason !== 'MAX_TOKENS') res = retry
         } catch {
           // Ignore retry failure; the truncation check below surfaces it.
@@ -1598,10 +1743,7 @@ Return ONLY the schema-constrained JSON, with no markdown or additional commenta
         assertStillEligible(shouldGenerate)
         const repairPrompt = `${prompt}
 IMPORTANT TRANSCRIPT REPAIR: Your previous response had missing/repeated timing or collapsed minutes of conversation into an oversized speaker item. Re-listen to the audio. Return truthful increasing timestamps, split every voice change into its own segments item, and split a continuing speaker at least every 30 seconds. No content value may exceed 120 words.`
-        const retry = await attempt(
-          baseConfig,
-          repairPrompt
-        )
+        const retry = await attempt(mainConfig(), repairPrompt)
         if (
           !retry.text ||
           retry.finishReason === 'MAX_TOKENS' ||

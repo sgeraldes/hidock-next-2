@@ -91,7 +91,7 @@ function spawnStreaming(
     })
   })
 }
-import { getConfig } from './config'
+import { getConfig, CURRENT_GEMINI_CHAT_MODEL } from './config'
 import { isFeatureEnabled } from './feature-gate'
 import {
   addToQueue,
@@ -905,6 +905,11 @@ async function transcribeWithGemini(
     // richer than the string-returning AIBrain.analyzeAudio contract.
     apiKey: resolveGeminiApiKey(),
     model: modelName,
+    // Only reached when the Transcribe model gets a container the splitters
+    // cannot cut (an imported .m4a/.ogg/.flac). The user's chat model decides,
+    // so the default is whatever CURRENT_GEMINI_CHAT_MODEL is today rather than
+    // a version frozen inside the transcription package.
+    fallbackModel: config.chat?.geminiModel || CURRENT_GEMINI_CHAT_MODEL,
     language: config.transcription.language || 'unknown'
   })
 
