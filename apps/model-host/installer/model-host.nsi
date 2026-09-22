@@ -91,10 +91,20 @@ Section "Uninstall"
 
   ; $INSTDIR comes from a per-user registry value. Only delete it when it
   ; still names the directory that this installer conventionally owns.
+  ; For paths shorter than 18 characters, the negative StrCpy offset yields an
+  ; empty string, so the comparison fails.
   StrCpy $R0 "$INSTDIR" ${NSIS_MAX_STRLEN} -17
   StrCmp $R0 "${PRODUCT}" 0 refuse_program_directory
   StrCpy $R0 "$INSTDIR" 1 -18
   StrCmp $R0 "\" remove_program refuse_program_directory
+
+  ; This is intentionally a name guard, not a location guard. Paths such as
+  ; C:\a\..\HiDock Model Host and \\server\share\HiDock Model Host pass because
+  ; they still identify a directory named ${PRODUCT}.
+  System::Call 'kernel32::GetFileAttributes(t "$INSTDIR") i .r0'
+  IntCmp $R0 -1 refuse_program_directory
+  IntOp $R1 $R0 & 0x400
+  IntCmp $R1 0 remove_program refuse_program_directory refuse_program_directory
 
   remove_program:
     Delete "$INSTDIR\uninstall.exe"
@@ -103,7 +113,7 @@ Section "Uninstall"
 
   refuse_program_directory:
     MessageBox MB_OK|MB_ICONEXCLAMATION \
-      "The program directory was left in place because '$INSTDIR' does not end with '${PRODUCT}'. Remove that path by hand if it is safe to delete."
+      "The program directory, including its uninstaller, was left in place because '$INSTDIR' does not end with '${PRODUCT}' or could not be safely inspected. Remove that path by hand if it is safe to delete."
 
   ; Deregister in both cases. The program directory may need manual removal,
   ; but its shortcuts and Add/Remove Programs entry must not remain active.
