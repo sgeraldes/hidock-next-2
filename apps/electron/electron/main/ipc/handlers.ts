@@ -35,6 +35,7 @@ import { registerModelHostHandlers } from './model-host-handlers'
 import { registerReDiarizeHandlers } from './re-diarize-handlers'
 import { registerTimelineHandlers } from './timeline-handlers'
 import { registerClipboardCaptureHandlers } from './clipboard-capture-handlers'
+import { registerNotesHandlers } from './notes-handlers'
 import { registerGitCommitsHandlers } from './git-commits-handlers'
 import { registerWaveformCacheHandlers } from './waveform-cache-handlers'
 import { registerBrainsHandlers } from './brains-handlers'
@@ -96,6 +97,7 @@ export function registerIpcHandlers(): void {
   registerReDiarizeHandlers()
   registerTimelineHandlers()
   registerClipboardCaptureHandlers()
+  registerNotesHandlers()
   registerGitCommitsHandlers()
   registerWaveformCacheHandlers()
   registerBrainsHandlers()

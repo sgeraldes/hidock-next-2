@@ -522,6 +522,11 @@ export const CORE_CHANNEL_PREFIXES: string[] = [
   'repair:',
   'brains:',
   'knowledge:',
+  // Hand-written notes. Writing one needs no transcription, no assistant and no
+  // network, so it stays available under every preset — the same reason config
+  // and db are here. The three AI channels on this namespace degrade to an
+  // error result when no provider is configured; they never gate the editor.
+  'notes:',
   'artifacts:',
   'waveform:',
   'handover:',

@@ -395,6 +395,21 @@ describe('DatabaseEngine', () => {
     engine.closeDatabase()
   })
 
+  it('enforces foreign keys, and says so rather than inheriting it', async () => {
+    // This used to depend on how better-sqlite3 was compiled. The installed
+    // build carries SQLITE_DEFAULT_FOREIGN_KEYS, so enforcement was on while
+    // the engine's own comment said it was off; a rebuild without that flag
+    // would have turned every ON DELETE CASCADE in the schema into a no-op
+    // with nothing failing to announce it.
+    const engine = makeEngine('fk')
+    await engine.initialize()
+    try {
+      expect(engine.queryAll<{ foreign_keys: number }>('PRAGMA foreign_keys')[0].foreign_keys).toBe(1)
+    } finally {
+      engine.closeDatabase()
+    }
+  })
+
   it('getDatabase throws before initialize', () => {
     const engine = makeEngine('uninit')
     expect(() => engine.getDatabase()).toThrow('Database not initialized')
