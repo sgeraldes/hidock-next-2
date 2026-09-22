@@ -86,6 +86,7 @@ describe('JensenDevice (transport-agnostic core)', () => {
     expect(USB_PRODUCT_IDS.H1E).toBe(0xb00d)
     expect(USB_PRODUCT_IDS.P1).toBe(0xb00e)
     expect(USB_PRODUCT_IDS.P1_MINI).toBe(0xaf0f)
+    expect(USB_PRODUCT_IDS.P1_MINI_NEW).toBe(0xb00f)
     expect(USB_PRODUCT_IDS.H1_LITE).toBe(0x0104)
   })
 
@@ -152,6 +153,23 @@ describe('JensenDevice (transport-agnostic core)', () => {
     const h1 = new JensenDevice(makeFakeUsb())
     await h1.tryConnect(makeDevice(USB_PRODUCT_IDS.H1))
     expect(h1.getModel()).toBe('hidock-h1')
+  })
+
+  it('detects the newer P1 Mini USB product ID through tryConnect', async () => {
+    const device = {
+      vendorId: 0x10d6,
+      productId: USB_PRODUCT_IDS.P1_MINI_NEW,
+      productName: 'HiDock P1 Mini',
+      opened: true,
+      open: vi.fn(async () => {}),
+      selectConfiguration: vi.fn(async () => {}),
+      claimInterface: vi.fn(async () => {}),
+      selectAlternateInterface: vi.fn(async () => {}),
+    } as unknown as USBDevice
+
+    const p1Mini = new JensenDevice(makeFakeUsb())
+    await p1Mini.tryConnect(device)
+    expect(p1Mini.getModel()).toBe('hidock-p1-mini')
   })
 
   it('bounds a stalled download, resolves false, and quarantines the connection', async () => {

@@ -112,6 +112,7 @@ export const USB_PRODUCT_IDS = {
   P1_OLD: 0xaf0e,
   P1: 0xb00e,
   P1_MINI: 0xaf0f,
+  P1_MINI_NEW: 0xb00f,
   H1_ALT1: 0x0100,
   H1E_ALT1: 0x0101,
   H1_ALT2: 0x0102,
@@ -1123,6 +1124,7 @@ export class JensenDevice {
       case USB_PRODUCT_IDS.P1_ALT:
         return 'hidock-p1'
       case USB_PRODUCT_IDS.P1_MINI:
+      case USB_PRODUCT_IDS.P1_MINI_NEW:
       case USB_PRODUCT_IDS.P1_MINI_ALT:
         return 'hidock-p1-mini'
       case USB_PRODUCT_IDS.H1_LITE:
