@@ -15,12 +15,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const deps = vi.hoisted(() => ({
   modelPresent: true,
   serviceReturnsNull: false,
+  paused: false,
   embedCalls: [] as Array<{ texts: string[]; purpose: string }>,
 }))
 
 vi.mock('../../local-embedder', () => ({
   getLocalEmbedder: () => ({
     isModelPresent: () => deps.modelPresent,
+    isPaused: () => deps.paused,
     embed: async (texts: string[], purpose: string) => {
       deps.embedCalls.push({ texts, purpose })
       if (deps.serviceReturnsNull) return null
@@ -34,10 +36,16 @@ import { LocalOnnxEmbedBrain } from '../local-onnx-embed-brain'
 beforeEach(() => {
   deps.modelPresent = true
   deps.serviceReturnsNull = false
+  deps.paused = false
   deps.embedCalls = []
 })
 
 describe('LocalOnnxEmbedBrain', () => {
+  it('returns abort nulls after a resource stop instead of asking the router for cloud fallback', async () => {
+    deps.paused = true
+    expect(await new LocalOnnxEmbedBrain().embed(['test'])).toEqual([null])
+    expect(deps.embedCalls).toHaveLength(0)
+  })
   it('advertises only the embed capability', () => {
     const brain = new LocalOnnxEmbedBrain()
     expect(brain.id).toBe('local-onnx-embed')

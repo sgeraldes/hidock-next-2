@@ -115,6 +115,16 @@ export interface AppConfig {
     speakerLinkingMatchMargin: number
     speakerLinkingMinSpeechSeconds: number
     speakerLinkingTimeoutSeconds: number
+    /**
+     * Share of the machine's logical CPUs the diarization worker may use, 1-100.
+     *
+     * pyannote picks its thread count from the CPU count, so on a 24-thread box
+     * one recording saturates half the machine and the desktop crawls. This is
+     * the knob that keeps the machine usable while a backlog drains. It only
+     * matters on CPU: with a working CUDA GPU the worker barely uses the CPU at
+     * all, and this cap costs nothing.
+     */
+    speakerLinkingCpuPercent?: number
     // VibeVoice backend (microsoft/VibeVoice-ASR) — reuses localAsrPath/mcp_runner.py.
     vibevoiceModelId: string
     vibevoiceDevice: string
@@ -138,6 +148,7 @@ export interface AppConfig {
   }
   embeddings: {
     provider: 'ollama'
+    localCpuPercent?: number
     ollamaBaseUrl: string
     ollamaModel: string
     chunkSize: number
@@ -214,6 +225,9 @@ const DEFAULT_CONFIG: AppConfig = {
     speakerLinkingMatchMargin: 0.08,
     speakerLinkingMinSpeechSeconds: 4,
     speakerLinkingTimeoutSeconds: 600,
+    // 40% leaves the machine responsive while a backlog drains. Raise it when
+    // nobody is using the machine; lower it if the desktop still stutters.
+    speakerLinkingCpuPercent: 40,
     vibevoiceModelId: process.env.VIBEVOICE_MODEL_ID || 'microsoft/VibeVoice-ASR',
     vibevoiceDevice: process.env.ASR_DEVICE || 'cuda:0',
     vibevoiceAttn: process.env.VIBEVOICE_ATTN || 'sdpa', // VibeVoice-ASR supports neither flash_attention_2 (not built on Windows) nor flex_attention (unsupported arch); both silently fall back to sdpa, so use it directly
@@ -224,6 +238,7 @@ const DEFAULT_CONFIG: AppConfig = {
   },
   embeddings: {
     provider: 'ollama',
+    localCpuPercent: 50,
     ollamaBaseUrl: 'http://localhost:11434',
     ollamaModel: 'nomic-embed-text',
     chunkSize: 500,
