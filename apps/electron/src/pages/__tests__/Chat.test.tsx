@@ -37,7 +37,7 @@ const twoDaysAgo = new Date(now.getTime() - 2 * 86400000).toISOString()
 global.window.electronAPI = {
   rag: {
     status: vi.fn().mockResolvedValue({ success: true, data: { ready: true, ollamaAvailable: true, documentCount: 5, meetingCount: 2 } }),
-    getChunks: vi.fn().mockResolvedValue([]),
+    getChunks: vi.fn().mockResolvedValue({ total: 0, offset: 0, limit: 100, chunks: [] }),
     chatLegacy: vi.fn().mockResolvedValue({ answer: 'Hello' }),
     cancel: vi.fn().mockResolvedValue({ success: true })
   },
@@ -609,6 +609,100 @@ describe('Chat Component', () => {
       // sub-24rem overlay so it can never collapse into a one-word-per-line column.
       expect(caption.className).toContain('truncate')
       expect(caption.className).toContain('@sm:block')
+    })
+  })
+
+  describe('chunk viewer paging', () => {
+    // The viewer used to ask for every chunk in the index at once — 237,920 rows
+    // with their text on the current library. It now asks for one page and the
+    // controls move the offset; these tests pin that it never asks for the lot.
+    const PAGE = 100
+
+    /** A page response shaped like rag:get-chunks returns it. */
+    function pageOf(total: number, offset: number): {
+      total: number
+      offset: number
+      limit: number
+      chunks: Array<{ id: string; content: string; chunkIndex: number; embeddingDimensions: number }>
+    } {
+      const size = Math.min(PAGE, Math.max(total - offset, 0))
+      return {
+        total,
+        offset,
+        limit: PAGE,
+        chunks: Array.from({ length: size }, (_, i) => ({
+          id: `chunk-${offset + i}`,
+          content: `text of chunk ${offset + i}`,
+          chunkIndex: offset + i,
+          embeddingDimensions: 768
+        }))
+      }
+    }
+
+    async function openViewer(): Promise<void> {
+      render(
+        <MemoryRouter>
+          <Chat />
+        </MemoryRouter>
+      )
+      await screen.findByText('HISTORY')
+      fireEvent.click(screen.getByText('Chunks').closest('button')!)
+    }
+
+    it('asks for the first page only, and shows the range against the total', async () => {
+      const getChunks = window.electronAPI.rag.getChunks as ReturnType<typeof vi.fn>
+      getChunks.mockImplementation(async (offset = 0) => pageOf(250, offset))
+
+      await openViewer()
+
+      await waitFor(() => expect(getChunks).toHaveBeenCalledWith(0, PAGE))
+      // One request, for one page — not the whole index.
+      expect(getChunks).toHaveBeenCalledTimes(1)
+      await screen.findByText('Indexed Chunks (1–100 of 250)')
+      expect(screen.getByText(/text of chunk 0/)).toBeTruthy()
+      // Nothing before the first page, so Prev is dead and Next is live.
+      expect(screen.getByLabelText('Previous page of chunks')).toHaveProperty('disabled', true)
+      expect(screen.getByLabelText('Next page of chunks')).toHaveProperty('disabled', false)
+    })
+
+    it('pages forward and back by one page at a time', async () => {
+      const getChunks = window.electronAPI.rag.getChunks as ReturnType<typeof vi.fn>
+      getChunks.mockImplementation(async (offset = 0) => pageOf(250, offset))
+
+      await openViewer()
+      await screen.findByText('Indexed Chunks (1–100 of 250)')
+
+      fireEvent.click(screen.getByLabelText('Next page of chunks'))
+      await screen.findByText('Indexed Chunks (101–200 of 250)')
+      expect(getChunks).toHaveBeenLastCalledWith(100, PAGE)
+      expect(screen.getByText(/text of chunk 100/)).toBeTruthy()
+
+      fireEvent.click(screen.getByLabelText('Previous page of chunks'))
+      await screen.findByText('Indexed Chunks (1–100 of 250)')
+      expect(getChunks).toHaveBeenLastCalledWith(0, PAGE)
+    })
+
+    it('stops at the last page', async () => {
+      const getChunks = window.electronAPI.rag.getChunks as ReturnType<typeof vi.fn>
+      getChunks.mockImplementation(async (offset = 0) => pageOf(150, offset))
+
+      await openViewer()
+      await screen.findByText('Indexed Chunks (1–100 of 150)')
+
+      fireEvent.click(screen.getByLabelText('Next page of chunks'))
+      await screen.findByText('Indexed Chunks (101–150 of 150)')
+      // The tail is short; there is nothing after it to ask for.
+      expect(screen.getByLabelText('Next page of chunks')).toHaveProperty('disabled', true)
+    })
+
+    it('keeps the empty-index message when there is nothing indexed', async () => {
+      const getChunks = window.electronAPI.rag.getChunks as ReturnType<typeof vi.fn>
+      getChunks.mockImplementation(async () => pageOf(0, 0))
+
+      await openViewer()
+
+      await screen.findByText(/No chunks indexed yet/)
+      expect(screen.getByText('Indexed Chunks (0)')).toBeTruthy()
     })
   })
 })

@@ -20,6 +20,11 @@ import { RAGFilterSchema } from '../validation/common'
 import type { RAGFilter, RAGStatus, RAGChatResponse } from '../types/api'
 import { getMeetingsForContact, getMeetingsForProject } from '../services/database'
 
+/** Chunk-viewer page size when the renderer asks for none. */
+const CHUNK_PAGE_DEFAULT = 100
+/** Hard ceiling on one chunk-viewer page, whatever the renderer asks for. */
+const CHUNK_PAGE_MAX = 500
+
 // Helper to extract meeting IDs from RAGFilter
 function extractMeetingIdsFromFilter(filter: RAGFilter): string[] | undefined {
   switch (filter.type) {
@@ -283,27 +288,43 @@ export function registerRAGHandlers(): void {
     }
   )
 
-  // Get all chunks (for viewer)
-  ipcMain.handle('rag:get-chunks', async () => {
-    const documents = vectorStore.getAllDocuments()
-    // The index holds no chunk text any more, and this viewer shows it, so the
-    // text is read back here EXPLICITLY. This is the one caller that hydrates
-    // the whole index: on the 237k-chunk library that is ~200 MB of strings
-    // built per invocation, and the renderer then serializes all of it over
-    // IPC. It was equally expensive before, just paid once at boot and held
-    // for the whole session instead. Paginating this handler is the fix; it is
-    // out of scope for the memory work and tracked separately.
-    vectorStore.hydrateContent(documents)
-    return documents.map((doc) => ({
-      id: doc.id,
-      content: doc.content ?? '',
-      meetingId: doc.metadata.meetingId,
-      recordingId: doc.metadata.recordingId,
-      chunkIndex: doc.metadata.chunkIndex,
-      subject: doc.metadata.subject,
-      timestamp: doc.metadata.timestamp,
-      embeddingDimensions: doc.embedding.length
-    }))
+  // Get ONE PAGE of chunks (for viewer).
+  //
+  // This used to return every chunk in the index in a single response: 237,920
+  // rows on the current library, each with its full text. Since the index
+  // stopped holding chunk text resident, serving it also meant hydrating the
+  // whole index — ~200 MB of strings materialized per invocation, then
+  // serialized over IPC to a viewer that shows a screenful. It now hydrates and
+  // ships only the requested page, and reports the eligible total so the
+  // renderer can page through.
+  ipcMain.handle('rag:get-chunks', async (_event, request?: { offset?: number; limit?: number }) => {
+    const rawOffset = Number(request?.offset ?? 0)
+    const rawLimit = Number(request?.limit ?? CHUNK_PAGE_DEFAULT)
+    const offset = Number.isFinite(rawOffset) ? Math.max(Math.trunc(rawOffset), 0) : 0
+    // Clamped, not trusted: the cap is what stops a renderer (or a stale build)
+    // asking for the whole index in one response again.
+    const limit = Number.isFinite(rawLimit)
+      ? Math.min(Math.max(Math.trunc(rawLimit), 1), CHUNK_PAGE_MAX)
+      : CHUNK_PAGE_DEFAULT
+    // getDocumentPage applies the SAME fail-closed eligibility boundary
+    // getAllDocuments did (RE6-1), over the whole corpus BEFORE slicing, so
+    // `total` and every page stay inside it.
+    const page = vectorStore.getDocumentPage(offset, limit)
+    return {
+      total: page.total,
+      offset: page.offset,
+      limit: page.limit,
+      chunks: page.documents.map((doc) => ({
+        id: doc.id,
+        content: doc.content ?? '',
+        meetingId: doc.metadata.meetingId,
+        recordingId: doc.metadata.recordingId,
+        chunkIndex: doc.metadata.chunkIndex,
+        subject: doc.metadata.subject,
+        timestamp: doc.metadata.timestamp,
+        embeddingDimensions: doc.embedding.length
+      }))
+    }
   })
 
   // Global search

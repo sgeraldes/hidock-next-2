@@ -116,6 +116,18 @@ interface SearchResult {
   score: number
 }
 
+/** One slice of the eligible corpus — see {@link VectorStore.getDocumentPage}. */
+interface DocumentPage {
+  /** Eligible documents in the whole corpus, not in this page. */
+  total: number
+  /** The offset actually served, after clamping into [0, total]. */
+  offset: number
+  /** The page size actually served. */
+  limit: number
+  /** Shallow copies of the page's documents, hydrated. */
+  documents: VectorDocument[]
+}
+
 // Cosine similarity between two vectors (any indexable array-like)
 function cosineSimilarity(a: number[] | Float32Array, b: number[] | Float32Array): number {
   if (a.length !== b.length) return 0
@@ -1318,6 +1330,37 @@ class VectorStore {
     // full document set inherit the fail-closed eligibility boundary here.
     return this.filterEligibleDocs(Array.from(this.documents.values()))
   }
+
+  /**
+   * One page of the eligible document set, with chunk text hydrated for THAT
+   * PAGE only.
+   *
+   * The chunk viewer (rag:get-chunks) used to take {@link getAllDocuments} and
+   * hydrate all of it: on the 237,920-chunk library that is ~200 MB of strings
+   * built per invocation, then serialized over IPC to the renderer. It only
+   * ever shows a screenful, so only a screenful is read back.
+   *
+   * The page carries SHALLOW COPIES, not the index's own documents.
+   * {@link hydrateContent} fills text in place, so hydrating the stored objects
+   * would let the viewer re-grow the resident chunk text one page at a time
+   * until the whole index was back in memory — the exact cost the index stopped
+   * paying (see {@link VectorDocument.content}).
+   *
+   * Eligibility is unchanged: the SAME fail-closed boundary getAllDocuments
+   * applies runs over the whole corpus BEFORE the slice, so `total` counts
+   * eligible documents and paging can never walk past the boundary into an
+   * excluded one. `offset` is clamped into [0, total] and `limit` to >= 0; both
+   * are echoed back so the caller pages from what it actually got.
+   */
+  getDocumentPage(offset: number, limit: number): DocumentPage {
+    const eligible = this.filterEligibleDocs(Array.from(this.documents.values()))
+    const total = eligible.length
+    const start = Math.min(Math.max(Math.trunc(offset) || 0, 0), total)
+    const size = Math.max(Math.trunc(limit) || 0, 0)
+    const documents = eligible.slice(start, start + size).map((doc) => ({ ...doc }))
+    this.hydrateContent(documents)
+    return { total, offset: start, limit: size, documents }
+  }
 }
 
 // Singleton instance
@@ -1331,4 +1374,4 @@ export function getVectorStore(): VectorStore {
 }
 
 export { VectorStore, chunkText, cosineSimilarity, diversifyResults }
-export type { VectorDocument, SearchResult }
+export type { VectorDocument, SearchResult, DocumentPage }
