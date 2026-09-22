@@ -237,9 +237,10 @@ describe('classifyLowValueCaptures', () => {
     // Long recording → keep unrated.
     seedRecording('long', { duration: 1800 })
     seedCapture('cap-long', 'long')
-    // Short but with a real transcript → keep unrated.
+    // Short but with a real, speakable transcript (25 words in 8s ≈ 3.1 words
+    // per second, the median rate in the owner's DB) → keep unrated.
     seedRecording('short-transcribed', { duration: 8 })
-    seedTranscript('short-transcribed', { wordCount: 120 })
+    seedTranscript('short-transcribed', { wordCount: 25 })
     seedCapture('cap-st', 'short-transcribed')
     // Short but linked to a meeting → keep unrated.
     run('INSERT INTO meetings (id, subject, start_time, end_time) VALUES (?, ?, ?, ?)', ['m1', 'Sync', '2026-01-01T10:00:00.000Z', '2026-01-01T11:00:00.000Z'])
@@ -252,6 +253,42 @@ describe('classifyLowValueCaptures', () => {
       const q = queryOne<{ quality_rating: string }>('SELECT quality_rating FROM knowledge_captures WHERE id = ?', [id])
       expect(q?.quality_rating).toBe('unrated')
     }
+  })
+
+  it('treats a physically impossible transcript as no transcript at all', () => {
+    // 120 words in 8 seconds is 15 words per second — roughly three times the
+    // fastest human speech, i.e. a hallucinated transcript. It must not buy
+    // the clip its way out of the "no meaningful transcript" test
+    // (2026-09-22).
+    seedRecording('hallucinated', { duration: 8 })
+    seedTranscript('hallucinated', { wordCount: 120 })
+    seedCapture('cap-hallucinated', 'hallucinated')
+
+    expect(classifyLowValueCaptures().markedLowValue).toBe(1)
+    const q = queryOne<{ quality_rating: string }>(
+      'SELECT quality_rating FROM knowledge_captures WHERE id = ?',
+      ['cap-hallucinated']
+    )
+    expect(q?.quality_rating).toBe('low-value')
+  })
+
+  it('leaves a rating the user cleared back to unrated alone', () => {
+    // Clearing a rating is a decision, not an absence of one: quality_source
+    // stays 'user' and this classifier must not re-mark the row (2026-09-22).
+    seedRecording('cleared', { duration: 6 })
+    seedCapture('cap-cleared', 'cleared')
+    run(
+      "UPDATE knowledge_captures SET quality_rating = 'unrated', quality_source = 'user' WHERE id = ?",
+      ['cap-cleared']
+    )
+
+    expect(classifyLowValueCaptures().markedLowValue).toBe(0)
+    const q = queryOne<{ quality_rating: string; quality_source: string | null }>(
+      'SELECT quality_rating, quality_source FROM knowledge_captures WHERE id = ?',
+      ['cap-cleared']
+    )
+    expect(q?.quality_rating).toBe('unrated')
+    expect(q?.quality_source).toBe('user')
   })
 
   it('never overrides a user/AI-set rating and is idempotent', () => {

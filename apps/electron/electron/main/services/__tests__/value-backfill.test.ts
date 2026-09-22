@@ -115,13 +115,20 @@ function wipeData(): void {
   })
 }
 
-function seedRecording(id: string, opts: { personal?: boolean } = {}): void {
+function seedRecording(id: string, opts: { personal?: boolean; durationSeconds?: number | null } = {}): void {
   run(
     `INSERT INTO recordings
        (id, filename, file_path, date_recorded, status, location,
-        transcription_status, on_device, on_local, source, is_imported, personal)
-     VALUES (?, ?, ?, ?, 'none', 'local-only', 'none', 0, 1, 'hidock', 0, ?)`,
-    [id, `${id}.wav`, `/tmp/${id}.wav`, '2026-01-01T10:00:00.000Z', opts.personal ? 1 : 0]
+        transcription_status, on_device, on_local, source, is_imported, personal, duration_seconds)
+     VALUES (?, ?, ?, ?, 'none', 'local-only', 'none', 0, 1, 'hidock', 0, ?, ?)`,
+    [
+      id,
+      `${id}.wav`,
+      `/tmp/${id}.wav`,
+      '2026-01-01T10:00:00.000Z',
+      opts.personal ? 1 : 0,
+      opts.durationSeconds ?? null
+    ]
   )
 }
 
@@ -358,6 +365,32 @@ describe('value-backfill', () => {
       seedRecording(recId)
       seedCapture('cap-notranscript', recId)
       // no seedTranscript() call
+
+      const result = await startValueBackfill()
+
+      expect(result.total).toBe(0)
+      expect(classifyCaptureValueRawMock).not.toHaveBeenCalled()
+    })
+
+    it('DOES select a short capture with no transcript — the duration gate can decide it', async () => {
+      // 2026-09-22: a recording under 30 seconds is judged by duration alone,
+      // so it belongs in scope even with nothing to read. classifyCaptureValueRaw
+      // serves it without a provider call.
+      const recId = 'rec-short-notranscript'
+      seedRecording(recId, { durationSeconds: 8 })
+      seedCapture('cap-short-notranscript', recId)
+
+      const result = await startValueBackfill()
+
+      expect(result.total).toBe(1)
+      expect(classifyCaptureValueRawMock).toHaveBeenCalledTimes(1)
+      expect(getBackfillStateRow('cap-short-notranscript')?.status).toBe('classified')
+    })
+
+    it('still skips a LONG capture with no transcript', async () => {
+      const recId = 'rec-long-notranscript'
+      seedRecording(recId, { durationSeconds: 1800 })
+      seedCapture('cap-long-notranscript', recId)
 
       const result = await startValueBackfill()
 
