@@ -22,9 +22,22 @@
  * else (repo-relative fixtures, ':memory:', anonymous DBs) is closed but
  * never touched on disk.
  */
-import { existsSync, readdirSync, rmSync } from 'fs'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'os'
 import { basename, dirname, join, resolve, sep } from 'path'
+
+// The sweep runs in every DB-backed test file's afterAll, including files that
+// call vi.mock('fs') for their own reasons. A plain `import ... from 'fs'`
+// resolves through the same module graph as the test, so those mocks would
+// reach in here and break teardown with "No readdirSync export is defined on
+// the fs mock". A CJS require of the builtin bypasses the mock registry, so
+// cleanup always talks to the real filesystem. Tests that want to drive the
+// sweep's failure paths still swap the functions on tempDbFileOps.
+const realFs = createRequire(import.meta.url)('node:fs') as {
+  existsSync: (path: string) => boolean
+  readdirSync: (path: string) => string[]
+  rmSync: (path: string, options?: { force?: boolean }) => void
+}
 
 interface SqliteHandle {
   readonly open: boolean
@@ -50,9 +63,9 @@ const tracked: TrackedDb[] = (globalStore[GLOBAL_KEY] ??= [])
 const DB_FILE_SUFFIXES = ['', '-wal', '-shm', '-journal']
 
 export const tempDbFileOps = {
-  existsSync,
-  readdirSync,
-  rmSync,
+  existsSync: realFs.existsSync,
+  readdirSync: realFs.readdirSync,
+  rmSync: realFs.rmSync,
 }
 
 function cleanupError(operation: string, path: string, error: unknown): Error {
@@ -151,6 +164,10 @@ export function sweepTempDbs(): { closed: number; deleted: number } {
     try {
       names = tempDbFileOps.readdirSync(dir)
     } catch (error) {
+      // A temp dir the test already removed holds no backups to delete, which
+      // is the outcome the sweep wants. Only a directory that is still there
+      // and unreadable is a failure worth surfacing.
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') continue
       for (const file of dbFiles) deleteFailed.add(file)
       errors.push(cleanupError('read directory failed for', dir, error))
       continue

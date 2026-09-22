@@ -17,7 +17,7 @@
 
 import { describe, it, expect, vi } from 'vitest'
 import Database from 'better-sqlite3'
-import { existsSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { sweepTempDbs, tempDbFileOps, trackDatabases } from '../../../../src/test/temp-db-tracker'
@@ -142,6 +142,51 @@ describe('temp-db-tracker (via the setup-db better-sqlite3 shim)', () => {
     fresh.sweepTempDbs()
 
     expect(db.open).toBe(false)
+    expect(existsSync(p)).toBe(false)
+  })
+
+  it('treats a temp directory the test already removed as nothing left to clean', () => {
+    // Several suites mint their DB inside their own temp directory and delete
+    // that directory themselves. The backup scan then reads a directory that
+    // is gone, which is the outcome the sweep wants, not a failure.
+    const p = tempDbPath('vanished-dir')
+    const db = new Database(p)
+    db.exec('CREATE TABLE t (x)')
+    db.close()
+    rmSync(p, { force: true })
+
+    const originalReaddirSync = tempDbFileOps.readdirSync
+    tempDbFileOps.readdirSync = ((dir: string) => {
+      const error = new Error(`ENOENT: no such file or directory, scandir '${dir}'`) as NodeJS.ErrnoException
+      error.code = 'ENOENT'
+      throw error
+    }) as typeof readdirSync
+
+    try {
+      expect(() => sweepTempDbs()).not.toThrow()
+    } finally {
+      tempDbFileOps.readdirSync = originalReaddirSync
+    }
+  })
+
+  it('still fails loudly when the directory is there but unreadable', () => {
+    const p = tempDbPath('unreadable-dir')
+    const db = new Database(p)
+    db.exec('CREATE TABLE t (x)')
+
+    const originalReaddirSync = tempDbFileOps.readdirSync
+    tempDbFileOps.readdirSync = ((dir: string) => {
+      const error = new Error(`EACCES: permission denied, scandir '${dir}'`) as NodeJS.ErrnoException
+      error.code = 'EACCES'
+      throw error
+    }) as typeof readdirSync
+
+    try {
+      expect(() => sweepTempDbs()).toThrow('read directory failed')
+    } finally {
+      tempDbFileOps.readdirSync = originalReaddirSync
+    }
+    expect(() => sweepTempDbs()).not.toThrow()
     expect(existsSync(p)).toBe(false)
   })
 
