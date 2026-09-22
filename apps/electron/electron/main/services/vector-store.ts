@@ -1207,6 +1207,45 @@ class VectorStore {
     return this.hydrateContent(docs)
   }
 
+  /**
+   * Score ONE meeting's chunks against a query and return the best `topK`.
+   *
+   * This lived in rag.ts as a hand-rolled cosine loop over `doc.embedding`,
+   * a second implementation of {@link cosineSimilarity} that happened to agree
+   * with this one. Scoring belongs next to the vectors: it is the only reason
+   * anything outside this file needed to read a raw embedding, and once the
+   * vectors move to their own process a caller could not read them anyway.
+   *
+   * Matches the old rag.ts behaviour exactly, including its fallbacks: a
+   * missing query embedding, or a chunk whose dimension disagrees with it,
+   * scores 0.5 so the meeting's chunks are still returned in a sensible order
+   * rather than disappearing from a meeting-scoped chat.
+   */
+  async searchWithinMeeting(
+    meetingId: string,
+    query: string,
+    topK = 5
+  ): Promise<SearchResult[]> {
+    const docs = await this.searchByMeeting(meetingId)
+    const queryEmbedding = await getEmbeddingsService().generateEmbedding(query, {
+      purpose: 'query'
+    })
+
+    if (!queryEmbedding) {
+      return docs.slice(0, topK).map((document) => ({ document, score: 0.5 }))
+    }
+
+    const scored = docs.map((document) => ({
+      document,
+      score:
+        document.embedding.length === queryEmbedding.length
+          ? cosineSimilarity(queryEmbedding, document.embedding)
+          : 0.5
+    }))
+    scored.sort((a, b) => b.score - a.score)
+    return scored.slice(0, topK)
+  }
+
   async deleteByRecording(recordingId: string): Promise<number> {
     const deleted = this.dropByRecordingFromMemory(recordingId)
     const db = getDatabase()

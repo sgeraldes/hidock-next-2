@@ -838,31 +838,11 @@ class RAGService {
     //   partitions hold chunks (provider just switched, reindex not done).
     let retrievalIssue: 'provider-failure' | 'reindex-pending' | null = null
     if (context.meetingId) {
-      // Search within specific meeting
-      const docs = await vectorStore.searchByMeeting(context.meetingId)
-      const queryEmbedding = await getEmbeddingsService().generateEmbedding(message, { purpose: 'query' })
-      if (queryEmbedding) {
-        // Re-rank by actual query relevance using cosine similarity
-        searchResults = docs.map((doc) => {
-          let score = 0.5 // Default if embedding comparison fails
-          if (doc.embedding && doc.embedding.length === queryEmbedding.length) {
-            let dotProduct = 0, normA = 0, normB = 0
-            for (let i = 0; i < queryEmbedding.length; i++) {
-              dotProduct += queryEmbedding[i] * doc.embedding[i]
-              normA += queryEmbedding[i] * queryEmbedding[i]
-              normB += doc.embedding[i] * doc.embedding[i]
-            }
-            const denominator = Math.sqrt(normA) * Math.sqrt(normB)
-            score = denominator === 0 ? 0 : dotProduct / denominator
-          }
-          return { document: doc, score }
-        })
-        // Sort by actual relevance
-        searchResults.sort((a, b) => b.score - a.score)
-      } else {
-        searchResults = docs.map((doc) => ({ document: doc, score: 0.5 }))
-      }
-      searchResults = searchResults.slice(0, 5)
+      // Search within specific meeting. The re-rank used to be a cosine loop
+      // written out here over doc.embedding — a second copy of the store's own
+      // cosineSimilarity. Scoring now happens next to the vectors, which is
+      // what lets them live outside this process.
+      searchResults = await vectorStore.searchWithinMeeting(context.meetingId, message, 5)
     } else {
       // Global search — over-fetch 3x so the per-recording diversity cap can
       // drop near-duplicate chunks from one dominant meeting without starving
@@ -1382,7 +1362,7 @@ ${transcript.substring(0, 8000)}` // Limit context size
   async findActionItems(meetingId?: string): Promise<string | null> {
     const vectorStore = getVectorStore()
 
-    let docs
+    let docs: Awaited<ReturnType<typeof vectorStore.searchByMeeting>>
     if (meetingId) {
       docs = await vectorStore.searchByMeeting(meetingId)
     } else {
