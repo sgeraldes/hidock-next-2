@@ -1984,6 +1984,15 @@ export function Library() {
 
   // Opening and bulk selection are separate modes. A plain click opens the
   // reader and clears bulk selection; modifiers deliberately build selection.
+
+  // An in-place rename writes through SourceRow; the list only has to reflect
+  // it. Patching the row beats refetching the library for one string.
+  const handleRenamed = useCallback((id: string, userTitle: string | undefined) => {
+    const appState = useAppStore.getState()
+    appState.setUnifiedRecordings(
+      appState.unifiedRecordings.map((r) => (r.id === id ? { ...r, userTitle } : r))
+    )
+  }, [])
   const handleRowClick = useCallback((recording: UnifiedRecording) => {
     clearSelection()
     setSelectedSourceId(recording.id)
@@ -2580,6 +2589,7 @@ export function Library() {
                           // ranges) plus the Trash-only menu actions (§D1):
                           // Restore + Delete permanently.
                           <SourceRow
+                            onRenamed={handleRenamed}
                             recording={recording}
                             meeting={meeting}
                             transcript={transcripts.get(recording.id)}
@@ -2603,6 +2613,7 @@ export function Library() {
                           />
                         ) : (
                           <SourceRow
+                            onRenamed={handleRenamed}
                             recording={recording}
                             meeting={meeting}
                             transcript={transcripts.get(recording.id)}

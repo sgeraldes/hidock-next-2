@@ -13,6 +13,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import { Library } from '../Library'
 
+/**
+ * Rows are located by the text the row actually shows. Until 2026-09-22 that
+ * was always the filename; now an unassigned source shows its title when it has
+ * one, and the filename moves to the second line's tooltip. The fixtures are
+ * unchanged — only the locators follow the row.
+ */
+
 afterEach(() => {
   cleanup()
 })
@@ -282,7 +289,7 @@ function mockRecordingState(deviceConnected: boolean, hookRecordings: Array<Reco
 }
 
 async function openPermanentDeleteDialog() {
-  await screen.findByText('synced.wav')
+  await screen.findByText('Synced Recording')
   fireEvent.keyDown(screen.getByLabelText(/^more actions$/i), { key: 'Enter' })
   fireEvent.click(await screen.findByRole('menuitem', { name: /delete permanently/i }))
   await screen.findByRole('heading', { name: /delete permanently/i })
@@ -305,6 +312,11 @@ describe('bulk permanent deletion — durable device erase', () => {
       id: 'device-raw-1',
       filename: 'raw-device-only.hda',
       deviceFilename: 'raw-device-only.hda',
+      // A device-only recording that was never transcribed has no capture and
+      // therefore no suggested title, so its row is titled by its filename.
+      // Without this it would inherit syncedRecording's title via the spread.
+      title: undefined,
+      userTitle: undefined,
       location: 'device-only' as const,
       localPath: undefined,
       syncStatus: 'not-synced' as const,
@@ -338,7 +350,7 @@ describe('bulk permanent deletion — durable device erase', () => {
     selectionHarness.selectedIds = new Set(['synced-1'])
 
     renderLibrary()
-    await screen.findByText('synced.wav')
+    await screen.findByText('Synced Recording')
     fireEvent.click(screen.getByRole('button', { name: /^delete permanently$/i }))
     await screen.findByText(/1 copy also exists on the device/i)
     fireEvent.click(screen.getByRole('button', { name: /^delete permanently$/i }))
@@ -350,7 +362,7 @@ describe('bulk permanent deletion — durable device erase', () => {
     const rebuildOrder = mockRefreshLocal.mock.invocationCallOrder[0]
     expect(cacheOrder).toBeLessThan(reconcileOrder)
     expect(reconcileOrder).toBeLessThan(rebuildOrder)
-    await waitFor(() => expect(screen.queryByText('synced.wav')).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByText('Synced Recording')).not.toBeInTheDocument())
   })
 
   it('journals a selected local recording device copy when the immediate erase cannot run', async () => {
@@ -360,7 +372,7 @@ describe('bulk permanent deletion — durable device erase', () => {
     }) as any
 
     renderLibrary()
-    await screen.findByText('synced.wav')
+    await screen.findByText('Synced Recording')
     fireEvent.click(screen.getByRole('button', { name: /^delete permanently$/i }))
     await screen.findByText(/1 copy also exists on the device/i)
     fireEvent.click(screen.getByRole('button', { name: /^delete permanently$/i }))
@@ -462,7 +474,7 @@ describe('executeDeletePermanent — device checkbox (D3/AR3-6)', () => {
     renderLibrary()
 
     await waitFor(() => expect(api.downloadService.getPurgedFilenames).toHaveBeenCalled())
-    await waitFor(() => expect(screen.queryByText('synced.wav')).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByText('Synced Recording')).not.toBeInTheDocument())
     expect(screen.getByText(/no knowledge captured yet/i)).toBeInTheDocument()
   })
 

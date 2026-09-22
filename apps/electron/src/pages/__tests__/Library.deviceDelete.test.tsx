@@ -9,6 +9,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import { Library } from '../Library'
 
+/**
+ * Rows are located by the text the row shows. Since 2026-09-22 an unassigned
+ * source shows its title when it has one; the filename moved to the second
+ * line's tooltip. Fixtures unchanged, locators follow the row.
+ */
+
 afterEach(() => {
   cleanup()
 })
@@ -211,7 +217,7 @@ describe('Synced-row "Delete from device" (spec-005/F17 T5 §D3/AC#2)', () => {
   it('invokes getHiDockDeviceService().deleteRecording, never deleteCascade, and toasts success (AC#8)', async () => {
     deleteRecordingMock.mockResolvedValue(true)
     renderLibrary()
-    await screen.findByText('synced.wav')
+    await screen.findByText('Synced Recording')
 
     fireEvent.keyDown(screen.getByLabelText(/^more actions$/i), { key: 'Enter' })
     fireEvent.click(await screen.findByRole('menuitem', { name: /delete from device/i }))
@@ -229,7 +235,7 @@ describe('Synced-row "Delete from device" (spec-005/F17 T5 §D3/AC#2)', () => {
 
   it('device-delete confirm dialog copy matches §D2 exactly', async () => {
     renderLibrary()
-    await screen.findByText('synced.wav')
+    await screen.findByText('Synced Recording')
     fireEvent.keyDown(screen.getByLabelText(/^more actions$/i), { key: 'Enter' })
     fireEvent.click(await screen.findByRole('menuitem', { name: /delete from device/i }))
 

@@ -197,6 +197,12 @@ export interface AppConfig {
   // resolveFeatureState() in src/shared/feature-registry.ts.
   features: FeaturesConfig
   ui: {
+    /**
+     * Title the library shows for a source with no calendar event.
+     * `suggested` (default) prefers the AI title; `filename` restores the old
+     * behaviour. A title the user typed wins under either one.
+     */
+    unassignedTitleSource?: 'suggested' | 'filename'
     theme: 'light' | 'dark' | 'system'
     defaultView: 'week' | 'month'
     startOfWeek: number
@@ -290,6 +296,7 @@ const DEFAULT_CONFIG: AppConfig = {
   // modular features existed. New installs may later be asked during onboarding.
   features: { ...DEFAULT_FEATURES_CONFIG },
   ui: {
+    unassignedTitleSource: 'suggested',
     theme: 'system',
     defaultView: 'week',
     startOfWeek: 1, // Monday

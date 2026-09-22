@@ -1,4 +1,4 @@
-import { memo, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { AlertCircle, Download, Trash2, Wand2, Sparkles, FileText, RefreshCw, AudioLines, MoreHorizontal, Calendar, EyeOff, Eye, TrendingDown, Ban, RotateCcw, ArchiveRestore } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -15,9 +15,11 @@ import { Meeting, Transcript } from '@/types'
 import type { QualityRating } from '@/types/knowledge'
 import { UnifiedRecording, hasLocalPath, isRecordingBacked } from '@/types/unified-recording'
 import type { DownloadStatus } from '@/store/useAppStore'
+import { toast } from '@/components/ui/toaster'
 import { StatusIcon } from './StatusIcon'
 import { TranscriptionStatusBadge } from './TranscriptionStatusBadge'
 import { useLibraryStore } from '@/store/useLibraryStore'
+import { useConfigStore } from '@/store/domain/useConfigStore'
 import { getDisplayTitle } from '@/features/library/utils/getDisplayTitle'
 import { highlightText } from '@/features/library/utils/highlightText'
 import { getRowMeta } from '@/features/library/utils/rowMeta'
@@ -75,6 +77,20 @@ function ValueBadge({ recording }: { recording: UnifiedRecording }) {
   )
 }
 
+/**
+ * `knowledge:update` reports a failure in its result (it does not throw) and
+ * the shape of `error` differs by handler: a bare string in one, a coded
+ * object in another. Read whichever is there rather than showing "[object
+ * Object]" to the user.
+ */
+function renameErrorMessage(result: unknown): string {
+  const err = (result as { error?: unknown } | null | undefined)?.error
+  if (typeof err === 'string' && err.trim()) return err
+  const message = (err as { message?: unknown } | null | undefined)?.message
+  if (typeof message === 'string' && message.trim()) return message
+  return 'The title was not saved.'
+}
+
 interface SourceRowProps {
   recording: UnifiedRecording
   meeting?: Meeting
@@ -96,6 +112,8 @@ interface SourceRowProps {
       existing callers keep type-checking; no longer drives any UI. */
   anySelected?: boolean
   searchQuery?: string
+  /** Called after an in-place rename commits, so the list can update without a refetch. */
+  onRenamed?: (id: string, userTitle: string | undefined) => void
   /** Row-level checkbox selection was removed; kept for caller compatibility. */
   onSelectionChange?: (id: string, shiftKey: boolean) => void
   onClick?: () => void
@@ -148,20 +166,96 @@ export const SourceRow = memo(function SourceRow({
   isDownloading = false,
   downloadProgress,
   downloadStatus,
-  deviceConnected = false
+  deviceConnected = false,
+  onRenamed
 }: SourceRowProps) {
   const error = useLibraryStore((state) => state.recordingErrors.get(recording.id))
   const [actionMenuOpen, setActionMenuOpen] = useState(false)
   const [contextMenuAnchor, setContextMenuAnchor] = useState<{ x: number; y: number } | null>(null)
 
-  // Smart title
-  const { primaryText, source: titleSource } = getDisplayTitle(recording, meeting, transcript)
+  // Smart title. The preference decides whether an unassigned source shows its
+  // AI-suggested title or its filename; a title the user typed wins either way.
+  const unassignedTitleSource = useConfigStore(
+    (state) => state.config?.ui?.unassignedTitleSource ?? 'suggested'
+  )
+  const { primaryText, source: titleSource } = getDisplayTitle(
+    recording,
+    meeting,
+    transcript,
+    unassignedTitleSource
+  )
   // The machine filename is noise in the prime space — it lives in the row's
   // hover tooltip and the expanded row, never on the always-visible second line.
   const titleIsFilename = titleSource === 'filename'
 
+  // Rename in place. The reader has had this for a while; the list did not, so
+  // renaming meant opening a source just to retitle it. Same IPC, no new
+  // backend. Without a capture there is nowhere to store the title, so the
+  // affordance is withheld rather than failing on save.
+  const canRename = Boolean(recording.knowledgeCaptureId)
+  const [renaming, setRenaming] = useState(false)
+  const [draftTitle, setDraftTitle] = useState('')
+  const [savingRename, setSavingRename] = useState(false)
+  /** Blur and Enter can both land while a save is in flight; one write only. */
+  const savingRef = useRef(false)
+  /** A plain click opens the reader; a double click renames. Hold the open for
+   *  one double-click interval so renaming does not also open the source. */
+  const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const cancelPendingOpen = () => {
+    if (openTimer.current) {
+      clearTimeout(openTimer.current)
+      openTimer.current = null
+    }
+  }
+  useEffect(() => cancelPendingOpen, [])
+
+  const commitRename = async () => {
+    if (savingRef.current) return
+    const trimmed = draftTitle.trim()
+    const currentUserTitle = recording.userTitle?.trim() ?? ''
+    if (trimmed === currentUserTitle) {
+      setRenaming(false)
+      return
+    }
+    // Opening the editor and committing it untouched must NOT turn the AI's
+    // guess into a title the user never wrote: a stray double click plus a
+    // click elsewhere would otherwise stamp `user_title`, which outranks the
+    // `filename` preference and survives any later re-analysis.
+    if (!currentUserTitle && trimmed === primaryText.trim()) {
+      setRenaming(false)
+      return
+    }
+    savingRef.current = true
+    setSavingRename(true)
+    try {
+      // Empty clears the user title and falls back to the suggestion.
+      const result = await window.electronAPI.knowledge.update(recording.knowledgeCaptureId!, {
+        userTitle: trimmed || null,
+      })
+      // knowledge:update REPORTS failure, it does not throw. Trusting the
+      // absence of an exception showed a rename that was never written and
+      // vanished on the next refresh.
+      if (!result?.success) {
+        toast.error('Could not rename', renameErrorMessage(result))
+        return
+      }
+      setRenaming(false)
+      onRenamed?.(recording.id, trimmed || undefined)
+    } catch (e) {
+      console.error('[SourceRow] rename failed:', e)
+      toast.error('Could not rename', e instanceof Error ? e.message : 'The title was not saved.')
+    } finally {
+      savingRef.current = false
+      setSavingRename(false)
+    }
+  }
+
   const handleRowClick = (e: React.MouseEvent) => {
     if (isDeleting) return
+    // The second click of a double click must not re-run this: it opened the
+    // source once already, and with a modifier held it would toggle the
+    // selection twice and cancel itself out.
+    if (e.detail > 1) return
     // Don't trigger onClick when the click lands on an action button.
     const target = e.target as HTMLElement
     if (target.closest('button')) {
@@ -235,9 +329,62 @@ export const SourceRow = memo(function SourceRow({
               right cluster so the title starts flush-left with no wasted gutter. */}
           <div className="flex-1 min-w-0">
             <div className="flex items-start gap-1.5 min-w-0">
-              <p className={`font-medium text-sm ${compact ? 'truncate' : 'line-clamp-2'} text-foreground leading-tight min-w-0`} title={primaryText}>
-                {searchQuery ? highlightText(primaryText, searchQuery) : primaryText}
-              </p>
+              {renaming ? (
+                <input
+                  autoFocus
+                  aria-label="Rename source"
+                  // `title` is a VARCHAR the whole app renders in one line; a
+                  // pasted document does not belong in it.
+                  maxLength={200}
+                  disabled={savingRename}
+                  className="min-w-0 flex-1 rounded border border-input bg-background px-1 py-0.5 text-sm font-medium leading-tight"
+                  value={draftTitle}
+                  onChange={(e) => setDraftTitle(e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                  onBlur={() => void commitRename()}
+                  onKeyDown={(e) => {
+                    e.stopPropagation()
+                    if (e.key === 'Enter') void commitRename()
+                    if (e.key === 'Escape') setRenaming(false)
+                  }}
+                />
+              ) : (
+                <p
+                  className={`font-medium text-sm ${compact ? 'truncate' : 'line-clamp-2'} text-foreground leading-tight min-w-0`}
+                  title={
+                    canRename
+                      ? `${primaryText} — double-click to rename`
+                      : `${primaryText} — this source has no knowledge capture yet, so there is nowhere to store a title. Transcribe it first.`
+                  }
+                  onClick={(e) => {
+                    // A plain click on the title opens the source and a double
+                    // click renames it, so the open waits out the double-click
+                    // window. Without this the rename ALSO opened the reader
+                    // and wiped any bulk selection — the exact trip to the
+                    // reader this feature exists to avoid. Modifier clicks
+                    // (select / range-select) bubble through untouched.
+                    if (!canRename || isDeleting || e.ctrlKey || e.metaKey || e.shiftKey) return
+                    if (!onClick) return
+                    e.stopPropagation()
+                    if (e.detail > 1) return
+                    cancelPendingOpen()
+                    openTimer.current = setTimeout(() => {
+                      openTimer.current = null
+                      onClick()
+                    }, 250)
+                  }}
+                  onDoubleClick={(e) => {
+                    if (!canRename) return
+                    e.stopPropagation()
+                    cancelPendingOpen()
+                    setDraftTitle(recording.userTitle?.trim() || primaryText)
+                    setRenaming(true)
+                  }}
+                >
+                  {searchQuery ? highlightText(primaryText, searchQuery) : primaryText}
+                </p>
+              )}
               {/* Personal ("ignored") badge — this recording is kept but pulled out of
                   all AI processing and default surfaces (v38). */}
               {recording.personal && (
