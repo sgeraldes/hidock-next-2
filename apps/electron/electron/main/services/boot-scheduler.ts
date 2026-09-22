@@ -227,6 +227,9 @@ export function startBootScheduler(options: BootSchedulerOptions = {}): Promise<
 
       const elapsedMs = Date.now() - startedAt
       timings.push({ name: task.name, startedAt, elapsedMs, ok, ...(error ? { error } : {}) })
+      if (process.env.HIDOCK_BENCH_OUTPUT) {
+        console.info('[BootTiming] ' + JSON.stringify({ name: task.name, elapsedMs, ok }))
+      }
 
       if (ok) {
         log(`"${task.name}" done in ${elapsedMs}ms`)
