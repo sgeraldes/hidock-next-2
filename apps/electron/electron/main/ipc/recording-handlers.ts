@@ -857,10 +857,10 @@ export function registerRecordingHandlers(): void {
     }
   })
 
-  // One-time idempotent backfill of duration_seconds for rows the download/import
-  // paths stored as NULL. Uses device-cache + transcript timing already in the DB
-  // so the Library can sort/filter by length offline. Called on Library mount.
-  ipcMain.handle('recordings:backfillDurations', async (): Promise<{ success: boolean; scanned?: number; updated?: number; markedLowValue?: number; markedByDuration?: number; error?: string }> => {
+  // Bring duration_seconds in line with the audio on disk, then rate what the
+  // corrected lengths now allow. Measures each file once (see audio-duration.ts)
+  // and remembers it, so this stays cheap on every Library mount.
+  ipcMain.handle('recordings:backfillDurations', async (): Promise<{ success: boolean; scanned?: number; updated?: number; measured?: number; truncated?: number; rerateable?: number; markedLowValue?: number; markedByDuration?: number; error?: string }> => {
     try {
       const result = backfillRecordingDurations()
       // Classify AFTER the duration backfill so both classifiers can use the

@@ -1,0 +1,136 @@
+/**
+ * readAudioDuration — the length of a recording, read from its own bytes.
+ *
+ * The fixtures here are built rather than checked in: an MPEG frame header is
+ * four bytes of bitfields, and writing them out in the test is what makes the
+ * expected duration checkable by hand. Every case matches a real shape in the
+ * owner's library, including the one that motivated the module — a RIFF
+ * container whose `fmt ` chunk declares PCM over an MPEG payload.
+ *
+ * @vitest-environment node
+ */
+import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { readAudioDuration } from '../audio-duration'
+
+let dir: string
+
+beforeAll(() => {
+  dir = mkdtempSync(join(tmpdir(), 'hidock-audio-duration-'))
+})
+
+afterAll(() => {
+  rmSync(dir, { recursive: true, force: true })
+})
+
+/**
+ * One MPEG-2 Layer III frame header at 64 kbps / 16 kHz — the device's format.
+ * 0xFF 0xF3: sync, version 2, layer III, no CRC. 0x88: bitrate index 8 (64
+ * kbps), rate index 2 (16 kHz), no padding. 0xC4: channel mode and flags,
+ * which the duration does not read.
+ */
+const FRAME_64K_16K = Buffer.from([0xff, 0xf3, 0x88, 0xc4])
+
+/** Frame length for that shape: 72 * 64000 / 16000 = 288 bytes. */
+const FRAME_64K_16K_BYTES = 288
+
+/** `frames` back-to-back frames, each with its header and silent payload. */
+function mpegStream(frames: number): Buffer {
+  const out = Buffer.alloc(frames * FRAME_64K_16K_BYTES)
+  for (let i = 0; i < frames; i++) FRAME_64K_16K.copy(out, i * FRAME_64K_16K_BYTES)
+  return out
+}
+
+/** A RIFF/WAVE wrapper whose `fmt ` chunk describes 16-bit mono PCM at 16 kHz. */
+function riffWrap(payload: Buffer): Buffer {
+  const header = Buffer.alloc(44)
+  header.write('RIFF', 0, 'latin1')
+  header.writeUInt32LE(36 + payload.length, 4)
+  header.write('WAVE', 8, 'latin1')
+  header.write('fmt ', 12, 'latin1')
+  header.writeUInt32LE(16, 16) // chunk size
+  header.writeUInt16LE(1, 20) // format tag: PCM
+  header.writeUInt16LE(1, 22) // channels
+  header.writeUInt32LE(16000, 24) // sample rate
+  header.writeUInt32LE(32000, 28) // byte rate
+  header.writeUInt16LE(2, 32) // block align
+  header.writeUInt16LE(16, 34) // bits per sample
+  header.write('data', 36, 'latin1')
+  header.writeUInt32LE(payload.length, 40)
+  return Buffer.concat([header, payload])
+}
+
+function write(name: string, data: Buffer): string {
+  const path = join(dir, name)
+  writeFileSync(path, data)
+  return path
+}
+
+describe('readAudioDuration', () => {
+  it('measures a bare MPEG stream from its bitrate', () => {
+    // 1000 frames * 288 bytes = 288,000 bytes at 8,000 bytes per second.
+    const path = write('bare.mp3', mpegStream(1000))
+    const result = readAudioDuration(path)
+    expect(result?.seconds).toBeCloseTo(36, 3)
+    expect(result?.how).toBe('mpeg 64kbps/16000Hz')
+  })
+
+  it('measures the MPEG payload inside a container that claims PCM', () => {
+    // This is the shape that made the whole library read a quarter short: the
+    // same 288,000 bytes are 36 s of MPEG and would be 9 s of the declared PCM.
+    const path = write('lying.wav', riffWrap(mpegStream(1000)))
+    const result = readAudioDuration(path)
+    expect(result?.seconds).toBeCloseTo(36, 3)
+    expect(result?.how).toBe('mpeg 64kbps/16000Hz')
+  })
+
+  it('believes a container that is telling the truth', () => {
+    // 32,000 bytes of real PCM at 32,000 bytes per second is one second.
+    const path = write('honest.wav', riffWrap(Buffer.alloc(32000)))
+    const result = readAudioDuration(path)
+    expect(result?.seconds).toBeCloseTo(1, 6)
+    expect(result?.how).toBe('pcm 16000Hz/1ch')
+  })
+
+  it('skips an ID3 tag before looking for the first frame', () => {
+    const tag = Buffer.alloc(2058) // 10-byte header + 2048 bytes of tag
+    tag.write('ID3', 0, 'latin1')
+    tag[3] = 3
+    tag[9] = 2048 & 0x7f
+    tag[8] = (2048 >> 7) & 0x7f
+    const path = write('tagged.mp3', Buffer.concat([tag, mpegStream(500)]))
+    const result = readAudioDuration(path)
+    expect(result?.seconds).toBeCloseTo(18, 3)
+  })
+
+  it('takes the payload size from the file when the container leaves it blank', () => {
+    const wrapped = riffWrap(mpegStream(1000))
+    wrapped.writeUInt32LE(0, 40) // a streaming writer that never went back
+    const path = write('unfinished.wav', wrapped)
+    expect(readAudioDuration(path)?.seconds).toBeCloseTo(36, 3)
+  })
+
+  it('does not lock onto a lone 0xFF byte that looks like a sync', () => {
+    // One plausible header with nothing behind it must not set the bitrate for
+    // a whole file of silence.
+    const noise = Buffer.alloc(32000)
+    FRAME_64K_16K.copy(noise, 100)
+    const path = write('false-sync.wav', riffWrap(noise))
+    const result = readAudioDuration(path)
+    expect(result?.how).toBe('pcm 16000Hz/1ch')
+  })
+
+  it('returns null for a file it cannot read', () => {
+    expect(readAudioDuration(join(dir, 'does-not-exist.wav'))).toBeNull()
+    expect(readAudioDuration(write('empty.wav', Buffer.alloc(0)))).toBeNull()
+    expect(readAudioDuration(write('garbage.flac', Buffer.from('fLaC-but-not-really')))).toBeNull()
+  })
+
+  it('returns null for a directory', () => {
+    const sub = join(dir, 'a-directory.wav')
+    mkdirSync(sub, { recursive: true })
+    expect(readAudioDuration(sub)).toBeNull()
+  })
+})
