@@ -1161,10 +1161,10 @@ export interface ElectronAPI {
     getRealtimeData: (offset: number) => Promise<any>
     onLiveTranscriptionStatus: (callback: (data: { status: string; channel?: 0 | 1 }) => void) => () => void
     onLiveTranscriptionInterim: (
-      callback: (data: { text: string; speaker: 'you' | 'them' | 'speaker-1' | 'speaker-2' | 'speaker' }) => void
+      callback: (data: { text: string; speaker: 'you' | 'them' | 'speaker-1' | 'speaker-2' | 'speaker'; channel?: 0 | 1 | null }) => void
     ) => () => void
     onLiveTranscriptionFinal: (
-      callback: (data: { text: string; speaker: 'you' | 'them' | 'speaker-1' | 'speaker-2' | 'speaker' }) => void
+      callback: (data: { text: string; speaker: 'you' | 'them' | 'speaker-1' | 'speaker-2' | 'speaker'; channel?: 0 | 1 | null }) => void
     ) => () => void
     onLiveTranscriptionError: (callback: (data: { error: string; channel?: 0 | 1 }) => void) => () => void
     /**
@@ -1924,17 +1924,17 @@ const electronAPI: ElectronAPI = {
       return () => ipcRenderer.removeListener('transcription-live:status', handler)
     },
     onLiveTranscriptionInterim: (
-      callback: (data: { text: string; speaker: 'you' | 'them' | 'speaker-1' | 'speaker-2' | 'speaker' }) => void
+      callback: (data: { text: string; speaker: 'you' | 'them' | 'speaker-1' | 'speaker-2' | 'speaker'; channel?: 0 | 1 | null }) => void
     ) => {
-      const handler = (_event: any, data: { text: string; speaker: 'you' | 'them' | 'speaker-1' | 'speaker-2' | 'speaker' }) =>
+      const handler = (_event: any, data: { text: string; speaker: 'you' | 'them' | 'speaker-1' | 'speaker-2' | 'speaker'; channel?: 0 | 1 | null }) =>
         callback(data)
       ipcRenderer.on('transcription-live:interim', handler)
       return () => ipcRenderer.removeListener('transcription-live:interim', handler)
     },
     onLiveTranscriptionFinal: (
-      callback: (data: { text: string; speaker: 'you' | 'them' | 'speaker-1' | 'speaker-2' | 'speaker' }) => void
+      callback: (data: { text: string; speaker: 'you' | 'them' | 'speaker-1' | 'speaker-2' | 'speaker'; channel?: 0 | 1 | null }) => void
     ) => {
-      const handler = (_event: any, data: { text: string; speaker: 'you' | 'them' | 'speaker-1' | 'speaker-2' | 'speaker' }) =>
+      const handler = (_event: any, data: { text: string; speaker: 'you' | 'them' | 'speaker-1' | 'speaker-2' | 'speaker'; channel?: 0 | 1 | null }) =>
         callback(data)
       ipcRenderer.on('transcription-live:final', handler)
       return () => ipcRenderer.removeListener('transcription-live:final', handler)
