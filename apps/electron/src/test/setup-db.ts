@@ -40,13 +40,11 @@ vi.mock('better-sqlite3', async () => {
   return { default: trackDatabases(Database) }
 })
 
-// Temp-DB hygiene: this setup module is evaluated once per test FILE, so this
-// afterAll runs after each file's own hooks finish. The one-macrotask defer
-// keeps the sweep after a file's own synchronous afterAll cleanup regardless
-// of vitest's hook ordering, so suites that close/delete their DB themselves
-// always get to run first.
+// Temp-DB hygiene: this setup module is evaluated once per test FILE. The
+// tracker owns all handles, so it can close them before deleting their files
+// without waiting for an event-loop turn. That keeps cleanup deterministic
+// when a busy runner delays, or a suite replaces, setImmediate.
 afterAll(async () => {
-  await new Promise((tick) => setImmediate(tick))
   const { sweepTempDbs } = await import('./temp-db-tracker')
   sweepTempDbs()
 })
