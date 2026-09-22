@@ -63,16 +63,6 @@ export function useNotes() {
     void refresh()
   }, [refresh])
 
-  const select = useCallback((note: Note | null) => {
-    setSelectedId(note?.id ?? null)
-    selectedIdRef.current = note?.id ?? null
-    setDraft(note?.content ?? '')
-    draftRef.current = note?.content ?? ''
-    lastSaved.current = note?.content ?? ''
-    setRelated([])
-    setSuggestions([])
-  }, [])
-
   /** Write the draft now. Called by the debounce, on switching note, and on unmount. */
   const flush = useCallback(async (id: string, content: string) => {
     if (content === lastSaved.current) return
@@ -89,6 +79,35 @@ export function useNotes() {
       setSaving(false)
     }
   }, [])
+
+  /**
+   * Open a note, after putting the one that was open on disk.
+   *
+   * Switching used to leave the outgoing note's debounce pending and its draft
+   * behind. One keystroke in the new note then cleared that pending timer —
+   * `edit` clears whichever timer is current, not whichever note it belongs to
+   * — and the old note's sentence was gone, with the unmount flush now holding
+   * the NEW note's text and unable to recover it. So the switch flushes and
+   * clears, and nothing crosses from one note to the other.
+   */
+  const select = useCallback(
+    (note: Note | null) => {
+      if (saveTimer.current) clearTimeout(saveTimer.current)
+      if (analyzeTimer.current) clearTimeout(analyzeTimer.current)
+      const leaving = selectedIdRef.current
+      const leavingDraft = draftRef.current
+      if (leaving && leaving !== note?.id) void flush(leaving, leavingDraft)
+
+      setSelectedId(note?.id ?? null)
+      selectedIdRef.current = note?.id ?? null
+      setDraft(note?.content ?? '')
+      draftRef.current = note?.content ?? ''
+      lastSaved.current = note?.content ?? ''
+      setRelated([])
+      setSuggestions([])
+    },
+    [flush]
+  )
 
   const edit = useCallback(
     (content: string) => {
@@ -125,14 +144,16 @@ export function useNotes() {
 
   const create = useCallback(
     async (options: { live?: boolean } = {}) => {
-      if (selectedId) await flush(selectedId, draft)
+      // select() below writes the outgoing draft; this awaits it first so the
+      // write is on disk before the list is rebuilt around the new note.
+      if (selectedIdRef.current) await flush(selectedIdRef.current, draftRef.current)
       const result = await window.electronAPI.notes.create({ live: options.live })
       if (!result.success || !result.note) return null
       setNotes((current) => [result.note!, ...current])
       select(result.note)
       return result.note
     },
-    [selectedId, draft, flush, select]
+    [flush, select]
   )
 
   const remove = useCallback(

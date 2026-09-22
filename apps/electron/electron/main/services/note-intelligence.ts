@@ -129,7 +129,33 @@ export async function analyzeNote(
  * means a failed index leaves the previous version findable, which is the older
  * text of a note that still exists — worse than fresh, much better than gone.
  */
-export async function indexNote(noteId: string): Promise<boolean> {
+/**
+ * One index run per note at a time.
+ *
+ * `notes:update` fires this without awaiting it, so two saves close together
+ * overlap. Both read the note's existing rows, both embed, and both insert a
+ * row whose id ends in Date.now(): two vectors survive for one note and a
+ * search can quote whichever landed last, which is not necessarily the newer
+ * text. Serialising per note makes the second run see the first one's row.
+ */
+const indexingInFlight = new Map<string, Promise<boolean>>()
+
+export function indexNote(noteId: string): Promise<boolean> {
+  const running = indexingInFlight.get(noteId)
+  // Chain rather than drop: the second call was asked for because the text
+  // changed again, so it has to run, just not at the same time.
+  const next = (running ?? Promise.resolve(false)).then(
+    () => indexNoteOnce(noteId),
+    () => indexNoteOnce(noteId)
+  )
+  indexingInFlight.set(noteId, next)
+  void next.finally(() => {
+    if (indexingInFlight.get(noteId) === next) indexingInFlight.delete(noteId)
+  })
+  return next
+}
+
+async function indexNoteOnce(noteId: string): Promise<boolean> {
   const note = getNote(noteId)
   if (!note || !note.content.trim()) return false
 
@@ -269,7 +295,11 @@ export async function suggestMeetings(noteId: string, limit = 5): Promise<Meetin
       subject: meeting.subject || 'Untitled meeting',
       startTime: meeting.start_time,
       reason: 'You wrote this while that meeting was happening.',
-      score: 1,
+      // Above any similarity score, which is what the reason claims. Cosine
+      // scores from this store are not bounded at 1, so a hardcoded 1 could be
+      // outranked by a merely similar transcript and the list would contradict
+      // the sentence next to it.
+      score: Number.POSITIVE_INFINITY,
     })
   }
 

@@ -156,12 +156,29 @@ describe('the AI never owns a correction', () => {
     expect(after?.categorySource).toBe('ai')
   })
 
-  it('an analysis is not an edit, so it does not reorder the list', async () => {
+  it('an analysis is not an edit, so it leaves updated_at alone', async () => {
+    // Asserting only the list order passed either way: the analysis was applied
+    // to the OLDER note, so even a bumped updated_at would have left the newer
+    // one on top. The timestamp itself is what has to be pinned.
+    const note = createNote({ content: 'algo' })
+    const before = getNote(note.id)!.updatedAt
+
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    applyAnalysis(note.id, { summary: 'resumen', suggestedTitle: 'título' }, 'hash')
+
+    expect(getNote(note.id)!.updatedAt).toBe(before)
+    expect(getNote(note.id)!.summary).toBe('resumen')
+  })
+
+  it('an edit IS an edit, so it does move the note to the top', async () => {
     const older = createNote({ content: 'vieja' })
     await new Promise((resolve) => setTimeout(resolve, 5))
     createNote({ content: 'nueva' })
-    applyAnalysis(older.id, { summary: 'resumen' }, 'hash')
     expect(listNotes()[0].content).toBe('nueva')
+
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    updateNote(older.id, { content: 'vieja, retocada' })
+    expect(listNotes()[0].content).toBe('vieja, retocada')
   })
 })
 

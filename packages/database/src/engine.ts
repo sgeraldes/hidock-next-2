@@ -628,10 +628,21 @@ export class DatabaseEngine {
       this.bdb.pragma('journal_mode = WAL')
       this.bdb.pragma('synchronous = NORMAL')
       this.bdb.pragma('busy_timeout = 5000')
-      // Deliberately leave foreign_keys at SQLite's default (OFF) to match the
-      // previous sql.js engine. Enabling enforcement would activate dormant
-      // ON DELETE CASCADE clauses and reject writes the app historically allowed
-      // — a behavior change out of scope for this stability fix.
+      // Foreign keys, stated rather than inherited.
+      //
+      // This comment used to say enforcement was deliberately left OFF to match
+      // the previous sql.js engine. That stopped being true without anyone
+      // changing a line: the better-sqlite3 this app installs is built with
+      // SQLITE_DEFAULT_FOREIGN_KEYS, so the default here is already ON and the
+      // cascades have been live all along. Measured, not assumed:
+      // `pragma('foreign_keys')` reads 1 on a fresh connection and
+      // `compile_options` lists DEFAULT_FOREIGN_KEYS.
+      //
+      // Setting it explicitly changes nothing today and stops the app's
+      // behaviour from depending on how a native module happened to be
+      // compiled. A rebuild without that flag would otherwise have silently
+      // turned every ON DELETE CASCADE in this schema into a no-op.
+      this.bdb.pragma('foreign_keys = ON')
 
       this.shim = new SqlJsCompatDatabase(this.bdb, this.recordChanges, () => this.lastChanges)
 

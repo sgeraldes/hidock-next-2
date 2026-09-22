@@ -132,6 +132,40 @@ describe('saving', () => {
     expect(updates.map((u) => u.content)).toContain('escrito y no guardado')
   })
 
+  it('writes the old note before opening another one', async () => {
+    // The failure this replaces: switching left the outgoing note's debounce
+    // pending, and one keystroke in the new note cleared it. The first note's
+    // sentence was gone, and the unmount flush now held the second note's text
+    // and could not recover it.
+    const { result } = renderHook(() => useNotes())
+    await settle()
+    act(() => result.current.select(notes[0]))
+    act(() => result.current.edit('lo de la primera'))
+
+    act(() => result.current.select(notes[1]))
+    act(() => result.current.edit('lo de la segunda'))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS)
+    })
+    await settle()
+
+    expect(updates.find((u) => u.id === 'n1')?.content).toBe('lo de la primera')
+    expect(updates.find((u) => u.id === 'n2')?.content).toBe('lo de la segunda')
+  })
+
+  it('does not carry one note’s text into another', async () => {
+    const { result } = renderHook(() => useNotes())
+    await settle()
+    act(() => result.current.select(notes[0]))
+    act(() => result.current.edit('texto de la primera'))
+    act(() => result.current.select(notes[1]))
+    await settle()
+
+    // Nothing written for n2, and n2's editor shows n2's own text.
+    expect(updates.filter((u) => u.id === 'n2')).toHaveLength(0)
+    expect(result.current.draft).toBe('dos')
+  })
+
   it('writes the old note before opening a new one', async () => {
     const { result } = renderHook(() => useNotes())
     await settle()

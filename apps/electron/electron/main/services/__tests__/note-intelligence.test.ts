@@ -1,11 +1,15 @@
 // @vitest-environment node
 
 /**
- * Reading the model's answer.
+ * Reading the model's answer, and nothing else.
  *
  * Everything here is about not trusting it: a model asked for JSON returns
  * fenced JSON, chatty JSON, a category nobody offered, or nothing at all, and
  * none of those may reach the database.
+ *
+ * The rest of this module is tested next door — `note-indexing.test.ts` for
+ * indexNote and `note-meeting-links.test.ts` for meetingHappeningNow and
+ * suggestMeetings — so do not read this file's name as covering them.
  */
 
 import { describe, expect, it, vi } from 'vitest'

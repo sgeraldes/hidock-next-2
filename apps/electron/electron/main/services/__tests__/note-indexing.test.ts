@@ -19,7 +19,7 @@ vi.mock('electron', () => ({
   app: { getPath: vi.fn().mockReturnValue('/tmp'), getName: vi.fn().mockReturnValue('test') },
 }))
 
-const addDocument = vi.fn(async () => 'vector-1')
+const addDocument = vi.fn(async (_content: string, _metadata?: Record<string, unknown>) => 'vector-1' as string | null)
 vi.mock('../vector-store', () => ({
   getVectorStore: () => ({ addDocument, search: vi.fn(async () => []) }),
 }))
@@ -47,7 +47,7 @@ afterAll(() => {
 })
 
 beforeEach(() => {
-  addDocument.mockClear()
+  addDocument.mockReset()
   addDocument.mockResolvedValue('vector-1')
   getDatabase().run('DELETE FROM notes')
   getDatabase().run('DELETE FROM vector_embeddings')
@@ -117,10 +117,42 @@ describe('indexNote', () => {
   it('says it failed when there is no embedder, instead of claiming success', async () => {
     // With no embeddings provider addDocument returns null. The note is still
     // saved; it is only missing from semantic search until the next edit.
-    addDocument.mockResolvedValue(null as never)
+    addDocument.mockResolvedValue(null)
     const note = createNote({ content: 'algo' })
 
     expect(await indexNote(note.id)).toBe(false)
+  })
+
+  it('leaves one vector when two saves overlap, and it is the newer text', async () => {
+    // notes:update fires indexNote without awaiting it, so two saves close
+    // together used to interleave: both read the existing rows, both embedded,
+    // and both inserted a row whose id ends in Date.now(). Two vectors survived
+    // for one note and a search could quote whichever landed last.
+    const note = createNote({ content: 'primera versión' })
+    let call = 0
+    addDocument.mockImplementation(async (content: string) => {
+      const mine = ++call
+      await new Promise((resolve) => setTimeout(resolve, mine === 1 ? 20 : 1))
+      const id = `v${mine}`
+      getDatabase().run(
+        `INSERT INTO vector_embeddings (id, content, embedding, source_type, capture_id, chunk_index)
+         VALUES (?, ?, '[]', 'note', ?, 0)`,
+        [id, content, note.id]
+      )
+      return id
+    })
+
+    const first = indexNote(note.id)
+    updateNote(note.id, { content: 'segunda versión' })
+    const second = indexNote(note.id)
+    await Promise.all([first, second])
+
+    const rows = queryAll<{ content: string }>(
+      `SELECT content FROM vector_embeddings WHERE capture_id = ?`,
+      [note.id]
+    )
+    expect(rows).toHaveLength(1)
+    expect(rows[0].content).toBe('segunda versión')
   })
 
   it('keeps the previous version findable when the embedder fails', async () => {
@@ -133,7 +165,7 @@ describe('indexNote', () => {
        VALUES ('old', 'primera versión', '[]', 'note', ?, 0)`,
       [note.id]
     )
-    addDocument.mockResolvedValue(null as never)
+    addDocument.mockResolvedValue(null)
 
     expect(await indexNote(note.id)).toBe(false)
     expect(queryAll(`SELECT id FROM vector_embeddings WHERE id = 'old'`)).toHaveLength(1)
