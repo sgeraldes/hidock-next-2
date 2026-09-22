@@ -16,9 +16,9 @@ import type { Meeting } from '@/types'
 
 /**
  * Since 2026-09-22 a user title is also the source's display title, so it
- * renders in the reader header AND in the metadata field. These assertions take
- * the first match: what they are checking is that the value is shown, not how
- * many places show it.
+ * renders in EXACTLY two places: the reader header and the "Content title"
+ * metadata field. The assertions pin that count rather than taking the first
+ * match — "at least one" would also pass on a duplicate-render regression.
  */
 
 // ---------------------------------------------------------------------------
@@ -207,7 +207,7 @@ describe('SourceReader — metadata editing', () => {
     const rec = makeRecording({ userTitle: 'My Recording Title', knowledgeCaptureId: 'kc-1' })
     render(<SourceReader recording={rec} />)
 
-    expect(screen.getAllByText('My Recording Title')[0]).toBeInTheDocument()
+    expect(screen.getAllByText('My Recording Title')).toHaveLength(2) // header + metadata field
     expect(screen.queryByRole('textbox', { name: /recording title/i })).not.toBeInTheDocument()
   })
 
@@ -406,7 +406,7 @@ describe('SourceReader — metadata editing', () => {
     rerender(<SourceReader recording={rec2} />)
 
     expect(screen.queryByRole('textbox', { name: /recording title/i })).not.toBeInTheDocument()
-    expect(screen.getAllByText('Title 2')[0]).toBeInTheDocument()
+    expect(screen.getAllByText('Title 2')).toHaveLength(2) // header + metadata field
   })
 
   // 12. Meeting card shows Change/Remove when meeting linked

@@ -31,8 +31,12 @@ export type UnassignedTitlePreference = 'suggested' | 'filename'
  * 945 rows reading `2026Sep21-170242-Rec32.hda` while the title that actually
  * describes each one was already computed and stored a join away
  * (`knowledge_captures.title`, populated on 938 of those 945). Identity is not
- * lost — `source` tells the row to keep showing the filename underneath, so
- * the machine name stays visible and greppable, one line down.
+ * lost: `source` tells the row the title is no longer the filename, so the row
+ * hangs the filename off the second line's hover tooltip and the reader shows
+ * it as an explicit Filename field. It stays searchable either way —
+ * buildSearchCorpus indexes the filename independently of the title. It is NOT
+ * printed as always-visible text on the row: the row's fixed 48px compact
+ * height has one secondary line and it belongs to date/time/duration.
  *
  * Please do not "fix" this back to filename-only without talking to him.
  *

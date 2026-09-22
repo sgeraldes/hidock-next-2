@@ -1,5 +1,14 @@
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+
+vi.mock('@/components/ui/toaster', () => ({
+  toast: Object.assign(vi.fn(), {
+    success: vi.fn(),
+    error: vi.fn(),
+    warning: vi.fn(),
+    info: vi.fn(),
+  }),
+}))
 import { SourceRow } from '../SourceRow'
 import type { UnifiedRecording } from '@/types/unified-recording'
 import type { Meeting } from '@/types'
@@ -536,5 +545,141 @@ describe('SourceRow Trash-mode menu (spec-005/F17 §D1)', () => {
     openMenu()
     expect(await screen.findByRole('menuitem', { name: /^restore/i })).toBeInTheDocument()
     expect(screen.getByRole('menuitem', { name: /delete permanently/i })).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Rename in place (2026-09-22 spec §3). The spec asked for save / Escape /
+// empty / disabled-without-a-capture and the PR shipped none of them, so the
+// first version wrote an unsaved title into the list and promoted the AI's
+// guess into `user_title` on a stray double click.
+// ---------------------------------------------------------------------------
+describe('SourceRow — rename in place', () => {
+  const update = vi.fn()
+
+  const renameable: UnifiedRecording = {
+    ...baseRecording,
+    userTitle: undefined,
+    title: 'Suggested AI title',
+    knowledgeCaptureId: 'kc-1'
+  }
+
+  beforeEach(() => {
+    update.mockReset().mockResolvedValue({ success: true })
+    ;(globalThis as unknown as { window: { electronAPI: unknown } }).window.electronAPI = {
+      knowledge: { update }
+    }
+  })
+
+  function startRename(text = 'Suggested AI title') {
+    fireEvent.doubleClick(screen.getByText(text))
+    return screen.getByLabelText('Rename source') as HTMLInputElement
+  }
+
+  it('opens the editor on double click and does NOT open the source', () => {
+    vi.useFakeTimers()
+    try {
+      const onClick = vi.fn()
+      render(<SourceRow recording={renameable} onClick={onClick} />)
+      const title = screen.getByText('Suggested AI title')
+      // Real double click: two clicks, then dblclick.
+      fireEvent.click(title, { detail: 1 })
+      fireEvent.click(title, { detail: 2 })
+      fireEvent.doubleClick(title, { detail: 2 })
+      vi.advanceTimersByTime(1000)
+      expect(onClick).not.toHaveBeenCalled()
+      expect(screen.getByLabelText('Rename source')).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('still opens the source on a plain single click', () => {
+    vi.useFakeTimers()
+    try {
+      const onClick = vi.fn()
+      render(<SourceRow recording={renameable} onClick={onClick} />)
+      fireEvent.click(screen.getByText('Suggested AI title'), { detail: 1 })
+      vi.advanceTimersByTime(300)
+      expect(onClick).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('saves on Enter and reports the new title to the list', async () => {
+    const onRenamed = vi.fn()
+    render(<SourceRow recording={renameable} onRenamed={onRenamed} />)
+    const input = startRename()
+    fireEvent.change(input, { target: { value: '  Antamina, la buena  ' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith('kc-1', { userTitle: 'Antamina, la buena' })
+    )
+    await waitFor(() => expect(onRenamed).toHaveBeenCalledWith('r1', 'Antamina, la buena'))
+  })
+
+  it('cancels on Escape without writing anything', async () => {
+    render(<SourceRow recording={renameable} />)
+    const input = startRename()
+    fireEvent.change(input, { target: { value: 'discard me' } })
+    fireEvent.keyDown(input, { key: 'Escape' })
+    fireEvent.blur(input)
+
+    await waitFor(() => expect(screen.getByText('Suggested AI title')).toBeInTheDocument())
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('clears the user title when the editor is emptied', async () => {
+    const onRenamed = vi.fn()
+    const named = { ...renameable, userTitle: 'Mine' }
+    render(<SourceRow recording={named} onRenamed={onRenamed} />)
+    const input = startRename('Mine')
+    fireEvent.change(input, { target: { value: '   ' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(update).toHaveBeenCalledWith('kc-1', { userTitle: null }))
+    await waitFor(() => expect(onRenamed).toHaveBeenCalledWith('r1', undefined))
+  })
+
+  it('never turns the AI suggestion into a user title on an untouched commit', async () => {
+    render(<SourceRow recording={renameable} />)
+    const input = startRename()
+    // No typing at all — the editor opened by accident and lost focus.
+    fireEvent.blur(input)
+
+    await waitFor(() => expect(screen.getByText('Suggested AI title')).toBeInTheDocument())
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('keeps the editor open and says so when the save is REPORTED as failed', async () => {
+    // knowledge:update returns { success: false }; it does not throw. Treating
+    // no-exception as success showed a rename that was never written.
+    update.mockResolvedValue({ success: false, error: 'capture is gone' })
+    const onRenamed = vi.fn()
+    const { toast } = await import('@/components/ui/toaster')
+    render(<SourceRow recording={renameable} onRenamed={onRenamed} />)
+    const input = startRename()
+    fireEvent.change(input, { target: { value: 'never lands' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not rename', 'capture is gone'))
+    expect(onRenamed).not.toHaveBeenCalled()
+    expect((screen.getByLabelText('Rename source') as HTMLInputElement).value).toBe('never lands')
+  })
+
+  it('withholds the rename and gives the reason when there is no capture to store it in', () => {
+    const noCapture = { ...renameable, knowledgeCaptureId: undefined }
+    render(<SourceRow recording={noCapture} />)
+    const title = screen.getByText('Suggested AI title')
+    expect(title.getAttribute('title')).toMatch(/no knowledge capture/i)
+    fireEvent.doubleClick(title)
+    expect(screen.queryByLabelText('Rename source')).not.toBeInTheDocument()
+  })
+
+  it('caps the title at a length the row can actually render', () => {
+    render(<SourceRow recording={renameable} />)
+    expect(startRename()).toHaveAttribute('maxlength', '200')
   })
 })
