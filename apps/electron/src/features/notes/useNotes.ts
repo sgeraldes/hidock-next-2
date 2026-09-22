@@ -40,6 +40,17 @@ export function useNotes() {
   const analyzeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** The text the last write sent, so an unchanged draft writes nothing. */
   const lastSaved = useRef('')
+  /**
+   * The draft and the open note, as refs.
+   *
+   * The unmount effect needs both, and reading them from state would put them
+   * in its dependency array — which makes the effect re-run on every keystroke,
+   * and its cleanup then clears the timers that `edit` just set. The debounce
+   * would be gone: every keystroke would write, and the analysis would never
+   * fire at all. Refs keep that effect mounted once and torn down once.
+   */
+  const draftRef = useRef('')
+  const selectedIdRef = useRef<string | null>(null)
 
   const selected = notes.find((note) => note.id === selectedId) ?? null
 
@@ -54,7 +65,9 @@ export function useNotes() {
 
   const select = useCallback((note: Note | null) => {
     setSelectedId(note?.id ?? null)
+    selectedIdRef.current = note?.id ?? null
     setDraft(note?.content ?? '')
+    draftRef.current = note?.content ?? ''
     lastSaved.current = note?.content ?? ''
     setRelated([])
     setSuggestions([])
@@ -70,6 +83,8 @@ export function useNotes() {
         lastSaved.current = content
         setNotes((current) => current.map((note) => (note.id === id ? result.note! : note)))
       }
+      // A failed write leaves lastSaved alone, so the next keystroke tries
+      // again instead of believing the text is on disk.
     } finally {
       setSaving(false)
     }
@@ -78,6 +93,7 @@ export function useNotes() {
   const edit = useCallback(
     (content: string) => {
       setDraft(content)
+      draftRef.current = content
       const id = selectedId
       if (!id) return
       if (saveTimer.current) clearTimeout(saveTimer.current)
@@ -100,9 +116,12 @@ export function useNotes() {
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current)
       if (analyzeTimer.current) clearTimeout(analyzeTimer.current)
-      if (selectedId) void flush(selectedId, draft)
+      if (selectedIdRef.current) void flush(selectedIdRef.current, draftRef.current)
     }
-  }, [selectedId, draft, flush])
+    // Empty on purpose: this runs when the editor really goes away, not on
+    // every keystroke. See draftRef above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const create = useCallback(
     async (options: { live?: boolean } = {}) => {
