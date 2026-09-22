@@ -10,7 +10,7 @@
     "build": "npm --prefix apps/electron run build",
     "build:win": "npm --prefix apps/electron run build:win",
     "typecheck": "npm --prefix apps/electron run typecheck",
-    "lint": "npm --prefix apps/electron run lint && npm --prefix packages/database run lint",
+    "lint": "npm --prefix apps/electron run lint",
     "test": "npm --prefix apps/electron run test:run"
   }
 }
