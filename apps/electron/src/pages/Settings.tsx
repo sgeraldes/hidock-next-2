@@ -1304,8 +1304,14 @@ export function Settings() {
                   disabled={saving}
                   onValueChange={async (value) => {
                     try {
+                      // `null`, not `undefined`: saveConfig deep-merges and
+                      // skips undefined, so "auto" used to leave the old pin
+                      // in place and this control could only ever pin, never
+                      // release. Clearing the measured value too is what makes
+                      // it measure again instead of reusing a bad reading.
                       await updateConfig('transcription', {
-                        liveMicChannel: value === 'auto' ? undefined : (Number(value) as 0 | 1),
+                        liveMicChannel: value === 'auto' ? null : (Number(value) as 0 | 1),
+                        ...(value === 'auto' ? { liveMicChannelMeasured: null } : {}),
                       })
                       setLiveMicChannelSetting(value)
                       toast.success('Saved', 'Applies to the next live session.')

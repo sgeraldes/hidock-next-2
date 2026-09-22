@@ -18,10 +18,24 @@ const LIVE_SESSION_ROTATE_MS = 9 * 60 * 1000
  *
  * Two Live sessions cost twice the minutes of one, and in a normal meeting one
  * person talks at a time, so the quiet channel is most of the bill for nothing.
- * -45 dBFS on 16-bit is ~184 of 32768: above room noise and the device's own
- * handling noise, below any speech that Gemini could transcribe anyway.
+ *
+ * The first cut at this was -45 dBFS (RMS 184), which is far too high for a
+ * *mean* level: a 20 ms packet of speech at -50 dBFS measures RMS 73, and that
+ * is an ordinary soft voice, not noise. The gate would have eaten it whole.
+ * -55 dBFS is RMS 58 of 32768 — still above a quiet room once DC is removed
+ * (see `acRms`), and below any voice worth transcribing.
  */
-const SILENCE_RMS = 184
+const SILENCE_RMS = 58
+
+/**
+ * Keep sending a channel for this long after its last packet above the gate.
+ *
+ * Speech is not continuous: the gaps between words, and the tail of a final
+ * consonant, sit under any threshold. Gating packet by packet chops those off
+ * and hands Gemini clipped words. A one second hangover is cheap — it only
+ * bills while someone was talking a moment ago.
+ */
+const SILENCE_HANGOVER_MS = 1000
 
 /** How much audio the channel identification looks at before it commits. */
 const IDENTIFY_MS = 10_000
@@ -73,20 +87,39 @@ export function splitRealtimeChannels(packet: RealtimeData): [RealtimeChannel, R
   const rightView = new DataView(right.buffer)
   let leftSum = 0
   let rightSum = 0
+  let leftSquares = 0
+  let rightSquares = 0
 
   for (let frame = 0; frame < frameCount; frame++) {
     const l = inView.getInt16(frame * 4, true)
     const r = inView.getInt16(frame * 4 + 2, true)
     leftView.setInt16(frame * 2, l, true)
     rightView.setInt16(frame * 2, r, true)
-    leftSum += l * l
-    rightSum += r * r
+    leftSum += l
+    rightSum += r
+    leftSquares += l * l
+    rightSquares += r * r
   }
 
   return [
-    { pcm: left, rms: Math.sqrt(leftSum / frameCount) },
-    { pcm: right, rms: Math.sqrt(rightSum / frameCount) },
+    { pcm: left, rms: acRms(leftSquares, leftSum, frameCount) },
+    { pcm: right, rms: acRms(rightSquares, rightSum, frameCount) },
   ]
+}
+
+/**
+ * RMS with the packet's DC component removed.
+ *
+ * A converter with a DC offset reads as constant loudness: a channel sitting at
+ * a steady 400 has a plain RMS of 400, sails over the silence gate and bills a
+ * Live session for a flat line. Subtracting the mean is what an audio level
+ * meter does, and it costs one extra accumulator. Under two frames there is no
+ * mean worth removing, so the plain RMS stands.
+ */
+function acRms(sumOfSquares: number, sum: number, frameCount: number): number {
+  const mean = sum / frameCount
+  const variance = frameCount < 2 ? sumOfSquares / frameCount : sumOfSquares / frameCount - mean * mean
+  return Math.sqrt(Math.max(0, variance))
 }
 
 /**
@@ -117,15 +150,31 @@ export function hidockRealtimeToMonoPcm(packet: RealtimeData): Uint8Array {
  *
  * Nothing documents which channel is which — the protocol says "stereo" and
  * stops. Guessing costs transcripts that credit your words to the other side,
- * so this measures instead: the microphone channel is the one that runs hotter
- * while the device's owner talks. It reports `null` until it has enough audio,
- * and keeps reporting `null` when the two channels are too close to separate,
- * which is a usable answer (the UI shows speaker-1/speaker-2) rather than a
- * coin flip.
+ * so this measures instead.
+ *
+ * It does **not** measure who is louder. That was the first design and it is
+ * wrong in the most ordinary case there is: on a call the far side arrives at
+ * line level and routinely runs hotter than the device owner's own voice, so
+ * "louder wins" labels the other person `you`. Fed 210 packets of owner-at-3000
+ * against far-side-at-9000, the energy rule picked channel 1 — the far side.
+ *
+ * What actually separates the two is the **floor**, not the peak. The
+ * microphone hears the room the whole time: between turns it still reads a few
+ * hundred of hiss, breath and handling. The far-side channel is digital audio
+ * from the other end of a codec; between turns it drops to near zero. So the
+ * channel whose quiet moments are the loudest is the microphone, whoever
+ * happens to shout. Measured as a low percentile of the per-packet RMS, which
+ * ignores the talking and looks only at the gaps.
+ *
+ * It reports `null` until it has enough audio, and keeps reporting `null` when
+ * the two floors are within ~3 dB, which is a usable answer (the UI shows
+ * speaker-1/speaker-2) rather than a coin flip.
  */
 export class MicChannelIdentifier {
-  private leftEnergy = 0
-  private rightEnergy = 0
+  private readonly leftLevels: number[] = []
+  private readonly rightLevels: number[] = []
+  private leftFloor = 0
+  private rightFloor = 0
   private packets = 0
   private elapsedMs = 0
   private decided: 0 | 1 | null = null
@@ -148,29 +197,44 @@ export class MicChannelIdentifier {
     return this.decided
   }
 
-  /** Energies observed so far, for the log line that justifies the choice. */
+  /** The two measured floors, for the log line that justifies the choice. */
   get evidence(): { left: number; right: number } {
-    return { left: Math.round(this.leftEnergy), right: Math.round(this.rightEnergy) }
+    return { left: Math.round(this.leftFloor), right: Math.round(this.rightFloor) }
   }
 
   /** Feed one packet's channels. `durationMs` is that packet's audio length. */
   observe(channels: [RealtimeChannel, RealtimeChannel], durationMs: number): void {
     if (this.closed) return
     const [left, right] = channels
-    // Silence tells us nothing about which side the microphone is on.
+    // Both channels quiet tells us nothing: there is no talking to sit under.
     if (left.rms < SILENCE_RMS && right.rms < SILENCE_RMS) return
-    this.leftEnergy += left.rms
-    this.rightEnergy += right.rms
+    this.leftLevels.push(left.rms)
+    this.rightLevels.push(right.rms)
     this.packets += 1
     this.elapsedMs += durationMs
     if (this.elapsedMs < IDENTIFY_MS && this.packets < IDENTIFY_MAX_PACKETS) return
 
     this.closed = true
-    const hot = Math.max(this.leftEnergy, this.rightEnergy)
-    const cold = Math.min(this.leftEnergy, this.rightEnergy)
-    if (cold <= 0 || hot / cold < IDENTIFY_MIN_RATIO) return
-    this.decided = this.leftEnergy > this.rightEnergy ? 0 : 1
+    this.leftFloor = noiseFloor(this.leftLevels)
+    this.rightFloor = noiseFloor(this.rightLevels)
+    const hot = Math.max(this.leftFloor, this.rightFloor)
+    const cold = Math.min(this.leftFloor, this.rightFloor)
+    if (hot <= 0) return
+    // A floor of exactly zero on one side is the clearest case there is: that
+    // channel is digital silence between turns, so the other one is the room.
+    if (cold > 0 && hot / cold < IDENTIFY_MIN_RATIO) return
+    this.decided = this.leftFloor > this.rightFloor ? 0 : 1
   }
+}
+
+/** Where a channel sits when nobody on it is talking: its 20th percentile. */
+const FLOOR_PERCENTILE = 0.2
+
+function noiseFloor(levels: number[]): number {
+  if (levels.length === 0) return 0
+  const sorted = [...levels].sort((a, b) => a - b)
+  const index = Math.min(sorted.length - 1, Math.floor(sorted.length * FLOOR_PERCENTILE))
+  return sorted[index]
 }
 
 /** 16 kHz mono PCM16LE: 32,000 bytes per second. */
@@ -310,6 +374,10 @@ export class GeminiLiveTranscriptionService {
   private persistedChannel = false
   private sender: LiveTranscriptionSender | null = null
   private active = false
+  /** Bumped by every start and stop, so a superseded start cleans up after itself. */
+  private generation = 0
+  /** Per channel, when that channel last carried audio above the silence gate. */
+  private lastVoiceAt: [number, number] = [-Infinity, -Infinity]
 
   constructor(
     private readonly createClient: (apiKey: string) => LiveClient = (apiKey) => new GoogleGenAI({ apiKey }),
@@ -320,18 +388,29 @@ export class GeminiLiveTranscriptionService {
     const key = resolveGeminiApiKey()
     if (!key) throw new Error('Gemini API key is required for live transcription')
     await this.stop()
+    const generation = ++this.generation
     this.active = true
     this.sender = sender
     this.persistedChannel = false
+    this.lastVoiceAt = [-Infinity, -Infinity]
     this.identifier = new MicChannelIdentifier(configuredMicChannel())
 
     const a = this.buildSession(0)
     const b = this.buildSession(1)
+    // Registered before the first await: a `stop()` that lands mid-connect has
+    // to be able to find these two, or they stay open with nothing pointing at
+    // them. Two overlapping `start()` calls (a double-clicked resume button)
+    // used to leak exactly one pair of Live sessions each time.
+    this.sessions = [a, b]
     await a.connect(key)
+    if (generation !== this.generation) return this.discard(a, b)
     try {
       await b.connect(key)
+      if (generation !== this.generation) return this.discard(a, b)
       this.sessions = [a, b]
     } catch (error) {
+      if (generation !== this.generation) return this.discard(a, b)
+      this.sessions = null
       // One channel transcribed with no attribution beats no transcript. Said
       // once, not on every packet. `monoSession` is the state that records it.
       this.emit('transcription-live:error', {
@@ -340,7 +419,13 @@ export class GeminiLiveTranscriptionService {
           (error instanceof Error ? ` (${error.message})` : ''),
       })
       this.monoSession = a
+      await b.stop()
     }
+  }
+
+  /** A start that lost a race owns its own sessions; nothing else will close them. */
+  private async discard(...sessions: ChannelSession[]): Promise<void> {
+    for (const session of sessions) await session.stop()
   }
 
   async acceptDevicePacket(packet: RealtimeData): Promise<void> {
@@ -362,9 +447,13 @@ export class GeminiLiveTranscriptionService {
     if (!this.sessions) return
 
     // Silence on a channel is not sent: it is most of the cost of running two
-    // sessions and it gives the model's own VAD nothing to do.
+    // sessions and it gives the model's own VAD nothing to do. The hangover is
+    // what keeps that from eating the gaps inside a sentence and the tail of
+    // the last word — a gate with no hangover hands Gemini clipped speech.
+    const now = this.now()
     for (let index = 0; index < 2; index++) {
-      if (channels[index].rms < SILENCE_RMS) continue
+      if (channels[index].rms >= SILENCE_RMS) this.lastVoiceAt[index] = now
+      else if (now - this.lastVoiceAt[index] >= SILENCE_HANGOVER_MS) continue
       await this.sessions[index].send(channels[index].pcm, key)
     }
   }
@@ -376,6 +465,7 @@ export class GeminiLiveTranscriptionService {
 
   async stop(): Promise<void> {
     this.active = false
+    this.generation += 1
     const sessions = this.allSessions()
     this.sessions = null
     this.monoSession = null
@@ -393,8 +483,11 @@ export class GeminiLiveTranscriptionService {
     return new ChannelSession(
       this.createClient,
       this.now,
-      (text) => this.emit('transcription-live:interim', { text, speaker: this.labelFor(channel) }),
-      (text) => this.emit('transcription-live:final', { text, speaker: this.labelFor(channel) }),
+      // `channel` rides along with `speaker` so the UI can relabel turns that
+      // are already on screen when the measurement settles: the label changes,
+      // the cable the turn came in on does not.
+      (text) => this.emit('transcription-live:interim', { text, speaker: this.labelFor(channel), channel: this.channelOf(channel) }),
+      (text) => this.emit('transcription-live:final', { text, speaker: this.labelFor(channel), channel: this.channelOf(channel) }),
       (status) => this.emit('transcription-live:status', { status, channel }),
       (error) => this.emit('transcription-live:error', { error, channel })
     )
@@ -407,6 +500,11 @@ export class GeminiLiveTranscriptionService {
    * channels, the labels stay neutral. A transcript never claims `you` on a
    * guess.
    */
+  /** null when the stream is the unattributed mono fallback. */
+  private channelOf(channel: 0 | 1): 0 | 1 | null {
+    return this.monoSession ? null : channel
+  }
+
   private labelFor(channel: 0 | 1): SpeakerLabel {
     if (this.monoSession) return 'speaker'
     const mic = this.identifier.micChannel
@@ -427,8 +525,12 @@ export class GeminiLiveTranscriptionService {
     this.persistedChannel = true
     // Next session starts already knowing, instead of spending its first ten
     // seconds on speaker-1/speaker-2 again.
-    void updateConfig('transcription', { liveMicChannel: mic }).catch((error) => {
-      console.warn('[LiveTranscription] could not persist liveMicChannel:', error)
+    // Remembered under its own key. Writing the measurement into
+    // `liveMicChannel` turned the user's explicit "Measure automatically" into
+    // a pin behind their back, and the Settings control could never undo it,
+    // so one wrong measurement became permanent.
+    void updateConfig('transcription', { liveMicChannelMeasured: mic }).catch((error) => {
+      console.warn('[LiveTranscription] could not persist liveMicChannelMeasured:', error)
     })
   }
 
@@ -437,10 +539,18 @@ export class GeminiLiveTranscriptionService {
   }
 }
 
-/** `auto` (measure), or a channel index the user pinned in Settings. */
+/**
+ * `auto` (measure), or a channel index already known.
+ *
+ * The pin the user set in Settings always wins; a value this app measured in an
+ * earlier session is only a warm start, so that picking "Measure automatically"
+ * really does go back to measuring.
+ */
 function configuredMicChannel(): 0 | 1 | 'auto' {
-  const value = getConfig().transcription.liveMicChannel
-  return value === 0 || value === 1 ? value : 'auto'
+  const { liveMicChannel, liveMicChannelMeasured } = getConfig().transcription
+  if (liveMicChannel === 0 || liveMicChannel === 1) return liveMicChannel
+  if (liveMicChannelMeasured === 0 || liveMicChannelMeasured === 1) return liveMicChannelMeasured
+  return 'auto'
 }
 
 export const geminiLiveTranscription = new GeminiLiveTranscriptionService()
