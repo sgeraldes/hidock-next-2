@@ -67,10 +67,24 @@ El asunto del evento sigue primero: cuando hay reunión, manda el calendario, y
 eso no se toca. Los pasos 2 y 3 son nuevos y sólo pueden aplicar a las
 grabaciones sin reunión, que es exactamente el pedido.
 
-`source` ya lo consume `SourceRow` para decidir si muestra el nombre de archivo
-como texto secundario; con la precedencia nueva, una fila titulada por IA o por
-el usuario muestra el archivo debajo. **La identidad no se pierde, se corre de
-lugar.**
+`source` ya lo consume `SourceRow` para decidir dónde queda el nombre de
+archivo. **La identidad no se pierde, se corre de lugar** — y conviene ser
+exacto sobre a dónde, porque la primera redacción de este spec decía "lo
+muestra debajo" y eso no es lo que se construyó:
+
+| Dónde | Qué pasa con el nombre de archivo |
+|---|---|
+| Fila de la lista | tooltip de la segunda línea (`title=`), al pasar el mouse |
+| Lector | campo **Filename** explícito, visible, cuando el título no es el archivo |
+| Búsqueda | `buildSearchCorpus` lo indexa aparte del título, siempre |
+
+No va como texto siempre visible en la fila: la fila compacta mide 48px fijos
+—de eso depende la aritmética del virtualizador— y su única línea secundaria es
+fecha · hora · duración. Si en el uso real el tooltip no alcanza, la decisión de
+darle una línea propia es de producto y cambia el alto de la fila.
+
+El mismo título y la misma preferencia valen para la vista de tarjetas
+(`SourceCard`), que antes se titulaba sola con `recording.title || filename`.
 
 ### 2. El ajuste
 
@@ -95,9 +109,26 @@ Una grabación sin `knowledgeCaptureId` no tiene dónde guardar el título: en e
 caso el renombre queda deshabilitado con el motivo en el tooltip, en vez de
 fallar al guardar.
 
+Tres reglas que salieron de la revisión adversarial y son parte del contrato:
+
+- `knowledge:update` **informa** el fallo en el resultado, no lo tira. Hay que
+  mirar `result.success`; confiar en la ausencia de excepción mostraba un
+  renombre que nunca se escribió y desaparecía al refrescar.
+- Abrir el editor y confirmarlo **sin tocarlo** no escribe nada. Si no, un doble
+  clic al pasar más un clic afuera estampaba la sugerencia de la IA en
+  `user_title`, que le gana a la preferencia `filename` y sobrevive a un
+  re-análisis: queda fijada una elección que el usuario nunca hizo.
+- El clic simple sobre el título espera la ventana del doble clic antes de abrir
+  el lector. Sin eso el renombre abría igual el lector y borraba la selección
+  múltiple, que es justo el viaje que esta función existe para evitar.
+
 ### 4. Las 7 sin sugerencia
 
-938 de 945 ya tienen título sugerido; 7 no. No se genera nada en masa por
+938 de 945 ya tienen título sugerido; 7 no. Medido contra la base real el
+22-sep: esas 7 son exactamente las que **no tienen fila en
+`knowledge_captures`**, así que son también las 7 que no se pueden renombrar a
+mano — no hay dónde guardar el título. El tooltip lo dice. Se destraba solo
+cuando se transcriben. No se genera nada en masa por
 detrás: esas 7 muestran el nombre de archivo, que es la respuesta correcta
 cuando no hay nada mejor. La sugerencia se produce cuando esa grabación se
 transcribe o se re-analiza, que es el camino que ya la produce para las otras
@@ -121,6 +152,22 @@ transcribe o se re-analiza, que es el camino que ya la produce para las otras
 - Renombre en la fila: guarda, cancela con Escape, vacío borra, y queda
   deshabilitado sin `knowledgeCaptureId`.
 - Que el ajuste persista y se lea al arrancar.
+
+## Lo medido contra la base (22-sep, sólo lectura)
+
+| Consulta | Resultado |
+|---|---|
+| grabaciones vivas | 2.129 |
+| sin reunión | 945 |
+| sin reunión con título sugerido | 938 |
+| sin reunión sin fila de captura | 7 |
+| `title` vacío, nulo o en blanco | 0 |
+| `user_title` ya poblado | 0 |
+| títulos sugeridos distintos entre los 938 | 924 |
+
+Los 14 repetidos son mayormente pruebas de audio ("Prueba de Asistente Virtual
+Seguros Bolívar" aparece 6 veces). Esas filas se siguen distinguiendo por la
+segunda línea, que lleva fecha, hora y duración.
 
 ## Criterio de éxito
 
