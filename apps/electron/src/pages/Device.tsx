@@ -23,6 +23,23 @@ import { shouldLogQa } from '@/services/qa-monitor'
 
 const CONNECTION_TIMEOUT_MS = 10000 // 10 second timeout (BUG-006)
 
+/** Interim lines are keyed by the cable they came in on, not by their label. */
+const channelKey = (channel: 0 | 1 | null | undefined): string =>
+  channel === 0 || channel === 1 ? String(channel) : 'mono'
+
+/**
+ * What a turn from `channel` is called right now.
+ *
+ * Derived on every render instead of frozen into the turn, so that when the
+ * microphone measurement settles mid-session the turns already on screen are
+ * renamed from Speaker 1 / Speaker 2 to You / Them, as the design asks.
+ */
+function speakerLabel(channel: 0 | 1 | null, micChannel: 0 | 1 | null | undefined): string {
+  if (channel === null) return 'Speaker'
+  if (micChannel === 0 || micChannel === 1) return channel === micChannel ? 'You' : 'Them'
+  return channel === 0 ? 'Speaker 1' : 'Speaker 2'
+}
+
 export function Device() {
   // B-DEV-001: Unified syncing state - use only store as single source of truth
   const storeSyncing = useAppStore(state => state.deviceSyncing)
@@ -57,8 +74,17 @@ export function Device() {
   // DV-09: Ref to track current offset for use in interval callback (avoids stale closure)
   const realtimeDataOffsetRef = useRef(0)
   const [liveTranscriptionStatus, setLiveTranscriptionStatus] = useState('stopped')
-  const [liveTranscriptionInterim, setLiveTranscriptionInterim] = useState('')
-  const [liveTranscriptionFinal, setLiveTranscriptionFinal] = useState<string[]>([])
+  // One entry per channel: the live transcript is two streams, not one, because
+  // the device sends the microphone and the far side on separate channels.
+  // Keyed and stored by CHANNEL, never by label: the label changes the moment
+  // the microphone measurement settles, and keying by it stranded the old
+  // `speaker-1` interim line on screen forever while `You` started a new one.
+  const [liveTranscriptionInterim, setLiveTranscriptionInterim] = useState<Record<string, string>>({})
+  const [liveTranscriptionFinal, setLiveTranscriptionFinal] = useState<
+    Array<{ channel: 0 | 1 | null; text: string }>
+  >([])
+  /** null until measured; null after measuring means the channels were too close. */
+  const [liveMicChannel, setLiveMicChannel] = useState<0 | 1 | null | undefined>(undefined)
 
   // P1-specific state
   const [batteryStatus, setBatteryStatus] = useState<BatteryStatus | null>(null)
@@ -685,8 +711,9 @@ export function Device() {
 
   const handleStartRealtime = async () => {
     setError(null)
-    setLiveTranscriptionInterim('')
+    setLiveTranscriptionInterim({})
     setLiveTranscriptionFinal([])
+    setLiveMicChannel(undefined)
     try {
       const success = await deviceService.startRealtime()
       if (success) {
@@ -786,13 +813,20 @@ export function Device() {
     if (!api?.onLiveTranscriptionStatus) return
     const cleanups = [
       api.onLiveTranscriptionStatus(({ status }) => setLiveTranscriptionStatus(status)),
-      api.onLiveTranscriptionInterim(({ text }) => setLiveTranscriptionInterim(text)),
-      api.onLiveTranscriptionFinal(({ text }) => {
-        setLiveTranscriptionFinal((current) => [...current, text])
-        setLiveTranscriptionInterim('')
+      api.onLiveTranscriptionInterim(({ text, channel }) =>
+        setLiveTranscriptionInterim((current) => ({ ...current, [channelKey(channel)]: text }))
+      ),
+      api.onLiveTranscriptionFinal(({ text, channel }) => {
+        setLiveTranscriptionFinal((current) => [...current, { channel: channel ?? null, text }])
+        // Only that channel's provisional line is cleared: the other channel may
+        // still be mid-sentence.
+        setLiveTranscriptionInterim((current) => ({ ...current, [channelKey(channel)]: '' }))
       }),
+      api.onLiveTranscriptionChannels?.(({ micChannel }) => setLiveMicChannel(micChannel)),
       api.onLiveTranscriptionError(({ error: liveError }) => setError(liveError)),
-    ]
+      // `onLiveTranscriptionChannels` is optional on the API, so the array can
+      // hold an `undefined` and unmounting would throw on it.
+    ].filter((cleanup): cleanup is () => void => typeof cleanup === 'function')
     return () => cleanups.forEach((cleanup) => cleanup())
   }, [])
 
@@ -1404,7 +1438,10 @@ export function Device() {
                     </div>
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    HiDock stereo audio is mixed to 16kHz 16-bit mono and transcribed by Gemini 3.5 Flash Live Transcribe.
+                    HiDock sends two channels. Each is transcribed on its own Gemini 3.5 Live
+                    Transcribe session, so turns are attributed by channel rather than guessed —
+                    live transcription has no speaker diarization.
+                    {liveMicChannel === null && ' The two channels sounded alike, so turns stay labelled by channel.'}
                   </p>
                   {(realtimeActive || liveTranscriptionFinal.length > 0) && (
                     <div className="rounded-lg border bg-muted/30 p-4" aria-live="polite">
@@ -1413,13 +1450,28 @@ export function Device() {
                         <span className="text-xs capitalize text-muted-foreground">{liveTranscriptionStatus}</span>
                       </div>
                       <div className="max-h-56 space-y-2 overflow-y-auto text-sm">
-                        {liveTranscriptionFinal.map((text, index) => <p key={`${index}-${text}`}>{text}</p>)}
-                        {liveTranscriptionInterim && (
-                          <p className="italic text-muted-foreground">{liveTranscriptionInterim}</p>
-                        )}
-                        {liveTranscriptionFinal.length === 0 && !liveTranscriptionInterim && (
-                          <p className="text-muted-foreground">Listening for speech…</p>
-                        )}
+                        {liveTranscriptionFinal.map((turn, index) => (
+                          <p key={`${index}-${turn.text}`}>
+                            <span className="mr-2 font-medium text-muted-foreground">
+                              {speakerLabel(turn.channel, liveMicChannel)}
+                            </span>
+                            {turn.text}
+                          </p>
+                        ))}
+                        {Object.entries(liveTranscriptionInterim)
+                          .filter(([, text]) => text)
+                          .map(([key, text]) => (
+                            <p key={`interim-${key}`} className="italic text-muted-foreground">
+                              <span className="mr-2 font-medium">
+                                {speakerLabel(key === 'mono' ? null : (Number(key) as 0 | 1), liveMicChannel)}
+                              </span>
+                              {text}
+                            </p>
+                          ))}
+                        {liveTranscriptionFinal.length === 0 &&
+                          !Object.values(liveTranscriptionInterim).some(Boolean) && (
+                            <p className="text-muted-foreground">Listening for speech…</p>
+                          )}
                       </div>
                     </div>
                   )}

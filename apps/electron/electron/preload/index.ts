@@ -1159,10 +1159,21 @@ export interface ElectronAPI {
     pauseRealtime: () => Promise<any>
     stopRealtime: () => Promise<any>
     getRealtimeData: (offset: number) => Promise<any>
-    onLiveTranscriptionStatus: (callback: (data: { status: string }) => void) => () => void
-    onLiveTranscriptionInterim: (callback: (data: { text: string }) => void) => () => void
-    onLiveTranscriptionFinal: (callback: (data: { text: string }) => void) => () => void
-    onLiveTranscriptionError: (callback: (data: { error: string }) => void) => () => void
+    onLiveTranscriptionStatus: (callback: (data: { status: string; channel?: 0 | 1 }) => void) => () => void
+    onLiveTranscriptionInterim: (
+      callback: (data: { text: string; speaker: 'you' | 'them' | 'speaker-1' | 'speaker-2' | 'speaker'; channel?: 0 | 1 | null }) => void
+    ) => () => void
+    onLiveTranscriptionFinal: (
+      callback: (data: { text: string; speaker: 'you' | 'them' | 'speaker-1' | 'speaker-2' | 'speaker'; channel?: 0 | 1 | null }) => void
+    ) => () => void
+    onLiveTranscriptionError: (callback: (data: { error: string; channel?: 0 | 1 }) => void) => () => void
+    /**
+     * Fires once per session when the microphone channel is measured.
+     * `micChannel` is null when the two channels were too close to separate.
+     */
+    onLiveTranscriptionChannels: (
+      callback: (data: { micChannel: 0 | 1 | null; left: number; right: number }) => void
+    ) => () => void
     // Battery & Bluetooth
     getBatteryStatus: () => Promise<any>
     startBluetoothScan: (duration?: number) => Promise<any>
@@ -1907,25 +1918,39 @@ const electronAPI: ElectronAPI = {
     pauseRealtime: () => callIPC('jensen:pauseRealtime'),
     stopRealtime: () => callIPC('jensen:stopRealtime'),
     getRealtimeData: (offset: number) => callIPC('jensen:getRealtimeData', { offset }),
-    onLiveTranscriptionStatus: (callback: (data: { status: string }) => void) => {
-      const handler = (_event: any, data: { status: string }) => callback(data)
+    onLiveTranscriptionStatus: (callback: (data: { status: string; channel?: 0 | 1 }) => void) => {
+      const handler = (_event: any, data: { status: string; channel?: 0 | 1 }) => callback(data)
       ipcRenderer.on('transcription-live:status', handler)
       return () => ipcRenderer.removeListener('transcription-live:status', handler)
     },
-    onLiveTranscriptionInterim: (callback: (data: { text: string }) => void) => {
-      const handler = (_event: any, data: { text: string }) => callback(data)
+    onLiveTranscriptionInterim: (
+      callback: (data: { text: string; speaker: 'you' | 'them' | 'speaker-1' | 'speaker-2' | 'speaker'; channel?: 0 | 1 | null }) => void
+    ) => {
+      const handler = (_event: any, data: { text: string; speaker: 'you' | 'them' | 'speaker-1' | 'speaker-2' | 'speaker'; channel?: 0 | 1 | null }) =>
+        callback(data)
       ipcRenderer.on('transcription-live:interim', handler)
       return () => ipcRenderer.removeListener('transcription-live:interim', handler)
     },
-    onLiveTranscriptionFinal: (callback: (data: { text: string }) => void) => {
-      const handler = (_event: any, data: { text: string }) => callback(data)
+    onLiveTranscriptionFinal: (
+      callback: (data: { text: string; speaker: 'you' | 'them' | 'speaker-1' | 'speaker-2' | 'speaker'; channel?: 0 | 1 | null }) => void
+    ) => {
+      const handler = (_event: any, data: { text: string; speaker: 'you' | 'them' | 'speaker-1' | 'speaker-2' | 'speaker'; channel?: 0 | 1 | null }) =>
+        callback(data)
       ipcRenderer.on('transcription-live:final', handler)
       return () => ipcRenderer.removeListener('transcription-live:final', handler)
     },
-    onLiveTranscriptionError: (callback: (data: { error: string }) => void) => {
-      const handler = (_event: any, data: { error: string }) => callback(data)
+    onLiveTranscriptionError: (callback: (data: { error: string; channel?: 0 | 1 }) => void) => {
+      const handler = (_event: any, data: { error: string; channel?: 0 | 1 }) => callback(data)
       ipcRenderer.on('transcription-live:error', handler)
       return () => ipcRenderer.removeListener('transcription-live:error', handler)
+    },
+    onLiveTranscriptionChannels: (
+      callback: (data: { micChannel: 0 | 1 | null; left: number; right: number }) => void
+    ) => {
+      const handler = (_event: any, data: { micChannel: 0 | 1 | null; left: number; right: number }) =>
+        callback(data)
+      ipcRenderer.on('transcription-live:channels', handler)
+      return () => ipcRenderer.removeListener('transcription-live:channels', handler)
     },
     // Battery & Bluetooth
     getBatteryStatus: () => callIPC('jensen:getBatteryStatus'),

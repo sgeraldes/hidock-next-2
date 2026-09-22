@@ -20,6 +20,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { useAppStore, useCalendarSyncing, useCalendarManualSyncing } from '@/store/useAppStore'
 import { useConfigStore } from '@/store/domain/useConfigStore'
@@ -100,6 +101,8 @@ export function Settings() {
   const [localAsrVocabularyFile, setLocalAsrVocabularyFile] = useState('vocabulary.json')
   const [localAsrDiarize, setLocalAsrDiarize] = useState(true)
   const [localAsrNumBeams, setLocalAsrNumBeams] = useState(5)
+  /** 'auto' | '0' | '1' — kept as a string because the Select is string-valued. */
+  const [liveMicChannelSetting, setLiveMicChannelSetting] = useState('auto')
   const [chatProvider, setChatProvider] = useState<'gemini' | 'ollama'>('gemini')
   const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434')
   const [showApiKey, setShowApiKey] = useState(false)
@@ -328,6 +331,12 @@ export function Settings() {
       setLocalAsrVocabularyFile(config.transcription.localAsrVocabularyFile || 'vocabulary.json')
       setLocalAsrDiarize(config.transcription.localAsrDiarize ?? true)
       setLocalAsrNumBeams(config.transcription.localAsrNumBeams || 5)
+      // undefined means 'measure it'; 0 and 1 are explicit pins.
+      setLiveMicChannelSetting(
+        config.transcription.liveMicChannel === 0 || config.transcription.liveMicChannel === 1
+          ? String(config.transcription.liveMicChannel)
+          : 'auto'
+      )
       setChatProvider(config.chat.provider)
       setOllamaUrl(config.embeddings.ollamaBaseUrl)
       // C-CHAT: Load RAG context window size
@@ -1231,6 +1240,56 @@ export function Settings() {
                   </div>
                 </>
               )}
+
+              {/*
+                Live transcription speaker channel. The device sends two
+                channels and the Live API does no diarization, so which channel
+                is the microphone IS the speaker attribution. Nothing documents
+                which one it is, so the app measures it on the first ten seconds
+                of speech; this is the override for when that measurement is
+                wrong or cannot separate the two. Saves on change — it is one
+                value and it has no partner fields to stay consistent with.
+              */}
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">Live microphone channel</p>
+                  <p className="text-xs text-muted-foreground">
+                    Which of the device&apos;s two channels is your microphone, used to label live
+                    turns as you or them. Measured automatically; pin it if the labels come out
+                    swapped.
+                  </p>
+                </div>
+                <Select
+                  value={liveMicChannelSetting}
+                  disabled={saving}
+                  onValueChange={async (value) => {
+                    try {
+                      // `null`, not `undefined`: saveConfig deep-merges and
+                      // skips undefined, so "auto" used to leave the old pin
+                      // in place and this control could only ever pin, never
+                      // release. Clearing the measured value too is what makes
+                      // it measure again instead of reusing a bad reading.
+                      await updateConfig('transcription', {
+                        liveMicChannel: value === 'auto' ? null : (Number(value) as 0 | 1),
+                        ...(value === 'auto' ? { liveMicChannelMeasured: null } : {}),
+                      })
+                      setLiveMicChannelSetting(value)
+                      toast.success('Saved', 'Applies to the next live session.')
+                    } catch (error) {
+                      toast.error('Could not save', String(error))
+                    }
+                  }}
+                >
+                  <SelectTrigger className="w-56" aria-label="Live microphone channel">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="auto">Measure automatically</SelectItem>
+                    <SelectItem value="0">Left channel</SelectItem>
+                    <SelectItem value="1">Right channel</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
 
               <Button
                 onClick={handleSaveTranscription}

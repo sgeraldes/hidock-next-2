@@ -125,6 +125,19 @@ export interface AppConfig {
      * all, and this cap costs nothing.
      */
     speakerLinkingCpuPercent?: number
+    /**
+     * Which realtime channel carries the microphone, for live speaker labels.
+     * This one is the user's pin from Settings and it always wins. Absent or
+     * null = measure it (see MicChannelIdentifier); 0 or 1 pins it.
+     */
+    liveMicChannel?: 0 | 1 | null
+    /**
+     * The channel the app measured in an earlier session, used as a warm start
+     * so a new session does not spend its first ten seconds unattributed. Kept
+     * apart from `liveMicChannel` so that writing it cannot silently turn the
+     * user's "Measure automatically" into a pin they can no longer undo.
+     */
+    liveMicChannelMeasured?: 0 | 1 | null
     // VibeVoice backend (microsoft/VibeVoice-ASR) — reuses localAsrPath/mcp_runner.py.
     vibevoiceModelId: string
     vibevoiceDevice: string
