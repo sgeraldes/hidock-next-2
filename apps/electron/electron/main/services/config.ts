@@ -125,6 +125,11 @@ export interface AppConfig {
      * all, and this cap costs nothing.
      */
     speakerLinkingCpuPercent?: number
+    /**
+     * Which realtime channel carries the microphone, for live speaker labels.
+     * Absent/other = measure it (see MicChannelIdentifier); 0 or 1 pins it.
+     */
+    liveMicChannel?: 0 | 1
     // VibeVoice backend (microsoft/VibeVoice-ASR) — reuses localAsrPath/mcp_runner.py.
     vibevoiceModelId: string
     vibevoiceDevice: string

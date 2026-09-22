@@ -225,6 +225,8 @@ export interface AppConfig {
     speakerLinkingTimeoutSeconds: number
     /** Share of logical CPUs the diarization worker may use, 1-100. */
     speakerLinkingCpuPercent?: number
+    /** Realtime channel carrying the microphone; absent = measure it. */
+    liveMicChannel?: 0 | 1
     autoTranscribe: boolean
     language: string
     /** F16/spec-001 kill-switch (main-process config.ts) — mirrored here only
