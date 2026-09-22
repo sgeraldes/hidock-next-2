@@ -67,7 +67,10 @@ describe('Gemini live transcription', () => {
       view.setInt16(8 + i * 4, 6000 * sign, true)
       view.setInt16(8 + i * 4 + 2, 5000 * sign, true)
     }
-    await service.acceptDevicePacket({ rest: 0, muted: false, data: packet })
+    // The packet is queued, not sent inline: the USB poll must not wait on the
+    // provider. `flush` is how a test observes what the provider received.
+    service.acceptDevicePacket({ rest: 0, muted: false, data: packet })
+    await service.flush()
     expect(session.sendRealtimeInput).toHaveBeenCalledWith({
       audio: { data: expect.any(String), mimeType: 'audio/pcm;rate=16000' },
     })
