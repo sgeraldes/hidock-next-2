@@ -87,6 +87,10 @@ export const FEATURES: Record<FeatureId, FeatureDefinition> = {
     ipcNamespaces: [
       'transcription:',
       'transcripts:',
+      // Pairing with the machine that runs the speaker models. It belongs to
+      // transcription and fails closed with it: with transcription off there is
+      // nothing to send anywhere, so pairing would be a control with no effect.
+      'model-host:',
       'turn-speakers:',
       'self-id:',
       'transcript-upgrade:',

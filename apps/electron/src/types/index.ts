@@ -225,6 +225,10 @@ export interface AppConfig {
     speakerLinkingTimeoutSeconds: number
     /** Share of logical CPUs the diarization worker may use, 1-100. */
     speakerLinkingCpuPercent?: number
+    /** Address of the machine that runs the speaker models. Empty = this one. */
+    modelHostUrl?: string
+    /** Token this computer got when it paired with that host. */
+    modelHostToken?: string
     /** Realtime channel the user pinned; absent or null = measure it. */
     liveMicChannel?: 0 | 1 | null
     /** Realtime channel measured in an earlier session; a warm start only. */

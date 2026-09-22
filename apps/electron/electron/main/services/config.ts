@@ -126,6 +126,17 @@ export interface AppConfig {
      */
     speakerLinkingCpuPercent?: number
     /**
+     * Address of the HiDock Model Host, the machine that has the GPU.
+     *
+     * Empty means there is none and nothing changes: diarization runs here, on
+     * the CPU, exactly as it does today. A host that is off, paused or busy
+     * also changes nothing, because every one of those sends the recording back
+     * to the local worker.
+     */
+    modelHostUrl?: string
+    /** Token this machine got when it paired with that host. */
+    modelHostToken?: string
+    /**
      * Which realtime channel carries the microphone, for live speaker labels.
      * This one is the user's pin from Settings and it always wins. Absent or
      * null = measure it (see MicChannelIdentifier); 0 or 1 pins it.
@@ -247,6 +258,8 @@ const DEFAULT_CONFIG: AppConfig = {
     // 40% leaves the machine responsive while a backlog drains. Raise it when
     // nobody is using the machine; lower it if the desktop still stutters.
     speakerLinkingCpuPercent: 40,
+    modelHostUrl: '',
+    modelHostToken: '',
     vibevoiceModelId: process.env.VIBEVOICE_MODEL_ID || 'microsoft/VibeVoice-ASR',
     vibevoiceDevice: process.env.ASR_DEVICE || 'cuda:0',
     vibevoiceAttn: process.env.VIBEVOICE_ATTN || 'sdpa', // VibeVoice-ASR supports neither flash_attention_2 (not built on Windows) nor flex_attention (unsupported arch); both silently fall back to sdpa, so use it directly

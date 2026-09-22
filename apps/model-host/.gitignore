@@ -1,0 +1,4 @@
+# The staged payload and the installer. Both are produced by
+# `npm run build:installer`, and the staged payload alone is ~100 MB because it
+# carries a copy of node.exe.
+build/
