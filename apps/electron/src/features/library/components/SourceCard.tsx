@@ -25,6 +25,8 @@ import { LABEL_DELETE_FROM_DEVICE, LABEL_MOVE_TO_TRASH } from '@/features/librar
 import { StatusIcon } from './StatusIcon'
 import { TranscriptionStatusBadge } from './TranscriptionStatusBadge'
 import { useLibraryStore } from '@/store/useLibraryStore'
+import { useConfigStore } from '@/store/domain/useConfigStore'
+import { getDisplayTitle } from '@/features/library/utils/getDisplayTitle'
 import type { DownloadStatus } from '@/store/useAppStore'
 
 interface SourceCardProps {
@@ -83,6 +85,21 @@ export const SourceCard = memo(function SourceCard({
   const canPlay = hasLocalPath(recording)
   const error = useLibraryStore((state) => state.recordingErrors.get(recording.id))
 
+  // Same title the list shows, same rules. The card used to read
+  // `recording.title || recording.filename` on its own, which ignored a title
+  // the user typed, ignored the calendar subject, and ignored the
+  // `unassignedTitleSource` preference entirely — switching the setting left
+  // card view unchanged.
+  const unassignedTitleSource = useConfigStore(
+    (state) => state.config?.ui?.unassignedTitleSource ?? 'suggested'
+  )
+  const { primaryText: displayTitle } = getDisplayTitle(
+    recording,
+    meeting,
+    transcript,
+    unassignedTitleSource
+  )
+
   const handleCardClick = (e: React.MouseEvent) => {
     // Buttons and links own their clicks. Everywhere else on the card follows
     // Explorer semantics: modifier clicks change the selection without opening;
@@ -112,7 +129,7 @@ export const SourceCard = memo(function SourceCard({
           <div className="flex items-center gap-3">
             <StatusIcon recording={recording} />
             <div>
-              <CardTitle className="text-base">{recording.title || recording.filename}</CardTitle>
+              <CardTitle className="text-base">{displayTitle}</CardTitle>
               <CardDescription>
                 {formatDateTime(recording.dateRecorded.toISOString())}
                 {recording.size && ` • ${formatBytes(recording.size)}`}
@@ -392,6 +409,13 @@ export const SourceCard = memo(function SourceCard({
     prevProps.recording.transcriptionStatus === nextProps.recording.transcriptionStatus &&
     prevProps.recording.quality === nextProps.recording.quality &&
     prevProps.recording.title === nextProps.recording.title &&
+    // The card is titled by getDisplayTitle now, so everything that decides
+    // that title has to invalidate the memo — a rename that did not repaint
+    // the card was the bug this line closes.
+    prevProps.recording.userTitle === nextProps.recording.userTitle &&
+    prevProps.recording.filename === nextProps.recording.filename &&
+    prevProps.recording.meetingSubject === nextProps.recording.meetingSubject &&
+    prevProps.meeting?.subject === nextProps.meeting?.subject &&
     prevProps.recording.category === nextProps.recording.category &&
     prevProps.recording.duration === nextProps.recording.duration &&
     prevProps.recording.size === nextProps.recording.size &&
