@@ -1,8 +1,9 @@
 # Grabaciones sin reunión: título sugerido por defecto y renombre
 
 Fecha: 2026-09-22
-Estado: spec aprobado, en implementación
-Feature 2 de 4 de la cola del 22-sep. PR propio, revisión adversarial antes del merge.
+Estado: construido y mergeado en `main` ([PR #8](https://github.com/sgeraldes/hidock-next-2/pull/8)).
+Feature 2 de 4 de la cola del 22-sep. El QA del 22-sep lo leyó contra el código y no
+encontró ninguna diferencia de comportamiento; lo único que corrigió fue un número.
 
 ## El pedido
 
@@ -10,8 +11,10 @@ Sebastián, 22-sep: "Recordings que no están asociadas a ninguna meeting, debo
 poder renombrarlas, y el sistema debería sugerir un título también y desplegarlo
 por defecto, con la opción en setting para cambiarlo."
 
-Son 945 grabaciones de 2.131 sin reunión asociada. Hoy la lista les muestra el
-nombre de archivo: `2026Sep21-170242-Rec32.hda`.
+Son 945 grabaciones de **2.129 vivas** sin reunión asociada. Hoy la lista les
+muestra el nombre de archivo: `2026Sep21-170242-Rec32.hda`. (La tabla `recordings`
+tiene 2.131 filas; dos están borradas. El número que importa es el de las vivas, y
+este documento decía 2.131 en la prosa y 2.129 en la tabla de mediciones.)
 
 ## Lo que ya existe (y no hay que construir)
 
@@ -41,8 +44,8 @@ La regla era: el título de la fila es **identidad de la fuente** (nombre de
 archivo, o asunto del evento), nunca contenido. Tenía su lógica: el nombre de
 archivo es inmutable y casa con lo que hay en el disco y en el dispositivo.
 
-Contra eso: 945 filas que dicen `2026Sep21-170242-Rec32.hda` no le dicen nada a
-nadie, y el título que sí describe la grabación ya está calculado y guardado, a
+Contra eso: 945 filas de 2.129 que dicen `2026Sep21-170242-Rec32.hda` no le dicen
+nada a nadie, y el título que sí describe la grabación ya está calculado y guardado, a
 un join de distancia. La identidad se conserva mostrándola al lado, no
 ocupando la línea principal.
 

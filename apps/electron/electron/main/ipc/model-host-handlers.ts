@@ -43,7 +43,9 @@ export function registerModelHostHandlers(): void {
     }
     try {
       const { token } = await pairWithModelHost(parsed.data.url, parsed.data.code)
-      saveConfig({
+      // Awaited: a pairing that says "done" while the token never reached disk
+      // would work until the next restart and then quietly stop.
+      await saveConfig({
         transcription: { modelHostUrl: parsed.data.url, modelHostToken: token },
       } as Parameters<typeof saveConfig>[0])
       return { success: true }
@@ -53,11 +55,17 @@ export function registerModelHostHandlers(): void {
   })
 
   ipcMain.handle('model-host:forget', async () => {
-    // Empty, not undefined: saveConfig deep-merges and drops undefined, so
-    // undefined would leave the old address in place and look like a no-op.
-    saveConfig({
-      transcription: { modelHostUrl: '', modelHostToken: '' },
-    } as Parameters<typeof saveConfig>[0])
-    return { success: true }
+    try {
+      // Empty, not undefined: saveConfig deep-merges and drops undefined, so
+      // undefined would leave the old address in place and look like a no-op.
+      await saveConfig({
+        transcription: { modelHostUrl: '', modelHostToken: '' },
+      } as Parameters<typeof saveConfig>[0])
+      return { success: true }
+    } catch (error) {
+      // Saying "forgotten" while the token is still on disk is the one answer
+      // this must never give.
+      return { success: false, error: (error as Error).message }
+    }
   })
 }

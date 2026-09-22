@@ -1247,7 +1247,7 @@ export function Settings() {
               {/*
                 Title for sources with no calendar event. This reverses an
                 earlier decision (the filename used to always win) because 945
-                of 2,131 sources have no meeting and showed a machine name in
+                of the 2,129 live sources have no meeting and showed a machine name in
                 the prime slot while a title that describes them already
                 existed. The filename stays visible on the second line.
               */}

@@ -1,8 +1,9 @@
 # Transcripción en vivo: un canal por hablante, no un promedio
 
 Fecha: 2026-09-22
-Estado: spec aprobado, en implementación
-Feature 1 de 4 de la cola del 22-sep. PR propio, revisión adversarial antes del merge.
+Estado: construido y mergeado en `main` ([PR #7](https://github.com/sgeraldes/hidock-next-2/pull/7)).
+Feature 1 de 4 de la cola del 22-sep. Revisado contra el código el 22-sep por un QA
+que leyó este documento afirmación por afirmación; lo que decía de más está corregido abajo.
 
 ## El defecto
 
@@ -133,16 +134,24 @@ el silencio de verdad, no el crosstalk.
 
 | Caso | Comportamiento |
 |---|---|
-| El paquete llega mono (largo impar de frames, o firmware que manda 1 canal) | una sola sesión, etiqueta `speaker`, como hoy |
+| El dispositivo manda un solo canal | una sola sesión, etiqueta `speaker`, tras **cinco paquetes seguidos** de un canal |
 | La segunda sesión no conecta | se sigue con la primera y se emite `transcription-live:error` una vez; el transcript no se corta |
 | La medición no concluye | `speaker-1` / `speaker-2` |
 | Firmware sin soporte realtime | igual que hoy: `supportsRealtimeFirmware` corta antes con el mensaje que ya existe |
 
+**Cómo se decide que el dispositivo es mono.** Un paquete estéreo siempre trae un
+número entero de tramas de 4 bytes. Un payload múltiplo de 2 y no de 4 es un
+flujo de muestras sueltas, o sea un canal. Un paquete así **no alcanza**: una
+lectura USB truncada se ve idéntica, y degradar con el primero tiraría la
+atribución de toda la sesión por un solo tropiezo. Hacen falta cinco seguidos,
+que son medio segundo, y el aviso sale una vez y no por paquete. Un paquete raro
+aislado se sigue transcribiendo leyendo sus tramas enteras.
+
 La rotación de sesión a los 9 minutos (el límite documentado es 10) se aplica a
 **cada** sesión por separado, con su propio reloj: hoy hay un solo `openedAt`.
 Los paquetes que llegan mientras una sesión rota esperan a que abra la nueva, no
-se tiran (verificado con tres paquetes concurrentes durante una rotación: los
-tres se entregan).
+se tiran. Verificado con tres envíos concurrentes cruzando una rotación: abre una
+sesión nueva por canal, no una por paquete, y los cuatro paquetes llegan enteros.
 
 Dos `start()` superpuestos —el botón de reanudar tocado dos veces— dejaban un par
 de sesiones Live abiertas sin nada que las apuntara. Cada `start()` ahora lleva
@@ -169,7 +178,10 @@ Unit, sin dispositivo:
   1, con los dos parejos no concluye, y respeta el override de la config.
 - Puerta de energía: un canal bajo el piso no se manda, el otro sí.
 - Dos sesiones: cada canal va a su sesión, cada una rota por su cuenta a los
-  9 min, y la caída de una no arrastra a la otra.
+  9 min, y la caída de una no arrastra a la otra, ni al conectar ni a mitad de
+  sesión.
+- Mono: un paquete raro aislado no degrada nada; cinco seguidos sí, una sola vez,
+  y el payload va como está en vez de promediarse consigo mismo.
 - Etiquetas: antes de concluir la medición nunca se emite `you`/`them`.
 
 Verificación real (requiere el dispositivo y hablar):

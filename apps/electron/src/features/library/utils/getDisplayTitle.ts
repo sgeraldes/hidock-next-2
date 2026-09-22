@@ -27,7 +27,7 @@ export type UnassignedTitlePreference = 'suggested' | 'filename'
  * either one."
  *
  * That was reversed deliberately on 2026-09-22, by the product owner, for a
- * measured reason: 945 of 2,131 sources have no meeting, so the library showed
+ * measured reason: 945 of the 2,129 live sources have no meeting, so the library showed
  * 945 rows reading `2026Sep21-170242-Rec32.hda` while the title that actually
  * describes each one was already computed and stored a join away
  * (`knowledge_captures.title`, populated on 938 of those 945). Identity is not

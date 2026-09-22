@@ -61,7 +61,11 @@ function writeConfigAtomically(path: string, contents: string): void {
   }
 }
 
-// CS-007: Encrypt sensitive config values (ICS URL) at rest using Electron safeStorage
+// CS-007: Encrypt sensitive config values at rest using Electron safeStorage.
+// Two of them now: the calendar's ICS URL and the model host's pairing token.
+// The token lets whoever holds it send audio to that host and read the result
+// back, so it is a credential and it does not sit in a plaintext file next to
+// the settings.
 function encryptSensitive(value: string): string {
   try {
     if (safeStorage.isEncryptionAvailable() && value) {
@@ -483,6 +487,11 @@ export async function initializeConfig(): Promise<void> {
       if (savedConfig.calendar?.icsUrl) {
         savedConfig.calendar.icsUrl = decryptSensitive(savedConfig.calendar.icsUrl)
       }
+      if (savedConfig.transcription?.modelHostToken) {
+        savedConfig.transcription.modelHostToken = decryptSensitive(
+          savedConfig.transcription.modelHostToken
+        )
+      }
       // Merge with defaults to handle new fields
       config = deepMerge(DEFAULT_CONFIG, savedConfig)
       // Auto-upgrade retired Gemini model names in persisted configs so old
@@ -568,6 +577,12 @@ export async function saveConfig(newConfig: Partial<AppConfig>): Promise<void> {
     calendar: {
       ...config.calendar,
       icsUrl: encryptSensitive(config.calendar.icsUrl)
+    },
+    transcription: {
+      ...config.transcription,
+      modelHostToken: config.transcription.modelHostToken
+        ? encryptSensitive(config.transcription.modelHostToken)
+        : config.transcription.modelHostToken
     }
   }
 
