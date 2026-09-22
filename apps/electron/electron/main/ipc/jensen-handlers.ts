@@ -576,7 +576,11 @@ export function registerJensenHandlers(): void {
       const { offset } = JensenRealtimeDataSchema.parse(args)
       const result = await getJensenDevice().getRealtimeData(offset)
       if (result && !event.sender.isDestroyed()) {
-        await geminiLiveTranscription.acceptDevicePacket(result)
+        // Not awaited, and `acceptDevicePacket` does not await the provider
+        // either: this handler is the renderer's realtime poll, and the device
+        // buffer it drains is finite. Waiting on a WebSocket here is what made
+        // `rest` grow and packets disappear on the device.
+        geminiLiveTranscription.acceptDevicePacket(result)
         event.sender.send('jensen:realtime-data', {
           rest: result.rest,
           muted: result.muted,

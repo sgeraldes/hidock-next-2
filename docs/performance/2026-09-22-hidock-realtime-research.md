@@ -387,6 +387,21 @@ drenaje del buffer del dispositivo, que es donde `rest` crece y se pierden
 paquetes. La cola es unas veinte líneas y saca la latencia del proveedor del
 camino del USB.
 
+**Hecho el 22-sep-2026.** `acceptDevicePacket` ya no es `async`: encola y vuelve,
+y un único lazo de drenaje manda de a un paquete por vez, en orden de llegada.
+La cola tiene tope de 200 paquetes (`MAX_QUEUED_PACKETS`), que a 16 kHz estéreo
+son entre 10 y 20 segundos de audio y cerca de 1,3 MB. Cuando se llena **descarta
+el más viejo**, porque descartar el más nuevo congelaría la transcripción en el
+instante de la demora y no volvería nunca. El primer descarte de cada episodio
+sale por log y por `transcription-live:error`; el resto no, para no tapar el log.
+`pause()` vacía la cola y `stop()` la vacía, cierra las sesiones y recién ahí
+espera el drenaje, así ningún envío sobrevive a la sesión que lo generó. Esa
+espera tiene tope de 250 ms (`STOP_DRAIN_GRACE_MS`): el SDK no acepta
+`AbortSignal`, así que un handshake colgado no se puede cancelar, y sin tope el
+botón Stop se quedaba esperando un socket muerto. Abandonar el drenaje es seguro
+porque las sesiones ya están cerradas y el lazo compara la generación antes de
+cada paquete.
+
 **4. Agregar H1 Lite y arreglar `getRealtimeSettings`.** Dos defectos concretos
 que salieron de comparar con el vendor:
 
