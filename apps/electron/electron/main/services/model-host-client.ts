@@ -19,6 +19,34 @@ import type { AcousticWorkerResult } from './speaker-linking'
 /** The host answers health in well under a second on a LAN. */
 const HEALTH_TIMEOUT_MS = 2000
 
+/**
+ * A 15 s answer covers a burst of backlog jobs without making pause changes wait
+ * through a diarization: cancellation is checked every second, while each job
+ * has a 600 s minimum budget. The job endpoint remains authoritative between
+ * refreshes and returns its own pause/busy reason.
+ */
+export const MODEL_HOST_HEALTH_CACHE_MS = 15_000
+
+type CachedHealth = {
+  key: string
+  expiresAt: number
+  health: ModelHostHealth | null
+}
+
+let cachedHealth: CachedHealth | null = null
+let pendingHealth: { key: string; result: Promise<ModelHostHealth | null> } | null = null
+
+/** Clear the process-wide health answer after a host job proves it is stale. */
+function invalidateModelHostHealthCache(): void {
+  cachedHealth = null
+}
+
+/** Exported for tests, which must not retain a prior host's answer. */
+export function resetModelHostHealthCache(): void {
+  cachedHealth = null
+  pendingHealth = null
+}
+
 export interface ModelHostSettings {
   /** Empty means there is no host and none of this runs. */
   url: string
@@ -65,21 +93,38 @@ export async function checkModelHost(
 ): Promise<ModelHostHealth | null> {
   const base = normalizeBase(settings.url)
   if (!base) return null
-  try {
-    const response = await fetchFn(`${base}/health`, {
-      // A stranger gets only the version and the state. The GPU, its driver
-      // and how many clients are paired are reconnaissance, so the host hands
-      // them to a paired client and nobody else.
-      headers: settings.token ? { authorization: `Bearer ${settings.token}` } : {},
-      signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
-    })
-    if (!response.ok) return null
-    const health = (await response.json()) as ModelHostHealth
-    if (!Array.isArray(health.capabilities)) return null
+
+  const key = `${base}\n${settings.token}`
+  const now = Date.now()
+  if (cachedHealth?.key === key && cachedHealth.expiresAt > now) return cachedHealth.health
+  if (pendingHealth?.key === key) return pendingHealth.result
+
+  const result = (async () => {
+    let health: ModelHostHealth | null = null
+    try {
+      const response = await fetchFn(`${base}/health`, {
+        // A stranger gets only the version and the state. The GPU, its driver
+        // and how many clients are paired are reconnaissance, so the host hands
+        // them to a paired client and nobody else.
+        headers: settings.token ? { authorization: `Bearer ${settings.token}` } : {},
+        signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
+      })
+      if (response.ok) {
+        const candidate = (await response.json()) as ModelHostHealth
+        if (Array.isArray(candidate.capabilities)) health = candidate
+      }
+    } catch {
+      // An unavailable host is an ordinary fallback condition.
+    }
+    cachedHealth = { key, health, expiresAt: Date.now() + MODEL_HOST_HEALTH_CACHE_MS }
     return health
-  } catch {
-    return null
-  }
+  })()
+
+  pendingHealth = { key, result }
+  void result.finally(() => {
+    if (pendingHealth?.result === result) pendingHealth = null
+  })
+  return result
 }
 
 /** Trade a code shown on the host for a token this machine keeps. */
@@ -186,6 +231,9 @@ export async function diarizeOnModelHost(
     }
     return result
   } catch (error) {
+    // The job is the current authority on the host. Its failure can mean a pause,
+    // a new busy worker, or a revoked token, so the next recording refreshes health.
+    invalidateModelHostHealthCache()
     if (error instanceof ModelHostUnavailableError) throw error
     if (error instanceof Error && error.name === 'AbortError') {
       throw new ModelHostUnavailableError('The model host took too long, or the recording was cancelled.')
