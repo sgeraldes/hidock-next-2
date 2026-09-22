@@ -8,7 +8,17 @@
  * none of those may reach the database.
  */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+
+// The module reaches the brains, which reach the config, which reaches
+// Electron's app. Nothing under test here calls any of it.
+vi.mock('electron', () => ({
+  app: {
+    getPath: vi.fn().mockReturnValue('/tmp'),
+    getName: vi.fn().mockReturnValue('test'),
+  },
+}))
+
 import { NOTE_CATEGORIES, parseAnalysis } from '../note-intelligence'
 
 describe('parseAnalysis', () => {
