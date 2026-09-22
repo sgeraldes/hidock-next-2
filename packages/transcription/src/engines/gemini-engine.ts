@@ -39,6 +39,12 @@ export interface GeminiEngineOptions {
   apiKey: string
   model?: string
   language?: string
+  /**
+   * Model for the chunked generateContent path when the Transcribe model gets
+   * audio it cannot cut. The Transcribe model itself only speaks Interactions,
+   * so falling through with it would call an API it does not serve.
+   */
+  fallbackModel?: string
 }
 
 /**
@@ -69,6 +75,25 @@ const MIN_NATIVE_SPLIT_SECONDS = 60
  * calls). A tail shorter than the smallest interval we would ever request
  * cannot be recovered by splitting, so it is not a shortfall.
  */
+/**
+ * The native path gave up because the AUDIO cannot be cut, not because the
+ * model cannot finish the interval.
+ *
+ * The splitters understand WAV and MP3. An imported .m4a/.ogg/.flac arrives
+ * whole, so when the Transcribe model returns something incomplete there is no
+ * smaller interval to retry with. `main` sent those recordings to the chunked
+ * generateContent path, and removing that left them permanently unusable —
+ * which was never the point: the point was to stop routing around a model that
+ * could be fixed. This error is what lets `transcribe()` tell the two cases
+ * apart.
+ */
+export class NativeAudioNotSplittableError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'NativeAudioNotSplittableError'
+  }
+}
+
 export function nativeCoverageShortfall(
   segments: ReadonlyArray<{ endTime: number }>,
   durationSeconds: number | undefined,
@@ -946,12 +971,14 @@ export class GeminiEngine implements TranscriptionEngine {
   private readonly apiKey: string
   private readonly model: string
   private readonly language: string
+  private readonly fallbackModel: string
 
   constructor(options: GeminiEngineOptions) {
     this.apiKey = options.apiKey
     // Electron config supplies the dedicated Transcribe model. Keep the
     // package fallback compatible for callers that have not migrated yet.
     this.model = options.model ?? 'gemini-3.8-flash'
+    this.fallbackModel = options.fallbackModel ?? 'gemini-3.8-flash'
     this.language = options.language ?? 'unknown'
   }
 
@@ -1031,7 +1058,7 @@ export class GeminiEngine implements TranscriptionEngine {
     // request. Refuse an unsplittable longer container instead of silently
     // sending an unsupported request or reverting to prompt-based range repair.
     if (chunks.length === 1 && durationSeconds > 30 * 60) {
-      throw new Error(
+      throw new NativeAudioNotSplittableError(
         'Gemini 3.5 Transcribe requires recordings over 30 minutes to be valid WAV or MP3 audio so they can be safely chunked'
       )
     }
@@ -1094,15 +1121,18 @@ export class GeminiEngine implements TranscriptionEngine {
           const unsplittable =
             chunk.durationSec > GeminiEngine.NATIVE_MIN_SPLIT_SECONDS &&
             depth < GeminiEngine.NATIVE_MAX_SPLIT_DEPTH
-          throw new Error(
+          const detail =
             'Gemini could not produce a complete, reliable transcript for ' +
-              formatTimestamp(chunk.startSec) + '-' +
-              formatTimestamp(chunk.startSec + chunk.durationSec) + ' (' + why + ')' +
-              (unsplittable
-                ? '. This audio could not be split into smaller intervals to retry; ' +
-                  'convert it to WAV or MP3 and transcribe it again.'
-                : '')
-          )
+            formatTimestamp(chunk.startSec) + '-' +
+            formatTimestamp(chunk.startSec + chunk.durationSec) + ' (' + why + ')'
+          if (unsplittable) {
+            // Not a dead end: the caller retries this recording on the chunked
+            // generateContent path, which takes the bytes as they are.
+            throw new NativeAudioNotSplittableError(
+              detail + '. This audio could not be split into smaller intervals to retry.'
+            )
+          }
+          throw new Error(detail)
         }
         console.warn(
           '[GeminiEngine] ' + formatTimestamp(chunk.startSec) + '-' +
@@ -1536,13 +1566,33 @@ Calendar and meeting context are spelling hints only; never invent speech from t
 
     const genAI = new GoogleGenAI({ apiKey: this.apiKey })
 
+    // Which model the chunked generateContent path below will call. It stays
+    // `this.model` unless the Transcribe model got audio it cannot cut.
+    let generationModel = this.model
+    let fellBack = false
+
     if (this.model === 'gemini-3.5-transcribe') {
-      const segments = await this.transcribeWithNativeModel(genAI, audio, mimeType, options)
-      for (const segment of segments) yield segment
-      return
+      try {
+        const segments = await this.transcribeWithNativeModel(genAI, audio, mimeType, options)
+        for (const segment of segments) yield segment
+        return
+      } catch (error) {
+        // Only the container wall falls through. Everything else — silence,
+        // cancellation, auth, quota, an interval the model cannot finish even
+        // at the floor — belongs to the caller, and routing those to another
+        // model is what this change exists to stop doing.
+        if (!(error instanceof NativeAudioNotSplittableError)) throw error
+        console.warn(
+          '[GeminiEngine] ' + error.message +
+            ' Retrying on chunked ' + this.fallbackModel + ', which takes these bytes as they are.'
+        )
+        generationModel = this.fallbackModel
+        fellBack = true
+      }
     }
 
     if (
+      !fellBack &&
       /^gemini-(?:3(?:\.|$)|[4-9])/i.test(this.model) &&
       filePath &&
       options.durationSeconds &&
@@ -1615,7 +1665,7 @@ Return ONLY the schema-constrained JSON, with no markdown or additional commenta
 
       const attempt = async (config: GenerateContentConfig, promptText = prompt) => {
         const stream = await genAI.models.generateContentStream({
-          model: this.model,
+          model: generationModel,
           contents: [{ role: 'user', parts: [part, { text: promptText }] }],
           config,
         })

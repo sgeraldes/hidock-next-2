@@ -1067,18 +1067,74 @@ describe('GeminiEngine native Transcribe subdivision', () => {
     expect(order).toEqual(['upload', 'delete', 'upload', 'delete', 'upload', 'delete'])
   })
 
-  it('tells the user a container it cannot cut is the blocker', async () => {
-    // The splitters only understand WAV and MP3, so an imported .m4a/.ogg/.flac
-    // reaches the model whole and cannot be retried smaller. That is a
-    // different wall from "the interval is already at the floor", and the only
-    // one the user can do something about.
+  // The splitters only understand WAV and MP3, so an imported .m4a/.ogg/.flac
+  // reaches the model whole and cannot be retried smaller. That is a different
+  // wall from "the interval is already at the floor": at the floor the model
+  // has answered and there is nothing left to ask, while bytes we cannot cut
+  // are OUR limit, and another model reads those bytes fine. `main` sent them
+  // to the chunked generateContent path; PR #6 removed that and left every
+  // imported .m4a permanently untranscribable. It goes back, narrowed to this
+  // one case so a model that merely fell short is still not routed around.
+  const m4a = Buffer.from('ftypM4A  not something the splitters can cut')
+
+  it('falls back to the chunked path for a container it cannot cut', async () => {
+    mockInteractionsCreate.mockResolvedValue(incomplete)
+    mockGenerateContentStream.mockResolvedValue(
+      streamResponse('[00:00] Speaker 1: hola [00:04] Speaker 2: buenas')
+    )
+    const engine = new GeminiEngine({
+      apiKey: 'x',
+      model: 'gemini-3.5-transcribe',
+      fallbackModel: 'gemini-3.8-flash',
+    })
+
+    const segments = await collect(
+      engine.transcribe(m4a, { source: 'mic', durationSeconds: 900 })
+    )
+
+    expect(segments.map((segment) => segment.speaker)).toEqual(['Speaker 1', 'Speaker 2'])
+    // The fallback calls the TEXT model. Sending the Transcribe model to
+    // generateContent would call an API it does not serve.
+    expect(mockGenerateContentStream).toHaveBeenCalled()
+    for (const call of mockGenerateContentStream.mock.calls) {
+      expect(call[0].model).toBe('gemini-3.8-flash')
+    }
+  })
+
+  it('falls back for a container over the 30-minute native limit', async () => {
+    // Unary transcription with diarization is documented at 30 min. Bytes we
+    // cannot cut to fit are the same wall, so they take the same exit instead
+    // of failing the recording outright.
+    mockGenerateContentStream.mockResolvedValue(streamResponse('[00:00] Speaker 1: hola'))
+    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+
+    const segments = await collect(
+      engine.transcribe(m4a, { source: 'mic', durationSeconds: 40 * 60 })
+    )
+
+    expect(segments).toHaveLength(1)
+    expect(mockInteractionsCreate).not.toHaveBeenCalled()
+    expect(mockGenerateContentStream).toHaveBeenCalled()
+  })
+
+  it('does NOT fall back when the model simply could not finish a cuttable interval', async () => {
+    // The whole point of the subdivision work: a model falling short is fixed
+    // by asking it for less, not by handing the recording to another model.
     mockInteractionsCreate.mockResolvedValue(incomplete)
     const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
 
-    await expect(collect(engine.transcribe(
-      Buffer.from('ftypM4A  not something the splitters can cut'),
-      { source: 'mic', durationSeconds: 900 }
-    ))).rejects.toThrow(/convert it to WAV or MP3/)
+    await expect(collect(engine.transcribe(wav(120), { source: 'mic', durationSeconds: 120 })))
+      .rejects.toThrow(/could not produce a complete, reliable transcript/)
+    expect(mockGenerateContentStream).not.toHaveBeenCalled()
+  })
+
+  it('does NOT fall back on silence or cancellation', async () => {
+    mockInteractionsCreate.mockResolvedValue(silence)
+    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+
+    await expect(collect(engine.transcribe(m4a, { source: 'mic', durationSeconds: 900 })))
+      .rejects.toBeInstanceOf(NoSpeechDetectedError)
+    expect(mockGenerateContentStream).not.toHaveBeenCalled()
   })
 
   it('does not subdivide silence: no speech is an answer', async () => {
