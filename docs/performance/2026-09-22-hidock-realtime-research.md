@@ -423,6 +423,27 @@ uno; lo que falta y conviene sumar es `start_ms` como clave —- pegar por
 que se parten cuando llegan finales fuera de orden, que es justamente para lo que
 el vendor lo usa.
 
+## Addendum: H1 Lite USB identification
+
+The vendor bundle identifies an H1 Lite by USB product ID `260` (`0x0104`). At byte offset
+`4,826,984` in
+`https://hinotes.hidock.com/assets/js/index-DXxQ4T5b.js`, the vendor's model resolver ends with:
+
+```js
+H2==8256 ? "hidock-p1" : H2==8257 ? "hidock-p1:mini" : H2==260 ? "hidock-h1:lite" : "unknown"
+```
+
+The resolver receives `Qa.productId` immediately after WebUSB opens and claims the device. This
+is the same signal that this package uses in `detectModel`. The mapping keeps the existing H1
+product IDs separate: `45068`, `256`, and `258` resolve to `hidock-h1`; only `260` resolves to
+`hidock-h1:lite`.
+
+I also searched the vendor site for H1 Lite firmware and USB documentation, searched public code
+hosting for the known HiDock product IDs, and checked the local machine for an attached H1 Lite.
+The public searches did not produce a stronger source than the vendor bundle. No H1 Lite was
+attached to this machine. The bundle provides direct, implementation-level evidence for product
+ID `0x0104`, so this result unblocks the change.
+
 ## Fuentes
 
 - Bundle oficial: `https://hinotes.hidock.com/assets/js/index-DXxQ4T5b.js`,

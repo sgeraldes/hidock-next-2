@@ -117,7 +117,8 @@ export const USB_PRODUCT_IDS = {
   H1_ALT2: 0x0102,
   H1E_ALT2: 0x0103,
   P1_ALT: 0x2040,
-  P1_MINI_ALT: 0x2041
+  P1_MINI_ALT: 0x2041,
+  H1_LITE: 0x0104
 }
 
 export const EP_OUT = 0x01
@@ -127,7 +128,7 @@ export const EP_IN = 0x82
 // Types
 // ============================================================
 
-export type DeviceModel = 'hidock-h1' | 'hidock-h1e' | 'hidock-p1' | 'hidock-p1-mini' | 'unknown'
+export type DeviceModel = 'hidock-h1' | 'hidock-h1e' | 'hidock-p1' | 'hidock-p1-mini' | 'hidock-h1-lite' | 'unknown'
 
 /** Firmware gates recovered from the current HiNotes web application. */
 export function supportsRealtimeFirmware(model: DeviceModel, versionNumber: number | null): boolean {
@@ -139,6 +140,7 @@ export function supportsRealtimeFirmware(model: DeviceModel, versionNumber: numb
   }
   if (model === 'hidock-p1') return versionNumber >= 66312
   if (model === 'hidock-p1-mini') return versionNumber >= 131840
+  if (model === 'hidock-h1-lite') return versionNumber >= 196864
   return false
 }
 
@@ -1123,6 +1125,8 @@ export class JensenDevice {
       case USB_PRODUCT_IDS.P1_MINI:
       case USB_PRODUCT_IDS.P1_MINI_ALT:
         return 'hidock-p1-mini'
+      case USB_PRODUCT_IDS.H1_LITE:
+        return 'hidock-h1-lite'
       default:
         return 'unknown'
     }
