@@ -2,6 +2,7 @@ import Database from 'better-sqlite3'
 import { existsSync, readFileSync } from 'fs'
 import { join, normalize, resolve as resolvePath } from 'path'
 import { randomUUID } from 'crypto'
+import { readAudioDuration } from './audio-duration'
 import { getDatabasePath } from './file-storage'
 
 // Re-exported so consumers (e.g. vector-store's binary cache) can locate the
@@ -11,10 +12,10 @@ import { DatabaseEngine, getTableColumns, type SqlJsDatabase } from '@hidock/dat
 import { normalizeName, isGenericSpeakerLabel, detectAmbiguousName } from './entity-normalize'
 import { getEventBus } from './event-bus'
 import { isCancelledMeetingSubject, scoreMeetingCandidates } from './recording-match-scoring'
-import { isImpossibleTranscriptDensity } from './value-thresholds'
+import { DURATION_LOW_VALUE_MAX_SECONDS, isImpossibleTranscriptDensity } from './value-thresholds'
 import type { QualityRating } from '@/types/knowledge'
 
-const SCHEMA_VERSION = 55
+const SCHEMA_VERSION = 57
 
 const SCHEMA = `
 -- Calendar events from ICS
@@ -78,6 +79,10 @@ CREATE TABLE IF NOT EXISTS recordings (
     -- tombstone (hidden everywhere, restorable until hard-purged). See deleteRecordingCascade.
     personal INTEGER DEFAULT 0,
     deleted_at TEXT,
+    -- Where duration_seconds came from (v56). 'file' means it was measured from
+    -- the audio itself and needs no re-measuring. Anything else is an estimate
+    -- that backfillRecordingDurations will try to replace.
+    duration_source TEXT,
     FOREIGN KEY (meeting_id) REFERENCES meetings(id)
 );
 
@@ -107,6 +112,10 @@ CREATE TABLE IF NOT EXISTS knowledge_captures (
     -- rating the user set by hand, see applyCaptureValueClassification.
     quality_reasons TEXT,
     quality_source TEXT CHECK(quality_source IN ('ai', 'user')),
+    -- Which automatic rater wrote it (v57), read only when quality_source is
+    -- 'ai': 'content' for the model that read the transcript, 'duration' for
+    -- the stopwatch. Undoing one must never undo the other.
+    quality_method TEXT,
 
     -- Storage tier and retention
     storage_tier TEXT CHECK(storage_tier IN ('hot', 'cold', 'expiring', 'deleted')) DEFAULT 'hot',
@@ -2988,6 +2997,33 @@ const MIGRATIONS: Record<number, () => void> = {
     database.run(NOTES_TABLE_DDL)
     console.log('Migration v55 complete')
   },
+  56: () => {
+    console.log('Running migration to schema v56: duration provenance')
+    const database = getDatabase()
+    // Every duration in an existing database came from the device cache or a
+    // transcript's last segment end, never from the audio. Leaving the column
+    // NULL is what tells backfillRecordingDurations to measure those rows once.
+    try {
+      database.run('ALTER TABLE recordings ADD COLUMN duration_source TEXT')
+    } catch {
+      // Column already present on a database repaired before this migration ran.
+    }
+    console.log('Migration v56 complete')
+  },
+  57: () => {
+    console.log('Running migration to schema v57: which rater wrote a quality rating')
+    const database = getDatabase()
+    // A column rather than a wider CHECK on quality_source: SQLite cannot alter
+    // a constraint, and rebuilding knowledge_captures — a protected table — to
+    // change one is not worth it. Existing rows stay NULL, which reads as
+    // "unknown rater" and is exactly right: before this, nothing recorded it.
+    try {
+      database.run('ALTER TABLE knowledge_captures ADD COLUMN quality_method TEXT')
+    } catch {
+      // Already present on a database repaired before this migration ran.
+    }
+    console.log('Migration v57 complete')
+  },
 }
 
 /**
@@ -3400,7 +3436,10 @@ function repairPhase(): void {
     // v38 privacy source-deletion columns — force-add so older on-disk schemas
     // have them before any read-site filters on personal/deleted_at.
     { name: 'personal', def: "INTEGER DEFAULT 0" },
-    { name: 'deleted_at', def: "TEXT" }
+    { name: 'deleted_at', def: "TEXT" },
+    // v56 duration provenance — force-add so the duration backfill can tell a
+    // measured length from an estimated one on an older on-disk schema.
+    { name: 'duration_source', def: "TEXT" }
   ]
   if (recCols.length > 0) {
     for (const col of recordingRepairs) {
@@ -3433,7 +3472,10 @@ function repairPhase(): void {
     // embed the column name itself or the ALTER becomes `ADD COLUMN TEXT`
     // (syntax error, silently swallowed by the try/catch below).
     { name: 'quality_reasons', def: 'quality_reasons TEXT' },
-    { name: 'quality_source', def: "quality_source TEXT CHECK(quality_source IN ('ai','user'))" }
+    { name: 'quality_source', def: "quality_source TEXT CHECK(quality_source IN ('ai','user'))" },
+    // v57 rater provenance — force-add so the duration gate can be undone
+    // without touching a content judgement on an older on-disk schema.
+    { name: 'quality_method', def: 'TEXT' }
   ]
   if (capCols.length > 0) {
     for (const col of knowledgeRepairs) {
@@ -6397,15 +6439,20 @@ export function healRecordingStatusFromTranscripts(): number {
  * waveform and backfills the real duration here. Only writes when the value is
  * a positive, finite number and differs from what's stored.
  */
-export function updateRecordingDuration(id: string, durationSeconds: number): void {
+export function updateRecordingDuration(id: string, durationSeconds: number, source?: string): void {
   if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return
   const rounded = Math.round(durationSeconds)
-  const existing = queryOne<{ duration_seconds: number | null }>(
-    'SELECT duration_seconds FROM recordings WHERE id = ?',
+  const existing = queryOne<{ duration_seconds: number | null; duration_source: string | null }>(
+    'SELECT duration_seconds, duration_source FROM recordings WHERE id = ?',
     [id]
   )
-  if (existing && existing.duration_seconds === rounded) return
-  run('UPDATE recordings SET duration_seconds = ? WHERE id = ?', [rounded, id])
+  if (source === undefined) {
+    if (existing && existing.duration_seconds === rounded) return
+    run('UPDATE recordings SET duration_seconds = ? WHERE id = ?', [rounded, id])
+    return
+  }
+  if (existing && existing.duration_seconds === rounded && existing.duration_source === source) return
+  run('UPDATE recordings SET duration_seconds = ?, duration_source = ? WHERE id = ?', [rounded, source, id])
 }
 
 /** Strip a trailing audio extension so a .wav download matches its .hda source. */
@@ -6435,24 +6482,89 @@ export function maxTranscriptSegmentEnd(speakersJson: string | null | undefined)
 }
 
 /**
- * One-time (idempotent) backfill of `recordings.duration_seconds` for rows the
- * download/import paths stored as NULL. Uses the cheapest reliable sources that
- * already live in the DB — no new dependency, no audio decode, works offline:
+ * Undo a stopwatch verdict that a corrected duration has just invalidated.
  *
- *   1. the device-file cache duration (matched by base filename), then
- *   2. the transcript's last segment end (a lower bound).
+ * The duration gate rates anything under DURATION_LOW_VALUE_MAX_SECONDS as
+ * low-value or garbage without reading a word of it, which is right when the
+ * number is a measurement and wrong when it is a transcript's last segment
+ * end. A recording stored as 15 seconds and measured at 570 was rated on a
+ * length it never had, and the gate will not revisit it: its query only looks
+ * at captures still `unrated`.
  *
- * Persisting the value makes client-side sort/filter-by-duration in the Library
- * work even when the device is disconnected (the UI reads duration_seconds into
- * UnifiedRecording.duration). Safe to run on every Library mount:
- * `updateRecordingDuration` no-ops when the value is unchanged.
+ * So when a measurement lifts a recording from under the gate's threshold to
+ * over it, the verdict below goes back to `unrated` and the next pass decides
+ * again on the real length.
+ *
+ * Only the stopwatch's own verdicts are cleared, which is why the gate records
+ * `quality_method = 'duration'` beside the `'ai'` both automatic raters write.
+ * Under one name this could not tell them apart, and a judgement the model made
+ * after reading a transcript would be thrown away by a correction that says
+ * nothing about content. A rating a person set, a rating the model made, and a
+ * legacy rating with no method recorded are all left alone.
+ *
+ * The confidence and the assessment timestamp go with the rating. Leaving them
+ * behind would hand the next reader a row that is `unrated` and still looks
+ * assessed.
  */
-export function backfillRecordingDurations(): { scanned: number; updated: number } {
-  const rows = queryAll<{ id: string; filename: string }>(
-    `SELECT id, filename FROM recordings
-     WHERE (duration_seconds IS NULL OR duration_seconds <= 0) AND deleted_at IS NULL`
+function clearStopwatchVerdict(recordingId: string): number {
+  run(
+    `UPDATE knowledge_captures
+        SET quality_rating = 'unrated', quality_reasons = NULL, quality_source = NULL,
+            quality_method = NULL, quality_confidence = NULL, quality_assessed_at = NULL
+      WHERE source_recording_id = ?
+        AND quality_source = 'ai'
+        AND quality_method = 'duration'
+        AND quality_rating IN ('garbage', 'low-value')`,
+    [recordingId]
   )
-  if (rows.length === 0) return { scanned: 0, updated: 0 }
+  return getRowsModified()
+}
+
+/**
+ * How far a transcript may run past the end of the audio file before the file
+ * is treated as the truncated one. A transcriber's last segment can overshoot
+ * the audio by a fraction of a second; two seconds of slack absorbs that and
+ * nothing else.
+ */
+const TRUNCATED_FILE_TOLERANCE_SECONDS = 2
+
+/**
+ * Bring `recordings.duration_seconds` in line with the audio on disk.
+ *
+ * The number used to come from whatever was cheapest: the device-file cache
+ * (which holds no durations at all in practice) and then the transcript's last
+ * segment end, which this file's own comment called a lower bound. It was.
+ * Measured against the owner's library on 2026-09-22, 1,058 of 2,080 on-disk
+ * recordings carried a wrong duration and 888 of them were short — 317 hours of
+ * audio the library did not know it had. The duration gate in
+ * value-thresholds.ts rates recordings by length, so it was reading estimates.
+ *
+ * So the audio file decides now (see audio-duration.ts), and a row is measured
+ * once: a `duration_source` of 'file' is what keeps the next Library mount from
+ * opening two thousand files again.
+ *
+ * One case refuses the measurement. When the transcript runs past the end of
+ * the file, the local copy holds less audio than was once transcribed — a
+ * truncated download, of which the owner's library has 37. Writing the shorter
+ * number would record the loss as fact, so the estimate stands and the row is
+ * counted instead.
+ *
+ * Rows whose file cannot be read (four imported FLACs, two files gone from
+ * disk) fall back to the old cache-then-transcript chain, and only when they
+ * have no duration at all. Safe to run on every Library mount.
+ */
+export function backfillRecordingDurations(): {
+  scanned: number
+  updated: number
+  measured: number
+  truncated: number
+  rerateable: number
+} {
+  const rows = queryAll<{ id: string; filename: string; file_path: string | null; duration_seconds: number | null }>(
+    `SELECT id, filename, file_path, duration_seconds FROM recordings
+     WHERE deleted_at IS NULL AND (duration_source IS NULL OR duration_source <> 'file')`
+  )
+  if (rows.length === 0) return { scanned: 0, updated: 0, measured: 0, truncated: 0, rerateable: 0 }
 
   // Index the device cache by base filename so .wav downloads match .hda sources.
   const cacheRows = queryAll<{ filename: string; duration_seconds: number | null }>(
@@ -6466,9 +6578,37 @@ export function backfillRecordingDurations(): { scanned: number; updated: number
   }
 
   let updated = 0
+  let measured = 0
+  let truncated = 0
+  let rerateable = 0
   for (const row of rows) {
-    let seconds = cacheByBase.get(durationBaseFilename(row.filename)) ?? 0
+    const audio = row.file_path ? readAudioDuration(row.file_path) : null
 
+    if (audio && audio.seconds > 0) {
+      // A transcript is evidence about the audio that was captured, not about
+      // the bytes left on this disk. When it runs past them, believe it.
+      const transcript = queryOne<{ speakers: string | null }>(
+        'SELECT speakers FROM transcripts WHERE recording_id = ? LIMIT 1',
+        [row.id]
+      )
+      const transcribedTo = maxTranscriptSegmentEnd(transcript?.speakers)
+      if (transcribedTo > audio.seconds + TRUNCATED_FILE_TOLERANCE_SECONDS) {
+        truncated++
+        continue
+      }
+      measured++
+      const before = row.duration_seconds ?? 0
+      if (Math.round(before) !== Math.round(audio.seconds)) updated++
+      updateRecordingDuration(row.id, audio.seconds, 'file')
+      if (before > 0 && before < DURATION_LOW_VALUE_MAX_SECONDS && audio.seconds >= DURATION_LOW_VALUE_MAX_SECONDS) {
+        rerateable += clearStopwatchVerdict(row.id)
+      }
+      continue
+    }
+
+    // Unreadable or missing file: the old estimate chain, and only to fill a gap.
+    if ((row.duration_seconds ?? 0) > 0) continue
+    let seconds = cacheByBase.get(durationBaseFilename(row.filename)) ?? 0
     if (seconds <= 0) {
       const t = queryOne<{ speakers: string | null }>(
         'SELECT speakers FROM transcripts WHERE recording_id = ? LIMIT 1',
@@ -6476,17 +6616,20 @@ export function backfillRecordingDurations(): { scanned: number; updated: number
       )
       seconds = maxTranscriptSegmentEnd(t?.speakers)
     }
-
     if (seconds > 0) {
       updateRecordingDuration(row.id, seconds)
       updated++
     }
   }
 
-  if (updated > 0) {
-    console.log(`[duration-backfill] populated duration_seconds for ${updated}/${rows.length} recording(s)`)
+  if (updated > 0 || truncated > 0) {
+    console.log(
+      `[duration-backfill] measured ${measured} file(s), changed ${updated} duration(s), ` +
+        `kept ${truncated} whose transcript outruns the file on disk, ` +
+        `reopened ${rerateable} rating(s) the old length had settled (of ${rows.length} scanned)`
+    )
   }
-  return { scanned: rows.length, updated }
+  return { scanned: rows.length, updated, measured, truncated, rerateable }
 }
 
 /**

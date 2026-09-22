@@ -430,6 +430,12 @@ export interface ElectronAPI {
       success: boolean
       scanned?: number
       updated?: number
+      /** Rows whose length was read from the audio file itself. */
+      measured?: number
+      /** Rows whose transcript runs past the end of the file on disk. */
+      truncated?: number
+      /** Automatic ratings reopened because the corrected length invalidated them. */
+      rerateable?: number
       markedLowValue?: number
       markedByDuration?: number
       error?: string
