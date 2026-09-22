@@ -37,7 +37,9 @@ def get_hf_token() -> str | None:
     config_path = Path(os.environ.get("APPDATA", "")) / "hidock-universal-knowledge-hub" / "config.json"
     try:
         return json.loads(config_path.read_text(encoding="utf-8")).get("transcription", {}).get("localAsrHfToken")
-    except Exception:
+    except (OSError, ValueError, AttributeError):
+        # Missing/unreadable config, malformed JSON, or a section that is not an
+        # object. Any of those means "no token here"; anything else should surface.
         return None
 
 
@@ -85,8 +87,7 @@ def decode_audio(audio_path: str, torch: Any) -> dict[str, Any]:
             "16000",
             "pipe:1",
         ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         check=False,
     )
     if process.returncode != 0:
@@ -122,15 +123,25 @@ def main() -> int:
     import torch
     from pyannote.audio import Pipeline
 
+    # The host passes the thread budget (see diarizationThreadEnv in
+    # speaker-linking.ts). OMP/MKL read their own variables at import time;
+    # torch's intra-op pool has to be told explicitly, and on a CPU-only box
+    # this is the difference between one recording pinning half the machine
+    # for its whole run and it fitting in the share the user configured.
+    threads_env = os.environ.get("HIDOCK_DIARIZATION_THREADS")
+    if threads_env and threads_env.isdigit() and int(threads_env) > 0:
+        torch.set_num_threads(int(threads_env))
+        log(f"torch intra-op threads capped at {threads_env}")
+
     token = get_hf_token()
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    log(f"loading {args.model} on {device}")
+    log(f"loading {args.model} on {device} (torch threads {torch.get_num_threads()})")
     actual_model = args.model
     try:
         try:
             pipeline = Pipeline.from_pretrained(actual_model, token=token)
         except TypeError:
-            pipeline = Pipeline.from_pretrained(actual_model, use_auth_token=token)
+            pipeline = Pipeline.from_pretrained(actual_model, use_auth_token=token)  # type: ignore[call-arg]  # pyannote < 3.3 kwarg
     except Exception as primary_error:
         if not args.fallback_model or args.fallback_model == actual_model:
             raise
@@ -139,7 +150,9 @@ def main() -> int:
         try:
             pipeline = Pipeline.from_pretrained(actual_model, token=token)
         except TypeError:
-            pipeline = Pipeline.from_pretrained(actual_model, use_auth_token=token)
+            pipeline = Pipeline.from_pretrained(actual_model, use_auth_token=token)  # type: ignore[call-arg]  # pyannote < 3.3 kwarg
+    if pipeline is None:
+        raise RuntimeError(f"pyannote returned no pipeline for {actual_model}")
     pipeline.to(torch.device(device))
     audio_input = decode_audio(args.audio, torch)
 
@@ -148,7 +161,7 @@ def main() -> int:
         kwargs["min_speakers"] = args.min_speakers
     if args.max_speakers is not None:
         kwargs["max_speakers"] = args.max_speakers
-    output = pipeline(audio_input, **kwargs)
+    output = pipeline(audio_input, **kwargs)  # type: ignore[arg-type]  # stubs type min/max_speakers as bool
 
     diarization = getattr(output, "speaker_diarization", output)
     embeddings = getattr(output, "speaker_embeddings", None)
@@ -158,7 +171,7 @@ def main() -> int:
             "Use speaker-diarization-community-1 with a current pyannote.audio release."
         )
 
-    labels = list(diarization.labels())
+    labels = list(diarization.labels())  # type: ignore[attr-defined]  # Annotation, untyped in stubs
     embedding_rows = [as_list(row) for row in embeddings]
     if len(labels) != len(embedding_rows):
         raise RuntimeError(
@@ -167,7 +180,7 @@ def main() -> int:
 
     segments: list[dict[str, Any]] = []
     speech_seconds = {label: 0.0 for label in labels}
-    for segment, _, label in diarization.itertracks(yield_label=True):
+    for segment, _, label in diarization.itertracks(yield_label=True):  # type: ignore[attr-defined]
         start = round(float(segment.start), 3)
         end = round(float(segment.end), 3)
         if end <= start:
