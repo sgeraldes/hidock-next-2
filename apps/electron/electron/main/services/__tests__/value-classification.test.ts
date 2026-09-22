@@ -66,6 +66,7 @@ import {
   applyCaptureValueClassification,
   classifyCaptureValue,
   classifyCaptureValueRaw,
+  applyDurationValueGate,
   neutralizeDelimiters,
   VALUE_REASON_TAGS
 } from '../value-classification'
@@ -90,13 +91,34 @@ function wipeData(): void {
   })
 }
 
-function seedRecording(id: string, opts: { filename?: string } = {}): void {
+function seedRecording(
+  id: string,
+  opts: {
+    filename?: string
+    durationSeconds?: number | null
+    fileSize?: number | null
+    personal?: 0 | 1
+    deletedAt?: string | null
+  } = {}
+): void {
   run(
     `INSERT INTO recordings
        (id, filename, file_path, date_recorded, status, location,
-        transcription_status, on_device, on_local, source, is_imported, personal)
-     VALUES (?, ?, ?, ?, 'none', 'local-only', 'none', 0, 1, 'hidock', 0, 0)`,
-    [id, opts.filename ?? `${id}.wav`, `/tmp/${id}.wav`, '2026-01-01T10:00:00.000Z']
+        transcription_status, on_device, on_local, source, is_imported, personal,
+        duration_seconds, file_size, deleted_at)
+     VALUES (?, ?, ?, ?, 'none', 'local-only', 'none', 0, 1, 'hidock', 0, ?, ?, ?, ?)`,
+    [
+      id,
+      opts.filename ?? `${id}.wav`,
+      `/tmp/${id}.wav`,
+      '2026-01-01T10:00:00.000Z',
+      opts.personal ?? 0,
+      opts.durationSeconds ?? null,
+      // Default: a file whose size matches the device rate of 8,000 B/s, so
+      // the duration is never contradicted unless a test says so.
+      opts.fileSize === undefined ? (opts.durationSeconds ?? 0) * 8000 || null : opts.fileSize,
+      opts.deletedAt ?? null
+    ]
   )
 }
 
@@ -987,5 +1009,224 @@ describe('classifyCaptureValueRaw (no persistence — AR-3 seam split)', () => {
     expect(noProvider.providerCalled).toBe(false)
 
     expect(mockComplete).not.toHaveBeenCalled()
+  })
+})
+
+// ===========================================================================
+// Duration gate (2026-09-22) - the free verdict, and the sweep that repairs
+// the captures the LLM backfill never reached.
+// ===========================================================================
+
+describe('classifyCaptureValueRaw duration gate', () => {
+  beforeAll(async () => {
+    cleanupDbFiles(paths.db)
+    await initializeDatabase()
+  })
+
+  afterAll(() => {
+    try {
+      closeDatabase()
+    } catch {
+      /* ignore */
+    }
+    cleanupDbFiles(paths.db)
+  })
+
+  beforeEach(() => {
+    wipeData()
+    mockComplete.mockReset()
+    mockGetProviderConfig.mockReturnValue({ provider: 'gemini', apiKey: 'k' })
+  })
+
+  it('rates a sub-10s recording garbage without calling the provider', async () => {
+    seedRecording('rec-dur-1', { durationSeconds: 7 })
+    seedTranscript('rec-dur-1', { fullText: 'Hello? Is anyone there? Hello?' })
+    seedCapture('cap-dur-1', 'rec-dur-1')
+
+    const raw = await classifyCaptureValueRaw('cap-dur-1')
+
+    expect(raw.skipped).toBeUndefined()
+    expect(raw.providerCalled).toBe(false)
+    expect(mockComplete).not.toHaveBeenCalled()
+    expect(raw.classification.value).toBe('none')
+
+    expect(applyCaptureValueClassification('cap-dur-1', raw.classification).rating).toBe('garbage')
+  })
+
+  it('rates a 10-30s recording low-value without calling the provider', async () => {
+    seedRecording('rec-dur-2', { durationSeconds: 18 })
+    seedTranscript('rec-dur-2', { fullText: 'A single sentence and nothing else.' })
+    seedCapture('cap-dur-2', 'rec-dur-2')
+
+    const raw = await classifyCaptureValueRaw('cap-dur-2')
+
+    expect(raw.classification.value).toBe('low')
+    expect(mockComplete).not.toHaveBeenCalled()
+    expect(applyCaptureValueClassification('cap-dur-2', raw.classification).rating).toBe('low-value')
+  })
+
+  it('judges a short recording that was never transcribed at all', async () => {
+    seedRecording('rec-dur-3', { durationSeconds: 4 })
+    seedCapture('cap-dur-3', 'rec-dur-3')
+    // no transcript seeded - before the gate this returned skipped:no-transcript
+
+    const raw = await classifyCaptureValueRaw('cap-dur-3')
+
+    expect(raw.skipped).toBeUndefined()
+    expect(raw.classification.value).toBe('none')
+    expect(raw.providerCalled).toBe(false)
+    expect(mockComplete).not.toHaveBeenCalled()
+  })
+
+  it('refuses the duration verdict when the file size contradicts the duration', async () => {
+    // A four-minute recording whose transcription stopped after the first
+    // utterance: backfillRecordingDurations wrote the transcript's last
+    // segment end, 8s, onto a 1.92 MB file. Judging that as garbage would
+    // bury a real meeting.
+    seedRecording('rec-dur-6', { durationSeconds: 8, fileSize: 240 * 8000 })
+    seedTranscript('rec-dur-6', { fullText: 'So the first thing we agreed was the July date.' })
+    seedCapture('cap-dur-6', 'rec-dur-6')
+    mockComplete.mockResolvedValue('{"value":"high","value_reasons":[],"value_confidence":0.9}')
+
+    const raw = await classifyCaptureValueRaw('cap-dur-6')
+
+    // Falls through to the content judgement rather than the stopwatch.
+    expect(raw.classification.value).toBe('high')
+    expect(raw.providerCalled).toBe(true)
+    expect(applyCaptureValueClassification('cap-dur-6', raw.classification).rating).toBe('unrated')
+  })
+
+  it('still calls the provider for a 30s+ recording', async () => {
+    seedRecording('rec-dur-4', { durationSeconds: 45 })
+    seedTranscript('rec-dur-4', { fullText: 'Real content about the July delivery date.' })
+    seedCapture('cap-dur-4', 'rec-dur-4')
+    mockComplete.mockResolvedValue('{"value":"high","value_reasons":[],"value_confidence":0.9}')
+
+    const raw = await classifyCaptureValueRaw('cap-dur-4')
+
+    expect(mockComplete).toHaveBeenCalledTimes(1)
+    expect(raw.providerCalled).toBe(true)
+    expect(raw.classification.value).toBe('high')
+  })
+
+  it('never reaches the gate for a user-rated capture', async () => {
+    seedRecording('rec-dur-5', { durationSeconds: 3 })
+    seedCapture('cap-dur-5', 'rec-dur-5', { qualityRating: 'valuable', qualitySource: 'user' })
+
+    const raw = await classifyCaptureValueRaw('cap-dur-5')
+
+    expect(raw.skipped).toBe('already-rated')
+    expect(raw.currentRating).toBe('valuable')
+  })
+})
+
+describe('applyDurationValueGate (sweep)', () => {
+  beforeAll(async () => {
+    cleanupDbFiles(paths.db)
+    await initializeDatabase()
+  })
+
+  afterAll(() => {
+    try {
+      closeDatabase()
+    } catch {
+      /* ignore */
+    }
+    cleanupDbFiles(paths.db)
+  })
+
+  beforeEach(() => {
+    wipeData()
+    mockComplete.mockReset()
+  })
+
+  it('rates every short capture and nothing longer, with no provider call', () => {
+    seedRecording('rec-sw-1', { durationSeconds: 6 })
+    seedCapture('cap-sw-1', 'rec-sw-1')
+    seedRecording('rec-sw-2', { durationSeconds: 22 })
+    seedCapture('cap-sw-2', 'rec-sw-2')
+    seedRecording('rec-sw-3', { durationSeconds: 41 })
+    seedCapture('cap-sw-3', 'rec-sw-3')
+    seedRecording('rec-sw-4', { durationSeconds: null })
+    seedCapture('cap-sw-4', 'rec-sw-4')
+
+    const result = applyDurationValueGate()
+
+    expect(result).toEqual({ candidates: 2, marked: 2 })
+    expect(getCaptureRow('cap-sw-1')?.quality_rating).toBe('garbage')
+    expect(getCaptureRow('cap-sw-2')?.quality_rating).toBe('low-value')
+    expect(getCaptureRow('cap-sw-3')?.quality_rating).toBe('unrated')
+    expect(getCaptureRow('cap-sw-4')?.quality_rating).toBe('unrated')
+    expect(mockComplete).not.toHaveBeenCalled()
+  })
+
+  it('stamps source, confidence and reasons on what it writes', () => {
+    seedRecording('rec-sw-5', { durationSeconds: 8 })
+    seedCapture('cap-sw-5', 'rec-sw-5')
+
+    applyDurationValueGate()
+
+    const row = getCaptureRow('cap-sw-5')
+    expect(row?.quality_source).toBe('ai')
+    expect(row?.quality_confidence).toBe(1)
+    expect(row?.quality_reasons).toBe(JSON.stringify(['no_substance']))
+    expect(row?.quality_assessed_at).toBeTruthy()
+  })
+
+  it('never touches a rating the user set, or one the user cleared', () => {
+    seedRecording('rec-sw-6', { durationSeconds: 5 })
+    seedCapture('cap-sw-6', 'rec-sw-6', { qualityRating: 'valuable', qualitySource: 'user' })
+    seedRecording('rec-sw-7', { durationSeconds: 5 })
+    seedCapture('cap-sw-7', 'rec-sw-7', { qualityRating: 'unrated', qualitySource: 'user' })
+
+    // scanned:0 proves the sweep QUERY excludes both — the user-cleared row
+    // never even reaches the writer that would also have refused it.
+    const result = applyDurationValueGate()
+
+    expect(result).toEqual({ candidates: 0, marked: 0 })
+    expect(getCaptureRow('cap-sw-6')?.quality_rating).toBe('valuable')
+    expect(getCaptureRow('cap-sw-7')?.quality_rating).toBe('unrated')
+    expect(getCaptureRow('cap-sw-7')?.quality_source).toBe('user')
+  })
+
+  it('leaves a legacy rating with no quality_source alone', () => {
+    seedRecording('rec-sw-8', { durationSeconds: 5 })
+    seedCapture('cap-sw-8', 'rec-sw-8', { qualityRating: 'valuable', qualitySource: null })
+
+    expect(applyDurationValueGate().marked).toBe(0)
+    expect(getCaptureRow('cap-sw-8')?.quality_rating).toBe('valuable')
+  })
+
+  it('skips personal and soft-deleted recordings', () => {
+    seedRecording('rec-sw-9', { durationSeconds: 5, personal: 1 })
+    seedCapture('cap-sw-9', 'rec-sw-9')
+    seedRecording('rec-sw-10', { durationSeconds: 5, deletedAt: '2026-01-02T00:00:00.000Z' })
+    seedCapture('cap-sw-10', 'rec-sw-10')
+
+    expect(applyDurationValueGate()).toEqual({ candidates: 0, marked: 0 })
+    expect(getCaptureRow('cap-sw-9')?.quality_rating).toBe('unrated')
+    expect(getCaptureRow('cap-sw-10')?.quality_rating).toBe('unrated')
+  })
+
+  it('leaves a short capture alone when its file is too big for its duration', () => {
+    // The sweep must not rate a recording whose duration_seconds came out of
+    // a truncated transcript. It drops out of the candidate set entirely, so
+    // it costs nothing on every later mount either.
+    seedRecording('rec-sw-12', { durationSeconds: 8, fileSize: 240 * 8000 })
+    seedCapture('cap-sw-12', 'rec-sw-12')
+
+    expect(applyDurationValueGate()).toEqual({ candidates: 0, marked: 0 })
+    expect(getCaptureRow('cap-sw-12')?.quality_rating).toBe('unrated')
+    expect(getCaptureRow('cap-sw-12')?.quality_source).toBeNull()
+  })
+
+  it('is idempotent - a second sweep finds nothing left to do', () => {
+    seedRecording('rec-sw-11', { durationSeconds: 5 })
+    seedCapture('cap-sw-11', 'rec-sw-11')
+
+    expect(applyDurationValueGate()).toEqual({ candidates: 1, marked: 1 })
+    const first = getCaptureRow('cap-sw-11')
+    expect(applyDurationValueGate()).toEqual({ candidates: 0, marked: 0 })
+    expect(getCaptureRow('cap-sw-11')).toEqual(first)
   })
 })
