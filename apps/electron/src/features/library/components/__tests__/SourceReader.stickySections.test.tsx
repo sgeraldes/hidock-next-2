@@ -216,6 +216,27 @@ describe('SourceReader — one scrolling column', () => {
     }
   })
 
+  it('keeps the vertical rhythm the flattened wrappers used to supply', () => {
+    // space-y-4 and pt-2 lived on wrappers that can no longer have a box, and
+    // deleting them cost 8px before Summary and 16px before the transcript.
+    // They come back as spacer siblings, which are not ancestors and so cannot
+    // trap a sticky header.
+    render(<SourceReader recording={makeRecording()} transcript={TRANSCRIPT} />)
+    expect(screen.getByTestId('reader-gap-summary').className).toContain('h-2')
+    expect(screen.getByTestId('reader-gap-transcript').className).toContain('h-4')
+  })
+
+  it('does not charge the non-section states for the scroller bottom padding twice', () => {
+    // pb-6 moved to the scroller, where it applies to every state. A copy left
+    // on the lower-workspace wrapper gave device-only, artifact and no_speech
+    // 72px of bottom padding where they used to have 48.
+    render(<SourceReader recording={makeRecording()} transcript={TRANSCRIPT} />)
+    const column = screen.getByTestId('reader-scroll-body')
+    expect(column.className).toContain('pb-6')
+    const doubled = Array.from(column.querySelectorAll('.pb-6'))
+    expect(doubled, 'nothing inside the column repeats the scroller pb-6').toHaveLength(0)
+  })
+
   it('leaves no box between a section header and the scrolling column', () => {
     // The whole feature rests on this. A sticky element cannot leave its
     // containing block, so a header inside a section box pins only while that

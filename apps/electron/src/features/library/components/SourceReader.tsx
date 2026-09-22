@@ -1908,9 +1908,12 @@ export function SourceReader({
         {showLowerWorkspace && (
         // Box-less while the reading area is showing sections: a sticky header
         // cannot escape an ancestor's box, so everything between a section and
-        // reader-scroll-body has to generate none. The padding this used to
-        // carry now lives on the scroller itself.
-        <div className={cn(readingAreaHasSections ? 'contents' : 'pb-6')}>
+        // reader-scroll-body has to generate none.
+        //
+        // No pb-6 in either branch any more. It moved to the scroller, where it
+        // applies to both, and leaving a copy here charged the non-section
+        // states 72px of bottom padding where they used to pay 48.
+        <div className={cn(readingAreaHasSections && 'contents')}>
           {/* Transcript / Artifact Content. The section branch supplies its own
               horizontal padding (ReaderSection), so the reading area only pads
               itself when it is showing one of the non-section states. */}
@@ -1943,9 +1946,15 @@ export function SourceReader({
                 </p>
               </div>
             ) : effectiveTranscript ? (
-              // Box-less for the same reason; the sections' own vertical
-              // padding carries the rhythm that space-y-4 used to.
+              // Box-less for the same reason. The rhythm space-y-4 and pt-2
+              // used to supply comes back as spacer siblings: a sibling is not
+              // an ancestor, so it cannot trap a sticky header the way a
+              // wrapper would. 8px before Summary, 16px before the transcript,
+              // which is exactly what the two utilities added.
               <div className="contents">
+                {sectionIsVisible('summary') && (
+                  <div aria-hidden="true" className="h-2" data-testid="reader-gap-summary" />
+                )}
                 {sectionIsVisible('summary') && (
                   <ReaderSection
                     section="summary"
@@ -1966,6 +1975,9 @@ export function SourceReader({
                   </ReaderSection>
                 )}
 
+                {sectionIsVisible('transcript') && (
+                  <div aria-hidden="true" className="h-4" data-testid="reader-gap-transcript" />
+                )}
                 {sectionIsVisible('transcript') && (
                   <ReaderSection
                     section="transcript"
