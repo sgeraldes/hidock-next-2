@@ -91,6 +91,9 @@ Section "Uninstall"
 
   ; $INSTDIR comes from a per-user registry value. Only delete it when it
   ; still names the directory that this installer conventionally owns.
+  ; This is intentionally a name guard, not a location guard. Paths such as
+  ; C:\a\..\HiDock Model Host and \\server\share\HiDock Model Host pass because
+  ; they still identify a directory named ${PRODUCT}.
   ; For paths shorter than 18 characters, the negative StrCpy offset yields an
   ; empty string, so the comparison fails.
   StrCpy $R0 "$INSTDIR" ${NSIS_MAX_STRLEN} -17
@@ -98,12 +101,9 @@ Section "Uninstall"
   StrCpy $R0 "$INSTDIR" 1 -18
   StrCmp $R0 "\" remove_program refuse_program_directory
 
-  ; This is intentionally a name guard, not a location guard. Paths such as
-  ; C:\a\..\HiDock Model Host and \\server\share\HiDock Model Host pass because
-  ; they still identify a directory named ${PRODUCT}.
   System::Call 'kernel32::GetFileAttributes(t "$INSTDIR") i .r0'
-  IntCmp $R0 -1 refuse_program_directory
-  IntOp $R1 $R0 & 0x400
+  IntCmp $0 -1 refuse_program_directory
+  IntOp $R1 $0 & 0x400
   IntCmp $R1 0 remove_program refuse_program_directory refuse_program_directory
 
   remove_program:
