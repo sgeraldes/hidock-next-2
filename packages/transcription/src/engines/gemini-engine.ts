@@ -42,6 +42,13 @@ export interface GeminiEngineOptions {
 }
 
 /**
+ * Smallest interval worth asking the model for. Below it, halving again cannot
+ * change the answer, so a chunk the model still cannot finish is a failure to
+ * surface rather than a reason to keep splitting.
+ */
+const MIN_NATIVE_SPLIT_SECONDS = 60
+
+/**
  * Why a `completed` native transcript is still treated as incomplete.
  *
  * `gemini-3.5-transcribe` can return `status: 'completed'` with word timings
@@ -51,6 +58,16 @@ export interface GeminiEngineOptions {
  * engine notices before the app has to fail the recording: under 55% coverage,
  * or more than five minutes of audio after the last timed word. Returns null
  * when the transcript reaches the end or the duration is unknown.
+ *
+ * Both thresholds also require at least MIN_NATIVE_SPLIT_SECONDS of audio after
+ * the last timed word. Coverage is a ratio, and a ratio says nothing on a short
+ * interval: a speaker who says one sentence and then goes quiet leaves the same
+ * 30% coverage in a 20-minute chunk and in the 40-second chunk it halves down
+ * to, so without the absolute floor the caller recursed to the split floor and
+ * failed a recording whose transcript was complete (measured 2026-09-22: a
+ * 1200 s interval with speech only in its first 20 s threw after six paid
+ * calls). A tail shorter than the smallest interval we would ever request
+ * cannot be recovered by splitting, so it is not a shortfall.
  */
 export function nativeCoverageShortfall(
   segments: ReadonlyArray<{ endTime: number }>,
@@ -59,14 +76,18 @@ export function nativeCoverageShortfall(
 ): string | null {
   if (!durationSeconds || !Number.isFinite(durationSeconds) || durationSeconds <= 0) return null
   if (segments.length === 0) return null
+  const offset = Number.isFinite(startSec) ? startSec : 0
   // Segment times are absolute in the recording; `startSec` brings them back to
   // the interval being judged, so one chunk can be checked on its own.
-  let lastEnd = startSec
+  let lastEnd = offset
   for (const segment of segments) if (segment.endTime > lastEnd) lastEnd = segment.endTime
-  lastEnd -= startSec
+  // Clamp into the interval: a segment before it contributes nothing, and one
+  // past its end does not buy extra coverage.
+  lastEnd = Math.min(Math.max(lastEnd - offset, 0), durationSeconds)
+  const missing = durationSeconds - lastEnd
+  if (missing <= MIN_NATIVE_SPLIT_SECONDS) return null
   const coverage = lastEnd / durationSeconds
   if (coverage < 0.55) return `covers ${Math.round(coverage * 100)}% of the ${Math.round(durationSeconds)}s recording`
-  const missing = durationSeconds - lastEnd
   if (missing > 300) return `ends ${Math.round(missing)}s before the end of the recording`
   return null
 }
@@ -357,7 +378,17 @@ function parseMp3FrameHeader(audio: Buffer, p: number): Mp3FrameHeader | null {
  * — an unsplittable chunk has to fail rather than be retried identically.
  */
 export function halveChunk(chunk: AudioChunk): AudioChunk[] | null {
-  const target = Math.max(1, Math.floor(chunk.durationSec / 2))
+  // A duration we cannot trust makes the target meaningless: with 0 or a
+  // fraction the target floors to 1 and the splitters return one part PER
+  // SECOND (measured: 600 parts out of a 600 s chunk), each one a paid upload
+  // and a paid request. Refuse instead.
+  if (!Number.isFinite(chunk.durationSec) || chunk.durationSec < 2) return null
+  // Round the target UP. Rounding down leaves a runt third part — 601 s split
+  // at 300 s gives 300/300/1, and that 1-second part costs an upload and a
+  // request to transcribe nothing. Rounding up gives exactly two parts for any
+  // duration, and the larger one is still strictly shorter than the parent, so
+  // the caller's recursion keeps shrinking.
+  const target = Math.ceil(chunk.durationSec / 2)
   const parts =
     splitWavIntoChunks(chunk.data, target) ?? splitMp3IntoChunks(chunk.data, target)
   if (!parts || parts.length < 2) return null
@@ -522,6 +553,9 @@ function clockMatchToSeconds(match: RegExpMatchArray): number {
 }
 
 function formatTimestamp(seconds: number): string {
+  // A duration the caller could not determine reaches here as NaN, and
+  // `NaN:NaN` in an error message the user reads is worse than saying unknown.
+  if (!Number.isFinite(seconds)) return '??:??'
   const whole = Math.max(0, Math.floor(seconds))
   const hours = Math.floor(whole / 3600)
   const minutes = Math.floor((whole % 3600) / 60)
@@ -899,7 +933,15 @@ export class GeminiEngine implements TranscriptionEngine {
    * model still cannot finish is a failure worth surfacing rather than a
    * reason to keep halving. Same value the prompt-based range path uses.
    */
-  static readonly NATIVE_MIN_SPLIT_SECONDS = 60
+  static readonly NATIVE_MIN_SPLIT_SECONDS = MIN_NATIVE_SPLIT_SECONDS
+
+  /**
+   * Hard stop on how deep the native subdivision may recurse. The floor above
+   * is what normally ends the descent; this bounds the damage if a splitter
+   * ever returns a part that is not shorter than its parent. 20 min halved to
+   * the 60 s floor is five levels, so ten leaves room without hiding a bug.
+   */
+  static readonly NATIVE_MAX_SPLIT_DEPTH = 10
 
   private readonly apiKey: string
   private readonly model: string
@@ -1034,8 +1076,15 @@ export class GeminiEngine implements TranscriptionEngine {
 
       /** Halve and retry, or fail when there is nothing left to try. */
       const subdivide = async (why: string): Promise<TranscriptSegment[]> => {
+        // Every interval is strictly shorter than its parent and the floor
+        // stops the descent, so the depth cap can only be reached if a splitter
+        // ever stops shrinking. Cheaper to assert it than to let a future
+        // change spend an unbounded number of uploads finding out.
         const halves =
-          chunk.durationSec > GeminiEngine.NATIVE_MIN_SPLIT_SECONDS ? halveChunk(chunk) : null
+          depth < GeminiEngine.NATIVE_MAX_SPLIT_DEPTH &&
+          chunk.durationSec > GeminiEngine.NATIVE_MIN_SPLIT_SECONDS
+            ? halveChunk(chunk)
+            : null
         if (!halves) {
           throw new Error(
             'Gemini could not produce a complete, reliable transcript for ' +
@@ -1053,6 +1102,17 @@ export class GeminiEngine implements TranscriptionEngine {
         return out
       }
 
+      /**
+       * One pass over this exact interval. Returns the segments, or the reason
+       * the interval has to be split — deliberately NOT the split itself, so
+       * this chunk's uploaded file is deleted by the `finally` below before any
+       * subdivision uploads its own. Recursing inside the `try` kept every
+       * ancestor's file alive for the whole subtree (a 20-minute WAV per level),
+       * which is Files API quota spent on audio nobody is reading any more.
+       */
+      const attempt = async (): Promise<
+        { segments: TranscriptSegment[] } | { splitBecause: string }
+      > => {
       const uploadStartedAt = Date.now()
       trace({ phase: 'upload', status: 'started', ...common })
       let uploaded: { name: string; uri: string; mimeType: string }
@@ -1107,7 +1167,7 @@ export class GeminiEngine implements TranscriptionEngine {
         }
 
         // The model ran out of room for this interval: a smaller one fits.
-        if (interaction.status === 'incomplete') return await subdivide('interaction incomplete')
+        if (interaction.status === 'incomplete') return { splitBecause: 'interaction incomplete' }
         if (interaction.status !== 'completed') {
           throw new Error('Gemini native transcription ' + interaction.status)
         }
@@ -1129,10 +1189,10 @@ export class GeminiEngine implements TranscriptionEngine {
         const shortfall = segments.length
           ? nativeCoverageShortfall(segments, chunk.durationSec, chunk.startSec)
           : null
-        if (shortfall) return await subdivide(shortfall)
+        if (shortfall) return { splitBecause: shortfall }
 
         trace({ phase: 'chunk', status: 'completed', elapsedMs: Date.now() - chunkStartedAt, ...common })
-        return segments
+        return { segments }
       } catch (error) {
         trace({
           phase: 'chunk',
@@ -1154,6 +1214,10 @@ export class GeminiEngine implements TranscriptionEngine {
           trace({ phase: 'cleanup', status: 'failed', elapsedMs: Date.now() - cleanupStartedAt, ...common })
         }
       }
+      }
+
+      const outcome = await attempt()
+      return 'segments' in outcome ? outcome.segments : await subdivide(outcome.splitBecause)
     }
 
     for (let index = 0; index < chunks.length; index++) {

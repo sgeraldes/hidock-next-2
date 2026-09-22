@@ -986,6 +986,26 @@ describe('GeminiEngine native Transcribe subdivision', () => {
     expect(segments).toHaveLength(2)
   })
 
+  it('keeps absolute times through two levels of subdivision', async () => {
+    // The classic bug in a recursive splitter is a right-hand part reporting
+    // times relative to itself. 1200 s -> 600+600, the first 600 -> 300+300.
+    mockInteractionsCreate
+      .mockResolvedValueOnce(incomplete)      // 0-1200
+      .mockResolvedValueOnce(incomplete)      // 0-600
+      .mockResolvedValueOnce(words(10, 290))  // 0-300
+      .mockResolvedValueOnce(words(10, 290))  // 300-600
+      .mockResolvedValueOnce(words(10, 590))  // 600-1200
+    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+
+    const segments = await collect(engine.transcribe(wav(1200), { source: 'mic', durationSeconds: 1200 }))
+
+    expect(segments.map((s) => [s.startTime, s.endTime])).toEqual([
+      [10, 290],
+      [310, 590],
+      [610, 1190],
+    ])
+  })
+
   it('keeps a transcript that reaches the end of its interval', async () => {
     mockInteractionsCreate.mockResolvedValue(words(0, 599))
     const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
@@ -1004,6 +1024,47 @@ describe('GeminiEngine native Transcribe subdivision', () => {
     await expect(collect(engine.transcribe(wav(30), { source: 'mic', durationSeconds: 30 })))
       .rejects.toThrow(/could not produce a complete, reliable transcript/)
     expect(mockInteractionsCreate).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a transcript whose speaker simply stopped talking', async () => {
+    // 240 s recording, one utterance in the first 20 s, then quiet. Coverage is
+    // 8%, which the ratio alone calls a shortfall — but there is nothing to
+    // recover, and halving keeps the ratio while shrinking the interval. Until
+    // 2026-09-22 this recursed to the 60 s floor and threw
+    // "covers 54% of the 37s recording", failing a recording whose transcript
+    // was complete. It now splits while the unaccounted tail is worth a
+    // request and then accepts the answer.
+    mockInteractionsCreate
+      .mockResolvedValueOnce(words(0, 20))  // 0-240: tail 220 s, worth splitting
+      .mockResolvedValueOnce(words(0, 20))  // 0-120: tail 100 s, worth splitting
+      .mockResolvedValueOnce(words(0, 20))  // 0-60:  tail 40 s, accepted
+      .mockResolvedValueOnce(silence)       // 60-120
+      .mockResolvedValueOnce(silence)       // 120-240
+    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+
+    const segments = await collect(engine.transcribe(wav(240), { source: 'mic', durationSeconds: 240 }))
+
+    expect(segments).toHaveLength(1)
+    expect(segments[0].startTime).toBe(0)
+    expect(mockInteractionsCreate).toHaveBeenCalledTimes(5)
+  })
+
+  it('releases a chunk file before its subdivisions upload their own', async () => {
+    // Recursing while the parent's file was still open kept one uploaded file
+    // per ancestor alive for the whole subtree — a 20-minute WAV per level of
+    // Files API quota, held for audio nobody reads again.
+    const order: string[] = []
+    mockFilesUpload.mockImplementation(async () => { order.push('upload'); return nativeFile })
+    mockFilesDelete.mockImplementation(async () => { order.push('delete') })
+    mockInteractionsCreate
+      .mockResolvedValueOnce(incomplete)
+      .mockResolvedValueOnce(words(0, 300))
+      .mockResolvedValueOnce(words(0, 300))
+    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+
+    await collect(engine.transcribe(wav(600), { source: 'mic', durationSeconds: 600 }))
+
+    expect(order).toEqual(['upload', 'delete', 'upload', 'delete', 'upload', 'delete'])
   })
 
   it('does not subdivide silence: no speech is an answer', async () => {
@@ -1059,6 +1120,54 @@ describe('halveChunk', () => {
     expect(covered).toBeCloseTo(600, 0)
   })
 
+  it('splits an odd duration into exactly two parts, with no runt tail', () => {
+    // A floored target left a third part of whatever did not divide evenly —
+    // 601 s came back as 300/300/1, and that 1-second part cost an upload and
+    // a request to transcribe nothing.
+    for (const seconds of [601, 121, 999, 1201]) {
+      const halves = halveChunk({
+        data: buildWav(seconds * BYTE_RATE, BYTE_RATE),
+        mimeType: 'audio/wav',
+        startSec: 1200,
+        durationSec: seconds,
+      })
+      expect(halves).toHaveLength(2)
+      // The two parts cover the parent exactly, end to end, and each one is
+      // strictly shorter than the parent so the recursion keeps shrinking.
+      expect(halves![0].startSec).toBe(1200)
+      expect(halves![1].startSec).toBeCloseTo(1200 + halves![0].durationSec, 5)
+      expect(halves![0].durationSec + halves![1].durationSec).toBeCloseTo(seconds, 5)
+      for (const half of halves!) expect(half.durationSec).toBeLessThan(seconds)
+    }
+  })
+
+  it('halves an MP3 chunk without dropping a frame', () => {
+    const frameCount = 400
+    const mp3 = buildMp3(frameCount)
+    const total = frameCount * MP3_FRAME_DUR
+    const halves = halveChunk({ data: mp3, mimeType: 'audio/mp3', startSec: 60, durationSec: total })
+    expect(halves).not.toBeNull()
+    // Every byte of the parent survives, in order, across the parts.
+    expect(Buffer.concat(halves!.map((h) => h.data)).equals(mp3)).toBe(true)
+    expect(halves!.reduce((sum, h) => sum + h.durationSec, 0)).toBeCloseTo(total, 5)
+    expect(halves![0].startSec).toBe(60)
+    for (const half of halves!) expect(half.durationSec).toBeLessThan(total)
+  })
+
+  it('refuses a duration it cannot trust instead of cutting per second', () => {
+    // With 0, a negative or NaN the target floored to 1 and the splitters
+    // returned ONE PART PER SECOND — 600 uploads and 600 requests out of a
+    // single 600 s chunk.
+    for (const durationSec of [0, -5, 1, Number.NaN]) {
+      expect(halveChunk({
+        data: buildWav(600 * BYTE_RATE, BYTE_RATE),
+        mimeType: 'audio/wav',
+        startSec: 0,
+        durationSec,
+      })).toBeNull()
+    }
+  })
+
   it('returns null for bytes it cannot cut', () => {
     expect(halveChunk({
       data: Buffer.from('not audio at all'),
@@ -1084,5 +1193,20 @@ describe('nativeCoverageShortfall', () => {
   it('accepts a transcript that reaches within five minutes of the end', () => {
     expect(nativeCoverageShortfall([{ endTime: 3400 }], 3600)).toBeNull()
     expect(nativeCoverageShortfall([{ endTime: 0.9 }], 1)).toBeNull()
+  })
+  it('ignores a tail shorter than the smallest interval worth requesting', () => {
+    // 54% of 37 s is 17 s unaccounted. Splitting cannot recover 17 s, so this
+    // is a speaker who stopped talking, not a truncated transcript.
+    expect(nativeCoverageShortfall([{ endTime: 20 }], 37)).toBeNull()
+    expect(nativeCoverageShortfall([{ endTime: 20 }], 75)).toBeNull()
+    // One second past the floor it is worth one more request.
+    expect(nativeCoverageShortfall([{ endTime: 20 }], 81)).toMatch(/covers 25%/)
+  })
+  it('clamps segments that fall outside the interval being judged', () => {
+    // Times are absolute; a segment before the interval must not read as
+    // negative coverage, and one past its end must not read as extra.
+    expect(nativeCoverageShortfall([{ endTime: 5 }], 600, 600)).toMatch(/covers 0%/)
+    expect(nativeCoverageShortfall([{ endTime: -50 }], 600)).toMatch(/covers 0%/)
+    expect(nativeCoverageShortfall([{ endTime: 5000 }], 600)).toBeNull()
   })
 })
