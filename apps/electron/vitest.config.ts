@@ -52,7 +52,15 @@ export default defineConfig({
           // the default 10s hookTimeout (pixel-rag, timeline-analysis and
           // merge-journal have each red-lighted CI this way). A hung hook still
           // fails — it just gets a runner-realistic margin.
-          hookTimeout: 60000
+          hookTimeout: 60000,
+          // The same argument, for the test bodies. These open real SQLite
+          // databases and write to them, and the 5s default is not a
+          // runner-realistic budget for that: on 2026-09-22 two green branches
+          // failed CI on two unrelated files, recording-deletion.test.ts:467
+          // and project-discovery-observations-heal-v43.test.ts:194, both with
+          // "Test timed out in 5000ms" and both passing locally. A test that
+          // genuinely hangs still fails; it just stops being a coin flip.
+          testTimeout: 30000
         }
       },
       {
