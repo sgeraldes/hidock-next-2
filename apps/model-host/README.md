@@ -102,7 +102,11 @@ says it cannot diarize, rather than one that accepts every job and fails it.
 
 Uninstalling removes the program and leaves the second group, because a 2.5 GB
 download and a paired token are the person's, not the installer's. The
-uninstaller says so and names the folder.
+uninstaller says so and names the folder. If the stored installation path does
+not end in `\HiDock Model Host`, has a reparse-point attribute such as a junction
+or symlink, or cannot have its attributes read, it leaves that directory in
+place. It names the retained path, says the uninstaller remains inside it, and
+still removes the Start Menu shortcuts and HKCU registration.
 
 ## What is not here yet
 

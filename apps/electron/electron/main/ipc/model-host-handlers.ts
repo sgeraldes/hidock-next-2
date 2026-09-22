@@ -9,7 +9,11 @@
 
 import { ipcMain } from 'electron'
 import { z } from 'zod'
-import { checkModelHost, pairWithModelHost } from '../services/model-host-client'
+import {
+  checkModelHost,
+  pairWithModelHost,
+  resetModelHostHealthCache,
+} from '../services/model-host-client'
 import { getConfig, saveConfig } from '../services/config'
 
 const AddressSchema = z.object({
@@ -26,10 +30,14 @@ export function registerModelHostHandlers(): void {
     const parsed = AddressSchema.safeParse(raw)
     if (!parsed.success) return { success: false, error: 'Enter the host address.' }
     const config = getConfig().transcription
-    const health = await checkModelHost({
-      url: parsed.data.url,
-      token: config.modelHostToken || '',
-    })
+    const health = await checkModelHost(
+      {
+        url: parsed.data.url,
+        token: config.modelHostToken || '',
+      },
+      fetch,
+      { forceRefresh: true }
+    )
     if (!health) {
       return { success: false, error: 'No host answered at that address.' }
     }
@@ -55,6 +63,7 @@ export function registerModelHostHandlers(): void {
   })
 
   ipcMain.handle('model-host:forget', async () => {
+    resetModelHostHealthCache()
     try {
       // Empty, not undefined: saveConfig deep-merges and drops undefined, so
       // undefined would leave the old address in place and look like a no-op.

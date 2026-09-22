@@ -7,6 +7,8 @@ import {
   pairWithModelHost,
   diarizeOnModelHost,
   ModelHostUnavailableError,
+  MODEL_HOST_HEALTH_CACHE_MS,
+  resetModelHostHealthCache,
 } from '../model-host-client'
 
 const HEALTHY = {
@@ -48,6 +50,8 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.useRealTimers()
+  resetModelHostHealthCache()
   rmSync(dir, { recursive: true, force: true })
 })
 
@@ -74,6 +78,36 @@ describe('checkModelHost', () => {
   it('is null for an answer that is not a host', async () => {
     const fetchFn = vi.fn(async () => jsonResponse({ hello: 'from some other server' }))
     expect(await checkModelHost({ url: 'http://x:1', token: 't' }, fetchFn as never)).toBe(null)
+  })
+
+  it('refreshes a cached unavailable host when a person checks again', async () => {
+    const fetchFn = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({}, 503))
+      .mockResolvedValueOnce(jsonResponse(HEALTHY))
+    const settings = { url: 'http://x:1', token: 't' }
+
+    expect(await checkModelHost(settings, fetchFn as never)).toBe(null)
+    await expect(checkModelHost(settings, fetchFn as never, { forceRefresh: true })).resolves.toEqual(HEALTHY)
+    expect(fetchFn).toHaveBeenCalledTimes(2)
+  })
+
+  it('shares an in-flight health request among concurrent checks', async () => {
+    let resolveHealth!: (response: Response) => void
+    const healthResponse = new Promise<Response>((resolve) => {
+      resolveHealth = resolve
+    })
+    const fetchFn = vi.fn(() => healthResponse)
+    const settings = { url: 'http://x:1', token: 't' }
+
+    const checks = Promise.all([
+      checkModelHost(settings, fetchFn as never),
+      checkModelHost(settings, fetchFn as never),
+      checkModelHost(settings, fetchFn as never),
+    ])
+    expect(fetchFn).toHaveBeenCalledTimes(1)
+
+    resolveHealth(jsonResponse(HEALTHY))
+    await expect(checks).resolves.toEqual([HEALTHY, HEALTHY, HEALTHY])
   })
 })
 
@@ -129,8 +163,12 @@ describe('diarizeOnModelHost', () => {
     ],
     [
       'paused',
-      () => vi.fn(async () => jsonResponse({ ...HEALTHY, state: 'paused', reason: 'The host is paused.' })) as never,
-      /paused/,
+      () => vi.fn(async (url: string) =>
+        String(url).endsWith('/health')
+          ? jsonResponse(HEALTHY)
+          : jsonResponse({ error: 'The host is paused. Nobody but you can resume it.' }, 503)
+      ) as never,
+      /Nobody but you can resume it/,
     ],
     [
       'busy',
@@ -175,6 +213,63 @@ describe('diarizeOnModelHost', () => {
       )
     })
   }
+
+  it('caches an unavailable health answer across a recording backlog', async () => {
+    const fetchFn = vi.fn(async (url: string) =>
+      String(url).endsWith('/health') ? jsonResponse({}, 503) : jsonResponse(RESULT)
+    )
+    const recordings = 20
+
+    for (let index = 0; index < recordings; index += 1) {
+      await expect(
+        diarizeOnModelHost(audioPath, { url: 'http://gamestation:8765', token: 'tok' }, { timeoutMs: 5000 }, fetchFn as never)
+      ).rejects.toThrow('The model host did not answer.')
+    }
+
+    const healthCalls = calls(fetchFn).filter(([url]) => url.endsWith('/health'))
+    expect(healthCalls.length).toBeLessThan(recordings)
+    expect(healthCalls).toHaveLength(1)
+  })
+
+  it('shares one fresh health answer across a recording backlog', async () => {
+    const fetchFn = vi.fn(async (url: string) =>
+      String(url).endsWith('/health') ? jsonResponse(HEALTHY) : jsonResponse(RESULT)
+    )
+    const recordings = 20
+
+    for (let index = 0; index < recordings; index += 1) {
+      await expect(
+        diarizeOnModelHost(audioPath, { url: 'http://gamestation:8765', token: 'tok' }, { timeoutMs: 5000 }, fetchFn as never)
+      ).resolves.toEqual(RESULT)
+    }
+
+    const healthCalls = calls(fetchFn).filter(([url]) => url.endsWith('/health'))
+    expect(healthCalls.length).toBeLessThan(recordings)
+    expect(healthCalls).toHaveLength(1)
+  })
+
+  it('refreshes health after its cache lifetime, so a newly paused host explains itself', async () => {
+    vi.useFakeTimers()
+    let state: 'ready' | 'paused' = 'ready'
+    const fetchFn = vi.fn(async (url: string) =>
+      String(url).endsWith('/health')
+        ? jsonResponse({ ...HEALTHY, state, ...(state === 'paused' ? { reason: 'The host is paused. Nobody but you can resume it.' } : {}) })
+        : jsonResponse(RESULT)
+    )
+
+    await expect(
+      diarizeOnModelHost(audioPath, { url: 'http://gamestation:8765', token: 'tok' }, { timeoutMs: 5000 }, fetchFn as never)
+    ).resolves.toEqual(RESULT)
+
+    state = 'paused'
+    await vi.advanceTimersByTimeAsync(MODEL_HOST_HEALTH_CACHE_MS + 1)
+
+    await expect(
+      diarizeOnModelHost(audioPath, { url: 'http://gamestation:8765', token: 'tok' }, { timeoutMs: 5000 }, fetchFn as never)
+    ).rejects.toThrow('The host is paused. Nobody but you can resume it.')
+    expect(calls(fetchFn).filter(([url]) => url.endsWith('/health'))).toHaveLength(2)
+    vi.useRealTimers()
+  })
 
   it('does NOT fall back on a result that came back malformed', async () => {
     // A host that answers 200 with nonsense is a bug to see, not a network

@@ -141,7 +141,7 @@ const mockLiveTranscription = vi.hoisted(() => ({
   start: vi.fn().mockResolvedValue(undefined),
   pause: vi.fn(),
   stop: vi.fn().mockResolvedValue(undefined),
-  acceptDevicePacket: vi.fn().mockResolvedValue(undefined),
+  acceptDevicePacket: vi.fn(),
 }))
 
 vi.mock('../../services/gemini-live-transcription', () => ({
