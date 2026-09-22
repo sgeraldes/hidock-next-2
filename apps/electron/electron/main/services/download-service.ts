@@ -37,7 +37,7 @@ import { saveRecording, getRecordingsPath } from './file-storage'
 import { emitActivityLog } from './activity-log'
 import { cancelActiveTransfer, cancelActiveTransferByName, getActiveTransferFilename } from './download-transfer-controller'
 import { existsSync } from 'fs'
-import { join, basename } from 'path'
+import { join, basename, dirname } from 'path'
 
 /**
  * D-022 — why a requested file did not enter the queue.
@@ -391,7 +391,21 @@ export class DownloadService {
     if (!row) return false
     if (row.file_path && existsSync(row.file_path)) return true
 
-    // The claim is stale. Retire it rather than letting it shadow the disk.
+    // A missing file and an unmounted volume look identical from here, and the
+    // recordings live on an external drive. If the directory that should hold
+    // the file is itself unreachable, keep trusting the row: blocking downloads
+    // until the drive is back is recoverable, dropping 2000+ rows and re-pulling
+    // the entire device over USB is not.
+    if (row.file_path && !existsSync(dirname(row.file_path))) {
+      console.warn(
+        `[DownloadService] "${row.file_path}" is unreachable and so is its folder — ` +
+        'treating the synced_files row as still valid until the volume comes back'
+      )
+      return true
+    }
+
+    // The folder is there and the file is not. The claim is stale: retire it
+    // rather than letting it shadow the disk.
     console.warn(
       `[DownloadService] synced_files claimed "${filename}" was at "${row.file_path}" but nothing is there — ` +
       'retiring the row so the file can be reconciled or re-downloaded'

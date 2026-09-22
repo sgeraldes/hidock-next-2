@@ -85,7 +85,9 @@ describe('DownloadService — a synced_files row never outranks the disk', () =>
         local_filename: 'D022a-Rec01.wav',
         file_path: 'F:\\Old-Location\\D022a-Rec01.wav'
       })
-      // Nothing is on disk — not the recorded path, not any canonical variant.
+      // The drive is mounted (the folder resolves); the audio is not there, and
+      // not under any canonical variant either.
+      filesOnDisk.add('F:/Old-Location')
 
       const result = service.isFileAlreadySynced('D022a-Rec01.hda')
 
@@ -98,6 +100,7 @@ describe('DownloadService — a synced_files row never outranks the disk', () =>
         local_filename: 'D022b-Rec02.wav',
         file_path: 'F:\\Old-Location\\D022b-Rec02.wav'
       })
+      filesOnDisk.add('F:/Old-Location') // drive mounted, file gone
 
       service.isFileAlreadySynced('D022b-Rec02.hda')
 
@@ -111,6 +114,7 @@ describe('DownloadService — a synced_files row never outranks the disk', () =>
         local_filename: 'D022c-Rec03.wav',
         file_path: 'F:\\Old-Location\\D022c-Rec03.wav'
       })
+      filesOnDisk.add('F:/Old-Location') // drive mounted, file no longer there
       // The audio is in the CURRENT recordings directory, under the .wav variant.
       filesOnDisk.add('/mock/recordings/D022c-Rec03.wav')
 
@@ -121,6 +125,39 @@ describe('DownloadService — a synced_files row never outranks the disk', () =>
       expect(syncedRows.get('D022c-Rec03.hda')?.file_path.split('\\').join('/')).toBe(
         '/mock/recordings/D022c-Rec03.wav'
       )
+    })
+
+    it('keeps the row when the whole volume is unreachable, not just the file', () => {
+      // The audio lives on an external drive. "File missing" and "drive not
+      // mounted" are the same observation from here, and retiring 2000+ rows on
+      // an unplugged drive would re-pull the entire device over USB.
+      syncedRows.set('D022g-Rec07.hda', {
+        original_filename: 'D022g-Rec07.hda',
+        local_filename: 'D022g-Rec07.wav',
+        file_path: 'F:/HiDock-Next-Audios/D022g-Rec07.wav'
+      })
+      // Neither the file nor its directory is present — F: is gone.
+
+      const result = service.isFileAlreadySynced('D022g-Rec07.hda')
+
+      expect(result.synced).toBe(true)
+      expect(mockRemoveSyncedFile).not.toHaveBeenCalled()
+      expect(syncedRows.has('D022g-Rec07.hda')).toBe(true)
+    })
+
+    it('retires the row when the folder is there and only the file is gone', () => {
+      syncedRows.set('D022h-Rec08.hda', {
+        original_filename: 'D022h-Rec08.hda',
+        local_filename: 'D022h-Rec08.wav',
+        file_path: 'F:/HiDock-Next-Audios/D022h-Rec08.wav'
+      })
+      // The drive is mounted — the directory resolves — but the file is not there.
+      filesOnDisk.add('F:/HiDock-Next-Audios')
+
+      const result = service.isFileAlreadySynced('D022h-Rec08.hda')
+
+      expect(result.synced).toBe(false)
+      expect(mockRemoveSyncedFile).toHaveBeenCalledWith('D022h-Rec08.hda')
     })
 
     it('still trusts a row whose file is exactly where it says', () => {
@@ -145,6 +182,7 @@ describe('DownloadService — a synced_files row never outranks the disk', () =>
         local_filename: 'D022e-Rec05.wav',
         file_path: 'F:\\Old-Location\\D022e-Rec05.wav'
       })
+      filesOnDisk.add('F:/Old-Location') // drive mounted, file gone
 
       const result = service.queueDownloads([{ filename: 'D022e-Rec05.hda', size: 1024 }], true)
 
