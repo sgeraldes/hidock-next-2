@@ -31,7 +31,11 @@ vi.mock('../config', () => ({
   updateConfig: async () => {},
 }))
 
-import { GeminiLiveTranscriptionService, MAX_QUEUED_PACKETS } from '../gemini-live-transcription'
+import {
+  GeminiLiveTranscriptionService,
+  MAX_QUEUED_PACKETS,
+  STOP_DRAIN_GRACE_MS,
+} from '../gemini-live-transcription'
 
 const ROTATE_MS = 9 * 60 * 1000
 
@@ -192,7 +196,30 @@ describe('the realtime send queue', () => {
     await h.service.stop()
   })
 
-  it('says nothing while the queue stays under its bound', async () => {
+  it('reports a second episode after the queue has caught up', async () => {
+    // The "once" above is once per episode, not once per session. Catching up
+    // ends the episode; the next stall is news again. Without the reset in the
+    // drain loop the user is told the first time and never again.
+    const h = await stalled()
+    for (let i = 1; i <= MAX_QUEUED_PACKETS + 5; i++) h.service.acceptDevicePacket(tone(1000 + i))
+    expect(errors(h)).toHaveLength(1)
+
+    await h.open()
+    expect(h.service.queuedPackets).toBe(0)
+
+    // A second stall, with the queue empty and the episode closed.
+    h.tick(ROTATE_MS + 1)
+    h.gate()
+    for (let i = 1; i <= MAX_QUEUED_PACKETS + 5; i++) h.service.acceptDevicePacket(tone(2000 + i))
+    expect(errors(h)).toHaveLength(2)
+
+    await h.open()
+    await h.service.stop()
+  })
+
+  it('says nothing about backpressure while the queue stays under its bound', async () => {
+    // Only the under-bound case. What happens when it overflows is pinned by
+    // 'bounds the queue and drops the oldest audio' and by the two tests above.
     const h = await stalled()
     for (let i = 1; i <= MAX_QUEUED_PACKETS - 1; i++) h.service.acceptDevicePacket(tone(1000 + i))
     expect(errors(h)).toHaveLength(0)
@@ -270,12 +297,66 @@ describe('the realtime send queue', () => {
     await h.service.stop()
   })
 
-  it('ignores packets that arrive while stopped', async () => {
-    const h = harness()
-    await h.service.start(h.sender)
-    await h.service.stop()
-    h.service.acceptDevicePacket(tone(9000))
-    await h.service.flush()
-    expect(allSamples(h)).toHaveLength(0)
+  it('returns from stop even when the reconnect never comes back', async () => {
+    // The SDK takes no AbortSignal, so a handshake that hangs cannot be
+    // cancelled. Before the deadline, `stop()` waited on it and so did
+    // `jensen:stopRealtime`, which awaits `stop()` in its `finally`: the Stop
+    // button hung on a dead socket. The gate here is never opened, which is
+    // what the earlier version of this test never did.
+    vi.useFakeTimers()
+    try {
+      const h = harness()
+      await h.service.start(h.sender)
+      h.tick(ROTATE_MS + 1)
+      h.gate()
+      for (let i = 1; i <= 5; i++) h.service.acceptDevicePacket(tone(i * 100))
+
+      let returned = false
+      const stopping = h.service.stop().then(() => {
+        returned = true
+      })
+      await vi.advanceTimersByTimeAsync(STOP_DRAIN_GRACE_MS - 1)
+      expect(returned).toBe(false)
+      await vi.advanceTimersByTimeAsync(2)
+      await stopping
+      expect(returned).toBe(true)
+
+      // Abandoning the drain is safe: the sessions were closed before the wait,
+      // so nothing reaches the provider when the handshake finally settles.
+      await h.open()
+      expect(allSamples(h)).toHaveLength(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not even queue a packet that arrives while stopped', async () => {
+    // `processPacket` refuses too, so asserting on what the provider received
+    // proves nothing about the guard in `acceptDevicePacket`. Queue depth right
+    // after a plain stop proves nothing either: the drain loop shifts the
+    // packet off before the call returns. The case where the guard is the only
+    // thing standing is a drain abandoned on a handshake — nothing is left to
+    // consume the queue, so a packet accepted now is memory held for a session
+    // that is over, and it grows with every poll the renderer has in flight.
+    vi.useFakeTimers()
+    try {
+      const h = harness()
+      await h.service.start(h.sender)
+      h.tick(ROTATE_MS + 1)
+      h.gate()
+      h.service.acceptDevicePacket(tone(100))
+
+      const stopping = h.service.stop()
+      await vi.advanceTimersByTimeAsync(STOP_DRAIN_GRACE_MS + 1)
+      await stopping
+
+      h.service.acceptDevicePacket(tone(9000))
+      expect(h.service.queuedPackets).toBe(0)
+
+      await h.open()
+      expect(allSamples(h)).toHaveLength(0)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

@@ -300,6 +300,16 @@ const bytesToMs = (byteLength: number): number => (byteLength / 32_000) * 1000
 export const MAX_QUEUED_PACKETS = 200
 
 /**
+ * How long `stop()` waits for a parked drain before returning anyway.
+ *
+ * Long enough that the ordinary case — a send already handed to the SDK —
+ * finishes and `stop()` still returns having drained cleanly. Short enough that
+ * a user who pressed Stop gets the UI back while a dead socket is still timing
+ * out somewhere underneath.
+ */
+export const STOP_DRAIN_GRACE_MS = 250
+
+/**
  * One Live session bound to one audio channel.
  *
  * Each session owns its own rotation clock. The previous single-session code
@@ -519,8 +529,11 @@ export class GeminiLiveTranscriptionService {
    * is a property of the firmware on the other end of the cable, not of any
    * one packet, so repeating it every 100 ms would bury the log.
    */
-  private async degradeToMono(): Promise<void> {
-    if (this.monoSession) return
+  private async degradeToMono(generation: number): Promise<void> {
+    // The caller snapshots the generation before this call; a stop between the
+    // two would otherwise put "the device is sending a single audio channel" on
+    // screen for a session the user already ended.
+    if (this.monoSession || generation !== this.generation) return
     const open = this.sessions
     this.sessions = null
     this.emit('transcription-live:error', {
@@ -639,6 +652,33 @@ export class GeminiLiveTranscriptionService {
     while (this.draining) await this.draining
   }
 
+  /**
+   * Wait for the drain, but not forever.
+   *
+   * A drain parked inside `live.connect` is suspended on a promise nobody can
+   * cancel: the SDK takes no AbortSignal, so `ChannelSession.stop()` can latch
+   * the session closed but cannot make the handshake return. Without a deadline
+   * `stop()` inherits that wait, and `jensen:stopRealtime` inherits it in turn,
+   * so a stalled reconnect at the 9 minute mark leaves the Stop button hanging
+   * on a socket.
+   *
+   * Abandoning the drain is safe, which is why a deadline is enough: the
+   * sessions are already closed and latched, and the loop checks the generation
+   * before every packet, so when the handshake finally settles the loop finds a
+   * stale generation, exits, and the session it opened is closed unused.
+   */
+  private async flushWithin(ms: number): Promise<void> {
+    if (!this.draining) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    await Promise.race([
+      this.flush(),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, ms)
+      }),
+    ])
+    if (timer) clearTimeout(timer)
+  }
+
   private async processPacket(packet: RealtimeData): Promise<void> {
     if (!this.active) return
     const key = resolveGeminiApiKey()
@@ -655,7 +695,7 @@ export class GeminiLiveTranscriptionService {
     if (looksMono(packet)) {
       this.monoRun += 1
       if (this.monoRun >= MONO_PACKETS_BEFORE_DEGRADING && !this.monoSession) {
-        await this.degradeToMono()
+        await this.degradeToMono(generation)
         if (generation !== this.generation) return
       }
       if (this.monoSession) {
@@ -724,7 +764,9 @@ export class GeminiLiveTranscriptionService {
     // one packet through, because nothing had told the session to stop yet.
     for (const session of sessions) await session.stop()
     // And only then wait for the loop to unwind, so no send outlives `stop()`.
-    await this.flush()
+    // Bounded, because that wait can be a WebSocket handshake that nobody can
+    // cancel, and Stop has to return either way.
+    await this.flushWithin(STOP_DRAIN_GRACE_MS)
     this.emit('transcription-live:status', { status: 'stopped' })
     this.sender = null
   }
