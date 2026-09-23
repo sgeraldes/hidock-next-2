@@ -449,13 +449,18 @@ app.on('before-quit', (event) => {
   stopRecordingWatcher()
   stopTranscriptionProcessor()
   void (async () => {
+    let releaseTimer: NodeJS.Timeout | undefined
     try {
       await Promise.race([
         getJensenDevice().disconnect(),
-        new Promise((resolve) => setTimeout(resolve, USB_RELEASE_TIMEOUT_MS)),
+        new Promise((resolve) => {
+          releaseTimer = setTimeout(resolve, USB_RELEASE_TIMEOUT_MS)
+        }),
       ])
     } catch (error) {
       console.warn('[Quit] releasing the USB device failed:', error)
+    } finally {
+      clearTimeout(releaseTimer)
     }
     closeDatabase()
     console.log('Cleanup complete')
