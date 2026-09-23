@@ -3899,6 +3899,14 @@ export async function initializeDatabase(): Promise<void> {
   await engine.initialize()
 }
 
+/**
+ * Open the database for reading only, for the headless brain (see brain-host.ts).
+ * No journal-mode change, no backup, no schema work; refuses an older schema.
+ */
+export function initializeDatabaseReadOnly(): void {
+  engine.initializeReadOnly()
+}
+
 /** Invoked by the post-paint boot scheduler; never delays the main window. */
 export async function runDeferredDatabaseBackup(): Promise<void> {
   await engine.runDeferredBackup()

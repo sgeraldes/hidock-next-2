@@ -33,7 +33,10 @@ export function configureEarlyStartup(): void {
     app.commandLine.appendSwitch('device-event-log-level', '3')
   }
 
-  const enableRemoteDebugging = is.dev || process.env.ENABLE_REMOTE_DEBUGGING === 'true'
+  // Never in the headless brain: it exists to replace the debugging port as the
+  // way agents reach this data, and opening that port would put it right back.
+  const brainOnly = process.argv.includes('--brain-only')
+  const enableRemoteDebugging = !brainOnly && (is.dev || process.env.ENABLE_REMOTE_DEBUGGING === 'true')
   if (enableRemoteDebugging) {
     const cdpPort = process.env.HIDOCK_DEV_CDP_PORT || '9222'
     app.commandLine.appendSwitch('remote-debugging-port', cdpPort)

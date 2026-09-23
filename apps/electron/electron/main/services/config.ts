@@ -476,7 +476,17 @@ export function migrateGeminiKeyToCredentialStore(cfg: AppConfig): boolean {
   }
 }
 
-export async function initializeConfig(): Promise<void> {
+/**
+ * Load config.json into memory.
+ *
+ * `persist: false` is for a second process reading the same profile while the
+ * app may be running — the headless brain. It loads and merges, and never
+ * writes: the migrations below rewrite config.json and move the Gemini key into
+ * the credential store, and two processes doing that at once would clobber each
+ * other. The brain needs the storage paths, not the model settings.
+ */
+export async function initializeConfig(options: { persist?: boolean } = {}): Promise<void> {
+  const persist = options.persist !== false
   const configPath = getConfigPath()
 
   try {
@@ -494,6 +504,7 @@ export async function initializeConfig(): Promise<void> {
       }
       // Merge with defaults to handle new fields
       config = deepMerge(DEFAULT_CONFIG, savedConfig)
+      if (!persist) return
       // Auto-upgrade retired Gemini model names in persisted configs so old
       // saved values (e.g. gemini-2.0-flash, now 404) don't break transcription
       // and GraphRAG extraction. Persist if anything changed.
@@ -504,6 +515,10 @@ export async function initializeConfig(): Promise<void> {
         await saveConfig(config)
       }
     } else {
+      if (!persist) {
+        config = { ...DEFAULT_CONFIG }
+        return
+      }
       // Create config file with defaults
       await saveConfig(DEFAULT_CONFIG)
     }

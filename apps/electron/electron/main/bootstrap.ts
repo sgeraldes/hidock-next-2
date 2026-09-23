@@ -9,10 +9,29 @@ const startup = getStartupState()
 startup.runtimeDir = __dirname
 configureEarlyStartup()
 
-startup.hasSingleInstanceLock = acquireSingleInstanceLock({
-  getMainWindow: () => startup.mainWindow,
-  getSplashWindow: () => startup.splashWindow
-})
+// `--brain-only` is the headless second brain an agent's bridge starts when the
+// app is closed: no window, no GPU, read-only database, exits when idle or when
+// the app opens (see brain-host.ts). It must not take the single-instance lock,
+// or opening the app while it runs would only focus a process with no window.
+const brainOnly = process.argv.includes('--brain-only')
+
+if (brainOnly) {
+  app.disableHardwareAcceleration()
+  app.whenReady().then(async () => {
+    const { runBrainOnly } = await import('./brain-host')
+    await runBrainOnly()
+  }).catch((error) => {
+    console.error('[Brain] headless start failed:', error)
+    app.exit(1)
+  })
+}
+
+startup.hasSingleInstanceLock = brainOnly
+  ? false
+  : acquireSingleInstanceLock({
+      getMainWindow: () => startup.mainWindow,
+      getSplashWindow: () => startup.splashWindow
+    })
 
 if (startup.hasSingleInstanceLock) {
   app.whenReady().then(async () => {
