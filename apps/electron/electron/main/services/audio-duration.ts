@@ -25,6 +25,13 @@
  * So the bytes decide, not the declaration: find the payload, and if it opens
  * on an MPEG frame, measure it as MPEG. PCM arithmetic is the fallback for a
  * container that turns out to be telling the truth.
+ *
+ * Variable bitrate. The app's own "split recording" feature writes its parts
+ * as VBR MP3 with a Xing header, averaging 47-49 kbps. Measuring those from the
+ * first frame's bitrate read them a third short, and the duration backfill then
+ * flagged all seven parts in the owner's library as truncated downloads — the
+ * transcript, correctly, ran past a length the file never had. A Xing, Info or
+ * VBRI header states the exact frame count, so when one is present it decides.
  */
 
 import { openSync, readSync, closeSync, statSync } from 'fs'
@@ -56,6 +63,15 @@ interface MpegFrame {
   hz: number
   /** Frame length in bytes, used to confirm the next frame lands on a sync. */
   bytes: number
+  /** Audio samples each frame carries: 384, 1152, or 576 for MPEG 2/2.5 Layer III. */
+  samples: number
+  /**
+   * Where a Xing/Info header would start, counted from the frame's first byte:
+   * after the 4-byte header and the Layer III side information, whose size
+   * depends on the MPEG version and on mono versus stereo. Null for Layers I
+   * and II, which do not carry one.
+   */
+  xingOffset: number | null
 }
 
 /** Parse an MPEG audio frame header at `offset`, or null when there is none. */
@@ -82,6 +98,7 @@ function parseFrame(buffer: Buffer, offset: number): MpegFrame | null {
   const hz = SAMPLE_RATES[version]?.[rateIndex]
   if (!kbps || !hz) return null
 
+  const mono = ((buffer[offset + 3] >> 6) & 3) === 3
   const bits = kbps * 1000
   // Samples per frame decide the coefficient. Layer I is 384 (and counts in
   // 4-byte slots), Layer II is 1152 in every version, and Layer III is 1152
@@ -95,7 +112,38 @@ function parseFrame(buffer: Buffer, offset: number): MpegFrame | null {
     layer === 3
       ? (Math.floor((12 * bits) / hz) + padding) * 4
       : Math.floor((coefficient * bits) / hz) + padding
-  return { kbps, hz, bytes }
+  const samples = layer === 3 ? 384 : layerThree && version !== 3 ? 576 : 1152
+  const sideInfo = version === 3 ? (mono ? 17 : 32) : mono ? 9 : 17
+  return { kbps, hz, bytes, samples, xingOffset: layerThree ? 4 + sideInfo : null }
+}
+
+/** Offset of a Fraunhofer VBRI header from the frame's first byte; fixed by its spec. */
+const VBRI_OFFSET = 4 + 32
+
+/**
+ * The exact number of audio frames, when the first frame carries a Xing, Info
+ * or VBRI header that states it. Null when there is no such header or it does
+ * not include a frame count, which is what a plain CBR stream looks like.
+ */
+function statedFrameCount(buffer: Buffer, frameStart: number, frame: MpegFrame): number | null {
+  if (frame.xingOffset !== null) {
+    const at = frameStart + frame.xingOffset
+    if (at + 12 <= buffer.length) {
+      const tag = buffer.subarray(at, at + 4).toString('latin1')
+      // Xing marks VBR, Info the same structure on a CBR file. Bit 0 of the
+      // flags says the frame count follows.
+      if ((tag === 'Xing' || tag === 'Info') && (buffer.readUInt32BE(at + 4) & 1) === 1) {
+        const frames = buffer.readUInt32BE(at + 8)
+        if (frames > 0) return frames
+      }
+    }
+  }
+  const vbri = frameStart + VBRI_OFFSET
+  if (vbri + 18 <= buffer.length && buffer.subarray(vbri, vbri + 4).toString('latin1') === 'VBRI') {
+    const frames = buffer.readUInt32BE(vbri + 14)
+    if (frames > 0) return frames
+  }
+  return null
 }
 
 /**
@@ -183,11 +231,12 @@ export interface AudioDuration {
  * file is missing, empty, or in a format this cannot read (the four imported
  * FLACs in the owner's library are the known case).
  *
- * MPEG duration assumes a constant bitrate, which is what this app's device
- * writes — every one of the 2,080 measured files is a flat 64 kbps at 16 kHz.
- * A variable-bitrate import would read long or short here; nothing in the
- * library is one today, and the alternative is walking every frame of a 28 MB
- * file on every scan.
+ * The device writes constant-bitrate MPEG, 64 kbps at 16 kHz, and for that the
+ * payload size over the bitrate is exact. When the first frame carries a Xing,
+ * Info or VBRI header, its frame count is used instead, which is exact for
+ * variable bitrate too — the app's split parts are the case that needs it. A
+ * VBR file with no such header would still read long or short; producing one
+ * takes an encoder that omits the header, and none in this app does.
  */
 export function readAudioDuration(path: string): AudioDuration | null {
   let fileSize: number
@@ -209,6 +258,13 @@ export function readAudioDuration(path: string): AudioDuration | null {
   const payload = findPayload(header, fileSize)
   const found = findFrame(header.subarray(payload.offset, payload.offset + SYNC_SEARCH_BYTES))
   if (found) {
+    const frames = statedFrameCount(header, payload.offset + found.offset, found.frame)
+    if (frames !== null) {
+      return {
+        seconds: (frames * found.frame.samples) / found.frame.hz,
+        how: `mpeg ${found.frame.hz}Hz, ${frames} frames from the stream header`,
+      }
+    }
     const bytes = payload.size - found.offset
     if (bytes <= 0) return null
     return {
