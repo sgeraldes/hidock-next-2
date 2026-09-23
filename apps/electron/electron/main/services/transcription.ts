@@ -1847,6 +1847,12 @@ export const TOO_SHORT_REASON_CODE = 'recording_too_short'
 function measureTooShortClip(filePath: string): Record<string, unknown> | null {
   const measured = readAudioDuration(filePath)
   if (!measured || measured.seconds >= DURATION_GARBAGE_MAX_SECONDS) return null
+  // Skipping drops a recording from transcription for good, so only a real MPEG
+  // measurement may decide it. The PCM fallback reads a lying RIFF container at
+  // a quarter of its length: a 30-second device file whose first frame sat past
+  // the sync search window read as 7.6 seconds in review. Anything that did not
+  // come from MPEG frames goes through the normal path instead.
+  if (!measured.how.startsWith('mpeg')) return null
   return {
     status: 'no_speech',
     reasonCodes: [TOO_SHORT_REASON_CODE],
@@ -1976,6 +1982,7 @@ async function transcribeRecording(
   }
 
   console.log(`Transcribing: ${recording.filename}`)
+  const statusBeforeRun = recording.transcription_status ?? 'none'
   // AI-13: Use standard enum values matching Recording.transcription_status
   updateRecordingTranscriptionStatus(recordingId, 'processing')
 
@@ -2076,6 +2083,23 @@ Meeting ${i + 1}: "${m.subject}"
         `(${(audioPreflight.nonSilentRatio * 100).toFixed(2)}%); provider transcription and all downstream AI skipped`
     )
     return { status: 'no_speech', reason: 'no_speech' }
+  }
+
+  // An explicit re-run of a value-excluded recording gets past the gate above
+  // for one reason: so this local preflight can prove silence and retire a false
+  // transcript. It found speech, so the rating still stands and no provider may
+  // see this audio. Stop here, before pyannote. Leaving it to the downstream
+  // checks ended the run badly: speaker linking was killed mid-run and the row
+  // retried three times into an error, or, with speaker linking off, the status
+  // stayed 'processing' forever with a dead Transcribe button. The owner lifts
+  // the rating with "Clear rating", and the next re-run then goes through.
+  if (isExplicitReprocess && !isRecordingEligible(recordingId)) {
+    updateRecordingTranscriptionStatus(recordingId, statusBeforeRun)
+    console.log(
+      `[Transcription] ${recordingId} has speech but its rating keeps it from any provider; ` +
+        'explicit re-run stopped after the local check. Clear the rating to transcribe it.'
+    )
+    return { status: 'cancelled' }
   }
 
   meetingContext += `\n\nLOCAL AUDIO ACTIVITY EVIDENCE (authoritative safety constraint):
@@ -2225,6 +2249,9 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
         `[Transcription] Recording ${recordingId} became ineligible during the transcription ` +
           'provider pipeline (chunk/upload/retry) — aborted before further audio was sent; nothing persisted'
       )
+      // Hand the status back: 'processing' with nothing running is a dead
+      // Transcribe button, because the UI ignores clicks on a run in progress.
+      updateRecordingTranscriptionStatus(recordingId, statusBeforeRun)
       return { status: 'cancelled' }
     }
     if (e instanceof NoSpeechDetectedError) {
@@ -2289,6 +2316,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
       `[Transcription] Recording ${recordingId} became ineligible during audio transcription ` +
         '— skipping Gemini analysis; no transcript sent to any external LLM for analysis'
     )
+    updateRecordingTranscriptionStatus(recordingId, statusBeforeRun)
     return { status: 'cancelled' }
   }
 

@@ -585,6 +585,64 @@ describe('Transcription Service', () => {
       expect(mockAnalyzeAudioPreflight).toHaveBeenCalled()
       expect(mockUpdateRecordingStatus).not.toHaveBeenCalledWith('rec-short-rerun', 'no_speech')
     })
+
+    it('stops an explicit re-run of a rated clip once the local check finds speech, and hands the status back', async () => {
+      // Review of PR #25: a garbage-rated clip re-run explicitly got past the
+      // gate (so the local check could prove silence), found speech, and then
+      // died later — speaker linking killed mid-run into three retries and an
+      // error, or with speaker linking off, 'processing' forever. It must stop
+      // right after the local check, before any provider, status restored.
+      queueOne('rec-rated', writeMpegClip('rated.wav', 5), 'gemini')
+      mockGetRecordingById.mockReturnValue({
+        id: 'rec-rated',
+        filename: 'rec-rated.wav',
+        file_path: joinPath(clipDir, 'rated.wav'),
+        duration_seconds: 5,
+        date_recorded: '2026-09-22T10:00:00.000Z',
+        status: 'no_speech',
+        transcription_status: 'no_speech'
+      })
+      mockIsRecordingEligible.mockReturnValue(false) // rated garbage: value-excluded
+
+      await runQueueUntil(() => {
+        expect(mockUpdateQueueItem).toHaveBeenCalledWith('queue-rec-rated', 'cancelled')
+      })
+
+      expect(mockAnalyzeAudioPreflight).toHaveBeenCalled() // the local check still ran
+      expect(mockGeminiTranscribeCall).not.toHaveBeenCalled()
+      expect(mockGenerateContent).not.toHaveBeenCalled()
+      const statuses = mockUpdateRecordingStatus.mock.calls.filter(([id]) => id === 'rec-rated').map(([, s]) => s)
+      expect(statuses).toEqual(['processing', 'no_speech'])
+    })
+
+    it('never skips on a PCM measurement, which reads a lying container at a quarter of its length', async () => {
+      // An honest 16-bit PCM WAV of 5 s measures as PCM. The skip decision only
+      // trusts MPEG frames, so this goes to the transcriber rather than being
+      // dropped on a measurement that could be wrong by a factor of four.
+      const pcm = Buffer.alloc(44 + 160000)
+      pcm.write('RIFF', 0, 'latin1')
+      pcm.writeUInt32LE(36 + 160000, 4)
+      pcm.write('WAVE', 8, 'latin1')
+      pcm.write('fmt ', 12, 'latin1')
+      pcm.writeUInt32LE(16, 16)
+      pcm.writeUInt16LE(1, 20)
+      pcm.writeUInt16LE(1, 22)
+      pcm.writeUInt32LE(16000, 24)
+      pcm.writeUInt32LE(32000, 28)
+      pcm.writeUInt16LE(2, 32)
+      pcm.writeUInt16LE(16, 34)
+      pcm.write('data', 36, 'latin1')
+      pcm.writeUInt32LE(160000, 40)
+      const path = joinPath(clipDir, 'pcm-5s.wav')
+      writeFileSync(path, pcm)
+      queueOne('rec-pcm', path)
+
+      await runQueueUntil(() => {
+        expect(mockGeminiTranscribeCall).toHaveBeenCalled()
+      })
+
+      expect(mockUpdateRecordingStatus).not.toHaveBeenCalledWith('rec-pcm', 'no_speech')
+    })
   })
 
   describe('queueTranscriptionIfEnabled (single transcription funnel)', () => {
