@@ -102,7 +102,11 @@ export function useOperations() {
       // distinguish corrective user work from an automatic/background retry.
       // Previously this branch returned false above, making the primary
       // Re-transcribe button a no-op while the dropdown happened to work.
-      if (recording.transcriptionStatus === 'complete') {
+      // A no_speech recording (silent, or skipped as shorter than the value
+      // gate's minimum) takes the same route: clicking Transcribe on it is the
+      // user overriding that verdict, and only an explicit reprocess bypasses
+      // the main process's too-short gate.
+      if (recording.transcriptionStatus === 'complete' || recording.transcriptionStatus === 'no_speech') {
         const configResult = await window.electronAPI.config.get()
         const configuredProvider = configResult?.success
           ? (configResult.data as AppConfig)?.transcription?.provider

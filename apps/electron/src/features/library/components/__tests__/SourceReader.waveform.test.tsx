@@ -109,7 +109,7 @@ beforeEach(() => {
   useUIStore.setState({ waveformLoadedForId: null, waveformLoadingId: null, playbackDuration: 0 })
   useLibraryStore.setState({
     waveformPinned: false,
-    readerSectionModes: { player: 'expanded', metadata: 'expanded', summary: 'expanded', transcript: 'expanded' },
+    readerSectionModes: { player: 'expanded', metadata: 'expanded', moments: 'expanded', summary: 'expanded', transcript: 'expanded' },
     readerVerticalSizes: [64, 36],
     listCollapsed: false
   })
@@ -131,7 +131,7 @@ describe('SourceReader — single explicitly controlled waveform', () => {
   it('minimizes to the full-width player pill and still renders ONE element', () => {
     const restore = mockRegionWidth(800) // wide pane → pill, not scrubber
     render(<SourceReader recording={makeRecording()} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Player' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Minimize Player' }))
     const players = screen.getAllByTestId(/^waveform-player-/)
     expect(players).toHaveLength(1)
     expect(screen.getByTestId('waveform-player-pill')).toBeInTheDocument()
@@ -142,7 +142,7 @@ describe('SourceReader — single explicitly controlled waveform', () => {
   it('uses the scrubber for a minimized player when the reader pane is narrow', () => {
     const restore = mockRegionWidth(320) // below breakpoint → scrubber
     render(<SourceReader recording={makeRecording()} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Player' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Minimize Player' }))
     expect(screen.getAllByTestId(/^waveform-player-/)).toHaveLength(1)
     expect(screen.getByTestId('waveform-player-scrubber')).toBeInTheDocument()
     restore()
@@ -198,11 +198,15 @@ describe('SourceReader — docked small player', () => {
 
     expect(useLibraryStore.getState().listCollapsed).toBe(true)
     expect(screen.getByRole('button', { name: 'Return Player to reader' })).toBeInTheDocument()
-    expect(screen.queryByTestId('reader-scroll-body')).not.toBeInTheDocument()
+    // The reader is ONE scrolling column since 2026-09-22, so the column itself
+    // always exists. What maximizing removes is every OTHER section.
+    expect(screen.getByTestId('reader-scroll-body')).toBeInTheDocument()
+    expect(screen.queryByTestId('reader-section-transcript')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('reader-section-metadata')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Return Player to reader' }))
     expect(useLibraryStore.getState().listCollapsed).toBe(false)
-    expect(screen.getByTestId('reader-scroll-body')).toBeInTheDocument()
+    expect(screen.getByTestId('reader-section-metadata')).toBeInTheDocument()
   })
 })
 

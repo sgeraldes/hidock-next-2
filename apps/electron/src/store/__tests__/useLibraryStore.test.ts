@@ -85,6 +85,7 @@ describe('useLibraryStore', () => {
       expect(state.readerSectionModes).toEqual({
         player: 'expanded',
         metadata: 'expanded',
+        moments: 'expanded',
         summary: 'expanded',
         transcript: 'expanded'
       })
@@ -1043,12 +1044,39 @@ describe('useLibraryStore', () => {
   })
 
   describe('Reader workspace layout', () => {
+    it('fills in a section a previously-persisted store never heard of', () => {
+      // zustand/persist merges shallowly: a v0 map with four keys would REPLACE
+      // the five-key default and leave `moments` undefined, which then reads as
+      // a section with no mode at all.
+      const migrate = useLibraryStore.persist.getOptions().migrate!
+      const migrated = migrate(
+        {
+          readerSectionModes: {
+            player: 'docked',
+            metadata: 'hidden',
+            summary: 'expanded',
+            transcript: 'expanded'
+          },
+          readerVerticalSizes: [50, 50]
+        },
+        0
+      ) as { readerSectionModes: Record<string, string>; readerVerticalSizes: number[] }
+
+      expect(migrated.readerSectionModes.moments).toBe('expanded')
+      // Every choice the stored map DID carry survives.
+      expect(migrated.readerSectionModes.player).toBe('docked')
+      expect(migrated.readerSectionModes.metadata).toBe('hidden')
+      // And so does the legacy key the reader no longer reads.
+      expect(migrated.readerVerticalSizes).toEqual([50, 50])
+    })
+
     it('updates one section without changing the others', () => {
       useLibraryStore.getState().setReaderSectionMode('player', 'docked')
 
       expect(useLibraryStore.getState().readerSectionModes).toEqual({
         player: 'docked',
         metadata: 'expanded',
+        moments: 'expanded',
         summary: 'expanded',
         transcript: 'expanded'
       })

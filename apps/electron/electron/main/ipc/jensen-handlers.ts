@@ -101,6 +101,16 @@ let recordingPollIntervalMs = RECORDING_POLL_INTERVAL_MS
 // undefined = unknown (never read yet); string = actively recording; null = idle.
 let lastRecordingFilename: string | null | undefined = undefined
 
+/**
+ * The device's in-progress recording as the CMD-18 poll last saw it: a
+ * filename while recording, null when confirmed idle, undefined when unknown.
+ * Main-process readers (truncated-download recovery) use it to keep their
+ * hands off the file the device is still writing.
+ */
+export function getActiveDeviceRecording(): string | null | undefined {
+  return lastRecordingFilename
+}
+
 function scheduleRecordingPoll(intervalMs: number): void {
   if (recordingPollTimer) clearInterval(recordingPollTimer)
   recordingPollIntervalMs = intervalMs

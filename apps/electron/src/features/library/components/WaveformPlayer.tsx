@@ -37,10 +37,8 @@
  */
 
 import { useCallback, useEffect, useId, useMemo, useState } from 'react'
-import { Play, Pause, Square, SkipBack, SkipForward, Volume2, CheckSquare, GitBranch, StickyNote, ChevronDown, Pencil, CircleCheck, CircleDashed, Scissors } from 'lucide-react'
+import { Play, Pause, Square, SkipBack, SkipForward, Volume2, Scissors } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Textarea } from '@/components/ui/textarea'
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   Select,
   SelectContent,
@@ -53,6 +51,7 @@ import { useAudioControls } from '@/components/OperationController'
 import { WaveformCanvas, type SentimentSegment, type WaveformSpeakerRange } from '@/components/WaveformCanvas'
 import type { DerivedSpeakerRange } from '../utils/speakerRanges'
 import { formatTimestamp } from '@/utils/audioUtils'
+import { EVENT_KIND_COLOR } from '../utils/timelineEventKinds'
 import { cn } from '@/lib/utils'
 
 export type WaveformPlayerMode = 'pill' | 'scrubber' | 'full'
@@ -128,10 +127,6 @@ interface WaveformPlayerProps {
   speakerRanges?: SpeakerRange[]
   /** Numbered event markers (full mode only; no-op when absent). */
   events?: TimelineEvent[]
-  /** Rich per-event details (full text + metadata + editability), keyed by refId/id. */
-  eventDetails?: Record<string, TimelineEventDetail>
-  /** Persist an edit for an editable event; resolves true when saved. */
-  onEventUpdate?: (event: TimelineEvent, patch: TimelineEventPatch) => Promise<boolean>
   /** Score-based sentiment for the curve + bar-coloring hook (full mode). */
   sentiment?: SentimentScorePoint[]
   /** Notified when the user seeks (seconds). */
@@ -154,17 +149,6 @@ function scoreSentimentToSegments(points: SentimentScorePoint[]): SentimentSegme
   }))
 }
 
-/** Marker accent per kind — actions vs decisions read as distinct colors. */
-const EVENT_KIND_COLOR: Record<NonNullable<TimelineEvent['kind']>, string> = {
-  action: '#D97706', // amber-600
-  decision: '#7C3AED', // violet-600
-  note: '#64748B' // slate-500
-}
-const EVENT_KIND_ICON = {
-  action: CheckSquare,
-  decision: GitBranch,
-  note: StickyNote
-} as const
 
 /** Full-mode stage dimensions + the subtle gradient panel (theme-aware). */
 const SENTIMENT_H = 68 // px — sentiment curve panel
@@ -264,8 +248,6 @@ export function WaveformPlayer({
   fluid = false,
   speakerRanges,
   events,
-  eventDetails,
-  onEventUpdate,
   sentiment,
   onSeek,
   splitPointSec,
@@ -372,10 +354,13 @@ export function WaveformPlayer({
 
   // ---- 'pill' -------------------------------------------------------------
   if (mode === 'pill') {
+    // Exactly 32px tall: a 28px play button and speed pill, 1px of padding and
+    // a 1px border above and below. The reader pins the minimized player as a
+    // bar in the section-strip stack, whose rows are PINNED_STRIP_H (32px).
     return (
       <div
         className={cn(
-          'items-center gap-2 rounded-full border bg-muted/50 py-1 pl-1 pr-2 text-foreground',
+          'h-8 items-center gap-2 rounded-full border bg-muted/50 py-px pl-px pr-2 text-foreground',
           fluid ? 'flex w-full' : 'inline-flex max-w-full',
           className
         )}
@@ -388,7 +373,7 @@ export function WaveformPlayer({
           disabled={!pb.canPlayThis}
           title={pb.canPlayThis ? (pb.isPlaying ? 'Pause' : 'Play') : 'Download to play'}
           aria-label={pb.isPlaying ? 'Pause' : 'Play'}
-          className="h-8 w-8 shrink-0 rounded-full"
+          className="h-7 w-7 shrink-0 rounded-full"
         >
           {pb.isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
         </Button>
@@ -476,15 +461,12 @@ export function WaveformPlayer({
       handleRate={handleRate}
       speakerRanges={speakerRanges}
       events={events}
-      eventDetails={eventDetails}
-      onEventUpdate={onEventUpdate}
       sentiment={sentiment}
       splitPointSec={splitPointSec}
       storeSentiment={wf.storeSentiment}
       onEventClick={onEventClick}
       activeEvent={activeEvent}
       setInternalActiveEvent={setInternalActiveEvent}
-      recordingId={recordingId}
     />
   )
 }
@@ -504,15 +486,12 @@ interface FullTimelineProps {
   handleRate: (v: string) => void
   speakerRanges?: SpeakerRange[]
   events?: TimelineEvent[]
-  eventDetails?: Record<string, TimelineEventDetail>
-  onEventUpdate?: (event: TimelineEvent, patch: TimelineEventPatch) => Promise<boolean>
   sentiment?: SentimentScorePoint[]
   splitPointSec?: number
   storeSentiment: SentimentSegment[] | null
   onEventClick?: (event: TimelineEvent) => void
   activeEvent: string | null
   setInternalActiveEvent: (id: string | null) => void
-  recordingId?: string
 }
 
 /** The full-mode meeting timeline: colored bars, playhead, markers, sentiment. */
@@ -529,27 +508,15 @@ function FullTimeline({
   handleRate,
   speakerRanges,
   events,
-  eventDetails,
-  onEventUpdate,
   sentiment,
   splitPointSec,
   storeSentiment,
   onEventClick,
   activeEvent,
-  setInternalActiveEvent,
-  recordingId
+  setInternalActiveEvent
 }: FullTimelineProps) {
   // Event-list detail interaction: expanded row + inline edit state.
-  const [expandedEventId, setExpandedEventId] = useState<string | null>(null)
-  const [editingEventId, setEditingEventId] = useState<string | null>(null)
-  const [editDraft, setEditDraft] = useState('')
-  const [editSaving, setEditSaving] = useState(false)
 
-  // Reset the transient event-list detail state when the recording changes.
-  useEffect(() => {
-    setExpandedEventId(null)
-    setEditingEventId(null)
-  }, [recordingId])
   // The time axis uses the REAL duration so the rich timeline renders on a silent
   // open; the playhead still tracks live playback position (0 when not playing).
   const duration = axisDuration
@@ -815,193 +782,12 @@ function FullTimeline({
         </div>
       </div>
 
-      {/* Event list — numbered actions/decisions, cross-linked with the markers.
-          Height-capped + internally scrollable so a long list can't grow the
-          docked header and push the reader's docked essentials off-screen.
-          Row text WRAPS (full item text, no truncation). Click the text to
-          expand the detail panel (metadata + seek + edit); click the timestamp
-          chip to seek. */}
-      {markers.length > 0 && (
-        <TooltipProvider delayDuration={300}>
-          <ul className="max-h-40 space-y-0.5 overflow-y-auto border-t pt-2" data-testid="timeline-events">
-            {markers.map((m) => {
-              const kind = m.kind ?? 'note'
-              const Icon = EVENT_KIND_ICON[kind]
-              const isActive = activeEvent === m.id
-              const detail = eventDetails?.[m.refId ?? m.id]
-              const displayText = detail?.fullText ?? (m.label || `${kind} at ${formatTimestamp(m.timeSec)}`)
-              const isExpanded = expandedEventId === m.id
-              const isEditing = editingEventId === m.id
-              const isCompleted = detail?.status === 'completed'
-              const tooltipLines = [
-                displayText,
-                detail?.assignee ? `Assignee: ${detail.assignee}` : null,
-                detail?.dueDate ? `Due: ${detail.dueDate}` : null,
-                detail?.status ? `Status: ${detail.status}` : null
-              ].filter(Boolean) as string[]
-              return (
-                <li key={m.id}>
-                  <div
-                    className={cn(
-                      'rounded transition-colors',
-                      isActive ? 'bg-primary/10' : 'hover:bg-muted/60'
-                    )}
-                  >
-                    <div className="flex items-start gap-2 px-1.5 py-1">
-                      <button
-                        type="button"
-                        onClick={() => setExpandedEventId(isExpanded ? null : m.id)}
-                        aria-expanded={isExpanded}
-                        aria-label={`${isExpanded ? 'Collapse' : 'Expand'} details for item ${m.index ?? ''}`}
-                        className="flex min-w-0 flex-1 items-start gap-2 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 rounded"
-                      >
-                        <span
-                          className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold text-white"
-                          style={{ backgroundColor: EVENT_KIND_COLOR[kind] }}
-                        >
-                          {m.index ?? ''}
-                        </span>
-                        <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-                        {isEditing ? (
-                          <span className="min-w-0 flex-1" onClick={(e) => e.stopPropagation()}>
-                            <Textarea
-                              value={editDraft}
-                              onChange={(e) => setEditDraft(e.target.value)}
-                              rows={3}
-                              className="text-xs"
-                              aria-label={`Edit item ${m.index ?? ''} text`}
-                            />
-                            <span className="mt-1.5 flex items-center gap-2">
-                              <Button
-                                size="sm"
-                                className="h-6 px-2 text-xs"
-                                disabled={editSaving || !editDraft.trim()}
-                                onClick={() => {
-                                  setEditSaving(true)
-                                  void onEventUpdate?.(m, { content: editDraft.trim() }).then((ok) => {
-                                    setEditSaving(false)
-                                    if (ok) setEditingEventId(null)
-                                  })
-                                }}
-                              >
-                                {editSaving ? 'Saving…' : 'Save'}
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="h-6 px-2 text-xs"
-                                disabled={editSaving}
-                                onClick={() => setEditingEventId(null)}
-                              >
-                                Cancel
-                              </Button>
-                            </span>
-                          </span>
-                        ) : (
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <span
-                                className={cn(
-                                  'min-w-0 flex-1 whitespace-normal break-words leading-snug',
-                                  isCompleted && 'line-through text-muted-foreground'
-                                )}
-                              >
-                                {displayText}
-                              </span>
-                            </TooltipTrigger>
-                            <TooltipContent side="top" align="start" className="max-w-md">
-                              {tooltipLines.map((line, i) => (
-                                <p key={i} className={i === 0 ? 'whitespace-pre-wrap' : 'text-xs text-muted-foreground'}>
-                                  {line}
-                                </p>
-                              ))}
-                              {!detail && <p className="text-xs text-muted-foreground">Click to seek; details unavailable</p>}
-                            </TooltipContent>
-                          </Tooltip>
-                        )}
-                        {!isEditing && (
-                          <ChevronDown
-                            className={cn('mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform', isExpanded && 'rotate-180')}
-                            aria-hidden="true"
-                          />
-                        )}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => activateEvent(m)}
-                        aria-pressed={isActive}
-                        title={`Seek to ${formatTimestamp(m.timeSec)}`}
-                        className="shrink-0 rounded px-1 tabular-nums text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-                      >
-                        {formatTimestamp(m.timeSec)}
-                      </button>
-                    </div>
-                    {isExpanded && !isEditing && (
-                      <div className="space-y-2 px-1.5 pb-2 pl-9 text-xs" data-testid={`event-detail-${m.id}`}>
-                        {detail?.context && (
-                          <p className="whitespace-pre-wrap text-muted-foreground">
-                            <span className="font-medium text-foreground">Context: </span>
-                            {detail.context}
-                          </p>
-                        )}
-                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground">
-                          <span className="font-medium text-foreground capitalize">{kind}</span>
-                          {detail?.status && <span>Status: <span className="capitalize">{detail.status.replace('_', ' ')}</span></span>}
-                          {detail?.assignee && <span>Assignee: {detail.assignee}</span>}
-                          {detail?.dueDate && <span>Due: {detail.dueDate}</span>}
-                          {detail?.priority && <span>Priority: <span className="capitalize">{detail.priority}</span></span>}
-                          {!detail?.editable && <span className="italic">Read-only item</span>}
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-6 px-2 text-xs"
-                            onClick={() => activateEvent(m)}
-                          >
-                            Seek to {formatTimestamp(m.timeSec)}
-                          </Button>
-                          {detail?.editable && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-6 gap-1 px-2 text-xs"
-                              onClick={() => {
-                                setEditDraft(displayText)
-                                setEditingEventId(m.id)
-                              }}
-                            >
-                              <Pencil className="h-3 w-3" aria-hidden="true" />
-                              Edit
-                            </Button>
-                          )}
-                          {detail?.editable && kind === 'action' && detail?.status && (
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="h-6 gap-1 px-2 text-xs"
-                              onClick={() => {
-                                const next = isCompleted ? 'pending' : 'completed'
-                                void onEventUpdate?.(m, { status: next })
-                              }}
-                            >
-                              {isCompleted ? (
-                                <><CircleDashed className="h-3 w-3" aria-hidden="true" /> Reopen</>
-                              ) : (
-                                <><CircleCheck className="h-3 w-3" aria-hidden="true" /> Mark complete</>
-                              )}
-                            </Button>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </li>
-              )
-            })}
-          </ul>
-        </TooltipProvider>
-      )}
+      {/* The event list used to live here. It moved out to
+          TimelineEventList.tsx on 2026-09-22 and is now its own reader
+          section, so it survives any player mode and scrolls with the rest of
+          the column. The numbered markers above stay: they are positioned on
+          the time axis and belong to the graph. Cross-highlighting still works
+          through `activeEventId`, which SourceReader owns and hands to both. */}
     </div>
   )
 }
