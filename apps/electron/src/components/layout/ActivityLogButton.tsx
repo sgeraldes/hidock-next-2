@@ -13,7 +13,7 @@
  * to newest, colour-coded entries, Clear).
  */
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { Activity, Terminal, X, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -86,14 +86,41 @@ interface ActivityLogOverlayProps {
 
 function ActivityLogOverlay({ open, onClose, entries, onClear }: ActivityLogOverlayProps) {
   const listRef = useRef<HTMLDivElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
 
+  // A modal takes the keyboard with it: focus moves into the panel on open,
+  // Tab cycles inside it, and focus returns to whatever opened it on close.
   useEffect(() => {
     if (!open) return
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    panelRef.current?.focus()
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') {
+        onClose()
+        return
+      }
+      if (e.key !== 'Tab' || !panelRef.current) return
+      const focusable = [...panelRef.current.querySelectorAll<HTMLElement>('button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')]
+      if (focusable.length === 0) {
+        e.preventDefault()
+        return
+      }
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      const inside = panelRef.current.contains(document.activeElement)
+      if (e.shiftKey && (document.activeElement === first || !inside)) {
+        e.preventDefault()
+        last.focus()
+      } else if (!e.shiftKey && (document.activeElement === last || !inside)) {
+        e.preventDefault()
+        first.focus()
+      }
     }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      opener?.focus()
+    }
   }, [open, onClose])
 
   useEffect(() => {
@@ -119,7 +146,11 @@ function ActivityLogOverlay({ open, onClose, entries, onClear }: ActivityLogOver
       aria-label="Activity log"
     >
       <button type="button" aria-label="Close" className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative z-10 flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-slate-700 bg-slate-900 text-slate-100 shadow-2xl">
+      <div
+        ref={panelRef}
+        tabIndex={-1}
+        className="relative z-10 flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-slate-700 bg-slate-900 text-slate-100 shadow-2xl outline-none"
+      >
         <div className="flex items-center justify-between border-b border-slate-700 px-4 py-3">
           <div className="flex items-center gap-2">
             <Terminal className="h-4 w-4 text-slate-400" />

@@ -81,6 +81,28 @@ describe('ActivityLogButton', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
+  it('takes focus on open, keeps Tab inside, and gives focus back on close', () => {
+    setupLog([entry()])
+    render(<ActivityLogButton />)
+    const opener = screen.getByRole('button', { name: /activity log/i })
+    opener.focus()
+
+    fireEvent.click(opener)
+    const dialog = screen.getByRole('dialog', { name: 'Activity log' })
+    expect(dialog.contains(document.activeElement)).toBe(true)
+
+    // Tab from the last control wraps to the first, never out to the page.
+    const panel = dialog.querySelector<HTMLElement>('[tabindex="-1"]')!
+    const inPanel = [...panel.querySelectorAll<HTMLElement>('button')]
+    inPanel[inPanel.length - 1].focus()
+    fireEvent.keyDown(window, { key: 'Tab' })
+    expect(dialog.contains(document.activeElement)).toBe(true)
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(document.activeElement).toBe(opener)
+  })
+
   it('clears the log from the overlay', () => {
     setupLog([entry({ message: 'Boom', type: 'error' })])
     render(<ActivityLogButton />)
