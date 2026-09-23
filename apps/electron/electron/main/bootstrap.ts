@@ -16,7 +16,12 @@ configureEarlyStartup()
 const brainOnly = process.argv.includes('--brain-only')
 
 if (brainOnly) {
+  // Nothing is drawn, so nothing needs a GPU. disableHardwareAcceleration alone
+  // still leaves Chromium a software-compositing GPU process (45 MB measured);
+  // these two switches stop it from starting at all.
   app.disableHardwareAcceleration()
+  app.commandLine.appendSwitch('disable-gpu')
+  app.commandLine.appendSwitch('disable-software-rasterizer')
   app.whenReady().then(async () => {
     const { runBrainOnly } = await import('./brain-host')
     await runBrainOnly()
