@@ -14,6 +14,9 @@
  *      choice persists in `readerSectionModes`.
  *    - Each header strip pins to the top while its section is on screen,
  *      stacking under the strips above it within a budget.
+ *    - The player has no labeled strip. Its section controls sit next to its
+ *      1x speed selector; minimized or docked, the player itself is a one-line
+ *      bar that pins in the strip's place. Expanded, it does not pin.
  *    - Participants (who actually spoke) chips — derived from the SAME resolved
  *      speaker map the transcript uses, so a renamed speaker updates here too
  *
@@ -24,7 +27,7 @@
  * docs/superpowers/specs/2026-09-22-reader-sticky-sections-design.md.
  */
 
-import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { TranscriptViewer, type StoredSegment, type TranscriptContentUpdate } from './TranscriptViewer'
 import { TranscriptionStatusBadge } from './TranscriptionStatusBadge'
@@ -37,7 +40,7 @@ import { getDisplayTitle } from '@/features/library/utils/getDisplayTitle'
 import { getSourceType } from '@/features/library/utils/sourceType'
 import { ArtifactReader } from './ArtifactReader'
 import { RecordingSplitEditor } from './RecordingSplitEditor'
-import { HiddenReaderSections } from './ReaderSectionControls'
+import { HiddenReaderSections, ReaderSectionActions } from './ReaderSectionControls'
 import { ReaderSection } from './ReaderSection'
 import { TimelineEventList } from './TimelineEventList'
 import { useStickySectionPins } from '../hooks/useStickySectionPins'
@@ -1111,13 +1114,20 @@ export function SourceReader({
   // hidden section takes no slot in the pinned stack and the next one inherits
   // its place. Computed here, with the other hooks, because useStickySectionPins
   // is one and this component returns early when there is no recording.
+  //
+  // The player takes a slot only while it is a one-line bar (minimized or
+  // docked) and only when there is a player at all. Expanded, it has no strip
+  // and nothing short enough to pin; if it kept slot 0 anyway, every strip
+  // below would pin 32px lower than it should, over an empty band.
+  const hasPlayer = !!localPath
   const pinOrder = useMemo(
     () => READER_SECTION_ORDER.filter(
       (section) =>
         readerSectionModes[section] !== 'hidden' &&
-        (!maximizedSection || maximizedSection === section)
+        (!maximizedSection || maximizedSection === section) &&
+        (section !== 'player' || (hasPlayer && readerSectionModes.player !== 'expanded'))
     ),
-    [readerSectionModes, maximizedSection]
+    [readerSectionModes, maximizedSection, hasPlayer]
   )
   const pins = useStickySectionPins(pinOrder)
 
@@ -1596,9 +1606,23 @@ export function SourceReader({
             pinned={isSectionPinned('player')}
             stickyTop={pins.stickyTop('player')}
             sentinelRef={pins.sentinelRef('player')}
-            keepBodyWhenCompact
+            headerless
           >
             <ReaderPlayer
+              controls={
+                <ReaderSectionActions
+                  section="player"
+                  label="Player"
+                  mode={readerSectionModes.player}
+                  onModeChange={(mode) => changeSectionMode('player', mode)}
+                  onMaximize={() => toggleMaximizedSection('player')}
+                  maximized={maximizedSection === 'player'}
+                  pinned={isSectionPinned('player')}
+                  // Same id the labeled sections use for their strip content,
+                  // so "is the player pinned" reads the same way everywhere.
+                  testId="reader-player-controls"
+                />
+              }
               recordingId={recording.id}
               filePath={localPath}
               durationSec={durationSeconds}
@@ -2293,6 +2317,12 @@ interface ReaderPlayerProps {
   onEventClick?: (event: TimelineEvent) => void
   /** Highlighted event id, owned by the reader and shared with the list. */
   activeEventId?: string | null
+  /**
+   * The player section's own controls (layout and section mode). Rendered
+   * immediately after the player's box, on the row that holds the 1x speed
+   * selector, and outside that box, so the player needs no title strip.
+   */
+  controls?: ReactNode
 }
 
 function ReaderPlayer({
@@ -2310,6 +2340,7 @@ function ReaderPlayer({
   splitPointSec,
   onEventClick,
   activeEventId = null,
+  controls,
 }: ReaderPlayerProps) {
   const regionRef = useRef<HTMLDivElement>(null)
   const innerRef = useRef<HTMLDivElement>(null)
@@ -2355,7 +2386,14 @@ function ReaderPlayer({
   }, [mode, big, narrow])
 
   return (
-    <div ref={regionRef} className="relative flex items-start gap-1" data-testid="reader-player-region">
+    <div
+      ref={regionRef}
+      // Compact, the player and its controls share one line, centred. Expanded,
+      // the speed selector is on the transport row at the BOTTOM of the
+      // timeline box, so the controls sit at the bottom too.
+      className={cn('relative flex w-full min-w-0 gap-1', big ? 'items-end' : 'items-center')}
+      data-testid="reader-player-region"
+    >
       <div
         className="relative min-w-0 flex-1 overflow-hidden rounded-lg motion-safe:transition-[max-height] motion-safe:duration-300 motion-safe:ease-out"
         style={{ maxHeight }}
@@ -2416,6 +2454,17 @@ function ReaderPlayer({
         )}
       </div>
 
+      {controls && (
+        <div
+          // Expanded, the timeline box ends with its 32px transport row, then
+          // p-3 (12px) and a 1px border, so that row's centre is 29px above the
+          // bottom. The 28px icon buttons need 15px under them to share it.
+          className={cn('shrink-0', big && 'mb-[15px]')}
+          data-testid="reader-player-controls-slot"
+        >
+          {controls}
+        </div>
+      )}
     </div>
   )
 }
