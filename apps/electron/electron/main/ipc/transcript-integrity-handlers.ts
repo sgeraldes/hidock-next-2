@@ -16,6 +16,7 @@ import { ipcMain } from 'electron'
 import { z } from 'zod'
 import { addToQueue, resolveRecordingId, setTranscriptIntegrityAccepted } from '../services/database'
 import { processQueueManually } from '../services/transcription'
+import { filterEligibleRecordingIds } from '../services/recording-eligibility'
 import { success, error, type Result } from '../types/api'
 
 const RecordingIdSchema = z.string().min(1).max(200)
@@ -34,7 +35,10 @@ const RetranscribeSchema = z.object({
 
 export interface RetranscribeResult {
   queued: number
-  /** Not found, or not eligible (personal, deleted, already queued). */
+  /**
+   * Not found, or not eligible: personal, deleted, rated too low to send to a
+   * provider, or already queued.
+   */
   skipped: number
 }
 
@@ -55,10 +59,16 @@ export function registerTranscriptIntegrityHandlers(): void {
     if (!parsed.success) return error('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid request')
     let queued = 0
     let skipped = 0
-    for (const id of new Set(parsed.data.recordingIds)) {
-      const recording = resolveRecordingId(id)
+    const recordings = [...new Set(parsed.data.recordingIds)].map((id) => resolveRecordingId(id))
+    // The same gate the queue applies before any audio leaves the machine. A
+    // value-excluded recording would pass addToQueue and then be cancelled at
+    // the provider boundary, so counting it as queued would promise a new
+    // transcript that never comes. Fails closed: if eligibility cannot be
+    // read, nothing is queued.
+    const { eligible } = filterEligibleRecordingIds(recordings.flatMap((r) => (r ? [r.id] : [])))
+    for (const recording of recordings) {
       // addToQueue refuses personal and deleted recordings and ones already queued.
-      if (recording && addToQueue(recording.id)) queued++
+      if (recording && eligible.has(recording.id) && addToQueue(recording.id)) queued++
       else skipped++
     }
     // Queued in the normal order, not ahead of the owner's own requests: a

@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { existsSync, rmSync } from 'fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 
 const paths = vi.hoisted(() => ({ db: '' }))
 paths.db = join(tmpdir(), `hidock-integrity-${process.pid}-${Date.now()}.db`)
@@ -27,6 +27,7 @@ import {
   insertTranscript,
   backfillTranscriptIntegrity,
   refreshTranscriptIntegrity,
+  remeasureRecordingDuration,
   setTranscriptIntegrityAccepted,
 } from '../database'
 
@@ -49,6 +50,21 @@ function seed(id: string, seconds: number): void {
 
 const segs = (list: Array<[number, string]>) =>
   JSON.stringify(list.map(([start, text]) => ({ speaker: 'SPEAKER_00', start, end: start, text })))
+
+/**
+ * A constant-bitrate MPEG-2 Layer III stream the app's reader measures exactly:
+ * 64 kbps at 16 kHz is 576 samples and 288 bytes per frame, 36 ms each.
+ */
+function mpegStream(seconds: number): Buffer {
+  const frames = Math.round(seconds / 0.036)
+  const frame = Buffer.alloc(288)
+  // Sync, MPEG-2, Layer III, no CRC; bitrate index 8 (64 kbps), 16 kHz, mono.
+  frame[0] = 0xff
+  frame[1] = 0xf3
+  frame[2] = 0x88
+  frame[3] = 0xc0
+  return Buffer.concat(Array.from({ length: frames }, () => frame))
+}
 
 function row(id: string) {
   return queryOne<{
@@ -124,6 +140,26 @@ describe('transcript integrity storage', () => {
     expect(refreshTranscriptIntegrity('tx-up')?.status).toBe('ok')
     expect(row('tx-up').integrity_status).toBe('ok')
     expect(row('tx-up').integrity_accepted_at).toBeNull()
+  })
+
+  it('judges the transcript again once a complete file replaces a short one', () => {
+    // Review of PR #32: a short download was judged against its short file and
+    // kept the label after truncated-recovery brought the whole file back.
+    seed('rec-rec', 60)
+    insertTranscript({ id: 'tx-rec', recording_id: 'rec-rec', full_text: 'x', language: 'es', speakers: segs([[0, 'a'], [100, 'b']]) })
+    expect(row('tx-rec').integrity_status).toBe('suspect')
+
+    // The recovered file: a real 120 s MPEG stream (64 kbps CBR, 16 kHz mono).
+    const dir = mkdtempSync(join(tmpdir(), 'hidock-integrity-audio-'))
+    const file = join(dir, 'rec-rec.mp3')
+    writeFileSync(file, mpegStream(120))
+    run('UPDATE recordings SET file_path = ?, duration_source = NULL WHERE id = ?', [file, 'rec-rec'])
+    try {
+      remeasureRecordingDuration('rec-rec')
+      expect(row('tx-rec').integrity_status).toBe('ok')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it('labels transcripts stored before the check existed, once', () => {

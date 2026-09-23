@@ -34,7 +34,7 @@ vi.mock('@/services/device-sync-actions', () => ({
 }))
 
 const toastMock = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() }))
-const integrityHarness = vi.hoisted(() => ({ filter: null as string | null, set: vi.fn() }))
+const integrityHarness = vi.hoisted(() => ({ filter: null as string | null, set: vi.fn(), search: '' }))
 vi.mock('@/components/ui/toaster', () => ({ toast: toastMock }))
 
 // Mock hooks
@@ -154,7 +154,7 @@ vi.mock('@/store/useLibraryStore', () => ({
       setIntegrityFilter: integrityHarness.set,
       statusFilter: null,
       setStatusFilter: vi.fn(),
-      searchQuery: '',
+      searchQuery: integrityHarness.search,
       setSearchQuery: vi.fn(),
       viewMode: 'compact',
       sortBy: 'date',
@@ -231,7 +231,7 @@ vi.mock('@/features/library/hooks', () => ({
     categoryFilter: null,
     qualityFilter: null,
     statusFilter: null,
-    searchQuery: '',
+    searchQuery: integrityHarness.search,
     setFilterMode: vi.fn(),
     setSemanticFilter: vi.fn(),
     setExclusiveFilter: vi.fn(),
@@ -845,6 +845,7 @@ describe('Library — transcript integrity labels', () => {
     toastMock.warning.mockClear()
     toastMock.success.mockClear()
     integrityHarness.filter = null
+    integrityHarness.search = ''
     integrityHarness.set.mockClear()
     vi.mocked(useUnifiedRecordings).mockReturnValue({
       recordings: [clean, shaky],
@@ -900,5 +901,35 @@ describe('Library — transcript integrity labels', () => {
       expect(window.electronAPI.transcripts.retranscribeMany).toHaveBeenCalledWith({ recordingIds: ['shaky-1'] })
     )
     await waitFor(() => expect(toastMock.success).toHaveBeenCalledWith('Queued 1 transcription', expect.any(String)))
+  })
+
+  it('counts and queues only what the search leaves on screen', async () => {
+    // Review of PR #32: the bar counted the filter's matches but ignored the
+    // search box, so "Queue 2" would have queued a row the owner had hidden.
+    const shakyTwo = { ...shaky, id: 'shaky-2', title: 'Budget review', localPath: '/p/two.wav' }
+    vi.mocked(useUnifiedRecordings).mockReturnValue({
+      recordings: [clean, shaky, shakyTwo],
+      loading: false,
+      error: null,
+      refresh: mockRefresh,
+      deviceConnected: false,
+      stats: { total: 3, deviceOnly: 0, localOnly: 3, both: 0, synced: 3, unsynced: 0, onSource: 0, locallyAvailable: 3 },
+    } as any)
+    vi.mocked(window.electronAPI.transcripts.getByRecordingIdsOwner).mockResolvedValue({
+      ...transcriptsById,
+      'shaky-2': { ...transcriptsById['shaky-1'], id: 't-shaky-2', recording_id: 'shaky-2' },
+    } as any)
+    integrityHarness.filter = 'flagged'
+    integrityHarness.search = 'budget'
+
+    render(<MemoryRouter><Library /></MemoryRouter>)
+
+    const bar = await screen.findByTestId('integrity-bulk-bar')
+    expect(bar).toHaveTextContent('1 flagged transcript in this view.')
+    fireEvent.click(within(bar).getByRole('button', { name: 'Transcribe it again' }))
+    fireEvent.click(within(bar).getByRole('button', { name: 'Queue 1' }))
+    await waitFor(() =>
+      expect(window.electronAPI.transcripts.retranscribeMany).toHaveBeenCalledWith({ recordingIds: ['shaky-2'] })
+    )
   })
 })

@@ -3792,10 +3792,19 @@ function repairPhase(): void {
   // timeline-analysis write. Idempotent.
   const transcriptCols = getTableColumns(database, 'transcripts')
   if (transcriptCols.length > 0) {
-    for (const col of ['sentiment_segments', 'event_markers']) {
+    // v39 timeline columns, then the v58 integrity columns that insertTranscript
+    // names on every write.
+    for (const [col, type] of [
+      ['sentiment_segments', 'TEXT'],
+      ['event_markers', 'TEXT'],
+      ['integrity_status', 'TEXT'],
+      ['integrity_json', 'TEXT'],
+      ['integrity_version', 'INTEGER'],
+      ['integrity_accepted_at', 'TEXT'],
+    ]) {
       if (!transcriptCols.includes(col)) {
         console.log(`[Database] Repairing transcripts: adding ${col}`)
-        try { database.run(`ALTER TABLE transcripts ADD COLUMN ${col} TEXT`) } catch {}
+        try { database.run(`ALTER TABLE transcripts ADD COLUMN ${col} ${type}`) } catch {}
       }
     }
   }
@@ -6663,6 +6672,10 @@ export function remeasureRecordingDuration(
   const audio = readAudioDuration(row.file_path)
   if (!audio || audio.seconds <= 0) return null
   const settled = settleMeasuredDuration(row, audio.seconds)
+  // The transcript was judged against the short file. Judge it again against
+  // the complete one, so a label that only the missing audio caused goes away.
+  const transcript = queryOne<{ id: string }>('SELECT id FROM transcripts WHERE recording_id = ?', [recordingId])
+  if (transcript) refreshTranscriptIntegrity(transcript.id)
   return { seconds: audio.seconds, truncated: settled.truncated, changed: settled.changed }
 }
 

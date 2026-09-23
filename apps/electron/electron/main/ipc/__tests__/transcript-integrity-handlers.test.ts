@@ -16,6 +16,14 @@ vi.mock('../../services/database', () => db)
 const transcription = vi.hoisted(() => ({ processQueueManually: vi.fn() }))
 vi.mock('../../services/transcription', () => transcription)
 
+const eligibility = vi.hoisted(() => ({ excluded: new Set<string>(), failClosed: false }))
+vi.mock('../../services/recording-eligibility', () => ({
+  filterEligibleRecordingIds: (ids: Iterable<string>) =>
+    eligibility.failClosed
+      ? { eligible: new Set<string>(), failClosed: true }
+      : { eligible: new Set([...ids].filter((id) => !eligibility.excluded.has(id))), failClosed: false },
+}))
+
 import { registerTranscriptIntegrityHandlers } from '../transcript-integrity-handlers'
 
 const call = (channel: string, payload: unknown) => handlers.get(channel)!({}, payload) as Promise<any>
@@ -24,6 +32,8 @@ beforeEach(() => {
   handlers.clear()
   vi.clearAllMocks()
   registerTranscriptIntegrityHandlers()
+  eligibility.excluded = new Set()
+  eligibility.failClosed = false
   db.resolveRecordingId.mockImplementation((id: string) => (id.startsWith('missing') ? undefined : { id }))
 })
 
@@ -36,6 +46,27 @@ describe('transcripts:retranscribeMany', () => {
     expect(result).toEqual({ success: true, data: { queued: 2, skipped: 2 } })
     expect(db.addToQueue).toHaveBeenCalledTimes(3)
     expect(transcription.processQueueManually).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not count a recording rated too low to send as queued', async () => {
+    // Review of PR #32: addToQueue accepts a value-excluded recording, and the
+    // provider boundary then cancels it; the toast said "Queued" regardless.
+    db.addToQueue.mockImplementation((id: string) => `q-${id}`)
+    eligibility.excluded = new Set(['garbage-1'])
+
+    const result = await call('transcripts:retranscribeMany', { recordingIds: ['a', 'garbage-1'] })
+
+    expect(result.data).toEqual({ queued: 1, skipped: 1 })
+    expect(db.addToQueue).toHaveBeenCalledTimes(1)
+    expect(db.addToQueue).toHaveBeenCalledWith('a')
+  })
+
+  it('queues nothing when eligibility cannot be read', async () => {
+    db.addToQueue.mockImplementation((id: string) => `q-${id}`)
+    eligibility.failClosed = true
+    const result = await call('transcripts:retranscribeMany', { recordingIds: ['a', 'b'] })
+    expect(result.data).toEqual({ queued: 0, skipped: 2 })
+    expect(db.addToQueue).not.toHaveBeenCalled()
   })
 
   it('does not start the queue when nothing was queued', async () => {

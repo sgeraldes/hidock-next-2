@@ -100,6 +100,18 @@ Both channels live under `transcripts:`, which the transcription feature gates.
 when the HiDock holds a larger file than the copy on disk, which is real evidence of a short
 download, and offers the recovery. The integrity labels cover the rest.
 
+## Review of PR #32
+
+| Finding | Decision |
+|---|---|
+| A download that really is short gets labelled, because its transcript is judged against the short file | Kept on purpose: the owner prefers "the transcript is wrong" to "audio was lost" as the default reading, and the label has a way back to green. What was wrong is that the label outlived a recovery: `remeasureRecordingDuration` now checks the transcript again once the complete file is back |
+| The first Library mount after the upgrade does 1 to 2 s of extra synchronous work | Accepted: it runs once per rule version, over ~2,100 transcripts (0.3 ms each) and ~50 file reads |
+| The repair phase did not add the v58 columns | Fixed, next to the v39 timeline columns |
+| The bulk bar counted and queued the filter's matches, ignoring the search box | Fixed: it acts on exactly the rows on screen |
+| Bulk re-transcription counted value-excluded recordings as queued, then the provider gate cancelled them | Fixed: the handler applies the same eligibility gate first, fails closed, and reports them as skipped |
+| A persisted filter shows an empty list until transcripts load | Accepted: it fills in as soon as the transcripts arrive |
+| "Accept as is" is gated with transcription, though it only writes a local flag | Accepted: every `transcripts:` channel follows the transcription gate, and with transcription off there is no second path to compare against |
+
 ## Not in this change
 
 Tracked on the board card `hidock_transcript_integrity_20260923`:

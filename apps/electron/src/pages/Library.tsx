@@ -2429,14 +2429,14 @@ export function Library() {
               integrityCounts={integrityCounts}
               onIntegrityFilterChange={(filter) => setIntegrityFilter(filter === 'all' ? null : filter)}
             />
-            {integrityFilter !== null && integrityFilter !== 'accepted' && scopedRecordings.length > 0 && (
+            {integrityFilter !== null && integrityFilter !== 'accepted' && filteredRecordings.length > 0 && (
               <div className="mt-2 flex flex-wrap items-center gap-2 text-xs" data-testid="integrity-bulk-bar">
                 <span className="text-muted-foreground">
-                  {scopedRecordings.length} flagged transcript{scopedRecordings.length === 1 ? '' : 's'} in this view.
+                  {filteredRecordings.length} flagged transcript{filteredRecordings.length === 1 ? '' : 's'} in this view.
                 </span>
                 {!retranscribeArmed ? (
                   <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setRetranscribeArmed(true)}>
-                    Transcribe {scopedRecordings.length === 1 ? 'it' : `all ${scopedRecordings.length}`} again
+                    Transcribe {filteredRecordings.length === 1 ? 'it' : `all ${filteredRecordings.length}`} again
                   </Button>
                 ) : (
                   <>
@@ -2446,7 +2446,8 @@ export function Library() {
                       className="h-7 text-xs"
                       onClick={async () => {
                         setRetranscribeArmed(false)
-                        const ids = scopedRecordings.map((rec) => rec.id)
+                        // Exactly the rows on screen: the filter and the search box.
+                        const ids = filteredRecordings.map((rec) => rec.id)
                         const result = await window.electronAPI.transcripts.retranscribeMany({ recordingIds: ids })
                         if (!result.success) {
                           toast.error('Could not queue the transcriptions', result.error.message)
@@ -2456,13 +2457,13 @@ export function Library() {
                         toast.success(
                           `Queued ${queued} transcription${queued === 1 ? '' : 's'}`,
                           skipped > 0
-                            ? `${skipped} could not be queued: personal, deleted, or already waiting.`
+                            ? `${skipped} could not be queued: personal, deleted, rated too low to send, or already waiting.`
                             : 'Each new transcript is checked when it is stored.'
                         )
                         void refresh(false)
                       }}
                     >
-                      Queue {scopedRecordings.length}
+                      Queue {filteredRecordings.length}
                     </Button>
                     <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setRetranscribeArmed(false)}>
                       Cancel
