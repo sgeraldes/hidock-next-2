@@ -1,6 +1,6 @@
 """Compare startup benchmark runs against a baseline, one panel per run.
 
-Usage: python compare.py OUTPUT_DIR BASELINE_RUN [RUN ...] [--label RUN=NAME ...]
+Usage: python compare.py OUTPUT_DIR BASELINE_RUN [RUN ...] [--label=RUN_DIR_NAME=NAME ...]
 
 Each run is a directory written by benchmark-startup.py (and report.py, for
 summary.json). The first run is the baseline; every other run is compared with
@@ -33,40 +33,58 @@ def load(run: Path):
 
 
 def cpu_seconds_total(resources):
-    last = {}
+    # A pid can be reused inside a run: when a counter goes down, the old
+    # process's last value is banked and the new one counts from zero.
+    last, banked = {}, 0.0
     for r in resources:
         for p in r['processes']:
+            previous = last.get(p['pid'])
+            if previous is not None and p['cpuSeconds'] < previous:
+                banked += previous
             last[p['pid']] = p['cpuSeconds']
-    return sum(last.values())
+    return banked + sum(last.values())
 
 
 def metrics(summary, events, resources):
-    heart = [e for e in events if e['type'] == 'heartbeat']
+    # A field the run did not produce is None and shows as n/a: a window that
+    # never appeared must not read as a window that appeared at 0 s.
+    def seconds(key):
+        v = summary.get(key)
+        return None if v is None else v / 1000
+
     stalls = summary.get('stallsOver100Ms', [])
     return {
-        'Window shown (s)': (summary.get('windowMs') or 0) / 1000,
-        'Startup settled (s)': (summary.get('bootSettledMs') or 0) / 1000,
-        'Worst main-thread stall (s)': (summary.get('maxMainDelayMs') or 0) / 1000,
+        'Window shown (s)': seconds('windowMs'),
+        'Startup settled (s)': seconds('bootSettledMs'),
+        'Worst main-thread stall (s)': seconds('maxMainDelayMs'),
         'Main-thread stalls over 100 ms': len(stalls),
         'Time frozen in those stalls (s)': sum(s['delayMs'] for s in stalls) / 1000,
-        'Worst renderer lateness (ms)': summary.get('maxRendererDelayMs') or 0,
-        'Peak memory, all processes (GiB)': summary.get('peakTreeGiB') or 0,
-        'Peak memory, main process (GiB)': summary.get('peakMainGiB') or 0,
+        'Worst renderer lateness (ms)': summary.get('maxRendererDelayMs'),
+        'Peak memory, all processes (GiB)': summary.get('peakTreeGiB'),
+        'Peak memory, main process (GiB)': summary.get('peakMainGiB'),
         'CPU time, all processes (s)': cpu_seconds_total(resources),
-        'Heartbeats recorded': len(heart),
+        'Run length (s)': summary.get('elapsedSeconds'),
     }
 
 
+# Rows shown for context, never coloured better or worse.
+NEUTRAL = {'Run length (s)'}
+
+
 def fmt(v):
+    if v is None:
+        return 'n/a'
     if isinstance(v, int):
         return f'{v:,}'
     return f'{v:,.2f}'
 
 
-def delta_cell(base, value, lower_is_better=True):
-    if base in (None, 0):
+def delta_cell(base, value, lower_is_better=True, neutral=False):
+    if base in (None, 0) or value is None:
         return '<td class="num">n/a</td>'
     change = (value - base) / base * 100
+    if neutral:
+        return f'<td class="num same">{change:+.0f}%</td>'
     better = change < 0 if lower_is_better else change > 0
     cls = 'same' if abs(change) < 5 else ('good' if better else 'bad')
     return f'<td class="num {cls}">{change:+.0f}%</td>'
@@ -80,7 +98,7 @@ def color(name: str) -> str:
 
 
 def timeline_svg(summary, events, resources):
-    total = max(summary.get('elapsedSeconds') or 0, resources[-1]['seconds'] if resources else 1)
+    total = max(summary.get('elapsedSeconds') or 0, resources[-1]['seconds'] if resources else 0, 0.001)
     x = lambda s: 150 + (W - 160) * s / total
     rows = []
     y = 24
@@ -113,7 +131,7 @@ def timeline_svg(summary, events, resources):
                 continue
             op = min(1.0, 0.25 + load / 2)
             rows.append(f'<rect x="{x(t0):.1f}" y="{y}" width="{max(1, x(t1)-x(t0)):.1f}" height="16" '
-                        f'fill="#ff8c1a" opacity="{op:.2f}"><title>{label}: {load*100:.0f}% of a core at {t0:.1f}s</title></rect>')
+                        f'fill="#ff8c1a" opacity="{op:.2f}"><title>{html.escape(label)}: {load*100:.0f}% of a core at {t0:.1f}s</title></rect>')
         rows.append(f'<text x="{W-6}" y="{y+12}" class="lanenote">{peak_rss:,.0f} MB peak</text>')
         y += 20
     # Main-thread lateness and stalls
@@ -260,7 +278,6 @@ def main():
     names = [labels.get(r.name, r.name) for r in runs]
     ms = [metrics(s, e, res) for _, s, e, res, _ in data]
     lower_better = {k: True for k in ms[0]}
-    lower_better['Heartbeats recorded'] = False
 
     head = '<tr><th>Metric</th>' + ''.join(
         f'<th>{html.escape(n)}{" (baseline)" if i == 0 else ""}</th>' + ('' if i == 0 else '<th>vs baseline</th>')
@@ -271,7 +288,7 @@ def main():
         for i, m in enumerate(ms):
             body += f'<td class="num">{fmt(m[k])}</td>'
             if i:
-                body += delta_cell(ms[0][k], m[k], lower_better[k])
+                body += delta_cell(ms[0][k], m[k], lower_better[k], neutral=k in NEUTRAL)
         body += '</tr>'
 
     panels = ''
