@@ -11,6 +11,13 @@
  *      when the section pins.
  *   3. The body, which keeps scrolling under the strip.
  *
+ * A `headerless` section (the player) has no labeled strip. Its body carries
+ * its own controls, and when the section is minimized or docked the body is a
+ * single PINNED_STRIP_H bar that takes the strip's place in the stack: same
+ * height, same sticky offset, same pinned look. Expanded, it has nothing short
+ * enough to pin and stays in flow; the reader leaves it out of the stack order
+ * so the next section inherits slot 0.
+ *
  * The wrapper is `display: contents`, which is what makes the stacking work at
  * all. A sticky element cannot leave its containing block, so a header inside a
  * section box pins only while that box is on screen and then leaves with it —
@@ -18,7 +25,8 @@
  * -1138, -1106, -863 and -716 pixels while the design called for 0, 32, 64 and
  * 96. With no box of its own, each header's containing block becomes the scroll
  * body and the strips pile up as intended. Every ancestor between here and
- * `reader-scroll-body` has to stay box-less for the same reason.
+ * `reader-scroll-body` has to stay box-less for the same reason, and so does
+ * everything between the headerless bar and the scroll body.
  *
  * Pinning deliberately does NOT collapse the body. Collapsing it would delete
  * the height it occupied, the browser would clamp scrollTop, the page would jump
@@ -36,6 +44,15 @@ import { SENTINEL_H } from '../hooks/useStickySectionPins'
 import { ReaderSectionControls } from './ReaderSectionControls'
 import type { ReaderSectionId, ReaderSectionMode } from '@/store/useLibraryStore'
 
+// The pinned look, shared by the labeled strip and the headerless bar. Nothing
+// here changes the box's size, so it cannot move the content below.
+// `motion-safe:` is the repo's existing way of honouring prefers-reduced-motion.
+const PIN_TRANSITION =
+  'motion-safe:transition-[background-color,box-shadow,border-color] motion-safe:duration-[180ms] motion-safe:ease-out'
+const PINNED_LOOK =
+  'border-b border-border bg-background/95 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/80'
+const UNPINNED_LOOK = 'border-b border-transparent bg-transparent'
+
 interface ReaderSectionProps {
   section: ReaderSectionId
   label: string
@@ -52,12 +69,12 @@ interface ReaderSectionProps {
   /** Rendered to the right of the label, inside the strip, at strip height. */
   headerExtra?: ReactNode
   /**
-   * Keep rendering the body when the user minimizes the section, because the
-   * body has a compact presentation of its own. The player is the one that does:
-   * `compact` turns its graph into a pill, and hiding it outright would leave a
-   * minimized player with no way to press Play.
+   * No labeled strip: the body renders its own controls. Implies the body is
+   * kept when minimized, because it has a compact presentation of its own (the
+   * player's graph turns into a one-line bar, and hiding it would leave a
+   * minimized player with no way to press Play).
    */
-  keepBodyWhenCompact?: boolean
+  headerless?: boolean
   children?: ReactNode
   /** Extra classes for the body. The wrapper has no box to put them on. */
   className?: string
@@ -74,12 +91,14 @@ export function ReaderSection({
   stickyTop,
   sentinelRef,
   headerExtra,
-  keepBodyWhenCompact = false,
+  headerless = false,
   children,
   className
 }: ReaderSectionProps) {
-  const open = mode !== 'compact' || keepBodyWhenCompact
+  const open = mode !== 'compact' || headerless
   const stacks = stickyTop !== null
+  // A headerless section is a pinnable bar whenever it is not expanded.
+  const bar = headerless && mode !== 'expanded'
 
   return (
     <section
@@ -99,38 +118,55 @@ export function ReaderSection({
         style={{ height: SENTINEL_H, marginBottom: -SENTINEL_H }}
         data-testid={`reader-sentinel-${section}`}
       />
-      <div
-        className={cn(
-          // h-8 on the STRIP itself, not just on the controls inside it: with
-          // border-box the 1px bottom border lives inside those 32px, so the
-          // strip measures exactly PINNED_STRIP_H and the stack's `index * 32`
-          // offsets land flush instead of drifting 1px per section.
-          'z-20 flex h-8 items-center gap-2 px-4',
-          stacks ? 'sticky' : 'relative',
-          // The whole animation. Nothing here changes the box's size, so it
-          // cannot move the content below. `motion-safe:` is the repo's existing
-          // way of honouring prefers-reduced-motion (see ReaderPlayer).
-          'motion-safe:transition-[background-color,box-shadow,border-color] motion-safe:duration-[180ms] motion-safe:ease-out',
-          pinned
-            ? 'border-b border-border bg-background/95 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/80'
-            : 'border-b border-transparent bg-transparent'
-        )}
-        style={stacks ? { top: stickyTop } : undefined}
-      >
-        <ReaderSectionControls
-          className="min-w-0 flex-1"
-          section={section}
-          label={label}
-          mode={mode}
-          onModeChange={onModeChange}
-          onMaximize={onMaximize}
-          maximized={maximized}
-          pinned={pinned}
-        />
-        {headerExtra}
-      </div>
+      {!headerless && (
+        <div
+          className={cn(
+            // h-8 on the STRIP itself, not just on the controls inside it: with
+            // border-box the 1px bottom border lives inside those 32px, so the
+            // strip measures exactly PINNED_STRIP_H and the stack's `index * 32`
+            // offsets land flush instead of drifting 1px per section.
+            'z-20 flex h-8 items-center gap-2 px-4',
+            stacks ? 'sticky' : 'relative',
+            PIN_TRANSITION,
+            pinned ? PINNED_LOOK : UNPINNED_LOOK
+          )}
+          style={stacks ? { top: stickyTop } : undefined}
+          data-reader-pin={section}
+        >
+          <ReaderSectionControls
+            className="min-w-0 flex-1"
+            section={section}
+            label={label}
+            mode={mode}
+            onModeChange={onModeChange}
+            onMaximize={onMaximize}
+            maximized={maximized}
+            pinned={pinned}
+          />
+          {headerExtra}
+        </div>
+      )}
       {open && (
-        <div id={`reader-${section}-content`} className={cn('px-4 pb-3 pt-1', className)}>
+        <div
+          id={`reader-${section}-content`}
+          data-testid={`reader-${section}-body`}
+          className={cn(
+            bar
+              ? [
+                  // Same box as a labeled strip: exactly PINNED_STRIP_H with the
+                  // border inside it, so the rest of the stack stays on its
+                  // 32px grid whichever section holds slot 0.
+                  'z-20 flex h-8 items-center px-4',
+                  stacks ? 'sticky' : 'relative',
+                  PIN_TRANSITION,
+                  pinned ? PINNED_LOOK : UNPINNED_LOOK
+                ]
+              : ['px-4 pb-3', headerless ? 'pt-2' : 'pt-1'],
+            className
+          )}
+          style={bar && stacks ? { top: stickyTop } : undefined}
+          data-reader-pin={bar ? section : undefined}
+        >
           {children}
         </div>
       )}

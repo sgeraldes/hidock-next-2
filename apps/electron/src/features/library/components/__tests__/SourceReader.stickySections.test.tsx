@@ -107,6 +107,19 @@ function cross(el: Element, ratio: number) {
 
 const sentinel = (section: string) => screen.getByTestId(`reader-sentinel-${section}`)
 const strip = (section: string) => screen.getByTestId(`reader-${section}-controls`)
+/** The element that actually sticks: a labeled strip, or the player's bar. */
+const pinEl = (section: string) =>
+  screen.getByTestId(`reader-section-${section}`).querySelector<HTMLElement>(`[data-reader-pin="${section}"]`)
+
+function setModes(overrides: Partial<Record<string, string>>) {
+  useLibraryStore.setState({
+    readerSectionModes: {
+      player: 'expanded', metadata: 'expanded', moments: 'expanded',
+      summary: 'expanded', transcript: 'expanded',
+      ...overrides
+    } as never
+  })
+}
 
 // ---------------------------------------------------------------------------
 
@@ -237,7 +250,7 @@ describe('SourceReader — one scrolling column', () => {
     expect(doubled, 'nothing inside the column repeats the scroller pb-6').toHaveLength(0)
   })
 
-  it('leaves no box between a section header and the scrolling column', () => {
+  it('leaves no box between a section header and the scrolling column', async () => {
     // The whole feature rests on this. A sticky element cannot leave its
     // containing block, so a header inside a section box pins only while that
     // box is on screen and then scrolls away with it. Measured in the running
@@ -249,21 +262,35 @@ describe('SourceReader — one scrolling column', () => {
     // jsdom computes no layout, so this cannot watch them stack. What it can
     // hold is the structural precondition: every element between a header and
     // reader-scroll-body generates no box.
-    render(<SourceReader recording={makeRecording()} transcript={TRANSCRIPT} />)
-    const column = screen.getByTestId('reader-scroll-body')
+    //
+    // Since the second step the player has no labeled strip. Minimized, its
+    // one-line bar is what sticks, so it is held to the same rule; expanded, it
+    // has nothing that sticks at all. Both states are covered.
+    for (const playerMode of ['compact', 'expanded']) {
+      setModes({ player: playerMode })
+      const { unmount } = render(<SourceReader recording={makeRecording()} transcript={TRANSCRIPT} />)
+      await screen.findByTestId('reader-section-transcript')
+      const column = screen.getByTestId('reader-scroll-body')
 
-    for (const section of ['player', 'metadata', 'moments', 'summary', 'transcript']) {
-      const el = screen.queryByTestId(`reader-section-${section}`)
-      if (!el) continue
-      const header = el.querySelector('[class*="sticky"], [class*="relative"]')
-      expect(header, `${section} has no header strip`).not.toBeNull()
+      for (const section of ['player', 'metadata', 'moments', 'summary', 'transcript']) {
+        const el = screen.queryByTestId(`reader-section-${section}`)
+        expect(el, `${section} (player ${playerMode}) is not rendered`).not.toBeNull()
+        const header = pinEl(section)
+        if (section === 'player' && playerMode === 'expanded') {
+          expect(header, 'an expanded player has nothing that sticks').toBeNull()
+          continue
+        }
+        expect(header, `${section} (player ${playerMode}) has no sticky element`).not.toBeNull()
+        expect(header!.className).toMatch(/\b(sticky|relative)\b/)
 
-      for (let node = header!.parentElement; node && node !== column; node = node.parentElement) {
-        expect(
-          node.className.toString().split(/\s+/),
-          `${section}: ${node.tagName}.${node.className} would trap the sticky header`
-        ).toContain('contents')
+        for (let node = header!.parentElement; node && node !== column; node = node.parentElement) {
+          expect(
+            node.className.toString().split(/\s+/),
+            `${section} (player ${playerMode}): ${node.tagName}.${node.className} would trap the sticky header`
+          ).toContain('contents')
+        }
       }
+      unmount()
     }
   })
 
@@ -279,13 +306,43 @@ describe('SourceReader — one scrolling column', () => {
 // 2. The two layers
 // ---------------------------------------------------------------------------
 describe('SourceReader — scrolling never writes the chosen mode', () => {
-  it('pins the player strip without touching readerSectionModes', () => {
+  it('pins an expanded section strip without touching readerSectionModes', () => {
     render(<SourceReader recording={makeRecording()} transcript={TRANSCRIPT} />)
+    expect(strip('metadata')).toHaveAttribute('data-pinned', 'false')
+
+    cross(sentinel('metadata'), 0) // scrolled fully past the section's top edge
+
+    expect(strip('metadata')).toHaveAttribute('data-pinned', 'true')
+    expect(useLibraryStore.getState().readerSectionModes.metadata).toBe('expanded')
+  })
+
+  it('pins the minimized player bar without touching readerSectionModes', () => {
+    // The player has no labeled strip since the second step. Minimized, the
+    // player itself is a one-line bar, and that bar is what pins.
+    setModes({ player: 'compact' })
+    render(<SourceReader recording={makeRecording()} transcript={TRANSCRIPT} />)
+    const bar = pinEl('player')!
+    expect(bar.className).toContain('sticky')
+    expect(bar.className).toContain('h-8')
+    expect(bar).toHaveStyle({ top: '0px' })
+    expect(bar).toContainElement(screen.getByTestId('waveform-player-pill'))
     expect(strip('player')).toHaveAttribute('data-pinned', 'false')
 
-    cross(sentinel('player'), 0) // scrolled fully past the section's top edge
+    cross(sentinel('player'), 0)
 
     expect(strip('player')).toHaveAttribute('data-pinned', 'true')
+    expect(bar.className).toContain('shadow-sm')
+    expect(useLibraryStore.getState().readerSectionModes.player).toBe('compact')
+  })
+
+  it('never pins an expanded player, and gives its slot to the next section', () => {
+    render(<SourceReader recording={makeRecording()} transcript={TRANSCRIPT} />)
+    expect(pinEl('player')).toBeNull()
+    expect(pinEl('metadata')).toHaveStyle({ top: '0px' })
+
+    cross(sentinel('player'), 0)
+
+    expect(strip('player')).toHaveAttribute('data-pinned', 'false')
     expect(useLibraryStore.getState().readerSectionModes.player).toBe('expanded')
   })
 
@@ -360,15 +417,15 @@ describe('SourceReader — hysteresis', () => {
   it('holds the current state while the sentinel is only partly across', () => {
     render(<SourceReader recording={makeRecording()} transcript={TRANSCRIPT} />)
 
-    cross(sentinel('player'), 0.5)
-    expect(strip('player')).toHaveAttribute('data-pinned', 'false')
+    cross(sentinel('metadata'), 0.5)
+    expect(strip('metadata')).toHaveAttribute('data-pinned', 'false')
 
-    cross(sentinel('player'), 0)
-    expect(strip('player')).toHaveAttribute('data-pinned', 'true')
+    cross(sentinel('metadata'), 0)
+    expect(strip('metadata')).toHaveAttribute('data-pinned', 'true')
 
     // Back INTO the band, but not all the way out: still pinned.
-    cross(sentinel('player'), 0.5)
-    expect(strip('player')).toHaveAttribute('data-pinned', 'true')
+    cross(sentinel('metadata'), 0.5)
+    expect(strip('metadata')).toHaveAttribute('data-pinned', 'true')
   })
 })
 
@@ -397,12 +454,38 @@ describe('SourceReader — stacking within the budget', () => {
     render(<SourceReader recording={makeRecording()} transcript={TRANSCRIPT} />)
     await screen.findByTestId('reader-section-transcript')
 
-    // player / metadata / moments participate; summary and transcript do not.
-    expect(strip('player').parentElement).toHaveStyle({ top: '0px' })
-    expect(strip('metadata').parentElement).toHaveStyle({ top: '32px' })
-    expect(strip('moments').parentElement).toHaveStyle({ top: '64px' })
-    expect(strip('summary').parentElement?.className).toContain('relative')
-    expect(strip('summary').parentElement?.className).not.toContain('sticky')
+    // The expanded player has nothing that pins, so metadata / moments / summary
+    // participate and the transcript does not.
+    expect(pinEl('player')).toBeNull()
+    expect(pinEl('metadata')).toHaveStyle({ top: '0px' })
+    expect(pinEl('moments')).toHaveStyle({ top: '32px' })
+    expect(pinEl('summary')).toHaveStyle({ top: '64px' })
+    expect(pinEl('transcript')?.className).toContain('relative')
+    expect(pinEl('transcript')?.className).not.toContain('sticky')
+  })
+
+  it('stacks a minimized player bar in slot 0, on the same 32px grid', async () => {
+    mockReaderHeight(400) // budget of 3
+    setModes({ player: 'compact' })
+    render(<SourceReader recording={makeRecording()} transcript={TRANSCRIPT} />)
+    await screen.findByTestId('reader-section-transcript')
+
+    expect(pinEl('player')).toHaveStyle({ top: '0px' })
+    expect(pinEl('metadata')).toHaveStyle({ top: '32px' })
+    expect(pinEl('moments')).toHaveStyle({ top: '64px' })
+    expect(pinEl('summary')?.className).toContain('relative')
+    expect(pinEl('summary')?.className).not.toContain('sticky')
+  })
+
+  it('gives slot 0 to metadata when the recording has no player at all', () => {
+    // A minimized player would take slot 0, but a recording with no local file
+    // renders no player. Before the second step it kept the slot anyway, and
+    // every strip below pinned 32px low over an empty band.
+    setModes({ player: 'compact' })
+    const deviceOnly = { ...makeRecording(), location: 'device-only', localPath: undefined } as unknown as UnifiedRecording
+    render(<SourceReader recording={deviceOnly} />)
+    expect(screen.queryByTestId('reader-section-player')).not.toBeInTheDocument()
+    expect(pinEl('metadata')).toHaveStyle({ top: '0px' })
   })
 
   it('gives a hidden section\'s slot to the section after it', async () => {
@@ -440,7 +523,7 @@ describe('SourceReader — Actions & decisions section', () => {
     render(<SourceReader recording={makeRecording()} transcript={TRANSCRIPT} />)
     await screen.findByTestId('timeline-events')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Player' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Minimize Player' }))
 
     expect(useLibraryStore.getState().readerSectionModes.player).toBe('compact')
     expect(screen.getByTestId('timeline-events')).toBeInTheDocument()

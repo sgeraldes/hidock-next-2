@@ -1,9 +1,9 @@
 # Lector de grabaciones: una sola columna con secciones que se fijan arriba
 
 Fecha: 2026-09-22
-Estado: construido, PR abierto contra `main`.
-Primera de dos partes. La segunda (rediseño del espacio del encabezado) queda
-descrita al final y no se construye acá.
+Estado: la primera parte entró a `main` con el PR #18. La segunda (compactar
+los controles de sección) está descrita en "Segundo paso", al final, y va en
+el PR #26.
 
 ## El pedido
 
@@ -163,7 +163,8 @@ documento, y no hay salto posible por construcción.
 Minimizar sí esconde el cuerpo, con una excepción: el player. Su cuerpo ya tiene
 una presentación compacta propia (el gráfico se vuelve una pastilla), y
 esconderlo dejaría un player minimizado sin botón de Play. `ReaderSection` lo
-recibe como `keepBodyWhenCompact`. Es el comportamiento que ya tenía y que las
+recibía como `keepBodyWhenCompact`; desde el segundo paso es `headerless`, que
+además quita la tira (ver "Segundo paso"). Es el comportamiento que ya tenía y que las
 pruebas existentes afirman.
 
 ### 4. El presupuesto de la pila
@@ -413,19 +414,112 @@ La aprobación visual queda pendiente.
 (Nexo, Academy, Delivery Central, Sales, EDF), y HiDock tiene su propio sistema
 de tokens sobre shadcn.
 
-## El paso siguiente, que es otro PR
+## Segundo paso: controles compactos (rama `feat/reader-compaction`)
 
-El rediseño de espacio que Sebastián describió, con sus ejemplos:
+### El pedido
 
-- El player no necesita un título "Player" arriba.
-- Ni la etiqueta "Minimized".
-- El control de Layout pasa a ser un botón sin texto, al mismo nivel del player
-  y no en una fila de título, al lado del selector de velocidad 1x, fuera del
-  player.
-- Al lado de Layout, un ícono que cicle minimizar, restaurar, maximizar y ocultar,
-  para poder expandir una sección sin tener que scrollear hasta arriba.
+Sebastián, 22-sep, sobre el player:
 
-Este PR no construye nada que haya que tirar para llegar ahí. La tira de
-encabezado ya es un componente propio con alto fijo, y el fijado no depende de
-que la tira tenga título ni pastilla: depende del centinela y del alto constante.
-Cambiar qué se dibuja adentro de la tira no toca la mecánica del fijado.
+> the player doesn't need a title above it saying 'Player', not the 'minimized'
+> label. The Layout button can be just a button with no text, and at the same
+> level of the player, not in a title, but next to the 1x speed selector,
+> outside of the player itself. And in order to expand that section, you can
+> unscroll, but also have an icon next to layout to minimize or unminimize and
+> maximize, or even hide.
+
+Y sobre acciones y decisiones minimizada: ocupar arriba una parte chica, sin el
+espacio desperdiciado que tenía el estado minimizado.
+
+### Qué cambió
+
+| Pieza | Antes (#18) | Ahora |
+|---|---|---|
+| Player | tira de 32 px con "Player", la pastilla de modo y "Layout" | sin tira. Los controles van en la fila del player, a la derecha del selector 1x y fuera de la caja del player |
+| Pastilla "Minimized" / "Docked" | en todas las tiras | no existe más. El chevron del título ya dice si la sección está abierta |
+| Botón Layout | ícono más la palabra "Layout" desde `@md` | solo ícono, con `aria-label` y tooltip. El menú no cambia: sigue teniendo Dock, que no tiene ícono propio |
+| Íconos de modo | no había | al lado de Layout: minimizar o expandir, maximizar (o volver al lector si ya está maximizada) y ocultar. Uno por acción, un clic cada uno |
+| Resto de las secciones | título, pastilla, "Layout" | título, y la misma fila de íconos que el player |
+
+Los íconos llaman a las mismas acciones del store que ya existían
+(`setReaderSectionMode`, `maximizeReaderSection`, `restoreReaderSection`, por
+medio de `changeSectionMode` y `toggleMaximizedSection` en `SourceReader`). No
+se agregó estado.
+
+La fila de íconos es un componente propio, `ReaderSectionActions`, en
+`ReaderSectionControls.tsx`. Las tiras con título la usan a la derecha del
+título, y el player la recibe por la prop `controls` de `ReaderPlayer`.
+
+Por qué cuatro íconos y no uno que cicle entre modos, como decía la nota del
+primer paso: un ciclo que termina en "ocultar" hace desaparecer la sección al
+cuarto clic, y para llegar a "maximizar" hay que pasar por los otros. Con un
+ícono por acción cada una cuesta un clic y el tooltip dice qué hace.
+
+### Cómo se fija el player sin tira
+
+El player no tiene título, así que no tiene una tira que fijar. Se resolvió así:
+
+| Modo del player | Qué se fija | Lugar en la pila |
+|---|---|---|
+| `expanded` | nada. El gráfico es demasiado alto para fijarse y se va al scrollear | ninguno. La sección siguiente hereda el lugar 0 |
+| `compact` / `docked` | el player mismo, como barra de una línea de 32 px | el lugar 0, igual que una tira |
+| sin archivo local | no hay player | ninguno |
+
+La barra es el cuerpo de la sección del player con las mismas clases que una
+tira: `h-8`, `sticky`, el mismo `top` y el mismo aspecto al fijarse. Para que
+entre en 32 px, la pastilla del player pasó a medir exactamente eso (botón de
+play de 28 px, 1 px de padding y 1 px de borde arriba y abajo). Con eso la pila
+sigue en múltiplos de 32 px sea cual sea la sección que ocupa el lugar 0.
+
+Para expandir un player minimizado que está fijado arriba alcanza con el ícono
+de expandir; el player vuelve a su lugar en el flujo, arriba, que es donde
+Sebastián dijo que se puede volver scrolleando.
+
+De paso se corrigió un defecto del primer paso: con una grabación sin archivo
+local no se renderiza el player, pero su lugar en la pila seguía reservado, y
+todas las tiras se fijaban 32 px más abajo, sobre una franja vacía. Ahora el
+orden de la pila excluye al player cuando no hay player o cuando está expandido.
+
+Lo que no cambió y sigue cubierto por la prueba "leaves no box between a section
+header and the scrolling column": entre cualquier elemento que se fija (tira o
+barra del player) y `reader-scroll-body` no hay ninguna caja. La prueba ahora
+busca el elemento fijable por `data-reader-pin` y corre dos veces, con el player
+minimizado (la barra tiene que cumplir la regla) y expandido (no tiene que haber
+nada fijable).
+
+### Acciones y decisiones minimizada
+
+Minimizada, la sección son dos elementos: el centinela, que no ocupa alto, y la
+tira de 32 px. La tira muestra solo el título. Lo que sobraba era la pastilla
+"Minimized" y la palabra "Layout", que ocupaban ancho, no alto; el alto ya era
+de 32 px desde el primer paso.
+
+### Pruebas
+
+Archivo nuevo `SourceReader.compaction.test.tsx`. A diferencia de las otras
+suites de `SourceReader`, no mockea `WaveformPlayer`, porque "al lado del
+selector 1x" solo se puede probar contra la fila real del player.
+
+| Criterio | Prueba |
+|---|---|
+| sin "Player" en la sección del player | `shows no "Player" label anywhere in the player section`, `stays untitled when minimized` |
+| sin "Minimized" | `shows no "Minimized" or "Docked" label with every section minimized or docked` |
+| Layout solo ícono, al lado del 1x, fuera del player | `is an icon with no text, immediately after the speed selector` (expandido y minimizado), `has a tooltip that names it`, `still opens the full layout menu` |
+| íconos de modo | `sits right after Layout, each icon-only with a name`, `minimizes and expands through the store`, `maximizes, then returns to the reader…`, `hides the player…`, `names each icon in a tooltip` |
+| resto de las secciones | `keeps the label in the strip and makes every control an icon`, `offers Expand once a labeled section is minimized, with no pill` |
+| acciones minimizada = 32 px | `renders only the zero-height sentinel and the 32px strip` |
+| el fijado sigue apilando | en `SourceReader.stickySections.test.tsx`: la prueba de "no box" extendida, `pins the minimized player bar…`, `never pins an expanded player…`, `stacks a minimized player bar in slot 0…`, `gives slot 0 to metadata when the recording has no player at all` |
+
+Cada prueba nueva se corrió contra el código de #18 y falla ahí (20 fallas),
+salvo `still opens the full layout menu` y `stays untitled when minimized` en su
+primera versión. La primera es una guarda de regresión a propósito. La segunda
+pasaba por un error de la prueba: `textContent` junta los textos sin espacio
+("PlayerMinimized"), y la expresión con `\b` no encontraba "Player". Se cambió a
+buscar la palabra sin límites.
+
+### Lo que no se pudo verificar
+
+Igual que en el primer paso: esta sesión no abre la app. No está visto en
+pantalla que la pastilla de 32 px se vea bien, que los íconos queden alineados
+con el 1x en el modo expandido (la cuenta está en el comentario de
+`ReaderPlayer`: 15 px de margen inferior), ni que la barra del player se fije
+arriba en la app real. Lo verifica el coordinador en vivo.
