@@ -21,9 +21,11 @@ export function registerAppHandlers(): void {
         windows[0].webContents.reload()
       }
     } else {
-      // In production, do a full relaunch
+      // In production, do a full relaunch. quit(), not exit(): exit skips
+      // before-quit, and with it the USB release; leaving the device open is
+      // what made the process crash on its way out (exit code 139).
       app.relaunch()
-      app.exit(0)
+      app.quit()
     }
   })
 
