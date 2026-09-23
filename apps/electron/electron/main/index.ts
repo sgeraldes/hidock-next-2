@@ -20,7 +20,7 @@ const USB_PRODUCT_IDS = [
 ]
 import { initializeDatabase, closeDatabase, isGraphProvenanceCleanupRegistered } from './services/database'
 import { initializeConfig, getConfig } from './services/config'
-import { setAutoConnectChecker } from './services/jensen'
+import { getJensenDevice, setAutoConnectChecker } from './services/jensen'
 import { initializeStartupStorage } from './storage-startup'
 import { registerIpcHandlers } from './ipc/handlers'
 import { stopAutoSync, initializeCalendarAutoSync } from './ipc/calendar-handlers'
@@ -431,13 +431,34 @@ app.on('window-all-closed', () => {
   }
 })
 
-app.on('before-quit', () => {
+/** How long quitting waits for the USB device to let go before leaving anyway. */
+const USB_RELEASE_TIMEOUT_MS = 2000
+let quitCleanupDone = false
+
+app.on('before-quit', (event) => {
+  if (quitCleanupDone) return
+  // The first quit is held back once so the USB device can be released. The
+  // app used to exit with the device still open, and the process then crashed
+  // inside libusb's teardown (exit code 139) after this cleanup had run.
+  event.preventDefault()
+  quitCleanupDone = true
   // Release the brain lock first, so an agent asking a moment later starts a
   // headless brain instead of knocking on a door that is closing.
   void stopAppBrain().catch(() => {})
   stopAutoSync() // B-CAL-002: Clean up calendar auto-sync interval
   stopRecordingWatcher()
   stopTranscriptionProcessor()
-  closeDatabase()
-  console.log('Cleanup complete')
+  void (async () => {
+    try {
+      await Promise.race([
+        getJensenDevice().disconnect(),
+        new Promise((resolve) => setTimeout(resolve, USB_RELEASE_TIMEOUT_MS)),
+      ])
+    } catch (error) {
+      console.warn('[Quit] releasing the USB device failed:', error)
+    }
+    closeDatabase()
+    console.log('Cleanup complete')
+    app.quit()
+  })()
 })
