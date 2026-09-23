@@ -354,10 +354,13 @@ export function WaveformPlayer({
 
   // ---- 'pill' -------------------------------------------------------------
   if (mode === 'pill') {
+    // Exactly 32px tall: a 28px play button and speed pill, 1px of padding and
+    // a 1px border above and below. The reader pins the minimized player as a
+    // bar in the section-strip stack, whose rows are PINNED_STRIP_H (32px).
     return (
       <div
         className={cn(
-          'items-center gap-2 rounded-full border bg-muted/50 py-1 pl-1 pr-2 text-foreground',
+          'h-8 items-center gap-2 rounded-full border bg-muted/50 py-px pl-px pr-2 text-foreground',
           fluid ? 'flex w-full' : 'inline-flex max-w-full',
           className
         )}
@@ -370,7 +373,7 @@ export function WaveformPlayer({
           disabled={!pb.canPlayThis}
           title={pb.canPlayThis ? (pb.isPlaying ? 'Pause' : 'Play') : 'Download to play'}
           aria-label={pb.isPlaying ? 'Pause' : 'Play'}
-          className="h-8 w-8 shrink-0 rounded-full"
+          className="h-7 w-7 shrink-0 rounded-full"
         >
           {pb.isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
         </Button>

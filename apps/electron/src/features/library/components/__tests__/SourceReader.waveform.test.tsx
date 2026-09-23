@@ -131,7 +131,7 @@ describe('SourceReader — single explicitly controlled waveform', () => {
   it('minimizes to the full-width player pill and still renders ONE element', () => {
     const restore = mockRegionWidth(800) // wide pane → pill, not scrubber
     render(<SourceReader recording={makeRecording()} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Player' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Minimize Player' }))
     const players = screen.getAllByTestId(/^waveform-player-/)
     expect(players).toHaveLength(1)
     expect(screen.getByTestId('waveform-player-pill')).toBeInTheDocument()
@@ -142,7 +142,7 @@ describe('SourceReader — single explicitly controlled waveform', () => {
   it('uses the scrubber for a minimized player when the reader pane is narrow', () => {
     const restore = mockRegionWidth(320) // below breakpoint → scrubber
     render(<SourceReader recording={makeRecording()} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Player' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Minimize Player' }))
     expect(screen.getAllByTestId(/^waveform-player-/)).toHaveLength(1)
     expect(screen.getByTestId('waveform-player-scrubber')).toBeInTheDocument()
     restore()
