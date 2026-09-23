@@ -5,6 +5,12 @@ import { RefreshCw, AlertCircle, EyeOff, Trash2 } from 'lucide-react'
 import { toast } from '@/components/ui/toaster'
 import { getHiDockDeviceService } from '@/services/hidock-device'
 import { scanAndReconcile } from '@/services/device-sync-actions'
+import { recoverTruncated } from '@/services/truncated-recovery-actions'
+import {
+  describeTruncatedRecovery,
+  recoverActionLabel,
+  type TruncatedRecoveryCounts
+} from '@/features/library/utils/truncatedRecoveryCopy'
 import { overlayActiveTranscriptionStatuses, useUnifiedRecordings } from '@/hooks/useUnifiedRecordings'
 import {
   UnifiedRecording,
@@ -450,13 +456,28 @@ export function Library() {
         }
         // A file that holds less audio than its own transcript lost bytes
         // somewhere, and the only place that showed was a line in the main
-        // process log. Say it once, on the mount that found them.
+        // process log. Say it once, on the mount that found them, with what
+        // the device can still give back. Recovery only starts from the
+        // toast's action: nothing downloads without the owner asking.
         const shortened = result?.truncated ?? 0
         if (result?.success && shortened > 0) {
+          let counts: TruncatedRecoveryCounts | null = null
+          try {
+            counts = (await window.electronAPI.downloadService?.truncatedRecoveryPlan?.()) ?? null
+          } catch (e) {
+            // Device Sync off rejects the channel; the warning still stands.
+            console.warn('[Library] Truncated-recovery plan unavailable:', e)
+          }
+          const recoverable = counts?.recoverable ?? 0
           toast.warning(
             'Some recordings are shorter than their transcripts',
-            `${shortened} file${shortened === 1 ? '' : 's'} on disk hold less audio than was transcribed from them, ` +
-              'which usually means the download was cut short. Their stored length is left as it was.'
+            describeTruncatedRecovery(counts, shortened),
+            recoverable > 0
+              ? {
+                  duration: 30_000,
+                  action: { label: recoverActionLabel(recoverable), onClick: () => { void recoverTruncated() } },
+                }
+              : undefined
           )
         }
       } catch (e) {

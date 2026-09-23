@@ -12,6 +12,7 @@ import { registerQualityHandlers } from './quality-handlers'
 import { registerMigrationHandlers } from './migration-handlers'
 import { registerDeviceCacheHandlers } from './device-cache-handlers'
 import { registerDownloadServiceHandlers } from '../services/download-service'
+import { registerTruncatedRecoveryHandlers } from './truncated-recovery-handlers'
 import { registerIntegrityHandlers } from './integrity-handlers'
 import { registerKnowledgeHandlers } from './knowledge-handlers'
 import { registerAssistantHandlers } from './assistant-handlers'
@@ -71,6 +72,7 @@ export function registerIpcHandlers(): void {
   registerMigrationHandlers()
   registerDeviceCacheHandlers()
   registerDownloadServiceHandlers()
+  registerTruncatedRecoveryHandlers()
   registerIntegrityHandlers()
   registerKnowledgeHandlers()
   registerAssistantHandlers()
