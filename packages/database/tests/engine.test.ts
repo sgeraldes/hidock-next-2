@@ -9,7 +9,7 @@
  * compatibility facade) without any app coupling.
  */
 
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { existsSync, rmSync } from 'fs'
@@ -319,6 +319,24 @@ describe('DatabaseEngine', () => {
     expect(engine.lastPostMigrationVacuum.thresholdBytes).toBe(64 * 1024 * 1024)
     engine.run('INSERT INTO items (id, name, note) VALUES (?, ?, ?)', ['a', 'A', 'n'])
     expect(engine.queryAll('SELECT * FROM items')).toHaveLength(1)
+    engine.closeDatabase()
+  })
+
+  it('records a failed post-migration VACUUM as not run', async () => {
+    const path = tempDbPath('vacuum-fails')
+    paths.push(path)
+    const engine = new DatabaseEngine({
+      betterSqlite3: Database,
+      dbPathProvider: () => path,
+      schemaVersion: 2,
+      schema: SCHEMA,
+      vacuumMinReclaimBytes: 0,
+      migrations: { 2: () => {} },
+    })
+    const vacuum = vi.spyOn(engine, 'vacuum').mockReturnValue(false)
+    await engine.initialize()
+    expect(vacuum).toHaveBeenCalledTimes(1)
+    expect(engine.lastPostMigrationVacuum).toMatchObject({ considered: true, ran: false })
     engine.closeDatabase()
   })
 

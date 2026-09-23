@@ -2182,8 +2182,9 @@ const MIGRATIONS: Record<number, () => void> = {
     // ceiling and crashed the app. Compact every embedding to a binary Float32
     // BLOB (~3x smaller) and drop duplicate (recording_id, chunk_index) rows.
     // Idempotent: only rows whose embedding is still TEXT are converted, so a
-    // re-run is a no-op. The engine runs VACUUM after this migration to reclaim
-    // the freed pages. See vector-store.ts for the matching write/read change.
+    // re-run is a no-op. The engine VACUUMs after this migration when the freed
+    // pages reach its threshold (they do here: ~1.7 GB). See vector-store.ts for
+    // the matching write/read change.
     console.log('Running migration to schema v36: compact vector_embeddings (JSON text -> Float32 BLOB) + dedupe')
     const database = getDatabase()
 
@@ -2248,7 +2249,7 @@ const MIGRATIONS: Record<number, () => void> = {
       console.log(
         `[Migration v36] compacted ${converted} embeddings to Float32 BLOB` +
           (deleted > 0 ? `, dropped ${deleted} malformed` : '') +
-          ' (VACUUM reclaims the freed space)'
+          ' (the post-migration VACUUM reclaims the freed space when it passes the threshold)'
       )
     } catch (e) {
       console.warn('[Migration v36] embedding compaction failed (non-fatal):', e)

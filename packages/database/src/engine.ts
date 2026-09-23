@@ -834,8 +834,7 @@ export class DatabaseEngine {
       // One-time space reclamation after a size-reducing migration (VACUUM must
       // run outside any transaction). Reports before/after size.
       if (this.appliedMigration && this.config.vacuumAfterMigration !== false && this.worthVacuuming(sizeBefore)) {
-        this.vacuum(sizeBefore)
-        this.lastPostMigrationVacuum.ran = true
+        this.lastPostMigrationVacuum.ran = this.vacuum(sizeBefore)
       } else {
         this.checkpoint()
       }
@@ -857,15 +856,21 @@ export class DatabaseEngine {
    */
   private worthVacuuming(fileSize: number): boolean {
     const bdb = this.getBdb()
-    let reclaimable = 0
+    const threshold = this.config.vacuumMinReclaimBytes ?? Math.max(64 * 1024 * 1024, Math.floor(fileSize * 0.05))
+    let reclaimable: number
     try {
       const freePages = Number(bdb.pragma('freelist_count', { simple: true }))
       const pageSize = Number(bdb.pragma('page_size', { simple: true }))
       reclaimable = freePages * pageSize
-    } catch {
-      reclaimable = 0
+    } catch (e) {
+      // Unknown is not "nothing to reclaim": keep the old behaviour and vacuum.
+      console.warn(
+        '[Database] Could not measure free pages after migration; vacuuming as before:',
+        (e as Error).message
+      )
+      this.lastPostMigrationVacuum = { considered: true, ran: false, reclaimableBytes: -1, thresholdBytes: threshold }
+      return true
     }
-    const threshold = this.config.vacuumMinReclaimBytes ?? Math.max(64 * 1024 * 1024, Math.floor(fileSize * 0.05))
     this.lastPostMigrationVacuum = { considered: true, ran: false, reclaimableBytes: reclaimable, thresholdBytes: threshold }
     const worth = reclaimable >= threshold
     if (!worth) {
@@ -909,8 +914,11 @@ export class DatabaseEngine {
     }
   }
 
-  /** Run VACUUM to reclaim free pages; logs before/after on-disk size. */
-  vacuum(sizeBefore = this.fileSize(this.dbPath)): void {
+  /**
+   * Run VACUUM to reclaim free pages; logs before/after on-disk size. Returns
+   * whether it completed: a failure is logged and not fatal.
+   */
+  vacuum(sizeBefore = this.fileSize(this.dbPath)): boolean {
     const bdb = this.getBdb()
     const t0 = Date.now()
     try {
@@ -923,8 +931,10 @@ export class DatabaseEngine {
         `[Database] VACUUM complete in ${((Date.now() - t0) / 1000).toFixed(1)}s: ` +
           `${fmt(sizeBefore)} -> ${fmt(after)}`
       )
+      return true
     } catch (e) {
       console.warn('[Database] VACUUM failed (non-fatal):', (e as Error).message)
+      return false
     }
   }
 
