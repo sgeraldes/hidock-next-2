@@ -50,11 +50,14 @@ async function waitUntilGone(other: BrainLock, timeoutMs: number): Promise<boole
 }
 
 /** Ask whatever else holds the lock to leave. Returns once it has, or has had its chance. */
-async function displaceOthers(): Promise<void> {
+async function displaceOthers(stillServing: () => boolean): Promise<void> {
   const other = readBrainLock(lockPath)
   if (!other || other.instanceId === lock?.instanceId) return
   if (other.kind !== 'service') return // another app instance cannot exist; the single-instance lock sees to that
   if (!(await probeBrain(other))) return
+  // The probe takes time. If the app began quitting meanwhile, the headless
+  // brain is the one that should keep answering, so it is left alone.
+  if (!stillServing()) return
   await requestStepDown(other)
   if (!(await waitUntilGone(other, STEP_DOWN_WAIT_MS))) {
     console.warn(`[Brain] headless brain pid ${other.pid} did not step down within ${STEP_DOWN_WAIT_MS} ms`)
@@ -125,7 +128,7 @@ export async function startAppBrain(options: {
   const instanceId = randomUUID()
   lock = null
 
-  await displaceOthers()
+  await displaceOthers(() => mine === generation)
   if (mine !== generation) return
 
   const started = await startBrainServer({
@@ -158,7 +161,7 @@ export async function startAppBrain(options: {
       if (!lock) return
       const current = readBrainLock(lockPath)
       if (current?.instanceId === lock.instanceId) return
-      await displaceOthers()
+      await displaceOthers(() => mine === generation)
       claimLock()
     })()
   }, WATCHDOG_MS)

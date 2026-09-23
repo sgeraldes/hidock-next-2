@@ -94,13 +94,18 @@ export function writeBrainLock(path: string, lock: BrainLock, renameFile: typeof
         }
         throw error
       }
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25 * (attempt + 1))
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10 * (attempt + 1))
     }
   }
 }
 
-/** How many times a lock write retries a rename that Windows refused. About 1.4 s in all. */
-export const LOCK_WRITE_RETRIES = 10
+/**
+ * How many times a lock write retries a rename that Windows refused. The waits
+ * block the thread that writes, which in the app is the main process, so they
+ * stay short: 150 ms in all. A lock still held after that is left to the app's
+ * watchdog, which tries again ten seconds later without blocking anything.
+ */
+export const LOCK_WRITE_RETRIES = 5
 
 /** Remove the lock only if it is still ours. A newer owner's lock is left alone. */
 export function removeBrainLockIfOwned(path: string, instanceId: string): void {
