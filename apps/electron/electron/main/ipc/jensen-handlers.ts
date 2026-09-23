@@ -157,6 +157,16 @@ async function pollRecordingOnce(): Promise<void> {
   }
 }
 
+/**
+ * What the recording poll last saw, for readers that must not touch the USB bus
+ * themselves. `known` is false until the first successful poll after a connect;
+ * `recording` is the filename being written, or null when the device is idle.
+ */
+export function getLiveRecordingState(): { known: boolean; recording: string | null } {
+  if (lastRecordingFilename === undefined) return { known: false, recording: null }
+  return { known: true, recording: lastRecordingFilename }
+}
+
 // Idempotent — safe to call after every scan. Starts the poll the first time the
 // device has fully initialized (a file-list scan has completed).
 function startRecordingPoll(): void {

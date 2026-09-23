@@ -2,7 +2,6 @@ import { useEffect, Suspense } from 'react'
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { Layout } from '@/components/layout/Layout'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
-import { SecurityWarningBanner } from '@/components/SecurityWarningBanner'
 import { LoadingSpinner } from '@/components/LoadingSpinner'
 import { ToastProvider } from '@/components/ui/toaster'
 import { FloatingAssistant } from '@/components/assistant/FloatingAssistant'
@@ -154,7 +153,6 @@ function App(): React.ReactElement {
   return (
     <ToastProvider>
       <ClipboardCapture />
-      <SecurityWarningBanner />
       <Layout>
         <NavigationLogger />
         <RoutePersistence />

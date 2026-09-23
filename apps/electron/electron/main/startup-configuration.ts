@@ -33,7 +33,13 @@ export function configureEarlyStartup(): void {
     app.commandLine.appendSwitch('device-event-log-level', '3')
   }
 
-  const enableRemoteDebugging = is.dev || process.env.ENABLE_REMOTE_DEBUGGING === 'true'
+  // Development only. The debugging port has no authentication and runs any
+  // JavaScript in the app, so an installed build never opens it: agents reach
+  // the data through the brain API, which checks a token and the privacy gate.
+  // ENABLE_REMOTE_DEBUGGING used to open it in production too and is no longer
+  // read. The headless brain never opens it either.
+  const brainOnly = process.argv.includes('--brain-only')
+  const enableRemoteDebugging = !brainOnly && is.dev
   if (enableRemoteDebugging) {
     const cdpPort = process.env.HIDOCK_DEV_CDP_PORT || '9222'
     app.commandLine.appendSwitch('remote-debugging-port', cdpPort)
