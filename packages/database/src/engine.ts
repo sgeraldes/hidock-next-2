@@ -501,11 +501,19 @@ export interface DatabaseEngineConfig {
    */
   deferBackupOnBoot?: boolean
   /**
-   * When true (default), the engine runs VACUUM once after any boot that applied
-   * a new migration — reclaiming free pages left by a size-reducing migration
-   * (e.g. the embeddings JSON→BLOB conversion). Set false to skip.
+   * When true (default), the engine considers a VACUUM after any boot that
+   * applied a new migration, to reclaim free pages left by a size-reducing
+   * migration (e.g. the embeddings JSON→BLOB conversion). Set false to skip.
    */
   vacuumAfterMigration?: boolean
+  /**
+   * The post-migration VACUUM runs only when the free pages it would reclaim
+   * reach this many bytes. VACUUM rewrites the whole file on the startup path:
+   * on a 2.8 GB library it held the splash for 17 s to reclaim 0.9 MB after a
+   * migration that only added columns. Default: the larger of 64 MiB and 5% of
+   * the file. Set 0 to vacuum after every migration.
+   */
+  vacuumMinReclaimBytes?: number
   /** @deprecated no-op — better-sqlite3 writes incrementally (WAL). */
   saveDebounceMs?: number
   /** @deprecated no-op — better-sqlite3 writes incrementally (WAL). */
@@ -527,6 +535,13 @@ export class DatabaseEngine {
   private inTransaction = false
   private lastChanges = 0
   private appliedMigration = false
+  /** What the last boot decided about the post-migration VACUUM (for logs and tests). */
+  lastPostMigrationVacuum: { considered: boolean; ran: boolean; reclaimableBytes: number; thresholdBytes: number } = {
+    considered: false,
+    ran: false,
+    reclaimableBytes: 0,
+    thresholdBytes: 0,
+  }
   private checkpointCount = 0
   private deferredBackupPending = false
 
@@ -680,6 +695,7 @@ export class DatabaseEngine {
   initializeReadOnly(): void {
     if (this.bdb) this.closeDatabase()
     this.appliedMigration = false
+    this.lastPostMigrationVacuum = { considered: false, ran: false, reclaimableBytes: 0, thresholdBytes: 0 }
     this.deferredBackupPending = false
     this.dbPath = this.config.dbPathProvider()
 
@@ -725,6 +741,7 @@ export class DatabaseEngine {
     // Per-boot flag (drives the one-time post-migration VACUUM); must not leak
     // a previous boot's value into this one.
     this.appliedMigration = false
+    this.lastPostMigrationVacuum = { considered: false, ran: false, reclaimableBytes: 0, thresholdBytes: 0 }
     this.deferredBackupPending = false
 
     this.dbPath = this.config.dbPathProvider()
@@ -816,8 +833,8 @@ export class DatabaseEngine {
 
       // One-time space reclamation after a size-reducing migration (VACUUM must
       // run outside any transaction). Reports before/after size.
-      if (this.appliedMigration && this.config.vacuumAfterMigration !== false) {
-        this.vacuum(sizeBefore)
+      if (this.appliedMigration && this.config.vacuumAfterMigration !== false && this.worthVacuuming(sizeBefore)) {
+        this.lastPostMigrationVacuum.ran = this.vacuum(sizeBefore)
       } else {
         this.checkpoint()
       }
@@ -831,6 +848,38 @@ export class DatabaseEngine {
       console.error('[Database] FATAL initialization error:', error)
       throw error
     }
+  }
+
+  /**
+   * Whether a post-migration VACUUM would reclaim enough to be worth rewriting
+   * the file on the startup path. Records the decision either way.
+   */
+  private worthVacuuming(fileSize: number): boolean {
+    const bdb = this.getBdb()
+    const threshold = this.config.vacuumMinReclaimBytes ?? Math.max(64 * 1024 * 1024, Math.floor(fileSize * 0.05))
+    let reclaimable: number
+    try {
+      const freePages = Number(bdb.pragma('freelist_count', { simple: true }))
+      const pageSize = Number(bdb.pragma('page_size', { simple: true }))
+      reclaimable = freePages * pageSize
+    } catch (e) {
+      // Unknown is not "nothing to reclaim": keep the old behaviour and vacuum.
+      console.warn(
+        '[Database] Could not measure free pages after migration; vacuuming as before:',
+        (e as Error).message
+      )
+      this.lastPostMigrationVacuum = { considered: true, ran: false, reclaimableBytes: -1, thresholdBytes: threshold }
+      return true
+    }
+    this.lastPostMigrationVacuum = { considered: true, ran: false, reclaimableBytes: reclaimable, thresholdBytes: threshold }
+    const worth = reclaimable >= threshold
+    if (!worth) {
+      console.log(
+        `[Database] VACUUM skipped after migration: ${(reclaimable / BYTES_PER_MB).toFixed(1)}MB reclaimable, ` +
+          `below ${(threshold / BYTES_PER_MB).toFixed(1)}MB`
+      )
+    }
+    return worth
   }
 
   private fileSize(p: string): number {
@@ -865,8 +914,11 @@ export class DatabaseEngine {
     }
   }
 
-  /** Run VACUUM to reclaim free pages; logs before/after on-disk size. */
-  vacuum(sizeBefore = this.fileSize(this.dbPath)): void {
+  /**
+   * Run VACUUM to reclaim free pages; logs before/after on-disk size. Returns
+   * whether it completed: a failure is logged and not fatal.
+   */
+  vacuum(sizeBefore = this.fileSize(this.dbPath)): boolean {
     const bdb = this.getBdb()
     const t0 = Date.now()
     try {
@@ -879,8 +931,10 @@ export class DatabaseEngine {
         `[Database] VACUUM complete in ${((Date.now() - t0) / 1000).toFixed(1)}s: ` +
           `${fmt(sizeBefore)} -> ${fmt(after)}`
       )
+      return true
     } catch (e) {
       console.warn('[Database] VACUUM failed (non-fatal):', (e as Error).message)
+      return false
     }
   }
 

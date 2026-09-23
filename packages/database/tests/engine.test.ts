@@ -9,7 +9,7 @@
  * compatibility facade) without any app coupling.
  */
 
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { existsSync, rmSync } from 'fs'
@@ -52,6 +52,7 @@ describe('DatabaseEngine', () => {
     repairPhase?: () => void
     protectedTables?: string[]
     vacuumAfterMigration?: boolean
+    vacuumMinReclaimBytes?: number
   }) {
     return {
       betterSqlite3: Database,
@@ -62,6 +63,7 @@ describe('DatabaseEngine', () => {
       repairPhase: opts.repairPhase,
       protectedTables: opts.protectedTables,
       vacuumAfterMigration: opts.vacuumAfterMigration,
+      vacuumMinReclaimBytes: opts.vacuumMinReclaimBytes,
     }
   }
 
@@ -271,7 +273,7 @@ describe('DatabaseEngine', () => {
     e2.closeDatabase()
   })
 
-  it('runs VACUUM once after a boot that applied a migration', async () => {
+  it('runs VACUUM once after a boot that applied a migration, when it reclaims enough', async () => {
     const path = tempDbPath('vacuum')
     paths.push(path)
     let migrated = false
@@ -280,6 +282,7 @@ describe('DatabaseEngine', () => {
       dbPathProvider: () => path,
       schemaVersion: 2,
       schema: SCHEMA,
+      vacuumMinReclaimBytes: 0,
       migrations: {
         2: () => {
           migrated = true
@@ -291,9 +294,49 @@ describe('DatabaseEngine', () => {
     })
     await engine.initialize()
     expect(migrated).toBe(true)
+    expect(engine.lastPostMigrationVacuum.ran).toBe(true)
     // VACUUM ran without error and the db is still usable.
     engine.run('INSERT INTO items (id, name) VALUES (?, ?)', ['a', 'A'])
     expect(engine.queryAll('SELECT * FROM items')).toHaveLength(1)
+    engine.closeDatabase()
+  })
+
+  it('skips the post-migration VACUUM when it would reclaim too little to be worth a rewrite', async () => {
+    // A migration that only adds columns frees nothing. On the owner's 2.8 GB
+    // library the unconditional VACUUM held the splash for 17 s to gain 0.9 MB.
+    const path = tempDbPath('vacuum-skip')
+    paths.push(path)
+    const engine = new DatabaseEngine({
+      betterSqlite3: Database,
+      dbPathProvider: () => path,
+      schemaVersion: 2,
+      schema: SCHEMA,
+      migrations: { 2: () => engine.run('ALTER TABLE items ADD COLUMN note TEXT') },
+    })
+    await engine.initialize()
+    expect(engine.lastPostMigrationVacuum.considered).toBe(true)
+    expect(engine.lastPostMigrationVacuum.ran).toBe(false)
+    expect(engine.lastPostMigrationVacuum.thresholdBytes).toBe(64 * 1024 * 1024)
+    engine.run('INSERT INTO items (id, name, note) VALUES (?, ?, ?)', ['a', 'A', 'n'])
+    expect(engine.queryAll('SELECT * FROM items')).toHaveLength(1)
+    engine.closeDatabase()
+  })
+
+  it('records a failed post-migration VACUUM as not run', async () => {
+    const path = tempDbPath('vacuum-fails')
+    paths.push(path)
+    const engine = new DatabaseEngine({
+      betterSqlite3: Database,
+      dbPathProvider: () => path,
+      schemaVersion: 2,
+      schema: SCHEMA,
+      vacuumMinReclaimBytes: 0,
+      migrations: { 2: () => {} },
+    })
+    const vacuum = vi.spyOn(engine, 'vacuum').mockReturnValue(false)
+    await engine.initialize()
+    expect(vacuum).toHaveBeenCalledTimes(1)
+    expect(engine.lastPostMigrationVacuum).toMatchObject({ considered: true, ran: false })
     engine.closeDatabase()
   })
 
@@ -339,7 +382,9 @@ describe('DatabaseEngine', () => {
   it('re-initialize resets per-boot migration state (no repeat VACUUM when nothing migrated)', async () => {
     const path = tempDbPath('reinit-vacuum')
     paths.push(path)
-    const engine = new DatabaseEngine(makeEngineConfig({ path, schemaVersion: 2, migrations: { 2: () => {} } }))
+    const engine = new DatabaseEngine(
+      makeEngineConfig({ path, schemaVersion: 2, migrations: { 2: () => {} }, vacuumMinReclaimBytes: 0 })
+    )
 
     await engine.initialize() // applies v2 — this boot ends in VACUUM, not a checkpoint
     expect(engine.getPhysicalSaveCount()).toBe(0)
