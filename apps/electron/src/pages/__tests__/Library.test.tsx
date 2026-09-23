@@ -33,6 +33,9 @@ vi.mock('@/services/device-sync-actions', () => ({
   scanAndReconcile: deviceSyncHarness.scanAndReconcile
 }))
 
+const toastMock = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() }))
+vi.mock('@/components/ui/toaster', () => ({ toast: toastMock }))
+
 // Mock hooks
 vi.mock('@/hooks/useUnifiedRecordings', () => ({
   useUnifiedRecordings: vi.fn(),
@@ -262,7 +265,8 @@ global.window.electronAPI = {
     restore: vi.fn().mockResolvedValue({ success: true }),
     // spec-005/F17 T5 — loaded eagerly on mount (for the Trash toggle's count).
     getTrash: vi.fn().mockResolvedValue([]),
-    getById: vi.fn().mockResolvedValue(null)
+    getById: vi.fn().mockResolvedValue(null),
+    backfillDurations: vi.fn().mockResolvedValue({ success: true })
   },
   downloadService: {
     queueDownloads: vi.fn()
@@ -713,5 +717,41 @@ describe('Library', () => {
       })
       expect(mockRefresh).not.toHaveBeenCalled()
     })
+  })
+})
+
+describe('Library — recordings whose file is shorter than their transcript', () => {
+  // This file does not clear mocks between tests, and the toast spy is shared.
+  beforeEach(() => {
+    toastMock.warning.mockClear()
+  })
+
+  it('says so once when the backfill finds them', async () => {
+    vi.mocked(window.electronAPI.recordings.backfillDurations).mockResolvedValueOnce({
+      success: true,
+      scanned: 40,
+      truncated: 37,
+    })
+
+    render(<MemoryRouter><Library /></MemoryRouter>)
+
+    await waitFor(() => expect(toastMock.warning).toHaveBeenCalledTimes(1))
+    const [title, body] = toastMock.warning.mock.calls[0]
+    expect(title).toMatch(/shorter than their transcripts/i)
+    expect(body).toContain('37 files')
+  })
+
+  it('says nothing when every file holds the audio it should', async () => {
+    vi.mocked(window.electronAPI.recordings.backfillDurations).mockResolvedValueOnce({
+      success: true,
+      scanned: 40,
+      measured: 40,
+      truncated: 0,
+    })
+
+    render(<MemoryRouter><Library /></MemoryRouter>)
+
+    await waitFor(() => expect(window.electronAPI.recordings.backfillDurations).toHaveBeenCalled())
+    expect(toastMock.warning).not.toHaveBeenCalled()
   })
 })

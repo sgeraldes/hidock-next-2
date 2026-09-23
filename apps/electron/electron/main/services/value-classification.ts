@@ -156,6 +156,22 @@ export interface ApplyResult {
 }
 
 /**
+ * Which automatic rater produced a rating, when `quality_source` is 'ai'.
+ *
+ * Both raters stamp 'ai' and always did, and `quality_source` carries a CHECK
+ * constraint that only admits 'ai' and 'user'. Widening it would mean
+ * rebuilding knowledge_captures, a protected table, to change one constraint —
+ * so the distinction lives in its own column instead.
+ *
+ * It matters because undoing one of them is not the same as undoing the other.
+ * Correcting a duration invalidates a stopwatch verdict and says nothing about
+ * a judgement the model made after reading the transcript.
+ *
+ * 'user' still outranks both and is never overwritten.
+ */
+export type CaptureRatingMethod = 'content' | 'duration'
+
+/**
  * Guarded, idempotent, never-downgrade, confidence-floored DB write. Writes
  * iff ALL of:
  *  - the capture is currently unrated/NULL OR was itself AI-set
@@ -175,7 +191,11 @@ export interface ApplyResult {
  * Non-throwing; logs only captureId + resulting rating (no transcript text,
  * no summary).
  */
-export function applyCaptureValueClassification(captureId: string, cls: ValueClassification): ApplyResult {
+export function applyCaptureValueClassification(
+  captureId: string,
+  cls: ValueClassification,
+  method: CaptureRatingMethod = 'content'
+): ApplyResult {
   const targetRating: QualityRating | 'unrated' = mapValueToRating(cls.value) ?? 'unrated'
   const isDowngrade = targetRating !== 'unrated'
 
@@ -202,11 +222,11 @@ export function applyCaptureValueClassification(captureId: string, cls: ValueCla
     run(
       `UPDATE knowledge_captures
           SET quality_rating = ?, quality_confidence = ?, quality_assessed_at = ?,
-              quality_reasons = ?, quality_source = 'ai', updated_at = ?
+              quality_reasons = ?, quality_source = 'ai', quality_method = ?, updated_at = ?
         WHERE id = ?
           AND (quality_rating = 'unrated' OR quality_rating IS NULL OR quality_source = 'ai')
           AND COALESCE(quality_source, '') != 'user'`,
-      [targetRating, cls.confidence, now, JSON.stringify(cls.reasons), now, captureId]
+      [targetRating, cls.confidence, now, JSON.stringify(cls.reasons), method, now, captureId]
     )
 
     if (getRowsModified() > 0) {
@@ -591,7 +611,7 @@ export function applyDurationValueGate(): { candidates: number; marked: number }
     }
     const verdict = classifyByDuration(row.duration_seconds, row.file_size)
     if (!verdict) continue
-    if (applyCaptureValueClassification(row.id, verdict).applied) marked++
+    if (applyCaptureValueClassification(row.id, verdict, 'duration').applied) marked++
   }
 
   if (marked > 0 || contradicted > 0) {

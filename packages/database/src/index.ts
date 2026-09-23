@@ -12,6 +12,7 @@ export {
   DatabaseEngine,
   getTableColumns,
   stripLeadingSqlComments,
+  splitSqlStatements,
   parseDestructiveStatement,
   MassDeleteError,
 } from './engine.js'
