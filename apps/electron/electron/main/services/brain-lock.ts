@@ -29,7 +29,12 @@ export interface BrainLock {
   /** Random per process; a health probe must echo it back to count as alive. */
   instanceId: string
   startedAt: string
-  /** The executable that can start a headless brain, so a client need not guess. */
+  /**
+   * The installed executable that can start a headless brain, so a client need
+   * not guess. Empty when the writer is a dev build: a dev path points at
+   * electron.exe or a local unpacked build, and a client must never launch that
+   * against the owner's data. Use `packagedExe()` to fill it.
+   */
   exe: string
 }
 
@@ -37,6 +42,11 @@ export const BRAIN_LOCK_FILENAME = 'brain.json'
 
 export function brainLockPath(userDataDir: string): string {
   return join(userDataDir, BRAIN_LOCK_FILENAME)
+}
+
+/** What to write as `exe`: the running executable when installed, nothing in dev. */
+export function packagedExe(isPackaged: boolean, execPath: string): string {
+  return isPackaged ? execPath : ''
 }
 
 /** The current lock, or null when there is none or it cannot be read. */
@@ -62,11 +72,35 @@ export function readBrainLock(path: string): BrainLock | null {
  * Replace the lock in one step. Written beside the target and renamed over it,
  * so a reader sees the old lock or the new one and never half of either.
  */
-export function writeBrainLock(path: string, lock: BrainLock): void {
+export function writeBrainLock(path: string, lock: BrainLock, renameFile: typeof renameSync = renameSync): void {
   const tmp = `${path}.${process.pid}.tmp`
   writeFileSync(tmp, JSON.stringify(lock, null, 2), 'utf-8')
-  renameSync(tmp, path)
+  // On Windows a rename over a file that another process has open fails with
+  // EPERM, EBUSY or EACCES. Three things read this file routinely (the headless
+  // brain's watch, the app's watchdog, the bridge while it waits), so a collision
+  // is expected now and then. Each read holds the file for well under a
+  // millisecond, so a few short retries get past it.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      renameFile(tmp, path)
+      return
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (attempt >= LOCK_WRITE_RETRIES || (code !== 'EPERM' && code !== 'EBUSY' && code !== 'EACCES')) {
+        try {
+          unlinkSync(tmp)
+        } catch {
+          // The temp file is ours and harmless; the next write replaces it.
+        }
+        throw error
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25 * (attempt + 1))
+    }
+  }
 }
+
+/** How many times a lock write retries a rename that Windows refused. About 1.4 s in all. */
+export const LOCK_WRITE_RETRIES = 10
 
 /** Remove the lock only if it is still ours. A newer owner's lock is left alone. */
 export function removeBrainLockIfOwned(path: string, instanceId: string): void {

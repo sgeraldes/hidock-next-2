@@ -17,6 +17,7 @@ import { app } from 'electron'
 import { randomBytes, randomUUID } from 'crypto'
 import {
   brainLockPath,
+  packagedExe,
   probeBrain,
   readBrainLock,
   removeBrainLockIfOwned,
@@ -97,24 +98,48 @@ function recordingNow(getLiveRecording: () => { known: boolean; recording: strin
   }
 }
 
+/** Write our lock; a failure is logged and left to the watchdog to retry. */
+function claimLock(): void {
+  if (!lock) return
+  try {
+    writeBrainLock(lockPath, lock)
+  } catch (error) {
+    console.warn('[Brain] could not write the lock file; the watchdog retries:', error)
+  }
+}
+
+/**
+ * Bumped by every start and every stop. A start that finds it changed after an
+ * await knows the app began quitting meanwhile, and backs out instead of
+ * serving after the database has closed.
+ */
+let generation = 0
+
 export async function startAppBrain(options: {
   getLiveRecording: () => { known: boolean; recording: string | null }
 }): Promise<void> {
   if (server) return
+  const mine = ++generation
   lockPath = brainLockPath(app.getPath('userData'))
   const token = randomBytes(32).toString('hex')
   const instanceId = randomUUID()
   lock = null
 
   await displaceOthers()
+  if (mine !== generation) return
 
-  server = await startBrainServer({
+  const started = await startBrainServer({
     kind: 'app',
     token,
     instanceId,
     queries: brainQueries,
     recordingNow: recordingNow(options.getLiveRecording),
   })
+  if (mine !== generation) {
+    await started.close()
+    return
+  }
+  server = started
   lock = {
     kind: 'app',
     pid: process.pid,
@@ -122,23 +147,27 @@ export async function startAppBrain(options: {
     token,
     instanceId,
     startedAt: new Date().toISOString(),
-    exe: process.execPath,
+    exe: packagedExe(app.isPackaged, process.execPath),
   }
-  writeBrainLock(lockPath, lock)
-  console.log(`[Brain] serving on 127.0.0.1:${server.port}`)
 
+  // The watchdog goes up before the first write, so a first write that Windows
+  // refuses is retried in ten seconds instead of leaving the app unreachable
+  // for the whole session.
   watchdog = setInterval(() => {
     void (async () => {
       if (!lock) return
       const current = readBrainLock(lockPath)
       if (current?.instanceId === lock.instanceId) return
       await displaceOthers()
-      writeBrainLock(lockPath, lock)
+      claimLock()
     })()
   }, WATCHDOG_MS)
+  claimLock()
+  console.log(`[Brain] serving on 127.0.0.1:${server.port}`)
 }
 
 export async function stopAppBrain(): Promise<void> {
+  generation++
   if (watchdog) clearInterval(watchdog)
   watchdog = null
   if (lock) removeBrainLockIfOwned(lockPath, lock.instanceId)

@@ -413,17 +413,6 @@ app.whenReady().then(async () => {
 
   console.log('Background services scheduled')
 
-  // Show security warning in production when remote debugging is explicitly enabled
-  if (!is.dev && process.env.ENABLE_REMOTE_DEBUGGING === 'true' && mainWindow) {
-    // Wait for window to be ready before sending the warning
-    mainWindow.webContents.on('did-finish-load', () => {
-      mainWindow?.webContents.send('security-warning', {
-        type: 'remote-debugging-enabled',
-        message: 'Remote debugging is enabled. This should only be used for troubleshooting.'
-      })
-    })
-  }
-
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })

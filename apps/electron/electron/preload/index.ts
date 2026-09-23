@@ -1498,9 +1498,6 @@ export interface ElectronAPI {
   onTranscriptionAllCancelled: (callback: (data: { count: number }) => void) => () => void
   onTranscriptionQueueState: (callback: (state: TranscriptionQueueState) => void) => () => void
 
-  // Security Warning Events
-  onSecurityWarning: (callback: (data: { type: string; message: string }) => void) => () => void
-
   // Activity Log bridge — main process services (transcription, calendar, download) emit entries here
   onActivityLogEntry: (callback: (entry: { type: string; message: string; details?: string; timestamp: string }) => void) => () => void
 }
@@ -2265,15 +2262,6 @@ const electronAPI: ElectronAPI = {
     ipcRenderer.on('transcription:queueState', handler)
     return () => {
       ipcRenderer.removeListener('transcription:queueState', handler)
-    }
-  },
-
-  // Security Warning Listener
-  onSecurityWarning: (callback: (data: { type: string; message: string }) => void) => {
-    const handler = (_event: any, data: { type: string; message: string }) => callback(data)
-    ipcRenderer.on('security-warning', handler)
-    return () => {
-      ipcRenderer.removeListener('security-warning', handler)
     }
   },
 

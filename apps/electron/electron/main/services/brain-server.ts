@@ -123,8 +123,17 @@ export function startBrainServer(options: BrainServerOptions): Promise<RunningBr
     if (!tokensMatch(bearer(req), options.token)) return send(res, 401, { error: 'missing or wrong token' })
     options.onRequest?.()
 
-    const url = new URL(req.url ?? '/', `http://127.0.0.1:${port}`)
-    const parts = url.pathname.split('/').filter(Boolean).map((p) => decodeURIComponent(p))
+    // Parsing throws on a bad escape (`%E0`) or an absolute-form request line
+    // with a broken host. Uncaught in the main process, that is Electron's modal
+    // error box, so it answers 400 here instead.
+    let url: URL
+    let parts: string[]
+    try {
+      url = new URL(req.url ?? '/', `http://127.0.0.1:${port}`)
+      parts = url.pathname.split('/').filter(Boolean).map((p) => decodeURIComponent(p))
+    } catch {
+      return send(res, 400, { error: 'malformed request path' })
+    }
     const method = req.method ?? 'GET'
     const q = options.queries
 

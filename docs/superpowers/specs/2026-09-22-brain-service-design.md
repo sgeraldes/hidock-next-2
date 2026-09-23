@@ -251,3 +251,20 @@ gates, and the owner's page is unchanged.
 
 **Not served.** `raw` is gone, by design. `recording-now` needs the app open.
 Semantic search and RAG stay in the app, as stated above.
+
+**Port 9222, closed.** An installed build no longer opens the debugging port
+under any setting. `ENABLE_REMOTE_DEBUGGING` is not read anymore, and the red
+banner that announced it went with it. Development builds keep the port, which
+is what it is for. Until this landed the port was still open on the owner's
+machine, and any local process could reach `recordings.getForMeeting` through it
+and skip the gate this work adds.
+
+**Review of PR #29, fixed.**
+
+| Finding | Fix |
+|---|---|
+| A path with a bad escape (`/transcripts/%E0`) threw before the `try`: an uncaught exception in the main process | parsing moved inside its own guard, answers 400 |
+| On Windows, renaming over `brain.json` fails with EPERM while another process reads it. The app's first write then left it unreachable for the whole session | `writeBrainLock` retries EPERM, EBUSY and EACCES with short waits. The app arms its watchdog before the first write and treats a failed write as one to retry |
+| The lock's `exe` came from `process.execPath` even in dev, and the bridge launched it from a dead lock | `exe` is written only by an installed build, and the bridge never launches a dead lock's `exe` |
+| A headless brain on its way out read the lock, then deleted it; the app's new lock could land in between | it removes its lock while its server still answers. The app writes only after that server stops answering |
+| Quitting while the app was still displacing a headless brain left a server running after the database closed | a start that finds the app quitting closes its server and returns |

@@ -145,6 +145,15 @@ describe('what it answers', () => {
     expect(queries.calls).toEqual([])
   })
 
+  it('answers 400 to a path it cannot decode, and keeps serving', async () => {
+    // Review of PR #29: a bad escape threw outside the try, which in the main
+    // process is an uncaught exception and Electron's modal error box.
+    const { port, queries } = await start('service')
+    expect((await call(port, '/transcripts/%E0')).status).toBe(400)
+    expect((await call(port, '/health')).status).toBe(200)
+    expect(queries.calls).toEqual([])
+  })
+
   it('serves only pending actionables', async () => {
     const { port } = await start('service')
     expect((await call(port, '/actionables?since=2026-09-15&status=done')).status).toBe(400)

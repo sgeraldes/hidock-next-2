@@ -5,11 +5,13 @@
  * @vitest-environment node
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, existsSync, readdirSync } from 'fs'
+import { mkdtempSync, rmSync, writeFileSync, existsSync, readdirSync, renameSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
   brainLockPath,
+  LOCK_WRITE_RETRIES,
+  packagedExe,
   probeBrain,
   readBrainLock,
   removeBrainLockIfOwned,
@@ -85,6 +87,45 @@ describe('the lock file', () => {
     expect(readBrainLock(path)?.instanceId).toBe('the-app')
     removeBrainLockIfOwned(path, 'the-app')
     expect(existsSync(path)).toBe(false)
+  })
+
+  it('retries a rename that Windows refuses while another process reads the lock', () => {
+    // Review of PR #29: renameSync over a file another handle has open fails
+    // with EPERM on Windows, and the app's first write then never recovered.
+    let refusals = 2
+    const flakyRename: typeof renameSync = (from, to) => {
+      if (refusals-- > 0) throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' })
+      renameSync(from, to)
+    }
+    writeBrainLock(path, lockFor(), flakyRename)
+    expect(readBrainLock(path)).toEqual(lockFor())
+    expect(readdirSync(dir)).toEqual(['brain.json'])
+  })
+
+  it('gives up after its retries, cleans its temp file, and does not retry other errors', () => {
+    let calls = 0
+    const alwaysBusy: typeof renameSync = () => {
+      calls++
+      throw Object.assign(new Error('busy'), { code: 'EBUSY' })
+    }
+    expect(() => writeBrainLock(path, lockFor(), alwaysBusy)).toThrow('busy')
+    expect(calls).toBe(LOCK_WRITE_RETRIES + 1)
+    expect(readdirSync(dir)).toEqual([])
+
+    calls = 0
+    const missing: typeof renameSync = () => {
+      calls++
+      throw Object.assign(new Error('gone'), { code: 'ENOENT' })
+    }
+    expect(() => writeBrainLock(path, lockFor(), missing)).toThrow('gone')
+    expect(calls).toBe(1)
+  })
+
+  it('names an executable only when the writer is an installed build', () => {
+    // A dev lock named electron.exe or a local unpacked build, and the bridge
+    // launched it against the owner's data.
+    expect(packagedExe(true, 'C:/Programs/hidock-next/HiDock Next.exe')).toBe('C:/Programs/hidock-next/HiDock Next.exe')
+    expect(packagedExe(false, 'G:/Code/hidock-next-2/node_modules/electron/dist/electron.exe')).toBe('')
   })
 })
 

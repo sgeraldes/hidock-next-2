@@ -27,6 +27,7 @@ import {
   brainLockPath,
   probeBrain,
   readBrainLock,
+  packagedExe,
   removeBrainLockIfOwned,
   writeBrainLock,
   type BrainLock,
@@ -81,9 +82,12 @@ export async function runBrainOnly(): Promise<void> {
     leaving = true
     if (idleTimer) clearTimeout(idleTimer)
     if (lockWatch) clearInterval(lockWatch)
-    // Finish the requests already in flight before letting go of anything.
-    if (server) await server.close()
+    // Let go of the lock while the server still answers. The app waits for this
+    // server to stop answering before it writes its own lock, so removing ours
+    // first means the app's new lock can never land between our read and our
+    // delete. Requests already in flight still finish before the server closes.
     removeBrainLockIfOwned(lockPath, instanceId)
+    if (server) await server.close()
     try {
       closeDatabase()
     } catch {
@@ -114,7 +118,7 @@ export async function runBrainOnly(): Promise<void> {
     token,
     instanceId,
     startedAt: new Date().toISOString(),
-    exe: process.execPath,
+    exe: packagedExe(app.isPackaged, process.execPath),
   }
 
   // Claim, then confirm the claim stuck. Two launchers racing both write; the
