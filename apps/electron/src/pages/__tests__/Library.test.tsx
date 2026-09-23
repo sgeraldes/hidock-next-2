@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import { Library } from '../Library'
@@ -34,6 +34,7 @@ vi.mock('@/services/device-sync-actions', () => ({
 }))
 
 const toastMock = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() }))
+const integrityHarness = vi.hoisted(() => ({ filter: null as string | null, set: vi.fn(), search: '' }))
 vi.mock('@/components/ui/toaster', () => ({ toast: toastMock }))
 
 // Mock hooks
@@ -149,9 +150,11 @@ vi.mock('@/store/useLibraryStore', () => ({
       setListCollapsed: vi.fn(),
       qualityFilter: null,
       setQualityFilter: vi.fn(),
+      integrityFilter: integrityHarness.filter,
+      setIntegrityFilter: integrityHarness.set,
       statusFilter: null,
       setStatusFilter: vi.fn(),
-      searchQuery: '',
+      searchQuery: integrityHarness.search,
       setSearchQuery: vi.fn(),
       viewMode: 'compact',
       sortBy: 'date',
@@ -228,7 +231,7 @@ vi.mock('@/features/library/hooks', () => ({
     categoryFilter: null,
     qualityFilter: null,
     statusFilter: null,
-    searchQuery: '',
+    searchQuery: integrityHarness.search,
     setFilterMode: vi.fn(),
     setSemanticFilter: vi.fn(),
     setExclusiveFilter: vi.fn(),
@@ -252,7 +255,12 @@ const transcriptionCancelledListeners: Array<() => void> = []
 // Mock electronAPI
 global.window.electronAPI = {
   // ADV13: Library uses the owner-management batch accessor.
-  transcripts: { getByRecordingIds: vi.fn().mockResolvedValue({}), getByRecordingIdsOwner: vi.fn().mockResolvedValue({}) },
+  transcripts: {
+    getByRecordingIds: vi.fn().mockResolvedValue({}),
+    getByRecordingIdsOwner: vi.fn().mockResolvedValue({}),
+    setIntegrityAccepted: vi.fn().mockResolvedValue({ success: true, data: { accepted: true } }),
+    retranscribeMany: vi.fn().mockResolvedValue({ success: true, data: { queued: 1, skipped: 0 } })
+  },
   meetings: { getByIds: vi.fn().mockResolvedValue({}) },
   knowledge: { getById: vi.fn().mockResolvedValue(null) },
   storage: { openFolder: vi.fn() },
@@ -723,13 +731,15 @@ describe('Library', () => {
   })
 })
 
-describe('Library — recordings whose file is shorter than their transcript', () => {
+describe('Library — recordings the HiDock holds a larger copy of', () => {
   // This file does not clear mocks between tests, and the toast spy is shared.
   beforeEach(() => {
     toastMock.warning.mockClear()
   })
 
-  it('says so once when the backfill finds them', async () => {
+  it('stays quiet about a transcript that outruns its file when the device has no fuller copy', async () => {
+    // A transcript running past its audio is usually wrong timestamps, not lost
+    // audio; the integrity labels report that. Nothing here to recover.
     vi.mocked(window.electronAPI.recordings.backfillDurations).mockResolvedValueOnce({
       success: true,
       scanned: 40,
@@ -738,10 +748,9 @@ describe('Library — recordings whose file is shorter than their transcript', (
 
     render(<MemoryRouter><Library /></MemoryRouter>)
 
-    await waitFor(() => expect(toastMock.warning).toHaveBeenCalledTimes(1))
-    const [title, body] = toastMock.warning.mock.calls[0]
-    expect(title).toMatch(/shorter than their transcripts/i)
-    expect(body).toContain('37 files')
+    await waitFor(() => expect(window.electronAPI.recordings.backfillDurations).toHaveBeenCalled())
+    await waitFor(() => expect(window.electronAPI.downloadService.truncatedRecoveryPlan).toHaveBeenCalled())
+    expect(toastMock.warning).not.toHaveBeenCalled()
   })
 
   it('offers to recover the ones the device still holds larger, and only on request', async () => {
@@ -770,10 +779,10 @@ describe('Library — recordings whose file is shorter than their transcript', (
     render(<MemoryRouter><Library /></MemoryRouter>)
 
     await waitFor(() => expect(toastMock.warning).toHaveBeenCalledTimes(1))
-    const [, body, opts] = toastMock.warning.mock.calls[0]
-    expect(body).toContain('complete copy of 3')
-    expect(body).toContain('36 are no longer on the HiDock')
-    expect(body).toContain('8 match')
+    const [title, body, opts] = toastMock.warning.mock.calls[0]
+    expect(title).toMatch(/fuller copies/i)
+    expect(body).toContain('larger file than the copy on disk for 3 recordings')
+    expect(body).not.toMatch(/transcri/i)
     expect(opts?.action?.label).toBe('Recover 3 from the device')
     // Nothing is queued until the owner clicks.
     expect(window.electronAPI.downloadService.recoverTruncated).not.toHaveBeenCalled()
@@ -784,7 +793,7 @@ describe('Library — recordings whose file is shorter than their transcript', (
     await waitFor(() => expect(toastMock.success).toHaveBeenCalledWith('3 recoveries queued', expect.any(String)))
   })
 
-  it('says the audio is gone, with no action, when the device has none of them', async () => {
+  it('says nothing when the device has none of them', async () => {
     vi.mocked(window.electronAPI.recordings.backfillDurations).mockResolvedValueOnce({
       success: true,
       truncated: 2,
@@ -800,11 +809,8 @@ describe('Library — recordings whose file is shorter than their transcript', (
 
     render(<MemoryRouter><Library /></MemoryRouter>)
 
-    await waitFor(() => expect(toastMock.warning).toHaveBeenCalledTimes(1))
-    const [, body, opts] = toastMock.warning.mock.calls[0]
-    expect(body).toContain('2 are no longer on the HiDock, so the missing audio cannot be recovered')
-    expect(body).toContain('Nothing was deleted')
-    expect(opts).toBeUndefined()
+    await waitFor(() => expect(window.electronAPI.downloadService.truncatedRecoveryPlan).toHaveBeenCalled())
+    expect(toastMock.warning).not.toHaveBeenCalled()
   })
 
   it('says nothing when every file holds the audio it should', async () => {
@@ -819,5 +825,111 @@ describe('Library — recordings whose file is shorter than their transcript', (
 
     await waitFor(() => expect(window.electronAPI.recordings.backfillDurations).toHaveBeenCalled())
     expect(toastMock.warning).not.toHaveBeenCalled()
+  })
+})
+
+describe('Library — transcript integrity labels', () => {
+  const clean = { ...mockRecording, id: 'clean-1', title: 'Clean one', localPath: '/p/clean.wav' }
+  const shaky = { ...mockRecording, id: 'shaky-1', title: 'Shaky one', localPath: '/p/shaky.wav' }
+  const suspectJson = JSON.stringify({
+    version: 1,
+    status: 'suspect',
+    issues: [{ code: 'repeated_start', count: 3, detail: '3 lines start at the same instant as another line.' }],
+  })
+  const transcriptsById = {
+    'clean-1': { id: 't-clean', recording_id: 'clean-1', integrity_status: 'ok', integrity_json: '{"issues":[]}' },
+    'shaky-1': { id: 't-shaky', recording_id: 'shaky-1', integrity_status: 'suspect', integrity_json: suspectJson },
+  }
+
+  beforeEach(() => {
+    toastMock.warning.mockClear()
+    toastMock.success.mockClear()
+    integrityHarness.filter = null
+    integrityHarness.search = ''
+    integrityHarness.set.mockClear()
+    vi.mocked(useUnifiedRecordings).mockReturnValue({
+      recordings: [clean, shaky],
+      loading: false,
+      error: null,
+      refresh: mockRefresh,
+      deviceConnected: false,
+      stats: { total: 2, deviceOnly: 0, localOnly: 2, both: 0, synced: 2, unsynced: 0, onSource: 0, locallyAvailable: 2 },
+    } as any)
+    vi.mocked(window.electronAPI.transcripts.getByRecordingIdsOwner).mockResolvedValue(transcriptsById as any)
+    vi.mocked(window.electronAPI.transcripts.retranscribeMany).mockClear()
+  })
+
+  it('announces flagged transcripts once, on the mount that checked them, and Review opens the filter', async () => {
+    vi.mocked(window.electronAPI.recordings.backfillDurations).mockResolvedValueOnce({
+      success: true,
+      integrityChecked: 2,
+    })
+
+    render(<MemoryRouter><Library /></MemoryRouter>)
+
+    await waitFor(() => expect(toastMock.warning).toHaveBeenCalledTimes(1))
+    const [title, , opts] = toastMock.warning.mock.calls[0]
+    expect(title).toBe('1 transcript has problems in their timing or text')
+    expect(opts?.action?.label).toBe('Review')
+    opts.action.onClick()
+    expect(integrityHarness.set).toHaveBeenCalledWith('flagged')
+  })
+
+  it('says nothing when the check found no transcript to label', async () => {
+    vi.mocked(window.electronAPI.recordings.backfillDurations).mockResolvedValueOnce({ success: true, integrityChecked: 0 })
+
+    render(<MemoryRouter><Library /></MemoryRouter>)
+
+    await waitFor(() => expect(window.electronAPI.recordings.backfillDurations).toHaveBeenCalled())
+    expect(toastMock.warning).not.toHaveBeenCalled()
+  })
+
+  it('shows only flagged transcripts under the filter, and queues them again on confirmation', async () => {
+    integrityHarness.filter = 'flagged'
+
+    render(<MemoryRouter><Library /></MemoryRouter>)
+
+    const bar = await screen.findByTestId('integrity-bulk-bar')
+    expect(bar).toHaveTextContent('1 flagged transcript in this view.')
+    expect(screen.queryByText('Clean one')).not.toBeInTheDocument()
+
+    fireEvent.click(within(bar).getByRole('button', { name: 'Transcribe it again' }))
+    expect(window.electronAPI.transcripts.retranscribeMany).not.toHaveBeenCalled()
+    fireEvent.click(within(bar).getByRole('button', { name: 'Queue 1' }))
+
+    await waitFor(() =>
+      expect(window.electronAPI.transcripts.retranscribeMany).toHaveBeenCalledWith({ recordingIds: ['shaky-1'] })
+    )
+    await waitFor(() => expect(toastMock.success).toHaveBeenCalledWith('Queued 1 transcription', expect.any(String)))
+  })
+
+  it('counts and queues only what the search leaves on screen', async () => {
+    // Review of PR #32: the bar counted the filter's matches but ignored the
+    // search box, so "Queue 2" would have queued a row the owner had hidden.
+    const shakyTwo = { ...shaky, id: 'shaky-2', title: 'Budget review', localPath: '/p/two.wav' }
+    vi.mocked(useUnifiedRecordings).mockReturnValue({
+      recordings: [clean, shaky, shakyTwo],
+      loading: false,
+      error: null,
+      refresh: mockRefresh,
+      deviceConnected: false,
+      stats: { total: 3, deviceOnly: 0, localOnly: 3, both: 0, synced: 3, unsynced: 0, onSource: 0, locallyAvailable: 3 },
+    } as any)
+    vi.mocked(window.electronAPI.transcripts.getByRecordingIdsOwner).mockResolvedValue({
+      ...transcriptsById,
+      'shaky-2': { ...transcriptsById['shaky-1'], id: 't-shaky-2', recording_id: 'shaky-2' },
+    } as any)
+    integrityHarness.filter = 'flagged'
+    integrityHarness.search = 'budget'
+
+    render(<MemoryRouter><Library /></MemoryRouter>)
+
+    const bar = await screen.findByTestId('integrity-bulk-bar')
+    expect(bar).toHaveTextContent('1 flagged transcript in this view.')
+    fireEvent.click(within(bar).getByRole('button', { name: 'Transcribe it again' }))
+    fireEvent.click(within(bar).getByRole('button', { name: 'Queue 1' }))
+    await waitFor(() =>
+      expect(window.electronAPI.transcripts.retranscribeMany).toHaveBeenCalledWith({ recordingIds: ['shaky-2'] })
+    )
   })
 })

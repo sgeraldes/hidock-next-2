@@ -59,6 +59,8 @@ interface LibraryState {
   exclusiveFilter: ExclusiveLocationFilter
   categoryFilter: string | null
   qualityFilter: string | null
+  /** Transcript integrity filter; see transcriptIntegrity.ts for the values. */
+  integrityFilter: string | null
   statusFilter: string | null
   sourceTypeFilter: SourceTypeFilter
   durationPreset: DurationPreset
@@ -148,6 +150,7 @@ interface LibraryActions {
   setExclusiveFilter: (filter: ExclusiveLocationFilter) => void
   setCategoryFilter: (filter: string | null) => void
   setQualityFilter: (filter: string | null) => void
+  setIntegrityFilter: (filter: string | null) => void
   setStatusFilter: (filter: string | null) => void
   setSourceTypeFilter: (filter: SourceTypeFilter) => void
   setDurationPreset: (preset: DurationPreset) => void
@@ -212,6 +215,7 @@ const initialState: LibraryState = {
   exclusiveFilter: 'all',
   categoryFilter: null,
   qualityFilter: null,
+  integrityFilter: null,
   statusFilter: null,
   sourceTypeFilter: 'all',
   durationPreset: 'all',
@@ -255,6 +259,7 @@ export const useLibraryStore = create<LibraryStore>()(
       setExclusiveFilter: (filter) => set({ exclusiveFilter: filter }),
       setCategoryFilter: (filter) => set({ categoryFilter: filter }),
       setQualityFilter: (filter) => set({ qualityFilter: filter }),
+      setIntegrityFilter: (filter) => set({ integrityFilter: filter }),
       setStatusFilter: (filter) => set({ statusFilter: filter }),
       setSourceTypeFilter: (filter) => set({ sourceTypeFilter: filter }),
       setDurationPreset: (preset) => set({ durationPreset: preset }),
@@ -266,6 +271,7 @@ export const useLibraryStore = create<LibraryStore>()(
           exclusiveFilter: 'all',
           categoryFilter: null,
           qualityFilter: null,
+          integrityFilter: null,
           statusFilter: null,
           sourceTypeFilter: 'all',
           durationPreset: 'all',
@@ -452,6 +458,7 @@ export const useLibraryStore = create<LibraryStore>()(
         exclusiveFilter: state.exclusiveFilter,
         categoryFilter: state.categoryFilter,
         qualityFilter: state.qualityFilter,
+        integrityFilter: state.integrityFilter,
         statusFilter: state.statusFilter,
         sourceTypeFilter: state.sourceTypeFilter,
         durationPreset: state.durationPreset,

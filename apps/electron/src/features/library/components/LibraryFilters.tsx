@@ -26,6 +26,7 @@ import type {
   SourceTypeFilter
 } from '@/features/library/utils/sourceType'
 import { DURATION_PRESET_LABELS, type DurationPreset } from '@/features/library/utils/durationFilter'
+import { ISSUE_ORDER, ISSUE_TAGS, integrityFilterLabel, isIntegrityFilter } from '@/features/library/utils/transcriptIntegrity'
 
 export type TypeCounts = Record<string, number> & { all: number }
 
@@ -59,6 +60,10 @@ interface LibraryFiltersProps {
   onSortByChange?: (sortBy: SortBy) => void
   onSortOrderChange?: (order: SortOrder) => void
   onClearFilters: () => void
+  /** Transcript integrity filter ('all' when off) and how many transcripts each value matches. */
+  integrityFilter?: string
+  integrityCounts?: Record<string, number>
+  onIntegrityFilterChange?: (filter: string) => void
 }
 
 const CATEGORIES = ['all', 'meeting', 'interview', '1:1', 'brainstorm'] as const
@@ -96,7 +101,10 @@ export function LibraryFilters({
   onSearchQueryChange,
   onSortByChange,
   onSortOrderChange,
-  onClearFilters
+  onClearFilters,
+  integrityFilter = 'all',
+  integrityCounts = {},
+  onIntegrityFilterChange
 }: LibraryFiltersProps) {
   const selectedType = artifactTypes.find((type) => type.id === sourceTypeFilter)
   const supportsDuration = selectedType?.capabilities.includes('timed') ?? false
@@ -114,7 +122,8 @@ export function LibraryFilters({
     supportsConversation && categoryFilter !== 'all',
     supportsQuality && qualityFilter !== 'all',
     statusFilter !== 'all',
-    supportsDuration && durationPreset !== 'all'
+    supportsDuration && durationPreset !== 'all',
+    integrityFilter !== 'all'
   ].filter(Boolean).length
   const anyFilterActive = advancedActiveCount > 0 || sourceTypeFilter !== 'all' || searchQuery.length > 0
 
@@ -151,6 +160,10 @@ export function LibraryFilters({
   if (statusFilter !== 'all') {
     chips.push({ key: 'status', label: statusFilter, clear: () => onStatusFilterChange('all') })
   }
+  if (integrityFilter !== 'all' && onIntegrityFilterChange && isIntegrityFilter(integrityFilter)) {
+    chips.push({ key: 'integrity', label: integrityFilterLabel(integrityFilter), clear: () => onIntegrityFilterChange('all') })
+  }
+  const showIntegrity = !!onIntegrityFilterChange && ((integrityCounts.flagged ?? 0) > 0 || (integrityCounts.accepted ?? 0) > 0 || integrityFilter !== 'all')
 
   return (
     <div className="space-y-2 pt-3">
@@ -255,6 +268,20 @@ export function LibraryFilters({
                   <div className="text-xs font-semibold text-foreground/70">Quality</div>
                   <select value={qualityFilter} onChange={(event) => onQualityFilterChange(event.target.value)} className="h-8 w-full rounded-md border border-input bg-background px-3 py-1 text-xs" aria-label="Filter by quality rating">
                     <option value="all">All ratings</option><option value="valuable">Valuable</option><option value="archived">Archived</option><option value="low-value">Low-value</option><option value="garbage">Garbage</option><option value="unrated">Unrated</option>
+                  </select>
+                </section>
+              )}
+
+              {showIntegrity && (
+                <section className="space-y-1.5">
+                  <div className="text-xs font-semibold text-foreground/70">Transcript</div>
+                  <select value={integrityFilter} onChange={(event) => onIntegrityFilterChange?.(event.target.value)} className="h-8 w-full rounded-md border border-input bg-background px-3 py-1 text-xs" aria-label="Filter by transcript problems">
+                    <option value="all">Any transcript</option>
+                    <option value="flagged">Any problem ({integrityCounts.flagged ?? 0})</option>
+                    {ISSUE_ORDER.filter((code) => (integrityCounts[`issue:${code}`] ?? 0) > 0 || integrityFilter === `issue:${code}`).map((code) => (
+                      <option key={code} value={`issue:${code}`}>{ISSUE_TAGS[code]} ({integrityCounts[`issue:${code}`] ?? 0})</option>
+                    ))}
+                    {((integrityCounts.accepted ?? 0) > 0 || integrityFilter === 'accepted') && <option value="accepted">Accepted as is ({integrityCounts.accepted ?? 0})</option>}
                   </select>
                 </section>
               )}

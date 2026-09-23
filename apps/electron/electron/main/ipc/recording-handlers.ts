@@ -67,7 +67,13 @@ import {
   type RecordingSplitResult,
   type RecordingSplitSuggestion
 } from '../services/recording-split'
-import { getQueueItems, getActionableQueueItems, addToQueue, updateQueueItem } from '../services/database'
+import {
+  getQueueItems,
+  getActionableQueueItems,
+  addToQueue,
+  updateQueueItem,
+  backfillTranscriptIntegrity,
+} from '../services/database'
 import { getConfig } from '../services/config'
 import {
   GetRecordingByIdSchema,
@@ -860,7 +866,7 @@ export function registerRecordingHandlers(): void {
   // Bring duration_seconds in line with the audio on disk, then rate what the
   // corrected lengths now allow. Measures each file once (see audio-duration.ts)
   // and remembers it, so this stays cheap on every Library mount.
-  ipcMain.handle('recordings:backfillDurations', async (): Promise<{ success: boolean; scanned?: number; updated?: number; measured?: number; truncated?: number; rerateable?: number; markedLowValue?: number; markedByDuration?: number; error?: string }> => {
+  ipcMain.handle('recordings:backfillDurations', async (): Promise<{ success: boolean; scanned?: number; updated?: number; measured?: number; truncated?: number; rerateable?: number; markedLowValue?: number; markedByDuration?: number; integrityChecked?: number; error?: string }> => {
     try {
       const result = backfillRecordingDurations()
       // Classify AFTER the duration backfill so both classifiers can use the
@@ -870,7 +876,16 @@ export function registerRecordingHandlers(): void {
       // knowledge is rated here, for free, instead of waiting for an LLM
       // backfill the user has to trigger by hand and that had never once run.
       const byDuration = applyDurationValueGate()
-      return { success: true, ...result, markedLowValue: quality.markedLowValue, markedByDuration: byDuration.marked }
+      // After the durations: the integrity check compares each transcript with
+      // the audio's measured length, so it reads the lengths just settled.
+      const integrity = backfillTranscriptIntegrity()
+      return {
+        success: true,
+        ...result,
+        markedLowValue: quality.markedLowValue,
+        markedByDuration: byDuration.marked,
+        integrityChecked: integrity.checked,
+      }
     } catch (error) {
       console.error('recordings:backfillDurations error:', error)
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error occurred' }

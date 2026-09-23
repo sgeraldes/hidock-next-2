@@ -454,6 +454,8 @@ export interface ElectronAPI {
       rerateable?: number
       markedLowValue?: number
       markedByDuration?: number
+      /** Transcripts checked for timing and text that cannot fit the audio. */
+      integrityChecked?: number
       error?: string
     }>
     linkToMeeting: (recordingId: string, meetingId: string, confidence: number, method: string) => Promise<any>
@@ -636,6 +638,10 @@ export interface ElectronAPI {
      */
     getByRecordingIdOwner: (recordingId: string) => Promise<any>
     getByRecordingIdsOwner: (recordingIds: string[]) => Promise<Record<string, any>>
+    /** Manual path to green: accept a flagged transcript as it is, or undo that. */
+    setIntegrityAccepted: (request: { recordingId: string; accepted: boolean }) => Promise<Result<{ accepted: boolean }>>
+    /** Automatic path to green: queue new transcriptions; each is checked when stored. */
+    retranscribeMany: (request: { recordingIds: string[] }) => Promise<Result<{ queued: number; skipped: number }>>
     search: (query: string) => Promise<any[]>
     getRecurringTopics: () => Promise<Array<{ topic: string; recordingCount: number }>>
     assignSpeaker: (request: { recordingId: string; speakerLabel: string; contactId?: string; newName?: string }) => Promise<Result<Contact>>
@@ -1645,6 +1651,8 @@ const electronAPI: ElectronAPI = {
     getByRecordingIds: (recordingIds) => callIPC('db:get-transcripts-by-recording-ids', recordingIds),
     getByRecordingIdOwner: (recordingId) => callIPC('db:get-transcript-owner', recordingId),
     getByRecordingIdsOwner: (recordingIds) => callIPC('db:get-transcripts-by-recording-ids-owner', recordingIds),
+    setIntegrityAccepted: (request) => callIPC('transcripts:setIntegrityAccepted', request),
+    retranscribeMany: (request) => callIPC('transcripts:retranscribeMany', request),
     search: (query) => callIPC('db:search-transcripts', query),
     getRecurringTopics: () => callIPC('db:get-recurring-topics'),
     assignSpeaker: (request) => callIPC('transcripts:assignSpeaker', request),

@@ -24,7 +24,15 @@
  */
 
 import { getChatLLMService } from './chat-llm'
-import { queryAll, queryOne, run, runInTransaction, saveDatabase, getQueueItems } from './database'
+import {
+  queryAll,
+  queryOne,
+  run,
+  runInTransaction,
+  saveDatabase,
+  getQueueItems,
+  refreshTranscriptIntegrity,
+} from './database'
 import { isRecordingEligible, filterEligibleRecordingIds } from './recording-eligibility'
 import {
   classifyTranscriptFormat,
@@ -450,6 +458,9 @@ export async function reformatOne(transcriptId: string): Promise<'done' | 'faile
   runInTransaction(() => {
     run(`UPDATE transcripts SET speakers = ? WHERE id = ?`, [JSON.stringify(usable), transcriptId])
   })
+  // New segments, new timing: check them again rather than keep the verdict
+  // (or the owner's acceptance) that belonged to the old ones.
+  refreshTranscriptIntegrity(transcriptId)
   saveDatabase()
   return 'done'
 }

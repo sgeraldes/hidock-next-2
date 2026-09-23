@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { RefreshCw, AlertCircle, EyeOff, Trash2 } from 'lucide-react'
 import { toast } from '@/components/ui/toaster'
+import { Button } from '@/components/ui/button'
 import { getHiDockDeviceService } from '@/services/hidock-device'
 import { scanAndReconcile } from '@/services/device-sync-actions'
 import { recoverTruncated } from '@/services/truncated-recovery-actions'
@@ -11,6 +12,14 @@ import {
   recoverActionLabel,
   type TruncatedRecoveryCounts
 } from '@/features/library/utils/truncatedRecoveryCopy'
+import {
+  ISSUE_ORDER,
+  integrityIssues,
+  integrityLabel,
+  isIntegrityFilter,
+  matchesIntegrityFilter,
+  type IntegrityFilter
+} from '@/features/library/utils/transcriptIntegrity'
 import { overlayActiveTranscriptionStatuses, useUnifiedRecordings } from '@/hooks/useUnifiedRecordings'
 import {
   UnifiedRecording,
@@ -98,6 +107,29 @@ export function Library() {
     deviceConnected,
   } = useUnifiedRecordings()
 
+  // Enrichment: transcripts for the loaded recordings (meetings load below).
+  const [transcripts, setTranscripts] = useState<Map<string, Transcript>>(new Map())
+  const recordingsRef = useRef<UnifiedRecording[]>([])
+
+  /**
+   * Re-read transcripts (all local ones, or the given ids) and merge them into
+   * the map. The enrichment effect only reloads when the set of ids changes, so
+   * a verdict written by the integrity check or an acceptance needs this.
+   */
+  const reloadTranscripts = useCallback(async (ids?: string[]): Promise<Map<string, Transcript>> => {
+    const targets = ids ?? recordingsRef.current.filter((rec) => hasLocalPath(rec)).map((rec) => rec.id)
+    if (targets.length === 0) return new Map()
+    const fresh = new Map<string, Transcript>(
+      Object.entries(await window.electronAPI.transcripts.getByRecordingIdsOwner(targets)) as [string, Transcript][]
+    )
+    setTranscripts((prev) => {
+      const merged = new Map(prev)
+      for (const [id, t] of fresh) merged.set(id, t)
+      return merged
+    })
+    return fresh
+  }, [])
+
   // Hard-purged captures are knowledge tombstones, not fresh device sources.
   // Library owns this projection rule; Device/Sync deliberately keeps showing
   // a surviving hardware copy with its "Deleted" badge.
@@ -128,6 +160,7 @@ export function Library() {
       return !filenameBase || !purgedFilenameBases.has(filenameBase)
     })
   }, [durableRecordings, activeTranscriptionSignature, purgedFilenameBases])
+  recordingsRef.current = recordings
 
   const stats = useMemo(() => {
     let deviceOnly = 0
@@ -237,6 +270,11 @@ export function Library() {
   const durationPreset = useLibraryStore((state) => state.durationPreset)
   const setDurationPreset = useLibraryStore((state) => state.setDurationPreset)
   const clearAllFilters = useLibraryStore((state) => state.clearFilters)
+  const storedIntegrityFilter = useLibraryStore((state) => state.integrityFilter)
+  const setIntegrityFilter = useLibraryStore((state) => state.setIntegrityFilter)
+  // Persisted state from an older build may hold nothing or an unknown value.
+  const integrityFilter: IntegrityFilter | null =
+    typeof storedIntegrityFilter === 'string' && isIntegrityFilter(storedIntegrityFilter) ? storedIntegrityFilter : null
 
 
   // Sort state
@@ -454,11 +492,33 @@ export function Library() {
         ) {
           await refresh(false)
         }
+        // The integrity check labels transcripts whose timing or text cannot be
+        // right. It runs once per transcript, so this notice appears on the
+        // mount that first checked them; after that the labels and the
+        // Library's Transcript filter are where they live.
+        if (result?.success && (result.integrityChecked ?? 0) > 0) {
+          const checked = await reloadTranscripts()
+          const flagged = [...checked.values()].filter((t) => {
+            const label = integrityLabel(t)
+            return label === 'suspect' || label === 'broken'
+          }).length
+          if (flagged > 0) {
+            toast.warning(
+              `${flagged} transcript${flagged === 1 ? ' has' : 's have'} problems in their timing or text`,
+              'Each one is labelled in the list. Filter by Transcript to review them: transcribe again, or accept as is.',
+              { duration: 30_000, action: { label: 'Review', onClick: () => setIntegrityFilter('flagged') } }
+            )
+          }
+        }
         // A file that holds less audio than its own transcript lost bytes
         // somewhere, and the only place that showed was a line in the main
         // process log. Say it once, on the mount that found them, with what
         // the device can still give back. Recovery only starts from the
         // toast's action: nothing downloads without the owner asking.
+        // A transcript that runs past its audio is usually a timing error, not
+        // lost audio, and the integrity labels cover it. Say something here
+        // only when the HiDock holds a larger file than the one on disk: that
+        // is real evidence of a short download, and there is audio to recover.
         const shortened = result?.truncated ?? 0
         if (result?.success && shortened > 0) {
           let counts: TruncatedRecoveryCounts | null = null
@@ -469,22 +529,22 @@ export function Library() {
             console.warn('[Library] Truncated-recovery plan unavailable:', e)
           }
           const recoverable = counts?.recoverable ?? 0
-          toast.warning(
-            'Some recordings are shorter than their transcripts',
-            describeTruncatedRecovery(counts, shortened),
-            recoverable > 0
-              ? {
-                  duration: 30_000,
-                  action: { label: recoverActionLabel(recoverable), onClick: () => { void recoverTruncated() } },
-                }
-              : undefined
-          )
+          if (recoverable > 0) {
+            toast.warning(
+              'The HiDock has fuller copies of some recordings',
+              describeTruncatedRecovery(counts, shortened),
+              {
+                duration: 30_000,
+                action: { label: recoverActionLabel(recoverable), onClick: () => { void recoverTruncated() } },
+              }
+            )
+          }
         }
       } catch (e) {
         console.error('[Library] Duration backfill failed:', e)
       }
     })()
-  }, [loading, recordings.length, refresh])
+  }, [loading, recordings.length, refresh, reloadTranscripts, setIntegrityFilter])
 
   // spec-005/F17 T5 §D1 — loads the Trash *data* (for the toggle's count),
   // independent of *entering* Trash (showTrash). Cheap: idx_recordings_deleted_at
@@ -557,7 +617,6 @@ export function Library() {
   }, [clearSelection])
 
   // Enrichment: Load transcripts and meetings for recordings
-  const [transcripts, setTranscripts] = useState<Map<string, Transcript>>(new Map())
   const [meetings, setMeetings] = useState<Map<string, Meeting>>(new Map())
 
   const refreshCompletedTranscription = useCallback(async (recordingId: string) => {
@@ -778,9 +837,30 @@ export function Library() {
       if (categoryFilter !== null && rec.category !== categoryFilter) return false
       if (qualityFilter !== null && rec.quality !== qualityFilter) return false
       if (statusFilter !== null && rec.status !== statusFilter) return false
+      if (integrityFilter !== null && !matchesIntegrityFilter(transcripts.get(rec.id), integrityFilter)) return false
       return true
     })
-  }, [baseRecordings, artifactTypes, sourceTypeFilter, durationPreset, categoryFilter, qualityFilter, statusFilter])
+  }, [baseRecordings, artifactTypes, sourceTypeFilter, durationPreset, categoryFilter, qualityFilter, statusFilter, integrityFilter, transcripts])
+
+  // How many transcripts each Transcript-filter value matches, over the same
+  // population the other facets count.
+  const integrityCounts = useMemo(() => {
+    const counts: Record<string, number> = { flagged: 0, accepted: 0 }
+    for (const code of ISSUE_ORDER) counts[`issue:${code}`] = 0
+    for (const rec of baseRecordings) {
+      const t = transcripts.get(rec.id)
+      const label = integrityLabel(t)
+      if (label === 'accepted') counts.accepted++
+      if (label !== 'suspect' && label !== 'broken') continue
+      counts.flagged++
+      for (const issue of integrityIssues(t)) counts[`issue:${issue.code}`]++
+    }
+    return counts
+  }, [baseRecordings, transcripts])
+
+  // Automatic path to green for everything the current Transcript filter shows.
+  const [retranscribeArmed, setRetranscribeArmed] = useState(false)
+  useEffect(() => setRetranscribeArmed(false), [integrityFilter])
 
   // Filter recordings based on scoped set + search, then sort.
   const filteredRecordings = useMemo(() => {
@@ -2345,7 +2425,53 @@ export function Library() {
               onSortByChange={setSortBy}
               onSortOrderChange={setSortOrder}
               onClearFilters={clearAllFilters}
+              integrityFilter={integrityFilter ?? 'all'}
+              integrityCounts={integrityCounts}
+              onIntegrityFilterChange={(filter) => setIntegrityFilter(filter === 'all' ? null : filter)}
             />
+            {integrityFilter !== null && integrityFilter !== 'accepted' && filteredRecordings.length > 0 && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs" data-testid="integrity-bulk-bar">
+                <span className="text-muted-foreground">
+                  {filteredRecordings.length} flagged transcript{filteredRecordings.length === 1 ? '' : 's'} in this view.
+                </span>
+                {!retranscribeArmed ? (
+                  <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setRetranscribeArmed(true)}>
+                    Transcribe {filteredRecordings.length === 1 ? 'it' : `all ${filteredRecordings.length}`} again
+                  </Button>
+                ) : (
+                  <>
+                    <span>This sends the audio to the transcription provider again and may cost money.</span>
+                    <Button
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={async () => {
+                        setRetranscribeArmed(false)
+                        // Exactly the rows on screen: the filter and the search box.
+                        const ids = filteredRecordings.map((rec) => rec.id)
+                        const result = await window.electronAPI.transcripts.retranscribeMany({ recordingIds: ids })
+                        if (!result.success) {
+                          toast.error('Could not queue the transcriptions', result.error.message)
+                          return
+                        }
+                        const { queued, skipped } = result.data
+                        toast.success(
+                          `Queued ${queued} transcription${queued === 1 ? '' : 's'}`,
+                          skipped > 0
+                            ? `${skipped} could not be queued: personal, deleted, rated too low to send, or already waiting.`
+                            : 'Each new transcript is checked when it is stored.'
+                        )
+                        void refresh(false)
+                      }}
+                    >
+                      Queue {filteredRecordings.length}
+                    </Button>
+                    <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setRetranscribeArmed(false)}>
+                      Cancel
+                    </Button>
+                  </>
+                )}
+              </div>
+            )}
             {personalCount > 0 && (
               <div className="mt-2 flex items-center">
                 <button
@@ -2850,6 +2976,9 @@ export function Library() {
               }}
               // Reveal the assistant: open the floating overlay, or expand the
               // embedded pane if it's collapsed to a rail (honors chat placement).
+              onIntegrityChanged={() => {
+                if (selectedRecording) void reloadTranscripts([selectedRecording.id])
+              }}
               onAskAboutSource={() => {
                 const ui = useUIStore.getState()
                 if (ui.chatPlacement === 'embedded') ui.setChatEmbeddedCollapsed(false)
