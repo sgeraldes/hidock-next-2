@@ -160,6 +160,69 @@ export function stripLeadingSqlComments(sql: string): string {
     .trim()
 }
 
+/**
+ * Split a schema script into statements, ignoring semicolons that are not
+ * statement terminators.
+ *
+ * A plain `.split(';')` was what this did, and on 2026-09-22 a semicolon
+ * written inside a `--` comment in a CREATE TABLE cut that statement in two.
+ * SQLite then reported a syntax error on the second half, the table was never
+ * created, and the only trace was one warning line in a boot log full of them
+ * — every later migration failed with "no such table". The cost is not the bug,
+ * it is that the failure points nowhere near the cause.
+ *
+ * Semicolons inside line comments, block comments and quoted identifiers or
+ * strings are therefore text, not terminators. Doubled quotes (SQLite's escape,
+ * `'it''s'`) close and immediately reopen the literal, which lands on the same
+ * answer without a special case.
+ */
+export function splitSqlStatements(schema: string): string[] {
+  const statements: string[] = []
+  let start = 0
+  let quote: string | null = null
+  let lineComment = false
+  let blockComment = false
+
+  for (let i = 0; i < schema.length; i++) {
+    const ch = schema[i]
+    const next = schema[i + 1]
+
+    if (lineComment) {
+      if (ch === '\n') lineComment = false
+      continue
+    }
+    if (blockComment) {
+      if (ch === '*' && next === '/') {
+        blockComment = false
+        i++
+      }
+      continue
+    }
+    if (quote) {
+      if (ch === quote) quote = null
+      continue
+    }
+
+    if (ch === '-' && next === '-') {
+      lineComment = true
+      i++
+    } else if (ch === '/' && next === '*') {
+      blockComment = true
+      i++
+    } else if (ch === "'" || ch === '"' || ch === '`') {
+      quote = ch
+    } else if (ch === ';') {
+      const statement = schema.slice(start, i).trim()
+      if (statement.length > 0) statements.push(statement)
+      start = i + 1
+    }
+  }
+
+  const tail = schema.slice(start).trim()
+  if (tail.length > 0) statements.push(tail)
+  return statements
+}
+
 /* -------------------------------------------------------------------------- */
 /*  Parameter normalization (sql.js accepted looser inputs than               */
 /*  better-sqlite3; normalize so consumer call sites are unchanged).          */
@@ -655,10 +718,7 @@ export class DatabaseEngine {
       const deferRoutineBackup = this.config.deferBackupOnBoot === true && !migrationPending
       if (hadExistingFile && !deferRoutineBackup) await this.backupOnBoot(migrationPending)
 
-      const statements = this.config.schema
-        .split(';')
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0)
+      const statements = splitSqlStatements(this.config.schema)
 
       // --- PHASE 1: CORE TABLES ---
       console.log('[Database] Phase 1: Ensuring core tables exist...')

@@ -34,6 +34,8 @@ vi.mock('../database', () => ({
   markRecordingDownloaded: vi.fn(),
   addSyncedFile: vi.fn(),
   isFileSynced: vi.fn(() => false),
+  getSyncedFile: vi.fn(() => undefined),
+  removeSyncedFile: vi.fn(),
   isFilePurged: () => false,
   getRecordingByFilename: vi.fn(() => null),
   getSyncedFilenames: vi.fn(() => new Set()),
@@ -59,14 +61,15 @@ vi.mock('fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('fs')>()
   return {
     ...actual,
-    default: { ...actual, existsSync: vi.fn(() => false) },
-    existsSync: vi.fn(() => false)
+    // D-022: the sentinel path a mocked synced_files row points at reads as present.
+    default: { ...actual, existsSync: (p: unknown) => String(p).startsWith('/mock/synced-on-disk/') },
+    existsSync: (p: unknown) => String(p).startsWith('/mock/synced-on-disk/')
   }
 })
 
 // Need to import AFTER mocks
 import { getDownloadService, DownloadService, type DownloadQueueItem } from '../download-service'
-import { isFileSynced, queryAll, run } from '../database'
+import { getSyncedFile, queryAll, run } from '../database'
 
 const mockQueryAll = vi.mocked(queryAll)
 const mockRun = vi.mocked(run)
@@ -95,9 +98,10 @@ describe('DownloadService', () => {
         { filename: 'test2.hda', size: 2048 }
       ])
 
-      expect(ids).toHaveLength(2)
-      expect(ids).toContain('test1.hda')
-      expect(ids).toContain('test2.hda')
+      expect(ids.queued).toHaveLength(2)
+      expect(ids.queued).toContain('test1.hda')
+      expect(ids.queued).toContain('test2.hda')
+      expect(ids.skipped).toHaveLength(0)
 
       const state = service.getState()
       expect(state.queue).toHaveLength(2)
@@ -227,7 +231,10 @@ describe('DownloadService', () => {
 
       // Auto-sync reconciliation re-offers the same file → must be suppressed.
       const queued = service.queueDownloads([{ filename: 'nope.hda', size: 1024 }])
-      expect(queued).toHaveLength(0)
+      expect(queued.queued).toHaveLength(0)
+      expect(queued.skipped).toEqual([
+        expect.objectContaining({ filename: 'nope.hda', skip: 'user-cancelled' })
+      ])
       const item = service.getState().queue.find((i: DownloadQueueItem) => i.filename === 'nope.hda')
       expect(item?.status).toBe('cancelled')
       expect(item?.cancelReason).toBe('user')
@@ -239,7 +246,7 @@ describe('DownloadService', () => {
       service.cancelDownload('again.hda')
 
       const queued = service.queueDownloads([{ filename: 'again.hda', size: 1024 }], true)
-      expect(queued).toEqual(['again.hda'])
+      expect(queued.queued).toEqual(['again.hda'])
       const item = service.getState().queue.find((i: DownloadQueueItem) => i.filename === 'again.hda')
       expect(item?.status).toBe('pending')
       expect(item?.cancelReason).toBeUndefined()
@@ -288,7 +295,7 @@ describe('DownloadService', () => {
 
       // Post-restart auto-sync reconciliation re-offers the file → NOT requeued.
       const queued = restarted.queueDownloads([{ filename: 'survivor.hda', size: 4096 }])
-      expect(queued).toHaveLength(0)
+      expect(queued.queued).toHaveLength(0)
       expect(
         restarted.getState().queue.find((i: DownloadQueueItem) => i.filename === 'survivor.hda')?.status
       ).toBe('cancelled')
@@ -346,13 +353,17 @@ describe('DownloadService', () => {
 
       // Reconciliation re-offers the interrupted file → re-queued as pending.
       const queued = restarted.queueDownloads([{ filename: 'comeback.hda', size: 2048 }])
-      expect(queued).toEqual(['comeback.hda'])
+      expect(queued.queued).toEqual(['comeback.hda'])
 
       restarted.destroy()
     })
 
     it('restart: removes a stale pending row when the file is already synced', () => {
-      vi.mocked(isFileSynced).mockImplementation((filename) => filename === 'done.hda')
+      vi.mocked(getSyncedFile).mockImplementation((filename: string) =>
+        filename === 'done.hda'
+          ? { id: 'sf-done', original_filename: filename, local_filename: filename, file_path: '/mock/synced-on-disk/' + filename, synced_at: '' }
+          : undefined
+      )
       mockQueryAll.mockReturnValueOnce([{
         id: 'done.hda',
         filename: 'done.hda',
@@ -371,7 +382,7 @@ describe('DownloadService', () => {
 
       expect(restarted.getState().queue).toHaveLength(0)
       expect(mockRun).toHaveBeenCalledWith('DELETE FROM download_queue WHERE filename = ?', ['done.hda'])
-      vi.mocked(isFileSynced).mockReturnValue(false)
+      vi.mocked(getSyncedFile).mockReturnValue(undefined)
       restarted.destroy()
     })
 

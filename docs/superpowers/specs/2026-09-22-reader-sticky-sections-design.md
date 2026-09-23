@@ -1,9 +1,9 @@
 # Lector de grabaciones: una sola columna con secciones que se fijan arriba
 
 Fecha: 2026-09-22
-Estado: primera parte en el PR #18. La segunda (compactar los controles de
-sección) está descrita en "Segundo paso", al final, y va en un PR propio que
-depende de #18.
+Estado: la primera parte entró a `main` con el PR #18. La segunda (compactar
+los controles de sección) está descrita en "Segundo paso", al final, y va en
+el PR #26.
 
 ## El pedido
 

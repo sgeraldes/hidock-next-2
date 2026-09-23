@@ -139,7 +139,12 @@ import {
   ensureKnowledgeCaptureForRecording,
   ensureNoSpeechKnowledgeCapture
 } from './knowledge-capture-backfill'
-import { applyCaptureValueClassification, parseValueClassification, neutralizeDelimiters } from './value-classification'
+import {
+  applyCaptureValueClassification,
+  parseValueClassification,
+  classifyByDuration,
+  neutralizeDelimiters
+} from './value-classification'
 import { parseAndAssessDiarization } from './diarization-quality'
 import { analyzeAudioPreflight, type AudioPreflightReport } from './audio-preflight'
 import { isAutomaticMeetingLinkTemporallyEligible } from './recording-match-scoring'
@@ -1766,7 +1771,18 @@ export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
         try {
           const captureId = ensureKnowledgeCaptureForRecording(row.recording_id)
           if (captureId) {
-            applyCaptureValueClassification(captureId, parseValueClassification(analysis))
+            // Same precedence as the live path: duration first. Without it a
+            // re-analysis that comes back 'normal' maps to 'unrated' and
+            // would RESET a short clip the duration gate had already called
+            // garbage, since the guard lets an AI-set rating be refreshed.
+            const durationRow = queryOne<{ duration_seconds: number | null; file_size: number | null }>(
+              'SELECT duration_seconds, file_size FROM recordings WHERE id = ?',
+              [row.recording_id]
+            )
+            const cls =
+              classifyByDuration(durationRow?.duration_seconds, durationRow?.file_size) ??
+              parseValueClassification(analysis)
+            applyCaptureValueClassification(captureId, cls)
           }
         } catch (e) {
           console.warn('[ValueClassification] reanalysis apply failed (non-fatal):', e)
@@ -2432,7 +2448,15 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   // results (which leave the capture unrated) emit nothing.
   if (captureId && config.transcription.valueClassificationEnabled !== false) {
     try {
-      const cls = parseValueClassification(analysis)
+      // The stopwatch outranks the rubric at the bottom end (2026-09-22): a
+      // recording too short to hold knowledge is worthless however confident
+      // the model sounds about its transcript, and short clips are exactly
+      // where transcribers hallucinate (one 13-second clip produced 508
+      // words). classifyByDuration returns null above its band, leaving the
+      // model's judgement in charge of everything long enough to judge.
+      const cls =
+        classifyByDuration(recording.duration_seconds, recording.file_size) ??
+        parseValueClassification(analysis)
       const applied = applyCaptureValueClassification(captureId, cls)
       if (applied.applied && (applied.rating === 'low-value' || applied.rating === 'garbage')) {
         const { getEventBus } = await import('./event-bus')
@@ -2909,6 +2933,20 @@ export async function transcribeManually(recordingId: string): Promise<void> {
     notifyRenderer('transcription:completed', { recordingId })
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+    // D-022 — a renderer event is not a record. If nothing is listening (the
+    // window is closed, the user navigated away, the call came over IPC from a
+    // script), the failure used to vanish and the recording kept the same
+    // 'none' status as one nobody had ever attempted — which is how two
+    // interviews went 12 days without anyone noticing they had never run.
+    // Persist the outcome the way the queue processor already does.
+    const failedId = getRecordingById(recordingId)?.id ?? resolveRecordingId(recordingId)?.id ?? recordingId
+    try {
+      updateRecordingTranscriptionStatus(failedId, 'error')
+    } catch (statusError) {
+      console.error('[Transcription] Could not mark the recording as errored:', statusError)
+    }
+    const failed = getRecordingById(failedId)
+    emitActivityLog('error', 'Transcription failed', `${failed?.filename ?? recordingId}: ${errorMessage}`)
     notifyRenderer('transcription:failed', { recordingId, error: errorMessage })
     throw error
   }
