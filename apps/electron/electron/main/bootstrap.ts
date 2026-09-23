@@ -22,6 +22,13 @@ if (brainOnly) {
   app.disableHardwareAcceleration()
   app.commandLine.appendSwitch('disable-gpu')
   app.commandLine.appendSwitch('disable-software-rasterizer')
+  // Keep Chromium's own files away from the app's. The headless brain and the
+  // app share the profile directory — that is where config.json and the lock
+  // live — and during a handoff both run at once. Chromium writes its session
+  // data (disk cache, Local State, cookies, network state) there by default,
+  // and two processes opening the same cache fight over it. The brain uses no
+  // browser storage, so its session data goes to a folder of its own.
+  app.setPath('sessionData', join(app.getPath('userData'), 'brain-only-session'))
   app.whenReady().then(async () => {
     const { runBrainOnly } = await import('./brain-host')
     await runBrainOnly()
