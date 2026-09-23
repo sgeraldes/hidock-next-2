@@ -41,6 +41,7 @@ import {
   countTranscriptSpeakers,
   buildContentText
 } from '../services/recording-match-scoring'
+import { applyDurationValueGate } from '../services/value-classification'
 import { copyFileSync, existsSync, statSync } from 'fs'
 import { basename, join, extname } from 'path'
 import { randomUUID } from 'crypto'
@@ -856,16 +857,20 @@ export function registerRecordingHandlers(): void {
     }
   })
 
-  // One-time idempotent backfill of duration_seconds for rows the download/import
-  // paths stored as NULL. Uses device-cache + transcript timing already in the DB
-  // so the Library can sort/filter by length offline. Called on Library mount.
-  ipcMain.handle('recordings:backfillDurations', async (): Promise<{ success: boolean; scanned?: number; updated?: number; markedLowValue?: number; error?: string }> => {
+  // Bring duration_seconds in line with the audio on disk, then rate what the
+  // corrected lengths now allow. Measures each file once (see audio-duration.ts)
+  // and remembers it, so this stays cheap on every Library mount.
+  ipcMain.handle('recordings:backfillDurations', async (): Promise<{ success: boolean; scanned?: number; updated?: number; measured?: number; truncated?: number; rerateable?: number; markedLowValue?: number; markedByDuration?: number; error?: string }> => {
     try {
       const result = backfillRecordingDurations()
-      // Classify AFTER the duration backfill so the low-value heuristic can use
-      // the freshly-populated duration_seconds.
+      // Classify AFTER the duration backfill so both classifiers can use the
+      // freshly-populated duration_seconds.
       const quality = classifyLowValueCaptures()
-      return { success: true, ...result, markedLowValue: quality.markedLowValue }
+      // The duration gate (2026-09-22): a recording too short to hold
+      // knowledge is rated here, for free, instead of waiting for an LLM
+      // backfill the user has to trigger by hand and that had never once run.
+      const byDuration = applyDurationValueGate()
+      return { success: true, ...result, markedLowValue: quality.markedLowValue, markedByDuration: byDuration.marked }
     } catch (error) {
       console.error('recordings:backfillDurations error:', error)
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error occurred' }

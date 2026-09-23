@@ -426,11 +426,11 @@ export function Library() {
     }
   }, [refresh])
 
-  // One-shot backfill: populate recordings.duration_seconds (NULL on the
-  // download/import paths) from device-cache + transcript timing already in the
-  // DB, and mark clearly-junk captures low-value. Idempotent server-side. Runs
-  // once per mount, after the first data load, then refreshes so the newly
-  // persisted durations/ratings drive sort/filter even when offline.
+  // One-shot backfill: bring recordings.duration_seconds in line with the audio
+  // on disk, then rate what the corrected lengths allow. Idempotent server-side
+  // and each file is measured once, so this stays cheap on later mounts. Runs
+  // once per mount, after the first data load, then refreshes so the persisted
+  // durations and ratings drive sort/filter even when offline.
   const backfillRanRef = useRef(false)
   useEffect(() => {
     if (backfillRanRef.current) return
@@ -440,8 +440,24 @@ export function Library() {
     void (async () => {
       try {
         const result = await window.electronAPI.recordings.backfillDurations()
-        if (result?.success && ((result.updated ?? 0) > 0 || (result.markedLowValue ?? 0) > 0)) {
+        if (
+          result?.success &&
+          ((result.updated ?? 0) > 0 ||
+            (result.markedLowValue ?? 0) > 0 ||
+            (result.markedByDuration ?? 0) > 0)
+        ) {
           await refresh(false)
+        }
+        // A file that holds less audio than its own transcript lost bytes
+        // somewhere, and the only place that showed was a line in the main
+        // process log. Say it once, on the mount that found them.
+        const shortened = result?.truncated ?? 0
+        if (result?.success && shortened > 0) {
+          toast.warning(
+            'Some recordings are shorter than their transcripts',
+            `${shortened} file${shortened === 1 ? '' : 's'} on disk hold less audio than was transcribed from them, ` +
+              'which usually means the download was cut short. Their stored length is left as it was.'
+          )
         }
       } catch (e) {
         console.error('[Library] Duration backfill failed:', e)
