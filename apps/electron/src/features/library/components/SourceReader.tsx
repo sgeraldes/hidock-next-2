@@ -545,7 +545,9 @@ export function SourceReader({
       }
     })()
     return () => { cancelled = true }
-  }, [recordingId, effectiveTranscript?.id])
+    // transcriptionStatus: a run that ends no_speech writes no transcript, so
+    // the status flip is the only signal that a new `vad` run exists to read.
+  }, [recordingId, effectiveTranscript?.id, recording?.transcriptionStatus])
 
   useEffect(() => {
     if (!recordingId) return
@@ -1184,6 +1186,7 @@ export function SourceReader({
   // Same title resolver the list row uses, so clicking a row and the detail
   // header always agree (no raw filename leaking through here).
   const { primaryText: displayTitle } = getDisplayTitle(recording, meeting, effectiveTranscript)
+  const tooShortSkip = findTooShortSkip(processingRuns)
   const displayedProcessingRuns: ReaderProcessingRun[] = processingRuns.length > 0
     ? processingRuns
     : effectiveTranscript?.transcription_provider
@@ -1939,11 +1942,28 @@ export function SourceReader({
               <ArtifactReader recording={recording} onAskAboutSource={onAskAboutSource} />
             ) : recording.transcriptionStatus === 'no_speech' ? (
               <div className="mx-auto max-w-xl rounded-lg border border-border/70 bg-muted/30 px-5 py-6 text-center">
-                <p className="font-medium text-foreground">No intelligible speech detected</p>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Automatic transcription, summary, participant inference, and meeting auto-linking were skipped.
-                  Re-run transcription if you believe this recording contains spoken words.
-                </p>
+                {tooShortSkip ? (
+                  <>
+                    <p className="font-medium text-foreground">Too short to transcribe</p>
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      {tooShortSkip.seconds} {tooShortSkip.seconds === 1 ? 'second' : 'seconds'} of audio.
+                      Recordings under {tooShortSkip.minimumSeconds} seconds are skipped.
+                      To transcribe it anyway, choose Clear rating in its row menu, then re-run transcription.
+                      {/* A skipped clip is rated garbage, and the main process keeps
+                          garbage-rated audio away from every provider even on an
+                          explicit re-run. Clearing the rating is a user rating,
+                          which no automatic rater overwrites. */}
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="font-medium text-foreground">No intelligible speech detected</p>
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      Automatic transcription, summary, participant inference, and meeting auto-linking were skipped.
+                      Re-run transcription if you believe this recording contains spoken words.
+                    </p>
+                  </>
+                )}
               </div>
             ) : effectiveTranscript ? (
               // Box-less for the same reason. The rhythm space-y-4 and pt-2
@@ -2087,6 +2107,31 @@ const VISIBLE_PROCESSING_STAGES = new Set<ReaderProcessingRun['stage']>([
   'persistence', 'actionable-detection', 'timeline-analysis', 'org-reconciliation', 'graph-sync',
   'wiki-export', 'rag-indexing'
 ])
+
+/** The `vad` run's record of a clip skipped for length rather than silence.
+ *  'recording_too_short' mirrors TOO_SHORT_REASON_CODE in the main process
+ *  (services/transcription.ts). Null for silent audio, or when unrecorded. */
+function findTooShortSkip(runs: ReaderProcessingRun[]): { seconds: number; minimumSeconds: number } | null {
+  const vad = runs.find((processingRun) => processingRun.stage === 'vad')
+  if (!vad?.quality_json) return null
+  try {
+    const quality = JSON.parse(vad.quality_json) as {
+      reasonCodes?: unknown
+      durationSeconds?: unknown
+      minimumDurationSeconds?: unknown
+    }
+    if (!Array.isArray(quality.reasonCodes) || !quality.reasonCodes.includes('recording_too_short')) return null
+    if (typeof quality.durationSeconds !== 'number' || typeof quality.minimumDurationSeconds !== 'number') return null
+    // Whole seconds read naturally; a sub-second clip keeps one decimal so it
+    // does not read as "0 seconds".
+    const seconds = quality.durationSeconds < 1
+      ? Math.round(quality.durationSeconds * 10) / 10
+      : Math.round(quality.durationSeconds)
+    return { seconds, minimumSeconds: quality.minimumDurationSeconds }
+  } catch {
+    return null
+  }
+}
 
 function processingStageLabel(stage: ReaderProcessingRun['stage']): string {
   switch (stage) {
