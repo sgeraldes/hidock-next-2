@@ -28,7 +28,10 @@ function rowsFrom(result: any[]): any[] {
   })
 }
 
+const refreshIntegrity = vi.hoisted(() => vi.fn())
+
 vi.mock('../database', () => ({
+  refreshTranscriptIntegrity: refreshIntegrity,
   queryAll: (sql: string, params: any[] = []) => (dbInstance ? rowsFrom(dbInstance.exec(sql, params)) : []),
   queryOne: (sql: string, params: any[] = []) =>
     dbInstance ? rowsFrom(dbInstance.exec(sql, params))[0] : undefined,
@@ -237,6 +240,9 @@ describe('reformatOne — text-only reformat write + idempotency', () => {
     expect(segs).toHaveLength(2)
     expect(segs[0]).toMatchObject({ speaker: 'Speaker 1', start: 0, text: 'hola qué tal' })
 
+    // New segments, new timing: the integrity verdict is computed again.
+    expect(refreshIntegrity).toHaveBeenCalledWith('t1')
+
     // Idempotency: the row is no longer legacy, so a re-scan won't re-pick it.
     const res = scanOldTranscripts()
     expect(res.legacyTotal).toBe(0)
@@ -245,7 +251,9 @@ describe('reformatOne — text-only reformat write + idempotency', () => {
 
   it('marks failed and leaves speakers untouched when the model call throws', async () => {
     mockGenerate.mockRejectedValue(new Error('quota exceeded'))
+    refreshIntegrity.mockClear()
     expect(await reformatOne('t1')).toBe('failed')
+    expect(refreshIntegrity).not.toHaveBeenCalled()
     expect(transcriptRow('t1').speakers).toBeNull()
   })
 

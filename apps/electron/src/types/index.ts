@@ -107,6 +107,11 @@ export interface Transcript {
   diarization_quality_status?: 'high' | 'degraded' | 'failed' | 'unavailable' | null
   diarization_quality?: string | null
   mentioned_people?: string | null
+  /** Transcript integrity (v58): see features/library/utils/transcriptIntegrity.ts. */
+  integrity_status?: 'ok' | 'suspect' | 'broken' | null
+  integrity_json?: string | null
+  integrity_version?: number | null
+  integrity_accepted_at?: string | null
   created_at: string
 }
 

@@ -19,6 +19,7 @@ import { registerAssistantHandlers } from './assistant-handlers'
 import { registerActionablesHandlers } from './actionables-handlers'
 import { registerMeetingsHandlers } from './meetings-handlers'
 import { registerTranscriptsHandlers } from './transcripts-handlers'
+import { registerTranscriptIntegrityHandlers } from './transcript-integrity-handlers'
 import { registerJensenHandlers } from './jensen-handlers'
 import { registerKnowledgeGraphHandlers } from './knowledge-graph-handlers'
 import { registerDevicePipelineHandlers } from './device-pipeline-handlers'
@@ -79,6 +80,7 @@ export function registerIpcHandlers(): void {
   registerActionablesHandlers()
   registerMeetingsHandlers()
   registerTranscriptsHandlers()
+  registerTranscriptIntegrityHandlers()
   registerJensenHandlers()
   registerKnowledgeGraphHandlers()
   // Slice 4: DevicePipeline state/action IPC bridge. INERT — the live app still

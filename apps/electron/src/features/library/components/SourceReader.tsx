@@ -30,6 +30,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { TranscriptViewer, type StoredSegment, type TranscriptContentUpdate } from './TranscriptViewer'
+import { TranscriptIntegrityPanel } from './TranscriptIntegrityPanel'
 import { TranscriptionStatusBadge } from './TranscriptionStatusBadge'
 import { StatusIcon } from './StatusIcon'
 import { WaveformPlayer, type TimelineEvent, type TimelineEventDetail, type TimelineEventPatch, type SentimentScorePoint, type WaveformPlayerMode } from './WaveformPlayer'
@@ -309,6 +310,8 @@ interface SourceReaderProps {
   onSplitCompleted?: (firstChildId: string) => void
   // Opens the source-scoped AI assistant drawer/overlay for this recording.
   onAskAboutSource?: () => void
+  // The owner accepted or un-accepted a flagged transcript; reload its verdict.
+  onIntegrityChanged?: () => void
 }
 
 export function SourceReader({
@@ -337,7 +340,8 @@ export function SourceReader({
   onNavigateToMeeting,
   onMetadataEdited,
   onSplitCompleted,
-  onAskAboutSource
+  onAskAboutSource,
+  onIntegrityChanged
 }: SourceReaderProps) {
 
   // Title editing state
@@ -2034,6 +2038,14 @@ export function SourceReader({
                     stickyTop={pins.stickyTop('transcript')}
                     sentinelRef={pins.sentinelRef('transcript')}
                   >
+                        {transcript && (
+                          <TranscriptIntegrityPanel
+                            recordingId={recording.id}
+                            transcript={transcript}
+                            onRetranscribe={onTranscribe}
+                            onChanged={onIntegrityChanged}
+                          />
+                        )}
                         <TranscriptViewer
                           transcript={effectiveTranscript.full_text}
                           segments={transcriptSegments}

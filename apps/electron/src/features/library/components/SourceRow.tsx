@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { AlertCircle, Download, Trash2, Wand2, Sparkles, FileText, RefreshCw, AudioLines, MoreHorizontal, Calendar, EyeOff, Eye, TrendingDown, Ban, RotateCcw, ArchiveRestore } from 'lucide-react'
+import { AlertCircle, Download, Trash2, Wand2, Sparkles, FileText, RefreshCw, AudioLines, MoreHorizontal, Calendar, EyeOff, Eye, TrendingDown, Ban, RotateCcw, ArchiveRestore, AlertTriangle, XOctagon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import {
@@ -25,6 +25,7 @@ import { highlightText } from '@/features/library/utils/highlightText'
 import { getRowMeta } from '@/features/library/utils/rowMeta'
 import { sourceTypeLabel } from '@/features/library/utils/sourceType'
 import { formatValueReasons } from '@/features/library/utils/valueReasons'
+import { ISSUE_TAGS, integrityIssues, integrityLabel } from '@/features/library/utils/transcriptIntegrity'
 import {
   LABEL_DELETE_FROM_DEVICE,
   LABEL_MOVE_TO_TRASH,
@@ -72,6 +73,38 @@ function ValueBadge({ recording }: { recording: UnifiedRecording }) {
       <TooltipContent>
         <p>{label}</p>
         <p className="text-xs text-muted-foreground mt-0.5">{secondLine}</p>
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+/**
+ * Transcript integrity badge: icon-only like ValueBadge, shown only while a
+ * transcript is flagged. Red when its text cannot fit the audio, amber when
+ * only its timing is wrong. An accepted or clean transcript shows nothing.
+ */
+function IntegrityBadge({ transcript }: { transcript?: Transcript }) {
+  const label = integrityLabel(transcript)
+  if (label !== 'suspect' && label !== 'broken') return null
+  const broken = label === 'broken'
+  const Icon = broken ? XOctagon : AlertTriangle
+  const title = broken ? 'Transcript does not fit the audio' : 'Transcript timing is wrong'
+  const tags = integrityIssues(transcript).map((i) => ISSUE_TAGS[i.code])
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className={`inline-flex shrink-0 ${broken ? 'text-red-600 dark:text-red-400' : 'text-amber-600 dark:text-amber-400'}`}
+          role="img"
+          aria-label={title}
+          data-testid="integrity-badge"
+        >
+          <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>
+        <p>{title}</p>
+        <p className="text-xs text-muted-foreground mt-0.5">{tags.join(' · ')}</p>
       </TooltipContent>
     </Tooltip>
   )
@@ -429,6 +462,7 @@ export const SourceRow = memo(function SourceRow({
               before the meeting chip so the two provenance/quality glyphs read
               left-to-right in the same tight cluster. */}
           {!isDeleting && <ValueBadge recording={recording} />}
+          {!isDeleting && <IntegrityBadge transcript={transcript} />}
           {/* Meeting-link (calendar) provenance — the system knows this row maps to a
               calendar event; the status icons align with it. */}
           {!isDeleting && meeting && (
@@ -726,6 +760,9 @@ export const SourceRow = memo(function SourceRow({
     prevProps.deletionLabel === nextProps.deletionLabel &&
     prevProps.transcript?.id === nextProps.transcript?.id &&
     prevProps.transcript?.title_suggestion === nextProps.transcript?.title_suggestion &&
+    prevProps.transcript?.integrity_status === nextProps.transcript?.integrity_status &&
+    prevProps.transcript?.integrity_accepted_at === nextProps.transcript?.integrity_accepted_at &&
+    prevProps.transcript?.integrity_json === nextProps.transcript?.integrity_json &&
     prevProps.meeting?.id === nextProps.meeting?.id &&
     prevProps.meeting?.subject === nextProps.meeting?.subject &&
     prevProps.searchQuery === nextProps.searchQuery &&

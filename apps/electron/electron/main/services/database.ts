@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'fs'
 import { join, normalize, resolve as resolvePath } from 'path'
 import { randomUUID } from 'crypto'
 import { readAudioDuration } from './audio-duration'
+import { assessTranscriptIntegrity, INTEGRITY_VERSION, type TranscriptIntegrity } from './transcript-integrity'
 import { getDatabasePath } from './file-storage'
 
 // Re-exported so consumers (e.g. vector-store's binary cache) can locate the
@@ -15,7 +16,7 @@ import { isCancelledMeetingSubject, scoreMeetingCandidates } from './recording-m
 import { DURATION_LOW_VALUE_MAX_SECONDS, isImpossibleTranscriptDensity } from './value-thresholds'
 import type { QualityRating } from '@/types/knowledge'
 
-const SCHEMA_VERSION = 57
+const SCHEMA_VERSION = 58
 
 const SCHEMA = `
 -- Calendar events from ICS
@@ -306,6 +307,13 @@ CREATE TABLE IF NOT EXISTS transcripts (
     diarization_quality_status TEXT,
     diarization_quality TEXT,
     mentioned_people TEXT,
+    -- Transcript integrity (v58): what the transcript's own timing says about
+    -- it. Status ok/suspect/broken, the findings as JSON, the rule version
+    -- that produced them, and when the owner accepted it as it is.
+    integrity_status TEXT,
+    integrity_json TEXT,
+    integrity_version INTEGER,
+    integrity_accepted_at TEXT,
     -- Meeting-timeline data (v39): windowed sentiment + event markers, both JSON.
     -- sentiment_segments: [{startSec,endSec,score:-1..1}] time-series across the recording.
     -- event_markers: [{id,kind,atSec,label,refId}] action/decision markers with audio offsets.
@@ -3023,6 +3031,25 @@ const MIGRATIONS: Record<number, () => void> = {
       // Already present on a database repaired before this migration ran.
     }
     console.log('Migration v57 complete')
+  },
+  58: () => {
+    console.log('Running migration to schema v58: transcript integrity labels')
+    const database = getDatabase()
+    // Filled by backfillTranscriptIntegrity() on the next Library mount, not
+    // here: the check reads audio files, and a migration should not.
+    for (const column of [
+      'integrity_status TEXT',
+      'integrity_json TEXT',
+      'integrity_version INTEGER',
+      'integrity_accepted_at TEXT',
+    ]) {
+      try {
+        database.run(`ALTER TABLE transcripts ADD COLUMN ${column}`)
+      } catch {
+        // Already present on a database repaired before this migration ran.
+      }
+    }
+    console.log('Migration v58 complete')
   },
 }
 
@@ -7010,6 +7037,10 @@ export interface Transcript {
   diarization_quality_status?: DiarizationQualityStatus
   diarization_quality?: string
   mentioned_people?: string
+  integrity_status?: TranscriptIntegrity['status']
+  integrity_json?: string
+  integrity_version?: number
+  integrity_accepted_at?: string | null
   created_at: string
 }
 
@@ -7197,12 +7228,19 @@ export function getTranscriptsByRecordingIds(recordingIds: string[]): Map<string
 }
 
 export function insertTranscript(transcript: Omit<Transcript, 'created_at'>): void {
+  // Every new transcript is checked as it is stored. It replaces the row, so an
+  // earlier acceptance goes with the old text: the owner accepted that one.
+  const integrity = assessTranscriptIntegrity(
+    transcript.speakers ?? null,
+    integrityAudioSeconds(transcript.recording_id)
+  )
   run(
     `INSERT OR REPLACE INTO transcripts (id, recording_id, full_text, language, summary, action_items,
       topics, key_points, sentiment, speakers, word_count, transcription_provider, transcription_model,
       title_suggestion, question_suggestions, transcription_run_id, diarization_run_id, summary_run_id,
-      title_run_id, meeting_resolution_run_id, diarization_quality_status, diarization_quality, mentioned_people)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      title_run_id, meeting_resolution_run_id, diarization_quality_status, diarization_quality, mentioned_people,
+      integrity_status, integrity_json, integrity_version, integrity_accepted_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
     [
       transcript.id,
       transcript.recording_id,
@@ -7226,9 +7264,98 @@ export function insertTranscript(transcript: Omit<Transcript, 'created_at'>): vo
       transcript.meeting_resolution_run_id ?? null,
       transcript.diarization_quality_status ?? null,
       transcript.diarization_quality ?? null,
-      transcript.mentioned_people ?? null
+      transcript.mentioned_people ?? null,
+      integrity.status,
+      JSON.stringify(integrity),
+      INTEGRITY_VERSION
     ]
   )
+}
+
+/**
+ * The audio length the integrity check compares against: the stored duration
+ * when it was measured from the file, otherwise a fresh measurement, otherwise
+ * null. Never a transcript-derived estimate: judging a transcript against a
+ * length taken from that same transcript would prove nothing.
+ */
+function integrityAudioSeconds(recordingId: string): number | null {
+  const row = queryOne<{ duration_seconds: number | null; duration_source: string | null; file_path: string | null }>(
+    'SELECT duration_seconds, duration_source, file_path FROM recordings WHERE id = ?',
+    [recordingId]
+  )
+  if (!row) return null
+  if (row.duration_source === 'file' && (row.duration_seconds ?? 0) > 0) return row.duration_seconds
+  if (row.file_path) {
+    const audio = readAudioDuration(row.file_path)
+    if (audio && audio.seconds > 0) return audio.seconds
+  }
+  return null
+}
+
+/**
+ * Check a stored transcript again after its segments changed. Clears an
+ * acceptance, because what was accepted is no longer what is stored.
+ */
+export function refreshTranscriptIntegrity(transcriptId: string): TranscriptIntegrity | null {
+  const row = queryOne<{ recording_id: string; speakers: string | null }>(
+    'SELECT recording_id, speakers FROM transcripts WHERE id = ?',
+    [transcriptId]
+  )
+  if (!row) return null
+  const integrity = assessTranscriptIntegrity(row.speakers, integrityAudioSeconds(row.recording_id))
+  run(
+    `UPDATE transcripts SET integrity_status = ?, integrity_json = ?, integrity_version = ?,
+       integrity_accepted_at = NULL WHERE id = ?`,
+    [integrity.status, JSON.stringify(integrity), INTEGRITY_VERSION, transcriptId]
+  )
+  return integrity
+}
+
+/**
+ * Check every transcript not yet checked under the current rules. Idempotent:
+ * a transcript is read once per rule version. An acceptance survives, since
+ * the text it covers has not changed.
+ */
+export function backfillTranscriptIntegrity(): { checked: number; ok: number; suspect: number; broken: number } {
+  const rows = queryAll<{ id: string; recording_id: string; speakers: string | null }>(
+    `SELECT t.id, t.recording_id, t.speakers FROM transcripts t
+       JOIN recordings r ON r.id = t.recording_id
+      WHERE r.deleted_at IS NULL
+        AND (t.integrity_version IS NULL OR t.integrity_version < ?)`,
+    [INTEGRITY_VERSION]
+  )
+  const counts = { checked: 0, ok: 0, suspect: 0, broken: 0 }
+  for (const row of rows) {
+    const integrity = assessTranscriptIntegrity(row.speakers, integrityAudioSeconds(row.recording_id))
+    runNoSave(
+      'UPDATE transcripts SET integrity_status = ?, integrity_json = ?, integrity_version = ? WHERE id = ?',
+      [integrity.status, JSON.stringify(integrity), INTEGRITY_VERSION, row.id]
+    )
+    counts.checked++
+    counts[integrity.status]++
+  }
+  if (counts.checked > 0) {
+    saveDatabase()
+    console.log(
+      `[transcript-integrity] checked ${counts.checked} transcript(s): ` +
+        `${counts.ok} ok, ${counts.suspect} suspect, ${counts.broken} broken`
+    )
+  }
+  return counts
+}
+
+/**
+ * The owner's manual path to green: accept a flagged transcript as it is, or
+ * take the acceptance back. Returns false when the recording has no transcript.
+ */
+export function setTranscriptIntegrityAccepted(recordingId: string, accepted: boolean): boolean {
+  const row = queryOne<{ id: string }>('SELECT id FROM transcripts WHERE recording_id = ?', [recordingId])
+  if (!row) return false
+  run('UPDATE transcripts SET integrity_accepted_at = ? WHERE id = ?', [
+    accepted ? new Date().toISOString() : null,
+    row.id,
+  ])
+  return true
 }
 
 /**
