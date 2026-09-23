@@ -34,8 +34,12 @@ import {
 import { startBrainServer, type RunningBrainServer } from './services/brain-server'
 import * as brainQueries from './services/brain-queries'
 
-/** How long without a request before the headless brain goes away. */
-export const BRAIN_IDLE_MS = 10 * 60 * 1000
+/**
+ * How long without a request before the headless brain goes away. Ten minutes
+ * covers a morning pull that makes a few calls in a row. HIDOCK_BRAIN_IDLE_MS
+ * overrides it, which is how the exit is verified without waiting ten minutes.
+ */
+export const BRAIN_IDLE_MS = Number(process.env.HIDOCK_BRAIN_IDLE_MS) > 0 ? Number(process.env.HIDOCK_BRAIN_IDLE_MS) : 10 * 60 * 1000
 
 /** How often to look at the lock file for a new owner. */
 const LOCK_WATCH_MS = 3000
