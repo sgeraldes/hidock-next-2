@@ -144,6 +144,103 @@ describe('readAudioDuration', () => {
     expect(result?.seconds).toBeCloseTo(0.26, 3)
   })
 
+  it('reads the exact frame count from a Xing header, whatever the bytes suggest', () => {
+    // The app's split parts are VBR MP3 averaging ~48 kbps while their first
+    // frame says 64. Measured from that first frame they read a third short,
+    // and all seven in the owner's library were flagged as truncated. The Xing
+    // header states the frame count, so it decides.
+    //
+    // MPEG-2 Layer III mono: 576 samples per frame at 16 kHz, and the Xing
+    // header sits after the 4-byte frame header and 9 bytes of side info.
+    const stream = mpegStream(100)
+    stream.write('Xing', 13, 'latin1')
+    stream.writeUInt32BE(1, 17) // flags: frame count present
+    stream.writeUInt32BE(2500, 21) // 2500 frames * 576 / 16000 = 90 s
+    const result = readAudioDuration(write('split-part.mp3', stream))
+    expect(result?.seconds).toBeCloseTo(90, 6)
+    expect(result?.how).toContain('2500 frames')
+  })
+
+  it('reads an Info header the same way, which is Xing on a constant-bitrate file', () => {
+    const stream = mpegStream(100)
+    stream.write('Info', 13, 'latin1')
+    stream.writeUInt32BE(1, 17)
+    stream.writeUInt32BE(1000, 21) // 36 s
+    expect(readAudioDuration(write('info.mp3', stream))?.seconds).toBeCloseTo(36, 6)
+  })
+
+  it('reads a VBRI header, the other encoder convention', () => {
+    const stream = mpegStream(100)
+    stream.write('VBRI', 36, 'latin1')
+    stream.writeUInt32BE(5000, 36 + 14) // 5000 * 576 / 16000 = 180 s
+    expect(readAudioDuration(write('vbri.mp3', stream))?.seconds).toBeCloseTo(180, 6)
+  })
+
+  it('scales the stated frame count down when the file holds fewer bytes than the header says', () => {
+    // A file cut short keeps its header. Believing the frame count reported
+    // the full length of a file that held half of it — the reviewer produced
+    // exactly that with a copy of a real split part truncated to half.
+    const stream = mpegStream(100) // 28,800 bytes present
+    stream.write('Xing', 13, 'latin1')
+    stream.writeUInt32BE(1 | 2, 17) // frames and bytes present
+    stream.writeUInt32BE(2500, 21) // 2500 frames = 90 s
+    stream.writeUInt32BE(57600, 25) // the header says 57,600 bytes: this file is half of it
+    const result = readAudioDuration(write('truncated-vbr.mp3', stream))
+    expect(result?.seconds).toBeCloseTo(45, 0)
+    expect(result?.how).toContain('1250 of 2500 frames')
+  })
+
+  it('trusts the frame count when the stated byte count matches the file', () => {
+    const stream = mpegStream(100)
+    stream.write('Xing', 13, 'latin1')
+    stream.writeUInt32BE(1 | 2, 17)
+    stream.writeUInt32BE(2500, 21)
+    stream.writeUInt32BE(28800, 25) // exactly what is on disk
+    expect(readAudioDuration(write('intact-vbr.mp3', stream))?.seconds).toBeCloseTo(90, 6)
+  })
+
+  it('ignores a Xing header that does not state a frame count', () => {
+    // Flags without bit 0: nothing to read, so fall back to the bitrate.
+    const stream = mpegStream(1000)
+    stream.write('Xing', 13, 'latin1')
+    stream.writeUInt32BE(0, 17)
+    const result = readAudioDuration(write('xing-no-count.mp3', stream))
+    expect(result?.seconds).toBeCloseTo(36, 3)
+    expect(result?.how).toBe('mpeg 64kbps/16000Hz')
+  })
+
+  it('finds the Xing header inside a RIFF container too', () => {
+    const stream = mpegStream(100)
+    stream.write('Xing', 13, 'latin1')
+    stream.writeUInt32BE(1, 17)
+    stream.writeUInt32BE(2500, 21)
+    expect(readAudioDuration(write('xing-in-riff.wav', riffWrap(stream)))?.seconds).toBeCloseTo(90, 6)
+  })
+
+  it('answers null for VBR without a header rather than a number that is wrong', () => {
+    // First frame 320 kbps, the rest 64: with no Xing header, payload over the
+    // first frame's bitrate reads a fifth of the real length. The reviewer built
+    // exactly this at 40 s and it read 8 — short enough to be skipped from
+    // transcription for good. A frame from the middle reveals the change.
+    const high = Buffer.from([0xff, 0xfb, 0xe0, 0xc4]) // MPEG-1 L3, 320 kbps, 44.1 kHz
+    const highBytes = Math.floor((144 * 320000) / 44100) // 1044
+    const lowFrame = Buffer.from([0xff, 0xfb, 0x50, 0xc4]) // MPEG-1 L3, 64 kbps, 44.1 kHz
+    const lowBytes = Math.floor((144 * 64000) / 44100) // 208
+    const frames = 2000
+    const data = Buffer.alloc(highBytes * 2 + lowBytes * frames)
+    high.copy(data, 0)
+    high.copy(data, highBytes)
+    for (let i = 0; i < frames; i++) lowFrame.copy(data, highBytes * 2 + i * lowBytes)
+    expect(readAudioDuration(write('vbr-no-header.mp3', data))).toBeNull()
+  })
+
+  it('still measures constant bitrate exactly, now that the middle is checked too', () => {
+    // The device's own format: every frame 64 kbps, so the middle agrees.
+    const result = readAudioDuration(write('cbr-checked.mp3', mpegStream(5000)))
+    expect(result?.seconds).toBeCloseTo(180, 3)
+    expect(result?.how).toBe('mpeg 64kbps/16000Hz')
+  })
+
   it('returns null for a file it cannot read', () => {
     expect(readAudioDuration(join(dir, 'does-not-exist.wav'))).toBeNull()
     expect(readAudioDuration(write('empty.wav', Buffer.alloc(0)))).toBeNull()
