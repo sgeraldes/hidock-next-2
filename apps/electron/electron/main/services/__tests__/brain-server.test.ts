@@ -23,6 +23,8 @@ function fakeQueries(): BrainQueries & { calls: string[] } {
     knowledgeById: (id) => (calls.push(`knowledgeOne:${id}`), id === 'k1' ? { id: 'k1' } : null),
     meetingRecordings: (id) => (calls.push(`recordings:${id}`), [{ id: 'r1' }]),
     transcriptForRecording: (id) => (calls.push(`transcript:${id}`), id === 'r1' ? { recording_id: 'r1' } : null),
+    recordingById: (id) => (calls.push(`recording:${id}`), id === 'r1' ? { id: 'r1' } : null),
+    recordingsByFilenamePrefix: (prefix) => (calls.push(`prefix:${prefix}`), [{ id: 'p1' }]),
   }
 }
 
@@ -118,6 +120,15 @@ describe('what it answers', () => {
       'recordings:m1',
       'transcript:r1',
     ])
+  })
+
+  it('serves a recording by id and recordings by filename prefix', async () => {
+    const { port, queries } = await start('service')
+    expect((await call(port, '/recordings/r1')).body).toEqual({ id: 'r1' })
+    expect((await call(port, '/recordings/nope')).status).toBe(404)
+    expect((await call(port, `/recordings?filenamePrefix=${encodeURIComponent('Rec10 - Part ')}`)).body).toEqual([{ id: 'p1' }])
+    expect((await call(port, '/recordings?filenamePrefix=Re')).status).toBe(400)
+    expect(queries.calls).toEqual(['recording:r1', 'recording:nope', 'prefix:Rec10 - Part '])
   })
 
   it('answers 404 for an id that is absent or excluded, without saying which', async () => {

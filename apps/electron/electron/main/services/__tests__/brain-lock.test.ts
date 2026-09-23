@@ -30,6 +30,8 @@ const noQueries = {
   knowledgeById: () => null,
   meetingRecordings: () => [],
   transcriptForRecording: () => null,
+  recordingById: () => null,
+  recordingsByFilenamePrefix: () => [],
 }
 
 function lockFor(overrides: Partial<BrainLock> = {}): BrainLock {

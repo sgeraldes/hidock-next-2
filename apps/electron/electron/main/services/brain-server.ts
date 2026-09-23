@@ -34,6 +34,8 @@ export interface BrainQueries {
   knowledgeById(id: string): unknown
   meetingRecordings(meetingId: string): unknown[]
   transcriptForRecording(recordingId: string): unknown
+  recordingById(recordingId: string): unknown
+  recordingsByFilenamePrefix(prefix: string): unknown[]
 }
 
 export interface BrainServerOptions {
@@ -67,6 +69,8 @@ const ROUTES = [
   'GET /knowledge?ids=<id,id>',
   'GET /knowledge/<id>',
   'GET /transcripts/<recordingId>',
+  'GET /recordings/<id>',
+  'GET /recordings?filenamePrefix=<prefix>',
   'GET /recording-now',
   'POST /step-down',
 ]
@@ -176,6 +180,15 @@ export function startBrainServer(options: BrainServerOptions): Promise<RunningBr
       }
       if (parts[0] === 'knowledge' && parts.length === 2) {
         const found = q.knowledgeById(parts[1])
+        return found ? send(res, 200, found) : send(res, 404, { error: 'not found' })
+      }
+      if (parts[0] === 'recordings' && parts.length === 1) {
+        const prefix = url.searchParams.get('filenamePrefix') ?? ''
+        if (prefix.length < 3) return send(res, 400, { error: 'filenamePrefix of at least 3 characters is required' })
+        return send(res, 200, q.recordingsByFilenamePrefix(prefix))
+      }
+      if (parts[0] === 'recordings' && parts.length === 2) {
+        const found = q.recordingById(parts[1])
         return found ? send(res, 200, found) : send(res, 404, { error: 'not found' })
       }
       if (parts[0] === 'transcripts' && parts.length === 2) {

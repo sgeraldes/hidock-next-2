@@ -34,6 +34,8 @@ import {
   knowledgeById,
   pendingActionablesSince,
   actionableById,
+  recordingById,
+  recordingsByFilenamePrefix,
 } from '../brain-queries'
 
 function cleanupDbFiles(base: string): void {
@@ -210,5 +212,34 @@ describe('meetings since a date', () => {
     seedMeeting('before', '2026-08-01T10:00:00.000Z', '2026-08-01T11:00:00.000Z')
     const ids = meetingsSince('2026-09-01', new Date('2026-09-22T12:00:00.000Z')).map((m) => m.id)
     expect(ids).toEqual(['m1'])
+  })
+})
+
+describe('single recordings and split parts', () => {
+  it('returns one eligible recording by id and nothing for an excluded one', () => {
+    expect((recordingById('open') as { id: string }).id).toBe('open')
+    expect(recordingById('private')).toBeNull()
+    expect(recordingById('trashed')).toBeNull()
+  })
+
+  it('finds the parts of a split capture by filename prefix, excluded parts left out', () => {
+    run("UPDATE recordings SET filename = 'Rec10 - Part 1.mp3', date_recorded = '2026-09-10T10:00:00Z' WHERE id = 'open'")
+    run("UPDATE recordings SET filename = 'Rec10 - Part 2.mp3', date_recorded = '2026-09-10T11:00:00Z' WHERE id = 'private'")
+    seedRecording('part3', 'm1')
+    run("UPDATE recordings SET filename = 'Rec10 - Part 3.mp3', date_recorded = '2026-09-10T12:00:00Z' WHERE id = 'part3'")
+    const names = recordingsByFilenamePrefix('Rec10 - Part ').map((r) => (r as { filename: string }).filename)
+    expect(names).toEqual(['Rec10 - Part 1.mp3', 'Rec10 - Part 3.mp3'])
+  })
+
+  it('treats LIKE wildcards in the prefix literally', () => {
+    run("UPDATE recordings SET filename = 'Rec10 - Part 1.mp3' WHERE id = 'open'")
+    // An unescaped '%' would match every filename that contains ' - Part'.
+    expect(recordingsByFilenamePrefix('%Part')).toEqual([])
+    expect(recordingsByFilenamePrefix('Rec_0')).toEqual([])
+  })
+
+  it('refuses a prefix too short to mean anything', () => {
+    expect(recordingsByFilenamePrefix('Re')).toEqual([])
+    expect(recordingsByFilenamePrefix(null)).toEqual([])
   })
 })

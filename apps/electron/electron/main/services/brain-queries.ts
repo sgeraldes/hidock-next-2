@@ -125,6 +125,37 @@ export function meetingRecordings(meetingId: unknown): unknown[] {
   )
 }
 
+/** Longest filename prefix accepted, and most rows a prefix search returns. */
+const MAX_PREFIX_LENGTH = 200
+const MAX_PREFIX_RESULTS = 50
+
+/** One recording row, without its transcript, or null when absent or excluded. */
+export function recordingById(recordingId: unknown): unknown {
+  if (!isId(recordingId)) return null
+  const { eligible, failClosed } = filterEligibleRecordingIds([recordingId])
+  if (failClosed || !eligible.has(recordingId)) return null
+  return queryOne('SELECT * FROM recordings WHERE id = ?', [recordingId]) ?? null
+}
+
+/**
+ * Recordings whose filename starts with `prefix`, oldest first — how a caller
+ * finds the other parts of a capture the app split into "<base> - Part N".
+ * Excluded recordings are left out. LIKE wildcards in the prefix are escaped,
+ * so a prefix matches literally.
+ */
+export function recordingsByFilenamePrefix(prefix: unknown): unknown[] {
+  if (typeof prefix !== 'string' || prefix.length < 3 || prefix.length > MAX_PREFIX_LENGTH) return []
+  const pattern = `${prefix.replace(/[\\%_]/g, (c) => `\\${c}`)}%`
+  const rows = queryAll<{ id: string }>(
+    `SELECT * FROM recordings WHERE filename LIKE ? ESCAPE '\\' ORDER BY date_recorded ASC LIMIT ${MAX_PREFIX_RESULTS}`,
+    [pattern]
+  )
+  if (rows.length === 0) return []
+  const { eligible, failClosed } = filterEligibleRecordingIds(rows.map((r) => r.id))
+  if (failClosed) return []
+  return rows.filter((r) => eligible.has(r.id))
+}
+
 /** A recording's transcript, or null when absent or the recording is excluded. */
 export function transcriptForRecording(recordingId: unknown): unknown {
   if (!isId(recordingId)) return null
