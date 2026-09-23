@@ -81,6 +81,7 @@ with (OUTPUT / 'app.log').open('w', encoding='utf-8') as log, (OUTPUT / 'resourc
                              cwd=APP, env=env, stdout=log, stderr=log)
     root = psutil.Process(child.pid)
     previous = {}
+    kinds = {}
     while child.poll() is None:
         try:
             members = [root] + root.children(recursive=True)
@@ -90,8 +91,22 @@ with (OUTPUT / 'app.log').open('w', encoding='utf-8') as log, (OUTPUT / 'resourc
         for member in members:
             try:
                 cpu = sum(member.cpu_times()[:2])
+                # Keyed by pid and start time: a reused pid is a different process.
+                key = (member.pid, member.create_time())
+                if key not in kinds:
+                    # Chromium names each child with --type=; the one without it is main.
+                    try:
+                        args = member.cmdline()
+                        kind = next((a.split('=', 1)[1] for a in args if a.startswith('--type=')), 'main')
+                        if kind == 'utility':
+                            sub = next((a.split('=', 1)[1] for a in args if a.startswith('--utility-sub-type=')), '')
+                            kind = 'utility ' + sub.rsplit('.', 1)[-1] if sub else kind
+                    except psutil.Error:
+                        # Unknown type, but keep sampling the process.
+                        kind = 'unknown'
+                    kinds[key] = kind
                 rows.append({'pid': member.pid, 'rss': member.memory_info().rss,
-                             'cpuSeconds': cpu, 'name': member.name()})
+                             'cpuSeconds': cpu, 'name': member.name(), 'type': kinds[key]})
             except psutil.Error:
                 pass
         free = psutil.virtual_memory().available

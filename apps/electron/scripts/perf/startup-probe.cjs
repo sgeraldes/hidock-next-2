@@ -80,6 +80,10 @@ setInterval(() => {
 }, 250).unref()
 app.on('browser-window-created', (_, window) => {
   const id = window.id
+  // A window behind other windows gets its timers throttled to once a second,
+  // which reads as a steady 750 ms renderer lateness that is not a freeze.
+  // Measure the renderer the same way whether or not the window is on top.
+  window.webContents.setBackgroundThrottling(false)
   emit({ type: 'window-created', id })
   for (const event of ['did-start-loading', 'dom-ready', 'did-finish-load']) {
     window.webContents.on(event, () => emit({ type: event, id }))

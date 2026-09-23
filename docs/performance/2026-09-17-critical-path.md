@@ -124,3 +124,25 @@ limited to embeddings until the shared governor is connected to every engine.
 An independent QA agent reviewed the process boundary and harness. Its findings led to separate queue
 and execution deadlines, restart suppression and explicit worker-completion evidence. GPU adaptation,
 aggregate resource limits and sampled-memory enforcement limitations remain open rather than hidden.
+
+## Comparing a round against its baseline (added 2026-09-23)
+
+Every optimization round ends with a comparison against the baseline, not with a single run.
+
+1. Run the benchmark on the baseline code and on the changed code, in the same mode (warm or
+   `--cold`, with or without `--inference`). Runs in different modes are not comparable: the
+   17-sep runs with `--inference` include 23 s of local ONNX work that a plain run does not.
+2. `python apps/electron/scripts/perf/report.py <run>` for each run, then
+   `python apps/electron/scripts/perf/compare.py <out-dir> <baseline-run> <run> [<run> ...] --label=<run-dir-name>=<label>`.
+3. `compare.html` has, per run: a table of the numbers that decide responsiveness with the change
+   against the baseline (red worse, green better, grey within 5%); a timeline with one lane per
+   process (CPU use, peak memory), main- and renderer-thread lateness, main-thread stalls over
+   100 ms as red bands, and the startup tasks; a flame graph of the main process built from the V8
+   CPU profile, idle excluded; and the hottest functions by self time.
+
+Since 2026-09-23 the harness records each process's Chromium type (main, renderer, gpu-process,
+utility …), so the timeline lanes are named. Older runs label only the main process.
+
+The harness measures startup on an isolated copy of the library. It does not cover the app in use:
+USB sync, transcription, diarization and Library scrolling are excluded, and those are where the
+reported freezes happened.
