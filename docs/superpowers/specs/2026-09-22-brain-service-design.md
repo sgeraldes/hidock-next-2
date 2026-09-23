@@ -233,8 +233,10 @@ So the headless brain is **the app's own binary**, launched as
 | `packages/local-service` shared with model-host | the token compare and Host check live in `brain-server.ts` | model-host is a separately installed product with its own pairing flow and its own installer; sharing ~30 lines would have meant vendoring a workspace package into that installer |
 | pairing code | token written to the lock file | the only clients are processes of the same Windows account, so reading the lock file is already the proof of identity |
 
-**Measured.** The headless brain runs in 194 MB (main 108, GPU 45, utility 41),
-and the GPU process is now switched off in that mode. The full app runs in about
+**Measured.** The headless brain runs in about 190 MB of working set across three
+processes. On the installed build of 2026-09-23: main 109 MB, network utility 41, GPU 38.
+Hardware acceleration is off in that mode, but Chromium still starts a GPU process for
+software compositing; that switch saved about 7 MB, not the process. The full app runs in about
 1.7 GB. Against the owner's real database, read-only, with the app open:
 answers came back for pending actionables (86), meetings (37), a meeting's
 recordings with coverage ranking, and a transcript; `recording-now` answered 503
