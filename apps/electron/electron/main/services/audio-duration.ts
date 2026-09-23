@@ -238,6 +238,26 @@ function readHeader(path: string, fileSize: number): Buffer {
   }
 }
 
+/**
+ * The first confirmed frame at or after `offset`, read from a small window of
+ * the file. Null when the window holds no frame (or cannot be read).
+ */
+function sampleFrameAt(path: string, offset: number, fileSize: number): MpegFrame | null {
+  if (offset < 0 || offset >= fileSize) return null
+  const length = Math.min(SYNC_SEARCH_BYTES, fileSize - offset)
+  const window = Buffer.alloc(length)
+  let fd: number | null = null
+  try {
+    fd = openSync(path, 'r')
+    const read = readSync(fd, window, 0, length, offset)
+    return findFrame(window.subarray(0, read))?.frame ?? null
+  } catch {
+    return null
+  } finally {
+    if (fd !== null) closeSync(fd)
+  }
+}
+
 export interface AudioDuration {
   /** Length in seconds. */
   seconds: number
@@ -254,8 +274,9 @@ export interface AudioDuration {
  * payload size over the bitrate is exact. When the first frame carries a Xing,
  * Info or VBRI header, its frame count is used instead, which is exact for
  * variable bitrate too — the app's split parts are the case that needs it. A
- * VBR file with no such header would still read long or short; producing one
- * takes an encoder that omits the header, and none in this app does.
+ * VBR file with no such header cannot be measured exactly without walking every
+ * frame; a second frame sampled from the middle catches it when the bitrate
+ * there differs, and the answer is then null rather than a wrong number.
  */
 export function readAudioDuration(path: string): AudioDuration | null {
   let fileSize: number
@@ -291,6 +312,15 @@ export function readAudioDuration(path: string): AudioDuration | null {
     }
     const bytes = payload.size - found.offset
     if (bytes <= 0) return null
+    // Payload over bitrate is only right when the bitrate is constant, and a VBR
+    // file without a Xing header looks exactly like CBR from its first frame.
+    // Built in review: a 40-second stream whose first frame is 320 kbps and the
+    // rest 64 read as 8 seconds — short enough to be skipped from transcription
+    // for good. One more frame from the middle of the payload settles it: a
+    // different bitrate there means no exact answer is available, and null
+    // (unmeasurable) is safer than a wrong number.
+    const middle = sampleFrameAt(path, payload.offset + found.offset + Math.floor(bytes / 2), fileSize)
+    if (middle && middle.kbps !== found.frame.kbps) return null
     return {
       seconds: (bytes * 8) / (found.frame.kbps * 1000),
       how: `mpeg ${found.frame.kbps}kbps/${found.frame.hz}Hz`,

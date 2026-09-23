@@ -217,6 +217,30 @@ describe('readAudioDuration', () => {
     expect(readAudioDuration(write('xing-in-riff.wav', riffWrap(stream)))?.seconds).toBeCloseTo(90, 6)
   })
 
+  it('answers null for VBR without a header rather than a number that is wrong', () => {
+    // First frame 320 kbps, the rest 64: with no Xing header, payload over the
+    // first frame's bitrate reads a fifth of the real length. The reviewer built
+    // exactly this at 40 s and it read 8 — short enough to be skipped from
+    // transcription for good. A frame from the middle reveals the change.
+    const high = Buffer.from([0xff, 0xfb, 0xe0, 0xc4]) // MPEG-1 L3, 320 kbps, 44.1 kHz
+    const highBytes = Math.floor((144 * 320000) / 44100) // 1044
+    const lowFrame = Buffer.from([0xff, 0xfb, 0x50, 0xc4]) // MPEG-1 L3, 64 kbps, 44.1 kHz
+    const lowBytes = Math.floor((144 * 64000) / 44100) // 208
+    const frames = 2000
+    const data = Buffer.alloc(highBytes * 2 + lowBytes * frames)
+    high.copy(data, 0)
+    high.copy(data, highBytes)
+    for (let i = 0; i < frames; i++) lowFrame.copy(data, highBytes * 2 + i * lowBytes)
+    expect(readAudioDuration(write('vbr-no-header.mp3', data))).toBeNull()
+  })
+
+  it('still measures constant bitrate exactly, now that the middle is checked too', () => {
+    // The device's own format: every frame 64 kbps, so the middle agrees.
+    const result = readAudioDuration(write('cbr-checked.mp3', mpegStream(5000)))
+    expect(result?.seconds).toBeCloseTo(180, 3)
+    expect(result?.how).toBe('mpeg 64kbps/16000Hz')
+  })
+
   it('returns null for a file it cannot read', () => {
     expect(readAudioDuration(join(dir, 'does-not-exist.wav'))).toBeNull()
     expect(readAudioDuration(write('empty.wav', Buffer.alloc(0)))).toBeNull()
