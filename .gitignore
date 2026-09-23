@@ -18,4 +18,4 @@ __pycache__/
 
 # Git Bash turns `2>NUL` into a file named NUL in the working directory.
 # Claude Code's shell snapshot does this on every start (unalias pkill 2>NUL).
-/NUL
+NUL
