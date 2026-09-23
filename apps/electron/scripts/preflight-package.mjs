@@ -16,8 +16,7 @@
  *    is running somewhere its dependencies were not installed. Junctions count:
  *    `mklink /J`, `mklink /D` and the `'junction'` symlinks npm and pnpm create
  *    all report `isSymbolicLink()`.
- * 2. npm must report nothing `missing` or `extraneous` anywhere in the
- *    production tree.
+ * 2. npm must report nothing `missing` anywhere in the production tree.
  *
  * Two things about that second check are load-bearing, and the first version of
  * this file got both wrong:
@@ -35,6 +34,17 @@
  * replaces deduped by bare package name, so a healthy `lodash` visited first
  * hid an extraneous `lodash` nested elsewhere — npm reported the problem and
  * the walk reported an intact tree.
+ *
+ * `missing` is the failure, and `extraneous` is not. Measured on the very tree
+ * that produced the broken installers: npm reports `usb/node-gyp-build` as
+ * missing there — a dependency `usb` requires and the tree cannot resolve,
+ * which is precisely what the packaged app then fails to load. The same tree
+ * reports over 8,000 packages as extraneous, so extraneous says nothing on its
+ * own. And a clean CI install reports two extraneous packages that are
+ * harmless: `@emnapi/runtime` and `@img/sharp-wasm32`, sharp's WebAssembly
+ * fallback for platforms this app does not ship on. Packaging leaves an
+ * unrequired package out, which is correct. So extraneous is printed for the
+ * record and never blocks; the first version of this gate blocked CI on it.
  *
  * `invalid` is deliberately ignored. This repo has nine today, all dev-only
  * version mismatches inside the linked packages, and none of them changes what
@@ -96,13 +106,21 @@ if (problems.length === 0) {
     }
 
     if (parsed) {
-      const broken = (parsed.problems ?? []).filter((problem) => /^(missing|extraneous):/.test(problem))
-      if (broken.length > 0) {
+      const all = parsed.problems ?? []
+      const missing = all.filter((problem) => problem.startsWith('missing:'))
+      const extraneous = all.filter((problem) => problem.startsWith('extraneous:'))
+      if (missing.length > 0) {
         problems.push(
-          'the production dependency tree is not intact:\n' +
-            broken.map((problem) => `    ${problem}`).join('\n') +
-            '\n  electron-builder walks this tree, so anything listed here is left out of\n' +
-            '  app.asar and the packaged app fails to require it at startup.'
+          'the production dependency tree is missing packages it requires:\n' +
+            missing.map((problem) => `    ${problem}`).join('\n') +
+            '\n  electron-builder walks this tree, so these are left out of app.asar and\n' +
+            '  the packaged app fails to require them at startup.'
+        )
+      }
+      if (extraneous.length > 0 && missing.length === 0) {
+        console.log(
+          `[preflight] ${extraneous.length} installed package(s) nothing requires; packaging leaves them out, which is fine:\n` +
+            extraneous.slice(0, 10).map((problem) => `    ${problem}`).join('\n')
         )
       }
     }
