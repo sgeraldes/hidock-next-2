@@ -662,6 +662,60 @@ export class DatabaseEngine {
 
   /* --- Initialization / 4-phase boot -------------------------------------- */
 
+  /**
+   * Open an existing database for reading only, without touching it.
+   *
+   * For a second process that answers questions about the data while the app
+   * that owns it may be running too — the headless brain service. SQLite in WAL
+   * mode lets any number of readers work alongside one writer, but only if the
+   * reader never tries to write, and the ordinary {@link initialize} writes a
+   * great deal: it switches the journal mode, takes a backup, creates tables,
+   * repairs columns and runs migrations. None of that is the reader's business.
+   *
+   * So this opens with `readonly` and `fileMustExist`, sets only per-connection
+   * settings, and refuses outright when the file is on an older schema than
+   * this code expects: the queries name columns a migration adds, and a reader
+   * cannot run the migration. Open the app once to upgrade the file.
+   */
+  initializeReadOnly(): void {
+    if (this.bdb) this.closeDatabase()
+    this.appliedMigration = false
+    this.deferredBackupPending = false
+    this.dbPath = this.config.dbPathProvider()
+
+    const Ctor = this.config.betterSqlite3
+    if (typeof Ctor !== 'function') {
+      throw new Error(
+        'DatabaseEngineConfig.betterSqlite3 is required (pass the default export of better-sqlite3).'
+      )
+    }
+    if (!existsSync(this.dbPath)) {
+      throw new Error(`No database at ${this.dbPath}. Open the app once to create it.`)
+    }
+
+    const bdb = new Ctor(this.dbPath, { readonly: true, fileMustExist: true })
+    try {
+      // Connection settings only. journal_mode is a property of the file and a
+      // read-only connection must not try to change it.
+      bdb.pragma('busy_timeout = 5000')
+      bdb.pragma('foreign_keys = ON')
+      this.bdb = bdb
+      const onDisk = this.readSchemaVersion()
+      if (onDisk < this.config.schemaVersion) {
+        throw new Error(
+          `The database is on schema v${onDisk} and this code needs v${this.config.schemaVersion}. ` +
+            'Open the app once so it can upgrade the file; a read-only reader cannot.'
+        )
+      }
+      this.shim = new SqlJsCompatDatabase(this.bdb, this.recordChanges, () => this.lastChanges)
+    } catch (error) {
+      this.bdb = null
+      this.shim = null
+      bdb.close()
+      throw error
+    }
+  }
+
   async initialize(): Promise<void> {
     // Re-initialization: release any previous connection before opening a new
     // one — better-sqlite3 handles are never GC-closed, so overwriting this.bdb
