@@ -14,6 +14,7 @@
  */
 
 import { useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { Activity, Terminal, X, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -85,14 +86,41 @@ interface ActivityLogOverlayProps {
 
 function ActivityLogOverlay({ open, onClose, entries, onClear }: ActivityLogOverlayProps) {
   const listRef = useRef<HTMLDivElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
 
+  // A modal takes the keyboard with it: focus moves into the panel on open,
+  // Tab cycles inside it, and focus returns to whatever opened it on close.
   useEffect(() => {
     if (!open) return
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    panelRef.current?.focus()
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') {
+        onClose()
+        return
+      }
+      if (e.key !== 'Tab' || !panelRef.current) return
+      const focusable = [...panelRef.current.querySelectorAll<HTMLElement>('button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')]
+      if (focusable.length === 0) {
+        e.preventDefault()
+        return
+      }
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      const inside = panelRef.current.contains(document.activeElement)
+      if (e.shiftKey && (document.activeElement === first || !inside)) {
+        e.preventDefault()
+        last.focus()
+      } else if (!e.shiftKey && (document.activeElement === last || !inside)) {
+        e.preventDefault()
+        first.focus()
+      }
     }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      opener?.focus()
+    }
   }, [open, onClose])
 
   useEffect(() => {
@@ -105,15 +133,24 @@ function ActivityLogOverlay({ open, onClose, entries, onClear }: ActivityLogOver
 
   if (!open) return null
 
-  return (
+  // Rendered into document.body, not where the button sits. The button lives in
+  // the titlebar, which is a window-drag region, and a fixed overlay inside it
+  // inherited `-webkit-app-region: drag`: the whole window became a drag handle
+  // and Windows swallowed every click on the log, its Close button and Clear.
+  // Escape still worked because keys never go through the drag region.
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-6"
+      className="titlebar-no-drag fixed inset-0 z-50 flex items-center justify-center p-6"
       role="dialog"
       aria-modal="true"
       aria-label="Activity log"
     >
       <button type="button" aria-label="Close" className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative z-10 flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-slate-700 bg-slate-900 text-slate-100 shadow-2xl">
+      <div
+        ref={panelRef}
+        tabIndex={-1}
+        className="relative z-10 flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-slate-700 bg-slate-900 text-slate-100 shadow-2xl outline-none"
+      >
         <div className="flex items-center justify-between border-b border-slate-700 px-4 py-3">
           <div className="flex items-center gap-2">
             <Terminal className="h-4 w-4 text-slate-400" />
@@ -182,7 +219,8 @@ function ActivityLogOverlay({ open, onClose, entries, onClear }: ActivityLogOver
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
 

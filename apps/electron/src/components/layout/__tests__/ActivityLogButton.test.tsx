@@ -60,6 +60,49 @@ describe('ActivityLogButton', () => {
     expect(screen.getByText('Device connected')).toBeInTheDocument()
   })
 
+  it('renders the overlay outside the titlebar drag region, so clicks reach it', () => {
+    // The titlebar is `-webkit-app-region: drag`. An overlay mounted inside it
+    // inherited that, turning the whole window into a drag handle that Windows
+    // does not deliver clicks through: nothing in the log could be clicked.
+    setupLog([entry()])
+    const { container } = render(
+      <div className="titlebar-drag-region">
+        <ActivityLogButton />
+      </div>
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /activity log/i }))
+    const dialog = screen.getByRole('dialog', { name: 'Activity log' })
+    expect(container.contains(dialog)).toBe(false)
+    expect(dialog.closest('.titlebar-drag-region')).toBeNull()
+    expect(dialog).toHaveClass('titlebar-no-drag')
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Close' })[0])
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('takes focus on open, keeps Tab inside, and gives focus back on close', () => {
+    setupLog([entry()])
+    render(<ActivityLogButton />)
+    const opener = screen.getByRole('button', { name: /activity log/i })
+    opener.focus()
+
+    fireEvent.click(opener)
+    const dialog = screen.getByRole('dialog', { name: 'Activity log' })
+    expect(dialog.contains(document.activeElement)).toBe(true)
+
+    // Tab from the last control wraps to the first, never out to the page.
+    const panel = dialog.querySelector<HTMLElement>('[tabindex="-1"]')!
+    const inPanel = [...panel.querySelectorAll<HTMLElement>('button')]
+    inPanel[inPanel.length - 1].focus()
+    fireEvent.keyDown(window, { key: 'Tab' })
+    expect(dialog.contains(document.activeElement)).toBe(true)
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(document.activeElement).toBe(opener)
+  })
+
   it('clears the log from the overlay', () => {
     setupLog([entry({ message: 'Boom', type: 'error' })])
     render(<ActivityLogButton />)
