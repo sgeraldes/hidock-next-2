@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSy
 import { join, basename, extname, resolve, normalize } from 'path'
 import { getConfig, getDataPath } from './config'
 import type { AppConfig } from './config'
+import { readAudioDuration } from './audio-duration'
 
 export class StorageInitializationError extends Error {
   constructor(
@@ -207,6 +208,97 @@ export async function saveRecording(
   }
 
   return filePath
+}
+
+/** What replaceRecordingFile did, for the caller's log and the row update. */
+export interface ReplacedRecordingFile {
+  filePath: string
+  previousBytes: number
+  bytes: number
+  seconds: number
+}
+
+/**
+ * Put a complete copy of a recording in place of a truncated one, at the SAME
+ * path.
+ *
+ * saveRecording never overwrites: a name that exists gets a numeric suffix.
+ * That is the right rule for a new download and the wrong one here. A suffixed
+ * copy would leave two files for one recording, and every row that points at
+ * the old path (recordings.file_path, synced_files) would keep pointing at the
+ * short one. The waveform cache notices on its own: it compares file sizes. So this writes beside the target and swaps
+ * it in, deliberately, and only after the new bytes prove they are better:
+ *
+ * - the bytes are staged in a `.partial` next to the target (same volume, so
+ *   the rename is atomic);
+ * - the staged copy must be strictly larger than the file it replaces and must
+ *   measure as longer audio (readAudioDuration, never the container header);
+ * - the cancellation predicate is checked after staging, before the swap.
+ *
+ * Any failure, refusal or cancel deletes the `.partial` and leaves the original
+ * file exactly as it was. A refusal throws; a cancel resolves null.
+ */
+export async function replaceRecordingFile(
+  targetPath: string,
+  data: Buffer,
+  options?: SaveRecordingOptions & { originalDate?: Date }
+): Promise<ReplacedRecordingFile | null> {
+  let previousBytes: number
+  try {
+    const stat = statSync(targetPath)
+    if (!stat.isFile()) throw new Error('not a file')
+    previousBytes = stat.size
+  } catch {
+    throw new Error(`Cannot replace "${targetPath}": the file to replace is not there`)
+  }
+  if (data.length <= previousBytes) {
+    throw new Error(
+      `Refusing to replace "${basename(targetPath)}": the new copy (${data.length} bytes) is not larger than the file on disk (${previousBytes} bytes)`
+    )
+  }
+
+  const tempPath = `${targetPath}.${process.pid}.${Date.now()}.partial`
+  const discardTemp = (): void => {
+    try { if (existsSync(tempPath)) unlinkSync(tempPath) } catch { /* best-effort */ }
+  }
+
+  let seconds: number
+  try {
+    writeFileSync(tempPath, data)
+
+    const staged = readAudioDuration(tempPath)
+    const current = readAudioDuration(targetPath)
+    if (!staged || staged.seconds <= 0) {
+      throw new Error(`Refusing to replace "${basename(targetPath)}": the new copy is not readable audio`)
+    }
+    if (current && staged.seconds <= current.seconds) {
+      throw new Error(
+        `Refusing to replace "${basename(targetPath)}": the new copy holds ${staged.seconds.toFixed(1)} s, ` +
+          `no more than the ${current.seconds.toFixed(1)} s already on disk`
+      )
+    }
+    seconds = staged.seconds
+
+    if (options?.isCancelled?.()) {
+      discardTemp()
+      return null
+    }
+
+    renameSync(tempPath, targetPath)
+  } catch (error) {
+    discardTemp()
+    throw error
+  }
+
+  if (options?.originalDate) {
+    try {
+      utimesSync(targetPath, options.originalDate, options.originalDate)
+    } catch (error) {
+      console.warn('Failed to set file modification time:', error)
+    }
+  }
+
+  return { filePath: targetPath, previousBytes, bytes: data.length, seconds }
 }
 
 export async function saveTranscript(

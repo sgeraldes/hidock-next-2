@@ -6526,7 +6526,110 @@ function clearStopwatchVerdict(recordingId: string): number {
  * the audio by a fraction of a second; two seconds of slack absorbs that and
  * nothing else.
  */
-const TRUNCATED_FILE_TOLERANCE_SECONDS = 2
+export const TRUNCATED_FILE_TOLERANCE_SECONDS = 2
+
+/**
+ * The one rule for "this file is shorter than the audio that was transcribed
+ * from it". The duration backfill uses it to refuse a measurement, and the
+ * truncated-download recovery uses it to pick what to fetch again, so the two
+ * can never disagree about which recordings are truncated.
+ */
+export function transcriptOutrunsFile(transcribedToSeconds: number, fileSeconds: number): boolean {
+  return transcribedToSeconds > fileSeconds + TRUNCATED_FILE_TOLERANCE_SECONDS
+}
+
+/** Last transcript segment end for a recording, 0 when it has no usable timing. */
+function transcribedToSeconds(recordingId: string): number {
+  const transcript = queryOne<{ speakers: string | null }>(
+    'SELECT speakers FROM transcripts WHERE recording_id = ? LIMIT 1',
+    [recordingId]
+  )
+  return maxTranscriptSegmentEnd(transcript?.speakers)
+}
+
+/** A recording whose local file holds less audio than its transcript covers. */
+export interface TruncatedRecording {
+  id: string
+  filename: string
+  filePath: string
+  /** Seconds of audio in the local file, measured from its bytes. */
+  fileSeconds: number
+  /** Where the transcript's last segment ends. */
+  transcribedTo: number
+}
+
+/**
+ * Recordings the duration backfill refuses to measure because the transcript
+ * runs past the end of the file. A truncated row never gets
+ * `duration_source = 'file'` (the backfill skips it), so only unsettled rows
+ * need reading; once a complete file replaces the short one and the row is
+ * settled, it drops out of this list by itself.
+ */
+export function findTruncatedRecordings(): TruncatedRecording[] {
+  const rows = queryAll<{ id: string; filename: string; file_path: string | null }>(
+    `SELECT id, filename, file_path FROM recordings
+     WHERE deleted_at IS NULL AND file_path IS NOT NULL AND file_path <> ''
+       AND (duration_source IS NULL OR duration_source <> 'file')`
+  )
+  const truncated: TruncatedRecording[] = []
+  for (const row of rows) {
+    const audio = readAudioDuration(row.file_path as string)
+    if (!audio || audio.seconds <= 0) continue
+    const transcribedTo = transcribedToSeconds(row.id)
+    if (transcriptOutrunsFile(transcribedTo, audio.seconds)) {
+      truncated.push({
+        id: row.id,
+        filename: row.filename,
+        filePath: row.file_path as string,
+        fileSeconds: audio.seconds,
+        transcribedTo,
+      })
+    }
+  }
+  return truncated
+}
+
+/**
+ * Settle one row against a measurement of its file: refuse it when the file is
+ * truncated, otherwise store it as `duration_source = 'file'` and reopen a
+ * stopwatch verdict the corrected length invalidates.
+ */
+function settleMeasuredDuration(
+  row: { id: string; duration_seconds: number | null },
+  fileSeconds: number
+): { truncated: boolean; changed: boolean; reopened: number } {
+  if (transcriptOutrunsFile(transcribedToSeconds(row.id), fileSeconds)) {
+    return { truncated: true, changed: false, reopened: 0 }
+  }
+  const before = row.duration_seconds ?? 0
+  const changed = Math.round(before) !== Math.round(fileSeconds)
+  updateRecordingDuration(row.id, fileSeconds, 'file')
+  let reopened = 0
+  if (before > 0 && before < DURATION_LOW_VALUE_MAX_SECONDS && fileSeconds >= DURATION_LOW_VALUE_MAX_SECONDS) {
+    reopened = clearStopwatchVerdict(row.id)
+  }
+  return { truncated: false, changed, reopened }
+}
+
+/**
+ * Measure one recording's file again and settle its row the way the backfill
+ * would. Called after a complete copy of a truncated recording has replaced the
+ * short file, so the row gets `duration_source = 'file'` and leaves the
+ * truncated set. Returns what happened, or null when the file cannot be read.
+ */
+export function remeasureRecordingDuration(
+  recordingId: string
+): { seconds: number; truncated: boolean; changed: boolean } | null {
+  const row = queryOne<{ id: string; file_path: string | null; duration_seconds: number | null }>(
+    'SELECT id, file_path, duration_seconds FROM recordings WHERE id = ?',
+    [recordingId]
+  )
+  if (!row?.file_path) return null
+  const audio = readAudioDuration(row.file_path)
+  if (!audio || audio.seconds <= 0) return null
+  const settled = settleMeasuredDuration(row, audio.seconds)
+  return { seconds: audio.seconds, truncated: settled.truncated, changed: settled.changed }
+}
 
 /**
  * Bring `recordings.duration_seconds` in line with the audio on disk.
@@ -6544,10 +6647,11 @@ const TRUNCATED_FILE_TOLERANCE_SECONDS = 2
  * opening two thousand files again.
  *
  * One case refuses the measurement. When the transcript runs past the end of
- * the file, the local copy holds less audio than was once transcribed — a
- * truncated download, of which the owner's library has 37. Writing the shorter
- * number would record the loss as fact, so the estimate stands and the row is
- * counted instead.
+ * the file, the local copy holds less audio than was once transcribed. The
+ * owner's library had 47 of these on 2026-09-22. Writing the shorter number
+ * would record the loss as fact, so the estimate stands and the row is counted
+ * instead. truncated-recovery.ts fetches the complete file back when the
+ * device still has a larger copy.
  *
  * Rows whose file cannot be read (four imported FLACs, two files gone from
  * disk) fall back to the old cache-then-transcript chain, and only when they
@@ -6587,22 +6691,14 @@ export function backfillRecordingDurations(): {
     if (audio && audio.seconds > 0) {
       // A transcript is evidence about the audio that was captured, not about
       // the bytes left on this disk. When it runs past them, believe it.
-      const transcript = queryOne<{ speakers: string | null }>(
-        'SELECT speakers FROM transcripts WHERE recording_id = ? LIMIT 1',
-        [row.id]
-      )
-      const transcribedTo = maxTranscriptSegmentEnd(transcript?.speakers)
-      if (transcribedTo > audio.seconds + TRUNCATED_FILE_TOLERANCE_SECONDS) {
+      const settled = settleMeasuredDuration(row, audio.seconds)
+      if (settled.truncated) {
         truncated++
         continue
       }
       measured++
-      const before = row.duration_seconds ?? 0
-      if (Math.round(before) !== Math.round(audio.seconds)) updated++
-      updateRecordingDuration(row.id, audio.seconds, 'file')
-      if (before > 0 && before < DURATION_LOW_VALUE_MAX_SECONDS && audio.seconds >= DURATION_LOW_VALUE_MAX_SECONDS) {
-        rerateable += clearStopwatchVerdict(row.id)
-      }
+      if (settled.changed) updated++
+      rerateable += settled.reopened
       continue
     }
 

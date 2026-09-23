@@ -270,7 +270,9 @@ global.window.electronAPI = {
     backfillDurations: vi.fn().mockResolvedValue({ success: true })
   },
   downloadService: {
-    queueDownloads: vi.fn()
+    queueDownloads: vi.fn(),
+    truncatedRecoveryPlan: vi.fn().mockResolvedValue(null),
+    recoverTruncated: vi.fn().mockResolvedValue({ queued: [], skipped: [] })
   },
   onTranscriptionCompleted: vi.fn((callback) => {
     transcriptionCompletedListeners.push(callback)
@@ -740,6 +742,69 @@ describe('Library — recordings whose file is shorter than their transcript', (
     const [title, body] = toastMock.warning.mock.calls[0]
     expect(title).toMatch(/shorter than their transcripts/i)
     expect(body).toContain('37 files')
+  })
+
+  it('offers to recover the ones the device still holds larger, and only on request', async () => {
+    vi.mocked(window.electronAPI.recordings.backfillDurations).mockResolvedValueOnce({
+      success: true,
+      truncated: 47,
+    })
+    vi.mocked(window.electronAPI.downloadService.truncatedRecoveryPlan).mockResolvedValueOnce({
+      truncated: 47,
+      recoverable: 3,
+      deviceNotLarger: 8,
+      notOnDevice: 36,
+      heldBack: 0,
+      deviceListKnown: true,
+    })
+    vi.mocked(window.electronAPI.downloadService.recoverTruncated).mockResolvedValueOnce({
+      queued: ['a.hda', 'b.hda', 'c.hda'],
+      skipped: [],
+      truncated: 47,
+      recoverable: 3,
+      deviceNotLarger: 8,
+      notOnDevice: 36,
+      heldBack: 0,
+    })
+
+    render(<MemoryRouter><Library /></MemoryRouter>)
+
+    await waitFor(() => expect(toastMock.warning).toHaveBeenCalledTimes(1))
+    const [, body, opts] = toastMock.warning.mock.calls[0]
+    expect(body).toContain('complete copy of 3')
+    expect(body).toContain('36 are no longer on the HiDock')
+    expect(body).toContain('8 match')
+    expect(opts?.action?.label).toBe('Recover 3 from the device')
+    // Nothing is queued until the owner clicks.
+    expect(window.electronAPI.downloadService.recoverTruncated).not.toHaveBeenCalled()
+
+    opts.action.onClick()
+
+    await waitFor(() => expect(window.electronAPI.downloadService.recoverTruncated).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(toastMock.success).toHaveBeenCalledWith('3 recoveries queued', expect.any(String)))
+  })
+
+  it('says the audio is gone, with no action, when the device has none of them', async () => {
+    vi.mocked(window.electronAPI.recordings.backfillDurations).mockResolvedValueOnce({
+      success: true,
+      truncated: 2,
+    })
+    vi.mocked(window.electronAPI.downloadService.truncatedRecoveryPlan).mockResolvedValueOnce({
+      truncated: 2,
+      recoverable: 0,
+      deviceNotLarger: 0,
+      notOnDevice: 2,
+      heldBack: 0,
+      deviceListKnown: true,
+    })
+
+    render(<MemoryRouter><Library /></MemoryRouter>)
+
+    await waitFor(() => expect(toastMock.warning).toHaveBeenCalledTimes(1))
+    const [, body, opts] = toastMock.warning.mock.calls[0]
+    expect(body).toContain('2 are no longer on the HiDock, so the missing audio cannot be recovered')
+    expect(body).toContain('Nothing was deleted')
+    expect(opts).toBeUndefined()
   })
 
   it('says nothing when every file holds the audio it should', async () => {

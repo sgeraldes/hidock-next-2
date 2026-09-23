@@ -333,6 +333,22 @@ export interface ClipboardCaptureResult {
   error?: string
 }
 
+/** Truncated-download recovery counts (see electron/main/services/truncated-recovery.ts). */
+export interface TruncatedRecoveryCounts {
+  /** Recordings whose transcript runs past the end of their local file. */
+  truncated: number
+  /** The device holds a strictly larger copy. */
+  recoverable: number
+  /** The device holds a copy of the same size or smaller. */
+  deviceNotLarger: number
+  /** Not in the device's last file listing: the audio is gone. */
+  notOnDevice: number
+  /** Held back because the device is, or may be, still writing it. */
+  heldBack: number
+  /** False when no device listing has ever been stored. */
+  deviceListKnown?: boolean
+}
+
 export interface ElectronAPI {
   // App
   app: {
@@ -1008,6 +1024,13 @@ export interface ElectronAPI {
     isFileSynced: (filename: string) => Promise<{ synced: boolean; reason: string }>
     getFilesToSync: (files: Array<{ filename: string; size: number; duration: number; dateCreated: Date }>) => Promise<Array<{ filename: string; size: number; duration: number; dateCreated: Date; skipReason?: string }>>
     getPurgedFilenames: () => Promise<string[]>
+    /** Counts for recordings whose local file is shorter than their transcript. */
+    truncatedRecoveryPlan: () => Promise<TruncatedRecoveryCounts>
+    /** Queue a complete copy of every truncated recording the device still holds larger. */
+    recoverTruncated: () => Promise<TruncatedRecoveryCounts & {
+      queued: string[]
+      skipped: Array<{ filename: string; skip: 'already-synced' | 'already-queued' | 'user-cancelled'; reason: string }>
+    }>
     queueDownloads: (files: Array<{ filename: string; size: number; dateCreated?: string }>) => Promise<{
       queued: string[]
       skipped: Array<{
@@ -1906,6 +1929,8 @@ const electronAPI: ElectronAPI = {
     isFileSynced: (filename) => callIPC('download-service:is-file-synced', filename),
     getFilesToSync: (files) => callIPC('download-service:get-files-to-sync', files),
     getPurgedFilenames: () => callIPC('download-service:get-purged-filenames'),
+    truncatedRecoveryPlan: () => callIPC('download-service:truncated-recovery-plan'),
+    recoverTruncated: () => callIPC('download-service:recover-truncated'),
     queueDownloads: (files) => callIPC('download-service:queue-downloads', files),
     startSession: (files) => callIPC('download-service:start-session', files),
     processDownload: (filename, data) => callIPC('download-service:process-download', filename, data),
