@@ -44,6 +44,11 @@ vi.mock('../database', () => ({
   markRecordingDownloaded: (...args: unknown[]) => mockMarkRecordingDownloaded(...(args as [])),
   addSyncedFile: (...args: unknown[]) => mockAddSyncedFile(...args),
   isFileSynced: (filename: string) => mockIsFileSynced(filename),
+  getSyncedFile: (filename: string) =>
+    mockIsFileSynced(filename)
+      ? { original_filename: filename, local_filename: filename, file_path: '/mock/synced-on-disk/' + filename }
+      : undefined,
+  removeSyncedFile: vi.fn(),
   isFilePurged: () => false,
   getRecordingByFilename: (filename: string) => mockGetRecordingByFilename(filename),
   getSyncedFilenames: vi.fn(() => new Set()),
@@ -67,8 +72,10 @@ vi.mock('fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('fs')>()
   return {
     ...actual,
-    default: { ...actual, existsSync: (p: string) => mockExistsSync(p) },
-    existsSync: (p: string) => mockExistsSync(p)
+    // The sentinel backs a mocked synced_files row (D-022); everything else
+    // stays under the test's own mockExistsSync control.
+    default: { ...actual, existsSync: (p: string) => String(p).startsWith('/mock/synced-on-disk/') || mockExistsSync(p) },
+    existsSync: (p: string) => String(p).startsWith('/mock/synced-on-disk/') || mockExistsSync(p)
   }
 })
 
@@ -142,11 +149,15 @@ describe('DownloadService — C5 Phase 0 session/queue/reconciliation gaps', () 
   describe('queueDownloads: dedups against a normalized (.hda -> .mp3) filename already in the queue', () => {
     it('does not add a duplicate when the normalized equivalent is already queued', () => {
       const first = service.queueDownloads([{ filename: 'song.mp3', size: 1000 }])
-      expect(first).toEqual(['song.mp3'])
+      expect(first.queued).toEqual(['song.mp3'])
 
       // 'song.hda' normalizes to 'song.mp3', which is already queued.
       const second = service.queueDownloads([{ filename: 'song.hda', size: 1000 }])
-      expect(second).toEqual([])
+      expect(second.queued).toEqual([])
+      // D-022: and it says why, rather than looking like an empty success.
+      expect(second.skipped).toEqual([
+        expect.objectContaining({ filename: 'song.hda', skip: 'already-queued' })
+      ])
       expect(service.getState().queue).toHaveLength(1)
     })
   })

@@ -48,7 +48,14 @@ import { useTranscriptionStore } from '@/store/features/useTranscriptionStore'
 const mockUpdateStatus = vi.fn().mockResolvedValue(undefined)
 const mockCancelTranscription = vi.fn().mockResolvedValue(undefined)
 const mockCancelAllTranscriptions = vi.fn().mockResolvedValue({ count: 3 })
-const mockQueueDownloads = vi.fn().mockResolvedValue(undefined)
+// D-022: queueDownloads reports { queued, skipped }; by default everything asked
+// for is queued, so tests that care about refusals can override per case.
+const mockQueueDownloads = vi
+  .fn()
+  .mockImplementation(async (files: Array<{ filename: string }>) => ({
+    queued: files.map((f) => f.filename),
+    skipped: []
+  }))
 const mockCancelAllDownloads = vi.fn().mockResolvedValue(undefined)
 const mockCancelDownload = vi.fn().mockResolvedValue({ success: true })
 
@@ -307,6 +314,72 @@ describe('useOperations', () => {
         dateCreated: expect.any(String)
       }])
       expect(drainDownloadQueue).toHaveBeenCalledOnce()
+    })
+
+    it('drains an already-queued file instead of releasing the work that still has to run', async () => {
+      // 'already-queued' means the download EXISTS and is pending. Releasing the
+      // scope here would leave it stranded forever with auto-download off.
+      const { drainDownloadQueue, releaseDownloadBookkeeping } = await import('@/hooks/useDownloadOrchestrator')
+      mockQueueDownloads.mockResolvedValueOnce({
+        queued: [],
+        skipped: [{ filename: 'REC0007.WAV', skip: 'already-queued', reason: 'Already in the download queue' }]
+      })
+      const { result } = renderHook(() => useOperations())
+
+      const deviceOnly = {
+        id: 'rec-7',
+        filename: 'REC0007.WAV',
+        deviceFilename: 'REC0007.WAV',
+        location: 'device-only' as const,
+        syncStatus: 'device-only' as const,
+        transcriptionStatus: 'none' as const,
+        size: 2048,
+        duration: 60,
+        dateRecorded: new Date()
+      }
+
+      let success: boolean | undefined
+      await act(async () => {
+        success = await result.current.queueDownload(deviceOnly as any)
+      })
+
+      expect(success).toBe(true)
+      expect(drainDownloadQueue).toHaveBeenCalled()
+      expect(releaseDownloadBookkeeping).not.toHaveBeenCalledWith('REC0007.WAV')
+    })
+
+    it('reports a refusal instead of claiming a download that will never happen', async () => {
+      // D-022: the service used to answer with an empty list and the UI said
+      // "Download queued" anyway, so a file it had silently refused looked
+      // exactly like one on its way.
+      const { toast } = await import('@/components/ui/toaster')
+      mockQueueDownloads.mockResolvedValueOnce({
+        queued: [],
+        skipped: [{ filename: 'REC0006.WAV', skip: 'already-synced', reason: 'In synced_files table' }]
+      })
+      const { result } = renderHook(() => useOperations())
+
+      const deviceOnly = {
+        id: 'rec-6',
+        filename: 'REC0006.WAV',
+        deviceFilename: 'REC0006.WAV',
+        location: 'device-only' as const,
+        syncStatus: 'device-only' as const,
+        transcriptionStatus: 'none' as const,
+        size: 2048,
+        duration: 60,
+        dateRecorded: new Date()
+      }
+
+      let success: boolean | undefined
+      await act(async () => {
+        success = await result.current.queueDownload(deviceOnly as any)
+      })
+
+      expect(success).toBe(false)
+      expect(toast).toHaveBeenCalledWith(
+        expect.objectContaining({ description: 'In synced_files table' })
+      )
     })
   })
 
