@@ -1,20 +1,27 @@
 /**
  * SourceReader Component
  *
- * The Library's center detail panel for a selected recording. The reader is a
- * vertically resizable workspace with independently controlled sections:
+ * The Library's center detail panel for a selected recording. ONE scrolling
+ * column, whose sections stick to the top as you scroll past them.
  *
- *  Context area:
+ *  Head (scrolls away):
  *    - Title (inline-editable) + transcription status
  *    - A curated meta strip (date · duration · location)
  *    - Primary CTAs (Play/Download, Transcribe/Re-transcribe ▾, Ask, overflow)
- *    - Player and metadata can be expanded, minimized, docked, hidden, or maximized
+ *
+ *  Sections, in column order — player, metadata, moments, summary, transcript:
+ *    - Each can be expanded, minimized, docked, hidden, or maximized, and that
+ *      choice persists in `readerSectionModes`.
+ *    - Each header strip pins to the top while its section is on screen,
+ *      stacking under the strips above it within a budget.
  *    - Participants (who actually spoke) chips — derived from the SAME resolved
  *      speaker map the transcript uses, so a renamed speaker updates here too
  *
- *  Reading area:
- *    - Summary and transcript have the same explicit layout states
- *    - A keyboard-accessible handle reallocates height between both areas
+ * Until 2026-09-22 this was two resizable panes ("context area" / "reading
+ * area") with a handle between them, and scrolling was forbidden from touching
+ * the layout. Both are gone. PINNING IS PRESENTATION: scrolling never writes
+ * `readerSectionModes`. See useStickySectionPins and
+ * docs/superpowers/specs/2026-09-22-reader-sticky-sections-design.md.
  */
 
 import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from 'react'
@@ -30,15 +37,17 @@ import { getDisplayTitle } from '@/features/library/utils/getDisplayTitle'
 import { getSourceType } from '@/features/library/utils/sourceType'
 import { ArtifactReader } from './ArtifactReader'
 import { RecordingSplitEditor } from './RecordingSplitEditor'
-import { HiddenReaderSections, ReaderSectionControls } from './ReaderSectionControls'
+import { HiddenReaderSections } from './ReaderSectionControls'
+import { ReaderSection } from './ReaderSection'
+import { TimelineEventList } from './TimelineEventList'
+import { useStickySectionPins } from '../hooks/useStickySectionPins'
 import { useUIStore } from '@/store/useUIStore'
-import { useLibraryStore, type ReaderSectionId, type ReaderSectionMode } from '@/store/useLibraryStore'
+import { useLibraryStore, type ReaderSectionId, type ReaderSectionMode, type ReaderSectionModes } from '@/store/useLibraryStore'
 import { UnifiedRecording, hasLocalPath, isDeviceOnly, isRecordingBacked } from '@/types/unified-recording'
 import type { DownloadStatus } from '@/store/useAppStore'
 import { Transcript, Meeting, MeetingAttendee, parseJsonArray } from '@/types'
 import { Calendar, CloudDownload, Download, Trash2, Wand2, RefreshCw, Play, Square, Pencil, Check, Edit2, Link, X, ExternalLink, FolderOpen, MoreHorizontal, Folder, Plus, EyeOff, Eye, Sparkles, ChevronDown, Cloud, Cpu, Users, Mail, UserCog, Scissors } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/hover-card'
 import { PersonHoverCard } from '@/components/entity/EntityHoverCards'
@@ -73,6 +82,20 @@ import {
 import { formatDateTime, formatDuration, formatBytes, cn } from '@/lib/utils'
 import { formatSmartDate, formatRelativeDate } from '@/lib/smartDate'
 import { useTranscriptionStore } from '@/store/features/useTranscriptionStore'
+
+/**
+ * The reader's sections, in the order they appear in the single scrolling
+ * column, which is also the order their strips stack in when they pin.
+ */
+const READER_SECTION_ORDER: ReaderSectionId[] = ['player', 'metadata', 'moments', 'summary', 'transcript']
+
+const READER_SECTION_LABELS: Record<ReaderSectionId, string> = {
+  player: 'Player',
+  metadata: 'Metadata',
+  moments: 'Actions & decisions',
+  summary: 'Summary',
+  transcript: 'Full transcript'
+}
 
 /** Reader width (px) below which the docked bar drops to the bare scrubber. */
 const NARROW_WIDTH_BREAKPOINT = 420
@@ -347,11 +370,24 @@ export function SourceReader({
   const [linkDialogOpen, setLinkDialogOpen] = useState(false)
   const [showUnlinkConfirmation, setShowUnlinkConfirmation] = useState(false)
 
-  // Explicit, persisted section layout. Scrolling never changes these modes.
-  const readerSectionModes = useLibraryStore((s) => s.readerSectionModes)
+  // LAYER ONE: what the user chose, and the only layer that persists. Scrolling
+  // never writes here. The second layer (which sections are stuck to the top
+  // right now) is derived below and lives only as long as this component does.
+  const persistedSectionModes = useLibraryStore((s) => s.readerSectionModes)
   const setReaderSectionMode = useLibraryStore((s) => s.setReaderSectionMode)
-  const readerVerticalSizes = useLibraryStore((s) => s.readerVerticalSizes)
-  const setReaderVerticalSizes = useLibraryStore((s) => s.setReaderVerticalSizes)
+  // A store rehydrated by an older build, or a test that calls setState with a
+  // partial map, can be missing a section. `migrate` covers the first case; this
+  // covers the second, and costs nothing.
+  const readerSectionModes = useMemo<ReaderSectionModes>(
+    () => ({
+      player: persistedSectionModes?.player ?? 'expanded',
+      metadata: persistedSectionModes?.metadata ?? 'expanded',
+      moments: persistedSectionModes?.moments ?? 'expanded',
+      summary: persistedSectionModes?.summary ?? 'expanded',
+      transcript: persistedSectionModes?.transcript ?? 'expanded'
+    }),
+    [persistedSectionModes]
+  )
   const maximizedSection = useLibraryStore((s) => s.readerMaximizedSection)
   const maximizeReaderSection = useLibraryStore((s) => s.maximizeReaderSection)
   const restoreMaximizedSection = useLibraryStore((s) => s.restoreReaderSection)
@@ -626,6 +662,8 @@ export function SourceReader({
   // (full text + assignee/due/status/priority + editability). Fetched with the
   // timeline; joined by marker refId. Transcript-JSON items (refId `txa_`/`txk_`)
   // get editable details sourced from those transcript arrays.
+  /** Highlighted timeline event, shared by the graph's markers and the list. */
+  const [activeEventId, setActiveEventId] = useState<string | null>(null)
   const [eventRowDetails, setEventRowDetails] = useState<Record<string, TimelineEventDetail>>({})
   useEffect(() => {
     let cancelled = false
@@ -893,10 +931,15 @@ export function SourceReader({
     return () => { cancelled = true }
   }, [recordingId, transcriptRevisionKey, analysisRetryNonce])
 
-  // B1: a timeline marker (or event-list row) was activated — ask the transcript
-  // to scroll to + pulse the turn at this marker's time. A bumped nonce re-fires
-  // the pulse for a repeat click on the same marker.
+  // B1: a timeline marker (or a row in Actions & decisions) was activated — ask
+  // the transcript to scroll to + pulse the turn at this marker's time. A bumped
+  // nonce re-fires the pulse for a repeat click on the same marker.
+  //
+  // The highlighted id lives HERE now. The event list left the player on
+  // 2026-09-22 to become its own section, so the graph's markers and the list
+  // are siblings; the only place that can keep them agreeing is their parent.
   const handleTimelineEventClick = useCallback((event: TimelineEvent) => {
+    setActiveEventId(event.id)
     highlightNonceRef.current += 1
     setTranscriptHighlight({ atMs: Math.round(event.timeSec * 1000), nonce: highlightNonceRef.current })
   }, [])
@@ -1062,10 +1105,31 @@ export function SourceReader({
     duration_seconds: recording.duration ?? null
   } : null, [recording])
 
+  // LAYER TWO. Sections in document order with the hidden ones removed, so a
+  // hidden section takes no slot in the pinned stack and the next one inherits
+  // its place. Computed here, with the other hooks, because useStickySectionPins
+  // is one and this component returns early when there is no recording.
+  const pinOrder = useMemo(
+    () => READER_SECTION_ORDER.filter(
+      (section) =>
+        readerSectionModes[section] !== 'hidden' &&
+        (!maximizedSection || maximizedSection === section)
+    ),
+    [readerSectionModes, maximizedSection]
+  )
+  const pins = useStickySectionPins(pinOrder)
+
   const handleReaderSeek = useCallback((startMs: number, endMs?: number) => {
     if (splitMode) setSplitPointSec(startMs / 1000)
     onSeek?.(startMs, endMs)
   }, [onSeek, splitMode])
+
+  // Activating from the LIST also has to seek, which the player used to do for
+  // it from the inside.
+  const handleTimelineEventActivate = useCallback((event: TimelineEvent) => {
+    handleReaderSeek(Math.round(event.timeSec * 1000))
+    handleTimelineEventClick(event)
+  }, [handleReaderSeek, handleTimelineEventClick])
 
   const closeSplitMode = useCallback(() => {
     setSplitMode(false)
@@ -1183,14 +1247,21 @@ export function SourceReader({
 
   const sectionIsVisible = (section: ReaderSectionId) =>
     readerSectionModes[section] !== 'hidden' && (!maximizedSection || maximizedSection === section)
-  const sectionIsOpen = (section: ReaderSectionId) => readerSectionModes[section] !== 'compact'
-  const showUpperWorkspace = !maximizedSection || maximizedSection === 'player' || maximizedSection === 'metadata'
   const showLowerWorkspace = !maximizedSection || maximizedSection === 'summary' || maximizedSection === 'transcript'
+  // The reading area pads itself only when it is NOT showing sections; a
+  // ReaderSection brings its own horizontal padding. Same conditions, in the
+  // same order, as the ternary that picks what the reading area renders.
+  const readingAreaHasSections =
+    !isDeviceOnly(recording) && isAudioSource &&
+    recording.transcriptionStatus !== 'no_speech' && !!effectiveTranscript
+  const isSectionPinned = (section: ReaderSectionId) =>
+    readerSectionModes[section] === 'docked' || pins.isPinned(section)
+
   const hiddenReaderSections = (Object.entries(readerSectionModes) as Array<[ReaderSectionId, ReaderSectionMode]>)
     .filter(([, mode]) => mode === 'hidden')
     .map(([id]) => ({
       id,
-      label: id === 'player' ? 'Player' : id.charAt(0).toUpperCase() + id.slice(1)
+      label: READER_SECTION_LABELS[id]
     }))
 
   return (
@@ -1199,24 +1270,31 @@ export function SourceReader({
         hidden={hiddenReaderSections}
         onRestore={(section) => changeSectionMode(section, 'expanded')}
       />
-      <ResizablePanelGroup
-        direction="vertical"
-        className="min-h-0 flex-1"
-        onLayout={maximizedSection ? undefined : setReaderVerticalSizes}
-        data-testid="reader-vertical-layout"
-      >
-      {showUpperWorkspace && (
-      <ResizablePanel
-        defaultSize={maximizedSection ? 100 : readerVerticalSizes[0] ?? 64}
-        minSize={maximizedSection ? 100 : 24}
-        order={1}
-      >
       {/* ===================================================================
-          DOCKED HEADER — stays put while the body scrolls.
-          Title + status + curated meta + primary CTAs + compact player +
-          Participants chips.
+          ONE SCROLLING COLUMN.
+
+          This used to be two resizable panes with a handle between them: a
+          "context area" (title, meta, CTAs, player, metadata) and a "reading
+          area" (summary, transcript), each with its own scrollbar and a 64/36
+          default split. Reading a transcript meant dragging the handle or
+          maximizing, and the player kept two thirds of the reader whether or not
+          anyone was looking at it.
+
+          Now every section lives in one column. Each section's header strip
+          sticks to the top while that section is on screen, stacking under the
+          strips above it, so scrolling down leaves a compact strip behind and the
+          body reads uninterrupted.
+
+          Pinning is PRESENTATION. It never writes readerSectionModes — that map
+          is what the user chose. See useStickySectionPins.
           =================================================================== */}
-      <div className="h-full overflow-y-auto bg-background" data-testid="reader-compact-header">
+      <div
+        ref={pins.scrollRef}
+        className="min-h-0 flex-1 overflow-y-auto bg-background pb-6"
+        data-testid="reader-scroll-body"
+      >
+        {!maximizedSection && (
+        <>
         {/* Authoritative source identity: official meeting subject once linked,
             otherwise the immutable filename. Content title is edited below. */}
         <div className="flex items-start gap-2 px-4 pt-4">
@@ -1253,127 +1331,6 @@ export function SourceReader({
             <span className="rounded-full bg-muted px-2 py-0.5 font-medium capitalize text-foreground">{sourceType}</span>
           )}
         </div>
-
-        {sectionIsVisible('metadata') && (
-        <section
-          className={cn(
-            'px-4 pt-2',
-            readerSectionModes.metadata === 'docked' && 'sticky top-0 z-20 border-b bg-background/95 shadow-sm'
-          )}
-          aria-label="Source metadata"
-        >
-        <ReaderSectionControls
-          section="metadata"
-          label="Metadata"
-          mode={readerSectionModes.metadata}
-          onModeChange={(mode) => changeSectionMode('metadata', mode)}
-          onMaximize={() => toggleMaximizedSection('metadata')}
-          maximized={maximizedSection === 'metadata'}
-        />
-        {sectionIsOpen('metadata') && (
-        <div id="reader-metadata-content">
-        {/* Independent identity fields: source filename, calendar subject, and
-            AI title suggestion are never aliases for the editable content title. */}
-        <dl className="grid grid-cols-1 gap-x-6 gap-y-2 pt-2 text-xs @md:grid-cols-2" data-testid="source-identity-fields">
-          {displayTitle !== recording.filename && (
-            <div className="min-w-0">
-              <dt className="font-medium text-muted-foreground">Filename</dt>
-              <dd className="mt-0.5 truncate text-foreground" title={recording.filename}>{recording.filename}</dd>
-            </div>
-          )}
-          {isAudioSource && !meeting && !recording.meetingSubject && meetingCandidates.length > 0 && (
-            <div className="min-w-0">
-              <dt className="font-medium text-muted-foreground">Possible meeting</dt>
-              <dd className="mt-0.5 truncate text-foreground" title={candidateMeetingLabel}>{candidateMeetingLabel}</dd>
-            </div>
-          )}
-          <div className="min-w-0">
-            <dt className="font-medium text-muted-foreground">Content title</dt>
-            {isEditingTitle ? (
-              <dd className="mt-0.5 flex min-w-0 items-center gap-1">
-                <Input
-                  value={editedTitle}
-                  onChange={(e) => setEditedTitle(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleSaveTitle()
-                    if (e.key === 'Escape') handleCancelTitle()
-                  }}
-                  className="h-6 min-w-0 px-1.5 py-0 text-xs"
-                  autoFocus
-                  disabled={isSavingTitle}
-                  aria-label="Recording title — content title"
-                />
-                <Button variant="ghost" size="icon" className="h-6 w-6" onClick={handleSaveTitle} disabled={isSavingTitle} aria-label="Save title" title="Save (Enter)">
-                  <Check className="h-3.5 w-3.5" />
-                </Button>
-                <Button variant="ghost" size="icon" className="h-6 w-6" onClick={handleCancelTitle} disabled={isSavingTitle} aria-label="Cancel editing" title="Cancel (Escape)">
-                  <X className="h-3.5 w-3.5" />
-                </Button>
-              </dd>
-            ) : (
-              <dd className="group mt-0.5 flex min-w-0 items-center gap-1 text-foreground">
-                <span className="truncate" title={recording.userTitle || effectiveTranscript?.title_suggestion || undefined}>
-                  {recording.userTitle || effectiveTranscript?.title_suggestion || 'Not generated'}
-                </span>
-                {recording.knowledgeCaptureId && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsEditingTitle(true)
-                      setEditedTitle(recording.userTitle || effectiveTranscript?.title_suggestion || '')
-                    }}
-                    className="shrink-0 rounded p-0.5 opacity-0 transition-opacity hover:bg-muted focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 group-hover:opacity-100 group-focus-within:opacity-100"
-                    aria-label="Edit title"
-                    title="Edit content title"
-                  >
-                    <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
-                  </button>
-                )}
-              </dd>
-            )}
-          </div>
-          {isAudioSource && (meeting?.organizer_name || meeting?.organizer_email) && (
-            <div className="min-w-0">
-              <dt className="font-medium text-muted-foreground">Organizer</dt>
-              <dd className="mt-0.5 truncate text-foreground" title={meeting?.organizer_name || meeting?.organizer_email || undefined}>
-                {meeting?.organizer_name || meeting?.organizer_email}
-              </dd>
-            </div>
-          )}
-        </dl>
-
-        {isAudioSource && !meeting && !isDeviceOnly(recording) && (
-          <button
-            type="button"
-            className="mt-2 flex max-w-full flex-wrap items-center gap-1.5 rounded-md border border-dashed px-2.5 py-1.5 text-left transition-colors hover:border-primary hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
-            onClick={() => setLinkDialogOpen(true)}
-            aria-label="Link this recording to a meeting"
-          >
-            <Link className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
-            <span className="text-[11px] font-semibold text-primary">Link meeting</span>
-            {meetingCandidates.length > 0 && (
-              <span className="text-[11px] text-muted-foreground">
-                {meetingCandidates.length} possible {meetingCandidates.length === 1 ? 'match' : 'matches'}
-              </span>
-            )}
-            {meetingCandidates.slice(0, 4).map((candidate) => (
-              <span
-                key={candidate.meetingId}
-                className="rounded-full border border-dashed px-2 py-0.5 text-[11px] hover:border-primary"
-                title={candidate.matchReason || undefined}
-              >
-                {candidate.subject} · {Math.round(candidate.confidenceScore * 100)}%
-              </span>
-            ))}
-          </button>
-        )}
-
-        {displayedProcessingRuns.length > 0 && <ProcessingRunChips runs={displayedProcessingRuns} />}
-        </div>
-        )}
-        </section>
-        )}
-
         {/* Primary CTAs */}
         <div className="flex flex-wrap items-center gap-2 px-4 pb-3 pt-3">
           {/* Primary action: Play/Stop for local files, Download for device-only */}
@@ -1622,34 +1579,28 @@ export function SourceReader({
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
+        </>
+        )}
 
-        {/* One waveform, with an explicit state chosen by the user. Scrolling
-            never changes its presentation. */}
         {canPlay && sectionIsVisible('player') && (
-          <section
-            className={cn(
-              'px-4 pb-3 pt-2',
-              readerSectionModes.player === 'docked' && 'sticky top-0 z-30 border-b bg-background/95 shadow-sm'
-            )}
-            aria-label="Audio player"
+          <ReaderSection
+            section="player"
+            label="Player"
+            mode={readerSectionModes.player}
+            onModeChange={(mode) => changeSectionMode('player', mode)}
+            onMaximize={() => toggleMaximizedSection('player')}
+            maximized={maximizedSection === 'player'}
+            pinned={isSectionPinned('player')}
+            stickyTop={pins.stickyTop('player')}
+            sentinelRef={pins.sentinelRef('player')}
+            keepBodyWhenCompact
           >
-            <ReaderSectionControls
-              section="player"
-              label="Player"
-              mode={readerSectionModes.player}
-              onModeChange={(mode) => changeSectionMode('player', mode)}
-              onMaximize={() => toggleMaximizedSection('player')}
-              maximized={maximizedSection === 'player'}
-            />
-            <div id="reader-player-content">
             <ReaderPlayer
               recordingId={recording.id}
               filePath={localPath}
               durationSec={durationSeconds}
               speakerRanges={speakerTimeline.ranges}
               events={timelineEvents}
-              eventDetails={eventDetails}
-              onEventUpdate={handleEventUpdate}
               sentiment={timeline?.sentiment}
               analyzing={analyzingTimeline}
               analysisFailure={timelineAnalysisFailure}
@@ -1657,6 +1608,7 @@ export function SourceReader({
               presentation={readerSectionModes.player === 'expanded' ? 'expanded' : 'compact'}
               onSeek={(sec) => handleReaderSeek(Math.round(sec * 1000))}
               onEventClick={handleTimelineEventClick}
+              activeEventId={activeEventId}
               splitPointSec={splitMode ? splitPointSec : undefined}
             />
             {splitMode && localPath && (
@@ -1678,175 +1630,294 @@ export function SourceReader({
                 }}
               />
             )}
-            </div>
-          </section>
+          </ReaderSection>
         )}
 
-        {sectionIsVisible('metadata') && sectionIsOpen('metadata') && (
-        <div id="reader-metadata-context">
-        {/* Linked Meeting — meeting context and its change/remove controls. */}
-        {meeting && (
-          <div className="px-4 pb-3" data-testid="linked-meeting-card">
-            <div className="flex items-center gap-2 p-3 bg-muted/30 border rounded-lg">
-              <div
-                className="flex items-center gap-2 min-w-0 flex-1 cursor-pointer hover:opacity-80 transition-opacity"
-                onClick={() => onNavigateToMeeting?.(meeting.id)}
+        {sectionIsVisible('metadata') && (
+          <ReaderSection
+            section="metadata"
+            label="Metadata"
+            mode={readerSectionModes.metadata}
+            onModeChange={(mode) => changeSectionMode('metadata', mode)}
+            onMaximize={() => toggleMaximizedSection('metadata')}
+            maximized={maximizedSection === 'metadata'}
+            pinned={isSectionPinned('metadata')}
+            stickyTop={pins.stickyTop('metadata')}
+            sentinelRef={pins.sentinelRef('metadata')}
+          >
+            {/* Independent identity fields: source filename, calendar subject, and
+                AI title suggestion are never aliases for the editable content title. */}
+            <dl className="grid grid-cols-1 gap-x-6 gap-y-2 pt-2 text-xs @md:grid-cols-2" data-testid="source-identity-fields">
+              {displayTitle !== recording.filename && (
+                <div className="min-w-0">
+                  <dt className="font-medium text-muted-foreground">Filename</dt>
+                  <dd className="mt-0.5 truncate text-foreground" title={recording.filename}>{recording.filename}</dd>
+                </div>
+              )}
+              {isAudioSource && !meeting && !recording.meetingSubject && meetingCandidates.length > 0 && (
+                <div className="min-w-0">
+                  <dt className="font-medium text-muted-foreground">Possible meeting</dt>
+                  <dd className="mt-0.5 truncate text-foreground" title={candidateMeetingLabel}>{candidateMeetingLabel}</dd>
+                </div>
+              )}
+              <div className="min-w-0">
+                <dt className="font-medium text-muted-foreground">Content title</dt>
+                {isEditingTitle ? (
+                  <dd className="mt-0.5 flex min-w-0 items-center gap-1">
+                    <Input
+                      value={editedTitle}
+                      onChange={(e) => setEditedTitle(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleSaveTitle()
+                        if (e.key === 'Escape') handleCancelTitle()
+                      }}
+                      className="h-6 min-w-0 px-1.5 py-0 text-xs"
+                      autoFocus
+                      disabled={isSavingTitle}
+                      aria-label="Recording title — content title"
+                    />
+                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={handleSaveTitle} disabled={isSavingTitle} aria-label="Save title" title="Save (Enter)">
+                      <Check className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={handleCancelTitle} disabled={isSavingTitle} aria-label="Cancel editing" title="Cancel (Escape)">
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  </dd>
+                ) : (
+                  <dd className="group mt-0.5 flex min-w-0 items-center gap-1 text-foreground">
+                    <span className="truncate" title={recording.userTitle || effectiveTranscript?.title_suggestion || undefined}>
+                      {recording.userTitle || effectiveTranscript?.title_suggestion || 'Not generated'}
+                    </span>
+                    {recording.knowledgeCaptureId && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsEditingTitle(true)
+                          setEditedTitle(recording.userTitle || effectiveTranscript?.title_suggestion || '')
+                        }}
+                        className="shrink-0 rounded p-0.5 opacity-0 transition-opacity hover:bg-muted focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 group-hover:opacity-100 group-focus-within:opacity-100"
+                        aria-label="Edit title"
+                        title="Edit content title"
+                      >
+                        <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
+                      </button>
+                    )}
+                  </dd>
+                )}
+              </div>
+              {isAudioSource && (meeting?.organizer_name || meeting?.organizer_email) && (
+                <div className="min-w-0">
+                  <dt className="font-medium text-muted-foreground">Organizer</dt>
+                  <dd className="mt-0.5 truncate text-foreground" title={meeting?.organizer_name || meeting?.organizer_email || undefined}>
+                    {meeting?.organizer_name || meeting?.organizer_email}
+                  </dd>
+                </div>
+              )}
+            </dl>
+
+            {isAudioSource && !meeting && !isDeviceOnly(recording) && (
+              <button
+                type="button"
+                className="mt-2 flex max-w-full flex-wrap items-center gap-1.5 rounded-md border border-dashed px-2.5 py-1.5 text-left transition-colors hover:border-primary hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                onClick={() => setLinkDialogOpen(true)}
+                aria-label="Link this recording to a meeting"
               >
-                <Calendar className="h-4 w-4 text-primary shrink-0" />
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium truncate">{meeting.subject}</p>
-                  <p className="text-xs text-muted-foreground">{formatDateTime(meeting.start_time)}</p>
+                <Link className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
+                <span className="text-[11px] font-semibold text-primary">Link meeting</span>
+                {meetingCandidates.length > 0 && (
+                  <span className="text-[11px] text-muted-foreground">
+                    {meetingCandidates.length} possible {meetingCandidates.length === 1 ? 'match' : 'matches'}
+                  </span>
+                )}
+                {meetingCandidates.slice(0, 4).map((candidate) => (
+                  <span
+                    key={candidate.meetingId}
+                    className="rounded-full border border-dashed px-2 py-0.5 text-[11px] hover:border-primary"
+                    title={candidate.matchReason || undefined}
+                  >
+                    {candidate.subject} · {Math.round(candidate.confidenceScore * 100)}%
+                  </span>
+                ))}
+              </button>
+            )}
+
+            {displayedProcessingRuns.length > 0 && <ProcessingRunChips runs={displayedProcessingRuns} />}
+            {/* Linked Meeting — meeting context and its change/remove controls. */}
+            {meeting && (
+              <div className="px-4 pb-3" data-testid="linked-meeting-card">
+                <div className="flex items-center gap-2 p-3 bg-muted/30 border rounded-lg">
+                  <div
+                    className="flex items-center gap-2 min-w-0 flex-1 cursor-pointer hover:opacity-80 transition-opacity"
+                    onClick={() => onNavigateToMeeting?.(meeting.id)}
+                  >
+                    <Calendar className="h-4 w-4 text-primary shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium truncate">{meeting.subject}</p>
+                      <p className="text-xs text-muted-foreground">{formatDateTime(meeting.start_time)}</p>
+                    </div>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 shrink-0"
+                    onClick={(e) => { e.stopPropagation(); setLinkDialogOpen(true) }}
+                    title="Change linked meeting"
+                  >
+                    <Edit2 className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
+                    onClick={(e) => { e.stopPropagation(); setShowUnlinkConfirmation(true) }}
+                    title="Remove meeting link (meeting is not deleted)"
+                    aria-label="Remove meeting link"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
                 </div>
               </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7 shrink-0"
-                onClick={(e) => { e.stopPropagation(); setLinkDialogOpen(true) }}
-                title="Change linked meeting"
-              >
-                <Edit2 className="h-3.5 w-3.5" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
-                onClick={(e) => { e.stopPropagation(); setShowUnlinkConfirmation(true) }}
-                title="Remove meeting link (meeting is not deleted)"
-                aria-label="Remove meeting link"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-          </div>
-        )}
+            )}
 
-        {/* Participants (who actually spoke) — docked, actionable chips. */}
-        {people.participants.length > 0 && (
-          <div className="px-4 pb-3" data-testid="participants-section">
-            <ParticipantsChips
-              participants={people.participants}
-              contacts={people.allContacts}
-              colorByKey={speakerTimeline.colorByKey}
-              onOpenPicker={people.ensureAllContacts}
-              onAssign={people.assignSpeaker}
-              onUnassign={people.unassignSpeaker}
-            />
-          </div>
-        )}
-
-        {meeting && (
-          <div className="px-4 pb-3" data-testid="invited-section">
-            <InvitedChips
-              invited={people.invited}
-              resolveAttendee={people.resolveAttendee}
-              spokeKey={people.attendeeSpoke}
-            />
-          </div>
-        )}
-
-        {mentionedPeople.length > 0 && (
-          <div className="px-4 pb-3" data-testid="mentioned-people-section">
-            <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-              Mentioned ({mentionedPeople.length})
-              <span className="font-normal">· not attendance</span>
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {mentionedPeople.map((person, index) => (
-                <span key={`${person.name}-${index}`} className="rounded-full border px-2 py-0.5 text-xs" title={person.role}>
-                  {person.name}{person.role ? ` · ${person.role}` : ''}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Secondary metadata stays available without consuming transcript space. */}
-        <details
-          className="group border-t"
-          data-testid="reader-more-metadata"
-          open={metadataOpen}
-          onToggle={(event) => setMetadataOpen(event.currentTarget.open)}
-        >
-          <summary className="flex cursor-pointer list-none items-center gap-1.5 px-4 py-2 text-xs font-medium text-muted-foreground hover:text-foreground">
-            <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
-            More metadata
-          </summary>
-          <div className="px-4 pb-3 space-y-3">
-          <div className="grid grid-cols-2 @md:grid-cols-3 @xl:grid-cols-4 gap-x-4 gap-y-2 text-sm">
-            <div>
-              <p className="text-xs font-medium text-muted-foreground mb-0.5">Size</p>
-              <p>{recording.size ? formatBytes(recording.size) : 'Unknown'}</p>
-            </div>
-            {recording.quality && recording.quality !== 'unrated' && (
-              <div>
-                <p className="text-xs font-medium text-muted-foreground mb-0.5">Quality</p>
-                <p className="capitalize">{recording.quality.replace('-', ' ')}</p>
+            {/* Participants (who actually spoke) — docked, actionable chips. */}
+            {people.participants.length > 0 && (
+              <div className="px-4 pb-3" data-testid="participants-section">
+                <ParticipantsChips
+                  participants={people.participants}
+                  contacts={people.allContacts}
+                  colorByKey={speakerTimeline.colorByKey}
+                  onOpenPicker={people.ensureAllContacts}
+                  onAssign={people.assignSpeaker}
+                  onUnassign={people.unassignSpeaker}
+                />
               </div>
             )}
-            {recording.knowledgeCaptureId ? (
-              <div>
-                <p className="text-xs font-medium text-muted-foreground mb-0.5">Category</p>
-                <Select
-                  value={recording.category || ''}
-                  onValueChange={handleCategoryChange}
-                  disabled={isSavingCategory}
-                >
-                  <SelectTrigger className="h-7 text-sm w-[140px]">
-                    <SelectValue placeholder="Select category" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {CATEGORY_OPTIONS.map((opt) => (
-                      <SelectItem key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            ) : recording.category ? (
-              <div>
-                <p className="text-xs font-medium text-muted-foreground mb-0.5">Category</p>
-                <p className="capitalize">{recording.category}</p>
-              </div>
-            ) : null}
-          </div>
 
-          {recording.knowledgeCaptureId && (
-            <div>
-              <p className="text-xs font-medium text-muted-foreground mb-1.5">Projects</p>
-              <ProjectAssignmentRow knowledgeCaptureId={recording.knowledgeCaptureId} />
-            </div>
-          )}
-          </div>
-        </details>
-        </div>
+            {meeting && (
+              <div className="px-4 pb-3" data-testid="invited-section">
+                <InvitedChips
+                  invited={people.invited}
+                  resolveAttendee={people.resolveAttendee}
+                  spokeKey={people.attendeeSpoke}
+                />
+              </div>
+            )}
+
+            {mentionedPeople.length > 0 && (
+              <div className="px-4 pb-3" data-testid="mentioned-people-section">
+                <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                  Mentioned ({mentionedPeople.length})
+                  <span className="font-normal">· not attendance</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {mentionedPeople.map((person, index) => (
+                    <span key={`${person.name}-${index}`} className="rounded-full border px-2 py-0.5 text-xs" title={person.role}>
+                      {person.name}{person.role ? ` · ${person.role}` : ''}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Secondary metadata stays available without consuming transcript space. */}
+            <details
+              className="group border-t"
+              data-testid="reader-more-metadata"
+              open={metadataOpen}
+              onToggle={(event) => setMetadataOpen(event.currentTarget.open)}
+            >
+              <summary className="flex cursor-pointer list-none items-center gap-1.5 px-4 py-2 text-xs font-medium text-muted-foreground hover:text-foreground">
+                <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
+                More metadata
+              </summary>
+              <div className="px-4 pb-3 space-y-3">
+              <div className="grid grid-cols-2 @md:grid-cols-3 @xl:grid-cols-4 gap-x-4 gap-y-2 text-sm">
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground mb-0.5">Size</p>
+                  <p>{recording.size ? formatBytes(recording.size) : 'Unknown'}</p>
+                </div>
+                {recording.quality && recording.quality !== 'unrated' && (
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground mb-0.5">Quality</p>
+                    <p className="capitalize">{recording.quality.replace('-', ' ')}</p>
+                  </div>
+                )}
+                {recording.knowledgeCaptureId ? (
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground mb-0.5">Category</p>
+                    <Select
+                      value={recording.category || ''}
+                      onValueChange={handleCategoryChange}
+                      disabled={isSavingCategory}
+                    >
+                      <SelectTrigger className="h-7 text-sm w-[140px]">
+                        <SelectValue placeholder="Select category" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {CATEGORY_OPTIONS.map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : recording.category ? (
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground mb-0.5">Category</p>
+                    <p className="capitalize">{recording.category}</p>
+                  </div>
+                ) : null}
+              </div>
+
+              {recording.knowledgeCaptureId && (
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground mb-1.5">Projects</p>
+                  <ProjectAssignmentRow knowledgeCaptureId={recording.knowledgeCaptureId} />
+                </div>
+              )}
+              </div>
+            </details>
+          </ReaderSection>
         )}
-      </div>
-      </ResizablePanel>
-      )}
 
-      {/* ===================================================================
-          READING AREA — Summary / Transcript, independently scrollable.
-          =================================================================== */}
-      {showUpperWorkspace && showLowerWorkspace && (
-        <ResizableHandle
-          withHandle
-          className="z-30 h-2 bg-border/60 transition-colors hover:bg-primary/30 focus-visible:bg-primary/30"
-          aria-label="Resize player and transcript areas"
-          data-testid="reader-vertical-resize-handle"
-        />
-      )}
-      {showLowerWorkspace && (
-      <ResizablePanel
-        defaultSize={maximizedSection ? 100 : readerVerticalSizes[1] ?? 36}
-        minSize={maximizedSection ? 100 : 24}
-        order={2}
-      >
-      <div className="h-full min-h-0 overflow-y-auto" data-testid="reader-scroll-body">
-        <div className="p-6 space-y-4">
-          {/* Transcript / Artifact Content */}
-          <div>
+        {/* Actions and decisions, promoted out of the player's graph into a
+            section of their own, so they survive any player mode. */}
+        {isAudioSource && sectionIsVisible('moments') && (
+          <ReaderSection
+            section="moments"
+            label="Actions & decisions"
+            mode={readerSectionModes.moments}
+            onModeChange={(mode) => changeSectionMode('moments', mode)}
+            onMaximize={() => toggleMaximizedSection('moments')}
+            maximized={maximizedSection === 'moments'}
+            pinned={isSectionPinned('moments')}
+            stickyTop={pins.stickyTop('moments')}
+            sentinelRef={pins.sentinelRef('moments')}
+          >
+            <TimelineEventList
+              events={timelineEvents}
+              eventDetails={eventDetails}
+              onEventUpdate={handleEventUpdate}
+              activeEventId={activeEventId}
+              onActivate={handleTimelineEventActivate}
+              recordingId={recording.id}
+            />
+          </ReaderSection>
+        )}
+        {showLowerWorkspace && (
+        // Box-less while the reading area is showing sections: a sticky header
+        // cannot escape an ancestor's box, so everything between a section and
+        // reader-scroll-body has to generate none.
+        //
+        // No pb-6 in either branch any more. It moved to the scroller, where it
+        // applies to both, and leaving a copy here charged the non-section
+        // states 72px of bottom padding where they used to pay 48.
+        <div className={cn(readingAreaHasSections && 'contents')}>
+          {/* Transcript / Artifact Content. The section branch supplies its own
+              horizontal padding (ReaderSection), so the reading area only pads
+              itself when it is showing one of the non-section states. */}
+          <div className={cn(readingAreaHasSections ? 'contents' : 'p-6')}>
             {isDeviceOnly(recording) ? (
               <div className="flex items-start gap-3 rounded-lg bg-muted/35 px-4 py-3">
                 <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-orange-500/10 text-orange-600 dark:text-orange-300">
@@ -1875,52 +1946,50 @@ export function SourceReader({
                 </p>
               </div>
             ) : effectiveTranscript ? (
-              <div className="space-y-3">
+              // Box-less for the same reason. The rhythm space-y-4 and pt-2
+              // used to supply comes back as spacer siblings: a sibling is not
+              // an ancestor, so it cannot trap a sticky header the way a
+              // wrapper would. 8px before Summary, 16px before the transcript,
+              // which is exactly what the two utilities added.
+              <div className="contents">
                 {sectionIsVisible('summary') && (
-                  <section
-                    className={cn(
-                      'border-b pb-3',
-                      readerSectionModes.summary === 'docked' && 'sticky top-0 z-20 rounded-lg border bg-background px-3 pt-1 shadow-sm'
-                    )}
-                    aria-label="Summary"
+                  <div aria-hidden="true" className="h-2" data-testid="reader-gap-summary" />
+                )}
+                {sectionIsVisible('summary') && (
+                  <ReaderSection
+                    section="summary"
+                    label="Summary"
+                    mode={readerSectionModes.summary}
+                    onModeChange={(mode) => changeSectionMode('summary', mode)}
+                    onMaximize={() => toggleMaximizedSection('summary')}
+                    maximized={maximizedSection === 'summary'}
+                    pinned={isSectionPinned('summary')}
+                    stickyTop={pins.stickyTop('summary')}
+                    sentinelRef={pins.sentinelRef('summary')}
                   >
-                    <ReaderSectionControls
-                      section="summary"
-                      label="Summary"
-                      mode={readerSectionModes.summary}
-                      onModeChange={(mode) => changeSectionMode('summary', mode)}
-                      onMaximize={() => toggleMaximizedSection('summary')}
-                      maximized={maximizedSection === 'summary'}
-                    />
-                    {sectionIsOpen('summary') && (
-                      <div id="reader-summary-content" className="max-w-[75ch] pt-1 text-sm leading-relaxed text-foreground">
-                        {effectiveTranscript.summary
-                          ? <p className="whitespace-pre-wrap">{effectiveTranscript.summary}</p>
-                          : <p className="text-muted-foreground">No summary generated.</p>}
-                      </div>
-                    )}
-                  </section>
+                    <div className="max-w-[75ch] text-sm leading-relaxed text-foreground">
+                      {effectiveTranscript.summary
+                        ? <p className="whitespace-pre-wrap">{effectiveTranscript.summary}</p>
+                        : <p className="text-muted-foreground">No summary generated.</p>}
+                    </div>
+                  </ReaderSection>
                 )}
 
                 {sectionIsVisible('transcript') && (
-                  <section
-                    className={cn(
-                      readerSectionModes.transcript === 'docked' && 'relative rounded-lg border bg-background px-3 shadow-sm'
-                    )}
-                    aria-label="Full transcript"
+                  <div aria-hidden="true" className="h-4" data-testid="reader-gap-transcript" />
+                )}
+                {sectionIsVisible('transcript') && (
+                  <ReaderSection
+                    section="transcript"
+                    label="Full transcript"
+                    mode={readerSectionModes.transcript}
+                    onModeChange={(mode) => changeSectionMode('transcript', mode)}
+                    onMaximize={() => toggleMaximizedSection('transcript')}
+                    maximized={maximizedSection === 'transcript'}
+                    pinned={isSectionPinned('transcript')}
+                    stickyTop={pins.stickyTop('transcript')}
+                    sentinelRef={pins.sentinelRef('transcript')}
                   >
-                    <div className={cn(readerSectionModes.transcript === 'docked' && 'sticky top-0 z-20 bg-background')}>
-                      <ReaderSectionControls
-                        section="transcript"
-                        label="Full transcript"
-                        mode={readerSectionModes.transcript}
-                        onModeChange={(mode) => changeSectionMode('transcript', mode)}
-                        onMaximize={() => toggleMaximizedSection('transcript')}
-                        maximized={maximizedSection === 'transcript'}
-                      />
-                    </div>
-                    {sectionIsOpen('transcript') && (
-                      <div id="reader-transcript-content">
                         <TranscriptViewer
                           transcript={effectiveTranscript.full_text}
                           segments={transcriptSegments}
@@ -1931,14 +2000,12 @@ export function SourceReader({
                           onSeek={handleReaderSeek}
                           showSummary={false}
                           showTranscriptHeader={false}
-                          /* H3: action items live in ONE home — the timeline event-list above. */
+                          /* H3: action items live in ONE home — the Actions & decisions section. */
                           showActionItems={false}
                           actionItems={actionItems}
                           onTranscriptUpdated={handleTranscriptUpdated}
                         />
-                      </div>
-                    )}
-                  </section>
+                  </ReaderSection>
                 )}
               </div>
             ) : recording.transcriptionStatus === 'complete' ? (
@@ -1961,10 +2028,8 @@ export function SourceReader({
             )}
           </div>
         </div>
+        )}
       </div>
-      </ResizablePanel>
-      )}
-      </ResizablePanelGroup>
 
       {/* Meeting link dialog */}
       <RecordingLinkDialog
@@ -2165,10 +2230,6 @@ interface ReaderPlayerProps {
   durationSec: number
   speakerRanges: DerivedSpeakerRange[]
   events?: TimelineEvent[]
-  /** Rich per-event details (full text + metadata + editability) for the list. */
-  eventDetails?: Record<string, TimelineEventDetail>
-  /** Persist an edit for an editable event; resolves true when saved. */
-  onEventUpdate?: (event: TimelineEvent, patch: TimelineEventPatch) => Promise<boolean>
   sentiment?: SentimentScorePoint[]
   analyzing: boolean
   /**
@@ -2183,8 +2244,10 @@ interface ReaderPlayerProps {
   onSeek: (sec: number) => void
   /** User-selected cut position, rendered independently from the playhead. */
   splitPointSec?: number
-  /** A numbered marker / event-list row was activated (B1 cross-highlight). */
+  /** A numbered marker was activated (B1 cross-highlight). */
   onEventClick?: (event: TimelineEvent) => void
+  /** Highlighted event id, owned by the reader and shared with the list. */
+  activeEventId?: string | null
 }
 
 function ReaderPlayer({
@@ -2193,8 +2256,6 @@ function ReaderPlayer({
   durationSec,
   speakerRanges,
   events,
-  eventDetails,
-  onEventUpdate,
   sentiment,
   analyzing,
   analysisFailure = null,
@@ -2203,6 +2264,7 @@ function ReaderPlayer({
   onSeek,
   splitPointSec,
   onEventClick,
+  activeEventId = null,
 }: ReaderPlayerProps) {
   const regionRef = useRef<HTMLDivElement>(null)
   const innerRef = useRef<HTMLDivElement>(null)
@@ -2262,12 +2324,11 @@ function ReaderPlayer({
             durationSec={durationSec}
             speakerRanges={big ? speakerRanges : undefined}
             events={big ? events : undefined}
-            eventDetails={big ? eventDetails : undefined}
-            onEventUpdate={onEventUpdate}
             sentiment={big ? sentiment : undefined}
             onSeek={onSeek}
             splitPointSec={splitPointSec}
             onEventClick={onEventClick}
+            activeEventId={activeEventId}
           />
         </div>
 

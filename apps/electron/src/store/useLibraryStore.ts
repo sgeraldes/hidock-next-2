@@ -30,9 +30,22 @@ export type SortOrder = 'asc' | 'desc'
  */
 export type AssistantDock = 'pinned' | 'floating' | 'collapsed'
 
-export type ReaderSectionId = 'player' | 'metadata' | 'summary' | 'transcript'
+export type ReaderSectionId = 'player' | 'metadata' | 'moments' | 'summary' | 'transcript'
 export type ReaderSectionMode = 'expanded' | 'compact' | 'docked' | 'hidden'
 export type ReaderSectionModes = Record<ReaderSectionId, ReaderSectionMode>
+
+/**
+ * Every reader section starts expanded. Single source of truth for the initial
+ * state, `resetReaderLayout`, and the persist migration that fills in a section
+ * a previously-persisted store never heard of.
+ */
+export const DEFAULT_READER_SECTION_MODES: ReaderSectionModes = {
+  player: 'expanded',
+  metadata: 'expanded',
+  moments: 'expanded',
+  summary: 'expanded',
+  transcript: 'expanded'
+}
 
 interface LibraryState {
   // View preferences (persisted)
@@ -54,13 +67,34 @@ interface LibraryState {
   // Source-scoped AI assistant docking (persisted)
   assistantDock: AssistantDock
 
-  // Legacy preference retained for persisted-store compatibility. New reader UI
-  // uses readerSectionModes.player instead of scroll-driven pinning.
+  // Legacy preference retained for persisted-store compatibility. Nothing reads
+  // it. Scroll-driven pinning came back on 2026-09-22 (see readerSectionModes
+  // below), but it is NOT this flag: pinning is now derived per section and
+  // never persisted, while this one was a single stored on/off for the player.
   waveformPinned: boolean
 
-  // Reader workspace layout. Each source section has an explicit state; none of
-  // these change implicitly when the user scrolls.
+  // Reader workspace layout: the state the USER chose for each section, and the
+  // only layer that persists.
+  //
+  // This used to carry the rule "none of these change implicitly when the user
+  // scrolls", written after a scroll-pinned player jumped around and the fix was
+  // to take scrolling out of the layout entirely. The product owner reversed
+  // that on 2026-09-22: he wants sections to compact and stick to the top as he
+  // scrolls a single long column.
+  //
+  // The reversal does not bring back the jumping, because scrolling produces a
+  // PRESENTATION on top of this map and never writes to it. SourceReader keeps
+  // which sections are currently stuck in local component state; a section the
+  // user set to `compact` or `hidden` is never re-expanded by scrolling back up.
+  // See docs/superpowers/specs/2026-09-22-reader-sticky-sections-design.md.
+  //
+  // Please do not "fix" this back to a scroll-free layout without talking to him.
   readerSectionModes: ReaderSectionModes
+  // Legacy split between the old two-pane reader (context area / reading area).
+  // The reader is ONE scrolling column since 2026-09-22 and nothing reads this,
+  // but a store persisted by an older build still carries it — kept here (and in
+  // `partialize`) so rehydrating such a store stays lossless, the same treatment
+  // `waveformPinned` gets above.
   readerVerticalSizes: number[]
 
   // Maximization is transient but must live above SourceReader: collapsing the
@@ -186,12 +220,7 @@ const initialState: LibraryState = {
   assistantDock: 'collapsed',
   // Retained for compatibility with stores written before explicit section modes.
   waveformPinned: false,
-  readerSectionModes: {
-    player: 'expanded',
-    metadata: 'expanded',
-    summary: 'expanded',
-    transcript: 'expanded'
-  },
+  readerSectionModes: { ...DEFAULT_READER_SECTION_MODES },
   readerVerticalSizes: [64, 36],
   readerMaximizedSection: null,
   readerListCollapsedBeforeMaximize: null,
@@ -270,12 +299,7 @@ export const useLibraryStore = create<LibraryStore>()(
         listCollapsed: state.readerListCollapsedBeforeMaximize ?? state.listCollapsed
       })),
       resetReaderLayout: () => set((state) => ({
-        readerSectionModes: {
-          player: 'expanded',
-          metadata: 'expanded',
-          summary: 'expanded',
-          transcript: 'expanded'
-        },
+        readerSectionModes: { ...DEFAULT_READER_SECTION_MODES },
         readerVerticalSizes: [64, 36],
         readerMaximizedSection: null,
         readerListCollapsedBeforeMaximize: null,
@@ -403,6 +427,21 @@ export const useLibraryStore = create<LibraryStore>()(
     {
       name: 'hidock-library-store',
       storage: createJSONStorage(() => localStorage),
+      // v1 (2026-09-22) added the `moments` reader section. zustand/persist
+      // merges shallowly, so a v0 `readerSectionModes` with four keys REPLACES
+      // the five-key default and leaves `moments` undefined. Fill in whatever a
+      // stored map is missing and keep every choice it does carry.
+      version: 1,
+      migrate: (persisted, _version) => {
+        const state = (persisted ?? {}) as Partial<LibraryState>
+        return {
+          ...state,
+          readerSectionModes: {
+            ...DEFAULT_READER_SECTION_MODES,
+            ...(state.readerSectionModes ?? {})
+          }
+        }
+      },
       // Only persist view preferences and filters, not selection or scroll
       partialize: (state) => ({
         viewMode: state.viewMode,
