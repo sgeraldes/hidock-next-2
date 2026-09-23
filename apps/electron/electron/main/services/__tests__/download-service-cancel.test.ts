@@ -29,6 +29,8 @@ vi.mock('../database', () => ({
   markRecordingDownloaded: vi.fn(),
   addSyncedFile: vi.fn(),
   isFileSynced: vi.fn(() => false),
+  getSyncedFile: vi.fn(() => undefined),
+  removeSyncedFile: vi.fn(),
   isFilePurged: () => false,
   getRecordingByFilename: vi.fn(() => null),
   getSyncedFilenames: vi.fn(() => new Set()),

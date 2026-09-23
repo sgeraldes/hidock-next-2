@@ -72,7 +72,13 @@ export const DURATION_LOW_VALUE_MAX_SECONDS = 30
  *  a duration understated by roughly 8x or more. A 60-second recording
  *  truncated to 20 slips through. It catches the shape that actually occurs —
  *  a multi-minute recording truncated to seconds — and it never blocks a
- *  genuinely short clip, because a short clip's file is small. */
+ *  genuinely short clip, because a short clip's file is small.
+ *
+ *  Since 2026-09-22 backfillRecordingDurations measures the audio itself
+ *  (audio-duration.ts) and marks what it measured, so most rows now carry a
+ *  real length rather than an estimate. This stays as the net under the rest:
+ *  a row whose file could not be read, one written before the measurement ran,
+ *  and any future path that stores a duration without opening the file. */
 export const MAX_PLAUSIBLE_BYTES_PER_SECOND = 64000
 
 /** True when the file is too big to hold only `durationSeconds` of audio, so

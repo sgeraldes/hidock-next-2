@@ -2933,6 +2933,20 @@ export async function transcribeManually(recordingId: string): Promise<void> {
     notifyRenderer('transcription:completed', { recordingId })
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+    // D-022 — a renderer event is not a record. If nothing is listening (the
+    // window is closed, the user navigated away, the call came over IPC from a
+    // script), the failure used to vanish and the recording kept the same
+    // 'none' status as one nobody had ever attempted — which is how two
+    // interviews went 12 days without anyone noticing they had never run.
+    // Persist the outcome the way the queue processor already does.
+    const failedId = getRecordingById(recordingId)?.id ?? resolveRecordingId(recordingId)?.id ?? recordingId
+    try {
+      updateRecordingTranscriptionStatus(failedId, 'error')
+    } catch (statusError) {
+      console.error('[Transcription] Could not mark the recording as errored:', statusError)
+    }
+    const failed = getRecordingById(failedId)
+    emitActivityLog('error', 'Transcription failed', `${failed?.filename ?? recordingId}: ${errorMessage}`)
     notifyRenderer('transcription:failed', { recordingId, error: errorMessage })
     throw error
   }
