@@ -121,30 +121,49 @@ function parseFrame(buffer: Buffer, offset: number): MpegFrame | null {
 const VBRI_OFFSET = 4 + 32
 
 /**
- * The exact number of audio frames, when the first frame carries a Xing, Info
- * or VBRI header that states it. Null when there is no such header or it does
- * not include a frame count, which is what a plain CBR stream looks like.
+ * What the first frame's Xing, Info or VBRI header states about the stream: the
+ * number of audio frames, and, when present, the number of bytes they occupy.
+ * Null when there is no such header or it gives no frame count, which is what a
+ * plain CBR stream looks like.
  */
-function statedFrameCount(buffer: Buffer, frameStart: number, frame: MpegFrame): number | null {
+function statedStream(
+  buffer: Buffer,
+  frameStart: number,
+  frame: MpegFrame
+): { frames: number; bytes: number | null } | null {
   if (frame.xingOffset !== null) {
     const at = frameStart + frame.xingOffset
-    if (at + 12 <= buffer.length) {
+    if (at + 8 <= buffer.length) {
       const tag = buffer.subarray(at, at + 4).toString('latin1')
-      // Xing marks VBR, Info the same structure on a CBR file. Bit 0 of the
-      // flags says the frame count follows.
-      if ((tag === 'Xing' || tag === 'Info') && (buffer.readUInt32BE(at + 4) & 1) === 1) {
-        const frames = buffer.readUInt32BE(at + 8)
-        if (frames > 0) return frames
+      // Xing marks VBR, Info the same structure on a CBR file. The flags say
+      // which optional fields follow, in order: frames (bit 0), bytes (bit 1).
+      if (tag === 'Xing' || tag === 'Info') {
+        const flags = buffer.readUInt32BE(at + 4)
+        if ((flags & 1) === 1 && at + 12 <= buffer.length) {
+          const frames = buffer.readUInt32BE(at + 8)
+          const bytes = (flags & 2) === 2 && at + 16 <= buffer.length ? buffer.readUInt32BE(at + 12) : null
+          if (frames > 0) return { frames, bytes: bytes && bytes > 0 ? bytes : null }
+        }
       }
     }
   }
   const vbri = frameStart + VBRI_OFFSET
   if (vbri + 18 <= buffer.length && buffer.subarray(vbri, vbri + 4).toString('latin1') === 'VBRI') {
+    const bytes = buffer.readUInt32BE(vbri + 10)
     const frames = buffer.readUInt32BE(vbri + 14)
-    if (frames > 0) return frames
+    if (frames > 0) return { frames, bytes: bytes > 0 ? bytes : null }
   }
   return null
 }
+
+/**
+ * The header describes the stream as it was written, and a file cut short keeps
+ * its header. Believing the frame count then reports the full length of a file
+ * that holds half of it — the one case the duration backfill exists to catch.
+ * When the header also states its byte count and the file holds materially
+ * fewer bytes, the frame count is scaled down to what is actually there.
+ */
+const TRUNCATION_TOLERANCE = 0.98
 
 /**
  * First MPEG frame in `buffer`, confirmed by a second sync exactly one frame
@@ -258,11 +277,16 @@ export function readAudioDuration(path: string): AudioDuration | null {
   const payload = findPayload(header, fileSize)
   const found = findFrame(header.subarray(payload.offset, payload.offset + SYNC_SEARCH_BYTES))
   if (found) {
-    const frames = statedFrameCount(header, payload.offset + found.offset, found.frame)
-    if (frames !== null) {
+    const stated = statedStream(header, payload.offset + found.offset, found.frame)
+    if (stated !== null) {
+      const present = payload.size - found.offset
+      const truncated = stated.bytes !== null && present < stated.bytes * TRUNCATION_TOLERANCE
+      const frames = truncated ? Math.floor((stated.frames * present) / stated.bytes!) : stated.frames
       return {
         seconds: (frames * found.frame.samples) / found.frame.hz,
-        how: `mpeg ${found.frame.hz}Hz, ${frames} frames from the stream header`,
+        how: truncated
+          ? `mpeg ${found.frame.hz}Hz, ${frames} of ${stated.frames} frames; the file holds ${present} of the ${stated.bytes} bytes its header states`
+          : `mpeg ${found.frame.hz}Hz, ${frames} frames from the stream header`,
       }
     }
     const bytes = payload.size - found.offset

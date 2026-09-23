@@ -176,6 +176,29 @@ describe('readAudioDuration', () => {
     expect(readAudioDuration(write('vbri.mp3', stream))?.seconds).toBeCloseTo(180, 6)
   })
 
+  it('scales the stated frame count down when the file holds fewer bytes than the header says', () => {
+    // A file cut short keeps its header. Believing the frame count reported
+    // the full length of a file that held half of it — the reviewer produced
+    // exactly that with a copy of a real split part truncated to half.
+    const stream = mpegStream(100) // 28,800 bytes present
+    stream.write('Xing', 13, 'latin1')
+    stream.writeUInt32BE(1 | 2, 17) // frames and bytes present
+    stream.writeUInt32BE(2500, 21) // 2500 frames = 90 s
+    stream.writeUInt32BE(57600, 25) // the header says 57,600 bytes: this file is half of it
+    const result = readAudioDuration(write('truncated-vbr.mp3', stream))
+    expect(result?.seconds).toBeCloseTo(45, 0)
+    expect(result?.how).toContain('1250 of 2500 frames')
+  })
+
+  it('trusts the frame count when the stated byte count matches the file', () => {
+    const stream = mpegStream(100)
+    stream.write('Xing', 13, 'latin1')
+    stream.writeUInt32BE(1 | 2, 17)
+    stream.writeUInt32BE(2500, 21)
+    stream.writeUInt32BE(28800, 25) // exactly what is on disk
+    expect(readAudioDuration(write('intact-vbr.mp3', stream))?.seconds).toBeCloseTo(90, 6)
+  })
+
   it('ignores a Xing header that does not state a frame count', () => {
     // Flags without bit 0: nothing to read, so fall back to the bitrate.
     const stream = mpegStream(1000)
