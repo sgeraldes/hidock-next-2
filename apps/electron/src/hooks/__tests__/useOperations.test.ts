@@ -219,6 +219,34 @@ describe('useOperations', () => {
       expect(mockAddToQueue).toHaveBeenCalledWith('queue-reprocess-1', 'rec-complete', 'completed.wav')
     })
 
+    it('routes Transcribe on a no-speech recording through an explicit provider reprocess', async () => {
+      // A clip skipped as too short (or silent) ends no_speech. Clicking
+      // Transcribe on it is the user overriding that verdict, so it must reach
+      // the main process as an explicit reprocess, which bypasses the
+      // too-short gate. A plain addToQueue would be skipped again.
+      const { result } = renderHook(() => useOperations())
+      const skipped = {
+        id: 'rec-short',
+        filename: 'short.wav',
+        location: 'local-only' as const,
+        localPath: '/path/short.wav',
+        syncStatus: 'synced' as const,
+        transcriptionStatus: 'no_speech' as const,
+        size: 1024,
+        duration: 6,
+        dateRecorded: new Date()
+      }
+
+      let success: boolean | undefined
+      await act(async () => {
+        success = await result.current.queueTranscription(skipped as any)
+      })
+
+      expect(success).toBe(true)
+      expect(mockReprocessWith).toHaveBeenCalledWith('rec-short', 'gemini')
+      expect(mockAddToQueueIPC).not.toHaveBeenCalled()
+    })
+
     it('queues local ASR transcription without a Gemini API key', async () => {
       vi.mocked(window.electronAPI.config.get).mockResolvedValue({
         success: true,

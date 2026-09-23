@@ -191,6 +191,40 @@ describe('SourceReader — Transcribe split/dropdown', () => {
     expect(screen.getByRole('button', { name: /^transcribe$/i })).toBeInTheDocument()
   })
 
+  it('says a skipped clip was too short, with its measured length, and keeps retry available', async () => {
+    ;(window.electronAPI as any).transcripts = {
+      getProcessingRuns: vi.fn().mockResolvedValue({
+        success: true,
+        data: [{
+          id: 'run-vad',
+          stage: 'vad',
+          provider: 'hidock-next',
+          tool: 'audio-duration',
+          model: 'duration-gate-v1',
+          version: null,
+          execution: 'local',
+          status: 'completed',
+          quality_status: 'no_speech',
+          quality_json: JSON.stringify({
+            status: 'no_speech',
+            reasonCodes: ['recording_too_short'],
+            durationSeconds: 6.2,
+            minimumDurationSeconds: 10
+          }),
+          estimated_cost_amount: null,
+          estimated_cost_currency: null,
+          cost_method: null
+        }]
+      })
+    }
+    render(<SourceReader recording={makeRecording({ transcriptionStatus: 'no_speech' })} onTranscribe={vi.fn()} />)
+    expect(await screen.findByText('Too short to transcribe')).toBeInTheDocument()
+    expect(screen.getByText(/6 seconds of audio\. Recordings under 10 seconds are skipped\./)).toBeInTheDocument()
+    expect(screen.getByText(/choose Clear rating in its row menu, then re-run transcription/)).toBeInTheDocument()
+    expect(screen.queryByText('No intelligible speech detected')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^transcribe$/i })).toBeInTheDocument()
+  })
+
   it('renders a primary Transcribe button and a method picker (no raw "VibeVoice")', () => {
     render(<SourceReader recording={makeRecording()} onTranscribe={vi.fn()} />)
     expect(screen.getByRole('button', { name: /^transcribe$/i })).toBeInTheDocument()

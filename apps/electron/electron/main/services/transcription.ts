@@ -147,6 +147,8 @@ import {
 } from './value-classification'
 import { parseAndAssessDiarization } from './diarization-quality'
 import { analyzeAudioPreflight, type AudioPreflightReport } from './audio-preflight'
+import { readAudioDuration } from './audio-duration'
+import { DURATION_GARBAGE_MAX_SECONDS } from './value-thresholds'
 import { isAutomaticMeetingLinkTemporallyEligible } from './recording-match-scoring'
 import {
   applyKnownVoiceBindings,
@@ -599,7 +601,9 @@ async function processQueue(): Promise<void> {
           const recDone = getRecordingById(item.recording_id)
           emitActivityLog(
             'info',
-            'No intelligible speech detected',
+            outcome.reason === TOO_SHORT_REASON_CODE
+              ? `Too short to transcribe (under ${DURATION_GARBAGE_MAX_SECONDS} seconds)`
+              : 'No intelligible speech detected',
             `${recDone?.filename ?? item.recording_id}: transcription and AI analysis skipped`
           )
         } else {
@@ -1816,7 +1820,47 @@ export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
  * the soft-delete's 'cancelled' tombstone with 'completed' and emit
  * transcription:completed for content that does not exist).
  */
-type TranscribeOutcome = { status: 'completed' | 'cancelled' | 'no_speech' }
+type TranscribeOutcome =
+  | { status: 'completed' | 'cancelled' }
+  // `reason` separates "the audio is silent" from "the audio is too short to
+  // be worth a transcriber call"; the queue's activity log words them apart.
+  | { status: 'no_speech'; reason: 'no_speech' | typeof TOO_SHORT_REASON_CODE }
+
+/**
+ * Reason code on the `vad` processing run when a recording ends `no_speech`
+ * because it is shorter than DURATION_GARBAGE_MAX_SECONDS, not because it is
+ * silent. The value gate rates such a clip `garbage` on length alone, so
+ * transcribing it first is a paid provider call for audio that is then thrown
+ * away (measured 2026-09-22: 6 of the 7 live recordings under 10 s carried a
+ * full transcription). The reader reads this code to say "too short" instead
+ * of "no speech". Mirrored as a literal in SourceReader.tsx.
+ */
+export const TOO_SHORT_REASON_CODE = 'recording_too_short'
+
+/**
+ * Measure the file and, when it is under the garbage threshold, return the
+ * quality report the `vad` run records. Null means "transcribe normally": the
+ * clip is long enough, or the file could not be measured. The length comes
+ * from the audio's own bytes; `recordings.duration_seconds` was a
+ * transcript-derived estimate for half the library and must not decide this.
+ */
+function measureTooShortClip(filePath: string): Record<string, unknown> | null {
+  const measured = readAudioDuration(filePath)
+  if (!measured || measured.seconds >= DURATION_GARBAGE_MAX_SECONDS) return null
+  // Skipping drops a recording from transcription for good, so only a real MPEG
+  // measurement may decide it. The PCM fallback reads a lying RIFF container at
+  // a quarter of its length: a 30-second device file whose first frame sat past
+  // the sync search window read as 7.6 seconds in review. Anything that did not
+  // come from MPEG frames goes through the normal path instead.
+  if (!measured.how.startsWith('mpeg')) return null
+  return {
+    status: 'no_speech',
+    reasonCodes: [TOO_SHORT_REASON_CODE],
+    durationSeconds: Math.round(measured.seconds * 1000) / 1000,
+    minimumDurationSeconds: DURATION_GARBAGE_MAX_SECONDS,
+    measuredBy: measured.how
+  }
+}
 
 function isCancelledMeetingSubject(subject: string | null | undefined): boolean {
   return /^\s*(cancelled|canceled|cancelado|cancelada)\s*[:\-–—]/i.test(subject ?? '')
@@ -1910,7 +1954,35 @@ async function transcribeRecording(
     throw new Error('Recording metadata or schedule matching is not ready')
   }
 
+  // Too short to hold one exchange: end in the same terminal state as silent
+  // audio before ffmpeg or any provider runs. An explicit user re-run (a
+  // provider override from recordings:reprocessWith) is the escape hatch and
+  // skips this check. An unmeasurable file falls through to the normal path.
+  if (!isExplicitReprocess) {
+    const tooShort = measureTooShortClip(recording.file_path)
+    if (tooShort) {
+      const durationRun = createProcessingRun({
+        recordingId,
+        stage: 'vad',
+        provider: 'hidock-next',
+        tool: 'audio-duration',
+        model: 'duration-gate-v1',
+        execution: 'local'
+      })
+      completeProcessingRun(durationRun.id, { qualityStatus: 'no_speech', quality: tooShort })
+      await retireNoSpeechGeneratedContent(recordingId)
+      updateRecordingTranscriptionStatus(recordingId, 'no_speech')
+      updateRecordingStatus(recordingId, 'no_speech')
+      console.log(
+        `[Transcription] ${recordingId} is ${tooShort.durationSeconds}s long, under the ` +
+          `${DURATION_GARBAGE_MAX_SECONDS}s minimum; provider transcription and all downstream AI skipped`
+      )
+      return { status: 'no_speech', reason: TOO_SHORT_REASON_CODE }
+    }
+  }
+
   console.log(`Transcribing: ${recording.filename}`)
+  const statusBeforeRun = recording.transcription_status ?? 'none'
   // AI-13: Use standard enum values matching Recording.transcription_status
   updateRecordingTranscriptionStatus(recordingId, 'processing')
 
@@ -2010,7 +2082,24 @@ Meeting ${i + 1}: "${m.subject}"
       `[Transcription] ${recordingId} has ${audioPreflight.nonSilentSeconds}s of local audio activity ` +
         `(${(audioPreflight.nonSilentRatio * 100).toFixed(2)}%); provider transcription and all downstream AI skipped`
     )
-    return { status: 'no_speech' }
+    return { status: 'no_speech', reason: 'no_speech' }
+  }
+
+  // An explicit re-run of a value-excluded recording gets past the gate above
+  // for one reason: so this local preflight can prove silence and retire a false
+  // transcript. It found speech, so the rating still stands and no provider may
+  // see this audio. Stop here, before pyannote. Leaving it to the downstream
+  // checks ended the run badly: speaker linking was killed mid-run and the row
+  // retried three times into an error, or, with speaker linking off, the status
+  // stayed 'processing' forever with a dead Transcribe button. The owner lifts
+  // the rating with "Clear rating", and the next re-run then goes through.
+  if (isExplicitReprocess && !isRecordingEligible(recordingId)) {
+    updateRecordingTranscriptionStatus(recordingId, statusBeforeRun)
+    console.log(
+      `[Transcription] ${recordingId} has speech but its rating keeps it from any provider; ` +
+        'explicit re-run stopped after the local check. Clear the rating to transcribe it.'
+    )
+    return { status: 'cancelled' }
   }
 
   meetingContext += `\n\nLOCAL AUDIO ACTIVITY EVIDENCE (authoritative safety constraint):
@@ -2160,6 +2249,9 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
         `[Transcription] Recording ${recordingId} became ineligible during the transcription ` +
           'provider pipeline (chunk/upload/retry) — aborted before further audio was sent; nothing persisted'
       )
+      // Hand the status back: 'processing' with nothing running is a dead
+      // Transcribe button, because the UI ignores clicks on a run in progress.
+      updateRecordingTranscriptionStatus(recordingId, statusBeforeRun)
       return { status: 'cancelled' }
     }
     if (e instanceof NoSpeechDetectedError) {
@@ -2169,7 +2261,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
       updateRecordingTranscriptionStatus(recordingId, 'no_speech')
       updateRecordingStatus(recordingId, 'no_speech')
       console.log(`[Transcription] Provider confirmed no intelligible speech for ${recordingId}; downstream AI skipped`)
-      return { status: 'no_speech' }
+      return { status: 'no_speech', reason: 'no_speech' }
     }
     const message = e instanceof Error ? e.message : String(e)
     failProcessingRun(transcriptionRun.id, message)
@@ -2224,6 +2316,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
       `[Transcription] Recording ${recordingId} became ineligible during audio transcription ` +
         '— skipping Gemini analysis; no transcript sent to any external LLM for analysis'
     )
+    updateRecordingTranscriptionStatus(recordingId, statusBeforeRun)
     return { status: 'cancelled' }
   }
 

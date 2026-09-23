@@ -36,10 +36,10 @@ jobs:
           done
           (cd packages/database && npm rebuild better-sqlite3)
           (cd packages/knowledge-graph && npm rebuild better-sqlite3)
-      - name: Test shared packages
+      - name: Lint and test shared packages
         run: |
           for n in ai-providers calendar-sync connectors connectors-slack database jensen-protocol knowledge-graph transcription; do
-            (cd "packages/$n" && npm test)
+            (cd "packages/$n" && npm run lint --if-present && npm test)
           done
       - name: Install app
         working-directory: apps/electron
@@ -47,6 +47,12 @@ jobs:
       - name: Restore Node ABI for tests
         working-directory: packages/database
         run: npm rebuild better-sqlite3
+      - name: Packaging preflight
+        working-directory: apps/electron
+        # The packaging scripts run this too, but CI never packages on a pull
+        # request, so without this step a dependency tree that cannot be
+        # packaged is only found at release time. It takes seconds.
+        run: node scripts/preflight-package.mjs
       - name: Typecheck
         working-directory: apps/electron
         run: npm run typecheck

@@ -11,7 +11,10 @@
  */
 
 // This test runs in node environment, so we must define mocks BEFORE imports
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest'
+import { mkdtempSync, writeFileSync, rmSync } from 'fs'
+import { tmpdir } from 'os'
+import { join as joinPath } from 'path'
 
 // Track calls to updateRecordingStatus
 const mockUpdateRecordingStatus = vi.fn()
@@ -181,7 +184,11 @@ vi.mock('electron', () => ({
 
 // Mock config
 vi.mock('../config', () => ({
-  getConfig: vi.fn(() => mockConfig)
+  getConfig: vi.fn(() => mockConfig),
+  // transcribeWithGemini builds the engine with this as its fallback model.
+  // Without it the Gemini path threw at construction, before the engine's
+  // transcribe() ran, so no test here could observe the provider being reached.
+  CURRENT_GEMINI_CHAT_MODEL: 'gemini-chat-test'
 }))
 
 // Mock google generative AI - make it fail
@@ -453,11 +460,204 @@ describe('Transcription Service', () => {
     })
   })
 
+  // Recordings under DURATION_GARBAGE_MAX_SECONDS are rated garbage by the value
+  // gate, so paying a transcriber for them first is waste. The length comes
+  // from the file's own bytes (readAudioDuration), never from duration_seconds,
+  // so these fixtures are real MPEG files on disk. The fs mock above spreads the
+  // real module, so statSync/openSync read them for real.
+  describe('short clips skip the transcriber', () => {
+    let clipDir: string
+
+    beforeAll(() => {
+      clipDir = mkdtempSync(joinPath(tmpdir(), 'hidock-short-clip-'))
+    })
+
+    afterAll(() => {
+      rmSync(clipDir, { recursive: true, force: true })
+    })
+
+    /** MPEG-2 Layer III, 64 kbps, 16 kHz: a 4-byte header every 288 bytes =
+     *  8000 bytes per second, the device's own format. */
+    function writeMpegClip(name: string, seconds: number): string {
+      const frameBytes = 288
+      const frames = Math.round((seconds * 8000) / frameBytes)
+      const out = Buffer.alloc(frames * frameBytes)
+      for (let i = 0; i < frames; i++) Buffer.from([0xff, 0xf3, 0x88, 0xc4]).copy(out, i * frameBytes)
+      const path = joinPath(clipDir, name)
+      writeFileSync(path, out)
+      return path
+    }
+
+    function queueOne(recordingId: string, filePath: string, provider?: string): void {
+      const queueItem = {
+        id: `queue-${recordingId}`,
+        recording_id: recordingId,
+        filename: `${recordingId}.wav`,
+        status: 'pending',
+        attempts: 0,
+        ...(provider ? { provider } : {})
+      }
+      mockGetQueueItems.mockImplementation((status?: string) => status === 'pending' ? [queueItem] : [])
+      mockGetRecordingById.mockReturnValue({
+        id: recordingId,
+        filename: queueItem.filename,
+        file_path: filePath,
+        // Deliberately wrong: a transcript-derived estimate must not decide.
+        duration_seconds: 600,
+        date_recorded: '2026-09-22T10:00:00.000Z',
+        status: 'none'
+      })
+    }
+
+    async function runQueueUntil(assertion: () => void): Promise<void> {
+      const { startTranscriptionProcessor, stopTranscriptionProcessor } = await import('../transcription')
+      startTranscriptionProcessor()
+      try {
+        await vi.waitFor(assertion, { timeout: 15000, interval: 25 })
+      } finally {
+        stopTranscriptionProcessor()
+      }
+    }
+
+    it('ends a 5-second clip as no_speech with the too-short reason, without calling the transcriber', async () => {
+      queueOne('rec-short', writeMpegClip('short.wav', 5))
+      const database = await import('../database')
+
+      await runQueueUntil(() => {
+        expect(mockUpdateQueueItem).toHaveBeenCalledWith('queue-rec-short', 'completed')
+      })
+
+      expect(mockAnalyzeAudioPreflight).not.toHaveBeenCalled()
+      expect(mockGeminiTranscribeCall).not.toHaveBeenCalled()
+      expect(mockGenerateContent).not.toHaveBeenCalled()
+      expect(mockInsertTranscript).not.toHaveBeenCalled()
+      expect(mockUpdateRecordingStatus).toHaveBeenCalledWith('rec-short', 'no_speech')
+      expect(vi.mocked(database.retireGeneratedContentForNoSpeech)).toHaveBeenCalledWith('rec-short')
+      expect(vi.mocked(database.createProcessingRun)).toHaveBeenCalledWith(
+        expect.objectContaining({ recordingId: 'rec-short', stage: 'vad', tool: 'audio-duration', execution: 'local' })
+      )
+      const completion = vi.mocked(database.completeProcessingRun).mock.calls.find(([id]) => id === 'run-vad')
+      expect(completion?.[1]).toMatchObject({
+        qualityStatus: 'no_speech',
+        quality: {
+          status: 'no_speech',
+          reasonCodes: ['recording_too_short'],
+          // 139 whole frames = 40,032 bytes = 5.004 s.
+          durationSeconds: expect.closeTo(5, 1),
+          minimumDurationSeconds: 10
+        }
+      })
+    })
+
+    it('sends a 30-second clip to the transcriber as before', async () => {
+      queueOne('rec-long', writeMpegClip('long.wav', 30))
+
+      await runQueueUntil(() => {
+        expect(mockGeminiTranscribeCall).toHaveBeenCalled()
+      })
+
+      expect(mockAnalyzeAudioPreflight).toHaveBeenCalled()
+      expect(mockUpdateRecordingStatus).not.toHaveBeenCalledWith('rec-long', 'no_speech')
+    })
+
+    it('sends a file it cannot measure to the transcriber instead of skipping it', async () => {
+      const unreadable = joinPath(clipDir, 'unreadable.wav')
+      writeFileSync(unreadable, Buffer.alloc(4000)) // zeros: no RIFF, no MPEG sync
+      queueOne('rec-unmeasured', unreadable)
+
+      await runQueueUntil(() => {
+        expect(mockGeminiTranscribeCall).toHaveBeenCalled()
+      })
+
+      expect(mockAnalyzeAudioPreflight).toHaveBeenCalled()
+      expect(mockUpdateRecordingStatus).not.toHaveBeenCalledWith('rec-unmeasured', 'no_speech')
+    })
+
+    it('transcribes a short clip when the user explicitly re-runs it', async () => {
+      // A provider on the queue row is the explicit reprocess path
+      // (recordings:reprocessWith).
+      queueOne('rec-short-rerun', writeMpegClip('short-rerun.wav', 5), 'gemini')
+
+      await runQueueUntil(() => {
+        expect(mockGeminiTranscribeCall).toHaveBeenCalled()
+      })
+
+      expect(mockAnalyzeAudioPreflight).toHaveBeenCalled()
+      expect(mockUpdateRecordingStatus).not.toHaveBeenCalledWith('rec-short-rerun', 'no_speech')
+    })
+
+    it('stops an explicit re-run of a rated clip once the local check finds speech, and hands the status back', async () => {
+      // Review of PR #25: a garbage-rated clip re-run explicitly got past the
+      // gate (so the local check could prove silence), found speech, and then
+      // died later — speaker linking killed mid-run into three retries and an
+      // error, or with speaker linking off, 'processing' forever. It must stop
+      // right after the local check, before any provider, status restored.
+      queueOne('rec-rated', writeMpegClip('rated.wav', 5), 'gemini')
+      mockGetRecordingById.mockReturnValue({
+        id: 'rec-rated',
+        filename: 'rec-rated.wav',
+        file_path: joinPath(clipDir, 'rated.wav'),
+        duration_seconds: 5,
+        date_recorded: '2026-09-22T10:00:00.000Z',
+        status: 'no_speech',
+        transcription_status: 'no_speech'
+      })
+      mockIsRecordingEligible.mockReturnValue(false) // rated garbage: value-excluded
+
+      await runQueueUntil(() => {
+        expect(mockUpdateQueueItem).toHaveBeenCalledWith('queue-rec-rated', 'cancelled')
+      })
+
+      expect(mockAnalyzeAudioPreflight).toHaveBeenCalled() // the local check still ran
+      expect(mockGeminiTranscribeCall).not.toHaveBeenCalled()
+      expect(mockGenerateContent).not.toHaveBeenCalled()
+      const statuses = mockUpdateRecordingStatus.mock.calls.filter(([id]) => id === 'rec-rated').map(([, s]) => s)
+      expect(statuses).toEqual(['processing', 'no_speech'])
+    })
+
+    it('never skips on a PCM measurement, which reads a lying container at a quarter of its length', async () => {
+      // An honest 16-bit PCM WAV of 5 s measures as PCM. The skip decision only
+      // trusts MPEG frames, so this goes to the transcriber rather than being
+      // dropped on a measurement that could be wrong by a factor of four.
+      const pcm = Buffer.alloc(44 + 160000)
+      pcm.write('RIFF', 0, 'latin1')
+      pcm.writeUInt32LE(36 + 160000, 4)
+      pcm.write('WAVE', 8, 'latin1')
+      pcm.write('fmt ', 12, 'latin1')
+      pcm.writeUInt32LE(16, 16)
+      pcm.writeUInt16LE(1, 20)
+      pcm.writeUInt16LE(1, 22)
+      pcm.writeUInt32LE(16000, 24)
+      pcm.writeUInt32LE(32000, 28)
+      pcm.writeUInt16LE(2, 32)
+      pcm.writeUInt16LE(16, 34)
+      pcm.write('data', 36, 'latin1')
+      pcm.writeUInt32LE(160000, 40)
+      const path = joinPath(clipDir, 'pcm-5s.wav')
+      writeFileSync(path, pcm)
+      queueOne('rec-pcm', path)
+
+      await runQueueUntil(() => {
+        expect(mockGeminiTranscribeCall).toHaveBeenCalled()
+      })
+
+      expect(mockUpdateRecordingStatus).not.toHaveBeenCalledWith('rec-pcm', 'no_speech')
+    })
+  })
+
   describe('queueTranscriptionIfEnabled (single transcription funnel)', () => {
     it('queues the recording and returns true when autoTranscribe is enabled', async () => {
       mockConfig.transcription.autoTranscribe = true
       // processQueueManually() runs the queue; keep it a no-op by returning no pending items.
       mockGetQueueItems.mockReturnValue([])
+      // A stale/foreign id that resolves to the canonical recording row. Set
+      // here rather than inherited from whichever test ran before.
+      mockGetRecordingById.mockReturnValue({
+        id: 'rec-123',
+        filename: 'test.wav',
+        file_path: '/recordings/test.wav',
+        status: 'complete'
+      })
 
       const { queueTranscriptionIfEnabled } = await import('../transcription')
 

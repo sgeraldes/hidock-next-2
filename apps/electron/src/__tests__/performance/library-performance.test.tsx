@@ -65,6 +65,7 @@ vi.mock('@/store/useLibraryStore', () => ({
       readerSectionModes: {
         player: 'expanded',
         metadata: 'expanded',
+        moments: 'expanded',
         summary: 'expanded',
         transcript: 'expanded'
       },

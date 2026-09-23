@@ -24,6 +24,9 @@ interface ReaderSectionControlsProps {
   onModeChange: (mode: ReaderSectionMode) => void
   onMaximize: () => void
   maximized?: boolean
+  /** The strip is currently stuck to the top of the reader. Presentation only —
+   *  it never implies anything about `mode`, which is the user's own choice. */
+  pinned?: boolean
   className?: string
 }
 
@@ -34,14 +37,20 @@ export function ReaderSectionControls({
   onModeChange,
   onMaximize,
   maximized = false,
+  pinned = false,
   className
 }: ReaderSectionControlsProps) {
   const expanded = mode === 'expanded' || mode === 'docked'
 
   return (
     <div
-      className={cn('flex min-h-9 items-center gap-1.5', className)}
+      // FIXED height, pinned or not (PINNED_STRIP_H, set by the strip around
+      // this row). A sticky element keeps its space in the flow, so a strip that
+      // grew or shrank on pinning would shift everything below it. Constant
+      // height means pinning costs zero layout.
+      className={cn('flex h-full min-h-8 items-center gap-1.5', className)}
       data-testid={`reader-${section}-controls`}
+      data-pinned={pinned ? 'true' : 'false'}
     >
       <button
         type="button"
