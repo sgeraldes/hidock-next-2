@@ -212,3 +212,42 @@ The app is never the one that yields, because the app is the one a person is loo
 
 **In-flight requests are never dropped.** Stepping down drains; a client mid-question gets its
 answer, and the next question goes to the app.
+
+## What was built, and where it departs from the above (2026-09-22, night)
+
+Building it turned up a fact that changed the shape. The IPC handlers the old
+bridge reached through `window.electronAPI` do not just read rows: they run
+them through the app's **eligibility gate** — `applyCaptureEligibility`,
+`gateActionables`, `filterEligibleRecordingIds` — which keeps recordings the
+owner marked personal, deleted or value-excluded, and everything derived from
+them, away from assistants. A separate `packages/brain-queries` with its own SQL
+would have been a second copy of a privacy rule, and a second copy drifts.
+
+So the headless brain is **the app's own binary**, launched as
+`HiDock Next.exe --brain-only`, instead of a separate `apps/brain` service:
+
+| Planned | Built | Why |
+|---|---|---|
+| `apps/brain`, a separate Node service | `--brain-only` mode of the app (`brain-host.ts`) | same code, same gate, nothing to keep in sync |
+| `packages/brain-queries` | `services/brain-queries.ts`, calling the gate and mappers moved to `services/capture-read-model.ts` and `services/actionable-read-model.ts` | the gate had lived as private functions in two IPC handler files; moved unchanged so both callers share it |
+| `packages/local-service` shared with model-host | the token compare and Host check live in `brain-server.ts` | model-host is a separately installed product with its own pairing flow and its own installer; sharing ~30 lines would have meant vendoring a workspace package into that installer |
+| pairing code | token written to the lock file | the only clients are processes of the same Windows account, so reading the lock file is already the proof of identity |
+
+**Measured.** The headless brain runs in 194 MB (main 108, GPU 45, utility 41),
+and the GPU process is now switched off in that mode. The full app runs in about
+1.7 GB. Against the owner's real database, read-only, with the app open:
+answers came back for pending actionables (86), meetings (37), a meeting's
+recordings with coverage ranking, and a transcript; `recording-now` answered 503
+because the device state lives in the app; a second `--brain-only` saw the first
+and exited 0; after 90 s idle (`HIDOCK_BRAIN_IDLE_MS`) it logged
+`{"event":"stopped","reason":"idle"}`, removed the lock and exited 0.
+
+**Privacy, measured.** Two recordings in the owner's library are soft-deleted
+and linked to meetings. Through the brain, both transcripts return `null`, and
+the meeting that has two other recordings returns those two and not the deleted
+one. The old bridge's callers used `recordings.getForMeeting`, which gates
+nothing because it serves the owner's own meeting page; its brain counterpart
+gates, and the owner's page is unchanged.
+
+**Not served.** `raw` is gone, by design. `recording-now` needs the app open.
+Semantic search and RAG stay in the app, as stated above.
