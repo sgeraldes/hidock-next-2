@@ -13,7 +13,8 @@
  * to newest, colour-coded entries, Clear).
  */
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { Activity, Terminal, X, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -105,9 +106,14 @@ function ActivityLogOverlay({ open, onClose, entries, onClear }: ActivityLogOver
 
   if (!open) return null
 
-  return (
+  // Rendered into document.body, not where the button sits. The button lives in
+  // the titlebar, which is a window-drag region, and a fixed overlay inside it
+  // inherited `-webkit-app-region: drag`: the whole window became a drag handle
+  // and Windows swallowed every click on the log, its Close button and Clear.
+  // Escape still worked because keys never go through the drag region.
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-6"
+      className="titlebar-no-drag fixed inset-0 z-50 flex items-center justify-center p-6"
       role="dialog"
       aria-modal="true"
       aria-label="Activity log"
@@ -182,7 +188,8 @@ function ActivityLogOverlay({ open, onClose, entries, onClear }: ActivityLogOver
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
 
