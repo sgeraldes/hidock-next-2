@@ -27,9 +27,10 @@ Four separate reasons, each verified on 2026-09-22.
    JavaScript in the renderer, accepts any process on the machine, and lights a red security banner
    in the app. It is opened by `ENABLE_REMOTE_DEBUGGING`, a **user-wide** environment variable, so
    it applies to every Electron program the owner runs, not just this one.
-3. **Nothing stops a second copy.** The packaged app holds a single-instance lock, so a second
-   packaged copy only focuses the first. A `npm run dev` instance is a different matter: it uses its
-   own profile, `is.dev` turns CDP on unconditionally, and each one loads its own vector store
+3. **Nothing stopped a second copy** (fixed 24-sep-2026: one HiDock per OS user now, whatever the
+   profile; see `apps/electron/CONTRIBUTING.md`). The packaged app held a single-instance lock, so a
+   second packaged copy only focused the first. A `npm run dev` instance was a different matter: it
+   used its own profile, `is.dev` turns CDP on unconditionally, and each one loads its own vector store
    (~1.3 GB, and up to ~4 GB more if the local embedder wakes). That is the memory the owner
    describes: sessions starting their own.
 4. **The contract lives in one repo.** The bridge is a script in `dfx5-sdm-ops`, and the way in is

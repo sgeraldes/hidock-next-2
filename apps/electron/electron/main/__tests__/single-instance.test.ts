@@ -2,6 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { app } from 'electron'
 import { acquireSingleInstanceLock } from '../single-instance'
 
+// The lock folder is created before the lock is taken; nothing is written in tests.
+const mkdirSpy = vi.hoisted(() => vi.fn())
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('fs')>()
+  return { ...actual, mkdirSync: mkdirSpy, default: { ...actual, mkdirSync: mkdirSpy } }
+})
+
 // Mock electron. `app` is an event emitter + lock API; we capture registered
 // handlers so we can invoke the `second-instance` callback directly.
 vi.mock('electron', () => {
@@ -10,6 +17,14 @@ vi.mock('electron', () => {
     app: {
       requestSingleInstanceLock: vi.fn(),
       quit: vi.fn(),
+      // userData starts as the profile; setPath records every change.
+      __paths: { userData: 'C:/profiles/benchmark', appData: 'C:/Users/me/AppData/Roaming' } as Record<string, string>,
+      getPath: vi.fn(function (this: unknown, name: string) {
+        return (app as unknown as { __paths: Record<string, string> }).__paths[name]
+      }),
+      setPath: vi.fn((name: string, value: string) => {
+        ;(app as unknown as { __paths: Record<string, string> }).__paths[name] = value
+      }),
       on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
         ;(handlers[event] ??= []).push(cb)
       }),
@@ -134,5 +149,31 @@ describe('acquireSingleInstanceLock', () => {
     acquireSingleInstanceLock({ getMainWindow: () => null })
 
     expect(() => mockedApp.__emit('second-instance')).not.toThrow()
+  })
+
+  it('takes one lock for every profile, and puts the profile back', () => {
+    const paths = (app as unknown as { __paths: Record<string, string> }).__paths
+    paths.userData = 'C:/profiles/benchmark'
+    let userDataWhenRequested = ''
+    mockedApp.requestSingleInstanceLock.mockImplementation(() => {
+      userDataWhenRequested = paths.userData
+      return true
+    })
+
+    acquireSingleInstanceLock({ getMainWindow: () => null })
+
+    expect(userDataWhenRequested.split('\\').join('/')).toBe('C:/Users/me/AppData/Roaming/HiDock Next/instance-lock')
+    expect(paths.userData).toBe('C:/profiles/benchmark')
+    expect(mkdirSpy.mock.calls[0][0]).toBe(userDataWhenRequested)
+  })
+
+  it('puts the profile back even when the lock request throws', () => {
+    const paths = (app as unknown as { __paths: Record<string, string> }).__paths
+    paths.userData = 'C:/profiles/dev'
+    mockedApp.requestSingleInstanceLock.mockImplementation(() => {
+      throw new Error('boom')
+    })
+    expect(() => acquireSingleInstanceLock({ getMainWindow: () => null })).toThrow('boom')
+    expect(paths.userData).toBe('C:/profiles/dev')
   })
 })
