@@ -732,11 +732,23 @@ function spawnWorker(
     // Stopping waits for the whole tree to exit before the promise settles, so the
     // voice slot is not released while this worker (or its FFmpeg) still runs.
     let stopping: Promise<void> | null = null
+    // The worker's own exit, whether taskkill worked or the fallback kill did.
+    const exited = new Promise<void>((resolve) => child.once('close', () => resolve()))
     const stop = (error: Error) => {
       if (stopping) return
       clearTimeout(timeout)
       clearInterval(cancellation)
-      stopping = killTree(child).then(() => reject(error))
+      let ceilingTimer: ReturnType<typeof setTimeout> | undefined
+      const ceiling = new Promise<void>((resolve) => {
+        ceilingTimer = setTimeout(() => {
+          console.warn(`[SpeakerLinking] worker ${child.pid} still running 15 s after it was stopped`)
+          resolve()
+        }, 15_000)
+      })
+      stopping = Promise.all([killTree(child), Promise.race([exited, ceiling])]).then(() => {
+        clearTimeout(ceilingTimer)
+        reject(error)
+      })
     }
     const timeout = setTimeout(() => {
       // A timeout means the worker could not serve THIS recording in budget, not that the
