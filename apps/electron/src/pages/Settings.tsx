@@ -31,6 +31,7 @@ import { ConnectorsSettings } from '@/components/settings/ConnectorsSettings'
 import { AIBrainsSettings } from '@/components/settings/AIBrainsSettings'
 import { FeaturesSettings } from '@/components/settings/FeaturesSettings'
 import { ModelHostSettings } from '@/components/settings/ModelHostSettings'
+import { SpeakerSetupPanel } from '@/components/settings/SpeakerSetupPanel'
 import { toast } from '@/components/ui/toaster'
 import { LEGACY_GRAPH_DISCLOSURE } from '@/features/library/utils/deletionCopy'
 import type { StorageInfo, AppConfig } from '@/types'
@@ -1340,6 +1341,18 @@ export function Settings() {
                 <Save className="h-4 w-4 mr-2" aria-hidden="true" />
                 {isTranscriptionDirty ? 'Save' : 'Saved'}
               </Button>
+            </CardContent>
+          </Card>
+
+          <Card data-testid="speakers-and-voices">
+            <CardHeader>
+              <CardTitle>Speakers &amp; voices</CardTitle>
+              <CardDescription>
+                How HiDock separates speakers and recognizes known voices on this computer.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <SpeakerSetupPanel />
             </CardContent>
           </Card>
 

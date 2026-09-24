@@ -158,6 +158,7 @@ import {
   SpeakerLinkingUnavailableError,
   type SpeakerLinkingResult
 } from './speaker-linking'
+import { CANONICAL_VOICE_MODEL } from './speaker-engines'
 
 let mainWindow: BrowserWindow | null = null
 let isProcessing = false
@@ -2115,8 +2116,8 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     recordingId,
     stage: 'diarization',
     provider: 'pyannote',
-    tool: 'community-1',
-    model: config.transcription.speakerLinkingModel,
+    tool: 'pyannote',
+    model: CANONICAL_VOICE_MODEL,
     execution: 'local',
     parentRunIds: [vadRun.id]
   })
@@ -2154,7 +2155,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     }
     speakerLinking = {
       available: false,
-      model: config.transcription.speakerLinkingModel,
+      model: CANONICAL_VOICE_MODEL,
       modelVersion: null,
       device: null,
       segments: [],

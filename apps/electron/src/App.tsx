@@ -12,6 +12,7 @@ import { NavigationLogger, initInteractionLogger, initErrorLogger, cleanupQAMoni
 import { lazyWithRetry } from '@/lib/lazyWithRetry'
 import { useTheme } from '@/hooks/useTheme'
 import { ClipboardCapture } from '@/hooks/useClipboardCapture'
+import { SpeakerSetupDialog } from '@/components/settings/SpeakerSetupDialog'
 import { persistRoute, getInitialRoute } from '@/lib/routePersistence'
 
 // Lazy load all page components for code splitting
@@ -153,6 +154,7 @@ function App(): React.ReactElement {
   return (
     <ToastProvider>
       <ClipboardCapture />
+      <SpeakerSetupDialog />
       <Layout>
         <NavigationLogger />
         <RoutePersistence />

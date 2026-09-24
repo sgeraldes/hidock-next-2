@@ -141,6 +141,15 @@ export interface AppConfig {
     /** Token this machine got when it paired with that host. */
     modelHostToken?: string
     /**
+     * Which engine does voice recognition (see speaker-engines.ts). 'auto' keeps
+     * the behaviour from before 24-sep-2026: the Model Host when paired, else here.
+     */
+    speakerEngine?: 'auto' | 'pyannote-local' | 'onnx-local' | 'signatures-from-turns' | 'model-host' | 'pyannoteai' | 'off'
+    /** GPU fingerprint when the owner last confirmed the Speaker setup; a change reopens it. */
+    speakerSetupFingerprint?: string
+    /** When the owner last confirmed the Speaker setup (ISO). */
+    speakerSetupAt?: string
+    /**
      * Which realtime channel carries the microphone, for live speaker labels.
      * This one is the user's pin from Settings and it always wins. Absent or
      * null = measure it (see MicChannelIdentifier); 0 or 1 pins it.
@@ -251,7 +260,9 @@ const DEFAULT_CONFIG: AppConfig = {
     speakerLinkingEnabled: true,
     speakerLinkingPythonPath: process.env.SPEAKER_LINKING_PYTHON || (process.platform === 'win32' ? 'py' : 'python3'),
     speakerLinkingWorkerPath: process.env.SPEAKER_LINKING_WORKER || '',
-    speakerLinkingModel: 'pyannote/speaker-diarization-community-1',
+    // Superseded by the pin to the voice library's model (speaker-linking.ts
+    // pinnedVoiceModel); kept for configs that still carry it.
+    speakerLinkingModel: 'pyannote/speaker-diarization-3.1',
     speakerLinkingFallbackModel: 'pyannote/speaker-diarization-3.1',
     // Conservative defaults: a match must be both strong and clearly better
     // than the runner-up. Uncertain voices remain anonymous.
@@ -264,6 +275,9 @@ const DEFAULT_CONFIG: AppConfig = {
     speakerLinkingCpuPercent: 40,
     modelHostUrl: '',
     modelHostToken: '',
+    speakerEngine: 'auto',
+    speakerSetupFingerprint: '',
+    speakerSetupAt: '',
     vibevoiceModelId: process.env.VIBEVOICE_MODEL_ID || 'microsoft/VibeVoice-ASR',
     vibevoiceDevice: process.env.ASR_DEVICE || 'cuda:0',
     vibevoiceAttn: process.env.VIBEVOICE_ATTN || 'sdpa', // VibeVoice-ASR supports neither flash_attention_2 (not built on Windows) nor flex_attention (unsupported arch); both silently fall back to sdpa, so use it directly

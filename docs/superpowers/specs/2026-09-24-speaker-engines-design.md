@@ -215,8 +215,12 @@ compared with the baseline (`scripts/perf/compare.py`).
 
 1. **Engine seam, hardware profiles, Speaker setup, red warning, model pin.** Engine interface around
    the two existing engines (`pyannote-local`, `model-host`) plus `off`; fingerprint; dialog; Settings
-   panel; the voice model pinned to the library's cluster space (local and host); queue ordering and
-   stage display.
+   panel; the voice model pinned to the library's cluster space (local and host: the client sends
+   `model=` on every job, the host runs only that model from an allow-list, and a host from before
+   pinning that answers in another model is ignored in favour of this computer); pyannote 3.1 as the
+   default everywhere, including the Model Host installer.
+1b. **Long recordings stop blocking short ones.** Queue ordering and a lane for short recordings
+   while a long one runs; stage and estimate in the Library. Its own PR, right after phase 1.
 2. **Canonical voice IDs, model transfer, `onnx-local` and `signatures-from-turns`.** The
    `canonical_voice_id` migration and model tag; turn sampling shared by the transfer and by
    `signatures-from-turns`; sherpa-onnx with DirectML and CPU; the compatibility check; transfer with
@@ -225,7 +229,9 @@ compared with the baseline (`scripts/perf/compare.py`).
 3. **Provider registry and online transcribers.** OpenAI, AssemblyAI, Meta Muse, pyannoteAI; the
    existing Gemini moved into the registry; encrypted keys; chunk relabelling by voice.
 4. **`pyannoteai` engine and voiceprints.** Separate voiceprint table, identify on each recording.
-5. **Model Host on the RTX 4090.** Install, pair and validate against the same benchmark.
+5. **Model Host on the RTX 4090.** Rebuild the installer from phase 1 code (the 0.1.0 build still
+   defaults to community-1 and ignores `model=`), install, pair and validate against the same
+   benchmark.
 6. **Diarization benchmark on the owner's recordings.** 5 to 10 recordings with known speakers;
    speaker-attribution error, cost and time per engine and provider; the recommended defaults follow
    the numbers.

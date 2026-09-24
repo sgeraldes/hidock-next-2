@@ -161,7 +161,12 @@ export async function pairWithModelHost(
 export async function diarizeOnModelHost(
   audioPath: string,
   settings: ModelHostSettings,
-  options: { timeoutMs: number; shouldContinue?: () => boolean },
+  options: {
+    timeoutMs: number
+    shouldContinue?: () => boolean
+    /** The voice model the library needs; the host runs this one, with no fallback. */
+    model?: string
+  },
   fetchFn: typeof fetch = fetch
 ): Promise<AcousticWorkerResult> {
   const base = normalizeBase(settings.url)
@@ -194,7 +199,8 @@ export async function diarizeOnModelHost(
 
   try {
     const response = await fetchFn(
-      `${base}/jobs/diarize?ext=${encodeURIComponent(extname(audioPath) || '.wav')}`,
+      `${base}/jobs/diarize?ext=${encodeURIComponent(extname(audioPath) || '.wav')}` +
+        (options.model ? `&model=${encodeURIComponent(options.model)}` : ''),
       {
         method: 'POST',
         headers: {

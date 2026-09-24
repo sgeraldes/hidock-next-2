@@ -78,6 +78,15 @@ a filename and the body is whatever the caller sent, so an unchecked value is an
 arbitrary file write, and the job's own cleanup would not remove the result
 because it would land outside the temp directory that gets deleted.
 
+The `model` query parameter pins the voice model. The client sends the model its
+voice library was built with (`pyannote/speaker-diarization-3.1` today), and the
+host runs that model alone, with no fallback: an answer from another model would
+land in a different embedding space and stop matching every known voice. Only
+the models in `PINNABLE_MODELS` (`src/server.mjs`) are accepted; anything else
+gets 400 before the lane is taken, so a paired client cannot make the host
+download an arbitrary repository. Without the parameter the host uses its
+configured model, which defaults to 3.1.
+
 One heavy job at a time. The lane is taken in the same tick as the admission
 check, before the body is read, so two clients uploading at once cannot both be
 admitted; the second gets 429 and goes local rather than queueing behind
