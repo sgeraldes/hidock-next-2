@@ -685,8 +685,21 @@ function runWorker(
   audioDurationSeconds?: number | null,
   engineArgs: string[] = []
 ): Promise<AcousticWorkerResult> {
+  const stuckError = () =>
+    new SpeakerLinkingUnavailableError('a stopped voice worker has not exited yet; continuing without voices')
+  if (stuckWorkers > 0) return Promise.reject(stuckError())
   return new Promise((resolve, reject) => {
-    void inVoiceSlot(async () => {
+    let abandoned = false
+    // If a worker gets stuck while this job waits for the slot, this job gives up
+    // its voice step at once instead of waiting behind a process that may never end.
+    const bail = () => {
+      abandoned = true
+      reject(stuckError())
+    }
+    onWorkerStuck.add(bail)
+    inVoiceSlot(async () => {
+      onWorkerStuck.delete(bail)
+      if (abandoned) return
       const hold: WorkerHold = {}
       const result = spawnWorker(audioPath, shouldContinue, audioDurationSeconds, engineArgs, hold)
       result.then(resolve, reject)
@@ -695,7 +708,23 @@ function runWorker(
       // give up on the job after its 15 s ceiling (the recording then goes on
       // without voices), but the next voice job still waits for this process.
       if (hold.exited) await hold.exited
+    }).catch((error: unknown) => {
+      onWorkerStuck.delete(bail)
+      reject(error)
     })
+  })
+}
+
+/** Workers stopped but not yet exited: while any exists, voice jobs are skipped, not queued. */
+let stuckWorkers = 0
+const onWorkerStuck = new Set<() => void>()
+
+function markWorkerStuck(exited: Promise<void>): void {
+  stuckWorkers += 1
+  for (const bail of [...onWorkerStuck]) bail()
+  onWorkerStuck.clear()
+  void exited.then(() => {
+    stuckWorkers -= 1
   })
 }
 
@@ -763,6 +792,7 @@ function spawnWorker(
       const ceiling = new Promise<void>((resolve) => {
         ceilingTimer = setTimeout(() => {
           console.warn(`[SpeakerLinking] worker ${child.pid} still running 15 s after it was stopped; killing again`)
+          markWorkerStuck(exited)
           void killTree(child)
           try {
             if (child.pid) process.kill(child.pid)
