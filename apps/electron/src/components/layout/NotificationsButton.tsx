@@ -26,6 +26,7 @@ import { useUIStore } from '@/store/ui/useUIStore'
 import { useOperations } from '@/hooks/useOperations'
 import { isRetryableDownloadItem } from '@/hooks/useDownloadOrchestrator'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
+import { isFeatureOffThisRun } from '@/lib/bootFeatures'
 
 /** Strip the recording extension for a cleaner display name (keeps the date stamp). */
 function displayName(filename: string): string {
@@ -82,7 +83,7 @@ export function NotificationsButton() {
   // otherwise the two badges disagree (for example, 3 versus 4 failures).
   useEffect(() => {
     const api = window.electronAPI?.downloadService
-    if (!api) return
+    if (!api || isFeatureOffThisRun('device-sync')) return
     const project = (state: { queue: Array<{ filename: string; fileSize: number; progress: number; status: DownloadQueueEntry['status']; error?: string; cancelReason?: 'user' | 'interrupted' }> }) => {
       setPersistedDownloads(state.queue.map((item) => ({
         filename: item.filename,
