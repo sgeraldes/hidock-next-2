@@ -9,7 +9,7 @@ import { getDatabasePath } from './file-storage'
 // Re-exported so consumers (e.g. vector-store's binary cache) can locate the
 // DB file without pulling the file-storage module graph into their tests.
 export { getDatabasePath }
-import { DatabaseEngine, getTableColumns, type BootProgress, type SqlJsDatabase } from '@hidock/database'
+import { DatabaseEngine, getTableColumns, type BootProgress, type ExternalBackup, type SqlJsDatabase } from '@hidock/database'
 import { normalizeName, isGenericSpeakerLabel, detectAmbiguousName } from './entity-normalize'
 import { getEventBus } from './event-bus'
 import { isCancelledMeetingSubject, scoreMeetingCandidates } from './recording-match-scoring'
@@ -3966,23 +3966,28 @@ const engine = new DatabaseEngine({
 
 /**
  * The hourly backups written by `scripts/backup-db.py` (Windows task
- * `HiDock-DB-Backup`): `<data root>/backups/hidock-YYYYMMDD-HHMMSS.db`, next to
- * the `data` folder that holds the database. The stamp is when that backup
- * started, local time. Only final names count; a `.tmp` is a copy in progress.
- * Newest first.
+ * `HiDock-DB-Backup`) in `<data root>/backups`, next to the `data` folder, that
+ * are exact copies: each has a `<name>.source.json` recording the database's
+ * modification time (ns) and size, unchanged from the start to the end of the
+ * copy with an empty WAL. A backup without that record is never offered.
  */
-export function listHourlyBackups(): Array<{ path: string; startedAtMs: number }> {
+export function listHourlyBackups(): ExternalBackup[] {
   const dir = join(dirname(dirname(getDatabasePath())), 'backups')
   if (!existsSync(dir)) return []
-  const out: Array<{ path: string; startedAtMs: number }> = []
+  const out: ExternalBackup[] = []
   for (const name of readdirSync(dir)) {
-    const m = /^hidock-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})\.db$/.exec(name)
-    if (!m) continue
-    const [, y, mo, d, h, mi, s] = m
-    const startedAtMs = new Date(+y, +mo - 1, +d, +h, +mi, +s).getTime()
-    out.push({ path: join(dir, name), startedAtMs })
+    if (!/^hidock-\d{8}-\d{6}\.db$/.test(name)) continue
+    const sidecar = join(dir, `${name}.source.json`)
+    if (!existsSync(sidecar)) continue
+    try {
+      const s = JSON.parse(readFileSync(sidecar, 'utf8')) as { exact?: boolean; db_mtime_ns?: string; db_size?: number }
+      if (s.exact !== true || typeof s.db_mtime_ns !== 'string' || typeof s.db_size !== 'number') continue
+      out.push({ path: join(dir, name), sourceMtimeNs: BigInt(s.db_mtime_ns), sourceSize: s.db_size })
+    } catch {
+      /* an unreadable record is no proof */
+    }
   }
-  return out.sort((a, b) => b.startedAtMs - a.startedAtMs)
+  return out
 }
 
 /**

@@ -79,6 +79,19 @@ export interface BetterSqlite3Database {
   readonly name: string
 }
 
+/**
+ * A complete backup made by something else, with the exact state of the source
+ * file it copied: modification time in nanoseconds and size, recorded before
+ * and after the copy and found unchanged, with an empty WAL. Equality with the
+ * current file is the proof; no clock is compared, so neither a clock change nor
+ * daylight saving can make an older copy look current.
+ */
+export interface ExternalBackup {
+  path: string
+  sourceMtimeNs: bigint
+  sourceSize: number
+}
+
 /** What the engine reports while it opens the database, for a splash screen. */
 export type BootProgress =
   | { phase: 'backup'; copiedBytes: number; totalBytes: number }
@@ -508,7 +521,7 @@ export interface DatabaseEngineConfig {
    * the whole file again: on 24-sep that copy held the splash for 3.5 minutes
    * on a USB disk while an identical 1-hour-old backup sat next to it.
    */
-  externalBackups?: () => Array<{ path: string; startedAtMs: number }>
+  externalBackups?: () => Array<ExternalBackup>
   /**
    * When true, a routine daily backup runs asynchronously after schema setup so
    * a multi-gigabyte copy does not hold the application splash for minutes.
@@ -540,6 +553,9 @@ export interface DatabaseEngineConfig {
 }
 
 const BYTES_PER_MB = 1024 * 1024
+
+/** The database file as it was before this boot opened it. */
+type BeforeOpen = { mtimeNs: bigint; size: number; walBytes: number }
 
 /* -------------------------------------------------------------------------- */
 /*  Engine.                                                                     */
@@ -582,20 +598,18 @@ export class DatabaseEngine {
    * non-empty WAL means commits the main file does not show yet). Measured
    * before this boot opened the file, so the open itself cannot count as a change.
    */
-  private reusableExternalBackup(before: { mtimeMs: number; walBytes: number } | null): string | null {
+  private reusableExternalBackup(before: BeforeOpen | null): string | null {
     if (!before || before.walBytes > 0 || !this.config.externalBackups) return null
-    let candidates: Array<{ path: string; startedAtMs: number }>
+    let candidates: ExternalBackup[]
     try {
       candidates = this.config.externalBackups()
     } catch {
       return null
     }
-    const size = this.fileSize(this.dbPath)
     for (const c of candidates) {
-      if (!(c.startedAtMs > before.mtimeMs)) continue
-      // Same size is cheap evidence it is a full copy of this file, not a
-      // truncated or unrelated one.
-      if (!existsSync(c.path) || this.fileSize(c.path) !== size) continue
+      if (c.sourceMtimeNs !== before.mtimeNs || c.sourceSize !== before.size) continue
+      // The copy itself must be whole: a truncated file is never the snapshot.
+      if (!existsSync(c.path) || this.fileSize(c.path) !== before.size) continue
       return c.path
     }
     return null
@@ -604,7 +618,7 @@ export class DatabaseEngine {
   private async backupOnBoot(
     failClosed = false,
     onProgress?: (p: BootProgress) => void,
-    before: { mtimeMs: number; walBytes: number } | null = null
+    before: BeforeOpen | null = null
   ): Promise<void> {
     const cfg = this.config.backupOnBoot
     if (!cfg || cfg.keep <= 0) return
@@ -615,20 +629,23 @@ export class DatabaseEngine {
       const prefix = `${base}.bak-`
       const day = new Date().toISOString().slice(0, 10)
       const bak = join(dir, `${prefix}${day}`)
+      let reused = false
       const reusable = !existsSync(bak) && failClosed ? this.reusableExternalBackup(before) : null
       if (reusable) {
-        // A hard link gives the dated name (so today's routine backup is not
-        // repeated and the prune below counts it) without copying a byte. On a
-        // disk without hard links the external backup still is the snapshot;
-        // the routine backup then runs later, after the window paints.
+        // A hard link gives the dated name without copying a byte, and it keeps
+        // the snapshot alive when the hourly rotation deletes its own name. A
+        // disk without hard links (exFAT) gets the full copy below instead:
+        // the snapshot must not depend on a file another program rotates.
         try {
           linkSync(reusable, bak)
-        } catch {
-          /* the external file alone is the pre-migration snapshot */
+          reused = true
+          onProgress?.({ phase: 'backup-reused', path: reusable })
+          console.log(`[Database] Pre-migration backup: linked ${reusable} (identical to the database)`)
+        } catch (e) {
+          console.warn(`[Database] Could not link ${reusable} (${(e as Error).message}); copying instead`)
         }
-        onProgress?.({ phase: 'backup-reused', path: reusable })
-        console.log(`[Database] Pre-migration backup: reusing ${reusable} (database unchanged since it started)`)
-      } else if (!existsSync(bak)) {
+      }
+      if (!reused && !existsSync(bak)) {
         // SQLite's online backup API runs incrementally without blocking the
         // Node event loop and includes committed WAL pages. A raw copyFileSync
         // of the 2.79 GB main file blocked Electron startup for ~153 seconds and
@@ -830,12 +847,14 @@ export class DatabaseEngine {
     const hadExistingFile = existsSync(this.dbPath)
     const sizeBefore = hadExistingFile ? this.fileSize(this.dbPath) : 0
     // Before opening: the open itself writes the -shm and may touch the WAL.
-    let beforeOpen: { mtimeMs: number; walBytes: number } | null = null
+    let beforeOpen: BeforeOpen | null = null
     if (hadExistingFile) {
       try {
         const walPath = `${this.dbPath}-wal`
+        const st = statSync(this.dbPath, { bigint: true })
         beforeOpen = {
-          mtimeMs: statSync(this.dbPath).mtimeMs,
+          mtimeNs: st.mtimeNs,
+          size: Number(st.size),
           walBytes: existsSync(walPath) ? statSync(walPath).size : 0,
         }
       } catch {

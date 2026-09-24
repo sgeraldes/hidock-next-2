@@ -94,7 +94,7 @@ worst stall 0.71 s, peak main 1.65 GiB (`artifacts/compare-20260924-main/compare
 | Item | Next step | Date |
 |---|---|---|
 | `getTranscriptsByRecordingIds` loads every transcript row at Library mount | Load only the fields the list needs | 25-sep |
-| Window at 6 s on a launch that migrates (backup before migration) | Back up after the window shows, or in the background | 25-sep |
+| Window at 6 s on a launch that migrates (backup before migration) | Done 24-sep (#41): the pre-migration backup stays blocking and fail-closed by design, but links the latest hourly backup when it is an exact copy of the database (same modification time to the nanosecond and size, empty WAL), and the splash shows the copy's progress otherwise. A schema-current launch already backs up after paint | done |
 | Database open 0.46-0.58 s; semantic index restore 0.57 s | Profile and split | 26-sep |
 | The 1 GB memory target; vector store out of the main process (design B, already approved by Sebastián) | Build design B, int8 vectors | 28-sep |
 | Profile the app in use (downloading, transcribing, scrolling the Library), not only startup | Extend the harness | 28-sep |

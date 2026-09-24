@@ -250,7 +250,11 @@ describe('rotating on-boot backup', () => {
       e.closeDatabase()
       return path
     }
-    function v2Engine(path: string, externalBackups?: () => Array<{ path: string; startedAtMs: number }>) {
+    const stateOf = (p: string) => {
+      const st = statSync(p, { bigint: true })
+      return { sourceMtimeNs: st.mtimeNs, sourceSize: Number(st.size) }
+    }
+    function v2Engine(path: string, externalBackups?: () => Array<{ path: string; sourceMtimeNs: bigint; sourceSize: number }>) {
       return new DatabaseEngine({
         betterSqlite3: Database,
         dbPathProvider: () => path,
@@ -283,13 +287,14 @@ describe('rotating on-boot backup', () => {
       expect(todays(path)).toHaveLength(1)
     })
 
-    it('reuses an external backup that started after the last write, without copying', async () => {
+    it('reuses an external backup made from exactly this file, without copying', async () => {
       const path = await v1File('backup-reuse')
       const external = `${path}.hourly`
       extra.push(external)
       copyFileSync(path, external)
       const seen: string[] = []
-      const e = v2Engine(path, () => [{ path: external, startedAtMs: statSync(path).mtimeMs + 1000 }])
+      const source = stateOf(path)
+      const e = v2Engine(path, () => [{ path: external, ...source }])
       await e.initialize({ onProgress: (p) => seen.push(p.phase) })
       e.closeDatabase()
       expect(seen).toEqual(['backup-reused', 'migrating'])
@@ -298,13 +303,14 @@ describe('rotating on-boot backup', () => {
       expect(statSync(todays(path)[0]).size).toBe(statSync(external).size)
     })
 
-    it('copies anyway when the external backup is older than the last write', async () => {
+    it('copies anyway when the file changed after that backup (a different modification time)', async () => {
       const path = await v1File('backup-stale')
       const external = `${path}.hourly`
       extra.push(external)
       copyFileSync(path, external)
       const seen: string[] = []
-      const e = v2Engine(path, () => [{ path: external, startedAtMs: statSync(path).mtimeMs - 60_000 }])
+      const source = stateOf(path)
+      const e = v2Engine(path, () => [{ path: external, ...source, sourceMtimeNs: source.sourceMtimeNs - 1n }])
       await e.initialize({ onProgress: (p) => seen.push(p.phase) })
       e.closeDatabase()
       expect(seen[0]).toBe('backup')
@@ -317,7 +323,7 @@ describe('rotating on-boot backup', () => {
       extra.push(external)
       writeFileSync(external, 'truncated')
       const seen: string[] = []
-      const e = v2Engine(path, () => [{ path: external, startedAtMs: Date.now() + 1000 }])
+      const e = v2Engine(path, () => [{ path: external, ...stateOf(path) }])
       await e.initialize({ onProgress: (p) => seen.push(p.phase) })
       e.closeDatabase()
       expect(seen).not.toContain('backup-reused')

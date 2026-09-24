@@ -896,7 +896,10 @@ interface TranscriptAnalysis {
 /**
  * Give every turn an end. The engine's own end wins when it is after the
  * start (word timestamps give one). Otherwise the turn runs to the next
- * turn's start, and the last turn to the end of the recording.
+ * turn's start. The last turn, with neither, ends where its own text would at
+ * a normal speaking rate (2.5 words a second), never past the recording: running
+ * it to the end of the file would count trailing silence as speech in the
+ * coverage check.
  *
  * This used to overwrite every end with the next start and the last one with
  * its own start. A zero-length turn is invalid to the timestamp check, so a
@@ -904,8 +907,10 @@ interface TranscriptAnalysis {
  * have invalid timestamps" on eight short clips on 22-sep) and every last
  * turn in the library was stored with no length.
  */
+export const SPOKEN_WORDS_PER_SECOND = 2.5
+
 export function closeTurnEnds(
-  segments: Array<{ start: number; end: number }>,
+  segments: Array<{ start: number; end: number; text?: string }>,
   durationSeconds?: number
 ): void {
   for (let i = 0; i < segments.length; i++) {
@@ -914,13 +919,14 @@ export function closeTurnEnds(
     const next = segments[i + 1]?.start
     if (next !== undefined && Number.isFinite(next) && next > s.start) {
       s.end = next
-    } else if (
-      next === undefined &&
-      typeof durationSeconds === 'number' &&
-      Number.isFinite(durationSeconds) &&
-      durationSeconds > s.start
-    ) {
-      s.end = durationSeconds
+    } else if (next === undefined && s.text && Number.isFinite(s.start)) {
+      const words = s.text.trim().split(/\s+/).filter(Boolean).length
+      const spoken = s.start + Math.max(1, words / SPOKEN_WORDS_PER_SECOND)
+      const limit =
+        typeof durationSeconds === 'number' && Number.isFinite(durationSeconds) && durationSeconds > s.start
+          ? durationSeconds
+          : Infinity
+      s.end = Math.min(spoken, limit)
     } else {
       // Nothing honest to close it with: the timestamp check reports it.
       s.end = s.start
