@@ -795,6 +795,8 @@ export interface ElectronAPI {
   speakers: {
     getSetup: (request?: { refresh?: boolean }) => Promise<Result<SpeakerSetup>>
     applySetup: (request: { engine: SpeakerEngineId; fingerprint: string; confirmOff?: boolean }) => Promise<Result<SpeakerSetup>>
+    /** "Decide later": keep the setup closed on this hardware. */
+    dismissSetup: () => Promise<Result<null>>
   }
 
   // Knowledge Captures
@@ -1729,7 +1731,8 @@ const electronAPI: ElectronAPI = {
 
   speakers: {
     getSetup: (request) => callIPC('speakers:getSetup', request),
-    applySetup: (request) => callIPC('speakers:applySetup', request)
+    applySetup: (request) => callIPC('speakers:applySetup', request),
+    dismissSetup: () => callIPC('speakers:dismissSetup')
   },
 
   knowledge: {

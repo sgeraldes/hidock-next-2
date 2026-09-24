@@ -27,16 +27,23 @@ export interface DetectedHardware {
   gpus: DetectedGpu[]
   cpu: { model: string; logicalCores: number }
   platform: NodeJS.Platform
+  /**
+   * True when the GPU query itself failed (PowerShell missing, WMI error,
+   * timeout), as opposed to answering with no GPUs. An empty list then says
+   * nothing about the machine, and the setup must not ask on it.
+   */
+  detectionFailed?: boolean
 }
 
 export type HardwareProfile = 'nvidia-cuda' | 'gpu-directml' | 'cpu-with-host' | 'cpu-only'
 
-type Exec = (file: string, args: string[], timeoutMs: number) => Promise<string>
+/** stdout, or null when the command could not run or failed. */
+type Exec = (file: string, args: string[], timeoutMs: number) => Promise<string | null>
 
 const defaultExec: Exec = (file, args, timeoutMs) =>
   new Promise((resolve) => {
     execFile(file, args, { timeout: timeoutMs, windowsHide: true, maxBuffer: 1024 * 1024 }, (error, stdout) =>
-      resolve(error ? '' : String(stdout))
+      resolve(error ? null : String(stdout))
     )
   })
 
@@ -57,13 +64,17 @@ interface WmiAdapter {
   AdapterCompatibility?: string
 }
 
-export function parseWmiAdapters(json: string): Omit<DetectedGpu, 'cuda'>[] {
+/** null when the output is not the JSON the query produces: the query failed. */
+export function parseWmiAdapters(json: string | null): Omit<DetectedGpu, 'cuda'>[] | null {
+  if (json === null) return null
+  // No video controller at all prints nothing.
+  if (!json.trim()) return []
   let rows: WmiAdapter[] = []
   try {
     const parsed = JSON.parse(json) as WmiAdapter | WmiAdapter[]
     rows = Array.isArray(parsed) ? parsed : [parsed]
   } catch {
-    return []
+    return null
   }
   return rows
     .filter((r) => r?.Name && !NOT_A_GPU.test(r.Name))
@@ -71,8 +82,8 @@ export function parseWmiAdapters(json: string): Omit<DetectedGpu, 'cuda'>[] {
 }
 
 /** Names of the GPUs nvidia-smi can drive (CUDA works for these). */
-export function parseNvidiaSmi(csv: string): string[] {
-  return csv
+export function parseNvidiaSmi(csv: string | null): string[] {
+  return (csv ?? '')
     .split(/\r?\n/)
     .map((l) => l.split(',')[0]?.trim())
     .filter((n): n is string => !!n)
@@ -99,7 +110,12 @@ export async function detectHardware(exec: Exec = defaultExec): Promise<Detected
     exec('nvidia-smi', ['--query-gpu=name', '--format=csv,noheader'], 5000),
   ])
   const cudaNames = parseNvidiaSmi(smi)
-  const gpus = parseWmiAdapters(wmi).map((g) => ({
+  const adapters = parseWmiAdapters(wmi)
+  if (adapters === null) {
+    console.warn('[HardwareProfile] The GPU query failed; not treating this as a machine without a GPU.')
+    return { gpus: [], cpu, platform: process.platform, detectionFailed: true }
+  }
+  const gpus = adapters.map((g) => ({
     ...g,
     cuda: g.vendor === 'nvidia' && cudaNames.some((n) => g.name.includes(n) || n.includes(g.name)),
   }))
@@ -185,6 +201,9 @@ export function buildSetupOptions({ hardware, modelHostPaired, measuredLocalRati
 }
 
 export function describeProfile(profile: HardwareProfile, hardware: DetectedHardware): string {
+  if (hardware.detectionFailed) {
+    return 'Could not read the GPUs on this computer. Press "Detect again" to retry.'
+  }
   const gpuNames = hardware.gpus.map((g) => g.name).join(', ')
   switch (profile) {
     case 'nvidia-cuda':

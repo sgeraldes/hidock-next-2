@@ -97,11 +97,12 @@ export interface SpeakerEngineConfig {
 /**
  * The engine that actually runs. `auto` (and any engine not built yet) keeps
  * today's behaviour: the Model Host when one is configured, else this
- * computer. The old switch still decides for `auto`: anything but true means off,
- * exactly as before the setup existed.
+ * computer. The old `speakerLinkingEnabled` switch was the privacy control and
+ * still is, for every engine: anything but true means off. The setup keeps the
+ * two fields in step, so this only matters for a hand-edited config.
  */
 export function resolveSpeakerEngine(config: SpeakerEngineConfig): Exclude<SpeakerEngineId, 'auto'> {
-  if (config.speakerLinkingEnabled !== true && (config.speakerEngine || 'auto') === 'auto') return 'off'
+  if (config.speakerLinkingEnabled !== true) return 'off'
   const chosen = config.speakerEngine
   if (chosen && chosen !== 'auto' && chosen in SPEAKER_ENGINES) {
     const engine = SPEAKER_ENGINES[chosen as Exclude<SpeakerEngineId, 'auto'>]

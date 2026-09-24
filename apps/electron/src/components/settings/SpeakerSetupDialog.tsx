@@ -37,11 +37,18 @@ export function SpeakerSetupDialog(): React.ReactElement | null {
     }
   }, [])
 
+  // "Decide later", Escape or the close button: remember it for this hardware
+  // so the dialog does not open on every launch.
+  const close = (next: boolean) => {
+    setOpen(next)
+    if (!next) void window.electronAPI?.speakers?.dismissSetup?.().catch(() => {})
+  }
+
   if (!setup) return null
 
   const firstTime = !setup.lastConfirmedAt
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={close}>
       <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto" data-testid="speaker-setup-dialog">
         <DialogHeader>
           <DialogTitle>{firstTime ? 'Set up voice recognition' : 'Your hardware changed'}</DialogTitle>
@@ -53,7 +60,7 @@ export function SpeakerSetupDialog(): React.ReactElement | null {
         </DialogHeader>
         <SpeakerSetupPanel initial={setup} onSaved={() => setOpen(false)} />
         <div className="flex justify-end">
-          <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
+          <Button variant="ghost" size="sm" onClick={() => close(false)}>
             Decide later
           </Button>
         </div>

@@ -294,6 +294,9 @@ export interface LibraryVoiceSpace {
   modelVersion: string | null
   clusters: number
   anchored: number
+  /** Voices from other models or versions: kept, but not matched until transferred. */
+  otherModelClusters: number
+  otherModelAnchored: number
 }
 
 /**
@@ -315,7 +318,23 @@ export function libraryVoiceSpace(): LibraryVoiceSpace | null {
       LIMIT 1`
   )
   if (!row) return null
-  return { model: row.model, modelVersion: row.model_version, clusters: row.clusters, anchored: row.anchored ?? 0 }
+  // Voices from any other model or version cannot match new recordings until a
+  // model transfer brings them over (spec: canonical voice IDs). Counted so the
+  // setup can say so instead of losing them silently.
+  const other = queryOne<{ clusters: number; anchored: number }>(
+    `SELECT COUNT(*) AS clusters, SUM(CASE WHEN contact_id IS NOT NULL THEN 1 ELSE 0 END) AS anchored
+       FROM voice_clusters
+      WHERE NOT (model = ? AND COALESCE(model_version, '') = COALESCE(?, ''))`,
+    [row.model, row.model_version]
+  )
+  return {
+    model: row.model,
+    modelVersion: row.model_version,
+    clusters: row.clusters,
+    anchored: row.anchored ?? 0,
+    otherModelClusters: other?.clusters ?? 0,
+    otherModelAnchored: other?.anchored ?? 0
+  }
 }
 
 /**
@@ -673,7 +692,7 @@ export async function runSpeakerLinkingPreflight(
   if (engine === 'off') {
     return {
       available: false,
-      model: CANONICAL_VOICE_MODEL,
+      model: pinnedVoiceModel(),
       modelVersion: null,
       device: null,
       segments: [],

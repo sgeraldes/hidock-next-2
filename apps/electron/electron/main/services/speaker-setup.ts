@@ -17,7 +17,7 @@ import {
   type SpeakerSetupOption,
 } from './hardware-profile'
 import { resolveSpeakerEngine, SPEAKER_ENGINES, type SpeakerEngineId } from './speaker-engines'
-import { libraryVoiceSpace, type LibraryVoiceSpace } from './speaker-linking'
+import { libraryVoiceSpace, pinnedVoiceModel, type LibraryVoiceSpace } from './speaker-linking'
 
 export interface SpeakerSetup {
   hardware: DetectedHardware
@@ -32,6 +32,8 @@ export interface SpeakerSetup {
   needsConfirmation: boolean
   lastConfirmedAt: string | null
   voiceSpace: LibraryVoiceSpace | null
+  /** The GPU query failed; the setup does not open on a guess. */
+  detectionFailed: boolean
 }
 
 let cached: Promise<DetectedHardware> | null = null
@@ -46,14 +48,16 @@ function hardware(refresh = false): Promise<DetectedHardware> {
  * Local pyannote's measured seconds of processing per second of audio, on the
  * device this computer uses now (cuda or cpu), from the last completed runs.
  */
-export function measuredLocalSpeedRatio(device: 'cuda' | 'cpu'): number | null {
+export function measuredLocalSpeedRatio(device: 'cuda' | 'cpu', model: string): number | null {
   const rows = queryAll<{ started_at: string; completed_at: string; duration_seconds: number; quality_json: string | null }>(
     `SELECT p.started_at, p.completed_at, r.duration_seconds, p.quality_json
        FROM processing_runs p JOIN recordings r ON r.id = p.recording_id
       WHERE p.stage = 'diarization' AND p.provider = 'pyannote' AND p.execution = 'local'
         AND p.status IN ('completed', 'degraded') AND p.completed_at IS NOT NULL
+        AND p.model = ?
         AND r.duration_seconds >= 300
-      ORDER BY p.started_at DESC LIMIT 60`
+      ORDER BY p.started_at DESC LIMIT 60`,
+    [model]
   )
   const ratios: number[] = []
   for (const row of rows) {
@@ -82,7 +86,7 @@ export async function getSpeakerSetup(options: { refresh?: boolean } = {}): Prom
   const { profile, options: engineOptions } = buildSetupOptions({
     hardware: detected,
     modelHostPaired,
-    measuredLocalRatio: measuredLocalSpeedRatio(device),
+    measuredLocalRatio: measuredLocalSpeedRatio(device, pinnedVoiceModel()),
   })
   return {
     hardware: detected,
@@ -92,13 +96,30 @@ export async function getSpeakerSetup(options: { refresh?: boolean } = {}): Prom
     options: engineOptions,
     configuredEngine: (config.speakerEngine as SpeakerEngineId) || 'auto',
     effectiveEngine: resolveSpeakerEngine(config),
-    needsConfirmation: config.speakerSetupFingerprint !== fingerprint,
+    // Asks once per hardware: not on a failed GPU query (that is not new
+    // hardware), not on hardware already confirmed, and not on hardware the
+    // owner answered "Decide later" on.
+    needsConfirmation:
+      !detected.detectionFailed &&
+      config.speakerSetupFingerprint !== fingerprint &&
+      config.speakerSetupDismissedFingerprint !== fingerprint,
     lastConfirmedAt: config.speakerSetupAt || null,
     voiceSpace: libraryVoiceSpace(),
+    detectionFailed: !!detected.detectionFailed,
   }
 }
 
 export class SpeakerSetupError extends Error {}
+
+/**
+ * "Decide later": the dialog stays closed on this hardware and opens again only
+ * when a GPU is added or removed. Settings still shows the setup.
+ */
+export async function dismissSpeakerSetup(): Promise<void> {
+  const detected = await hardware()
+  if (detected.detectionFailed) return
+  await updateConfig('transcription', { speakerSetupDismissedFingerprint: gpuFingerprint(detected) })
+}
 
 /** Tests only: forget the detection cached for this session. */
 export function resetSpeakerSetupCache(): void {
@@ -128,11 +149,16 @@ export async function applySpeakerSetup(choice: {
       throw new SpeakerSetupError('Pair a Model Host before choosing it.')
     }
   }
-  // The hardware this process detected, not the one the window showed: a GPU
-  // removed while the dialog was open must still ask again next launch.
-  const fingerprint = gpuFingerprint(await hardware())
+  // The choice was made for the hardware the window showed. If this process
+  // now sees different GPUs, the options may not fit: ask again rather than
+  // save a choice made for hardware that is gone.
+  const detected = await hardware()
+  if (detected.detectionFailed) {
+    throw new SpeakerSetupError('Could not read the GPUs on this computer. Press "Detect again" and choose again.')
+  }
+  const fingerprint = gpuFingerprint(detected)
   if (fingerprint !== choice.fingerprint) {
-    console.warn(`[SpeakerSetup] the hardware changed while the setup was open (${choice.fingerprint} -> ${fingerprint})`)
+    throw new SpeakerSetupError('The GPUs changed while this was open. Check the options again.')
   }
   await updateConfig('transcription', {
     speakerEngine: choice.engine,

@@ -32,6 +32,7 @@ import { AIBrainsSettings } from '@/components/settings/AIBrainsSettings'
 import { FeaturesSettings } from '@/components/settings/FeaturesSettings'
 import { ModelHostSettings } from '@/components/settings/ModelHostSettings'
 import { SpeakerSetupPanel } from '@/components/settings/SpeakerSetupPanel'
+import { useFeatureEnabled } from '@/store/useFeatureStore'
 import { toast } from '@/components/ui/toaster'
 import { LEGACY_GRAPH_DISCLOSURE } from '@/features/library/utils/deletionCopy'
 import type { StorageInfo, AppConfig } from '@/types'
@@ -66,6 +67,8 @@ type SpeakerModelAccess = {
 }
 
 export function Settings() {
+  // Voice recognition is part of transcription; with it off, its channels are closed.
+  const transcriptionEnabled = useFeatureEnabled('transcription')
   // SM-09 fix: Use granular selectors
   const syncCalendar = useAppStore((s) => s.syncCalendar)
   const calendarSyncing = useCalendarSyncing()
@@ -1344,6 +1347,7 @@ export function Settings() {
             </CardContent>
           </Card>
 
+          {transcriptionEnabled && (
           <Card data-testid="speakers-and-voices">
             <CardHeader>
               <CardTitle>Speakers &amp; voices</CardTitle>
@@ -1355,6 +1359,7 @@ export function Settings() {
               <SpeakerSetupPanel />
             </CardContent>
           </Card>
+          )}
 
           <ModelHostSettings />
 

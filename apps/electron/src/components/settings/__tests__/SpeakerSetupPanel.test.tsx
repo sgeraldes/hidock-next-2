@@ -31,11 +31,20 @@ const SETUP = {
   effectiveEngine: 'pyannote-local',
   needsConfirmation: true,
   lastConfirmedAt: null,
-  voiceSpace: { model: 'pyannote/speaker-diarization-3.1', modelVersion: '4.0.7', clusters: 244, anchored: 6 },
+  voiceSpace: {
+    model: 'pyannote/speaker-diarization-3.1',
+    modelVersion: '4.0.7',
+    clusters: 244,
+    anchored: 6,
+    otherModelClusters: 0,
+    otherModelAnchored: 0,
+  },
+  detectionFailed: false,
 } as unknown as SpeakerSetup
 
 const getSetup = vi.fn()
 const applySetup = vi.fn()
+const dismissSetup = vi.fn()
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -44,7 +53,8 @@ beforeEach(() => {
     success: true,
     data: { ...SETUP, needsConfirmation: false, configuredEngine: choice.engine },
   }))
-  global.window.electronAPI = { speakers: { getSetup, applySetup } } as any
+  dismissSetup.mockResolvedValue({ success: true, data: null })
+  global.window.electronAPI = { speakers: { getSetup, applySetup, dismissSetup } } as any
 })
 
 describe('SpeakerSetupPanel', () => {
@@ -79,6 +89,18 @@ describe('SpeakerSetupPanel', () => {
     expect(applySetup.mock.calls[0][0]).toMatchObject({ engine: 'off', confirmOff: true })
   })
 
+  it('keeps voice recognition off for an owner who had it off, instead of preselecting the recommendation', () => {
+    render(<SpeakerSetupPanel initial={{ ...SETUP, effectiveEngine: 'off' } as SpeakerSetup} />)
+    expect((screen.getByDisplayValue('off') as HTMLInputElement).checked).toBe(true)
+    expect((screen.getByDisplayValue('pyannote-local') as HTMLInputElement).checked).toBe(false)
+  })
+
+  it('says how many voices come from another model', () => {
+    const voiceSpace = { ...SETUP.voiceSpace!, otherModelClusters: 12, otherModelAnchored: 2 }
+    render(<SpeakerSetupPanel initial={{ ...SETUP, voiceSpace } as SpeakerSetup} />)
+    expect(screen.getByText(/12 more voices \(2 linked to people\)/)).toBeInTheDocument()
+  })
+
   it('clears the confirmation when the owner picks off again later', async () => {
     render(<SpeakerSetupPanel initial={SETUP} />)
     fireEvent.click(screen.getByDisplayValue('off'))
@@ -99,6 +121,12 @@ describe('SpeakerSetupDialog', () => {
     getSetup.mockResolvedValue({ success: true, data: { ...SETUP, lastConfirmedAt: '2026-09-01T00:00:00Z' } })
     render(<SpeakerSetupDialog />)
     expect(await screen.findByText('Your hardware changed')).toBeInTheDocument()
+  })
+
+  it('remembers "Decide later" for this hardware', async () => {
+    render(<SpeakerSetupDialog />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Decide later' }))
+    await waitFor(() => expect(dismissSetup).toHaveBeenCalledOnce())
   })
 
   it('stays closed on an ordinary launch', async () => {

@@ -149,6 +149,8 @@ export interface AppConfig {
     speakerSetupFingerprint?: string
     /** When the owner last confirmed the Speaker setup (ISO). */
     speakerSetupAt?: string
+    /** GPU fingerprint the owner answered "Decide later" on; the dialog stays closed on it. */
+    speakerSetupDismissedFingerprint?: string
     /**
      * Which realtime channel carries the microphone, for live speaker labels.
      * This one is the user's pin from Settings and it always wins. Absent or
@@ -278,6 +280,7 @@ const DEFAULT_CONFIG: AppConfig = {
     speakerEngine: 'auto',
     speakerSetupFingerprint: '',
     speakerSetupAt: '',
+    speakerSetupDismissedFingerprint: '',
     vibevoiceModelId: process.env.VIBEVOICE_MODEL_ID || 'microsoft/VibeVoice-ASR',
     vibevoiceDevice: process.env.ASR_DEVICE || 'cuda:0',
     vibevoiceAttn: process.env.VIBEVOICE_ATTN || 'sdpa', // VibeVoice-ASR supports neither flash_attention_2 (not built on Windows) nor flex_attention (unsupported arch); both silently fall back to sdpa, so use it directly

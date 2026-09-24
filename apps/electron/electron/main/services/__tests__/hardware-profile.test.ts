@@ -22,11 +22,12 @@ const OWNER_WMI = JSON.stringify([
 ])
 
 const cpu = { model: 'AMD Ryzen 9 7900X3D 12-Core Processor', logicalCores: 24 }
+const ownerGpus = () => parseWmiAdapters(OWNER_WMI)!
 const hw = (gpus: DetectedHardware['gpus']): DetectedHardware => ({ gpus, cpu, platform: 'win32' })
 
 describe('GPU detection', () => {
   it('reads the real GPUs and drops virtual displays', () => {
-    const gpus = parseWmiAdapters(OWNER_WMI)
+    const gpus = ownerGpus()
     expect(gpus.map((g) => g.name)).toEqual(['AMD Radeon(TM) Graphics', 'AMD Radeon RX 6600 XT'])
     expect(gpus.every((g) => g.vendor === 'amd')).toBe(true)
   })
@@ -34,7 +35,17 @@ describe('GPU detection', () => {
   it('accepts a single adapter object and survives bad output', () => {
     expect(parseWmiAdapters(JSON.stringify({ Name: 'NVIDIA GeForce RTX 4090', DriverVersion: '1' }))).toHaveLength(1)
     expect(parseWmiAdapters('')).toEqual([])
-    expect(parseWmiAdapters('not json')).toEqual([])
+  })
+
+  it('tells a failed query apart from a machine with no GPU', async () => {
+    expect(parseWmiAdapters(null)).toBeNull()
+    expect(parseWmiAdapters('not json')).toBeNull()
+    if (process.platform !== 'win32') return
+    const failed = await detectHardware(async (file) => (file === 'nvidia-smi' ? null : null))
+    expect(failed.detectionFailed).toBe(true)
+    const none = await detectHardware(async (file) => (file === 'nvidia-smi' ? null : ''))
+    expect(none.detectionFailed).toBeUndefined()
+    expect(gpuFingerprint(none)).toBe('no-gpu')
   })
 
   it('names vendors', () => {
@@ -58,7 +69,7 @@ describe('GPU detection', () => {
 
 describe('fingerprint', () => {
   it('changes when a GPU is added or removed, not when a driver updates', () => {
-    const base = hw(parseWmiAdapters(OWNER_WMI).map((g) => ({ ...g, cuda: false })))
+    const base = hw(ownerGpus().map((g) => ({ ...g, cuda: false })))
     const newDriver = hw(base.gpus.map((g) => ({ ...g, driver: '99.0' })))
     const with4090 = hw([...base.gpus, { name: 'NVIDIA GeForce RTX 4090', vendor: 'nvidia', driver: '1', cuda: true }])
     expect(gpuFingerprint(newDriver)).toBe(gpuFingerprint(base))
@@ -67,13 +78,13 @@ describe('fingerprint', () => {
   })
 
   it('does not depend on the order WMI lists the adapters', () => {
-    const gpus = parseWmiAdapters(OWNER_WMI).map((g) => ({ ...g, cuda: false }))
+    const gpus = ownerGpus().map((g) => ({ ...g, cuda: false }))
     expect(gpuFingerprint(hw([...gpus].reverse()))).toBe(gpuFingerprint(hw(gpus)))
   })
 })
 
 describe('profiles and recommendations', () => {
-  const amd = hw(parseWmiAdapters(OWNER_WMI).map((g) => ({ ...g, cuda: false })))
+  const amd = hw(ownerGpus().map((g) => ({ ...g, cuda: false })))
   const nvidia = hw([{ name: 'NVIDIA GeForce RTX 4090', vendor: 'nvidia', driver: '1', cuda: true }])
 
   it('classifies the owner PC as a GPU without CUDA', () => {
@@ -118,9 +129,15 @@ describe('resolveSpeakerEngine', () => {
   })
 
   it('honours an explicit choice, and never runs an engine that is not built', () => {
-    expect(resolveSpeakerEngine({ speakerEngine: 'pyannote-local', modelHostUrl: 'http://x' })).toBe('pyannote-local')
-    expect(resolveSpeakerEngine({ speakerEngine: 'off' })).toBe('off')
-    expect(resolveSpeakerEngine({ speakerEngine: 'onnx-local' })).toBe('pyannote-local')
-    expect(resolveSpeakerEngine({ speakerEngine: 'nonsense' })).toBe('pyannote-local')
+    const on = { speakerLinkingEnabled: true }
+    expect(resolveSpeakerEngine({ ...on, speakerEngine: 'pyannote-local', modelHostUrl: 'http://x' })).toBe('pyannote-local')
+    expect(resolveSpeakerEngine({ ...on, speakerEngine: 'off' })).toBe('off')
+    expect(resolveSpeakerEngine({ ...on, speakerEngine: 'onnx-local' })).toBe('pyannote-local')
+    expect(resolveSpeakerEngine({ ...on, speakerEngine: 'nonsense' })).toBe('pyannote-local')
+  })
+
+  it('treats the old off switch as off for any engine (a hand-edited config)', () => {
+    expect(resolveSpeakerEngine({ speakerEngine: 'pyannote-local', speakerLinkingEnabled: false })).toBe('off')
+    expect(resolveSpeakerEngine({ speakerEngine: 'model-host', modelHostUrl: 'http://x' })).toBe('off')
   })
 })

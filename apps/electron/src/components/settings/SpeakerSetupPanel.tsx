@@ -61,6 +61,13 @@ export function SpeakerSetupPanel({ initial, onSaved }: SpeakerSetupPanelProps):
 
   useEffect(() => {
     if (!setup || selected) return
+    // Voice recognition that is off stays off unless the owner picks an engine:
+    // preselecting the recommendation would turn it back on with one click.
+    if (setup.effectiveEngine === 'off') {
+      setSelected('off')
+      setConfirmOff(true)
+      return
+    }
     // Preselect the current engine when the owner already chose one on this
     // hardware; otherwise the recommendation.
     const current = setup.options.find((o) => o.engine === setup.configuredEngine && o.available)
@@ -114,10 +121,18 @@ export function SpeakerSetupPanel({ initial, onSaved }: SpeakerSetupPanelProps):
           <Cpu className="h-4 w-4" aria-hidden="true" />
           {setup.hardware.cpu.model} · {setup.hardware.cpu.logicalCores} threads
         </div>
+        {setup.detectionFailed && (
+          <p className="text-amber-600 dark:text-amber-400">
+            The GPUs could not be read, so these options may not fit this computer.
+          </p>
+        )}
         {setup.voiceSpace && (
           <p className="text-muted-foreground">
             Your library knows {setup.voiceSpace.clusters} voices, {setup.voiceSpace.anchored} of them linked to people.
             Every option here keeps using the model they were built with, so they keep being recognized.
+            {setup.voiceSpace.otherModelClusters > 0 &&
+              ` ${setup.voiceSpace.otherModelClusters} more voices (${setup.voiceSpace.otherModelAnchored} linked to people) ` +
+                'come from another voice model and are not matched until they are transferred.'}
           </p>
         )}
       </div>

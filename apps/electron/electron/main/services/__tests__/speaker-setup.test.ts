@@ -23,20 +23,30 @@ const updateConfig = vi.fn(async (_section: string, patch: Record<string, unknow
 })
 let runs: { started_at: string; completed_at: string; duration_seconds: number; quality_json: string | null }[] = []
 let gpus: { name: string; vendor: string; driver: string | null; cuda: boolean }[] = []
+let detectionFailed = false
 
 vi.mock('../config', () => ({ getConfig: () => config, updateConfig: (s: string, p: Record<string, unknown>) => updateConfig(s, p) }))
 vi.mock('../database', () => ({ queryAll: () => runs }))
-vi.mock('../speaker-linking', () => ({ libraryVoiceSpace: () => null }))
+vi.mock('../speaker-linking', () => ({
+  libraryVoiceSpace: () => null,
+  pinnedVoiceModel: () => 'pyannote/speaker-diarization-3.1'
+}))
 vi.mock('../hardware-profile', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../hardware-profile')>()
   return {
     ...actual,
-    detectHardware: async () => ({ gpus, cpu: { model: 'Ryzen', logicalCores: 24 }, platform: 'win32' }),
+    detectHardware: async () => ({
+      gpus: detectionFailed ? [] : gpus,
+      cpu: { model: 'Ryzen', logicalCores: 24 },
+      platform: 'win32',
+      ...(detectionFailed ? { detectionFailed: true } : {})
+    }),
   }
 })
 
 import {
   applySpeakerSetup,
+  dismissSpeakerSetup,
   getSpeakerSetup,
   measuredLocalSpeedRatio,
   resetSpeakerSetupCache,
@@ -65,9 +75,11 @@ beforeEach(() => {
     speakerLinkingEnabled: true,
     speakerSetupFingerprint: '',
     speakerSetupAt: '',
+    speakerSetupDismissedFingerprint: '',
     modelHostUrl: '',
     modelHostToken: '',
   })
+  detectionFailed = false
   updateConfig.mockClear()
   runs = []
   gpus = AMD
@@ -98,13 +110,35 @@ describe('when the setup asks', () => {
     expect(after.profile).toBe('nvidia-cuda')
   })
 
-  it('saves the hardware it detected, not the one the window sent', async () => {
+  it('asks again instead of saving when the GPUs changed while the setup was open', async () => {
     const first = await getSpeakerSetup()
     gpus = [...AMD, RTX]
     await getSpeakerSetup({ refresh: true })
-    await applySpeakerSetup({ engine: 'pyannote-local', fingerprint: first.fingerprint })
-    expect(config.transcription.speakerSetupFingerprint).not.toBe(first.fingerprint)
-    expect(String(config.transcription.speakerSetupFingerprint)).toContain('RTX 4090')
+    await expect(applySpeakerSetup({ engine: 'pyannote-local', fingerprint: first.fingerprint })).rejects.toThrow(
+      /GPUs changed/
+    )
+    expect(updateConfig).not.toHaveBeenCalled()
+  })
+
+  it('stays closed on hardware the owner answered "Decide later" on, and opens on new hardware', async () => {
+    await getSpeakerSetup()
+    await dismissSpeakerSetup()
+    expect((await getSpeakerSetup()).needsConfirmation).toBe(false)
+    gpus = [...AMD, RTX]
+    expect((await getSpeakerSetup({ refresh: true })).needsConfirmation).toBe(true)
+  })
+
+  it('does not open on a failed GPU query, and refuses to save a choice made on it', async () => {
+    detectionFailed = true
+    const setup = await getSpeakerSetup({ refresh: true })
+    expect(setup.detectionFailed).toBe(true)
+    expect(setup.needsConfirmation).toBe(false)
+    expect(setup.profileSummary).toMatch(/Could not read the GPUs/)
+    await expect(applySpeakerSetup({ engine: 'pyannote-local', fingerprint: setup.fingerprint })).rejects.toThrow(
+      /Could not read the GPUs/
+    )
+    await dismissSpeakerSetup()
+    expect(updateConfig).not.toHaveBeenCalled()
   })
 })
 
@@ -136,10 +170,11 @@ describe('what can be chosen', () => {
 describe('measured speed', () => {
   it('is the median of runs on the same device, and needs at least three', () => {
     runs = [run(20, 3600, 'cpu'), run(25, 3600, 'cpu'), run(1, 3600, 'cuda')]
-    expect(measuredLocalSpeedRatio('cpu')).toBeNull()
+    const model = 'pyannote/speaker-diarization-3.1'
+    expect(measuredLocalSpeedRatio('cpu', model)).toBeNull()
     runs.push(run(30, 3600, 'cpu'), run(5, 3600, null))
-    expect(measuredLocalSpeedRatio('cpu')).toBeCloseTo(25 / 60)
-    expect(measuredLocalSpeedRatio('cuda')).toBeNull()
+    expect(measuredLocalSpeedRatio('cpu', model)).toBeCloseTo(25 / 60)
+    expect(measuredLocalSpeedRatio('cuda', model)).toBeNull()
   })
 
   it('shows on the pyannote option', async () => {

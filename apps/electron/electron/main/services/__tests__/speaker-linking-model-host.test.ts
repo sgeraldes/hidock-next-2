@@ -23,10 +23,16 @@ const config = {
 vi.mock('../config', () => ({ getConfig: () => config }))
 // The library's voice space, as libraryVoiceSpace() would read it. null = empty library.
 let space: { model: string; model_version: string; clusters: number; anchored: number } | null = null
+// Voices from other models, as the second libraryVoiceSpace() query counts them.
+let otherModels = { clusters: 0, anchored: 0 }
+const queriesSeen: string[] = []
 
 vi.mock('../database', () => ({
   queryAll: () => [],
-  queryOne: () => space,
+  queryOne: (sql: string) => {
+    queriesSeen.push(sql)
+    return /WHERE NOT \(model = \?/.test(sql) ? otherModels : space
+  },
   runInTransaction: (fn: () => unknown) => fn(),
   runNoSave: () => {},
 }))
@@ -34,6 +40,7 @@ vi.mock('../database', () => ({
 import {
   assertInLibraryVoiceSpace,
   diarize,
+  libraryVoiceSpace,
   pinnedVoiceModel,
   resetModelHostComplaint,
   SpeakerLinkingUnavailableError
@@ -53,6 +60,8 @@ const OTHER_MODEL = { ...REMOTE, model: 'pyannote/speaker-diarization-community-
 
 beforeEach(() => {
   space = null
+  otherModels = { clusters: 0, anchored: 0 }
+  queriesSeen.length = 0
   config.transcription.modelHostUrl = ''
   config.transcription.modelHostToken = ''
   resetModelHostComplaint()
@@ -230,8 +239,44 @@ describe('the voice model is pinned to the library', () => {
     expect(local).toHaveBeenCalledOnce()
   })
 
+  it('reports the winning model and counts the voices of every other model', () => {
+    space = LIBRARY
+    otherModels = { clusters: 12, anchored: 2 }
+    expect(libraryVoiceSpace()).toEqual({
+      model: 'pyannote/speaker-diarization-3.1',
+      modelVersion: '4.0.7',
+      clusters: 244,
+      anchored: 6,
+      otherModelClusters: 12,
+      otherModelAnchored: 2
+    })
+    // The winner is the model with the most anchored voices, then the most voices.
+    expect(queriesSeen[0]).toMatch(/ORDER BY anchored DESC, clusters DESC/)
+  })
+
+  it('warns, and still writes, when only the model version changed', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const lib = {
+      model: LIBRARY.model,
+      modelVersion: '4.0.7',
+      clusters: 244,
+      anchored: 6,
+      otherModelClusters: 0,
+      otherModelAnchored: 0
+    }
+    expect(() => assertInLibraryVoiceSpace({ ...V31, modelVersion: '4.1.0' }, lib)).not.toThrow()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('4.0.7 -> 4.1.0'))
+  })
+
   it('refuses to write a result from another model into the library', () => {
-    const lib = { model: LIBRARY.model, modelVersion: LIBRARY.model_version, clusters: 244, anchored: 6 }
+    const lib = {
+      model: LIBRARY.model,
+      modelVersion: LIBRARY.model_version,
+      clusters: 244,
+      anchored: 6,
+      otherModelClusters: 0,
+      otherModelAnchored: 0
+    }
     expect(() => assertInLibraryVoiceSpace(OTHER_MODEL, lib)).toThrow(SpeakerLinkingUnavailableError)
     expect(() => assertInLibraryVoiceSpace(V31, lib)).not.toThrow()
     expect(() => assertInLibraryVoiceSpace(OTHER_MODEL, null)).not.toThrow()

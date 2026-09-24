@@ -7,7 +7,13 @@
 
 import { ipcMain } from 'electron'
 import { z } from 'zod'
-import { applySpeakerSetup, getSpeakerSetup, SpeakerSetupError, type SpeakerSetup } from '../services/speaker-setup'
+import {
+  applySpeakerSetup,
+  dismissSpeakerSetup,
+  getSpeakerSetup,
+  SpeakerSetupError,
+  type SpeakerSetup
+} from '../services/speaker-setup'
 import { success, error, type Result } from '../types/api'
 
 const EngineSchema = z.enum(['auto', 'pyannote-local', 'onnx-local', 'signatures-from-turns', 'model-host', 'pyannoteai', 'off'])
@@ -29,6 +35,16 @@ export function registerSpeakerSetupHandlers(): void {
     } catch (e) {
       console.error('[speakers:getSetup]', e)
       return error('INTERNAL_ERROR', e instanceof Error ? e.message : 'Could not read the hardware')
+    }
+  })
+
+  ipcMain.handle('speakers:dismissSetup', async (): Promise<Result<null>> => {
+    try {
+      await dismissSpeakerSetup()
+      return success(null)
+    } catch (e) {
+      console.error('[speakers:dismissSetup]', e)
+      return error('INTERNAL_ERROR', e instanceof Error ? e.message : 'Could not save')
     }
   })
 

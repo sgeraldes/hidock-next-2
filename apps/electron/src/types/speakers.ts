@@ -43,5 +43,14 @@ export interface SpeakerSetup {
   effectiveEngine: Exclude<SpeakerEngineId, 'auto'>
   needsConfirmation: boolean
   lastConfirmedAt: string | null
-  voiceSpace: { model: string; modelVersion: string | null; clusters: number; anchored: number } | null
+  voiceSpace: {
+    model: string
+    modelVersion: string | null
+    clusters: number
+    anchored: number
+    otherModelClusters: number
+    otherModelAnchored: number
+  } | null
+  /** The GPU query failed; the profile and options are a guess until "Detect again" works. */
+  detectionFailed: boolean
 }

@@ -177,11 +177,15 @@ key is set. The existing plain-text Gemini and HF keys move to the encrypted sto
 
 ## Hardware profiles
 
-A **hardware fingerprint** is the sorted list of GPU names and driver versions (WMI
-`Win32_VideoController`, plus `nvidia-smi` when present), CPU model and logical cores, and whether a
-paired Model Host is reachable. It is stored in config. At launch the fingerprint is computed (cheap,
-no model loading); only when it differs from the stored one does the app open the **Speaker setup**
-dialog. Launches with the same hardware never show it.
+A **hardware fingerprint** is the sorted list of real GPUs as `vendor:name` (WMI
+`Win32_VideoController`, virtual displays excluded; `nvidia-smi` marks the ones CUDA can drive).
+Driver versions are left out on purpose: a driver update must not ask again (goal 3). CPU and Model
+Host pairing shape the options but are not part of the fingerprint. It is stored in config. At launch
+the fingerprint is computed (cheap, no model loading); only when it differs from the stored one does
+the app open the **Speaker setup** dialog. Launches with the same hardware never show it. "Decide
+later" stores the fingerprint it was answered on, so the dialog stays closed until a GPU is added or
+removed. A GPU query that fails (PowerShell missing, WMI error) is not read as "no GPU": the dialog
+does not open on it, and a choice cannot be saved until detection works.
 
 | Detected | Recommended | Also offered |
 |---|---|---|
@@ -191,7 +195,9 @@ dialog. Launches with the same hardware never show it.
 | CPU only | `signatures-from-turns` | onnx-local (CPU), pyannoteai, pyannote-local (slow) |
 
 The dialog shows what was detected, the options for this hardware with an estimate per hour of audio
-(measured on the machine by a 30-second calibration clip, not guessed), the cost for online options,
+(the median of this computer's own past runs on the same device and model, shown once there are at
+least three runs of five minutes or more; nothing is shown rather than a guess), the cost for online
+options,
 and the recommended one preselected. The same panel lives in Settings under "Speakers & voices".
 
 **Turning voice recognition off** is an option in the list, never the default. Choosing it shows a
