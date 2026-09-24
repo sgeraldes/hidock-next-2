@@ -28,6 +28,13 @@ Sebastián, 23-sep, after a 4-hour recording spent 80 minutes in local diarizati
    only one with reusable voiceprints). Compare them on diarization quality and cost.
 7. A person's voice identity must survive hardware changes (added 24-sep, see below).
 8. Every optimization round ends with a benchmark compared against the baseline.
+9. Changing the voice model must not lose known voices. When a model is needed or a change is
+   detected, offer a model transfer: take samples of every recorded voice from its speaker turns, run
+   them through the new model, and keep an equivalence table per model (added 24-sep).
+10. Each voice has one canonical ID, whatever model recognized it, so several models can run side by
+    side. Labels from different models never collide, or the transcript says which model produced
+    them. pyannote 3.1 is the default and the backward-compatible reference; only other models get
+    a model tag (added 24-sep).
 
 ## Voice identity across hardware (measured 24-sep)
 
@@ -38,7 +45,15 @@ including all 6 anchored to a contact. Changing GPU, moving to the CPU, or movin
 not change a voice ID as long as the model is the same.
 
 The latent risk: the configured model is `community-1` with 3.1 as fallback, locally and on the Model
-Host. It falls back to 3.1 today because community-1 does not load here. If it ever loads (here or on
+Host. It falls back to 3.1 today because community-1 does not load here. It never produced a single
+voice: every attempt failed (24-aug invalid worker output; 25-26-aug `transformers` errors; 27-aug
+unauthenticated Hugging Face download and "paging file too small"; 15-16-sep and 22-sep 600 s
+timeouts; 21-sep "accept user conditions": the model is gated and the conditions were never accepted
+on the owner's Hugging Face account). community-1 shipped with pyannote.audio 4.0.0 on 29-sep-2025:
+VBx clustering instead of agglomerative, an "exclusive" one-speaker-at-a-time output that lines up
+with transcript timestamps, and lower DER than 3.1 on every published benchmark (AMI IHM 18.8 → 17.0,
+AliMeeting 24.5 → 20.3, DIHARD 3 21.4 → 20.2, MSDWild 25.4 → 22.8). Whether its embedding weights
+equal 3.1's is not published; the compatibility check below answers it on the owner's audio. If it ever loads (here or on
 the 4090), new embeddings land in a different space and stop matching every known voice, silently.
 Rule, from phase 1: **the model that writes voice evidence is pinned to the library's cluster space**
 (the model and version of the existing clusters). A different model is allowed only through the
@@ -99,6 +114,43 @@ lose the 6 people already anchored. Rule:
    recordings where it was observed (audio is on disk), so anchored people carry over.
 2. `pyannoteai` voiceprints are opaque and matched only by their `/identify` endpoint. They live in a
    separate table keyed by contact; they never mix with local clusters.
+
+### Canonical voice IDs and model transfer
+
+Goals 9 and 10. The existing `voice_clusters` rows are all `pyannote/speaker-diarization-3.1`; they
+become the canonical voices, so every `Voice XXXXXX` label and every contact anchor stays exactly as it
+is today. pyannote 3.1 stays the default model when nothing is chosen.
+
+Data model (one migration):
+
+- `voice_clusters.canonical_voice_id` (nullable, FK to `voice_clusters.id`). NULL on a 3.1 row: the
+  row is itself canonical. On a row from another model it points to the canonical voice it
+  represents. A row per (canonical voice, model, model_version) is the equivalence table.
+- A voice first heard by a non-default model, with no match in its space, gets a new cluster that is
+  its own canonical voice. Its label comes from its own id, so it cannot collide with a 3.1 label.
+  The next transfer into 3.1 gives it a 3.1 row pointing at it.
+- `recording_voice_clusters.model` records which model made each match. The label shown is always the
+  canonical one; the transcript shows a small model tag only when the model is not pyannote 3.1.
+- Contact anchors live on the canonical row. Matching in any model resolves to the canonical voice
+  and reads the contact from there.
+
+Model transfer, offered when a new model is chosen, or when a result arrives from a model that has no
+rows yet (for example community-1 finally loading, or a Model Host running another model):
+
+1. For each canonical voice, collect samples from its speaker turns: the transcript turns whose label
+   `recording_voice_clusters` maps to that voice, one speaker only, no overlap, 2 to 15 s each, up to
+   60 s per voice from at least two recordings when there are two. Audio is on disk (MP3 inside a
+   WAV header: decode by content, not by the header).
+2. Embed the samples with the new model and store the mean as the voice's row in that model's space.
+3. Validate before the new model may write: hold out one recording per voice, re-embed it, and
+   require that it maps back to the same canonical voice with the usual thresholds (cosine ≥ 0.72,
+   margin ≥ 0.08). Report per voice; a voice that fails stays usable in 3.1 and is marked
+   `needs_review` in the new model. The run fails as a whole if any anchored voice fails.
+4. Until the transfer passes, the pin rule holds: results from the new model are not written.
+
+Several models can then run side by side (for example `onnx-local` on the AMD GPU and 3.1 on the
+Model Host) because both resolve to the same canonical voice. `signatures-from-turns` (engine 3) uses
+the same sampling code as step 1, which is why the two ship together.
 
 ## Online transcription providers
 
@@ -165,8 +217,11 @@ compared with the baseline (`scripts/perf/compare.py`).
    the two existing engines (`pyannote-local`, `model-host`) plus `off`; fingerprint; dialog; Settings
    panel; the voice model pinned to the library's cluster space (local and host); queue ordering and
    stage display.
-2. **`onnx-local` and `signatures-from-turns`.** sherpa-onnx; DirectML and CPU; the compatibility
-   check and re-embedding pass; calibration clip; speed measured on this PC against pyannote.
+2. **Canonical voice IDs, model transfer, `onnx-local` and `signatures-from-turns`.** The
+   `canonical_voice_id` migration and model tag; turn sampling shared by the transfer and by
+   `signatures-from-turns`; sherpa-onnx with DirectML and CPU; the compatibility check; transfer with
+   hold-out validation; speed measured on this PC against pyannote. community-1 becomes a transfer
+   target once its Hugging Face conditions are accepted and it loads.
 3. **Provider registry and online transcribers.** OpenAI, AssemblyAI, Meta Muse, pyannoteAI; the
    existing Gemini moved into the registry; encrypted keys; chunk relabelling by voice.
 4. **`pyannoteai` engine and voiceprints.** Separate voiceprint table, identify on each recording.
