@@ -131,7 +131,8 @@ import {
   failProcessingRun,
   type Transcript
 } from './database'
-import { getActiveTranscription, setActiveTranscription } from './transcription-activity'
+import { addActiveTranscription, getActiveTranscriptions, removeActiveTranscription } from './transcription-activity'
+import { resolveSpeakerEngine } from './speaker-engines'
 import { BrowserWindow } from 'electron'
 import { emitActivityLog } from './activity-log'
 import { isRecordingEligible } from './recording-eligibility'
@@ -163,6 +164,10 @@ import {
 
 let mainWindow: BrowserWindow | null = null
 let isProcessing = false
+/** The main lane's current job, for the short lane's decision. */
+let mainJob: { recordingId: string; startedAt: number; estimateSeconds: number; stage: string } | null = null
+/** recording_id running in the short lane, or null. */
+let shortLane: string | null = null
 let processingInterval: ReturnType<typeof setInterval> | null = null
 let lastSkipLogAt = 0 // Throttle "skipping" spam to once per 60s
 
@@ -196,8 +201,8 @@ export function startTranscriptionProcessor(): void {
   // The repairs are for rows a crashed run left behind. A run this process
   // already started (a new recording kicks the queue before this boot task)
   // holds a live lock and a live 'processing' row: leave both alone.
-  if (!isProcessing) clearStaleTranscriptionLock()
-  resetStuckTranscriptions(getActiveTranscription())
+  if (!isProcessing && !shortLane) clearStaleTranscriptionLock()
+  resetStuckTranscriptions(getActiveTranscriptions())
 
   console.log('Starting transcription processor')
 
@@ -314,6 +319,8 @@ export interface TranscriptionQueueState {
   paused: boolean
   isProcessing: boolean
   processingId: string | null
+  /** recording_id running in the short-recording lane beside the main job. */
+  shortLaneId: string | null
   pendingCount: number
   processingCount: number
 }
@@ -324,6 +331,7 @@ export function getQueueState(): TranscriptionQueueState {
     paused: queuePaused,
     isProcessing,
     processingId: currentProcessingId,
+    shortLaneId: shortLane,
     pendingCount: getQueueItems('pending').length,
     processingCount: getQueueItems('processing').length
   }
@@ -374,7 +382,32 @@ export function orderPendingForProcessing<T extends OrderableQueueItem>(items: T
   })
 }
 
+/**
+ * Recordings cancelled while a lane was transcribing them. Every continuation
+ * gate of the pipeline (voice step, provider calls, the check before analysis,
+ * analysis) asks `stillWanted`, so a cancelled job stops at the next gate and
+ * persists nothing. Only live jobs are added, and a job's entries are cleared
+ * when it ends, so cancelling never blocks a later request for the same recording.
+ */
+const cancelledRecordings = new Set<string>()
+
+function stillWanted(recordingId: string): boolean {
+  return !cancelledRecordings.has(recordingId) && isRecordingEligible(recordingId)
+}
+
+/** The queued id and the recording id the pipeline will use for it (they differ for legacy synced-file ids). */
+function idsFor(recordingId: string): string[] {
+  const canonical = getRecordingById(recordingId)?.id ?? resolveRecordingId(recordingId)?.id
+  return canonical && canonical !== recordingId ? [recordingId, canonical] : [recordingId]
+}
+
+function cancelIfRunning(recordingId: string): void {
+  const live = new Set(getActiveTranscriptions())
+  for (const id of idsFor(recordingId)) if (live.has(id)) cancelledRecordings.add(id)
+}
+
 export function cancelTranscription(recordingId: string): void {
+  cancelIfRunning(recordingId)
   removeFromQueueByRecordingId(recordingId)
   clearQueueHints(recordingId)
   updateRecordingTranscriptionStatus(recordingId, 'none')
@@ -384,6 +417,7 @@ export function cancelTranscription(recordingId: string): void {
 
 export function cancelAllTranscriptions(): number {
   cancelRequested = true
+  for (const id of getActiveTranscriptions()) cancelledRecordings.add(id)
   const count = cancelPendingTranscriptions()
   userPriorityIds.clear()
   queuePriorityRank.clear()
@@ -397,8 +431,185 @@ export function cancelAllTranscriptions(): number {
 
 const MAX_RETRY_ATTEMPTS = 3 // spec-014: configurable max retry attempts
 
+/**
+ * Transcribe one queue row and record the outcome. Shared by the main lane and
+ * the short-recording lane. The row goes to 'processing' before the first
+ * await, so the other lane can never pick the same row.
+ */
+async function runQueueItem(
+  item: ReturnType<typeof getQueueItems>[number],
+  onStage?: (stage: string) => void
+): Promise<void> {
+  const ids = idsFor(item.recording_id)
+  for (const id of ids) addActiveTranscription(id)
+  try {
+    updateQueueItem(item.id, 'processing')
+    updateQueueProgress(item.id, 0) // spec-014: reset progress
+    notifyRenderer('transcription:started', { queueItemId: item.id, recordingId: item.recording_id })
+    const recording = getRecordingById(item.recording_id)
+    const filename = recording?.filename ?? item.recording_id
+    emitActivityLog('info', 'Transcribing recording', filename)
+
+    // Report only real stage/range completion. A previous timer advanced to
+    // 90% solely because wall-clock time passed, even while Gemini was stuck
+    // retrying the first interval; that made a failed job look nearly done.
+    const progressCallback = (stage: string, progress: number) => {
+      onStage?.(stage)
+      updateQueueProgress(item.id, progress)
+      notifyRenderer('transcription:progress', {
+        queueItemId: item.id,
+        recordingId: item.recording_id,
+        stage,
+        progress
+      })
+    }
+
+    const outcome = await transcribeRecording(item.recording_id, progressCallback, item.provider)
+
+    if (outcome.status === 'cancelled') {
+      // INC-2 — the recording was trashed / marked personal / hard-purged
+      // mid-run and NOTHING was persisted. Do NOT claim completion: that
+      // would overwrite the soft-delete's 'cancelled' tombstone with
+      // 'completed', jump progress to 100, and emit transcription:completed
+      // for content that does not exist. Leave it cancelled.
+      updateQueueItem(item.id, 'cancelled')
+      clearQueueHints(item.recording_id)
+      console.log(`[Transcription] ${item.recording_id} cancelled mid-run (ineligible) — queue item marked cancelled`)
+    } else if (outcome.status === 'no_speech') {
+      updateQueueProgress(item.id, 100)
+      updateQueueItem(item.id, 'completed')
+      clearQueueHints(item.recording_id)
+      notifyRenderer('transcription:completed', {
+        queueItemId: item.id,
+        recordingId: item.recording_id,
+        outcome: 'no_speech'
+      })
+      const recDone = getRecordingById(item.recording_id)
+      emitActivityLog(
+        'info',
+        outcome.reason === TOO_SHORT_REASON_CODE
+          ? `Too short to transcribe (under ${DURATION_GARBAGE_MAX_SECONDS} seconds)`
+          : 'No intelligible speech detected',
+        `${recDone?.filename ?? item.recording_id}: transcription and AI analysis skipped`
+      )
+    } else {
+      updateQueueProgress(item.id, 100) // spec-014: mark complete
+      updateQueueItem(item.id, 'completed')
+      clearQueueHints(item.recording_id) // request satisfied — drop priority hints
+      notifyRenderer('transcription:completed', { queueItemId: item.id, recordingId: item.recording_id })
+      const recDone = getRecordingById(item.recording_id)
+      emitActivityLog('success', 'Transcription complete', recDone?.filename ?? item.recording_id)
+    }
+  } catch (error) {
+    if (ids.some((id) => cancelledRecordings.has(id))) {
+      // Cancelled by the user while running: the step it was in threw because
+      // its gate said stop. That is a cancellation, not a failure.
+      updateQueueItem(item.id, 'cancelled')
+      updateRecordingTranscriptionStatus(item.recording_id, 'none')
+      clearQueueHints(item.recording_id)
+      console.log(`[Transcription] ${item.recording_id} stopped after cancel; nothing saved`)
+      return
+    }
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+    console.error('Transcription failed:', errorMessage)
+
+    updateQueueItem(item.id, 'failed', errorMessage)
+    // AI-13: Use standard enum value 'error' (not 'failed')
+    updateRecordingTranscriptionStatus(item.recording_id, 'error')
+    // Drop the priority hints: a subsequent auto-retry is background work and
+    // should sort by recency. An explicit user retry re-marks it (see the
+    // transcription:retry IPC handler).
+    clearQueueHints(item.recording_id)
+    notifyRenderer('transcription:failed', {
+      queueItemId: item.id,
+      recordingId: item.recording_id,
+      error: errorMessage
+    })
+    const recFail = getRecordingById(item.recording_id)
+    emitActivityLog('error', 'Transcription failed', `${recFail?.filename ?? item.recording_id}: ${errorMessage}`)
+
+    // B-TXN-003: Use typed property access instead of `as any` cast
+    const retryCount = item.retry_count ?? 0
+    if (retryCount >= MAX_RETRY_ATTEMPTS) {
+      console.log(`Recording ${item.recording_id} failed after ${retryCount} retries (max: ${MAX_RETRY_ATTEMPTS})`)
+    }
+  } finally {
+    for (const id of ids) {
+      removeActiveTranscription(id)
+      cancelledRecordings.delete(id)
+    }
+  }
+}
+
+/**
+ * Seconds a transcription is expected to take, from the recording length.
+ * Measured on this PC on 24-sep: Gemini 0.03 to 0.12 s per second of audio
+ * (1 h in about 2 min, 4 h chunked in about 30 min), pyannote on the CPU about
+ * 0.3 s per second at the 40% thread budget. Unknown length counts as long.
+ */
+export function estimateTranscriptionSeconds(durationSeconds: number | null | undefined, localVoices: boolean): number {
+  const d = typeof durationSeconds === 'number' && Number.isFinite(durationSeconds) && durationSeconds > 0 ? durationSeconds : 3600
+  return d * (0.12 + (localVoices ? 0.35 : 0))
+}
+
+/** A waiting recording goes in the short lane when the running job will take
+ * more than this much longer than the waiting one would (spec: speaker engines,
+ * "Long recordings stop blocking short ones"). */
+export const SHORT_LANE_MIN_GAIN_SECONDS = 600
+
+/** The first waiting item (in processing order) that finishes well before the
+ * running job would; null when none does. Pure, for tests. */
+export function pickShortLaneItem<T>(
+  ordered: T[],
+  remainingSeconds: number,
+  estimateOf: (item: T) => number
+): T | null {
+  for (const item of ordered) {
+    if (estimateOf(item) + SHORT_LANE_MIN_GAIN_SECONDS < remainingSeconds) return item
+  }
+  return null
+}
+
+function voicesRunLocally(): boolean {
+  return resolveSpeakerEngine(getConfig().transcription) === 'pyannote-local'
+}
+
+/**
+ * Second lane: while the main lane runs a long job, a waiting recording that
+ * would finish far sooner runs beside it instead of behind it. On 23-sep one
+ * 4-hour recording held a 21-minute one for over an hour; on 24-sep a 4-hour
+ * backlog item held the 37-minute meeting recorded that morning.
+ *
+ * One short job at a time, and never while the long job is in its local voice
+ * step: two pyannote workers would take 80% of the CPU between them.
+ */
+async function maybeStartShortLane(): Promise<void> {
+  if (shortLane || !mainJob || queuePaused || cancelRequested) return
+  if (!isFeatureEnabled('transcription')) return
+  if (mainJob.stage === 'voices') return
+  const remaining = mainJob.estimateSeconds - (Date.now() - mainJob.startedAt) / 1000
+  const localVoices = voicesRunLocally()
+  const pick = pickShortLaneItem(orderPendingForProcessing(getQueueItems('pending')), remaining, (i) =>
+    estimateTranscriptionSeconds(getRecordingById(i.recording_id)?.duration_seconds ?? null, localVoices)
+  )
+  if (!pick) return
+  shortLane = pick.recording_id
+  console.log(`[Transcription] Short lane: ${pick.filename ?? pick.recording_id} runs beside ${mainJob.recordingId} (${Math.round(remaining / 60)} min left there)`)
+  emitQueueState()
+  try {
+    await runQueueItem(pick)
+  } finally {
+    shortLane = null
+    emitQueueState()
+  }
+}
+
 async function processQueue(): Promise<void> {
-  if (isProcessing) return
+  if (isProcessing) {
+    // The main lane is busy: this tick may start the short lane beside it.
+    void maybeStartShortLane().catch((e) => console.error('[Transcription] short lane error:', e))
+    return
+  }
 
   // Round-3 [HIGH]: with the transcription FEATURE disabled, a queue pass must
   // not start at all (no retry re-queues, no stuck-item bookkeeping, no drain) —
@@ -560,94 +771,17 @@ async function processQueue(): Promise<void> {
       if (!item) break
       processedThisRun.add(item.id)
       currentProcessingId = item.recording_id
-      setActiveTranscription(item.recording_id)
+      const duration = getRecordingById(item.recording_id)?.duration_seconds ?? null
+      mainJob = { recordingId: item.recording_id, startedAt: Date.now(), estimateSeconds: estimateTranscriptionSeconds(duration, voicesRunLocally()), stage: 'starting' }
       emitQueueState()
-
       try {
-        updateQueueItem(item.id, 'processing')
-        updateQueueProgress(item.id, 0) // spec-014: reset progress
-        notifyRenderer('transcription:started', { queueItemId: item.id, recordingId: item.recording_id })
-        const recording = getRecordingById(item.recording_id)
-        const filename = recording?.filename ?? item.recording_id
-        emitActivityLog('info', 'Transcribing recording', filename)
-
-        // Report only real stage/range completion. A previous timer advanced to
-        // 90% solely because wall-clock time passed, even while Gemini was stuck
-        // retrying the first interval; that made a failed job look nearly done.
-        const progressCallback = (stage: string, progress: number) => {
-          updateQueueProgress(item.id, progress)
-          notifyRenderer('transcription:progress', {
-            queueItemId: item.id,
-            recordingId: item.recording_id,
-            stage,
-            progress
-          })
-        }
-
-        const outcome = await transcribeRecording(item.recording_id, progressCallback, item.provider)
-
-        if (outcome.status === 'cancelled') {
-          // INC-2 — the recording was trashed / marked personal / hard-purged
-          // mid-run and NOTHING was persisted. Do NOT claim completion: that
-          // would overwrite the soft-delete's 'cancelled' tombstone with
-          // 'completed', jump progress to 100, and emit transcription:completed
-          // for content that does not exist. Leave it cancelled.
-          updateQueueItem(item.id, 'cancelled')
-          clearQueueHints(item.recording_id)
-          console.log(`[Transcription] ${item.recording_id} cancelled mid-run (ineligible) — queue item marked cancelled`)
-        } else if (outcome.status === 'no_speech') {
-          updateQueueProgress(item.id, 100)
-          updateQueueItem(item.id, 'completed')
-          clearQueueHints(item.recording_id)
-          notifyRenderer('transcription:completed', {
-            queueItemId: item.id,
-            recordingId: item.recording_id,
-            outcome: 'no_speech'
-          })
-          const recDone = getRecordingById(item.recording_id)
-          emitActivityLog(
-            'info',
-            outcome.reason === TOO_SHORT_REASON_CODE
-              ? `Too short to transcribe (under ${DURATION_GARBAGE_MAX_SECONDS} seconds)`
-              : 'No intelligible speech detected',
-            `${recDone?.filename ?? item.recording_id}: transcription and AI analysis skipped`
-          )
-        } else {
-          updateQueueProgress(item.id, 100) // spec-014: mark complete
-          updateQueueItem(item.id, 'completed')
-          clearQueueHints(item.recording_id) // request satisfied — drop priority hints
-          notifyRenderer('transcription:completed', { queueItemId: item.id, recordingId: item.recording_id })
-          const recDone = getRecordingById(item.recording_id)
-          emitActivityLog('success', 'Transcription complete', recDone?.filename ?? item.recording_id)
-        }
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error'
-        console.error('Transcription failed:', errorMessage)
-
-        updateQueueItem(item.id, 'failed', errorMessage)
-        // AI-13: Use standard enum value 'error' (not 'failed')
-        updateRecordingTranscriptionStatus(item.recording_id, 'error')
-        // Drop the priority hints: a subsequent auto-retry is background work and
-        // should sort by recency. An explicit user retry re-marks it (see the
-        // transcription:retry IPC handler).
-        clearQueueHints(item.recording_id)
-        notifyRenderer('transcription:failed', {
-          queueItemId: item.id,
-          recordingId: item.recording_id,
-          error: errorMessage
+        await runQueueItem(item, (stage) => {
+          if (mainJob) mainJob.stage = stage
         })
-        const recFail = getRecordingById(item.recording_id)
-        emitActivityLog('error', 'Transcription failed', `${recFail?.filename ?? item.recording_id}: ${errorMessage}`)
-
-        // B-TXN-003: Use typed property access instead of `as any` cast
-        const retryCount = item.retry_count ?? 0
-        if (retryCount >= MAX_RETRY_ATTEMPTS) {
-          console.log(`Recording ${item.recording_id} failed after ${retryCount} retries (max: ${MAX_RETRY_ATTEMPTS})`)
-        }
       } finally {
         // This item is no longer in flight — clear before the next dequeue.
         currentProcessingId = null
-        setActiveTranscription(null)
+        mainJob = null
         emitQueueState()
       }
     }
@@ -662,7 +796,7 @@ async function processQueue(): Promise<void> {
     // marked busy with nothing running, and every later tick returned early.
     isProcessing = false
     currentProcessingId = null
-    setActiveTranscription(null)
+    mainJob = null
     // spec-005: Always release mutex lock, even if an error occurred
     releaseTranscriptionLock(processId)
   }
@@ -2169,11 +2303,12 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     parentRunIds: [vadRun.id]
   })
   let speakerLinking: SpeakerLinkingResult
+  progressCallback?.('voices', 3)
   try {
     speakerLinking = await runSpeakerLinkingPreflight(
       recordingId,
       recording.file_path,
-      () => isRecordingEligible(recordingId),
+      () => stillWanted(recordingId),
       recording.duration_seconds
     )
     completeProcessingRun(acousticDiarizationRun.id, {
@@ -2286,7 +2421,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
             recording.file_path,
             meetingContext,
             progressCallback,
-            () => isRecordingEligible(recordingId),
+            () => stillWanted(recordingId),
             recording.duration_seconds ?? undefined
           )
   } catch (e) {
@@ -2359,7 +2494,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   // checks cannot undo. Re-check SYNCHRONOUSLY here, adjacent to the analysis
   // call (no await between), and return the cancelled outcome WITHOUT invoking
   // the analysis provider when ineligible or the lookup fails closed.
-  if (!isRecordingEligible(recordingId)) {
+  if (!stillWanted(recordingId)) {
     console.log(
       `[Transcription] Recording ${recordingId} became ineligible during audio transcription ` +
         '— skipping Gemini analysis; no transcript sent to any external LLM for analysis'
@@ -2384,7 +2519,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   let analysis: TranscriptAnalysis
   try {
     analysis = await analyzeTranscriptWithGemini(fullText, candidateMeetings, () =>
-      isRecordingEligible(recordingId)
+      stillWanted(recordingId)
     )
     completeProcessingRun(summaryRun.id, { outputRefs: { summary: `trans_${recordingId}.summary` } })
   } catch (error) {
@@ -2427,7 +2562,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   // after the purge transaction, orphaned to a recording that no longer exists.
   let processabilitySkipLogged = false
   const stillProcessable = (): boolean => {
-    if (isRecordingProcessable(recordingId)) return true
+    if (isRecordingProcessable(recordingId) && !cancelledRecordings.has(recordingId)) return true
     if (!processabilitySkipLogged) {
       processabilitySkipLogged = true
       console.log(

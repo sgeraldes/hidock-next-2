@@ -13003,17 +13003,18 @@ export function selectMeetingForRecordingByUser(recordingId: string, meetingId: 
 }
 
 export function resetStuckTranscriptions(
-  activeRecordingId: string | null = null
+  activeRecordingIds: string[] = []
 ): { recordingsReset: number; queueItemsReset: number } {
   const db = getDatabase()
-  // The recording this process is transcribing right now is not stuck.
-  const keep = activeRecordingId ?? ''
+  // The recordings this process is transcribing right now are not stuck.
+  const keep = activeRecordingIds.length > 0 ? activeRecordingIds : ['']
+  const marks = keep.map(() => '?').join(', ')
   db.run(
-    "UPDATE recordings SET transcription_status = 'none' WHERE transcription_status IN ('processing', 'pending') AND id != ?",
-    [keep]
+    `UPDATE recordings SET transcription_status = 'none' WHERE transcription_status IN ('processing', 'pending') AND id NOT IN (${marks})`,
+    keep
   )
   const recordingsReset = db.getRowsModified()
-  db.run("UPDATE transcription_queue SET status = 'pending' WHERE status = 'processing' AND recording_id != ?", [keep])
+  db.run(`UPDATE transcription_queue SET status = 'pending' WHERE status = 'processing' AND recording_id NOT IN (${marks})`, keep)
   const queueItemsReset = db.getRowsModified()
   console.log(`[Database] Reset stuck transcriptions: ${recordingsReset} recordings, ${queueItemsReset} queue items`)
   return { recordingsReset, queueItemsReset }

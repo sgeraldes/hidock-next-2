@@ -152,6 +152,13 @@ export interface AppConfig {
     /** GPU fingerprint the owner answered "Decide later" on; the dialog stays closed on it. */
     speakerSetupDismissedFingerprint?: string
     /**
+     * Whether the onnx-local engine may use DirectML on this GPU. Set by a probe
+     * of single-chunk calls (each must finish under 50 ms after warm-up) or by a
+     * DirectML failure; recorded per GPU fingerprint. Absent = not proven yet,
+     * which means the CPU.
+     */
+    onnxDmlProbe?: { fingerprint: string; ok: boolean; maxMs: number | null; at: string; reason?: string }
+    /**
      * Which realtime channel carries the microphone, for live speaker labels.
      * This one is the user's pin from Settings and it always wins. Absent or
      * null = measure it (see MicChannelIdentifier); 0 or 1 pins it.

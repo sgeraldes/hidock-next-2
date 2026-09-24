@@ -209,7 +209,7 @@ export function describeProfile(profile: HardwareProfile, hardware: DetectedHard
     case 'nvidia-cuda':
       return `NVIDIA GPU with CUDA (${gpuNames}).`
     case 'gpu-directml':
-      return `GPU without CUDA (${gpuNames}). pyannote can only use the CPU here.`
+      return `GPU without CUDA (${gpuNames}). The ONNX engine uses it through DirectML; pyannote can only use the CPU here.`
     case 'cpu-with-host':
       return `No CUDA GPU here${gpuNames ? ` (${gpuNames})` : ''}, and a Model Host is paired on your network.`
     case 'cpu-only':

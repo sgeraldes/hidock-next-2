@@ -97,16 +97,16 @@ describe('profiles and recommendations', () => {
   it('offers only engines that are built, and recommends the best of them', () => {
     const { options } = buildSetupOptions({ hardware: amd, modelHostPaired: false, measuredLocalRatio: 0.33 })
     // Not built yet: never listed, not even greyed out.
-    expect(options.map((o) => o.engine)).toEqual(['model-host', 'pyannote-local', 'off'])
+    expect(options.map((o) => o.engine)).toEqual(['onnx-local', 'model-host', 'pyannote-local', 'off'])
     for (const hardware of [amd, nvidia, hw([])]) {
       for (const o of buildSetupOptions({ hardware, modelHostPaired: false }).options) {
-        expect(['pyannote-local', 'model-host', 'off']).toContain(o.engine)
+        expect(['onnx-local', 'pyannote-local', 'model-host', 'off']).toContain(o.engine)
       }
     }
     const recommended = options.filter((o) => o.recommended)
     expect(recommended).toHaveLength(1)
-    // Model Host is unavailable until paired, so the recommendation today is local pyannote.
-    expect(recommended[0].engine).toBe('pyannote-local')
+    // On a GPU without CUDA the ONNX engine runs the same voice model through DirectML.
+    expect(recommended[0].engine).toBe('onnx-local')
     expect(options.find((o) => o.engine === 'model-host')?.unavailableReason).toMatch(/Pair/)
     expect(options.find((o) => o.engine === 'pyannote-local')?.measuredSpeedRatio).toBe(0.33)
   })
@@ -138,7 +138,8 @@ describe('resolveSpeakerEngine', () => {
     const on = { speakerLinkingEnabled: true }
     expect(resolveSpeakerEngine({ ...on, speakerEngine: 'pyannote-local', modelHostUrl: 'http://x' })).toBe('pyannote-local')
     expect(resolveSpeakerEngine({ ...on, speakerEngine: 'off' })).toBe('off')
-    expect(resolveSpeakerEngine({ ...on, speakerEngine: 'onnx-local' })).toBe('pyannote-local')
+    expect(resolveSpeakerEngine({ ...on, speakerEngine: 'onnx-local' })).toBe('onnx-local')
+    expect(resolveSpeakerEngine({ ...on, speakerEngine: 'pyannoteai' })).toBe('pyannote-local')
     expect(resolveSpeakerEngine({ ...on, speakerEngine: 'nonsense' })).toBe('pyannote-local')
   })
 
