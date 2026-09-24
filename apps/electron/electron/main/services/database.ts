@@ -16,7 +16,7 @@ import { isCancelledMeetingSubject, scoreMeetingCandidates } from './recording-m
 import { DURATION_LOW_VALUE_MAX_SECONDS, isImpossibleTranscriptDensity } from './value-thresholds'
 import type { QualityRating } from '@/types/knowledge'
 
-const SCHEMA_VERSION = 58
+const SCHEMA_VERSION = 59
 
 const SCHEMA = `
 -- Calendar events from ICS
@@ -321,6 +321,28 @@ CREATE TABLE IF NOT EXISTS transcripts (
     event_markers TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (recording_id) REFERENCES recordings(id)
+);
+
+-- Audio profile (v59): how much of each recording holds sound and where,
+-- read from the MP3 frame gains (decoded when the file is not the device's
+-- stream). Category too_short / silent / noise / speech. The per-frame
+-- envelope lives in the cache folder, and this row is what the Library filters on.
+CREATE TABLE IF NOT EXISTS audio_profiles (
+    recording_id TEXT PRIMARY KEY,
+    version INTEGER NOT NULL,
+    method TEXT NOT NULL,
+    file_size INTEGER,
+    file_mtime_ms INTEGER,
+    duration_seconds REAL,
+    sound_seconds REAL,
+    sound_share REAL,
+    longest_sound_seconds REAL,
+    median_level REAL,
+    spike_count INTEGER,
+    category TEXT NOT NULL,
+    ranges_json TEXT,
+    computed_at TEXT NOT NULL,
+    FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
 );
 
 -- Stage-level processing provenance (v52 / SPEC-009). One provider call can
@@ -3052,6 +3074,29 @@ const MIGRATIONS: Record<number, () => void> = {
     }
     console.log('Migration v58 complete')
   },
+  59: () => {
+    console.log('Running migration to schema v59: audio profiles')
+    // Empty on purpose: the profiles are filled by the background pass
+    // (audio-profile-store.ts), which reads audio files; a migration should not.
+    getDatabase().run(`CREATE TABLE IF NOT EXISTS audio_profiles (
+          recording_id TEXT PRIMARY KEY,
+          version INTEGER NOT NULL,
+          method TEXT NOT NULL,
+          file_size INTEGER,
+          file_mtime_ms INTEGER,
+          duration_seconds REAL,
+          sound_seconds REAL,
+          sound_share REAL,
+          longest_sound_seconds REAL,
+          median_level REAL,
+          spike_count INTEGER,
+          category TEXT NOT NULL,
+          ranges_json TEXT,
+          computed_at TEXT NOT NULL,
+          FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
+      )`)
+    console.log('Migration v59 complete')
+  },
 }
 
 /**
@@ -4455,6 +4500,10 @@ export interface Recording {
   meeting_id?: string
   /** Read projection from the assigned meeting; never persisted on recordings. */
   meeting_subject?: string | null
+  /** Read projection from audio_profiles (v59); null until the recording is profiled. */
+  audio_category?: 'too_short' | 'silent' | 'noise' | 'speech' | null
+  audio_sound_seconds?: number | null
+  audio_duration_seconds?: number | null
   correlation_confidence?: number
   correlation_method?: string
   status: string  // Legacy field for backwards compatibility
@@ -4489,9 +4538,12 @@ export interface Recording {
  */
 export function getRecordings(): Recording[] {
   return queryAll<Recording>(
-    `SELECT r.*, m.subject AS meeting_subject
+    `SELECT r.*, m.subject AS meeting_subject,
+            ap.category AS audio_category, ap.sound_seconds AS audio_sound_seconds,
+            ap.duration_seconds AS audio_duration_seconds
        FROM recordings r
        LEFT JOIN meetings m ON m.id = r.meeting_id
+       LEFT JOIN audio_profiles ap ON ap.recording_id = r.id
       WHERE r.deleted_at IS NULL
         AND (r.location IS NULL OR r.location <> 'deleted')
       ORDER BY r.date_recorded DESC`

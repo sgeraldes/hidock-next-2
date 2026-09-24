@@ -27,6 +27,7 @@ import type {
 } from '@/features/library/utils/sourceType'
 import { DURATION_PRESET_LABELS, type DurationPreset } from '@/features/library/utils/durationFilter'
 import { ISSUE_ORDER, ISSUE_TAGS, integrityFilterLabel, isIntegrityFilter } from '@/features/library/utils/transcriptIntegrity'
+import { AUDIO_FILTERS, isAudioFilter } from '@/features/library/utils/audioCheck'
 
 export type TypeCounts = Record<string, number> & { all: number }
 
@@ -64,6 +65,10 @@ interface LibraryFiltersProps {
   integrityFilter?: string
   integrityCounts?: Record<string, number>
   onIntegrityFilterChange?: (filter: string) => void
+  /** Audio check filter ('all' when off) and how many recordings each value matches. */
+  audioFilter?: string
+  audioCounts?: Record<string, number>
+  onAudioFilterChange?: (filter: string) => void
 }
 
 const CATEGORIES = ['all', 'meeting', 'interview', '1:1', 'brainstorm'] as const
@@ -104,7 +109,10 @@ export function LibraryFilters({
   onClearFilters,
   integrityFilter = 'all',
   integrityCounts = {},
-  onIntegrityFilterChange
+  onIntegrityFilterChange,
+  audioFilter = 'all',
+  audioCounts = {},
+  onAudioFilterChange
 }: LibraryFiltersProps) {
   const selectedType = artifactTypes.find((type) => type.id === sourceTypeFilter)
   const supportsDuration = selectedType?.capabilities.includes('timed') ?? false
@@ -123,7 +131,8 @@ export function LibraryFilters({
     supportsQuality && qualityFilter !== 'all',
     statusFilter !== 'all',
     supportsDuration && durationPreset !== 'all',
-    integrityFilter !== 'all'
+    integrityFilter !== 'all',
+    audioFilter !== 'all'
   ].filter(Boolean).length
   const anyFilterActive = advancedActiveCount > 0 || sourceTypeFilter !== 'all' || searchQuery.length > 0
 
@@ -163,6 +172,11 @@ export function LibraryFilters({
   if (integrityFilter !== 'all' && onIntegrityFilterChange && isIntegrityFilter(integrityFilter)) {
     chips.push({ key: 'integrity', label: integrityFilterLabel(integrityFilter), clear: () => onIntegrityFilterChange('all') })
   }
+  if (audioFilter !== 'all' && onAudioFilterChange && isAudioFilter(audioFilter)) {
+    const label = AUDIO_FILTERS.find((f) => f.value === audioFilter)?.label ?? audioFilter
+    chips.push({ key: 'audio', label: `Audio: ${label}`, clear: () => onAudioFilterChange('all') })
+  }
+  const showAudio = !!onAudioFilterChange
   const showIntegrity = !!onIntegrityFilterChange && ((integrityCounts.flagged ?? 0) > 0 || (integrityCounts.accepted ?? 0) > 0 || integrityFilter !== 'all')
 
   return (
@@ -268,6 +282,18 @@ export function LibraryFilters({
                   <div className="text-xs font-semibold text-foreground/70">Quality</div>
                   <select value={qualityFilter} onChange={(event) => onQualityFilterChange(event.target.value)} className="h-8 w-full rounded-md border border-input bg-background px-3 py-1 text-xs" aria-label="Filter by quality rating">
                     <option value="all">All ratings</option><option value="valuable">Valuable</option><option value="archived">Archived</option><option value="low-value">Low-value</option><option value="garbage">Garbage</option><option value="unrated">Unrated</option>
+                  </select>
+                </section>
+              )}
+
+              {showAudio && (
+                <section className="space-y-1.5">
+                  <div className="text-xs font-semibold text-foreground/70">Audio</div>
+                  <select value={audioFilter} onChange={(event) => onAudioFilterChange?.(event.target.value)} className="h-8 w-full rounded-md border border-input bg-background px-3 py-1 text-xs" aria-label="Filter by audio check">
+                    <option value="all">Any audio</option>
+                    {AUDIO_FILTERS.filter((f) => (audioCounts[f.value] ?? 0) > 0 || audioFilter === f.value).map((f) => (
+                      <option key={f.value} value={f.value}>{f.label} ({audioCounts[f.value] ?? 0})</option>
+                    ))}
                   </select>
                 </section>
               )}

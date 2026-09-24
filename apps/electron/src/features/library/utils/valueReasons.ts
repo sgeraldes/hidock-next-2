@@ -19,13 +19,18 @@ export type KnownValueReason =
   | 'background_ambient'
   | 'no_substance'
   | 'off_topic_chatter'
+  // Set by the audio check, not by the model (recording checks, v59).
+  | 'silent_audio'
+  | 'noise_only'
 
 export const VALUE_REASON_LABELS: Record<KnownValueReason, string> = {
   personal_family: 'Personal / family',
   greeting_only_no_show: 'Greeting only / no-show',
   background_ambient: 'Background / ambient',
   no_substance: 'No substance',
-  off_topic_chatter: 'Off-topic chatter'
+  off_topic_chatter: 'Off-topic chatter',
+  silent_audio: 'Silent audio',
+  noise_only: 'Noise only'
 }
 
 function isKnownValueReason(reason: string): reason is KnownValueReason {

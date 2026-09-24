@@ -266,11 +266,23 @@ per speaker from the transcript, embed them, match against the canonical voices.
 
 ## Phases
 
-1. Registry, the Length and Silence/Noise checks with the new categories, labels and filters, and
-   the background pass over the library. Listening review of the Noise threshold.
-2. "Run checks…" on a selection and "Re-process" on one recording, with integrity, value
-   classification and re-transcription moved into the registry.
-3. Voice re-identification, after the speaker engines phase 2 (turn sampling) lands.
+1. **Audio profile (built).** `audio-profile.ts` reads the MP3 frame gains (ffmpeg decoding for
+   anything else), sorts each recording into too short / silent / noise only / speech, and finds the
+   sound ranges. A silent or noise verdict is confirmed by decoding before it is written, so it errs
+   toward keeping (24-sep: 150 of 154 short recordings agree with the decoded reference; none with
+   speech is called silent or noise). `audio-profile-store.ts` keeps one row per recording in
+   `audio_profiles` (schema v59) and the per-frame envelope in `<cache>/audio-envelope/`, reads a
+   file again only when its size or modification time changes, and rates silent, noise-only and
+   too-short recordings "no value" (method `audio`; AI ratings give way, the owner's never do). A
+   boot task runs the pass over the whole library in the background; `audio:checkRecording` checks
+   one recording on request. The Library shows "Silent", "Noise only" or "Too short" as a word on
+   the row and filters on them under "Audio".
+2. The player's waveform drawn from the stored envelope; the sound ranges used by transcription and
+   diarization (Rec93: 23 minutes of 4 hours); the adaptive threshold for noisy rooms (Rec50).
+3. "Run checks…" on a selection and "Re-process" on one recording, with integrity, value
+   classification, the audio check and re-transcription in one registry.
+4. The audio index stages that need voices and topics: voices per range (after speaker engines
+   phase 2, turn sampling), topics per range, split suggestions decided by Jev.
 
 Each phase: tests, adversarial review by a separate agent, merge, and a benchmark compared with the
 baseline.

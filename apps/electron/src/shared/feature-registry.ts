@@ -531,6 +531,9 @@ export const CORE_CHANNEL_PREFIXES: string[] = [
   'notes:',
   'artifacts:',
   'waveform:',
+  // Audio checks (silent, noise only, too short; where the sound is). Reading a
+  // file's frame gains needs no provider, no network and no feature.
+  'audio:',
   'handover:',
   'outputs:',
   // Connector management surface (list/configure/connect/disconnect for ALL

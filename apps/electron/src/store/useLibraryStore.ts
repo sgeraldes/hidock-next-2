@@ -61,6 +61,8 @@ interface LibraryState {
   qualityFilter: string | null
   /** Transcript integrity filter; see transcriptIntegrity.ts for the values. */
   integrityFilter: string | null
+  /** Audio check filter; see audioCheck.ts for the values. */
+  audioFilter: string | null
   statusFilter: string | null
   sourceTypeFilter: SourceTypeFilter
   durationPreset: DurationPreset
@@ -151,6 +153,7 @@ interface LibraryActions {
   setCategoryFilter: (filter: string | null) => void
   setQualityFilter: (filter: string | null) => void
   setIntegrityFilter: (filter: string | null) => void
+  setAudioFilter: (filter: string | null) => void
   setStatusFilter: (filter: string | null) => void
   setSourceTypeFilter: (filter: SourceTypeFilter) => void
   setDurationPreset: (preset: DurationPreset) => void
@@ -216,6 +219,7 @@ const initialState: LibraryState = {
   categoryFilter: null,
   qualityFilter: null,
   integrityFilter: null,
+  audioFilter: null,
   statusFilter: null,
   sourceTypeFilter: 'all',
   durationPreset: 'all',
@@ -260,6 +264,7 @@ export const useLibraryStore = create<LibraryStore>()(
       setCategoryFilter: (filter) => set({ categoryFilter: filter }),
       setQualityFilter: (filter) => set({ qualityFilter: filter }),
       setIntegrityFilter: (filter) => set({ integrityFilter: filter }),
+      setAudioFilter: (filter) => set({ audioFilter: filter }),
       setStatusFilter: (filter) => set({ statusFilter: filter }),
       setSourceTypeFilter: (filter) => set({ sourceTypeFilter: filter }),
       setDurationPreset: (preset) => set({ durationPreset: preset }),
@@ -272,6 +277,7 @@ export const useLibraryStore = create<LibraryStore>()(
           categoryFilter: null,
           qualityFilter: null,
           integrityFilter: null,
+          audioFilter: null,
           statusFilter: null,
           sourceTypeFilter: 'all',
           durationPreset: 'all',
@@ -459,6 +465,7 @@ export const useLibraryStore = create<LibraryStore>()(
         categoryFilter: state.categoryFilter,
         qualityFilter: state.qualityFilter,
         integrityFilter: state.integrityFilter,
+        audioFilter: state.audioFilter,
         statusFilter: state.statusFilter,
         sourceTypeFilter: state.sourceTypeFilter,
         durationPreset: state.durationPreset,

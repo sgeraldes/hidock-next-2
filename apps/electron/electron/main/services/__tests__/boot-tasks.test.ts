@@ -34,6 +34,7 @@ const ALL_TASK_NAMES = [
   'integrity-check',
   'org-reconcile',
   'knowledge-capture-backfill',
+  'audio-profile-backfill',
   'meeting-wiki-backfill',
   'start-transcription-processor',
   'semantic-index-restore',
@@ -88,13 +89,13 @@ describe('registerGatedBootTasks', () => {
     expect(registered).toEqual(ALL_TASK_NAMES)
   })
 
-  it('library-only registers ZERO gated tasks — only the library-floor backfill', () => {
+  it('library-only registers ZERO gated tasks — only the library-floor backfills', () => {
     const registered: string[] = []
     registerGatedBootTasks({
       isFeatureEnabled: enabledUnder({ preset: 'library-only', flags: {} }),
       register: (t) => registered.push(t.name),
     })
-    expect(registered).toEqual(['database-backup', 'integrity-check', 'knowledge-capture-backfill'])
+    expect(registered).toEqual(['database-backup', 'integrity-check', 'knowledge-capture-backfill', 'audio-profile-backfill'])
   })
 
   it('library-transcription adds exactly the two transcription tasks', () => {
@@ -107,6 +108,7 @@ describe('registerGatedBootTasks', () => {
       'database-backup',
       'integrity-check',
       'knowledge-capture-backfill',
+      'audio-profile-backfill',
       'start-transcription-processor',
     ])
   })
@@ -119,7 +121,7 @@ describe('registerGatedBootTasks', () => {
     })
     // meeting-wiki (meeting-intelligence), transcription tasks and
     // semantic-index-restore (assistant) all drop via the requires:transcription cascade.
-    expect(registered).toEqual(['database-backup', 'stale-auto-link-repair', 'integrity-check', 'org-reconcile', 'knowledge-capture-backfill'])
+    expect(registered).toEqual(['database-backup', 'stale-auto-link-repair', 'integrity-check', 'org-reconcile', 'knowledge-capture-backfill', 'audio-profile-backfill'])
   })
 
   it('a disabled task NEVER runs — its run() body is not invoked', async () => {
@@ -137,13 +139,13 @@ describe('registerGatedBootTasks', () => {
       defs,
     })
     for (const t of captured) await t.run()
-    expect(ran).toEqual(['database-backup', 'integrity-check', 'knowledge-capture-backfill'])
+    expect(ran).toEqual(['database-backup', 'integrity-check', 'knowledge-capture-backfill', 'audio-profile-backfill'])
   })
 
   it('uses the live config-backed gate by default (mocked config here)', () => {
     featuresConfig = { preset: 'library-only', flags: {} }
     const registered: string[] = []
     registerGatedBootTasks({ register: (t) => registered.push(t.name) })
-    expect(registered).toEqual(['database-backup', 'integrity-check', 'knowledge-capture-backfill'])
+    expect(registered).toEqual(['database-backup', 'integrity-check', 'knowledge-capture-backfill', 'audio-profile-backfill'])
   })
 })

@@ -92,7 +92,20 @@ export interface CaptureValueClassifiedEvent extends DomainEvent {
   }
 }
 
+/** Audio profiles were computed (recording checks): Library labels and ratings may have changed. */
+export interface AudioProfilesUpdatedEvent extends DomainEvent {
+  type: 'audio:profiles-updated'
+  payload: {
+    profiled: number
+    silent: number
+    noise: number
+    tooShort: number
+    capturesRated: number
+  }
+}
+
 export type KnownDomainEvent =
+  | AudioProfilesUpdatedEvent
   | QualityAssessedEvent
   | StorageTierAssignedEvent
   | RecordingCleanupSuggestedEvent

@@ -26,6 +26,9 @@ export interface DatabaseRecording {
   date_recorded?: string
   meeting_id?: string
   meeting_subject?: string
+  /** Audio check (v59), joined from audio_profiles; null until checked. */
+  audio_category?: 'too_short' | 'silent' | 'noise' | 'speech' | null
+  audio_sound_seconds?: number | null
   // FL-001: transcription_status is the authoritative column; status is the legacy fallback
   transcription_status?: string
   status: string
@@ -272,6 +275,8 @@ export function buildRecordingMap(
         transcriptionStatus: mapTranscriptionStatus(dbRec?.transcription_status ?? dbRec?.status, capture?.status ?? undefined),
         meetingId: dbRec?.meeting_id,
         meetingSubject: dbRec?.meeting_subject,
+        audioCategory: dbRec?.audio_category ?? undefined,
+        audioSoundSeconds: dbRec?.audio_sound_seconds ?? undefined,
         sourceKind: 'recording',
         knowledgeCaptureId: capture?.id,
         userTitle: capture?.userTitle || undefined,
@@ -362,6 +367,8 @@ export function buildRecordingMap(
         transcriptionStatus: mapTranscriptionStatus(dbRec.transcription_status ?? dbRec.status, capture?.status ?? undefined),
         meetingId: dbRec.meeting_id,
         meetingSubject: dbRec.meeting_subject,
+        audioCategory: dbRec.audio_category ?? undefined,
+        audioSoundSeconds: dbRec.audio_sound_seconds ?? undefined,
         // CX-T5-3: explicit — this is a REAL recordings-table row even when its
         // nullable file_path is empty (the old path inference misread that as
         // capture-only and stripped its deletion/restore affordances).
