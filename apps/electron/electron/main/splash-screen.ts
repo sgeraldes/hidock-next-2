@@ -138,7 +138,10 @@ export async function createSplashWindow(preloadPath: string): Promise<BrowserWi
     console.error('[Splash] Failed to load splash content:', error)
   }
 
-  if (!splash.isDestroyed()) splash.show()
+  if (!splash.isDestroyed()) {
+    if (process.env.HIDOCK_BENCH_OUTPUT) splash.showInactive()
+    else splash.show()
+  }
   console.log(`[Splash] First rendered frame ready in ${Math.round(performance.now() - startedAt)}ms`)
   return splash
 }

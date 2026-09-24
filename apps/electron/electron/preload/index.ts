@@ -157,6 +157,7 @@ import type {
 } from '../../src/types/knowledge'
 import type { PipelineState } from '../main/types/device-pipeline'
 import type { Note, NoteRelatedItem, NoteMeetingSuggestion } from '../../src/types/notes'
+import type { SpeakerEngineId, SpeakerSetup } from '../../src/types/speakers'
 
 /** A Context Graph node with its degree + click-through ids (mirrors the service DTO). */
 interface ContextGraphNode {
@@ -788,6 +789,14 @@ export interface ElectronAPI {
     }>
     pair: (request: { url: string; code: string }) => Promise<{ success: boolean; error?: string }>
     forget: () => Promise<{ success: boolean }>
+  }
+
+  /** Voice recognition engine per hardware: detect, recommend, save the choice. */
+  speakers: {
+    getSetup: (request?: { refresh?: boolean }) => Promise<Result<SpeakerSetup>>
+    applySetup: (request: { engine: SpeakerEngineId; fingerprint: string; confirmOff?: boolean }) => Promise<Result<SpeakerSetup>>
+    /** "Decide later": keep the setup closed on this hardware. */
+    dismissSetup: () => Promise<Result<null>>
   }
 
   // Knowledge Captures
@@ -1718,6 +1727,12 @@ const electronAPI: ElectronAPI = {
     check: (request) => callIPC('model-host:check', request),
     pair: (request) => callIPC('model-host:pair', request),
     forget: () => callIPC('model-host:forget')
+  },
+
+  speakers: {
+    getSetup: (request) => callIPC('speakers:getSetup', request),
+    applySetup: (request) => callIPC('speakers:applySetup', request),
+    dismissSetup: () => callIPC('speakers:dismissSetup')
   },
 
   knowledge: {

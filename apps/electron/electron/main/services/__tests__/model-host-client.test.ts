@@ -142,6 +142,19 @@ describe('diarizeOnModelHost', () => {
     expect(jobCall[1].headers.authorization).toBe('Bearer tok')
   })
 
+  it('pins the voice model on the job', async () => {
+    const fetchFn = vi.fn(async (url: string) =>
+      String(url).endsWith('/health') ? jsonResponse(HEALTHY) : jsonResponse(RESULT)
+    )
+    await diarizeOnModelHost(
+      audioPath,
+      { url: 'http://gamestation:8765', token: 'tok' },
+      { timeoutMs: 5000, model: 'pyannote/speaker-diarization-3.1' },
+      fetchFn as never
+    )
+    expect(calls(fetchFn)[1][0]).toContain('&model=pyannote%2Fspeaker-diarization-3.1')
+  })
+
   // Each of these is a reason to diarize locally, never a reason to fail the
   // recording. They are separate cases because each one reaches the user as a
   // different sentence.

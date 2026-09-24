@@ -76,6 +76,21 @@ export function safeExtension(raw) {
 }
 
 /**
+ * The voice models a client may ask for. The client pins the model its voice
+ * library was built with, so a host configured for another one still answers
+ * in the library's space. Anything else is refused rather than downloaded.
+ */
+export const PINNABLE_MODELS = new Set([
+  'pyannote/speaker-diarization-3.1',
+  'pyannote/speaker-diarization-community-1',
+])
+
+export function pinnedModel(raw) {
+  const value = String(raw ?? '')
+  return PINNABLE_MODELS.has(value) ? value : ''
+}
+
+/**
  * True when the request came from this machine AND addressed it as this
  * machine.
  *
@@ -209,6 +224,12 @@ export function createHandler(deps) {
           })
           return
         }
+        const requested = url.searchParams.get('model')
+        const pinned = pinnedModel(requested)
+        if (requested && !pinned) {
+          sendJson(res, 400, { error: `this host does not run the voice model ${requested}` })
+          return
+        }
         if (!deps.state.canAdmit()) {
           // One heavy job at a time, so the client retries or goes local
           // instead of queueing behind something it cannot see.
@@ -236,6 +257,9 @@ export function createHandler(deps) {
           }
           const result = await diarize(audio, {
             ...deps.jobOptions(),
+            // A pinned model is used alone: falling back to another model would
+            // answer in a voice space the client just said it cannot use.
+            ...(pinned ? { model: pinned, fallbackModel: pinned } : {}),
             extension: safeExtension(url.searchParams.get('ext')),
             signal: controller.signal,
           })

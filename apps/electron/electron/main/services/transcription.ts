@@ -154,6 +154,7 @@ import {
   applyKnownVoiceBindings,
   buildSpeakerLinkingContext,
   reconcileProviderSpeakers,
+  pinnedVoiceModel,
   runSpeakerLinkingPreflight,
   SpeakerLinkingUnavailableError,
   type SpeakerLinkingResult
@@ -2115,8 +2116,8 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     recordingId,
     stage: 'diarization',
     provider: 'pyannote',
-    tool: 'community-1',
-    model: config.transcription.speakerLinkingModel,
+    tool: 'pyannote',
+    model: pinnedVoiceModel(),
     execution: 'local',
     parentRunIds: [vadRun.id]
   })
@@ -2154,7 +2155,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     }
     speakerLinking = {
       available: false,
-      model: config.transcription.speakerLinkingModel,
+      model: pinnedVoiceModel(),
       modelVersion: null,
       device: null,
       segments: [],

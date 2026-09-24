@@ -7,6 +7,7 @@ import ffmpegPath from 'ffmpeg-static'
 import { getConfig } from './config'
 import { queryAll, queryOne, runInTransaction, runNoSave } from './database'
 import { diarizeOnModelHost, ModelHostUnavailableError } from './model-host-client'
+import { CANONICAL_VOICE_MODEL, resolveSpeakerEngine } from './speaker-engines'
 
 /** Default share of logical CPUs when the config does not say. */
 const DEFAULT_DIARIZATION_CPU_PERCENT = 40
@@ -287,6 +288,81 @@ let lastModelHostComplaint = ''
 let remoteAttemptsInFlight = 0
 
 /** Exported so a test can watch the same recording twice in one run. */
+/** The model (and version) the library's voices were built with. */
+export interface LibraryVoiceSpace {
+  model: string
+  modelVersion: string | null
+  clusters: number
+  anchored: number
+  /** Voices from other models or versions: kept, but not matched until transferred. */
+  otherModelClusters: number
+  otherModelAnchored: number
+}
+
+/**
+ * The embedding space of the existing voices: the model with the most
+ * contact-anchored clusters, then the most clusters. Null for an empty library.
+ *
+ * Voice IDs match only within one model. Changing GPU or moving to the Model
+ * Host does not change them (measured 24-sep: 35 voices matched across the
+ * RTX 4090 and the CPU); changing the model does, silently. So the model that
+ * writes voice evidence is pinned to this space.
+ */
+export function libraryVoiceSpace(): LibraryVoiceSpace | null {
+  const row = queryOne<{ model: string; model_version: string | null; clusters: number; anchored: number }>(
+    `SELECT model, model_version, COUNT(*) AS clusters,
+            SUM(CASE WHEN contact_id IS NOT NULL THEN 1 ELSE 0 END) AS anchored
+       FROM voice_clusters
+      GROUP BY model, model_version
+      ORDER BY anchored DESC, clusters DESC
+      LIMIT 1`
+  )
+  if (!row) return null
+  // Voices from any other model or version cannot match new recordings until a
+  // model transfer brings them over (spec: canonical voice IDs). Counted so the
+  // setup can say so instead of losing them silently.
+  const other = queryOne<{ clusters: number; anchored: number }>(
+    `SELECT COUNT(*) AS clusters, SUM(CASE WHEN contact_id IS NOT NULL THEN 1 ELSE 0 END) AS anchored
+       FROM voice_clusters
+      WHERE NOT (model = ? AND COALESCE(model_version, '') = COALESCE(?, ''))`,
+    [row.model, row.model_version]
+  )
+  return {
+    model: row.model,
+    modelVersion: row.model_version,
+    clusters: row.clusters,
+    anchored: row.anchored ?? 0,
+    otherModelClusters: other?.clusters ?? 0,
+    otherModelAnchored: other?.anchored ?? 0
+  }
+}
+
+/**
+ * A result from a different model would start every voice from zero. Refuse it
+ * rather than write it: the recording degrades to the transcriber's labels and
+ * says why, and the library keeps its voices.
+ */
+export function assertInLibraryVoiceSpace(result: AcousticWorkerResult, space: LibraryVoiceSpace | null): void {
+  if (!space) return
+  if (result.model !== space.model) {
+    throw new SpeakerLinkingUnavailableError(
+      `voice model mismatch: this result came from ${result.model}, but the library's voices were built with ` +
+        `${space.model}. Not writing it, so known voices keep matching.`
+    )
+  }
+  if (space.modelVersion && result.modelVersion && result.modelVersion !== space.modelVersion) {
+    console.warn(
+      `[SpeakerLinking] voice model version changed: ${space.modelVersion} -> ${result.modelVersion}. ` +
+        'New voices will not match voices from the old version until they are migrated.'
+    )
+  }
+}
+
+/** The model every engine must answer in: the library's, or the canonical default when it is empty. */
+export function pinnedVoiceModel(): string {
+  return libraryVoiceSpace()?.model ?? CANONICAL_VOICE_MODEL
+}
+
 export function resetModelHostComplaint(): void {
   lastModelHostComplaint = ''
   remoteAttemptsInFlight = 0
@@ -307,13 +383,15 @@ export async function diarize(
   deps: {
     local?: typeof runWorker
     remote?: typeof diarizeOnModelHost
+    /** Never ask the Model Host, even if one is paired (engine pyannote-local). */
+    localOnly?: boolean
   } = {}
 ): Promise<AcousticWorkerResult> {
   const local = deps.local || runWorker
   const remote = deps.remote || diarizeOnModelHost
   const config = getConfig().transcription
   const url = config.modelHostUrl?.trim()
-  if (!url) return local(audioPath, shouldContinue, audioDurationSeconds)
+  if (!url || deps.localOnly) return local(audioPath, shouldContinue, audioDurationSeconds)
 
   remoteAttemptsInFlight += 1
   try {
@@ -322,12 +400,21 @@ export async function diarize(
       { url, token: config.modelHostToken || '' },
       {
         timeoutMs: speakerLinkingTimeoutMs(config.speakerLinkingTimeoutSeconds, audioDurationSeconds),
-        shouldContinue
+        shouldContinue,
+        model: pinnedVoiceModel()
       }
     )
     // Only the last one out clears it. Clearing while another recording is
     // still failing would make the next failure repeat a line already said.
     if (remoteAttemptsInFlight === 1) lastModelHostComplaint = ''
+    const pinned = pinnedVoiceModel()
+    if (result.model !== pinned) {
+      // A host from before model pinning ignores the request and runs its own model.
+      console.warn(
+        `[SpeakerLinking] the Model Host used ${result.model}, not ${pinned} like the library's voices. Diarizing here instead.`
+      )
+      return local(audioPath, shouldContinue, audioDurationSeconds)
+    }
     console.log(`[SpeakerLinking] diarized on the model host (${result.device})`)
     return result
   } catch (error) {
@@ -359,12 +446,15 @@ function runWorker(
   const python = /^(py|python|python3)(\.exe)?$/i.test(configuredPython) && existsSync(localRuntime)
     ? localRuntime
     : configuredPython
+  // The library's model, alone: a fallback to another model would not match its voices.
+  const model = pinnedVoiceModel()
+  const fallbackModel = model
   const args = [
     ...(process.platform === 'win32' && /(^|[\\/])py(?:\.exe)?$/i.test(python) ? ['-3.11'] : []),
     workerPath,
     '--audio', audioPath,
-    '--model', config.speakerLinkingModel,
-    '--fallback-model', config.speakerLinkingFallbackModel || 'pyannote/speaker-diarization-3.1',
+    '--model', model,
+    '--fallback-model', fallbackModel,
     '--min-speech-seconds', String(config.speakerLinkingMinSpeechSeconds)
   ]
   return new Promise((resolve, reject) => {
@@ -598,19 +688,25 @@ export async function runSpeakerLinkingPreflight(
   audioDurationSeconds?: number | null
 ): Promise<SpeakerLinkingResult> {
   const config = getConfig().transcription
-  if (!config.speakerLinkingEnabled) {
+  const engine = resolveSpeakerEngine(config)
+  if (engine === 'off') {
     return {
       available: false,
-      model: config.speakerLinkingModel,
+      model: pinnedVoiceModel(),
       modelVersion: null,
       device: null,
       segments: [],
       matches: [],
-      reason: 'disabled in transcription settings'
+      reason: 'voice recognition is turned off in Speakers & voices'
     }
   }
-  const result = await diarize(audioPath, shouldContinue, audioDurationSeconds)
+  // pyannote-local skips the host; model-host (and auto with a host) tries it first.
+  const result =
+    engine === 'pyannote-local'
+      ? await diarize(audioPath, shouldContinue, audioDurationSeconds, { remote: undefined, localOnly: true })
+      : await diarize(audioPath, shouldContinue, audioDurationSeconds)
   if (!shouldContinue()) throw new Error('speaker-linking cancelled because recording became ineligible')
+  assertInLibraryVoiceSpace(result, libraryVoiceSpace())
   const matches = persistMatches(recordingId, result)
   return {
     available: true,

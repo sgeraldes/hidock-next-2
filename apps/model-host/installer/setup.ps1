@@ -120,7 +120,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Installing pyannote failed. Nothing else was c
 Step 'Diarization model'
 if (-not $HuggingFaceToken) {
   Write-Host '  pyannote models need a Hugging Face token and their licence accepted.' -ForegroundColor Yellow
-  Write-Host '  Accept at https://huggingface.co/pyannote/speaker-diarization-community-1'
+  Write-Host '  Accept at https://huggingface.co/pyannote/speaker-diarization-3.1'
+  Write-Host '  and https://huggingface.co/pyannote/segmentation-3.0'
   Write-Host '  then create a token at https://huggingface.co/settings/tokens'
   $HuggingFaceToken = Read-Host '  Paste the token (or press Enter to do this later)'
 }
@@ -149,7 +150,7 @@ function Write-HostConfig {
   $config = @{
     port = 8765
     cpuPercent = 50
-    model = 'pyannote/speaker-diarization-community-1'
+    model = 'pyannote/speaker-diarization-3.1'
     fallbackModel = 'pyannote/speaker-diarization-3.1'
     minSpeechSeconds = 1.5
     timeoutMs = 3600000
@@ -197,7 +198,7 @@ Remove-Item -LiteralPath $tmpScript -Force
 $env:HF_TOKEN = $HuggingFaceToken
 $env:HUGGINGFACE_HUB_TOKEN = $HuggingFaceToken
 $worker = Join-Path $InstallDir 'resources\speaker-linking\worker.py'
-$output = & $PythonExe $worker --audio $wav --model 'pyannote/speaker-diarization-community-1' --fallback-model 'pyannote/speaker-diarization-3.1' --min-speech-seconds 0.5 2>&1
+$output = & $PythonExe $worker --audio $wav --model 'pyannote/speaker-diarization-3.1' --fallback-model 'pyannote/speaker-diarization-3.1' --min-speech-seconds 0.5 2>&1
 $code = $LASTEXITCODE
 Remove-Item -LiteralPath $wav -Force -ErrorAction SilentlyContinue
 

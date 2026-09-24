@@ -47,6 +47,21 @@ for (const level of ['log', 'info', 'warn', 'error']) {
     }
     if (message.includes('[BootScheduler] Complete')) {
       emit({ type: 'boot-settled' })
+      // What the owner would see at this moment: open dialogs and a screenshot.
+      setTimeout(async () => {
+        try {
+          const window = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().includes('/renderer/index.html'))
+          const dialogs = await window.webContents.executeJavaScript(
+            'Array.from(document.querySelectorAll("[role=dialog]")).map(d => ({ testId: d.getAttribute("data-testid"), ' +
+            'title: d.querySelector("h2")?.textContent ?? null, ' +
+            'options: Array.from(d.querySelectorAll("input[type=radio]")).map(r => ({ engine: r.value, disabled: r.disabled, checked: r.checked })) }))')
+          emit({ type: 'ui-dialogs', dialogs })
+          const image = await window.webContents.capturePage()
+          fs.writeFileSync(path.join(output, 'boot-settled.png'), image.toPNG())
+        } catch (error) {
+          emit({ type: 'ui-dialogs', error: String(error) })
+        }
+      }, 1500)
       if (process.env.HIDOCK_BENCH_INFERENCE === '1') {
         setTimeout(async () => {
           const name = 'local-semantic-query'

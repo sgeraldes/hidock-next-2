@@ -234,6 +234,10 @@ export interface AppConfig {
     modelHostUrl?: string
     /** Token this computer got when it paired with that host. */
     modelHostToken?: string
+    speakerEngine?: 'auto' | 'pyannote-local' | 'onnx-local' | 'signatures-from-turns' | 'model-host' | 'pyannoteai' | 'off'
+    speakerSetupFingerprint?: string
+    speakerSetupAt?: string
+    speakerSetupDismissedFingerprint?: string
     /** Realtime channel the user pinned; absent or null = measure it. */
     liveMicChannel?: 0 | 1 | null
     /** Realtime channel measured in an earlier session; a warm start only. */

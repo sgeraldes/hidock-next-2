@@ -359,6 +359,63 @@ describe('routes', () => {
     expect(seenExtension).toBe('.flac')
   })
 
+  it('runs the voice model the client pins, with no fallback to another one', async () => {
+    const { token } = deps.pairing.redeem(deps.pairing.openPairing())
+    await deps.state.apply('start')
+    let seen = null
+    deps.diarize = async (_audio, options) => {
+      seen = options
+      return WORKER_RESULT
+    }
+    await createHandler(deps)(
+      request({
+        method: 'POST',
+        url: '/jobs/diarize?model=' + encodeURIComponent('pyannote/speaker-diarization-3.1'),
+        headers: { authorization: `Bearer ${token}` },
+        body: 'audio',
+      }),
+      response()
+    )
+    expect(seen.model).toBe('pyannote/speaker-diarization-3.1')
+    expect(seen.fallbackModel).toBe('pyannote/speaker-diarization-3.1')
+  })
+
+  it('keeps its own model when the client pins none (older clients)', async () => {
+    const { token } = deps.pairing.redeem(deps.pairing.openPairing())
+    await deps.state.apply('start')
+    let seen = null
+    deps.diarize = async (_audio, options) => {
+      seen = options
+      return WORKER_RESULT
+    }
+    await createHandler(deps)(
+      request({ method: 'POST', url: '/jobs/diarize', headers: { authorization: `Bearer ${token}` }, body: 'audio' }),
+      response()
+    )
+    expect(seen.model).toBe('m')
+    expect(seen.fallbackModel).toBe('f')
+  })
+
+  it('refuses a model outside the allow-list without taking the lane', async () => {
+    const { token } = deps.pairing.redeem(deps.pairing.openPairing())
+    await deps.state.apply('start')
+    const diarize = vi.fn(async () => WORKER_RESULT)
+    deps.diarize = diarize
+    const res = response()
+    await createHandler(deps)(
+      request({
+        method: 'POST',
+        url: '/jobs/diarize?model=' + encodeURIComponent('evil/remote-code'),
+        headers: { authorization: `Bearer ${token}` },
+        body: 'audio',
+      }),
+      res
+    )
+    expect(res.statusCode).toBe(400)
+    expect(diarize).not.toHaveBeenCalled()
+    expect(deps.state.canAdmit()).toBe(true)
+  })
+
   it('does not hand the GPU and the client count to a stranger', async () => {
     const res = response()
     await createHandler(deps)(request({ url: '/health', local: false, host: 'gamestation:8765' }), res)

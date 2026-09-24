@@ -46,7 +46,11 @@ export function revealMainWindow(
 
       // Show first, then close the always-on-top splash. This avoids exposing
       // the desktop between the two native-window operations.
-      if (!window.isVisible()) window.show()
+      // A benchmark run must not take the foreground from the person at the machine.
+      if (!window.isVisible()) {
+        if (process.env.HIDOCK_BENCH_OUTPUT) window.showInactive()
+        else window.show()
+      }
       options.closeSplash()
       options.log?.(`[Startup] Main window revealed via ${reason}`)
       settle(reason)

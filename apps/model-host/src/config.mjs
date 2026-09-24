@@ -38,7 +38,8 @@ export const DEFAULTS = {
   port: DEFAULT_PORT,
   /** Half the machine, the same share the client gives its own worker. */
   cpuPercent: 50,
-  model: 'pyannote/speaker-diarization-community-1',
+  // 3.1 built the voice library; the client pins it on every job anyway.
+  model: 'pyannote/speaker-diarization-3.1',
   fallbackModel: 'pyannote/speaker-diarization-3.1',
   minSpeechSeconds: 1.5,
   /** An hour: long enough for a long meeting on CPU, short enough to give up. */
