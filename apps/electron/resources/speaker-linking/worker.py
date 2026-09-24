@@ -101,6 +101,61 @@ def decode_audio(audio_path: str, torch: Any) -> dict[str, Any]:
     return {"waveform": waveform, "sample_rate": 16000, "uri": Path(audio_path).stem}
 
 
+EMBEDDER_ONNX = "wespeaker-resnet34-lm-masked.onnx"
+SEGMENTATION_ONNX = "segmentation-3.0.onnx"
+
+
+def use_onnx_models(pipeline: Any, onnx_dir: str, provider: str, torch: Any) -> str:
+    """Run the pipeline's two neural models through ONNX Runtime.
+
+    Everything else stays pyannote: chunking, binarization, clustering and the
+    output. The ONNX files are exports of the same weights (export_voice_onnx.py,
+    embeddings cosine 1.000000 against PyTorch), so the voices land in the same
+    space as the library's and no transfer is needed. The embedder runs on
+    DirectML when asked (0.6 ms per second of audio on an RX 6600 XT against 5.7
+    on the CPU); segmentation stays on the CPU, where it measured faster (1.6 ms
+    against 3 to 4 on DirectML).
+
+    Returns the device label that goes into the result.
+    """
+    import numpy as np
+    import onnxruntime as ort
+
+    options = ort.SessionOptions()
+    threads_env = os.environ.get("HIDOCK_DIARIZATION_THREADS")
+    if threads_env and threads_env.isdigit() and int(threads_env) > 0:
+        options.intra_op_num_threads = int(threads_env)
+    wanted = ["DmlExecutionProvider", "CPUExecutionProvider"] if provider == "dml" else ["CPUExecutionProvider"]
+    available = ort.get_available_providers()
+    if provider == "dml" and "DmlExecutionProvider" not in available:
+        raise RuntimeError(
+            "DirectML is not available in this Python environment "
+            f"(onnxruntime providers: {', '.join(available)}). Install onnxruntime-directml."
+        )
+    embedder = ort.InferenceSession(os.path.join(onnx_dir, EMBEDDER_ONNX), options, providers=wanted)
+    segmenter = ort.InferenceSession(
+        os.path.join(onnx_dir, SEGMENTATION_ONNX), options, providers=["CPUExecutionProvider"]
+    )
+
+    def embed(waveforms: Any, weights: Any = None) -> Any:
+        x = waveforms.detach().cpu().numpy().astype(np.float32)
+        if x.ndim == 3:
+            x = x[:, 0, :]  # (batch, channel, samples) -> (batch, samples)
+        if weights is None:
+            w = np.ones((x.shape[0], 1), dtype=np.float32)
+        else:
+            w = weights.detach().cpu().numpy().astype(np.float32)
+        return torch.from_numpy(embedder.run(None, {"waveforms": x, "weights": w})[0])
+
+    def segment(waveforms: Any, *_: Any, **__: Any) -> Any:
+        x = waveforms.detach().cpu().numpy().astype(np.float32)
+        return torch.from_numpy(segmenter.run(None, {"waveforms": x})[0])
+
+    pipeline._embedding.model_.forward = embed
+    pipeline._segmentation.model.forward = segment
+    return "onnx-dml" if provider == "dml" else "onnx-cpu"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="HiDock persistent acoustic speaker-linking worker")
     parser.add_argument("--audio", required=True)
@@ -109,6 +164,9 @@ def main() -> int:
     parser.add_argument("--min-speech-seconds", type=float, default=4.0)
     parser.add_argument("--min-speakers", type=int)
     parser.add_argument("--max-speakers", type=int)
+    parser.add_argument("--engine", choices=["pyannote", "onnx"], default="pyannote")
+    parser.add_argument("--onnx-dir", help="folder with the exported ONNX voice models")
+    parser.add_argument("--onnx-provider", choices=["dml", "cpu"], default="cpu")
     args = parser.parse_args()
 
     # Some native/model dependencies print diagnostics such as "Could not ..."
@@ -154,6 +212,11 @@ def main() -> int:
     if pipeline is None:
         raise RuntimeError(f"pyannote returned no pipeline for {actual_model}")
     pipeline.to(torch.device(device))
+    if args.engine == "onnx":
+        if not args.onnx_dir:
+            raise RuntimeError("--engine onnx needs --onnx-dir")
+        device = use_onnx_models(pipeline, args.onnx_dir, args.onnx_provider, torch)
+        log(f"voice models through ONNX Runtime ({device})")
     audio_input = decode_audio(args.audio, torch)
 
     kwargs: dict[str, int] = {}

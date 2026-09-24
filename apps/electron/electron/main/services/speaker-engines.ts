@@ -45,7 +45,7 @@ export const SPEAKER_ENGINES: Record<Exclude<SpeakerEngineId, 'auto'>, SpeakerEn
     description:
       'The same voice model through ONNX Runtime: runs on AMD and Intel GPUs with DirectML, and faster than pyannote on a CPU.',
     where: 'this computer',
-    built: false,
+    built: true,
   },
   'signatures-from-turns': {
     id: 'signatures-from-turns',

@@ -154,7 +154,7 @@ describe('what can be chosen', () => {
 
   it('refuses an engine that is not built yet, or a Model Host that is not paired', async () => {
     const { fingerprint } = await getSpeakerSetup()
-    await expect(applySpeakerSetup({ engine: 'onnx-local', fingerprint })).rejects.toThrow(/not available yet/)
+    await expect(applySpeakerSetup({ engine: 'pyannoteai', fingerprint })).rejects.toThrow(/not available yet/)
     await expect(applySpeakerSetup({ engine: 'model-host', fingerprint })).rejects.toThrow(/Pair a Model Host/)
     expect(updateConfig).not.toHaveBeenCalled()
   })

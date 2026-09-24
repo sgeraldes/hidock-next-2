@@ -1,13 +1,14 @@
 import { spawn } from 'child_process'
-import { existsSync } from 'fs'
-import { join, isAbsolute } from 'path'
+import { existsSync, mkdirSync } from 'fs'
+import { dirname, join, isAbsolute } from 'path'
 import { randomUUID } from 'crypto'
 import { availableParallelism } from 'os'
 import ffmpegPath from 'ffmpeg-static'
-import { getConfig } from './config'
+import { getConfig, getDataPath } from './config'
 import { queryAll, queryOne, runInTransaction, runNoSave } from './database'
 import { diarizeOnModelHost, ModelHostUnavailableError } from './model-host-client'
 import { CANONICAL_VOICE_MODEL, resolveSpeakerEngine } from './speaker-engines'
+import { detectHardware } from './hardware-profile'
 
 /** Default share of logical CPUs when the config does not say. */
 const DEFAULT_DIARIZATION_CPU_PERCENT = 40
@@ -429,23 +430,105 @@ export async function diarize(
   }
 }
 
-function runWorker(
+function resolveVoicePython(): string {
+  const configuredPython = getConfig().transcription.speakerLinkingPythonPath || (process.platform === 'win32' ? 'py' : 'python3')
+  const localRuntime = process.platform === 'win32'
+    ? join(process.cwd(), '.venv-speaker-linking', 'Scripts', 'python.exe')
+    : join(process.cwd(), '.venv-speaker-linking', 'bin', 'python')
+  return /^(py|python|python3)(\.exe)?$/i.test(configuredPython) && existsSync(localRuntime)
+    ? localRuntime
+    : configuredPython
+}
+
+/** Where the ONNX exports of the voice models live, next to the other local models. */
+export function voiceOnnxDir(): string {
+  return join(getDataPath(), 'models', 'voice-onnx-pyannote-3.1')
+}
+
+const VOICE_ONNX_FILES = ['wespeaker-resnet34-lm-masked.onnx', 'segmentation-3.0.onnx']
+
+let voiceOnnxExport: Promise<void> | null = null
+
+/**
+ * Export the voice models to ONNX once, with the same Python environment that
+ * already holds the pyannote weights (resources/speaker-linking/export_voice_onnx.py
+ * checks each export against PyTorch before it is used). Later runs reuse the files.
+ */
+export function ensureVoiceOnnxModels(): Promise<void> {
+  const dir = voiceOnnxDir()
+  if (VOICE_ONNX_FILES.every((f) => existsSync(join(dir, f)))) return Promise.resolve()
+  if (voiceOnnxExport) return voiceOnnxExport
+  const exporter = join(dirname(resolveWorkerPath(getConfig().transcription.speakerLinkingWorkerPath)), 'export_voice_onnx.py')
+  if (!existsSync(exporter)) {
+    return Promise.reject(new SpeakerLinkingUnavailableError(`voice model exporter not found: ${exporter}`))
+  }
+  mkdirSync(dir, { recursive: true })
+  const python = resolveVoicePython()
+  console.log(`[SpeakerLinking] Exporting the voice models to ONNX in ${dir} (once)`)
+  voiceOnnxExport = new Promise<void>((resolve, reject) => {
+    const child = spawn(python, [exporter, dir], {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, HF_HUB_OFFLINE: '1', HF_TOKEN: getConfig().transcription.localAsrHfToken || process.env.HF_TOKEN }
+    })
+    let tail = ''
+    const keep = (chunk: Buffer) => {
+      tail = (tail + chunk.toString()).slice(-4000)
+    }
+    child.stdout.on('data', keep)
+    child.stderr.on('data', keep)
+    const timer = setTimeout(() => child.kill(), 10 * 60 * 1000)
+    child.on('error', (e) => {
+      clearTimeout(timer)
+      reject(new SpeakerLinkingUnavailableError(`voice model export could not start: ${e.message}`))
+    })
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      if (code === 0 && VOICE_ONNX_FILES.every((f) => existsSync(join(dir, f)))) {
+        console.log(`[SpeakerLinking] Voice models exported:\n${tail.trim()}`)
+        resolve()
+      } else {
+        reject(new SpeakerLinkingUnavailableError(`voice model export failed (exit ${code}): ${tail.trim().slice(-600)}`))
+      }
+    })
+  }).finally(() => {
+    voiceOnnxExport = null
+  })
+  return voiceOnnxExport
+}
+
+let gpuPresent: Promise<boolean> | null = null
+
+/** DirectML when this computer has any GPU; otherwise ONNX Runtime on the CPU. */
+async function onnxProvider(): Promise<'dml' | 'cpu'> {
+  gpuPresent ??= detectHardware()
+    .then((h) => !h.detectionFailed && h.gpus.length > 0)
+    .catch(() => false)
+  return (await gpuPresent) ? 'dml' : 'cpu'
+}
+
+async function runOnnxWorker(
   audioPath: string,
   shouldContinue: () => boolean,
   audioDurationSeconds?: number | null
+): Promise<AcousticWorkerResult> {
+  await ensureVoiceOnnxModels()
+  const provider = await onnxProvider()
+  return runWorker(audioPath, shouldContinue, audioDurationSeconds, ['--engine', 'onnx', '--onnx-dir', voiceOnnxDir(), '--onnx-provider', provider])
+}
+
+function runWorker(
+  audioPath: string,
+  shouldContinue: () => boolean,
+  audioDurationSeconds?: number | null,
+  engineArgs: string[] = []
 ): Promise<AcousticWorkerResult> {
   const config = getConfig().transcription
   const workerPath = resolveWorkerPath(config.speakerLinkingWorkerPath)
   if (!existsSync(workerPath)) {
     return Promise.reject(new SpeakerLinkingUnavailableError(`speaker-linking worker not found: ${workerPath}`))
   }
-  const configuredPython = config.speakerLinkingPythonPath || (process.platform === 'win32' ? 'py' : 'python3')
-  const localRuntime = process.platform === 'win32'
-    ? join(process.cwd(), '.venv-speaker-linking', 'Scripts', 'python.exe')
-    : join(process.cwd(), '.venv-speaker-linking', 'bin', 'python')
-  const python = /^(py|python|python3)(\.exe)?$/i.test(configuredPython) && existsSync(localRuntime)
-    ? localRuntime
-    : configuredPython
+  const python = resolveVoicePython()
   // The library's model, alone: a fallback to another model would not match its voices.
   const model = pinnedVoiceModel()
   const fallbackModel = model
@@ -455,7 +538,8 @@ function runWorker(
     '--audio', audioPath,
     '--model', model,
     '--fallback-model', fallbackModel,
-    '--min-speech-seconds', String(config.speakerLinkingMinSpeechSeconds)
+    '--min-speech-seconds', String(config.speakerLinkingMinSpeechSeconds),
+    ...engineArgs
   ]
   return new Promise((resolve, reject) => {
     const child = spawn(python, args, {
@@ -700,11 +784,13 @@ export async function runSpeakerLinkingPreflight(
       reason: 'voice recognition is turned off in Speakers & voices'
     }
   }
-  // pyannote-local skips the host; model-host (and auto with a host) tries it first.
+  // pyannote-local and onnx-local skip the host; model-host (and auto with a host) tries it first.
   const result =
-    engine === 'pyannote-local'
-      ? await diarize(audioPath, shouldContinue, audioDurationSeconds, { remote: undefined, localOnly: true })
-      : await diarize(audioPath, shouldContinue, audioDurationSeconds)
+    engine === 'onnx-local'
+      ? await runOnnxWorker(audioPath, shouldContinue, audioDurationSeconds)
+      : engine === 'pyannote-local'
+        ? await diarize(audioPath, shouldContinue, audioDurationSeconds, { remote: undefined, localOnly: true })
+        : await diarize(audioPath, shouldContinue, audioDurationSeconds)
   if (!shouldContinue()) throw new Error('speaker-linking cancelled because recording became ineligible')
   assertInLibraryVoiceSpace(result, libraryVoiceSpace())
   const matches = persistMatches(recordingId, result)

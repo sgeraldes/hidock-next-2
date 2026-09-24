@@ -1,7 +1,7 @@
 // Runs the exported voice models on CPU and DirectML with the app's own
 // onnxruntime-node, and says how fast they are and whether both agree.
 //
-//   node scripts/models/check_voice_onnx.cjs <models folder> <audio.f32>
+//   node resources/speaker-linking/check_voice_onnx.cjs <models folder> <audio.f32>
 //
 // <audio.f32>: 16 kHz mono float32 PCM, at least 60 s, e.g.
 //   ffmpeg -ss 600 -t 60 -i recording.wav -ac 1 -ar 16000 -f f32le audio.f32

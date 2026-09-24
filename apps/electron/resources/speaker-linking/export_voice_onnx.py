@@ -149,3 +149,43 @@ with torch.inference_mode():
     r = seg_model(torch.from_numpy(xa)).numpy()
 o = sess.run(None, {'waveforms': xa})[0]
 print('shapes', r.shape, o.shape, '| max abs diff', float(np.abs(r - o).max()))
+
+# --- the embedder as the diarization pipeline calls it: with per-frame masks ---
+#
+# pyannote 3.1 embeds each (chunk, local speaker) pair by passing the whole chunk
+# and that speaker's activity as `weights` to the statistics pooling. The export
+# above has no mask, so it only reproduces whole-clip embeddings. This one takes
+# the same (waveforms, weights) the pipeline passes to `_embedding.model_`.
+
+
+class MaskedEmbedder(torch.nn.Module):
+    def __init__(self, m):
+        super().__init__()
+        self.fbank = KaldiFbank()
+        self.resnet = m.resnet
+        self.register_buffer('scale', torch.tensor(32768.0, dtype=torch.float32))
+
+    def forward(self, waveforms, weights):  # (batch, samples), (batch, mask frames)
+        feats = self.fbank(waveforms * self.scale)
+        return self.resnet(feats, weights=weights)[1]
+
+
+masked = MaskedEmbedder(model).eval()
+path = os.path.join(out_dir, 'wespeaker-resnet34-lm-masked.onnx')
+x = torch.randn(2, SR * 10) * 0.05
+w = (torch.rand(2, 589) > 0.4).float()
+torch.onnx.export(masked, (x, w), path, input_names=['waveforms', 'weights'], output_names=['embeddings'],
+                  dynamic_axes={'waveforms': {0: 'batch', 1: 'samples'}, 'weights': {0: 'batch', 1: 'mask_frames'},
+                                'embeddings': {0: 'batch'}},
+                  opset_version=17, dynamo=False)
+print('exported', path, round(os.path.getsize(path) / 1e6, 1), 'MB')
+
+sess = ort.InferenceSession(path, providers=['CPUExecutionProvider'])
+for trial in range(3):
+    xa = (np.random.randn(3, SR * 10) * 0.05).astype(np.float32)
+    wa = (np.random.rand(3, 589) > 0.3 + 0.2 * trial).astype(np.float32)
+    with torch.inference_mode():
+        ref = model(torch.from_numpy(xa).unsqueeze(1), weights=torch.from_numpy(wa)).numpy()
+    got = sess.run(None, {'waveforms': xa, 'weights': wa})[0]
+    cos = min(float((r * g).sum() / (np.linalg.norm(r) * np.linalg.norm(g))) for r, g in zip(ref, got))
+    print(f'masked trial {trial}: worst cosine vs pyannote = {cos:.6f}')
