@@ -382,7 +382,32 @@ export function orderPendingForProcessing<T extends OrderableQueueItem>(items: T
   })
 }
 
+/**
+ * Recordings cancelled while a lane was transcribing them. Every continuation
+ * gate of the pipeline (voice step, provider calls, the check before analysis,
+ * analysis) asks `stillWanted`, so a cancelled job stops at the next gate and
+ * persists nothing. Only live jobs are added, and a job's entries are cleared
+ * when it ends, so cancelling never blocks a later request for the same recording.
+ */
+const cancelledRecordings = new Set<string>()
+
+function stillWanted(recordingId: string): boolean {
+  return !cancelledRecordings.has(recordingId) && isRecordingEligible(recordingId)
+}
+
+/** The queued id and the recording id the pipeline will use for it (they differ for legacy synced-file ids). */
+function idsFor(recordingId: string): string[] {
+  const canonical = getRecordingById(recordingId)?.id ?? resolveRecordingId(recordingId)?.id
+  return canonical && canonical !== recordingId ? [recordingId, canonical] : [recordingId]
+}
+
+function cancelIfRunning(recordingId: string): void {
+  const live = new Set(getActiveTranscriptions())
+  for (const id of idsFor(recordingId)) if (live.has(id)) cancelledRecordings.add(id)
+}
+
 export function cancelTranscription(recordingId: string): void {
+  cancelIfRunning(recordingId)
   removeFromQueueByRecordingId(recordingId)
   clearQueueHints(recordingId)
   updateRecordingTranscriptionStatus(recordingId, 'none')
@@ -392,6 +417,7 @@ export function cancelTranscription(recordingId: string): void {
 
 export function cancelAllTranscriptions(): number {
   cancelRequested = true
+  for (const id of getActiveTranscriptions()) cancelledRecordings.add(id)
   const count = cancelPendingTranscriptions()
   userPriorityIds.clear()
   queuePriorityRank.clear()
@@ -414,7 +440,8 @@ async function runQueueItem(
   item: ReturnType<typeof getQueueItems>[number],
   onStage?: (stage: string) => void
 ): Promise<void> {
-  addActiveTranscription(item.recording_id)
+  const ids = idsFor(item.recording_id)
+  for (const id of ids) addActiveTranscription(id)
   try {
     updateQueueItem(item.id, 'processing')
     updateQueueProgress(item.id, 0) // spec-014: reset progress
@@ -498,7 +525,10 @@ async function runQueueItem(
       console.log(`Recording ${item.recording_id} failed after ${retryCount} retries (max: ${MAX_RETRY_ATTEMPTS})`)
     }
   } finally {
-    removeActiveTranscription(item.recording_id)
+    for (const id of ids) {
+      removeActiveTranscription(id)
+      cancelledRecordings.delete(id)
+    }
   }
 }
 
@@ -2269,7 +2299,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     speakerLinking = await runSpeakerLinkingPreflight(
       recordingId,
       recording.file_path,
-      () => isRecordingEligible(recordingId),
+      () => stillWanted(recordingId),
       recording.duration_seconds
     )
     completeProcessingRun(acousticDiarizationRun.id, {
@@ -2382,7 +2412,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
             recording.file_path,
             meetingContext,
             progressCallback,
-            () => isRecordingEligible(recordingId),
+            () => stillWanted(recordingId),
             recording.duration_seconds ?? undefined
           )
   } catch (e) {
@@ -2455,7 +2485,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   // checks cannot undo. Re-check SYNCHRONOUSLY here, adjacent to the analysis
   // call (no await between), and return the cancelled outcome WITHOUT invoking
   // the analysis provider when ineligible or the lookup fails closed.
-  if (!isRecordingEligible(recordingId)) {
+  if (!stillWanted(recordingId)) {
     console.log(
       `[Transcription] Recording ${recordingId} became ineligible during audio transcription ` +
         '— skipping Gemini analysis; no transcript sent to any external LLM for analysis'
@@ -2480,7 +2510,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   let analysis: TranscriptAnalysis
   try {
     analysis = await analyzeTranscriptWithGemini(fullText, candidateMeetings, () =>
-      isRecordingEligible(recordingId)
+      stillWanted(recordingId)
     )
     completeProcessingRun(summaryRun.id, { outputRefs: { summary: `trans_${recordingId}.summary` } })
   } catch (error) {

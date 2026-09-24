@@ -94,7 +94,7 @@ they are.
 | Engine | Where | What it runs | For |
 |---|---|---|---|
 | `pyannote-local` | this PC | today's worker.py (torch) | NVIDIA GPUs; slow on CPU |
-| `onnx-local` | this PC | sherpa-onnx: pyannote segmentation-3.0 + WeSpeaker ResNet34 embeddings, ONNX Runtime with DirectML or CPU | AMD/Intel GPUs, and a faster CPU path |
+| `onnx-local` | this PC | pyannote 3.1 with its segmentation-3.0 and WeSpeaker ResNet34 models run by ONNX Runtime (DirectML or CPU); pyannote's own chunking and clustering | AMD/Intel GPUs, and a faster CPU path |
 | `signatures-from-turns` | this PC | no diarization; takes the transcriber's speaker turns and embeds a few seconds per speaker with the same ONNX embedding model | any hardware; seconds instead of minutes |
 | `model-host` | a PC on the LAN | today's remote host (GPU) | a home GPU box, e.g. the RTX 4090 |
 | `pyannoteai` | online | pyannoteAI Precision diarization + voiceprints | CPU-only machines that want the best diarization |
@@ -224,9 +224,12 @@ Built on 24-sep as a second lane (`maybeStartShortLane` in `transcription.ts`). 
 halfway through Gemini, so instead of reordering, a waiting recording runs beside the long one when the
 long one's remaining estimate exceeds the waiting one's by more than 10 minutes. Estimates: 0.12 s per
 second of audio for Gemini plus 0.35 s for the local voice step (measured 24-sep: 1 h in about 2 min,
-4 h in 14 min, pyannote at the 40% thread budget about 0.3). One short job at a time, and none while the
-long job is in its local voice step, so two pyannote workers never share the CPU. The queue state
-carries `shortLaneId`; the dock lists both rows as processing.
+4 h in 14 min, pyannote at the 40% thread budget about 0.3). One short job at a time. Two voice
+workers never share the CPU because every local voice job in the process (both lanes, the ONNX export,
+the DirectML probe) goes through one slot, `inVoiceSlot` in `speaker-linking.ts`; the lane also waits
+to start while the long job is in its voice step. Cancelling stops a running job at its next gate
+(voice step, provider call, before analysis, analysis) and nothing is saved. The queue state carries
+`shortLaneId`; the dock lists both rows as processing.
 
 ## Phases
 
@@ -243,7 +246,7 @@ compared with the baseline (`scripts/perf/compare.py`).
    while a long one runs; stage and estimate in the Library. Its own PR, right after phase 1.
 2. **Canonical voice IDs, model transfer, `onnx-local` and `signatures-from-turns`.** The
    `canonical_voice_id` migration and model tag; turn sampling shared by the transfer and by
-   `signatures-from-turns`; sherpa-onnx with DirectML and CPU; the compatibility check; transfer with
+   `signatures-from-turns`; ONNX Runtime with DirectML and CPU; the compatibility check; transfer with
    hold-out validation; speed measured on this PC against pyannote. community-1 becomes a transfer
    target once its Hugging Face conditions are accepted and it loads.
    **`onnx-local` built 24-sep:** pyannote 3.1 keeps its chunking and clustering; its two models run
@@ -251,11 +254,13 @@ compared with the baseline (`scripts/perf/compare.py`).
    `<data>/models/voice-onnx-pyannote-3.1-v2`). Same voice space, no transfer. Measured on Rec54
    (5 m 30 s): pyannote on the CPU 129 s, ONNX with the embedder on the RX 6600 XT 31 s, identical
    segments and embeddings (cosine 1.000000, 100% same speaker per 0.1 s). The RX 6600 XT also draws
-   the screen, and a GPU call cannot be interrupted, so DirectML has to be proven before it is used:
-   a probe of 20 single-chunk calls (10 s of audio each) must stay under 50 ms per call on that exact
-   GPU (RX 6600 XT: 6.9 ms worst), the verdict is stored per GPU fingerprint, and until then the engine
-   runs on the CPU. In a run every call carries one chunk; a call over 50 ms, or any DirectML failure,
-   moves the rest of the recording (and later ones) to the CPU. One local voice job runs at a time in
+   the screen, and a GPU call cannot be interrupted: the 50 ms figure is measured after each call
+   returns, not enforced. What keeps it small is the size of the work: every call carries one 10-second
+   chunk. DirectML is used only after a probe on that exact GPU and driver (two warm-up calls on
+   1-second clips, then 20 single-chunk calls, all under 50 ms; RX 6600 XT: 6.9 ms worst); the verdict
+   is stored per GPU and driver version, and until then the engine runs on the CPU. In a run, a call
+   over 50 ms moves the rest of the recording to the CPU, and a DirectML failure (not a timeout or a
+   cancellation) reruns that recording on the CPU and marks the GPU as not usable. One local voice job runs at a time in
    the process (queue lanes, export, probe), at below-normal priority with the thread budget. The
    export goes to a staging folder, fails on any mismatch with PyTorch, and is published with a
    manifest only when complete. A 32-chunk batch froze the machine on 24-sep; that path does not

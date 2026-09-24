@@ -1,5 +1,5 @@
 import { spawn } from 'child_process'
-import { existsSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'fs'
 import { dirname, join, isAbsolute } from 'path'
 import { randomUUID } from 'crypto'
 import { availableParallelism, constants as osConstants, setPriority } from 'os'
@@ -471,6 +471,29 @@ function lowerPriority(pid: number | undefined): void {
   }
 }
 
+/** Ready means a manifest whose every file exists with the recorded size. */
+export function voiceOnnxReady(dir: string): boolean {
+  try {
+    const manifest = JSON.parse(readFileSync(join(dir, VOICE_ONNX_MANIFEST), 'utf8')) as { files?: Record<string, number> }
+    const files = manifest.files ?? {}
+    return VOICE_ONNX_FILES.every((f) => typeof files[f] === 'number' && existsSync(join(dir, f)) && statSync(join(dir, f)).size === files[f])
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Stop a worker and everything it started. On Windows `kill()` ends only the
+ * Python process; the FFmpeg it runs keeps decoding (SPEC-013).
+ */
+function killTree(child: { pid?: number; kill: () => boolean }): void {
+  if (process.platform === 'win32' && child.pid) {
+    spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }).on('error', () => child.kill())
+  } else {
+    child.kill()
+  }
+}
+
 let voiceOnnxExport: Promise<void> | null = null
 
 /**
@@ -482,7 +505,7 @@ let voiceOnnxExport: Promise<void> | null = null
  */
 export function ensureVoiceOnnxModels(): Promise<void> {
   const dir = voiceOnnxDir()
-  if (existsSync(join(dir, VOICE_ONNX_MANIFEST))) return Promise.resolve()
+  if (voiceOnnxReady(dir)) return Promise.resolve()
   if (voiceOnnxExport) return voiceOnnxExport
   const exporter = join(dirname(resolveWorkerPath(getConfig().transcription.speakerLinkingWorkerPath)), 'export_voice_onnx.py')
   if (!existsSync(exporter)) {
@@ -513,7 +536,7 @@ export function ensureVoiceOnnxModels(): Promise<void> {
         }
         child.stdout.on('data', keep)
         child.stderr.on('data', keep)
-        const timer = setTimeout(() => child.kill(), 10 * 60 * 1000)
+        const timer = setTimeout(() => killTree(child), 10 * 60 * 1000)
         child.on('error', (e) => {
           clearTimeout(timer)
           reject(new SpeakerLinkingUnavailableError(`voice model export could not start: ${e.message}`))
@@ -567,7 +590,8 @@ async function onnxProvider(): Promise<'dml' | 'cpu'> {
   const hardware = await hardwareOnce.catch(() => null)
   if (!hardware || hardware.detectionFailed) return 'cpu'
   if (!hardware.gpus.some((g) => g.vendor === 'amd' || g.vendor === 'intel' || g.vendor === 'nvidia')) return 'cpu'
-  const fingerprint = gpuFingerprint(hardware)
+  // Driver versions are part of the evidence: a driver update means a new probe.
+  const fingerprint = `${gpuFingerprint(hardware)}|${hardware.gpus.map((g) => g.driver ?? '?').sort().join(',')}`
   const known = getConfig().transcription.onnxDmlProbe
   if (known && known.fingerprint === fingerprint) return known.ok ? 'dml' : 'cpu'
   const verdict = await inVoiceSlot(() => probeDirectMl(fingerprint))
@@ -590,7 +614,7 @@ function probeDirectMl(fingerprint: string): Promise<DmlVerdict> {
     let err = ''
     child.stdout.on('data', (c: Buffer) => (out += c.toString()))
     child.stderr.on('data', (c: Buffer) => (err = (err + c.toString()).slice(-2000)))
-    const timer = setTimeout(() => child.kill(), 120_000)
+    const timer = setTimeout(() => killTree(child), 120_000)
     const fail = (reason: string) => resolve({ fingerprint, ok: false, maxMs: null, at, reason })
     child.on('error', (e) => {
       clearTimeout(timer)
@@ -609,6 +633,17 @@ function probeDirectMl(fingerprint: string): Promise<DmlVerdict> {
   })
 }
 
+/**
+ * A failure of DirectML itself (provider, device, kernel), as opposed to a
+ * timeout, a cancellation, unreadable audio or a broken worker contract: only
+ * these get a CPU rerun, so a slow DirectML run cannot double the voice step.
+ */
+export function isDirectMlFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  if (/timed out|cancelled|ineligible|invalid speaker-linking worker output/i.test(message)) return false
+  return /DirectML|DmlExecutionProvider|\bDML\b|onnxruntime|D3D12|DXGI/i.test(message)
+}
+
 async function runOnnxWorker(
   audioPath: string,
   shouldContinue: () => boolean,
@@ -621,13 +656,13 @@ async function runOnnxWorker(
   try {
     return await runWorker(audioPath, shouldContinue, audioDurationSeconds, args('dml'))
   } catch (error) {
-    if (!shouldContinue()) throw error
+    if (!shouldContinue() || !isDirectMlFailure(error)) throw error
     // DirectML failed on this machine: this recording goes to the CPU now, and
     // so does every later one until the GPU changes.
     const message = (error as Error).message
     console.warn(`[SpeakerLinking] DirectML run failed (${message.slice(0, 200)}); retrying on the CPU`)
     const hardware = await hardwareOnce?.catch(() => null)
-    if (hardware) recordDmlVerdict({ fingerprint: gpuFingerprint(hardware), ok: false, maxMs: null, at: new Date().toISOString(), reason: message.slice(0, 300) })
+    if (hardware) recordDmlVerdict({ fingerprint: `${gpuFingerprint(hardware)}|${hardware.gpus.map((g) => g.driver ?? '?').sort().join(',')}`, ok: false, maxMs: null, at: new Date().toISOString(), reason: message.slice(0, 300) })
     return runWorker(audioPath, shouldContinue, audioDurationSeconds, args('cpu'))
   }
 }
@@ -684,7 +719,7 @@ function spawnWorker(
     const cap = 25 * 1024 * 1024
     const timeoutMs = speakerLinkingTimeoutMs(config.speakerLinkingTimeoutSeconds, audioDurationSeconds)
     const timeout = setTimeout(() => {
-      child.kill()
+      killTree(child)
       // A timeout means the worker could not serve THIS recording in budget, not that the
       // audio is bad: degrade to provider-managed diarization instead of failing the
       // transcript (the transcript is the product, voice linking is the enhancement).
@@ -694,7 +729,7 @@ function spawnWorker(
     }, timeoutMs)
     const cancellation = setInterval(() => {
       if (!shouldContinue()) {
-        child.kill()
+        killTree(child)
         clearTimeout(timeout)
         clearInterval(cancellation)
         reject(new Error('speaker-linking cancelled because recording became ineligible'))

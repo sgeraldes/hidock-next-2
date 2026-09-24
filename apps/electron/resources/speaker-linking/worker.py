@@ -225,8 +225,11 @@ def probe_dml(onnx_dir: str) -> int:
     )
     x = (np.random.randn(1, 160000) * 0.05).astype(np.float32)
     w = np.ones((1, 589), dtype=np.float32)
+    # Warm-up (shader compilation) on 1-second clips: the smallest GPU work that
+    # still compiles the same kernels.
+    small = (np.random.randn(1, 16000) * 0.05).astype(np.float32)
     for _ in range(2):
-        session.run(None, {"waveforms": x, "weights": w})
+        session.run(None, {"waveforms": small, "weights": np.ones((1, 59), dtype=np.float32)})
     worst = 0.0
     for _ in range(20):
         started = time.perf_counter()
