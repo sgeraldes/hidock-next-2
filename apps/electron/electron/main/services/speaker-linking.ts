@@ -685,14 +685,29 @@ function runWorker(
   audioDurationSeconds?: number | null,
   engineArgs: string[] = []
 ): Promise<AcousticWorkerResult> {
-  return inVoiceSlot(() => spawnWorker(audioPath, shouldContinue, audioDurationSeconds, engineArgs))
+  return new Promise((resolve, reject) => {
+    void inVoiceSlot(async () => {
+      const hold: WorkerHold = {}
+      const result = spawnWorker(audioPath, shouldContinue, audioDurationSeconds, engineArgs, hold)
+      result.then(resolve, reject)
+      await result.catch(() => undefined)
+      // The slot stays held until the worker process has really exited. A stop can
+      // give up on the job after its 15 s ceiling (the recording then goes on
+      // without voices), but the next voice job still waits for this process.
+      if (hold.exited) await hold.exited
+    })
+  })
 }
+
+/** Filled by spawnWorker: settles when the worker process has exited (or never started). */
+type WorkerHold = { exited?: Promise<void> }
 
 function spawnWorker(
   audioPath: string,
   shouldContinue: () => boolean,
   audioDurationSeconds?: number | null,
-  engineArgs: string[] = []
+  engineArgs: string[] = [],
+  hold: WorkerHold = {}
 ): Promise<AcousticWorkerResult> {
   const config = getConfig().transcription
   const workerPath = resolveWorkerPath(config.speakerLinkingWorkerPath)
@@ -729,11 +744,17 @@ function spawnWorker(
     let stderr = ''
     const cap = 25 * 1024 * 1024
     const timeoutMs = speakerLinkingTimeoutMs(config.speakerLinkingTimeoutSeconds, audioDurationSeconds)
-    // Stopping waits for the whole tree to exit before the promise settles, so the
-    // voice slot is not released while this worker (or its FFmpeg) still runs.
+    // The worker's own exit (or a failed start). runWorker holds the voice slot on
+    // this, so no other voice job starts while this process still runs.
+    const exited = new Promise<void>((resolve) => {
+      child.once('close', () => resolve())
+      child.once('error', () => resolve())
+    })
+    hold.exited = exited
+    // Stopping ends the whole tree, then settles the job once the worker exited.
+    // If it has not exited 15 s later, the kill is repeated and the job settles
+    // anyway (the recording continues without voices); the slot keeps waiting.
     let stopping: Promise<void> | null = null
-    // The worker's own exit, whether taskkill worked or the fallback kill did.
-    const exited = new Promise<void>((resolve) => child.once('close', () => resolve()))
     const stop = (error: Error) => {
       if (stopping) return
       clearTimeout(timeout)
@@ -741,7 +762,13 @@ function spawnWorker(
       let ceilingTimer: ReturnType<typeof setTimeout> | undefined
       const ceiling = new Promise<void>((resolve) => {
         ceilingTimer = setTimeout(() => {
-          console.warn(`[SpeakerLinking] worker ${child.pid} still running 15 s after it was stopped`)
+          console.warn(`[SpeakerLinking] worker ${child.pid} still running 15 s after it was stopped; killing again`)
+          void killTree(child)
+          try {
+            if (child.pid) process.kill(child.pid)
+          } catch {
+            /* already gone */
+          }
           resolve()
         }, 15_000)
       })
