@@ -42,6 +42,7 @@ import { useOperations } from '@/hooks/useOperations'
 import { isRetryableDownloadItem } from '@/hooks/useDownloadOrchestrator'
 import type { UnifiedRecording } from '@/types/unified-recording'
 import { toast } from '@/components/ui/toaster'
+import { isFeatureOffThisRun } from '@/lib/bootFeatures'
 
 interface OperationsPanelProps {
   sidebarOpen: boolean
@@ -171,7 +172,7 @@ export function OperationsPanel({ sidebarOpen }: OperationsPanelProps) {
   const [persistedDownloads, setPersistedDownloads] = useState<DownloadQueueEntry[]>([])
 
   useEffect(() => {
-    if (!window.electronAPI?.downloadService) return
+    if (!window.electronAPI?.downloadService || isFeatureOffThisRun('device-sync')) return
     window.electronAPI.downloadService.getState().then((state) => {
       setPersistedDownloads((state?.queue ?? []).map((item) => ({
         filename: item.filename,

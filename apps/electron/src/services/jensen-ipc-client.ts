@@ -31,6 +31,7 @@ import type {
   BatteryStatus,
   BluetoothStatus,
 } from '@hidock/jensen-protocol'
+import { isFeatureOffThisRun } from '@/lib/bootFeatures'
 
 // Drain trailing `jensen:download-chunk` events after the downloadFile invoke
 // resolves. Poll every IDLE_MS until the received count stops growing or
@@ -99,7 +100,7 @@ export class JensenIpcClient {
     // 2026-07-22 — pull the CURRENT state once on subscribe: broadcasts only
     // fire on operations, so without this a freshly reloaded renderer reports
     // "device not connected" while main still holds the USB connection.
-    void window.electronAPI.jensen.getState?.().then((state?: JensenIpcState | null) => {
+    if (!isFeatureOffThisRun('device-sync')) void window.electronAPI.jensen.getState?.().then((state?: JensenIpcState | null) => {
       if (!state) return
       const wasConnected = this._connected
       this._connected = state.connected

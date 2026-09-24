@@ -95,6 +95,7 @@ export interface ActivityLogEntry {
 
 // Import shared activity log constant
 import { MAX_ACTIVITY_LOG_ENTRIES } from '../constants/activity-log'
+import { isFeatureOffThisRun } from '@/lib/bootFeatures'
 
 type ActivityListener = (entry: ActivityLogEntry) => void
 
@@ -687,6 +688,7 @@ class HiDockDeviceService {
    * the Library in a false "Device not connected" state.
    */
   async hydrateConnectionState(): Promise<boolean> {
+    if (isFeatureOffThisRun('device-sync')) return false
     try {
       const mainState = await window.electronAPI?.jensen?.getState?.()
       if (!mainState?.connected) return false

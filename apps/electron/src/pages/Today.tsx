@@ -53,6 +53,7 @@ import {
 import { CATEGORY_DOT, CATEGORY_CHIP, CATEGORY_ORDER } from '@/lib/meeting-category-colors'
 import { UNLINKED_STATE_LABEL } from '@/lib/calendar-utils'
 import type { Contact } from '@/types'
+import { isFeatureOffThisRun } from '@/lib/bootFeatures'
 
 const TODAY_PARTICIPANT_LIMIT = 4
 
@@ -414,7 +415,7 @@ export function Today() {
       return
     }
     const getAll = window.electronAPI?.deviceCache?.getAll
-    if (!getAll) {
+    if (!getAll || isFeatureOffThisRun('device-sync')) {
       setRecordedOnDeviceByMeeting({})
       return
     }

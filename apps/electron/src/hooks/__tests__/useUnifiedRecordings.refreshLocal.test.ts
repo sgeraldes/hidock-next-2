@@ -188,4 +188,33 @@ describe('useUnifiedRecordings.refreshLocal (CX-T6-4)', () => {
     expect(rebuilt).toBe(false)
     expect(storeState.setUnifiedRecordings).not.toHaveBeenCalled()
   })
+
+  it('shows local recordings when the device cache is gated off (Device Sync disabled)', async () => {
+    // Before the guard, this rejection failed the whole load and the Library
+    // showed 0 sources plus a red "Feature Device Sync is disabled" error.
+    global.window.electronAPI = createMockElectronAPI([])
+    window.electronAPI.recordings.getAll = vi.fn().mockResolvedValue([{
+      id: 'rec-1',
+      filename: 'local.hda',
+      file_path: 'F:/recordings/local.mp3',
+      file_size: 1024,
+      status: 'transcribed',
+      on_local: 1,
+      on_device: 0,
+      location: 'local-only'
+    }])
+    window.electronAPI.deviceCache.getAll = vi.fn().mockRejectedValue(
+      new Error('FeatureDisabledError: Feature "Device Sync" is disabled (channel deviceCache:getAll).')
+    )
+    const { result } = renderHook(() => useUnifiedRecordings())
+
+    let rebuilt: boolean | undefined
+    await act(async () => {
+      rebuilt = await result.current.refreshLocal!()
+    })
+
+    expect(rebuilt).toBe(true)
+    await waitFor(() => expect(latestRecordings.map((r) => r.filename)).toEqual(['local.hda']))
+    expect(storeState.setUnifiedRecordingsError).not.toHaveBeenCalledWith(expect.stringContaining('disabled'))
+  })
 })

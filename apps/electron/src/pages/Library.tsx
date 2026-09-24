@@ -85,6 +85,7 @@ import { useLibraryStore, useLibrarySorting } from '@/store/useLibraryStore'
 import { useOperations } from '@/hooks/useOperations'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { useTranscriptionStore } from '@/store/features/useTranscriptionStore'
+import { isFeatureOffThisRun } from '@/lib/bootFeatures'
 
 const COMPACT_ROW_HEIGHT_PX = 48
 
@@ -523,9 +524,11 @@ export function Library() {
         if (result?.success && shortened > 0) {
           let counts: TruncatedRecoveryCounts | null = null
           try {
-            counts = (await window.electronAPI.downloadService?.truncatedRecoveryPlan?.()) ?? null
+            counts = isFeatureOffThisRun('device-sync')
+              ? null
+              : ((await window.electronAPI.downloadService?.truncatedRecoveryPlan?.()) ?? null)
           } catch (e) {
-            // Device Sync off rejects the channel; the warning still stands.
+            // Device Sync turned off during this run rejects the channel; the warning still stands.
             console.warn('[Library] Truncated-recovery plan unavailable:', e)
           }
           const recoverable = counts?.recoverable ?? 0
@@ -581,7 +584,7 @@ export function Library() {
 
   const loadPurgedFilenameBases = useCallback(async () => {
     const getPurgedFilenames = window.electronAPI?.downloadService?.getPurgedFilenames
-    if (!getPurgedFilenames) return
+    if (!getPurgedFilenames || isFeatureOffThisRun('device-sync')) return
     try {
       const filenames = await getPurgedFilenames()
       setPurgedFilenameBases(new Set(filenames.map(purgeFilenameBase).filter((base): base is string => !!base)))
