@@ -14,6 +14,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -102,6 +103,8 @@ def decode_audio(audio_path: str, torch: Any) -> dict[str, Any]:
 
 
 EMBEDDER_ONNX = "wespeaker-resnet34-lm-masked.onnx"
+# Longest a single GPU call may take before the rest of the run goes to the CPU.
+GPU_CALL_BUDGET_S = 0.05
 SEGMENTATION_ONNX = "segmentation-3.0.onnx"
 
 
@@ -133,6 +136,18 @@ def use_onnx_models(pipeline: Any, onnx_dir: str, provider: str, torch: Any) -> 
             f"(onnxruntime providers: {', '.join(available)}). Install onnxruntime-directml."
         )
     embedder = ort.InferenceSession(os.path.join(onnx_dir, EMBEDDER_ONNX), options, providers=wanted)
+    # The GPU that runs DirectML is usually the one drawing the screen, and
+    # Windows cannot give compute a lower priority than the desktop. One long
+    # GPU call freezes the machine (24-sep: a 32 x 10 s batch did). So on
+    # DirectML each call carries one chunk, every call is timed, and the first
+    # call after warm-up that takes longer than GPU_CALL_BUDGET_S moves the rest
+    # of the recording to the CPU.
+    cpu_embedder = (
+        ort.InferenceSession(os.path.join(onnx_dir, EMBEDDER_ONNX), options, providers=["CPUExecutionProvider"])
+        if provider == "dml"
+        else embedder
+    )
+    state = {"gpu": provider == "dml", "calls": 0}
     segmenter = ort.InferenceSession(
         os.path.join(onnx_dir, SEGMENTATION_ONNX), options, providers=["CPUExecutionProvider"]
     )
@@ -145,7 +160,23 @@ def use_onnx_models(pipeline: Any, onnx_dir: str, provider: str, torch: Any) -> 
             w = np.ones((x.shape[0], 1), dtype=np.float32)
         else:
             w = weights.detach().cpu().numpy().astype(np.float32)
-        return torch.from_numpy(embedder.run(None, {"waveforms": x, "weights": w})[0])
+        if not state["gpu"]:
+            return torch.from_numpy(cpu_embedder.run(None, {"waveforms": x, "weights": w})[0])
+        rows = []
+        for i in range(x.shape[0]):
+            started = time.perf_counter()
+            rows.append(embedder.run(None, {"waveforms": x[i : i + 1], "weights": w[i : i + 1]})[0])
+            elapsed = time.perf_counter() - started
+            state["calls"] += 1
+            # The first calls compile shaders on the CPU; they are not GPU time.
+            if state["calls"] > 2 and elapsed > GPU_CALL_BUDGET_S:
+                log(f"a DirectML call took {elapsed * 1000:.0f} ms (budget {GPU_CALL_BUDGET_S * 1000:.0f}); CPU from here on")
+                state["gpu"] = False
+                rest = cpu_embedder.run(None, {"waveforms": x[i + 1 :], "weights": w[i + 1 :]})[0] if i + 1 < x.shape[0] else None
+                if rest is not None:
+                    rows.append(rest)
+                break
+        return torch.from_numpy(np.concatenate(rows, axis=0))
 
     def segment(waveforms: Any, *_: Any, **__: Any) -> Any:
         x = waveforms.detach().cpu().numpy().astype(np.float32)
@@ -153,7 +184,10 @@ def use_onnx_models(pipeline: Any, onnx_dir: str, provider: str, torch: Any) -> 
 
     pipeline._embedding.model_.forward = embed
     pipeline._segmentation.model.forward = segment
-    return "onnx-dml" if provider == "dml" else "onnx-cpu"
+    def device_label() -> str:
+        return "onnx-dml" if state["gpu"] else "onnx-cpu"
+
+    return device_label
 
 
 def main() -> int:
@@ -215,8 +249,8 @@ def main() -> int:
     if args.engine == "onnx":
         if not args.onnx_dir:
             raise RuntimeError("--engine onnx needs --onnx-dir")
-        device = use_onnx_models(pipeline, args.onnx_dir, args.onnx_provider, torch)
-        log(f"voice models through ONNX Runtime ({device})")
+        device_label = use_onnx_models(pipeline, args.onnx_dir, args.onnx_provider, torch)
+        log(f"voice models through ONNX Runtime ({device_label()})")
     audio_input = decode_audio(args.audio, torch)
 
     kwargs: dict[str, int] = {}
@@ -225,6 +259,8 @@ def main() -> int:
     if args.max_speakers is not None:
         kwargs["max_speakers"] = args.max_speakers
     output = pipeline(audio_input, **kwargs)  # type: ignore[arg-type]  # stubs type min/max_speakers as bool
+    if args.engine == "onnx":
+        device = device_label()  # the device the run finished on (DirectML may have fallen back)
 
     diarization = getattr(output, "speaker_diarization", output)
     embeddings = getattr(output, "speaker_embeddings", None)

@@ -442,7 +442,7 @@ function resolveVoicePython(): string {
 
 /** Where the ONNX exports of the voice models live, next to the other local models. */
 export function voiceOnnxDir(): string {
-  return join(getDataPath(), 'models', 'voice-onnx-pyannote-3.1')
+  return join(getDataPath(), 'models', 'voice-onnx-pyannote-3.1-v2')
 }
 
 const VOICE_ONNX_FILES = ['wespeaker-resnet34-lm-masked.onnx', 'segmentation-3.0.onnx']

@@ -246,6 +246,14 @@ compared with the baseline (`scripts/perf/compare.py`).
    `signatures-from-turns`; sherpa-onnx with DirectML and CPU; the compatibility check; transfer with
    hold-out validation; speed measured on this PC against pyannote. community-1 becomes a transfer
    target once its Hugging Face conditions are accepted and it loads.
+   **`onnx-local` built 24-sep:** pyannote 3.1 keeps its chunking and clustering; its two models run
+   through ONNX Runtime (`worker.py --engine onnx`, exports from `export_voice_onnx.py`, created once in
+   `<data>/models/voice-onnx-pyannote-3.1-v2`). Same voice space, no transfer. Measured on Rec54
+   (5 m 30 s): pyannote on the CPU 129 s, ONNX with the embedder on the RX 6600 XT 31 s, identical
+   segments and embeddings (cosine 1.000000, 100% same speaker per 0.1 s). The RX 6600 XT also draws
+   the screen: on DirectML every GPU call carries one 10-second chunk (about 6 ms), and a call over
+   50 ms after warm-up moves the rest of the recording to the CPU. A 32-chunk batch froze the machine
+   on 24-sep; that path does not exist any more. `signatures-from-turns` is still to build.
 3. **Provider registry and online transcribers.** OpenAI, AssemblyAI, Meta Muse, pyannoteAI; the
    existing Gemini moved into the registry; encrypted keys; chunk relabelling by voice.
 4. **`pyannoteai` engine and voiceprints.** Separate voiceprint table, identify on each recording.

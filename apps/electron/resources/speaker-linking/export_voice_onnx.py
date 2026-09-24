@@ -16,8 +16,8 @@ Two things the plain export does not survive, and how this file gets around them
   converts them, so KaldiFbank rebuilds them from plain ops (framing, DC removal,
   pre-emphasis, Hamming window, a 512-point DFT as matrix products, torchaudio's own
   mel matrix, log, mean centring).
-- unfold() does not export with a dynamic length; framing is a conv1d with an
-  identity kernel instead.
+- unfold() does not export with a dynamic length; framing gathers sample indices
+  instead (a conv1d with an identity kernel exports too, but DirectML rejects it).
 """
 
 import math
@@ -60,11 +60,16 @@ class KaldiFbank(torch.nn.Module):
         banks, _ = kaldi.get_mel_banks(hp.num_mel_bins, NFFT, float(SR), 20.0, 0.0, 100.0, -500.0, 1.0)
         banks = torch.nn.functional.pad(banks, (0, 1))  # 256 -> 257 bins, like kaldi.fbank
         self.register_buffer('banks', banks.float().t())  # (257, 80)
-        # Framing as a convolution with an identity kernel: exports for any length.
-        self.register_buffer('framer', torch.eye(WIN).unsqueeze(1))  # (400, 1, 400)
+        # Offsets of one frame; each frame's start is added at run time.
+        self.register_buffer('offsets', torch.arange(WIN).unsqueeze(0))  # (1, 400)
 
     def forward(self, wave):  # (batch, samples), already scaled by 2**15
-        frames = torch.nn.functional.conv1d(wave.unsqueeze(1), self.framer, stride=HOP).transpose(1, 2)  # (B, T, 400)
+        # Framing as a gather of sample indices: exports for any length and runs on
+        # DirectML. (An identity-kernel conv1d also exported, but DirectML rejects
+        # it with "The parameter is incorrect" at the batch sizes pyannote uses.)
+        count = (wave.shape[1] - WIN) // HOP + 1
+        starts = torch.arange(count, device=wave.device).unsqueeze(1) * HOP  # (T, 1)
+        frames = wave[:, starts + self.offsets]                             # (B, T, 400)
         frames = frames - frames.mean(dim=2, keepdim=True)                  # remove DC
         prev = torch.cat([frames[:, :, :1], frames[:, :, :-1]], dim=2)
         frames = frames - 0.97 * prev                                       # pre-emphasis
