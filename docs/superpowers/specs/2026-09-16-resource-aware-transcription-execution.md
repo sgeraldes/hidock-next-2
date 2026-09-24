@@ -7,11 +7,12 @@
 - **Origin:** written 16-sep in the archived `sgeraldes/hidock-next` repository, where it was never
   committed; moved here on 24-sep with its mockups (`mockups/spec-013-*`). SPEC-007, 009 and 011 live
   only in that archive.
-- **Built since, in this repository:** the speaker-linking timeout scaled to the audio length and the
-  worker thread cap (`speaker-linking.ts`), speaker setup per hardware with DirectML detection (#35),
-  the Model Host as the remote audio worker (#9). The CPU-percentage policy, process priority, stage
-  checkpoints and the device-download backpressure in section 6.5 have not been checked against
-  today's code; that re-scope is a dated row in `docs/superpowers/plans/2026-09-24-hidock-plan.md`.
+- **Built since, in this repository:** the speaker-linking timeout scaled to the audio length, the
+  CPU-percentage thread budget for the diarization worker (`diarizationThreadEnv` in
+  `speaker-linking.ts`, every OpenMP/MKL/BLAS/torch variable), speaker setup per hardware with DirectML
+  detection (#35), the Model Host as the remote audio worker (#9). Process priority, stage checkpoints
+  and the device-download backpressure in section 6.5 have not been checked against today's code;
+  that re-scope is a dated row in `docs/superpowers/plans/2026-09-24-hidock-plan.md`.
 
 ## 1. Product decision
 

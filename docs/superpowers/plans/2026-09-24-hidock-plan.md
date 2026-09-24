@@ -133,7 +133,7 @@ Unchanged by this session. Each keeps its row in the inventory; the date is the 
 | Reader compaction (#26), the 12 px hysteresis and the cost of five stacked `backdrop-blur`: never checked in the app | Claude | 26-sep |
 | Boot stalls named on 07-19 and never fixed: synchronous `reconcileOrganization`, ICS fetch with no timeout | Claude (section 5) | 26-sep |
 | 07-14 overnight lanes E (incremental calendar sync), G, H, N and M's closing walk, never started | Claude: re-scope against today's code | 29-sep |
-| SPEC-013 resource-aware transcription (moved from the archived repo on 24-sep): CPU-percentage policy, priority, stage checkpoints, download backpressure | Claude: re-scope against today's code | 29-sep |
+| SPEC-013 resource-aware transcription (moved from the archived repo on 24-sep): process priority, stage checkpoints, download backpressure (the CPU-percentage thread budget is built) | Claude: re-scope against today's code | 29-sep |
 | Signing the Model Host installer (certificate) | **Sebastián** decides and buys | open |
 | Whether the file name always shows in the Library row | **Sebastián** decides | open |
 | `ENABLE_REMOTE_DEBUGGING` still present (empty) in the user environment | Claude | 25-sep |
