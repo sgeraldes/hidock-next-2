@@ -702,7 +702,7 @@ describe('Database Service', () => {
       updateQueueItem(live, 'processing')
       updateQueueItem(dead, 'processing')
 
-      expect(resetStuckTranscriptions('rec-live')).toEqual({ recordingsReset: 1, queueItemsReset: 1 })
+      expect(resetStuckTranscriptions(['rec-live'])).toEqual({ recordingsReset: 1, queueItemsReset: 1 })
       // Untouched: queueing set it to pending, and the reset would have made it 'none'.
       expect(getRecordingById('rec-live')?.transcription_status).toBe('pending')
       expect(getRecordingById('rec-dead')?.transcription_status).toBe('none')

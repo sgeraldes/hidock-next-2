@@ -73,7 +73,7 @@ export function registerTranscriptionHandlers(): void {
       return getQueueState()
     } catch (error) {
       console.error('transcription:queueState error:', error)
-      return { paused: false, isProcessing: false, processingId: null, pendingCount: 0, processingCount: 0 }
+      return { paused: false, isProcessing: false, processingId: null, shortLaneId: null, pendingCount: 0, processingCount: 0 }
     }
   })
 }

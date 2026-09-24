@@ -41,6 +41,8 @@ export interface QueueProcessorState {
   paused: boolean
   isProcessing: boolean
   processingId: string | null
+  /** recording_id in the short-recording lane beside the main job. */
+  shortLaneId?: string | null
   pendingCount: number
   processingCount: number
 }

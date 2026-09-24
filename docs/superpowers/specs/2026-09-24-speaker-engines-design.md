@@ -220,6 +220,14 @@ remaining work: a recording waiting behind a job that will take more than 10 min
 itself goes first. The Library shows the stage (preparing, voices, transcribing, labels) and an
 estimate from the engine's measured speed.
 
+Built on 24-sep as a second lane (`maybeStartShortLane` in `transcription.ts`). A job can not be paused
+halfway through Gemini, so instead of reordering, a waiting recording runs beside the long one when the
+long one's remaining estimate exceeds the waiting one's by more than 10 minutes. Estimates: 0.12 s per
+second of audio for Gemini plus 0.35 s for the local voice step (measured 24-sep: 1 h in about 2 min,
+4 h in 14 min, pyannote at the 40% thread budget about 0.3). One short job at a time, and none while the
+long job is in its local voice step, so two pyannote workers never share the CPU. The queue state
+carries `shortLaneId`; the dock lists both rows as processing.
+
 ## Phases
 
 Each phase: spec section, tests, adversarial review by a separate agent, merge, and a benchmark
