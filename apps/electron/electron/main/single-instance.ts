@@ -41,24 +41,30 @@ export function acquireSingleInstanceLock(options: SingleInstanceOptions): boole
   // We are the primary. When a second launch is attempted, the OS delivers a
   // `second-instance` event here instead of starting a rival process — focus
   // our existing window so the user sees the app they already have running.
-  app.on('second-instance', () => {
-    const mainWindow = options.getMainWindow()
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      if (mainWindow.isMinimized()) {
-        mainWindow.restore()
-      }
-      mainWindow.show()
-      mainWindow.focus()
-      return
-    }
-
-    // Main window not created yet (still initializing) — surface the splash.
-    const splashWindow = options.getSplashWindow?.()
-    if (splashWindow && !splashWindow.isDestroyed()) {
-      splashWindow.show()
-      splashWindow.focus()
-    }
-  })
+  app.on('second-instance', () => showRunningInstance(options))
 
   return true
+}
+
+/**
+ * Bring this instance forward because the owner tried to start another one:
+ * the main window, or the splash while the app is still starting.
+ */
+export function showRunningInstance(options: SingleInstanceOptions): void {
+  const mainWindow = options.getMainWindow()
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore()
+    }
+    mainWindow.show()
+    mainWindow.focus()
+    return
+  }
+
+  // Main window not created yet (still initializing) — surface the splash.
+  const splashWindow = options.getSplashWindow?.()
+  if (splashWindow && !splashWindow.isDestroyed()) {
+    splashWindow.show()
+    splashWindow.focus()
+  }
 }

@@ -20,6 +20,15 @@ process.cpu_affinity(original_affinity[:6])
 process.nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
 if psutil.virtual_memory().available < 8 * 1024**3:
     raise SystemExit('Less than 8 GiB free RAM; benchmark not started')
+# One HiDock per user: the app refuses a second instance, whatever its profile.
+# A running HiDock would also load the machine and spoil the numbers.
+for other in psutil.process_iter(['name', 'cmdline']):
+    try:
+        args = other.info['cmdline'] or []
+        if (other.info['name'] or '').lower() in ('electron.exe', 'hidock next.exe', 'hidock-next.exe')                 and not any(a.startswith('--type=') for a in args):
+            raise SystemExit(f'HiDock is running (pid {other.pid}); close it before benchmarking')
+    except psutil.Error:
+        pass
 
 # Build sequentially and inherit the bounded CPU affinity; no dev watcher.
 with (OUTPUT / 'build.log').open('w') as log:

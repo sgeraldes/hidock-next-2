@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import { join } from 'path'
-import { acquireSingleInstanceLock } from './single-instance'
+import { acquireSingleInstanceLock, showRunningInstance } from './single-instance'
+import { acquireMachineInstanceLock } from './machine-instance'
 import { createSplashWindow } from './splash-screen'
 import { configureEarlyStartup } from './startup-configuration'
 import { getStartupState } from './startup-state'
@@ -47,6 +48,23 @@ startup.hasSingleInstanceLock = brainOnly
 
 if (startup.hasSingleInstanceLock) {
   app.whenReady().then(async () => {
+    // One HiDock per user on this machine, whatever its profile. Electron's
+    // lock above only covers this userData folder; a second profile (a dev or
+    // benchmark run, a copied install) used to open a second window beside the
+    // first. Checked before the splash, so the second launch shows nothing.
+    const onlyInstance = await acquireMachineInstanceLock({
+      onSecondLaunch: () =>
+        showRunningInstance({
+          getMainWindow: () => startup.mainWindow,
+          getSplashWindow: () => startup.splashWindow
+        })
+    })
+    if (!onlyInstance) {
+      console.log('[Startup] Another HiDock is already running for this user; it was brought forward. Quitting.')
+      startup.hasSingleInstanceLock = false
+      app.quit()
+      return
+    }
     // This entry intentionally imports no database, AI, graph, transcription,
     // or renderer application modules. Show a useful frame first; the splash's
     // renderer process stays responsive while the main process evaluates the
