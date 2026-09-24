@@ -36,7 +36,7 @@ background (about 3 minutes).
 | Voice signatures from the transcript's turns | Designed | Embed a few seconds per transcriber turn with the same ONNX embedder; shares the sampling with model transfer | 25-sep |
 | Long recordings must not block short ones; stage and estimate in the Library | Designed (spec "Long recordings stop blocking short ones") | Queue ordering plus a lane for short recordings; stage and ETA from measured speed | 25-sep |
 | Canonical voice IDs and model transfer | Designed | `canonical_voice_id` migration, transfer with hold-out validation, model tag in transcripts | 26-sep |
-| Model Host on the RTX 4090 | Installer built (PR #9) but it still defaults to community-1 | Rebuild the installer from main (3.1 default, `model=` pin), install and pair on the 4090 box, benchmark | 26-sep |
+| Model Host on the RTX 4090 | The source defaults to 3.1 and honours the `model=` pin since #35; the only installer built so far (0.1.0, PR #9) predates that and still defaults to community-1 | Rebuild the installer from main, install and pair it on the 4090 box, benchmark | 26-sep |
 | Online providers: Gemini, OpenAI, AssemblyAI, Meta Muse, pyannoteAI; compare diarization and cost | Researched (`docs/superpowers/specs/2026-09-24-diarization-provider-apis.md`) | Provider registry, encrypted keys (moving the plain Gemini and HF keys too), one engine per provider | 27-sep |
 | Diarization benchmark on the owner's recordings | Designed | 5 to 10 recordings with known speakers; error, cost and time per engine; recommendations follow the numbers | 27-sep |
 
