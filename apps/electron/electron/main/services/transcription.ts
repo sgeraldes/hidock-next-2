@@ -501,6 +501,15 @@ async function runQueueItem(
       emitActivityLog('success', 'Transcription complete', recDone?.filename ?? item.recording_id)
     }
   } catch (error) {
+    if (ids.some((id) => cancelledRecordings.has(id))) {
+      // Cancelled by the user while running: the step it was in threw because
+      // its gate said stop. That is a cancellation, not a failure.
+      updateQueueItem(item.id, 'cancelled')
+      updateRecordingTranscriptionStatus(item.recording_id, 'none')
+      clearQueueHints(item.recording_id)
+      console.log(`[Transcription] ${item.recording_id} stopped after cancel; nothing saved`)
+      return
+    }
     const errorMessage = error instanceof Error ? error.message : 'Unknown error'
     console.error('Transcription failed:', errorMessage)
 
@@ -2553,7 +2562,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   // after the purge transaction, orphaned to a recording that no longer exists.
   let processabilitySkipLogged = false
   const stillProcessable = (): boolean => {
-    if (isRecordingProcessable(recordingId)) return true
+    if (isRecordingProcessable(recordingId) && !cancelledRecordings.has(recordingId)) return true
     if (!processabilitySkipLogged) {
       processabilitySkipLogged = true
       console.log(

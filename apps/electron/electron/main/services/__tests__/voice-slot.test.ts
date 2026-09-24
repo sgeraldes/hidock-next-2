@@ -56,6 +56,8 @@ describe('isDirectMlFailure', () => {
     expect(isDirectMlFailure(new Error('speaker-linking cancelled because recording became ineligible'))).toBe(false)
     expect(isDirectMlFailure(new Error('invalid speaker-linking worker output: worker returned an incomplete result'))).toBe(false)
     expect(isDirectMlFailure(new Error('ffmpeg could not decode the audio'))).toBe(false)
+    // An onnxruntime error that is not about DirectML (bad model, bad input) would fail on the CPU too.
+    expect(isDirectMlFailure(new Error('onnxruntime: Invalid input shape for waveforms'))).toBe(false)
   })
 })
 

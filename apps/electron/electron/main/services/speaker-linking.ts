@@ -486,12 +486,23 @@ export function voiceOnnxReady(dir: string): boolean {
  * Stop a worker and everything it started. On Windows `kill()` ends only the
  * Python process; the FFmpeg it runs keeps decoding (SPEC-013).
  */
-function killTree(child: { pid?: number; kill: () => boolean }): void {
-  if (process.platform === 'win32' && child.pid) {
-    spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }).on('error', () => child.kill())
-  } else {
+function killTree(child: { pid?: number; kill: () => boolean }): Promise<void> {
+  if (process.platform !== 'win32' || !child.pid) {
     child.kill()
+    return Promise.resolve()
   }
+  return new Promise((resolve) => {
+    const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+    killer.on('error', () => {
+      child.kill()
+      resolve()
+    })
+    // 128: the process was already gone. Anything else: fall back to killing the parent.
+    killer.on('close', (code) => {
+      if (code !== 0 && code !== 128) child.kill()
+      resolve()
+    })
+  })
 }
 
 let voiceOnnxExport: Promise<void> | null = null
@@ -536,7 +547,7 @@ export function ensureVoiceOnnxModels(): Promise<void> {
         }
         child.stdout.on('data', keep)
         child.stderr.on('data', keep)
-        const timer = setTimeout(() => killTree(child), 10 * 60 * 1000)
+        const timer = setTimeout(() => void killTree(child), 10 * 60 * 1000)
         child.on('error', (e) => {
           clearTimeout(timer)
           reject(new SpeakerLinkingUnavailableError(`voice model export could not start: ${e.message}`))
@@ -614,7 +625,7 @@ function probeDirectMl(fingerprint: string): Promise<DmlVerdict> {
     let err = ''
     child.stdout.on('data', (c: Buffer) => (out += c.toString()))
     child.stderr.on('data', (c: Buffer) => (err = (err + c.toString()).slice(-2000)))
-    const timer = setTimeout(() => killTree(child), 120_000)
+    const timer = setTimeout(() => void killTree(child), 120_000)
     const fail = (reason: string) => resolve({ fingerprint, ok: false, maxMs: null, at, reason })
     child.on('error', (e) => {
       clearTimeout(timer)
@@ -641,7 +652,7 @@ function probeDirectMl(fingerprint: string): Promise<DmlVerdict> {
 export function isDirectMlFailure(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
   if (/timed out|cancelled|ineligible|invalid speaker-linking worker output/i.test(message)) return false
-  return /DirectML|DmlExecutionProvider|\bDML\b|onnxruntime|D3D12|DXGI/i.test(message)
+  return /DirectML|DmlExecutionProvider|\bDML\b|D3D12|DXGI|MLOperatorAuthorImpl/i.test(message)
 }
 
 async function runOnnxWorker(
@@ -718,22 +729,25 @@ function spawnWorker(
     let stderr = ''
     const cap = 25 * 1024 * 1024
     const timeoutMs = speakerLinkingTimeoutMs(config.speakerLinkingTimeoutSeconds, audioDurationSeconds)
+    // Stopping waits for the whole tree to exit before the promise settles, so the
+    // voice slot is not released while this worker (or its FFmpeg) still runs.
+    let stopping: Promise<void> | null = null
+    const stop = (error: Error) => {
+      if (stopping) return
+      clearTimeout(timeout)
+      clearInterval(cancellation)
+      stopping = killTree(child).then(() => reject(error))
+    }
     const timeout = setTimeout(() => {
-      killTree(child)
       // A timeout means the worker could not serve THIS recording in budget, not that the
       // audio is bad: degrade to provider-managed diarization instead of failing the
       // transcript (the transcript is the product, voice linking is the enhancement).
-      reject(new SpeakerLinkingUnavailableError(
+      stop(new SpeakerLinkingUnavailableError(
         `speaker-linking timed out after ${Math.round(timeoutMs / 1000)} seconds`
       ))
     }, timeoutMs)
     const cancellation = setInterval(() => {
-      if (!shouldContinue()) {
-        killTree(child)
-        clearTimeout(timeout)
-        clearInterval(cancellation)
-        reject(new Error('speaker-linking cancelled because recording became ineligible'))
-      }
+      if (!shouldContinue()) stop(new Error('speaker-linking cancelled because recording became ineligible'))
     }, 1000)
     child.stdout.setEncoding('utf8')
     child.stderr.setEncoding('utf8')
@@ -751,6 +765,7 @@ function spawnWorker(
     child.on('close', (code) => {
       clearTimeout(timeout)
       clearInterval(cancellation)
+      if (stopping) return // settled by stop() once the tree is gone
       if (code !== 0) {
         const detail = stderr.trim().split('\n').slice(-12).join('\n') || `speaker-linking exited with code ${code}`
         if (isSpeakerLinkingUnavailableDetail(detail)) {
