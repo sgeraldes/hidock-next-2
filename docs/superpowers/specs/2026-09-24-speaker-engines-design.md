@@ -16,6 +16,38 @@ Sebastián, 23-sep, after a 4-hour recording spent 80 minutes in local diarizati
 > recommended one, should exist. Let's not build only one option, let's build all 4. And provide
 > capabilities to use any of the services you mentioned.
 
+## Goals, in Sebastián's words (do not drop any)
+
+1. CPU diarization cannot be the path for users without a GPU; give them a real alternative.
+2. Voice recognition is a major, distinguishing feature. Turning it off comes with a big red warning.
+3. The hardware check runs once per hardware change (a GPU added or removed), never on every launch.
+4. A set of configuration options per hardware profile, with one marked as recommended.
+5. Build all four options, not one: hardware-aware local engine, voice signatures from the
+   transcriber's turns, the remote Model Host (RTX 4090), and online services.
+6. Support every online service named: Gemini, OpenAI, Meta Muse, AssemblyAI (and pyannoteAI, the
+   only one with reusable voiceprints). Compare them on diarization quality and cost.
+7. A person's voice identity must survive hardware changes (added 24-sep, see below).
+8. Every optimization round ends with a benchmark compared against the baseline.
+
+## Voice identity across hardware (measured 24-sep)
+
+The ID depends on the embedding model, not on the device. The library's voices were built with
+`pyannote/speaker-diarization-3.1` (pyannote.audio 4.0.7): 58 recordings on the RTX 4090 (CUDA, 24-aug
+to 04-sep) and 125 on the CPU (since 15-sep). 35 voices were matched in recordings from both periods,
+including all 6 anchored to a contact. Changing GPU, moving to the CPU, or moving to the Model Host does
+not change a voice ID as long as the model is the same.
+
+The latent risk: the configured model is `community-1` with 3.1 as fallback, locally and on the Model
+Host. It falls back to 3.1 today because community-1 does not load here. If it ever loads (here or on
+the 4090), new embeddings land in a different space and stop matching every known voice, silently.
+Rule, from phase 1: **the model that writes voice evidence is pinned to the library's cluster space**
+(the model and version of the existing clusters). A different model is allowed only through the
+compatibility check and re-embedding pass described under "Keeping known voices". The Model Host must
+use the same pinned model; the client sends it and refuses a result from another model.
+
+The Model Host installer already exists: `apps/model-host/build/HiDock-Model-Host-0.1.0-Setup.exe`
+(PR #9, 22-sep). What is missing is installing and pairing it on the 4090 machine (phase 5).
+
 ## What exists
 
 - Transcription providers: `gemini` (default, `gemini-3.5-transcribe`, speaker labels per 20-minute
@@ -129,9 +161,10 @@ estimate from the engine's measured speed.
 Each phase: spec section, tests, adversarial review by a separate agent, merge, and a benchmark
 compared with the baseline (`scripts/perf/compare.py`).
 
-1. **Engine seam, hardware profiles, Speaker setup, red warning.** Engine interface around the two
-   existing engines (`pyannote-local`, `model-host`) plus `off`; fingerprint; dialog; Settings panel;
-   queue ordering and stage display.
+1. **Engine seam, hardware profiles, Speaker setup, red warning, model pin.** Engine interface around
+   the two existing engines (`pyannote-local`, `model-host`) plus `off`; fingerprint; dialog; Settings
+   panel; the voice model pinned to the library's cluster space (local and host); queue ordering and
+   stage display.
 2. **`onnx-local` and `signatures-from-turns`.** sherpa-onnx; DirectML and CPU; the compatibility
    check and re-embedding pass; calibration clip; speed measured on this PC against pyannote.
 3. **Provider registry and online transcribers.** OpenAI, AssemblyAI, Meta Muse, pyannoteAI; the
