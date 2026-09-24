@@ -17,7 +17,7 @@ Specs this plan points to:
 
 | PR | Ask | Evidence |
 |---|---|---|
-| #35 | Voice recognition setup per hardware, one recommended option, red warning to turn it off, asks only when a GPU is added or removed | Real build on a library copy: dialog at boot with the AMD hardware, unbuilt options disabled. Voice model pinned to the library's (pyannote 3.1), locally and on the Model Host. 6,161 tests |
+| #35 | Voice recognition setup per hardware, one recommended option, red warning to turn it off, asks only when a GPU is added or removed | Real build on a library copy: dialog at boot with the AMD hardware, unbuilt options disabled. Voice model pinned to the library's (pyannote 3.1), locally and on the Model Host. 6,148 app tests and 43 Model Host tests |
 | #35 | Explain community-1 | It never produced a voice: every attempt failed (gated on Hugging Face, timeouts, load errors). Spec section "Voice identity across hardware" |
 | #36 | Library showed 0 sources with Device Sync off | 8 FeatureDisabledError per launch before, 0 after; contract in `docs/architecture/feature-gating.md` |
 | #37 | "IT SHOULD NOT BE POSSIBLE TO OPEN TWO! BY DESIGN" | Second launch with another profile quits in about 1 s, no window, the running app comes forward. Electron's lock keyed to `%APPDATA%\HiDock Next\instance-lock` |
@@ -71,9 +71,12 @@ agreed; only 8 of 20 dropped ones did (mojev called 12 of them normal or high, a
 | Jev (TypeSafe API) as the decider | Chosen by Sebastián for split suggestions; API documented in the recording-checks spec | Opt-in with an encrypted key, because it sends text off the machine; compare with mojev on the same questions | 27-sep |
 | Images | mojev's image training is on its roadmap, not released | Revisit when a vision checkpoint exists | open |
 
-Today only value classification and knowledge-graph extraction ask an LLM for a decision; meeting
-matching, splits and voice linking are heuristics or embeddings. Summaries and extraction stay on
-LLMs: the decision model only chooses among given options.
+Today these ask an LLM for a decision: value classification (`value-classification.ts`,
+`value-backfill.ts`), knowledge-graph extraction (`knowledge-graph-service.ts`), meeting
+disambiguation when several meetings overlap (`meeting-disambiguation.ts`), and speaker naming
+(`speaker-inference.ts`, `self-identification.ts`). Splits are silence heuristics and voice matching
+is embeddings. Value, disambiguation and naming are choices among given options, so they are the
+candidates for the decision model; summaries, notes and extraction stay on LLMs.
 
 ## 4. Transcript quality (card `hidock_transcript_integrity_20260923`)
 
@@ -101,7 +104,12 @@ worst stall 0.71 s, peak main 1.65 GiB (`artifacts/compare-20260924-main/compare
 
 | Item | Owner | Status |
 |---|---|---|
+| Local branches `feat/speaker-engines` and `fix/library-with-device-sync-off` | Claude | deleted 24-sep after their squash merges (#35, #36); phase 2 starts from main |
 | Local branch `build/latest-integration` (all its changes are on main through #18, #19, #21, #26, #32) | **Sebastián**: `git -C G:/Code/hidock-next-2 branch -D build/latest-integration` (the safety hook refuses it to Claude) | open |
+| 13 stale `remotes/origin/*` tracking refs in hidock-next-2 (the remote only has main) | Claude: `git fetch --prune` | 25-sep |
+| Old repo `G:\Code\hidock-next`: 4 modified uncommitted files (`speaker-linking.ts`, its test, `transcription.ts`, `.gitignore`), an untracked `.playwright-cli/`, 5 extra worktrees | Claude: compare with hidock-next-2, keep what is not there, then clean | 26-sep |
+| `.gitattributes` against the repeated CRLF flips (proposed 07-14, never added to either repo) | Claude | 25-sep |
+| Flaky `temp-db-tracker` test under load (22-sep) | Claude | 25-sep |
 | Half-installed `~` and `~ws-sso-sync` folders in the system Python's site-packages | Sebastián, or a reinstall of `aws-sso-sync` | open, harmless |
 | Stale `hidock-db-engine-test-*` files in the system Temp break the engine tests | Claude: make the engine tests use and remove their own folder | 25-sep |
 | Diarization runs left `running` when the app quits (22-sep and 23-sep rows) | Claude: close stale runs at boot | 25-sep |
@@ -110,10 +118,24 @@ worst stall 0.71 s, peak main 1.65 GiB (`artifacts/compare-20260924-main/compare
 
 ## 7. Open items from the 23-sep inventory
 
-Still open, unchanged by this session: the Assistant model picker and quality roadmap; the 16
-purged audios still on disk; the "shorter than transcript" toast not written to the Activity Log;
-real-time transcription never tested with the device recording (#7, #13, #14); the reader
-compaction (#26) not checked visually; `ENABLE_REMOTE_DEBUGGING` still present (empty) in the user
-environment; cards `ops_hidock_bridge_down_20260819`, `ops_hidock_sin_link_20260827`,
-`hidock_deps_vitest5_electron44_20260916`. Each keeps its row in the inventory and its board card;
-dates are set there.
+Unchanged by this session. Each keeps its row in the inventory; the date is the proposed one.
+
+| Item | Owner | Date |
+|---|---|---|
+| Assistant model picker and the quality roadmap (thinking, `maxContextChunks`, query rewriting, intent routing) | Claude | 29-sep |
+| 16 purged audios still on disk (re-import proposed, never raised again) | Sebastián decides: re-import or delete | 25-sep |
+| The "shorter than transcript" warning is a toast only, not written to the Activity Log | Claude | 25-sep |
+| Real-time transcription (#7, #13, #14) never run with the device recording | Claude, with the device connected | 26-sep |
+| Truncated-download recovery (#27) never exercised against the device | Claude, with the device connected | 26-sep |
+| D-022 self-repair never observed in an installed build (card `hidock_d022_synced_files_20260922`, in review) | Claude | 26-sep |
+| Notes (#10, #11): no walkthrough of the UI | Claude | 26-sep |
+| Split suggestion and stale auto-link retract (08-25 defect 3): "repairs itself on next launch" never observed | Claude | 26-sep |
+| Reader compaction (#26), the 12 px hysteresis and the cost of five stacked `backdrop-blur`: never checked in the app | Claude | 26-sep |
+| Boot stalls named on 07-19 and never fixed: synchronous `reconcileOrganization`, ICS fetch with no timeout | Claude (section 5) | 26-sep |
+| 07-14 overnight lanes E (incremental calendar sync), G, H, N and M's closing walk, never started | Claude: re-scope against today's code | 29-sep |
+| Signing the Model Host installer (certificate) | **Sebastián** decides and buys | open |
+| Whether the file name always shows in the Library row | **Sebastián** decides | open |
+| `ENABLE_REMOTE_DEBUGGING` still present (empty) in the user environment | Claude | 25-sep |
+| Shared MCP HTTP server proposal (`geraldes-plugins` `950e300`; the plugin was disabled on 18-sep) | Sebastián decides whether it is still wanted | open |
+| Card `hidock_frozen_20260918` (blocked) | Claude: close or reopen with today's evidence | 25-sep |
+| Cards `ops_hidock_bridge_down_20260819`, `ops_hidock_sin_link_20260827`, `hidock_deps_vitest5_electron44_20260916` | Claude | 26-sep |
