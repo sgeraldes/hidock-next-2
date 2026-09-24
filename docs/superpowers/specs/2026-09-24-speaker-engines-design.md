@@ -60,8 +60,10 @@ Rule, from phase 1: **the model that writes voice evidence is pinned to the libr
 compatibility check and re-embedding pass described under "Keeping known voices". The Model Host must
 use the same pinned model; the client sends it and refuses a result from another model.
 
-The Model Host installer already exists: `apps/model-host/build/HiDock-Model-Host-0.1.0-Setup.exe`
-(PR #9, 22-sep). What is missing is installing and pairing it on the 4090 machine (phase 5).
+The Model Host exists: `apps/model-host`, installer built as `HiDock-Model-Host-0.1.0-Setup.exe` (PR #9,
+22-sep). That build predates phase 1: it defaults to community-1 and ignores `model=`. The source on main
+defaults to 3.1 and honours the pin, so the installer has to be rebuilt before it is installed and paired
+on the 4090 machine (phase 5).
 
 ## What exists
 
