@@ -7382,23 +7382,39 @@ export function refreshTranscriptIntegrity(transcriptId: string): TranscriptInte
  * a transcript is read once per rule version. An acceptance survives, since
  * the text it covers has not changed.
  */
-export function backfillTranscriptIntegrity(): { checked: number; ok: number; suspect: number; broken: number } {
-  const rows = queryAll<{ id: string; recording_id: string; speakers: string | null }>(
-    `SELECT t.id, t.recording_id, t.speakers FROM transcripts t
-       JOIN recordings r ON r.id = t.recording_id
-      WHERE r.deleted_at IS NULL
-        AND (t.integrity_version IS NULL OR t.integrity_version < ?)`,
-    [INTEGRITY_VERSION]
-  )
+export async function backfillTranscriptIntegrity(
+  options: { batchSize?: number } = {}
+): Promise<{ checked: number; ok: number; suspect: number; broken: number }> {
+  // In batches, yielding between them: the first launch after v58 labels every
+  // transcript in the library, and doing all ~2,000 in one loop froze the main
+  // thread for 2.2 s (measured 24-sep, startup benchmark).
+  const batchSize = options.batchSize ?? 100
   const counts = { checked: 0, ok: 0, suspect: 0, broken: 0 }
-  for (const row of rows) {
-    const integrity = assessTranscriptIntegrity(row.speakers, integrityAudioSeconds(row.recording_id))
-    runNoSave(
-      'UPDATE transcripts SET integrity_status = ?, integrity_json = ?, integrity_version = ? WHERE id = ?',
-      [integrity.status, JSON.stringify(integrity), INTEGRITY_VERSION, row.id]
+  const seen = new Set<string>()
+  for (;;) {
+    const rows = queryAll<{ id: string; recording_id: string; speakers: string | null }>(
+      `SELECT t.id, t.recording_id, t.speakers FROM transcripts t
+         JOIN recordings r ON r.id = t.recording_id
+        WHERE r.deleted_at IS NULL
+          AND (t.integrity_version IS NULL OR t.integrity_version < ?)
+        LIMIT ?`,
+      [INTEGRITY_VERSION, batchSize]
     )
-    counts.checked++
-    counts[integrity.status]++
+    // A row the update could not move out of this query would come back
+    // forever; stop when a batch holds nothing new.
+    const fresh = rows.filter((row) => !seen.has(row.id))
+    if (fresh.length === 0) break
+    for (const row of fresh) {
+      seen.add(row.id)
+      const integrity = assessTranscriptIntegrity(row.speakers, integrityAudioSeconds(row.recording_id))
+      runNoSave(
+        'UPDATE transcripts SET integrity_status = ?, integrity_json = ?, integrity_version = ? WHERE id = ?',
+        [integrity.status, JSON.stringify(integrity), INTEGRITY_VERSION, row.id]
+      )
+      counts.checked++
+      counts[integrity.status]++
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve))
   }
   if (counts.checked > 0) {
     saveDatabase()

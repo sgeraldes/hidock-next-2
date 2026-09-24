@@ -109,7 +109,7 @@ describe('transcript integrity storage', () => {
     expect(row('tx-short').integrity_status).toBe('broken')
   })
 
-  it('lets the owner accept a flagged transcript, and a replacement loses the acceptance', () => {
+  it('lets the owner accept a flagged transcript, and a replacement loses the acceptance', async () => {
     seed('rec-acc', 60)
     const flagged = segs([[0, 'a'], [3, 'b'], [3, 'c']])
     insertTranscript({ id: 'tx-acc', recording_id: 'rec-acc', full_text: 'x', language: 'es', speakers: flagged })
@@ -118,7 +118,7 @@ describe('transcript integrity storage', () => {
     expect(row('tx-acc').integrity_accepted_at).not.toBeNull()
 
     // A backfill under the same rules keeps it: the text has not changed.
-    backfillTranscriptIntegrity()
+    await backfillTranscriptIntegrity()
     expect(row('tx-acc').integrity_accepted_at).not.toBeNull()
 
     // A new transcription replaces the row, and with it what was accepted.
@@ -162,15 +162,15 @@ describe('transcript integrity storage', () => {
     }
   })
 
-  it('labels transcripts stored before the check existed, once', () => {
+  it('labels transcripts stored before the check existed, once', async () => {
     seed('rec-old', 60)
     insertTranscript({ id: 'tx-old', recording_id: 'rec-old', full_text: 'x', language: 'es', speakers: segs([[10, 'a'], [4, 'b']]) })
     run('UPDATE transcripts SET integrity_status = NULL, integrity_json = NULL, integrity_version = NULL WHERE id = ?', ['tx-old'])
 
-    const first = backfillTranscriptIntegrity()
+    const first = await backfillTranscriptIntegrity({ batchSize: 2 })
     expect(first.checked).toBe(1)
     expect(first.suspect).toBe(1)
     expect(row('tx-old').integrity_status).toBe('suspect')
-    expect(backfillTranscriptIntegrity().checked).toBe(0)
+    expect((await backfillTranscriptIntegrity()).checked).toBe(0)
   })
 })
