@@ -13,7 +13,7 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { existsSync, rmSync, readdirSync, writeFileSync } from 'fs'
+import { copyFileSync, existsSync, rmSync, readdirSync, statSync, writeFileSync } from 'fs'
 import Database from 'better-sqlite3'
 import { DatabaseEngine, MassDeleteError, parseDestructiveStatement } from '../src/index.js'
 
@@ -24,7 +24,12 @@ const SCHEMA = `
 `
 
 function tempDbPath(name: string): string {
-  return join(tmpdir(), `hidock-db-safety-${name}.sqlite`)
+  const p = join(tmpdir(), `hidock-db-safety-${name}.sqlite`)
+  // Start from nothing. A run that dies mid-test leaves these fixed names
+  // behind, and the next run then opened a database that already had rows
+  // (23-sep: six stale files turned 7 passing tests red a day later).
+  for (const suffix of ['', '-wal', '-shm', '-journal']) rmSync(`${p}${suffix}`, { force: true })
+  return p
 }
 
 describe('mass-delete tripwire', () => {
@@ -227,5 +232,101 @@ describe('rotating on-boot backup', () => {
     await second.runDeferredBackup()
     expect(siblingFiles(path).filter((file) => /\.bak-\d{4}-\d{2}-\d{2}$/.test(file))).toHaveLength(1)
     second.closeDatabase()
+  })
+
+  describe('before a migration', () => {
+    const extra: string[] = []
+    afterEach(() => {
+      for (const f of extra) rmSync(f, { force: true })
+      extra.length = 0
+    })
+
+    // A v1 file on disk, then an engine that wants v2: the boot must back up first.
+    async function v1File(name: string): Promise<string> {
+      const path = tempDbPath(name)
+      paths.push(path)
+      const e = makeEngine(path, 3)
+      await e.initialize()
+      e.closeDatabase()
+      return path
+    }
+    const stateOf = (p: string) => {
+      const st = statSync(p, { bigint: true })
+      return { sourceMtimeNs: st.mtimeNs, sourceSize: Number(st.size) }
+    }
+    function v2Engine(path: string, externalBackups?: () => Array<{ path: string; sourceMtimeNs: bigint; sourceSize: number }>) {
+      return new DatabaseEngine({
+        betterSqlite3: Database,
+        dbPathProvider: () => path,
+        schemaVersion: 2,
+        schema: SCHEMA,
+        migrations: { 2: () => {} },
+        backupOnBoot: { keep: 3 },
+        deferBackupOnBoot: true,
+        externalBackups,
+      })
+    }
+    const todays = (path: string) => siblingFiles(path).filter((f) => /\.bak-\d{4}-\d{2}-\d{2}$/.test(f))
+
+    it('reports the copy as it goes, then the migration', async () => {
+      const path = await v1File('backup-progress')
+      const seen: string[] = []
+      let last = { copiedBytes: 0, totalBytes: -1 }
+      const e = v2Engine(path)
+      await e.initialize({
+        onProgress: (p) => {
+          seen.push(p.phase)
+          if (p.phase === 'backup') last = p
+        },
+      })
+      e.closeDatabase()
+      expect(seen[0]).toBe('backup')
+      expect(seen.at(-1)).toBe('migrating')
+      expect(last.totalBytes).toBeGreaterThan(0)
+      expect(last.copiedBytes).toBe(last.totalBytes)
+      expect(todays(path)).toHaveLength(1)
+    })
+
+    it('reuses an external backup made from exactly this file, without copying', async () => {
+      const path = await v1File('backup-reuse')
+      const external = `${path}.hourly`
+      extra.push(external)
+      copyFileSync(path, external)
+      const seen: string[] = []
+      const source = stateOf(path)
+      const e = v2Engine(path, () => [{ path: external, ...source }])
+      await e.initialize({ onProgress: (p) => seen.push(p.phase) })
+      e.closeDatabase()
+      expect(seen).toEqual(['backup-reused', 'migrating'])
+      // Hard-linked under the dated name, so the routine backup is not repeated today.
+      expect(todays(path)).toHaveLength(1)
+      expect(statSync(todays(path)[0]).size).toBe(statSync(external).size)
+    })
+
+    it('copies anyway when the file changed after that backup (a different modification time)', async () => {
+      const path = await v1File('backup-stale')
+      const external = `${path}.hourly`
+      extra.push(external)
+      copyFileSync(path, external)
+      const seen: string[] = []
+      const source = stateOf(path)
+      const e = v2Engine(path, () => [{ path: external, ...source, sourceMtimeNs: source.sourceMtimeNs - 1n }])
+      await e.initialize({ onProgress: (p) => seen.push(p.phase) })
+      e.closeDatabase()
+      expect(seen[0]).toBe('backup')
+      expect(seen).not.toContain('backup-reused')
+    })
+
+    it('copies anyway when the external backup is not the same size', async () => {
+      const path = await v1File('backup-size')
+      const external = `${path}.hourly`
+      extra.push(external)
+      writeFileSync(external, 'truncated')
+      const seen: string[] = []
+      const e = v2Engine(path, () => [{ path: external, ...stateOf(path) }])
+      await e.initialize({ onProgress: (p) => seen.push(p.phase) })
+      e.closeDatabase()
+      expect(seen).not.toContain('backup-reused')
+    })
   })
 })

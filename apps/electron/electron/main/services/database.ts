@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3'
-import { existsSync, readFileSync } from 'fs'
-import { join, normalize, resolve as resolvePath } from 'path'
+import { existsSync, readdirSync, readFileSync } from 'fs'
+import { dirname, join, normalize, resolve as resolvePath } from 'path'
 import { randomUUID } from 'crypto'
 import { readAudioDuration } from './audio-duration'
 import { assessTranscriptIntegrity, INTEGRITY_VERSION, type TranscriptIntegrity } from './transcript-integrity'
@@ -9,7 +9,7 @@ import { getDatabasePath } from './file-storage'
 // Re-exported so consumers (e.g. vector-store's binary cache) can locate the
 // DB file without pulling the file-storage module graph into their tests.
 export { getDatabasePath }
-import { DatabaseEngine, getTableColumns, type SqlJsDatabase } from '@hidock/database'
+import { DatabaseEngine, getTableColumns, type BootProgress, type ExternalBackup, type SqlJsDatabase } from '@hidock/database'
 import { normalizeName, isGenericSpeakerLabel, detectAmbiguousName } from './entity-normalize'
 import { getEventBus } from './event-bus'
 import { isCancelledMeetingSubject, scoreMeetingCandidates } from './recording-match-scoring'
@@ -3961,7 +3961,34 @@ const engine = new DatabaseEngine({
   protectedTables: ['knowledge_captures', 'transcripts', 'recordings', 'meetings', 'contacts'],
   backupOnBoot: { keep: 3 },
   deferBackupOnBoot: true,
+  externalBackups: listHourlyBackups,
 })
+
+/**
+ * The hourly backups written by `scripts/backup-db.py` (Windows task
+ * `HiDock-DB-Backup`) in `<data root>/backups`, next to the `data` folder, that
+ * are exact copies: each has a `<name>.source.json` recording the database's
+ * modification time (ns) and size, unchanged from the start to the end of the
+ * copy with an empty WAL. A backup without that record is never offered.
+ */
+export function listHourlyBackups(): ExternalBackup[] {
+  const dir = join(dirname(dirname(getDatabasePath())), 'backups')
+  if (!existsSync(dir)) return []
+  const out: ExternalBackup[] = []
+  for (const name of readdirSync(dir)) {
+    if (!/^hidock-\d{8}-\d{6}\.db$/.test(name)) continue
+    const sidecar = join(dir, `${name}.source.json`)
+    if (!existsSync(sidecar)) continue
+    try {
+      const s = JSON.parse(readFileSync(sidecar, 'utf8')) as { exact?: boolean; db_mtime_ns?: string; db_size?: number }
+      if (s.exact !== true || typeof s.db_mtime_ns !== 'string' || typeof s.db_size !== 'number') continue
+      out.push({ path: join(dir, name), sourceMtimeNs: BigInt(s.db_mtime_ns), sourceSize: s.db_size })
+    } catch {
+      /* an unreadable record is no proof */
+    }
+  }
+  return out
+}
 
 /**
  * Run `fn` with the mass-delete tripwire suspended — for legitimate bulk deletes
@@ -3977,8 +4004,8 @@ export function runWithMassDeleteAllowed<T>(fn: () => T): T {
  * shared @hidock/database engine, configured above with this app's schema,
  * version, migrations, and repairPhase.
  */
-export async function initializeDatabase(): Promise<void> {
-  await engine.initialize()
+export async function initializeDatabase(options: { onProgress?: (p: BootProgress) => void } = {}): Promise<void> {
+  await engine.initialize(options)
 }
 
 /**
@@ -12975,11 +13002,18 @@ export function selectMeetingForRecordingByUser(recordingId: string, meetingId: 
   })
 }
 
-export function resetStuckTranscriptions(): { recordingsReset: number; queueItemsReset: number } {
+export function resetStuckTranscriptions(
+  activeRecordingId: string | null = null
+): { recordingsReset: number; queueItemsReset: number } {
   const db = getDatabase()
-  db.run("UPDATE recordings SET transcription_status = 'none' WHERE transcription_status IN ('processing', 'pending')")
+  // The recording this process is transcribing right now is not stuck.
+  const keep = activeRecordingId ?? ''
+  db.run(
+    "UPDATE recordings SET transcription_status = 'none' WHERE transcription_status IN ('processing', 'pending') AND id != ?",
+    [keep]
+  )
   const recordingsReset = db.getRowsModified()
-  db.run("UPDATE transcription_queue SET status = 'pending' WHERE status = 'processing'")
+  db.run("UPDATE transcription_queue SET status = 'pending' WHERE status = 'processing' AND recording_id != ?", [keep])
   const queueItemsReset = db.getRowsModified()
   console.log(`[Database] Reset stuck transcriptions: ${recordingsReset} recordings, ${queueItemsReset} queue items`)
   return { recordingsReset, queueItemsReset }

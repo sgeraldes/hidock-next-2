@@ -131,6 +131,7 @@ import {
   failProcessingRun,
   type Transcript
 } from './database'
+import { getActiveTranscription, setActiveTranscription } from './transcription-activity'
 import { BrowserWindow } from 'electron'
 import { emitActivityLog } from './activity-log'
 import { isRecordingEligible } from './recording-eligibility'
@@ -192,8 +193,11 @@ export function startTranscriptionProcessor(): void {
     return
   }
 
-  clearStaleTranscriptionLock()
-  resetStuckTranscriptions()
+  // The repairs are for rows a crashed run left behind. A run this process
+  // already started (a new recording kicks the queue before this boot task)
+  // holds a live lock and a live 'processing' row: leave both alone.
+  if (!isProcessing) clearStaleTranscriptionLock()
+  resetStuckTranscriptions(getActiveTranscription())
 
   console.log('Starting transcription processor')
 
@@ -556,6 +560,7 @@ async function processQueue(): Promise<void> {
       if (!item) break
       processedThisRun.add(item.id)
       currentProcessingId = item.recording_id
+      setActiveTranscription(item.recording_id)
       emitQueueState()
 
       try {
@@ -642,6 +647,7 @@ async function processQueue(): Promise<void> {
       } finally {
         // This item is no longer in flight — clear before the next dequeue.
         currentProcessingId = null
+        setActiveTranscription(null)
         emitQueueState()
       }
     }
@@ -649,10 +655,14 @@ async function processQueue(): Promise<void> {
     if (cancelRequested) {
       console.log('Transcription cancelled by user')
     }
-    isProcessing = false
     // AI-11: Reset cancel flag after loop exits, not on a timer
     cancelRequested = false
   } finally {
+    // In the finally: an exception between items used to leave the queue
+    // marked busy with nothing running, and every later tick returned early.
+    isProcessing = false
+    currentProcessingId = null
+    setActiveTranscription(null)
     // spec-005: Always release mutex lock, even if an error occurred
     releaseTranscriptionLock(processId)
   }
@@ -883,6 +893,46 @@ interface TranscriptAnalysis {
   value_confidence?: number
 }
 
+/**
+ * Give every turn an end. The engine's own end wins when it is after the
+ * start (word timestamps give one). Otherwise the turn runs to the next
+ * turn's start. The last turn, with neither, ends where its own text would at
+ * a normal speaking rate (2.5 words a second), never past the recording: running
+ * it to the end of the file would count trailing silence as speech in the
+ * coverage check.
+ *
+ * This used to overwrite every end with the next start and the last one with
+ * its own start. A zero-length turn is invalid to the timestamp check, so a
+ * recording with a single turn failed outright ("All diarization segments
+ * have invalid timestamps" on eight short clips on 22-sep) and every last
+ * turn in the library was stored with no length.
+ */
+export const SPOKEN_WORDS_PER_SECOND = 2.5
+
+export function closeTurnEnds(
+  segments: Array<{ start: number; end: number; text?: string }>,
+  durationSeconds?: number
+): void {
+  for (let i = 0; i < segments.length; i++) {
+    const s = segments[i]
+    if (Number.isFinite(s.end) && s.end > s.start) continue
+    const next = segments[i + 1]?.start
+    if (next !== undefined && Number.isFinite(next) && next > s.start) {
+      s.end = next
+    } else if (next === undefined && s.text && Number.isFinite(s.start)) {
+      const words = s.text.trim().split(/\s+/).filter(Boolean).length
+      const spoken = s.start + Math.max(1, words / SPOKEN_WORDS_PER_SECOND)
+      const known = typeof durationSeconds === 'number' && Number.isFinite(durationSeconds)
+      // A turn that starts at or after the end of the recording has no audio to
+      // end in: it stays zero-length and the timestamp check reports it.
+      s.end = known ? (durationSeconds > s.start ? Math.min(spoken, durationSeconds) : s.start) : spoken
+    } else {
+      // Nothing honest to close it with: the timestamp check reports it.
+      s.end = s.start
+    }
+  }
+}
+
 async function transcribeWithGemini(
   filePath: string,
   meetingContext: string,
@@ -964,10 +1014,7 @@ async function transcribeWithGemini(
     throw new NoSpeechDetectedError('Gemini returned no intelligible speech')
   }
 
-  // Each turn's end is the next turn's start (the engine yields start-only).
-  for (let i = 0; i < segments.length; i++) {
-    segments[i].end = segments[i + 1]?.start ?? segments[i].start
-  }
+  closeTurnEnds(segments, durationSeconds)
 
   // full_text stays plain (no timestamps) for search / analysis / embeddings —
   // one readable turn per line with its speaker label. The timestamped segment

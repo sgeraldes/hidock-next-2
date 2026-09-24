@@ -7,8 +7,8 @@
  *
  * Every engine returns the same AcousticWorkerResult, so everything after it
  * (matching, relabelling, contact anchoring) is shared. Engines not built yet
- * are listed so the Speaker setup can show the whole plan, but they are never
- * selected: a config naming one falls back to automatic.
+ * stay in this catalogue for the plan, but the Speaker setup never shows them
+ * and a config naming one falls back to automatic.
  */
 
 export type SpeakerEngineId =

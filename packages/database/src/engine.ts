@@ -43,7 +43,7 @@
  *   4. Full Schema       — re-run all statements to apply indexes/constraints
  */
 
-import { existsSync, readdirSync, renameSync, rmSync, statSync } from 'fs'
+import { existsSync, linkSync, readdirSync, renameSync, rmSync, statSync } from 'fs'
 import { dirname, basename, join } from 'path'
 
 /* -------------------------------------------------------------------------- */
@@ -69,12 +69,34 @@ export interface BetterSqlite3Database {
   exec(sql: string): BetterSqlite3Database
   pragma(source: string, options?: { simple?: boolean }): unknown
   serialize(): Buffer
-  backup(destinationFile: string): Promise<{ totalPages: number; remainingPages: number }>
+  backup(
+    destinationFile: string,
+    options?: { progress?: (info: { totalPages: number; remainingPages: number }) => number }
+  ): Promise<{ totalPages: number; remainingPages: number }>
   close(): void
   readonly open: boolean
   readonly inTransaction: boolean
   readonly name: string
 }
+
+/**
+ * A complete backup made by something else, with the exact state of the source
+ * file it copied: modification time in nanoseconds and size, recorded before
+ * and after the copy and found unchanged, with an empty WAL. Equality with the
+ * current file is the proof; no clock is compared, so neither a clock change nor
+ * daylight saving can make an older copy look current.
+ */
+export interface ExternalBackup {
+  path: string
+  sourceMtimeNs: bigint
+  sourceSize: number
+}
+
+/** What the engine reports while it opens the database, for a splash screen. */
+export type BootProgress =
+  | { phase: 'backup'; copiedBytes: number; totalBytes: number }
+  | { phase: 'backup-reused'; path: string }
+  | { phase: 'migrating'; fromVersion: number; toVersion: number }
 
 /** The better-sqlite3 default export (the Database constructor). */
 export type BetterSqlite3Constructor = new (
@@ -493,6 +515,14 @@ export interface DatabaseEngineConfig {
    */
   backupOnBoot?: { keep: number }
   /**
+   * Complete backups made by something else (the hourly backup task), newest
+   * first. Before a migration the engine reuses the newest one when the
+   * database has not changed since that backup started, instead of copying
+   * the whole file again: on 24-sep that copy held the splash for 3.5 minutes
+   * on a USB disk while an identical 1-hour-old backup sat next to it.
+   */
+  externalBackups?: () => Array<ExternalBackup>
+  /**
    * When true, a routine daily backup runs asynchronously after schema setup so
    * a multi-gigabyte copy does not hold the application splash for minutes.
    * A boot with pending migrations still awaits the backup before any schema
@@ -523,6 +553,9 @@ export interface DatabaseEngineConfig {
 }
 
 const BYTES_PER_MB = 1024 * 1024
+
+/** The database file as it was before this boot opened it. */
+type BeforeOpen = { mtimeNs: bigint; size: number; walBytes: number }
 
 /* -------------------------------------------------------------------------- */
 /*  Engine.                                                                     */
@@ -559,7 +592,34 @@ export class DatabaseEngine {
 
   /* --- Backup + destructive guard (unchanged semantics) ------------------- */
 
-  private async backupOnBoot(failClosed = false): Promise<void> {
+  /**
+   * The newest external backup that holds exactly what the database holds:
+   * it started after the main file was last written, and the WAL is empty (a
+   * non-empty WAL means commits the main file does not show yet). Measured
+   * before this boot opened the file, so the open itself cannot count as a change.
+   */
+  private reusableExternalBackup(before: BeforeOpen | null): string | null {
+    if (!before || before.walBytes > 0 || !this.config.externalBackups) return null
+    let candidates: ExternalBackup[]
+    try {
+      candidates = this.config.externalBackups()
+    } catch {
+      return null
+    }
+    for (const c of candidates) {
+      if (c.sourceMtimeNs !== before.mtimeNs || c.sourceSize !== before.size) continue
+      // The copy itself must be whole: a truncated file is never the snapshot.
+      if (!existsSync(c.path) || this.fileSize(c.path) !== before.size) continue
+      return c.path
+    }
+    return null
+  }
+
+  private async backupOnBoot(
+    failClosed = false,
+    onProgress?: (p: BootProgress) => void,
+    before: BeforeOpen | null = null
+  ): Promise<void> {
     const cfg = this.config.backupOnBoot
     if (!cfg || cfg.keep <= 0) return
     try {
@@ -569,7 +629,23 @@ export class DatabaseEngine {
       const prefix = `${base}.bak-`
       const day = new Date().toISOString().slice(0, 10)
       const bak = join(dir, `${prefix}${day}`)
-      if (!existsSync(bak)) {
+      let reused = false
+      const reusable = !existsSync(bak) && failClosed ? this.reusableExternalBackup(before) : null
+      if (reusable) {
+        // A hard link gives the dated name without copying a byte, and it keeps
+        // the snapshot alive when the hourly rotation deletes its own name. A
+        // disk without hard links (exFAT) gets the full copy below instead:
+        // the snapshot must not depend on a file another program rotates.
+        try {
+          linkSync(reusable, bak)
+          reused = true
+          onProgress?.({ phase: 'backup-reused', path: reusable })
+          console.log(`[Database] Pre-migration backup: linked ${reusable} (identical to the database)`)
+        } catch (e) {
+          console.warn(`[Database] Could not link ${reusable} (${(e as Error).message}); copying instead`)
+        }
+      }
+      if (!reused && !existsSync(bak)) {
         // SQLite's online backup API runs incrementally without blocking the
         // Node event loop and includes committed WAL pages. A raw copyFileSync
         // of the 2.79 GB main file blocked Electron startup for ~153 seconds and
@@ -578,7 +654,29 @@ export class DatabaseEngine {
         rmSync(partial, { force: true })
         const source = new this.config.betterSqlite3(this.dbPath, { readonly: true, fileMustExist: true })
         try {
-          await source.backup(partial)
+          const pageSize = Number(source.pragma('page_size', { simple: true })) || 4096
+          let lastReport = 0
+          await source.backup(partial, {
+            progress: ({ totalPages, remainingPages }) => {
+              const now = Date.now()
+              if (onProgress && (now - lastReport > 250 || remainingPages === 0)) {
+                lastReport = now
+                onProgress({
+                  phase: 'backup',
+                  copiedBytes: (totalPages - remainingPages) * pageSize,
+                  totalBytes: totalPages * pageSize,
+                })
+              }
+              // Pages per step: 8 MB at 4 KB pages. The default (100) spends
+              // most of a multi-gigabyte copy on per-step overhead.
+              return 2048
+            },
+          })
+          // SQLite does not call back after the last step: report the finish.
+          if (onProgress) {
+            const total = statSync(partial).size
+            onProgress({ phase: 'backup', copiedBytes: total, totalBytes: total })
+          }
         } finally {
           source.close()
         }
@@ -732,7 +830,7 @@ export class DatabaseEngine {
     }
   }
 
-  async initialize(): Promise<void> {
+  async initialize(options: { onProgress?: (p: BootProgress) => void } = {}): Promise<void> {
     // Re-initialization: release any previous connection before opening a new
     // one — better-sqlite3 handles are never GC-closed, so overwriting this.bdb
     // below would strand the old native file handle (open until process exit,
@@ -748,6 +846,21 @@ export class DatabaseEngine {
 
     const hadExistingFile = existsSync(this.dbPath)
     const sizeBefore = hadExistingFile ? this.fileSize(this.dbPath) : 0
+    // Before opening: the open itself writes the -shm and may touch the WAL.
+    let beforeOpen: BeforeOpen | null = null
+    if (hadExistingFile) {
+      try {
+        const walPath = `${this.dbPath}-wal`
+        const st = statSync(this.dbPath, { bigint: true })
+        beforeOpen = {
+          mtimeNs: st.mtimeNs,
+          size: Number(st.size),
+          walBytes: existsSync(walPath) ? statSync(walPath).size : 0,
+        }
+      } catch {
+        beforeOpen = null
+      }
+    }
 
     try {
       const Ctor = this.config.betterSqlite3
@@ -787,7 +900,12 @@ export class DatabaseEngine {
       const versionBeforeBoot = hadExistingFile ? this.readSchemaVersion() : this.config.schemaVersion
       const migrationPending = hadExistingFile && versionBeforeBoot < this.config.schemaVersion
       const deferRoutineBackup = this.config.deferBackupOnBoot === true && !migrationPending
-      if (hadExistingFile && !deferRoutineBackup) await this.backupOnBoot(migrationPending)
+      if (hadExistingFile && !deferRoutineBackup) {
+        await this.backupOnBoot(migrationPending, options.onProgress, beforeOpen)
+      }
+      if (migrationPending) {
+        options.onProgress?.({ phase: 'migrating', fromVersion: versionBeforeBoot, toVersion: this.config.schemaVersion })
+      }
 
       const statements = splitSqlStatements(this.config.schema)
 

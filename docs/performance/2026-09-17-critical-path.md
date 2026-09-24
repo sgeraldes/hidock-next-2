@@ -54,7 +54,9 @@ Model/session construction, rather than the measured single-query inference, dom
 The isolated first-search runs take roughly 21–29 s. The process boundary keeps native library
 loading, session construction and inference off Electron's main thread. Remaining 0.2–0.4 s main
 stalls occur in bootstrap/module loading, backup completion, reconciliation, capture backfill and
-retrieval. They remain optimization targets; the app is not yet uniformly below a 50 ms latency budget.
+retrieval. (Backup, 24-sep: on a schema-current launch the daily copy runs after paint; a launch
+that migrates still waits for a complete pre-migration snapshot, fail-closed, but links the latest
+hourly backup instead of copying when that backup is an exact copy of the database file.) They remain optimization targets; the app is not yet uniformly below a 50 ms latency budget.
 
 ## Changes exercised
 

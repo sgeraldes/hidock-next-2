@@ -13,7 +13,6 @@ const option = (engine: string, extra: Record<string, unknown> = {}) => ({
   where: 'this computer',
   available: true,
   recommended: false,
-  idealForHardware: false,
   ...extra,
 })
 
@@ -23,7 +22,7 @@ const SETUP = {
   profile: 'gpu-directml',
   profileSummary: 'GPU without CUDA (AMD Radeon RX 6600 XT).',
   options: [
-    option('onnx-local', { available: false, idealForHardware: true, unavailableReason: 'Not built yet.' }),
+    option('model-host', { available: false, unavailableReason: 'No Model Host is paired. Pair one in Settings first.' }),
     option('pyannote-local', { recommended: true, measuredSpeedRatio: 1 / 3 }),
     option('off', { label: 'Turn voice recognition off' }),
   ],
@@ -61,11 +60,13 @@ describe('SpeakerSetupPanel', () => {
   it('preselects the recommendation and shows the measured speed', async () => {
     render(<SpeakerSetupPanel initial={SETUP} />)
     expect(screen.getByText('Recommended')).toBeInTheDocument()
-    expect(screen.getByText('Best for this hardware')).toBeInTheDocument()
     expect(screen.getByText(/about 20 min per hour of audio/)).toBeInTheDocument()
     const radio = screen.getByDisplayValue('pyannote-local') as HTMLInputElement
     expect(radio.checked).toBe(true)
-    expect((screen.getByDisplayValue('onnx-local') as HTMLInputElement).disabled).toBe(true)
+    // An option that exists but needs a step says which step.
+    expect((screen.getByDisplayValue('model-host') as HTMLInputElement).disabled).toBe(true)
+    expect(screen.getByText(/Pair one in Settings/)).toBeInTheDocument()
+    expect(screen.queryByText(/Not built/)).toBeNull()
   })
 
   it('saves the chosen engine', async () => {

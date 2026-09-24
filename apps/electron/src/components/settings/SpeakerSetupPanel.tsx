@@ -168,9 +168,6 @@ export function SpeakerSetupPanel({ initial, onSaved }: SpeakerSetupPanelProps):
                     {option.recommended && (
                       <span className="rounded-full bg-primary/15 px-2 py-0.5 text-xs text-primary">Recommended</span>
                     )}
-                    {option.idealForHardware && !option.available && (
-                      <span className="rounded-full border px-2 py-0.5 text-xs">Best for this hardware</span>
-                    )}
                     <span className="text-xs text-muted-foreground">{option.where}</span>
                   </div>
                   <p className="text-muted-foreground">{option.description}</p>

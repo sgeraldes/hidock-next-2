@@ -24,6 +24,7 @@ Uso:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sqlite3
 import sys
@@ -95,6 +96,7 @@ def backup_once(dry_run: bool = False) -> Path | None:
     final = BACKUP_DIR / f"{PREFIX}{stamp}{SUFFIX}"
     tmp = BACKUP_DIR / f"{PREFIX}{stamp}{SUFFIX}.tmp"
 
+    before = source_state()
     src_mb = DB.stat().st_size / 1024 / 1024
     if dry_run:
         log(f"[dry-run] copiaria {src_mb:.0f} MB a {final.name}")
@@ -132,6 +134,18 @@ def backup_once(dry_run: bool = False) -> Path | None:
         return None
 
     os.replace(tmp, final)
+    # Exact copy of the file as it is on disk: the same state before and after
+    # the copy, with nothing waiting in the WAL. The app reuses such a copy as
+    # its pre-migration backup, and the next run skips while it still matches.
+    after = source_state()
+    record = {
+        "db_mtime_ns": str(after["mtime_ns"]),
+        "db_size": after["size"],
+        "wal_size": after["wal_size"],
+        "exact": before == after and after["wal_size"] == 0,
+    }
+    with open(sidecar_of(final), "w", encoding="utf-8") as f:
+        json.dump(record, f)
     dt = time.time() - t0
     out_mb = final.stat().st_size / 1024 / 1024
     log(f"OK {final.name} — {out_mb:.0f} MB en {dt:.1f}s ({out_mb/max(dt,0.001):.0f} MB/s)")
@@ -164,6 +178,63 @@ def parse_stamp(p: Path) -> datetime | None:
         return naive.replace(tzinfo=now_local().tzinfo)
     except ValueError:
         return None
+
+
+def source_state() -> dict[str, int]:
+    """The database file as the file system reports it, to the nanosecond."""
+    st = DB.stat()
+    wal = DB.parent / f"{DB.name}-wal"
+    return {
+        "mtime_ns": st.st_mtime_ns,
+        "size": st.st_size,
+        "wal_size": wal.stat().st_size if wal.exists() else 0,
+    }
+
+
+def sidecar_of(backup: Path) -> Path:
+    return backup.with_name(f"{backup.name}.source.json")
+
+
+def skip_reason(now: datetime | None = None) -> str | None:
+    """Por que esta corrida no tiene que copiar nada, o None si tiene que copiar.
+
+    Dos casos, medidos el 24-sep: la base no cambio desde el ultimo backup
+    (F: juntaba 72 GB de copias identicas de a 2,9 GB), o la app esta haciendo
+    su propio backup antes de actualizar la base. Ese dia las dos copias
+    arrancaron con un minuto de diferencia en el mismo disco USB, cada una bajo
+    a 4 MB/s, y el splash de la app quedo 3,5 minutos en "Initializing".
+    """
+    now = now or now_local()
+    # La app escribe `hidock.db.bak-<fecha>.partial` mientras copia.
+    for p in DB.parent.iterdir():
+        if p.name.startswith(f"{DB.name}.bak-") and p.name.endswith(".partial"):
+            age = now.timestamp() - p.stat().st_mtime
+            if age < 15 * 60:
+                return f"la app esta haciendo su propio backup ({p.name})"
+
+    # Sin reloj de por medio: el ultimo backup exacto registro el estado de la
+    # base (mtime en ns y tamano, WAL vacio); si la base sigue igual, no cambio.
+    # Un cambio de hora o el horario de verano no mueven el mtime de un archivo.
+    # Se revisan todos, no el de nombre mas nuevo: despues de atrasar el reloj
+    # el nombre mas nuevo puede no ser el ultimo backup hecho.
+    now_state = source_state()
+    if now_state["wal_size"] != 0:
+        return None
+    for backup in BACKUP_DIR.glob(f"{PREFIX}*{SUFFIX}"):
+        if parse_stamp(backup) is None:
+            continue
+        try:
+            with open(sidecar_of(backup), encoding="utf-8") as f:
+                record = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if (
+            record.get("exact") is True
+            and record.get("db_mtime_ns") == str(now_state["mtime_ns"])
+            and record.get("db_size") == now_state["size"]
+        ):
+            return f"la base no cambio desde {backup.name}"
+    return None
 
 
 def rotate(dry_run: bool = False) -> None:
@@ -211,10 +282,13 @@ def rotate(dry_run: bool = False) -> None:
     log(f"rotacion: conservo {len(keep)}, borro {len(doomed)} ({freed:.1f} GB)")
     for path in doomed:
         # Borrado por ruta literal, nunca por glob ni por variable.
+        sidecar = sidecar_of(path)
         if dry_run:
             log(f"  [dry-run] borraria {path.name}")
         else:
             os.remove(str(path))
+            if sidecar.exists():
+                os.remove(str(sidecar))
             log(f"  borrado {path.name}")
 
 
@@ -243,6 +317,11 @@ def main() -> int:
     if args.verify_only:
         return verify_all()
 
+    reason = skip_reason()
+    if reason:
+        log(f"sin copia: {reason}")
+        rotate(dry_run=args.dry_run)
+        return 0
     made = backup_once(dry_run=args.dry_run)
     rotate(dry_run=args.dry_run)
     return 0 if made else 1

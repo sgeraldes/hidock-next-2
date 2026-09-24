@@ -165,8 +165,26 @@ async function initializeServices(): Promise<boolean> {
   if (!await initializeStartupStorage(splashWindow, updateSplashStatus)) return false
   console.log('File storage initialized')
 
-  await updateSplashStatus('Initializing database...', 30)
-  await initializeDatabase()
+  await updateSplashStatus('Opening your library...', 30)
+  // A boot that updates the database structure first makes a full copy of
+  // it. On a multi-gigabyte library on a USB disk that takes minutes, and the
+  // splash has to say so instead of a bare "Initializing".
+  await initializeDatabase({
+    onProgress: (p) => {
+      if (p.phase === 'backup') {
+        const gb = (n: number) => (n / 1024 ** 3).toFixed(1)
+        const share = p.totalBytes > 0 ? p.copiedBytes / p.totalBytes : 0
+        void updateSplashStatus(
+          `Backing up your library before updating it (${gb(p.copiedBytes)} of ${gb(p.totalBytes)} GB)...`,
+          30 + Math.round(share * 25)
+        )
+      } else if (p.phase === 'backup-reused') {
+        void updateSplashStatus('Backup ready (the latest hourly backup is up to date)...', 55)
+      } else {
+        void updateSplashStatus(`Updating your library to version ${p.toVersion}...`, 56)
+      }
+    },
+  })
   console.log('Database initialized')
 
   // The semantic index can exceed 2 GB. It is restored after the renderer's
