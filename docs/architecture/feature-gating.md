@@ -2,8 +2,8 @@
 
 The registry is `apps/electron/src/shared/feature-registry.ts`; the main-process gate is
 `apps/electron/electron/main/services/feature-gate.ts`. This page records the contract between the
-two processes. (The registry used to point at `docs/specs/2026-07-11-modular-features-spec.md`,
-which was never in this repository.)
+two processes. The original design is the modular-features spec,
+[2026-07-11-modular-features-spec.md](../superpowers/specs/2026-07-11-modular-features-spec.md).
 
 ## Two kinds of feature
 
