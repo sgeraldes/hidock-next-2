@@ -781,6 +781,7 @@ function spawnWorker(
     })
     hold.exited = exited
     // Stopping ends the whole tree, then settles the job once the worker exited.
+    // The 15 s ceiling bounds everything, taskkill included, so the job always settles.
     // If it has not exited 15 s later, the kill is repeated and the job settles
     // anyway (the recording continues without voices); the slot keeps waiting.
     let stopping: Promise<void> | null = null
@@ -802,7 +803,7 @@ function spawnWorker(
           resolve()
         }, 15_000)
       })
-      stopping = Promise.all([killTree(child), Promise.race([exited, ceiling])]).then(() => {
+      stopping = Promise.race([Promise.all([killTree(child), exited]).then(() => undefined), ceiling]).then(() => {
         clearTimeout(ceilingTimer)
         reject(error)
       })
