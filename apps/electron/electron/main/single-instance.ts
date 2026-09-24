@@ -1,4 +1,5 @@
 import { app, BrowserWindow } from 'electron'
+import { mkdirSync } from 'fs'
 import { join } from 'path'
 
 /**
@@ -49,9 +50,14 @@ export function acquireSingleInstanceLock(options: SingleInstanceOptions): boole
   // competes for the same lock, and the OS arbitrates two launches at the same
   // moment. Nothing reads userData between these two lines.
   const profile = app.getPath('userData')
+  const lockDir = instanceLockDir()
+  // Electron creates the folder itself before it builds the lock; creating it
+  // here too keeps the lock independent of that detail (on macOS and Linux the
+  // lock files live in this folder and cannot be written without it).
+  mkdirSync(lockDir, { recursive: true })
   let gotTheLock: boolean
   try {
-    app.setPath('userData', instanceLockDir())
+    app.setPath('userData', lockDir)
     gotTheLock = app.requestSingleInstanceLock()
   } finally {
     app.setPath('userData', profile)
@@ -59,6 +65,10 @@ export function acquireSingleInstanceLock(options: SingleInstanceOptions): boole
 
   if (!gotTheLock) {
     // Another instance already owns the DB. Quit before touching anything.
+    // It was told to come forward; if it is busy (a long synchronous boot),
+    // Chromium waits up to 20 s for its answer and may end it after that. The
+    // database is WAL, so that end is a crash SQLite recovers from.
+    console.log('[Startup] HiDock is already running for this user; asked it to come forward. Quitting.')
     app.quit()
     return false
   }

@@ -37,7 +37,8 @@ def is_running_hidock(proc):
         where = (proc.exe() + ' ' + proc.cwd()).lower()
     except psutil.Error:
         return False
-    return 'hidock-next' in where
+    # Any HiDock checkout, this one included, whatever the folder is called.
+    return 'hidock' in where or str(ROOT).lower() in where
 
 
 for other in psutil.process_iter(['name', 'cmdline']):

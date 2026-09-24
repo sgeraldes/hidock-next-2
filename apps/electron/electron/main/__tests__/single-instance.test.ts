@@ -2,6 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { app } from 'electron'
 import { acquireSingleInstanceLock } from '../single-instance'
 
+// The lock folder is created before the lock is taken; nothing is written in tests.
+const mkdirSpy = vi.hoisted(() => vi.fn())
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('fs')>()
+  return { ...actual, mkdirSync: mkdirSpy, default: { ...actual, mkdirSync: mkdirSpy } }
+})
+
 // Mock electron. `app` is an event emitter + lock API; we capture registered
 // handlers so we can invoke the `second-instance` callback directly.
 vi.mock('electron', () => {
@@ -157,6 +164,7 @@ describe('acquireSingleInstanceLock', () => {
 
     expect(userDataWhenRequested.split('\\').join('/')).toBe('C:/Users/me/AppData/Roaming/HiDock Next/instance-lock')
     expect(paths.userData).toBe('C:/profiles/benchmark')
+    expect(mkdirSpy.mock.calls[0][0]).toBe(userDataWhenRequested)
   })
 
   it('puts the profile back even when the lock request throws', () => {
