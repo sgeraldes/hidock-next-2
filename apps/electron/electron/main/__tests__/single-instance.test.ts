@@ -10,6 +10,14 @@ vi.mock('electron', () => {
     app: {
       requestSingleInstanceLock: vi.fn(),
       quit: vi.fn(),
+      // userData starts as the profile; setPath records every change.
+      __paths: { userData: 'C:/profiles/benchmark', appData: 'C:/Users/me/AppData/Roaming' } as Record<string, string>,
+      getPath: vi.fn(function (this: unknown, name: string) {
+        return (app as unknown as { __paths: Record<string, string> }).__paths[name]
+      }),
+      setPath: vi.fn((name: string, value: string) => {
+        ;(app as unknown as { __paths: Record<string, string> }).__paths[name] = value
+      }),
       on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
         ;(handlers[event] ??= []).push(cb)
       }),
@@ -134,5 +142,30 @@ describe('acquireSingleInstanceLock', () => {
     acquireSingleInstanceLock({ getMainWindow: () => null })
 
     expect(() => mockedApp.__emit('second-instance')).not.toThrow()
+  })
+
+  it('takes one lock for every profile, and puts the profile back', () => {
+    const paths = (app as unknown as { __paths: Record<string, string> }).__paths
+    paths.userData = 'C:/profiles/benchmark'
+    let userDataWhenRequested = ''
+    mockedApp.requestSingleInstanceLock.mockImplementation(() => {
+      userDataWhenRequested = paths.userData
+      return true
+    })
+
+    acquireSingleInstanceLock({ getMainWindow: () => null })
+
+    expect(userDataWhenRequested.split('\\').join('/')).toBe('C:/Users/me/AppData/Roaming/HiDock Next/instance-lock')
+    expect(paths.userData).toBe('C:/profiles/benchmark')
+  })
+
+  it('puts the profile back even when the lock request throws', () => {
+    const paths = (app as unknown as { __paths: Record<string, string> }).__paths
+    paths.userData = 'C:/profiles/dev'
+    mockedApp.requestSingleInstanceLock.mockImplementation(() => {
+      throw new Error('boom')
+    })
+    expect(() => acquireSingleInstanceLock({ getMainWindow: () => null })).toThrow('boom')
+    expect(paths.userData).toBe('C:/profiles/dev')
   })
 })

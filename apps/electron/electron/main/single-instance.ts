@@ -1,4 +1,17 @@
 import { app, BrowserWindow } from 'electron'
+import { join } from 'path'
+
+/**
+ * The folder the lock lives in: one for every profile of this OS user.
+ *
+ * Electron keys its lock to the userData folder in effect when the lock is
+ * requested, so each profile (HIDOCK_DEV_USERDATA, a benchmark run, a copied
+ * install) used to get its own lock, and a second HiDock opened beside the
+ * first on 24-sep-2026. By design there is one HiDock per user.
+ */
+export function instanceLockDir(): string {
+  return join(app.getPath('appData'), 'HiDock Next', 'instance-lock')
+}
 
 /**
  * Options for {@link acquireSingleInstanceLock}.
@@ -30,7 +43,19 @@ export interface SingleInstanceOptions {
  *   immediately (before opening the DB) without creating windows.
  */
 export function acquireSingleInstanceLock(options: SingleInstanceOptions): boolean {
-  const gotTheLock = app.requestSingleInstanceLock()
+  // Request the lock with userData pointing at the shared lock folder, then put
+  // the profile back at once. The lock keeps the folder it was created with
+  // (Electron's ProcessSingleton reads it at construction), so every profile
+  // competes for the same lock, and the OS arbitrates two launches at the same
+  // moment. Nothing reads userData between these two lines.
+  const profile = app.getPath('userData')
+  let gotTheLock: boolean
+  try {
+    app.setPath('userData', instanceLockDir())
+    gotTheLock = app.requestSingleInstanceLock()
+  } finally {
+    app.setPath('userData', profile)
+  }
 
   if (!gotTheLock) {
     // Another instance already owns the DB. Quit before touching anything.
