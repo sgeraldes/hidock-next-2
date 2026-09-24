@@ -26,4 +26,5 @@ export type {
   BetterSqlite3Constructor,
   BetterSqlite3Database,
   BetterSqlite3Statement,
+  BootProgress,
 } from './engine.js'

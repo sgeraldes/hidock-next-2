@@ -24,6 +24,7 @@ import {
   SyncedFile
 } from './database'
 import { getRecordingsPath } from './file-storage'
+import { getActiveTranscription } from './transcription-activity'
 
 // =============================================================================
 // Types
@@ -464,23 +465,28 @@ class IntegrityService {
     console.log('[IntegrityService] Checking for stuck transcriptions...')
 
     const db = getDatabase()
+    // A recording this process is transcribing right now is not stuck: this
+    // check runs after the window paints, when the queue may already be busy.
+    const keep = getActiveTranscription() ?? ''
 
     // Reset stuck recordings
-    const stuckRecordings = queryAll<{ id: string }>(`
-      SELECT id FROM recordings WHERE status = 'transcribing'
-    `)
+    const stuckRecordings = queryAll<{ id: string }>(
+      `SELECT id FROM recordings WHERE status = 'transcribing' AND id != ?`,
+      [keep]
+    )
 
     if (stuckRecordings.length > 0) {
-      db.run(`UPDATE recordings SET status = 'pending' WHERE status = 'transcribing'`)
+      db.run(`UPDATE recordings SET status = 'pending' WHERE status = 'transcribing' AND id != ?`, [keep])
     }
 
     // Reset stuck queue items
-    const stuckQueue = queryAll<{ id: string }>(`
-      SELECT id FROM transcription_queue WHERE status = 'processing'
-    `)
+    const stuckQueue = queryAll<{ id: string }>(
+      `SELECT id FROM transcription_queue WHERE status = 'processing' AND recording_id != ?`,
+      [keep]
+    )
 
     if (stuckQueue.length > 0) {
-      db.run(`UPDATE transcription_queue SET status = 'pending' WHERE status = 'processing'`)
+      db.run(`UPDATE transcription_queue SET status = 'pending' WHERE status = 'processing' AND recording_id != ?`, [keep])
     }
 
     const totalFixed = stuckRecordings.length + stuckQueue.length

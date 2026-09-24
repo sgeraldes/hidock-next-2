@@ -202,6 +202,10 @@ least three runs of five minutes or more; nothing is shown rather than a guess),
 options,
 and the recommended one preselected. The same panel lives in Settings under "Speakers & voices".
 
+Only engines that are built appear. Until an engine ships it is not listed at all, not even greyed out:
+a choice nobody can pick or fix is noise (Sebastián, 24-sep). An engine that is built but needs a step
+(the Model Host before pairing) stays, with the step written under it.
+
 **Turning voice recognition off** is an option in the list, never the default. Choosing it shows a
 red warning, and needs a second, explicit confirmation:
 

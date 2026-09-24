@@ -166,6 +166,40 @@ def parse_stamp(p: Path) -> datetime | None:
         return None
 
 
+def skip_reason(now: datetime | None = None) -> str | None:
+    """Por que esta corrida no tiene que copiar nada, o None si tiene que copiar.
+
+    Dos casos, medidos el 24-sep: la base no cambio desde el ultimo backup
+    (F: juntaba 72 GB de copias identicas de a 2,9 GB), o la app esta haciendo
+    su propio backup antes de actualizar la base. Ese dia las dos copias
+    arrancaron con un minuto de diferencia en el mismo disco USB, cada una bajo
+    a 4 MB/s, y el splash de la app quedo 3,5 minutos en "Initializing".
+    """
+    now = now or now_local()
+    # La app escribe `hidock.db.bak-<fecha>.partial` mientras copia.
+    for p in DB.parent.iterdir():
+        if p.name.startswith(f"{DB.name}.bak-") and p.name.endswith(".partial"):
+            age = now.timestamp() - p.stat().st_mtime
+            if age < 15 * 60:
+                return f"la app esta haciendo su propio backup ({p.name})"
+
+    wal = DB.parent / f"{DB.name}-wal"
+    if wal.exists() and wal.stat().st_size > 0:
+        return None  # hay transacciones en el WAL: la base cambio
+    newest = max(
+        ((p, s) for p in BACKUP_DIR.glob(f"{PREFIX}*{SUFFIX}") if (s := parse_stamp(p)) is not None),
+        key=lambda x: x[1],
+        default=None,
+    )
+    if newest is None:
+        return None
+    path, started = newest
+    # El backup arranco despues de la ultima escritura de la base: tiene todo.
+    if started.timestamp() > DB.stat().st_mtime:
+        return f"la base no cambio desde {path.name}"
+    return None
+
+
 def rotate(dry_run: bool = False) -> None:
     """Conserva los N mas nuevos por hora, por dia y por semana.
 
@@ -243,6 +277,11 @@ def main() -> int:
     if args.verify_only:
         return verify_all()
 
+    reason = skip_reason()
+    if reason:
+        log(f"sin copia: {reason}")
+        rotate(dry_run=args.dry_run)
+        return 0
     made = backup_once(dry_run=args.dry_run)
     rotate(dry_run=args.dry_run)
     return 0 if made else 1

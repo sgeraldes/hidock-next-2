@@ -18,7 +18,12 @@ import { DatabaseEngine, getTableColumns } from '../src/index.js'
 
 function tempDbPath(name: string): string {
   // Stable per-test path (no Date.now/Math.random — keep deterministic)
-  return join(tmpdir(), `hidock-db-engine-test-${name}.sqlite`)
+  const p = join(tmpdir(), `hidock-db-engine-test-${name}.sqlite`)
+  // Start from nothing. A run that dies mid-test leaves these fixed names
+  // behind, and the next run then opened a database that already had rows
+  // (23-sep: six stale files turned 7 passing tests red a day later).
+  for (const suffix of ['', '-wal', '-shm', '-journal']) rmSync(`${p}${suffix}`, { force: true })
+  return p
 }
 
 const SCHEMA = `

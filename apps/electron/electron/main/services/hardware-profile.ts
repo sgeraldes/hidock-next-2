@@ -156,8 +156,6 @@ export interface SpeakerSetupOption {
   unavailableReason?: string
   /** The best choice for this hardware among the available ones. */
   recommended: boolean
-  /** The best choice for this hardware, even if it is not built yet. */
-  idealForHardware: boolean
   /** Processing time as a share of the audio length, when it was measured on this computer. */
   measuredSpeedRatio?: number
 }
@@ -174,11 +172,14 @@ export function buildSetupOptions({ hardware, modelHostPaired, measuredLocalRati
   options: SpeakerSetupOption[]
 } {
   const profile = profileOf(hardware, modelHostPaired)
-  const order = ORDER[profile]
-  const options: SpeakerSetupOption[] = order.map((engine, index) => {
+  // Only engines that exist are offered. An engine that is not built is not a
+  // choice with a reason the owner can act on; listing it greyed out showed
+  // options nobody could pick or fix (Sebastián, 24-sep).
+  const order = ORDER[profile].filter((engine) => SPEAKER_ENGINES[engine].built)
+  const options: SpeakerSetupOption[] = order.map((engine) => {
     const d = SPEAKER_ENGINES[engine]
-    let available = d.built
-    let unavailableReason = d.built ? undefined : 'Not built yet; it arrives in a later update.'
+    let available = true
+    let unavailableReason: string | undefined
     if (engine === 'model-host' && d.built && !modelHostPaired) {
       available = false
       unavailableReason = 'No Model Host is paired. Pair one in Settings first.'
@@ -191,7 +192,6 @@ export function buildSetupOptions({ hardware, modelHostPaired, measuredLocalRati
       available,
       unavailableReason,
       recommended: false,
-      idealForHardware: index === 0,
       measuredSpeedRatio: engine === 'pyannote-local' && measuredLocalRatio ? measuredLocalRatio : undefined,
     }
   })

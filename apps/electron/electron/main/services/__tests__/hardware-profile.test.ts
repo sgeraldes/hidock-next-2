@@ -94,9 +94,15 @@ describe('profiles and recommendations', () => {
     expect(profileOf(hw([]), false)).toBe('cpu-only')
   })
 
-  it('recommends the best option that exists today, and says which would be ideal', () => {
+  it('offers only engines that are built, and recommends the best of them', () => {
     const { options } = buildSetupOptions({ hardware: amd, modelHostPaired: false, measuredLocalRatio: 0.33 })
-    expect(options[0]).toMatchObject({ engine: 'onnx-local', idealForHardware: true, available: false })
+    // Not built yet: never listed, not even greyed out.
+    expect(options.map((o) => o.engine)).toEqual(['model-host', 'pyannote-local', 'off'])
+    for (const hardware of [amd, nvidia, hw([])]) {
+      for (const o of buildSetupOptions({ hardware, modelHostPaired: false }).options) {
+        expect(['pyannote-local', 'model-host', 'off']).toContain(o.engine)
+      }
+    }
     const recommended = options.filter((o) => o.recommended)
     expect(recommended).toHaveLength(1)
     // Model Host is unavailable until paired, so the recommendation today is local pyannote.

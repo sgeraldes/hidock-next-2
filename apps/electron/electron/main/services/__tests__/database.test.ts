@@ -691,6 +691,24 @@ describe('Database Service', () => {
     it('returns zeros when nothing is stuck', () => {
       expect(resetStuckTranscriptions()).toEqual({ recordingsReset: 0, queueItemsReset: 0 })
     })
+
+    it('leaves the recording this process is transcribing alone', () => {
+      // 24-sep: a new recording started the queue before the boot repair ran;
+      // the repair put the in-flight row back to pending and hid the running job.
+      seedRecording('rec-live', { transcription_status: 'processing' })
+      seedRecording('rec-dead', { transcription_status: 'processing' })
+      const live = addToQueue('rec-live')
+      const dead = addToQueue('rec-dead')
+      updateQueueItem(live, 'processing')
+      updateQueueItem(dead, 'processing')
+
+      expect(resetStuckTranscriptions('rec-live')).toEqual({ recordingsReset: 1, queueItemsReset: 1 })
+      // Untouched: queueing set it to pending, and the reset would have made it 'none'.
+      expect(getRecordingById('rec-live')?.transcription_status).toBe('pending')
+      expect(getRecordingById('rec-dead')?.transcription_status).toBe('none')
+      expect(queryOne<{ status: string }>('SELECT status FROM transcription_queue WHERE id = ?', [live])?.status).toBe('processing')
+      expect(queryOne<{ status: string }>('SELECT status FROM transcription_queue WHERE id = ?', [dead])?.status).toBe('pending')
+    })
   })
 
   // =========================================================================

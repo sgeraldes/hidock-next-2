@@ -29,7 +29,6 @@ export interface SpeakerSetupOption {
   available: boolean
   unavailableReason?: string
   recommended: boolean
-  idealForHardware: boolean
   measuredSpeedRatio?: number
 }
 
