@@ -40,7 +40,8 @@ import { setMainWindowForValueBackfill } from './services/value-backfill'
 import { acquireSingleInstanceLock } from './single-instance'
 import { startBootScheduler } from './services/boot-scheduler'
 import { registerGatedBootTasks } from './services/boot-tasks'
-import { isFeatureEnabled, captureBootEffectiveFeatures } from './services/feature-gate'
+import { isFeatureEnabled, captureBootEffectiveFeatures, getBootEffectiveFeatures } from './services/feature-gate'
+import { FEATURES, type FeatureId } from '../../src/shared/feature-registry'
 import { createSplashWindow } from './splash-screen'
 import { configureEarlyStartup } from './startup-configuration'
 import { getStartupState } from './startup-state'
@@ -112,6 +113,14 @@ function createWindow(): void {
         }),
     webPreferences: {
       preload: join(runtimeDir, '../preload/index.js'),
+      // Restart-gated features that are off for this whole run; the renderer
+      // skips their channels from the first render.
+      additionalArguments: [
+        `--hidock-boot-disabled-features=${Object.entries(getBootEffectiveFeatures())
+          .filter(([id, state]) => !state.enabled && FEATURES[id as FeatureId]?.runtimeToggleable === false)
+          .map(([id]) => id)
+          .join(',')}`
+      ],
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false

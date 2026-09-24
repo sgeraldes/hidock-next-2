@@ -13,6 +13,7 @@ import { useEffect, useRef, useCallback } from 'react'
 import { getHiDockDeviceService } from '@/services/hidock-device'
 import { useAppStore } from '@/store/useAppStore'
 import { useFeatureStore } from '@/store/useFeatureStore'
+import { isFeatureDisabledRejection } from '@/lib/featureDisabled'
 import { toast } from '@/components/ui/toaster'
 import { parseError, getErrorMessage } from '@/features/library/utils/errorHandling'
 import { shouldLogQa } from '@/services/qa-monitor'
@@ -226,10 +227,7 @@ export function isDeviceSyncInitiationBlocked(): boolean {
  * download failure — the loop stops and the item must NOT be marked failed.
  * Exported for tests.
  */
-export function isFeatureDisabledRejection(error: unknown): boolean {
-  const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error ?? '')
-  return text.includes('FeatureDisabledError') || text.includes('is disabled (channel')
-}
+export { isFeatureDisabledRejection }
 
 /**
  * Hard connectivity gate for STARTING a download session. A download must NEVER

@@ -8,6 +8,26 @@ import {
 } from '@/types/unified-recording'
 import type { KnowledgeCapture } from '@/types/knowledge'
 import { UNKNOWN_DATE, isUnknownDate } from '@/lib/unknownDate'
+import { isFeatureOffThisRun } from '@/lib/bootFeatures'
+import { isFeatureDisabledRejection } from '@/lib/featureDisabled'
+
+/**
+ * Recordings still on the device that are not downloaded yet. With Device Sync
+ * off the channel is gated and rejects; before this guard that rejection failed
+ * the whole load and the Library showed 0 sources.
+ */
+async function readDeviceCache(): Promise<CachedDeviceFile[]> {
+  if (isFeatureOffThisRun('device-sync')) return []
+  try {
+    return ((await window.electronAPI.deviceCache.getAll()) as CachedDeviceFile[]) ?? []
+  } catch (error) {
+    // The feature store can still say "enabled" for a moment at boot, before it
+    // hydrates, so the gate's own rejection is read as "no cache" too. Any other
+    // failure still fails the load: refreshLocal's callers rely on that.
+    if (isFeatureDisabledRejection(error)) return []
+    throw error
+  }
+}
 
 // Re-exported so existing importers (e.g. regression tests, and any consumer that
 // reached for the sentinel here) keep working. The canonical definition now lives
@@ -624,7 +644,7 @@ export function useUnifiedRecordings(): UseUnifiedRecordingsResult {
         window.electronAPI.recordings.getAll() as Promise<DatabaseRecording[]>,
         window.electronAPI.recordings.getTrash() as Promise<DatabaseRecording[]>,
         window.electronAPI.syncedFiles.getAll() as Promise<SyncedFile[]>,
-        window.electronAPI.deviceCache.getAll() as Promise<CachedDeviceFile[]>,
+        readDeviceCache(),
         // ROUND-15 RESIDUAL — owner Library uses the existence-scoped OWNER
         // accessor so the owner still sees+manages captures of their own
         // excluded (personal / soft-deleted / value-excluded) recordings, incl.
@@ -789,7 +809,7 @@ export function useUnifiedRecordings(): UseUnifiedRecordingsResult {
         window.electronAPI.recordings.getAll() as Promise<DatabaseRecording[]>,
         window.electronAPI.recordings.getTrash() as Promise<DatabaseRecording[]>,
         window.electronAPI.syncedFiles.getAll() as Promise<SyncedFile[]>,
-        window.electronAPI.deviceCache.getAll() as Promise<CachedDeviceFile[]>,
+        readDeviceCache(),
         // ROUND-15 RESIDUAL — owner Library uses the existence-scoped OWNER
         // accessor so the owner still sees+manages captures of their own
         // excluded (personal / soft-deleted / value-excluded) recordings, incl.

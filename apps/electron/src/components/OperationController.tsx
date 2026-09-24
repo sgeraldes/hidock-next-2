@@ -20,12 +20,22 @@ import { useDownloadOrchestrator } from '@/hooks/useDownloadOrchestrator'
 import { useDeviceSubscriptions } from '@/hooks/useDeviceSubscriptions'
 import { useTranscriptionSync } from '@/hooks/useTranscriptionSync'
 import { shouldLogQa } from '@/services/qa-monitor'
+import { isFeatureOffThisRun } from '@/lib/bootFeatures'
+
+/**
+ * The device side: downloads and device subscriptions. Not mounted when Device
+ * Sync was off at launch, because every channel it calls rejects until the next
+ * launch. A live disable keeps it mounted: those hooks drain in-flight work.
+ */
+function DeviceOperations(): null {
+  useDownloadOrchestrator()
+  useDeviceSubscriptions()
+  return null
+}
 
 export function OperationController() {
   // Compose focused hooks for each responsibility
   useAudioPlayback()
-  useDownloadOrchestrator()
-  useDeviceSubscriptions()
   useTranscriptionSync()
 
   // Calendar sync - thin enough to remain inline
@@ -45,8 +55,8 @@ export function OperationController() {
     }
   }, [])
 
-  // This component renders nothing - purely side effects
-  return null
+  // Side effects only; the device side mounts only when Device Sync runs this launch.
+  return isFeatureOffThisRun('device-sync') ? null : <DeviceOperations />
 }
 
 // =============================================================================

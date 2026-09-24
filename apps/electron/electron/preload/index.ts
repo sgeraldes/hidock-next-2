@@ -352,6 +352,12 @@ export interface TruncatedRecoveryCounts {
 }
 
 export interface ElectronAPI {
+  /**
+   * Features that are off for this whole run (disabled when the app started).
+   * Their channels reject until the next launch, so the renderer does not call
+   * them. Known from the first render: main passes it when it creates the window.
+   */
+  bootDisabledFeatures: string[]
   // App
   app: {
     restart: () => Promise<void>
@@ -1550,7 +1556,15 @@ export interface ElectronAPI {
 }
 
 // Expose the API to the renderer process
+const BOOT_DISABLED_ARG = '--hidock-boot-disabled-features='
+
 const electronAPI: ElectronAPI = {
+  bootDisabledFeatures: (
+    process.argv.find((arg) => arg.startsWith(BOOT_DISABLED_ARG))?.slice(BOOT_DISABLED_ARG.length) ?? ''
+  )
+    .split(',')
+    .filter(Boolean),
+
   app: {
     restart: () => callIPC('app:restart'),
     info: () => callIPC('app:info'),
