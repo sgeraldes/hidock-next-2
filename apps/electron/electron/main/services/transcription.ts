@@ -922,11 +922,10 @@ export function closeTurnEnds(
     } else if (next === undefined && s.text && Number.isFinite(s.start)) {
       const words = s.text.trim().split(/\s+/).filter(Boolean).length
       const spoken = s.start + Math.max(1, words / SPOKEN_WORDS_PER_SECOND)
-      const limit =
-        typeof durationSeconds === 'number' && Number.isFinite(durationSeconds) && durationSeconds > s.start
-          ? durationSeconds
-          : Infinity
-      s.end = Math.min(spoken, limit)
+      const known = typeof durationSeconds === 'number' && Number.isFinite(durationSeconds)
+      // A turn that starts at or after the end of the recording has no audio to
+      // end in: it stays zero-length and the timestamp check reports it.
+      s.end = known ? (durationSeconds > s.start ? Math.min(spoken, durationSeconds) : s.start) : spoken
     } else {
       // Nothing honest to close it with: the timestamp check reports it.
       s.end = s.start

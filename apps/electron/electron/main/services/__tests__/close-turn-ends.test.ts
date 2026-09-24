@@ -43,6 +43,12 @@ describe('closeTurnEnds', () => {
     expect(turns.map((t) => t.end)).toEqual([3, 8, 10])
   })
 
+  it('leaves a turn that starts past the end of the recording zero-length', () => {
+    const turns = [{ start: 20, end: 20, text: 'algo' }]
+    closeTurnEnds(turns, 17)
+    expect(turns[0].end).toBe(20)
+  })
+
   it('invents nothing when there is no honest end', () => {
     const turns = [
       { start: 5, end: 5 },

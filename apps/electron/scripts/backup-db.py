@@ -215,23 +215,25 @@ def skip_reason(now: datetime | None = None) -> str | None:
     # Sin reloj de por medio: el ultimo backup exacto registro el estado de la
     # base (mtime en ns y tamano, WAL vacio); si la base sigue igual, no cambio.
     # Un cambio de hora o el horario de verano no mueven el mtime de un archivo.
-    names = sorted(p for p in BACKUP_DIR.glob(f"{PREFIX}*{SUFFIX}") if parse_stamp(p) is not None)
-    if not names:
-        return None
-    newest = names[-1]
-    try:
-        with open(sidecar_of(newest), encoding="utf-8") as f:
-            record = json.load(f)
-    except (OSError, ValueError):
-        return None
+    # Se revisan todos, no el de nombre mas nuevo: despues de atrasar el reloj
+    # el nombre mas nuevo puede no ser el ultimo backup hecho.
     now_state = source_state()
-    if (
-        record.get("exact") is True
-        and now_state["wal_size"] == 0
-        and record.get("db_mtime_ns") == str(now_state["mtime_ns"])
-        and record.get("db_size") == now_state["size"]
-    ):
-        return f"la base no cambio desde {newest.name}"
+    if now_state["wal_size"] != 0:
+        return None
+    for backup in BACKUP_DIR.glob(f"{PREFIX}*{SUFFIX}"):
+        if parse_stamp(backup) is None:
+            continue
+        try:
+            with open(sidecar_of(backup), encoding="utf-8") as f:
+                record = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if (
+            record.get("exact") is True
+            and record.get("db_mtime_ns") == str(now_state["mtime_ns"])
+            and record.get("db_size") == now_state["size"]
+        ):
+            return f"la base no cambio desde {backup.name}"
     return None
 
 
