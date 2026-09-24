@@ -18,6 +18,7 @@
  */
 
 import { spawn } from 'child_process'
+import bundledFfmpeg from 'ffmpeg-static'
 
 /** Rule version: bump when a threshold or category rule changes, so profiles are recomputed. */
 export const AUDIO_PROFILE_VERSION = 1
@@ -29,6 +30,17 @@ export const FRAME_SECONDS = 576 / 16000
 export const LOUD_GAIN = 142
 /** Decoded frames louder than this count as sound, the same line as the pre-flight. */
 export const LOUD_DB = -45
+
+/**
+ * The device's encoder fills every frame: part2_3_length is 2,200 bits in 100%
+ * of the owner's recordings (24-sep). Its gain means loudness only for that
+ * encoder; LAME, for one, writes a higher gain for silence than for a tone
+ * (review of 24-sep). A stream in the same format from another encoder fails
+ * this check and is decoded instead.
+ */
+export const DEVICE_PART2_3_LENGTH = 2200
+/** Share of frames that must carry the device's part2_3_length. */
+export const DEVICE_FINGERPRINT_SHARE = 0.95
 
 /** Under this many seconds a recording is not processed automatically. */
 export const TOO_SHORT_SECONDS = 10
@@ -90,6 +102,7 @@ export function scanDeviceMp3(buf: Buffer): Uint8Array | null {
   const gains = new Uint8Array(Math.ceil(payload / 288) + 1)
   let frames = 0
   let skipped = 0
+  let deviceShaped = 0
   while (i + 9 <= buf.length) {
     const b1 = buf[i + 1]
     const b2 = buf[i + 2]
@@ -108,18 +121,30 @@ export function scanDeviceMp3(buf: Buffer): Uint8Array | null {
       continue
     }
     const sideInfo = i + 4 + ((b1 & 1) === 0 ? 2 : 0) // CRC when the protection bit is 0
+    if (sideInfo + 5 > buf.length) break // a frame cut off before its side information
     // MPEG-2 mono side info: main_data_begin 8, private 1, part2_3_length 12,
     // big_values 9, then global_gain 8 = bits 30..37.
+    // bits 9..20: after the 8 bits of main_data_begin and the private bit.
+    const part23 = (((buf[sideInfo + 1] << 16) | (buf[sideInfo + 2] << 8) | buf[sideInfo + 3]) >> 11) & 0xfff
+    if (part23 === DEVICE_PART2_3_LENGTH) deviceShaped++
     gains[frames++] = (((buf[sideInfo + 3] << 8) | buf[sideInfo + 4]) >> 2) & 0xff
     i += 288 + ((b2 >> 1) & 1)
   }
   // A stream of the device covers its file; a few stray bytes at the end are fine.
   if (frames === 0 || frames * 288 < payload * 0.9) return null
+  // Same format, another encoder: its gains do not mean what the device's mean.
+  if (deviceShaped < frames * DEVICE_FINGERPRINT_SHARE) return null
   return gains.subarray(0, frames)
 }
 
+/** The ffmpeg the app ships (ffmpeg-static), outside the asar archive when packaged. */
+export function bundledFfmpegPath(): string {
+  if (!bundledFfmpeg) throw new Error('The bundled ffmpeg is not available')
+  return bundledFfmpeg.replace(/app\.asar([\\/])/, 'app.asar.unpacked$1')
+}
+
 /** Per-frame peak dBFS of any audio file, decoded by ffmpeg at 16 kHz mono in frame-sized blocks. */
-export function decodeFrameLevels(filePath: string, ffmpegPath = 'ffmpeg'): Promise<Float32Array> {
+export function decodeFrameLevels(filePath: string, ffmpegPath = bundledFfmpegPath()): Promise<Float32Array> {
   return new Promise((resolve, reject) => {
     const child = spawn(
       ffmpegPath,
@@ -149,7 +174,9 @@ export function decodeFrameLevels(filePath: string, ffmpegPath = 'ffmpeg'): Prom
     child.stderr.on('data', (d) => (stderr += String(d)))
     child.on('error', reject)
     child.on('close', (code) => {
-      if (code !== 0 && levels.length === 0) reject(new Error(`ffmpeg could not decode the audio: ${stderr.trim().slice(0, 200)}`))
+      // A decode that stopped partway would describe only the start of the
+      // file; better no profile than a wrong one (the pass tries again later).
+      if (code !== 0) reject(new Error(`ffmpeg could not decode the audio (exit ${code}): ${stderr.trim().slice(0, 200)}`))
       else resolve(Float32Array.from(levels))
     })
   })

@@ -225,7 +225,7 @@ Decided by the silence check, stored as a label with a filter, like the integrit
 
 | Label | Rule | What happens |
 |---|---|---|
-| Too short, not processed | measured length under 10 s | never transcribed automatically; "Transcribe anyway" on the recording |
+| Too short, not processed | measured length under 10 s | never transcribed automatically; "Transcribe anyway" on the recording; a label, not a rating |
 | Silent | 0.25 s of sound or less | value set to useless; generated content can be retired in one action |
 | Noise only | sound exists, but no sustained stretch: every activity interval under 1.5 s, and in total under 3 s or under 3% | same as Silent, labelled differently so it can be reviewed |
 | Speech present | anything else | nothing changes |
@@ -272,8 +272,12 @@ per speaker from the transcript, embed them, match against the canonical voices.
    toward keeping (24-sep: 150 of 154 short recordings agree with the decoded reference; none with
    speech is called silent or noise). `audio-profile-store.ts` keeps one row per recording in
    `audio_profiles` (schema v59) and the per-frame envelope in `<cache>/audio-envelope/`, reads a
-   file again only when its size or modification time changes, and rates silent, noise-only and
-   too-short recordings "no value" (method `audio`; AI ratings give way, the owner's never do). A
+   file again only when its size or modification time changes, and rates silent and noise-only
+   recordings "no value" (method `audio`; AI ratings give way, the owner's never do, personal
+   recordings are never rated, and a later profile that finds speech takes the rating back). Too
+   short is a label only. The fast path trusts the gain only for the device's own encoder (every
+   frame carries 2,200 bits of audio data); any other stream, a LAME file in the same format
+   included, is decoded with the bundled ffmpeg. New files are profiled when they arrive. A
    boot task runs the pass over the whole library in the background; `audio:checkRecording` checks
    one recording on request. The Library shows "Silent", "Noise only" or "Too short" as a word on
    the row and filters on them under "Audio".

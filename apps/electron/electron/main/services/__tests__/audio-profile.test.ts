@@ -8,7 +8,13 @@
  */
 
 import { describe, expect, it, vi } from 'vitest'
+import { execFileSync } from 'child_process'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import {
+  bundledFfmpegPath,
+  decodeFrameLevels,
   FRAME_SECONDS,
   LOUD_GAIN,
   profileAudioFile,
@@ -28,6 +34,9 @@ function frame(gain: number, crc = false): Buffer {
   f[2] = 0x88
   f[3] = 0xc4
   const side = crc ? 6 : 4
+  // part2_3_length = 2200 (bits 9..20), as the device's encoder writes in every frame
+  f[side + 1] = 0x44
+  f[side + 2] = 0xc0
   // global_gain = side-info bits 30..37
   f[side + 3] = (gain >> 6) & 0x03
   f[side + 4] = (gain << 2) & 0xff
@@ -162,5 +171,58 @@ describe('confirming a verdict that would hide a recording', () => {
     expect(decode).toHaveBeenCalledOnce()
     expect(p.method).toBe('decoded')
     expect(p.category).toBe('silent')
+  })
+})
+
+describe('streams from other encoders', () => {
+  it('does not trust the gain of a stream whose frames are not filled like the device ones', () => {
+    // Same format, but part2_3_length varies from frame to frame (any VBR-minded encoder).
+    const frames = Array.from({ length: 600 }, (_, i) => {
+      const f = frame(QUIET)
+      f[5] = 0x10 + (i % 7) // part2_3_length no longer 2200
+      return f
+    })
+    expect(scanDeviceMp3(Buffer.concat(frames))).toBeNull()
+  })
+
+  it('sends a real LAME file in the same format to decoding (it reads silence as loud)', () => {
+    let ffmpeg: string
+    try {
+      ffmpeg = bundledFfmpegPath()
+    } catch {
+      return // no bundled ffmpeg in this environment
+    }
+    if (!existsSync(ffmpeg)) return
+    const dir = mkdtempSync(join(tmpdir(), 'hidock-lame-'))
+    try {
+      const out = join(dir, 'voice.mp3')
+      execFileSync(ffmpeg, [
+        '-hide_banner', '-loglevel', 'error',
+        '-f', 'lavfi', '-i', 'anullsrc=r=16000:cl=mono:d=10',
+        '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=16000:duration=10',
+        '-filter_complex', '[0:a][1:a]concat=n=2:v=0:a=1',
+        '-ac', '1', '-ar', '16000', '-codec:a', 'libmp3lame', '-b:a', '64k', out,
+      ])
+      expect(scanDeviceMp3(readFileSync(out))).toBeNull()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('decoding', () => {
+  it('uses the ffmpeg the app ships, outside the asar archive', () => {
+    expect(bundledFfmpegPath()).not.toMatch(/app\.asar[\\/]/)
+  })
+
+  it('fails on a file it cannot decode instead of returning part of it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hidock-bad-'))
+    try {
+      const bad = join(dir, 'bad.m4a')
+      writeFileSync(bad, Buffer.alloc(4096, 0x33))
+      await expect(decodeFrameLevels(bad)).rejects.toThrow(/could not decode/)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

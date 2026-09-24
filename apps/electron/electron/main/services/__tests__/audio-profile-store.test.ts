@@ -48,6 +48,8 @@ function frame(gain: number): Buffer {
   f[1] = 0xf3
   f[2] = 0x88
   f[3] = 0xc4
+  f[5] = 0x44 // part2_3_length 2200, as the device writes
+  f[6] = 0xc0
   f[7] = (gain >> 6) & 0x03
   f[8] = (gain << 2) & 0xff
   return f
@@ -93,6 +95,11 @@ beforeAll(async () => {
   seedRecording('talk', audio([[138, 5], [165, 20], [138, 5]]))
   seedRecording('knocks', audio([[138, 12], [170, 0.3], [138, 12], [170, 0.3], [138, 12]]))
   seedRecording('gone', null)
+  seedRecording('private', audio([[138, 20]]))
+  run('UPDATE recordings SET personal = 1 WHERE id = ?', ['private'])
+  seedRecording('short', audio([[165, 6]]))
+  seedCapture('c-private', 'private', 'valuable', 'ai')
+  seedCapture('c-short', 'short', 'unrated', null)
   seedCapture('c-silent-ai', 'silent', 'valuable', 'ai')
   seedCapture('c-silent-user', 'silent', 'valuable', 'user')
   seedCapture('c-talk', 'talk', 'valuable', 'ai')
@@ -109,13 +116,13 @@ afterAll(() => {
 
 describe('audio profiles on the library', () => {
   it('lists every recording with a file and no profile', () => {
-    expect(recordingsNeedingProfile().map((r) => r.id).sort()).toEqual(['knocks', 'silent', 'talk'])
+    expect(recordingsNeedingProfile().map((r) => r.id).sort()).toEqual(['knocks', 'private', 'short', 'silent', 'talk'])
   })
 
   it('profiles the library, rates silent and noise-only recordings, and leaves speech alone', async () => {
     const progress = await backfillAudioProfiles({ gapMs: 0, decode })
-    expect(progress.profiled).toBe(3)
-    expect(progress.byCategory).toMatchObject({ silent: 1, noise: 1, speech: 1 })
+    expect(progress.profiled).toBe(5)
+    expect(progress.byCategory).toMatchObject({ silent: 2, noise: 1, speech: 1, too_short: 1 })
     expect(getAudioProfile('silent')?.category).toBe('silent')
     expect(getAudioProfile('knocks')?.category).toBe('noise')
     expect(getAudioProfile('talk')?.category).toBe('speech')
@@ -127,6 +134,12 @@ describe('audio profiles on the library', () => {
     // The owner's own rating is never touched, and speech changes nothing.
     expect(rating('c-silent-user')?.quality_rating).toBe('valuable')
     expect(rating('c-talk')?.quality_rating).toBe('valuable')
+    // Personal recordings are profiled but never rated, like every automatic rater.
+    expect(getAudioProfile('private')?.category).toBe('silent')
+    expect(rating('c-private')?.quality_rating).toBe('valuable')
+    // Too short is a label: left for the owner to process by hand, not judged.
+    expect(getAudioProfile('short')?.category).toBe('too_short')
+    expect(rating('c-short')?.quality_rating).toBe('unrated')
 
     expect(existsSync(envelopePath('talk'))).toBe(true)
     expect(recordingsNeedingProfile()).toEqual([])
@@ -147,5 +160,20 @@ describe('audio profiles on the library', () => {
     const rows = getRecordings()
     expect(rows.find((r) => r.id === 'knocks')?.audio_category).toBe('noise')
     expect(rows.find((r) => r.id === 'gone')?.audio_category ?? null).toBeNull()
+  })
+
+  it('checks a recording again when its file size changes (a complete copy replaced a short one)', () => {
+    run('UPDATE recordings SET file_size = ? WHERE id = ?', [999_999, 'knocks'])
+    expect(recordingsNeedingProfile().map((r) => r.id)).toContain('knocks')
+  })
+
+  it('takes the audio verdict back when the audio turns out to hold speech', async () => {
+    expect(rating('c-silent-ai')?.quality_rating).toBe('garbage')
+    writeFileSync(join(dir, 'silent.wav'), audio([[138, 5], [165, 20], [138, 5]]))
+    const again = await profileRecording({ id: 'silent', file_path: join(dir, 'silent.wav') }, { decode })
+    expect(again.profile?.category).toBe('speech')
+    expect(rating('c-silent-ai')).toMatchObject({ quality_rating: 'unrated', quality_method: null })
+    // The owner's rating was never the audio check's to change.
+    expect(rating('c-silent-user')?.quality_rating).toBe('valuable')
   })
 })

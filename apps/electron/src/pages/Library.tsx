@@ -21,6 +21,9 @@ import {
   type IntegrityFilter
 } from '@/features/library/utils/transcriptIntegrity'
 import { AUDIO_FILTERS, isAudioFilter, matchesAudioFilter, type AudioFilter } from '@/features/library/utils/audioCheck'
+
+/** Sources with no recording behind them (captures, notes, artifacts) have no audio to check. */
+const isAudioless = (rec: { sourceKind?: string }) => !!rec.sourceKind && rec.sourceKind !== 'recording'
 import { overlayActiveTranscriptionStatuses, useUnifiedRecordings } from '@/hooks/useUnifiedRecordings'
 import {
   UnifiedRecording,
@@ -846,7 +849,8 @@ export function Library() {
       if (qualityFilter !== null && rec.quality !== qualityFilter) return false
       if (statusFilter !== null && rec.status !== statusFilter) return false
       if (integrityFilter !== null && !matchesIntegrityFilter(transcripts.get(rec.id), integrityFilter)) return false
-      if (audioFilter !== null && !matchesAudioFilter(rec.audioCategory, audioFilter)) return false
+      // Only recordings have audio to check; the counts leave the rest out too.
+      if (audioFilter !== null && (isAudioless(rec) || !matchesAudioFilter(rec.audioCategory, audioFilter))) return false
       return true
     })
   }, [baseRecordings, artifactTypes, sourceTypeFilter, durationPreset, categoryFilter, qualityFilter, statusFilter, integrityFilter, audioFilter, transcripts])
@@ -856,7 +860,7 @@ export function Library() {
   const audioCounts = useMemo(() => {
     const counts: Record<string, number> = { no_sound: 0, silent: 0, noise: 0, too_short: 0, unchecked: 0 }
     for (const rec of baseRecordings) {
-      if (rec.sourceKind && rec.sourceKind !== 'recording') continue
+      if (isAudioless(rec)) continue
       for (const f of AUDIO_FILTERS) if (matchesAudioFilter(rec.audioCategory, f.value)) counts[f.value]++
     }
     return counts

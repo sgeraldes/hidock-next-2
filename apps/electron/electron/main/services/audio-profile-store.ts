@@ -7,19 +7,23 @@
  * `audio_profiles` (what the Library filters and labels on), the per-frame
  * envelope as a file in the cache folder (one byte per 36 ms frame, for the
  * waveform and later stages). A profile is current while its rule version, the
- * file size and the file's modification time match; otherwise it is computed
- * again.
+ * file size and the file's modification time match. The pass selects rows
+ * whose version or recorded file size differ; a profile request checks the
+ * modification time too.
  *
- * Silent, noise-only and too-short recordings are rated "no value" through the
- * same guarded path the duration gate uses: AI ratings are replaced (audio
- * with no sound outranks a rating of text the transcriber invented for it), a
- * rating the owner set is never touched.
+ * Silent and noise-only recordings are rated "no value" through the same
+ * guarded path the duration gate uses: AI ratings are replaced (audio with no
+ * sound outranks a rating of text the transcriber invented for it), a rating
+ * the owner set is never touched, and personal recordings are never rated (the
+ * privacy predicate every automatic rater follows). When a later profile finds
+ * speech, the audio verdict is taken back. Too short is a label only: the
+ * owner asked for those to be left for manual processing, not judged.
  */
 
 import { existsSync, mkdirSync, statSync } from 'fs'
 import { readFile, writeFile } from 'fs/promises'
 import { join } from 'path'
-import { queryAll, queryOne, run } from './database'
+import { getRowsModified, queryAll, queryOne, run } from './database'
 import { getCachePath } from './file-storage'
 import {
   AUDIO_PROFILE_VERSION,
@@ -58,20 +62,42 @@ export function isProfileCurrent(row: AudioProfileRow | null, size: number, mtim
   return !!row && row.version === AUDIO_PROFILE_VERSION && row.file_size === size && row.file_mtime_ms === Math.round(mtimeMs)
 }
 
-/** Verdicts that rate a recording "no value"; speech changes no rating. */
+/** Verdicts that rate a recording "no value". Speech and too short change no rating. */
 const VALUE_BY_CATEGORY: Partial<Record<AudioCategory, ValueClassification>> = {
   silent: { value: 'none', reasons: ['silent_audio'], confidence: 1 },
   noise: { value: 'none', reasons: ['noise_only'], confidence: 1 },
-  too_short: { value: 'none', reasons: ['no_substance'], confidence: 1 },
+}
+
+/**
+ * Take back a "no value" rating this check gave, when the audio turns out to
+ * hold speech after all (a replaced file, a rule change). The capture goes back
+ * to unrated so the content classifier decides. Mirrors clearStopwatchVerdict
+ * for the duration gate.
+ */
+export function clearAudioVerdict(recordingId: string): number {
+  run(
+    `UPDATE knowledge_captures
+        SET quality_rating = 'unrated', quality_reasons = NULL, quality_source = NULL,
+            quality_method = NULL, quality_confidence = NULL, quality_assessed_at = NULL
+      WHERE source_recording_id = ?
+        AND quality_source = 'ai'
+        AND quality_method = 'audio'
+        AND quality_rating IN ('garbage', 'low-value')`,
+    [recordingId]
+  )
+  return getRowsModified()
 }
 
 /** Rate the recording's captures from its audio. Returns how many were changed. */
 export function applyAudioValueVerdict(recordingId: string, category: AudioCategory): number {
   const verdict = VALUE_BY_CATEGORY[category]
-  if (!verdict) return 0
+  if (!verdict) return category === 'speech' ? clearAudioVerdict(recordingId) : 0
   const captures = queryAll<{ id: string }>(
-    `SELECT id FROM knowledge_captures
-      WHERE source_recording_id = ? AND deleted_at IS NULL AND COALESCE(quality_source, '') != 'user'`,
+    `SELECT kc.id FROM knowledge_captures kc
+       JOIN recordings r ON r.id = kc.source_recording_id
+      WHERE kc.source_recording_id = ? AND kc.deleted_at IS NULL
+        AND COALESCE(kc.quality_source, '') != 'user'
+        AND COALESCE(r.personal, 0) = 0`,
     [recordingId]
   )
   let changed = 0
@@ -154,8 +180,8 @@ export interface BackfillProgress {
 }
 
 /**
- * Recordings whose profile is missing or from an older rule version. Files
- * that changed on disk are caught when they are profiled (size and mtime).
+ * Recordings whose profile is missing, from an older rule version, or taken
+ * from a file of another size (a complete copy replacing a short download).
  */
 export function recordingsNeedingProfile(): { id: string; file_path: string | null }[] {
   return queryAll<{ id: string; file_path: string | null }>(
@@ -164,7 +190,8 @@ export function recordingsNeedingProfile(): { id: string; file_path: string | nu
        LEFT JOIN audio_profiles ap ON ap.recording_id = r.id
       WHERE r.deleted_at IS NULL
         AND r.file_path IS NOT NULL AND r.file_path != ''
-        AND (ap.recording_id IS NULL OR ap.version != ?)
+        AND (ap.recording_id IS NULL OR ap.version != ?
+             OR (r.file_size IS NOT NULL AND r.file_size > 0 AND ap.file_size IS NOT r.file_size))
       ORDER BY r.date_recorded DESC`,
     [AUDIO_PROFILE_VERSION]
   )
@@ -188,6 +215,24 @@ async function announce(progress: Pick<BackfillProgress, 'profiled' | 'byCategor
     })
   } catch (error) {
     console.warn('[AudioProfile] could not announce the update:', error)
+  }
+}
+
+/** A recording that just arrived: profile it now (unless current) and announce it. Never throws. */
+export async function profileNewRecording(recordingId: string): Promise<void> {
+  try {
+    const recording = queryOne<{ id: string; file_path: string | null }>(
+      'SELECT id, file_path FROM recordings WHERE id = ? AND deleted_at IS NULL',
+      [recordingId]
+    )
+    if (!recording) return
+    const outcome = await profileRecording(recording)
+    if (!outcome.profile) return
+    const byCategory = { too_short: 0, silent: 0, noise: 0, speech: 0 } as Record<AudioCategory, number>
+    byCategory[outcome.profile.category] = 1
+    await announce({ profiled: 1, byCategory, capturesRated: outcome.capturesRated })
+  } catch (error) {
+    console.warn(`[AudioProfile] ${recordingId}: ${error instanceof Error ? error.message : error}`)
   }
 }
 

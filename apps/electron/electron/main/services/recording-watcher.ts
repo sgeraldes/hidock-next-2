@@ -198,6 +198,12 @@ async function processNewRecording(filePath: string): Promise<void> {
     })
 
     notifyRenderer('recording:new', { recording })
+
+    // The audio check (silent, noise only, too short, where the sound is) for
+    // the new file now, rather than at the next launch.
+    import('./audio-profile-store')
+      .then(({ profileNewRecording }) => profileNewRecording(recordingId))
+      .catch((err) => console.error('[RecordingWatcher] Failed to load the audio check:', err))
   } catch (error) {
     console.error('Error processing recording:', error)
   }
