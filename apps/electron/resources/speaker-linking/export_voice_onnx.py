@@ -20,6 +20,7 @@ Two things the plain export does not survive, and how this file gets around them
   instead (a conv1d with an identity kernel exports too, but DirectML rejects it).
 """
 
+import ctypes
 import math
 import os
 import sys
@@ -32,6 +33,8 @@ os.environ.setdefault('HF_HUB_OFFLINE', '1')
 from pyannote.audio import Model  # noqa: E402
 
 out_dir = sys.argv[1]
+if sys.platform == 'win32':  # below-normal priority: the export must not slow the desktop
+    ctypes.windll.kernel32.SetPriorityClass(ctypes.windll.kernel32.GetCurrentProcess(), 0x00004000)
 model = Model.from_pretrained('pyannote/wespeaker-voxceleb-resnet34-LM').eval()
 hp = model.hparams
 assert hp.fbank_centering_span is None and hp.dither == 0.0 and hp.snip_edges and hp.round_to_power_of_two
@@ -112,6 +115,7 @@ for secs in (3, 9):
     print(f'{secs}s fbank frames {tuple(a.shape)} vs {tuple(b.shape)}; max abs diff {float((a - b).abs().max()):.5f}')
     cos = float(torch.nn.functional.cosine_similarity(ra, rb).item())
     print(f'{secs}s embedding cosine(pyannote, rebuilt) = {cos:.6f}')
+    assert cos > 0.9999, f'rebuilt embedder differs from pyannote: cosine {cos}'
 
 path = os.path.join(out_dir, 'wespeaker-resnet34-lm.onnx')
 x = torch.randn(1, SR * 5) * 0.05
@@ -130,6 +134,7 @@ for secs in (4, 15):
     got = sess.run(None, {'waveforms': xa})[0]
     cos = float((ref * got).sum() / (np.linalg.norm(ref) * np.linalg.norm(got)))
     print(f'{secs}s ONNX (cpu) vs pyannote embedding cosine = {cos:.6f}')
+    assert cos > 0.9999, f'ONNX embedder differs from pyannote: cosine {cos}'
 
 # --- segmentation-3.0 ---
 
@@ -154,6 +159,7 @@ with torch.inference_mode():
     r = seg_model(torch.from_numpy(xa)).numpy()
 o = sess.run(None, {'waveforms': xa})[0]
 print('shapes', r.shape, o.shape, '| max abs diff', float(np.abs(r - o).max()))
+assert r.shape == o.shape and float(np.abs(r - o).max()) < 1e-3, 'ONNX segmentation differs from pyannote'
 
 # --- the embedder as the diarization pipeline calls it: with per-frame masks ---
 #
@@ -194,3 +200,4 @@ for trial in range(3):
     got = sess.run(None, {'waveforms': xa, 'weights': wa})[0]
     cos = min(float((r * g).sum() / (np.linalg.norm(r) * np.linalg.norm(g))) for r, g in zip(ref, got))
     print(f'masked trial {trial}: worst cosine vs pyannote = {cos:.6f}')
+    assert cos > 0.9999, f'masked ONNX embedder differs from pyannote: cosine {cos}'

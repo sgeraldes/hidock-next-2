@@ -169,7 +169,7 @@ def use_onnx_models(pipeline: Any, onnx_dir: str, provider: str, torch: Any) -> 
             elapsed = time.perf_counter() - started
             state["calls"] += 1
             # The first calls compile shaders on the CPU; they are not GPU time.
-            if state["calls"] > 2 and elapsed > GPU_CALL_BUDGET_S:
+            if state["calls"] > 1 and elapsed > GPU_CALL_BUDGET_S:
                 log(f"a DirectML call took {elapsed * 1000:.0f} ms (budget {GPU_CALL_BUDGET_S * 1000:.0f}); CPU from here on")
                 state["gpu"] = False
                 rest = cpu_embedder.run(None, {"waveforms": x[i + 1 :], "weights": w[i + 1 :]})[0] if i + 1 < x.shape[0] else None
@@ -190,9 +190,58 @@ def use_onnx_models(pipeline: Any, onnx_dir: str, provider: str, torch: Any) -> 
     return device_label
 
 
+def lower_own_priority() -> None:
+    """Below-normal priority for this process and anything it starts."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+            kernel32.SetPriorityClass(kernel32.GetCurrentProcess(), 0x00004000)  # BELOW_NORMAL
+        except Exception:  # noqa: BLE001 - priority is a courtesy, never a failure
+            pass
+    else:
+        try:
+            os.nice(5)
+        except OSError:
+            pass
+
+
+def probe_dml(onnx_dir: str) -> int:
+    """Prove DirectML is safe on this GPU before any real work uses it.
+
+    Twenty single-chunk calls (10 s of audio each) after two warm-up calls,
+    which compile shaders on the CPU. Prints {"ok", "maxMs"}; ok only when
+    every timed call stays under the budget.
+    """
+    import numpy as np
+    import onnxruntime as ort
+
+    if "DmlExecutionProvider" not in ort.get_available_providers():
+        print(json.dumps({"ok": False, "maxMs": None, "reason": "no DirectML in onnxruntime"}))
+        return 0
+    session = ort.InferenceSession(
+        os.path.join(onnx_dir, EMBEDDER_ONNX), providers=["DmlExecutionProvider", "CPUExecutionProvider"]
+    )
+    x = (np.random.randn(1, 160000) * 0.05).astype(np.float32)
+    w = np.ones((1, 589), dtype=np.float32)
+    for _ in range(2):
+        session.run(None, {"waveforms": x, "weights": w})
+    worst = 0.0
+    for _ in range(20):
+        started = time.perf_counter()
+        session.run(None, {"waveforms": x, "weights": w})
+        worst = max(worst, (time.perf_counter() - started) * 1000)
+        if worst > GPU_CALL_BUDGET_S * 1000:
+            break
+    print(json.dumps({"ok": worst <= GPU_CALL_BUDGET_S * 1000, "maxMs": round(worst, 1)}))
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="HiDock persistent acoustic speaker-linking worker")
-    parser.add_argument("--audio", required=True)
+    parser.add_argument("--audio")
+    parser.add_argument("--probe-dml", action="store_true", help="time single DirectML calls and exit")
     parser.add_argument("--model", default="pyannote/speaker-diarization-community-1")
     parser.add_argument("--fallback-model", default="pyannote/speaker-diarization-3.1")
     parser.add_argument("--min-speech-seconds", type=float, default=4.0)
@@ -202,6 +251,13 @@ def main() -> int:
     parser.add_argument("--onnx-dir", help="folder with the exported ONNX voice models")
     parser.add_argument("--onnx-provider", choices=["dml", "cpu"], default="cpu")
     args = parser.parse_args()
+    lower_own_priority()
+    if args.probe_dml:
+        if not args.onnx_dir:
+            raise RuntimeError("--probe-dml needs --onnx-dir")
+        return probe_dml(args.onnx_dir)
+    if not args.audio:
+        raise RuntimeError("--audio is required")
 
     # Some native/model dependencies print diagnostics such as "Could not ..."
     # to stdout while importing or loading. Electron's worker contract reserves

@@ -251,9 +251,15 @@ compared with the baseline (`scripts/perf/compare.py`).
    `<data>/models/voice-onnx-pyannote-3.1-v2`). Same voice space, no transfer. Measured on Rec54
    (5 m 30 s): pyannote on the CPU 129 s, ONNX with the embedder on the RX 6600 XT 31 s, identical
    segments and embeddings (cosine 1.000000, 100% same speaker per 0.1 s). The RX 6600 XT also draws
-   the screen: on DirectML every GPU call carries one 10-second chunk (about 6 ms), and a call over
-   50 ms after warm-up moves the rest of the recording to the CPU. A 32-chunk batch froze the machine
-   on 24-sep; that path does not exist any more. `signatures-from-turns` is still to build.
+   the screen, and a GPU call cannot be interrupted, so DirectML has to be proven before it is used:
+   a probe of 20 single-chunk calls (10 s of audio each) must stay under 50 ms per call on that exact
+   GPU (RX 6600 XT: 6.9 ms worst), the verdict is stored per GPU fingerprint, and until then the engine
+   runs on the CPU. In a run every call carries one chunk; a call over 50 ms, or any DirectML failure,
+   moves the rest of the recording (and later ones) to the CPU. One local voice job runs at a time in
+   the process (queue lanes, export, probe), at below-normal priority with the thread budget. The
+   export goes to a staging folder, fails on any mismatch with PyTorch, and is published with a
+   manifest only when complete. A 32-chunk batch froze the machine on 24-sep; that path does not
+   exist any more. `signatures-from-turns` is still to build.
 3. **Provider registry and online transcribers.** OpenAI, AssemblyAI, Meta Muse, pyannoteAI; the
    existing Gemini moved into the registry; encrypted keys; chunk relabelling by voice.
 4. **`pyannoteai` engine and voiceprints.** Separate voiceprint table, identify on each recording.

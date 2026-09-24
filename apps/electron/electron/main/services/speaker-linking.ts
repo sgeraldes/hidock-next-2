@@ -1,14 +1,14 @@
 import { spawn } from 'child_process'
-import { existsSync, mkdirSync } from 'fs'
+import { existsSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from 'fs'
 import { dirname, join, isAbsolute } from 'path'
 import { randomUUID } from 'crypto'
-import { availableParallelism } from 'os'
+import { availableParallelism, constants as osConstants, setPriority } from 'os'
 import ffmpegPath from 'ffmpeg-static'
-import { getConfig, getDataPath } from './config'
+import { getConfig, getDataPath, updateConfig } from './config'
 import { queryAll, queryOne, runInTransaction, runNoSave } from './database'
 import { diarizeOnModelHost, ModelHostUnavailableError } from './model-host-client'
 import { CANONICAL_VOICE_MODEL, resolveSpeakerEngine } from './speaker-engines'
-import { detectHardware } from './hardware-profile'
+import { detectHardware, gpuFingerprint } from './hardware-profile'
 
 /** Default share of logical CPUs when the config does not say. */
 const DEFAULT_DIARIZATION_CPU_PERCENT = 40
@@ -446,65 +446,167 @@ export function voiceOnnxDir(): string {
 }
 
 const VOICE_ONNX_FILES = ['wespeaker-resnet34-lm-masked.onnx', 'segmentation-3.0.onnx']
+/** Written last, after the exporter's own checks passed: its presence is what "ready" means. */
+const VOICE_ONNX_MANIFEST = 'manifest.json'
+
+/**
+ * One local voice job at a time in this process, whatever asks for it: the two
+ * queue lanes, the ONNX export and the DirectML probe. Two pyannote workers side
+ * by side took 80% of the CPU; one at a time keeps the machine usable.
+ */
+let voiceSlot: Promise<unknown> = Promise.resolve()
+export function inVoiceSlot<T>(job: () => Promise<T>): Promise<T> {
+  const run = voiceSlot.then(job, job)
+  voiceSlot = run.catch(() => undefined)
+  return run
+}
+
+/** Voice jobs never compete with the desktop for the CPU. */
+function lowerPriority(pid: number | undefined): void {
+  if (!pid) return
+  try {
+    setPriority(pid, osConstants.priority.PRIORITY_BELOW_NORMAL)
+  } catch {
+    /* the worker also lowers its own priority at start */
+  }
+}
 
 let voiceOnnxExport: Promise<void> | null = null
 
 /**
  * Export the voice models to ONNX once, with the same Python environment that
- * already holds the pyannote weights (resources/speaker-linking/export_voice_onnx.py
- * checks each export against PyTorch before it is used). Later runs reuse the files.
+ * already holds the pyannote weights. The exporter writes into a staging folder
+ * and exits non-zero if any export differs from PyTorch; only then is the folder
+ * published under its final name with a manifest. A killed or failed export
+ * leaves nothing that looks ready.
  */
 export function ensureVoiceOnnxModels(): Promise<void> {
   const dir = voiceOnnxDir()
-  if (VOICE_ONNX_FILES.every((f) => existsSync(join(dir, f)))) return Promise.resolve()
+  if (existsSync(join(dir, VOICE_ONNX_MANIFEST))) return Promise.resolve()
   if (voiceOnnxExport) return voiceOnnxExport
   const exporter = join(dirname(resolveWorkerPath(getConfig().transcription.speakerLinkingWorkerPath)), 'export_voice_onnx.py')
   if (!existsSync(exporter)) {
     return Promise.reject(new SpeakerLinkingUnavailableError(`voice model exporter not found: ${exporter}`))
   }
-  mkdirSync(dir, { recursive: true })
-  const python = resolveVoicePython()
-  console.log(`[SpeakerLinking] Exporting the voice models to ONNX in ${dir} (once)`)
-  voiceOnnxExport = new Promise<void>((resolve, reject) => {
-    const child = spawn(python, [exporter, dir], {
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, HF_HUB_OFFLINE: '1', HF_TOKEN: getConfig().transcription.localAsrHfToken || process.env.HF_TOKEN }
-    })
-    let tail = ''
-    const keep = (chunk: Buffer) => {
-      tail = (tail + chunk.toString()).slice(-4000)
-    }
-    child.stdout.on('data', keep)
-    child.stderr.on('data', keep)
-    const timer = setTimeout(() => child.kill(), 10 * 60 * 1000)
-    child.on('error', (e) => {
-      clearTimeout(timer)
-      reject(new SpeakerLinkingUnavailableError(`voice model export could not start: ${e.message}`))
-    })
-    child.on('close', (code) => {
-      clearTimeout(timer)
-      if (code === 0 && VOICE_ONNX_FILES.every((f) => existsSync(join(dir, f)))) {
-        console.log(`[SpeakerLinking] Voice models exported:\n${tail.trim()}`)
-        resolve()
-      } else {
-        reject(new SpeakerLinkingUnavailableError(`voice model export failed (exit ${code}): ${tail.trim().slice(-600)}`))
-      }
-    })
-  }).finally(() => {
+  const staging = `${dir}.staging`
+  voiceOnnxExport = inVoiceSlot(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        rmSync(staging, { recursive: true, force: true })
+        mkdirSync(staging, { recursive: true })
+        const config = getConfig().transcription
+        console.log(`[SpeakerLinking] Exporting the voice models to ONNX (once), staging in ${staging}`)
+        const child = spawn(resolveVoicePython(), [exporter, staging], {
+          windowsHide: true,
+          stdio: ['ignore', 'pipe', 'pipe'],
+          env: {
+            ...process.env,
+            HF_HUB_OFFLINE: '1',
+            HF_TOKEN: config.localAsrHfToken || process.env.HF_TOKEN,
+            ...diarizationThreadEnv(config.speakerLinkingCpuPercent)
+          }
+        })
+        lowerPriority(child.pid)
+        let tail = ''
+        const keep = (chunk: Buffer) => {
+          tail = (tail + chunk.toString()).slice(-4000)
+        }
+        child.stdout.on('data', keep)
+        child.stderr.on('data', keep)
+        const timer = setTimeout(() => child.kill(), 10 * 60 * 1000)
+        child.on('error', (e) => {
+          clearTimeout(timer)
+          reject(new SpeakerLinkingUnavailableError(`voice model export could not start: ${e.message}`))
+        })
+        child.on('close', (code) => {
+          clearTimeout(timer)
+          try {
+            if (code !== 0 || !VOICE_ONNX_FILES.every((f) => existsSync(join(staging, f)))) {
+              throw new SpeakerLinkingUnavailableError(`voice model export failed (exit ${code}): ${tail.trim().slice(-600)}`)
+            }
+            const files = Object.fromEntries(VOICE_ONNX_FILES.map((f) => [f, statSync(join(staging, f)).size]))
+            writeFileSync(join(staging, VOICE_ONNX_MANIFEST), JSON.stringify({ files, exportedAt: new Date().toISOString() }))
+            // Publish: whatever sat under the final name without a manifest is not an export.
+            rmSync(dir, { recursive: true, force: true })
+            renameSync(staging, dir)
+            console.log(`[SpeakerLinking] Voice models exported and checked:\n${tail.trim()}`)
+            resolve()
+          } catch (e) {
+            rmSync(staging, { recursive: true, force: true })
+            reject(e)
+          }
+        })
+      })
+  ).finally(() => {
     voiceOnnxExport = null
   })
   return voiceOnnxExport
 }
 
-let gpuPresent: Promise<boolean> | null = null
+/** Longest a single DirectML call may take; the display GPU cannot be preempted. */
+export const DML_CALL_BUDGET_MS = 50
 
-/** DirectML when this computer has any GPU; otherwise ONNX Runtime on the CPU. */
+type DmlVerdict = { fingerprint: string; ok: boolean; maxMs: number | null; at: string; reason?: string }
+
+function recordDmlVerdict(verdict: DmlVerdict): void {
+  void updateConfig('transcription', { onnxDmlProbe: verdict }).catch((e) =>
+    console.warn('[SpeakerLinking] could not store the DirectML verdict:', e)
+  )
+}
+
+let hardwareOnce: ReturnType<typeof detectHardware> | null = null
+
+/**
+ * The ONNX Runtime provider for this run. DirectML only on an AMD, Intel or
+ * NVIDIA GPU, and only after a probe on that exact GPU proved every single-chunk
+ * call finishes under DML_CALL_BUDGET_MS. Unproven means the CPU: a GPU call
+ * cannot be interrupted, so the proof has to come before the real work.
+ */
 async function onnxProvider(): Promise<'dml' | 'cpu'> {
-  gpuPresent ??= detectHardware()
-    .then((h) => !h.detectionFailed && h.gpus.length > 0)
-    .catch(() => false)
-  return (await gpuPresent) ? 'dml' : 'cpu'
+  hardwareOnce ??= detectHardware()
+  const hardware = await hardwareOnce.catch(() => null)
+  if (!hardware || hardware.detectionFailed) return 'cpu'
+  if (!hardware.gpus.some((g) => g.vendor === 'amd' || g.vendor === 'intel' || g.vendor === 'nvidia')) return 'cpu'
+  const fingerprint = gpuFingerprint(hardware)
+  const known = getConfig().transcription.onnxDmlProbe
+  if (known && known.fingerprint === fingerprint) return known.ok ? 'dml' : 'cpu'
+  const verdict = await inVoiceSlot(() => probeDirectMl(fingerprint))
+  recordDmlVerdict(verdict)
+  console.log(`[SpeakerLinking] DirectML probe on ${fingerprint}: ${verdict.ok ? 'passed' : 'failed'} (max ${verdict.maxMs ?? '?'} ms)${verdict.reason ? `: ${verdict.reason}` : ''}`)
+  return verdict.ok ? 'dml' : 'cpu'
+}
+
+function probeDirectMl(fingerprint: string): Promise<DmlVerdict> {
+  const at = new Date().toISOString()
+  const workerPath = resolveWorkerPath(getConfig().transcription.speakerLinkingWorkerPath)
+  return new Promise((resolve) => {
+    const child = spawn(resolveVoicePython(), [workerPath, '--probe-dml', '--onnx-dir', voiceOnnxDir()], {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, ...diarizationThreadEnv(getConfig().transcription.speakerLinkingCpuPercent) }
+    })
+    lowerPriority(child.pid)
+    let out = ''
+    let err = ''
+    child.stdout.on('data', (c: Buffer) => (out += c.toString()))
+    child.stderr.on('data', (c: Buffer) => (err = (err + c.toString()).slice(-2000)))
+    const timer = setTimeout(() => child.kill(), 120_000)
+    const fail = (reason: string) => resolve({ fingerprint, ok: false, maxMs: null, at, reason })
+    child.on('error', (e) => {
+      clearTimeout(timer)
+      fail(e.message)
+    })
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      if (code !== 0) return fail(err.trim().split('\n').slice(-3).join(' ') || `exit ${code}`)
+      try {
+        const r = JSON.parse(out) as { ok: boolean; maxMs: number }
+        resolve({ fingerprint, ok: r.ok === true && r.maxMs <= DML_CALL_BUDGET_MS, maxMs: r.maxMs, at })
+      } catch {
+        fail('probe printed no result')
+      }
+    })
+  })
 }
 
 async function runOnnxWorker(
@@ -514,10 +616,33 @@ async function runOnnxWorker(
 ): Promise<AcousticWorkerResult> {
   await ensureVoiceOnnxModels()
   const provider = await onnxProvider()
-  return runWorker(audioPath, shouldContinue, audioDurationSeconds, ['--engine', 'onnx', '--onnx-dir', voiceOnnxDir(), '--onnx-provider', provider])
+  const args = (p: 'dml' | 'cpu') => ['--engine', 'onnx', '--onnx-dir', voiceOnnxDir(), '--onnx-provider', p]
+  if (provider === 'cpu') return runWorker(audioPath, shouldContinue, audioDurationSeconds, args('cpu'))
+  try {
+    return await runWorker(audioPath, shouldContinue, audioDurationSeconds, args('dml'))
+  } catch (error) {
+    if (!shouldContinue()) throw error
+    // DirectML failed on this machine: this recording goes to the CPU now, and
+    // so does every later one until the GPU changes.
+    const message = (error as Error).message
+    console.warn(`[SpeakerLinking] DirectML run failed (${message.slice(0, 200)}); retrying on the CPU`)
+    const hardware = await hardwareOnce?.catch(() => null)
+    if (hardware) recordDmlVerdict({ fingerprint: gpuFingerprint(hardware), ok: false, maxMs: null, at: new Date().toISOString(), reason: message.slice(0, 300) })
+    return runWorker(audioPath, shouldContinue, audioDurationSeconds, args('cpu'))
+  }
 }
 
+/** Every local voice worker runs through the single voice slot. */
 function runWorker(
+  audioPath: string,
+  shouldContinue: () => boolean,
+  audioDurationSeconds?: number | null,
+  engineArgs: string[] = []
+): Promise<AcousticWorkerResult> {
+  return inVoiceSlot(() => spawnWorker(audioPath, shouldContinue, audioDurationSeconds, engineArgs))
+}
+
+function spawnWorker(
   audioPath: string,
   shouldContinue: () => boolean,
   audioDurationSeconds?: number | null,
@@ -553,6 +678,7 @@ function runWorker(
         ...diarizationThreadEnv(config.speakerLinkingCpuPercent)
       }
     })
+    lowerPriority(child.pid)
     let stdout = ''
     let stderr = ''
     const cap = 25 * 1024 * 1024
