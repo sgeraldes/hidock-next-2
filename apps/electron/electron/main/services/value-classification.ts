@@ -169,7 +169,7 @@ export interface ApplyResult {
  *
  * 'user' still outranks both and is never overwritten.
  */
-export type CaptureRatingMethod = 'content' | 'duration'
+export type CaptureRatingMethod = 'content' | 'duration' | 'audio'
 
 /**
  * Guarded, idempotent, never-downgrade, confidence-floored DB write. Writes

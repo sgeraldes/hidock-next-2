@@ -27,6 +27,10 @@ interface RecordingBase {
   transcriptionStatus: 'none' | 'pending' | 'processing' | 'complete' | 'no_speech' | 'error'
   meetingId?: string
   meetingSubject?: string
+  /** Audio check (v59): silent / noise / too_short / speech; undefined until checked. */
+  audioCategory?: 'too_short' | 'silent' | 'noise' | 'speech'
+  /** Seconds of the recording that hold sound, from the same check. */
+  audioSoundSeconds?: number
   transcript?: TranscriptSummary
   // Knowledge Capture integration
   knowledgeCaptureId?: string

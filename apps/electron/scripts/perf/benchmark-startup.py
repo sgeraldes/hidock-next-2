@@ -100,7 +100,14 @@ env.pop('ELECTRON_RUN_AS_NODE', None)
 env.pop('ELECTRON_RENDERER_URL', None)
 if '--inference' in sys.argv:
     env['HIDOCK_BENCH_INFERENCE'] = '1'
-print('Starting controlled app; 6 logical CPUs, 8 GiB process-tree ceiling, 150 seconds maximum', flush=True)
+# --audio-check=<search text>: verification run for the audio check (recording
+# checks). The pass reads every audio file once, so the time limit is longer and
+# nothing from this run is a benchmark number.
+audio_check = next((a.split('=', 1)[1] for a in sys.argv if a.startswith('--audio-check=')), '')
+if audio_check:
+    env['HIDOCK_BENCH_AUDIO_CHECK'] = audio_check
+limit_seconds = 900 if audio_check else 150
+print(f'Starting controlled app; 6 logical CPUs, 8 GiB process-tree ceiling, {limit_seconds} seconds maximum', flush=True)
 started = time.monotonic()
 reason = 'normal-exit'
 with (OUTPUT / 'app.log').open('w', encoding='utf-8') as log, (OUTPUT / 'resources.jsonl').open('w') as samples:
@@ -140,8 +147,8 @@ with (OUTPUT / 'app.log').open('w', encoding='utf-8') as log, (OUTPUT / 'resourc
         elapsed = time.monotonic() - started
         samples.write(json.dumps({'seconds': elapsed, 'freeBytes': free, 'processes': rows}) + '\n')
         samples.flush()
-        if free < 5 * 1024**3 or sum(r['rss'] for r in rows) > 8 * 1024**3 or elapsed > 150:
-            reason = 'watchdog-memory' if elapsed <= 150 else 'watchdog-timeout'
+        if free < 5 * 1024**3 or sum(r['rss'] for r in rows) > 8 * 1024**3 or elapsed > limit_seconds:
+            reason = 'watchdog-memory' if elapsed <= limit_seconds else 'watchdog-timeout'
             # Only this isolated benchmark's processes, never other apps.
             for member in reversed(members):
                 try:

@@ -16,7 +16,7 @@ import { isCancelledMeetingSubject, scoreMeetingCandidates } from './recording-m
 import { DURATION_LOW_VALUE_MAX_SECONDS, isImpossibleTranscriptDensity } from './value-thresholds'
 import type { QualityRating } from '@/types/knowledge'
 
-const SCHEMA_VERSION = 58
+const SCHEMA_VERSION = 59
 
 const SCHEMA = `
 -- Calendar events from ICS
@@ -321,6 +321,28 @@ CREATE TABLE IF NOT EXISTS transcripts (
     event_markers TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (recording_id) REFERENCES recordings(id)
+);
+
+-- Audio profile (v59): how much of each recording holds sound and where,
+-- read from the MP3 frame gains (decoded when the file is not the device's
+-- stream). Category too_short / silent / noise / speech. The per-frame
+-- envelope lives in the cache folder, and this row is what the Library filters on.
+CREATE TABLE IF NOT EXISTS audio_profiles (
+    recording_id TEXT PRIMARY KEY,
+    version INTEGER NOT NULL,
+    method TEXT NOT NULL,
+    file_size INTEGER,
+    file_mtime_ms INTEGER,
+    duration_seconds REAL,
+    sound_seconds REAL,
+    sound_share REAL,
+    longest_sound_seconds REAL,
+    median_level REAL,
+    spike_count INTEGER,
+    category TEXT NOT NULL,
+    ranges_json TEXT,
+    computed_at TEXT NOT NULL,
+    FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
 );
 
 -- Stage-level processing provenance (v52 / SPEC-009). One provider call can
@@ -3052,6 +3074,29 @@ const MIGRATIONS: Record<number, () => void> = {
     }
     console.log('Migration v58 complete')
   },
+  59: () => {
+    console.log('Running migration to schema v59: audio profiles')
+    // Empty on purpose: the profiles are filled by the background pass
+    // (audio-profile-store.ts), which reads audio files; a migration should not.
+    getDatabase().run(`CREATE TABLE IF NOT EXISTS audio_profiles (
+          recording_id TEXT PRIMARY KEY,
+          version INTEGER NOT NULL,
+          method TEXT NOT NULL,
+          file_size INTEGER,
+          file_mtime_ms INTEGER,
+          duration_seconds REAL,
+          sound_seconds REAL,
+          sound_share REAL,
+          longest_sound_seconds REAL,
+          median_level REAL,
+          spike_count INTEGER,
+          category TEXT NOT NULL,
+          ranges_json TEXT,
+          computed_at TEXT NOT NULL,
+          FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
+      )`)
+    console.log('Migration v59 complete')
+  },
 }
 
 /**
@@ -4455,6 +4500,10 @@ export interface Recording {
   meeting_id?: string
   /** Read projection from the assigned meeting; never persisted on recordings. */
   meeting_subject?: string | null
+  /** Read projection from audio_profiles (v59); null until the recording is profiled. */
+  audio_category?: 'too_short' | 'silent' | 'noise' | 'speech' | null
+  audio_sound_seconds?: number | null
+  audio_duration_seconds?: number | null
   correlation_confidence?: number
   correlation_method?: string
   status: string  // Legacy field for backwards compatibility
@@ -4489,9 +4538,12 @@ export interface Recording {
  */
 export function getRecordings(): Recording[] {
   return queryAll<Recording>(
-    `SELECT r.*, m.subject AS meeting_subject
+    `SELECT r.*, m.subject AS meeting_subject,
+            ap.category AS audio_category, ap.sound_seconds AS audio_sound_seconds,
+            ap.duration_seconds AS audio_duration_seconds
        FROM recordings r
        LEFT JOIN meetings m ON m.id = r.meeting_id
+       LEFT JOIN audio_profiles ap ON ap.recording_id = r.id
       WHERE r.deleted_at IS NULL
         AND (r.location IS NULL OR r.location <> 'deleted')
       ORDER BY r.date_recorded DESC`
@@ -7330,23 +7382,39 @@ export function refreshTranscriptIntegrity(transcriptId: string): TranscriptInte
  * a transcript is read once per rule version. An acceptance survives, since
  * the text it covers has not changed.
  */
-export function backfillTranscriptIntegrity(): { checked: number; ok: number; suspect: number; broken: number } {
-  const rows = queryAll<{ id: string; recording_id: string; speakers: string | null }>(
-    `SELECT t.id, t.recording_id, t.speakers FROM transcripts t
-       JOIN recordings r ON r.id = t.recording_id
-      WHERE r.deleted_at IS NULL
-        AND (t.integrity_version IS NULL OR t.integrity_version < ?)`,
-    [INTEGRITY_VERSION]
-  )
+export async function backfillTranscriptIntegrity(
+  options: { batchSize?: number } = {}
+): Promise<{ checked: number; ok: number; suspect: number; broken: number }> {
+  // In batches, yielding between them: the first launch after v58 labels every
+  // transcript in the library, and doing all ~2,000 in one loop froze the main
+  // thread for 2.2 s (measured 24-sep, startup benchmark).
+  const batchSize = options.batchSize ?? 100
   const counts = { checked: 0, ok: 0, suspect: 0, broken: 0 }
-  for (const row of rows) {
-    const integrity = assessTranscriptIntegrity(row.speakers, integrityAudioSeconds(row.recording_id))
-    runNoSave(
-      'UPDATE transcripts SET integrity_status = ?, integrity_json = ?, integrity_version = ? WHERE id = ?',
-      [integrity.status, JSON.stringify(integrity), INTEGRITY_VERSION, row.id]
+  const seen = new Set<string>()
+  for (;;) {
+    const rows = queryAll<{ id: string; recording_id: string; speakers: string | null }>(
+      `SELECT t.id, t.recording_id, t.speakers FROM transcripts t
+         JOIN recordings r ON r.id = t.recording_id
+        WHERE r.deleted_at IS NULL
+          AND (t.integrity_version IS NULL OR t.integrity_version < ?)
+        LIMIT ?`,
+      [INTEGRITY_VERSION, batchSize]
     )
-    counts.checked++
-    counts[integrity.status]++
+    // A row the update could not move out of this query would come back
+    // forever; stop when a batch holds nothing new.
+    const fresh = rows.filter((row) => !seen.has(row.id))
+    if (fresh.length === 0) break
+    for (const row of fresh) {
+      seen.add(row.id)
+      const integrity = assessTranscriptIntegrity(row.speakers, integrityAudioSeconds(row.recording_id))
+      runNoSave(
+        'UPDATE transcripts SET integrity_status = ?, integrity_json = ?, integrity_version = ? WHERE id = ?',
+        [integrity.status, JSON.stringify(integrity), INTEGRITY_VERSION, row.id]
+      )
+      counts.checked++
+      counts[integrity.status]++
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve))
   }
   if (counts.checked > 0) {
     saveDatabase()

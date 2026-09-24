@@ -26,12 +26,48 @@ function finish() {
   })
 }
 const original = { ...console }
+// --audio-check: after boot, wait for the audio check pass over the library,
+// read the categories back through the Library's own IPC, search for one
+// recording and screenshot its row. Verification only; nothing is timed.
+const audioCheck = process.env.HIDOCK_BENCH_AUDIO_CHECK || ''
+async function captureAudioCheck(message) {
+  try {
+    const window = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().includes('/renderer/index.html'))
+    const counts = await window.webContents.executeJavaScript(
+      'window.electronAPI.recordings.getAll().then(rows => rows.reduce((acc, r) => { const k = r.audio_category || "unchecked"; acc[k] = (acc[k] || 0) + 1; return acc }, {}))')
+    emit({ type: 'audio-check', summary: message.slice(0, 300), counts })
+    // A fresh profile opens the voice setup over the Library; answer it the way a person would.
+    await window.webContents.executeJavaScript(
+      'Array.from(document.querySelectorAll("button")).find(b => b.textContent.trim() === "Decide later")?.click()')
+    await new Promise(r => setTimeout(r, 800))
+    // Type the filename into the Library search the way a person would.
+    await window.webContents.executeJavaScript(`(() => {
+      const input = Array.from(document.querySelectorAll('input')).find(i => (i.placeholder || '').startsWith('Search') && i.closest('main'))
+        || Array.from(document.querySelectorAll('input')).filter(i => (i.placeholder || '').startsWith('Search')).pop()
+      if (!input) return false
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+      setter.call(input, ${JSON.stringify(audioCheck)})
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      return true
+    })()`)
+    await new Promise(r => setTimeout(r, 3000))
+    const labels = await window.webContents.executeJavaScript(
+      'Array.from(document.querySelectorAll("[data-testid=audio-label]")).map(e => e.textContent)')
+    emit({ type: 'audio-check-row', search: audioCheck, labels })
+    const image = await window.webContents.capturePage()
+    fs.writeFileSync(path.join(output, 'audio-check.png'), image.toPNG())
+  } catch (error) {
+    emit({ type: 'audio-check', error: String(error) })
+  }
+  setTimeout(finish, 1000)
+}
 let task
 let completedEmbedding = false
 for (const level of ['log', 'info', 'warn', 'error']) {
   console[level] = (...args) => {
     const message = String(args[0])
     if (message.startsWith('[LocalEmbedder] Worker completed ')) completedEmbedding = true
+    if (audioCheck && message.startsWith('[AudioProfile] profiled ')) void captureAudioCheck(message)
     const match = message.match(/\[BootScheduler\] starting "([^"]+)"/)
     if (message.startsWith('[BootTiming] ')) {
       emit({ type: 'task-duration', ...JSON.parse(message.slice(13)) })
@@ -78,7 +114,7 @@ for (const level of ['log', 'info', 'warn', 'error']) {
           }
           setTimeout(finish, 10000)
         }, 3000)
-      } else setTimeout(finish, 20000)
+      } else if (!audioCheck) setTimeout(finish, 20000)
     }
     original[level](...args)
   }

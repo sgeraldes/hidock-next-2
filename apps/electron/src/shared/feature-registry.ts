@@ -556,6 +556,13 @@ export const CORE_CHANNEL_PREFIXES: string[] = [
  * Anything new on these namespaces is `unclassified` until explicitly added.
  */
 export const CORE_CHANNELS: string[] = [
+  // Audio checks (silent, noise only, too short; where the sound is). Reading a
+  // file's frame gains needs no provider, no network and no feature. Listed one
+  // by one, not as an 'audio:' prefix: a later paid check on that namespace
+  // must not inherit core by default (the storage: lesson).
+  'audio:checkLibrary',
+  'audio:checkRecording',
+  'audio:getCheck',
   'storage:assign-tier',
   'storage:delete-recording',
   'storage:execute-cleanup',

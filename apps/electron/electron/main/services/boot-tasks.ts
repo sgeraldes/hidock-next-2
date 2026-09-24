@@ -97,6 +97,24 @@ export const BOOT_TASK_DEFS: GatedBootTask[] = [
     },
   },
   {
+    // Recording checks: profile every recording's audio once (silent, noise
+    // only, too short, where the sound is). Library floor, always runs. Returns
+    // at once; the pass walks the library in the background, one file at a time.
+    name: 'audio-profile-backfill',
+    feature: null,
+    run: async () => {
+      await import('./audio-profile-store')
+        .then(async ({ backfillAudioProfiles }) => {
+          // Reading files competes with a transcription for the disk: wait for it.
+          const { getQueueState } = await import('./transcription')
+          void backfillAudioProfiles({ pauseWhile: () => getQueueState().isProcessing }).catch((e) =>
+            console.error('[AudioProfile] backfill error:', e)
+          )
+        })
+        .catch((e) => console.error('[AudioProfile] load error:', e))
+    },
+  },
+  {
     name: 'meeting-wiki-backfill',
     feature: 'meeting-intelligence',
     run: async () => {

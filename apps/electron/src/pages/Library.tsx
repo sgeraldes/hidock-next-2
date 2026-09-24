@@ -20,6 +20,10 @@ import {
   matchesIntegrityFilter,
   type IntegrityFilter
 } from '@/features/library/utils/transcriptIntegrity'
+import { AUDIO_FILTERS, isAudioFilter, matchesAudioFilter, type AudioFilter } from '@/features/library/utils/audioCheck'
+
+/** Sources with no recording behind them (captures, notes, artifacts) have no audio to check. */
+const isAudioless = (rec: { sourceKind?: string }) => !!rec.sourceKind && rec.sourceKind !== 'recording'
 import { overlayActiveTranscriptionStatuses, useUnifiedRecordings } from '@/hooks/useUnifiedRecordings'
 import {
   UnifiedRecording,
@@ -271,6 +275,10 @@ export function Library() {
   const durationPreset = useLibraryStore((state) => state.durationPreset)
   const setDurationPreset = useLibraryStore((state) => state.setDurationPreset)
   const clearAllFilters = useLibraryStore((state) => state.clearFilters)
+  const storedAudioFilter = useLibraryStore((state) => state.audioFilter)
+  const setAudioFilter = useLibraryStore((state) => state.setAudioFilter)
+  const audioFilter: AudioFilter | null =
+    typeof storedAudioFilter === 'string' && isAudioFilter(storedAudioFilter) ? storedAudioFilter : null
   const storedIntegrityFilter = useLibraryStore((state) => state.integrityFilter)
   const setIntegrityFilter = useLibraryStore((state) => state.setIntegrityFilter)
   // Persisted state from an older build may hold nothing or an unknown value.
@@ -841,9 +849,31 @@ export function Library() {
       if (qualityFilter !== null && rec.quality !== qualityFilter) return false
       if (statusFilter !== null && rec.status !== statusFilter) return false
       if (integrityFilter !== null && !matchesIntegrityFilter(transcripts.get(rec.id), integrityFilter)) return false
+      // Only recordings have audio to check; the counts leave the rest out too.
+      if (audioFilter !== null && (isAudioless(rec) || !matchesAudioFilter(rec.audioCategory, audioFilter))) return false
       return true
     })
-  }, [baseRecordings, artifactTypes, sourceTypeFilter, durationPreset, categoryFilter, qualityFilter, statusFilter, integrityFilter, transcripts])
+  }, [baseRecordings, artifactTypes, sourceTypeFilter, durationPreset, categoryFilter, qualityFilter, statusFilter, integrityFilter, audioFilter, transcripts])
+
+  // How many recordings each Audio-filter value matches. Only audio sources
+  // have a category; everything else is left out rather than counted unchecked.
+  const audioCounts = useMemo(() => {
+    const counts: Record<string, number> = { no_sound: 0, silent: 0, noise: 0, too_short: 0, unchecked: 0 }
+    for (const rec of baseRecordings) {
+      if (isAudioless(rec)) continue
+      for (const f of AUDIO_FILTERS) if (matchesAudioFilter(rec.audioCategory, f.value)) counts[f.value]++
+    }
+    return counts
+  }, [baseRecordings])
+
+  // The audio check finished a pass or a recording: labels and ratings changed.
+  useEffect(() => {
+    const api = window.electronAPI as { onDomainEvent?: (cb: (e: { type?: string }) => void) => () => void } | undefined
+    if (!api?.onDomainEvent) return
+    return api.onDomainEvent((event) => {
+      if (event?.type === 'audio:profiles-updated') void refreshLocal?.()
+    })
+  }, [refreshLocal])
 
   // How many transcripts each Transcript-filter value matches, over the same
   // population the other facets count.
@@ -2431,6 +2461,9 @@ export function Library() {
               integrityFilter={integrityFilter ?? 'all'}
               integrityCounts={integrityCounts}
               onIntegrityFilterChange={(filter) => setIntegrityFilter(filter === 'all' ? null : filter)}
+              audioFilter={audioFilter ?? 'all'}
+              audioCounts={audioCounts}
+              onAudioFilterChange={(filter) => setAudioFilter(filter === 'all' ? null : filter)}
             />
             {integrityFilter !== null && integrityFilter !== 'accepted' && filteredRecordings.length > 0 && (
               <div className="mt-2 flex flex-wrap items-center gap-2 text-xs" data-testid="integrity-bulk-bar">

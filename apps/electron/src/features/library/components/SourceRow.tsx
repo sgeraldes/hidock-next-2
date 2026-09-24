@@ -26,6 +26,7 @@ import { getRowMeta } from '@/features/library/utils/rowMeta'
 import { sourceTypeLabel } from '@/features/library/utils/sourceType'
 import { formatValueReasons } from '@/features/library/utils/valueReasons'
 import { ISSUE_TAGS, integrityIssues, integrityLabel } from '@/features/library/utils/transcriptIntegrity'
+import { audioLabel } from '@/features/library/utils/audioCheck'
 import {
   LABEL_DELETE_FROM_DEVICE,
   LABEL_MOVE_TO_TRASH,
@@ -105,6 +106,30 @@ function IntegrityBadge({ transcript }: { transcript?: Transcript }) {
       <TooltipContent>
         <p>{title}</p>
         <p className="text-xs text-muted-foreground mt-0.5">{tags.join(' · ')}</p>
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+/**
+ * Audio check label, in words: "Silent", "Noise only", "Too short". Shown
+ * whenever the audio holds no usable sound, whatever the transcript says.
+ */
+function AudioLabel({ recording }: { recording: UnifiedRecording }) {
+  const found = audioLabel(recording.audioCategory)
+  if (!found) return null
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className="inline-flex shrink-0 items-center rounded border border-red-500/40 bg-red-500/10 px-1.5 py-px text-[10px] font-medium leading-4 text-red-700 dark:text-red-300"
+          data-testid="audio-label"
+        >
+          {found.label}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>
+        <p>{found.detail}</p>
       </TooltipContent>
     </Tooltip>
   )
@@ -463,6 +488,7 @@ export const SourceRow = memo(function SourceRow({
               left-to-right in the same tight cluster. */}
           {!isDeleting && <ValueBadge recording={recording} />}
           {!isDeleting && <IntegrityBadge transcript={transcript} />}
+          {!isDeleting && <AudioLabel recording={recording} />}
           {/* Meeting-link (calendar) provenance — the system knows this row maps to a
               calendar event; the status icons align with it. */}
           {!isDeleting && meeting && (
@@ -748,6 +774,7 @@ export const SourceRow = memo(function SourceRow({
     prevProps.recording.transcriptionStatus === nextProps.recording.transcriptionStatus &&
     prevProps.recording.title === nextProps.recording.title &&
     prevProps.recording.meetingSubject === nextProps.recording.meetingSubject &&
+    prevProps.recording.audioCategory === nextProps.recording.audioCategory &&
     prevProps.recording.category === nextProps.recording.category &&
     prevProps.recording.quality === nextProps.recording.quality &&
     prevProps.recording.qualityReasons?.join('|') === nextProps.recording.qualityReasons?.join('|') &&

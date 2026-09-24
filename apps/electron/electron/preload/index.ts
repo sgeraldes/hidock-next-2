@@ -158,6 +158,7 @@ import type {
 import type { PipelineState } from '../main/types/device-pipeline'
 import type { Note, NoteRelatedItem, NoteMeetingSuggestion } from '../../src/types/notes'
 import type { SpeakerEngineId, SpeakerSetup } from '../../src/types/speakers'
+import type { AudioCheckResult } from '../../src/types/audio'
 
 /** A Context Graph node with its degree + click-through ids (mirrors the service DTO). */
 interface ContextGraphNode {
@@ -1110,6 +1111,14 @@ export interface ElectronAPI {
     assignTier: (recordingId: string, quality: 'high' | 'medium' | 'low') => Promise<any>
   }
 
+  // Audio checks: silent / noise only / too short, and where the sound is.
+  audio: {
+    checkRecording: (recordingId: string) => Promise<Result<AudioCheckResult>>
+    getCheck: (recordingId: string) => Promise<Result<AudioCheckResult | null>>
+    /** Starts the pass over the library; the result arrives as the audio:profiles-updated event. */
+    checkLibrary: () => Promise<Result<{ started: boolean }>>
+  }
+
   // Data Integrity Service - Health checks and repairs
   integrity: {
     runScan: () => Promise<{
@@ -2014,6 +2023,12 @@ const electronAPI: ElectronAPI = {
     initializeUntiered: () => callIPC('storage:initialize-untiered'),
     assignTier: (recordingId: string, quality: 'high' | 'medium' | 'low') =>
       callIPC('storage:assign-tier', recordingId, quality)
+  },
+
+  audio: {
+    checkRecording: (recordingId) => callIPC('audio:checkRecording', recordingId),
+    getCheck: (recordingId) => callIPC('audio:getCheck', recordingId),
+    checkLibrary: () => callIPC('audio:checkLibrary')
   },
 
   // Data Integrity Service API

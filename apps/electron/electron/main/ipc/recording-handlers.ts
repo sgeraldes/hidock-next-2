@@ -878,7 +878,7 @@ export function registerRecordingHandlers(): void {
       const byDuration = applyDurationValueGate()
       // After the durations: the integrity check compares each transcript with
       // the audio's measured length, so it reads the lengths just settled.
-      const integrity = backfillTranscriptIntegrity()
+      const integrity = await backfillTranscriptIntegrity()
       return {
         success: true,
         ...result,
