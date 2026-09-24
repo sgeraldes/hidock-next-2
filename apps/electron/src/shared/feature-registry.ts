@@ -3,8 +3,8 @@
  *
  * PURE module: no Electron / Node imports so BOTH the main process (via relative
  * path) and the renderer (via `@/shared/...`) consume the exact same registry and
- * the exact same `resolveFeatureState` resolver. See
- * `docs/specs/2026-07-11-modular-features-spec.md` §A.
+ * the exact same `resolveFeatureState` resolver. The contract between the gate
+ * and the window: `docs/architecture/feature-gating.md`.
  *
  * `core` and `library` are NOT FeatureIds — they are the permanent floor (always
  * on, never gated). Every other capability is a togglable FeatureId.
