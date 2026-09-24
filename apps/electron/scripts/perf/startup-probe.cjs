@@ -36,6 +36,10 @@ async function captureAudioCheck(message) {
     const counts = await window.webContents.executeJavaScript(
       'window.electronAPI.recordings.getAll().then(rows => rows.reduce((acc, r) => { const k = r.audio_category || "unchecked"; acc[k] = (acc[k] || 0) + 1; return acc }, {}))')
     emit({ type: 'audio-check', summary: message.slice(0, 300), counts })
+    // A fresh profile opens the voice setup over the Library; answer it the way a person would.
+    await window.webContents.executeJavaScript(
+      'Array.from(document.querySelectorAll("button")).find(b => b.textContent.trim() === "Decide later")?.click()')
+    await new Promise(r => setTimeout(r, 800))
     // Type the filename into the Library search the way a person would.
     await window.webContents.executeJavaScript(`(() => {
       const input = Array.from(document.querySelectorAll('input')).find(i => (i.placeholder || '').startsWith('Search') && i.closest('main'))
