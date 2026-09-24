@@ -23,6 +23,14 @@ npm run build
 
 The application is built with Electron, React, and TypeScript. Shared packages live in `packages/`.
 
+### One HiDock per user
+
+Only one HiDock runs per OS user, whatever its profile: the installed app, `npm run dev` (including
+`HIDOCK_DEV_USERDATA` profiles) and the startup benchmark share one lock under
+`%APPDATA%\HiDock Next\instance-lock`. A second launch brings the running one forward and quits
+without opening a window or the database. Close the installed app before `npm run dev`, and before
+`scripts/perf/benchmark-startup.py`, which refuses to start while HiDock is running.
+
 ## Pull requests
 
 Include:

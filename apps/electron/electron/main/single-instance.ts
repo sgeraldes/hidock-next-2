@@ -1,4 +1,18 @@
 import { app, BrowserWindow } from 'electron'
+import { mkdirSync } from 'fs'
+import { join } from 'path'
+
+/**
+ * The folder the lock lives in: one for every profile of this OS user.
+ *
+ * Electron keys its lock to the userData folder in effect when the lock is
+ * requested, so each profile (HIDOCK_DEV_USERDATA, a benchmark run, a copied
+ * install) used to get its own lock, and a second HiDock opened beside the
+ * first on 24-sep-2026. By design there is one HiDock per user.
+ */
+export function instanceLockDir(): string {
+  return join(app.getPath('appData'), 'HiDock Next', 'instance-lock')
+}
 
 /**
  * Options for {@link acquireSingleInstanceLock}.
@@ -30,10 +44,31 @@ export interface SingleInstanceOptions {
  *   immediately (before opening the DB) without creating windows.
  */
 export function acquireSingleInstanceLock(options: SingleInstanceOptions): boolean {
-  const gotTheLock = app.requestSingleInstanceLock()
+  // Request the lock with userData pointing at the shared lock folder, then put
+  // the profile back at once. The lock keeps the folder it was created with
+  // (Electron's ProcessSingleton reads it at construction), so every profile
+  // competes for the same lock, and the OS arbitrates two launches at the same
+  // moment. Nothing reads userData between these two lines.
+  const profile = app.getPath('userData')
+  const lockDir = instanceLockDir()
+  // Electron creates the folder itself before it builds the lock; creating it
+  // here too keeps the lock independent of that detail (on macOS and Linux the
+  // lock files live in this folder and cannot be written without it).
+  mkdirSync(lockDir, { recursive: true })
+  let gotTheLock: boolean
+  try {
+    app.setPath('userData', lockDir)
+    gotTheLock = app.requestSingleInstanceLock()
+  } finally {
+    app.setPath('userData', profile)
+  }
 
   if (!gotTheLock) {
     // Another instance already owns the DB. Quit before touching anything.
+    // It was told to come forward; if it is busy (a long synchronous boot),
+    // Chromium waits up to 20 s for its answer and may end it after that. The
+    // database is WAL, so that end is a crash SQLite recovers from.
+    console.log('[Startup] HiDock is already running for this user; asked it to come forward. Quitting.')
     app.quit()
     return false
   }
@@ -41,24 +76,30 @@ export function acquireSingleInstanceLock(options: SingleInstanceOptions): boole
   // We are the primary. When a second launch is attempted, the OS delivers a
   // `second-instance` event here instead of starting a rival process — focus
   // our existing window so the user sees the app they already have running.
-  app.on('second-instance', () => {
-    const mainWindow = options.getMainWindow()
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      if (mainWindow.isMinimized()) {
-        mainWindow.restore()
-      }
-      mainWindow.show()
-      mainWindow.focus()
-      return
-    }
-
-    // Main window not created yet (still initializing) — surface the splash.
-    const splashWindow = options.getSplashWindow?.()
-    if (splashWindow && !splashWindow.isDestroyed()) {
-      splashWindow.show()
-      splashWindow.focus()
-    }
-  })
+  app.on('second-instance', () => showRunningInstance(options))
 
   return true
+}
+
+/**
+ * Bring this instance forward because the owner tried to start another one:
+ * the main window, or the splash while the app is still starting.
+ */
+export function showRunningInstance(options: SingleInstanceOptions): void {
+  const mainWindow = options.getMainWindow()
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore()
+    }
+    mainWindow.show()
+    mainWindow.focus()
+    return
+  }
+
+  // Main window not created yet (still initializing) — surface the splash.
+  const splashWindow = options.getSplashWindow?.()
+  if (splashWindow && !splashWindow.isDestroyed()) {
+    splashWindow.show()
+    splashWindow.focus()
+  }
 }
