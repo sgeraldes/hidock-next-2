@@ -51,6 +51,45 @@ the user's choice. The user confirms.
 Stored in the settings table: `machine.signature`, `machine.measurement` (JSON, with date), and
 `machine.profile` (the choice) together with the signature it was chosen under.
 
+## 2b. Enablers: hardware is not enough
+
+A GPU is usable only when the software it needs is present and works. For each runtime the app
+checks, separately from the hardware:
+
+| Runtime | Enablers checked |
+|---|---|
+| CUDA (NVIDIA) | driver version meets the minimum; CUDA runtime and cuDNN libraries the bundled ONNX Runtime / torch build expects; `onnxruntime-gpu` or CUDA torch actually loads |
+| DirectML (AMD, Intel, NVIDIA) | Windows 10 1903+; DirectX 12 feature level of the adapter; `onnxruntime-directml` loads and creates a session on that adapter |
+| CPU | Python runtime and model files present; ONNX Runtime CPU loads |
+| Cloud | API key present and one test call succeeds |
+| Remote host | host paired, reachable, and reports its own enablers |
+
+Enabler state is part of what the startup check reads (file and version checks only, no model
+load), so a removed CUDA install or a broken driver is noticed the same way a hardware change is.
+It is not part of the hardware signature; it has its own stored state.
+
+**Installing enablers.** When a profile needs something missing, the app says what and how big
+("GPU profile needs the DirectML runtime, 180 MB") and installs it itself, into the app's own
+folder: ONNX Runtime packages, Python wheels, and model files, downloaded from their official
+sources with checksums. What the app cannot install (a GPU driver, a CUDA toolkit that needs
+admin rights) it links to with exact instructions, and the profile stays unavailable until the
+next check finds it.
+
+**Switching rule.** A profile can be selected only when its hardware and all its enablers are
+present. Otherwise it shows as unavailable, with the reason and the fix.
+
+**Verify before switching.** Selecting a profile runs a qualification test before it becomes
+active:
+1. load each model the profile uses, on the runtime it will use;
+2. run a bundled 30-second sample through every job (speakers, voice ID, embeddings,
+   transcription if local);
+3. check that the results match the reference output within tolerance, and that each GPU call is
+   within the 50 ms limit on a display GPU.
+
+If every step passes, the profile becomes active and the result is stored with the signature. If
+any step fails, the previous profile stays active, and the app shows which step failed and why.
+The same test runs again after an enabler install and after any detected change.
+
 ## 3. Execution profiles
 
 One profile decides where each heavy job runs. Jobs: transcription, speaker separation,
