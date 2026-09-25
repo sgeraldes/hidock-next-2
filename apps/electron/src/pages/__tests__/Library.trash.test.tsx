@@ -404,7 +404,7 @@ describe('Trash toggle (spec-005/F17 §D1/§D4)', () => {
     expect(trashToggleButton()).toHaveAccessibleName(`View Trash, 2 items`)
     // Still showing the live list — Trash mode was never entered.
     expect(screen.getByText('Live Recording 0')).toBeInTheDocument()
-    expect(screen.queryByText('trashed-newer.wav')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('source-row-trash-1')).not.toBeInTheDocument()
   })
 
   it('is a real button with aria-pressed reflecting showTrash', async () => {
@@ -425,8 +425,8 @@ describe('Trash mode swaps the displayed list (AC#3, AC#10)', () => {
 
     // The 3 live rows are gone; the 2 trashed rows are shown instead.
     expect(screen.queryByText('Live Recording 0')).not.toBeInTheDocument()
-    await screen.findByText(/trashed-newer\.wav/i)
-    expect(screen.getByText(/trashed-older\.wav/i)).toBeInTheDocument()
+    await screen.findByTestId('source-row-trash-1')
+    expect(screen.getByTestId('source-row-trash-2')).toBeInTheDocument()
 
     openRowMenu(0)
     expect(await screen.findByRole('menuitem', { name: /^restore/i })).toBeInTheDocument()
@@ -439,7 +439,7 @@ describe('Trash mode swaps the displayed list (AC#3, AC#10)', () => {
     renderLibrary()
     await waitFor(() => expect(trashToggleButton()).toHaveAccessibleName(`View Trash, 2 items`))
     fireEvent.click(trashToggleButton())
-    await screen.findByText(/trashed-newer\.wav/i)
+    await screen.findByTestId('source-row-trash-1')
     // SourceCard renders a distinctive testid; Trash must never render it.
     expect(screen.queryByTestId('source-card')).not.toBeInTheDocument()
   })
@@ -449,7 +449,7 @@ describe('Trash mode swaps the displayed list (AC#3, AC#10)', () => {
     await waitFor(() => expect(trashToggleButton()).toHaveAccessibleName(`View Trash, 2 items`))
     expect(screen.getByTestId('grid-view-toggle')).toBeInTheDocument()
     fireEvent.click(trashToggleButton())
-    await screen.findByText(/trashed-newer\.wav/i)
+    await screen.findByTestId('source-row-trash-1')
     expect(screen.queryByTestId('grid-view-toggle')).not.toBeInTheDocument()
   })
 
@@ -457,10 +457,10 @@ describe('Trash mode swaps the displayed list (AC#3, AC#10)', () => {
     renderLibrary()
     await waitFor(() => expect(trashToggleButton()).toHaveAccessibleName(`View Trash, 2 items`))
     fireEvent.click(trashToggleButton())
-    await screen.findByText(/trashed-newer\.wav/i)
+    await screen.findByTestId('source-row-trash-1')
     fireEvent.click(trashToggleButton())
     await screen.findByText('Live Recording 0')
-    expect(screen.queryByText(/trashed-newer\.wav/i)).not.toBeInTheDocument()
+    expect(screen.queryByTestId('source-row-trash-1')).not.toBeInTheDocument()
   })
 })
 
@@ -471,7 +471,7 @@ describe('Search + filters hidden in Trash mode (AR3-5)', () => {
     expect(screen.getByPlaceholderText(/^search \d+ sources?…$/i)).toBeInTheDocument()
 
     fireEvent.click(trashToggleButton())
-    await screen.findByText(/trashed-newer\.wav/i)
+    await screen.findByTestId('source-row-trash-1')
     expect(screen.queryByPlaceholderText(/^search \d+ sources?…$/i)).not.toBeInTheDocument()
     expect(screen.getByText(/hidden and excluded from ai/i)).toBeInTheDocument()
   })
@@ -482,7 +482,7 @@ describe('Restore round-trip (AC#4)', () => {
     renderLibrary()
     await waitFor(() => expect(trashToggleButton()).toHaveAccessibleName(`View Trash, 2 items`))
     fireEvent.click(trashToggleButton())
-    await screen.findByText(/trashed-newer\.wav/i)
+    await screen.findByTestId('source-row-trash-1')
 
     // After restoring, only trash-2 remains in the (mocked) Trash.
     getTrashMock.mockResolvedValueOnce([trashRow2])
@@ -495,8 +495,8 @@ describe('Restore round-trip (AC#4)', () => {
     })
     await waitFor(() => expect(mockRefresh).toHaveBeenCalledWith(false))
     await waitFor(() => expect(getTrashMock).toHaveBeenCalledTimes(2)) // mount + post-restore reload
-    await waitFor(() => expect(screen.queryByText(/trashed-newer\.wav/i)).not.toBeInTheDocument())
-    expect(screen.getByText(/trashed-older\.wav/i)).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByTestId('source-row-trash-1')).not.toBeInTheDocument())
+    expect(screen.getByTestId('source-row-trash-2')).toBeInTheDocument()
   })
 })
 
@@ -505,7 +505,7 @@ describe('H17 in Trash mode — no horizontal scroll, full-width separators (AC#
     renderLibrary()
     await waitFor(() => expect(trashToggleButton()).toHaveAccessibleName(`View Trash, 2 items`))
     fireEvent.click(trashToggleButton())
-    await screen.findByText(/trashed-newer\.wav/i)
+    await screen.findByTestId('source-row-trash-1')
 
     const scroller = screen.getByTestId('library-list')
     expect(scroller.className).toContain('overflow-x-hidden')
@@ -532,7 +532,7 @@ describe('Permanent delete from Trash (AC#9)', () => {
     renderLibrary()
     await waitFor(() => expect(trashToggleButton()).toHaveAccessibleName(`View Trash, 2 items`))
     fireEvent.click(trashToggleButton())
-    await screen.findByText(/trashed-newer\.wav/i)
+    await screen.findByTestId('source-row-trash-1')
 
     getTrashMock.mockResolvedValueOnce([trashRow2])
 
@@ -550,7 +550,7 @@ describe('Permanent delete from Trash (AC#9)', () => {
       expect(window.electronAPI.recordings.deleteCascade).toHaveBeenCalledWith('trash-1', true)
     })
     await waitFor(() => expect(getTrashMock).toHaveBeenCalledTimes(2))
-    await waitFor(() => expect(screen.queryByText(/trashed-newer\.wav/i)).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByTestId('source-row-trash-1')).not.toBeInTheDocument())
   })
 
   // spec-006/F17 T6 F-INFO-6 — a Trash row's UnifiedRecording ALWAYS
@@ -597,7 +597,7 @@ describe('Permanent delete from Trash (AC#9)', () => {
     renderLibrary()
     await waitFor(() => expect(trashToggleButton()).toHaveAccessibleName(`View Trash, 2 items`))
     fireEvent.click(trashToggleButton())
-    await screen.findByText(/trashed-newer\.wav/i)
+    await screen.findByTestId('source-row-trash-1')
 
     openRowMenu(0)
     fireEvent.click(await screen.findByRole('menuitem', { name: /delete permanently/i }))
@@ -638,7 +638,7 @@ describe('AR3-5 — Trash state boundaries', () => {
     expect(audioControlsMock.stop).not.toHaveBeenCalled()
 
     fireEvent.click(trashToggleButton())
-    await screen.findByText(/trashed-newer\.wav/i)
+    await screen.findByTestId('source-row-trash-1')
     await waitFor(() => expect(audioControlsMock.stop).toHaveBeenCalled())
   })
 
@@ -647,7 +647,7 @@ describe('AR3-5 — Trash state boundaries', () => {
     renderLibrary()
     await waitFor(() => expect(trashToggleButton()).toHaveAccessibleName(`View Trash, 2 items`))
     fireEvent.click(trashToggleButton())
-    await screen.findByText(/trashed-newer\.wav/i)
+    await screen.findByTestId('source-row-trash-1')
     expect(audioControlsMock.stop).not.toHaveBeenCalled()
   })
 
@@ -658,7 +658,7 @@ describe('AR3-5 — Trash state boundaries', () => {
     expect(setSelectedSourceId).not.toHaveBeenCalledWith(null)
 
     fireEvent.click(trashToggleButton())
-    await screen.findByText(/trashed-newer\.wav/i)
+    await screen.findByTestId('source-row-trash-1')
     await waitFor(() => expect(setSelectedSourceId).toHaveBeenCalledWith(null))
   })
 
@@ -669,7 +669,7 @@ describe('AR3-5 — Trash state boundaries', () => {
     fireEvent.click(trashToggleButton())
     // Scoped to the LIST — the selected trash row now ALSO renders its detail
     // in the middle panel (the 2026-07-23 fix: the reader resolves trash rows).
-    await within(screen.getByTestId('library-list')).findByText(/trashed-newer\.wav/i)
+    await within(screen.getByTestId('library-list')).findByTestId('source-row-trash-1')
     expect(setSelectedSourceId).not.toHaveBeenCalledWith(null)
   })
 
@@ -678,7 +678,7 @@ describe('AR3-5 — Trash state boundaries', () => {
     renderLibrary()
     await waitFor(() => expect(trashToggleButton()).toHaveAccessibleName(`View Trash, 2 items`))
     fireEvent.click(trashToggleButton())
-    await within(screen.getByTestId('library-list')).findByText(/trashed-newer\.wav/i)
+    await within(screen.getByTestId('library-list')).findByTestId('source-row-trash-1')
     expect(setSelectedSourceId).not.toHaveBeenCalledWith(null) // still in the corpus so far
 
     getTrashMock.mockResolvedValueOnce([trashRow2]) // trash-1 leaves Trash after restore
@@ -749,7 +749,7 @@ describe('CX-T5-3 — null-file_path recording stays restorable in Trash', () =>
     renderLibrary()
     await waitFor(() => expect(trashToggleButton()).toHaveAccessibleName(`View Trash, 1 items`))
     fireEvent.click(trashToggleButton())
-    await screen.findByText(/null-path\.wav/i)
+    await screen.findByTestId('source-row-trash-nullpath')
 
     openRowMenu(0)
     expect(await screen.findByRole('menuitem', { name: /^restore/i })).toBeInTheDocument()
@@ -774,7 +774,7 @@ describe('2026-07-23 — Trash selection uses live-list explorer semantics', () 
     // "you cannot select it in Trash" gap is closed). Focus carries over from
     // the live list, so ArrowDown then ArrowUp pins focus on trash row 0.
     fireEvent.click(trashToggleButton())
-    await within(list).findByText(/trashed-newer\.wav/i)
+    await within(list).findByTestId('source-row-trash-1')
     fireEvent.keyDown(list, { key: 'ArrowDown' })
     fireEvent.keyDown(list, { key: 'ArrowUp' })
     fireEvent.keyDown(list, { key: ' ' })
@@ -793,7 +793,7 @@ describe('2026-07-23 — Trash selection uses live-list explorer semantics', () 
     expect(screen.getByRole('toolbar', { name: /^bulk actions$/i })).toBeInTheDocument()
 
     fireEvent.click(trashToggleButton())
-    await within(screen.getByTestId('library-list')).findByText(/trashed-newer\.wav/i)
+    await within(screen.getByTestId('library-list')).findByTestId('source-row-trash-1')
     expect(screen.queryByRole('toolbar', { name: /^bulk actions$/i })).not.toBeInTheDocument()
     expect(screen.queryByTestId('trash-bulk-bar')).not.toBeInTheDocument()
     // Entering Trash also clears whatever selection existed (handleToggleTrash).
@@ -806,7 +806,7 @@ describe('2026-07-23 — Trash selection uses live-list explorer semantics', () 
     renderLibrary()
     await waitFor(() => expect(trashToggleButton()).toHaveAccessibleName(`View Trash, 2 items`))
     fireEvent.click(trashToggleButton())
-    await within(screen.getByTestId('library-list')).findByText(/trashed-newer\.wav/i)
+    await within(screen.getByTestId('library-list')).findByTestId('source-row-trash-1')
 
     const bar = await screen.findByTestId('trash-bulk-bar')
     expect(bar).toHaveTextContent('2 of 2 selected')
@@ -826,7 +826,7 @@ describe('2026-07-23 — Trash selection uses live-list explorer semantics', () 
     renderLibrary()
     await waitFor(() => expect(trashToggleButton()).toHaveAccessibleName(`View Trash, 2 items`))
     fireEvent.click(trashToggleButton())
-    const rowText = await within(screen.getByTestId('library-list')).findByText(/trashed-newer\.wav/i)
+    const rowText = await within(screen.getByTestId('library-list')).findByTestId('source-row-trash-1')
     fireEvent.click(rowText)
     expect(setSelectedSourceId).toHaveBeenCalledWith('trash-1')
     expect(selectionSpies.handleSelectionClick).not.toHaveBeenCalled()
@@ -836,7 +836,7 @@ describe('2026-07-23 — Trash selection uses live-list explorer semantics', () 
     renderLibrary()
     await waitFor(() => expect(trashToggleButton()).toHaveAccessibleName(`View Trash, 2 items`))
     fireEvent.click(trashToggleButton())
-    const rowText = await within(screen.getByTestId('library-list')).findByText(/trashed-newer\.wav/i)
+    const rowText = await within(screen.getByTestId('library-list')).findByTestId('source-row-trash-1')
     fireEvent.click(rowText, { ctrlKey: true })
     expect(selectionSpies.handleSelectionClick).toHaveBeenCalledWith(
       'trash-1',
@@ -850,7 +850,7 @@ describe('2026-07-23 — Trash selection uses live-list explorer semantics', () 
     renderLibrary()
     await waitFor(() => expect(trashToggleButton()).toHaveAccessibleName(`View Trash, 2 items`))
     fireEvent.click(trashToggleButton())
-    await within(screen.getByTestId('library-list')).findByText(/trashed-newer\.wav/i)
+    await within(screen.getByTestId('library-list')).findByTestId('source-row-trash-1')
     // The reader resolves the trash row from the Trash corpus (previously it
     // read only the LIVE list and stayed stuck on "No recording selected").
     expect(screen.queryByText(/no recording selected/i)).not.toBeInTheDocument()

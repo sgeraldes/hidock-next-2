@@ -25,7 +25,6 @@ import { LABEL_DELETE_FROM_DEVICE, LABEL_MOVE_TO_TRASH } from '@/features/librar
 import { StatusIcon } from './StatusIcon'
 import { TranscriptionStatusBadge } from './TranscriptionStatusBadge'
 import { useLibraryStore } from '@/store/useLibraryStore'
-import { useConfigStore } from '@/store/domain/useConfigStore'
 import { getDisplayTitle } from '@/features/library/utils/getDisplayTitle'
 import type { DownloadStatus } from '@/store/useAppStore'
 
@@ -85,20 +84,9 @@ export const SourceCard = memo(function SourceCard({
   const canPlay = hasLocalPath(recording)
   const error = useLibraryStore((state) => state.recordingErrors.get(recording.id))
 
-  // Same title the list shows, same rules. The card used to read
-  // `recording.title || recording.filename` on its own, which ignored a title
-  // the user typed, ignored the calendar subject, and ignored the
-  // `unassignedTitleSource` preference entirely — switching the setting left
-  // card view unchanged.
-  const unassignedTitleSource = useConfigStore(
-    (state) => state.config?.ui?.unassignedTitleSource ?? 'suggested'
-  )
-  const { primaryText: displayTitle } = getDisplayTitle(
-    recording,
-    meeting,
-    transcript,
-    unassignedTitleSource
-  )
+  // Same title the list shows, same rules (getDisplayTitle): the file name
+  // never appears on the card either.
+  const { primaryText: displayTitle } = getDisplayTitle(recording, meeting, transcript)
 
   const handleCardClick = (e: React.MouseEvent) => {
     // Buttons and links own their clicks. Everywhere else on the card follows

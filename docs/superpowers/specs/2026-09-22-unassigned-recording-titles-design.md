@@ -2,6 +2,13 @@
 
 Fecha: 2026-09-22
 Estado: construido y mergeado en `main` ([PR #8](https://github.com/sgeraldes/hidock-next-2/pull/8)).
+**Cambio del 25-sep (Sebastián):** el nombre de archivo sale de la lista por completo: ni título de
+respaldo, ni tooltip, ni fila expandida, ni opción en Settings. Solo aparece en la sección Metadata del
+lector ("el filename no es importante, fecha y hora ya se extraen; sirve para encontrarlo en el
+dispositivo"). Sin título, una grabación se llama "Recording, <fecha y hora>"; un documento, imagen o
+nota importados conservan su nombre de archivo, que eligió una persona. La búsqueda sigue encontrando
+por nombre de archivo. La opción `ui.unassignedTitleSource` ya no se lee.
+
 Feature 2 de 4 de la cola del 22-sep. El QA del 22-sep lo leyó contra el código y no
 encontró ninguna diferencia de comportamiento; lo único que corrigió fue un número.
 
