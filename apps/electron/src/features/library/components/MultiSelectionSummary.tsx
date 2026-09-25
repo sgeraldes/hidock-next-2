@@ -1,5 +1,6 @@
 import type { UnifiedRecording } from '@/types/unified-recording'
 import { formatBytes, formatDuration } from '@/lib/utils'
+import { getDisplayTitle } from '../utils/getDisplayTitle'
 
 interface MultiSelectionSummaryProps {
   recordings: UnifiedRecording[]
@@ -44,8 +45,8 @@ export function MultiSelectionSummary({ recordings, mode }: MultiSelectionSummar
         <h3 className="text-sm font-medium">Selected sources</h3>
         <ul className="mt-2 space-y-1.5 text-sm">
           {recordings.slice(0, PREVIEW_LIMIT).map((recording) => (
-            <li key={recording.id} className="truncate" title={recording.title || recording.filename}>
-              {recording.title || recording.filename}
+            <li key={recording.id} className="truncate">
+              {getDisplayTitle(recording).primaryText}
             </li>
           ))}
           {remainingCount > 0 && (

@@ -19,7 +19,6 @@ import { toast } from '@/components/ui/toaster'
 import { StatusIcon } from './StatusIcon'
 import { TranscriptionStatusBadge } from './TranscriptionStatusBadge'
 import { useLibraryStore } from '@/store/useLibraryStore'
-import { useConfigStore } from '@/store/domain/useConfigStore'
 import { getDisplayTitle } from '@/features/library/utils/getDisplayTitle'
 import { highlightText } from '@/features/library/utils/highlightText'
 import { getRowMeta } from '@/features/library/utils/rowMeta'
@@ -231,20 +230,9 @@ export const SourceRow = memo(function SourceRow({
   const [actionMenuOpen, setActionMenuOpen] = useState(false)
   const [contextMenuAnchor, setContextMenuAnchor] = useState<{ x: number; y: number } | null>(null)
 
-  // Smart title. The preference decides whether an unassigned source shows its
-  // AI-suggested title or its filename; a title the user typed wins either way.
-  const unassignedTitleSource = useConfigStore(
-    (state) => state.config?.ui?.unassignedTitleSource ?? 'suggested'
-  )
-  const { primaryText, source: titleSource } = getDisplayTitle(
-    recording,
-    meeting,
-    transcript,
-    unassignedTitleSource
-  )
-  // The machine filename is noise in the prime space — it lives in the row's
-  // hover tooltip and the expanded row, never on the always-visible second line.
-  const titleIsFilename = titleSource === 'filename'
+  // Meeting subject, typed title, suggested title, or kind and date. The file
+  // name never appears in the list; it is in the reader's Metadata section.
+  const { primaryText } = getDisplayTitle(recording, meeting, transcript)
 
   // Rename in place. The reader has had this for a while; the list did not, so
   // renaming meant opening a source just to retitle it. Same IPC, no new
@@ -278,7 +266,7 @@ export const SourceRow = memo(function SourceRow({
     // Opening the editor and committing it untouched must NOT turn the AI's
     // guess into a title the user never wrote: a stray double click plus a
     // click elsewhere would otherwise stamp `user_title`, which outranks the
-    // `filename` preference and survives any later re-analysis.
+    // suggested title and survives any later re-analysis.
     if (!currentUserTitle && trimmed === primaryText.trim()) {
       setRenaming(false)
       return
@@ -341,13 +329,11 @@ export const SourceRow = memo(function SourceRow({
   // the list scannable by kind.
   const { Icon: TypeIcon, parts: secondaryParts, type: sourceType } = getRowMeta(recording)
   const secondaryText = secondaryParts.join(' \u00B7 ')
-  // Tooltip on the second line surfaces the raw filename when it isn't already
-  // the title, so the machine name stays discoverable without cluttering the row.
-  const secondaryTitle = titleIsFilename ? undefined : recording.filename
 
   return (
     <TooltipProvider>
       <div
+        data-testid={`source-row-${recording.id}`}
         className={[
           // select-none: shift+click (range select) must not start the browser's
           // native TEXT selection — the list behaves like a file explorer, not
@@ -462,7 +448,7 @@ export const SourceRow = memo(function SourceRow({
                 className="h-3 w-3 shrink-0 text-muted-foreground/70"
                 aria-label={`${sourceTypeLabel(sourceType)} source`}
               />
-              <span className="truncate" title={secondaryTitle}>
+              <span className="truncate">
                 {searchQuery ? highlightText(secondaryText, searchQuery) : secondaryText}
               </span>
             </p>

@@ -47,7 +47,7 @@ describe('SourceRow second line', () => {
     expect(line.textContent).not.toContain('.hda')
   })
 
-  it('keeps the raw filename discoverable when the official meeting subject is the title', () => {
+  it('never shows the file name, not even as a tooltip (Sebastián, 25-sep-2026)', () => {
     const meeting = {
       id: 'm-tooltip', subject: 'Quarterly planning',
       start_time: '2026-07-08T18:30:00', end_time: '2026-07-08T19:30:00',
@@ -57,7 +57,8 @@ describe('SourceRow second line', () => {
     } as Meeting
     render(<SourceRow {...defaultProps} meeting={meeting} />)
     const line = screen.getByText((content) => /44m/.test(content))
-    expect(line).toHaveAttribute('title', '2026Jul08-190246-Rec49.hda')
+    expect(line).not.toHaveAttribute('title')
+    expect(screen.queryByText(/Rec49/)).toBeNull()
   })
 
   it('does not attach a filename tooltip when the filename IS the title', () => {
@@ -111,11 +112,12 @@ describe('SourceRow never renders blank (title + dated second line always presen
     expect(line.textContent).not.toContain('Unknown')
   })
 
-  it('falls back to the filename as the title when nothing better exists', () => {
-    const rec = { ...baseRecording, userTitle: undefined, meetingSubject: undefined }
+  it('falls back to the kind and date as the title when nothing better exists', () => {
+    const rec = { ...baseRecording, userTitle: undefined, meetingSubject: undefined, title: undefined }
     render(<SourceRow {...defaultProps} recording={rec} />)
-    // Title <p> is never empty — the filename is the guaranteed fallback.
-    expect(screen.getByText('2026Jul08-190246-Rec49.hda')).toBeInTheDocument()
+    // Title <p> is never empty, and never the file name.
+    expect(screen.getByText(/^Recording, /)).toBeInTheDocument()
+    expect(screen.queryByText(/Rec49/)).toBeNull()
   })
 })
 

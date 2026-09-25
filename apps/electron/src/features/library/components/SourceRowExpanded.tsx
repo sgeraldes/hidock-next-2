@@ -21,7 +21,7 @@ export const SourceRowExpanded = memo(function SourceRowExpanded({
     <div
       id={`expanded-${recording.id}`}
       role="region"
-      aria-label={`Details for ${recording.filename}`}
+      aria-label="Recording details"
       className="mx-3 mb-3 p-4 rounded-lg border border-border bg-muted shadow-md space-y-3"
     >
       {/* Metadata Grid */}
@@ -65,10 +65,6 @@ export const SourceRowExpanded = memo(function SourceRowExpanded({
             <p>{recording.title}</p>
           </div>
         )}
-        <div className="col-span-2">
-          <p className="text-xs font-medium text-muted-foreground mb-1">File</p>
-          <p className="truncate font-mono text-xs" title={recording.filename}>{recording.filename}</p>
-        </div>
       </div>
 
       {/* Linked Meeting */}

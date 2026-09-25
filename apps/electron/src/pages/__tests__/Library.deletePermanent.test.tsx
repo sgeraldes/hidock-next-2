@@ -314,7 +314,7 @@ describe('bulk permanent deletion — durable device erase', () => {
       filename: 'raw-device-only.hda',
       deviceFilename: 'raw-device-only.hda',
       // A device-only recording that was never transcribed has no capture and
-      // therefore no suggested title, so its row is titled by its filename.
+      // therefore no suggested title, so its row is titled by kind and date.
       // Without this it would inherit syncedRecording's title via the spread.
       title: undefined,
       userTitle: undefined,
@@ -329,7 +329,7 @@ describe('bulk permanent deletion — durable device erase', () => {
     getLastDeleteErrorMock.mockReturnValue('The HiDock disconnected before the erase could start.')
 
     renderLibrary()
-    await screen.findByText('raw-device-only.hda')
+    await screen.findByTestId('source-row-device-raw-1')
     fireEvent.click(screen.getByRole('button', { name: /^delete permanently$/i }))
     await screen.findByText(/no local copy exists/i)
     expect(screen.queryByRole('checkbox', { name: /also delete/i })).not.toBeInTheDocument()
@@ -340,7 +340,7 @@ describe('bulk permanent deletion — durable device erase', () => {
       expect.stringContaining('disconnected before the erase could start'),
       expect.objectContaining({ action: expect.objectContaining({ label: 'Retry' }) })
     ))
-    expect(screen.getByText('raw-device-only.hda')).toBeInTheDocument()
+    expect(screen.getByTestId('source-row-device-raw-1')).toBeInTheDocument()
 
     const retryOptions = toastMock.warning.mock.calls.find(([title]) => title === 'Device copy remains')?.[2]
     retryOptions.action.onClick()

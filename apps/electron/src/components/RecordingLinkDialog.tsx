@@ -386,7 +386,7 @@ export function RecordingLinkDialog({
                 {linkedRecordings.map(r => (
                   <div key={r.id} className="flex items-center gap-3 px-3 py-2">
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm truncate">{(r as any).title || r.filename}</p>
+                      <p className="text-sm truncate">{(r as any).title || 'Untitled recording'}</p>
                       <p className="text-xs text-muted-foreground">{formatDateTime(r.date_recorded)}</p>
                     </div>
                     <Button
@@ -394,7 +394,7 @@ export function RecordingLinkDialog({
                       size="icon"
                       className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
                       title="Remove meeting link (meeting is not deleted)"
-                      aria-label={`Remove meeting link for ${(r as any).title || r.filename}`}
+                      aria-label={`Remove meeting link for ${(r as any).title || 'the recording from ' + formatDateTime(r.date_recorded)}`}
                       disabled={unlinkingId === r.id}
                       onClick={() => handleUnlinkOther(r.id)}
                     >

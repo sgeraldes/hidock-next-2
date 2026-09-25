@@ -106,7 +106,6 @@ export function Settings() {
   const [localAsrVocabularyFile, setLocalAsrVocabularyFile] = useState('vocabulary.json')
   const [localAsrDiarize, setLocalAsrDiarize] = useState(true)
   const [localAsrNumBeams, setLocalAsrNumBeams] = useState(5)
-  const [unassignedTitleSource, setUnassignedTitleSource] = useState('suggested')
   /** 'auto' | '0' | '1' — kept as a string because the Select is string-valued. */
   const [liveMicChannelSetting, setLiveMicChannelSetting] = useState('auto')
   const [chatProvider, setChatProvider] = useState<'gemini' | 'ollama'>('gemini')
@@ -337,7 +336,6 @@ export function Settings() {
       setLocalAsrVocabularyFile(config.transcription.localAsrVocabularyFile || 'vocabulary.json')
       setLocalAsrDiarize(config.transcription.localAsrDiarize ?? true)
       setLocalAsrNumBeams(config.transcription.localAsrNumBeams || 5)
-      setUnassignedTitleSource(config.ui?.unassignedTitleSource ?? 'suggested')
       // undefined means 'measure it'; 0 and 1 are explicit pins.
       setLiveMicChannelSetting(
         config.transcription.liveMicChannel === 0 || config.transcription.liveMicChannel === 1
@@ -1247,44 +1245,6 @@ export function Settings() {
                   </div>
                 </>
               )}
-
-              {/*
-                Title for sources with no calendar event. This reverses an
-                earlier decision (the filename used to always win) because 945
-                of the 2,129 live sources have no meeting and showed a machine name in
-                the prime slot while a title that describes them already
-                existed. The filename stays visible on the second line.
-              */}
-              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium">Title for unassigned recordings</p>
-                  <p className="text-xs text-muted-foreground">
-                    What the library shows for a recording with no calendar event. A title you
-                    type always wins; this chooses what fills in when you have not.
-                  </p>
-                </div>
-                <Select
-                  value={unassignedTitleSource}
-                  disabled={saving}
-                  onValueChange={async (value) => {
-                    try {
-                      await updateConfig('ui', { unassignedTitleSource: value as 'suggested' | 'filename' })
-                      setUnassignedTitleSource(value)
-                      toast.success('Saved', 'The library updates right away.')
-                    } catch (error) {
-                      toast.error('Could not save', String(error))
-                    }
-                  }}
-                >
-                  <SelectTrigger className="w-56" aria-label="Title for unassigned recordings">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="suggested">Suggested title</SelectItem>
-                    <SelectItem value="filename">File name</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
 
               {/*
                 Live transcription speaker channel. The device sends two

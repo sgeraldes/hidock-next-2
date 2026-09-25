@@ -1679,12 +1679,12 @@ export function SourceReader({
             {/* Independent identity fields: source filename, calendar subject, and
                 AI title suggestion are never aliases for the editable content title. */}
             <dl className="grid grid-cols-1 gap-x-6 gap-y-2 pt-2 text-xs @md:grid-cols-2" data-testid="source-identity-fields">
-              {displayTitle !== recording.filename && (
-                <div className="min-w-0">
-                  <dt className="font-medium text-muted-foreground">Filename</dt>
-                  <dd className="mt-0.5 truncate text-foreground" title={recording.filename}>{recording.filename}</dd>
-                </div>
-              )}
+              {/* The only place the file name shows: it finds the file on the device
+                  and in the recordings folder; the list never shows it. */}
+              <div className="min-w-0">
+                <dt className="font-medium text-muted-foreground">Filename</dt>
+                <dd className="mt-0.5 truncate font-mono text-foreground" title={recording.filename}>{recording.filename}</dd>
+              </div>
               {isAudioSource && !meeting && !recording.meetingSubject && meetingCandidates.length > 0 && (
                 <div className="min-w-0">
                   <dt className="font-medium text-muted-foreground">Possible meeting</dt>
