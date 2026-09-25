@@ -9,7 +9,7 @@ import { getDatabasePath } from './file-storage'
 // Re-exported so consumers (e.g. vector-store's binary cache) can locate the
 // DB file without pulling the file-storage module graph into their tests.
 export { getDatabasePath }
-import { DatabaseEngine, getTableColumns, SchemaBehindError, type BootProgress, type ExternalBackup, type SqlJsDatabase } from '@hidock/database'
+import { DatabaseEngine, getTableColumns, type BootProgress, type ExternalBackup, type SqlJsDatabase } from '@hidock/database'
 import { normalizeName, isGenericSpeakerLabel, detectAmbiguousName } from './entity-normalize'
 import { getEventBus } from './event-bus'
 import { isCancelledMeetingSubject, scoreMeetingCandidates } from './recording-match-scoring'
@@ -4011,13 +4011,11 @@ export async function initializeDatabase(options: { onProgress?: (p: BootProgres
 /**
  * Open the database for reading only, for the headless brain (see brain-host.ts).
  * No journal-mode change, no backup, no schema work; refuses an older schema
- * with a {@link SchemaBehindError}.
+ * with a `SchemaBehindError` from `@hidock/database`.
  */
 export function initializeDatabaseReadOnly(): void {
   engine.initializeReadOnly()
 }
-
-export { SchemaBehindError }
 
 /** Invoked by the post-paint boot scheduler; never delays the main window. */
 export async function runDeferredDatabaseBackup(): Promise<void> {

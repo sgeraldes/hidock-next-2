@@ -25,12 +25,12 @@ import { app } from 'electron'
 import { spawn } from 'child_process'
 import { randomBytes, randomUUID } from 'crypto'
 import { initializeConfig } from './services/config'
-import {
-  closeDatabase,
-  initializeDatabase,
-  initializeDatabaseReadOnly,
-  SchemaBehindError,
-} from './services/database'
+// SchemaBehindError comes from the package itself, not re-exported through
+// services/database: the bundler folds that module into a namespace object
+// named after it, which shadowed the package import and crashed the headless
+// start with "Cannot access 'database' before initialization".
+import { SchemaBehindError } from '@hidock/database'
+import { closeDatabase, initializeDatabase, initializeDatabaseReadOnly } from './services/database'
 import { requestSharedInstanceLock } from './single-instance'
 import { upgradeDatabaseWhenAlone } from './brain-upgrade'
 import {
