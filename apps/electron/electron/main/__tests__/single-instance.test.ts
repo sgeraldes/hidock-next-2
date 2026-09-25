@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { app } from 'electron'
-import { acquireSingleInstanceLock, requestSharedInstanceLock } from '../single-instance'
+import {
+  acquireSingleInstanceLock,
+  requestSharedInstanceLock,
+  BRAIN_LOCK_PROBE,
+  isBrainLockProbe,
+} from '../single-instance'
 
 // The lock folder is created before the lock is taken; nothing is written in tests.
 const mkdirSpy = vi.hoisted(() => vi.fn())
@@ -194,5 +199,39 @@ describe('requestSharedInstanceLock', () => {
     expect(mockedApp.quit).not.toHaveBeenCalled()
     expect(mockedApp.on).not.toHaveBeenCalled()
     expect(app.getPath('userData')).toBe(profile)
+  })
+})
+
+describe('headless brain lock probe', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    for (const key of Object.keys(mockedApp.__handlers)) delete mockedApp.__handlers[key]
+  })
+
+  it('sends the probe marker with the request', () => {
+    mockedApp.requestSingleInstanceLock.mockReturnValue(false)
+    requestSharedInstanceLock(BRAIN_LOCK_PROBE)
+    expect(mockedApp.requestSingleInstanceLock).toHaveBeenCalledWith(BRAIN_LOCK_PROBE)
+  })
+
+  it('leaves the app window alone when a brain probes, and still comes forward for a real launch', () => {
+    mockedApp.requestSingleInstanceLock.mockReturnValue(true)
+    const win = makeWindow()
+    acquireSingleInstanceLock({ getMainWindow: () => win as never })
+
+    mockedApp.__emit('second-instance', {}, [], 'C:/', BRAIN_LOCK_PROBE)
+    expect(win.show).not.toHaveBeenCalled()
+    expect(win.focus).not.toHaveBeenCalled()
+
+    mockedApp.__emit('second-instance', {}, [], 'C:/', undefined)
+    expect(win.show).toHaveBeenCalledTimes(1)
+    expect(win.focus).toHaveBeenCalledTimes(1)
+  })
+
+  it('recognises only the exact marker', () => {
+    expect(isBrainLockProbe(BRAIN_LOCK_PROBE)).toBe(true)
+    for (const other of [undefined, null, {}, { hidockBrainLockProbe: 'yes' }, 'probe']) {
+      expect(isBrainLockProbe(other)).toBe(false)
+    }
   })
 })

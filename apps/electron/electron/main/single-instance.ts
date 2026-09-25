@@ -29,15 +29,33 @@ export interface SingleInstanceOptions {
 }
 
 /**
+ * What the headless brain sends with its lock request. A refused request
+ * always reaches the holder as a `second-instance` event; this marks it as a
+ * probe, not an owner opening HiDock, so the app does not come forward and a
+ * brain upgrading the file does not start the app for it.
+ */
+export const BRAIN_LOCK_PROBE = { hidockBrainLockProbe: true } as const
+
+/** True when a `second-instance` event came from a headless brain's probe. */
+export function isBrainLockProbe(additionalData: unknown): boolean {
+  return (
+    typeof additionalData === 'object' &&
+    additionalData !== null &&
+    (additionalData as Record<string, unknown>).hidockBrainLockProbe === true
+  )
+}
+
+/**
  * Ask for the one lock every HiDock of this OS user competes for, without
  * acting on the answer. `true` means no other HiDock holds it right now.
  *
  * The app takes it for its whole life. The headless brain takes it only while
  * it upgrades the database file, as the proof that no app is running or
  * starting against that file, and gives it back with
- * `app.releaseSingleInstanceLock()` as soon as the upgrade ends.
+ * `app.releaseSingleInstanceLock()` as soon as the upgrade ends. The brain
+ * passes {@link BRAIN_LOCK_PROBE} so a refusal does not look like a launch.
  */
-export function requestSharedInstanceLock(): boolean {
+export function requestSharedInstanceLock(additionalData?: Record<string, unknown>): boolean {
   // Request the lock with userData pointing at the shared lock folder, then put
   // the profile back at once. The lock keeps the folder it was created with
   // (Electron's ProcessSingleton reads it at construction), so every profile
@@ -51,7 +69,7 @@ export function requestSharedInstanceLock(): boolean {
   mkdirSync(lockDir, { recursive: true })
   try {
     app.setPath('userData', lockDir)
-    return app.requestSingleInstanceLock()
+    return additionalData ? app.requestSingleInstanceLock(additionalData) : app.requestSingleInstanceLock()
   } finally {
     app.setPath('userData', profile)
   }
@@ -88,7 +106,12 @@ export function acquireSingleInstanceLock(options: SingleInstanceOptions): boole
   // We are the primary. When a second launch is attempted, the OS delivers a
   // `second-instance` event here instead of starting a rival process — focus
   // our existing window so the user sees the app they already have running.
-  app.on('second-instance', () => showRunningInstance(options))
+  app.on('second-instance', (_event, _argv, _cwd, additionalData) => {
+    // A headless brain asking whether it is alone is not the owner opening
+    // HiDock: the window stays where it is.
+    if (isBrainLockProbe(additionalData)) return
+    showRunningInstance(options)
+  })
 
   return true
 }

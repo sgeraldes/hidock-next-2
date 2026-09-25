@@ -31,7 +31,7 @@ import { initializeConfig } from './services/config'
 // start with "Cannot access 'database' before initialization".
 import { SchemaBehindError } from '@hidock/database'
 import { closeDatabase, initializeDatabase, initializeDatabaseReadOnly } from './services/database'
-import { requestSharedInstanceLock } from './single-instance'
+import { BRAIN_LOCK_PROBE, isBrainLockProbe, requestSharedInstanceLock } from './single-instance'
 import { upgradeDatabaseWhenAlone } from './brain-upgrade'
 import {
   brainLockPath,
@@ -71,11 +71,15 @@ async function openDatabaseForReading(): Promise<void> {
   } catch (error) {
     if (!(error instanceof SchemaBehindError)) throw error
     await upgradeDatabaseWhenAlone(error, {
-      takeLock: requestSharedInstanceLock,
+      takeLock: () => requestSharedInstanceLock(BRAIN_LOCK_PROBE),
       releaseLock: () => app.releaseSingleInstanceLock(),
       onAppLaunchRefused: (listener) => {
-        app.on('second-instance', listener)
-        return () => app.removeListener('second-instance', listener)
+        // Another headless brain probing the lock is not the owner opening the app.
+        const onSecondInstance = (_event: Electron.Event, _argv: string[], _cwd: string, data: unknown): void => {
+          if (!isBrainLockProbe(data)) listener()
+        }
+        app.on('second-instance', onSecondInstance)
+        return () => app.removeListener('second-instance', onSecondInstance)
       },
       upgrade: async (onProgress) => {
         try {
