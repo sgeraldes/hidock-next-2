@@ -15,6 +15,7 @@ export {
   splitSqlStatements,
   parseDestructiveStatement,
   MassDeleteError,
+  SchemaBehindError,
 } from './engine.js'
 export type {
   DatabaseEngineConfig,

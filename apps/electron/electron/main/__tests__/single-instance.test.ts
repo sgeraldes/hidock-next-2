@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { app } from 'electron'
-import { acquireSingleInstanceLock } from '../single-instance'
+import { acquireSingleInstanceLock, requestSharedInstanceLock } from '../single-instance'
 
 // The lock folder is created before the lock is taken; nothing is written in tests.
 const mkdirSpy = vi.hoisted(() => vi.fn())
@@ -175,5 +175,24 @@ describe('acquireSingleInstanceLock', () => {
     })
     expect(() => acquireSingleInstanceLock({ getMainWindow: () => null })).toThrow('boom')
     expect(paths.userData).toBe('C:/profiles/dev')
+  })
+})
+
+describe('requestSharedInstanceLock', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('answers without quitting or registering anything, and puts the profile back', () => {
+    // The headless brain asks for the lock only to prove it is alone before an
+    // upgrade; a refusal must leave it running so it can report why.
+    const profile = app.getPath('userData')
+    for (const held of [true, false]) {
+      mockedApp.requestSingleInstanceLock.mockReturnValue(held)
+      expect(requestSharedInstanceLock()).toBe(held)
+    }
+    expect(mockedApp.quit).not.toHaveBeenCalled()
+    expect(mockedApp.on).not.toHaveBeenCalled()
+    expect(app.getPath('userData')).toBe(profile)
   })
 })
