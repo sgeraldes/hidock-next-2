@@ -31,6 +31,26 @@ Only one HiDock runs per OS user, whatever its profile: the installed app, `npm 
 without opening a window or the database. Close the installed app before `npm run dev`, and before
 `scripts/perf/benchmark-startup.py`, which refuses to start while HiDock is running.
 
+The headless second brain (`--brain-only`, started by agents while the app is closed) takes the
+same lock only while it upgrades the database for a new build. A launch during that upgrade shows
+"HiDock is updating your library" and quits; the brain opens the app when the upgrade ends. See
+`docs/superpowers/specs/2026-09-22-brain-service-design.md`.
+
+### Native modules: one binary, two runtimes
+
+`better-sqlite3` is compiled for one runtime at a time. The test suite runs under Node
+(`NODE_MODULE_VERSION` 147) and the app under Electron (149). Before `npm test`, run
+`npm rebuild better-sqlite3` in `packages/database` and `apps/electron`. Before running the app from
+the checkout, rebuild for Electron in each `node_modules/better-sqlite3`:
+
+```bash
+npx node-gyp rebuild --target=44.4.1 --arch=x64 --dist-url=https://electronjs.org/headers
+```
+
+Packaging rebuilds it for Electron too, but not reliably: on 2026-09-25 an installer shipped the
+Node binary and exited 0. `scripts/after-pack-check-native.cjs` now loads every packed
+`better_sqlite3.node` with the packed executable and fails the build if one does not load.
+
 ## Pull requests
 
 Include:
