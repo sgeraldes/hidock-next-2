@@ -17,6 +17,7 @@ import { UnifiedRecording, hasLocalPath, isDeviceOnly } from '@/types/unified-re
 import { useLibraryStore } from '@/store/useLibraryStore'
 import { getRecoveryAction } from '@/features/library/utils/errorHandling'
 import { TranscriptionStatusBadge } from './TranscriptionStatusBadge'
+import { getDisplayTitle } from '../utils/getDisplayTitle'
 
 interface Transcript {
   id: string
@@ -299,7 +300,7 @@ export function SourceDetailDrawer({
         {/* Audio Player (sticky when playing) */}
         {isPlaying && canPlay && (
           <div className="sticky top-0 bg-background z-10 py-4 border-b">
-            <AudioPlayer recordingId={source.id} filename={source.filename} onClose={onStop} />
+            <AudioPlayer recordingId={source.id} title={getDisplayTitle(source).primaryText} onClose={onStop} />
           </div>
         )}
 

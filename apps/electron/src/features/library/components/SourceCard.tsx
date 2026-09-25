@@ -278,7 +278,7 @@ export const SourceCard = memo(function SourceCard({
       <CardContent className="space-y-4">
         {/* Audio Player */}
         {isPlaying && hasLocalPath(recording) && (
-          <AudioPlayer recordingId={recording.id} filename={recording.filename} onClose={onStop} />
+          <AudioPlayer recordingId={recording.id} title={displayTitle} onClose={onStop} />
         )}
 
         {/* Linked Meeting */}

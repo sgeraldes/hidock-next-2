@@ -78,7 +78,9 @@ import {
   selectMeetingForRecordingByUser,
   getRecordingByFilename,
   upsertRecordingFromDevice,
-  markRecordingsNotOnDevice
+  markRecordingsNotOnDevice,
+  clearPurgeTombstones,
+  isFilePurged,
 } from '../database'
 
 // ---------------------------------------------------------------------------
@@ -672,6 +674,18 @@ describe('Database Service', () => {
   // =========================================================================
   // 9. resetStuckTranscriptions
   // =========================================================================
+  describe('clearPurgeTombstones()', () => {
+    it('removes every extension variant of a purged name and nothing else', () => {
+      for (const n of ['2025Dec17-212704-Rec50.hda', '2025Dec17-212704-Rec50.wav', '2025Dec17-212704-Rec50.mp3', 'other.hda']) {
+        run('INSERT OR IGNORE INTO purged_files (filename) VALUES (?)', [n])
+      }
+      expect(clearPurgeTombstones('2025Dec17-212704-Rec50.wav')).toBe(3)
+      expect(isFilePurged('2025Dec17-212704-Rec50.hda')).toBe(false)
+      expect(isFilePurged('2025Dec17-212704-Rec50.mp3')).toBe(false)
+      expect(isFilePurged('other.hda')).toBe(true)
+    })
+  })
+
   describe('resetStuckTranscriptions()', () => {
     it('resets stuck recordings and queue items, returning the real counts', () => {
       seedRecording('rec-1', { transcription_status: 'processing' })

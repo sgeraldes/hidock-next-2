@@ -972,7 +972,6 @@ export function MeetingDetail() {
                       {currentlyPlayingId === recording.id && recording.file_path && (
                         <div className="my-3">
                           <AudioPlayer
-                            filename={recording.filename}
                             onClose={() => audioControls.stop()}
                           />
                         </div>

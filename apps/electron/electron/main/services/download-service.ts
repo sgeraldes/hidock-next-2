@@ -20,6 +20,7 @@ import {
   getSyncedFile,
   removeSyncedFile,
   isFilePurged,
+  clearPurgeTombstones,
   getPurgedFilenames,
   getRecordingByFilename,
   getSyncedFilenames,
@@ -893,6 +894,11 @@ export class DownloadService {
       // (.hda device name vs .wav local name) and creates the recordings row
       // itself when none exists, so downloads never race the file watcher.
       addSyncedFile(filename, basename(filePath), filePath, data.length)
+      // Automatic downloads skip purged files, so finishing one is an explicit restore.
+      if (isFilePurged(filename)) {
+        const cleared = clearPurgeTombstones(filename)
+        console.log(`[DownloadService] ${filename} was purged and has been downloaded again: restored (${cleared} tombstones cleared)`)
+      }
       const recordingId = markRecordingDownloaded(filename, filePath, {
         fileSize: data.length,
         dateRecorded: item.recordingDate?.toISOString()

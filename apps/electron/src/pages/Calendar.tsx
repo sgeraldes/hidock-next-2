@@ -43,6 +43,8 @@ import { toast } from '@/components/ui/toaster'
 import { CalendarHeader, CalendarStatsBar, StatusIcon, RecordingTooltipContent, MeetingOverlayTooltipContent } from '@/components/calendar'
 import type { LocationFilter, SortOption } from '@/components/calendar'
 
+import { getDisplayTitle } from '@/features/library/utils/getDisplayTitle'
+
 // Extracted calendar utilities
 import {
   type CalendarViewType,
@@ -1157,7 +1159,7 @@ export function Calendar() {
                 if (rec && hasLocalPath(rec)) {
                   return (
                     <AudioPlayer
-                      filename={rec.filename}
+                      title={getDisplayTitle(rec).primaryText}
                       onClose={() => audioControls.stop()}
                     />
                   )
