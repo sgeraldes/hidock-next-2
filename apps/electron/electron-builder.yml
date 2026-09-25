@@ -15,6 +15,8 @@ files:
 extraResources:
   - from: resources/speaker-linking
     to: speaker-linking
+# Refuse a package whose better-sqlite3 the packed Electron cannot load (25-sep: a Node-built binary shipped).
+afterPack: scripts/after-pack-check-native.cjs
 asarUnpack:
   - '**/*.node'
   - '**/usb/**'
