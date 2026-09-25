@@ -40,9 +40,18 @@ exports.default = async function afterPackCheckNative(context) {
     console.warn(`  • native check skipped: packed for ${electronPlatformName}-${archName}, building on ${process.platform}-${process.arch}`)
     return
   }
-  const exeName = process.platform === 'win32' ? `${packager.appInfo.productFilename}.exe` : packager.appInfo.productFilename
-  const exe = join(appOutDir, exeName)
-  const unpacked = join(appOutDir, 'resources', 'app.asar.unpacked')
+  // Where electron-builder puts the executable and resources (platformPackager.js):
+  // inside the .app bundle on macOS, beside the executable elsewhere.
+  const name = packager.appInfo.productFilename
+  const bundle = join(appOutDir, `${name}.app`)
+  const exe =
+    electronPlatformName === 'darwin'
+      ? join(bundle, 'Contents', 'MacOS', name)
+      : join(appOutDir, electronPlatformName === 'win32' ? `${name}.exe` : name)
+  const unpacked =
+    electronPlatformName === 'darwin'
+      ? join(bundle, 'Contents', 'Resources', 'app.asar.unpacked')
+      : join(appOutDir, 'resources', 'app.asar.unpacked')
   if (!existsSync(exe) || !existsSync(unpacked)) {
     throw new Error(`native check: expected ${exe} and ${unpacked} after packing`)
   }
