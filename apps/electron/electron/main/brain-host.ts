@@ -31,7 +31,8 @@ import { initializeConfig } from './services/config'
 // start with "Cannot access 'database' before initialization".
 import { SchemaBehindError } from '@hidock/database'
 import { closeDatabase, initializeDatabase, initializeDatabaseReadOnly } from './services/database'
-import { BRAIN_LOCK_PROBE, isBrainLockProbe, requestSharedInstanceLock } from './single-instance'
+import { BRAIN_LOCK_PROBE, instanceLockDir, isBrainLockProbe, requestSharedInstanceLock } from './single-instance'
+import { clearUpgradeMarker, readLiveUpgradeMarker, writeUpgradeMarker } from './upgrade-marker'
 import { upgradeDatabaseWhenAlone } from './brain-upgrade'
 import {
   brainLockPath,
@@ -90,6 +91,12 @@ async function openDatabaseForReading(): Promise<void> {
       },
       openApp,
       report,
+      markUpgrading: () => writeUpgradeMarker(instanceLockDir(), process.pid),
+      clearUpgrading: () => clearUpgradeMarker(instanceLockDir(), process.pid),
+      otherUpgrade: () => {
+        const marker = readLiveUpgradeMarker(instanceLockDir())
+        return marker && marker.pid !== process.pid ? marker.pid : null
+      },
     })
   }
   initializeDatabaseReadOnly()

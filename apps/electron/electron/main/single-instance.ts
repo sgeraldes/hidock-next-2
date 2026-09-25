@@ -1,6 +1,7 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, dialog } from 'electron'
 import { mkdirSync } from 'fs'
 import { join } from 'path'
+import { readLiveUpgradeMarker } from './upgrade-marker'
 
 /**
  * The folder the lock lives in: one for every profile of this OS user.
@@ -94,6 +95,26 @@ export function acquireSingleInstanceLock(options: SingleInstanceOptions): boole
   const gotTheLock = requestSharedInstanceLock()
 
   if (!gotTheLock) {
+    // The holder may be a headless brain upgrading the database for a new
+    // build. It has no window to bring forward, so without a word here the
+    // click would look like it did nothing. The brain opens the app itself
+    // once the upgrade ends (it saw this launch as a second-instance event).
+    if (readLiveUpgradeMarker(instanceLockDir())) {
+      console.log('[Startup] A headless brain is upgrading the database; the app opens when it finishes.')
+      void app
+        .whenReady()
+        .then(() =>
+          dialog.showMessageBox({
+            type: 'info',
+            title: 'HiDock',
+            message: 'HiDock is updating your library for the new version.',
+            detail: 'It opens by itself when the update finishes, usually within a minute.',
+          })
+        )
+        .catch(() => undefined)
+        .finally(() => app.quit())
+      return false
+    }
     // Another instance already owns the DB. Quit before touching anything.
     // It was told to come forward; if it is busy (a long synchronous boot),
     // Chromium waits up to 20 s for its answer and may end it after that. The

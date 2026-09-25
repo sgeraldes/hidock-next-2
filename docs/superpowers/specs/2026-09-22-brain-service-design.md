@@ -290,8 +290,11 @@ releases it and opens the file read-only as on any other start (`brain-upgrade.t
 |---|---|
 | Lock free: no app running or starting | the brain runs the app's own `initializeDatabase()`: the fail-closed pre-migration backup (the hourly copy hard-linked when identical, otherwise an online backup), then the migrations. Then it closes the file, releases the lock and serves read-only |
 | Lock taken: the app is open or starting | the brain does not touch the file and exits 1, saying the app upgrades it when it starts |
-| The owner opens the app during the upgrade | the launch finds the lock taken and quits, as any second instance does. The brain notes it and, once the lock is back, starts the app (installed builds only). The app then takes over the brain API as usual |
+| The owner opens the app during the upgrade | the launch finds the lock taken. It sees the brain's upgrade marker, shows "HiDock is updating your library for the new version. It opens by itself when the update finishes" and quits. The brain noted the launch and, once the lock is back, starts the app (installed builds only). The app then takes over the brain API as usual |
+| Two agent calls start two brains at once | the second finds the lock taken and the first one's marker. It reports `upgrading` (so its bridge keeps waiting), waits up to 30 minutes for the marker to go, then opens read-only and finds the first brain serving |
 | The upgrade fails | the lock is released, the error goes to the log, and the app still opens if the owner asked for it |
+
+**The marker.** While it upgrades, the brain writes `brain-upgrading.json` (its pid and start time) in the shared instance-lock folder, `%APPDATA%\HiDock Next\instance-lock`, and removes it when it releases the lock. A marker whose process is gone, or older than 35 minutes, counts as absent, so a brain killed mid-upgrade leaves nobody waiting. Writing it is best effort: if it fails, a refused launch quits silently as it did before, and the lock is still released.
 
 While the lock is held no app can start against the file, so the upgrade never runs beside a
 writer. The brain writes to the database only during this upgrade.
@@ -312,6 +315,8 @@ v57 backup of 24-sep:
 | Backup | `hidock.db.bak-2026-09-25` present, schema v57 |
 | After the upgrade | the lock is free while the brain serves |
 
+
+**A kill mid-upgrade.** Migrations run synchronously, and the refused launch's handshake with the lock holder waits up to about 20 s, after which Chromium may end an unresponsive holder. The v57 to v59 run measured below took well under a second of migration time, so this is far off today. If it happens, the file stays consistent: the engine records the schema version after each migration and the migrations are written to run again safely (`ALTER` in try/catch, `IF NOT EXISTS`), so the next start, app or brain, repeats the step that was cut, after taking its own backup. A future migration that rewrites every row of a large table in one statement should yield or run in chunks.
 
 **The launcher waits.** The brain logs `{"event":"upgrading"}` and throttled `upgrade-progress`
 lines. The bridge in `dfx5-sdm-ops/scripts/hidock_bridge.mjs` normally gives the brain 30 s to

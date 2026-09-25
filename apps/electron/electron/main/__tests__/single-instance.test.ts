@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { app } from 'electron'
+import { app, dialog } from 'electron'
 import {
   acquireSingleInstanceLock,
   requestSharedInstanceLock,
@@ -14,6 +14,10 @@ vi.mock('fs', async (importOriginal) => {
   return { ...actual, mkdirSync: mkdirSpy, default: { ...actual, mkdirSync: mkdirSpy } }
 })
 
+// The upgrade marker, controllable per test. Absent unless a test sets it.
+const liveMarker = vi.hoisted(() => vi.fn((): { pid: number; startedAt: string } | null => null))
+vi.mock('../upgrade-marker', () => ({ readLiveUpgradeMarker: liveMarker }))
+
 // Mock electron. `app` is an event emitter + lock API; we capture registered
 // handlers so we can invoke the `second-instance` callback directly.
 vi.mock('electron', () => {
@@ -22,6 +26,7 @@ vi.mock('electron', () => {
     app: {
       requestSingleInstanceLock: vi.fn(),
       quit: vi.fn(),
+      whenReady: vi.fn(() => Promise.resolve()),
       // userData starts as the profile; setPath records every change.
       __paths: { userData: 'C:/profiles/benchmark', appData: 'C:/Users/me/AppData/Roaming' } as Record<string, string>,
       getPath: vi.fn(function (this: unknown, name: string) {
@@ -38,7 +43,8 @@ vi.mock('electron', () => {
         for (const cb of handlers[event] ?? []) cb(...args)
       },
       __handlers: handlers
-    }
+    },
+    dialog: { showMessageBox: vi.fn(() => Promise.resolve({ response: 0 })) }
   }
 })
 
@@ -233,5 +239,32 @@ describe('headless brain lock probe', () => {
     for (const other of [undefined, null, {}, { hidockBrainLockProbe: 'yes' }, 'probe']) {
       expect(isBrainLockProbe(other)).toBe(false)
     }
+  })
+})
+
+describe('a launch refused while a headless brain upgrades the database', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    liveMarker.mockReturnValue(null)
+  })
+
+  it('tells the owner the app opens after the update, then quits', async () => {
+    mockedApp.requestSingleInstanceLock.mockReturnValue(false)
+    liveMarker.mockReturnValue({ pid: 4242, startedAt: '2026-09-25T05:00:00Z' })
+
+    expect(acquireSingleInstanceLock({ getMainWindow: () => null })).toBe(false)
+    // Not before the message: quitting first would close it unseen.
+    expect(mockedApp.quit).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(mockedApp.quit).toHaveBeenCalledTimes(1))
+    expect(dialog.showMessageBox).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringMatching(/updating your library/) })
+    )
+  })
+
+  it('quits at once, without a message, when no upgrade is running', () => {
+    mockedApp.requestSingleInstanceLock.mockReturnValue(false)
+    expect(acquireSingleInstanceLock({ getMainWindow: () => null })).toBe(false)
+    expect(mockedApp.quit).toHaveBeenCalledTimes(1)
+    expect(dialog.showMessageBox).not.toHaveBeenCalled()
   })
 })

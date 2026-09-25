@@ -34,12 +34,57 @@ export interface BrainUpgradeDeps {
   openApp: () => void
   /** One line of JSON for the launcher's log. */
   report: (event: Record<string, unknown>) => void
-  /** Clock, for throttling progress lines. */
+  /** Say, for other HiDock processes, that this one is upgrading; and stop saying it. */
+  markUpgrading: () => void
+  clearUpgrading: () => void
+  /** The pid of another headless brain upgrading right now, or null. */
+  otherUpgrade: () => number | null
+  /** Clock, for throttling progress lines and bounding the wait. */
   now?: () => number
+  sleep?: (ms: number) => Promise<void>
 }
 
 /** At most one progress line per this many milliseconds; the launcher reads them as a heartbeat. */
 export const PROGRESS_REPORT_MS = 5000
+
+/**
+ * How long a refused brain looks for the upgrade marker before deciding the
+ * lock belongs to the app: the winner writes it right after taking the lock.
+ */
+export const MARKER_GRACE_MS = 2000
+/** How often a waiting brain looks again. */
+export const WAIT_POLL_MS = 1000
+/** The longest a brain waits for another one's upgrade; the bridge waits 30 minutes. */
+export const WAIT_FOR_OTHER_MS = 30 * 60 * 1000
+
+const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+/**
+ * Another headless brain holds the lock and is upgrading: wait for it to
+ * finish, reporting it the way an own upgrade is reported, so the launcher
+ * keeps waiting too. Returns false when no other brain is upgrading.
+ */
+async function waitForOtherUpgrade(deps: BrainUpgradeDeps): Promise<boolean> {
+  const now = deps.now ?? Date.now
+  const sleep = deps.sleep ?? defaultSleep
+  const graceEnds = now() + MARKER_GRACE_MS
+  let other = deps.otherUpgrade()
+  while (other === null && now() < graceEnds) {
+    await sleep(WAIT_POLL_MS / 4)
+    other = deps.otherUpgrade()
+  }
+  if (other === null) return false
+  deps.report({ event: 'upgrading', waitingFor: 'another headless brain', pid: other })
+  const gives = now() + WAIT_FOR_OTHER_MS
+  while (deps.otherUpgrade() !== null) {
+    if (now() >= gives) {
+      throw new Error(`Another headless brain (pid ${other}) has been upgrading the database for 30 minutes; gave up waiting.`)
+    }
+    await sleep(WAIT_POLL_MS)
+  }
+  deps.report({ event: 'upgrade-finished-elsewhere', pid: other })
+  return true
+}
 
 export async function upgradeDatabaseWhenAlone(
   versions: { onDisk: number; needed: number },
@@ -47,6 +92,9 @@ export async function upgradeDatabaseWhenAlone(
 ): Promise<void> {
   const now = deps.now ?? Date.now
   if (!deps.takeLock()) {
+    // Two agent calls right after an install start two brains; the second
+    // finds the first one's lock. Wait for its upgrade, then read as usual.
+    if (await waitForOtherUpgrade(deps)) return
     throw new Error(
       `The database is on schema v${versions.onDisk} and this code needs v${versions.needed}, ` +
         'and another HiDock holds it (the app is open or starting). The app upgrades the file ' +
@@ -54,6 +102,13 @@ export async function upgradeDatabaseWhenAlone(
     )
   }
 
+  // Best effort: without the marker a refused launch just quits silently, as
+  // before. It must never cost the lock its release.
+  try {
+    deps.markUpgrading()
+  } catch (error) {
+    deps.report({ event: 'upgrade-marker-failed', error: error instanceof Error ? error.message : String(error) })
+  }
   let appLaunchRefused = false
   const unsubscribe = deps.onAppLaunchRefused(() => {
     if (!appLaunchRefused) deps.report({ event: 'app-launch-waiting', reason: 'the database is being upgraded' })
@@ -74,6 +129,11 @@ export async function upgradeDatabaseWhenAlone(
     deps.report({ event: 'upgraded', toVersion: versions.needed })
   } finally {
     unsubscribe()
+    try {
+      deps.clearUpgrading()
+    } catch {
+      // A marker left behind is ignored once this process is gone.
+    }
     deps.releaseLock()
     // Open it even when the upgrade failed: the app retries it with its own
     // splash, and the owner who clicked gets the window they asked for.
