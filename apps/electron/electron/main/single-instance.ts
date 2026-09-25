@@ -1,6 +1,7 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, dialog } from 'electron'
 import { mkdirSync } from 'fs'
 import { join } from 'path'
+import { readLiveUpgradeMarker } from './upgrade-marker'
 
 /**
  * The folder the lock lives in: one for every profile of this OS user.
@@ -29,6 +30,53 @@ export interface SingleInstanceOptions {
 }
 
 /**
+ * What the headless brain sends with its lock request. A refused request
+ * always reaches the holder as a `second-instance` event; this marks it as a
+ * probe, not an owner opening HiDock, so the app does not come forward and a
+ * brain upgrading the file does not start the app for it.
+ */
+export const BRAIN_LOCK_PROBE = { hidockBrainLockProbe: true } as const
+
+/** True when a `second-instance` event came from a headless brain's probe. */
+export function isBrainLockProbe(additionalData: unknown): boolean {
+  return (
+    typeof additionalData === 'object' &&
+    additionalData !== null &&
+    (additionalData as Record<string, unknown>).hidockBrainLockProbe === true
+  )
+}
+
+/**
+ * Ask for the one lock every HiDock of this OS user competes for, without
+ * acting on the answer. `true` means no other HiDock holds it right now.
+ *
+ * The app takes it for its whole life. The headless brain takes it only while
+ * it upgrades the database file, as the proof that no app is running or
+ * starting against that file, and gives it back with
+ * `app.releaseSingleInstanceLock()` as soon as the upgrade ends. The brain
+ * passes {@link BRAIN_LOCK_PROBE} so a refusal does not look like a launch.
+ */
+export function requestSharedInstanceLock(additionalData?: Record<string, unknown>): boolean {
+  // Request the lock with userData pointing at the shared lock folder, then put
+  // the profile back at once. The lock keeps the folder it was created with
+  // (Electron's ProcessSingleton reads it at construction), so every profile
+  // competes for the same lock, and the OS arbitrates two launches at the same
+  // moment. Nothing reads userData between these two lines.
+  const profile = app.getPath('userData')
+  const lockDir = instanceLockDir()
+  // Electron creates the folder itself before it builds the lock; creating it
+  // here too keeps the lock independent of that detail (on macOS and Linux the
+  // lock files live in this folder and cannot be written without it).
+  mkdirSync(lockDir, { recursive: true })
+  try {
+    app.setPath('userData', lockDir)
+    return additionalData ? app.requestSingleInstanceLock(additionalData) : app.requestSingleInstanceLock()
+  } finally {
+    app.setPath('userData', profile)
+  }
+}
+
+/**
  * Enforce a single running instance BEFORE the database engine is initialized.
  *
  * Now that the app runs on better-sqlite3 + WAL against a real on-disk file,
@@ -44,26 +92,29 @@ export interface SingleInstanceOptions {
  *   immediately (before opening the DB) without creating windows.
  */
 export function acquireSingleInstanceLock(options: SingleInstanceOptions): boolean {
-  // Request the lock with userData pointing at the shared lock folder, then put
-  // the profile back at once. The lock keeps the folder it was created with
-  // (Electron's ProcessSingleton reads it at construction), so every profile
-  // competes for the same lock, and the OS arbitrates two launches at the same
-  // moment. Nothing reads userData between these two lines.
-  const profile = app.getPath('userData')
-  const lockDir = instanceLockDir()
-  // Electron creates the folder itself before it builds the lock; creating it
-  // here too keeps the lock independent of that detail (on macOS and Linux the
-  // lock files live in this folder and cannot be written without it).
-  mkdirSync(lockDir, { recursive: true })
-  let gotTheLock: boolean
-  try {
-    app.setPath('userData', lockDir)
-    gotTheLock = app.requestSingleInstanceLock()
-  } finally {
-    app.setPath('userData', profile)
-  }
+  const gotTheLock = requestSharedInstanceLock()
 
   if (!gotTheLock) {
+    // The holder may be a headless brain upgrading the database for a new
+    // build. It has no window to bring forward, so without a word here the
+    // click would look like it did nothing. The brain opens the app itself
+    // once the upgrade ends (it saw this launch as a second-instance event).
+    if (readLiveUpgradeMarker(instanceLockDir())) {
+      console.log('[Startup] A headless brain is upgrading the database; the app opens when it finishes.')
+      void app
+        .whenReady()
+        .then(() =>
+          dialog.showMessageBox({
+            type: 'info',
+            title: 'HiDock',
+            message: 'HiDock is updating your library for the new version.',
+            detail: 'It opens by itself when the update finishes, usually within a minute.',
+          })
+        )
+        .catch(() => undefined)
+        .finally(() => app.quit())
+      return false
+    }
     // Another instance already owns the DB. Quit before touching anything.
     // It was told to come forward; if it is busy (a long synchronous boot),
     // Chromium waits up to 20 s for its answer and may end it after that. The
@@ -76,7 +127,12 @@ export function acquireSingleInstanceLock(options: SingleInstanceOptions): boole
   // We are the primary. When a second launch is attempted, the OS delivers a
   // `second-instance` event here instead of starting a rival process — focus
   // our existing window so the user sees the app they already have running.
-  app.on('second-instance', () => showRunningInstance(options))
+  app.on('second-instance', (_event, _argv, _cwd, additionalData) => {
+    // A headless brain asking whether it is alone is not the owner opening
+    // HiDock: the window stays where it is.
+    if (isBrainLockProbe(additionalData)) return
+    showRunningInstance(options)
+  })
 
   return true
 }

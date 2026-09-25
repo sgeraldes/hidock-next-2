@@ -11,8 +11,10 @@ configureEarlyStartup()
 
 // `--brain-only` is the headless second brain an agent's bridge starts when the
 // app is closed: no window, no GPU, read-only database, exits when idle or when
-// the app opens (see brain-host.ts). It must not take the single-instance lock,
+// the app opens (see brain-host.ts). It must not keep the single-instance lock,
 // or opening the app while it runs would only focus a process with no window.
+// It holds that lock only while it upgrades an older database file, and opens
+// the app afterwards if the owner tried to during the upgrade (brain-upgrade.ts).
 const brainOnly = process.argv.includes('--brain-only')
 
 if (brainOnly) {

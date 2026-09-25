@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { app } from 'electron'
-import { acquireSingleInstanceLock } from '../single-instance'
+import { app, dialog } from 'electron'
+import {
+  acquireSingleInstanceLock,
+  requestSharedInstanceLock,
+  BRAIN_LOCK_PROBE,
+  isBrainLockProbe,
+} from '../single-instance'
 
 // The lock folder is created before the lock is taken; nothing is written in tests.
 const mkdirSpy = vi.hoisted(() => vi.fn())
@@ -8,6 +13,10 @@ vi.mock('fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('fs')>()
   return { ...actual, mkdirSync: mkdirSpy, default: { ...actual, mkdirSync: mkdirSpy } }
 })
+
+// The upgrade marker, controllable per test. Absent unless a test sets it.
+const liveMarker = vi.hoisted(() => vi.fn((): { pid: number; startedAt: string } | null => null))
+vi.mock('../upgrade-marker', () => ({ readLiveUpgradeMarker: liveMarker }))
 
 // Mock electron. `app` is an event emitter + lock API; we capture registered
 // handlers so we can invoke the `second-instance` callback directly.
@@ -17,6 +26,7 @@ vi.mock('electron', () => {
     app: {
       requestSingleInstanceLock: vi.fn(),
       quit: vi.fn(),
+      whenReady: vi.fn(() => Promise.resolve()),
       // userData starts as the profile; setPath records every change.
       __paths: { userData: 'C:/profiles/benchmark', appData: 'C:/Users/me/AppData/Roaming' } as Record<string, string>,
       getPath: vi.fn(function (this: unknown, name: string) {
@@ -33,7 +43,8 @@ vi.mock('electron', () => {
         for (const cb of handlers[event] ?? []) cb(...args)
       },
       __handlers: handlers
-    }
+    },
+    dialog: { showMessageBox: vi.fn(() => Promise.resolve({ response: 0 })) }
   }
 })
 
@@ -175,5 +186,85 @@ describe('acquireSingleInstanceLock', () => {
     })
     expect(() => acquireSingleInstanceLock({ getMainWindow: () => null })).toThrow('boom')
     expect(paths.userData).toBe('C:/profiles/dev')
+  })
+})
+
+describe('requestSharedInstanceLock', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('answers without quitting or registering anything, and puts the profile back', () => {
+    // The headless brain asks for the lock only to prove it is alone before an
+    // upgrade; a refusal must leave it running so it can report why.
+    const profile = app.getPath('userData')
+    for (const held of [true, false]) {
+      mockedApp.requestSingleInstanceLock.mockReturnValue(held)
+      expect(requestSharedInstanceLock()).toBe(held)
+    }
+    expect(mockedApp.quit).not.toHaveBeenCalled()
+    expect(mockedApp.on).not.toHaveBeenCalled()
+    expect(app.getPath('userData')).toBe(profile)
+  })
+})
+
+describe('headless brain lock probe', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    for (const key of Object.keys(mockedApp.__handlers)) delete mockedApp.__handlers[key]
+  })
+
+  it('sends the probe marker with the request', () => {
+    mockedApp.requestSingleInstanceLock.mockReturnValue(false)
+    requestSharedInstanceLock(BRAIN_LOCK_PROBE)
+    expect(mockedApp.requestSingleInstanceLock).toHaveBeenCalledWith(BRAIN_LOCK_PROBE)
+  })
+
+  it('leaves the app window alone when a brain probes, and still comes forward for a real launch', () => {
+    mockedApp.requestSingleInstanceLock.mockReturnValue(true)
+    const win = makeWindow()
+    acquireSingleInstanceLock({ getMainWindow: () => win as never })
+
+    mockedApp.__emit('second-instance', {}, [], 'C:/', BRAIN_LOCK_PROBE)
+    expect(win.show).not.toHaveBeenCalled()
+    expect(win.focus).not.toHaveBeenCalled()
+
+    mockedApp.__emit('second-instance', {}, [], 'C:/', undefined)
+    expect(win.show).toHaveBeenCalledTimes(1)
+    expect(win.focus).toHaveBeenCalledTimes(1)
+  })
+
+  it('recognises only the exact marker', () => {
+    expect(isBrainLockProbe(BRAIN_LOCK_PROBE)).toBe(true)
+    for (const other of [undefined, null, {}, { hidockBrainLockProbe: 'yes' }, 'probe']) {
+      expect(isBrainLockProbe(other)).toBe(false)
+    }
+  })
+})
+
+describe('a launch refused while a headless brain upgrades the database', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    liveMarker.mockReturnValue(null)
+  })
+
+  it('tells the owner the app opens after the update, then quits', async () => {
+    mockedApp.requestSingleInstanceLock.mockReturnValue(false)
+    liveMarker.mockReturnValue({ pid: 4242, startedAt: '2026-09-25T05:00:00Z' })
+
+    expect(acquireSingleInstanceLock({ getMainWindow: () => null })).toBe(false)
+    // Not before the message: quitting first would close it unseen.
+    expect(mockedApp.quit).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(mockedApp.quit).toHaveBeenCalledTimes(1))
+    expect(dialog.showMessageBox).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringMatching(/updating your library/) })
+    )
+  })
+
+  it('quits at once, without a message, when no upgrade is running', () => {
+    mockedApp.requestSingleInstanceLock.mockReturnValue(false)
+    expect(acquireSingleInstanceLock({ getMainWindow: () => null })).toBe(false)
+    expect(mockedApp.quit).toHaveBeenCalledTimes(1)
+    expect(dialog.showMessageBox).not.toHaveBeenCalled()
   })
 })

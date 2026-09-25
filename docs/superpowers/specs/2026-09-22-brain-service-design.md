@@ -271,3 +271,58 @@ and skip the gate this work adds.
 | The lock's `exe` came from `process.execPath` even in dev, and the bridge launched it from a dead lock | `exe` is written only by an installed build, and the bridge never launches a dead lock's `exe` |
 | A headless brain on its way out read the lock, then deleted it; the app's new lock could land in between | it removes its lock while its server still answers. The app writes only after that server stops answering |
 | Quitting while the app was still displacing a headless brain left a server running after the database closed | a start that finds the app quitting closes its server and returns |
+
+## Upgrading the database when the app is closed (2026-09-25)
+
+**What broke.** The headless brain opened the database read-only and refused a file on an older
+schema than its code. Installing a build with a new migration left the file one schema behind until
+the owner opened the app window. On 2026-09-24 the daily SDM sweep ran with the app closed, and
+every bridge command (`actionables-pending`, `recording-now`, `ingest.py all`) failed with
+`The database is on schema v57 and this code needs v58`. Agents were locked out until someone
+opened the app by hand, which is what the headless brain was supposed to make unnecessary.
+
+**What it does now.** On that refusal (`SchemaBehindError`, typed so no other failure takes this
+path) the brain asks for the lock every HiDock of this user competes for (`requestSharedInstanceLock`
+in `single-instance.ts`, the lock from PR #37). It holds the lock only while it upgrades, then
+releases it and opens the file read-only as on any other start (`brain-upgrade.ts`).
+
+| Situation | What happens |
+|---|---|
+| Lock free: no app running or starting | the brain runs the app's own `initializeDatabase()`: the fail-closed pre-migration backup (the hourly copy hard-linked when identical, otherwise an online backup), then the migrations. Then it closes the file, releases the lock and serves read-only |
+| Lock taken: the app is open or starting | the brain does not touch the file and exits 1, saying the app upgrades it when it starts |
+| The owner opens the app during the upgrade | the launch finds the lock taken. It sees the brain's upgrade marker, shows "HiDock is updating your library for the new version. It opens by itself when the update finishes" and quits. The brain noted the launch and, once the lock is back, starts the app (installed builds only). The app then takes over the brain API as usual |
+| Two agent calls start two brains at once | the second finds the lock taken and the first one's marker. It reports `upgrading` (so its bridge keeps waiting), waits up to 30 minutes for the marker to go, then opens read-only and finds the first brain serving |
+| The upgrade fails | the lock is released, the error goes to the log, and the app still opens if the owner asked for it |
+
+**The marker.** While it upgrades, the brain writes `brain-upgrading.json` (its pid and start time) in the shared instance-lock folder, `%APPDATA%\HiDock Next\instance-lock`, and removes it when it releases the lock. A marker whose process is gone, or older than 35 minutes, counts as absent, so a brain killed mid-upgrade leaves nobody waiting. Writing it is best effort: if it fails, a refused launch quits silently as it did before, and the lock is still released.
+
+While the lock is held no app can start against the file, so the upgrade never runs beside a
+writer. The brain writes to the database only during this upgrade.
+
+A refused lock request always reaches the holder as a `second-instance` event, which the app
+answers by coming to the front. The brain's request carries `{hidockBrainLockProbe: true}`, and
+the app and an upgrading brain ignore events that carry it. Without the marker an open app would
+jump forward whenever an agent's brain met an old schema, and a second brain racing the first
+would make the first open the app.
+
+**Measured on 2026-09-25**, packaged build, on a copy of the owner's 2.9 GB database from the
+v57 backup of 24-sep:
+
+| Case | Result |
+|---|---|
+| Another HiDock holds the lock | exit 1 with the message above; file modification time, size and schema v57 unchanged; the holder got the probe marker |
+| App closed, through the bridge | backup, v57 to v59, read-only serve: 97 pending actionables in 6.5 s (backup to a local SSD) |
+| Backup | `hidock.db.bak-2026-09-25` present, schema v57 |
+| After the upgrade | the lock is free while the brain serves |
+
+
+**A kill mid-upgrade.** Migrations run synchronously, and the refused launch's handshake with the lock holder waits up to about 20 s, after which Chromium may end an unresponsive holder. The v57 to v59 run measured below took well under a second of migration time, so this is far off today. If it happens, the file stays consistent: the engine records the schema version after each migration and the migrations are written to run again safely (`ALTER` in try/catch, `IF NOT EXISTS`), so the next start, app or brain, repeats the step that was cut, after taking its own backup. A future migration that rewrites every row of a large table in one statement should yield or run in chunks.
+
+**The launcher waits.** The brain logs `{"event":"upgrading"}` and throttled `upgrade-progress`
+lines. The bridge in `dfx5-sdm-ops/scripts/hidock_bridge.mjs` normally gives the brain 30 s to
+come up. When it sees `upgrading` it extends that to 30 minutes and says so on stderr, since a
+backup of the 2.9 GB library can take minutes.
+
+**`recording-now` with the app closed** still answers `{"recording": null, "error": ...}`,
+because the device state lives in the app. What changed is that the bridge gets that answer
+instead of a brain that never started.

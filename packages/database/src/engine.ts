@@ -159,6 +159,26 @@ export class MassDeleteError extends Error {
   }
 }
 
+/**
+ * The file is on an older schema than the code that opened it read-only.
+ *
+ * Typed so a reader can tell this case from every other failure: the headless
+ * brain upgrades the file itself when no other HiDock has it open, and gives up
+ * on anything else.
+ */
+export class SchemaBehindError extends Error {
+  constructor(
+    readonly onDisk: number,
+    readonly needed: number
+  ) {
+    super(
+      `The database is on schema v${onDisk} and this code needs v${needed}. ` +
+        'Open the app once so it can upgrade the file; a read-only reader cannot.'
+    )
+    this.name = 'SchemaBehindError'
+  }
+}
+
 /** A protected table is only guarded once it holds more than this many rows. */
 const MASS_DELETE_MIN_ROWS = 20
 /** Refuse a single statement that would remove more than this fraction of rows. */
@@ -788,7 +808,9 @@ export class DatabaseEngine {
    * So this opens with `readonly` and `fileMustExist`, sets only per-connection
    * settings, and refuses outright when the file is on an older schema than
    * this code expects: the queries name columns a migration adds, and a reader
-   * cannot run the migration. Open the app once to upgrade the file.
+   * cannot run the migration. The refusal is a {@link SchemaBehindError}, so a
+   * caller that can prove it is alone with the file may run {@link initialize}
+   * to upgrade it and then open read-only again.
    */
   initializeReadOnly(): void {
     if (this.bdb) this.closeDatabase()
@@ -815,12 +837,7 @@ export class DatabaseEngine {
       bdb.pragma('foreign_keys = ON')
       this.bdb = bdb
       const onDisk = this.readSchemaVersion()
-      if (onDisk < this.config.schemaVersion) {
-        throw new Error(
-          `The database is on schema v${onDisk} and this code needs v${this.config.schemaVersion}. ` +
-            'Open the app once so it can upgrade the file; a read-only reader cannot.'
-        )
-      }
+      if (onDisk < this.config.schemaVersion) throw new SchemaBehindError(onDisk, this.config.schemaVersion)
       this.shim = new SqlJsCompatDatabase(this.bdb, this.recordChanges, () => this.lastChanges)
     } catch (error) {
       this.bdb = null

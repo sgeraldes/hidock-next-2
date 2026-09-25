@@ -15,7 +15,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { existsSync, rmSync, statSync } from 'fs'
 import Database from 'better-sqlite3'
-import { DatabaseEngine } from '../src/index.js'
+import { DatabaseEngine, SchemaBehindError } from '../src/index.js'
 
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);
@@ -117,5 +117,15 @@ describe('DatabaseEngine.initializeReadOnly', () => {
 
     const reader = engineFor(path, 5)
     expect(() => reader.initializeReadOnly()).toThrow(/schema v1 and this code needs v5/)
+    // Typed, with both versions, so the headless brain can tell this failure
+    // from every other one and upgrade the file when it is alone.
+    let caught: unknown
+    try {
+      reader.initializeReadOnly()
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toBeInstanceOf(SchemaBehindError)
+    expect(caught).toMatchObject({ onDisk: 1, needed: 5 })
   })
 })

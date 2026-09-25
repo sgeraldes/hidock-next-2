@@ -4010,7 +4010,8 @@ export async function initializeDatabase(options: { onProgress?: (p: BootProgres
 
 /**
  * Open the database for reading only, for the headless brain (see brain-host.ts).
- * No journal-mode change, no backup, no schema work; refuses an older schema.
+ * No journal-mode change, no backup, no schema work; refuses an older schema
+ * with a `SchemaBehindError` from `@hidock/database`.
  */
 export function initializeDatabaseReadOnly(): void {
   engine.initializeReadOnly()

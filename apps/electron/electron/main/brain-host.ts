@@ -9,9 +9,11 @@
  * second implementation of that rule in a separate service would drift.
  *
  * What it does not do, so it stays light: no window, no GPU, no boot tasks, no
- * embedder, no vector store, no device, no calendar sync, no migrations. The
- * database is opened read-only, so it can run beside the app without either
- * one blocking the other.
+ * embedder, no vector store, no device, no calendar sync. The database is
+ * opened read-only, so it can run beside the app without either one blocking
+ * the other. The one write it ever makes is the schema upgrade a new build
+ * needs, and only while it holds the lock that proves no app is running or
+ * starting (see brain-upgrade.ts); then it reopens the file read-only.
  *
  * Its lifetime is the owner's rule, "if the app is not needed, it does not
  * run": it exits after BRAIN_IDLE_MS without a request, and it exits the moment
@@ -20,9 +22,18 @@
  */
 
 import { app } from 'electron'
+import { spawn } from 'child_process'
 import { randomBytes, randomUUID } from 'crypto'
 import { initializeConfig } from './services/config'
-import { closeDatabase, initializeDatabaseReadOnly } from './services/database'
+// SchemaBehindError comes from the package itself, not re-exported through
+// services/database: the bundler folds that module into a namespace object
+// named after it, which shadowed the package import and crashed the headless
+// start with "Cannot access 'database' before initialization".
+import { SchemaBehindError } from '@hidock/database'
+import { closeDatabase, initializeDatabase, initializeDatabaseReadOnly } from './services/database'
+import { BRAIN_LOCK_PROBE, instanceLockDir, isBrainLockProbe, requestSharedInstanceLock } from './single-instance'
+import { clearUpgradeMarker, readLiveUpgradeMarker, writeUpgradeMarker } from './upgrade-marker'
+import { upgradeDatabaseWhenAlone } from './brain-upgrade'
 import {
   brainLockPath,
   probeBrain,
@@ -50,6 +61,60 @@ function report(event: Record<string, unknown>): void {
   process.stdout.write(`${JSON.stringify({ brain: 'service', ...event })}\n`)
 }
 
+/**
+ * Open the file read-only. When it is a schema behind this build, upgrade it
+ * first if no other HiDock has it, then open it read-only like any other start.
+ */
+async function openDatabaseForReading(): Promise<void> {
+  try {
+    initializeDatabaseReadOnly()
+    return
+  } catch (error) {
+    if (!(error instanceof SchemaBehindError)) throw error
+    await upgradeDatabaseWhenAlone(error, {
+      takeLock: () => requestSharedInstanceLock(BRAIN_LOCK_PROBE),
+      releaseLock: () => app.releaseSingleInstanceLock(),
+      onAppLaunchRefused: (listener) => {
+        // Another headless brain probing the lock is not the owner opening the app.
+        const onSecondInstance = (_event: Electron.Event, _argv: string[], _cwd: string, data: unknown): void => {
+          if (!isBrainLockProbe(data)) listener()
+        }
+        app.on('second-instance', onSecondInstance)
+        return () => app.removeListener('second-instance', onSecondInstance)
+      },
+      upgrade: async (onProgress) => {
+        try {
+          await initializeDatabase({ onProgress })
+        } finally {
+          closeDatabase()
+        }
+      },
+      openApp,
+      report,
+      markUpgrading: () => writeUpgradeMarker(instanceLockDir(), process.pid),
+      clearUpgrading: () => clearUpgradeMarker(instanceLockDir(), process.pid),
+      otherUpgrade: () => {
+        const marker = readLiveUpgradeMarker(instanceLockDir())
+        return marker && marker.pid !== process.pid ? marker.pid : null
+      },
+    })
+  }
+  initializeDatabaseReadOnly()
+}
+
+/**
+ * Start the app the owner clicked while the upgrade held the lock. Only an
+ * installed build: a dev run's executable is electron.exe, which needs the
+ * project path and must not be pointed at the owner's data by accident.
+ */
+function openApp(): void {
+  if (!app.isPackaged) {
+    report({ event: 'open-app-skipped', reason: 'not an installed build' })
+    return
+  }
+  spawn(process.execPath, [], { detached: true, stdio: 'ignore' }).unref()
+}
+
 export async function runBrainOnly(): Promise<void> {
   const lockPath = brainLockPath(app.getPath('userData'))
 
@@ -63,7 +128,7 @@ export async function runBrainOnly(): Promise<void> {
 
   try {
     await initializeConfig({ persist: false })
-    initializeDatabaseReadOnly()
+    await openDatabaseForReading()
   } catch (error) {
     report({ event: 'failed', error: error instanceof Error ? error.message : String(error) })
     app.exit(1)
