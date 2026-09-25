@@ -296,6 +296,23 @@ releases it and opens the file read-only as on any other start (`brain-upgrade.t
 While the lock is held no app can start against the file, so the upgrade never runs beside a
 writer. The brain writes to the database only during this upgrade.
 
+A refused lock request always reaches the holder as a `second-instance` event, which the app
+answers by coming to the front. The brain's request carries `{hidockBrainLockProbe: true}`, and
+the app and an upgrading brain ignore events that carry it. Without the marker an open app would
+jump forward whenever an agent's brain met an old schema, and a second brain racing the first
+would make the first open the app.
+
+**Measured on 2026-09-25**, packaged build, on a copy of the owner's 2.9 GB database from the
+v57 backup of 24-sep:
+
+| Case | Result |
+|---|---|
+| Another HiDock holds the lock | exit 1 with the message above; file modification time, size and schema v57 unchanged; the holder got the probe marker |
+| App closed, through the bridge | backup, v57 to v59, read-only serve: 97 pending actionables in 6.5 s (backup to a local SSD) |
+| Backup | `hidock.db.bak-2026-09-25` present, schema v57 |
+| After the upgrade | the lock is free while the brain serves |
+
+
 **The launcher waits.** The brain logs `{"event":"upgrading"}` and throttled `upgrade-progress`
 lines. The bridge in `dfx5-sdm-ops/scripts/hidock_bridge.mjs` normally gives the brain 30 s to
 come up. When it sees `upgrading` it extends that to 30 minutes and says so on stderr, since a
