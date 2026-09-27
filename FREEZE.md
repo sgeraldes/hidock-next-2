@@ -125,7 +125,47 @@ files that mock `../database` now export `getPurgedFilenames` from the mock
 
 ## Tests added
 
-(to be filled during step 3)
+Not run in this worktree (dependencies not installed per machine rules).
+Written to match the existing vitest style next to them.
+
+1. apps/electron/electron/main/services/__tests__/download-service-reconcile-batch.test.ts
+   - getFilesToSync wraps the whole snapshot in exactly ONE runInTransaction.
+   - getFilesToSyncBatched: 250 files / batch 100 => 3 transactions, 2
+     setImmediate yields; a single chunk yields zero times.
+   - batched and sync variants return identical results in the same order.
+   - purge tombstones loaded once (getPurgedFilenames x1, isFilePurged never),
+     with variant matching (.hda vs .wav tombstone) preserved.
+   - batched reconcile still emits ONE coalesced recording:new per snapshot.
+
+2. apps/electron/electron/main/ipc/__tests__/device-cache-handlers.test.ts
+   - saveAll wraps clear + 2,139 inserts in ONE runInTransaction, with the
+     DELETE inside it and the CREATE TABLE before it.
+   - errors still propagate to the renderer.
+
+3. apps/electron/electron/main/services/__tests__/device-files-cache.test.ts
+   - real-SQLite round trip: saveDeviceFilesCache replaces the cache
+     wholesale (never appends) and reads rows back exactly; file_size alias
+     accepted.
+
+Run them with (from apps/electron, after npm install):
+
+```
+npx vitest run electron/main/services/__tests__/download-service-reconcile-batch.test.ts
+npx vitest run electron/main/ipc/__tests__/device-cache-handlers.test.ts
+npx vitest run electron/main/services/__tests__/device-files-cache.test.ts
+```
+
+Also re-run the touched-mock suites (they now export getPurgedFilenames):
+
+```
+npx vitest run electron/main/services/__tests__/download-service-r4-logspam.test.ts
+npx vitest run electron/main/services/__tests__/download-service-c004.test.ts
+npx vitest run electron/main/services/__tests__/download-service-session-c5.test.ts
+npx vitest run electron/main/services/__tests__/download-service.test.ts
+npx vitest run electron/main/services/__tests__/download-service-b007.test.ts
+npx vitest run electron/main/services/__tests__/download-service-cancel.test.ts
+npx vitest run electron/main/services/__tests__/download-service-stale-synced-row.test.ts
+```
 
 ## How to verify
 
