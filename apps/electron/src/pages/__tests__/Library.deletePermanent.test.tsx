@@ -342,6 +342,13 @@ describe('bulk permanent deletion — durable device erase', () => {
     ))
     expect(screen.getByTestId('source-row-device-raw-1')).toBeInTheDocument()
 
+    // Named by its display title, never its file name (owner, 25-sep-2026), and
+    // the per-item "<name>: " prefix is stripped, not doubled, for a single row.
+    const body = toastMock.warning.mock.calls.find(([title]) => title === 'Device copy remains')?.[1] as string
+    expect(body).not.toContain('raw-device-only')
+    expect(body).toMatch(/^The HiDock disconnected before the erase could start\./)
+    expect(body).toMatch(/ is still on the device\.$/)
+
     const retryOptions = toastMock.warning.mock.calls.find(([title]) => title === 'Device copy remains')?.[2]
     retryOptions.action.onClick()
     await waitFor(() => expect(deleteRecordingMock).toHaveBeenCalledTimes(2))
@@ -520,7 +527,7 @@ describe('executeDeletePermanent — device checkbox (D3/AR3-6)', () => {
     await waitFor(() => {
       expect(toastMock.warning).toHaveBeenCalledWith(
         'Removed locally — device copy remains',
-        expect.stringContaining('synced.wav')
+        expect.stringContaining('Synced Recording')
       )
     })
     expect(toastMock.success).not.toHaveBeenCalled()
@@ -540,7 +547,7 @@ describe('executeDeletePermanent — device checkbox (D3/AR3-6)', () => {
     await waitFor(() => {
       expect(toastMock.warning).toHaveBeenCalledWith(
         'Removed locally — device copy remains',
-        expect.stringContaining('synced.wav')
+        expect.stringContaining('Synced Recording')
       )
     })
     expect(toastMock.success).not.toHaveBeenCalled()
@@ -613,7 +620,7 @@ describe('executeDeletePermanent — device checkbox (D3/AR3-6)', () => {
     await waitFor(() => {
       expect(toastMock.warning).toHaveBeenCalledWith(
         'Removed locally — device copy remains',
-        expect.stringContaining('synced.wav')
+        expect.stringContaining('Synced Recording')
       )
     })
     expect(toastMock.warning).not.toHaveBeenCalledWith(

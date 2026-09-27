@@ -1069,7 +1069,7 @@ export function SourceReader({
         return
       }
       if (res.queueItemId) addToQueue(res.queueItemId, recording.id, recording.filename)
-      toast.success(`Transcribing with ${label}`, recording.filename)
+      toast.success(`Transcribing with ${label}`, getDisplayTitle(recording).primaryText)
     } catch (err) {
       toast.error('Failed to transcribe', err instanceof Error ? err.message : undefined)
     }
@@ -1095,7 +1095,7 @@ export function SourceReader({
         return
       }
       if (res.queueItemId) addToQueue(res.queueItemId, recording.id, recording.filename)
-      toast.success('Re-diarizing speakers', recording.filename)
+      toast.success('Re-diarizing speakers', getDisplayTitle(recording).primaryText)
     } catch (err) {
       toast.error('Failed to re-diarize', err instanceof Error ? err.message : undefined)
       setReDiarizing(false)

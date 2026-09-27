@@ -725,7 +725,7 @@ describe('Confirm-dialog copy matches §D2 exactly', () => {
     await waitFor(() => expect(trashToggleButton()).toHaveAccessibleName(`View Trash, 2 items`))
     fireEvent.click(screen.getAllByTitle('Move to Trash')[0])
 
-    expect(await screen.findByText(/move "live-0\.wav" to trash\?/i)).toBeInTheDocument()
+    expect(await screen.findByText(/move "live recording 0" to trash\?/i)).toBeInTheDocument()
     expect(screen.getByText(/restore it from trash, or delete it permanently later/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^move to trash$/i })).toBeInTheDocument()
   })

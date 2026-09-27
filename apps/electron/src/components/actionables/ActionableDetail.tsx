@@ -15,8 +15,6 @@ interface ActionableDetailProps {
 /** The subset of a recording row the source panel needs to render a link. */
 interface SourceRecording {
   id: string
-  filename: string
-  original_filename: string | null
   date_recorded: string | null
   meeting_id: string | null
 }

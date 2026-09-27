@@ -1495,13 +1495,13 @@ export function Library() {
             removed === 0 &&
             failures.length === 1
           if (oneFailedDeviceOnly) {
-            const failurePrefix = `${selectedRecordings[0].filename}: `
+            const failurePrefix = `${nameOf(selectedRecordings[0])}: `
             const failureReason = failures[0].startsWith(failurePrefix)
               ? failures[0].slice(failurePrefix.length)
               : failures[0]
             toast.warning(
               'Device copy remains',
-              `${failureReason} ${selectedRecordings[0].filename} is still on the device.`,
+              `${failureReason} ${nameOf(selectedRecordings[0])} is still on the device.`,
               { action: { label: 'Retry', onClick: () => { void execute(true) } } }
             )
           } else {
@@ -1637,7 +1637,7 @@ export function Library() {
     setConfirmDialog({
       open: true,
       title: LABEL_DELETE_FROM_DEVICE,
-      description: deviceDeleteConfirmDescription(recording.filename),
+      description: deviceDeleteConfirmDescription(nameOf(recording)),
       actionLabel: LABEL_DELETE_FROM_DEVICE,
       onConfirm: () => executeDeleteFromDevice(recording)
     })
@@ -1687,7 +1687,7 @@ export function Library() {
     setConfirmDialog({
       open: true,
       title: LABEL_MOVE_TO_TRASH,
-      description: softDeleteConfirmDescription(recording.filename),
+      description: softDeleteConfirmDescription(nameOf(recording)),
       actionLabel: LABEL_MOVE_TO_TRASH,
       onConfirm: () => executeDeleteLocal(recording)
     })
@@ -1729,7 +1729,7 @@ export function Library() {
         const graphUnavailable = !!(res as { graphUnavailable?: boolean } | undefined)?.graphUnavailable
         import('@/components/ui/toaster').then(({ toast }) => {
           if (graphUnavailable) {
-            toast.error(FAILURE_NOTHING_DELETED_TITLE, graphCleanupFailedBody(recording.filename), {
+            toast.error(FAILURE_NOTHING_DELETED_TITLE, graphCleanupFailedBody(nameOf(recording)), {
               action: {
                 label: LABEL_DELETE_ANYWAY_SKIP_GRAPH,
                 onClick: () => {
@@ -1742,7 +1742,7 @@ export function Library() {
               }
             })
           } else {
-            toast.error(FAILURE_NOTHING_DELETED_TITLE, genericPermanentDeleteFailedBody(recording.filename))
+            toast.error(FAILURE_NOTHING_DELETED_TITLE, genericPermanentDeleteFailedBody(nameOf(recording)))
           }
         })
         return
@@ -1854,7 +1854,7 @@ export function Library() {
         // pure function of these five inputs — see selectCompletionToast's
         // own doc comment for the full CX-T6-1..6 rationale.
         const { variant, title, body } = selectCompletionToast({
-          filename: recording.filename,
+          name: nameOf(recording),
           deviceOutcome,
           filesPending,
           pendingKinds,
@@ -1872,7 +1872,7 @@ export function Library() {
     } catch (e) {
       console.error('Failed to permanently delete:', e)
       import('@/components/ui/toaster').then(({ toast }) => {
-        toast.error(FAILURE_NOTHING_DELETED_TITLE, genericPermanentDeleteFailedBody(recording.filename))
+        toast.error(FAILURE_NOTHING_DELETED_TITLE, genericPermanentDeleteFailedBody(nameOf(recording)))
       })
     } finally {
       setDeleting(null)
@@ -3061,7 +3061,7 @@ export function Library() {
       <DeletePermanentDialog
         open={deletePermanentDialog.open}
         onOpenChange={(open) => setDeletePermanentDialog((prev) => ({ ...prev, open }))}
-        filename={deletePermanentDialog.recording?.filename ?? ''}
+        title={deletePermanentDialog.recording ? nameOf(deletePermanentDialog.recording) : ''}
         impact={deletePermanentDialog.impact}
         // F-INFO-6: a Trash row's UnifiedRecording ALWAYS flattens to
         // 'local-only' (trashRowToUnified has no live device signal), so the
