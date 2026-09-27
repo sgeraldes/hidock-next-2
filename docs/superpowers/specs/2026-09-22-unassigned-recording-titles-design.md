@@ -64,6 +64,8 @@ vuelta.
 
 ### 1. Precedencia nueva, sólo cuando no hay reunión
 
+> Reemplazado el 25-sep: el paso "nombre de archivo" ya no existe para grabaciones; el último respaldo es "Recording, <fecha y hora>". Ver la nota del principio.
+
 `getDisplayTitle` pasa a resolver así:
 
 | Orden | Fuente | `source` |
@@ -98,6 +100,8 @@ El mismo título y la misma preferencia valen para la vista de tarjetas
 
 ### 2. El ajuste
 
+> Reemplazado el 25-sep: el ajuste se quitó de Settings y `ui.unassignedTitleSource` ya no se lee.
+
 `ui.unassignedTitleSource`, en Settings → Transcription, tres valores:
 
 - `suggested` (default): la precedencia de arriba.
@@ -109,6 +113,8 @@ título sigue apareciendo — lo que apaga es la **sugerencia de la IA**, que es
 único que él no eligió.
 
 ### 3. Renombrar desde la lista
+
+> Reemplazado en parte el 25-sep: la fila ya no muestra el nombre de archivo, ni en el tooltip ni expandida. El renombre sigue igual.
 
 El editor del lector ya existe y escribe `userTitle`. Falta llegar a él sin
 abrir el lector: **doble clic sobre el título de la fila** lo vuelve un input,
@@ -134,6 +140,8 @@ Tres reglas que salieron de la revisión adversarial y son parte del contrato:
 
 ### 4. Las 7 sin sugerencia
 
+> Reemplazado el 25-sep: las grabaciones sin sugerencia se llaman "Recording, <fecha y hora>", no por su nombre de archivo.
+
 938 de 945 ya tienen título sugerido; 7 no. Medido contra la base real el
 22-sep: esas 7 son exactamente las que **no tienen fila en
 `knowledge_captures`**, así que son también las 7 que no se pueden renombrar a
@@ -153,6 +161,8 @@ transcribe o se re-analiza, que es el camino que ya la produce para las otras
 - **Tocar el título cuando hay reunión.** El asunto del calendario sigue mandando.
 
 ## Testing
+
+> Reemplazado en parte el 25-sep: los casos del ajuste y del nombre de archivo como título se borraron; `getDisplayTitle.test.ts` prueba la precedencia nueva.
 
 - `getDisplayTitle`: las cuatro precedencias, con y sin reunión, con el ajuste en
   `suggested` y en `filename`; que `userTitle` gane incluso con el ajuste en
