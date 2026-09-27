@@ -684,6 +684,23 @@ describe('Database Service', () => {
       expect(isFilePurged('2025Dec17-212704-Rec50.mp3')).toBe(false)
       expect(isFilePurged('other.hda')).toBe(true)
     })
+
+    it('throws on a failing delete and removes nothing (single atomic statement)', () => {
+      for (const n of ['2025Dec18-090000-Rec51.hda', '2025Dec18-090000-Rec51.wav']) {
+        run('INSERT OR IGNORE INTO purged_files (filename) VALUES (?)', [n])
+      }
+      // Injected failure: any DELETE on purged_files aborts.
+      run(`CREATE TRIGGER fail_purge_delete BEFORE DELETE ON purged_files
+           BEGIN SELECT RAISE(ABORT, 'injected purge-delete failure'); END`, [])
+      try {
+        expect(() => clearPurgeTombstones('2025Dec18-090000-Rec51.wav')).toThrow('injected purge-delete failure')
+        // Nothing was removed: a half-cleared tombstone set is not possible.
+        expect(isFilePurged('2025Dec18-090000-Rec51.hda')).toBe(true)
+        expect(isFilePurged('2025Dec18-090000-Rec51.wav')).toBe(true)
+      } finally {
+        run('DROP TRIGGER fail_purge_delete', [])
+      }
+    })
   })
 
   describe('resetStuckTranscriptions()', () => {

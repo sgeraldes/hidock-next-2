@@ -7811,20 +7811,17 @@ export function isFilePurged(filename: string): boolean {
  * skip purged files, so a completed download of one is a deliberate restore.
  * Without this the restored recording stayed hidden (the Library filters
  * tombstoned names) and the folder scan refused it. Returns rows removed.
+ *
+ * All variants go in a single DELETE so the undo is atomic: a failure removes
+ * nothing and throws, and the caller (download completion) reports the restore
+ * as failed rather than leaving a half-cleared tombstone set.
  */
 export function clearPurgeTombstones(filename: string): number {
   const base = filename.replace(/\.(hda|wav|mp3)$/i, '')
   const names = [...new Set([filename, `${base}.hda`, `${base}.wav`, `${base}.mp3`])]
-  let removed = 0
-  try {
-    for (const name of names) {
-      run('DELETE FROM purged_files WHERE filename = ?', [name])
-      removed += getDatabase().getRowsModified()
-    }
-  } catch {
-    return removed
-  }
-  return removed
+  const placeholders = names.map(() => '?').join(', ')
+  run(`DELETE FROM purged_files WHERE filename IN (${placeholders})`, names)
+  return getDatabase().getRowsModified()
 }
 
 export function getPurgedFilenames(): string[] {
