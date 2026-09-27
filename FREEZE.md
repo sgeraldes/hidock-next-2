@@ -97,7 +97,31 @@ F3. `saveDeviceFilesCache` (database.ts:7876-7897): same DELETE + N auto-committ
 
 ## Changes
 
-(to be filled during step 2)
+F1. apps/electron/electron/main/services/download-service.ts
+  - `getFilesToSync` (:520) now reconciles the whole snapshot inside ONE
+    `runInTransaction` (was: every per-file write its own WAL commit).
+  - New `getFilesToSyncBatched` (:538): same work in chunks of 100 with a
+    `setImmediate` yield between chunks (mirrors backfillTranscriptIntegrity,
+    database.ts:7413). The IPC handler `download-service:get-files-to-sync`
+    (:1697) now awaits the batched variant, so a 2,139-file reconcile no
+    longer blocks the main thread in one stretch.
+  - Per-file loop body extracted verbatim into `reconcileDeviceFile` (:572);
+    post-loop event + summary into `finishReconcile`. Behaviour identical.
+  - Purge tombstones loaded ONCE per reconcile via `getPurgedFilenames()` into
+    a Set (was: 4 `isFilePurged` SELECTs per device file => ~8,500 queries per
+    reconcile at 2,139 files).
+
+F2. apps/electron/electron/main/ipc/device-cache-handlers.ts:44-59
+  - `deviceCache:saveAll` DELETE + N INSERTs now wrapped in one
+    `runInTransaction` (was: ~2,140 individual commits after every scan).
+
+F3. apps/electron/electron/main/services/database.ts:7876
+  - `saveDeviceFilesCache` uses `runInTransaction` + `runNoSave` (same pattern).
+
+Existing tests updated (mock surface only): the seven download-service test
+files that mock `../database` now export `getPurgedFilenames` from the mock
+(download-service.test.ts, -b007, -c004, -cancel, -r4-logspam,
+-stale-synced-row, -session-c5); c004 derives it from its mockPurgedFiles set.
 
 ## Tests added
 

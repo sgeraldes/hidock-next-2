@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron'
-import { getDatabase, queryAll, run } from '../services/database'
+import { getDatabase, queryAll, run, runInTransaction } from '../services/database'
 
 // Device cache stores the list of files from the HiDock device for offline access
 // This allows the UI to show the device file list even when disconnected
@@ -41,18 +41,24 @@ export function registerDeviceCacheHandlers(): void {
         )
       `)
 
-      // Clear existing cache
-      db.run('DELETE FROM device_file_cache')
+      // Clear + reinsert in ONE transaction: after every scan this writes the
+      // whole device list (2,000+ rows on a loaded device), and per-statement
+      // auto-commit made that thousands of individual WAL commits on the main
+      // thread. Same writes, one commit.
+      runInTransaction(() => {
+        // Clear existing cache
+        db.run('DELETE FROM device_file_cache')
 
-      // Insert new files
-      const stmt = db.prepare(
-        'INSERT INTO device_file_cache (filename, size, duration, dateCreated) VALUES (?, ?, ?, ?)'
-      )
+        // Insert new files
+        const stmt = db.prepare(
+          'INSERT INTO device_file_cache (filename, size, duration, dateCreated) VALUES (?, ?, ?, ?)'
+        )
 
-      for (const file of files) {
-        stmt.run([file.filename, file.size, file.duration, file.dateCreated])
-      }
-      stmt.free()
+        for (const file of files) {
+          stmt.run([file.filename, file.size, file.duration, file.dateCreated])
+        }
+        stmt.free()
+      })
 
       console.log(`[DeviceCache] Cached ${files.length} files`)
     } catch (error) {

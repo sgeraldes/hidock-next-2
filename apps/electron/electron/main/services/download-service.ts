@@ -56,6 +56,22 @@ export interface DownloadSkip {
   reason: string
 }
 
+/** One device file as the file-list scan reports it. */
+export type DeviceFileSnapshot = { filename: string; size: number; duration: number; dateCreated: Date }
+/** The same file after reconciliation, with the reason it needs no download. */
+export type ReconciledDeviceFile = DeviceFileSnapshot & { skipReason?: string }
+
+/** Accumulated state for one getFilesToSync / getFilesToSyncBatched pass. */
+interface ReconcileContext {
+  results: ReconciledDeviceFile[]
+  skippedCount: number
+  queuedCount: number
+  reconciledCount: number
+  enrichmentFailureCount: number
+  newlyDiscovered: Recording[]
+  purged: Set<string>
+}
+
 /**
  * D-022 — queueDownloads reports both halves of what it did. Callers that only
  * look at `queued` still behave correctly; callers that care about a file they
@@ -492,102 +508,154 @@ export class DownloadService {
   }
 
   /**
-   * Get files that need to be synced from a list
+   * Get files that need to be synced from a list.
+   *
+   * The whole snapshot is reconciled inside ONE transaction: without it every
+   * per-file upsert / synced_files heal / processing run is its own WAL commit
+   * (~2,139 commits per scan at the owner's library size), and a reconcile on a
+   * full device held the main thread long enough to freeze every window.
+   * Behaviour is unchanged — per-file failures were already contained inside
+   * the loop body.
    */
-  getFilesToSync(deviceFiles: Array<{ filename: string; size: number; duration: number; dateCreated: Date }>): Array<{ filename: string; size: number; duration: number; dateCreated: Date; skipReason?: string }> {
-    const results: Array<{ filename: string; size: number; duration: number; dateCreated: Date; skipReason?: string }> = []
-    let skippedCount = 0
-    let queuedCount = 0
-    let reconciledCount = 0
-    let enrichmentFailureCount = 0
-    const newlyDiscovered: Recording[] = []
-
-    for (const file of deviceFiles) {
-      // v51 — AUTOMATIC reconciliation must never resurrect a hard-purged
-      // recording: tombstoned files are skipped silently (anti-resurrection).
-      // An explicit per-file download (queueDownloads) is still allowed —
-      // re-downloading on purpose is the user's call.
-      const purgeVariants = [
-        file.filename,
-        file.filename.replace(/\.hda$/i, '.wav'),
-        file.filename.replace(/\.wav$/i, '.hda'),
-        file.filename.replace(/\.(hda|wav)$/i, '.mp3'),
-      ]
-      if (purgeVariants.some((v) => isFilePurged(v))) {
-        skippedCount++
-        results.push({ ...file, skipReason: 'Permanently deleted (purge tombstone)' })
-        continue
+  getFilesToSync(deviceFiles: DeviceFileSnapshot[]): ReconciledDeviceFile[] {
+    const ctx = this.beginReconcile()
+    runInTransaction(() => {
+      for (const file of deviceFiles) {
+        this.reconcileDeviceFile(file, ctx)
       }
+    })
+    return this.finishReconcile(ctx)
+  }
 
-      // Resolve factual local/synced state BEFORE the metadata upsert. If this
-      // snapshot is merely rediscovering a historical local file, it must not
-      // be announced as a new recording or launch hundreds of enrichments.
-      const { synced, reason } = this.isFileAlreadySynced(file.filename)
+  /**
+   * Batched variant for the IPC path (a full device reconcile arrives as one
+   * `download-service:get-files-to-sync` call). Same work and same result as
+   * getFilesToSync, processed in chunks of `batchSize` with a setImmediate
+   * yield between chunks so a 2,000+ file reconcile lets the main thread
+   * breathe — the same pattern backfillTranscriptIntegrity uses (batches of
+   * 100 with setImmediate) after an unbatched loop froze startup for 2.2 s.
+   */
+  async getFilesToSyncBatched(
+    deviceFiles: DeviceFileSnapshot[],
+    batchSize = 100
+  ): Promise<ReconciledDeviceFile[]> {
+    const ctx = this.beginReconcile()
+    for (let i = 0; i < deviceFiles.length; i += batchSize) {
+      const chunk = deviceFiles.slice(i, i + batchSize)
+      runInTransaction(() => {
+        for (const file of chunk) {
+          this.reconcileDeviceFile(file, ctx)
+        }
+      })
+      if (i + batchSize < deviceFiles.length) {
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      }
+    }
+    return this.finishReconcile(ctx)
+  }
 
-      // SPEC-009: discovery itself is a durable ingestion event. Persist all
-      // metadata the device already knows and correlate it with the calendar
-      // before deciding whether a download is required. This makes the filename,
-      // time, duration, and provisional meeting visible immediately—even while
-      // the audio is still device-only.
-      try {
-        const previous = getRecordingByFilename(file.filename)
-        const recording = upsertRecordingFromDevice(file)
-        const isNewUnsyncedRecording = !previous && !synced
-        if (isNewUnsyncedRecording) {
-          const metadataRun = createProcessingRun({
-            recordingId: recording.id,
-            stage: 'metadata',
-            provider: 'hidock-device',
-            tool: 'jensen-file-list',
-            execution: 'local'
-          })
-          completeProcessingRun(metadataRun.id, {
-            outputRefs: {
-              filename: recording.filename,
-              dateRecorded: recording.date_recorded,
-              durationSeconds: recording.duration_seconds,
-              fileSize: recording.file_size
-            }
-          })
-        }
-        const previousDate = previous ? new Date(previous.date_recorded).getTime() : Number.NaN
-        const incomingDate = file.dateCreated.getTime()
-        const metadataChanged = !!previous && !synced && (
-          previous.duration_seconds == null
-          || Math.abs(previous.duration_seconds - file.duration) > 1
-          || !Number.isFinite(previousDate)
-          || Math.abs(previousDate - incomingDate) > 1000
-        )
-        if (isNewUnsyncedRecording || metadataChanged) {
-          enrichRecordingScheduleMetadata(recording.id)
-        }
-        if (isNewUnsyncedRecording) {
-          newlyDiscovered.push(recording)
-        }
-      } catch {
-        // Metadata enrichment is observable but non-blocking: a repair can run
-        // at the auto-transcription gate. Aggregate failures to avoid per-file spam.
-        enrichmentFailureCount++
-      }
-      if (synced) {
-        skippedCount++
-        // BUG-R4: files that were healed into synced_files during this pass
-        // (found on disk / in recordings table) used to log one line each.
-        // Count them and report the total on the single summary line below.
-        if (reason.includes('reconciled') || reason === 'In recordings table with valid file') {
-          reconciledCount++
-        }
-      } else {
-        queuedCount++
-      }
-      results.push({ ...file, skipReason: synced ? reason : undefined })
+  private beginReconcile(): ReconcileContext {
+    return {
+      results: [],
+      skippedCount: 0,
+      queuedCount: 0,
+      reconciledCount: 0,
+      enrichmentFailureCount: 0,
+      newlyDiscovered: [],
+      // v51 purge tombstones, loaded ONCE per reconcile: the per-file
+      // isFilePurged() lookup was 4 SELECTs per device file (~8,500 queries
+      // per reconcile at 2,139 files).
+      purged: new Set(getPurgedFilenames())
+    }
+  }
+
+  private reconcileDeviceFile(file: DeviceFileSnapshot, ctx: ReconcileContext): void {
+    // v51 — AUTOMATIC reconciliation must never resurrect a hard-purged
+    // recording: tombstoned files are skipped silently (anti-resurrection).
+    // An explicit per-file download (queueDownloads) is still allowed —
+    // re-downloading on purpose is the user's call.
+    const purgeVariants = [
+      file.filename,
+      file.filename.replace(/\.hda$/i, '.wav'),
+      file.filename.replace(/\.wav$/i, '.hda'),
+      file.filename.replace(/\.(hda|wav)$/i, '.mp3'),
+    ]
+    if (purgeVariants.some((v) => ctx.purged.has(v))) {
+      ctx.skippedCount++
+      ctx.results.push({ ...file, skipReason: 'Permanently deleted (purge tombstone)' })
+      return
     }
 
+    // Resolve factual local/synced state BEFORE the metadata upsert. If this
+    // snapshot is merely rediscovering a historical local file, it must not
+    // be announced as a new recording or launch hundreds of enrichments.
+    const { synced, reason } = this.isFileAlreadySynced(file.filename)
+
+    // SPEC-009: discovery itself is a durable ingestion event. Persist all
+    // metadata the device already knows and correlate it with the calendar
+    // before deciding whether a download is required. This makes the filename,
+    // time, duration, and provisional meeting visible immediately—even while
+    // the audio is still device-only.
+    try {
+      const previous = getRecordingByFilename(file.filename)
+      const recording = upsertRecordingFromDevice(file)
+      const isNewUnsyncedRecording = !previous && !synced
+      if (isNewUnsyncedRecording) {
+        const metadataRun = createProcessingRun({
+          recordingId: recording.id,
+          stage: 'metadata',
+          provider: 'hidock-device',
+          tool: 'jensen-file-list',
+          execution: 'local'
+        })
+        completeProcessingRun(metadataRun.id, {
+          outputRefs: {
+            filename: recording.filename,
+            dateRecorded: recording.date_recorded,
+            durationSeconds: recording.duration_seconds,
+            fileSize: recording.file_size
+          }
+        })
+      }
+      const previousDate = previous ? new Date(previous.date_recorded).getTime() : Number.NaN
+      const incomingDate = file.dateCreated.getTime()
+      const metadataChanged = !!previous && !synced && (
+        previous.duration_seconds == null
+        || Math.abs(previous.duration_seconds - file.duration) > 1
+        || !Number.isFinite(previousDate)
+        || Math.abs(previousDate - incomingDate) > 1000
+      )
+      if (isNewUnsyncedRecording || metadataChanged) {
+        enrichRecordingScheduleMetadata(recording.id)
+      }
+      if (isNewUnsyncedRecording) {
+        ctx.newlyDiscovered.push(recording)
+      }
+    } catch {
+      // Metadata enrichment is observable but non-blocking: a repair can run
+      // at the auto-transcription gate. Aggregate failures to avoid per-file spam.
+      ctx.enrichmentFailureCount++
+    }
+    if (synced) {
+      ctx.skippedCount++
+      // BUG-R4: files that were healed into synced_files during this pass
+      // (found on disk / in recordings table) used to log one line each.
+      // Count them and report the total on the single summary line below.
+      if (reason.includes('reconciled') || reason === 'In recordings table with valid file') {
+        ctx.reconciledCount++
+      }
+    } else {
+      ctx.queuedCount++
+    }
+    ctx.results.push({ ...file, skipReason: synced ? reason : undefined })
+  }
+
+  private finishReconcile(ctx: ReconcileContext): ReconciledDeviceFile[] {
     // A device list is one snapshot, not N independent arrivals. Publish one
     // coalesced event after every row is durable so the renderer performs one
     // local rebuild and one toast instead of a full-library refresh per file.
-    if (newlyDiscovered.length > 0) {
-      const newest = newlyDiscovered.reduce((latest, recording) =>
+    if (ctx.newlyDiscovered.length > 0) {
+      const newest = ctx.newlyDiscovered.reduce((latest, recording) =>
         new Date(recording.date_recorded).getTime() > new Date(latest.date_recorded).getTime()
           ? recording
           : latest
@@ -595,7 +663,7 @@ export class DownloadService {
       for (const window of BrowserWindow.getAllWindows()) {
         window.webContents.send('recording:new', {
           recording: newest,
-          count: newlyDiscovered.length
+          count: ctx.newlyDiscovered.length
         })
       }
     }
@@ -603,12 +671,12 @@ export class DownloadService {
     // BUG-R4: ONE summary line per reconciliation (was 1300+ per-file lines).
     // reconciled suffix only appears when files were actually healed this pass,
     // so the steady-state line stays "N files skipped (already synced), M files queued".
-    const reconciledNote = reconciledCount > 0 ? ` (${reconciledCount} reconciled from disk/recordings)` : ''
-    console.log(`[DownloadService] Reconciliation: ${skippedCount} files skipped (already synced)${reconciledNote}, ${queuedCount} files queued`)
-    if (enrichmentFailureCount > 0) {
-      console.warn(`[DownloadService] Metadata enrichment deferred for ${enrichmentFailureCount} file(s)`)
+    const reconciledNote = ctx.reconciledCount > 0 ? ` (${ctx.reconciledCount} reconciled from disk/recordings)` : ''
+    console.log(`[DownloadService] Reconciliation: ${ctx.skippedCount} files skipped (already synced)${reconciledNote}, ${ctx.queuedCount} files queued`)
+    if (ctx.enrichmentFailureCount > 0) {
+      console.warn(`[DownloadService] Metadata enrichment deferred for ${ctx.enrichmentFailureCount} file(s)`)
     }
-    return results
+    return ctx.results
   }
 
   /**
@@ -1590,9 +1658,11 @@ export function registerDownloadServiceHandlers(): void {
     return service.isFileAlreadySynced(filename)
   })
 
-  // Get files to sync from a list
+  // Get files to sync from a list. A full device reconcile is thousands of
+  // files; the batched variant chunks the work and yields between chunks so
+  // the main thread stays responsive (see getFilesToSyncBatched).
   ipcMain.handle('download-service:get-files-to-sync', (_, files: Array<{ filename: string; size: number; duration: number; dateCreated: Date }>) => {
-    return service.getFilesToSync(files)
+    return service.getFilesToSyncBatched(files)
   })
 
   // v51 — purge-tombstoned filenames (all variants), so the device file list

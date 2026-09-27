@@ -7880,20 +7880,25 @@ export function saveDeviceFilesCache(files: Array<{
   duration_seconds?: number
   date_recorded: string
 }>): void {
-  // Clear existing cache
-  run('DELETE FROM device_files_cache')
+  // Clear + reinsert in ONE transaction: this rewrites the whole device list
+  // (2,000+ rows on a loaded device) and per-statement auto-commit made that
+  // thousands of individual WAL commits. Same writes, one commit.
+  runInTransaction(() => {
+    // Clear existing cache
+    runNoSave('DELETE FROM device_files_cache')
 
-  // Insert new cache entries
-  for (const file of files) {
-    const id = `cache_${file.filename.replace(/[^a-zA-Z0-9]/g, '_')}`
-    // Accept both 'size' and 'file_size' for flexibility
-    const fileSize = file.size ?? file.file_size ?? null
-    run(
-      `INSERT OR REPLACE INTO device_files_cache (id, filename, file_size, duration_seconds, date_recorded)
-       VALUES (?, ?, ?, ?, ?)`,
-      [id, file.filename, fileSize, file.duration_seconds ?? null, file.date_recorded]
-    )
-  }
+    // Insert new cache entries
+    for (const file of files) {
+      const id = `cache_${file.filename.replace(/[^a-zA-Z0-9]/g, '_')}`
+      // Accept both 'size' and 'file_size' for flexibility
+      const fileSize = file.size ?? file.file_size ?? null
+      runNoSave(
+        `INSERT OR REPLACE INTO device_files_cache (id, filename, file_size, duration_seconds, date_recorded)
+         VALUES (?, ?, ?, ?, ?)`,
+        [id, file.filename, fileSize, file.duration_seconds ?? null, file.date_recorded]
+      )
+    }
+  })
 }
 
 export function clearDeviceFilesCache(): void {

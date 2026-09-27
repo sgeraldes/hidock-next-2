@@ -46,6 +46,7 @@ vi.mock('../database', () => ({
       : undefined,
   removeSyncedFile: vi.fn(),
   isFilePurged: (filename: string) => mockPurgedFiles.has(filename),
+  getPurgedFilenames: () => [...mockPurgedFiles],
   getRecordingByFilename: vi.fn(() => null),
   getSyncedFilenames: vi.fn(() => new Set()),
   queryOne: vi.fn(() => null),
