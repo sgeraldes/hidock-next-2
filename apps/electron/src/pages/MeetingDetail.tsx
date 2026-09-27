@@ -895,7 +895,11 @@ export function MeetingDetail() {
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-2">
                           <Mic className="h-4 w-4 text-green-600" />
-                          <span className="font-medium">{recording.filename}</span>
+                          {/* A recording's file name is never shown (owner, 25-sep-2026):
+                              the suggested title, else a neutral label with the date. */}
+                          <span className="font-medium">
+                            {recording.transcript?.title_suggestion?.trim() || `Recording, ${formatDateTime(recording.date_recorded)}`}
+                          </span>
                         </div>
                         <div className="flex items-center gap-2">
                           {(() => {

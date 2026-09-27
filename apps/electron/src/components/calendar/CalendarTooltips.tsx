@@ -71,10 +71,8 @@ export const RecordingTooltipContent = memo(function RecordingTooltipContent({ r
           Recording
         </div>
         <div className="text-xs space-y-1">
-          <div className="flex items-center gap-2">
-            <span className="text-muted-foreground">File:</span>
-            <span className="font-mono text-[11px] truncate">{recording.filename}</span>
-          </div>
+          {/* No "File:" line: a recording's file name is never shown to the user
+              (owner, 25-sep-2026); it lives only in the reader's Metadata. */}
           <div className="flex items-center gap-2">
             <span className="text-muted-foreground">Recorded:</span>
             <span>

@@ -66,6 +66,7 @@ import {
 import { matchesDurationPreset } from '@/features/library/utils/durationFilter'
 import { trashRowToUnified } from '@/features/library/utils/trashRow'
 import type { DatabaseRecording } from '@/hooks/useUnifiedRecordings'
+import { getDisplayTitle } from '@/features/library/utils/getDisplayTitle'
 import {
   softDeleteConfirmDescription,
   deviceDeleteConfirmDescription,
@@ -90,6 +91,12 @@ import { useOperations } from '@/hooks/useOperations'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { useTranscriptionStore } from '@/store/features/useTranscriptionStore'
 import { isFeatureOffThisRun } from '@/lib/bootFeatures'
+
+/** How a recording is named in messages: its display title, never its file name
+ * (owner, 25-sep-2026: the file name lives only in the reader's Metadata). */
+function nameOf(recording: Parameters<typeof getDisplayTitle>[0]): string {
+  return getDisplayTitle(recording).primaryText
+}
 
 const COMPACT_ROW_HEIGHT_PX = 48
 
@@ -141,7 +148,7 @@ export function Library() {
   const [purgedFilenameBases, setPurgedFilenameBases] = useState<Set<string>>(new Set())
   const [permanentDeleteProgress, setPermanentDeleteProgress] = useState<{
     recordingId: string
-    filename: string
+    label: string
     stage: PermanentDeleteStage
   } | null>(null)
 
@@ -1358,7 +1365,7 @@ export function Library() {
           const impact = impacts.get(recording.id)
           setBulkProgress({ current: i + 1, total: selectedRecordings.length })
           const initialStage: PermanentDeleteStage = isDeviceOnly(recording) ? 'erasing-device' : 'removing-local'
-          setPermanentDeleteProgress({ recordingId: recording.id, filename: recording.filename, stage: initialStage })
+          setPermanentDeleteProgress({ recordingId: recording.id, label: nameOf(recording), stage: initialStage })
           announce(
             initialStage === 'erasing-device'
               ? `Erasing device copy ${i + 1} of ${selectedRecordings.length}`
@@ -1369,7 +1376,7 @@ export function Library() {
               // Device-only rows have no local data to purge. Permanent deletion
               // therefore requires deleting their sole copy from the hardware.
               if (!alsoDeleteFromDevice) {
-                failures.push(`${recording.filename}: device copy was kept`)
+                failures.push(`${nameOf(recording)}: device copy was kept`)
                 continue
               }
               const ok = await deviceService.deleteRecording(recording.deviceFilename)
@@ -1414,7 +1421,7 @@ export function Library() {
               try {
                 setPermanentDeleteProgress({
                   recordingId: recording.id,
-                  filename: targetDeviceFilename,
+                  label: nameOf(recording),
                   stage: 'erasing-device'
                 })
                 announce(`Removed from Library. Erasing device copy ${i + 1} of ${selectedRecordings.length}`)
@@ -1453,7 +1460,7 @@ export function Library() {
               }
             }
           } catch (e) {
-            failures.push(`${recording.filename}: ${e instanceof Error ? e.message : String(e)}`)
+            failures.push(`${nameOf(recording)}: ${e instanceof Error ? e.message : String(e)}`)
           }
         }
 
@@ -1583,8 +1590,8 @@ export function Library() {
   const executeDeleteFromDevice = useCallback(async (recording: UnifiedRecording) => {
     if (!('deviceFilename' in recording)) return
     setDeleting(recording.id)
-    setPermanentDeleteProgress({ recordingId: recording.id, filename: recording.deviceFilename, stage: 'erasing-device' })
-    announce(`Erasing the device copy for ${recording.filename}`)
+    setPermanentDeleteProgress({ recordingId: recording.id, label: nameOf(recording), stage: 'erasing-device' })
+    announce(`Erasing the device copy for ${nameOf(recording)}`)
     try {
       const deviceService = getHiDockDeviceService()
       const ok = await deviceService.deleteRecording(recording.deviceFilename)
@@ -1604,17 +1611,17 @@ export function Library() {
         if (viewMayBeStale) {
           toast.warning(
             'Device file is absent — view may be stale',
-            `The HiDock no longer has "${recording.filename}", but the Library could not fully refresh. Use Refresh to reconcile the view.`
+            `The HiDock no longer has "${nameOf(recording)}", but the Library could not fully refresh. Use Refresh to reconcile the view.`
           )
         } else {
-          toast.success(SUCCESS_REMOVED_FROM_DEVICE_TITLE, `"${recording.filename}" was erased from the HiDock.`)
+          toast.success(SUCCESS_REMOVED_FROM_DEVICE_TITLE, `"${nameOf(recording)}" was erased from the HiDock.`)
         }
       })
     } catch (e) {
       console.error('Failed to delete from device:', e)
       import('@/components/ui/toaster').then(({ toast }) => {
         const reason = e instanceof Error ? e.message : String(e)
-        toast.error('Device copy remains', `${reason} ${recording.filename} is still on the device.`)
+        toast.error('Device copy remains', `${reason} ${nameOf(recording)} is still on the device.`)
       })
     } finally {
       setDeleting(null)
@@ -1652,7 +1659,7 @@ export function Library() {
       if (currentlyPlayingId === recording.id) audioControls.stop()
       if (selectedSourceId === recording.id) setSelectedSourceId(null)
       import('@/components/ui/toaster').then(({ toast }) => {
-        toast.success(SUCCESS_MOVED_TO_TRASH_TITLE, `"${recording.filename}" is hidden and excluded from processing.`, {
+        toast.success(SUCCESS_MOVED_TO_TRASH_TITLE, `"${nameOf(recording)}" is hidden and excluded from processing.`, {
           duration: 8000,
           action: {
             label: 'Undo',
@@ -1667,7 +1674,7 @@ export function Library() {
     } catch (e) {
       console.error('Failed to delete local file:', e)
       import('@/components/ui/toaster').then(({ toast }) => {
-        toast.error('Delete Failed', `Failed to delete "${recording.filename}". Please try again.`)
+        toast.error('Delete Failed', `Failed to delete "${nameOf(recording)}". Please try again.`)
       })
     } finally {
       setDeleting(null)
@@ -1711,8 +1718,8 @@ export function Library() {
     impact?: DeletePermanentDialogImpact
   ) => {
     setDeleting(recording.id)
-    setPermanentDeleteProgress({ recordingId: recording.id, filename: recording.filename, stage: 'removing-local' })
-    announce(`Removing local data for ${recording.filename}`)
+    setPermanentDeleteProgress({ recordingId: recording.id, label: nameOf(recording), stage: 'removing-local' })
+    announce(`Removing local data for ${nameOf(recording)}`)
     try {
       const res = opts?.skipGraphCleanup
         ? await window.electronAPI.recordings.deleteCascade(recording.id, true, { skipGraphCleanup: true })
@@ -1773,10 +1780,10 @@ export function Library() {
         } else {
           setPermanentDeleteProgress({
             recordingId: recording.id,
-            filename: targetDeviceFilename,
+            label: nameOf(recording),
             stage: 'erasing-device'
           })
-          announce(`Removed from Library. Erasing the device copy for ${recording.filename}`)
+          announce(`Removed from Library. Erasing the device copy for ${nameOf(recording)}`)
           // One main-process operation handles both connected and disconnected
           // states: attempt the hardware erase exactly once and durably journal
           // it on failure. The old connected branch bypassed the journal, so a
@@ -1938,14 +1945,14 @@ export function Library() {
       if (!res?.success) throw new Error('Restore failed')
       await refresh(false)
       await loadTrash()
-      announce(`Restored "${recording.filename}"`)
+      announce(`Restored "${nameOf(recording)}"`)
       import('@/components/ui/toaster').then(({ toast }) => {
-        toast.success(SUCCESS_RESTORED_TITLE, `"${recording.filename}" is back in your Library.`)
+        toast.success(SUCCESS_RESTORED_TITLE, `"${nameOf(recording)}" is back in your Library.`)
       })
     } catch (e) {
       console.error('Failed to restore recording:', e)
       import('@/components/ui/toaster').then(({ toast }) => {
-        toast.error('Restore Failed', `Failed to restore "${recording.filename}". Please try again.`)
+        toast.error('Restore Failed', `Failed to restore "${nameOf(recording)}". Please try again.`)
       })
     }
   }, [refresh, loadTrash, announce])
@@ -1965,7 +1972,7 @@ export function Library() {
           if (!res?.success) throw new Error('Restore failed')
           restored++
         } catch (e) {
-          failures.push(`${recording.filename}: ${e instanceof Error ? e.message : String(e)}`)
+          failures.push(`${nameOf(recording)}: ${e instanceof Error ? e.message : String(e)}`)
         }
       }
       await refresh(false)
@@ -1994,14 +2001,14 @@ export function Library() {
         toast.success(
           next ? 'Marked personal' : 'Unmarked personal',
           next
-            ? `"${recording.filename}" is kept but excluded from AI processing and default views.`
-            : `"${recording.filename}" is back in AI processing and views.`
+            ? `"${nameOf(recording)}" is kept but excluded from AI processing and default views.`
+            : `"${nameOf(recording)}" is back in AI processing and views.`
         )
       })
     } catch (e) {
       console.error('Failed to toggle personal:', e)
       import('@/components/ui/toaster').then(({ toast }) => {
-        toast.error('Action Failed', `Could not update "${recording.filename}".`)
+        toast.error('Action Failed', `Could not update "${nameOf(recording)}".`)
       })
     }
   }, [refresh])
@@ -2017,14 +2024,14 @@ export function Library() {
         toast.success(
           rating === 'unrated' ? 'Rating cleared' : 'Rating updated',
           rating === 'unrated'
-            ? `"${recording.filename}" rating was cleared.`
-            : `"${recording.filename}" marked ${rating.replace('-', ' ')}.`
+            ? `"${nameOf(recording)}" rating was cleared.`
+            : `"${nameOf(recording)}" marked ${rating.replace('-', ' ')}.`
         )
       })
     } catch (e) {
       console.error('Failed to set value rating:', e)
       import('@/components/ui/toaster').then(({ toast }) => {
-        toast.error('Action Failed', `Could not update the rating for "${recording.filename}".`)
+        toast.error('Action Failed', `Could not update the rating for "${nameOf(recording)}".`)
       })
     }
   }, [refresh])
@@ -2656,8 +2663,8 @@ export function Library() {
                       ? `Erasing device copies… ${bulkProgress.current} of ${bulkProgress.total}`
                       : 'Erasing device copy…'}
                 </p>
-                <p className="truncate text-muted-foreground" title={permanentDeleteProgress.filename}>
-                  {permanentDeleteProgress.filename}
+                <p className="truncate text-muted-foreground" title={permanentDeleteProgress.label}>
+                  {permanentDeleteProgress.label}
                 </p>
               </div>
             </div>

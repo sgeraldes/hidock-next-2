@@ -88,8 +88,10 @@ describe('ActionableDetail source resolution', () => {
 
     renderDetail('r-42')
 
-    // Uses the recording's friendly name and links into the Library.
-    const link = await screen.findByRole('button', { name: /standup\.wav/i })
+    // Links into the Library under a neutral label, never the file name
+    // (owner, 25-sep-2026); the date shows beside it.
+    const link = await screen.findByRole('button', { name: /^recording\b/i })
+    expect(screen.queryByText(/standup\.wav|rec_2026-06-01\.wav/i)).not.toBeInTheDocument()
     expect(link).toBeInTheDocument()
     expect(mockRecordingsGetById).toHaveBeenCalledWith('r-42')
 
@@ -112,7 +114,7 @@ describe('ActionableDetail source resolution', () => {
 
     renderDetail('r-7')
 
-    const link = await screen.findByRole('button', { name: /open meeting kickoff\.wav/i })
+    const link = await screen.findByRole('button', { name: /open meeting recording/i })
     expect(link).toBeInTheDocument()
   })
 
