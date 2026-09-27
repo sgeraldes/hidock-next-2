@@ -1355,7 +1355,10 @@ export class DownloadService {
     }
 
     if (count > 0 || alreadySynced.length > 0) {
-      this.state.isPaused = false
+      // Only a MANUAL retry unpauses the queue: it is the owner asking for work
+      // to move again. The automatic reconnect retry (interruptedOnly=true) must
+      // leave a deliberate pause untouched.
+      if (!interruptedOnly) this.state.isPaused = false
       this.markDirty()
       this.emitStateUpdate(true) // C-004: immediate emit for retry status changes
     }
@@ -1460,7 +1463,9 @@ export class DownloadService {
     if (this.cancelLock) return
     try {
       this.cancelLock = true
-      this.state.isPaused = true
+      // NOTE: cancelAll deliberately does NOT touch isPaused. Cancelling empties
+      // the queue, which stops the renderer's drain loop on its own; pausing here
+      // would silently block every future download until a manual resume.
 
       const activeFilename = getActiveTransferFilename()
       const activeItem = activeFilename ? this.state.queue.get(activeFilename) : undefined
@@ -1529,6 +1534,37 @@ export class DownloadService {
     } finally {
       this.cancelLock = false
     }
+  }
+
+  /**
+   * Queue-level pause: stop STARTING new downloads. Mirrors the transcription
+   * queue's pauseQueue: the item actively streaming on the USB bus finishes (a
+   * mid-transfer abort is what cancel/cancelAll are for), and the renderer's
+   * drain loop checks this flag before every dequeue, so nothing new starts
+   * until resume(). In-memory on purpose, like the transcription pause: a
+   * restart resumes processing.
+   */
+  pause(): void {
+    if (!this.state.isPaused) {
+      this.state.isPaused = true
+      console.log('[DownloadService] Downloads paused (in-flight download, if any, will finish)')
+      emitActivityLog('info', 'Downloads paused', 'Queued downloads stay pending until Resume')
+    }
+    this.emitStateUpdate(true)
+  }
+
+  /**
+   * Resume dequeuing. The emitted state update carries the still-pending items,
+   * and the renderer's state-update subscription restarts the drain loop — no
+   * separate kick needed here.
+   */
+  resume(): void {
+    if (this.state.isPaused) {
+      this.state.isPaused = false
+      console.log('[DownloadService] Downloads resumed')
+      emitActivityLog('info', 'Downloads resumed')
+    }
+    this.emitStateUpdate(true)
   }
 
   /**
@@ -1730,6 +1766,19 @@ export function registerDownloadServiceHandlers(): void {
   // Cancel all. Resolves after the in-flight USB transfer has been aborted and settled.
   ipcMain.handle('download-service:cancel-all', async () => {
     await service.cancelAll()
+  })
+
+  // Queue-level pause: no new downloads start (the in-flight one finishes).
+  // Teardown-classified: a stop op with zero device I/O, so it stays reachable
+  // while a device-sync disable is pending.
+  ipcMain.handle('download-service:pause', () => {
+    service.pause()
+  })
+
+  // Resume dequeuing. Initiation-gated like queue-downloads/start-session: with
+  // device-sync disabled there is nothing legitimate to resume.
+  ipcMain.handle('download-service:resume', () => {
+    service.resume()
   })
 
   // Retry failed downloads

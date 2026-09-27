@@ -702,6 +702,10 @@ export const TEARDOWN_CHANNELS: string[] = [
   'download-service:is-file-synced',
   'download-service:mark-failed',
   'download-service:notify-completion',
+  // pause stops NEW downloads from starting and flips only an in-memory flag —
+  // zero device I/O, a stop op. download-service:resume is deliberately NOT here:
+  // it restarts device work, so it takes the initiation gate.
+  'download-service:pause',
   'download-service:update-progress',
   // --- assistant: cancel/cleanup of in-flight AI work ---
   'rag:cancel',

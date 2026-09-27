@@ -1075,6 +1075,9 @@ export interface ElectronAPI {
     dismiss: (filename: string) => Promise<boolean>
     cancel: (filename: string) => Promise<{ success: boolean; error?: string }>
     cancelAll: () => Promise<void>
+    /** Pause starting new downloads (the in-flight one finishes); resume restarts the drain. */
+    pause: () => Promise<void>
+    resume: () => Promise<void>
     retryFailed: (deviceConnected?: boolean, interruptedOnly?: boolean) => Promise<{ count: number; error?: string }>
     getStats: () => Promise<{ totalSynced: number; pendingInQueue: number; failedInQueue: number }>
     checkStalled: () => Promise<number>
@@ -1983,6 +1986,8 @@ const electronAPI: ElectronAPI = {
     dismiss: (filename) => callIPC('download-service:dismiss', filename),
     cancel: (filename) => callIPC('download-service:cancel', filename),
     cancelAll: () => callIPC('download-service:cancel-all'),
+    pause: () => callIPC('download-service:pause'),
+    resume: () => callIPC('download-service:resume'),
     retryFailed: (deviceConnected?: boolean, interruptedOnly?: boolean) => callIPC('download-service:retry-failed', deviceConnected, interruptedOnly),
     getStats: () => callIPC('download-service:get-stats'),
     checkStalled: () => callIPC('download-service:check-stalled'),
