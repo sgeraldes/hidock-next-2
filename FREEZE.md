@@ -169,4 +169,24 @@ npx vitest run electron/main/services/__tests__/download-service-stale-synced-ro
 
 ## How to verify
 
-(to be filled at the end)
+From apps/electron (dependencies installed — NOT this worktree):
+
+1. Typecheck the main-process code:
+   `npm run typecheck:node`
+2. New tests (see "Tests added" for the full list, including the seven
+   touched-mock suites):
+   `npx vitest run electron/main/services/__tests__/download-service-reconcile-batch.test.ts electron/main/ipc/__tests__/device-cache-handlers.test.ts electron/main/services/__tests__/device-files-cache.test.ts`
+3. Whole suite for regressions: `npm run test:run`
+4. Lint: `npm run lint`
+5. Real device: connect the HiDock with the 2,139-file library, watch the
+   scan. Expected: the window stays responsive during "Scanning files" and
+   the reconcile that follows; the Activity Log still shows one
+   "Reconciliation: N files skipped (already synced), M files queued" summary;
+   the Library lists the same sources as before.
+
+Expected effect at 2,139 files: per-statement WAL commits drop from
+thousands to ~22 (one per 100-file batch), purge lookups from ~8,500 SELECTs
+to 1, and the remaining per-file work (upserts, existsSync stats on the
+recordings drive, calendar enrichment for new files) runs in 100-file slices
+with the main thread yielded between slices, so the UI never blocks for more
+than one batch at a time.
