@@ -21,6 +21,8 @@ recording, and Microsoft 365 and Slack connect on first try.
 - **Transcript problems in place.** Lines with a repeated or backwards time, or too many words for
   their time, are marked in the transcript. Clicking "Repeated times" or "Times go backwards" goes
   to the next such line. Editing a line also edits its start time.
+- **Player & notifications.** A Settings page for the skip length, the speeds in the speed menu,
+  the speed recordings start at, and how long notices stay on screen.
 - **Week starts on.** Settings > Calendar picks Monday, Sunday or Saturday, and the week and
   month views now agree (they started on Monday and on Sunday).
 - **A switch per feature.** Settings > Features lists every feature with its own switch, what it
@@ -44,6 +46,8 @@ recording, and Microsoft 365 and Slack connect on first try.
 - Row icons now keep their place, so a missing one reads as a gap.
 - The RAG Context Window, chunk size and chunk overlap settings were saved and ignored; they are
   read now, and at their defaults nothing changes. Five settings nothing used are gone.
+- A speed picked in the player reset to 1x on the next recording while the menu still showed
+  the old speed.
 - A .flac recording could be imported but was then missed by the folder watcher, the file date
   fix and the orphan and date checks; every place now uses the same list of audio types.
 - A transcript with one line out of time order refused every edit ("Invalid transcript edit"), and

@@ -53,6 +53,7 @@ import type { DerivedSpeakerRange } from '../utils/speakerRanges'
 import { formatTimestamp } from '@/utils/audioUtils'
 import { EVENT_KIND_COLOR } from '../utils/timelineEventKinds'
 import { cn } from '@/lib/utils'
+import { currentPlayerPreferences, speedLabel, usePlayerPreferences } from '@/lib/player-preferences'
 
 export type WaveformPlayerMode = 'pill' | 'scrubber' | 'full'
 
@@ -210,16 +211,18 @@ function useScopedWaveform(recordingId?: string) {
 
 /** The "1×" speed control as a compact pill-friendly Select. */
 function SpeedPill({ value, onChange, className }: { value: string; onChange: (v: string) => void; className?: string }) {
+  const { playbackSpeeds } = usePlayerPreferences()
   return (
     <Select value={value} onValueChange={onChange}>
       <SelectTrigger className={cn('h-7 w-[58px] rounded-full px-2.5 text-xs', className)} aria-label="Playback speed">
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
-        <SelectItem value="0.5">0.5×</SelectItem>
-        <SelectItem value="1">1×</SelectItem>
-        <SelectItem value="1.5">1.5×</SelectItem>
-        <SelectItem value="2">2×</SelectItem>
+        {playbackSpeeds.map((speed) => (
+          <SelectItem key={speed} value={String(speed)}>
+            {speedLabel(speed)}
+          </SelectItem>
+        ))}
       </SelectContent>
     </Select>
   )
@@ -257,7 +260,8 @@ export function WaveformPlayer({
 }: WaveformPlayerProps) {
   const pb = usePlayback(recordingId, filePath)
   const wf = useScopedWaveform(recordingId)
-  const [playbackRate, setPlaybackRate] = useState('1')
+  const playerPrefs = usePlayerPreferences()
+  const [playbackRate, setPlaybackRate] = useState(() => String(currentPlayerPreferences().defaultPlaybackSpeed))
 
   // Full-mode timeline interaction (local to the player): which event
   // marker/list row is highlighted, unless a parent drives it via `activeEventId`.
@@ -301,10 +305,13 @@ export function WaveformPlayer({
     [durationSec, pb.audioControls, pb.liveDuration, onSeek]
   )
 
-  const skipBackward = useCallback(() => pb.audioControls.seek(Math.max(0, pb.rawCurrentTime - 10)), [pb.audioControls, pb.rawCurrentTime])
+  const skipBackward = useCallback(
+    () => pb.audioControls.seek(Math.max(0, pb.rawCurrentTime - playerPrefs.skipSeconds)),
+    [pb.audioControls, pb.rawCurrentTime, playerPrefs.skipSeconds]
+  )
   const skipForward = useCallback(
-    () => pb.audioControls.seek(Math.min(pb.rawDuration, pb.rawCurrentTime + 10)),
-    [pb.audioControls, pb.rawDuration, pb.rawCurrentTime]
+    () => pb.audioControls.seek(Math.min(pb.rawDuration, pb.rawCurrentTime + playerPrefs.skipSeconds)),
+    [pb.audioControls, pb.rawDuration, pb.rawCurrentTime, playerPrefs.skipSeconds]
   )
 
   const progress = pb.liveDuration > 0 ? Math.min(1, pb.liveTime / pb.liveDuration) : 0

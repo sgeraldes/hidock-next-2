@@ -289,6 +289,11 @@ export interface AppConfig {
     officeHoursStart: number
     officeHoursEnd: number
     workDays: number[]
+    /** Player & notifications (Settings). Defaults are the numbers the app used before. */
+    skipSeconds?: number
+    playbackSpeeds?: number[]
+    defaultPlaybackSpeed?: number
+    toastSeconds?: number
   }
 }
 

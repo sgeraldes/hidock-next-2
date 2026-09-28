@@ -12,6 +12,7 @@ import { useUIStore } from '@/store/useUIStore'
 import { useAudioControls } from '@/components/OperationController'
 import { WaveformCanvas } from '@/components/WaveformCanvas'
 import { formatTimestamp } from '@/utils/audioUtils'
+import { currentPlayerPreferences, speedLabel, usePlayerPreferences } from '@/lib/player-preferences'
 
 interface AudioPlayerProps {
   /** Visible label: the recording's display title. Never its file name. */
@@ -66,7 +67,8 @@ export function AudioPlayer({ title, recordingId, filePath, onClose }: AudioPlay
   const audioControls = useAudioControls()
 
   // Local state for playback speed
-  const [playbackRate, setPlaybackRate] = useState('1')
+  const playerPrefs = usePlayerPreferences()
+  const [playbackRate, setPlaybackRate] = useState(() => String(currentPlayerPreferences().defaultPlaybackSpeed))
 
   // Is THIS recording the one currently loaded in the shared audio engine?
   // When no recordingId is provided (legacy mount sites that only render while
@@ -106,14 +108,14 @@ export function AudioPlayer({ title, recordingId, filePath, onClose }: AudioPlay
   )
 
   const skipBackward = useCallback(() => {
-    const newTime = Math.max(0, currentTime - 10)
+    const newTime = Math.max(0, currentTime - playerPrefs.skipSeconds)
     audioControls.seek(newTime)
-  }, [currentTime, audioControls])
+  }, [currentTime, audioControls, playerPrefs.skipSeconds])
 
   const skipForward = useCallback(() => {
-    const newTime = Math.min(duration, currentTime + 10)
+    const newTime = Math.min(duration, currentTime + playerPrefs.skipSeconds)
     audioControls.seek(newTime)
-  }, [currentTime, duration, audioControls])
+  }, [currentTime, duration, audioControls, playerPrefs.skipSeconds])
 
   const handlePlaybackRateChange = useCallback(
     (value: string) => {
@@ -215,10 +217,11 @@ export function AudioPlayer({ title, recordingId, filePath, onClose }: AudioPlay
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="0.5">0.5×</SelectItem>
-              <SelectItem value="1">1×</SelectItem>
-              <SelectItem value="1.5">1.5×</SelectItem>
-              <SelectItem value="2">2×</SelectItem>
+              {playerPrefs.playbackSpeeds.map((speed) => (
+                <SelectItem key={speed} value={String(speed)}>
+                  {speedLabel(speed)}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
 

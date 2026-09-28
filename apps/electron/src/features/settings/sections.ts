@@ -22,7 +22,8 @@ import {
   Wrench,
   Code2,
   History,
-  Info
+  Info,
+  PlayCircle
 } from 'lucide-react'
 
 export type SettingsSectionId =
@@ -30,6 +31,7 @@ export type SettingsSectionId =
   | 'features'
   | 'assistant'
   | 'calendar'
+  | 'player'
   | 'privacy'
   | 'transcription'
   | 'speakers'
@@ -93,6 +95,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'Your calendar feed and how often it syncs.',
     icon: CalendarDays,
     keywords: ['ics', 'meetings', 'sync', 'outlook']
+  },
+  {
+    id: 'player',
+    group: 'preferences',
+    label: 'Player & notifications',
+    description: 'Skip length, speeds, the starting speed and how long notices stay.',
+    icon: PlayCircle,
+    keywords: ['audio', 'playback', 'speed', 'skip', 'toast', 'notice', 'seconds']
   },
   {
     id: 'privacy',

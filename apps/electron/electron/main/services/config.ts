@@ -285,6 +285,14 @@ export interface AppConfig {
     calendarView: 'day' | 'workweek' | 'week' | 'month'
     hideEmptyMeetings: boolean
     showListView: boolean
+    officeHoursStart?: number
+    officeHoursEnd?: number
+    workDays?: number[]
+    /** Player & notifications (Settings). Defaults are the numbers the app used before. */
+    skipSeconds?: number
+    playbackSpeeds?: number[]
+    defaultPlaybackSpeed?: number
+    toastSeconds?: number
   }
 }
 
@@ -387,7 +395,11 @@ const DEFAULT_CONFIG: AppConfig = {
     startOfWeek: 1, // Monday
     calendarView: 'week',
     hideEmptyMeetings: true,
-    showListView: false
+    showListView: false,
+    skipSeconds: 10,
+    playbackSpeeds: [0.5, 1, 1.5, 2],
+    defaultPlaybackSpeed: 1,
+    toastSeconds: 5
   }
 }
 
