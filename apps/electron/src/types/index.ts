@@ -170,6 +170,18 @@ export interface StorageLocationUsage {
   disk: { totalBytes: number; freeBytes: number } | null
 }
 
+export interface StorageMovePlan {
+  folder: 'recordings' | 'transcripts' | 'data'
+  from: string
+  to: string
+  files: number
+  bytes: number
+  targetFreeBytes: number | null
+  targetHasFiles: boolean
+  targetHasDatabase?: boolean
+  blocker: string | null
+}
+
 export interface StorageInfo {
   dataPath: string
   recordingsPath: string

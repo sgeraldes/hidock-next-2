@@ -1,4 +1,5 @@
 import { getStorageUsage, recordingsOverLimit, resetStorageLimitCache } from '../services/storage-usage'
+import { cancelMove, moveFolder, planMove, switchFolder, type MovableFolder } from '../services/storage-move'
 import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { randomUUID } from 'crypto'
 import { existsSync } from 'fs'
@@ -53,6 +54,40 @@ export function registerStorageHandlers(): void {
       return { success: false, error: message }
     }
   })
+
+  // Changing a storage folder: plan, then move (copy + rewrite paths) or switch
+  const isMovable = (f: unknown): f is MovableFolder => f === 'recordings' || f === 'transcripts'
+  ipcMain.handle('storage:plan-move', async (_, folder: unknown, to: unknown) => {
+    try {
+      if (!(isMovable(folder) || folder === 'data') || typeof to !== 'string') throw new Error('Invalid folder')
+      return { success: true, data: await planMove(folder, to) }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
+    }
+  })
+  ipcMain.handle('storage:move-folder', async (event, folder: unknown, to: unknown) => {
+    try {
+      if (!isMovable(folder) || typeof to !== 'string') throw new Error('Invalid folder')
+      const result = await moveFolder(folder, to, (progress) => {
+        if (!event.sender.isDestroyed()) event.sender.send('storage:move-progress', progress)
+      })
+      resetStorageLimitCache()
+      return { success: true, data: result }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
+    }
+  })
+  ipcMain.handle('storage:switch-folder', async (_, folder: unknown, to: unknown) => {
+    try {
+      if (!isMovable(folder) || typeof to !== 'string') throw new Error('Invalid folder')
+      await switchFolder(folder, to)
+      resetStorageLimitCache()
+      return { success: true, data: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
+    }
+  })
+  ipcMain.handle('storage:cancel-move', async () => ({ success: true, data: cancelMove() }))
 
   // Auto-download asks this before each cycle (Settings > Storage limit)
   ipcMain.handle('storage:recordings-over-limit', async () => {

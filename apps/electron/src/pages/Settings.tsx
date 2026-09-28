@@ -39,7 +39,7 @@ import { SpeakerSetupPanel } from '@/components/settings/SpeakerSetupPanel'
 import { useFeatureEnabled } from '@/store/useFeatureStore'
 import { toast } from '@/components/ui/toaster'
 import { LEGACY_GRAPH_DISCLOSURE } from '@/features/library/utils/deletionCopy'
-import type { StorageInfo, AppConfig } from '@/types'
+import type { StorageInfo, AppConfig, StorageMovePlan } from '@/types'
 import { SettingsNav } from '@/features/settings/SettingsNav'
 import { OverviewSection } from '@/features/settings/OverviewSection'
 import { AboutSection } from '@/features/settings/AboutSection'
@@ -57,6 +57,7 @@ import { PlayerSection } from '@/features/settings/PlayerSection'
 import { appLocale } from '@/lib/locale'
 import { DisplaySection } from '@/features/settings/DisplaySection'
 import { DeviceStorageCard, StorageUsageLine, useStorageUsage } from '@/features/settings/StorageUsage'
+import { StorageMoveConfirm } from '@/features/settings/StorageMoveConfirm'
 
 // RAG configuration constants — MAX_CONTEXT_CHUNKS must match config.ts default (10)
 const RAG_DEFAULTS = {
@@ -67,11 +68,6 @@ const RAG_DEFAULTS = {
 
 type StorageFolder = 'recordings' | 'transcripts' | 'data'
 
-const STORAGE_CONFIG_KEYS: Record<StorageFolder, 'recordingsPath' | 'transcriptsPath' | 'dataPath'> = {
-  recordings: 'recordingsPath',
-  transcripts: 'transcriptsPath',
-  data: 'dataPath'
-}
 
 const STORAGE_LABELS: Record<StorageFolder, string> = {
   recordings: 'Recordings',
@@ -131,6 +127,7 @@ export function Settings({
   const setChatPosition = useUIStore((s) => s.setChatPosition)
   const { config, loadConfig, updateConfig, configLoading } = useConfigStore()
   const { usage: storageUsage, reload: reloadStorageUsage } = useStorageUsage()
+  const [pendingMove, setPendingMove] = useState<StorageMovePlan | null>(null)
   const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null)
   const [storageError, setStorageError] = useState<string | null>(null) // B-SET-002: Storage error state
   const [saving, setSaving] = useState(false)
@@ -748,21 +745,32 @@ export function Settings({
 
     if (nextPath === getCurrentStoragePath(folder)) return
 
+    // A new folder is a decision, not a save: plan it and let the person
+    // choose to move the files, switch without moving, or cancel.
     setSavingStorageFolder(folder)
     try {
-      await updateConfig('storage', {
-        [STORAGE_CONFIG_KEYS[folder]]: nextPath
-      } as Partial<AppConfig['storage']>)
-      setStoragePaths((prev) => ({ ...prev, [folder]: nextPath }))
-      await loadStorageInfo()
-      toast.success('Storage Folder Saved', `${STORAGE_LABELS[folder]} folder updated`)
+      const planned = await window.electronAPI.storage.planMove?.(folder, nextPath)
+      if (!planned?.success || !planned.data) throw new Error(planned?.error ?? 'Could not check the new folder')
+      setPendingMove(planned.data)
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to save storage folder'
-      toast.error('Save Failed', message)
+      const message = error instanceof Error ? error.message : 'Failed to check the storage folder'
+      toast.error(`Could not change the ${STORAGE_LABELS[folder].toLowerCase()} folder`, message)
       setStoragePaths((prev) => ({ ...prev, [folder]: getCurrentStoragePath(folder) }))
     } finally {
       setSavingStorageFolder(null)
     }
+  }
+
+  const finishStorageChange = async () => {
+    setPendingMove(null)
+    await loadConfig()
+    await loadStorageInfo()
+    reloadStorageUsage()
+  }
+
+  const cancelStorageChange = (folder: StorageFolder) => {
+    setPendingMove(null)
+    setStoragePaths((prev) => ({ ...prev, [folder]: getCurrentStoragePath(folder) }))
   }
 
   const handleSelectStorageFolder = async (folder: StorageFolder) => {
@@ -1803,6 +1811,13 @@ export function Settings({
                               usage={storageUsage?.find((u) => u.id === folder)}
                               onLimitSaved={reloadStorageUsage}
                             />
+                            {pendingMove?.folder === folder && (
+                              <StorageMoveConfirm
+                                plan={pendingMove}
+                                onDone={() => void finishStorageChange()}
+                                onCancel={() => cancelStorageChange(folder)}
+                              />
+                            )}
                           </div>
                           <Button
                             type="button"

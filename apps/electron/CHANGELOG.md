@@ -51,6 +51,9 @@ recording, and Microsoft 365 and Slack connect on first try.
 - Row icons now keep their place, so a missing one reads as a gap.
 - The RAG Context Window, chunk size and chunk overlap settings were saved and ignored; they are
   read now, and at their defaults nothing changes. Five settings nothing used are gone.
+- Changing a storage folder only created the new one: files stayed, every recording kept pointing
+  at the old folder, and the folder watcher kept watching it. Settings now offers to move the files
+  (copied and checked, stored paths updated, originals kept) or to switch without moving.
 - A speed picked in the player reset to 1x on the next recording while the menu still showed
   the old speed.
 - A .flac recording could be imported but was then missed by the folder watcher, the file date
