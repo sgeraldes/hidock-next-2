@@ -566,6 +566,7 @@ export const CORE_CHANNELS: string[] = [
   // Library maintenance card (Settings). Stored data only; relinking skips when
   // no Microsoft 365 account is connected.
   'maintenance:markEvaluationsOutdated',
+  'maintenance:matchMeetings',
   'maintenance:recheckWarnings',
   'maintenance:redrawWaveforms',
   'maintenance:relinkMeetings',

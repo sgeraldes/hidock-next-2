@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { toast } from '@/components/ui/toaster'
 
-type Job = 'rescan' | 'warnings' | 'relink' | 'waveforms'
+type Job = 'rescan' | 'warnings' | 'relink' | 'match' | 'waveforms'
 
 /**
  * Library maintenance: one button per job that repairs or refreshes what the
@@ -80,6 +80,19 @@ export function LibraryMaintenanceCard({
         const history = r.accounts === 0 ? ' No Microsoft 365 account is connected, so only meetings already here were used.' : ` ${r.meetingsSynced} meetings synced.`
         const errors = r.errors.length > 0 ? ` Problems: ${r.errors.join('; ')}` : ''
         return `${r.linked} recordings linked. ${r.unlinkedAfter} of ${r.unlinkedBefore} still have no meeting.${history}${errors}`
+      }
+    },
+    {
+      job: 'match',
+      title: 'Match meetings with Jev',
+      detail:
+        'For each recording with two or more possible meetings, Jev reads what was said against each meeting subject and attendees, and links the clear answers. Sends a transcript excerpt and the meeting list to api.typesafe.ai. Links you set stay as they are.',
+      action: 'Match',
+      disabled: !rescanAvailable,
+      run: async () => {
+        const r = unwrap(await api.matchMeetings())
+        const auth = r.stoppedOnAuth ? ' Stopped: Jev rejected the key.' : ''
+        return `${r.linked} linked, ${r.relinked} moved to a better meeting, ${r.noMatch} match none of their meetings. Jev asked ${r.asked} times (${r.reused} answers reused).${auth}`
       }
     },
     {

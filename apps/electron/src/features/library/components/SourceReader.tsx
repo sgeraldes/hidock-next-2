@@ -166,6 +166,14 @@ interface ReaderMeetingCandidate {
   matchReason: string | null
   isAiSelected: boolean
   isUserConfirmed: boolean
+  /** Jev's probability that this is the meeting, from what was said; null when Jev was not asked. */
+  contentProbability?: number | null
+}
+
+/** The percentage a candidate chip shows: Jev's, from what was said, when there is one; else the time score. */
+function candidatePercent(candidate: ReaderMeetingCandidate): number {
+  const p = typeof candidate.contentProbability === 'number' ? candidate.contentProbability : candidate.confidenceScore
+  return Math.round(p * 100)
 }
 
 /** Map the IPC result into the WaveformPlayer's props (1-based marker numbers). */
@@ -1765,8 +1773,9 @@ export function SourceReader({
                     key={candidate.meetingId}
                     className="rounded-full border border-dashed px-2 py-0.5 text-[11px] hover:border-primary"
                     title={candidate.matchReason || undefined}
+                    data-testid="meeting-candidate-chip"
                   >
-                    {candidate.subject} · {Math.round(candidate.confidenceScore * 100)}%
+                    {candidate.subject} · {candidatePercent(candidate)}%
                   </span>
                 ))}
               </button>

@@ -1143,6 +1143,20 @@ export interface ElectronAPI {
     redrawWaveforms: () => Promise<Result<{ total: number; drawn: number; keptExact: number; noEnvelope: number }>>
     /** Rescan with Jev, every recording: marks the stored evaluations outdated before the value backfill runs. */
     markEvaluationsOutdated: () => Promise<Result<{ marked: number }>>
+    /** Ask Jev which meeting each recording is and link the clear answers (dryRun: only list them). */
+    matchMeetings: (options?: { dryRun?: boolean }) => Promise<
+      Result<{
+        checked: number
+        asked: number
+        reused: number
+        linked: number
+        relinked: number
+        noMatch: number
+        skipped: number
+        failed: number
+        stoppedOnAuth: boolean
+      }>
+    >
   }
 
   // Data Integrity Service - Health checks and repairs
@@ -2071,7 +2085,8 @@ const electronAPI: ElectronAPI = {
     recheckWarnings: () => callIPC('maintenance:recheckWarnings'),
     relinkMeetings: () => callIPC('maintenance:relinkMeetings'),
     redrawWaveforms: () => callIPC('maintenance:redrawWaveforms'),
-    markEvaluationsOutdated: () => callIPC('maintenance:markEvaluationsOutdated')
+    markEvaluationsOutdated: () => callIPC('maintenance:markEvaluationsOutdated'),
+    matchMeetings: (options) => callIPC('maintenance:matchMeetings', options)
   },
 
   // Data Integrity Service API

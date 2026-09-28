@@ -16,7 +16,7 @@ import { isCancelledMeetingSubject, scoreMeetingCandidates } from './recording-m
 import { DURATION_LOW_VALUE_MAX_SECONDS, isImpossibleTranscriptDensity } from './value-thresholds'
 import type { QualityRating } from '@/types/knowledge'
 
-const SCHEMA_VERSION = 62
+const SCHEMA_VERSION = 63
 
 const SCHEMA = `
 -- Calendar events from ICS
@@ -374,6 +374,24 @@ CREATE TABLE IF NOT EXISTS recording_evaluations (
 CREATE INDEX IF NOT EXISTS idx_recording_evaluations_recording ON recording_evaluations(recording_id);
 -- v62: the Library reads the latest evaluation per recording.
 CREATE INDEX IF NOT EXISTS idx_recording_evaluations_latest ON recording_evaluations(recording_id, evaluated_at DESC);
+
+-- Jev meeting match (v63): which candidate meeting a recording is, from what
+-- was said (jev-meeting-match.ts). One row per recording, reused while the
+-- candidate set (candidate_key) stays the same.
+CREATE TABLE IF NOT EXISTS recording_meeting_matches (
+    recording_id TEXT PRIMARY KEY,
+    version INTEGER NOT NULL,
+    candidate_key TEXT NOT NULL,
+    probabilities_json TEXT NOT NULL,
+    none_probability REAL,
+    top_meeting_id TEXT,
+    top_probability REAL,
+    margin REAL,
+    model TEXT,
+    input_tokens INTEGER,
+    evaluated_at TEXT NOT NULL,
+    FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
+);
 
 -- Stage-level processing provenance (v52 / SPEC-009). One provider call can
 -- produce several output stages, but every displayed result references the
@@ -3173,6 +3191,25 @@ const MIGRATIONS: Record<number, () => void> = {
       'CREATE INDEX IF NOT EXISTS idx_recording_evaluations_latest ON recording_evaluations(recording_id, evaluated_at DESC)'
     )
     console.log('Migration v62 complete')
+  },
+  63: () => {
+    // Jev meeting match: a new table, no change to existing data.
+    console.log('Running migration to schema v63: recording_meeting_matches')
+    getDatabase().run(`CREATE TABLE IF NOT EXISTS recording_meeting_matches (
+    recording_id TEXT PRIMARY KEY,
+    version INTEGER NOT NULL,
+    candidate_key TEXT NOT NULL,
+    probabilities_json TEXT NOT NULL,
+    none_probability REAL,
+    top_meeting_id TEXT,
+    top_probability REAL,
+    margin REAL,
+    model TEXT,
+    input_tokens INTEGER,
+    evaluated_at TEXT NOT NULL,
+    FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
+)`)
+    console.log('Migration v63 complete')
   },
 }
 
@@ -13451,6 +13488,76 @@ export function getTranscriptionLockStatus(): {
   }
 
   return { processId: null, acquiredAt: null, updatedAt: null }
+}
+
+// ---------------------------------------------------------------------------
+// Jev meeting match (v63)
+// ---------------------------------------------------------------------------
+
+export interface StoredMeetingMatch {
+  probabilities: Record<string, number>
+  none: number
+  topMeetingId: string | null
+  topProbability: number
+  margin: number
+  candidateKey: string
+  inputTokens: number | null
+}
+
+export function getRecordingMeetingMatch(recordingId: string, version: number): StoredMeetingMatch | null {
+  const row = queryOne<{
+    candidate_key: string
+    probabilities_json: string
+    none_probability: number | null
+    top_meeting_id: string | null
+    top_probability: number | null
+    margin: number | null
+    input_tokens: number | null
+  }>('SELECT * FROM recording_meeting_matches WHERE recording_id = ? AND version = ?', [recordingId, version])
+  if (!row) return null
+  let probabilities: Record<string, number> = {}
+  try {
+    probabilities = JSON.parse(row.probabilities_json) as Record<string, number>
+  } catch {
+    return null
+  }
+  return {
+    probabilities,
+    none: row.none_probability ?? 0,
+    topMeetingId: row.top_meeting_id,
+    topProbability: row.top_probability ?? 0,
+    margin: row.margin ?? 0,
+    candidateKey: row.candidate_key,
+    inputTokens: row.input_tokens
+  }
+}
+
+export function saveRecordingMeetingMatch(recordingId: string, version: number, model: string, match: StoredMeetingMatch): void {
+  run(
+    `INSERT INTO recording_meeting_matches
+       (recording_id, version, candidate_key, probabilities_json, none_probability, top_meeting_id, top_probability,
+        margin, model, input_tokens, evaluated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(recording_id) DO UPDATE SET
+       version = excluded.version, candidate_key = excluded.candidate_key,
+       probabilities_json = excluded.probabilities_json, none_probability = excluded.none_probability,
+       top_meeting_id = excluded.top_meeting_id, top_probability = excluded.top_probability,
+       margin = excluded.margin, model = excluded.model, input_tokens = excluded.input_tokens,
+       evaluated_at = excluded.evaluated_at`,
+    [
+      recordingId,
+      version,
+      match.candidateKey,
+      JSON.stringify(match.probabilities),
+      match.none,
+      match.topMeetingId,
+      match.topProbability,
+      match.margin,
+      model,
+      match.inputTokens,
+      new Date().toISOString()
+    ]
+  )
 }
 
 // ---------------------------------------------------------------------------

@@ -17,7 +17,6 @@ import {
   linkRecordingToMeeting,
   unlinkRecordingFromMeeting,
   getTranscriptByRecordingId,
-  getCandidatesForRecordingWithDetails,
   getMeetingsNearDate,
   selectMeetingForRecordingByUser,
   insertRecording,
@@ -32,15 +31,9 @@ import {
 import { getRecordingFiles, getRecordingsPath } from '../services/file-storage'
 import { parseHiDockFilenameDateIso } from '../services/hidock-filename'
 import { disambiguateOverlappingCandidates } from '../services/meeting-disambiguation'
+import { matchMeetingWithJev, type MeetingMatch } from '../services/jev-meeting-match'
+import { jevMeetingMatchDeps, listMeetingCandidates, toMatchCandidates, toMatchContext } from '../services/meeting-candidate-list'
 import { filterEligibleRecordingIds } from '../services/recording-eligibility'
-import {
-  scoreMeetingCandidates,
-  isCancelledMeetingSubject,
-  deriveTranscriptTitle,
-  deriveTranscriptSummary,
-  countTranscriptSpeakers,
-  buildContentText
-} from '../services/recording-match-scoring'
 import { applyDurationValueGate } from '../services/value-classification'
 import { copyFileSync, existsSync, statSync } from 'fs'
 import { basename, join, extname } from 'path'
@@ -381,72 +374,31 @@ export function registerRecordingHandlers(): void {
         return { success: true, data: [], recordingContext: null }
       }
 
-      const transcript = getTranscriptByRecordingId(recording.id)
-      const recordingContext = {
-        title: deriveTranscriptTitle(transcript),
-        summary: deriveTranscriptSummary(transcript),
-        speakerCount: countTranscriptSpeakers(transcript),
-        hasTranscript: !!transcript
-      }
+      const list = listMeetingCandidates(recording)
+      const { recordingContext, candidates, scored, scoreByMeeting } = list
 
-      // Union the stored candidates with meetings near the recording, keyed by
-      // meeting id (stored rows win — they carry the real candidate id and any
-      // user confirmation). Nearby-only meetings get a synthetic id.
-      const byMeeting = new Map<string, ReturnType<typeof getCandidatesForRecordingWithDetails>[number]>()
-      for (const candidate of getCandidatesForRecordingWithDetails(recording.id)) {
-        byMeeting.set(candidate.meetingId, candidate)
-      }
-      try {
-        for (const meeting of getMeetingsNearDate(recording.date_recorded)) {
-          if (!byMeeting.has(meeting.id)) {
-            byMeeting.set(meeting.id, {
-              id: `nearby_${meeting.id}`,
-              recordingId: recording.id,
-              meetingId: meeting.id,
-              subject: meeting.subject,
-              startTime: meeting.start_time,
-              endTime: meeting.end_time,
-              confidenceScore: 0,
-              matchReason: null,
-              isAiSelected: false,
-              isUserConfirmed: false,
-              isAllDay: (meeting.is_all_day ?? 0) === 1
-            })
-          }
-        }
-      } catch (nearbyError) {
-        // Nearby meetings are best-effort enrichment — never fail the dialog for it.
-        console.error('recordings:getCandidates nearby lookup failed:', nearbyError)
-      }
-
-      const candidates = Array.from(byMeeting.values())
-        .filter((candidate) => !isCancelledMeetingSubject(candidate.subject))
-      const scored = scoreMeetingCandidates(
-        {
-          dateRecorded: recording.date_recorded,
-          durationSeconds: recording.duration_seconds,
-          contentText: buildContentText(transcript)
-        },
-        candidates.map((c) => ({
-          meetingId: c.meetingId,
-          subject: c.subject,
-          startTime: c.startTime,
-          endTime: c.endTime,
-          isAllDay: c.isAllDay
-        }))
-      )
-      const scoreByMeeting = new Map(scored.map((s) => [s.meetingId, s]))
-
-      // 2026-07-24 (owner design): with MULTIPLE overlapping meetings the
-      // deterministic score can't always tell which one the recording belongs
-      // to — a cheap LLM pass reads the transcript title/summary against the
-      // candidates. A single overlap never triggers this (the time match IS
-      // the answer). Any failure keeps the deterministic order.
       const confirmedMeetingId = candidates.find((candidate) => candidate.isUserConfirmed)?.meetingId
         ?? (recording.correlation_method === 'user_override' ? recording.meeting_id : undefined)
+
+      // Jev reads what was said against each candidate (owner, 28-sep-2026: the
+      // time score gave a lunch and a working session the same 72%). Stored per
+      // candidate set, so reopening the recording does not ask again.
+      let jevMatch: MeetingMatch | null = null
+      const jevDeps = confirmedMeetingId ? null : jevMeetingMatchDeps()
+      if (jevDeps && recordingContext.hasTranscript) {
+        try {
+          jevMatch = await matchMeetingWithJev(recording.id, toMatchContext(recording, list), toMatchCandidates(list), jevDeps)
+        } catch (jevError) {
+          console.warn('recordings:getCandidates Jev meeting match failed:', jevError)
+        }
+      }
+
+      // Without Jev: with MULTIPLE overlapping meetings a cheap LLM pass reads the
+      // transcript title/summary against the candidates (2026-07-24 design). A
+      // single overlap never triggers it. Any failure keeps the time order.
       const overlapping = scored.filter((s) => s.hasOverlap)
       let llmPick: { meetingId: string; reason: string } | null = null
-      if (!confirmedMeetingId && recordingContext.hasTranscript && overlapping.length >= 2) {
+      if (!jevMatch && !confirmedMeetingId && recordingContext.hasTranscript && overlapping.length >= 2) {
         const byId = new Map(candidates.map((c) => [c.meetingId, c]))
         llmPick = await disambiguateOverlappingCandidates(
           recording.id,
@@ -465,16 +417,30 @@ export function registerRecordingHandlers(): void {
       const data = candidates
         .map((candidate) => {
           const score = scoreByMeeting.get(candidate.meetingId)
-          if (!score) return candidate
+          const contentProbability = jevMatch ? (jevMatch.probabilities[candidate.meetingId] ?? null) : null
+          if (!score) return { ...candidate, contentProbability }
           const isLlmPick = llmPick?.meetingId === candidate.meetingId
+          const isJevPick = !!jevMatch && jevMatch.topMeetingId === candidate.meetingId && jevMatch.topProbability >= 0.5
+          const reason = contentProbability !== null
+            ? `Jev: ${Math.round(contentProbability * 100)}% from what was said · ${score.matchReason}`
+            : isLlmPick ? `${llmPick!.reason} · ${score.matchReason}` : score.matchReason
           return {
             ...candidate,
             confidenceScore: score.confidenceScore,
-            matchReason: isLlmPick ? `${llmPick!.reason} · ${score.matchReason}` : score.matchReason,
-            isAiSelected: confirmedMeetingId ? false : isLlmPick ? true : llmPick ? false : score.isBestMatch
+            contentProbability,
+            matchReason: reason,
+            isAiSelected: confirmedMeetingId
+              ? false
+              : jevMatch ? isJevPick : isLlmPick ? true : llmPick ? false : score.isBestMatch
           }
         })
         .sort((a, b) => {
+          // Jev's answer, when there is one, orders the list by what was said.
+          if (jevMatch) {
+            const pa = a.contentProbability ?? -1
+            const pb = b.contentProbability ?? -1
+            if (pa !== pb) return pb - pa
+          }
           // The LLM pick leads the overlap tier when present.
           if (llmPick) {
             const aPick = a.meetingId === llmPick.meetingId ? 1 : 0
@@ -487,7 +453,12 @@ export function registerRecordingHandlers(): void {
           return overlapDelta !== 0 ? overlapDelta : b.confidenceScore - a.confidenceScore
         })
 
-      return { success: true, data, recordingContext }
+      return {
+        success: true,
+        data,
+        recordingContext,
+        contentMatch: jevMatch ? { none: jevMatch.none, topMeetingId: jevMatch.topMeetingId, topProbability: jevMatch.topProbability } : null
+      }
     } catch (error) {
       console.error('recordings:getCandidates error:', error)
       return { success: false, data: [], error: error instanceof Error ? error.message : 'Unknown error' }

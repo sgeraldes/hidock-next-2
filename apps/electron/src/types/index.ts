@@ -404,6 +404,8 @@ export interface MeetingCandidate {
   matchReason: string | null
   isAiSelected: boolean
   isUserConfirmed: boolean
+  /** Jev's probability that this is the meeting, from what was said; null or absent when Jev was not asked. */
+  contentProbability?: number | null
 }
 
 /**

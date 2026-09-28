@@ -202,3 +202,126 @@ export async function relinkRecordingsToMeetings(): Promise<RelinkResult> {
   result.unlinkedAfter = unlinkedCount()
   return result
 }
+
+// ---------------------------------------------------------------------------
+// Match meetings with Jev
+// ---------------------------------------------------------------------------
+
+/** Links a person made; the Jev match never changes them. */
+const PERSON_SET_METHODS = new Set(['manual', 'user_override', 'user_preassign', 'user_standalone', 'user_preassign_standalone'])
+
+/** Recordings asked at once, and the spacing between starts (Jev allows 1,200 a minute). */
+const MATCH_CONCURRENCY = 6
+const MATCH_MIN_INTERVAL_MS = 100
+
+export interface MeetingMatchJobResult {
+  checked: number
+  asked: number
+  reused: number
+  linked: number
+  relinked: number
+  noMatch: number
+  skipped: number
+  failed: number
+  stoppedOnAuth: boolean
+  /** With dryRun: the links the run would make, and nothing is changed. */
+  planned?: Array<{ recordingId: string; from: string | null; to: string; probability: number }>
+}
+
+let matchRunning = false
+
+/**
+ * Ask Jev which meeting each recording is, for every recording with a
+ * transcript and two or more candidate meetings, and link the clear answers
+ * (probability 0.7 or more, 0.25 ahead of the next). Links a person set stay
+ * as they are. Answers are stored, so a second run only asks for recordings
+ * whose candidates changed.
+ */
+export async function matchMeetingsWithJev(
+  options: { dryRun?: boolean } = {}
+): Promise<MeetingMatchJobResult | { busy: true } | { noKey: true }> {
+  if (matchRunning) return { busy: true }
+  const { jevMeetingMatchDeps, listMeetingCandidates, toMatchCandidates, toMatchContext } = await import('./meeting-candidate-list')
+  const deps = jevMeetingMatchDeps()
+  if (!deps) return { noKey: true }
+  matchRunning = true
+  try {
+    const { matchMeetingWithJev, isClearMatch, pickMatchCandidates, candidateKey, MEETING_MATCH_VERSION } = await import('./jev-meeting-match')
+    const { getRecordingById, getRecordingMeetingMatch, linkRecordingToMeeting } = await import('./database')
+    const { filterEligibleRecordingIds } = await import('./recording-eligibility')
+    const { isClassifierAuthError } = await import('./value-backfill')
+
+    const ids = queryAll<{ id: string }>(
+      `SELECT r.id FROM recordings r
+         JOIN transcripts t ON t.recording_id = r.id
+        WHERE r.deleted_at IS NULL AND COALESCE(r.personal, 0) = 0
+          AND t.full_text IS NOT NULL AND TRIM(t.full_text) != ''
+        ORDER BY r.date_recorded DESC`
+    ).map((r) => r.id)
+    const { eligible } = filterEligibleRecordingIds(ids)
+
+    const result: MeetingMatchJobResult = { checked: 0, asked: 0, reused: 0, linked: 0, relinked: 0, noMatch: 0, skipped: 0, failed: 0, stoppedOnAuth: false }
+    if (options.dryRun) result.planned = []
+    const queue = ids.filter((id) => eligible.has(id))
+    let lastStart = 0
+
+    const one = async (recordingId: string): Promise<void> => {
+      const recording = getRecordingById(recordingId)
+      if (!recording) return
+      result.checked++
+      if (recording.correlation_method && PERSON_SET_METHODS.has(recording.correlation_method)) {
+        result.skipped++
+        return
+      }
+      const list = listMeetingCandidates(recording)
+      const candidates = toMatchCandidates(list)
+      const picked = pickMatchCandidates(candidates)
+      if (picked.length < 2) {
+        result.skipped++
+        return
+      }
+      const stored = getRecordingMeetingMatch(recordingId, MEETING_MATCH_VERSION)
+      const reuse = stored?.candidateKey === candidateKey(picked)
+      if (!reuse) {
+        const wait = lastStart + MATCH_MIN_INTERVAL_MS - Date.now()
+        lastStart = Math.max(Date.now(), lastStart + MATCH_MIN_INTERVAL_MS)
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait))
+      }
+      const match = await matchMeetingWithJev(recordingId, toMatchContext(recording, list), candidates, deps)
+      if (reuse) result.reused++
+      else result.asked++
+      if (!isClearMatch(match)) {
+        if (match && match.topMeetingId === null) result.noMatch++
+        return
+      }
+      if (recording.meeting_id === match.topMeetingId) return
+      if (options.dryRun) {
+        result.planned!.push({ recordingId, from: recording.meeting_id ?? null, to: match.topMeetingId, probability: match.topProbability })
+      } else {
+        linkRecordingToMeeting(recordingId, match.topMeetingId, match.topProbability, 'jev_content_match')
+      }
+      if (recording.meeting_id) result.relinked++
+      else result.linked++
+    }
+
+    const workers = Array.from({ length: MATCH_CONCURRENCY }, async () => {
+      while (queue.length > 0 && !result.stoppedOnAuth) {
+        const id = queue.shift()!
+        try {
+          await one(id)
+        } catch (error) {
+          if (isClassifierAuthError(error)) {
+            result.stoppedOnAuth = true
+            return
+          }
+          result.failed++
+          console.warn('[MeetingMatch] failed for', id, error)
+        }
+      }
+    })
+    await Promise.all(workers)
+    return result
+  } finally {
+    matchRunning = false
+  }
+}
