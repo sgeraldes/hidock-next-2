@@ -71,6 +71,11 @@ let MIN_INTERVAL_MS = 800
  *  1,200 requests a minute (docs.typesafe.ai/models, 27-sep-2026); 100 ms keeps
  *  a 2,000-item backlog to a few minutes and far under that limit. */
 let JEV_MIN_INTERVAL_MS = 100
+/** Recordings classified in parallel per chunk when Jev decides. One at a time
+ *  ran at 2.4 a second (27-sep-2026, owner's machine): the wait was the Jev
+ *  round trip, not the work. Six in flight stays well under Jev's 20 requests
+ *  a second. The LLM path stays sequential. */
+let JEV_CONCURRENCY = 6
 /** Terminal parking threshold — a 'failed' item with attempts >= this is
  *  excluded from the eligible set (both the query AND this constant read the
  *  SAME number, per AR-4). */
@@ -88,6 +93,7 @@ export function _setValueBackfillConfigForTests(overrides: {
   chunkSize?: number
   minIntervalMs?: number
   jevMinIntervalMs?: number
+  jevConcurrency?: number
   maxDurableAttempts?: number
   inRunRetryDelaysMs?: number[]
   progressThrottleMs?: number
@@ -99,6 +105,7 @@ export function _setValueBackfillConfigForTests(overrides: {
     JEV_MIN_INTERVAL_MS = overrides.minIntervalMs
   }
   if (overrides.jevMinIntervalMs !== undefined) JEV_MIN_INTERVAL_MS = overrides.jevMinIntervalMs
+  if (overrides.jevConcurrency !== undefined) JEV_CONCURRENCY = overrides.jevConcurrency
   if (overrides.maxDurableAttempts !== undefined) MAX_DURABLE_ATTEMPTS = overrides.maxDurableAttempts
   if (overrides.inRunRetryDelaysMs !== undefined) IN_RUN_RETRY_DELAYS_MS = overrides.inRunRetryDelaysMs
   if (overrides.progressThrottleMs !== undefined) PROGRESS_THROTTLE_MS = overrides.progressThrottleMs
@@ -111,6 +118,7 @@ export function _resetValueBackfillForTests(): void {
   CHUNK_SIZE = 5
   MIN_INTERVAL_MS = 800
   JEV_MIN_INTERVAL_MS = 100
+  JEV_CONCURRENCY = 6
   MAX_DURABLE_ATTEMPTS = 3
   IN_RUN_RETRY_DELAYS_MS = [1000, 2000, 4000]
   PROGRESS_THROTTLE_MS = 500
@@ -651,6 +659,8 @@ export async function startValueBackfill(opts?: { order?: 'newest' | 'oldest' })
       return { started: false, reason: 'no-provider' }
     }
     runIntervalMs = classifier === 'jev' ? JEV_MIN_INTERVAL_MS : MIN_INTERVAL_MS
+    const parallel = classifier === 'jev' ? Math.max(1, JEV_CONCURRENCY) : 1
+    const chunkSize = parallel > 1 ? parallel : CHUNK_SIZE
     console.log(`[ValueBackfill] classifier: ${classifier}`)
 
     _ensureValueBackfillTable()
@@ -672,24 +682,37 @@ export async function startValueBackfill(opts?: { order?: 'newest' | 'oldest' })
     lastCallStartedAt = 0
     loopStarted = true
 
-    outer: for (let i = 0; i < eligibleIds.length; i += CHUNK_SIZE) {
-      const chunk = eligibleIds.slice(i, i + CHUNK_SIZE)
-      for (const captureId of chunk) {
+    // Counts one finished item; returns false when the run must stop.
+    const record = (outcome: ProcessOutcome): boolean => {
+      if (outcome === 'auth-failed') {
+        stopped = 'auth'
+        return false
+      }
+      processed++
+      if (outcome === 'marked') marked++
+      else if (outcome === 'failed') failed++
+      const now = Date.now()
+      if (now - lastProgressAt >= PROGRESS_THROTTLE_MS || processed === total) {
+        lastProgressAt = now
+        notifyRenderer('value:backfill-progress', { processed, total, marked, failed })
+      }
+      return true
+    }
+
+    outer: for (let i = 0; i < eligibleIds.length; i += chunkSize) {
+      const chunk = eligibleIds.slice(i, i + chunkSize)
+      if (parallel > 1) {
+        // Jev: the whole chunk in flight at once. Each item still does its own
+        // throttle wait, privacy recheck, reserve and finalize transaction.
         if (cancelled) break outer
-
-        const outcome = await processOneCapture(captureId, runId)
-        if (outcome === 'auth-failed') {
-          stopped = 'auth'
-          break outer
-        }
-        processed++
-        if (outcome === 'marked') marked++
-        else if (outcome === 'failed') failed++
-
-        const now = Date.now()
-        if (now - lastProgressAt >= PROGRESS_THROTTLE_MS || processed === total) {
-          lastProgressAt = now
-          notifyRenderer('value:backfill-progress', { processed, total, marked, failed })
+        const outcomes = await Promise.all(chunk.map((captureId) => processOneCapture(captureId, runId)))
+        let keepGoing = true
+        for (const outcome of outcomes) keepGoing = record(outcome) && keepGoing
+        if (!keepGoing) break outer
+      } else {
+        for (const captureId of chunk) {
+          if (cancelled) break outer
+          if (!record(await processOneCapture(captureId, runId))) break outer
         }
       }
       // Yield between chunks so a long run never blocks the renderer for more

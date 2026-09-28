@@ -1408,6 +1408,37 @@ describe('value-backfill', () => {
   // ---------------------------------------------------------------------
 
   describe('rate limiting', () => {
+    it('with Jev, keeps several recordings in flight at once; the LLM stays one at a time', async () => {
+      for (let i = 0; i < 7; i++) seedEligible(`cap-p${i}`)
+      let inFlight = 0
+      let maxInFlight = 0
+      classifyCaptureValueRawMock.mockImplementation(async () => {
+        inFlight++
+        maxInFlight = Math.max(maxInFlight, inFlight)
+        await new Promise((resolve) => setTimeout(resolve, 5))
+        inFlight--
+        return successReply('normal', 0.9)
+      })
+      _setValueBackfillConfigForTests({ jevConcurrency: 3, minIntervalMs: 0, jevMinIntervalMs: 0 })
+      getProviderConfigFromSettingsMock.mockReturnValue(null)
+      mockConfig.transcription.jevApiKey = 'jev-test-key' // pragma: allowlist secret
+      try {
+        await startValueBackfill()
+        expect(classifyCaptureValueRawMock).toHaveBeenCalledTimes(7)
+        expect(maxInFlight).toBe(3)
+      } finally {
+        mockConfig.transcription.jevApiKey = ''
+      }
+
+      // Same data through the LLM path: never more than one call at a time.
+      classifyCaptureValueRawMock.mockClear()
+      maxInFlight = 0
+      for (let i = 0; i < 4; i++) seedEligible(`cap-q${i}`)
+      getProviderConfigFromSettingsMock.mockReturnValue({ provider: 'google', model: 'gemini-3.5-flash', apiKey: 'test-key' }) // pragma: allowlist secret
+      await startValueBackfill()
+      expect(maxInFlight).toBe(1)
+    })
+
     it('starts with only a Jev key (no AI provider) and uses the Jev spacing, not the LLM one', async () => {
       seedEligible('cap-1')
       seedEligible('cap-2')
@@ -1418,6 +1449,8 @@ describe('value-backfill', () => {
       _setValueBackfillConfigForTests({
         minIntervalMs: 60_000,
         jevMinIntervalMs: 30_000,
+        // One at a time, so the second call has to wait for the first.
+        jevConcurrency: 1,
         delayFn: async (ms: number) => {
           delayCalls.push(ms)
         }
