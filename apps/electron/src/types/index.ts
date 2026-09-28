@@ -274,6 +274,12 @@ export interface AppConfig {
   // Modular features (Track I) — mirror of the main-process shape. `preset`
   // selects a named feature-set; `flags` are sparse per-feature overrides.
   features?: FeaturesConfig
+  /** Decisions (Jev): one switch for Jev and one per job. Absent means all on. */
+  decisions?: {
+    jevEnabled: boolean
+    jevValue: boolean
+    jevMeetingMatch: boolean
+  }
   ui: {
     /** Library title for sources with no calendar event. */
     /** No longer read (25-sep-2026): the Library never titles a source by its file name. */

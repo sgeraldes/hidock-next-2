@@ -232,6 +232,18 @@ export interface AppConfig {
   // existing installs. The effective per-feature state is computed by the pure
   // resolveFeatureState() in src/shared/feature-registry.ts.
   features: FeaturesConfig
+  /**
+   * Decisions (Jev): one switch for Jev and one per job it does. Each job
+   * runs only with a key, the Jev switch on and its own switch on. All on by
+   * default, which is how Jev behaved before the switches existed.
+   */
+  decisions: {
+    jevEnabled: boolean
+    /** Value and evaluation: stars, kind, work or personal, transcript trust. */
+    jevValue: boolean
+    /** Which calendar meeting a recording is, from what was said. */
+    jevMeetingMatch: boolean
+  }
   ui: {
     /**
      * Title the library shows for a source with no calendar event.
@@ -341,6 +353,11 @@ const DEFAULT_CONFIG: AppConfig = {
   // Default preset `full` → every feature enabled → identical behavior to before
   // modular features existed. New installs may later be asked during onboarding.
   features: { ...DEFAULT_FEATURES_CONFIG },
+  decisions: {
+    jevEnabled: true,
+    jevValue: true,
+    jevMeetingMatch: true
+  },
   ui: {
     theme: 'system',
     defaultView: 'week',
