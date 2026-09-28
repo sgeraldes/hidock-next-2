@@ -140,6 +140,9 @@ export interface AppConfig {
     modelHostUrl?: string
     /** Token this machine got when it paired with that host. */
     modelHostToken?: string
+    // Jev (TypeSafe AI) key. When set, Jev classifies recording value instead
+    // of the LLM. Encrypted at rest like modelHostToken.
+    jevApiKey?: string
     /**
      * Which engine does voice recognition (see speaker-engines.ts). 'auto' keeps
      * the behaviour from before 24-sep-2026: the Model Host when paired, else here.
@@ -285,6 +288,7 @@ const DEFAULT_CONFIG: AppConfig = {
     speakerLinkingCpuPercent: 40,
     modelHostUrl: '',
     modelHostToken: '',
+    jevApiKey: '',
     speakerEngine: 'auto',
     speakerSetupFingerprint: '',
     speakerSetupAt: '',
@@ -521,6 +525,9 @@ export async function initializeConfig(options: { persist?: boolean } = {}): Pro
       if (savedConfig.calendar?.icsUrl) {
         savedConfig.calendar.icsUrl = decryptSensitive(savedConfig.calendar.icsUrl)
       }
+      if (savedConfig.transcription?.jevApiKey) {
+        savedConfig.transcription.jevApiKey = decryptSensitive(savedConfig.transcription.jevApiKey)
+      }
       if (savedConfig.transcription?.modelHostToken) {
         savedConfig.transcription.modelHostToken = decryptSensitive(
           savedConfig.transcription.modelHostToken
@@ -621,7 +628,10 @@ export async function saveConfig(newConfig: Partial<AppConfig>): Promise<void> {
       ...config.transcription,
       modelHostToken: config.transcription.modelHostToken
         ? encryptSensitive(config.transcription.modelHostToken)
-        : config.transcription.modelHostToken
+        : config.transcription.modelHostToken,
+      jevApiKey: config.transcription.jevApiKey
+        ? encryptSensitive(config.transcription.jevApiKey)
+        : config.transcription.jevApiKey
     }
   }
 

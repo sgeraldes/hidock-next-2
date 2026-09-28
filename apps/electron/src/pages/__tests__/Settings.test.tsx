@@ -1,6 +1,6 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { Settings } from '../Settings'
 
 const mockLoadConfig = vi.fn()
@@ -300,6 +300,20 @@ describe('Settings Page', () => {
   it('hides the kill-switch hint when valueClassificationEnabled is not explicitly false', async () => {
     render(<Settings />)
     expect(screen.queryByText(/Automatic rating of newly transcribed recordings is turned off/)).not.toBeInTheDocument()
+  })
+
+  it('saves a pasted Jev key through updateConfig and never shows it back', async () => {
+    mockUpdateConfig.mockResolvedValue(undefined)
+    render(<Settings />)
+
+    const input = screen.getByLabelText('Jev API key (TypeSafe AI)') as HTMLInputElement
+    expect(input.type).toBe('password')
+    fireEvent.change(input, { target: { value: '  ts-test-key  ' } }) // pragma: allowlist secret
+    fireEvent.click(screen.getByRole('button', { name: 'Save key' }))
+
+    await waitFor(() => expect(mockUpdateConfig).toHaveBeenCalledWith('transcription', { jevApiKey: 'ts-test-key' })) // pragma: allowlist secret
+    // The draft clears after saving; the saved key lives only in config.
+    await waitFor(() => expect(input.value).toBe(''))
   })
 
   /**

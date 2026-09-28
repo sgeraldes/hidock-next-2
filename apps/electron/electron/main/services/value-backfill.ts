@@ -52,9 +52,9 @@ import {
   classifyCaptureValueRaw,
   applyCaptureValueClassification,
   DURATION_LOW_VALUE_MAX_SECONDS,
+  getValueClassifierKind,
   type RawClassificationResult
 } from './value-classification'
-import { getProviderConfigFromSettings } from './ai-provider-config'
 
 // ---------------------------------------------------------------------------
 // Tunables — `let` (not `const`) so tests can shrink delays/chunk sizes to
@@ -66,6 +66,10 @@ import { getProviderConfigFromSettings } from './ai-provider-config'
 let CHUNK_SIZE = 5
 /** Minimum spacing between LLM calls (rate limit). */
 let MIN_INTERVAL_MS = 800
+/** Minimum spacing between Jev calls. Jev answers in 70 to 500 ms and allows
+ *  1,200 requests a minute (docs.typesafe.ai/models, 27-sep-2026); 100 ms keeps
+ *  a 2,000-item backlog to a few minutes and far under that limit. */
+let JEV_MIN_INTERVAL_MS = 100
 /** Terminal parking threshold — a 'failed' item with attempts >= this is
  *  excluded from the eligible set (both the query AND this constant read the
  *  SAME number, per AR-4). */
@@ -88,7 +92,10 @@ export function _setValueBackfillConfigForTests(overrides: {
   delayFn?: (ms: number) => Promise<void>
 }): void {
   if (overrides.chunkSize !== undefined) CHUNK_SIZE = overrides.chunkSize
-  if (overrides.minIntervalMs !== undefined) MIN_INTERVAL_MS = overrides.minIntervalMs
+  if (overrides.minIntervalMs !== undefined) {
+    MIN_INTERVAL_MS = overrides.minIntervalMs
+    JEV_MIN_INTERVAL_MS = overrides.minIntervalMs
+  }
   if (overrides.maxDurableAttempts !== undefined) MAX_DURABLE_ATTEMPTS = overrides.maxDurableAttempts
   if (overrides.inRunRetryDelaysMs !== undefined) IN_RUN_RETRY_DELAYS_MS = overrides.inRunRetryDelaysMs
   if (overrides.progressThrottleMs !== undefined) PROGRESS_THROTTLE_MS = overrides.progressThrottleMs
@@ -100,6 +107,7 @@ export function _setValueBackfillConfigForTests(overrides: {
 export function _resetValueBackfillForTests(): void {
   CHUNK_SIZE = 5
   MIN_INTERVAL_MS = 800
+  JEV_MIN_INTERVAL_MS = 100
   MAX_DURABLE_ATTEMPTS = 3
   IN_RUN_RETRY_DELAYS_MS = [1000, 2000, 4000]
   PROGRESS_THROTTLE_MS = 500
@@ -435,10 +443,13 @@ async function callWithInRunRetries(captureId: string): Promise<RawClassificatio
 
 let lastCallStartedAt = 0
 
+/** Spacing for the run in progress; set when the run starts. */
+let runIntervalMs = MIN_INTERVAL_MS
+
 async function waitForThrottle(): Promise<void> {
   const elapsed = Date.now() - lastCallStartedAt
-  if (lastCallStartedAt > 0 && elapsed < MIN_INTERVAL_MS) {
-    await delayFn(MIN_INTERVAL_MS - elapsed)
+  if (lastCallStartedAt > 0 && elapsed < runIntervalMs) {
+    await delayFn(runIntervalMs - elapsed)
   }
 }
 
@@ -617,10 +628,12 @@ export async function startValueBackfill(opts?: { order?: 'newest' | 'oldest' })
   let loopStarted = false
 
   try {
-    const providerConfig = getProviderConfigFromSettings()
-    if (!providerConfig) {
+    const classifier = getValueClassifierKind()
+    if (!classifier) {
       return { started: false, reason: 'no-provider' }
     }
+    runIntervalMs = classifier === 'jev' ? JEV_MIN_INTERVAL_MS : MIN_INTERVAL_MS
+    console.log(`[ValueBackfill] classifier: ${classifier}`)
 
     _ensureValueBackfillTable()
 

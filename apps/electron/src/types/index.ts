@@ -234,6 +234,8 @@ export interface AppConfig {
     modelHostUrl?: string
     /** Token this computer got when it paired with that host. */
     modelHostToken?: string
+    /** Jev (TypeSafe AI) key; when set, Jev classifies recording value. */
+    jevApiKey?: string
     speakerEngine?: 'auto' | 'pyannote-local' | 'onnx-local' | 'signatures-from-turns' | 'model-host' | 'pyannoteai' | 'off'
     speakerSetupFingerprint?: string
     speakerSetupAt?: string

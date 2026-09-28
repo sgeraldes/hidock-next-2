@@ -46,10 +46,16 @@ vi.mock('../ai-provider-config', () => ({
 // (Codex adversarial review AR-2a) — mock it directly rather than the real
 // config.ts, which needs `electron`'s app.getPath() at module scope.
 const mockConfig = vi.hoisted(() => ({
-  transcription: { valueClassificationMinConfidence: 0.6 }
+  transcription: { valueClassificationMinConfidence: 0.6, jevApiKey: '' }
 }))
 vi.mock('../config', () => ({
   getConfig: () => mockConfig
+}))
+
+// Jev's HTTP client: mocked so no request leaves the test.
+const mockAskJev = vi.fn()
+vi.mock('../jev-client', () => ({
+  askJev: (...args: unknown[]) => mockAskJev(...args)
 }))
 
 import {
@@ -68,7 +74,8 @@ import {
   classifyCaptureValueRaw,
   applyDurationValueGate,
   neutralizeDelimiters,
-  VALUE_REASON_TAGS
+  VALUE_REASON_TAGS,
+  getValueClassifierKind
 } from '../value-classification'
 
 function cleanupDbFiles(base: string): void {
@@ -1228,5 +1235,127 @@ describe('applyDurationValueGate (sweep)', () => {
     const first = getCaptureRow('cap-sw-11')
     expect(applyDurationValueGate()).toEqual({ candidates: 0, marked: 0 })
     expect(getCaptureRow('cap-sw-11')).toEqual(first)
+  })
+})
+
+describe('Jev (TypeSafe AI) as the value classifier', () => {
+  const JEV_KEY = 'jev-test-key' // pragma: allowlist secret
+
+  function jevReply(value: string, confidence: number, nouls: Record<string, number> = {}) {
+    const answers: Record<string, unknown> = {
+      value: {
+        type: 'choice',
+        choice: value,
+        probabilities: { high: 0, normal: 0, low: 0, none: 0, [value]: 1 },
+        confidence
+      }
+    }
+    for (const tag of VALUE_REASON_TAGS) answers[tag] = { type: 'noul', noul: nouls[tag] ?? 0.1 }
+    return { model: 'jev-1.13.0', answers, usage: { input_tokens: 900, output_tokens: 40 } }
+  }
+
+  beforeAll(async () => {
+    cleanupDbFiles(paths.db)
+    await initializeDatabase()
+  })
+
+  afterAll(() => {
+    mockConfig.transcription.jevApiKey = ''
+    try {
+      closeDatabase()
+    } catch {
+      /* ignore */
+    }
+    cleanupDbFiles(paths.db)
+  })
+
+  beforeEach(() => {
+    wipeData()
+    mockComplete.mockReset()
+    mockAskJev.mockReset()
+    mockGetProviderConfig.mockReset()
+    mockGetProviderConfig.mockReturnValue({ provider: 'google', model: 'gemini-3.5-flash', apiKey: 'test-key' }) // pragma: allowlist secret
+    mockConfig.transcription.valueClassificationMinConfidence = 0.6
+    mockConfig.transcription.jevApiKey = JEV_KEY
+  })
+
+  it('asks Jev, not the LLM, when a Jev key is set, and persists its verdict', async () => {
+    seedRecording('rec-j1')
+    seedTranscript('rec-j1', { fullText: 'Hola mamá, ¿qué cocinamos hoy? Pasta con salsa.' })
+    seedCapture('cap-j1', 'rec-j1', { summary: 'Family chat about dinner.' })
+    mockAskJev.mockResolvedValue(jevReply('none', 0.9, { personal_family: 0.93 }))
+
+    const result = await classifyCaptureValue('cap-j1')
+
+    expect(mockComplete).not.toHaveBeenCalled()
+    expect(mockAskJev).toHaveBeenCalledTimes(1)
+    const [key, state, questions] = mockAskJev.mock.calls[0]
+    expect(key).toBe(JEV_KEY)
+    expect(state.transcript_excerpt).toContain('qué cocinamos')
+    expect(state.summary).toBe('Family chat about dinner.')
+    expect(questions.value.type).toBe('choice')
+    expect(Object.keys(questions.value.criteria).sort()).toEqual(['high', 'low', 'none', 'normal'])
+    for (const tag of VALUE_REASON_TAGS) expect(questions[tag].type).toBe('noul')
+
+    expect(result.value).toBe('none')
+    expect(result.rating).toBe('garbage')
+    expect(result.reasons).toEqual(['personal_family'])
+    expect(result.confidence).toBeCloseTo(0.9)
+    expect(getCaptureRow('cap-j1')?.quality_rating).toBe('garbage')
+  })
+
+  it('keeps a low-confidence Jev downgrade from persisting (same floor as the LLM)', async () => {
+    seedRecording('rec-j2')
+    seedTranscript('rec-j2', { fullText: 'Mostly small talk about the weather.' })
+    seedCapture('cap-j2', 'rec-j2')
+    mockAskJev.mockResolvedValue(jevReply('low', 0.4))
+
+    const result = await classifyCaptureValue('cap-j2')
+
+    expect(result.changed).toBe(false)
+    expect(getCaptureRow('cap-j2')?.quality_rating).toBe('unrated')
+  })
+
+  it('never lets an unknown Jev option through: it degrades to normal (no rating change)', async () => {
+    seedRecording('rec-j3')
+    seedTranscript('rec-j3', { fullText: 'Planning the Q4 roadmap.' })
+    seedCapture('cap-j3', 'rec-j3')
+    mockAskJev.mockResolvedValue(jevReply('garbage-please', 0.99))
+
+    const result = await classifyCaptureValue('cap-j3')
+
+    expect(result.value).toBe('normal')
+    // 'normal' never assigns a rating: the row stays unrated.
+    expect(result.rating).toBe('unrated')
+    expect(getCaptureRow('cap-j3')?.quality_rating).toBe('unrated')
+  })
+
+  it('propagates a Jev failure so the backfill can retry or park the item', async () => {
+    seedRecording('rec-j4')
+    seedTranscript('rec-j4', { fullText: 'Real meeting content.' })
+    seedCapture('cap-j4', 'rec-j4')
+    mockAskJev.mockRejectedValue(new Error('Jev returned HTTP 529'))
+
+    await expect(classifyCaptureValueRaw('cap-j4')).rejects.toThrow('HTTP 529')
+    expect(getCaptureRow('cap-j4')?.quality_rating).toBe('unrated')
+  })
+
+  it('still rates a clip under the duration gate for free, without calling Jev', async () => {
+    seedRecording('rec-j5', { durationSeconds: 8 })
+    seedTranscript('rec-j5', { fullText: 'Hola?' })
+    seedCapture('cap-j5', 'rec-j5')
+
+    const raw = await classifyCaptureValueRaw('cap-j5')
+
+    expect(raw.providerCalled).toBe(false)
+    expect(mockAskJev).not.toHaveBeenCalled()
+  })
+
+  it('reports which classifier the backfill will use', () => {
+    expect(getValueClassifierKind()).toBe('jev')
+    mockConfig.transcription.jevApiKey = ''
+    expect(getValueClassifierKind()).toBe('llm')
+    mockGetProviderConfig.mockReturnValue(null)
+    expect(getValueClassifierKind()).toBeNull()
   })
 })
