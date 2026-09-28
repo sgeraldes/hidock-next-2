@@ -155,6 +155,8 @@ export class DevicePipelineService extends EventEmitter {
   private autoConnectListenersBound = false
   /** Upper bound on any single native USB connect call before it's treated as failed. */
   private static readonly CONNECT_TIMEOUT_MS = 12_000
+  /** Minimum gap between streaming file-list snapshots during a scan. */
+  private static readonly FILES_EMIT_INTERVAL_MS = 250
   private connectHandler: ((event: { device: unknown }) => void) | null = null
   private disconnectHandler: ((event: { device: unknown }) => void) | null = null
 
@@ -368,9 +370,18 @@ export class DevicePipelineService extends EventEmitter {
     const onProgress = (current: number, total: number): void => {
       this.patchState({ scanProgress: { current, total } })
     }
+    // Copying and broadcasting the whole growing list on every USB packet is
+    // O(N^2) over a 2,000-file scan. Publish the first packet at once, then at
+    // most every FILES_EMIT_INTERVAL_MS; the caller emits the complete list
+    // when the scan returns.
+    let lastEmitAt = 0
     const onNewFiles = (files: FileInfo[]): void => {
       streamedFiles.push(...files)
-      this.emit('files', [...streamedFiles])
+      const now = Date.now()
+      if (lastEmitAt === 0 || now - lastEmitAt >= DevicePipelineService.FILES_EMIT_INTERVAL_MS) {
+        lastEmitAt = now
+        this.emit('files', [...streamedFiles])
+      }
     }
     const files = await this.safe(() => this.jensen.listFiles(onProgress, expected, onNewFiles))
     this.patchState({ scanProgress: null })

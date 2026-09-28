@@ -395,6 +395,53 @@ describe('Database Service', () => {
       ])
     })
 
+    it('shows only the latest attempt per recording: a failure a later attempt superseded is hidden', () => {
+      seedRecording('rec-retried')
+      seedRecording('rec-redone')
+      seedRecording('rec-dismissed-later')
+      // rec-retried: failed, then retried as a new row that is now pending.
+      const oldFail = addToQueue('rec-retried')
+      updateQueueItem(oldFail, 'failed', 'first try failed')
+      const retry = addToQueue('rec-retried')
+      // rec-redone: failed, then a later attempt completed.
+      const failedOnce = addToQueue('rec-redone')
+      updateQueueItem(failedOnce, 'failed', 'failed once')
+      const redone = addToQueue('rec-redone')
+      updateQueueItem(redone, 'completed')
+      // rec-dismissed-later: two failures; the newer one stays, the older hides.
+      const failA = addToQueue('rec-dismissed-later')
+      updateQueueItem(failA, 'failed', 'A')
+      const failB = addToQueue('rec-dismissed-later')
+      updateQueueItem(failB, 'failed', 'B')
+      // Same-second created_at is the common case; rowid breaks the tie.
+      run("UPDATE transcription_queue SET created_at = '2026-09-27 10:00:00'")
+
+      const items = getActionableQueueItems()
+      expect(items.map((i) => i.id).sort()).toEqual([failB, retry].sort())
+      // The processor's own read is untouched.
+      expect(getQueueItems('failed').map((i) => i.id).sort()).toEqual([failA, failB, failedOnce, oldFail].sort())
+    })
+
+    it('flags failures stamped before this app session started', () => {
+      seedRecording('rec-old')
+      seedRecording('rec-new')
+      seedRecording('rec-pending')
+      const oldFail = addToQueue('rec-old')
+      updateQueueItem(oldFail, 'failed', 'yesterday')
+      run("UPDATE transcription_queue SET completed_at = '2020-01-01 00:00:00' WHERE id = ?", [oldFail])
+      const newFail = addToQueue('rec-new')
+      updateQueueItem(newFail, 'failed', 'just now')
+      run("UPDATE transcription_queue SET completed_at = datetime('now', '+1 minute') WHERE id = ?", [newFail])
+      const pending = addToQueue('rec-pending')
+      run("UPDATE transcription_queue SET created_at = '2020-01-01 00:00:00' WHERE id = ?", [pending])
+
+      const byId = new Map(getActionableQueueItems().map((i) => [i.id, i.from_previous_session]))
+      expect(byId.get(oldFail)).toBe(1)
+      expect(byId.get(newFail)).toBe(0)
+      // Only failures are ever "earlier"; queued work is always current.
+      expect(byId.get(pending)).toBe(0)
+    })
+
     it('deduplicates active work for the same recording and marks it pending once', () => {
       seedRecording('rec-1')
       const first = addToQueue('rec-1')

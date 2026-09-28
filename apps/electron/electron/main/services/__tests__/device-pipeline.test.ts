@@ -210,6 +210,26 @@ describe('DevicePipelineService', () => {
         expect(snapshots).toContainEqual(['streamed.hda'])
       })
 
+      it('throttles streaming snapshots and still publishes the complete list once the scan ends', async () => {
+        // 200 packets arriving back to back: one snapshot per packet copied the
+        // whole growing list every time (O(N^2) at 2,000 files).
+        const all = Array.from({ length: 200 }, (_, i) => makeFileInfo(`f${i}.hda`))
+        const listFiles = vi.fn(async (_progress, _expected, onNewFiles) => {
+          for (const file of all) onNewFiles?.([file])
+          return all
+        })
+        const jensen = makeJensen({ listFiles })
+        const svc = new DevicePipelineService(jensen, makeDownloadService())
+        const snapshots: number[] = []
+        svc.on('files', files => snapshots.push(files.length))
+
+        await svc.connect()
+
+        expect(snapshots[0]).toBe(1) // the first packet is published at once
+        expect(snapshots.length).toBeLessThan(10)
+        expect(snapshots[snapshots.length - 1]).toBe(200) // complete list after the scan
+      })
+
     it('scans on first connect (no cache)', async () => {
       const jensen = makeJensen()
       const svc = new DevicePipelineService(jensen, makeDownloadService())

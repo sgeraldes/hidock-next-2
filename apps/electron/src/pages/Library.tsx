@@ -87,6 +87,7 @@ import {
 import type { TypeCounts } from '@/features/library/components/LibraryFilters'
 import { useLibraryStore, useLibrarySorting } from '@/store/useLibraryStore'
 import { useOperations } from '@/hooks/useOperations'
+import { useProcessingPause } from '@/hooks/useProcessingPause'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { useTranscriptionStore } from '@/store/features/useTranscriptionStore'
 import { isFeatureOffThisRun } from '@/lib/bootFeatures'
@@ -153,6 +154,7 @@ export function Library() {
       .map((item) => [item.recordingId, item.status] as const)
       .sort(([left], [right]) => left.localeCompare(right))
   ))
+  const { paused: processingPaused, toggle: toggleProcessingPause } = useProcessingPause()
   const recordings = useMemo(() => {
     const pairs = JSON.parse(activeTranscriptionSignature) as Array<[string, 'pending' | 'processing']>
     const statuses = new Map<string, 'pending' | 'processing'>()
@@ -2377,6 +2379,9 @@ export function Library() {
         bulkCounts={bulkCounts}
         bulkProcessing={bulkProcessing}
         bulkProgress={bulkProgress}
+        processingPaused={processingPaused}
+        hasActiveProcessing={downloadCounts.pending + downloadCounts.active > 0 || activeTranscriptionSignature !== '[]'}
+        onToggleProcessingPause={toggleProcessingPause}
         onAddRecording={handleAddRecording}
         onImportFile={handleImportFile}
         onOpenFolder={openRecordingsFolder}

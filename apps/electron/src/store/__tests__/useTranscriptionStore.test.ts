@@ -146,6 +146,37 @@ describe('useTranscriptionStore', () => {
       expect(item.startedAt?.toISOString()).toBe('2026-08-19T18:59:15.000Z')
       expect(item.completedAt).toBeUndefined()
     })
+
+    it('maps the main-process earlier-session flag onto failed items', () => {
+      useTranscriptionStore.getState().reconcileQueue([
+        { id: 'q-old', recording_id: 'rec-old', filename: 'old.hda', status: 'failed', from_previous_session: 1 },
+        { id: 'q-new', recording_id: 'rec-new', filename: 'new.hda', status: 'failed', from_previous_session: 0 },
+        { id: 'q-live', recording_id: 'rec-live', filename: 'live.hda', status: 'pending' }
+      ])
+
+      const queue = useTranscriptionStore.getState().queue
+      expect(queue.get('q-old')?.fromPreviousSession).toBe(true)
+      expect(queue.get('q-new')?.fromPreviousSession).toBe(false)
+      expect(queue.get('q-live')?.fromPreviousSession).toBe(false)
+    })
+  })
+
+  describe('dismissMany', () => {
+    it('dismisses exactly the given failures through the durable cancel path', async () => {
+      useTranscriptionStore.getState().reconcileQueue([
+        { id: 'q-a', recording_id: 'rec-a', filename: 'a.hda', status: 'failed' },
+        { id: 'q-b', recording_id: 'rec-b', filename: 'b.hda', status: 'failed' },
+        { id: 'q-c', recording_id: 'rec-c', filename: 'c.hda', status: 'failed' }
+      ])
+
+      const removed = await useTranscriptionStore.getState().dismissMany(['q-a', 'q-c'])
+
+      expect(removed).toBe(2)
+      expect(window.electronAPI.recordings.updateQueueItem).toHaveBeenCalledWith('q-a', 'cancelled')
+      expect(window.electronAPI.recordings.updateQueueItem).toHaveBeenCalledWith('q-c', 'cancelled')
+      expect(window.electronAPI.recordings.updateQueueItem).not.toHaveBeenCalledWith('q-b', 'cancelled')
+      expect(Array.from(useTranscriptionStore.getState().queue.keys())).toEqual(['q-b'])
+    })
   })
 
   describe('updateProgress', () => {

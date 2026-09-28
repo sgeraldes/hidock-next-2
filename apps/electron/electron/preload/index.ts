@@ -1032,6 +1032,8 @@ export interface ElectronAPI {
         status: 'pending' | 'downloading' | 'cancelling' | 'completed' | 'failed' | 'cancelled'
         error?: string
         cancelReason?: 'user' | 'interrupted'
+        /** Reloaded at boot: written by an earlier app session. */
+        fromPreviousSession?: boolean
       }>
       session: {
         id: string

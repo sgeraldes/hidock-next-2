@@ -4,7 +4,7 @@ import { OperationsPanel } from '../OperationsPanel'
 
 // Mock stores
 import { useAppStore, useDownloadQueue, useUnifiedRecordings } from '@/store/useAppStore'
-import { useTranscriptionStore, useTranscriptionStats, useTranscriptionPaused } from '@/store/features/useTranscriptionStore'
+import { useTranscriptionStore, useTranscriptionStats } from '@/store/features/useTranscriptionStore'
 import { useUIStore } from '@/store/ui/useUIStore'
 
 // Spy on navigation without needing a Router.
@@ -14,8 +14,9 @@ vi.mock('react-router-dom', async (orig) => ({
   useNavigate: () => mockNavigate
 }))
 
+const mockSetDownloadsPaused = vi.fn()
 vi.mock('@/store/useAppStore', () => ({
-  useAppStore: vi.fn(),
+  useAppStore: Object.assign(vi.fn(), { getState: () => ({ setDownloadsPaused: mockSetDownloadsPaused }) }),
   useDownloadQueue: vi.fn().mockReturnValue(new Map()),
   useDeviceSyncProgress: vi.fn().mockReturnValue(null),
   useDeviceSyncEta: vi.fn().mockReturnValue(null),
@@ -34,8 +35,15 @@ const mockDeprioritize = vi.fn()
 const mockRetry = vi.fn().mockResolvedValue(true)
 const mockDismiss = vi.fn().mockResolvedValue(true)
 const mockDismissFailed = vi.fn().mockResolvedValue(1)
+const mockDismissMany = vi.fn().mockResolvedValue(1)
 const mockPauseQueue = vi.fn()
 const mockResumeQueue = vi.fn()
+// The combined downloads + transcriptions switch (shared with the Library header).
+const mockToggleProcessing = vi.fn()
+const mockProcessingPause = { paused: false, downloadsPaused: false, transcriptionPaused: false }
+vi.mock('@/hooks/useProcessingPause', () => ({
+  useProcessingPause: () => ({ ...mockProcessingPause, pause: vi.fn(), resume: vi.fn(), toggle: mockToggleProcessing })
+}))
 const mockApplyQueueState = vi.fn()
 const mockClipboardWrite = vi.fn().mockResolvedValue(undefined)
 
@@ -60,6 +68,7 @@ function makeTranscriptionState(queue: Map<string, unknown>) {
     retry: mockRetry,
     dismiss: mockDismiss,
     dismissFailed: mockDismissFailed,
+    dismissMany: mockDismissMany,
     pauseQueue: mockPauseQueue,
     resumeQueue: mockResumeQueue,
     applyQueueState: mockApplyQueueState
@@ -81,7 +90,9 @@ function setupDefaultMocks() {
     return typeof selector === 'function' ? selector(state) : state
   })
 
-  vi.mocked(useTranscriptionPaused).mockReturnValue(false)
+  mockProcessingPause.paused = false
+  mockProcessingPause.downloadsPaused = false
+  mockProcessingPause.transcriptionPaused = false
 }
 
 /** Seed one pending item + optional recording, and open the detail overlay so
@@ -138,6 +149,9 @@ describe('OperationsPanel', () => {
       value: { writeText: mockClipboardWrite }
     })
     setupDefaultMocks()
+    vi.mocked(useUnifiedRecordings).mockReturnValue([])
+    // mockReturnValue survives clearAllMocks; reset so one test's downloads never leak into the next.
+    vi.mocked(useDownloadQueue).mockReturnValue(new Map())
     useUIStore.setState({ operationsOverlayOpen: false })
   })
 
@@ -225,7 +239,8 @@ describe('OperationsPanel', () => {
       expect(screen.getByText('First queued:').parentElement).not.toHaveTextContent('Unknown')
       expect(screen.getByText('Last started:').parentElement).not.toHaveTextContent('Unknown')
 
-      fireEvent.click(screen.getByLabelText('Copy error for 2026Aug19-150011-Rec02'))
+      fireEvent.click(screen.getByLabelText('Copy error for Recording'))
+      expect(screen.queryByText(/2026Aug19-150011-Rec02/)).not.toBeInTheDocument()
       expect(mockClipboardWrite).toHaveBeenCalledWith(fullError)
     })
 
@@ -266,7 +281,7 @@ describe('OperationsPanel', () => {
       render(<OperationsPanel sidebarOpen={true} />)
 
       expect(await screen.findByText('Source unavailable')).toBeInTheDocument()
-      fireEvent.click(screen.getByRole('button', { name: 'Dismiss download failure missing' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Dismiss download failure Recording' }))
       await waitFor(() => expect(dismissDownload).toHaveBeenCalledWith('missing.hda'))
     })
   })
@@ -286,29 +301,39 @@ describe('OperationsPanel', () => {
       useUIStore.setState({ operationsOverlayOpen: true })
     }
 
-    it('shows an enabled Pause control and calls pauseQueue', () => {
+    it('shows an enabled Pause control that pauses the whole pipeline', () => {
       setupActiveOverlay()
       render(<OperationsPanel sidebarOpen={true} />)
 
-      const pauseBtn = screen.getByLabelText('Pause transcription queue')
+      const pauseBtn = screen.getByLabelText('Pause processing')
       expect(pauseBtn).not.toBeDisabled()
       fireEvent.click(pauseBtn)
-      expect(mockPauseQueue).toHaveBeenCalled()
+      expect(mockToggleProcessing).toHaveBeenCalledTimes(1)
+    })
+
+    it('offers Resume while only downloads are paused and nothing is queued for transcription', () => {
+      mockProcessingPause.paused = true
+      mockProcessingPause.downloadsPaused = true
+      useUIStore.setState({ operationsOverlayOpen: true })
+      render(<OperationsPanel sidebarOpen={true} />)
+
+      fireEvent.click(screen.getByLabelText('Resume processing'))
+      expect(mockToggleProcessing).toHaveBeenCalledTimes(1)
     })
 
     it('flips to a Resume control and shows a Paused badge when paused', () => {
       setupActiveOverlay()
-      vi.mocked(useTranscriptionPaused).mockReturnValue(true)
+      mockProcessingPause.paused = true
+      mockProcessingPause.transcriptionPaused = true
       render(<OperationsPanel sidebarOpen={true} />)
 
-      const resumeBtn = screen.getByLabelText('Resume transcription queue')
+      const resumeBtn = screen.getByLabelText('Resume processing')
       expect(resumeBtn).not.toBeDisabled()
       // "Paused" shows in both the sidebar badge and the overlay header.
       expect(screen.getAllByText(/Paused/).length).toBeGreaterThan(0)
 
       fireEvent.click(resumeBtn)
-      expect(mockResumeQueue).toHaveBeenCalled()
-      expect(mockPauseQueue).not.toHaveBeenCalled()
+      expect(mockToggleProcessing).toHaveBeenCalledTimes(1)
     })
 
     it('never renders a disabled "coming soon" pause placeholder', () => {
@@ -324,6 +349,10 @@ describe('OperationsPanel', () => {
     function setupDownloadOverlay(downloads: Array<Record<string, unknown>>) {
       const queue = new Map(downloads.map((d) => [d.filename as string, d]))
       vi.mocked(useDownloadQueue).mockReturnValue(queue as any)
+      // The Library source for REC0001 carries a suggested title.
+      vi.mocked(useUnifiedRecordings).mockReturnValue([
+        { id: 'rec-0001', filename: 'REC0001.WAV', title: 'Weekly sync' }
+      ] as any)
       useUIStore.setState({ operationsOverlayOpen: true })
     }
 
@@ -335,7 +364,9 @@ describe('OperationsPanel', () => {
 
       // Overlay titled "Operations", lists the download with progress + size.
       expect(screen.getByRole('dialog', { name: /operations detail/i })).toBeInTheDocument()
-      expect(screen.getByText('REC0001')).toBeInTheDocument()
+      // Named by its title, never the device file name.
+      expect(screen.getByText('Weekly sync')).toBeInTheDocument()
+      expect(screen.queryByText(/REC0001/)).not.toBeInTheDocument()
       expect(screen.getByText(/Downloading… 42%/)).toBeInTheDocument()
       // The stale copy must never appear when a download is active.
       expect(screen.queryByText('No active transcriptions.')).not.toBeInTheDocument()
@@ -348,7 +379,7 @@ describe('OperationsPanel', () => {
       ])
       render(<OperationsPanel sidebarOpen={true} />)
 
-      fireEvent.click(screen.getByLabelText('Cancel download REC0001'))
+      fireEvent.click(screen.getByLabelText('Cancel download Weekly sync'))
       expect(mockCancelDownload).toHaveBeenCalledWith('REC0001.WAV')
     })
 
@@ -359,7 +390,7 @@ describe('OperationsPanel', () => {
       render(<OperationsPanel sidebarOpen={true} />)
 
       expect(screen.getByText(/Cancelling…/)).toBeInTheDocument()
-      expect(screen.getByLabelText('Cancel download REC0001')).toBeDisabled()
+      expect(screen.getByLabelText('Cancel download Weekly sync')).toBeDisabled()
     })
 
     it('Cancel-all downloads control is wired to cancelAllDownloads', () => {
@@ -371,6 +402,76 @@ describe('OperationsPanel', () => {
 
       fireEvent.click(screen.getByRole('button', { name: 'Cancel all downloads' }))
       expect(mockCancelAllDownloads).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('earlier-session failures', () => {
+    function setupEarlier() {
+      const queue = new Map<string, unknown>([
+        ['t-old', {
+          id: 't-old', recordingId: 'rec-old', filename: 'OLD.hda', status: 'failed', progress: 0,
+          error: 'old failure', retryCount: 0, attempts: 1, priority: 0, fromPreviousSession: true,
+          completedAt: new Date('2026-09-20T10:00:00Z')
+        }],
+        ['t-now', {
+          id: 't-now', recordingId: 'rec-now', filename: 'NOW.hda', status: 'failed', progress: 0,
+          error: 'this session', retryCount: 0, attempts: 1, priority: 0, fromPreviousSession: false
+        }]
+      ])
+      vi.mocked(useTranscriptionStats).mockReturnValue({
+        total: 2, completed: 0, failed: 2, processing: 0, pending: 0, aggregateProgress: 0
+      })
+      vi.mocked(useTranscriptionStore).mockImplementation((selector: any) => {
+        const state = makeTranscriptionState(queue)
+        return typeof selector === 'function' ? selector(state) : state
+      })
+      const dismiss = vi.fn().mockResolvedValue(true)
+      Object.defineProperty(window, 'electronAPI', {
+        configurable: true,
+        value: {
+          downloadService: {
+            getState: vi.fn().mockResolvedValue({
+              queue: [{
+                id: 'old-dl', filename: 'OLD-DL.hda', fileSize: 10, progress: 0, status: 'failed',
+                error: 'USB transfer failed', fromPreviousSession: true
+              }],
+              session: null, isProcessing: false, isPaused: false
+            }),
+            onStateUpdate: vi.fn().mockReturnValue(() => {}),
+            dismiss
+          }
+        }
+      })
+      return { dismiss }
+    }
+
+    it('counts only this session\'s failures in the badge', async () => {
+      setupEarlier()
+      render(<OperationsPanel sidebarOpen={true} />)
+
+      // One current transcription failure; the earlier transcription and the
+      // earlier download failure never reach the badge.
+      expect(await screen.findByText('1 failed')).toBeInTheDocument()
+    })
+
+    it('keeps earlier failures in one collapsed group that clears in one click', async () => {
+      const { dismiss } = setupEarlier()
+      useUIStore.setState({ operationsOverlayOpen: true })
+      render(<OperationsPanel sidebarOpen={true} />)
+
+      const toggle = await screen.findByRole('button', { name: /Earlier failures \(2\)/ })
+      expect(toggle).toHaveAttribute('aria-expanded', 'false')
+      expect(screen.queryByText('old failure')).not.toBeInTheDocument()
+      // The current failure stays in the main list.
+      expect(screen.getByText(/this session/)).toBeInTheDocument()
+
+      fireEvent.click(toggle)
+      expect(screen.getByText(/old failure/)).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Clear earlier failures' }))
+      await waitFor(() => expect(mockDismissMany).toHaveBeenCalledWith(['t-old']))
+      expect(dismiss).toHaveBeenCalledWith('OLD-DL.hda')
+      expect(mockDismissMany).not.toHaveBeenCalledWith(expect.arrayContaining(['t-now']))
     })
   })
 })

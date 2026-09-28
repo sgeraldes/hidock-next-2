@@ -460,6 +460,12 @@ export function useDownloadOrchestrator() {
     }
 
     const state = await window.electronAPI.downloadService.getState()
+    // Paused by the owner (Library header / Operations): start nothing, items stay pending.
+    if (state.isPaused) {
+      if (shouldLogQa()) console.log('[useDownloadOrchestrator] Not starting downloads — paused')
+      isProcessingDownloads.current = false
+      return
+    }
     const allPending = state.queue.filter((item: DownloadQueueItem) => item.status === 'pending')
 
     // Slice 1: scope to the user's explicit request when auto-download is off,
@@ -515,6 +521,9 @@ export function useDownloadOrchestrator() {
     // Round-4: the device-sync gate closed mid-run (live disable). Remaining
     // items stay PENDING — this is not a cancel and not a failure.
     let gateStopped = false
+    // Paused mid-run: the in-flight item finished, the rest stay pending and
+    // visible as queued. Not a cancel, so the renderer queue mirror is kept.
+    let pausedStop = false
     let bytesDownloaded = 0
     const initialTotal = pendingItems.length
     // Guards against re-selecting an item that already failed this run (failed items
@@ -566,6 +575,11 @@ export function useDownloadOrchestrator() {
 
       // Fresh snapshot → scope → recency order → first not-yet-attempted item.
       const freshState = await window.electronAPI.downloadService.getState()
+      if (freshState.isPaused) {
+        if (shouldLogQa()) console.log('[useDownloadOrchestrator] Paused — stopping before next dequeue (items stay pending)')
+        pausedStop = true
+        break
+      }
       const freshPending = freshState.queue.filter((i: DownloadQueueItem) => i.status === 'pending')
       const ordered = orderDownloadsForProcessing(
         selectDownloadsToProcess(freshPending, _requestedDownloads, autoDownload),
@@ -642,7 +656,13 @@ export function useDownloadOrchestrator() {
       window.dispatchEvent(new CustomEvent('hidock:downloads-completed'))
     }
 
-    if (completed > 0 || failed > 0 || aborted) {
+    if (pausedStop) {
+      toast({
+        title: 'Downloads paused',
+        description: `Downloaded ${completed} of ${pendingItems.length}; the rest stay queued until you resume`,
+        variant: 'default'
+      })
+    } else if (completed > 0 || failed > 0 || aborted) {
       toast({
         title: gateStopped
           ? 'Device Sync turned off'
@@ -706,6 +726,7 @@ export function useDownloadOrchestrator() {
           // (status/progress/error, plus the transient 'cancelling'→'cancelled' flash).
           // This is the one source of truth the bell popover + Operations overlay read.
           useAppStore.getState().syncDownloadQueue(state.queue)
+          useAppStore.getState().setDownloadsPaused(state.isPaused === true)
 
           if (_cancelEpoch > _lastProcessedEpoch) {
             _lastProcessedEpoch = _cancelEpoch
@@ -735,6 +756,7 @@ export function useDownloadOrchestrator() {
           const step = useAppStore.getState().connectionStatus.step
           if (
             hasPending &&
+            !state.isPaused &&
             !isProcessingDownloads.current &&
             !isDeviceSyncInitiationBlocked() &&
             canStartDownloadSession(deviceService.isConnected(), step)

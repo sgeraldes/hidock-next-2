@@ -7674,12 +7674,46 @@ export function getQueueItems(status?: string): (QueueItem & { filename?: string
  * excluded so a periodic UI reconciliation does not serialize and scan years of
  * terminal rows merely to render the handful of actionable operations.
  */
-export function getActionableQueueItems(): (QueueItem & { filename?: string; date_recorded?: string })[] {
-  return queryAll<QueueItem & { filename?: string; date_recorded?: string }>(`
-    SELECT tq.*, r.filename, r.date_recorded
+/**
+ * When this process started. Failures stamped before it belong to an earlier
+ * app session; Operations shows them collapsed instead of as fresh errors.
+ */
+const APP_SESSION_STARTED_AT_ISO = new Date().toISOString()
+
+export type ActionableQueueItem = QueueItem & {
+  filename?: string
+  date_recorded?: string
+  /** 1 when a failed row was stamped before this app session started. */
+  from_previous_session?: number
+}
+
+export function getActionableQueueItems(): ActionableQueueItem[] {
+  // A failed row is hidden when a later attempt for the same recording exists
+  // (retried, completed or dismissed): Operations shows the latest attempt only.
+  // Pending/processing rows always show; the processor reads getQueueItems.
+  return queryAll<ActionableQueueItem>(`
+    SELECT tq.*, r.filename, r.date_recorded,
+      CASE
+        WHEN tq.status = 'failed'
+          AND datetime(COALESCE(tq.completed_at, tq.started_at, tq.created_at)) < datetime(?)
+        THEN 1 ELSE 0
+      END AS from_previous_session
     FROM transcription_queue tq
     LEFT JOIN recordings r ON tq.recording_id = r.id
     WHERE tq.status IN ('pending', 'processing', 'failed')
+      AND NOT (
+        tq.status = 'failed'
+        AND EXISTS (
+          SELECT 1
+          FROM transcription_queue newer
+          WHERE newer.recording_id = tq.recording_id
+            AND newer.id <> tq.id
+            AND (
+              datetime(newer.created_at) > datetime(tq.created_at)
+              OR (datetime(newer.created_at) = datetime(tq.created_at) AND newer.rowid > tq.rowid)
+            )
+        )
+      )
       AND NOT (
         tq.status = 'failed'
         AND EXISTS (
@@ -7690,7 +7724,7 @@ export function getActionableQueueItems(): (QueueItem & { filename?: string; dat
         )
       )
     ORDER BY r.date_recorded DESC, tq.created_at ASC
-  `)
+  `, [APP_SESSION_STARTED_AT_ISO])
 }
 
 export function updateQueueItem(id: string, status: string, errorMessage?: string): void {

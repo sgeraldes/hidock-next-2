@@ -114,6 +114,10 @@ export interface DownloadQueueItem {
   // user-cancelled rows are reloaded on startup, so a deliberate cancel survives an
   // app restart instead of resurrecting via post-restart reconciliation.
   cancelReason?: 'user' | 'interrupted'
+  // Reloaded from download_queue at boot, so it was written by an earlier app
+  // session. Memory only: Operations collapses these failures under
+  // "Earlier failures" instead of listing them as fresh errors.
+  fromPreviousSession?: boolean
   // Truncated-download recovery: this download brings back the complete copy of
   // a recording whose local file is shorter than its transcript. The new bytes
   // replace the file at `path` in place, and only after they prove longer (see
@@ -316,7 +320,8 @@ export class DownloadService {
           recordingDate: item.recording_date ? new Date(item.recording_date) : undefined,
           cancelReason: item.cancel_reason ?? undefined,
           // Prune age fallback for rows without terminal/start timestamps.
-          createdAt: item.created_at ? new Date(item.created_at) : undefined
+          createdAt: item.created_at ? new Date(item.created_at) : undefined,
+          fromPreviousSession: true
         }
         if (queueItem.status === 'downloading') {
           // A process restart interrupted this transfer. There is no active USB

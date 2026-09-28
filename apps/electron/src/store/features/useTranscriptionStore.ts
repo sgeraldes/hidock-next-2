@@ -34,6 +34,8 @@ export interface TranscriptionItem {
    * honor this exactly (deferred follow-up).
    */
   priority: number
+  /** A failure stamped before this app session started (main-process flag). */
+  fromPreviousSession?: boolean
 }
 
 /** Queue-processor state mirrored from the main process (source of truth). */
@@ -60,6 +62,8 @@ export interface TranscriptionQueueSnapshotItem {
   started_at?: string
   completed_at?: string
   provider?: string
+  /** 1 when a failed row predates this app session (getActionableQueueItems). */
+  from_previous_session?: number
 }
 
 /** SQLite CURRENT_TIMESTAMP is UTC but omits the `Z` suffix. Parse it as UTC so
@@ -98,6 +102,8 @@ export interface TranscriptionQueueStore {
   dismiss: (id: string) => Promise<boolean>
   /** Dismiss every terminal failure and return the number removed. */
   dismissFailed: () => Promise<number>
+  /** Dismiss these failures (same path as dismiss) and return the number removed. */
+  dismissMany: (ids: string[]) => Promise<number>
   /**
    * Bump a pending item sooner. Updates the local view optimistically AND sends
    * the reorder intent to main (which owns the authoritative processing order).
@@ -171,7 +177,8 @@ export const useTranscriptionStore = create<TranscriptionQueueStore>()(
             completedAt:
               snapshot.status === 'failed' ? parseQueueTimestamp(snapshot.completed_at) : undefined,
             provider: snapshot.provider ?? previous?.provider,
-            priority: previous?.priority ?? 0
+            priority: previous?.priority ?? 0,
+            fromPreviousSession: snapshot.from_previous_session === 1
           }
           queue.set(item.id, item)
           if (item.status === 'processing') processing.add(item.recordingId)
@@ -306,8 +313,12 @@ export const useTranscriptionStore = create<TranscriptionQueueStore>()(
       const failedIds = Array.from(get().queue.values())
         .filter((item) => item.status === 'failed')
         .map((item) => item.id)
+      return get().dismissMany(failedIds)
+    },
+
+    dismissMany: async (ids) => {
       let removed = 0
-      for (const id of failedIds) {
+      for (const id of ids) {
         if (await get().dismiss(id)) removed++
       }
       return removed

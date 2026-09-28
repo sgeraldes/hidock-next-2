@@ -71,6 +71,7 @@ vi.mock('fs', async (importOriginal) => {
 })
 
 import { DownloadService, registerDownloadServiceHandlers, getDownloadService } from '../download-service'
+import { queryAll } from '../database'
 
 describe('DownloadService — queue pause/resume', () => {
   let service: DownloadService
@@ -156,6 +157,28 @@ describe('DownloadService — queue pause/resume', () => {
       expect(singleton.getState().isPaused).toBe(false)
     } finally {
       singleton.destroy()
+    }
+  })
+
+  it('marks rows reloaded from the database as from an earlier session; new work is not', () => {
+    // The constructor's loadQueueFromDatabase reads download_queue once. The
+    // failure is an hour old: older than 24 h would be pruned at load.
+    const anHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+    vi.mocked(queryAll).mockReturnValueOnce([
+      {
+        id: 'q-old', filename: 'old.hda', file_size: 10, progress: 40, status: 'failed',
+        error: 'USB transfer failed', started_at: anHourAgo, completed_at: anHourAgo,
+        recording_date: null, cancel_reason: null, created_at: anHourAgo
+      }
+    ] as never)
+    const reloaded = new DownloadService()
+    try {
+      reloaded.queueDownloads([{ filename: 'new.hda', size: 20 }])
+      const byName = new Map(reloaded.getState().queue.map((i) => [i.filename, i]))
+      expect(byName.get('old.hda')?.fromPreviousSession).toBe(true)
+      expect(byName.get('new.hda')?.fromPreviousSession).toBeFalsy()
+    } finally {
+      reloaded.destroy()
     }
   })
 })

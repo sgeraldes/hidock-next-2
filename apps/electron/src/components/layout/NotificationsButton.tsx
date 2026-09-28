@@ -13,12 +13,15 @@
  * — so they are one source of truth and can never diverge. We intentionally keep
  * the sidebar badge (owned by OperationsPanel) as-is and make the titlebar bell
  * the SAME source rather than a second, independent counter.
+ *
+ * Both also drop failures from earlier app sessions (operationHistory), which
+ * the Operations overlay keeps in a collapsed "Earlier failures" group.
  */
 
 import { useEffect, useMemo, useState } from 'react'
 import { Bell, Download, AlertCircle, RefreshCw, ArrowRight, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { useDownloadQueue } from '@/store/useAppStore'
+import { useDownloadQueue, useUnifiedRecordings } from '@/store/useAppStore'
 import type { DownloadQueueEntry } from '@/store/useAppStore'
 import { useTranscriptionStats, useTranscriptionStore } from '@/store/features/useTranscriptionStore'
 import type { TranscriptionItem, TranscriptionStatus } from '@/store/features/useTranscriptionStore'
@@ -27,11 +30,8 @@ import { useOperations } from '@/hooks/useOperations'
 import { isRetryableDownloadItem } from '@/hooks/useDownloadOrchestrator'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 import { isFeatureOffThisRun } from '@/lib/bootFeatures'
+import { isEarlierFailure, operationLabel, recordingForDownload } from './operationHistory'
 
-/** Strip the recording extension for a cleaner display name (keeps the date stamp). */
-function displayName(filename: string): string {
-  return filename.replace(/\.(hda|wav|mp3|m4a)$/i, '')
-}
 
 const STATUS_LABEL: Record<TranscriptionStatus, string> = {
   pending: 'Queued',
@@ -72,6 +72,7 @@ export function NotificationsButton() {
   const downloadQueue = useDownloadQueue()
   const txStats = useTranscriptionStats()
   const txQueue = useTranscriptionStore((s) => s.queue)
+  const recordings = useUnifiedRecordings()
   const openOperationsOverlay = useUIStore((s) => s.openOperationsOverlay)
   const { cancelDownload, cancelAllDownloads } = useOperations()
   const [open, setOpen] = useState(false)
@@ -84,14 +85,15 @@ export function NotificationsButton() {
   useEffect(() => {
     const api = window.electronAPI?.downloadService
     if (!api || isFeatureOffThisRun('device-sync')) return
-    const project = (state: { queue: Array<{ filename: string; fileSize: number; progress: number; status: DownloadQueueEntry['status']; error?: string; cancelReason?: 'user' | 'interrupted' }> }) => {
+    const project = (state: { queue: Array<{ filename: string; fileSize: number; progress: number; status: DownloadQueueEntry['status']; error?: string; cancelReason?: 'user' | 'interrupted'; fromPreviousSession?: boolean }> }) => {
       setPersistedDownloads(state.queue.map((item) => ({
         filename: item.filename,
         size: item.fileSize,
         progress: item.progress,
         status: item.status,
         error: item.error,
-        cancelReason: item.cancelReason
+        cancelReason: item.cancelReason,
+        fromPreviousSession: item.fromPreviousSession
       })))
     }
     api.getState().then((state) => project(state)).catch(() => {})
@@ -103,14 +105,14 @@ export function NotificationsButton() {
   const transcriptions = useMemo<TranscriptionItem[]>(
     () =>
       Array.from(txQueue.values())
-        .filter((i) => i.status !== 'completed')
+        .filter((i) => i.status !== 'completed' && !isEarlierFailure(i))
         .sort((a, b) => statusRank(a.status) - statusRank(b.status)),
     [txQueue]
   )
   const downloads = useMemo(() => {
     const merged = new Map(persistedDownloads.map((item) => [item.filename, item]))
     for (const item of downloadQueue.values()) merged.set(item.filename, item)
-    return Array.from(merged.values()).filter((item) => item.status !== 'completed')
+    return Array.from(merged.values()).filter((item) => item.status !== 'completed' && !isEarlierFailure(item))
   }, [downloadQueue, persistedDownloads])
   // Only pending/downloading/cancelling count as in progress. Failed downloads
   // remain actionable history and belong in the error count instead.
@@ -125,7 +127,9 @@ export function NotificationsButton() {
   const canCancelAllDownloads = useMemo(() => downloads.some(isCancelableDownload), [downloads])
 
   const active = txStats.processing + txStats.pending + activeDownloadCount
-  const errors = txStats.failed + failedDownloadCount
+  // This session's failures only, matching the Operations badge.
+  const failedTranscriptionCount = transcriptions.filter((i) => i.status === 'failed').length
+  const errors = failedTranscriptionCount + failedDownloadCount
   const total = active + errors
   // Keep the popover populated while a cancelled row flashes, even if the badge count
   // has already dropped to zero.
@@ -188,7 +192,7 @@ export function NotificationsButton() {
                   {item.status === 'pending' && <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-yellow-500/80" />}
                   {item.status === 'failed' && <AlertCircle className="h-4 w-4 shrink-0 text-red-500" />}
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm text-foreground">{displayName(item.filename)}</div>
+                    <div className="truncate text-sm text-foreground">{operationLabel(recordings.find((r) => r.id === item.recordingId))}</div>
                     <div className="truncate text-[11px] text-muted-foreground">
                       {STATUS_LABEL[item.status]}
                       {item.error ? ` · ${item.error}` : ''}
@@ -196,7 +200,9 @@ export function NotificationsButton() {
                   </div>
                 </li>
               ))}
-              {downloads.map((dl) => (
+              {downloads.map((dl) => {
+                const dlLabel = operationLabel(recordingForDownload(recordings, dl.filename))
+                return (
                 <li key={`dl-${dl.filename}`} className="flex items-center gap-2.5 rounded-md px-2 py-1.5">
                   {dl.status === 'failed' ? (
                     <AlertCircle className="h-4 w-4 shrink-0 text-red-500" />
@@ -211,7 +217,7 @@ export function NotificationsButton() {
                     />
                   )}
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm text-foreground">{displayName(dl.filename)}</div>
+                    <div className="truncate text-sm text-foreground">{dlLabel}</div>
                     <div className="truncate text-[11px] text-muted-foreground">
                       {downloadStatusLabel(dl)}{dl.error ? ` · ${dl.error}` : ''}
                     </div>
@@ -221,7 +227,7 @@ export function NotificationsButton() {
                       type="button"
                       onClick={() => cancelDownload(dl.filename)}
                       disabled={dl.status === 'cancelling'}
-                      aria-label={`Cancel download ${displayName(dl.filename)}`}
+                      aria-label={`Cancel download ${dlLabel}`}
                       title="Cancel download"
                       className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-red-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
                     >
@@ -229,7 +235,8 @@ export function NotificationsButton() {
                     </button>
                   )}
                 </li>
-              ))}
+                )
+              })}
             </ul>
           )}
         </div>
