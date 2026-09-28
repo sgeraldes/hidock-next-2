@@ -34,6 +34,7 @@ recording, and Microsoft 365 and Slack connect on first try.
 ### Fixes
 
 - Recordings never linked to Outlook meetings: the linker only read the ICS feed.
+- Microsoft 365 and Slack only synced when you pressed Sync; they now sync on the calendar interval.
 - A Slack token saved after startup kept answering "token missing" until a restart.
 - A first Slack sync would have pulled every channel; channels now start off and are picked in a
   searchable list.

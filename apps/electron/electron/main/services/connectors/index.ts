@@ -13,6 +13,8 @@ import { ConnectorHost } from '@hidock/connectors'
 import { getConnectorStore } from './connector-store'
 import { createIngestionSink } from './ingestion'
 import { m365Descriptor, createM365Connector } from './m365/m365-connector'
+import { getConfig } from '../config'
+import { isFeatureEnabledIn } from '../../../../src/shared/feature-registry'
 
 let host: ConnectorHost | null = null
 
@@ -77,4 +79,58 @@ export async function initConnectors(): Promise<void> {
       /* best-effort */
     }
   }
+  startConnectorSchedule()
+}
+
+/** First scheduled sync after start: late enough to stay out of the boot work. */
+const FIRST_SYNC_DELAY_MS = 2 * 60_000
+
+let firstSyncTimer: ReturnType<typeof setTimeout> | null = null
+let syncTimer: ReturnType<typeof setInterval> | null = null
+let scheduledRunInFlight = false
+
+/** Sync every connected connector once; a run never overlaps the previous one. */
+export async function syncConnectedConnectors(): Promise<void> {
+  if (scheduledRunInFlight) return
+  const config = getConfig()
+  if (!config.calendar.syncEnabled || !isFeatureEnabledIn(config.features, 'calendar')) return
+  scheduledRunInFlight = true
+  try {
+    const h = getConnectorHost()
+    for (const id of h.listInstances()) {
+      if (h.getStatus(id).state !== 'connected') continue
+      try {
+        await h.syncNow(id)
+      } catch (err) {
+        console.warn(`[connectors] Scheduled sync of ${id} failed:`, err instanceof Error ? err.message : err)
+      }
+    }
+  } finally {
+    scheduledRunInFlight = false
+  }
+}
+
+/**
+ * Keep connected connectors in sync on the calendar's interval (Settings >
+ * Calendar, "Every N minutes"; auto-sync off stops it). The host had a
+ * scheduler that nothing called, so Microsoft 365 only synced on a click
+ * (settings inventory, 28-sep-2026). Call again after the calendar settings
+ * change.
+ */
+export function startConnectorSchedule(): void {
+  stopConnectorSchedule()
+  const config = getConfig()
+  if (!config.calendar.syncEnabled) return
+  const minutes = Math.max(5, Math.round(config.calendar.syncIntervalMinutes || 15))
+  firstSyncTimer = setTimeout(() => void syncConnectedConnectors(), FIRST_SYNC_DELAY_MS)
+  syncTimer = setInterval(() => void syncConnectedConnectors(), minutes * 60_000)
+  firstSyncTimer.unref?.()
+  syncTimer.unref?.()
+}
+
+export function stopConnectorSchedule(): void {
+  if (firstSyncTimer) clearTimeout(firstSyncTimer)
+  if (syncTimer) clearInterval(syncTimer)
+  firstSyncTimer = null
+  syncTimer = null
 }
