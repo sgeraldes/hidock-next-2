@@ -64,6 +64,7 @@ import { StorageMoveConfirm } from '@/features/settings/StorageMoveConfirm'
 import { ServiceList } from '@/features/settings/ServiceList'
 import { TranscriptionPipelineControls } from '@/features/settings/TranscriptionPipelineControls'
 import { RecordingSection } from '@/features/settings/RecordingSection'
+import { CalendarPreferences } from '@/features/settings/CalendarPreferences'
 
 // RAG configuration constants — MAX_CONTEXT_CHUNKS must match config.ts default (10)
 const RAG_DEFAULTS = {
@@ -1036,6 +1037,8 @@ export function Settings({
                     <option value={6}>Saturday</option>
                   </select>
                 </div>
+
+                <CalendarPreferences />
 
                 <div className="flex items-center gap-2">
                   <Button

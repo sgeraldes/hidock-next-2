@@ -60,6 +60,10 @@ describe('expandMeetingOccurrences', () => {
   beforeEach(async () => {
     const mod = await import('../calendar-sync')
     expandMeetingOccurrences = mod.expandMeetingOccurrences
+    // These cases were written for a 60-back, 90-ahead window; the window is a
+    // setting now (Settings > Calendar), so pin it to what they expect.
+    const { applyCalendarWindow } = await import('../calendar-window')
+    applyCalendarWindow({ calendar: { windowPastDays: 60, windowFutureDays: 90 } })
   })
 
   it('expands a daily RRULE across the window (the DEVOPs Daily bug)', () => {

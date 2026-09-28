@@ -262,12 +262,12 @@ describe('M365Connector — calendar history for relinking', () => {
   const container = { externalId: 'calendar', name: 'Calendar', kind: 'calendar' }
   const startOf = (url: string) => new URL(`https://graph.microsoft.com/v1.0${url}`).searchParams.get('startDateTime')
 
-  it('reads only the last 30 days by default', async () => {
+  it('reads the calendar window back by default (60 days, Settings > Calendar)', async () => {
     const graphFetch = vi.fn(async (_url: string) => ({ value: [], '@odata.deltaLink': 'D' }))
     const connector = new M365Connector(fakeCtx({ clientId: 'abc' }), { acquireToken: async () => 'tok', graphFetch })
     await connector.capabilities.sources!.pull(container)
     const days = (Date.now() - Date.parse(startOf(graphFetch.mock.calls[0][0])!)) / 86_400_000
-    expect(Math.round(days)).toBe(30)
+    expect(Math.round(days)).toBe(60)
   })
 
   it('reaches back to calendarHistoryStart when it is set', async () => {
