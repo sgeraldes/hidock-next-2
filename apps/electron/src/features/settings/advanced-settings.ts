@@ -9,7 +9,7 @@ export type AdvancedSection = 'embeddings' | 'transcription' | 'chat'
 export interface AdvancedSetting {
   section: AdvancedSection
   key: string
-  group: 'Search' | 'Speakers & voices' | 'Transcription' | 'AI models'
+  group: 'Search' | 'Voice matching' | 'Ratings' | 'AI models'
   label: string
   detail: string
   kind: 'number' | 'text'
@@ -48,43 +48,43 @@ export const ADVANCED_SETTINGS: AdvancedSetting[] = [
     detail: 'Where VibeVoice runs: cuda:0 for the first NVIDIA GPU, cpu otherwise. This PC has an AMD GPU, so cuda does not apply here.'
   },
   {
-    section: 'transcription', key: 'valueClassificationMinConfidence', group: 'Transcription', kind: 'number', min: 0, max: 1, step: 0.05,
+    section: 'transcription', key: 'valueClassificationMinConfidence', group: 'Ratings', kind: 'number', min: 0, max: 1, step: 0.05,
     label: 'Rating confidence floor',
     detail: 'A rating below this confidence is not applied; the recording stays unrated.'
   },
   {
-    section: 'transcription', key: 'speakerLinkingMatchThreshold', group: 'Speakers & voices', kind: 'number', min: 0.5, max: 0.99, step: 0.01,
+    section: 'transcription', key: 'speakerLinkingMatchThreshold', group: 'Voice matching', kind: 'number', min: 0.5, max: 0.99, step: 0.01,
     label: 'Voice match threshold',
     detail: 'How similar a voice must be to a known one to be named after it. Higher names fewer, with fewer mistakes.'
   },
   {
-    section: 'transcription', key: 'speakerLinkingMatchMargin', group: 'Speakers & voices', kind: 'number', min: 0, max: 0.5, step: 0.01,
+    section: 'transcription', key: 'speakerLinkingMatchMargin', group: 'Voice matching', kind: 'number', min: 0, max: 0.5, step: 0.01,
     label: 'Voice match margin',
     detail: 'How far ahead of the second-best voice the best one must be.'
   },
   {
-    section: 'transcription', key: 'speakerLinkingMinSpeechSeconds', group: 'Speakers & voices', kind: 'number', min: 1, max: 60, step: 1, unit: 's',
+    section: 'transcription', key: 'speakerLinkingMinSpeechSeconds', group: 'Voice matching', kind: 'number', min: 1, max: 60, step: 1, unit: 's',
     label: 'Speech needed per voice',
     detail: 'A voice with less speech than this in a recording is not matched.'
   },
   {
-    section: 'transcription', key: 'speakerLinkingTimeoutSeconds', group: 'Speakers & voices', kind: 'number', min: 60, max: 21600, step: 60, unit: 's',
+    section: 'transcription', key: 'speakerLinkingTimeoutSeconds', group: 'Voice matching', kind: 'number', min: 60, max: 21600, step: 60, unit: 's',
     label: 'Voice step time limit',
     detail: 'The least time the voice step gets; long recordings get 1.5 times their length.'
   },
   {
-    section: 'transcription', key: 'speakerLinkingPythonPath', group: 'Speakers & voices', kind: 'text',
+    section: 'transcription', key: 'speakerLinkingPythonPath', group: 'Voice matching', kind: 'text',
     label: 'Python for the voice step',
     detail: 'The Python that runs the pyannote voice step.'
   },
   {
-    section: 'transcription', key: 'speakerLinkingWorkerPath', group: 'Speakers & voices', kind: 'text', allowEmpty: true,
+    section: 'transcription', key: 'speakerLinkingWorkerPath', group: 'Voice matching', kind: 'text', allowEmpty: true,
     label: 'Voice worker script',
     detail: 'Leave empty to use the one that ships with HiDock.'
   }
 ]
 
-export const ADVANCED_GROUPS: AdvancedSetting['group'][] = ['Search', 'Transcription', 'Speakers & voices', 'AI models']
+export const ADVANCED_GROUPS: AdvancedSetting['group'][] = ['Search', 'Ratings', 'Voice matching', 'AI models']
 
 /** Read a typed value, or say what is wrong with it. `others` is the section's current values. */
 export function parseAdvancedValue(

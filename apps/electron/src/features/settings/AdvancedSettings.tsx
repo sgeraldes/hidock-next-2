@@ -116,8 +116,12 @@ export function AdvancedSettings() {
 
   useEffect(() => {
     let live = true
-    window.electronAPI.config
-      .getDefaults()
+    const getDefaults = window.electronAPI?.config?.getDefaults
+    if (!getDefaults) {
+      setLoadError('this build cannot read them')
+      return
+    }
+    getDefaults()
       .then((result) => {
         if (!live) return
         if (result?.success) setDefaults(result.data as Sections)
