@@ -66,22 +66,52 @@ function writeConfigAtomically(path: string, contents: string): void {
 // The token lets whoever holds it send audio to that host and read the result
 // back, so it is a credential and it does not sit in a plaintext file next to
 // the settings.
+//
+// When the operating system offers no encryption at all, the value is written
+// as is: losing a pairing or a key there is worse, and safeStorage decides. When
+// encryption is available but fails, the save fails instead of quietly writing
+// plain text (review 28-sep-2026).
 function encryptSensitive(value: string): string {
+  if (!value) return value
+  if (!safeStorage.isEncryptionAvailable()) {
+    console.warn('[Config] This system offers no encryption; a secret is stored as plain text in config.json.')
+    return value
+  }
   try {
-    if (safeStorage.isEncryptionAvailable() && value) {
-      return '__enc__' + safeStorage.encryptString(value).toString('base64')
-    }
-  } catch { /* fall through to plaintext */ }
-  return value
+    return '__enc__' + safeStorage.encryptString(value).toString('base64')
+  } catch (err) {
+    throw new Error(
+      `The key or token could not be encrypted, so it was not saved: ${err instanceof Error ? err.message : String(err)}`
+    )
+  }
 }
 
-function decryptSensitive(value: string): string {
+/**
+ * Ciphertext that could not be decrypted at load, by field. The field loads as
+ * "not set" and its original ciphertext is written back unchanged on save, so a
+ * damaged keychain never turns into a re-encrypted ciphertext used as the
+ * credential. A new value typed by the person replaces it.
+ */
+const undecryptedSecrets = new Map<string, string>()
+
+function decryptSensitive(value: string, field: string): string {
+  undecryptedSecrets.delete(field)
+  if (!value.startsWith('__enc__')) return value
   try {
-    if (value.startsWith('__enc__') && safeStorage.isEncryptionAvailable()) {
+    if (safeStorage.isEncryptionAvailable()) {
       return safeStorage.decryptString(Buffer.from(value.slice(7), 'base64'))
     }
-  } catch { /* fall through to return as-is */ }
-  return value
+  } catch (err) {
+    console.error(`[Config] Could not decrypt ${field}; it reads as not set until replaced:`, err)
+  }
+  undecryptedSecrets.set(field, value)
+  return ''
+}
+
+/** What goes to disk for a secret field: the encrypted value, or the kept ciphertext. */
+function secretForDisk<T extends string | undefined>(value: T, field: string): T | string {
+  if (value) return encryptSensitive(value)
+  return undecryptedSecrets.get(field) ?? value
 }
 
 export interface AppConfig {
@@ -466,6 +496,13 @@ export function syncGeminiKeyToCredentialStore(rawKey: string): boolean {
     // getSecret returns null when absent OR unreadable (keychain locked). In both
     // cases a non-null desired value differs → we (re)write it; a null desired
     // with an already-absent secret matches → no-op.
+    // Clearing always deletes: getSecret() also returns null for a stored key it
+    // cannot read, and skipping the delete then left that old key in place.
+    if (desired === null) {
+      const ok = store.setSecret('gemini-api', 'apiKey', null)
+      if (!ok) console.error('[Config] Could not delete the Gemini key from the credential store.')
+      return ok
+    }
     const current = store.getSecret('gemini-api', 'apiKey')
     const currentNorm = current && current.length ? current : null
     if (currentNorm === desired) return true // already in sync
@@ -540,21 +577,13 @@ export async function initializeConfig(options: { persist?: boolean } = {}): Pro
       const savedConfig = JSON.parse(fileContent)
       // CS-007: Decrypt sensitive fields before loading into memory
       if (savedConfig.calendar?.icsUrl) {
-        savedConfig.calendar.icsUrl = decryptSensitive(savedConfig.calendar.icsUrl)
+        savedConfig.calendar.icsUrl = decryptSensitive(savedConfig.calendar.icsUrl, 'calendar.icsUrl')
       }
-      if (savedConfig.transcription?.jevApiKey) {
-        savedConfig.transcription.jevApiKey = decryptSensitive(savedConfig.transcription.jevApiKey)
-      }
-      if (savedConfig.transcription?.geminiApiKey) {
-        savedConfig.transcription.geminiApiKey = decryptSensitive(savedConfig.transcription.geminiApiKey)
-      }
-      if (savedConfig.transcription?.localAsrHfToken) {
-        savedConfig.transcription.localAsrHfToken = decryptSensitive(savedConfig.transcription.localAsrHfToken)
-      }
-      if (savedConfig.transcription?.modelHostToken) {
-        savedConfig.transcription.modelHostToken = decryptSensitive(
-          savedConfig.transcription.modelHostToken
-        )
+      for (const key of ['jevApiKey', 'geminiApiKey', 'localAsrHfToken', 'modelHostToken'] as const) {
+        const value = savedConfig.transcription?.[key]
+        if (typeof value === 'string' && value) {
+          savedConfig.transcription[key] = decryptSensitive(value, `transcription.${key}`)
+        }
       }
       // Merge with defaults to handle new fields
       config = deepMerge(DEFAULT_CONFIG, savedConfig)
@@ -645,24 +674,16 @@ export async function saveConfig(newConfig: Partial<AppConfig>): Promise<void> {
     ...config,
     calendar: {
       ...config.calendar,
-      icsUrl: encryptSensitive(config.calendar.icsUrl)
+      icsUrl: secretForDisk(config.calendar.icsUrl, 'calendar.icsUrl')
     },
     transcription: {
       ...config.transcription,
-      modelHostToken: config.transcription.modelHostToken
-        ? encryptSensitive(config.transcription.modelHostToken)
-        : config.transcription.modelHostToken,
-      jevApiKey: config.transcription.jevApiKey
-        ? encryptSensitive(config.transcription.jevApiKey)
-        : config.transcription.jevApiKey,
+      modelHostToken: secretForDisk(config.transcription.modelHostToken, 'transcription.modelHostToken'),
+      jevApiKey: secretForDisk(config.transcription.jevApiKey, 'transcription.jevApiKey'),
       // Plain text until 28-sep-2026 (settings inventory); a plain value on disk
       // is read as-is and written back encrypted on the next save.
-      geminiApiKey: config.transcription.geminiApiKey
-        ? encryptSensitive(config.transcription.geminiApiKey)
-        : config.transcription.geminiApiKey,
-      localAsrHfToken: config.transcription.localAsrHfToken
-        ? encryptSensitive(config.transcription.localAsrHfToken)
-        : config.transcription.localAsrHfToken
+      geminiApiKey: secretForDisk(config.transcription.geminiApiKey, 'transcription.geminiApiKey'),
+      localAsrHfToken: secretForDisk(config.transcription.localAsrHfToken, 'transcription.localAsrHfToken')
     }
   }
 

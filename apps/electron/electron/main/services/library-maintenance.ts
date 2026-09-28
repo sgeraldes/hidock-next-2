@@ -246,7 +246,7 @@ export async function matchMeetingsWithJev(
   if (!deps) return { noKey: true }
   matchRunning = true
   try {
-    const { matchMeetingWithJev, isClearMatch, pickMatchCandidates, candidateKey, meetingCopyKey, MEETING_MATCH_VERSION } = await import('./jev-meeting-match')
+    const { matchMeetingWithJev, isClearMatch, pickMatchCandidates, matchRequestKey, meetingCopyKey, MEETING_MATCH_VERSION } = await import('./jev-meeting-match')
     const { getRecordingById, getRecordingMeetingMatch, getMeetingById, linkRecordingToMeeting } = await import('./database')
     const { filterEligibleRecordingIds } = await import('./recording-eligibility')
     const { isClassifierAuthError } = await import('./value-backfill')
@@ -291,14 +291,15 @@ export async function matchMeetingsWithJev(
         result.skipped++
         return
       }
+      const context = toMatchContext(recording, list)
       const stored = getRecordingMeetingMatch(recordingId, MEETING_MATCH_VERSION)
-      const reuse = stored?.candidateKey === candidateKey(picked)
+      const reuse = stored?.candidateKey === matchRequestKey(context, candidates)
       if (!reuse) {
         const wait = lastStart + MATCH_MIN_INTERVAL_MS - Date.now()
         lastStart = Math.max(Date.now(), lastStart + MATCH_MIN_INTERVAL_MS)
         if (wait > 0) await new Promise((r) => setTimeout(r, wait))
       }
-      const match = await matchMeetingWithJev(recordingId, toMatchContext(recording, list), candidates, deps)
+      const match = await matchMeetingWithJev(recordingId, context, candidates, deps)
       if (match?.topMeetingId && recording.meeting_id && recording.meeting_id !== match.topMeetingId) {
         const a = keyOf(recording.meeting_id)
         const b = keyOf(match.topMeetingId)

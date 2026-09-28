@@ -78,6 +78,12 @@ const UpdateTranscriptRequestSchema = z
   .object({
     recordingId: RecordingIdSchema,
     expectedFullText: z.string().max(10_000_000),
+    /**
+     * The stored segments the editor started from (null when there were none).
+     * A start-time edit does not change the text, so the text check alone let
+     * two editors overwrite each other's times (review 28-sep-2026).
+     */
+    expectedSegments: z.array(z.unknown()).max(50_000).nullable().optional(),
     segments: z.array(EditableTranscriptSegmentSchema).min(1).max(50_000)
   })
   .superRefine(({ segments }, ctx) => {
@@ -95,6 +101,17 @@ const UpdateTranscriptRequestSchema = z
   })
 
 type EditableTranscriptSegment = z.infer<typeof EditableTranscriptSegmentSchema>
+
+/** The stored segments as the reader parses them: a non-empty array, or null. */
+function storedSegmentsOf(speakers: string | null): unknown[] | null {
+  if (!speakers) return null
+  try {
+    const parsed = JSON.parse(speakers)
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : null
+  } catch {
+    return null
+  }
+}
 
 interface TranscriptEditResult {
   fullText: string
@@ -242,12 +259,18 @@ export function registerTranscriptsHandlers(): void {
 
         runInTransaction(() => {
           if (!isRecordingEligible(recordingId)) throw new Error('RECORDING_INELIGIBLE')
-          const current = queryOne<{ full_text: string }>(
-            'SELECT full_text FROM transcripts WHERE recording_id = ?',
+          const current = queryOne<{ full_text: string; speakers: string | null }>(
+            'SELECT full_text, speakers FROM transcripts WHERE recording_id = ?',
             [recordingId]
           )
           if (!current) throw new Error('TRANSCRIPT_NOT_FOUND')
           if (current.full_text !== parsed.data.expectedFullText) throw new Error('TRANSCRIPT_CHANGED')
+          if (
+            parsed.data.expectedSegments !== undefined &&
+            JSON.stringify(parsed.data.expectedSegments) !== JSON.stringify(storedSegmentsOf(current.speakers))
+          ) {
+            throw new Error('TRANSCRIPT_CHANGED')
+          }
 
           runNoSave(
             'UPDATE transcripts SET full_text = ?, speakers = ?, word_count = ? WHERE recording_id = ?',

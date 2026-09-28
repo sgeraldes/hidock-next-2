@@ -134,8 +134,8 @@ export function registerConfigHandlers(): void {
   // Get specific value
   ipcMain.handle('config:get-value', async <K extends keyof AppConfig>(_, key: K) => {
     try {
-      const config = getConfig()
-      return success(config[key])
+      // Same rule as config:get: no secret crosses to the window.
+      return success(redactSecrets(getConfig())[key])
     } catch (err) {
       console.error(`[config:get-value] Error getting ${String(key)}:`, err)
       return errorResult(

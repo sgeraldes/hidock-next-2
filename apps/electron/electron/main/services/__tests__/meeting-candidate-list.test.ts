@@ -39,6 +39,13 @@ describe('collapseMeetingCopies', () => {
     expect(collapseMeetingCopies([confirmed, m365], 'm365:AAMk1').map((c) => c.meetingId)).toEqual(['ics-1'])
   })
 
+  it('keeps two meetings from the same source with the same subject and start', () => {
+    const other = row('m365:AAMk2', 'Daily Cloud', '2026-09-24T15:00:00Z')
+    expect(collapseMeetingCopies([m365, other], null).map((c) => c.meetingId)).toEqual(['m365:AAMk1', 'm365:AAMk2'])
+    // With one feed copy, it pairs with one of them and the other stays.
+    expect(collapseMeetingCopies([ics, m365, other], null).map((c) => c.meetingId)).toEqual(['m365:AAMk1', 'm365:AAMk2'])
+  })
+
   it('treats the same subject at another time as another meeting', () => {
     expect(meetingCopyKey('Daily', '2026-09-24T15:00:00Z')).not.toBe(meetingCopyKey('Daily', '2026-09-25T15:00:00Z'))
   })

@@ -8,12 +8,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { tmpdir } from 'os'
 
+const ss = vi.hoisted(() => ({ available: true, failDecrypt: false, failEncrypt: false }))
 vi.mock('electron', () => ({
   app: { getPath: () => tmpdir() },
   safeStorage: {
-    isEncryptionAvailable: () => true,
-    encryptString: (value: string) => Buffer.from(`CIPHER:${value}`, 'utf8'),
-    decryptString: (buffer: Buffer) => buffer.toString('utf8').replace(/^CIPHER:/, '')
+    isEncryptionAvailable: () => ss.available,
+    encryptString: (value: string) => {
+      if (ss.failEncrypt) throw new Error('encryption backend error')
+      return Buffer.from(`CIPHER:${value}`, 'utf8')
+    },
+    decryptString: (buffer: Buffer) => {
+      if (ss.failDecrypt) throw new Error('keychain damaged')
+      return buffer.toString('utf8').replace(/^CIPHER:/, '')
+    }
   }
 }))
 
@@ -33,16 +40,22 @@ vi.mock('fs', () => ({
   closeSync: vi.fn(() => {})
 }))
 
+const store = vi.hoisted(() => ({ setSecret: vi.fn((..._args: unknown[]) => true) }))
 vi.mock('../brains/brain-credential-store', () => ({
-  getBrainCredentialStore: () => ({ getSecret: () => null, setSecret: () => true })
+  // getSecret null = absent OR unreadable; the store cannot tell us which.
+  getBrainCredentialStore: () => ({ getSecret: () => null, setSecret: store.setSecret })
 }))
 
-import { saveConfig, initializeConfig, getConfig } from '../config'
+import { saveConfig, initializeConfig, getConfig, syncGeminiKeyToCredentialStore } from '../config'
 import { SAVED_SECRET, redactSecrets, withoutSavedSecrets } from '../../../../src/shared/secret-fields'
 
 beforeEach(() => {
   written.length = 0
   onDisk = '{}'
+  ss.available = true
+  ss.failDecrypt = false
+  ss.failEncrypt = false
+  store.setSecret.mockClear()
 })
 
 describe('secrets at rest', () => {
@@ -62,6 +75,29 @@ describe('secrets at rest', () => {
     await initializeConfig()
     expect(getConfig().transcription.geminiApiKey).toBe('AIzaOld') // pragma: allowlist secret
     expect(getConfig().transcription.localAsrHfToken).toBe('hf_old') // pragma: allowlist secret
+  })
+})
+
+describe('secrets that cannot be protected (review 28-sep-2026)', () => {
+  it('refuses to write a secret when encryption is available but fails', async () => {
+    ss.failEncrypt = true
+    await expect(saveConfig({ transcription: { jevApiKey: 'jev_live' } } as never)).rejects.toThrow(/could not be encrypted/) // pragma: allowlist secret
+    expect(written.join('')).not.toContain('jev_live')
+  })
+
+  it('an undecryptable secret reads as not set and its ciphertext stays on disk unchanged', async () => {
+    onDisk = JSON.stringify({ transcription: { jevApiKey: '__enc__' + Buffer.from('CIPHER:jev_old').toString('base64') } }) // pragma: allowlist secret
+    const cipher = JSON.parse(onDisk).transcription.jevApiKey
+    ss.failDecrypt = true
+    await initializeConfig()
+    expect(getConfig().transcription.jevApiKey).toBe('')
+    await saveConfig({ transcription: { provider: 'gemini' } } as never)
+    expect(JSON.parse(written[written.length - 1]).transcription.jevApiKey).toBe(cipher)
+  })
+
+  it('clearing the Gemini key always deletes it, even when the stored one was unreadable', () => {
+    expect(syncGeminiKeyToCredentialStore('')).toBe(true)
+    expect(store.setSecret).toHaveBeenCalledWith('gemini-api', 'apiKey', null)
   })
 })
 

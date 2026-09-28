@@ -267,31 +267,32 @@ function parseTimestamp(timestampStr: string): number | null {
 function parseTranscriptSegments(transcript: string): { segments: TranscriptSegment[]; hasTimestamps: boolean } {
   const segments: TranscriptSegment[] = []
 
-  // Regex to match timestamps at the start of a line (with optional brackets)
-  // Matches: [00:15], [00:15:30], 00:15, 00:15:30 at line start
-  const timestampRegex = /^(\[?\d{1,2}:\d{2}(?::\d{2})?\]?)\s+(.*)$/gm
+  // Timestamps at the start of a line (with optional brackets):
+  // [00:15], [00:15:30], 00:15, 00:15:30. A line without one continues the turn
+  // above; text before the first timestamp is its own turn at 0. Saving a
+  // correction rebuilds the whole transcript from these turns, so no line may
+  // be dropped here (review 28-sep-2026: continuation lines were deleted).
+  const timestampLine = /^(\[?\d{1,2}:\d{2}(?::\d{2})?\]?)\s+(.*)$/
+  const preamble: string[] = []
+  let sawTimestamp = false
 
-  let match: RegExpExecArray | null
-
-  while ((match = timestampRegex.exec(transcript)) !== null) {
-    const [, timestampStr, text] = match
-    const startMs = parseTimestamp(timestampStr)
-
-    if (startMs !== null) {
-      // Set endMs of previous segment
-      if (segments.length > 0) {
-        segments[segments.length - 1].endMs = startMs
-      }
-
-      // Parse speaker name from text
-      const { speaker, remainingText } = parseSpeaker(text.trim())
-
-      segments.push({
-        startMs,
-        text: remainingText,
-        speaker
-      })
+  for (const line of transcript.split(/\r?\n/)) {
+    const match = timestampLine.exec(line)
+    const startMs = match ? parseTimestamp(match[1]) : null
+    if (match && startMs !== null) {
+      sawTimestamp = true
+      if (segments.length > 0) segments[segments.length - 1].endMs = startMs
+      const { speaker, remainingText } = parseSpeaker(match[2].trim())
+      segments.push({ startMs, text: remainingText, speaker })
+      continue
     }
+    const text = line.trim()
+    if (!text) continue
+    if (!sawTimestamp) preamble.push(text)
+    else segments[segments.length - 1].text = `${segments[segments.length - 1].text}\n${text}`.trim()
+  }
+  if (sawTimestamp && preamble.length > 0) {
+    segments.unshift({ startMs: 0, endMs: segments[0]?.startMs, text: preamble.join('\n') })
   }
 
   if (segments.length > 0) {
@@ -560,8 +561,13 @@ export function TranscriptViewer({
   }, [storedSegments, transcript])
   const [localSegments, setLocalSegments] = useState<TranscriptSegment[] | null>(null)
   const [persistedFullText, setPersistedFullText] = useState(transcript)
+  // The stored segments this editor started from, sent with a save so the main
+  // process refuses it when someone else changed a time in the meantime.
+  const [persistedStored, setPersistedStored] = useState<StoredSegment[] | null>(storedSegments ?? null)
   const latestTranscriptRef = useRef(transcript)
   latestTranscriptRef.current = transcript
+  const latestStoredRef = useRef(storedSegments)
+  latestStoredRef.current = storedSegments
   const segments = localSegments ?? parsedTranscript.segments
   const hasTimestamps = localSegments
     ? localSegments.some((segment) => segment.startMs > 0)
@@ -570,6 +576,7 @@ export function TranscriptViewer({
   useEffect(() => {
     setLocalSegments(null)
     setPersistedFullText(latestTranscriptRef.current)
+    setPersistedStored(latestStoredRef.current ?? null)
     setEditingIndex(null)
     setEditDraft('')
     setEditStart('')
@@ -654,6 +661,7 @@ export function TranscriptViewer({
       const result = await window.electronAPI.transcripts.updateContent({
         recordingId,
         expectedFullText: persistedFullText,
+        expectedSegments: persistedStored,
         segments: nextSegments
       })
       if (!result.success) {
@@ -665,6 +673,7 @@ export function TranscriptViewer({
       const mapped = fromStoredSegments(result.data.segments)
       setLocalSegments(mapped)
       setPersistedFullText(result.data.fullText)
+      setPersistedStored(result.data.segments.length > 0 ? result.data.segments : null)
       setEditingIndex(null)
       setEditDraft('')
       setEditStart('')
@@ -694,7 +703,7 @@ export function TranscriptViewer({
     } finally {
       setSavingIndex(null)
     }
-  }, [cancelEditing, editDraft, editStart, editingIndex, hasTimestamps, onTranscriptUpdated, persistedFullText, recordingId, savingIndex, segments])
+  }, [cancelEditing, editDraft, editStart, editingIndex, hasTimestamps, onTranscriptUpdated, persistedFullText, persistedStored, recordingId, savingIndex, segments])
 
   const retryRag = useCallback(async () => {
     if (!recordingId || retryingRag) return
