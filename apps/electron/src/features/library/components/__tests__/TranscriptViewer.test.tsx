@@ -239,6 +239,8 @@ describe('TranscriptViewer speaker assignment (recordingId)', () => {
     await waitFor(() => expect(mockUpdateContent).toHaveBeenCalledWith({
       recordingId: 'rec1',
       expectedFullText: 'Speaker 1: Hello there, everyone.',
+      // The stored segments it started from, so a concurrent time edit is refused.
+      expectedSegments: segments,
       segments: [{ speaker: 'Speaker 1', start: 0, end: 5, text: 'Aló Aló, Sorry recién te leo' }]
     }))
     expect(await screen.findByText('Corrected text.')).toBeInTheDocument()
@@ -652,5 +654,15 @@ describe('TranscriptViewer follow-when-not-playing (isPlaying=false)', () => {
     // Jump to top ⇒ scrollIntoView called with block:'start' (not 'center',
     // which is how a live "current segment" would be centered).
     expect(scrollSpy).toHaveBeenCalledWith(expect.objectContaining({ block: 'start' }))
+  })
+})
+
+describe('TranscriptViewer plain timestamped text (no stored segments)', () => {
+  it('keeps lines without a timestamp: text before the first one and continuation lines', () => {
+    const transcript = ['Notas previas', '[00:05] Ana: Hola', 'sigue la misma idea', '[00:10] Beto: Chau'].join('\n')
+    render(<TranscriptViewer transcript={transcript} onSeek={noop} />)
+    expect(screen.getByText('Notas previas')).toBeInTheDocument()
+    expect(screen.getByText(/Hola\s+sigue la misma idea/)).toBeInTheDocument()
+    expect(screen.getByText('Chau')).toBeInTheDocument()
   })
 })

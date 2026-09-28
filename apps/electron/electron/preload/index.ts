@@ -658,6 +658,7 @@ export interface ElectronAPI {
     updateContent: (request: {
       recordingId: string
       expectedFullText: string
+      expectedSegments?: unknown[] | null
       segments: Array<{ speaker?: string; start: number; end?: number; text: string }>
     }) => Promise<Result<{
       fullText: string

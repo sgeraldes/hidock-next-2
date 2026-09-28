@@ -73,10 +73,19 @@ export function pickMatchCandidates(candidates: MatchCandidate[]): MatchCandidat
     .slice(0, MAX_MATCH_CANDIDATES)
 }
 
-/** Stable key of a candidate set, so a stored answer is reused only for the same meetings. */
-export function candidateKey(candidates: MatchCandidate[]): string {
-  const ids = candidates.map((c) => c.meetingId).sort().join('|')
-  return createHash('sha256').update(`${MEETING_MATCH_VERSION}|${ids}`).digest('hex').slice(0, 32)
+
+/** The key a stored answer must carry to be reused for this recording and these candidates. */
+export function matchRequestKey(context: MatchContext, allCandidates: MatchCandidate[]): string {
+  const { state, questions } = buildMeetingMatchRequest(context, pickMatchCandidates(allCandidates))
+  return requestKey(state, questions)
+}
+
+/** Stable key of everything Jev is sent for one match. */
+export function requestKey(state: unknown, questions: unknown): string {
+  return createHash('sha256')
+    .update(`${MEETING_MATCH_VERSION}|${JSON.stringify(state)}|${JSON.stringify(questions)}`)
+    .digest('hex')
+    .slice(0, 32)
 }
 
 function excerpt(text: string | null): string {
@@ -193,11 +202,13 @@ export async function matchMeetingWithJev(
   const candidates = pickMatchCandidates(allCandidates)
   if (candidates.length < 2 || !deps.apiKey.trim()) return null
   if (!context.transcriptText && !context.summary) return null
-  const key = candidateKey(candidates)
+  const { state, questions, keys } = buildMeetingMatchRequest(context, candidates)
+  // The stored answer is reused only for the same question: a corrected
+  // transcript or a renamed or moved meeting asks Jev again.
+  const key = requestKey(state, questions)
   const stored = deps.load(recordingId)
   if (stored && stored.candidateKey === key) return stored
 
-  const { state, questions, keys } = buildMeetingMatchRequest(context, candidates)
   const res = await (deps.ask ?? askJev)(deps.apiKey, state, questions)
   const match = parseMeetingMatch(res, keys, key)
   if (match) deps.save(recordingId, match)

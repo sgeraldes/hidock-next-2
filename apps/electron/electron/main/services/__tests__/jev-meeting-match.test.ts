@@ -8,7 +8,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   buildMeetingMatchRequest,
-  candidateKey,
+  matchRequestKey,
   isClearMatch,
   matchMeetingWithJev,
   parseMeetingMatch,
@@ -103,7 +103,17 @@ describe('matchMeetingWithJev', () => {
     expect(first?.topMeetingId).toBe('m365:daily')
     await matchMeetingWithJev('rec-1', context, [lunch, daily], deps)
     expect(ask).toHaveBeenCalledTimes(1)
-    expect(stored!.candidateKey).toBe(candidateKey(pickMatchCandidates([lunch, daily])))
+    expect(stored!.candidateKey).toBe(matchRequestKey(context, [lunch, daily]))
+  })
+
+  it('asks again when the evidence changes but the meetings stay the same', async () => {
+    let stored: MeetingMatch | null = null
+    const ask = vi.fn(async () => reply({ m1: 0.02, m2: 0.93, none: 0.05 }))
+    const deps = { apiKey: 'k', load: () => stored, save: (_id: string, m: MeetingMatch) => (stored = m), ask }
+    await matchMeetingWithJev('rec-1', context, [lunch, daily], deps)
+    await matchMeetingWithJev('rec-1', { ...context, transcriptText: 'corrected text' }, [lunch, daily], deps)
+    await matchMeetingWithJev('rec-1', { ...context, transcriptText: 'corrected text' }, [{ ...lunch, subject: 'Renamed' }, daily], deps)
+    expect(ask).toHaveBeenCalledTimes(3)
   })
 
   it('does not ask with fewer than two candidates, without a key, or without text', async () => {

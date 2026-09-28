@@ -125,6 +125,28 @@ describe('transcript content editing IPC', () => {
     expect(saved).toEqual(segments)
   })
 
+  it('refuses a save when another editor changed a time since this one loaded', async () => {
+    db.queryOne.mockReturnValue({
+      full_text: request.expectedFullText,
+      speakers: JSON.stringify([{ speaker: 'Voice ABC', start: 25, end: 35, text: 'wrong words' }])
+    })
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:updateContent')?.({} as never, {
+      ...request,
+      expectedSegments: [{ speaker: 'Voice ABC', start: 23, end: 35, text: 'wrong words' }]
+    }) as any
+    expect(result).toMatchObject({ success: false, error: { code: 'RETRYABLE_ERROR' } })
+    expect(db.runNoSave).not.toHaveBeenCalled()
+  })
+
+  it('saves when the stored segments are the ones the editor loaded', async () => {
+    const stored = [{ speaker: 'Voice ABC', start: 23, end: 35, text: 'wrong words' }]
+    db.queryOne.mockReturnValue({ full_text: request.expectedFullText, speakers: JSON.stringify(stored) })
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:updateContent')?.({} as never, { ...request, expectedSegments: stored }) as any
+    expect(result).toMatchObject({ success: true })
+  })
+
   it('refuses to overwrite a concurrently replaced transcript', async () => {
     db.queryOne.mockReturnValueOnce({ full_text: 'A newer transcription won the race' })
     registerTranscriptsHandlers()

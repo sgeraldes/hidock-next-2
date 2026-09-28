@@ -91,21 +91,32 @@ export function listMeetingCandidates(recording: Recording) {
 
 
 /**
- * One candidate per real meeting. Among copies keep the one the person
- * confirmed, else the one the recording is linked to, else the connector copy
- * (it carries attendee emails), else the first.
+ * One candidate per real meeting. A copy is the same event seen through two
+ * sources (the Microsoft 365 connector and the calendar feed), so a connector
+ * row and a feed row with the same subject and start are paired one to one;
+ * two rows from the same source are two meetings and both stay (review
+ * 28-sep-2026). Of a pair keep the one the person confirmed, else the one the
+ * recording is linked to, else the connector copy (it carries attendee emails).
  */
 export function collapseMeetingCopies(candidates: CandidateRow[], linkedMeetingId: string | null): CandidateRow[] {
   const rank = (c: CandidateRow) =>
     (c.isUserConfirmed ? 8 : 0) + (c.meetingId === linkedMeetingId ? 4 : 0) + (c.meetingId.startsWith('m365') ? 2 : 0)
-  const byKey = new Map<string, CandidateRow>()
+  const groups = new Map<string, { connector: CandidateRow[]; feed: CandidateRow[] }>()
   for (const c of candidates) {
     const key = meetingCopyKey(c.subject, c.startTime)
-    const kept = byKey.get(key)
-    if (!kept || rank(c) > rank(kept)) byKey.set(key, c)
+    const group = groups.get(key) ?? { connector: [], feed: [] }
+    ;(c.meetingId.startsWith('m365') ? group.connector : group.feed).push(c)
+    groups.set(key, group)
   }
-  const keep = new Set(byKey.values())
-  return candidates.filter((c) => keep.has(c))
+  const drop = new Set<CandidateRow>()
+  for (const { connector, feed } of groups.values()) {
+    const a = [...connector].sort((x, y) => rank(y) - rank(x))
+    const b = [...feed].sort((x, y) => rank(y) - rank(x))
+    for (let i = 0; i < Math.min(a.length, b.length); i++) {
+      drop.add(rank(b[i]) > rank(a[i]) ? a[i] : b[i])
+    }
+  }
+  return candidates.filter((c) => !drop.has(c))
 }
 
 interface AttendeeJson {
