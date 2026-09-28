@@ -68,7 +68,7 @@ agreed; only 8 of 20 dropped ones did (mojev called 12 of them normal or high, a
 |---|---|---|---|
 | A `decide(state, questions)` seam next to the LLM `complete()` | Not built | Choice / score / noul questions, LLM fallback when confidence is low | 26-sep |
 | mojev as the local decider | Runs on CPU (above); no useful GPU path on the RX 6600 XT today; the RTX 4090 Model Host is the fast path | Serve it from the Model Host (CUDA) and on CPU for background work; calibrate the value question on the existing ratings before it decides anything by default | 27-sep |
-| Jev (TypeSafe API) as the decider | Chosen by Sebastián for split suggestions; API documented in the recording-checks spec | Opt-in with an encrypted key, because it sends text off the machine; compare with mojev on the same questions | 27-sep |
+| Jev (TypeSafe API) as the decider | Built 27-sep for value classification (`jev-client.ts`, `classifyValueWithJev`): one Choice over the four value levels plus one Noul per reason tag, one call per recording. Key in Settings, encrypted at rest; when set, Jev rates the backlog instead of the LLM, 100 ms apart | Run it over the 1,961 unrated recordings; then split suggestions; compare with mojev on the same questions | 27-sep |
 | Images | mojev's image training is on its roadmap, not released | Revisit when a vision checkpoint exists | open |
 
 Today these ask an LLM for a decision: value classification (`value-classification.ts`,

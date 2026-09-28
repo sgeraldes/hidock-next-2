@@ -499,10 +499,28 @@ export function Settings() {
   // Uses the SAVED config (not the possibly-dirty form fields above) since
   // this reflects what the main process will actually see when the button
   // is clicked — mirrors getProviderConfigFromSettings()'s exact condition.
+  const hasJevKey = !!config?.transcription.jevApiKey?.trim()
   const hasValueProvider = useMemo(
-    () => config?.chat.provider === 'gemini' && !!config?.transcription.geminiApiKey,
-    [config]
+    () => hasJevKey || (config?.chat.provider === 'gemini' && !!config?.transcription.geminiApiKey),
+    [config, hasJevKey]
   )
+  // Jev (TypeSafe AI) key for the value classifier. A draft so typing never
+  // saves half a key; Remove clears it (back to the AI provider).
+  const [jevKeyDraft, setJevKeyDraft] = useState('')
+  const [savingJevKey, setSavingJevKey] = useState(false)
+  const handleSaveJevKey = useCallback(async () => {
+    const next = jevKeyDraft.trim()
+    setSavingJevKey(true)
+    try {
+      await updateConfig('transcription', { jevApiKey: next })
+      setJevKeyDraft('')
+      toast.success(next ? 'Jev key saved' : 'Jev key removed')
+    } catch (error) {
+      toast.error('Could not save the Jev key', String(error))
+    } finally {
+      setSavingJevKey(false)
+    }
+  }, [jevKeyDraft, updateConfig])
   const [valueBackfillRunning, setValueBackfillRunning] = useState(false)
   const [valueBackfillProgress, setValueBackfillProgress] = useState<{
     processed: number
@@ -1333,8 +1351,9 @@ export function Settings() {
                 background audio picked up by mistake. Recordings judged as noise get a Low-value or Garbage badge in
                 the Library, and from then on — going forward — they are left out of Assistant answers, the Context
                 Graph, and action-item extraction. Nothing is deleted, and ratings you set yourself are never changed —
-                you can re-rate any recording from its row menu. Uses your configured AI provider (one request per
-                recording); runs in the background, and you can cancel and resume anytime.
+                you can re-rate any recording from its row menu. Uses Jev (TypeSafe AI) when its key is set below,
+                otherwise your configured AI provider (one request per recording); runs in the background, and you can
+                cancel and resume anytime.
               </CardDescription>
               {/* RE-3 — scope the promise honestly: the exclusion applies going
                   forward to content this version rates + attributes; it does not
@@ -1343,8 +1362,35 @@ export function Settings() {
               <p className="mt-1 px-6 text-xs text-muted-foreground">{LEGACY_GRAPH_DISCLOSURE}</p>
             </CardHeader>
             <CardContent className="space-y-3">
+              <div className="space-y-1.5">
+                <label htmlFor="jev-api-key" className="text-sm font-medium">Jev API key (TypeSafe AI)</label>
+                <div className="flex items-center gap-2">
+                  <Input
+                    id="jev-api-key"
+                    type="password"
+                    autoComplete="off"
+                    value={jevKeyDraft}
+                    onChange={(e) => setJevKeyDraft(e.target.value)}
+                    placeholder={hasJevKey ? 'Key saved. Paste a new one to replace it' : 'Paste your key from typesafe.ai'}
+                    className="max-w-sm"
+                  />
+                  <Button
+                    variant="outline"
+                    onClick={handleSaveJevKey}
+                    disabled={savingJevKey || (!jevKeyDraft.trim() && !hasJevKey)}
+                  >
+                    {jevKeyDraft.trim() || !hasJevKey ? 'Save key' : 'Remove key'}
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {hasJevKey
+                    ? 'Jev rates recordings. It sends a transcript excerpt, the summary and the meeting subject to api.typesafe.ai. '
+                    : 'Without a key, the AI provider above rates recordings. '}
+                  The key is stored encrypted on this computer.
+                </p>
+              </div>
               {!hasValueProvider && (
-                <p className="text-xs text-muted-foreground">Configure an AI provider above to enable.</p>
+                <p className="text-xs text-muted-foreground">Add a Jev key or configure an AI provider above to enable.</p>
               )}
               {config?.transcription.valueClassificationEnabled === false && (
                 <p className="text-xs text-muted-foreground">
