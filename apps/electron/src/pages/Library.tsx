@@ -925,7 +925,7 @@ export function Library() {
     const api = window.electronAPI as { onDomainEvent?: (cb: (e: { type?: string }) => void) => () => void } | undefined
     if (!api?.onDomainEvent) return
     return api.onDomainEvent((event) => {
-      if (event?.type === 'audio:profiles-updated') void refreshLocal?.()
+      if (event?.type === 'audio:profiles-updated' || event?.type === 'evaluation:warnings-updated') void refreshLocal?.()
     })
   }, [refreshLocal])
 

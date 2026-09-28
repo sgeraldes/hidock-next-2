@@ -19,13 +19,13 @@ import { shouldLogQa } from '@/services/qa-monitor'
  */
 async function tryLoadCachedWaveform(
   recordingId: string
-): Promise<{ peaks: Float32Array; duration: number } | null> {
+): Promise<{ peaks: Float32Array; duration: number; coarse: boolean } | null> {
   try {
     const cache = window.electronAPI?.waveform
     if (!cache) return null
     const entry = await cache.getCache(recordingId)
     if (entry && Array.isArray(entry.peaks) && entry.peaks.length > 0) {
-      return { peaks: Float32Array.from(entry.peaks), duration: entry.duration ?? 0 }
+      return { peaks: Float32Array.from(entry.peaks), duration: entry.duration ?? 0, coarse: entry.coarse === true }
     }
   } catch (err) {
     console.warn('[useAudioPlayback] Waveform cache read failed:', err)
@@ -302,11 +302,13 @@ export function useAudioPlayback() {
           useUIStore.getState().setPlaybackProgress(0, cached.duration)
         }
         if (shouldLogQa()) console.log(`[QA-MONITOR][Operation] Waveform loaded from cache: ${recordingId}`)
-        return
+        // A coarse waveform (drawn from the loudness envelope) stays on screen
+        // while the exact one is decoded below and saved over it.
+        if (!cached.coarse) return
+      } else {
+        // Cache miss — only NOW show the (brief) computing state.
+        setWaveformLoading(recordingId)
       }
-
-      // Cache miss — only NOW show the (brief) computing state.
-      setWaveformLoading(recordingId)
 
       const response = await window.electronAPI.storage.readRecording(filePath)
 

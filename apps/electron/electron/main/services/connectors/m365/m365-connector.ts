@@ -410,7 +410,11 @@ export class M365Connector implements Connector {
   // ── Sources ──────────────────────────────────────────────────────────────────
 
   private calendarInitialUrl(): string {
-    const start = new Date(Date.now() - CALENDAR_WINDOW_PAST_DAYS * 86_400_000).toISOString()
+    // Normally the last 30 days. "Relink recordings to meetings" sets
+    // calendarHistoryStart to the oldest recording so past meetings come in.
+    const recent = Date.now() - CALENDAR_WINDOW_PAST_DAYS * 86_400_000
+    const history = Date.parse(String(this.ctx.getConfig().calendarHistoryStart ?? ''))
+    const start = new Date(Number.isFinite(history) ? Math.min(history, recent) : recent).toISOString()
     const end = new Date(Date.now() + CALENDAR_WINDOW_FUTURE_DAYS * 86_400_000).toISOString()
     const select = 'subject,start,end,location,onlineMeeting,isOnlineMeeting,organizer,attendees,bodyPreview,webLink,showAs,seriesMasterId'
     return `/me/calendarView/delta?startDateTime=${encodeURIComponent(start)}&endDateTime=${encodeURIComponent(end)}&$select=${select}`

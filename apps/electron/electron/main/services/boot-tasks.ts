@@ -122,8 +122,8 @@ export const BOOT_TASK_DEFS: GatedBootTask[] = [
     feature: null,
     run: async () => {
       await import('./value-classification')
-        .then(({ recomputeAudioWarnings }) => {
-          const changed = recomputeAudioWarnings()
+        .then(async ({ recomputeAudioWarnings }) => {
+          const changed = await recomputeAudioWarnings()
           if (changed > 0) console.log(`[Evaluation] recomputed ${changed} audio-versus-transcript warnings`)
         })
         .catch((e) => console.error('[Evaluation] warning refresh error:', e))

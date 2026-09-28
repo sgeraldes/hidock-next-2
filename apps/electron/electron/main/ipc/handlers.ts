@@ -21,6 +21,7 @@ import { registerMeetingsHandlers } from './meetings-handlers'
 import { registerTranscriptsHandlers } from './transcripts-handlers'
 import { registerTranscriptIntegrityHandlers } from './transcript-integrity-handlers'
 import { registerAudioCheckHandlers } from './audio-check-handlers'
+import { registerMaintenanceHandlers } from './maintenance-handlers'
 import { registerSpeakerSetupHandlers } from './speaker-setup-handlers'
 import { registerJensenHandlers } from './jensen-handlers'
 import { registerKnowledgeGraphHandlers } from './knowledge-graph-handlers'
@@ -84,6 +85,7 @@ export function registerIpcHandlers(): void {
   registerTranscriptsHandlers()
   registerTranscriptIntegrityHandlers()
   registerAudioCheckHandlers()
+  registerMaintenanceHandlers()
   registerSpeakerSetupHandlers()
   registerJensenHandlers()
   registerKnowledgeGraphHandlers()

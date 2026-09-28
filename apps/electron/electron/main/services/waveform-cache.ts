@@ -35,6 +35,11 @@ export interface WaveformCacheEntry {
   /** Source audio file size in bytes (0 if unknown) — used for change detection. */
   fileSize: number
   createdAt: string
+  /**
+   * Drawn from the stored loudness envelope, not decoded (library-maintenance).
+   * The player shows it at once and replaces it with the decoded one.
+   */
+  coarse?: boolean
 }
 
 function getWaveformCacheDir(): string {
@@ -84,7 +89,8 @@ export function setWaveformCache(
   recordingId: string,
   peaks: number[],
   duration = 0,
-  fileSize = 0
+  fileSize = 0,
+  coarse = false
 ): boolean {
   if (!recordingId || !Array.isArray(peaks) || peaks.length === 0) return false
   try {
@@ -95,7 +101,8 @@ export function setWaveformCache(
       sampleCount: peaks.length,
       duration: Number.isFinite(duration) ? duration : 0,
       fileSize: Number.isFinite(fileSize) ? fileSize : 0,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      ...(coarse ? { coarse: true } : {})
     }
     writeFileSync(entryPath(recordingId), JSON.stringify(entry))
     return true

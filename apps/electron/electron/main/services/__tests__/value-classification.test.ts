@@ -75,7 +75,8 @@ import {
   applyDurationValueGate,
   neutralizeDelimiters,
   VALUE_REASON_TAGS,
-  getValueClassifierKind
+  getValueClassifierKind,
+  recomputeAudioWarnings
 } from '../value-classification'
 
 function cleanupDbFiles(base: string): void {
@@ -1431,6 +1432,38 @@ describe('Jev (TypeSafe AI) as the value classifier', () => {
       'cap-j7'
     ])
     expect(stored?.audio_warning).toBe('possible_invented_transcript')
+  })
+
+  it('recomputes stored warnings from stored numbers, for the recordings asked', async () => {
+    seedRecording('rec-w1', { durationSeconds: 789 })
+    seedTranscript('rec-w1', { fullText: Array.from({ length: 400 }, (_, i) => `w${i}`).join(' ') })
+    seedCapture('cap-w1', 'rec-w1')
+    seedRecording('rec-w2', { durationSeconds: 789 })
+    seedTranscript('rec-w2', { fullText: Array.from({ length: 400 }, (_, i) => `w${i}`).join(' ') })
+    seedCapture('cap-w2', 'rec-w2')
+    mockAskJev.mockResolvedValue(jevReply(4, 0.1))
+    await classifyCaptureValue('cap-w1')
+    await classifyCaptureValue('cap-w2')
+    const warning = (id: string) =>
+      queryOne<{ audio_warning: string | null }>('SELECT audio_warning FROM recording_evaluations WHERE capture_id = ?', [id])?.audio_warning ?? null
+    expect(warning('cap-w1')).toBeNull() // no audio profile yet: nothing to judge
+
+    // The audio check finds both files silent afterwards.
+    for (const id of ['rec-w1', 'rec-w2']) {
+      run(
+        `INSERT INTO audio_profiles (recording_id, version, method, duration_seconds, sound_seconds, sound_share, category, computed_at)
+         VALUES (?, 1, 'decoded', 789, 0, 0, 'silent', '2026-09-28T00:00:00.000Z')`,
+        [id]
+      )
+    }
+
+    expect(await recomputeAudioWarnings(['rec-w1'])).toBe(1)
+    expect(warning('cap-w1')).toBe('possible_invented_transcript')
+    expect(warning('cap-w2')).toBeNull() // not asked for
+    expect(await recomputeAudioWarnings()).toBe(1)
+    expect(warning('cap-w2')).toBe('possible_invented_transcript')
+    expect(await recomputeAudioWarnings()).toBe(0) // nothing left to change
+    expect(await recomputeAudioWarnings([])).toBe(0)
   })
 
   it('reports which classifier the backfill will use', () => {

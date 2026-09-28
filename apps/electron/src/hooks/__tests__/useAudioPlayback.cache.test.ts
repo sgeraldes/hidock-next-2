@@ -92,6 +92,31 @@ describe('useAudioPlayback — H5 disk cache', () => {
     expect(useUIStore.getState().waveformLoadedForId).toBe('rec-2')
   })
 
+  it('shows a coarse waveform at once, then decodes the exact one and saves it over', async () => {
+    getCache.mockResolvedValue({
+      version: 1,
+      recordingId: 'rec-c',
+      peaks: [0.3, 0.3],
+      sampleCount: 2,
+      duration: 42,
+      fileSize: 100,
+      createdAt: 'now',
+      coarse: true
+    })
+    readRecording.mockResolvedValue({ success: true, data: btoa('audio-bytes') })
+    decodeAudioData.mockResolvedValue({ duration: 42 })
+    generateWaveformData.mockResolvedValue(new Float32Array([0.1, 0.9]))
+
+    renderHook(() => useAudioPlayback())
+    await window.__audioControls!.loadWaveformOnly('rec-c', '/x/rec-c.mp3')
+
+    expect(generateWaveformData).toHaveBeenCalled()
+    expect(setCache).toHaveBeenCalledTimes(1)
+    expect(setCache.mock.calls[0][0]).toBe('rec-c')
+    const shown = Array.from(useUIStore.getState().playbackWaveformData!)
+    expect(shown[1]).toBeCloseTo(0.9, 5) // the exact one replaced the coarse one
+  })
+
   it('starts a split preview at the requested timestamp before audio becomes audible', async () => {
     let heardFrom = -1
     class FakeAudio extends EventTarget {
