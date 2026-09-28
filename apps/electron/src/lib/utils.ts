@@ -1,5 +1,6 @@
 import { type ClassValue, clsx } from 'clsx'
 import { twMerge } from 'tailwind-merge'
+import { appLocale } from '@/lib/locale'
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
@@ -7,7 +8,7 @@ export function cn(...inputs: ClassValue[]) {
 
 export function formatDate(date: Date | string): string {
   const d = typeof date === 'string' ? new Date(date) : date
-  return d.toLocaleDateString('en-US', {
+  return d.toLocaleDateString(appLocale(), {
     weekday: 'short',
     month: 'short',
     day: 'numeric'
@@ -16,7 +17,7 @@ export function formatDate(date: Date | string): string {
 
 export function formatTime(date: Date | string): string {
   const d = typeof date === 'string' ? new Date(date) : date
-  return d.toLocaleTimeString('en-US', {
+  return d.toLocaleTimeString(appLocale(), {
     hour: '2-digit',
     minute: '2-digit',
     hour12: true

@@ -20,6 +20,7 @@ import { useOperations } from '@/hooks/useOperations'
 import { formatEta, formatBytes } from '@/utils/formatters'
 import { DeviceFileList, isFilenamePurged } from '@/components/DeviceFileList'
 import { shouldLogQa } from '@/services/qa-monitor'
+import { appLocale } from '@/lib/locale'
 
 const CONNECTION_TIMEOUT_MS = 10000 // 10 second timeout (BUG-006)
 
@@ -1260,7 +1261,7 @@ export function Device() {
                       onClick={() => {
                         // Format activity log for clipboard
                         const logText = activityLog.map(entry => {
-                          const timestamp = entry.timestamp.toLocaleTimeString('en-US', {
+                          const timestamp = entry.timestamp.toLocaleTimeString(appLocale(), {
                             hour12: false,
                             hour: '2-digit',
                             minute: '2-digit',
@@ -1341,7 +1342,7 @@ export function Device() {
                           }`}
                         >
                           <span className="text-muted-foreground/60 shrink-0">
-                            {entry.timestamp.toLocaleTimeString('en-US', {
+                            {entry.timestamp.toLocaleTimeString(appLocale(), {
                               hour12: false,
                               hour: '2-digit',
                               minute: '2-digit',

@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 import { sourceTypeLabel, type LibrarySourceType } from '@/features/library/utils/sourceType'
 import { useTodayCaptures, type TodayCapture } from './useTodayCaptures'
+import { appLocale } from '@/lib/locale'
 
 /** Per-kind glyph — mirrors the Library row icons so the two surfaces read alike. */
 const TYPE_ICON: Record<Exclude<LibrarySourceType, 'audio'>, LucideIcon> = {
@@ -15,7 +16,7 @@ const TYPE_ICON: Record<Exclude<LibrarySourceType, 'audio'>, LucideIcon> = {
 }
 
 function formatTime(d: Date): string {
-  return isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return isNaN(d.getTime()) ? '' : d.toLocaleTimeString(appLocale(), { hour: '2-digit', minute: '2-digit' })
 }
 
 /**

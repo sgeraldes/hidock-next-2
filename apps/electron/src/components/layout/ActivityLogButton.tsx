@@ -21,6 +21,7 @@ import { Button } from '@/components/ui/button'
 import { useActivityLog, useAppStore } from '@/store/useAppStore'
 import { useUIStore } from '@/store/ui/useUIStore'
 import type { ActivityLogEntry } from '@/services/hidock-device'
+import { appLocale } from '@/lib/locale'
 
 export function ActivityLogButton() {
   const activityLog = useActivityLog()
@@ -205,7 +206,7 @@ function ActivityLogOverlay({ open, onClose, entries, onClear }: ActivityLogOver
                 )}
               >
                 <span className="mr-1.5 text-slate-600">
-                  {entry.timestamp.toLocaleTimeString('en-US', {
+                  {entry.timestamp.toLocaleTimeString(appLocale(), {
                     hour12: false,
                     hour: '2-digit',
                     minute: '2-digit',

@@ -4,6 +4,7 @@ import { useConfigStore } from '@/store/domain/useConfigStore'
 import { formatBytes, cn } from '@/lib/utils'
 import type { StorageInfo } from '@/types'
 import type { SettingsSectionId } from './sections'
+import { appLocale } from '@/lib/locale'
 
 interface ConnectorLine {
   label: string
@@ -120,7 +121,7 @@ export function OverviewSection({
       id: 'storage',
       title: 'Library on disk',
       value: storageInfo ? formatBytes(storageInfo.totalSizeBytes) : '…',
-      detail: storageInfo ? `${storageInfo.recordingsCount.toLocaleString()} recordings` : 'Checking',
+      detail: storageInfo ? `${storageInfo.recordingsCount.toLocaleString(appLocale())} recordings` : 'Checking',
       tone: 'ok'
     },
     {

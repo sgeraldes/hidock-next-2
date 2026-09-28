@@ -1,4 +1,5 @@
 import type { Note } from '@/types/notes'
+import { appLocale } from '@/lib/locale'
 
 /**
  * What the list shows for a note.
@@ -41,7 +42,7 @@ function formatWhen(then: Date, now: Date): string {
   if (Number.isNaN(then.getTime())) return 'unknown'
   const sameDay = then.toDateString() === now.toDateString()
   if (sameDay) {
-    return then.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+    return then.toLocaleTimeString(appLocale(), { hour: '2-digit', minute: '2-digit' })
   }
-  return then.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  return then.toLocaleDateString(appLocale(), { month: 'short', day: 'numeric' })
 }

@@ -21,6 +21,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store'
+import { appLocale } from '@/lib/locale'
 
 export interface LiveMeeting {
   id: string
@@ -75,7 +76,7 @@ function formatElapsed(seconds: number): string {
 function meetingTimeLabel(m: LiveMeeting): string {
   const fmt = (iso: string) => {
     const d = new Date(iso)
-    return isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    return isNaN(d.getTime()) ? '' : d.toLocaleTimeString(appLocale(), { hour: '2-digit', minute: '2-digit' })
   }
   return `${fmt(m.start_time)}–${fmt(m.end_time)}`
 }

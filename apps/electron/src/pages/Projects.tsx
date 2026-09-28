@@ -89,6 +89,7 @@ interface ProjectActionable {
 import { cn } from '@/lib/utils'
 import { pageContent } from '@/lib/pageLayout'
 import { toast } from '@/components/ui/toaster'
+import { appLocale } from '@/lib/locale'
 
 export function Projects() {
   const [projects, setProjects] = useState<Project[]>([])
@@ -658,7 +659,7 @@ export function Projects() {
                     type="button"
                     onClick={() => handleSelectProject(project)}
                     aria-current={isActive ? 'true' : undefined}
-                    title={`${project.name} · ${project.status} · created ${new Date(project.createdAt).toLocaleDateString()}`}
+                    title={`${project.name} · ${project.status} · created ${new Date(project.createdAt).toLocaleDateString(appLocale())}`}
                     style={{ animationDelay: `${Math.min(index, 8) * 35}ms` }}
                     className={cn(
                       "animate-rise-in lift w-full text-left p-3 rounded-xl cursor-pointer group",
@@ -689,7 +690,7 @@ export function Projects() {
                             aria-hidden="true"
                           />
                           <Clock className="h-3 w-3" aria-hidden="true" />
-                          <span>{new Date(project.createdAt).toLocaleDateString()}</span>
+                          <span>{new Date(project.createdAt).toLocaleDateString(appLocale())}</span>
                         </div>
                       </div>
                     </div>
@@ -807,7 +808,7 @@ export function Projects() {
                     >
                       {activeProject.status}
                     </span>
-                    <span className="text-xs text-muted-foreground">Created {new Date(activeProject.createdAt).toLocaleDateString()}</span>
+                    <span className="text-xs text-muted-foreground">Created {new Date(activeProject.createdAt).toLocaleDateString(appLocale())}</span>
                   </div>
                 </div>
               </div>
@@ -1053,7 +1054,7 @@ export function Projects() {
                                 <p className="text-sm font-medium truncate group-hover:text-primary transition-colors">{k.title || 'Untitled'}</p>
                                 {(k.summary || k.capturedAt) && (
                                   <p className="text-[10px] text-muted-foreground truncate mt-0.5">
-                                    {k.summary || new Date(k.capturedAt).toLocaleDateString()}
+                                    {k.summary || new Date(k.capturedAt).toLocaleDateString(appLocale())}
                                   </p>
                                 )}
                               </div>
@@ -1239,7 +1240,7 @@ export function Projects() {
                           >
                             <div className="min-w-0 flex-1">
                               <p className="text-sm font-medium truncate group-hover:text-primary transition-colors">{a.title}</p>
-                              <p className="text-[10px] text-muted-foreground mt-0.5">{new Date(a.createdAt).toLocaleDateString()}</p>
+                              <p className="text-[10px] text-muted-foreground mt-0.5">{new Date(a.createdAt).toLocaleDateString(appLocale())}</p>
                             </div>
                             <span
                               title={`Status: ${a.status}`}

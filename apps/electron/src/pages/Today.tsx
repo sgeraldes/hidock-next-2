@@ -54,6 +54,7 @@ import { CATEGORY_DOT, CATEGORY_CHIP, CATEGORY_ORDER } from '@/lib/meeting-categ
 import { UNLINKED_STATE_LABEL } from '@/lib/calendar-utils'
 import type { Contact } from '@/types'
 import { isFeatureOffThisRun } from '@/lib/bootFeatures'
+import { appLocale } from '@/lib/locale'
 
 const TODAY_PARTICIPANT_LIMIT = 4
 
@@ -122,11 +123,11 @@ function greeting(): string {
 function formatTime(iso?: string): string {
   if (!iso) return ''
   const d = new Date(iso)
-  return isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return isNaN(d.getTime()) ? '' : d.toLocaleTimeString(appLocale(), { hour: '2-digit', minute: '2-digit' })
 }
 
 function formatClock(d: Date): string {
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return d.toLocaleTimeString(appLocale(), { hour: '2-digit', minute: '2-digit' })
 }
 
 /**
@@ -151,7 +152,7 @@ function formatTimeRange(startIso?: string, endIso?: string, compact = false): s
 function formatDay(iso?: string): string {
   if (!iso) return ''
   const d = new Date(iso)
-  return isNaN(d.getTime()) ? '' : d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
+  return isNaN(d.getTime()) ? '' : d.toLocaleDateString(appLocale(), { weekday: 'short', month: 'short', day: 'numeric' })
 }
 
 // ── Shared, stateless ribbon primitives (module scope: stable identity) ───────
@@ -975,7 +976,7 @@ export function Today() {
           <div>
             <div className="flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wide text-primary">
               <Sun className="h-4 w-4" />
-              {new Date().toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}
+              {new Date().toLocaleDateString(appLocale(), { weekday: 'long', month: 'long', day: 'numeric' })}
             </div>
             <h1 className="mt-1 text-4xl font-bold tracking-tight">{greeting()}, Sebastián</h1>
             {data && (

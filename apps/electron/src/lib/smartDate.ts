@@ -4,6 +4,7 @@
  * not read like this week's) and, where useful, a relative "x days ago" hint.
  */
 
+import { appLocale } from '@/lib/locale'
 function toDate(value: Date | string | number | null | undefined): Date | null {
   if (value == null) return null
   const d = value instanceof Date ? value : new Date(value)
@@ -26,9 +27,9 @@ export function formatSmartDate(
 ): string {
   const d = toDate(value)
   if (!d) return opts.fallback ?? 'Unknown date'
-  const date = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  const date = d.toLocaleDateString(appLocale(), { month: 'short', day: 'numeric', year: 'numeric' })
   if (opts.time === false) return date
-  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+  const time = d.toLocaleTimeString(appLocale(), { hour: 'numeric', minute: '2-digit' })
   return `${date} · ${time}`
 }
 

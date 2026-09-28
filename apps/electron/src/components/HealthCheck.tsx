@@ -3,6 +3,7 @@ import { AlertCircle, CheckCircle2, AlertTriangle, RefreshCw, Wrench, ChevronDow
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { useAppStore } from '@/store/useAppStore'
+import { appLocale } from '@/lib/locale'
 
 interface CleanupResult {
   deletedFiles: string[]
@@ -314,7 +315,7 @@ export function HealthCheck() {
 
             {/* Scan Timestamp */}
             <div className="text-xs text-muted-foreground text-center">
-              Last scan: {new Date(report.scanCompleted).toLocaleString()}
+              Last scan: {new Date(report.scanCompleted).toLocaleString(appLocale())}
             </div>
           </div>
         )}

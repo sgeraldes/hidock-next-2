@@ -44,6 +44,7 @@ import type { Person, PersonType } from '@/types/knowledge'
 import { cn } from '@/lib/utils'
 import { pageWide } from '@/lib/pageLayout'
 import { toast } from '@/components/ui/toaster'
+import { appLocale } from '@/lib/locale'
 
 /** Above this many links on BOTH sides, a merge requires typing the loser's name. */
 const MERGE_LINK_THRESHOLD = 10
@@ -289,7 +290,7 @@ export function People() {
     if (!dateStr) return 'Unknown'
     const date = new Date(dateStr)
     if (isNaN(date.getTime())) return 'Unknown'
-    return date.toLocaleDateString()
+    return date.toLocaleDateString(appLocale())
   }
 
   /** Return "interaction" (singular) or "interactions" (plural) */

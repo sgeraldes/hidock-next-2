@@ -6,6 +6,7 @@ import { formatDateTime } from '@/lib/utils'
 import { useMeetingParticipants, participantLabel, getCachedMeetingParticipants } from '@/lib/meeting-participants'
 import { useMeetingRecordingIntel, getCachedMeetingRecordingIntel } from '@/lib/meeting-recording-intelligence'
 import { meaningfulDescriptionLines, extractMeetingUrl } from '@/lib/description-format'
+import { appLocale } from '@/lib/locale'
 
 const HOVER_PARTICIPANT_LIMIT = 5
 const HOVER_MEETING_LIMIT = 3
@@ -186,7 +187,7 @@ export function PersonHoverCard({
               <span className="truncate flex-1">{(m.subject as string) || 'Meeting'}</span>
               {m.start_time ? (
                 <span className="shrink-0 text-[10px] text-muted-foreground">
-                  {new Date(m.start_time as string).toLocaleDateString()}
+                  {new Date(m.start_time as string).toLocaleDateString(appLocale())}
                 </span>
               ) : null}
             </button>
@@ -377,7 +378,7 @@ export function MeetingHoverCard({
     ? ''
     : intel.transcribed
       ? intel.wordCount
-        ? `Recorded · transcribed (${intel.wordCount.toLocaleString()} words)`
+        ? `Recorded · transcribed (${intel.wordCount.toLocaleString(appLocale())} words)`
         : 'Recorded · transcript available'
       : 'Recorded'
 

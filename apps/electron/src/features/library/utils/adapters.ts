@@ -5,6 +5,7 @@
 import { UnifiedRecording, hasLocalPath, isDeviceOnly } from '@/types/unified-recording'
 import { AudioSource, ProcessingStatus, SourceLocation } from '../types/source'
 import { getDisplayTitle } from './getDisplayTitle'
+import { appLocale } from '@/lib/locale'
 
 /**
  * Convert UnifiedRecording to AudioSource
@@ -104,7 +105,7 @@ export function getSourceDisplayTitle(source: AudioSource): string {
  */
 export function getSourceDateDisplay(source: AudioSource): string {
   const date = new Date(source.capturedAt)
-  return date.toLocaleDateString(undefined, {
+  return date.toLocaleDateString(appLocale(), {
     year: 'numeric',
     month: 'short',
     day: 'numeric',

@@ -42,6 +42,7 @@ import {
 import { entityColor } from './graph-theme'
 import type { NodeDetail, Provenance, ProvenanceEntity, MergePreview, ContextGraphNode } from './types'
 import { MergeIntoDialog } from '@/components/identity/MergeIntoDialog'
+import { appLocale } from '@/lib/locale'
 
 interface OpenTarget {
   type: string
@@ -77,7 +78,7 @@ function formatDate(ms: number | null): string {
   if (ms == null) return ''
   const d = new Date(ms)
   if (Number.isNaN(d.getTime())) return ''
-  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+  return d.toLocaleDateString(appLocale(), { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
 /** A labelled fact row in the "what this is" grid. */

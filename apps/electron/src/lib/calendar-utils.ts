@@ -6,6 +6,7 @@ import type { Meeting } from '@/types'
 import type { UnifiedRecording } from '@/types/unified-recording'
 import { categorizeMeeting, isAllDayMeeting, type MeetingCategory } from './meeting-timing'
 import { isUnknownDate } from './unknownDate'
+import { appLocale } from '@/lib/locale'
 
 /**
  * A meeting this long (or flagged all-day) is a low-precision "bridge" window. A
@@ -342,7 +343,7 @@ export function assignOverlapLanes<T extends { startTime: Date; endTime: Date }>
  */
 export function buildEventAriaLabel(subject: string, start: Date, end: Date): string {
   const fmt = (d: Date) =>
-    d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+    d.toLocaleTimeString(appLocale(), { hour: 'numeric', minute: '2-digit' })
   const name = subject && subject.trim().length > 0 ? subject.trim() : 'Untitled event'
   return `${name}, ${fmt(start)} to ${fmt(end)}`
 }
@@ -675,7 +676,7 @@ export function recordingBlockTitle(recording: CalendarRecording): string {
   if (recording.linkedMeeting) return recording.linkedMeeting.subject
   const title = recording.title?.trim()
   if (title) return title
-  const time = recording.startTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+  const time = recording.startTime.toLocaleTimeString(appLocale(), { hour: 'numeric', minute: '2-digit' })
   return `Recording · ${time}`
 }
 
@@ -685,7 +686,7 @@ export function recordingBlockTitle(recording: CalendarRecording): string {
  */
 export function formatUnmatchedRecordingMeta(recording: CalendarRecording): string {
   const duration = formatDurationStr(recording.durationSeconds)
-  const time = recording.startTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+  const time = recording.startTime.toLocaleTimeString(appLocale(), { hour: 'numeric', minute: '2-digit' })
   return `${duration} · ${time}`
 }
 

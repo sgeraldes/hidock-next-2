@@ -74,18 +74,19 @@ import {
   OVERLAP_INDENT_STEP,
   OVERLAP_MAX_INDENT_LANES,
 } from '@/lib/calendar-utils'
+import { appLocale } from '@/lib/locale'
 
 // Helper functions for date/time formatting in list views. An undated recording
 // (UNKNOWN_DATE epoch sentinel) has no real date, so it renders honestly instead
 // of a bogus "Dec 31" / "Jan 1" 1970 short date (#58).
 function formatShortDate(date: Date): string {
   if (isUnknownDate(date)) return 'Unknown'
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  return date.toLocaleDateString(appLocale(), { month: 'short', day: 'numeric' })
 }
 
 function formatShortTime(date: Date): string {
   if (isUnknownDate(date)) return ''
-  return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+  return date.toLocaleTimeString(appLocale(), { hour: 'numeric', minute: '2-digit' })
 }
 
 // CA-05: Current time indicator that updates every 60 seconds
@@ -522,14 +523,14 @@ export function Calendar() {
   }
 
   const monthYear = currentDate instanceof Date 
-    ? currentDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+    ? currentDate.toLocaleDateString(appLocale(), { month: 'long', year: 'numeric' })
     : ''
 
   // Format last sync time (memoized)
   const formatLastSync = useCallback(() => {
     if (!lastSync) return ''
     const syncDate = new Date(lastSync)
-    return syncDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+    return syncDate.toLocaleTimeString(appLocale(), { hour: 'numeric', minute: '2-digit' })
   }, [lastSync])
 
   // Handle sync button click
@@ -1337,7 +1338,7 @@ export function Calendar() {
                     'text-xs font-semibold uppercase tracking-wide',
                     today ? 'text-primary' : 'text-foreground/70'
                   )}>
-                    {date.toLocaleDateString('en-US', { weekday: calendarView === 'day' ? 'long' : 'short' })}
+                    {date.toLocaleDateString(appLocale(), { weekday: calendarView === 'day' ? 'long' : 'short' })}
                   </div>
                   <div
                     className={cn(

@@ -56,6 +56,7 @@ import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/h
 import { MeetingHoverCard } from '@/components/entity'
 import { cn, getRelativeTime } from '@/lib/utils'
 import type { Message, Conversation, KnowledgeCapture } from '@/types/knowledge'
+import { appLocale } from '@/lib/locale'
 
 const MAX_INPUT_LENGTH = 4000
 
@@ -651,7 +652,7 @@ export function Chat() {
     const markdown = [
       `# ${activeConversation.title || 'Untitled Conversation'}`,
       ``,
-      `**Date:** ${new Date(activeConversation.createdAt).toLocaleDateString()}`,
+      `**Date:** ${new Date(activeConversation.createdAt).toLocaleDateString(appLocale())}`,
       `**Messages:** ${messages.length}`,
       ``,
       `---`,
@@ -661,7 +662,7 @@ export function Chat() {
         // (main already redacts its content) is exported neutrally, never as
         // 'Assistant'. Main-side gates are authoritative; this is defense-in-depth.
         const role = msg.role === 'user' ? '**You:**' : msg.role === 'assistant' ? '**Assistant:**' : '**Message:**'
-        const timestamp = new Date(msg.createdAt).toLocaleString()
+        const timestamp = new Date(msg.createdAt).toLocaleString(appLocale())
         return `### ${role} _(${timestamp})_\n\n${msg.content}\n`
       })
     ].join('\n')
@@ -1548,7 +1549,7 @@ export function Chat() {
                             'text-[10px] mt-3 opacity-50',
                             message.role === 'user' ? 'text-primary-foreground' : 'text-muted-foreground'
                           )}
-                          title={new Date(message.createdAt).toLocaleString()}
+                          title={new Date(message.createdAt).toLocaleString(appLocale())}
                         >
                           {getRelativeTime(message.createdAt)}
                         </p>

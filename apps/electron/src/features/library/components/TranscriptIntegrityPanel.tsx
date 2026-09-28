@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import type { Transcript } from '@/types'
 import { ISSUE_TAGS, integrityIssues, integrityLabel } from '@/features/library/utils/transcriptIntegrity'
 import { isJumpableLineIssue, type LineIssueCode } from '@/shared/transcript-line-issues'
+import { appLocale } from '@/lib/locale'
 
 interface TranscriptIntegrityPanelProps {
   recordingId: string
@@ -44,7 +45,7 @@ export function TranscriptIntegrityPanel({ recordingId, transcript, onRetranscri
   }
 
   if (label === 'accepted') {
-    const when = transcript.integrity_accepted_at ? new Date(transcript.integrity_accepted_at).toLocaleDateString() : ''
+    const when = transcript.integrity_accepted_at ? new Date(transcript.integrity_accepted_at).toLocaleDateString(appLocale()) : ''
     return (
       <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-xs text-muted-foreground" data-testid="transcript-integrity" data-integrity="accepted">
         <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" aria-hidden="true" />

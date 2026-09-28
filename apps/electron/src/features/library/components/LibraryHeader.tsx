@@ -24,6 +24,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import { TranscriptUpgradeButton } from './TranscriptUpgradeButton'
+import { appLocale } from '@/lib/locale'
 
 interface LibraryHeaderProps {
   stats: {
@@ -102,7 +103,7 @@ export function LibraryHeader({
           <h1 className="whitespace-nowrap text-xl font-bold tracking-tight sm:text-2xl">Knowledge Library</h1>
           <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
             <span className="tabular-nums">
-              {stats.total.toLocaleString()} source{stats.total !== 1 ? 's' : ''}
+              {stats.total.toLocaleString(appLocale())} source{stats.total !== 1 ? 's' : ''}
             </span>
             {stats.deviceOnly > 0 && (
               <button
