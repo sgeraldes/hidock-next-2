@@ -53,8 +53,10 @@ import {
   applyCaptureValueClassification,
   DURATION_LOW_VALUE_MAX_SECONDS,
   getValueClassifierKind,
+  storeEvaluation,
   type RawClassificationResult
 } from './value-classification'
+import { EVALUATION_VERSION } from './jev-evaluation'
 import { JevError } from './jev-client'
 
 // ---------------------------------------------------------------------------
@@ -238,7 +240,7 @@ const VALUE_BACKFILL_PARKED_PREDICATE = `vbs.status IN ('failed', 'in_progress')
 // run_id note at startValueBackfill).
 // ---------------------------------------------------------------------------
 
-function getEligibleCaptureIds(order: 'newest' | 'oldest'): string[] {
+function getEligibleCaptureIds(order: 'newest' | 'oldest', withEvaluation = false): string[] {
   const orderClause = order === 'oldest' ? 'ASC' : 'DESC'
   // The transcripts JOIN cannot fan a capture out into duplicate rows:
   // transcripts.recording_id is NOT NULL UNIQUE (one transcript per recording).
@@ -248,14 +250,30 @@ function getEligibleCaptureIds(order: 'newest' | 'oldest'): string[] {
        LEFT JOIN transcripts t ON t.recording_id = kc.source_recording_id
        LEFT JOIN recordings r ON r.id = kc.source_recording_id
       WHERE ${VALUE_BACKFILL_PRIVACY_WHERE}
-        AND kc.quality_rating = 'unrated'
-        AND NOT EXISTS (
-          SELECT 1 FROM value_backfill_state vbs
-           WHERE vbs.capture_id = kc.id
-             AND (vbs.status = 'classified' OR (${VALUE_BACKFILL_PARKED_PREDICATE}))
+        AND (
+          (kc.quality_rating = 'unrated'
+            AND NOT EXISTS (
+              SELECT 1 FROM value_backfill_state vbs
+               WHERE vbs.capture_id = kc.id
+                 AND (vbs.status = 'classified' OR (${VALUE_BACKFILL_PARKED_PREDICATE}))
+            ))
+          -- With Jev: every capture with a transcript and no evaluation at the
+          -- current version, rated or not (a rating is never changed by it).
+          -- Short clips get the free duration verdict and no evaluation, so they
+          -- stay out here or they would come back every run.
+          OR (? = 1
+            AND t.full_text IS NOT NULL AND TRIM(t.full_text) != ''
+            AND (r.duration_seconds IS NULL OR r.duration_seconds >= ${DURATION_LOW_VALUE_MAX_SECONDS})
+            AND NOT EXISTS (
+              SELECT 1 FROM recording_evaluations re WHERE re.capture_id = kc.id AND re.version >= ?
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM value_backfill_state vbs
+               WHERE vbs.capture_id = kc.id AND (${VALUE_BACKFILL_PARKED_PREDICATE})
+            ))
         )
       ORDER BY kc.captured_at ${orderClause}`,
-    [MAX_DURABLE_ATTEMPTS]
+    [MAX_DURABLE_ATTEMPTS, withEvaluation ? 1 : 0, EVALUATION_VERSION, MAX_DURABLE_ATTEMPTS]
   )
   return rows.map((r) => r.id)
 }
@@ -581,6 +599,7 @@ async function processOneCapture(captureId: string, runId: string): Promise<Proc
           throw new Error(`applyCaptureValueClassification failed (reason=error) for capture=${captureId}`)
         }
       }
+      if (raw.evaluation) storeEvaluation(captureId, raw.recordingId ?? null, raw.evaluation)
       finalizeClassifiedInTransaction(captureId, runId, resultRating)
     })
   } catch (e) {
@@ -675,7 +694,7 @@ export async function startValueBackfill(opts?: { order?: 'newest' | 'oldest' })
     // also guarded against is closed by the attempts cap in
     // getEligibleCaptureIds instead (Opus review M1/L3).
     const runId = randomUUID()
-    const eligibleIds = getEligibleCaptureIds(order)
+    const eligibleIds = getEligibleCaptureIds(order, classifier === 'jev')
     total = eligibleIds.length
 
     let lastProgressAt = 0
@@ -792,7 +811,12 @@ export function getValueBackfillStatus(): ValueBackfillStatus {
   const total = row?.total ?? 0
   const done = row?.done ?? 0
   const failed = row?.failed ?? 0
-  const remaining = Math.max(0, total - done - failed)
+  // With Jev the scan also evaluates rated recordings, so "left" is the real
+  // eligible set, not only the unrated ones.
+  const remaining =
+    getValueClassifierKind() === 'jev'
+      ? getEligibleCaptureIds('newest', true).length
+      : Math.max(0, total - done - failed)
 
   return { running, total, done, marked: row?.marked ?? 0, failed, remaining }
 }

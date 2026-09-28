@@ -1241,16 +1241,29 @@ describe('applyDurationValueGate (sweep)', () => {
 describe('Jev (TypeSafe AI) as the value classifier', () => {
   const JEV_KEY = 'jev-test-key' // pragma: allowlist secret
 
-  function jevReply(value: string, confidence: number, nouls: Record<string, number> = {}) {
+  /** A Jev reply for the evaluation question set: stars 1..5 as a score, plus kind, context and nouls. */
+  function jevReply(
+    stars: number | null,
+    confidence: number,
+    nouls: Record<string, number> = {},
+    extra: { kind?: string; context?: string } = {}
+  ) {
     const answers: Record<string, unknown> = {
-      value: {
-        type: 'choice',
-        choice: value,
-        probabilities: { high: 0, normal: 0, low: 0, none: 0, [value]: 1 },
+      kind: { type: 'choice', choice: extra.kind ?? 'team_meeting', probabilities: {}, confidence: 0.8 },
+      context: { type: 'choice', choice: extra.context ?? 'work', probabilities: {}, confidence: 0.9 }
+    }
+    if (stars !== null) {
+      answers.stars = {
+        type: 'score',
+        score: stars - 1,
+        legend: {},
+        probabilities: { [String(stars - 1)]: 1 },
         confidence
       }
     }
-    for (const tag of VALUE_REASON_TAGS) answers[tag] = { type: 'noul', noul: nouls[tag] ?? 0.1 }
+    for (const id of [...VALUE_REASON_TAGS, 'transcript_invented', 'transcript_overfull', 'has_action_items', 'sensitive']) {
+      answers[id] = { type: 'noul', noul: nouls[id] ?? 0.1 }
+    }
     return { model: 'jev-1.13.0', answers, usage: { input_tokens: 900, output_tokens: 40 } }
   }
 
@@ -1283,7 +1296,7 @@ describe('Jev (TypeSafe AI) as the value classifier', () => {
     seedRecording('rec-j1')
     seedTranscript('rec-j1', { fullText: 'Hola mamá, ¿qué cocinamos hoy? Pasta con salsa.' })
     seedCapture('cap-j1', 'rec-j1', { summary: 'Family chat about dinner.' })
-    mockAskJev.mockResolvedValue(jevReply('none', 0.9, { personal_family: 0.93 }))
+    mockAskJev.mockResolvedValue(jevReply(1, 0.9, { personal_family: 0.93 }, { kind: 'personal_call', context: 'personal' }))
 
     const result = await classifyCaptureValue('cap-j1')
 
@@ -1293,22 +1306,36 @@ describe('Jev (TypeSafe AI) as the value classifier', () => {
     expect(key).toBe(JEV_KEY)
     expect(state.transcript_excerpt).toContain('qué cocinamos')
     expect(state.summary).toBe('Family chat about dinner.')
-    expect(questions.value.type).toBe('choice')
-    expect(Object.keys(questions.value.criteria).sort()).toEqual(['high', 'low', 'none', 'normal'])
-    for (const tag of VALUE_REASON_TAGS) expect(questions[tag].type).toBe('noul')
+    // One call carries the whole evaluation: stars as a 5-level score, kind and
+    // context as choices, transcript trust and the reason tags as yes/no.
+    expect(questions.stars.type).toBe('score')
+    expect(questions.stars.criteria).toHaveLength(5)
+    expect(questions.kind.type).toBe('choice')
+    expect(Object.keys(questions.kind.criteria)).toContain('interview')
+    expect(Object.keys(questions.context.criteria).sort()).toEqual(['mixed', 'personal', 'unclear', 'work'])
+    for (const id of [...VALUE_REASON_TAGS, 'transcript_invented', 'transcript_overfull', 'has_action_items', 'sensitive']) {
+      expect(questions[id].type).toBe('noul')
+    }
 
     expect(result.value).toBe('none')
     expect(result.rating).toBe('garbage')
     expect(result.reasons).toEqual(['personal_family'])
     expect(result.confidence).toBeCloseTo(0.9)
     expect(getCaptureRow('cap-j1')?.quality_rating).toBe('garbage')
+    // The whole evaluation is stored next to the rating.
+    const stored = queryOne<{ version: number; star_level: number; kind: string; context: string; reasons_json: string }>(
+      'SELECT version, star_level, kind, context, reasons_json FROM recording_evaluations WHERE capture_id = ?',
+      ['cap-j1']
+    )
+    expect(stored).toMatchObject({ version: 1, star_level: 1, kind: 'personal_call', context: 'personal' })
+    expect(JSON.parse(stored!.reasons_json)).toEqual(['personal_family'])
   })
 
   it('keeps a low-confidence Jev downgrade from persisting (same floor as the LLM)', async () => {
     seedRecording('rec-j2')
     seedTranscript('rec-j2', { fullText: 'Mostly small talk about the weather.' })
     seedCapture('cap-j2', 'rec-j2')
-    mockAskJev.mockResolvedValue(jevReply('low', 0.4))
+    mockAskJev.mockResolvedValue(jevReply(2, 0.4))
 
     const result = await classifyCaptureValue('cap-j2')
 
@@ -1316,11 +1343,11 @@ describe('Jev (TypeSafe AI) as the value classifier', () => {
     expect(getCaptureRow('cap-j2')?.quality_rating).toBe('unrated')
   })
 
-  it('never lets an unknown Jev option through: it degrades to normal (no rating change)', async () => {
+  it('a reply without a usable stars answer degrades to normal (no rating change)', async () => {
     seedRecording('rec-j3')
     seedTranscript('rec-j3', { fullText: 'Planning the Q4 roadmap.' })
     seedCapture('cap-j3', 'rec-j3')
-    mockAskJev.mockResolvedValue(jevReply('garbage-please', 0.99))
+    mockAskJev.mockResolvedValue(jevReply(null, 0.99, {}, { kind: 'not-a-kind' }))
 
     const result = await classifyCaptureValue('cap-j3')
 
@@ -1349,6 +1376,49 @@ describe('Jev (TypeSafe AI) as the value classifier', () => {
 
     expect(raw.providerCalled).toBe(false)
     expect(mockAskJev).not.toHaveBeenCalled()
+  })
+
+  it('evaluates an already-rated recording with Jev and keeps its rating', async () => {
+    seedRecording('rec-j6')
+    seedTranscript('rec-j6', { fullText: 'Entrevista para el puesto de project manager.' })
+    seedCapture('cap-j6', 'rec-j6', { qualityRating: 'valuable', qualitySource: 'user' })
+    mockAskJev.mockResolvedValue(jevReply(5, 0.9, {}, { kind: 'interview', context: 'work' }))
+
+    const result = await classifyCaptureValue('cap-j6')
+
+    expect(result.skipped).toBe('already-rated')
+    expect(getCaptureRow('cap-j6')?.quality_rating).toBe('valuable')
+    const stored = queryOne<{ star_level: number; kind: string }>(
+      'SELECT star_level, kind FROM recording_evaluations WHERE capture_id = ?',
+      ['cap-j6']
+    )
+    expect(stored).toMatchObject({ star_level: 5, kind: 'interview' })
+
+    // Already evaluated at this version: no second call.
+    mockAskJev.mockClear()
+    await classifyCaptureValue('cap-j6')
+    expect(mockAskJev).not.toHaveBeenCalled()
+  })
+
+  it('warns when a silent file carries a long transcript, and sends Jev the audio numbers', async () => {
+    seedRecording('rec-j7', { durationSeconds: 789 })
+    const invented = Array.from({ length: 400 }, (_, i) => `palabra${i}`).join(' ')
+    seedTranscript('rec-j7', { fullText: invented })
+    seedCapture('cap-j7', 'rec-j7')
+    run(
+      `INSERT INTO audio_profiles (recording_id, version, method, duration_seconds, sound_seconds, sound_share, category, computed_at)
+       VALUES ('rec-j7', 1, 'decoded', 789, 3.7, 0.0047, 'noise', '2026-09-25T00:00:00.000Z')`
+    )
+    mockAskJev.mockResolvedValue(jevReply(4, 0.9))
+
+    await classifyCaptureValue('cap-j7')
+
+    const [, state] = mockAskJev.mock.calls[0]
+    expect(state.audio).toMatchObject({ audio_category: 'noise', sound_seconds: 4, duration_seconds: 789 })
+    const stored = queryOne<{ audio_warning: string }>('SELECT audio_warning FROM recording_evaluations WHERE capture_id = ?', [
+      'cap-j7'
+    ])
+    expect(stored?.audio_warning).toBe('possible_invented_transcript')
   })
 
   it('reports which classifier the backfill will use', () => {
