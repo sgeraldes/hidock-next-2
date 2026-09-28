@@ -894,6 +894,8 @@ export interface ElectronAPI {
   // Storage
   storage: {
     getInfo: () => Promise<any>
+    getUsage?: () => Promise<{ success: boolean; data?: import('../../src/types').StorageLocationUsage[]; error?: string }>
+    recordingsOverLimit?: () => Promise<{ success: boolean; data?: boolean; error?: string }>
     openFolder: (folder: 'recordings' | 'transcripts' | 'data') => Promise<boolean>
     selectFolder?: (currentPath?: string) => Promise<{ success: boolean; data?: string | null; error?: string }>
     openFile: (filePath: string) => Promise<{ success: boolean; error?: string }>
@@ -1865,6 +1867,8 @@ const electronAPI: ElectronAPI = {
 
   storage: {
     getInfo: () => callIPC('storage:get-info'),
+    getUsage: () => callIPC('storage:get-usage'),
+    recordingsOverLimit: () => callIPC('storage:recordings-over-limit'),
     openFolder: (folder) => callIPC('storage:open-folder', folder),
     selectFolder: (currentPath) => callIPC('storage:select-folder', currentPath),
     openFile: (filePath) => callIPC('storage:open-file', filePath),

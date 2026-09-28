@@ -56,6 +56,7 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { PlayerSection } from '@/features/settings/PlayerSection'
 import { appLocale } from '@/lib/locale'
 import { DisplaySection } from '@/features/settings/DisplaySection'
+import { DeviceStorageCard, StorageUsageLine, useStorageUsage } from '@/features/settings/StorageUsage'
 
 // RAG configuration constants — MAX_CONTEXT_CHUNKS must match config.ts default (10)
 const RAG_DEFAULTS = {
@@ -129,6 +130,7 @@ export function Settings({
   const chatPosition = useUIStore((s) => s.chatPosition)
   const setChatPosition = useUIStore((s) => s.setChatPosition)
   const { config, loadConfig, updateConfig, configLoading } = useConfigStore()
+  const { usage: storageUsage, reload: reloadStorageUsage } = useStorageUsage()
   const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null)
   const [storageError, setStorageError] = useState<string | null>(null) // B-SET-002: Storage error state
   const [saving, setSaving] = useState(false)
@@ -1761,14 +1763,19 @@ export function Settings({
                   <>
                     <div className="grid grid-cols-2 gap-4 text-sm">
                       <div>
-                        <p className="text-muted-foreground">Total Size</p>
-                        <p className="font-medium">{formatBytes(storageInfo.totalSizeBytes)}</p>
+                        <p className="text-muted-foreground">HiDock on this computer</p>
+                        <p className="font-medium">
+                          {formatBytes(
+                            storageUsage ? storageUsage.reduce((sum, u) => sum + u.bytes, 0) : storageInfo.totalSizeBytes
+                          )}
+                        </p>
                       </div>
                       <div>
                         <p className="text-muted-foreground">Recordings</p>
-                        <p className="font-medium">{storageInfo.recordingsCount} files</p>
+                        <p className="font-medium">{storageInfo.recordingsCount.toLocaleString(appLocale())}</p>
                       </div>
                     </div>
+                    <DeviceStorageCard />
 
                     <div className="space-y-3 text-sm">
                       {([
@@ -1791,6 +1798,10 @@ export function Settings({
                               className="mt-1 h-8 font-mono text-xs"
                               title={storagePaths[folder]}
                               aria-label={`${label} folder path`}
+                            />
+                            <StorageUsageLine
+                              usage={storageUsage?.find((u) => u.id === folder)}
+                              onLimitSaved={reloadStorageUsage}
                             />
                           </div>
                           <Button

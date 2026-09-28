@@ -119,9 +119,11 @@ export function OverviewSection({
     },
     {
       id: 'storage',
-      title: 'Library on disk',
+      title: 'On this computer',
       value: storageInfo ? formatBytes(storageInfo.totalSizeBytes) : '…',
-      detail: storageInfo ? `${storageInfo.recordingsCount.toLocaleString(appLocale())} recordings` : 'Checking',
+      detail: storageInfo
+        ? `Recordings, transcripts and the database · ${storageInfo.recordingsCount.toLocaleString(appLocale())} recordings`
+        : 'Checking',
       tone: 'ok'
     },
     {
