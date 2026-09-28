@@ -55,6 +55,10 @@ function save(values: Record<'ui' | 'capture', Record<string, unknown>>): void {
 /** Start keeping the preferences in config.json. Returns the unsubscribe. */
 export function startUiConfigSync(): () => void {
   let hydrated = false
+  // What config.json holds or is about to hold: the store's config only
+  // updates when a save returns, so A, B, A in quick succession must compare
+  // with B, not with the A still in the store.
+  const lastSent = new Map<string, unknown>()
 
   const hydrate = (config: Sections | null | undefined) => {
     if (!config || hydrated) return
@@ -63,8 +67,13 @@ export function startUiConfigSync(): () => void {
     const migrate: Record<'ui' | 'capture', Record<string, unknown>> = { ui: {}, capture: {} }
     for (const p of PREFERENCES) {
       const saved = config[p.section]?.[p.key]
-      if (saved === undefined) migrate[p.section][p.key] = p.read(ui)
-      else if (saved !== p.read(ui)) p.apply(saved)
+      if (saved === undefined) {
+        migrate[p.section][p.key] = p.read(ui)
+        lastSent.set(`${p.section}.${p.key}`, p.read(ui))
+      } else {
+        lastSent.set(`${p.section}.${p.key}`, saved)
+        if (saved !== p.read(ui)) p.apply(saved)
+      }
     }
     save(migrate)
   }
@@ -73,11 +82,14 @@ export function startUiConfigSync(): () => void {
   const offConfig = useConfigStore.subscribe((state) => hydrate(state.config as unknown as Sections | null))
   const offUi = useUIStore.subscribe((state, previous) => {
     if (!hydrated) return
-    const config = useConfigStore.getState().config as unknown as Sections | null
     const changes: Record<'ui' | 'capture', Record<string, unknown>> = { ui: {}, capture: {} }
     for (const p of PREFERENCES) {
       const next = p.read(state)
-      if (next !== p.read(previous) && next !== config?.[p.section]?.[p.key]) changes[p.section][p.key] = next
+      const id = `${p.section}.${p.key}`
+      if (next !== p.read(previous) && next !== lastSent.get(id)) {
+        changes[p.section][p.key] = next
+        lastSent.set(id, next)
+      }
     }
     save(changes)
   })

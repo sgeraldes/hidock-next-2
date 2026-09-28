@@ -37,7 +37,7 @@ import { queryAll, run, runInTransaction } from './database'
 import { startRecordingWatcher, stopRecordingWatcher } from './recording-watcher'
 import { getDownloadService } from './download-service'
 import { getQueueState, pauseQueue, resumeQueue } from './transcription'
-import { setMovingFolder, liveRecordingInProgress } from './storage-move-state'
+import { setMovingFolder, liveRecordingInProgress, capturesWritesInFlight } from './storage-move-state'
 
 export type MovableFolder = 'recordings' | 'transcripts' | 'captures'
 
@@ -90,6 +90,11 @@ function currentPath(folder: MovableFolder | 'data'): string {
   if (folder === 'transcripts') return getTranscriptsPath()
   if (folder === 'captures') return getCapturesPath()
   return getConfig().storage.dataPath
+}
+
+/** The other movable folders: none may sit inside another (usage would count it twice). */
+function otherFolders(folder: MovableFolder | 'data'): string[] {
+  return (['recordings', 'transcripts', 'captures'] as const).filter((f) => f !== folder).map((f) => currentPath(f))
 }
 
 /** Every file under root with its size. Any unreadable folder or file throws. */
@@ -165,6 +170,9 @@ export async function planMove(folder: MovableFolder | 'data', to: string, ownLo
   } else if (!target) blocker = 'Choose a folder.'
   else if (key(from) === key(target)) blocker = 'That is already the folder in use.'
   else if (overlaps(from, target)) blocker = 'The new folder cannot be inside the current one, or contain it.'
+  else if (folder !== 'data' && otherFolders(folder).some((p) => overlaps(p, target))) {
+    blocker = 'The new folder cannot be inside another HiDock folder (recordings, transcripts or captures), or contain one.'
+  }
   else if (lock && !ownLock) blocker = `A move of ${lock.folder} is already running.`
   else if (folder === 'recordings' && liveRecordingInProgress()) blocker = 'A live stream is being recorded into this folder. Stop it on the Device page first.'
   else if (folder !== 'data' && targetHasFiles) blocker = 'Choose an empty folder: the new folder already has files, and nothing there is overwritten.'
@@ -239,12 +247,12 @@ async function copyVerified(src: string, dest: string, size: number, signal: Abo
   }
 }
 
-async function waitUntilIdle(state: { cancel: boolean }): Promise<void> {
+async function waitUntilIdle(state: { cancel: boolean }, folder: MovableFolder): Promise<void> {
   const started = Date.now()
-  while (downloadsRunning() || transcriptionRunning()) {
+  while (downloadsRunning() || transcriptionRunning() || (folder === 'captures' && capturesWritesInFlight())) {
     if (state.cancel) return
     if (Date.now() - started > BUSY_WAIT_MAX_MS) {
-      throw new Error('A download or transcription is still running after 10 minutes; try the move again later.')
+      throw new Error('A download, transcription or image import is still running after 10 minutes; try the move again later.')
     }
     await new Promise((r) => setTimeout(r, BUSY_WAIT_STEP_MS))
   }
@@ -278,7 +286,7 @@ export async function moveFolder(
       stopRecordingWatcher()
       await new Promise((r) => setTimeout(r, WATCHER_DRAIN_MS))
     }
-    await waitUntilIdle(state)
+    await waitUntilIdle(state, folder)
 
     // The folder must still be what the person confirmed.
     const plan = await planMove(folder, to, true)

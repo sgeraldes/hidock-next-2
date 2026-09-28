@@ -21,7 +21,7 @@ import { getVectorStore } from './vector-store'
 import { filterEligibleCaptureIds, isCaptureEligible } from './recording-eligibility'
 import { getEventBus } from './event-bus'
 import { getCapturesPath } from './file-storage'
-import { refuseWhileCapturesMove } from './storage-move-state'
+import { beginCapturesWrite, endCapturesWrite, refuseWhileCapturesMove } from './storage-move-state'
 
 export interface ArtifactRow {
   id: string
@@ -86,10 +86,22 @@ export async function importArtifact(
   filePath: string,
   opts: ImportArtifactOptions = {}
 ): Promise<ImportArtifactResult> {
+  // No new import while the captures folder moves, and a move waits for the
+  // ones already writing: an import copies its file and awaits the vision call
+  // before it stores the path (review, 28-sep-2026).
+  refuseWhileCapturesMove()
+  beginCapturesWrite()
+  try {
+    return await importArtifactNow(filePath, opts)
+  } finally {
+    endCapturesWrite()
+  }
+}
+
+async function importArtifactNow(filePath: string, opts: ImportArtifactOptions): Promise<ImportArtifactResult> {
   if (!existsSync(filePath)) {
     throw new Error(`File not found: ${filePath}`)
   }
-  refuseWhileCapturesMove()
 
   const buffer = readFileSync(filePath)
   const contentHash = createHash('sha256').update(buffer).digest('hex')

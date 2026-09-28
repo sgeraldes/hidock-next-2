@@ -37,3 +37,19 @@ export function refuseWhileCapturesMove(): void {
     throw new Error('The captures folder is being moved; try again when the move finishes.')
   }
 }
+
+let capturesWriters = 0
+
+/** An import is writing into the captures folder (artifact-service); pair with endCapturesWrite. */
+export function beginCapturesWrite(): void {
+  capturesWriters++
+}
+
+export function endCapturesWrite(): void {
+  capturesWriters = Math.max(0, capturesWriters - 1)
+}
+
+/** A captures move waits for these: an import already past its check must finish first. */
+export function capturesWritesInFlight(): boolean {
+  return capturesWriters > 0
+}

@@ -50,6 +50,13 @@ recording, and Microsoft 365 and Slack connect on first try.
   channels to a WAV in the recordings folder. When it stops, the recording is in the Library, linked
   to its meeting and transcribed like any other, diarization included. A stream cut off by a crash
   or an unplugged cable is saved too. Off with the switch in Settings > Recording.
+- **Secrets, Shortcuts and Library pages.** Secrets lists every stored key and token, set or
+  not, with Replace and Remove; Shortcuts lists the keys HiDock answers to; Library sets the rows,
+  the sort and how each part of a source opens.
+- **Captures folder.** Images and imported files have a folder setting on Storage and Privacy &
+  capture, with its size and limit, and a move like recordings and transcripts.
+- **Chat placement and clipboard capture are saved with the other settings**, instead of only in
+  the window; the choice already made is kept.
 - **Quality checks.** The thresholds behind warnings and ratings are settings now: when a quiet file
   or a thin transcript is flagged, how sure Jev must be before a transcript "may be invented" or a
   meeting is linked, when a short clip is low-value, retries, the re-transcription score and the

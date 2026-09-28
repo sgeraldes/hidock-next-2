@@ -41,4 +41,13 @@ describe('chat placement and clipboard capture live in config.json', () => {
     expect(updateConfig).toHaveBeenCalledTimes(1)
     expect(updateConfig).toHaveBeenCalledWith('ui', { chatPosition: 'left' })
   })
+
+  it('A, B, A before the first save returns ends with A saved', () => {
+    useConfigStore.setState({ config: { ui: { chatPlacement: 'floating', chatPosition: 'right' }, capture: { autoClipboard: false } } } as never)
+    stop = startUiConfigSync()
+    useUIStore.getState().setChatPosition('left')
+    useUIStore.getState().setChatPosition('right')
+    expect(updateConfig).toHaveBeenLastCalledWith('ui', { chatPosition: 'right' })
+    expect(updateConfig).toHaveBeenCalledTimes(2)
+  })
 })

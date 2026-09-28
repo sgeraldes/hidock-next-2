@@ -182,6 +182,12 @@ describe('storage folder move', () => {
     expect(st.watcher).toEqual([])
   })
 
+  it('no HiDock folder may go inside another one', async () => {
+    const insideRecordings = join(st.recordings, 'captures-here')
+    expect((await planMove('captures', insideRecordings)).blocker).toMatch(/inside another HiDock folder/)
+    expect((await planMove('transcripts', join(st.captures, 'x'))).blocker).toMatch(/inside another HiDock folder/)
+  })
+
   it('says whether a new data folder already has a library', async () => {
     const other = join(root, 'other')
     mkdirSync(join(other, 'data'), { recursive: true })

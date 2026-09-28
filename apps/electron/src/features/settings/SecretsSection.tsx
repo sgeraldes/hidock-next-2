@@ -179,8 +179,8 @@ export function SecretsSection({ onNavigate }: { onNavigate?: (id: SettingsSecti
         ) : others.length === 0 ? (
           <p className="py-3 text-xs text-muted-foreground">None stored.</p>
         ) : (
-          others.map((o) => (
-            <div key={o.label} className="flex flex-wrap items-center justify-between gap-2 border-b border-border py-2 last:border-b-0">
+          others.map((o, i) => (
+            <div key={`${o.page}-${i}`} className="flex flex-wrap items-center justify-between gap-2 border-b border-border py-2 last:border-b-0">
               <span className="text-sm">{o.label}</span>
               <div className="flex items-center gap-2">
                 <span className={`text-xs ${o.isSet ? 'text-emerald-600' : 'text-muted-foreground'}`}>{o.isSet ? 'Set' : 'Not set'}</span>
