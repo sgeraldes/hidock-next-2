@@ -47,7 +47,7 @@ import { configureEarlyStartup } from './startup-configuration'
 import { getStartupState } from './startup-state'
 import { revealMainWindow, type WindowRevealReason } from './window-reveal'
 import { startAppBrain, stopAppBrain } from './services/brain-app'
-import { getLiveRecordingState } from './ipc/jensen-handlers'
+import { finishLiveRecording, getLiveRecordingState } from './ipc/jensen-handlers'
 
 const startup = getStartupState()
 configureEarlyStartup() // idempotent fallback when this module is launched directly in tests/tools
@@ -473,6 +473,7 @@ app.on('before-quit', (event) => {
   // headless brain instead of knocking on a door that is closing.
   void stopAppBrain().catch(() => {})
   stopAutoSync() // B-CAL-002: Clean up calendar auto-sync interval
+  finishLiveRecording() // a stream still playing is saved; the next start imports it
   stopRecordingWatcher()
   stopTranscriptionProcessor()
   void (async () => {

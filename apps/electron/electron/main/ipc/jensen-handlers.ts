@@ -18,6 +18,10 @@ import { retryPendingFileCleanups } from '../services/recording-deletion-service
 import { serializeDeviceOperation } from '../services/device-operation-serializer'
 import { emitActivityLog } from '../services/activity-log'
 import { geminiLiveTranscription } from '../services/gemini-live-transcription'
+import { RealtimeRecorder, recoverPartialLiveRecordings, type RecorderResult } from '../services/realtime-recorder'
+import { getRecordingsPath } from '../services/file-storage'
+import { getConfig } from '../services/config'
+import { setLiveRecording, storageMoveInProgress } from '../services/storage-move-state'
 import {
   trackActiveTransfer,
   cancelActiveTransfer,
@@ -201,7 +205,53 @@ function stopRecordingPoll(): void {
 // Handler registration
 // ---------------------------------------------------------------------------
 
+// The realtime stream, saved as a recording while it plays (28-sep-2026).
+const liveRecorder = new RealtimeRecorder({
+  recordingsPath: () => getRecordingsPath(),
+  enabled: () => getConfig().transcription?.liveSaveRecording !== false,
+  folderMoving: () => storageMoveInProgress('recordings'),
+  now: () => new Date()
+})
+
+function tellWindows(result: RecorderResult | { status: 'error'; message: string }): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.webContents.isDestroyed()) win.webContents.send('jensen:realtime-recording', result)
+  }
+}
+
+/** Never throws: a recording problem must not stop the stream or its live transcript. */
+function startLiveRecording(): void {
+  let why: string | null
+  try {
+    why = liveRecorder.start()
+  } catch (err) {
+    why = `Could not start the live recording: ${err instanceof Error ? err.message : String(err)}`
+  }
+  setLiveRecording(liveRecorder.recording)
+  if (why && why !== 'off') tellWindows({ status: 'error', message: why })
+}
+
+/** Close the live file, if one is open. Every way a stream ends comes through here, quitting included. */
+export function finishLiveRecording(): void {
+  let result: RecorderResult | null = null
+  try {
+    result = liveRecorder.finish()
+  } catch (err) {
+    result = { status: 'error', message: err instanceof Error ? err.message : String(err) }
+  } finally {
+    setLiveRecording(false)
+  }
+  if (result && result.status !== 'empty') tellWindows(result)
+}
+
 export function registerJensenHandlers(): void {
+  // A stream cut off by a crash is still audio worth keeping.
+  try {
+    const recovered = recoverPartialLiveRecordings(getRecordingsPath())
+    if (recovered.length > 0) console.log('[Jensen] Recovered live recordings:', recovered)
+  } catch (err) {
+    console.error('[Jensen] Could not check for unfinished live recordings:', err)
+  }
   // -------------------------------------------------------------------------
   // Connection-state push events
   //
@@ -279,6 +329,7 @@ export function registerJensenHandlers(): void {
 
   ipcMain.handle('jensen:disconnect', async () => {
     try {
+      finishLiveRecording()
       await geminiLiveTranscription.stop()
       // Abort an in-flight download so it stops being saved. The device keeps
       // streaming the rest of the file regardless; gracefulCloseDevice then drains
@@ -309,6 +360,7 @@ export function registerJensenHandlers(): void {
 
   ipcMain.handle('jensen:reset', async () => {
     try {
+      finishLiveRecording()
       await geminiLiveTranscription.stop()
       getJensenDevice().abortInFlight()
       return await serializeDeviceOperation(() => getJensenDevice().reset())
@@ -564,6 +616,7 @@ export function registerJensenHandlers(): void {
       await geminiLiveTranscription.start(event.sender)
       const result = await realtimeDevice.startRealtime(2)
       if (!result || result.result !== 'success') await geminiLiveTranscription.stop()
+      else startLiveRecording()
       return result
     } catch (error) {
       await geminiLiveTranscription.stop()
@@ -587,6 +640,7 @@ export function registerJensenHandlers(): void {
     } catch {
       return null
     } finally {
+      finishLiveRecording()
       await geminiLiveTranscription.stop()
     }
   })
@@ -600,6 +654,7 @@ export function registerJensenHandlers(): void {
         // either: this handler is the renderer's realtime poll, and the device
         // buffer it drains is finite. Waiting on a WebSocket here is what made
         // `rest` grow and packets disappear on the device.
+        liveRecorder.write(result)
         geminiLiveTranscription.acceptDevicePacket(result)
         event.sender.send('jensen:realtime-data', {
           rest: result.rest,
@@ -673,6 +728,9 @@ export function registerJensenHandlers(): void {
 
   jensen.ondisconnect = () => {
     stopRecordingPoll()
+    // The stream ended with the cable: save it now, or the next stream would
+    // be appended to this file.
+    finishLiveRecording()
     broadcast('jensen:disconnect-event')
     broadcast('jensen:state-changed', {
       connected: false,

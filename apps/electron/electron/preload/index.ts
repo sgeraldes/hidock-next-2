@@ -1337,6 +1337,8 @@ export interface ElectronAPI {
     pauseRealtime: () => Promise<any>
     stopRealtime: () => Promise<any>
     getRealtimeData: (offset: number) => Promise<any>
+    /** The realtime stream was saved as a recording, or saving it failed. */
+    onRealtimeRecording: (callback: (data: { status: 'saved'; filename: string; seconds: number } | { status: 'error'; message: string; filename?: string }) => void) => () => void
     onLiveTranscriptionStatus: (callback: (data: { status: string; channel?: 0 | 1 }) => void) => () => void
     onLiveTranscriptionInterim: (
       callback: (data: { text: string; speaker: 'you' | 'them' | 'speaker-1' | 'speaker-2' | 'speaker'; channel?: 0 | 1 | null }) => void
@@ -2155,6 +2157,11 @@ const electronAPI: ElectronAPI = {
     pauseRealtime: () => callIPC('jensen:pauseRealtime'),
     stopRealtime: () => callIPC('jensen:stopRealtime'),
     getRealtimeData: (offset: number) => callIPC('jensen:getRealtimeData', { offset }),
+    onRealtimeRecording: (callback: (data: { status: 'saved'; filename: string; seconds: number } | { status: 'error'; message: string; filename?: string }) => void) => {
+      const handler = (_event: any, data: { status: 'saved'; filename: string; seconds: number } | { status: 'error'; message: string; filename?: string }) => callback(data)
+      ipcRenderer.on('jensen:realtime-recording', handler)
+      return () => ipcRenderer.removeListener('jensen:realtime-recording', handler)
+    },
     onLiveTranscriptionStatus: (callback: (data: { status: string; channel?: 0 | 1 }) => void) => {
       const handler = (_event: any, data: { status: string; channel?: 0 | 1 }) => callback(data)
       ipcRenderer.on('transcription-live:status', handler)

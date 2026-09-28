@@ -19,6 +19,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { mkdtempSync, readdirSync, rmSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 
 const mockRetryPendingFileCleanups = vi.hoisted(() => vi.fn().mockResolvedValue({
   attempted: 0,
@@ -148,11 +151,22 @@ vi.mock('../../services/gemini-live-transcription', () => ({
   geminiLiveTranscription: mockLiveTranscription,
 }))
 
+// The live recorder writes into the recordings folder: a temp one here.
+const liveDir = vi.hoisted(() => ({ path: '' }))
+vi.mock('../../services/file-storage', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../services/file-storage')>()),
+  getRecordingsPath: () => liveDir.path,
+}))
+vi.mock('../../services/config', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../services/config')>()),
+  getConfig: () => ({ transcription: {} }),
+}))
+
 // ---------------------------------------------------------------------------
 // Import and register handlers under test
 // ---------------------------------------------------------------------------
 
-import { registerJensenHandlers } from '../jensen-handlers'
+import { finishLiveRecording, registerJensenHandlers } from '../jensen-handlers'
 
 // ---------------------------------------------------------------------------
 // Helper to build a fake IPC event with a spy-able sender
@@ -174,6 +188,7 @@ function makeEvent(destroyed = false) {
 describe('registerJensenHandlers', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    liveDir.path = mkdtempSync(join(tmpdir(), 'jensen-live-'))
     mockRetryPendingFileCleanups.mockResolvedValue({ attempted: 0, cleared: 0, stillPending: {} })
     mockJensen.getModel.mockReturnValue('unknown')
     mockJensen.versionNumber = 327714
@@ -190,6 +205,9 @@ describe('registerJensenHandlers', () => {
     // interval/kickoff timers) so a leaked timer can't fire in a later test.
     mockJensen.ondisconnect?.()
     vi.useRealTimers()
+    // A test that starts a stream and never stops it leaves the recorder open.
+    finishLiveRecording()
+    rmSync(liveDir.path, { recursive: true, force: true })
   })
 
   // -------------------------------------------------------------------------
@@ -401,6 +419,40 @@ describe('registerJensenHandlers', () => {
     expect(mockLiveTranscription.start).toHaveBeenCalledWith(event.sender)
     expect(mockJensen.startRealtime).toHaveBeenCalledTimes(1)
     expect(mockJensen.startRealtime).toHaveBeenCalledWith(2)
+  })
+
+  it('saves the realtime stream as a recording and says so when it stops', async () => {
+    mockJensen.getModel.mockReturnValue('hidock-h1e')
+    mockJensen.versionNumber = 393984
+    mockJensen.startRealtime.mockResolvedValue({ result: 'success' })
+    const packet = { rest: 0, muted: false, data: new Uint8Array(8 + 16000 * 4) }
+    mockJensen.getRealtimeData.mockResolvedValueOnce(packet)
+    const event = makeEvent()
+
+    await mockHandlers['jensen:startRealtime'](event)
+    expect(readdirSync(liveDir.path)[0]).toMatch(/-Live\.wav\.partial$/)
+    await mockHandlers['jensen:getRealtimeData'](event, { offset: 0 })
+    await mockHandlers['jensen:stopRealtime'](event)
+
+    const files = readdirSync(liveDir.path)
+    expect(files).toHaveLength(1)
+    expect(files[0]).toMatch(/^\d{4}[A-Z][a-z]{2}\d{2}-\d{6}-Live\.wav$/)
+    expect(broadcastSendCalls).toContainEqual(['jensen:realtime-recording', { status: 'saved', filename: files[0], seconds: 1 }])
+  })
+
+  it('an unplugged device saves the stream, and the next stream gets its own file', async () => {
+    mockJensen.getModel.mockReturnValue('hidock-h1e')
+    mockJensen.versionNumber = 393984
+    mockJensen.startRealtime.mockResolvedValue({ result: 'success' })
+    mockJensen.getRealtimeData.mockResolvedValueOnce({ rest: 0, muted: false, data: new Uint8Array(8 + 64) })
+    const event = makeEvent()
+    await mockHandlers['jensen:startRealtime'](event)
+    await mockHandlers['jensen:getRealtimeData'](event, { offset: 0 })
+    mockJensen.ondisconnect?.()
+    const files = readdirSync(liveDir.path)
+    expect(files).toHaveLength(1)
+    expect(files[0]).toMatch(/-Live\.wav$/)
+    expect(broadcastSendCalls.some(([c, p]) => c === 'jensen:realtime-recording' && p.status === 'saved')).toBe(true)
   })
 
   it('rejects realtime streaming before Gemini or USB when firmware is too old', async () => {

@@ -97,6 +97,13 @@ export function RecordingSection() {
           checked={config?.transcription?.autoTranscribe !== false}
           onChange={(on) => save('transcription', { autoTranscribe: on }, 'automatic transcription')}
         />
+        <Row
+          id="liveSaveRecording"
+          label="Save live streams as recordings"
+          detail="Realtime streaming on the Device page writes both channels to the recordings folder. When it stops, the recording is in the Library and transcribes like any other."
+          checked={config?.transcription?.liveSaveRecording !== false}
+          onChange={(on) => save('transcription', { liveSaveRecording: on }, 'saving live streams')}
+        />
       </section>
 
       <section className="space-y-2 rounded-lg border border-border bg-card p-4">

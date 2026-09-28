@@ -835,6 +835,15 @@ export function Device() {
       }),
       api.onLiveTranscriptionChannels?.(({ micChannel }) => setLiveMicChannel(micChannel)),
       api.onLiveTranscriptionError(({ error: liveError }) => setError(liveError)),
+      api.onRealtimeRecording?.((saved) => {
+        if (saved.status === 'saved') {
+          const m = Math.floor(saved.seconds / 60)
+          const s = Math.round(saved.seconds % 60)
+          toast.success('Live stream saved', `${saved.filename}, ${m}:${String(s).padStart(2, '0')}. It is in the Library and transcribes like any recording.`)
+        } else {
+          toast.error('The live recording had a problem', saved.message)
+        }
+      }),
       // `onLiveTranscriptionChannels` is optional on the API, so the array can
       // hold an `undefined` and unmounting would throw on it.
     ].filter((cleanup): cleanup is () => void => typeof cleanup === 'function')

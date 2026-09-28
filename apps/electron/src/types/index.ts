@@ -287,6 +287,8 @@ export interface AppConfig {
     valueClassificationEnabled?: boolean
     /** Clips shorter than this are not transcribed (Settings > Transcription > Pipeline). */
     minRecordingSeconds?: number
+    /** Save the realtime stream as a Library recording. Absent = on. */
+    liveSaveRecording?: boolean
   }
   embeddings: {
     provider: 'ollama'

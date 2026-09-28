@@ -19,3 +19,14 @@ export function refuseWhileTranscriptsMove(): void {
     throw new Error('The transcripts folder is being moved; try again when the move finishes.')
   }
 }
+
+let liveRecording = false
+
+/** The realtime recorder sets this while a stream is being written to the recordings folder. */
+export function setLiveRecording(on: boolean): void {
+  liveRecording = on
+}
+
+export function liveRecordingInProgress(): boolean {
+  return liveRecording
+}
