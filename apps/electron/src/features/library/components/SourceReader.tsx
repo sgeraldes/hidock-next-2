@@ -321,6 +321,8 @@ interface SourceReaderProps {
   onAskAboutSource?: () => void
   // The owner accepted or un-accepted a flagged transcript; reload its verdict.
   onIntegrityChanged?: () => void
+  /** Close the reader and unselect the recording (the X next to the title). */
+  onClose?: () => void
 }
 
 export function SourceReader({
@@ -350,7 +352,8 @@ export function SourceReader({
   onMetadataEdited,
   onSplitCompleted,
   onAskAboutSource,
-  onIntegrityChanged
+  onIntegrityChanged,
+  onClose
 }: SourceReaderProps) {
 
   // Title editing state
@@ -1316,6 +1319,31 @@ export function SourceReader({
           Pinning is PRESENTATION. It never writes readerSectionModes — that map
           is what the user chose. See useStickySectionPins.
           =================================================================== */}
+      {/* Authoritative source identity: official meeting subject once linked,
+          otherwise the immutable filename. Content title is edited below. It
+          sits above the scrolling body so the close button stays in reach
+          while reading a long transcript (owner, 28-sep-2026). */}
+      {!maximizedSection && (
+        <div className="flex shrink-0 items-start gap-2 bg-background px-4 pb-1 pt-4">
+          <div className="min-w-0 flex-1">
+            <h2 className="text-lg font-semibold line-clamp-2 leading-tight" title={displayTitle}>
+              {displayTitle}
+            </h2>
+          </div>
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="-mr-1 -mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label="Close"
+              title="Close (Esc)"
+              data-testid="reader-close"
+            >
+              <X className="h-4 w-4" aria-hidden="true" />
+            </button>
+          )}
+        </div>
+      )}
       <div
         ref={pins.scrollRef}
         className="min-h-0 flex-1 overflow-y-auto bg-background pb-6"
@@ -1323,15 +1351,6 @@ export function SourceReader({
       >
         {!maximizedSection && (
         <>
-        {/* Authoritative source identity: official meeting subject once linked,
-            otherwise the immutable filename. Content title is edited below. */}
-        <div className="flex items-start gap-2 px-4 pt-4">
-          <div className="min-w-0 flex-1">
-            <h2 className="text-lg font-semibold line-clamp-2 leading-tight" title={displayTitle}>
-              {displayTitle}
-            </h2>
-          </div>
-        </div>
 
         {/* Curated meta strip: date · duration · location · status */}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 pt-2 text-xs text-muted-foreground">
