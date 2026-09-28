@@ -59,23 +59,6 @@ export function isValidDate(date: unknown): date is Date {
   return date instanceof Date && !isNaN(date.getTime())
 }
 
-export function getWeekDates(date: Date): Date[] {
-  const start = new Date(date)
-  const day = start.getDay()
-  const diff = start.getDate() - day + (day === 0 ? -6 : 1) // Adjust for Monday start
-  start.setDate(diff)
-  start.setHours(0, 0, 0, 0)
-
-  const dates: Date[] = []
-  for (let i = 0; i < 7; i++) {
-    const d = new Date(start)
-    d.setDate(start.getDate() + i)
-    dates.push(d)
-  }
-
-  return dates
-}
-
 export function isSameDay(date1: Date, date2: Date): boolean {
   return (
     date1.getFullYear() === date2.getFullYear() &&

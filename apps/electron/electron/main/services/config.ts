@@ -15,6 +15,7 @@ import type { BrainId, BrainTask } from './brains/types'
 import { getBrainCredentialStore } from './brains/brain-credential-store'
 import type { FeaturesConfig } from '../../../src/shared/feature-registry'
 import { DEFAULT_FEATURES_CONFIG } from '../../../src/shared/feature-registry'
+import { applyRagSettings } from './rag-settings'
 
 /** Best-effort fsync of a path (file or directory). Silently skips where the FS
  *  or platform doesn't support it (e.g. directory fsync on Windows) — durability
@@ -120,7 +121,6 @@ export interface AppConfig {
     dataPath: string
     recordingsPath?: string
     transcriptsPath?: string
-    maxRecordingsGB: number
   }
   calendar: {
     icsUrl: string
@@ -143,8 +143,6 @@ export interface AppConfig {
     speakerLinkingEnabled: boolean
     speakerLinkingPythonPath: string
     speakerLinkingWorkerPath: string
-    speakerLinkingModel: string
-    speakerLinkingFallbackModel: string
     speakerLinkingMatchThreshold: number
     speakerLinkingMatchMargin: number
     speakerLinkingMinSpeechSeconds: number
@@ -255,7 +253,6 @@ export interface AppConfig {
     enabled: Record<BrainId, boolean>
     defaultBrain: BrainId
     taskRouting: Partial<Record<BrainTask, BrainId>>
-    models: Partial<Record<BrainId, string>>
   }
   // Modular features (Track I). `preset` selects a named feature-set; `flags` are
   // sparse per-feature overrides. Default preset `full` = ZERO behavior change for
@@ -283,7 +280,6 @@ export interface AppConfig {
     /** No longer read (25-sep-2026): the Library never titles a source by its file name. */
     unassignedTitleSource?: 'suggested' | 'filename'
     theme: 'light' | 'dark' | 'system'
-    defaultView: 'week' | 'month'
     startOfWeek: number
     calendarView: 'day' | 'workweek' | 'week' | 'month'
     hideEmptyMeetings: boolean
@@ -295,7 +291,6 @@ const DEFAULT_CONFIG: AppConfig = {
   version: '1.0.0',
   storage: {
     dataPath: join(app.getPath('home'), 'HiDock'),
-    maxRecordingsGB: 50
   },
   calendar: {
     icsUrl: '',
@@ -318,8 +313,6 @@ const DEFAULT_CONFIG: AppConfig = {
     speakerLinkingWorkerPath: process.env.SPEAKER_LINKING_WORKER || '',
     // Superseded by the pin to the voice library's model (speaker-linking.ts
     // pinnedVoiceModel); kept for configs that still carry it.
-    speakerLinkingModel: 'pyannote/speaker-diarization-3.1',
-    speakerLinkingFallbackModel: 'pyannote/speaker-diarization-3.1',
     // Conservative defaults: a match must be both strong and clearly better
     // than the runner-up. Uncertain voices remain anonymous.
     speakerLinkingMatchThreshold: 0.72,
@@ -379,7 +372,6 @@ const DEFAULT_CONFIG: AppConfig = {
     },
     defaultBrain: 'gemini-api',
     taskRouting: {},
-    models: {}
   },
   // Default preset `full` → every feature enabled → identical behavior to before
   // modular features existed. New installs may later be asked during onboarding.
@@ -391,7 +383,6 @@ const DEFAULT_CONFIG: AppConfig = {
   },
   ui: {
     theme: 'system',
-    defaultView: 'week',
     startOfWeek: 1, // Monday
     calendarView: 'week',
     hideEmptyMeetings: true,
@@ -588,6 +579,7 @@ export async function initializeConfig(options: { persist?: boolean } = {}): Pro
       }
       // Merge with defaults to handle new fields
       config = deepMerge(DEFAULT_CONFIG, savedConfig)
+      applyRagSettings(config)
       if (!persist) return
       // Auto-upgrade retired Gemini model names in persisted configs so old
       // saved values (e.g. gemini-2.0-flash, now 404) don't break transcription
@@ -635,6 +627,7 @@ export async function saveConfig(newConfig: Partial<AppConfig>): Promise<void> {
   }
 
   config = deepMerge(config, newConfig)
+  applyRagSettings(config)
 
   const desiredGeminiKey = config.transcription?.geminiApiKey ?? ''
   const geminiKeyChanged = prevGeminiKey.trim() !== desiredGeminiKey.trim()

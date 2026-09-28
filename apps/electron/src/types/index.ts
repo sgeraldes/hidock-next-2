@@ -207,7 +207,6 @@ export interface AppConfig {
     dataPath: string
     recordingsPath?: string
     transcriptsPath?: string
-    maxRecordingsGB: number
   }
   calendar: CalendarSettings
   transcription: {
@@ -222,8 +221,6 @@ export interface AppConfig {
     speakerLinkingEnabled: boolean
     speakerLinkingPythonPath: string
     speakerLinkingWorkerPath: string
-    speakerLinkingModel: string
-    speakerLinkingFallbackModel: string
     speakerLinkingMatchThreshold: number
     speakerLinkingMatchMargin: number
     speakerLinkingMinSpeechSeconds: number
@@ -285,7 +282,6 @@ export interface AppConfig {
     /** No longer read (25-sep-2026): the Library never titles a source by its file name. */
     unassignedTitleSource?: 'suggested' | 'filename'
     theme: 'light' | 'dark' | 'system'
-    defaultView: 'week' | 'month'
     startOfWeek: number
     calendarView: 'day' | 'workweek' | 'week' | 'month'
     hideEmptyMeetings: boolean

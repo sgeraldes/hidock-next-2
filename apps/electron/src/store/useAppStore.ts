@@ -5,6 +5,8 @@ import type { HiDockDeviceState, ConnectionStatus, ActivityLogEntry } from '@/se
 import type { UnifiedRecording } from '@/types/unified-recording'
 // CA-10: CalendarViewType shared between store and calendar-utils
 import type { CalendarViewType } from '@/lib/calendar-utils'
+import { normalizeWeekStart, startOfWeekDate } from '@/lib/calendar-utils'
+import { useConfigStore } from '@/store/domain/useConfigStore'
 import {
   MAX_ACTIVITY_LOG_ENTRIES,
   createActivityLogKey,
@@ -593,10 +595,10 @@ function getViewStartDate(date: Date, view: CalendarViewType): Date {
   const start = new Date(date)
   if (view === 'day') {
     // Just the current day
-  } else if (view === 'workweek' || view === 'week') {
-    const day = start.getDay()
-    const diff = start.getDate() - day + (day === 0 ? -6 : 1) // Monday start
-    start.setDate(diff)
+  } else if (view === 'workweek') {
+    return startOfWeekDate(date, 1)
+  } else if (view === 'week') {
+    return startOfWeekDate(date, normalizeWeekStart(useConfigStore.getState().config?.ui?.startOfWeek))
   } else {
     start.setDate(1)
   }

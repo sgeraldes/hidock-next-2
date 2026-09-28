@@ -21,6 +21,8 @@ recording, and Microsoft 365 and Slack connect on first try.
 - **Transcript problems in place.** Lines with a repeated or backwards time, or too many words for
   their time, are marked in the transcript. Clicking "Repeated times" or "Times go backwards" goes
   to the next such line. Editing a line also edits its start time.
+- **Week starts on.** Settings > Calendar picks Monday, Sunday or Saturday, and the week and
+  month views now agree (they started on Monday and on Sunday).
 - **A switch per feature.** Settings > Features lists every feature with its own switch, what it
   costs to run and what it needs; the preset changes to Custom when your set matches none. The
   main Jev switch is there too.
@@ -39,6 +41,8 @@ recording, and Microsoft 365 and Slack connect on first try.
   setting saved.
 - The audio-versus-transcript warning flagged real short clips and long quiet meetings.
 - Row icons now keep their place, so a missing one reads as a gap.
+- The RAG Context Window, chunk size and chunk overlap settings were saved and ignored; they are
+  read now, and at their defaults nothing changes. Five settings nothing used are gone.
 - A transcript with one line out of time order refused every edit ("Invalid transcript edit"), and
   saving an edit dropped the speaker-confidence marks.
 

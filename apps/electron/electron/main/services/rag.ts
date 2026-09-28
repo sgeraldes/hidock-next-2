@@ -30,6 +30,7 @@ import type { BrainId } from './brains/types'
 // knowledge-graph/ingest/LLM stack (loaded lazily inside buildGraphContext).
 import type { NeighborhoodFactProvenance } from './knowledge-graph-service'
 import { Result, success, error } from '../types/api'
+import { contextChunksFor } from './rag-settings'
 
 /**
  * One in-memory conversation-history turn. ADV18-1 (round-19): assistant turns
@@ -827,7 +828,9 @@ class RAGService {
     const now = new Date()
     const intent = detectIntent(message)
     const temporalRange = resolveTemporalRange(message, now)
-    const topK = intent === 'report' ? 16 : intent === 'topics' ? 10 : 5
+    // Settings > Assistant "RAG Context Window" (chat.maxContextChunks); at the
+    // default of 10 this is 5, 10 and 16 as before the setting was read.
+    const topK = contextChunksFor(intent)
 
     // Search for relevant context
     let searchResults: SearchResult[]

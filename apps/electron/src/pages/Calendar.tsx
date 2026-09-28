@@ -57,6 +57,8 @@ import {
   getWorkweekDates,
   getDayDates,
   getMonthDates,
+  normalizeWeekStart,
+  weekdayHeaders,
   matchRecordingsToMeetings,
   createPlaceholderMeetings,
   buildCalendarRecordings,
@@ -134,6 +136,7 @@ export function Calendar() {
   // B-CAL-005: Granular config selectors to prevent excess re-renders
   const calendarConfig = useConfigStore((s) => s.config?.calendar)
   const uiConfig = useConfigStore((s) => s.config?.ui)
+  const weekStartsOn = normalizeWeekStart(uiConfig?.startOfWeek)
   const loadConfig = useConfigStore((s) => s.loadConfig)
   const updateConfig = useConfigStore((s) => s.updateConfig)
   // B-CAL-001: Named action selectors replace raw useAppStore.setState()
@@ -229,7 +232,7 @@ export function Calendar() {
     let endDate: string
 
     if (calendarView === 'month') {
-      const dates = getMonthDates(currentDate)
+      const dates = getMonthDates(currentDate, weekStartsOn)
       startDate = dates[0].toISOString()
       const lastDate = new Date(dates[dates.length - 1])
       lastDate.setHours(23, 59, 59, 999)
@@ -248,7 +251,7 @@ export function Calendar() {
       lastDate.setHours(23, 59, 59, 999)
       endDate = lastDate.toISOString()
     } else {
-      const dates = getWeekDates(currentDate)
+      const dates = getWeekDates(currentDate, weekStartsOn)
       startDate = dates[0].toISOString()
       const lastDate = new Date(dates[6])
       lastDate.setHours(23, 59, 59, 999)
@@ -256,7 +259,7 @@ export function Calendar() {
     }
 
     return { startDate, endDate }
-  }, [currentDate, calendarView])
+  }, [currentDate, calendarView, weekStartsOn])
 
   // Load meetings when date or view changes
   useEffect(() => {
@@ -294,15 +297,15 @@ export function Calendar() {
       case 'workweek':
         return getWorkweekDates(currentDate)
       case 'week':
-        return getWeekDates(currentDate)
+        return getWeekDates(currentDate, weekStartsOn)
       case 'month':
-        return getMonthDates(currentDate)
+        return getMonthDates(currentDate, weekStartsOn)
       default:
-        return getWeekDates(currentDate)
+        return getWeekDates(currentDate, weekStartsOn)
     }
-  }, [currentDate, calendarView])
+  }, [currentDate, calendarView, weekStartsOn])
 
-  const monthDates = useMemo(() => getMonthDates(currentDate), [currentDate])
+  const monthDates = useMemo(() => getMonthDates(currentDate, weekStartsOn), [currentDate, weekStartsOn])
 
   // Office hours from config (B-CAL-005: uses granular uiConfig)
   const officeHoursStart = uiConfig?.officeHoursStart ?? 9
@@ -1194,12 +1197,12 @@ export function Calendar() {
           )}
           {/* Day of Week Headers */}
           <div className="grid grid-cols-7 border-b flex-shrink-0">
-            {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, idx) => (
-              <div key={day} className={cn(
+            {weekdayHeaders(weekStartsOn).map(({ day, label }) => (
+              <div key={label} className={cn(
                 'text-center py-2 text-xs font-medium border-l first:border-l-0',
-                !workDays.includes(idx) && 'text-muted-foreground bg-muted/30'
+                !workDays.includes(day) && 'text-muted-foreground bg-muted/30'
               )}>
-                {day}
+                {label}
               </div>
             ))}
           </div>

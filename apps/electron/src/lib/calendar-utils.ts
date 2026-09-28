@@ -158,22 +158,39 @@ function addDaysDSTSafe(date: Date, days: number): Date {
   return result
 }
 
-/**
- * Get dates for a week (Monday-based)
- */
-export function getWeekDates(date: Date): Date[] {
-  const day = date.getDay()
-  const diff = day === 0 ? -6 : 1 - day // Monday is 1
-  const monday = addDaysDSTSafe(date, diff)
+/** The first day of the week, 0 = Sunday to 6 = Saturday (config `ui.startOfWeek`). Monday by default. */
+export function normalizeWeekStart(value: unknown): number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 6 ? value : 1
+}
 
-  return Array.from({ length: 7 }, (_, i) => addDaysDSTSafe(monday, i))
+/** Midnight of the first day of the week that contains `date`. */
+export function startOfWeekDate(date: Date, weekStartsOn = 1): Date {
+  const back = (date.getDay() - weekStartsOn + 7) % 7
+  return addDaysDSTSafe(date, -back)
 }
 
 /**
- * Get dates for workweek (Mon-Fri)
+ * Dates of the week that contains `date`, starting on `weekStartsOn`. The week
+ * and month views read the same setting (they used to start on Monday and on
+ * Sunday).
  */
+export function getWeekDates(date: Date, weekStartsOn = 1): Date[] {
+  const first = startOfWeekDate(date, weekStartsOn)
+  return Array.from({ length: 7 }, (_, i) => addDaysDSTSafe(first, i))
+}
+
+/** Monday to Friday of the week that contains `date`, whatever day the week starts on. */
 export function getWorkweekDates(date: Date): Date[] {
-  return getWeekDates(date).slice(0, 5)
+  return getWeekDates(date, 1).slice(0, 5)
+}
+
+/** Day-name headers in display order, with the day number each one is (0 = Sunday). */
+export function weekdayHeaders(weekStartsOn = 1): Array<{ day: number; label: string }> {
+  const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+  return Array.from({ length: 7 }, (_, i) => {
+    const day = (weekStartsOn + i) % 7
+    return { day, label: names[day] }
+  })
 }
 
 /**
@@ -186,19 +203,18 @@ export function getDayDates(date: Date): Date[] {
 /**
  * Get all dates for month view (including padding from prev/next months)
  */
-export function getMonthDates(date: Date): Date[] {
+export function getMonthDates(date: Date, weekStartsOn = 1): Date[] {
   const year = date.getFullYear()
   const month = date.getMonth()
 
   const firstDay = new Date(year, month, 1)
   const lastDay = new Date(year, month + 1, 0)
 
-  // Start from Sunday before (or on) the first day (DST-safe)
-  const startDate = addDaysDSTSafe(firstDay, -firstDay.getDay())
-
-  // End on Saturday after (or on) the last day (DST-safe)
-  const daysToSaturday = lastDay.getDay() === 6 ? 0 : 6 - lastDay.getDay()
-  const endDate = addDaysDSTSafe(lastDay, daysToSaturday)
+  // From the first day of the week that holds the 1st, to the last day of the
+  // week that holds the month's last day (DST-safe).
+  const startDate = startOfWeekDate(firstDay, weekStartsOn)
+  const lastWeekday = (weekStartsOn + 6) % 7
+  const endDate = addDaysDSTSafe(lastDay, (lastWeekday - lastDay.getDay() + 7) % 7)
 
   const dates: Date[] = []
   let current = startDate
