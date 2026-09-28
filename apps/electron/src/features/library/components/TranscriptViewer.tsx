@@ -32,6 +32,8 @@ export interface StoredSegment {
   start: number
   end?: number
   text: string
+  speakerAttribution?: string
+  speakerConfidence?: number
 }
 
 interface TranscriptViewerProps {
@@ -88,6 +90,9 @@ interface TranscriptSegment {
   endMs?: number
   text: string
   speaker?: string
+  /** Carried from storage so saving a correction keeps them. */
+  speakerAttribution?: string
+  speakerConfidence?: number
 }
 
 /** A speaker split loaded from the backend (base label forked from a turn on). */
@@ -150,7 +155,9 @@ function fromStoredSegments(stored: StoredSegment[]): TranscriptSegment[] {
       startMs: Math.round((s.start || 0) * 1000),
       endMs: s.end != null ? Math.round(s.end * 1000) : undefined,
       speaker: s.speaker,
-      text: s.text.trim()
+      text: s.text.trim(),
+      ...(s.speakerAttribution ? { speakerAttribution: s.speakerAttribution } : {}),
+      ...(typeof s.speakerConfidence === 'number' ? { speakerConfidence: s.speakerConfidence } : {})
     }))
 }
 
@@ -585,7 +592,9 @@ export function TranscriptViewer({
       ...(segment.speaker ? { speaker: segment.speaker } : {}),
       start: segment.startMs / 1000,
       ...(segment.endMs !== undefined ? { end: segment.endMs / 1000 } : {}),
-      text: index === editingIndex ? corrected : segment.text
+      text: index === editingIndex ? corrected : segment.text,
+      ...(segment.speakerAttribution ? { speakerAttribution: segment.speakerAttribution } : {}),
+      ...(segment.speakerConfidence !== undefined ? { speakerConfidence: segment.speakerConfidence } : {})
     }))
 
     setSavingIndex(editingIndex)
