@@ -2329,7 +2329,9 @@ export function Library() {
     onScroll()
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
-  }, [rowVirtualizer])
+    // The list itself changing (first load, a filter, the sort) also moves the
+    // top row without a scroll event, so the pinned date recomputes then too.
+  }, [rowVirtualizer, displayedRecordings])
 
   useEffect(() => {
     const prevIds = prevItemIdsRef.current

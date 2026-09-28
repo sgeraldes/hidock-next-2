@@ -13,10 +13,12 @@ export function dateGroupLabel(date: Date | string | null | undefined, now: Date
   if (!date) return null
   const d = typeof date === 'string' ? new Date(date) : date
   if (!Number.isFinite(d.getTime())) return null
-  const today = startOfDay(now)
-  const day = startOfDay(d)
-  if (day >= today) return 'Today'
-  if (day >= today - DAY_MS) return 'Yesterday'
-  if (day >= today - 6 * DAY_MS) return 'This week'
+  // Calendar days back, rounded: a daylight-saving day is 23 or 25 hours long,
+  // so fixed 24-hour steps would put yesterday in "This week" once a year.
+  const daysAgo = Math.round((startOfDay(now) - startOfDay(d)) / DAY_MS)
+  if (daysAgo === 0) return 'Today'
+  if (daysAgo === 1) return 'Yesterday'
+  // A future date (a device with a wrong clock) is not "Today": it gets its month.
+  if (daysAgo > 1 && daysAgo <= 6) return 'This week'
   return d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
 }
