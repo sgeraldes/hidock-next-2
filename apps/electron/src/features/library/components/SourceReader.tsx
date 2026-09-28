@@ -527,11 +527,14 @@ export function SourceReader({
         word_count: update.wordCount
       }
     })
+    // The saved lines were checked again in the main process; reload the
+    // transcript the warning reads, so it shows the new result.
+    if (update.integrity) onIntegrityChanged?.()
     // A re-transcription would replace the user's correction, so reuse the
     // existing overwrite warning that already protects user-edited metadata.
     setMetadataEdited(true)
     onMetadataEdited?.()
-  }, [fallbackTranscript, onMetadataEdited, transcript])
+  }, [fallbackTranscript, onIntegrityChanged, onMetadataEdited, transcript])
 
   // H6: Fetch the transcript directly when the parent didn't supply one but the
   // recording is transcribed (e.g. selection arrived via the sidebar Library nav

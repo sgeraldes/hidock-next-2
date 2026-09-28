@@ -91,6 +91,8 @@ export interface TranscriptContentUpdate {
   fullText: string
   segments: StoredSegment[]
   wordCount: number
+  /** The timing check on the saved lines, when the main process ran it. */
+  integrity?: { status: 'ok' | 'suspect' | 'broken'; json: string }
 }
 
 interface TranscriptSegment {
@@ -680,7 +682,8 @@ export function TranscriptViewer({
       onTranscriptUpdated?.({
         fullText: result.data.fullText,
         segments: result.data.segments,
-        wordCount: result.data.wordCount
+        wordCount: result.data.wordCount,
+        ...(result.data.integrity ? { integrity: result.data.integrity } : {})
       })
 
       if (result.data.ragStatus === 'indexed') {
@@ -787,7 +790,10 @@ export function TranscriptViewer({
     const flagged = issuesByLine
       .map((codes, index) => (codes.includes(issueJump.code) ? index : -1))
       .filter((index) => index >= 0)
-    if (flagged.length === 0) return
+    if (flagged.length === 0) {
+      toast.info('No line has this problem now', 'The warning was measured before a later change. HiDock measures it again the next time it starts.')
+      return
+    }
     const last = lastIssueJumpRef.current[issueJump.code] ?? -1
     const next = flagged.find((index) => index > last) ?? flagged[0]
     lastIssueJumpRef.current[issueJump.code] = next

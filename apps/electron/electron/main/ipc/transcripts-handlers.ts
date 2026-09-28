@@ -19,7 +19,8 @@ import {
   runNoSave,
   Contact,
   SpeakerMapEntry,
-  getActiveProcessingRunsForRecording
+  getActiveProcessingRunsForRecording,
+  refreshTranscriptIntegrity
 } from '../services/database'
 import { isRecordingEligible } from '../services/recording-eligibility'
 import { consolidateVoiceIdentityForSpeaker } from '../services/voice-identity-consolidation'
@@ -120,6 +121,8 @@ interface TranscriptEditResult {
   indexedChunks: number
   ragStatus: 'indexed' | 'pending'
   ragError?: string
+  /** The timing check run again on the saved lines (a time edit can fix or cause a problem). */
+  integrity?: { status: string; json: string }
 }
 
 function canonicalTranscriptText(segments: EditableTranscriptSegment[]): string {
@@ -280,6 +283,18 @@ export function registerTranscriptsHandlers(): void {
         })
         vectorStore.dropByRecordingFromMemory(recordingId)
 
+        // The warning is about these lines' times, so it is judged again on
+        // what was saved. Edits used to skip this, and a fixed line kept its
+        // warning with jump buttons that found nothing (28-sep-2026).
+        let integrity: TranscriptEditResult['integrity']
+        try {
+          const saved = queryOne<{ id: string }>('SELECT id FROM transcripts WHERE recording_id = ?', [recordingId])
+          const checked = saved ? refreshTranscriptIntegrity(saved.id) : null
+          if (checked) integrity = { status: checked.status, json: JSON.stringify(checked) }
+        } catch (err) {
+          console.warn('[TranscriptEdit] Saved; the timing check could not run again:', safeErrorMessage(err))
+        }
+
         let indexedChunks = 0
         let ragStatus: TranscriptEditResult['ragStatus'] = 'indexed'
         let ragError: string | undefined
@@ -304,7 +319,8 @@ export function registerTranscriptsHandlers(): void {
           wordCount,
           indexedChunks,
           ragStatus,
-          ...(ragError ? { ragError } : {})
+          ...(ragError ? { ragError } : {}),
+          ...(integrity ? { integrity } : {})
         })
       } catch (err) {
         const message = safeErrorMessage(err)

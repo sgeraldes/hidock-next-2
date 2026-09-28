@@ -7514,21 +7514,36 @@ function integrityAudioSeconds(recordingId: string): number | null {
   return null
 }
 
+/** The problems a verdict names, as a comparable key (status plus each code and count). */
+function integrityProblemsKey(integrity: { status?: string; issues?: Array<{ code: string; count?: number }> } | null): string {
+  if (!integrity) return ''
+  const issues = (integrity.issues ?? []).map((i) => `${i.code}:${i.count ?? ''}`).sort()
+  return `${integrity.status ?? ''}|${issues.join(',')}`
+}
+
 /**
- * Check a stored transcript again after its segments changed. Clears an
- * acceptance, because what was accepted is no longer what is stored.
+ * Check a stored transcript again after its segments changed. An acceptance
+ * covers the problems that were found; it stays when the new check finds the
+ * same ones (a wording fix), and is cleared when they changed.
  */
 export function refreshTranscriptIntegrity(transcriptId: string): TranscriptIntegrity | null {
-  const row = queryOne<{ recording_id: string; speakers: string | null }>(
-    'SELECT recording_id, speakers FROM transcripts WHERE id = ?',
+  const row = queryOne<{ recording_id: string; speakers: string | null; integrity_json: string | null }>(
+    'SELECT recording_id, speakers, integrity_json FROM transcripts WHERE id = ?',
     [transcriptId]
   )
   if (!row) return null
   const integrity = assessTranscriptIntegrity(row.speakers, integrityAudioSeconds(row.recording_id))
+  let previous: Parameters<typeof integrityProblemsKey>[0] = null
+  try {
+    previous = row.integrity_json ? JSON.parse(row.integrity_json) : null
+  } catch {
+    previous = null // an unreadable old verdict covers nothing
+  }
+  const sameProblems = previous !== null && integrityProblemsKey(previous) === integrityProblemsKey(integrity)
   run(
     `UPDATE transcripts SET integrity_status = ?, integrity_json = ?, integrity_version = ?,
-       integrity_accepted_at = NULL WHERE id = ?`,
-    [integrity.status, JSON.stringify(integrity), INTEGRITY_VERSION, transcriptId]
+       integrity_accepted_at = CASE WHEN ? THEN integrity_accepted_at ELSE NULL END WHERE id = ?`,
+    [integrity.status, JSON.stringify(integrity), INTEGRITY_VERSION, sameProblems ? 1 : 0, transcriptId]
   )
   return integrity
 }

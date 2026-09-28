@@ -30,6 +30,7 @@ import {
   remeasureRecordingDuration,
   setTranscriptIntegrityAccepted,
 } from '../database'
+import { INTEGRITY_VERSION } from '../transcript-integrity'
 
 function cleanup(): void {
   for (const suffix of ['', '-wal', '-shm', '.tmp']) {
@@ -94,7 +95,7 @@ describe('transcript integrity storage', () => {
     seed('rec-ok', 60)
     insertTranscript({ id: 'tx-ok', recording_id: 'rec-ok', full_text: 'x', language: 'es', speakers: segs([[0, 'hola'], [5, 'chau']]) })
     expect(row('tx-ok').integrity_status).toBe('ok')
-    expect(row('tx-ok').integrity_version).toBe(1)
+    expect(row('tx-ok').integrity_version).toBe(INTEGRITY_VERSION)
 
     seed('rec-rep', 60)
     insertTranscript({ id: 'tx-rep', recording_id: 'rec-rep', full_text: 'x', language: 'es', speakers: segs([[0, 'a'], [9, 'b'], [9, 'c']]) })
@@ -140,6 +141,16 @@ describe('transcript integrity storage', () => {
     expect(refreshTranscriptIntegrity('tx-up')?.status).toBe('ok')
     expect(row('tx-up').integrity_status).toBe('ok')
     expect(row('tx-up').integrity_accepted_at).toBeNull()
+  })
+
+  it('keeps an acceptance when a wording fix leaves the same problems', () => {
+    seed('rec-word', 60)
+    insertTranscript({ id: 'tx-word', recording_id: 'rec-word', full_text: 'x', language: 'es', speakers: segs([[0, 'a'], [3, 'b'], [3, 'c']]) })
+    setTranscriptIntegrityAccepted('rec-word', true)
+
+    run('UPDATE transcripts SET speakers = ? WHERE id = ?', [segs([[0, 'a'], [3, 'b, fixed'], [3, 'c']]), 'tx-word'])
+    expect(refreshTranscriptIntegrity('tx-word')?.status).toBe('suspect')
+    expect(row('tx-word').integrity_accepted_at).not.toBeNull()
   })
 
   it('judges the transcript again once a complete file replaces a short one', () => {
