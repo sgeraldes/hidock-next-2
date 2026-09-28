@@ -37,9 +37,14 @@ export function StorageMoveConfirm({ plan, onDone, onCancel }: Props) {
       return (
         <div className="mt-2 space-y-2 rounded border border-amber-500/40 bg-amber-500/5 p-3 text-xs" role="status">
           <p>Saved. HiDock opens the library in the new folder the next time it starts.</p>
-          <Button size="sm" variant="outline" onClick={() => window.electronAPI?.app?.restart()}>
-            Restart now
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" onClick={() => window.electronAPI?.app?.restart()}>
+              Restart now
+            </Button>
+            <Button size="sm" variant="ghost" onClick={onDone}>
+              Later
+            </Button>
+          </div>
         </div>
       )
     }
@@ -60,7 +65,6 @@ export function StorageMoveConfirm({ plan, onDone, onCancel }: Props) {
               try {
                 await updateConfig('storage', { dataPath: plan.to })
                 setRestartNeeded(true)
-                onDone()
               } catch (err) {
                 toast.error('Could not change the data folder', err instanceof Error ? err.message : undefined)
               }
@@ -80,11 +84,14 @@ export function StorageMoveConfirm({ plan, onDone, onCancel }: Props) {
     setBusy(mode)
     try {
       const api = window.electronAPI.storage
-      const result = mode === 'move' ? await api.moveFolder?.(plan.folder as 'recordings', plan.to) : await api.switchFolder?.(plan.folder as 'recordings', plan.to)
+      const result =
+        mode === 'move'
+          ? await api.moveFolder?.(plan.folder as 'recordings', plan.to, { files: plan.files, bytes: plan.bytes })
+          : await api.switchFolder?.(plan.folder as 'recordings', plan.to)
       if (!result?.success) throw new Error(result?.error ?? 'The folder was not changed')
       const cancelled = mode === 'move' && (result as { data?: { cancelled: boolean } }).data?.cancelled
       if (cancelled) {
-        toast.info('Move stopped', 'Nothing was switched. The copied files are in the new folder.')
+        toast.info('Move stopped', 'Nothing was switched, and the partial copy was removed.')
       } else {
         toast.success(mode === 'move' ? 'Folder moved' : 'Folder switched', mode === 'move' ? `The originals are still in ${plan.from}; delete them when you are sure.` : undefined)
       }
@@ -102,7 +109,7 @@ export function StorageMoveConfirm({ plan, onDone, onCancel }: Props) {
       <p>
         {plan.files > 0 ? `${count} are in ${plan.from}.` : `${plan.from} is empty.`}{' '}
         {plan.targetFreeBytes !== null && `The new disk has ${formatBytes(plan.targetFreeBytes)} free.`}
-        {plan.targetHasFiles && ' The new folder already has files; they are kept.'}
+
       </p>
       {plan.blocker && <p className="text-destructive">{plan.blocker}</p>}
       {progress && (
@@ -120,9 +127,11 @@ export function StorageMoveConfirm({ plan, onDone, onCancel }: Props) {
         <Button size="sm" disabled={!!plan.blocker || busy !== null || plan.files === 0} onClick={() => void run('move')}>
           {busy === 'move' ? 'Moving…' : `Move ${count} and switch`}
         </Button>
-        <Button size="sm" variant="outline" disabled={busy !== null || (!!plan.blocker && !plan.blocker.includes('free space'))} onClick={() => void run('switch')}>
-          Switch without moving
-        </Button>
+        {plan.canSwitchWithoutMoving && (
+          <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => void run('switch')}>
+            Use the new folder
+          </Button>
+        )}
         {busy === 'move' ? (
           <Button size="sm" variant="ghost" onClick={() => void window.electronAPI.storage.cancelMove?.()}>
             Stop
@@ -133,7 +142,10 @@ export function StorageMoveConfirm({ plan, onDone, onCancel }: Props) {
           </Button>
         )}
       </div>
-      <p className="text-muted-foreground">Moving copies every file, checks each copy, then points HiDock at the new folder. The originals stay.</p>
+      <p className="text-muted-foreground">
+        Moving pauses downloads and transcription, copies every file, checks each copy, then points HiDock at the new
+        folder. The originals stay until you delete them.
+      </p>
     </div>
   )
 }

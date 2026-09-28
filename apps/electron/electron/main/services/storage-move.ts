@@ -1,24 +1,43 @@
 /**
- * Changing where recordings or transcripts live (Settings > Storage). Saving a
- * new folder used to only create it: the files stayed, every recording row
- * kept its old absolute path, the folder watcher kept watching the old folder
- * (settings map, 28-sep-2026). A move now copies the files, checks each copy,
- * rewrites the stored paths in one transaction, switches the setting and
- * restarts the watcher. The originals stay where they were; deleting them is
- * the person's call.
+ * Changing where recordings or transcripts live (Settings > Storage).
  *
- * The data folder is not moved here: it holds the open database. Changing it
- * points HiDock at whatever library is in the new folder after a restart, and
- * the plan says so before anything changes.
+ * A move copies every file to the new folder, checks each copy, rewrites the
+ * stored absolute paths, switches the setting and restarts the folder watcher.
+ * The originals stay where they were; deleting them is the person's call.
+ *
+ * Safety rules, from the storage review (28-sep-2026):
+ *  - One move at a time, taken before any await.
+ *  - Downloads and transcription are paused, and the folder watcher stopped
+ *    (with its delayed callbacks drained), for the whole move, so nothing new
+ *    is written to the old folder while it is being copied.
+ *  - The new folder must be empty (or not exist yet): nothing there is ever
+ *    overwritten or mistaken for a copy.
+ *  - Each file is copied to a .partial name, checked and only then renamed.
+ *  - Any unreadable folder or file fails the move; nothing is switched.
+ *  - Stop is honoured during a file and right before the switch; a stopped
+ *    move deletes what it copied and switches nothing.
+ *  - Paths are rewritten in code, not with SQL character offsets (drive roots,
+ *    UNC shares and non-BMP characters all work); if the setting cannot be
+ *    saved afterwards the paths are put back.
+ *  - The move runs only if the folder still matches what the person confirmed.
+ *
+ * "Switch without moving" is allowed only while the current folder is empty:
+ * playback reads files only under the configured folder, so switching with
+ * files left behind would make them unplayable.
+ *
+ * The data folder is not moved: it holds the open database. Changing it points
+ * HiDock at whatever library is in the new folder after a restart.
  */
-import { promises as fs, existsSync } from 'fs'
+import { promises as fs, createReadStream, createWriteStream, existsSync } from 'fs'
+import { pipeline } from 'stream/promises'
 import { dirname, join, relative, resolve, sep } from 'path'
 import { getConfig, updateConfig } from './config'
 import { getRecordingsPath, getTranscriptsPath, initializeFileStorage } from './file-storage'
-import { runInTransaction, runNoSave } from './database'
+import { queryAll, run, runInTransaction } from './database'
 import { startRecordingWatcher, stopRecordingWatcher } from './recording-watcher'
 import { getDownloadService } from './download-service'
-import { folderSize } from './storage-usage'
+import { getQueueState, pauseQueue, resumeQueue } from './transcription'
+import { setMovingFolder } from './storage-move-state'
 
 export type MovableFolder = 'recordings' | 'transcripts'
 
@@ -26,15 +45,14 @@ export interface MovePlan {
   folder: MovableFolder | 'data'
   from: string
   to: string
-  /** Files and bytes that would be copied. */
   files: number
   bytes: number
-  /** Free space on the target disk; null when it cannot be read. */
   targetFreeBytes: number | null
-  /** The target already holds files (they are kept; same-size files are not copied again). */
+  /** The target already holds files (a move then refuses; a data folder may hold a library). */
   targetHasFiles: boolean
-  /** For the data folder: the target already has a HiDock database. */
   targetHasDatabase?: boolean
+  /** Only when the current folder is empty (see the header). */
+  canSwitchWithoutMoving: boolean
   /** Why the move cannot start, in words; null when it can. */
   blocker: string | null
 }
@@ -47,14 +65,24 @@ export interface MoveProgress {
   totalBytes: number
 }
 
-function samePath(a: string, b: string): boolean {
-  return resolve(a).toLowerCase() === resolve(b).toLowerCase()
+/** Delay of the watcher's per-file callback, plus margin (recording-watcher.ts). */
+const WATCHER_DRAIN_MS = 1500
+const BUSY_WAIT_STEP_MS = 500
+const BUSY_WAIT_MAX_MS = 10 * 60_000
+
+function key(p: string): string {
+  return resolve(p).toLowerCase()
 }
 
-function insidePath(child: string, parent: string): boolean {
-  const c = resolve(child).toLowerCase()
-  const p = resolve(parent).toLowerCase()
-  return c.startsWith(p.endsWith(sep) ? p : p + sep)
+function withSep(p: string): string {
+  return p.endsWith(sep) ? p : p + sep
+}
+
+/** True when a and b are the same folder or one contains the other. */
+function overlaps(a: string, b: string): boolean {
+  const x = withSep(key(a))
+  const y = withSep(key(b))
+  return x.startsWith(y) || y.startsWith(x)
 }
 
 function currentPath(folder: MovableFolder | 'data'): string {
@@ -63,21 +91,25 @@ function currentPath(folder: MovableFolder | 'data'): string {
   return getConfig().storage.dataPath
 }
 
-async function listFiles(root: string): Promise<string[]> {
-  const out: string[] = []
+/** Every file under root with its size. Any unreadable folder or file throws. */
+async function listFilesStrict(root: string): Promise<Array<{ path: string; size: number }>> {
+  if (!existsSync(root)) return []
+  const out: Array<{ path: string; size: number }> = []
   const stack = [root]
   while (stack.length > 0) {
     const dir = stack.pop() as string
-    let entries: import('fs').Dirent[]
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true })
-    } catch {
-      continue
-    }
+    const entries = await fs.readdir(dir, { withFileTypes: true }).catch((err: unknown) => {
+      throw new Error(`Cannot read ${dir}: ${err instanceof Error ? err.message : String(err)}`)
+    })
     for (const e of entries) {
       const full = join(dir, e.name)
       if (e.isDirectory()) stack.push(full)
-      else if (e.isFile()) out.push(full)
+      else if (e.isFile()) {
+        const st = await fs.stat(full).catch((err: unknown) => {
+          throw new Error(`Cannot read ${full}: ${err instanceof Error ? err.message : String(err)}`)
+        })
+        out.push({ path: full, size: st.size })
+      }
     }
   }
   return out
@@ -87,17 +119,35 @@ function downloadsRunning(): boolean {
   try {
     return getDownloadService().getState().queue.some((item) => item.status === 'downloading')
   } catch {
-    // no download service yet: nothing running
+    return false
   }
-  return false
 }
 
-let moving: { folder: MovableFolder; cancel: boolean } | null = null
+function transcriptionRunning(): boolean {
+  try {
+    const q = getQueueState()
+    return q.isProcessing || q.shortLaneId !== null
+  } catch {
+    return false
+  }
+}
 
-export async function planMove(folder: MovableFolder | 'data', to: string): Promise<MovePlan> {
+let lock: { folder: MovableFolder; cancel: boolean; abort: AbortController } | null = null
+
+export async function planMove(folder: MovableFolder | 'data', to: string, ownLock = false): Promise<MovePlan> {
   const from = currentPath(folder)
   const target = to.trim()
-  const { bytes, files } = await folderSize(from)
+  let files = 0
+  let bytes = 0
+  let blocker: string | null = null
+  try {
+    const list = folder === 'data' ? [] : await listFilesStrict(from)
+    files = list.length
+    bytes = list.reduce((sum, f) => sum + f.size, 0)
+  } catch (err) {
+    blocker = err instanceof Error ? err.message : String(err)
+  }
+
   let targetFreeBytes: number | null = null
   let targetHasFiles = false
   try {
@@ -109,103 +159,178 @@ export async function planMove(folder: MovableFolder | 'data', to: string): Prom
     targetFreeBytes = null
   }
 
-  let blocker: string | null = null
-  if (!target) blocker = 'Choose a folder.'
-  else if (samePath(from, target)) blocker = 'That is already the folder in use.'
-  else if (insidePath(target, from)) blocker = 'The new folder cannot be inside the current one.'
-  else if (moving) blocker = `A move of ${moving.folder} is already running.`
-  else if (folder !== 'data' && downloadsRunning()) blocker = 'Downloads are running. Wait for them to finish, or pause them, then move.'
+  if (blocker) {
+    // unreadable source: keep that reason
+  } else if (!target) blocker = 'Choose a folder.'
+  else if (key(from) === key(target)) blocker = 'That is already the folder in use.'
+  else if (overlaps(from, target)) blocker = 'The new folder cannot be inside the current one, or contain it.'
+  else if (lock && !ownLock) blocker = `A move of ${lock.folder} is already running.`
+  else if (folder !== 'data' && targetHasFiles) blocker = 'Choose an empty folder: the new folder already has files, and nothing there is overwritten.'
   else if (folder !== 'data' && targetFreeBytes !== null && targetFreeBytes < bytes) blocker = 'The new disk does not have enough free space.'
 
-  const plan: MovePlan = { folder, from, to: target, files, bytes, targetFreeBytes, targetHasFiles, blocker }
+  const plan: MovePlan = {
+    folder,
+    from,
+    to: target,
+    files,
+    bytes,
+    targetFreeBytes,
+    targetHasFiles,
+    canSwitchWithoutMoving: folder !== 'data' && files === 0 && !blocker,
+    blocker
+  }
   if (folder === 'data') plan.targetHasDatabase = existsSync(join(target, 'data', 'hidock.db'))
   return plan
 }
 
-/** Rewrite every stored absolute path under `from` so it points under `to`. */
+const PATH_COLUMNS: Array<[string, string]> = [
+  ['recordings', 'file_path'],
+  ['synced_files', 'file_path'],
+  ['audio_sources', 'local_path']
+]
+
+/** Rewrite every stored absolute path under `from` to the same place under `to`. Returns rows changed. */
 export function rewriteStoredPaths(from: string, to: string): number {
-  const prefix = resolve(from)
-  const next = resolve(to)
-  const columns: Array<[string, string]> = [
-    ['recordings', 'file_path'],
-    ['synced_files', 'file_path'],
-    ['audio_sources', 'local_path']
-  ]
+  const prefix = withSep(resolve(from))
+  const next = withSep(resolve(to))
+  const prefixKey = prefix.toLowerCase()
   let changed = 0
   runInTransaction(() => {
-    for (const [table, column] of columns) {
-      // Windows paths compare case-insensitively; the prefix keeps the separator
-      // so F:\Rec does not also match F:\Recordings-old.
-      runNoSave(
-        `UPDATE ${table} SET ${column} = ? || substr(${column}, ?) WHERE lower(substr(${column}, 1, ?)) = lower(?)`,
-        [next + sep, prefix.length + 2, prefix.length + 1, prefix + sep]
+    for (const [table, column] of PATH_COLUMNS) {
+      const rows = queryAll<{ rid: number; p: string }>(
+        `SELECT rowid AS rid, ${column} AS p FROM ${table} WHERE ${column} IS NOT NULL AND ${column} != ''`
       )
-      changed++
+      for (const row of rows) {
+        if (!row.p.toLowerCase().startsWith(prefixKey)) continue
+        run(`UPDATE ${table} SET ${column} = ? WHERE rowid = ?`, [next + row.p.slice(prefix.length), row.rid])
+        changed++
+      }
     }
   })
   return changed
 }
 
+async function copyVerified(src: string, dest: string, size: number, signal: AbortSignal): Promise<void> {
+  const partial = `${dest}.partial`
+  await fs.mkdir(dirname(dest), { recursive: true })
+  try {
+    await pipeline(createReadStream(src), createWriteStream(partial, { flags: 'wx' }), { signal })
+    const copied = await fs.stat(partial)
+    if (copied.size !== size) throw new Error(`The copy of ${src} is incomplete; nothing was switched.`)
+    await fs.rename(partial, dest)
+  } catch (err) {
+    await fs.rm(partial, { force: true }).catch(() => undefined)
+    throw err
+  }
+}
+
+async function waitUntilIdle(state: { cancel: boolean }): Promise<void> {
+  const started = Date.now()
+  while (downloadsRunning() || transcriptionRunning()) {
+    if (state.cancel) return
+    if (Date.now() - started > BUSY_WAIT_MAX_MS) {
+      throw new Error('A download or transcription is still running after 10 minutes; try the move again later.')
+    }
+    await new Promise((r) => setTimeout(r, BUSY_WAIT_STEP_MS))
+  }
+}
+
 export async function moveFolder(
   folder: MovableFolder,
   to: string,
+  expected: { files: number; bytes: number },
   onProgress: (p: MoveProgress) => void
 ): Promise<{ copiedFiles: number; copiedBytes: number; cancelled: boolean }> {
-  const plan = await planMove(folder, to)
-  if (plan.blocker) throw new Error(plan.blocker)
-  moving = { folder, cancel: false }
-  const state = moving
-  let copiedFiles = 0
+  // Taken before any await so two clicks cannot both start.
+  if (lock) throw new Error(`A move of ${lock.folder} is already running.`)
+  const state = { folder, cancel: false, abort: new AbortController() }
+  lock = state
+  setMovingFolder(folder)
+
+  const downloads = getDownloadService()
+  const downloadsWerePaused = downloads.getState().isPaused
+  const transcriptionWasPaused = getQueueState().paused
+  const copied: string[] = []
   let copiedBytes = 0
+  let switched = false
   try {
+    if (!downloadsWerePaused) downloads.pause()
+    if (!transcriptionWasPaused) pauseQueue()
+    if (folder === 'recordings') {
+      stopRecordingWatcher()
+      await new Promise((r) => setTimeout(r, WATCHER_DRAIN_MS))
+    }
+    await waitUntilIdle(state)
+
+    // The folder must still be what the person confirmed.
+    const plan = await planMove(folder, to, true)
+    if (plan.blocker) throw new Error(plan.blocker)
+    if (plan.files !== expected.files || plan.bytes !== expected.bytes) {
+      throw new Error('The folder changed since you confirmed. Review the move again.')
+    }
+
+    const files = await listFilesStrict(plan.from)
     await fs.mkdir(plan.to, { recursive: true })
-    const files = await listFiles(plan.from)
-    for (const src of files) {
-      if (state.cancel) return { copiedFiles, copiedBytes, cancelled: true }
-      const dest = join(plan.to, relative(plan.from, src))
-      const { size } = await fs.stat(src)
-      const existing = await fs.stat(dest).catch(() => null)
-      if (!existing || existing.size !== size) {
-        await fs.mkdir(dirname(dest), { recursive: true })
-        await fs.copyFile(src, dest)
-        const copied = await fs.stat(dest)
-        if (copied.size !== size) throw new Error(`Copy of ${relative(plan.from, src)} is incomplete; nothing was switched.`)
+    for (const f of files) {
+      if (state.cancel) break
+      const dest = join(plan.to, relative(plan.from, f.path))
+      try {
+        await copyVerified(f.path, dest, f.size, state.abort.signal)
+      } catch (err) {
+        if (state.cancel) break
+        throw err
       }
-      copiedFiles++
-      copiedBytes += size
-      if (copiedFiles % 25 === 0 || copiedFiles === files.length) {
-        onProgress({ folder, copiedFiles, totalFiles: files.length, copiedBytes, totalBytes: plan.bytes })
+      copied.push(dest)
+      copiedBytes += f.size
+      if (copied.length % 25 === 0 || copied.length === files.length) {
+        onProgress({ folder, copiedFiles: copied.length, totalFiles: files.length, copiedBytes, totalBytes: plan.bytes })
       }
     }
 
-    // Everything is copied: switch in one go.
-    if (folder === 'recordings') {
-      stopRecordingWatcher()
-      rewriteStoredPaths(plan.from, plan.to)
+    // Last chance to stop before anything irreversible.
+    if (state.cancel) {
+      for (const p of copied) await fs.rm(p, { force: true }).catch(() => undefined)
+      return { copiedFiles: 0, copiedBytes: 0, cancelled: true }
     }
-    await updateConfig('storage', { [folder === 'recordings' ? 'recordingsPath' : 'transcriptsPath']: plan.to })
+
+    const configKey = folder === 'recordings' ? 'recordingsPath' : 'transcriptsPath'
+    if (folder === 'recordings') rewriteStoredPaths(plan.from, plan.to)
+    try {
+      await updateConfig('storage', { [configKey]: plan.to })
+    } catch (err) {
+      if (folder === 'recordings') rewriteStoredPaths(plan.to, plan.from)
+      throw err
+    }
+    switched = true
     await initializeFileStorage()
-    if (folder === 'recordings') startRecordingWatcher()
-    return { copiedFiles, copiedBytes, cancelled: false }
+    return { copiedFiles: copied.length, copiedBytes, cancelled: false }
+  } catch (err) {
+    // Nothing switched: the copies are not in use, remove them.
+    if (!switched) for (const p of copied) await fs.rm(p, { force: true }).catch(() => undefined)
+    throw err
   } finally {
-    moving = null
+    if (folder === 'recordings') startRecordingWatcher() // follows whichever folder is configured now
+    if (!transcriptionWasPaused) resumeQueue()
+    if (!downloadsWerePaused) downloads.resume()
+    setMovingFolder(null)
+    lock = null
   }
 }
 
 export function cancelMove(): boolean {
-  if (!moving) return false
-  moving.cancel = true
+  if (!lock) return false
+  lock.cancel = true
+  lock.abort.abort()
   return true
 }
 
-/**
- * Use the new folder as it is: files already recorded stay where they are (their
- * rows still point there), new files go to the new folder, and the watcher
- * follows it.
- */
+/** Use a new folder while the current one is empty (see the header). */
 export async function switchFolder(folder: MovableFolder, to: string): Promise<void> {
   const plan = await planMove(folder, to)
-  if (plan.blocker && plan.blocker !== 'The new disk does not have enough free space.') throw new Error(plan.blocker)
+  if (!plan.canSwitchWithoutMoving) {
+    throw new Error(plan.blocker ?? 'The current folder has files. Move them, so they stay playable.')
+  }
+  await fs.mkdir(plan.to, { recursive: true })
   await updateConfig('storage', { [folder === 'recordings' ? 'recordingsPath' : 'transcriptsPath']: plan.to })
   await initializeFileStorage()
   if (folder === 'recordings') {

@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSy
 import { RECORDING_AUDIO_EXTENSIONS } from '../../../src/shared/audio-extensions'
 import { join, basename, extname, resolve, normalize } from 'path'
 import { getConfig, getDataPath } from './config'
+import { refuseWhileTranscriptsMove } from './storage-move-state'
 import type { AppConfig } from './config'
 import { readAudioDuration } from './audio-duration'
 
@@ -307,6 +308,8 @@ export async function saveTranscript(
   transcript: string,
   format: 'txt' | 'json' = 'txt'
 ): Promise<string> {
+  // Settings > Storage may be moving this folder; a file written now would be left behind.
+  refuseWhileTranscriptsMove()
   const transcriptsPath = getTranscriptsPath()
 
   // Extract just the filename without any path components

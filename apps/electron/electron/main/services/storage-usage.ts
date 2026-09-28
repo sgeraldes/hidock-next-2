@@ -22,6 +22,8 @@ export interface StorageLocationUsage {
   overLimit: boolean
   /** The disk the location is on; null when it cannot be read. */
   disk: { totalBytes: number; freeBytes: number } | null
+  /** Why the folder could not be measured (a disconnected drive); null when measured. */
+  error: string | null
 }
 
 const GB = 1024 ** 3
@@ -42,8 +44,11 @@ export async function folderSize(root: string, exclude: string[] = []): Promise<
     let entries: import('fs').Dirent[]
     try {
       entries = await fs.readdir(dir, { withFileTypes: true })
-    } catch {
-      continue // missing or unreadable: nothing to count there
+    } catch (err) {
+      // A folder that does not exist yet holds nothing; anything else (a
+      // disconnected drive, no permission) is not a measurement.
+      if (dir === root && (err as NodeJS.ErrnoException)?.code === 'ENOENT') return { bytes: 0, files: 0 }
+      throw new Error(`Cannot read ${dir}: ${err instanceof Error ? err.message : String(err)}`)
     }
     for (const entry of entries) {
       const full = join(dir, entry.name)
@@ -53,8 +58,9 @@ export async function folderSize(root: string, exclude: string[] = []): Promise<
         try {
           bytes += (await fs.stat(full)).size
           files++
-        } catch {
-          // removed while counting
+        } catch (err) {
+          // Removed while counting is fine; anything else is not a measurement.
+          if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') throw err
         }
       }
     }
@@ -88,9 +94,15 @@ export async function getStorageUsage(): Promise<StorageLocationUsage[]> {
   ]
   return Promise.all(
     locations.map(async ({ id, path, exclude }) => {
-      const [{ bytes, files }, disk] = await Promise.all([folderSize(path, exclude), diskOf(path)])
       const limitBytes = limitBytesFor(id)
-      return { id, path, bytes, files, limitBytes, overLimit: limitBytes !== null && bytes >= limitBytes, disk }
+      const disk = await diskOf(path)
+      try {
+        const { bytes, files } = await folderSize(path, exclude)
+        return { id, path, bytes, files, limitBytes, overLimit: limitBytes !== null && bytes >= limitBytes, disk, error: null }
+      } catch (err) {
+        // Unmeasurable counts as over a set limit, so auto-download never fills an unknown folder.
+        return { id, path, bytes: 0, files: 0, limitBytes, overLimit: limitBytes !== null, disk, error: err instanceof Error ? err.message : String(err) }
+      }
     })
   )
 }
@@ -106,9 +118,14 @@ export async function recordingsOverLimit(now = Date.now()): Promise<boolean> {
   const limit = limitBytesFor('recordings')
   if (limit === null) return false
   if (overLimitCache && now - overLimitCache.at < OVER_LIMIT_CACHE_MS) return overLimitCache.value
-  const { bytes } = await folderSize(getRecordingsPath())
-  overLimitCache = { at: now, value: bytes >= limit }
-  return overLimitCache.value
+  let over = true // cannot measure: fail closed
+  try {
+    over = (await folderSize(getRecordingsPath())).bytes >= limit
+  } catch (err) {
+    console.warn('[Storage] Recordings folder could not be measured; auto-download pauses:', err)
+  }
+  overLimitCache = { at: now, value: over }
+  return over
 }
 
 /** Forget the cached answer (a limit changed). */
