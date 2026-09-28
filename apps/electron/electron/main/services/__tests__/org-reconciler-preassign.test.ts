@@ -155,3 +155,40 @@ describe('autoLinkRecordingsToMeetings — connector meetings', () => {
     expect(recordingRunCalls('time_overlap')).toHaveLength(1)
   })
 })
+
+describe('autoLinkRecordingsToMeetings — duplicate meetings and nearby windows', () => {
+  it('orders meetings with the connector copy first, so it wins an equal fit', async () => {
+    const db = await import('../database')
+    vi.mocked(db.getActiveCalendarSyncToken).mockReturnValueOnce('ics-token')
+    recordingRows = [{ id: 'rec-D', filename: 'RecD.wav', date_recorded: '2026-08-07T10:05:00Z', duration_seconds: 1800 }]
+    // The mocked DB returns rows in the order the SQL asks for: connector first.
+    meetingRows = [
+      { id: 'm365:AAMk9', subject: 'Weekly', start_time: '2026-08-07T10:00:00Z', end_time: '2026-08-07T11:00:00Z' },
+      { id: 'ics-uid-9', subject: 'Weekly', start_time: '2026-08-07T10:00:00Z', end_time: '2026-08-07T11:00:00Z' }
+    ]
+    autoLinkRecordingsToMeetings()
+    const sql = vi.mocked(db.queryAll).mock.calls.map((c) => String(c[0])).filter((s) => /FROM meetings/i.test(s)).at(-1)
+    expect(sql).toMatch(/ORDER BY CASE WHEN/)
+    const link = recordingRunCalls('time_overlap')[0]
+    expect(link[1]).toEqual(['m365:AAMk9', 'rec-D'])
+  })
+})
+
+describe('windowsNear', () => {
+  it('keeps every meeting that can overlap the recording and drops the ones that cannot', async () => {
+    const { windowsNear } = await import('../org-reconciler')
+    const h = 3600_000
+    const sorted = [
+      { id: 'old', start: 0, end: h, isAllDay: false },
+      { id: 'allday', start: 9 * h, end: 33 * h, isAllDay: true },
+      { id: 'near', start: 10 * h, end: 11 * h, isAllDay: false },
+      { id: 'later', start: 40 * h, end: 41 * h, isAllDay: false }
+    ]
+    const starts = sorted.map((w) => w.start)
+    const ids = windowsNear(sorted, starts, 24 * h, 10.5 * h, 10.9 * h).map((w) => w.id)
+    // A superset bounded by the longest meeting: the selector still checks overlap.
+    expect(ids).toEqual(expect.arrayContaining(['allday', 'near']))
+    expect(ids).not.toContain('later')
+    expect(windowsNear(sorted, starts, 2 * h, 10.5 * h, 10.9 * h).map((w) => w.id)).toEqual(['allday', 'near'])
+  })
+})

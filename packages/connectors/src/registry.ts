@@ -319,17 +319,28 @@ export class ConnectorHost {
     const descriptor = this.descriptorFor(id)
     if (!descriptor) throw new Error(`Unknown connector: ${id}`)
     const plain: ConnectorConfig = {}
+    let credentialsChanged = false
     for (const field of descriptor.configFields) {
       if (!(field.key in values)) continue
       const raw = values[field.key]
       if (field.secret) {
         const str = typeof raw === 'string' ? raw : String(raw)
-        if (str !== '') this.store.setSecret(id, field.key, str)
+        if (str !== '' && str !== this.store.getSecret(id, field.key)) {
+          this.store.setSecret(id, field.key, str)
+          credentialsChanged = true
+        }
       } else {
         plain[field.key] = raw
       }
     }
     if (Object.keys(plain).length > 0) this.store.setConfig(id, plain)
+    // New credentials can mean another account or workspace, where the saved
+    // sync positions mean nothing. Keep each source's on/off choice, restart its cursor.
+    if (credentialsChanged) {
+      for (const containerId of Object.keys(this.store.getState(id).sources ?? {})) {
+        this.store.setSourceState(id, containerId, { cursor: null })
+      }
+    }
     const inst = this.instances.get(id)
     if (inst?.configure) await inst.configure(this.effectiveConfig(id))
   }
@@ -408,8 +419,10 @@ export class ConnectorHost {
     if (!sources) return outcome
     const sourceState = this.store.getSourceState(id, container.externalId)
     let cursor = sourceState.cursor ?? undefined
+    let more = false
     for (let page = 0; page < MAX_SYNC_PAGES; page++) {
       const result = await sources.pull(container, cursor)
+      more = Boolean(result.hasMore)
       if (result.items.length > 0 && this.sink) {
         const partial = await this.sink.ingest(id, container, result.items)
         outcome.meetings += partial.meetings
@@ -420,6 +433,7 @@ export class ConnectorHost {
       if (result.cursor !== undefined) cursor = result.cursor
       if (!result.hasMore) break
     }
+    if (more) outcome.truncated = true
     this.store.setSourceState(id, container.externalId, {
       cursor: cursor ?? null,
       lastSyncAt: new Date().toISOString(),
@@ -444,6 +458,7 @@ export class ConnectorHost {
         total.contacts += partial.contacts
         total.artifacts += partial.artifacts
         total.skipped += partial.skipped
+        if (partial.truncated) total.truncated = true
       }
       const nowIso = new Date().toISOString()
       this.store.setLastSyncAt(id, nowIso)

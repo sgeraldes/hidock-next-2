@@ -14,7 +14,7 @@
  * Owner request, 28-sep-2026.
  */
 
-import { existsSync, readFileSync, statSync } from 'fs'
+import { readFile, stat } from 'fs/promises'
 import { queryAll, queryOne, run } from './database'
 import { envelopePath } from './audio-profile-store'
 import { getWaveformCache, setWaveformCache } from './waveform-cache'
@@ -55,9 +55,14 @@ export interface WaveformRedrawResult {
 
 let redrawRunning = false
 
+/** Longest stretch the redraw keeps the main process busy before it yields. */
+const REDRAW_YIELD_MS = 20
+
 /**
  * Coarse waveform for every recording that has an envelope and no exact
- * waveform yet. Yields between recordings. One pass at a time.
+ * waveform for its current file. File reads are asynchronous and the loop
+ * yields every REDRAW_YIELD_MS, so a slow disk does not stall the windows.
+ * One pass at a time.
  */
 export async function redrawWaveforms(onProgress?: (done: number, total: number) => void): Promise<WaveformRedrawResult | { busy: true }> {
   if (redrawRunning) return { busy: true }
@@ -70,30 +75,42 @@ export async function redrawWaveforms(onProgress?: (done: number, total: number)
         WHERE r.deleted_at IS NULL`
     )
     const result: WaveformRedrawResult = { total: rows.length, drawn: 0, keptExact: 0, noEnvelope: 0 }
+    let lastYield = Date.now()
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i]
-      const existing = getWaveformCache(row.id)
+      const fileSize = row.file_path ? await fileSizeOf(row.file_path) : 0
+      // An exact waveform counts only for the file as it is now: a replaced or
+      // repaired file (another size) gets a fresh one.
+      const existing = getWaveformCache(row.id, fileSize || undefined)
       if (existing && !existing.coarse) {
         result.keptExact++
       } else {
-        const path = envelopePath(row.id)
-        if (!existsSync(path)) {
+        const envelope = await readFile(envelopePath(row.id)).catch(() => null)
+        if (!envelope) {
           result.noEnvelope++
         } else {
-          const peaks = peaksFromEnvelope(new Uint8Array(readFileSync(path)))
-          const fileSize = row.file_path && existsSync(row.file_path) ? statSync(row.file_path).size : 0
+          const peaks = peaksFromEnvelope(new Uint8Array(envelope))
           if (peaks.length > 0 && setWaveformCache(row.id, peaks, row.duration_seconds ?? 0, fileSize, true)) result.drawn++
         }
       }
-      if (i % 25 === 24) {
+      if (Date.now() - lastYield >= REDRAW_YIELD_MS) {
         onProgress?.(i + 1, rows.length)
         await new Promise<void>((resolve) => setImmediate(resolve))
+        lastYield = Date.now()
       }
     }
     onProgress?.(rows.length, rows.length)
     return result
   } finally {
     redrawRunning = false
+  }
+}
+
+async function fileSizeOf(path: string): Promise<number> {
+  try {
+    return (await stat(path)).size
+  } catch {
+    return 0
   }
 }
 
@@ -109,6 +126,9 @@ export function markEvaluationsOutdated(): number {
   run('UPDATE recording_evaluations SET version = 0')
   return queryOne<{ n: number }>('SELECT COUNT(*) AS n FROM recording_evaluations')?.n ?? 0
 }
+
+/** Sync rounds one relink may take per account (each round is up to 50 Graph pages). */
+export const MAX_RELINK_SYNC_ROUNDS = 40
 
 export interface RelinkResult {
   unlinkedBefore: number
@@ -162,8 +182,16 @@ export async function relinkRecordingsToMeetings(): Promise<RelinkResult> {
       if (historyFrom) store.setConfig(id, { calendarHistoryStart: historyFrom })
       // A fresh window needs a fresh delta query: the saved cursor only covers the old one.
       store.setSourceState(id, 'calendar', { cursor: null })
-      const outcome = await host.syncNow(id, 'calendar')
-      result.meetingsSynced += outcome.meetings
+      // A sync stops after its page cap with the next page saved; keep going
+      // until the calendar is complete, or linking would run on part of it.
+      for (let round = 0; round < MAX_RELINK_SYNC_ROUNDS; round++) {
+        const outcome = await host.syncNow(id, 'calendar')
+        result.meetingsSynced += outcome.meetings
+        if (!outcome.truncated) break
+        if (round === MAX_RELINK_SYNC_ROUNDS - 1) {
+          result.errors.push(`${summary.label}: calendar history is longer than ${MAX_RELINK_SYNC_ROUNDS} sync rounds; run Relink again to continue.`)
+        }
+      }
     } catch (error) {
       result.errors.push(`${summary.label}: ${error instanceof Error ? error.message : String(error)}`)
     }

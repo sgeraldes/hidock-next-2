@@ -1,8 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import { X } from 'lucide-react'
 import type { SourceContainer } from '@hidock/connectors'
 import { Input } from '@/components/ui/input'
-import { Checkbox } from '@/components/ui/checkbox'
 
 /**
  * Type-to-filter picker for connectors with many sources (a Slack workspace
@@ -21,6 +20,7 @@ export function SourcePicker({
   noun?: string
 }) {
   const [query, setQuery] = useState('')
+  const listId = useId()
 
   const chosen = useMemo(() => containers.filter(isEnabled), [containers, isEnabled])
   const shown = useMemo(() => {
@@ -59,39 +59,38 @@ export function SourcePicker({
         )}
       </div>
       <Input
-        role="combobox"
-        aria-expanded="true"
-        aria-controls="source-picker-list"
+        type="search"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         placeholder={`Type to filter ${containers.length} ${noun}s`}
+        aria-label={`Filter ${noun}s`}
+        aria-controls={listId}
         autoComplete="off"
       />
-      <ul
-        id="source-picker-list"
-        role="listbox"
-        aria-multiselectable="true"
-        className="max-h-72 overflow-y-auto rounded border border-border"
-      >
-        {shown.length === 0 && <li className="px-3 py-2 text-xs text-muted-foreground">No {noun} matches &ldquo;{query}&rdquo;.</li>}
+      {/* Real checkboxes: Tab reaches each one and Space toggles it (review of #53, A1). */}
+      <fieldset id={listId} className="max-h-72 overflow-y-auto rounded border border-border">
+        <legend className="sr-only">{`${noun[0].toUpperCase()}${noun.slice(1)}s to sync`}</legend>
+        {shown.length === 0 && <p className="px-3 py-2 text-xs text-muted-foreground">No {noun} matches &ldquo;{query}&rdquo;.</p>}
         {shown.map((c) => {
           const on = isEnabled(c)
           return (
-            <li
+            <label
               key={c.externalId}
-              role="option"
-              aria-selected={on}
-              className="flex cursor-pointer items-center gap-2 border-b border-border px-3 py-1.5 text-sm last:border-b-0 hover:bg-muted/50"
-              onClick={() => onToggle(c.externalId, !on)}
+              className="flex cursor-pointer items-center gap-2 border-b border-border px-3 py-1.5 text-sm last:border-b-0 hover:bg-muted/50 focus-within:bg-muted/50"
             >
-              <Checkbox checked={on} tabIndex={-1} aria-hidden="true" onClick={(e) => e.stopPropagation()} onCheckedChange={(v) => onToggle(c.externalId, v)} />
+              <input
+                type="checkbox"
+                checked={on}
+                onChange={(e) => onToggle(c.externalId, e.target.checked)}
+                className="h-4 w-4 shrink-0 accent-primary"
+              />
               <span className="min-w-0 flex-1 truncate">#{c.name}</span>
               {c.kind !== 'channel' && <span className="text-xs text-muted-foreground">{c.kind.replace('_', ' ')}</span>}
               {!c.metadata?.isMember && <span className="text-xs text-muted-foreground">not a member</span>}
-            </li>
+            </label>
           )
         })}
-      </ul>
+      </fieldset>
     </div>
   )
 }

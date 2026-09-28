@@ -1,4 +1,6 @@
 import { ipcMain } from 'electron'
+import { statSync } from 'fs'
+import { queryOne } from '../services/database'
 import {
   getWaveformCache,
   setWaveformCache,
@@ -11,7 +13,7 @@ import {
  */
 export function registerWaveformCacheHandlers(): void {
   ipcMain.handle('waveform:getCache', async (_event, recordingId: string, fileSize?: number) => {
-    return getWaveformCache(recordingId, fileSize)
+    return getWaveformCache(recordingId, fileSize ?? currentFileSize(recordingId))
   })
 
   ipcMain.handle(
@@ -26,4 +28,14 @@ export function registerWaveformCacheHandlers(): void {
   })
 
   console.log('[WaveformCache] IPC handlers registered')
+}
+
+/** Size of the recording's audio file on disk now, or undefined when unknown. */
+function currentFileSize(recordingId: string): number | undefined {
+  try {
+    const row = queryOne<{ file_path: string | null }>('SELECT file_path FROM recordings WHERE id = ?', [recordingId])
+    return row?.file_path ? statSync(row.file_path).size : undefined
+  } catch {
+    return undefined
+  }
 }

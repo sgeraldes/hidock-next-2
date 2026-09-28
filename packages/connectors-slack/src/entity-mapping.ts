@@ -69,7 +69,7 @@ function decodeEntities(s: string): string {
  */
 export function renderText(text: string | undefined, userNames?: Map<string, string>): string {
   if (!text) return ''
-  let out = text
+  const out = text
     // User mentions: <@U123> or <@U123|label>
     .replace(/<@([A-Z0-9]+)(?:\|([^>]*))?>/g, (_full, id: string, label?: string) => {
       const name = userNames?.get(id) ?? label ?? id

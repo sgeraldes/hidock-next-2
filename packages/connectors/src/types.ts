@@ -493,6 +493,11 @@ export interface IngestionOutcome {
   contacts: number
   artifacts: number
   skipped: number
+  /**
+   * True when a sync stopped at the page cap with more pages waiting. The
+   * cursor points at the next page, so another sync continues where it stopped.
+   */
+  truncated?: boolean
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

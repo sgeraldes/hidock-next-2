@@ -13,12 +13,12 @@ const channels: SourceContainer[] = [
 describe('SourcePicker', () => {
   it('filters the list as you type', () => {
     render(<SourcePicker containers={channels} isEnabled={() => false} onToggle={vi.fn()} />)
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'dev' } })
-    const options = screen.getAllByRole('option')
-    expect(options).toHaveLength(1)
-    expect(options[0]).toHaveTextContent('hidock-dev')
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'nothing-like-this' } })
-    expect(screen.queryAllByRole('option')).toHaveLength(0)
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Filter channels' }), { target: { value: 'dev' } })
+    const boxes = screen.getAllByRole('checkbox')
+    expect(boxes).toHaveLength(1)
+    expect(screen.getByRole('checkbox', { name: /hidock-dev/ })).toBeInTheDocument()
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Filter channels' }), { target: { value: 'nothing-like-this' } })
+    expect(screen.queryAllByRole('checkbox')).toHaveLength(0)
     expect(screen.getByText(/No channel matches/)).toBeInTheDocument()
   })
 
@@ -31,15 +31,17 @@ describe('SourcePicker', () => {
     const onToggle = vi.fn()
     const chosen = new Set(['C3'])
     render(<SourcePicker containers={channels} isEnabled={(c) => chosen.has(c.externalId)} onToggle={onToggle} />)
-    expect(screen.getAllByRole('option')[0]).toHaveTextContent('random')
+    expect(screen.getAllByRole('checkbox')[0]).toHaveAccessibleName(/random/)
     fireEvent.click(screen.getByRole('button', { name: 'Stop syncing random' }))
     expect(onToggle).toHaveBeenCalledWith('C3', false)
   })
 
-  it('picks a channel by clicking its row', () => {
+  it('every channel is a real checkbox, so the keyboard can pick it', () => {
     const onToggle = vi.fn()
     render(<SourcePicker containers={channels} isEnabled={() => false} onToggle={onToggle} />)
-    fireEvent.click(screen.getAllByRole('option').find((o) => o.textContent?.includes('#general'))!)
+    const general = screen.getByRole('checkbox', { name: /#general/ })
+    expect(general.tagName).toBe('INPUT')
+    fireEvent.click(general) // what Space does on a focused checkbox
     expect(onToggle).toHaveBeenCalledWith('C1', true)
   })
 })

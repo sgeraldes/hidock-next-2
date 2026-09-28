@@ -2,7 +2,7 @@
 
 The **C2 Slack connector** for HiDock Next — a scheduled, **LLM-free** delta sync
 of Slack into the intelligence layer, implementing the connector-host `Connector`
-contract (Layer 2 of `apps/electron/CONNECTORS.md`).
+contract (Layer 2 of [`docs/CONNECTORS.md`](../../docs/CONNECTORS.md)).
 
 Transport is **native HTTP + token** (not MCP): a thin, deterministic Slack Web
 API client. No LLM is anywhere in the sync/retrieval path — LLM housekeeping (if
@@ -32,7 +32,7 @@ Create a bot (`xoxb-…`) or user (`xoxp-…`) token with:
 For private channels and group DMs, use the `groups:*` / `im:*` / `mpim:*`
 equivalents. The token is a **secret**: the host stores it in the OS keychain /
 config service and passes it in at construction — it is **never** written to the
-DB (`CONNECTORS.md` §Data model). Exported as `SLACK_REQUIRED_SCOPES`.
+DB ([`docs/CONNECTORS.md`](../../docs/CONNECTORS.md)). Exported as `SLACK_REQUIRED_SCOPES`.
 
 ## Usage
 
@@ -102,6 +102,6 @@ types.
 ```bash
 npm install
 npm run typecheck   # tsc --noEmit (strict)
-npm test            # vitest — 40 tests, all Slack HTTP mocked (no network)
+npm test            # vitest, all Slack HTTP mocked (no network)
 npm run build       # tsup → dist (esm + cjs + dts)
 ```
