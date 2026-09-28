@@ -311,7 +311,7 @@ describe('Settings Page', () => {
     fireEvent.change(input, { target: { value: '  ts-test-key  ' } }) // pragma: allowlist secret
     fireEvent.click(screen.getByRole('button', { name: 'Save key' }))
 
-    await waitFor(() => expect(mockUpdateConfig).toHaveBeenCalledWith('transcription', { jevApiKey: 'ts-test-key' }))
+    await waitFor(() => expect(mockUpdateConfig).toHaveBeenCalledWith('transcription', { jevApiKey: 'ts-test-key' })) // pragma: allowlist secret
     // The draft clears after saving; the saved key lives only in config.
     await waitFor(() => expect(input.value).toBe(''))
   })
