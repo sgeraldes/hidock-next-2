@@ -144,6 +144,10 @@ export class ConnectorStore implements ConnectorStateStore {
     this.persist()
   }
 
+  hasSourceState(id: string, containerId: string): boolean {
+    return Boolean(this.ensure(id).sources[containerId])
+  }
+
   getSourceState(id: string, containerId: string): StoredSourceState {
     const state = this.ensure(id)
     if (!state.sources[containerId]) {

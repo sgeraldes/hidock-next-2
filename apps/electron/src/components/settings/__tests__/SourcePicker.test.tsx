@@ -1,0 +1,45 @@
+import { describe, it, expect, vi } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
+import type { SourceContainer } from '@hidock/connectors'
+import { SourcePicker } from '../SourcePicker'
+
+const channels: SourceContainer[] = [
+  { externalId: 'C1', name: 'general', kind: 'channel', defaultEnabled: false, metadata: { isMember: true } },
+  { externalId: 'C2', name: 'dfx5-delivery', kind: 'channel', defaultEnabled: false, metadata: { isMember: true } },
+  { externalId: 'C3', name: 'random', kind: 'channel', defaultEnabled: false, metadata: { isMember: false } },
+  { externalId: 'C4', name: 'hidock-dev', kind: 'private_channel', defaultEnabled: false, metadata: { isMember: true } }
+]
+
+describe('SourcePicker', () => {
+  it('filters the list as you type', () => {
+    render(<SourcePicker containers={channels} isEnabled={() => false} onToggle={vi.fn()} />)
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'dev' } })
+    const options = screen.getAllByRole('option')
+    expect(options).toHaveLength(1)
+    expect(options[0]).toHaveTextContent('hidock-dev')
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'nothing-like-this' } })
+    expect(screen.queryAllByRole('option')).toHaveLength(0)
+    expect(screen.getByText(/No channel matches/)).toBeInTheDocument()
+  })
+
+  it('says nothing syncs until a channel is picked', () => {
+    render(<SourcePicker containers={channels} isEnabled={() => false} onToggle={vi.fn()} />)
+    expect(screen.getByText(/Nothing syncs until you pick one/)).toBeInTheDocument()
+  })
+
+  it('lists chosen channels first, as chips that can be removed', () => {
+    const onToggle = vi.fn()
+    const chosen = new Set(['C3'])
+    render(<SourcePicker containers={channels} isEnabled={(c) => chosen.has(c.externalId)} onToggle={onToggle} />)
+    expect(screen.getAllByRole('option')[0]).toHaveTextContent('random')
+    fireEvent.click(screen.getByRole('button', { name: 'Stop syncing random' }))
+    expect(onToggle).toHaveBeenCalledWith('C3', false)
+  })
+
+  it('picks a channel by clicking its row', () => {
+    const onToggle = vi.fn()
+    render(<SourcePicker containers={channels} isEnabled={() => false} onToggle={onToggle} />)
+    fireEvent.click(screen.getAllByRole('option').find((o) => o.textContent?.includes('#general'))!)
+    expect(onToggle).toHaveBeenCalledWith('C1', true)
+  })
+})

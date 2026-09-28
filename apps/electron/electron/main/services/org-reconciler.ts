@@ -154,6 +154,9 @@ export function selectAutoLinkMeeting(
  * it links to the one with the largest overlap; other overlaps stay visible
  * as candidates in recording_meeting_candidates.
  */
+/** Meetings synced by a connector: ids are `<connectorId>:<externalId>` (connectors/ingestion.ts). */
+export const CONNECTOR_MEETING_PREDICATE = `(calendar_sync_token IS NULL AND id LIKE 'm365%:%')`
+
 export function autoLinkRecordingsToMeetings(): number {
   // Exclude rows the user forced standalone — their choice must survive every
   // reconcile pass, even after the preassignment row is consumed.
@@ -177,10 +180,14 @@ export function autoLinkRecordingsToMeetings(): number {
     preassignByBase.set(baseRecordingName(pa.filename).toLowerCase(), pa)
   }
 
+  // Meetings in the current ICS snapshot, plus every meeting a connector
+  // brought (Microsoft 365). Connector meetings carry no ICS token, so the
+  // snapshot filter alone left every Outlook meeting out of linking (28-sep-2026).
   const activeCalendarToken = getActiveCalendarSyncToken()
   const meetings = queryAll<MeetingRow>(
     activeCalendarToken
-      ? `SELECT id, subject, start_time, end_time, is_all_day FROM meetings WHERE calendar_sync_token = ?`
+      ? `SELECT id, subject, start_time, end_time, is_all_day FROM meetings
+         WHERE calendar_sync_token = ? OR ${CONNECTOR_MEETING_PREDICATE}`
       : `SELECT id, subject, start_time, end_time, is_all_day FROM meetings`,
     activeCalendarToken ? [activeCalendarToken] : []
   )

@@ -51,7 +51,7 @@
  * The shipped public client id. EMPTY by default — the project owner pastes the
  * registered app's Application (client) ID here. Public identifier, not a secret.
  */
-export const DEFAULT_M365_CLIENT_ID = ''
+export const DEFAULT_M365_CLIENT_ID = '67b76502-e2d7-4507-8ad6-256b8d0f3689' // "HiDock Next (Desktop)", registered 28-sep-2026
 
 /**
  * Default authority tenant. 'common' allows BOTH personal Microsoft accounts

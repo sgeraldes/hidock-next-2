@@ -18,6 +18,7 @@ import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
+import { SourcePicker } from './SourcePicker'
 import { toast } from '@/components/ui/toaster'
 import type {
   ConnectorSummary,
@@ -25,6 +26,9 @@ import type {
   ConnectorStatusState,
   SourceContainer,
 } from '@hidock/connectors'
+
+/** More sources than this get the type-to-filter picker instead of one switch each. */
+const SOURCE_PICKER_THRESHOLD = 8
 
 const STATUS_META: Record<ConnectorStatusState, { label: string; className: string }> = {
   disconnected: { label: 'Disconnected', className: 'border-border bg-muted text-muted-foreground' },
@@ -289,6 +293,13 @@ function AccountBlock({
     [summary.sources]
   )
 
+  // A source nobody has chosen yet follows its connector's default: Slack
+  // channels start off, calendar and contacts start on. The host syncs the same way.
+  const sourceEnabled = useCallback(
+    (c: SourceContainer) => sourceState.get(c.externalId)?.enabled ?? c.defaultEnabled ?? true,
+    [sourceState]
+  )
+
   const toggleSource = async (containerId: string, enabled: boolean) => {
     try {
       const next = await window.electronAPI.connectors.setSourceEnabled(instanceId, containerId, enabled)
@@ -403,12 +414,19 @@ function AccountBlock({
         </div>
       )}
 
-      {containers.length > 0 && (
+      {containers.length > SOURCE_PICKER_THRESHOLD && (
+        <div className="space-y-2">
+          <p className="text-sm font-medium">Sources to sync</p>
+          <SourcePicker containers={containers} isEnabled={sourceEnabled} onToggle={toggleSource} />
+        </div>
+      )}
+
+      {containers.length > 0 && containers.length <= SOURCE_PICKER_THRESHOLD && (
         <div className="space-y-2">
           <p className="text-sm font-medium">Sources to sync</p>
           {containers.map((c) => {
             const persisted = sourceState.get(c.externalId)
-            const enabled = persisted ? persisted.enabled : true
+            const enabled = sourceEnabled(c)
             return (
               <div key={c.externalId} className="flex items-center justify-between rounded border border-border px-3 py-2">
                 <div className="text-sm">

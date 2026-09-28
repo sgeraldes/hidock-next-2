@@ -61,8 +61,12 @@ export const SLACK_REQUIRED_SCOPES = {
   chatWrite: 'chat:write'
 } as const
 
-export function createSlackConnector(config: SlackConnectorConfig, deps: SlackClientDeps = {}): SlackConnector {
-  return new SlackConnector(config, deps)
+export function createSlackConnector(
+  config: SlackConnectorConfig,
+  deps: SlackClientDeps = {},
+  loadConfig?: () => SlackConnectorConfig
+): SlackConnector {
+  return new SlackConnector(config, deps, loadConfig)
 }
 
 export class SlackConnector implements Connector, IdentityProvider, SourceProvider, ActionProvider, SignalProvider {
@@ -72,15 +76,24 @@ export class SlackConnector implements Connector, IdentityProvider, SourceProvid
 
   readonly capabilities: Connector['capabilities']
 
-  private readonly client: SlackClient
-  private readonly config: SlackConnectorConfig
+  private client: SlackClient
+  private config: SlackConnectorConfig
   private status_: ConnectorStatus = { state: 'disconnected' }
 
   private directory: SlackUser[] | null = null
   private userNames: Map<string, string> = new Map()
   private signalListener: ((s: GraphSignal) => void) | null = null
 
-  constructor(config: SlackConnectorConfig, deps: SlackClientDeps = {}) {
+  constructor(
+    config: SlackConnectorConfig,
+    private readonly deps: SlackClientDeps = {},
+    /**
+     * Reads the saved token and allowlist again. The host builds the connector
+     * once at startup, so without this a token pasted in Settings later never
+     * reached it and Connect kept answering "token missing" (28-sep-2026).
+     */
+    private readonly loadConfig?: () => SlackConnectorConfig
+  ) {
     this.config = config
     this.client = new SlackClient(config.token, deps)
     this.capabilities = {
@@ -89,13 +102,35 @@ export class SlackConnector implements Connector, IdentityProvider, SourceProvid
       actions: this,
       signals: this
     }
-    // Stable id so the host can key persisted cursors/identities across restarts.
-    // Empty token → stable literal id so the host can still enumerate/register it.
-    this.id = config.token ? `slack:${hashToken(config.token)}` : 'slack:unconfigured'
+    this.id = SlackConnector.idFor(config.token)
     if (!config.token) this.status_ = { state: 'auth-needed', message: 'token missing' }
   }
 
-  readonly id: string
+  // Stable id so the host can key persisted cursors/identities across restarts.
+  // Empty token → stable literal id so the host can still enumerate/register it.
+  private static idFor(token: string): string {
+    return token ? `slack:${hashToken(token)}` : 'slack:unconfigured'
+  }
+
+  id: string
+
+  /** Host hook after Settings saves: pick up a new token. */
+  configure(): void {
+    this.reloadConfig()
+  }
+
+  private reloadConfig(): void {
+    if (!this.loadConfig) return
+    const next = this.loadConfig()
+    if (next.token !== this.config.token) {
+      this.client = new SlackClient(next.token, this.deps)
+      this.id = SlackConnector.idFor(next.token)
+      this.directory = null
+      this.userNames = new Map()
+      this.status_ = next.token ? { state: 'disconnected' } : { state: 'auth-needed', message: 'token missing' }
+    }
+    this.config = next
+  }
 
   status(): ConnectorStatus {
     return this.status_
@@ -103,6 +138,7 @@ export class SlackConnector implements Connector, IdentityProvider, SourceProvid
 
   /** Validate the token and move to connected/auth-needed. Idempotent. */
   async connect(): Promise<ConnectorStatus> {
+    this.reloadConfig()
     if (!this.config.token) {
       this.status_ = { state: 'auth-needed', message: 'token missing' }
       return this.status_
@@ -184,14 +220,6 @@ export class SlackConnector implements Connector, IdentityProvider, SourceProvid
   async listContainers(): Promise<SourceContainer[]> {
     const channels = await this.client.listChannels()
     return channels.map(channelToSourceContainer)
-  }
-
-  /** Channels the user opted into (config.channelAllowlist), for the scheduler. */
-  async listSelectedContainers(): Promise<SourceContainer[]> {
-    const allow = new Set(this.config.channelAllowlist ?? [])
-    if (allow.size === 0) return []
-    const all = await this.listContainers()
-    return all.filter((c) => allow.has(c.externalId))
   }
 
   async pull(container: SourceContainer, since?: string, opts?: SyncChannelOptions): Promise<PullResult> {
@@ -298,25 +326,9 @@ export const slackDescriptor: ConnectorDescriptor = {
       secret: true,
       placeholder: 'xoxb-… or xoxp-…',
       help: 'Bot or user token. Stored encrypted; never written to the database.'
-    },
-    {
-      key: 'channelAllowlist',
-      label: 'Channels to sync',
-      type: 'text',
-      required: false,
-      placeholder: 'C0123ABCD, C0456EFGH',
-      help: 'Comma-separated channel IDs to sync. Leave empty to sync none until you opt channels in.'
     }
   ],
   capabilityKinds: ['identity', 'sources', 'actions', 'signals']
-}
-
-/** Parse the comma-separated `channelAllowlist` config field into ids. */
-function parseAllowlist(value: unknown): string[] {
-  return String(value ?? '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
 }
 
 /**
@@ -324,10 +336,7 @@ function parseAllowlist(value: unknown): string[] {
  * Register with `descriptor.id` ('slack') → this factory in the host registry.
  */
 export const slackConnectorFactory: ConnectorFactory = (ctx: ConnectorContext) => {
-  const token = ctx.getSecret('token') ?? ''
-  const cfg = ctx.getConfig()
-  return createSlackConnector({
-    token,
-    channelAllowlist: parseAllowlist(cfg.channelAllowlist)
-  })
+  // Channels are chosen per source in Settings (host source state), not here.
+  const load = (): SlackConnectorConfig => ({ token: ctx.getSecret('token') ?? '' })
+  return createSlackConnector(load(), {}, load)
 }

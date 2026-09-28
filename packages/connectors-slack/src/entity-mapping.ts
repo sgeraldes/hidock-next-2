@@ -224,6 +224,8 @@ export function channelToSourceContainer(channel: SlackChannel): SourceContainer
     externalId: channel.id,
     name: channel.name ?? channel.id,
     kind: channel.is_im ? 'dm' : channel.is_private ? 'private_channel' : 'channel',
+    // Off until the user picks it in Settings (see SourceContainer.defaultEnabled).
+    defaultEnabled: false,
     metadata: {
       isPrivate: channel.is_private ?? false,
       isMember: channel.is_member ?? false,

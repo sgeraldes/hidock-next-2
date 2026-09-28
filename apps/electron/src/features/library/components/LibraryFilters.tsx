@@ -44,7 +44,6 @@ interface LibraryFiltersProps {
   artifactTypes: LibraryArtifactTypeDescriptor[]
   hasRatedQuality: boolean
   exclusiveFilter: ExclusiveLocationFilter
-  categoryFilter: string
   qualityFilter: string
   statusFilter: string
   sourceTypeFilter: SourceTypeFilter
@@ -92,7 +91,6 @@ const EVALUATION_SECTIONS: { key: EvaluationKey; title: string; any: string; opt
   { key: 'warning', title: 'Transcript warnings', any: 'Any', options: WARNING_FILTERS }
 ]
 
-const CATEGORIES = ['all', 'meeting', 'interview', '1:1', 'brainstorm'] as const
 const DURATION_PRESETS: DurationPreset[] = ['all', 'under10s', 'under1m', 'under5m', 'over5m']
 
 function iconForType(type: string): LucideIcon {
@@ -110,7 +108,6 @@ export function LibraryFilters({
   artifactTypes,
   hasRatedQuality,
   exclusiveFilter,
-  categoryFilter,
   qualityFilter,
   statusFilter,
   sourceTypeFilter,
@@ -138,7 +135,6 @@ export function LibraryFilters({
 }: LibraryFiltersProps) {
   const selectedType = artifactTypes.find((type) => type.id === sourceTypeFilter)
   const supportsDuration = selectedType?.capabilities.includes('timed') ?? false
-  const supportsConversation = selectedType?.capabilities.includes('conversation') ?? false
   const supportsQuality = hasRatedQuality && (sourceTypeFilter === 'all' || selectedType?.capabilities.includes('rateable'))
 
   const populatedTypes = artifactTypes.filter((type) => (typeCounts[type.id] ?? 0) > 0 || type.id === sourceTypeFilter)
@@ -149,7 +145,6 @@ export function LibraryFilters({
 
   const advancedActiveCount = [
     exclusiveFilter !== 'all',
-    supportsConversation && categoryFilter !== 'all',
     supportsQuality && qualityFilter !== 'all',
     statusFilter !== 'all',
     supportsDuration && durationPreset !== 'all',
@@ -182,9 +177,6 @@ export function LibraryFilters({
   }
   if (supportsDuration && durationPreset !== 'all') {
     chips.push({ key: 'duration', label: DURATION_PRESET_LABELS[durationPreset], clear: () => onDurationPresetChange('all') })
-  }
-  if (supportsConversation && categoryFilter !== 'all') {
-    chips.push({ key: 'category', label: categoryFilter, clear: () => onCategoryFilterChange('all') })
   }
   if (supportsQuality && qualityFilter !== 'all') {
     chips.push({ key: 'quality', label: qualityFilter, clear: () => onQualityFilterChange('all') })
@@ -375,14 +367,6 @@ export function LibraryFilters({
                 </select>
               </section>
 
-              {supportsConversation && (
-                <section className="space-y-1.5">
-                  <div className="text-xs font-semibold text-foreground/70">Conversation type</div>
-                  <div className="flex flex-wrap gap-1" role="group" aria-label="Filter by conversation type">
-                    {CATEGORIES.map((category) => <FacetButton key={category} active={categoryFilter === category} onClick={() => onCategoryFilterChange(category)} label={category === 'all' ? 'Any' : category.charAt(0).toUpperCase() + category.slice(1)} />)}
-                  </div>
-                </section>
-              )}
             </div>
           </PopoverContent>
         </Popover>

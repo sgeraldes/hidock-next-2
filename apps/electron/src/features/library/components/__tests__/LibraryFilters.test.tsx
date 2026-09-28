@@ -30,7 +30,6 @@ function renderFilters(overrides: Partial<React.ComponentProps<typeof LibraryFil
       artifactTypes={artifactTypes}
       hasRatedQuality={false}
       exclusiveFilter="all"
-      categoryFilter="all"
       qualityFilter="all"
       statusFilter="all"
       sourceTypeFilter="all"
@@ -57,7 +56,7 @@ describe('LibraryFilters — registry-driven artifact types', () => {
   })
 
   it('invokes the type handler and clears audio-only state before selecting Images', () => {
-    const handlers = renderFilters({ sourceTypeFilter: 'audio', durationPreset: 'under1m', categoryFilter: 'meeting' })
+    const handlers = renderFilters({ sourceTypeFilter: 'audio', durationPreset: 'under1m' })
     fireEvent.click(screen.getByRole('button', { name: /Images \(3\)/ }))
     expect(handlers.onDurationPresetChange).toHaveBeenCalledWith('all')
     expect(handlers.onCategoryFilterChange).toHaveBeenCalledWith('all')
@@ -66,11 +65,11 @@ describe('LibraryFilters — registry-driven artifact types', () => {
 })
 
 describe('LibraryFilters — capability-specific controls', () => {
-  it('shows Duration and conversation controls for Audio', () => {
+  it('shows Duration for Audio, and no old conversation-type facet (Jev Kind replaces it)', () => {
     renderFilters({ sourceTypeFilter: 'audio' })
     fireEvent.click(screen.getByRole('button', { name: /More filters and sorting/i }))
     expect(screen.getAllByText('Duration')).toHaveLength(2)
-    expect(screen.getByText('Conversation type')).toBeInTheDocument()
+    expect(screen.queryByText('Conversation type')).not.toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'Duration' })).toBeInTheDocument()
   })
 

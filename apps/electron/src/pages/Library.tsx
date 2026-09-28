@@ -879,7 +879,8 @@ export function Library() {
     return baseRecordings.filter((rec) => {
       if (!matchesSourceTypeFilter(getSourceType(rec, artifactTypes), sourceTypeFilter)) return false
       if (!matchesDurationPreset(rec, durationPreset)) return false
-      if (categoryFilter !== null && rec.category !== categoryFilter) return false
+      // The old conversation-type facet is gone (Jev's Kind replaces it); a value
+      // still persisted from before must not hide recordings with no way to clear it.
       if (qualityFilter !== null && rec.quality !== qualityFilter) return false
       if (statusFilter !== null && rec.status !== statusFilter) return false
       if (integrityFilter !== null && !matchesIntegrityFilter(transcripts.get(rec.id), integrityFilter)) return false
@@ -891,7 +892,7 @@ export function Library() {
       if (warningFilter !== null && !matchesWarningFilter(rec, warningFilter)) return false
       return true
     })
-  }, [baseRecordings, artifactTypes, sourceTypeFilter, durationPreset, categoryFilter, qualityFilter, statusFilter, integrityFilter, audioFilter, kindFilter, contextFilter, starsFilter, warningFilter, transcripts])
+  }, [baseRecordings, artifactTypes, sourceTypeFilter, durationPreset, qualityFilter, statusFilter, integrityFilter, audioFilter, kindFilter, contextFilter, starsFilter, warningFilter, transcripts])
 
   // How many recordings each Audio-filter value matches. Only audio sources
   // have a category; everything else is left out rather than counted unchecked.
@@ -2496,7 +2497,6 @@ export function Library() {
               artifactTypes={artifactTypes}
               hasRatedQuality={ratedCount > 0}
               exclusiveFilter={exclusiveFilter}
-              categoryFilter={categoryFilter ?? 'all'}
               qualityFilter={qualityFilter ?? 'all'}
               statusFilter={statusFilter ?? 'all'}
               sourceTypeFilter={sourceTypeFilter}

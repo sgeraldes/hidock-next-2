@@ -1,5 +1,13 @@
 import { describe, it, expect, vi } from 'vitest'
 import type { ConnectorContext } from '@hidock/connectors'
+// This file covers the "register your own app" path, so it runs without the
+// shipped client id; default-id.test.ts covers the shipped one.
+vi.mock('../default-app', () => ({
+  DEFAULT_M365_CLIENT_ID: '',
+  DEFAULT_M365_TENANT: 'common',
+  hasDefaultM365App: () => false
+}))
+
 import { M365Connector, m365Descriptor } from '../m365-connector'
 
 function fakeCtx(config: Record<string, string> = {}): ConnectorContext & { statuses: any[] } {
@@ -56,8 +64,7 @@ describe('M365Connector — descriptor', () => {
   })
 
   it('with no shipped default: clientId is required and setup is NOT optional', () => {
-    // The shipped default client id is empty by default (placeholder), so the
-    // full "register your own app" walkthrough applies.
+    // With no shipped client id the full "register your own app" walkthrough applies.
     expect(m365Descriptor.setupOptional).toBe(false)
     const clientId = m365Descriptor.configFields.find((f) => f.key === 'clientId')!
     expect(clientId.required).toBe(true)
