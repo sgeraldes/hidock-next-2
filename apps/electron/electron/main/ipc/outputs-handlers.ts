@@ -18,6 +18,7 @@ import { run, runInTransaction, queryOne } from '../services/database'
 import { filterEligibleActionableRows } from '../services/actionable-eligibility'
 import { getConfig, updateConfig } from '../services/config'
 import { randomUUID } from 'crypto'
+import { refuseWhileTranscriptsMove } from '../services/storage-move-state'
 
 /**
  * Result of a "Open in Claude Code" launch request. `needsFolder` asks the
@@ -50,6 +51,7 @@ export function exportOutputToFile(content: string, templateId: string): string 
         .replace(/^-+|-+$/g, '')
         .slice(0, 60) || templateId
     const savedPath = join(outputsDir, `${date}-${templateId}-${slug}.md`)
+    refuseWhileTranscriptsMove()
     writeFileSync(savedPath, content, 'utf-8')
     return savedPath
   } catch (exportErr) {

@@ -48,6 +48,13 @@ export function StorageUsageLine({ usage, onLimitSaved }: { usage: StorageLocati
       .catch((err: unknown) => toast.error('Could not save the limit', err instanceof Error ? err.message : undefined))
   }
 
+  if (usage.error) {
+    return (
+      <p className="mt-1.5 text-xs text-destructive" data-testid={`storage-usage-${id}`}>
+        Could not measure this folder: {usage.error}.{id === 'recordings' && usage.limitBytes ? ' Automatic downloads pause until it can be read.' : ''}
+      </p>
+    )
+  }
   const usedShare = usage.limitBytes ? Math.min(1, usage.bytes / usage.limitBytes) : null
   return (
     <div className="mt-1.5 space-y-1 text-xs" data-testid={`storage-usage-${id}`}>

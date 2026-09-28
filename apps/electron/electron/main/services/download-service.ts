@@ -40,6 +40,7 @@ import { emitActivityLog } from './activity-log'
 import { cancelActiveTransfer, cancelActiveTransferByName, getActiveTransferFilename } from './download-transfer-controller'
 import { existsSync } from 'fs'
 import { join, basename, dirname } from 'path'
+import { resetStorageLimitCache } from './storage-usage'
 
 /**
  * D-022 — why a requested file did not enter the queue.
@@ -962,6 +963,7 @@ export class DownloadService {
       // cancellation check, so a cancel that lands mid-write never yields a visible
       // half-file (and never deletes a pre-existing valid recording — collisions get
       // a numeric suffix). isCancelled() is re-evaluated inside, just before rename.
+      resetStorageLimitCache() // the folder is about to grow; the next limit check measures again
       const filePath = await saveRecording(filename, data, undefined, item.recordingDate, {
         isCancelled: () => this.isCancelledStatus(item),
       })

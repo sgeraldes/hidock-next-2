@@ -28,6 +28,7 @@ import { StringDecoder } from 'string_decoder'
 import { getTranscriptsPath, getCachePath } from './file-storage'
 import { queryAll, queryOne, run } from './database'
 import { isRecordingEligible, filterEligibleRecordingIds } from './recording-eligibility'
+import { refuseWhileTranscriptsMove } from './storage-move-state'
 
 /**
  * Ownership of a wiki page, as declared by the `recording_id` in its YAML
@@ -897,6 +898,7 @@ function writeIfChanged(path: string, content: string): boolean {
   } catch {
     /* missing / unreadable — fall through and write */
   }
+  refuseWhileTranscriptsMove()
   writeFileSync(path, content, 'utf-8')
   return true
 }
