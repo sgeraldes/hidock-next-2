@@ -134,9 +134,9 @@ Unchanged by this session. Each keeps its row in the inventory; the date is the 
 | Boot stalls named on 07-19 and never fixed: synchronous `reconcileOrganization`, ICS fetch with no timeout | Claude (section 5) | 26-sep |
 | 07-14 overnight lanes E (incremental calendar sync), G, H, N and M's closing walk, never started | Claude: re-scope against today's code | 29-sep |
 | SPEC-013 resource-aware transcription (`docs/superpowers/specs/2026-09-16-resource-aware-transcription-execution.md`, moved from the archived repo on 24-sep): process priority, stage checkpoints, download backpressure (the CPU-percentage thread budget is built) | Claude: re-scope against today's code | 29-sep |
-| Signing the Model Host installer (certificate) | **Sebastián** decides and buys | open |
-| Whether the file name always shows in the Library row | **Sebastián** decides | open |
+| Signing the Model Host installer (certificate) | Decided 25-sep (Sebastián): stays unsigned; one SmartScreen click per install on his own machines | done |
+| Whether the file name always shows in the Library row | Decided 25-sep (Sebastián): never in the list, only in the reader's Metadata section; built in the library-file-name PR | done |
 | `ENABLE_REMOTE_DEBUGGING` still present (empty) in the user environment | Claude | 25-sep |
-| Shared MCP HTTP server proposal (`geraldes-plugins` `950e300`; the plugin was disabled on 18-sep) | Sebastián decides whether it is still wanted | open |
+| Shared MCP HTTP server proposal (`geraldes-plugins` `950e300`; the plugin was disabled on 18-sep) | Decided 25-sep (Sebastián): dropped; agents use the brain API (#29) | done |
 | Card `hidock_frozen_20260918` (blocked) | Claude: close or reopen with today's evidence | 25-sep |
 | Cards `ops_hidock_bridge_down_20260819`, `ops_hidock_sin_link_20260827`, `hidock_deps_vitest5_electron44_20260916` | Claude | 26-sep |

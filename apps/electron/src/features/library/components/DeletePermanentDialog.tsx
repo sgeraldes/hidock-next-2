@@ -59,7 +59,8 @@ export interface DeletePermanentDialogImpact {
 export interface DeletePermanentDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  filename: string
+  /** How the recording is named to the user (display title, never the device file name). */
+  title: string
   /** Extended impact (T6 fills graphEstimate + onDevice; T5 renders it). All optional-safe. */
   impact?: DeletePermanentDialogImpact
   /**
@@ -103,7 +104,7 @@ export function buildRemovesText(impact?: DeletePermanentDialogImpact): string {
 export function DeletePermanentDialog({
   open,
   onOpenChange,
-  filename,
+  title,
   impact,
   deviceConnected,
   onConfirm
@@ -113,7 +114,7 @@ export function DeletePermanentDialog({
   // Default unchecked every time the dialog (re)opens, including for a different recording.
   useEffect(() => {
     if (open) setAlsoDeleteFromDevice(false)
-  }, [open, filename])
+  }, [open, title])
 
   const removesText = buildRemovesText(impact)
   const showDeviceCheckbox = impact?.onDevice === true
@@ -129,7 +130,7 @@ export function DeletePermanentDialog({
               Description element is a <p>, which can't contain another <p>. */}
           <AlertDialogDescription asChild>
             <div className="space-y-2 text-left">
-              <p>Delete &quot;{filename}&quot; permanently?</p>
+              <p>Delete &quot;{title}&quot; permanently?</p>
               {/* AR3-8: every count is labelled point-in-time — never implied as a
                   live/future guarantee. */}
               <p>As of now, this removes {removesText}.</p>

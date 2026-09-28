@@ -392,7 +392,7 @@ Job output is kept 24 hours after completion. Times are seconds.
 
 ### Voiceprints and cross-recording identification
 This is the only service in the list that hands back a reusable voice signature.
-- `POST /v1/voiceprint` with `{ "url": "...", "model": "precision-3" }`; sample must be at most 30 seconds. Job output: `{ "voiceprint": "U29tZVZvaWNlUHJpbnREYXRhMQ==" }`, an opaque base64 string that you store yourself (it is deleted from pyannote after 24 h).
+- `POST /v1/voiceprint` with `{ "url": "...", "model": "precision-3" }`; sample must be at most 30 seconds. Job output: `{ "voiceprint": "U29tZVZvaWNlUHJpbnREYXRhMQ==" }`, an opaque base64 string that you store yourself (it is deleted from pyannote after 24 h). <!-- pragma: allowlist secret (documentation example, base64 of a placeholder) -->
 - `POST /v1/identify`:
   ```json
   { "url": "media://rec-002",

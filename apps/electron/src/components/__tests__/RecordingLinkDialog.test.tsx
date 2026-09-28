@@ -56,16 +56,18 @@ beforeEach(() => {
 })
 
 describe('RecordingLinkDialog — decidable match', () => {
-  it('leads the header with the transcript title and demotes the filename', async () => {
+  it('leads the header with the transcript title and never shows the filename', async () => {
     render(<RecordingLinkDialog recording={RECORDING} open onClose={vi.fn()} onResolved={vi.fn()} />)
 
     // Transcript-derived title is the headline.
     expect(await screen.findByText('Cierre de Proyecto y Acciones de Retrospectiva')).toBeInTheDocument()
     // Summary is shown.
     expect(screen.getByText(/definió acciones de retrospectiva/i)).toBeInTheDocument()
-    // Filename + speaker count are relegated to the quiet metadata line.
-    const meta = screen.getByText(/2026Jul08-140719-Rec46\.hda/)
-    expect(meta.textContent).toContain('2 speakers')
+    // Duration + speaker count sit on the quiet metadata line; the file name
+    // is never shown (owner, 25-sep-2026: it lives only in the reader's Metadata).
+    const meta = screen.getByText(/2 speakers/)
+    expect(meta.textContent).toContain('30m 0s')
+    expect(screen.queryByText(/2026Jul08-140719-Rec46\.hda/)).not.toBeInTheDocument()
   })
 
   it('flags the leading candidate as the best match and shows discriminating scores', async () => {
@@ -83,13 +85,14 @@ describe('RecordingLinkDialog — decidable match', () => {
     expect(screen.getByText(/No meeting — standalone recording/)).toBeInTheDocument()
   })
 
-  it('falls back to the filename headline when there is no transcript', async () => {
+  it('falls back to the date and duration line when there is no transcript', async () => {
     primeApi({ success: true, data: [], recordingContext: { title: null, summary: null, speakerCount: null, hasTranscript: false } })
     render(<RecordingLinkDialog recording={RECORDING} open onClose={vi.fn()} onResolved={vi.fn()} />)
 
     await waitFor(() => {
-      expect(screen.getByText(/2026Jul08-140719-Rec46\.hda/)).toBeInTheDocument()
+      expect(screen.getByText(/30m 0s/)).toBeInTheDocument()
     })
+    expect(screen.queryByText(/2026Jul08-140719-Rec46\.hda/)).not.toBeInTheDocument()
     expect(screen.queryByText('Best match')).not.toBeInTheDocument()
   })
 

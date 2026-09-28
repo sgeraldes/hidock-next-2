@@ -14,7 +14,8 @@ import { WaveformCanvas } from '@/components/WaveformCanvas'
 import { formatTimestamp } from '@/utils/audioUtils'
 
 interface AudioPlayerProps {
-  filename?: string
+  /** Visible label: the recording's display title. Never its file name. */
+  title?: string
   /**
    * The recording this player is showing. When provided, waveform/loading/error
    * states are scoped to it, so a different recording's stale error or waveform
@@ -39,7 +40,7 @@ interface AudioPlayerProps {
  * The actual audio playback is handled by OperationController.
  * This component displays the playback state, waveform, and controls.
  */
-export function AudioPlayer({ filename, recordingId, filePath, onClose }: AudioPlayerProps) {
+export function AudioPlayer({ title, recordingId, filePath, onClose }: AudioPlayerProps) {
   // Read playback state from UIStore
   const isPlaying = useUIStore((state) => state.isPlaying)
   const currentlyPlayingId = useUIStore((state) => state.currentlyPlayingId)
@@ -124,8 +125,7 @@ export function AudioPlayer({ filename, recordingId, filePath, onClose }: AudioP
 
   return (
     <div className="p-4 bg-muted rounded-lg space-y-3">
-      {/* Filename if provided */}
-      {filename && <p className="text-sm font-medium truncate">{filename}</p>}
+      {title && <p className="text-sm font-medium truncate">{title}</p>}
 
       {/* Waveform visualization */}
       {waveformData ? (
@@ -159,7 +159,7 @@ export function AudioPlayer({ filename, recordingId, filePath, onClose }: AudioP
         </div>
       ) : (
         <div className="h-20 bg-background rounded flex items-center justify-center text-sm text-muted-foreground">
-          {filename ? 'Press Play to load the waveform' : 'Select a recording to view waveform'}
+          {title || recordingId ? 'Press Play to load the waveform' : 'Select a recording to view waveform'}
         </div>
       )}
 

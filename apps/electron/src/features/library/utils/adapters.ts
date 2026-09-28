@@ -4,6 +4,7 @@
 
 import { UnifiedRecording, hasLocalPath, isDeviceOnly } from '@/types/unified-recording'
 import { AudioSource, ProcessingStatus, SourceLocation } from '../types/source'
+import { getDisplayTitle } from './getDisplayTitle'
 
 /**
  * Convert UnifiedRecording to AudioSource
@@ -50,7 +51,7 @@ export function unifiedRecordingToAudioSource(recording: UnifiedRecording): Audi
   const source: AudioSource = {
     id: recording.id,
     type: 'audio',
-    title: recording.title || recording.filename,
+    title: getDisplayTitle(recording).primaryText,
     capturedAt: recording.dateRecorded.toISOString(),
     location,
     processingStatus,

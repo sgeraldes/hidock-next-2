@@ -274,6 +274,7 @@ export interface AppConfig {
   features?: FeaturesConfig
   ui: {
     /** Library title for sources with no calendar event. */
+    /** No longer read (25-sep-2026): the Library never titles a source by its file name. */
     unassignedTitleSource?: 'suggested' | 'filename'
     theme: 'light' | 'dark' | 'system'
     defaultView: 'week' | 'month'

@@ -6,6 +6,7 @@ import { parseHiDockFilenameDateIso } from './hidock-filename'
 import {
   getRecordingByFilenameVariants,
   insertRecording,
+  isFilePurged,
   getMeetings,
   linkRecordingToMeeting,
   updateRecordingLifecycle,
@@ -127,6 +128,23 @@ function generateRecordingId(_filePath: string): string {
   return randomUUID()
 }
 
+/**
+ * Was this file permanently deleted in the app? A purge removes the recording
+ * and leaves filename tombstones (every name variant, see purgeRecording), but
+ * it keeps the audio file in the recordings folder. Without this check the
+ * folder scan re-imported every purged file on the next start: on 25-sep all
+ * 22 purged files still on disk were back in the library.
+ */
+export function isPurgedFile(filename: string): boolean {
+  const variants = new Set([
+    filename,
+    filename.replace(/\.hda$/i, '.wav'),
+    filename.replace(/\.wav$/i, '.hda'),
+    filename.replace(/\.(hda|wav)$/i, '.mp3'),
+  ])
+  return [...variants].some((v) => isFilePurged(v))
+}
+
 async function processNewRecording(filePath: string): Promise<void> {
   try {
     const filename = basename(filePath)
@@ -160,6 +178,9 @@ async function processNewRecording(filePath: string): Promise<void> {
     // using it silently shifts the recording's timeline and breaks meeting
     // correlation (the 2026-07-23 Rec39a-d mp3 incident). Fall back to mtime
     // only for names that carry no date.
+    // A purged recording stays purged even though its file is still here.
+    if (isPurgedFile(filename)) return
+
     const dateRecorded = parseHiDockFilenameDateIso(filename) ?? stats.mtime.toISOString()
 
     const recordingId = generateRecordingId(filePath)

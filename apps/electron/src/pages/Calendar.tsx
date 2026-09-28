@@ -43,6 +43,8 @@ import { toast } from '@/components/ui/toaster'
 import { CalendarHeader, CalendarStatsBar, StatusIcon, RecordingTooltipContent, MeetingOverlayTooltipContent } from '@/components/calendar'
 import type { LocationFilter, SortOption } from '@/components/calendar'
 
+import { getDisplayTitle } from '@/features/library/utils/getDisplayTitle'
+
 // Extracted calendar utilities
 import {
   type CalendarViewType,
@@ -644,8 +646,8 @@ export function Calendar() {
     const deviceService = getHiDockDeviceService()
     if (!deviceService.isConnected()) return
 
-    // Confirm deletion
-    const confirmed = window.confirm(`Delete "${recording.filename}" from device? This cannot be undone.`)
+    // Confirm deletion (named by its display title, never the file name).
+    const confirmed = window.confirm(`Delete "${getDisplayTitle(recording).primaryText}" from device? This cannot be undone.`)
     if (!confirmed) return
 
     setDeleting(recording.id)
@@ -669,8 +671,10 @@ export function Calendar() {
   const handleDeleteLocal = useCallback(async (recording: UnifiedRecording) => {
     if (!hasLocalPath(recording)) return
 
+    // Named by its display title, never the file name (owner, 25-sep-2026).
+    const displayTitle = getDisplayTitle(recording).primaryText
     const confirmed = window.confirm(
-      `Move "${recording.filename}" to Trash? It will be hidden and excluded from all AI processing. ` +
+      `Move "${displayTitle}" to Trash? It will be hidden and excluded from all AI processing. ` +
         'Nothing is erased — restore it from Trash, or delete it permanently later.'
     )
     if (!confirmed) return
@@ -680,7 +684,7 @@ export function Calendar() {
       const res = await window.electronAPI.recordings.deleteCascade(recording.id, false)
       if (!res?.success) throw new Error(res?.error || 'Delete failed')
       await refreshRecordings(false)
-      toast.success('Moved to Trash', `"${recording.filename}" is hidden and excluded from processing.`, {
+      toast.success('Moved to Trash', `"${displayTitle}" is hidden and excluded from processing.`, {
         duration: 8000,
         action: {
           label: 'Undo',
@@ -692,7 +696,7 @@ export function Calendar() {
       })
     } catch (e) {
       console.error('Delete failed:', e)
-      toast.error('Delete Failed', `Failed to move "${recording.filename}" to Trash. Please try again.`)
+      toast.error('Delete Failed', `Failed to move "${displayTitle}" to Trash. Please try again.`)
     } finally {
       setDeleting(null)
     }
@@ -893,6 +897,9 @@ export function Calendar() {
                 {filteredRecordings.map((recording) => {
                   const canPlay = hasLocalPath(recording)
                   const isSelected = selectedIds.has(recording.id)
+                  // A recording's file name is never shown (owner, 25-sep-2026): the
+                  // display title is the meeting/user/suggested title or a date label.
+                  const displayTitle = getDisplayTitle(recording).primaryText
 
                   return (
                     <div
@@ -900,7 +907,7 @@ export function Calendar() {
                       role="button"
                       tabIndex={0}
                       aria-pressed={isSelected}
-                      aria-label={`${recording.filename}, ${formatShortDate(recording.dateRecorded)} ${formatShortTime(recording.dateRecorded)}${isSelected ? ', selected' : ''}`}
+                      aria-label={`${displayTitle}, ${formatShortDate(recording.dateRecorded)} ${formatShortTime(recording.dateRecorded)}${isSelected ? ', selected' : ''}`}
                       onClick={() => toggleSelection(recording.id)}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' || e.key === ' ') {
@@ -1027,6 +1034,9 @@ export function Calendar() {
                 {filteredRecordings.map((recording) => {
                   const canPlay = hasLocalPath(recording)
                   const isSelected = selectedIds.has(recording.id)
+                  // A recording's file name is never shown (owner, 25-sep-2026): the
+                  // display title is the meeting/user/suggested title or a date label.
+                  const displayTitle = getDisplayTitle(recording).primaryText
 
                   return (
                     <div
@@ -1041,7 +1051,7 @@ export function Calendar() {
                         onClick={() => toggleSelection(recording.id)}
                         className="flex-shrink-0 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                         aria-pressed={isSelected}
-                        aria-label={`${isSelected ? 'Deselect' : 'Select'} ${recording.filename}`}
+                        aria-label={`${isSelected ? 'Deselect' : 'Select'} ${displayTitle}`}
                       >
                         {isSelected ? (
                           <CheckSquare className="h-4 w-4 text-primary" />
@@ -1063,9 +1073,9 @@ export function Calendar() {
                         {formatShortTime(recording.dateRecorded)}
                       </span>
 
-                      {/* Filename */}
-                      <span className="flex-1 truncate font-mono text-xs" title={recording.filename}>
-                        {recording.filename}
+                      {/* Title */}
+                      <span className="flex-1 truncate text-xs" title={displayTitle}>
+                        {displayTitle}
                       </span>
 
                       {/* Duration */}
@@ -1157,7 +1167,7 @@ export function Calendar() {
                 if (rec && hasLocalPath(rec)) {
                   return (
                     <AudioPlayer
-                      filename={rec.filename}
+                      title={getDisplayTitle(rec).primaryText}
                       onClose={() => audioControls.stop()}
                     />
                   )

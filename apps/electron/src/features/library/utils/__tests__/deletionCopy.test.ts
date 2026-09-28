@@ -223,7 +223,7 @@ describe('T5 success/partial toast titles (S1)', () => {
 // cover the decision function directly.
 describe('selectCompletionToast — outcome ladder (T6 fix rounds CX-T6-1..6)', () => {
   const baseInputs = {
-    filename: 'meeting.wav',
+    name: 'meeting.wav',
     deviceOutcome: 'not-requested' as const,
     filesPending: false,
     pendingKinds: [] as string[],

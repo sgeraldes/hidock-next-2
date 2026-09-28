@@ -224,12 +224,14 @@ export function RecordingLinkDialog({
   if (!recording) return null
 
   // Header context comes from the transcript (fetched with the candidates). The
-  // filename, duration and speaker count drop to a quiet metadata line beneath.
+  // recording date, duration and speaker count form a quiet metadata line beneath
+  // — never the file name (owner, 25-sep-2026: that lives only in the reader's
+  // Metadata section).
   const headlineTitle = recordingContext?.title ?? null
   const headlineSummary = recordingContext?.summary ?? null
   const speakerCount = recordingContext?.speakerCount ?? null
   const metaLine = [
-    recording.filename,
+    recording.date_recorded ? formatDateTime(recording.date_recorded) : null,
     recording.duration_seconds ? formatDuration(recording.duration_seconds) : null,
     speakerCount ? `${speakerCount} speaker${speakerCount === 1 ? '' : 's'}` : null
   ]
@@ -261,9 +263,9 @@ export function RecordingLinkDialog({
           </DialogTitle>
           <DialogDescription className="text-sm space-y-1">
             {/* Lead with what the recording IS (transcript-derived title/summary)
-                when known; the raw filename, duration and speaker count drop to a
-                quiet metadata line. The fetched context wins over the props so the
-                header is right even when the opener only had a filename. */}
+                when known; date, duration and speaker count form a quiet metadata
+                line (never the file name). The fetched context wins over the props
+                so the header is right even when the opener only had a filename. */}
             {headlineTitle ? (
               <>
                 <span className="font-medium block leading-snug text-foreground">{headlineTitle}</span>
@@ -386,7 +388,7 @@ export function RecordingLinkDialog({
                 {linkedRecordings.map(r => (
                   <div key={r.id} className="flex items-center gap-3 px-3 py-2">
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm truncate">{(r as any).title || r.filename}</p>
+                      <p className="text-sm truncate">{(r as any).title || 'Untitled recording'}</p>
                       <p className="text-xs text-muted-foreground">{formatDateTime(r.date_recorded)}</p>
                     </div>
                     <Button
@@ -394,7 +396,7 @@ export function RecordingLinkDialog({
                       size="icon"
                       className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
                       title="Remove meeting link (meeting is not deleted)"
-                      aria-label={`Remove meeting link for ${(r as any).title || r.filename}`}
+                      aria-label={`Remove meeting link for ${(r as any).title || 'the recording from ' + formatDateTime(r.date_recorded)}`}
                       disabled={unlinkingId === r.id}
                       onClick={() => handleUnlinkOther(r.id)}
                     >

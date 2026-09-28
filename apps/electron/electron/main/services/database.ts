@@ -7805,6 +7805,25 @@ export function isFilePurged(filename: string): boolean {
  * v51 — every purge-tombstoned filename (all variants), for renderer surfaces
  * that badge "Deleted — still on device" (DeviceFileList).
  */
+/**
+ * Undo a purge's tombstones for this name (every extension variant). Called
+ * when the owner explicitly downloads a purged file again: automatic paths
+ * skip purged files, so a completed download of one is a deliberate restore.
+ * Without this the restored recording stayed hidden (the Library filters
+ * tombstoned names) and the folder scan refused it. Returns rows removed.
+ *
+ * All variants go in a single DELETE so the undo is atomic: a failure removes
+ * nothing and throws, and the caller (download completion) reports the restore
+ * as failed rather than leaving a half-cleared tombstone set.
+ */
+export function clearPurgeTombstones(filename: string): number {
+  const base = filename.replace(/\.(hda|wav|mp3)$/i, '')
+  const names = [...new Set([filename, `${base}.hda`, `${base}.wav`, `${base}.mp3`])]
+  const placeholders = names.map(() => '?').join(', ')
+  run(`DELETE FROM purged_files WHERE filename IN (${placeholders})`, names)
+  return getDatabase().getRowsModified()
+}
+
 export function getPurgedFilenames(): string[] {
   try {
     return queryAll<{ filename: string }>('SELECT filename FROM purged_files').map((r) => r.filename)

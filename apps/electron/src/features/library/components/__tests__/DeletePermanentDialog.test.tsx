@@ -18,7 +18,7 @@ function renderDialog(overrides: Partial<React.ComponentProps<typeof DeletePerma
     <DeletePermanentDialog
       open
       onOpenChange={onOpenChange}
-      filename="meeting.wav"
+      title="meeting.wav"
       impact={baseImpact}
       deviceConnected={false}
       onConfirm={onConfirm}

@@ -15,8 +15,6 @@ interface ActionableDetailProps {
 /** The subset of a recording row the source panel needs to render a link. */
 interface SourceRecording {
   id: string
-  filename: string
-  original_filename: string | null
   date_recorded: string | null
   meeting_id: string | null
 }
@@ -100,8 +98,8 @@ export function ActionableDetail({ actionable, resolveRecipient }: ActionableDet
   const captureTitle = capture?.title?.trim() || 'Source recording'
   const captureDate = capture?.capturedAt ? formatDateTime(capture.capturedAt) : null
 
-  const recordingTitle =
-    recording?.original_filename?.trim() || recording?.filename?.trim() || 'Recording'
+  // Never the file name (owner, 25-sep-2026); the date shows beside it.
+  const recordingTitle = 'Recording'
   const recordingDate = recording?.date_recorded ? formatDateTime(recording.date_recorded) : null
 
   return (

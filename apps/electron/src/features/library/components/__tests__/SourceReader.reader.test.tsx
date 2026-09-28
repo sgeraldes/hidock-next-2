@@ -152,8 +152,9 @@ describe('SourceReader — duration', () => {
 describe('SourceReader — header date', () => {
   it('renders the date WITH the year', () => {
     render(<SourceReader recording={makeRecording({ dateRecorded: new Date('2024-01-15T10:00:00Z') })} />)
-    // formatSmartDate → "Jan 15, 2024 · …"
-    expect(screen.getByText(/Jan 15, 2024/)).toBeInTheDocument()
+    // formatSmartDate → "Jan 15, 2024 · …". An untitled recording is titled by
+    // its date too, so the date can appear more than once.
+    expect(screen.getAllByText(/Jan 15, 2024/).length).toBeGreaterThan(0)
   })
 })
 

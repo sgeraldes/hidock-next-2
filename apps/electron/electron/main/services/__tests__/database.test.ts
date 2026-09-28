@@ -78,7 +78,9 @@ import {
   selectMeetingForRecordingByUser,
   getRecordingByFilename,
   upsertRecordingFromDevice,
-  markRecordingsNotOnDevice
+  markRecordingsNotOnDevice,
+  clearPurgeTombstones,
+  isFilePurged,
 } from '../database'
 
 // ---------------------------------------------------------------------------
@@ -672,6 +674,35 @@ describe('Database Service', () => {
   // =========================================================================
   // 9. resetStuckTranscriptions
   // =========================================================================
+  describe('clearPurgeTombstones()', () => {
+    it('removes every extension variant of a purged name and nothing else', () => {
+      for (const n of ['2025Dec17-212704-Rec50.hda', '2025Dec17-212704-Rec50.wav', '2025Dec17-212704-Rec50.mp3', 'other.hda']) {
+        run('INSERT OR IGNORE INTO purged_files (filename) VALUES (?)', [n])
+      }
+      expect(clearPurgeTombstones('2025Dec17-212704-Rec50.wav')).toBe(3)
+      expect(isFilePurged('2025Dec17-212704-Rec50.hda')).toBe(false)
+      expect(isFilePurged('2025Dec17-212704-Rec50.mp3')).toBe(false)
+      expect(isFilePurged('other.hda')).toBe(true)
+    })
+
+    it('throws on a failing delete and removes nothing (single atomic statement)', () => {
+      for (const n of ['2025Dec18-090000-Rec51.hda', '2025Dec18-090000-Rec51.wav']) {
+        run('INSERT OR IGNORE INTO purged_files (filename) VALUES (?)', [n])
+      }
+      // Injected failure: any DELETE on purged_files aborts.
+      run(`CREATE TRIGGER fail_purge_delete BEFORE DELETE ON purged_files
+           BEGIN SELECT RAISE(ABORT, 'injected purge-delete failure'); END`, [])
+      try {
+        expect(() => clearPurgeTombstones('2025Dec18-090000-Rec51.wav')).toThrow('injected purge-delete failure')
+        // Nothing was removed: a half-cleared tombstone set is not possible.
+        expect(isFilePurged('2025Dec18-090000-Rec51.hda')).toBe(true)
+        expect(isFilePurged('2025Dec18-090000-Rec51.wav')).toBe(true)
+      } finally {
+        run('DROP TRIGGER fail_purge_delete', [])
+      }
+    })
+  })
+
   describe('resetStuckTranscriptions()', () => {
     it('resets stuck recordings and queue items, returning the real counts', () => {
       seedRecording('rec-1', { transcription_status: 'processing' })

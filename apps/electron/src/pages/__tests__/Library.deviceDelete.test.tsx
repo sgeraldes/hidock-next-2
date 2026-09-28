@@ -230,7 +230,9 @@ describe('Synced-row "Delete from device" (spec-005/F17 T5 §D3/AC#2)', () => {
     expect(mockRefresh).not.toHaveBeenCalledWith(true)
     expect(window.electronAPI.recordings.deleteCascade).not.toHaveBeenCalled()
     await waitFor(() => {
-      expect(toastMock.success).toHaveBeenCalledWith('Removed from device', expect.stringContaining('synced.wav'))
+      // Named by its display title, never its file name (owner, 25-sep-2026).
+      expect(toastMock.success).toHaveBeenCalledWith('Removed from device', expect.stringContaining('Synced Recording'))
+      expect(toastMock.success).not.toHaveBeenCalledWith('Removed from device', expect.stringContaining('synced.wav'))
     })
   })
 
@@ -240,7 +242,7 @@ describe('Synced-row "Delete from device" (spec-005/F17 T5 §D3/AC#2)', () => {
     fireEvent.keyDown(screen.getByLabelText(/^more actions$/i), { key: 'Enter' })
     fireEvent.click(await screen.findByRole('menuitem', { name: /delete from device/i }))
 
-    expect(await screen.findByText(/delete "synced\.wav" from the hidock device\?/i)).toBeInTheDocument()
+    expect(await screen.findByText(/delete "synced recording" from the hidock device\?/i)).toBeInTheDocument()
     expect(screen.getByText(/your local copy \(if any\) is kept/i)).toBeInTheDocument()
   })
 })
