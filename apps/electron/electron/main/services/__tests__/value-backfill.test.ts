@@ -1444,8 +1444,8 @@ describe('value-backfill', () => {
         expect(stored).toMatchObject({ kind: 'noise_accidental', star_level: 1 })
         // The rating is untouched.
         expect(queryOne<{ quality_rating: string }>('SELECT quality_rating FROM knowledge_captures WHERE id = ?', ['cap-rated'])?.quality_rating).toBe('garbage')
-        // Evaluated now: the next scan has nothing left for it.
-        expect(getValueBackfillStatus().remaining).toBe(0)
+        // Evaluated now: the numbers agree and the next scan has nothing left.
+        expect(getValueBackfillStatus()).toMatchObject({ total: 1, done: 1, remaining: 0 })
       } finally {
         mockConfig.transcription.jevApiKey = ''
       }

@@ -1400,6 +1400,18 @@ describe('Jev (TypeSafe AI) as the value classifier', () => {
     expect(mockAskJev).not.toHaveBeenCalled()
   })
 
+  it('never sends a short, already-rated clip to Jev', async () => {
+    seedRecording('rec-j8', { durationSeconds: 12 })
+    seedTranscript('rec-j8', { fullText: 'Hola, hola, ¿se escucha?' })
+    seedCapture('cap-j8', 'rec-j8', { qualityRating: 'garbage', qualitySource: 'ai' })
+
+    const raw = await classifyCaptureValueRaw('cap-j8')
+
+    expect(raw.skipped).toBe('already-rated')
+    expect(raw.providerCalled).toBe(false)
+    expect(mockAskJev).not.toHaveBeenCalled()
+  })
+
   it('warns when a silent file carries a long transcript, and sends Jev the audio numbers', async () => {
     seedRecording('rec-j7', { durationSeconds: 789 })
     const invented = Array.from({ length: 400 }, (_, i) => `palabra${i}`).join(' ')
