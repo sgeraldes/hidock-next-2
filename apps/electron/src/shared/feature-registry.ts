@@ -563,6 +563,12 @@ export const CORE_CHANNELS: string[] = [
   'audio:checkLibrary',
   'audio:checkRecording',
   'audio:getCheck',
+  // Library maintenance card (Settings). Stored data only; relinking skips when
+  // no Microsoft 365 account is connected.
+  'maintenance:markEvaluationsOutdated',
+  'maintenance:recheckWarnings',
+  'maintenance:redrawWaveforms',
+  'maintenance:relinkMeetings',
   'storage:assign-tier',
   'storage:delete-recording',
   'storage:execute-cleanup',

@@ -200,6 +200,15 @@ export function recordingsNeedingProfile(): { id: string; file_path: string | nu
 /** Tell the windows that labels and ratings may have changed. */
 async function announce(progress: Pick<BackfillProgress, 'profiled' | 'byCategory' | 'capturesRated'>): Promise<void> {
   if (progress.profiled === 0) return
+  // The audio numbers the audio-versus-transcript warning reads just changed.
+  // Refresh the stored warnings first, so labels and warnings agree when the
+  // Library reloads (the boot refresh may have run before this pass finished).
+  try {
+    const { recomputeAudioWarnings } = await import('./value-classification')
+    await recomputeAudioWarnings()
+  } catch (error) {
+    console.warn('[AudioProfile] could not refresh evaluation warnings:', error)
+  }
   try {
     const { getEventBus } = await import('./event-bus')
     getEventBus().emitDomainEvent({

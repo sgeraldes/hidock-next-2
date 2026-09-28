@@ -48,6 +48,7 @@ import {
   getRowsModified,
   isValueExcludedRecording,
   removeRecordingVoiceEvidence,
+  runInTransaction,
   saveRecordingEvaluation
 } from './database'
 import { complete } from '@hidock/ai-providers'
@@ -794,13 +795,24 @@ export function applyDurationValueGate(): { candidates: number; marked: number }
   return { candidates: rows.length, marked }
 }
 
+/** Rows written per transaction by recomputeAudioWarnings, with a yield between chunks. */
+export const WARNING_REFRESH_CHUNK = 200
+
 /**
- * Recompute every stored audio-versus-transcript warning from the numbers the
+ * Recompute stored audio-versus-transcript warnings from the numbers the
  * database already holds (audio profile, transcript words, stored stars). No
- * Jev call: the rule is local. Runs at boot, so a rule change or a new audio
- * profile reaches the Library without a new scan. Returns how many changed.
+ * Jev call: the rule is local. Runs at boot, after an audio-profile pass, and
+ * from Settings, so a rule change or a new profile reaches the Library without
+ * a new scan. `recordingIds` limits it to those recordings.
+ *
+ * Writes go in chunks of WARNING_REFRESH_CHUNK inside one transaction each,
+ * yielding between chunks so the main process keeps answering the windows.
+ * When anything changed it announces `evaluation:warnings-updated`, and an open
+ * Library reloads its rows. Returns how many warnings changed.
  */
-export function recomputeAudioWarnings(): number {
+export async function recomputeAudioWarnings(recordingIds?: string[]): Promise<number> {
+  if (recordingIds && recordingIds.length === 0) return 0
+  const filter = recordingIds ? `WHERE kc.source_recording_id IN (${recordingIds.map(() => '?').join(', ')})` : ''
   const rows = queryAll<{
     capture_id: string
     star_level: number | null
@@ -820,9 +832,11 @@ export function recomputeAudioWarnings(): number {
        JOIN knowledge_captures kc ON kc.id = re.capture_id
        LEFT JOIN recordings r ON r.id = kc.source_recording_id
        LEFT JOIN audio_profiles ap ON ap.recording_id = kc.source_recording_id
-       LEFT JOIN transcripts t ON t.recording_id = kc.source_recording_id`
+       LEFT JOIN transcripts t ON t.recording_id = kc.source_recording_id
+       ${filter}`,
+    recordingIds ?? []
   )
-  let changed = 0
+  const updates: Array<{ captureId: string; warning: ReturnType<typeof audioTranscriptWarning> }> = []
   for (const row of rows) {
     const audio = evaluationAudio({
       recording_id: null,
@@ -841,10 +855,26 @@ export function recomputeAudioWarnings(): number {
       evaluation_version: null
     })
     const next = audioTranscriptWarning(audio, row.star_level)
-    if ((next ?? null) !== (row.audio_warning ?? null)) {
-      run('UPDATE recording_evaluations SET audio_warning = ? WHERE capture_id = ?', [next, row.capture_id])
-      changed++
+    if ((next ?? null) !== (row.audio_warning ?? null)) updates.push({ captureId: row.capture_id, warning: next })
+  }
+  for (let i = 0; i < updates.length; i += WARNING_REFRESH_CHUNK) {
+    const chunk = updates.slice(i, i + WARNING_REFRESH_CHUNK)
+    runInTransaction(() => {
+      for (const u of chunk) run('UPDATE recording_evaluations SET audio_warning = ? WHERE capture_id = ?', [u.warning, u.captureId])
+    })
+    if (i + WARNING_REFRESH_CHUNK < updates.length) await new Promise<void>((resolve) => setImmediate(resolve))
+  }
+  if (updates.length > 0) {
+    try {
+      const { getEventBus } = await import('./event-bus')
+      getEventBus().emitDomainEvent({
+        type: 'evaluation:warnings-updated',
+        timestamp: new Date().toISOString(),
+        payload: { changed: updates.length }
+      })
+    } catch (error) {
+      console.warn('[Evaluation] could not announce the warning refresh:', error)
     }
   }
-  return changed
+  return updates.length
 }

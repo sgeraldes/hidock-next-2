@@ -104,8 +104,15 @@ export interface AudioProfilesUpdatedEvent extends DomainEvent {
   }
 }
 
+/** Stored audio-versus-transcript warnings changed (recomputeAudioWarnings): Library rows may have changed. */
+export interface EvaluationWarningsUpdatedEvent extends DomainEvent {
+  type: 'evaluation:warnings-updated'
+  payload: { changed: number }
+}
+
 export type KnownDomainEvent =
   | AudioProfilesUpdatedEvent
+  | EvaluationWarningsUpdatedEvent
   | QualityAssessedEvent
   | StorageTierAssignedEvent
   | RecordingCleanupSuggestedEvent

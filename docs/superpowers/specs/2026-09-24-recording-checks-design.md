@@ -281,11 +281,36 @@ per speaker from the transcript, embed them, match against the canonical voices.
    boot task runs the pass over the whole library in the background; `audio:checkRecording` checks
    one recording on request. The Library shows "Silent", "Noise only" or "Too short" as a word on
    the row and filters on them under "Audio".
-2. The player's waveform drawn from the stored envelope; the sound ranges used by transcription and
-   diarization (Rec93: 23 minutes of 4 hours); the adaptive threshold for noisy rooms (Rec50).
-3. "Run checks…" on a selection and "Re-process" on one recording, with integrity, value
+2. **Jev evaluation and warnings (built, #50 to #53, 28-sep).** One Jev pass per capture stores
+   stars (1 to 5, each level described), a kind, work or personal, and transcript trust in
+   `recording_evaluations` (schema v61, latest per recording read through the v62 index). The
+   audio-versus-transcript warning is computed locally from the audio profile and the transcript
+   and stored with the evaluation (`jev-evaluation.ts`, `WARNING_RULES`):
+   - possibly invented: the file is silent or noise only, or under 5% of a file of 60 s or more
+     holds sound, and the transcript has 100 words or more or 3 stars or more; or the transcript
+     runs over 250 words per minute of the whole recording;
+   - possibly missed: 300 s or more of sound and fewer than 20 words per minute of that sound.
+   The first rules, tuned on the 2,043-recording pass, judged "quiet" by absolute seconds of sound
+   and the speaking rate by seconds of sound; both flagged real recordings and were replaced.
+   Warnings are recomputed from stored numbers, never with a Jev call: at boot
+   (`evaluation-warning-refresh`), after every audio-profile pass (before `audio:profiles-updated`
+   is announced, so labels and warnings agree), and from the Settings maintenance card. Writes go
+   in chunks of 200 per transaction with a yield between chunks, and a change announces
+   `evaluation:warnings-updated`, which reloads an open Library.
+   The Library row shows stars and kind as one label and the warning as an icon, in fixed places:
+   labels, value, warning, integrity, meeting, status, transcription, error. An empty place keeps
+   its width. On a narrow pane the label column drops first (under 34rem), then integrity and
+   meeting (under 22rem). Filters: Kind, Work or personal, Stars, Warnings.
+3. **Library maintenance (Settings, built).** Rescan with Jev (marks every evaluation outdated,
+   then the value scan evaluates all again), Re-check warnings, Relink recordings to meetings (the
+   Microsoft 365 calendar pulled back to the oldest recording through `calendarHistoryStart`, then
+   the time-overlap linker), Redraw waveforms (a coarse waveform from the stored envelope, flagged
+   `coarse`; the player shows it at once and replaces it with the decoded one on first open).
+4. The sound ranges used by transcription and diarization (Rec93: 23 minutes of 4 hours); the
+   adaptive threshold for noisy rooms (Rec50).
+5. "Run checks…" on a selection and "Re-process" on one recording, with integrity, value
    classification, the audio check and re-transcription in one registry.
-4. The audio index stages that need voices and topics: voices per range (after speaker engines
+6. The audio index stages that need voices and topics: voices per range (after speaker engines
    phase 2, turn sampling), topics per range, split suggestions decided by Jev.
 
 Each phase: tests, adversarial review by a separate agent, merge, and a benchmark compared with the

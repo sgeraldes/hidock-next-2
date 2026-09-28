@@ -912,6 +912,8 @@ export interface ElectronAPI {
       duration: number
       fileSize: number
       createdAt: string
+      /** Drawn from the loudness envelope; the player replaces it with the decoded one. */
+      coarse?: boolean
     } | null>
     setCache: (recordingId: string, peaks: number[], duration?: number, fileSize?: number) => Promise<boolean>
     clearCache: (recordingId: string) => Promise<boolean>
@@ -1122,6 +1124,25 @@ export interface ElectronAPI {
     getCheck: (recordingId: string) => Promise<Result<AudioCheckResult | null>>
     /** Starts the pass over the library; the result arrives as the audio:profiles-updated event. */
     checkLibrary: () => Promise<Result<{ started: boolean }>>
+  }
+
+  // Library maintenance: the Settings maintenance card.
+  maintenance: {
+    recheckWarnings: () => Promise<Result<{ changed: number; evaluated: number }>>
+    relinkMeetings: () => Promise<
+      Result<{
+        unlinkedBefore: number
+        unlinkedAfter: number
+        linked: number
+        meetingsSynced: number
+        historyFrom: string | null
+        accounts: number
+        errors: string[]
+      }>
+    >
+    redrawWaveforms: () => Promise<Result<{ total: number; drawn: number; keptExact: number; noEnvelope: number }>>
+    /** Rescan with Jev, every recording: marks the stored evaluations outdated before the value backfill runs. */
+    markEvaluationsOutdated: () => Promise<Result<{ marked: number }>>
   }
 
   // Data Integrity Service - Health checks and repairs
@@ -2044,6 +2065,13 @@ const electronAPI: ElectronAPI = {
     checkRecording: (recordingId) => callIPC('audio:checkRecording', recordingId),
     getCheck: (recordingId) => callIPC('audio:getCheck', recordingId),
     checkLibrary: () => callIPC('audio:checkLibrary')
+  },
+
+  maintenance: {
+    recheckWarnings: () => callIPC('maintenance:recheckWarnings'),
+    relinkMeetings: () => callIPC('maintenance:relinkMeetings'),
+    redrawWaveforms: () => callIPC('maintenance:redrawWaveforms'),
+    markEvaluationsOutdated: () => callIPC('maintenance:markEvaluationsOutdated')
   },
 
   // Data Integrity Service API

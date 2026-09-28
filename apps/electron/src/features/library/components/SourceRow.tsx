@@ -175,9 +175,12 @@ function EvaluationWarning({ recording }: { recording: UnifiedRecording }) {
  * empty, so every icon sits in the same column on every row and a missing one
  * reads as a gap (owner, 28-sep-2026).
  */
-function IconSlot({ name, children }: { name: string; children?: ReactNode }) {
+function IconSlot({ name, narrow, children }: { name: string; narrow?: 'hide'; children?: ReactNode }) {
   return (
-    <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center" data-slot={name}>
+    <span
+      className={`${narrow === 'hide' ? 'hidden @[22rem]:inline-flex' : 'inline-flex'} h-4 w-4 shrink-0 items-center justify-center`}
+      data-slot={name}
+    >
       {children}
     </span>
   )
@@ -547,15 +550,15 @@ export const SourceRow = memo(function SourceRow({
               status, transcription, error. Each keeps its width when empty so the
               columns line up down the list. */}
           {!isDeleting && (
-            <span className="flex w-36 shrink-0 items-center justify-end gap-1 overflow-hidden" data-slot="labels">
+            <span className="hidden w-36 shrink-0 items-center justify-end gap-1 overflow-hidden @[34rem]:flex" data-slot="labels">
               <AudioLabel recording={recording} />
               <EvaluationLabel recording={recording} />
             </span>
           )}
           {!isDeleting && <IconSlot name="value"><ValueBadge recording={recording} /></IconSlot>}
           {!isDeleting && <IconSlot name="warning"><EvaluationWarning recording={recording} /></IconSlot>}
-          {!isDeleting && <IconSlot name="integrity"><IntegrityBadge transcript={transcript} /></IconSlot>}
-          {!isDeleting && <IconSlot name="meeting">{meeting && (
+          {!isDeleting && <IconSlot name="integrity" narrow="hide"><IntegrityBadge transcript={transcript} /></IconSlot>}
+          {!isDeleting && <IconSlot name="meeting" narrow="hide">{meeting && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <span

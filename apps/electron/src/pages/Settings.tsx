@@ -31,6 +31,7 @@ import { ConnectorsSettings } from '@/components/settings/ConnectorsSettings'
 import { AIBrainsSettings } from '@/components/settings/AIBrainsSettings'
 import { FeaturesSettings } from '@/components/settings/FeaturesSettings'
 import { ModelHostSettings } from '@/components/settings/ModelHostSettings'
+import { LibraryMaintenanceCard } from '@/components/settings/LibraryMaintenanceCard'
 import { SpeakerSetupPanel } from '@/components/settings/SpeakerSetupPanel'
 import { useFeatureEnabled } from '@/store/useFeatureStore'
 import { toast } from '@/components/ui/toaster'
@@ -603,6 +604,13 @@ export function Settings() {
       toast.error('Could not start classification', error instanceof Error ? error.message : 'Unknown error')
     }
   }, [])
+
+  // Maintenance card: mark every evaluation outdated, then the usual scan evaluates them again.
+  const handleRescanWithJev = useCallback(async () => {
+    const res = await window.electronAPI.maintenance.markEvaluationsOutdated()
+    if (!res?.success) throw new Error('Could not mark the evaluations outdated.')
+    await handleStartValueBackfill()
+  }, [handleStartValueBackfill])
 
   const handleCancelValueBackfill = useCallback(async () => {
     try {
@@ -1463,6 +1471,12 @@ export function Settings() {
               )}
             </CardContent>
           </Card>
+
+          <LibraryMaintenanceCard
+            onRescanWithJev={handleRescanWithJev}
+            rescanAvailable={hasJevKey}
+            rescanRunning={valueBackfillRunning}
+          />
 
           {/* Chat Settings */}
           <Card>

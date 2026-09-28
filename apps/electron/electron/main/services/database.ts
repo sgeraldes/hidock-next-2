@@ -16,7 +16,7 @@ import { isCancelledMeetingSubject, scoreMeetingCandidates } from './recording-m
 import { DURATION_LOW_VALUE_MAX_SECONDS, isImpossibleTranscriptDensity } from './value-thresholds'
 import type { QualityRating } from '@/types/knowledge'
 
-const SCHEMA_VERSION = 61
+const SCHEMA_VERSION = 62
 
 const SCHEMA = `
 -- Calendar events from ICS
@@ -372,6 +372,8 @@ CREATE TABLE IF NOT EXISTS recording_evaluations (
     FOREIGN KEY (capture_id) REFERENCES knowledge_captures(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_recording_evaluations_recording ON recording_evaluations(recording_id);
+-- v62: the Library reads the latest evaluation per recording.
+CREATE INDEX IF NOT EXISTS idx_recording_evaluations_latest ON recording_evaluations(recording_id, evaluated_at DESC);
 
 -- Stage-level processing provenance (v52 / SPEC-009). One provider call can
 -- produce several output stages, but every displayed result references the
@@ -3162,6 +3164,15 @@ const MIGRATIONS: Record<number, () => void> = {
     )`)
     getDatabase().run('CREATE INDEX IF NOT EXISTS idx_recording_evaluations_recording ON recording_evaluations(recording_id)')
     console.log('Migration v61 complete')
+  },
+  62: () => {
+    // The Library's getRecordings() picks the latest evaluation per recording
+    // (ORDER BY evaluated_at DESC). Additive: an index, no data change.
+    console.log('Running migration to schema v62: latest-evaluation index')
+    getDatabase().run(
+      'CREATE INDEX IF NOT EXISTS idx_recording_evaluations_latest ON recording_evaluations(recording_id, evaluated_at DESC)'
+    )
+    console.log('Migration v62 complete')
   },
 }
 
