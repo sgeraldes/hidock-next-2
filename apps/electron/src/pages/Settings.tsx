@@ -40,6 +40,7 @@ import type { StorageInfo, AppConfig } from '@/types'
 import { SettingsNav } from '@/features/settings/SettingsNav'
 import { OverviewSection } from '@/features/settings/OverviewSection'
 import { AboutSection } from '@/features/settings/AboutSection'
+import { ReleasesSection } from '@/features/settings/ReleasesSection'
 import {
   DEFAULT_SETTINGS_SECTION,
   getSettingsSection,
@@ -824,6 +825,7 @@ export function Settings({
           )}
 
           {section === 'overview' && <OverviewSection storageInfo={storageInfo} onNavigate={(id) => onSectionChange?.(id)} />}
+          {section === 'releases' && <ReleasesSection />}
           {section === 'about' && <AboutSection storageInfo={storageInfo} />}
 
           {show('features') && (

@@ -21,6 +21,7 @@ import {
   HardDrive,
   Wrench,
   Code2,
+  History,
   Info
 } from 'lucide-react'
 
@@ -38,6 +39,7 @@ export type SettingsSectionId =
   | 'storage'
   | 'maintenance'
   | 'developer'
+  | 'releases'
   | 'about'
 
 export type SettingsGroupId = 'general' | 'preferences' | 'services' | 'system'
@@ -163,6 +165,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'Logging and diagnostics.',
     icon: Code2,
     keywords: ['qa', 'logs', 'debug']
+  },
+  {
+    id: 'releases',
+    group: 'system',
+    label: 'Releases',
+    description: 'What changed in each build.',
+    icon: History,
+    keywords: ['changelog', 'release notes', 'what is new', 'version']
   },
   {
     id: 'about',
