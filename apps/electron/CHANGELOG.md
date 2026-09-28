@@ -21,6 +21,9 @@ recording, and Microsoft 365 and Slack connect on first try.
 - **Transcript problems in place.** Lines with a repeated or backwards time, or too many words for
   their time, are marked in the transcript. Clicking "Repeated times" or "Times go backwards" goes
   to the next such line. Editing a line also edits its start time.
+- **A switch per feature.** Settings > Features lists every feature with its own switch, what it
+  costs to run and what it needs; the preset changes to Custom when your set matches none. The
+  main Jev switch is there too.
 - **Close the reader.** An X next to the title closes it and unselects the recording (Esc does the
   same). The title stays at the top while you scroll.
 - **Click a time to play.** A time in the transcript starts the recording there, even when nothing

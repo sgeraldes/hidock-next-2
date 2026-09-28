@@ -1,30 +1,40 @@
 /**
- * Features settings — Track I phase 1: MINIMAL preset selector only.
- *
- * The full per-feature panel (cards, individual toggles, cascade confirm dialog)
- * is phase I3. This slice ships just the named-preset dropdown so "HiDock
- * Library Management" actually stops transcription/assistant/graph/calendar
- * work, plus an honest summary of what the selected preset turns off and a
- * restart banner when a change can't apply live.
+ * Features settings: the preset, then one switch per feature (owner,
+ * 28-sep-2026: "main toggle should live here"). A switch writes a feature flag
+ * through applyFeatureToggle, which names the preset again when the chosen set
+ * is exactly one. A feature whose hard dependency is off shows why and cannot be
+ * turned on until that one is. Jev's main switch is here too; its per-job
+ * switches stay on the Decisions page. Connectors are turned on and off on the
+ * Connectors page: the registry's connector entries gate nothing yet.
  */
 
 import { useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { RotateCcw } from 'lucide-react'
+import { Switch } from '@/components/ui/switch'
+import { ChevronRight, RotateCcw } from 'lucide-react'
 import { useConfigStore } from '@/store/domain/useConfigStore'
 import { usePendingRestart, useFeatureStore, describeDisableReason } from '@/store/useFeatureStore'
 import {
-  ALL_FEATURE_IDS,
+  CORE_FEATURE_IDS,
   FEATURES,
   PRESET_INFO,
+  applyFeatureToggle,
+  type FeatureId,
   type PresetId,
 } from '@/shared/feature-registry'
 import { toast } from '@/components/ui/toaster'
 
 const SELECTABLE_PRESETS: PresetId[] = ['library-only', 'library-transcription', 'full', 'custom']
 
-export function FeaturesSettings(): React.ReactElement {
+const COST_WORD = { light: 'light', medium: 'medium', heavy: 'heavy' } as const
+
+export function FeaturesSettings({
+  onNavigate
+}: {
+  /** Open another Settings page (Connectors, Decisions). */
+  onNavigate?: (section: 'connectors' | 'decisions') => void
+} = {}): React.ReactElement {
   const { config, updateConfig } = useConfigStore()
   const resolved = useFeatureStore((s) => s.resolved)
   const pendingRestart = usePendingRestart()
@@ -52,10 +62,25 @@ export function FeaturesSettings(): React.ReactElement {
     }
   }
 
-  // Honest summary of what the CURRENT resolved state turns off (incl. cascade).
-  const disabled = ALL_FEATURE_IDS.filter(
-    (id) => !id.startsWith('connector:') && !resolved[id]?.enabled
-  )
+  const toggleFeature = async (id: FeatureId, on: boolean) => {
+    setSaving(true)
+    try {
+      await updateConfig('features', applyFeatureToggle(config?.features, id, on))
+    } catch (e) {
+      toast.error(`Could not turn ${on ? 'on' : 'off'} ${FEATURES[id].label}`, e instanceof Error ? e.message : undefined)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const jevOn = config?.decisions?.jevEnabled !== false
+  const setJev = async (on: boolean) => {
+    try {
+      await updateConfig('decisions', { ...(config?.decisions ?? { jevValue: true, jevMeetingMatch: true }), jevEnabled: on })
+    } catch (e) {
+      toast.error('Could not change Jev', e instanceof Error ? e.message : undefined)
+    }
+  }
 
   return (
     <Card>
@@ -87,23 +112,66 @@ export function FeaturesSettings(): React.ReactElement {
           <p className="text-xs text-muted-foreground">{PRESET_INFO[preset].description}</p>
         </div>
 
-        {disabled.length > 0 && (
-          <div className="rounded-md border border-border bg-muted/40 p-3">
-            <p className="text-xs font-medium">Turned off by this preset:</p>
-            <ul className="mt-1 space-y-0.5">
-              {disabled.map((id) => (
-                <li key={id} className="text-xs text-muted-foreground">
-                  {FEATURES[id].label}
-                  {resolved[id]?.reason?.startsWith('requires:') && (
-                    <span className="ml-1 text-muted-foreground/70">
-                      — {describeDisableReason(resolved[id]?.reason)}
-                    </span>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
+        <ul className="divide-y divide-border rounded-md border border-border" aria-label="Features" data-testid="feature-switches">
+          {CORE_FEATURE_IDS.map((id) => {
+            const def = FEATURES[id]
+            const state = resolved[id]
+            const blockedBy = state?.reason?.startsWith('requires:') ? describeDisableReason(state.reason) : null
+            return (
+              <li key={id} className="flex items-start justify-between gap-4 px-3 py-2.5">
+                <div className="min-w-0 space-y-0.5">
+                  <p className="text-sm font-medium">{def.label}</p>
+                  <p className="text-xs text-muted-foreground">{def.description}</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    {blockedBy ? (
+                      <span className="text-amber-700 dark:text-amber-400">{blockedBy}</span>
+                    ) : (
+                      <>
+                        Uses CPU {COST_WORD[def.hardwareCost.cpu]}, memory {COST_WORD[def.hardwareCost.memory]}, network{' '}
+                        {COST_WORD[def.hardwareCost.network]}
+                        {!def.runtimeToggleable && ' · takes effect after a restart'}
+                      </>
+                    )}
+                  </p>
+                </div>
+                <Switch
+                  checked={!!state?.enabled}
+                  disabled={saving || !!blockedBy}
+                  onCheckedChange={(v) => void toggleFeature(id, v)}
+                  aria-label={def.label}
+                />
+              </li>
+            )
+          })}
+          <li className="flex items-start justify-between gap-4 px-3 py-2.5">
+            <div className="min-w-0 space-y-0.5">
+              <p className="text-sm font-medium">Decisions (Jev)</p>
+              <p className="text-xs text-muted-foreground">
+                Rates recordings and links them to meetings with Jev. Each job has its own switch on the{' '}
+                <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={() => onNavigate?.('decisions')}>
+                  Decisions page
+                </button>
+                .
+              </p>
+            </div>
+            <Switch checked={jevOn} onCheckedChange={(v) => void setJev(v)} aria-label="Decisions (Jev)" />
+          </li>
+          <li>
+            <button
+              type="button"
+              onClick={() => onNavigate?.('connectors')}
+              className="flex w-full items-center justify-between gap-4 px-3 py-2.5 text-left hover:bg-accent/50"
+            >
+              <span className="min-w-0 space-y-0.5">
+                <span className="block text-sm font-medium">Connectors</span>
+                <span className="block text-xs text-muted-foreground">
+                  Microsoft 365, Slack and the calendar feed are turned on and off on the Connectors page.
+                </span>
+              </span>
+              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            </button>
+          </li>
+        </ul>
 
         {pendingRestart.length > 0 && (
           <div

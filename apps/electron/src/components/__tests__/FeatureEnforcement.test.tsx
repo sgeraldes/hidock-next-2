@@ -181,7 +181,7 @@ describe('FeatureRoute + FeatureDisabledPage', () => {
   })
 })
 
-describe('FeaturesSettings (minimal preset dropdown)', () => {
+describe('FeaturesSettings (preset and one switch per feature)', () => {
   const baseConfig = { features: { preset: 'full', flags: {} } } as unknown as AppConfig
 
   beforeEach(() => {
@@ -199,15 +199,45 @@ describe('FeaturesSettings (minimal preset dropdown)', () => {
     expect(updateConfig).toHaveBeenCalledWith('features', { preset: 'library-only', flags: {} })
   })
 
-  it('lists what the current resolved state turns off (honest summary)', () => {
+  it('shows one switch per feature, on or off as resolved', () => {
     setFeatures({ preset: 'library-only', flags: {} })
     useConfigStore.setState({
       config: { features: { preset: 'library-only', flags: {} } } as unknown as AppConfig,
     })
     render(<FeaturesSettings />)
-    expect(screen.getByText('Turned off by this preset:')).toBeInTheDocument()
-    expect(screen.getByText('Transcription')).toBeInTheDocument()
-    expect(screen.getByText('Assistant')).toBeInTheDocument()
+    expect(screen.getByRole('switch', { name: 'Device Sync' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('switch', { name: 'Transcription' })).toHaveAttribute('aria-checked', 'false')
+    // Connectors are not switched here: their entries gate nothing yet.
+    expect(screen.queryByRole('switch', { name: 'Slack' })).not.toBeInTheDocument()
+  })
+
+  it('turning one feature off saves a Custom set with that one flag', () => {
+    const updateConfig = vi.fn().mockResolvedValue(undefined)
+    useConfigStore.setState({ updateConfig })
+    render(<FeaturesSettings />)
+    fireEvent.click(screen.getByRole('switch', { name: 'Explore' }))
+    expect(updateConfig).toHaveBeenCalledWith('features', { preset: 'custom', flags: { explore: false } })
+  })
+
+  it('locks a feature whose dependency is off and says which one', () => {
+    setFeatures({ preset: 'custom', flags: { transcription: false } })
+    useConfigStore.setState({
+      config: { features: { preset: 'custom', flags: { transcription: false } } } as unknown as AppConfig,
+    })
+    render(<FeaturesSettings />)
+    expect(screen.getByRole('switch', { name: 'Assistant' })).toBeDisabled()
+    expect(screen.getAllByText(/Requires Transcription/i).length).toBeGreaterThan(0)
+  })
+
+  it('has the main Jev switch, writing decisions.jevEnabled', () => {
+    const updateConfig = vi.fn().mockResolvedValue(undefined)
+    useConfigStore.setState({
+      updateConfig,
+      config: { ...baseConfig, decisions: { jevEnabled: true, jevValue: true, jevMeetingMatch: false } } as unknown as AppConfig,
+    })
+    render(<FeaturesSettings />)
+    fireEvent.click(screen.getByRole('switch', { name: 'Decisions (Jev)' }))
+    expect(updateConfig).toHaveBeenCalledWith('decisions', { jevEnabled: false, jevValue: true, jevMeetingMatch: false })
   })
 
   it('shows the restart banner only when a pending-restart feature exists', () => {
@@ -216,8 +246,7 @@ describe('FeaturesSettings (minimal preset dropdown)', () => {
     useFeatureStore.getState().setPendingRestart(['assistant'])
     rerender(<FeaturesSettings />)
     // Desired-ON + pending ⇒ enable direction: "Restart required to activate".
-    expect(screen.getByText(/restart required to activate/i)).toBeInTheDocument()
-    expect(screen.getByText('Assistant')).toBeInTheDocument()
+    expect(screen.getByText(/restart required to activate/i).textContent).toContain('Assistant')
   })
 
   it('round-3 banner distinguishes the DISABLE direction ("disabled for new work")', () => {
@@ -227,8 +256,8 @@ describe('FeaturesSettings (minimal preset dropdown)', () => {
     render(<FeaturesSettings />)
     const banner = screen.getByText(/disabled for new work — restart to fully unload/i)
     expect(banner).toBeInTheDocument()
-    // The banner line itself names the feature (it also appears in the
-    // "turned off" summary, so scope the assertion to the banner paragraph).
+    // The banner line itself names the feature (it also labels its switch,
+    // so scope the assertion to the banner paragraph).
     expect(banner.textContent).toContain('Device Sync')
     expect(screen.queryByText(/restart required to activate/i)).not.toBeInTheDocument()
   })

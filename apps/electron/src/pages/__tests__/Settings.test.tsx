@@ -101,10 +101,10 @@ describe('Settings Page', () => {
   it('should render settings sections', async () => {
     render(<Settings />)
 
-    expect(screen.getByText('Calendar')).toBeInTheDocument()
-    expect(screen.getByText('Transcription')).toBeInTheDocument()
-    expect(screen.getByText('Chat / RAG')).toBeInTheDocument()
-    expect(screen.getByText('Storage')).toBeInTheDocument()
+    // Card titles; "Calendar" and "Transcription" are also feature switch names.
+    for (const title of ['Calendar', 'Transcription', 'Chat / RAG', 'Storage']) {
+      expect(screen.getByRole('heading', { name: title })).toBeInTheDocument()
+    }
   })
 
   it('should render calendar settings form', async () => {

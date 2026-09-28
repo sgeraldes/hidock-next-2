@@ -836,7 +836,7 @@ export function Settings({
             {/* Modular features (Track I) — preset selector. The `features` anchor is
                 the deep-link target of FeatureDisabledPage's "Enable in Settings". */}
             <div id="features">
-              <FeaturesSettings />
+              <FeaturesSettings onNavigate={(id) => onSectionChange?.(id)} />
             </div>
             </>
           )}

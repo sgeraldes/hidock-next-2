@@ -746,3 +746,36 @@ export function classifyChannel(channel: string): ChannelClass {
   }
   return { kind: 'unclassified' }
 }
+
+/**
+ * Turn one feature on or off from the Features page. The result names a preset
+ * when the chosen set is exactly one (so the dropdown stays honest), and is
+ * `custom` with the differences from Full otherwise. Connector flags, which
+ * presets never set, are kept as they were.
+ */
+export function applyFeatureToggle(
+  features: Partial<FeaturesConfig> | null | undefined,
+  id: FeatureId,
+  on: boolean
+): FeaturesConfig {
+  const preset: PresetId = isPresetId(features?.preset) ? (features!.preset as PresetId) : 'full'
+  const flags = features?.flags ?? {}
+  const baseline = presetBaseline(preset)
+  const intent = {} as Record<FeatureId, boolean>
+  for (const f of CORE_FEATURE_IDS) intent[f] = flags[f] ?? baseline[f]
+  intent[id] = on
+
+  const connectorFlags: Partial<Record<FeatureId, boolean>> = {}
+  for (const c of CONNECTOR_FEATURE_IDS) if (flags[c] !== undefined) connectorFlags[c] = flags[c]
+
+  for (const named of ['library-only', 'library-transcription', 'full'] as const) {
+    const set = new Set(PRESETS[named])
+    if (CORE_FEATURE_IDS.every((f) => intent[f] === set.has(f))) {
+      return { preset: named, flags: connectorFlags }
+    }
+  }
+  const full = presetBaseline('full')
+  const diff: Partial<Record<FeatureId, boolean>> = { ...connectorFlags }
+  for (const f of CORE_FEATURE_IDS) if (intent[f] !== full[f]) diff[f] = intent[f]
+  return { preset: 'custom', flags: diff }
+}
