@@ -37,7 +37,7 @@ import { queryAll, run, runInTransaction } from './database'
 import { startRecordingWatcher, stopRecordingWatcher } from './recording-watcher'
 import { getDownloadService } from './download-service'
 import { getQueueState, pauseQueue, resumeQueue } from './transcription'
-import { setMovingFolder } from './storage-move-state'
+import { setMovingFolder, liveRecordingInProgress } from './storage-move-state'
 
 export type MovableFolder = 'recordings' | 'transcripts'
 
@@ -165,6 +165,7 @@ export async function planMove(folder: MovableFolder | 'data', to: string, ownLo
   else if (key(from) === key(target)) blocker = 'That is already the folder in use.'
   else if (overlaps(from, target)) blocker = 'The new folder cannot be inside the current one, or contain it.'
   else if (lock && !ownLock) blocker = `A move of ${lock.folder} is already running.`
+  else if (folder === 'recordings' && liveRecordingInProgress()) blocker = 'A live stream is being recorded into this folder. Stop it on the Device page first.'
   else if (folder !== 'data' && targetHasFiles) blocker = 'Choose an empty folder: the new folder already has files, and nothing there is overwritten.'
   else if (folder !== 'data' && targetFreeBytes !== null && targetFreeBytes < bytes) blocker = 'The new disk does not have enough free space.'
 
@@ -243,6 +244,9 @@ export async function moveFolder(
 ): Promise<{ copiedFiles: number; copiedBytes: number; cancelled: boolean }> {
   // Taken before any await so two clicks cannot both start.
   if (lock) throw new Error(`A move of ${lock.folder} is already running.`)
+  if (folder === 'recordings' && liveRecordingInProgress()) {
+    throw new Error('A live stream is being recorded into this folder. Stop it on the Device page first.')
+  }
   const state = { folder, cancel: false, abort: new AbortController() }
   lock = state
   setMovingFolder(folder)

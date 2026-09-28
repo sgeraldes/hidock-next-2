@@ -213,6 +213,8 @@ export interface AppConfig {
      * user's "Measure automatically" into a pin they can no longer undo.
      */
     liveMicChannelMeasured?: 0 | 1 | null
+    /** Save the realtime stream as a Library recording (Settings > Recording). Absent = on. */
+    liveSaveRecording?: boolean
     // VibeVoice backend (microsoft/VibeVoice-ASR) — reuses localAsrPath/mcp_runner.py.
     vibevoiceModelId: string
     vibevoiceDevice: string

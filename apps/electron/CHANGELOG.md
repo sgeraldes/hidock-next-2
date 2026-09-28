@@ -46,6 +46,10 @@ recording, and Microsoft 365 and Slack connect on first try.
   same). The title stays at the top while you scroll.
 - **Click a time to play.** A time in the transcript starts the recording there, even when nothing
   is playing.
+- **Live streams become recordings.** Realtime streaming on the Device page now also writes both
+  channels to a WAV in the recordings folder. When it stops, the recording is in the Library, linked
+  to its meeting and transcribed like any other, diarization included. A stream cut off by a crash
+  or an unplugged cable is saved too. Off with the switch in Settings > Recording.
 - **Connectors, easier to set up.** The Slack channel list has "Choose all shown" for the filtered
   channels, and says what a sync does: one Library item per channel, what edits do, and what it does
   not do yet (channel summaries, reports, people matching). The ICS calendar feed has Disconnect.
