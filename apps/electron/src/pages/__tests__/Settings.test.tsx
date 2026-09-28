@@ -1,6 +1,6 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { Settings } from '../Settings'
 
 const mockLoadConfig = vi.fn()
@@ -348,6 +348,37 @@ describe('Settings Page', () => {
     await waitFor(() => expect(mockUpdateConfig).toHaveBeenCalledWith('transcription', { jevApiKey: 'ts-test-key' })) // pragma: allowlist secret
     // The draft clears after saving; the saved key lives only in config.
     await waitFor(() => expect(input.value).toBe(''))
+  })
+
+  it('shows one section at a time with the settings menu', () => {
+    const onSectionChange = vi.fn()
+    render(<Settings section="calendar" onSectionChange={onSectionChange} />)
+    expect(screen.getByRole('heading', { level: 2, name: 'Calendar' })).toBeInTheDocument()
+    expect(screen.getByRole('navigation', { name: 'Settings sections' })).toBeInTheDocument()
+    // Only the Calendar page: other pages' controls are not rendered.
+    expect(screen.getByLabelText(/ICS/i)).toBeInTheDocument()
+    expect(screen.queryByLabelText('Provider in use')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Transcription' }))
+    expect(onSectionChange).toHaveBeenCalledWith('transcription')
+  })
+
+  it('searches the menu and opens the first match on Enter', () => {
+    const onSectionChange = vi.fn()
+    render(<Settings section="overview" onSectionChange={onSectionChange} />)
+    const search = screen.getByRole('searchbox', { name: 'Search settings' })
+    fireEvent.change(search, { target: { value: 'hugging' } })
+    const nav = screen.getByRole('navigation', { name: 'Settings sections' })
+    expect(within(nav).getAllByRole('button').map((b) => b.textContent)).toEqual(['Speakers & voices'])
+    fireEvent.keyDown(search, { key: 'Enter' })
+    expect(onSectionChange).toHaveBeenCalledWith('speakers')
+  })
+
+  it('opens the page behind an overview tile', () => {
+    const onSectionChange = vi.fn()
+    render(<Settings section="overview" onSectionChange={onSectionChange} />)
+    fireEvent.click(within(screen.getByTestId('settings-overview')).getByText('Decisions (Jev)'))
+    expect(onSectionChange).toHaveBeenCalledWith('decisions')
   })
 
   it('picks the transcription provider from a list and keeps every provider configurable', () => {

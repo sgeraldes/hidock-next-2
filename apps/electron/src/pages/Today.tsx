@@ -1043,7 +1043,7 @@ export function Today() {
                   Your Outlook calendar isn&apos;t connected yet. Add your Outlook ICS URL in Settings and your meetings
                   will appear here, correlate with recordings automatically, and enrich every transcript.
                 </div>
-                <Button size="sm" onClick={() => navigate('/settings')}>
+                <Button size="sm" onClick={() => navigate('/settings/calendar')}>
                   <SettingsIcon className="mr-2 h-4 w-4" />
                   Connect calendar
                 </Button>

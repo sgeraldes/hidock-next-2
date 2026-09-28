@@ -12,10 +12,13 @@ import {
   Trash2,
   Settings2,
   Globe,
+  Mail,
+  MessagesSquare,
+  type LucideIcon,
 } from 'lucide-react'
+import { ServiceList, type ServiceListItem, type ServiceTone } from '@/features/settings/ServiceList'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
 import { SourcePicker } from './SourcePicker'
@@ -37,6 +40,20 @@ const STATUS_META: Record<ConnectorStatusState, { label: string; className: stri
   connected: { label: 'Connected', className: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' },
   syncing: { label: 'Syncing…', className: 'border-blue-500/20 bg-blue-500/10 text-blue-700 dark:text-blue-300' },
   error: { label: 'Error', className: 'border-red-500/20 bg-red-500/10 text-red-700 dark:text-red-300' },
+}
+
+const STATUS_TONE: Partial<Record<ConnectorStatusState, ServiceTone>> = {
+  connected: 'ok',
+  syncing: 'busy',
+  connecting: 'busy',
+  'auth-needed': 'attention',
+  error: 'error',
+  disconnected: 'off'
+}
+
+const CONNECTOR_ICONS: Record<string, LucideIcon> = {
+  m365: Mail,
+  slack: MessagesSquare
 }
 
 function StatusBadge({ status }: { status: ConnectorStatus }) {
@@ -485,70 +502,6 @@ function AccountBlock({
   )
 }
 
-/**
- * One card per connector TYPE. Renders the type's description once, then each
- * configured account (instance). Multi-instance types get an "Add account" button.
- */
-function ConnectorTypeCard({
-  descriptorId,
-  accounts,
-  onChanged,
-  onAdded,
-  onRemoved,
-}: {
-  descriptorId: string
-  accounts: ConnectorSummary[]
-  onChanged: (s: ConnectorSummary) => void
-  onAdded: (s: ConnectorSummary) => void
-  onRemoved: (instanceId: string) => void
-}) {
-  const descriptor = accounts[0]?.descriptor
-  const multi = accounts[0]?.multiInstance ?? false
-  const [adding, setAdding] = useState(false)
-
-  const addAccount = async () => {
-    setAdding(true)
-    try {
-      const created = await window.electronAPI.connectors.addInstance(descriptorId)
-      onAdded(created)
-    } catch (e) {
-      toast.error(`Add account failed: ${e instanceof Error ? e.message : String(e)}`)
-    } finally {
-      setAdding(false)
-    }
-  }
-
-  if (!descriptor) return null
-
-  return (
-    <div className="rounded-lg border border-border/60 bg-muted/20 p-4 space-y-3">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="font-semibold">{descriptor.displayName}</h3>
-          <p className="mt-0.5 text-sm text-muted-foreground">{descriptor.description}</p>
-        </div>
-        {multi && (
-          <Button variant="outline" size="sm" onClick={addAccount} disabled={adding}>
-            <Plus className="mr-1.5 h-4 w-4" /> {adding ? 'Adding…' : 'Add account'}
-          </Button>
-        )}
-      </div>
-      <div className="space-y-3">
-        {accounts.map((a) => (
-          <AccountBlock
-            key={a.instanceId}
-            summary={a}
-            onChanged={onChanged}
-            // Allow removal only when more than one account exists, so the type
-            // card (and its "Add account" button) never disappears entirely.
-            onRemoved={multi && accounts.length > 1 ? onRemoved : undefined}
-          />
-        ))}
-      </div>
-    </div>
-  )
-}
-
 export function ConnectorsSettings() {
   const [connectors, setConnectors] = useState<ConnectorSummary[]>([])
   const [loading, setLoading] = useState(true)
@@ -597,33 +550,96 @@ export function ConnectorsSettings() {
     return [...map.entries()]
   }, [connectors])
 
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const selected = connectors.find((c) => c.instanceId === selectedId) ?? connectors[0] ?? null
+  const selectedGroup = selected ? (groups.find(([type]) => type === selected.descriptor.id)?.[1] ?? []) : []
+
+  const items: ServiceListItem[] = connectors.map((c) => {
+    const meta = STATUS_META[c.status.state] ?? STATUS_META.disconnected
+    const sameType = connectors.filter((o) => o.descriptor.id === c.descriptor.id).length
+    return {
+      id: c.instanceId,
+      label: sameType > 1 && c.label !== c.descriptor.displayName ? `${c.descriptor.displayName} · ${c.label}` : c.label,
+      status: meta.label,
+      tone: STATUS_TONE[c.status.state] ?? 'off',
+      icon: CONNECTOR_ICONS[c.descriptor.id] ?? Plug
+    }
+  })
+
+  if (loading) return <p className="text-sm text-muted-foreground">Loading connectors…</p>
+  if (groups.length === 0) return <p className="text-sm text-muted-foreground">No connectors available.</p>
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Connectors</CardTitle>
-        <CardDescription>
-          Connect external systems — Microsoft 365 (calendar + contacts) and Slack — to feed meetings, people, and
-          knowledge into your library. Microsoft 365 supports multiple accounts (e.g. personal + work).
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {loading ? (
-          <p className="text-sm text-muted-foreground">Loading connectors…</p>
-        ) : groups.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No connectors available.</p>
-        ) : (
-          groups.map(([type, accounts]) => (
-            <ConnectorTypeCard
-              key={type}
-              descriptorId={type}
-              accounts={accounts}
-              onChanged={onChanged}
-              onAdded={onAdded}
-              onRemoved={onRemoved}
-            />
-          ))
-        )}
-      </CardContent>
-    </Card>
+    <ServiceList
+      label="Connectors"
+      items={items}
+      selected={selected?.instanceId ?? null}
+      onSelect={setSelectedId}
+      footer={groups
+        .filter(([, accounts]) => accounts[0]?.multiInstance)
+        .map(([type, accounts]) => (
+          <AddAccountButton
+            key={type}
+            descriptorId={type}
+            name={accounts[0].descriptor.displayName}
+            onAdded={(created) => {
+              onAdded(created)
+              setSelectedId(created.instanceId)
+            }}
+          />
+        ))}
+    >
+      {selected && (
+        <div className="space-y-3">
+          <div>
+            <h3 className="text-lg font-semibold">{selected.descriptor.displayName}</h3>
+            <p className="mt-0.5 text-sm text-muted-foreground">{selected.descriptor.description}</p>
+          </div>
+          <AccountBlock
+            key={selected.instanceId}
+            summary={selected}
+            onChanged={onChanged}
+            // Removal only while another account of the same type remains, so the
+            // type and its "Add account" button never disappear.
+            onRemoved={
+              selected.multiInstance && selectedGroup.length > 1
+                ? (id) => {
+                    onRemoved(id)
+                    setSelectedId(null)
+                  }
+                : undefined
+            }
+          />
+        </div>
+      )}
+    </ServiceList>
+  )
+}
+
+/** "Add <service> account" under the list, for connectors that allow several accounts. */
+function AddAccountButton({
+  descriptorId,
+  name,
+  onAdded
+}: {
+  descriptorId: string
+  name: string
+  onAdded: (s: ConnectorSummary) => void
+}) {
+  const [adding, setAdding] = useState(false)
+  const add = async () => {
+    setAdding(true)
+    try {
+      onAdded(await window.electronAPI.connectors.addInstance(descriptorId))
+    } catch (e) {
+      toast.error(`Add account failed: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setAdding(false)
+    }
+  }
+  return (
+    <Button variant="ghost" size="sm" className="w-full justify-start text-muted-foreground" onClick={add} disabled={adding}>
+      <Plus className="mr-1.5 h-4 w-4" /> {adding ? 'Adding…' : `Add ${name} account`}
+    </Button>
   )
 }
