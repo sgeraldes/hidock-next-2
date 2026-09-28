@@ -62,7 +62,7 @@ const { fakeJensen, fakeDownloadService } = vi.hoisted(() => {
       versionCode: null as string | null
     },
     fakeDownloadService: {
-      getFilesToSync: vi.fn().mockReturnValue([]),
+      getFilesToSyncBatched: vi.fn().mockResolvedValue([]),
       processDownload: vi.fn().mockResolvedValue({ success: true }),
       cancelActiveDownloads: vi.fn().mockReturnValue(0)
     }
@@ -131,7 +131,7 @@ function makeDownloadService(
   overrides: Partial<PipelineDownloadService> = {}
 ): PipelineDownloadService {
   return {
-    getFilesToSync: vi.fn().mockReturnValue([]),
+    getFilesToSyncBatched: vi.fn().mockResolvedValue([]),
     processDownload: vi.fn().mockResolvedValue({ success: true }),
     cancelActiveDownloads: vi.fn().mockReturnValue(0),
     ...overrides

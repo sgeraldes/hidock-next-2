@@ -550,7 +550,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     const call = window.electronAPI?.downloadService?.pause?.()
     call?.catch((e: unknown) => {
       console.error('[AppStore] download pause IPC failed:', e)
-      set({ downloadsPaused: false })
+      // Revert only if nothing (a resume, a state echo) changed it since.
+      if (get().downloadsPaused) set({ downloadsPaused: false })
     })
   },
 
@@ -559,7 +560,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const call = window.electronAPI?.downloadService?.resume?.()
     call?.catch((e: unknown) => {
       console.error('[AppStore] download resume IPC failed:', e)
-      set({ downloadsPaused: true })
+      if (!get().downloadsPaused) set({ downloadsPaused: true })
     })
   },
 

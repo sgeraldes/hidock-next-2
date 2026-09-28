@@ -103,9 +103,9 @@ export interface PipelineJensen {
 }
 
 export interface PipelineDownloadService {
-  getFilesToSync(
+  getFilesToSyncBatched(
     deviceFiles: Array<{ filename: string; size: number; duration: number; dateCreated: Date }>
-  ): Array<{ filename: string; size: number; duration: number; dateCreated: Date; skipReason?: string }>
+  ): Promise<Array<{ filename: string; size: number; duration: number; dateCreated: Date; skipReason?: string }>>
   processDownload(
     filename: string,
     data: Buffer
@@ -245,7 +245,7 @@ export class DevicePipelineService extends EventEmitter {
 
     // RECONCILE (CPU only — no USB)
     this.setPhase('reconciling')
-    const toDownload = this.reconcile(this.cachedFiles ?? [])
+    const toDownload = await this.reconcile(this.cachedFiles ?? [])
 
     if (this.aborted()) return
 
@@ -335,7 +335,7 @@ export class DevicePipelineService extends EventEmitter {
           this.emit('files', this.getFiles())
         }
         this.setPhase('reconciling')
-        const toDownload = this.reconcile(this.cachedFiles ?? [])
+        const toDownload = await this.reconcile(this.cachedFiles ?? [])
         if (toDownload.length > 0) {
           this.setPhase('downloading')
           await this.downloadAll(toDownload)
@@ -392,7 +392,7 @@ export class DevicePipelineService extends EventEmitter {
   // RECONCILE (CPU only — delegates to DownloadService)
   // ==========================================================================
 
-  reconcile(files: FileInfo[]): DownloadItem[] {
+  async reconcile(files: FileInfo[]): Promise<DownloadItem[]> {
     const deviceFiles = files.map((f) => ({
       filename: f.name,
       size: f.length,
@@ -400,7 +400,7 @@ export class DevicePipelineService extends EventEmitter {
       dateCreated: f.time ?? new Date()
     }))
 
-    const reconciled = this.downloadService.getFilesToSync(deviceFiles)
+    const reconciled = await this.downloadService.getFilesToSyncBatched(deviceFiles)
     return reconciled
       .filter((r) => !r.skipReason)
       .map((r) => ({

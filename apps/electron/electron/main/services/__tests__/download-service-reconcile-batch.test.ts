@@ -194,4 +194,44 @@ describe('device file-list reconcile: one transaction, batched yields, hoisted t
       expect.objectContaining({ count: 500 })
     )
   })
+
+  it('two overlapping batched reconciles run one after the other, never interleaved', async () => {
+    const order: string[] = []
+    type Reconciler = { reconcileDeviceFile: (f: DeviceFile, c: unknown) => void }
+    const target = service as unknown as Reconciler
+    const original = target.reconcileDeviceFile.bind(service)
+    const spy = vi.spyOn(target, 'reconcileDeviceFile').mockImplementation((file, ctx) => {
+      order.push(file.filename.slice(0, 1))
+      original(file, ctx)
+    })
+    const first = makeFiles(250)
+    const second = makeFiles(250).map((f) => ({ ...f, filename: `b${f.filename}` }))
+
+    // Auto-sync and a manual refresh both reconcile while the first one yields.
+    await Promise.all([
+      service.getFilesToSyncBatched(first, 100),
+      service.getFilesToSyncBatched(second, 100)
+    ])
+
+    // Every file of the first snapshot before any of the second.
+    expect(order.join('')).toBe('r'.repeat(250) + 'b'.repeat(250))
+    spy.mockRestore()
+  })
+
+  it('re-reads purge tombstones per chunk, so a purge during the yield is honoured', async () => {
+    // The owner purges rec_0150 after the first chunk has been reconciled.
+    mockGetPurgedFilenames.mockReturnValueOnce([]).mockReturnValue(['rec_0150.hda'])
+
+    const results = await service.getFilesToSyncBatched(makeFiles(250), 100)
+
+    expect(mockGetPurgedFilenames).toHaveBeenCalledTimes(3) // once per chunk
+    expect(results.find((r) => r.filename === 'rec_0150.hda')?.skipReason).toContain('Permanently deleted')
+  })
+
+  it('a failed reconcile does not block the next one', async () => {
+    mockRunInTransaction.mockImplementationOnce(() => { throw new Error('disk full') })
+
+    await expect(service.getFilesToSyncBatched(makeFiles(10), 100)).rejects.toThrow('disk full')
+    await expect(service.getFilesToSyncBatched(makeFiles(10), 100)).resolves.toHaveLength(10)
+  })
 })

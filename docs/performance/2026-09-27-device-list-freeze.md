@@ -20,13 +20,18 @@ stopped painting until it finished.
 - The reconcile runs in chunks of 100 files, one transaction per chunk, with a
   `setImmediate` yield between chunks (same pattern as
   `backfillTranscriptIntegrity`). The IPC handler awaits the batched variant.
-- Purge tombstones load once per reconcile into a Set.
+- Reconciles are serialized: a second call (auto-sync, manual refresh, the
+  Device page) waits for the one in progress, so two passes can never both treat
+  a new file as new while one of them yields.
+- Purge tombstones load into a Set once per chunk (1 query per 100 files), so a
+  purge that lands during a yield is still honoured.
+- The device pipeline reconciles through the same batched path.
 - Both device-cache writes run in one transaction.
 - The pipeline publishes the first streamed packet at once, then at most every
   250 ms; the full list is still emitted when the scan returns.
 
 Expected effect: commits drop from thousands to about 22 per reconcile, purge
-lookups from about 8,500 to 1, and the main thread is never blocked for more
+lookups from about 8,500 to 22 (one per chunk), and the main thread is never blocked for more
 than one 100-file chunk.
 
 ## Tests
@@ -53,3 +58,9 @@ sessions (download rows reloaded at boot, transcription rows stamped before the
 process started) sit in a collapsed "Earlier failures (N)" group with one Clear
 button. Rows are named by the recording's display title, never the device file
 name.
+
+Only failures go in that group. A user-cancelled download stays in the normal
+list: its row is the marker that stops reconciliation from queuing the file
+again, so a one-click Clear must never remove it. Schema v60 adds an index on
+`transcription_queue(recording_id, created_at)` for the latest-attempt lookup,
+which runs on every Operations poll.

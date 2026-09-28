@@ -165,6 +165,10 @@ export class DownloadService {
   }
   private stalledCheckInterval: NodeJS.Timeout | null = null // spec-007: periodic stalled check
   private cancelLock = false
+  // Batched reconciles yield between chunks, so two callers (auto-sync,
+  // manual refresh, the Device page) could interleave and both treat a new
+  // file as new. Each reconcile waits for the previous one to finish.
+  private reconcileChain: Promise<unknown> = Promise.resolve()
 
   // B-DWN-009: Dirty-flag caching for getState() to avoid creating new arrays on every call
   private dirty = true
@@ -540,13 +544,25 @@ export class DownloadService {
    * breathe — the same pattern backfillTranscriptIntegrity uses (batches of
    * 100 with setImmediate) after an unbatched loop froze startup for 2.2 s.
    */
-  async getFilesToSyncBatched(
+  getFilesToSyncBatched(
     deviceFiles: DeviceFileSnapshot[],
     batchSize = 100
+  ): Promise<ReconciledDeviceFile[]> {
+    const run = this.reconcileChain.then(() => this.reconcileInChunks(deviceFiles, batchSize))
+    this.reconcileChain = run.catch(() => undefined)
+    return run
+  }
+
+  private async reconcileInChunks(
+    deviceFiles: DeviceFileSnapshot[],
+    batchSize: number
   ): Promise<ReconciledDeviceFile[]> {
     const ctx = this.beginReconcile()
     for (let i = 0; i < deviceFiles.length; i += batchSize) {
       const chunk = deviceFiles.slice(i, i + batchSize)
+      // A purge can land while we yield: re-read the tombstones per chunk
+      // (one query per 100 files) so a just-purged file is never re-queued.
+      if (i > 0) ctx.purged = new Set(getPurgedFilenames())
       runInTransaction(() => {
         for (const file of chunk) {
           this.reconcileDeviceFile(file, ctx)

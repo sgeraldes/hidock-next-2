@@ -16,7 +16,7 @@ import { isCancelledMeetingSubject, scoreMeetingCandidates } from './recording-m
 import { DURATION_LOW_VALUE_MAX_SECONDS, isImpossibleTranscriptDensity } from './value-thresholds'
 import type { QualityRating } from '@/types/knowledge'
 
-const SCHEMA_VERSION = 59
+const SCHEMA_VERSION = 60
 
 const SCHEMA = `
 -- Calendar events from ICS
@@ -778,6 +778,7 @@ CREATE INDEX IF NOT EXISTS idx_recordings_status ON recordings(status);
 CREATE INDEX IF NOT EXISTS idx_transcripts_recording ON transcripts(recording_id);
 CREATE INDEX IF NOT EXISTS idx_embeddings_transcript ON embeddings(transcript_id);
 CREATE INDEX IF NOT EXISTS idx_queue_status ON transcription_queue(status);
+CREATE INDEX IF NOT EXISTS idx_queue_recording ON transcription_queue(recording_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_synced_original ON synced_files(original_filename);
 CREATE INDEX IF NOT EXISTS idx_contacts_email ON contacts(email);
 CREATE INDEX IF NOT EXISTS idx_contacts_name ON contacts(name);
@@ -3096,6 +3097,14 @@ const MIGRATIONS: Record<number, () => void> = {
           FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
       )`)
     console.log('Migration v59 complete')
+  },
+  60: () => {
+    console.log('Running migration to schema v60: transcription_queue(recording_id) index')
+    // getActionableQueueItems looks up the latest attempt per recording on
+    // every Operations poll; without this index it scans the whole queue
+    // once per failed row on the main thread.
+    getDatabase().run('CREATE INDEX IF NOT EXISTS idx_queue_recording ON transcription_queue(recording_id, created_at)')
+    console.log('Migration v60 complete')
   },
 }
 

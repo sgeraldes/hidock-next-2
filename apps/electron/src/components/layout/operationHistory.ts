@@ -17,8 +17,13 @@ export interface SessionTagged {
   fromPreviousSession?: boolean
 }
 
+/**
+ * Failures only. A user-cancelled download from an earlier session stays in
+ * the normal list: its row is the durable marker that stops reconciliation
+ * from queuing the file again, so it must never go in a one-click Clear.
+ */
 export function isEarlierFailure(item: SessionTagged): boolean {
-  return item.fromPreviousSession === true && (item.status === 'failed' || item.status === 'cancelled')
+  return item.fromPreviousSession === true && item.status === 'failed'
 }
 
 export function splitBySession<T extends SessionTagged>(items: readonly T[]): { current: T[]; earlier: T[] } {
