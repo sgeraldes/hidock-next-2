@@ -4,6 +4,7 @@
  * four agentic brains that shell out to their installed CLIs (Claude Code, Codex,
  * Gemini CLI, Kiro CLI).
  */
+import { findCodexCompanion } from './codex-companion'
 import { ClaudeCodeBrain } from './claude-code-brain'
 import { CodexBrain } from './codex-brain'
 import { GeminiApiBrain } from './gemini-api-brain'
@@ -14,15 +15,6 @@ import { OllamaBrain } from './ollama-brain'
 import type { AIBrain, BrainId } from './types'
 
 /**
- * Codex-companion setup script (structured auth probe). Version-pinned to the
- * plugin cache layout on this machine; the CodexBrain silently falls back to a
- * plain `codex --version` presence probe when it's absent, so a missing/renamed
- * companion never breaks auth detection.
- */
-const CODEX_COMPANION_PATH =
-  'C:/Users/Sebastian/.claude/plugins/cache/openai-codex/codex/1.0.6/scripts/codex-companion.mjs'
-
-/**
  * Append-only registration list. Each factory is invoked once and its brain
  * cached. Later phases add their adapters here without colliding with others.
  */
@@ -31,7 +23,7 @@ const REGISTRATIONS: Array<() => AIBrain> = [
   () => new OllamaBrain(),
   () => new LocalOnnxEmbedBrain(),
   () => new ClaudeCodeBrain(),
-  () => new CodexBrain({ companionPath: CODEX_COMPANION_PATH }),
+  () => new CodexBrain({ companionPath: findCodexCompanion() }),
   () => new GeminiCliBrain(),
   () => new KiroCliBrain(),
 ]

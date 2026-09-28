@@ -136,7 +136,7 @@ export function Settings({
   const [transcriptionProvider, setTranscriptionProvider] = useState<'gemini' | 'local-asr' | 'vibevoice'>('gemini')
   const [geminiApiKey, setGeminiApiKey] = useState('')
   const [geminiModel, setGeminiModel] = useState('gemini-3.5-transcribe')
-  const [localAsrPath, setLocalAsrPath] = useState('G:\\Code\\claude-plugins\\plugins\\mcp-asr')
+  const [localAsrPath, setLocalAsrPath] = useState('')
   const [localAsrHfToken, setLocalAsrHfToken] = useState('')
   const [localAsrVocabularyFile, setLocalAsrVocabularyFile] = useState('vocabulary.json')
   const [localAsrDiarize, setLocalAsrDiarize] = useState(true)
@@ -324,7 +324,7 @@ export function Settings({
       transcriptionProvider !== (config.transcription.provider || 'gemini') ||
       geminiApiKey !== config.transcription.geminiApiKey ||
       geminiModel !== (config.transcription.geminiModel || 'gemini-3.5-transcribe') ||
-      localAsrPath !== (config.transcription.localAsrPath || 'G:\\Code\\claude-plugins\\plugins\\mcp-asr') ||
+      localAsrPath !== (config.transcription.localAsrPath || '') ||
       localAsrHfToken !== (config.transcription.localAsrHfToken || '') ||
       localAsrVocabularyFile !== (config.transcription.localAsrVocabularyFile || 'vocabulary.json') ||
       localAsrDiarize !== (config.transcription.localAsrDiarize ?? true) ||
@@ -379,7 +379,7 @@ export function Settings({
     sync('transcriptionProvider', config.transcription.provider || 'gemini', setTranscriptionProvider)
     sync('geminiApiKey', config.transcription.geminiApiKey, setGeminiApiKey)
     sync('geminiModel', config.transcription.geminiModel || 'gemini-3.5-transcribe', setGeminiModel)
-    sync('localAsrPath', config.transcription.localAsrPath || 'G:\\Code\\claude-plugins\\plugins\\mcp-asr', setLocalAsrPath)
+    sync('localAsrPath', config.transcription.localAsrPath || '', setLocalAsrPath)
     sync('localAsrHfToken', config.transcription.localAsrHfToken || '', setLocalAsrHfToken)
     sync('localAsrVocabularyFile', config.transcription.localAsrVocabularyFile || 'vocabulary.json', setLocalAsrVocabularyFile)
     sync('localAsrDiarize', config.transcription.localAsrDiarize ?? true, setLocalAsrDiarize)
@@ -505,7 +505,7 @@ export function Settings({
     const previousApiKey = config?.transcription.geminiApiKey || ''
     const previousModel = config?.transcription.geminiModel || 'gemini-3.5-transcribe'
     const previousProvider = config?.transcription.provider || 'gemini'
-    const previousLocalAsrPath = config?.transcription.localAsrPath || 'G:\\Code\\claude-plugins\\plugins\\mcp-asr'
+    const previousLocalAsrPath = config?.transcription.localAsrPath || ''
     const previousLocalAsrHfToken = config?.transcription.localAsrHfToken || ''
     const previousLocalAsrVocabularyFile = config?.transcription.localAsrVocabularyFile || 'vocabulary.json'
     const previousLocalAsrDiarize = config?.transcription.localAsrDiarize ?? true
@@ -1166,16 +1166,31 @@ export function Settings({
                   </h3>
                     <div>
                       <label htmlFor="localAsrPath" className="text-sm font-medium">ASR MCP Path</label>
-                      <Input
-                        id="localAsrPath"
-                        value={localAsrPath}
-                        onChange={(e) => setLocalAsrPath(e.target.value)}
-                        onKeyDown={(e) => e.key === 'Enter' && handleSaveTranscription()}
-                        disabled={saving}
-                        aria-label="ASR MCP project path"
-                        aria-describedby="localAsrPath-description"
-                        className="mt-1 font-mono text-xs"
-                      />
+                      <div className="mt-1 flex gap-2">
+                        <Input
+                          id="localAsrPath"
+                          value={localAsrPath}
+                          onChange={(e) => setLocalAsrPath(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && handleSaveTranscription()}
+                          disabled={saving}
+                          placeholder="Choose the folder with mcp_runner.py"
+                          aria-label="ASR MCP project path"
+                          aria-describedby="localAsrPath-description"
+                          className="font-mono text-xs"
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={saving}
+                          onClick={async () => {
+                            const picked = await window.electronAPI?.storage?.selectFolder?.(localAsrPath || undefined)
+                            if (picked?.success && picked.data) setLocalAsrPath(picked.data)
+                          }}
+                        >
+                          Browse
+                        </Button>
+                      </div>
                       <p id="localAsrPath-description" className="text-xs text-muted-foreground mt-1">
                         Folder containing mcp_runner.py from the ASR MCP project
                       </p>
