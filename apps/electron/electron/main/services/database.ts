@@ -16,7 +16,7 @@ import { isCancelledMeetingSubject, scoreMeetingCandidates } from './recording-m
 import { DURATION_LOW_VALUE_MAX_SECONDS, isImpossibleTranscriptDensity } from './value-thresholds'
 import type { QualityRating } from '@/types/knowledge'
 
-const SCHEMA_VERSION = 60
+const SCHEMA_VERSION = 61
 
 const SCHEMA = `
 -- Calendar events from ICS
@@ -344,6 +344,34 @@ CREATE TABLE IF NOT EXISTS audio_profiles (
     computed_at TEXT NOT NULL,
     FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
 );
+
+-- Jev evaluation (v61): one System One pass per capture. Stars, kind, work or
+-- personal, transcript trust and more (jev-evaluation.ts). Only the value ever
+-- changes a rating. The rest is read by the Library and later stages.
+CREATE TABLE IF NOT EXISTS recording_evaluations (
+    capture_id TEXT PRIMARY KEY,
+    recording_id TEXT,
+    version INTEGER NOT NULL,
+    model TEXT,
+    stars REAL,
+    star_level INTEGER,
+    stars_confidence REAL,
+    kind TEXT,
+    kind_confidence REAL,
+    context TEXT,
+    context_confidence REAL,
+    transcript_invented REAL,
+    transcript_overfull REAL,
+    has_action_items REAL,
+    sensitive REAL,
+    reasons_json TEXT,
+    answers_json TEXT NOT NULL,
+    input_tokens INTEGER,
+    audio_warning TEXT,
+    evaluated_at TEXT NOT NULL,
+    FOREIGN KEY (capture_id) REFERENCES knowledge_captures(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_recording_evaluations_recording ON recording_evaluations(recording_id);
 
 -- Stage-level processing provenance (v52 / SPEC-009). One provider call can
 -- produce several output stages, but every displayed result references the
@@ -3105,6 +3133,35 @@ const MIGRATIONS: Record<number, () => void> = {
     // once per failed row on the main thread.
     getDatabase().run('CREATE INDEX IF NOT EXISTS idx_queue_recording ON transcription_queue(recording_id, created_at)')
     console.log('Migration v60 complete')
+  },
+  61: () => {
+    console.log('Running migration to schema v61: recording_evaluations')
+    // Additive: a new table the Jev evaluation pass fills. Nothing existing changes.
+    getDatabase().run(`CREATE TABLE IF NOT EXISTS recording_evaluations (
+        capture_id TEXT PRIMARY KEY,
+        recording_id TEXT,
+        version INTEGER NOT NULL,
+        model TEXT,
+        stars REAL,
+        star_level INTEGER,
+        stars_confidence REAL,
+        kind TEXT,
+        kind_confidence REAL,
+        context TEXT,
+        context_confidence REAL,
+        transcript_invented REAL,
+        transcript_overfull REAL,
+        has_action_items REAL,
+        sensitive REAL,
+        reasons_json TEXT,
+        answers_json TEXT NOT NULL,
+        input_tokens INTEGER,
+        audio_warning TEXT,
+        evaluated_at TEXT NOT NULL,
+        FOREIGN KEY (capture_id) REFERENCES knowledge_captures(id) ON DELETE CASCADE
+    )`)
+    getDatabase().run('CREATE INDEX IF NOT EXISTS idx_recording_evaluations_recording ON recording_evaluations(recording_id)')
+    console.log('Migration v61 complete')
   },
 }
 
@@ -13370,4 +13427,59 @@ export function getTranscriptionLockStatus(): {
   }
 
   return { processId: null, acquiredAt: null, updatedAt: null }
+}
+
+// ---------------------------------------------------------------------------
+// Jev evaluations (v61)
+// ---------------------------------------------------------------------------
+
+export interface RecordingEvaluationRow {
+  capture_id: string
+  recording_id: string | null
+  version: number
+  model: string | null
+  stars: number | null
+  star_level: number | null
+  stars_confidence: number | null
+  kind: string | null
+  kind_confidence: number | null
+  context: string | null
+  context_confidence: number | null
+  transcript_invented: number | null
+  transcript_overfull: number | null
+  has_action_items: number | null
+  sensitive: number | null
+  reasons_json: string | null
+  answers_json: string
+  input_tokens: number | null
+  audio_warning: string | null
+  evaluated_at: string
+}
+
+/** Insert or replace a capture's evaluation (one row per capture, latest wins). */
+export function saveRecordingEvaluation(row: Omit<RecordingEvaluationRow, 'evaluated_at'> & { evaluated_at?: string }): void {
+  run(
+    `INSERT INTO recording_evaluations (capture_id, recording_id, version, model, stars, star_level, stars_confidence,
+        kind, kind_confidence, context, context_confidence, transcript_invented, transcript_overfull,
+        has_action_items, sensitive, reasons_json, answers_json, input_tokens, audio_warning, evaluated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(capture_id) DO UPDATE SET
+        recording_id = excluded.recording_id, version = excluded.version, model = excluded.model,
+        stars = excluded.stars, star_level = excluded.star_level, stars_confidence = excluded.stars_confidence,
+        kind = excluded.kind, kind_confidence = excluded.kind_confidence, context = excluded.context,
+        context_confidence = excluded.context_confidence, transcript_invented = excluded.transcript_invented,
+        transcript_overfull = excluded.transcript_overfull, has_action_items = excluded.has_action_items,
+        sensitive = excluded.sensitive, reasons_json = excluded.reasons_json, answers_json = excluded.answers_json,
+        input_tokens = excluded.input_tokens, audio_warning = excluded.audio_warning, evaluated_at = excluded.evaluated_at`,
+    [
+      row.capture_id, row.recording_id, row.version, row.model, row.stars, row.star_level, row.stars_confidence,
+      row.kind, row.kind_confidence, row.context, row.context_confidence, row.transcript_invented,
+      row.transcript_overfull, row.has_action_items, row.sensitive, row.reasons_json, row.answers_json,
+      row.input_tokens, row.audio_warning, row.evaluated_at ?? new Date().toISOString()
+    ]
+  )
+}
+
+export function getRecordingEvaluation(captureId: string): RecordingEvaluationRow | null {
+  return queryOne<RecordingEvaluationRow>('SELECT * FROM recording_evaluations WHERE capture_id = ?', [captureId]) ?? null
 }

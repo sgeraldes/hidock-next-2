@@ -53,8 +53,10 @@ import {
   applyCaptureValueClassification,
   DURATION_LOW_VALUE_MAX_SECONDS,
   getValueClassifierKind,
+  storeEvaluation,
   type RawClassificationResult
 } from './value-classification'
+import { EVALUATION_VERSION } from './jev-evaluation'
 import { JevError } from './jev-client'
 
 // ---------------------------------------------------------------------------
@@ -71,6 +73,11 @@ let MIN_INTERVAL_MS = 800
  *  1,200 requests a minute (docs.typesafe.ai/models, 27-sep-2026); 100 ms keeps
  *  a 2,000-item backlog to a few minutes and far under that limit. */
 let JEV_MIN_INTERVAL_MS = 100
+/** Recordings classified in parallel per chunk when Jev decides. One at a time
+ *  ran at 2.4 a second (27-sep-2026, owner's machine): the wait was the Jev
+ *  round trip, not the work. Six in flight stays well under Jev's 20 requests
+ *  a second. The LLM path stays sequential. */
+let JEV_CONCURRENCY = 6
 /** Terminal parking threshold — a 'failed' item with attempts >= this is
  *  excluded from the eligible set (both the query AND this constant read the
  *  SAME number, per AR-4). */
@@ -88,6 +95,7 @@ export function _setValueBackfillConfigForTests(overrides: {
   chunkSize?: number
   minIntervalMs?: number
   jevMinIntervalMs?: number
+  jevConcurrency?: number
   maxDurableAttempts?: number
   inRunRetryDelaysMs?: number[]
   progressThrottleMs?: number
@@ -99,6 +107,7 @@ export function _setValueBackfillConfigForTests(overrides: {
     JEV_MIN_INTERVAL_MS = overrides.minIntervalMs
   }
   if (overrides.jevMinIntervalMs !== undefined) JEV_MIN_INTERVAL_MS = overrides.jevMinIntervalMs
+  if (overrides.jevConcurrency !== undefined) JEV_CONCURRENCY = overrides.jevConcurrency
   if (overrides.maxDurableAttempts !== undefined) MAX_DURABLE_ATTEMPTS = overrides.maxDurableAttempts
   if (overrides.inRunRetryDelaysMs !== undefined) IN_RUN_RETRY_DELAYS_MS = overrides.inRunRetryDelaysMs
   if (overrides.progressThrottleMs !== undefined) PROGRESS_THROTTLE_MS = overrides.progressThrottleMs
@@ -111,6 +120,7 @@ export function _resetValueBackfillForTests(): void {
   CHUNK_SIZE = 5
   MIN_INTERVAL_MS = 800
   JEV_MIN_INTERVAL_MS = 100
+  JEV_CONCURRENCY = 6
   MAX_DURABLE_ATTEMPTS = 3
   IN_RUN_RETRY_DELAYS_MS = [1000, 2000, 4000]
   PROGRESS_THROTTLE_MS = 500
@@ -230,7 +240,7 @@ const VALUE_BACKFILL_PARKED_PREDICATE = `vbs.status IN ('failed', 'in_progress')
 // run_id note at startValueBackfill).
 // ---------------------------------------------------------------------------
 
-function getEligibleCaptureIds(order: 'newest' | 'oldest'): string[] {
+function getEligibleCaptureIds(order: 'newest' | 'oldest', withEvaluation = false): string[] {
   const orderClause = order === 'oldest' ? 'ASC' : 'DESC'
   // The transcripts JOIN cannot fan a capture out into duplicate rows:
   // transcripts.recording_id is NOT NULL UNIQUE (one transcript per recording).
@@ -240,14 +250,30 @@ function getEligibleCaptureIds(order: 'newest' | 'oldest'): string[] {
        LEFT JOIN transcripts t ON t.recording_id = kc.source_recording_id
        LEFT JOIN recordings r ON r.id = kc.source_recording_id
       WHERE ${VALUE_BACKFILL_PRIVACY_WHERE}
-        AND kc.quality_rating = 'unrated'
-        AND NOT EXISTS (
-          SELECT 1 FROM value_backfill_state vbs
-           WHERE vbs.capture_id = kc.id
-             AND (vbs.status = 'classified' OR (${VALUE_BACKFILL_PARKED_PREDICATE}))
+        AND (
+          (kc.quality_rating = 'unrated'
+            AND NOT EXISTS (
+              SELECT 1 FROM value_backfill_state vbs
+               WHERE vbs.capture_id = kc.id
+                 AND (vbs.status = 'classified' OR (${VALUE_BACKFILL_PARKED_PREDICATE}))
+            ))
+          -- With Jev: every capture with a transcript and no evaluation at the
+          -- current version, rated or not (a rating is never changed by it).
+          -- Short clips get the free duration verdict and no evaluation, so they
+          -- stay out here or they would come back every run.
+          OR (? = 1
+            AND t.full_text IS NOT NULL AND TRIM(t.full_text) != ''
+            AND (r.duration_seconds IS NULL OR r.duration_seconds >= ${DURATION_LOW_VALUE_MAX_SECONDS})
+            AND NOT EXISTS (
+              SELECT 1 FROM recording_evaluations re WHERE re.capture_id = kc.id AND re.version >= ?
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM value_backfill_state vbs
+               WHERE vbs.capture_id = kc.id AND (${VALUE_BACKFILL_PARKED_PREDICATE})
+            ))
         )
       ORDER BY kc.captured_at ${orderClause}`,
-    [MAX_DURABLE_ATTEMPTS]
+    [MAX_DURABLE_ATTEMPTS, withEvaluation ? 1 : 0, EVALUATION_VERSION, MAX_DURABLE_ATTEMPTS]
   )
   return rows.map((r) => r.id)
 }
@@ -573,6 +599,7 @@ async function processOneCapture(captureId: string, runId: string): Promise<Proc
           throw new Error(`applyCaptureValueClassification failed (reason=error) for capture=${captureId}`)
         }
       }
+      if (raw.evaluation) storeEvaluation(captureId, raw.recordingId ?? null, raw.evaluation)
       finalizeClassifiedInTransaction(captureId, runId, resultRating)
     })
   } catch (e) {
@@ -651,6 +678,8 @@ export async function startValueBackfill(opts?: { order?: 'newest' | 'oldest' })
       return { started: false, reason: 'no-provider' }
     }
     runIntervalMs = classifier === 'jev' ? JEV_MIN_INTERVAL_MS : MIN_INTERVAL_MS
+    const parallel = classifier === 'jev' ? Math.max(1, JEV_CONCURRENCY) : 1
+    const chunkSize = parallel > 1 ? parallel : CHUNK_SIZE
     console.log(`[ValueBackfill] classifier: ${classifier}`)
 
     _ensureValueBackfillTable()
@@ -665,31 +694,44 @@ export async function startValueBackfill(opts?: { order?: 'newest' | 'oldest' })
     // also guarded against is closed by the attempts cap in
     // getEligibleCaptureIds instead (Opus review M1/L3).
     const runId = randomUUID()
-    const eligibleIds = getEligibleCaptureIds(order)
+    const eligibleIds = getEligibleCaptureIds(order, classifier === 'jev')
     total = eligibleIds.length
 
     let lastProgressAt = 0
     lastCallStartedAt = 0
     loopStarted = true
 
-    outer: for (let i = 0; i < eligibleIds.length; i += CHUNK_SIZE) {
-      const chunk = eligibleIds.slice(i, i + CHUNK_SIZE)
-      for (const captureId of chunk) {
+    // Counts one finished item; returns false when the run must stop.
+    const record = (outcome: ProcessOutcome): boolean => {
+      if (outcome === 'auth-failed') {
+        stopped = 'auth'
+        return false
+      }
+      processed++
+      if (outcome === 'marked') marked++
+      else if (outcome === 'failed') failed++
+      const now = Date.now()
+      if (now - lastProgressAt >= PROGRESS_THROTTLE_MS || processed === total) {
+        lastProgressAt = now
+        notifyRenderer('value:backfill-progress', { processed, total, marked, failed })
+      }
+      return true
+    }
+
+    outer: for (let i = 0; i < eligibleIds.length; i += chunkSize) {
+      const chunk = eligibleIds.slice(i, i + chunkSize)
+      if (parallel > 1) {
+        // Jev: the whole chunk in flight at once. Each item still does its own
+        // throttle wait, privacy recheck, reserve and finalize transaction.
         if (cancelled) break outer
-
-        const outcome = await processOneCapture(captureId, runId)
-        if (outcome === 'auth-failed') {
-          stopped = 'auth'
-          break outer
-        }
-        processed++
-        if (outcome === 'marked') marked++
-        else if (outcome === 'failed') failed++
-
-        const now = Date.now()
-        if (now - lastProgressAt >= PROGRESS_THROTTLE_MS || processed === total) {
-          lastProgressAt = now
-          notifyRenderer('value:backfill-progress', { processed, total, marked, failed })
+        const outcomes = await Promise.all(chunk.map((captureId) => processOneCapture(captureId, runId)))
+        let keepGoing = true
+        for (const outcome of outcomes) keepGoing = record(outcome) && keepGoing
+        if (!keepGoing) break outer
+      } else {
+        for (const captureId of chunk) {
+          if (cancelled) break outer
+          if (!record(await processOneCapture(captureId, runId))) break outer
         }
       }
       // Yield between chunks so a long run never blocks the renderer for more
@@ -769,7 +811,12 @@ export function getValueBackfillStatus(): ValueBackfillStatus {
   const total = row?.total ?? 0
   const done = row?.done ?? 0
   const failed = row?.failed ?? 0
-  const remaining = Math.max(0, total - done - failed)
+  // With Jev the scan also evaluates rated recordings, so "left" is the real
+  // eligible set, not only the unrated ones.
+  const remaining =
+    getValueClassifierKind() === 'jev'
+      ? getEligibleCaptureIds('newest', true).length
+      : Math.max(0, total - done - failed)
 
   return { running, total, done, marked: row?.marked ?? 0, failed, remaining }
 }

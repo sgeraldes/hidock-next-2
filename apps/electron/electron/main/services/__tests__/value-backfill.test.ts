@@ -1408,6 +1408,80 @@ describe('value-backfill', () => {
   // ---------------------------------------------------------------------
 
   describe('rate limiting', () => {
+    it('with Jev, also evaluates rated recordings that have no evaluation yet, and stores it', async () => {
+      // Rated by an earlier pass, long enough, with a transcript: eligible for the evaluation.
+      seedRecording('rec-rated', { durationSeconds: 900 })
+      seedTranscript('rec-rated')
+      seedCapture('cap-rated', 'rec-rated', { qualityRating: 'garbage', qualitySource: 'ai' })
+      // A short clip gets the free duration verdict and never an evaluation: not eligible.
+      seedRecording('rec-short', { durationSeconds: 8 })
+      seedTranscript('rec-short')
+      seedCapture('cap-short', 'rec-short', { qualityRating: 'garbage', qualitySource: 'ai' })
+      getProviderConfigFromSettingsMock.mockReturnValue(null)
+      mockConfig.transcription.jevApiKey = 'jev-test-key' // pragma: allowlist secret
+      const evaluation = {
+        version: 1, model: 'jev-1.13.0', stars: 1.2, starLevel: 1, starsConfidence: 0.9, kind: 'noise_accidental',
+        kindConfidence: 0.8, context: 'unclear', contextConfidence: 0.7, transcriptInvented: 0.1,
+        transcriptOverfull: 0.1, hasActionItems: 0, sensitive: 0, reasons: [], inputTokens: 500, answers: {},
+        audioWarning: null
+      }
+      classifyCaptureValueRawMock.mockResolvedValue({
+        classification: { value: 'normal', reasons: [], confidence: 0 },
+        currentRating: 'garbage',
+        skipped: 'already-rated',
+        evaluation,
+        recordingId: 'rec-rated',
+        providerCalled: true
+      })
+      try {
+        await startValueBackfill()
+        expect(classifyCaptureValueRawMock).toHaveBeenCalledTimes(1)
+        expect(classifyCaptureValueRawMock).toHaveBeenCalledWith('cap-rated')
+        const stored = queryOne<{ kind: string; star_level: number }>(
+          'SELECT kind, star_level FROM recording_evaluations WHERE capture_id = ?',
+          ['cap-rated']
+        )
+        expect(stored).toMatchObject({ kind: 'noise_accidental', star_level: 1 })
+        // The rating is untouched.
+        expect(queryOne<{ quality_rating: string }>('SELECT quality_rating FROM knowledge_captures WHERE id = ?', ['cap-rated'])?.quality_rating).toBe('garbage')
+        // Evaluated now: the next scan has nothing left for it.
+        expect(getValueBackfillStatus().remaining).toBe(0)
+      } finally {
+        mockConfig.transcription.jevApiKey = ''
+      }
+    })
+
+    it('with Jev, keeps several recordings in flight at once; the LLM stays one at a time', async () => {
+      for (let i = 0; i < 7; i++) seedEligible(`cap-p${i}`)
+      let inFlight = 0
+      let maxInFlight = 0
+      classifyCaptureValueRawMock.mockImplementation(async () => {
+        inFlight++
+        maxInFlight = Math.max(maxInFlight, inFlight)
+        await new Promise((resolve) => setTimeout(resolve, 5))
+        inFlight--
+        return successReply('normal', 0.9)
+      })
+      _setValueBackfillConfigForTests({ jevConcurrency: 3, minIntervalMs: 0, jevMinIntervalMs: 0 })
+      getProviderConfigFromSettingsMock.mockReturnValue(null)
+      mockConfig.transcription.jevApiKey = 'jev-test-key' // pragma: allowlist secret
+      try {
+        await startValueBackfill()
+        expect(classifyCaptureValueRawMock).toHaveBeenCalledTimes(7)
+        expect(maxInFlight).toBe(3)
+      } finally {
+        mockConfig.transcription.jevApiKey = ''
+      }
+
+      // Same data through the LLM path: never more than one call at a time.
+      classifyCaptureValueRawMock.mockClear()
+      maxInFlight = 0
+      for (let i = 0; i < 4; i++) seedEligible(`cap-q${i}`)
+      getProviderConfigFromSettingsMock.mockReturnValue({ provider: 'google', model: 'gemini-3.5-flash', apiKey: 'test-key' }) // pragma: allowlist secret
+      await startValueBackfill()
+      expect(maxInFlight).toBe(1)
+    })
+
     it('starts with only a Jev key (no AI provider) and uses the Jev spacing, not the LLM one', async () => {
       seedEligible('cap-1')
       seedEligible('cap-2')
@@ -1418,6 +1492,8 @@ describe('value-backfill', () => {
       _setValueBackfillConfigForTests({
         minIntervalMs: 60_000,
         jevMinIntervalMs: 30_000,
+        // One at a time, so the second call has to wait for the first.
+        jevConcurrency: 1,
         delayFn: async (ms: number) => {
           delayCalls.push(ms)
         }
