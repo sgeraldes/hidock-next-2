@@ -167,6 +167,9 @@ export class DownloadService {
     isPaused: false
   }
   private stalledCheckInterval: NodeJS.Timeout | null = null // spec-007: periodic stalled check
+  // Files whose transfer went silent once this run. The first stall is retried by
+  // the reconnect; a second one stays failed, so a bad file cannot loop.
+  private stallRetried = new Set<string>()
   private cancelLock = false
   // Batched reconciles yield between chunks, so two callers (auto-sync,
   // manual refresh, the Device page) could interleave and both treat a new
@@ -1006,6 +1009,7 @@ export class DownloadService {
       })
 
       // Update queue item
+      this.stallRetried.delete(item.filename) // a later stall gets its one retry again
       item.status = 'completed'
       item.progress = 100
       item.completedAt = new Date()
@@ -1203,9 +1207,41 @@ export class DownloadService {
   }
 
   /**
-   * Mark download as failed (spec-007: persist failure)
+   * The device stopped sending in the middle of this file and the connection is
+   * being reset (28-sep-2026: the 2 h 27 min meeting stopped at 3.4 of 67 MB right
+   * after the app started, and the same file then came down whole in 26 s). The
+   * first stall is marked interrupted, so the reconnect retries it; a second stall
+   * of the same file stays failed until a manual retry.
    */
-  markFailed(filename: string, error: string): void {
+  noteTransferStall(filename: string, received: number, fileSize: number): void {
+    const item = this.state.queue.get(filename)
+    if (!item || item.status !== 'downloading') return
+    const mb = (n: number): string => (n / 1024 / 1024).toFixed(1)
+    const what = `The device stopped sending at ${mb(received)} of ${mb(fileSize)} MB`
+    if (!this.stallRetried.has(filename)) {
+      this.stallRetried.add(filename)
+      item.status = 'cancelled'
+      item.cancelReason = 'interrupted'
+      item.error = `${what}; retrying after the reconnect`
+      emitActivityLog('warning', `Download stalled: ${filename}`, item.error)
+    } else {
+      item.status = 'failed'
+      item.error = `${what}, a second time; use Retry to try again`
+      emitActivityLog('error', `Download failed: ${filename}`, item.error)
+      if (this.state.currentSession) this.state.currentSession.failedFiles++
+    }
+    item.completedAt = new Date() // terminal-state stamp: prune age source
+    this.persistQueueItem(item)
+    this.markDirty()
+    this.emitStateUpdate(true)
+  }
+
+  /**
+   * Mark download as failed (spec-007: persist failure). Returns false when the
+   * item was already settled as cancelled (a user cancel, or a stall the queue
+   * retries), so the caller does not report a failure that did not happen.
+   */
+  markFailed(filename: string, error: string): boolean {
     const item = this.state.queue.get(filename)
     if (item) {
       // Phase-1 cancellation: never downgrade a user cancel to 'failed'. When a cancel
@@ -1215,7 +1251,7 @@ export class DownloadService {
       // reconnect). A deliberate cancel stays terminal until an explicit retry.
       if (item.status === 'cancelling' || item.status === 'cancelled') {
         console.log(`[DownloadService] Ignoring markFailed for ${filename} — status is '${item.status}'`)
-        return
+        return false
       }
       item.status = 'failed'
       item.error = error
@@ -1231,6 +1267,7 @@ export class DownloadService {
       // C-004: Status transitions emit immediately to prevent stale UI
       this.emitStateUpdate(true)
     }
+    return true
   }
 
   /**
@@ -1782,7 +1819,7 @@ export function registerDownloadServiceHandlers(): void {
 
   // Mark as failed
   ipcMain.handle('download-service:mark-failed', (_, filename: string, error: string) => {
-    service.markFailed(filename, error)
+    return service.markFailed(filename, error)
   })
 
   // Clear completed

@@ -368,9 +368,13 @@ export function useDownloadOrchestrator() {
           removeFromDownloadQueue(item.filename)
           return false
         }
-        console.error(`[useDownloadOrchestrator] Download failed: ${item.filename}`)
-        await window.electronAPI.downloadService.markFailed(item.filename, 'USB transfer failed')
+        const failed = await window.electronAPI.downloadService.markFailed(item.filename, 'USB transfer failed')
         removeFromDownloadQueue(item.filename)
+        if (failed === false) {
+          // Main already settled it: a stall the reconnect retries, logged there.
+          return false
+        }
+        console.error(`[useDownloadOrchestrator] Download failed: ${item.filename}`)
         deviceService.log('error', 'Download failed', `${item.filename}: USB transfer failed`)
         toast({
           title: 'Download failed',
