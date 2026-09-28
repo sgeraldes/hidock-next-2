@@ -3041,6 +3041,7 @@ export function Library() {
                 }
               }}
               onStop={handleStopCallback}
+              onClose={() => setSelectedSourceId(null)}
               onSeek={(startMs) => {
                 if (!selectedRecording || !hasLocalPath(selectedRecording)) return
                 // A time click plays from that point: it starts this recording if

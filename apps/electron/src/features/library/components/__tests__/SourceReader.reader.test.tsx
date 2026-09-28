@@ -296,3 +296,22 @@ describe('SourceReader — Re-diarize', () => {
     await waitFor(() => expect((toast as any).error).toHaveBeenCalledWith('Re-diarize unavailable', expect.any(String)))
   })
 })
+
+// ---------------------------------------------------------------------------
+// Close button: unselects the recording, and stays outside the scrolling body
+// ---------------------------------------------------------------------------
+describe('SourceReader — close', () => {
+  it('shows an X above the scrolling body that calls onClose', () => {
+    const onClose = vi.fn()
+    render(<SourceReader recording={makeRecording()} onClose={onClose} />)
+    const close = screen.getByTestId('reader-close')
+    expect(screen.getByTestId('reader-scroll-body').contains(close)).toBe(false)
+    fireEvent.click(close)
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('has no X when the caller cannot close the reader', () => {
+    render(<SourceReader recording={makeRecording()} />)
+    expect(screen.queryByTestId('reader-close')).not.toBeInTheDocument()
+  })
+})
