@@ -588,7 +588,12 @@ export async function classifyCaptureValueRaw(captureId: string): Promise<RawCla
 
   const jevKey = getConfig().transcription.jevApiKey?.trim()
   const hasTranscript = !!row.transcript_full_text && row.transcript_full_text.trim() !== ''
-  const needsEvaluation = !!jevKey && hasTranscript && (row.evaluation_version ?? 0) < EVALUATION_VERSION
+  // Short clips get the free duration verdict and are never sent to Jev; the
+  // scan's eligibility query applies the same line, but it belongs here too so
+  // no other caller can send one.
+  const longEnough = row.duration_seconds === null || row.duration_seconds >= DURATION_LOW_VALUE_MAX_SECONDS
+  const needsEvaluation =
+    !!jevKey && hasTranscript && longEnough && (row.evaluation_version ?? 0) < EVALUATION_VERSION
   const evaluate = () =>
     evaluateWithJev(jevKey as string, {
       summary: row.summary,

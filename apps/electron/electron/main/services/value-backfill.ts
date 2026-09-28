@@ -240,13 +240,9 @@ const VALUE_BACKFILL_PARKED_PREDICATE = `vbs.status IN ('failed', 'in_progress')
 // run_id note at startValueBackfill).
 // ---------------------------------------------------------------------------
 
-function getEligibleCaptureIds(order: 'newest' | 'oldest', withEvaluation = false): string[] {
-  const orderClause = order === 'oldest' ? 'ASC' : 'DESC'
-  // The transcripts JOIN cannot fan a capture out into duplicate rows:
-  // transcripts.recording_id is NOT NULL UNIQUE (one transcript per recording).
-  const rows = queryAll<{ id: string }>(
-    `SELECT kc.id AS id
-       FROM knowledge_captures kc
+/** FROM + WHERE of the eligible set, shared by the id list and the count. */
+function eligibleFromWhere(): string {
+  return `FROM knowledge_captures kc
        LEFT JOIN transcripts t ON t.recording_id = kc.source_recording_id
        LEFT JOIN recordings r ON r.id = kc.source_recording_id
       WHERE ${VALUE_BACKFILL_PRIVACY_WHERE}
@@ -271,11 +267,26 @@ function getEligibleCaptureIds(order: 'newest' | 'oldest', withEvaluation = fals
               SELECT 1 FROM value_backfill_state vbs
                WHERE vbs.capture_id = kc.id AND (${VALUE_BACKFILL_PARKED_PREDICATE})
             ))
-        )
-      ORDER BY kc.captured_at ${orderClause}`,
-    [MAX_DURABLE_ATTEMPTS, withEvaluation ? 1 : 0, EVALUATION_VERSION, MAX_DURABLE_ATTEMPTS]
+        )`
+}
+
+function eligibleParams(withEvaluation: boolean): unknown[] {
+  return [MAX_DURABLE_ATTEMPTS, withEvaluation ? 1 : 0, EVALUATION_VERSION, MAX_DURABLE_ATTEMPTS]
+}
+
+function getEligibleCaptureIds(order: 'newest' | 'oldest', withEvaluation = false): string[] {
+  const orderClause = order === 'oldest' ? 'ASC' : 'DESC'
+  // The transcripts JOIN cannot fan a capture out into duplicate rows:
+  // transcripts.recording_id is NOT NULL UNIQUE (one transcript per recording).
+  const rows = queryAll<{ id: string }>(
+    `SELECT kc.id AS id ${eligibleFromWhere()} ORDER BY kc.captured_at ${orderClause}`,
+    eligibleParams(withEvaluation)
   )
   return rows.map((r) => r.id)
+}
+
+function countEligibleCaptures(withEvaluation: boolean): number {
+  return queryOne<{ n: number }>(`SELECT COUNT(*) AS n ${eligibleFromWhere()}`, eligibleParams(withEvaluation))?.n ?? 0
 }
 
 /**
@@ -808,15 +819,28 @@ export function getValueBackfillStatus(): ValueBackfillStatus {
     [MAX_DURABLE_ATTEMPTS]
   )
 
+  const failed = row?.failed ?? 0
+  if (getValueClassifierKind() === 'jev') {
+    // With Jev the scan evaluates every transcribed recording, rated or not, so
+    // all three numbers come from the evaluation set: done = evaluated at the
+    // current version, remaining = still eligible, total = both. The marker
+    // table alone would count evaluation-only passes as "classified" and let
+    // total, done and remaining disagree.
+    const evaluated =
+      queryOne<{ n: number }>(
+        `SELECT COUNT(*) AS n FROM recording_evaluations re
+           JOIN knowledge_captures kc ON kc.id = re.capture_id
+           LEFT JOIN transcripts t ON t.recording_id = kc.source_recording_id
+           LEFT JOIN recordings r ON r.id = kc.source_recording_id
+          WHERE re.version >= ? AND ${VALUE_BACKFILL_PRIVACY_WHERE}`,
+        [EVALUATION_VERSION]
+      )?.n ?? 0
+    const remaining = countEligibleCaptures(true)
+    return { running, total: evaluated + remaining, done: evaluated, marked: row?.marked ?? 0, failed, remaining }
+  }
+
   const total = row?.total ?? 0
   const done = row?.done ?? 0
-  const failed = row?.failed ?? 0
-  // With Jev the scan also evaluates rated recordings, so "left" is the real
-  // eligible set, not only the unrated ones.
-  const remaining =
-    getValueClassifierKind() === 'jev'
-      ? getEligibleCaptureIds('newest', true).length
-      : Math.max(0, total - done - failed)
-
+  const remaining = Math.max(0, total - done - failed)
   return { running, total, done, marked: row?.marked ?? 0, failed, remaining }
 }
