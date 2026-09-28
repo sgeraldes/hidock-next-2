@@ -16,9 +16,11 @@ import { open } from 'fs/promises'
 export const MIC_SHARE_MIN = 0.65
 /** Less speech than this says nothing about who the speaker is. */
 export const MIN_SPEECH_SECONDS = 5
-/** Every 4th frame is enough to compare two channels' energy, and 4 times cheaper. */
-const FRAME_STRIDE = 4
-const READ_SECONDS = 1
+/** A quarter second out of every second of a turn is enough to compare two channels, and reads a quarter of the file. */
+const WINDOW_SECONDS = 0.25
+const STEP_SECONDS = 1
+/** Where the fmt and data headers are looked for (a WAV may carry metadata before them). */
+const HEAD_BYTES = 64 * 1024
 
 export const LIVE_FILENAME = /-Live(-\d+)?\.wav$/i
 
@@ -68,24 +70,25 @@ export async function channelEnergyBySpeaker(
   const out = new Map<string, ChannelEnergy>()
   const file = await open(wavPath, 'r')
   try {
-    const head = Buffer.alloc(4096)
+    const head = Buffer.alloc(HEAD_BYTES)
     const { bytesRead } = await file.read(head, 0, head.length, 0)
     const layout = parseWavLayout(head.subarray(0, bytesRead))
     if (!layout) return out
     const frameBytes = 4
     const totalFrames = Math.floor(layout.dataBytes / frameBytes)
-    const chunkFrames = layout.sampleRate * READ_SECONDS
-    const buf = Buffer.alloc(chunkFrames * frameBytes)
+    const windowFrames = Math.max(1, Math.round(layout.sampleRate * WINDOW_SECONDS))
+    const stepFrames = Math.max(windowFrames, Math.round(layout.sampleRate * STEP_SECONDS))
+    const buf = Buffer.alloc(windowFrames * frameBytes)
     for (const seg of segments) {
       if (!seg.speaker || typeof seg.start !== 'number' || typeof seg.end !== 'number' || seg.end - seg.start < 0.5) continue
       const first = Math.max(0, Math.floor(seg.start * layout.sampleRate))
       const last = Math.min(totalFrames, Math.floor(seg.end * layout.sampleRate))
       if (last <= first) continue
       const acc = out.get(seg.speaker) ?? { mic: 0, other: 0, seconds: 0 }
-      for (let frame = first; frame < last; frame += chunkFrames) {
-        const frames = Math.min(chunkFrames, last - frame)
+      for (let frame = first; frame < last; frame += stepFrames) {
+        const frames = Math.min(windowFrames, last - frame)
         const { bytesRead: got } = await file.read(buf, 0, frames * frameBytes, layout.dataOffset + frame * frameBytes)
-        for (let i = 0; i + frameBytes <= got; i += frameBytes * FRAME_STRIDE) {
+        for (let i = 0; i + frameBytes <= got; i += frameBytes) {
           const left = buf.readInt16LE(i)
           const right = buf.readInt16LE(i + 2)
           const mic = micChannel === 0 ? left : right
@@ -117,7 +120,8 @@ export interface LiveOwnerDeps {
   segments: (id: string) => TimedSegment[]
   speakerMap: (id: string) => Array<{ speaker_label: string; contact_id: string }>
   ownerContactId: () => string | null
-  micChannel: () => 0 | 1 | null
+  /** The microphone channel noted with this file when it was recorded (not today's setting). */
+  micChannel: (wavPath: string) => 0 | 1 | null
   assign: (recordingId: string, label: string, contactId: string) => void
 }
 
@@ -131,8 +135,8 @@ export async function nameOwnerOnLiveRecording(recordingId: string, deps: LiveOw
   if (!rec?.file_path || !LIVE_FILENAME.test(rec.filename ?? rec.file_path)) return { named: false, reason: 'not a live recording' }
   const owner = deps.ownerContactId()
   if (!owner) return { named: false, reason: 'no owner chosen in Settings' }
-  const mic = deps.micChannel()
-  if (mic === null) return { named: false, reason: 'the microphone channel is not known yet' }
+  const mic = deps.micChannel(rec.file_path)
+  if (mic === null) return { named: false, reason: 'the microphone channel was not noted for this recording' }
   const map = deps.speakerMap(recordingId)
   if (map.some((m) => m.contact_id === owner)) return { named: false, reason: 'the owner is already named here' }
   const energy = await channelEnergyBySpeaker(rec.file_path, deps.segments(recordingId), mic)

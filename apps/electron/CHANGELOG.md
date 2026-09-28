@@ -50,6 +50,9 @@ recording, and Microsoft 365 and Slack connect on first try.
   channels to a WAV in the recordings folder. When it stops, the recording is in the Library, linked
   to its meeting and transcribed like any other, diarization included. A stream cut off by a crash
   or an unplugged cable is saved too. Off with the switch in Settings > Recording.
+- **"This is you".** Choose your contact on Settings > Speakers & voices. In a live stream saved
+  from the HiDock, the speaker on the microphone channel is then named after you. Nobody is named
+  when that is not clear.
 - **Secrets, Shortcuts and Library pages.** Secrets lists every stored key and token, set or
   not, with Replace and Remove; Shortcuts lists the keys HiDock answers to; Library sets the rows,
   the sort and how each part of a source opens.

@@ -6,7 +6,7 @@ import {
 } from '@hidock/transcription'
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import { getBrainRegistry, resolveGeminiApiKey } from './brains'
-import { readFile, existsSync } from 'fs'
+import { readFile, readFileSync, existsSync } from 'fs'
 import { promisify } from 'util'
 import { spawn } from 'child_process'
 import { join, isAbsolute } from 'path'
@@ -93,6 +93,7 @@ function spawnStreaming(
 }
 import { getConfig } from './config'
 import { nameOwnerOnLiveRecording, type LiveOwnerDeps } from './live-channel-speakers'
+import { liveNotePath } from './realtime-recorder'
 import { languageFor } from './transcription-language'
 import { isFeatureEnabled } from './feature-gate'
 import {
@@ -456,11 +457,14 @@ const liveOwnerDeps: LiveOwnerDeps = {
   },
   speakerMap: (id) => getSpeakerMap(id),
   ownerContactId: () => getConfig().identity?.ownerContactId || null,
-  micChannel: () => {
-    const t = getConfig().transcription
-    const pinned = t.liveMicChannel
-    const measured = t.liveMicChannelMeasured
-    return pinned === 0 || pinned === 1 ? pinned : measured === 0 || measured === 1 ? measured : null
+  // The channel noted with the file when it was recorded: today's setting may differ.
+  micChannel: (wavPath) => {
+    try {
+      const note = JSON.parse(readFileSync(liveNotePath(wavPath), 'utf8')) as { micChannel?: unknown }
+      return note.micChannel === 0 || note.micChannel === 1 ? note.micChannel : null
+    } catch {
+      return null
+    }
   },
   assign: (recordingId, label, contactId) => {
     assignSpeaker(recordingId, label, { contactId })

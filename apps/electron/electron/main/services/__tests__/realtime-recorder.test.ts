@@ -125,4 +125,12 @@ describe('realtime recorder', () => {
     expect(recoverPartialLiveRecordings(folder)).toEqual([join(folder, '2026Sep28-104512-Live-2.wav')])
     expect(readFileSync(join(folder, '2026Sep28-104512-Live.wav'), 'utf8')).toBe('kept')
   })
+
+  it('notes which channel was the microphone next to the file', () => {
+    const rec = new RealtimeRecorder({ ...deps, micChannel: () => 1 })
+    rec.start()
+    rec.write(packet([1, 2]))
+    rec.finish()
+    expect(JSON.parse(readFileSync(join(folder, '2026Sep28-104512-Live.live.json'), 'utf8'))).toEqual({ micChannel: 1 })
+  })
 })
