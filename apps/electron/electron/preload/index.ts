@@ -896,6 +896,11 @@ export interface ElectronAPI {
     getInfo: () => Promise<any>
     getUsage?: () => Promise<{ success: boolean; data?: import('../../src/types').StorageLocationUsage[]; error?: string }>
     recordingsOverLimit?: () => Promise<{ success: boolean; data?: boolean; error?: string }>
+    planMove?: (folder: 'recordings' | 'transcripts' | 'data', to: string) => Promise<{ success: boolean; data?: import('../../src/types').StorageMovePlan; error?: string }>
+    moveFolder?: (folder: 'recordings' | 'transcripts', to: string) => Promise<{ success: boolean; data?: { copiedFiles: number; copiedBytes: number; cancelled: boolean }; error?: string }>
+    switchFolder?: (folder: 'recordings' | 'transcripts', to: string) => Promise<{ success: boolean; error?: string }>
+    cancelMove?: () => Promise<{ success: boolean; data?: boolean }>
+    onMoveProgress?: (cb: (p: { folder: string; copiedFiles: number; totalFiles: number; copiedBytes: number; totalBytes: number }) => void) => () => void
     openFolder: (folder: 'recordings' | 'transcripts' | 'data') => Promise<boolean>
     selectFolder?: (currentPath?: string) => Promise<{ success: boolean; data?: string | null; error?: string }>
     openFile: (filePath: string) => Promise<{ success: boolean; error?: string }>
@@ -1869,6 +1874,15 @@ const electronAPI: ElectronAPI = {
     getInfo: () => callIPC('storage:get-info'),
     getUsage: () => callIPC('storage:get-usage'),
     recordingsOverLimit: () => callIPC('storage:recordings-over-limit'),
+    planMove: (folder, to) => callIPC('storage:plan-move', folder, to),
+    moveFolder: (folder, to) => callIPC('storage:move-folder', folder, to),
+    switchFolder: (folder, to) => callIPC('storage:switch-folder', folder, to),
+    cancelMove: () => callIPC('storage:cancel-move'),
+    onMoveProgress: (cb) => {
+      const listener = (_: unknown, p: Parameters<typeof cb>[0]) => cb(p)
+      ipcRenderer.on('storage:move-progress', listener)
+      return () => ipcRenderer.removeListener('storage:move-progress', listener)
+    },
     openFolder: (folder) => callIPC('storage:open-folder', folder),
     selectFolder: (currentPath) => callIPC('storage:select-folder', currentPath),
     openFile: (filePath) => callIPC('storage:open-file', filePath),
