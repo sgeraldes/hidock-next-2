@@ -145,7 +145,7 @@ export function Settings({
   /** 'auto' | '0' | '1' — kept as a string because the Select is string-valued. */
   const [liveMicChannelSetting, setLiveMicChannelSetting] = useState('auto')
   const [chatProvider, setChatProvider] = useState<'gemini' | 'ollama'>('gemini')
-  const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434')
+  const [ollamaUrl, setOllamaUrl] = useState('')
   const [showApiKey, setShowApiKey] = useState(false)
   const [storageLoading, setStorageLoading] = useState(false)
   const [storagePaths, setStoragePaths] = useState<Record<StorageFolder, string>>({
@@ -669,7 +669,7 @@ export function Settings({
 
     // Store previous values for rollback
     const previousChatProvider = config?.chat.provider || 'gemini'
-    const previousOllamaUrl = config?.embeddings.ollamaBaseUrl || 'http://localhost:11434'
+    const previousOllamaUrl = config?.embeddings.ollamaBaseUrl || ''
     const previousContextSize = config?.chat.maxContextChunks || RAG_DEFAULTS.MAX_CONTEXT_CHUNKS
 
     const chatUpdates = {
