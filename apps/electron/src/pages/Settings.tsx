@@ -16,7 +16,10 @@ import {
   KeyRound,
   LoaderCircle,
   TriangleAlert,
-  CalendarDays
+  CalendarDays,
+  Workflow,
+  Cpu,
+  Radio
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -58,6 +61,8 @@ import { appLocale } from '@/lib/locale'
 import { DisplaySection } from '@/features/settings/DisplaySection'
 import { DeviceStorageCard, StorageUsageLine, useStorageUsage } from '@/features/settings/StorageUsage'
 import { StorageMoveConfirm } from '@/features/settings/StorageMoveConfirm'
+import { ServiceList } from '@/features/settings/ServiceList'
+import { TranscriptionPipelineControls } from '@/features/settings/TranscriptionPipelineControls'
 
 // RAG configuration constants — MAX_CONTEXT_CHUNKS must match config.ts default (10)
 const RAG_DEFAULTS = {
@@ -67,6 +72,7 @@ const RAG_DEFAULTS = {
 } as const
 
 type StorageFolder = 'recordings' | 'transcripts' | 'data'
+type TranscriptionPane = 'pipeline' | 'gemini' | 'local' | 'live'
 
 
 const STORAGE_LABELS: Record<StorageFolder, string> = {
@@ -128,6 +134,7 @@ export function Settings({
   const { config, loadConfig, updateConfig, configLoading } = useConfigStore()
   const { usage: storageUsage, reload: reloadStorageUsage } = useStorageUsage()
   const [pendingMove, setPendingMove] = useState<StorageMovePlan | null>(null)
+  const [transcriptionPane, setTranscriptionPane] = useState<TranscriptionPane>('pipeline')
   const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null)
   const [storageError, setStorageError] = useState<string | null>(null) // B-SET-002: Storage error state
   const [saving, setSaving] = useState(false)
@@ -1129,11 +1136,25 @@ export function Settings({
             <Card>
               <CardHeader>
                 <CardTitle>Transcription</CardTitle>
-                <CardDescription>Choose cloud Gemini or local ASR for meeting transcripts</CardDescription>
+                <CardDescription>What happens to each recording, and the services that transcribe it.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
+                <ServiceList
+                  label="Transcription"
+                  selected={transcriptionPane}
+                  onSelect={(id) => setTranscriptionPane(id as TranscriptionPane)}
+                  items={[
+                    { id: 'pipeline', label: 'Pipeline', status: config?.transcription.autoTranscribe === false ? 'Manual' : 'Automatic', tone: 'ok', icon: Workflow },
+                    { id: 'gemini', label: 'Gemini', status: transcriptionProvider === 'gemini' ? 'Default' : isSavedSecret(geminiApiKey) || geminiApiKey ? 'Set up' : 'Not set up', tone: transcriptionProvider === 'gemini' ? 'ok' : 'off', icon: Sparkles },
+                    { id: 'local', label: 'Local ASR & VibeVoice', status: transcriptionProvider === 'local-asr' || transcriptionProvider === 'vibevoice' ? 'Default' : localAsrPath ? 'Set up' : 'Not set up', tone: transcriptionProvider === 'local-asr' || transcriptionProvider === 'vibevoice' ? 'ok' : 'off', icon: Cpu },
+                    { id: 'live', label: 'Live transcription', status: 'Gemini Live', tone: 'off', icon: Radio }
+                  ]}
+                >
+                <div className="space-y-4">
+                {transcriptionPane === 'pipeline' && (
+                <>
                 <div>
-                  <label htmlFor="transcriptionProvider" className="text-sm font-medium">Provider in use</label>
+                  <label htmlFor="transcriptionProvider" className="text-sm font-medium">Default service</label>
                   <select
                     id="transcriptionProvider"
                     value={transcriptionProvider}
@@ -1150,10 +1171,14 @@ export function Settings({
                   </select>
                   <p id="transcriptionProvider-description" className="mt-1 text-xs text-muted-foreground">
                     {TRANSCRIPTION_PROVIDERS.find((provider) => provider.value === transcriptionProvider)?.detail}
-                    {' '}Each provider keeps its settings below, whichever one is in use.
+                    {' '}Each service keeps its own settings in its item on the left.
                   </p>
                 </div>
+                <TranscriptionPipelineControls />
+                </>
+                )}
 
+                {transcriptionPane === 'gemini' && (
                 <section aria-labelledby="gemini-settings-heading" className="space-y-4 rounded-xl border border-border p-4">
                   <h3 id="gemini-settings-heading" className="flex items-center gap-2 text-sm font-semibold">
                     Gemini
@@ -1228,7 +1253,9 @@ export function Settings({
                       </p>
                     </div>
                 </section>
+                )}
 
+                {transcriptionPane === 'local' && (
                 <section aria-labelledby="local-asr-settings-heading" className="space-y-4 rounded-xl border border-border p-4">
                   <h3 id="local-asr-settings-heading" className="flex items-center gap-2 text-sm font-semibold">
                     Local ASR and VibeVoice
@@ -1321,7 +1348,10 @@ export function Settings({
                       </div>
                     </div>
                 </section>
+                )}
 
+                {transcriptionPane === 'live' && (
+                <>
                 {/*
                   Live transcription speaker channel. The device sends two
                   channels and the Live API does no diarization, so which channel
@@ -1372,6 +1402,10 @@ export function Settings({
                   </Select>
                 </div>
 
+                </>
+                )}
+
+                {transcriptionPane !== 'live' && (
                 <Button
                   onClick={handleSaveTranscription}
                   disabled={saving || !isTranscriptionDirty}
@@ -1380,6 +1414,9 @@ export function Settings({
                   <Save className="h-4 w-4 mr-2" aria-hidden="true" />
                   {isTranscriptionDirty ? 'Save' : 'Saved'}
                 </Button>
+                )}
+                </div>
+                </ServiceList>
               </CardContent>
             </Card>
             </>
