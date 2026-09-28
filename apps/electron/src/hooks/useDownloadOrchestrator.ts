@@ -148,6 +148,25 @@ export function clearAllDownloadBookkeeping(): void {
  * - auto-download ON  → all pending (bulk auto-sync semantics)
  * - auto-download OFF → only items the user explicitly requested
  */
+/**
+ * True when automatic downloads must stop: the recordings folder reached its
+ * limit, or the check itself failed (fail closed, storage review 28-sep-2026).
+ */
+async function recordingsFull(): Promise<boolean> {
+  try {
+    const over = await window.electronAPI.storage?.recordingsOverLimit?.()
+    if (!over) return false // no limit support in this build
+    if (!over.success || over.data) {
+      console.warn('[DownloadOrchestrator] Recordings folder is full or could not be measured; automatic downloads pause', over.error ?? '')
+      return true
+    }
+    return false
+  } catch (err) {
+    console.warn('[DownloadOrchestrator] Storage limit check failed; automatic downloads pause', err)
+    return true
+  }
+}
+
 export function selectDownloadsToProcess<T extends { filename: string }>(
   pending: T[],
   requested: Set<string>,
@@ -477,13 +496,7 @@ export function useDownloadOrchestrator() {
       autoDownload = cfg?.device?.autoDownload === true
       // Settings > Storage: over the recordings limit, only downloads the
       // person asked for go ahead.
-      if (autoDownload) {
-        const over = await window.electronAPI.storage?.recordingsOverLimit?.()
-        if (over?.success && over.data) {
-          autoDownload = false
-          console.warn('[DownloadOrchestrator] Recordings are over their storage limit; auto-download paused')
-        }
-      }
+      if (autoDownload && (await recordingsFull())) autoDownload = false
     } catch {
       autoDownload = false
     }
@@ -543,6 +556,9 @@ export function useDownloadOrchestrator() {
     // newly-detected newer recording — or a user-explicit request — preempts the
     // remaining backlog immediately (recency-first, mirroring the transcription queue).
     while (true) {
+      // Settings > Storage limit, checked before every automatic file: once the
+      // folder is full only the downloads the person asked for continue.
+      if (autoDownload && (await recordingsFull())) autoDownload = false
       // Round-4 [HIGH]: observe the device-sync gate BEFORE each new dequeue.
       // A live disable mid-queue stops the loop here — the in-flight item has
       // already finished, every remaining item stays PENDING (untouched, never

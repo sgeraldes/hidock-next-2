@@ -168,6 +168,7 @@ export interface StorageLocationUsage {
   limitBytes: number | null
   overLimit: boolean
   disk: { totalBytes: number; freeBytes: number } | null
+  error: string | null
 }
 
 export interface StorageMovePlan {
@@ -179,6 +180,7 @@ export interface StorageMovePlan {
   targetFreeBytes: number | null
   targetHasFiles: boolean
   targetHasDatabase?: boolean
+  canSwitchWithoutMoving: boolean
   blocker: string | null
 }
 

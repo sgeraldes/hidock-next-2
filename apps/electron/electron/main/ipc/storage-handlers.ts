@@ -65,10 +65,12 @@ export function registerStorageHandlers(): void {
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
     }
   })
-  ipcMain.handle('storage:move-folder', async (event, folder: unknown, to: unknown) => {
+  ipcMain.handle('storage:move-folder', async (event, folder: unknown, to: unknown, expected: unknown) => {
     try {
       if (!isMovable(folder) || typeof to !== 'string') throw new Error('Invalid folder')
-      const result = await moveFolder(folder, to, (progress) => {
+      const exp = expected as { files?: unknown; bytes?: unknown } | undefined
+      if (typeof exp?.files !== 'number' || typeof exp?.bytes !== 'number') throw new Error('Review the move first')
+      const result = await moveFolder(folder, to, { files: exp.files, bytes: exp.bytes }, (progress) => {
         if (!event.sender.isDestroyed()) event.sender.send('storage:move-progress', progress)
       })
       resetStorageLimitCache()
