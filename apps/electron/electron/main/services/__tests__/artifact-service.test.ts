@@ -22,7 +22,8 @@ const dbPath = join(testRoot, 'hidock.db')
 const srcDir = join(testRoot, 'src')
 
 // database.ts reads getDatabasePath from file-storage.
-vi.mock('../file-storage', () => ({ getDatabasePath: () => dbPath }))
+// The captures folder is <data>/artifacts unless Settings says otherwise.
+vi.mock('../file-storage', () => ({ getDatabasePath: () => dbPath, getCapturesPath: () => `${testRoot}/artifacts` }))
 
 // artifact-service reads getDataPath (artifacts store root); artifact-types reads
 // getConfig (no Gemini key → image extraction skips gracefully).
