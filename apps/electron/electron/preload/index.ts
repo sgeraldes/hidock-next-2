@@ -381,6 +381,8 @@ export interface ElectronAPI {
     set: (config: any) => Promise<any>
     updateSection: (section: string, values: any) => Promise<any>
     getValue: (key: string) => Promise<any>
+    /** The shipped defaults (secrets redacted), for "Default:" and Reset. */
+    getDefaults: () => Promise<Result<Record<string, Record<string, unknown>>>>
     listGeminiModels: () => Promise<any>
     checkSpeakerModelAccess: (token?: string) => Promise<any>
     openSpeakerModelAccess: () => Promise<any>
@@ -1635,6 +1637,7 @@ const electronAPI: ElectronAPI = {
     set: (config) => callIPC('config:set', config),
     updateSection: (section, values) => callIPC('config:update-section', section, values),
     getValue: (key) => callIPC('config:get-value', key),
+    getDefaults: () => callIPC('config:get-defaults'),
     listGeminiModels: () => callIPC('config:listGeminiModels'),
     checkSpeakerModelAccess: (token) => callIPC('config:checkSpeakerModelAccess', token),
     openSpeakerModelAccess: () => callIPC('config:openSpeakerModelAccess')

@@ -1,7 +1,7 @@
 import { ipcMain, shell } from 'electron'
 import { startConnectorSchedule } from '../services/connectors'
 import { isSavedSecret, redactSecrets, withoutSavedSecrets } from '../../../src/shared/secret-fields'
-import { getConfig, saveConfig, updateConfig, AppConfig, RETIRED_GEMINI_MODELS } from '../services/config'
+import { getConfig, getDefaultConfig, saveConfig, updateConfig, AppConfig, RETIRED_GEMINI_MODELS } from '../services/config'
 import { initializeFileStorage } from '../services/file-storage'
 import { listGeminiTranscriptionModels } from '../services/gemini-models'
 import { success, error as errorResult } from '../types/api'
@@ -91,6 +91,17 @@ export function registerConfigHandlers(): void {
 
   // List the audio-transcription-capable Gemini models available to the saved
   // API key (live from the API; falls back to a concrete list when unreachable).
+  // The shipped defaults, so Settings shows and resets to them without
+  // repeating any value in the renderer (settings spec: one source per default).
+  ipcMain.handle('config:get-defaults', async () => {
+    try {
+      return success(redactSecrets(getDefaultConfig()))
+    } catch (err) {
+      console.error('[config:get-defaults] Error:', err)
+      return errorResult('INTERNAL_ERROR', 'Failed to read the default settings', err instanceof Error ? err.message : String(err))
+    }
+  })
+
   ipcMain.handle('config:listGeminiModels', async () => {
     try {
       const key = getConfig().transcription.geminiApiKey
