@@ -68,6 +68,7 @@ export interface RepairResult {
 // Shared parser (single source of truth) — re-exported here so existing
 // consumers of this module keep working.
 import { parseHiDockFilenameDate } from './hidock-filename'
+import { autoLinkRecordingsToMeetings } from './org-reconciler'
 export { parseHiDockFilenameDate } from './hidock-filename'
 
 /**
@@ -568,9 +569,8 @@ class IntegrityService {
       // A repaired date_recorded changes what a recording overlaps — re-run the
       // batch auto-linker so rows whose dates were just corrected (e.g. files
       // that arrived with the copy time) get their meeting link now, not on
-      // some later calendar sync. Lazy import keeps this module cycle-free.
+      // some later calendar sync.
       try {
-        const { autoLinkRecordingsToMeetings } = await import('./org-reconciler')
         const linked = autoLinkRecordingsToMeetings()
         if (linked > 0) {
           console.log(`[IntegrityService] Auto-linked ${linked} recording(s) after date repairs`)

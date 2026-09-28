@@ -10,6 +10,7 @@ import { calendarWindow } from './calendar-window'
 import { whenBootTasksSettled, areBootTasksSettled } from './boot-scheduler'
 import { emitActivityLog } from './activity-log'
 import { getEventBus } from './event-bus'
+import { reconcileOrganization } from './org-reconciler'
 
 // Re-export package types and correlate for consumers (e.g. recording-watcher)
 export { correlate } from '@hidock/calendar-sync'
@@ -930,12 +931,8 @@ async function runSyncCalendar(
     }
 
     // Tie the new meetings into the rest of the app: auto-link overlapping
-    // recordings and create People from attendees. Non-fatal. Lazy import:
-    // org-reconciler is a heavy, opportunistically-invoked service kept out of
-    // this module's static import surface (execution deferral, not chunk
-    // splitting — the main process bundles to a single file regardless).
+    // recordings and create People from attendees. Non-fatal.
     try {
-      const { reconcileOrganization } = await import('./org-reconciler')
       reconcileOrganization()
     } catch (reconcileError) {
       console.error('Post-sync reconciliation failed:', reconcileError)

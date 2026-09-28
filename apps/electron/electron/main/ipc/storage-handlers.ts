@@ -32,6 +32,7 @@ import { isFeatureEnabled } from '../services/feature-gate'
 // services/hidock-filename.ts) — see that module for why filename dates are
 // authoritative over mtimes.
 import { parseHiDockFilenameDate } from '../services/hidock-filename'
+import { queueTranscriptionIfEnabled } from '../services/transcription'
 
 export function registerStorageHandlers(): void {
   // Get storage info
@@ -311,13 +312,12 @@ export function registerStorageHandlers(): void {
       // recurring row before transcription had any chance to repair it.
       enrichRecordingScheduleMetadata(recordingId)
 
-      // Add to transcription queue only when auto-transcribe is enabled. Lazy
-      // import: keeps the heavy transcription module out of this handler's
-      // static surface for the common (no-new-recording) path (execution
-      // deferral, not chunk splitting).
-      import('../services/transcription').then(({ queueTranscriptionIfEnabled }) => {
+      // Add to transcription queue only when auto-transcribe is enabled.
+      try {
         queueTranscriptionIfEnabled(recordingId)
-      }).catch(() => {})
+      } catch {
+        // Best-effort: the recording is saved either way.
+      }
 
       // Track this file as synced so we don't re-download it
       addSyncedFile(result.data.filename, result.data.filename, filePath, buffer.length)

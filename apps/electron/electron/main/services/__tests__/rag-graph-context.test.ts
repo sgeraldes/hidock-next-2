@@ -21,8 +21,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// --- knowledge-graph-service (lazy-imported inside buildGraphContext) ---
-const kgMock = {
+// --- knowledge-graph-service (imported statically by rag.ts, so hoisted) ---
+const kgMock = vi.hoisted(() => ({
   findMentionedEntity: vi.fn(),
   neighborhoodFacts: vi.fn(),
   queryListNodes: vi.fn(),
@@ -30,7 +30,7 @@ const kgMock = {
   // ARF-2 / P1 — buildGraphContext computes the exclusion context once per
   // query and threads it into every neighborhoodFacts call (object shape).
   getGroundingExclusionSet: vi.fn(() => ({ ids: new Set<string>(), failClosed: false })),
-}
+}))
 vi.mock('../knowledge-graph-service', () => kgMock)
 
 // --- config (imported by the real chat-llm; rag.ts itself no longer reads it) ---

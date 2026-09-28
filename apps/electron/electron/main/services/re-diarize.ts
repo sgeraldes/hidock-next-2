@@ -34,6 +34,7 @@
 
 import { queryAll, run, addToQueue, updateRecordingTranscriptionStatus, runInTransaction } from './database'
 import { isRecordingEligible } from './recording-eligibility'
+import { markUserPriority, processQueueManually } from './transcription'
 
 // Config-KV marker prefixes written by the self-identification pass
 // (self-identification.ts SCANNED_KEY_PREFIX / MERGE_KEY_PREFIX). Clearing the
@@ -221,10 +222,7 @@ export async function reDiarizeRecording(recordingId: string, provider?: string)
   })
 
   // Post-commit (OUTSIDE the transaction): the clear/enqueue/status are now
-  // durably committed, so kick the queue. Lazy-import the transcription service
-  // so this module stays light for unit tests of the clearing logic (mirrors
-  // self-identification's lazy imports).
-  const { markUserPriority, processQueueManually } = await import('./transcription')
+  // durably committed, so kick the queue.
   markUserPriority(recordingId) // explicit single-recording request — jump the backlog
   void processQueueManually()
 

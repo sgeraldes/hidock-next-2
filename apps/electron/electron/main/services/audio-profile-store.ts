@@ -31,7 +31,7 @@ import {
   type AudioCategory,
   type AudioProfile,
 } from './audio-profile'
-import { applyCaptureValueClassification, type ValueClassification } from './value-classification'
+import { applyCaptureValueClassification, recomputeAudioWarnings, type ValueClassification } from './value-classification'
 
 export interface AudioProfileRow {
   recording_id: string
@@ -204,7 +204,6 @@ async function announce(progress: Pick<BackfillProgress, 'profiled' | 'byCategor
   // Refresh the stored warnings first, so labels and warnings agree when the
   // Library reloads (the boot refresh may have run before this pass finished).
   try {
-    const { recomputeAudioWarnings } = await import('./value-classification')
     await recomputeAudioWarnings()
   } catch (error) {
     console.warn('[AudioProfile] could not refresh evaluation warnings:', error)

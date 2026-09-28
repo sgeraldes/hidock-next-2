@@ -41,6 +41,7 @@ import { cancelActiveTransfer, cancelActiveTransferByName, getActiveTransferFile
 import { existsSync } from 'fs'
 import { join, basename, dirname } from 'path'
 import { resetStorageLimitCache } from './storage-usage'
+import { queueTranscriptionIfEnabled } from './transcription'
 
 /**
  * D-022 — why a requested file did not enter the queue.
@@ -1018,14 +1019,13 @@ export class DownloadService {
       this.markDirty()
       this.emitStateUpdate(true) // C-004: immediate emit for completion
 
-      // Lazy import: fire-and-forget queue trigger, mirrors the same pattern in
-      // storage-handlers.ts and recording-watcher.ts (execution deferral, not
-      // chunk splitting).
-      import('./transcription').then(({ queueTranscriptionIfEnabled }) => {
+      // Fire-and-forget queue trigger, the same as storage-handlers.ts and
+      // recording-watcher.ts.
+      try {
         queueTranscriptionIfEnabled(recordingId)
-      }).catch(err => {
-        console.error('[DownloadService] Failed to import transcription service:', err)
-      })
+      } catch (err) {
+        console.error('[DownloadService] Failed to queue transcription:', err)
+      }
 
       // DL-07: Clean up completed items from queue after emitting final state.
       // Keep them briefly so the renderer sees the 100% state, then remove.

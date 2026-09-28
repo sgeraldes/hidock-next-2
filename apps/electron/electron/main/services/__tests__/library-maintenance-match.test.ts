@@ -39,6 +39,11 @@ vi.mock('../recording-eligibility', () => ({
   filterEligibleRecordingIds: (ids: string[]) => ({ eligible: new Set(ids), failClosed: false })
 }))
 vi.mock('../value-backfill', () => ({ isClassifierAuthError: (e: { status?: number }) => e?.status === 401 }))
+// Imported statically by library-maintenance for the relink job, which this
+// file does not run; the real ones load config.ts.
+vi.mock('../connectors', () => ({}))
+vi.mock('../connectors/connector-store', () => ({}))
+vi.mock('../org-reconciler', () => ({}))
 
 const candidates = [
   { meetingId: 'lunch', subject: 'Almuerzo', startTime: 'a', endTime: 'b', hasOverlap: true, timeScore: 0.72, attendees: [] },

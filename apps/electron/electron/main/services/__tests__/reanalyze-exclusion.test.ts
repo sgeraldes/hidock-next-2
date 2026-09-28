@@ -59,7 +59,7 @@ vi.mock('../brains', () => ({
 
 vi.mock('../vector-store', () => ({ getVectorStore: vi.fn(() => null) }))
 
-const exportMeetingWikiMock = vi.fn(() => null)
+const exportMeetingWikiMock = vi.hoisted(() => vi.fn(() => null))
 vi.mock('../meeting-wiki', () => ({ exportMeetingWiki: exportMeetingWikiMock }))
 
 let _dbCounter = 0
