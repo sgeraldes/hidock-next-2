@@ -4598,6 +4598,12 @@ export interface Recording {
   audio_category?: 'too_short' | 'silent' | 'noise' | 'speech' | null
   audio_sound_seconds?: number | null
   audio_duration_seconds?: number | null
+  /** Read projection from recording_evaluations (v61), the latest per recording; null until evaluated. */
+  eval_star_level?: number | null
+  eval_kind?: string | null
+  eval_context?: string | null
+  eval_audio_warning?: string | null
+  eval_transcript_invented?: number | null
   correlation_confidence?: number
   correlation_method?: string
   status: string  // Legacy field for backwards compatibility
@@ -4634,10 +4640,17 @@ export function getRecordings(): Recording[] {
   return queryAll<Recording>(
     `SELECT r.*, m.subject AS meeting_subject,
             ap.category AS audio_category, ap.sound_seconds AS audio_sound_seconds,
-            ap.duration_seconds AS audio_duration_seconds
+            ap.duration_seconds AS audio_duration_seconds,
+            ev.star_level AS eval_star_level, ev.kind AS eval_kind, ev.context AS eval_context,
+            ev.audio_warning AS eval_audio_warning, ev.transcript_invented AS eval_transcript_invented
        FROM recordings r
        LEFT JOIN meetings m ON m.id = r.meeting_id
        LEFT JOIN audio_profiles ap ON ap.recording_id = r.id
+       -- One evaluation per recording (the table is keyed by capture): the latest.
+       LEFT JOIN recording_evaluations ev ON ev.capture_id = (
+         SELECT e2.capture_id FROM recording_evaluations e2
+          WHERE e2.recording_id = r.id ORDER BY e2.evaluated_at DESC LIMIT 1
+       )
       WHERE r.deleted_at IS NULL
         AND (r.location IS NULL OR r.location <> 'deleted')
       ORDER BY r.date_recorded DESC`

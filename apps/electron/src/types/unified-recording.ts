@@ -9,6 +9,22 @@
 
 import type { QualityRating } from './knowledge'
 
+/** Jev evaluation vocabularies (recording_evaluations, v61). */
+export type RecordingKind =
+  | 'interview'
+  | 'team_meeting'
+  | 'project_meeting'
+  | 'one_on_one'
+  | 'sales_support_call'
+  | 'presentation_class'
+  | 'personal_call'
+  | 'gaming_entertainment'
+  | 'media_playback'
+  | 'device_test'
+  | 'noise_accidental'
+export type RecordingContext = 'work' | 'personal' | 'mixed' | 'unclear'
+export type AudioWarning = 'possible_invented_transcript' | 'possible_missed_transcription'
+
 // Transcript summary for display purposes
 export interface TranscriptSummary {
   id: string
@@ -31,6 +47,16 @@ interface RecordingBase {
   audioCategory?: 'too_short' | 'silent' | 'noise' | 'speech'
   /** Seconds of the recording that hold sound, from the same check. */
   audioSoundSeconds?: number
+  /** Jev evaluation (v61): stars 1 to 5; undefined until evaluated. */
+  evalStarLevel?: number
+  /** Jev evaluation: what kind of recording this is. */
+  evalKind?: RecordingKind
+  /** Jev evaluation: work, personal, mixed or unclear. */
+  evalContext?: RecordingContext
+  /** Audio versus transcript cross-check: possible invented or missed transcription. */
+  evalAudioWarning?: AudioWarning
+  /** Jev's probability that the transcript is invented. */
+  evalTranscriptInvented?: number
   transcript?: TranscriptSummary
   // Knowledge Capture integration
   knowledgeCaptureId?: string

@@ -1,6 +1,6 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { AlertCircle, Download, Trash2, Wand2, Sparkles, FileText, RefreshCw, AudioLines, MoreHorizontal, Calendar, EyeOff, Eye, TrendingDown, Ban, RotateCcw, ArchiveRestore, AlertTriangle, XOctagon } from 'lucide-react'
+import { AlertCircle, Download, Trash2, Wand2, Sparkles, FileText, RefreshCw, AudioLines, MoreHorizontal, Calendar, EyeOff, Eye, TrendingDown, Ban, RotateCcw, ArchiveRestore, AlertTriangle, XOctagon, FileWarning, FileX } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import {
@@ -26,6 +26,7 @@ import { sourceTypeLabel } from '@/features/library/utils/sourceType'
 import { formatValueReasons } from '@/features/library/utils/valueReasons'
 import { ISSUE_TAGS, integrityIssues, integrityLabel } from '@/features/library/utils/transcriptIntegrity'
 import { audioLabel } from '@/features/library/utils/audioCheck'
+import { CONTEXT_LABELS, KIND_LABELS, WARNING_LABELS, effectiveWarning } from '@/features/library/utils/evaluation'
 import {
   LABEL_DELETE_FROM_DEVICE,
   LABEL_MOVE_TO_TRASH,
@@ -107,6 +108,78 @@ function IntegrityBadge({ transcript }: { transcript?: Transcript }) {
         <p className="text-xs text-muted-foreground mt-0.5">{tags.join(' · ')}</p>
       </TooltipContent>
     </Tooltip>
+  )
+}
+
+/**
+ * Jev evaluation (v61): stars and the kind of recording, e.g. "4★ Team meeting".
+ * Muted: it describes the recording, it does not warn. The tooltip adds the
+ * context (work, personal).
+ */
+function EvaluationLabel({ recording }: { recording: UnifiedRecording }) {
+  if (!recording.evalStarLevel && !recording.evalKind) return null
+  const kind = recording.evalKind ? KIND_LABELS[recording.evalKind] : null
+  const context = recording.evalContext ? CONTEXT_LABELS[recording.evalContext] : null
+  const stars = recording.evalStarLevel ?? null
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className="inline-flex min-w-0 items-center gap-1 truncate rounded border border-border px-1.5 py-px text-[10px] leading-4 text-muted-foreground"
+          data-testid="evaluation-label"
+          aria-label={[stars ? `${stars} of 5 stars` : null, kind, context].filter(Boolean).join(', ')}
+        >
+          {stars && <span className="font-medium tabular-nums">{stars}★</span>}
+          {kind && <span>{kind}</span>}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>
+        <p>{[stars ? `${stars} of 5 stars` : null, kind, context].filter(Boolean).join(' · ')}</p>
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+/**
+ * Audio versus transcript warning: a meaningful transcript on silent audio
+ * (possibly invented), or a lot of sound with almost no words (possibly missed).
+ * Icon-only so it keeps its slot; the words are in the tooltip.
+ */
+function EvaluationWarning({ recording }: { recording: UnifiedRecording }) {
+  const warning = effectiveWarning(recording)
+  if (!warning) return null
+  const { label, detail } = WARNING_LABELS[warning]
+  const Icon = warning === 'possible_invented_transcript' ? FileWarning : FileX
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className="inline-flex shrink-0 text-amber-600 dark:text-amber-400"
+          role="img"
+          aria-label={label}
+          data-testid="evaluation-warning"
+        >
+          <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>
+        <p>{label}</p>
+        <p className="text-xs text-muted-foreground mt-0.5">{detail}</p>
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+/**
+ * One fixed-width place in the row's right cluster. It keeps its width when
+ * empty, so every icon sits in the same column on every row and a missing one
+ * reads as a gap (owner, 28-sep-2026).
+ */
+function IconSlot({ name, children }: { name: string; children?: ReactNode }) {
+  return (
+    <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center" data-slot={name}>
+      {children}
+    </span>
   )
 }
 
@@ -469,15 +542,20 @@ export const SourceRow = memo(function SourceRow({
               <span className="truncate">{deletionLabel}</span>
             </div>
           )}
-          {/* Value badge (F16/spec-003) — icon-only, low-value/garbage only. Sits
-              before the meeting chip so the two provenance/quality glyphs read
-              left-to-right in the same tight cluster. */}
-          {!isDeleting && <ValueBadge recording={recording} />}
-          {!isDeleting && <IntegrityBadge transcript={transcript} />}
-          {!isDeleting && <AudioLabel recording={recording} />}
-          {/* Meeting-link (calendar) provenance — the system knows this row maps to a
-              calendar event; the status icons align with it. */}
-          {!isDeleting && meeting && (
+          {/* Fixed places, left to right: labels (stars and kind, audio check),
+              value, audio-vs-transcript warning, transcript integrity, meeting,
+              status, transcription, error. Each keeps its width when empty so the
+              columns line up down the list. */}
+          {!isDeleting && (
+            <span className="flex w-36 shrink-0 items-center justify-end gap-1 overflow-hidden" data-slot="labels">
+              <AudioLabel recording={recording} />
+              <EvaluationLabel recording={recording} />
+            </span>
+          )}
+          {!isDeleting && <IconSlot name="value"><ValueBadge recording={recording} /></IconSlot>}
+          {!isDeleting && <IconSlot name="warning"><EvaluationWarning recording={recording} /></IconSlot>}
+          {!isDeleting && <IconSlot name="integrity"><IntegrityBadge transcript={transcript} /></IconSlot>}
+          {!isDeleting && <IconSlot name="meeting">{meeting && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <span
@@ -493,11 +571,10 @@ export const SourceRow = memo(function SourceRow({
                 <p className="text-xs text-muted-foreground mt-0.5">{formatDateTime(meeting.start_time)}</p>
               </TooltipContent>
             </Tooltip>
-          )}
-          {!isDeleting && <StatusIcon recording={recording} />}
-          {!isDeleting && <TranscriptionStatusBadge status={recording.transcriptionStatus} compact />}
-          {/* Error indicator */}
-          {!isDeleting && error && (
+          )}</IconSlot>}
+          {!isDeleting && <IconSlot name="status"><StatusIcon recording={recording} /></IconSlot>}
+          {!isDeleting && <IconSlot name="transcription"><TranscriptionStatusBadge status={recording.transcriptionStatus} compact /></IconSlot>}
+          {!isDeleting && <IconSlot name="error">{error && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <AlertCircle className="h-3.5 w-3.5 text-destructive shrink-0" aria-label="Processing error" />
@@ -507,7 +584,7 @@ export const SourceRow = memo(function SourceRow({
                 {error.details && <p className="text-xs text-muted-foreground mt-1">{error.details}</p>}
               </TooltipContent>
             </Tooltip>
-          )}
+          )}</IconSlot>}
 
           {/* Download progress (device-only, in flight) */}
           {!isDeleting && recording.location === 'device-only' && downloadStatus && (
@@ -761,6 +838,11 @@ export const SourceRow = memo(function SourceRow({
     prevProps.recording.title === nextProps.recording.title &&
     prevProps.recording.meetingSubject === nextProps.recording.meetingSubject &&
     prevProps.recording.audioCategory === nextProps.recording.audioCategory &&
+    prevProps.recording.evalStarLevel === nextProps.recording.evalStarLevel &&
+    prevProps.recording.evalKind === nextProps.recording.evalKind &&
+    prevProps.recording.evalContext === nextProps.recording.evalContext &&
+    prevProps.recording.evalAudioWarning === nextProps.recording.evalAudioWarning &&
+    prevProps.recording.evalTranscriptInvented === nextProps.recording.evalTranscriptInvented &&
     prevProps.recording.category === nextProps.recording.category &&
     prevProps.recording.quality === nextProps.recording.quality &&
     prevProps.recording.qualityReasons?.join('|') === nextProps.recording.qualityReasons?.join('|') &&
