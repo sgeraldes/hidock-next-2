@@ -67,7 +67,7 @@ describe('qualityRules (Settings > Quality checks)', () => {
     const r = qualityRules()
     expect(r.maxRetries).toBe(5)
     expect(r.reasonProbability).toBe(1)
-    expect(r.meaningfulStars).toBe(1)
+    expect(r.meaningfulStars).toBe(2) // at least 2: 1 star is every rated recording
     expect(r.liveSilenceRms).toBe(41)
     expect(r.busySoundSeconds).toBe(300)
   })
@@ -82,10 +82,8 @@ describe('qualityRules (Settings > Quality checks)', () => {
     expect(resolveQualityRules(undefined)).toEqual(DEFAULT_QUALITY_RULES)
   })
 
-  it('returns a copy, so a caller cannot change the rules in force', () => {
-    const r = qualityRules()
-    r.maxRetries = 9
-    expect(qualityRules().maxRetries).toBe(3)
+  it('the rules in force are frozen, so a caller cannot change them', () => {
+    expect(Object.isFrozen(qualityRules())).toBe(true)
   })
 
   it('names the keys that changed', () => {

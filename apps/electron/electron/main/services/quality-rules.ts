@@ -15,6 +15,8 @@
  * test that names one still reads the default.
  */
 
+import { QUALITY_BOUNDS } from '../../../src/shared/quality-bounds'
+
 export const DEFAULT_MIN_RECORDING_SECONDS = 10
 
 let minSeconds = DEFAULT_MIN_RECORDING_SECONDS
@@ -66,24 +68,8 @@ export const DEFAULT_QUALITY_RULES: Readonly<QualityConfig> = Object.freeze({
   liveSilenceRms: 58
 })
 
-/** Allowed range per key; `integer` rounds the value. Out of range is clamped; a non-number falls back to the default. */
-export const QUALITY_BOUNDS: Readonly<Record<QualityKey, { min: number; max: number; integer?: boolean }>> = Object.freeze({
-  quietSoundShare: { min: 0, max: 1 },
-  quietMinDurationSeconds: { min: 0, max: 3600, integer: true },
-  meaningfulWords: { min: 1, max: 10000, integer: true },
-  meaningfulStars: { min: 1, max: 5, integer: true },
-  maxWordsPerMinuteOfRecording: { min: 50, max: 2000, integer: true },
-  busySoundSeconds: { min: 10, max: 7200, integer: true },
-  minWordsPerMinuteOfSound: { min: 0, max: 300, integer: true },
-  inventedProbability: { min: 0, max: 1 },
-  reasonProbability: { min: 0, max: 1 },
-  lowValueMaxSeconds: { min: 0, max: 600, integer: true },
-  maxRetries: { min: 0, max: 10, integer: true },
-  retranscribeScore: { min: 0, max: 100, integer: true },
-  meetingAutoLinkProbability: { min: 0, max: 1 },
-  meetingAutoLinkMargin: { min: 0, max: 1 },
-  liveSilenceRms: { min: 0, max: 2000, integer: true }
-})
+/** Allowed range per key (src/shared/quality-bounds.ts, shared with the Settings page). */
+export { QUALITY_BOUNDS }
 
 /** The keys whose change alters the stored audio-versus-transcript warnings. */
 export const WARNING_RULE_KEYS: readonly QualityKey[] = [
@@ -110,7 +96,7 @@ export function resolveQualityRules(saved: unknown): QualityConfig {
   return out
 }
 
-let rules: QualityConfig = { ...DEFAULT_QUALITY_RULES }
+let rules: Readonly<QualityConfig> = DEFAULT_QUALITY_RULES
 
 export function applyQualityRules(config: {
   transcription?: { minRecordingSeconds?: unknown }
@@ -118,7 +104,7 @@ export function applyQualityRules(config: {
 }): void {
   const v = config.transcription?.minRecordingSeconds
   minSeconds = typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 600 ? v : DEFAULT_MIN_RECORDING_SECONDS
-  rules = resolveQualityRules(config.quality)
+  rules = Object.freeze(resolveQualityRules(config.quality))
 }
 
 /** Clips shorter than this are not transcribed and are rated no-value. */
@@ -126,9 +112,9 @@ export function minRecordingSeconds(): number {
   return minSeconds
 }
 
-/** The quality thresholds in force now (a copy; validated and clamped). */
-export function qualityRules(): QualityConfig {
-  return { ...rules }
+/** The quality thresholds in force now (validated, clamped, frozen: read per audio packet, so no copy). */
+export function qualityRules(): Readonly<QualityConfig> {
+  return rules
 }
 
 /** Keys whose value differs between two resolved rule sets. */

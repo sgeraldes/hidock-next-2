@@ -22,6 +22,34 @@ export interface QualityRecomputeJobs {
   recomputeEvaluationReasons: () => Promise<number>
 }
 
+/**
+ * One run of each job at a time. A save while a job runs asks for one more
+ * run after it, which reads the rules in force then: a change and a quick
+ * revert cannot leave the first run's values behind (review, 28-sep-2026).
+ */
+const inFlight = new Map<string, { again: boolean; done: Promise<void> }>()
+
+function runOneAtATime(name: string, job: () => Promise<void>): Promise<void> {
+  const current = inFlight.get(name)
+  if (current) {
+    current.again = true
+    return current.done
+  }
+  const state = { again: false, done: Promise.resolve() }
+  state.done = (async () => {
+    try {
+      do {
+        state.again = false
+        await job()
+      } while (state.again)
+    } finally {
+      inFlight.delete(name)
+    }
+  })()
+  inFlight.set(name, state)
+  return state.done
+}
+
 const defaultJobs: QualityRecomputeJobs = {
   recomputeAudioWarnings: () => recomputeAudioWarnings(),
   recomputeEvaluationReasons: () => recomputeEvaluationReasons()
@@ -40,18 +68,22 @@ export function recomputeForQualityChange(
   const started: Promise<void>[] = []
   if (changed.some((k) => WARNING_RULE_KEYS.includes(k))) {
     started.push(
-      jobs
-        .recomputeAudioWarnings()
-        .then((n) => console.log(`[Quality] warning rules changed; ${n} stored warning(s) updated`))
-        .catch((err: unknown) => console.error('[Quality] recomputing audio warnings failed:', err))
+      runOneAtATime('warnings', () =>
+        jobs
+          .recomputeAudioWarnings()
+          .then((n) => console.log(`[Quality] warning rules changed; ${n} stored warning(s) updated`))
+          .catch((err: unknown) => console.error('[Quality] recomputing audio warnings failed:', err))
+      )
     )
   }
   if (changed.includes('reasonProbability')) {
     started.push(
-      jobs
-        .recomputeEvaluationReasons()
-        .then((n) => console.log(`[Quality] reason threshold changed; ${n} stored evaluation(s) updated`))
-        .catch((err: unknown) => console.error('[Quality] recomputing evaluation reasons failed:', err))
+      runOneAtATime('reasons', () =>
+        jobs
+          .recomputeEvaluationReasons()
+          .then((n) => console.log(`[Quality] reason threshold changed; ${n} stored evaluation(s) updated`))
+          .catch((err: unknown) => console.error('[Quality] recomputing evaluation reasons failed:', err))
+      )
     )
   }
   return Promise.all(started).then(() => undefined)

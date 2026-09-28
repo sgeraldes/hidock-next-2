@@ -12,7 +12,7 @@ vi.mock('../value-classification', () => ({
 }))
 
 import { recomputeForQualityChange } from '../quality-recompute'
-import { resolveQualityRules } from '../quality-rules'
+import { DEFAULT_QUALITY_RULES, resolveQualityRules } from '../quality-rules'
 
 function jobs() {
   return {
@@ -63,5 +63,27 @@ describe('recomputeForQualityChange', () => {
     await expect(recomputeForQualityChange(base, resolveQualityRules({ meaningfulWords: 50 }), j)).resolves.toBeUndefined()
     expect(error).toHaveBeenCalledWith('[Quality] recomputing audio warnings failed:', expect.any(Error))
     error.mockRestore()
+  })
+})
+
+describe('recompute runs one at a time', () => {
+  it('a save during a run queues exactly one more run', async () => {
+    let release: () => void = () => undefined
+    let runs = 0
+    const jobs = {
+      recomputeAudioWarnings: vi.fn(async () => {
+        runs++
+        if (runs === 1) await new Promise<void>((r) => (release = r))
+        return 0
+      }),
+      recomputeEvaluationReasons: vi.fn(async () => 0)
+    }
+    const next = { ...DEFAULT_QUALITY_RULES, quietSoundShare: 0.1 }
+    const first = recomputeForQualityChange(DEFAULT_QUALITY_RULES, next, jobs)
+    void recomputeForQualityChange(next, DEFAULT_QUALITY_RULES, jobs)
+    void recomputeForQualityChange(DEFAULT_QUALITY_RULES, next, jobs)
+    release()
+    await first
+    expect(jobs.recomputeAudioWarnings).toHaveBeenCalledTimes(2)
   })
 })
