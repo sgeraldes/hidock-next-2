@@ -7,6 +7,13 @@
 
 export type LineIssueCode = 'repeated_start' | 'backwards_start' | 'cramped_lines' | 'untimed_lines'
 
+/** The codes a person can jump to in the transcript: each marks specific lines. */
+export const JUMPABLE_LINE_ISSUES: readonly LineIssueCode[] = ['repeated_start', 'backwards_start', 'cramped_lines']
+
+export function isJumpableLineIssue(code: string): code is LineIssueCode {
+  return (JUMPABLE_LINE_ISSUES as readonly string[]).includes(code)
+}
+
 /** Starts that round to the same hundredth of a second are the same instant. */
 export const SAME_START_RESOLUTION = 100
 /** A start this far before the previous one is going backwards, not jitter. */

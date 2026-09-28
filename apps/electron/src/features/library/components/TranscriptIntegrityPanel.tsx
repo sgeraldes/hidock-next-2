@@ -9,6 +9,7 @@ import { AlertTriangle, CheckCircle2, RotateCcw, XOctagon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import type { Transcript } from '@/types'
 import { ISSUE_TAGS, integrityIssues, integrityLabel } from '@/features/library/utils/transcriptIntegrity'
+import { isJumpableLineIssue, type LineIssueCode } from '@/shared/transcript-line-issues'
 
 interface TranscriptIntegrityPanelProps {
   recordingId: string
@@ -17,9 +18,11 @@ interface TranscriptIntegrityPanelProps {
   onRetranscribe?: () => void
   /** Called after the owner accepted or un-accepted, so the caller can reload. */
   onChanged?: () => void
+  /** Go to the next line with this problem in the transcript below. */
+  onJump?: (code: LineIssueCode) => void
 }
 
-export function TranscriptIntegrityPanel({ recordingId, transcript, onRetranscribe, onChanged }: TranscriptIntegrityPanelProps) {
+export function TranscriptIntegrityPanel({ recordingId, transcript, onRetranscribe, onChanged, onJump }: TranscriptIntegrityPanelProps) {
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
   const label = integrityLabel(transcript)
@@ -74,12 +77,29 @@ export function TranscriptIntegrityPanel({ recordingId, transcript, onRetranscri
         </p>
       </div>
       <ul className="flex flex-wrap gap-1.5" aria-label="Problems found">
-        {issues.map((issue) => (
-          <li key={issue.code} title={issue.detail} className="rounded-full border bg-background px-2 py-0.5">
-            {ISSUE_TAGS[issue.code]}
-            {issue.count > 1 ? ` · ${issue.count}` : ''}
-          </li>
-        ))}
+        {issues.map((issue) => {
+          const text = `${ISSUE_TAGS[issue.code]}${issue.count > 1 ? ` · ${issue.count}` : ''}`
+          const code = issue.code
+          return (
+            <li key={code}>
+              {onJump && isJumpableLineIssue(code) ? (
+                <button
+                  type="button"
+                  title={`${issue.detail ?? ''}${issue.detail ? ' ' : ''}Click to go to the next one.`}
+                  onClick={() => onJump(code)}
+                  className="rounded-full border border-amber-500/50 bg-background px-2 py-0.5 hover:bg-amber-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  data-testid={`integrity-jump-${code}`}
+                >
+                  {text}
+                </button>
+              ) : (
+                <span title={issue.detail} className="inline-block rounded-full border bg-background px-2 py-0.5">
+                  {text}
+                </span>
+              )}
+            </li>
+          )
+        })}
       </ul>
       <div className="flex flex-wrap items-center gap-2">
         {onRetranscribe && (

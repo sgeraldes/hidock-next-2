@@ -3042,9 +3042,16 @@ export function Library() {
               }}
               onStop={handleStopCallback}
               onSeek={(startMs) => {
-                if (selectedRecording && hasLocalPath(selectedRecording)) {
-                  audioControls.seek(startMs / 1000)
+                if (!selectedRecording || !hasLocalPath(selectedRecording)) return
+                // A time click plays from that point: it starts this recording if
+                // another (or none) is loaded, and resumes it if it was paused.
+                const ui = useUIStore.getState()
+                if (ui.currentlyPlayingId !== selectedRecording.id) {
+                  void audioControls.play(selectedRecording.id, selectedRecording.localPath, startMs / 1000)
+                  return
                 }
+                audioControls.seek(startMs / 1000)
+                if (!ui.isPlaying) audioControls.resume()
               }}
               // Action button callbacks
               onDownload={selectedRecording && isDeviceOnly(selectedRecording)
