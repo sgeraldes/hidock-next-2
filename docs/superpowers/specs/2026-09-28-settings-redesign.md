@@ -34,6 +34,15 @@ page by what it holds ("token" finds Speakers & voices), and groups:
 | Services | Transcription, Speakers & voices, AI providers, Connectors, Decisions (Jev) |
 | System | Storage & backups, Maintenance, Performance, Security, Secrets, Prompts, Developer, About |
 
+One setting, two pages (owner, 28-sep-2026). A setting may appear on two pages when both are
+natural places to look for it, as long as it is one config key and both controls read and write
+it, so they never disagree. Storage shows every location (captures, transcripts, recordings) and
+each also sits on its own page: the captures folder on the capture page, transcript storage on
+Transcription, recordings storage on Recording.
+
+Recording gets its own page once the recording feature from the standalone app is integrated:
+auto-record from the HiDock, local recording, and where recordings go.
+
 Under 768 px the menu becomes one picker above the page. Every page is `/settings/<id>`; the old
 `/settings#features` anchors redirect.
 
