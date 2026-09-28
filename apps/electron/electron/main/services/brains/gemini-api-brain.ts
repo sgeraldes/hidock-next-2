@@ -14,7 +14,9 @@
  * the plaintext-key gap.
  */
 import { GoogleGenerativeAI, TaskType } from '@google/generative-ai'
-import { getConfig, CURRENT_GEMINI_CHAT_MODEL } from '../config'
+import { getConfig } from '../config'
+import { CURRENT_GEMINI_CHAT_MODEL } from '../gemini-model-ids'
+import { languageFor } from '../transcription-language'
 import { getBrainCredentialStore } from './brain-credential-store'
 import type {
   AIBrain,
@@ -27,7 +29,7 @@ import type {
 } from './types'
 import { eligibleToGenerate } from './eligibility'
 
-const DEFAULT_MODEL = 'gemini-3.8-flash'
+const DEFAULT_MODEL = CURRENT_GEMINI_CHAT_MODEL
 const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001'
 const GEMINI_BATCH_LIMIT = 100
 
@@ -228,7 +230,7 @@ export class GeminiApiBrain implements AIBrain {
       // Same reason as the transcription service: the chunked path needs a
       // model that speaks generateContent, and the user's chat setting picks it.
       fallbackModel: config.chat?.geminiModel || CURRENT_GEMINI_CHAT_MODEL,
-      language: input.language || config.transcription.language || 'unknown',
+      language: input.language || languageFor('gemini', config.transcription.language),
     })
 
     const parts: string[] = []

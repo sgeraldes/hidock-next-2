@@ -16,6 +16,7 @@ import { getBrainCredentialStore } from './brains/brain-credential-store'
 import type { FeaturesConfig } from '../../../src/shared/feature-registry'
 import { DEFAULT_FEATURES_CONFIG } from '../../../src/shared/feature-registry'
 import { applyRagSettings } from './rag-settings'
+import { CURRENT_GEMINI_CHAT_MODEL, CURRENT_GEMINI_TRANSCRIPTION_MODEL } from './gemini-model-ids'
 
 /** Best-effort fsync of a path (file or directory). Silently skips where the FS
  *  or platform doesn't support it (e.g. directory fsync on Windows) — durability
@@ -301,7 +302,7 @@ const DEFAULT_CONFIG: AppConfig = {
   transcription: {
     provider: 'gemini',
     geminiApiKey: '',
-    geminiModel: 'gemini-3.5-transcribe',
+    geminiModel: CURRENT_GEMINI_TRANSCRIPTION_MODEL,
     // Empty until chosen: the old default was one person's machine (settings inventory).
     localAsrPath: process.env.ASR_MCP_PATH || '',
     localAsrHfToken: process.env.HF_TOKEN || '',
@@ -347,7 +348,7 @@ const DEFAULT_CONFIG: AppConfig = {
   },
   chat: {
     provider: 'gemini',
-    geminiModel: 'gemini-3.8-flash',
+    geminiModel: CURRENT_GEMINI_CHAT_MODEL,
     ollamaModel: 'llama3.2',
     maxContextChunks: 10
   },
@@ -420,8 +421,7 @@ export const RETIRED_GEMINI_MODELS = new Set([
   'gemini-3.6-flash',
   'gemini-3.7-flash',
 ])
-export const CURRENT_GEMINI_TRANSCRIPTION_MODEL = 'gemini-3.5-transcribe'
-export const CURRENT_GEMINI_CHAT_MODEL = 'gemini-3.8-flash'
+export { CURRENT_GEMINI_TRANSCRIPTION_MODEL, CURRENT_GEMINI_CHAT_MODEL }
 /** Backward-compatible alias used by general Gemini analysis code. */
 export const CURRENT_GEMINI_MODEL = CURRENT_GEMINI_CHAT_MODEL
 

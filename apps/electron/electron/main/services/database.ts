@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3'
+import { RECORDING_AUDIO_EXTENSIONS } from '../../../src/shared/audio-extensions'
 import { existsSync, readdirSync, readFileSync } from 'fs'
 import { dirname, join, normalize, resolve as resolvePath } from 'path'
 import { randomUUID } from 'crypto'
@@ -6352,7 +6353,7 @@ export function getAllRecordingsUnified(): Recording[] {
 }
 
 // Known audio extensions a recording may exist under (.hda on device, .wav/.mp3 locally)
-const RECORDING_EXTENSIONS = ['hda', 'wav', 'mp3', 'm4a']
+const RECORDING_EXTENSIONS = RECORDING_AUDIO_EXTENSIONS.map((ext) => ext.slice(1))
 
 /**
  * Find a recording row by filename, tolerating extension differences.

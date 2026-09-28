@@ -11,6 +11,8 @@
  * Docs: https://ai.google.dev/gemini-api/docs/models
  */
 
+import { CURRENT_GEMINI_TRANSCRIPTION_MODEL } from './gemini-model-ids'
+
 export interface GeminiModelOption {
   value: string
   label: string
@@ -18,7 +20,7 @@ export interface GeminiModelOption {
 
 // Concrete-safe fallback (no network).
 export const FALLBACK_GEMINI_MODELS: GeminiModelOption[] = [
-  { value: 'gemini-3.5-transcribe', label: 'Gemini 3.5 Flash Transcribe' }
+  { value: CURRENT_GEMINI_TRANSCRIPTION_MODEL, label: 'Gemini 3.5 Flash Transcribe' }
 ]
 
 interface RawModel {
@@ -41,7 +43,7 @@ export function filterTranscriptionModels(
   for (const m of raw || []) {
     if (!m?.name) continue
     const id = m.name.replace(/^models\//, '')
-    if (id !== 'gemini-3.5-transcribe') continue
+    if (id !== CURRENT_GEMINI_TRANSCRIPTION_MODEL) continue
     if (retired.has(id)) continue
     if (seen.has(id)) continue
     seen.add(id)
