@@ -577,6 +577,8 @@ export const CORE_CHANNELS: string[] = [
   'storage:get-cleanup-suggestions',
   'storage:get-cleanup-suggestions-for-tier',
   'storage:get-info',
+  'storage:get-usage',
+  'storage:recordings-over-limit',
   'storage:get-stats',
   'storage:initialize-untiered',
   'storage:open-file',

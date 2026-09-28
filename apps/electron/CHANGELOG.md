@@ -21,6 +21,9 @@ recording, and Microsoft 365 and Slack connect on first try.
 - **Transcript problems in place.** Lines with a repeated or backwards time, or too many words for
   their time, are marked in the transcript. Clicking "Repeated times" or "Times go backwards" goes
   to the next such line. Editing a line also edits its start time.
+- **Storage you can read.** Each folder shows its size, file count and the free space on its own
+  disk, with an optional limit; over the recordings limit, auto-download pauses. The connected
+  HiDock's storage is on the same page.
 - **Display.** A Settings page for the theme and the format of dates, times and numbers. Every
   date in the app now uses that one format; some screens forced US English before.
 - **Player & notifications.** A Settings page for the skip length, the speeds in the speed menu,

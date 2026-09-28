@@ -160,6 +160,16 @@ export interface QueueItem {
   completed_at: string | null
 }
 
+export interface StorageLocationUsage {
+  id: 'recordings' | 'transcripts' | 'data'
+  path: string
+  bytes: number
+  files: number
+  limitBytes: number | null
+  overLimit: boolean
+  disk: { totalBytes: number; freeBytes: number } | null
+}
+
 export interface StorageInfo {
   dataPath: string
   recordingsPath: string
@@ -207,6 +217,8 @@ export interface AppConfig {
     dataPath: string
     recordingsPath?: string
     transcriptsPath?: string
+    /** Optional limits in GB per location; absent = no limit. */
+    limitsGB?: Partial<Record<'recordings' | 'transcripts' | 'data', number | null>>
   }
   calendar: CalendarSettings
   transcription: {

@@ -475,6 +475,15 @@ export function useDownloadOrchestrator() {
       const result = await window.electronAPI.config.get()
       const cfg = result?.success ? (result.data as { device?: { autoDownload?: boolean } }) : null
       autoDownload = cfg?.device?.autoDownload === true
+      // Settings > Storage: over the recordings limit, only downloads the
+      // person asked for go ahead.
+      if (autoDownload) {
+        const over = await window.electronAPI.storage?.recordingsOverLimit?.()
+        if (over?.success && over.data) {
+          autoDownload = false
+          console.warn('[DownloadOrchestrator] Recordings are over their storage limit; auto-download paused')
+        }
+      }
     } catch {
       autoDownload = false
     }

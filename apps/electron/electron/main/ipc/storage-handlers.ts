@@ -1,3 +1,4 @@
+import { getStorageUsage, recordingsOverLimit, resetStorageLimitCache } from '../services/storage-usage'
 import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { randomUUID } from 'crypto'
 import { existsSync } from 'fs'
@@ -36,6 +37,27 @@ export function registerStorageHandlers(): void {
   ipcMain.handle('storage:get-info', async () => {
     try {
       return { success: true, data: getStorageInfo() }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error'
+      return { success: false, error: message }
+    }
+  })
+
+  // Space per location, free space on each disk, optional limits
+  ipcMain.handle('storage:get-usage', async () => {
+    try {
+      resetStorageLimitCache()
+      return { success: true, data: await getStorageUsage() }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error'
+      return { success: false, error: message }
+    }
+  })
+
+  // Auto-download asks this before each cycle (Settings > Storage limit)
+  ipcMain.handle('storage:recordings-over-limit', async () => {
+    try {
+      return { success: true, data: await recordingsOverLimit() }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error'
       return { success: false, error: message }
