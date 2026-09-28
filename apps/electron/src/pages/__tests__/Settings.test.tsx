@@ -350,6 +350,28 @@ describe('Settings Page', () => {
     await waitFor(() => expect(input.value).toBe(''))
   })
 
+  it('picks the transcription provider from a list and keeps every provider configurable', () => {
+    render(<Settings />)
+    const provider = screen.getByLabelText('Provider in use') as HTMLSelectElement
+    expect(provider.tagName).toBe('SELECT')
+    expect(Array.from(provider.options).map((o) => o.value)).toEqual(['gemini', 'local-asr', 'vibevoice'])
+
+    // Both providers' settings show whichever one is in use.
+    expect(screen.getByLabelText('Gemini API Key')).toBeInTheDocument()
+    expect(screen.getByLabelText('ASR MCP project path')).toBeInTheDocument()
+    fireEvent.change(provider, { target: { value: 'local-asr' } })
+    expect(screen.getByLabelText('Gemini API Key')).toBeInTheDocument()
+    expect(screen.getByLabelText('ASR MCP project path')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /Local ASR and VibeVoice/ })).toHaveTextContent('In use')
+    expect(screen.getByRole('heading', { name: /^Gemini/ })).not.toHaveTextContent('In use')
+  })
+
+  it('shows the speaker identification model in Speakers and voices, not under the provider', () => {
+    render(<Settings />)
+    const speakers = screen.getByTestId('speakers-and-voices')
+    expect(speakers).toContainElement(screen.getByRole('heading', { name: 'Speaker identification model' }))
+  })
+
   it('saves a changed Hugging Face token on its own, without the Transcription Save button', async () => {
     mockUpdateConfig.mockResolvedValue(undefined)
     render(<Settings />)

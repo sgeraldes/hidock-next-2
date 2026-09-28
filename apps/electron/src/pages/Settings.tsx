@@ -67,6 +67,18 @@ type SpeakerModelAccess = {
   message: string
 }
 
+/** Transcription providers for the "Provider in use" list. */
+const TRANSCRIPTION_PROVIDERS = [
+  { value: 'gemini', label: 'Gemini (cloud)', detail: 'Google Gemini transcribes in the cloud with your API key.' },
+  { value: 'local-asr', label: 'Local ASR', detail: 'Runs on this computer through the ASR MCP project.' },
+  {
+    value: 'vibevoice',
+    label: 'VibeVoice (local)',
+    detail:
+      'microsoft/VibeVoice-ASR runs on this computer: transcription, speakers and timestamps in one pass, language detected. Needs the optional vibevoice install in the ASR MCP project.'
+  }
+] as const
+
 export function Settings() {
   // Voice recognition is part of transcription; with it off, its channels are closed.
   const transcriptionEnabled = useFeatureEnabled('transcription')
@@ -134,10 +146,11 @@ export function Settings() {
   const [speakerModelAccess, setSpeakerModelAccess] = useState<SpeakerModelAccess | null>(null)
   const [speakerModelAccessChecking, setSpeakerModelAccessChecking] = useState(false)
   const lastAutoCheckedTokenRef = useRef<string | null>(null)
-  // The saved token the field last showed. A later config change (any section
-  // saving) refreshes the field only while it still shows that value, so a new
-  // token typed but not saved yet is not thrown away (28-sep-2026).
-  const syncedHfTokenRef = useRef('')
+  // The saved value each form field last showed. A later config change (any
+  // section saving, a reload) refreshes a field only while it still shows that
+  // value, so an edit not saved yet is never thrown away (28-sep-2026: a new
+  // Hugging Face token, then the provider choice, were silently reset).
+  const syncedFieldsRef = useRef<Record<string, unknown>>({})
 
   const loadGeminiModels = useCallback(async () => {
     setModelsLoading(true)
@@ -329,31 +342,36 @@ export function Settings() {
   }, [loadConfigStable])
 
   useEffect(() => {
-    if (config) {
-      setIcsUrl(config.calendar.icsUrl)
-      setSyncEnabled(config.calendar.syncEnabled)
-      setSyncInterval(config.calendar.syncIntervalMinutes)
-      setTranscriptionProvider(config.transcription.provider || 'gemini')
-      setGeminiApiKey(config.transcription.geminiApiKey)
-      setGeminiModel(config.transcription.geminiModel || 'gemini-3.5-transcribe')
-      setLocalAsrPath(config.transcription.localAsrPath || 'G:\\Code\\claude-plugins\\plugins\\mcp-asr')
-      const savedHfToken = config.transcription.localAsrHfToken || ''
-      setLocalAsrHfToken((current) => (current === syncedHfTokenRef.current ? savedHfToken : current))
-      syncedHfTokenRef.current = savedHfToken
-      setLocalAsrVocabularyFile(config.transcription.localAsrVocabularyFile || 'vocabulary.json')
-      setLocalAsrDiarize(config.transcription.localAsrDiarize ?? true)
-      setLocalAsrNumBeams(config.transcription.localAsrNumBeams || 5)
-      // undefined means 'measure it'; 0 and 1 are explicit pins.
-      setLiveMicChannelSetting(
-        config.transcription.liveMicChannel === 0 || config.transcription.liveMicChannel === 1
-          ? String(config.transcription.liveMicChannel)
-          : 'auto'
-      )
-      setChatProvider(config.chat.provider)
-      setOllamaUrl(config.embeddings.ollamaBaseUrl)
-      // C-CHAT: Load RAG context window size
-      setRagContextSize(config.chat.maxContextChunks)
+    if (!config) return
+    const synced = syncedFieldsRef.current
+    // Show the saved value unless the field holds an edit that is not saved yet.
+    const sync = <T,>(key: string, saved: T, set: (update: (current: T) => T) => void) => {
+      const first = !(key in synced)
+      const previous = synced[key]
+      set((current) => (first || Object.is(current, previous) ? saved : current))
+      synced[key] = saved
     }
+    sync('icsUrl', config.calendar.icsUrl, setIcsUrl)
+    sync('syncEnabled', config.calendar.syncEnabled, setSyncEnabled)
+    sync('syncInterval', config.calendar.syncIntervalMinutes, setSyncInterval)
+    sync('transcriptionProvider', config.transcription.provider || 'gemini', setTranscriptionProvider)
+    sync('geminiApiKey', config.transcription.geminiApiKey, setGeminiApiKey)
+    sync('geminiModel', config.transcription.geminiModel || 'gemini-3.5-transcribe', setGeminiModel)
+    sync('localAsrPath', config.transcription.localAsrPath || 'G:\\Code\\claude-plugins\\plugins\\mcp-asr', setLocalAsrPath)
+    sync('localAsrHfToken', config.transcription.localAsrHfToken || '', setLocalAsrHfToken)
+    sync('localAsrVocabularyFile', config.transcription.localAsrVocabularyFile || 'vocabulary.json', setLocalAsrVocabularyFile)
+    sync('localAsrDiarize', config.transcription.localAsrDiarize ?? true, setLocalAsrDiarize)
+    sync('localAsrNumBeams', config.transcription.localAsrNumBeams || 5, setLocalAsrNumBeams)
+    // undefined means 'measure it'; 0 and 1 are explicit pins. Saves on change, so it always follows config.
+    setLiveMicChannelSetting(
+      config.transcription.liveMicChannel === 0 || config.transcription.liveMicChannel === 1
+        ? String(config.transcription.liveMicChannel)
+        : 'auto'
+    )
+    sync('chatProvider', config.chat.provider, setChatProvider)
+    sync('ollamaUrl', config.embeddings.ollamaBaseUrl, setOllamaUrl)
+    // C-CHAT: Load RAG context window size
+    sync('ragContextSize', config.chat.maxContextChunks, setRagContextSize)
   }, [config])
 
   useEffect(() => {
@@ -990,45 +1008,250 @@ export function Settings() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div>
-                <label id="transcriptionProvider-label" className="text-sm font-medium">Provider</label>
-                <div className="flex gap-2 mt-2" role="group" aria-labelledby="transcriptionProvider-label">
-                  <Button
-                    variant={transcriptionProvider === 'gemini' ? 'default' : 'outline'}
-                    onClick={() => setTranscriptionProvider('gemini')}
-                    disabled={saving}
-                    aria-label="Use Gemini transcription provider"
-                    aria-pressed={transcriptionProvider === 'gemini'}
-                  >
-                    Gemini
-                  </Button>
-                  <Button
-                    variant={transcriptionProvider === 'local-asr' ? 'default' : 'outline'}
-                    onClick={() => setTranscriptionProvider('local-asr')}
-                    disabled={saving}
-                    aria-label="Use local ASR transcription provider"
-                    aria-pressed={transcriptionProvider === 'local-asr'}
-                  >
-                    Local ASR
-                  </Button>
-                  <Button
-                    variant={transcriptionProvider === 'vibevoice' ? 'default' : 'outline'}
-                    onClick={() => setTranscriptionProvider('vibevoice')}
-                    disabled={saving}
-                    aria-label="Use VibeVoice transcription provider"
-                    aria-pressed={transcriptionProvider === 'vibevoice'}
-                  >
-                    VibeVoice
-                  </Button>
-                </div>
-                {transcriptionProvider === 'vibevoice' && (
-                  <p className="text-xs text-muted-foreground mt-2">
-                    VibeVoice (microsoft/VibeVoice-ASR) runs locally for full-file / re-processing:
-                    joint transcription, speaker diarization and timestamps in one pass. Auto-detects
-                    language. Requires the optional <code>vibevoice</code> install in the ASR MCP project.
-                  </p>
-                )}
+                <label htmlFor="transcriptionProvider" className="text-sm font-medium">Provider in use</label>
+                <select
+                  id="transcriptionProvider"
+                  value={transcriptionProvider}
+                  onChange={(e) => setTranscriptionProvider(e.target.value as typeof transcriptionProvider)}
+                  disabled={saving}
+                  aria-describedby="transcriptionProvider-description"
+                  className="mt-1 w-full max-w-sm rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                >
+                  {TRANSCRIPTION_PROVIDERS.map((provider) => (
+                    <option key={provider.value} value={provider.value}>
+                      {provider.label}
+                    </option>
+                  ))}
+                </select>
+                <p id="transcriptionProvider-description" className="mt-1 text-xs text-muted-foreground">
+                  {TRANSCRIPTION_PROVIDERS.find((provider) => provider.value === transcriptionProvider)?.detail}
+                  {' '}Each provider keeps its settings below, whichever one is in use.
+                </p>
               </div>
 
+              <section aria-labelledby="gemini-settings-heading" className="space-y-4 rounded-xl border border-border p-4">
+                <h3 id="gemini-settings-heading" className="flex items-center gap-2 text-sm font-semibold">
+                  Gemini
+                  {transcriptionProvider === 'gemini' && (
+                    <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-medium text-primary">In use</span>
+                  )}
+                </h3>
+                  <div>
+                    <label htmlFor="geminiApiKey" className="text-sm font-medium">Gemini API Key</label>
+                    <div className="relative mt-1">
+                      <Input
+                        id="geminiApiKey"
+                        type={showApiKey ? 'text' : 'password'}
+                        placeholder="Enter your Gemini API key"
+                        value={geminiApiKey}
+                        onChange={(e) => setGeminiApiKey(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleSaveTranscription()}
+                        disabled={saving}
+                        aria-label="Gemini API Key"
+                        aria-describedby="geminiApiKey-description"
+                        className="pr-10"
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0"
+                        onClick={() => setShowApiKey(!showApiKey)}
+                        aria-label={showApiKey ? 'Hide API key' : 'Show API key'}
+                        tabIndex={-1}
+                      >
+                        {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                    <p id="geminiApiKey-description" className="text-xs text-muted-foreground mt-1">
+                      Get your API key from{' '}
+                      <a
+                        href="https://aistudio.google.com/app/apikey"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-primary hover:underline"
+                      >
+                        Google AI Studio
+                      </a>
+                    </p>
+                  </div>
+
+                  <div>
+                    <label htmlFor="geminiModel" className="text-sm font-medium">Transcription Model</label>
+                    <select
+                      id="geminiModel"
+                      value={geminiModel}
+                      onChange={(e) => setGeminiModel(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleSaveTranscription()}
+                      disabled={saving}
+                      aria-label="Transcription Model"
+                      aria-describedby="geminiModel-description"
+                      className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                    >
+                      {geminiModelOptions.map((model) => (
+                        <option key={model.value} value={model.value}>
+                          {model.label}
+                        </option>
+                      ))}
+                    </select>
+                    <p id="geminiModel-description" className="text-xs text-muted-foreground mt-1">
+                      {modelsLoading
+                        ? 'Loading available models…'
+                        : modelsLive
+                          ? 'Live list from your Gemini API key (audio-capable models only).'
+                          : 'Showing built-in defaults — add/verify your API key to load the live model list.'}
+                    </p>
+                  </div>
+              </section>
+
+              <section aria-labelledby="local-asr-settings-heading" className="space-y-4 rounded-xl border border-border p-4">
+                <h3 id="local-asr-settings-heading" className="flex items-center gap-2 text-sm font-semibold">
+                  Local ASR and VibeVoice
+                  {(transcriptionProvider === 'local-asr' || transcriptionProvider === 'vibevoice') && (
+                    <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-medium text-primary">In use</span>
+                  )}
+                </h3>
+                  <div>
+                    <label htmlFor="localAsrPath" className="text-sm font-medium">ASR MCP Path</label>
+                    <Input
+                      id="localAsrPath"
+                      value={localAsrPath}
+                      onChange={(e) => setLocalAsrPath(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleSaveTranscription()}
+                      disabled={saving}
+                      aria-label="ASR MCP project path"
+                      aria-describedby="localAsrPath-description"
+                      className="mt-1 font-mono text-xs"
+                    />
+                    <p id="localAsrPath-description" className="text-xs text-muted-foreground mt-1">
+                      Folder containing mcp_runner.py from the ASR MCP project
+                    </p>
+                  </div>
+
+                  <div>
+                    <label htmlFor="localAsrVocabularyFile" className="text-sm font-medium">Vocabulary File</label>
+                    <Input
+                      id="localAsrVocabularyFile"
+                      value={localAsrVocabularyFile}
+                      onChange={(e) => setLocalAsrVocabularyFile(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleSaveTranscription()}
+                      disabled={saving}
+                      aria-label="Local ASR vocabulary file"
+                      aria-describedby="localAsrVocabularyFile-description"
+                      className="mt-1 font-mono text-xs"
+                    />
+                    <p id="localAsrVocabularyFile-description" className="text-xs text-muted-foreground mt-1">
+                      Relative or absolute JSON correction file. Leave empty to disable corrections.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="localAsrDiarize"
+                        checked={localAsrDiarize}
+                        onChange={(e) => setLocalAsrDiarize(e.target.checked)}
+                        disabled={saving}
+                        aria-label="Enable speaker diarization"
+                        className="rounded"
+                      />
+                      <label htmlFor="localAsrDiarize" className="text-sm">
+                        Speaker diarization
+                      </label>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <label htmlFor="localAsrNumBeams" className="text-sm">Beams</label>
+                      <Input
+                        id="localAsrNumBeams"
+                        type="number"
+                        min={1}
+                        max={10}
+                        value={localAsrNumBeams}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value, 10)
+                          if (!isNaN(val)) setLocalAsrNumBeams(Math.min(10, Math.max(1, val)))
+                        }}
+                        onKeyDown={(e) => e.key === 'Enter' && handleSaveTranscription()}
+                        disabled={saving}
+                        aria-label="Local ASR beam search width"
+                        className="w-20"
+                      />
+                    </div>
+                  </div>
+              </section>
+
+              {/*
+                Live transcription speaker channel. The device sends two
+                channels and the Live API does no diarization, so which channel
+                is the microphone IS the speaker attribution. Nothing documents
+                which one it is, so the app measures it on the first ten seconds
+                of speech; this is the override for when that measurement is
+                wrong or cannot separate the two. Saves on change — it is one
+                value and it has no partner fields to stay consistent with.
+              */}
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">Live microphone channel</p>
+                  <p className="text-xs text-muted-foreground">
+                    Which of the device&apos;s two channels is your microphone, used to label live
+                    turns as you or them. Measured automatically; pin it if the labels come out
+                    swapped.
+                  </p>
+                </div>
+                <Select
+                  value={liveMicChannelSetting}
+                  disabled={saving}
+                  onValueChange={async (value) => {
+                    try {
+                      // `null`, not `undefined`: saveConfig deep-merges and
+                      // skips undefined, so "auto" used to leave the old pin
+                      // in place and this control could only ever pin, never
+                      // release. Clearing the measured value too is what makes
+                      // it measure again instead of reusing a bad reading.
+                      await updateConfig('transcription', {
+                        liveMicChannel: value === 'auto' ? null : (Number(value) as 0 | 1),
+                        ...(value === 'auto' ? { liveMicChannelMeasured: null } : {}),
+                      })
+                      setLiveMicChannelSetting(value)
+                      toast.success('Saved', 'Applies to the next live session.')
+                    } catch (error) {
+                      toast.error('Could not save', String(error))
+                    }
+                  }}
+                >
+                  <SelectTrigger className="w-56" aria-label="Live microphone channel">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="auto">Measure automatically</SelectItem>
+                    <SelectItem value="0">Left channel</SelectItem>
+                    <SelectItem value="1">Right channel</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <Button
+                onClick={handleSaveTranscription}
+                disabled={saving || !isTranscriptionDirty}
+                aria-label="Save transcription settings"
+              >
+                <Save className="h-4 w-4 mr-2" aria-hidden="true" />
+                {isTranscriptionDirty ? 'Save' : 'Saved'}
+              </Button>
+            </CardContent>
+          </Card>
+
+          {transcriptionEnabled && (
+          <Card data-testid="speakers-and-voices">
+            <CardHeader>
+              <CardTitle>Speakers &amp; voices</CardTitle>
+              <CardDescription>
+                How HiDock separates speakers and recognizes known voices on this computer.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
               <section
                 aria-labelledby="speaker-model-heading"
                 className="rounded-xl bg-muted/45 p-4 shadow-sm"
@@ -1164,221 +1387,9 @@ export function Settings() {
                   </Button>
                 </div>
               </section>
-
-              {transcriptionProvider === 'gemini' ? (
-                <>
-                  <div>
-                    <label htmlFor="geminiApiKey" className="text-sm font-medium">Gemini API Key</label>
-                    <div className="relative mt-1">
-                      <Input
-                        id="geminiApiKey"
-                        type={showApiKey ? 'text' : 'password'}
-                        placeholder="Enter your Gemini API key"
-                        value={geminiApiKey}
-                        onChange={(e) => setGeminiApiKey(e.target.value)}
-                        onKeyDown={(e) => e.key === 'Enter' && handleSaveTranscription()}
-                        disabled={saving}
-                        aria-label="Gemini API Key"
-                        aria-describedby="geminiApiKey-description"
-                        className="pr-10"
-                      />
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0"
-                        onClick={() => setShowApiKey(!showApiKey)}
-                        aria-label={showApiKey ? 'Hide API key' : 'Show API key'}
-                        tabIndex={-1}
-                      >
-                        {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                      </Button>
-                    </div>
-                    <p id="geminiApiKey-description" className="text-xs text-muted-foreground mt-1">
-                      Get your API key from{' '}
-                      <a
-                        href="https://aistudio.google.com/app/apikey"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-primary hover:underline"
-                      >
-                        Google AI Studio
-                      </a>
-                    </p>
-                  </div>
-
-                  <div>
-                    <label htmlFor="geminiModel" className="text-sm font-medium">Transcription Model</label>
-                    <select
-                      id="geminiModel"
-                      value={geminiModel}
-                      onChange={(e) => setGeminiModel(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleSaveTranscription()}
-                      disabled={saving}
-                      aria-label="Transcription Model"
-                      aria-describedby="geminiModel-description"
-                      className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-                    >
-                      {geminiModelOptions.map((model) => (
-                        <option key={model.value} value={model.value}>
-                          {model.label}
-                        </option>
-                      ))}
-                    </select>
-                    <p id="geminiModel-description" className="text-xs text-muted-foreground mt-1">
-                      {modelsLoading
-                        ? 'Loading available models…'
-                        : modelsLive
-                          ? 'Live list from your Gemini API key (audio-capable models only).'
-                          : 'Showing built-in defaults — add/verify your API key to load the live model list.'}
-                    </p>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div>
-                    <label htmlFor="localAsrPath" className="text-sm font-medium">ASR MCP Path</label>
-                    <Input
-                      id="localAsrPath"
-                      value={localAsrPath}
-                      onChange={(e) => setLocalAsrPath(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleSaveTranscription()}
-                      disabled={saving}
-                      aria-label="ASR MCP project path"
-                      aria-describedby="localAsrPath-description"
-                      className="mt-1 font-mono text-xs"
-                    />
-                    <p id="localAsrPath-description" className="text-xs text-muted-foreground mt-1">
-                      Folder containing mcp_runner.py from the ASR MCP project
-                    </p>
-                  </div>
-
-                  <div>
-                    <label htmlFor="localAsrVocabularyFile" className="text-sm font-medium">Vocabulary File</label>
-                    <Input
-                      id="localAsrVocabularyFile"
-                      value={localAsrVocabularyFile}
-                      onChange={(e) => setLocalAsrVocabularyFile(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleSaveTranscription()}
-                      disabled={saving}
-                      aria-label="Local ASR vocabulary file"
-                      aria-describedby="localAsrVocabularyFile-description"
-                      className="mt-1 font-mono text-xs"
-                    />
-                    <p id="localAsrVocabularyFile-description" className="text-xs text-muted-foreground mt-1">
-                      Relative or absolute JSON correction file. Leave empty to disable corrections.
-                    </p>
-                  </div>
-
-                  <div className="flex items-center gap-4">
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        id="localAsrDiarize"
-                        checked={localAsrDiarize}
-                        onChange={(e) => setLocalAsrDiarize(e.target.checked)}
-                        disabled={saving}
-                        aria-label="Enable speaker diarization"
-                        className="rounded"
-                      />
-                      <label htmlFor="localAsrDiarize" className="text-sm">
-                        Speaker diarization
-                      </label>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <label htmlFor="localAsrNumBeams" className="text-sm">Beams</label>
-                      <Input
-                        id="localAsrNumBeams"
-                        type="number"
-                        min={1}
-                        max={10}
-                        value={localAsrNumBeams}
-                        onChange={(e) => {
-                          const val = parseInt(e.target.value, 10)
-                          if (!isNaN(val)) setLocalAsrNumBeams(Math.min(10, Math.max(1, val)))
-                        }}
-                        onKeyDown={(e) => e.key === 'Enter' && handleSaveTranscription()}
-                        disabled={saving}
-                        aria-label="Local ASR beam search width"
-                        className="w-20"
-                      />
-                    </div>
-                  </div>
-                </>
-              )}
-
-              {/*
-                Live transcription speaker channel. The device sends two
-                channels and the Live API does no diarization, so which channel
-                is the microphone IS the speaker attribution. Nothing documents
-                which one it is, so the app measures it on the first ten seconds
-                of speech; this is the override for when that measurement is
-                wrong or cannot separate the two. Saves on change — it is one
-                value and it has no partner fields to stay consistent with.
-              */}
-              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium">Live microphone channel</p>
-                  <p className="text-xs text-muted-foreground">
-                    Which of the device&apos;s two channels is your microphone, used to label live
-                    turns as you or them. Measured automatically; pin it if the labels come out
-                    swapped.
-                  </p>
-                </div>
-                <Select
-                  value={liveMicChannelSetting}
-                  disabled={saving}
-                  onValueChange={async (value) => {
-                    try {
-                      // `null`, not `undefined`: saveConfig deep-merges and
-                      // skips undefined, so "auto" used to leave the old pin
-                      // in place and this control could only ever pin, never
-                      // release. Clearing the measured value too is what makes
-                      // it measure again instead of reusing a bad reading.
-                      await updateConfig('transcription', {
-                        liveMicChannel: value === 'auto' ? null : (Number(value) as 0 | 1),
-                        ...(value === 'auto' ? { liveMicChannelMeasured: null } : {}),
-                      })
-                      setLiveMicChannelSetting(value)
-                      toast.success('Saved', 'Applies to the next live session.')
-                    } catch (error) {
-                      toast.error('Could not save', String(error))
-                    }
-                  }}
-                >
-                  <SelectTrigger className="w-56" aria-label="Live microphone channel">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="auto">Measure automatically</SelectItem>
-                    <SelectItem value="0">Left channel</SelectItem>
-                    <SelectItem value="1">Right channel</SelectItem>
-                  </SelectContent>
-                </Select>
+              <div className="mt-6">
+                <SpeakerSetupPanel />
               </div>
-
-              <Button
-                onClick={handleSaveTranscription}
-                disabled={saving || !isTranscriptionDirty}
-                aria-label="Save transcription settings"
-              >
-                <Save className="h-4 w-4 mr-2" aria-hidden="true" />
-                {isTranscriptionDirty ? 'Save' : 'Saved'}
-              </Button>
-            </CardContent>
-          </Card>
-
-          {transcriptionEnabled && (
-          <Card data-testid="speakers-and-voices">
-            <CardHeader>
-              <CardTitle>Speakers &amp; voices</CardTitle>
-              <CardDescription>
-                How HiDock separates speakers and recognizes known voices on this computer.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <SpeakerSetupPanel />
             </CardContent>
           </Card>
           )}
