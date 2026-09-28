@@ -39,6 +39,8 @@ const mockExistsSync = vi.fn((_p: string) => false)
 const mockGetRecordingByFilename = vi.fn((_f: string) => null as null | { file_path: string })
 const mockAddSyncedFile = vi.fn()
 const mockMarkRecordingDownloaded = vi.fn(() => 'recording-id')
+const mockIsFilePurged = vi.fn((_f: string) => false)
+const mockClearPurgeTombstones = vi.fn((_f: string) => 0)
 
 vi.mock('../database', () => ({
   markRecordingDownloaded: (...args: unknown[]) => mockMarkRecordingDownloaded(...(args as [])),
@@ -49,8 +51,9 @@ vi.mock('../database', () => ({
       ? { original_filename: filename, local_filename: filename, file_path: '/mock/synced-on-disk/' + filename }
       : undefined,
   removeSyncedFile: vi.fn(),
-  isFilePurged: () => false,
+  isFilePurged: (filename: string) => mockIsFilePurged(filename),
   getPurgedFilenames: () => [],
+  clearPurgeTombstones: (filename: string) => mockClearPurgeTombstones(filename),
   getRecordingByFilename: (filename: string) => mockGetRecordingByFilename(filename),
   getSyncedFilenames: vi.fn(() => new Set()),
   queryOne: vi.fn(() => null),
@@ -91,6 +94,8 @@ describe('DownloadService — C5 Phase 0 session/queue/reconciliation gaps', () 
     mockExistsSync.mockReturnValue(false)
     mockGetRecordingByFilename.mockReturnValue(null)
     mockMarkRecordingDownloaded.mockReturnValue('recording-id')
+    mockIsFilePurged.mockReturnValue(false)
+    mockClearPurgeTombstones.mockReturnValue(0)
     service = getDownloadService()
     // Same isolation pattern as sibling suites: drain the shared singleton's queue.
     const state = service.getState()
@@ -191,6 +196,28 @@ describe('DownloadService — C5 Phase 0 session/queue/reconciliation gaps', () 
       expect(mockAddSyncedFile).toHaveBeenCalled()
       const item = service.getState().queue.find((i: DownloadQueueItem) => i.filename === 'exact.hda')
       expect(item?.status).toBe('completed')
+    })
+
+    it('fails the download with a clear message when clearing the purge tombstones throws', async () => {
+      // The file was purged, the owner re-downloaded it (an explicit restore),
+      // and the tombstone cleanup blew up. The result must NOT be a success:
+      // the file would stay hidden (the Library filters tombstoned names)
+      // while the queue reported the restore as done.
+      service.queueDownloads([{ filename: 'purged.hda', size: 100 }])
+      mockIsFilePurged.mockReturnValue(true)
+      mockClearPurgeTombstones.mockImplementation(() => {
+        throw new Error('injected purge-delete failure')
+      })
+
+      const result = await service.processDownload('purged.hda', Buffer.alloc(100))
+
+      expect(result.success).toBe(false)
+      expect(result.error).toContain('Failed to restore purged recording purged.hda')
+      expect(result.error).toContain('injected purge-delete failure')
+      const item = service.getState().queue.find((i: DownloadQueueItem) => i.filename === 'purged.hda')
+      expect(item?.status).toBe('failed')
+      // The restore never completed, so no recordings row may be written.
+      expect(mockMarkRecordingDownloaded).not.toHaveBeenCalled()
     })
   })
 

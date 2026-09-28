@@ -14,6 +14,7 @@ import {
   isRetryableDownloadItem
 } from '@/hooks/useDownloadOrchestrator'
 import type { UnifiedRecording } from '@/types/unified-recording'
+import { getDisplayTitle } from '@/features/library/utils/getDisplayTitle'
 import { hasLocalPath, isDeviceOnly } from '@/types/unified-recording'
 import type { AppConfig } from '@/types'
 import { getHiDockDeviceService } from '@/services/hidock-device'
@@ -124,7 +125,7 @@ export function useOperations() {
           return false
         }
         addToQueue(result.queueItemId, recording.id, recording.filename)
-        toast({ title: 'Re-transcription queued', description: recording.filename })
+        toast({ title: 'Re-transcription queued', description: getDisplayTitle(recording).primaryText })
         return true
       }
 
@@ -136,7 +137,7 @@ export function useOperations() {
         return false
       }
       addToQueue(queueItemId, recording.id, recording.filename)
-      toast({ title: 'Transcription queued', description: recording.filename })
+      toast({ title: 'Transcription queued', description: getDisplayTitle(recording).primaryText })
       return true
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Unknown error'
@@ -151,7 +152,7 @@ export function useOperations() {
       return false
     }
     if (recording.transcriptionStatus === 'processing') {
-      toast({ title: 'Already in progress', description: recording.filename })
+      toast({ title: 'Already in progress', description: getDisplayTitle(recording).primaryText })
       return false
     }
 
@@ -164,7 +165,7 @@ export function useOperations() {
       if (result.queueItemId) {
         addToQueue(result.queueItemId, recording.id, recording.filename)
       }
-      toast({ title: 'Re-transcribing with VibeVoice', description: recording.filename })
+      toast({ title: 'Re-transcribing with VibeVoice', description: getDisplayTitle(recording).primaryText })
       return true
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Unknown error'
@@ -260,7 +261,7 @@ export function useOperations() {
         // is never coming.
         if (refusal?.skip === 'already-queued') {
           drainDownloadQueue()
-          toast({ title: 'Already in the download queue', description: recording.filename })
+          toast({ title: 'Already in the download queue', description: getDisplayTitle(recording).primaryText })
           return true
         }
         releaseDownloadBookkeeping(recording.deviceFilename)
@@ -276,7 +277,7 @@ export function useOperations() {
       // above plus an explicit drain makes the visible Download/Start action actually
       // start that row instead of leaving it in a permanent "pending" state.
       drainDownloadQueue()
-      toast({ title: 'Download queued', description: recording.filename })
+      toast({ title: 'Download queued', description: getDisplayTitle(recording).primaryText })
       return true
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Unknown error'
@@ -353,10 +354,10 @@ export function useOperations() {
         // Nothing was cancelled (e.g. already terminal / not in flight) — drop the
         // marker so a genuinely running transfer is never mislabeled as cancelled.
         clearDownloadCancelled(filename)
-        toast({ title: 'Could not cancel download', description: res.error || filename, variant: 'error' })
+        toast({ title: 'Could not cancel download', description: res.error || 'Try again.', variant: 'error' })
         return false
       }
-      toast({ title: 'Download cancelled', description: filename })
+      toast({ title: 'Download cancelled' })
       return true
     } catch (e) {
       clearDownloadCancelled(filename)

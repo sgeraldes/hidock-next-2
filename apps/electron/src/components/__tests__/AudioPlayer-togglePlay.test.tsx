@@ -45,7 +45,7 @@ describe('AudioPlayer reader Play button — initial load+play', () => {
 
   it('not loaded → Play calls play(recordingId, filePath) for the initial load', () => {
     const { container } = render(
-      <AudioPlayer recordingId="rec-1" filePath="/audio/rec-1.wav" filename="rec-1.wav" />
+      <AudioPlayer recordingId="rec-1" filePath="/audio/rec-1.wav" title="Budget review" />
     )
     const btn = getPlayButton(container)
     expect(btn.disabled).toBe(false)
@@ -59,7 +59,7 @@ describe('AudioPlayer reader Play button — initial load+play', () => {
   it('loaded + paused → Play calls resume (not a fresh play)', () => {
     useUIStore.setState({ currentlyPlayingId: 'rec-1', isPlaying: false })
     const { container } = render(
-      <AudioPlayer recordingId="rec-1" filePath="/audio/rec-1.wav" filename="rec-1.wav" />
+      <AudioPlayer recordingId="rec-1" filePath="/audio/rec-1.wav" title="Budget review" />
     )
 
     fireEvent.click(getPlayButton(container))
@@ -71,7 +71,7 @@ describe('AudioPlayer reader Play button — initial load+play', () => {
   it('loaded + playing → button pauses', () => {
     useUIStore.setState({ currentlyPlayingId: 'rec-1', isPlaying: true })
     const { container } = render(
-      <AudioPlayer recordingId="rec-1" filePath="/audio/rec-1.wav" filename="rec-1.wav" />
+      <AudioPlayer recordingId="rec-1" filePath="/audio/rec-1.wav" title="Budget review" />
     )
 
     fireEvent.click(getPlayButton(container))
@@ -82,7 +82,7 @@ describe('AudioPlayer reader Play button — initial load+play', () => {
 
   it('device-only / no filePath and not loaded → Play disabled and does nothing', () => {
     const { container } = render(
-      <AudioPlayer recordingId="rec-1" filename="rec-1.wav" />
+      <AudioPlayer recordingId="rec-1" title="Budget review" />
     )
     const btn = getPlayButton(container)
 

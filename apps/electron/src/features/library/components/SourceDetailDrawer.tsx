@@ -17,6 +17,7 @@ import { UnifiedRecording, hasLocalPath, isDeviceOnly } from '@/types/unified-re
 import { useLibraryStore } from '@/store/useLibraryStore'
 import { getRecoveryAction } from '@/features/library/utils/errorHandling'
 import { TranscriptionStatusBadge } from './TranscriptionStatusBadge'
+import { getDisplayTitle } from '../utils/getDisplayTitle'
 
 interface Transcript {
   id: string
@@ -130,7 +131,7 @@ export function SourceDetailDrawer({
         <SheetHeader className="space-y-1">
           <div className="flex items-center justify-between">
             <SheetTitle className="text-lg font-semibold pr-8 truncate">
-              {source.title || source.filename}
+              {getDisplayTitle(source).primaryText}
             </SheetTitle>
           </div>
           <SheetDescription id="source-detail-description">
@@ -299,7 +300,7 @@ export function SourceDetailDrawer({
         {/* Audio Player (sticky when playing) */}
         {isPlaying && canPlay && (
           <div className="sticky top-0 bg-background z-10 py-4 border-b">
-            <AudioPlayer recordingId={source.id} filename={source.filename} onClose={onStop} />
+            <AudioPlayer recordingId={source.id} title={getDisplayTitle(source).primaryText} onClose={onStop} />
           </div>
         )}
 
@@ -402,10 +403,8 @@ export function SourceDetailDrawer({
 
             <TabsContent value="details" className="mt-4">
               <dl className="space-y-3 text-sm">
-                <div>
-                  <dt className="text-xs font-medium text-muted-foreground">Filename</dt>
-                  <dd className="mt-1">{source.filename}</dd>
-                </div>
+                {/* No Filename row: a recording's file name lives only in the
+                    reader's Metadata section (owner, 25-sep-2026). */}
                 {source.duration && (
                   <div>
                     <dt className="text-xs font-medium text-muted-foreground">Duration</dt>

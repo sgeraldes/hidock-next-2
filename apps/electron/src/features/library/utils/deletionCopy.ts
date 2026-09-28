@@ -35,13 +35,13 @@ export function ariaLabelWithScope(label: string, scope: string): string {
 }
 
 // Confirm-dialog copy. Permanent delete uses the dedicated DeletePermanentDialog (§D6), not this.
-export function softDeleteConfirmDescription(filename: string): string {
-  return `Move "${filename}" to Trash? It will be hidden and excluded from all AI processing. ` +
+export function softDeleteConfirmDescription(name: string): string {
+  return `Move "${name}" to Trash? It will be hidden and excluded from all AI processing. ` +
     'Nothing is erased — restore it from Trash, or delete it permanently later.'
 }
 
-export function deviceDeleteConfirmDescription(filename: string): string {
-  return `Delete "${filename}" from the HiDock device? This erases the on-device recording and ` +
+export function deviceDeleteConfirmDescription(name: string): string {
+  return `Delete "${name}" from the HiDock device? This erases the on-device recording and ` +
     "can't be undone. Your local copy (if any) is kept."
 }
 
@@ -69,7 +69,7 @@ export const LEGACY_GRAPH_DISCLOSURE =
 // spec-005/F17 T5 — success/partial-summary toast TITLES for the
 // menu-triggered actions elsewhere in Library.tsx (soft delete, device-only
 // delete, restore, bulk delete). Bodies stay inline at each call site
-// (single-use, interpolating the filename/counts directly) — only the
+// (single-use, interpolating the display name/counts directly) — only the
 // titles are shared copy. Phase-3 integration-review S1: these used to be
 // literals that bypassed this module despite its single-source claim.
 export const SUCCESS_MOVED_TO_TRASH_TITLE = 'Moved to Trash'
@@ -98,12 +98,12 @@ export const FAILURE_NOTHING_DELETED_TITLE = 'Delete failed — nothing was remo
 /** AR3-1/AR3-3(a) — the local purge itself refused (fail-closed) because the
  *  graph cleanup seam is unavailable. Pairs with the AR3-3(c) escape-hatch
  *  toast action. */
-export function graphCleanupFailedBody(filename: string): string {
-  return `Couldn't finish removing "${filename}" (graph cleanup failed). Nothing was deleted; please retry.`
+export function graphCleanupFailedBody(name: string): string {
+  return `Couldn't finish removing "${name}" (graph cleanup failed). Nothing was deleted; please retry.`
 }
 
-export function genericPermanentDeleteFailedBody(filename: string): string {
-  return `Failed to permanently delete "${filename}". Nothing was deleted; please retry.`
+export function genericPermanentDeleteFailedBody(name: string): string {
+  return `Failed to permanently delete "${name}". Nothing was deleted; please retry.`
 }
 
 /** AR3-3(c) — the failure toast's explicit second-action label. */
@@ -116,9 +116,9 @@ export const LABEL_DELETE_ANYWAY_SKIP_GRAPH = 'Delete anyway (skip graph cleanup
  *  execute time). Never the plain success toast in this case. */
 export const DEVICE_COPY_REMAINS_TITLE = 'Removed locally — device copy remains'
 
-export function deviceCopyRemainsBody(filename: string): string {
+export function deviceCopyRemainsBody(name: string): string {
   return (
-    `Removed "${filename}" and its data from this computer. The device copy is still there ` +
+    `Removed "${name}" and its data from this computer. The device copy is still there ` +
     'and will reconcile on the next device scan.'
   )
 }
@@ -141,10 +141,10 @@ function joinParts(parts: string[]): string {
   return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`
 }
 
-export function filesPendingBody(filename: string, kinds: string[]): string {
+export function filesPendingBody(name: string, kinds: string[]): string {
   const unique = Array.from(new Set(kinds)).map((k) => CLEANUP_KIND_LABELS[k] ?? `a ${k} file`)
   const list = joinParts(unique) || 'a file'
-  return `Removed "${filename}"'s data, but ${list} couldn't be deleted yet. It will retry automatically.`
+  return `Removed "${name}"'s data, but ${list} couldn't be deleted yet. It will retry automatically.`
 }
 
 /** ADV49-1 (round 51, DELETION HONESTY) — the hard purge removed the
@@ -154,11 +154,11 @@ export function filesPendingBody(filename: string, kinds: string[]): string {
  *  owner the file must be removed manually. */
 export const FILES_UNRECOVERABLE_TITLE = 'Removed data — cleanup could not be guaranteed'
 
-export function filesUnrecoverableBody(filename: string, kinds: string[]): string {
+export function filesUnrecoverableBody(name: string, kinds: string[]): string {
   const unique = Array.from(new Set(kinds)).map((k) => CLEANUP_KIND_LABELS[k] ?? `a ${k} file`)
   const list = joinParts(unique) || 'a file'
   return (
-    `Removed "${filename}"'s data, but ${list} couldn't be deleted and this could not be recorded for ` +
+    `Removed "${name}"'s data, but ${list} couldn't be deleted and this could not be recorded for ` +
     'an automatic retry. Please remove it manually.'
   )
 }
@@ -178,11 +178,11 @@ export const VIEW_MAY_BE_STALE_NOTE =
  *  pending-cleanup ledger is non-empty. */
 export const COMBINED_PARTIAL_TITLE = 'Partially removed — device copy remains'
 
-export function combinedPartialBody(filename: string, kinds: string[]): string {
+export function combinedPartialBody(name: string, kinds: string[]): string {
   const unique = Array.from(new Set(kinds)).map((k) => CLEANUP_KIND_LABELS[k] ?? `a ${k} file`)
   const list = joinParts(unique) || 'a file'
   return (
-    `Removed "${filename}"'s data, but ${list} couldn't be deleted yet (it will retry automatically), ` +
+    `Removed "${name}"'s data, but ${list} couldn't be deleted yet (it will retry automatically), ` +
     'and the device copy is still there — it will reconcile on the next device scan.'
   )
 }
@@ -223,10 +223,10 @@ export const GRAPH_CLEANUP_DEFERRED_TITLE = 'Deleted — graph cleanup deferred'
 export const GRAPH_CLEANUP_DEFERRED_NOTE =
   ' Knowledge-graph cleanup was skipped and will retry automatically.'
 
-export function graphCleanupDeferredBody(filename: string, alsoDeviceRemoved: boolean): string {
+export function graphCleanupDeferredBody(name: string, alsoDeviceRemoved: boolean): string {
   const deviceSuffix = alsoDeviceRemoved ? ' and the device copy' : ''
   return (
-    `Removed "${filename}"'s data${deviceSuffix}, but the knowledge-graph cleanup couldn't run now. ` +
+    `Removed "${name}"'s data${deviceSuffix}, but the knowledge-graph cleanup couldn't run now. ` +
     'It will retry automatically.'
   )
 }
@@ -237,7 +237,7 @@ export function graphCleanupDeferredBody(filename: string, alsoDeviceRemoved: bo
 export type DeviceDeleteOutcome = 'not-requested' | 'success' | 'partial' | 'queued'
 
 export interface CompletionToastInputs {
-  filename: string
+  name: string
   deviceOutcome: DeviceDeleteOutcome
   /** AR3-2 — true when the local purge's own post-commit file cleanup left something pending. */
   filesPending: boolean
@@ -274,7 +274,7 @@ export interface CompletionToast {
  * dispatches whatever this returns; it owns no copy decisions of its own.
  */
 export function selectCompletionToast(inputs: CompletionToastInputs): CompletionToast {
-  const { filename, deviceOutcome, filesPending, pendingKinds, viewMayBeStale, graphCleanupDeferred, cleanupUnrecoverable, removed } = inputs
+  const { name, deviceOutcome, filesPending, pendingKinds, viewMayBeStale, graphCleanupDeferred, cleanupUnrecoverable, removed } = inputs
   const staleNote = viewMayBeStale ? ` ${VIEW_MAY_BE_STALE_NOTE}` : ''
   // ARF-4 — appended to EVERY partial branch so none overclaims the graph was
   // cleaned; when it is the SOLE caveat, its own dedicated branch below fires.
@@ -291,7 +291,7 @@ export function selectCompletionToast(inputs: CompletionToastInputs): Completion
     return {
       variant: 'warning',
       title: FILES_UNRECOVERABLE_TITLE,
-      body: filesUnrecoverableBody(filename, pendingKinds) + deviceNote + staleNote + graphNote
+      body: filesUnrecoverableBody(name, pendingKinds) + deviceNote + staleNote + graphNote
     }
   }
 
@@ -301,11 +301,11 @@ export function selectCompletionToast(inputs: CompletionToastInputs): Completion
     return {
       variant: 'warning',
       title: COMBINED_PARTIAL_TITLE,
-      body: combinedPartialBody(filename, pendingKinds) + graphNote
+      body: combinedPartialBody(name, pendingKinds) + graphNote
     }
   }
   if (deviceOutcome === 'partial') {
-    return { variant: 'warning', title: DEVICE_COPY_REMAINS_TITLE, body: deviceCopyRemainsBody(filename) + graphNote }
+    return { variant: 'warning', title: DEVICE_COPY_REMAINS_TITLE, body: deviceCopyRemainsBody(name) + graphNote }
   }
   if (deviceOutcome === 'queued') {
     // 2026-07-22 — the hardware erase is durably journaled; honest "will
@@ -313,14 +313,14 @@ export function selectCompletionToast(inputs: CompletionToastInputs): Completion
     return {
       variant: 'warning',
       title: 'Deleted permanently — device erase queued',
-      body: `Removed "${filename}" and its data from this computer. The device copy will be erased automatically when the device reconnects.` + graphNote,
+      body: `Removed "${name}" and its data from this computer. The device copy will be erased automatically when the device reconnects.` + graphNote,
     }
   }
   if (filesPending) {
     return {
       variant: 'warning',
       title: FILES_PENDING_TITLE,
-      body: filesPendingBody(filename, pendingKinds) + staleNote + graphNote
+      body: filesPendingBody(name, pendingKinds) + staleNote + graphNote
     }
   }
   if (graphCleanupDeferred) {
@@ -329,7 +329,7 @@ export function selectCompletionToast(inputs: CompletionToastInputs): Completion
     return {
       variant: 'warning',
       title: GRAPH_CLEANUP_DEFERRED_TITLE,
-      body: graphCleanupDeferredBody(filename, deviceOutcome === 'success') + staleNote
+      body: graphCleanupDeferredBody(name, deviceOutcome === 'success') + staleNote
     }
   }
   if (viewMayBeStale) {
