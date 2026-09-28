@@ -90,7 +90,7 @@ function makeDownloadService(
 ): PipelineDownloadService {
   const base: PipelineDownloadService = {
     // By default, every device file needs syncing (no skipReason).
-    getFilesToSync: vi.fn((deviceFiles) =>
+    getFilesToSyncBatched: vi.fn(async (deviceFiles) =>
       deviceFiles.map((f) => ({ ...f }))
     ),
     processDownload: vi.fn().mockResolvedValue({ success: true, filePath: '/rec/x.mp3' }),
@@ -166,7 +166,7 @@ describe('DevicePipelineService', () => {
       const jensen = makeJensen()
       // Everything already synced → skipReason set on all.
       const dl = makeDownloadService({
-        getFilesToSync: vi.fn((deviceFiles) =>
+        getFilesToSyncBatched: vi.fn(async (deviceFiles) =>
           deviceFiles.map((f) => ({ ...f, skipReason: 'already synced' }))
         )
       })
@@ -208,6 +208,38 @@ describe('DevicePipelineService', () => {
 
         expect(listFiles.mock.calls[0][2]).toEqual(expect.any(Function))
         expect(snapshots).toContainEqual(['streamed.hda'])
+      })
+
+      it('throttles streaming snapshots and still publishes the complete list once the scan ends', async () => {
+        // 200 packets arriving back to back: one snapshot per packet copied the
+        // whole growing list every time (O(N^2) at 2,000 files).
+        // One packet every 50 ms for 10 s: about one snapshot per 250 ms.
+        const all = Array.from({ length: 200 }, (_, i) => makeFileInfo(`f${i}.hda`))
+        vi.useFakeTimers({ toFake: ['Date'] })
+        const listFiles = vi.fn(async (_progress, _expected, onNewFiles) => {
+          for (const file of all) {
+            onNewFiles?.([file])
+            vi.setSystemTime(Date.now() + 50)
+          }
+          return all
+        })
+        const jensen = makeJensen({ listFiles })
+        const svc = new DevicePipelineService(jensen, makeDownloadService())
+        const snapshots: number[] = []
+        svc.on('files', files => snapshots.push(files.length))
+
+        try {
+          await svc.connect()
+        } finally {
+          vi.useRealTimers()
+        }
+
+        expect(snapshots[0]).toBe(1) // the first packet is published at once
+        // 10 s of streaming / 250 ms = 40 streaming snapshots, plus the final list.
+        expect(snapshots.length).toBeGreaterThanOrEqual(38)
+        expect(snapshots.length).toBeLessThanOrEqual(43)
+        expect(snapshots[5] - snapshots[4]).toBe(5) // 250 ms apart = 5 packets
+        expect(snapshots[snapshots.length - 1]).toBe(200) // complete list after the scan
       })
 
     it('scans on first connect (no cache)', async () => {
@@ -345,7 +377,7 @@ describe('DevicePipelineService', () => {
       })
       // Mark the middle file as already-synced → it must NOT be downloaded.
       const dl = makeDownloadService({
-        getFilesToSync: vi.fn((deviceFiles) =>
+        getFilesToSyncBatched: vi.fn(async (deviceFiles) =>
           deviceFiles.map((f) =>
             f.filename === 'skip.hda' ? { ...f, skipReason: 'already synced' } : { ...f }
           )

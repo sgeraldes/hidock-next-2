@@ -16,7 +16,7 @@ import { isCancelledMeetingSubject, scoreMeetingCandidates } from './recording-m
 import { DURATION_LOW_VALUE_MAX_SECONDS, isImpossibleTranscriptDensity } from './value-thresholds'
 import type { QualityRating } from '@/types/knowledge'
 
-const SCHEMA_VERSION = 59
+const SCHEMA_VERSION = 60
 
 const SCHEMA = `
 -- Calendar events from ICS
@@ -778,6 +778,7 @@ CREATE INDEX IF NOT EXISTS idx_recordings_status ON recordings(status);
 CREATE INDEX IF NOT EXISTS idx_transcripts_recording ON transcripts(recording_id);
 CREATE INDEX IF NOT EXISTS idx_embeddings_transcript ON embeddings(transcript_id);
 CREATE INDEX IF NOT EXISTS idx_queue_status ON transcription_queue(status);
+CREATE INDEX IF NOT EXISTS idx_queue_recording ON transcription_queue(recording_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_synced_original ON synced_files(original_filename);
 CREATE INDEX IF NOT EXISTS idx_contacts_email ON contacts(email);
 CREATE INDEX IF NOT EXISTS idx_contacts_name ON contacts(name);
@@ -3096,6 +3097,14 @@ const MIGRATIONS: Record<number, () => void> = {
           FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
       )`)
     console.log('Migration v59 complete')
+  },
+  60: () => {
+    console.log('Running migration to schema v60: transcription_queue(recording_id) index')
+    // getActionableQueueItems looks up the latest attempt per recording on
+    // every Operations poll; without this index it scans the whole queue
+    // once per failed row on the main thread.
+    getDatabase().run('CREATE INDEX IF NOT EXISTS idx_queue_recording ON transcription_queue(recording_id, created_at)')
+    console.log('Migration v60 complete')
   },
 }
 
@@ -7674,12 +7683,46 @@ export function getQueueItems(status?: string): (QueueItem & { filename?: string
  * excluded so a periodic UI reconciliation does not serialize and scan years of
  * terminal rows merely to render the handful of actionable operations.
  */
-export function getActionableQueueItems(): (QueueItem & { filename?: string; date_recorded?: string })[] {
-  return queryAll<QueueItem & { filename?: string; date_recorded?: string }>(`
-    SELECT tq.*, r.filename, r.date_recorded
+/**
+ * When this process started. Failures stamped before it belong to an earlier
+ * app session; Operations shows them collapsed instead of as fresh errors.
+ */
+const APP_SESSION_STARTED_AT_ISO = new Date().toISOString()
+
+export type ActionableQueueItem = QueueItem & {
+  filename?: string
+  date_recorded?: string
+  /** 1 when a failed row was stamped before this app session started. */
+  from_previous_session?: number
+}
+
+export function getActionableQueueItems(): ActionableQueueItem[] {
+  // A failed row is hidden when a later attempt for the same recording exists
+  // (retried, completed or dismissed): Operations shows the latest attempt only.
+  // Pending/processing rows always show; the processor reads getQueueItems.
+  return queryAll<ActionableQueueItem>(`
+    SELECT tq.*, r.filename, r.date_recorded,
+      CASE
+        WHEN tq.status = 'failed'
+          AND datetime(COALESCE(tq.completed_at, tq.started_at, tq.created_at)) < datetime(?)
+        THEN 1 ELSE 0
+      END AS from_previous_session
     FROM transcription_queue tq
     LEFT JOIN recordings r ON tq.recording_id = r.id
     WHERE tq.status IN ('pending', 'processing', 'failed')
+      AND NOT (
+        tq.status = 'failed'
+        AND EXISTS (
+          SELECT 1
+          FROM transcription_queue newer
+          WHERE newer.recording_id = tq.recording_id
+            AND newer.id <> tq.id
+            AND (
+              datetime(newer.created_at) > datetime(tq.created_at)
+              OR (datetime(newer.created_at) = datetime(tq.created_at) AND newer.rowid > tq.rowid)
+            )
+        )
+      )
       AND NOT (
         tq.status = 'failed'
         AND EXISTS (
@@ -7690,7 +7733,7 @@ export function getActionableQueueItems(): (QueueItem & { filename?: string; dat
         )
       )
     ORDER BY r.date_recorded DESC, tq.created_at ASC
-  `)
+  `, [APP_SESSION_STARTED_AT_ISO])
 }
 
 export function updateQueueItem(id: string, status: string, errorMessage?: string): void {
@@ -7899,20 +7942,25 @@ export function saveDeviceFilesCache(files: Array<{
   duration_seconds?: number
   date_recorded: string
 }>): void {
-  // Clear existing cache
-  run('DELETE FROM device_files_cache')
+  // Clear + reinsert in ONE transaction: this rewrites the whole device list
+  // (2,000+ rows on a loaded device) and per-statement auto-commit made that
+  // thousands of individual WAL commits. Same writes, one commit.
+  runInTransaction(() => {
+    // Clear existing cache
+    runNoSave('DELETE FROM device_files_cache')
 
-  // Insert new cache entries
-  for (const file of files) {
-    const id = `cache_${file.filename.replace(/[^a-zA-Z0-9]/g, '_')}`
-    // Accept both 'size' and 'file_size' for flexibility
-    const fileSize = file.size ?? file.file_size ?? null
-    run(
-      `INSERT OR REPLACE INTO device_files_cache (id, filename, file_size, duration_seconds, date_recorded)
-       VALUES (?, ?, ?, ?, ?)`,
-      [id, file.filename, fileSize, file.duration_seconds ?? null, file.date_recorded]
-    )
-  }
+    // Insert new cache entries
+    for (const file of files) {
+      const id = `cache_${file.filename.replace(/[^a-zA-Z0-9]/g, '_')}`
+      // Accept both 'size' and 'file_size' for flexibility
+      const fileSize = file.size ?? file.file_size ?? null
+      runNoSave(
+        `INSERT OR REPLACE INTO device_files_cache (id, filename, file_size, duration_seconds, date_recorded)
+         VALUES (?, ?, ?, ?, ?)`,
+        [id, file.filename, fileSize, file.duration_seconds ?? null, file.date_recorded]
+      )
+    }
+  })
 }
 
 export function clearDeviceFilesCache(): void {

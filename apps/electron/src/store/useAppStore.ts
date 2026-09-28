@@ -48,6 +48,8 @@ export interface DownloadQueueEntry {
   status: DownloadStatus
   error?: string
   cancelReason?: 'user' | 'interrupted'
+  /** Reloaded from the database at boot: written by an earlier app session. */
+  fromPreviousSession?: boolean
 }
 
 /** One item from the main-process download-service state stream. */
@@ -143,6 +145,9 @@ interface AppState {
   // Download queue state (persists across page navigation). Enriched with status/error
   // so the bell popover + Operations overlay can show and cancel in-flight downloads.
   downloadQueue: Map<string, DownloadQueueEntry>
+  // Mirror of DownloadService.state.isPaused (main is the source of truth; the
+  // download-service:state-update echo keeps this in step).
+  downloadsPaused: boolean
 
   // Actions
   setMeetings: (meetings: Meeting[]) => void
@@ -208,6 +213,10 @@ interface AppState {
    * main-process emits. Cancelled rows flash briefly, then self-dismiss.
    */
   syncDownloadQueue: (items: MainDownloadItem[]) => void
+  setDownloadsPaused: (paused: boolean) => void
+  /** Stop starting new downloads (the in-flight one finishes). Optimistic; reverts if IPC fails. */
+  pauseDownloads: () => void
+  resumeDownloads: () => void
   /**
    * @deprecated Use `useIsDownloading(id)` selector hook instead.
    * This method uses `get()` which causes over-subscription - the caller re-renders
@@ -267,6 +276,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // Download queue initial state
   downloadQueue: new Map(),
+  downloadsPaused: false,
 
   // Meeting actions
   setMeetings: (meetings) => set({ meetings }),
@@ -529,6 +539,30 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     return { downloadQueue: next }
   }),
+
+  setDownloadsPaused: (paused) => {
+    if (get().downloadsPaused !== paused) set({ downloadsPaused: paused })
+  },
+
+  pauseDownloads: () => {
+    // Optimistic flip; the state-update echo from main confirms it.
+    set({ downloadsPaused: true })
+    const call = window.electronAPI?.downloadService?.pause?.()
+    call?.catch((e: unknown) => {
+      console.error('[AppStore] download pause IPC failed:', e)
+      // Revert only if nothing (a resume, a state echo) changed it since.
+      if (get().downloadsPaused) set({ downloadsPaused: false })
+    })
+  },
+
+  resumeDownloads: () => {
+    set({ downloadsPaused: false })
+    const call = window.electronAPI?.downloadService?.resume?.()
+    call?.catch((e: unknown) => {
+      console.error('[AppStore] download resume IPC failed:', e)
+      if (!get().downloadsPaused) set({ downloadsPaused: true })
+    })
+  },
 
   // SM-M01: Deprecated methods that use get() causing over-subscription.
   // Components should use useIsDownloading(id) and useDownloadProgress(id) selector hooks instead.

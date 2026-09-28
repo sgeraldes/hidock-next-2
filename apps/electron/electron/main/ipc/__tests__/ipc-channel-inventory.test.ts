@@ -155,6 +155,8 @@ describe('IPC channel registrar inventory', () => {
       'device-pipeline:connect',
       'device-pipeline:sync',
       'download-service:queue-downloads',
+      // resume restarts device work; only pause is teardown (stop op, no USB I/O).
+      'download-service:resume',
       'download-service:start-session',
     ]) {
       expect(TEARDOWN_CHANNELS, `${ch} must be initiation`).not.toContain(ch)

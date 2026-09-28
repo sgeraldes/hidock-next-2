@@ -150,6 +150,8 @@ beforeEach(() => {
     // via syncDownloadQueue BEFORE the (gated) auto-start check. The mirror is a
     // pure store mutation with no device I/O; the mock records that it ran.
     syncDownloadQueue: vi.fn(),
+    // The same echo mirrors DownloadService.isPaused (owner pause).
+    setDownloadsPaused: vi.fn(),
   })
 
   harness.deviceService.isConnected.mockReturnValue(true)

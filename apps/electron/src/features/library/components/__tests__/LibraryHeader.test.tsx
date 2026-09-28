@@ -12,7 +12,8 @@ function renderHeader(overrides: Partial<React.ComponentProps<typeof LibraryHead
     onRefresh: vi.fn(),
     onShowDeviceOnly: vi.fn(),
     onSetCompactView: vi.fn(),
-    onToggleTrash: vi.fn()
+    onToggleTrash: vi.fn(),
+    onToggleProcessingPause: vi.fn()
   }
 
   render(
@@ -27,6 +28,8 @@ function renderHeader(overrides: Partial<React.ComponentProps<typeof LibraryHead
       bulkCounts={{ deviceOnly: 1, needsTranscription: 0 }}
       bulkProcessing={false}
       bulkProgress={{ current: 0, total: 0 }}
+      processingPaused={false}
+      hasActiveProcessing={false}
       showTrash={false}
       trashCount={2}
       {...handlers}
@@ -78,5 +81,26 @@ describe('LibraryHeader — responsive action hierarchy', () => {
     expect(start).toBeEnabled()
     fireEvent.click(start)
     expect(handlers.onBulkDownload).toHaveBeenCalledOnce()
+  })
+})
+
+describe('LibraryHeader — pause processing', () => {
+  it('shows no pause control when nothing is downloading or queued and nothing is paused', () => {
+    renderHeader()
+    expect(screen.queryByRole('button', { name: 'Pause processing' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Resume processing' })).not.toBeInTheDocument()
+  })
+
+  it('pauses downloads and transcriptions in one click while work is running', () => {
+    const handlers = renderHeader({ hasActiveProcessing: true })
+    fireEvent.click(screen.getByRole('button', { name: 'Pause processing' }))
+    expect(handlers.onToggleProcessingPause).toHaveBeenCalledOnce()
+  })
+
+  it('says it is paused and offers Resume, even with nothing queued', () => {
+    const handlers = renderHeader({ processingPaused: true })
+    expect(screen.getByText('Paused')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Resume processing' }))
+    expect(handlers.onToggleProcessingPause).toHaveBeenCalledOnce()
   })
 })

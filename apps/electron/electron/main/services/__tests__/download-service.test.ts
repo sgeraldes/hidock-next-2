@@ -37,6 +37,7 @@ vi.mock('../database', () => ({
   getSyncedFile: vi.fn(() => undefined),
   removeSyncedFile: vi.fn(),
   isFilePurged: () => false,
+  getPurgedFilenames: () => [],
   getRecordingByFilename: vi.fn(() => null),
   getSyncedFilenames: vi.fn(() => new Set()),
   // spec-007: Mock new database functions

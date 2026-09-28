@@ -16,6 +16,7 @@ import {
   Copy,
   Check,
   ChevronDown,
+  ChevronRight,
   Trash2
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -23,6 +24,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { cn } from '@/lib/utils'
 import { formatBytes } from '@/utils/formatters'
 import {
+  useAppStore,
   useDownloadQueue,
   useUnifiedRecordings
 } from '@/store/useAppStore'
@@ -30,7 +32,6 @@ import type { DownloadQueueEntry } from '@/store/useAppStore'
 import {
   useTranscriptionStore,
   useTranscriptionStats,
-  useTranscriptionPaused,
   type TranscriptionItem,
   type TranscriptionStatus
 } from '@/store/features/useTranscriptionStore'
@@ -39,6 +40,8 @@ import {
   useOperationsOverlayOpen
 } from '@/store/ui/useUIStore'
 import { useOperations } from '@/hooks/useOperations'
+import { useProcessingPause } from '@/hooks/useProcessingPause'
+import { splitBySession, recordingForDownload, operationLabel } from './operationHistory'
 import { isRetryableDownloadItem } from '@/hooks/useDownloadOrchestrator'
 import type { UnifiedRecording } from '@/types/unified-recording'
 import { toast } from '@/components/ui/toaster'
@@ -70,10 +73,6 @@ function compareTranscriptions(a: TranscriptionItem, b: TranscriptionItem): numb
 }
 
 /** Strip the recording extension for a cleaner display name (keeps the date stamp). */
-function displayName(filename: string): string {
-  return filename.replace(/\.(hda|wav|mp3|m4a)$/i, '')
-}
-
 const OPERATION_TIME_FORMAT = new Intl.DateTimeFormat(undefined, {
   dateStyle: 'medium',
   timeStyle: 'medium'
@@ -128,12 +127,6 @@ function downloadStatusRank(dl: DownloadQueueEntry): number {
 }
 
 /** Resolve a net-new, human title for the source behind a transcription item. */
-function sourceTitleFor(item: TranscriptionItem, rec?: UnifiedRecording): string | null {
-  const title = rec?.title ?? rec?.meetingSubject
-  if (title && title.trim() && title !== item.filename) return title
-  return null
-}
-
 /**
  * The Operations surface does NOT live in the sidebar. The sidebar shows only a
  * single compact status badge — what's happening and the error count — that
@@ -151,14 +144,10 @@ export function OperationsPanel({ sidebarOpen }: OperationsPanelProps) {
   const retryItem = useTranscriptionStore((s) => s.retry)
   const dismissItem = useTranscriptionStore((s) => s.dismiss)
   const dismissFailedItems = useTranscriptionStore((s) => s.dismissFailed)
-  const queuePaused = useTranscriptionPaused()
-  const pauseQueue = useTranscriptionStore((s) => s.pauseQueue)
-  const resumeQueue = useTranscriptionStore((s) => s.resumeQueue)
+  const dismissManyItems = useTranscriptionStore((s) => s.dismissMany)
+  // One switch for downloads + transcriptions, shared with the Library header.
+  const { paused: processingPaused, transcriptionPaused, toggle: toggleProcessing } = useProcessingPause()
   const applyQueueState = useTranscriptionStore((s) => s.applyQueueState)
-  const toggleQueuePaused = useCallback(() => {
-    if (queuePaused) resumeQueue()
-    else pauseQueue()
-  }, [queuePaused, pauseQueue, resumeQueue])
   const recordings = useUnifiedRecordings()
   const { cancelTranscription, cancelDownload, cancelAllDownloads, retryFailedDownloads } = useOperations()
 
@@ -174,23 +163,27 @@ export function OperationsPanel({ sidebarOpen }: OperationsPanelProps) {
   useEffect(() => {
     if (!window.electronAPI?.downloadService || isFeatureOffThisRun('device-sync')) return
     window.electronAPI.downloadService.getState().then((state) => {
+      // Hydrate the download pause after a renderer reload (main keeps it in memory).
+      useAppStore.getState().setDownloadsPaused(state?.isPaused === true)
       setPersistedDownloads((state?.queue ?? []).map((item) => ({
         filename: item.filename,
         size: item.fileSize,
         progress: item.progress,
         status: item.status,
         error: item.error,
-        cancelReason: item.cancelReason
+        cancelReason: item.cancelReason,
+        fromPreviousSession: item.fromPreviousSession
       })))
     }).catch(() => {})
-    const unsub = window.electronAPI.downloadService.onStateUpdate((state: { queue: Array<{ filename: string; fileSize: number; progress: number; status: DownloadQueueEntry['status']; error?: string; cancelReason?: 'user' | 'interrupted' }> }) => {
+    const unsub = window.electronAPI.downloadService.onStateUpdate((state: { queue: Array<{ filename: string; fileSize: number; progress: number; status: DownloadQueueEntry['status']; error?: string; cancelReason?: 'user' | 'interrupted'; fromPreviousSession?: boolean }> }) => {
       setPersistedDownloads(state.queue.map((item) => ({
         filename: item.filename,
         size: item.fileSize,
         progress: item.progress,
         status: item.status,
         error: item.error,
-        cancelReason: item.cancelReason
+        cancelReason: item.cancelReason,
+        fromPreviousSession: item.fromPreviousSession
       })))
     })
     return unsub
@@ -203,6 +196,8 @@ export function OperationsPanel({ sidebarOpen }: OperationsPanelProps) {
       .filter((item) => item.status !== 'completed')
       .sort((a, b) => downloadStatusRank(a) - downloadStatusRank(b))
   }, [downloadQueue, persistedDownloads])
+  // Failures from an earlier app session go to one collapsed group, not the badge.
+  const downloadHistory = useMemo(() => splitBySession(downloads), [downloads])
 
   // Mirror the main-process transcription queue state (paused? which id is live?).
   useEffect(() => {
@@ -247,29 +242,47 @@ export function OperationsPanel({ sidebarOpen }: OperationsPanelProps) {
     return window.electronAPI.downloadService.dismiss(filename)
   }, [])
 
-  const activeDownloadCount = downloads.filter((item) => ['pending', 'downloading', 'cancelling'].includes(item.status)).length
-  const failedDownloadCount = downloads.filter((item) => isRetryableDownloadItem(item)).length
+  // Same per-row dismiss the list offers, applied to the whole earlier group.
+  const clearEarlierFailures = useCallback(async (transcriptionIds: string[], downloadFilenames: string[]) => {
+    const results = await Promise.all(downloadFilenames.map((filename) => dismissDownload(filename)))
+    const removed = (await dismissManyItems(transcriptionIds)) + results.filter(Boolean).length
+    if (removed > 0) toast.success(`${removed} earlier failure${removed === 1 ? '' : 's'} cleared`)
+  }, [dismissDownload, dismissManyItems])
+
+  const currentDownloads = downloadHistory.current
+  const activeDownloadCount = currentDownloads.filter((item) => ['pending', 'downloading', 'cancelling'].includes(item.status)).length
+  const failedDownloadCount = currentDownloads.filter((item) => isRetryableDownloadItem(item)).length
   const hasDownloads = activeDownloadCount > 0
   const hasFailedDownloads = failedDownloadCount > 0
   const hasTranscriptions =
     transcriptionStats.pending > 0 || transcriptionStats.processing > 0 || transcriptionStats.failed > 0
-  if (!hasDownloads && !hasFailedDownloads && !hasTranscriptions) return null
+  // Stay visible while paused, so Resume is always one click away.
+  if (!hasDownloads && !hasFailedDownloads && !hasTranscriptions && downloadHistory.earlier.length === 0 && !processingPaused) return null
 
   const activeTranscriptions = transcriptionStats.processing + transcriptionStats.pending
-  const errorCount = transcriptionStats.failed + failedDownloadCount
-  const orderedTranscriptions = Array.from(transcriptionQueue.values())
-    .filter((i) => i.status !== 'completed')
-    .sort(compareTranscriptions)
+  const transcriptionHistory = splitBySession(
+    Array.from(transcriptionQueue.values())
+      .filter((i) => i.status !== 'completed')
+      .sort(compareTranscriptions)
+  )
+  const currentFailedTranscriptions = transcriptionHistory.current.filter((i) => i.status === 'failed').length
+  const earlierFailureCount = transcriptionHistory.earlier.length + downloadHistory.earlier.length
+  // Badges count this session's failures only; earlier ones never turn them red.
+  const errorCount = currentFailedTranscriptions + failedDownloadCount
 
   const overlay = (
     <OperationsOverlay
       open={overlayOpen}
       onClose={closeOverlay}
-      items={orderedTranscriptions}
-      downloads={downloads}
+      items={transcriptionHistory.current}
+      downloads={currentDownloads}
+      earlierItems={transcriptionHistory.earlier}
+      earlierDownloads={downloadHistory.earlier}
+      onClearEarlier={clearEarlierFailures}
       recordings={recordings}
-      paused={queuePaused}
-      onTogglePause={toggleQueuePaused}
+      paused={processingPaused}
+      transcriptionPaused={transcriptionPaused}
+      onTogglePause={toggleProcessing}
       onGoTo={goToSource}
       onPrioritize={prioritize}
       onDeprioritize={deprioritize}
@@ -327,7 +340,9 @@ export function OperationsPanel({ sidebarOpen }: OperationsPanelProps) {
         ? `${activeDownloadCount} downloading`
         : errorCount > 0
           ? `${errorCount} failed`
-          : 'Operations'
+          : earlierFailureCount > 0
+            ? `${earlierFailureCount} earlier failure${earlierFailureCount === 1 ? '' : 's'}`
+            : 'Operations'
 
   return (
     <>
@@ -341,7 +356,7 @@ export function OperationsPanel({ sidebarOpen }: OperationsPanelProps) {
           <div className="flex items-center gap-2 text-xs text-slate-300">
             <Sparkles className={cn('h-3.5 w-3.5 shrink-0', activeTranscriptions > 0 ? 'text-purple-400 animate-pulse' : 'text-slate-500')} />
             <span className="truncate">{primaryLabel}</span>
-            {queuePaused && (
+            {processingPaused && (
               <span className="rounded bg-amber-500/20 px-1 text-[9px] font-medium uppercase tracking-wide text-amber-300">Paused</span>
             )}
             <span className="ml-auto flex items-center gap-1.5">
@@ -375,8 +390,15 @@ interface OperationsOverlayProps {
   onClose: () => void
   items: TranscriptionItem[]
   downloads: DownloadQueueEntry[]
+  /** Failures from earlier app sessions, shown collapsed. */
+  earlierItems: TranscriptionItem[]
+  earlierDownloads: DownloadQueueEntry[]
+  onClearEarlier: (transcriptionIds: string[], downloadFilenames: string[]) => Promise<void>
   recordings: UnifiedRecording[]
+  /** Downloads or transcriptions paused (the combined switch). */
   paused: boolean
+  /** Transcription queue alone, for the retry toast wording. */
+  transcriptionPaused: boolean
   onTogglePause: () => void
   onGoTo: (item: TranscriptionItem) => void
   onPrioritize: (id: string) => void
@@ -398,8 +420,12 @@ function OperationsOverlay({
   onClose,
   items,
   downloads,
+  earlierItems,
+  earlierDownloads,
+  onClearEarlier,
   recordings,
   paused,
+  transcriptionPaused,
   onTogglePause,
   onGoTo,
   onPrioritize,
@@ -417,6 +443,8 @@ function OperationsOverlay({
 }: OperationsOverlayProps) {
   const [copiedErrorId, setCopiedErrorId] = useState<string | null>(null)
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set())
+  const [earlierOpen, setEarlierOpen] = useState(false)
+  const [clearingEarlier, setClearingEarlier] = useState(false)
 
   const withBusy = useCallback(async (id: string, action: () => Promise<boolean>, successMessage: string) => {
     setBusyIds((current) => new Set(current).add(id))
@@ -454,6 +482,7 @@ function OperationsOverlay({
   if (!open) return null
 
   const totalCount = items.length + downloads.length
+  const earlierCount = earlierItems.length + earlierDownloads.length
   const canCancelAllDownloads = downloads.some(isCancelableDownload)
   const failedTranscriptionCount = items.filter((item) => item.status === 'failed').length
   const terminalDownloadCount = downloads.filter((item) => ['failed', 'cancelled', 'completed'].includes(item.status)).length
@@ -521,13 +550,15 @@ function OperationsOverlay({
                 Cancel all downloads
               </Button>
             )}
-            {items.some((i) => i.status === 'pending' || i.status === 'processing') && (
+            {(paused ||
+              items.some((i) => i.status === 'pending' || i.status === 'processing') ||
+              downloads.some((d) => d.status === 'pending' || d.status === 'downloading')) && (
               <Button
                 variant="ghost"
                 size="sm"
                 className="h-7 gap-1.5 px-2 text-xs text-slate-300 hover:text-slate-100"
                 onClick={onTogglePause}
-                aria-label={paused ? 'Resume transcription queue' : 'Pause transcription queue'}
+                aria-label={paused ? 'Resume processing' : 'Pause processing'}
               >
                 {paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
                 {paused ? 'Resume' : 'Pause'}
@@ -540,7 +571,7 @@ function OperationsOverlay({
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-3">
-          {totalCount === 0 ? (
+          {totalCount === 0 && earlierCount === 0 ? (
             <p className="py-8 text-center text-sm text-slate-500">No active operations.</p>
           ) : (
             <div className="space-y-3">
@@ -552,7 +583,9 @@ function OperationsOverlay({
                     <span className="rounded-full bg-slate-700 px-1.5 text-[10px] text-slate-300">{downloads.length}</span>
                   </h3>
                   <ul className="space-y-1">
-                    {downloads.map((dl) => (
+                    {downloads.map((dl) => {
+                      const dlLabel = operationLabel(recordingForDownload(recordings, dl.filename))
+                      return (
                       <li key={`dl-${dl.filename}`} className="flex items-center gap-3 rounded-md px-2 py-2 hover:bg-slate-800">
                         {dl.status === 'cancelling' ? (
                           <RefreshCw className="h-4 w-4 shrink-0 animate-spin text-amber-400" />
@@ -562,7 +595,7 @@ function OperationsOverlay({
                           <Download className={cn('h-4 w-4 shrink-0', dl.status === 'cancelled' ? 'text-slate-500' : 'text-emerald-400')} />
                         )}
                         <div className="min-w-0 flex-1">
-                          <div className="truncate text-sm text-slate-100">{displayName(dl.filename)}</div>
+                          <div className="truncate text-sm text-slate-100">{dlLabel}</div>
                           <div className="truncate text-[11px] text-slate-500">
                             {downloadStatusLabel(dl)}
                             {dl.size > 0 ? ` · ${formatBytes(dl.size)}` : ''}
@@ -603,7 +636,7 @@ function OperationsOverlay({
                               () => onDismissDownload(dl.filename),
                               'Download failure dismissed'
                             )}
-                            aria-label={`Dismiss download failure ${displayName(dl.filename)}`}
+                            aria-label={`Dismiss download failure ${dlLabel}`}
                           >
                             <X className="h-3.5 w-3.5" />
                             Dismiss
@@ -611,7 +644,7 @@ function OperationsOverlay({
                         )}
                         {(isCancelableDownload(dl) || dl.status === 'cancelling') && (
                           <IconBtn
-                            label={`Cancel download ${displayName(dl.filename)}`}
+                            label={`Cancel download ${dlLabel}`}
                             danger
                             disabled={dl.status === 'cancelling'}
                             onClick={() => onCancelDownload(dl.filename)}
@@ -620,7 +653,8 @@ function OperationsOverlay({
                           </IconBtn>
                         )}
                       </li>
-                    ))}
+                      )
+                    })}
                   </ul>
                 </section>
               )}
@@ -635,7 +669,7 @@ function OperationsOverlay({
                   <ul className="space-y-1">
               {items.map((item) => {
                 const rec = recordings.find((r) => r.id === item.recordingId)
-                const title = sourceTitleFor(item, rec)
+                const title = operationLabel(rec)
                 const isPending = item.status === 'pending'
                 const isFailed = item.status === 'failed'
                 const startedAt = formatOperationTime(item.startedAt)
@@ -657,9 +691,9 @@ function OperationsOverlay({
                       {isFailed && <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />}
 
                       <div className="min-w-0 flex-1 text-left">
-                        <div className="truncate text-sm text-slate-100 hover:text-sky-300">{title ?? displayName(item.filename)}</div>
+                        <div className="truncate text-sm text-slate-100 hover:text-sky-300">{title}</div>
                         <div className="truncate text-[11px] tabular-nums text-slate-400">
-                          {displayName(item.filename)} · {STATUS_LABEL[item.status]} · {attemptLabel(item)}
+                          {STATUS_LABEL[item.status]} · {attemptLabel(item)}
                           {eventTime ? ` · ${eventTime}` : ''}
                         </div>
                       </div>
@@ -696,7 +730,7 @@ function OperationsOverlay({
                               onClick={() => void withBusy(
                                 item.id,
                                 () => onRetry(item.id),
-                                paused ? 'Retry queued — transcription queue is paused' : 'Retry queued'
+                                transcriptionPaused ? 'Retry queued — transcription queue is paused' : 'Retry queued'
                               )}
                             >
                               <RotateCcw className={cn('h-3.5 w-3.5', isBusy && 'animate-spin')} />
@@ -744,7 +778,7 @@ function OperationsOverlay({
                               size="sm"
                               className="h-7 gap-1.5 px-2 text-xs text-slate-300 hover:text-white"
                               onClick={() => void copyError(item)}
-                              aria-label={`Copy error for ${displayName(item.filename)}`}
+                              aria-label={`Copy error for ${title}`}
                             >
                               {copiedErrorId === item.id ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
                               {copiedErrorId === item.id ? 'Copied' : 'Copy error'}
@@ -757,6 +791,63 @@ function OperationsOverlay({
                 )
               })}
                   </ul>
+                </section>
+              )}
+
+              {earlierCount > 0 && (
+                <section aria-label="Earlier failures" className="border-t border-slate-800 pt-2">
+                  <div className="flex items-center gap-2 px-2">
+                    <button
+                      type="button"
+                      className="flex flex-1 items-center gap-1.5 text-left text-[11px] font-medium uppercase tracking-wide text-slate-500 hover:text-slate-300"
+                      aria-expanded={earlierOpen}
+                      onClick={() => setEarlierOpen((v) => !v)}
+                    >
+                      <ChevronRight className={cn('h-3 w-3 transition-transform', earlierOpen && 'rotate-90')} />
+                      Earlier failures ({earlierCount})
+                    </button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 gap-1.5 px-2 text-xs text-slate-300 hover:text-slate-100"
+                      disabled={clearingEarlier}
+                      aria-label="Clear earlier failures"
+                      onClick={() => {
+                        setClearingEarlier(true)
+                        void onClearEarlier(
+                          earlierItems.map((i) => i.id),
+                          earlierDownloads.map((d) => d.filename)
+                        ).finally(() => setClearingEarlier(false))
+                      }}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Clear
+                    </Button>
+                  </div>
+                  {earlierOpen && (
+                    <ul className="mt-1 space-y-1">
+                      {earlierDownloads.map((dl) => (
+                        <li key={`earlier-dl-${dl.filename}`} className="flex items-center gap-3 rounded-md px-2 py-1.5 text-slate-400">
+                          <Download className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-sm">{operationLabel(recordingForDownload(recordings, dl.filename))}</div>
+                            <div className="truncate text-[11px] text-slate-500">{downloadStatusLabel(dl)}{dl.error ? ` · ${dl.error}` : ''}</div>
+                          </div>
+                        </li>
+                      ))}
+                      {earlierItems.map((item) => (
+                        <li key={`earlier-${item.id}`} className="flex items-center gap-3 rounded-md px-2 py-1.5 text-slate-400">
+                          <Sparkles className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-sm">{operationLabel(recordings.find((r) => r.id === item.recordingId))}</div>
+                            <div className="truncate text-[11px] text-slate-500">
+                              {formatOperationTime(item.completedAt) ?? 'Failed'}{item.error ? ` · ${item.error}` : ''}
+                            </div>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </section>
               )}
             </div>

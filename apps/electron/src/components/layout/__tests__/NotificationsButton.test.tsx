@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { NotificationsButton } from '../NotificationsButton'
-import { useDownloadQueue } from '@/store/useAppStore'
+import { useDownloadQueue, useUnifiedRecordings } from '@/store/useAppStore'
 import { useTranscriptionStats, useTranscriptionStore } from '@/store/features/useTranscriptionStore'
 import { useUIStore } from '@/store/ui/useUIStore'
 
@@ -26,7 +26,7 @@ class RO {
 ;(globalThis as unknown as { ResizeObserver: typeof RO }).ResizeObserver =
   (globalThis as unknown as { ResizeObserver?: typeof RO }).ResizeObserver ?? RO
 
-vi.mock('@/store/useAppStore', () => ({ useDownloadQueue: vi.fn() }))
+vi.mock('@/store/useAppStore', () => ({ useDownloadQueue: vi.fn(), useUnifiedRecordings: vi.fn(() => []) }))
 vi.mock('@/store/features/useTranscriptionStore', () => ({
   useTranscriptionStats: vi.fn(),
   useTranscriptionStore: vi.fn()
@@ -51,6 +51,11 @@ function setup({
   stats?: { total: number; completed: number; failed: number; processing: number; pending: number; aggregateProgress: number }
 } = {}) {
   vi.mocked(useDownloadQueue).mockReturnValue(downloads as any)
+  // Library sources for the fixture files; rows are named by these titles.
+  vi.mocked(useUnifiedRecordings).mockReturnValue([
+    { id: 'r1', filename: '2026-07-10-standup.wav', title: 'Standup' },
+    { id: 'r2', filename: '2026-07-10-notes.wav', title: 'Notes' }
+  ] as any)
   vi.mocked(useTranscriptionStats).mockReturnValue(stats as any)
   vi.mocked(useTranscriptionStore).mockImplementation((selector: any) => selector({ queue }))
   vi.mocked(useUIStore).mockImplementation((selector: any) => selector({ openOperationsOverlay: mockOpenOverlay }))
@@ -101,9 +106,10 @@ describe('NotificationsButton', () => {
     const trigger = screen.getByRole('button', { name: /Notifications: 2 operations in progress/i })
     fireEvent.click(trigger)
 
-    expect(screen.getByText('2026-07-10-standup')).toBeInTheDocument()
+    expect(screen.getByText('Standup')).toBeInTheDocument()
     expect(screen.getByText('Transcribing…')).toBeInTheDocument()
-    expect(screen.getByText('2026-07-10-notes')).toBeInTheDocument()
+    expect(screen.getByText('Notes')).toBeInTheDocument()
+    expect(screen.queryByText(/2026-07-10/)).not.toBeInTheDocument()
     expect(screen.getByText(/Downloading… 42%/)).toBeInTheDocument()
   })
 
@@ -137,7 +143,8 @@ describe('NotificationsButton', () => {
 
     const trigger = await screen.findByRole('button', { name: /2 failed/i })
     fireEvent.click(trigger)
-    expect(screen.getByText('missing')).toBeInTheDocument()
+    // No Library source for the file: a neutral label, never the file name.
+    expect(screen.getByText('Recording')).toBeInTheDocument()
     expect(screen.getByText(/Failed · USB transfer failed/)).toBeInTheDocument()
     await waitFor(() => expect(screen.getByText('2 failed')).toBeInTheDocument())
   })
@@ -149,7 +156,7 @@ describe('NotificationsButton', () => {
     render(<NotificationsButton />)
 
     fireEvent.click(screen.getByRole('button', { name: /Notifications/i }))
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel download 2026-07-10-notes' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel download Notes' }))
     expect(mockCancelDownload).toHaveBeenCalledWith('2026-07-10-notes.wav')
   })
 
@@ -161,7 +168,7 @@ describe('NotificationsButton', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Notifications/i }))
     expect(screen.getByText('Cancelling…')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Cancel download x' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Cancel download Recording' })).toBeDisabled()
   })
 
   it('offers a Cancel-all downloads control wired to cancelAllDownloads', () => {
@@ -176,5 +183,23 @@ describe('NotificationsButton', () => {
     fireEvent.click(screen.getByRole('button', { name: /Notifications/i }))
     fireEvent.click(screen.getByRole('button', { name: 'Cancel all downloads' }))
     expect(mockCancelAllDownloads).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves failures from earlier app sessions out of the badge and the list', async () => {
+    ;(window as any).electronAPI.downloadService.getState.mockResolvedValue({
+      queue: [{
+        filename: 'old.hda', fileSize: 10, progress: 0, status: 'failed',
+        error: 'USB transfer failed', fromPreviousSession: true
+      }]
+    })
+    setup({
+      queue: new Map([['t1', txItem({ status: 'failed', error: 'old', fromPreviousSession: true })]]),
+      stats: { total: 1, completed: 0, failed: 1, processing: 0, pending: 0, aggregateProgress: 0 }
+    })
+    render(<NotificationsButton />)
+
+    await waitFor(() => expect((window as any).electronAPI.downloadService.getState).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: 'Notifications' }))
+    expect(screen.getByText('No recent activity')).toBeInTheDocument()
   })
 })

@@ -38,6 +38,7 @@ vi.mock('../database', () => ({
       : undefined,
   removeSyncedFile: vi.fn(),
   isFilePurged: () => false,
+  getPurgedFilenames: () => [],
   getRecordingByFilename: (filename: string) => mockGetRecordingByFilename(filename),
   upsertRecordingFromDevice: vi.fn((file: DeviceFile) => ({
     id: `id:${file.filename}`,

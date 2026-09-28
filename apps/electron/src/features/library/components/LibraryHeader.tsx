@@ -6,6 +6,8 @@ import {
   FolderOpen,
   LayoutGrid,
   List,
+  Pause,
+  Play,
   Plus,
   RefreshCw,
   Trash2,
@@ -42,6 +44,11 @@ interface LibraryHeaderProps {
   }
   bulkProcessing: boolean
   bulkProgress: { current: number; total: number }
+  /** Downloads or transcriptions are paused (main process is the source of truth). */
+  processingPaused: boolean
+  /** Something is downloading or queued for transcription, so there is work to pause. */
+  hasActiveProcessing: boolean
+  onToggleProcessingPause: () => void
   onAddRecording: () => void
   onImportFile: () => void
   onOpenFolder: () => void
@@ -66,6 +73,9 @@ export function LibraryHeader({
   bulkCounts,
   bulkProcessing,
   bulkProgress,
+  processingPaused,
+  hasActiveProcessing,
+  onToggleProcessingPause,
   onAddRecording,
   onImportFile,
   onOpenFolder,
@@ -184,6 +194,32 @@ export function LibraryHeader({
                 {bulkProcessing ? `${bulkProgress.current}/${bulkProgress.total}` : bulkCounts.needsTranscription}
               </span>
             </Button>
+          )}
+
+          {(processingPaused || hasActiveProcessing) && (
+            <div className="flex items-center gap-2">
+              {processingPaused && (
+                <span className="rounded bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">
+                  Paused
+                </span>
+              )}
+              <Button
+                variant={processingPaused ? 'default' : 'outline'}
+                size="sm"
+                onClick={onToggleProcessingPause}
+                aria-label={processingPaused ? 'Resume processing' : 'Pause processing'}
+                title={processingPaused
+                  ? 'Start downloads and transcriptions again'
+                  : 'Stop new downloads and transcriptions. The one in progress finishes.'}
+              >
+                {processingPaused ? (
+                  <Play className="mr-2 h-4 w-4" aria-hidden="true" />
+                ) : (
+                  <Pause className="mr-2 h-4 w-4" aria-hidden="true" />
+                )}
+                {processingPaused ? 'Resume' : 'Pause'}
+              </Button>
+            </div>
           )}
 
           <TranscriptUpgradeButton compact />
