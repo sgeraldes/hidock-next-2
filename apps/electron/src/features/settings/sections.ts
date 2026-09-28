@@ -26,6 +26,9 @@ import {
   PlayCircle,
   Monitor,
   Mic,
+  KeyRound,
+  Keyboard,
+  Library,
   Gauge
 } from 'lucide-react'
 
@@ -38,12 +41,15 @@ export type SettingsSectionId =
   | 'player'
   | 'recording'
   | 'privacy'
+  | 'shortcuts'
+  | 'library'
   | 'transcription'
   | 'speakers'
   | 'ai-providers'
   | 'connectors'
   | 'decisions'
   | 'storage'
+  | 'secrets'
   | 'maintenance'
   | 'quality'
   | 'developer'
@@ -135,6 +141,22 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     keywords: ['clipboard', 'screenshots', 'capture']
   },
   {
+    id: 'library',
+    group: 'preferences',
+    label: 'Library',
+    description: 'How the list shows and sorts, and how a source opens.',
+    icon: Library,
+    keywords: ['rows', 'sort', 'reader', 'sections', 'cards']
+  },
+  {
+    id: 'shortcuts',
+    group: 'preferences',
+    label: 'Shortcuts',
+    description: 'The keys HiDock answers to.',
+    icon: Keyboard,
+    keywords: ['keyboard', 'keys', 'hotkeys', 'ctrl']
+  },
+  {
     id: 'transcription',
     group: 'services',
     label: 'Transcription',
@@ -181,6 +203,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'Where recordings, transcripts and data live on this computer.',
     icon: HardDrive,
     keywords: ['folders', 'disk', 'path', 'data']
+  },
+  {
+    id: 'secrets',
+    group: 'system',
+    label: 'Secrets',
+    description: 'Every stored key and token: set or not, replace or remove.',
+    icon: KeyRound,
+    keywords: ['api key', 'token', 'password', 'credential', 'encrypted']
   },
   {
     id: 'maintenance',

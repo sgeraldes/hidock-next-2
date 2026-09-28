@@ -899,12 +899,12 @@ export interface ElectronAPI {
     getInfo: () => Promise<any>
     getUsage?: () => Promise<{ success: boolean; data?: import('../../src/types').StorageLocationUsage[]; error?: string }>
     recordingsOverLimit?: () => Promise<{ success: boolean; data?: boolean; error?: string }>
-    planMove?: (folder: 'recordings' | 'transcripts' | 'data', to: string) => Promise<{ success: boolean; data?: import('../../src/types').StorageMovePlan; error?: string }>
-    moveFolder?: (folder: 'recordings' | 'transcripts', to: string, expected: { files: number; bytes: number }) => Promise<{ success: boolean; data?: { copiedFiles: number; copiedBytes: number; cancelled: boolean }; error?: string }>
-    switchFolder?: (folder: 'recordings' | 'transcripts', to: string) => Promise<{ success: boolean; error?: string }>
+    planMove?: (folder: 'recordings' | 'transcripts' | 'captures' | 'data', to: string) => Promise<{ success: boolean; data?: import('../../src/types').StorageMovePlan; error?: string }>
+    moveFolder?: (folder: 'recordings' | 'transcripts' | 'captures', to: string, expected: { files: number; bytes: number }) => Promise<{ success: boolean; data?: { copiedFiles: number; copiedBytes: number; cancelled: boolean }; error?: string }>
+    switchFolder?: (folder: 'recordings' | 'transcripts' | 'captures', to: string) => Promise<{ success: boolean; error?: string }>
     cancelMove?: () => Promise<{ success: boolean; data?: boolean }>
     onMoveProgress?: (cb: (p: { folder: string; copiedFiles: number; totalFiles: number; copiedBytes: number; totalBytes: number }) => void) => () => void
-    openFolder: (folder: 'recordings' | 'transcripts' | 'data') => Promise<boolean>
+    openFolder: (folder: 'recordings' | 'transcripts' | 'captures' | 'data') => Promise<boolean>
     selectFolder?: (currentPath?: string) => Promise<{ success: boolean; data?: string | null; error?: string }>
     openFile: (filePath: string) => Promise<{ success: boolean; error?: string }>
     revealInFolder: (filePath: string) => Promise<{ success: boolean; error?: string }>

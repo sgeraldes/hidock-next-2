@@ -2,15 +2,15 @@
  * Space used by each storage location, the free space on the disk it lives
  * on, and its optional limit (Settings > Storage, owner 28-sep-2026). Each
  * location can sit on a different disk, so each gets its own disk numbers.
- * The data folder does not count the recordings or transcripts folders when
+ * The data folder does not count the recordings, transcripts or captures folders when
  * they sit inside it.
  */
 import { promises as fs } from 'fs'
 import { join, resolve, sep } from 'path'
 import { getConfig, getDataPath } from './config'
-import { getRecordingsPath, getTranscriptsPath } from './file-storage'
+import { getCapturesPath, getRecordingsPath, getTranscriptsPath } from './file-storage'
 
-export type StorageLocationId = 'recordings' | 'transcripts' | 'data'
+export type StorageLocationId = 'recordings' | 'transcripts' | 'captures' | 'data'
 
 export interface StorageLocationUsage {
   id: StorageLocationId
@@ -85,12 +85,14 @@ export function limitBytesFor(id: StorageLocationId): number | null {
 export async function getStorageUsage(): Promise<StorageLocationUsage[]> {
   const recordings = getRecordingsPath()
   const transcripts = getTranscriptsPath()
+  const captures = getCapturesPath()
   const data = getDataPath()
   const locations: Array<{ id: StorageLocationId; path: string; exclude: string[] }> = [
     { id: 'recordings', path: recordings, exclude: [] },
     { id: 'transcripts', path: transcripts, exclude: [] },
-    // Recordings and transcripts inside the data folder are counted on their own rows.
-    { id: 'data', path: data, exclude: [recordings, transcripts].filter((p) => inside(p, data) && resolve(p) !== resolve(data)) }
+    { id: 'captures', path: captures, exclude: [] },
+    // Recordings, transcripts and captures inside the data folder are counted on their own rows.
+    { id: 'data', path: data, exclude: [recordings, transcripts, captures].filter((p) => inside(p, data) && resolve(p) !== resolve(data)) }
   ]
   return Promise.all(
     locations.map(async ({ id, path, exclude }) => {

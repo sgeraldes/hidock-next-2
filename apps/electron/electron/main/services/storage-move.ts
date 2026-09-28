@@ -32,14 +32,14 @@ import { promises as fs, createReadStream, createWriteStream, existsSync } from 
 import { pipeline } from 'stream/promises'
 import { dirname, join, relative, resolve, sep } from 'path'
 import { getConfig, updateConfig } from './config'
-import { getRecordingsPath, getTranscriptsPath, initializeFileStorage } from './file-storage'
+import { getRecordingsPath, getTranscriptsPath, initializeFileStorage, getCapturesPath } from './file-storage'
 import { queryAll, run, runInTransaction } from './database'
 import { startRecordingWatcher, stopRecordingWatcher } from './recording-watcher'
 import { getDownloadService } from './download-service'
 import { getQueueState, pauseQueue, resumeQueue } from './transcription'
-import { setMovingFolder, liveRecordingInProgress } from './storage-move-state'
+import { setMovingFolder, liveRecordingInProgress, capturesWritesInFlight } from './storage-move-state'
 
-export type MovableFolder = 'recordings' | 'transcripts'
+export type MovableFolder = 'recordings' | 'transcripts' | 'captures'
 
 export interface MovePlan {
   folder: MovableFolder | 'data'
@@ -88,7 +88,13 @@ function overlaps(a: string, b: string): boolean {
 function currentPath(folder: MovableFolder | 'data'): string {
   if (folder === 'recordings') return getRecordingsPath()
   if (folder === 'transcripts') return getTranscriptsPath()
+  if (folder === 'captures') return getCapturesPath()
   return getConfig().storage.dataPath
+}
+
+/** The other movable folders: none may sit inside another (usage would count it twice). */
+function otherFolders(folder: MovableFolder | 'data'): string[] {
+  return (['recordings', 'transcripts', 'captures'] as const).filter((f) => f !== folder).map((f) => currentPath(f))
 }
 
 /** Every file under root with its size. Any unreadable folder or file throws. */
@@ -164,6 +170,9 @@ export async function planMove(folder: MovableFolder | 'data', to: string, ownLo
   } else if (!target) blocker = 'Choose a folder.'
   else if (key(from) === key(target)) blocker = 'That is already the folder in use.'
   else if (overlaps(from, target)) blocker = 'The new folder cannot be inside the current one, or contain it.'
+  else if (folder !== 'data' && otherFolders(folder).some((p) => overlaps(p, target))) {
+    blocker = 'The new folder cannot be inside another HiDock folder (recordings, transcripts or captures), or contain one.'
+  }
   else if (lock && !ownLock) blocker = `A move of ${lock.folder} is already running.`
   else if (folder === 'recordings' && liveRecordingInProgress()) blocker = 'A live stream is being recorded into this folder. Stop it on the Device page first.'
   else if (folder !== 'data' && targetHasFiles) blocker = 'Choose an empty folder: the new folder already has files, and nothing there is overwritten.'
@@ -190,14 +199,27 @@ const PATH_COLUMNS: Array<[string, string]> = [
   ['audio_sources', 'local_path']
 ]
 
+/** The rows that hold absolute paths into each movable folder (transcripts are found by name). */
+const STORED_PATHS: Record<MovableFolder, Array<[string, string]>> = {
+  recordings: PATH_COLUMNS,
+  transcripts: [],
+  captures: [['artifacts', 'storage_path']]
+}
+
+const CONFIG_KEY: Record<MovableFolder, 'recordingsPath' | 'transcriptsPath' | 'capturesPath'> = {
+  recordings: 'recordingsPath',
+  transcripts: 'transcriptsPath',
+  captures: 'capturesPath'
+}
+
 /** Rewrite every stored absolute path under `from` to the same place under `to`. Returns rows changed. */
-export function rewriteStoredPaths(from: string, to: string): number {
+export function rewriteStoredPaths(from: string, to: string, columns: Array<[string, string]> = PATH_COLUMNS): number {
   const prefix = withSep(resolve(from))
   const next = withSep(resolve(to))
   const prefixKey = prefix.toLowerCase()
   let changed = 0
   runInTransaction(() => {
-    for (const [table, column] of PATH_COLUMNS) {
+    for (const [table, column] of columns) {
       const rows = queryAll<{ rid: number; p: string }>(
         `SELECT rowid AS rid, ${column} AS p FROM ${table} WHERE ${column} IS NOT NULL AND ${column} != ''`
       )
@@ -225,12 +247,12 @@ async function copyVerified(src: string, dest: string, size: number, signal: Abo
   }
 }
 
-async function waitUntilIdle(state: { cancel: boolean }): Promise<void> {
+async function waitUntilIdle(state: { cancel: boolean }, folder: MovableFolder): Promise<void> {
   const started = Date.now()
-  while (downloadsRunning() || transcriptionRunning()) {
+  while (downloadsRunning() || transcriptionRunning() || (folder === 'captures' && capturesWritesInFlight())) {
     if (state.cancel) return
     if (Date.now() - started > BUSY_WAIT_MAX_MS) {
-      throw new Error('A download or transcription is still running after 10 minutes; try the move again later.')
+      throw new Error('A download, transcription or image import is still running after 10 minutes; try the move again later.')
     }
     await new Promise((r) => setTimeout(r, BUSY_WAIT_STEP_MS))
   }
@@ -264,7 +286,7 @@ export async function moveFolder(
       stopRecordingWatcher()
       await new Promise((r) => setTimeout(r, WATCHER_DRAIN_MS))
     }
-    await waitUntilIdle(state)
+    await waitUntilIdle(state, folder)
 
     // The folder must still be what the person confirmed.
     const plan = await planMove(folder, to, true)
@@ -297,12 +319,13 @@ export async function moveFolder(
       return { copiedFiles: 0, copiedBytes: 0, cancelled: true }
     }
 
-    const configKey = folder === 'recordings' ? 'recordingsPath' : 'transcriptsPath'
-    if (folder === 'recordings') rewriteStoredPaths(plan.from, plan.to)
+    const configKey = CONFIG_KEY[folder]
+    const columns = STORED_PATHS[folder]
+    if (columns.length > 0) rewriteStoredPaths(plan.from, plan.to, columns)
     try {
       await updateConfig('storage', { [configKey]: plan.to })
     } catch (err) {
-      if (folder === 'recordings') rewriteStoredPaths(plan.to, plan.from)
+      if (columns.length > 0) rewriteStoredPaths(plan.to, plan.from, columns)
       throw err
     }
     switched = true
@@ -335,7 +358,7 @@ export async function switchFolder(folder: MovableFolder, to: string): Promise<v
     throw new Error(plan.blocker ?? 'The current folder has files. Move them, so they stay playable.')
   }
   await fs.mkdir(plan.to, { recursive: true })
-  await updateConfig('storage', { [folder === 'recordings' ? 'recordingsPath' : 'transcriptsPath']: plan.to })
+  await updateConfig('storage', { [CONFIG_KEY[folder]]: plan.to })
   await initializeFileStorage()
   if (folder === 'recordings') {
     stopRecordingWatcher()

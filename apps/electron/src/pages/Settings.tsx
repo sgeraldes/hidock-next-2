@@ -67,6 +67,9 @@ import { RecordingSection } from '@/features/settings/RecordingSection'
 import { CalendarPreferences } from '@/features/settings/CalendarPreferences'
 import { DiarizationCpuShare, OllamaModelFields } from '@/features/settings/ModelFields'
 import { AdvancedSettings } from '@/features/settings/AdvancedSettings'
+import { SecretsSection } from '@/features/settings/SecretsSection'
+import { ShortcutsSection } from '@/features/settings/ShortcutsSection'
+import { LibrarySection } from '@/features/settings/LibrarySection'
 import { QualitySettings } from '@/features/settings/QualitySettings'
 
 // RAG configuration constants — MAX_CONTEXT_CHUNKS must match config.ts default (10)
@@ -76,13 +79,14 @@ const RAG_DEFAULTS = {
   MAX_CONTEXT_CHUNKS_LIMIT: 20
 } as const
 
-type StorageFolder = 'recordings' | 'transcripts' | 'data'
+type StorageFolder = 'recordings' | 'transcripts' | 'captures' | 'data'
 type TranscriptionPane = 'pipeline' | 'gemini' | 'local' | 'live'
 
 
 const STORAGE_LABELS: Record<StorageFolder, string> = {
   recordings: 'Recordings',
   transcripts: 'Transcripts',
+  captures: 'Captures',
   data: 'Data'
 }
 
@@ -166,6 +170,7 @@ export function Settings({
   const [storagePaths, setStoragePaths] = useState<Record<StorageFolder, string>>({
     recordings: '',
     transcripts: '',
+    captures: '',
     data: ''
   })
   const [savingStorageFolder, setSavingStorageFolder] = useState<StorageFolder | null>(null)
@@ -424,10 +429,11 @@ export function Settings({
       setStoragePaths({
         recordings: config?.storage?.recordingsPath || storageInfo.recordingsPath || '',
         transcripts: config?.storage?.transcriptsPath || storageInfo.transcriptsPath || '',
+        captures: config?.storage?.capturesPath || storageInfo.capturesPath || '',
         data: config?.storage?.dataPath || storageInfo.dataPath || ''
       })
     }
-  }, [config?.storage?.dataPath, config?.storage?.recordingsPath, config?.storage?.transcriptsPath, storageInfo])
+  }, [config?.storage?.dataPath, config?.storage?.recordingsPath, config?.storage?.transcriptsPath, config?.storage?.capturesPath, storageInfo])
 
   const loadStorageInfo = async () => {
     try {
@@ -757,6 +763,9 @@ export function Settings({
     }
     if (folder === 'transcripts') {
       return config?.storage?.transcriptsPath || storageInfo?.transcriptsPath || ''
+    }
+    if (folder === 'captures') {
+      return config?.storage?.capturesPath || storageInfo?.capturesPath || ''
     }
     return config?.storage?.dataPath || storageInfo?.dataPath || ''
   }
@@ -1864,6 +1873,7 @@ export function Settings({
                       {([
                         ['recordings', 'Recordings'],
                         ['transcripts', 'Transcripts'],
+                        ['captures', 'Captures'],
                         ['data', 'Data']
                       ] as const).map(([folder, label]) => (
                         <div key={folder} className="flex items-center gap-2 p-2 bg-muted/50 rounded">
@@ -1967,10 +1977,28 @@ export function Settings({
                     aria-label="Describe images with AI"
                   />
                 </div>
+                {/* One key with Settings > Storage, where it is changed and moved (owner rule, 28-sep-2026). */}
+                <div className="flex items-center justify-between gap-4" data-testid="captures-folder">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium">Where captures are kept</p>
+                    <p className="mt-1 truncate font-mono text-xs" title={storageInfo?.capturesPath}>
+                      {config?.storage?.capturesPath || storageInfo?.capturesPath || 'The artifacts folder inside the data folder'}
+                    </p>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={() => onSectionChange?.('storage')}>
+                    Change in Storage
+                  </Button>
+                </div>
               </CardContent>
             </Card>
             </>
           )}
+
+          {show('secrets') && <SecretsSection onNavigate={(id) => onSectionChange?.(id)} />}
+
+          {show('library') && <LibrarySection />}
+
+          {show('shortcuts') && <ShortcutsSection />}
 
           {show('developer') && (
             <>

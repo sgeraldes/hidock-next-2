@@ -14,13 +14,14 @@
 import { createHash, randomUUID } from 'crypto'
 import { existsSync, mkdirSync, readFileSync, copyFileSync, rmSync } from 'fs'
 import { join, extname, basename } from 'path'
-import { getDataPath } from './config'
 import { queryOne, queryAll, run, runInTransaction } from './database'
 import { resolveType, getArtifactType, listArtifactTypes, ArtifactExtractionError } from './artifact-types'
 import { resolveGeminiApiKey } from './brains'
 import { getVectorStore } from './vector-store'
 import { filterEligibleCaptureIds, isCaptureEligible } from './recording-eligibility'
 import { getEventBus } from './event-bus'
+import { getCapturesPath } from './file-storage'
+import { beginCapturesWrite, endCapturesWrite, refuseWhileCapturesMove } from './storage-move-state'
 
 export interface ArtifactRow {
   id: string
@@ -59,9 +60,9 @@ export interface ImportArtifactResult {
   indexedChunks: number
 }
 
-/** Root for the artifacts store — mirrors file-storage's getDataPath()-based resolution. */
+/** Root for the artifacts store: the captures folder (Privacy & capture, Storage). */
 export function getArtifactsPath(): string {
-  return join(getDataPath(), 'artifacts')
+  return getCapturesPath()
 }
 
 /**
@@ -85,6 +86,19 @@ export async function importArtifact(
   filePath: string,
   opts: ImportArtifactOptions = {}
 ): Promise<ImportArtifactResult> {
+  // No new import while the captures folder moves, and a move waits for the
+  // ones already writing: an import copies its file and awaits the vision call
+  // before it stores the path (review, 28-sep-2026).
+  refuseWhileCapturesMove()
+  beginCapturesWrite()
+  try {
+    return await importArtifactNow(filePath, opts)
+  } finally {
+    endCapturesWrite()
+  }
+}
+
+async function importArtifactNow(filePath: string, opts: ImportArtifactOptions): Promise<ImportArtifactResult> {
   if (!existsSync(filePath)) {
     throw new Error(`File not found: ${filePath}`)
   }

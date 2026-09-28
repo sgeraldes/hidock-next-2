@@ -12,9 +12,11 @@ import { join, sep } from 'path'
 const st = vi.hoisted(() => ({
   recordings: '',
   transcripts: '',
+  captures: '',
   data: '',
   downloading: false,
   rows: [] as Array<{ rid: number; p: string }>,
+  artifactRows: [] as Array<{ rid: number; p: string }>,
   updates: [] as Array<Record<string, unknown>>,
   failConfig: false,
   watcher: [] as string[],
@@ -28,19 +30,23 @@ vi.mock('../config', () => ({
     if (st.failConfig) throw new Error('disk full')
     st.updates.push(values)
     if (typeof values.recordingsPath === 'string') st.recordings = values.recordingsPath
+    if (typeof values.capturesPath === 'string') st.captures = values.capturesPath
   })
 }))
 vi.mock('../file-storage', () => ({
   getRecordingsPath: () => st.recordings,
   getTranscriptsPath: () => st.transcripts,
+  getCapturesPath: () => st.captures,
   initializeFileStorage: vi.fn(async () => undefined)
 }))
 vi.mock('../database', () => ({
   runInTransaction: (fn: () => unknown) => fn(),
-  // Only the recordings table holds rows in these tests.
-  queryAll: (sql: string) => (sql.includes('FROM recordings') ? st.rows.map((r) => ({ ...r })) : []),
-  run: (_sql: string, params: unknown[]) => {
-    const row = st.rows.find((r) => r.rid === params[1])
+  // The recordings table and, for the captures folder, the artifacts table hold rows here.
+  queryAll: (sql: string) =>
+    sql.includes('FROM recordings') ? st.rows.map((r) => ({ ...r })) : sql.includes('FROM artifacts') ? st.artifactRows.map((r) => ({ ...r })) : [],
+  run: (sql: string, params: unknown[]) => {
+    const rows = sql.includes('UPDATE artifacts') ? st.artifactRows : st.rows
+    const row = rows.find((r) => r.rid === params[1])
     if (row) row.p = params[0] as string
   }
 }))
@@ -68,6 +74,8 @@ beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'storage-move-'))
   st.recordings = join(root, 'old')
   st.transcripts = join(root, 'transcripts')
+  st.captures = join(root, 'artifacts')
+  st.artifactRows = []
   st.data = root
   st.downloading = false
   st.failConfig = false
@@ -157,6 +165,27 @@ describe('storage folder move', () => {
     rmSync(st.recordings, { recursive: true, force: true })
     await switchFolder('recordings', join(root, 'new'))
     expect(st.updates).toEqual([{ recordingsPath: join(root, 'new') }])
+  })
+
+  it('moves the captures folder and the stored artifact paths with it, and nothing else', async () => {
+    mkdirSync(join(st.captures, 'image', 'ab'), { recursive: true })
+    writeFileSync(join(st.captures, 'image', 'ab', 'x.png'), 'png')
+    st.artifactRows = [{ rid: 1, p: join(st.captures, 'image', 'ab', 'x.png') }]
+    const recordingsBefore = st.rows.map((r) => r.p)
+    const to = join(root, 'captures-new')
+    expect(await planMove('captures', to)).toMatchObject({ files: 1, bytes: 3, blocker: null })
+    await moveFolder('captures', to, { files: 1, bytes: 3 }, () => undefined)
+    expect(readFileSync(join(to, 'image', 'ab', 'x.png'), 'utf8')).toBe('png')
+    expect(st.artifactRows[0].p).toBe(join(to, 'image', 'ab', 'x.png'))
+    expect(st.rows.map((r) => r.p)).toEqual(recordingsBefore)
+    expect(st.updates).toEqual([{ capturesPath: to }])
+    expect(st.watcher).toEqual([])
+  })
+
+  it('no HiDock folder may go inside another one', async () => {
+    const insideRecordings = join(st.recordings, 'captures-here')
+    expect((await planMove('captures', insideRecordings)).blocker).toMatch(/inside another HiDock folder/)
+    expect((await planMove('transcripts', join(st.captures, 'x'))).blocker).toMatch(/inside another HiDock folder/)
   })
 
   it('says whether a new data folder already has a library', async () => {

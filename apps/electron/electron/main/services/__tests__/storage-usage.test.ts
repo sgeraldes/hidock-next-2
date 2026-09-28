@@ -8,7 +8,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
-const paths = vi.hoisted(() => ({ data: '', recordings: '', transcripts: '', limits: {} as Record<string, number | null> }))
+const paths = vi.hoisted(() => ({ data: '', recordings: '', transcripts: '', captures: '', limits: {} as Record<string, number | null> }))
 
 vi.mock('../config', () => ({
   getDataPath: () => paths.data,
@@ -16,7 +16,8 @@ vi.mock('../config', () => ({
 }))
 vi.mock('../file-storage', () => ({
   getRecordingsPath: () => paths.recordings,
-  getTranscriptsPath: () => paths.transcripts
+  getTranscriptsPath: () => paths.transcripts,
+  getCapturesPath: () => paths.captures
 }))
 
 import { folderSize, getStorageUsage, recordingsOverLimit, resetStorageLimitCache } from '../storage-usage'
@@ -27,6 +28,7 @@ beforeEach(() => {
   paths.data = root
   paths.recordings = join(root, 'recordings')
   paths.transcripts = join(root, 'transcripts')
+  paths.captures = join(root, 'artifacts')
   paths.limits = {}
   mkdirSync(paths.recordings)
   mkdirSync(paths.transcripts)
@@ -34,6 +36,8 @@ beforeEach(() => {
   writeFileSync(join(paths.recordings, 'a.mp3'), Buffer.alloc(3000))
   writeFileSync(join(paths.recordings, 'b.mp3'), Buffer.alloc(2000))
   writeFileSync(join(paths.transcripts, 'a.md'), Buffer.alloc(100))
+  mkdirSync(paths.captures)
+  writeFileSync(join(paths.captures, 'x.png'), Buffer.alloc(40))
   writeFileSync(join(root, 'data', 'hidock.db'), Buffer.alloc(700))
   resetStorageLimitCache()
 })
@@ -48,6 +52,7 @@ describe('storage usage', () => {
     const byId = Object.fromEntries(usage.map((u) => [u.id, u]))
     expect(byId.recordings).toMatchObject({ bytes: 5000, files: 2, limitBytes: null, overLimit: false })
     expect(byId.transcripts).toMatchObject({ bytes: 100, files: 1 })
+    expect(byId.captures).toMatchObject({ bytes: 40, files: 1 })
     expect(byId.data).toMatchObject({ bytes: 700, files: 1 })
     expect(byId.recordings.disk?.totalBytes).toBeGreaterThan(0)
   })

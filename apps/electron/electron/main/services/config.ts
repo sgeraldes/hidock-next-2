@@ -126,11 +126,13 @@ export interface AppConfig {
     dataPath: string
     recordingsPath?: string
     transcriptsPath?: string
+    /** Images and imported files (Privacy & capture, Storage). Empty: <dataPath>/artifacts. */
+    capturesPath?: string
     /**
      * Optional limits in GB per location (Settings > Storage); absent = no
      * limit. Over the recordings limit, auto-download pauses.
      */
-    limitsGB?: Partial<Record<'recordings' | 'transcripts' | 'data', number | null>>
+    limitsGB?: Partial<Record<'recordings' | 'transcripts' | 'captures' | 'data', number | null>>
   }
   calendar: {
     icsUrl: string
@@ -283,6 +285,8 @@ export interface AppConfig {
    */
   capture?: {
     describeImages?: boolean
+    /** Capture screenshots copied to the clipboard (Privacy & capture). No default, as for ui.chatPlacement. */
+    autoClipboard?: boolean
   }
   /**
    * Decisions (Jev): one switch for Jev and one per job it does. Each job
@@ -321,6 +325,13 @@ export interface AppConfig {
     toastSeconds?: number
     /** Dates, times and numbers (Settings > Display); 'system' follows Windows. */
     locale?: string
+    /**
+     * Where the assistant sits (Settings > Assistant). No default on purpose:
+     * absent means never saved here, so the renderer copies its older
+     * localStorage choice in (ui-config-sync.ts).
+     */
+    chatPlacement?: 'floating' | 'embedded'
+    chatPosition?: 'left' | 'right'
   }
 }
 
@@ -789,6 +800,11 @@ export async function updateConfig<K extends keyof AppConfig>(
   section: K,
   values: Partial<AppConfig[K]>
 ): Promise<void> {
+  // An explicit '' is Remove: forget a kept ciphertext too, or it would be
+  // written back (a secret that failed to decrypt, Settings > Secrets).
+  for (const [key, value] of Object.entries(values as Record<string, unknown>)) {
+    if (value === '') undecryptedSecrets.delete(`${String(section)}.${key}`)
+  }
   const updatedSection = { ...(config[section] as any), ...values }
   await saveConfig({ [section]: updatedSection } as Partial<AppConfig>)
 }

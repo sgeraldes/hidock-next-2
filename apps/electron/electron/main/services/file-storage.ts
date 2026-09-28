@@ -62,6 +62,7 @@ export interface StorageInfo {
   dataPath: string
   recordingsPath: string
   transcriptsPath: string
+  capturesPath: string
   cachePath: string
   databasePath: string
   totalSizeBytes: number
@@ -95,6 +96,12 @@ export async function initializeFileStorage(storage: AppConfig['storage'] = getC
 export function getRecordingsPath(): string {
   const storage = getConfig().storage
   return storage.recordingsPath || join(getDataPath(), 'recordings')
+}
+
+/** Images and imported files (artifact-service): configured, or <dataPath>/artifacts as before. */
+export function getCapturesPath(): string {
+  const storage = getConfig().storage
+  return storage.capturesPath || join(getDataPath(), 'artifacts')
 }
 
 export function getTranscriptsPath(): string {
@@ -404,6 +411,7 @@ export function getStorageInfo(): StorageInfo {
     dataPath,
     recordingsPath,
     transcriptsPath,
+    capturesPath: getCapturesPath(),
     cachePath,
     databasePath,
     totalSizeBytes,

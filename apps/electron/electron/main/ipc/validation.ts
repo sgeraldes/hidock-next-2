@@ -176,7 +176,7 @@ export const UpdateTranscriptionStatusSchema = z.object({
  * Open folder request
  */
 export const OpenFolderSchema = z.object({
-  folder: z.enum(['recordings', 'transcripts', 'data'])
+  folder: z.enum(['recordings', 'transcripts', 'captures', 'data'])
 })
 
 /**
