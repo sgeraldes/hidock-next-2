@@ -26,6 +26,7 @@ import {
 import { getRecurringTopics } from '../services/recurring-topics'
 import { filterEligibleRecordingIds, existingRecordings } from '../services/recording-eligibility'
 import { revalidateStoredSources, REDACTED_ANSWER } from '../services/chat-source-provenance'
+import { autoLinkRecordingsToMeetings } from '../services/org-reconciler'
 
 export function registerDatabaseHandlers(): void {
   // Meetings
@@ -233,11 +234,7 @@ export function registerDatabaseHandlers(): void {
 
     // Self-heal: recordings and meetings arrive independently (device download
     // vs ICS sync), so run the time-overlap auto-linker before reading links.
-    // Lazy import: org-reconciler is only needed for this one self-heal path,
-    // not eagerly for every db:get-meeting-details call (execution deferral,
-    // not chunk splitting — the main process bundles to a single file).
     try {
-      const { autoLinkRecordingsToMeetings } = await import('../services/org-reconciler')
       autoLinkRecordingsToMeetings()
     } catch (e) {
       console.error('db:get-meeting-details auto-link failed:', e)

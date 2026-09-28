@@ -15,6 +15,14 @@ import { registerBootTask } from './boot-scheduler'
 import { isFeatureEnabled as defaultIsFeatureEnabled } from './feature-gate'
 import type { FeatureId } from '../../../src/shared/feature-registry'
 import { markVectorStartupQueued } from './vector-startup-state'
+import { getIntegrityService } from './integrity-service'
+import { reconcileOrganization } from './org-reconciler'
+import { backfillKnowledgeCaptures } from './knowledge-capture-backfill'
+import { backfillAudioProfiles } from './audio-profile-store'
+import { getQueueState, startTranscriptionProcessor } from './transcription'
+import { recomputeAudioWarnings } from './value-classification'
+import { backfillMeetingWiki } from './meeting-wiki'
+import { getVectorStore } from './vector-store'
 
 export interface GatedBootTask {
   name: string
@@ -24,8 +32,8 @@ export interface GatedBootTask {
 }
 
 /**
- * Deferred boot tasks tagged by owning feature. Heavy modules load lazily only
- * when their task actually runs.
+ * Deferred boot tasks tagged by owning feature. The work runs only when its task
+ * runs; the modules are bundled into the main chunk either way.
  */
 export const BOOT_TASK_DEFS: GatedBootTask[] = [
   {
@@ -65,14 +73,14 @@ export const BOOT_TASK_DEFS: GatedBootTask[] = [
     name: 'integrity-check',
     feature: null,
     run: async () => {
-      await import('./integrity-service')
-        .then(async ({ getIntegrityService }) => {
-          const result = await getIntegrityService().runStartupChecks()
-          if (result.issuesFound > 0) {
-            console.log(`Integrity checks: ${result.issuesFixed}/${result.issuesFound} issues fixed`)
-          }
-        })
-        .catch((e) => console.error('[IntegrityService] startup check error:', e))
+      try {
+        const result = await getIntegrityService().runStartupChecks()
+        if (result.issuesFound > 0) {
+          console.log(`Integrity checks: ${result.issuesFixed}/${result.issuesFound} issues fixed`)
+        }
+      } catch (e) {
+        console.error('[IntegrityService] startup check error:', e)
+      }
     },
   },
   {
@@ -81,9 +89,11 @@ export const BOOT_TASK_DEFS: GatedBootTask[] = [
     name: 'org-reconcile',
     feature: 'calendar',
     run: async () => {
-      await import('./org-reconciler')
-        .then(({ reconcileOrganization }) => reconcileOrganization())
-        .catch((e) => console.error('[OrgReconciler] error:', e))
+      try {
+        reconcileOrganization()
+      } catch (e) {
+        console.error('[OrgReconciler] error:', e)
+      }
     },
   },
   {
@@ -91,9 +101,11 @@ export const BOOT_TASK_DEFS: GatedBootTask[] = [
     name: 'knowledge-capture-backfill',
     feature: null,
     run: async () => {
-      await import('./knowledge-capture-backfill')
-        .then(({ backfillKnowledgeCaptures }) => backfillKnowledgeCaptures())
-        .catch((e) => console.error('[KnowledgeCaptureBackfill] error:', e))
+      try {
+        backfillKnowledgeCaptures()
+      } catch (e) {
+        console.error('[KnowledgeCaptureBackfill] error:', e)
+      }
     },
   },
   {
@@ -103,15 +115,10 @@ export const BOOT_TASK_DEFS: GatedBootTask[] = [
     name: 'audio-profile-backfill',
     feature: null,
     run: async () => {
-      await import('./audio-profile-store')
-        .then(async ({ backfillAudioProfiles }) => {
-          // Reading files competes with a transcription for the disk: wait for it.
-          const { getQueueState } = await import('./transcription')
-          void backfillAudioProfiles({ pauseWhile: () => getQueueState().isProcessing }).catch((e) =>
-            console.error('[AudioProfile] backfill error:', e)
-          )
-        })
-        .catch((e) => console.error('[AudioProfile] load error:', e))
+      // Reading files competes with a transcription for the disk: wait for it.
+      void backfillAudioProfiles({ pauseWhile: () => getQueueState().isProcessing }).catch((e) =>
+        console.error('[AudioProfile] backfill error:', e)
+      )
     },
   },
   {
@@ -121,46 +128,51 @@ export const BOOT_TASK_DEFS: GatedBootTask[] = [
     name: 'evaluation-warning-refresh',
     feature: null,
     run: async () => {
-      await import('./value-classification')
-        .then(async ({ recomputeAudioWarnings }) => {
-          const changed = await recomputeAudioWarnings()
-          if (changed > 0) console.log(`[Evaluation] recomputed ${changed} audio-versus-transcript warnings`)
-        })
-        .catch((e) => console.error('[Evaluation] warning refresh error:', e))
+      try {
+        const changed = await recomputeAudioWarnings()
+        if (changed > 0) console.log(`[Evaluation] recomputed ${changed} audio-versus-transcript warnings`)
+      } catch (e) {
+        console.error('[Evaluation] warning refresh error:', e)
+      }
     },
   },
   {
     name: 'meeting-wiki-backfill',
     feature: 'meeting-intelligence',
     run: async () => {
-      await import('./meeting-wiki')
-        .then(({ backfillMeetingWiki }) => backfillMeetingWiki())
-        .catch((e) => console.error('[MeetingWiki] Backfill error:', e))
+      try {
+        await backfillMeetingWiki()
+      } catch (e) {
+        console.error('[MeetingWiki] Backfill error:', e)
+      }
     },
   },
   {
     name: 'start-transcription-processor',
     feature: 'transcription',
     run: async () => {
-      await import('./transcription')
-        .then(({ startTranscriptionProcessor }) => startTranscriptionProcessor())
-        .catch((e) => console.error('[Transcription] processor start error:', e))
+      try {
+        startTranscriptionProcessor()
+      } catch (e) {
+        console.error('[Transcription] processor start error:', e)
+      }
     },
   },
   {
     name: 'semantic-index-restore',
     feature: 'assistant',
-    run: () =>
-      import('./vector-store')
-        .then(async ({ getVectorStore }) => {
-          // Boot restores existing local state only. It MUST NOT generate new
-          // embeddings or call a provider: that old "backfill" phase could walk
-          // the entire transcript corpus and made startup an open-ended job.
-          // Newly completed transcripts index through the transcription
-          // pipeline; historical repair remains an explicit maintenance action.
-          await getVectorStore().initialize()
-        })
-        .catch((e) => console.error('[VectorStore] Restore error:', e)),
+    run: async () => {
+      try {
+        // Boot restores existing local state only. It MUST NOT generate new
+        // embeddings or call a provider: that old "backfill" phase could walk
+        // the entire transcript corpus and made startup an open-ended job.
+        // Newly completed transcripts index through the transcription
+        // pipeline; historical repair remains an explicit maintenance action.
+        await getVectorStore().initialize()
+      } catch (e) {
+        console.error('[VectorStore] Restore error:', e)
+      }
+    },
   },
 ]
 

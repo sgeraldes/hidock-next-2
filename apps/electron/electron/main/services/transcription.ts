@@ -163,6 +163,13 @@ import {
   type SpeakerLinkingResult
 } from './speaker-linking'
 import { CURRENT_GEMINI_CHAT_MODEL, CURRENT_GEMINI_TRANSCRIPTION_MODEL } from './gemini-model-ids'
+import { exportMeetingWiki } from './meeting-wiki'
+import { removeRecordingFromGraph } from './knowledge-graph-service'
+import { analyzeTimeline } from './timeline-analysis'
+import { applyTranscriptEntities } from './org-reconciler'
+import { runSelfIdentificationForRecording } from './self-identification'
+import { runSpeakerInference } from './speaker-inference'
+import { getEmbeddingsService } from './embeddings'
 
 let mainWindow: BrowserWindow | null = null
 let isProcessing = false
@@ -1980,7 +1987,6 @@ export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
       // Re-export the wiki page from the now-healed row (new file name may
       // differ from any earlier filename-slug page; acceptable). Non-fatal.
       try {
-        const { exportMeetingWiki } = await import('./meeting-wiki')
         const wikiPath = exportMeetingWiki(row.recording_id)
         if (wikiPath) console.log(`[Reanalyze] Re-exported wiki ${wikiPath}`)
       } catch (e) {
@@ -2055,7 +2061,6 @@ async function retireNoSpeechGeneratedContent(recordingId: string): Promise<void
   // graph cleanup can resolve every transcript/source edge. A cleanup failure
   // is visible in logs but cannot resurrect a disproven transcript in the UI.
   try {
-    const { removeRecordingFromGraph } = await import('./knowledge-graph-service')
     const result = removeRecordingFromGraph(recordingId)
     if (!result.ok) console.warn('[Transcription] No-speech graph retirement was incomplete:', result.error)
   } catch (error) {
@@ -2897,8 +2902,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     parentRunIds: [summaryRun.id, actionableRun.id]
   })
   try {
-    const { analyzeTimeline } = await import('./timeline-analysis')
-    // RE-1 — re-check AFTER the import await, adjacent to the write.
+    // RE-1 — re-check adjacent to the write.
     if (stillProcessable()) {
       // P2 (round-3) — also thread the gate INTO analyzeTimeline so its own
       // internal sentiment-LLM await is covered (re-checked before its UPDATE).
@@ -2940,8 +2944,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     parentRunIds: [summaryRun.id]
   })
   try {
-    const { applyTranscriptEntities } = await import('./org-reconciler')
-    // RE-1 — re-check AFTER the import await; applyTranscriptEntities is a
+    // RE-1 — re-check adjacent to the write; applyTranscriptEntities is a
     // synchronous write, so this fully closes the race window.
     if (stillProcessable()) {
       const linkedMeetingId =
@@ -2992,8 +2995,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   const identityErrors: string[] = []
   const identityAllowed = diarizationQuality.status === 'high'
   try {
-    const { runSelfIdentificationForRecording } = await import('./self-identification')
-    // RE-1 — re-check AFTER the import await, adjacent to the write.
+    // RE-1 — re-check adjacent to the write.
     if (stillProcessable() && identityAllowed) {
       // P2 (round-3) — thread the gate IN so self-id's own LLM await is covered
       // (its contacts/speaker-bindings/mention-resolutions/scan-marker writes
@@ -3020,7 +3022,6 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   // context, written only when corroborated against a trusted roster. Runs
   // AFTER self-ID so only the remaining unbound labels are attempted.
   try {
-    const { runSpeakerInference } = await import('./speaker-inference')
     if (stillProcessable() && identityAllowed) {
       const inferred = await runSpeakerInference(recordingId, {
         shouldPersist: () => isRecordingProcessable(recordingId)
@@ -3093,8 +3094,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     parentRunIds: [summaryRun.id]
   })
   try {
-    const { exportMeetingWiki } = await import('./meeting-wiki')
-    // RE-1 — re-check AFTER the import await; exportMeetingWiki is a synchronous
+    // RE-1 — re-check adjacent to the write; exportMeetingWiki is a synchronous
     // file write, so this fully closes the window.
     if (stillProcessable()) {
       const wikiPath = exportMeetingWiki(recordingId)
@@ -3120,7 +3120,6 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   if (stillProcessable()) {
     let embeddingProvider = 'not-configured'
     try {
-      const { getEmbeddingsService } = await import('./embeddings')
       embeddingProvider = (await getEmbeddingsService().activeProviderId()) ?? 'not-configured'
     } catch {
       // The indexing attempt below owns the actual failure; provenance still

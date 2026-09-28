@@ -26,9 +26,8 @@ import {
 import { stripDiacritics } from './entity-normalize'
 import { randomUUID } from 'crypto'
 import type { BrainId } from './brains/types'
-// Type-only — erased at compile so RAG's runtime import graph stays free of the
-// knowledge-graph/ingest/LLM stack (loaded lazily inside buildGraphContext).
 import type { NeighborhoodFactProvenance } from './knowledge-graph-service'
+import * as knowledgeGraph from './knowledge-graph-service'
 import { Result, success, error } from '../types/api'
 import { contextChunksFor } from './rag-settings'
 
@@ -396,8 +395,7 @@ function detectNormalizedEntities(
  * that meeting's own neighborhood. Facts are trimmed to a per-brain token budget so
  * a small local model isn't flooded (see {@link graphFactTokenBudget}).
  *
- * Fully lazy/defensive: the knowledge-graph service pulls in the ingest/LLM stack,
- * so it is imported here and every failure degrades to "no graph facts".
+ * Fully defensive: every knowledge-graph failure degrades to "no graph facts".
  */
 export async function buildGraphContext(
   message: string,
@@ -406,7 +404,7 @@ export async function buildGraphContext(
 ): Promise<string[]> {
   const parts: string[] = []
   try {
-    const kg = await import('./knowledge-graph-service')
+    const kg = knowledgeGraph
     const budget = await graphFactTokenBudget()
     const seenEntities = new Set<string>()
     let usedTokens = 0

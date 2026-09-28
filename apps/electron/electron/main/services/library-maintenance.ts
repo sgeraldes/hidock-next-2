@@ -19,6 +19,12 @@ import { queryAll, queryOne, run } from './database'
 import { envelopePath } from './audio-profile-store'
 import { getWaveformCache, setWaveformCache } from './waveform-cache'
 import { recomputeAudioWarnings } from './value-classification'
+import { getConnectorHost } from './connectors'
+import { getConnectorStore } from './connectors/connector-store'
+import { autoLinkRecordingsToMeetings } from './org-reconciler'
+import { jevMeetingMatchDeps, listMeetingCandidates, toMatchCandidates, toMatchContext } from './meeting-candidate-list'
+import { matchMeetingWithJev, isClearMatch, pickMatchCandidates, matchRequestKey, meetingCopyKey, MEETING_MATCH_VERSION } from './jev-meeting-match'
+import { isClassifierAuthError } from './value-backfill'
 
 /** Peaks per waveform, the same count the player computes when it decodes. */
 export const WAVEFORM_PEAKS = 1000
@@ -170,8 +176,6 @@ export async function relinkRecordingsToMeetings(): Promise<RelinkResult> {
     errors: []
   }
 
-  const { getConnectorHost } = await import('./connectors')
-  const { getConnectorStore } = await import('./connectors/connector-store')
   const host = getConnectorHost()
   const store = getConnectorStore()
   for (const id of host.listInstances()) {
@@ -197,7 +201,6 @@ export async function relinkRecordingsToMeetings(): Promise<RelinkResult> {
     }
   }
 
-  const { autoLinkRecordingsToMeetings } = await import('./org-reconciler')
   result.linked = autoLinkRecordingsToMeetings()
   result.unlinkedAfter = unlinkedCount()
   return result
@@ -241,15 +244,12 @@ export async function matchMeetingsWithJev(
   options: { dryRun?: boolean } = {}
 ): Promise<MeetingMatchJobResult | { busy: true } | { noKey: true }> {
   if (matchRunning) return { busy: true }
-  const { jevMeetingMatchDeps, listMeetingCandidates, toMatchCandidates, toMatchContext } = await import('./meeting-candidate-list')
   const deps = jevMeetingMatchDeps()
   if (!deps) return { noKey: true }
   matchRunning = true
   try {
-    const { matchMeetingWithJev, isClearMatch, pickMatchCandidates, matchRequestKey, meetingCopyKey, MEETING_MATCH_VERSION } = await import('./jev-meeting-match')
     const { getRecordingById, getRecordingMeetingMatch, getMeetingById, linkRecordingToMeeting } = await import('./database')
     const { filterEligibleRecordingIds } = await import('./recording-eligibility')
-    const { isClassifierAuthError } = await import('./value-backfill')
 
     const ids = queryAll<{ id: string }>(
       `SELECT r.id FROM recordings r

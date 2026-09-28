@@ -21,10 +21,13 @@ vi.mock('../file-storage', () => ({
   getDatabasePath: () => dbPath
 }))
 
-// Mock the transcription service so reDiarizeRecording's lazy import resolves to
-// no-op queue hooks (no real provider / mainWindow needed).
-const markUserPriority = vi.fn()
-const processQueueManually = vi.fn(() => Promise.resolve())
+// Mock the transcription service so reDiarizeRecording's queue hooks are
+// no-ops (no real provider / mainWindow needed). Hoisted: re-diarize imports
+// them statically.
+const { markUserPriority, processQueueManually } = vi.hoisted(() => ({
+  markUserPriority: vi.fn(),
+  processQueueManually: vi.fn(() => Promise.resolve())
+}))
 vi.mock('../transcription', () => ({
   markUserPriority,
   processQueueManually

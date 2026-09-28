@@ -9,12 +9,15 @@
  * renderer store react live), and a `stop` action, where present, halts the
  * feature's background work.
  *
- * All start/stop bodies use dynamic import so this module stays light and free of
- * circular imports (it is loaded from config-handlers).
+ * graph-sync stays a dynamic import so it keeps its own chunk. The other targets
+ * are bundled into the main chunk anyway, so they are imported statically.
  */
 
 import { getEventBus } from './event-bus'
 import { getResolvedFeatures, getBootEffectiveFeatures } from './feature-gate'
+import { startTranscriptionProcessor, stopTranscriptionProcessor } from './transcription'
+import { initializeCalendarAutoSync, stopAutoSync } from '../ipc/calendar-handlers'
+import { stopClipboardWatch } from './clipboard-capture'
 import {
   ALL_FEATURE_IDS,
   FEATURES,
@@ -39,12 +42,12 @@ interface Lifecycle {
  */
 const lifecycles: Partial<Record<FeatureId, Lifecycle>> = {
   transcription: {
-    start: () => import('./transcription').then((m) => m.startTranscriptionProcessor()),
-    stop: () => import('./transcription').then((m) => m.stopTranscriptionProcessor()),
+    start: () => startTranscriptionProcessor(),
+    stop: () => stopTranscriptionProcessor(),
   },
   calendar: {
-    start: () => import('../ipc/calendar-handlers').then((m) => m.initializeCalendarAutoSync()),
-    stop: () => import('../ipc/calendar-handlers').then((m) => m.stopAutoSync()),
+    start: () => initializeCalendarAutoSync(),
+    stop: () => stopAutoSync(),
   },
   'context-graph': {
     start: () => import('./graph-sync').then((m) => m.startGraphSync()),
@@ -53,7 +56,7 @@ const lifecycles: Partial<Record<FeatureId, Lifecycle>> = {
   // Clipboard watch is user-opt-in (its own toggle), so we do NOT auto-start it
   // when the feature is enabled — but we DO stop it when the feature is disabled.
   'clipboard-capture': {
-    stop: () => import('./clipboard-capture').then((m) => m.stopClipboardWatch()),
+    stop: () => stopClipboardWatch(),
   },
 }
 

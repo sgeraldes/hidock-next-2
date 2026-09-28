@@ -1,5 +1,6 @@
 import { app, safeStorage } from 'electron'
 import { join } from 'path'
+import { homedir } from 'os'
 import {
   existsSync,
   readFileSync,
@@ -323,7 +324,9 @@ export interface AppConfig {
 const DEFAULT_CONFIG: AppConfig = {
   version: '1.0.0',
   storage: {
-    dataPath: join(app.getPath('home'), 'HiDock'),
+    // os.homedir() is Electron's 'home' path, and needs no Electron at load time, so a
+    // module that imports config can be loaded in a test without mocking Electron (ADV55-1).
+    dataPath: join(homedir(), 'HiDock'),
   },
   calendar: {
     icsUrl: '',

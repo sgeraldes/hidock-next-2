@@ -79,6 +79,7 @@ import {
 import type { Contact, Project, IdentitySuggestion, AcceptSuggestionResult, MergeKind } from './database'
 import { getEventBus } from './event-bus'
 import { resolveContact } from './entity-resolver'
+import { getProviderConfigFromSettings } from './ai-provider-config'
 
 // ---------------------------------------------------------------------------
 // GraphDb adapter — bridges the app's database exports to the GraphDb interface
@@ -213,12 +214,6 @@ export interface IngestResult {
 }
 
 export async function ingestFromDbTranscripts(): Promise<IngestResult> {
-  // ADV55-1 (round-57): lazy-load provider config so importing this service (now done
-  // by org-reconciler for the contact-merge composite) does NOT eagerly pull config.ts,
-  // which reads app.getPath('home') at MODULE LOAD. Keeping it lazy lets the graph
-  // service be imported in a plain Node context without an Electron `app` mock, while
-  // ingestion (which needs the provider) still resolves it here.
-  const { getProviderConfigFromSettings } = await import('./ai-provider-config')
   const providerConfig = getProviderConfigFromSettings()
   if (!providerConfig) {
     throw new Error('No AI provider configured. Please set a provider API key in Settings.')
@@ -430,8 +425,6 @@ export async function ingestFromFolder(folderPath: string): Promise<IngestResult
     throw new Error(`Path is not a directory: ${resolved}`)
   }
 
-  // Lazy-load — see ingestFromDbTranscripts (ADV55-1): avoids an eager config.ts load.
-  const { getProviderConfigFromSettings } = await import('./ai-provider-config')
   const providerConfig = getProviderConfigFromSettings()
   if (!providerConfig) {
     throw new Error('No AI provider configured. Please set a provider API key in Settings.')
