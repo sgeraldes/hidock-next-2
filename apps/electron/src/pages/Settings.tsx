@@ -69,6 +69,7 @@ import { DiarizationCpuShare, OllamaModelFields } from '@/features/settings/Mode
 import { AdvancedSettings } from '@/features/settings/AdvancedSettings'
 import { SecretsSection } from '@/features/settings/SecretsSection'
 import { ShortcutsSection } from '@/features/settings/ShortcutsSection'
+import { LibrarySection } from '@/features/settings/LibrarySection'
 
 // RAG configuration constants — MAX_CONTEXT_CHUNKS must match config.ts default (10)
 const RAG_DEFAULTS = {
@@ -1993,6 +1994,8 @@ export function Settings({
           )}
 
           {show('secrets') && <SecretsSection onNavigate={(id) => onSectionChange?.(id)} />}
+
+          {show('library') && <LibrarySection />}
 
           {show('shortcuts') && <ShortcutsSection />}
 

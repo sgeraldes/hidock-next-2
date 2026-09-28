@@ -27,7 +27,8 @@ import {
   Monitor,
   Mic,
   KeyRound,
-  Keyboard
+  Keyboard,
+  Library
 } from 'lucide-react'
 
 export type SettingsSectionId =
@@ -40,6 +41,7 @@ export type SettingsSectionId =
   | 'recording'
   | 'privacy'
   | 'shortcuts'
+  | 'library'
   | 'transcription'
   | 'speakers'
   | 'ai-providers'
@@ -135,6 +137,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'What HiDock collects on its own.',
     icon: ShieldCheck,
     keywords: ['clipboard', 'screenshots', 'capture']
+  },
+  {
+    id: 'library',
+    group: 'preferences',
+    label: 'Library',
+    description: 'How the list shows and sorts, and how a source opens.',
+    icon: Library,
+    keywords: ['rows', 'sort', 'reader', 'sections', 'cards']
   },
   {
     id: 'shortcuts',
