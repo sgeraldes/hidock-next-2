@@ -1870,6 +1870,28 @@ export function Settings({
                     aria-label="Auto-capture screenshots from clipboard"
                   />
                 </div>
+                <div className="flex items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <label htmlFor="describeImagesToggle" className="text-sm font-medium">
+                      Describe images with AI
+                    </label>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Each pasted, imported or connector image is sent to Google Gemini with your key for a
+                      description and tags, so you can search it by what it shows. Off: images are kept but
+                      not described, and are found only by their name.
+                    </p>
+                  </div>
+                  <Switch
+                    id="describeImagesToggle"
+                    checked={config?.capture?.describeImages !== false}
+                    onCheckedChange={(on) => {
+                      void updateConfig('capture', { describeImages: on }).catch((err: unknown) =>
+                        toast.error('Could not change image descriptions', err instanceof Error ? err.message : undefined)
+                      )
+                    }}
+                    aria-label="Describe images with AI"
+                  />
+                </div>
               </CardContent>
             </Card>
             </>

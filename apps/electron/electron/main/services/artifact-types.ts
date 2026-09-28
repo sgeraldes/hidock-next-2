@@ -216,6 +216,10 @@ registerArtifactType({
     // Key resolves via the brain credential store (falls back to the plaintext
     // config key). Vision uses inlineData multimodal input, which has no AIBrain
     // method in Phase 1, so the SDK call stays here (key resolution is shared).
+    if (getConfig().capture?.describeImages === false) {
+      // Settings > Privacy & capture: the person turned image descriptions off.
+      return { text: '', metadata: { description: null, note: 'image description turned off in Settings' } }
+    }
     const apiKey = resolveGeminiApiKey()
     if (!apiKey) {
       // Skip gracefully — no vision model configured.

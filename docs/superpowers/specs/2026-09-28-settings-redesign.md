@@ -99,6 +99,20 @@ Fix first, before new controls:
 6. The Ollama URL is also in the renderer CSP; changing it in Settings must update what the CSP
    allows.
 
+## Image understanding (owner, 28-sep-2026)
+
+Today every image goes whole to Gemini for a description (artifact-types.ts), with a switch since
+28-sep. The target is local first and cheap first:
+
+1. Category: Jev picks one of a given list of categories (screenshot of a meeting, slide, document,
+   whiteboard, photo, diagram...). Check first that the Jev API takes images.
+2. Short description: a small local model, Moondream2 or Florence-2.
+3. When more is needed (a document, a dense slide): Granite Vision or Qwen2.5-VL, with OCR text
+   extraction fused in late, so the text is exact and the description stays short.
+
+Each step runs through the AI-provider routing like the other tasks, respects the display-GPU rule
+(small batches, CPU fallback), and the switch on Privacy & capture turns all of it off.
+
 ## Phases
 
 1. Shell: menu, search, one page per area, overview and about. Existing cards move as they are.

@@ -233,6 +233,14 @@ export interface AppConfig {
     limitsGB?: Partial<Record<'recordings' | 'transcripts' | 'data', number | null>>
   }
   calendar: CalendarSettings
+  /**
+   * Captures (Settings > Privacy & capture). describeImages: send each pasted,
+   * imported or connector image to the vision model for a description and tags
+   * (on by default, owner 28-sep-2026; it was always on with no switch).
+   */
+  capture?: {
+    describeImages?: boolean
+  }
   transcription: {
     provider: 'gemini' | 'local-asr' | 'vibevoice'
     geminiApiKey: string
