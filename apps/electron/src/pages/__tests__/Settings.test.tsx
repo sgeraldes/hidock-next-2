@@ -110,7 +110,8 @@ describe('Settings Page', () => {
   it('should render calendar settings form', async () => {
     render(<Settings />)
 
-    expect(screen.getByLabelText('ICS Calendar URL')).toBeInTheDocument()
+    // The ICS link is a source, so it lives in Connectors (loaded after mount).
+    expect(await screen.findByLabelText('ICS Calendar URL')).toBeInTheDocument()
     expect(screen.getByLabelText('Enable auto-sync')).toBeInTheDocument()
     expect(screen.getByLabelText('Sync interval in minutes')).toBeInTheDocument()
   })
@@ -222,7 +223,7 @@ describe('Settings Page', () => {
     render(<Settings />)
 
     // The mock config has lastSyncAt set to '2026-03-01T10:00:00Z'
-    expect(screen.getByText(/Last synced:/)).toBeInTheDocument()
+    expect(await screen.findByText(/Last synced:/)).toBeInTheDocument()
   })
 
   // Chat Placement control — persists to useUIStore and is honored on load.
@@ -355,8 +356,10 @@ describe('Settings Page', () => {
     render(<Settings section="calendar" onSectionChange={onSectionChange} />)
     expect(screen.getByRole('heading', { level: 2, name: 'Calendar' })).toBeInTheDocument()
     expect(screen.getByRole('navigation', { name: 'Settings sections' })).toBeInTheDocument()
-    // Only the Calendar page: other pages' controls are not rendered.
-    expect(screen.getByLabelText(/ICS/i)).toBeInTheDocument()
+    // Only the Calendar page: its own controls, not other pages' (the ICS link
+    // is in Connectors now).
+    expect(screen.getByLabelText('Sync interval in minutes')).toBeInTheDocument()
+    expect(screen.queryByLabelText(/ICS/i)).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Provider in use')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Transcription' }))
@@ -433,7 +436,7 @@ describe('Settings Page', () => {
 
       render(<Settings />)
 
-      const button = screen.getByRole('button', { name: 'Sync calendar now' })
+      const button = await screen.findByRole('button', { name: 'Sync calendar now' })
       expect(button).not.toBeDisabled()
 
       // And clicking it reaches the manual path.
@@ -447,7 +450,7 @@ describe('Settings Page', () => {
 
       render(<Settings />)
 
-      expect(screen.getByRole('button', { name: 'Sync calendar now' })).toBeDisabled()
+      expect(await screen.findByRole('button', { name: 'Sync calendar now' })).toBeDisabled()
     })
   })
 })

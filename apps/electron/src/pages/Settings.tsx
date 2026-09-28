@@ -15,7 +15,8 @@ import {
   ExternalLink,
   KeyRound,
   LoaderCircle,
-  TriangleAlert
+  TriangleAlert,
+  CalendarDays
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -953,28 +954,12 @@ export function Settings({
             <Card>
               <CardHeader>
                 <CardTitle>Calendar</CardTitle>
-                <CardDescription>Configure calendar sync from Outlook</CardDescription>
+                <CardDescription>
+                  How the calendar looks and how often every calendar source syncs. The sources
+                  themselves (Microsoft 365, a calendar feed) are in Connectors.
+                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div>
-                  <label htmlFor="icsUrl" className="text-sm font-medium">ICS Calendar URL</label>
-                  <Input
-                    id="icsUrl"
-                    type="url"
-                    placeholder={isSavedSecret(icsUrl) ? 'Calendar link saved. Paste a new one to replace it' : 'https://outlook.office365.com/owa/calendar/.../calendar.ics'}
-                    value={isSavedSecret(icsUrl) ? '' : icsUrl}
-                    onChange={(e) => setIcsUrl(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleSaveCalendar()}
-                    disabled={saving}
-                    aria-label="ICS Calendar URL"
-                    aria-describedby="icsUrl-description"
-                    className="mt-1"
-                  />
-                  <p id="icsUrl-description" className="text-xs text-muted-foreground mt-1">
-                    Publish your Outlook calendar and paste the ICS link here
-                  </p>
-                </div>
-
                 <div className="flex items-center gap-4">
                   <div className="flex items-center gap-2">
                     <input
@@ -1042,20 +1027,6 @@ export function Settings({
                     <Save className="h-4 w-4 mr-2" aria-hidden="true" />
                     {isCalendarDirty ? 'Save' : 'Saved'}
                   </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => syncCalendar('manual')}
-                    disabled={calendarManualSyncing || saving}
-                    aria-label="Sync calendar now"
-                  >
-                    <RefreshCw className={`h-4 w-4 mr-2 ${calendarSyncing ? 'animate-spin' : ''}`} aria-hidden="true" />
-                    Sync Now
-                  </Button>
-                  {config?.calendar.lastSyncAt && (
-                    <span className="text-xs text-muted-foreground ml-2">
-                      Last synced: {new Date(config.calendar.lastSyncAt).toLocaleString(appLocale())}
-                    </span>
-                  )}
                 </div>
               </CardContent>
             </Card>
@@ -1065,7 +1036,73 @@ export function Settings({
           {show('connectors') && (
             <>
             {/* Connectors (Layer 2): external-system integrations */}
-            <ConnectorsSettings />
+            <ConnectorsSettings
+              extra={[
+                {
+                  item: {
+                    id: 'ics-feed',
+                    label: 'Calendar feed (ICS)',
+                    status: config?.calendar.icsUrl ? 'Set up' : 'Not set up',
+                    tone: config?.calendar.icsUrl ? 'ok' : 'off',
+                    icon: CalendarDays
+                  },
+                  content: (
+                    <div className="space-y-4" data-testid="ics-feed-connector">
+                      <div>
+                        <h3 className="text-lg font-semibold">Calendar feed (ICS)</h3>
+                        <p className="mt-0.5 text-sm text-muted-foreground">
+                          For a calendar that only publishes an ICS link (Google, iCloud, a published Outlook
+                          calendar). With Microsoft 365 connected you do not need it for Outlook.
+                        </p>
+                      </div>
+                      <div>
+                        <label htmlFor="icsUrl" className="text-sm font-medium">ICS Calendar URL</label>
+                        <Input
+                          id="icsUrl"
+                          type="url"
+                          placeholder={isSavedSecret(icsUrl) ? 'Calendar link saved. Paste a new one to replace it' : 'https://outlook.office365.com/owa/calendar/.../calendar.ics'}
+                          value={isSavedSecret(icsUrl) ? '' : icsUrl}
+                          onChange={(e) => setIcsUrl(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && handleSaveCalendar()}
+                          disabled={saving}
+                          aria-label="ICS Calendar URL"
+                          aria-describedby="icsUrl-description"
+                          className="mt-1"
+                        />
+                        <p id="icsUrl-description" className="text-xs text-muted-foreground mt-1">
+                          Publish your Outlook calendar and paste the ICS link here
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <Button
+                          onClick={handleSaveCalendar}
+                          disabled={saving || !isCalendarDirty}
+                          aria-label="Save calendar settings"
+                        >
+                          <Save className="h-4 w-4 mr-2" aria-hidden="true" />
+                          {isCalendarDirty ? 'Save' : 'Saved'}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => syncCalendar('manual')}
+                          disabled={calendarManualSyncing || saving}
+                          aria-label="Sync calendar now"
+                        >
+                          <RefreshCw className={`h-4 w-4 mr-2 ${calendarSyncing ? 'animate-spin' : ''}`} aria-hidden="true" />
+                          Sync Now
+                        </Button>
+                        {config?.calendar.lastSyncAt && (
+                          <span className="text-xs text-muted-foreground ml-2">
+                            Last synced: {new Date(config.calendar.lastSyncAt).toLocaleString(appLocale())}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )
+                }
+              ]}
+            />
             </>
           )}
 
