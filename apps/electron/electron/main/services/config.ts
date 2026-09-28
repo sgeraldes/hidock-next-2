@@ -307,7 +307,8 @@ const DEFAULT_CONFIG: AppConfig = {
     provider: 'gemini',
     geminiApiKey: '',
     geminiModel: 'gemini-3.5-transcribe',
-    localAsrPath: process.env.ASR_MCP_PATH || 'G:\\Code\\claude-plugins\\plugins\\mcp-asr',
+    // Empty until chosen: the old default was one person's machine (settings inventory).
+    localAsrPath: process.env.ASR_MCP_PATH || '',
     localAsrHfToken: process.env.HF_TOKEN || '',
     localAsrVocabularyFile: 'vocabulary.json',
     localAsrDiarize: true,
