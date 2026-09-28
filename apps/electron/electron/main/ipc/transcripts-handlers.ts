@@ -25,6 +25,7 @@ import {
 import { isRecordingEligible } from '../services/recording-eligibility'
 import { consolidateVoiceIdentityForSpeaker } from '../services/voice-identity-consolidation'
 import { getVectorStore } from '../services/vector-store'
+import { exportMeetingWiki } from '../services/meeting-wiki'
 import { success, error, Result } from '../types/api'
 import { UUIDSchema } from '../validation/common'
 
@@ -307,7 +308,6 @@ export function registerTranscriptsHandlers(): void {
         }
 
         try {
-          const { exportMeetingWiki } = await import('../services/meeting-wiki')
           exportMeetingWiki(recordingId)
         } catch (err) {
           console.warn('[TranscriptEdit] Meeting wiki refresh failed (non-fatal):', safeErrorMessage(err))

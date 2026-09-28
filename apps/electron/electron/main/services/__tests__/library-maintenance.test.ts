@@ -67,6 +67,10 @@ vi.mock('../connectors/connector-store', () => ({ getConnectorStore: () => ({ se
 
 const autoLink = vi.fn(() => 225)
 vi.mock('../org-reconciler', () => ({ autoLinkRecordingsToMeetings: () => autoLink() }))
+// Imported statically by library-maintenance for the Jev match job, which
+// this file does not run; the real ones load config.ts.
+vi.mock('../meeting-candidate-list', () => ({}))
+vi.mock('../value-backfill', () => ({}))
 
 import { peaksFromEnvelope, redrawWaveforms, relinkRecordingsToMeetings, GAIN_AMPLITUDE_OFFSET } from '../library-maintenance'
 

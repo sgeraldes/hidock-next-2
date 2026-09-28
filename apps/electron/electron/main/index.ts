@@ -48,6 +48,7 @@ import { getStartupState } from './startup-state'
 import { revealMainWindow, type WindowRevealReason } from './window-reveal'
 import { startAppBrain, stopAppBrain } from './services/brain-app'
 import { finishLiveRecording, getLiveRecordingState } from './ipc/jensen-handlers'
+import { initConnectors } from './services/connectors'
 
 const startup = getStartupState()
 configureEarlyStartup() // idempotent fallback when this module is launched directly in tests/tools
@@ -250,9 +251,7 @@ async function initializeServices(): Promise<boolean> {
   // Connectors (Layer 2): build the host + attempt silent (non-interactive)
   // resume for connectors that already have credentials. Never launches an
   // interactive sign-in on startup; failures are best-effort.
-  import('./services/connectors')
-    .then(({ initConnectors }) => initConnectors())
-    .catch((e) => console.error('[Connectors] startup wiring failed:', e))
+  initConnectors().catch((e) => console.error('[Connectors] startup wiring failed:', e))
 
   await updateSplashStatus('Starting application...', 100)
   return true

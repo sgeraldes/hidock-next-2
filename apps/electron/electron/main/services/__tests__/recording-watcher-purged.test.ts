@@ -11,6 +11,9 @@ const purged = new Set(['2025Dec17-212704-Rec50.hda', '2025Dec17-212704-Rec50.wa
 
 vi.mock('electron', () => ({ BrowserWindow: { getAllWindows: () => [] } }))
 vi.mock('../file-storage', () => ({ getRecordingsPath: () => '' }))
+// recording-watcher imports both statically; the real ones load config.ts.
+vi.mock('../transcription', () => ({ queueTranscriptionIfEnabled: vi.fn() }))
+vi.mock('../audio-profile-store', () => ({ profileNewRecording: vi.fn(async () => {}) }))
 vi.mock('../database', () => ({
   getRecordingByFilenameVariants: vi.fn(() => null),
   insertRecording: vi.fn(),

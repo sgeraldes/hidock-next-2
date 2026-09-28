@@ -14,6 +14,8 @@ import {
   Recording
 } from './database'
 import { BrowserWindow } from 'electron'
+import { queueTranscriptionIfEnabled } from './transcription'
+import { profileNewRecording } from './audio-profile-store'
 
 const AUDIO_EXTENSIONS: readonly string[] = RECORDING_AUDIO_EXTENSIONS
 
@@ -210,22 +212,20 @@ async function processNewRecording(filePath: string): Promise<void> {
 
     correlateWithMeeting(recordingId, new Date(dateRecorded))
 
-    // Lazy import: fire-and-forget queue trigger, mirrors the same pattern in
-    // storage-handlers.ts and download-service.ts (execution deferral, not
-    // chunk splitting).
-    import('./transcription').then(({ queueTranscriptionIfEnabled }) => {
-      queueTranscriptionIfEnabled(recordingId)
-    }).catch(err => {
-      console.error('[RecordingWatcher] Failed to import transcription service:', err)
-    })
-
+    // The Library hears of the recording before its queue entry (the lazy
+    // import used to give this order by accident; now it is on purpose).
     notifyRenderer('recording:new', { recording })
+
+    try {
+      queueTranscriptionIfEnabled(recordingId)
+    } catch (err) {
+      console.error('[RecordingWatcher] Failed to queue transcription:', err)
+    }
 
     // The audio check (silent, noise only, too short, where the sound is) for
     // the new file now, rather than at the next launch.
-    import('./audio-profile-store')
-      .then(({ profileNewRecording }) => profileNewRecording(recordingId))
-      .catch((err) => console.error('[RecordingWatcher] Failed to load the audio check:', err))
+    profileNewRecording(recordingId)
+      .catch((err) => console.error('[RecordingWatcher] The audio check failed:', err))
   } catch (error) {
     console.error('Error processing recording:', error)
   }

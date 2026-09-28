@@ -14,6 +14,8 @@ vi.mock('../../services/database', () => ({
   unassignSpeaker: vi.fn()
 }))
 
+vi.mock('../../services/meeting-wiki', () => ({ exportMeetingWiki: vi.fn(() => null) }))
+
 vi.mock('../../services/vector-store', () => ({
   getVectorStore: vi.fn()
 }))
