@@ -21,6 +21,17 @@
  */
 
 import { IMPOSSIBLE_WORDS_PER_SECOND } from './value-thresholds'
+import {
+  CRAMPED_MIN_WORDS,
+  CRAMPED_WORDS_PER_SECOND,
+  countLineIssues,
+  countWords,
+  lineIssues
+} from '../../../src/shared/transcript-line-issues'
+
+// The per-line rules live in src/shared so the transcript viewer marks exactly
+// the lines these counts describe.
+export { CRAMPED_MIN_WORDS, CRAMPED_WORDS_PER_SECOND }
 
 export type IntegrityIssueCode =
   | 'repeated_start'
@@ -53,20 +64,10 @@ export interface TranscriptIntegrity {
 /** Bumped when the rules change, so stored results are recomputed. */
 export const INTEGRITY_VERSION = 1
 
-/** Faster than anyone speaks, for one line: the library-wide rule. */
-export const CRAMPED_WORDS_PER_SECOND = IMPOSSIBLE_WORDS_PER_SECOND
-/** A line needs this many words before its pace means anything. */
-export const CRAMPED_MIN_WORDS = 8
 /** Above this over a whole recording, the text does not fit in the audio. */
 export const MAX_WORDS_PER_AUDIO_SECOND = IMPOSSIBLE_WORDS_PER_SECOND
 /** Slack for a last line that ends a little after the audio does. */
 export const PAST_END_TOLERANCE_SECONDS = 2
-/** Starts that round to the same hundredth of a second are the same instant. */
-const SAME_START_RESOLUTION = 100
-/** A start this far before the previous one is going backwards, not jitter. */
-const BACKWARDS_TOLERANCE_SECONDS = 0.5
-
-const WORD = /[\p{L}\p{N}]+/gu
 
 interface Line {
   start: number | null
@@ -94,9 +95,6 @@ function toLines(speakersJson: string | null | undefined): Line[] {
   return lines
 }
 
-function countWords(text: string): number {
-  return text.match(WORD)?.length ?? 0
-}
 
 function plural(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`
@@ -115,41 +113,17 @@ export function assessTranscriptIntegrity(
   const audio = typeof audioSeconds === 'number' && audioSeconds > 0 ? audioSeconds : null
   const issues: IntegrityIssue[] = []
 
+  const perLine = lineIssues(lines)
+  const counts = countLineIssues(perLine)
+  const repeated = counts.repeated_start
+  const backwards = counts.backwards_start
+  const cramped = counts.cramped_lines
+  const untimed = counts.untimed_lines
   let words = 0
-  let untimed = 0
-  let repeated = 0
-  let backwards = 0
-  let cramped = 0
   let lastTime = 0
-  const seenStarts = new Set<number>()
-  let previousStart: number | null = null
-
-  const timed = lines.filter((l) => l.start !== null)
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
-    const n = countWords(line.text)
-    words += n
-    if (line.start === null) {
-      untimed++
-      continue
-    }
-    const start = line.start
-    const instant = Math.round(start * SAME_START_RESOLUTION)
-    if (seenStarts.has(instant)) repeated++
-    seenStarts.add(instant)
-    if (previousStart !== null && start < previousStart - BACKWARDS_TOLERANCE_SECONDS) backwards++
-    previousStart = start
-    lastTime = Math.max(lastTime, start, line.end ?? start)
-  }
-
-  // Pace per line: words over the time until the next stated start.
-  for (let i = 0; i < timed.length; i++) {
-    const n = countWords(timed[i].text)
-    if (n < CRAMPED_MIN_WORDS) continue
-    const next = timed[i + 1]?.start ?? timed[i].end
-    if (next === null || next === undefined) continue
-    const span = next - (timed[i].start as number)
-    if (span <= 0 || n / span > CRAMPED_WORDS_PER_SECOND) cramped++
+  for (const line of lines) {
+    words += countWords(line.text)
+    if (line.start !== null) lastTime = Math.max(lastTime, line.start, line.end ?? line.start)
   }
 
   if (repeated > 0) {

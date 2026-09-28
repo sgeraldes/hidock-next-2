@@ -25,6 +25,9 @@ import { useMediaQuery } from '@/hooks/useMediaQuery'
 import { toast } from '@/components/ui/toaster'
 import { cn } from '@/lib/utils'
 import type { Person } from '@/types/knowledge'
+import { lineIssues, isJumpableLineIssue, type LineIssueCode } from '@/shared/transcript-line-issues'
+import { ISSUE_TAGS } from '../utils/transcriptIntegrity'
+import { formatTimestamp, parseTypedTime } from '../utils/formatTimestamp'
 
 /** Stored transcript segment (from the `speakers` JSON column). Times in seconds. */
 export interface StoredSegment {
@@ -75,6 +78,11 @@ interface TranscriptViewerProps {
    * transcripts (a fabricated action-item time can't map to a real turn → no-op).
    */
   highlightRequest?: { atMs: number; nonce: number } | null
+  /**
+   * Go to the next line with this problem (after the last one jumped to, wrapping
+   * around), scroll it into view and flash it. From the integrity panel labels.
+   */
+  issueJump?: { code: LineIssueCode; nonce: number } | null
   /** Mirrors a successful persisted correction into the owning reader state. */
   onTranscriptUpdated?: (update: TranscriptContentUpdate) => void
 }
@@ -294,6 +302,12 @@ function parseTranscriptSegments(transcript: string): { segments: TranscriptSegm
   return { segments: parseSpeakerSegments(transcript), hasTimestamps: false }
 }
 
+/** The start time as the edit field shows it: 1:05, or 1:05.4 when it has tenths. */
+function formatEditableTime(ms: number): string {
+  const tenths = Math.round(ms / 100) % 10
+  return tenths ? `${formatTimestamp(ms / 1000)}.${tenths}` : formatTimestamp(ms / 1000)
+}
+
 export function TranscriptViewer({
   transcript,
   currentTimeMs,
@@ -307,6 +321,7 @@ export function TranscriptViewer({
   recordingId,
   isPlaying,
   highlightRequest,
+  issueJump,
   onTranscriptUpdated
 }: TranscriptViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -319,6 +334,7 @@ export function TranscriptViewer({
   const [transcriptExpanded, setTranscriptExpanded] = useState(true)
   const [editingIndex, setEditingIndex] = useState<number | null>(null)
   const [editDraft, setEditDraft] = useState('')
+  const [editStart, setEditStart] = useState('')
   const [editError, setEditError] = useState<string | null>(null)
   const [savingIndex, setSavingIndex] = useState<number | null>(null)
   const [ragPending, setRagPending] = useState<string | null>(null)
@@ -556,9 +572,25 @@ export function TranscriptViewer({
     setPersistedFullText(latestTranscriptRef.current)
     setEditingIndex(null)
     setEditDraft('')
+    setEditStart('')
     setEditError(null)
     setRagPending(null)
   }, [recordingId])
+
+  // Problems per line, with the same rules the integrity warning counts.
+  const issuesByLine = useMemo<LineIssueCode[][]>(
+    () =>
+      hasTimestamps
+        ? lineIssues(
+            segments.map((s) => ({
+              start: s.startMs / 1000,
+              end: s.endMs !== undefined ? s.endMs / 1000 : null,
+              text: s.text
+            }))
+          ).map((codes) => codes.filter(isJumpableLineIssue))
+        : [],
+    [segments, hasTimestamps]
+  )
 
   const editEnabled = Boolean(recordingId && window.electronAPI?.transcripts?.updateContent)
 
@@ -566,6 +598,7 @@ export function TranscriptViewer({
     setAutoFollow(false)
     setEditingIndex(index)
     setEditDraft(segments[index]?.text ?? '')
+    setEditStart(formatEditableTime(segments[index]?.startMs ?? 0))
     setEditError(null)
   }, [segments])
 
@@ -573,6 +606,7 @@ export function TranscriptViewer({
     if (savingIndex !== null) return
     setEditingIndex(null)
     setEditDraft('')
+    setEditStart('')
     setEditError(null)
   }, [savingIndex])
 
@@ -583,15 +617,32 @@ export function TranscriptViewer({
       setEditError('A transcript turn cannot be empty.')
       return
     }
-    if (corrected === segments[editingIndex]?.text.trim()) {
+    const editedSegment = segments[editingIndex]
+    let startSec = editedSegment ? editedSegment.startMs / 1000 : 0
+    if (hasTimestamps) {
+      const parsed = parseTypedTime(editStart)
+      if (parsed === null) {
+        setEditError('The time must look like 1:05, 1:05.5 or 1:02:03.')
+        return
+      }
+      startSec = parsed
+    }
+    const timeChanged = hasTimestamps && editedSegment
+      ? Math.round(startSec * 10) !== Math.round(editedSegment.startMs / 100)
+      : false
+    if (corrected === editedSegment?.text.trim() && !timeChanged) {
       cancelEditing()
       return
     }
+    // A moved line keeps its length: the end moves by the same amount.
+    const shiftSec = timeChanged && editedSegment ? startSec - editedSegment.startMs / 1000 : 0
 
     const nextSegments = segments.map((segment, index) => ({
       ...(segment.speaker ? { speaker: segment.speaker } : {}),
-      start: segment.startMs / 1000,
-      ...(segment.endMs !== undefined ? { end: segment.endMs / 1000 } : {}),
+      start: index === editingIndex && timeChanged ? startSec : segment.startMs / 1000,
+      ...(segment.endMs !== undefined
+        ? { end: index === editingIndex && timeChanged ? Math.max(startSec, segment.endMs / 1000 + shiftSec) : segment.endMs / 1000 }
+        : {}),
       text: index === editingIndex ? corrected : segment.text,
       ...(segment.speakerAttribution ? { speakerAttribution: segment.speakerAttribution } : {}),
       ...(segment.speakerConfidence !== undefined ? { speakerConfidence: segment.speakerConfidence } : {})
@@ -616,6 +667,7 @@ export function TranscriptViewer({
       setPersistedFullText(result.data.fullText)
       setEditingIndex(null)
       setEditDraft('')
+      setEditStart('')
       onTranscriptUpdated?.({
         fullText: result.data.fullText,
         segments: result.data.segments,
@@ -642,7 +694,7 @@ export function TranscriptViewer({
     } finally {
       setSavingIndex(null)
     }
-  }, [cancelEditing, editDraft, editingIndex, onTranscriptUpdated, persistedFullText, recordingId, savingIndex, segments])
+  }, [cancelEditing, editDraft, editStart, editingIndex, hasTimestamps, onTranscriptUpdated, persistedFullText, recordingId, savingIndex, segments])
 
   const retryRag = useCallback(async () => {
     if (!recordingId || retryingRag) return
@@ -717,6 +769,24 @@ export function TranscriptViewer({
     setPulse({ index: idx, nonce: highlightRequest.nonce })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [highlightRequest?.nonce])
+
+  // Jump to the next line with the requested problem. Each code remembers where
+  // it last jumped, so repeated clicks walk through all of them and wrap.
+  const lastIssueJumpRef = useRef<Partial<Record<LineIssueCode, number>>>({})
+  useEffect(() => {
+    if (!issueJump) return
+    const flagged = issuesByLine
+      .map((codes, index) => (codes.includes(issueJump.code) ? index : -1))
+      .filter((index) => index >= 0)
+    if (flagged.length === 0) return
+    const last = lastIssueJumpRef.current[issueJump.code] ?? -1
+    const next = flagged.find((index) => index > last) ?? flagged[0]
+    lastIssueJumpRef.current[issueJump.code] = next
+    setTranscriptExpanded(true)
+    setAutoFollow(false)
+    setPulse({ index: next, nonce: issueJump.nonce })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [issueJump?.nonce])
 
   // Once the pulsed turn is in the DOM, scroll it into view (reduced-motion →
   // instant) and clear the pulse after a short, self-terminating window so the
@@ -931,6 +1001,7 @@ export function TranscriptViewer({
                     ? segments.slice(0, i).some((s) => s.speaker === base)
                     : false
                   const mergeSuspected = base ? mergeHints.has(base) : false
+                  const lineProblems = issuesByLine[i] ?? []
                   return (
                   <div
                     key={i}
@@ -939,8 +1010,11 @@ export function TranscriptViewer({
                       if (i === pulse?.index) pulseSegmentRef.current = el
                     }}
                     data-testid={i === pulse?.index ? 'transcript-turn-highlighted' : undefined}
+                    data-line-issues={lineProblems.length > 0 ? lineProblems.join(' ') : undefined}
                     className={cn(
                       'group/turn text-sm p-2 rounded-md transition-colors',
+                      // A line the integrity check flagged: amber edge, tags below.
+                      lineProblems.length > 0 && 'border-l-2 border-amber-500/70 bg-amber-500/5 pl-2.5',
                       hasTimestamps && i === currentSegmentIndex && 'bg-primary/10',
                       // Brief cross-highlight pulse from a timeline marker click. The
                       // ring + wash fade out (motion-safe) when the pulse clears; a
@@ -989,6 +1063,14 @@ export function TranscriptViewer({
                             </span>
                           )
                         )}
+                        {lineProblems.map((code) => (
+                          <span
+                            key={code}
+                            className="rounded-full border border-amber-500/50 px-1.5 text-[11px] leading-4 text-amber-700 dark:text-amber-400"
+                          >
+                            {ISSUE_TAGS[code]}
+                          </span>
+                        ))}
                       </div>
                     )}
                     {editingIndex === i ? (
@@ -1016,6 +1098,31 @@ export function TranscriptViewer({
                           className="w-full resize-y rounded-lg border border-primary/50 bg-background px-3 py-2 text-sm leading-relaxed text-foreground shadow-sm outline-none transition-[border-color,box-shadow] placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/25 disabled:cursor-wait disabled:opacity-70"
                         />
                         <div className="flex flex-wrap items-center gap-2">
+                          {hasTimestamps && (
+                            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                              Starts at
+                              <input
+                                value={editStart}
+                                onChange={(event) => {
+                                  setEditStart(event.target.value)
+                                  if (editError) setEditError(null)
+                                }}
+                                onKeyDown={(event) => {
+                                  if (event.key === 'Escape') {
+                                    event.preventDefault()
+                                    cancelEditing()
+                                  } else if (event.key === 'Enter') {
+                                    event.preventDefault()
+                                    void saveCorrection()
+                                  }
+                                }}
+                                disabled={savingIndex === i}
+                                inputMode="decimal"
+                                aria-label={`Start time of transcript turn ${i + 1}`}
+                                className="w-20 rounded-md border border-input bg-background px-2 py-1 font-mono text-xs text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/25"
+                              />
+                            </label>
+                          )}
                           <span id={`transcript-edit-hint-${i}`} className="mr-auto text-xs text-muted-foreground">
                             Ctrl+Enter saves and rebuilds RAG. Esc cancels.
                           </span>

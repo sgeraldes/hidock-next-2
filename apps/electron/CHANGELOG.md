@@ -18,6 +18,11 @@ recording, and Microsoft 365 and Slack connect on first try.
 - **Library maintenance.** Rescan with Jev, re-check warnings, relink recordings to meetings (the
   Outlook calendar back to the oldest recording), redraw waveforms.
 - **Microsoft 365 with no setup.** HiDock ships its own app registration; Connect and sign in.
+- **Transcript problems in place.** Lines with a repeated or backwards time, or too many words for
+  their time, are marked in the transcript. Clicking "Repeated times" or "Times go backwards" goes
+  to the next such line. Editing a line also edits its start time.
+- **Click a time to play.** A time in the transcript starts the recording there, even when nothing
+  is playing.
 
 ### Fixes
 
@@ -29,6 +34,8 @@ recording, and Microsoft 365 and Slack connect on first try.
   setting saved.
 - The audio-versus-transcript warning flagged real short clips and long quiet meetings.
 - Row icons now keep their place, so a missing one reads as a gap.
+- A transcript with one line out of time order refused every edit ("Invalid transcript edit"), and
+  saving an edit dropped the speaker-confidence marks.
 
 ## 2026-09-27 | Jev rates recordings; the device list stops freezing the app
 

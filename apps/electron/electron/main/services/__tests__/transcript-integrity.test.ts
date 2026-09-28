@@ -2,7 +2,8 @@
  * @vitest-environment node
  */
 import { describe, it, expect } from 'vitest'
-import { assessTranscriptIntegrity, formatClock } from '../transcript-integrity'
+import { CRAMPED_WORDS_PER_SECOND, assessTranscriptIntegrity, formatClock } from '../transcript-integrity'
+import { IMPOSSIBLE_WORDS_PER_SECOND } from '../value-thresholds'
 
 const seg = (start: number | null, text: string, end?: number) => ({ speaker: 'SPEAKER_00', start, end, text })
 const json = (segments: unknown[]) => JSON.stringify(segments)
@@ -88,5 +89,11 @@ describe('formatClock', () => {
   it('formats minutes and hours', () => {
     expect(formatClock(18)).toBe('0:18')
     expect(formatClock(6669)).toBe('1:51:09')
+  })
+})
+
+describe('shared line rules', () => {
+  it('flags one line at the library-wide impossible pace', () => {
+    expect(CRAMPED_WORDS_PER_SECOND).toBe(IMPOSSIBLE_WORDS_PER_SECOND)
   })
 })

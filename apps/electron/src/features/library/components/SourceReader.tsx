@@ -31,6 +31,7 @@ import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect, typ
 import { useNavigate } from 'react-router-dom'
 import { TranscriptViewer, type StoredSegment, type TranscriptContentUpdate } from './TranscriptViewer'
 import { TranscriptIntegrityPanel } from './TranscriptIntegrityPanel'
+import type { LineIssueCode } from '@/shared/transcript-line-issues'
 import { TranscriptionStatusBadge } from './TranscriptionStatusBadge'
 import { StatusIcon } from './StatusIcon'
 import { WaveformPlayer, type TimelineEvent, type TimelineEventDetail, type TimelineEventPatch, type SentimentScorePoint, type WaveformPlayerMode } from './WaveformPlayer'
@@ -432,6 +433,8 @@ export function SourceReader({
   // row) asks the transcript to scroll to + pulse the matching turn. The nonce
   // re-fires the pulse when the same marker is clicked twice. Reset per recording.
   const [transcriptHighlight, setTranscriptHighlight] = useState<{ atMs: number; nonce: number } | null>(null)
+  // "Go to the next line with this problem", from the integrity panel's labels.
+  const [issueJump, setIssueJump] = useState<{ code: LineIssueCode; nonce: number } | null>(null)
   const highlightNonceRef = useRef(0)
 
   // B3 backfill guard, keyed by CONTENT-derived transcript revision (see
@@ -2053,6 +2056,7 @@ export function SourceReader({
                             transcript={transcript}
                             onRetranscribe={onTranscribe}
                             onChanged={onIntegrityChanged}
+                            onJump={(code) => setIssueJump({ code, nonce: Date.now() })}
                           />
                         )}
                         <TranscriptViewer
@@ -2062,6 +2066,7 @@ export function SourceReader({
                           currentTimeMs={currentTimeMs}
                           isPlaying={isPlaying}
                           highlightRequest={transcriptHighlight}
+                          issueJump={issueJump}
                           onSeek={handleReaderSeek}
                           showSummary={false}
                           showTranscriptHeader={false}
