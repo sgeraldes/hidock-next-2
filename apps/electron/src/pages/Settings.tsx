@@ -65,6 +65,7 @@ import { ServiceList } from '@/features/settings/ServiceList'
 import { TranscriptionPipelineControls } from '@/features/settings/TranscriptionPipelineControls'
 import { RecordingSection } from '@/features/settings/RecordingSection'
 import { CalendarPreferences } from '@/features/settings/CalendarPreferences'
+import { DiarizationCpuShare, OllamaModelFields } from '@/features/settings/ModelFields'
 
 // RAG configuration constants — MAX_CONTEXT_CHUNKS must match config.ts default (10)
 const RAG_DEFAULTS = {
@@ -1437,7 +1438,8 @@ export function Settings({
                   How HiDock separates speakers and recognizes known voices on this computer.
                 </CardDescription>
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-4">
+                <DiarizationCpuShare />
                 <section
                   aria-labelledby="speaker-model-heading"
                   className="rounded-xl bg-muted/45 p-4 shadow-sm"
@@ -1738,6 +1740,9 @@ export function Settings({
                     <p id="ollamaUrl-description" className="text-xs text-muted-foreground mt-1">
                       URL of your local Ollama server
                     </p>
+                    <div className="mt-3">
+                      <OllamaModelFields />
+                    </div>
                   </div>
                 )}
 
