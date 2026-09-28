@@ -105,6 +105,26 @@ describe('transcript content editing IPC', () => {
     )
   })
 
+  it('saves a transcript whose lines start slightly out of order and keeps speaker attribution', async () => {
+    // Real case (28-sep-2026): overlapping speech gave a line starting 1 s
+    // before the previous one, and the old order rule refused every edit.
+    const segments = [
+      { speaker: 'A', start: 1004.2, end: 1006, text: 'Bueno', speakerAttribution: 'acoustic', speakerConfidence: 0.91 },
+      { speaker: 'B', start: 1003.2, end: 1004, text: '(noise)', speakerAttribution: 'unresolved', speakerConfidence: 0 }
+    ]
+    db.queryOne.mockReturnValue({ full_text: 'A: Bueno' })
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:updateContent')?.({} as never, {
+      recordingId: 'rec-1',
+      expectedFullText: 'A: Bueno',
+      segments
+    }) as any
+
+    expect(result).toMatchObject({ success: true })
+    const saved = JSON.parse(vi.mocked(db.runNoSave).mock.calls[0][1][1] as string)
+    expect(saved).toEqual(segments)
+  })
+
   it('refuses to overwrite a concurrently replaced transcript', async () => {
     db.queryOne.mockReturnValueOnce({ full_text: 'A newer transcription won the race' })
     registerTranscriptsHandlers()

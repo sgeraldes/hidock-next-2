@@ -64,7 +64,11 @@ const EditableTranscriptSegmentSchema = z
     speaker: z.string().trim().min(1).max(200).optional(),
     start: z.number().finite().min(0).max(7 * 24 * 60 * 60),
     end: z.number().finite().min(0).max(7 * 24 * 60 * 60).optional(),
-    text: z.string().trim().min(1).max(50_000)
+    text: z.string().trim().min(1).max(50_000),
+    // How the speaker was attributed (speaker-linking.ts). Kept through an edit so
+    // correcting a word does not erase the diarization quality marks.
+    speakerAttribution: z.string().trim().min(1).max(40).optional(),
+    speakerConfidence: z.number().finite().min(0).max(1).optional()
   })
   .refine((segment) => segment.end === undefined || segment.end >= segment.start, {
     message: 'Segment end must not precede its start'
@@ -77,18 +81,13 @@ const UpdateTranscriptRequestSchema = z
     segments: z.array(EditableTranscriptSegmentSchema).min(1).max(50_000)
   })
   .superRefine(({ segments }, ctx) => {
+    // Start order is not checked: transcription output has lines that start a
+    // little before the previous one (overlapping speech), the integrity check
+    // reports them as "times go backwards", and rejecting them here made every
+    // line of such a transcript impossible to edit (owner, 28-sep-2026).
     let size = 0
-    let previousStart = -1
-    for (const [index, segment] of segments.entries()) {
+    for (const segment of segments) {
       size += segment.text.length + (segment.speaker?.length ?? 0)
-      if (segment.start < previousStart) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['segments', index, 'start'],
-          message: 'Segments must be ordered by start time'
-        })
-      }
-      previousStart = segment.start
     }
     if (size > 10_000_000) {
       ctx.addIssue({ code: 'custom', path: ['segments'], message: 'Transcript is too large' })
