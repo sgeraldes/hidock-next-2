@@ -26,6 +26,7 @@ import { useAppStore, useCalendarSyncing, useCalendarManualSyncing } from '@/sto
 import { useConfigStore } from '@/store/domain/useConfigStore'
 import { useUIStore } from '@/store/ui/useUIStore'
 import { formatBytes, cn } from '@/lib/utils'
+import { isSavedSecret } from '@/shared/secret-fields'
 import { HealthCheck } from '@/components/HealthCheck'
 import { ConnectorsSettings } from '@/components/settings/ConnectorsSettings'
 import { AIBrainsSettings } from '@/components/settings/AIBrainsSettings'
@@ -266,7 +267,7 @@ export function Settings({
       ) {
         return 'Local ASR beam search must be between 1 and 10'
       }
-      if (updates.transcription.geminiApiKey !== undefined) {
+      if (updates.transcription.geminiApiKey !== undefined && !isSavedSecret(updates.transcription.geminiApiKey)) {
         const apiKey = updates.transcription.geminiApiKey.trim()
         if (apiKey && apiKey.length < 10) {
           return 'API key must be at least 10 characters'
@@ -279,7 +280,7 @@ export function Settings({
 
     // Calendar settings validation
     if (updates.calendar) {
-      if (updates.calendar.icsUrl !== undefined) {
+      if (updates.calendar.icsUrl !== undefined && !isSavedSecret(updates.calendar.icsUrl)) {
         const url = updates.calendar.icsUrl.trim()
         if (url && !url.startsWith('http')) {
           return 'Calendar URL must start with http:// or https://'
@@ -952,8 +953,8 @@ export function Settings({
                   <Input
                     id="icsUrl"
                     type="url"
-                    placeholder="https://outlook.office365.com/owa/calendar/.../calendar.ics"
-                    value={icsUrl}
+                    placeholder={isSavedSecret(icsUrl) ? 'Calendar link saved. Paste a new one to replace it' : 'https://outlook.office365.com/owa/calendar/.../calendar.ics'}
+                    value={isSavedSecret(icsUrl) ? '' : icsUrl}
                     onChange={(e) => setIcsUrl(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleSaveCalendar()}
                     disabled={saving}
@@ -1092,8 +1093,8 @@ export function Settings({
                         <Input
                           id="geminiApiKey"
                           type={showApiKey ? 'text' : 'password'}
-                          placeholder="Enter your Gemini API key"
-                          value={geminiApiKey}
+                          placeholder={isSavedSecret(geminiApiKey) ? 'Key saved. Paste a new one to replace it' : 'Enter your Gemini API key'}
+                          value={isSavedSecret(geminiApiKey) ? '' : geminiApiKey}
                           onChange={(e) => setGeminiApiKey(e.target.value)}
                           onKeyDown={(e) => e.key === 'Enter' && handleSaveTranscription()}
                           disabled={saving}
@@ -1365,8 +1366,8 @@ export function Settings({
                       <Input
                         id="localAsrHfToken"
                         type={showHfToken ? 'text' : 'password'}
-                        placeholder="hf_xxxxxxxxxxxxxxxxxxxx"
-                        value={localAsrHfToken}
+                        placeholder={isSavedSecret(localAsrHfToken) ? 'Token saved. Paste a new one to replace it' : 'hf_xxxxxxxxxxxxxxxxxxxx'}
+                        value={isSavedSecret(localAsrHfToken) ? '' : localAsrHfToken}
                         onChange={(event) => {
                           setLocalAsrHfToken(event.target.value)
                           setSpeakerModelAccess(null)
