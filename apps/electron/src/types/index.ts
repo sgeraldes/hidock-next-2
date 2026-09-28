@@ -196,6 +196,8 @@ export interface CalendarSettings {
   icsUrl: string
   syncEnabled: boolean
   syncIntervalMinutes: number
+  windowPastDays?: number
+  windowFutureDays?: number
   lastSyncAt: string | null
 }
 

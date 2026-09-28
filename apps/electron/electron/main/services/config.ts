@@ -17,6 +17,7 @@ import type { FeaturesConfig } from '../../../src/shared/feature-registry'
 import { DEFAULT_FEATURES_CONFIG } from '../../../src/shared/feature-registry'
 import { applyRagSettings } from './rag-settings'
 import { applyQualityRules } from './quality-rules'
+import { applyCalendarWindow } from './calendar-window'
 import { CURRENT_GEMINI_CHAT_MODEL, CURRENT_GEMINI_TRANSCRIPTION_MODEL } from './gemini-model-ids'
 
 /** Best-effort fsync of a path (file or directory). Silently skips where the FS
@@ -133,6 +134,9 @@ export interface AppConfig {
     icsUrl: string
     syncEnabled: boolean
     syncIntervalMinutes: number
+    /** Days every calendar source reads back and ahead (calendar-window.ts). */
+    windowPastDays?: number
+    windowFutureDays?: number
     lastSyncAt: string | null
   }
   transcription: {
@@ -323,7 +327,9 @@ const DEFAULT_CONFIG: AppConfig = {
     icsUrl: '',
     syncEnabled: true,
     syncIntervalMinutes: 15,
-    lastSyncAt: null
+    lastSyncAt: null,
+    windowPastDays: 60,
+    windowFutureDays: 120
   },
   transcription: {
     provider: 'gemini',
@@ -418,7 +424,10 @@ const DEFAULT_CONFIG: AppConfig = {
     skipSeconds: 10,
     playbackSpeeds: [0.5, 1, 1.5, 2],
     defaultPlaybackSpeed: 1,
-    toastSeconds: 5
+    toastSeconds: 5,
+    officeHoursStart: 9,
+    officeHoursEnd: 18,
+    workDays: [1, 2, 3, 4, 5]
   }
 }
 
@@ -612,6 +621,7 @@ export async function initializeConfig(options: { persist?: boolean } = {}): Pro
       config = deepMerge(DEFAULT_CONFIG, savedConfig)
       applyRagSettings(config)
       applyQualityRules(config)
+      applyCalendarWindow(config)
       if (!persist) return
       // Auto-upgrade retired Gemini model names in persisted configs so old
       // saved values (e.g. gemini-2.0-flash, now 404) don't break transcription
@@ -661,6 +671,7 @@ export async function saveConfig(newConfig: Partial<AppConfig>): Promise<void> {
   config = deepMerge(config, newConfig)
   applyRagSettings(config)
   applyQualityRules(config)
+  applyCalendarWindow(config)
 
   const desiredGeminiKey = config.transcription?.geminiApiKey ?? ''
   const geminiKeyChanged = prevGeminiKey.trim() !== desiredGeminiKey.trim()

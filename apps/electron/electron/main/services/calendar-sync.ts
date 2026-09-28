@@ -6,6 +6,7 @@ import { join } from 'path'
 import { getCachePath } from './file-storage'
 import { activateCalendarSyncToken, upsertMeetingsBatch, Meeting } from './database'
 import { getConfig, updateConfig } from './config'
+import { calendarWindow } from './calendar-window'
 import { whenBootTasksSettled, areBootTasksSettled } from './boot-scheduler'
 import { emitActivityLog } from './activity-log'
 import { getEventBus } from './event-bus'
@@ -490,8 +491,6 @@ function buildMeetingRow(
 }
 
 // Recurrence expansion window, measured from sync time.
-const RECURRENCE_WINDOW_BACK_DAYS = 60
-const RECURRENCE_WINDOW_FORWARD_DAYS = 90
 const DAY_MS = 24 * 60 * 60 * 1000
 // Cap emitted occurrences per series per window; a pathological RRULE (e.g. an
 // hourly rule with no COUNT/UNTIL) is truncated with a warning rather than
@@ -717,8 +716,9 @@ export function expandMeetingOccurrences(
   events: CalendarEvent[],
   now: Date = new Date()
 ): Omit<Meeting, 'created_at' | 'updated_at'>[] {
-  const windowStartMs = now.getTime() - RECURRENCE_WINDOW_BACK_DAYS * DAY_MS
-  const windowEndMs = now.getTime() + RECURRENCE_WINDOW_FORWARD_DAYS * DAY_MS
+  const { pastDays, futureDays } = calendarWindow()
+  const windowStartMs = now.getTime() - pastDays * DAY_MS
+  const windowEndMs = now.getTime() + futureDays * DAY_MS
 
   // Group VEVENTs sharing a UID: a recurring series is one master (has RRULE,
   // no RECURRENCE-ID) plus zero or more overrides (each has RECURRENCE-ID).

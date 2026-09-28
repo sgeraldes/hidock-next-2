@@ -35,6 +35,8 @@ recording, and Microsoft 365 and Slack connect on first try.
   date in the app now uses that one format; some screens forced US English before.
 - **Player & notifications.** A Settings page for the skip length, the speeds in the speed menu,
   the speed recordings start at, and how long notices stay on screen.
+- **Office hours and work days** are set in Settings > Calendar, and one calendar window (60 days
+  back, 120 ahead) applies to the feed and Microsoft 365 alike.
 - **Week starts on.** Settings > Calendar picks Monday, Sunday or Saturday, and the week and
   month views now agree (they started on Monday and on Sunday).
 - **A switch per feature.** Settings > Features lists every feature with its own switch, what it

@@ -49,13 +49,12 @@ import type {
 import { mapGraphContact, mapGraphEvent, mapGraphPerson } from './graph-mappers'
 import { DEFAULT_M365_CLIENT_ID, DEFAULT_M365_TENANT, hasDefaultM365App } from './default-app'
 import { startLoopbackServer } from './loopback-server'
+import { calendarWindow } from '../../calendar-window'
 
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0'
 /** Delegated scopes. Reserved scopes (openid/profile/offline_access) are added by MSAL. */
 const GRAPH_SCOPES = ['User.Read', 'Calendars.Read', 'Contacts.Read', 'People.Read']
 
-const CALENDAR_WINDOW_PAST_DAYS = 30
-const CALENDAR_WINDOW_FUTURE_DAYS = 120
 const MSAL_CACHE_SECRET = 'msalCache' // pragma: allowlist secret — store KEY name, not a credential
 /** How long the loopback server waits for the browser redirect before giving up. */
 const AUTH_CODE_TIMEOUT_MS = 5 * 60_000
@@ -410,12 +409,12 @@ export class M365Connector implements Connector {
   // ── Sources ──────────────────────────────────────────────────────────────────
 
   private calendarInitialUrl(): string {
-    // Normally the last 30 days. "Relink recordings to meetings" sets
+    // Normally the calendar window (Settings > Calendar, 60 days by default). "Relink recordings to meetings" sets
     // calendarHistoryStart to the oldest recording so past meetings come in.
-    const recent = Date.now() - CALENDAR_WINDOW_PAST_DAYS * 86_400_000
+    const recent = Date.now() - calendarWindow().pastDays * 86_400_000
     const history = Date.parse(String(this.ctx.getConfig().calendarHistoryStart ?? ''))
     const start = new Date(Number.isFinite(history) ? Math.min(history, recent) : recent).toISOString()
-    const end = new Date(Date.now() + CALENDAR_WINDOW_FUTURE_DAYS * 86_400_000).toISOString()
+    const end = new Date(Date.now() + calendarWindow().futureDays * 86_400_000).toISOString()
     const select = 'subject,start,end,location,onlineMeeting,isOnlineMeeting,organizer,attendees,bodyPreview,webLink,showAs,seriesMasterId'
     return `/me/calendarView/delta?startDateTime=${encodeURIComponent(start)}&endDateTime=${encodeURIComponent(end)}&$select=${select}`
   }
