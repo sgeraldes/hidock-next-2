@@ -71,6 +71,7 @@ import { SecretsSection } from '@/features/settings/SecretsSection'
 import { ShortcutsSection } from '@/features/settings/ShortcutsSection'
 import { LibrarySection } from '@/features/settings/LibrarySection'
 import { QualitySettings } from '@/features/settings/QualitySettings'
+import { OwnerContactPicker } from '@/features/settings/OwnerContactPicker'
 
 // RAG configuration constants — MAX_CONTEXT_CHUNKS must match config.ts default (10)
 const RAG_DEFAULTS = {
@@ -1467,6 +1468,7 @@ export function Settings({
 
           {show('speakers') && (
             <>
+            <OwnerContactPicker />
             {transcriptionEnabled && (
             <Card data-testid="speakers-and-voices">
               <CardHeader>
