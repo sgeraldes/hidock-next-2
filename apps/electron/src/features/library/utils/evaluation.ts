@@ -8,6 +8,7 @@
  */
 
 import type { AudioWarning, RecordingContext, RecordingKind } from '@/types/unified-recording'
+import { useConfigStore } from '@/store/domain/useConfigStore'
 
 export type { AudioWarning, RecordingContext, RecordingKind }
 
@@ -43,8 +44,21 @@ export const WARNING_LABELS: Record<AudioWarning, { label: string; detail: strin
   }
 }
 
-/** Jev's own "invented" probability at or above this also counts as a warning. */
+/**
+ * Jev's own "invented" probability at or above this also counts as a warning.
+ * The default of Settings > Quality checks "inventedProbability"; used only
+ * until the config has loaded, or when it holds no usable value.
+ */
 export const INVENTED_THRESHOLD = 0.8
+
+function validThreshold(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1 ? v : null
+}
+
+/** The invented-transcript threshold in force: the saved setting, else INVENTED_THRESHOLD. */
+export function inventedThreshold(): number {
+  return validThreshold(useConfigStore.getState().config?.quality?.inventedProbability) ?? INVENTED_THRESHOLD
+}
 
 export type KindFilter = RecordingKind | 'unevaluated'
 export type ContextFilter = RecordingContext
@@ -91,9 +105,9 @@ export interface EvaluationFields {
 }
 
 /** The warning a row shows: the stored rule result, or Jev's own "invented" answer when it is sure. */
-export function effectiveWarning(r: EvaluationFields): AudioWarning | null {
+export function effectiveWarning(r: EvaluationFields, threshold: number = inventedThreshold()): AudioWarning | null {
   if (r.evalAudioWarning) return r.evalAudioWarning
-  if ((r.evalTranscriptInvented ?? 0) >= INVENTED_THRESHOLD) return 'possible_invented_transcript'
+  if ((r.evalTranscriptInvented ?? 0) >= threshold) return 'possible_invented_transcript'
   return null
 }
 
@@ -113,7 +127,8 @@ export function matchesStarsFilter(r: EvaluationFields, filter: StarsFilter): bo
   return s === Number(filter)
 }
 
-export function matchesWarningFilter(r: EvaluationFields, filter: WarningFilter): boolean {
-  const w = effectiveWarning(r)
+/** `inventedProbability` is the saved threshold when the caller has it; absent reads the store. */
+export function matchesWarningFilter(r: EvaluationFields, filter: WarningFilter, inventedProbability?: number): boolean {
+  const w = effectiveWarning(r, validThreshold(inventedProbability) ?? inventedThreshold())
   return filter === 'any' ? w !== null : w === filter
 }

@@ -4,12 +4,13 @@
  * default shown next to it comes from the main process, never from here.
  */
 
-export type AdvancedSection = 'embeddings' | 'transcription' | 'chat'
+export type AdvancedSection = 'embeddings' | 'transcription' | 'chat' | 'quality'
 
 export interface AdvancedSetting {
   section: AdvancedSection
   key: string
-  group: 'Search' | 'Voice matching' | 'Ratings' | 'AI models'
+  /** The heading the row sits under; each list names its groups in order. */
+  group: string
   label: string
   detail: string
   kind: 'number' | 'text'
@@ -86,7 +87,7 @@ export const ADVANCED_SETTINGS: AdvancedSetting[] = [
   }
 ]
 
-export const ADVANCED_GROUPS: AdvancedSetting['group'][] = ['Search', 'Ratings', 'Voice matching', 'AI models']
+export const ADVANCED_GROUPS: string[] = ['Search', 'Ratings', 'Voice matching', 'AI models']
 
 /** Read a typed value, or say what is wrong with it. `others` is the section's current values. */
 export function parseAdvancedValue(

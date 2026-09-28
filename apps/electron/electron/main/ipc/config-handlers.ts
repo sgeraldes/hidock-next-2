@@ -12,6 +12,8 @@ import {
   checkSpeakerModelAccess,
   SPEAKER_MODEL_ACCESS_URL
 } from '../services/speaker-model-access'
+import { qualityRules } from '../services/quality-rules'
+import { recomputeForQualityChange } from '../services/quality-recompute'
 
 export function registerConfigHandlers(): void {
   // Get full config
@@ -63,6 +65,7 @@ export function registerConfigHandlers(): void {
         // Track I: capture the resolved feature state BEFORE the write so the
         // lifecycle reconciler can diff old→new and start/stop the right loops.
         const prevFeatures = section === 'features' ? getResolvedFeatures() : null
+        const prevQuality = section === 'quality' ? qualityRules() : null
         await updateConfig(section, withoutSavedSecrets(values as Record<string, unknown>) as Partial<AppConfig[K]>)
         if (section === 'storage') {
           await initializeFileStorage()
@@ -74,6 +77,10 @@ export function registerConfigHandlers(): void {
         if (section === 'features' && prevFeatures) {
           // Runtime start/stop of toggled features + broadcast to the renderer.
           await reconcileFeatures(prevFeatures)
+        }
+        if (section === 'quality' && prevQuality) {
+          // Stored warnings and reasons follow a changed rule, in the background.
+          void recomputeForQualityChange(prevQuality, qualityRules())
         }
         emitActivityLog('info', `Settings updated: ${String(section)}`)
         return success(redactSecrets(getConfig()))

@@ -151,7 +151,7 @@ import {
 import { parseAndAssessDiarization } from './diarization-quality'
 import { analyzeAudioPreflight, type AudioPreflightReport } from './audio-preflight'
 import { readAudioDuration } from './audio-duration'
-import { minRecordingSeconds } from './quality-rules'
+import { minRecordingSeconds, qualityRules } from './quality-rules'
 import { isAutomaticMeetingLinkTemporallyEligible } from './recording-match-scoring'
 import {
   applyKnownVoiceBindings,
@@ -438,7 +438,8 @@ export function cancelAllTranscriptions(): number {
   return count
 }
 
-const MAX_RETRY_ATTEMPTS = 3 // spec-014: configurable max retry attempts
+/** Transcription attempts before a recording is marked failed (spec-014). Settings > Quality checks "maxRetries"; clamped by quality-rules.ts. */
+const maxRetryAttempts = (): number => qualityRules().maxRetries
 
 /**
  * Transcribe one queue row and record the outcome. Shared by the main lane and
@@ -539,8 +540,9 @@ async function runQueueItem(
 
     // B-TXN-003: Use typed property access instead of `as any` cast
     const retryCount = item.retry_count ?? 0
-    if (retryCount >= MAX_RETRY_ATTEMPTS) {
-      console.log(`Recording ${item.recording_id} failed after ${retryCount} retries (max: ${MAX_RETRY_ATTEMPTS})`)
+    const maxRetries = maxRetryAttempts()
+    if (retryCount >= maxRetries) {
+      console.log(`Recording ${item.recording_id} failed after ${retryCount} retries (max: ${maxRetries})`)
     }
   } finally {
     for (const id of ids) {
@@ -726,7 +728,8 @@ async function processQueue(): Promise<void> {
         continue
       }
 
-      if (retryCount < MAX_RETRY_ATTEMPTS) {
+      const maxRetries = maxRetryAttempts()
+      if (retryCount < maxRetries) {
         // B-TXN-001: Calculate backoff delay: 30s * 2^retryCount, capped at 120s
         const backoffMs = Math.min(30000 * Math.pow(2, retryCount), 120000)
         // SQLite CURRENT_TIMESTAMP writes UTC without a `Z` suffix; appending Z
@@ -739,7 +742,7 @@ async function processQueue(): Promise<void> {
 
         if (timeSinceFailure < backoffMs) {
           // Not enough time has passed; skip this retry cycle
-          console.log(`[Transcription] Backoff for ${item.id}: waiting ${Math.round((backoffMs - timeSinceFailure) / 1000)}s more (retry ${retryCount + 1}/${MAX_RETRY_ATTEMPTS})`)
+          console.log(`[Transcription] Backoff for ${item.id}: waiting ${Math.round((backoffMs - timeSinceFailure) / 1000)}s more (retry ${retryCount + 1}/${maxRetries})`)
           continue
         }
 
@@ -747,7 +750,7 @@ async function processQueue(): Promise<void> {
         updateQueueItem(item.id, 'pending')
         // Also reset recording status so UI shows it's retrying
         updateRecordingTranscriptionStatus(item.recording_id, 'pending')
-        console.log(`Re-queuing failed item ${item.id} (retry ${retryCount + 1}/${MAX_RETRY_ATTEMPTS}, backoff ${backoffMs / 1000}s)`)
+        console.log(`Re-queuing failed item ${item.id} (retry ${retryCount + 1}/${maxRetries}, backoff ${backoffMs / 1000}s)`)
       }
     }
 

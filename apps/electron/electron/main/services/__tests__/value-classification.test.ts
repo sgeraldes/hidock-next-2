@@ -76,8 +76,10 @@ import {
   neutralizeDelimiters,
   VALUE_REASON_TAGS,
   getValueClassifierKind,
-  recomputeAudioWarnings
+  recomputeAudioWarnings,
+  recomputeEvaluationReasons
 } from '../value-classification'
+import { applyQualityRules } from '../quality-rules'
 
 function cleanupDbFiles(base: string): void {
   for (const suffix of ['', '-wal', '-shm', '.tmp']) {
@@ -1464,6 +1466,31 @@ describe('Jev (TypeSafe AI) as the value classifier', () => {
     expect(warning('cap-w2')).toBe('possible_invented_transcript')
     expect(await recomputeAudioWarnings()).toBe(0) // nothing left to change
     expect(await recomputeAudioWarnings([])).toBe(0)
+  })
+
+  it('recomputes stored reasons from the stored Jev answers at the reason threshold in force', async () => {
+    seedRecording('rec-r1', { durationSeconds: 789 })
+    seedTranscript('rec-r1', { fullText: Array.from({ length: 400 }, (_, i) => `w${i}`).join(' ') })
+    seedCapture('cap-r1', 'rec-r1')
+    mockAskJev.mockResolvedValue(jevReply(3, 0.9, { no_substance: 0.6 }))
+    await classifyCaptureValue('cap-r1')
+    const reasons = () =>
+      JSON.parse(
+        queryOne<{ reasons_json: string }>('SELECT reasons_json FROM recording_evaluations WHERE capture_id = ?', ['cap-r1'])!
+          .reasons_json
+      )
+    expect(reasons()).toEqual(['no_substance'])
+    const asked = mockAskJev.mock.calls.length
+
+    applyQualityRules({ quality: { reasonProbability: 0.7 } })
+    try {
+      expect(await recomputeEvaluationReasons()).toBe(1)
+      expect(reasons()).toEqual([])
+      expect(await recomputeEvaluationReasons()).toBe(0)
+    } finally {
+      applyQualityRules({})
+    }
+    expect(mockAskJev.mock.calls.length).toBe(asked) // no new Jev call
   })
 
   it('reports which classifier the backfill will use', () => {

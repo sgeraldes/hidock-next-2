@@ -14,15 +14,20 @@
 
 import { createHash } from 'crypto'
 import { askJev, JEV_MODEL, type JevQuestion, type JevResponse, type JevStructured } from './jev-client'
+import { DEFAULT_QUALITY_RULES, qualityRules } from './quality-rules'
 
 export const MEETING_MATCH_VERSION = 1
 
 /** Candidates sent in one request: the overlapping ones first, then the closest by time. */
 export const MAX_MATCH_CANDIDATES = 12
 
-/** A recording is linked by content only on a clear answer. */
-export const AUTO_LINK_MIN_PROBABILITY = 0.7
-export const AUTO_LINK_MIN_MARGIN = 0.25
+/**
+ * A recording is linked by content only on a clear answer. These are the
+ * defaults of Settings > Quality checks; isClearMatch reads the values in
+ * force from qualityRules().
+ */
+export const AUTO_LINK_MIN_PROBABILITY = DEFAULT_QUALITY_RULES.meetingAutoLinkProbability
+export const AUTO_LINK_MIN_MARGIN = DEFAULT_QUALITY_RULES.meetingAutoLinkMargin
 
 const EXCERPT_HEAD_CHARS = 2500
 const EXCERPT_TAIL_CHARS = 800
@@ -173,11 +178,12 @@ export function parseMeetingMatch(res: JevResponse, keys: Map<string, string>, k
 
 /** Whether an answer is clear enough to link the recording without asking. */
 export function isClearMatch(match: MeetingMatch | null): match is MeetingMatch & { topMeetingId: string } {
+  const rules = qualityRules()
   return (
     !!match &&
     match.topMeetingId !== null &&
-    match.topProbability >= AUTO_LINK_MIN_PROBABILITY &&
-    match.margin >= AUTO_LINK_MIN_MARGIN
+    match.topProbability >= rules.meetingAutoLinkProbability &&
+    match.margin >= rules.meetingAutoLinkMargin
   )
 }
 

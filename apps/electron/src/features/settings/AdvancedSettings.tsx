@@ -1,6 +1,8 @@
 /**
  * Developer > Advanced: the config values with no other control, each with
- * its default (read from the main process) and a Reset.
+ * its default (read from the main process) and a Reset. The same panel takes
+ * another list and its group names, which is how Settings > Quality checks
+ * is built.
  */
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
@@ -114,7 +116,21 @@ function AdvancedRow({ setting, current, fallback, section }: {
   )
 }
 
-export function AdvancedSettings() {
+export interface AdvancedSettingsProps {
+  settings?: AdvancedSetting[]
+  groups?: string[]
+  title?: string
+  intro?: string
+  testId?: string
+}
+
+export function AdvancedSettings({
+  settings = ADVANCED_SETTINGS,
+  groups = ADVANCED_GROUPS,
+  title = 'Advanced',
+  intro = 'Values that tune the pipeline. Each saves when you leave the field; Reset puts back the default.',
+  testId = 'settings-advanced'
+}: AdvancedSettingsProps = {}) {
   const config = useConfigStore((s) => s.config) as unknown as Sections | null
   const [defaults, setDefaults] = useState<Sections | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -140,18 +156,16 @@ export function AdvancedSettings() {
 
   if (!config) return null
   return (
-    <section className="space-y-4 rounded-lg border border-border bg-card p-4" data-testid="settings-advanced">
+    <section className="space-y-4 rounded-lg border border-border bg-card p-4" data-testid={testId}>
       <div>
-        <h3 className="text-sm font-semibold">Advanced</h3>
-        <p className="text-xs text-muted-foreground">
-          Values that tune the pipeline. Each saves when you leave the field; Reset puts back the default.
-        </p>
+        <h3 className="text-sm font-semibold">{title}</h3>
+        <p className="text-xs text-muted-foreground">{intro}</p>
         {loadError && <p className="mt-1 text-xs text-destructive">Defaults unavailable: {loadError}. Reset is hidden.</p>}
       </div>
-      {ADVANCED_GROUPS.map((group) => (
+      {groups.map((group) => (
         <div key={group}>
           <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{group}</h4>
-          {ADVANCED_SETTINGS.filter((s) => s.group === group).map((setting) => {
+          {settings.filter((s) => s.group === group).map((setting) => {
             const section = config[setting.section] ?? {}
             return (
               <AdvancedRow

@@ -28,6 +28,7 @@ vi.mock('../../services/activity-log', () => ({ emitActivityLog: vi.fn() }))
 vi.mock('../../services/feature-gate', () => ({ getResolvedFeatures: vi.fn() }))
 vi.mock('../../services/feature-lifecycle', () => ({ reconcileFeatures: vi.fn() }))
 vi.mock('../../services/speaker-model-access', () => ({ checkSpeakerModelAccess: vi.fn(), SPEAKER_MODEL_ACCESS_URL: '' }))
+vi.mock('../../services/quality-recompute', () => ({ recomputeForQualityChange: vi.fn() }))
 
 import { registerConfigHandlers } from '../config-handlers'
 
