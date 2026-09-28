@@ -18,6 +18,32 @@ const TONE_DOT: Record<Tone, string> = {
   off: 'bg-muted-foreground/40'
 }
 
+type OverviewConfig = ReturnType<typeof useConfigStore.getState>['config']
+
+/** Ready means the same as what the save accepts for that provider (Settings.tsx). */
+export function transcriptionReady(t: NonNullable<OverviewConfig>['transcription'] | undefined): boolean {
+  if (!t) return false
+  const provider = t.provider || 'gemini'
+  if (provider === 'gemini') return !!t.geminiApiKey?.trim()
+  if (!t.localAsrPath?.trim()) return false
+  if (provider === 'local-asr' && t.localAsrDiarize !== false && !t.localAsrHfToken?.trim()) return false
+  return true
+}
+
+/** Jev is on only when its switch and at least one job are on, and a key is saved. */
+export function jevStatus(config: OverviewConfig): { value: string; detail: string; tone: Tone } {
+  const hasKey = !!config?.transcription.jevApiKey?.trim()
+  const d = config?.decisions
+  const enabled = d?.jevEnabled !== false
+  const jobs = [d?.jevValue !== false && 'rates recordings', d?.jevMeetingMatch !== false && 'links meetings'].filter(
+    (j): j is string => !!j
+  )
+  if (!enabled || jobs.length === 0) return { value: 'Off', detail: 'Turned off in Decisions (Jev)', tone: 'off' }
+  if (!hasKey) return { value: 'Off', detail: 'Add a key to turn it on', tone: 'off' }
+  const text = jobs.join(' and ')
+  return { value: 'On', detail: text.charAt(0).toUpperCase() + text.slice(1), tone: 'ok' }
+}
+
 /**
  * Settings overview: one tile per area with its state in words, each opening
  * the page that changes it.
@@ -51,8 +77,8 @@ export function OverviewSection({
 
   const provider = config?.transcription.provider || 'gemini'
   const providerLabel = provider === 'gemini' ? 'Gemini' : provider === 'vibevoice' ? 'VibeVoice' : 'Local ASR'
-  const providerReady = provider === 'gemini' ? !!config?.transcription.geminiApiKey?.trim() : !!config?.transcription.localAsrPath?.trim()
-  const hasJevKey = !!config?.transcription.jevApiKey?.trim()
+  const providerReady = transcriptionReady(config?.transcription)
+  const jev = jevStatus(config)
   const connected = connectors?.filter((c) => c.state === 'connected') ?? []
   const needsSetup = connectors?.filter((c) => c.state !== 'connected') ?? []
 
@@ -67,9 +93,9 @@ export function OverviewSection({
     {
       id: 'decisions',
       title: 'Decisions (Jev)',
-      value: hasJevKey ? 'On' : 'Off',
-      detail: hasJevKey ? 'Rates recordings and checks transcripts' : 'Add a key to turn it on',
-      tone: hasJevKey ? 'ok' : 'off'
+      value: jev.value,
+      detail: jev.detail,
+      tone: jev.tone
     },
     {
       id: 'connectors',
