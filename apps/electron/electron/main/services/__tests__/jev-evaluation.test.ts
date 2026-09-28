@@ -108,9 +108,31 @@ describe('audioTranscriptWarning', () => {
     )
   })
 
-  it('flags text faster than anyone talks', () => {
+  it('flags text faster than anyone talks over the whole recording', () => {
+    // 18 minutes, 7,466 words: 415 words per minute (Rec58, 28-sep).
+    expect(audioTranscriptWarning(audio({ duration_seconds: 1080, sound_seconds: 716, transcript_words: 7466 }), 4)).toBe(
+      'possible_invented_transcript'
+    )
+  })
+
+  it('does not flag real recordings the first rule caught (28-sep pass)', () => {
+    // A 33-second clip with 24 seconds of sound and 72 words (Rec78).
     expect(
-      audioTranscriptWarning(audio({ sound_seconds: 60, transcript_words: 900, words_per_minute_of_sound: 900 }), 3)
+      audioTranscriptWarning(audio({ duration_seconds: 33, sound_seconds: 24, sound_share: 0.75, transcript_words: 72 }), 3)
+    ).toBeNull()
+    // A 105-minute workshop, 56% sound, 18,743 words: fast on "seconds of sound", normal on the recording (Rec71).
+    expect(
+      audioTranscriptWarning(
+        audio({ duration_seconds: 6290, sound_seconds: 3497, sound_share: 0.556, transcript_words: 18743, words_per_minute_of_sound: 322 }),
+        5
+      )
+    ).toBeNull()
+  })
+
+  it('flags a long file that is almost all quiet even when the audio check calls it speech', () => {
+    // 3 minutes, 7 seconds of sound, 589 words (Rec11).
+    expect(
+      audioTranscriptWarning(audio({ duration_seconds: 185, sound_seconds: 7, sound_share: 0.035, transcript_words: 589 }), 4)
     ).toBe('possible_invented_transcript')
   })
 

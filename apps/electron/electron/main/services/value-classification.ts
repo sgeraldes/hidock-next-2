@@ -793,3 +793,58 @@ export function applyDurationValueGate(): { candidates: number; marked: number }
   }
   return { candidates: rows.length, marked }
 }
+
+/**
+ * Recompute every stored audio-versus-transcript warning from the numbers the
+ * database already holds (audio profile, transcript words, stored stars). No
+ * Jev call: the rule is local. Runs at boot, so a rule change or a new audio
+ * profile reaches the Library without a new scan. Returns how many changed.
+ */
+export function recomputeAudioWarnings(): number {
+  const rows = queryAll<{
+    capture_id: string
+    star_level: number | null
+    audio_warning: string | null
+    duration_seconds: number | null
+    sound_seconds: number | null
+    sound_share: number | null
+    audio_category: string | null
+    word_count: number | null
+    full_text: string | null
+    integrity_status: string | null
+  }>(
+    `SELECT re.capture_id, re.star_level, re.audio_warning,
+            r.duration_seconds, ap.sound_seconds, ap.sound_share, ap.category AS audio_category,
+            t.word_count, t.full_text, t.integrity_status
+       FROM recording_evaluations re
+       JOIN knowledge_captures kc ON kc.id = re.capture_id
+       LEFT JOIN recordings r ON r.id = kc.source_recording_id
+       LEFT JOIN audio_profiles ap ON ap.recording_id = kc.source_recording_id
+       LEFT JOIN transcripts t ON t.recording_id = kc.source_recording_id`
+  )
+  let changed = 0
+  for (const row of rows) {
+    const audio = evaluationAudio({
+      recording_id: null,
+      quality_rating: null,
+      quality_source: null,
+      summary: null,
+      transcript_full_text: row.full_text,
+      meeting_subject: null,
+      duration_seconds: row.duration_seconds,
+      file_size: null,
+      sound_seconds: row.sound_seconds,
+      sound_share: row.sound_share,
+      audio_category: row.audio_category,
+      word_count: row.word_count,
+      integrity_status: row.integrity_status,
+      evaluation_version: null
+    })
+    const next = audioTranscriptWarning(audio, row.star_level)
+    if ((next ?? null) !== (row.audio_warning ?? null)) {
+      run('UPDATE recording_evaluations SET audio_warning = ? WHERE capture_id = ?', [next, row.capture_id])
+      changed++
+    }
+  }
+  return changed
+}

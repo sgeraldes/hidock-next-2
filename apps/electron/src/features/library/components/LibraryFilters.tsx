@@ -28,6 +28,7 @@ import type {
 import { DURATION_PRESET_LABELS, type DurationPreset } from '@/features/library/utils/durationFilter'
 import { ISSUE_ORDER, ISSUE_TAGS, integrityFilterLabel, isIntegrityFilter } from '@/features/library/utils/transcriptIntegrity'
 import { AUDIO_FILTERS, isAudioFilter } from '@/features/library/utils/audioCheck'
+import { CONTEXT_FILTERS, KIND_FILTERS, STARS_FILTERS, WARNING_FILTERS } from '@/features/library/utils/evaluation'
 
 export type TypeCounts = Record<string, number> & { all: number }
 
@@ -69,7 +70,27 @@ interface LibraryFiltersProps {
   audioFilter?: string
   audioCounts?: Record<string, number>
   onAudioFilterChange?: (filter: string) => void
+  /** Jev evaluation filters ('all' when off), with how many recordings each value matches. */
+  evaluation?: EvaluationFilterProps
 }
+
+type EvaluationKey = 'kind' | 'context' | 'stars' | 'warning'
+
+export interface EvaluationFilterProps {
+  kind: string
+  context: string
+  stars: string
+  warning: string
+  counts: Record<EvaluationKey, Record<string, number>>
+  onChange: (key: EvaluationKey, value: string) => void
+}
+
+const EVALUATION_SECTIONS: { key: EvaluationKey; title: string; any: string; options: { value: string; label: string }[] }[] = [
+  { key: 'kind', title: 'Kind', any: 'Any kind', options: KIND_FILTERS },
+  { key: 'context', title: 'Work or personal', any: 'Any', options: CONTEXT_FILTERS },
+  { key: 'stars', title: 'Stars', any: 'Any stars', options: STARS_FILTERS },
+  { key: 'warning', title: 'Transcript warnings', any: 'Any', options: WARNING_FILTERS }
+]
 
 const CATEGORIES = ['all', 'meeting', 'interview', '1:1', 'brainstorm'] as const
 const DURATION_PRESETS: DurationPreset[] = ['all', 'under10s', 'under1m', 'under5m', 'over5m']
@@ -112,7 +133,8 @@ export function LibraryFilters({
   onIntegrityFilterChange,
   audioFilter = 'all',
   audioCounts = {},
-  onAudioFilterChange
+  onAudioFilterChange,
+  evaluation
 }: LibraryFiltersProps) {
   const selectedType = artifactTypes.find((type) => type.id === sourceTypeFilter)
   const supportsDuration = selectedType?.capabilities.includes('timed') ?? false
@@ -132,7 +154,8 @@ export function LibraryFilters({
     statusFilter !== 'all',
     supportsDuration && durationPreset !== 'all',
     integrityFilter !== 'all',
-    audioFilter !== 'all'
+    audioFilter !== 'all',
+    ...EVALUATION_SECTIONS.map((section) => !!evaluation && evaluation[section.key] !== 'all')
   ].filter(Boolean).length
   const anyFilterActive = advancedActiveCount > 0 || sourceTypeFilter !== 'all' || searchQuery.length > 0
 
@@ -175,6 +198,14 @@ export function LibraryFilters({
   if (audioFilter !== 'all' && onAudioFilterChange && isAudioFilter(audioFilter)) {
     const label = AUDIO_FILTERS.find((f) => f.value === audioFilter)?.label ?? audioFilter
     chips.push({ key: 'audio', label: `Audio: ${label}`, clear: () => onAudioFilterChange('all') })
+  }
+  if (evaluation) {
+    for (const section of EVALUATION_SECTIONS) {
+      const value = evaluation[section.key]
+      if (value === 'all') continue
+      const label = section.options.find((o) => o.value === value)?.label ?? value
+      chips.push({ key: `eval-${section.key}`, label: `${section.title}: ${label}`, clear: () => evaluation.onChange(section.key, 'all') })
+    }
   }
   const showAudio = !!onAudioFilterChange
   const showIntegrity = !!onIntegrityFilterChange && ((integrityCounts.flagged ?? 0) > 0 || (integrityCounts.accepted ?? 0) > 0 || integrityFilter !== 'all')
@@ -297,6 +328,31 @@ export function LibraryFilters({
                   </select>
                 </section>
               )}
+
+              {evaluation &&
+                EVALUATION_SECTIONS.map((section) => {
+                  const counts = evaluation.counts[section.key] ?? {}
+                  const value = evaluation[section.key]
+                  const options = section.options.filter((o) => (counts[o.value] ?? 0) > 0 || value === o.value)
+                  // Nothing evaluated yet (or nothing to pick): no empty select.
+                  if (options.length === 0) return null
+                  return (
+                    <section key={section.key} className="space-y-1.5">
+                      <div className="text-xs font-semibold text-foreground/70">{section.title}</div>
+                      <select
+                        value={value}
+                        onChange={(event) => evaluation.onChange(section.key, event.target.value)}
+                        className="h-8 w-full rounded-md border border-input bg-background px-3 py-1 text-xs"
+                        aria-label={`Filter by ${section.title.toLowerCase()}`}
+                      >
+                        <option value="all">{section.any}</option>
+                        {options.map((o) => (
+                          <option key={o.value} value={o.value}>{o.label} ({counts[o.value] ?? 0})</option>
+                        ))}
+                      </select>
+                    </section>
+                  )
+                })}
 
               {showIntegrity && (
                 <section className="space-y-1.5">

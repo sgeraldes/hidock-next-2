@@ -21,6 +21,20 @@ import {
   type IntegrityFilter
 } from '@/features/library/utils/transcriptIntegrity'
 import { AUDIO_FILTERS, isAudioFilter, matchesAudioFilter, type AudioFilter } from '@/features/library/utils/audioCheck'
+import {
+  CONTEXT_FILTERS,
+  KIND_FILTERS,
+  STARS_FILTERS,
+  WARNING_FILTERS,
+  isContextFilter,
+  isKindFilter,
+  isStarsFilter,
+  isWarningFilter,
+  matchesContextFilter,
+  matchesKindFilter,
+  matchesStarsFilter,
+  matchesWarningFilter
+} from '@/features/library/utils/evaluation'
 
 /** Sources with no recording behind them (captures, notes, artifacts) have no audio to check. */
 const isAudioless = (rec: { sourceKind?: string }) => !!rec.sourceKind && rec.sourceKind !== 'recording'
@@ -288,6 +302,17 @@ export function Library() {
   const setAudioFilter = useLibraryStore((state) => state.setAudioFilter)
   const audioFilter: AudioFilter | null =
     typeof storedAudioFilter === 'string' && isAudioFilter(storedAudioFilter) ? storedAudioFilter : null
+  // Jev evaluation filters. A stored value the current vocabulary no longer
+  // knows reads as off, like the audio filter.
+  const setEvaluationFilter = useLibraryStore((state) => state.setEvaluationFilter)
+  const storedKind = useLibraryStore((state) => state.kindFilter)
+  const storedContext = useLibraryStore((state) => state.contextFilter)
+  const storedStars = useLibraryStore((state) => state.starsFilter)
+  const storedWarning = useLibraryStore((state) => state.warningFilter)
+  const kindFilter = typeof storedKind === 'string' && isKindFilter(storedKind) ? storedKind : null
+  const contextFilter = typeof storedContext === 'string' && isContextFilter(storedContext) ? storedContext : null
+  const starsFilter = typeof storedStars === 'string' && isStarsFilter(storedStars) ? storedStars : null
+  const warningFilter = typeof storedWarning === 'string' && isWarningFilter(storedWarning) ? storedWarning : null
   const storedIntegrityFilter = useLibraryStore((state) => state.integrityFilter)
   const setIntegrityFilter = useLibraryStore((state) => state.setIntegrityFilter)
   // Persisted state from an older build may hold nothing or an unknown value.
@@ -860,9 +885,13 @@ export function Library() {
       if (integrityFilter !== null && !matchesIntegrityFilter(transcripts.get(rec.id), integrityFilter)) return false
       // Only recordings have audio to check; the counts leave the rest out too.
       if (audioFilter !== null && (isAudioless(rec) || !matchesAudioFilter(rec.audioCategory, audioFilter))) return false
+      if (kindFilter !== null && (isAudioless(rec) || !matchesKindFilter(rec, kindFilter))) return false
+      if (contextFilter !== null && !matchesContextFilter(rec, contextFilter)) return false
+      if (starsFilter !== null && !matchesStarsFilter(rec, starsFilter)) return false
+      if (warningFilter !== null && !matchesWarningFilter(rec, warningFilter)) return false
       return true
     })
-  }, [baseRecordings, artifactTypes, sourceTypeFilter, durationPreset, categoryFilter, qualityFilter, statusFilter, integrityFilter, audioFilter, transcripts])
+  }, [baseRecordings, artifactTypes, sourceTypeFilter, durationPreset, categoryFilter, qualityFilter, statusFilter, integrityFilter, audioFilter, kindFilter, contextFilter, starsFilter, warningFilter, transcripts])
 
   // How many recordings each Audio-filter value matches. Only audio sources
   // have a category; everything else is left out rather than counted unchecked.
@@ -871,6 +900,21 @@ export function Library() {
     for (const rec of baseRecordings) {
       if (isAudioless(rec)) continue
       for (const f of AUDIO_FILTERS) if (matchesAudioFilter(rec.audioCategory, f.value)) counts[f.value]++
+    }
+    return counts
+  }, [baseRecordings])
+
+  // How many recordings each evaluation-filter value matches (audio sources only).
+  const evaluationCounts = useMemo(() => {
+    const counts: Record<'kind' | 'context' | 'stars' | 'warning', Record<string, number>> = {
+      kind: {}, context: {}, stars: {}, warning: {}
+    }
+    for (const rec of baseRecordings) {
+      if (isAudioless(rec)) continue
+      for (const f of KIND_FILTERS) if (matchesKindFilter(rec, f.value)) counts.kind[f.value] = (counts.kind[f.value] ?? 0) + 1
+      for (const f of CONTEXT_FILTERS) if (matchesContextFilter(rec, f.value)) counts.context[f.value] = (counts.context[f.value] ?? 0) + 1
+      for (const f of STARS_FILTERS) if (matchesStarsFilter(rec, f.value)) counts.stars[f.value] = (counts.stars[f.value] ?? 0) + 1
+      for (const f of WARNING_FILTERS) if (matchesWarningFilter(rec, f.value)) counts.warning[f.value] = (counts.warning[f.value] ?? 0) + 1
     }
     return counts
   }, [baseRecordings])
@@ -2476,6 +2520,14 @@ export function Library() {
               audioFilter={audioFilter ?? 'all'}
               audioCounts={audioCounts}
               onAudioFilterChange={(filter) => setAudioFilter(filter === 'all' ? null : filter)}
+              evaluation={{
+                kind: kindFilter ?? 'all',
+                context: contextFilter ?? 'all',
+                stars: starsFilter ?? 'all',
+                warning: warningFilter ?? 'all',
+                counts: evaluationCounts,
+                onChange: (key, value) => setEvaluationFilter(`${key}Filter`, value === 'all' ? null : value)
+              }}
             />
             {integrityFilter !== null && integrityFilter !== 'accepted' && filteredRecordings.length > 0 && (
               <div className="mt-2 flex flex-wrap items-center gap-2 text-xs" data-testid="integrity-bulk-bar">

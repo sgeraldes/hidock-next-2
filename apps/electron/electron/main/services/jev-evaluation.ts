@@ -251,15 +251,25 @@ export function evaluationToValue(ev: RecordingEvaluation): {
 
 export type AudioTranscriptWarning = 'possible_invented_transcript' | 'possible_missed_transcription'
 
-/** Thresholds for the audio-versus-transcript warning (owner, 28-sep-2026). */
+/**
+ * Thresholds for the audio-versus-transcript warning (owner, 28-sep-2026).
+ *
+ * Tuned on the first full pass (2,043 recordings, 28-sep): judging "quiet" by
+ * absolute seconds of sound flagged real short clips (a 33 s clip with 24 s of
+ * sound), and judging the speaking rate against the seconds of sound flagged
+ * long quiet meetings, because the loudness line undercounts soft speech (a
+ * 58-minute workshop at 322 words per minute of "sound", 179 per minute of
+ * recording). Both are now measured against the whole recording.
+ */
 export const WARNING_RULES = {
-  /** Under this many seconds of sound in the whole file, a real transcript cannot be long. */
-  quietSoundSeconds: 30,
+  /** Under this share of the file holding sound (in a file at least this long), a real transcript cannot be long. */
+  quietSoundShare: 0.05,
+  quietMinDurationSeconds: 60,
   /** A transcript this long, or rated this well, is "plenty of meaning". */
   meaningfulWords: 100,
   meaningfulStars: 3,
-  /** Faster than anyone talks: text that cannot have come from the sound there is. */
-  maxWordsPerMinuteOfSound: 250,
+  /** Faster than anyone talks over the whole recording: text that cannot have come from its audio. */
+  maxWordsPerMinuteOfRecording: 250,
   /** This much sound with almost no words: the transcription likely missed it. */
   busySoundSeconds: 300,
   minWordsPerMinuteOfSound: 20
@@ -281,14 +291,21 @@ export function audioTranscriptWarning(
   if (!audio) return null
   const words = audio.transcript_words ?? 0
   const sound = audio.sound_seconds
+  const duration = audio.duration_seconds
   const quiet =
     audio.audio_category === 'silent' ||
     audio.audio_category === 'noise' ||
-    (sound !== null && sound < WARNING_RULES.quietSoundSeconds)
+    (audio.sound_share !== null &&
+      audio.sound_share < WARNING_RULES.quietSoundShare &&
+      (duration ?? 0) >= WARNING_RULES.quietMinDurationSeconds)
   const meaningful = words >= WARNING_RULES.meaningfulWords || (starLevel ?? 0) >= WARNING_RULES.meaningfulStars
   if (quiet && meaningful) return 'possible_invented_transcript'
-  const wpm = audio.words_per_minute_of_sound
-  if (wpm !== null && words >= WARNING_RULES.meaningfulWords && wpm > WARNING_RULES.maxWordsPerMinuteOfSound) {
+  if (
+    duration !== null &&
+    duration > 0 &&
+    words >= WARNING_RULES.meaningfulWords &&
+    words / (duration / 60) > WARNING_RULES.maxWordsPerMinuteOfRecording
+  ) {
     return 'possible_invented_transcript'
   }
   if (

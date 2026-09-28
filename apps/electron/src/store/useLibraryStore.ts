@@ -63,6 +63,11 @@ interface LibraryState {
   integrityFilter: string | null
   /** Audio check filter; see audioCheck.ts for the values. */
   audioFilter: string | null
+  /** Jev evaluation filters; see evaluation.ts for the values. */
+  kindFilter: string | null
+  contextFilter: string | null
+  starsFilter: string | null
+  warningFilter: string | null
   statusFilter: string | null
   sourceTypeFilter: SourceTypeFilter
   durationPreset: DurationPreset
@@ -154,6 +159,7 @@ interface LibraryActions {
   setQualityFilter: (filter: string | null) => void
   setIntegrityFilter: (filter: string | null) => void
   setAudioFilter: (filter: string | null) => void
+  setEvaluationFilter: (key: 'kindFilter' | 'contextFilter' | 'starsFilter' | 'warningFilter', filter: string | null) => void
   setStatusFilter: (filter: string | null) => void
   setSourceTypeFilter: (filter: SourceTypeFilter) => void
   setDurationPreset: (preset: DurationPreset) => void
@@ -220,6 +226,10 @@ const initialState: LibraryState = {
   qualityFilter: null,
   integrityFilter: null,
   audioFilter: null,
+  kindFilter: null,
+  contextFilter: null,
+  starsFilter: null,
+  warningFilter: null,
   statusFilter: null,
   sourceTypeFilter: 'all',
   durationPreset: 'all',
@@ -265,6 +275,7 @@ export const useLibraryStore = create<LibraryStore>()(
       setQualityFilter: (filter) => set({ qualityFilter: filter }),
       setIntegrityFilter: (filter) => set({ integrityFilter: filter }),
       setAudioFilter: (filter) => set({ audioFilter: filter }),
+      setEvaluationFilter: (key, filter) => set({ [key]: filter } as Partial<LibraryState>),
       setStatusFilter: (filter) => set({ statusFilter: filter }),
       setSourceTypeFilter: (filter) => set({ sourceTypeFilter: filter }),
       setDurationPreset: (preset) => set({ durationPreset: preset }),
@@ -278,6 +289,10 @@ export const useLibraryStore = create<LibraryStore>()(
           qualityFilter: null,
           integrityFilter: null,
           audioFilter: null,
+          kindFilter: null,
+          contextFilter: null,
+          starsFilter: null,
+          warningFilter: null,
           statusFilter: null,
           sourceTypeFilter: 'all',
           durationPreset: 'all',
@@ -466,6 +481,10 @@ export const useLibraryStore = create<LibraryStore>()(
         qualityFilter: state.qualityFilter,
         integrityFilter: state.integrityFilter,
         audioFilter: state.audioFilter,
+        kindFilter: state.kindFilter,
+        contextFilter: state.contextFilter,
+        starsFilter: state.starsFilter,
+        warningFilter: state.warningFilter,
         statusFilter: state.statusFilter,
         sourceTypeFilter: state.sourceTypeFilter,
         durationPreset: state.durationPreset,

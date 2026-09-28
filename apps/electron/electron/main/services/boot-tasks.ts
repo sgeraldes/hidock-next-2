@@ -115,6 +115,21 @@ export const BOOT_TASK_DEFS: GatedBootTask[] = [
     },
   },
   {
+    // Jev evaluation warnings (v61): recompute the audio-versus-transcript
+    // warning from stored numbers, so a rule change or a new audio profile shows
+    // in the Library without a new scan. Local only, about 2,000 rows.
+    name: 'evaluation-warning-refresh',
+    feature: null,
+    run: async () => {
+      await import('./value-classification')
+        .then(({ recomputeAudioWarnings }) => {
+          const changed = recomputeAudioWarnings()
+          if (changed > 0) console.log(`[Evaluation] recomputed ${changed} audio-versus-transcript warnings`)
+        })
+        .catch((e) => console.error('[Evaluation] warning refresh error:', e))
+    },
+  },
+  {
     name: 'meeting-wiki-backfill',
     feature: 'meeting-intelligence',
     run: async () => {

@@ -1,4 +1,5 @@
 import { useEffect, useCallback, useMemo, useRef } from 'react'
+import type { EvaluationFields } from '@/features/library/utils/evaluation'
 import { getHiDockDeviceService, HiDockRecording } from '@/services/hidock-device'
 import { useAppStore } from '@/store/useAppStore'
 import {
@@ -49,6 +50,12 @@ export interface DatabaseRecording {
   /** Audio check (v59), joined from audio_profiles; null until checked. */
   audio_category?: 'too_short' | 'silent' | 'noise' | 'speech' | null
   audio_sound_seconds?: number | null
+  /** Jev evaluation (v61), joined from recording_evaluations; null until evaluated. */
+  eval_star_level?: number | null
+  eval_kind?: string | null
+  eval_context?: string | null
+  eval_audio_warning?: string | null
+  eval_transcript_invented?: number | null
   // FL-001: transcription_status is the authoritative column; status is the legacy fallback
   transcription_status?: string
   status: string
@@ -187,6 +194,18 @@ function findMatchByDateTime(
 }
 
 // Build unified recordings from multiple sources
+/** The Jev evaluation columns of a database row, as UnifiedRecording fields. */
+export function evaluationFields(dbRec: DatabaseRecording | undefined): EvaluationFields {
+  if (!dbRec) return {}
+  return {
+    evalStarLevel: dbRec.eval_star_level ?? undefined,
+    evalKind: (dbRec.eval_kind ?? undefined) as EvaluationFields['evalKind'],
+    evalContext: (dbRec.eval_context ?? undefined) as EvaluationFields['evalContext'],
+    evalAudioWarning: (dbRec.eval_audio_warning ?? undefined) as EvaluationFields['evalAudioWarning'],
+    evalTranscriptInvented: dbRec.eval_transcript_invented ?? undefined
+  }
+}
+
 export function buildRecordingMap(
   deviceRecs: HiDockRecording[],
   dbRecs: DatabaseRecording[],
@@ -297,6 +316,7 @@ export function buildRecordingMap(
         meetingSubject: dbRec?.meeting_subject,
         audioCategory: dbRec?.audio_category ?? undefined,
         audioSoundSeconds: dbRec?.audio_sound_seconds ?? undefined,
+        ...evaluationFields(dbRec),
         sourceKind: 'recording',
         knowledgeCaptureId: capture?.id,
         userTitle: capture?.userTitle || undefined,
@@ -389,6 +409,7 @@ export function buildRecordingMap(
         meetingSubject: dbRec.meeting_subject,
         audioCategory: dbRec.audio_category ?? undefined,
         audioSoundSeconds: dbRec.audio_sound_seconds ?? undefined,
+        ...evaluationFields(dbRec),
         // CX-T5-3: explicit — this is a REAL recordings-table row even when its
         // nullable file_path is empty (the old path inference misread that as
         // capture-only and stripped its deletion/restore affordances).
