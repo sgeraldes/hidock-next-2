@@ -1,6 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, useDeferredValue } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useVirtualizer } from '@tanstack/react-virtual'
+import { dateGroupLabel } from '@/features/library/utils/dateGroups'
 import { RefreshCw, AlertCircle, EyeOff, Trash2 } from 'lucide-react'
 import { toast } from '@/components/ui/toaster'
 import { Button } from '@/components/ui/button'
@@ -2306,6 +2307,11 @@ export function Library() {
   // "fixed" it the same way implicitly — this makes it automatic.
   const prevItemIdsRef = useRef<string[]>([])
   const firstVisibleIndexRef = useRef(0)
+  // The date group of the topmost visible row, shown pinned above the list
+  // (Today, Yesterday, This week, the month). Only a change of group re-renders.
+  const [topDateGroup, setTopDateGroup] = useState<string | null>(null)
+  const displayedRecordingsRef = useRef(displayedRecordings)
+  displayedRecordingsRef.current = displayedRecordings
 
   // Keep the topmost VISIBLE row's index current. getVirtualItems() includes
   // overscan rows above the viewport, so items[0] is not a valid scroll anchor.
@@ -2317,6 +2323,8 @@ export function Library() {
         (item) => item.start + item.size > el.scrollTop
       )
       if (firstVisible) firstVisibleIndexRef.current = firstVisible.index
+      const top = displayedRecordingsRef.current[firstVisible?.index ?? 0]
+      setTopDateGroup(dateGroupLabel(top?.dateRecorded ?? null))
     }
     onScroll()
     el.addEventListener('scroll', onScroll, { passive: true })
@@ -2700,6 +2708,19 @@ export function Library() {
               aria-label="Recording list navigation. Use arrow keys to navigate, Space to select, Enter to open."
               data-testid="library-list"
             >
+        {/* Pinned date group. The negative bottom margin cancels its own height,
+            so it overlays the list without moving any row (rows are fixed 48 px). */}
+        {!showTrash && sortBy === 'date' && displayedRecordings.length > 0 && topDateGroup && (
+          <div
+            className="pointer-events-none sticky top-0 z-10 -mb-6 flex h-6 items-center px-3"
+            data-testid="library-date-group"
+            aria-hidden="true"
+          >
+            <span className="rounded bg-background/90 px-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground shadow-sm">
+              {topDateGroup}
+            </span>
+          </div>
+        )}
         {/* min-w-0 so the list content always shrinks to the pane width and NEVER
             scrolls horizontally — rows truncate instead. The pane itself has a
             sensible minimum (TriPaneLayout) so the title/date can't be starved. */}

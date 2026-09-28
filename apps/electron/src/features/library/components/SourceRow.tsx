@@ -10,7 +10,7 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
-import { formatDateTime } from '@/lib/utils'
+import { cn, formatDateTime } from '@/lib/utils'
 import { Meeting, Transcript } from '@/types'
 import type { QualityRating } from '@/types/knowledge'
 import { UnifiedRecording, hasLocalPath, isRecordingBacked } from '@/types/unified-recording'
@@ -414,7 +414,7 @@ export const SourceRow = memo(function SourceRow({
           // select-none: shift+click (range select) must not start the browser's
           // native TEXT selection — the list behaves like a file explorer, not
           // a text document (2026-07-21 report).
-          `@container flex ${compact ? 'h-12 items-center' : 'items-start'} justify-between gap-2 ${compact ? 'py-1.5' : 'py-2.5'} px-3 ${isDeleting ? 'cursor-wait' : 'cursor-pointer'} select-none`,
+          `group @container flex ${compact ? 'h-12 items-center' : 'items-start'} justify-between gap-2 ${compact ? 'py-1.5' : 'py-2.5'} px-3 ${isDeleting ? 'cursor-wait' : 'cursor-pointer'} select-none`,
           'transition-[background-color,box-shadow] duration-150',
           // ONE visual system, ONE box (2026-07-22): background tints ONLY —
           // no outline rings. The wrapper owns separators (border-t); outline
@@ -650,6 +650,11 @@ export const SourceRow = memo(function SourceRow({
                       onPointerDown={(e) => e.stopPropagation()}
                       onClick={(e) => e.stopPropagation()}
                       aria-label="More actions"
+                      // Shown on hover, focus or while open; it keeps its place either way (Kiro Crew rows).
+                      className={cn(
+                        'opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100',
+                        isSelected && 'opacity-100'
+                      )}
                     >
                       <MoreHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
                     </Button>
