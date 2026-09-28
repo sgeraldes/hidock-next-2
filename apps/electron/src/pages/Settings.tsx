@@ -37,6 +37,17 @@ import { useFeatureEnabled } from '@/store/useFeatureStore'
 import { toast } from '@/components/ui/toaster'
 import { LEGACY_GRAPH_DISCLOSURE } from '@/features/library/utils/deletionCopy'
 import type { StorageInfo, AppConfig } from '@/types'
+import { SettingsNav } from '@/features/settings/SettingsNav'
+import { OverviewSection } from '@/features/settings/OverviewSection'
+import { AboutSection } from '@/features/settings/AboutSection'
+import {
+  DEFAULT_SETTINGS_SECTION,
+  getSettingsSection,
+  isSettingsSectionId,
+  sectionFromLegacyHash,
+  type SettingsSectionId
+} from '@/features/settings/sections'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 
 // RAG configuration constants — MAX_CONTEXT_CHUNKS must match config.ts default (10)
 const RAG_DEFAULTS = {
@@ -79,7 +90,15 @@ const TRANSCRIPTION_PROVIDERS = [
   }
 ] as const
 
-export function Settings() {
+export function Settings({
+  section,
+  onSectionChange
+}: {
+  /** The page to show. Without one the whole list renders with no menu (tests, old links). */
+  section?: SettingsSectionId
+  onSectionChange?: (id: SettingsSectionId) => void
+} = {}) {
+  const show = (id: SettingsSectionId) => !section || section === id
   // Voice recognition is part of transcription; with it off, its channels are closed.
   const transcriptionEnabled = useFeatureEnabled('transcription')
   // SM-09 fix: Use granular selectors
@@ -792,941 +811,1040 @@ export function Settings() {
     )
   }
 
-  return (
-    <div className="flex flex-col h-full">
-      <header className="border-b px-6 py-4">
-        <h1 className="text-2xl font-bold">Settings</h1>
-      </header>
+  const activeSection = section ? getSettingsSection(section) : null
 
+  const pageBody = (
       <div className="flex-1 overflow-auto p-6">
-        <div className="max-w-2xl mx-auto space-y-6">
-          {/* Modular features (Track I) — preset selector. The `features` anchor is
-              the deep-link target of FeatureDisabledPage's "Enable in Settings". */}
-          <div id="features">
-            <FeaturesSettings />
-          </div>
+        <div className={cn('mx-auto space-y-6', activeSection ? 'max-w-3xl' : 'max-w-2xl')}>
+          {activeSection && (
+            <header className="space-y-1">
+              <h2 className="text-2xl font-semibold">{activeSection.label}</h2>
+              <p className="text-sm text-muted-foreground">{activeSection.description}</p>
+            </header>
+          )}
 
-          {/* Assistant — Chat Placement */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Assistant</CardTitle>
-              <CardDescription>Choose how the AI assistant appears while you work</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-5">
-              {/* Placement: Floating (bubble) vs Embedded (docked pane) */}
-              <div className="space-y-2">
-                <span className="text-sm font-medium">Chat placement</span>
-                <div
-                  role="group"
-                  aria-label="Chat placement"
-                  className="inline-flex rounded-lg border border-input bg-muted/40 p-0.5"
-                >
-                  <button
-                    type="button"
-                    aria-pressed={chatPlacement === 'floating'}
-                    onClick={() => setChatPlacement('floating')}
-                    className={cn(
-                      'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                      chatPlacement === 'floating'
-                        ? 'bg-background font-medium text-foreground shadow-sm'
-                        : 'text-muted-foreground hover:text-foreground'
-                    )}
-                  >
-                    <MessageSquare className="h-4 w-4" aria-hidden="true" />
-                    Floating
-                  </button>
-                  <button
-                    type="button"
-                    aria-pressed={chatPlacement === 'embedded'}
-                    onClick={() => setChatPlacement('embedded')}
-                    className={cn(
-                      'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                      chatPlacement === 'embedded'
-                        ? 'bg-background font-medium text-foreground shadow-sm'
-                        : 'text-muted-foreground hover:text-foreground'
-                    )}
-                  >
-                    <PanelRightOpen className="h-4 w-4" aria-hidden="true" />
-                    Embedded
-                  </button>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  {chatPlacement === 'floating'
-                    ? 'A chat bubble floats over the app; click it to open the assistant. Pin it to embed it as a docked pane.'
-                    : 'The assistant is docked as a pane in the Library, collapsible to a side rail. Unpin it to float.'}
-                </p>
-              </div>
+          {section === 'overview' && <OverviewSection storageInfo={storageInfo} onNavigate={(id) => onSectionChange?.(id)} />}
+          {section === 'about' && <AboutSection storageInfo={storageInfo} />}
 
-              {/* Position: Left / Right edge */}
-              <div className="space-y-2">
-                <span className="text-sm font-medium">Position</span>
-                <div
-                  role="group"
-                  aria-label="Chat position"
-                  className="inline-flex rounded-lg border border-input bg-muted/40 p-0.5"
-                >
-                  <button
-                    type="button"
-                    aria-pressed={chatPosition === 'left'}
-                    onClick={() => setChatPosition('left')}
-                    className={cn(
-                      'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                      chatPosition === 'left'
-                        ? 'bg-background font-medium text-foreground shadow-sm'
-                        : 'text-muted-foreground hover:text-foreground'
-                    )}
-                  >
-                    <PanelLeft className="h-4 w-4" aria-hidden="true" />
-                    Left
-                  </button>
-                  <button
-                    type="button"
-                    aria-pressed={chatPosition === 'right'}
-                    onClick={() => setChatPosition('right')}
-                    className={cn(
-                      'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                      chatPosition === 'right'
-                        ? 'bg-background font-medium text-foreground shadow-sm'
-                        : 'text-muted-foreground hover:text-foreground'
-                    )}
-                  >
-                    <PanelRight className="h-4 w-4" aria-hidden="true" />
-                    Right
-                  </button>
-                </div>
-                <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
-                  Sets the bubble corner and the docked pane&apos;s edge.
-                </p>
-              </div>
-            </CardContent>
-          </Card>
+          {show('features') && (
+            <>
+            {/* Modular features (Track I) — preset selector. The `features` anchor is
+                the deep-link target of FeatureDisabledPage's "Enable in Settings". */}
+            <div id="features">
+              <FeaturesSettings />
+            </div>
+            </>
+          )}
 
-          {/* Calendar Settings */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Calendar</CardTitle>
-              <CardDescription>Configure calendar sync from Outlook</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div>
-                <label htmlFor="icsUrl" className="text-sm font-medium">ICS Calendar URL</label>
-                <Input
-                  id="icsUrl"
-                  type="url"
-                  placeholder="https://outlook.office365.com/owa/calendar/.../calendar.ics"
-                  value={icsUrl}
-                  onChange={(e) => setIcsUrl(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleSaveCalendar()}
-                  disabled={saving}
-                  aria-label="ICS Calendar URL"
-                  aria-describedby="icsUrl-description"
-                  className="mt-1"
-                />
-                <p id="icsUrl-description" className="text-xs text-muted-foreground mt-1">
-                  Publish your Outlook calendar and paste the ICS link here
-                </p>
-              </div>
-
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    id="syncEnabled"
-                    checked={syncEnabled}
-                    onChange={(e) => setSyncEnabled(e.target.checked)}
-                    disabled={saving}
-                    aria-label="Enable auto-sync"
-                    className="rounded"
-                  />
-                  <label htmlFor="syncEnabled" className="text-sm">
-                    Auto-sync enabled
-                  </label>
+          {show('assistant') && (
+            <>
+            {/* Assistant — Chat Placement */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Assistant</CardTitle>
+                <CardDescription>Choose how the AI assistant appears while you work</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-5">
+                {/* Placement: Floating (bubble) vs Embedded (docked pane) */}
+                <div className="space-y-2">
+                  <span className="text-sm font-medium">Chat placement</span>
+                  <div
+                    role="group"
+                    aria-label="Chat placement"
+                    className="inline-flex rounded-lg border border-input bg-muted/40 p-0.5"
+                  >
+                    <button
+                      type="button"
+                      aria-pressed={chatPlacement === 'floating'}
+                      onClick={() => setChatPlacement('floating')}
+                      className={cn(
+                        'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                        chatPlacement === 'floating'
+                          ? 'bg-background font-medium text-foreground shadow-sm'
+                          : 'text-muted-foreground hover:text-foreground'
+                      )}
+                    >
+                      <MessageSquare className="h-4 w-4" aria-hidden="true" />
+                      Floating
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={chatPlacement === 'embedded'}
+                      onClick={() => setChatPlacement('embedded')}
+                      className={cn(
+                        'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                        chatPlacement === 'embedded'
+                          ? 'bg-background font-medium text-foreground shadow-sm'
+                          : 'text-muted-foreground hover:text-foreground'
+                      )}
+                    >
+                      <PanelRightOpen className="h-4 w-4" aria-hidden="true" />
+                      Embedded
+                    </button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {chatPlacement === 'floating'
+                      ? 'A chat bubble floats over the app; click it to open the assistant. Pin it to embed it as a docked pane.'
+                      : 'The assistant is docked as a pane in the Library, collapsible to a side rail. Unpin it to float.'}
+                  </p>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  <label htmlFor="syncInterval" className="text-sm">Every</label>
+                {/* Position: Left / Right edge */}
+                <div className="space-y-2">
+                  <span className="text-sm font-medium">Position</span>
+                  <div
+                    role="group"
+                    aria-label="Chat position"
+                    className="inline-flex rounded-lg border border-input bg-muted/40 p-0.5"
+                  >
+                    <button
+                      type="button"
+                      aria-pressed={chatPosition === 'left'}
+                      onClick={() => setChatPosition('left')}
+                      className={cn(
+                        'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                        chatPosition === 'left'
+                          ? 'bg-background font-medium text-foreground shadow-sm'
+                          : 'text-muted-foreground hover:text-foreground'
+                      )}
+                    >
+                      <PanelLeft className="h-4 w-4" aria-hidden="true" />
+                      Left
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={chatPosition === 'right'}
+                      onClick={() => setChatPosition('right')}
+                      className={cn(
+                        'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                        chatPosition === 'right'
+                          ? 'bg-background font-medium text-foreground shadow-sm'
+                          : 'text-muted-foreground hover:text-foreground'
+                      )}
+                    >
+                      <PanelRight className="h-4 w-4" aria-hidden="true" />
+                      Right
+                    </button>
+                  </div>
+                  <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                    Sets the bubble corner and the docked pane&apos;s edge.
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+            </>
+          )}
+
+          {show('calendar') && (
+            <>
+            {/* Calendar Settings */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Calendar</CardTitle>
+                <CardDescription>Configure calendar sync from Outlook</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div>
+                  <label htmlFor="icsUrl" className="text-sm font-medium">ICS Calendar URL</label>
                   <Input
-                    id="syncInterval"
-                    type="number"
-                    min={5}
-                    max={120}
-                    value={syncInterval}
-                    onChange={(e) => {
-                      const val = parseInt(e.target.value)
-                      if (isNaN(val)) return
-                      // Clamp to valid range
-                      setSyncInterval(Math.min(120, Math.max(5, val)))
-                    }}
+                    id="icsUrl"
+                    type="url"
+                    placeholder="https://outlook.office365.com/owa/calendar/.../calendar.ics"
+                    value={icsUrl}
+                    onChange={(e) => setIcsUrl(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleSaveCalendar()}
                     disabled={saving}
-                    aria-label="Sync interval in minutes"
-                    className="w-20"
+                    aria-label="ICS Calendar URL"
+                    aria-describedby="icsUrl-description"
+                    className="mt-1"
                   />
-                  <span className="text-sm">minutes</span>
+                  <p id="icsUrl-description" className="text-xs text-muted-foreground mt-1">
+                    Publish your Outlook calendar and paste the ICS link here
+                  </p>
                 </div>
-              </div>
 
-              <div className="flex items-center gap-2">
-                <Button
-                  onClick={handleSaveCalendar}
-                  disabled={saving || !isCalendarDirty}
-                  aria-label="Save calendar settings"
-                >
-                  <Save className="h-4 w-4 mr-2" aria-hidden="true" />
-                  {isCalendarDirty ? 'Save' : 'Saved'}
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => syncCalendar('manual')}
-                  disabled={calendarManualSyncing || saving}
-                  aria-label="Sync calendar now"
-                >
-                  <RefreshCw className={`h-4 w-4 mr-2 ${calendarSyncing ? 'animate-spin' : ''}`} aria-hidden="true" />
-                  Sync Now
-                </Button>
-                {config?.calendar.lastSyncAt && (
-                  <span className="text-xs text-muted-foreground ml-2">
-                    Last synced: {new Date(config.calendar.lastSyncAt).toLocaleString()}
-                  </span>
-                )}
-              </div>
-            </CardContent>
-          </Card>
+                <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="syncEnabled"
+                      checked={syncEnabled}
+                      onChange={(e) => setSyncEnabled(e.target.checked)}
+                      disabled={saving}
+                      aria-label="Enable auto-sync"
+                      className="rounded"
+                    />
+                    <label htmlFor="syncEnabled" className="text-sm">
+                      Auto-sync enabled
+                    </label>
+                  </div>
 
-          {/* Connectors (Layer 2): external-system integrations */}
-          <ConnectorsSettings />
+                  <div className="flex items-center gap-2">
+                    <label htmlFor="syncInterval" className="text-sm">Every</label>
+                    <Input
+                      id="syncInterval"
+                      type="number"
+                      min={5}
+                      max={120}
+                      value={syncInterval}
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value)
+                        if (isNaN(val)) return
+                        // Clamp to valid range
+                        setSyncInterval(Math.min(120, Math.max(5, val)))
+                      }}
+                      onKeyDown={(e) => e.key === 'Enter' && handleSaveCalendar()}
+                      disabled={saving}
+                      aria-label="Sync interval in minutes"
+                      className="w-20"
+                    />
+                    <span className="text-sm">minutes</span>
+                  </div>
+                </div>
 
-          {/* AI Brains (H10): pick which AI provider powers analysis/chat/outputs */}
-          <AIBrainsSettings />
-
-          {/* Transcription Settings */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Transcription</CardTitle>
-              <CardDescription>Choose cloud Gemini or local ASR for meeting transcripts</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div>
-                <label htmlFor="transcriptionProvider" className="text-sm font-medium">Provider in use</label>
-                <select
-                  id="transcriptionProvider"
-                  value={transcriptionProvider}
-                  onChange={(e) => setTranscriptionProvider(e.target.value as typeof transcriptionProvider)}
-                  disabled={saving}
-                  aria-describedby="transcriptionProvider-description"
-                  className="mt-1 w-full max-w-sm rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-                >
-                  {TRANSCRIPTION_PROVIDERS.map((provider) => (
-                    <option key={provider.value} value={provider.value}>
-                      {provider.label}
-                    </option>
-                  ))}
-                </select>
-                <p id="transcriptionProvider-description" className="mt-1 text-xs text-muted-foreground">
-                  {TRANSCRIPTION_PROVIDERS.find((provider) => provider.value === transcriptionProvider)?.detail}
-                  {' '}Each provider keeps its settings below, whichever one is in use.
-                </p>
-              </div>
-
-              <section aria-labelledby="gemini-settings-heading" className="space-y-4 rounded-xl border border-border p-4">
-                <h3 id="gemini-settings-heading" className="flex items-center gap-2 text-sm font-semibold">
-                  Gemini
-                  {transcriptionProvider === 'gemini' && (
-                    <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-medium text-primary">In use</span>
+                <div className="flex items-center gap-2">
+                  <Button
+                    onClick={handleSaveCalendar}
+                    disabled={saving || !isCalendarDirty}
+                    aria-label="Save calendar settings"
+                  >
+                    <Save className="h-4 w-4 mr-2" aria-hidden="true" />
+                    {isCalendarDirty ? 'Save' : 'Saved'}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => syncCalendar('manual')}
+                    disabled={calendarManualSyncing || saving}
+                    aria-label="Sync calendar now"
+                  >
+                    <RefreshCw className={`h-4 w-4 mr-2 ${calendarSyncing ? 'animate-spin' : ''}`} aria-hidden="true" />
+                    Sync Now
+                  </Button>
+                  {config?.calendar.lastSyncAt && (
+                    <span className="text-xs text-muted-foreground ml-2">
+                      Last synced: {new Date(config.calendar.lastSyncAt).toLocaleString()}
+                    </span>
                   )}
-                </h3>
-                  <div>
-                    <label htmlFor="geminiApiKey" className="text-sm font-medium">Gemini API Key</label>
-                    <div className="relative mt-1">
-                      <Input
-                        id="geminiApiKey"
-                        type={showApiKey ? 'text' : 'password'}
-                        placeholder="Enter your Gemini API key"
-                        value={geminiApiKey}
-                        onChange={(e) => setGeminiApiKey(e.target.value)}
+                </div>
+              </CardContent>
+            </Card>
+            </>
+          )}
+
+          {show('connectors') && (
+            <>
+            {/* Connectors (Layer 2): external-system integrations */}
+            <ConnectorsSettings />
+            </>
+          )}
+
+          {show('ai-providers') && (
+            <>
+            {/* AI Brains (H10): pick which AI provider powers analysis/chat/outputs */}
+            <AIBrainsSettings />
+            </>
+          )}
+
+          {show('transcription') && (
+            <>
+            {/* Transcription Settings */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Transcription</CardTitle>
+                <CardDescription>Choose cloud Gemini or local ASR for meeting transcripts</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div>
+                  <label htmlFor="transcriptionProvider" className="text-sm font-medium">Provider in use</label>
+                  <select
+                    id="transcriptionProvider"
+                    value={transcriptionProvider}
+                    onChange={(e) => setTranscriptionProvider(e.target.value as typeof transcriptionProvider)}
+                    disabled={saving}
+                    aria-describedby="transcriptionProvider-description"
+                    className="mt-1 w-full max-w-sm rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                  >
+                    {TRANSCRIPTION_PROVIDERS.map((provider) => (
+                      <option key={provider.value} value={provider.value}>
+                        {provider.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p id="transcriptionProvider-description" className="mt-1 text-xs text-muted-foreground">
+                    {TRANSCRIPTION_PROVIDERS.find((provider) => provider.value === transcriptionProvider)?.detail}
+                    {' '}Each provider keeps its settings below, whichever one is in use.
+                  </p>
+                </div>
+
+                <section aria-labelledby="gemini-settings-heading" className="space-y-4 rounded-xl border border-border p-4">
+                  <h3 id="gemini-settings-heading" className="flex items-center gap-2 text-sm font-semibold">
+                    Gemini
+                    {transcriptionProvider === 'gemini' && (
+                      <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-medium text-primary">In use</span>
+                    )}
+                  </h3>
+                    <div>
+                      <label htmlFor="geminiApiKey" className="text-sm font-medium">Gemini API Key</label>
+                      <div className="relative mt-1">
+                        <Input
+                          id="geminiApiKey"
+                          type={showApiKey ? 'text' : 'password'}
+                          placeholder="Enter your Gemini API key"
+                          value={geminiApiKey}
+                          onChange={(e) => setGeminiApiKey(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && handleSaveTranscription()}
+                          disabled={saving}
+                          aria-label="Gemini API Key"
+                          aria-describedby="geminiApiKey-description"
+                          className="pr-10"
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0"
+                          onClick={() => setShowApiKey(!showApiKey)}
+                          aria-label={showApiKey ? 'Hide API key' : 'Show API key'}
+                          tabIndex={-1}
+                        >
+                          {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </Button>
+                      </div>
+                      <p id="geminiApiKey-description" className="text-xs text-muted-foreground mt-1">
+                        Get your API key from{' '}
+                        <a
+                          href="https://aistudio.google.com/app/apikey"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-primary hover:underline"
+                        >
+                          Google AI Studio
+                        </a>
+                      </p>
+                    </div>
+
+                    <div>
+                      <label htmlFor="geminiModel" className="text-sm font-medium">Transcription Model</label>
+                      <select
+                        id="geminiModel"
+                        value={geminiModel}
+                        onChange={(e) => setGeminiModel(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && handleSaveTranscription()}
                         disabled={saving}
-                        aria-label="Gemini API Key"
-                        aria-describedby="geminiApiKey-description"
+                        aria-label="Transcription Model"
+                        aria-describedby="geminiModel-description"
+                        className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                      >
+                        {geminiModelOptions.map((model) => (
+                          <option key={model.value} value={model.value}>
+                            {model.label}
+                          </option>
+                        ))}
+                      </select>
+                      <p id="geminiModel-description" className="text-xs text-muted-foreground mt-1">
+                        {modelsLoading
+                          ? 'Loading available models…'
+                          : modelsLive
+                            ? 'Live list from your Gemini API key (audio-capable models only).'
+                            : 'Showing built-in defaults — add/verify your API key to load the live model list.'}
+                      </p>
+                    </div>
+                </section>
+
+                <section aria-labelledby="local-asr-settings-heading" className="space-y-4 rounded-xl border border-border p-4">
+                  <h3 id="local-asr-settings-heading" className="flex items-center gap-2 text-sm font-semibold">
+                    Local ASR and VibeVoice
+                    {(transcriptionProvider === 'local-asr' || transcriptionProvider === 'vibevoice') && (
+                      <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-medium text-primary">In use</span>
+                    )}
+                  </h3>
+                    <div>
+                      <label htmlFor="localAsrPath" className="text-sm font-medium">ASR MCP Path</label>
+                      <Input
+                        id="localAsrPath"
+                        value={localAsrPath}
+                        onChange={(e) => setLocalAsrPath(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleSaveTranscription()}
+                        disabled={saving}
+                        aria-label="ASR MCP project path"
+                        aria-describedby="localAsrPath-description"
+                        className="mt-1 font-mono text-xs"
+                      />
+                      <p id="localAsrPath-description" className="text-xs text-muted-foreground mt-1">
+                        Folder containing mcp_runner.py from the ASR MCP project
+                      </p>
+                    </div>
+
+                    <div>
+                      <label htmlFor="localAsrVocabularyFile" className="text-sm font-medium">Vocabulary File</label>
+                      <Input
+                        id="localAsrVocabularyFile"
+                        value={localAsrVocabularyFile}
+                        onChange={(e) => setLocalAsrVocabularyFile(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleSaveTranscription()}
+                        disabled={saving}
+                        aria-label="Local ASR vocabulary file"
+                        aria-describedby="localAsrVocabularyFile-description"
+                        className="mt-1 font-mono text-xs"
+                      />
+                      <p id="localAsrVocabularyFile-description" className="text-xs text-muted-foreground mt-1">
+                        Relative or absolute JSON correction file. Leave empty to disable corrections.
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          id="localAsrDiarize"
+                          checked={localAsrDiarize}
+                          onChange={(e) => setLocalAsrDiarize(e.target.checked)}
+                          disabled={saving}
+                          aria-label="Enable speaker diarization"
+                          className="rounded"
+                        />
+                        <label htmlFor="localAsrDiarize" className="text-sm">
+                          Speaker diarization
+                        </label>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <label htmlFor="localAsrNumBeams" className="text-sm">Beams</label>
+                        <Input
+                          id="localAsrNumBeams"
+                          type="number"
+                          min={1}
+                          max={10}
+                          value={localAsrNumBeams}
+                          onChange={(e) => {
+                            const val = parseInt(e.target.value, 10)
+                            if (!isNaN(val)) setLocalAsrNumBeams(Math.min(10, Math.max(1, val)))
+                          }}
+                          onKeyDown={(e) => e.key === 'Enter' && handleSaveTranscription()}
+                          disabled={saving}
+                          aria-label="Local ASR beam search width"
+                          className="w-20"
+                        />
+                      </div>
+                    </div>
+                </section>
+
+                {/*
+                  Live transcription speaker channel. The device sends two
+                  channels and the Live API does no diarization, so which channel
+                  is the microphone IS the speaker attribution. Nothing documents
+                  which one it is, so the app measures it on the first ten seconds
+                  of speech; this is the override for when that measurement is
+                  wrong or cannot separate the two. Saves on change — it is one
+                  value and it has no partner fields to stay consistent with.
+                */}
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium">Live microphone channel</p>
+                    <p className="text-xs text-muted-foreground">
+                      Which of the device&apos;s two channels is your microphone, used to label live
+                      turns as you or them. Measured automatically; pin it if the labels come out
+                      swapped.
+                    </p>
+                  </div>
+                  <Select
+                    value={liveMicChannelSetting}
+                    disabled={saving}
+                    onValueChange={async (value) => {
+                      try {
+                        // `null`, not `undefined`: saveConfig deep-merges and
+                        // skips undefined, so "auto" used to leave the old pin
+                        // in place and this control could only ever pin, never
+                        // release. Clearing the measured value too is what makes
+                        // it measure again instead of reusing a bad reading.
+                        await updateConfig('transcription', {
+                          liveMicChannel: value === 'auto' ? null : (Number(value) as 0 | 1),
+                          ...(value === 'auto' ? { liveMicChannelMeasured: null } : {}),
+                        })
+                        setLiveMicChannelSetting(value)
+                        toast.success('Saved', 'Applies to the next live session.')
+                      } catch (error) {
+                        toast.error('Could not save', String(error))
+                      }
+                    }}
+                  >
+                    <SelectTrigger className="w-56" aria-label="Live microphone channel">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="auto">Measure automatically</SelectItem>
+                      <SelectItem value="0">Left channel</SelectItem>
+                      <SelectItem value="1">Right channel</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <Button
+                  onClick={handleSaveTranscription}
+                  disabled={saving || !isTranscriptionDirty}
+                  aria-label="Save transcription settings"
+                >
+                  <Save className="h-4 w-4 mr-2" aria-hidden="true" />
+                  {isTranscriptionDirty ? 'Save' : 'Saved'}
+                </Button>
+              </CardContent>
+            </Card>
+            </>
+          )}
+
+          {show('speakers') && (
+            <>
+            {transcriptionEnabled && (
+            <Card data-testid="speakers-and-voices">
+              <CardHeader>
+                <CardTitle>Speakers &amp; voices</CardTitle>
+                <CardDescription>
+                  How HiDock separates speakers and recognizes known voices on this computer.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <section
+                  aria-labelledby="speaker-model-heading"
+                  className="rounded-xl bg-muted/45 p-4 shadow-sm"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h3 id="speaker-model-heading" className="text-sm font-semibold">
+                        Speaker identification model
+                      </h3>
+                      <p className="mt-1 max-w-prose text-xs text-muted-foreground">
+                        Runs locally before transcription to keep the same voice linked across recordings. Community-1
+                        requires a Hugging Face token whose account has accepted the model&apos;s contact-sharing conditions.
+                      </p>
+                    </div>
+                    <div
+                      role="status"
+                      aria-live="polite"
+                      className={cn(
+                        'inline-flex max-w-full items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium',
+                        speakerModelAccess?.status === 'granted'
+                          ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                          : speakerModelAccess?.status === 'invalid-token' || speakerModelAccess?.status === 'terms-pending'
+                            ? 'bg-amber-500/15 text-amber-800 dark:text-amber-300'
+                            : 'bg-background text-muted-foreground'
+                      )}
+                    >
+                      {speakerModelAccessChecking ? (
+                        <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden="true" />
+                      ) : speakerModelAccess?.status === 'granted' ? (
+                        <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                      ) : speakerModelAccess?.status === 'invalid-token' || speakerModelAccess?.status === 'terms-pending' ? (
+                        <TriangleAlert className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                      ) : (
+                        <KeyRound className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                      )}
+                      <span className="truncate">
+                        {speakerModelAccessChecking
+                          ? 'Checking access…'
+                          : speakerModelAccess?.status === 'granted'
+                            ? isSpeakerTokenDirty ? 'Access valid · not saved yet' : 'Community-1 ready'
+                            : speakerModelAccess?.status === 'terms-pending'
+                              ? 'Acceptance required'
+                              : speakerModelAccess?.status === 'invalid-token'
+                                ? 'Token rejected'
+                                : speakerModelAccess?.status === 'unavailable'
+                                  ? 'Check unavailable'
+                                  : localAsrHfToken.trim()
+                                    ? 'Not checked'
+                                    : 'Token required'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="mt-4">
+                    <label htmlFor="localAsrHfToken" className="text-sm font-medium">Hugging Face Token</label>
+                    <div className="relative mt-1">
+                      <Input
+                        id="localAsrHfToken"
+                        type={showHfToken ? 'text' : 'password'}
+                        placeholder="hf_xxxxxxxxxxxxxxxxxxxx"
+                        value={localAsrHfToken}
+                        onChange={(event) => {
+                          setLocalAsrHfToken(event.target.value)
+                          setSpeakerModelAccess(null)
+                          lastAutoCheckedTokenRef.current = null
+                        }}
+                        onKeyDown={(event) => event.key === 'Enter' && isSpeakerTokenDirty && handleSaveSpeakerToken()}
+                        disabled={saving}
+                        aria-label="Hugging Face token for speaker identification"
+                        aria-describedby="localAsrHfToken-description speaker-model-access-detail"
                         className="pr-10"
                       />
                       <Button
                         type="button"
                         variant="ghost"
                         size="sm"
-                        className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0"
-                        onClick={() => setShowApiKey(!showApiKey)}
-                        aria-label={showApiKey ? 'Hide API key' : 'Show API key'}
+                        className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2 p-0"
+                        onClick={() => setShowHfToken(!showHfToken)}
+                        aria-label={showHfToken ? 'Hide token' : 'Show token'}
                         tabIndex={-1}
                       >
-                        {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        {showHfToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                       </Button>
                     </div>
-                    <p id="geminiApiKey-description" className="text-xs text-muted-foreground mt-1">
-                      Get your API key from{' '}
-                      <a
-                        href="https://aistudio.google.com/app/apikey"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-primary hover:underline"
-                      >
-                        Google AI Studio
-                      </a>
+                    <p id="localAsrHfToken-description" className="mt-1 text-xs text-muted-foreground">
+                      The token is checked only against fixed huggingface.co endpoints and is never shown in status text.
                     </p>
                   </div>
 
-                  <div>
-                    <label htmlFor="geminiModel" className="text-sm font-medium">Transcription Model</label>
-                    <select
-                      id="geminiModel"
-                      value={geminiModel}
-                      onChange={(e) => setGeminiModel(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleSaveTranscription()}
-                      disabled={saving}
-                      aria-label="Transcription Model"
-                      aria-describedby="geminiModel-description"
-                      className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-                    >
-                      {geminiModelOptions.map((model) => (
-                        <option key={model.value} value={model.value}>
-                          {model.label}
-                        </option>
-                      ))}
-                    </select>
-                    <p id="geminiModel-description" className="text-xs text-muted-foreground mt-1">
-                      {modelsLoading
-                        ? 'Loading available models…'
-                        : modelsLive
-                          ? 'Live list from your Gemini API key (audio-capable models only).'
-                          : 'Showing built-in defaults — add/verify your API key to load the live model list.'}
-                    </p>
-                  </div>
-              </section>
-
-              <section aria-labelledby="local-asr-settings-heading" className="space-y-4 rounded-xl border border-border p-4">
-                <h3 id="local-asr-settings-heading" className="flex items-center gap-2 text-sm font-semibold">
-                  Local ASR and VibeVoice
-                  {(transcriptionProvider === 'local-asr' || transcriptionProvider === 'vibevoice') && (
-                    <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-medium text-primary">In use</span>
-                  )}
-                </h3>
-                  <div>
-                    <label htmlFor="localAsrPath" className="text-sm font-medium">ASR MCP Path</label>
-                    <Input
-                      id="localAsrPath"
-                      value={localAsrPath}
-                      onChange={(e) => setLocalAsrPath(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleSaveTranscription()}
-                      disabled={saving}
-                      aria-label="ASR MCP project path"
-                      aria-describedby="localAsrPath-description"
-                      className="mt-1 font-mono text-xs"
-                    />
-                    <p id="localAsrPath-description" className="text-xs text-muted-foreground mt-1">
-                      Folder containing mcp_runner.py from the ASR MCP project
-                    </p>
-                  </div>
-
-                  <div>
-                    <label htmlFor="localAsrVocabularyFile" className="text-sm font-medium">Vocabulary File</label>
-                    <Input
-                      id="localAsrVocabularyFile"
-                      value={localAsrVocabularyFile}
-                      onChange={(e) => setLocalAsrVocabularyFile(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleSaveTranscription()}
-                      disabled={saving}
-                      aria-label="Local ASR vocabulary file"
-                      aria-describedby="localAsrVocabularyFile-description"
-                      className="mt-1 font-mono text-xs"
-                    />
-                    <p id="localAsrVocabularyFile-description" className="text-xs text-muted-foreground mt-1">
-                      Relative or absolute JSON correction file. Leave empty to disable corrections.
-                    </p>
-                  </div>
-
-                  <div className="flex items-center gap-4">
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        id="localAsrDiarize"
-                        checked={localAsrDiarize}
-                        onChange={(e) => setLocalAsrDiarize(e.target.checked)}
-                        disabled={saving}
-                        aria-label="Enable speaker diarization"
-                        className="rounded"
-                      />
-                      <label htmlFor="localAsrDiarize" className="text-sm">
-                        Speaker diarization
-                      </label>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <label htmlFor="localAsrNumBeams" className="text-sm">Beams</label>
-                      <Input
-                        id="localAsrNumBeams"
-                        type="number"
-                        min={1}
-                        max={10}
-                        value={localAsrNumBeams}
-                        onChange={(e) => {
-                          const val = parseInt(e.target.value, 10)
-                          if (!isNaN(val)) setLocalAsrNumBeams(Math.min(10, Math.max(1, val)))
-                        }}
-                        onKeyDown={(e) => e.key === 'Enter' && handleSaveTranscription()}
-                        disabled={saving}
-                        aria-label="Local ASR beam search width"
-                        className="w-20"
-                      />
-                    </div>
-                  </div>
-              </section>
-
-              {/*
-                Live transcription speaker channel. The device sends two
-                channels and the Live API does no diarization, so which channel
-                is the microphone IS the speaker attribution. Nothing documents
-                which one it is, so the app measures it on the first ten seconds
-                of speech; this is the override for when that measurement is
-                wrong or cannot separate the two. Saves on change — it is one
-                value and it has no partner fields to stay consistent with.
-              */}
-              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium">Live microphone channel</p>
-                  <p className="text-xs text-muted-foreground">
-                    Which of the device&apos;s two channels is your microphone, used to label live
-                    turns as you or them. Measured automatically; pin it if the labels come out
-                    swapped.
-                  </p>
-                </div>
-                <Select
-                  value={liveMicChannelSetting}
-                  disabled={saving}
-                  onValueChange={async (value) => {
-                    try {
-                      // `null`, not `undefined`: saveConfig deep-merges and
-                      // skips undefined, so "auto" used to leave the old pin
-                      // in place and this control could only ever pin, never
-                      // release. Clearing the measured value too is what makes
-                      // it measure again instead of reusing a bad reading.
-                      await updateConfig('transcription', {
-                        liveMicChannel: value === 'auto' ? null : (Number(value) as 0 | 1),
-                        ...(value === 'auto' ? { liveMicChannelMeasured: null } : {}),
-                      })
-                      setLiveMicChannelSetting(value)
-                      toast.success('Saved', 'Applies to the next live session.')
-                    } catch (error) {
-                      toast.error('Could not save', String(error))
-                    }
-                  }}
-                >
-                  <SelectTrigger className="w-56" aria-label="Live microphone channel">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="auto">Measure automatically</SelectItem>
-                    <SelectItem value="0">Left channel</SelectItem>
-                    <SelectItem value="1">Right channel</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <Button
-                onClick={handleSaveTranscription}
-                disabled={saving || !isTranscriptionDirty}
-                aria-label="Save transcription settings"
-              >
-                <Save className="h-4 w-4 mr-2" aria-hidden="true" />
-                {isTranscriptionDirty ? 'Save' : 'Saved'}
-              </Button>
-            </CardContent>
-          </Card>
-
-          {transcriptionEnabled && (
-          <Card data-testid="speakers-and-voices">
-            <CardHeader>
-              <CardTitle>Speakers &amp; voices</CardTitle>
-              <CardDescription>
-                How HiDock separates speakers and recognizes known voices on this computer.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <section
-                aria-labelledby="speaker-model-heading"
-                className="rounded-xl bg-muted/45 p-4 shadow-sm"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <h3 id="speaker-model-heading" className="text-sm font-semibold">
-                      Speaker identification model
-                    </h3>
-                    <p className="mt-1 max-w-prose text-xs text-muted-foreground">
-                      Runs locally before transcription to keep the same voice linked across recordings. Community-1
-                      requires a Hugging Face token whose account has accepted the model&apos;s contact-sharing conditions.
-                    </p>
-                  </div>
-                  <div
-                    role="status"
-                    aria-live="polite"
+                  <p
+                    id="speaker-model-access-detail"
                     className={cn(
-                      'inline-flex max-w-full items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium',
-                      speakerModelAccess?.status === 'granted'
-                        ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
-                        : speakerModelAccess?.status === 'invalid-token' || speakerModelAccess?.status === 'terms-pending'
-                          ? 'bg-amber-500/15 text-amber-800 dark:text-amber-300'
-                          : 'bg-background text-muted-foreground'
+                      'mt-3 text-xs',
+                      speakerModelAccess?.status === 'invalid-token' || speakerModelAccess?.status === 'terms-pending'
+                        ? 'text-amber-800 dark:text-amber-300'
+                        : 'text-muted-foreground'
                     )}
                   >
-                    {speakerModelAccessChecking ? (
-                      <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden="true" />
-                    ) : speakerModelAccess?.status === 'granted' ? (
-                      <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                    ) : speakerModelAccess?.status === 'invalid-token' || speakerModelAccess?.status === 'terms-pending' ? (
-                      <TriangleAlert className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                    ) : (
-                      <KeyRound className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                    )}
-                    <span className="truncate">
-                      {speakerModelAccessChecking
-                        ? 'Checking access…'
-                        : speakerModelAccess?.status === 'granted'
-                          ? isSpeakerTokenDirty ? 'Access valid · not saved yet' : 'Community-1 ready'
-                          : speakerModelAccess?.status === 'terms-pending'
-                            ? 'Acceptance required'
-                            : speakerModelAccess?.status === 'invalid-token'
-                              ? 'Token rejected'
-                              : speakerModelAccess?.status === 'unavailable'
-                                ? 'Check unavailable'
-                                : localAsrHfToken.trim()
-                                  ? 'Not checked'
-                                  : 'Token required'}
-                    </span>
-                  </div>
-                </div>
+                    {speakerModelAccess?.message ||
+                      'Access has not been checked yet. Until Community-1 is available, the app records the actual fallback model in the Tools metadata.'}
+                    {speakerModelAccess?.account ? ` Hugging Face account: ${speakerModelAccess.account}.` : ''}
+                    {speakerModelAccess?.status === 'granted' && isSpeakerTokenDirty
+                      ? ' Click Save token to make it the active token.'
+                      : ''}
+                  </p>
 
-                <div className="mt-4">
-                  <label htmlFor="localAsrHfToken" className="text-sm font-medium">Hugging Face Token</label>
-                  <div className="relative mt-1">
-                    <Input
-                      id="localAsrHfToken"
-                      type={showHfToken ? 'text' : 'password'}
-                      placeholder="hf_xxxxxxxxxxxxxxxxxxxx"
-                      value={localAsrHfToken}
-                      onChange={(event) => {
-                        setLocalAsrHfToken(event.target.value)
-                        setSpeakerModelAccess(null)
-                        lastAutoCheckedTokenRef.current = null
-                      }}
-                      onKeyDown={(event) => event.key === 'Enter' && isSpeakerTokenDirty && handleSaveSpeakerToken()}
-                      disabled={saving}
-                      aria-label="Hugging Face token for speaker identification"
-                      aria-describedby="localAsrHfToken-description speaker-model-access-detail"
-                      className="pr-10"
-                    />
+                  <div className="mt-4 flex flex-wrap gap-2">
                     <Button
                       type="button"
-                      variant="ghost"
                       size="sm"
-                      className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2 p-0"
-                      onClick={() => setShowHfToken(!showHfToken)}
-                      aria-label={showHfToken ? 'Hide token' : 'Show token'}
-                      tabIndex={-1}
+                      onClick={handleSaveSpeakerToken}
+                      disabled={saving || !isSpeakerTokenDirty}
+                      data-testid="save-speaker-token"
                     >
-                      {showHfToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      {isSpeakerTokenDirty ? 'Save token' : 'Token saved'}
+                    </Button>
+                    <Button type="button" variant="outline" size="sm" onClick={openSpeakerModelAccess}>
+                      <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
+                      Review model access
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={checkSpeakerModelAccess}
+                      disabled={speakerModelAccessChecking}
+                    >
+                      <RefreshCw
+                        className={cn('mr-2 h-4 w-4', speakerModelAccessChecking && 'animate-spin')}
+                        aria-hidden="true"
+                      />
+                      Check again
                     </Button>
                   </div>
-                  <p id="localAsrHfToken-description" className="mt-1 text-xs text-muted-foreground">
-                    The token is checked only against fixed huggingface.co endpoints and is never shown in status text.
-                  </p>
+                </section>
+                <div className="mt-6">
+                  <SpeakerSetupPanel />
                 </div>
+              </CardContent>
+            </Card>
+            )}
 
-                <p
-                  id="speaker-model-access-detail"
-                  className={cn(
-                    'mt-3 text-xs',
-                    speakerModelAccess?.status === 'invalid-token' || speakerModelAccess?.status === 'terms-pending'
-                      ? 'text-amber-800 dark:text-amber-300'
-                      : 'text-muted-foreground'
-                  )}
-                >
-                  {speakerModelAccess?.message ||
-                    'Access has not been checked yet. Until Community-1 is available, the app records the actual fallback model in the Tools metadata.'}
-                  {speakerModelAccess?.account ? ` Hugging Face account: ${speakerModelAccess.account}.` : ''}
-                  {speakerModelAccess?.status === 'granted' && isSpeakerTokenDirty
-                    ? ' Click Save token to make it the active token.'
-                    : ''}
-                </p>
-
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={handleSaveSpeakerToken}
-                    disabled={saving || !isSpeakerTokenDirty}
-                    data-testid="save-speaker-token"
-                  >
-                    {isSpeakerTokenDirty ? 'Save token' : 'Token saved'}
-                  </Button>
-                  <Button type="button" variant="outline" size="sm" onClick={openSpeakerModelAccess}>
-                    <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
-                    Review model access
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={checkSpeakerModelAccess}
-                    disabled={speakerModelAccessChecking}
-                  >
-                    <RefreshCw
-                      className={cn('mr-2 h-4 w-4', speakerModelAccessChecking && 'animate-spin')}
-                      aria-hidden="true"
-                    />
-                    Check again
-                  </Button>
-                </div>
-              </section>
-              <div className="mt-6">
-                <SpeakerSetupPanel />
-              </div>
-            </CardContent>
-          </Card>
+            <ModelHostSettings />
+            </>
           )}
 
-          <ModelHostSettings />
-
-          {/* Library value classification (F16/spec-003) */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Find low-value recordings</CardTitle>
-              <CardDescription>
-                The AI reads the transcript of each recording you haven&apos;t rated yet and judges whether the
-                conversation is actually useful — or noise, like personal chatter, a call where nobody showed up, or
-                background audio picked up by mistake. Recordings judged as noise get a Low-value or Garbage badge in
-                the Library, and from then on — going forward — they are left out of Assistant answers, the Context
-                Graph, and action-item extraction. Nothing is deleted, and ratings you set yourself are never changed —
-                you can re-rate any recording from its row menu. Uses Jev (TypeSafe AI) when its key is set below,
-                otherwise your configured AI provider (one request per recording); runs in the background, and you can
-                cancel and resume anytime.
-              </CardDescription>
-              {/* RE-3 — scope the promise honestly: the exclusion applies going
-                  forward to content this version rates + attributes; it does not
-                  retroactively pull already-woven graph facts from recordings an
-                  earlier version analyzed. */}
-              <p className="mt-1 px-6 text-xs text-muted-foreground">{LEGACY_GRAPH_DISCLOSURE}</p>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="space-y-1.5">
-                <label htmlFor="jev-api-key" className="text-sm font-medium">Jev API key (TypeSafe AI)</label>
-                <div className="flex items-center gap-2">
-                  <Input
-                    id="jev-api-key"
-                    aria-describedby="jev-api-key-help"
-                    type="password"
-                    autoComplete="off"
-                    value={jevKeyDraft}
-                    onChange={(e) => setJevKeyDraft(e.target.value)}
-                    placeholder={hasJevKey ? 'Key saved. Paste a new one to replace it' : 'Paste your key from typesafe.ai'}
-                    className="max-w-sm"
-                  />
-                  <Button
-                    variant="outline"
-                    onClick={handleSaveJevKey}
-                    disabled={savingJevKey || (!jevKeyDraft.trim() && !hasJevKey)}
-                  >
-                    {jevKeyDraft.trim() || !hasJevKey ? 'Save key' : 'Remove key'}
-                  </Button>
+          {show('decisions') && (
+            <>
+            {/* Library value classification (F16/spec-003) */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Find low-value recordings</CardTitle>
+                <CardDescription>
+                  The AI reads the transcript of each recording you haven&apos;t rated yet and judges whether the
+                  conversation is actually useful — or noise, like personal chatter, a call where nobody showed up, or
+                  background audio picked up by mistake. Recordings judged as noise get a Low-value or Garbage badge in
+                  the Library, and from then on — going forward — they are left out of Assistant answers, the Context
+                  Graph, and action-item extraction. Nothing is deleted, and ratings you set yourself are never changed —
+                  you can re-rate any recording from its row menu. Uses Jev (TypeSafe AI) when its key is set below,
+                  otherwise your configured AI provider (one request per recording); runs in the background, and you can
+                  cancel and resume anytime.
+                </CardDescription>
+                {/* RE-3 — scope the promise honestly: the exclusion applies going
+                    forward to content this version rates + attributes; it does not
+                    retroactively pull already-woven graph facts from recordings an
+                    earlier version analyzed. */}
+                <p className="mt-1 px-6 text-xs text-muted-foreground">{LEGACY_GRAPH_DISCLOSURE}</p>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="space-y-1.5">
+                  <label htmlFor="jev-api-key" className="text-sm font-medium">Jev API key (TypeSafe AI)</label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      id="jev-api-key"
+                      aria-describedby="jev-api-key-help"
+                      type="password"
+                      autoComplete="off"
+                      value={jevKeyDraft}
+                      onChange={(e) => setJevKeyDraft(e.target.value)}
+                      placeholder={hasJevKey ? 'Key saved. Paste a new one to replace it' : 'Paste your key from typesafe.ai'}
+                      className="max-w-sm"
+                    />
+                    <Button
+                      variant="outline"
+                      onClick={handleSaveJevKey}
+                      disabled={savingJevKey || (!jevKeyDraft.trim() && !hasJevKey)}
+                    >
+                      {jevKeyDraft.trim() || !hasJevKey ? 'Save key' : 'Remove key'}
+                    </Button>
+                  </div>
+                  <p id="jev-api-key-help" className="text-xs text-muted-foreground">
+                    {hasJevKey
+                      ? 'Jev rates recordings. It sends a transcript excerpt, the summary and the meeting subject to api.typesafe.ai. '
+                      : 'Without a key, the AI provider above rates recordings. '}
+                    The key is stored encrypted on this computer.
+                  </p>
                 </div>
-                <p id="jev-api-key-help" className="text-xs text-muted-foreground">
-                  {hasJevKey
-                    ? 'Jev rates recordings. It sends a transcript excerpt, the summary and the meeting subject to api.typesafe.ai. '
-                    : 'Without a key, the AI provider above rates recordings. '}
-                  The key is stored encrypted on this computer.
-                </p>
-              </div>
-              {!hasValueProvider && (
-                <p className="text-xs text-muted-foreground">Add a Jev key or configure an AI provider above to enable.</p>
-              )}
-              {config?.transcription.valueClassificationEnabled === false && (
-                <p className="text-xs text-muted-foreground">
-                  Automatic rating of newly transcribed recordings is turned off in your config
-                  (valueClassificationEnabled) — this manual scan still works.
-                </p>
-              )}
-              <div className="flex items-center gap-2">
-                <Button
-                  onClick={handleStartValueBackfill}
-                  disabled={!hasValueProvider || valueBackfillRunning}
-                  aria-label="Scan library for low-value recordings"
-                >
-                  {valueBackfillRunning && <RefreshCw className="h-4 w-4 mr-2 animate-spin" aria-hidden="true" />}
-                  {valueBackfillRunning
-                    ? 'Scanning…'
-                    : valueBackfillRemaining > 0
-                      ? `Resume scan (${valueBackfillRemaining} left)`
-                      : 'Scan unrated recordings'}
-                </Button>
-                {valueBackfillRunning && (
-                  <Button variant="outline" onClick={handleCancelValueBackfill} aria-label="Cancel scan">
-                    Cancel
-                  </Button>
+                {!hasValueProvider && (
+                  <p className="text-xs text-muted-foreground">Add a Jev key or configure an AI provider above to enable.</p>
                 )}
-              </div>
-              {(valueBackfillRunning || valueBackfillProgress) && (
-                <p className="text-xs text-muted-foreground" aria-live="polite">
-                  {valueBackfillProgress
-                    ? `Checked ${valueBackfillProgress.processed} of ${valueBackfillProgress.total} recordings · ${valueBackfillProgress.marked} marked low-value`
-                    : 'Starting…'}
-                </p>
-              )}
-            </CardContent>
-          </Card>
-
-          <LibraryMaintenanceCard
-            onRescanWithJev={handleRescanWithJev}
-            rescanAvailable={hasJevKey}
-            rescanRunning={valueBackfillRunning}
-          />
-
-          {/* Chat Settings */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Chat / RAG</CardTitle>
-              <CardDescription>Configure chat provider for querying meetings</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div>
-                <label id="chatProvider-label" className="text-sm font-medium">Chat Provider</label>
-                <div className="flex gap-2 mt-2" role="group" aria-labelledby="chatProvider-label">
+                {config?.transcription.valueClassificationEnabled === false && (
+                  <p className="text-xs text-muted-foreground">
+                    Automatic rating of newly transcribed recordings is turned off in your config
+                    (valueClassificationEnabled) — this manual scan still works.
+                  </p>
+                )}
+                <div className="flex items-center gap-2">
                   <Button
-                    variant={chatProvider === 'gemini' ? 'default' : 'outline'}
-                    onClick={() => setChatProvider('gemini')}
-                    onKeyDown={(e) => e.key === 'Enter' && setChatProvider('gemini')}
-                    disabled={saving}
-                    aria-label="Use Gemini chat provider"
-                    aria-pressed={chatProvider === 'gemini'}
+                    onClick={handleStartValueBackfill}
+                    disabled={!hasValueProvider || valueBackfillRunning}
+                    aria-label="Scan library for low-value recordings"
                   >
-                    Gemini
+                    {valueBackfillRunning && <RefreshCw className="h-4 w-4 mr-2 animate-spin" aria-hidden="true" />}
+                    {valueBackfillRunning
+                      ? 'Scanning…'
+                      : valueBackfillRemaining > 0
+                        ? `Resume scan (${valueBackfillRemaining} left)`
+                        : 'Scan unrated recordings'}
                   </Button>
-                  <Button
-                    variant={chatProvider === 'ollama' ? 'default' : 'outline'}
-                    onClick={() => setChatProvider('ollama')}
-                    onKeyDown={(e) => e.key === 'Enter' && setChatProvider('ollama')}
-                    disabled={saving}
-                    aria-label="Use Ollama local chat provider"
-                    aria-pressed={chatProvider === 'ollama'}
-                  >
-                    Ollama (Local)
-                  </Button>
+                  {valueBackfillRunning && (
+                    <Button variant="outline" onClick={handleCancelValueBackfill} aria-label="Cancel scan">
+                      Cancel
+                    </Button>
+                  )}
                 </div>
-              </div>
+                {(valueBackfillRunning || valueBackfillProgress) && (
+                  <p className="text-xs text-muted-foreground" aria-live="polite">
+                    {valueBackfillProgress
+                      ? `Checked ${valueBackfillProgress.processed} of ${valueBackfillProgress.total} recordings · ${valueBackfillProgress.marked} marked low-value`
+                      : 'Starting…'}
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+            </>
+          )}
 
-              {chatProvider === 'ollama' && (
+          {show('maintenance') && (
+            <>
+            <LibraryMaintenanceCard
+              onRescanWithJev={handleRescanWithJev}
+              rescanAvailable={hasJevKey}
+              rescanRunning={valueBackfillRunning}
+            />
+            </>
+          )}
+
+          {show('assistant') && (
+            <>
+            {/* Chat Settings */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Chat / RAG</CardTitle>
+                <CardDescription>Configure chat provider for querying meetings</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
                 <div>
-                  <label htmlFor="ollamaUrl" className="text-sm font-medium">Ollama URL</label>
+                  <label id="chatProvider-label" className="text-sm font-medium">Chat Provider</label>
+                  <div className="flex gap-2 mt-2" role="group" aria-labelledby="chatProvider-label">
+                    <Button
+                      variant={chatProvider === 'gemini' ? 'default' : 'outline'}
+                      onClick={() => setChatProvider('gemini')}
+                      onKeyDown={(e) => e.key === 'Enter' && setChatProvider('gemini')}
+                      disabled={saving}
+                      aria-label="Use Gemini chat provider"
+                      aria-pressed={chatProvider === 'gemini'}
+                    >
+                      Gemini
+                    </Button>
+                    <Button
+                      variant={chatProvider === 'ollama' ? 'default' : 'outline'}
+                      onClick={() => setChatProvider('ollama')}
+                      onKeyDown={(e) => e.key === 'Enter' && setChatProvider('ollama')}
+                      disabled={saving}
+                      aria-label="Use Ollama local chat provider"
+                      aria-pressed={chatProvider === 'ollama'}
+                    >
+                      Ollama (Local)
+                    </Button>
+                  </div>
+                </div>
+
+                {chatProvider === 'ollama' && (
+                  <div>
+                    <label htmlFor="ollamaUrl" className="text-sm font-medium">Ollama URL</label>
+                    <Input
+                      id="ollamaUrl"
+                      type="url"
+                      placeholder="http://localhost:11434"
+                      value={ollamaUrl}
+                      onChange={(e) => setOllamaUrl(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleSaveChat()}
+                      disabled={saving}
+                      aria-label="Ollama base URL"
+                      aria-describedby="ollamaUrl-description"
+                      className="mt-1"
+                    />
+                    <p id="ollamaUrl-description" className="text-xs text-muted-foreground mt-1">
+                      URL of your local Ollama server
+                    </p>
+                  </div>
+                )}
+
+                {/* C-CHAT: RAG Context Window Size */}
+                <div>
+                  <label htmlFor="ragContextSize" className="text-sm font-medium">
+                    RAG Context Window
+                  </label>
                   <Input
-                    id="ollamaUrl"
-                    type="url"
-                    placeholder="http://localhost:11434"
-                    value={ollamaUrl}
-                    onChange={(e) => setOllamaUrl(e.target.value)}
+                    id="ragContextSize"
+                    type="number"
+                    min={1}
+                    max={20}
+                    value={ragContextSize}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value, 10)
+                      if (!isNaN(val)) {
+                        setRagContextSize(Math.min(20, Math.max(1, val)))
+                      }
+                    }}
                     onKeyDown={(e) => e.key === 'Enter' && handleSaveChat()}
                     disabled={saving}
-                    aria-label="Ollama base URL"
-                    aria-describedby="ollamaUrl-description"
+                    aria-label="RAG context window size"
+                    aria-describedby="ragContextSize-description"
                     className="mt-1"
                   />
-                  <p id="ollamaUrl-description" className="text-xs text-muted-foreground mt-1">
-                    URL of your local Ollama server
+                  <p id="ragContextSize-description" className="text-xs text-muted-foreground mt-1">
+                    Number of knowledge chunks to retrieve for context (1-20). Default: 10
                   </p>
                 </div>
-              )}
 
-              {/* C-CHAT: RAG Context Window Size */}
-              <div>
-                <label htmlFor="ragContextSize" className="text-sm font-medium">
-                  RAG Context Window
-                </label>
-                <Input
-                  id="ragContextSize"
-                  type="number"
-                  min={1}
-                  max={20}
-                  value={ragContextSize}
-                  onChange={(e) => {
-                    const val = parseInt(e.target.value, 10)
-                    if (!isNaN(val)) {
-                      setRagContextSize(Math.min(20, Math.max(1, val)))
-                    }
-                  }}
-                  onKeyDown={(e) => e.key === 'Enter' && handleSaveChat()}
-                  disabled={saving}
-                  aria-label="RAG context window size"
-                  aria-describedby="ragContextSize-description"
-                  className="mt-1"
-                />
-                <p id="ragContextSize-description" className="text-xs text-muted-foreground mt-1">
-                  Number of knowledge chunks to retrieve for context (1-20). Default: 10
-                </p>
-              </div>
+                <Button
+                  onClick={handleSaveChat}
+                  disabled={saving || !isChatDirty}
+                  aria-label="Save chat settings"
+                >
+                  <Save className="h-4 w-4 mr-2" aria-hidden="true" />
+                  {isChatDirty ? 'Save' : 'Saved'}
+                </Button>
+              </CardContent>
+            </Card>
+            </>
+          )}
 
-              <Button
-                onClick={handleSaveChat}
-                disabled={saving || !isChatDirty}
-                aria-label="Save chat settings"
-              >
-                <Save className="h-4 w-4 mr-2" aria-hidden="true" />
-                {isChatDirty ? 'Save' : 'Saved'}
-              </Button>
-            </CardContent>
-          </Card>
-
-          {/* Storage */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Storage</CardTitle>
-              <CardDescription>Local data storage information</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {/* Storage loading indicator */}
-              {storageLoading && !storageInfo && (
-                <div className="flex items-center gap-2 py-4 justify-center">
-                  <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" />
-                  <span className="text-sm text-muted-foreground">Loading storage info...</span>
-                </div>
-              )}
-              {/* B-SET-002: Storage error with retry button */}
-              {storageError && (
-                <div className="flex items-center gap-3 p-3 rounded-md bg-destructive/10 text-destructive border border-destructive/20">
-                  <AlertCircle className="h-5 w-5 flex-shrink-0" />
-                  <div className="flex-1 text-sm">{storageError}</div>
-                  <Button variant="outline" size="sm" onClick={loadStorageInfo}>
-                    <RefreshCw className="h-3 w-3 mr-1" />
-                    Retry
-                  </Button>
-                </div>
-              )}
-              {storageInfo && (
-                <>
-                  <div className="grid grid-cols-2 gap-4 text-sm">
-                    <div>
-                      <p className="text-muted-foreground">Total Size</p>
-                      <p className="font-medium">{formatBytes(storageInfo.totalSizeBytes)}</p>
-                    </div>
-                    <div>
-                      <p className="text-muted-foreground">Recordings</p>
-                      <p className="font-medium">{storageInfo.recordingsCount} files</p>
-                    </div>
+          {show('storage') && (
+            <>
+            {/* Storage */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Storage</CardTitle>
+                <CardDescription>Local data storage information</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {/* Storage loading indicator */}
+                {storageLoading && !storageInfo && (
+                  <div className="flex items-center gap-2 py-4 justify-center">
+                    <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" />
+                    <span className="text-sm text-muted-foreground">Loading storage info...</span>
                   </div>
-
-                  <div className="space-y-3 text-sm">
-                    {([
-                      ['recordings', 'Recordings'],
-                      ['transcripts', 'Transcripts'],
-                      ['data', 'Data']
-                    ] as const).map(([folder, label]) => (
-                      <div key={folder} className="flex items-center gap-2 p-2 bg-muted/50 rounded">
-                        <div className="flex-1 min-w-0">
-                          <label htmlFor={`${folder}Path`} className="text-muted-foreground text-xs">
-                            {label}
-                          </label>
-                          <Input
-                            id={`${folder}Path`}
-                            value={storagePaths[folder]}
-                            onChange={(e) => handleStoragePathChange(folder, e.target.value)}
-                            onBlur={(e) => saveStoragePath(folder, e.target.value)}
-                            onKeyDown={(e) => handleStoragePathKeyDown(folder, e)}
-                            disabled={savingStorageFolder === folder}
-                            className="mt-1 h-8 font-mono text-xs"
-                            title={storagePaths[folder]}
-                            aria-label={`${label} folder path`}
-                          />
-                        </div>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleSelectStorageFolder(folder)}
-                          disabled={savingStorageFolder === folder}
-                          aria-label={`Select ${label.toLowerCase()} folder`}
-                        >
-                          {savingStorageFolder === folder ? (
-                            <RefreshCw className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <FolderOpen className="h-4 w-4" />
-                          )}
-                        </Button>
+                )}
+                {/* B-SET-002: Storage error with retry button */}
+                {storageError && (
+                  <div className="flex items-center gap-3 p-3 rounded-md bg-destructive/10 text-destructive border border-destructive/20">
+                    <AlertCircle className="h-5 w-5 flex-shrink-0" />
+                    <div className="flex-1 text-sm">{storageError}</div>
+                    <Button variant="outline" size="sm" onClick={loadStorageInfo}>
+                      <RefreshCw className="h-3 w-3 mr-1" />
+                      Retry
+                    </Button>
+                  </div>
+                )}
+                {storageInfo && (
+                  <>
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div>
+                        <p className="text-muted-foreground">Total Size</p>
+                        <p className="font-medium">{formatBytes(storageInfo.totalSizeBytes)}</p>
                       </div>
-                    ))}
+                      <div>
+                        <p className="text-muted-foreground">Recordings</p>
+                        <p className="font-medium">{storageInfo.recordingsCount} files</p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3 text-sm">
+                      {([
+                        ['recordings', 'Recordings'],
+                        ['transcripts', 'Transcripts'],
+                        ['data', 'Data']
+                      ] as const).map(([folder, label]) => (
+                        <div key={folder} className="flex items-center gap-2 p-2 bg-muted/50 rounded">
+                          <div className="flex-1 min-w-0">
+                            <label htmlFor={`${folder}Path`} className="text-muted-foreground text-xs">
+                              {label}
+                            </label>
+                            <Input
+                              id={`${folder}Path`}
+                              value={storagePaths[folder]}
+                              onChange={(e) => handleStoragePathChange(folder, e.target.value)}
+                              onBlur={(e) => saveStoragePath(folder, e.target.value)}
+                              onKeyDown={(e) => handleStoragePathKeyDown(folder, e)}
+                              disabled={savingStorageFolder === folder}
+                              className="mt-1 h-8 font-mono text-xs"
+                              title={storagePaths[folder]}
+                              aria-label={`${label} folder path`}
+                            />
+                          </div>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleSelectStorageFolder(folder)}
+                            disabled={savingStorageFolder === folder}
+                            aria-label={`Select ${label.toLowerCase()} folder`}
+                          >
+                            {savingStorageFolder === folder ? (
+                              <RefreshCw className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <FolderOpen className="h-4 w-4" />
+                            )}
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </CardContent>
+            </Card>
+            </>
+          )}
+
+          {show('privacy') && (
+            <>
+            {/* Capture — turning ambient inputs (clipboard screenshots) into knowledge. */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Capture</CardTitle>
+                <CardDescription>Bring screenshots into your knowledge library</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <label htmlFor="autoCaptureScreenshotsToggle" className="text-sm font-medium">
+                      Auto-capture screenshots from clipboard
+                    </label>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Watch the clipboard and automatically add copied screenshots as image
+                      captures. You can always paste (<code>Ctrl/Cmd+V</code>) to add one manually,
+                      even with this off.
+                    </p>
                   </div>
-                </>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Capture — turning ambient inputs (clipboard screenshots) into knowledge. */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Capture</CardTitle>
-              <CardDescription>Bring screenshots into your knowledge library</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center justify-between gap-4">
-                <div className="min-w-0">
-                  <label htmlFor="autoCaptureScreenshotsToggle" className="text-sm font-medium">
-                    Auto-capture screenshots from clipboard
-                  </label>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Watch the clipboard and automatically add copied screenshots as image
-                    captures. You can always paste (<code>Ctrl/Cmd+V</code>) to add one manually,
-                    even with this off.
-                  </p>
+                  <Switch
+                    id="autoCaptureScreenshotsToggle"
+                    checked={autoCaptureScreenshots}
+                    onCheckedChange={setAutoCaptureScreenshots}
+                    aria-label="Auto-capture screenshots from clipboard"
+                  />
                 </div>
-                <Switch
-                  id="autoCaptureScreenshotsToggle"
-                  checked={autoCaptureScreenshots}
-                  onCheckedChange={setAutoCaptureScreenshots}
-                  aria-label="Auto-capture screenshots from clipboard"
-                />
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+            </>
+          )}
 
-          {/* Developer / Advanced — QA logging lives here now (it used to sit in the
-              always-visible sidebar footer, which the product owner flagged). */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Developer</CardTitle>
-              <CardDescription>Advanced diagnostics and logging</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center justify-between gap-4">
-                <div className="min-w-0">
-                  <label htmlFor="qaLogsToggle" className="text-sm font-medium">
-                    QA Logs
-                  </label>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Emit verbose <code>[QA-MONITOR]</code> diagnostics to the console. For
-                    debugging only — leave off for normal use.
-                  </p>
+          {show('developer') && (
+            <>
+            {/* Developer / Advanced — QA logging lives here now (it used to sit in the
+                always-visible sidebar footer, which the product owner flagged). */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Developer</CardTitle>
+                <CardDescription>Advanced diagnostics and logging</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <label htmlFor="qaLogsToggle" className="text-sm font-medium">
+                      QA Logs
+                    </label>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Emit verbose <code>[QA-MONITOR]</code> diagnostics to the console. For
+                      debugging only — leave off for normal use.
+                    </p>
+                  </div>
+                  <Switch
+                    id="qaLogsToggle"
+                    checked={qaLogsEnabled}
+                    onCheckedChange={setQaLogsEnabled}
+                    aria-label="Enable QA diagnostic logs"
+                  />
                 </div>
-                <Switch
-                  id="qaLogsToggle"
-                  checked={qaLogsEnabled}
-                  onCheckedChange={setQaLogsEnabled}
-                  aria-label="Enable QA diagnostic logs"
-                />
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+            </>
+          )}
 
-          {/* Health Check & Advanced Operations */}
-          <HealthCheck />
+          {show('maintenance') && (
+            <>
+            {/* Health Check & Advanced Operations */}
+            <HealthCheck />
+            </>
+          )}
         </div>
       </div>
+  )
+
+  // Without a section (the whole page, as tests render it) there is no menu.
+  if (!section) {
+    return (
+      <div className="flex flex-col h-full">
+        <header className="border-b px-6 py-4">
+          <h1 className="text-2xl font-bold">Settings</h1>
+        </header>
+        {pageBody}
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col md:flex-row">
+      <SettingsNav active={section} onSelect={(id) => onSectionChange?.(id)} />
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">{pageBody}</div>
     </div>
   )
 }
 
-export default Settings
+/**
+ * The /settings route: /settings/<section> opens one page with the menu. The old
+ * single-page anchors (/settings#features) redirect to their section.
+ */
+function SettingsPage() {
+  const { section } = useParams()
+  const location = useLocation()
+  const navigate = useNavigate()
+  const legacy = sectionFromLegacyHash(location.hash)
+
+  useEffect(() => {
+    if (legacy) navigate(`/settings/${legacy}`, { replace: true })
+  }, [legacy, navigate])
+
+  const active = legacy ?? (isSettingsSectionId(section) ? section : DEFAULT_SETTINGS_SECTION)
+  return <Settings section={active} onSectionChange={(id) => navigate(`/settings/${id}`)} />
+}
+
+export default SettingsPage

@@ -306,7 +306,7 @@ function App(): React.ReactElement {
             }
           />
           <Route
-            path="/settings"
+            path="/settings/:section?"
             element={
               <ErrorBoundary>
                 <Suspense fallback={<LoadingSpinner message="Loading settings..." />}>
