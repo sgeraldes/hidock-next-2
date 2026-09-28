@@ -16,6 +16,11 @@ interface Rec {
 }
 
 const recordings = new Map<string, Rec>()
+const meetings = new Map<string, { subject: string; start_time: string }>([
+  ['lunch', { subject: 'Almuerzo', start_time: '2026-09-24T15:00:00Z' }],
+  ['daily', { subject: 'Daily Cloud', start_time: '2026-09-24T15:00:00Z' }],
+  ['ics-daily', { subject: 'Daily Cloud', start_time: '2026-09-24T15:00:00Z' }]
+])
 const linkRecordingToMeeting = vi.fn()
 
 vi.mock('../database', () => ({
@@ -24,6 +29,7 @@ vi.mock('../database', () => ({
   run: vi.fn(),
   getRecordingById: (id: string) => recordings.get(id) ?? null,
   getRecordingMeetingMatch: () => null,
+  getMeetingById: (id: string) => meetings.get(id) ?? null,
   linkRecordingToMeeting: (...args: unknown[]) => linkRecordingToMeeting(...args)
 }))
 vi.mock('../audio-profile-store', () => ({ envelopePath: (id: string) => id }))
@@ -103,5 +109,13 @@ describe('matchMeetingsWithJev', () => {
     const result = await matchMeetingsWithJev({ dryRun: true })
     expect(linkRecordingToMeeting).not.toHaveBeenCalled()
     expect(result).toMatchObject({ relinked: 1, planned: [{ recordingId: 'wrong', from: 'lunch', to: 'daily' }] })
+  })
+
+  it('does not move a recording between two copies of the same meeting', async () => {
+    recordings.set('copy', { id: 'copy', meeting_id: 'ics-daily', correlation_method: 'time_overlap', date_recorded: 'a', duration_seconds: 60 })
+    askJev.mockResolvedValue(reply(0.03, 0.9, 0.07))
+    const result = await matchMeetingsWithJev()
+    expect(linkRecordingToMeeting).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ relinked: 0, linked: 0 })
   })
 })

@@ -23,9 +23,10 @@ import {
   scoreMeetingCandidates
 } from './recording-match-scoring'
 import { getConfig } from './config'
-import { JEV_MODEL, MEETING_MATCH_VERSION, type MatchCandidate, type MatchContext, type MeetingMatchDeps } from './jev-meeting-match'
+import { JEV_MODEL, MEETING_MATCH_VERSION, meetingCopyKey, type MatchCandidate, type MatchContext, type MeetingMatchDeps } from './jev-meeting-match'
 
 export type CandidateRow = ReturnType<typeof getCandidatesForRecordingWithDetails>[number]
+export { meetingCopyKey }
 
 export function listMeetingCandidates(recording: Recording) {
   const transcript = getTranscriptByRecordingId(recording.id)
@@ -66,7 +67,10 @@ export function listMeetingCandidates(recording: Recording) {
     console.error('listMeetingCandidates: nearby lookup failed:', nearbyError)
   }
 
-  const candidates = Array.from(byMeeting.values()).filter((candidate) => !isCancelledMeetingSubject(candidate.subject))
+  const candidates = collapseMeetingCopies(
+    Array.from(byMeeting.values()).filter((candidate) => !isCancelledMeetingSubject(candidate.subject)),
+    recording.meeting_id ?? null
+  )
   const scored = scoreMeetingCandidates(
     {
       dateRecorded: recording.date_recorded,
@@ -83,6 +87,25 @@ export function listMeetingCandidates(recording: Recording) {
   )
   const scoreByMeeting = new Map(scored.map((s) => [s.meetingId, s]))
   return { transcript, recordingContext, candidates, scored, scoreByMeeting }
+}
+
+
+/**
+ * One candidate per real meeting. Among copies keep the one the person
+ * confirmed, else the one the recording is linked to, else the connector copy
+ * (it carries attendee emails), else the first.
+ */
+export function collapseMeetingCopies(candidates: CandidateRow[], linkedMeetingId: string | null): CandidateRow[] {
+  const rank = (c: CandidateRow) =>
+    (c.isUserConfirmed ? 8 : 0) + (c.meetingId === linkedMeetingId ? 4 : 0) + (c.meetingId.startsWith('m365') ? 2 : 0)
+  const byKey = new Map<string, CandidateRow>()
+  for (const c of candidates) {
+    const key = meetingCopyKey(c.subject, c.startTime)
+    const kept = byKey.get(key)
+    if (!kept || rank(c) > rank(kept)) byKey.set(key, c)
+  }
+  const keep = new Set(byKey.values())
+  return candidates.filter((c) => keep.has(c))
 }
 
 interface AttendeeJson {

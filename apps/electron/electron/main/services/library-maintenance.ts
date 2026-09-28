@@ -246,8 +246,8 @@ export async function matchMeetingsWithJev(
   if (!deps) return { noKey: true }
   matchRunning = true
   try {
-    const { matchMeetingWithJev, isClearMatch, pickMatchCandidates, candidateKey, MEETING_MATCH_VERSION } = await import('./jev-meeting-match')
-    const { getRecordingById, getRecordingMeetingMatch, linkRecordingToMeeting } = await import('./database')
+    const { matchMeetingWithJev, isClearMatch, pickMatchCandidates, candidateKey, meetingCopyKey, MEETING_MATCH_VERSION } = await import('./jev-meeting-match')
+    const { getRecordingById, getRecordingMeetingMatch, getMeetingById, linkRecordingToMeeting } = await import('./database')
     const { filterEligibleRecordingIds } = await import('./recording-eligibility')
     const { isClassifierAuthError } = await import('./value-backfill')
 
@@ -259,6 +259,17 @@ export async function matchMeetingsWithJev(
         ORDER BY r.date_recorded DESC`
     ).map((r) => r.id)
     const { eligible } = filterEligibleRecordingIds(ids)
+
+    const copyKeys = new Map<string, string | null>()
+    const keyOf = (id: string): string | null => {
+      if (!copyKeys.has(id)) {
+        const m = getMeetingById(id)
+        copyKeys.set(id, m ? meetingCopyKey(m.subject, m.start_time) : null)
+      }
+      return copyKeys.get(id) ?? null
+    }
+    const sameMeetingIds = new Set<string>()
+    const sameMeeting = (a: string, b: string) => sameMeetingIds.has(`${a}|${b}`)
 
     const result: MeetingMatchJobResult = { checked: 0, asked: 0, reused: 0, linked: 0, relinked: 0, noMatch: 0, skipped: 0, failed: 0, stoppedOnAuth: false }
     if (options.dryRun) result.planned = []
@@ -288,6 +299,11 @@ export async function matchMeetingsWithJev(
         if (wait > 0) await new Promise((r) => setTimeout(r, wait))
       }
       const match = await matchMeetingWithJev(recordingId, toMatchContext(recording, list), candidates, deps)
+      if (match?.topMeetingId && recording.meeting_id && recording.meeting_id !== match.topMeetingId) {
+        const a = keyOf(recording.meeting_id)
+        const b = keyOf(match.topMeetingId)
+        if (a && a === b) sameMeetingIds.add(`${recording.meeting_id}|${match.topMeetingId}`)
+      }
       if (reuse) result.reused++
       else result.asked++
       if (!isClearMatch(match)) {
@@ -295,6 +311,8 @@ export async function matchMeetingsWithJev(
         return
       }
       if (recording.meeting_id === match.topMeetingId) return
+      // Linked to another copy of the same meeting (ICS and Microsoft 365): nothing to move.
+      if (recording.meeting_id && sameMeeting(recording.meeting_id, match.topMeetingId)) return
       if (options.dryRun) {
         result.planned!.push({ recordingId, from: recording.meeting_id ?? null, to: match.topMeetingId, probability: match.topProbability })
       } else {

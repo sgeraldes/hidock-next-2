@@ -60,6 +60,12 @@ export interface MeetingMatch {
   inputTokens: number | null
 }
 
+/** Same meeting, two sources: the ICS feed and Microsoft 365 carry one event with the same subject and start. */
+export function meetingCopyKey(subject: string, startTime: string): string {
+  const start = Date.parse(startTime)
+  return `${subject.trim().toLowerCase()}|${Number.isFinite(start) ? start : startTime}`
+}
+
 /** The candidates Jev sees: overlapping first, then by time score, at most MAX_MATCH_CANDIDATES. */
 export function pickMatchCandidates(candidates: MatchCandidate[]): MatchCandidate[] {
   return [...candidates]
