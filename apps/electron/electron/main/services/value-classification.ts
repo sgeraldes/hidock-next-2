@@ -55,6 +55,7 @@ import { complete } from '@hidock/ai-providers'
 import { getProviderConfigFromSettings } from './ai-provider-config'
 import { getConfig } from './config'
 import { askJev } from './jev-client'
+import { jevKeyFor } from './jev-settings'
 import {
   buildEvaluationQuestions,
   buildEvaluationState,
@@ -439,7 +440,7 @@ export type ValueClassifierKind = 'jev' | 'llm'
  *  neither is configured. Jev wins when its key is set: Sebastián chose it
  *  (27-sep-2026) as the decider for the value backlog. */
 export function getValueClassifierKind(): ValueClassifierKind | null {
-  if (getConfig().transcription.jevApiKey?.trim()) return 'jev'
+  if (jevKeyFor('value')) return 'jev'
   return getProviderConfigFromSettings() ? 'llm' : null
 }
 
@@ -587,7 +588,7 @@ export async function classifyCaptureValueRaw(captureId: string): Promise<RawCla
     }
   }
 
-  const jevKey = getConfig().transcription.jevApiKey?.trim()
+  const jevKey = jevKeyFor('value')
   const hasTranscript = !!row.transcript_full_text && row.transcript_full_text.trim() !== ''
   // Short clips get the free duration verdict and are never sent to Jev; the
   // scan's eligibility query applies the same line, but it belongs here too so

@@ -22,7 +22,7 @@ import {
   isCancelledMeetingSubject,
   scoreMeetingCandidates
 } from './recording-match-scoring'
-import { getConfig } from './config'
+import { jevKeyFor } from './jev-settings'
 import { JEV_MODEL, MEETING_MATCH_VERSION, meetingCopyKey, type MatchCandidate, type MatchContext, type MeetingMatchDeps } from './jev-meeting-match'
 
 export type CandidateRow = ReturnType<typeof getCandidatesForRecordingWithDetails>[number]
@@ -153,7 +153,7 @@ export function toMatchContext(recording: Recording, list: ReturnType<typeof lis
 
 /** Store and key for the Jev meeting match, or null when no Jev key is set. */
 export function jevMeetingMatchDeps(): MeetingMatchDeps | null {
-  const apiKey = String(getConfig().transcription?.jevApiKey ?? '').trim()
+  const apiKey = jevKeyFor('meetingMatch')
   if (!apiKey) return null
   return {
     apiKey,
