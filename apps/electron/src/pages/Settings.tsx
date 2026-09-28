@@ -66,6 +66,7 @@ import { TranscriptionPipelineControls } from '@/features/settings/Transcription
 import { RecordingSection } from '@/features/settings/RecordingSection'
 import { CalendarPreferences } from '@/features/settings/CalendarPreferences'
 import { DiarizationCpuShare, OllamaModelFields } from '@/features/settings/ModelFields'
+import { AdvancedSettings } from '@/features/settings/AdvancedSettings'
 
 // RAG configuration constants — MAX_CONTEXT_CHUNKS must match config.ts default (10)
 const RAG_DEFAULTS = {
@@ -1999,6 +2000,7 @@ export function Settings({
                 </div>
               </CardContent>
             </Card>
+            <AdvancedSettings />
             </>
           )}
 

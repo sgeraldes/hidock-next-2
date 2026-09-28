@@ -655,6 +655,11 @@ export function getConfig(): AppConfig {
   return { ...config }
 }
 
+/** The shipped defaults, for Settings' "Default:" and Reset (a copy; never the live config). */
+export function getDefaultConfig(): AppConfig {
+  return structuredClone(DEFAULT_CONFIG)
+}
+
 export async function saveConfig(newConfig: Partial<AppConfig>): Promise<void> {
   // Snapshot the PRIOR in-memory config and the PRIOR plaintext key BEFORE merging
   // so we can (a) roll back a failed store write on a key change (HIGH-4) and
