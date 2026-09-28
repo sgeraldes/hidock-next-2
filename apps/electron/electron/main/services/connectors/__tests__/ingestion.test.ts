@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { readdirSync } from 'fs'
+import { createHash } from 'crypto'
 import { tmpdir } from 'os'
 
 // Replace the electron-dependent modules so importing ingestion.ts doesn't pull
@@ -127,5 +128,61 @@ describe('ConnectorIngestionSink routing', () => {
     expect(outcome.meetings).toBe(2)
     expect(spy).toHaveBeenCalledTimes(1)
     expect(spy.mock.calls[0][0]).toHaveLength(2)
+  })
+})
+
+describe('ConnectorIngestionSink: one Library item per channel', () => {
+  const channel: SourceContainer = { externalId: 'C1', name: 'general', kind: 'channel' }
+  const msg = (ts: string, text: string): SourceItem => ({
+    externalId: `C1:${ts}`,
+    kind: 'message',
+    mime: 'text/markdown',
+    text,
+    createdAt: '2026-09-28T00:00:00Z'
+  })
+  const sha = (text: string) => createHash('sha256').update(text).digest('hex')
+
+  function channelDeps(existing: Record<string, { id: string; content_hash: string }> = {}) {
+    const deps = fakeDeps()
+    const calls: string[] = []
+    return Object.assign(deps, {
+      calls,
+      captureFor: (_c: string, container: SourceContainer) => {
+        calls.push(`capture:${container.externalId}`)
+        return `cap-${container.externalId}`
+      },
+      findExisting: (_c: string, ref: string) => existing[ref],
+      removeArtifact: (id: string) => calls.push(`remove:${id}`)
+    })
+  }
+
+  it('files every message of a channel under the same item', async () => {
+    const deps = channelDeps()
+    const outcome = await new ConnectorIngestionSink(deps).ingest('slack:T1', channel, [msg('1', 'hi'), msg('2', 'there')])
+    expect(outcome.artifacts).toBe(2)
+    expect(deps.imported.map((i) => i.opts.knowledgeCaptureId)).toEqual(['cap-C1', 'cap-C1'])
+  })
+
+  it('leaves an unchanged message alone', async () => {
+    const deps = channelDeps({ 'C1:1': { id: 'a1', content_hash: sha('hi') } })
+    const outcome = await new ConnectorIngestionSink(deps).ingest('slack:T1', channel, [msg('1', 'hi')])
+    expect(outcome).toMatchObject({ artifacts: 0, skipped: 1 })
+    expect(deps.imported).toEqual([])
+    expect(deps.calls).toEqual([])
+  })
+
+  it('replaces an edited message, finding the item before the old copy goes', async () => {
+    const deps = channelDeps({ 'C1:1': { id: 'a1', content_hash: sha('hi') } })
+    const outcome = await new ConnectorIngestionSink(deps).ingest('slack:T1', channel, [msg('1', 'hi, edited')])
+    expect(outcome.artifacts).toBe(1)
+    expect(deps.calls).toEqual(['capture:C1', 'remove:a1'])
+    expect(deps.imported[0].opts).toMatchObject({ sourceRef: 'C1:1', knowledgeCaptureId: 'cap-C1' })
+  })
+
+  it('counts content already in the Library as skipped', async () => {
+    const deps = channelDeps()
+    deps.importArtifactFile = async () => ({ deduped: true })
+    const outcome = await new ConnectorIngestionSink(deps).ingest('slack:T1', channel, [msg('1', 'hi')])
+    expect(outcome).toMatchObject({ artifacts: 0, skipped: 1 })
   })
 })
