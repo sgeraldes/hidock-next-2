@@ -347,7 +347,7 @@ CREATE TABLE IF NOT EXISTS audio_profiles (
 
 -- Jev evaluation (v61): one System One pass per capture. Stars, kind, work or
 -- personal, transcript trust and more (jev-evaluation.ts). Only the value ever
--- changes a rating; the rest is read by the Library and later stages.
+-- changes a rating. The rest is read by the Library and later stages.
 CREATE TABLE IF NOT EXISTS recording_evaluations (
     capture_id TEXT PRIMARY KEY,
     recording_id TEXT,
