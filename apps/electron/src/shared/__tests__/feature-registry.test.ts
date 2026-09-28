@@ -10,6 +10,7 @@
 
 import { describe, it, expect } from 'vitest'
 import {
+  applyFeatureToggle,
   ALL_FEATURE_IDS,
   CORE_FEATURE_IDS,
   CONNECTOR_FEATURE_IDS,
@@ -307,5 +308,34 @@ describe('isPresetId', () => {
     expect(isPresetId('custom')).toBe(true)
     expect(isPresetId('everything')).toBe(false)
     expect(isPresetId(undefined)).toBe(false)
+  })
+})
+
+describe('applyFeatureToggle (Features page switches)', () => {
+  it('turning one feature off from Full gives Custom with that one flag', () => {
+    expect(applyFeatureToggle({ preset: 'full', flags: {} }, 'explore', false)).toEqual({
+      preset: 'custom',
+      flags: { explore: false },
+    })
+  })
+
+  it('turning it back on names the preset again with no flags', () => {
+    expect(applyFeatureToggle({ preset: 'custom', flags: { explore: false } }, 'explore', true)).toEqual({
+      preset: 'full',
+      flags: {},
+    })
+  })
+
+  it('lands on a smaller named preset when the set matches it exactly', () => {
+    expect(applyFeatureToggle({ preset: 'library-only', flags: {} }, 'transcription', true)).toEqual({
+      preset: 'library-transcription',
+      flags: {},
+    })
+  })
+
+  it('keeps connector flags, which presets never set', () => {
+    const next = applyFeatureToggle({ preset: 'full', flags: { 'connector:slack': true } }, 'today', false)
+    expect(next).toEqual({ preset: 'custom', flags: { 'connector:slack': true, today: false } })
+    expect(resolveFeatureState(next).today.enabled).toBe(false)
   })
 })
