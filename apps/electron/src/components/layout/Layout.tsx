@@ -36,6 +36,7 @@ import { OperationsPanel } from '@/components/layout/OperationsPanel'
 import { useUIStore } from '@/store/ui/useUIStore'
 import { useActionablesPendingCount, useActionablesStore } from '@/store'
 import { useFeatureStore, describeDisableReason, featureForPath } from '@/store/useFeatureStore'
+import { startUiConfigSync } from '@/store/ui/ui-config-sync'
 
 interface LayoutProps {
   children: ReactNode
@@ -227,6 +228,9 @@ export function Layout({ children }: LayoutProps) {
   const prevConnectedRef = useRef<boolean | null>(null)
   const prevStatusStepRef = useRef<string | null>(null)
   const hasShownInitialToast = useRef(false)
+
+  // Chat placement and clipboard capture are kept in config.json (ui-config-sync.ts).
+  useEffect(() => startUiConfigSync(), [])
 
   // Initialize app on mount
   useEffect(() => {

@@ -244,6 +244,7 @@ export interface AppConfig {
    */
   capture?: {
     describeImages?: boolean
+    autoClipboard?: boolean
   }
   transcription: {
     provider: 'gemini' | 'local-asr' | 'vibevoice'
@@ -329,6 +330,8 @@ export interface AppConfig {
     officeHoursStart: number
     officeHoursEnd: number
     workDays: number[]
+    chatPlacement?: 'floating' | 'embedded'
+    chatPosition?: 'left' | 'right'
     /** Player & notifications (Settings). Defaults are the numbers the app used before. */
     skipSeconds?: number
     playbackSpeeds?: number[]

@@ -282,6 +282,8 @@ export interface AppConfig {
    */
   capture?: {
     describeImages?: boolean
+    /** Capture screenshots copied to the clipboard (Privacy & capture). No default, as for ui.chatPlacement. */
+    autoClipboard?: boolean
   }
   /**
    * Decisions (Jev): one switch for Jev and one per job it does. Each job
@@ -318,6 +320,13 @@ export interface AppConfig {
     toastSeconds?: number
     /** Dates, times and numbers (Settings > Display); 'system' follows Windows. */
     locale?: string
+    /**
+     * Where the assistant sits (Settings > Assistant). No default on purpose:
+     * absent means never saved here, so the renderer copies its older
+     * localStorage choice in (ui-config-sync.ts).
+     */
+    chatPlacement?: 'floating' | 'embedded'
+    chatPosition?: 'left' | 'right'
   }
 }
 
