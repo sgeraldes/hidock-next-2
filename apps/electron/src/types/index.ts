@@ -317,6 +317,24 @@ export interface AppConfig {
     jevValue: boolean
     jevMeetingMatch: boolean
   }
+  /** Settings > Quality checks (mirror of the main-process shape; the main process clamps each value). */
+  quality?: {
+    quietSoundShare?: number
+    quietMinDurationSeconds?: number
+    meaningfulWords?: number
+    meaningfulStars?: number
+    maxWordsPerMinuteOfRecording?: number
+    busySoundSeconds?: number
+    minWordsPerMinuteOfSound?: number
+    inventedProbability?: number
+    reasonProbability?: number
+    lowValueMaxSeconds?: number
+    maxRetries?: number
+    retranscribeScore?: number
+    meetingAutoLinkProbability?: number
+    meetingAutoLinkMargin?: number
+    liveSilenceRms?: number
+  }
   ui: {
     /** Library title for sources with no calendar event. */
     /** No longer read (25-sep-2026): the Library never titles a source by its file name. */

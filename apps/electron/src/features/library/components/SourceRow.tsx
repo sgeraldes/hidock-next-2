@@ -27,6 +27,7 @@ import { formatValueReasons } from '@/features/library/utils/valueReasons'
 import { ISSUE_TAGS, integrityIssues, integrityLabel } from '@/features/library/utils/transcriptIntegrity'
 import { audioLabel } from '@/features/library/utils/audioCheck'
 import { CONTEXT_LABELS, KIND_LABELS, WARNING_LABELS, effectiveWarning } from '@/features/library/utils/evaluation'
+import { useConfigStore } from '@/store/domain/useConfigStore'
 import {
   LABEL_DELETE_FROM_DEVICE,
   LABEL_MOVE_TO_TRASH,
@@ -146,6 +147,8 @@ function EvaluationLabel({ recording }: { recording: UnifiedRecording }) {
  * Icon-only so it keeps its slot; the words are in the tooltip.
  */
 function EvaluationWarning({ recording }: { recording: UnifiedRecording }) {
+  // Subscribed, so a changed Settings > Quality checks threshold redraws the row.
+  useConfigStore((s) => s.config?.quality?.inventedProbability)
   const warning = effectiveWarning(recording)
   if (!warning) return null
   const { label, detail } = WARNING_LABELS[warning]

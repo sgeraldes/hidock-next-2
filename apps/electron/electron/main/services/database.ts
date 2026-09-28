@@ -14,7 +14,7 @@ import { DatabaseEngine, getTableColumns, type BootProgress, type ExternalBackup
 import { normalizeName, isGenericSpeakerLabel, detectAmbiguousName } from './entity-normalize'
 import { getEventBus } from './event-bus'
 import { isCancelledMeetingSubject, scoreMeetingCandidates } from './recording-match-scoring'
-import { DURATION_LOW_VALUE_MAX_SECONDS, isImpossibleTranscriptDensity } from './value-thresholds'
+import { isImpossibleTranscriptDensity, lowValueMaxSeconds } from './value-thresholds'
 import type { QualityRating } from '@/types/knowledge'
 
 const SCHEMA_VERSION = 63
@@ -6737,7 +6737,7 @@ export function maxTranscriptSegmentEnd(speakersJson: string | null | undefined)
 /**
  * Undo a stopwatch verdict that a corrected duration has just invalidated.
  *
- * The duration gate rates anything under DURATION_LOW_VALUE_MAX_SECONDS as
+ * The duration gate rates anything under lowValueMaxSeconds() as
  * low-value or garbage without reading a word of it, which is right when the
  * number is a measurement and wrong when it is a transcript's last segment
  * end. A recording stored as 15 seconds and measured at 570 was rated on a
@@ -6858,7 +6858,8 @@ function settleMeasuredDuration(
   const changed = Math.round(before) !== Math.round(fileSeconds)
   updateRecordingDuration(row.id, fileSeconds, 'file')
   let reopened = 0
-  if (before > 0 && before < DURATION_LOW_VALUE_MAX_SECONDS && fileSeconds >= DURATION_LOW_VALUE_MAX_SECONDS) {
+  const lowValueLine = lowValueMaxSeconds()
+  if (before > 0 && before < lowValueLine && fileSeconds >= lowValueLine) {
     reopened = clearStopwatchVerdict(row.id)
   }
   return { truncated: false, changed, reopened }

@@ -61,6 +61,7 @@ import {
   buildEvaluationState,
   evaluationToValue,
   parseEvaluation,
+  reasonsFromAnswers,
   audioTranscriptWarning,
   EVALUATION_VERSION,
   type EvaluationAudio,
@@ -69,7 +70,7 @@ import {
 import {
   classifyByDuration,
   isDurationContradictedByFileSize,
-  DURATION_LOW_VALUE_MAX_SECONDS,
+  lowValueMaxSeconds,
   MAX_PLAUSIBLE_BYTES_PER_SECOND
 } from './value-thresholds'
 import type { QualityRating } from '@/types/knowledge'
@@ -160,7 +161,8 @@ export {
   MAX_PLAUSIBLE_BYTES_PER_SECOND,
   isImpossibleTranscriptDensity,
   isDurationContradictedByFileSize,
-  classifyByDuration
+  classifyByDuration,
+  lowValueMaxSeconds
 } from './value-thresholds'
 
 export interface ApplyResult {
@@ -593,7 +595,7 @@ export async function classifyCaptureValueRaw(captureId: string): Promise<RawCla
   // Short clips get the free duration verdict and are never sent to Jev; the
   // scan's eligibility query applies the same line, but it belongs here too so
   // no other caller can send one.
-  const longEnough = row.duration_seconds === null || row.duration_seconds >= DURATION_LOW_VALUE_MAX_SECONDS
+  const longEnough = row.duration_seconds === null || row.duration_seconds >= lowValueMaxSeconds()
   const needsEvaluation =
     !!jevKey && hasTranscript && longEnough && (row.evaluation_version ?? 0) < EVALUATION_VERSION
   const evaluate = () =>
@@ -765,7 +767,7 @@ export function applyDurationValueGate(): { candidates: number; marked: number }
             AND r.file_size > 0
             AND r.file_size > r.duration_seconds * ?
           )`,
-      [DURATION_LOW_VALUE_MAX_SECONDS, MAX_PLAUSIBLE_BYTES_PER_SECOND]
+      [lowValueMaxSeconds(), MAX_PLAUSIBLE_BYTES_PER_SECOND]
     )
   } catch (e) {
     console.warn('[ValueClassification] duration gate sweep query failed:', e instanceof Error ? e.message : e)
@@ -877,5 +879,40 @@ export async function recomputeAudioWarnings(recordingIds?: string[]): Promise<n
       console.warn('[Evaluation] could not announce the warning refresh:', error)
     }
   }
+  return updates.length
+}
+
+/**
+ * Recompute stored reason tags (recording_evaluations.reasons_json) from the
+ * answers Jev already gave (answers_json) at the reason threshold in force
+ * (Settings > Quality checks). No Jev call: every reason is a Noul whose
+ * probability is stored. A capture's rating and its quality_reasons are not
+ * touched; those were decided when it was rated. Returns how many rows changed.
+ */
+export async function recomputeEvaluationReasons(): Promise<number> {
+  const rows = queryAll<{ capture_id: string; reasons_json: string | null; answers_json: string }>(
+    'SELECT capture_id, reasons_json, answers_json FROM recording_evaluations'
+  )
+  const updates: Array<{ captureId: string; reasons: string }> = []
+  let unreadable = 0
+  for (const row of rows) {
+    let answers: Parameters<typeof reasonsFromAnswers>[0]
+    try {
+      answers = JSON.parse(row.answers_json)
+    } catch {
+      unreadable++
+      continue
+    }
+    const next = JSON.stringify(reasonsFromAnswers(answers))
+    if (next !== (row.reasons_json ?? '[]')) updates.push({ captureId: row.capture_id, reasons: next })
+  }
+  for (let i = 0; i < updates.length; i += WARNING_REFRESH_CHUNK) {
+    const chunk = updates.slice(i, i + WARNING_REFRESH_CHUNK)
+    runInTransaction(() => {
+      for (const u of chunk) run('UPDATE recording_evaluations SET reasons_json = ? WHERE capture_id = ?', [u.reasons, u.captureId])
+    })
+    if (i + WARNING_REFRESH_CHUNK < updates.length) await new Promise<void>((resolve) => setImmediate(resolve))
+  }
+  if (unreadable > 0) console.warn(`[Evaluation] reasons not recomputed for ${unreadable} evaluation(s) with unreadable answers`)
   return updates.length
 }

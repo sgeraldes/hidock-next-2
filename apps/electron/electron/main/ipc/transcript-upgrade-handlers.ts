@@ -16,7 +16,7 @@ import {
   runUpgrade,
   getUpgradeStatus,
   getRecommendedRecordingIds,
-  DEFAULT_TRIAGE_THRESHOLD,
+  triageThreshold,
   type ScanResult,
   type UpgradeStatus
 } from '../services/transcript-upgrade'
@@ -25,7 +25,7 @@ const ThresholdSchema = z.object({ threshold: z.number().min(0).max(100).optiona
 
 function resolveThreshold(request: unknown): number {
   const parsed = ThresholdSchema.safeParse(request)
-  return parsed.success && parsed.data?.threshold != null ? parsed.data.threshold : DEFAULT_TRIAGE_THRESHOLD
+  return parsed.success && parsed.data?.threshold != null ? parsed.data.threshold : triageThreshold()
 }
 
 export function registerTranscriptUpgradeHandlers(): void {
