@@ -43,8 +43,10 @@ vi.mock('../file-storage', () => ({
 
 vi.mock('../activity-log', () => ({ emitActivityLog: vi.fn() }))
 
+const bus: { active: string | null } = { active: null }
+
 vi.mock('../download-transfer-controller', () => ({
-  getActiveTransferFilename: () => null,
+  getActiveTransferFilename: () => bus.active,
   cancelActiveTransferByName: vi.fn(() => Promise.resolve(true)),
   cancelActiveTransfer: vi.fn(() => Promise.resolve(true)),
 }))
@@ -62,11 +64,13 @@ describe('DownloadService — transfer stall', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    bus.active = null
     service = new DownloadService()
   })
 
   afterEach(() => {
     service.destroy()
+    vi.useRealTimers()
   })
 
   function item(name: string) {
@@ -101,6 +105,9 @@ describe('DownloadService — transfer stall', () => {
 
     expect(item('bad.hda')?.status).toBe('failed')
     expect(item('bad.hda')?.error).toContain('a second time; use Retry')
+    // the renderer's generic failure that follows keeps that reason
+    expect(service.markFailed('bad.hda', 'USB transfer failed')).toBe(false)
+    expect(item('bad.hda')?.error).toContain('a second time; use Retry')
     expect(service.retryFailed(true, true).count).toBe(0)
     // a manual retry still works
     expect(service.retryFailed(true, false).count).toBe(1)
@@ -118,5 +125,23 @@ describe('DownloadService — transfer stall', () => {
     service.updateProgress('f.hda', 10)
     expect(service.markFailed('f.hda', 'USB transfer failed')).toBe(true)
     expect(item('f.hda')?.status).toBe('failed')
+  })
+
+  it('leaves the file on the bus to the driver watchdog, and still fails an orphan', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-28T23:29:13Z'))
+    service.queueDownloads([{ filename: 'small.hda', size: 5_000_000 }, { filename: 'orphan.hda', size: 5_000_000 }])
+    service.updateProgress('small.hda', 10)
+    service.updateProgress('orphan.hda', 10)
+    bus.active = 'small.hda'
+
+    vi.setSystemTime(new Date('2026-09-28T23:30:30Z')) // 77 s of silence, past the 60 s small-file limit
+    expect(service.checkForStalledDownloads()).toBe(1)
+
+    expect(item('small.hda')?.status).toBe('downloading')
+    expect(item('orphan.hda')?.status).toBe('failed')
+    // the driver's watchdog then reports it and the reconnect retries it
+    service.noteTransferStall('small.hda', 10, 5_000_000)
+    expect(item('small.hda')?.cancelReason).toBe('interrupted')
   })
 })
