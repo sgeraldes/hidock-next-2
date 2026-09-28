@@ -528,6 +528,12 @@ export async function initializeConfig(options: { persist?: boolean } = {}): Pro
       if (savedConfig.transcription?.jevApiKey) {
         savedConfig.transcription.jevApiKey = decryptSensitive(savedConfig.transcription.jevApiKey)
       }
+      if (savedConfig.transcription?.geminiApiKey) {
+        savedConfig.transcription.geminiApiKey = decryptSensitive(savedConfig.transcription.geminiApiKey)
+      }
+      if (savedConfig.transcription?.localAsrHfToken) {
+        savedConfig.transcription.localAsrHfToken = decryptSensitive(savedConfig.transcription.localAsrHfToken)
+      }
       if (savedConfig.transcription?.modelHostToken) {
         savedConfig.transcription.modelHostToken = decryptSensitive(
           savedConfig.transcription.modelHostToken
@@ -631,7 +637,15 @@ export async function saveConfig(newConfig: Partial<AppConfig>): Promise<void> {
         : config.transcription.modelHostToken,
       jevApiKey: config.transcription.jevApiKey
         ? encryptSensitive(config.transcription.jevApiKey)
-        : config.transcription.jevApiKey
+        : config.transcription.jevApiKey,
+      // Plain text until 28-sep-2026 (settings inventory); a plain value on disk
+      // is read as-is and written back encrypted on the next save.
+      geminiApiKey: config.transcription.geminiApiKey
+        ? encryptSensitive(config.transcription.geminiApiKey)
+        : config.transcription.geminiApiKey,
+      localAsrHfToken: config.transcription.localAsrHfToken
+        ? encryptSensitive(config.transcription.localAsrHfToken)
+        : config.transcription.localAsrHfToken
     }
   }
 

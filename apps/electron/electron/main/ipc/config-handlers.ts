@@ -1,4 +1,5 @@
 import { ipcMain, shell } from 'electron'
+import { isSavedSecret, redactSecrets, withoutSavedSecrets } from '../../../src/shared/secret-fields'
 import { getConfig, saveConfig, updateConfig, AppConfig, RETIRED_GEMINI_MODELS } from '../services/config'
 import { initializeFileStorage } from '../services/file-storage'
 import { listGeminiTranscriptionModels } from '../services/gemini-models'
@@ -15,7 +16,8 @@ export function registerConfigHandlers(): void {
   // Get full config
   ipcMain.handle('config:get', async () => {
     try {
-      return success(getConfig())
+      // Secrets never reach the window: it gets a "saved" marker instead.
+      return success(redactSecrets(getConfig()))
     } catch (err) {
       console.error('[config:get] Error:', err)
       return errorResult(
@@ -29,9 +31,18 @@ export function registerConfigHandlers(): void {
   // Save full config
   ipcMain.handle('config:set', async (_, newConfig: Partial<AppConfig>) => {
     try {
-      await saveConfig(newConfig)
+      // A field still carrying the "saved" marker was not changed: keep the stored secret.
+      const cleaned = Object.fromEntries(
+        Object.entries(newConfig).map(([section, values]) => [
+          section,
+          values && typeof values === 'object' && !Array.isArray(values)
+            ? withoutSavedSecrets(values as Record<string, unknown>)
+            : values
+        ])
+      ) as Partial<AppConfig>
+      await saveConfig(cleaned)
       emitActivityLog('info', 'Settings saved')
-      return success(getConfig())
+      return success(redactSecrets(getConfig()))
     } catch (err) {
       console.error('[config:set] Error:', err)
       emitActivityLog('error', 'Failed to save settings', err instanceof Error ? err.message : undefined)
@@ -51,7 +62,7 @@ export function registerConfigHandlers(): void {
         // Track I: capture the resolved feature state BEFORE the write so the
         // lifecycle reconciler can diff old→new and start/stop the right loops.
         const prevFeatures = section === 'features' ? getResolvedFeatures() : null
-        await updateConfig(section, values)
+        await updateConfig(section, withoutSavedSecrets(values as Record<string, unknown>) as Partial<AppConfig[K]>)
         if (section === 'storage') {
           await initializeFileStorage()
         }
@@ -60,7 +71,7 @@ export function registerConfigHandlers(): void {
           await reconcileFeatures(prevFeatures)
         }
         emitActivityLog('info', `Settings updated: ${String(section)}`)
-        return success(getConfig())
+        return success(redactSecrets(getConfig()))
       } catch (err) {
         console.error(`[config:update-section] Error updating ${String(section)}:`, err)
         emitActivityLog('error', `Failed to update ${String(section)} settings`, err instanceof Error ? err.message : undefined)
@@ -93,7 +104,9 @@ export function registerConfigHandlers(): void {
   ipcMain.handle('config:checkSpeakerModelAccess', async (_, token?: string) => {
     try {
       const savedToken = getConfig().transcription.localAsrHfToken || ''
-      return success(await checkSpeakerModelAccess(typeof token === 'string' ? token : savedToken))
+      // The window only holds the "saved" marker for a stored token.
+      const useSaved = typeof token !== 'string' || isSavedSecret(token)
+      return success(await checkSpeakerModelAccess(useSaved ? savedToken : token))
     } catch (err) {
       console.error('[config:checkSpeakerModelAccess] Error:', err)
       return errorResult(
