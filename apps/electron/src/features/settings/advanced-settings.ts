@@ -19,16 +19,18 @@ export interface AdvancedSetting {
   unit?: string
   /** A text value that may be left empty (empty means "find it"). */
   allowEmpty?: boolean
+  /** Only whole numbers (the main process rounds these). */
+  integer?: boolean
 }
 
 export const ADVANCED_SETTINGS: AdvancedSetting[] = [
   {
-    section: 'embeddings', key: 'chunkSize', group: 'Search', kind: 'number', min: 100, max: 4000, step: 50, unit: 'characters',
+    section: 'embeddings', key: 'chunkSize', group: 'Search', kind: 'number', integer: true, min: 100, max: 4000, step: 50, unit: 'characters',
     label: 'Passage size',
     detail: 'How much text each search passage holds. Applies to text indexed from now on.'
   },
   {
-    section: 'embeddings', key: 'chunkOverlap', group: 'Search', kind: 'number', min: 0, max: 1000, step: 10, unit: 'characters',
+    section: 'embeddings', key: 'chunkOverlap', group: 'Search', kind: 'number', integer: true, min: 0, max: 1000, step: 10, unit: 'characters',
     label: 'Passage overlap',
     detail: 'Text repeated between neighbouring passages, so a sentence is not cut in two. At most half the passage size.'
   },
@@ -68,7 +70,7 @@ export const ADVANCED_SETTINGS: AdvancedSetting[] = [
     detail: 'A voice with less speech than this in a recording is not matched.'
   },
   {
-    section: 'transcription', key: 'speakerLinkingTimeoutSeconds', group: 'Voice matching', kind: 'number', min: 60, max: 21600, step: 60, unit: 's',
+    section: 'transcription', key: 'speakerLinkingTimeoutSeconds', group: 'Voice matching', kind: 'number', integer: true, min: 60, max: 21600, step: 60, unit: 's',
     label: 'Voice step time limit',
     detail: 'The least time the voice step gets; long recordings get 1.5 times their length.'
   },
@@ -99,14 +101,15 @@ export function parseAdvancedValue(
   }
   const value = Number(text.replace(',', '.'))
   if (!text || !Number.isFinite(value)) return { error: 'Enter a number' }
+  if (setting.integer && !Number.isInteger(value)) return { error: 'Enter a whole number' }
   if (setting.min !== undefined && value < setting.min) return { error: `At least ${setting.min}` }
   if (setting.max !== undefined && value > setting.max) return { error: `At most ${setting.max}` }
   // The main process caps the overlap at half the passage size (rag-settings.ts).
   if (setting.key === 'chunkOverlap' && typeof others.chunkSize === 'number' && value > Math.floor(others.chunkSize / 2)) {
-    return { error: `At most half the passage size (${Math.floor(others.chunkSize / 2)})` }
+    return { error: `At most half the passage size (${Math.floor(others.chunkSize / 2)}). Raise the passage size first.` }
   }
   if (setting.key === 'chunkSize' && typeof others.chunkOverlap === 'number' && value < others.chunkOverlap * 2) {
-    return { error: `At least twice the overlap (${others.chunkOverlap * 2})` }
+    return { error: `At least twice the overlap (${others.chunkOverlap * 2}). Lower the overlap first.` }
   }
   return { value }
 }

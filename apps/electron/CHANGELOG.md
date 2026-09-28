@@ -50,6 +50,10 @@ recording, and Microsoft 365 and Slack connect on first try.
   channels to a WAV in the recordings folder. When it stops, the recording is in the Library, linked
   to its meeting and transcribed like any other, diarization included. A stream cut off by a crash
   or an unplugged cable is saved too. Off with the switch in Settings > Recording.
+- **Developer > Advanced.** The tuning values that had no control get one: search passage size and
+  overlap, the Gemini chat model, the VibeVoice model and device, the rating confidence floor, and
+  the voice-matching threshold, margin, minimum speech, time limit and paths. Each shows its default
+  and has a Reset.
 - **Connectors, easier to set up.** The Slack channel list has "Choose all shown" for the filtered
   channels, and says what a sync does: one Library item per channel, what edits do, and what it does
   not do yet (channel summaries, reports, people matching). The ICS calendar feed has Disconnect.

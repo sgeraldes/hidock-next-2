@@ -48,6 +48,16 @@ describe('Developer > Advanced', () => {
     await waitFor(() => expect(updateConfig).toHaveBeenCalledWith('transcription', { speakerLinkingMatchThreshold: 0.8 }))
   })
 
+  it('Enter then leaving the field saves once', async () => {
+    updateConfig.mockImplementation(() => new Promise((resolve) => setTimeout(resolve, 20)))
+    render(<AdvancedSettings />)
+    const margin = await screen.findByLabelText('Voice match margin')
+    fireEvent.change(margin, { target: { value: '0.1' } })
+    fireEvent.keyDown(margin, { key: 'Enter' })
+    fireEvent.blur(margin)
+    await waitFor(() => expect(updateConfig).toHaveBeenCalledTimes(1))
+  })
+
   it('Reset appears only when the value differs from its default, and saves the default', async () => {
     render(<AdvancedSettings />)
     const reset = await screen.findByRole('button', { name: 'Reset Passage size to its default' })
@@ -63,7 +73,8 @@ describe('parseAdvancedValue', () => {
   const python = ADVANCED_SETTINGS.find((s) => s.key === 'speakerLinkingPythonPath')!
 
   it('keeps the overlap at most half the passage size, as the main process does', () => {
-    expect(parseAdvancedValue(overlap, '300', { chunkSize: 500 })).toEqual({ error: 'At most half the passage size (250)' })
+    expect(parseAdvancedValue(overlap, '300', { chunkSize: 500 })).toEqual({ error: 'At most half the passage size (250). Raise the passage size first.' })
+    expect(parseAdvancedValue(overlap, '25.5', { chunkSize: 500 })).toEqual({ error: 'Enter a whole number' })
     expect(parseAdvancedValue(overlap, '250', { chunkSize: 500 })).toEqual({ value: 250 })
   })
 

@@ -2,7 +2,7 @@
  * Developer > Advanced: the config values with no other control, each with
  * its default (read from the main process) and a Reset.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/components/ui/toaster'
@@ -26,11 +26,14 @@ function AdvancedRow({ setting, current, fallback, section }: {
   const [draft, setDraft] = useState(display(current))
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  // Enter saves and then the field loses focus: one save, not two.
+  const inFlight = useRef(false)
   const id = `advanced-${setting.section}-${setting.key}`
 
   useEffect(() => setDraft(display(current)), [current])
 
   const save = async (raw: string) => {
+    if (inFlight.current) return
     if (raw.trim() === display(current).trim()) {
       setError(null)
       return
@@ -42,12 +45,14 @@ function AdvancedRow({ setting, current, fallback, section }: {
     }
     setError(null)
     setSaving(true)
+    inFlight.current = true
     try {
       await updateConfig(setting.section, { [setting.key]: parsed.value } as never)
     } catch (err) {
       setDraft(display(current))
       toast.error(`Could not change ${setting.label.toLowerCase()}`, err instanceof Error ? err.message : undefined)
     } finally {
+      inFlight.current = false
       setSaving(false)
     }
   }
