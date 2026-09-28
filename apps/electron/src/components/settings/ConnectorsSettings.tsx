@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import {
   RefreshCw,
@@ -503,7 +504,17 @@ function AccountBlock({
   )
 }
 
-export function ConnectorsSettings() {
+/**
+ * A source that is not a connector-host connector but belongs in this list,
+ * like the ICS calendar feed (it predates the host). Settings supplies its
+ * row and its detail pane.
+ */
+export interface ExtraConnector {
+  item: ServiceListItem
+  content: ReactNode
+}
+
+export function ConnectorsSettings({ extra = [] }: { extra?: ExtraConnector[] } = {}) {
   const [connectors, setConnectors] = useState<ConnectorSummary[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -552,10 +563,12 @@ export function ConnectorsSettings() {
   }, [connectors])
 
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const selected = connectors.find((c) => c.instanceId === selectedId) ?? connectors[0] ?? null
+  // With no connector yet, the first extra source (the ICS feed) is shown.
+  const selectedExtra = extra.find((e) => e.item.id === selectedId) ?? (connectors.length === 0 ? (extra[0] ?? null) : null)
+  const selected = selectedExtra ? null : (connectors.find((c) => c.instanceId === selectedId) ?? connectors[0] ?? null)
   const selectedGroup = selected ? (groups.find(([type]) => type === selected.descriptor.id)?.[1] ?? []) : []
 
-  const items: ServiceListItem[] = connectors.map((c) => {
+  const connectorItems: ServiceListItem[] = connectors.map((c) => {
     const meta = STATUS_META[c.status.state] ?? STATUS_META.disconnected
     const sameType = connectors.filter((o) => o.descriptor.id === c.descriptor.id).length
     return {
@@ -566,15 +579,16 @@ export function ConnectorsSettings() {
       icon: CONNECTOR_ICONS[c.descriptor.id] ?? Plug
     }
   })
+  const items = [...connectorItems, ...extra.map((e) => e.item)]
 
   if (loading) return <p className="text-sm text-muted-foreground">Loading connectors…</p>
-  if (groups.length === 0) return <p className="text-sm text-muted-foreground">No connectors available.</p>
+  if (groups.length === 0 && extra.length === 0) return <p className="text-sm text-muted-foreground">No connectors available.</p>
 
   return (
     <ServiceList
       label="Connectors"
       items={items}
-      selected={selected?.instanceId ?? null}
+      selected={selectedExtra?.item.id ?? selected?.instanceId ?? null}
       onSelect={setSelectedId}
       footer={groups
         .filter(([, accounts]) => accounts[0]?.multiInstance)
@@ -590,6 +604,7 @@ export function ConnectorsSettings() {
           />
         ))}
     >
+      {selectedExtra?.content}
       {selected && (
         <div className="space-y-3">
           <div>
