@@ -43,6 +43,8 @@ recording, and Microsoft 365 and Slack connect on first try.
 - Row icons now keep their place, so a missing one reads as a gap.
 - The RAG Context Window, chunk size and chunk overlap settings were saved and ignored; they are
   read now, and at their defaults nothing changes. Five settings nothing used are gone.
+- A .flac recording could be imported but was then missed by the folder watcher, the file date
+  fix and the orphan and date checks; every place now uses the same list of audio types.
 - A transcript with one line out of time order refused every edit ("Invalid transcript edit"), and
   saving an edit dropped the speaker-confidence marks.
 

@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, unlinkSync, utimesSync, renameSync } from 'fs'
+import { RECORDING_AUDIO_EXTENSIONS } from '../../../src/shared/audio-extensions'
 import { join, basename, extname, resolve, normalize } from 'path'
 import { getConfig, getDataPath } from './config'
 import type { AppConfig } from './config'
@@ -347,7 +348,7 @@ export function getRecordingFiles(): string[] {
   return readdirSync(recordingsPath)
     .filter((file) => {
       const ext = extname(file).toLowerCase()
-      return ['.wav', '.mp3', '.m4a', '.ogg', '.webm', '.hda'].includes(ext)
+      return (RECORDING_AUDIO_EXTENSIONS as readonly string[]).includes(ext)
     })
     .map((file) => join(recordingsPath, file))
 }

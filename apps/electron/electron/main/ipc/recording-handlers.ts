@@ -1,4 +1,5 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron'
+import { RECORDING_AUDIO_EXTENSIONS } from '../../../src/shared/audio-extensions'
 import { rankRecordingsByMeetingCoverage } from '../services/recording-match-scoring'
 import {
   getRecordings,
@@ -490,7 +491,7 @@ export function registerRecordingHandlers(): void {
       const result = await dialog.showOpenDialog(focusedWindow || BrowserWindow.getAllWindows()[0], {
         title: 'Select Audio File',
         filters: [
-          { name: 'Audio Files', extensions: ['mp3', 'm4a', 'wav', 'ogg', 'flac'] }
+          { name: 'Audio Files', extensions: RECORDING_AUDIO_EXTENSIONS.map((ext) => ext.slice(1)) }
         ],
         properties: ['openFile']
       })
@@ -569,7 +570,7 @@ export function registerRecordingHandlers(): void {
   ipcMain.handle('recordings:addExternalByPath', async (_, filePath: string): Promise<{ success: boolean; recording?: Recording; error?: string }> => {
     try {
       // Validate file extension
-      const allowedExtensions = ['.mp3', '.m4a', '.wav', '.ogg', '.flac', '.webm', '.hda']
+      const allowedExtensions: readonly string[] = RECORDING_AUDIO_EXTENSIONS
       const fileExtension = extname(filePath).toLowerCase()
       if (!allowedExtensions.includes(fileExtension)) {
         return { success: false, error: `Unsupported file type: ${fileExtension}. Supported: ${allowedExtensions.join(', ')}` }

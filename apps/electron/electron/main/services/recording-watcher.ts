@@ -1,4 +1,5 @@
 import { watch, existsSync, statSync, readdirSync } from 'fs'
+import { RECORDING_AUDIO_EXTENSIONS } from '../../../src/shared/audio-extensions'
 import { join, extname, basename } from 'path'
 import { randomUUID } from 'crypto'
 import { getRecordingsPath } from './file-storage'
@@ -14,7 +15,7 @@ import {
 } from './database'
 import { BrowserWindow } from 'electron'
 
-const AUDIO_EXTENSIONS = ['.wav', '.mp3', '.m4a', '.ogg', '.webm', '.hda']
+const AUDIO_EXTENSIONS: readonly string[] = RECORDING_AUDIO_EXTENSIONS
 
 let watcher: ReturnType<typeof watch> | null = null
 let mainWindow: BrowserWindow | null = null

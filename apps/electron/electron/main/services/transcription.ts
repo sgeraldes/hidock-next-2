@@ -91,7 +91,8 @@ function spawnStreaming(
     })
   })
 }
-import { getConfig, CURRENT_GEMINI_CHAT_MODEL } from './config'
+import { getConfig } from './config'
+import { languageFor } from './transcription-language'
 import { isFeatureEnabled } from './feature-gate'
 import {
   addToQueue,
@@ -161,6 +162,7 @@ import {
   SpeakerLinkingUnavailableError,
   type SpeakerLinkingResult
 } from './speaker-linking'
+import { CURRENT_GEMINI_CHAT_MODEL, CURRENT_GEMINI_TRANSCRIPTION_MODEL } from './gemini-model-ids'
 
 let mainWindow: BrowserWindow | null = null
 let isProcessing = false
@@ -1091,7 +1093,7 @@ async function transcribeWithGemini(
   progressCallback?.('reading_file', 5)
   const audioBuffer = await readFileAsync(filePath)
 
-  const modelName = config.transcription.geminiModel || 'gemini-3.5-transcribe'
+  const modelName = config.transcription.geminiModel || CURRENT_GEMINI_TRANSCRIPTION_MODEL
   const engine = new GeminiEngine({
     // Key resolves via the brain credential store (falls back to the plaintext
     // config key), so the one-time migration is honoured here too. Audio still
@@ -1104,7 +1106,7 @@ async function transcribeWithGemini(
     // so the default is whatever CURRENT_GEMINI_CHAT_MODEL is today rather than
     // a version frozen inside the transcription package.
     fallbackModel: config.chat?.geminiModel || CURRENT_GEMINI_CHAT_MODEL,
-    language: config.transcription.language || 'unknown'
+    language: languageFor('gemini', config.transcription.language)
   })
 
   progressCallback?.('transcribing', 20)
@@ -1159,7 +1161,7 @@ async function transcribeWithGemini(
     fullText,
     provider: 'gemini',
     model: modelName,
-    language: config.transcription.language || 'unknown',
+    language: languageFor('gemini', config.transcription.language),
     speakers: JSON.stringify(segments),
     providerTimeline
   }
@@ -1185,7 +1187,7 @@ async function transcribeWithLocalAsr(
     throw new Error(`Local ASR runner not found: ${runnerPath}`)
   }
 
-  const language = (config.transcription.language || 'es').slice(0, 2).toLowerCase()
+  const language = languageFor('local-asr', config.transcription.language)
   const vocabularyPath = config.transcription.localAsrVocabularyFile
     ? (isAbsolute(config.transcription.localAsrVocabularyFile)
         ? config.transcription.localAsrVocabularyFile
@@ -1294,7 +1296,7 @@ async function transcribeWithVibeVoice(
   }
 
   // VibeVoice auto-detects language and code-switches; "auto" unless overridden.
-  const language = (config.transcription.language || 'auto').toLowerCase()
+  const language = languageFor('vibevoice', config.transcription.language)
   const vocabularyPath = config.transcription.localAsrVocabularyFile
     ? (isAbsolute(config.transcription.localAsrVocabularyFile)
         ? config.transcription.localAsrVocabularyFile
@@ -1411,7 +1413,7 @@ async function analyzeTranscriptWithGemini(
       action_items: [],
       topics: [],
       key_points: [],
-      language: config.transcription.language || 'unknown'
+      language: languageFor('gemini', config.transcription.language)
     }
   }
 
@@ -1420,7 +1422,7 @@ async function analyzeTranscriptWithGemini(
   // don't fit the string-returning AIBrain.generate contract, so this analysis
   // path keeps its direct SDK usage — full delegation is deferred to a later phase.
   const genAI = new GoogleGenerativeAI(resolveGeminiApiKey())
-  const model = genAI.getGenerativeModel({ model: config.chat?.geminiModel || 'gemini-3.8-flash' })
+  const model = genAI.getGenerativeModel({ model: config.chat?.geminiModel || CURRENT_GEMINI_CHAT_MODEL })
 
   let meetingSelectionSection = ''
   if (candidateMeetings.length > 1) {
@@ -1871,7 +1873,7 @@ export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
         stage: 'summary',
         provider: reanalysisHasGemini ? 'gemini' : 'hidock-next',
         tool: reanalysisHasGemini ? 'gemini-analysis' : 'local-fallback',
-        model: reanalysisHasGemini ? (reanalysisConfig.chat?.geminiModel || 'gemini-3.8-flash') : null,
+        model: reanalysisHasGemini ? (reanalysisConfig.chat?.geminiModel || CURRENT_GEMINI_CHAT_MODEL) : null,
         execution: reanalysisHasGemini ? 'cloud' : 'local'
       })
       let analysis: TranscriptAnalysis
@@ -1913,7 +1915,7 @@ export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
         stage: 'title',
         provider: reanalysisHasGemini ? 'gemini' : 'hidock-next',
         tool: reanalysisHasGemini ? 'gemini-analysis' : 'local-fallback',
-        model: reanalysisHasGemini ? (reanalysisConfig.chat?.geminiModel || 'gemini-3.8-flash') : null,
+        model: reanalysisHasGemini ? (reanalysisConfig.chat?.geminiModel || CURRENT_GEMINI_CHAT_MODEL) : null,
         execution: reanalysisHasGemini ? 'cloud' : 'local',
         parentRunIds: [summaryRun.id]
       })
@@ -2229,7 +2231,7 @@ Meeting ${i + 1}: "${m.subject}"
     ? 'CohereLabs/cohere-transcribe-03-2026'
     : transcriptionProvider === 'vibevoice'
       ? 'microsoft/VibeVoice-ASR'
-      : config.transcription.geminiModel || 'gemini-3.5-transcribe'
+      : config.transcription.geminiModel || CURRENT_GEMINI_TRANSCRIPTION_MODEL
   const execution = transcriptionProvider === 'gemini' ? 'cloud' : 'local'
   // SPEC-009 / CHANGE-2026-08-14-001: this provider-independent local safety
   // gate MUST complete before diarization, ASR, summarization, meeting
@@ -2506,7 +2508,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   progressCallback?.('analyzing', 50) // spec-014: progress reporting
   const hasGeminiAnalysis = !!resolveGeminiApiKey()
   const analysisProvider = hasGeminiAnalysis ? 'gemini' : 'hidock-next'
-  const analysisModel = hasGeminiAnalysis ? (config.chat?.geminiModel || 'gemini-3.8-flash') : null
+  const analysisModel = hasGeminiAnalysis ? (config.chat?.geminiModel || CURRENT_GEMINI_CHAT_MODEL) : null
   const summaryRun = createProcessingRun({
     recordingId,
     stage: 'summary',
@@ -2778,7 +2780,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     stage: 'actionable-detection',
     provider: resolveGeminiApiKey() ? 'gemini' : 'hidock-next',
     tool: resolveGeminiApiKey() ? 'gemini-analysis' : 'eligibility-gate',
-    model: resolveGeminiApiKey() ? (config.chat?.geminiModel || 'gemini-3.8-flash') : null,
+    model: resolveGeminiApiKey() ? (config.chat?.geminiModel || CURRENT_GEMINI_CHAT_MODEL) : null,
     execution: resolveGeminiApiKey() ? 'cloud' : 'local',
     parentRunIds: [summaryRun.id]
   })
@@ -2890,7 +2892,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     stage: 'timeline-analysis',
     provider: resolveGeminiApiKey() ? 'gemini' : 'hidock-next',
     tool: resolveGeminiApiKey() ? 'sentiment+local-markers' : 'local-markers',
-    model: resolveGeminiApiKey() ? (config.chat?.geminiModel || 'gemini-3.8-flash') : null,
+    model: resolveGeminiApiKey() ? (config.chat?.geminiModel || CURRENT_GEMINI_CHAT_MODEL) : null,
     execution: resolveGeminiApiKey() ? 'provider-managed' : 'local',
     parentRunIds: [summaryRun.id, actionableRun.id]
   })

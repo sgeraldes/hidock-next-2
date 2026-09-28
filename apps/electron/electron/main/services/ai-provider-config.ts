@@ -11,6 +11,7 @@
 
 import { getConfig } from './config'
 import type { ProviderConfig } from '@hidock/ai-providers'
+import { CURRENT_GEMINI_CHAT_MODEL } from './gemini-model-ids'
 
 /**
  * Resolve the AI provider config for the app's shared complete() seam, from
@@ -24,7 +25,7 @@ export function getProviderConfigFromSettings(): ProviderConfig | null {
   if (cfg.chat.provider === 'gemini' && cfg.transcription.geminiApiKey) {
     return {
       provider: 'google',
-      model: cfg.chat.geminiModel || 'gemini-3.8-flash',
+      model: cfg.chat.geminiModel || CURRENT_GEMINI_CHAT_MODEL,
       apiKey: cfg.transcription.geminiApiKey,
     }
   }

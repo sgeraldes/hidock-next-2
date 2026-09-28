@@ -10,6 +10,7 @@
  */
 
 import { existsSync, readdirSync, statSync, unlinkSync, utimesSync } from 'fs'
+import { RECORDING_AUDIO_EXTENSIONS } from '../../../src/shared/audio-extensions'
 import { join, basename, dirname, extname } from 'path'
 import {
   getDatabase,
@@ -514,7 +515,7 @@ class IntegrityService {
     }
 
     const files = readdirSync(recordingsPath)
-    const audioExtensions = ['.wav', '.mp3', '.m4a', '.ogg', '.webm']
+    const audioExtensions: readonly string[] = RECORDING_AUDIO_EXTENSIONS
     const oneHourMs = 60 * 60 * 1000
 
     let found = 0
@@ -717,7 +718,7 @@ class IntegrityService {
     }
 
     const files = readdirSync(recordingsPath)
-    const audioExtensions = ['.wav', '.mp3', '.m4a', '.ogg', '.webm', '.hda']
+    const audioExtensions: readonly string[] = RECORDING_AUDIO_EXTENSIONS
 
     for (const file of files) {
       const ext = extname(file).toLowerCase()
@@ -824,7 +825,7 @@ class IntegrityService {
     const recordingsPath = getRecordingsPath()
     if (existsSync(recordingsPath)) {
       const files = readdirSync(recordingsPath)
-      const audioExtensions = ['.wav', '.mp3', '.m4a', '.ogg', '.webm']
+      const audioExtensions: readonly string[] = RECORDING_AUDIO_EXTENSIONS
 
       for (const file of files) {
         const ext = extname(file).toLowerCase()
@@ -949,6 +950,9 @@ class IntegrityService {
     if (!existsSync(recordingsPath)) return issues
 
     const files = readdirSync(recordingsPath)
+    // Narrower on purpose: this check proposes an automatic delete, and only
+    // files downloaded from the device (.wav, .mp3, .m4a) are known to be
+    // broken when they are this small.
     const audioExtensions = ['.wav', '.mp3', '.m4a']
 
     for (const file of files) {

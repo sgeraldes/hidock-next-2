@@ -1,4 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, useDeferredValue } from 'react'
+import { isRecordingAudioFile } from '@/shared/audio-extensions'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { dateGroupLabel } from '@/features/library/utils/dateGroups'
@@ -362,11 +363,7 @@ export function Library() {
     setIsDragOver(false)
 
     const files = Array.from(e.dataTransfer.files)
-    const audioExtensions = ['.mp3', '.m4a', '.wav', '.ogg', '.flac', '.webm', '.hda']
-    const audioFiles = files.filter(f => {
-      const ext = '.' + f.name.split('.').pop()?.toLowerCase()
-      return audioExtensions.includes(ext)
-    })
+    const audioFiles = files.filter((f) => isRecordingAudioFile(f.name))
 
     if (audioFiles.length === 0) {
       toast.warning('No Audio Files', 'Only audio files can be imported (.mp3, .wav, .m4a, .ogg, .flac, .webm, .hda)')

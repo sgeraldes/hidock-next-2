@@ -19,6 +19,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai'
 import pdfParse, { type PdfParseResult } from 'pdf-parse/lib/pdf-parse.js'
 import { chunkText } from './vector-store'
 import { getConfig } from './config'
+import { CURRENT_GEMINI_CHAT_MODEL } from './gemini-model-ids'
 import { resolveGeminiApiKey } from './brains'
 
 /** Result of a type's text extraction: the plain text plus optional metadata. */
@@ -227,7 +228,7 @@ registerArtifactType({
 
     try {
       const genAI = new GoogleGenerativeAI(apiKey)
-      const model = genAI.getGenerativeModel({ model: getConfig().chat?.geminiModel || 'gemini-3.8-flash' })
+      const model = genAI.getGenerativeModel({ model: getConfig().chat?.geminiModel || CURRENT_GEMINI_CHAT_MODEL })
       const result = await model.generateContent({
         contents: [
           {
