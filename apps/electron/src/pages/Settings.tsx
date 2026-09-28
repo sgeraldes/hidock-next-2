@@ -52,6 +52,7 @@ import {
   type SettingsSectionId
 } from '@/features/settings/sections'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
+import { PlayerSection } from '@/features/settings/PlayerSection'
 
 // RAG configuration constants — MAX_CONTEXT_CHUNKS must match config.ts default (10)
 const RAG_DEFAULTS = {
@@ -830,6 +831,7 @@ export function Settings({
           {section === 'overview' && <OverviewSection storageInfo={storageInfo} onNavigate={(id) => onSectionChange?.(id)} />}
           {section === 'releases' && <ReleasesSection />}
           {section === 'decisions' && <DecisionsSection />}
+          {section === 'player' && <PlayerSection />}
           {section === 'about' && <AboutSection storageInfo={storageInfo} />}
 
           {show('features') && (

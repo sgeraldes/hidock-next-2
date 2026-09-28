@@ -2,6 +2,7 @@ import * as React from 'react'
 import * as ToastPrimitive from '@radix-ui/react-toast'
 import { X, CheckCircle2, AlertCircle, Info } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { currentPlayerPreferences } from '@/lib/player-preferences'
 
 // Toast context for global state
 export interface ToastAction {
@@ -72,7 +73,8 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     setToasts((prev) => [...prev, { id, ...options }])
 
     // Auto-remove after duration
-    const duration = options.duration ?? 5000
+    // Settings > Player & notifications; a notice that sets its own time keeps it.
+    const duration = options.duration ?? currentPlayerPreferences().toastSeconds * 1000
     if (duration > 0) {
       setTimeout(() => {
         setToasts((prev) => prev.filter((t) => t.id !== id))

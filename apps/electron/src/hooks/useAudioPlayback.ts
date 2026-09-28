@@ -12,6 +12,7 @@ import { toast } from '@/components/ui/toaster'
 import { parseError, getErrorMessage } from '@/features/library/utils/errorHandling'
 import { generateWaveformData, decodeAudioData, getAudioMimeType } from '@/utils/audioUtils'
 import { shouldLogQa } from '@/services/qa-monitor'
+import { currentPlayerPreferences } from '@/lib/player-preferences'
 
 /**
  * H5: Try to load precomputed waveform peaks from the disk cache.
@@ -50,6 +51,7 @@ async function persistWaveform(
 }
 
 export function useAudioPlayback() {
+  const rateRef = useRef<number | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const audioBlobUrlRef = useRef<string | null>(null)
   const waveformAbortControllerRef = useRef<AbortController | null>(null)
@@ -114,6 +116,10 @@ export function useAudioPlayback() {
         if (!audioRef.current) {
           if (shouldLogQa()) console.log('[useAudioPlayback] Creating new Audio element')
           audioRef.current = new Audio()
+          // Each recording is a new element: carry the speed picked last (the
+          // menu kept showing it while the new audio played at 1x), starting
+          // from Settings > Player & notifications.
+          audioRef.current.playbackRate = rateRef.current ?? currentPlayerPreferences().defaultPlaybackSpeed
 
           // Define event handlers as named functions so they can be properly removed
           const handleTimeUpdate = () => {
@@ -400,6 +406,7 @@ export function useAudioPlayback() {
   }, [])
 
   const setPlaybackRate = useCallback((rate: number) => {
+    rateRef.current = rate
     if (audioRef.current) audioRef.current.playbackRate = rate
   }, [])
 
