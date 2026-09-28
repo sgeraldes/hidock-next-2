@@ -20,6 +20,7 @@ import {
 import { TitleBar } from '@/components/layout/TitleBar'
 import { showBrandHorizontalDivider } from '@/components/layout/Brand'
 import { cn } from '@/lib/utils'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   useAppStore,
   useLastCalendarSync,
@@ -152,6 +153,23 @@ export function navItemVisibility(
     return { visibility: 'grayed', hint: describeDisableReason(state.reason) }
   }
   return { visibility: 'hidden', hint: null }
+}
+
+/**
+ * The collapsed sidebar shows only icons; the name appears beside the icon on
+ * hover or focus, as in Kiro Crew (owner, 28-sep-2026). Expanded, the name is
+ * already on screen and no tooltip is added.
+ */
+export function RailTooltip({ collapsed, label, children }: { collapsed: boolean; label: string; children: ReactNode }) {
+  if (!collapsed) return <>{children}</>
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side="right" sideOffset={8}>
+        {label}
+      </TooltipContent>
+    </Tooltip>
+  )
 }
 
 export function Layout({ children }: LayoutProps) {
@@ -345,6 +363,7 @@ export function Layout({ children }: LayoutProps) {
         </button>
         {/* Navigation — nav px-2.5 (10px) + item px-3 (12px) + half-icon (10px)
             lands every icon centre on the shared 32px rail axis (see TitleBar). */}
+        <TooltipProvider delayDuration={200}>
         <nav className="flex-1 px-2.5 pt-3 pb-2 space-y-4 overflow-y-auto">
           {/* The sidebar-collapse control now lives as an edge-handle on the
               brand/content divider in the titlebar (see TitleBar), so the nav rail
@@ -364,8 +383,9 @@ export function Layout({ children }: LayoutProps) {
                   // with a "Requires X" hint (the cascade must SURFACE, not vanish).
                   if (item.visibility === 'grayed') {
                     return (
+                      <RailTooltip key={item.href} collapsed={!sidebarOpen} label={item.hint ? `${item.name}: ${item.hint}` : item.name}>
                       <div
-                        key={item.href}
+                        aria-label={!sidebarOpen ? item.name : undefined}
                         role="link"
                         aria-disabled="true"
                         title={item.hint ?? undefined}
@@ -385,13 +405,15 @@ export function Layout({ children }: LayoutProps) {
                           </span>
                         )}
                       </div>
+                      </RailTooltip>
                     )
                   }
                   const isActive = location.pathname.startsWith(item.href)
                   return (
+                    <RailTooltip key={item.href} collapsed={!sidebarOpen} label={item.name}>
                     <Link
-                      key={item.href}
                       to={item.href}
+                      aria-label={!sidebarOpen ? item.name : undefined}
                       className={cn(
                         'relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400',
                         !sidebarOpen && 'justify-center',
@@ -410,6 +432,7 @@ export function Layout({ children }: LayoutProps) {
                         active={isActive}
                       />
                     </Link>
+                    </RailTooltip>
                   )
                 })}
               </div>
@@ -422,8 +445,10 @@ export function Layout({ children }: LayoutProps) {
 
           {/* Settings at bottom - separate from sections */}
           <div className="pt-2 border-t border-slate-800">
+            <RailTooltip collapsed={!sidebarOpen} label="Settings">
             <Link
               to="/settings"
+              aria-label={!sidebarOpen ? 'Settings' : undefined}
               className={cn(
                 'flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400',
                 !sidebarOpen && 'justify-center',
@@ -436,8 +461,10 @@ export function Layout({ children }: LayoutProps) {
               <Settings className="h-5 w-5 flex-shrink-0" />
               {sidebarOpen && <span>Settings</span>}
             </Link>
+            </RailTooltip>
           </div>
         </nav>
+        </TooltipProvider>
 
         {/* Operations Panel - Downloads + Transcriptions */}
         <OperationsPanel sidebarOpen={sidebarOpen} />
