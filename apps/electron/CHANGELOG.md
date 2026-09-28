@@ -21,6 +21,10 @@ recording, and Microsoft 365 and Slack connect on first try.
 - **Transcript problems in place.** Lines with a repeated or backwards time, or too many words for
   their time, are marked in the transcript. Clicking "Repeated times" or "Times go backwards" goes
   to the next such line. Editing a line also edits its start time.
+- **Transcription as services.** Settings > Transcription lists Pipeline, Gemini, Local ASR &
+  VibeVoice and Live transcription. Pipeline holds what happens to every recording: automatic
+  transcription (also on the Device page), the default service, the language, automatic rating and
+  the shortest clip to transcribe.
 - **Storage you can read.** Each folder shows its size, file count and the free space on its own
   disk, with an optional limit; over the recordings limit, auto-download pauses. The connected
   HiDock's storage is on the same page.

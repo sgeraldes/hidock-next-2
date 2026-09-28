@@ -27,6 +27,7 @@
  */
 
 import type { ValueClassification } from './value-classification'
+import { minRecordingSeconds } from './quality-rules'
 
 /** Under 10 seconds => `none` => 'garbage'.
  *  Ten seconds does not fit one complete exchange — a question and its answer
@@ -164,7 +165,7 @@ export function classifyByDuration(
   if (isDurationContradictedByFileSize(fileSizeBytes, durationSeconds)) {
     return null
   }
-  if (durationSeconds < DURATION_GARBAGE_MAX_SECONDS) {
+  if (durationSeconds < minRecordingSeconds()) {
     return { value: 'none', reasons: ['no_substance'], confidence: 1 }
   }
   if (durationSeconds < DURATION_LOW_VALUE_MAX_SECONDS) {

@@ -151,7 +151,7 @@ import {
 import { parseAndAssessDiarization } from './diarization-quality'
 import { analyzeAudioPreflight, type AudioPreflightReport } from './audio-preflight'
 import { readAudioDuration } from './audio-duration'
-import { DURATION_GARBAGE_MAX_SECONDS } from './value-thresholds'
+import { minRecordingSeconds } from './quality-rules'
 import { isAutomaticMeetingLinkTemporallyEligible } from './recording-match-scoring'
 import {
   applyKnownVoiceBindings,
@@ -490,7 +490,7 @@ async function runQueueItem(
       emitActivityLog(
         'info',
         outcome.reason === TOO_SHORT_REASON_CODE
-          ? `Too short to transcribe (under ${DURATION_GARBAGE_MAX_SECONDS} seconds)`
+          ? `Too short to transcribe (under ${minRecordingSeconds()} seconds)`
           : 'No intelligible speech detected',
         `${recDone?.filename ?? item.recording_id}: transcription and AI analysis skipped`
       )
@@ -2012,7 +2012,7 @@ type TranscribeOutcome =
 
 /**
  * Reason code on the `vad` processing run when a recording ends `no_speech`
- * because it is shorter than DURATION_GARBAGE_MAX_SECONDS, not because it is
+ * because it is shorter than minRecordingSeconds() (Settings > Transcription > Pipeline), not because it is
  * silent. The value gate rates such a clip `garbage` on length alone, so
  * transcribing it first is a paid provider call for audio that is then thrown
  * away (measured 2026-09-22: 6 of the 7 live recordings under 10 s carried a
@@ -2030,7 +2030,7 @@ export const TOO_SHORT_REASON_CODE = 'recording_too_short'
  */
 function measureTooShortClip(filePath: string): Record<string, unknown> | null {
   const measured = readAudioDuration(filePath)
-  if (!measured || measured.seconds >= DURATION_GARBAGE_MAX_SECONDS) return null
+  if (!measured || measured.seconds >= minRecordingSeconds()) return null
   // Skipping drops a recording from transcription for good, so only a real MPEG
   // measurement may decide it. The PCM fallback reads a lying RIFF container at
   // a quarter of its length: a 30-second device file whose first frame sat past
@@ -2041,7 +2041,7 @@ function measureTooShortClip(filePath: string): Record<string, unknown> | null {
     status: 'no_speech',
     reasonCodes: [TOO_SHORT_REASON_CODE],
     durationSeconds: Math.round(measured.seconds * 1000) / 1000,
-    minimumDurationSeconds: DURATION_GARBAGE_MAX_SECONDS,
+    minimumDurationSeconds: minRecordingSeconds(),
     measuredBy: measured.how
   }
 }
@@ -2159,7 +2159,7 @@ async function transcribeRecording(
       updateRecordingStatus(recordingId, 'no_speech')
       console.log(
         `[Transcription] ${recordingId} is ${tooShort.durationSeconds}s long, under the ` +
-          `${DURATION_GARBAGE_MAX_SECONDS}s minimum; provider transcription and all downstream AI skipped`
+          `${minRecordingSeconds()}s minimum; provider transcription and all downstream AI skipped`
       )
       return { status: 'no_speech', reason: TOO_SHORT_REASON_CODE }
     }

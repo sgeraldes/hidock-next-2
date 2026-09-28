@@ -97,6 +97,13 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
+
+/** Transcription is a list of panes (Pipeline, Gemini, Local ASR, Live); open one. */
+function openTranscriptionPane(name: RegExp) {
+  const list = screen.getByRole('listbox', { name: 'Transcription' })
+  fireEvent.click(within(list).getByRole('option', { name }))
+}
+
 describe('Settings Page', () => {
   it('should render settings sections', async () => {
     render(<Settings />)
@@ -119,6 +126,7 @@ describe('Settings Page', () => {
   it('should render transcription settings form', async () => {
     render(<Settings />)
 
+    openTranscriptionPane(/^Gemini/)
     expect(screen.getByLabelText('Gemini API Key')).toBeInTheDocument()
     expect(screen.getByLabelText('Transcription Model')).toBeInTheDocument()
     expect(screen.getByLabelText('Hugging Face token for speaker identification')).toBeInTheDocument()
@@ -165,6 +173,7 @@ describe('Settings Page', () => {
   // C-006: API key visibility toggle
   it('should toggle API key visibility', async () => {
     render(<Settings />)
+    openTranscriptionPane(/^Gemini/)
 
     const apiKeyInput = screen.getByLabelText('Gemini API Key') as HTMLInputElement
 
@@ -384,20 +393,22 @@ describe('Settings Page', () => {
     expect(onSectionChange).toHaveBeenCalledWith('decisions')
   })
 
-  it('picks the transcription provider from a list and keeps every provider configurable', () => {
+  it('picks the default service in Pipeline and keeps every service configurable in its own pane', () => {
     render(<Settings />)
-    const provider = screen.getByLabelText('Provider in use') as HTMLSelectElement
+    const provider = screen.getByLabelText('Default service') as HTMLSelectElement
     expect(provider.tagName).toBe('SELECT')
     expect(Array.from(provider.options).map((o) => o.value)).toEqual(['gemini', 'local-asr', 'vibevoice'])
+    expect(screen.getByLabelText('Skip clips shorter than')).toBeInTheDocument()
+    expect(screen.getByLabelText('Transcribe new recordings automatically')).toBeInTheDocument()
 
-    // Both providers' settings show whichever one is in use.
-    expect(screen.getByLabelText('Gemini API Key')).toBeInTheDocument()
-    expect(screen.getByLabelText('ASR MCP project path')).toBeInTheDocument()
     fireEvent.change(provider, { target: { value: 'local-asr' } })
+    // Every service keeps its settings, whichever is the default.
+    openTranscriptionPane(/^Gemini/)
     expect(screen.getByLabelText('Gemini API Key')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /^Gemini/ })).not.toHaveTextContent('In use')
+    openTranscriptionPane(/^Local ASR/)
     expect(screen.getByLabelText('ASR MCP project path')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: /Local ASR and VibeVoice/ })).toHaveTextContent('In use')
-    expect(screen.getByRole('heading', { name: /^Gemini/ })).not.toHaveTextContent('In use')
   })
 
   it('shows the speaker identification model in Speakers and voices, not under the provider', () => {

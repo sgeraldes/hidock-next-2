@@ -19,6 +19,7 @@
 
 import { spawn } from 'child_process'
 import bundledFfmpeg from 'ffmpeg-static'
+import { minRecordingSeconds } from './quality-rules'
 
 /** Rule version: bump when a threshold or category rule changes, so profiles are recomputed. */
 export const AUDIO_PROFILE_VERSION = 1
@@ -43,6 +44,7 @@ export const DEVICE_PART2_3_LENGTH = 2200
 export const DEVICE_FINGERPRINT_SHARE = 0.95
 
 /** Under this many seconds a recording is not processed automatically. */
+/** Default of Settings > Transcription > Pipeline "Skip clips shorter than" (quality-rules.ts). */
 export const TOO_SHORT_SECONDS = 10
 /** At most this much sound in total: silent. */
 export const SILENT_MAX_SOUND_SECONDS = 0.25
@@ -270,7 +272,7 @@ export function summarize(
   const longestSoundSeconds = longestRun * FRAME_SECONDS
 
   let category: AudioCategory = 'speech'
-  if (durationSeconds < TOO_SHORT_SECONDS) category = 'too_short'
+  if (durationSeconds < minRecordingSeconds()) category = 'too_short'
   else if (soundSeconds <= SILENT_MAX_SOUND_SECONDS) category = 'silent'
   else if (
     longestSoundSeconds < NOISE_MAX_RUN_SECONDS &&

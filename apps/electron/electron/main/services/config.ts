@@ -16,6 +16,7 @@ import { getBrainCredentialStore } from './brains/brain-credential-store'
 import type { FeaturesConfig } from '../../../src/shared/feature-registry'
 import { DEFAULT_FEATURES_CONFIG } from '../../../src/shared/feature-registry'
 import { applyRagSettings } from './rag-settings'
+import { applyQualityRules } from './quality-rules'
 import { CURRENT_GEMINI_CHAT_MODEL, CURRENT_GEMINI_TRANSCRIPTION_MODEL } from './gemini-model-ids'
 
 /** Best-effort fsync of a path (file or directory). Silently skips where the FS
@@ -222,6 +223,8 @@ export interface AppConfig {
     // later via the standalone backfill (separate complete() call, no
     // summary-call blast radius). See phase-1-architecture-review.md A1.
     valueClassificationEnabled: boolean
+    /** Clips shorter than this many seconds are not transcribed (Settings > Transcription > Pipeline). */
+    minRecordingSeconds?: number
     // Codex adversarial review (AR-2a): a downgrade (low->low-value,
     // none->garbage) only persists when the model's own confidence meets this
     // floor; below it, applyCaptureValueClassification writes nothing at all
@@ -608,6 +611,7 @@ export async function initializeConfig(options: { persist?: boolean } = {}): Pro
       // Merge with defaults to handle new fields
       config = deepMerge(DEFAULT_CONFIG, savedConfig)
       applyRagSettings(config)
+      applyQualityRules(config)
       if (!persist) return
       // Auto-upgrade retired Gemini model names in persisted configs so old
       // saved values (e.g. gemini-2.0-flash, now 404) don't break transcription
@@ -656,6 +660,7 @@ export async function saveConfig(newConfig: Partial<AppConfig>): Promise<void> {
 
   config = deepMerge(config, newConfig)
   applyRagSettings(config)
+  applyQualityRules(config)
 
   const desiredGeminiKey = config.transcription?.geminiApiKey ?? ''
   const geminiKeyChanged = prevGeminiKey.trim() !== desiredGeminiKey.trim()

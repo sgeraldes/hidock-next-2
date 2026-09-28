@@ -281,6 +281,8 @@ export interface AppConfig {
      *  Optional (unlike its form-bound siblings above) since it's read
      *  defensively (`=== false`) rather than round-tripped through a form. */
     valueClassificationEnabled?: boolean
+    /** Clips shorter than this are not transcribed (Settings > Transcription > Pipeline). */
+    minRecordingSeconds?: number
   }
   embeddings: {
     provider: 'ollama'
