@@ -493,6 +493,22 @@ export function Settings({
     }
   }
 
+  // Forget the feed link. Meetings already brought in stay in the calendar;
+  // nothing new arrives from the feed (28-sep-2026).
+  const handleDisconnectCalendar = async () => {
+    if (saving) return
+    setSaving(true)
+    try {
+      await updateConfig('calendar', { icsUrl: '' })
+      setIcsUrl('')
+      toast.success('Calendar feed disconnected', 'Meetings already in the calendar stay.')
+    } catch (error) {
+      toast.error('Could not disconnect the feed', error instanceof Error ? error.message : undefined)
+    } finally {
+      setSaving(false)
+    }
+  }
+
   // The token saves on its own. It used to ride on the Transcription card's
   // Save button far below, and the green "Access valid" pill above it read like
   // a button, so a new token looked saved and was not (28-sep-2026).
@@ -1115,6 +1131,16 @@ export function Settings({
                           <RefreshCw className={`h-4 w-4 mr-2 ${calendarSyncing ? 'animate-spin' : ''}`} aria-hidden="true" />
                           Sync Now
                         </Button>
+                        {config?.calendar.icsUrl && (
+                          <Button
+                            variant="ghost"
+                            onClick={handleDisconnectCalendar}
+                            disabled={saving}
+                            className="text-muted-foreground hover:text-red-600"
+                          >
+                            Disconnect
+                          </Button>
+                        )}
                         {config?.calendar.lastSyncAt && (
                           <span className="text-xs text-muted-foreground ml-2">
                             Last synced: {new Date(config.calendar.lastSyncAt).toLocaleString(appLocale())}

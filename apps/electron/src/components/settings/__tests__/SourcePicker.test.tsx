@@ -44,4 +44,19 @@ describe('SourcePicker', () => {
     fireEvent.click(general) // what Space does on a focused checkbox
     expect(onToggle).toHaveBeenCalledWith('C1', true)
   })
+
+  it('chooses every channel the filter shows in one click, and can drop them again', async () => {
+    const onToggleMany = vi.fn(async () => undefined)
+    const chosen = new Set(['C4'])
+    render(
+      <SourcePicker containers={channels} isEnabled={(c) => chosen.has(c.externalId)} onToggle={vi.fn()} onToggleMany={onToggleMany} />
+    )
+    expect(screen.queryByRole('button', { name: /Choose all/ })).toBeNull()
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Filter channels' }), { target: { value: 'd' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Choose all 3 shown' }))
+    expect(onToggleMany).toHaveBeenCalledWith(['C2', 'C3'], true)
+    await screen.findByRole('button', { name: 'Choose all 3 shown' })
+    fireEvent.click(screen.getByRole('button', { name: 'Drop the 1 chosen here' }))
+    expect(onToggleMany).toHaveBeenLastCalledWith(['C4'], false)
+  })
 })

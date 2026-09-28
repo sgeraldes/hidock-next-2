@@ -123,6 +123,12 @@ describe('Settings Page', () => {
     expect(screen.getByLabelText('Sync interval in minutes')).toBeInTheDocument()
   })
 
+  it('disconnects the calendar feed by clearing its link', async () => {
+    render(<Settings />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Disconnect' }))
+    await waitFor(() => expect(mockUpdateConfig).toHaveBeenCalledWith('calendar', { icsUrl: '' }))
+  })
+
   it('should render transcription settings form', async () => {
     render(<Settings />)
 

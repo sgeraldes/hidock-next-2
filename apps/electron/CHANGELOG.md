@@ -46,6 +46,9 @@ recording, and Microsoft 365 and Slack connect on first try.
   same). The title stays at the top while you scroll.
 - **Click a time to play.** A time in the transcript starts the recording there, even when nothing
   is playing.
+- **Connectors, easier to set up.** The Slack channel list has "Choose all shown" for the filtered
+  channels, and says what a sync does: one Library item per channel, what edits do, and what it does
+  not do yet (channel summaries, reports, people matching). The ICS calendar feed has Disconnect.
 
 ### Fixes
 
@@ -69,6 +72,13 @@ recording, and Microsoft 365 and Slack connect on first try.
   fix and the orphan and date checks; every place now uses the same list of audio types.
 - A transcript with one line out of time order refused every edit ("Invalid transcript edit"), and
   saving an edit dropped the speaker-confidence marks.
+- **Moving a storage folder is safe to stop.** One move at a time; downloads, transcription and the
+  folder watcher pause while it runs; each file is copied, checked, then renamed; Stop removes the
+  copies; a failed save puts every path back. If a folder cannot be measured, automatic downloads
+  pause instead of filling the disk.
+- **Slack items no longer flood the Library.** Every message was going to become its own Library
+  item. Now each channel is one item, an edited message replaces its old copy, and an unchanged one
+  is skipped.
 
 ## 2026-09-27 | Jev rates recordings; the device list stops freezing the app
 

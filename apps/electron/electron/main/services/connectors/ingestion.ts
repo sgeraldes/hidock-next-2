@@ -150,12 +150,19 @@ export class ConnectorIngestionSink implements IngestionSink {
                 outcome.skipped++
                 continue
               }
-              this.deps.removeArtifact?.(existing.id)
             }
             // Everything from one source (a channel) goes into one Library item.
+            // Found before the old copy is removed: that copy may be the only
+            // thing that ties the channel to its item.
             const knowledgeCaptureId = this.deps.captureFor?.(connectorId, container)
-            await this.deps.importArtifactFile(staged, { sourceConnectorId: connectorId, sourceRef: item.externalId, knowledgeCaptureId })
-            outcome.artifacts++
+            if (existing) this.deps.removeArtifact?.(existing.id)
+            const result = (await this.deps.importArtifactFile(staged, {
+              sourceConnectorId: connectorId,
+              sourceRef: item.externalId,
+              knowledgeCaptureId
+            })) as { deduped?: boolean } | undefined
+            if (result?.deduped) outcome.skipped++
+            else outcome.artifacts++
           } finally {
             try {
               rmSync(staged, { force: true })
@@ -165,7 +172,8 @@ export class ConnectorIngestionSink implements IngestionSink {
             }
           }
         }
-      } catch {
+      } catch (err) {
+        console.warn(`[ConnectorIngestion] ${connectorId}: could not file ${item.kind} ${item.externalId}:`, err)
         outcome.skipped++
       }
     }

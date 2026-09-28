@@ -12,14 +12,18 @@ export function SourcePicker({
   containers,
   isEnabled,
   onToggle,
+  onToggleMany,
   noun = 'channel',
 }: {
   containers: SourceContainer[]
   isEnabled: (c: SourceContainer) => boolean
   onToggle: (containerId: string, enabled: boolean) => void
+  /** Choose or drop several at once (the filtered list); saved one after another. */
+  onToggleMany?: (containerIds: string[], enabled: boolean) => Promise<void>
   noun?: string
 }) {
   const [query, setQuery] = useState('')
+  const [bulkBusy, setBulkBusy] = useState(false)
   const listId = useId()
 
   const chosen = useMemo(() => containers.filter(isEnabled), [containers, isEnabled])
@@ -33,6 +37,19 @@ export function SourcePicker({
           Number(isEnabled(b)) - Number(isEnabled(a)) || member(a) - member(b) || a.name.localeCompare(b.name)
       )
   }, [containers, isEnabled, query])
+
+  const filtered = query.trim().length > 0
+  const shownOff = shown.filter((c) => !isEnabled(c))
+  const shownOn = shown.filter((c) => isEnabled(c))
+  const bulk = async (ids: string[], enabled: boolean) => {
+    if (!onToggleMany || ids.length === 0) return
+    setBulkBusy(true)
+    try {
+      await onToggleMany(ids, enabled)
+    } finally {
+      setBulkBusy(false)
+    }
+  }
 
   return (
     <div className="space-y-2">
@@ -67,6 +84,28 @@ export function SourcePicker({
         aria-controls={listId}
         autoComplete="off"
       />
+      {onToggleMany && filtered && shown.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 text-xs">
+          <button
+            type="button"
+            className="font-medium text-primary hover:underline disabled:opacity-50 disabled:no-underline"
+            disabled={bulkBusy || shownOff.length === 0}
+            onClick={() => void bulk(shownOff.map((c) => c.externalId), true)}
+          >
+            {bulkBusy ? 'Saving…' : `Choose all ${shown.length} shown`}
+          </button>
+          {shownOn.length > 0 && (
+            <button
+              type="button"
+              className="text-muted-foreground hover:text-foreground hover:underline disabled:opacity-50"
+              disabled={bulkBusy}
+              onClick={() => void bulk(shownOn.map((c) => c.externalId), false)}
+            >
+              Drop the {shownOn.length} chosen here
+            </button>
+          )}
+        </div>
+      )}
       {/* Real checkboxes: Tab reaches each one and Space toggles it (review of #53, A1). */}
       <fieldset id={listId} className="max-h-72 overflow-y-auto rounded border border-border">
         <legend className="sr-only">{`${noun[0].toUpperCase()}${noun.slice(1)}s to sync`}</legend>

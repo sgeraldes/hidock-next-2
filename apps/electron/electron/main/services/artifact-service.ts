@@ -186,7 +186,7 @@ export async function importArtifact(
   // without re-reading the artifact. Reuses the existing knowledge_captures.summary
   // column (no schema bump); never overwrites a summary a user/enricher already set.
   const captionText = imageCaption(kind, metadata)
-  if (captionText && knowledgeCaptureId) {
+  if (captionText && knowledgeCaptureId && !opts.knowledgeCaptureId) {
     try {
       run(
         `UPDATE knowledge_captures SET summary = ?, updated_at = ?

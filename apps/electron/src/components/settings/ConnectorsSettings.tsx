@@ -323,8 +323,24 @@ function AccountBlock({
     try {
       const next = await window.electronAPI.connectors.setSourceEnabled(instanceId, containerId, enabled)
       onChanged(next)
-    } catch {
-      /* ignore */
+    } catch (err) {
+      toast.error('Could not change the source', err instanceof Error ? err.message : undefined)
+    }
+  }
+
+  // One after another: each save reads the list the previous one wrote.
+  const toggleSources = async (containerIds: string[], enabled: boolean) => {
+    let done = 0
+    try {
+      for (const id of containerIds) {
+        onChanged(await window.electronAPI.connectors.setSourceEnabled(instanceId, id, enabled))
+        done++
+      }
+    } catch (err) {
+      toast.error(
+        `Saved ${done} of ${containerIds.length}`,
+        err instanceof Error ? err.message : 'The rest were not changed'
+      )
     }
   }
 
@@ -436,7 +452,8 @@ function AccountBlock({
       {containers.length > SOURCE_PICKER_THRESHOLD && (
         <div className="space-y-2">
           <p className="text-sm font-medium">Sources to sync</p>
-          <SourcePicker containers={containers} isEnabled={sourceEnabled} onToggle={toggleSource} />
+          {descriptor.id === 'slack' && <SlackSyncNote />}
+          <SourcePicker containers={containers} isEnabled={sourceEnabled} onToggle={toggleSource} onToggleMany={toggleSources} />
         </div>
       )}
 
@@ -509,6 +526,30 @@ function AccountBlock({
  * like the ICS calendar feed (it predates the host). Settings supplies its
  * row and its detail pane.
  */
+/**
+ * What syncing a channel does, as the code does it today (28-sep-2026): the
+ * owner asked whether it makes one Library entry, what edits do, and whether
+ * summaries, reports and people matching come from it.
+ */
+function SlackSyncNote() {
+  return (
+    <div className="space-y-1 rounded border border-border bg-muted/30 p-3 text-xs text-muted-foreground" data-testid="slack-sync-note">
+      <p>
+        Each chosen channel becomes one Library item, named <span className="font-medium text-foreground">#channel · Slack</span>.
+        Every message and image lands inside it, and the Assistant and search can use them.
+      </p>
+      <p>
+        Each sync brings what is new since the last one. An edited message replaces the old copy; an unchanged one is
+        left alone. Messages deleted in Slack stay here.
+      </p>
+      <p>
+        Not yet: summaries of a channel, status reports and action items (those read recording transcripts only), and
+        matching Slack people to people in the Library.
+      </p>
+    </div>
+  )
+}
+
 export interface ExtraConnector {
   item: ServiceListItem
   content: ReactNode
