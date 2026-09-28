@@ -28,7 +28,8 @@ import {
   Mic,
   KeyRound,
   Keyboard,
-  Library
+  Library,
+  Gauge
 } from 'lucide-react'
 
 export type SettingsSectionId =
@@ -50,6 +51,7 @@ export type SettingsSectionId =
   | 'storage'
   | 'secrets'
   | 'maintenance'
+  | 'quality'
   | 'developer'
   | 'releases'
   | 'about'
@@ -217,6 +219,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'Jobs that refresh or repair what the Library shows.',
     icon: Wrench,
     keywords: ['rescan', 'warnings', 'relink', 'waveforms', 'health', 'repair', 'integrity']
+  },
+  {
+    id: 'quality',
+    group: 'system',
+    label: 'Quality checks',
+    description: 'The numbers behind transcript warnings, ratings, retries and meeting links.',
+    icon: Gauge,
+    keywords: ['threshold', 'invented', 'missed', 'silence', 'retries', 'retry', 'low value', 'meeting link', 'reasons', 'probability']
   },
   {
     id: 'developer',

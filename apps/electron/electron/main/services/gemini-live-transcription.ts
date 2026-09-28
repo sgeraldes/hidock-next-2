@@ -7,6 +7,7 @@ import {
 import type { RealtimeData } from '@hidock/jensen-protocol'
 import { resolveGeminiApiKey } from './brains'
 import { getConfig, updateConfig } from './config'
+import { DEFAULT_QUALITY_RULES, qualityRules } from './quality-rules'
 
 export const GEMINI_LIVE_TRANSCRIBE_MODEL = 'gemini-3.5-transcribe-live'
 
@@ -24,8 +25,12 @@ const LIVE_SESSION_ROTATE_MS = 9 * 60 * 1000
  * is an ordinary soft voice, not noise. The gate would have eaten it whole.
  * -55 dBFS is RMS 58 of 32768 — still above a quiet room once DC is removed
  * (see `acRms`), and below any voice worth transcribing.
+ *
+ * The default of Settings > Quality checks "liveSilenceRms"; the value in
+ * force is silenceRms(), read per packet so a change reaches a running session.
  */
-const SILENCE_RMS = 58
+export const SILENCE_RMS = DEFAULT_QUALITY_RULES.liveSilenceRms
+const silenceRms = (): number => qualityRules().liveSilenceRms
 
 /**
  * Keep sending a channel for this long after its last packet above the gate.
@@ -249,7 +254,8 @@ export class MicChannelIdentifier {
     if (this.closed) return
     const [left, right] = channels
     // Both channels quiet tells us nothing: there is no talking to sit under.
-    if (left.rms < SILENCE_RMS && right.rms < SILENCE_RMS) return
+    const gate = silenceRms()
+    if (left.rms < gate && right.rms < gate) return
     this.leftLevels.push(left.rms)
     this.rightLevels.push(right.rms)
     this.packets += 1
@@ -725,7 +731,7 @@ export class GeminiLiveTranscriptionService {
     // the last word — a gate with no hangover hands Gemini clipped speech.
     const now = this.now()
     for (let index = 0; index < 2; index++) {
-      if (channels[index].rms >= SILENCE_RMS) this.lastVoiceAt[index] = now
+      if (channels[index].rms >= silenceRms()) this.lastVoiceAt[index] = now
       else if (now - this.lastVoiceAt[index] >= SILENCE_HANGOVER_MS) continue
       await this.sessions[index].send(channels[index].pcm, key)
       if (generation !== this.generation) return

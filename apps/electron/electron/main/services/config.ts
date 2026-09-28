@@ -18,6 +18,7 @@ import type { FeaturesConfig } from '../../../src/shared/feature-registry'
 import { DEFAULT_FEATURES_CONFIG } from '../../../src/shared/feature-registry'
 import { applyRagSettings } from './rag-settings'
 import { applyQualityRules } from './quality-rules'
+import { DEFAULT_QUALITY_RULES, type QualityConfig } from './quality-rules'
 import { applyCalendarWindow } from './calendar-window'
 import { CURRENT_GEMINI_CHAT_MODEL, CURRENT_GEMINI_TRANSCRIPTION_MODEL } from './gemini-model-ids'
 
@@ -299,6 +300,8 @@ export interface AppConfig {
     /** Which calendar meeting a recording is, from what was said. */
     jevMeetingMatch: boolean
   }
+  /** Settings > Quality checks: thresholds that were constants (quality-rules.ts reads and clamps them). */
+  quality: QualityConfig
   ui: {
     /**
      * Title the library shows for a source with no calendar event.
@@ -431,6 +434,7 @@ const DEFAULT_CONFIG: AppConfig = {
     jevValue: true,
     jevMeetingMatch: true
   },
+  quality: { ...DEFAULT_QUALITY_RULES },
   ui: {
     theme: 'system',
     startOfWeek: 1, // Monday

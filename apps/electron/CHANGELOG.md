@@ -50,6 +50,11 @@ recording, and Microsoft 365 and Slack connect on first try.
   channels to a WAV in the recordings folder. When it stops, the recording is in the Library, linked
   to its meeting and transcribed like any other, diarization included. A stream cut off by a crash
   or an unplugged cable is saved too. Off with the switch in Settings > Recording.
+- **Quality checks.** The thresholds behind warnings and ratings are settings now: when a quiet file
+  or a thin transcript is flagged, how sure Jev must be before a transcript "may be invented" or a
+  meeting is linked, when a short clip is low-value, retries, the re-transcription score and the
+  live silence gate. Changing a warning rule updates the saved warnings; changing Jev's reason
+  threshold updates saved reasons without asking Jev again.
 - **Developer > Advanced.** The tuning values that had no control get one: search passage size and
   overlap, the Gemini chat model, the VibeVoice model and device, the rating confidence floor, and
   the voice-matching threshold, margin, minimum speech, time limit and paths. Each shows its default

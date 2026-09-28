@@ -51,7 +51,7 @@ import { queryAll, queryOne, run, runInTransaction } from './database'
 import {
   classifyCaptureValueRaw,
   applyCaptureValueClassification,
-  DURATION_LOW_VALUE_MAX_SECONDS,
+  lowValueMaxSeconds,
   getValueClassifierKind,
   storeEvaluation,
   type RawClassificationResult
@@ -201,9 +201,11 @@ let cancelled = false
  *  The duration arm is what brings a short, never-transcribed capture into
  *  scope. It costs nothing to serve: classifyCaptureValueRaw returns the
  *  stopwatch verdict without calling the provider at all. Interpolated
- *  rather than bound because it is a module-level numeric constant, which
- *  keeps both consumers' parameter lists unchanged. */
-const VALUE_BACKFILL_PRIVACY_WHERE = `kc.deleted_at IS NULL
+ *  rather than bound because it is a number clamped by quality-rules.ts
+ *  (Settings > Quality checks), which keeps both consumers' parameter lists
+ *  unchanged. A function, so a changed setting reaches the next query. */
+function valueBackfillPrivacyWhere(): string {
+  return `kc.deleted_at IS NULL
         AND COALESCE(kc.quality_source, '') != 'user'
         AND COALESCE(r.personal, 0) = 0
         AND r.deleted_at IS NULL
@@ -211,8 +213,9 @@ const VALUE_BACKFILL_PRIVACY_WHERE = `kc.deleted_at IS NULL
           (t.full_text IS NOT NULL AND TRIM(t.full_text) != '')
           OR (r.duration_seconds IS NOT NULL
               AND r.duration_seconds > 0
-              AND r.duration_seconds < ${DURATION_LOW_VALUE_MAX_SECONDS})
+              AND r.duration_seconds < ${lowValueMaxSeconds()})
         )`
+}
 
 /** Durable retry cap exhausted — applies identically to a terminally-'failed'
  *  row and a crashed-and-never-finalized 'in_progress' row (AR-3 / Opus review
@@ -245,7 +248,7 @@ function eligibleFromWhere(): string {
   return `FROM knowledge_captures kc
        LEFT JOIN transcripts t ON t.recording_id = kc.source_recording_id
        LEFT JOIN recordings r ON r.id = kc.source_recording_id
-      WHERE ${VALUE_BACKFILL_PRIVACY_WHERE}
+      WHERE ${valueBackfillPrivacyWhere()}
         AND (
           (kc.quality_rating = 'unrated'
             AND NOT EXISTS (
@@ -259,7 +262,7 @@ function eligibleFromWhere(): string {
           -- stay out here or they would come back every run.
           OR (? = 1
             AND t.full_text IS NOT NULL AND TRIM(t.full_text) != ''
-            AND (r.duration_seconds IS NULL OR r.duration_seconds >= ${DURATION_LOW_VALUE_MAX_SECONDS})
+            AND (r.duration_seconds IS NULL OR r.duration_seconds >= ${lowValueMaxSeconds()})
             AND NOT EXISTS (
               SELECT 1 FROM recording_evaluations re WHERE re.capture_id = kc.id AND re.version >= ?
             )
@@ -814,7 +817,7 @@ export function getValueBackfillStatus(): ValueBackfillStatus {
        LEFT JOIN transcripts t ON t.recording_id = kc.source_recording_id
        LEFT JOIN recordings r ON r.id = kc.source_recording_id
        LEFT JOIN value_backfill_state vbs ON vbs.capture_id = kc.id
-      WHERE ${VALUE_BACKFILL_PRIVACY_WHERE}
+      WHERE ${valueBackfillPrivacyWhere()}
         AND (kc.quality_rating = 'unrated' OR vbs.capture_id IS NOT NULL)`,
     [MAX_DURABLE_ATTEMPTS]
   )
@@ -832,7 +835,7 @@ export function getValueBackfillStatus(): ValueBackfillStatus {
            JOIN knowledge_captures kc ON kc.id = re.capture_id
            LEFT JOIN transcripts t ON t.recording_id = kc.source_recording_id
            LEFT JOIN recordings r ON r.id = kc.source_recording_id
-          WHERE re.version >= ? AND ${VALUE_BACKFILL_PRIVACY_WHERE}`,
+          WHERE re.version >= ? AND ${valueBackfillPrivacyWhere()}`,
         [EVALUATION_VERSION]
       )?.n ?? 0
     const remaining = countEligibleCaptures(true)

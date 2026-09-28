@@ -27,7 +27,7 @@
  */
 
 import type { ValueClassification } from './value-classification'
-import { minRecordingSeconds } from './quality-rules'
+import { DEFAULT_QUALITY_RULES, minRecordingSeconds, qualityRules } from './quality-rules'
 
 /** Under 10 seconds => `none` => 'garbage'.
  *  Ten seconds does not fit one complete exchange — a question and its answer
@@ -46,8 +46,16 @@ export const DURATION_GARBAGE_MAX_SECONDS = 10
  *
  *  30 seconds is where the gate STOPS. The 30-60s band (50 recordings) can
  *  hold a real short voice memo — "the client agreed to the July date" — so
- *  that stays a content judgement for the model, not a stopwatch decision. */
-export const DURATION_LOW_VALUE_MAX_SECONDS = 30
+ *  that stays a content judgement for the model, not a stopwatch decision.
+ *
+ *  The default of Settings > Quality checks "lowValueMaxSeconds"; the value in
+ *  force is lowValueMaxSeconds(). */
+export const DURATION_LOW_VALUE_MAX_SECONDS = DEFAULT_QUALITY_RULES.lowValueMaxSeconds
+
+/** The low-value line in force now (Settings > Quality checks, clamped by quality-rules.ts). */
+export function lowValueMaxSeconds(): number {
+  return qualityRules().lowValueMaxSeconds
+}
 
 /** Bytes per second above which a file holds more audio than its stored
  *  duration admits, which makes the duration wrong rather than the recording
@@ -168,7 +176,7 @@ export function classifyByDuration(
   if (durationSeconds < minRecordingSeconds()) {
     return { value: 'none', reasons: ['no_substance'], confidence: 1 }
   }
-  if (durationSeconds < DURATION_LOW_VALUE_MAX_SECONDS) {
+  if (durationSeconds < lowValueMaxSeconds()) {
     return { value: 'low', reasons: ['no_substance'], confidence: 0.95 }
   }
   return null

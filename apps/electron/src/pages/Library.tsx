@@ -107,6 +107,7 @@ import { useOperations } from '@/hooks/useOperations'
 import { useProcessingPause } from '@/hooks/useProcessingPause'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { useTranscriptionStore } from '@/store/features/useTranscriptionStore'
+import { useConfigStore } from '@/store/domain/useConfigStore'
 import { isFeatureOffThisRun } from '@/lib/bootFeatures'
 
 /** How a recording is named in messages: its display title, never its file name
@@ -826,6 +827,8 @@ export function Library() {
 
   // Stage 1: exact availability + personal visibility. Overlapping inclusive
   // accounting is deliberately not a user-facing Library query model.
+  // Settings > Quality checks: the warning filter follows the invented-transcript threshold.
+  const inventedProbability = useConfigStore((s) => s.config?.quality?.inventedProbability)
   const baseRecordings = useMemo(() => {
     return recordings.filter((rec) => {
       const locationMatches = matchesExclusiveFilter(rec.location, exclusiveFilter)
@@ -887,10 +890,10 @@ export function Library() {
       if (kindFilter !== null && (isAudioless(rec) || !matchesKindFilter(rec, kindFilter))) return false
       if (contextFilter !== null && !matchesContextFilter(rec, contextFilter)) return false
       if (starsFilter !== null && !matchesStarsFilter(rec, starsFilter)) return false
-      if (warningFilter !== null && !matchesWarningFilter(rec, warningFilter)) return false
+      if (warningFilter !== null && !matchesWarningFilter(rec, warningFilter, inventedProbability)) return false
       return true
     })
-  }, [baseRecordings, artifactTypes, sourceTypeFilter, durationPreset, qualityFilter, statusFilter, integrityFilter, audioFilter, kindFilter, contextFilter, starsFilter, warningFilter, transcripts])
+  }, [baseRecordings, artifactTypes, sourceTypeFilter, durationPreset, qualityFilter, statusFilter, integrityFilter, audioFilter, kindFilter, contextFilter, starsFilter, warningFilter, inventedProbability, transcripts])
 
   // How many recordings each Audio-filter value matches. Only audio sources
   // have a category; everything else is left out rather than counted unchecked.
@@ -913,10 +916,10 @@ export function Library() {
       for (const f of KIND_FILTERS) if (matchesKindFilter(rec, f.value)) counts.kind[f.value] = (counts.kind[f.value] ?? 0) + 1
       for (const f of CONTEXT_FILTERS) if (matchesContextFilter(rec, f.value)) counts.context[f.value] = (counts.context[f.value] ?? 0) + 1
       for (const f of STARS_FILTERS) if (matchesStarsFilter(rec, f.value)) counts.stars[f.value] = (counts.stars[f.value] ?? 0) + 1
-      for (const f of WARNING_FILTERS) if (matchesWarningFilter(rec, f.value)) counts.warning[f.value] = (counts.warning[f.value] ?? 0) + 1
+      for (const f of WARNING_FILTERS) if (matchesWarningFilter(rec, f.value, inventedProbability)) counts.warning[f.value] = (counts.warning[f.value] ?? 0) + 1
     }
     return counts
-  }, [baseRecordings])
+  }, [baseRecordings, inventedProbability])
 
   // The audio check finished a pass or a recording: labels and ratings changed.
   useEffect(() => {

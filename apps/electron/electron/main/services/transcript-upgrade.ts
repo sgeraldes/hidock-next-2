@@ -34,6 +34,7 @@ import {
   refreshTranscriptIntegrity,
 } from './database'
 import { isRecordingEligible, filterEligibleRecordingIds } from './recording-eligibility'
+import { DEFAULT_QUALITY_RULES, qualityRules } from './quality-rules'
 import {
   classifyTranscriptFormat,
   scoreImportance,
@@ -47,8 +48,17 @@ import {
   type TriageStoredSegment
 } from './transcript-triage-core'
 
-/** Default importance threshold: score >= this → recommend audio re-transcription. */
-export const DEFAULT_TRIAGE_THRESHOLD = 60
+/**
+ * Default importance threshold: score >= this → recommend audio re-transcription.
+ * The default of Settings > Quality checks "retranscribeScore"; callers that
+ * pass no threshold get triageThreshold(), the value in force.
+ */
+export const DEFAULT_TRIAGE_THRESHOLD = DEFAULT_QUALITY_RULES.retranscribeScore
+
+/** The re-transcription score in force now (Settings > Quality checks). */
+export function triageThreshold(): number {
+  return qualityRules().retranscribeScore
+}
 
 /** Joined transcript row carrying everything the triage needs in one query. */
 interface JoinedTranscriptRow {
@@ -301,7 +311,7 @@ function tally(total: number, assessments: TriageAssessment[], threshold: number
  * READ-ONLY dry run: classify + triage every transcript and return counts. Does
  * not write anything, so it is safe to call against the live DB.
  */
-export function scanOldTranscripts(threshold = DEFAULT_TRIAGE_THRESHOLD): ScanResult {
+export function scanOldTranscripts(threshold = triageThreshold()): ScanResult {
   // ADV45-4 (round-47) — tally ONLY the eligible assessment set; excluded /
   // unassociable transcripts must not inflate any displayed count. Fail-closed:
   // zero counts when eligibility can't be established.
@@ -316,7 +326,7 @@ export function scanOldTranscripts(threshold = DEFAULT_TRIAGE_THRESHOLD): ScanRe
  * flat, below-threshold band. The important band is left flagged (surfaced via
  * getRecommendedRecordingIds) for a user-initiated audio re-transcription.
  */
-export function runUpgrade(threshold = DEFAULT_TRIAGE_THRESHOLD): ScanResult {
+export function runUpgrade(threshold = triageThreshold()): ScanResult {
   const result = scanOldTranscripts(threshold)
   void kickReformatProcessing(threshold)
   return result
@@ -326,7 +336,7 @@ export function runUpgrade(threshold = DEFAULT_TRIAGE_THRESHOLD): ScanResult {
  *  ADV45-4 (round-47) — sourced from the shared ELIGIBLE assessment set so an
  *  excluded / unassociable recording is never surfaced via
  *  transcript-upgrade:getRecommended; fail-closed empty. */
-export function getRecommendedRecordingIds(threshold = DEFAULT_TRIAGE_THRESHOLD): string[] {
+export function getRecommendedRecordingIds(threshold = triageThreshold()): string[] {
   const assessments = eligibleAssessments(threshold)
   if (assessments === null) return []
   return assessments
@@ -348,7 +358,7 @@ function getReformatTranscriptIds(threshold: number): string[] {
 }
 
 /** Current upgrade status: scan counts + whether the worker is draining. */
-export function getUpgradeStatus(threshold = DEFAULT_TRIAGE_THRESHOLD): UpgradeStatus {
+export function getUpgradeStatus(threshold = triageThreshold()): UpgradeStatus {
   return { ...scanOldTranscripts(threshold), reformattingActive: reformatting }
 }
 
@@ -474,7 +484,7 @@ export async function reformatOne(transcriptId: string): Promise<'done' | 'faile
  * Never throws.
  */
 export async function kickReformatProcessing(
-  threshold = DEFAULT_TRIAGE_THRESHOLD,
+  threshold = triageThreshold(),
   pollMs = 30000
 ): Promise<void> {
   if (reformatting) return
