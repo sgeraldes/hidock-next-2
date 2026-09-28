@@ -12,7 +12,7 @@
  */
 
 import { createHash, randomUUID } from 'crypto'
-import { existsSync, mkdirSync, readFileSync, copyFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, copyFileSync, rmSync } from 'fs'
 import { join, extname, basename } from 'path'
 import { getDataPath } from './config'
 import { queryOne, queryAll, run, runInTransaction } from './database'
@@ -588,3 +588,54 @@ export async function backfillImageCaptureIndex(limit = 10): Promise<ImageCaptur
 
 /** Re-export so IPC/tests can resolve types without importing the registry directly. */
 export { resolveType, getArtifactType, listArtifactTypes }
+
+/**
+ * The one Library item that holds everything a connector brings from one
+ * source (a Slack channel): found from any artifact already filed under it, or
+ * created. Connector items used to become one capture each, titled with a temp
+ * file name, so a busy channel would have flooded the Library (28-sep-2026).
+ */
+export function connectorCaptureId(connectorId: string, container: { externalId: string; name: string }, label: string): string {
+  const row = queryOne<{ knowledge_capture_id: string | null }>(
+    `SELECT knowledge_capture_id FROM artifacts
+      WHERE source_connector_id = ? AND substr(source_ref, 1, ?) = ? AND knowledge_capture_id IS NOT NULL
+      LIMIT 1`,
+    [connectorId, container.externalId.length + 1, `${container.externalId}:`]
+  )
+  if (row?.knowledge_capture_id) return row.knowledge_capture_id
+  const id = randomUUID()
+  const now = new Date().toISOString()
+  run(
+    `INSERT INTO knowledge_captures (id, title, category, status, captured_at, created_at, updated_at)
+     VALUES (?, ?, 'note', 'ready', ?, ?, ?)`,
+    [id, `${container.name} · ${label}`, now, now, now]
+  )
+  return id
+}
+
+/** The artifact a connector already filed under this source ref, if any. */
+export function findConnectorArtifact(connectorId: string, sourceRef: string): ArtifactRow | undefined {
+  return queryOne<ArtifactRow>('SELECT * FROM artifacts WHERE source_connector_id = ? AND source_ref = ?', [connectorId, sourceRef])
+}
+
+/** Remove an artifact, its search chunks and its stored file (an edited message is replaced). */
+export function removeArtifact(id: string): void {
+  const row = queryOne<ArtifactRow>('SELECT * FROM artifacts WHERE id = ?', [id])
+  if (!row) return
+  runInTransaction(() => {
+    run('DELETE FROM vector_embeddings WHERE recording_id = ?', [id])
+    run('DELETE FROM artifacts WHERE id = ?', [id])
+  })
+  try {
+    getVectorStore().dropByRecordingFromMemory(id)
+  } catch {
+    // vector store not loaded: nothing in memory to drop
+  }
+  if (row.storage_path) {
+    try {
+      rmSync(row.storage_path, { force: true })
+    } catch (err) {
+      console.warn('[ArtifactService] Could not delete the replaced file:', err)
+    }
+  }
+}

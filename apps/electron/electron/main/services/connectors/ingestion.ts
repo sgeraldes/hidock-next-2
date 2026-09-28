@@ -12,8 +12,8 @@
  * Pure mappers are exported for unit testing; the db/artifact dependencies are
  * injectable so routing can be tested without a live database.
  */
-import { randomUUID } from 'crypto'
-import { writeFileSync, rmSync, mkdtempSync } from 'fs'
+import { createHash, randomUUID } from 'crypto'
+import { writeFileSync, rmSync, mkdtempSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import type {
@@ -31,7 +31,7 @@ import {
   updateContact,
   type Meeting,
 } from '../database'
-import { importArtifact } from '../artifact-service'
+import { connectorCaptureId, findConnectorArtifact, importArtifact, removeArtifact } from '../artifact-service'
 
 type MeetingRow = Omit<Meeting, 'created_at' | 'updated_at'>
 
@@ -78,7 +78,15 @@ export interface IngestionDeps {
   upsertMeetings: (rows: MeetingRow[]) => void
   /** Apply a standalone external contact; returns whether it was created/updated. */
   applyContact: (p: ExternalPerson) => 'created' | 'updated'
-  importArtifactFile: (filePath: string, opts: { sourceConnectorId: string; sourceRef: string }) => Promise<unknown>
+  importArtifactFile: (
+    filePath: string,
+    opts: { sourceConnectorId: string; sourceRef: string; knowledgeCaptureId?: string }
+  ) => Promise<unknown>
+  /** The one Library item for this source (a channel); absent in tests that only check routing. */
+  captureFor?: (connectorId: string, container: SourceContainer) => string
+  /** The artifact already filed under this source ref, to skip or replace it. */
+  findExisting?: (connectorId: string, sourceRef: string) => { id: string; content_hash: string | null } | undefined
+  removeArtifact?: (id: string) => void
 }
 
 /** Default contact apply: enrich an email-matched contact, else create a fresh one. */
@@ -102,12 +110,21 @@ const DEFAULT_DEPS: IngestionDeps = {
   upsertMeetings: (rows) => upsertMeetingsBatch(rows),
   applyContact: defaultApplyContact,
   importArtifactFile: (filePath, opts) => importArtifact(filePath, opts),
+  captureFor: (connectorId, container) => connectorCaptureId(connectorId, container, connectorLabel(connectorId)),
+  findExisting: (connectorId, sourceRef) => findConnectorArtifact(connectorId, sourceRef),
+  removeArtifact: (id) => removeArtifact(id),
+}
+
+/** "slack:T123" -> "Slack", "m365:abc" -> "Microsoft 365". */
+function connectorLabel(connectorId: string): string {
+  const type = connectorId.split(':')[0]
+  return type === 'm365' ? 'Microsoft 365' : type.charAt(0).toUpperCase() + type.slice(1)
 }
 
 export class ConnectorIngestionSink implements IngestionSink {
   constructor(private readonly deps: IngestionDeps = DEFAULT_DEPS) {}
 
-  async ingest(connectorId: string, _container: SourceContainer, items: SourceItem[]): Promise<IngestionOutcome> {
+  async ingest(connectorId: string, container: SourceContainer, items: SourceItem[]): Promise<IngestionOutcome> {
     const outcome: IngestionOutcome = { meetings: 0, contacts: 0, artifacts: 0, skipped: 0 }
     const meetingRows: MeetingRow[] = []
 
@@ -125,7 +142,19 @@ export class ConnectorIngestionSink implements IngestionSink {
             continue
           }
           try {
-            await this.deps.importArtifactFile(staged, { sourceConnectorId: connectorId, sourceRef: item.externalId })
+            // Same message as last sync: nothing to do. Edited: replace it.
+            const existing = this.deps.findExisting?.(connectorId, item.externalId)
+            if (existing) {
+              const hash = createHash('sha256').update(readFileSync(staged)).digest('hex')
+              if (existing.content_hash === hash) {
+                outcome.skipped++
+                continue
+              }
+              this.deps.removeArtifact?.(existing.id)
+            }
+            // Everything from one source (a channel) goes into one Library item.
+            const knowledgeCaptureId = this.deps.captureFor?.(connectorId, container)
+            await this.deps.importArtifactFile(staged, { sourceConnectorId: connectorId, sourceRef: item.externalId, knowledgeCaptureId })
             outcome.artifacts++
           } finally {
             try {
