@@ -21,6 +21,9 @@ recording, and Microsoft 365 and Slack connect on first try.
 - **Transcript problems in place.** Lines with a repeated or backwards time, or too many words for
   their time, are marked in the transcript. Clicking "Repeated times" or "Times go backwards" goes
   to the next such line. Editing a line also edits its start time.
+- **Recording page.** The HiDock switches (record meetings automatically, connect on start,
+  download and transcribe automatically) are in Settings too, in sync with the Device page, with
+  where recordings go. Auto-record is stored on the device and changes while it is connected.
 - **Transcription as services.** Settings > Transcription lists Pipeline, Gemini, Local ASR &
   VibeVoice and Live transcription. Pipeline holds what happens to every recording: automatic
   transcription (also on the Device page), the default service, the language, automatic rating and

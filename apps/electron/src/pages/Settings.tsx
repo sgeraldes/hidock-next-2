@@ -63,6 +63,7 @@ import { DeviceStorageCard, StorageUsageLine, useStorageUsage } from '@/features
 import { StorageMoveConfirm } from '@/features/settings/StorageMoveConfirm'
 import { ServiceList } from '@/features/settings/ServiceList'
 import { TranscriptionPipelineControls } from '@/features/settings/TranscriptionPipelineControls'
+import { RecordingSection } from '@/features/settings/RecordingSection'
 
 // RAG configuration constants — MAX_CONTEXT_CHUNKS must match config.ts default (10)
 const RAG_DEFAULTS = {
@@ -853,6 +854,7 @@ export function Settings({
           {section === 'decisions' && <DecisionsSection />}
           {section === 'player' && <PlayerSection />}
           {section === 'display' && <DisplaySection />}
+          {section === 'recording' && <RecordingSection />}
           {section === 'about' && <AboutSection storageInfo={storageInfo} />}
 
           {show('features') && (
