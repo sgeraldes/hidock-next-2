@@ -2,8 +2,8 @@ import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, use
 import { isRecordingAudioFile } from '@/shared/audio-extensions'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { dateGroupLabel } from '@/features/library/utils/dateGroups'
-import { RefreshCw, AlertCircle, EyeOff, Trash2 } from 'lucide-react'
+import { coarseDateGroup, COARSE_GROUP_LABELS, type CoarseDateGroup } from '@/features/library/utils/dateGroups'
+import { RefreshCw, AlertCircle, EyeOff, Trash2, Plus } from 'lucide-react'
 import { toast } from '@/components/ui/toaster'
 import { Button } from '@/components/ui/button'
 import { getHiDockDeviceService } from '@/services/hidock-device'
@@ -117,6 +117,17 @@ function nameOf(recording: Parameters<typeof getDisplayTitle>[0]): string {
 }
 
 const COMPACT_ROW_HEIGHT_PX = 48
+const GROUP_HEADER_HEIGHT_PX = 28
+
+/**
+ * The compact/Trash list virtualizes a flat sequence of items that is either a
+ * time-group header (Today, This week, Earlier, Older) or a recording row. The
+ * header carries its coarse group; the row carries its index into the currently
+ * displayed recordings so keyboard focus and selection keep working unchanged.
+ */
+type ListItem =
+  | { kind: 'header'; key: string; group: CoarseDateGroup; label: string }
+  | { kind: 'row'; key: string; recordingIndex: number }
 
 type PermanentDeleteStage = 'removing-local' | 'erasing-device'
 
@@ -412,6 +423,12 @@ export function Library() {
   const setCompactView = useCallback((compact: boolean) => {
     setViewMode(compact ? 'compact' : 'card')
   }, [setViewMode])
+
+  // Time-group sections hide anything older than the current month behind a
+  // "Show older" control (the Kiro Crew sessions list). Transient: the list
+  // always opens on the recent groups, and any filter/sort/search change resets
+  // it so a stale reveal never persists across a different result set.
+  const [showOlder, setShowOlder] = useState(false)
 
   // Bulk operations
   const [bulkProcessing, setBulkProcessing] = useState(false)
@@ -1019,7 +1036,30 @@ export function Library() {
   // list" (virtualizer count/estimateSize, the render map, itemIds, the
   // reveal-on-open findIndex) reads THIS, never filteredRecordings/trashedRecordings
   // directly — swapping only one of them would desync indices (spec's hazard note).
-  const displayedRecordings = showTrash ? trashedRecordings : filteredRecordings
+  const fullDisplayedRecordings = showTrash ? trashedRecordings : filteredRecordings
+
+  // Time groups only make sense in the compact list, sorted by date, outside
+  // Trash (Trash is a flat, ungrouped tombstone list per §D1).
+  const grouped = compactView && !showTrash && sortBy === 'date'
+
+  // "Show older" gate: until the user asks, drop everything older than the
+  // current month. This is what keeps the list opening on the recent groups.
+  const displayedRecordings = useMemo(() => {
+    if (!grouped || showOlder) return fullDisplayedRecordings
+    return fullDisplayedRecordings.filter((rec) => coarseDateGroup(rec.dateRecorded) !== 'older')
+  }, [fullDisplayedRecordings, grouped, showOlder])
+
+  // How many recordings the "older" gate is currently hiding (drives the button).
+  const hiddenOlderCount = fullDisplayedRecordings.length - displayedRecordings.length
+
+  // Any filter/sort/search change starts the list back on the recent groups.
+  useEffect(() => {
+    setShowOlder(false)
+  }, [
+    exclusiveFilter, categoryFilter, qualityFilter, statusFilter, sourceTypeFilter,
+    durationPreset, deferredSearchQuery, integrityFilter, audioFilter, kindFilter,
+    contextFilter, starsFilter, warningFilter, sortBy, sortOrder, showTrash
+  ])
 
   // `id` is the durable identity, but keep the renderer safe if an upstream
   // reconciliation regression momentarily projects two device rows with the
@@ -1037,6 +1077,58 @@ export function Library() {
         : recording.id
     )
   }, [displayedRecordings])
+
+  // The compact/Trash list is a flat sequence of group headers + rows. Headers
+  // are inserted at each coarse-group boundary (only when grouped). Card view
+  // never uses this — it maps displayedRecordings directly.
+  const usesRowList = compactView || showTrash
+  const listItems = useMemo<ListItem[]>(() => {
+    if (!usesRowList) return []
+    const items: ListItem[] = []
+    let lastGroup: CoarseDateGroup | null = null
+    displayedRecordings.forEach((rec, index) => {
+      if (grouped) {
+        const group = coarseDateGroup(rec.dateRecorded) ?? 'older'
+        if (group !== lastGroup) {
+          items.push({ kind: 'header', key: `group:${group}`, group, label: COARSE_GROUP_LABELS[group] })
+          lastGroup = group
+        }
+      }
+      items.push({ kind: 'row', key: itemRenderKeys[index], recordingIndex: index })
+    })
+    return items
+  }, [usesRowList, grouped, displayedRecordings, itemRenderKeys])
+
+  // recordingIndex -> index in listItems (for scrollToIndex, which addresses the
+  // virtualizer's own item list, headers included).
+  const rowListIndexByRecordingIndex = useMemo(() => {
+    const map: number[] = []
+    listItems.forEach((item, li) => {
+      if (item.kind === 'row') map[item.recordingIndex] = li
+    })
+    return map
+  }, [listItems])
+
+  // Fixed per-item heights + their prefix-sum offsets. Rows stay a strict 48px;
+  // headers are 28px. Positioning the compact rows from these exact offsets (not
+  // from a measured/estimated compositor transform) keeps virtual geometry
+  // deterministic — the invariant the split/deletion bugs turned on.
+  const listGeometry = useMemo(() => {
+    const offsets: number[] = []
+    const heights: number[] = []
+    let acc = 0
+    for (const item of listItems) {
+      const h = item.kind === 'header' ? GROUP_HEADER_HEIGHT_PX : COMPACT_ROW_HEIGHT_PX
+      offsets.push(acc)
+      heights.push(h)
+      acc += h
+    }
+    return { offsets, heights, total: acc }
+  }, [listItems])
+
+  // The keys the virtualizer/anchor logic tracks: list-item keys for the row
+  // list (headers + rows), plain render keys for card view.
+  const virtualKeys = usesRowList ? listItems.map((item) => item.key) : itemRenderKeys
 
   // Summaries and bulk actions describe the complete selection in the active
   // corpus, even if a selected live recording is later hidden by a filter.
@@ -2261,25 +2353,29 @@ export function Library() {
   // empty measured range after the source rail is reopened.
   const [listScrollElement, setListScrollElement] = useState<HTMLDivElement | null>(null)
 
-  // B-LIB-008: Simplified estimateSize — complex calculations caused unnecessary
-  // virtualizer re-measurements. The virtualizer uses measureElement for actual sizing.
-  // Trash mode FORCES the SourceRow list regardless of viewMode (§D1 — SourceCard
-  // has no onRestore affordance), so its row height (48) applies whenever showTrash.
+  // Per-item height. Rows are 48px, group headers 28px, cards ~200px. Accepts
+  // an index (TanStack passes one) but stays valid when called with none (the
+  // test harness), so it never yields NaN geometry.
   const estimateSize = useCallback(
-    () => (compactView || showTrash) ? COMPACT_ROW_HEIGHT_PX : 200,
-    [compactView, showTrash]
+    (index?: number) => {
+      if (!usesRowList) return 200
+      if (typeof index === 'number' && listGeometry.heights[index] != null) return listGeometry.heights[index]
+      return COMPACT_ROW_HEIGHT_PX
+    },
+    [usesRowList, listGeometry]
   )
 
   // Identity, not the current array index, owns every cached measurement. A
   // split replaces one source with two children at the same position; index
-  // keys otherwise attach the old row's geometry to the wrong recordings.
+  // keys otherwise attach the old row's geometry to the wrong recordings. For
+  // the grouped row list the key set also covers header items.
   const getVirtualItemKey = useCallback(
-    (index: number) => itemRenderKeys[index] ?? index,
-    [itemRenderKeys]
+    (index: number) => virtualKeys[index] ?? index,
+    [virtualKeys]
   )
 
   const rowVirtualizer = useVirtualizer({
-    count: displayedRecordings.length,
+    count: usesRowList ? listItems.length : displayedRecordings.length,
     getScrollElement: () => listScrollElement,
     estimateSize,
     getItemKey: getVirtualItemKey,
@@ -2292,7 +2388,7 @@ export function Library() {
   // and separators "go missing" (2026-07-20). Force a full re-measure whenever
   // the list CONTENT changes. This runs before paint so replacing the split
   // source cannot expose one frame of stale/overlapping offsets.
-  const displayedIdSignature = itemRenderKeys.join('|')
+  const displayedIdSignature = virtualKeys.join('|')
   useLayoutEffect(() => {
     rowVirtualizer.measure()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2302,18 +2398,20 @@ export function Library() {
   // shifts every row up but scrollTop doesn't move — the list then renders a
   // half-clipped row at the top ("un-alignment when I delete"). ESTIMATED
   // heights can't fix this (rows are variable-height), so anchor to an ITEM:
-  // track the topmost visible row's id continuously, and after any list change
-  // scroll THAT item back to the top of the viewport. Refresh/surface-change
-  // "fixed" it the same way implicitly — this makes it automatic.
+  // track the topmost visible item's key continuously, and after any list change
+  // scroll THAT item back to the top of the viewport. Works in list-item key
+  // space so it handles both rows and group headers.
   const prevItemIdsRef = useRef<string[]>([])
   const firstVisibleIndexRef = useRef(0)
-  // The date group of the topmost visible row, shown pinned above the list
-  // (Today, Yesterday, This week, the month). Only a change of group re-renders.
+  // The coarse time group of the topmost visible item, pinned above the list
+  // (Today, This week, Earlier, Older). Only a change of group re-renders.
   const [topDateGroup, setTopDateGroup] = useState<string | null>(null)
   const displayedRecordingsRef = useRef(displayedRecordings)
   displayedRecordingsRef.current = displayedRecordings
+  const listItemsRef = useRef(listItems)
+  listItemsRef.current = listItems
 
-  // Keep the topmost VISIBLE row's index current. getVirtualItems() includes
+  // Keep the topmost VISIBLE item's index current. getVirtualItems() includes
   // overscan rows above the viewport, so items[0] is not a valid scroll anchor.
   useEffect(() => {
     const el = parentRef.current
@@ -2323,29 +2421,35 @@ export function Library() {
         (item) => item.start + item.size > el.scrollTop
       )
       if (firstVisible) firstVisibleIndexRef.current = firstVisible.index
-      const top = displayedRecordingsRef.current[firstVisible?.index ?? 0]
-      setTopDateGroup(dateGroupLabel(top?.dateRecorded ?? null))
+      const item = listItemsRef.current[firstVisible?.index ?? 0]
+      if (item?.kind === 'header') {
+        setTopDateGroup(item.label)
+      } else if (item?.kind === 'row') {
+        setTopDateGroup(COARSE_GROUP_LABELS[coarseDateGroup(displayedRecordingsRef.current[item.recordingIndex]?.dateRecorded) ?? 'older'])
+      } else {
+        setTopDateGroup(null)
+      }
     }
     onScroll()
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
     // The list itself changing (first load, a filter, the sort) also moves the
-    // top row without a scroll event, so the pinned date recomputes then too.
-  }, [rowVirtualizer, displayedRecordings])
+    // top row without a scroll event, so the pinned group recomputes then too.
+  }, [rowVirtualizer, listItems, displayedRecordings])
 
   useEffect(() => {
     const prevIds = prevItemIdsRef.current
     const el = parentRef.current
-    if (prevIds.length > 0 && itemIds.length > 0) {
-      const removed = prevIds.some((id) => !itemIds.includes(id))
+    if (prevIds.length > 0 && virtualKeys.length > 0) {
+      const removed = prevIds.some((id) => !virtualKeys.includes(id))
       if (removed) {
         const anchorId = prevIds[firstVisibleIndexRef.current]
-        const newIndex = anchorId ? itemIds.indexOf(anchorId) : -1
+        const newIndex = anchorId ? virtualKeys.indexOf(anchorId) : -1
         if (newIndex >= 0) {
           rowVirtualizer.scrollToIndex(newIndex, { align: 'start' })
         } else {
-          // The anchor row itself was deleted — land on the nearest surviving row.
-          rowVirtualizer.scrollToIndex(Math.min(firstVisibleIndexRef.current, itemIds.length - 1), {
+          // The anchor item itself was removed — land on the nearest survivor.
+          rowVirtualizer.scrollToIndex(Math.min(firstVisibleIndexRef.current, virtualKeys.length - 1), {
             align: 'start',
           })
         }
@@ -2356,7 +2460,7 @@ export function Library() {
         if (el.scrollTop > max) rowVirtualizer.scrollToOffset(max)
       }
     }
-    prevItemIdsRef.current = itemIds
+    prevItemIdsRef.current = virtualKeys
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [displayedIdSignature])
 
@@ -2376,9 +2480,12 @@ export function Library() {
     if (lastScrolledSourceIdRef.current === selectedSourceId) return
     const index = displayedRecordings.findIndex((r) => r.id === selectedSourceId)
     if (index < 0) return // not in the current (possibly filtered/Trash) list yet — retry when it appears
+    // Group headers shift a recording's position in the virtualizer's own item
+    // list, so translate the recording index to its list-item index first.
+    const virtualIndex = usesRowList ? (rowListIndexByRecordingIndex[index] ?? index) : index
     lastScrolledSourceIdRef.current = selectedSourceId
-    rowVirtualizer.scrollToIndex(index, { align: 'auto' })
-  }, [selectedSourceId, displayedRecordings, rowVirtualizer])
+    rowVirtualizer.scrollToIndex(virtualIndex, { align: 'auto' })
+  }, [selectedSourceId, displayedRecordings, usesRowList, rowListIndexByRecordingIndex, rowVirtualizer])
 
   // Loading state — show skeleton layout instead of bare spinner
   if (loading && recordings.length === 0) {
@@ -2793,6 +2900,21 @@ export function Library() {
               {(compactView || showTrash) && (
                 <div className="mb-2 flex items-center justify-between px-3">
                   <div className="flex items-center gap-3">
+                    {!showTrash && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 px-2 text-xs"
+                        onClick={handleAddRecording}
+                        aria-label="Add a source"
+                        title="Add a source to the library"
+                        data-testid="list-add-source"
+                      >
+                        <Plus className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+                        Add source
+                      </Button>
+                    )}
                     <span className="text-xs text-muted-foreground">
                       {displayedRecordings.length} shown
                     </span>
@@ -2832,25 +2954,54 @@ export function Library() {
                 // any stale DOM left by a previously duplicated React key.
                 <div key={`compact-view:${displayedIdSignature}`}>
                   {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-                    const recording = displayedRecordings[virtualRow.index]
+                    const item = listItems[virtualRow.index]
+                    const top = listGeometry.offsets[virtualRow.index] ?? virtualRow.index * COMPACT_ROW_HEIGHT_PX
+
+                    // Time-group header (Today / This week / Earlier / Older).
+                    if (!item || item.kind === 'header') {
+                      return (
+                        <div
+                          key={item?.key ?? `header-${virtualRow.index}`}
+                          data-testid="library-group-header"
+                          aria-hidden="true"
+                          style={{
+                            position: 'absolute',
+                            top: `${top}px`,
+                            left: 0,
+                            width: '100%',
+                            height: `${GROUP_HEADER_HEIGHT_PX}px`
+                          }}
+                          className="flex items-end px-3 pb-1"
+                        >
+                          <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                            {item?.label ?? ''}
+                          </span>
+                        </div>
+                      )
+                    }
+
+                    const recordingIndex = item.recordingIndex
+                    const recording = displayedRecordings[recordingIndex]
                     const meeting = recording.meetingId ? meetings.get(recording.meetingId) : undefined
-                    const isFocused = focusedIndex === virtualRow.index
+                    const isFocused = focusedIndex === recordingIndex
+                    const prevItem = listItems[virtualRow.index - 1]
 
                     return (
                       <div
-                        key={itemRenderKeys[virtualRow.index]}
-                        data-index={virtualRow.index}
-                        data-focus-index={virtualRow.index}
+                        key={item.key}
+                        data-index={recordingIndex}
+                        data-focus-index={recordingIndex}
                         // Compact rows are a strict 48px contract. Measuring
                         // them dynamically reintroduces stale index geometry
-                        // during split insertion; the estimate is exact.
+                        // during split insertion; the exact prefix-sum offset
+                        // (which also accounts for group headers) is used.
                         style={{
                           position: 'absolute',
                           // Use layout positioning, not a transformed compositor
                           // layer. Chromium can retain stale glyph pixels on a
                           // recycled transformed row after split insertion,
                           // producing the doubled metadata text seen in the app.
-                          top: `${virtualRow.index * COMPACT_ROW_HEIGHT_PX}px`,
+                          top: `${top}px`,
                           left: 0,
                           width: '100%',
                           height: `${COMPACT_ROW_HEIGHT_PX}px`
@@ -2859,15 +3010,17 @@ export function Library() {
                           // Keep separators out of measured row geometry. A real
                           // border changes the height whenever selection joins or
                           // splits a run, leaving cached virtual offsets one pixel
-                          // out of alignment until the next full refresh.
-                          virtualRow.index > 0 &&
+                          // out of alignment until the next full refresh. A row
+                          // that follows a group header gets no separator — the
+                          // header already breaks the run.
+                          prevItem?.kind === 'row' &&
                           !(selectedIds.has(recording.id) &&
-                            selectedIds.has(displayedRecordings[virtualRow.index - 1]?.id))
+                            selectedIds.has(displayedRecordings[prevItem.recordingIndex]?.id))
                             ? 'before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-border'
                             : '',
                           isFocused ? 'ring-2 ring-primary ring-inset' : ''
                         ].join(' ')}
-                        aria-rowindex={virtualRow.index + 1}
+                        aria-rowindex={recordingIndex + 1}
                       >
                         {showTrash ? (
                           // Trash rows: SAME selection semantics as the live list
@@ -3017,6 +3170,20 @@ export function Library() {
                 </div>
               )}
             </div>
+            {!showTrash && hiddenOlderCount > 0 && (
+              <div className="flex justify-center px-3 py-3">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => setShowOlder(true)}
+                  data-testid="show-older"
+                >
+                  Show older ({hiddenOlderCount.toLocaleString()})
+                </Button>
+              </div>
+            )}
             </div>
           )}
         </div>

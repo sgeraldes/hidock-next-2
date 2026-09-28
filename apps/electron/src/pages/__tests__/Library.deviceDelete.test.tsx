@@ -168,7 +168,7 @@ const syncedRecording = {
   title: 'Synced Recording',
   duration: 60,
   size: 2048,
-  dateRecorded: new Date('2026-01-01T00:00:00Z'),
+  dateRecorded: new Date(), // recent so the row stays in the visible "Today" time group
   location: 'both' as const,
   localPath: '/data/synced.wav',
   syncStatus: 'synced' as const,

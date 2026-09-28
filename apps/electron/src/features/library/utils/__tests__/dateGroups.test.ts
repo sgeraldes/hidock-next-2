@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { dateGroupLabel } from '../dateGroups'
+import { dateGroupLabel, coarseDateGroup, coarseDateGroupLabel } from '../dateGroups'
 
 const now = new Date(2026, 8, 28, 9, 0) // 28 Sep 2026, 09:00 local
 
@@ -28,5 +28,31 @@ describe('dateGroupLabel', () => {
   it('gives nothing for a missing or broken date', () => {
     expect(dateGroupLabel(null, now)).toBeNull()
     expect(dateGroupLabel('not a date', now)).toBeNull()
+  })
+})
+
+describe('coarseDateGroup', () => {
+  it('buckets into today, this week, earlier this month, and older', () => {
+    expect(coarseDateGroup(new Date(2026, 8, 28, 1, 0), now)).toBe('today')
+    expect(coarseDateGroup(new Date(2026, 8, 27, 23, 0), now)).toBe('week') // yesterday
+    expect(coarseDateGroup(new Date(2026, 8, 22, 12, 0), now)).toBe('week') // 6 days ago
+    expect(coarseDateGroup(new Date(2026, 8, 20, 12, 0), now)).toBe('earlier') // still September
+    expect(coarseDateGroup(new Date(2026, 8, 1, 12, 0), now)).toBe('earlier')
+    expect(coarseDateGroup(new Date(2026, 7, 31, 12, 0), now)).toBe('older') // August
+    expect(coarseDateGroup(new Date(2025, 8, 28, 12, 0), now)).toBe('older') // a year back
+  })
+
+  it('keeps a future date with today, never as older', () => {
+    expect(coarseDateGroup(new Date(2026, 8, 29, 12, 0), now)).toBe('today')
+    expect(coarseDateGroup(new Date(2027, 0, 1), now)).toBe('today')
+  })
+
+  it('labels the buckets in plain words and gives nothing for a broken date', () => {
+    expect(coarseDateGroupLabel(new Date(2026, 8, 28), now)).toBe('Today')
+    expect(coarseDateGroupLabel(new Date(2026, 8, 24), now)).toBe('This week')
+    expect(coarseDateGroupLabel(new Date(2026, 8, 3), now)).toBe('Earlier')
+    expect(coarseDateGroupLabel(new Date(2026, 6, 3), now)).toBe('Older')
+    expect(coarseDateGroup(null, now)).toBeNull()
+    expect(coarseDateGroupLabel('not a date', now)).toBeNull()
   })
 })
