@@ -24,7 +24,8 @@ import {
   History,
   Info,
   PlayCircle,
-  Monitor
+  Monitor,
+  Mic
 } from 'lucide-react'
 
 export type SettingsSectionId =
@@ -34,6 +35,7 @@ export type SettingsSectionId =
   | 'assistant'
   | 'calendar'
   | 'player'
+  | 'recording'
   | 'privacy'
   | 'transcription'
   | 'speakers'
@@ -113,6 +115,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'Skip length, speeds, the starting speed and how long notices stay.',
     icon: PlayCircle,
     keywords: ['audio', 'playback', 'speed', 'skip', 'toast', 'notice', 'seconds']
+  },
+  {
+    id: 'recording',
+    group: 'preferences',
+    label: 'Recording',
+    description: 'How recordings arrive from the HiDock, and where they go.',
+    icon: Mic,
+    keywords: ['auto-record', 'record', 'device', 'hidock', 'download', 'connect', 'microphone', 'mic']
   },
   {
     id: 'privacy',
