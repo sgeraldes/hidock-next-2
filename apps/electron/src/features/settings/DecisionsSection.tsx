@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils'
 
 const JEV_ENDPOINT = 'https://api.typesafe.ai/v1/systemone'
 
-type JobKey = 'jevValue' | 'jevMeetingMatch'
+type JobKey = 'jevValue' | 'jevMeetingMatch' | 'jevSpeakerNames'
 
 const JOBS: Array<{
   key: JobKey | null
@@ -33,11 +33,13 @@ const JOBS: Array<{
     storedAs: 'meeting matches'
   },
   {
-    key: null,
-    title: 'Suggest who each speaker is',
-    sends: 'Not built yet.',
-    decides: 'A suggested contact for each speaker, for you to confirm. Planned in the identity design.',
-    storedAs: 'identity suggestions'
+    key: 'jevSpeakerNames',
+    title: 'Name the speakers',
+    sends:
+      'For each unnamed speaker, up to four of their lines, lines where others mention names, the meeting subject, the summary, and the people who may be speaking: the invite list, the meeting contacts, and your organization when the meeting gives fewer than three names.',
+    decides:
+      'Which of those people each speaker is, or none. A clear answer (80% or more, 30 points ahead of the next) names the speaker; names you or a voice match set are never changed.',
+    storedAs: 'speaker names'
   }
 ]
 

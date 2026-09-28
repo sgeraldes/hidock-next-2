@@ -35,6 +35,10 @@ import {
   resolveMention
 } from './database'
 import { resolveContact } from './entity-resolver'
+import { getConfig } from './config'
+import { jevKeyFor } from './jev-settings'
+import { askJev } from './jev-client'
+import { buildSpeakerNameRequest, parseSpeakerNames } from './jev-speaker-names'
 
 /** Same auto-link line self-identification uses for resolveContact. */
 const AUTO_LINK_THRESHOLD = 0.8
@@ -194,9 +198,44 @@ interface TranscriptContextRow {
  * corroborated ones. Idempotent (never overwrites existing bindings) and
  * fail-quiet (returns counts, never throws).
  */
+/** Names from a meeting's attendee JSON (strings or {name|displayName}). */
+function attendeeNames(attendeesJson: string | null | undefined): string[] {
+  if (!attendeesJson) return []
+  try {
+    const parsed = JSON.parse(attendeesJson)
+    if (!Array.isArray(parsed)) return []
+    const out: string[] = []
+    for (const a of parsed) {
+      const n = typeof a === 'string' ? a : (a?.name ?? a?.displayName ?? '')
+      if (typeof n === 'string' && n.trim()) out.push(n.trim())
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+
+/** Contacts with the owner's email domain, most met first (Settings "This is you"). */
+function ownerOrgNames(limit = 15): string[] {
+  const ownerId = getConfig().identity?.ownerContactId
+  if (!ownerId) return []
+  const owner = queryOne<{ email: string | null }>('SELECT email FROM contacts WHERE id = ?', [ownerId])
+  const domain = owner?.email?.split('@')[1]?.trim().toLowerCase()
+  if (!domain) return []
+  return queryAll<{ name: string }>(
+    `SELECT name FROM contacts WHERE lower(email) LIKE ? AND id != ? ORDER BY meeting_count DESC, last_seen_at DESC LIMIT ?`,
+    [`%@${domain}`, ownerId, limit]
+  ).map((r) => r.name)
+}
+
 export async function runSpeakerInference(
   recordingId: string,
-  opts: { shouldPersist?: () => boolean } = {}
+  opts: {
+    shouldPersist?: () => boolean
+    /** Tests: which Jev key a job gets, and the Jev call. */
+    jevKey?: (job: 'speakerNames') => string | null
+    askJev?: typeof askJev
+  } = {}
 ): Promise<InferenceRunResult> {
   // MANDATORY internal eligibility gate (same as self-ID): an excluded
   // recording's transcript never reaches the LLM and gets no new bindings.
@@ -250,7 +289,11 @@ export async function runSpeakerInference(
       [recordingId]
     ).map((r) => r.source_name)
   ]
-  const roster = buildRoster(meeting?.attendees, resolvedNames)
+  // The owner's organisation (contacts with the owner's email domain, most met
+  // first) joins the roster when the meeting itself names fewer than three
+  // people: an internal call often has no invite list (#27, 28-sep-2026).
+  const orgNames = attendeeNames(meeting?.attendees).length + new Set(resolvedNames).size < 3 ? ownerOrgNames() : []
+  const roster = buildRoster(meeting?.attendees, [...resolvedNames, ...orgNames])
   if (roster.size === 0) return { proposed: 0, bound: 0, skipped: true }
 
   // Samples per unbound label: first turns + turns where another speaker might
@@ -275,44 +318,59 @@ export async function runSpeakerInference(
     })
   }
 
-  // Display roster for the prompt (calendar invite list + resolved names).
-  const attendeeDisplayNames: string[] = []
-  if (meeting?.attendees) {
-    try {
-      const parsed = JSON.parse(meeting.attendees)
-      if (Array.isArray(parsed)) {
-        for (const a of parsed) {
-          const n = typeof a === 'string' ? a : (a?.name ?? a?.displayName ?? '')
-          if (typeof n === 'string' && n.trim()) attendeeDisplayNames.push(n.trim())
-        }
+  // Display roster for the prompt (calendar invite list + resolved names + organisation).
+  const attendeeDisplayNames = attendeeNames(meeting?.attendees)
+  const rosterNames = [...new Set([...attendeeDisplayNames, ...resolvedNames, ...orgNames])]
+
+  // Jev when it may run (Settings > Decisions (Jev) > Name the speakers): one
+  // choice per speaker from the roster. Otherwise the LLM, as before. Either
+  // way the proposals go through the same corroboration and write rules below.
+  let proposals: InferenceProposal[]
+  const jevKey = (opts.jevKey ?? jevKeyFor)('speakerNames')
+  if (jevKey) {
+    const request = buildSpeakerNameRequest(
+      unboundSamples.filter((u) => u.label !== '(context from other speakers)'),
+      rosterNames,
+      {
+        meetingSubject: meeting?.subject ?? null,
+        title: trow?.title_suggestion ?? null,
+        summary: trow?.summary ?? null,
+        named: existing.map((e) => `${e.speaker_label}: ${e.name}`),
+        addresses: addressSamples.map((t) => `${t.speaker}: ${t.text.slice(0, 180)}`)
       }
-    } catch { /* not JSON */ }
+    )
+    if (!request) return { proposed: 0, bound: 0, skipped: true }
+    const res = await (opts.askJev ?? askJev)(jevKey, request.state, request.questions)
+    if (!isRecordingEligible(recordingId) || (opts.shouldPersist && !opts.shouldPersist())) {
+      return { proposed: 0, bound: 0, skipped: true }
+    }
+    proposals = parseSpeakerNames(res, request).map((pick) => ({ speaker: pick.label, name: pick.name, confidence: 'high' as const }))
+  } else {
+    const prompt = buildInferencePrompt({
+      boundNames: existing.map((e) => ({ label: e.speaker_label, name: e.name })),
+      unboundSamples,
+      // The candidate roster the LLM picks FROM — invite list + meeting contacts +
+      // analysis-resolved names (+ bindings for elimination). Showing only the
+      // already-bound names here (as before) left the model with NO candidates
+      // for fully-unbound recordings and it honestly abstained.
+      rosterNames,
+      meetingSubject: meeting?.subject ?? null,
+      transcriptTitle: trow?.title_suggestion ?? null,
+      transcriptSummary: trow?.summary ?? null
+    })
+
+    const raw = await getChatLLMService().generateText(prompt, 'You answer with a JSON array only. No prose.', {
+      shouldGenerate: () => isRecordingEligible(recordingId)
+    })
+    if (!raw) return { proposed: 0, bound: 0, skipped: true }
+
+    // Post-await gate, adjacent to the writes (same rule as self-ID).
+    if (!isRecordingEligible(recordingId) || (opts.shouldPersist && !opts.shouldPersist())) {
+      return { proposed: 0, bound: 0, skipped: true }
+    }
+    proposals = parseInferenceResponse(raw)
   }
-
-  const prompt = buildInferencePrompt({
-    boundNames: existing.map((e) => ({ label: e.speaker_label, name: e.name })),
-    unboundSamples,
-    // The candidate roster the LLM picks FROM — invite list + meeting contacts +
-    // analysis-resolved names (+ bindings for elimination). Showing only the
-    // already-bound names here (as before) left the model with NO candidates
-    // for fully-unbound recordings and it honestly abstained.
-    rosterNames: [...new Set([...attendeeDisplayNames, ...resolvedNames])],
-    meetingSubject: meeting?.subject ?? null,
-    transcriptTitle: trow?.title_suggestion ?? null,
-    transcriptSummary: trow?.summary ?? null
-  })
-
-  const raw = await getChatLLMService().generateText(prompt, 'You answer with a JSON array only. No prose.', {
-    shouldGenerate: () => isRecordingEligible(recordingId)
-  })
-  if (!raw) return { proposed: 0, bound: 0, skipped: true }
-
-  // Post-await gate, adjacent to the writes (same rule as self-ID).
-  if (!isRecordingEligible(recordingId) || (opts.shouldPersist && !opts.shouldPersist())) {
-    return { proposed: 0, bound: 0, skipped: true }
-  }
-
-  const proposals = parseInferenceResponse(raw).filter((p) => unbound.includes(p.speaker))
+  proposals = proposals.filter((p) => unbound.includes(p.speaker))
   let bound = 0
   for (const p of proposals) {
     if (p.confidence !== 'high') continue
