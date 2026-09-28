@@ -6,7 +6,7 @@ import {
 } from '@hidock/transcription'
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import { getBrainRegistry, resolveGeminiApiKey } from './brains'
-import { readFile, existsSync } from 'fs'
+import { readFile, readFileSync, existsSync } from 'fs'
 import { promisify } from 'util'
 import { spawn } from 'child_process'
 import { join, isAbsolute } from 'path'
@@ -92,11 +92,15 @@ function spawnStreaming(
   })
 }
 import { getConfig } from './config'
+import { nameOwnerOnLiveRecording, type LiveOwnerDeps } from './live-channel-speakers'
+import { liveNotePath } from './realtime-recorder'
 import { languageFor } from './transcription-language'
 import { isFeatureEnabled } from './feature-gate'
 import {
   addToQueue,
   getRecordingById,
+  getSpeakerMap,
+  assignSpeaker,
   resolveRecordingId,
   updateRecordingTranscriptionStatus,
   updateRecordingStatus,
@@ -436,6 +440,35 @@ export function cancelAllTranscriptions(): number {
   // rather than on a timer, to avoid the race where the flag resets before
   // processQueue has a chance to observe it.
   return count
+}
+
+
+/** Where the live-recording owner step reads and writes (live-channel-speakers.ts). */
+const liveOwnerDeps: LiveOwnerDeps = {
+  recording: (id) => getRecordingById(id) ?? undefined,
+  segments: (id) => {
+    const row = queryOne<{ speakers: string | null }>('SELECT speakers FROM transcripts WHERE recording_id = ?', [id])
+    try {
+      const parsed = row?.speakers ? JSON.parse(row.speakers) : []
+      return Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  },
+  speakerMap: (id) => getSpeakerMap(id),
+  ownerContactId: () => getConfig().identity?.ownerContactId || null,
+  // The channel noted with the file when it was recorded: today's setting may differ.
+  micChannel: (wavPath) => {
+    try {
+      const note = JSON.parse(readFileSync(liveNotePath(wavPath), 'utf8')) as { micChannel?: unknown }
+      return note.micChannel === 0 || note.micChannel === 1 ? note.micChannel : null
+    } catch {
+      return null
+    }
+  },
+  assign: (recordingId, label, contactId) => {
+    assignSpeaker(recordingId, label, { contactId })
+  }
 }
 
 /** Transcription attempts before a recording is marked failed (spec-014). Settings > Quality checks "maxRetries"; clamped by quality-rules.ts. */
@@ -3037,6 +3070,22 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   } catch (e) {
     identityErrors.push(e instanceof Error ? e.message : String(e))
     console.error('[SpeakerInference] Speaker inference pass failed:', e)
+  }
+
+  // A live stream keeps both HiDock channels: the speaker on the microphone
+  // channel is the owner ("This is you" in Settings). Not gated on diarization
+  // quality: the evidence is the channel, not a voice match (28-sep-2026).
+  try {
+    if (stillProcessable()) {
+      const owner = await nameOwnerOnLiveRecording(recordingId, liveOwnerDeps)
+      if (owner.named) {
+        identityBound += 1
+        console.log(`[LiveOwner] Recording ${recordingId}: ${owner.label} is the owner (microphone channel)`)
+      }
+    }
+  } catch (e) {
+    identityErrors.push(e instanceof Error ? e.message : String(e))
+    console.error('[LiveOwner] Naming the microphone speaker failed:', e)
   }
   completeProcessingRun(speakerIdentityRun.id, {
     status: !identityAllowed || identityErrors.length > 0 ? 'degraded' : 'completed',

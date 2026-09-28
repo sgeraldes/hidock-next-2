@@ -210,7 +210,13 @@ const liveRecorder = new RealtimeRecorder({
   recordingsPath: () => getRecordingsPath(),
   enabled: () => getConfig().transcription?.liveSaveRecording !== false,
   folderMoving: () => storageMoveInProgress('recordings'),
-  now: () => new Date()
+  now: () => new Date(),
+  micChannel: () => {
+    const t = getConfig().transcription
+    const pinned = t?.liveMicChannel
+    const measured = t?.liveMicChannelMeasured
+    return pinned === 0 || pinned === 1 ? pinned : measured === 0 || measured === 1 ? measured : null
+  }
 })
 
 function tellWindows(result: RecorderResult | { status: 'error'; message: string }): void {

@@ -244,6 +244,9 @@ export interface AppConfig {
    * imported or connector image to the vision model for a description and tags
    * (on by default, owner 28-sep-2026; it was always on with no switch).
    */
+  identity?: {
+    ownerContactId?: string
+  }
   capture?: {
     describeImages?: boolean
     autoClipboard?: boolean
