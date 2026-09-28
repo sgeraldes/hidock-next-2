@@ -27,6 +27,7 @@ import { useConfigStore } from '@/store/domain/useConfigStore'
 import { useUIStore } from '@/store/ui/useUIStore'
 import { formatBytes, cn } from '@/lib/utils'
 import { isSavedSecret } from '@/shared/secret-fields'
+import { normalizeWeekStart } from '@/lib/calendar-utils'
 import { HealthCheck } from '@/components/HealthCheck'
 import { ConnectorsSettings } from '@/components/settings/ConnectorsSettings'
 import { AIBrainsSettings } from '@/components/settings/AIBrainsSettings'
@@ -1006,6 +1007,25 @@ export function Settings({
                     />
                     <span className="text-sm">minutes</span>
                   </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <label htmlFor="startOfWeek" className="text-sm">Week starts on</label>
+                  <select
+                    id="startOfWeek"
+                    aria-label="Week starts on"
+                    className="rounded-md border border-input bg-background px-2 py-1 text-sm"
+                    value={normalizeWeekStart(config?.ui?.startOfWeek)}
+                    onChange={(e) => {
+                      void updateConfig('ui', { startOfWeek: Number(e.target.value) }).catch((err: unknown) =>
+                        toast.error('Could not change the first day of the week', err instanceof Error ? err.message : undefined)
+                      )
+                    }}
+                  >
+                    <option value={1}>Monday</option>
+                    <option value={0}>Sunday</option>
+                    <option value={6}>Saturday</option>
+                  </select>
                 </div>
 
                 <div className="flex items-center gap-2">

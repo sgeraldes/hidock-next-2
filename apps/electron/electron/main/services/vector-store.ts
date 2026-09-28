@@ -25,6 +25,7 @@ import {
   isRecordingEligible
 } from './recording-eligibility'
 import { getEmbeddingsService } from './embeddings'
+import { ragSettings } from './rag-settings'
 
 interface VectorDocument {
   id: string
@@ -945,7 +946,8 @@ class VectorStore {
     }
 
     // Chunk the transcript and embed all chunks in one batched call
-    const chunks = chunkText(transcript)
+    const { chunkSize, chunkOverlap } = ragSettings()
+    const chunks = chunkText(transcript, chunkSize, chunkOverlap)
 
     // ADV41-2 (round-43) — PRE-PROVIDER gate, adjacent to the provider call with
     // NO await between here and generateEmbeddings. A top-of-function or batch
