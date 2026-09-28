@@ -71,7 +71,7 @@ vi.mock('../ai-provider-config', () => ({
 // applyCaptureValueClassification (kept real) reads the confidence floor via
 // getConfig() — mock it directly (mirrors value-classification.test.ts).
 const mockConfig = vi.hoisted(() => ({
-  transcription: { valueClassificationMinConfidence: 0.6 }
+  transcription: { valueClassificationMinConfidence: 0.6, jevApiKey: '' }
 }))
 vi.mock('../config', () => ({
   getConfig: () => mockConfig
@@ -94,6 +94,7 @@ import {
   _resetValueBackfillForTests,
   _getYieldCountForTests
 } from '../value-backfill'
+import { JevError } from '../jev-client'
 
 function cleanupDbFiles(base: string): void {
   for (const suffix of ['', '-wal', '-shm', '.tmp']) {
@@ -1360,6 +1361,36 @@ describe('value-backfill', () => {
       expect(completeCall?.[1]).toMatchObject({ processed: 1, failed: 1 })
     })
 
+    it('a rejected Jev key (401) stops the run at the first item and parks nothing', async () => {
+      seedEligible('cap-1')
+      seedEligible('cap-2')
+      seedEligible('cap-3')
+      const { win, send } = FAKE_WINDOW_FACTORY()
+      setMainWindowForValueBackfill(win)
+      classifyCaptureValueRawMock.mockRejectedValue(new JevError('Jev returned HTTP 401: invalid key', 401))
+
+      await startValueBackfill()
+
+      // One call, no in-run retries, no second item.
+      expect(classifyCaptureValueRawMock).toHaveBeenCalledTimes(1)
+      const completeCall = send.mock.calls.find((c) => c[0] === 'value:backfill-complete')
+      expect(completeCall?.[1]).toMatchObject({ stopped: 'auth', processed: 0, failed: 0 })
+      // No durable failure: every item is still eligible for the next scan.
+      expect(getValueBackfillStatus().failed).toBe(0)
+      expect(getValueBackfillStatus().remaining).toBe(3)
+    })
+
+    it('a transient Jev error (529) is still retried in-run, not treated as a bad key', async () => {
+      seedEligible('cap-1')
+      classifyCaptureValueRawMock
+        .mockRejectedValueOnce(new JevError('Jev returned HTTP 529', 529))
+        .mockResolvedValue(successReply('normal', 0.9))
+
+      await startValueBackfill()
+
+      expect(classifyCaptureValueRawMock).toHaveBeenCalledTimes(2)
+    })
+
     it('never sends to a destroyed window', async () => {
       seedEligible('cap-1')
       const send = vi.fn()
@@ -1377,6 +1408,32 @@ describe('value-backfill', () => {
   // ---------------------------------------------------------------------
 
   describe('rate limiting', () => {
+    it('starts with only a Jev key (no AI provider) and uses the Jev spacing, not the LLM one', async () => {
+      seedEligible('cap-1')
+      seedEligible('cap-2')
+      getProviderConfigFromSettingsMock.mockReturnValue(null)
+      mockConfig.transcription.jevApiKey = 'jev-test-key' // pragma: allowlist secret
+      const delayCalls: number[] = []
+      // Spacings far apart so the one in use is unmistakable.
+      _setValueBackfillConfigForTests({
+        minIntervalMs: 60_000,
+        jevMinIntervalMs: 30_000,
+        delayFn: async (ms: number) => {
+          delayCalls.push(ms)
+        }
+      })
+      try {
+        const result = await startValueBackfill()
+        expect(result.started).toBe(true)
+        expect(classifyCaptureValueRawMock).toHaveBeenCalledTimes(2)
+        expect(delayCalls.length).toBeGreaterThan(0)
+        expect(Math.max(...delayCalls)).toBeLessThanOrEqual(30_000)
+        expect(Math.max(...delayCalls)).toBeGreaterThan(29_000)
+      } finally {
+        mockConfig.transcription.jevApiKey = ''
+      }
+    })
+
     it('waits at least MIN_INTERVAL_MS between LLM calls', async () => {
       seedEligible('cap-1')
       seedEligible('cap-2')

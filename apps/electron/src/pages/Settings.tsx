@@ -546,9 +546,14 @@ export function Settings() {
       setValueBackfillRunning(false)
       setValueBackfillProgress(result)
       setValueBackfillRemaining(Math.max(0, result.total - result.processed))
+      if (result.stopped === 'auth') {
+        toast.error('Jev rejected the key', 'Nothing more was rated. Paste the key again in this card and scan.')
+        return
+      }
       toast.success(
         result.cancelled ? 'Classification cancelled' : 'Classification complete',
-        `${result.processed} classified · ${result.marked} marked low-value.`
+        `${result.processed} classified · ${result.marked} marked low-value` +
+          (result.failed > 0 ? ` · ${result.failed} failed (retried on the next scan).` : '.')
       )
     })
 
@@ -1367,6 +1372,7 @@ export function Settings() {
                 <div className="flex items-center gap-2">
                   <Input
                     id="jev-api-key"
+                    aria-describedby="jev-api-key-help"
                     type="password"
                     autoComplete="off"
                     value={jevKeyDraft}
@@ -1382,7 +1388,7 @@ export function Settings() {
                     {jevKeyDraft.trim() || !hasJevKey ? 'Save key' : 'Remove key'}
                   </Button>
                 </div>
-                <p className="text-xs text-muted-foreground">
+                <p id="jev-api-key-help" className="text-xs text-muted-foreground">
                   {hasJevKey
                     ? 'Jev rates recordings. It sends a transcript excerpt, the summary and the meeting subject to api.typesafe.ai. '
                     : 'Without a key, the AI provider above rates recordings. '}
