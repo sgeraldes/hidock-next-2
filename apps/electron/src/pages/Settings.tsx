@@ -68,6 +68,7 @@ import { CalendarPreferences } from '@/features/settings/CalendarPreferences'
 import { DiarizationCpuShare, OllamaModelFields } from '@/features/settings/ModelFields'
 import { AdvancedSettings } from '@/features/settings/AdvancedSettings'
 import { SecretsSection } from '@/features/settings/SecretsSection'
+import { ShortcutsSection } from '@/features/settings/ShortcutsSection'
 
 // RAG configuration constants — MAX_CONTEXT_CHUNKS must match config.ts default (10)
 const RAG_DEFAULTS = {
@@ -1992,6 +1993,8 @@ export function Settings({
           )}
 
           {show('secrets') && <SecretsSection onNavigate={(id) => onSectionChange?.(id)} />}
+
+          {show('shortcuts') && <ShortcutsSection />}
 
           {show('developer') && (
             <>
