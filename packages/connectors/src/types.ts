@@ -133,6 +133,12 @@ export interface SourceContainer {
   kind: string
   /** Approximate item count, when cheap to know (additive). */
   itemCount?: number
+  /**
+   * Whether the container syncs before the user has chosen (additive, default
+   * true). Slack channels start off: a workspace has hundreds, and syncing all
+   * of them by default would pull every channel's history.
+   */
+  defaultEnabled?: boolean
   metadata?: Record<string, unknown>
 }
 
@@ -461,6 +467,12 @@ export interface ConnectorStateStore {
   getInstanceMeta?(id: string): ConnectorInstanceMeta | null
   /** Additive (optional): purge all state + secrets for an instance. */
   removeInstance?(id: string): void
+  /**
+   * Additive (optional): true when the user has saved a choice for this
+   * container. Without it the host cannot tell "never chosen" from "on",
+   * because getSourceState fills in a default.
+   */
+  hasSourceState?(id: string, containerId: string): boolean
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

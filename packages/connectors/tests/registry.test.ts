@@ -167,6 +167,32 @@ describe('ConnectorHost', () => {
     expect(seen).toContain('connected')
   })
 
+  it('syncNow skips a container that starts off until the user switches it on', async () => {
+    class ChoiceStore extends MemoryStore {
+      hasSourceState(id: string, containerId: string): boolean {
+        return Boolean(this.getState(id).sources[containerId])
+      }
+    }
+    const choiceStore = new ChoiceStore()
+    const choiceSink = new CountingSink()
+    const h = new ConnectorHost({ store: choiceStore, sink: choiceSink })
+    h.register(descriptor, (ctx) => {
+      const c = makeFakeConnector(ctx)
+      const sources = c.capabilities.sources!
+      return {
+        ...c,
+        capabilities: {
+          sources: { ...sources, listContainers: async () => [{ externalId: 'c1', name: 'Chan', kind: 'channel', defaultEnabled: false }] },
+        },
+      }
+    })
+    await h.connect('fake')
+    expect((await h.syncNow('fake')).artifacts).toBe(0)
+    expect(choiceSink.calls).toBe(0)
+    h.setSourceEnabled('fake', 'c1', true)
+    expect((await h.syncNow('fake')).artifacts).toBe(2)
+  })
+
   it('syncNow pulls all pages, advances the cursor, and ingests each page', async () => {
     await host.connect('fake')
     const outcome = await host.syncNow('fake')

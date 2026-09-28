@@ -141,3 +141,17 @@ describe('autoLinkRecordingsToMeetings — pre-assignment consumption', () => {
     expect(runCalls('DELETE FROM recording_preassignments')).toHaveLength(0)
   })
 })
+
+describe('autoLinkRecordingsToMeetings — connector meetings', () => {
+  it('reads Microsoft 365 meetings next to the active ICS snapshot', async () => {
+    const db = await import('../database')
+    vi.mocked(db.getActiveCalendarSyncToken).mockReturnValueOnce('ics-token')
+    recordingRows = [{ id: 'rec-M', filename: 'RecM.wav', date_recorded: '2026-08-07T17:00:00Z', duration_seconds: 1800 }]
+    meetingRows = [{ id: 'm365:AAMk1', subject: 'DevOps weekly', start_time: '2026-08-07T17:00:00Z', end_time: '2026-08-07T18:00:00Z' }]
+    autoLinkRecordingsToMeetings()
+    const meetingQuery = vi.mocked(db.queryAll).mock.calls.map((c) => String(c[0])).filter((sql) => /FROM meetings/i.test(sql))
+      .at(-1)
+    expect(meetingQuery).toContain("id LIKE 'm365%:%'")
+    expect(recordingRunCalls('time_overlap')).toHaveLength(1)
+  })
+})

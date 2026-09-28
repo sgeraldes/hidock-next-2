@@ -49,7 +49,7 @@ describe('SlackConnector identity', () => {
 })
 
 describe('SlackConnector sources', () => {
-  it('listContainers maps channels; listSelectedContainers respects the allowlist', async () => {
+  it('listContainers maps channels, each off until picked', async () => {
     const channels = {
       ok: true,
       channels: [
@@ -59,15 +59,10 @@ describe('SlackConnector sources', () => {
       response_metadata: { next_cursor: '' }
     }
     const { fetchFn } = makeMockFetch({ 'conversations.list': { body: channels } })
-    const c = createSlackConnector({ token: 'xoxb-t', channelAllowlist: ['C2'] }, { fetchFn })
-    expect((await c.listContainers()).map((x) => x.externalId)).toEqual(['C1', 'C2'])
-    expect((await c.listSelectedContainers()).map((x) => x.externalId)).toEqual(['C2'])
-  })
-
-  it('listSelectedContainers is empty when nothing is opted in', async () => {
-    const { fetchFn } = makeMockFetch({ 'conversations.list': { body: { ok: true, channels: [], response_metadata: { next_cursor: '' } } } })
     const c = createSlackConnector({ token: 'xoxb-t' }, { fetchFn })
-    expect(await c.listSelectedContainers()).toEqual([])
+    const containers = await c.listContainers()
+    expect(containers.map((x) => x.externalId)).toEqual(['C1', 'C2'])
+    expect(containers.every((x) => x.defaultEnabled === false)).toBe(true)
   })
 })
 
@@ -182,31 +177,16 @@ describe('host registration (descriptor + factory)', () => {
     expect(slackDescriptor.transport).toBe('native')
     const token = slackDescriptor.configFields.find((f) => f.key === 'token')
     expect(token).toMatchObject({ type: 'password', required: true, secret: true })
-    expect(slackDescriptor.configFields.some((f) => f.key === 'channelAllowlist')).toBe(true)
+    // Channels are picked per source in Settings, not typed as ids.
+    expect(slackDescriptor.configFields.map((f) => f.key)).toEqual(['token'])
     expect([...slackDescriptor.capabilityKinds].sort()).toEqual(['actions', 'identity', 'signals', 'sources'])
   })
 
-  it('factory reads the token via ctx.getSecret and parses the channel allowlist', async () => {
-    const ctx = fakeContext({ channelAllowlist: 'C1, C2 ,, C3' }, { token: 'xoxb-fromsecret' })
-    const connector = slackConnectorFactory(ctx)
+  it('factory reads the token via ctx.getSecret', () => {
+    const connector = slackConnectorFactory(fakeContext({}, { token: 'xoxb-fromsecret' }))
     expect(connector.type).toBe('slack')
     expect(connector.capabilities.sources).toBeDefined()
-    // Allowlist parsed (trimmed, blanks dropped) → listSelectedContainers filters to it.
-    const { fetchFn } = makeMockFetch({
-      'conversations.list': {
-        body: {
-          ok: true,
-          channels: [
-            { id: 'C1', name: 'a' },
-            { id: 'C9', name: 'z' }
-          ],
-          response_metadata: { next_cursor: '' }
-        }
-      }
-    })
-    // Rebuild with the same allowlist but injected fetch to assert filtering.
-    const withFetch = createSlackConnector({ token: 'x', channelAllowlist: ['C1', 'C2', 'C3'] }, { fetchFn })
-    expect((await withFetch.listSelectedContainers()).map((c) => c.externalId)).toEqual(['C1'])
+    expect(connector.id).not.toBe('slack:unconfigured')
   })
 
   it('factory tolerates a missing token — constructs and reports auth-needed', async () => {
@@ -215,5 +195,30 @@ describe('host registration (descriptor + factory)', () => {
     expect(connector.status().state).toBe('auth-needed')
     // connect() short-circuits to auth-needed without any network call.
     expect((await connector.connect!()).state).toBe('auth-needed')
+  })
+})
+
+describe('SlackConnector picks up a token saved after startup', () => {
+  it('connects with a token pasted in Settings once the connector already exists', async () => {
+    const { fetchFn } = makeMockFetch({ 'auth.test': { body: { ok: true, team: 'Acme' } } })
+    let saved = ''
+    const c = createSlackConnector({ token: '' }, { fetchFn }, () => ({ token: saved }))
+    expect(c.status()).toMatchObject({ state: 'auth-needed', message: 'token missing' })
+    expect(c.id).toBe('slack:unconfigured')
+    saved = 'xoxp-new'
+    const status = await c.connect()
+    expect(status).toMatchObject({ state: 'connected', message: 'Connected to Acme' })
+    expect(c.id).not.toBe('slack:unconfigured')
+  })
+
+  it('configure() alone refreshes the token', async () => {
+    const { fetchFn } = makeMockFetch({ 'auth.test': { body: { ok: true, team: 'Acme' } } })
+    let saved = { token: '' }
+    const c = createSlackConnector({ token: '' }, { fetchFn }, () => saved)
+    saved = { token: 'xoxb-later' }
+    c.configure()
+    expect(c.id).toMatch(/^slack:/)
+    expect(c.id).not.toBe('slack:unconfigured')
+    expect(c.status().state).toBe('disconnected')
   })
 })

@@ -350,6 +350,23 @@ describe('Settings Page', () => {
     await waitFor(() => expect(input.value).toBe(''))
   })
 
+  it('saves a changed Hugging Face token on its own, without the Transcription Save button', async () => {
+    mockUpdateConfig.mockResolvedValue(undefined)
+    render(<Settings />)
+
+    const save = screen.getByTestId('save-speaker-token')
+    expect(save).toBeDisabled() // nothing changed yet
+    fireEvent.change(screen.getByLabelText('Hugging Face token for speaker identification'), {
+      target: { value: ' hf_newtoken ' } // pragma: allowlist secret
+    })
+    expect(save).toHaveTextContent('Save token')
+    fireEvent.click(save)
+
+    await waitFor(() =>
+      expect(mockUpdateConfig).toHaveBeenCalledWith('transcription', { localAsrHfToken: 'hf_newtoken' }) // pragma: allowlist secret
+    )
+  })
+
   /**
    * F15 / re-review #3: the startup mount sync parks on the boot gate for the
    * whole startup window. Gating this control on "any sync in flight" disabled

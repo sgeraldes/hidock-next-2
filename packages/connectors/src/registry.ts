@@ -390,6 +390,14 @@ export class ConnectorHost {
     this.store.setSourceState(id, containerId, { enabled })
   }
 
+  /** A container's saved choice, or its default when the user never chose. */
+  private sourceEnabled(id: string, container: SourceContainer): boolean {
+    if (this.store.hasSourceState && !this.store.hasSourceState(id, container.externalId)) {
+      return container.defaultEnabled ?? true
+    }
+    return this.store.getSourceState(id, container.externalId).enabled
+  }
+
   private async syncContainer(
     id: string,
     inst: Connector,
@@ -429,7 +437,7 @@ export class ConnectorHost {
       const containers = await inst.capabilities.sources.listContainers()
       const targets = containerId
         ? containers.filter((c) => c.externalId === containerId)
-        : containers.filter((c) => this.store.getSourceState(id, c.externalId).enabled)
+        : containers.filter((c) => this.sourceEnabled(id, c))
       for (const container of targets) {
         const partial = await this.syncContainer(id, inst, container)
         total.meetings += partial.meetings

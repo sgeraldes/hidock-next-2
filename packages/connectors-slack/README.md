@@ -40,8 +40,7 @@ DB (`CONNECTORS.md` §Data model). Exported as `SLACK_REQUIRED_SCOPES`.
 import { createSlackConnector } from '@hidock/connectors-slack'
 
 const slack = createSlackConnector({
-  token: process.env.SLACK_TOKEN!,      // from keychain, injected by the host
-  channelAllowlist: ['C123', 'C456']    // channels the user opted in to sync
+  token: process.env.SLACK_TOKEN!       // from keychain, injected by the host
 })
 
 await slack.connect()                    // validates the token (auth.test)
@@ -77,11 +76,13 @@ this package:
 
 - `slackDescriptor: ConnectorDescriptor` — Settings → Connectors metadata
   (id `slack`, transport `native`, auth setup steps, config fields
-  `token` [password/secret/required] and `channelAllowlist` [text], and all four
-  capability kinds).
+  `token` [password/secret/required], and all four capability kinds).
+  Channels are chosen per source in Settings: every channel container carries
+  `defaultEnabled: false`, so nothing syncs until the user picks it.
 - `slackConnectorFactory: ConnectorFactory` — `(ctx: ConnectorContext) => Connector`;
   reads the token via `ctx.getSecret('token')` (secrets live in safeStorage,
-  never the DB) and the channel allowlist via `ctx.getConfig()`.
+  never the DB). It reads the token again on `configure()` and `connect()`, so a
+  token saved after startup takes effect without a restart.
 
 Register `slackDescriptor.id → slackConnectorFactory` in the host registry. A
 connector built with no token constructs cleanly and reports `auth-needed`

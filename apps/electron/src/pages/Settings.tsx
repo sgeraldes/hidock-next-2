@@ -133,6 +133,10 @@ export function Settings() {
   const [speakerModelAccess, setSpeakerModelAccess] = useState<SpeakerModelAccess | null>(null)
   const [speakerModelAccessChecking, setSpeakerModelAccessChecking] = useState(false)
   const lastAutoCheckedTokenRef = useRef<string | null>(null)
+  // The saved token the field last showed. A later config change (any section
+  // saving) refreshes the field only while it still shows that value, so a new
+  // token typed but not saved yet is not thrown away (28-sep-2026).
+  const syncedHfTokenRef = useRef('')
 
   const loadGeminiModels = useCallback(async () => {
     setModelsLoading(true)
@@ -332,7 +336,9 @@ export function Settings() {
       setGeminiApiKey(config.transcription.geminiApiKey)
       setGeminiModel(config.transcription.geminiModel || 'gemini-3.5-transcribe')
       setLocalAsrPath(config.transcription.localAsrPath || 'G:\\Code\\claude-plugins\\plugins\\mcp-asr')
-      setLocalAsrHfToken(config.transcription.localAsrHfToken || '')
+      const savedHfToken = config.transcription.localAsrHfToken || ''
+      setLocalAsrHfToken((current) => (current === syncedHfTokenRef.current ? savedHfToken : current))
+      syncedHfTokenRef.current = savedHfToken
       setLocalAsrVocabularyFile(config.transcription.localAsrVocabularyFile || 'vocabulary.json')
       setLocalAsrDiarize(config.transcription.localAsrDiarize ?? true)
       setLocalAsrNumBeams(config.transcription.localAsrNumBeams || 5)
@@ -427,6 +433,22 @@ export function Settings() {
       const message = error instanceof Error ? error.message : 'Failed to save calendar settings'
       toast.error('Save Failed', message)
       console.error('Failed to save calendar settings:', error)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // The token saves on its own. It used to ride on the Transcription card's
+  // Save button far below, and the green "Access valid" pill above it read like
+  // a button, so a new token looked saved and was not (28-sep-2026).
+  const handleSaveSpeakerToken = async () => {
+    if (saving) return
+    setSaving(true)
+    try {
+      await updateConfig('transcription', { localAsrHfToken: localAsrHfToken.trim() })
+      toast.success('Token saved', 'Speaker identification uses the new Hugging Face token.')
+    } catch (error) {
+      toast.error('Save failed', error instanceof Error ? error.message : 'The token could not be saved.')
     } finally {
       setSaving(false)
     }
@@ -1038,7 +1060,7 @@ export function Settings() {
                       {speakerModelAccessChecking
                         ? 'Checking access…'
                         : speakerModelAccess?.status === 'granted'
-                          ? isSpeakerTokenDirty ? 'Access valid · Save token' : 'Community-1 ready'
+                          ? isSpeakerTokenDirty ? 'Access valid · not saved yet' : 'Community-1 ready'
                           : speakerModelAccess?.status === 'terms-pending'
                             ? 'Acceptance required'
                             : speakerModelAccess?.status === 'invalid-token'
@@ -1065,7 +1087,7 @@ export function Settings() {
                         setSpeakerModelAccess(null)
                         lastAutoCheckedTokenRef.current = null
                       }}
-                      onKeyDown={(event) => event.key === 'Enter' && handleSaveTranscription()}
+                      onKeyDown={(event) => event.key === 'Enter' && isSpeakerTokenDirty && handleSaveSpeakerToken()}
                       disabled={saving}
                       aria-label="Hugging Face token for speaker identification"
                       aria-describedby="localAsrHfToken-description speaker-model-access-detail"
@@ -1101,11 +1123,20 @@ export function Settings() {
                     'Access has not been checked yet. Until Community-1 is available, the app records the actual fallback model in the Tools metadata.'}
                   {speakerModelAccess?.account ? ` Hugging Face account: ${speakerModelAccess.account}.` : ''}
                   {speakerModelAccess?.status === 'granted' && isSpeakerTokenDirty
-                    ? ' Save transcription settings to make this the active token.'
+                    ? ' Click Save token to make it the active token.'
                     : ''}
                 </p>
 
                 <div className="mt-4 flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={handleSaveSpeakerToken}
+                    disabled={saving || !isSpeakerTokenDirty}
+                    data-testid="save-speaker-token"
+                  >
+                    {isSpeakerTokenDirty ? 'Save token' : 'Token saved'}
+                  </Button>
                   <Button type="button" variant="outline" size="sm" onClick={openSpeakerModelAccess}>
                     <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
                     Review model access
