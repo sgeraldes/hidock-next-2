@@ -14,7 +14,8 @@ const db = vi.hoisted(() => ({
   assignSpeaker: vi.fn(),
   getSpeakerMap: vi.fn(),
   unassignSpeaker: vi.fn(),
-  getActiveProcessingRunsForRecording: vi.fn()
+  getActiveProcessingRunsForRecording: vi.fn(),
+  refreshTranscriptIntegrity: vi.fn()
 }))
 
 const vectorStore = vi.hoisted(() => ({
@@ -88,6 +89,18 @@ describe('transcript content editing IPC', () => {
       'Voice ABC: Aló Aló, Sorry recién te leo',
       expect.objectContaining({ recordingId: 'rec-1' })
     )
+  })
+
+  it('checks the saved lines again, so a fixed time clears its warning', async () => {
+    db.queryOne.mockImplementation((sql: string) =>
+      sql.startsWith('SELECT id FROM transcripts') ? { id: 'trans_rec-1' } : { full_text: request.expectedFullText }
+    )
+    db.refreshTranscriptIntegrity.mockReturnValue({ version: 2, status: 'ok', issues: [] })
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:updateContent')?.({} as never, request) as any
+
+    expect(db.refreshTranscriptIntegrity).toHaveBeenCalledWith('trans_rec-1')
+    expect(result.data.integrity).toEqual({ status: 'ok', json: JSON.stringify({ version: 2, status: 'ok', issues: [] }) })
   })
 
   it('saves the correction but reports RAG pending when embeddings fail', async () => {

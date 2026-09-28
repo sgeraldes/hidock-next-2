@@ -76,6 +76,10 @@ recording, and Microsoft 365 and Slack connect on first try.
   fix and the orphan and date checks; every place now uses the same list of audio types.
 - A transcript with one line out of time order refused every edit ("Invalid transcript edit"), and
   saving an edit dropped the speaker-confidence marks.
+- **A fixed transcript loses its warning.** Editing a line's time fixed the problem but kept the
+  "times are wrong" warning, and its jump buttons found nothing. A saved edit is now checked again,
+  every transcript is checked again once at the next start, and "Accept as is" survives a wording
+  fix that leaves the same problems.
 - **Moving a storage folder is safe to stop.** One move at a time; downloads, transcription and the
   folder watcher pause while it runs; each file is copied, checked, then renamed; Stop removes the
   copies; a failed save puts every path back. If a folder cannot be measured, automatic downloads

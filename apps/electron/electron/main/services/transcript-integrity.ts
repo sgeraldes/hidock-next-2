@@ -52,7 +52,7 @@ export interface IntegrityIssue {
 export type IntegrityStatus = 'ok' | 'suspect' | 'broken'
 
 export interface TranscriptIntegrity {
-  version: 1
+  version: number
   status: IntegrityStatus
   issues: IntegrityIssue[]
   /** Measured audio length used for the checks, null when it was unknown. */
@@ -61,8 +61,8 @@ export interface TranscriptIntegrity {
   lines: number
 }
 
-/** Bumped when the rules change, so stored results are recomputed. */
-export const INTEGRITY_VERSION = 1
+/** Bumped when the rules change, so stored results are recomputed. 2: edits saved before 28-sep-2026 were never checked again. */
+export const INTEGRITY_VERSION = 2
 
 /** Above this over a whole recording, the text does not fit in the audio. */
 export const MAX_WORDS_PER_AUDIO_SECOND = IMPOSSIBLE_WORDS_PER_SECOND

@@ -667,6 +667,7 @@ export interface ElectronAPI {
       indexedChunks: number
       ragStatus: 'indexed' | 'pending'
       ragError?: string
+      integrity?: { status: 'ok' | 'suspect' | 'broken'; json: string }
     }>>
     reindex: (request: { recordingId: string }) => Promise<Result<{ indexedChunks: number }>>
     updateExtractedItem: (request: { recordingId: string; kind: 'action' | 'decision'; index: number; content: string }) => Promise<Result<{ kind: 'action' | 'decision'; index: number; content: string }>>
