@@ -161,7 +161,7 @@ export interface QueueItem {
 }
 
 export interface StorageLocationUsage {
-  id: 'recordings' | 'transcripts' | 'data'
+  id: 'recordings' | 'transcripts' | 'captures' | 'data'
   path: string
   bytes: number
   files: number
@@ -172,7 +172,7 @@ export interface StorageLocationUsage {
 }
 
 export interface StorageMovePlan {
-  folder: 'recordings' | 'transcripts' | 'data'
+  folder: 'recordings' | 'transcripts' | 'captures' | 'data'
   from: string
   to: string
   files: number
@@ -188,6 +188,7 @@ export interface StorageInfo {
   dataPath: string
   recordingsPath: string
   transcriptsPath: string
+  capturesPath: string
   cachePath: string
   databasePath: string
   totalSizeBytes: number
@@ -233,8 +234,9 @@ export interface AppConfig {
     dataPath: string
     recordingsPath?: string
     transcriptsPath?: string
+    capturesPath?: string
     /** Optional limits in GB per location; absent = no limit. */
-    limitsGB?: Partial<Record<'recordings' | 'transcripts' | 'data', number | null>>
+    limitsGB?: Partial<Record<'recordings' | 'transcripts' | 'captures' | 'data', number | null>>
   }
   calendar: CalendarSettings
   /**

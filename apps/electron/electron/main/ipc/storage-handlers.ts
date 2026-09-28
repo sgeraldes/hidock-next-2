@@ -9,7 +9,8 @@ import {
   getTranscriptsPath,
   readRecordingFile,
   deleteRecording,
-  saveRecording
+  saveRecording,
+  getCapturesPath
 } from '../services/file-storage'
 import {
   insertRecording,
@@ -57,7 +58,7 @@ export function registerStorageHandlers(): void {
   })
 
   // Changing a storage folder: plan, then move (copy + rewrite paths) or switch
-  const isMovable = (f: unknown): f is MovableFolder => f === 'recordings' || f === 'transcripts'
+  const isMovable = (f: unknown): f is MovableFolder => f === 'recordings' || f === 'transcripts' || f === 'captures'
   ipcMain.handle('storage:plan-move', async (_, folder: unknown, to: unknown) => {
     try {
       if (!(isMovable(folder) || folder === 'data') || typeof to !== 'string') throw new Error('Invalid folder')
@@ -117,6 +118,9 @@ export function registerStorageHandlers(): void {
           break
         case 'transcripts':
           path = getTranscriptsPath()
+          break
+        case 'captures':
+          path = getCapturesPath()
           break
         case 'data':
           path = getStorageInfo().dataPath

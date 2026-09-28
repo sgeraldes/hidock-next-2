@@ -125,11 +125,13 @@ export interface AppConfig {
     dataPath: string
     recordingsPath?: string
     transcriptsPath?: string
+    /** Images and imported files (Privacy & capture, Storage). Empty: <dataPath>/artifacts. */
+    capturesPath?: string
     /**
      * Optional limits in GB per location (Settings > Storage); absent = no
      * limit. Over the recordings limit, auto-download pauses.
      */
-    limitsGB?: Partial<Record<'recordings' | 'transcripts' | 'data', number | null>>
+    limitsGB?: Partial<Record<'recordings' | 'transcripts' | 'captures' | 'data', number | null>>
   }
   calendar: {
     icsUrl: string

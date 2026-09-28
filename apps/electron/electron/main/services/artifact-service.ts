@@ -14,13 +14,14 @@
 import { createHash, randomUUID } from 'crypto'
 import { existsSync, mkdirSync, readFileSync, copyFileSync, rmSync } from 'fs'
 import { join, extname, basename } from 'path'
-import { getDataPath } from './config'
 import { queryOne, queryAll, run, runInTransaction } from './database'
 import { resolveType, getArtifactType, listArtifactTypes, ArtifactExtractionError } from './artifact-types'
 import { resolveGeminiApiKey } from './brains'
 import { getVectorStore } from './vector-store'
 import { filterEligibleCaptureIds, isCaptureEligible } from './recording-eligibility'
 import { getEventBus } from './event-bus'
+import { getCapturesPath } from './file-storage'
+import { refuseWhileCapturesMove } from './storage-move-state'
 
 export interface ArtifactRow {
   id: string
@@ -59,9 +60,9 @@ export interface ImportArtifactResult {
   indexedChunks: number
 }
 
-/** Root for the artifacts store — mirrors file-storage's getDataPath()-based resolution. */
+/** Root for the artifacts store: the captures folder (Privacy & capture, Storage). */
 export function getArtifactsPath(): string {
-  return join(getDataPath(), 'artifacts')
+  return getCapturesPath()
 }
 
 /**
@@ -88,6 +89,7 @@ export async function importArtifact(
   if (!existsSync(filePath)) {
     throw new Error(`File not found: ${filePath}`)
   }
+  refuseWhileCapturesMove()
 
   const buffer = readFileSync(filePath)
   const contentHash = createHash('sha256').update(buffer).digest('hex')

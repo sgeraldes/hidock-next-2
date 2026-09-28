@@ -32,14 +32,14 @@ import { promises as fs, createReadStream, createWriteStream, existsSync } from 
 import { pipeline } from 'stream/promises'
 import { dirname, join, relative, resolve, sep } from 'path'
 import { getConfig, updateConfig } from './config'
-import { getRecordingsPath, getTranscriptsPath, initializeFileStorage } from './file-storage'
+import { getRecordingsPath, getTranscriptsPath, initializeFileStorage, getCapturesPath } from './file-storage'
 import { queryAll, run, runInTransaction } from './database'
 import { startRecordingWatcher, stopRecordingWatcher } from './recording-watcher'
 import { getDownloadService } from './download-service'
 import { getQueueState, pauseQueue, resumeQueue } from './transcription'
 import { setMovingFolder, liveRecordingInProgress } from './storage-move-state'
 
-export type MovableFolder = 'recordings' | 'transcripts'
+export type MovableFolder = 'recordings' | 'transcripts' | 'captures'
 
 export interface MovePlan {
   folder: MovableFolder | 'data'
@@ -88,6 +88,7 @@ function overlaps(a: string, b: string): boolean {
 function currentPath(folder: MovableFolder | 'data'): string {
   if (folder === 'recordings') return getRecordingsPath()
   if (folder === 'transcripts') return getTranscriptsPath()
+  if (folder === 'captures') return getCapturesPath()
   return getConfig().storage.dataPath
 }
 
@@ -190,14 +191,27 @@ const PATH_COLUMNS: Array<[string, string]> = [
   ['audio_sources', 'local_path']
 ]
 
+/** The rows that hold absolute paths into each movable folder (transcripts are found by name). */
+const STORED_PATHS: Record<MovableFolder, Array<[string, string]>> = {
+  recordings: PATH_COLUMNS,
+  transcripts: [],
+  captures: [['artifacts', 'storage_path']]
+}
+
+const CONFIG_KEY: Record<MovableFolder, 'recordingsPath' | 'transcriptsPath' | 'capturesPath'> = {
+  recordings: 'recordingsPath',
+  transcripts: 'transcriptsPath',
+  captures: 'capturesPath'
+}
+
 /** Rewrite every stored absolute path under `from` to the same place under `to`. Returns rows changed. */
-export function rewriteStoredPaths(from: string, to: string): number {
+export function rewriteStoredPaths(from: string, to: string, columns: Array<[string, string]> = PATH_COLUMNS): number {
   const prefix = withSep(resolve(from))
   const next = withSep(resolve(to))
   const prefixKey = prefix.toLowerCase()
   let changed = 0
   runInTransaction(() => {
-    for (const [table, column] of PATH_COLUMNS) {
+    for (const [table, column] of columns) {
       const rows = queryAll<{ rid: number; p: string }>(
         `SELECT rowid AS rid, ${column} AS p FROM ${table} WHERE ${column} IS NOT NULL AND ${column} != ''`
       )
@@ -297,12 +311,13 @@ export async function moveFolder(
       return { copiedFiles: 0, copiedBytes: 0, cancelled: true }
     }
 
-    const configKey = folder === 'recordings' ? 'recordingsPath' : 'transcriptsPath'
-    if (folder === 'recordings') rewriteStoredPaths(plan.from, plan.to)
+    const configKey = CONFIG_KEY[folder]
+    const columns = STORED_PATHS[folder]
+    if (columns.length > 0) rewriteStoredPaths(plan.from, plan.to, columns)
     try {
       await updateConfig('storage', { [configKey]: plan.to })
     } catch (err) {
-      if (folder === 'recordings') rewriteStoredPaths(plan.to, plan.from)
+      if (columns.length > 0) rewriteStoredPaths(plan.to, plan.from, columns)
       throw err
     }
     switched = true
@@ -335,7 +350,7 @@ export async function switchFolder(folder: MovableFolder, to: string): Promise<v
     throw new Error(plan.blocker ?? 'The current folder has files. Move them, so they stay playable.')
   }
   await fs.mkdir(plan.to, { recursive: true })
-  await updateConfig('storage', { [folder === 'recordings' ? 'recordingsPath' : 'transcriptsPath']: plan.to })
+  await updateConfig('storage', { [CONFIG_KEY[folder]]: plan.to })
   await initializeFileStorage()
   if (folder === 'recordings') {
     stopRecordingWatcher()
