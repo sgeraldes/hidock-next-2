@@ -24,6 +24,11 @@ interface RecordingLinkDialogProps {
   onResolved: () => void
 }
 
+/** Jev's probability from what was said when there is one, else the time score. */
+function matchScore(option: MeetingCandidate): number {
+  return typeof option.contentProbability === 'number' ? option.contentProbability : option.confidenceScore
+}
+
 export function RecordingLinkDialog({
   recording,
   meeting,
@@ -473,20 +478,20 @@ export function RecordingLinkDialog({
                         </div>
                       )}
                     </div>
-                    {hasCandidates && option.confidenceScore > 0 && (
+                    {hasCandidates && matchScore(option) > 0 && (
                       <span
                         className={cn(
                           'text-xs px-2 py-0.5 rounded-full flex-shrink-0 font-medium',
-                          option.confidenceScore > 0.7 &&
+                          matchScore(option) > 0.7 &&
                             'bg-green-100 text-green-800 dark:bg-green-500/15 dark:text-green-300',
-                          option.confidenceScore > 0.4 &&
-                            option.confidenceScore <= 0.7 &&
+                          matchScore(option) > 0.4 &&
+                            matchScore(option) <= 0.7 &&
                             'bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300',
-                          option.confidenceScore <= 0.4 && 'bg-muted text-muted-foreground'
+                          matchScore(option) <= 0.4 && 'bg-muted text-muted-foreground'
                         )}
-                        title="Match confidence"
+                        title={typeof option.contentProbability === 'number' ? 'Jev, from what was said' : 'Match by time'}
                       >
-                        {Math.round(option.confidenceScore * 100)}%
+                        {Math.round(matchScore(option) * 100)}%
                       </span>
                     )}
                   </label>

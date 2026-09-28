@@ -8,6 +8,8 @@
 import { ipcMain } from 'electron'
 import { success, error, type Result } from '../types/api'
 import {
+  matchMeetingsWithJev,
+  type MeetingMatchJobResult,
   markEvaluationsOutdated,
   recheckWarnings,
   redrawWaveforms,
@@ -43,6 +45,18 @@ export function registerMaintenanceHandlers(): void {
     } catch (e) {
       console.error('[maintenance:redrawWaveforms]', e)
       return error('INTERNAL_ERROR', e instanceof Error ? e.message : 'Could not draw the waveforms')
+    }
+  })
+
+  ipcMain.handle('maintenance:matchMeetings', async (_event, options?: { dryRun?: boolean }): Promise<Result<MeetingMatchJobResult>> => {
+    try {
+      const result = await matchMeetingsWithJev({ dryRun: options?.dryRun === true })
+      if ('busy' in result) return error('RETRYABLE_ERROR', 'Meetings are already being matched.')
+      if ('noKey' in result) return error('VALIDATION_ERROR', 'Add a Jev key in Decisions (Jev) first.')
+      return success(result)
+    } catch (e) {
+      console.error('[maintenance:matchMeetings]', e)
+      return error('INTERNAL_ERROR', e instanceof Error ? e.message : 'Could not match meetings')
     }
   })
 
