@@ -25,7 +25,8 @@ import {
   Info,
   PlayCircle,
   Monitor,
-  Mic
+  Mic,
+  KeyRound
 } from 'lucide-react'
 
 export type SettingsSectionId =
@@ -43,6 +44,7 @@ export type SettingsSectionId =
   | 'connectors'
   | 'decisions'
   | 'storage'
+  | 'secrets'
   | 'maintenance'
   | 'developer'
   | 'releases'
@@ -179,6 +181,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'Where recordings, transcripts and data live on this computer.',
     icon: HardDrive,
     keywords: ['folders', 'disk', 'path', 'data']
+  },
+  {
+    id: 'secrets',
+    group: 'system',
+    label: 'Secrets',
+    description: 'Every stored key and token: set or not, replace or remove.',
+    icon: KeyRound,
+    keywords: ['api key', 'token', 'password', 'credential', 'encrypted']
   },
   {
     id: 'maintenance',
