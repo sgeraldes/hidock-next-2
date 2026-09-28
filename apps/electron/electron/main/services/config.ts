@@ -266,6 +266,14 @@ export interface AppConfig {
   // resolveFeatureState() in src/shared/feature-registry.ts.
   features: FeaturesConfig
   /**
+   * Captures (Settings > Privacy & capture). describeImages: send each pasted,
+   * imported or connector image to the vision model for a description and tags
+   * (on by default, owner 28-sep-2026; it was always on with no switch).
+   */
+  capture?: {
+    describeImages?: boolean
+  }
+  /**
    * Decisions (Jev): one switch for Jev and one per job it does. Each job
    * runs only with a key, the Jev switch on and its own switch on. All on by
    * default, which is how Jev behaved before the switches existed.
@@ -392,6 +400,7 @@ const DEFAULT_CONFIG: AppConfig = {
   // Default preset `full` → every feature enabled → identical behavior to before
   // modular features existed. New installs may later be asked during onboarding.
   features: { ...DEFAULT_FEATURES_CONFIG },
+  capture: { describeImages: true },
   decisions: {
     jevEnabled: true,
     jevValue: true,
