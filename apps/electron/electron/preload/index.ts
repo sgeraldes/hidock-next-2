@@ -1249,7 +1249,15 @@ export interface ElectronAPI {
       callback: (progress: { processed: number; total: number; marked: number; failed: number }) => void
     ) => () => void
     onComplete: (
-      callback: (result: { processed: number; total: number; marked: number; failed: number; cancelled: boolean }) => void
+      callback: (result: {
+        processed: number
+        total: number
+        marked: number
+        failed: number
+        cancelled: boolean
+        /** 'auth': the classifier rejected the key; the run stopped at the first item. */
+        stopped?: 'auth'
+      }) => void
     ) => () => void
   }
 

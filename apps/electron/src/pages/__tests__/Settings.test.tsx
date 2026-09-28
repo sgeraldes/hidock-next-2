@@ -302,6 +302,40 @@ describe('Settings Page', () => {
     expect(screen.queryByText(/Automatic rating of newly transcribed recordings is turned off/)).not.toBeInTheDocument()
   })
 
+  it('removes a saved Jev key from the same field', async () => {
+    const { useConfigStore } = await import('@/store/domain/useConfigStore')
+    const mockedUseConfigStore = vi.mocked(useConfigStore)
+    const originalImpl = mockedUseConfigStore.getMockImplementation()
+    mockedUseConfigStore.mockImplementation((selector?: any) => {
+      const state = {
+        config: {
+          calendar: { icsUrl: '', syncEnabled: false, syncIntervalMinutes: 15, lastSyncAt: null },
+          transcription: { geminiApiKey: '', geminiModel: 'gemini-3-pro-preview', jevApiKey: 'saved' }, // pragma: allowlist secret
+          chat: { provider: 'gemini' as const },
+          embeddings: { ollamaBaseUrl: 'http://localhost:11434' }
+        },
+        loadConfig: mockLoadConfig,
+        updateConfig: mockUpdateConfig,
+        configLoading: false
+      }
+      if (typeof selector === 'function') return selector(state)
+      return state
+    })
+    mockUpdateConfig.mockResolvedValue(undefined)
+
+    try {
+      render(<Settings />)
+      // The saved key is never shown; the field offers to replace it.
+      const input = screen.getByLabelText('Jev API key (TypeSafe AI)') as HTMLInputElement
+      expect(input.value).toBe('')
+      expect(screen.getByText(/Jev rates recordings/)).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Remove key' }))
+      await waitFor(() => expect(mockUpdateConfig).toHaveBeenCalledWith('transcription', { jevApiKey: '' }))
+    } finally {
+      if (originalImpl) mockedUseConfigStore.mockImplementation(originalImpl)
+    }
+  })
+
   it('saves a pasted Jev key through updateConfig and never shows it back', async () => {
     mockUpdateConfig.mockResolvedValue(undefined)
     render(<Settings />)

@@ -55,6 +55,7 @@ import {
   getValueClassifierKind,
   type RawClassificationResult
 } from './value-classification'
+import { JevError } from './jev-client'
 
 // ---------------------------------------------------------------------------
 // Tunables — `let` (not `const`) so tests can shrink delays/chunk sizes to
@@ -86,6 +87,7 @@ let delayFn: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => se
 export function _setValueBackfillConfigForTests(overrides: {
   chunkSize?: number
   minIntervalMs?: number
+  jevMinIntervalMs?: number
   maxDurableAttempts?: number
   inRunRetryDelaysMs?: number[]
   progressThrottleMs?: number
@@ -96,6 +98,7 @@ export function _setValueBackfillConfigForTests(overrides: {
     MIN_INTERVAL_MS = overrides.minIntervalMs
     JEV_MIN_INTERVAL_MS = overrides.minIntervalMs
   }
+  if (overrides.jevMinIntervalMs !== undefined) JEV_MIN_INTERVAL_MS = overrides.jevMinIntervalMs
   if (overrides.maxDurableAttempts !== undefined) MAX_DURABLE_ATTEMPTS = overrides.maxDurableAttempts
   if (overrides.inRunRetryDelaysMs !== undefined) IN_RUN_RETRY_DELAYS_MS = overrides.inRunRetryDelaysMs
   if (overrides.progressThrottleMs !== undefined) PROGRESS_THROTTLE_MS = overrides.progressThrottleMs
@@ -360,6 +363,13 @@ function finalizeClassifiedInTransaction(captureId: string, runId: string, resul
 // (network hiccup, transient 429) within THIS ONE durable attempt.
 // ---------------------------------------------------------------------------
 
+/** The classifier rejected the credentials (a bad or revoked Jev key).
+ *  Retrying cannot help and every later item would fail the same way, so
+ *  the run stops at the first one instead of burning 1,900 items of retries. */
+export function isClassifierAuthError(e: unknown): boolean {
+  return e instanceof JevError && (e.status === 401 || e.status === 403)
+}
+
 function isRateLimitError(e: unknown): boolean {
   const message = e instanceof Error ? e.message : String(e)
   return /429|rate.?limit|too many requests|quota/i.test(message)
@@ -417,6 +427,7 @@ async function callWithInRunRetries(captureId: string): Promise<RawClassificatio
       // invoked, so a failed attempt still counts for spacing.
       lastCallStartedAt = Date.now()
       lastError = e
+      if (isClassifierAuthError(e)) throw e
       if (attempt < IN_RUN_RETRY_DELAYS_MS.length) {
         const baseDelay = IN_RUN_RETRY_DELAYS_MS[attempt]
         const waitMs = isRateLimitError(e) ? baseDelay * RATE_LIMIT_BACKOFF_MULTIPLIER : baseDelay
@@ -471,7 +482,7 @@ export function _getYieldCountForTests(): number {
 // One item, start to finish: RESERVE -> CALL (with in-run retries) -> FINALIZE.
 // ---------------------------------------------------------------------------
 
-type ProcessOutcome = 'marked' | 'unmarked' | 'skipped' | 'failed'
+type ProcessOutcome = 'marked' | 'unmarked' | 'skipped' | 'failed' | 'auth-failed'
 
 async function processOneCapture(captureId: string, runId: string): Promise<ProcessOutcome> {
   // CX-T3-6: the rate-limit wait comes FIRST — it can park this item for up
@@ -510,6 +521,12 @@ async function processOneCapture(captureId: string, runId: string): Promise<Proc
         `[ValueBackfill] capture=${captureId} privacy-blocked mid-retry (personal/deleted/purged) — skipped, no failure parked`
       )
       return 'skipped'
+    }
+    // A rejected key: park NOTHING (no durable attempt burned; reserve's
+    // 'in_progress' row is recovered by the next run) and stop the run.
+    if (isClassifierAuthError(e)) {
+      console.warn(`[ValueBackfill] classifier rejected the key (capture=${captureId}) — stopping the run`)
+      return 'auth-failed'
     }
     // CX-T3-10: if a concurrent purge removed the capture while the failing
     // call was in flight, finalizeFailure writes nothing — report the item
@@ -626,6 +643,7 @@ export async function startValueBackfill(opts?: { order?: 'newest' | 'oldest' })
   let failed = 0
   let total = 0
   let loopStarted = false
+  let stopped: 'auth' | undefined
 
   try {
     const classifier = getValueClassifierKind()
@@ -660,6 +678,10 @@ export async function startValueBackfill(opts?: { order?: 'newest' | 'oldest' })
         if (cancelled) break outer
 
         const outcome = await processOneCapture(captureId, runId)
+        if (outcome === 'auth-failed') {
+          stopped = 'auth'
+          break outer
+        }
         processed++
         if (outcome === 'marked') marked++
         else if (outcome === 'failed') failed++
@@ -683,7 +705,7 @@ export async function startValueBackfill(opts?: { order?: 'newest' | 'oldest' })
     // throws without one, and the Settings card resets its own local state
     // from the start() response instead.
     if (loopStarted) {
-      notifyRenderer('value:backfill-complete', { processed, total, marked, failed, cancelled })
+      notifyRenderer('value:backfill-complete', { processed, total, marked, failed, cancelled, stopped })
     }
   }
 }
