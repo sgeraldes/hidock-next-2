@@ -1,4 +1,5 @@
 import { ipcMain, shell } from 'electron'
+import { startConnectorSchedule } from '../services/connectors'
 import { isSavedSecret, redactSecrets, withoutSavedSecrets } from '../../../src/shared/secret-fields'
 import { getConfig, saveConfig, updateConfig, AppConfig, RETIRED_GEMINI_MODELS } from '../services/config'
 import { initializeFileStorage } from '../services/file-storage'
@@ -65,6 +66,10 @@ export function registerConfigHandlers(): void {
         await updateConfig(section, withoutSavedSecrets(values as Record<string, unknown>) as Partial<AppConfig[K]>)
         if (section === 'storage') {
           await initializeFileStorage()
+        }
+        if (section === 'calendar') {
+          // The connector schedule follows the calendar's auto-sync and interval.
+          startConnectorSchedule()
         }
         if (section === 'features' && prevFeatures) {
           // Runtime start/stop of toggled features + broadcast to the renderer.
