@@ -46,6 +46,7 @@ import { isRetryableDownloadItem } from '@/hooks/useDownloadOrchestrator'
 import type { UnifiedRecording } from '@/types/unified-recording'
 import { toast } from '@/components/ui/toaster'
 import { isFeatureOffThisRun } from '@/lib/bootFeatures'
+import { appLocale } from '@/lib/locale'
 
 interface OperationsPanelProps {
   sidebarOpen: boolean
@@ -73,7 +74,7 @@ function compareTranscriptions(a: TranscriptionItem, b: TranscriptionItem): numb
 }
 
 /** Strip the recording extension for a cleaner display name (keeps the date stamp). */
-const OPERATION_TIME_FORMAT = new Intl.DateTimeFormat(undefined, {
+const OPERATION_TIME_FORMAT = new Intl.DateTimeFormat(appLocale(), {
   dateStyle: 'medium',
   timeStyle: 'medium'
 })

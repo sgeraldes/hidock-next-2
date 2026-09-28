@@ -3,10 +3,11 @@ import { GitCommitHorizontal, GitBranch, Check, Copy } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 import { useTodayCommits, type RepoCommitGroup, type TodayCommit } from './useTodayCommits'
+import { appLocale } from '@/lib/locale'
 
 function formatTime(iso: string): string {
   const d = new Date(iso)
-  return isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return isNaN(d.getTime()) ? '' : d.toLocaleTimeString(appLocale(), { hour: '2-digit', minute: '2-digit' })
 }
 
 /** Per-repo header: "N commits · branch". */

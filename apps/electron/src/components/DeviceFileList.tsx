@@ -24,6 +24,7 @@ import { hasDeviceFile, type DeviceOnlyRecording, type BothLocationsRecording } 
 import { formatBytes, formatDuration } from '@/utils/formatters'
 import { useAppStore, useIsDownloading, useDownloadProgress } from '@/store/useAppStore'
 import { useUIStore } from '@/store/ui/useUIStore'
+import { appLocale } from '@/lib/locale'
 
 type SortColumn = 'filename' | 'size' | 'duration' | 'dateRecorded'
 type SortDirection = 'asc' | 'desc'
@@ -175,7 +176,7 @@ function DeviceFileRow({
       <span className="text-xs text-muted-foreground">{durationDisplay}</span>
 
       {/* Date */}
-      <span className="text-xs text-muted-foreground">{recording.dateRecorded?.toLocaleDateString()}</span>
+      <span className="text-xs text-muted-foreground">{recording.dateRecorded?.toLocaleDateString(appLocale())}</span>
 
       {/* Actions */}
       <div className="flex items-center gap-1 justify-end">

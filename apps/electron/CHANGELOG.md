@@ -21,6 +21,8 @@ recording, and Microsoft 365 and Slack connect on first try.
 - **Transcript problems in place.** Lines with a repeated or backwards time, or too many words for
   their time, are marked in the transcript. Clicking "Repeated times" or "Times go backwards" goes
   to the next such line. Editing a line also edits its start time.
+- **Display.** A Settings page for the theme and the format of dates, times and numbers. Every
+  date in the app now uses that one format; some screens forced US English before.
 - **Player & notifications.** A Settings page for the skip length, the speeds in the speed menu,
   the speed recordings start at, and how long notices stay on screen.
 - **Week starts on.** Settings > Calendar picks Monday, Sunday or Saturday, and the week and

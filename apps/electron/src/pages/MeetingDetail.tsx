@@ -32,6 +32,7 @@ import { useUIStore } from '@/store/useUIStore'
 import { toast } from '@/components/ui/toaster'
 import { EntityMention } from '@/components/entity'
 import type { MeetingDetails } from '@/types'
+import { appLocale } from '@/lib/locale'
 
 const ATTENDEES_COLLAPSED_LIMIT = 8
 
@@ -77,7 +78,7 @@ function parseStoredSegments(speakers: string | null | undefined): StoredSegment
 function safeFormatTime(date: Date, options: Intl.DateTimeFormatOptions): string {
   try {
     if (isNaN(date.getTime())) return '--:--'
-    return date.toLocaleTimeString('en-US', options)
+    return date.toLocaleTimeString(appLocale(), options)
   } catch {
     return '--:--'
   }
@@ -86,7 +87,7 @@ function safeFormatTime(date: Date, options: Intl.DateTimeFormatOptions): string
 function safeFormatDate(date: Date, options: Intl.DateTimeFormatOptions): string {
   try {
     if (isNaN(date.getTime())) return 'Unknown date'
-    return date.toLocaleDateString('en-US', options)
+    return date.toLocaleDateString(appLocale(), options)
   } catch {
     return 'Unknown date'
   }
@@ -95,7 +96,7 @@ function safeFormatDate(date: Date, options: Intl.DateTimeFormatOptions): string
 function safeGetTimezoneName(date: Date): string {
   try {
     if (isNaN(date.getTime())) return ''
-    return Intl.DateTimeFormat('en-US', { timeZoneName: 'short' })
+    return Intl.DateTimeFormat(appLocale(), { timeZoneName: 'short' })
       .formatToParts(date)
       .find(p => p.type === 'timeZoneName')?.value || ''
   } catch {

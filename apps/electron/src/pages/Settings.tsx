@@ -53,6 +53,8 @@ import {
 } from '@/features/settings/sections'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { PlayerSection } from '@/features/settings/PlayerSection'
+import { appLocale } from '@/lib/locale'
+import { DisplaySection } from '@/features/settings/DisplaySection'
 
 // RAG configuration constants — MAX_CONTEXT_CHUNKS must match config.ts default (10)
 const RAG_DEFAULTS = {
@@ -832,6 +834,7 @@ export function Settings({
           {section === 'releases' && <ReleasesSection />}
           {section === 'decisions' && <DecisionsSection />}
           {section === 'player' && <PlayerSection />}
+          {section === 'display' && <DisplaySection />}
           {section === 'about' && <AboutSection storageInfo={storageInfo} />}
 
           {show('features') && (
@@ -1050,7 +1053,7 @@ export function Settings({
                   </Button>
                   {config?.calendar.lastSyncAt && (
                     <span className="text-xs text-muted-foreground ml-2">
-                      Last synced: {new Date(config.calendar.lastSyncAt).toLocaleString()}
+                      Last synced: {new Date(config.calendar.lastSyncAt).toLocaleString(appLocale())}
                     </span>
                   )}
                 </div>

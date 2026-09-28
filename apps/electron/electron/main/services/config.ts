@@ -293,6 +293,8 @@ export interface AppConfig {
     playbackSpeeds?: number[]
     defaultPlaybackSpeed?: number
     toastSeconds?: number
+    /** Dates, times and numbers (Settings > Display); 'system' follows Windows. */
+    locale?: string
   }
 }
 

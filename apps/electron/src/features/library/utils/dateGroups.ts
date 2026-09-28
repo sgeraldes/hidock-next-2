@@ -3,6 +3,7 @@
  * time): Today, Yesterday, This week, then the month ("September 2026").
  */
 
+import { appLocale } from '@/lib/locale'
 const DAY_MS = 86_400_000
 
 function startOfDay(d: Date): number {
@@ -20,5 +21,5 @@ export function dateGroupLabel(date: Date | string | null | undefined, now: Date
   if (daysAgo === 1) return 'Yesterday'
   // A future date (a device with a wrong clock) is not "Today": it gets its month.
   if (daysAgo > 1 && daysAgo <= 6) return 'This week'
-  return d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
+  return d.toLocaleDateString(appLocale(), { month: 'long', year: 'numeric' })
 }

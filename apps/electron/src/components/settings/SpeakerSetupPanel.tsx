@@ -14,6 +14,7 @@ import { AlertOctagon, Cpu, MonitorSmartphone, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import type { SpeakerEngineId, SpeakerSetup, SpeakerSetupOption } from '@/types/speakers'
+import { appLocale } from '@/lib/locale'
 
 export const VOICE_OFF_WARNING =
   'Voice recognition is what lets HiDock name the people in your recordings. With it off, speakers stay ' +
@@ -210,7 +211,7 @@ export function SpeakerSetupPanel({ initial, onSaved }: SpeakerSetupPanelProps):
         </Button>
         {setup.lastConfirmedAt && (
           <span className="text-xs text-muted-foreground">
-            Last confirmed {new Date(setup.lastConfirmedAt).toLocaleDateString()}
+            Last confirmed {new Date(setup.lastConfirmedAt).toLocaleDateString(appLocale())}
           </span>
         )}
       </div>

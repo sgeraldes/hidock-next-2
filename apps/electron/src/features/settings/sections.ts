@@ -23,12 +23,14 @@ import {
   Code2,
   History,
   Info,
-  PlayCircle
+  PlayCircle,
+  Monitor
 } from 'lucide-react'
 
 export type SettingsSectionId =
   | 'overview'
   | 'features'
+  | 'display'
   | 'assistant'
   | 'calendar'
   | 'player'
@@ -79,6 +81,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'Which parts of HiDock are turned on.',
     icon: ToggleRight,
     keywords: ['preset', 'library only', 'modules', 'enable', 'disable']
+  },
+  {
+    id: 'display',
+    group: 'preferences',
+    label: 'Display',
+    description: 'The theme and how dates, times and numbers look.',
+    icon: Monitor,
+    keywords: ['theme', 'dark', 'light', 'language', 'locale', 'date', 'time', 'format', 'region']
   },
   {
     id: 'assistant',

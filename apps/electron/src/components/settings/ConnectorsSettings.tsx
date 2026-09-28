@@ -29,6 +29,7 @@ import type {
   ConnectorStatusState,
   SourceContainer,
 } from '@hidock/connectors'
+import { appLocale } from '@/lib/locale'
 
 /** More sources than this get the type-to-filter picker instead of one switch each. */
 const SOURCE_PICKER_THRESHOLD = 8
@@ -451,7 +452,7 @@ function AccountBlock({
                   <span className="ml-2 text-xs text-muted-foreground">{c.kind}</span>
                   {persisted?.lastSyncAt && (
                     <span className="ml-2 text-xs text-muted-foreground">
-                      · last {new Date(persisted.lastSyncAt).toLocaleString()}
+                      · last {new Date(persisted.lastSyncAt).toLocaleString(appLocale())}
                     </span>
                   )}
                 </div>
@@ -495,7 +496,7 @@ function AccountBlock({
           </Button>
         )}
         {status.lastSyncAt && (
-          <span className="text-xs text-muted-foreground">Last synced {new Date(status.lastSyncAt).toLocaleString()}</span>
+          <span className="text-xs text-muted-foreground">Last synced {new Date(status.lastSyncAt).toLocaleString(appLocale())}</span>
         )}
       </div>
     </div>
