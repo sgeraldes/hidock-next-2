@@ -24,10 +24,15 @@ vi.mock('../database', () => ({
 }))
 
 const files = new Map<string, Uint8Array>()
-vi.mock('fs', () => ({
-  existsSync: (p: string) => files.has(p),
-  readFileSync: (p: string) => Buffer.from(files.get(p) ?? new Uint8Array()),
-  statSync: () => ({ size: 1234 })
+vi.mock('fs/promises', () => ({
+  readFile: async (p: string) => {
+    if (!files.has(p)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
+    return Buffer.from(files.get(p)!)
+  },
+  stat: async (p: string) => {
+    if (!files.has(p)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
+    return { size: 1234 }
+  }
 }))
 
 vi.mock('../audio-profile-store', () => ({ envelopePath: (id: string) => `env/${id}.u8` }))
@@ -124,6 +129,17 @@ describe('relinkRecordingsToMeetings', () => {
     expect(syncNow).toHaveBeenCalledTimes(1) // Slack is not a calendar
     expect(syncNow).toHaveBeenCalledWith('m365', 'calendar')
     expect(result).toMatchObject({ unlinkedBefore: 925, unlinkedAfter: 700, linked: 225, meetingsSynced: 1200, accounts: 1, errors: [] })
+  })
+
+  it('keeps syncing while the calendar sync stops at the page cap', async () => {
+    syncNow
+      .mockResolvedValueOnce({ meetings: 500, contacts: 0, artifacts: 0, skipped: 0, truncated: true } as never)
+      .mockResolvedValueOnce({ meetings: 500, contacts: 0, artifacts: 0, skipped: 0, truncated: true } as never)
+      .mockResolvedValueOnce({ meetings: 200, contacts: 0, artifacts: 0, skipped: 0 })
+    const result = await relinkRecordingsToMeetings()
+    expect(syncNow).toHaveBeenCalledTimes(3)
+    expect(result.meetingsSynced).toBe(1200)
+    expect(autoLink).toHaveBeenCalledTimes(1)
   })
 
   it('still links with the meetings already here when the calendar pull fails', async () => {

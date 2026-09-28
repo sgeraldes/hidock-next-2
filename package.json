@@ -10,7 +10,8 @@
     "build": "npm --prefix apps/electron run build",
     "build:win": "npm --prefix apps/electron run build:win",
     "typecheck": "npm --prefix apps/electron run typecheck",
-    "lint": "npm --prefix apps/electron run lint",
+    "lint": "npm --prefix apps/electron run lint && npm run lint:packages",
+    "lint:packages": "node apps/electron/node_modules/eslint/bin/eslint.js -c apps/electron/eslint.config.mjs packages/connectors/src packages/connectors/tests packages/connectors-slack/src packages/connectors-slack/tests",
     "test": "npm --prefix apps/electron run test:run"
   }
 }

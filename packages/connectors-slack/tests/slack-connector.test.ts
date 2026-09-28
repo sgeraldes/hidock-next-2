@@ -67,7 +67,7 @@ describe('SlackConnector sources', () => {
 })
 
 describe('SlackConnector actions', () => {
-  const personWithSlack = (externalId: string): EntityRef => ({
+  const personWithSlack = (_externalId: string): EntityRef => ({
     type: 'person',
     id: 'p1'
     // identities filled per-test using the connector id
@@ -190,8 +190,9 @@ describe('host registration (descriptor + factory)', () => {
   })
 
   it('factory tolerates a missing token — constructs and reports auth-needed', async () => {
-    const connector = slackConnectorFactory(fakeContext({}, {}))
-    expect(connector.id.startsWith('slack:')).toBe(true)
+    const ctx = fakeContext({}, {})
+    const connector = slackConnectorFactory(ctx)
+    expect(connector.id).toBe(ctx.connectorId) // the host instance id
     expect(connector.status().state).toBe('auth-needed')
     // connect() short-circuits to auth-needed without any network call.
     expect((await connector.connect!()).state).toBe('auth-needed')
@@ -208,7 +209,6 @@ describe('SlackConnector picks up a token saved after startup', () => {
     saved = 'xoxp-new'
     const status = await c.connect()
     expect(status).toMatchObject({ state: 'connected', message: 'Connected to Acme' })
-    expect(c.id).not.toBe('slack:unconfigured')
   })
 
   it('configure() alone refreshes the token', async () => {
@@ -217,8 +217,17 @@ describe('SlackConnector picks up a token saved after startup', () => {
     const c = createSlackConnector({ token: '' }, { fetchFn }, () => saved)
     saved = { token: 'xoxb-later' }
     c.configure()
-    expect(c.id).toMatch(/^slack:/)
-    expect(c.id).not.toBe('slack:unconfigured')
-    expect(c.status().state).toBe('disconnected')
+    expect(c.status().state).toBe('disconnected') // no longer "token missing"
+  })
+})
+
+describe('SlackConnector keeps the host instance id', () => {
+  it('uses the instance id and keeps it when the token changes', () => {
+    let saved = { token: 'xoxb-a' }
+    const c = createSlackConnector({ token: 'xoxb-a' }, {}, () => saved, 'slack')
+    expect(c.id).toBe('slack')
+    saved = { token: 'xoxb-b' }
+    c.configure()
+    expect(c.id).toBe('slack')
   })
 })

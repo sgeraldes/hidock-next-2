@@ -157,6 +157,43 @@ export function selectAutoLinkMeeting(
 /** Meetings synced by a connector: ids are `<connectorId>:<externalId>` (connectors/ingestion.ts). */
 export const CONNECTOR_MEETING_PREDICATE = `(calendar_sync_token IS NULL AND id LIKE 'm365%:%')`
 
+/**
+ * The same meeting often arrives twice, from the ICS feed and from Microsoft
+ * 365, with the same times. The selector keeps the first of two equal fits, so
+ * the order decides: connector copies first (they carry attendee emails), then
+ * by id, the same on every run.
+ */
+export const CONNECTOR_FIRST_ORDER = `CASE WHEN ${CONNECTOR_MEETING_PREDICATE} THEN 0 ELSE 1 END, id`
+
+/**
+ * The meetings that can overlap [recStart, recEnd]: those starting before the
+ * recording ends (plus the early-start tolerance) and after it starts minus the
+ * longest meeting. `sorted` is by start, stable, so equal starts keep SQL order.
+ */
+export function windowsNear(
+  sorted: AutoLinkWindow[],
+  starts: number[],
+  maxDurationMs: number,
+  recStart: number,
+  recEnd: number,
+  earlyStartToleranceMs = EARLY_START_TOLERANCE_MS
+): AutoLinkWindow[] {
+  const lo = lowerBound(starts, recStart - maxDurationMs)
+  const hi = lowerBound(starts, recEnd + earlyStartToleranceMs + 1)
+  return sorted.slice(lo, hi)
+}
+
+function lowerBound(values: number[], target: number): number {
+  let lo = 0
+  let hi = values.length
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1
+    if (values[mid] < target) lo = mid + 1
+    else hi = mid
+  }
+  return lo
+}
+
 export function autoLinkRecordingsToMeetings(): number {
   // Exclude rows the user forced standalone — their choice must survive every
   // reconcile pass, even after the preassignment row is consumed.
@@ -187,8 +224,9 @@ export function autoLinkRecordingsToMeetings(): number {
   const meetings = queryAll<MeetingRow>(
     activeCalendarToken
       ? `SELECT id, subject, start_time, end_time, is_all_day FROM meetings
-         WHERE calendar_sync_token = ? OR ${CONNECTOR_MEETING_PREDICATE}`
-      : `SELECT id, subject, start_time, end_time, is_all_day FROM meetings`,
+         WHERE calendar_sync_token = ? OR ${CONNECTOR_MEETING_PREDICATE}
+         ORDER BY ${CONNECTOR_FIRST_ORDER}`
+      : `SELECT id, subject, start_time, end_time, is_all_day FROM meetings ORDER BY ${CONNECTOR_FIRST_ORDER}`,
     activeCalendarToken ? [activeCalendarToken] : []
   )
   const meetingIds = new Set(meetings.map((m) => m.id))
@@ -200,6 +238,11 @@ export function autoLinkRecordingsToMeetings(): number {
       isAllDay: (m.is_all_day ?? 0) === 1
     }))
     .filter((m) => Number.isFinite(m.start) && Number.isFinite(m.end))
+  // Each recording checks only the meetings near it (thousands of meetings
+  // after a calendar history pull made the full scan quadratic).
+  const sortedWindows = [...meetingWindows].sort((a, b) => a.start - b.start)
+  const windowStarts = sortedWindows.map((m) => m.start)
+  const maxDurationMs = sortedWindows.reduce((max, m) => Math.max(max, m.end - m.start), 0)
 
   // Collect the work first, then apply in ONE transaction — per-row run()
   // persists the whole sql.js database to disk on every call.
@@ -234,7 +277,11 @@ export function autoLinkRecordingsToMeetings(): number {
 
     // Fit-based, bridge-excluding selection: a tightly-fitting meeting wins over a
     // containing all-day event, and an all-day/≥4h bridge is never auto-attached.
-    const decision = selectAutoLinkMeeting(recStart, recEnd, meetingWindows)
+    const decision = selectAutoLinkMeeting(
+      recStart,
+      recEnd,
+      windowsNear(sortedWindows, windowStarts, maxDurationMs, recStart, recEnd)
+    )
     if (decision.id === null) {
       if (decision.declinedBridge) declinedBridgeCount++
     } else {

@@ -167,6 +167,30 @@ describe('ConnectorHost', () => {
     expect(seen).toContain('connected')
   })
 
+  it('reports a sync that stopped at the page cap, and continues from there next time', async () => {
+    host = new ConnectorHost({ store, sink })
+    host.register(descriptor, (ctx) => makeFakeConnector(ctx, { pages: 60 }))
+    await host.connect('fake')
+    const first = await host.syncNow('fake')
+    expect(first.truncated).toBe(true)
+    expect(first.artifacts).toBe(50)
+    const second = await host.syncNow('fake')
+    expect(second.truncated).toBeUndefined()
+    expect(second.artifacts).toBe(10)
+  })
+
+  it('new credentials restart every source cursor but keep the on/off choice', async () => {
+    await host.configure('fake', { token: 'first' })
+    await host.connect('fake')
+    await host.syncNow('fake')
+    host.setSourceEnabled('fake', 'c1', false)
+    expect(store.getSourceState('fake', 'c1').cursor).toBe('2')
+    await host.configure('fake', { token: 'first' }) // same token: nothing changes
+    expect(store.getSourceState('fake', 'c1').cursor).toBe('2')
+    await host.configure('fake', { token: 'second' })
+    expect(store.getSourceState('fake', 'c1')).toMatchObject({ cursor: null, enabled: false })
+  })
+
   it('syncNow skips a container that starts off until the user switches it on', async () => {
     class ChoiceStore extends MemoryStore {
       hasSourceState(id: string, containerId: string): boolean {

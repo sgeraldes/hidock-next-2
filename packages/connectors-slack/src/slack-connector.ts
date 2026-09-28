@@ -64,9 +64,10 @@ export const SLACK_REQUIRED_SCOPES = {
 export function createSlackConnector(
   config: SlackConnectorConfig,
   deps: SlackClientDeps = {},
-  loadConfig?: () => SlackConnectorConfig
+  loadConfig?: () => SlackConnectorConfig,
+  instanceId?: string
 ): SlackConnector {
-  return new SlackConnector(config, deps, loadConfig)
+  return new SlackConnector(config, deps, loadConfig, instanceId)
 }
 
 export class SlackConnector implements Connector, IdentityProvider, SourceProvider, ActionProvider, SignalProvider {
@@ -88,11 +89,17 @@ export class SlackConnector implements Connector, IdentityProvider, SourceProvid
     config: SlackConnectorConfig,
     private readonly deps: SlackClientDeps = {},
     /**
-     * Reads the saved token and allowlist again. The host builds the connector
+     * Reads the saved token again. The host builds the connector
      * once at startup, so without this a token pasted in Settings later never
      * reached it and Connect kept answering "token missing" (28-sep-2026).
      */
-    private readonly loadConfig?: () => SlackConnectorConfig
+    private readonly loadConfig?: () => SlackConnectorConfig,
+    /**
+     * The host's instance id (ctx.connectorId). It is the connector's id for
+     * its whole life, as the host contract requires; a token change does not
+     * change it. Without one (tests, standalone use) the id comes from the token.
+     */
+    instanceId?: string
   ) {
     this.config = config
     this.client = new SlackClient(config.token, deps)
@@ -102,9 +109,12 @@ export class SlackConnector implements Connector, IdentityProvider, SourceProvid
       actions: this,
       signals: this
     }
-    this.id = SlackConnector.idFor(config.token)
+    this.id = instanceId ?? SlackConnector.idFor(config.token)
     if (!config.token) this.status_ = { state: 'auth-needed', message: 'token missing' }
   }
+
+  /** Bumped on every token change; results of work started before it are dropped. */
+  private generation = 0
 
   // Stable id so the host can key persisted cursors/identities across restarts.
   // Empty token → stable literal id so the host can still enumerate/register it.
@@ -112,7 +122,7 @@ export class SlackConnector implements Connector, IdentityProvider, SourceProvid
     return token ? `slack:${hashToken(token)}` : 'slack:unconfigured'
   }
 
-  id: string
+  readonly id: string
 
   /** Host hook after Settings saves: pick up a new token. */
   configure(): void {
@@ -123,8 +133,8 @@ export class SlackConnector implements Connector, IdentityProvider, SourceProvid
     if (!this.loadConfig) return
     const next = this.loadConfig()
     if (next.token !== this.config.token) {
+      this.generation++
       this.client = new SlackClient(next.token, this.deps)
-      this.id = SlackConnector.idFor(next.token)
       this.directory = null
       this.userNames = new Map()
       this.status_ = next.token ? { state: 'disconnected' } : { state: 'auth-needed', message: 'token missing' }
@@ -170,7 +180,10 @@ export class SlackConnector implements Connector, IdentityProvider, SourceProvid
   /** Load (once) and cache the Slack user directory. */
   async ensureDirectory(force = false): Promise<SlackUser[]> {
     if (this.directory && !force) return this.directory
+    const generation = this.generation
     const users = await this.client.listUsers()
+    // The token changed while this was loading: these users belong to the old workspace.
+    if (generation !== this.generation) return this.ensureDirectory(force)
     this.directory = users
     this.userNames = new Map(users.map((u) => [u.id, bestName(u)]))
     return users
@@ -225,7 +238,12 @@ export class SlackConnector implements Connector, IdentityProvider, SourceProvid
   async pull(container: SourceContainer, since?: string, opts?: SyncChannelOptions): Promise<PullResult> {
     // Names resolve mentions → @display; load the directory before mapping.
     await this.ensureDirectory().catch(() => undefined)
+    // One client and mapping for the whole pull, so a token change mid-pull cannot mix workspaces.
+    const generation = this.generation
     const result = await syncChannel(this.client, container.externalId, this.mappingContext(), since, opts)
+    if (generation !== this.generation) {
+      throw new Error('The Slack token changed during this sync; run the sync again.')
+    }
     // Bridge pull-time signals to any push subscriber.
     if (this.signalListener && result.signals) {
       for (const s of result.signals) this.signalListener(s)
@@ -296,7 +314,7 @@ function hashToken(token: string): string {
 //
 // The host registry maps `descriptor.id → factory`. The factory receives a
 // ConnectorContext and reads the token via ctx.getSecret('token') (secrets live
-// in safeStorage, never in the DB) and the channel allowlist via ctx.getConfig().
+// in safeStorage, never in the DB). Channels are chosen per source in Settings.
 // The host can register this connector WITHOUT editing this package.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -338,5 +356,5 @@ export const slackDescriptor: ConnectorDescriptor = {
 export const slackConnectorFactory: ConnectorFactory = (ctx: ConnectorContext) => {
   // Channels are chosen per source in Settings (host source state), not here.
   const load = (): SlackConnectorConfig => ({ token: ctx.getSecret('token') ?? '' })
-  return createSlackConnector(load(), {}, load)
+  return createSlackConnector(load(), {}, load, ctx.connectorId)
 }

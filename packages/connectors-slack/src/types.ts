@@ -24,11 +24,6 @@ export interface SlackConnectorConfig {
    * it in here at construction (CONNECTORS.md §Data model).
    */
   token: string
-  /**
-   * Channel ids the user selected to sync. Empty = nothing syncs (the user must
-   * explicitly opt channels in). See CONNECTORS.md sources capability.
-   */
-  channelAllowlist?: string[]
   /** Per-connector sync interval hint (ms). The host owns scheduling. */
   syncIntervalMs?: number
 }
