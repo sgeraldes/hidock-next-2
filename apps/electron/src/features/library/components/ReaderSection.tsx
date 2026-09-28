@@ -48,7 +48,7 @@ import type { ReaderSectionId, ReaderSectionMode } from '@/store/useLibraryStore
 // here changes the box's size, so it cannot move the content below.
 // `motion-safe:` is the repo's existing way of honouring prefers-reduced-motion.
 const PIN_TRANSITION =
-  'motion-safe:transition-[background-color,box-shadow,border-color] motion-safe:duration-[180ms] motion-safe:ease-out'
+  'motion-safe:transition-[background-color,box-shadow,border-color] motion-safe:[transition-duration:180ms] motion-safe:ease-out'
 const PINNED_LOOK =
   'border-b border-border bg-background/95 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/80'
 const UNPINNED_LOOK = 'border-b border-transparent bg-transparent'
