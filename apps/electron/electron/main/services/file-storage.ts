@@ -442,6 +442,9 @@ export function deleteRecording(filePath: string): boolean {
 
     if (existsSync(filePath)) {
       unlinkSync(filePath)
+      // A live stream's note of its microphone channel goes with it (realtime-recorder.ts).
+      const note = filePath.replace(/\.wav$/i, '.live.json')
+      if (note !== filePath && existsSync(note)) unlinkSync(note)
       return true
     }
     return false

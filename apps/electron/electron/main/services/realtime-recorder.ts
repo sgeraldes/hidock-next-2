@@ -13,7 +13,7 @@
  * stops. The watcher only takes audio extensions, so it never imports a file
  * that is still growing.
  */
-import { closeSync, existsSync, openSync, readdirSync, renameSync, rmSync, statSync, writeSync } from 'fs'
+import { closeSync, existsSync, openSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'fs'
 import { join } from 'path'
 import type { RealtimeData } from '@hidock/jensen-protocol'
 
@@ -24,6 +24,11 @@ const BYTES_PER_FRAME = LIVE_CHANNELS * 2
 
 /** Odd-length packets in a row that mean the firmware sends one channel. */
 const MONO_RUN = 5
+
+/** <name>.wav -> <name>.live.json, the note of which channel was the microphone. */
+export function liveNotePath(wavPath: string): string {
+  return wavPath.replace(/\.wav$/i, '.live.json')
+}
 
 /** A 44-byte PCM WAV header for `dataBytes` of stereo 16-bit audio. */
 export function wavHeader(dataBytes: number): Buffer {
@@ -70,6 +75,8 @@ function monoToStereo(mono: Uint8Array): Buffer {
 
 export interface RecorderDeps {
   recordingsPath: () => string
+  /** The microphone channel in force for this stream (pinned or measured), noted next to the file. */
+  micChannel?: () => 0 | 1 | null
   /** Settings > Recording: "Save live streams as recordings". */
   enabled: () => boolean
   /** The recordings folder is being moved: a new file there would be left behind. */
@@ -203,6 +210,7 @@ export class RealtimeRecorder {
     }
     try {
       renameSync(this.partialPath, this.finalPath)
+      this.writeChannelNote()
     } catch (err) {
       return { status: 'error', message: err instanceof Error ? err.message : String(err), filename: `${this.filename}.partial` }
     }
@@ -210,6 +218,21 @@ export class RealtimeRecorder {
     // What was written before a disk error is still a usable recording.
     if (this.error) return { status: 'error', message: `Saved the first ${Math.round(seconds)} s only: ${this.error}`, filename: this.filename }
     return { status: 'saved', filename: this.filename, seconds }
+  }
+
+  /**
+   * <name>.live.json: which channel was the microphone while this stream was
+   * recorded, for naming the owner after transcription. The setting can change
+   * before a backlogged file is transcribed, so it is kept with the file.
+   */
+  private writeChannelNote(): void {
+    const mic = this.deps.micChannel?.() ?? null
+    if (mic === null) return
+    try {
+      writeFileSync(liveNotePath(this.finalPath), JSON.stringify({ micChannel: mic }))
+    } catch (err) {
+      console.warn('[RealtimeRecorder] Could not note the microphone channel:', err)
+    }
   }
 
   private flushPendingAsStereo(fd = this.fd): void {

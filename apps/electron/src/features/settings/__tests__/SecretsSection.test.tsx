@@ -40,7 +40,7 @@ describe('Settings > Secrets', () => {
     fireEvent.click(gemini.querySelector('button')!)
     fireEvent.change(screen.getByLabelText('New google gemini api key'), { target: { value: ' AIzaNEW ' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-    await waitFor(() => expect(updateConfig).toHaveBeenCalledWith('transcription', { geminiApiKey: 'AIzaNEW' }))
+    await waitFor(() => expect(updateConfig).toHaveBeenCalledWith('transcription', { geminiApiKey: 'AIzaNEW' })) // pragma: allowlist secret
 
     fireEvent.click(screen.getByTestId('secret-icsUrl').querySelectorAll('button')[1])
     expect(updateConfig).toHaveBeenCalledTimes(1)

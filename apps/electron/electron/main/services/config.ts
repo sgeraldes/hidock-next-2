@@ -283,6 +283,10 @@ export interface AppConfig {
    * imported or connector image to the vision model for a description and tags
    * (on by default, owner 28-sep-2026; it was always on with no switch).
    */
+  /** Who the owner is among the contacts (Settings > Speakers & voices, "This is you"). */
+  identity?: {
+    ownerContactId?: string
+  }
   capture?: {
     describeImages?: boolean
     /** Capture screenshots copied to the clipboard (Privacy & capture). No default, as for ui.chatPlacement. */

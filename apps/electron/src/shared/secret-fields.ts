@@ -7,7 +7,7 @@
  * that did not change the field), the main process keeps the stored value.
  */
 
-export const SAVED_SECRET = '__hidock_saved_secret__'
+export const SAVED_SECRET = '__hidock_saved_secret__' // pragma: allowlist secret
 
 /** [section, key] of every secret in AppConfig. */
 export const SECRET_CONFIG_FIELDS = [
