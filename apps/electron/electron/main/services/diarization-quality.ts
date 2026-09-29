@@ -290,3 +290,84 @@ export function parseAndAssessDiarization(
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Speaker naming, per speaker (owner decision A, 29-sep-2026)
+// ---------------------------------------------------------------------------
+// Naming used to need a perfect recording: one shaky segment in 933 blocked all
+// of its speakers, and 100 of 103 recordings in a week named nobody. Now the
+// recording only has to be grounded in the audio, and each speaker is judged on
+// its own turns. Shaky turns are never used as evidence.
+
+/** A speaker needs at least this many solid turns to be named. */
+export const NAMING_MIN_SOLID_TURNS = 5
+/** ...and at most this share of shaky ('acoustic-weak') turns. */
+export const NAMING_MAX_WEAK_SHARE = 0.2
+
+export interface NamingTurn {
+  speaker?: unknown
+  text?: unknown
+  speakerAttribution?: unknown
+}
+
+/**
+ * A turn that may be used as naming evidence: it has a speaker and text, and
+ * its speaker was not a guess. Turns from before attribution existed count as
+ * solid, as they always did.
+ */
+export function isSolidTurn(turn: NamingTurn): boolean {
+  if (typeof turn.speaker !== 'string' || !turn.speaker.trim()) return false
+  if (typeof turn.text !== 'string' || !turn.text.trim()) return false
+  return turn.speakerAttribution !== 'acoustic-weak' && turn.speakerAttribution !== 'unresolved'
+}
+
+/** Speakers with enough solid turns, and few enough shaky ones, to be named. */
+export function nameableSpeakers(turns: NamingTurn[]): Set<string> {
+  const per = new Map<string, { solid: number; weak: number }>()
+  for (const t of turns) {
+    if (typeof t.speaker !== 'string' || !t.speaker.trim() || t.speakerAttribution === 'unresolved') continue
+    const e = per.get(t.speaker) ?? { solid: 0, weak: 0 }
+    if (t.speakerAttribution === 'acoustic-weak') e.weak++
+    else if (typeof t.text === 'string' && t.text.trim()) e.solid++
+    per.set(t.speaker, e)
+  }
+  const out = new Set<string>()
+  for (const [label, e] of per) {
+    const total = e.solid + e.weak
+    if (e.solid >= NAMING_MIN_SOLID_TURNS && e.weak / total <= NAMING_MAX_WEAK_SHARE) out.add(label)
+  }
+  return out
+}
+
+/**
+ * The turns naming may use as evidence. Shaky turns never count. On a recording
+ * whose quality report is degraded, only speakers with enough solid turns
+ * (nameableSpeakers) take part; on a high-quality recording, or an older one
+ * without a report, every speaker does, as before.
+ */
+export function namingEvidence<T extends NamingTurn>(turns: T[], qualityJson: string | null | undefined): T[] {
+  let status: string | undefined
+  try {
+    status = qualityJson ? (JSON.parse(qualityJson) as { status?: string }).status : undefined
+  } catch {
+    status = undefined
+  }
+  const perSpeaker = status !== undefined && status !== 'high'
+  const nameable = perSpeaker ? nameableSpeakers(turns) : null
+  return turns.filter((t) => isSolidTurn(t) && (!nameable || nameable.has(String(t.speaker))))
+}
+
+/**
+ * Whether the recording as a whole is grounded well enough to name anyone:
+ * speaker timing matches the audio (55% coverage, 80% of turns grounded) and
+ * the labels use one scheme. A missing report (older transcripts) allows it.
+ */
+export function namingAllowed(q: Pick<DiarizationQualityReport, 'status' | 'coverageRatio' | 'groundingRatio' | 'mixedLabelSchemes'> | null | undefined): boolean {
+  if (!q) return true
+  if (q.status === 'high') return true
+  if (q.status !== 'degraded') return false
+  if (q.mixedLabelSchemes) return false
+  if (q.coverageRatio !== null && q.coverageRatio < 0.55) return false
+  if (q.groundingRatio !== null && q.groundingRatio < 0.8) return false
+  return true
+}

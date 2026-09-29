@@ -39,6 +39,7 @@ import { getConfig } from './config'
 import { jevKeyFor } from './jev-settings'
 import { askJev } from './jev-client'
 import { buildSpeakerNameRequest, jevRoster, parseSpeakerNames } from './jev-speaker-names'
+import { namingEvidence, type NamingTurn } from './diarization-quality'
 
 /** Same auto-link line self-identification uses for resolveContact. */
 const AUTO_LINK_THRESHOLD = 0.8
@@ -191,6 +192,7 @@ interface TranscriptContextRow {
   title_suggestion: string | null
   summary: string | null
   speakers: string | null
+  diarization_quality?: string | null
 }
 
 /**
@@ -249,16 +251,17 @@ export async function runSpeakerInference(
   const boundLabels = new Set(existing.map((e) => e.speaker_label))
 
   const trow = queryOne<TranscriptContextRow>(
-    'SELECT title_suggestion, summary, speakers FROM transcripts WHERE recording_id = ?',
+    'SELECT title_suggestion, summary, speakers, diarization_quality FROM transcripts WHERE recording_id = ?',
     [recordingId]
   )
+  // Only solid turns are evidence, and on a degraded recording only speakers
+  // with enough of them take part (per-speaker rule, 29-sep-2026).
   let turns: SpeakerTurnLite[] = []
   try {
     const parsed = JSON.parse(trow?.speakers ?? '[]')
     if (Array.isArray(parsed)) {
-      turns = parsed
-        .filter((t) => t && typeof t.speaker === 'string' && typeof t.text === 'string')
-        .map((t) => ({ speaker: t.speaker, text: t.text }))
+      const raw = parsed.filter((t): t is NamingTurn => !!t && typeof t === 'object')
+      turns = namingEvidence(raw, trow?.diarization_quality).map((t) => ({ speaker: String(t.speaker), text: String(t.text) }))
     }
   } catch { /* no parseable turns */ }
 
