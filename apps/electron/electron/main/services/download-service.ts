@@ -1214,9 +1214,11 @@ export class DownloadService {
    * of the same file stays failed until a manual retry.
    */
   noteTransferStall(filename: string, received: number, fileSize: number): void {
+    // Forget files that left the queue (dismissed, pruned) so the memo stays small.
+    for (const f of this.stallRetried) if (!this.state.queue.has(f)) this.stallRetried.delete(f)
     const item = this.state.queue.get(filename)
     if (!item || item.status !== 'downloading') return
-    const mb = (n: number): string => (n / 1024 / 1024).toFixed(1)
+    const mb =(n: number): string => (n / 1024 / 1024).toFixed(1)
     const what = `The device stopped sending at ${mb(received)} of ${mb(fileSize)} MB`
     if (!this.stallRetried.has(filename)) {
       this.stallRetried.add(filename)
