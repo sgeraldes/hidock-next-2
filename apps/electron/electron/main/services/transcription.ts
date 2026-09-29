@@ -152,7 +152,7 @@ import {
   classifyByDuration,
   neutralizeDelimiters
 } from './value-classification'
-import { parseAndAssessDiarization } from './diarization-quality'
+import { namingAllowed, parseAndAssessDiarization } from './diarization-quality'
 import { analyzeAudioPreflight, type AudioPreflightReport } from './audio-preflight'
 import { readAudioDuration } from './audio-duration'
 import { minRecordingSeconds, qualityRules } from './quality-rules'
@@ -3029,7 +3029,10 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   let identityBound = 0
   let identityMergeSuspected = 0
   const identityErrors: string[] = []
-  const identityAllowed = diarizationQuality.status === 'high'
+  // Per-speaker naming (owner decision, 29-sep-2026): the recording only has to
+  // be grounded in the audio; each speaker is then judged on its own turns
+  // inside self-identification and speaker inference.
+  const identityAllowed = namingAllowed(diarizationQuality)
   try {
     // RE-1 — re-check adjacent to the write.
     if (stillProcessable() && identityAllowed) {

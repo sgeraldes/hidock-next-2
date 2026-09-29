@@ -28,9 +28,10 @@ const mockConsolidateVoiceIdentity = vi.fn((_recordingId: string, _label: string
 // queryOne dispatches on the SQL text: config lookups miss (not scanned), the
 // transcript lookup returns whatever `currentSpeakers` is set to for the test.
 let currentSpeakers: string | null = null
+let currentQuality: string | null = null
 const mockQueryOne = vi.fn((sql: string, _params?: unknown[]) => {
   if (/FROM config/i.test(sql)) return undefined
-  if (/FROM transcripts/i.test(sql)) return { speakers: currentSpeakers }
+  if (/FROM transcripts/i.test(sql)) return { speakers: currentSpeakers, diarization_quality: currentQuality }
   return undefined
 })
 
@@ -101,6 +102,7 @@ const ROLLCALL: SpeakerTurn[] = [
 beforeEach(() => {
   vi.clearAllMocks()
   currentSpeakers = null
+  currentQuality = null
   selfIdExcluded = { ids: new Set<string>(), failClosed: false }
   mockGetSpeakerMap.mockReturnValue([])
   mockGetRecordingById.mockReturnValue({ meeting_id: null })
@@ -520,6 +522,31 @@ describe('runSelfIdentificationForRecording — binding', () => {
       newName: 'Mariana',
       voiceAnchor: { method: 'self-identification', confidence: 0.97 }
     })
+  })
+
+  it('on a degraded recording, names a speaker with enough solid turns and leaves a thin one alone', async () => {
+    const solid = (text: string) => ({ speaker: 'Speaker 5', text, speakerAttribution: 'acoustic' })
+    currentSpeakers = JSON.stringify([
+      solid('Soy Mariana, encantada.'), solid('bien'), solid('sí'), solid('dale'), solid('listo'),
+      { speaker: 'Speaker 9', text: 'Soy Pedro.', speakerAttribution: 'acoustic' },
+      { speaker: 'Speaker 9', text: 'ok', speakerAttribution: 'acoustic-weak' }
+    ])
+    currentQuality = JSON.stringify({ status: 'degraded', coverageRatio: 1, groundingRatio: 1, mixedLabelSchemes: false })
+    mockResolveContact.mockReturnValue({ id: null, confidence: 0, method: 'none' })
+    mockAssignSpeaker.mockReturnValue({ id: 'c-mariana', name: 'Mariana' })
+    const seen: string[] = []
+    const llmBoth = vi.fn(async (prompt: string) => {
+      seen.push(prompt)
+      return JSON.stringify([{ speaker: 'Speaker 5', name: 'Mariana' }, { speaker: 'Speaker 9', name: 'Pedro' }])
+    })
+
+    const result = await runSelfIdentificationForRecording('rec-degraded', { llm: llmBoth })
+
+    expect(result.bound).toBe(1)
+    expect(mockAssignSpeaker).toHaveBeenCalledTimes(1)
+    expect(mockAssignSpeaker).toHaveBeenCalledWith('rec-degraded', 'Speaker 5', expect.anything())
+    // the thin speaker's turns were never sent as evidence
+    expect(seen.join('\n')).not.toContain('Soy Pedro')
   })
 
   it('NEVER overwrites an existing (manual) speaker binding', async () => {

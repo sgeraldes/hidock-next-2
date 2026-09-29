@@ -52,6 +52,8 @@ import { resolveContact } from './entity-resolver'
 import { isGenericSpeakerLabel, normalizeName, accentFoldedKey } from './entity-normalize'
 import { isRecordingEligible, filterEligibleRecordingIds } from './recording-eligibility'
 import { consolidateVoiceIdentityForSpeaker } from './voice-identity-consolidation'
+import { namingAllowed, namingEvidence, type NamingTurn } from './diarization-quality'
+import { runSpeakerInference } from './speaker-inference'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -529,6 +531,23 @@ export async function extractSelfIdentifications(
 // Impure helpers: turn loading + config markers
 // ---------------------------------------------------------------------------
 
+/**
+ * The turns naming may use as evidence (namingEvidence in diarization-quality):
+ * never a shaky turn, and on a degraded recording only speakers with enough
+ * solid turns.
+ */
+export function namingTurns(speakersJson: string | null | undefined, qualityJson?: string | null): SpeakerTurn[] {
+  let parsed: unknown
+  try {
+    parsed = speakersJson ? JSON.parse(speakersJson) : []
+  } catch {
+    return []
+  }
+  if (!Array.isArray(parsed)) return []
+  const raw = parsed.filter((seg): seg is NamingTurn => !!seg && typeof seg === 'object')
+  return namingEvidence(raw, qualityJson).map((t) => ({ speaker: String(t.speaker).trim(), text: String(t.text).trim() }))
+}
+
 /** Parse a transcript `speakers` JSON column into plain {speaker,text} turns. */
 export function parseSpeakerTurns(speakersJson: string | null | undefined): SpeakerTurn[] {
   if (!speakersJson) return []
@@ -642,9 +661,10 @@ export async function runSelfIdentificationForRecording(
     return { bound: 0, mergeSuspected: 0, skipped: true }
   }
 
-  const trow = queryOne<{ speakers: string | null }>('SELECT speakers FROM transcripts WHERE recording_id = ?', [
-    recordingId
-  ])
+  const trow = queryOne<{ speakers: string | null; diarization_quality?: string | null }>(
+    'SELECT speakers, diarization_quality FROM transcripts WHERE recording_id = ?',
+    [recordingId]
+  )
   const turns = parseSpeakerTurns(trow?.speakers)
   if (turns.length === 0) {
     markScanned(recordingId)
@@ -666,7 +686,15 @@ export async function runSelfIdentificationForRecording(
     return { bound: 0, mergeSuspected: 0, skipped: true }
   }
 
-  const result = await extractSelfIdentifications(turns, {
+  // Only solid turns of speakers that may be named are evidence (per-speaker
+  // rule, 29-sep-2026). Nothing to use is not "scanned": a later transcription
+  // may give this recording better turns.
+  const evidence = namingTurns(trow?.speakers, trow?.diarization_quality)
+  if (evidence.length === 0) {
+    return { bound: 0, mergeSuspected: 0, skipped: false }
+  }
+
+  const result = await extractSelfIdentifications(evidence, {
     llm: opts.llm,
     // ADV42-2 (round-44) — re-verify eligibility before the PRIMARY and FALLBACK
     // provider attempts inside BrainRouter (the isRecordingEligible gate above is
@@ -848,7 +876,12 @@ export async function backfillSelfIdentifications(pollMs = 30000): Promise<numbe
         // P2 (round-3) — the id list was snapshotted at the start; a recording
         // trashed/personal/purged since then must not have its turns sent to
         // the provider or any binding/marker persisted.
+        // The recording must be grounded in the audio, the same check the
+        // pipeline makes; then self-introductions, then the roster (Jev or LLM)
+        // for the speakers still unnamed (per-speaker rule, 29-sep-2026).
+        if (!namingAllowed(storedDiarizationQuality(id))) continue
         await runSelfIdentificationForRecording(id, { shouldPersist: () => isRecordingProcessable(id) })
+        await runSpeakerInference(id, { shouldPersist: () => isRecordingProcessable(id) })
         processed++
       } catch (e) {
         console.warn(`[SelfID] backfill failed for ${id}:`, e instanceof Error ? e.message : e)
@@ -858,6 +891,17 @@ export async function backfillSelfIdentifications(pollMs = 30000): Promise<numbe
     backfilling = false
   }
   return processed
+}
+
+/** The diarization quality report stored with the transcript, or null when there is none. */
+function storedDiarizationQuality(recordingId: string): Parameters<typeof namingAllowed>[0] {
+  const row = queryOne<{ q: string | null }>('SELECT diarization_quality AS q FROM transcripts WHERE recording_id = ?', [recordingId])
+  if (!row?.q) return null
+  try {
+    return JSON.parse(row.q) as Parameters<typeof namingAllowed>[0]
+  } catch {
+    return null
+  }
 }
 
 /** Ask the backfill worker to stop after the current item (shutdown/tests). */
