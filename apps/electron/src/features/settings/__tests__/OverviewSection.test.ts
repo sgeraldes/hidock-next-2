@@ -7,7 +7,7 @@ const base = {
   localAsrPath: 'C:/asr/run.py',
   localAsrDiarize: true,
   localAsrHfToken: '',
-  jevApiKey: 'saved'
+  jevApiKey: 'saved' // pragma: allowlist secret
 }
 
 describe('Overview transcription tile', () => {

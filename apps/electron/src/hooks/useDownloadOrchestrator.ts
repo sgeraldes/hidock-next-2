@@ -368,9 +368,14 @@ export function useDownloadOrchestrator() {
           removeFromDownloadQueue(item.filename)
           return false
         }
-        console.error(`[useDownloadOrchestrator] Download failed: ${item.filename}`)
-        await window.electronAPI.downloadService.markFailed(item.filename, 'USB transfer failed')
+        const failed = await window.electronAPI.downloadService.markFailed(item.filename, 'USB transfer failed')
         removeFromDownloadQueue(item.filename)
+        if (failed === false) {
+          // Main already settled it (a stall the reconnect retries, or a failure
+          // it recorded with its own reason) and logged it there.
+          return false
+        }
+        console.error(`[useDownloadOrchestrator] Download failed: ${item.filename}`)
         deviceService.log('error', 'Download failed', `${item.filename}: USB transfer failed`)
         toast({
           title: 'Download failed',
@@ -669,6 +674,18 @@ export function useDownloadOrchestrator() {
     // DL-005: Reset cancel flag so subsequent cancels work correctly
     _cancelInProgress = false
     clearDeviceSyncState()
+
+    // The reconnect's retry is skipped while this loop is still running. When the
+    // device came back before the loop ended (a stalled transfer resets the
+    // connection in about 2 s), retry the interrupted items now instead of at the
+    // next reconnect.
+    if (!aborted && window.electronAPI?.downloadService && deviceService.isConnected() && !isDeviceSyncInitiationBlocked()) {
+      void window.electronAPI.downloadService.getState().then((state) => {
+        if (state.queue.some((q: DownloadQueueItem) => isReconnectRetryableDownloadItem(q))) {
+          window.electronAPI.downloadService.retryFailed(true, true)
+        }
+      })
+    }
 
     if (aborted) {
       useAppStore.getState().clearDownloadQueue()

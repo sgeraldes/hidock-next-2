@@ -482,6 +482,12 @@ export class JensenDevice {
   // === Event callbacks ===
   ondisconnect?: () => void
   onconnect?: () => void
+  /**
+   * A download went silent for the stall window and the connection is about to be
+   * quarantined. Fires BEFORE the teardown, so the consumer can tag the transfer
+   * before the disconnect and the reconnect run.
+   */
+  ontransferstall?: (info: { filename: string; received: number; fileSize: number }) => void
 
   /**
    * Optional gate for the USB hot-plug auto-connect. When set and it returns
@@ -2538,6 +2544,7 @@ export class JensenDevice {
       }
 
       // reason === 'stall'
+      try { this.ontransferstall?.({ filename, received, fileSize }) } catch { /* a consumer bug must not block the teardown */ }
       console.warn(
         `[Jensen] downloadFile stalled for ${TRANSFER_STALL_TIMEOUT_MS / 1000}s ` +
         `(${received}/${fileSize} bytes) — draining IN FIFO, then quarantining for reconnect`)
