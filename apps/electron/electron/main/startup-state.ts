@@ -1,4 +1,5 @@
 import type { BrowserWindow } from 'electron'
+import type { ErrorLog } from './services/error-log'
 
 export interface StartupState {
   earlyConfigurationApplied: boolean
@@ -6,6 +7,8 @@ export interface StartupState {
   runtimeDir: string | null
   splashWindow: BrowserWindow | null
   mainWindow: BrowserWindow | null
+  /** Warnings and errors on disk; null until the instance lock is held. */
+  errorLog: ErrorLog | null
 }
 
 export function getStartupState(): StartupState {
@@ -16,7 +19,8 @@ export function getStartupState(): StartupState {
       hasSingleInstanceLock: null,
       runtimeDir: null,
       splashWindow: null,
-      mainWindow: null
+      mainWindow: null,
+      errorLog: null
     }
   }
   return root.__HIDOCK_STARTUP_STATE__

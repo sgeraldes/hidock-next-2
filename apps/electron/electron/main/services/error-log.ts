@@ -1,5 +1,5 @@
 /**
- * A dated log file of warnings and errors, main process and window (29-sep-2026).
+ * A dated log file of warnings and errors, main process and windows (29-sep-2026).
  *
  * The app kept its logs only in memory, so twice in one day a failure could not
  * be read back afterwards: the 2 h 27 min download stall and a Library crash in
@@ -32,9 +32,15 @@ export interface ErrorLog {
   readonly dir: string
 }
 
+const p2 = (n: number): string => String(n).padStart(2, '0')
+
 function day(d: Date): string {
-  const p = (n: number): string => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`
+}
+
+/** Local time, the same clock as the file name: "2026-09-29 20:31:22.104". */
+function stamp(d: Date): string {
+  return `${day(d)} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3, '0')}`
 }
 
 export function createErrorLog(dir: string, now: () => Date = () => new Date()): ErrorLog {
@@ -58,6 +64,15 @@ export function createErrorLog(dir: string, now: () => Date = () => new Date()):
     )
   }
 
+  const prune = (): void => {
+    const t = now()
+    const cutoff = day(new Date(t.getFullYear(), t.getMonth(), t.getDate() - KEEP_DAYS))
+    for (const name of readdirSync(dir)) {
+      const m = FILE_RE.exec(name)
+      if (m && m[1] < cutoff) unlinkSync(join(dir, name))
+    }
+  }
+
   return {
     dir,
     write(source, level, message) {
@@ -65,6 +80,9 @@ export function createErrorLog(dir: string, now: () => Date = () => new Date()):
       const today = day(at)
       const file = join(dir, `hidock-${today}.log`)
       if (today !== currentDay) {
+        // A new day: its own byte count, and the old files go (an app left
+        // open for weeks prunes too, not only at start).
+        const rolled = currentDay !== ''
         currentDay = today
         capped = false
         try {
@@ -72,27 +90,28 @@ export function createErrorLog(dir: string, now: () => Date = () => new Date()):
         } catch {
           bytes = 0 // no file for today yet
         }
+        if (rolled) {
+          try {
+            prune()
+          } catch (err) {
+            process.stderr.write(`[error-log] prune failed: ${(err as Error).message}\n`)
+          }
+        }
       }
       if (capped) return
       const body = message.length > MAX_ENTRY_CHARS ? `${message.slice(0, MAX_ENTRY_CHARS)} [cut]` : message
-      let line = `${at.toISOString()} ${source} ${level} ${body.replace(/\r?\n/g, '\n    ')}\n`
-      if (bytes + line.length > MAX_BYTES_PER_DAY) {
+      let line = `${stamp(at)} ${source} ${level} ${body.replace(/\r?\n/g, '\n    ')}\n`
+      if (bytes + Buffer.byteLength(line) > MAX_BYTES_PER_DAY) {
         capped = true
-        line = `${at.toISOString()} main warn log limit of ${MAX_BYTES_PER_DAY} bytes reached; nothing more is written today\n`
+        line = `${stamp(at)} main warn log limit of ${MAX_BYTES_PER_DAY} bytes reached; nothing more is written today\n`
       }
-      bytes += line.length
+      bytes += Buffer.byteLength(line)
       append(file, line)
     },
     flush() {
       return chain
     },
-    prune() {
-      const cutoff = day(new Date(now().getTime() - KEEP_DAYS * 86_400_000))
-      for (const name of readdirSync(dir)) {
-        const m = FILE_RE.exec(name)
-        if (m && m[1] < cutoff) unlinkSync(join(dir, name))
-      }
-    }
+    prune
   }
 }
 
@@ -100,7 +119,13 @@ export function createErrorLog(dir: string, now: () => Date = () => new Date()):
  * Tee the main process's console.warn and console.error into the log. The
  * original console still gets every call unchanged.
  */
+const TEED = Symbol.for('hidock.errorLog.teed')
+
 export function teeMainConsole(log: ErrorLog, target: Pick<Console, 'warn' | 'error'> = console): void {
+  // Once per console: a second call would write every line twice.
+  const marked = target as typeof target & { [TEED]?: boolean }
+  if (marked[TEED]) return
+  marked[TEED] = true
   for (const level of ['warn', 'error'] as const) {
     const original = target[level].bind(target)
     target[level] = (...args: unknown[]) => {

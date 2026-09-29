@@ -74,6 +74,36 @@ describe('error log', () => {
     expect(readdirSync(dir).sort()).toEqual(['hidock-2026-09-15.log', 'hidock-2026-09-28.log', 'notes.txt'])
   })
 
+  it('prunes again when the day rolls over while the app stays open', async () => {
+    writeFileSync(join(dir, 'hidock-2026-09-15.log'), 'x')
+    const log = createErrorLog(dir, () => clock)
+    log.write('main', 'warn', 'on the 29th')
+    expect(readdirSync(dir)).toContain('hidock-2026-09-15.log')
+    clock = new Date(2026, 9, 1, 8, 0, 0) // 1 Oct: the 15th is now older than 14 days
+    log.write('main', 'warn', 'on the 1st')
+    await log.flush()
+    expect(readdirSync(dir)).not.toContain('hidock-2026-09-15.log')
+  })
+
+  it('counts the daily cap in bytes, so accented and wide text cannot overshoot it', async () => {
+    writeFileSync(join(dir, 'hidock-2026-09-29.log'), 'y'.repeat(MAX_BYTES_PER_DAY - 300))
+    const log = createErrorLog(dir, () => clock)
+    log.write('main', 'error', 'ñ'.repeat(200)) // 200 characters, 400 bytes
+    await log.flush()
+    expect(read('hidock-2026-09-29.log')).toContain('log limit')
+    expect(read('hidock-2026-09-29.log')).not.toContain('ññ')
+  })
+
+  it('wraps a console only once', async () => {
+    const log = createErrorLog(dir, () => clock)
+    const target = { warn: (..._a: unknown[]) => undefined, error: (..._a: unknown[]) => undefined }
+    teeMainConsole(log, target)
+    teeMainConsole(log, target)
+    target.error('once')
+    await log.flush()
+    expect(read('hidock-2026-09-29.log').match(/once/g)).toHaveLength(1)
+  })
+
   it('tees console.warn and console.error without changing what the console gets', async () => {
     const log = createErrorLog(dir, () => clock)
     const seen: unknown[][] = []
