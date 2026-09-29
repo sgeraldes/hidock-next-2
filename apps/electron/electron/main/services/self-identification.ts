@@ -53,7 +53,7 @@ import { isGenericSpeakerLabel, normalizeName, accentFoldedKey } from './entity-
 import { isRecordingEligible, filterEligibleRecordingIds } from './recording-eligibility'
 import { consolidateVoiceIdentityForSpeaker } from './voice-identity-consolidation'
 import { namingAllowed, namingEvidence, type NamingTurn } from './diarization-quality'
-import { runSpeakerInference } from './speaker-inference'
+import { isInferenceAsked, runSpeakerInference } from './speaker-inference'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -111,13 +111,6 @@ const AUTO_LINK_THRESHOLD = 0.8
 
 const MERGE_KEY_PREFIX = 'self_id:merge_suspected:'
 const SCANNED_KEY_PREFIX = 'self_id:scanned:'
-/**
- * The roster step (speaker inference) has its own marker in the backfill: a
- * recording scanned for self-introductions long ago still needs the roster
- * asked once under the per-speaker rule (29-sep-2026). Bump the version to ask
- * again after the rule changes.
- */
-const INFERENCE_DONE_KEY_PREFIX = 'speaker_inference:backfill:v1:'
 
 // ---------------------------------------------------------------------------
 // Pure: lexical prefilter
@@ -871,7 +864,7 @@ export async function backfillSelfIdentifications(pollMs = 30000): Promise<numbe
   try {
     const ids = loadTranscriptsWithSpeakers()
       .map((r) => r.recording_id)
-      .filter((id) => !isScanned(id) || !isInferenceDone(id))
+      .filter((id) => !isScanned(id) || !isInferenceAsked(id))
     let i = 0
     while (i < ids.length && !backfillStopRequested) {
       if (audioQueueBusy()) {
@@ -880,7 +873,7 @@ export async function backfillSelfIdentifications(pollMs = 30000): Promise<numbe
       }
       const id = ids[i]
       i++
-      if (isScanned(id) && isInferenceDone(id)) continue
+      if (isScanned(id) && isInferenceAsked(id)) continue
       try {
         // P2 (round-3) — the id list was snapshotted at the start; a recording
         // trashed/personal/purged since then must not have its turns sent to
@@ -890,14 +883,14 @@ export async function backfillSelfIdentifications(pollMs = 30000): Promise<numbe
         // for the speakers still unnamed (per-speaker rule, 29-sep-2026).
         if (!namingAllowed(storedDiarizationQuality(id))) continue
         // Self-introductions once per recording (its own scanned marker), the
-        // roster once per rule version. A run that could not ask (no roster
-        // yet, model unavailable) leaves the marker off so it is tried again.
+        // roster once per rule version (runSpeakerInference writes its marker).
+        // A run that could not ask (no roster yet, model unavailable) leaves the
+        // marker off so it is tried again.
         if (!isScanned(id)) {
           await runSelfIdentificationForRecording(id, { shouldPersist: () => isRecordingProcessable(id) })
         }
-        if (!isInferenceDone(id)) {
-          const inferred = await runSpeakerInference(id, { shouldPersist: () => isRecordingProcessable(id) })
-          if (!inferred.skipped) setConfigMarker(`${INFERENCE_DONE_KEY_PREFIX}${id}`, nowIso())
+        if (!isInferenceAsked(id)) {
+          await runSpeakerInference(id, { shouldPersist: () => isRecordingProcessable(id) })
         }
         processed++
       } catch (e) {
@@ -908,10 +901,6 @@ export async function backfillSelfIdentifications(pollMs = 30000): Promise<numbe
     backfilling = false
   }
   return processed
-}
-
-function isInferenceDone(recordingId: string): boolean {
-  return hasConfigMarker(`${INFERENCE_DONE_KEY_PREFIX}${recordingId}`)
 }
 
 /** The diarization quality report stored with the transcript, or null when there is none. */

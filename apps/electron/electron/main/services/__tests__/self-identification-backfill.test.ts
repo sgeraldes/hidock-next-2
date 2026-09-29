@@ -39,8 +39,14 @@ vi.mock('../database', () => ({
 vi.mock('../entity-resolver', () => ({ resolveContact: vi.fn() }))
 vi.mock('../chat-llm', () => ({ getChatLLMService: () => ({ generate: vi.fn(async () => '[]') }) }))
 vi.mock('../voice-identity-consolidation', () => ({ consolidateVoiceIdentityForSpeaker: vi.fn() }))
+// Like the real module: the roster step records that it asked (unless it could not).
 vi.mock('../speaker-inference', () => ({
-  runSpeakerInference: (id: string, opts?: unknown) => mockInference(id, opts)
+  isInferenceAsked: (id: string) => markers.has(`speaker_inference:asked:v1:${id}`),
+  runSpeakerInference: async (id: string, opts?: unknown) => {
+    const result = await mockInference(id, opts)
+    if (!result.skipped) markers.set(`speaker_inference:asked:v1:${id}`, 'now')
+    return result
+  }
 }))
 
 import { backfillSelfIdentifications } from '../self-identification'
@@ -66,7 +72,7 @@ describe('backfillSelfIdentifications — roster step', () => {
     expect(await backfillSelfIdentifications(1)).toBe(1)
     expect(mockInference).toHaveBeenCalledTimes(1)
     expect(mockInference.mock.calls[0][0]).toBe('rec-old')
-    expect([...markers.keys()].some((k) => k.startsWith('speaker_inference:backfill:v1:rec-old'))).toBe(true)
+    expect(markers.has('speaker_inference:asked:v1:rec-old')).toBe(true)
 
     expect(await backfillSelfIdentifications(1)).toBe(0)
     expect(mockInference).toHaveBeenCalledTimes(1)
@@ -79,7 +85,7 @@ describe('backfillSelfIdentifications — roster step', () => {
 
     expect(markers.has('self_id:scanned:rec-new')).toBe(true)
     expect(mockInference).toHaveBeenCalledTimes(1)
-    expect(markers.has('speaker_inference:backfill:v1:rec-new')).toBe(true)
+    expect(markers.has('speaker_inference:asked:v1:rec-new')).toBe(true)
   })
 
   it('asks again next time when the roster could not be asked', async () => {
@@ -88,7 +94,7 @@ describe('backfillSelfIdentifications — roster step', () => {
     mockInference.mockResolvedValue({ proposed: 0, bound: 0, skipped: true })
 
     await backfillSelfIdentifications(1)
-    expect(markers.has('speaker_inference:backfill:v1:rec-noroster')).toBe(false)
+    expect(markers.has('speaker_inference:asked:v1:rec-noroster')).toBe(false)
 
     await backfillSelfIdentifications(1)
     expect(mockInference).toHaveBeenCalledTimes(2)

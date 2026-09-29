@@ -116,6 +116,7 @@ vi.mock('../database', () => ({
   getRecordingById: vi.fn(() => db.recording),
   getMeetingById: vi.fn(() => db.meeting),
   queryOne: vi.fn(() => db.transcript),
+  run: vi.fn(),
   queryAll: vi.fn((sql: string) =>
     typeof sql === 'string' && sql.includes('meeting_contacts') ? (db.meetingContacts ?? []) : (db.mentionResolutions ?? [])
   ),
@@ -129,7 +130,8 @@ vi.mock('../entity-resolver', () => ({
   resolveContact: vi.fn(() => ({ id: null, confidence: 0, method: 'none' }))
 }))
 
-import { runSpeakerInference } from '../speaker-inference'
+import { runSpeakerInference, INFERENCE_ASKED_KEY_PREFIX } from '../speaker-inference'
+import { run as dbRun } from '../database'
 
 const TURNS = [
   { speaker: 'Speaker 1', text: 'Listo, gracias Óscar.' },
@@ -168,6 +170,35 @@ describe('runSpeakerInference', () => {
     expect(Object.values(questions.s1.criteria).slice(0, -1)).toEqual(['Óscar Pereda'])
     expect(res.bound).toBe(1)
     expect(db.assignments).toEqual([{ label: 'Speaker 5', by: { newName: 'Óscar Pereda' } }])
+  })
+
+  it('records that the roster was asked, and not when it could not ask', async () => {
+    const askJev = vi.fn(async () => ({
+      model: 'jev',
+      answers: { s1: { type: 'choice' as const, choice: 'none', probabilities: { none: 1 }, confidence: 1 } },
+      usage: { input_tokens: 1, output_tokens: 1 }
+    }))
+    await runSpeakerInference('rec-1', { jevKey: () => 'key', askJev })
+    expect(dbRun).toHaveBeenCalledWith(expect.stringContaining('INTO config'), [
+      `${INFERENCE_ASKED_KEY_PREFIX}rec-1`, expect.any(String), expect.any(String)
+    ])
+
+    vi.mocked(dbRun).mockClear()
+    db.meeting = { id: 'm1', subject: 'Sync', attendees: null } // no roster: nothing was asked
+    db.meetingContacts = []
+    db.speakerMap = []
+    await runSpeakerInference('rec-1', { jevKey: () => 'key', askJev })
+    expect(dbRun).not.toHaveBeenCalled()
+  })
+
+  it('records that nothing is left to ask when every speaker is already named', async () => {
+    db.speakerMap = [
+      { speaker_label: 'Speaker 1', contact_id: 'c0', name: 'Sebastián Geraldes' },
+      { speaker_label: 'Speaker 5', contact_id: 'c1', name: 'Óscar Pereda' }
+    ]
+    const res = await runSpeakerInference('rec-1', { jevKey: () => 'key', askJev: vi.fn() })
+    expect(res.skipped).toBe(true)
+    expect(dbRun).toHaveBeenCalledWith(expect.stringContaining('INTO config'), expect.arrayContaining([`${INFERENCE_ASKED_KEY_PREFIX}rec-1`]))
   })
 
   it('binds nothing when Jev is unsure', async () => {
