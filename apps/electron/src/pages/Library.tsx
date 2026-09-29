@@ -1087,9 +1087,12 @@ export function Library() {
   // they hide/count consistently with genuine older rows.
   const displayedRecordings = useMemo(() => {
     if (!grouped || showOlder || !isDefaultView) return fullDisplayedRecordings
-    return fullDisplayedRecordings.filter(
+    const recent = fullDisplayedRecordings.filter(
       (rec) => bucketedDateGroup(rec.dateRecorded) !== 'older' || rec.id === selectedSourceId
     )
+    // Everything is older (early in a month, or a quiet stretch): hiding it all
+    // would show an empty library with no button, so show every recording.
+    return recent.length === 0 ? fullDisplayedRecordings : recent
   }, [fullDisplayedRecordings, grouped, showOlder, isDefaultView, selectedSourceId])
 
   // How many recordings the "older" gate is currently hiding (drives the button).

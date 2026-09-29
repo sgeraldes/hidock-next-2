@@ -1103,6 +1103,25 @@ describe('Library — time groups and Show older', () => {
     expect(headers).toContain('Older')
   })
 
+  // When every recording is older (early in a month), the gate must not leave an
+  // empty library with no Show older button: it shows them all.
+  it('shows every recording when all of them are older', async () => {
+    const old = { ...mockRecording, id: 'old-only', filename: 'old.wav', title: 'Old only', localPath: '/p/old.wav', dateRecorded: null }
+    vi.mocked(useUnifiedRecordings).mockReturnValue({
+      recordings: [old],
+      loading: false,
+      error: null,
+      refresh: mockRefresh,
+      deviceConnected: false,
+      stats: { total: 1, deviceOnly: 0, localOnly: 1, both: 0, synced: 1, unsynced: 0, onSource: 0, locallyAvailable: 1 }
+    } as any)
+
+    render(<MemoryRouter><Library /></MemoryRouter>)
+
+    await waitFor(() => expect(screen.getByText('Old only')).toBeInTheDocument())
+    expect(screen.queryByTestId('show-older')).not.toBeInTheDocument()
+  })
+
   // Fix 5: card view lost its pinned sticky date-group header when the row-list
   // refactor landed (listItems is empty in card view, so topDateGroup stayed
   // null). It must derive the group straight from displayedRecordings again.
