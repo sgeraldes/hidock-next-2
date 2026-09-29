@@ -116,6 +116,20 @@ function nameOf(recording: Parameters<typeof getDisplayTitle>[0]): string {
   return getDisplayTitle(recording).primaryText
 }
 
+/**
+ * The one coarse time bucket a recording belongs to — used for BOTH the
+ * time-group headers AND the "Show older" gate so the two can never disagree
+ * (the previous bug: the gate read `coarseDateGroup(...) !== 'older'`, which let
+ * an undated recording through as visible, while the header logic bucketed the
+ * same row under Older, and hiddenOlderCount excluded it). A recording with a
+ * missing/invalid dateRecorded has no place among the recent groups, so it is
+ * treated as Older: hidden by default, grouped under the Older header, and
+ * counted by the Show-older control — all consistently.
+ */
+function bucketedDateGroup(dateRecorded: Date | string | null | undefined): CoarseDateGroup {
+  return coarseDateGroup(dateRecorded) ?? 'older'
+}
+
 const COMPACT_ROW_HEIGHT_PX = 48
 const GROUP_HEADER_HEIGHT_PX = 28
 
@@ -1042,17 +1056,61 @@ export function Library() {
   // Trash (Trash is a flat, ungrouped tombstone list per §D1).
   const grouped = compactView && !showTrash && sortBy === 'date'
 
+  // "Show older" is a convenience for the PLAIN default view only: it opens the
+  // list on the recent groups and tucks everything older behind one button.
+  // The moment the user is searching, filtering, or sorting differently, hiding
+  // matches would be actively wrong — a search whose only hits are old would
+  // read as "no matches". So the gate is armed exclusively in the default view
+  // (no search text, every filter at its default, and the default date-desc
+  // sort); any deviation shows every match with no hiding at all.
+  const isDefaultView =
+    deferredSearchQuery.trim().length === 0 &&
+    exclusiveFilter === 'all' &&
+    categoryFilter === null &&
+    qualityFilter === null &&
+    statusFilter === null &&
+    sourceTypeFilter === 'all' &&
+    durationPreset === 'all' &&
+    integrityFilter === null &&
+    audioFilter === null &&
+    kindFilter === null &&
+    contextFilter === null &&
+    starsFilter === null &&
+    warningFilter === null &&
+    sortBy === 'date' &&
+    sortOrder === 'desc'
+
   // "Show older" gate: until the user asks, drop everything older than the
-  // current month. This is what keeps the list opening on the recent groups.
+  // current month — but ONLY in the plain default view, and NEVER the currently
+  // selected/opened recording (deep-linking or opening an older row must not
+  // leave it hidden). Undated rows bucket as Older via bucketedDateGroup, so
+  // they hide/count consistently with genuine older rows.
   const displayedRecordings = useMemo(() => {
-    if (!grouped || showOlder) return fullDisplayedRecordings
-    return fullDisplayedRecordings.filter((rec) => coarseDateGroup(rec.dateRecorded) !== 'older')
-  }, [fullDisplayedRecordings, grouped, showOlder])
+    if (!grouped || showOlder || !isDefaultView) return fullDisplayedRecordings
+    return fullDisplayedRecordings.filter(
+      (rec) => bucketedDateGroup(rec.dateRecorded) !== 'older' || rec.id === selectedSourceId
+    )
+  }, [fullDisplayedRecordings, grouped, showOlder, isDefaultView, selectedSourceId])
 
   // How many recordings the "older" gate is currently hiding (drives the button).
   const hiddenOlderCount = fullDisplayedRecordings.length - displayedRecordings.length
 
+  // Reveal-on-open safety net: if the selected/opened recording buckets to
+  // Older while the gate is still armed, turn Show older on so the whole Older
+  // section (its row included) renders and the reveal/scroll effect below can
+  // find it. The gate above already keeps the selected row itself visible; this
+  // additionally opens its section so the row isn't stranded on its own.
+  useEffect(() => {
+    if (!grouped || showOlder || !isDefaultView || !selectedSourceId) return
+    const selected = fullDisplayedRecordings.find((rec) => rec.id === selectedSourceId)
+    if (selected && bucketedDateGroup(selected.dateRecorded) === 'older') {
+      setShowOlder(true)
+    }
+  }, [grouped, showOlder, isDefaultView, selectedSourceId, fullDisplayedRecordings])
+
   // Any filter/sort/search change starts the list back on the recent groups.
+  // Safe now that the gate never hides the selected recording (rules 1 & 2):
+  // resetting to false can no longer yank an open older row out of the list.
   useEffect(() => {
     setShowOlder(false)
   }, [
@@ -1088,7 +1146,7 @@ export function Library() {
     let lastGroup: CoarseDateGroup | null = null
     displayedRecordings.forEach((rec, index) => {
       if (grouped) {
-        const group = coarseDateGroup(rec.dateRecorded) ?? 'older'
+        const group = bucketedDateGroup(rec.dateRecorded)
         if (group !== lastGroup) {
           items.push({ kind: 'header', key: `group:${group}`, group, label: COARSE_GROUP_LABELS[group] })
           lastGroup = group
@@ -1127,8 +1185,12 @@ export function Library() {
   }, [listItems])
 
   // The keys the virtualizer/anchor logic tracks: list-item keys for the row
-  // list (headers + rows), plain render keys for card view.
-  const virtualKeys = usesRowList ? listItems.map((item) => item.key) : itemRenderKeys
+  // list (headers + rows), plain render keys for card view. Memoized on their
+  // inputs so a ~2,000-row map isn't rebuilt on every unrelated render.
+  const virtualKeys = useMemo(
+    () => (usesRowList ? listItems.map((item) => item.key) : itemRenderKeys),
+    [usesRowList, listItems, itemRenderKeys]
+  )
 
   // Summaries and bulk actions describe the complete selection in the active
   // corpus, even if a selected live recording is later hidden by a filter.
@@ -2388,7 +2450,7 @@ export function Library() {
   // and separators "go missing" (2026-07-20). Force a full re-measure whenever
   // the list CONTENT changes. This runs before paint so replacing the split
   // source cannot expose one frame of stale/overlapping offsets.
-  const displayedIdSignature = virtualKeys.join('|')
+  const displayedIdSignature = useMemo(() => virtualKeys.join('|'), [virtualKeys])
   useLayoutEffect(() => {
     rowVirtualizer.measure()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2421,13 +2483,22 @@ export function Library() {
         (item) => item.start + item.size > el.scrollTop
       )
       if (firstVisible) firstVisibleIndexRef.current = firstVisible.index
-      const item = listItemsRef.current[firstVisible?.index ?? 0]
-      if (item?.kind === 'header') {
-        setTopDateGroup(item.label)
-      } else if (item?.kind === 'row') {
-        setTopDateGroup(COARSE_GROUP_LABELS[coarseDateGroup(displayedRecordingsRef.current[item.recordingIndex]?.dateRecorded) ?? 'older'])
+      if (usesRowList) {
+        const item = listItemsRef.current[firstVisible?.index ?? 0]
+        if (item?.kind === 'header') {
+          setTopDateGroup(item.label)
+        } else if (item?.kind === 'row') {
+          setTopDateGroup(COARSE_GROUP_LABELS[bucketedDateGroup(displayedRecordingsRef.current[item.recordingIndex]?.dateRecorded)])
+        } else {
+          setTopDateGroup(null)
+        }
       } else {
-        setTopDateGroup(null)
+        // Card view maps displayedRecordings directly (no header/row list
+        // items), so the virtual index IS the recording index. Derive the
+        // pinned group from the topmost visible recording — without this, card
+        // view lost its sticky date-group header entirely (a regression).
+        const recording = displayedRecordingsRef.current[firstVisible?.index ?? 0]
+        setTopDateGroup(recording ? COARSE_GROUP_LABELS[bucketedDateGroup(recording.dateRecorded)] : null)
       }
     }
     onScroll()
@@ -2435,7 +2506,7 @@ export function Library() {
     return () => el.removeEventListener('scroll', onScroll)
     // The list itself changing (first load, a filter, the sort) also moves the
     // top row without a scroll event, so the pinned group recomputes then too.
-  }, [rowVirtualizer, listItems, displayedRecordings])
+  }, [rowVirtualizer, listItems, displayedRecordings, usesRowList])
 
   useEffect(() => {
     const prevIds = prevItemIdsRef.current

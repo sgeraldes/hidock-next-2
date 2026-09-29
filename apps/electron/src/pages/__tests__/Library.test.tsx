@@ -35,6 +35,9 @@ vi.mock('@/services/device-sync-actions', () => ({
 
 const toastMock = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() }))
 const integrityHarness = vi.hoisted(() => ({ filter: null as string | null, set: vi.fn(), search: '' }))
+// Lets a test drive the persisted view mode (compact vs card) through the store
+// mock. Defaults to 'compact' so existing tests are unaffected.
+const viewHarness = vi.hoisted(() => ({ viewMode: 'compact' as 'compact' | 'card' }))
 vi.mock('@/components/ui/toaster', () => ({ toast: toastMock }))
 
 // Mock hooks
@@ -156,7 +159,7 @@ vi.mock('@/store/useLibraryStore', () => ({
       setStatusFilter: vi.fn(),
       searchQuery: integrityHarness.search,
       setSearchQuery: vi.fn(),
-      viewMode: 'compact',
+      viewMode: viewHarness.viewMode,
       sortBy: 'date',
       sortOrder: 'desc',
       sourceTypeFilter: 'all',
@@ -968,6 +971,9 @@ describe('Library — time groups and Show older', () => {
     vi.clearAllMocks()
     integrityHarness.filter = null
     integrityHarness.search = ''
+    scrollHarness.selectedSourceId = null
+    scrollHarness.scrollToIndex.mockClear()
+    viewHarness.viewMode = 'compact'
     vi.mocked(window.electronAPI.transcripts.getByRecordingIdsOwner).mockResolvedValue({})
     vi.mocked(window.electronAPI.meetings.getByIds).mockResolvedValue({})
     vi.mocked(window.electronAPI.recordings.getTrash).mockResolvedValue([])
@@ -1005,6 +1011,118 @@ describe('Library — time groups and Show older', () => {
     expect(headers).toContain('Older')
     // Once revealed, the button is gone (nothing left to show).
     expect(screen.queryByTestId('show-older')).not.toBeInTheDocument()
+  })
+
+  // Fix 1: a search whose only matches are in the hidden "older" group must
+  // show them (the gate is a default-view convenience only). Before the fix the
+  // list came back empty and the Show-older button — living inside the non-empty
+  // branch — never appeared, stranding the user on "no matches".
+  it('shows older matches when a search only hits older recordings', async () => {
+    const olderMatch = {
+      ...mockRecording,
+      id: 'older-match',
+      filename: 'older-match.wav',
+      title: 'Old archive one',
+      // The search token lives in a field that is NOT the row's visible title,
+      // so the asserted title text isn't split by search highlighting.
+      summary: 'zephyrquxtoken',
+      localPath: '/p/older-match.wav',
+      dateRecorded: new Date(Date.now() - 62 * 24 * 60 * 60 * 1000)
+    }
+    vi.mocked(useUnifiedRecordings).mockReturnValue({
+      recordings: [recent, olderMatch],
+      loading: false,
+      error: null,
+      refresh: mockRefresh,
+      deviceConnected: false,
+      stats: { total: 2, deviceOnly: 0, localOnly: 2, both: 0, synced: 2, unsynced: 0, onSource: 0, locallyAvailable: 2 }
+    } as any)
+    // A token that only the older recording's corpus contains.
+    integrityHarness.search = 'zephyrquxtoken'
+
+    render(<MemoryRouter><Library /></MemoryRouter>)
+
+    // The older match is shown despite living in the "older" bucket, and the
+    // recent non-match is filtered out by the search.
+    await waitFor(() => expect(screen.getByText('Old archive one')).toBeInTheDocument())
+    expect(screen.queryByText('Recent one')).not.toBeInTheDocument()
+    // With a search active nothing is hidden, so the Show-older gate is absent.
+    expect(screen.queryByTestId('show-older')).not.toBeInTheDocument()
+  })
+
+  // Fix 2: opening/deep-linking a recording in the hidden "older" group must
+  // reveal its row (and let the reveal/scroll effect find it), never leave it
+  // hidden behind the gate.
+  it('reveals and scrolls to an opened recording that lives in the older group', async () => {
+    scrollHarness.selectedSourceId = 'older-1'
+
+    render(<MemoryRouter><Library /></MemoryRouter>)
+
+    // The opened older row is now visible (its Older section was revealed). The
+    // selected recording also appears in the reader panel, so match all.
+    await waitFor(() => expect(screen.getAllByText('Old one').length).toBeGreaterThan(0))
+    // ...and the reveal/scroll effect located it in the virtualized list.
+    await waitFor(() => expect(scrollHarness.scrollToIndex).toHaveBeenCalled())
+    // Nothing is left hidden, so the Show-older gate is gone.
+    expect(screen.queryByTestId('show-older')).not.toBeInTheDocument()
+  })
+
+  // Fix 4: an undated (null/invalid dateRecorded) recording must be treated as
+  // Older for BOTH the bucket and the gate — hidden by default, counted by
+  // Show older, and grouped under the Older header once revealed. Before the
+  // fix it slipped through the gate as visible while being bucketed under Older.
+  it('buckets and counts undated recordings consistently under Older', async () => {
+    const undated = {
+      ...mockRecording,
+      id: 'undated-1',
+      filename: 'undated.wav',
+      title: 'Undated one',
+      localPath: '/p/undated.wav',
+      dateRecorded: null
+    }
+    vi.mocked(useUnifiedRecordings).mockReturnValue({
+      recordings: [recent, undated],
+      loading: false,
+      error: null,
+      refresh: mockRefresh,
+      deviceConnected: false,
+      stats: { total: 2, deviceOnly: 0, localOnly: 2, both: 0, synced: 2, unsynced: 0, onSource: 0, locallyAvailable: 2 }
+    } as any)
+
+    render(<MemoryRouter><Library /></MemoryRouter>)
+
+    // Hidden by default, and counted by the gate (consistent with genuine older).
+    await waitFor(() => expect(screen.getByText('Recent one')).toBeInTheDocument())
+    expect(screen.queryByText('Undated one')).not.toBeInTheDocument()
+    expect(screen.getByTestId('show-older')).toHaveTextContent('Show older (1)')
+
+    // Revealed under the Older header once the gate opens.
+    fireEvent.click(screen.getByTestId('show-older'))
+    await waitFor(() => expect(screen.getByText('Undated one')).toBeInTheDocument())
+    const headers = screen.getAllByTestId('library-group-header').map((el) => el.textContent)
+    expect(headers).toContain('Older')
+  })
+
+  // Fix 5: card view lost its pinned sticky date-group header when the row-list
+  // refactor landed (listItems is empty in card view, so topDateGroup stayed
+  // null). It must derive the group straight from displayedRecordings again.
+  it('renders the sticky date-group header in card view', async () => {
+    viewHarness.viewMode = 'card'
+    vi.mocked(useUnifiedRecordings).mockReturnValue({
+      recordings: [recent],
+      loading: false,
+      error: null,
+      refresh: mockRefresh,
+      deviceConnected: false,
+      stats: { total: 1, deviceOnly: 0, localOnly: 1, both: 0, synced: 1, unsynced: 0, onSource: 0, locallyAvailable: 1 }
+    } as any)
+
+    render(<MemoryRouter><Library /></MemoryRouter>)
+
+    await waitFor(() => {
+      const pinned = screen.getByTestId('library-date-group')
+      expect(pinned).toHaveTextContent('Today')
+    })
   })
 })
 
