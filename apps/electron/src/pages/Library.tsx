@@ -2471,6 +2471,9 @@ export function Library() {
   // The coarse time group of the topmost visible item, pinned above the list
   // (Today, This week, Earlier, Older). Only a change of group re-renders.
   const [topDateGroup, setTopDateGroup] = useState<string | null>(null)
+  // List view: at the top the toolbar and the first group heading are in view,
+  // and the pinned label would sit on top of the toolbar (29-sep-2026).
+  const [listScrolled, setListScrolled] = useState(false)
   const displayedRecordingsRef = useRef(displayedRecordings)
   displayedRecordingsRef.current = displayedRecordings
   const listItemsRef = useRef(listItems)
@@ -2486,6 +2489,7 @@ export function Library() {
         (item) => item.start + item.size > el.scrollTop
       )
       if (firstVisible) firstVisibleIndexRef.current = firstVisible.index
+      setListScrolled(el.scrollTop > 48)
       if (usesRowList) {
         const item = listItemsRef.current[firstVisible?.index ?? 0]
         if (item?.kind === 'header') {
@@ -2893,7 +2897,7 @@ export function Library() {
             >
         {/* Pinned date group. The negative bottom margin cancels its own height,
             so it overlays the list without moving any row (rows are fixed 48 px). */}
-        {!showTrash && sortBy === 'date' && displayedRecordings.length > 0 && topDateGroup && (
+        {!showTrash && sortBy === 'date' && displayedRecordings.length > 0 && topDateGroup && (!compactView || listScrolled) && (
           <div
             className="pointer-events-none sticky top-0 z-10 -mb-6 flex h-6 items-center px-3"
             data-testid="library-date-group"

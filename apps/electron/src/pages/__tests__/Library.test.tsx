@@ -1143,5 +1143,28 @@ describe('Library — time groups and Show older', () => {
       expect(pinned).toHaveTextContent('Today')
     })
   })
+
+  // In list view the pinned label sat on top of the toolbar at the top of the
+  // list, where the first group heading already shows (29-sep-2026).
+  it('shows the pinned group in list view only once the list is scrolled', async () => {
+    vi.mocked(useUnifiedRecordings).mockReturnValue({
+      recordings: [recent],
+      loading: false,
+      error: null,
+      refresh: mockRefresh,
+      deviceConnected: false,
+      stats: { total: 1, deviceOnly: 0, localOnly: 1, both: 0, synced: 1, unsynced: 0, onSource: 0, locallyAvailable: 1 }
+    } as any)
+
+    render(<MemoryRouter><Library /></MemoryRouter>)
+
+    await waitFor(() => expect(screen.getByText('Recent one')).toBeInTheDocument())
+    expect(screen.queryByTestId('library-date-group')).not.toBeInTheDocument()
+
+    const list = screen.getByTestId('library-list')
+    list.scrollTop = 200
+    fireEvent.scroll(list)
+    await waitFor(() => expect(screen.getByTestId('library-date-group')).toBeInTheDocument())
+  })
 })
 
