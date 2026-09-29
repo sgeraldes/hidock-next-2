@@ -13,6 +13,7 @@ import {
   isBootDrainActive,
   areBootTasksSettled,
   whenBootTasksSettled,
+  stallFromGap,
   _resetBootSchedulerForTests
 } from '../boot-scheduler'
 
@@ -200,6 +201,28 @@ describe('boot-scheduler — per-task timing (F15)', () => {
     await startBootScheduler({ startDelayMs: 0, gapMs: 0, measureStall: () => fixedStall(0, calls), ...silent })
 
     expect(calls).toEqual(['begin', 'one', 'end', 'begin', 'two', 'end', 'close'])
+  })
+
+  it('counts a late tick as a freeze but ignores a suspend-sized gap', () => {
+    expect(stallFromGap(10)).toBe(0)
+    expect(stallFromGap(1510)).toBe(1500)
+    expect(stallFromGap(59_999)).toBe(59_989)
+    // laptop lid closed for ten minutes
+    expect(stallFromGap(600_000)).toBe(0)
+  })
+
+  it('ends the drain, releases waiters and closes the probe even when the probe throws', async () => {
+    const calls: string[] = []
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    registerBootTask({ name: 'one', run: () => { calls.push('one') } })
+    const gate = whenBootTasksSettled(5000)
+    const broken = { begin: () => { throw new Error('probe broke') }, end: () => 0, close: () => { calls.push('close') } }
+
+    await startBootScheduler({ startDelayMs: 0, gapMs: 0, measureStall: () => broken, ...silent })
+
+    await expect(gate).resolves.toBeUndefined()
+    expect(isBootDrainActive()).toBe(false)
+    expect(calls).toEqual(['close'])
   })
 
   it('measures a real freeze with the default probe', async () => {

@@ -98,6 +98,18 @@ export interface StallProbe {
 }
 
 const STALL_TICK_MS = 10
+/**
+ * One gap between two ticks this long is the machine sleeping (lid closed,
+ * hibernate), not the app freezing: a freeze of a minute would be an outage,
+ * not a boot warning. Such a gap is ignored.
+ */
+const SUSPEND_GAP_MS = 60_000
+
+/** How much of a gap between two probe ticks counts as a freeze. */
+export function stallFromGap(gapMs: number): number {
+  if (gapMs >= SUSPEND_GAP_MS) return 0
+  return Math.max(0, gapMs - STALL_TICK_MS)
+}
 
 /**
  * The real probe. A task that never yields ends before the loop can fire the
@@ -111,7 +123,7 @@ function createStallProbe(): StallProbe {
   let maxLateMs = 0
   const timer = setInterval(() => {
     const now = performance.now()
-    maxLateMs = Math.max(maxLateMs, now - lastTick - STALL_TICK_MS)
+    maxLateMs = Math.max(maxLateMs, stallFromGap(now - lastTick))
     lastTick = now
   }, STALL_TICK_MS)
   timer.unref()
@@ -161,6 +173,7 @@ let settled = false
 let settlePromise: Promise<void> | null = null
 let timings: BootTaskTiming[] = []
 let settleWaiters: Array<() => void> = []
+let activeStallProbe: StallProbe | null = null
 
 /** Wait `ms` while yielding the event loop (renderer IPC runs during the wait). */
 function delay(ms: number): Promise<void> {
@@ -254,66 +267,73 @@ export function startBootScheduler(options: BootSchedulerOptions = {}): Promise<
     options.log ?? ((m: string) => { if (isQaLogsEnabled()) console.log(`[QA-MONITOR][BootScheduler] ${m}`) })
 
   const stallProbe = (options.measureStall ?? createStallProbe)()
+  activeStallProbe = stallProbe
 
   settlePromise = (async () => {
-    await delay(startDelayMs)
+    try {
+      await delay(startDelayMs)
 
-    while (queue.length > 0) {
-      const task = queue.shift() as BootTask
-      const startedAt = Date.now()
-      stallProbe.begin()
-      let ok = true
-      let error: string | undefined
-      try {
-        // ALWAYS printed, not QA-gated. `timings` below is the evidence surface
-        // for a task that merely runs SLOW, but it lives in memory: a task that
-        // aborts the process outright (V8 OOM, a native crash) takes the whole
-        // record with it and leaves no trace of which task was running. That is
-        // not hypothetical — an OOM abort in this drain went unattributed for
-        // seven days because the last durable line came from the previous task,
-        // making the NEXT task look innocent. One line per boot task (there are
-        // ~8) is the price of every future startup crash naming its own culprit.
-        console.log(`[BootScheduler] starting "${task.name}"`)
-        await task.run()
-      } catch (e) {
-        // Best-effort: one failing task must never abort the rest (this matches
-        // the pre-existing per-task try/catch each backfill had on its own).
-        ok = false
-        error = e instanceof Error ? e.message : String(e)
+      while (queue.length > 0) {
+        const task = queue.shift() as BootTask
+        const startedAt = Date.now()
+        stallProbe.begin()
+        let ok = true
+        let error: string | undefined
+        try {
+          // ALWAYS printed, not QA-gated. `timings` below is the evidence surface
+          // for a task that merely runs SLOW, but it lives in memory: a task that
+          // aborts the process outright (V8 OOM, a native crash) takes the whole
+          // record with it and leaves no trace of which task was running. That is
+          // not hypothetical — an OOM abort in this drain went unattributed for
+          // seven days because the last durable line came from the previous task,
+          // making the NEXT task look innocent. One line per boot task (there are
+          // ~8) is the price of every future startup crash naming its own culprit.
+          console.log(`[BootScheduler] starting "${task.name}"`)
+          await task.run()
+        } catch (e) {
+          // Best-effort: one failing task must never abort the rest (this matches
+          // the pre-existing per-task try/catch each backfill had on its own).
+          ok = false
+          error = e instanceof Error ? e.message : String(e)
+        }
+
+        const elapsedMs = Date.now() - startedAt
+        const maxStallMs = await stallProbe.end()
+        timings.push({ name: task.name, startedAt, elapsedMs, maxStallMs, ok, ...(error ? { error } : {}) })
+        if (process.env.HIDOCK_BENCH_OUTPUT) {
+          console.info('[BootTiming] ' + JSON.stringify({ name: task.name, elapsedMs, maxStallMs, ok }))
+        }
+
+        if (ok) {
+          log(`"${task.name}" done in ${elapsedMs}ms`)
+        } else {
+          // A failing boot task is a real defect, not QA chatter — always surface it.
+          console.error(`[BootScheduler] "${task.name}" failed after ${elapsedMs}ms:`, error)
+        }
+
+        // A task that held the main process (and therefore every renderer IPC
+        // round-trip) froze the window — report it regardless of the QA toggle so
+        // the next stall is attributable without a repro session.
+        if (maxStallMs >= STALL_WARN_MS) {
+          console.warn(
+            `[BootScheduler] boot task "${task.name}" froze the window for up to ${maxStallMs}ms ` +
+              `(${elapsedMs}ms in total); it needs to yield between steps.`
+          )
+        } else if (elapsedMs >= SLOW_TASK_NOTE_MS) {
+          log(`"${task.name}" took ${elapsedMs}ms in total but never froze the window for more than ${maxStallMs}ms`)
+        }
+
+        // Yield between tasks so the renderer's queued IPC is serviced before the
+        // next heavy pass grabs the event loop.
+        if (queue.length > 0) await delay(gapMs)
       }
-
-      const elapsedMs = Date.now() - startedAt
-      const maxStallMs = await stallProbe.end()
-      timings.push({ name: task.name, startedAt, elapsedMs, maxStallMs, ok, ...(error ? { error } : {}) })
-      if (process.env.HIDOCK_BENCH_OUTPUT) {
-        console.info('[BootTiming] ' + JSON.stringify({ name: task.name, elapsedMs, maxStallMs, ok }))
-      }
-
-      if (ok) {
-        log(`"${task.name}" done in ${elapsedMs}ms`)
-      } else {
-        // A failing boot task is a real defect, not QA chatter — always surface it.
-        console.error(`[BootScheduler] "${task.name}" failed after ${elapsedMs}ms:`, error)
-      }
-
-      // A task that held the main process (and therefore every renderer IPC
-      // round-trip) froze the window — report it regardless of the QA toggle so
-      // the next stall is attributable without a repro session.
-      if (maxStallMs >= STALL_WARN_MS) {
-        console.warn(
-          `[BootScheduler] boot task "${task.name}" froze the window for up to ${maxStallMs}ms ` +
-            `(${elapsedMs}ms in total); it needs to yield between steps.`
-        )
-      } else if (elapsedMs >= SLOW_TASK_NOTE_MS) {
-        log(`"${task.name}" took ${elapsedMs}ms in total but never froze the window for more than ${maxStallMs}ms`)
-      }
-
-      // Yield between tasks so the renderer's queued IPC is serviced before the
-      // next heavy pass grabs the event loop.
-      if (queue.length > 0) await delay(gapMs)
+    } catch (e) {
+      // Nothing in the loop should throw (a task's own error is caught above), but if
+      // something does, the drain still has to end: waiters must be released.
+      console.error('[BootScheduler] drain stopped by an unexpected error:', e)
+    } finally {
+      stallProbe.close()
     }
-
-    stallProbe.close()
 
     const totalMs = timings.reduce((sum, t) => sum + t.elapsedMs, 0)
     // Completion is operational state, not QA chatter. Keep this visible even
@@ -338,6 +358,8 @@ export function startBootScheduler(options: BootSchedulerOptions = {}): Promise<
  * observes a fresh scheduler. Not used by the app.
  */
 export function _resetBootSchedulerForTests(): void {
+  activeStallProbe?.close()
+  activeStallProbe = null
   queue = []
   started = false
   settled = false
