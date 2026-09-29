@@ -10,7 +10,9 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
-import { cn, formatDateTime } from '@/lib/utils'
+import { cn, formatDateTime, formatDuration } from '@/lib/utils'
+import { formatSmartDate } from '@/lib/smartDate'
+import { appLocale } from '@/lib/locale'
 import { Meeting, Transcript } from '@/types'
 import type { QualityRating } from '@/types/knowledge'
 import { UnifiedRecording, hasLocalPath, isRecordingBacked } from '@/types/unified-recording'
@@ -177,16 +179,39 @@ function EvaluationWarning({ recording }: { recording: UnifiedRecording }) {
  * One fixed-width place in the row's right cluster. It keeps its width when
  * empty, so every icon sits in the same column on every row and a missing one
  * reads as a gap (owner, 28-sep-2026).
+ *
+ * `hoverReveal` fades the place's contents out until the row is hovered or
+ * focused (Kiro Crew rows): informational glyphs (calendar link, location,
+ * a non-error transcription state) stay out of the way, while the ones that
+ * need attention (stars, warning, error, value, integrity, no-usable-sound)
+ * are always shown. The reserved width never changes, so the columns still
+ * line up down the list whether or not the row is hovered.
  */
-function IconSlot({ name, narrow, children }: { name: string; narrow?: 'hide'; children?: ReactNode }) {
+function IconSlot({ name, narrow, hoverReveal, children }: { name: string; narrow?: 'hide'; hoverReveal?: boolean; children?: ReactNode }) {
   return (
     <span
-      className={`${narrow === 'hide' ? 'hidden @[22rem]:inline-flex' : 'inline-flex'} h-4 w-4 shrink-0 items-center justify-center`}
+      className={[
+        narrow === 'hide' ? 'hidden @[22rem]:inline-flex' : 'inline-flex',
+        'h-4 w-4 shrink-0 items-center justify-center',
+        hoverReveal
+          ? 'opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100'
+          : ''
+      ].filter(Boolean).join(' ')}
       data-slot={name}
     >
       {children}
     </span>
   )
+}
+
+/** Recording start time only ("7:02 PM"), for the right of the compact title
+ *  line. Empty string for a missing/invalid date so the row never shows junk. */
+function clockTime(value: Date | string | null | undefined): string {
+  if (value == null) return ''
+  const d = value instanceof Date ? value : new Date(value)
+  const ms = d.getTime()
+  if (Number.isNaN(ms) || ms <= 0) return ''
+  return d.toLocaleTimeString(appLocale(), { hour: 'numeric', minute: '2-digit' })
 }
 
 /**
@@ -409,6 +434,20 @@ export const SourceRow = memo(function SourceRow({
   const { Icon: TypeIcon, parts: secondaryParts, type: sourceType } = getRowMeta(recording)
   const secondaryText = secondaryParts.join(' \u00B7 ')
 
+  // Compact rows are two lines in the Kiro Crew sessions style: the title with
+  // the start time on the right, then a muted meta line of date, duration and
+  // the recording's kind. The time moves to line one, so the meta line drops it
+  // (and the relative hint) and gains the kind label instead. Non-compact rows
+  // keep the single combined secondary line (date \u00B7 time \u00B7 duration).
+  const timeText = clockTime(recording.dateRecorded)
+  const kindLabel = recording.evalKind ? KIND_LABELS[recording.evalKind] : null
+  const compactMetaText = [
+    formatSmartDate(recording.dateRecorded, { time: false }),
+    sourceType === 'audio' && recording.duration && recording.duration > 0 ? formatDuration(recording.duration) : null,
+    kindLabel
+  ].filter(Boolean).join(' \u00B7 ')
+  const metaText = compact ? compactMetaText : secondaryText
+
   return (
     <TooltipProvider>
       <div
@@ -521,6 +560,15 @@ export const SourceRow = memo(function SourceRow({
                   Personal
                 </span>
               )}
+              {/* Recording start time, right of the title line (compact rows). */}
+              {compact && timeText && (
+                <span
+                  className="ml-auto shrink-0 pl-2 text-xs tabular-nums text-muted-foreground leading-tight"
+                  data-testid="row-time"
+                >
+                  {timeText}
+                </span>
+              )}
             </div>
             <p className="flex items-center gap-1 text-xs text-muted-foreground truncate leading-tight mt-0.5">
               <TypeIcon
@@ -528,7 +576,7 @@ export const SourceRow = memo(function SourceRow({
                 aria-label={`${sourceTypeLabel(sourceType)} source`}
               />
               <span className="truncate">
-                {searchQuery ? highlightText(secondaryText, searchQuery) : secondaryText}
+                {searchQuery ? highlightText(metaText, searchQuery) : metaText}
               </span>
             </p>
           </div>
@@ -553,7 +601,7 @@ export const SourceRow = memo(function SourceRow({
               status, transcription, error. Each keeps its width when empty so the
               columns line up down the list. */}
           {!isDeleting && (
-            <span className="hidden w-36 shrink-0 items-center justify-end gap-1 overflow-hidden @[34rem]:flex" data-slot="labels">
+            <span className="hidden w-36 shrink-0 items-center justify-end gap-1 overflow-hidden @[20rem]:flex" data-slot="labels">
               <AudioLabel recording={recording} />
               <EvaluationLabel recording={recording} />
             </span>
@@ -561,7 +609,7 @@ export const SourceRow = memo(function SourceRow({
           {!isDeleting && <IconSlot name="value"><ValueBadge recording={recording} /></IconSlot>}
           {!isDeleting && <IconSlot name="warning"><EvaluationWarning recording={recording} /></IconSlot>}
           {!isDeleting && <IconSlot name="integrity" narrow="hide"><IntegrityBadge transcript={transcript} /></IconSlot>}
-          {!isDeleting && <IconSlot name="meeting" narrow="hide">{meeting && (
+          {!isDeleting && <IconSlot name="meeting" narrow="hide" hoverReveal>{meeting && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <span
@@ -578,8 +626,8 @@ export const SourceRow = memo(function SourceRow({
               </TooltipContent>
             </Tooltip>
           )}</IconSlot>}
-          {!isDeleting && <IconSlot name="status"><StatusIcon recording={recording} /></IconSlot>}
-          {!isDeleting && <IconSlot name="transcription"><TranscriptionStatusBadge status={recording.transcriptionStatus} compact /></IconSlot>}
+          {!isDeleting && <IconSlot name="status" hoverReveal><StatusIcon recording={recording} /></IconSlot>}
+          {!isDeleting && <IconSlot name="transcription" hoverReveal={recording.transcriptionStatus !== 'error'}><TranscriptionStatusBadge status={recording.transcriptionStatus} compact /></IconSlot>}
           {!isDeleting && <IconSlot name="error">{error && (
             <Tooltip>
               <TooltipTrigger asChild>
