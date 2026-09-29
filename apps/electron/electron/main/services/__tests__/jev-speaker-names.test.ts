@@ -4,7 +4,7 @@
  * @vitest-environment node
  */
 import { describe, it, expect } from 'vitest'
-import { buildSpeakerNameRequest, parseSpeakerNames, MAX_ROSTER } from '../jev-speaker-names'
+import { buildSpeakerNameRequest, jevRoster, parseSpeakerNames, MAX_ROSTER } from '../jev-speaker-names'
 import type { JevResponse } from '../jev-client'
 
 const context = { meetingSubject: 'Avianca weekly', title: null, summary: null, named: ['SPEAKER_02: Ana'], addresses: ['SPEAKER_02: gracias Pedro'] }
@@ -26,6 +26,13 @@ describe('Jev speaker names', () => {
     expect(q.type).toBe('choice')
     expect(Object.keys((q as { criteria: Record<string, unknown> }).criteria)).toEqual(['p1', 'p2', 'none'])
     expect(buildSpeakerNameRequest(speakers, [], context)).toBeNull()
+  })
+
+  it('offers each person once and nobody already named', () => {
+    expect(jevRoster(['Pedro', 'María Ruiz', 'Pedro Gómez', 'Ana López', 'maria'], ['Ana'])).toEqual(['Pedro Gómez', 'María Ruiz'])
+    // a name that only shares a first word with another person stays
+    expect(jevRoster(['Pedro Gómez', 'Pedro Ruiz'], [])).toEqual(['Pedro Gómez', 'Pedro Ruiz'])
+    expect(jevRoster(['José Pérez'], ['Jose Perez'])).toEqual([])
   })
 
   it('caps the roster', () => {

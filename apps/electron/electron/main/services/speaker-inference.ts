@@ -38,7 +38,7 @@ import { resolveContact } from './entity-resolver'
 import { getConfig } from './config'
 import { jevKeyFor } from './jev-settings'
 import { askJev } from './jev-client'
-import { buildSpeakerNameRequest, parseSpeakerNames } from './jev-speaker-names'
+import { buildSpeakerNameRequest, jevRoster, parseSpeakerNames } from './jev-speaker-names'
 
 /** Same auto-link line self-identification uses for resolveContact. */
 const AUTO_LINK_THRESHOLD = 0.8
@@ -220,11 +220,14 @@ function ownerOrgNames(limit = 15): string[] {
   const ownerId = getConfig().identity?.ownerContactId
   if (!ownerId) return []
   const owner = queryOne<{ email: string | null }>('SELECT email FROM contacts WHERE id = ?', [ownerId])
-  const domain = owner?.email?.split('@')[1]?.trim().toLowerCase()
-  if (!domain) return []
+  const email = owner?.email?.trim().toLowerCase() ?? ''
+  const domain = email.slice(email.lastIndexOf('@') + 1)
+  if (!email.includes('@') || !domain) return []
+  // LIKE wildcards in the domain are matched literally.
+  const escaped = domain.replace(/[\\%_]/g, (c) => `\\${c}`)
   return queryAll<{ name: string }>(
-    `SELECT name FROM contacts WHERE lower(email) LIKE ? AND id != ? ORDER BY meeting_count DESC, last_seen_at DESC LIMIT ?`,
-    [`%@${domain}`, ownerId, limit]
+    `SELECT name FROM contacts WHERE lower(email) LIKE ? ESCAPE '\\' AND id != ? ORDER BY meeting_count DESC, last_seen_at DESC LIMIT ?`,
+    [`%@${escaped}`, ownerId, limit]
   ).map((r) => r.name)
 }
 
@@ -330,7 +333,7 @@ export async function runSpeakerInference(
   if (jevKey) {
     const request = buildSpeakerNameRequest(
       unboundSamples.filter((u) => u.label !== '(context from other speakers)'),
-      rosterNames,
+      jevRoster(rosterNames, existing.map((e) => e.name)),
       {
         meetingSubject: meeting?.subject ?? null,
         title: trow?.title_suggestion ?? null,

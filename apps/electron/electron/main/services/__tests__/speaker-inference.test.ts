@@ -157,12 +157,15 @@ describe('runSpeakerInference', () => {
   it('asks Jev instead of the LLM when the Jev job may run, and binds its sure pick', async () => {
     const askJev = vi.fn(async () => ({
       model: 'jev',
-      answers: { s1: { type: 'choice' as const, choice: 'p2', probabilities: { p1: 0.03, p2: 0.95, none: 0.02 }, confidence: 1 } },
+      answers: { s1: { type: 'choice' as const, choice: 'p1', probabilities: { p1: 0.95, none: 0.05 }, confidence: 1 } },
       usage: { input_tokens: 10, output_tokens: 1 }
     }))
     const res = await runSpeakerInference('rec-1', { jevKey: () => 'key', askJev })
     expect(generateText).not.toHaveBeenCalled()
     expect(askJev).toHaveBeenCalledTimes(1)
+    // Sebastián is already on Speaker 1, so Jev is offered only Óscar (and none)
+    const questions = (askJev.mock.calls[0] as unknown[])[2] as Record<string, { criteria: Record<string, string> }>
+    expect(Object.values(questions.s1.criteria).slice(0, -1)).toEqual(['Óscar Pereda'])
     expect(res.bound).toBe(1)
     expect(db.assignments).toEqual([{ label: 'Speaker 5', by: { newName: 'Óscar Pereda' } }])
   })
@@ -170,7 +173,7 @@ describe('runSpeakerInference', () => {
   it('binds nothing when Jev is unsure', async () => {
     const askJev = vi.fn(async () => ({
       model: 'jev',
-      answers: { s1: { type: 'choice' as const, choice: 'p2', probabilities: { p1: 0.4, p2: 0.5, none: 0.1 }, confidence: 0.5 } },
+      answers: { s1: { type: 'choice' as const, choice: 'p1', probabilities: { p1: 0.55, none: 0.45 }, confidence: 0.5 } },
       usage: { input_tokens: 10, output_tokens: 1 }
     }))
     const res = await runSpeakerInference('rec-1', { jevKey: () => 'key', askJev })

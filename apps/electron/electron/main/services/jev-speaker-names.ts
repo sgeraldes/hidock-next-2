@@ -45,6 +45,36 @@ export interface SpeakerNameRequest {
   people: Map<string, string>
 }
 
+function nameWords(name: string): string[] {
+  return name.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
+}
+
+/** True when one name is the other's leading words ("Pedro" and "Pedro Gómez"). */
+function samePerson(a: string, b: string): boolean {
+  const wa = nameWords(a)
+  const wb = nameWords(b)
+  if (wa.length === 0 || wb.length === 0) return false
+  const [short, long] = wa.length <= wb.length ? [wa, wb] : [wb, wa]
+  return short.every((w, i) => long[i] === w)
+}
+
+/**
+ * The people Jev may choose from: one entry per person, and nobody already
+ * named in this recording, so one person can never end up on two speakers.
+ * Spellings of one person collapse into the longest ("Pedro" into "Pedro
+ * Gómez"). Order is kept, so the invitees stay first.
+ */
+export function jevRoster(roster: string[], alreadyNamed: string[]): string[] {
+  const candidates = roster.map((n) => n.trim()).filter(Boolean).filter((n) => !alreadyNamed.some((a) => samePerson(n, a)))
+  const out: string[] = []
+  for (const name of candidates) {
+    const i = out.findIndex((kept) => samePerson(kept, name))
+    if (i === -1) out.push(name)
+    else if (nameWords(name).length > nameWords(out[i]).length) out[i] = name
+  }
+  return out
+}
+
 export function buildSpeakerNameRequest(speakers: SpeakerSample[], roster: string[], context: SpeakerNameContext): SpeakerNameRequest | null {
   const names = [...new Set(roster.map((n) => n.trim()).filter(Boolean))].slice(0, MAX_ROSTER)
   if (names.length === 0 || speakers.length === 0) return null
