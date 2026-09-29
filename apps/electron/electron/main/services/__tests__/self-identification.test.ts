@@ -449,6 +449,15 @@ describe('runSelfIdentificationForRecording — binding', () => {
     expect(mockResolveMention).not.toHaveBeenCalled()
   })
 
+  it('does not mark an excluded recording scanned even when its transcript has no turns', async () => {
+    currentSpeakers = '[]'
+    selfIdExcluded = { ids: new Set(['rec-empty-x']), failClosed: false }
+
+    const result = await runSelfIdentificationForRecording('rec-empty-x', { llm: vi.fn() })
+
+    expect(result.skipped).toBe(true)
+  })
+
   it('fails closed (no LLM) when eligibility cannot be verified', async () => {
     currentSpeakers = JSON.stringify([
       { speaker: 'Speaker 7', start: 0, end: 4, text: 'Yo también Seba, eh, Santiago de la Colina.' }

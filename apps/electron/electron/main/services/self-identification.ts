@@ -666,19 +666,21 @@ export async function runSelfIdentificationForRecording(
     [recordingId]
   )
   const turns = parseSpeakerTurns(trow?.speakers)
-  if (turns.length === 0) {
-    markScanned(recordingId)
-    return { bound: 0, mergeSuspected: 0, skipped: false }
-  }
 
   // RE8-3 (round-8) — MANDATORY internal eligibility gate BEFORE the LLM. The
   // prior design ran this ONLY when the OPTIONAL `shouldPersist` callback was
   // supplied; the production self-id:runForRecording IPC passes only {force}, so
   // a trashed / personal / value-excluded recording's diarized turns went to the
   // LLM (and created contacts/bindings) anyway. Gate here so EVERY caller is
-  // fail-closed. Skip WITHOUT marking scanned so a later restore can self-identify.
+  // fail-closed. Skip WITHOUT marking scanned so a later restore can self-identify
+  // (checked before the empty-turns case too, which would mark it, 29-sep-2026).
   if (!isRecordingEligible(recordingId)) {
     return { bound: 0, mergeSuspected: 0, skipped: true }
+  }
+
+  if (turns.length === 0) {
+    markScanned(recordingId)
+    return { bound: 0, mergeSuspected: 0, skipped: false }
   }
 
   // P2 (round-3) — additional in-flight gate for the pipeline (isRecordingProcessable).
