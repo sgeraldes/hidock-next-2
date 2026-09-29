@@ -17,6 +17,12 @@ import {
 } from '../boot-scheduler'
 
 const silent = { log: () => {} }
+/** A probe that reports the same freeze for every task. */
+const fixedStall = (ms: number, calls: string[] = []) => ({
+  begin: () => { calls.push('begin') },
+  end: () => { calls.push('end'); return ms },
+  close: () => { calls.push('close') }
+})
 
 describe('boot-scheduler', () => {
   beforeEach(() => _resetBootSchedulerForTests())
@@ -158,7 +164,7 @@ describe('boot-scheduler — per-task timing (F15)', () => {
     vi.spyOn(Date, 'now').mockImplementation(() => t)
     registerBootTask({ name: 'hog', run: () => { t += 9000 } })
 
-    await startBootScheduler({ startDelayMs: 0, gapMs: 0, measureStall: () => ({ stop: () => 8800 }), ...silent })
+    await startBootScheduler({ startDelayMs: 0, gapMs: 0, measureStall: () => fixedStall(8800), ...silent })
 
     expect(getBootTaskTimings()[0].elapsedMs).toBe(9000)
     expect(getBootTaskTimings()[0].maxStallMs).toBe(8800)
@@ -178,12 +184,22 @@ describe('boot-scheduler — per-task timing (F15)', () => {
     await startBootScheduler({
       startDelayMs: 0,
       gapMs: 0,
-      measureStall: () => ({ stop: () => 40 }),
+      measureStall: () => fixedStall(40),
       log: (m) => logged.push(m)
     })
 
     expect(warn).not.toHaveBeenCalled()
     expect(logged.some((m) => m.includes('"backup" took 11000ms in total but never froze the window for more than 40ms'))).toBe(true)
+  })
+
+  it('begins and ends the measurement around every task and closes it once at the end', async () => {
+    const calls: string[] = []
+    registerBootTask({ name: 'one', run: () => { calls.push('one') } })
+    registerBootTask({ name: 'two', run: () => { calls.push('two') } })
+
+    await startBootScheduler({ startDelayMs: 0, gapMs: 0, measureStall: () => fixedStall(0, calls), ...silent })
+
+    expect(calls).toEqual(['begin', 'one', 'end', 'begin', 'two', 'end', 'close'])
   })
 
   it('measures a real freeze with the default probe', async () => {

@@ -48,7 +48,6 @@
  * would put a false alarm in the error log on every start (29-sep-2026).
  */
 
-import { monitorEventLoopDelay } from 'perf_hooks'
 import { isQaLogsEnabled } from './qa-logs'
 
 export interface BootTask {
@@ -82,34 +81,49 @@ export interface BootSchedulerOptions {
    */
   log?: (msg: string) => void
   /** Tests: how the longest event-loop freeze during a task is measured. */
-  measureStall?: () => StallProbe | Promise<StallProbe>
+  measureStall?: () => StallProbe
 }
 
-/** Measures the longest event-loop freeze between its start and `stop()`. */
+/**
+ * Measures the longest event-loop freeze during each boot task: a 10 ms timer
+ * that records how late each tick fires. One probe lives for the whole drain.
+ */
 export interface StallProbe {
-  /** Stops measuring and returns the longest freeze, in ms. */
-  stop: () => number | Promise<number>
+  /** Starts a fresh measurement for the next task. */
+  begin: () => void
+  /** Ends it and returns the longest freeze since `begin`, in ms. */
+  end: () => number | Promise<number>
+  /** Stops the probe for good. */
+  close: () => void
 }
 
-const STALL_RESOLUTION_MS = 10
+const STALL_TICK_MS = 10
 
-/** The real probe: Node's event-loop delay histogram (its max is the longest late timer). */
-async function startStallProbe(): Promise<StallProbe> {
-  const histogram = monitorEventLoopDelay({ resolution: STALL_RESOLUTION_MS })
-  histogram.enable()
-  // The histogram ignores its first tick, so a freeze that happens right away
-  // would go unrecorded: let two ticks pass before the task starts.
-  await new Promise((resolve) => setTimeout(resolve, STALL_RESOLUTION_MS * 3))
+/**
+ * The real probe. A task that never yields ends before the loop can fire the
+ * late tick, so `end()` waits two ticks for the freeze to be recorded. (Node's
+ * own monitorEventLoopDelay histogram was tried first: it ignores the first tick
+ * after enable() and after reset(), which swallows exactly the freeze that
+ * starts a task.)
+ */
+function createStallProbe(): StallProbe {
+  let lastTick = performance.now()
+  let maxLateMs = 0
+  const timer = setInterval(() => {
+    const now = performance.now()
+    maxLateMs = Math.max(maxLateMs, now - lastTick - STALL_TICK_MS)
+    lastTick = now
+  }, STALL_TICK_MS)
+  timer.unref()
   return {
-    stop: async () => {
-      // A task that never yielded ends before the loop can fire the late timer:
-      // wait a turn or two so the freeze it caused is recorded.
-      await new Promise((resolve) => setTimeout(resolve, STALL_RESOLUTION_MS * 3))
-      histogram.disable()
-      // The histogram records the whole interval between two timer fires; what
-      // the window lost is the part beyond the resolution.
-      return Math.max(0, Math.round(histogram.max / 1e6 - STALL_RESOLUTION_MS))
-    }
+    begin: () => {
+      maxLateMs = 0
+    },
+    end: async () => {
+      await new Promise((resolve) => setTimeout(resolve, STALL_TICK_MS * 2))
+      return Math.max(0, Math.round(maxLateMs))
+    },
+    close: () => clearInterval(timer)
   }
 }
 
@@ -239,13 +253,15 @@ export function startBootScheduler(options: BootSchedulerOptions = {}): Promise<
   const log =
     options.log ?? ((m: string) => { if (isQaLogsEnabled()) console.log(`[QA-MONITOR][BootScheduler] ${m}`) })
 
+  const stallProbe = (options.measureStall ?? createStallProbe)()
+
   settlePromise = (async () => {
     await delay(startDelayMs)
 
     while (queue.length > 0) {
       const task = queue.shift() as BootTask
       const startedAt = Date.now()
-      const stallProbe = await (options.measureStall ?? startStallProbe)()
+      stallProbe.begin()
       let ok = true
       let error: string | undefined
       try {
@@ -267,7 +283,7 @@ export function startBootScheduler(options: BootSchedulerOptions = {}): Promise<
       }
 
       const elapsedMs = Date.now() - startedAt
-      const maxStallMs = await stallProbe.stop()
+      const maxStallMs = await stallProbe.end()
       timings.push({ name: task.name, startedAt, elapsedMs, maxStallMs, ok, ...(error ? { error } : {}) })
       if (process.env.HIDOCK_BENCH_OUTPUT) {
         console.info('[BootTiming] ' + JSON.stringify({ name: task.name, elapsedMs, maxStallMs, ok }))
@@ -296,6 +312,8 @@ export function startBootScheduler(options: BootSchedulerOptions = {}): Promise<
       // next heavy pass grabs the event loop.
       if (queue.length > 0) await delay(gapMs)
     }
+
+    stallProbe.close()
 
     const totalMs = timings.reduce((sum, t) => sum + t.elapsedMs, 0)
     // Completion is operational state, not QA chatter. Keep this visible even
