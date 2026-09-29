@@ -25,7 +25,7 @@ describe('DecisionsSection', () => {
     expect(screen.getByText(/Key saved/)).toBeInTheDocument()
     expect(screen.getByRole('switch', { name: 'Rate recordings and check transcripts' })).toBeChecked()
     expect(screen.getByRole('switch', { name: 'Match recordings to calendar meetings' })).toBeChecked()
-    expect(screen.getByText('Planned')).toBeInTheDocument()
+    expect(screen.getByRole('switch', { name: 'Name the speakers' })).toBeInTheDocument()
   })
 
   it('turns one job off without touching the others', () => {

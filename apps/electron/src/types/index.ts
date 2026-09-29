@@ -322,6 +322,7 @@ export interface AppConfig {
     jevEnabled: boolean
     jevValue: boolean
     jevMeetingMatch: boolean
+    jevSpeakerNames?: boolean
   }
   /** Settings > Quality checks (mirror of the main-process shape; the main process clamps each value). */
   quality?: {

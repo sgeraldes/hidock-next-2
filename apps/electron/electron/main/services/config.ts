@@ -303,6 +303,8 @@ export interface AppConfig {
     jevValue: boolean
     /** Which calendar meeting a recording is, from what was said. */
     jevMeetingMatch: boolean
+    /** Jev names anonymous speakers from the roster (#27). Absent = on. */
+    jevSpeakerNames?: boolean
   }
   /** Settings > Quality checks: thresholds that were constants (quality-rules.ts reads and clamps them). */
   quality: QualityConfig
@@ -436,7 +438,8 @@ const DEFAULT_CONFIG: AppConfig = {
   decisions: {
     jevEnabled: true,
     jevValue: true,
-    jevMeetingMatch: true
+    jevMeetingMatch: true,
+    jevSpeakerNames: true
   },
   quality: { ...DEFAULT_QUALITY_RULES },
   ui: {

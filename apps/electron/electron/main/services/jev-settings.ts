@@ -5,11 +5,12 @@
 
 import { getConfig } from './config'
 
-export type JevJob = 'value' | 'meetingMatch'
+export type JevJob = 'value' | 'meetingMatch' | 'speakerNames'
 
-const JOB_FLAG: Record<JevJob, 'jevValue' | 'jevMeetingMatch'> = {
+const JOB_FLAG: Record<JevJob, 'jevValue' | 'jevMeetingMatch' | 'jevSpeakerNames'> = {
   value: 'jevValue',
-  meetingMatch: 'jevMeetingMatch'
+  meetingMatch: 'jevMeetingMatch',
+  speakerNames: 'jevSpeakerNames'
 }
 
 /** The Jev key when this job may run, else null. */

@@ -177,6 +177,10 @@ export function Chat() {
   // a temporary drawer so the conversation list stays reachable without crushing the
   // chat column.
   const [historyOpen, setHistoryOpen] = useState(false)
+  // Read by the delayed input auto-focus (a timer, so it needs the live value).
+  const historyOpenRef = useRef(false)
+  historyOpenRef.current = historyOpen
+  const autoFocusedConversationRef = useRef<unknown>(undefined)
 
   // F2 (review finding 2): compact search affordance below @lg — toggles an inline
   // search bar under the header so the wide-mode search input has a narrow-mode
@@ -382,7 +386,15 @@ export function Chat() {
   useEffect(() => {
     if (!initialLoading && !initError) {
       // Small delay to let the DOM settle after state updates
-      const timer = setTimeout(() => inputRef.current?.focus(), 50)
+      // The delayed focus must not pull the user away: never while the history
+      // drawer is open, and on first load only when nothing else has focus yet.
+      const switched = autoFocusedConversationRef.current !== undefined && autoFocusedConversationRef.current !== activeConversation
+      autoFocusedConversationRef.current = activeConversation
+      const timer = setTimeout(() => {
+        if (historyOpenRef.current) return
+        const active = document.activeElement
+        if (switched || !active || active === document.body) inputRef.current?.focus()
+      }, 50)
       return () => clearTimeout(timer)
     }
     return undefined
