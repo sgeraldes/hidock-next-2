@@ -13,7 +13,7 @@ import { DecisionsSection } from '../DecisionsSection'
 beforeEach(() => {
   vi.clearAllMocks()
   config = {
-    transcription: { jevApiKey: '__hidock_saved_secret__' },
+    transcription: { jevApiKey: '__hidock_saved_secret__' }, // pragma: allowlist secret
     decisions: { jevEnabled: true, jevValue: true, jevMeetingMatch: true }
   }
 })

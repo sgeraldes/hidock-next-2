@@ -17,6 +17,7 @@ import { getJensenDevice } from '../services/jensen'
 import { retryPendingFileCleanups } from '../services/recording-deletion-service'
 import { serializeDeviceOperation } from '../services/device-operation-serializer'
 import { emitActivityLog } from '../services/activity-log'
+import { getDownloadService } from '../services/download-service'
 import { geminiLiveTranscription } from '../services/gemini-live-transcription'
 import { RealtimeRecorder, recoverPartialLiveRecordings, type RecorderResult } from '../services/realtime-recorder'
 import { getRecordingsPath } from '../services/file-storage'
@@ -730,6 +731,11 @@ export function registerJensenHandlers(): void {
     // only after the first file-list scan completes (see the jensen:listFiles
     // handler) so a CMD 18 poll can never fire during the connect handshake and
     // desync the protocol.
+  }
+
+  // A download that went silent: the queue decides whether the reconnect retries it.
+  jensen.ontransferstall = ({ filename, received, fileSize }) => {
+    getDownloadService().noteTransferStall(filename, received, fileSize)
   }
 
   jensen.ondisconnect = () => {

@@ -1085,7 +1085,8 @@ export interface ElectronAPI {
     }>
     processDownload: (filename: string, data: number[] | Uint8Array) => Promise<{ success: boolean; filePath?: string; error?: string }>
     updateProgress: (filename: string, bytesReceived: number) => Promise<void>
-    markFailed: (filename: string, error: string) => Promise<void>
+    /** False when the item was already settled (cancelled, or a stall the reconnect retries). */
+    markFailed: (filename: string, error: string) => Promise<boolean>
     clearCompleted: () => Promise<void>
     dismiss: (filename: string) => Promise<boolean>
     cancel: (filename: string) => Promise<{ success: boolean; error?: string }>
