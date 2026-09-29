@@ -31,6 +31,7 @@ import {
   getMeetingById,
   queryOne,
   queryAll,
+  run,
   assignSpeaker,
   resolveMention
 } from './database'
@@ -40,6 +41,26 @@ import { jevKeyFor } from './jev-settings'
 import { askJev } from './jev-client'
 import { buildSpeakerNameRequest, jevRoster, parseSpeakerNames } from './jev-speaker-names'
 import { namingEvidence, type NamingTurn } from './diarization-quality'
+
+/**
+ * Written when the roster has been asked for a recording (or there was nothing
+ * left to ask), by every caller: the pipeline, the backfill and the manual run.
+ * The backfill reads it so a recording is asked once per rule version. Bump the
+ * version to ask again after the rule changes (per-speaker naming, 29-sep-2026).
+ */
+export const INFERENCE_ASKED_KEY_PREFIX = 'speaker_inference:asked:v1:'
+
+export function isInferenceAsked(recordingId: string): boolean {
+  return !!queryOne<{ key: string }>('SELECT key FROM config WHERE key = ?', [`${INFERENCE_ASKED_KEY_PREFIX}${recordingId}`])
+}
+
+function markInferenceAsked(recordingId: string): void {
+  run('INSERT OR REPLACE INTO config (key, value, updated_at) VALUES (?, ?, ?)', [
+    `${INFERENCE_ASKED_KEY_PREFIX}${recordingId}`,
+    new Date().toISOString(),
+    new Date().toISOString()
+  ])
+}
 
 /** Same auto-link line self-identification uses for resolveContact. */
 const AUTO_LINK_THRESHOLD = 0.8
@@ -267,7 +288,11 @@ export async function runSpeakerInference(
 
   const labels = [...new Set(turns.map((t) => t.speaker))]
   const unbound = labels.filter((l) => !boundLabels.has(l))
-  if (unbound.length === 0) return { proposed: 0, bound: 0, skipped: true }
+  if (unbound.length === 0) {
+    // Nothing left to ask: every speaker is named, or none has enough solid turns.
+    markInferenceAsked(recordingId)
+    return { proposed: 0, bound: 0, skipped: true }
+  }
 
   // Roster: meeting attendees (calendar invite) + the meeting's resolved
   // contacts (meeting_contacts — the "Participants From transcripts" list) +
@@ -424,5 +449,6 @@ export async function runSpeakerInference(
     }
   }
 
+  markInferenceAsked(recordingId)
   return { proposed: proposals.length, bound, skipped: false }
 }

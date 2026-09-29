@@ -53,7 +53,7 @@ import { isGenericSpeakerLabel, normalizeName, accentFoldedKey } from './entity-
 import { isRecordingEligible, filterEligibleRecordingIds } from './recording-eligibility'
 import { consolidateVoiceIdentityForSpeaker } from './voice-identity-consolidation'
 import { namingAllowed, namingEvidence, type NamingTurn } from './diarization-quality'
-import { runSpeakerInference } from './speaker-inference'
+import { isInferenceAsked, runSpeakerInference } from './speaker-inference'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -864,7 +864,7 @@ export async function backfillSelfIdentifications(pollMs = 30000): Promise<numbe
   try {
     const ids = loadTranscriptsWithSpeakers()
       .map((r) => r.recording_id)
-      .filter((id) => !isScanned(id))
+      .filter((id) => !isScanned(id) || !isInferenceAsked(id))
     let i = 0
     while (i < ids.length && !backfillStopRequested) {
       if (audioQueueBusy()) {
@@ -873,7 +873,7 @@ export async function backfillSelfIdentifications(pollMs = 30000): Promise<numbe
       }
       const id = ids[i]
       i++
-      if (isScanned(id)) continue
+      if (isScanned(id) && isInferenceAsked(id)) continue
       try {
         // P2 (round-3) — the id list was snapshotted at the start; a recording
         // trashed/personal/purged since then must not have its turns sent to
@@ -882,8 +882,16 @@ export async function backfillSelfIdentifications(pollMs = 30000): Promise<numbe
         // pipeline makes; then self-introductions, then the roster (Jev or LLM)
         // for the speakers still unnamed (per-speaker rule, 29-sep-2026).
         if (!namingAllowed(storedDiarizationQuality(id))) continue
-        await runSelfIdentificationForRecording(id, { shouldPersist: () => isRecordingProcessable(id) })
-        await runSpeakerInference(id, { shouldPersist: () => isRecordingProcessable(id) })
+        // Self-introductions once per recording (its own scanned marker), the
+        // roster once per rule version (runSpeakerInference writes its marker).
+        // A run that could not ask (no roster yet, model unavailable) leaves the
+        // marker off so it is tried again.
+        if (!isScanned(id)) {
+          await runSelfIdentificationForRecording(id, { shouldPersist: () => isRecordingProcessable(id) })
+        }
+        if (!isInferenceAsked(id)) {
+          await runSpeakerInference(id, { shouldPersist: () => isRecordingProcessable(id) })
+        }
         processed++
       } catch (e) {
         console.warn(`[SelfID] backfill failed for ${id}:`, e instanceof Error ? e.message : e)
