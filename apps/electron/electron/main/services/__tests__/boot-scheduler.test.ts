@@ -13,10 +13,17 @@ import {
   isBootDrainActive,
   areBootTasksSettled,
   whenBootTasksSettled,
+  stallFromGap,
   _resetBootSchedulerForTests
 } from '../boot-scheduler'
 
 const silent = { log: () => {} }
+/** A probe that reports the same freeze for every task. */
+const fixedStall = (ms: number, calls: string[] = []) => ({
+  begin: () => { calls.push('begin') },
+  end: () => { calls.push('end'); return ms },
+  close: () => { calls.push('close') }
+})
 
 describe('boot-scheduler', () => {
   beforeEach(() => _resetBootSchedulerForTests())
@@ -150,19 +157,83 @@ describe('boot-scheduler — per-task timing (F15)', () => {
     expect(timings[1].ok).toBe(true)
   })
 
-  it('always warns about a task slow enough to freeze the window, even with QA logs off', async () => {
+  it('always warns about a task that froze the window, even with QA logs off', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    // 3000ms is the warn threshold; fake the clock rather than actually stalling.
+    // Fake the clock and the freeze measurement rather than actually stalling.
     const realNow = Date.now
     let t = realNow()
     vi.spyOn(Date, 'now').mockImplementation(() => t)
     registerBootTask({ name: 'hog', run: () => { t += 9000 } })
 
-    await startBootScheduler({ startDelayMs: 0, gapMs: 0, ...silent })
+    await startBootScheduler({ startDelayMs: 0, gapMs: 0, measureStall: () => fixedStall(8800), ...silent })
 
     expect(getBootTaskTimings()[0].elapsedMs).toBe(9000)
+    expect(getBootTaskTimings()[0].maxStallMs).toBe(8800)
     expect(warn).toHaveBeenCalledTimes(1)
-    expect(String(warn.mock.calls[0][0])).toContain('SLOW boot task "hog" took 9000ms')
+    expect(String(warn.mock.calls[0][0])).toContain('boot task "hog" froze the window for up to 8800ms (9000ms in total)')
+  })
+
+  it('does not warn about a long task that yielded, and notes it in the QA log only', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const logged: string[] = []
+    const realNow = Date.now
+    let t = realNow()
+    vi.spyOn(Date, 'now').mockImplementation(() => t)
+    // The database backup: 11 s in total, 40 ms at worst between yields.
+    registerBootTask({ name: 'backup', run: async () => { t += 11000 } })
+
+    await startBootScheduler({
+      startDelayMs: 0,
+      gapMs: 0,
+      measureStall: () => fixedStall(40),
+      log: (m) => logged.push(m)
+    })
+
+    expect(warn).not.toHaveBeenCalled()
+    expect(logged.some((m) => m.includes('"backup" took 11000ms in total but never froze the window for more than 40ms'))).toBe(true)
+  })
+
+  it('begins and ends the measurement around every task and closes it once at the end', async () => {
+    const calls: string[] = []
+    registerBootTask({ name: 'one', run: () => { calls.push('one') } })
+    registerBootTask({ name: 'two', run: () => { calls.push('two') } })
+
+    await startBootScheduler({ startDelayMs: 0, gapMs: 0, measureStall: () => fixedStall(0, calls), ...silent })
+
+    expect(calls).toEqual(['begin', 'one', 'end', 'begin', 'two', 'end', 'close'])
+  })
+
+  it('counts a late tick as a freeze but ignores a suspend-sized gap', () => {
+    expect(stallFromGap(10)).toBe(0)
+    expect(stallFromGap(1510)).toBe(1500)
+    expect(stallFromGap(59_999)).toBe(59_989)
+    // laptop lid closed for ten minutes
+    expect(stallFromGap(600_000)).toBe(0)
+  })
+
+  it('ends the drain, releases waiters and closes the probe even when the probe throws', async () => {
+    const calls: string[] = []
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    registerBootTask({ name: 'one', run: () => { calls.push('one') } })
+    const gate = whenBootTasksSettled(5000)
+    const broken = { begin: () => { throw new Error('probe broke') }, end: () => 0, close: () => { calls.push('close') } }
+
+    await startBootScheduler({ startDelayMs: 0, gapMs: 0, measureStall: () => broken, ...silent })
+
+    await expect(gate).resolves.toBeUndefined()
+    expect(isBootDrainActive()).toBe(false)
+    expect(calls).toEqual(['close'])
+  })
+
+  it('measures a real freeze with the default probe', async () => {
+    registerBootTask({ name: 'spin', run: () => { const end = performance.now() + 250; while (performance.now() < end) { /* hold the loop */ } } })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await startBootScheduler({ startDelayMs: 0, gapMs: 0, ...silent })
+
+    const stall = getBootTaskTimings()[0].maxStallMs
+    expect(stall).toBeGreaterThanOrEqual(150)
+    expect(warn).not.toHaveBeenCalled() // 250 ms is below the 1 s warn line
   })
 })
 
