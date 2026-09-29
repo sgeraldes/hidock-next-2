@@ -38,6 +38,7 @@ import { getStoragePolicyService } from './services/storage-policy'
 import { setMainWindowForMigration } from './ipc/migration-handlers'
 import { setMainWindowForValueBackfill } from './services/value-backfill'
 import { acquireSingleInstanceLock } from './single-instance'
+import { logWindow } from './services/error-log'
 import { startBootScheduler } from './services/boot-scheduler'
 import { registerGatedBootTasks } from './services/boot-tasks'
 import { isFeatureEnabled, captureBootEffectiveFeatures, getBootEffectiveFeatures } from './services/feature-gate'
@@ -128,6 +129,7 @@ function createWindow(): void {
     }
   })
   startup.mainWindow = mainWindow
+  if (startup.errorLog) logWindow(startup.errorLog, mainWindow.webContents)
 
   mainWindowReveal = revealMainWindow(mainWindow, {
     closeSplash,

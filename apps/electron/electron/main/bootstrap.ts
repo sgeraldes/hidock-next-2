@@ -4,6 +4,7 @@ import { acquireSingleInstanceLock } from './single-instance'
 import { createSplashWindow } from './splash-screen'
 import { configureEarlyStartup } from './startup-configuration'
 import { getStartupState } from './startup-state'
+import { createErrorLog, logWindow, teeMainConsole } from './services/error-log'
 
 const startup = getStartupState()
 startup.runtimeDir = __dirname
@@ -48,12 +49,23 @@ startup.hasSingleInstanceLock = brainOnly
     })
 
 if (startup.hasSingleInstanceLock) {
+  // Before anything else logs: warnings and errors also go to a dated file in
+  // the profile, so a failure can be read back after the fact.
+  try {
+    startup.errorLog = createErrorLog(join(app.getPath('userData'), 'logs'))
+    startup.errorLog.prune()
+    teeMainConsole(startup.errorLog)
+  } catch (err) {
+    console.error('[error-log] could not start the log file:', err)
+  }
+
   app.whenReady().then(async () => {
     // This entry intentionally imports no database, AI, graph, transcription,
     // or renderer application modules. Show a useful frame first; the splash's
     // renderer process stays responsive while the main process evaluates the
     // heavier application chunk.
     startup.splashWindow = await createSplashWindow(join(__dirname, '../preload/splash.js'))
+    if (startup.errorLog && startup.splashWindow) logWindow(startup.errorLog, startup.splashWindow.webContents)
     await import('./index')
   }).catch((error) => {
     console.error('[Startup] Application bootstrap failed:', error)

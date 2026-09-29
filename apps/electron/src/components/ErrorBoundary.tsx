@@ -23,7 +23,8 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error('ErrorBoundary caught an error:', error, errorInfo)
+    // Plain strings, so the error log on disk gets the stack and the component stack.
+    console.error(`ErrorBoundary caught an error: ${error?.stack ?? String(error)}\nComponent stack:${errorInfo.componentStack ?? ''}`)
   }
 
   render() {
