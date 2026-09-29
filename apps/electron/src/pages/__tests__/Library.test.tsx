@@ -35,6 +35,9 @@ vi.mock('@/services/device-sync-actions', () => ({
 
 const toastMock = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() }))
 const integrityHarness = vi.hoisted(() => ({ filter: null as string | null, set: vi.fn(), search: '' }))
+// Lets a test drive the persisted view mode (compact vs card) through the store
+// mock. Defaults to 'compact' so existing tests are unaffected.
+const viewHarness = vi.hoisted(() => ({ viewMode: 'compact' as 'compact' | 'card' }))
 vi.mock('@/components/ui/toaster', () => ({ toast: toastMock }))
 
 // Mock hooks
@@ -156,7 +159,7 @@ vi.mock('@/store/useLibraryStore', () => ({
       setStatusFilter: vi.fn(),
       searchQuery: integrityHarness.search,
       setSearchQuery: vi.fn(),
-      viewMode: 'compact',
+      viewMode: viewHarness.viewMode,
       sortBy: 'date',
       sortOrder: 'desc',
       sourceTypeFilter: 'all',
@@ -395,7 +398,9 @@ describe('Library', () => {
       renderLibrary()
 
       await waitFor(() => {
-        expect(scrollHarness.scrollToIndex).toHaveBeenCalledWith(3, { align: 'auto' })
+        // A "Today" group header occupies virtualizer index 0, so recording
+        // index 3 sits at list index 4 in the virtualizer's own item list.
+        expect(scrollHarness.scrollToIndex).toHaveBeenCalledWith(4, { align: 'auto' })
       })
     })
 
@@ -561,6 +566,9 @@ describe('Library', () => {
       })
       const view = renderLibrary()
 
+      // Recent (today) dates so the rows fall in the visible "Today" group
+      // rather than behind "Show older"; descending so the date-desc sort keeps
+      // the split children adjacent in the intended order.
       vi.mocked(useUnifiedRecordings).mockReturnValue({
         recordings: [
           {
@@ -568,7 +576,7 @@ describe('Library', () => {
             id: 'duplicate-parent-id',
             filename: 'part-1.flac',
             meetingSubject: 'External meeting',
-            dateRecorded: new Date('2026-08-18T18:46:00'),
+            dateRecorded: new Date(Date.now() - 1 * 60_000),
             duration: 2815
           },
           {
@@ -576,14 +584,14 @@ describe('Library', () => {
             id: 'duplicate-parent-id',
             filename: 'part-2.flac',
             meetingSubject: 'External meeting',
-            dateRecorded: new Date('2026-08-18T18:45:00'),
+            dateRecorded: new Date(Date.now() - 2 * 60_000),
             duration: 2819
           },
           {
             ...mockRecording,
             id: 'after-parent',
             filename: 'after.wav',
-            dateRecorded: new Date('2026-08-18T18:44:00')
+            dateRecorded: new Date(Date.now() - 3 * 60_000)
           }
         ],
         loading: false,
@@ -601,14 +609,20 @@ describe('Library', () => {
       await waitFor(() => {
         expect(screen.getAllByText('External meeting')).toHaveLength(2)
       })
-      expect(virtualizerHarness.options?.getItemKey?.(0)).toBe('duplicate-parent-id::part-1.flac')
-      expect(virtualizerHarness.options?.getItemKey?.(1)).toBe('duplicate-parent-id::part-2.flac')
-      expect(virtualizerHarness.options?.getItemKey?.(2)).toBe('after-parent')
+      // A "Today" group header now occupies virtualizer index 0, so the row keys
+      // start at index 1. The dedup-by-filename behaviour (same id → distinct
+      // filename-qualified keys, distinct fixed tracks) is unchanged.
+      expect(virtualizerHarness.options?.getItemKey?.(0)).toBe('group:today')
+      expect(virtualizerHarness.options?.getItemKey?.(1)).toBe('duplicate-parent-id::part-1.flac')
+      expect(virtualizerHarness.options?.getItemKey?.(2)).toBe('duplicate-parent-id::part-2.flac')
+      expect(virtualizerHarness.options?.getItemKey?.(3)).toBe('after-parent')
       expect(virtualizerHarness.measureElement).not.toHaveBeenCalled()
+      // data-index stays the RECORDING index (0,1,2); the 28px header offsets the
+      // fixed 48px row tracks that follow it.
       const rows = [0, 1, 2].map((index) => document.querySelector<HTMLElement>(`[data-index="${index}"]`))
-      expect(rows[0]).toHaveStyle({ height: '48px', top: '0px' })
-      expect(rows[1]).toHaveStyle({ height: '48px', top: '48px' })
-      expect(rows[2]).toHaveStyle({ height: '48px', top: '96px' })
+      expect(rows[0]).toHaveStyle({ height: '48px', top: '28px' })
+      expect(rows[1]).toHaveStyle({ height: '48px', top: '76px' })
+      expect(rows[2]).toHaveStyle({ height: '48px', top: '124px' })
       expect(rows.every((row) => row?.style.transform === '')).toBe(true)
       expect(new Set(rows.map((row) => row?.style.top)).size).toBe(3)
     })
@@ -933,3 +947,201 @@ describe('Library — transcript integrity labels', () => {
     )
   })
 })
+
+describe('Library — time groups and Show older', () => {
+  const recent = {
+    ...mockRecording,
+    id: 'recent-1',
+    filename: 'recent.wav',
+    title: 'Recent one',
+    localPath: '/p/recent.wav',
+    dateRecorded: new Date()
+  }
+  // Two calendar months back is always in the "Older" bucket (before this month).
+  const older = {
+    ...mockRecording,
+    id: 'older-1',
+    filename: 'older.wav',
+    title: 'Old one',
+    localPath: '/p/older.wav',
+    dateRecorded: new Date(Date.now() - 62 * 24 * 60 * 60 * 1000)
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    integrityHarness.filter = null
+    integrityHarness.search = ''
+    scrollHarness.selectedSourceId = null
+    scrollHarness.scrollToIndex.mockClear()
+    viewHarness.viewMode = 'compact'
+    vi.mocked(window.electronAPI.transcripts.getByRecordingIdsOwner).mockResolvedValue({})
+    vi.mocked(window.electronAPI.meetings.getByIds).mockResolvedValue({})
+    vi.mocked(window.electronAPI.recordings.getTrash).mockResolvedValue([])
+    vi.mocked(window.electronAPI.recordings.backfillDurations).mockResolvedValue({ success: true })
+    vi.mocked(useUnifiedRecordings).mockReturnValue({
+      recordings: [recent, older],
+      loading: false,
+      error: null,
+      refresh: mockRefresh,
+      deviceConnected: false,
+      stats: { total: 2, deviceOnly: 0, localOnly: 2, both: 0, synced: 2, unsynced: 0, onSource: 0, locallyAvailable: 2 }
+    } as any)
+  })
+
+  it('renders a Today group header and hides older recordings behind Show older', async () => {
+    render(<MemoryRouter><Library /></MemoryRouter>)
+
+    // The recent row and its group header are shown; the older row is hidden.
+    await waitFor(() => expect(screen.getByText('Recent one')).toBeInTheDocument())
+    const headers = screen.getAllByTestId('library-group-header').map((el) => el.textContent)
+    expect(headers).toContain('Today')
+    expect(screen.queryByText('Old one')).not.toBeInTheDocument()
+    // The gate offers to reveal the one hidden older recording.
+    expect(screen.getByTestId('show-older')).toHaveTextContent('Show older (1)')
+  })
+
+  it('reveals the older recordings and their Older header on Show older', async () => {
+    render(<MemoryRouter><Library /></MemoryRouter>)
+
+    await waitFor(() => expect(screen.getByTestId('show-older')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('show-older'))
+
+    await waitFor(() => expect(screen.getByText('Old one')).toBeInTheDocument())
+    const headers = screen.getAllByTestId('library-group-header').map((el) => el.textContent)
+    expect(headers).toContain('Older')
+    // Once revealed, the button is gone (nothing left to show).
+    expect(screen.queryByTestId('show-older')).not.toBeInTheDocument()
+  })
+
+  // Fix 1: a search whose only matches are in the hidden "older" group must
+  // show them (the gate is a default-view convenience only). Before the fix the
+  // list came back empty and the Show-older button — living inside the non-empty
+  // branch — never appeared, stranding the user on "no matches".
+  it('shows older matches when a search only hits older recordings', async () => {
+    const olderMatch = {
+      ...mockRecording,
+      id: 'older-match',
+      filename: 'older-match.wav',
+      title: 'Old archive one',
+      // The search token lives in a field that is NOT the row's visible title,
+      // so the asserted title text isn't split by search highlighting.
+      summary: 'zephyrquxtoken',
+      localPath: '/p/older-match.wav',
+      dateRecorded: new Date(Date.now() - 62 * 24 * 60 * 60 * 1000)
+    }
+    vi.mocked(useUnifiedRecordings).mockReturnValue({
+      recordings: [recent, olderMatch],
+      loading: false,
+      error: null,
+      refresh: mockRefresh,
+      deviceConnected: false,
+      stats: { total: 2, deviceOnly: 0, localOnly: 2, both: 0, synced: 2, unsynced: 0, onSource: 0, locallyAvailable: 2 }
+    } as any)
+    // A token that only the older recording's corpus contains.
+    integrityHarness.search = 'zephyrquxtoken'
+
+    render(<MemoryRouter><Library /></MemoryRouter>)
+
+    // The older match is shown despite living in the "older" bucket, and the
+    // recent non-match is filtered out by the search.
+    await waitFor(() => expect(screen.getByText('Old archive one')).toBeInTheDocument())
+    expect(screen.queryByText('Recent one')).not.toBeInTheDocument()
+    // With a search active nothing is hidden, so the Show-older gate is absent.
+    expect(screen.queryByTestId('show-older')).not.toBeInTheDocument()
+  })
+
+  // Fix 2: opening/deep-linking a recording in the hidden "older" group must
+  // reveal its row (and let the reveal/scroll effect find it), never leave it
+  // hidden behind the gate.
+  it('reveals and scrolls to an opened recording that lives in the older group', async () => {
+    scrollHarness.selectedSourceId = 'older-1'
+
+    render(<MemoryRouter><Library /></MemoryRouter>)
+
+    // The opened older row is now visible (its Older section was revealed). The
+    // selected recording also appears in the reader panel, so match all.
+    await waitFor(() => expect(screen.getAllByText('Old one').length).toBeGreaterThan(0))
+    // ...and the reveal/scroll effect located it in the virtualized list.
+    await waitFor(() => expect(scrollHarness.scrollToIndex).toHaveBeenCalled())
+    // Nothing is left hidden, so the Show-older gate is gone.
+    expect(screen.queryByTestId('show-older')).not.toBeInTheDocument()
+  })
+
+  // Fix 4: an undated (null/invalid dateRecorded) recording must be treated as
+  // Older for BOTH the bucket and the gate — hidden by default, counted by
+  // Show older, and grouped under the Older header once revealed. Before the
+  // fix it slipped through the gate as visible while being bucketed under Older.
+  it('buckets and counts undated recordings consistently under Older', async () => {
+    const undated = {
+      ...mockRecording,
+      id: 'undated-1',
+      filename: 'undated.wav',
+      title: 'Undated one',
+      localPath: '/p/undated.wav',
+      dateRecorded: null
+    }
+    vi.mocked(useUnifiedRecordings).mockReturnValue({
+      recordings: [recent, undated],
+      loading: false,
+      error: null,
+      refresh: mockRefresh,
+      deviceConnected: false,
+      stats: { total: 2, deviceOnly: 0, localOnly: 2, both: 0, synced: 2, unsynced: 0, onSource: 0, locallyAvailable: 2 }
+    } as any)
+
+    render(<MemoryRouter><Library /></MemoryRouter>)
+
+    // Hidden by default, and counted by the gate (consistent with genuine older).
+    await waitFor(() => expect(screen.getByText('Recent one')).toBeInTheDocument())
+    expect(screen.queryByText('Undated one')).not.toBeInTheDocument()
+    expect(screen.getByTestId('show-older')).toHaveTextContent('Show older (1)')
+
+    // Revealed under the Older header once the gate opens.
+    fireEvent.click(screen.getByTestId('show-older'))
+    await waitFor(() => expect(screen.getByText('Undated one')).toBeInTheDocument())
+    const headers = screen.getAllByTestId('library-group-header').map((el) => el.textContent)
+    expect(headers).toContain('Older')
+  })
+
+  // When every recording is older (early in a month), the gate must not leave an
+  // empty library with no Show older button: it shows them all.
+  it('shows every recording when all of them are older', async () => {
+    const old = { ...mockRecording, id: 'old-only', filename: 'old.wav', title: 'Old only', localPath: '/p/old.wav', dateRecorded: null }
+    vi.mocked(useUnifiedRecordings).mockReturnValue({
+      recordings: [old],
+      loading: false,
+      error: null,
+      refresh: mockRefresh,
+      deviceConnected: false,
+      stats: { total: 1, deviceOnly: 0, localOnly: 1, both: 0, synced: 1, unsynced: 0, onSource: 0, locallyAvailable: 1 }
+    } as any)
+
+    render(<MemoryRouter><Library /></MemoryRouter>)
+
+    await waitFor(() => expect(screen.getByText('Old only')).toBeInTheDocument())
+    expect(screen.queryByTestId('show-older')).not.toBeInTheDocument()
+  })
+
+  // Fix 5: card view lost its pinned sticky date-group header when the row-list
+  // refactor landed (listItems is empty in card view, so topDateGroup stayed
+  // null). It must derive the group straight from displayedRecordings again.
+  it('renders the sticky date-group header in card view', async () => {
+    viewHarness.viewMode = 'card'
+    vi.mocked(useUnifiedRecordings).mockReturnValue({
+      recordings: [recent],
+      loading: false,
+      error: null,
+      refresh: mockRefresh,
+      deviceConnected: false,
+      stats: { total: 1, deviceOnly: 0, localOnly: 1, both: 0, synced: 1, unsynced: 0, onSource: 0, locallyAvailable: 1 }
+    } as any)
+
+    render(<MemoryRouter><Library /></MemoryRouter>)
+
+    await waitFor(() => {
+      const pinned = screen.getByTestId('library-date-group')
+      expect(pinned).toHaveTextContent('Today')
+    })
+  })
+})
+
