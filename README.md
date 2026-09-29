@@ -67,6 +67,8 @@ npm run test:run
 npm run build
 ```
 
+Warnings and errors from the app and its window go to a file per day, kept 14 days, in the `logs` folder of the app profile: `logs\hidock-YYYY-MM-DD.log`. On Windows the profile is `%APPDATA%\hidock-universal-knowledge-hub` when it was created before 2.0, otherwise Electron's `userData` folder for HiDock Next. Attach the day's file when you report a problem.
+
 Contributions are welcome. Please read [the app contribution guide](apps/electron/CONTRIBUTING.md) and open an issue before starting a broad architectural change.
 
 ## Related project

@@ -38,6 +38,7 @@ import { getStoragePolicyService } from './services/storage-policy'
 import { setMainWindowForMigration } from './ipc/migration-handlers'
 import { setMainWindowForValueBackfill } from './services/value-backfill'
 import { acquireSingleInstanceLock } from './single-instance'
+import { createErrorLog, logWindow, teeMainConsole, type ErrorLog } from './services/error-log'
 import { startBootScheduler } from './services/boot-scheduler'
 import { registerGatedBootTasks } from './services/boot-tasks'
 import { isFeatureEnabled, captureBootEffectiveFeatures, getBootEffectiveFeatures } from './services/feature-gate'
@@ -54,6 +55,8 @@ const startup = getStartupState()
 configureEarlyStartup() // idempotent fallback when this module is launched directly in tests/tools
 const runtimeDir = startup.runtimeDir ?? __dirname
 let mainWindow: BrowserWindow | null = startup.mainWindow
+// Warnings and errors on disk, <userData>/logs (set once the instance lock is held).
+let errorLog: ErrorLog | null = null
 let splashWindow: BrowserWindow | null = startup.splashWindow
 let mainWindowReveal: Promise<WindowRevealReason | null> | null = null
 
@@ -128,6 +131,7 @@ function createWindow(): void {
     }
   })
   startup.mainWindow = mainWindow
+  if (errorLog) logWindow(errorLog, mainWindow.webContents)
 
   mainWindowReveal = revealMainWindow(mainWindow, {
     closeSplash,
@@ -304,6 +308,15 @@ app.whenReady().then(async () => {
   // 'ready' event still races the pending quit — this process must never touch
   // the shared database file.
   if (!hasSingleInstanceLock) return
+
+  // Before anything else logs: warnings and errors also go to a dated file.
+  try {
+    errorLog = createErrorLog(join(app.getPath('userData'), 'logs'))
+    errorLog.prune()
+    teeMainConsole(errorLog)
+  } catch (err) {
+    console.error('[error-log] could not start the log file:', err)
+  }
 
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.hidock.meeting-intelligence')
