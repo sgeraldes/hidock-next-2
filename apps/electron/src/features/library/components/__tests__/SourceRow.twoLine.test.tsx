@@ -70,15 +70,13 @@ describe('SourceRow compact — two-line Kiro Crew layout', () => {
   })
 })
 
-describe('SourceRow compact — icons hidden until hover unless they need attention', () => {
-  it('fades the calendar link, location and a clean transcription state until hover/focus', () => {
+describe('SourceRow compact — every icon is visible without hovering', () => {
+  it('shows the calendar link, the location and the transcription state at rest', () => {
     const { container } = render(<SourceRow recording={base} meeting={meeting} compact />)
-    const hoverGated = ['meeting', 'status', 'transcription']
-    for (const name of hoverGated) {
+    for (const name of ['meeting', 'status', 'transcription']) {
       const slot = container.querySelector(`[data-slot="${name}"]`)
       expect(slot, name).not.toBeNull()
-      expect(slot?.className, name).toContain('opacity-0')
-      expect(slot?.className, name).toContain('group-hover:opacity-100')
+      expect(slot?.className, name).not.toContain('opacity-0')
     }
   })
 
