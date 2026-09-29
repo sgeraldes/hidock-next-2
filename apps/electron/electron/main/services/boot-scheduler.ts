@@ -38,11 +38,17 @@
  * for tens of seconds and freeze the window on its own. Every task is therefore
  * timed and the record kept in memory (`getBootTaskTimings()`), so a stall can be
  * attributed to a specific task instead of guessed at. The per-task lines are QA
- * logs (gated on the QA Logs toggle, see services/qa-logs.ts), but a task that
- * runs longer than `SLOW_TASK_WARN_MS` always warns — a boot task holding the
- * main process that long is a defect, not debug chatter.
+ * logs (gated on the QA Logs toggle, see services/qa-logs.ts).
+ *
+ * What always warns is a FREEZE, not a long task: while a task runs the
+ * scheduler measures how late the event loop's timer fires, and a task that
+ * held the loop for `STALL_WARN_MS` or more is a defect. Total time is not the
+ * signal. The database backup takes 11 s, but it copies 8 MB per step and
+ * yields between steps, so the window never froze; warning on its wall time
+ * would put a false alarm in the error log on every start (29-sep-2026).
  */
 
+import { monitorEventLoopDelay } from 'perf_hooks'
 import { isQaLogsEnabled } from './qa-logs'
 
 export interface BootTask {
@@ -71,10 +77,40 @@ export interface BootSchedulerOptions {
   gapMs?: number
   /**
    * Optional logger override. Defaults to a QA-gated `[QA-MONITOR]` logger, so
-   * per-task chatter only appears when the QA Logs toggle is on. Slow-task
+   * per-task chatter only appears when the QA Logs toggle is on. Freeze
    * warnings and task failures bypass this and always print.
    */
   log?: (msg: string) => void
+  /** Tests: how the longest event-loop freeze during a task is measured. */
+  measureStall?: () => StallProbe | Promise<StallProbe>
+}
+
+/** Measures the longest event-loop freeze between its start and `stop()`. */
+export interface StallProbe {
+  /** Stops measuring and returns the longest freeze, in ms. */
+  stop: () => number | Promise<number>
+}
+
+const STALL_RESOLUTION_MS = 10
+
+/** The real probe: Node's event-loop delay histogram (its max is the longest late timer). */
+async function startStallProbe(): Promise<StallProbe> {
+  const histogram = monitorEventLoopDelay({ resolution: STALL_RESOLUTION_MS })
+  histogram.enable()
+  // The histogram ignores its first tick, so a freeze that happens right away
+  // would go unrecorded: let two ticks pass before the task starts.
+  await new Promise((resolve) => setTimeout(resolve, STALL_RESOLUTION_MS * 3))
+  return {
+    stop: async () => {
+      // A task that never yielded ends before the loop can fire the late timer:
+      // wait a turn or two so the freeze it caused is recorded.
+      await new Promise((resolve) => setTimeout(resolve, STALL_RESOLUTION_MS * 3))
+      histogram.disable()
+      // The histogram records the whole interval between two timer fires; what
+      // the window lost is the part beyond the resolution.
+      return Math.max(0, Math.round(histogram.max / 1e6 - STALL_RESOLUTION_MS))
+    }
+  }
 }
 
 /** One completed boot task's timing record. */
@@ -85,6 +121,8 @@ export interface BootTaskTiming {
   startedAt: number
   /** Wall-clock ms the task held the scheduler (await included). */
   elapsedMs: number
+  /** Longest event-loop freeze while the task ran: how long the window could not respond. */
+  maxStallMs: number
   /** False when the task threw; the scheduler continues either way. */
   ok: boolean
   /** Error message when `ok` is false. */
@@ -95,11 +133,13 @@ const DEFAULT_START_DELAY_MS = 4000
 const DEFAULT_GAP_MS = 1500
 
 /**
- * A boot task busier than this owns the main process (and therefore blocks ALL
- * renderer IPC) long enough for the window to be reported "Not Responding", so
- * it is surfaced regardless of the QA Logs toggle.
+ * A boot task that holds the main process this long without yielding blocks ALL
+ * renderer IPC: the window stutters, and past a few seconds it is reported "Not
+ * Responding". Surfaced regardless of the QA Logs toggle.
  */
-const SLOW_TASK_WARN_MS = 3000
+const STALL_WARN_MS = 1000
+/** A task that takes this long in total, freeze or not, is noted in the QA log. */
+const SLOW_TASK_NOTE_MS = 3000
 
 let queue: BootTask[] = []
 let started = false
@@ -205,6 +245,7 @@ export function startBootScheduler(options: BootSchedulerOptions = {}): Promise<
     while (queue.length > 0) {
       const task = queue.shift() as BootTask
       const startedAt = Date.now()
+      const stallProbe = await (options.measureStall ?? startStallProbe)()
       let ok = true
       let error: string | undefined
       try {
@@ -226,9 +267,10 @@ export function startBootScheduler(options: BootSchedulerOptions = {}): Promise<
       }
 
       const elapsedMs = Date.now() - startedAt
-      timings.push({ name: task.name, startedAt, elapsedMs, ok, ...(error ? { error } : {}) })
+      const maxStallMs = await stallProbe.stop()
+      timings.push({ name: task.name, startedAt, elapsedMs, maxStallMs, ok, ...(error ? { error } : {}) })
       if (process.env.HIDOCK_BENCH_OUTPUT) {
-        console.info('[BootTiming] ' + JSON.stringify({ name: task.name, elapsedMs, ok }))
+        console.info('[BootTiming] ' + JSON.stringify({ name: task.name, elapsedMs, maxStallMs, ok }))
       }
 
       if (ok) {
@@ -238,15 +280,16 @@ export function startBootScheduler(options: BootSchedulerOptions = {}): Promise<
         console.error(`[BootScheduler] "${task.name}" failed after ${elapsedMs}ms:`, error)
       }
 
-      // A task this slow held the main process (and therefore every renderer IPC
-      // round-trip) long enough to freeze the window — report it regardless of
-      // the QA toggle so the next stall is attributable without a repro session.
-      if (elapsedMs >= SLOW_TASK_WARN_MS) {
+      // A task that held the main process (and therefore every renderer IPC
+      // round-trip) froze the window — report it regardless of the QA toggle so
+      // the next stall is attributable without a repro session.
+      if (maxStallMs >= STALL_WARN_MS) {
         console.warn(
-          `[BootScheduler] SLOW boot task "${task.name}" took ${elapsedMs}ms ` +
-            `(>= ${SLOW_TASK_WARN_MS}ms); the UI is unresponsive for any part of that ` +
-            `spent without yielding.`
+          `[BootScheduler] boot task "${task.name}" froze the window for up to ${maxStallMs}ms ` +
+            `(${elapsedMs}ms in total); it needs to yield between steps.`
         )
+      } else if (elapsedMs >= SLOW_TASK_NOTE_MS) {
+        log(`"${task.name}" took ${elapsedMs}ms in total but never froze the window for more than ${maxStallMs}ms`)
       }
 
       // Yield between tasks so the renderer's queued IPC is serviced before the
