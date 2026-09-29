@@ -70,8 +70,10 @@ import {
   activateCalendarSyncToken,
   createProcessingRun,
   completeProcessingRun,
+  failProcessingRun,
   retireGeneratedContentForNoSpeech,
   getActiveProcessingRunsForRecording,
+  getProcessingRunsForRecording,
   enrichRecordingScheduleMetadata,
   getCandidatesForRecording,
   addRecordingMeetingCandidate,
@@ -848,6 +850,33 @@ describe('Database Service', () => {
       expect(JSON.parse(saved[0].quality_json!)).toEqual({ coverageRatio: 0.42 })
       expect(saved[0].duration_ms).toEqual(expect.any(Number))
       expect(saved[0].duration_ms).toBeGreaterThanOrEqual(0)
+    })
+
+    it('stores the tokens and the cost estimate of a run, also when it ends failed or cancelled', () => {
+      seedRecording('rec-cost')
+      const usage = { usage: { tokens: { calls: 2, promptTokens: 9000 } }, estimatedCostAmount: 0.0123, estimatedCostCurrency: 'USD', costMethod: 'list-price-2026-09-29' }
+
+      const done = createProcessingRun({ recordingId: 'rec-cost', stage: 'summary', provider: 'gemini', model: 'gemini-3.8-flash', execution: 'cloud' })
+      completeProcessingRun(done.id, usage)
+      const failed = createProcessingRun({ recordingId: 'rec-cost', stage: 'timeline-analysis', provider: 'gemini', model: 'gemini-3.8-flash', execution: 'cloud' })
+      failProcessingRun(failed.id, 'window scoring failed', false, usage)
+      const cancelled = createProcessingRun({ recordingId: 'rec-cost', stage: 'actionable-detection', provider: 'gemini', model: 'gemini-3.8-flash', execution: 'cloud' })
+      failProcessingRun(cancelled.id, 'became ineligible', true, usage)
+      const free = createProcessingRun({ recordingId: 'rec-cost', stage: 'vad', provider: 'hidock-next', execution: 'local' })
+      failProcessingRun(free.id, 'no audio')
+
+      const byStage = Object.fromEntries(getProcessingRunsForRecording('rec-cost').map((r) => [r.stage, r]))
+      for (const stage of ['summary', 'timeline-analysis', 'actionable-detection']) {
+        expect(byStage[stage].estimated_cost_amount).toBeCloseTo(0.0123, 6)
+        expect(byStage[stage].estimated_cost_currency).toBe('USD')
+        expect(byStage[stage].cost_method).toBe('list-price-2026-09-29')
+        expect(JSON.parse(byStage[stage].usage_json!)).toEqual(usage.usage)
+      }
+      expect(byStage['timeline-analysis'].status).toBe('failed')
+      expect(byStage['actionable-detection'].status).toBe('cancelled')
+      // a run that cost nothing keeps its columns empty
+      expect(byStage.vad.usage_json).toBeNull()
+      expect(byStage.vad.estimated_cost_amount).toBeNull()
     })
 
     it('persists every temporal meeting candidate before transcription', () => {

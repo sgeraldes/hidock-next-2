@@ -7393,10 +7393,32 @@ export function completeProcessingRun(id: string, result: CompleteProcessingRunI
   )
 }
 
-export function failProcessingRun(id: string, message: string, cancelled = false): void {
+/**
+ * Ends a run as failed or cancelled. `usage` is what the run cost before it
+ * ended: a failed or cancelled call was still billed, and its tokens stay on
+ * the run.
+ */
+export function failProcessingRun(
+  id: string,
+  message: string,
+  cancelled = false,
+  usage: Pick<CompleteProcessingRunInput, 'usage' | 'estimatedCostAmount' | 'estimatedCostCurrency' | 'costMethod'> = {}
+): void {
   run(
-    `UPDATE processing_runs SET status = ?, completed_at = ?, error_message = ? WHERE id = ?`,
-    [cancelled ? 'cancelled' : 'failed', new Date().toISOString(), message.slice(0, 2000), id]
+    `UPDATE processing_runs SET status = ?, completed_at = ?, error_message = ?,
+       usage_json = COALESCE(?, usage_json), estimated_cost_amount = COALESCE(?, estimated_cost_amount),
+       estimated_cost_currency = COALESCE(?, estimated_cost_currency), cost_method = COALESCE(?, cost_method)
+     WHERE id = ?`,
+    [
+      cancelled ? 'cancelled' : 'failed',
+      new Date().toISOString(),
+      message.slice(0, 2000),
+      usage.usage ? JSON.stringify(usage.usage) : null,
+      usage.estimatedCostAmount ?? null,
+      usage.estimatedCostCurrency ?? null,
+      usage.costMethod ?? null,
+      id
+    ]
   )
 }
 

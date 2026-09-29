@@ -1924,12 +1924,13 @@ export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
         execution: reanalysisHasGemini ? 'cloud' : 'local'
       })
       let analysis: TranscriptAnalysis
+      const reanalysisUsage = createGeminiUsageCollector()
       try {
-        analysis = await analyzeTranscriptWithGemini(row.full_text, [], () =>
-          isRecordingEligible(row.recording_id)
+        analysis = await reanalysisUsage.run(() =>
+          analyzeTranscriptWithGemini(row.full_text, [], () => isRecordingEligible(row.recording_id))
         )
       } catch (error) {
-        failProcessingRun(summaryRun.id, error instanceof Error ? error.message : String(error))
+        failProcessingRun(summaryRun.id, error instanceof Error ? error.message : String(error), false, runUsageFields(reanalysisUsage.total()))
         throw error
       }
 
@@ -1938,7 +1939,7 @@ export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
       // block the heal. Skips the UPDATE, capture-ensure, value-apply, and wiki
       // re-export below.
       if (!isRecordingGraphIngestable(row.recording_id)) {
-        failProcessingRun(summaryRun.id, 'Recording became ineligible during analysis', true)
+        failProcessingRun(summaryRun.id, 'Recording became ineligible during analysis', true, runUsageFields(reanalysisUsage.total()))
         console.log(`[Reanalyze] Recording ${row.recording_id} became ineligible mid-analysis — heal skipped`)
         continue
       }
@@ -1948,14 +1949,16 @@ export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
         completeProcessingRun(summaryRun.id, {
           status: 'degraded',
           qualityStatus: 'failed',
-          quality: { reason: 'Analysis returned no usable summary' }
+          quality: { reason: 'Analysis returned no usable summary' },
+          ...runUsageFields(reanalysisUsage.total())
         })
         console.warn(`[Reanalyze] Analysis still failing for ${row.recording_id}, leaving row as-is`)
         continue
       }
 
       completeProcessingRun(summaryRun.id, {
-        outputRefs: { summary: `trans_${row.recording_id}.summary` }
+        outputRefs: { summary: `trans_${row.recording_id}.summary` },
+        ...runUsageFields(reanalysisUsage.total())
       })
       const titleRun = createProcessingRun({
         recordingId: row.recording_id,
@@ -2576,7 +2579,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
       ...runUsageFields(summaryUsage.total())
     })
   } catch (error) {
-    failProcessingRun(summaryRun.id, error instanceof Error ? error.message : String(error))
+    failProcessingRun(summaryRun.id, error instanceof Error ? error.message : String(error), false, runUsageFields(summaryUsage.total()))
     throw error
   }
   const titleRun = createProcessingRun({
@@ -2932,7 +2935,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
       }
     } catch (error) {
       console.error('[Actionable Detection] Failed to create actionables:', error)
-      failProcessingRun(actionableRun.id, error instanceof Error ? error.message : String(error))
+      failProcessingRun(actionableRun.id, error instanceof Error ? error.message : String(error), false, runUsageFields(actionableUsage.total()))
       // Don't fail the transcription if actionable detection fails
     }
   }
@@ -2952,12 +2955,12 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     execution: resolveGeminiApiKey() ? 'provider-managed' : 'local',
     parentRunIds: [summaryRun.id, actionableRun.id]
   })
+  const timelineUsage = createGeminiUsageCollector()
   try {
     // RE-1 — re-check adjacent to the write.
     if (stillProcessable()) {
       // P2 (round-3) — also thread the gate INTO analyzeTimeline so its own
       // internal sentiment-LLM await is covered (re-checked before its UPDATE).
-      const timelineUsage = createGeminiUsageCollector()
       const timeline = await timelineUsage.run(() =>
         analyzeTimeline(recordingId, undefined, undefined, () => isRecordingProcessable(recordingId))
       )
@@ -2980,7 +2983,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     }
   } catch (e) {
     console.error('[Timeline] Timeline analysis failed (non-fatal):', e instanceof Error ? e.message : e)
-    failProcessingRun(timelineRun.id, e instanceof Error ? e.message : String(e))
+    failProcessingRun(timelineRun.id, e instanceof Error ? e.message : String(e), false, runUsageFields(timelineUsage.total()))
   }
 
   // Persist the project extracted from the conversation. Mentioned names are
