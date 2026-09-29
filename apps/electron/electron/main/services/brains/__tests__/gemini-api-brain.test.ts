@@ -34,6 +34,7 @@ vi.mock('@google/generative-ai', () => ({
 }))
 
 import { GeminiApiBrain, resolveGeminiApiKey } from '../gemini-api-brain'
+import { createGeminiUsageCollector } from '../../gemini-usage'
 
 describe('GeminiApiBrain', () => {
   let brain: GeminiApiBrain
@@ -154,6 +155,34 @@ describe('GeminiApiBrain', () => {
       const controller = new AbortController()
       await brain.chat([{ role: 'user', content: 'q' }], { signal: controller.signal })
       expect(mockGenerateContent.mock.calls[0][1]).toEqual({ signal: controller.signal })
+    })
+  })
+
+  describe('usage', () => {
+    beforeEach(() => {
+      mockConfig.transcription.geminiApiKey = 'key-1' // pragma: allowlist secret
+    })
+
+    it('reports the tokens of generate and chat to the active collector, under the model used', async () => {
+      const usageMetadata = { promptTokenCount: 1200, candidatesTokenCount: 80, totalTokenCount: 1280 }
+      mockGenerateContent.mockResolvedValue({ response: { text: () => 'ok', usageMetadata } })
+      const collector = createGeminiUsageCollector()
+
+      await collector.run(async () => {
+        await brain.generate([{ role: 'user', content: 'hi' }], { model: 'gemini-3.8-flash' })
+        await brain.chat([{ role: 'user', content: 'hi' }])
+      })
+
+      const total = collector.total()!
+      expect(total.tokens).toMatchObject({ calls: 2, promptTokens: 2400, outputTokens: 160 })
+      expect(Object.keys(total.byModel).sort()).toEqual(['gemini-3.8-flash', 'gemini-chat-model'])
+    })
+
+    it('does nothing extra outside a collector, and when the response has no usage', async () => {
+      await expect(brain.generate([{ role: 'user', content: 'hi' }])).resolves.toBe('gemini text')
+      const collector = createGeminiUsageCollector()
+      await collector.run(() => brain.generate([{ role: 'user', content: 'hi' }])) // default mock has no usageMetadata
+      expect(collector.total()).toBeNull()
     })
   })
 

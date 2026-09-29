@@ -30,6 +30,7 @@
 
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import { CURRENT_GEMINI_CHAT_MODEL } from './gemini-model-ids'
+import { recordGeminiUsage } from './gemini-usage'
 import { getRecordingById, resolveRecordingId, queryOne, queryAll, run } from './database'
 import { isRecordingEligible } from './recording-eligibility'
 import { eligibleToGenerate } from './brains/eligibility'
@@ -570,7 +571,8 @@ export const geminiWindowScorer: WindowScorer = async (windows, shouldGenerate) 
   if (!eligibleToGenerate(shouldGenerate)) return new Map()
 
   const genAI = new GoogleGenerativeAI(apiKey)
-  const model = genAI.getGenerativeModel({ model: config.chat?.geminiModel || CURRENT_GEMINI_CHAT_MODEL })
+  const modelId = config.chat?.geminiModel || CURRENT_GEMINI_CHAT_MODEL
+  const model = genAI.getGenerativeModel({ model: modelId })
 
   const windowBlock = windows
     .map((w) => `#${w.index} [${formatClock(w.startSec)}-${formatClock(w.endSec)}]\n${w.text}`)
@@ -593,6 +595,7 @@ ${windowBlock}`
     contents: [{ role: 'user', parts: [{ text: prompt }] }],
     generationConfig: { maxOutputTokens: 4096, thinkingConfig: { thinkingBudget: 0 } } as never
   })
+  recordGeminiUsage(modelId, result.response.usageMetadata)
 
   let text = ''
   try {
