@@ -125,8 +125,19 @@ interface NativeWordInfo {
   end_offset?: string
 }
 
+/** Passes one response's usage to the caller; a failing sink never affects the transcription. */
+function reportUsage(sink: TranscribeOptions['onUsage'], model: string, usage: unknown): void {
+  if (!sink || usage == null) return
+  try {
+    sink({ model, usage })
+  } catch {
+    // Accounting must never change provider behavior.
+  }
+}
+
 interface NativeTranscriptionInteraction {
   status: string
+  usage?: unknown
   output_text?: string
   steps?: Array<{
     content?: Array<{
@@ -1191,6 +1202,7 @@ export class GeminiEngine implements TranscriptionEngine {
             timeout: GeminiEngine.INTERACTION_REQUEST_TIMEOUT_MS,
             maxRetries: 0,
           }) as unknown as NativeTranscriptionInteraction
+          reportUsage(options.onUsage, this.model, interaction.usage)
           trace({
             phase: 'provider-transcription',
             status: 'completed',
@@ -1330,7 +1342,8 @@ export class GeminiEngine implements TranscriptionEngine {
     previousInteractionId: string | undefined,
     context: string,
     shouldGenerate?: () => boolean,
-    repair = false
+    repair = false,
+    onUsage?: TranscribeOptions['onUsage']
   ): Promise<{ segments: TranscriptSegment[]; interactionId: string }> {
     const splitRange = async (): Promise<{ segments: TranscriptSegment[]; interactionId: string }> => {
       if (endSec - startSec <= 60) {
@@ -1347,7 +1360,9 @@ export class GeminiEngine implements TranscriptionEngine {
         source,
         previousInteractionId,
         context,
-        shouldGenerate
+        shouldGenerate,
+        false,
+        onUsage
       )
       const right = await this.transcribeInteractionRange(
         genAI,
@@ -1357,7 +1372,9 @@ export class GeminiEngine implements TranscriptionEngine {
         source,
         left.interactionId,
         context,
-        shouldGenerate
+        shouldGenerate,
+        false,
+        onUsage
       )
       return { segments: [...left.segments, ...right.segments], interactionId: right.interactionId }
     }
@@ -1406,7 +1423,9 @@ Calendar and meeting context are spelling hints only; never invent speech from t
       id: string
       status: 'in_progress' | 'requires_action' | 'completed' | 'failed' | 'cancelled' | 'incomplete'
       steps?: Array<{ type: string; content?: Array<{ type: string; text?: string }> }>
+      usage?: unknown
     }
+    reportUsage(onUsage, this.model, interaction.usage)
 
     if (interaction.status === 'incomplete') return splitRange()
     if (interaction.status !== 'completed') {
@@ -1442,7 +1461,8 @@ Calendar and meeting context are spelling hints only; never invent speech from t
           previousInteractionId,
           context,
           shouldGenerate,
-          true
+          true,
+          onUsage
         )
       }
       return splitRange()
@@ -1468,7 +1488,8 @@ Calendar and meeting context are spelling hints only; never invent speech from t
           previousInteractionId,
           context,
           shouldGenerate,
-          true
+          true,
+          onUsage
         )
       }
       console.warn(
@@ -1504,7 +1525,9 @@ Calendar and meeting context are spelling hints only; never invent speech from t
           options.source,
           previousInteractionId,
           options.context ?? '',
-          shouldGenerate
+          shouldGenerate,
+          false,
+          options.onUsage
         )
         previousInteractionId = result.interactionId
         // Ranges share one conversation (previousInteractionId), so the model
@@ -1689,9 +1712,17 @@ Return ONLY the schema-constrained JSON, with no markdown or additional commenta
         })
         let out = ''
         let finishReason: string | undefined
-        for await (const streamChunk of stream) {
-          out += streamChunk.text ?? ''
-          finishReason = streamChunk.candidates?.[0]?.finishReason ?? finishReason
+        let usage: unknown
+        try {
+          for await (const streamChunk of stream) {
+            out += streamChunk.text ?? ''
+            finishReason = streamChunk.candidates?.[0]?.finishReason ?? finishReason
+            // The usage totals ride the last chunks; keep the latest.
+            usage = streamChunk.usageMetadata ?? usage
+          }
+        } finally {
+          // Billed whether or not the stream ended cleanly.
+          reportUsage(options.onUsage, generationModel, usage)
         }
         return {
           text: normalizeGeminiTranscriptResponse(out),
