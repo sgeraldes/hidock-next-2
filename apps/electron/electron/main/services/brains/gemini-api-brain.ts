@@ -18,6 +18,7 @@ import { getConfig } from '../config'
 import { CURRENT_GEMINI_CHAT_MODEL } from '../gemini-model-ids'
 import { languageFor } from '../transcription-language'
 import { getBrainCredentialStore } from './brain-credential-store'
+import { recordGeminiUsage } from '../gemini-usage'
 import type {
   AIBrain,
   AudioAnalyzeInput,
@@ -86,8 +87,9 @@ export class GeminiApiBrain implements AIBrain {
 
     const config = getConfig()
     const genAI = new GoogleGenerativeAI(apiKey)
+    const modelId = opts.model || config.chat.geminiModel || DEFAULT_MODEL
     const model = genAI.getGenerativeModel({
-      model: opts.model || config.chat.geminiModel || DEFAULT_MODEL,
+      model: modelId,
       ...(opts.systemPrompt ? { systemInstruction: opts.systemPrompt } : {}),
     })
 
@@ -111,6 +113,7 @@ export class GeminiApiBrain implements AIBrain {
       request as never,
       opts.signal ? { signal: opts.signal } : {}
     )
+    recordGeminiUsage(modelId, result.response.usageMetadata)
     return result.response.text()
   }
 
@@ -126,8 +129,9 @@ export class GeminiApiBrain implements AIBrain {
 
     const config = getConfig()
     const genAI = new GoogleGenerativeAI(apiKey)
+    const modelId = opts.model || config.chat.geminiModel || DEFAULT_MODEL
     const model = genAI.getGenerativeModel({
-      model: opts.model || config.chat.geminiModel || DEFAULT_MODEL,
+      model: modelId,
       ...(opts.systemPrompt ? { systemInstruction: opts.systemPrompt } : {}),
     })
 
@@ -156,6 +160,7 @@ export class GeminiApiBrain implements AIBrain {
       },
       opts.signal ? { signal: opts.signal } : {}
     )
+    recordGeminiUsage(modelId, result.response.usageMetadata)
     return result.response.text()
   }
 

@@ -172,6 +172,7 @@ import { removeRecordingFromGraph } from './knowledge-graph-service'
 import { analyzeTimeline } from './timeline-analysis'
 import { applyTranscriptEntities } from './org-reconciler'
 import { runSelfIdentificationForRecording } from './self-identification'
+import { createGeminiUsageCollector, recordGeminiUsage, runUsageFields } from './gemini-usage'
 import { runSpeakerInference } from './speaker-inference'
 import { getEmbeddingsService } from './embeddings'
 
@@ -1465,7 +1466,8 @@ async function analyzeTranscriptWithGemini(
   // don't fit the string-returning AIBrain.generate contract, so this analysis
   // path keeps its direct SDK usage — full delegation is deferred to a later phase.
   const genAI = new GoogleGenerativeAI(resolveGeminiApiKey())
-  const model = genAI.getGenerativeModel({ model: config.chat?.geminiModel || CURRENT_GEMINI_CHAT_MODEL })
+  const analysisModelId = config.chat?.geminiModel || CURRENT_GEMINI_CHAT_MODEL
+  const model = genAI.getGenerativeModel({ model: analysisModelId })
 
   let meetingSelectionSection = ''
   if (candidateMeetings.length > 1) {
@@ -1627,6 +1629,8 @@ Respond in JSON format:
         generationConfig: attempt.generationConfig as never
       })
       const response = analysisResult.response
+      // Both attempts are billed, so each response is reported.
+      recordGeminiUsage(analysisModelId, response.usageMetadata)
       let analysisText = ''
       try {
         analysisText = response.text()
@@ -2560,11 +2564,17 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     parentRunIds: [transcriptionRun.id, diarizationRun.id]
   })
   let analysis: TranscriptAnalysis
+  // One Gemini call feeds the summary, title and meeting-resolution stages; its
+  // tokens and cost are recorded on the summary run only, so sums stay right.
+  const summaryUsage = createGeminiUsageCollector()
   try {
-    analysis = await analyzeTranscriptWithGemini(fullText, candidateMeetings, () =>
-      stillWanted(recordingId)
+    analysis = await summaryUsage.run(() =>
+      analyzeTranscriptWithGemini(fullText, candidateMeetings, () => stillWanted(recordingId))
     )
-    completeProcessingRun(summaryRun.id, { outputRefs: { summary: `trans_${recordingId}.summary` } })
+    completeProcessingRun(summaryRun.id, {
+      outputRefs: { summary: `trans_${recordingId}.summary` },
+      ...runUsageFields(summaryUsage.total())
+    })
   } catch (error) {
     failProcessingRun(summaryRun.id, error instanceof Error ? error.message : String(error))
     throw error
@@ -2848,6 +2858,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     )
     completeProcessingRun(actionableRun.id, { outputRefs: { skipped: 'value-excluded', detected: 0 } })
   } else {
+    const actionableUsage = createGeminiUsageCollector()
     try {
       const knowledgeCapture = queryOne<{ id: string }>(
         'SELECT id FROM knowledge_captures WHERE source_recording_id = ?',
@@ -2855,10 +2866,12 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
       )
       const sourceKnowledgeId = knowledgeCapture?.id || recordingId
 
-      const detections = await detectActionables(fullText, sourceKnowledgeId, {
-        title: analysis.title_suggestion,
-        questions: analysis.question_suggestions
-      })
+      const detections = await actionableUsage.run(() =>
+        detectActionables(fullText, sourceKnowledgeId, {
+          title: analysis.title_suggestion,
+          questions: analysis.question_suggestions
+        })
+      )
 
       // CX-T2-1: detectActionables is an async LLM call — the pre-check above
       // is stale by the time it resolves. Re-check eligibility FRESH before
@@ -2906,13 +2919,15 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
           console.log(`[Actionable Detection] Created ${detections.length} actionables for ${recordingId}`)
         }
         completeProcessingRun(actionableRun.id, {
-          outputRefs: { detected: detections.length, persisted: detections.length }
+          outputRefs: { detected: detections.length, persisted: detections.length },
+          ...runUsageFields(actionableUsage.total())
         })
       }
       if (!stillProcessable() || isValueExcludedRecording(recordingId)) {
         completeProcessingRun(actionableRun.id, {
           status: 'cancelled',
-          outputRefs: { skipped: 'recording-became-ineligible', detected: detections.length }
+          outputRefs: { skipped: 'recording-became-ineligible', detected: detections.length },
+          ...runUsageFields(actionableUsage.total())
         })
       }
     } catch (error) {
@@ -2942,8 +2957,9 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     if (stillProcessable()) {
       // P2 (round-3) — also thread the gate INTO analyzeTimeline so its own
       // internal sentiment-LLM await is covered (re-checked before its UPDATE).
-      const timeline = await analyzeTimeline(recordingId, undefined, undefined, () =>
-        isRecordingProcessable(recordingId)
+      const timelineUsage = createGeminiUsageCollector()
+      const timeline = await timelineUsage.run(() =>
+        analyzeTimeline(recordingId, undefined, undefined, () => isRecordingProcessable(recordingId))
       )
       console.log(
         `[Timeline] Recording ${recordingId}: ${timeline.sentimentSegments.length} sentiment segment(s), ` +
@@ -2953,7 +2969,8 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
         outputRefs: {
           sentimentSegments: timeline.sentimentSegments.length,
           eventMarkers: timeline.eventMarkers.length
-        }
+        },
+        ...runUsageFields(timelineUsage.total())
       })
     } else {
       completeProcessingRun(timelineRun.id, {
