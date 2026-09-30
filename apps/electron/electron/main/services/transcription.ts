@@ -153,6 +153,7 @@ import {
   neutralizeDelimiters
 } from './value-classification'
 import { namingAllowed, parseAndAssessDiarization } from './diarization-quality'
+import { scheduleEvaluationCatchup } from './evaluation-catchup'
 import { analyzeAudioPreflight, type AudioPreflightReport } from './audio-preflight'
 import { readAudioDuration } from './audio-duration'
 import { minRecordingSeconds, qualityRules } from './quality-rules'
@@ -2823,6 +2824,9 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   // joined transcript, so the badge showed "Not transcribed" over a real
   // transcript. Advance status on the SAME row the transcript is attached to.
   updateRecordingStatus(recordingId, 'complete')
+  // Jev evaluation (stars, kind) for this recording and any recent one that
+  // missed it. Runs in the background: the pipeline never waits for Jev.
+  scheduleEvaluationCatchup()
   // Durability: a completed transcript is an expensive artifact (API cost + time),
   // so we force a synchronous flush to guarantee it survives a crash. But a full
   // sql.js export on EVERY completion blocks the main thread for seconds once the

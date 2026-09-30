@@ -21,6 +21,7 @@ import { backfillKnowledgeCaptures } from './knowledge-capture-backfill'
 import { backfillAudioProfiles } from './audio-profile-store'
 import { getQueueState, startTranscriptionProcessor } from './transcription'
 import { recomputeAudioWarnings } from './value-classification'
+import { scheduleEvaluationCatchup } from './evaluation-catchup'
 import { backfillMeetingWiki } from './meeting-wiki'
 import { getVectorStore } from './vector-store'
 
@@ -134,6 +135,16 @@ export const BOOT_TASK_DEFS: GatedBootTask[] = [
       } catch (e) {
         console.error('[Evaluation] warning refresh error:', e)
       }
+    },
+  },
+  {
+    // Recent recordings that have no Jev evaluation yet, so their Library chip
+    // (stars, kind) shows without the Settings scan. Starts in the background
+    // and returns at once: the scheduler never waits for Jev.
+    name: 'evaluation-catchup',
+    feature: 'transcription',
+    run: () => {
+      scheduleEvaluationCatchup()
     },
   },
   {

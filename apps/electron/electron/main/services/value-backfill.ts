@@ -2,7 +2,8 @@
  * Resumable value-classification backfill for the ~1,900 already-transcribed
  * captures (F16/spec-003, Part G). User-triggered from Settings ONLY — this
  * module is NEVER registered in boot-tasks.ts and never runs on Library
- * mount. (F15/F16 rationale: the owner has been burned repeatedly by heavy
+ * mount. (Recordings of the last few weeks that have no Jev evaluation are
+ * handled apart, one at a time, by evaluation-catchup.ts.) (F15/F16 rationale: the owner has been burned repeatedly by heavy
  * boot-time work freezing the app on a 1.6 GB / ~1,900-capture real DB; this
  * runner makes up to ~1,900 LLM calls, which must only ever happen because
  * the user explicitly asked for it, chunked and yielded so the renderer never
@@ -301,7 +302,7 @@ function countEligibleCaptures(withEvaluation: boolean): number {
  * no reserve, no attempt consumed, no marker — so if the flag is later
  * reverted, a future run picks the capture up with its counter untouched.
  */
-function isCapturePrivacyBlocked(captureId: string): boolean {
+export function isCapturePrivacyBlocked(captureId: string): boolean {
   const row = queryOne<{ personal: number; r_deleted: string | null; kc_deleted: string | null }>(
     `SELECT COALESCE(r.personal, 0) AS personal,
             r.deleted_at AS r_deleted,
@@ -657,6 +658,11 @@ export interface StartValueBackfillResult {
   started: boolean
   reason?: 'no-provider' | 'already-running'
   total?: number
+}
+
+/** True while the Settings scan is running; the catch-up waits for it. */
+export function isValueBackfillRunning(): boolean {
+  return running
 }
 
 /**
