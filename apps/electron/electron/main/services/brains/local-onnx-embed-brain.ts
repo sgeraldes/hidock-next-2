@@ -28,6 +28,7 @@ import type {
   EmbedOptions,
   GenerateOptions,
 } from './types'
+import { caps, type HarnessDescriptor } from './descriptor'
 
 const CAPABILITIES: ReadonlySet<BrainCapability> = new Set<BrainCapability>(['embed'])
 
@@ -37,6 +38,21 @@ export class LocalOnnxEmbedBrain implements AIBrain {
 
   capabilities(): ReadonlySet<BrainCapability> {
     return CAPABILITIES
+  }
+
+  descriptor(): HarnessDescriptor {
+    return {
+      id: this.id,
+      label: this.label,
+      kind: 'local',
+      vendor: 'local',
+      dataLeavesMachine: false,
+      latency: 'fast',
+      capabilities: caps('embedding'),
+      effort: { kind: 'none' },
+      needs: 'model-files',
+      modelSelectable: false
+    }
   }
 
   /** Local fs check only — cheap, cached by the caller's standards, never throws. */

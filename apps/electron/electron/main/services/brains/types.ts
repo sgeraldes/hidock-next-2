@@ -14,6 +14,8 @@
  * anywhere — including config.ts — without pulling in Electron/SDK code.
  */
 
+import type { HarnessDescriptor, ModelInfo } from './descriptor'
+
 export type BrainId =
   | 'gemini-api' // @google/generative-ai (current cloud path)
   | 'ollama' // local (current fallback)
@@ -22,6 +24,7 @@ export type BrainId =
   | 'codex' // @openai/codex-sdk                (Phase 3)
   | 'gemini-cli' // @google/gemini-cli               (Phase 4)
   | 'kiro' // kiro-cli headless (AWS Kiro CLI)  (Phase 5)
+  | 'openai-compatible' // any OpenAI-protocol server: LM Studio, llama.cpp, vLLM (pipeline phase 1)
 
 export type BrainCapability =
   | 'generate' // one-shot text generation
@@ -182,6 +185,10 @@ export interface AIBrain {
   capabilities(): ReadonlySet<BrainCapability>
   /** Cheap, cached; never throws. Drives Settings status + router availability. */
   authStatus(): Promise<BrainAuthStatus>
+  /** What this brain can do and costs, in the words the pipeline uses. See descriptor.ts. */
+  descriptor?(): HarnessDescriptor
+  /** The models this brain offers, when it can list them. Never throws; `[]` when it cannot. */
+  listModels?(): Promise<ModelInfo[]>
 
   generate(messages: BrainMessage[], opts?: GenerateOptions): Promise<string | null>
   chat(messages: BrainMessage[], opts?: GenerateOptions): Promise<string | null>

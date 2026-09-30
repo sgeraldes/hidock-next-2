@@ -18,6 +18,8 @@ import type {
   EmbedOptions,
   GenerateOptions,
 } from './types'
+import { caps, type HarnessDescriptor, type ModelInfo } from './descriptor'
+import { recordHarnessUsage } from './harness-usage'
 
 const CAPABILITIES: ReadonlySet<BrainCapability> = new Set<BrainCapability>([
   'generate',
@@ -31,6 +33,21 @@ export class OllamaBrain implements AIBrain {
 
   capabilities(): ReadonlySet<BrainCapability> {
     return CAPABILITIES
+  }
+
+  descriptor(): HarnessDescriptor {
+    return {
+      id: this.id,
+      label: this.label,
+      kind: 'local',
+      vendor: 'local',
+      dataLeavesMachine: false,
+      latency: 'medium',
+      capabilities: caps('text', 'embedding'),
+      effort: { kind: 'none' },
+      needs: 'running-server',
+      modelSelectable: true
+    }
   }
 
   async authStatus(): Promise<BrainAuthStatus> {
@@ -47,22 +64,44 @@ export class OllamaBrain implements AIBrain {
     }
   }
 
+  async listModels(): Promise<ModelInfo[]> {
+    try {
+      const names = await getOllamaService().listModels()
+      return names.map((id) => ({ id }))
+    } catch {
+      return []
+    }
+  }
+
   async generate(messages: BrainMessage[], opts: GenerateOptions = {}): Promise<string | null> {
     const prompt = messages
       .filter((m) => m.role !== 'system')
       .map((m) => m.content)
       .join('\n\n')
     const systemPrompt = opts.systemPrompt ?? messages.find((m) => m.role === 'system')?.content
-    return getOllamaService().generate(prompt, systemPrompt)
+    const startedAt = Date.now()
+    const usage = { inputTokens: undefined as number | undefined, outputTokens: undefined as number | undefined }
+    const out = await getOllamaService().generate(prompt, systemPrompt, {
+      model: opts.model,
+      onUsage: (u) => Object.assign(usage, u)
+    })
+    recordHarnessUsage({ harness: this.id, model: opts.model, ...usage, durationMs: Date.now() - startedAt })
+    return out
   }
 
   async chat(messages: BrainMessage[], opts: GenerateOptions = {}): Promise<string | null> {
-    return getOllamaService().chat(messages, {
+    const startedAt = Date.now()
+    const usage = { inputTokens: undefined as number | undefined, outputTokens: undefined as number | undefined }
+    const out = await getOllamaService().chat(messages, {
       systemPrompt: opts.systemPrompt,
       temperature: opts.temperature,
       maxTokens: opts.maxTokens,
       signal: opts.signal,
+      model: opts.model,
+      onUsage: (u) => Object.assign(usage, u)
     })
+    recordHarnessUsage({ harness: this.id, model: opts.model, ...usage, durationMs: Date.now() - startedAt })
+    return out
   }
 
   /**

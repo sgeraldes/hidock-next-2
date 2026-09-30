@@ -76,6 +76,9 @@ Gaps: rows 8, 9, 10, 13, 14, 15, 17, 27 and all transcription engines bypass the
 only `taskRouting.embed`; `FALLBACK_CHAINS` omits `kiro`; `getOllamaService()` caches URL and models on
 first use with no reset; `GenerateOptions.model` exists and no production caller sets it.
 
+Harnesses as of phase 1: eight brains (`openai-compatible` added), six audio engines and Jev described in
+`brains/descriptor.ts`, `brains/engine-descriptors.ts` and listed by `brains/harness-catalog.ts`.
+
 ## Sequence for one recording (`transcribeRecording`, `transcription.ts:2133`)
 
 1. gates and metadata (duration, `vad`); 2. `diarization` and `voice-id`; 3. `transcription`;

@@ -6,10 +6,12 @@
  *
  * @vitest-environment node
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { ClaudeCodeBrain, LEAN_CLAUDE_ARGS, resolveClaudeCommand } from '../claude-code-brain'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { ClaudeCodeBrain, LEAN_CLAUDE_ARGS, parseClaudeOutput, resolveClaudeCommand } from '../claude-code-brain'
 import type { SpawnFn } from '../cli-runner'
 import { makeFakeSpawn, type FakeSpawnScript } from './fake-spawn'
+import { createHarnessUsageCollector } from '../harness-usage'
+import { isBrainCoolingDown, _resetBrainCooldownsForTests } from '../brain-cooldown'
 
 const asSpawn = (fn: unknown) => fn as SpawnFn
 
@@ -479,5 +481,115 @@ describe('stale resolution cache (invalidate + single re-resolve)', () => {
     const brain = new ClaudeCodeBrain({ spawn: asSpawn(spawn.fn), env: {}, resolveCommand })
     expect(await brain.generate([{ role: 'user', content: 'q' }])).toBe('answer')
     expect(spawn.calls.map((c) => c.command)).toEqual([DEAD, 'claude'])
+  })
+})
+
+const RESULT_EVENT = {
+  type: 'result',
+  subtype: 'success',
+  is_error: false,
+  result: 'OK',
+  duration_ms: 2094,
+  total_cost_usd: 0.002085,
+  usage: {
+    input_tokens: 1860,
+    output_tokens: 45,
+    cache_read_input_tokens: 12,
+    output_tokens_details: { thinking_tokens: 38 }
+  },
+  modelUsage: { 'claude-haiku-4-5-20251001': {} }
+}
+const EVENTS = [
+  { type: 'system', subtype: 'init', model: 'claude-haiku-4-5-20251001' },
+  { type: 'assistant', message: {} },
+  RESULT_EVENT
+]
+
+describe('parseClaudeOutput', () => {
+  it('reads the answer, tokens, cost and model from the result event of a JSON array', () => {
+    expect(parseClaudeOutput(JSON.stringify(EVENTS))).toEqual({
+      text: 'OK',
+      isError: false,
+      model: 'claude-haiku-4-5-20251001',
+      inputTokens: 1860,
+      outputTokens: 7, // 45 output tokens, 38 of them thinking
+      thinkingTokens: 38,
+      cachedTokens: 12,
+      costUsd: 0.002085
+    })
+  })
+
+  it('reads a single result object', () => {
+    expect(parseClaudeOutput(JSON.stringify(RESULT_EVENT)).text).toBe('OK')
+  })
+
+  it('keeps plain text as the answer (an older CLI, or a test double)', () => {
+    expect(parseClaudeOutput('  plain answer \n')).toEqual({ text: 'plain answer', isError: false })
+  })
+
+  it('does not mistake an answer that is itself valid JSON for the CLI envelope', () => {
+    expect(parseClaudeOutput('42').text).toBe('42')
+    expect(parseClaudeOutput('{"summary":"x"}').text).toBe('{"summary":"x"}')
+    expect(parseClaudeOutput('[1,2,3]').text).toBe('[1,2,3]')
+    // A typed answer has the same `type` field the CLI events carry, and still is the answer.
+    expect(parseClaudeOutput('{"type":"summary","text":"x"}').text).toBe('{"type":"summary","text":"x"}')
+    expect(parseClaudeOutput('[{"type":"point","text":"a"}]').text).toBe('[{"type":"point","text":"a"}]')
+  })
+
+  it('gives no answer for events without a result, and none for empty output', () => {
+    expect(parseClaudeOutput(JSON.stringify(EVENTS.slice(0, 2)))).toEqual({ text: null, isError: false })
+    expect(parseClaudeOutput('')).toEqual({ text: null, isError: false })
+  })
+
+  it('marks an error result as an error and keeps its message', () => {
+    const errorEvent = { ...RESULT_EVENT, is_error: true, subtype: 'error_during_execution', result: 'Claude usage limit reached|1759000000' }
+    const parsed = parseClaudeOutput(JSON.stringify([errorEvent]))
+    expect(parsed.isError).toBe(true)
+    expect(parsed.text).toBe('Claude usage limit reached|1759000000')
+  })
+})
+
+describe('ClaudeCodeBrain reports usage and reads the JSON result', () => {
+  afterEach(() => _resetBrainCooldownsForTests())
+
+  it('asks for JSON on a text run and answers with the result text', async () => {
+    const spawn = makeFakeSpawn({ stdout: JSON.stringify(EVENTS), code: 0 })
+    const brain = new ClaudeCodeBrain({ spawn: asSpawn(spawn.fn), env: {}, resolveCommand: async () => 'claude' })
+    const collector = createHarnessUsageCollector()
+    const out = await collector.run(() => brain.generate([{ role: 'user', content: 'q' }], { model: 'haiku' }))
+    expect(out).toBe('OK')
+    expect(spawn.calls[0].args).toContain('--output-format')
+    expect(spawn.calls[0].args[spawn.calls[0].args.indexOf('--output-format') + 1]).toBe('json')
+    const bucket = collector.total()!.byModel['claude-code:claude-haiku-4-5-20251001']
+    expect(bucket).toMatchObject({ calls: 1, inputTokens: 1860, outputTokens: 7, thinkingTokens: 38, cachedTokens: 12, reportedCostUsd: 0.002085 })
+    expect(Number.isFinite(bucket.durationMs)).toBe(true)
+  })
+
+  it('does not ask for JSON on an agentic run, and takes stdout as the answer', async () => {
+    const spawn = makeFakeSpawn({ stdout: 'plain', code: 0 })
+    const brain = new ClaudeCodeBrain({ spawn: asSpawn(spawn.fn), env: {}, resolveCommand: async () => 'claude' })
+    const collector = createHarnessUsageCollector()
+    const out = await collector.run(() => brain.generate([{ role: 'user', content: 'q' }], { agentic: true, cwd: 'C:\\repo' }))
+    expect(out).toBe('plain')
+    expect(spawn.calls[0].args).not.toContain('--output-format')
+    expect(collector.total()!.calls).toBe(1) // time only
+  })
+
+  it('treats an error result as a failure, not as an answer, and rests the brain when it is out of quota', async () => {
+    const errorEvent = { ...RESULT_EVENT, is_error: true, result: 'Claude usage limit reached|1759000000' }
+    const spawn = makeFakeSpawn({ stdout: JSON.stringify([errorEvent]), code: 0 })
+    const brain = new ClaudeCodeBrain({ spawn: asSpawn(spawn.fn), env: {}, resolveCommand: async () => 'claude' })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    expect(await brain.generate([{ role: 'user', content: 'q' }])).toBeNull()
+    expect(isBrainCoolingDown('claude-code')).toBe(true)
+  })
+
+  it('finds the out-of-quota message in the JSON of a failed run too', async () => {
+    const errorEvent = { ...RESULT_EVENT, is_error: true, result: 'Claude usage limit reached|1759000000' }
+    const spawn = makeFakeSpawn({ stdout: JSON.stringify([errorEvent]), stderr: '', code: 1 })
+    const brain = new ClaudeCodeBrain({ spawn: asSpawn(spawn.fn), env: {}, resolveCommand: async () => 'claude' })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    expect(await brain.generate([{ role: 'user', content: 'q' }])).toBeNull()
+    expect(isBrainCoolingDown('claude-code')).toBe(true)
   })
 })

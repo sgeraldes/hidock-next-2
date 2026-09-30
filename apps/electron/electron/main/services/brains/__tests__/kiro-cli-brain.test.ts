@@ -10,9 +10,10 @@
  * @vitest-environment node
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { KiroCliBrain, parseKiroOutput, parseWhoami } from '../kiro-cli-brain'
+import { KiroCliBrain, parseKiroModels, parseKiroOutput, parseWhoami } from '../kiro-cli-brain'
 import type { SpawnFn } from '../cli-runner'
 import { makeFakeSpawn, type FakeSpawnScript } from './fake-spawn'
+import { createHarnessUsageCollector } from '../harness-usage'
 
 const asSpawn = (fn: unknown) => fn as SpawnFn
 const WHOAMI_JSON = JSON.stringify({
@@ -280,5 +281,59 @@ describe('KiroCliBrain', () => {
       expect(c.args).not.toContain('--reuse-window')
       if (c.args.includes('chat')) expect(c.args).toContain('--no-interactive')
     }
+  })
+})
+
+describe('Kiro model list', () => {
+  const sample = JSON.stringify({
+    models: [
+      { model_name: 'auto', description: 'Chosen by task', model_id: 'auto', rate_multiplier: 1.0, rate_unit: 'Credit' },
+      { model_name: 'claude-sonnet-5', description: 'Claude Sonnet 5', model_id: 'claude-sonnet-5', rate_multiplier: 1.3, rate_unit: 'Credit' }
+    ]
+  })
+
+  it('parses the JSON of kiro-cli chat --list-models', () => {
+    expect(parseKiroModels(sample)).toEqual([
+      { id: 'auto', label: 'auto', note: 'Chosen by task' },
+      { id: 'claude-sonnet-5', label: 'claude-sonnet-5', note: 'Claude Sonnet 5' }
+    ])
+  })
+
+  it('parses nothing from output that is not that JSON', () => {
+    expect(parseKiroModels('')).toEqual([])
+    expect(parseKiroModels('not json')).toEqual([])
+    expect(parseKiroModels('{"models": "x"}')).toEqual([])
+    expect(parseKiroModels('{"models": [{"nope": 1}]}')).toEqual([])
+  })
+
+  it('asks the CLI for the list with fixed flags only', async () => {
+    const spawn = makeFakeSpawn({ stdout: sample, code: 0 })
+    const models = await new KiroCliBrain({ spawn: asSpawn(spawn.fn), env: {}, getStoredKey: () => '' }).listModels()
+    expect(models.map((m) => m.id)).toEqual(['auto', 'claude-sonnet-5'])
+    expect(spawn.calls[0].args).toEqual(['chat', '--list-models', '--format', 'json'])
+  })
+
+  it('lists nothing when the CLI fails', async () => {
+    const spawn = makeFakeSpawn({ stdout: '', stderr: 'boom', code: 1 })
+    expect(await new KiroCliBrain({ spawn: asSpawn(spawn.fn), env: {}, getStoredKey: () => '' }).listModels()).toEqual([])
+  })
+})
+
+describe('Kiro effort and usage', () => {
+  it('passes the effort with a fixed flag', async () => {
+    const spawn = makeFakeSpawn({ stdout: '> OK', code: 0 })
+    const brain = new KiroCliBrain({ spawn: asSpawn(spawn.fn), env: {}, getStoredKey: () => '' })
+    await brain.generate([{ role: 'user', content: 'q' }], { effort: 'low' })
+    const args = spawn.calls[0].args
+    expect(args).toEqual(['chat', '--no-interactive', '--trust-tools=', '--effort', 'low'])
+    expect(args.join(' ')).not.toContain('q')
+  })
+
+  it('reports the time of a call', async () => {
+    const spawn = makeFakeSpawn({ stdout: '> OK', code: 0 })
+    const brain = new KiroCliBrain({ spawn: asSpawn(spawn.fn), env: {}, getStoredKey: () => '' })
+    const collector = createHarnessUsageCollector()
+    await collector.run(() => brain.generate([{ role: 'user', content: 'q' }]))
+    expect(collector.total()!.byModel['kiro:unknown'].calls).toBe(1)
   })
 })

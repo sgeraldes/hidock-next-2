@@ -49,6 +49,8 @@ import type {
   BrainMessage,
   GenerateOptions,
 } from './types'
+import { caps, type HarnessDescriptor, type ModelInfo } from './descriptor'
+import { recordHarnessUsage } from './harness-usage'
 
 const CAPABILITIES: ReadonlySet<BrainCapability> = new Set<BrainCapability>([
   'generate',
@@ -91,6 +93,22 @@ export class KiroCliBrain implements AIBrain {
 
   capabilities(): ReadonlySet<BrainCapability> {
     return CAPABILITIES
+  }
+
+  descriptor(): HarnessDescriptor {
+    return {
+      id: this.id,
+      label: this.label,
+      kind: 'cli',
+      vendor: 'AWS',
+      dataLeavesMachine: true,
+      latency: 'slow',
+      capabilities: caps('text', 'agentic'),
+      effort: { kind: 'levels', levels: ['low', 'medium', 'high', 'xhigh', 'max'] },
+      needs: 'cli-login',
+      // kiro-cli 2.24.1 answers --model with "Method not found" and runs on its default.
+      modelSelectable: false
+    }
   }
 
   /** The headless API key (env var, else the app's stored key). '' when absent. */
@@ -145,6 +163,22 @@ export class KiroCliBrain implements AIBrain {
     }
   }
 
+  /** `kiro-cli chat --list-models --format json`: fixed flags, no prompt, no model call. */
+  async listModels(): Promise<ModelInfo[]> {
+    try {
+      const res = await runCli(
+        KIRO_CLI,
+        ['chat', '--list-models', '--format', 'json'],
+        { timeoutMs: PROBE_TIMEOUT_MS, env: this.env },
+        this.spawn
+      )
+      if (res.code !== 0 || res.spawnError || res.timedOut) return []
+      return parseKiroModels(res.stdout)
+    } catch {
+      return []
+    }
+  }
+
   async generate(messages: BrainMessage[], opts: GenerateOptions = {}): Promise<string | null> {
     const prompt = foldMessagesToPrompt(messages, opts.systemPrompt)
     if (!prompt.trim()) return null
@@ -155,6 +189,7 @@ export class KiroCliBrain implements AIBrain {
     // PIPED VIA STDIN — never argv (confidentiality + no option injection).
     const args = ['chat', '--no-interactive', '--trust-tools=']
     if (opts.model) args.push('--model', opts.model)
+    if (opts.effort) args.push('--effort', opts.effort)
 
     // Make the app's stored key available to the child when the env lacks one
     // (harmless when the login session is the effective auth).
@@ -162,6 +197,7 @@ export class KiroCliBrain implements AIBrain {
     const env: NodeJS.ProcessEnv =
       key && !this.env.KIRO_API_KEY ? { ...this.env, KIRO_API_KEY: key } : this.env
 
+    const startedAt = Date.now()
     try {
       const res = await runCli(
         KIRO_CLI,
@@ -180,6 +216,7 @@ export class KiroCliBrain implements AIBrain {
         noteBrainFailure(this.id, cliErrorLines(res.stderr).join('\n'))
         return null
       }
+      recordHarnessUsage({ harness: this.id, model: opts.model, durationMs: Date.now() - startedAt })
       return parseKiroOutput(res.stdout)
     } catch (e) {
       console.error('[KiroCliBrain] generate threw unexpectedly:', e)
@@ -205,6 +242,30 @@ export function parseKiroOutput(stdout: string): string | null {
   let text = noAnsi.trim()
   if (text.startsWith('>')) text = text.slice(1).trimStart()
   return text.length > 0 ? text : null
+}
+
+/**
+ * Parse the JSON of `kiro-cli chat --list-models --format json`:
+ * `{ "models": [{ "model_id": "auto", "model_name": "auto", "description": "..." }, ...] }`.
+ * Anything else gives an empty list. Exported for direct unit testing.
+ */
+export function parseKiroModels(stdout: string): ModelInfo[] {
+  try {
+    const parsed = JSON.parse(stdout.trim()) as { models?: unknown }
+    if (!Array.isArray(parsed.models)) return []
+    const out: ModelInfo[] = []
+    for (const m of parsed.models as Array<Record<string, unknown>>) {
+      if (typeof m?.model_id !== 'string' || !m.model_id) continue
+      out.push({
+        id: m.model_id,
+        ...(typeof m.model_name === 'string' && m.model_name ? { label: m.model_name } : {}),
+        ...(typeof m.description === 'string' && m.description ? { note: m.description } : {})
+      })
+    }
+    return out
+  } catch {
+    return []
+  }
 }
 
 /**

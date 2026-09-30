@@ -9,8 +9,8 @@ I can do multiple passes in a single run, or split among different steps. Do I s
 harness and model to process one shot, or multiple stacked steps one after the other, or a
 combination? A new pipeline system needs to emerge from this."
 
-Status: draft for the owner's review. The four decisions of section 16 were taken on 30-sep-2026 and
-are reflected below. Nothing in this document is built except phase 0.
+Status: approved by the owner on 30-sep-2026; the four decisions of section 16 were taken that day and
+are reflected below. Built so far: phase 0 (PR #113) and phase 1 (PR #118).
 
 ## 1. What we want
 
@@ -134,9 +134,9 @@ works in a repository (handover) is the only exception and says so (`cwd`).
 | gemini-api | API | SDK, thinking off or a level | list models API | `thinkingLevel` or budget | native `responseSchema` | fast (about 1-3 s) |
 | ollama | local | HTTP, `format: json`, `keep_alive` | `/api/tags` | none (model dependent) | `format` schema | depends on hardware |
 | openai-compatible | local or LAN | HTTP chat completions | `/v1/models` | none | `response_format` when supported | depends on hardware |
-| claude-code | CLI | `-p --strict-mcp-config --disable-slash-commands --tools= --no-session-persistence --setting-sources= --system-prompt <one line>`, empty working folder, prompt on stdin | aliases (`haiku`, `sonnet`, `opus`) and full names | `--effort` | `--json-schema` (to verify) or prompt plus repair | slow (5-15 s per call) |
+| claude-code | CLI | `-p --strict-mcp-config --disable-slash-commands --tools= --no-session-persistence --setting-sources= --output-format json --system-prompt <one line>`, empty working folder, prompt on stdin | aliases (`haiku`, `sonnet`, `opus`) and full names | `--effort` | `--json-schema` (to verify) or prompt plus repair | slow (5-15 s per call) |
 | codex | CLI | `exec --skip-git-repo-check --ephemeral --ignore-user-config --ignore-rules --sandbox read-only --color never`, empty folder | from the CLI | `model_reasoning_effort` | `--output-schema` or prompt plus repair | slow |
-| gemini-cli, kiro | CLI | lean flags to be found and measured in phase 1 | from the CLI | none | prompt plus repair | slow |
+| gemini-cli, kiro | CLI | kiro: `chat --no-interactive --trust-tools=` plus `--effort`, already at its floor (5 s a call, measured 30-sep-2026); gemini-cli: default flags, lean flags not measured because the CLI answers only with a key in the shell | from the CLI | none | prompt plus repair | slow |
 | jev | special | HTTP, primitives only | fixed | none | native (Choice, Score) | fast |
 | local-onnx, ASR engines | local | in process or Python worker | from disk | none | none | audio, heavy |
 
@@ -356,7 +356,7 @@ Each phase has its own plan, tests, adversarial review and PR series.
 | Phase | Content | Behaviour change |
 |---|---|---|
 | 0 | Lean invocation for Claude Code and Codex; `effort` in `GenerateOptions`; empty working folder. Built (PR #113). | faster CLI calls; no tools or hooks loaded |
-| 1 | Capability descriptors on every adapter, audio and embedding engines included; OpenAI-compatible adapter (with Ollama); Jev harness wrapper; model discovery; lean flags for Gemini CLI and Kiro (measured); structured-output contract with repair; cost and usage for every adapter | none visible |
+| 1 | Capability descriptors on every adapter, audio and embedding engines included; OpenAI-compatible adapter (with Ollama); Jev harness wrapper; model discovery; lean flags for Gemini CLI and Kiro (measured); structured-output contract with repair; cost and usage for every adapter. Built (PR #118); the Gemini CLI flags were not measured for lack of a key in the shell | none visible |
 | 2 | Task catalog and runner with `single` and `fallback`; every text call site moved to `runStep` with today's defaults; a `processing_runs` row per call | usage and cost for all calls; no change in results |
 | 3 | `pipeline` config, migration, Settings > Pipeline for single and fallback plans on the text steps, profiles, Test bench, `pipeline_results` and Adopt | the owner can choose harness, model and effort for every text step |
 | 4 | The audio steps join: `transcribe`, `diarize`, `embed` and `live-transcribe` through the same runner and page, with the pairing rules and the reindex confirmation of section 6; their old pages show the engine read only | the owner can choose the engine of every audio step |

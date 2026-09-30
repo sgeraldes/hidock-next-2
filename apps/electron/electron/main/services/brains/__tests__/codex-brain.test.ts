@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { CodexBrain, LEAN_CODEX_ARGS } from '../codex-brain'
 import type { SpawnFn } from '../cli-runner'
 import { makeFakeSpawn, type FakeSpawnScript } from './fake-spawn'
+import { createHarnessUsageCollector } from '../harness-usage'
 
 const asSpawn = (fn: unknown) => fn as SpawnFn
 const COMPANION = 'C:/fake/codex-companion.mjs'
@@ -195,5 +196,18 @@ describe('CodexBrain', () => {
       expect(await p).toBeNull()
       expect(spawn.lastChild?.kill).toHaveBeenCalled()
     })
+  })
+})
+
+describe('CodexBrain reports usage', () => {
+  it('reports the time of a call (Codex states no usage on its plain output)', async () => {
+    const spawn = makeFakeSpawn({ stdout: 'ok', code: 0 })
+    const brain = new CodexBrain({ spawn: asSpawn(spawn.fn), env: {} })
+    const collector = createHarnessUsageCollector()
+    await collector.run(() => brain.generate([{ role: 'user', content: 'q' }], { model: 'gpt-x' }))
+    const bucket = collector.total()!.byModel['codex:gpt-x']
+    expect(bucket.calls).toBe(1)
+    expect(bucket.inputTokens).toBe(0)
+    expect(Number.isFinite(bucket.durationMs)).toBe(true)
   })
 })

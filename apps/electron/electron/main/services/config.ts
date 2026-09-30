@@ -272,6 +272,8 @@ export interface AppConfig {
     enabled: Record<BrainId, boolean>
     defaultBrain: BrainId
     taskRouting: Partial<Record<BrainTask, BrainId>>
+    /** The OpenAI-compatible server (LM Studio, llama.cpp, vLLM). The optional key is in the credential store. */
+    openaiCompatible?: { baseUrl: string; model: string; embeddingModel: string }
   }
   // Modular features (Track I). `preset` selects a named feature-set; `flags` are
   // sparse per-feature overrides. Default preset `full` = ZERO behavior change for
@@ -426,10 +428,12 @@ const DEFAULT_CONFIG: AppConfig = {
       'claude-code': false,
       codex: false,
       'gemini-cli': false,
-      kiro: false
+      kiro: false,
+      'openai-compatible': false
     },
     defaultBrain: 'gemini-api',
     taskRouting: {},
+    openaiCompatible: { baseUrl: 'http://localhost:1234/v1', model: '', embeddingModel: '' },
   },
   // Default preset `full` → every feature enabled → identical behavior to before
   // modular features existed. New installs may later be asked during onboarding.

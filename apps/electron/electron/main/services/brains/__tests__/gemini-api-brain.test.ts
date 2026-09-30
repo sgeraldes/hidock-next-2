@@ -35,6 +35,7 @@ vi.mock('@google/generative-ai', () => ({
 
 import { GeminiApiBrain, resolveGeminiApiKey } from '../gemini-api-brain'
 import { createGeminiUsageCollector } from '../../gemini-usage'
+import { createHarnessUsageCollector } from '../harness-usage'
 
 describe('GeminiApiBrain', () => {
   let brain: GeminiApiBrain
@@ -252,5 +253,67 @@ describe('GeminiApiBrain', () => {
         expect(out).toHaveLength(150)
       })
     })
+  })
+})
+
+describe('GeminiApiBrain.listModels', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockConfig.transcription.geminiApiKey = ''
+  })
+
+  it('lists the models that can generate, with the key in a header and not in the URL', async () => {
+    mockGetSecret.mockReturnValue('key-from-store')
+    const calls: Array<{ url: string; init: RequestInit }> = []
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), init: init ?? {} })
+      return new Response(
+        JSON.stringify({
+          models: [
+            { name: 'models/gemini-3.8-flash', displayName: 'Gemini 3.8 Flash', supportedGenerationMethods: ['generateContent'] },
+            { name: 'models/gemini-embedding-001', displayName: 'Embedding', supportedGenerationMethods: ['embedContent'] }
+          ]
+        }),
+        { status: 200 }
+      )
+    }) as typeof fetch
+    const models = await new GeminiApiBrain({ fetchImpl }).listModels()
+    expect(models).toEqual([{ id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash' }])
+    expect(calls[0].url).not.toContain('key-from-store')
+    expect((calls[0].init.headers as Record<string, string>)['x-goog-api-key']).toBe('key-from-store')
+  })
+
+  it('lists nothing, and does not throw, without a key or when the API fails', async () => {
+    mockGetSecret.mockReturnValue(null)
+    const never = (async () => {
+      throw new Error('must not be called')
+    }) as unknown as typeof fetch
+    expect(await new GeminiApiBrain({ fetchImpl: never }).listModels()).toEqual([])
+    mockGetSecret.mockReturnValue('k')
+    const failing = (async () => new Response('{}', { status: 500 })) as typeof fetch
+    expect(await new GeminiApiBrain({ fetchImpl: failing }).listModels()).toEqual([])
+  })
+})
+
+describe('GeminiApiBrain reports harness usage', () => {
+  it('reports tokens, model and time of generate and chat', async () => {
+    mockGetSecret.mockReturnValue('k')
+    mockGenerateContent.mockResolvedValue({
+      response: {
+        text: () => 'ok',
+        usageMetadata: { promptTokenCount: 120, candidatesTokenCount: 30, totalTokenCount: 170 }
+      }
+    })
+    const collector = createHarnessUsageCollector()
+    const brain = new GeminiApiBrain()
+    await collector.run(async () => {
+      await brain.generate([{ role: 'user', content: 'a' }], { model: 'gemini-3.8-flash' })
+      await brain.chat([{ role: 'user', content: 'b' }], { model: 'gemini-3.8-flash' })
+    })
+    const bucket = collector.total()!.byModel['gemini-api:gemini-3.8-flash']
+    expect(bucket.calls).toBe(2)
+    expect(bucket.inputTokens).toBe(240)
+    expect(bucket.outputTokens).toBe(60)
+    expect(bucket.thinkingTokens).toBe(40) // total 170 minus prompt 120 minus output 30, per call
   })
 })

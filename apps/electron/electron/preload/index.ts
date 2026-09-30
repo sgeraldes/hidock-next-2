@@ -23,6 +23,7 @@ export type BrainId =
   | 'codex'
   | 'gemini-cli'
   | 'kiro'
+  | 'openai-compatible'
 export type BrainCapability = 'generate' | 'chat' | 'analyzeAudio' | 'embed' | 'agentic'
 export type BrainTask = 'transcribeAnalyze' | 'chat' | 'outputs' | 'handover' | 'embed' | 'suggestions'
 export interface BrainAuthStatus {

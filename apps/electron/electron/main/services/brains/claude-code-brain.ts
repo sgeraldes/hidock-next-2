@@ -57,6 +57,8 @@ import type {
   BrainMessage,
   GenerateOptions,
 } from './types'
+import { caps, type HarnessDescriptor } from './descriptor'
+import { recordHarnessUsage } from './harness-usage'
 
 const CAPABILITIES: ReadonlySet<BrainCapability> = new Set<BrainCapability>([
   'generate',
@@ -73,6 +75,7 @@ const CAPABILITIES: ReadonlySet<BrainCapability> = new Set<BrainCapability>([
  * no tools, no session file, no settings sources, and a one-line system prompt instead of the
  * coding agent's. A run that works in a repository (GenerateOptions.agentic, the handover)
  * keeps the full configuration: tools and project files are the point there.
+ * A text run asks for the JSON result: it carries the answer, the tokens and the cost the CLI states.
  *
  * Known limit: a credential that exists only in a settings file (an apiKeyHelper, an env block)
  * is not visible to a lean run, because no settings source is loaded. The login (OAuth) and
@@ -84,6 +87,8 @@ export const LEAN_CLAUDE_ARGS: readonly string[] = [
   '--tools=',
   '--no-session-persistence',
   '--setting-sources=',
+  '--output-format',
+  'json',
   '--system-prompt',
   'You are a text-processing function. Follow the instructions in the user message and reply with only the requested output.'
 ]
@@ -106,6 +111,75 @@ export interface ClaudeCodeBrainDeps {
   resolveCommand?: () => Promise<string>
 }
 
+export interface ClaudeRun {
+  text: string | null
+  isError: boolean
+  model?: string
+  inputTokens?: number
+  outputTokens?: number
+  thinkingTokens?: number
+  cachedTokens?: number
+  costUsd?: number
+}
+
+/**
+ * The event types `claude -p --output-format json` prints. An answer that is itself JSON and carries a
+ * `type` field (a typed summary, a list of typed points) is an answer, not an event, unless its type is
+ * one of these words.
+ */
+const CLI_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'system',
+  'assistant',
+  'user',
+  'result',
+  'stream_event',
+  'rate_limit_event'
+])
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+const asNumber = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
+
+/**
+ * Read `claude -p --output-format json`: an array of events ending in a `result` event (or that
+ * event alone). Anything that is not that envelope is the answer itself: plain text from an older
+ * CLI, or from an agentic run, or an answer that happens to be valid JSON. Exported for direct testing.
+ */
+export function parseClaudeOutput(stdout: string): ClaudeRun {
+  const trimmed = stdout.trim()
+  if (!trimmed) return { text: null, isError: false }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(trimmed)
+  } catch {
+    return { text: trimmed, isError: false }
+  }
+  const events: unknown[] = Array.isArray(parsed) ? parsed : [parsed]
+  const result = [...events].reverse().find((e): e is Record<string, unknown> => isRecord(e) && e.type === 'result')
+  if (!result) {
+    // Events without a result (a run cut short) have no answer; anything else is the answer.
+    const envelope =
+      events.length > 0 && events.every((e) => isRecord(e) && typeof e.type === 'string' && CLI_EVENT_TYPES.has(e.type))
+    return envelope ? { text: null, isError: false } : { text: trimmed, isError: false }
+  }
+  const usage = isRecord(result.usage) ? result.usage : {}
+  const thinking = asNumber(isRecord(usage.output_tokens_details) ? usage.output_tokens_details.thinking_tokens : undefined)
+  const output = asNumber(usage.output_tokens)
+  const init = events.find((e): e is Record<string, unknown> => isRecord(e) && e.type === 'system' && typeof e.model === 'string')
+  const modelUsage = isRecord(result.modelUsage) ? Object.keys(result.modelUsage) : []
+  const text = typeof result.result === 'string' && result.result.trim() ? result.result.trim() : null
+  return {
+    text,
+    isError: result.is_error === true,
+    model: modelUsage[0] ?? (init ? String(init.model) : undefined),
+    inputTokens: asNumber(usage.input_tokens),
+    // Claude Code counts thinking inside output_tokens; the collector keeps them apart.
+    outputTokens: output === undefined ? undefined : Math.max(0, output - (thinking ?? 0)),
+    thinkingTokens: thinking,
+    cachedTokens: asNumber(usage.cache_read_input_tokens),
+    costUsd: asNumber(result.total_cost_usd)
+  }
+}
+
 export class ClaudeCodeBrain implements AIBrain {
   readonly id = 'claude-code' as const
   readonly label = 'Claude Code'
@@ -122,6 +196,21 @@ export class ClaudeCodeBrain implements AIBrain {
 
   capabilities(): ReadonlySet<BrainCapability> {
     return CAPABILITIES
+  }
+
+  descriptor(): HarnessDescriptor {
+    return {
+      id: this.id,
+      label: this.label,
+      kind: 'cli',
+      vendor: 'Anthropic',
+      dataLeavesMachine: true,
+      latency: 'slow',
+      capabilities: caps('text', 'agentic', 'long-context'),
+      effort: { kind: 'levels', levels: ['low', 'medium', 'high', 'xhigh', 'max'] },
+      needs: 'cli-login',
+      modelSelectable: true
+    }
   }
 
   /** Cached identity-verified command resolution (per instance). */
@@ -227,6 +316,7 @@ export class ClaudeCodeBrain implements AIBrain {
     if (opts.model) args.push('--model', opts.model)
     if (opts.effort) args.push('--effort', opts.effort)
     const cwd = opts.cwd ?? harnessWorkDir()
+    const startedAt = Date.now()
 
     try {
       let res = await runCli(
@@ -252,14 +342,31 @@ export class ClaudeCodeBrain implements AIBrain {
       }
       if (res.code !== 0) {
         // Only what the CLI reports as its error: a prompt it echoed may mention a
-        // usage limit without the brain being out of quota.
+        // usage limit without the brain being out of quota. A JSON run states its error in
+        // the result event on stdout, so that message counts too.
         const failure = summarizeCliFailure(res.stderr, res.code)
         console.error('[ClaudeCodeBrain] generate failed:', failure)
-        noteBrainFailure(this.id, failure)
+        const stated = agentic ? null : parseClaudeOutput(res.stdout)
+        noteBrainFailure(this.id, stated?.isError && stated.text ? `${failure}\n${stated.text}` : failure)
         return null
       }
-      const text = res.stdout.trim()
-      return text.length > 0 ? text : null
+      const run: ClaudeRun = agentic ? { text: res.stdout.trim() || null, isError: false } : parseClaudeOutput(res.stdout)
+      if (run.isError) {
+        console.error('[ClaudeCodeBrain] generate ended with an error result')
+        noteBrainFailure(this.id, run.text ?? '')
+        return null
+      }
+      recordHarnessUsage({
+        harness: this.id,
+        model: run.model ?? opts.model,
+        inputTokens: run.inputTokens,
+        outputTokens: run.outputTokens,
+        thinkingTokens: run.thinkingTokens,
+        cachedTokens: run.cachedTokens,
+        reportedCostUsd: run.costUsd,
+        durationMs: Date.now() - startedAt
+      })
+      return run.text
     } catch (e) {
       console.error('[ClaudeCodeBrain] generate threw unexpectedly:', e)
       return null

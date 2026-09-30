@@ -28,6 +28,8 @@ import type {
   BrainMessage,
   GenerateOptions,
 } from './types'
+import { caps, type HarnessDescriptor } from './descriptor'
+import { recordHarnessUsage } from './harness-usage'
 
 const CAPABILITIES: ReadonlySet<BrainCapability> = new Set<BrainCapability>([
   'generate',
@@ -81,6 +83,22 @@ export class CodexBrain implements AIBrain {
 
   capabilities(): ReadonlySet<BrainCapability> {
     return CAPABILITIES
+  }
+
+  descriptor(): HarnessDescriptor {
+    return {
+      id: this.id,
+      label: this.label,
+      kind: 'cli',
+      vendor: 'OpenAI',
+      dataLeavesMachine: true,
+      latency: 'slow',
+      capabilities: caps('text', 'agentic'),
+      // xhigh and max run as high (see the effort mapping in this file).
+      effort: { kind: 'levels', levels: ['low', 'medium', 'high'] },
+      needs: 'cli-login',
+      modelSelectable: true
+    }
   }
 
   async authStatus(): Promise<BrainAuthStatus> {
@@ -167,6 +185,7 @@ export class CodexBrain implements AIBrain {
     if (opts.model) args.push('--model', opts.model)
     if (opts.effort) args.push('-c', `model_reasoning_effort=${opts.effort === 'xhigh' || opts.effort === 'max' ? 'high' : opts.effort}`)
     const cwd = opts.cwd ?? harnessWorkDir()
+    const startedAt = Date.now()
 
     try {
       const res = await runCli(
@@ -186,6 +205,7 @@ export class CodexBrain implements AIBrain {
         noteBrainFailure(this.id, cliErrorLines(res.stderr).join('\n'))
         return null
       }
+      recordHarnessUsage({ harness: this.id, model: opts.model, durationMs: Date.now() - startedAt })
       const text = res.stdout.trim()
       return text.length > 0 ? text : null
     } catch (e) {

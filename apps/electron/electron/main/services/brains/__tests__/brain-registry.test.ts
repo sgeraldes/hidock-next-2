@@ -1,7 +1,7 @@
 /**
- * BrainRegistry tests — the registry must expose all six brains: the two
- * current-provider brains (gemini-api, ollama) and the four agentic CLI brains
- * (claude-code, codex, gemini-cli, kiro). Constructing them must not spawn anything.
+ * BrainRegistry tests — the registry must expose all eight brains: the
+ * current-provider brains (gemini-api, ollama, local-onnx-embed, openai-compatible) and the four
+ * agentic CLI brains (claude-code, codex, gemini-cli, kiro). Constructing them must not spawn anything.
  *
  * @vitest-environment node
  */
@@ -18,10 +18,19 @@ import { getBrainRegistry, resetBrainRegistry } from '../brain-registry'
 describe('BrainRegistry', () => {
   afterEach(() => resetBrainRegistry())
 
-  it('registers all seven brains by id', () => {
+  it('registers all eight brains by id', () => {
     const registry = getBrainRegistry()
     const ids = registry.list().map((b) => b.id).sort()
-    expect(ids).toEqual(['claude-code', 'codex', 'gemini-api', 'gemini-cli', 'kiro', 'local-onnx-embed', 'ollama'])
+    expect(ids).toEqual([
+      'claude-code',
+      'codex',
+      'gemini-api',
+      'gemini-cli',
+      'kiro',
+      'local-onnx-embed',
+      'ollama',
+      'openai-compatible'
+    ])
   })
 
   it('resolves each new agentic brain and its capabilities', () => {
