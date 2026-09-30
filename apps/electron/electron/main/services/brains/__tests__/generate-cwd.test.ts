@@ -60,10 +60,10 @@ describe('agentic adapters pass GenerateOptions.cwd to the child process', () =>
     expect(spawnedCwds(fake.calls)).toContain(CWD)
   })
 
-  it('omits cwd when the caller does not supply one (legacy callers unchanged)', async () => {
+  it('runs in the empty harness folder when the caller supplies no cwd (a lean text run)', async () => {
     const fake = makeFakeSpawn({ stdout: 'done', code: 0 })
     const brain = new CodexBrain({ spawn: asSpawn(fake.fn), env: {} })
     await brain.generate(MSGS)
-    expect(spawnedCwds(fake.calls)).toEqual([undefined])
+    expect(spawnedCwds(fake.calls)).toEqual([expect.stringMatching(/hidock-harness$/)])
   })
 })

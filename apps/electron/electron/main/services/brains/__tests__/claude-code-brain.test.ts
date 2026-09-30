@@ -7,7 +7,7 @@
  * @vitest-environment node
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { ClaudeCodeBrain, resolveClaudeCommand } from '../claude-code-brain'
+import { ClaudeCodeBrain, LEAN_CLAUDE_ARGS, resolveClaudeCommand } from '../claude-code-brain'
 import type { SpawnFn } from '../cli-runner'
 import { makeFakeSpawn, type FakeSpawnScript } from './fake-spawn'
 
@@ -88,7 +88,7 @@ describe('ClaudeCodeBrain', () => {
       const out = await brain.generate([{ role: 'user', content: 'q' }])
       expect(out).toBe('the answer')
       const genCall = spawn.calls.find((c) => c.args[0] === '-p')
-      expect(genCall?.args).toEqual(['-p']) // prompt is NOT in argv
+      expect(genCall?.args).toEqual(['-p', ...LEAN_CLAUDE_ARGS]) // prompt is NOT in argv
       expect(spawn.lastChild?.stdin.write).toHaveBeenCalledWith('User: q') // prompt on stdin
     })
 
@@ -96,7 +96,7 @@ describe('ClaudeCodeBrain', () => {
       const spawn = makeFakeSpawn({ stdout: 'ok', code: 0 })
       const brain = new ClaudeCodeBrain({ spawn: asSpawn(spawn.fn), env: {} })
       await brain.generate([{ role: 'user', content: 'q' }], { model: 'opus' })
-      expect(spawn.calls[0].args).toEqual(['-p', '--model', 'opus'])
+      expect(spawn.calls[0].args).toEqual(['-p', ...LEAN_CLAUDE_ARGS, '--model', 'opus'])
       expect(spawn.lastChild?.stdin.write).toHaveBeenCalledWith('User: q')
     })
 
@@ -142,8 +142,52 @@ describe('ClaudeCodeBrain', () => {
       { role: 'user', content: 'hi' },
     ])
     expect(out).toBe('reply')
-    expect(spawn.calls[0].args).toEqual(['-p'])
+    expect(spawn.calls[0].args).toEqual(['-p', ...LEAN_CLAUDE_ARGS])
     expect(spawn.lastChild?.stdin.write).toHaveBeenCalledWith('System: sys\n\nUser: hi')
+  })
+})
+
+describe('a text run is stripped down (30-sep-2026: 15.8 s with the defaults, about 5 s lean)', () => {
+  const run = async (opts: Parameters<ClaudeCodeBrain['generate']>[1] = {}) => {
+    const spawn = makeFakeSpawn({ stdout: 'ok', code: 0 })
+    const brain = new ClaudeCodeBrain({ spawn: asSpawn(spawn.fn), env: {} })
+    await brain.generate([{ role: 'user', content: 'q' }], opts)
+    return spawn.calls[0] as { args: string[]; options?: { cwd?: string } }
+  }
+
+  it('loads no MCP server, skill, tool, session file or settings source, and no coding-agent system prompt', async () => {
+    const call = await run()
+    for (const flag of ['--strict-mcp-config', '--disable-slash-commands', '--tools=', '--no-session-persistence', '--setting-sources=']) {
+      expect(call.args, flag).toContain(flag)
+    }
+    const at = call.args.indexOf('--system-prompt')
+    expect(at).toBeGreaterThan(-1)
+    expect(call.args[at + 1]).toMatch(/text-processing function/)
+  })
+
+  it('runs in an empty folder, so no project file is found from it', async () => {
+    const call = await run()
+    expect(call.options?.cwd).toMatch(/hidock-harness$/)
+  })
+
+  it('passes the model and the effort it is given, and leaves them out when it is not given any', async () => {
+    const withBoth = await run({ model: 'haiku', effort: 'low' })
+    expect(withBoth.args.slice(-4)).toEqual(['--model', 'haiku', '--effort', 'low'])
+    const bare = await run()
+    expect(bare.args).not.toContain('--model')
+    expect(bare.args).not.toContain('--effort')
+  })
+
+  it('keeps the full configuration for a run that works in a repository', async () => {
+    const call = await run({ cwd: 'C:\\target\\repo', agentic: true, model: 'sonnet' })
+    expect(call.args).toEqual(['-p', '--model', 'sonnet'])
+    expect(call.options?.cwd).toBe('C:\\target\\repo')
+  })
+
+  it('a cwd alone does not turn a text run into an agent: it stays lean, in that folder', async () => {
+    const call = await run({ cwd: 'C:\\somewhere' })
+    expect(call.args).toEqual(['-p', ...LEAN_CLAUDE_ARGS])
+    expect(call.options?.cwd).toBe('C:\\somewhere')
   })
 })
 

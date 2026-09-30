@@ -7,7 +7,7 @@
  * @vitest-environment node
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { CodexBrain } from '../codex-brain'
+import { CodexBrain, LEAN_CODEX_ARGS } from '../codex-brain'
 import type { SpawnFn } from '../cli-runner'
 import { makeFakeSpawn, type FakeSpawnScript } from './fake-spawn'
 
@@ -124,7 +124,7 @@ describe('CodexBrain', () => {
       const brain = new CodexBrain({ spawn: asSpawn(spawn.fn), env: {} })
       const out = await brain.generate([{ role: 'user', content: 'do it' }])
       expect(out).toBe('result text')
-      expect(spawn.calls[0]).toMatchObject({ command: 'codex', args: ['exec'] }) // prompt NOT in argv
+      expect(spawn.calls[0]).toMatchObject({ command: 'codex', args: ['exec', ...LEAN_CODEX_ARGS] }) // prompt NOT in argv
       expect(spawn.lastChild?.stdin.write).toHaveBeenCalledWith('User: do it')
     })
 
@@ -132,8 +132,46 @@ describe('CodexBrain', () => {
       const spawn = makeFakeSpawn({ stdout: 'ok', code: 0 })
       const brain = new CodexBrain({ spawn: asSpawn(spawn.fn), env: {} })
       await brain.generate([{ role: 'user', content: 'q' }], { model: 'gpt-x' })
-      expect(spawn.calls[0].args).toEqual(['exec', '--model', 'gpt-x'])
+      expect(spawn.calls[0].args).toEqual(['exec', ...LEAN_CODEX_ARGS, '--model', 'gpt-x'])
       expect(spawn.lastChild?.stdin.write).toHaveBeenCalledWith('User: q')
+    })
+
+    it('runs a text call without the user config, rules, session file or repository check, in an empty folder', async () => {
+      const spawn = makeFakeSpawn({ stdout: 'ok', code: 0 })
+      const brain = new CodexBrain({ spawn: asSpawn(spawn.fn), env: {} })
+      await brain.generate([{ role: 'user', content: 'q' }])
+      const call = spawn.calls[0] as { args: string[]; options?: { cwd?: string } }
+      for (const flag of ['--ignore-user-config', '--ignore-rules', '--ephemeral', '--skip-git-repo-check']) {
+        expect(call.args, flag).toContain(flag)
+      }
+      expect(call.args).toEqual(expect.arrayContaining(['--sandbox', 'read-only', '--color', 'never']))
+      expect(call.options?.cwd).toMatch(/hidock-harness$/)
+    })
+
+    it('maps the effort to the reasoning effort, xhigh and max being high', async () => {
+      const efforts: Array<['low' | 'medium' | 'high' | 'xhigh' | 'max', string]> = [['low', 'low'], ['medium', 'medium'], ['high', 'high'], ['xhigh', 'high'], ['max', 'high']]
+      for (const [effort, expected] of efforts) {
+        const spawn = makeFakeSpawn({ stdout: 'ok', code: 0 })
+        const brain = new CodexBrain({ spawn: asSpawn(spawn.fn), env: {} })
+        await brain.generate([{ role: 'user', content: 'q' }], { effort })
+        expect(spawn.calls[0].args.slice(-2), effort).toEqual(['-c', `model_reasoning_effort=${expected}`])
+      }
+    })
+
+    it('keeps the full configuration for a run that works in a repository', async () => {
+      const spawn = makeFakeSpawn({ stdout: 'ok', code: 0 })
+      const brain = new CodexBrain({ spawn: asSpawn(spawn.fn), env: {} })
+      await brain.generate([{ role: 'user', content: 'q' }], { cwd: 'C:\\target\\repo', agentic: true })
+      expect(spawn.calls[0].args).toEqual(['exec'])
+    })
+
+    it('a cwd alone does not turn a text run into an agent: it stays lean, in that folder', async () => {
+      const spawn = makeFakeSpawn({ stdout: 'ok', code: 0 })
+      const brain = new CodexBrain({ spawn: asSpawn(spawn.fn), env: {} })
+      await brain.generate([{ role: 'user', content: 'q' }], { cwd: 'C:\\somewhere' })
+      const call = spawn.calls[0] as { args: string[]; options?: { cwd?: string } }
+      expect(call.args).toEqual(['exec', ...LEAN_CODEX_ARGS])
+      expect(call.options?.cwd).toBe('C:\\somewhere')
     })
 
     it('returns null on non-zero exit', async () => {

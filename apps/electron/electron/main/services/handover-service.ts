@@ -888,6 +888,7 @@ export async function runHandoverAgent(params: RunHandoverAgentParams): Promise<
       finalResponse = await brain.generate([{ role: 'user', content: prompt }], {
         signal: params.signal,
         cwd: targetDir,
+        agentic: true,
       })
     } catch (e) {
       // Defensive: even though the contract forbids it, never let a throw escape.

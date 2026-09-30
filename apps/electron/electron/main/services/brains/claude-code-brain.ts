@@ -47,7 +47,7 @@
 import { statSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
-import { runCli, foldMessagesToPrompt, summarizeCliFailure, type SpawnFn, type CliRunResult } from './cli-runner'
+import { runCli, foldMessagesToPrompt, summarizeCliFailure, harnessWorkDir, type SpawnFn, type CliRunResult } from './cli-runner'
 import { noteBrainFailure } from './brain-cooldown'
 import { getBrainCredentialStore } from './brain-credential-store'
 import type {
@@ -63,6 +63,30 @@ const CAPABILITIES: ReadonlySet<BrainCapability> = new Set<BrainCapability>([
   'chat',
   'agentic',
 ])
+
+/**
+ * A text run never uses the CLI's default configuration. The default loads every hook,
+ * plugin, MCP server, skill and project file of the machine before it answers, uses the
+ * account's default model at its default effort and keeps a session on disk: 15.8 s for a
+ * one-word answer, against about 5 s with none of that (measured 30-sep-2026), and it
+ * spends the account's quota on work no tool needs. So a run gets: no MCP servers, no skills,
+ * no tools, no session file, no settings sources, and a one-line system prompt instead of the
+ * coding agent's. A run that works in a repository (GenerateOptions.agentic, the handover)
+ * keeps the full configuration: tools and project files are the point there.
+ *
+ * Known limit: a credential that exists only in a settings file (an apiKeyHelper, an env block)
+ * is not visible to a lean run, because no settings source is loaded. The login (OAuth) and
+ * ANTHROPIC_API_KEY in the environment are; the auth probe does not use the lean flags.
+ */
+export const LEAN_CLAUDE_ARGS: readonly string[] = [
+  '--strict-mcp-config',
+  '--disable-slash-commands',
+  '--tools=',
+  '--no-session-persistence',
+  '--setting-sources=',
+  '--system-prompt',
+  'You are a text-processing function. Follow the instructions in the user message and reply with only the requested output.'
+]
 
 /** Cheap, local auth-status probe (reads credential files; no model call). */
 const AUTH_TIMEOUT_MS = 8_000
@@ -198,14 +222,17 @@ export class ClaudeCodeBrain implements AIBrain {
 
     // `claude -p` with a piped stdin reads the prompt from stdin — keep the prompt
     // OUT of argv (confidentiality). Only fixed flags go in argv.
-    const args = ['-p']
+    const agentic = opts.agentic === true
+    const args = ['-p', ...(agentic ? [] : LEAN_CLAUDE_ARGS)]
     if (opts.model) args.push('--model', opts.model)
+    if (opts.effort) args.push('--effort', opts.effort)
+    const cwd = opts.cwd ?? harnessWorkDir()
 
     try {
       let res = await runCli(
         await this.claudeCommand(),
         args,
-        { timeoutMs: GENERATE_TIMEOUT_MS, signal: opts.signal, input: prompt, env: this.env, cwd: opts.cwd },
+        { timeoutMs: GENERATE_TIMEOUT_MS, signal: opts.signal, input: prompt, env: this.env, cwd },
         this.spawn
       )
       if (res.spawnError) {
@@ -215,7 +242,7 @@ export class ClaudeCodeBrain implements AIBrain {
         res = await runCli(
           await this.claudeCommand(),
           args,
-          { timeoutMs: GENERATE_TIMEOUT_MS, signal: opts.signal, input: prompt, env: this.env, cwd: opts.cwd },
+          { timeoutMs: GENERATE_TIMEOUT_MS, signal: opts.signal, input: prompt, env: this.env, cwd },
           this.spawn
         )
       }

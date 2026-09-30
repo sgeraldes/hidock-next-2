@@ -27,7 +27,8 @@
  */
 import { spawn as nodeSpawn } from 'child_process'
 import type { SpawnOptions, ChildProcess } from 'child_process'
-import { existsSync } from 'fs'
+import { chmodSync, existsSync, mkdirSync } from 'fs'
+import { tmpdir } from 'os'
 import { join, delimiter, extname } from 'path'
 
 /** The subset of child_process.spawn these adapters rely on (injectable for tests). */
@@ -541,4 +542,24 @@ export function summarizeCliFailure(stderr: string, code: number | null): string
   const picked = errors.length > 0 ? errors.join(' | ') : (lines[lines.length - 1] ?? '')
   const text = picked.length > CLI_FAILURE_LOG_MAX_CHARS ? `${picked.slice(0, CLI_FAILURE_LOG_MAX_CHARS)}…` : picked
   return text || `exit ${code}`
+}
+
+/**
+ * The working directory of a lean CLI run: an empty folder of its own, so no project file
+ * (CLAUDE.md, AGENTS.md, .git, settings, hooks) sits in it. The CLIs also look in parent folders;
+ * the temp folder is per user on Windows and macOS and holds none. On Linux it can be a shared
+ * /tmp, where the lean flags are what keep a foreign file in this folder from being read as
+ * configuration. Made private (mode 0700, where the OS honours it), also when an older build
+ * created it looser. A run for an agent that works in a repository (handover) passes its own cwd
+ * with agentic: true instead.
+ */
+export function harnessWorkDir(): string {
+  const dir = join(tmpdir(), 'hidock-harness')
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    chmodSync(dir, 0o700)
+  } catch {
+    // the CLI reports a directory it cannot use
+  }
+  return dir
 }

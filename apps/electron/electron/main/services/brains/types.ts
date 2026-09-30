@@ -44,12 +44,20 @@ export interface BrainMessage {
   content: string
 }
 
+/** How hard the model thinks, where the harness has the notion. */
+export type BrainEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
 export interface GenerateOptions {
   systemPrompt?: string
   temperature?: number
   maxTokens?: number
   /** Brain-specific model override. Falls back to the brain's configured default. */
   model?: string
+  /**
+   * Thinking effort. Claude Code passes it as --effort and Codex as model_reasoning_effort
+   * (xhigh and max are high there); the API and local brains have their own controls and ignore it.
+   */
+  effort?: BrainEffort
   /** Ask for JSON output where the brain supports it (Gemini responseMimeType). */
   json?: boolean
   /**
@@ -66,6 +74,13 @@ export interface GenerateOptions {
    * tasks by the router.
    */
   cwd?: string
+  /**
+   * Run the CLI harness with its full configuration (tools, project files, hooks). Only an agent
+   * that works in a repository asks for it (the handover). Absent or false: a lean text run, in
+   * whatever cwd the caller gives or in an empty folder. Only the Claude Code and Codex adapters
+   * make the distinction; Gemini CLI and Kiro always run with their normal configuration.
+   */
+  agentic?: boolean
   signal?: AbortSignal
   /**
    * ADV42-2 (round-44) — FAIL-CLOSED eligibility gate the router re-checks
