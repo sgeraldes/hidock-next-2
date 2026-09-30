@@ -16,7 +16,7 @@ import { isFeatureEnabled as defaultIsFeatureEnabled } from './feature-gate'
 import type { FeatureId } from '../../../src/shared/feature-registry'
 import { markVectorStartupQueued } from './vector-startup-state'
 import { getIntegrityService } from './integrity-service'
-import { reconcileOrganization } from './org-reconciler'
+import { reconcileOrganizationYielding } from './org-reconciler'
 import { backfillKnowledgeCaptures } from './knowledge-capture-backfill'
 import { backfillAudioProfiles } from './audio-profile-store'
 import { getQueueState, startTranscriptionProcessor } from './transcription'
@@ -91,7 +91,7 @@ export const BOOT_TASK_DEFS: GatedBootTask[] = [
     feature: 'calendar',
     run: async () => {
       try {
-        reconcileOrganization()
+        await reconcileOrganizationYielding()
       } catch (e) {
         console.error('[OrgReconciler] error:', e)
       }

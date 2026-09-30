@@ -10,7 +10,7 @@ import { calendarWindow } from './calendar-window'
 import { whenBootTasksSettled, areBootTasksSettled } from './boot-scheduler'
 import { emitActivityLog } from './activity-log'
 import { getEventBus } from './event-bus'
-import { reconcileOrganization } from './org-reconciler'
+import { reconcileOrganizationYielding } from './org-reconciler'
 
 // Re-export package types and correlate for consumers (e.g. recording-watcher)
 export { correlate } from '@hidock/calendar-sync'
@@ -779,7 +779,7 @@ export function isCalendarSyncActive(): boolean {
  * boot (`initializeCalendarAutoSync`) while the renderer fires another from
  * `Layout`'s mount effect, and the periodic `setInterval` could stack a third on
  * top of a slow pass. Each runs a full fetch → parse → recurrence expansion →
- * chunked DB write → `reconcileOrganization()` on the same main-process event
+ * chunked DB write → `reconcileOrganizationYielding()` on the same main-process event
  * loop. Overlapping passes are pure duplicated load on the thread that also has
  * to answer every renderer IPC.
  *
@@ -933,7 +933,7 @@ async function runSyncCalendar(
     // Tie the new meetings into the rest of the app: auto-link overlapping
     // recordings and create People from attendees. Non-fatal.
     try {
-      reconcileOrganization()
+      await reconcileOrganizationYielding()
     } catch (reconcileError) {
       console.error('Post-sync reconciliation failed:', reconcileError)
     }

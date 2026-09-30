@@ -384,6 +384,26 @@ export function upsertContactsFromMeetings(): { contacts: number; links: number 
   let newLinks = 0
 
   runInTransaction(() => {
+    // One read of the contacts and of the links, then lookups in memory. The
+    // per-person queries this replaces filtered on LOWER(email), which no index
+    // serves, and prepared a statement on every call: 15,920 person slots against
+    // 1,611 contacts froze the window for seconds at boot (30-sep-2026). The key
+    // is SQLite's own LOWER(email), and the first row by rowid wins, exactly as
+    // the query it replaces returned.
+    const contactsByEmail = new Map<string, { id: string; name: string }>()
+    for (const known of queryAll<{ id: string; name: string; email_key: string | null }>(
+      `SELECT id, name, LOWER(email) AS email_key FROM contacts ORDER BY rowid`
+    )) {
+      if (known.email_key !== null && !contactsByEmail.has(known.email_key)) {
+        contactsByEmail.set(known.email_key, { id: known.id, name: known.name })
+      }
+    }
+    const linkedPairs = new Set(
+      queryAll<{ meeting_id: string; contact_id: string }>(`SELECT meeting_id, contact_id FROM meeting_contacts`).map(
+        (link) => `${link.meeting_id}\u0000${link.contact_id}`
+      )
+    )
+
     for (const meeting of meetings) {
       const people: Array<{ name?: string; email: string; role: string }> = []
 
@@ -402,30 +422,27 @@ export function upsertContactsFromMeetings(): { contacts: number; links: number 
       }
 
       for (const person of people) {
-        let contact = queryOne<{ id: string; name: string; meeting_count: number }>(
-          `SELECT id, name, meeting_count FROM contacts WHERE LOWER(email) = ?`,
-          [person.email]
-        )
+        let contact = contactsByEmail.get(person.email)
         if (!contact) {
           const id = randomUUID()
           const now = meeting.start_time || new Date().toISOString()
+          const storedName = person.name || person.email.split('@')[0]
           run(
             `INSERT INTO contacts (id, name, email, type, first_seen_at, last_seen_at, meeting_count)
              VALUES (?, ?, ?, 'unknown', ?, ?, 0)`,
-            [id, person.name || person.email.split('@')[0], person.email, now, now]
+            [id, storedName, person.email, now, now]
           )
-          contact = { id, name: person.name || person.email, meeting_count: 0 }
+          contact = { id, name: storedName }
+          contactsByEmail.set(person.email, contact)
           newContacts++
         } else if (person.name && contact.name === person.email.split('@')[0]) {
           // upgrade email-derived placeholder names when a real name appears
           run(`UPDATE contacts SET name = ? WHERE id = ?`, [person.name, contact.id])
+          contact.name = person.name
         }
 
-        const existingLink = queryOne<{ meeting_id: string }>(
-          `SELECT meeting_id FROM meeting_contacts WHERE meeting_id = ? AND contact_id = ?`,
-          [meeting.id, contact.id]
-        )
-        if (!existingLink) {
+        const pair = `${meeting.id}\u0000${contact.id}`
+        if (!linkedPairs.has(pair)) {
           // These people come straight from the meeting's calendar organizer/
           // attendee data, so the membership is CALENDAR-authored (structural) —
           // tag it 'calendar' so the non-owner identity boundary treats it as
@@ -437,6 +454,7 @@ export function upsertContactsFromMeetings(): { contacts: number; links: number 
             `INSERT INTO meeting_contacts (meeting_id, contact_id, role, source) VALUES (?, ?, ?, 'calendar')`,
             [meeting.id, contact.id, person.role]
           )
+          linkedPairs.add(pair)
           newLinks++
         }
       }
@@ -1471,48 +1489,67 @@ export function autoSplitAmbiguousBuckets(): { buckets: number; resolved: number
   return { buckets: buckets.length, resolved: resolvedTotal }
 }
 
-/** Full reconciliation pass — run after calendar syncs and at startup. */
-export function reconcileOrganization(): void {
-  try {
-    repairEscapedMeetingText()
-  } catch (e) {
-    console.error('[OrgReconciler] text repair failed:', e)
-  }
-  try {
-    mergeDuplicateMeetingOccurrences()
-  } catch (e) {
-    console.error('[OrgReconciler] duplicate meeting-occurrence merge failed:', e)
-  }
-  try {
-    mergeDuplicateRecordings()
-  } catch (e) {
-    console.error('[OrgReconciler] duplicate recording merge failed:', e)
-  }
-  try {
-    autoLinkRecordingsToMeetings()
-  } catch (e) {
-    console.error('[OrgReconciler] recording auto-link failed:', e)
-  }
-  try {
-    upsertContactsFromMeetings()
-  } catch (e) {
-    console.error('[OrgReconciler] contacts upsert failed:', e)
-  }
-  try {
-    mergeDuplicateContacts()
-  } catch (e) {
-    console.error('[OrgReconciler] duplicate contact merge failed:', e)
-  }
-  try {
-    autoSplitAmbiguousBuckets()
-  } catch (e) {
-    console.error('[OrgReconciler] ambiguous-bucket auto-split failed:', e)
-  }
-  try {
+export interface ReconcileStep {
+  /** Name in the log when the step is slow. */
+  name: string
+  /** What the log says when the step throws. */
+  failure: string
+  run: () => unknown
+}
+
+/** The reconciliation steps, in the order they run. */
+export const RECONCILE_STEPS: readonly ReconcileStep[] = [
+  { name: 'text-repair', failure: 'text repair failed', run: repairEscapedMeetingText },
+  {
+    name: 'meeting-occurrence-merge',
+    failure: 'duplicate meeting-occurrence merge failed',
+    run: mergeDuplicateMeetingOccurrences
+  },
+  { name: 'recording-merge', failure: 'duplicate recording merge failed', run: mergeDuplicateRecordings },
+  { name: 'recording-auto-link', failure: 'recording auto-link failed', run: autoLinkRecordingsToMeetings },
+  { name: 'contacts-upsert', failure: 'contacts upsert failed', run: upsertContactsFromMeetings },
+  { name: 'contact-merge', failure: 'duplicate contact merge failed', run: mergeDuplicateContacts },
+  { name: 'ambiguous-bucket-split', failure: 'ambiguous-bucket auto-split failed', run: autoSplitAmbiguousBuckets },
+  {
     // BUG B self-heal: advance recordings.status for rows with a joined transcript
     // whose status drifted (never advanced past its insert-time default).
-    healRecordingStatusFromTranscripts()
+    name: 'status-self-heal',
+    failure: 'recording status self-heal failed',
+    // Called through an arrow so the import is read when the step runs, not when the module loads.
+    run: () => healRecordingStatusFromTranscripts()
+  }
+]
+
+/** A step that holds the main thread this long is named in the log. */
+export const SLOW_RECONCILE_STEP_MS = 500
+
+function runReconcileStep(step: ReconcileStep): void {
+  const startedAt = performance.now()
+  try {
+    step.run()
   } catch (e) {
-    console.error('[OrgReconciler] recording status self-heal failed:', e)
+    console.error(`[OrgReconciler] ${step.failure}:`, e)
+  }
+  const tookMs = Math.round(performance.now() - startedAt)
+  if (tookMs >= SLOW_RECONCILE_STEP_MS) {
+    console.warn(`[OrgReconciler] step "${step.name}" held the main thread for ${tookMs}ms`)
+  }
+}
+
+/** Full reconciliation pass — run after calendar syncs and at startup. */
+export function reconcileOrganization(): void {
+  for (const step of RECONCILE_STEPS) runReconcileStep(step)
+}
+
+/**
+ * The same pass, giving the event loop back between steps, so the window and the
+ * IPC handlers are only held for the longest step and not for all of them at
+ * once (org-reconcile froze the window for 4.9 s at boot, 29-sep-2026). The boot
+ * task and the post-sync pass use this one.
+ */
+export async function reconcileOrganizationYielding(): Promise<void> {
+  for (const step of RECONCILE_STEPS) {
+    runReconcileStep(step)
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
   }
 }

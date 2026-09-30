@@ -42,7 +42,7 @@ vi.mock('../event-bus', () => ({
 
 // Mock the side-effect modules syncCalendar dynamically imports.
 vi.mock('../activity-log', () => ({ emitActivityLog: vi.fn() }))
-vi.mock('../org-reconciler', () => ({ reconcileOrganization: vi.fn() }))
+vi.mock('../org-reconciler', () => ({ reconcileOrganizationYielding: vi.fn(async () => undefined) }))
 vi.mock('fs/promises', () => ({ writeFile: vi.fn().mockResolvedValue(undefined) }))
 
 describe('syncCalendar — calendar:synced broadcast', () => {
