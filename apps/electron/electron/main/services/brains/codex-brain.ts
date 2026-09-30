@@ -38,7 +38,7 @@ const CAPABILITIES: ReadonlySet<BrainCapability> = new Set<BrainCapability>([
 /**
  * A text run never uses the CLI's default configuration: no user config.toml, no rules files,
  * no session file, a read-only sandbox, and no git repository required. A run that works in a
- * repository (GenerateOptions.cwd, the handover) keeps the full configuration.
+ * repository (GenerateOptions.agentic, the handover) keeps the full configuration.
  */
 export const LEAN_CODEX_ARGS: readonly string[] = [
   '--skip-git-repo-check',
@@ -162,7 +162,7 @@ export class CodexBrain implements AIBrain {
 
     // `codex exec` with no positional prompt reads instructions from stdin — keep
     // the prompt OUT of argv (confidentiality). Only fixed flags go in argv.
-    const agentic = !!opts.cwd
+    const agentic = opts.agentic === true
     const args = ['exec', ...(agentic ? [] : LEAN_CODEX_ARGS)]
     if (opts.model) args.push('--model', opts.model)
     if (opts.effort) args.push('-c', `model_reasoning_effort=${opts.effort === 'xhigh' || opts.effort === 'max' ? 'high' : opts.effort}`)

@@ -545,14 +545,16 @@ export function summarizeCliFailure(stderr: string, code: number | null): string
 }
 
 /**
- * The working directory of a lean CLI run: an empty folder, so no project file
- * (CLAUDE.md, AGENTS.md, .git, settings, hooks) is found from it. A run for an
- * agent that works in a repository (handover) passes its own cwd instead.
+ * The working directory of a lean CLI run: an empty folder of its own, so no project file
+ * (CLAUDE.md, AGENTS.md, .git, settings, hooks) sits in it. The CLIs also look in parent folders,
+ * which under a per-user temp folder holds none. Created private (mode 0700 where the OS
+ * honours it). A run for an agent that works in a repository (handover) passes its own cwd
+ * with agentic: true instead.
  */
 export function harnessWorkDir(): string {
   const dir = join(tmpdir(), 'hidock-harness')
   try {
-    mkdirSync(dir, { recursive: true })
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
   } catch {
     // the CLI reports a directory it cannot use
   }

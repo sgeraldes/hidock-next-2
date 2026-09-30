@@ -74,6 +74,12 @@ export interface GenerateOptions {
    * tasks by the router.
    */
   cwd?: string
+  /**
+   * Run the CLI harness with its full configuration (tools, project files, hooks). Only an agent
+   * that works in a repository asks for it (the handover). Absent or false: a lean text run, in
+   * whatever cwd the caller gives or in an empty folder.
+   */
+  agentic?: boolean
   signal?: AbortSignal
   /**
    * ADV42-2 (round-44) — FAIL-CLOSED eligibility gate the router re-checks

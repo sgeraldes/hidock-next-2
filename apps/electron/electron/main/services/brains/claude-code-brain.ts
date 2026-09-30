@@ -71,8 +71,12 @@ const CAPABILITIES: ReadonlySet<BrainCapability> = new Set<BrainCapability>([
  * one-word answer, against about 5 s with none of that (measured 30-sep-2026), and it
  * spends the account's quota on work no tool needs. So a run gets: no MCP servers, no skills,
  * no tools, no session file, no settings sources, and a one-line system prompt instead of the
- * coding agent's. A run that works in a repository (GenerateOptions.cwd, the handover)
+ * coding agent's. A run that works in a repository (GenerateOptions.agentic, the handover)
  * keeps the full configuration: tools and project files are the point there.
+ *
+ * Known limit: a credential that exists only in a settings file (an apiKeyHelper, an env block)
+ * is not visible to a lean run, because no settings source is loaded. The login (OAuth) and
+ * ANTHROPIC_API_KEY in the environment are; the auth probe does not use the lean flags.
  */
 export const LEAN_CLAUDE_ARGS: readonly string[] = [
   '--strict-mcp-config',
@@ -218,7 +222,7 @@ export class ClaudeCodeBrain implements AIBrain {
 
     // `claude -p` with a piped stdin reads the prompt from stdin — keep the prompt
     // OUT of argv (confidentiality). Only fixed flags go in argv.
-    const agentic = !!opts.cwd
+    const agentic = opts.agentic === true
     const args = ['-p', ...(agentic ? [] : LEAN_CLAUDE_ARGS)]
     if (opts.model) args.push('--model', opts.model)
     if (opts.effort) args.push('--effort', opts.effort)

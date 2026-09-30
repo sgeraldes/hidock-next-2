@@ -179,9 +179,15 @@ describe('a text run is stripped down (30-sep-2026: 15.8 s with the defaults, ab
   })
 
   it('keeps the full configuration for a run that works in a repository', async () => {
-    const call = await run({ cwd: 'C:\\target\\repo', model: 'sonnet' })
+    const call = await run({ cwd: 'C:\\target\\repo', agentic: true, model: 'sonnet' })
     expect(call.args).toEqual(['-p', '--model', 'sonnet'])
     expect(call.options?.cwd).toBe('C:\\target\\repo')
+  })
+
+  it('a cwd alone does not turn a text run into an agent: it stays lean, in that folder', async () => {
+    const call = await run({ cwd: 'C:\\somewhere' })
+    expect(call.args).toEqual(['-p', ...LEAN_CLAUDE_ARGS])
+    expect(call.options?.cwd).toBe('C:\\somewhere')
   })
 })
 

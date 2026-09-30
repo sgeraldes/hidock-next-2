@@ -144,7 +144,7 @@ describe('CodexBrain', () => {
       for (const flag of ['--ignore-user-config', '--ignore-rules', '--ephemeral', '--skip-git-repo-check']) {
         expect(call.args, flag).toContain(flag)
       }
-      expect(call.args).toEqual(expect.arrayContaining(['--sandbox', 'read-only']))
+      expect(call.args).toEqual(expect.arrayContaining(['--sandbox', 'read-only', '--color', 'never']))
       expect(call.options?.cwd).toMatch(/hidock-harness$/)
     })
 
@@ -161,8 +161,17 @@ describe('CodexBrain', () => {
     it('keeps the full configuration for a run that works in a repository', async () => {
       const spawn = makeFakeSpawn({ stdout: 'ok', code: 0 })
       const brain = new CodexBrain({ spawn: asSpawn(spawn.fn), env: {} })
-      await brain.generate([{ role: 'user', content: 'q' }], { cwd: 'C:\\target\\repo' })
+      await brain.generate([{ role: 'user', content: 'q' }], { cwd: 'C:\\target\\repo', agentic: true })
       expect(spawn.calls[0].args).toEqual(['exec'])
+    })
+
+    it('a cwd alone does not turn a text run into an agent: it stays lean, in that folder', async () => {
+      const spawn = makeFakeSpawn({ stdout: 'ok', code: 0 })
+      const brain = new CodexBrain({ spawn: asSpawn(spawn.fn), env: {} })
+      await brain.generate([{ role: 'user', content: 'q' }], { cwd: 'C:\\somewhere' })
+      const call = spawn.calls[0] as { args: string[]; options?: { cwd?: string } }
+      expect(call.args).toEqual(['exec', ...LEAN_CODEX_ARGS])
+      expect(call.options?.cwd).toBe('C:\\somewhere')
     })
 
     it('returns null on non-zero exit', async () => {
