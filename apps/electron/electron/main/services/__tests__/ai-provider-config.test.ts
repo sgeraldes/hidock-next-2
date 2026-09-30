@@ -12,9 +12,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const mockGetConfig = vi.fn()
+const mockResolveGeminiApiKey = vi.fn()
 
 vi.mock('../config', () => ({
   getConfig: () => mockGetConfig()
+}))
+
+vi.mock('../brains/gemini-api-brain', () => ({
+  resolveGeminiApiKey: () => mockResolveGeminiApiKey()
 }))
 
 describe('getProviderConfigFromSettings', () => {
@@ -84,5 +89,40 @@ describe('getProviderConfigFromSettings', () => {
 
     const { getProviderConfigFromSettings } = await import('../ai-provider-config')
     expect(getProviderConfigFromSettings()).toBeNull()
+  })
+})
+
+describe('getGraphProviderConfig', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('uses the saved Gemini key even when chat is set to ollama', async () => {
+    mockGetConfig.mockReturnValue({ chat: { provider: 'ollama', geminiModel: 'gemini-3.8-flash' } })
+    mockResolveGeminiApiKey.mockReturnValue('store-key') // pragma: allowlist secret
+
+    const { getGraphProviderConfig, getProviderConfigFromSettings } = await import('../ai-provider-config')
+
+    expect(getGraphProviderConfig()).toEqual({ provider: 'google', model: 'gemini-3.8-flash', apiKey: 'store-key' }) // pragma: allowlist secret
+    // the chat-bound resolver (value classification) is unchanged
+    expect(getProviderConfigFromSettings()).toBeNull()
+  })
+
+  it('takes the key from the credential store resolver, so a store-only key works', async () => {
+    mockGetConfig.mockReturnValue({ chat: { provider: 'gemini', geminiModel: '' }, transcription: { geminiApiKey: '' } })
+    mockResolveGeminiApiKey.mockReturnValue('store-only-key') // pragma: allowlist secret
+
+    const { getGraphProviderConfig } = await import('../ai-provider-config')
+
+    expect(getGraphProviderConfig()).toEqual({ provider: 'google', model: 'gemini-3.8-flash', apiKey: 'store-only-key' }) // pragma: allowlist secret
+  })
+
+  it('is null only when there is no Gemini key at all', async () => {
+    mockGetConfig.mockReturnValue({ chat: { provider: 'gemini', geminiModel: 'gemini-3.8-flash' } })
+    mockResolveGeminiApiKey.mockReturnValue('')
+
+    const { getGraphProviderConfig } = await import('../ai-provider-config')
+
+    expect(getGraphProviderConfig()).toBeNull()
   })
 })

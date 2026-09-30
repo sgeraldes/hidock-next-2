@@ -79,7 +79,7 @@ import {
 import type { Contact, Project, IdentitySuggestion, AcceptSuggestionResult, MergeKind } from './database'
 import { getEventBus } from './event-bus'
 import { resolveContact } from './entity-resolver'
-import { getProviderConfigFromSettings } from './ai-provider-config'
+import { getGraphProviderConfig } from './ai-provider-config'
 
 // ---------------------------------------------------------------------------
 // GraphDb adapter — bridges the app's database exports to the GraphDb interface
@@ -214,7 +214,7 @@ export interface IngestResult {
 }
 
 export async function ingestFromDbTranscripts(): Promise<IngestResult> {
-  const providerConfig = getProviderConfigFromSettings()
+  const providerConfig = getGraphProviderConfig()
   if (!providerConfig) {
     throw new Error('No AI provider configured. Please set a provider API key in Settings.')
   }
@@ -425,7 +425,7 @@ export async function ingestFromFolder(folderPath: string): Promise<IngestResult
     throw new Error(`Path is not a directory: ${resolved}`)
   }
 
-  const providerConfig = getProviderConfigFromSettings()
+  const providerConfig = getGraphProviderConfig()
   if (!providerConfig) {
     throw new Error('No AI provider configured. Please set a provider API key in Settings.')
   }
