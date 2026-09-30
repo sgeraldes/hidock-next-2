@@ -1175,7 +1175,10 @@ async function transcribeWithGemini(
     onProgress: (done: number, total: number) => {
       progressCallback?.('transcribing', Math.min(45, 20 + Math.round((done / total) * 25)))
     },
-    onTrace: (event: TranscriptionTraceEvent) => providerTimeline.push(event)
+    onTrace: (event: TranscriptionTraceEvent) => providerTimeline.push(event),
+    // Every response is billed, the discarded ones too; the collector opened by
+    // the transcription stage takes them (a call outside a stage drops them).
+    onUsage: (event) => recordGeminiUsage(event.model, event.usage)
   } as Parameters<typeof engine.transcribe>[1] & { filePath: string })) {
     const text = segment.text?.trim()
     if (text) {
@@ -2456,6 +2459,8 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     parentRunIds: [vadRun.id, diarizationRun.id, voiceIdRun.id]
   })
   let rawTranscript: RawTranscriptionResult
+  const transcriptionUsage = createGeminiUsageCollector()
+  const providerFilePath = recording.file_path // narrowed here; a closure below would lose it
   try {
     rawTranscript = transcriptionProvider === 'vibevoice'
       ? await transcribeWithVibeVoice(recording.file_path, meetingContext, progressCallback)
@@ -2467,16 +2472,18 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
         // TranscriptionCancelledError (caught below) so we stop sending audio to
         // Gemini and persist nothing — the up-front + second-stage checks cannot
         // observe an exclusion that lands between the engine's own provider calls.
-        : await transcribeWithGemini(
-            recording.file_path,
-            meetingContext,
-            progressCallback,
-            () => stillWanted(recordingId),
-            recording.duration_seconds ?? undefined
+        : await transcriptionUsage.run(() =>
+            transcribeWithGemini(
+              providerFilePath,
+              meetingContext,
+              progressCallback,
+              () => stillWanted(recordingId),
+              recording.duration_seconds ?? undefined
+            )
           )
   } catch (e) {
     if (e instanceof TranscriptionCancelledError) {
-      failProcessingRun(transcriptionRun.id, e.message, true)
+      failProcessingRun(transcriptionRun.id, e.message, true, runUsageFields(transcriptionUsage.total()))
       if (!speakerLinking.available) failProcessingRun(diarizationRun.id, e.message, true)
       console.log(
         `[Transcription] Recording ${recordingId} became ineligible during the transcription ` +
@@ -2488,7 +2495,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
       return { status: 'cancelled' }
     }
     if (e instanceof NoSpeechDetectedError) {
-      failProcessingRun(transcriptionRun.id, e.message, true)
+      failProcessingRun(transcriptionRun.id, e.message, true, runUsageFields(transcriptionUsage.total()))
       if (!speakerLinking.available) failProcessingRun(diarizationRun.id, e.message, true)
       await retireNoSpeechGeneratedContent(recordingId)
       updateRecordingTranscriptionStatus(recordingId, 'no_speech')
@@ -2497,7 +2504,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
       return { status: 'no_speech', reason: 'no_speech' }
     }
     const message = e instanceof Error ? e.message : String(e)
-    failProcessingRun(transcriptionRun.id, message)
+    failProcessingRun(transcriptionRun.id, message, false, runUsageFields(transcriptionUsage.total()))
     if (!speakerLinking.available) failProcessingRun(diarizationRun.id, message)
     throw e
   }
@@ -2513,18 +2520,22 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   )
   if (diarizationQuality.status === 'failed') {
     const message = `Provider timestamps failed local audio grounding: ${diarizationQuality.reasons.join('; ')}`
-    failProcessingRun(transcriptionRun.id, message)
+    failProcessingRun(transcriptionRun.id, message, false, runUsageFields(transcriptionUsage.total()))
     if (!speakerLinking.available) failProcessingRun(diarizationRun.id, message)
     throw new Error(message)
   }
   completeProcessingRun(transcriptionRun.id, {
     outputRefs: { fullText: `trans_${recordingId}.full_text`, speakers: `trans_${recordingId}.speakers` },
-    usage: rawTranscript.providerTimeline?.length
-      ? {
-          providerTimeline: rawTranscript.providerTimeline,
-          chunkCount: Math.max(...rawTranscript.providerTimeline.map((event) => event.chunkCount))
-        }
-      : undefined
+    // The provider timeline stays in `usage`; the tokens and the cost estimate join it.
+    ...runUsageFields(
+      transcriptionUsage.total(),
+      rawTranscript.providerTimeline?.length
+        ? {
+            providerTimeline: rawTranscript.providerTimeline,
+            chunkCount: Math.max(...rawTranscript.providerTimeline.map((event) => event.chunkCount))
+          }
+        : {}
+    )
   })
   if (!speakerLinking.available) {
     completeProcessingRun(diarizationRun.id, {

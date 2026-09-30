@@ -1346,3 +1346,100 @@ describe('nativeCoverageShortfall', () => {
     expect(nativeCoverageShortfall([{ endTime: 5000 }], 600)).toBeNull()
   })
 })
+
+describe('GeminiEngine reports the usage of every provider response', () => {
+  const nativeFile = { name: 'files/usage', state: 'ACTIVE', mimeType: 'audio/wav', uri: 'files://usage' }
+  const BYTE_RATE = 100
+  const wav = (seconds: number) => buildWav(seconds * BYTE_RATE, BYTE_RATE)
+  const usage = (n: number) => ({ total_input_tokens: 1000 * n, total_output_tokens: 10 * n, total_tokens: 1010 * n })
+  const nativeWords = (from: number, to: number, n: number) => ({
+    status: 'completed',
+    usage: usage(n),
+    steps: [{ content: [{ annotations: [
+      { type: 'word_info', text: 'hola', speaker: 'spk_0', start_offset: from.toFixed(2) + 's', end_offset: to.toFixed(2) + 's' },
+    ] }] }],
+  })
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockFilesUpload.mockResolvedValue(nativeFile)
+    mockFilesDelete.mockResolvedValue(undefined)
+  })
+
+  it('native model: reports each response, the discarded incomplete one included', async () => {
+    mockInteractionsCreate
+      .mockResolvedValueOnce({ status: 'incomplete', usage: usage(1), steps: [] })
+      .mockResolvedValueOnce(nativeWords(0, 300, 2))
+      .mockResolvedValueOnce(nativeWords(0, 300, 3))
+    const events: Array<{ model: string; usage: unknown }> = []
+    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+
+    await collect(engine.transcribe(wav(600), { source: 'mic', durationSeconds: 600, onUsage: (e) => events.push(e) }))
+
+    expect(events.map((e) => e.model)).toEqual(['gemini-3.5-transcribe', 'gemini-3.5-transcribe', 'gemini-3.5-transcribe'])
+    expect(events.map((e) => (e.usage as { total_input_tokens: number }).total_input_tokens)).toEqual([1000, 2000, 3000])
+  })
+
+  it('stream path: reports the latest usage block once per call, and also when the stream breaks', async () => {
+    mockGenerateContentStream.mockImplementationOnce(() => (async function* () {
+      yield { text: '[00:00] Speaker 1: hola\n', candidates: [{ finishReason: undefined }], usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 1, totalTokenCount: 6 } }
+      yield { text: '[00:05] Speaker 2: adios', candidates: [{ finishReason: 'STOP' }], usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 4, totalTokenCount: 9 } }
+    })())
+    const events: Array<{ model: string; usage: unknown }> = []
+    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.8-flash' })
+
+    await collect(engine.transcribe(oneSecond, { source: 'mic', onUsage: (e) => events.push(e) }))
+
+    expect(events).toHaveLength(1)
+    expect(events[0].model).toBe('gemini-3.8-flash')
+    expect(events[0].usage).toEqual({ promptTokenCount: 5, candidatesTokenCount: 4, totalTokenCount: 9 })
+
+    mockGenerateContentStream.mockImplementationOnce(() => (async function* () {
+      yield { text: 'partial', usageMetadata: { promptTokenCount: 7, candidatesTokenCount: 1, totalTokenCount: 8 } }
+      throw new Error('connection reset')
+    })())
+    events.length = 0
+    await expect(collect(engine.transcribe(oneSecond, { source: 'mic', onUsage: (e) => events.push(e) }))).rejects.toThrow('connection reset')
+    expect(events).toHaveLength(1)
+    expect(events[0].usage).toMatchObject({ promptTokenCount: 7 })
+  })
+
+  it('long recording path: reports each range response', async () => {
+    mockFilesUpload.mockResolvedValue({ name: 'files/long', state: 'ACTIVE', mimeType: 'audio/wav', uri: 'https://generativelanguage.googleapis.com/v1beta/files/long' })
+    const range = (id: string, timestamps: string[]) => ({
+      id, status: 'completed', usage: usage(1),
+      steps: [{ type: 'model_output', content: [{ type: 'text', text: JSON.stringify({
+        hasSpeech: true,
+        segments: timestamps.map((ts, i) => ({ timestamp: ts, speaker: 'Speaker 1', content: 'texto ' + id + i })),
+      }) }] }],
+    })
+    // A range that reaches the end of its interval is kept as it is; a short one is asked again.
+    mockInteractionsCreate.mockResolvedValueOnce(range('a', ['00:00', '19:50'])).mockResolvedValueOnce(range('b', ['20:00']))
+    const events: Array<{ model: string; usage: unknown }> = []
+    const engine = new GeminiEngine({ apiKey: 'x' })
+
+    await collect(engine.transcribe(buildWav(1201, 1), { source: 'mic', filePath: 'long-recording.wav', durationSeconds: 1201, onUsage: (e) => events.push(e) }))
+
+    expect(mockInteractionsCreate).toHaveBeenCalledTimes(2)
+    expect(events).toHaveLength(2)
+    expect(events.map((e) => (e.usage as { total_input_tokens: number }).total_input_tokens)).toEqual([1000, 1000])
+  })
+
+  it('a sink that throws, and a response without usage, change nothing', async () => {
+    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+    const plain = (from: number, to: number) => ({ ...nativeWords(from, to, 1), usage: undefined })
+
+    mockInteractionsCreate.mockResolvedValueOnce(nativeWords(0, 300, 1)).mockResolvedValueOnce(nativeWords(300, 600, 1))
+    const withBrokenSink = await collect(engine.transcribe(wav(600), { source: 'mic', durationSeconds: 600, onUsage: () => { throw new Error('sink broke') } }))
+    expect(withBrokenSink.length).toBeGreaterThan(0)
+
+    vi.clearAllMocks()
+    mockFilesUpload.mockResolvedValue(nativeFile)
+    mockFilesDelete.mockResolvedValue(undefined)
+    mockInteractionsCreate.mockResolvedValueOnce(plain(0, 300)).mockResolvedValueOnce(plain(300, 600))
+    const events: unknown[] = []
+    const withoutUsage = await collect(engine.transcribe(wav(600), { source: 'mic', durationSeconds: 600, onUsage: (e) => events.push(e) }))
+    expect(withoutUsage.length).toBeGreaterThan(0)
+    expect(events).toHaveLength(0)
+  })
+})

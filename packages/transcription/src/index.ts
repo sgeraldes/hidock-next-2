@@ -5,6 +5,7 @@ export type {
   TranscriptionEngine,
   TranscriptionTraceEvent,
   TranscriptionTracePhase,
+  TranscriptionUsageEvent,
 } from './engines/engine-interface.js'
 export { NoSpeechDetectedError, TranscriptionCancelledError } from './engines/engine-interface.js'
 

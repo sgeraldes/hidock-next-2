@@ -37,7 +37,7 @@ Money: not measurable before 29-sep. Every one of the 1,121 Gemini runs has an e
 
 | # | Change | Saves | Needs |
 |---|---|---|---|
-| 1 | Record the usage and cost of every Gemini call in `processing_runs` (tokens from `usageMetadata`, price per model in one table). Done for the analysis (on the summary run), action items and timeline calls: `gemini-usage.ts`. Transcription, the biggest spend, is next: its engine has three call paths with retries | Makes money measurable; nothing else can be judged without it | Nothing |
+| 1 | Record the usage and cost of every Gemini call in `processing_runs` (tokens from `usageMetadata`, price per model in one table). Done: the analysis (on the summary run), action items, timeline and transcription (all three engine call paths, retries and discarded responses included), in `gemini-usage.ts` | Makes money measurable; nothing else can be judged without it | Nothing |
 | 2 | ~~Skip diarization for recordings Jev rates 1-2 stars~~ Dropped: measured 28-sep, completed pyannote runs took 33.2 h on 3-5 star recordings, 1.6 h on unrated ones and 0.1 h on 1-2 star ones (they are short). Not worth a behaviour change | 0.1 h of 35 h | Nothing |
 | 3 | Run diarization on the gamestation (HiDock Model Host, built 22-sep) instead of this PC | Most of the 55 h leaves this PC; the 4090 does it in minutes | Sebastián installs the host on the 4090 |
 | 4 | Skip the action-items Gemini call when Jev's `has_action_items` is under 0.2 | Up to 145 calls a month | Nothing (Jev already answers it) |

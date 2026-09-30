@@ -20,6 +20,13 @@ export interface TranscriptionTraceEvent {
   detail?: string
 }
 
+/** The usage block of one provider response, with the model that produced it. */
+export interface TranscriptionUsageEvent {
+  model: string
+  /** As the provider returned it (usageMetadata or an Interactions usage); the caller reads it. */
+  usage: unknown
+}
+
 export interface TranscribeOptions {
   source: 'mic' | 'system'
   language?: string
@@ -32,6 +39,11 @@ export interface TranscribeOptions {
   onProgress?: (done: number, total: number) => void
   /** Structured provider-boundary timing for diagnostics. */
   onTrace?: (event: TranscriptionTraceEvent) => void
+  /**
+   * Called for every provider response, including the ones a retry or a
+   * subdivision throws away: they were billed. Never affects the transcription.
+   */
+  onUsage?: (event: TranscriptionUsageEvent) => void
   /** Optional free-text context passed to the engine's prompt (e.g. meeting context for Gemini). */
   context?: string
   /**

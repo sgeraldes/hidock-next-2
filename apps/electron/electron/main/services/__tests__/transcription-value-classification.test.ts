@@ -197,15 +197,25 @@ vi.mock('@google/generative-ai', () => {
   return { GoogleGenerativeAI: MockGoogleGenerativeAI }
 })
 
+// eslint-disable-next-line require-yield -- the default engine of this suite is never reached (local-asr provider)
+const engineNotUsed = async function* (): AsyncGenerator<any> {
+  throw new Error('not used in this suite (local-asr provider)')
+}
+let mockGeminiEngineImpl: (...args: any[]) => AsyncGenerator<any> = engineNotUsed
+
 vi.mock('@hidock/transcription', () => {
-  // eslint-disable-next-line require-yield -- this suite never exercises the gemini raw-transcription path
-  const mockGeminiTranscribe = async function* () {
-    throw new Error('not used in this suite (local-asr provider)')
-  }
   function GeminiEngine() {
-    return { isAvailable: async () => true, isStreaming: false, isLocal: false, transcribe: mockGeminiTranscribe }
+    return {
+      isAvailable: async () => true,
+      isStreaming: false,
+      isLocal: false,
+      transcribe: (...args: any[]) => mockGeminiEngineImpl(...args)
+    }
   }
-  return { GeminiEngine }
+  // The stage's catch block tests the error against these two classes.
+  class NoSpeechDetectedError extends Error {}
+  class TranscriptionCancelledError extends Error {}
+  return { GeminiEngine, NoSpeechDetectedError, TranscriptionCancelledError }
 })
 
 vi.mock('fs', async (importOriginal) => {
@@ -830,5 +840,141 @@ describe('transcribeRecording — ADV40-1 eligibility BEFORE the provider', () =
     expect(mockInsertTranscript).not.toHaveBeenCalled()
     expect(mockEnsureCapture).not.toHaveBeenCalled()
     expect(mockUpdateRecordingStatus).not.toHaveBeenCalledWith('rec-elig', 'processing')
+  })
+})
+
+describe('transcribeRecording — Gemini usage lands on the stage runs', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    resetConfig()
+    mockIsRecordingEligible.mockReset()
+    mockIsValueExcludedRecording.mockReturnValue(false)
+    mockIsRecordingProcessable.mockReturnValue(true)
+    mockGetRecordingById.mockReturnValue({
+      id: 'rec-usage',
+      filename: 'usage.wav',
+      file_path: 'G:\\Recordings\\usage.wav',
+      status: 'complete'
+    })
+    mockQueryAll.mockImplementation(() => [])
+    mockQueryOne.mockReturnValue({ id: 'cap-usage' })
+    mockEnsureCapture.mockReturnValue('cap-usage')
+    mockApplyCaptureValueClassification.mockReturnValue({ applied: true, rating: 'unrated' })
+  })
+
+  afterEach(() => {
+    mockIsRecordingEligible.mockReset()
+  })
+
+  it('the summary run gets the tokens and the cost estimate of the analysis call; title and meeting resolution carry none', async () => {
+    mockGenerateContent.mockResolvedValue({
+      response: {
+        text: () => JSON.stringify(BASE_ANALYSIS),
+        usageMetadata: { promptTokenCount: 4000, candidatesTokenCount: 300, totalTokenCount: 4300 }
+      }
+    })
+    const { transcribeManually } = await import('../transcription')
+    const { completeProcessingRun } = await import('../database')
+
+    await transcribeManually('rec-usage')
+
+    const completed = (runId: string) =>
+      vi.mocked(completeProcessingRun).mock.calls.filter(([id]) => id === runId).map(([, result]) => result as Record<string, any>)
+    const summary = completed('run-summary')
+    expect(summary).toHaveLength(1)
+    expect(summary[0].usage).toMatchObject({ tokens: { calls: 1, promptTokens: 4000, outputTokens: 300 } })
+    expect(summary[0].estimatedCostAmount).toBeGreaterThan(0)
+    expect(summary[0].estimatedCostCurrency).toBe('USD')
+    expect(summary[0].costMethod).toBe('list-price-2026-09-29')
+    // one call, three stage records: the cost is counted once
+    for (const stage of ['run-title', 'run-meeting-resolution']) {
+      for (const result of completed(stage)) {
+        expect(result.usage).toBeUndefined()
+        expect(result.estimatedCostAmount).toBeUndefined()
+      }
+    }
+  })
+
+  it('a response without usage leaves the run without a cost', async () => {
+    mockGenerateContent.mockResolvedValue(geminiJsonResponse(BASE_ANALYSIS))
+    const { transcribeManually } = await import('../transcription')
+    const { completeProcessingRun } = await import('../database')
+
+    await transcribeManually('rec-usage')
+
+    const summary = vi.mocked(completeProcessingRun).mock.calls.find(([id]) => id === 'run-summary')?.[1] as Record<string, any>
+    expect(summary.usage).toBeUndefined()
+    expect(summary.estimatedCostAmount).toBeUndefined()
+  })
+})
+
+describe('transcribeRecording — the transcription stage records what the engine reports', () => {
+  const usage = (n: number) => ({ total_input_tokens: 10_000 * n, total_output_tokens: 500 * n, total_tokens: 10_500 * n })
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    resetConfig({ provider: 'gemini', geminiModel: 'gemini-3.5-transcribe' })
+    mockIsRecordingEligible.mockReset()
+    mockIsValueExcludedRecording.mockReturnValue(false)
+    mockIsRecordingProcessable.mockReturnValue(true)
+    mockGetRecordingById.mockReturnValue({
+      id: 'rec-tx',
+      filename: 'tx.wav',
+      file_path: 'G:\\Recordings\\tx.wav',
+      duration_seconds: 120,
+      status: 'complete'
+    })
+    mockQueryAll.mockImplementation(() => [])
+    mockQueryOne.mockReturnValue({ id: 'cap-tx' })
+    mockEnsureCapture.mockReturnValue('cap-tx')
+    mockApplyCaptureValueClassification.mockReturnValue({ applied: true, rating: 'unrated' })
+    mockGenerateContent.mockResolvedValue(geminiJsonResponse(BASE_ANALYSIS))
+  })
+
+  afterEach(() => {
+    mockIsRecordingEligible.mockReset()
+    mockGeminiEngineImpl = engineNotUsed
+  })
+
+  it('completes the run with the tokens of every response, the discarded one included, next to the provider timeline', async () => {
+    mockGeminiEngineImpl = async function* (_audio: unknown, options: any) {
+      const common = { chunkIndex: 1, chunkCount: 1, audioStartSec: 0, audioEndSec: 120 }
+      options.onTrace({ phase: 'provider-transcription', status: 'started', ...common })
+      options.onUsage({ model: 'gemini-3.5-transcribe', usage: usage(1) }) // an interval the model could not finish
+      options.onUsage({ model: 'gemini-3.5-transcribe', usage: usage(2) })
+      options.onTrace({ phase: 'provider-transcription', status: 'completed', elapsedMs: 5, ...common })
+      yield { speaker: 'Speaker 1', startTime: 0, endTime: 60, text: 'Hola a todos.' }
+      yield { speaker: 'Speaker 2', startTime: 60, endTime: 118, text: 'Buenos dias.' }
+    }
+    const { transcribeManually } = await import('../transcription')
+    const { completeProcessingRun } = await import('../database')
+
+    await transcribeManually('rec-tx')
+
+    const done = vi.mocked(completeProcessingRun).mock.calls.find(([id]) => id === 'run-transcription')?.[1] as Record<string, any>
+    expect(done.usage.tokens).toMatchObject({ calls: 2, promptTokens: 30_000, outputTokens: 1500 })
+    expect(done.usage.byModel['gemini-3.5-transcribe']).toMatchObject({ calls: 2 })
+    expect(done.usage.providerTimeline).toHaveLength(2)
+    expect(done.usage.chunkCount).toBe(1)
+    // 30,000 in at $2 and 1,500 out at $12 per million
+    expect(done.estimatedCostAmount).toBeCloseTo(0.06 + 0.018, 6)
+    expect(done.costMethod).toBe('list-price-2026-09-29')
+  })
+
+  it('keeps the tokens on the run when the engine fails after being billed', async () => {
+    mockGeminiEngineImpl = async function* (_audio: unknown, options: any) {
+      options.onUsage({ model: 'gemini-3.5-transcribe', usage: usage(1) })
+      yield* []
+      throw new Error('Gemini returned an empty transcription for segment 1/1')
+    }
+    const { transcribeManually } = await import('../transcription')
+    const { failProcessingRun } = await import('../database')
+
+    await transcribeManually('rec-tx').catch(() => undefined)
+
+    const failed = vi.mocked(failProcessingRun).mock.calls.find(([id]) => id === 'run-transcription')
+    expect(failed).toBeDefined()
+    expect((failed![3] as Record<string, any>).usage.tokens).toMatchObject({ calls: 1, promptTokens: 10_000 })
+    expect((failed![3] as Record<string, any>).estimatedCostAmount).toBeGreaterThan(0)
   })
 })
