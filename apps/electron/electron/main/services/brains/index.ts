@@ -6,6 +6,7 @@
  * Gemini-API + Ollama adapters that wrap the app's current LLM paths.
  */
 export * from './types'
+export * from './descriptor'
 export { BrainRouter, getBrainRouter, resetBrainRouter } from './brain-router'
 export type { ChatFailure } from './brain-router'
 export { BrainRegistry, getBrainRegistry, resetBrainRegistry } from './brain-registry'
