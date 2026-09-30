@@ -508,3 +508,23 @@ export function foldMessagesToPrompt(messages: { role: string; content: string }
   }
   return parts.join('\n\n')
 }
+
+/** The most of a failed CLI's stderr that goes to the log. */
+export const CLI_FAILURE_LOG_MAX_CHARS = 300
+
+/**
+ * What a failed CLI run says, short enough for the log. Some CLIs echo the whole
+ * prompt to stderr before they fail (`codex exec` prints the note or transcript it
+ * was given), and the log is a file on disk, so the full text never goes there:
+ * the lines that state an error, or failing that the last line, cut to a length.
+ */
+export function summarizeCliFailure(stderr: string, code: number | null): string {
+  const lines = stderr
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+  const errors = [...new Set(lines.filter((line) => /^error\b/i.test(line)))]
+  const picked = errors.length > 0 ? errors.join(' | ') : (lines[lines.length - 1] ?? '')
+  const text = picked.length > CLI_FAILURE_LOG_MAX_CHARS ? `${picked.slice(0, CLI_FAILURE_LOG_MAX_CHARS)}…` : picked
+  return text || `exit ${code}`
+}

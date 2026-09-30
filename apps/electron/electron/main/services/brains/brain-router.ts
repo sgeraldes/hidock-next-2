@@ -16,6 +16,7 @@
 import { getConfig } from '../config'
 import { getBrainRegistry, BrainRegistry } from './brain-registry'
 import { eligibleToGenerate } from './eligibility'
+import { isBrainCoolingDown } from './brain-cooldown'
 import type {
   AIBrain,
   AudioAnalyzeInput,
@@ -86,6 +87,7 @@ export class BrainRouter {
   private async isUsable(brain: AIBrain | null, need: BrainCapability): Promise<boolean> {
     if (!brain) return false
     if (!this.isEnabled(brain.id)) return false
+    if (isBrainCoolingDown(brain.id)) return false
     if (!brain.capabilities().has(need)) return false
     try {
       return (await brain.authStatus()).configured
@@ -185,6 +187,7 @@ export class BrainRouter {
       const brain = this.registry.get(id)
       if (!brain) continue
       if (!this.isEnabled(id)) continue
+      if (isBrainCoolingDown(id)) continue // out of quota until its stated reset
       if (!brain.capabilities().has('chat')) continue
       if (id === 'ollama') return brain // serve directly; no availability preflight
       try {
