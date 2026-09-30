@@ -19,7 +19,7 @@
  * `codex login status` (structured/exit-coded auth check), NOT a version-only
  * probe — plus OPENAI_API_KEY in the env. authStatus()/generate() NEVER throw.
  */
-import { runCli, foldMessagesToPrompt, summarizeCliFailure, cliErrorLines, type SpawnFn } from './cli-runner'
+import { runCli, foldMessagesToPrompt, summarizeCliFailure, cliErrorLines, harnessWorkDir, type SpawnFn } from './cli-runner'
 import { noteBrainFailure } from './brain-cooldown'
 import type {
   AIBrain,
@@ -34,6 +34,22 @@ const CAPABILITIES: ReadonlySet<BrainCapability> = new Set<BrainCapability>([
   'chat',
   'agentic',
 ])
+
+/**
+ * A text run never uses the CLI's default configuration: no user config.toml, no rules files,
+ * no session file, a read-only sandbox, and no git repository required. A run that works in a
+ * repository (GenerateOptions.cwd, the handover) keeps the full configuration.
+ */
+export const LEAN_CODEX_ARGS: readonly string[] = [
+  '--skip-git-repo-check',
+  '--ephemeral',
+  '--ignore-user-config',
+  '--ignore-rules',
+  '--sandbox',
+  'read-only',
+  '--color',
+  'never'
+]
 
 const AUTH_TIMEOUT_MS = 8_000
 const COMPANION_TIMEOUT_MS = 15_000
@@ -146,14 +162,17 @@ export class CodexBrain implements AIBrain {
 
     // `codex exec` with no positional prompt reads instructions from stdin — keep
     // the prompt OUT of argv (confidentiality). Only fixed flags go in argv.
-    const args = ['exec']
+    const agentic = !!opts.cwd
+    const args = ['exec', ...(agentic ? [] : LEAN_CODEX_ARGS)]
     if (opts.model) args.push('--model', opts.model)
+    if (opts.effort) args.push('-c', `model_reasoning_effort=${opts.effort === 'xhigh' || opts.effort === 'max' ? 'high' : opts.effort}`)
+    const cwd = opts.cwd ?? harnessWorkDir()
 
     try {
       const res = await runCli(
         'codex',
         args,
-        { timeoutMs: GENERATE_TIMEOUT_MS, signal: opts.signal, input: prompt, env: this.env, cwd: opts.cwd },
+        { timeoutMs: GENERATE_TIMEOUT_MS, signal: opts.signal, input: prompt, env: this.env, cwd },
         this.spawn
       )
       if (res.aborted || res.timedOut || res.spawnError || res.outputLimitExceeded) {

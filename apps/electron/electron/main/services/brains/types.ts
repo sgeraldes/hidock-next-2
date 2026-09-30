@@ -44,12 +44,20 @@ export interface BrainMessage {
   content: string
 }
 
+/** How hard the model thinks, where the harness has the notion. */
+export type BrainEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
 export interface GenerateOptions {
   systemPrompt?: string
   temperature?: number
   maxTokens?: number
   /** Brain-specific model override. Falls back to the brain's configured default. */
   model?: string
+  /**
+   * Thinking effort. Claude Code passes it as --effort and Codex as model_reasoning_effort
+   * (xhigh and max are high there); the API and local brains have their own controls and ignore it.
+   */
+  effort?: BrainEffort
   /** Ask for JSON output where the brain supports it (Gemini responseMimeType). */
   json?: boolean
   /**

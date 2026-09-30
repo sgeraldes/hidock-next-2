@@ -27,7 +27,8 @@
  */
 import { spawn as nodeSpawn } from 'child_process'
 import type { SpawnOptions, ChildProcess } from 'child_process'
-import { existsSync } from 'fs'
+import { existsSync, mkdirSync } from 'fs'
+import { tmpdir } from 'os'
 import { join, delimiter, extname } from 'path'
 
 /** The subset of child_process.spawn these adapters rely on (injectable for tests). */
@@ -541,4 +542,19 @@ export function summarizeCliFailure(stderr: string, code: number | null): string
   const picked = errors.length > 0 ? errors.join(' | ') : (lines[lines.length - 1] ?? '')
   const text = picked.length > CLI_FAILURE_LOG_MAX_CHARS ? `${picked.slice(0, CLI_FAILURE_LOG_MAX_CHARS)}…` : picked
   return text || `exit ${code}`
+}
+
+/**
+ * The working directory of a lean CLI run: an empty folder, so no project file
+ * (CLAUDE.md, AGENTS.md, .git, settings, hooks) is found from it. A run for an
+ * agent that works in a repository (handover) passes its own cwd instead.
+ */
+export function harnessWorkDir(): string {
+  const dir = join(tmpdir(), 'hidock-harness')
+  try {
+    mkdirSync(dir, { recursive: true })
+  } catch {
+    // the CLI reports a directory it cannot use
+  }
+  return dir
 }
