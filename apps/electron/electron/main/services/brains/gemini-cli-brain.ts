@@ -33,7 +33,7 @@
 import { existsSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
-import { runCli, foldMessagesToPrompt, summarizeCliFailure, type SpawnFn } from './cli-runner'
+import { runCli, foldMessagesToPrompt, summarizeCliFailure, cliErrorLines, type SpawnFn } from './cli-runner'
 import { noteBrainFailure } from './brain-cooldown'
 import { resolveGeminiApiKey } from './gemini-api-brain'
 import type {
@@ -179,11 +179,10 @@ export class GeminiCliBrain implements AIBrain {
         return null
       }
       if (res.code !== 0) {
-        // Only what the CLI reports as its error: a prompt it echoed may mention a
+        console.error('[GeminiCliBrain] generate failed:', summarizeCliFailure(res.stderr, res.code))
+        // Only the lines the CLI states as errors: a prompt it echoed may mention a
         // usage limit without the brain being out of quota.
-        const failure = summarizeCliFailure(res.stderr, res.code)
-        console.error('[GeminiCliBrain] generate failed:', failure)
-        noteBrainFailure(this.id, failure)
+        noteBrainFailure(this.id, cliErrorLines(res.stderr).join('\n'))
         return null
       }
       return parseGeminiJson(res.stdout)

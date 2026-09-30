@@ -172,6 +172,18 @@ describe('CodexBrain when the prompt it echoes mentions a usage limit', () => {
   })
 })
 
+describe('CodexBrain when the last stderr line is the echoed prompt', () => {
+  it('does not rest: with no error line there is nothing to decide from', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const spawn = makeFakeSpawn({ stderr: 'starting\nUser: we may hit the usage limit next month', code: 1 })
+    const brain = new CodexBrain({ spawn: spawn.fn as unknown as SpawnFn, env: {} })
+
+    expect(await brain.generate([{ role: 'user', content: 'x' }])).toBeNull()
+
+    expect(isBrainCoolingDown('codex')).toBe(false)
+  })
+})
+
 describe('BrainRouter with a resting brain', () => {
   function makeBrain(id: BrainId): AIBrain {
     const caps = new Set<BrainCapability>(['generate', 'chat'])
@@ -208,6 +220,24 @@ describe('BrainRouter with a resting brain', () => {
     expect(await router.chat('chat', [{ role: 'user', content: 'hi' }])).toBe('gemini-api:chat')
     expect(codex.chat).not.toHaveBeenCalled()
     expect(await router.resolve('chat', 'chat')).toBe(gemini)
+  })
+
+  it('does not call a resting brain for embeddings', async () => {
+    const embedder = makeBrain('ollama')
+    embedder.capabilities = () => new Set<BrainCapability>(['embed'])
+    embedder.embed = vi.fn(async (texts: string[]) => texts.map(() => [1]))
+    const other = makeBrain('gemini-api')
+    other.capabilities = () => new Set<BrainCapability>(['embed'])
+    other.embed = vi.fn(async (texts: string[]) => texts.map(() => [2]))
+    mockBrainsConfig = { taskRouting: { embed: 'ollama' }, enabled: { ollama: true, 'gemini-api': true } }
+    const router = new BrainRouter(registry([embedder, other]))
+    noteBrainFailure('ollama', 'usage limit reached', Date.now())
+
+    const vectors = await router.embed(['a'])
+
+    expect(embedder.embed).not.toHaveBeenCalled()
+    // An explicit route that cannot serve gives the null vectors callers treat as "no embedding available".
+    expect(vectors).toEqual([null])
   })
 
   it('uses the brain again after the reset', async () => {

@@ -37,6 +37,7 @@ import {
 } from './database'
 import { isRecordingEligible, isCaptureEligible, filterEligibleRecordingIds } from './recording-eligibility'
 import { getBrainRouter, getBrainRegistry } from './brains'
+import { isBrainCoolingDown } from './brains/brain-cooldown'
 import type { AIBrain } from './brains'
 import { getEventBus } from './event-bus'
 
@@ -704,7 +705,7 @@ export interface RunHandoverAgentResult {
 async function defaultResolveBrain(brainId?: string): Promise<AIBrain | null> {
   if (brainId) {
     const brain = getBrainRegistry().get(brainId as AIBrain['id'])
-    if (brain && brain.capabilities().has('agentic')) {
+    if (brain && brain.capabilities().has('agentic') && !isBrainCoolingDown(brain.id)) {
       try {
         if ((await brain.authStatus()).configured) return brain
       } catch {

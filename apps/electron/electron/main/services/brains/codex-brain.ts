@@ -19,7 +19,7 @@
  * `codex login status` (structured/exit-coded auth check), NOT a version-only
  * probe — plus OPENAI_API_KEY in the env. authStatus()/generate() NEVER throw.
  */
-import { runCli, foldMessagesToPrompt, summarizeCliFailure, type SpawnFn } from './cli-runner'
+import { runCli, foldMessagesToPrompt, summarizeCliFailure, cliErrorLines, type SpawnFn } from './cli-runner'
 import { noteBrainFailure } from './brain-cooldown'
 import type {
   AIBrain,
@@ -161,11 +161,10 @@ export class CodexBrain implements AIBrain {
         return null
       }
       if (res.code !== 0) {
-        // Only what the CLI reports as its error: a prompt it echoed may mention a
+        console.error('[CodexBrain] generate failed:', summarizeCliFailure(res.stderr, res.code))
+        // Only the lines the CLI states as errors: a prompt it echoed may mention a
         // usage limit without the brain being out of quota.
-        const failure = summarizeCliFailure(res.stderr, res.code)
-        console.error('[CodexBrain] generate failed:', failure)
-        noteBrainFailure(this.id, failure)
+        noteBrainFailure(this.id, cliErrorLines(res.stderr).join('\n'))
         return null
       }
       const text = res.stdout.trim()

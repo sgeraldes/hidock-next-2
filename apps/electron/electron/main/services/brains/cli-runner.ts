@@ -509,6 +509,20 @@ export function foldMessagesToPrompt(messages: { role: string; content: string }
   return parts.join('\n\n')
 }
 
+/**
+ * The lines of a CLI's stderr that state an error ("ERROR: ...", "Error when ..."),
+ * once each. A CLI that echoes the prompt puts it on other lines, so a decision
+ * taken from these lines is not taken from the prompt. An error line that itself
+ * quotes the prompt is bounded by CLI_FAILURE_LOG_MAX_CHARS in the log.
+ */
+export function cliErrorLines(stderr: string): string[] {
+  const lines = stderr
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^error\b/i.test(line))
+  return [...new Set(lines)]
+}
+
 /** The most of a failed CLI's stderr that goes to the log. */
 export const CLI_FAILURE_LOG_MAX_CHARS = 300
 
@@ -523,7 +537,7 @@ export function summarizeCliFailure(stderr: string, code: number | null): string
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
-  const errors = [...new Set(lines.filter((line) => /^error\b/i.test(line)))]
+  const errors = cliErrorLines(stderr)
   const picked = errors.length > 0 ? errors.join(' | ') : (lines[lines.length - 1] ?? '')
   const text = picked.length > CLI_FAILURE_LOG_MAX_CHARS ? `${picked.slice(0, CLI_FAILURE_LOG_MAX_CHARS)}…` : picked
   return text || `exit ${code}`

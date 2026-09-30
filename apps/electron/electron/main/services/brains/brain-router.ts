@@ -323,7 +323,7 @@ export class BrainRouter {
     const routed = this.brainsConfig()?.taskRouting?.['embed']
     if (routed && routed !== 'gemini-api') {
       const brain = this.registry.get(routed)
-      if (brain && this.isEnabled(routed) && brain.capabilities().has('embed') && brain.embed) {
+      if (brain && this.isEnabled(routed) && !isBrainCoolingDown(routed) && brain.capabilities().has('embed') && brain.embed) {
         if (!eligibleToGenerate(opts.shouldGenerate)) return ineligible()
         try {
           return await brain.embed(texts, opts)
@@ -369,7 +369,7 @@ export class BrainRouter {
     for (const id of FALLBACK_CHAINS.embed) {
       if (id === 'gemini-api' || tried.has(id)) continue
       const brain = this.registry.get(id)
-      if (!brain || !this.isEnabled(id) || !brain.capabilities().has('embed') || !brain.embed) continue
+      if (!brain || !this.isEnabled(id) || isBrainCoolingDown(id) || !brain.capabilities().has('embed') || !brain.embed) continue
       if (!eligibleToGenerate(opts.shouldGenerate)) return ineligible()
       try {
         return await brain.embed(texts, opts)
@@ -395,7 +395,7 @@ export class BrainRouter {
     const routed = cfg?.taskRouting?.['embed']
     if (routed && routed !== 'gemini-api') {
       const brain = this.registry.get(routed)
-      if (brain && this.isEnabled(routed) && brain.capabilities().has('embed')) {
+      if (brain && this.isEnabled(routed) && !isBrainCoolingDown(routed) && brain.capabilities().has('embed')) {
         try {
           if ((await brain.authStatus()).configured) return routed
         } catch {
@@ -408,7 +408,7 @@ export class BrainRouter {
     for (const id of FALLBACK_CHAINS.embed) {
       if (id === 'gemini-api' || id === routed) continue
       const brain = this.registry.get(id)
-      if (!brain || !this.isEnabled(id) || !brain.capabilities().has('embed')) continue
+      if (!brain || !this.isEnabled(id) || isBrainCoolingDown(id) || !brain.capabilities().has('embed')) continue
       try {
         if ((await brain.authStatus()).configured) return id
       } catch {
