@@ -77,7 +77,8 @@ export interface GenerateOptions {
   /**
    * Run the CLI harness with its full configuration (tools, project files, hooks). Only an agent
    * that works in a repository asks for it (the handover). Absent or false: a lean text run, in
-   * whatever cwd the caller gives or in an empty folder.
+   * whatever cwd the caller gives or in an empty folder. Only the Claude Code and Codex adapters
+   * make the distinction; Gemini CLI and Kiro always run with their normal configuration.
    */
   agentic?: boolean
   signal?: AbortSignal
