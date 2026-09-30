@@ -2,7 +2,8 @@
  * useKeyboardNavigation Hook
  *
  * Provides keyboard navigation for the Library list.
- * Supports Arrow Up/Down, Home/End, Space, Enter, Escape, Ctrl+A.
+ * Supports Arrow Up/Down, Home/End, Space, Enter, Escape, Ctrl+A. In a grid (`columns` above 1)
+ * Up and Down move a whole row and Left and Right move one card.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -19,6 +20,8 @@ interface UseKeyboardNavigationOptions {
   onExpandRow?: (id: string) => void
   onCollapseRow?: (id: string) => void
   onCollapseAllRows?: () => void
+  /** Cards per row of a grid layout. 1 (the default) is a plain list. */
+  columns?: number
   isEnabled?: boolean
 }
 
@@ -41,6 +44,7 @@ export function useKeyboardNavigation({
   onExpandRow,
   onCollapseRow,
   onCollapseAllRows,
+  columns = 1,
   isEnabled = true
 }: UseKeyboardNavigationOptions): UseKeyboardNavigationResult {
   const [focusedIndex, setFocusedIndex] = useState(-1)
@@ -98,6 +102,11 @@ export function useKeyboardNavigation({
           setFocusedIndex((prev) => {
             // C-005: When no item is focused (-1), start at first item
             if (prev < 0) return 0
+            if (columns > 1) {
+              // Down a row; the last row keeps the focus where it is.
+              const lastRow = Math.floor((items.length - 1) / columns)
+              return Math.floor(prev / columns) >= lastRow ? prev : Math.min(prev + columns, items.length - 1)
+            }
             const next = prev < items.length - 1 ? prev + 1 : prev
             return next
           })
@@ -108,22 +117,31 @@ export function useKeyboardNavigation({
           setFocusedIndex((prev) => {
             // C-005: When no item is focused (-1), start at last item
             if (prev < 0) return items.length - 1
+            if (columns > 1) return prev >= columns ? prev - columns : prev
             const next = prev > 0 ? prev - 1 : 0
             return next
           })
           break
 
         case 'ArrowRight':
-          // Expand row when collapsed
           event.preventDefault()
+          if (columns > 1) {
+            setFocusedIndex((prev) => (prev < 0 ? 0 : Math.min(prev + 1, items.length - 1)))
+            break
+          }
+          // Expand row when collapsed
           if (currentItemId && onExpandRow && expandedIds && !expandedIds.has(currentItemId)) {
             onExpandRow(currentItemId)
           }
           break
 
         case 'ArrowLeft':
-          // Collapse row when expanded
           event.preventDefault()
+          if (columns > 1) {
+            setFocusedIndex((prev) => (prev < 0 ? items.length - 1 : Math.max(prev - 1, 0)))
+            break
+          }
+          // Collapse row when expanded
           if (currentItemId && onCollapseRow && expandedIds && expandedIds.has(currentItemId)) {
             onCollapseRow(currentItemId)
           }
@@ -186,6 +204,7 @@ export function useKeyboardNavigation({
       onExpandRow,
       onCollapseRow,
       onCollapseAllRows,
+      columns,
       isEnabled
     ]
   )

@@ -57,6 +57,7 @@ import {
   LibraryFilters,
   SourceRow,
   SourceCard,
+  LibraryColumnHeader,
   StatusLegend,
   EmptyState,
   DeviceDisconnectBanner,
@@ -102,7 +103,9 @@ import {
   type DeviceDeleteOutcome
 } from '@/features/library/utils/deletionCopy'
 import type { TypeCounts } from '@/features/library/components/LibraryFilters'
-import { useLibraryStore, useLibrarySorting } from '@/store/useLibraryStore'
+import { useLibraryStore, useLibrarySorting, type SortBy } from '@/store/useLibraryStore'
+import { COLUMN_HEADER_HEIGHT_PX } from '@/features/library/components/libraryColumns'
+import { compareDerived, defaultSortOrder, derivedSortValue, isDerivedSort } from '@/features/library/utils/sortKeys'
 import { useOperations } from '@/hooks/useOperations'
 import { useProcessingPause } from '@/hooks/useProcessingPause'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
@@ -130,12 +133,21 @@ function bucketedDateGroup(dateRecorded: Date | string | null | undefined): Coar
   return coarseDateGroup(dateRecorded) ?? 'older'
 }
 
-// Two-line rows are 44px; on a wide list a row is one line of 32px (columns).
+// A row is one line of 32px on a wide list (columns), two lines of 44px on a narrow one, and
+// three lines of 68px on a very narrow one (a phone in portrait): title, date and time, chips.
 const COMPACT_ROW_HEIGHT_PX = 44
 const WIDE_ROW_HEIGHT_PX = 32
+const THREE_LINE_ROW_HEIGHT_PX = 68
 // The list width from which a row has room for date, time and duration columns.
 const WIDE_ROW_MIN_WIDTH_PX = 880
+// Under this width the chips no longer fit beside the date and get a line of their own.
+const THREE_LINE_MAX_WIDTH_PX = 400
 const GROUP_HEADER_HEIGHT_PX = 28
+// Card view: a grid of fixed-size cards. Columns are as many 300px cards as fit; a card and its gap
+// make one virtual row of a fixed pitch, so offsets are exact.
+const CARD_MIN_WIDTH_PX = 300
+const CARD_HEIGHT_PX = 204
+const CARD_GAP_PX = 12
 
 /**
  * The compact/Trash list virtualizes a flat sequence of items that is either a
@@ -295,10 +307,6 @@ export function Library() {
     return { pending, active }
   }, [downloadQueue])
 
-  // UI state - expandedTranscripts centralized in useLibraryStore (B-LIB-005)
-  const expandedTranscripts = useLibraryStore((state) => state.expandedTranscripts)
-  const toggleTranscriptExpansion = useLibraryStore((state) => state.toggleTranscriptExpansion)
-
   // Filter state - persisted in store across navigation
   // Using useTransitionFilters for non-blocking filter updates
   const {
@@ -356,6 +364,19 @@ export function Library() {
   const { sortBy, sortOrder } = useLibrarySorting()
   const setSortBy = useLibraryStore((state) => state.setSortBy)
   const setSortOrder = useLibraryStore((state) => state.setSortOrder)
+  const recordingErrors = useLibraryStore((state) => state.recordingErrors)
+  // A column header: a new column starts in its own natural direction, the same column turns the order around.
+  const handleColumnSort = useCallback(
+    (key: SortBy) => {
+      if (key === sortBy) {
+        setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')
+        return
+      }
+      setSortBy(key)
+      setSortOrder(defaultSortOrder(key))
+    },
+    [sortBy, sortOrder, setSortBy, setSortOrder]
+  )
 
   // Row expansion removed - details now shown in center panel
 
@@ -1018,7 +1039,26 @@ export function Library() {
 
     // Apply sorting
     const sortMultiplier = sortOrder === 'asc' ? 1 : -1
+    // Title, stars, meeting, status and transcript sort on a value worked out once per recording.
+    const derived = isDerivedSort(sortBy)
+      ? new Map(
+          filtered.map((rec) => [
+            rec.id,
+            derivedSortValue(sortBy, rec, {
+              meeting: rec.meetingId ? meetings.get(rec.meetingId) : undefined,
+              transcript: transcripts.get(rec.id),
+              error: recordingErrors?.get(rec.id)
+            })
+          ])
+        )
+      : null
     filtered.sort((a, b) => {
+      if (derived) {
+        const byKey = compareDerived(derived.get(a.id) ?? 0, derived.get(b.id) ?? 0, sortOrder)
+        if (byKey !== 0) return byKey
+        // Ties keep the newest first, so the same column always reads the same way.
+        return (b.dateRecorded ? new Date(b.dateRecorded).getTime() : 0) - (a.dateRecorded ? new Date(a.dateRecorded).getTime() : 0)
+      }
       switch (sortBy) {
         case 'date': {
           const aTime = a.dateRecorded ? new Date(a.dateRecorded).getTime() : 0
@@ -1027,8 +1067,6 @@ export function Library() {
         }
         case 'duration':
           return ((a.duration || 0) - (b.duration || 0)) * sortMultiplier
-        case 'name':
-          return a.filename.localeCompare(b.filename) * sortMultiplier
         case 'quality': {
           // C-005: Use actual quality rating values from KnowledgeCapture type
           // F16/spec-003: garbage made explicit (was an implicit ?? -1 fallback) —
@@ -1044,7 +1082,7 @@ export function Library() {
     })
 
     return filtered
-  }, [scopedRecordings, deferredSearchQuery, meetings, transcripts, sortBy, sortOrder])
+  }, [scopedRecordings, deferredSearchQuery, meetings, transcripts, recordingErrors, sortBy, sortOrder])
 
   // Count of personal ("ignored") recordings, to decide whether to show the chip.
   const personalCount = useMemo(() => recordings.filter((r) => r.personal).length, [recordings])
@@ -1174,11 +1212,17 @@ export function Library() {
     return map
   }, [listItems])
 
-  // Wide list: a row is one line with date, time and duration in columns, 32px.
-  // Narrow list: two lines, 44px. Measured from the list element (see the effect
-  // next to listScrollElement); the row height follows, so both are decided here.
-  const [wideRows, setWideRows] = useState(false)
-  const rowHeightPx = wideRows ? WIDE_ROW_HEIGHT_PX : COMPACT_ROW_HEIGHT_PX
+  // Wide list: a row is one line with date, time and duration in columns, 32px. Narrow: two lines,
+  // 44px. Very narrow: three lines, 68px. Card view: as many cards per row as fit. Measured from the
+  // list element (see the effect next to listScrollElement); the row height follows, so all of it is
+  // decided here, in states that change only when a breakpoint is crossed.
+  const [rowLayout, setRowLayout] = useState<'wide' | 'two' | 'three'>('two')
+  const [cardColumns, setCardColumns] = useState(1)
+  const wideRows = rowLayout === 'wide'
+  const rowHeightPx =
+    rowLayout === 'wide' ? WIDE_ROW_HEIGHT_PX : rowLayout === 'three' ? THREE_LINE_ROW_HEIGHT_PX : COMPACT_ROW_HEIGHT_PX
+  // The sticky column header covers the top of the list; scrolling to a row leaves it clear.
+  const showColumnHeader = (compactView || showTrash) && wideRows
 
   // Fixed per-item heights + their prefix-sum offsets. Rows stay a strict 44px
   // (32px when wide); headers are 28px. Positioning the compact rows from these
@@ -1281,6 +1325,7 @@ export function Library() {
     onExpandRow: () => {}, // No-op - expansion removed
     onCollapseRow: () => {}, // No-op - expansion removed
     onCollapseAllRows: () => {}, // No-op - expansion removed
+    columns: usesRowList ? 1 : cardColumns,
     isEnabled: displayedRecordings.length > 0
   })
 
@@ -1295,10 +1340,6 @@ export function Library() {
   }, [filteredRecordings, artifactTypes])
 
   // Handlers
-  const toggleTranscript = useCallback((id: string) => {
-    toggleTranscriptExpansion(id)
-  }, [toggleTranscriptExpansion])
-
   const openRecordingsFolder = async () => {
     await window.electronAPI.storage.openFolder('recordings')
   }
@@ -2348,13 +2389,6 @@ export function Library() {
     [handleGenerateOutput]
   )
 
-  const handleToggleTranscriptCallback = useCallback(
-    (recordingId: string) => {
-      toggleTranscript(recordingId)
-    },
-    [toggleTranscript]
-  )
-
   // Opening and bulk selection are separate modes. A plain click opens the
   // reader and clears bulk selection; modifiers deliberately build selection.
 
@@ -2433,7 +2467,11 @@ export function Library() {
   // columns; narrow: two lines). Set on mount and on every resize of the pane.
   useEffect(() => {
     if (!listScrollElement) return
-    const apply = (width: number) => setWideRows(width >= WIDE_ROW_MIN_WIDTH_PX)
+    const apply = (width: number) => {
+      setRowLayout(width >= WIDE_ROW_MIN_WIDTH_PX ? 'wide' : width > 0 && width < THREE_LINE_MAX_WIDTH_PX ? 'three' : 'two')
+      // The grid has a 12px margin on each side of its cards.
+      setCardColumns(Math.max(1, Math.floor((width - CARD_GAP_PX) / (CARD_MIN_WIDTH_PX + CARD_GAP_PX))))
+    }
     apply(listScrollElement.clientWidth)
     if (typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver((entries) => {
@@ -2449,7 +2487,7 @@ export function Library() {
   // with none (the test harness), so it never yields NaN geometry.
   const estimateSize = useCallback(
     (index?: number) => {
-      if (!usesRowList) return 200
+      if (!usesRowList) return CARD_HEIGHT_PX + CARD_GAP_PX
       if (typeof index === 'number' && listGeometry.heights[index] != null) return listGeometry.heights[index]
       return rowHeightPx
     },
@@ -2468,6 +2506,9 @@ export function Library() {
   const rowVirtualizer = useVirtualizer({
     count: usesRowList ? listItems.length : displayedRecordings.length,
     getScrollElement: () => listScrollElement,
+    // Card view is a grid: the virtualizer lays equal-height cards across the lanes in reading order.
+    lanes: usesRowList ? 1 : cardColumns,
+    scrollPaddingStart: showColumnHeader ? COLUMN_HEADER_HEIGHT_PX : 0,
     estimateSize,
     getItemKey: getVirtualItemKey,
     // The virtualizer used to flushSync a re-render on every scroll tick. When the
@@ -2479,7 +2520,7 @@ export function Library() {
     // rows, an overscan of 10 leaves no blank frame up to 300 px per frame (18,000 px
     // a second), where 5 left blank frames from 300.
     useFlushSync: false,
-    overscan: 10
+    overscan: usesRowList ? 10 : 8 * cardColumns
   })
 
   // After a deletion/insert every row shifts one index, and the virtualizer's
@@ -2492,7 +2533,7 @@ export function Library() {
   useLayoutEffect(() => {
     rowVirtualizer.measure()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [displayedIdSignature, compactView, showTrash, rowHeightPx])
+  }, [displayedIdSignature, compactView, showTrash, rowHeightPx, cardColumns])
 
   // Scroll-anchor preservation (2026-07-21/22): a deletion above the viewport
   // shifts every row up but scrollTop doesn't move — the list then renders a
@@ -2938,6 +2979,7 @@ export function Library() {
                 setListScrollElement((current) => current === el ? current : el)
               }}
               className="h-full overflow-y-auto overflow-x-hidden py-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-inset"
+              style={showColumnHeader ? { scrollPaddingTop: COLUMN_HEADER_HEIGHT_PX } : undefined}
               onKeyDown={handleKeyDown}
               tabIndex={0}
               role="application"
@@ -2948,7 +2990,8 @@ export function Library() {
             so it overlays the list without moving any row (rows are fixed height). */}
         {!showTrash && sortBy === 'date' && displayedRecordings.length > 0 && topDateGroup && (!compactView || listScrolled) && (
           <div
-            className="pointer-events-none sticky top-0 z-10 -mb-6 flex h-6 items-center px-3"
+            className="pointer-events-none sticky z-10 -mb-6 flex h-6 items-center px-3"
+            style={{ top: showColumnHeader ? COLUMN_HEADER_HEIGHT_PX : 0 }}
             data-testid="library-date-group"
             aria-hidden="true"
           >
@@ -3023,7 +3066,7 @@ export function Library() {
               />
             )
           ) : (
-            <div className="animate-rise-in">
+            <div className={`animate-rise-in ${compactView || showTrash ? '' : 'px-1.5'}`}>
               {(compactView || showTrash) && (
                 <div className="mb-2 flex items-center justify-between px-3">
                   <div className="flex items-center gap-3">
@@ -3061,6 +3104,9 @@ export function Library() {
                   </div>
                   {!showTrash && <StatusLegend />}
                 </div>
+              )}
+              {showColumnHeader && (
+                <LibraryColumnHeader sortBy={sortBy} sortOrder={sortOrder} onSort={handleColumnSort} />
               )}
             <div
               style={{
@@ -3162,6 +3208,7 @@ export function Library() {
                             transcript={transcripts.get(recording.id)}
                             compact
                             wide={wideRows}
+                            narrow={rowLayout === 'three'}
                             isSelected={selectedIds.has(recording.id)}
                             anySelected={selectedCount > 0}
                             isActiveSource={selectedSourceId === recording.id}
@@ -3187,6 +3234,7 @@ export function Library() {
                             transcript={transcripts.get(recording.id)}
                             compact
                             wide={wideRows}
+                            narrow={rowLayout === 'three'}
                             isSelected={selectedIds.has(recording.id)}
                             anySelected={selectedCount > 0}
                             isActiveSource={selectedSourceId === recording.id}
@@ -3231,8 +3279,8 @@ export function Library() {
                   })}
                 </div>
               ) : (
-                // Card View - LB-19 fix: Add focus indicator support
-                <div key="card-view" className="space-y-4">
+                // Card view: a grid of fixed-size cards (no measuring: every card is CARD_HEIGHT_PX).
+                <div key="card-view">
                   {rowVirtualizer.getVirtualItems().map((virtualRow) => {
                     const recording = displayedRecordings[virtualRow.index]
                     const transcript = transcripts.get(recording.id)
@@ -3244,56 +3292,56 @@ export function Library() {
                         key={itemRenderKeys[virtualRow.index]}
                         data-index={virtualRow.index}
                         data-focus-index={virtualRow.index}
-                        ref={rowVirtualizer.measureElement}
                         style={{
                           position: 'absolute',
-                          top: 0,
-                          left: 0,
-                          width: '100%',
-                          transform: `translateY(${virtualRow.start}px)`
+                          top: `${virtualRow.start}px`,
+                          left: `${(virtualRow.lane * 100) / cardColumns}%`,
+                          width: `${100 / cardColumns}%`,
+                          height: `${CARD_HEIGHT_PX + CARD_GAP_PX}px`,
+                          padding: `0 ${CARD_GAP_PX / 2}px ${CARD_GAP_PX}px`
                         }}
-                        className={isFocused ? 'ring-2 ring-primary rounded-lg' : ''}
-                        aria-rowindex={virtualRow.index + 1}
+                        aria-rowindex={Math.floor(virtualRow.index / cardColumns) + 1}
                       >
-                        <SourceCard
-                          recording={recording}
-                          transcript={transcript}
-                          meeting={meeting}
-                          isPlaying={currentlyPlayingId === recording.id}
-                          isTranscriptExpanded={expandedTranscripts.has(recording.id)}
-                          isDownloading={isDeviceOnly(recording) && ['downloading', 'cancelling'].includes(
-                            downloadQueue.get(recording.deviceFilename)?.status ?? ''
-                          )}
-                          downloadProgress={
-                            isDeviceOnly(recording) ? downloadQueue.get(recording.deviceFilename)?.progress : undefined
-                          }
-                          downloadStatus={
-                            isDeviceOnly(recording) ? downloadQueue.get(recording.deviceFilename)?.status : undefined
-                          }
-                          isDeleting={deleting === recording.id}
-                          deviceConnected={deviceConnected}
-                          isSelected={selectedIds.has(recording.id)}
-                          onSelectionChange={(id, shiftKey) =>
-                            handleSelectionClick(id, shiftKey, displayedRecordings.map((r) => r.id))
-                          }
-                          onClick={() => handleRowClick(recording)}
-                          onPlay={() => {
-                            if (hasLocalPath(recording)) {
-                              setSelectedSourceId(recording.id)
-                              handlePlayCallback(recording.id, recording.localPath)
+                        <div className={`h-full rounded-xl ${isFocused ? 'ring-2 ring-primary' : ''}`}>
+                          <SourceCard
+                            recording={recording}
+                            transcript={transcript}
+                            meeting={meeting}
+                            isPlaying={currentlyPlayingId === recording.id}
+                            isActiveSource={selectedSourceId === recording.id}
+                            isDownloading={isDeviceOnly(recording) && ['downloading', 'cancelling'].includes(
+                              downloadQueue.get(recording.deviceFilename)?.status ?? ''
+                            )}
+                            downloadProgress={
+                              isDeviceOnly(recording) ? downloadQueue.get(recording.deviceFilename)?.progress : undefined
                             }
-                          }}
-                          onStop={handleStopCallback}
-                          onDownload={() => handleDownloadCallback(recording)}
-                          onDelete={() => handleDeleteCallback(recording)}
-                          onMarkPersonal={() => handleMarkPersonalCallback(recording)}
-                          onTranscribe={getSourceType(recording, artifactTypes) === 'audio' ? () => queueTranscription(recording) : undefined}
-                          onReprocessVibeVoice={getSourceType(recording, artifactTypes) === 'audio' ? () => reprocessWithVibeVoice(recording) : undefined}
-                          onAskAssistant={() => handleAskAssistantCallback(recording)}
-                          onGenerateOutput={() => handleGenerateOutputCallback(recording)}
-                          onToggleTranscript={() => handleToggleTranscriptCallback(recording.id)}
-                          onNavigateToMeeting={handleNavigateToMeeting}
-                        />
+                            downloadStatus={
+                              isDeviceOnly(recording) ? downloadQueue.get(recording.deviceFilename)?.status : undefined
+                            }
+                            isDeleting={deleting === recording.id}
+                            deviceConnected={deviceConnected}
+                            isSelected={selectedIds.has(recording.id)}
+                            onSelectionChange={(id, shiftKey) =>
+                              handleSelectionClick(id, shiftKey, displayedRecordings.map((r) => r.id))
+                            }
+                            onClick={() => handleRowClick(recording)}
+                            onPlay={() => {
+                              if (hasLocalPath(recording)) {
+                                setSelectedSourceId(recording.id)
+                                handlePlayCallback(recording.id, recording.localPath)
+                              }
+                            }}
+                            onStop={handleStopCallback}
+                            onDownload={() => handleDownloadCallback(recording)}
+                            onDelete={() => handleDeleteCallback(recording)}
+                            onMarkPersonal={() => handleMarkPersonalCallback(recording)}
+                            onTranscribe={getSourceType(recording, artifactTypes) === 'audio' ? () => queueTranscription(recording) : undefined}
+                            onReprocessVibeVoice={getSourceType(recording, artifactTypes) === 'audio' ? () => reprocessWithVibeVoice(recording) : undefined}
+                            onAskAssistant={() => handleAskAssistantCallback(recording)}
+                            onGenerateOutput={() => handleGenerateOutputCallback(recording)}
+                            onNavigateToMeeting={handleNavigateToMeeting}
+                          />
+                        </div>
                       </div>
                     )
                   })}

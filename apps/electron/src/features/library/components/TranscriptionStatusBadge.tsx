@@ -8,7 +8,7 @@ interface TranscriptionStatusBadgeProps {
 }
 
 // Human-readable status text mapping
-const STATUS_LABELS: Record<string, string> = {
+export const TRANSCRIPTION_STATUS_LABELS: Record<string, string> = {
   none: 'Not transcribed',
   pending: 'Queued',
   processing: 'In Progress',
@@ -56,7 +56,7 @@ export function TranscriptionStatusBadge({ status, compact, className }: Transcr
       <TooltipProvider>
         <Tooltip>
           <TooltipTrigger asChild>
-            <span className={`inline-flex shrink-0 ${className || ''}`} aria-label={STATUS_LABELS[status]} role="img">
+            <span className={`inline-flex shrink-0 ${className || ''}`} aria-label={TRANSCRIPTION_STATUS_LABELS[status]} role="img">
               <Icon
                 className={`h-3.5 w-3.5 ${ICON_COLORS[status]} ${status === 'processing' ? 'motion-safe:animate-spin' : ''}`}
                 aria-hidden="true"
@@ -64,7 +64,7 @@ export function TranscriptionStatusBadge({ status, compact, className }: Transcr
             </span>
           </TooltipTrigger>
           <TooltipContent>
-            <p>{STATUS_LABELS[status]}</p>
+            <p>{TRANSCRIPTION_STATUS_LABELS[status]}</p>
           </TooltipContent>
         </Tooltip>
       </TooltipProvider>
@@ -73,7 +73,7 @@ export function TranscriptionStatusBadge({ status, compact, className }: Transcr
 
   return (
     <span className={`text-xs px-2 py-1 rounded-full ${STATUS_STYLES[status]} ${className || ''}`}>
-      {STATUS_LABELS[status]}
+      {TRANSCRIPTION_STATUS_LABELS[status]}
     </span>
   )
 }

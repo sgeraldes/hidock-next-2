@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { SourceRow } from '../SourceRow'
+import { useLibraryStore } from '@/store/useLibraryStore'
 import type { UnifiedRecording } from '@/types/unified-recording'
 import {
   effectiveWarning,
@@ -24,9 +25,10 @@ const base: UnifiedRecording = {
   knowledgeCaptureId: 'cap-1'
 }
 
-// The error place sits before the two that every row fills, so the menu button is not
-// pushed away by an empty place (owner, 30-sep-2026).
-const SLOT_ORDER = ['labels', 'value', 'warning', 'integrity', 'meeting', 'error', 'status', 'transcription']
+// Three icon places after the chips. A processing error takes the place of the status icon and a
+// transcript warning takes the place of the transcription icon, so neither has a place of its own
+// (owner, 30-sep-2026).
+const SLOT_ORDER = ['labels', 'meeting', 'status', 'transcription']
 
 function slotNames(container: HTMLElement): string[] {
   return Array.from(container.querySelectorAll('[data-slot]')).map((el) => el.getAttribute('data-slot') ?? '')
@@ -43,13 +45,13 @@ describe('Jev evaluation on a Library row', () => {
 
   it('shows the audio-versus-transcript warning as an icon with its words for screen readers', () => {
     render(<SourceRow recording={{ ...base, evalStarLevel: 4, evalAudioWarning: 'possible_invented_transcript' }} />)
-    expect(screen.getByTestId('evaluation-warning')).toHaveAttribute('aria-label', 'Transcript may be invented')
+    expect(screen.getByTestId('transcript-problem')).toHaveAttribute('aria-label', 'Transcript may be invented')
   })
 
   it('shows nothing for a recording not evaluated yet', () => {
     render(<SourceRow recording={base} />)
     expect(screen.queryByTestId('evaluation-label')).toBeNull()
-    expect(screen.queryByTestId('evaluation-warning')).toBeNull()
+    expect(screen.queryByTestId('transcript-problem')).toBeNull()
   })
 
   it('updates when an evaluation arrives (the row is memoized)', () => {
@@ -74,10 +76,71 @@ describe('fixed icon places on a Library row', () => {
 
   it('keeps an empty place instead of closing the gap', () => {
     const { container } = render(<SourceRow recording={base} />)
-    const value = container.querySelector('[data-slot="value"]')
-    expect(value).not.toBeNull()
-    expect(value?.childElementCount).toBe(0)
-    expect(value?.className).toContain('w-4')
+    const meeting = container.querySelector('[data-slot="meeting"]')
+    expect(meeting).not.toBeNull()
+    expect(meeting?.childElementCount).toBe(0)
+    expect(meeting?.className).toContain('w-4')
+  })
+})
+
+describe('a problem takes the place of what it is a problem with', () => {
+  const slot = (container: HTMLElement, name: string) => container.querySelector(`[data-slot="${name}"]`) as HTMLElement
+
+  it('a transcript warning replaces the transcription state, and the tooltip still says the state', () => {
+    const { container } = render(
+      <SourceRow recording={{ ...base, evalAudioWarning: 'possible_missed_transcription' }} />
+    )
+    const transcription = slot(container, 'transcription')
+    expect(transcription.querySelector('[data-testid="transcript-problem"]')).not.toBeNull()
+    expect(transcription.querySelector('[aria-label="Transcribed"]')).toBeNull()
+    expect(transcription.querySelectorAll('svg')).toHaveLength(1)
+  })
+
+  it('a transcript that does not fit the audio shows the worst problem, in red', () => {
+    const transcript = {
+      id: 't1',
+      integrity_status: 'broken',
+      integrity_json: JSON.stringify([{ code: 'too_long_for_audio', detail: 'x' }])
+    } as never
+    const { container } = render(
+      <SourceRow recording={{ ...base, evalAudioWarning: 'possible_invented_transcript' }} transcript={transcript} />
+    )
+    const icon = slot(container, 'transcription').querySelector('[data-testid="transcript-problem"]')
+    expect(icon?.getAttribute('data-kind')).toBe('broken')
+    expect(icon?.className).toContain('text-red-600')
+    expect(icon?.getAttribute('aria-label')).toContain('Transcript may be invented')
+  })
+
+  it('a run in flight or a failed run keeps saying so instead of a problem with the old transcript', () => {
+    for (const status of ['pending', 'processing', 'error'] as const) {
+      const { container, unmount } = render(
+        <SourceRow recording={{ ...base, transcriptionStatus: status, evalAudioWarning: 'possible_invented_transcript' }} />
+      )
+      expect(slot(container, 'transcription').querySelector('[data-testid="transcript-problem"]'), status).toBeNull()
+      unmount()
+    }
+  })
+
+  it('a processing error replaces the location icon in the status place', () => {
+    useLibraryStore.getState().setRecordingError('r1', {
+      type: 'transcription_failed',
+      message: 'The provider refused the file',
+      recoverable: true
+    } as never)
+    try {
+      const { container } = render(<SourceRow recording={{ ...base, location: 'both', deviceFilename: 'x.hda' }} />)
+      const status = slot(container, 'status')
+      expect(status.querySelector('[data-testid="processing-error"]')).not.toBeNull()
+      expect(status.querySelector('[aria-label="Synced"]')).toBeNull()
+      expect(status.querySelectorAll('svg')).toHaveLength(1)
+    } finally {
+      useLibraryStore.getState().clearRecordingError('r1')
+    }
+  })
+
+  it('without an error the status place shows where the file is', () => {
+    const { container } = render(<SourceRow recording={{ ...base, location: 'both', deviceFilename: 'x.hda' }} />)
+    expect(slot(container, 'status').querySelector('[aria-label="Synced"]')).not.toBeNull()
   })
 })
 

@@ -1,4 +1,23 @@
-import { Cloud, HardDrive, Check, Circle, Clock, Loader2, CheckCircle2, AlertCircle, MicOff, Info, TrendingDown, Ban, type LucideIcon } from 'lucide-react'
+import {
+  Cloud,
+  HardDrive,
+  Check,
+  Circle,
+  Clock,
+  Loader2,
+  CheckCircle2,
+  AlertCircle,
+  AlertTriangle,
+  Calendar,
+  FileWarning,
+  FileX,
+  MicOff,
+  Info,
+  TrendingDown,
+  Ban,
+  XOctagon,
+  type LucideIcon
+} from 'lucide-react'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 
 interface LegendItem {
@@ -7,14 +26,20 @@ interface LegendItem {
   label: string
 }
 
-// Mirrors StatusIcon (location) — the leading glyph on every row.
+// The calendar place of a row.
+const MEETING_ITEMS: LegendItem[] = [
+  { Icon: Calendar, color: 'text-primary/70', label: 'Linked to a calendar meeting' }
+]
+
+// Mirrors StatusPlaceIcon: where the file is, or a processing error in its place.
 const LOCATION_ITEMS: LegendItem[] = [
   { Icon: Cloud, color: 'text-orange-600 dark:text-orange-400', label: 'On device only' },
   { Icon: HardDrive, color: 'text-blue-600 dark:text-blue-400', label: 'Downloaded to computer' },
-  { Icon: Check, color: 'text-green-600 dark:text-green-400', label: 'Synced (device + computer)' }
+  { Icon: Check, color: 'text-green-600 dark:text-green-400', label: 'Synced (device + computer)' },
+  { Icon: AlertCircle, color: 'text-destructive', label: 'Processing error (in place of the above)' }
 ]
 
-// Mirrors TranscriptionStatusBadge (compact) — the second glyph on every row.
+// Mirrors TranscriptionStatusBadge (compact) — the last glyph on every row.
 const TRANSCRIPTION_ITEMS: LegendItem[] = [
   { Icon: Circle, color: 'text-muted-foreground/50', label: 'Not transcribed' },
   { Icon: Clock, color: 'text-yellow-600 dark:text-yellow-400', label: 'Queued' },
@@ -22,6 +47,14 @@ const TRANSCRIPTION_ITEMS: LegendItem[] = [
   { Icon: CheckCircle2, color: 'text-green-600 dark:text-green-400', label: 'Transcribed' },
   { Icon: MicOff, color: 'text-slate-500 dark:text-slate-400', label: 'No intelligible speech' },
   { Icon: AlertCircle, color: 'text-destructive', label: 'Failed' }
+]
+
+// Mirrors TranscriptionPlaceIcon: a problem with a finished transcript takes the place of its state.
+const PROBLEM_ITEMS: LegendItem[] = [
+  { Icon: XOctagon, color: 'text-red-600 dark:text-red-400', label: 'Text does not fit the audio' },
+  { Icon: FileWarning, color: 'text-amber-600 dark:text-amber-400', label: 'Text may be invented' },
+  { Icon: FileX, color: 'text-amber-600 dark:text-amber-400', label: 'Text may be missing' },
+  { Icon: AlertTriangle, color: 'text-amber-600 dark:text-amber-400', label: 'Timing is wrong' }
 ]
 
 // Mirrors SourceRow's ValueBadge (F16/spec-003) — the content-based value
@@ -32,7 +65,7 @@ const VALUE_ITEMS: LegendItem[] = [
 ]
 
 /**
- * StatusLegend — click-to-open key explaining the status glyphs that lead each
+ * StatusLegend — click-to-open key explaining the status glyphs on the right of each
  * library row. Discoverable (a labeled trigger, not hover-only), mirroring the
  * category legend on the Today page. Answers "what do these colors/icons mean?".
  */
@@ -48,8 +81,17 @@ export function StatusLegend() {
           Legend
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-60 p-3">
+      <PopoverContent align="end" className="w-72 p-3">
         <div className="space-y-3">
+          <div className="space-y-1.5">
+            <div className="text-xs font-semibold text-foreground/70">Meeting</div>
+            {MEETING_ITEMS.map(({ Icon, color, label }) => (
+              <div key={label} className="flex items-center gap-2 text-xs">
+                <Icon className={`h-3.5 w-3.5 shrink-0 ${color}`} aria-hidden="true" />
+                <span className="text-foreground/70">{label}</span>
+              </div>
+            ))}
+          </div>
           <div className="space-y-1.5">
             <div className="text-xs font-semibold text-foreground/70">Location</div>
             {LOCATION_ITEMS.map(({ Icon, color, label }) => (
@@ -62,6 +104,15 @@ export function StatusLegend() {
           <div className="space-y-1.5">
             <div className="text-xs font-semibold text-foreground/70">Transcription</div>
             {TRANSCRIPTION_ITEMS.map(({ Icon, color, label }) => (
+              <div key={label} className="flex items-center gap-2 text-xs">
+                <Icon className={`h-3.5 w-3.5 shrink-0 ${color}`} aria-hidden="true" />
+                <span className="text-foreground/70">{label}</span>
+              </div>
+            ))}
+          </div>
+          <div className="space-y-1.5">
+            <div className="text-xs font-semibold text-foreground/70">Transcript problems (in place of the above)</div>
+            {PROBLEM_ITEMS.map(({ Icon, color, label }) => (
               <div key={label} className="flex items-center gap-2 text-xs">
                 <Icon className={`h-3.5 w-3.5 shrink-0 ${color}`} aria-hidden="true" />
                 <span className="text-foreground/70">{label}</span>
