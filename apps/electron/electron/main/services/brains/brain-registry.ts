@@ -12,6 +12,7 @@ import { GeminiCliBrain } from './gemini-cli-brain'
 import { KiroCliBrain } from './kiro-cli-brain'
 import { LocalOnnxEmbedBrain } from './local-onnx-embed-brain'
 import { OllamaBrain } from './ollama-brain'
+import { OpenAiCompatibleBrain } from './openai-compatible-brain'
 import type { AIBrain, BrainId } from './types'
 
 /**
@@ -26,6 +27,7 @@ const REGISTRATIONS: Array<() => AIBrain> = [
   () => new CodexBrain({ companionPath: findCodexCompanion() }),
   () => new GeminiCliBrain(),
   () => new KiroCliBrain(),
+  () => new OpenAiCompatibleBrain(),
 ]
 
 export class BrainRegistry {

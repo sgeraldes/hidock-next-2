@@ -38,6 +38,7 @@ describe('every registered brain describes itself', () => {
     const byId = new Map(getBrainRegistry().list().map((b) => [b.id, b.descriptor!()]))
     expect(byId.get('ollama')!.dataLeavesMachine).toBe(false)
     expect(byId.get('local-onnx-embed')!.dataLeavesMachine).toBe(false)
+    expect(byId.get('openai-compatible')!.dataLeavesMachine).toBe(false)
     for (const id of ['gemini-api', 'claude-code', 'codex', 'gemini-cli', 'kiro'] as const) {
       expect(byId.get(id)!.dataLeavesMachine, id).toBe(true)
     }
