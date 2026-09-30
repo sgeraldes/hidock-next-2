@@ -409,6 +409,8 @@ export function upsertContactsFromMeetings(): { contacts: number; links: number 
     // created and merged on every start and after every calendar sync, and the
     // merge journal grew by about 1,000 rows a day (30-sep-2026). The journal is
     // the record of who took whom; a merge that was undone is not in it.
+    // Known trade-off: an address that was reassigned to another person after a merge (or a
+    // shared mailbox) resolves to the survivor of that merge until the merge is undone.
     const mergedInto = new Map<string, string>() // loser id -> keeper id
     const mergedEmailOwner = new Map<string, string>() // loser email -> keeper id
     for (const row of queryAll<{ loser_id: string | null; keeper_id: string; email: string | null }>(
