@@ -13,6 +13,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { KiroCliBrain, parseKiroModels, parseKiroOutput, parseWhoami } from '../kiro-cli-brain'
 import type { SpawnFn } from '../cli-runner'
 import { makeFakeSpawn, type FakeSpawnScript } from './fake-spawn'
+import { createHarnessUsageCollector } from '../harness-usage'
 
 const asSpawn = (fn: unknown) => fn as SpawnFn
 const WHOAMI_JSON = JSON.stringify({
@@ -315,5 +316,24 @@ describe('Kiro model list', () => {
   it('lists nothing when the CLI fails', async () => {
     const spawn = makeFakeSpawn({ stdout: '', stderr: 'boom', code: 1 })
     expect(await new KiroCliBrain({ spawn: asSpawn(spawn.fn), env: {}, getStoredKey: () => '' }).listModels()).toEqual([])
+  })
+})
+
+describe('Kiro effort and usage', () => {
+  it('passes the effort with a fixed flag', async () => {
+    const spawn = makeFakeSpawn({ stdout: '> OK', code: 0 })
+    const brain = new KiroCliBrain({ spawn: asSpawn(spawn.fn), env: {}, getStoredKey: () => '' })
+    await brain.generate([{ role: 'user', content: 'q' }], { effort: 'low' })
+    const args = spawn.calls[0].args
+    expect(args).toEqual(['chat', '--no-interactive', '--trust-tools=', '--effort', 'low'])
+    expect(args.join(' ')).not.toContain('q')
+  })
+
+  it('reports the time of a call', async () => {
+    const spawn = makeFakeSpawn({ stdout: '> OK', code: 0 })
+    const brain = new KiroCliBrain({ spawn: asSpawn(spawn.fn), env: {}, getStoredKey: () => '' })
+    const collector = createHarnessUsageCollector()
+    await collector.run(() => brain.generate([{ role: 'user', content: 'q' }]))
+    expect(collector.total()!.byModel['kiro:unknown'].calls).toBe(1)
   })
 })

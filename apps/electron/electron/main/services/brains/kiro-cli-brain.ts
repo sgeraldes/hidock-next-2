@@ -50,6 +50,7 @@ import type {
   GenerateOptions,
 } from './types'
 import { caps, type HarnessDescriptor, type ModelInfo } from './descriptor'
+import { recordHarnessUsage } from './harness-usage'
 
 const CAPABILITIES: ReadonlySet<BrainCapability> = new Set<BrainCapability>([
   'generate',
@@ -188,6 +189,7 @@ export class KiroCliBrain implements AIBrain {
     // PIPED VIA STDIN — never argv (confidentiality + no option injection).
     const args = ['chat', '--no-interactive', '--trust-tools=']
     if (opts.model) args.push('--model', opts.model)
+    if (opts.effort) args.push('--effort', opts.effort)
 
     // Make the app's stored key available to the child when the env lacks one
     // (harmless when the login session is the effective auth).
@@ -195,6 +197,7 @@ export class KiroCliBrain implements AIBrain {
     const env: NodeJS.ProcessEnv =
       key && !this.env.KIRO_API_KEY ? { ...this.env, KIRO_API_KEY: key } : this.env
 
+    const startedAt = Date.now()
     try {
       const res = await runCli(
         KIRO_CLI,
@@ -213,6 +216,7 @@ export class KiroCliBrain implements AIBrain {
         noteBrainFailure(this.id, cliErrorLines(res.stderr).join('\n'))
         return null
       }
+      recordHarnessUsage({ harness: this.id, model: opts.model, durationMs: Date.now() - startedAt })
       return parseKiroOutput(res.stdout)
     } catch (e) {
       console.error('[KiroCliBrain] generate threw unexpectedly:', e)

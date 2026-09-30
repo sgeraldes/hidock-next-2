@@ -12,9 +12,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const mockResolveKey = vi.fn<() => string>()
 vi.mock('../gemini-api-brain', () => ({ resolveGeminiApiKey: () => mockResolveKey() }))
 
-import { GeminiCliBrain, parseGeminiJson } from '../gemini-cli-brain'
+import { GeminiCliBrain, parseGeminiJson, parseGeminiUsage } from '../gemini-cli-brain'
 import type { SpawnFn } from '../cli-runner'
 import { makeFakeSpawn } from './fake-spawn'
+import { createHarnessUsageCollector } from '../harness-usage'
 
 const asSpawn = (fn: unknown) => fn as SpawnFn
 
@@ -144,5 +145,42 @@ describe('GeminiCliBrain', () => {
       expect(await p).toBeNull()
       expect(spawn.lastChild?.kill).toHaveBeenCalled()
     })
+  })
+})
+
+describe('Gemini CLI usage', () => {
+  const envelope = {
+    response: 'OK',
+    stats: { models: { 'gemini-3.8-flash': { tokens: { prompt: 900, candidates: 40, thoughts: 25, cached: 100, total: 965 } } } }
+  }
+
+  it('reads the tokens the CLI states in its stats', () => {
+    expect(parseGeminiUsage(JSON.stringify(envelope))).toEqual({
+      model: 'gemini-3.8-flash',
+      inputTokens: 900,
+      outputTokens: 40,
+      thinkingTokens: 25,
+      cachedTokens: 100
+    })
+  })
+
+  it('reads nothing from output without stats, or that is not JSON', () => {
+    expect(parseGeminiUsage('{"response":"x"}')).toBeNull()
+    expect(parseGeminiUsage('plain')).toBeNull()
+    expect(parseGeminiUsage('')).toBeNull()
+  })
+
+  it('reports tokens when there are stats, and time when there are none', async () => {
+    const withStats = makeFakeSpawn({ stdout: JSON.stringify(envelope), code: 0 })
+    const collector = createHarnessUsageCollector()
+    const brain = new GeminiCliBrain({ spawn: asSpawn(withStats.fn), env: { GEMINI_API_KEY: 'x' }, hasOAuthLogin: () => false })
+    expect(await collector.run(() => brain.generate([{ role: 'user', content: 'q' }]))).toBe('OK')
+    expect(collector.total()!.byModel['gemini-cli:gemini-3.8-flash']).toMatchObject({ calls: 1, inputTokens: 900, outputTokens: 40 })
+
+    const noStats = makeFakeSpawn({ stdout: '{"response":"OK"}', code: 0 })
+    const second = createHarnessUsageCollector()
+    const brain2 = new GeminiCliBrain({ spawn: asSpawn(noStats.fn), env: { GEMINI_API_KEY: 'x' }, hasOAuthLogin: () => false })
+    await second.run(() => brain2.generate([{ role: 'user', content: 'q' }], { model: 'gemini-3.8-flash' }))
+    expect(second.total()!.byModel['gemini-cli:gemini-3.8-flash'].calls).toBe(1)
   })
 })

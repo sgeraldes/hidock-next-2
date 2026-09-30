@@ -44,6 +44,7 @@ import type {
   GenerateOptions,
 } from './types'
 import { caps, type HarnessDescriptor } from './descriptor'
+import { recordHarnessUsage } from './harness-usage'
 
 const CAPABILITIES: ReadonlySet<BrainCapability> = new Set<BrainCapability>([
   'generate',
@@ -53,6 +54,41 @@ const CAPABILITIES: ReadonlySet<BrainCapability> = new Set<BrainCapability>([
 
 const VERSION_TIMEOUT_MS = 8_000
 const GENERATE_TIMEOUT_MS = 120_000
+
+export interface GeminiCliUsage {
+  model?: string
+  inputTokens: number
+  outputTokens: number
+  thinkingTokens: number
+  cachedTokens: number
+}
+
+const stat = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0)
+
+/**
+ * The tokens `gemini --output-format json` states in `stats.models.<model>.tokens`. Summed over the
+ * models it used (routing may use two) and attributed to the first. Null when the output has no stats.
+ * Exported for direct unit testing.
+ */
+export function parseGeminiUsage(stdout: string): GeminiCliUsage | null {
+  try {
+    const parsed = JSON.parse(stdout.trim()) as { stats?: { models?: Record<string, { tokens?: Record<string, unknown> }> } }
+    const models = parsed.stats?.models
+    if (!models || typeof models !== 'object') return null
+    const usage: GeminiCliUsage = { inputTokens: 0, outputTokens: 0, thinkingTokens: 0, cachedTokens: 0 }
+    for (const [name, m] of Object.entries(models)) {
+      const t = m?.tokens ?? {}
+      usage.model ??= name
+      usage.inputTokens += stat(t.prompt ?? t.input)
+      usage.outputTokens += stat(t.candidates ?? t.output)
+      usage.thinkingTokens += stat(t.thoughts)
+      usage.cachedTokens += stat(t.cached)
+    }
+    return usage.model ? usage : null
+  } catch {
+    return null
+  }
+}
 
 export interface GeminiCliBrainDeps {
   spawn?: SpawnFn
@@ -183,6 +219,7 @@ export class GeminiCliBrain implements AIBrain {
     const env: NodeJS.ProcessEnv =
       key && !this.env.GEMINI_API_KEY ? { ...this.env, GEMINI_API_KEY: key } : this.env
 
+    const startedAt = Date.now()
     try {
       const res = await runCli(
         'gemini',
@@ -201,6 +238,16 @@ export class GeminiCliBrain implements AIBrain {
         noteBrainFailure(this.id, cliErrorLines(res.stderr).join('\n'))
         return null
       }
+      const usage = parseGeminiUsage(res.stdout)
+      recordHarnessUsage({
+        harness: this.id,
+        model: usage?.model ?? opts.model,
+        inputTokens: usage?.inputTokens,
+        outputTokens: usage?.outputTokens,
+        thinkingTokens: usage?.thinkingTokens,
+        cachedTokens: usage?.cachedTokens,
+        durationMs: Date.now() - startedAt
+      })
       return parseGeminiJson(res.stdout)
     } catch (e) {
       console.error('[GeminiCliBrain] generate threw unexpectedly:', e)
