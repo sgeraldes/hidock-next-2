@@ -298,9 +298,15 @@ per speaker from the transcript, embed them, match against the canonical voices.
    in chunks of 200 per transaction with a yield between chunks, and a change announces
    `evaluation:warnings-updated`, which reloads an open Library.
    The Library row shows stars and kind as one label and the warning as an icon, in fixed places:
-   labels, value, warning, integrity, meeting, status, transcription, error. An empty place keeps
-   its width. On a narrow pane the label column drops first (under 34rem), then integrity and
-   meeting (under 22rem). Filters: Kind, Work or personal, Stars, Warnings.
+   labels, value, warning, integrity, meeting, error, status, transcription. An empty place keeps
+   its width. The error place sits before the two that every row fills, so the menu button is not
+   pushed away by an empty place. On a narrow row the label column drops first (under 20rem), then
+   integrity and meeting (under 22rem). Filters: Kind, Work or personal, Stars, Warnings.
+   Row layout (30-sep): from a list width of 880 px a row is one line of 32 px: the title, then
+   date, time and duration as aligned columns, then the labels, left-aligned so the chips start on
+   one line. Below that width a row has two lines in 44 px: the title with the time on the right,
+   and a muted line of date, duration and kind. The list measures its own width and sets the row
+   height, so the virtualizer offsets stay exact.
 3. **Library maintenance (Settings, built).** Rescan with Jev (marks every evaluation outdated,
    then the value scan evaluates all again), Re-check warnings, Relink recordings to meetings (the
    Microsoft 365 calendar pulled back to the oldest recording through `calendarHistoryStart`, then

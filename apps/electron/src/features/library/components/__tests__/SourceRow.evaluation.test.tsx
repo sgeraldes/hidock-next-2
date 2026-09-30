@@ -24,7 +24,9 @@ const base: UnifiedRecording = {
   knowledgeCaptureId: 'cap-1'
 }
 
-const SLOT_ORDER = ['labels', 'value', 'warning', 'integrity', 'meeting', 'status', 'transcription', 'error']
+// The error place sits before the two that every row fills, so the menu button is not
+// pushed away by an empty place (owner, 30-sep-2026).
+const SLOT_ORDER = ['labels', 'value', 'warning', 'integrity', 'meeting', 'error', 'status', 'transcription']
 
 function slotNames(container: HTMLElement): string[] {
   return Array.from(container.querySelectorAll('[data-slot]')).map((el) => el.getAttribute('data-slot') ?? '')

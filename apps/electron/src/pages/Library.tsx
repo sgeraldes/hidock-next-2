@@ -130,7 +130,11 @@ function bucketedDateGroup(dateRecorded: Date | string | null | undefined): Coar
   return coarseDateGroup(dateRecorded) ?? 'older'
 }
 
-const COMPACT_ROW_HEIGHT_PX = 48
+// Two-line rows are 44px; on a wide list a row is one line of 32px (columns).
+const COMPACT_ROW_HEIGHT_PX = 44
+const WIDE_ROW_HEIGHT_PX = 32
+// The list width from which a row has room for date, time and duration columns.
+const WIDE_ROW_MIN_WIDTH_PX = 880
 const GROUP_HEADER_HEIGHT_PX = 28
 
 /**
@@ -1170,22 +1174,29 @@ export function Library() {
     return map
   }, [listItems])
 
-  // Fixed per-item heights + their prefix-sum offsets. Rows stay a strict 48px;
-  // headers are 28px. Positioning the compact rows from these exact offsets (not
-  // from a measured/estimated compositor transform) keeps virtual geometry
-  // deterministic — the invariant the split/deletion bugs turned on.
+  // Wide list: a row is one line with date, time and duration in columns, 32px.
+  // Narrow list: two lines, 44px. Measured from the list element (see the effect
+  // next to listScrollElement); the row height follows, so both are decided here.
+  const [wideRows, setWideRows] = useState(false)
+  const rowHeightPx = wideRows ? WIDE_ROW_HEIGHT_PX : COMPACT_ROW_HEIGHT_PX
+
+  // Fixed per-item heights + their prefix-sum offsets. Rows stay a strict 44px
+  // (32px when wide); headers are 28px. Positioning the compact rows from these
+  // exact offsets (not from a measured/estimated compositor transform) keeps
+  // virtual geometry deterministic — the invariant the split/deletion bugs
+  // turned on.
   const listGeometry = useMemo(() => {
     const offsets: number[] = []
     const heights: number[] = []
     let acc = 0
     for (const item of listItems) {
-      const h = item.kind === 'header' ? GROUP_HEADER_HEIGHT_PX : COMPACT_ROW_HEIGHT_PX
+      const h = item.kind === 'header' ? GROUP_HEADER_HEIGHT_PX : rowHeightPx
       offsets.push(acc)
       heights.push(h)
       acc += h
     }
     return { offsets, heights, total: acc }
-  }, [listItems])
+  }, [listItems, rowHeightPx])
 
   // The keys the virtualizer/anchor logic tracks: list-item keys for the row
   // list (headers + rows), plain render keys for card view. Memoized on their
@@ -2418,16 +2429,31 @@ export function Library() {
   // empty measured range after the source rail is reopened.
   const [listScrollElement, setListScrollElement] = useState<HTMLDivElement | null>(null)
 
-  // Per-item height. Rows are 48px, group headers 28px, cards ~200px. Accepts
-  // an index (TanStack passes one) but stays valid when called with none (the
-  // test harness), so it never yields NaN geometry.
+  // The list element's width decides the row layout (wide: one line with
+  // columns; narrow: two lines). Set on mount and on every resize of the pane.
+  useEffect(() => {
+    if (!listScrollElement) return
+    const apply = (width: number) => setWideRows(width >= WIDE_ROW_MIN_WIDTH_PX)
+    apply(listScrollElement.clientWidth)
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width
+      if (typeof width === 'number') apply(width)
+    })
+    observer.observe(listScrollElement)
+    return () => observer.disconnect()
+  }, [listScrollElement])
+
+  // Per-item height. Rows are 44px (32px when wide), group headers 28px, cards
+  // ~200px. Accepts an index (TanStack passes one) but stays valid when called
+  // with none (the test harness), so it never yields NaN geometry.
   const estimateSize = useCallback(
     (index?: number) => {
       if (!usesRowList) return 200
       if (typeof index === 'number' && listGeometry.heights[index] != null) return listGeometry.heights[index]
-      return COMPACT_ROW_HEIGHT_PX
+      return rowHeightPx
     },
-    [usesRowList, listGeometry]
+    [usesRowList, listGeometry, rowHeightPx]
   )
 
   // Identity, not the current array index, owns every cached measurement. A
@@ -2457,7 +2483,7 @@ export function Library() {
   useLayoutEffect(() => {
     rowVirtualizer.measure()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [displayedIdSignature, compactView, showTrash])
+  }, [displayedIdSignature, compactView, showTrash, rowHeightPx])
 
   // Scroll-anchor preservation (2026-07-21/22): a deletion above the viewport
   // shifts every row up but scrollTop doesn't move — the list then renders a
@@ -2896,7 +2922,7 @@ export function Library() {
               data-testid="library-list"
             >
         {/* Pinned date group. The negative bottom margin cancels its own height,
-            so it overlays the list without moving any row (rows are fixed 48 px). */}
+            so it overlays the list without moving any row (rows are fixed height). */}
         {!showTrash && sortBy === 'date' && displayedRecordings.length > 0 && topDateGroup && (!compactView || listScrolled) && (
           <div
             className="pointer-events-none sticky top-0 z-10 -mb-6 flex h-6 items-center px-3"
@@ -3033,7 +3059,7 @@ export function Library() {
                 <div key={`compact-view:${displayedIdSignature}`}>
                   {rowVirtualizer.getVirtualItems().map((virtualRow) => {
                     const item = listItems[virtualRow.index]
-                    const top = listGeometry.offsets[virtualRow.index] ?? virtualRow.index * COMPACT_ROW_HEIGHT_PX
+                    const top = listGeometry.offsets[virtualRow.index] ?? virtualRow.index * rowHeightPx
 
                     // Time-group header (Today / This week / Earlier / Older).
                     if (!item || item.kind === 'header') {
@@ -3069,7 +3095,8 @@ export function Library() {
                         key={item.key}
                         data-index={recordingIndex}
                         data-focus-index={recordingIndex}
-                        // Compact rows are a strict 48px contract. Measuring
+                        // Compact rows are a strict fixed-height contract (44px, or
+                        // 32px on a wide list). Measuring
                         // them dynamically reintroduces stale index geometry
                         // during split insertion; the exact prefix-sum offset
                         // (which also accounts for group headers) is used.
@@ -3082,7 +3109,7 @@ export function Library() {
                           top: `${top}px`,
                           left: 0,
                           width: '100%',
-                          height: `${COMPACT_ROW_HEIGHT_PX}px`
+                          height: `${rowHeightPx}px`
                         }}
                         className={[
                           // Keep separators out of measured row geometry. A real
@@ -3111,6 +3138,7 @@ export function Library() {
                             meeting={meeting}
                             transcript={transcripts.get(recording.id)}
                             compact
+                            wide={wideRows}
                             isSelected={selectedIds.has(recording.id)}
                             anySelected={selectedCount > 0}
                             isActiveSource={selectedSourceId === recording.id}
@@ -3135,6 +3163,7 @@ export function Library() {
                             meeting={meeting}
                             transcript={transcripts.get(recording.id)}
                             compact
+                            wide={wideRows}
                             isSelected={selectedIds.has(recording.id)}
                             anySelected={selectedCount > 0}
                             isActiveSource={selectedSourceId === recording.id}
