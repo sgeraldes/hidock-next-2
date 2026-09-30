@@ -2515,7 +2515,7 @@ export function Library() {
         (item) => item.start + item.size > el.scrollTop
       )
       if (firstVisible) firstVisibleIndexRef.current = firstVisible.index
-      setListScrolled(el.scrollTop > 48)
+      setListScrolled(el.scrollTop > rowHeightPx)
       if (usesRowList) {
         const item = listItemsRef.current[firstVisible?.index ?? 0]
         if (item?.kind === 'header') {
@@ -2539,7 +2539,7 @@ export function Library() {
     return () => el.removeEventListener('scroll', onScroll)
     // The list itself changing (first load, a filter, the sort) also moves the
     // top row without a scroll event, so the pinned group recomputes then too.
-  }, [rowVirtualizer, listItems, displayedRecordings, usesRowList])
+  }, [rowVirtualizer, listItems, displayedRecordings, usesRowList, rowHeightPx])
 
   useEffect(() => {
     const prevIds = prevItemIdsRef.current
@@ -2567,6 +2567,20 @@ export function Library() {
     prevItemIdsRef.current = virtualKeys
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [displayedIdSignature])
+
+  // The rows are 44 px or 32 px depending on the list width. When the pane crosses
+  // the breakpoint every item changes height while scrollTop stays where it was, so
+  // the list would land on other content. Put the topmost visible item back at the
+  // top (the same anchor the removal path above uses).
+  const previousRowHeightRef = useRef(rowHeightPx)
+  useLayoutEffect(() => {
+    if (previousRowHeightRef.current === rowHeightPx) return
+    previousRowHeightRef.current = rowHeightPx
+    if (!usesRowList) return
+    const lastIndex = listItemsRef.current.length - 1
+    if (lastIndex < 0) return
+    rowVirtualizer.scrollToIndex(Math.min(firstVisibleIndexRef.current, lastIndex), { align: 'start' })
+  }, [rowHeightPx, usesRowList, rowVirtualizer])
 
   // Reveal-on-open: when a source becomes the active/opened one (via row click,
   // deep-link navigation, search result, or programmatic open), scroll the

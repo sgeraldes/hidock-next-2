@@ -156,6 +156,13 @@ describe('SourceRow compact wide — one line with aligned columns', () => {
     expect(before(duration, labels)).toBe(true)
   })
 
+  it('highlights a search match in the date and duration columns, like the two-line meta line', () => {
+    const { rerender } = render(<SourceRow recording={rich} compact wide searchQuery="44m" />)
+    expect(screen.getByTestId('row-duration').querySelector('mark')?.textContent).toBe('44m')
+    rerender(<SourceRow recording={rich} compact wide searchQuery="Sep" />)
+    expect(screen.getByTestId('row-date').querySelector('mark')?.textContent).toBe('Sep')
+  })
+
   it('keeps the duration column in place when a source has no duration', () => {
     render(<SourceRow recording={{ ...rich, duration: 0 }} compact wide />)
     expect(screen.getByTestId('row-duration').textContent).toBe('')

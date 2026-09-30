@@ -604,7 +604,7 @@ export const SourceRow = memo(function SourceRow({
                 {timeText}
               </span>
               <span className="w-14 shrink-0 text-right text-xs tabular-nums text-muted-foreground" data-testid="row-duration">
-                {durationText}
+                {searchQuery ? highlightText(durationText, searchQuery) : durationText}
               </span>
             </>
           )}

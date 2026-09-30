@@ -680,6 +680,8 @@ describe('Library', () => {
         expect(screen.getAllByTestId('row-duration')).toHaveLength(2)
         // The virtualizer measures again: cached 44px tracks are stale.
         expect(virtualizerHarness.measure).toHaveBeenCalled()
+        // Every item changed height while scrollTop stayed: the topmost visible item goes back to the top.
+        expect(scrollHarness.scrollToIndex).toHaveBeenLastCalledWith(0, { align: 'start' })
 
         resizeTo(500)
         await waitFor(() => expect(firstRow()).toHaveStyle({ height: '44px' }))
