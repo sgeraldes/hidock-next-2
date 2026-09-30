@@ -17,26 +17,59 @@ import { onSpeakerChange } from '../utils/speakerBus'
 
 const TTL_MS = 60_000
 const MAX_PARALLEL = 4
+// Names of this many recordings are kept; the oldest read goes first. Scrolling a long library must not grow this without end.
+const MAX_CACHED = 500
 
 const cache = new Map<string, { names: string[]; at: number }>()
 let active = 0
 const waiting: Array<() => void> = []
 
+/**
+ * At most MAX_PARALLEL reads at once. A finished read hands its slot straight to the next waiter (active does not
+ * change), so a card that mounts in between cannot take a slot the waiter is about to use.
+ */
 async function inSlot<T>(run: () => Promise<T>): Promise<T> {
   if (active >= MAX_PARALLEL) await new Promise<void>((resolve) => waiting.push(resolve))
-  active += 1
+  else active += 1
   try {
     return await run()
   } finally {
-    active -= 1
-    waiting.shift()?.()
+    const next = waiting.shift()
+    if (next) next()
+    else active -= 1
   }
 }
 
+function remember(recordingId: string, names: string[]): void {
+  cache.delete(recordingId)
+  cache.set(recordingId, { names, at: Date.now() })
+  while (cache.size > MAX_CACHED) {
+    const oldest = cache.keys().next().value
+    if (oldest === undefined) break
+    cache.delete(oldest)
+  }
+}
+
+/** How many recordings have their names remembered (tests). */
+export function cardPeopleCacheSize(): number {
+  return cache.size
+}
+
+// Bumped when what was read is forgotten, so a read already under way cannot store its old answer afterwards.
+let epoch = 0
+const generations = new Map<string, number>()
+const generationOf = (recordingId: string): string => `${epoch}:${generations.get(recordingId) ?? 0}`
+
 /** Forget what was read, for one recording or for all (tests). */
 export function forgetCardPeople(recordingId?: string): void {
-  if (recordingId) cache.delete(recordingId)
-  else cache.clear()
+  if (recordingId) {
+    cache.delete(recordingId)
+    generations.set(recordingId, (generations.get(recordingId) ?? 0) + 1)
+  } else {
+    cache.clear()
+    generations.clear()
+    epoch += 1
+  }
 }
 
 async function loadSpokeNames(recordingId: string): Promise<string[]> {
@@ -44,12 +77,13 @@ async function loadSpokeNames(recordingId: string): Promise<string[]> {
   if (hit && Date.now() - hit.at < TTL_MS) return hit.names
   const read = window.electronAPI?.transcripts?.getSpeakerMap
   if (!read) return []
+  const started = generationOf(recordingId)
   try {
     const res = await inSlot(() => read({ recordingId }))
     const names = res?.success
       ? [...new Set(res.data.map((entry) => entry.name?.trim()).filter((n): n is string => !!n && !isRawSpeakerLabel(n)))]
       : []
-    cache.set(recordingId, { names, at: Date.now() })
+    if (generationOf(recordingId) === started) remember(recordingId, names)
     return names
   } catch {
     return []
@@ -73,9 +107,12 @@ export function useCardPeople(recording: UnifiedRecording, transcript?: Transcri
       return
     }
     let cancelled = false
+    // A read started later wins: an older one that resolves last must not put the names from before a change back.
+    let latest = 0
     const load = () => {
+      const mine = (latest += 1)
       void loadSpokeNames(recording.id).then((names) => {
-        if (!cancelled) setSpoke(names)
+        if (!cancelled && mine === latest) setSpoke(names)
       })
     }
     load()

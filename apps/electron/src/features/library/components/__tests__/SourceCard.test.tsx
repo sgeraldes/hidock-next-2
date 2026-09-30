@@ -461,6 +461,21 @@ describe('SourceCard carries more, in the space it has', () => {
     }
   })
 
+  it('follows the local file: a recording that gets its file can be played and transcribed without a new id', () => {
+    const onTranscribe = vi.fn()
+    const withoutFile = { ...baseRecording, location: 'local-only', localPath: '', transcriptionStatus: 'none' } as UnifiedRecording
+    const { rerender } = render(<SourceCard {...makeProps({ recording: withoutFile, onTranscribe })} />)
+    expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Transcribe' })).toBeNull()
+    rerender(
+      <SourceCard
+        {...makeProps({ recording: { ...withoutFile, localPath: '/data/meeting.wav' } as UnifiedRecording, onTranscribe })}
+      />
+    )
+    expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Transcribe' })).toBeInTheDocument()
+  })
+
   it('keeps the same five blocks as before: the added information takes no extra line', () => {
     render(<SourceCard {...makeProps({ transcript: analysed, meeting: { id: 'm1', subject: 'Weekly', attendees: null } as unknown as Meeting })} />)
     // title, date and counts, chips and people, body, footer

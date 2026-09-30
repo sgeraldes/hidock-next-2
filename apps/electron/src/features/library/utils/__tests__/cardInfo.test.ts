@@ -50,9 +50,11 @@ describe('cardCounts', () => {
     })
   })
 
-  it('parses a transcript once', () => {
+  it('parses a transcript once, and again when its text changes in place', () => {
     const t = { id: 't', action_items: '["a"]', key_points: '[]' } as unknown as Transcript
     expect(cardCounts(t)).toBe(cardCounts(t))
+    t.action_items = '["a","b","c"]'
+    expect(cardCounts(t).actions).toBe(3)
   })
 })
 
@@ -117,9 +119,21 @@ describe('cardAction', () => {
 
   it('offers a Retry of the transcription after a transcription error or a failed status', () => {
     for (const type of ['transcription_failed', 'transcription_timeout', 'transcription_rate_limit', 'network_error'] as const) {
-      expect(cardAction(local, error(type), ctx), type).toMatchObject({ kind: 'transcribe', label: 'Retry', retry: true })
+      expect(cardAction({ ...local, transcriptionStatus: 'none' }, error(type), ctx), type).toMatchObject({
+        kind: 'transcribe',
+        label: 'Retry',
+        retry: true
+      })
     }
     expect(cardAction({ ...local, transcriptionStatus: 'error' }, undefined, ctx)).toMatchObject({ kind: 'transcribe', retry: true })
+  })
+
+  it('offers no retry over a finished transcript, whatever error is lying around', () => {
+    for (const type of ['network_error', 'transcription_failed', 'transcription_timeout'] as const) {
+      expect(cardAction(local, error(type), ctx), type).toBeNull()
+    }
+    // The same errors on a recording that has no transcript do offer it.
+    expect(cardAction({ ...local, transcriptionStatus: 'none' }, error('network_error'), ctx)?.label).toBe('Retry')
   })
 
   it('never offers to transcribe a recording that is not on this machine', () => {
@@ -153,6 +167,15 @@ describe('names and avatars', () => {
     expect(sameName('Sebastián Geraldes', 'Geraldes, Sebastian')).toBe(true)
     expect(sameName('Ana Pérez', 'Ana Gómez')).toBe(false)
     expect(sameName('', 'Ana')).toBe(false)
+  })
+
+  it('does not merge a first name with a full name that contains it: they may be two people', () => {
+    expect(sameName('Carlos', 'Carlos Ruiz')).toBe(false)
+    expect(sameName('Ana', 'Ana Gomez')).toBe(false)
+    expect(sameName('Luis', 'Luis')).toBe(true)
+    expect(sameName('Luis', 'luis')).toBe(true)
+    const people = mergePeople(['Carlos'], ['Carlos Ruiz', 'Ana'])
+    expect(people.map((p) => p.name)).toEqual(['Carlos', 'Carlos Ruiz', 'Ana'])
   })
 
   it('lists who spoke first, then who was only invited, each person once', () => {

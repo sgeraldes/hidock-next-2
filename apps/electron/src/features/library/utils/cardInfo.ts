@@ -22,7 +22,8 @@ export interface CardCounts {
 }
 
 const NO_COUNTS: CardCounts = { actions: null, keyPoints: null }
-const countCache = new WeakMap<Transcript, CardCounts>()
+// Keyed by the transcript object, and checked against the text it parsed, so a transcript changed in place is parsed again.
+const countCache = new WeakMap<Transcript, { actions: string | null; keyPoints: string | null; counts: CardCounts }>()
 
 function arrayLength(json: string | null | undefined): number | null {
   if (!json) return null
@@ -39,9 +40,9 @@ function arrayLength(json: string | null | undefined): number | null {
 export function cardCounts(transcript?: Transcript): CardCounts {
   if (!transcript) return NO_COUNTS
   const cached = countCache.get(transcript)
-  if (cached) return cached
+  if (cached && cached.actions === transcript.action_items && cached.keyPoints === transcript.key_points) return cached.counts
   const counts = { actions: arrayLength(transcript.action_items), keyPoints: arrayLength(transcript.key_points) }
-  countCache.set(transcript, counts)
+  countCache.set(transcript, { actions: transcript.action_items, keyPoints: transcript.key_points, counts })
   return counts
 }
 
@@ -100,11 +101,13 @@ export function cardAction(recording: UnifiedRecording, error: LibraryError | un
   if (error && DOWNLOAD_ERRORS.has(error.type) && deviceOnly && !ctx.downloading) {
     return { kind: 'download', label: 'Retry', retry: true, title: 'Try the download again' }
   }
+  // Only where there is no good transcript to lose: a finished transcript with an old or unrelated error keeps its
+  // notice but gets no button that would run the transcription over it.
+  const noTranscript = status === 'none' || status === 'no_speech' || status === 'error'
   if (
     ctx.canTranscribe &&
     !deviceOnly &&
-    status !== 'pending' &&
-    status !== 'processing' &&
+    noTranscript &&
     ((error && (error.type.startsWith('transcription_') || error.type === 'network_error')) || status === 'error')
   ) {
     return { kind: 'transcribe', label: 'Retry', retry: true, title: 'Try the transcription again' }
@@ -149,12 +152,17 @@ const fold = (name: string): string[] =>
     .split(/[^a-z0-9]+/)
     .filter(Boolean)
 
-/** Same person: every word of the shorter name is a word of the longer ("Ana Pérez" and "Ana Pérez (DFX5)"). */
+/**
+ * Same person: two or more words of the shorter name are all words of the longer ("Ana Pérez" and "Ana Pérez (DFX5)",
+ * "Geraldes, Sebastian" and "Sebastián Geraldes"). A single word matches only the same single word: "Carlos" and
+ * "Carlos Ruiz" may be two people, and showing both is better than hiding an attendee.
+ */
 export function sameName(a: string, b: string): boolean {
   const wa = fold(a)
   const wb = fold(b)
   if (wa.length === 0 || wb.length === 0) return false
   const [short, long] = wa.length <= wb.length ? [wa, wb] : [wb, wa]
+  if (short.length < 2) return short.length === long.length && short[0] === long[0]
   return short.every((w) => long.includes(w))
 }
 

@@ -118,6 +118,9 @@ function clockTime(value: Date | string | null | undefined): string {
   return d.toLocaleTimeString(appLocale(), { hour: 'numeric', minute: '2-digit' })
 }
 
+/** The local file of a recording, when it has one. A device-only recording has no such field. */
+const localPathOf = (r: UnifiedRecording): string | undefined => ('localPath' in r ? r.localPath : undefined)
+
 /**
  * One recording as a card of fixed size (the Library grid gives it CARD_HEIGHT_PX):
  * the title over two lines, date, time and length, the chips, a line of what is in it
@@ -437,6 +440,8 @@ export const SourceCard = memo(function SourceCard({
   return (
     prevProps.recording.id === nextProps.recording.id &&
     prevProps.recording.location === nextProps.recording.location &&
+    // canPlay, and with it the Play button and the Transcribe offer, follow the local file.
+    localPathOf(prevProps.recording) === localPathOf(nextProps.recording) &&
     prevProps.recording.personal === nextProps.recording.personal &&
     prevProps.recording.transcriptionStatus === nextProps.recording.transcriptionStatus &&
     prevProps.recording.quality === nextProps.recording.quality &&

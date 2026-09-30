@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Meeting, Transcript } from '@/types'
 import type { UnifiedRecording } from '@/types/unified-recording'
 import { emitSpeakerChange } from '../../utils/speakerBus'
-import { forgetCardPeople, useCardPeople } from '../useCardPeople'
+import { cardPeopleCacheSize, forgetCardPeople, useCardPeople } from '../useCardPeople'
 
 const recording = (id: string): UnifiedRecording =>
   ({
@@ -106,6 +106,73 @@ describe('useCardPeople', () => {
     setApi(undefined)
     render(<Probe id="r7" />)
     expect(screen.getByTestId('people-r7').textContent).toContain('-Marta Ríos')
+  })
+
+  it('keeps the newest names when an older read resolves last', async () => {
+    const answers = [
+      { delay: 40, name: 'Before The Change' },
+      { delay: 1, name: 'After The Change' }
+    ]
+    let call = 0
+    setApi(async () => {
+      const mine = answers[Math.min(call++, answers.length - 1)]
+      await new Promise((r) => setTimeout(r, mine.delay))
+      return { success: true, data: [{ speaker_label: 'S', contact_id: 'c', name: mine.name }] }
+    })
+    const view = render(<Probe id="r8" m={{ id: 'm', subject: 's', attendees: null } as unknown as Meeting} />)
+    // The first read is slow; a speaker change starts a second, fast one before the first ends.
+    await new Promise((r) => setTimeout(r, 5))
+    act(() => emitSpeakerChange('r8'))
+    await waitFor(() => expect(screen.getByTestId('people-r8').textContent).toBe('+After The Change'))
+    await new Promise((r) => setTimeout(r, 80))
+    expect(screen.getByTestId('people-r8').textContent).toBe('+After The Change')
+    // Nor did the slow read leave its old answer in the cache: a card mounted now starts from the new names.
+    view.unmount()
+    render(<Probe id="r8" m={{ id: 'm', subject: 's', attendees: null } as unknown as Meeting} />)
+    expect(screen.getByTestId('people-r8').textContent).toBe('+After The Change')
+    expect(call).toBe(2)
+  })
+
+  it('never has more than four reads in flight even when cards mount while others finish', async () => {
+    let running = 0
+    let peak = 0
+    setApi(async () => {
+      running += 1
+      peak = Math.max(peak, running)
+      await new Promise((r) => setTimeout(r, 6))
+      running -= 1
+      return { success: true, data: [] }
+    })
+    const view = render(<></>)
+    for (let i = 0; i < 30; i++) {
+      view.rerender(
+        <>
+          {Array.from({ length: i + 1 }, (_, k) => (
+            <Probe key={`s${k}`} id={`s${k}`} />
+          ))}
+        </>
+      )
+      await new Promise((r) => setTimeout(r, 2))
+    }
+    await new Promise((r) => setTimeout(r, 150))
+    expect(peak).toBeLessThanOrEqual(4)
+  })
+
+  it('keeps the names of a bounded number of recordings', async () => {
+    setApi(async ({ recordingId }) => ({ success: true, data: [{ speaker_label: 'S', contact_id: 'c', name: `Person ${recordingId}` }] }))
+    const ids = Array.from({ length: 520 }, (_, i) => `e${i}`)
+    const { rerender } = render(<></>)
+    for (let start = 0; start < ids.length; start += 40) {
+      rerender(
+        <>
+          {ids.slice(start, start + 40).map((id) => (
+            <Probe key={id} id={id} />
+          ))}
+        </>
+      )
+      await waitFor(() => expect(screen.getByTestId(`people-${ids[Math.min(start + 39, ids.length - 1)]}`).textContent).toContain('+Person'))
+    }
+    expect(cardPeopleCacheSize()).toBeLessThanOrEqual(500)
   })
 
   it('makes at most four reads at a time, however many cards are mounted', async () => {
