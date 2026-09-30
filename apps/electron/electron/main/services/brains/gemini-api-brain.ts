@@ -29,7 +29,7 @@ import type {
   GenerateOptions,
 } from './types'
 import { eligibleToGenerate } from './eligibility'
-import { caps, type HarnessDescriptor } from './descriptor'
+import { caps, type HarnessDescriptor, type ModelInfo } from './descriptor'
 
 const DEFAULT_MODEL = CURRENT_GEMINI_CHAT_MODEL
 const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001'
@@ -60,6 +60,12 @@ export class GeminiApiBrain implements AIBrain {
   readonly id = 'gemini-api' as const
   readonly label = 'Gemini (API key)'
 
+  private readonly fetchImpl: typeof fetch
+
+  constructor(deps: { fetchImpl?: typeof fetch } = {}) {
+    this.fetchImpl = deps.fetchImpl ?? fetch
+  }
+
   capabilities(): ReadonlySet<BrainCapability> {
     return CAPABILITIES
   }
@@ -85,6 +91,38 @@ export class GeminiApiBrain implements AIBrain {
       configured,
       method: 'api-key',
       detail: configured ? 'key set' : 'no API key',
+    }
+  }
+
+  /**
+   * The models the key can call for text. The key travels in a header, never in the URL. Lists
+   * nothing (never throws) without a key or when the API answers badly.
+   */
+  async listModels(): Promise<ModelInfo[]> {
+    const apiKey = resolveGeminiApiKey()
+    if (!apiKey) return []
+    try {
+      const res = await this.fetchImpl('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200', {
+        headers: { 'x-goog-api-key': apiKey },
+        signal: AbortSignal.timeout(5_000)
+      })
+      if (!res.ok) return []
+      const data = (await res.json()) as {
+        models?: Array<{ name?: unknown; displayName?: unknown; supportedGenerationMethods?: unknown }>
+      }
+      return (data.models ?? [])
+        .filter(
+          (m) =>
+            typeof m.name === 'string' &&
+            Array.isArray(m.supportedGenerationMethods) &&
+            m.supportedGenerationMethods.includes('generateContent')
+        )
+        .map((m) => {
+          const id = String(m.name).replace(/^models\//, '')
+          return typeof m.displayName === 'string' && m.displayName ? { id, label: m.displayName } : { id }
+        })
+    } catch {
+      return []
     }
   }
 

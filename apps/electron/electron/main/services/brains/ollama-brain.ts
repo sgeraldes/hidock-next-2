@@ -18,7 +18,7 @@ import type {
   EmbedOptions,
   GenerateOptions,
 } from './types'
-import { caps, type HarnessDescriptor } from './descriptor'
+import { caps, type HarnessDescriptor, type ModelInfo } from './descriptor'
 
 const CAPABILITIES: ReadonlySet<BrainCapability> = new Set<BrainCapability>([
   'generate',
@@ -60,6 +60,15 @@ export class OllamaBrain implements AIBrain {
       configured: available,
       method: available ? 'cli-login' : 'none',
       detail: available ? 'running' : 'not reachable',
+    }
+  }
+
+  async listModels(): Promise<ModelInfo[]> {
+    try {
+      const names = await getOllamaService().listModels()
+      return names.map((id) => ({ id }))
+    } catch {
+      return []
     }
   }
 

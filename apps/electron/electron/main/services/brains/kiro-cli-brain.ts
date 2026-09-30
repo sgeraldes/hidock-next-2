@@ -49,7 +49,7 @@ import type {
   BrainMessage,
   GenerateOptions,
 } from './types'
-import { caps, type HarnessDescriptor } from './descriptor'
+import { caps, type HarnessDescriptor, type ModelInfo } from './descriptor'
 
 const CAPABILITIES: ReadonlySet<BrainCapability> = new Set<BrainCapability>([
   'generate',
@@ -162,6 +162,22 @@ export class KiroCliBrain implements AIBrain {
     }
   }
 
+  /** `kiro-cli chat --list-models --format json`: fixed flags, no prompt, no model call. */
+  async listModels(): Promise<ModelInfo[]> {
+    try {
+      const res = await runCli(
+        KIRO_CLI,
+        ['chat', '--list-models', '--format', 'json'],
+        { timeoutMs: PROBE_TIMEOUT_MS, env: this.env },
+        this.spawn
+      )
+      if (res.code !== 0 || res.spawnError || res.timedOut) return []
+      return parseKiroModels(res.stdout)
+    } catch {
+      return []
+    }
+  }
+
   async generate(messages: BrainMessage[], opts: GenerateOptions = {}): Promise<string | null> {
     const prompt = foldMessagesToPrompt(messages, opts.systemPrompt)
     if (!prompt.trim()) return null
@@ -222,6 +238,30 @@ export function parseKiroOutput(stdout: string): string | null {
   let text = noAnsi.trim()
   if (text.startsWith('>')) text = text.slice(1).trimStart()
   return text.length > 0 ? text : null
+}
+
+/**
+ * Parse the JSON of `kiro-cli chat --list-models --format json`:
+ * `{ "models": [{ "model_id": "auto", "model_name": "auto", "description": "..." }, ...] }`.
+ * Anything else gives an empty list. Exported for direct unit testing.
+ */
+export function parseKiroModels(stdout: string): ModelInfo[] {
+  try {
+    const parsed = JSON.parse(stdout.trim()) as { models?: unknown }
+    if (!Array.isArray(parsed.models)) return []
+    const out: ModelInfo[] = []
+    for (const m of parsed.models as Array<Record<string, unknown>>) {
+      if (typeof m?.model_id !== 'string' || !m.model_id) continue
+      out.push({
+        id: m.model_id,
+        ...(typeof m.model_name === 'string' && m.model_name ? { label: m.model_name } : {}),
+        ...(typeof m.description === 'string' && m.description ? { note: m.description } : {})
+      })
+    }
+    return out
+  } catch {
+    return []
+  }
 }
 
 /**

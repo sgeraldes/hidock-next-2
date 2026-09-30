@@ -11,12 +11,14 @@ const mockIsAvailable = vi.fn()
 const mockChat = vi.fn()
 const mockGenerate = vi.fn()
 const mockGenerateEmbeddings = vi.fn()
+const mockListModels = vi.fn()
 vi.mock('../../ollama', () => ({
   getOllamaService: () => ({
     isAvailable: mockIsAvailable,
     chat: mockChat,
     generate: mockGenerate,
     generateEmbeddings: mockGenerateEmbeddings,
+    listModels: mockListModels,
   }),
 }))
 
@@ -89,5 +91,17 @@ describe('OllamaBrain', () => {
 
   it('embed([]) short-circuits to []', async () => {
     expect(await brain.embed([])).toEqual([])
+  })
+})
+
+describe('OllamaBrain.listModels', () => {
+  it('lists the installed models by name', async () => {
+    mockListModels.mockResolvedValue(['llama3.2:latest', 'qwen3:8b'])
+    expect(await new OllamaBrain().listModels()).toEqual([{ id: 'llama3.2:latest' }, { id: 'qwen3:8b' }])
+  })
+
+  it('lists nothing when Ollama is not running', async () => {
+    mockListModels.mockRejectedValue(new Error('down'))
+    expect(await new OllamaBrain().listModels()).toEqual([])
   })
 })
