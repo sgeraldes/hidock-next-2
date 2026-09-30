@@ -148,6 +148,8 @@ const GROUP_HEADER_HEIGHT_PX = 28
 const CARD_MIN_WIDTH_PX = 300
 const CARD_HEIGHT_PX = 204
 const CARD_GAP_PX = 12
+// Width the grid gives up at its two edges. Small, so a card in a single column (a phone in portrait) is as wide as it can be.
+const GRID_SIDE_MARGIN_PX = 4
 
 /**
  * The compact/Trash list virtualizes a flat sequence of items that is either a
@@ -2469,8 +2471,8 @@ export function Library() {
     if (!listScrollElement) return
     const apply = (width: number) => {
       setRowLayout(width >= WIDE_ROW_MIN_WIDTH_PX ? 'wide' : width > 0 && width < THREE_LINE_MAX_WIDTH_PX ? 'three' : 'two')
-      // The grid has a 12px margin on each side of its cards.
-      setCardColumns(Math.max(1, Math.floor((width - CARD_GAP_PX) / (CARD_MIN_WIDTH_PX + CARD_GAP_PX))))
+      // The grid has a 2px margin on each side, and each card 6px of its own.
+      setCardColumns(Math.max(1, Math.floor((width - GRID_SIDE_MARGIN_PX) / (CARD_MIN_WIDTH_PX + CARD_GAP_PX))))
     }
     apply(listScrollElement.clientWidth)
     if (typeof ResizeObserver === 'undefined') return
@@ -3079,7 +3081,7 @@ export function Library() {
               />
             )
           ) : (
-            <div className={`animate-rise-in ${compactView || showTrash ? '' : 'px-1.5'}`}>
+            <div className={`animate-rise-in ${compactView || showTrash ? '' : 'px-0.5'}`}>
               {(compactView || showTrash) && (
                 <div className="mb-2 flex items-center justify-between px-3">
                   <div className="flex items-center gap-3">
