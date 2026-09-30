@@ -130,7 +130,7 @@ export class OpenAiCompatibleBrain implements AIBrain {
       vendor: 'local',
       dataLeavesMachine: !isLoopbackUrl(this.settings().baseUrl),
       latency: 'medium',
-      capabilities: caps('text', 'json-schema', 'embedding'),
+      capabilities: caps('text', 'embedding'),
       effort: { kind: 'none' },
       needs: 'running-server',
       modelSelectable: true

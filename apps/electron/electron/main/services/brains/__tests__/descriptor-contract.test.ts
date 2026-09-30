@@ -11,7 +11,8 @@ vi.mock('../../config', () => ({ getConfig: () => ({ brains: {} }) }))
 vi.mock('../../ollama', () => ({ getOllamaService: () => ({ isAvailable: async () => false }) }))
 
 import { getBrainRegistry, resetBrainRegistry } from '../brain-registry'
-import { BRAIN_CAPABILITY_TO_HARNESS } from '../descriptor'
+import { BRAIN_CAPABILITY_TO_HARNESS, type HarnessCapability } from '../descriptor'
+import type { BrainCapability } from '../types'
 
 describe('every registered brain describes itself', () => {
   afterEach(() => resetBrainRegistry())
@@ -31,6 +32,31 @@ describe('every registered brain describes itself', () => {
       for (const c of brain.capabilities()) {
         expect(d.capabilities.has(BRAIN_CAPABILITY_TO_HARNESS[c]), `${brain.id}: ${c}`).toBe(true)
       }
+    }
+  })
+
+  it('claims no more than the adapter does for the capabilities that map to a method of it', () => {
+    const mapped: Array<[HarnessCapability, BrainCapability]> = [
+      ['text', 'generate'],
+      ['embedding', 'embed'],
+      ['agentic', 'agentic'],
+      ['audio', 'analyzeAudio']
+    ]
+    for (const brain of getBrainRegistry().list()) {
+      const d = brain.descriptor!()
+      for (const [claimed, method] of mapped) {
+        expect(d.capabilities.has(claimed), `${brain.id}: ${claimed}`).toBe(brain.capabilities().has(method))
+      }
+    }
+  })
+
+  it('claims no vision and no schema-enforced output: GenerateOptions carries no image and no schema yet', () => {
+    // When the runner of phase 2 adds an image input or a schema option to an adapter, that adapter's
+    // descriptor gains the capability in the same change, with its own test.
+    for (const brain of getBrainRegistry().list()) {
+      const d = brain.descriptor!()
+      expect(d.capabilities.has('vision'), `${brain.id}: vision`).toBe(false)
+      expect(d.capabilities.has('json-schema'), `${brain.id}: json-schema`).toBe(false)
     }
   })
 

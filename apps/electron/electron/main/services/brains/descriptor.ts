@@ -17,8 +17,8 @@ export type LatencyClass = 'fast' | 'medium' | 'slow' | 'heavy'
 
 export type HarnessCapability =
   | 'text'
-  | 'json-schema' // can be made to answer in a given JSON shape by the harness itself
-  | 'vision'
+  | 'json-schema' // the adapter passes a schema to the harness's native structured mode (none does yet: GenerateOptions has `json` only)
+  | 'vision' // the adapter sends an image (none does yet: BrainMessage content is text)
   | 'audio'
   | 'timestamps'
   | 'diarization'

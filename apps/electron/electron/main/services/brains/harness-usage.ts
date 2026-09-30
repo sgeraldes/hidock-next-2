@@ -1,6 +1,6 @@
 /**
- * What every harness call costs: tokens where the harness says them, time always, money where a
- * price is known.
+ * What every harness text call costs: tokens where the harness says them, time always, money where a
+ * price is known. Embedding calls report nothing here: the runner of phase 2 times every call itself.
  *
  * Same pattern as gemini-usage.ts (which stays: the transcription stages still use it): the code that
  * makes a call reports it with `recordHarnessUsage`, and the report goes to whichever collector is

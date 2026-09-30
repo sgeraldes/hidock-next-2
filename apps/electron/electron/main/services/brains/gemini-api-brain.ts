@@ -93,7 +93,7 @@ export class GeminiApiBrain implements AIBrain {
       vendor: 'Google',
       dataLeavesMachine: true,
       latency: 'fast',
-      capabilities: caps('text', 'json-schema', 'vision', 'audio', 'long-context', 'embedding'),
+      capabilities: caps('text', 'audio', 'long-context', 'embedding'),
       effort: { kind: 'thinking-budget' },
       needs: 'api-key',
       modelSelectable: true

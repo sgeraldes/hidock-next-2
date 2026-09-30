@@ -531,6 +531,9 @@ describe('parseClaudeOutput', () => {
     expect(parseClaudeOutput('42').text).toBe('42')
     expect(parseClaudeOutput('{"summary":"x"}').text).toBe('{"summary":"x"}')
     expect(parseClaudeOutput('[1,2,3]').text).toBe('[1,2,3]')
+    // A typed answer has the same `type` field the CLI events carry, and still is the answer.
+    expect(parseClaudeOutput('{"type":"summary","text":"x"}').text).toBe('{"type":"summary","text":"x"}')
+    expect(parseClaudeOutput('[{"type":"point","text":"a"}]').text).toBe('[{"type":"point","text":"a"}]')
   })
 
   it('gives no answer for events without a result, and none for empty output', () => {

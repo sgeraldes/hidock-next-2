@@ -122,6 +122,20 @@ export interface ClaudeRun {
   costUsd?: number
 }
 
+/**
+ * The event types `claude -p --output-format json` prints. An answer that is itself JSON and carries a
+ * `type` field (a typed summary, a list of typed points) is an answer, not an event, unless its type is
+ * one of these words.
+ */
+const CLI_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'system',
+  'assistant',
+  'user',
+  'result',
+  'stream_event',
+  'rate_limit_event'
+])
+
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const asNumber = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
 
@@ -143,7 +157,8 @@ export function parseClaudeOutput(stdout: string): ClaudeRun {
   const result = [...events].reverse().find((e): e is Record<string, unknown> => isRecord(e) && e.type === 'result')
   if (!result) {
     // Events without a result (a run cut short) have no answer; anything else is the answer.
-    const envelope = events.length > 0 && events.every((e) => isRecord(e) && typeof e.type === 'string')
+    const envelope =
+      events.length > 0 && events.every((e) => isRecord(e) && typeof e.type === 'string' && CLI_EVENT_TYPES.has(e.type))
     return envelope ? { text: null, isError: false } : { text: trimmed, isError: false }
   }
   const usage = isRecord(result.usage) ? result.usage : {}
