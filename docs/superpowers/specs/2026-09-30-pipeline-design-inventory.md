@@ -43,9 +43,10 @@ diarization quality, integrity and the org reconciler.
 
 ## Configuration that touches models (`S/config.ts`, type `:123`, defaults `:344`)
 
-- `transcription.*`: `provider` `gemini`; `geminiApiKey`; `geminiModel` `gemini-3.5-transcribe`;
-  `localAsr*`; `vibevoice*`; `speakerLinking*`; `modelHostUrl`, `modelHostToken`; `speakerEngine`
-  `auto`; `jevApiKey`; `autoTranscribe` true; `language` `es`; `valueClassificationEnabled` true;
+- `transcription.*`: `provider` `gemini`; the Gemini key; `geminiModel` `gemini-3.5-transcribe`;
+  `localAsr*`; `vibevoice*`; `speakerLinking*`; `modelHostUrl` and the Model Host access token;
+  `speakerEngine` `auto`; the Jev key; `autoTranscribe` true; `language` `es`;
+  `valueClassificationEnabled` true;
   `valueClassificationMinConfidence` 0.6.
 - `embeddings.*`: `provider` `ollama` (never read); `localCpuPercent` 50; `ollamaBaseUrl`;
   `ollamaModel` `nomic-embed-text`; `chunkSize` 500; `chunkOverlap` 50.
