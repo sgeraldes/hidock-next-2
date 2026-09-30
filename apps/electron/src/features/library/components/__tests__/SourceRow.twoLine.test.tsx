@@ -44,29 +44,77 @@ const meeting: Meeting = {
   updated_at: ''
 }
 
-describe('SourceRow compact — two-line Kiro Crew layout', () => {
-  it('puts the recording time on line one, right of the title', () => {
+describe('SourceRow compact — two-line layout', () => {
+  it('puts the title alone on the first line and truncates it to one line', () => {
     render(<SourceRow recording={base} compact />)
-    const time = screen.getByTestId('row-time')
-    // A start time (12h clock), not a date and not the filename.
-    expect(time.textContent).toMatch(/\d{1,2}:\d{2}\s?(AM|PM)/i)
-    expect(time.textContent).not.toContain('.hda')
-    expect(time.className).toContain('ml-auto')
+    const title = screen.getByText('Quarterly planning')
+    expect(title).toHaveClass('truncate')
+    // Nothing shares the title line: no time, no chips.
+    expect(title.parentElement?.children).toHaveLength(1)
+    expect(screen.queryByTestId('row-time')).not.toBeInTheDocument()
   })
 
-  it('shows a muted meta line of date, duration and kind — no time and no filename', () => {
-    render(<SourceRow recording={{ ...base, evalKind: 'team_meeting' }} compact />)
-    // date + duration + kind live together on the meta line.
-    const meta = screen.getByText((c) => /Sep 24/.test(c) && /44m/.test(c) && /Team meeting/.test(c))
-    expect(meta).toBeInTheDocument()
-    // The time is NOT repeated on the meta line (it is on line one).
-    expect(meta.textContent).not.toMatch(/\d{1,2}:\d{2}\s?(AM|PM)/i)
+  it('puts date, time and duration on the second line, with no filename', () => {
+    render(<SourceRow recording={base} compact />)
+    const meta = screen.getByTestId('row-meta')
+    expect(meta.textContent).toMatch(/Sep 24/)
+    expect(meta.textContent).toMatch(/7:02\s?PM/i)
+    expect(meta.textContent).toMatch(/44m/)
     expect(meta.textContent).not.toContain('Rec49')
+    expect(meta.textContent).not.toContain('.hda')
+  })
+
+  it('puts the chips on that second line, after the date', () => {
+    const { container } = render(
+      <SourceRow recording={{ ...base, evalKind: 'team_meeting', evalStarLevel: 4 }} compact />
+    )
+    const meta = screen.getByTestId('row-meta')
+    const labels = container.querySelector('[data-slot="labels"]') as HTMLElement
+    expect(labels.parentElement).toBe(meta.closest('div'))
+    expect(Boolean(meta.compareDocumentPosition(labels) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true)
+    expect(labels).toHaveTextContent('Team meeting')
+  })
+
+  it('keeps the icons on the right, vertically centred beside both lines', () => {
+    const { container } = render(<SourceRow recording={base} compact />)
+    const row = screen.getByRole('option')
+    expect(row).toHaveClass('h-11')
+    expect(row).toHaveClass('items-center')
+    for (const name of ['meeting', 'status', 'transcription']) {
+      expect(container.querySelector(`[data-slot="${name}"]`), name).not.toBeNull()
+    }
   })
 
   it('does not render a line-one time in card (non-compact) mode', () => {
     render(<SourceRow recording={base} />)
     expect(screen.queryByTestId('row-time')).not.toBeInTheDocument()
+  })
+})
+
+describe('SourceRow compact narrow — three lines on a phone', () => {
+  const rich = { ...base, evalKind: 'team_meeting', evalStarLevel: 4 } as UnifiedRecording
+
+  it('is a 68px row', () => {
+    render(<SourceRow recording={rich} compact narrow />)
+    expect(screen.getByRole('option')).toHaveClass('h-[68px]')
+  })
+
+  it('title on line one, date and time on line two, chips on line three', () => {
+    const { container } = render(<SourceRow recording={rich} compact narrow />)
+    const title = screen.getByText('Quarterly planning')
+    const meta = screen.getByTestId('row-meta')
+    const labels = container.querySelector('[data-slot="labels"]') as HTMLElement
+    const before = (a: Element, b: Element) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
+    expect(before(title, meta)).toBe(true)
+    expect(before(meta, labels)).toBe(true)
+    // The chips are a line of their own, not inside the date line.
+    expect(meta.closest('div')?.contains(labels)).toBe(false)
+    expect(labels).toHaveTextContent('Team meeting')
+  })
+
+  it('is ignored on a wide row', () => {
+    render(<SourceRow recording={rich} compact wide narrow />)
+    expect(screen.getByRole('option')).toHaveClass('h-8')
   })
 })
 
@@ -80,18 +128,19 @@ describe('SourceRow compact — every icon is visible without hovering', () => {
     }
   })
 
-  it('keeps the stars, the warning and the error icon always visible (never opacity-gated)', () => {
+  it('keeps the stars and the transcript warning always visible (never opacity-gated)', () => {
     const { container } = render(
       <SourceRow
         recording={{ ...base, evalStarLevel: 4, evalKind: 'team_meeting', evalAudioWarning: 'possible_invented_transcript' }}
         compact
       />
     )
-    for (const name of ['labels', 'warning', 'error', 'value', 'integrity']) {
+    for (const name of ['labels', 'transcription']) {
       const slot = container.querySelector(`[data-slot="${name}"]`)
       expect(slot, name).not.toBeNull()
       expect(slot?.className, name).not.toContain('opacity-0')
     }
+    expect(container.querySelector('[data-testid="transcript-problem"]')).not.toBeNull()
   })
 
   it('keeps a failed transcription visible without hover (it needs attention)', () => {
@@ -167,6 +216,27 @@ describe('SourceRow compact wide — one line with aligned columns', () => {
     render(<SourceRow recording={{ ...rich, duration: 0 }} compact wide />)
     expect(screen.getByTestId('row-duration').textContent).toBe('')
     expect(screen.getByTestId('row-duration').className).toContain('w-14')
+  })
+})
+
+describe('SourceRow compact — repaints when what it shows changes, whatever the handlers do', () => {
+  it('a rename repaints the title even when the click handler is the same function', () => {
+    const onClick = vi.fn()
+    const { rerender } = render(<SourceRow recording={base} compact onClick={onClick} />)
+    expect(screen.getByText('Quarterly planning')).toBeInTheDocument()
+    rerender(<SourceRow recording={{ ...base, userTitle: 'Q4 planning' }} compact onClick={onClick} />)
+    expect(screen.getByText('Q4 planning')).toBeInTheDocument()
+  })
+
+  it('a new date repaints the date and time', () => {
+    const onClick = vi.fn()
+    const { rerender } = render(<SourceRow recording={base} compact onClick={onClick} />)
+    rerender(
+      <SourceRow recording={{ ...base, dateRecorded: new Date('2026-09-25T08:30:00') }} compact onClick={onClick} />
+    )
+    const meta = screen.getByTestId('row-meta').textContent ?? ''
+    expect(meta).toMatch(/Sep 25/)
+    expect(meta).toMatch(/8:30\s?AM/i)
   })
 })
 

@@ -1,8 +1,8 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { AlertCircle, Download, Trash2, Wand2, Sparkles, FileText, RefreshCw, AudioLines, MoreHorizontal, Calendar, EyeOff, Eye, TrendingDown, Ban, RotateCcw, ArchiveRestore, AlertTriangle, XOctagon, FileWarning, FileX } from 'lucide-react'
+import { Download, Trash2, Wand2, Sparkles, FileText, RefreshCw, AudioLines, MoreHorizontal, EyeOff, Eye, TrendingDown, Ban, RotateCcw, ArchiveRestore } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -10,7 +10,7 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
-import { cn, formatDateTime, formatDuration } from '@/lib/utils'
+import { cn, formatDuration } from '@/lib/utils'
 import { formatSmartDate } from '@/lib/smartDate'
 import { appLocale } from '@/lib/locale'
 import { Meeting, Transcript } from '@/types'
@@ -18,18 +18,13 @@ import type { QualityRating } from '@/types/knowledge'
 import { UnifiedRecording, hasLocalPath, isRecordingBacked } from '@/types/unified-recording'
 import type { DownloadStatus } from '@/store/useAppStore'
 import { toast } from '@/components/ui/toaster'
-import { StatusIcon } from './StatusIcon'
-import { TranscriptionStatusBadge } from './TranscriptionStatusBadge'
+import { COLUMN_WIDTH } from './libraryColumns'
+import { CHIPS_BOX_CLASS, RowChips, MeetingIcon, StatusPlaceIcon, TranscriptionPlaceIcon } from './RowIcons'
 import { useLibraryStore } from '@/store/useLibraryStore'
 import { getDisplayTitle } from '@/features/library/utils/getDisplayTitle'
 import { highlightText } from '@/features/library/utils/highlightText'
 import { getRowMeta } from '@/features/library/utils/rowMeta'
 import { sourceTypeLabel } from '@/features/library/utils/sourceType'
-import { formatValueReasons } from '@/features/library/utils/valueReasons'
-import { ISSUE_TAGS, integrityIssues, integrityLabel } from '@/features/library/utils/transcriptIntegrity'
-import { audioLabel } from '@/features/library/utils/audioCheck'
-import { CONTEXT_LABELS, KIND_LABELS, WARNING_LABELS, effectiveWarning } from '@/features/library/utils/evaluation'
-import { useConfigStore } from '@/store/domain/useConfigStore'
 import {
   LABEL_DELETE_FROM_DEVICE,
   LABEL_MOVE_TO_TRASH,
@@ -45,137 +40,6 @@ import {
 } from '@/features/library/utils/deletionCopy'
 
 /**
- * F16/spec-003 — icon-only value badge, rendered only for low-value/garbage
- * (never valuable/archived/unrated). Lives in the row's `shrink-0` right
- * cluster so the H17 no-scroll invariant holds: no text label, so the
- * `flex-1 min-w-0` title always truncates before this cluster can grow.
- *
- * Relies on the single `<TooltipProvider>` SourceRow mounts around its whole
- * return value (/simplify S-6 — one provider per row, not one per tooltip
- * consumer) rather than mounting its own.
- */
-function ValueBadge({ recording }: { recording: UnifiedRecording }) {
-  if (recording.quality !== 'low-value' && recording.quality !== 'garbage') return null
-
-  const isGarbage = recording.quality === 'garbage'
-  const Icon = isGarbage ? Ban : TrendingDown
-  const label = isGarbage ? 'Garbage' : 'Low value'
-  const reasonsText = formatValueReasons(recording.qualityReasons)
-  const secondLine = reasonsText || (recording.qualitySource === 'user' ? 'Set by you' : 'AI-assessed')
-
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          className={`inline-flex shrink-0 ${isGarbage ? 'text-red-600 dark:text-red-400' : 'text-amber-600 dark:text-amber-400'}`}
-          role="img"
-          aria-label={label}
-        >
-          <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-        </span>
-      </TooltipTrigger>
-      <TooltipContent>
-        <p>{label}</p>
-        <p className="text-xs text-muted-foreground mt-0.5">{secondLine}</p>
-      </TooltipContent>
-    </Tooltip>
-  )
-}
-
-/**
- * Transcript integrity badge: icon-only like ValueBadge, shown only while a
- * transcript is flagged. Red when its text cannot fit the audio, amber when
- * only its timing is wrong. An accepted or clean transcript shows nothing.
- */
-function IntegrityBadge({ transcript }: { transcript?: Transcript }) {
-  const label = integrityLabel(transcript)
-  if (label !== 'suspect' && label !== 'broken') return null
-  const broken = label === 'broken'
-  const Icon = broken ? XOctagon : AlertTriangle
-  const title = broken ? 'Transcript does not fit the audio' : 'Transcript timing is wrong'
-  const tags = integrityIssues(transcript).map((i) => ISSUE_TAGS[i.code])
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          className={`inline-flex shrink-0 ${broken ? 'text-red-600 dark:text-red-400' : 'text-amber-600 dark:text-amber-400'}`}
-          role="img"
-          aria-label={title}
-          data-testid="integrity-badge"
-        >
-          <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-        </span>
-      </TooltipTrigger>
-      <TooltipContent>
-        <p>{title}</p>
-        <p className="text-xs text-muted-foreground mt-0.5">{tags.join(' · ')}</p>
-      </TooltipContent>
-    </Tooltip>
-  )
-}
-
-/**
- * Jev evaluation (v61): stars and the kind of recording, e.g. "4★ Team meeting".
- * Muted: it describes the recording, it does not warn. The tooltip adds the
- * context (work, personal).
- */
-function EvaluationLabel({ recording }: { recording: UnifiedRecording }) {
-  if (!recording.evalStarLevel && !recording.evalKind) return null
-  const kind = recording.evalKind ? KIND_LABELS[recording.evalKind] : null
-  const context = recording.evalContext ? CONTEXT_LABELS[recording.evalContext] : null
-  const stars = recording.evalStarLevel ?? null
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          className="inline-flex min-w-0 items-center gap-1 truncate rounded border border-border px-1.5 py-px text-[10px] leading-4 text-muted-foreground"
-          data-testid="evaluation-label"
-          aria-label={[stars ? `${stars} of 5 stars` : null, kind, context].filter(Boolean).join(', ')}
-        >
-          {stars && <span className="font-medium tabular-nums">{stars}★</span>}
-          {kind && <span>{kind}</span>}
-        </span>
-      </TooltipTrigger>
-      <TooltipContent>
-        <p>{[stars ? `${stars} of 5 stars` : null, kind, context].filter(Boolean).join(' · ')}</p>
-      </TooltipContent>
-    </Tooltip>
-  )
-}
-
-/**
- * Audio versus transcript warning: a meaningful transcript on silent audio
- * (possibly invented), or a lot of sound with almost no words (possibly missed).
- * Icon-only so it keeps its slot; the words are in the tooltip.
- */
-function EvaluationWarning({ recording }: { recording: UnifiedRecording }) {
-  // Subscribed, so a changed Settings > Quality checks threshold redraws the row.
-  useConfigStore((s) => s.config?.quality?.inventedProbability)
-  const warning = effectiveWarning(recording)
-  if (!warning) return null
-  const { label, detail } = WARNING_LABELS[warning]
-  const Icon = warning === 'possible_invented_transcript' ? FileWarning : FileX
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          className="inline-flex shrink-0 text-amber-600 dark:text-amber-400"
-          role="img"
-          aria-label={label}
-          data-testid="evaluation-warning"
-        >
-          <Icon className="h-3.5 w-3.5" aria-hidden="true" />
-        </span>
-      </TooltipTrigger>
-      <TooltipContent>
-        <p>{label}</p>
-        <p className="text-xs text-muted-foreground mt-0.5">{detail}</p>
-      </TooltipContent>
-    </Tooltip>
-  )
-}
-
-/**
  * One fixed-width place in the row's right cluster. It keeps its width when
  * empty, so every icon sits in the same column on every row and a missing one
  * reads as a gap (owner, 28-sep-2026).
@@ -183,15 +47,9 @@ function EvaluationWarning({ recording }: { recording: UnifiedRecording }) {
  * Every icon is always visible: the owner scans the list for each recording's
  * status, so nothing waits for a hover (29-sep-2026).
  */
-function IconSlot({ name, narrow, children }: { name: string; narrow?: 'hide'; children?: ReactNode }) {
+function IconSlot({ name, children }: { name: string; children?: ReactNode }) {
   return (
-    <span
-      className={[
-        narrow === 'hide' ? 'hidden @[22rem]:inline-flex' : 'inline-flex',
-        'h-4 w-4 shrink-0 items-center justify-center'
-      ].join(' ')}
-      data-slot={name}
-    >
+    <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center" data-slot={name}>
       {children}
     </span>
   )
@@ -205,30 +63,6 @@ function clockTime(value: Date | string | null | undefined): string {
   const ms = d.getTime()
   if (Number.isNaN(ms) || ms <= 0) return ''
   return d.toLocaleTimeString(appLocale(), { hour: 'numeric', minute: '2-digit' })
-}
-
-/**
- * Audio check label, in words: "Silent", "Noise only", "Too short". Shown
- * whenever the audio holds no usable sound, whatever the transcript says.
- */
-function AudioLabel({ recording }: { recording: UnifiedRecording }) {
-  const found = audioLabel(recording.audioCategory)
-  if (!found) return null
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          className="inline-flex shrink-0 items-center rounded border border-red-500/40 bg-red-500/10 px-1.5 py-px text-[10px] font-medium leading-4 text-red-700 dark:text-red-300"
-          data-testid="audio-label"
-        >
-          {found.label}
-        </span>
-      </TooltipTrigger>
-      <TooltipContent>
-        <p>{found.detail}</p>
-      </TooltipContent>
-    </Tooltip>
-  )
 }
 
 /**
@@ -269,6 +103,12 @@ interface SourceRowProps {
    * also owns the row height.
    */
   wide?: boolean
+  /**
+   * Compact rows that are not wide: the list is too narrow for the chips beside
+   * the date, so they get a third line (a phone in portrait). The list owns the
+   * breakpoint because it also owns the row height.
+   */
+  narrow?: boolean
   /** Bulk-selection checkbox was removed from the row (owner request). Retained so
       existing callers keep type-checking; no longer drives any UI. */
   anySelected?: boolean
@@ -311,6 +151,7 @@ export const SourceRow = memo(function SourceRow({
   deletionLabel = 'Removing local data…',
   compact = false,
   wide = false,
+  narrow = false,
   searchQuery = '',
   onSelectionChange,
   onClick,
@@ -435,21 +276,19 @@ export const SourceRow = memo(function SourceRow({
   const { Icon: TypeIcon, parts: secondaryParts, type: sourceType } = getRowMeta(recording)
   const secondaryText = secondaryParts.join(' \u00B7 ')
 
-  // Compact rows are two lines in the Kiro Crew sessions style: the title with
-  // the start time on the right, then a muted meta line of date, duration and
-  // the recording's kind. The time moves to line one, so the meta line drops it
-  // (and the relative hint) and gains the kind label instead. Non-compact rows
-  // keep the single combined secondary line (date \u00B7 time \u00B7 duration).
+  // Compact rows: the title alone on the first line, then a muted line of date, time
+  // and duration with the chips (stars and kind, audio check, value) after it. A list too
+  // narrow for both puts the chips on a third line. Non-compact rows keep the single
+  // combined secondary line (date \u00B7 time \u00B7 duration).
   const timeText = clockTime(recording.dateRecorded)
-  const kindLabel = recording.evalKind ? KIND_LABELS[recording.evalKind] : null
   const dateText = formatSmartDate(recording.dateRecorded, { time: false })
   const durationText =
     sourceType === 'audio' && recording.duration && recording.duration > 0 ? formatDuration(recording.duration) : ''
-  const compactMetaText = [dateText, durationText || null, kindLabel].filter(Boolean).join(' \u00B7 ')
+  const compactMetaText = [dateText, timeText, durationText].filter(Boolean).join(' \u00B7 ')
   const metaText = compact ? compactMetaText : secondaryText
-  // Wide compact rows: one line, the metadata in columns (the stars and kind are
-  // already in the label on the right, so the kind is not repeated).
+  // Wide compact rows: one line, the metadata in columns.
   const columns = compact && wide
+  const threeLines = compact && !wide && narrow
 
   return (
     <TooltipProvider>
@@ -459,7 +298,7 @@ export const SourceRow = memo(function SourceRow({
           // select-none: shift+click (range select) must not start the browser's
           // native TEXT selection — the list behaves like a file explorer, not
           // a text document (2026-07-21 report).
-          `group @container flex ${compact ? `${columns ? 'h-8' : 'h-11'} items-center` : 'items-start'} justify-between gap-2 ${compact ? (columns ? 'py-0' : 'py-1') : 'py-2.5'} px-3 ${isDeleting ? 'cursor-wait' : 'cursor-pointer'} select-none`,
+          `group @container flex ${compact ? `${columns ? 'h-8' : threeLines ? 'h-[68px]' : 'h-11'} items-center` : 'items-start'} justify-between gap-2 ${compact ? (columns ? 'py-0' : 'py-1') : 'py-2.5'} px-3 ${isDeleting ? 'cursor-wait' : 'cursor-pointer'} select-none`,
           'transition-[background-color,box-shadow] duration-150',
           // ONE visual system, ONE box (2026-07-22): background tints ONLY —
           // no outline rings. The wrapper owns separators (border-t); outline
@@ -563,26 +402,29 @@ export const SourceRow = memo(function SourceRow({
                   Personal
                 </span>
               )}
-              {/* Recording start time, right of the title line (compact rows). */}
-              {compact && !columns && timeText && (
-                <span
-                  className="ml-auto shrink-0 pl-2 text-xs tabular-nums text-muted-foreground leading-tight"
-                  data-testid="row-time"
-                >
-                  {timeText}
-                </span>
-              )}
             </div>
             {!columns && (
-              <p className="flex items-center gap-1 text-xs text-muted-foreground truncate leading-tight mt-0.5">
-                <TypeIcon
-                  className="h-3 w-3 shrink-0 text-muted-foreground/70"
-                  aria-label={`${sourceTypeLabel(sourceType)} source`}
-                />
-                <span className="truncate">
-                  {searchQuery ? highlightText(metaText, searchQuery) : metaText}
+              <div className="mt-0.5 flex min-w-0 items-center gap-2 overflow-hidden text-xs leading-tight text-muted-foreground">
+                <span className={`flex items-center gap-1 ${compact ? 'shrink-0' : 'min-w-0'}`}>
+                  <TypeIcon
+                    className="h-3 w-3 shrink-0 text-muted-foreground/70"
+                    aria-label={`${sourceTypeLabel(sourceType)} source`}
+                  />
+                  <span className={compact ? 'whitespace-nowrap' : 'truncate'} data-testid="row-meta">
+                    {searchQuery ? highlightText(metaText, searchQuery) : metaText}
+                  </span>
                 </span>
-              </p>
+                {!threeLines && !isDeleting && (
+                  <span className={CHIPS_BOX_CLASS} data-slot="labels">
+                    <RowChips recording={recording} />
+                  </span>
+                )}
+              </div>
+            )}
+            {threeLines && !isDeleting && (
+              <div className={`mt-0.5 ${CHIPS_BOX_CLASS}`} data-slot="labels">
+                <RowChips recording={recording} />
+              </div>
             )}
           </div>
         </div>
@@ -593,17 +435,17 @@ export const SourceRow = memo(function SourceRow({
         <div className="flex items-center gap-1.5 shrink-0">
           {columns && (
             <>
-              <span className="flex w-28 shrink-0 items-center gap-1 text-xs text-muted-foreground" data-testid="row-date">
+              <span className={`flex ${COLUMN_WIDTH.date} shrink-0 items-center gap-1 text-xs text-muted-foreground`} data-testid="row-date">
                 <TypeIcon
                   className="h-3 w-3 shrink-0 text-muted-foreground/70"
                   aria-label={`${sourceTypeLabel(sourceType)} source`}
                 />
                 <span className="truncate">{searchQuery ? highlightText(dateText, searchQuery) : dateText}</span>
               </span>
-              <span className="w-16 shrink-0 text-right text-xs tabular-nums text-muted-foreground" data-testid="row-time">
+              <span className={`${COLUMN_WIDTH.time} shrink-0 text-right text-xs tabular-nums text-muted-foreground`} data-testid="row-time">
                 {timeText}
               </span>
-              <span className="w-14 shrink-0 text-right text-xs tabular-nums text-muted-foreground" data-testid="row-duration">
+              <span className={`${COLUMN_WIDTH.duration} shrink-0 text-right text-xs tabular-nums text-muted-foreground`} data-testid="row-duration">
                 {searchQuery ? highlightText(durationText, searchQuery) : durationText}
               </span>
             </>
@@ -618,56 +460,21 @@ export const SourceRow = memo(function SourceRow({
               <span className="truncate">{deletionLabel}</span>
             </div>
           )}
-          {/* Fixed places, left to right: labels (stars and kind, audio check),
-              value, audio-vs-transcript warning, transcript integrity, meeting,
-              error, status, transcription. Each keeps its width when empty so the
-              columns line up down the list. The error place sits before the two
-              that every row fills, so the menu button is not pushed away by an
-              empty place (owner, 30-sep-2026). */}
-          {!isDeleting && (
-            // Left-aligned in the wide layout so the chips start on one line like the
-            // other columns; right-aligned beside the icons on two-line rows.
-            <span
-              className={`hidden w-36 shrink-0 items-center ${columns ? 'ml-2 justify-start' : 'justify-end'} gap-1 overflow-hidden @[20rem]:flex`}
-              data-slot="labels"
-            >
-              <AudioLabel recording={recording} />
-              <EvaluationLabel recording={recording} />
+          {/* Three fixed places, left to right: the calendar meeting, the status of the
+              file (where it is, or a processing error in its place) and the state of the
+              transcript (transcribed, or a problem with it in its place). Each keeps its
+              width when empty so the columns line up down the list. In the wide layout the
+              chips form a column of their own before the places (owner, 30-sep-2026). */}
+          {columns && !isDeleting && (
+            <span className={`ml-2 ${COLUMN_WIDTH.chips} shrink-0 ${CHIPS_BOX_CLASS}`} data-slot="labels">
+              <RowChips recording={recording} />
             </span>
           )}
-          {!isDeleting && <IconSlot name="value"><ValueBadge recording={recording} /></IconSlot>}
-          {!isDeleting && <IconSlot name="warning"><EvaluationWarning recording={recording} /></IconSlot>}
-          {!isDeleting && <IconSlot name="integrity" narrow="hide"><IntegrityBadge transcript={transcript} /></IconSlot>}
-          {!isDeleting && <IconSlot name="meeting" narrow="hide">{meeting && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span
-                  className="inline-flex shrink-0 text-primary/70"
-                  role="img"
-                  aria-label={`Linked to calendar meeting: ${meeting.subject}`}
-                >
-                  <Calendar className="h-3.5 w-3.5" aria-hidden="true" />
-                </span>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>Linked to calendar meeting</p>
-                <p className="text-xs text-muted-foreground mt-0.5">{formatDateTime(meeting.start_time)}</p>
-              </TooltipContent>
-            </Tooltip>
-          )}</IconSlot>}
-          {!isDeleting && <IconSlot name="error">{error && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <AlertCircle className="h-3.5 w-3.5 text-destructive shrink-0" aria-label="Processing error" />
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>{error.message}</p>
-                {error.details && <p className="text-xs text-muted-foreground mt-1">{error.details}</p>}
-              </TooltipContent>
-            </Tooltip>
-          )}</IconSlot>}
-          {!isDeleting && <IconSlot name="status"><StatusIcon recording={recording} /></IconSlot>}
-          {!isDeleting && <IconSlot name="transcription"><TranscriptionStatusBadge status={recording.transcriptionStatus} compact /></IconSlot>}
+          {!isDeleting && <IconSlot name="meeting"><MeetingIcon meeting={meeting} /></IconSlot>}
+          {!isDeleting && <IconSlot name="status"><StatusPlaceIcon recording={recording} error={error} /></IconSlot>}
+          {!isDeleting && (
+            <IconSlot name="transcription"><TranscriptionPlaceIcon recording={recording} transcript={transcript} /></IconSlot>
+          )}
 
           {/* Download progress (device-only, in flight) */}
           {!isDeleting && recording.location === 'device-only' && downloadStatus && (
@@ -924,6 +731,10 @@ export const SourceRow = memo(function SourceRow({
     prevProps.recording.personal === nextProps.recording.personal &&
     prevProps.recording.transcriptionStatus === nextProps.recording.transcriptionStatus &&
     prevProps.recording.title === nextProps.recording.title &&
+    // getDisplayTitle prefers the typed title, and the date and time lines read dateRecorded.
+    prevProps.recording.userTitle === nextProps.recording.userTitle &&
+    prevProps.recording.filename === nextProps.recording.filename &&
+    new Date(prevProps.recording.dateRecorded).getTime() === new Date(nextProps.recording.dateRecorded).getTime() &&
     prevProps.recording.meetingSubject === nextProps.recording.meetingSubject &&
     prevProps.recording.audioCategory === nextProps.recording.audioCategory &&
     prevProps.recording.evalStarLevel === nextProps.recording.evalStarLevel &&
@@ -940,6 +751,7 @@ export const SourceRow = memo(function SourceRow({
     // The list switches rows between two lines and one line with columns.
     prevProps.compact === nextProps.compact &&
     prevProps.wide === nextProps.wide &&
+    prevProps.narrow === nextProps.narrow &&
     prevProps.isSelected === nextProps.isSelected &&
     prevProps.isActiveSource === nextProps.isActiveSource &&
     prevProps.isDeleting === nextProps.isDeleting &&

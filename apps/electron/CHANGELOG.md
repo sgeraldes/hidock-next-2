@@ -2,6 +2,36 @@
 
 Each entry is one day of merged work. The Releases page in Settings reads this file.
 
+## 2026-09-30 | The Library list has a header and the card view is a card view
+
+The list follows the width of its pane, a header names every column and sorts on click, and the
+card view is a grid of cards.
+
+### New
+
+- **Header row on the wide list.** Title, Date, Time, Length, Rating and the three icon places each
+  have a header. Click one to sort by it, click again to turn the order around. The icon headers
+  show the icon the rows use, and their tooltips say what it can mean.
+- **More ways to sort.** Stars, calendar meeting, file status and transcript join date, title,
+  length and quality in Filters & sort. Title now sorts on the title the list shows, not on the
+  file name.
+- **Card view.** A grid of cards of one size: title over at most two lines, date, time and length,
+  the chips, a line of the summary or the meeting, the state of the file and the transcript, and
+  Play, Download or Transcribe. Everything else is in the card menu. Arrow keys move a row up
+  and down and a card left and right.
+
+### Changes
+
+- **Two icons less on a row.** A processing error now takes the place of the file-status icon
+  (the green tick), and a problem with the transcript (wrong timing, text that does not fit the
+  audio, text that may be invented or missing) takes the place of the transcription icon. The
+  tooltip lists every problem and still says the state. The Legend explains both.
+- **Narrow lists.** With the recording open beside the list, the title stays on one line and the
+  date, time and length go on the second, with the chips after them. On a phone-width list the
+  chips get a third line. A chip that does not fit is left out whole, or its kind is cut with an
+  ellipsis, never sliced in half.
+- **Cards no longer open the transcript inline.** Click the card to read it in the reader.
+
 ## 2026-09-28 | Settings with a menu, Jev in the Library, connectors that connect
 
 Settings is a menu of pages instead of one long page, the Library shows what Jev found about each

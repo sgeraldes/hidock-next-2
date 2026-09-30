@@ -717,13 +717,14 @@ describe('AR3-5 — Trash state boundaries', () => {
 describe('Confirm-dialog copy matches §D2 exactly', () => {
   it('soft delete: title/action "Move to Trash", description names the file + restore path', async () => {
     // viewMode is 'card' in this harness (default live-list rendering), so the
-    // soft-delete affordance here is SourceCard's own delete button — the
+    // soft-delete affordance here is the item in SourceCard's actions menu — the
     // dropdown-menu label matrix (with its D2 scope text) is covered in
     // SourceRow.test.tsx / SourceReader.deletion.test.tsx; this test only
     // verifies the CONFIRM DIALOG copy Library.tsx itself owns.
     renderLibrary()
     await waitFor(() => expect(trashToggleButton()).toHaveAccessibleName(`View Trash, 2 items`))
-    fireEvent.click(screen.getAllByTitle('Move to Trash')[0])
+    fireEvent.keyDown(screen.getAllByLabelText('Card actions')[0], { key: 'Enter' })
+    fireEvent.click(await screen.findByRole('menuitem', { name: /move to trash/i }))
 
     expect(await screen.findByText(/move "live recording 0" to trash\?/i)).toBeInTheDocument()
     expect(screen.getByText(/restore it from trash, or delete it permanently later/i)).toBeInTheDocument()

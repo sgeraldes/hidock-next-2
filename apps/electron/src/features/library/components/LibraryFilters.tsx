@@ -267,9 +267,13 @@ export function LibraryFilters({
                   <div className="flex items-center gap-2">
                     <select value={sortBy ?? 'date'} onChange={(event) => onSortByChange(event.target.value as SortBy)} className="h-8 flex-1 rounded-md border border-input bg-background px-3 py-1 text-xs" aria-label="Sort by">
                       <option value="date">Date</option>
-                      <option value="name">Name</option>
+                      <option value="name">Title</option>
                       {supportsDuration && <option value="duration">Duration</option>}
                       {supportsQuality && <option value="quality">Quality</option>}
+                      <option value="stars">Stars</option>
+                      <option value="meeting">Calendar meeting</option>
+                      <option value="status">File status</option>
+                      <option value="transcription">Transcript</option>
                     </select>
                     <button onClick={() => onSortOrderChange(sortOrder === 'asc' ? 'desc' : 'asc')} className="h-8 px-2 rounded-md border border-input bg-background text-xs font-medium hover:bg-muted transition-colors inline-flex items-center gap-1" aria-label={`Sort ${sortOrder === 'asc' ? 'ascending' : 'descending'}`}>
                       {sortOrder === 'asc' ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}

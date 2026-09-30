@@ -18,7 +18,7 @@ import type { DurationPreset } from '@/features/library/utils/durationFilter'
 import { LibraryError } from '@/features/library/utils/errorHandling'
 import { validateId } from '@/lib/utils'
 
-export type SortBy = 'date' | 'duration' | 'name' | 'quality'
+export type SortBy = 'date' | 'duration' | 'name' | 'quality' | 'stars' | 'meeting' | 'status' | 'transcription'
 export type SortOrder = 'asc' | 'desc'
 
 /**
@@ -118,7 +118,6 @@ interface LibraryState {
   expandedRowIds: Set<string>
 
   // Transcript expansion state (transient - not persisted)
-  expandedTranscripts: Set<string>
 
   // Panel state (persisted)
   panelSizes: number[]
@@ -194,8 +193,6 @@ interface LibraryActions {
   collapseAllRows: () => void
 
   // Transcript expansion
-  toggleTranscriptExpansion: (id: string) => void
-  collapseAllTranscripts: () => void
 
   // Error management
   setRecordingError: (id: string, error: LibraryError) => void
@@ -244,7 +241,6 @@ const initialState: LibraryState = {
   readerListCollapsedBeforeMaximize: null,
   selectedIds: new Set(),
   expandedRowIds: new Set(),
-  expandedTranscripts: new Set(),
   panelSizes: [25, 45, 30],
   listPaneSize: 25,
   listCollapsed: false,
@@ -296,9 +292,7 @@ export const useLibraryStore = create<LibraryStore>()(
           statusFilter: null,
           sourceTypeFilter: 'all',
           durationPreset: 'all',
-          searchQuery: '',
-          // C-005: Clear stale expansion state when filters reset to prevent accumulation
-          expandedTranscripts: new Set()
+          searchQuery: ''
         }),
 
       // Assistant docking
@@ -409,20 +403,6 @@ export const useLibraryStore = create<LibraryStore>()(
       },
 
       collapseAllRows: () => set({ expandedRowIds: new Set() }),
-
-      // Transcript expansion
-      toggleTranscriptExpansion: (id) =>
-        set((state) => {
-          const newExpanded = new Set(state.expandedTranscripts)
-          if (newExpanded.has(id)) {
-            newExpanded.delete(id)
-          } else {
-            newExpanded.add(id)
-          }
-          return { expandedTranscripts: newExpanded }
-        }),
-
-      collapseAllTranscripts: () => set({ expandedTranscripts: new Set() }),
 
       // Error management
       setRecordingError: (id, error) =>
