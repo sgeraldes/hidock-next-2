@@ -420,8 +420,8 @@ app.whenReady().then(async () => {
   // Under the default `full` preset every bounded task registers. The
   // definitions + gating live in services/boot-tasks.ts (unit-tested there):
   //   org-reconcile (calendar), knowledge-capture-backfill (library floor),
-  //   meeting-wiki-backfill (meeting-intelligence), start-transcription-processor
-  //   (transcription), semantic-index-restore (assistant). Provider-backed repair
+  //   meeting-wiki-backfill (meeting-intelligence), start-transcription-processor and
+  //   evaluation-catchup (transcription), semantic-index-restore (assistant). Provider-backed repair
   //   sweeps are explicit maintenance actions, not unbounded boot work.
   registerGatedBootTasks()
 

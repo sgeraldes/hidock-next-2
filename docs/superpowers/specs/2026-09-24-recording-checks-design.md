@@ -299,8 +299,9 @@ per speaker from the transcript, embed them, match against the canonical voices.
    `evaluation:warnings-updated`, which reloads an open Library.
    New recordings are evaluated without the Settings scan (30-sep). Until then the evaluation ran
    only from that button, so the 15 recordings after 25-sep showed no stars or kind. The catch-up
-   (`evaluation-catchup.ts`) runs after each finished transcript and once after boot, only when Jev
-   is the value classifier. It looks at the last 30 days, 20 recordings at a time, one call at a
+   (`evaluation-catchup.ts`) runs after each finished transcript and once after boot (a boot task of
+   the transcription feature), only when Jev is the value classifier and value classification is not
+   switched off. It looks at the last 30 days, 20 recordings at a time, one call at a
    time, skips a recording that turned personal or deleted, waits while the Settings scan runs, and
    stops on an authentication error or after three failures in a row. A recording that failed is
    not retried until the app restarts. The historical scan stays a button.

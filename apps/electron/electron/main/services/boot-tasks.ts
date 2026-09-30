@@ -142,7 +142,7 @@ export const BOOT_TASK_DEFS: GatedBootTask[] = [
     // (stars, kind) shows without the Settings scan. Starts in the background
     // and returns at once: the scheduler never waits for Jev.
     name: 'evaluation-catchup',
-    feature: null,
+    feature: 'transcription',
     run: () => {
       scheduleEvaluationCatchup()
     },

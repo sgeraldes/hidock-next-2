@@ -9,11 +9,17 @@
  * This is the small, bounded counterpart of the scan. It looks only at the last
  * few weeks and at a handful of recordings, one at a time, and it stops at the
  * first sign that Jev is unavailable. It runs after each finished transcript and
- * once after boot, and only when Jev is the value classifier (a key is set and
- * the value job is on). The big historical scan stays a button.
+ * once after boot (under the transcription feature), and only when Jev is the
+ * value classifier (a key is set and the value job is on) and value
+ * classification is not switched off. The big historical scan stays a button.
+ *
+ * It does not stop the Settings scan from starting while it runs: both write the
+ * same evaluation row (an upsert per capture), so the worst overlap is a
+ * duplicate Jev call for a few of the last 20 recordings.
  */
 
 import { queryAll } from './database'
+import { getConfig } from './config'
 import { classifyCaptureValue, getValueClassifierKind, lowValueMaxSeconds } from './value-classification'
 import { isCapturePrivacyBlocked, isClassifierAuthError, isValueBackfillRunning } from './value-backfill'
 import { EVALUATION_VERSION } from './jev-evaluation'
@@ -28,7 +34,7 @@ export const CATCHUP_MAX_CONSECUTIVE_FAILURES = 3
 export interface EvaluationCatchupResult {
   evaluated: number
   failed: number
-  stopped?: 'not-jev' | 'busy' | 'auth' | 'failures'
+  stopped?: 'not-jev' | 'disabled' | 'busy' | 'auth' | 'failures'
 }
 
 let running = false
@@ -67,6 +73,8 @@ function pendingCaptureIds(limit: number, sinceDays: number): string[] {
 export async function evaluateRecentUnevaluated(
   opts: { limit?: number; sinceDays?: number } = {}
 ): Promise<EvaluationCatchupResult> {
+  // The same kill switch as the rating written at the end of a transcript.
+  if (getConfig().transcription?.valueClassificationEnabled === false) return { evaluated: 0, failed: 0, stopped: 'disabled' }
   if (getValueClassifierKind() !== 'jev') return { evaluated: 0, failed: 0, stopped: 'not-jev' }
   if (running || isValueBackfillRunning()) return { evaluated: 0, failed: 0, stopped: 'busy' }
   running = true
@@ -85,10 +93,11 @@ export async function evaluateRecentUnevaluated(
         consecutiveFailures = 0
       } catch (e) {
         failed++
+        console.warn(`[Evaluation] catch-up failed for capture ${captureId}:`, e instanceof Error ? e.message : e)
+        // A rejected key says nothing about this capture: it is tried again once the key is fixed.
+        if (isClassifierAuthError(e)) return { evaluated, failed, stopped: 'auth' }
         consecutiveFailures++
         failedThisSession.add(captureId)
-        console.warn(`[Evaluation] catch-up failed for capture ${captureId}:`, e instanceof Error ? e.message : e)
-        if (isClassifierAuthError(e)) return { evaluated, failed, stopped: 'auth' }
         if (consecutiveFailures >= CATCHUP_MAX_CONSECUTIVE_FAILURES) return { evaluated, failed, stopped: 'failures' }
       }
     }

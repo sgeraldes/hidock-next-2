@@ -95,7 +95,7 @@ describe('registerGatedBootTasks', () => {
       isFeatureEnabled: enabledUnder({ preset: 'library-only', flags: {} }),
       register: (t) => registered.push(t.name),
     })
-    expect(registered).toEqual(['database-backup', 'integrity-check', 'knowledge-capture-backfill', 'audio-profile-backfill', 'evaluation-warning-refresh', 'evaluation-catchup'])
+    expect(registered).toEqual(['database-backup', 'integrity-check', 'knowledge-capture-backfill', 'audio-profile-backfill', 'evaluation-warning-refresh'])
   })
 
   it('library-transcription adds exactly the two transcription tasks', () => {
@@ -121,7 +121,7 @@ describe('registerGatedBootTasks', () => {
     })
     // meeting-wiki (meeting-intelligence), transcription tasks and
     // semantic-index-restore (assistant) all drop via the requires:transcription cascade.
-    expect(registered).toEqual(['database-backup', 'stale-auto-link-repair', 'integrity-check', 'org-reconcile', 'knowledge-capture-backfill', 'audio-profile-backfill', 'evaluation-warning-refresh', 'evaluation-catchup'])
+    expect(registered).toEqual(['database-backup', 'stale-auto-link-repair', 'integrity-check', 'org-reconcile', 'knowledge-capture-backfill', 'audio-profile-backfill', 'evaluation-warning-refresh'])
   })
 
   it('a disabled task NEVER runs — its run() body is not invoked', async () => {
@@ -139,13 +139,13 @@ describe('registerGatedBootTasks', () => {
       defs,
     })
     for (const t of captured) await t.run()
-    expect(ran).toEqual(['database-backup', 'integrity-check', 'knowledge-capture-backfill', 'audio-profile-backfill', 'evaluation-warning-refresh', 'evaluation-catchup'])
+    expect(ran).toEqual(['database-backup', 'integrity-check', 'knowledge-capture-backfill', 'audio-profile-backfill', 'evaluation-warning-refresh'])
   })
 
   it('uses the live config-backed gate by default (mocked config here)', () => {
     featuresConfig = { preset: 'library-only', flags: {} }
     const registered: string[] = []
     registerGatedBootTasks({ register: (t) => registered.push(t.name) })
-    expect(registered).toEqual(['database-backup', 'integrity-check', 'knowledge-capture-backfill', 'audio-profile-backfill', 'evaluation-warning-refresh', 'evaluation-catchup'])
+    expect(registered).toEqual(['database-backup', 'integrity-check', 'knowledge-capture-backfill', 'audio-profile-backfill', 'evaluation-warning-refresh'])
   })
 })

@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 let pending: string[] = []
 let jevActive = true
 let scanRunning = false
+let killSwitchOff = false
 const blocked = new Set<string>()
 const queryAll = vi.fn((_sql: string, _params?: unknown[]) => pending.map((id) => ({ id })))
 const classifyCaptureValue = vi.fn(async (_id: string) => ({ changed: false }))
@@ -28,6 +29,9 @@ vi.mock('../value-backfill', () => ({
   isValueBackfillRunning: () => scanRunning
 }))
 vi.mock('../jev-evaluation', () => ({ EVALUATION_VERSION: 3 }))
+vi.mock('../config', () => ({
+  getConfig: () => ({ transcription: { valueClassificationEnabled: killSwitchOff ? false : undefined } })
+}))
 
 import {
   CATCHUP_LIMIT,
@@ -43,6 +47,7 @@ beforeEach(() => {
   pending = []
   jevActive = true
   scanRunning = false
+  killSwitchOff = false
   blocked.clear()
   classifyCaptureValue.mockResolvedValue({ changed: false })
 })
@@ -82,6 +87,17 @@ describe('evaluateRecentUnevaluated', () => {
     const result = await evaluateRecentUnevaluated()
 
     expect(result).toEqual({ evaluated: 0, failed: 0, stopped: 'not-jev' })
+    expect(queryAll).not.toHaveBeenCalled()
+    expect(classifyCaptureValue).not.toHaveBeenCalled()
+  })
+
+  it('does nothing when value classification is switched off, like the rating at the end of a transcript', async () => {
+    killSwitchOff = true
+    pending = ['cap-1']
+
+    const result = await evaluateRecentUnevaluated()
+
+    expect(result).toEqual({ evaluated: 0, failed: 0, stopped: 'disabled' })
     expect(queryAll).not.toHaveBeenCalled()
     expect(classifyCaptureValue).not.toHaveBeenCalled()
   })
@@ -129,6 +145,17 @@ describe('evaluateRecentUnevaluated', () => {
 
     expect(result).toEqual({ evaluated: 0, failed: 1, stopped: 'auth' })
     expect(classifyCaptureValue).toHaveBeenCalledTimes(1)
+  })
+
+  it('tries the capture again after a rejected key, since the key said nothing about the transcript', async () => {
+    pending = ['cap-1']
+    classifyCaptureValue.mockRejectedValueOnce(new AuthError('401'))
+    await evaluateRecentUnevaluated()
+
+    const second = await evaluateRecentUnevaluated()
+
+    expect(second.evaluated).toBe(1)
+    expect(classifyCaptureValue).toHaveBeenCalledTimes(2)
   })
 
   it('stops after three failures in a row, and a success resets the count', async () => {
