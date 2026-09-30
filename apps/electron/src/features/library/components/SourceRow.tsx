@@ -256,12 +256,19 @@ interface SourceRowProps {
   isDeleting?: boolean
   deletionLabel?: string
   /**
-   * FIXED-HEIGHT row (48px, title truncated to one line). The compact list
-   * uses this so virtualized offsets are ALWAYS exact (48 × index) — variable
-   * heights (line-clamp-2 titles at ~74px) made every measurement/scroll/
-   * alignment bug possible (2026-07-22).
+   * FIXED-HEIGHT row (title truncated to one line): 44px on two lines, or 32px
+   * on one line when `wide`. The compact list uses this so virtualized offsets
+   * are ALWAYS exact — variable heights (line-clamp-2 titles at ~74px) made
+   * every measurement/scroll/alignment bug possible (2026-07-22).
    */
   compact?: boolean
+  /**
+   * Compact rows only: the list is wide enough for one line per row. Date, time
+   * and duration become aligned columns beside the title instead of a second
+   * line under it (owner, 30-sep-2026). The list owns the breakpoint because it
+   * also owns the row height.
+   */
+  wide?: boolean
   /** Bulk-selection checkbox was removed from the row (owner request). Retained so
       existing callers keep type-checking; no longer drives any UI. */
   anySelected?: boolean
@@ -303,6 +310,7 @@ export const SourceRow = memo(function SourceRow({
   isDeleting = false,
   deletionLabel = 'Removing local data…',
   compact = false,
+  wide = false,
   searchQuery = '',
   onSelectionChange,
   onClick,
@@ -434,12 +442,14 @@ export const SourceRow = memo(function SourceRow({
   // keep the single combined secondary line (date \u00B7 time \u00B7 duration).
   const timeText = clockTime(recording.dateRecorded)
   const kindLabel = recording.evalKind ? KIND_LABELS[recording.evalKind] : null
-  const compactMetaText = [
-    formatSmartDate(recording.dateRecorded, { time: false }),
-    sourceType === 'audio' && recording.duration && recording.duration > 0 ? formatDuration(recording.duration) : null,
-    kindLabel
-  ].filter(Boolean).join(' \u00B7 ')
+  const dateText = formatSmartDate(recording.dateRecorded, { time: false })
+  const durationText =
+    sourceType === 'audio' && recording.duration && recording.duration > 0 ? formatDuration(recording.duration) : ''
+  const compactMetaText = [dateText, durationText || null, kindLabel].filter(Boolean).join(' \u00B7 ')
   const metaText = compact ? compactMetaText : secondaryText
+  // Wide compact rows: one line, the metadata in columns (the stars and kind are
+  // already in the label on the right, so the kind is not repeated).
+  const columns = compact && wide
 
   return (
     <TooltipProvider>
@@ -449,7 +459,7 @@ export const SourceRow = memo(function SourceRow({
           // select-none: shift+click (range select) must not start the browser's
           // native TEXT selection — the list behaves like a file explorer, not
           // a text document (2026-07-21 report).
-          `group @container flex ${compact ? 'h-12 items-center' : 'items-start'} justify-between gap-2 ${compact ? 'py-1.5' : 'py-2.5'} px-3 ${isDeleting ? 'cursor-wait' : 'cursor-pointer'} select-none`,
+          `group @container flex ${compact ? `${columns ? 'h-8' : 'h-11'} items-center` : 'items-start'} justify-between gap-2 ${compact ? (columns ? 'py-0' : 'py-1') : 'py-2.5'} px-3 ${isDeleting ? 'cursor-wait' : 'cursor-pointer'} select-none`,
           'transition-[background-color,box-shadow] duration-150',
           // ONE visual system, ONE box (2026-07-22): background tints ONLY —
           // no outline rings. The wrapper owns separators (border-t); outline
@@ -554,7 +564,7 @@ export const SourceRow = memo(function SourceRow({
                 </span>
               )}
               {/* Recording start time, right of the title line (compact rows). */}
-              {compact && timeText && (
+              {compact && !columns && timeText && (
                 <span
                   className="ml-auto shrink-0 pl-2 text-xs tabular-nums text-muted-foreground leading-tight"
                   data-testid="row-time"
@@ -563,15 +573,17 @@ export const SourceRow = memo(function SourceRow({
                 </span>
               )}
             </div>
-            <p className="flex items-center gap-1 text-xs text-muted-foreground truncate leading-tight mt-0.5">
-              <TypeIcon
-                className="h-3 w-3 shrink-0 text-muted-foreground/70"
-                aria-label={`${sourceTypeLabel(sourceType)} source`}
-              />
-              <span className="truncate">
-                {searchQuery ? highlightText(metaText, searchQuery) : metaText}
-              </span>
-            </p>
+            {!columns && (
+              <p className="flex items-center gap-1 text-xs text-muted-foreground truncate leading-tight mt-0.5">
+                <TypeIcon
+                  className="h-3 w-3 shrink-0 text-muted-foreground/70"
+                  aria-label={`${sourceTypeLabel(sourceType)} source`}
+                />
+                <span className="truncate">
+                  {searchQuery ? highlightText(metaText, searchQuery) : metaText}
+                </span>
+              </p>
+            )}
           </div>
         </div>
 
@@ -579,6 +591,23 @@ export const SourceRow = memo(function SourceRow({
             the row's top line. The two status icons live here (not a left column) so
             the title starts flush-left. Playback lives in the mid-panel player. */}
         <div className="flex items-center gap-1.5 shrink-0">
+          {columns && (
+            <>
+              <span className="flex w-28 shrink-0 items-center gap-1 text-xs text-muted-foreground" data-testid="row-date">
+                <TypeIcon
+                  className="h-3 w-3 shrink-0 text-muted-foreground/70"
+                  aria-label={`${sourceTypeLabel(sourceType)} source`}
+                />
+                <span className="truncate">{searchQuery ? highlightText(dateText, searchQuery) : dateText}</span>
+              </span>
+              <span className="w-16 shrink-0 text-right text-xs tabular-nums text-muted-foreground" data-testid="row-time">
+                {timeText}
+              </span>
+              <span className="w-14 shrink-0 text-right text-xs tabular-nums text-muted-foreground" data-testid="row-duration">
+                {searchQuery ? highlightText(durationText, searchQuery) : durationText}
+              </span>
+            </>
+          )}
           {isDeleting && (
             <div
               className="flex max-w-44 items-center gap-1.5 text-xs font-medium text-muted-foreground"
@@ -591,10 +620,17 @@ export const SourceRow = memo(function SourceRow({
           )}
           {/* Fixed places, left to right: labels (stars and kind, audio check),
               value, audio-vs-transcript warning, transcript integrity, meeting,
-              status, transcription, error. Each keeps its width when empty so the
-              columns line up down the list. */}
+              error, status, transcription. Each keeps its width when empty so the
+              columns line up down the list. The error place sits before the two
+              that every row fills, so the menu button is not pushed away by an
+              empty place (owner, 30-sep-2026). */}
           {!isDeleting && (
-            <span className="hidden w-36 shrink-0 items-center justify-end gap-1 overflow-hidden @[20rem]:flex" data-slot="labels">
+            // Left-aligned in the wide layout so the chips start on one line like the
+            // other columns; right-aligned beside the icons on two-line rows.
+            <span
+              className={`hidden w-36 shrink-0 items-center ${columns ? 'ml-2 justify-start' : 'justify-end'} gap-1 overflow-hidden @[20rem]:flex`}
+              data-slot="labels"
+            >
               <AudioLabel recording={recording} />
               <EvaluationLabel recording={recording} />
             </span>
@@ -619,8 +655,6 @@ export const SourceRow = memo(function SourceRow({
               </TooltipContent>
             </Tooltip>
           )}</IconSlot>}
-          {!isDeleting && <IconSlot name="status"><StatusIcon recording={recording} /></IconSlot>}
-          {!isDeleting && <IconSlot name="transcription"><TranscriptionStatusBadge status={recording.transcriptionStatus} compact /></IconSlot>}
           {!isDeleting && <IconSlot name="error">{error && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -632,6 +666,8 @@ export const SourceRow = memo(function SourceRow({
               </TooltipContent>
             </Tooltip>
           )}</IconSlot>}
+          {!isDeleting && <IconSlot name="status"><StatusIcon recording={recording} /></IconSlot>}
+          {!isDeleting && <IconSlot name="transcription"><TranscriptionStatusBadge status={recording.transcriptionStatus} compact /></IconSlot>}
 
           {/* Download progress (device-only, in flight) */}
           {!isDeleting && recording.location === 'device-only' && downloadStatus && (
@@ -696,7 +732,7 @@ export const SourceRow = memo(function SourceRow({
                       aria-label="More actions"
                       // Shown on hover, focus or while open; it keeps its place either way (Kiro Crew rows).
                       className={cn(
-                        'opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100',
+                        'h-6 w-6 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100',
                         isSelected && 'opacity-100'
                       )}
                     >
@@ -901,6 +937,9 @@ export const SourceRow = memo(function SourceRow({
     prevProps.recording.qualitySource === nextProps.recording.qualitySource &&
     prevProps.recording.duration === nextProps.recording.duration &&
     prevProps.recording.size === nextProps.recording.size &&
+    // The list switches rows between two lines and one line with columns.
+    prevProps.compact === nextProps.compact &&
+    prevProps.wide === nextProps.wide &&
     prevProps.isSelected === nextProps.isSelected &&
     prevProps.isActiveSource === nextProps.isActiveSource &&
     prevProps.isDeleting === nextProps.isDeleting &&

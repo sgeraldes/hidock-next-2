@@ -618,13 +618,77 @@ describe('Library', () => {
       expect(virtualizerHarness.options?.getItemKey?.(3)).toBe('after-parent')
       expect(virtualizerHarness.measureElement).not.toHaveBeenCalled()
       // data-index stays the RECORDING index (0,1,2); the 28px header offsets the
-      // fixed 48px row tracks that follow it.
+      // fixed 44px row tracks that follow it.
       const rows = [0, 1, 2].map((index) => document.querySelector<HTMLElement>(`[data-index="${index}"]`))
-      expect(rows[0]).toHaveStyle({ height: '48px', top: '28px' })
-      expect(rows[1]).toHaveStyle({ height: '48px', top: '76px' })
-      expect(rows[2]).toHaveStyle({ height: '48px', top: '124px' })
+      expect(rows[0]).toHaveStyle({ height: '44px', top: '28px' })
+      expect(rows[1]).toHaveStyle({ height: '44px', top: '72px' })
+      expect(rows[2]).toHaveStyle({ height: '44px', top: '116px' })
       expect(rows.every((row) => row?.style.transform === '')).toBe(true)
       expect(new Set(rows.map((row) => row?.style.top)).size).toBe(3)
+    })
+
+    it('lays the rows out on one 32px line with columns when the list is wide, and on two 44px lines when it narrows', async () => {
+      const observers: Array<{ callback: ResizeObserverCallback; target: Element | null }> = []
+      class FakeResizeObserver {
+        private readonly entry: { callback: ResizeObserverCallback; target: Element | null }
+        constructor(callback: ResizeObserverCallback) {
+          this.entry = { callback, target: null }
+          observers.push(this.entry)
+        }
+        observe(target: Element) {
+          this.entry.target = target
+        }
+        unobserve = vi.fn()
+        disconnect = vi.fn()
+      }
+      vi.stubGlobal('ResizeObserver', FakeResizeObserver)
+      try {
+        vi.mocked(useUnifiedRecordings).mockReturnValue({
+          recordings: [
+            { ...mockRecording, id: 'wide-1', filename: 'a.wav', dateRecorded: new Date(Date.now() - 60_000), duration: 2815 },
+            { ...mockRecording, id: 'wide-2', filename: 'b.wav', dateRecorded: new Date(Date.now() - 120_000), duration: 2819 }
+          ],
+          loading: false,
+          error: null,
+          refresh: vi.fn(),
+          deviceConnected: false,
+          stats: { total: 2, deviceOnly: 0, localOnly: 2, both: 0, synced: 2, unsynced: 0, onSource: 0, locallyAvailable: 2 }
+        })
+        renderLibrary()
+
+        const listObservers = () =>
+          observers.filter((o) => o.target instanceof HTMLElement && o.target.querySelector('[role="listbox"]'))
+        const resizeTo = (width: number) =>
+          act(() => {
+            for (const o of listObservers()) {
+              o.callback([{ contentRect: { width } } as ResizeObserverEntry], {} as ResizeObserver)
+            }
+          })
+        const firstRow = () => document.querySelector<HTMLElement>('[data-index="0"]')
+
+        await waitFor(() => expect(firstRow()).not.toBeNull())
+        expect(listObservers().length).toBeGreaterThan(0)
+
+        // Narrow (the default): two lines, no columns.
+        expect(firstRow()).toHaveStyle({ height: '44px' })
+        expect(screen.queryAllByTestId('row-date')).toHaveLength(0)
+
+        resizeTo(1200)
+        await waitFor(() => expect(firstRow()).toHaveStyle({ height: '32px' }))
+        expect(document.querySelector<HTMLElement>('[data-index="1"]')).toHaveStyle({ height: '32px', top: '60px' })
+        expect(screen.getAllByTestId('row-date')).toHaveLength(2)
+        expect(screen.getAllByTestId('row-duration')).toHaveLength(2)
+        // The virtualizer measures again: cached 44px tracks are stale.
+        expect(virtualizerHarness.measure).toHaveBeenCalled()
+        // Every item changed height while scrollTop stayed: the topmost visible item goes back to the top.
+        expect(scrollHarness.scrollToIndex).toHaveBeenLastCalledWith(0, { align: 'start' })
+
+        resizeTo(500)
+        await waitFor(() => expect(firstRow()).toHaveStyle({ height: '44px' }))
+        expect(screen.queryAllByTestId('row-date')).toHaveLength(0)
+      } finally {
+        vi.unstubAllGlobals()
+      }
     })
   })
 

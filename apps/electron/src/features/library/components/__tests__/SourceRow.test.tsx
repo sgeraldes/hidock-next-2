@@ -197,7 +197,7 @@ describe('SourceRow permanent deletion state', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Erasing device copy…')
     expect(row).toHaveAttribute('aria-disabled', 'true')
     expect(row).toHaveAttribute('tabindex', '-1')
-    expect(row).toHaveClass('h-12')
+    expect(row).toHaveClass('h-11')
     expect(screen.queryByLabelText(/more actions/i)).not.toBeInTheDocument()
 
     fireEvent.click(row)

@@ -116,3 +116,65 @@ describe('SourceRow — row menu opens from the keyboard', () => {
     expect(await screen.findByRole('menuitem', { name: /ask assistant/i })).toBeInTheDocument()
   })
 })
+
+describe('SourceRow compact wide — one line with aligned columns', () => {
+  const rich = { ...base, evalKind: 'team_meeting', evalStarLevel: 4 } as UnifiedRecording
+
+  it('shows date, time and duration as columns and drops the second line', () => {
+    const { container } = render(<SourceRow recording={rich} compact wide />)
+    expect(screen.getByTestId('row-date').textContent).toMatch(/Sep 24/)
+    expect(screen.getByTestId('row-time').textContent).toMatch(/\d{1,2}:\d{2}\s?(AM|PM)/i)
+    expect(screen.getByTestId('row-duration').textContent).toMatch(/44m/)
+    // Only one time, and no stacked meta line with date and duration together.
+    expect(screen.getAllByTestId('row-time')).toHaveLength(1)
+    expect(screen.queryByText((c) => /Sep 24/.test(c) && /44m/.test(c))).not.toBeInTheDocument()
+    expect(container.querySelector('p.mt-0\\.5')).toBeNull()
+  })
+
+  it('is a 32px row, and 44px on two lines when not wide', () => {
+    const { rerender } = render(<SourceRow recording={rich} compact wide />)
+    expect(screen.getByRole('option')).toHaveClass('h-8')
+    rerender(<SourceRow recording={rich} compact wide={false} />)
+    expect(screen.getByRole('option')).toHaveClass('h-11')
+  })
+
+  it('does not repeat the kind: the label on the right already says it', () => {
+    render(<SourceRow recording={rich} compact wide />)
+    expect(screen.getAllByText('Team meeting')).toHaveLength(1)
+    expect(screen.getByTestId('evaluation-label')).toBeInTheDocument()
+  })
+
+  it('puts the columns before the icon cluster, in the order date, time, duration', () => {
+    const { container } = render(<SourceRow recording={rich} compact wide />)
+    const date = screen.getByTestId('row-date')
+    const time = screen.getByTestId('row-time')
+    const duration = screen.getByTestId('row-duration')
+    const labels = container.querySelector('[data-slot="labels"]') as HTMLElement
+    const before = (a: Element, b: Element) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
+    expect(before(date, time)).toBe(true)
+    expect(before(time, duration)).toBe(true)
+    expect(before(duration, labels)).toBe(true)
+  })
+
+  it('highlights a search match in the date and duration columns, like the two-line meta line', () => {
+    const { rerender } = render(<SourceRow recording={rich} compact wide searchQuery="44m" />)
+    expect(screen.getByTestId('row-duration').querySelector('mark')?.textContent).toBe('44m')
+    rerender(<SourceRow recording={rich} compact wide searchQuery="Sep" />)
+    expect(screen.getByTestId('row-date').querySelector('mark')?.textContent).toBe('Sep')
+  })
+
+  it('keeps the duration column in place when a source has no duration', () => {
+    render(<SourceRow recording={{ ...rich, duration: 0 }} compact wide />)
+    expect(screen.getByTestId('row-duration').textContent).toBe('')
+    expect(screen.getByTestId('row-duration').className).toContain('w-14')
+  })
+})
+
+describe('SourceRow compact — menu button', () => {
+  it('is compact, close to the icons', () => {
+    render(<SourceRow recording={base} compact />)
+    const button = screen.getByLabelText(/more actions/i)
+    expect(button).toHaveClass('h-6')
+    expect(button).toHaveClass('w-6')
+  })
+})
