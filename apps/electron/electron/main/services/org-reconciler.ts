@@ -22,7 +22,7 @@ import {
   getAllRecordingPreassignments,
   getMentionResolution,
   recordMentionResolutionNoSave,
-  getAmbiguousBuckets,
+  getAmbiguousBucketResolutions,
   getBucketResolution,
   getActiveCalendarSyncToken,
   healRecordingStatusFromTranscripts,
@@ -31,7 +31,8 @@ import {
   recordProjectDiscoveryObservation,
   clearProjectDiscoveryObservations,
   getProjectDiscoveryCorroborations,
-  type RecordingPreassignment
+  type RecordingPreassignment,
+  type BucketResolution
 } from './database'
 import { filterEligibleRecordingIds } from './recording-eligibility'
 import { mergeContactsWithGraph } from './knowledge-graph-service'
@@ -391,12 +392,39 @@ export function upsertContactsFromMeetings(): { contacts: number; links: number 
     // is SQLite's own LOWER(email), and the first row by rowid wins, exactly as
     // the query it replaces returned.
     const contactsByEmail = new Map<string, { id: string; name: string }>()
+    const contactsById = new Map<string, { id: string; name: string }>()
     for (const known of queryAll<{ id: string; name: string; email_key: string | null }>(
       `SELECT id, name, LOWER(email) AS email_key FROM contacts ORDER BY rowid`
     )) {
-      if (known.email_key !== null && !contactsByEmail.has(known.email_key)) {
-        contactsByEmail.set(known.email_key, { id: known.id, name: known.name })
-      }
+      const entry = { id: known.id, name: known.name }
+      contactsById.set(known.id, entry)
+      if (known.email_key !== null && !contactsByEmail.has(known.email_key)) contactsByEmail.set(known.email_key, entry)
+    }
+
+    // The email of a contact that was merged into another belongs to the survivor.
+    // A merge keeps the survivor's own email and drops the loser's, and the loser's
+    // address is still on the meetings that named it: without this the next pass
+    // saw an address nobody owned, created the contact again, and the name merge
+    // folded it away again. Measured on the real data: the same 34 contacts were
+    // created and merged on every start and after every calendar sync, and the
+    // merge journal grew by about 1,000 rows a day (30-sep-2026). The journal is
+    // the record of who took whom; a merge that was undone is not in it.
+    // Known trade-off: an address that was reassigned to another person after a merge (or a
+    // shared mailbox) resolves to the survivor of that merge until the merge is undone.
+    const mergedInto = new Map<string, string>() // loser id -> keeper id
+    const mergedEmailOwner = new Map<string, string>() // loser email -> keeper id
+    for (const row of queryAll<{ loser_id: string | null; keeper_id: string; email: string | null }>(
+      `SELECT loser_id, keeper_id, json_extract(loser_snapshot, '$.email') AS email
+         FROM merge_journal WHERE kind = 'contact' AND undone_at IS NULL ORDER BY seq`
+    )) {
+      if (row.loser_id) mergedInto.set(row.loser_id, row.keeper_id)
+      if (row.email && row.email.trim()) mergedEmailOwner.set(row.email.trim().toLowerCase(), row.keeper_id)
+    }
+    const survivorOfMergedEmail = (email: string): { id: string; name: string } | undefined => {
+      let owner = mergedEmailOwner.get(email)
+      // The keeper may itself have been merged later: follow the chain to a contact that still exists.
+      for (let hops = 0; owner && !contactsById.has(owner) && hops < 20; hops++) owner = mergedInto.get(owner)
+      return owner ? contactsById.get(owner) : undefined
     }
     const linkedPairs = new Set(
       queryAll<{ meeting_id: string; contact_id: string }>(`SELECT meeting_id, contact_id FROM meeting_contacts`).map(
@@ -422,7 +450,7 @@ export function upsertContactsFromMeetings(): { contacts: number; links: number 
       }
 
       for (const person of people) {
-        let contact = contactsByEmail.get(person.email)
+        let contact = contactsByEmail.get(person.email) ?? survivorOfMergedEmail(person.email)
         if (!contact) {
           const id = randomUUID()
           const now = meeting.start_time || new Date().toISOString()
@@ -434,6 +462,7 @@ export function upsertContactsFromMeetings(): { contacts: number; links: number 
           )
           contact = { id, name: storedName }
           contactsByEmail.set(person.email, contact)
+          contactsById.set(id, contact)
           newContacts++
         } else if (person.name && contact.name === person.email.split('@')[0]) {
           // upgrade email-derived placeholder names when a real name appears
@@ -1465,15 +1494,21 @@ export function repairMisbundledRecordings(
  * the M365 connector backfills real calendar attendees.
  */
 export function autoSplitAmbiguousBuckets(): { buckets: number; resolved: number } {
-  const buckets = getAmbiguousBuckets()
+  const found = getAmbiguousBucketResolutions()
+  const buckets = found.map((item) => item.bucket)
   let resolvedTotal = 0
   const now = new Date().toISOString()
-  for (const b of buckets) {
-    const res = getBucketResolution(b.contactId)
+  const toResolveIn = (res: BucketResolution) =>
+    res.recordings.filter((r) => r.method !== 'unclear' && r.bestGuessId && canUpgrade(r.resolvedMethod, r.method))
+  for (const item of found) {
+    // A bucket with nothing to resolve is skipped on the resolution built a moment
+    // ago. Only a bucket that has work is built again, because the buckets before
+    // it may have written links it depends on. (It used to be built again for every
+    // bucket, on every start and after every calendar sync.)
+    if (toResolveIn(item.resolution).length === 0) continue
+    const res = getBucketResolution(item.bucket.contactId)
     if (!res) continue
-    const toResolve = res.recordings.filter(
-      (r) => r.method !== 'unclear' && r.bestGuessId && canUpgrade(r.resolvedMethod, r.method)
-    )
+    const toResolve = toResolveIn(res)
     if (toResolve.length === 0) continue
     runInTransaction(() => {
       for (const r of toResolve) {

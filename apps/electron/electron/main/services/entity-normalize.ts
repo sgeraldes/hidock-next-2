@@ -30,9 +30,24 @@ export function stripDiacritics(value: string): string {
   return (value || '').normalize('NFD').replace(COMBINING_MARKS, '')
 }
 
+/**
+ * The keys already computed, by input. The key is a pure function of the string, and
+ * the ambiguous-bucket pass asks for the key of every contact name once per contact
+ * (about 2.6 million calls for 1,600 contacts): NFKC and NFD normalisation of the same
+ * few thousand names made org-reconcile hold the main thread for 3 s at boot
+ * (30-sep-2026). Bounded, and dropped whole when it fills.
+ */
+const ACCENT_FOLDED_KEYS = new Map<string, string>()
+const ACCENT_FOLDED_KEYS_MAX = 50_000
+
 /** Accent-insensitive normalized key: normalizeName + stripDiacritics. */
 export function accentFoldedKey(name: string): string {
-  return stripDiacritics(normalizeName(name))
+  const cached = ACCENT_FOLDED_KEYS.get(name)
+  if (cached !== undefined) return cached
+  const key = stripDiacritics(normalizeName(name))
+  if (ACCENT_FOLDED_KEYS.size >= ACCENT_FOLDED_KEYS_MAX) ACCENT_FOLDED_KEYS.clear()
+  ACCENT_FOLDED_KEYS.set(name, key)
+  return key
 }
 
 /** Whether a raw string looks like an email address (used to gate the email tier). */
@@ -203,9 +218,17 @@ export function fuzzyNameScore(aNorm: string, bNorm: string): number {
 // roughly half the mentions. These pure helpers let the resolver, the discovery
 // sweep, and the DB layer agree on what counts as an ambiguous bucket.
 
+/** The tokens already split, by input. Frozen because every caller shares the array. */
+const NAME_TOKENS = new Map<string, readonly string[]>()
+
 /** Accent-folded whitespace tokens of a name (lowercased, marks stripped, ≥1 char). */
-export function nameTokens(name: string): string[] {
-  return accentFoldedKey(name).split(' ').filter(Boolean)
+export function nameTokens(name: string): readonly string[] {
+  const cached = NAME_TOKENS.get(name)
+  if (cached !== undefined) return cached
+  const tokens = Object.freeze(accentFoldedKey(name).split(' ').filter(Boolean))
+  if (NAME_TOKENS.size >= ACCENT_FOLDED_KEYS_MAX) NAME_TOKENS.clear()
+  NAME_TOKENS.set(name, tokens)
+  return tokens
 }
 
 /** A name is a single token when it has exactly one whitespace-delimited word. */
@@ -226,7 +249,7 @@ export function hasSurname(name: string): boolean {
  * a two-letter fragment never collides half the directory.
  */
 export function firstNameNicknameMatch(bucketToken: string, fullName: string): boolean {
-  const b = stripDiacritics(normalizeName(bucketToken))
+  const b = accentFoldedKey(bucketToken)
   const first = nameTokens(fullName)[0] || ''
   if (b.length < 3 || first.length < 3) return false
   return b === first || first.startsWith(b) || b.startsWith(first)
