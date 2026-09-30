@@ -23,6 +23,8 @@ const virtualizerHarness = vi.hoisted(() => ({
     count: number
     estimateSize: () => number
     getItemKey?: (index: number) => string | number
+    useFlushSync?: boolean
+    overscan?: number
   }
 }))
 const deviceSyncHarness = vi.hoisted(() => ({
@@ -109,6 +111,8 @@ vi.mock('@tanstack/react-virtual', () => ({
     count: number
     estimateSize: () => number
     getItemKey?: (index: number) => string | number
+    useFlushSync?: boolean
+    overscan?: number
   }) => {
     virtualizerHarness.options = options
     const size = options.estimateSize()
@@ -625,6 +629,25 @@ describe('Library', () => {
       expect(rows[2]).toHaveStyle({ height: '44px', top: '116px' })
       expect(rows.every((row) => row?.style.transform === '')).toBe(true)
       expect(new Set(rows.map((row) => row?.style.top)).size).toBe(3)
+    })
+
+    it('does not force a synchronous re-render on scroll, and keeps a larger buffer of rows instead', async () => {
+      vi.mocked(useUnifiedRecordings).mockReturnValue({
+        recordings: [{ ...mockRecording, id: 'one', dateRecorded: new Date(Date.now() - 60_000) }],
+        loading: false,
+        error: null,
+        refresh: vi.fn(),
+        deviceConnected: false,
+        stats: { total: 1, deviceOnly: 0, localOnly: 1, both: 0, synced: 1, unsynced: 0, onSource: 0, locallyAvailable: 1 }
+      })
+      renderLibrary()
+
+      await waitFor(() => expect(virtualizerHarness.options).not.toBeNull())
+      // flushSync inside the virtualizer ran inside React's own render when the list changed during a
+      // scroll, and React logged "flushSync was called from inside a lifecycle method" (30-sep-2026).
+      expect(virtualizerHarness.options?.useFlushSync).toBe(false)
+      // A scroll update can now paint a frame late; 10 rows of buffer covers 300 px per frame at 32 px rows.
+      expect(virtualizerHarness.options?.overscan).toBeGreaterThanOrEqual(10)
     })
 
     it('lays the rows out on one 32px line with columns when the list is wide, and on two 44px lines when it narrows', async () => {

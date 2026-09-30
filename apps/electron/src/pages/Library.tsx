@@ -2470,7 +2470,16 @@ export function Library() {
     getScrollElement: () => listScrollElement,
     estimateSize,
     getItemKey: getVirtualItemKey,
-    overscan: 5
+    // The virtualizer used to flushSync a re-render on every scroll tick. When the
+    // list changed while the user was still scrolling (a recording finishing, a
+    // refresh), that ran inside React's own render and React logged "flushSync was
+    // called from inside a lifecycle method" (30-sep-2026, once in the error log).
+    // Without it a scroll update paints at most one frame late, so the buffer of
+    // rows kept outside the viewport is larger: measured in a hidden window with 32 px
+    // rows, an overscan of 10 leaves no blank frame up to 300 px per frame (18,000 px
+    // a second), where 5 left blank frames from 300.
+    useFlushSync: false,
+    overscan: 10
   })
 
   // After a deletion/insert every row shifts one index, and the virtualizer's
