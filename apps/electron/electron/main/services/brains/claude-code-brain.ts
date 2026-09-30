@@ -47,7 +47,8 @@
 import { statSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
-import { runCli, foldMessagesToPrompt, type SpawnFn, type CliRunResult } from './cli-runner'
+import { runCli, foldMessagesToPrompt, summarizeCliFailure, type SpawnFn, type CliRunResult } from './cli-runner'
+import { noteBrainFailure } from './brain-cooldown'
 import { getBrainCredentialStore } from './brain-credential-store'
 import type {
   AIBrain,
@@ -223,7 +224,11 @@ export class ClaudeCodeBrain implements AIBrain {
         return null
       }
       if (res.code !== 0) {
-        console.error('[ClaudeCodeBrain] generate failed:', res.stderr.trim() || `exit ${res.code}`)
+        // Only what the CLI reports as its error: a prompt it echoed may mention a
+        // usage limit without the brain being out of quota.
+        const failure = summarizeCliFailure(res.stderr, res.code)
+        console.error('[ClaudeCodeBrain] generate failed:', failure)
+        noteBrainFailure(this.id, failure)
         return null
       }
       const text = res.stdout.trim()

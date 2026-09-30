@@ -39,7 +39,8 @@
  *      exercised against the service in this cheap probe.
  * authStatus()/generate() NEVER throw.
  */
-import { runCli, foldMessagesToPrompt, type SpawnFn } from './cli-runner'
+import { runCli, foldMessagesToPrompt, summarizeCliFailure, cliErrorLines, type SpawnFn } from './cli-runner'
+import { noteBrainFailure } from './brain-cooldown'
 import { getBrainCredentialStore } from './brain-credential-store'
 import type {
   AIBrain,
@@ -173,7 +174,10 @@ export class KiroCliBrain implements AIBrain {
         return null
       }
       if (res.code !== 0) {
-        console.error('[KiroCliBrain] generate failed:', res.stderr.trim() || `exit ${res.code}`)
+        console.error('[KiroCliBrain] generate failed:', summarizeCliFailure(res.stderr, res.code))
+        // Only the lines the CLI states as errors: a prompt it echoed may mention a
+        // usage limit without the brain being out of quota.
+        noteBrainFailure(this.id, cliErrorLines(res.stderr).join('\n'))
         return null
       }
       return parseKiroOutput(res.stdout)

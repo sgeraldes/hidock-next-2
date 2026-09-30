@@ -16,6 +16,7 @@
 import { getConfig } from '../config'
 import { getBrainRegistry, BrainRegistry } from './brain-registry'
 import { eligibleToGenerate } from './eligibility'
+import { isBrainCoolingDown } from './brain-cooldown'
 import type {
   AIBrain,
   AudioAnalyzeInput,
@@ -86,6 +87,7 @@ export class BrainRouter {
   private async isUsable(brain: AIBrain | null, need: BrainCapability): Promise<boolean> {
     if (!brain) return false
     if (!this.isEnabled(brain.id)) return false
+    if (isBrainCoolingDown(brain.id)) return false
     if (!brain.capabilities().has(need)) return false
     try {
       return (await brain.authStatus()).configured
@@ -185,6 +187,7 @@ export class BrainRouter {
       const brain = this.registry.get(id)
       if (!brain) continue
       if (!this.isEnabled(id)) continue
+      if (isBrainCoolingDown(id)) continue // out of quota until its stated reset
       if (!brain.capabilities().has('chat')) continue
       if (id === 'ollama') return brain // serve directly; no availability preflight
       try {
@@ -320,7 +323,7 @@ export class BrainRouter {
     const routed = this.brainsConfig()?.taskRouting?.['embed']
     if (routed && routed !== 'gemini-api') {
       const brain = this.registry.get(routed)
-      if (brain && this.isEnabled(routed) && brain.capabilities().has('embed') && brain.embed) {
+      if (brain && this.isEnabled(routed) && !isBrainCoolingDown(routed) && brain.capabilities().has('embed') && brain.embed) {
         if (!eligibleToGenerate(opts.shouldGenerate)) return ineligible()
         try {
           return await brain.embed(texts, opts)
@@ -366,7 +369,7 @@ export class BrainRouter {
     for (const id of FALLBACK_CHAINS.embed) {
       if (id === 'gemini-api' || tried.has(id)) continue
       const brain = this.registry.get(id)
-      if (!brain || !this.isEnabled(id) || !brain.capabilities().has('embed') || !brain.embed) continue
+      if (!brain || !this.isEnabled(id) || isBrainCoolingDown(id) || !brain.capabilities().has('embed') || !brain.embed) continue
       if (!eligibleToGenerate(opts.shouldGenerate)) return ineligible()
       try {
         return await brain.embed(texts, opts)
@@ -392,7 +395,7 @@ export class BrainRouter {
     const routed = cfg?.taskRouting?.['embed']
     if (routed && routed !== 'gemini-api') {
       const brain = this.registry.get(routed)
-      if (brain && this.isEnabled(routed) && brain.capabilities().has('embed')) {
+      if (brain && this.isEnabled(routed) && !isBrainCoolingDown(routed) && brain.capabilities().has('embed')) {
         try {
           if ((await brain.authStatus()).configured) return routed
         } catch {
@@ -405,7 +408,7 @@ export class BrainRouter {
     for (const id of FALLBACK_CHAINS.embed) {
       if (id === 'gemini-api' || id === routed) continue
       const brain = this.registry.get(id)
-      if (!brain || !this.isEnabled(id) || !brain.capabilities().has('embed')) continue
+      if (!brain || !this.isEnabled(id) || isBrainCoolingDown(id) || !brain.capabilities().has('embed')) continue
       try {
         if ((await brain.authStatus()).configured) return id
       } catch {
