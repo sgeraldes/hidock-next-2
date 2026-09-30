@@ -731,6 +731,10 @@ export const SourceRow = memo(function SourceRow({
     prevProps.recording.personal === nextProps.recording.personal &&
     prevProps.recording.transcriptionStatus === nextProps.recording.transcriptionStatus &&
     prevProps.recording.title === nextProps.recording.title &&
+    // getDisplayTitle prefers the typed title, and the date and time lines read dateRecorded.
+    prevProps.recording.userTitle === nextProps.recording.userTitle &&
+    prevProps.recording.filename === nextProps.recording.filename &&
+    new Date(prevProps.recording.dateRecorded).getTime() === new Date(nextProps.recording.dateRecorded).getTime() &&
     prevProps.recording.meetingSubject === nextProps.recording.meetingSubject &&
     prevProps.recording.audioCategory === nextProps.recording.audioCategory &&
     prevProps.recording.evalStarLevel === nextProps.recording.evalStarLevel &&

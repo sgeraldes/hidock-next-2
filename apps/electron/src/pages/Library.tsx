@@ -2632,6 +2632,19 @@ export function Library() {
     rowVirtualizer.scrollToIndex(Math.min(firstVisibleIndexRef.current, lastIndex), { align: 'start' })
   }, [rowHeightPx, usesRowList, rowVirtualizer])
 
+  // The same for the card grid: a change in the number of columns moves every card while scrollTop
+  // stays, so put the topmost visible card back at the top.
+  const previousCardColumnsRef = useRef(cardColumns)
+  useLayoutEffect(() => {
+    if (previousCardColumnsRef.current === cardColumns) return
+    previousCardColumnsRef.current = cardColumns
+    if (usesRowList) return
+    const lastIndex = displayedRecordings.length - 1
+    if (lastIndex < 0) return
+    rowVirtualizer.scrollToIndex(Math.min(firstVisibleIndexRef.current, lastIndex), { align: 'start' })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cardColumns, usesRowList, rowVirtualizer])
+
   // Reveal-on-open: when a source becomes the active/opened one (via row click,
   // deep-link navigation, search result, or programmatic open), scroll the
   // virtualized list so that row is in view. Without this, opening an old

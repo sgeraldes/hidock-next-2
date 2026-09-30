@@ -219,6 +219,27 @@ describe('SourceRow compact wide — one line with aligned columns', () => {
   })
 })
 
+describe('SourceRow compact — repaints when what it shows changes, whatever the handlers do', () => {
+  it('a rename repaints the title even when the click handler is the same function', () => {
+    const onClick = vi.fn()
+    const { rerender } = render(<SourceRow recording={base} compact onClick={onClick} />)
+    expect(screen.getByText('Quarterly planning')).toBeInTheDocument()
+    rerender(<SourceRow recording={{ ...base, userTitle: 'Q4 planning' }} compact onClick={onClick} />)
+    expect(screen.getByText('Q4 planning')).toBeInTheDocument()
+  })
+
+  it('a new date repaints the date and time', () => {
+    const onClick = vi.fn()
+    const { rerender } = render(<SourceRow recording={base} compact onClick={onClick} />)
+    rerender(
+      <SourceRow recording={{ ...base, dateRecorded: new Date('2026-09-25T08:30:00') }} compact onClick={onClick} />
+    )
+    const meta = screen.getByTestId('row-meta').textContent ?? ''
+    expect(meta).toMatch(/Sep 25/)
+    expect(meta).toMatch(/8:30\s?AM/i)
+  })
+})
+
 describe('SourceRow compact — menu button', () => {
   it('is compact, close to the icons', () => {
     render(<SourceRow recording={base} compact />)
