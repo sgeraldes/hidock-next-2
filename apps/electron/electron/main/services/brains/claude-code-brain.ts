@@ -57,6 +57,7 @@ import type {
   BrainMessage,
   GenerateOptions,
 } from './types'
+import { caps, type HarnessDescriptor } from './descriptor'
 
 const CAPABILITIES: ReadonlySet<BrainCapability> = new Set<BrainCapability>([
   'generate',
@@ -122,6 +123,21 @@ export class ClaudeCodeBrain implements AIBrain {
 
   capabilities(): ReadonlySet<BrainCapability> {
     return CAPABILITIES
+  }
+
+  descriptor(): HarnessDescriptor {
+    return {
+      id: this.id,
+      label: this.label,
+      kind: 'cli',
+      vendor: 'Anthropic',
+      dataLeavesMachine: true,
+      latency: 'slow',
+      capabilities: caps('text', 'agentic', 'long-context'),
+      effort: { kind: 'levels', levels: ['low', 'medium', 'high', 'xhigh', 'max'] },
+      needs: 'cli-login',
+      modelSelectable: true
+    }
   }
 
   /** Cached identity-verified command resolution (per instance). */

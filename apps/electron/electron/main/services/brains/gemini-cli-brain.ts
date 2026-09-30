@@ -43,6 +43,7 @@ import type {
   BrainMessage,
   GenerateOptions,
 } from './types'
+import { caps, type HarnessDescriptor } from './descriptor'
 
 const CAPABILITIES: ReadonlySet<BrainCapability> = new Set<BrainCapability>([
   'generate',
@@ -80,6 +81,21 @@ export class GeminiCliBrain implements AIBrain {
 
   capabilities(): ReadonlySet<BrainCapability> {
     return CAPABILITIES
+  }
+
+  descriptor(): HarnessDescriptor {
+    return {
+      id: this.id,
+      label: this.label,
+      kind: 'cli',
+      vendor: 'Google',
+      dataLeavesMachine: true,
+      latency: 'slow',
+      capabilities: caps('text', 'agentic'),
+      effort: { kind: 'none' },
+      needs: 'cli-login',
+      modelSelectable: true
+    }
   }
 
   /** The Gemini key this brain will use, from env or the app's stored key. */

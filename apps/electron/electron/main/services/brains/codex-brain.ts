@@ -28,6 +28,7 @@ import type {
   BrainMessage,
   GenerateOptions,
 } from './types'
+import { caps, type HarnessDescriptor } from './descriptor'
 
 const CAPABILITIES: ReadonlySet<BrainCapability> = new Set<BrainCapability>([
   'generate',
@@ -81,6 +82,22 @@ export class CodexBrain implements AIBrain {
 
   capabilities(): ReadonlySet<BrainCapability> {
     return CAPABILITIES
+  }
+
+  descriptor(): HarnessDescriptor {
+    return {
+      id: this.id,
+      label: this.label,
+      kind: 'cli',
+      vendor: 'OpenAI',
+      dataLeavesMachine: true,
+      latency: 'slow',
+      capabilities: caps('text', 'agentic'),
+      // xhigh and max run as high (see the effort mapping in this file).
+      effort: { kind: 'levels', levels: ['low', 'medium', 'high'] },
+      needs: 'cli-login',
+      modelSelectable: true
+    }
   }
 
   async authStatus(): Promise<BrainAuthStatus> {

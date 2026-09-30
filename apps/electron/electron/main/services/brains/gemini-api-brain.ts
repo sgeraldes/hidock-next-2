@@ -29,6 +29,7 @@ import type {
   GenerateOptions,
 } from './types'
 import { eligibleToGenerate } from './eligibility'
+import { caps, type HarnessDescriptor } from './descriptor'
 
 const DEFAULT_MODEL = CURRENT_GEMINI_CHAT_MODEL
 const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001'
@@ -61,6 +62,21 @@ export class GeminiApiBrain implements AIBrain {
 
   capabilities(): ReadonlySet<BrainCapability> {
     return CAPABILITIES
+  }
+
+  descriptor(): HarnessDescriptor {
+    return {
+      id: this.id,
+      label: this.label,
+      kind: 'api',
+      vendor: 'Google',
+      dataLeavesMachine: true,
+      latency: 'fast',
+      capabilities: caps('text', 'json-schema', 'vision', 'audio', 'long-context', 'embedding'),
+      effort: { kind: 'thinking-budget' },
+      needs: 'api-key',
+      modelSelectable: true
+    }
   }
 
   async authStatus(): Promise<BrainAuthStatus> {

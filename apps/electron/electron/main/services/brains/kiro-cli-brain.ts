@@ -49,6 +49,7 @@ import type {
   BrainMessage,
   GenerateOptions,
 } from './types'
+import { caps, type HarnessDescriptor } from './descriptor'
 
 const CAPABILITIES: ReadonlySet<BrainCapability> = new Set<BrainCapability>([
   'generate',
@@ -91,6 +92,22 @@ export class KiroCliBrain implements AIBrain {
 
   capabilities(): ReadonlySet<BrainCapability> {
     return CAPABILITIES
+  }
+
+  descriptor(): HarnessDescriptor {
+    return {
+      id: this.id,
+      label: this.label,
+      kind: 'cli',
+      vendor: 'AWS',
+      dataLeavesMachine: true,
+      latency: 'slow',
+      capabilities: caps('text', 'agentic'),
+      effort: { kind: 'levels', levels: ['low', 'medium', 'high', 'xhigh', 'max'] },
+      needs: 'cli-login',
+      // kiro-cli 2.24.1 answers --model with "Method not found" and runs on its default.
+      modelSelectable: false
+    }
   }
 
   /** The headless API key (env var, else the app's stored key). '' when absent. */
