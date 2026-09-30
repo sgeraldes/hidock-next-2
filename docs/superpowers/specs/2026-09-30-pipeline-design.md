@@ -9,7 +9,8 @@ I can do multiple passes in a single run, or split among different steps. Do I s
 harness and model to process one shot, or multiple stacked steps one after the other, or a
 combination? A new pipeline system needs to emerge from this."
 
-Status: draft for the owner's review. Nothing in this document is built except phase 0.
+Status: draft for the owner's review. The four decisions of section 16 were taken on 30-sep-2026 and
+are reflected below. Nothing in this document is built except phase 0.
 
 ## 1. What we want
 
@@ -157,6 +158,38 @@ Rules:
 6. Quota: a harness that reports being out of quota rests until its reset (`brain-cooldown`); the
    runner treats a resting profile as unavailable and uses the fallback.
 
+### Audio engines and embeddings
+
+The owner put every step in scope, so `transcribe`, `diarize` and `embed` are steps with profiles like
+the others. What differs is that their engines are not interchangeable, so the capability descriptor
+does more work here.
+
+| Step | Engines (harnesses) | Capabilities that matter |
+|---|---|---|
+| transcribe | `gemini-transcribe` (native, rolling and chunked paths), `local-asr` (Cohere transcribe), `vibevoice`, `model-host` when it serves transcription | `audio`, `timestamps`, `diarization`, `maxAudioMinutes`, `languages` |
+| diarize | `pyannote-onnx` on this machine, `model-host` | `audio`, `segments`, `voiceVectors` |
+| embed | `local-onnx-embed`, `ollama`, `gemini-embedding` | `embedding`, `dimensions` |
+| live-transcribe | `gemini-live` | `audio`, `streaming` (realtime only, not part of a recording's flow) |
+
+Rules:
+
+1. `transcribe` needs timestamps. A transcriber without diarization is valid only while the `diarize`
+   step is on, because the speaker labels then come from its segments (the pairing the app makes
+   today for the local engines). The runner refuses a pair that leaves the transcript without
+   speakers and names the missing capability.
+2. Audio calls belong to the `audio` resource class: the existing queue, one heavy job at a time, and
+   the display-GPU rule. A fallback engine for `transcribe` is allowed but marked `slow`: a failed
+   two-hour recording costs its time twice.
+3. Changing the `embed` profile changes the vector space. Saving the plan asks for confirmation and
+   starts the reindex the app already runs when the embedding route changes; the old index stays
+   until the new one is complete.
+4. The Test bench works on audio steps too, on one recording chosen by the owner, with progress and
+   the same candidate and Adopt flow. A diarization or a transcript is compared by speaker count,
+   segment boundaries and word error against the stored one, not by reading both.
+5. Each engine keeps its own page for what is not a choice of model (paths, tokens, the Model Host
+   URL). The choice of engine moves to the Pipeline page and the old page shows it read only,
+   linked to the new one.
+
 ## 7. Plans
 
 A plan is the answer to the owner's question: one shot, stacked, or both.
@@ -228,7 +261,8 @@ Migration (`migration.ts`): the first start after the update builds `pipeline` f
 the behaviour is identical: `transcription.provider/geminiModel` to `transcribe`, `chat.geminiModel`
 to `understand`, `action-items`, `timeline`, `graph`, `images`; `brains.defaultBrain/taskRouting` to
 `chat`, `outputs`, `handover`, `notes`; `decisions.jev*` to `evaluate`, `meeting-match`,
-`speaker-names`; `brains.taskRouting.embed` to `embed`. Legacy keys stay readable for one release. The
+`speaker-names`; `transcription.speakerEngine` and the Model Host settings to `diarize`;
+`embeddings.*` and `brains.taskRouting.embed` to `embed`. Legacy keys stay readable for one release. The
 existing pages (AI providers, Decisions, Transcription) become views over the same keys ("one setting,
 two pages", Settings redesign) and are removed once the Pipeline page covers them.
 
@@ -296,8 +330,8 @@ be checked with the Test bench on the owner's recordings before the preset is ca
 
 | Step | Recommended profile | Why |
 |---|---|---|
-| transcribe | gemini-3.5-transcribe (unchanged) | only model with the timed diarized output the app needs |
-| diarize | ONNX on this machine, Model Host when present (unchanged) | audio, heavy, has its own page |
+| transcribe | gemini-3.5-transcribe (unchanged) | the model with timed, diarized output in one pass; the local engines need the diarize step |
+| diarize | ONNX on this machine, Model Host when present (unchanged) | audio, heavy |
 | understand | Gemini 3.8 flash, thinking off, one shot (unchanged) | 5.8 s a recording, JSON native |
 | action-items, timeline | Gemini 3.8 flash, thinking off, `action-items` gated by Jev's `hasActionItems` | 1.4 s and 2.4 s; the gate removes most calls |
 | evaluate, value, meeting-match, speaker-names | Jev | classification primitives, fast, cheap |
@@ -309,7 +343,7 @@ be checked with the Test bench on the owner's recordings before the preset is ca
 | chat | Gemini 3.8 flash, thinking low | interactive, quality matters |
 | outputs | a stronger model, thinking medium | documents, low volume |
 | handover | Claude Code or Codex in agentic mode | needs tools and a repository |
-| embed | unchanged; changing it reindexes | vector spaces differ per model |
+| embed | unchanged; changing it reindexes (section 6, rule 3) | vector spaces differ per model |
 
 The owner's current default brain (`claude-code`) becomes an explicit choice for `chat` and
 `handover`; the bulk steps do not inherit it. That is the fix for the speaker-naming re-run that
@@ -322,14 +356,16 @@ Each phase has its own plan, tests, adversarial review and PR series.
 | Phase | Content | Behaviour change |
 |---|---|---|
 | 0 | Lean invocation for Claude Code and Codex; `effort` in `GenerateOptions`; empty working folder. Built (PR #113). | faster CLI calls; no tools or hooks loaded |
-| 1 | Capability descriptors on every adapter; OpenAI-compatible adapter; Jev harness wrapper; model discovery; lean flags for Gemini CLI and Kiro (measured); structured-output contract with repair; cost and usage for every adapter | none visible |
-| 2 | Task catalog and runner with `single` and `fallback`; every call site moved to `runStep` with today's defaults; a `processing_runs` row per call | usage and cost for all calls; no change in results |
-| 3 | `pipeline` config, migration, Settings > Pipeline for single and fallback plans, profiles, Test bench, `pipeline_results` and Adopt | the owner can choose harness, model and effort per step |
-| 4 | Stacked passes, ensembles and merge rules; splitting the `understand` bundle into separate tasks | new shapes available |
-| 5 | Gates on Jev signals, split-input and reduce, presets, recommendations from history | cost and time drop on gated steps |
+| 1 | Capability descriptors on every adapter, audio and embedding engines included; OpenAI-compatible adapter (with Ollama); Jev harness wrapper; model discovery; lean flags for Gemini CLI and Kiro (measured); structured-output contract with repair; cost and usage for every adapter | none visible |
+| 2 | Task catalog and runner with `single` and `fallback`; every text call site moved to `runStep` with today's defaults; a `processing_runs` row per call | usage and cost for all calls; no change in results |
+| 3 | `pipeline` config, migration, Settings > Pipeline for single and fallback plans on the text steps, profiles, Test bench, `pipeline_results` and Adopt | the owner can choose harness, model and effort for every text step |
+| 4 | The audio steps join: `transcribe`, `diarize`, `embed` and `live-transcribe` through the same runner and page, with the pairing rules and the reindex confirmation of section 6; their old pages show the engine read only | the owner can choose the engine of every audio step |
+| 5 | Stacked passes, ensembles and merge rules; splitting the `understand` bundle into separate tasks | new shapes available |
+| 6 | Gates on Jev signals, split-input and reduce, presets, recommendations from history | cost and time drop on gated steps |
 
-Phase 3 answers the first half of the request (a harness, a model and an effort per step). Phase 4
-answers the second (passes and splits).
+Phase 3 answers the first half of the request (a harness, a model and an effort per step) for the
+text steps and phase 4 completes it for every step. Phase 5 answers the second half (passes and
+splits), after the Test bench exists to judge them (owner decisions 1 and 3).
 
 ## 14. Testing
 
@@ -355,25 +391,25 @@ answers the second (passes and splits).
 - Silent quality change: covered by section 11. No default changes without a preset change the owner
   approves.
 - Complexity of plans: capped at 3 passes and 4 calls, validated on save, and the UI leads with the
-  four common shapes. Split-input and reduce wait for phase 5 to see whether they are asked for.
+  four common shapes. Split-input and reduce wait for phase 6 to see whether they are asked for.
 - Local model resources: the runner's resource classes keep one heavy job at a time and protect the
   display GPU.
+- Audio engines are not interchangeable: an engine without timestamps or speakers cannot serve the
+  transcript the rest of the app reads. The capability check refuses those pairs before a recording
+  is spent on them, and the phase 4 tests run every engine pair on a real recording.
+- A changed embedding profile invalidates the index. Confirmation on save, and the old index stays
+  until the new one is complete, so search never goes blank.
 - CLI latency: shown as a latency class and confirmed once for bulk steps; not hidden.
 - Two ways to configure during migration: the existing pages read and write the same keys until they
   are removed.
 
-## 16. Decisions to confirm
+## 16. Decisions (owner, 30-sep-2026)
 
-1. Scope of the first release: text steps only (phases 1-3 above), with transcription, diarization
-   and embeddings staying on their own pages for now, or every step including the audio engines.
-   Recommended: text steps first; the audio engines have capability limits (one model does the timed
-   diarized output) and their own pages.
-2. Local models: Ollama only, or also any OpenAI-compatible server (LM Studio, llama.cpp, vLLM).
-   Recommended: both. The second is one small adapter and covers most local setups.
-3. Stacked and parallel plans: in the same release as the per-step choice, or right after.
-   Recommended: right after (phase 4), because per-step harness, model and effort already fixes the
-   crawling backfill and the wrong-model problem, and stacked plans need the Test bench to be worth
-   using.
-4. Candidate results and Adopt (section 11) versus writing the result straight to the sink.
-   Recommended: candidates and Adopt for re-runs and the Test bench; the normal pipeline still writes
-   straight to the sinks.
+1. Scope of the first release: every step, the audio engines included (transcription, diarization,
+   embeddings, live transcription). The design recommended text steps first, and the owner chose the
+   full scope. The audio steps come in phase 4, on the same runner and page, with the pairing and
+   reindex rules of section 6.
+2. Local models: Ollama and any OpenAI-compatible server (LM Studio, llama.cpp, vLLM), in phase 1.
+3. Stacked and parallel plans: right after the per-step choice (phase 5), once the Test bench exists.
+4. Candidate results and Adopt (section 11) for re-runs and the Test bench; the normal pipeline still
+   writes straight to the sinks.
