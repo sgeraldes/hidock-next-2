@@ -12676,27 +12676,39 @@ function buildBucketResolution(
   return { contactId: contact.id, name: contact.name, candidates, recordings }
 }
 
-/** Every contact that is an ambiguous mention bucket, with resolution progress. */
-export function getAmbiguousBuckets(): AmbiguousBucket[] {
+/**
+ * Every ambiguous mention bucket with its full resolution, computed once. The
+ * startup auto-split needs both the summary and the resolution; asking for them
+ * separately built every bucket's resolution twice (30-sep-2026).
+ */
+export function getAmbiguousBucketResolutions(): Array<{ bucket: AmbiguousBucket; resolution: BucketResolution }> {
   const contacts = queryAll<{ id: string; name: string }>('SELECT id, name FROM contacts')
-  const buckets: AmbiguousBucket[] = []
+  const found: Array<{ bucket: AmbiguousBucket; resolution: BucketResolution }> = []
   for (const c of contacts) {
     const amb = detectAmbiguousName(c.name, contacts, c.id)
     if (!amb.ambiguous) continue
     const res = buildBucketResolution(c, contacts)
     const resolvedCount = res.recordings.filter((r) => r.resolved).length
-    buckets.push({
-      contactId: c.id,
-      name: c.name,
-      candidates: res.candidates,
-      recordingCount: res.recordings.length,
-      resolvedCount,
-      pendingCount: res.recordings.length - resolvedCount
+    found.push({
+      resolution: res,
+      bucket: {
+        contactId: c.id,
+        name: c.name,
+        candidates: res.candidates,
+        recordingCount: res.recordings.length,
+        resolvedCount,
+        pendingCount: res.recordings.length - resolvedCount
+      }
     })
   }
   // Most recordings first — the biggest buckets are the most valuable to split.
-  buckets.sort((a, b) => b.recordingCount - a.recordingCount)
-  return buckets
+  found.sort((a, b) => b.bucket.recordingCount - a.bucket.recordingCount)
+  return found
+}
+
+/** Every contact that is an ambiguous mention bucket, with resolution progress. */
+export function getAmbiguousBuckets(): AmbiguousBucket[] {
+  return getAmbiguousBucketResolutions().map((item) => item.bucket)
 }
 
 /** Set of contact ids that are ambiguous buckets (for callers that must skip merges). */

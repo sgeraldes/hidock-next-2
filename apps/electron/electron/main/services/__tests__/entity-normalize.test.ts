@@ -8,6 +8,7 @@ import {
   normalizeName,
   stripDiacritics,
   accentFoldedKey,
+  nameTokens,
   looksLikeEmail,
   isGenericSpeakerLabel,
   levenshtein,
@@ -53,6 +54,32 @@ describe('stripDiacritics / accentFoldedKey', () => {
   it('accentFoldedKey normalizes and folds together', () => {
     expect(accentFoldedKey('Óscar')).toBe(accentFoldedKey('oscar'))
     expect(accentFoldedKey('Sebastián')).toBe('sebastian')
+  })
+})
+
+describe('the name keys are computed once per name', () => {
+  // The ambiguous-bucket pass asks for the key of every contact name once per contact; the keys are
+  // cached by input (30-sep-2026). The cache must not change a single result.
+  it('gives the same key on the second ask, for composed and decomposed accents alike', () => {
+    const composed = 'Sebasti\u00e1n Geraldes'
+    const decomposed = 'Sebastia\u0301n Geraldes'
+    const first = accentFoldedKey(composed)
+    expect(accentFoldedKey(composed)).toBe(first)
+    expect(accentFoldedKey(decomposed)).toBe(first)
+    expect(first).toBe('sebastian geraldes')
+  })
+
+  it('returns the same tokens as splitting the folded key, and never hands out a mutable array', () => {
+    expect([...nameTokens('  Mar\u00eda   del  Carmen ')]).toEqual(['maria', 'del', 'carmen'])
+    expect(nameTokens('Mar\u00eda del Carmen')).toBe(nameTokens('Mar\u00eda del Carmen'))
+    expect(Object.isFrozen(nameTokens('Sergio Hurtado'))).toBe(true)
+    expect([...nameTokens('')]).toEqual([])
+  })
+
+  it('keeps answering correctly after the cache is filled far past its size', () => {
+    for (let i = 0; i < 60_000; i++) accentFoldedKey(`Persona N\u00famero ${i}`)
+    expect(accentFoldedKey('Sebasti\u00e1n')).toBe('sebastian')
+    expect(hasSurname('Sergio Hurtado')).toBe(true)
   })
 })
 
