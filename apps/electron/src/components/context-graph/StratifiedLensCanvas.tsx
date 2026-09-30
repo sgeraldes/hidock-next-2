@@ -2,8 +2,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import ForceGraph2D, { type ForceGraphMethods, type NodeObject } from 'react-force-graph-2d'
 import type { ContextLensData, ContextLensNode } from './types'
 import { colorForType, STRATUM_STYLES } from './graph-theme'
-import { computeStratifiedLayout, type BandRect, type AxisTick } from './layout'
-import { formatSmartDate } from '@/lib/smartDate'
+import { computeStratifiedLayout, tickLabel, type BandRect, type AxisTick } from './layout'
 
 type GNode = ContextLensNode & NodeObject
 interface GLink {
@@ -34,13 +33,6 @@ export function baseRadius(degree: number): number {
  *  Exported for regression tests. */
 export function endpointId(v: string | { id: string }): string {
   return typeof v === 'object' && v !== null ? v.id : v
-}
-
-/** Axis tick label — short smart date WITH the year (e.g. "Jun 1, 2026").
- *  The x axis is ORDINAL (sequence, not duration), so real dates must stay in
- *  sight for the spacing to read honestly. Exported for regression tests. */
-export function tickLabel(dateMs: number): string {
-  return formatSmartDate(dateMs, { time: false })
 }
 
 /** Labels go into force-graph's HTML tooltip — escape user data. */

@@ -1,5 +1,9 @@
 import { memo } from 'react'
 import {
+  AlertCircle,
+  AlertTriangle,
+  Flag,
+  ListChecks,
   Calendar,
   Download,
   Eye,
@@ -42,6 +46,9 @@ import { getRowMeta } from '@/features/library/utils/rowMeta'
 import { sourceTypeLabel } from '@/features/library/utils/sourceType'
 import type { DownloadStatus } from '@/store/useAppStore'
 import { CHIPS_BOX_CLASS, RowChips, StatusPlaceIcon, TranscriptionPlaceIcon } from './RowIcons'
+import { PersonAvatars } from './PersonAvatars'
+import { cardAction, cardCounts, cardNotice, type CardCounts } from '@/features/library/utils/cardInfo'
+import { useCardPeople } from '@/features/library/hooks/useCardPeople'
 
 interface SourceCardProps {
   recording: UnifiedRecording
@@ -70,6 +77,38 @@ interface SourceCardProps {
   onNavigateToMeeting: (meetingId: string) => void
 }
 
+/** Actions and key points (which include the decisions) found in the transcript, small and at the right of the meta line. */
+function CountBadges({ counts }: { counts: CardCounts }) {
+  if (counts.actions === null && counts.keyPoints === null) return null
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
+  return (
+    <span className="ml-auto flex shrink-0 items-center gap-2 tabular-nums" data-testid="card-counts">
+      {counts.actions !== null && (
+        <span
+          className={cn('inline-flex items-center gap-0.5', counts.actions === 0 && 'opacity-50')}
+          title={plural(counts.actions, 'action item', 'action items')}
+          aria-label={plural(counts.actions, 'action item', 'action items')}
+          data-testid="card-actions-count"
+        >
+          <ListChecks className="h-3.5 w-3.5" aria-hidden="true" />
+          {counts.actions}
+        </span>
+      )}
+      {counts.keyPoints !== null && (
+        <span
+          className={cn('inline-flex items-center gap-0.5', counts.keyPoints === 0 && 'opacity-50')}
+          title={`${plural(counts.keyPoints, 'key point', 'key points')}, decisions included`}
+          aria-label={`${plural(counts.keyPoints, 'key point', 'key points')}, decisions included`}
+          data-testid="card-keypoints-count"
+        >
+          <Flag className="h-3.5 w-3.5" aria-hidden="true" />
+          {counts.keyPoints}
+        </span>
+      )}
+    </span>
+  )
+}
+
 /** Recording start time only ("7:02 PM"); empty for a missing or invalid date. */
 function clockTime(value: Date | string | null | undefined): string {
   if (value == null) return ''
@@ -78,6 +117,9 @@ function clockTime(value: Date | string | null | undefined): string {
   if (Number.isNaN(ms) || ms <= 0) return ''
   return d.toLocaleTimeString(appLocale(), { hour: 'numeric', minute: '2-digit' })
 }
+
+/** The local file of a recording, when it has one. A device-only recording has no such field. */
+const localPathOf = (r: UnifiedRecording): string | undefined => ('localPath' in r ? r.localPath : undefined)
 
 /**
  * One recording as a card of fixed size (the Library grid gives it CARD_HEIGHT_PX):
@@ -130,9 +172,15 @@ export const SourceCard = memo(function SourceCard({
     .join(' · ')
 
   const transcribing = recording.transcriptionStatus === 'pending' || recording.transcriptionStatus === 'processing'
-  const canTranscribe = canPlay && recording.transcriptionStatus !== 'complete' && Boolean(onTranscribe)
   const summary = transcript?.summary?.trim()
   const deviceOnly = isDeviceOnly(recording)
+  const counts = cardCounts(transcript)
+  const notice = cardNotice(recording, transcript, error)
+  const action = cardAction(recording, error, {
+    canTranscribe: canPlay && Boolean(onTranscribe),
+    downloading: isDownloading || Boolean(downloadStatus)
+  })
+  const people = useCardPeople(recording, transcript, meeting)
 
   const handleCardClick = (e: React.MouseEvent) => {
     // Buttons and links own their clicks. Everywhere else on the card follows
@@ -251,43 +299,70 @@ export const SourceCard = memo(function SourceCard({
           </DropdownMenu>
         </div>
 
-        <p className="mt-1 flex items-center gap-1 text-xs leading-4 text-muted-foreground" data-testid="card-meta">
-          <TypeIcon
-            className="h-3 w-3 shrink-0 text-muted-foreground/70"
-            aria-label={`${sourceTypeLabel(sourceType)} source`}
-          />
-          <span className="truncate">{metaText}</span>
-        </p>
-
-        <div className={`mt-2 ${CHIPS_BOX_CLASS}`} data-testid="card-chips">
-          {recording.personal && (
-            <span
-              className="inline-flex shrink-0 items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
-              role="img"
-              aria-label="Personal — excluded from AI processing"
-              title="Personal — kept on disk but excluded from AI processing and default surfaces"
-            >
-              <EyeOff className="h-2.5 w-2.5" aria-hidden="true" />
-              Personal
-            </span>
-          )}
-          <RowChips recording={recording} />
+        <div className="mt-1 flex items-center gap-2 text-xs leading-4 text-muted-foreground">
+          <p className="flex min-w-0 items-center gap-1" data-testid="card-meta">
+            <TypeIcon
+              className="h-3 w-3 shrink-0 text-muted-foreground/70"
+              aria-label={`${sourceTypeLabel(sourceType)} source`}
+            />
+            <span className="truncate">{metaText}</span>
+          </p>
+          <CountBadges counts={counts} />
         </div>
 
-        <div className="mt-2 flex min-h-0 flex-1 flex-col gap-1 overflow-hidden text-xs leading-4 text-muted-foreground">
-          {summary ? (
-            <p className={meeting ? 'line-clamp-1' : 'line-clamp-2'} data-testid="card-summary">
+        <div className="mt-2 flex h-5 items-center gap-2">
+          <div className={cn(CHIPS_BOX_CLASS, 'flex-1')} data-testid="card-chips">
+            {recording.personal && (
+              <span
+                className="inline-flex shrink-0 items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+                role="img"
+                aria-label="Personal — excluded from AI processing"
+                title="Personal — kept on disk but excluded from AI processing and default surfaces"
+              >
+                <EyeOff className="h-2.5 w-2.5" aria-hidden="true" />
+                Personal
+              </span>
+            )}
+            <RowChips recording={recording} />
+          </div>
+          <PersonAvatars people={people} />
+        </div>
+
+        <div className="mt-2 min-h-0 flex-1 overflow-hidden text-xs leading-4">
+          {notice ? (
+            <p
+              className={cn('line-clamp-2', notice.tone === 'error' ? 'text-destructive' : 'text-amber-700 dark:text-amber-400')}
+              title={notice.text}
+              data-testid="card-notice"
+              data-tone={notice.tone}
+            >
+              {notice.tone === 'error' ? (
+                <AlertCircle className="mr-1 inline h-3 w-3 align-[-2px]" aria-hidden="true" />
+              ) : (
+                <AlertTriangle className="mr-1 inline h-3 w-3 align-[-2px]" aria-hidden="true" />
+              )}
+              {notice.text}
+            </p>
+          ) : summary ? (
+            <p className="line-clamp-2 text-muted-foreground" data-testid="card-summary">
               {summary}
             </p>
           ) : deviceOnly ? (
-            <p className="line-clamp-2 italic">On the device only. Download it to play it and get a transcript.</p>
+            <p className="line-clamp-2 italic text-muted-foreground">On the device only. Download it to play it and get a transcript.</p>
           ) : recording.transcriptionStatus === 'none' ? (
-            <p className="line-clamp-2 italic">Not transcribed yet.</p>
+            <p className="line-clamp-2 italic text-muted-foreground">Not transcribed yet.</p>
           ) : null}
-          {meeting && (
+        </div>
+
+        <div className="mt-2 flex items-center gap-1.5 border-t border-border pt-2">
+          <div className="flex shrink-0 items-center gap-1.5" data-testid="card-status">
+            <StatusPlaceIcon recording={recording} error={error} />
+            <TranscriptionPlaceIcon recording={recording} transcript={transcript} />
+          </div>
+          {meeting ? (
             <button
               type="button"
-              className="flex min-w-0 items-center gap-1 rounded text-left text-foreground/80 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+              className="flex min-w-0 flex-1 items-center gap-1 rounded px-0.5 text-left text-xs text-foreground/80 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
               onClick={(e) => { e.stopPropagation(); onNavigateToMeeting(meeting.id) }}
               title={`Open the meeting: ${meeting.subject}`}
               data-testid="card-meeting"
@@ -295,81 +370,66 @@ export const SourceCard = memo(function SourceCard({
               <Calendar className="h-3 w-3 shrink-0 text-primary/70" aria-hidden="true" />
               <span className="truncate">{meeting.subject}</span>
             </button>
+          ) : (
+            <span className="flex-1" />
           )}
-        </div>
-
-        <div className="mt-2 flex items-center justify-between gap-2 border-t border-border pt-2">
-          <div className="flex items-center gap-1.5" data-testid="card-status">
-            <StatusPlaceIcon recording={recording} error={error} />
-            <TranscriptionPlaceIcon recording={recording} transcript={transcript} />
-          </div>
-          <div className="flex items-center gap-0.5">
-            {deviceOnly &&
-              (downloadStatus ? (
-                <span className="flex items-center gap-1 px-1 text-xs text-muted-foreground" aria-live="polite">
-                  <RefreshCw className={cn('h-3.5 w-3.5', isDownloading && 'animate-spin')} aria-hidden="true" />
-                  {downloadLabel}
-                </span>
+          {deviceOnly && downloadStatus && (
+            <span className="flex shrink-0 items-center gap-1 px-1 text-xs text-muted-foreground" aria-live="polite">
+              <RefreshCw className={cn('h-3.5 w-3.5', isDownloading && 'animate-spin')} aria-hidden="true" />
+              {downloadLabel}
+            </span>
+          )}
+          {action && (
+            <Button
+              variant="outline"
+              size="sm"
+              className={cn(
+                'h-7 shrink-0 gap-1 px-2 text-xs',
+                action.retry && 'border-destructive/50 text-destructive hover:bg-destructive/10 hover:text-destructive'
+              )}
+              onClick={action.kind === 'download' ? onDownload : onTranscribe}
+              disabled={action.kind === 'download' ? !deviceConnected : transcribing}
+              title={action.kind === 'download' && !deviceConnected ? 'Device not connected' : action.title}
+              aria-label={
+                action.kind === 'download'
+                  ? action.retry ? 'Retry download' : 'Download to computer'
+                  : action.retry ? 'Retry transcription' : 'Transcribe'
+              }
+              data-testid="card-action"
+            >
+              {action.retry ? (
+                <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+              ) : action.kind === 'download' ? (
+                <Download className="h-3.5 w-3.5" aria-hidden="true" />
               ) : (
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  className="h-7 w-7"
-                  onClick={onDownload}
-                  disabled={!deviceConnected}
-                  title={deviceConnected ? 'Download to computer' : 'Device not connected'}
-                  aria-label="Download to computer"
-                >
-                  <Download className="h-4 w-4" aria-hidden="true" />
-                </Button>
-              ))}
-            {canTranscribe && (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className="h-7 w-7"
-                onClick={onTranscribe}
-                disabled={transcribing}
-                title={
-                  recording.transcriptionStatus === 'pending'
-                    ? 'Transcription queued'
-                    : recording.transcriptionStatus === 'processing'
-                      ? 'Transcription in progress'
-                      : 'Transcribe this capture'
-                }
-                aria-label="Transcribe"
-              >
-                {recording.transcriptionStatus === 'processing' ? (
-                  <RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" />
-                ) : (
-                  <Wand2 className="h-4 w-4" aria-hidden="true" />
-                )}
-              </Button>
-            )}
-            {isPlaying ? (
-              <Button variant="ghost" size="icon-sm" className="h-7 w-7" onClick={onStop} title="Stop" aria-label="Stop">
-                <Square className="h-4 w-4" aria-hidden="true" />
-              </Button>
-            ) : (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className="h-7 w-7"
-                onClick={onPlay}
-                disabled={!canPlay || error?.type === 'audio_not_found'}
-                title={
-                  error?.type === 'audio_not_found'
-                    ? 'File missing'
-                    : canPlay
-                      ? 'Play capture'
-                      : 'Download to play'
-                }
-                aria-label="Play"
-              >
-                <Play className="h-4 w-4" aria-hidden="true" />
-              </Button>
-            )}
-          </div>
+                <Wand2 className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+              {action.label}
+            </Button>
+          )}
+          {isPlaying ? (
+            <Button variant="ghost" size="icon-sm" className="h-7 w-7 shrink-0" onClick={onStop} title="Stop" aria-label="Stop">
+              <Square className="h-4 w-4" aria-hidden="true" />
+            </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="h-7 w-7 shrink-0"
+              onClick={onPlay}
+              disabled={!canPlay || error?.type === 'audio_not_found'}
+              title={
+                error?.type === 'audio_not_found'
+                  ? 'File missing'
+                  : canPlay
+                    ? 'Play capture'
+                    : 'Download to play'
+              }
+              aria-label="Play"
+            >
+              <Play className="h-4 w-4" aria-hidden="true" />
+            </Button>
+          )}
         </div>
       </div>
     </TooltipProvider>
@@ -380,6 +440,8 @@ export const SourceCard = memo(function SourceCard({
   return (
     prevProps.recording.id === nextProps.recording.id &&
     prevProps.recording.location === nextProps.recording.location &&
+    // canPlay, and with it the Play button and the Transcribe offer, follow the local file.
+    localPathOf(prevProps.recording) === localPathOf(nextProps.recording) &&
     prevProps.recording.personal === nextProps.recording.personal &&
     prevProps.recording.transcriptionStatus === nextProps.recording.transcriptionStatus &&
     prevProps.recording.quality === nextProps.recording.quality &&
@@ -413,6 +475,10 @@ export const SourceCard = memo(function SourceCard({
     prevProps.isSelected === nextProps.isSelected &&
     prevProps.transcript?.id === nextProps.transcript?.id &&
     prevProps.transcript?.summary === nextProps.transcript?.summary &&
+    prevProps.transcript?.action_items === nextProps.transcript?.action_items &&
+    prevProps.transcript?.key_points === nextProps.transcript?.key_points &&
+    prevProps.meeting?.attendees === nextProps.meeting?.attendees &&
+    Boolean(prevProps.onTranscribe) === Boolean(nextProps.onTranscribe) &&
     prevProps.transcript?.integrity_status === nextProps.transcript?.integrity_status &&
     prevProps.transcript?.integrity_accepted_at === nextProps.transcript?.integrity_accepted_at &&
     prevProps.transcript?.integrity_json === nextProps.transcript?.integrity_json &&

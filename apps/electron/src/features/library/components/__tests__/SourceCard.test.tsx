@@ -353,17 +353,19 @@ describe('SourceCard actions', () => {
     expect(screen.getByText('40%')).toBeInTheDocument()
   })
 
-  it('an untranscribed local recording offers Transcribe, disabled while it is queued', () => {
+  it('an untranscribed local recording offers Transcribe, and none while the transcription is queued or running', () => {
     const onTranscribe = vi.fn()
     const { rerender } = render(
       <SourceCard {...makeProps({ recording: { ...baseRecording, transcriptionStatus: 'none' }, onTranscribe })} />
     )
-    fireEvent.click(screen.getByRole('button', { name: 'Transcribe' }))
+    const button = screen.getByRole('button', { name: 'Transcribe' })
+    expect(button).toHaveTextContent('Transcribe')
+    fireEvent.click(button)
     expect(onTranscribe).toHaveBeenCalledTimes(1)
-    rerender(
-      <SourceCard {...makeProps({ recording: { ...baseRecording, transcriptionStatus: 'pending' }, onTranscribe })} />
-    )
-    expect(screen.getByRole('button', { name: 'Transcribe' })).toBeDisabled()
+    for (const status of ['pending', 'processing'] as const) {
+      rerender(<SourceCard {...makeProps({ recording: { ...baseRecording, transcriptionStatus: status }, onTranscribe })} />)
+      expect(screen.queryByRole('button', { name: /transcribe/i })).toBeNull()
+    }
   })
 
   it('a playing card shows Stop instead of Play', () => {
@@ -372,5 +374,128 @@ describe('SourceCard actions', () => {
     expect(screen.queryByRole('button', { name: 'Play' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
     expect(onStop).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('SourceCard carries more, in the space it has', () => {
+  const analysed = {
+    id: 't1',
+    summary: 'Cutover agreed.',
+    action_items: JSON.stringify(['send plan', 'book window', 'tell Itaú']),
+    key_points: JSON.stringify(['Friday window', 'no rollback', 'owner is Ana', 'freeze at noon'])
+  } as unknown as Transcript
+
+  it('shows how many actions and key points the analysis found, at the right of the date line', () => {
+    render(<SourceCard {...makeProps({ transcript: analysed })} />)
+    const counts = screen.getByTestId('card-counts')
+    expect(screen.getByTestId('card-actions-count')).toHaveTextContent('3')
+    expect(screen.getByTestId('card-actions-count')).toHaveAttribute('aria-label', '3 action items')
+    expect(screen.getByTestId('card-keypoints-count')).toHaveTextContent('4')
+    expect(screen.getByTestId('card-keypoints-count')).toHaveAttribute('aria-label', '4 key points, decisions included')
+    // Same line as the date, not a line of their own.
+    expect(counts.parentElement).toBe(screen.getByTestId('card-meta').parentElement)
+  })
+
+  it('shows no counts for a transcript that was never analysed', () => {
+    render(<SourceCard {...makeProps({ transcript: { id: 't2' } as unknown as Transcript })} />)
+    expect(screen.queryByTestId('card-counts')).toBeNull()
+  })
+
+  it('shows the invited of the meeting as small circles on the chips line', () => {
+    const meeting = {
+      id: 'm1',
+      subject: 'Weekly',
+      start_time: '2026-09-29T22:00:00',
+      attendees: JSON.stringify([{ name: 'Ana Pérez' }, { name: 'Luis Gómez' }])
+    } as unknown as Meeting
+    render(<SourceCard {...makeProps({ meeting })} />)
+    const people = screen.getByTestId('card-people')
+    expect(people.parentElement).toBe(screen.getByTestId('card-chips').parentElement)
+    expect(screen.getAllByRole('img').filter((el) => el.getAttribute('data-spoke') === 'false')).toHaveLength(2)
+  })
+
+  it('says what is wrong in the body, with the tone of how bad it is', () => {
+    const { rerender } = render(
+      <SourceCard {...makeProps({ recording: { ...baseRecording, evalAudioWarning: 'possible_invented_transcript' } as UnifiedRecording })} />
+    )
+    const warning = screen.getByTestId('card-notice')
+    expect(warning).toHaveAttribute('data-tone', 'warning')
+    expect(warning).toHaveTextContent('Transcript may be invented')
+    expect(warning).toHaveClass('line-clamp-2')
+    expect(screen.queryByTestId('card-summary')).toBeNull()
+    rerender(<SourceCard {...makeProps({ recording: { ...baseRecording, transcriptionStatus: 'error' } })} />)
+    expect(screen.getByTestId('card-notice')).toHaveAttribute('data-tone', 'error')
+    expect(screen.getByTestId('card-notice')).toHaveTextContent('The transcription failed.')
+  })
+
+  it('offers Retry next to a failed transcription, and runs it', () => {
+    const onTranscribe = vi.fn()
+    render(<SourceCard {...makeProps({ recording: { ...baseRecording, transcriptionStatus: 'error' }, onTranscribe })} />)
+    const retry = screen.getByRole('button', { name: 'Retry transcription' })
+    expect(retry).toHaveTextContent('Retry')
+    fireEvent.click(retry)
+    expect(onTranscribe).toHaveBeenCalledTimes(1)
+  })
+
+  it('offers Retry for a failed download, and Download otherwise; Download waits for the device', () => {
+    const deviceOnly = { ...baseRecording, location: 'device-only', localPath: undefined, transcriptionStatus: 'none' } as unknown as UnifiedRecording
+    const onDownload = vi.fn()
+    useLibraryStore.getState().setRecordingError('r1', {
+      type: 'download_failed',
+      message: 'The dock stopped sending',
+      recoverable: true,
+      retryable: true
+    } as never)
+    try {
+      const { rerender } = render(<SourceCard {...makeProps({ recording: deviceOnly, deviceConnected: true, onDownload })} />)
+      expect(screen.getByTestId('card-notice')).toHaveTextContent('The dock stopped sending')
+      fireEvent.click(screen.getByRole('button', { name: 'Retry download' }))
+      expect(onDownload).toHaveBeenCalledTimes(1)
+      useLibraryStore.getState().clearRecordingError('r1')
+      rerender(<SourceCard {...makeProps({ recording: deviceOnly, deviceConnected: false, onDownload })} />)
+      const download = screen.getByRole('button', { name: 'Download to computer' })
+      expect(download).toHaveTextContent('Download')
+      expect(download).toBeDisabled()
+    } finally {
+      useLibraryStore.getState().clearRecordingError('r1')
+    }
+  })
+
+  it('follows the local file: a recording that gets its file can be played and transcribed without a new id', () => {
+    const onTranscribe = vi.fn()
+    const withoutFile = { ...baseRecording, location: 'local-only', localPath: '', transcriptionStatus: 'none' } as UnifiedRecording
+    const { rerender } = render(<SourceCard {...makeProps({ recording: withoutFile, onTranscribe })} />)
+    expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Transcribe' })).toBeNull()
+    rerender(
+      <SourceCard
+        {...makeProps({ recording: { ...withoutFile, localPath: '/data/meeting.wav' } as UnifiedRecording, onTranscribe })}
+      />
+    )
+    expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Transcribe' })).toBeInTheDocument()
+  })
+
+  it('keeps the same five blocks as before: the added information takes no extra line', () => {
+    render(<SourceCard {...makeProps({ transcript: analysed, meeting: { id: 'm1', subject: 'Weekly', attendees: null } as unknown as Meeting })} />)
+    // title, date and counts, chips and people, body, footer
+    expect(screen.getByTestId('source-card').children).toHaveLength(5)
+  })
+
+  it('puts the meeting in the footer, where the empty space is, and the state icons and actions around it', () => {
+    render(
+      <SourceCard
+        {...makeProps({
+          transcript: analysed,
+          meeting: { id: 'm1', subject: 'Weekly', attendees: null } as unknown as Meeting,
+          recording: { ...baseRecording, transcriptionStatus: 'none' },
+          onTranscribe: vi.fn()
+        })}
+      />
+    )
+    const footer = screen.getByTestId('card-status').parentElement!
+    expect(footer.contains(screen.getByTestId('card-meeting'))).toBe(true)
+    expect(footer.contains(screen.getByTestId('card-action'))).toBe(true)
+    expect(footer.contains(screen.getByRole('button', { name: 'Play' }))).toBe(true)
   })
 })

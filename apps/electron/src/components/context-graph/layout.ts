@@ -18,6 +18,14 @@
 
 import type { Stratum } from './types'
 import { STRATA_ORDER } from './graph-theme'
+import { formatSmartDate } from '@/lib/smartDate'
+
+/** Axis tick label — short smart date WITH the year (e.g. "Jun 1, 2026").
+ *  The x axis is ORDINAL (sequence, not duration), so real dates must stay in
+ *  sight for the spacing to read honestly. Exported for regression tests. */
+export function tickLabel(dateMs: number): string {
+  return formatSmartDate(dateMs, { time: false })
+}
 
 export interface LayoutInputNode {
   id: string

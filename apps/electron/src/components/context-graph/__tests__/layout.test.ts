@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeStratifiedLayout, type LayoutInputNode } from '../layout'
+import { computeStratifiedLayout, tickLabel, type LayoutInputNode } from '../layout'
 import { stratumOf, STRATA_ORDER } from '../graph-theme'
 
 const DAY = 86_400_000
@@ -228,14 +228,12 @@ describe('date axis ticks (honest ordinal scale)', () => {
     expect(ticks[ticks.length - 1].dateMs).toBe(base + 59 * DAY)
   })
 
-  // Dynamically importing the canvas module can be starved past the default 5s
-  // timeout when the full suite runs in parallel; the import itself is <50ms in
-  // isolation. Give it headroom so heavy-load runs don't flake.
-  it('tick labels render as short smart dates with the year', async () => {
-    const { tickLabel } = await import('../StratifiedLensCanvas')
+  // tickLabel lives with the layout: importing it from the force-graph canvas pulled in the whole
+  // graph library and timed out on a busy machine.
+  it('tick labels render as short smart dates with the year', () => {
     expect(tickLabel(Date.parse('2026-06-01T12:00:00Z'))).toMatch(/Jun\s+1,\s+2026/)
     expect(tickLabel(Date.parse('2025-12-31T12:00:00Z'))).toMatch(/2025/)
-  }, 15000)
+  })
 })
 
 describe('dense-timeline binning (no sub-diameter slot spacing)', () => {

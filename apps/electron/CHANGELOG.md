@@ -19,6 +19,12 @@ card view is a grid of cards.
   the chips, a line of the summary or the meeting, the state of the file and the transcript, and
   Play, Download or Transcribe. Everything else is in the card menu. Arrow keys move a row up
   and down and a card left and right.
+- **More on the card, in the space it had.** How many actions and key points (decisions included) the
+  analysis found, at the right of the date; the people as small circles with their initials, those who
+  spoke first and then those who were only invited, faded; what is wrong in words (an error, a failed
+  transcription, a transcript that may be invented or missing); and one button for the next step: Retry
+  after a failure, otherwise Download or Transcribe. The meeting is a link in the footer. The card
+  keeps its five blocks, and in a single column (a phone in portrait) it is as wide as the pane allows.
 
 ### Changes
 
