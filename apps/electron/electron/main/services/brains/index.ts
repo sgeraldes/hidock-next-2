@@ -10,6 +10,13 @@ export * from './descriptor'
 export { ENGINE_DESCRIPTORS, JEV_DESCRIPTOR } from './engine-descriptors'
 export { listHarnessDescriptors, findHarness, harnessesWith } from './harness-catalog'
 export { discoverModels, resetModelDiscoveryCache, STATIC_MODELS } from './model-discovery'
+export { recordHarnessUsage, createHarnessUsageCollector, harnessRunFields } from './harness-usage'
+export type {
+  HarnessUsageReport,
+  HarnessUsageTotal,
+  HarnessUsageBucket,
+  HarnessUsageCollector
+} from './harness-usage'
 export { BrainRouter, getBrainRouter, resetBrainRouter } from './brain-router'
 export type { ChatFailure } from './brain-router'
 export { BrainRegistry, getBrainRegistry, resetBrainRegistry } from './brain-registry'

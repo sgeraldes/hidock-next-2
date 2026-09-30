@@ -36,6 +36,8 @@ interface OllamaChatResponse {
   model: string
   message: OllamaChatMessage
   done: boolean
+  prompt_eval_count?: number
+  eval_count?: number
 }
 
 class OllamaService {
@@ -159,6 +161,10 @@ class OllamaService {
       maxTokens?: number
       systemPrompt?: string
       signal?: AbortSignal // B-CHAT-005: Support request cancellation
+      /** Model for this call. Defaults to the configured chat model. */
+      model?: string
+      /** Called with the token counts Ollama states for this call. */
+      onUsage?: (usage: { inputTokens: number; outputTokens: number }) => void
     } = {}
   ): Promise<string | null> {
     try {
@@ -171,7 +177,7 @@ class OllamaService {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: this.chatModel,
+          model: options.model ?? this.chatModel,
           messages: fullMessages,
           stream: false,
           options: {
@@ -194,6 +200,9 @@ class OllamaService {
       }
 
       const data: OllamaChatResponse = await response.json()
+      if (options.onUsage && (data.prompt_eval_count !== undefined || data.eval_count !== undefined)) {
+        options.onUsage({ inputTokens: data.prompt_eval_count ?? 0, outputTokens: data.eval_count ?? 0 })
+      }
       return data.message.content
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
@@ -205,8 +214,12 @@ class OllamaService {
     }
   }
 
-  async generate(prompt: string, systemPrompt?: string): Promise<string | null> {
-    return this.chat([{ role: 'user', content: prompt }], { systemPrompt })
+  async generate(
+    prompt: string,
+    systemPrompt?: string,
+    options: { model?: string; onUsage?: (usage: { inputTokens: number; outputTokens: number }) => void } = {}
+  ): Promise<string | null> {
+    return this.chat([{ role: 'user', content: prompt }], { systemPrompt, ...options })
   }
 }
 

@@ -10,6 +10,7 @@ vi.mock('../../config', () => ({ getConfig: () => ({ brains: {} }) }))
 vi.mock('../brain-credential-store', () => ({ getBrainCredentialStore: () => ({ getSecret: () => null }) }))
 
 import { OpenAiCompatibleBrain, isLoopbackUrl, type OpenAiCompatibleSettings } from '../openai-compatible-brain'
+import { createHarnessUsageCollector } from '../harness-usage'
 
 const SETTINGS: OpenAiCompatibleSettings = {
   baseUrl: 'http://localhost:1234/v1',
@@ -249,5 +250,26 @@ describe('OpenAiCompatibleBrain', () => {
       const bad = scriptedFetch(() => json({}, 500))
       expect(await make(bad.fn).listModels()).toEqual([])
     })
+  })
+})
+
+describe('OpenAiCompatibleBrain reports harness usage', () => {
+  it('reports the tokens the server states, under the model that answered', async () => {
+    const f = scriptedFetch(() =>
+      json({ choices: [{ message: { content: 'x' } }], model: 'qwen3-8b', usage: { prompt_tokens: 55, completion_tokens: 12 } })
+    )
+    const collector = createHarnessUsageCollector()
+    await collector.run(() => make(f.fn).generate([{ role: 'user', content: 'hi' }]))
+    const bucket = collector.total()!.byModel['openai-compatible:qwen3-8b']
+    expect(bucket.inputTokens).toBe(55)
+    expect(bucket.outputTokens).toBe(12)
+    expect(bucket.calls).toBe(1)
+  })
+
+  it('reports the time even when the server states no usage', async () => {
+    const f = scriptedFetch(() => json({ choices: [{ message: { content: 'x' } }] }))
+    const collector = createHarnessUsageCollector()
+    await collector.run(() => make(f.fn).generate([{ role: 'user', content: 'hi' }]))
+    expect(collector.total()!.calls).toBe(1)
   })
 })

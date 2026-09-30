@@ -35,6 +35,7 @@ vi.mock('@google/generative-ai', () => ({
 
 import { GeminiApiBrain, resolveGeminiApiKey } from '../gemini-api-brain'
 import { createGeminiUsageCollector } from '../../gemini-usage'
+import { createHarnessUsageCollector } from '../harness-usage'
 
 describe('GeminiApiBrain', () => {
   let brain: GeminiApiBrain
@@ -291,5 +292,28 @@ describe('GeminiApiBrain.listModels', () => {
     mockGetSecret.mockReturnValue('k')
     const failing = (async () => new Response('{}', { status: 500 })) as typeof fetch
     expect(await new GeminiApiBrain({ fetchImpl: failing }).listModels()).toEqual([])
+  })
+})
+
+describe('GeminiApiBrain reports harness usage', () => {
+  it('reports tokens, model and time of generate and chat', async () => {
+    mockGetSecret.mockReturnValue('k')
+    mockGenerateContent.mockResolvedValue({
+      response: {
+        text: () => 'ok',
+        usageMetadata: { promptTokenCount: 120, candidatesTokenCount: 30, totalTokenCount: 170 }
+      }
+    })
+    const collector = createHarnessUsageCollector()
+    const brain = new GeminiApiBrain()
+    await collector.run(async () => {
+      await brain.generate([{ role: 'user', content: 'a' }], { model: 'gemini-3.8-flash' })
+      await brain.chat([{ role: 'user', content: 'b' }], { model: 'gemini-3.8-flash' })
+    })
+    const bucket = collector.total()!.byModel['gemini-api:gemini-3.8-flash']
+    expect(bucket.calls).toBe(2)
+    expect(bucket.inputTokens).toBe(240)
+    expect(bucket.outputTokens).toBe(60)
+    expect(bucket.thinkingTokens).toBe(40) // total 170 minus prompt 120 minus output 30, per call
   })
 })

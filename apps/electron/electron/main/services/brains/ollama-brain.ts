@@ -19,6 +19,7 @@ import type {
   GenerateOptions,
 } from './types'
 import { caps, type HarnessDescriptor, type ModelInfo } from './descriptor'
+import { recordHarnessUsage } from './harness-usage'
 
 const CAPABILITIES: ReadonlySet<BrainCapability> = new Set<BrainCapability>([
   'generate',
@@ -78,16 +79,29 @@ export class OllamaBrain implements AIBrain {
       .map((m) => m.content)
       .join('\n\n')
     const systemPrompt = opts.systemPrompt ?? messages.find((m) => m.role === 'system')?.content
-    return getOllamaService().generate(prompt, systemPrompt)
+    const startedAt = Date.now()
+    const usage = { inputTokens: undefined as number | undefined, outputTokens: undefined as number | undefined }
+    const out = await getOllamaService().generate(prompt, systemPrompt, {
+      model: opts.model,
+      onUsage: (u) => Object.assign(usage, u)
+    })
+    recordHarnessUsage({ harness: this.id, model: opts.model, ...usage, durationMs: Date.now() - startedAt })
+    return out
   }
 
   async chat(messages: BrainMessage[], opts: GenerateOptions = {}): Promise<string | null> {
-    return getOllamaService().chat(messages, {
+    const startedAt = Date.now()
+    const usage = { inputTokens: undefined as number | undefined, outputTokens: undefined as number | undefined }
+    const out = await getOllamaService().chat(messages, {
       systemPrompt: opts.systemPrompt,
       temperature: opts.temperature,
       maxTokens: opts.maxTokens,
       signal: opts.signal,
+      model: opts.model,
+      onUsage: (u) => Object.assign(usage, u)
     })
+    recordHarnessUsage({ harness: this.id, model: opts.model, ...usage, durationMs: Date.now() - startedAt })
+    return out
   }
 
   /**

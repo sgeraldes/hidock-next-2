@@ -21,6 +21,7 @@
 import { getConfig } from '../config'
 import { getBrainCredentialStore } from './brain-credential-store'
 import { caps, type HarnessDescriptor, type ModelInfo } from './descriptor'
+import { recordHarnessUsage } from './harness-usage'
 import { eligibleToGenerate } from './eligibility'
 import type {
   AIBrain,
@@ -59,6 +60,8 @@ export interface OpenAiCompatibleDeps {
 
 interface ChatCompletion {
   choices?: Array<{ message?: { content?: unknown } }>
+  model?: unknown
+  usage?: { prompt_tokens?: unknown; completion_tokens?: unknown }
 }
 
 interface EmbeddingsResponse {
@@ -159,7 +162,17 @@ export class OpenAiCompatibleBrain implements AIBrain {
     if (opts.temperature !== undefined) body.temperature = opts.temperature
     if (opts.maxTokens !== undefined) body.max_tokens = opts.maxTokens
     if (opts.json) body.response_format = { type: 'json_object' }
+    const startedAt = Date.now()
     const data = (await this.post('/chat/completions', body, opts.signal)) as ChatCompletion | null
+    if (data) {
+      recordHarnessUsage({
+        harness: this.id,
+        model: (typeof data.model === 'string' && data.model) || model || undefined,
+        inputTokens: typeof data.usage?.prompt_tokens === 'number' ? data.usage.prompt_tokens : undefined,
+        outputTokens: typeof data.usage?.completion_tokens === 'number' ? data.usage.completion_tokens : undefined,
+        durationMs: Date.now() - startedAt
+      })
+    }
     const content = data?.choices?.[0]?.message?.content
     return typeof content === 'string' && content.trim() ? content : null
   }
