@@ -10,6 +10,8 @@ import { join } from 'path'
 const config = vi.hoisted(() => ({ pipeline: undefined as unknown }))
 vi.mock('../../config', () => ({ getConfig: () => ({ brains: {}, pipeline: config.pipeline }) }))
 vi.mock('../../ollama', () => ({ getOllamaService: () => ({ isAvailable: async () => false }) }))
+const reporter = vi.hoisted(() => ({ set: vi.fn() }))
+vi.mock('@hidock/ai-providers', () => ({ setCompletionUsageReporter: reporter.set }))
 
 import { installPipeline } from '../install'
 import { installCallStore, writeCall } from '../call-store'
@@ -43,6 +45,11 @@ describe('installPipeline', () => {
       steps: { notes: { passes: [{ calls: [{ profile: 'ollama-qwen3-8b', tasks: '*', role: 'produce' }] }] } }
     }
     expect(resolvePlan('notes').calls[0].profile).toMatchObject({ kind: 'direct', harness: 'ollama', model: 'qwen3:8b' })
+  })
+
+  it('registers the reporter that puts the completions of the AI providers package in the ledger', () => {
+    installPipeline({ run: vi.fn(), queryAll: vi.fn(() => []) })
+    expect(reporter.set).toHaveBeenCalledWith(expect.any(Function))
   })
 
   it('is called by the main process right after the database opens', () => {
