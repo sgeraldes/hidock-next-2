@@ -110,8 +110,10 @@ only for Gemini paths that call `recordGeminiUsage` (rows 1-3, 8, 9, 10 and the 
 
 As of phase 2a, the calls of rows 11, 12, 13, 15, 16, 21, 22, 23, 24, 25 and 26 are recorded in
 `pipeline_calls` (`S/pipeline/call-store.ts`), with or without a recording, with usage and cost where
-the harness states them. Rows 8, 9, 10, 14, 17, 18 and 27 follow in phase 2b. The headless brain host
-opens the database read-only and records nothing.
+the harness states them. As of phase 2b, rows 8, 9, 10, 14, 17, 18 and 27 are recorded too, one row per
+provider call (the analysis of row 8 has one for each of its two attempts), under the steps `analysis`,
+`actionable-detection`, `timeline`, `value-llm`, `graph-extract` and `image-describe`; their code and their
+routing are unchanged. The headless brain host opens the database read-only and records nothing.
 
 ## Unverified
 
