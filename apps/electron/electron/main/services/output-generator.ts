@@ -4,7 +4,7 @@
  * Generates structured outputs from meeting transcripts using LLM.
  */
 
-import { getBrainRouter } from './brains'
+import { runText } from './pipeline/runner'
 import { getTemplate, getTemplates, OutputTemplateId, OutputTemplate } from './output-templates'
 import {
   getMeetingById,
@@ -242,38 +242,40 @@ class OutputGeneratorService {
 
     const systemPrompt = `You are a professional document writer. Generate clear, well-structured documents based on meeting transcripts. Be concise but thorough. Use the exact format requested.`
 
-    // Prefer the configured cloud brain (Gemini, same credentials as
-    // transcription); fall back to local Ollama when no API key is set. Routing
-    // is now shared with chat-llm.ts and embeddings.ts via the brain seam. The
-    // Gemini brain defaults to config.transcription.geminiModel and lets any API
-    // error propagate — identical to the previous inline behaviour.
-    const brain = await getBrainRouter().resolve('outputs', 'generate')
-    if (!brain) {
-      throw new Error(
-        'No output provider available. Configure a Gemini API key in Settings or start Ollama.'
-      )
-    }
-
-    // ADV41-4 (round-43) — BrainRouter.resolve above is an await (auth /
-    // availability); an owner deletion / mark-personal / value-exclusion can
-    // commit during that gap. The prompt was assembled from eligibility
-    // snapshotted BEFORE the await, so revalidate the source recordings in the
-    // SAME synchronous step immediately before the provider call. If ANY source
-    // is now ineligible — or eligibility can't be established (fail closed) —
-    // refuse rather than send an excluded transcript to the brain (the prompt
-    // already embeds every source's text, so partial dropping is not possible).
-    const recheck = filterEligibleRecordingIds(sourceRecordingIds)
-    if (recheck.failClosed || sourceRecordingIds.some((id) => !recheck.eligible.has(id))) {
-      throw new Error(
-        'Recording eligibility changed during provider resolution — output generation refused (fail closed)'
-      )
-    }
-
-    const content = await brain.generate([{ role: 'user', content: prompt }], { systemPrompt })
-
-    if (!content) {
+    // The step's plan decides which provider writes the document. With no configuration that is the
+    // BrainRouter's outputs route exactly as before: the routed brain, else the default brain, else Gemini,
+    // else Ollama; one brain, one call, and a provider error reaches the caller.
+    //
+    // ADV41-4 (round-43): resolving the provider is an await (auth, availability); an owner deletion,
+    // mark-personal or value-exclusion can commit during it. The prompt was assembled from eligibility
+    // snapshotted before, so the runner calls this gate immediately before the provider call, after it has
+    // resolved which provider that is. If ANY source is now ineligible, or eligibility cannot be established
+    // (fail closed), it refuses rather than send an excluded transcript to the brain: the prompt already
+    // embeds every source's text, so partial dropping is not possible.
+    const outcome = await runText({
+      step: 'outputs',
+      messages: [{ role: 'user', content: prompt }],
+      options: {
+        systemPrompt,
+        shouldGenerate: () => {
+          const recheck = filterEligibleRecordingIds(sourceRecordingIds)
+          return !(recheck.failClosed || sourceRecordingIds.some((id) => !recheck.eligible.has(id)))
+        }
+      }
+    })
+    if (!outcome.ok) {
+      if (outcome.reason === 'unavailable') {
+        throw new Error('No output provider available. Configure a Gemini API key in Settings or start Ollama.')
+      }
+      if (outcome.reason === 'ineligible') {
+        throw new Error(
+          'Recording eligibility changed during provider resolution — output generation refused (fail closed)'
+        )
+      }
+      if (outcome.reason === 'error') throw outcome.error
       throw new Error('Failed to generate output. Please try again.')
     }
+    const content = outcome.text
 
     return {
       content,

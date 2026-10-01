@@ -270,4 +270,38 @@ describe('OutputGeneratorService', () => {
       expect(mockOllamaGenerate).not.toHaveBeenCalled()
     })
   })
+
+  describe('what the caller sees when the runner cannot produce a document', () => {
+    function stubCapture(): void {
+      vi.mocked(db.queryOne).mockReturnValue({
+        id: 'kc-1',
+        title: 'Knowledge Capture 1',
+        source_recording_id: 'rec-1',
+        captured_at: new Date().toISOString()
+      })
+      vi.mocked(db.getTranscriptByRecordingId).mockReturnValue({
+        id: 'trans-1',
+        recording_id: 'rec-1',
+        full_text: 'Full transcript text',
+        language: 'en',
+        created_at: new Date().toISOString()
+      } as any)
+    }
+
+    it('says no provider is available when none can serve', async () => {
+      mockOllamaIsAvailable.mockResolvedValue(false) // and the default config has no Gemini key
+      stubCapture()
+      await expect(
+        getOutputGeneratorService().generate({ templateId: 'meeting_minutes', knowledgeCaptureId: 'kc-1' })
+      ).rejects.toThrow(/No output provider available/)
+    })
+
+    it('asks to try again when the provider answers nothing', async () => {
+      mockOllamaGenerate.mockResolvedValue(null as unknown as string)
+      stubCapture()
+      await expect(
+        getOutputGeneratorService().generate({ templateId: 'meeting_minutes', knowledgeCaptureId: 'kc-1' })
+      ).rejects.toThrow(/Failed to generate output/)
+    })
+  })
 })
