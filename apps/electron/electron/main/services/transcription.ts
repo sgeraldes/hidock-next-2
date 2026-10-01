@@ -174,6 +174,8 @@ import { analyzeTimeline } from './timeline-analysis'
 import { applyTranscriptEntities } from './org-reconciler'
 import { runSelfIdentificationForRecording } from './self-identification'
 import { createGeminiUsageCollector, recordGeminiUsage, runUsageFields } from './gemini-usage'
+import { reportGeminiCall } from './pipeline/gemini-call'
+import { withCallRecord } from './pipeline/track-call'
 import { repairJsonString } from './pipeline/json-repair'
 import { runSpeakerInference } from './speaker-inference'
 import { getEmbeddingsService } from './embeddings'
@@ -941,7 +943,7 @@ interface ActionableDetection {
 async function detectActionables(
   transcriptText: string,
   knowledgeCaptureId: string,
-  metadata: { title?: string; questions?: string[] }
+  metadata: { title?: string; questions?: string[]; recordingId?: string }
 ): Promise<ActionableDetection[]> {
   if (!resolveGeminiApiKey()) {
     console.log('[Actionable Detection] Gemini API key not configured, skipping')
@@ -999,12 +1001,17 @@ Only include detections with confidence >= 0.6.`
     // inline @google/generative-ai call.
     const brain = getBrainRegistry().get('gemini-api')
     if (!brain) return []
+    // One ledger row for the call (the brain reports its own tokens); a failure still lands in the catch below.
     const responseText =
-      (await brain.generate([{ role: 'user', content: prompt }], {
-        maxTokens: 8192,
-        json: true,
-        disableThinking: true
-      })) ?? ''
+      (await withCallRecord(
+        { step: 'actionable-detection', recordingId: metadata.recordingId, route: 'direct:gemini-api-brain' },
+        () =>
+          brain.generate([{ role: 'user', content: prompt }], {
+            maxTokens: 8192,
+            json: true,
+            disableThinking: true
+          })
+      )) ?? ''
 
     // Extract JSON from response (might be wrapped in markdown code blocks)
     const jsonMatch = responseText.match(/\[[\s\S]*\]/)
@@ -1453,7 +1460,8 @@ async function transcribeWithVibeVoice(
 async function analyzeTranscriptWithGemini(
   fullText: string,
   candidateMeetings: ReturnType<typeof findCandidateMeetingsForRecording>,
-  shouldGenerate?: () => boolean
+  shouldGenerate?: () => boolean,
+  recordingId?: string
 ): Promise<TranscriptAnalysis> {
   const config = getConfig()
   if (!resolveGeminiApiKey()) {
@@ -1629,10 +1637,19 @@ Respond in JSON format:
       return { summary: 'Analysis failed', language: 'unknown' }
     }
     try {
-      const analysisResult = await model.generateContent({
-        contents: [{ role: 'user', parts: [{ text: analysisPrompt }] }],
-        generationConfig: attempt.generationConfig as never
-      })
+      // One ledger row for each provider call (both attempts are billed); what it throws is caught below, as before.
+      const startedAt = Date.now()
+      const analysisResult = await withCallRecord(
+        { step: 'analysis', recordingId, route: `direct:gemini-sdk:${attempt.label}` },
+        async () => {
+          const result = await model.generateContent({
+            contents: [{ role: 'user', parts: [{ text: analysisPrompt }] }],
+            generationConfig: attempt.generationConfig as never
+          })
+          reportGeminiCall(analysisModelId, result.response.usageMetadata, startedAt)
+          return result
+        }
+      )
       const response = analysisResult.response
       // Both attempts are billed, so each response is reported.
       recordGeminiUsage(analysisModelId, response.usageMetadata)
@@ -1818,7 +1835,7 @@ export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
       const reanalysisUsage = createGeminiUsageCollector()
       try {
         analysis = await reanalysisUsage.run(() =>
-          analyzeTranscriptWithGemini(row.full_text, [], () => isRecordingEligible(row.recording_id))
+          analyzeTranscriptWithGemini(row.full_text, [], () => isRecordingEligible(row.recording_id), row.recording_id)
         )
       } catch (error) {
         failProcessingRun(summaryRun.id, error instanceof Error ? error.message : String(error), false, runUsageFields(reanalysisUsage.total()))
@@ -2471,7 +2488,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   const summaryUsage = createGeminiUsageCollector()
   try {
     analysis = await summaryUsage.run(() =>
-      analyzeTranscriptWithGemini(fullText, candidateMeetings, () => stillWanted(recordingId))
+      analyzeTranscriptWithGemini(fullText, candidateMeetings, () => stillWanted(recordingId), recordingId)
     )
     completeProcessingRun(summaryRun.id, {
       outputRefs: { summary: `trans_${recordingId}.summary` },
@@ -2774,7 +2791,8 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
       const detections = await actionableUsage.run(() =>
         detectActionables(fullText, sourceKnowledgeId, {
           title: analysis.title_suggestion,
-          questions: analysis.question_suggestions
+          questions: analysis.question_suggestions,
+          recordingId
         })
       )
 

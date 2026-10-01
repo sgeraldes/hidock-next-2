@@ -280,6 +280,9 @@ import { exportMeetingWiki } from '../meeting-wiki'
 import { analyzeTimeline } from '../timeline-analysis'
 import { applyTranscriptEntities } from '../org-reconciler'
 import { runSelfIdentificationForRecording } from '../self-identification'
+import { CURRENT_GEMINI_CHAT_MODEL } from '../gemini-model-ids'
+import { setCallSink, type CallRecord } from '../pipeline/call-store'
+import { recordHarnessUsage } from '../brains/harness-usage'
 
 function resetConfig(overrides: Partial<typeof mockConfig.transcription> = {}) {
   mockConfig = {
@@ -976,5 +979,155 @@ describe('transcribeRecording — the transcription stage records what the engin
     expect(failed).toBeDefined()
     expect((failed![3] as Record<string, any>).usage.tokens).toMatchObject({ calls: 1, promptTokens: 10_000 })
     expect((failed![3] as Record<string, any>).estimatedCostAmount).toBeGreaterThan(0)
+  })
+})
+
+describe('transcript analysis leaves a ledger row per provider attempt (phase 2b)', () => {
+  let rows: CallRecord[]
+  const analysisRows = () => rows.filter((r) => r.step === 'analysis')
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    resetConfig()
+    mockQueryAll.mockImplementation((sql: string) => {
+      if (sql.includes('FROM transcripts')) {
+        return [{ recording_id: 'rec-reanalyze', full_text: 'Texto de la reunion anterior.' }]
+      }
+      return []
+    })
+    mockEnsureCapture.mockReturnValue('cap-reanalyze')
+    mockApplyCaptureValueClassification.mockReturnValue({ applied: true, rating: 'unrated' })
+    rows = []
+    setCallSink((_id, record) => {
+      rows.push(record)
+    })
+  })
+
+  afterEach(() => {
+    setCallSink(null)
+  })
+
+  it('writes one completed row, naming the recording, the model and the tokens, for an analysis that parses at once', async () => {
+    mockGenerateContent.mockResolvedValueOnce({
+      response: {
+        text: () => JSON.stringify(BASE_ANALYSIS),
+        usageMetadata: { promptTokenCount: 2000, candidatesTokenCount: 300, totalTokenCount: 2300 }
+      }
+    })
+    const { reanalyzeFailedTranscripts } = await import('../transcription')
+    await reanalyzeFailedTranscripts(1)
+    expect(analysisRows()).toHaveLength(1)
+    expect(analysisRows()[0]).toMatchObject({
+      recordingId: 'rec-reanalyze',
+      provider: 'gemini-api',
+      model: CURRENT_GEMINI_CHAT_MODEL,
+      status: 'completed',
+      route: 'direct:gemini-sdk:plain-text'
+    })
+    expect(analysisRows()[0].usage).toMatchObject({ calls: 1, tokens: { input: 2000, output: 300 } })
+  })
+
+  it('writes a row for each attempt, each with its own tokens, when the first answer cannot be parsed', async () => {
+    mockGenerateContent
+      .mockResolvedValueOnce({ response: { text: () => 'not json at all', usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 10 } } })
+      .mockResolvedValueOnce({ response: { text: () => JSON.stringify(BASE_ANALYSIS), usageMetadata: { promptTokenCount: 200, candidatesTokenCount: 20 } } })
+    const { reanalyzeFailedTranscripts } = await import('../transcription')
+    await reanalyzeFailedTranscripts(1)
+    expect(analysisRows().map((r) => r.route)).toEqual(['direct:gemini-sdk:plain-text', 'direct:gemini-sdk:json-mime-fallback'])
+    expect(analysisRows().map((r) => (r.usage as { tokens: { input: number } }).tokens.input)).toEqual([100, 200])
+  })
+
+  it('writes a failed row for an attempt that throws, and the analysis still goes on to the second attempt as before', async () => {
+    mockGenerateContent
+      .mockRejectedValueOnce(new Error('503 overloaded'))
+      .mockResolvedValueOnce({ response: { text: () => JSON.stringify(BASE_ANALYSIS), usageMetadata: { promptTokenCount: 50, candidatesTokenCount: 5 } } })
+    const { reanalyzeFailedTranscripts } = await import('../transcription')
+    await reanalyzeFailedTranscripts(1)
+    expect(mockGenerateContent).toHaveBeenCalledTimes(2)
+    expect(analysisRows().map((r) => r.status)).toEqual(['failed', 'completed'])
+    expect(analysisRows()[0].errorMessage).toMatch(/503 overloaded/)
+  })
+
+  it('writes no row for a recording that became ineligible before the provider call', async () => {
+    mockIsRecordingEligible.mockReturnValue(false)
+    try {
+      const { reanalyzeFailedTranscripts } = await import('../transcription')
+      await reanalyzeFailedTranscripts(1)
+      expect(mockGenerateContent).not.toHaveBeenCalled()
+      expect(analysisRows()).toEqual([])
+    } finally {
+      mockIsRecordingEligible.mockReturnValue(true)
+    }
+  })
+})
+
+describe('actionable detection leaves a ledger row (phase 2b)', () => {
+  const LONG_ASR_TEXT = Array.from({ length: 120 }, (_, i) => `palabra${i}`).join(' ')
+  const DETECTION_JSON = JSON.stringify([
+    { type: 'action_items', confidence: 0.9, suggestedTitle: 'Enviar notas', reason: 'dice enviar notas', suggestedTemplate: 'action_items' }
+  ])
+  const actionableInserts = () => mockRun.mock.calls.filter((c) => String(c[0]).includes('INSERT INTO actionables'))
+  let rows: CallRecord[]
+  const detectionRows = () => rows.filter((r) => r.step === 'actionable-detection')
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockIsValueExcludedRecording.mockReset()
+    mockIsRecordingEligible.mockReturnValue(true)
+    mockIsRecordingProcessable.mockReturnValue(true)
+    mockBrainGenerate.mockReset()
+    mockAsrText = LONG_ASR_TEXT
+    resetConfig()
+    mockGetRecordingById.mockReturnValue({ id: 'rec-led', filename: 'led.wav', file_path: 'G:\\Recordings\\led.wav', status: 'complete' })
+    mockQueryAll.mockImplementation(() => [])
+    mockQueryOne.mockReturnValue({ id: 'cap-led' })
+    mockEnsureCapture.mockReturnValue('cap-led')
+    mockApplyCaptureValueClassification.mockReturnValue({ applied: true, rating: 'unrated' })
+    mockGenerateContent.mockResolvedValue(geminiJsonResponse(BASE_ANALYSIS))
+    rows = []
+    setCallSink((_id, record) => {
+      rows.push(record)
+    })
+  })
+
+  afterEach(() => {
+    setCallSink(null)
+  })
+
+  it('writes one completed row, naming the recording and the tokens the brain reported, and the actionable is stored as before', async () => {
+    mockBrainGenerate.mockImplementation(async () => {
+      recordHarnessUsage({ harness: 'gemini-api', model: 'gemini-3.8-flash', inputTokens: 1800, outputTokens: 140, durationMs: 700 })
+      return DETECTION_JSON
+    })
+    const { transcribeManually } = await import('../transcription')
+    await transcribeManually('rec-led')
+    expect(detectionRows()).toHaveLength(1)
+    expect(detectionRows()[0]).toMatchObject({
+      recordingId: 'rec-led',
+      route: 'direct:gemini-api-brain',
+      provider: 'gemini-api',
+      model: 'gemini-3.8-flash',
+      status: 'completed'
+    })
+    expect(detectionRows()[0].usage).toMatchObject({ calls: 1, tokens: { input: 1800, output: 140 } })
+    expect(actionableInserts()).toHaveLength(1)
+  })
+
+  it('writes a failed row when the brain throws, and detection still finds nothing and stores nothing, as before', async () => {
+    mockBrainGenerate.mockRejectedValue(new Error('quota exceeded'))
+    const { transcribeManually } = await import('../transcription')
+    await transcribeManually('rec-led')
+    expect(detectionRows()).toHaveLength(1)
+    expect(detectionRows()[0]).toMatchObject({ status: 'failed', errorMessage: expect.stringMatching(/quota exceeded/) })
+    expect(actionableInserts()).toHaveLength(0)
+  })
+
+  it('writes no row for a recording that is value-excluded up front, because the call is never made', async () => {
+    mockBrainGenerate.mockResolvedValue(DETECTION_JSON)
+    mockIsValueExcludedRecording.mockReturnValue(true)
+    const { transcribeManually } = await import('../transcription')
+    await transcribeManually('rec-led')
+    expect(mockBrainGenerate).not.toHaveBeenCalled()
+    expect(detectionRows()).toEqual([])
   })
 })
