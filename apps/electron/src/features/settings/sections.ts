@@ -29,7 +29,8 @@ import {
   KeyRound,
   Keyboard,
   Library,
-  Gauge
+  Gauge,
+  Workflow
 } from 'lucide-react'
 
 export type SettingsSectionId =
@@ -46,6 +47,7 @@ export type SettingsSectionId =
   | 'transcription'
   | 'speakers'
   | 'ai-providers'
+  | 'pipeline'
   | 'connectors'
   | 'decisions'
   | 'storage'
@@ -179,6 +181,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'Which AI provider powers analysis, chat and outputs.',
     icon: Brain,
     keywords: ['brains', 'claude', 'codex', 'kiro', 'embeddings', 'cpu']
+  },
+  {
+    id: 'pipeline',
+    group: 'services',
+    label: 'Pipeline',
+    description: 'Which harness, model and effort run each step, and what each one costs.',
+    icon: Workflow,
+    keywords: ['harness', 'model', 'effort', 'fallback', 'claude', 'gemini', 'ollama', 'cost', 'steps', 'local', 'lm studio']
   },
   {
     id: 'connectors',
