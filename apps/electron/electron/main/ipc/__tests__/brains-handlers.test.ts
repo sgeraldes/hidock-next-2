@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ipcMain } from 'electron'
 import { registerBrainsHandlers } from '../brains-handlers'
-import { getConfig, updateConfig } from '../../services/config'
+import { getConfig, replaceConfigSection, updateConfig } from '../../services/config'
 import { getBrainRegistry } from '../../services/brains/brain-registry'
 import { getBrainCredentialStore } from '../../services/brains/brain-credential-store'
 import type { AIBrain, BrainAuthStatus, BrainCapability } from '../../services/brains/types'
@@ -13,6 +13,7 @@ vi.mock('electron', () => ({
 vi.mock('../../services/config', () => ({
   getConfig: vi.fn(),
   updateConfig: vi.fn(),
+  replaceConfigSection: vi.fn(),
 }))
 
 vi.mock('../../services/brains/brain-registry', () => ({
@@ -71,6 +72,7 @@ type IpcHandler = (event?: any, ...args: any[]) => any
 describe('Brains IPC Handlers', () => {
   let handlers: Record<string, IpcHandler> = {}
   const setSecret = vi.fn()
+  const hasSecret = vi.fn(() => false)
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -81,13 +83,24 @@ describe('Brains IPC Handlers', () => {
     }) as any)
     vi.mocked(getConfig).mockReturnValue({ brains: CONFIG_BRAINS } as any)
     vi.mocked(updateConfig).mockResolvedValue(undefined)
+    vi.mocked(replaceConfigSection).mockResolvedValue(undefined)
+    hasSecret.mockReturnValue(false)
     vi.mocked(getBrainRegistry).mockReturnValue({ list: () => BRAINS, get: () => null } as any)
-    vi.mocked(getBrainCredentialStore).mockReturnValue({ setSecret } as any)
+    vi.mocked(getBrainCredentialStore).mockReturnValue({ setSecret, hasSecret } as any)
     registerBrainsHandlers()
   })
 
-  it('registers all six brains:* channels', () => {
-    for (const ch of ['brains:list', 'brains:getRouting', 'brains:setEnabled', 'brains:setDefault', 'brains:setTaskRouting', 'brains:setCredential']) {
+  it('registers all eight brains:* channels', () => {
+    for (const ch of [
+      'brains:list',
+      'brains:getRouting',
+      'brains:setEnabled',
+      'brains:setDefault',
+      'brains:setTaskRouting',
+      'brains:setCredential',
+      'brains:getOpenAiCompatible',
+      'brains:setOpenAiCompatible',
+    ]) {
       expect(ipcMain.handle).toHaveBeenCalledWith(ch, expect.any(Function))
     }
   })
@@ -135,15 +148,79 @@ describe('Brains IPC Handlers', () => {
     expect(updateConfig).toHaveBeenCalledWith('brains', { defaultBrain: 'ollama' })
   })
 
-  it('brains:setTaskRouting sets and clears a per-task override', async () => {
+  it('brains:setTaskRouting sets and clears a per-task override by replacing the section', async () => {
+    // updateConfig merges deeply and would keep a cleared override, so the section is replaced.
     await handlers['brains:setTaskRouting']({}, { task: 'chat', id: 'ollama' })
-    expect(updateConfig).toHaveBeenCalledWith('brains', { taskRouting: { chat: 'ollama' } })
+    expect(replaceConfigSection).toHaveBeenCalledWith('brains', { ...CONFIG_BRAINS, taskRouting: { chat: 'ollama' } })
 
     vi.mocked(getConfig).mockReturnValue({
       brains: { ...CONFIG_BRAINS, taskRouting: { chat: 'ollama' } },
     } as any)
     await handlers['brains:setTaskRouting']({}, { task: 'chat', id: null })
-    expect(updateConfig).toHaveBeenLastCalledWith('brains', { taskRouting: {} })
+    expect(replaceConfigSection).toHaveBeenLastCalledWith('brains', { ...CONFIG_BRAINS, taskRouting: {} })
+    expect(updateConfig).not.toHaveBeenCalled()
+  })
+
+  describe('the OpenAI-compatible connection', () => {
+    it('brains:getOpenAiCompatible returns the saved connection with the defaults filled in, and whether a key is stored, never the key', async () => {
+      expect(await handlers['brains:getOpenAiCompatible']()).toEqual({
+        baseUrl: 'http://localhost:1234/v1',
+        model: '',
+        embeddingModel: '',
+        hasKey: false,
+      })
+      vi.mocked(getConfig).mockReturnValue({
+        brains: { ...CONFIG_BRAINS, openaiCompatible: { baseUrl: 'http://10.0.0.5:8000/v1', model: 'qwen3-8b', embeddingModel: 'nomic' } },
+      } as any)
+      hasSecret.mockReturnValue(true)
+      const saved = await handlers['brains:getOpenAiCompatible']()
+      expect(saved).toEqual({ baseUrl: 'http://10.0.0.5:8000/v1', model: 'qwen3-8b', embeddingModel: 'nomic', hasKey: true })
+      expect(hasSecret).toHaveBeenCalledWith('openai-compatible', 'apiKey')
+    })
+
+    it('brains:getOpenAiCompatible still answers when the credential store cannot be read', async () => {
+      hasSecret.mockImplementation(() => {
+        throw new Error('store locked')
+      })
+      expect(await handlers['brains:getOpenAiCompatible']()).toMatchObject({ hasKey: false })
+    })
+
+    it('brains:setOpenAiCompatible saves a valid connection with the values trimmed, leaving the other brain settings', async () => {
+      const result = await handlers['brains:setOpenAiCompatible']({}, { baseUrl: ' http://192.168.1.20:1234/v1 ', model: ' qwen3-8b ', embeddingModel: '' })
+      expect(result).toEqual({ success: true })
+      expect(replaceConfigSection).toHaveBeenCalledWith('brains', {
+        ...CONFIG_BRAINS,
+        openaiCompatible: { baseUrl: 'http://192.168.1.20:1234/v1', model: 'qwen3-8b', embeddingModel: '' },
+      })
+    })
+
+    it('brains:setOpenAiCompatible refuses an address that is not http or https, a name that is too long, and a malformed request', async () => {
+      for (const bad of [
+        { baseUrl: 'file:///etc/passwd', model: '', embeddingModel: '' },
+        { baseUrl: 'ftp://host/v1', model: '', embeddingModel: '' },
+        { baseUrl: 'javascript:alert(1)', model: '', embeddingModel: '' },
+        { baseUrl: 'localhost:1234', model: '', embeddingModel: '' },
+        { baseUrl: '', model: '', embeddingModel: '' },
+        { baseUrl: 'http://x/v1', model: 'm'.repeat(201), embeddingModel: '' },
+        { baseUrl: 'http://x/v1', model: '', embeddingModel: 'e'.repeat(201) },
+        { baseUrl: 7, model: '', embeddingModel: '' },
+        null,
+        'http://x/v1',
+      ]) {
+        const result = await handlers['brains:setOpenAiCompatible']({}, bad)
+        expect(result.success, JSON.stringify(bad)).toBe(false)
+        expect(typeof result.error).toBe('string')
+      }
+      expect(replaceConfigSection).not.toHaveBeenCalled()
+    })
+
+    it('brains:setOpenAiCompatible reports a failed write as an error', async () => {
+      vi.mocked(replaceConfigSection).mockRejectedValueOnce(new Error('disk full'))
+      expect(await handlers['brains:setOpenAiCompatible']({}, { baseUrl: 'http://x/v1', model: '', embeddingModel: '' })).toEqual({
+        success: false,
+        error: 'disk full',
+      })
+    })
   })
 
   it('brains:setCredential writes to the credential store', async () => {
