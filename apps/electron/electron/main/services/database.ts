@@ -17,7 +17,7 @@ import { isCancelledMeetingSubject, scoreMeetingCandidates } from './recording-m
 import { isImpossibleTranscriptDensity, lowValueMaxSeconds } from './value-thresholds'
 import type { QualityRating } from '@/types/knowledge'
 
-const SCHEMA_VERSION = 63
+const SCHEMA_VERSION = 64
 
 const SCHEMA = `
 -- Calendar events from ICS
@@ -393,6 +393,30 @@ CREATE TABLE IF NOT EXISTS recording_meeting_matches (
     evaluated_at TEXT NOT NULL,
     FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
 );
+
+-- One row per AI call a pipeline step makes (phase 2 of the pipeline design). Recording is optional:
+-- the assistant chat, notes and outputs have none. A row never holds a prompt or an answer.
+CREATE TABLE IF NOT EXISTS pipeline_calls (
+    id TEXT PRIMARY KEY,
+    step TEXT NOT NULL,
+    recording_id TEXT,
+    route TEXT NOT NULL,
+    provider TEXT,
+    model TEXT,
+    status TEXT NOT NULL CHECK(status IN ('completed', 'failed', 'cancelled')),
+    started_at TEXT NOT NULL,
+    completed_at TEXT NOT NULL,
+    duration_ms INTEGER NOT NULL,
+    parent_call_id TEXT,
+    usage_json TEXT,
+    estimated_cost_amount REAL,
+    estimated_cost_currency TEXT,
+    cost_method TEXT,
+    error_message TEXT,
+    FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_pipeline_calls_step ON pipeline_calls(step, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_pipeline_calls_recording ON pipeline_calls(recording_id);
 
 -- Stage-level processing provenance (v52 / SPEC-009). One provider call can
 -- produce several output stages, but every displayed result references the
@@ -3211,6 +3235,32 @@ const MIGRATIONS: Record<number, () => void> = {
     FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
 )`)
     console.log('Migration v63 complete')
+  },
+  64: () => {
+    // The pipeline call ledger: a new table, no change to existing data.
+    console.log('Running migration to schema v64: pipeline_calls')
+    getDatabase().run(`CREATE TABLE IF NOT EXISTS pipeline_calls (
+    id TEXT PRIMARY KEY,
+    step TEXT NOT NULL,
+    recording_id TEXT,
+    route TEXT NOT NULL,
+    provider TEXT,
+    model TEXT,
+    status TEXT NOT NULL CHECK(status IN ('completed', 'failed', 'cancelled')),
+    started_at TEXT NOT NULL,
+    completed_at TEXT NOT NULL,
+    duration_ms INTEGER NOT NULL,
+    parent_call_id TEXT,
+    usage_json TEXT,
+    estimated_cost_amount REAL,
+    estimated_cost_currency TEXT,
+    cost_method TEXT,
+    error_message TEXT,
+    FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
+)`)
+    getDatabase().run('CREATE INDEX IF NOT EXISTS idx_pipeline_calls_step ON pipeline_calls(step, started_at DESC)')
+    getDatabase().run('CREATE INDEX IF NOT EXISTS idx_pipeline_calls_recording ON pipeline_calls(recording_id)')
+    console.log('Migration v64 complete')
   },
 }
 
