@@ -19,7 +19,7 @@ const USB_PRODUCT_IDS = [
   0x2041   // P1 Mini (alternate)
 ]
 import { initializeDatabase, closeDatabase, isGraphProvenanceCleanupRegistered, run, queryAll } from './services/database'
-import { installCallStore } from './services/pipeline/call-store'
+import { installPipeline } from './services/pipeline/install'
 import { initializeConfig, getConfig } from './services/config'
 import { getJensenDevice, setAutoConnectChecker } from './services/jensen'
 import { initializeStartupStorage } from './storage-startup'
@@ -190,7 +190,7 @@ async function initializeServices(): Promise<boolean> {
     },
   })
   console.log('Database initialized')
-  installCallStore({ run, queryAll })
+  installPipeline({ run, queryAll })
 
   // The semantic index can exceed 2 GB. It is restored after the renderer's
   // first paint by the assistant boot task, so opening the library never waits
