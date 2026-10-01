@@ -47,6 +47,7 @@ import type {
   NodeGraphStats,
 } from '@hidock/knowledge-graph'
 import { complete } from '@hidock/ai-providers'
+import { withCallRecord } from './pipeline/track-call'
 import {
   run,
   runInTransaction,
@@ -213,6 +214,16 @@ export interface IngestResult {
   errors: Array<{ transcriptId: string; error: string }>
 }
 
+/**
+ * The extractor of one transcript or file: the completion of the configured provider, with one ledger row for the
+ * call. Built per source so the row names its recording; what the call throws still reaches the ingest loop, which
+ * keeps the error for that transcript.
+ */
+function trackedExtractor(providerConfig: Parameters<typeof complete>[1], recordingId: string | null): LlmExtractor {
+  return (prompt: string) =>
+    withCallRecord({ step: 'graph-extract', recordingId, route: 'direct:ai-sdk' }, () => complete(prompt, providerConfig))
+}
+
 export async function ingestFromDbTranscripts(): Promise<IngestResult> {
   const providerConfig = getGraphProviderConfig()
   if (!providerConfig) {
@@ -220,7 +231,6 @@ export async function ingestFromDbTranscripts(): Promise<IngestResult> {
   }
 
   const store = getKnowledgeGraphStore()
-  const llm: LlmExtractor = (prompt: string) => complete(prompt, providerConfig)
 
   // Get all transcripts with recording + meeting meta
   // Cross-reference (/simplify S-5, database.ts's getExcludedRecordingIds):
@@ -306,7 +316,7 @@ export async function ingestFromDbTranscripts(): Promise<IngestResult> {
       // The LLM extraction call stays OUTSIDE the transaction (Codex
       // adversarial review AR-1) — it can take seconds and must not hold a
       // DB transaction open.
-      const extraction = await extractGraphFromTranscript(row.full_text, meta, llm)
+      const extraction = await extractGraphFromTranscript(row.full_text, meta, trackedExtractor(providerConfig, row.recording_id))
       // F16/spec-002 (AR-1, layer 2 of 2) + F18 (spec-004, Step 6): FINAL
       // eligibility is decided with a FRESH point-read at persistence time,
       // inside the SAME transaction as the graph writes + ingested-marker
@@ -431,7 +441,8 @@ export async function ingestFromFolder(folderPath: string): Promise<IngestResult
   }
 
   const store = getKnowledgeGraphStore()
-  const llm: LlmExtractor = (prompt: string) => complete(prompt, providerConfig)
+  // A folder ingest has no recording: its rows have none.
+  const llm = trackedExtractor(providerConfig, null)
 
   const files = readdirSync(resolved).filter((f) => {
     const ext = extname(f).toLowerCase()
