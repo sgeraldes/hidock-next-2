@@ -6,6 +6,7 @@ import type {
   IngestionOutcome,
   SourceContainer,
 } from '@hidock/connectors'
+import type { ModelOption, PipelineSettingsState, SaveStepArgs, SaveStepResult } from '../../src/shared/pipeline-config'
 /**
  * AI Brains renderer-facing types (H10). Mirror of the main-process contract in
  * `electron/main/services/brains/types.ts` + `ipc/brains-handlers.ts`, declared
@@ -1264,6 +1265,13 @@ export interface ElectronAPI {
     setCredential: (args: { id: BrainId; field: string; value: string | null }) => Promise<{ success: boolean }>
   }
 
+  // Pipeline (phase 3a) — the owner's choice of harness, model and effort for each text step.
+  pipeline: {
+    getState: () => Promise<PipelineSettingsState>
+    saveStep: (args: SaveStepArgs) => Promise<SaveStepResult>
+    listModels: (args: { harness: string }) => Promise<ModelOption[]>
+  }
+
   // Handover (H9) — write a handover BUNDLE into a target repo and optionally run
   // it in-app through an agentic brain (Claude Code / Codex / Gemini CLI).
   handover: {
@@ -1972,6 +1980,12 @@ const electronAPI: ElectronAPI = {
     setTaskRouting: (args) => callIPC('brains:setTaskRouting', args),
     getRouting: () => callIPC('brains:getRouting'),
     setCredential: (args) => callIPC('brains:setCredential', args)
+  },
+
+  pipeline: {
+    getState: () => callIPC('pipeline:getState'),
+    saveStep: (args) => callIPC('pipeline:saveStep', args),
+    listModels: (args) => callIPC('pipeline:listModels', args)
   },
 
   handover: {

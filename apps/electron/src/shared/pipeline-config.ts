@@ -227,3 +227,41 @@ export interface StepStats {
   /** Median estimated cost in US dollars of the completed calls that have one; null when none does. */
   medianCostUsd: number | null
 }
+
+/** A harness as the Pipeline page draws it: its descriptor, and whether it can serve right now. */
+export interface HarnessState extends HarnessInfo {
+  available: boolean
+  /** Why it cannot serve; null when it can. */
+  reason: string | null
+}
+
+/** Everything the Pipeline page draws, in one read. */
+export interface PipelineSettingsState {
+  config: PipelineConfig
+  harnesses: HarnessState[]
+  stats: Record<string, StepStats>
+}
+
+export interface SaveStepArgs {
+  step: TextStepId
+  primary: StepChoice
+  fallback: StepChoice | null
+  /** The owner confirmed that a slow harness on a step that runs in bulk takes seconds per call. */
+  confirmSlow?: boolean
+}
+
+export interface SaveStepResult {
+  success: boolean
+  /** Errors that blocked the save, or the warnings that came with it. */
+  issues?: ValidationIssue[]
+  /** The save needs the owner to confirm a slow harness on a bulk step; resend with `confirmSlow`. */
+  needsConfirmation?: boolean
+  error?: string
+}
+
+/** A model a harness offers, for the model combobox. */
+export interface ModelOption {
+  id: string
+  label?: string
+  note?: string
+}
