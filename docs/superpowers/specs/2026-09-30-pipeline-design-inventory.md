@@ -108,6 +108,11 @@ graph-sync, wiki-export, rag-indexing`. Not recorded as runs: Jev evaluation, Je
 graph LLM call, image description, note analysis, reformat and RAG chat. Usage and cost are captured
 only for Gemini paths that call `recordGeminiUsage` (rows 1-3, 8, 9, 10 and the Gemini brain).
 
+As of phase 2a, the calls of rows 11, 12, 13, 15, 16, 21, 22, 23, 24, 25 and 26 are recorded in
+`pipeline_calls` (`S/pipeline/call-store.ts`), with or without a recording, with usage and cost where
+the harness states them. Rows 8, 9, 10, 14, 17, 18 and 27 follow in phase 2b. The headless brain host
+opens the database read-only and records nothing.
+
 ## Unverified
 
 Whether other models accept `thinkingBudget:0`; whether the Jev API accepts images; whether live

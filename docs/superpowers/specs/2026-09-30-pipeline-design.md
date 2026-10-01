@@ -10,7 +10,7 @@ harness and model to process one shot, or multiple stacked steps one after the o
 combination? A new pipeline system needs to emerge from this."
 
 Status: approved by the owner on 30-sep-2026; the four decisions of section 16 were taken that day and
-are reflected below. Built so far: phase 0 (PR #113) and phase 1 (PR #118).
+are reflected below. Built so far: phase 0 (PR #113), phase 1 (PR #118) and phase 2a (PR #120).
 
 ## 1. What we want
 
@@ -284,11 +284,12 @@ two pages", Settings redesign) and are removed once the Pipeline page covers the
 7. Persist: write the final outputs through the existing sinks. When the step is a candidate run (the
    Test bench, or "re-run with another plan"), the outputs go to `pipeline_results` instead
    (section 11).
-8. Record: one `processing_runs` row per call, `stage` = the step or task id, `provider` = harness,
-   `model`, `usage_json`, `estimated_cost_*`, `parent_run_ids` = the previous pass. Cost tables per
-   harness: Gemini has one; the CLIs report tokens when their JSON output allows it, otherwise the
-   duration; local models record duration. Every AI call gets a run, including the Jev calls, graph
-   ingest and image description that record none today.
+8. Record: one `pipeline_calls` row per call (`step`, `route`, `provider` = harness, `model`,
+   `usage_json`, `estimated_cost_*`, `parent_call_id` = the attempt that failed before it, with or
+   without a recording); `processing_runs` keeps the per-recording stages the reader shows. Cost
+   tables per harness: Gemini has one; the CLIs report tokens when their JSON output allows it,
+   otherwise the duration; local models record duration. Every AI call gets a row, including the Jev
+   calls, graph ingest and image description that record none today.
 9. Report: progress events to the Operations panel; errors name the step, the call and the profile.
 
 ## 10. Settings > Pipeline
@@ -357,7 +358,8 @@ Each phase has its own plan, tests, adversarial review and PR series.
 |---|---|---|
 | 0 | Lean invocation for Claude Code and Codex; `effort` in `GenerateOptions`; empty working folder. Built (PR #113). | faster CLI calls; no tools or hooks loaded |
 | 1 | Capability descriptors on every adapter, audio and embedding engines included; OpenAI-compatible adapter (with Ollama); Jev harness wrapper; model discovery; lean flags for Gemini CLI and Kiro (measured); structured-output contract with repair; cost and usage for every adapter. Built (PR #118); the Gemini CLI flags were not measured for lack of a key in the shell | none visible |
-| 2 | Task catalog and runner with `single` and `fallback`; every text call site moved to `runStep` with today's defaults; a `processing_runs` row per call | usage and cost for all calls; no change in results |
+| 2a | Text runner with `single` and `fallback`, the `pipeline_calls` ledger, default plans that keep today's routing; the nine text call sites that go through the router and the three Jev call sites on it. Built (PR #120). | a ledger row per call with time, tokens and cost; no change in results |
+| 2b | The six text call sites that call the Gemini SDK directly (analysis bundle, action detection, timeline, LLM value rating, graph ingest, image description) on the runner | usage and cost for all text calls |
 | 3 | `pipeline` config, migration, Settings > Pipeline for single and fallback plans on the text steps, profiles, Test bench, `pipeline_results` and Adopt | the owner can choose harness, model and effort for every text step |
 | 4 | The audio steps join: `transcribe`, `diarize`, `embed` and `live-transcribe` through the same runner and page, with the pairing rules and the reindex confirmation of section 6; their old pages show the engine read only | the owner can choose the engine of every audio step |
 | 5 | Stacked passes, ensembles and merge rules; splitting the `understand` bundle into separate tasks | new shapes available |
