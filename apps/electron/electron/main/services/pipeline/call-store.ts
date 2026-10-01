@@ -16,6 +16,7 @@
  * thrown: recording a call must not change the call.
  */
 import { randomUUID } from 'node:crypto'
+import type { StepStats } from '../../../../src/shared/pipeline-config'
 
 export type CallStatus = 'completed' | 'failed' | 'cancelled'
 
@@ -170,4 +171,45 @@ export function getCallsForRecording(recordingId: string): StoredCall[] {
 
 export function getRecentCalls(limit = 50): StoredCall[] {
   return requireDb().queryAll<CallRow>('SELECT * FROM pipeline_calls ORDER BY started_at DESC LIMIT ?', [limit]).map(fromRow)
+}
+
+function median(values: number[]): number | null {
+  if (values.length === 0) return null
+  const sorted = [...values].sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
+}
+
+interface StatsRow {
+  step: string
+  status: CallStatus
+  duration_ms: number
+  estimated_cost_amount: number | null
+  estimated_cost_currency: string | null
+}
+
+/**
+ * Per step: how many calls started since `sinceIso`, how many failed (a cancelled call is not a failure), and
+ * the median time and cost of the ones that completed. The Pipeline page shows these next to each step.
+ */
+export function getStepStats(sinceIso: string): Record<string, StepStats> {
+  const rows = requireDb().queryAll<StatsRow>(
+    'SELECT step, status, duration_ms, estimated_cost_amount, estimated_cost_currency FROM pipeline_calls WHERE started_at >= ?',
+    [sinceIso]
+  )
+  const grouped = new Map<string, StatsRow[]>()
+  for (const row of rows) grouped.set(row.step, [...(grouped.get(row.step) ?? []), row])
+  const out: Record<string, StepStats> = {}
+  for (const [step, list] of grouped) {
+    const completed = list.filter((r) => r.status === 'completed')
+    out[step] = {
+      calls: list.length,
+      failed: list.filter((r) => r.status === 'failed').length,
+      medianMs: median(completed.map((r) => r.duration_ms)),
+      medianCostUsd: median(
+        completed.flatMap((r) => (r.estimated_cost_amount !== null && r.estimated_cost_currency === 'USD' ? [r.estimated_cost_amount] : []))
+      )
+    }
+  }
+  return out
 }

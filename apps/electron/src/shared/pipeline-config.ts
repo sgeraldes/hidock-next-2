@@ -217,3 +217,13 @@ export function applyStepDraft(config: PipelineConfig, step: TextStepId, primary
   for (const id of Object.keys(profiles)) if (!used.has(id)) delete profiles[id]
   return { version: 1, profiles, steps }
 }
+
+/** The measured time and cost of one step over a window of the call ledger (read by the Pipeline page). */
+export interface StepStats {
+  calls: number
+  failed: number
+  /** Median duration of the completed calls; null when none completed. */
+  medianMs: number | null
+  /** Median estimated cost in US dollars of the completed calls that have one; null when none does. */
+  medianCostUsd: number | null
+}

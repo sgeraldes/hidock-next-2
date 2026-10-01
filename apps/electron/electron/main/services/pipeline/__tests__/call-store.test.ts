@@ -21,6 +21,7 @@ import { initializeDatabase, closeDatabase, run, queryAll, runWithMassDeleteAllo
 import {
   getCallsForRecording,
   getRecentCalls,
+  getStepStats,
   installCallStore,
   setCallSink,
   writeCall,
@@ -168,5 +169,60 @@ describe('pipeline call ledger', () => {
     expect(writeCall(record({ recordingId: 'no-such-recording' }))).toBeNull()
     expect(warn).toHaveBeenCalled()
     warn.mockRestore()
+  })
+
+  describe('getStepStats', () => {
+    beforeEach(() => {
+      runWithMassDeleteAllowed(() => run('DELETE FROM pipeline_calls'))
+      installCallStore(db)
+    })
+
+    const at = (iso: string, over: Partial<CallRecord>): CallRecord => record({ startedAt: iso, completedAt: iso, ...over })
+
+    it('is empty without calls', () => {
+      expect(getStepStats('2026-09-01T00:00:00.000Z')).toEqual({})
+    })
+
+    it('counts calls and failures and takes the median time and cost of the completed ones', () => {
+      for (const [ms, cost] of [
+        [1000, 0.001],
+        [3000, 0.003],
+        [2000, 0.002]
+      ] as const) {
+        writeCall(at('2026-09-30T10:00:00.000Z', { step: 'notes', durationMs: ms, estimatedCostAmount: cost }))
+      }
+      writeCall(at('2026-09-30T11:00:00.000Z', { step: 'notes', status: 'failed', durationMs: 90000, estimatedCostAmount: null, errorMessage: 'empty answer' }))
+      expect(getStepStats('2026-09-01T00:00:00.000Z').notes).toEqual({ calls: 4, failed: 1, medianMs: 2000, medianCostUsd: 0.002 })
+    })
+
+    it('does not count a cancelled call as a failure, or its time as a typical one', () => {
+      writeCall(at('2026-09-30T10:00:00.000Z', { step: 'chat', durationMs: 1000 }))
+      writeCall(at('2026-09-30T10:01:00.000Z', { step: 'chat', status: 'cancelled', durationMs: 60000, errorMessage: 'aborted' }))
+      expect(getStepStats('2026-09-01T00:00:00.000Z').chat).toEqual({ calls: 2, failed: 0, medianMs: 1000, medianCostUsd: 0.0001 })
+    })
+
+    it('takes the mean of the two middle values for an even count, and null cost when none is priced', () => {
+      for (const ms of [1000, 2000, 3000, 4000]) {
+        writeCall(at('2026-09-30T10:00:00.000Z', { step: 'chat', durationMs: ms, estimatedCostAmount: null, estimatedCostCurrency: null }))
+      }
+      expect(getStepStats('2026-09-01T00:00:00.000Z').chat).toMatchObject({ medianMs: 2500, medianCostUsd: null })
+    })
+
+    it('has no time for a step whose calls all failed', () => {
+      writeCall(at('2026-09-30T10:00:00.000Z', { step: 'outputs', status: 'failed', errorMessage: 'down' }))
+      expect(getStepStats('2026-09-01T00:00:00.000Z').outputs).toEqual({ calls: 1, failed: 1, medianMs: null, medianCostUsd: null })
+    })
+
+    it('leaves out calls before the window and keeps the steps apart', () => {
+      writeCall(at('2026-08-01T10:00:00.000Z', { step: 'notes' }))
+      writeCall(at('2026-09-30T10:00:00.000Z', { step: 'reformat' }))
+      const stats = getStepStats('2026-09-01T00:00:00.000Z')
+      expect(Object.keys(stats)).toEqual(['reformat'])
+    })
+
+    it('throws, like the other readers, when no database is installed', () => {
+      installCallStore(null)
+      expect(() => getStepStats('2026-09-01T00:00:00.000Z')).toThrow()
+    })
   })
 })
