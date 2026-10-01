@@ -11,6 +11,7 @@ HiDock Next turns HiDock recordings into a private, searchable knowledge workspa
 - Manage H1, H1E, P1, and known hardware variants from one desktop app.
 - Keep recordings, transcripts, metadata, and the knowledge graph local by default.
 - Use Gemini, OpenAI-compatible providers, Ollama, or other configured AI providers.
+- Choose the harness, model and effort that run each AI step in Settings > Pipeline, with a fallback, where the text goes, and the measured time and cost of each step.
 - Match recordings to calendar events and identify recurring people and projects.
 - Search across transcripts, summaries, decisions, action items, and linked context.
 - Connect optional Microsoft 365 and Slack sources without making them mandatory.
