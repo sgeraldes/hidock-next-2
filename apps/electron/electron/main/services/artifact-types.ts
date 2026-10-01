@@ -21,6 +21,8 @@ import { chunkText } from './vector-store'
 import { getConfig } from './config'
 import { CURRENT_GEMINI_CHAT_MODEL } from './gemini-model-ids'
 import { resolveGeminiApiKey } from './brains'
+import { reportGeminiCall } from './pipeline/gemini-call'
+import { withCallRecord } from './pipeline/track-call'
 
 /** Result of a type's text extraction: the plain text plus optional metadata. */
 export interface ArtifactExtraction {
@@ -232,27 +234,34 @@ registerArtifactType({
 
     try {
       const genAI = new GoogleGenerativeAI(apiKey)
-      const model = genAI.getGenerativeModel({ model: getConfig().chat?.geminiModel || CURRENT_GEMINI_CHAT_MODEL })
-      const result = await model.generateContent({
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              {
-                text:
-                  'Describe this image in detail for a searchable knowledge library. ' +
-                  'Return JSON: {"description": string, "tags": string[]}. ' +
-                  'Tags are concise keywords (objects, text, people, chart types, colors).'
-              },
-              { inlineData: { mimeType, data } }
-            ]
-          }
-        ],
-        generationConfig: {
-          maxOutputTokens: 1024,
-          responseMimeType: 'application/json',
-          thinkingConfig: { thinkingBudget: 0 }
-        } as never
+      const modelId = getConfig().chat?.geminiModel || CURRENT_GEMINI_CHAT_MODEL
+      const model = genAI.getGenerativeModel({ model: modelId })
+      // One ledger row for the vision call; what it throws is caught below, as before.
+      const startedAt = Date.now()
+      const result = await withCallRecord({ step: 'image-describe', route: 'direct:gemini-sdk' }, async () => {
+        const response = await model.generateContent({
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                {
+                  text:
+                    'Describe this image in detail for a searchable knowledge library. ' +
+                    'Return JSON: {"description": string, "tags": string[]}. ' +
+                    'Tags are concise keywords (objects, text, people, chart types, colors).'
+                },
+                { inlineData: { mimeType, data } }
+              ]
+            }
+          ],
+          generationConfig: {
+            maxOutputTokens: 1024,
+            responseMimeType: 'application/json',
+            thinkingConfig: { thinkingBudget: 0 }
+          } as never
+        })
+        reportGeminiCall(modelId, response.response.usageMetadata, startedAt)
+        return response
       })
 
       const responseText = result.response.text()

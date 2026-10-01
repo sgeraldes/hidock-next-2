@@ -31,6 +31,8 @@
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import { CURRENT_GEMINI_CHAT_MODEL } from './gemini-model-ids'
 import { recordGeminiUsage } from './gemini-usage'
+import { reportGeminiCall } from './pipeline/gemini-call'
+import { withCallRecord } from './pipeline/track-call'
 import { getRecordingById, resolveRecordingId, queryOne, queryAll, run } from './database'
 import { isRecordingEligible } from './recording-eligibility'
 import { eligibleToGenerate } from './brains/eligibility'
@@ -591,9 +593,15 @@ Respond with ONLY a JSON array, one object per segment, no prose:
 Segments:
 ${windowBlock}`
 
-  const result = await model.generateContent({
-    contents: [{ role: 'user', parts: [{ text: prompt }] }],
-    generationConfig: { maxOutputTokens: 4096, thinkingConfig: { thinkingBudget: 0 } } as never
+  // One ledger row for the call; what it throws still reaches the caller, which omits the sentiment series.
+  const startedAt = Date.now()
+  const result = await withCallRecord({ step: 'timeline', route: 'direct:gemini-sdk' }, async () => {
+    const response = await model.generateContent({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: { maxOutputTokens: 4096, thinkingConfig: { thinkingBudget: 0 } } as never
+    })
+    reportGeminiCall(modelId, response.response.usageMetadata, startedAt)
+    return response
   })
   recordGeminiUsage(modelId, result.response.usageMetadata)
 

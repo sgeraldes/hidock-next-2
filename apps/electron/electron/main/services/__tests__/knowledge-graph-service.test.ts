@@ -11,7 +11,7 @@
 
 // @vitest-environment node
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { rmSync, mkdirSync, writeFileSync } from 'fs'
@@ -54,6 +54,8 @@ vi.mock('../file-storage', () => ({
 
 import { complete } from '@hidock/ai-providers'
 import { getConfig } from '../config'
+import { setCallSink, type CallRecord } from '../pipeline/call-store'
+import { recordHarnessUsage } from '../brains/harness-usage'
 
 // ---------------------------------------------------------------------------
 // Fake extractor JSON
@@ -312,5 +314,62 @@ describe('knowledge-graph-service', () => {
       expect(Array.isArray(graph.nodes)).toBe(true)
       expect(Array.isArray(graph.edges)).toBe(true)
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Phase 2b: every extraction call leaves a ledger row
+// ---------------------------------------------------------------------------
+
+describe('graph extraction leaves a ledger row (phase 2b)', () => {
+  let rows: CallRecord[]
+  const graphRows = () => rows.filter((r) => r.step === 'graph-extract')
+
+  beforeEach(() => {
+    rows = []
+    setCallSink((_id, record) => {
+      rows.push(record)
+    })
+  })
+
+  afterEach(() => {
+    setCallSink(null)
+  })
+
+  const seedTranscript = (recId: string, txId: string) => {
+    dbRun(`INSERT OR IGNORE INTO recordings (id, filename, date_recorded, meeting_id) VALUES (?, ?, ?, ?)`, [recId, `${recId}.hda`, '2026-06-01', null])
+    dbRun(`INSERT OR IGNORE INTO transcripts (id, recording_id, full_text, language) VALUES (?, ?, ?, ?)`, [txId, recId, 'Alice discussed TypeScript.', 'en'])
+  }
+
+  it('writes one completed row for each transcript sent to the model, naming its recording and the tokens reported', async () => {
+    seedTranscript('rec-g1', 'tx-g1')
+    seedTranscript('rec-g2', 'tx-g2')
+    ;(complete as any).mockImplementation(async () => {
+      recordHarnessUsage({ harness: 'gemini-api', model: 'gemini-2.0-flash', inputTokens: 700, outputTokens: 90, durationMs: 400 })
+      return FAKE_JSON
+    })
+    await ingestFromDbTranscripts()
+    expect(graphRows()).toHaveLength(2)
+    expect(graphRows().map((r) => r.recordingId).sort()).toEqual(['rec-g1', 'rec-g2'])
+    expect(graphRows()[0]).toMatchObject({ route: 'direct:ai-sdk', provider: 'gemini-api', model: 'gemini-2.0-flash', status: 'completed' })
+    expect(graphRows()[0].usage).toMatchObject({ calls: 1, tokens: { input: 700, output: 90 } })
+  })
+
+  it('writes a failed row for a transcript whose extraction throws, and the pass still records the error and goes on, as before', async () => {
+    seedTranscript('rec-g3', 'tx-g3')
+    ;(complete as any).mockRejectedValue(new Error('429 quota'))
+    const result = await ingestFromDbTranscripts()
+    expect(result.ingested).toBe(0)
+    expect(result.errors).toHaveLength(1)
+    expect(graphRows()).toHaveLength(1)
+    expect(graphRows()[0]).toMatchObject({ status: 'failed', recordingId: 'rec-g3', errorMessage: expect.stringMatching(/429 quota/) })
+  })
+
+  it('writes no row for a transcript that was already ingested, because no call is made', async () => {
+    seedTranscript('rec-g4', 'tx-g4')
+    await ingestFromDbTranscripts()
+    const callsAfterFirstPass = graphRows().length
+    await ingestFromDbTranscripts()
+    expect(graphRows()).toHaveLength(callsAfterFirstPass)
   })
 })

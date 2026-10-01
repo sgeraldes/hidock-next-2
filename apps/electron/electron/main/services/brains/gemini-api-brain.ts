@@ -18,7 +18,7 @@ import { getConfig } from '../config'
 import { CURRENT_GEMINI_CHAT_MODEL } from '../gemini-model-ids'
 import { languageFor } from '../transcription-language'
 import { getBrainCredentialStore } from './brain-credential-store'
-import { recordGeminiUsage, tokensFromUsage } from '../gemini-usage'
+import { recordGeminiUsage } from '../gemini-usage'
 import type {
   AIBrain,
   AudioAnalyzeInput,
@@ -30,7 +30,7 @@ import type {
 } from './types'
 import { eligibleToGenerate } from './eligibility'
 import { caps, type HarnessDescriptor, type ModelInfo } from './descriptor'
-import { recordHarnessUsage } from './harness-usage'
+import { reportGeminiCall } from '../pipeline/gemini-call'
 
 const DEFAULT_MODEL = CURRENT_GEMINI_CHAT_MODEL
 const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001'
@@ -55,20 +55,6 @@ export function resolveGeminiApiKey(): string {
     fromStore = null
   }
   return (fromStore || getConfig().transcription.geminiApiKey || '').trim()
-}
-
-/** Reports one Gemini response to the harness collector (the Gemini one keeps its own report). */
-function reportGeminiCall(modelId: string, usage: unknown, startedAt: number): void {
-  const tokens = tokensFromUsage(usage)
-  recordHarnessUsage({
-    harness: 'gemini-api',
-    model: modelId,
-    inputTokens: tokens?.promptTokens,
-    outputTokens: tokens?.outputTokens,
-    thinkingTokens: tokens?.thoughtsTokens,
-    cachedTokens: tokens?.cachedTokens,
-    durationMs: Date.now() - startedAt
-  })
 }
 
 export class GeminiApiBrain implements AIBrain {

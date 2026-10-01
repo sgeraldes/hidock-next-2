@@ -689,7 +689,10 @@ export async function classifyCaptureValueRaw(captureId: string): Promise<RawCla
   // Deliberately NOT wrapped in try/catch: a complete() failure (network,
   // rate limit, ...) is an unexpected failure that must propagate to the
   // caller — only the JSON-parsing step below is non-throwing.
-  const reply = await complete(prompt, providerConfig)
+  // One ledger row for the completion; a failure still reaches the caller.
+  const reply = await withCallRecord({ step: 'value-llm', recordingId: row.recording_id, route: 'direct:ai-sdk' }, () =>
+    complete(prompt, providerConfig)
+  )
   const cls = parseValueClassification(extractJsonObject(reply) ?? undefined)
 
   return { classification: cls, currentRating: 'unrated', providerCalled: true }

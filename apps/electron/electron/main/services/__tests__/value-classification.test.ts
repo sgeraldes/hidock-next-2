@@ -15,7 +15,7 @@
  * Never opens F:\HiDock-Next-Data — temp/fixture DBs only.
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { existsSync, rmSync } from 'fs'
@@ -59,6 +59,7 @@ vi.mock('../jev-client', () => ({
 }))
 
 import { setCallSink, type CallRecord } from '../pipeline/call-store'
+import { recordHarnessUsage } from '../brains/harness-usage'
 import {
   initializeDatabase,
   closeDatabase,
@@ -1526,5 +1527,83 @@ describe('Jev (TypeSafe AI) as the value classifier', () => {
     expect(getValueClassifierKind()).toBe('llm')
     mockGetProviderConfig.mockReturnValue(null)
     expect(getValueClassifierKind()).toBeNull()
+  })
+})
+
+describe('standalone value rating leaves a ledger row (phase 2b)', () => {
+  let rows: CallRecord[]
+  const valueRows = () => rows.filter((r) => r.step === 'value-llm')
+
+  beforeAll(async () => {
+    cleanupDbFiles(paths.db)
+    await initializeDatabase()
+  })
+
+  afterAll(() => {
+    try {
+      closeDatabase()
+    } catch {
+      /* ignore */
+    }
+    cleanupDbFiles(paths.db)
+  })
+
+  beforeEach(() => {
+    wipeData()
+    mockComplete.mockReset()
+    mockGetProviderConfig.mockReset()
+    mockGetProviderConfig.mockReturnValue({ provider: 'google', model: 'gemini-3.5-flash', apiKey: 'test-key' }) // pragma: allowlist secret
+    mockConfig.transcription.valueClassificationMinConfidence = 0.6
+    rows = []
+    setCallSink((_id, record) => {
+      rows.push(record)
+    })
+  })
+
+  afterEach(() => {
+    setCallSink(null)
+  })
+
+  it('writes one completed row, naming the recording and the tokens the completion reported', async () => {
+    seedRecording('rec-led')
+    seedTranscript('rec-led', { fullText: 'Reunión de trabajo sobre el presupuesto Q3.', summary: 'Budget discussion.' })
+    seedCapture('cap-led', 'rec-led')
+    mockComplete.mockImplementation(async () => {
+      recordHarnessUsage({ harness: 'gemini-api', model: 'gemini-3.5-flash', inputTokens: 900, outputTokens: 40, durationMs: 300 })
+      return JSON.stringify({ value: 'normal', value_reasons: [], value_confidence: 0.9 })
+    })
+    await classifyCaptureValue('cap-led')
+    expect(valueRows()).toHaveLength(1)
+    expect(valueRows()[0]).toMatchObject({
+      recordingId: 'rec-led',
+      route: 'direct:ai-sdk',
+      provider: 'gemini-api',
+      model: 'gemini-3.5-flash',
+      status: 'completed'
+    })
+    expect(valueRows()[0].usage).toMatchObject({ calls: 1, tokens: { input: 900, output: 40 } })
+  })
+
+  it('writes a failed row and still lets the failure reach the caller, as before', async () => {
+    seedRecording('rec-fail')
+    seedTranscript('rec-fail', { fullText: 'Some real content here.' })
+    seedCapture('cap-fail', 'rec-fail')
+    mockComplete.mockRejectedValue(new Error('rate limit exceeded'))
+    await expect(classifyCaptureValue('cap-fail')).rejects.toThrow('rate limit exceeded')
+    expect(valueRows()).toHaveLength(1)
+    expect(valueRows()[0]).toMatchObject({ status: 'failed', recordingId: 'rec-fail', errorMessage: expect.stringMatching(/rate limit exceeded/) })
+  })
+
+  it('writes no row when no call is made: no transcript, no provider', async () => {
+    seedRecording('rec-none')
+    seedCapture('cap-none', 'rec-none')
+    await classifyCaptureValue('cap-none')
+    seedRecording('rec-np')
+    seedTranscript('rec-np', { fullText: 'Contenido real.' })
+    seedCapture('cap-np', 'rec-np')
+    mockGetProviderConfig.mockReturnValue(null)
+    await classifyCaptureValue('cap-np')
+    expect(mockComplete).not.toHaveBeenCalled()
+    expect(valueRows()).toEqual([])
   })
 })

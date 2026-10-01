@@ -10,7 +10,7 @@
  *
  * deriveSentimentSegments must FORWARD the gate to whichever scorer it uses.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 const mockGenerateContent = vi.fn(async () => ({
   response: { text: () => '[{"i":0,"score":0.5}]' },
@@ -28,6 +28,8 @@ vi.mock('../config', () => ({
 }))
 
 import { geminiWindowScorer, deriveSentimentSegments, type SentimentWindow } from '../timeline-analysis'
+import { CURRENT_GEMINI_CHAT_MODEL } from '../gemini-model-ids'
+import { setCallSink, type CallRecord } from '../pipeline/call-store'
 
 const WINDOWS: SentimentWindow[] = [
   { index: 0, startSec: 0, endSec: 30, text: 'hola qué tal' },
@@ -80,5 +82,60 @@ describe('deriveSentimentSegments forwards shouldGenerate to the scorer (round-4
     )
     expect(spyScorer).toHaveBeenCalledTimes(1)
     expect(received).toBe(gate)
+  })
+})
+
+describe('geminiWindowScorer leaves a ledger row (phase 2b)', () => {
+  let rows: CallRecord[]
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    rows = []
+    setCallSink((_id, record) => {
+      rows.push(record)
+    })
+  })
+
+  afterEach(() => {
+    setCallSink(null)
+  })
+
+  it('writes one completed row for the one provider call, with the model and the tokens the response reported', async () => {
+    mockGenerateContent.mockResolvedValueOnce({
+      response: {
+        text: () => '[{"i":0,"score":0.5}]',
+        usageMetadata: { promptTokenCount: 900, candidatesTokenCount: 120, totalTokenCount: 1020 }
+      }
+    } as never)
+    const scores = await geminiWindowScorer(WINDOWS, () => true)
+    expect(scores.get(0)).toBe(0.5)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      step: 'timeline',
+      recordingId: null,
+      route: 'direct:gemini-sdk',
+      provider: 'gemini-api',
+      model: CURRENT_GEMINI_CHAT_MODEL,
+      status: 'completed'
+    })
+    expect(rows[0].usage).toMatchObject({ calls: 1, tokens: { input: 900, output: 120 } })
+  })
+
+  it('still writes a row, with no usage figures, when the response carries no usage', async () => {
+    await geminiWindowScorer(WINDOWS, () => true)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].status).toBe('completed')
+  })
+
+  it('writes a failed row and lets the error through, as before, when the provider call throws', async () => {
+    mockGenerateContent.mockRejectedValueOnce(new Error('503 overloaded'))
+    await expect(geminiWindowScorer(WINDOWS, () => true)).rejects.toThrow('503 overloaded')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ step: 'timeline', status: 'failed', errorMessage: expect.stringMatching(/503 overloaded/) })
+  })
+
+  it('writes no row when the source became ineligible and no provider call was made', async () => {
+    await geminiWindowScorer(WINDOWS, () => false)
+    expect(rows).toEqual([])
   })
 })
