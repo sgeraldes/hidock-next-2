@@ -30,6 +30,7 @@ vi.mock('../../ollama', () => ({
 
 import { BrainRouter } from '../brain-router'
 import { OllamaBrain } from '../ollama-brain'
+import { noteBrainFailure, _resetBrainCooldownsForTests } from '../brain-cooldown'
 
 function makeBrain(id: BrainId, caps: BrainCapability[], configured: boolean): AIBrain {
   const set = new Set(caps)
@@ -770,5 +771,40 @@ describe('BrainRouter.chat (multi-hop fallback chain)', () => {
 
     expect(await router.chat('chat', [{ role: 'user', content: 'hi' }])).toBe('gemini-api:chat')
     expect(router.getLastChatFailure()).toBeNull()
+  })
+})
+
+describe('BrainRouter.canServe', () => {
+  beforeEach(() => {
+    mockBrainsConfig = { defaultBrain: 'gemini-api', enabled: { 'gemini-api': true, ollama: true, kiro: false, codex: true } }
+    _resetBrainCooldownsForTests()
+  })
+
+  const build = () =>
+    new BrainRouter(
+      makeRegistry({
+        'gemini-api': makeBrain('gemini-api', ['generate', 'chat'], true),
+        ollama: makeBrain('ollama', ['generate', 'chat'], false),
+        kiro: makeBrain('kiro', ['generate', 'chat', 'agentic'], true),
+        codex: makeBrain('codex', ['generate', 'chat', 'agentic'], true),
+      })
+    )
+
+  it('is true for an enabled, configured brain that has the capability', async () => {
+    expect(await build().canServe('gemini-api', 'chat')).toBe(true)
+    expect(await build().canServe('codex', 'agentic')).toBe(true)
+  })
+
+  it('is false for a brain that is not configured, disabled, unregistered or without the capability', async () => {
+    const router = build()
+    expect(await router.canServe('ollama', 'chat')).toBe(false) // not configured
+    expect(await router.canServe('kiro', 'chat')).toBe(false) // disabled in the config
+    expect(await router.canServe('claude-code', 'chat')).toBe(false) // not registered
+    expect(await router.canServe('gemini-api', 'agentic')).toBe(false) // lacks the capability
+  })
+
+  it('is false while the brain rests after an out-of-quota failure', async () => {
+    noteBrainFailure('codex', 'usage limit reached|4102444800')
+    expect(await build().canServe('codex', 'chat')).toBe(false)
   })
 })
