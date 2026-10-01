@@ -38,6 +38,7 @@ import {
 import { isRecordingEligible, isCaptureEligible, filterEligibleRecordingIds } from './recording-eligibility'
 import { getBrainRouter, getBrainRegistry } from './brains'
 import { isBrainCoolingDown } from './brains/brain-cooldown'
+import { withCallRecord } from './pipeline/track-call'
 import type { AIBrain } from './brains'
 import { getEventBus } from './event-bus'
 
@@ -885,11 +886,16 @@ export async function runHandoverAgent(params: RunHandoverAgentParams): Promise<
     try {
       // `generate()` NEVER throws by contract — it returns null on failure/cancel.
       // cwd = the validated target: the CLI child process actually runs there.
-      finalResponse = await brain.generate([{ role: 'user', content: prompt }], {
-        signal: params.signal,
-        cwd: targetDir,
-        agentic: true,
-      })
+      finalResponse = await withCallRecord(
+        { step: 'handover', route: 'agentic' },
+        () =>
+          brain.generate([{ role: 'user', content: prompt }], {
+            signal: params.signal,
+            cwd: targetDir,
+            agentic: true,
+          }),
+        (value) => (value == null || value === '' ? 'empty answer' : null)
+      )
     } catch (e) {
       // Defensive: even though the contract forbids it, never let a throw escape.
       console.error('[handover] brain.generate threw (contract violation):', e)

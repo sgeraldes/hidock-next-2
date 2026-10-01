@@ -51,6 +51,7 @@ vi.mock('../brains', () => ({
 vi.mock('../event-bus', () => ({ getEventBus: vi.fn(() => ({ emitDomainEvent: vi.fn() })) }))
 import { join } from 'path'
 import { tmpdir } from 'os'
+import { setCallSink, type CallRecord } from '../pipeline/call-store'
 import {
   assembleHandoverBundle,
   validateTargetDir,
@@ -504,6 +505,33 @@ describe('runHandoverAgent', () => {
     authStatus: async () => ({ configured: true, method: 'cli-login' as const }),
     generate: vi.fn(async () => result),
     chat: vi.fn(async () => result),
+  })
+
+  it('leaves one ledger row per agent run, completed or failed', async () => {
+    const rows: CallRecord[] = []
+    setCallSink((_id, record) => {
+      rows.push(record)
+    })
+    try {
+      await runHandoverAgent({
+        bundleId: 'bundle-1',
+        resolveBrain: async () => mockBrain('Did the work.') as any,
+        emit: () => {},
+        lookupBundle: lookup,
+      })
+      await runHandoverAgent({
+        bundleId: 'bundle-1',
+        resolveBrain: async () => mockBrain(null) as any,
+        emit: () => {},
+        lookupBundle: lookup,
+      })
+    } finally {
+      setCallSink(null)
+    }
+    expect(rows.map((r) => [r.step, r.route, r.status])).toEqual([
+      ['handover', 'agentic', 'completed'],
+      ['handover', 'agentic', 'failed'],
+    ])
   })
 
   it('runs the agent, writes RUN.log, and emits started+completed on success', async () => {
