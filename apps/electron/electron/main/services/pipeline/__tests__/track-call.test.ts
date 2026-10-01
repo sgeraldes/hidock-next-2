@@ -46,6 +46,17 @@ describe('trackCall', () => {
     expect(rows[0].record.estimatedCostAmount).toBeGreaterThan(0)
   })
 
+  it('names the harness that answered, not a failed one that reported usage first, when a chain falls back inside one call', async () => {
+    const result = await trackCall({ step: 'chat', route: 'router:chat:chat' }, async () => {
+      recordHarnessUsage({ harness: 'gemini-api', model: 'gemini-3.8-flash', inputTokens: 500, outputTokens: 0, durationMs: 300 })
+      recordHarnessUsage({ harness: 'ollama', model: 'qwen3:8b', inputTokens: 500, outputTokens: 120, durationMs: 2500 })
+      return 'answer'
+    })
+    expect(result).toMatchObject({ ok: true, provider: 'ollama' })
+    expect(rows[0].record).toMatchObject({ provider: 'ollama', model: 'qwen3:8b' })
+    expect(rows[0].record.usage).toMatchObject({ calls: 2, tokens: { input: 1000, output: 120 } })
+  })
+
   it('measures the time of the call', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-09-30T12:00:00.000Z'))

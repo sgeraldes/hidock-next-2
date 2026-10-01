@@ -65,7 +65,9 @@ export async function trackCall<T>(meta: CallMeta, fn: () => Promise<T>, judge?:
   }
 
   const total = collector.total()
-  const reporter = total ? Object.values(total.byModel)[0] : undefined
+  // A router chain can try several harnesses inside one call; the last one to report is the one that answered
+  // (or the last one that failed), and the row names it. Cost and usage still sum every attempt.
+  const reporter = total ? Object.values(total.byModel).at(-1) : undefined
   const fields = harnessRunFields(total)
   const completed = new Date()
   const callId = writeCall({

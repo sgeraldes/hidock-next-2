@@ -7,9 +7,10 @@
  *
  * Writing is behind a replaceable sink so that code which reaches a call site in a test, or before the
  * database opens, stores nothing and needs no database. `installCallStore(db)` sets the database sink;
- * the main process and the headless brain host call it right after `initializeDatabase()`, handing in
- * `run` and `queryAll`. This module imports nothing from `database.ts`, so a file that records a call
- * does not pull the database (and Electron) into its tests.
+ * the main process calls it right after `initializeDatabase()`, handing in `run` and `queryAll`. The
+ * headless brain host does not: it opens the database read-only and runs no text step. This module
+ * imports nothing from `database.ts`, so a file that records a call does not pull the database (and
+ * Electron) into its tests.
  *
  * A row never holds a prompt or an answer. A write that fails is reported once per error text and never
  * thrown: recording a call must not change the call.
