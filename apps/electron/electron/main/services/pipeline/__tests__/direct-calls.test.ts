@@ -69,6 +69,13 @@ describe('registerCompletionUsage', () => {
   })
 })
 
+describe('the real package', () => {
+  it('exports the reporter the app registers, so a stale build of the package is noticed here', async () => {
+    const actual = await vi.importActual<{ setCompletionUsageReporter?: unknown }>('@hidock/ai-providers')
+    expect(actual.setCompletionUsageReporter).toBeTypeOf('function')
+  })
+})
+
 describe('the observed steps', () => {
   it('include the six sites that call a model without the router', () => {
     for (const step of ['analysis', 'actionable-detection', 'timeline', 'value-llm', 'graph-extract', 'image-describe']) {

@@ -40,8 +40,9 @@
 | `packages/ai-providers/src/complete.ts` | `setCompletionUsageReporter`; `complete` reports provider, model, tokens and time after each completion |
 | `electron/main/services/pipeline/steps.ts` | the six steps in `OBSERVED_STEPS` |
 | `electron/main/services/pipeline/direct-calls.ts` | `registerCompletionUsage()` (maps the package's report to `recordHarnessUsage`) |
-| `electron/main/services/pipeline/install.ts` | `installPipeline` also registers the reporter |
-| `electron/main/services/brains/gemini-api-brain.ts` | `reportGeminiCall` is exported |
+| `electron/main/services/pipeline/install.ts` | `installPipeline` (phase 3a) also registers the reporter; written after 3a merged |
+| `electron/main/services/pipeline/gemini-call.ts` | `reportGeminiCall`, moved out of the Gemini brain into a leaf module (the timeline and the image description are leaf modules that must not import the brain, the configuration and Electron) |
+| `electron/main/services/brains/gemini-api-brain.ts` | imports `reportGeminiCall` from there |
 | `transcription.ts`, `timeline-analysis.ts`, `artifact-types.ts`, `value-classification.ts`, `knowledge-graph-service.ts` | each call wrapped in `withCallRecord` |
 
 ## Tasks
@@ -57,3 +58,10 @@
 - Spec coverage: phase 2b of the phases table (usage and cost for all text calls) is covered by recording; moving the sites onto the runner is deferred to 3b with the reason in decision 1.
 - Placeholders: none; the sites are named by file and the tests are named by behaviour.
 - Types: `withCallRecord`, `trackCall`, `recordHarnessUsage` and `reportGeminiCall` come from phase 1 and 2a; `setCompletionUsageReporter` and `registerCompletionUsage` are defined in tasks 1 and 2 and used in task 4.
+
+## Build notes (1-oct-2026)
+
+1. `reportGeminiCall` moved to `pipeline/gemini-call.ts` instead of being exported from the brain: `timeline-analysis.ts` is a leaf module whose pure tests run under plain node, and importing the brain pulls in the configuration and Electron.
+2. The package reporter is a hook inside `complete` (`setCompletionUsageReporter`), not a second function the sites call, so no call site argument and none of the fourteen test mocks of `complete` changed.
+3. The registration lives in `installPipeline` (phase 3a). Phase 2b was started before 3a merged, so that line and its test were added after the rebase.
+4. The actionable-detection tests passed on their first run: the code of the SDK sites was written before them. The failed-row test is the one that proves the wiring (a row exists only if the call is wrapped).
