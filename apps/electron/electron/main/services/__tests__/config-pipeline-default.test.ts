@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, afterAll } from 'vitest'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { mkdirSync, rmSync } from 'fs'
+import { mkdirSync, readFileSync, rmSync } from 'fs'
 
 // Isolated per-process userData dir, as in config-features-default.test.ts.
 function testUserDataDir(): string {
@@ -65,6 +65,14 @@ describe('config.pipeline', () => {
     await replaceConfigSection('pipeline', emptyPipelineConfig())
     expect(getConfig().pipeline.profiles).toEqual({})
     expect(getConfig().pipeline.steps).toEqual({})
+  })
+
+  it('writes the replaced section to config.json without the removed profile', async () => {
+    await replaceConfigSection('pipeline', WITH_NOTES)
+    const onDisk = () => JSON.parse(readFileSync(join(testUserDataDir(), 'config.json'), 'utf-8')).pipeline
+    expect(onDisk()).toEqual(WITH_NOTES)
+    await replaceConfigSection('pipeline', emptyPipelineConfig())
+    expect(onDisk()).toEqual(emptyPipelineConfig())
   })
 
   it('leaves the other sections as they were', async () => {
