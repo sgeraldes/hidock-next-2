@@ -73,6 +73,11 @@ describe('trackCall', () => {
     expect(rows[0].record).toMatchObject({ status: 'failed', errorMessage: 'empty answer' })
   })
 
+  it('lets the judge call a value cancelled instead of failed', async () => {
+    await trackCall({ step: 'chat', route: 'r' }, async () => null as string | null, () => ({ status: 'cancelled', message: 'aborted' }))
+    expect(rows[0].record).toMatchObject({ status: 'cancelled', errorMessage: 'aborted' })
+  })
+
   it('records a throw as failed, returns it without throwing, and keeps only the first line of the message', async () => {
     const boom = new Error('Bad request\nprompt: the private transcript text')
     const result = await trackCall({ step: 'outputs', route: 'r' }, async () => {

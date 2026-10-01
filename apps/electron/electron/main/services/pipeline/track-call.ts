@@ -24,8 +24,13 @@ export interface CallMeta {
   parentCallId?: string | null
 }
 
-/** A failure message when the value should count as a failed call (an empty answer), otherwise null. */
-export type Judge<T> = (value: T) => string | null
+/**
+ * What a judge says about a value that should not count as a success: a failure message (an empty
+ * answer), or a status of its own, for a call that was cancelled or whose source stopped being
+ * eligible and so did not fail.
+ */
+export type JudgeVerdict = string | { status: 'failed' | 'cancelled'; message: string }
+export type Judge<T> = (value: T) => JudgeVerdict | null
 
 export type TrackedCall<T> =
   | { ok: true; value: T; callId: string | null; provider: string | null }
@@ -47,10 +52,10 @@ export async function trackCall<T>(meta: CallMeta, fn: () => Promise<T>, judge?:
 
   try {
     const value = await collector.run(fn)
-    const refusal = judge?.(value) ?? null
-    if (refusal) {
-      status = 'failed'
-      errorMessage = refusal
+    const verdict = judge?.(value) ?? null
+    if (verdict) {
+      status = typeof verdict === 'string' ? 'failed' : verdict.status
+      errorMessage = typeof verdict === 'string' ? verdict : verdict.message
     }
     outcome = { ok: true, value }
   } catch (error) {

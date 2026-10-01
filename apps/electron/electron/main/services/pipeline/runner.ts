@@ -51,16 +51,31 @@ export interface RunnerDeps {
   track: typeof trackCall
 }
 
-/** null and '' are no answer; a string of spaces is an answer, as the call sites treat it today. */
-const emptyAnswer: Judge<string | null> = (value) => (value == null || value === '' ? 'empty answer' : null)
+/**
+ * null and '' are no answer; a string of spaces is an answer, as the call sites treat it today. The
+ * router answers null both when nobody could answer and when the caller aborted or the source stopped
+ * being eligible, so a null is told apart here: those two did not fail, they were cancelled.
+ */
+const judgeAnswer =
+  (options: GenerateOptions): Judge<string | null> =>
+  (value) => {
+    if (value != null && value !== '') return null
+    if (options.signal?.aborted) return { status: 'cancelled', message: 'aborted' }
+    if (!eligibleToGenerate(options.shouldGenerate)) return { status: 'cancelled', message: 'source no longer eligible' }
+    return 'empty answer'
+  }
 
 const ineligible = (): TextOutcome => ({ ok: false, reason: 'ineligible', callId: null })
 const unavailable = (): TextOutcome => ({ ok: false, reason: 'unavailable', callId: null })
 
-function settle(tracked: TrackedCall<string | null>): TextOutcome {
+function settle(tracked: TrackedCall<string | null>, options: GenerateOptions): TextOutcome {
   if (!tracked.ok) return { ok: false, reason: 'error', error: tracked.error, callId: tracked.callId }
   const text = tracked.value
-  if (text == null || text === '') return { ok: false, reason: 'empty', callId: tracked.callId }
+  if (text == null || text === '') {
+    // No fallback after this: the source is gone, not merely unanswered.
+    const reason = eligibleToGenerate(options.shouldGenerate) ? 'empty' : 'ineligible'
+    return { ok: false, reason, callId: tracked.callId }
+  }
   return { ok: true, text, provider: tracked.provider, callId: tracked.callId }
 }
 
@@ -85,21 +100,28 @@ async function runOne(deps: RunnerDeps, profile: Profile, request: TextRequest, 
 
   if (profile.kind === 'router') {
     if (profile.mode === 'chat') {
+      // The router checks the gate before each of its own attempts; this check keeps a source that is
+      // already ineligible from costing a ledger row.
+      if (!eligibleToGenerate(options.shouldGenerate)) return ineligible()
       return settle(
-        await deps.track(meta(`router:${profile.task}:chat`), () => deps.router.chat(profile.task, request.messages, options), emptyAnswer)
+        await deps.track(meta(`router:${profile.task}:chat`), () => deps.router.chat(profile.task, request.messages, options), judgeAnswer(options)),
+        options
       )
     }
     const brain = await deps.router.resolve(profile.task, 'generate')
     if (!brain) return unavailable()
     if (!eligibleToGenerate(options.shouldGenerate)) return ineligible()
-    return settle(await deps.track(meta(`router:${profile.task}:generate`), () => brain.generate(request.messages, options), emptyAnswer))
+    return settle(await deps.track(meta(`router:${profile.task}:generate`), () => brain.generate(request.messages, options), judgeAnswer(options)), options)
   }
 
   if (!(await deps.router.canServe(profile.harness, 'chat'))) return unavailable()
   const brain = deps.registry.get(profile.harness)
   if (!brain) return unavailable()
   if (!eligibleToGenerate(options.shouldGenerate)) return ineligible()
-  return settle(await deps.track(meta(`direct:${profile.id}`), () => brain.chat(request.messages, withProfile(options, profile)), emptyAnswer))
+  return settle(
+    await deps.track(meta(`direct:${profile.id}`), () => brain.chat(request.messages, withProfile(options, profile)), judgeAnswer(options)),
+    options
+  )
 }
 
 export function createTextRunner(deps: RunnerDeps): (request: TextRequest) => Promise<TextOutcome> {

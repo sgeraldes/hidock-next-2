@@ -102,6 +102,40 @@ describe('router route, chat mode (today\'s chat)', () => {
     expect(rows[0].record.status).toBe('failed')
   })
 
+  it('sends nothing and records nothing when the source is already ineligible, without asking the router', async () => {
+    const deps = makeDeps()
+    const outcome = await createTextRunner(deps)({ step: 'chat', messages: MESSAGES, options: { shouldGenerate: () => false } })
+    expect(outcome).toMatchObject({ ok: false, reason: 'ineligible', callId: null })
+    expect(deps.router.chat).not.toHaveBeenCalled()
+    expect(rows).toHaveLength(0)
+  })
+
+  it('says the source stopped being eligible, not that the call failed, when the router gives up on it mid-chain', async () => {
+    let eligible = true
+    const deps = makeDeps({
+      chat: async () => {
+        eligible = false // the router checks the gate before each attempt and answers null when it fails
+        return null
+      }
+    })
+    const outcome = await createTextRunner(deps)({ step: 'chat', messages: MESSAGES, options: { shouldGenerate: () => eligible } })
+    expect(outcome).toMatchObject({ ok: false, reason: 'ineligible' })
+    expect(rows[0].record).toMatchObject({ status: 'cancelled', errorMessage: 'source no longer eligible' })
+  })
+
+  it('records a call the caller aborted as cancelled, not as an empty answer', async () => {
+    const controller = new AbortController()
+    const deps = makeDeps({
+      chat: async () => {
+        controller.abort() // the router swallows the abort and answers null
+        return null
+      }
+    })
+    const outcome = await createTextRunner(deps)({ step: 'chat', messages: MESSAGES, options: { signal: controller.signal } })
+    expect(outcome).toMatchObject({ ok: false, reason: 'empty' })
+    expect(rows[0].record).toMatchObject({ status: 'cancelled', errorMessage: 'aborted' })
+  })
+
   it('links the row to the recording', async () => {
     await createTextRunner(makeDeps())({ step: 'reformat', messages: MESSAGES, recordingId: 'rec-9' })
     expect(rows[0].record.recordingId).toBe('rec-9')
