@@ -164,6 +164,18 @@ export function validatePipelineConfig(config: PipelineConfig, harnesses: readon
   return issues
 }
 
+/**
+ * The issues that decide whether one step may run: its own, those of the profiles it uses, and those of the
+ * whole configuration (another version). A mistake in a different step does not stop this one.
+ */
+export function issuesForStep(config: PipelineConfig, issues: readonly ValidationIssue[], step: TextStepId): ValidationIssue[] {
+  const call = config.steps?.[step]?.passes?.[0]?.calls?.[0]
+  const used = new Set<string>(call ? [call.profile, ...(call.onFail ? [call.onFail.profile] : [])] : [])
+  return issues.filter(
+    (i) => i.step === step || (i.profile !== undefined && used.has(i.profile)) || (i.step === undefined && i.profile === undefined)
+  )
+}
+
 export type ProfileDraft = ProfileConfig
 export type StepChoice = ProfileDraft | typeof AUTO_PROFILE
 

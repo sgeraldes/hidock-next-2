@@ -20,6 +20,7 @@ import {
   TEXT_STEP_IDS,
   applyStepDraft,
   emptyPipelineConfig,
+  issuesForStep,
   validatePipelineConfig,
   type HarnessInfo,
   type HarnessState,
@@ -88,7 +89,8 @@ let queue: Promise<unknown> = Promise.resolve()
 async function saveOne(args: SaveStepArgs): Promise<SaveStepResult> {
   const current = getConfig().pipeline ?? emptyPipelineConfig()
   const candidate = applyStepDraft(current, args.step, args.primary, args.fallback)
-  const issues = validatePipelineConfig(candidate, listHarnessInfos())
+  // Only what touches this step counts: a hand-edited mistake in another step must not stop the owner here.
+  const issues = issuesForStep(candidate, validatePipelineConfig(candidate, listHarnessInfos()), args.step)
   if (issues.some((i) => i.severity === 'error')) return { success: false, issues }
   if (!args.confirmSlow && issues.some((i) => i.code === 'slow-bulk' && i.step === args.step)) {
     return { success: false, needsConfirmation: true, issues }

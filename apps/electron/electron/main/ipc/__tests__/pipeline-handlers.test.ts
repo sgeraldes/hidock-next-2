@@ -167,6 +167,17 @@ describe('pipeline:saveStep', () => {
     expect(replaceConfigSection).not.toHaveBeenCalled()
   })
 
+  it('is not stopped by a hand-edited error in a step the owner is not changing', async () => {
+    state.config.pipeline = {
+      version: 1,
+      profiles: {},
+      steps: { chat: { passes: [{ calls: [{ profile: 'ghost', tasks: '*', role: 'produce' }] }] } }
+    }
+    const result = await call('pipeline:saveStep', { step: 'notes', primary: { harness: 'ollama' }, fallback: null })
+    expect(result.success).toBe(true)
+    expect(replaceConfigSection).toHaveBeenCalledTimes(1)
+  })
+
   it('refuses a fallback that is the same as the main choice', async () => {
     const same = { harness: 'ollama', model: 'm' }
     const result = await call('pipeline:saveStep', { step: 'chat', primary: same, fallback: same })

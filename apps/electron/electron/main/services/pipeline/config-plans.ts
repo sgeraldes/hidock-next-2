@@ -7,7 +7,7 @@
  * step falls back to its default. Warnings do not block. The configuration is read at call time, so a
  * change from the Pipeline page applies to the next call with no restart.
  */
-import { AUTO_PROFILE, validatePipelineConfig, type HarnessInfo, type PipelineConfig } from '../../../../src/shared/pipeline-config'
+import { AUTO_PROFILE, issuesForStep, validatePipelineConfig, type HarnessInfo, type PipelineConfig } from '../../../../src/shared/pipeline-config'
 import type { BrainEffort, BrainId } from '../brains'
 import type { PlanSource } from './plans'
 import { DEFAULT_PLANS, type DirectProfile, type Plan, type Profile, type TextStepId } from './steps'
@@ -31,10 +31,7 @@ export function createConfigPlanSource(deps: ConfigPlanDeps): PlanSource {
     if (!pipeline || !stepConfig) return null
     const harnesses = deps.getHarnesses()
     const call = stepConfig.passes?.[0]?.calls?.[0]
-    const used = new Set<string>(call ? [call.profile, ...(call.onFail ? [call.onFail.profile] : [])] : [])
-    const blocking = validatePipelineConfig(pipeline, harnesses).filter(
-      (i) => i.severity === 'error' && (i.step === step || (i.profile !== undefined && used.has(i.profile)) || (i.step === undefined && i.profile === undefined))
-    )
+    const blocking = issuesForStep(pipeline, validatePipelineConfig(pipeline, harnesses), step).filter((i) => i.severity === 'error')
     if (blocking.length > 0 || !call) {
       reportOnce(`the plan of "${step}" is invalid (${blocking[0]?.message ?? 'it has no call'})`)
       return null

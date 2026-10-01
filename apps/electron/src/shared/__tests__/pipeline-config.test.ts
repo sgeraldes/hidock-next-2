@@ -8,6 +8,7 @@ import {
   AUTO_PROFILE,
   applyStepDraft,
   emptyPipelineConfig,
+  issuesForStep,
   profileIdFor,
   validatePipelineConfig,
   type HarnessInfo,
@@ -150,5 +151,36 @@ describe('applyStepDraft', () => {
     const base = emptyPipelineConfig()
     applyStepDraft(base, 'notes', { harness: 'ollama' }, null)
     expect(base).toEqual(emptyPipelineConfig())
+  })
+})
+
+describe('issuesForStep', () => {
+  it('keeps the issues of the step, of the profiles it uses, and of the whole configuration, and leaves the others out', () => {
+    const config = {
+      version: 1,
+      profiles: { j: { harness: 'jev' }, g: { harness: 'gemini-api' }, x: { harness: 'nope' } },
+      steps: {
+        notes: { passes: [{ calls: [{ profile: 'g', tasks: '*', role: 'produce', onFail: { profile: 'j' } }] }] },
+        reformat: { passes: [{ calls: [{ profile: 'x', tasks: '*', role: 'produce' }] }] },
+        chat: { passes: [{ calls: [{ profile: 'ghost', tasks: '*', role: 'produce' }] }] }
+      }
+    } as unknown as PipelineConfig
+    const all = validatePipelineConfig(config, HARNESSES)
+    const forNotes = issuesForStep(config, all, 'notes').filter((i) => i.severity === 'error')
+    expect(forNotes.map((i) => i.profile)).toEqual(['j'])
+    const forChat = issuesForStep(config, all, 'chat').filter((i) => i.severity === 'error')
+    expect(forChat.map((i) => i.step)).toEqual(['chat'])
+    const forReformat = issuesForStep(config, all, 'reformat').filter((i) => i.severity === 'error')
+    expect(forReformat.map((i) => i.profile)).toEqual(['x'])
+  })
+
+  it('applies a problem with the whole configuration, such as another version, to every step', () => {
+    const config = { version: 2, profiles: {}, steps: {} } as unknown as PipelineConfig
+    expect(issuesForStep(config, validatePipelineConfig(config, HARNESSES), 'notes')).toHaveLength(1)
+  })
+
+  it('returns nothing for a step with no entry in a valid configuration', () => {
+    const config = withStep({ g: { harness: 'gemini-api' } }, 'notes', 'g')
+    expect(issuesForStep(config, validatePipelineConfig(config, HARNESSES), 'chat')).toEqual([])
   })
 })
