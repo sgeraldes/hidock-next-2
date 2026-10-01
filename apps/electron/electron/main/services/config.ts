@@ -16,6 +16,7 @@ import type { BrainId, BrainTask } from './brains/types'
 import { getBrainCredentialStore } from './brains/brain-credential-store'
 import type { FeaturesConfig } from '../../../src/shared/feature-registry'
 import { DEFAULT_FEATURES_CONFIG } from '../../../src/shared/feature-registry'
+import { emptyPipelineConfig, type PipelineConfig } from '../../../src/shared/pipeline-config'
 import { applyRagSettings } from './rag-settings'
 import { applyQualityRules } from './quality-rules'
 import { DEFAULT_QUALITY_RULES, type QualityConfig } from './quality-rules'
@@ -281,6 +282,13 @@ export interface AppConfig {
   // resolveFeatureState() in src/shared/feature-registry.ts.
   features: FeaturesConfig
   /**
+   * The owner's pipeline choices: which harness, model and effort run each text step (design section 8).
+   * Empty means every step is Automatic: the router follows Settings > AI providers, as before. Holds no
+   * secret; keys stay in the credential store. Save it with replaceConfigSection, not updateConfig: the
+   * deep merge of updateConfig can never remove a profile.
+   */
+  pipeline: PipelineConfig
+  /**
    * Captures (Settings > Privacy & capture). describeImages: send each pasted,
    * imported or connector image to the vision model for a description and tags
    * (on by default, owner 28-sep-2026; it was always on with no switch).
@@ -438,6 +446,7 @@ const DEFAULT_CONFIG: AppConfig = {
   // Default preset `full` → every feature enabled → identical behavior to before
   // modular features existed. New installs may later be asked during onboarding.
   features: { ...DEFAULT_FEATURES_CONFIG },
+  pipeline: emptyPipelineConfig(),
   capture: { describeImages: true },
   decisions: {
     jevEnabled: true,
@@ -818,6 +827,22 @@ export async function updateConfig<K extends keyof AppConfig>(
   }
   const updatedSection = { ...(config[section] as any), ...values }
   await saveConfig({ [section]: updatedSection } as Partial<AppConfig>)
+}
+
+/**
+ * Replace a whole section. updateConfig merges deeply, so it can add a key and never remove one; a
+ * section that holds entries the owner can delete (the pipeline profiles) is saved with this instead.
+ */
+export async function replaceConfigSection<K extends keyof AppConfig>(section: K, value: AppConfig[K]): Promise<void> {
+  const previous = config
+  config = { ...config, [section]: undefined }
+  try {
+    await saveConfig({ [section]: value } as Partial<AppConfig>)
+  } catch (error) {
+    // saveConfig puts back the config it was given, which is the one with the section cleared.
+    if (config[section] === undefined) config = previous
+    throw error
+  }
 }
 
 // Deep merge utility
