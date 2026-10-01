@@ -2,6 +2,31 @@
 
 Each entry is one day of merged work. The Releases page in Settings reads this file.
 
+## 2026-10-01 | Choose which AI runs each step
+
+Settings has a Pipeline page: for each step the assistant and the library take, pick the harness,
+the model and the effort, and see what the step costs.
+
+### New
+
+- **Settings > Pipeline.** Nine steps in three groups (Interactive, Speakers, Library). Each row says
+  what the step runs on, where its text goes (this computer, the vendors, or wherever AI providers
+  sends it), and the median time and cost of the last 30 days. Edit a step to choose the harness,
+  a model (the harness lists its models; you can type any name) and an effort for harnesses that
+  have levels. A step left on Automatic behaves as before.
+- **A fallback for each step.** It runs only when the main choice fails or is not available.
+- **Harnesses that cannot serve are greyed out with the reason**: not signed in, out of quota, or
+  turned off in AI providers. A slow harness on a step that runs on every recording asks for one
+  confirmation. A saved plan the app cannot run is marked on its row and the step runs as Automatic.
+- **Nothing needs a restart.** The next call uses what you save.
+- **Local server (OpenAI-compatible).** AI providers has a card for LM Studio, llama.cpp or vLLM:
+  address, model, embedding model and an optional key.
+
+### Changes
+
+- **Setting an AI task back to Automatic on AI providers now sticks.** The earlier choice used to stay
+  saved.
+
 ## 2026-09-30 | The Library list has a header and the card view is a card view
 
 The list follows the width of its pane, a header names every column and sorts on click, and the

@@ -1463,3 +1463,29 @@ The Test bench: run a draft plan now on a chosen recording or note, see each cal
 - Spec coverage: section 8 (configuration, versioned, validated), section 7 (single and fallback, validated on save and on load, an invalid plan never run), section 10 (page: steps in groups, plan as chips, privacy badge, median time and cost, row editor with harness availability, model combobox, effort, fallback, live validation, slow confirmation, nothing needs a restart), section 6 rules 3 and 4, section 12 (Automatic is the recommended default). Outside this plan on purpose: the Test bench, Adopt, `pipeline_results`, the profile manager, presets (3b), the migration (not needed while Automatic follows the legacy settings), the audio steps (phase 4).
 - Placeholders: the page's markup is written against its tests and the app's existing pages, not pasted; every test case is named with its arrange and assert and the pure modules are given in full.
 - Types: `StepChoice`, `ProfileDraft`, `PipelineConfig`, `ValidationIssue`, `HarnessInfo` (Task 1) are used by the plan source (Task 3), the handlers (Task 5) and the page (Task 7); `StepStats` is defined in the shared module in Task 5 and imported by `call-store.ts`; `PlanSource`, `DEFAULT_PLANS` and `DirectProfile` come from plan 2a.
+
+---
+
+## Build notes (1-oct-2026)
+
+Rulings taken while building, with the reason, so the review can reverse any of them.
+
+1. **`replaceConfigSection`, not `updateConfig`.** `saveConfig` deep-merges, so `updateConfig('pipeline', ...)` can add a
+   profile and never remove one; Task 2's own test ("dropped when saved again without it") failed against it. The section
+   is saved with `replaceConfigSection`, which clears the section and saves the new one, and puts the old one back if the
+   write fails. The same defect was in `brains:setTaskRouting` (a cleared override stayed saved); it now uses it too.
+2. **The headless brain host installs nothing.** It opens the database read-only and runs no text step, so Task 3 changes
+   `index.ts` only.
+3. **`PipelineSettingsState`, not `PipelineState`.** The preload already has a `PipelineState` for the download pipeline.
+4. **`StepStats` lives in the shared module** (Task 4 defines it there; the ledger imports it). `failed` counts only
+   failed calls: a cancelled call is neither a failure nor a typical time.
+5. **`issuesForStep`** (shared) selects the issues that decide one step: its own, those of the profiles it uses and those of
+   the whole configuration. The plan source and `pipeline:saveStep` both use it, so a hand-edited error in one step no
+   longer stops a save of another.
+6. **The page shows Automatic for a plan it ignores**, and says why on the row; the privacy label of such a step follows the
+   AI providers page, because that is where its text goes.
+7. **Native selects** for the harness and the effort: they work with the keyboard, in a test, and in both themes without a
+   popover. The model is an input with a datalist, so any name can be typed.
+8. **The design skills ask for a mockup approved by the owner before a visual change is committed.** The owner left
+   instructions not to ask and to finish; the page was photographed in a hidden window (1000 and 400 px, light and dark)
+   and read against the skills' list of defects instead. He can ask for changes.
