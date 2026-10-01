@@ -123,6 +123,12 @@ beforeEach(() => {
 })
 
 describe('ADV19-2 — post-await recheck of all prompt components', () => {
+  it('names the chat step when it asks the model', async () => {
+    searchMock.mockResolvedValueOnce([vectorDoc('recA', 'mA', 'ALPHA_TEXT')])
+    await getRAGService().chat('conv1', 'question')
+    expect(generateMock).toHaveBeenCalledWith(expect.any(Array), expect.objectContaining({ step: 'chat' }))
+  })
+
   it('drops a vector component whose recording is excluded DURING the graph await', async () => {
     searchMock.mockResolvedValueOnce([
       vectorDoc('recA', 'mA', 'ALPHA_TEXT'),

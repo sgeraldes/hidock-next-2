@@ -8,7 +8,7 @@
  * note.
  */
 
-import { getBrainRouter } from './brains'
+import { runText } from './pipeline/runner'
 import { getVectorStore } from './vector-store'
 import { getDatabase, queryAll, queryOne } from './database'
 import {
@@ -97,12 +97,14 @@ export async function analyzeNote(
   const hash = contentFingerprint(note.content)
   markAnalysisPending(noteId)
   try {
-    const answer = await getBrainRouter().chat(
-      'suggestions',
-      [{ role: 'user', content: note.content.slice(0, MAX_ANALYSIS_CHARS) }],
-      { systemPrompt: SYSTEM_PROMPT, temperature: 0.2, maxTokens: 500 }
-    )
-    const analysis = parseAnalysis(answer)
+    const outcome = await runText({
+      step: 'notes',
+      messages: [{ role: 'user', content: note.content.slice(0, MAX_ANALYSIS_CHARS) }],
+      options: { systemPrompt: SYSTEM_PROMPT, temperature: 0.2, maxTokens: 500 }
+    })
+    // A failure of the routing itself reaches the catch below, as it did when the router threw.
+    if (!outcome.ok && outcome.reason === 'error') throw outcome.error
+    const analysis = parseAnalysis(outcome.ok ? outcome.text : null)
     if (!analysis) {
       markAnalysisFailed(noteId, 'The model did not return a result this note could use.')
       return getNote(noteId)

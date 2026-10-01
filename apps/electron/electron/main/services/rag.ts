@@ -1255,6 +1255,7 @@ ${text}` })
     // must not be re-sent to a fallback brain. Re-runs the shared fail-closed
     // boundary on each attempt.
     const answer = await getChatLLMService().generate(messages, {
+      step: 'chat',
       systemPrompt: SYSTEM_PROMPT,
       temperature: 0.7,
       maxTokens: 1024,
@@ -1364,7 +1365,7 @@ ${transcript.substring(0, 8000)}` // Limit context size
       docs.map((d) => d.metadata.recordingId).filter((id): id is string => !!id),
       docs.map((d) => d.metadata.captureId).filter((id): id is string => !!id)
     )
-    return getChatLLMService().generateText(prompt, undefined, { shouldGenerate })
+    return getChatLLMService().generateText(prompt, undefined, { step: 'rag-summarize', shouldGenerate })
   }
 
   async findActionItems(meetingId?: string): Promise<string | null> {
@@ -1408,7 +1409,7 @@ ${transcript.substring(0, 8000)}`
       docs.map((d) => d.metadata.recordingId).filter((id): id is string => !!id),
       docs.map((d) => d.metadata.captureId).filter((id): id is string => !!id)
     )
-    return getChatLLMService().generateText(prompt, undefined, { shouldGenerate })
+    return getChatLLMService().generateText(prompt, undefined, { step: 'rag-action-items', shouldGenerate })
   }
 
   /**

@@ -39,6 +39,8 @@ import { resolveContact } from './entity-resolver'
 import { getConfig } from './config'
 import { jevKeyFor } from './jev-settings'
 import { askJev } from './jev-client'
+import { createJevHarness } from './pipeline/jev-harness'
+import { withCallRecord } from './pipeline/track-call'
 import { buildSpeakerNameRequest, jevRoster, parseSpeakerNames } from './jev-speaker-names'
 import { namingEvidence, type NamingTurn } from './diarization-quality'
 
@@ -371,7 +373,10 @@ export async function runSpeakerInference(
       }
     )
     if (!request) return { proposed: 0, bound: 0, skipped: true }
-    const res = await (opts.askJev ?? askJev)(jevKey, request.state, request.questions)
+    const harness = createJevHarness({ getKey: () => jevKey, askImpl: opts.askJev ?? askJev })
+    const res = await withCallRecord({ step: 'speaker-names', route: 'jev', recordingId }, () =>
+      harness.ask(request.state, request.questions)
+    )
     if (!isRecordingEligible(recordingId) || (opts.shouldPersist && !opts.shouldPersist())) {
       return { proposed: 0, bound: 0, skipped: true }
     }
@@ -391,6 +396,8 @@ export async function runSpeakerInference(
     })
 
     const raw = await getChatLLMService().generateText(prompt, 'You answer with a JSON array only. No prose.', {
+      step: 'speaker-roster',
+      recordingId,
       shouldGenerate: () => isRecordingEligible(recordingId)
     })
     if (!raw) return { proposed: 0, bound: 0, skipped: true }

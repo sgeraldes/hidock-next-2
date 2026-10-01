@@ -13,7 +13,8 @@
 
 import { getConfig } from './config'
 import { getOllamaService, OllamaChatMessage } from './ollama'
-import { getBrainRouter } from './brains'
+import { runText } from './pipeline/runner'
+import type { TextStepId } from './pipeline/steps'
 
 export type ChatBackend = 'gemini' | 'ollama' | 'none'
 
@@ -37,6 +38,10 @@ export interface ChatGenerateOptions {
    * summary/action items, self-identification, transcript reformat) pass it.
    */
   shouldGenerate?: () => boolean
+  /** Which step this call belongs to, for the call ledger and for the owner's plan. A caller that names none is the assistant chat. */
+  step?: TextStepId
+  /** The recording the text comes from, when there is one. */
+  recordingId?: string | null
 }
 
 class ChatLLMService {
@@ -75,27 +80,38 @@ class ChatLLMService {
    * cancellation, mirroring OllamaService.chat.
    */
   async generate(messages: OllamaChatMessage[], options: ChatGenerateOptions = {}): Promise<string | null> {
-    // Delegate to the BrainRouter: Gemini-first (config.chat.geminiModel) with
-    // Ollama fallback — identical routing to the previous inline implementation,
-    // now shared with embeddings.ts and output-generator.ts via the brain seam.
-    return getBrainRouter().chat('chat', messages, {
-      systemPrompt: options.systemPrompt,
-      temperature: options.temperature,
-      maxTokens: options.maxTokens,
-      signal: options.signal,
-      shouldGenerate: options.shouldGenerate
+    // The step's plan decides where the call goes. With no configuration that is the BrainRouter's
+    // chat route exactly as before: Gemini first (config.chat.geminiModel), Ollama as fallback, an
+    // explicit default honoured.
+    const outcome = await runText({
+      step: options.step ?? 'chat',
+      messages,
+      recordingId: options.recordingId ?? null,
+      options: {
+        systemPrompt: options.systemPrompt,
+        temperature: options.temperature,
+        maxTokens: options.maxTokens,
+        signal: options.signal,
+        shouldGenerate: options.shouldGenerate
+      }
     })
+    if (outcome.ok) return outcome.text
+    // The routing itself failed (not "nobody answered"): the error reaches the caller as it did when the router threw.
+    if (outcome.reason === 'error') throw outcome.error
+    return null
   }
 
   /** Convenience: single-prompt generation (mirrors OllamaService.generate). */
   async generateText(
     prompt: string,
     systemPrompt?: string,
-    options: { shouldGenerate?: () => boolean } = {}
+    options: { shouldGenerate?: () => boolean; step?: TextStepId; recordingId?: string | null } = {}
   ): Promise<string | null> {
     return this.generate([{ role: 'user', content: prompt }], {
       systemPrompt,
-      shouldGenerate: options.shouldGenerate
+      shouldGenerate: options.shouldGenerate,
+      step: options.step,
+      recordingId: options.recordingId
     })
   }
 }

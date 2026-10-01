@@ -9,7 +9,6 @@
  * the capability check of the catalog says so.
  */
 import { askJev, JEV_MODEL, JevError, type AskJevOptions, type JevQuestion, type JevResponse, type JevStructured } from '../jev-client'
-import { jevKeyFor, type JevJob } from '../jev-settings'
 import { JEV_DESCRIPTOR } from '../brains/engine-descriptors'
 import type { HarnessDescriptor } from '../brains/descriptor'
 import { recordHarnessUsage } from '../brains/harness-usage'
@@ -31,19 +30,15 @@ export function createJevHarness(deps: { getKey: () => string | null; askImpl?: 
       if (!apiKey) throw new JevError('Jev API key is not set', null)
       const startedAt = Date.now()
       const response = await askImpl(apiKey, state, questions, opts)
+      const usage = (response as { usage?: JevResponse['usage'] }).usage
       recordHarnessUsage({
         harness: 'jev',
         model: response.model || JEV_MODEL,
-        inputTokens: response.usage.input_tokens,
-        outputTokens: response.usage.output_tokens,
+        inputTokens: usage?.input_tokens,
+        outputTokens: usage?.output_tokens,
         durationMs: Date.now() - startedAt
       })
       return response
     }
   }
-}
-
-/** The Jev harness with the key of one job: it is configured only when Jev and that job's switch are on. */
-export function jevHarnessFor(job: JevJob): JevHarness {
-  return createJevHarness({ getKey: () => jevKeyFor(job) })
 }

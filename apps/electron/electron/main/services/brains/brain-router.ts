@@ -122,6 +122,11 @@ export class BrainRouter {
     return null
   }
 
+  /** Can this brain serve `need` right now? Same test as `resolve`: enabled, not resting, capable, configured. */
+  async canServe(id: BrainId, need: BrainCapability): Promise<boolean> {
+    return this.isUsable(this.registry.get(id), need)
+  }
+
   // ── Convenience wrappers (preserve the legacy fallback semantics) ──────────
 
   /**

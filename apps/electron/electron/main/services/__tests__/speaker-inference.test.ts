@@ -132,6 +132,7 @@ vi.mock('../entity-resolver', () => ({
 
 import { runSpeakerInference, INFERENCE_ASKED_KEY_PREFIX } from '../speaker-inference'
 import { run as dbRun } from '../database'
+import { setCallSink, type CallRecord } from '../pipeline/call-store'
 
 const TURNS = [
   { speaker: 'Speaker 1', text: 'Listo, gracias Óscar.' },
@@ -210,6 +211,35 @@ describe('runSpeakerInference', () => {
     const res = await runSpeakerInference('rec-1', { jevKey: () => 'key', askJev })
     expect(res.bound).toBe(0)
     expect(db.assignments).toEqual([])
+  })
+
+  it('names the speaker-roster step and the recording when it asks the model', async () => {
+    generateText.mockResolvedValue('[]')
+    await runSpeakerInference('rec-1')
+    expect(generateText).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({ step: 'speaker-roster', recordingId: 'rec-1' })
+    )
+  })
+
+  it('leaves one ledger row for the Jev call, linked to the recording', async () => {
+    const rows: CallRecord[] = []
+    setCallSink((_id, record) => {
+      rows.push(record)
+    })
+    try {
+      const askJev = vi.fn(async () => ({
+        model: 'jev',
+        answers: { s1: { type: 'choice' as const, choice: 'p1', probabilities: { p1: 0.95, none: 0.05 }, confidence: 1 } },
+        usage: { input_tokens: 10, output_tokens: 1 }
+      }))
+      await runSpeakerInference('rec-1', { jevKey: () => 'key', askJev })
+    } finally {
+      setCallSink(null)
+    }
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ step: 'speaker-names', route: 'jev', provider: 'jev', recordingId: 'rec-1', status: 'completed' })
   })
 
   it('binds a high-confidence, roster-corroborated proposal', async () => {

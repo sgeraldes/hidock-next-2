@@ -478,6 +478,7 @@ async function defaultLLM(
   shouldGenerate?: () => boolean
 ): Promise<string | null> {
   return getChatLLMService().generate([{ role: 'user', content: prompt }], {
+    step: 'self-id',
     systemPrompt,
     temperature: 0,
     maxTokens: 1024,
