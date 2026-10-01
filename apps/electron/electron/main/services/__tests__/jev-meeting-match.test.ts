@@ -17,6 +17,7 @@ import {
   type MatchCandidate,
   type MeetingMatch
 } from '../jev-meeting-match'
+import { setCallSink, type CallRecord } from '../pipeline/call-store'
 
 const context = {
   title: 'Configuración de certificados y coordinación ALB',
@@ -104,6 +105,25 @@ describe('matchMeetingWithJev', () => {
     await matchMeetingWithJev('rec-1', context, [lunch, daily], deps)
     expect(ask).toHaveBeenCalledTimes(1)
     expect(stored!.candidateKey).toBe(matchRequestKey(context, [lunch, daily]))
+  })
+
+  it('leaves one ledger row for the call, linked to the recording, and none when the stored answer is reused', async () => {
+    const rows: CallRecord[] = []
+    setCallSink((_id, record) => {
+      rows.push(record)
+    })
+    try {
+      let stored: MeetingMatch | null = null
+      const ask = vi.fn(async () => reply({ m1: 0.02, m2: 0.93, none: 0.05 }))
+      const deps = { apiKey: 'k', load: () => stored, save: (_id: string, m: MeetingMatch) => (stored = m), ask }
+      await matchMeetingWithJev('rec-1', context, [lunch, daily], deps)
+      await matchMeetingWithJev('rec-1', context, [lunch, daily], deps)
+    } finally {
+      setCallSink(null)
+    }
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ step: 'meeting-match', route: 'jev', provider: 'jev', model: 'jev-1.13.0', recordingId: 'rec-1', status: 'completed' })
+    expect(rows[0].usage).toMatchObject({ tokens: { input: 1800, output: 20 } })
   })
 
   it('asks again when the evidence changes but the meetings stay the same', async () => {

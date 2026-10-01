@@ -54,7 +54,8 @@ import {
 import { complete } from '@hidock/ai-providers'
 import { getProviderConfigFromSettings } from './ai-provider-config'
 import { getConfig } from './config'
-import { askJev } from './jev-client'
+import { createJevHarness } from './pipeline/jev-harness'
+import { withCallRecord } from './pipeline/track-call'
 import { jevKeyFor } from './jev-settings'
 import {
   buildEvaluationQuestions,
@@ -454,7 +455,13 @@ export function getValueClassifierKind(): ValueClassifierKind | null {
  */
 export async function evaluateWithJev(
   apiKey: string,
-  input: { summary: string | null; transcriptExcerpt: string; meetingSubject: string | null; audio: EvaluationAudio | null },
+  input: {
+    summary: string | null
+    transcriptExcerpt: string
+    meetingSubject: string | null
+    audio: EvaluationAudio | null
+    recordingId?: string | null
+  },
   fetchImpl?: typeof fetch
 ): Promise<RecordingEvaluation> {
   const state = buildEvaluationState({
@@ -463,7 +470,10 @@ export async function evaluateWithJev(
     meetingSubject: input.meetingSubject ? neutralizeDelimiters(input.meetingSubject) : null,
     audio: input.audio
   })
-  const response = await askJev(apiKey, state, buildEvaluationQuestions(), { fetchImpl })
+  const harness = createJevHarness({ getKey: () => apiKey })
+  const response = await withCallRecord({ step: 'evaluate', route: 'jev', recordingId: input.recordingId ?? null }, () =>
+    harness.ask(state, buildEvaluationQuestions(), { fetchImpl })
+  )
   const evaluation = parseEvaluation(response)
   evaluation.audioWarning = audioTranscriptWarning(input.audio, evaluation.starLevel)
   return evaluation
@@ -603,7 +613,8 @@ export async function classifyCaptureValueRaw(captureId: string): Promise<RawCla
       summary: row.summary,
       transcriptExcerpt: truncateTranscript(row.transcript_full_text as string),
       meetingSubject: row.meeting_subject,
-      audio: evaluationAudio(row)
+      audio: evaluationAudio(row),
+      recordingId: row.recording_id
     })
 
   const isUnrated = row.quality_rating === 'unrated' || row.quality_rating === null

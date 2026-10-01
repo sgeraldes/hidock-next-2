@@ -53,4 +53,12 @@ describe('createJevHarness', () => {
     await expect(collector.run(() => harness.ask('s', {}))).rejects.toMatchObject({ status: 429 })
     expect(collector.total()).toBeNull()
   })
+
+  it('still reports the call and its time when the response states no usage', async () => {
+    const askImpl = vi.fn(async () => ({ model: 'jev-latest', answers: {} }) as unknown as JevResponse)
+    const harness = createJevHarness({ getKey: () => 'k', askImpl })
+    const collector = createHarnessUsageCollector()
+    await collector.run(() => harness.ask('state', {}))
+    expect(collector.total()!.byModel['jev:jev-latest'].calls).toBe(1)
+  })
 })

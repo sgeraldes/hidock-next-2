@@ -14,6 +14,8 @@
 
 import { createHash } from 'crypto'
 import { askJev, JEV_MODEL, type JevQuestion, type JevResponse, type JevStructured } from './jev-client'
+import { createJevHarness } from './pipeline/jev-harness'
+import { withCallRecord } from './pipeline/track-call'
 import { DEFAULT_QUALITY_RULES, qualityRules } from './quality-rules'
 
 export const MEETING_MATCH_VERSION = 1
@@ -215,7 +217,8 @@ export async function matchMeetingWithJev(
   const stored = deps.load(recordingId)
   if (stored && stored.candidateKey === key) return stored
 
-  const res = await (deps.ask ?? askJev)(deps.apiKey, state, questions)
+  const harness = createJevHarness({ getKey: () => deps.apiKey, askImpl: deps.ask ?? askJev })
+  const res = await withCallRecord({ step: 'meeting-match', route: 'jev', recordingId }, () => harness.ask(state, questions))
   const match = parseMeetingMatch(res, keys, key)
   if (match) deps.save(recordingId, match)
   return match

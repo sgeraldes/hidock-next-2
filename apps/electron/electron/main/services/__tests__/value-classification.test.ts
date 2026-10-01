@@ -58,6 +58,7 @@ vi.mock('../jev-client', () => ({
   askJev: (...args: unknown[]) => mockAskJev(...args)
 }))
 
+import { setCallSink, type CallRecord } from '../pipeline/call-store'
 import {
   initializeDatabase,
   closeDatabase,
@@ -1332,6 +1333,32 @@ describe('Jev (TypeSafe AI) as the value classifier', () => {
     )
     expect(stored).toMatchObject({ version: 1, star_level: 1, kind: 'personal_call', context: 'personal' })
     expect(JSON.parse(stored!.reasons_json)).toEqual(['personal_family'])
+  })
+
+  it('leaves one ledger row for the Jev evaluation, linked to the recording', async () => {
+    seedRecording('rec-j1c')
+    seedTranscript('rec-j1c', { fullText: 'Hola mamá, ¿qué cocinamos hoy? Pasta con salsa.' })
+    seedCapture('cap-j1c', 'rec-j1c', { summary: 'Family chat about dinner.' })
+    mockAskJev.mockResolvedValue(jevReply(1, 0.9, { personal_family: 0.93 }, { kind: 'personal_call', context: 'personal' }))
+    const rows: CallRecord[] = []
+    setCallSink((_id, record) => {
+      rows.push(record)
+    })
+    try {
+      await classifyCaptureValue('cap-j1c')
+    } finally {
+      setCallSink(null)
+    }
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      step: 'evaluate',
+      route: 'jev',
+      provider: 'jev',
+      model: 'jev-1.13.0',
+      recordingId: 'rec-j1c',
+      status: 'completed'
+    })
+    expect(rows[0].usage).toMatchObject({ tokens: { input: 900, output: 40 } })
   })
 
   it('keeps a low-confidence Jev downgrade from persisting (same floor as the LLM)', async () => {
