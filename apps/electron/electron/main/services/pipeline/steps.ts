@@ -17,7 +17,19 @@ import { TEXT_STEP_IDS, type TextStepId } from '../../../../src/shared/pipeline-
 export const TEXT_STEPS = TEXT_STEP_IDS
 export type { TextStepId }
 
-export const OBSERVED_STEPS = ['handover', 'evaluate', 'meeting-match', 'speaker-names'] as const
+export const OBSERVED_STEPS = [
+  'handover',
+  'evaluate',
+  'meeting-match',
+  'speaker-names',
+  // Phase 2b: the sites that call a model without the router. They keep their own code and leave a ledger row.
+  'analysis',
+  'actionable-detection',
+  'timeline',
+  'value-llm',
+  'graph-extract',
+  'image-describe'
+] as const
 export type StepId = TextStepId | (typeof OBSERVED_STEPS)[number]
 
 /** Today's routing: `chat` walks the router's chat chain; `generate` resolves one brain and calls it once. */
