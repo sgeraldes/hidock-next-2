@@ -212,6 +212,16 @@ describe('runSpeakerInference', () => {
     expect(db.assignments).toEqual([])
   })
 
+  it('names the speaker-roster step and the recording when it asks the model', async () => {
+    generateText.mockResolvedValue('[]')
+    await runSpeakerInference('rec-1')
+    expect(generateText).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({ step: 'speaker-roster', recordingId: 'rec-1' })
+    )
+  })
+
   it('binds a high-confidence, roster-corroborated proposal', async () => {
     generateText.mockResolvedValue('[{"speaker":"Speaker 5","name":"Óscar Pereda","confidence":"high","evidence":"gracias Óscar"}]')
     const res = await runSpeakerInference('rec-1')

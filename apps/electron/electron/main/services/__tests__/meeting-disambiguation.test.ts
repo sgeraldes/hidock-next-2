@@ -67,6 +67,16 @@ describe('disambiguateOverlappingCandidates', () => {
     expect(res).toEqual({ meetingId: 'm2', reason: 'AI match: "Delivery Technical Weekly"' })
   })
 
+  it('names the meeting-pick step and the recording when it asks the model', async () => {
+    generateText.mockResolvedValue('2')
+    await disambiguateOverlappingCandidates('rec-1', CONTEXT, CANDIDATES)
+    expect(generateText).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({ step: 'meeting-pick', recordingId: 'rec-1' })
+    )
+  })
+
   it('NEVER calls the brain for a single overlap', async () => {
     const res = await disambiguateOverlappingCandidates('rec-1', CONTEXT, [CANDIDATES[0]])
     expect(res).toBeNull()

@@ -249,6 +249,15 @@ describe('reformatOne — text-only reformat write + idempotency', () => {
     expect(res.alreadyReformatted).toBe(1)
   })
 
+  it('names the reformat step and the recording when it asks the model', async () => {
+    mockGenerate.mockResolvedValue('[{"speaker":"Speaker 1","text":"hola qué tal"}]')
+    await reformatOne('t1')
+    expect(mockGenerate).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.objectContaining({ step: 'reformat', recordingId: expect.any(String) })
+    )
+  })
+
   it('marks failed and leaves speakers untouched when the model call throws', async () => {
     mockGenerate.mockRejectedValue(new Error('quota exceeded'))
     refreshIntegrity.mockClear()

@@ -84,7 +84,7 @@ export async function disambiguateOverlappingCandidates(
     const answer = await getChatLLMService().generateText(
       buildDisambiguationPrompt(context, candidates),
       'You are a precise meeting-matching assistant. You answer with a single number only.',
-      { shouldGenerate: () => isRecordingEligible(recordingId) }
+      { step: 'meeting-pick', recordingId, shouldGenerate: () => isRecordingEligible(recordingId) }
     )
     if (!answer) return null
     const idx = parseDisambiguationAnswer(answer, candidates.length)

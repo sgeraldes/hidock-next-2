@@ -391,6 +391,8 @@ export async function runSpeakerInference(
     })
 
     const raw = await getChatLLMService().generateText(prompt, 'You answer with a JSON array only. No prose.', {
+      step: 'speaker-roster',
+      recordingId,
       shouldGenerate: () => isRecordingEligible(recordingId)
     })
     if (!raw) return { proposed: 0, bound: 0, skipped: true }

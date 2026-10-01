@@ -425,6 +425,8 @@ export async function reformatOne(transcriptId: string): Promise<'done' | 'faile
     let response: string | null
     try {
       response = await svc.generate([{ role: 'user', content: buildReformatPrompt(block) }], {
+        step: 'reformat',
+        recordingId,
         systemPrompt: REFORMAT_SYSTEM_PROMPT,
         temperature: 0.2,
         maxTokens: 8192,
