@@ -101,6 +101,15 @@ export interface ValidationIssue {
 
 const PROFILE_ID = /^[a-z0-9][a-z0-9-]{0,63}$/
 
+/**
+ * A profile by name, or undefined. The profiles come from a file the owner may have edited, so a name
+ * such as `constructor` or `__proto__` must not find what Object inherits: only own entries count.
+ */
+export function getProfile(config: PipelineConfig, ref: string): ProfileConfig | undefined {
+  const profiles = config.profiles
+  return profiles && Object.prototype.hasOwnProperty.call(profiles, ref) ? profiles[ref] : undefined
+}
+
 export function validatePipelineConfig(config: PipelineConfig, harnesses: readonly HarnessInfo[]): ValidationIssue[] {
   const issues: ValidationIssue[] = []
   const error = (message: string, where: { step?: TextStepId; profile?: string } = {}) => issues.push({ severity: 'error', message, ...where })
@@ -149,12 +158,12 @@ export function validatePipelineConfig(config: PipelineConfig, harnesses: readon
     const call = step.passes[0].calls[0]
     const refs = [call.profile, ...(call.onFail ? [call.onFail.profile] : [])]
     for (const ref of refs) {
-      if (ref !== AUTO_PROFILE && !config.profiles[ref]) error(`${STEP_META[at.step].label} uses "${ref}", which does not exist.`, at)
+      if (ref !== AUTO_PROFILE && !getProfile(config, ref)) error(`${STEP_META[at.step].label} uses "${ref}", which does not exist.`, at)
     }
     if (call.onFail && call.onFail.profile === call.profile) error(`${STEP_META[at.step].label}: the fallback is the same as the main choice.`, at)
     if (STEP_META[at.step].bulk) {
       for (const ref of refs) {
-        const h = byId.get(config.profiles[ref]?.harness ?? '')
+        const h = byId.get(getProfile(config, ref)?.harness ?? '')
         if (h && h.latency === 'slow') {
           warn(`${h.label} takes seconds per call and ${STEP_META[at.step].label} runs once per recording.`, { ...at, code: 'slow-bulk' })
         }
@@ -202,14 +211,26 @@ function profileOf(draft: ProfileDraft): ProfileConfig {
   }
 }
 
+const sameProfile = (a: ProfileConfig, b: ProfileConfig): boolean =>
+  a.harness === b.harness && a.model === b.model && a.effort === b.effort && a.temperature === b.temperature && a.maxTokens === b.maxTokens
+
 /** Point a step at the choices of a draft. Pure: the input is not changed. */
 export function applyStepDraft(config: PipelineConfig, step: TextStepId, primary: StepChoice, fallback: StepChoice | null): PipelineConfig {
   const profiles: Record<string, ProfileConfig> = { ...config.profiles }
   const steps: PipelineConfig['steps'] = { ...config.steps }
   const refOf = (choice: StepChoice): string => {
     if (choice === AUTO_PROFILE) return AUTO_PROFILE
-    const id = profileIdFor(choice)
-    profiles[id] = profileOf(choice)
+    const wanted = profileOf(choice)
+    const base = profileIdFor(choice)
+    // Two different drafts can slug to the same name (a model `haiku-low` and a model `haiku` with effort `low`, or
+    // two long names that share their first 64 characters). A name that is taken by a different profile gets a
+    // number, so one step never starts running another step's profile.
+    let id = base
+    for (let n = 2; Object.prototype.hasOwnProperty.call(profiles, id) && !sameProfile(profiles[id], wanted); n++) {
+      const suffix = `-${n}`
+      id = `${base.slice(0, 64 - suffix.length).replace(/-+$/, '')}${suffix}`
+    }
+    profiles[id] = wanted
     return id
   }
   if (primary === AUTO_PROFILE && fallback === null) {

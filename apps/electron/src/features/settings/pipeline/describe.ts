@@ -4,6 +4,7 @@
  */
 import {
   AUTO_PROFILE,
+  getProfile,
   type EffortLevel,
   type HarnessInfo,
   type PipelineConfig,
@@ -32,7 +33,7 @@ const harnessLabel = (harnesses: readonly HarnessInfo[], id: string): string => 
 
 function describeRef(config: PipelineConfig, ref: string, harnesses: readonly HarnessInfo[]): string {
   if (ref === AUTO_PROFILE) return 'Automatic'
-  const profile = config.profiles?.[ref]
+  const profile = getProfile(config, ref)
   if (!profile) return 'Automatic'
   return [harnessLabel(harnesses, profile.harness), profile.model, profile.effort].filter(Boolean).join(' · ')
 }
@@ -50,7 +51,7 @@ export function privacyLabel(config: PipelineConfig, step: TextStepId, harnesses
   const calls = (config.steps?.[step]?.passes ?? []).flatMap((p) => p.calls)
   if (calls.length === 0) return 'Follows AI providers'
   const refs = calls.flatMap((c) => [c.profile, ...(c.onFail ? [c.onFail.profile] : [])])
-  const infos = refs.map((ref) => (ref === AUTO_PROFILE ? undefined : harnesses.find((h) => h.id === config.profiles?.[ref]?.harness)))
+  const infos = refs.map((ref) => (ref === AUTO_PROFILE ? undefined : harnesses.find((h) => h.id === getProfile(config, ref)?.harness)))
   // Automatic, a missing profile and an unknown harness all mean the step runs where the providers page sends it.
   if (infos.some((info) => !info)) return 'Follows AI providers'
   const vendors: string[] = []
@@ -81,7 +82,7 @@ export function choiceFromProfile(profile: ProfileConfig): ChoiceFields {
 
 function fieldsOfRef(config: PipelineConfig, ref: string): ChoiceFields {
   if (ref === AUTO_PROFILE) return AUTOMATIC
-  const profile = config.profiles?.[ref]
+  const profile = getProfile(config, ref)
   return profile ? choiceFromProfile(profile) : AUTOMATIC
 }
 

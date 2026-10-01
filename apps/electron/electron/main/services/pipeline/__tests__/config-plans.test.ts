@@ -94,3 +94,36 @@ describe('createConfigPlanSource', () => {
     expect(plans('notes')).not.toBeNull()
   })
 })
+
+describe('createConfigPlanSource: review findings', () => {
+  beforeEach(() => {
+    pipeline = undefined
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(console.warn).mockClear()
+  })
+
+  it('does not run a plan whose profile is named like an inherited property of Object', () => {
+    for (const ref of ['constructor', 'toString', 'valueOf']) {
+      pipeline = { version: 1, profiles: {}, steps: { notes: step(ref) } }
+      expect(source()('notes'), ref).toBeNull()
+    }
+  })
+
+  it('leaves out the effort of a harness that has no effort levels, as it leaves out the model of one that ignores it', () => {
+    pipeline = { version: 1, profiles: { g: { harness: 'gemini-api', model: 'm', effort: 'low' } }, steps: { notes: step('g') } }
+    expect(source()('notes')!.calls[0].profile).toEqual({ kind: 'direct', id: 'g', harness: 'gemini-api', model: 'm' })
+  })
+
+  it('says again when a plan that was fixed breaks again for the same reason, and not twice in a row', () => {
+    const plans = source()
+    pipeline = { version: 1, profiles: {}, steps: { notes: step('ghost') } }
+    plans('notes')
+    plans('notes')
+    expect(console.warn).toHaveBeenCalledTimes(1)
+    pipeline = { version: 1, profiles: { g: { harness: 'gemini-api' } }, steps: { notes: step('g') } }
+    expect(plans('notes')).not.toBeNull()
+    pipeline = { version: 1, profiles: {}, steps: { notes: step('ghost') } }
+    plans('notes')
+    expect(console.warn).toHaveBeenCalledTimes(2)
+  })
+})

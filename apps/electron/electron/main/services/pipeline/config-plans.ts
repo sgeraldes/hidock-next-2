@@ -7,7 +7,14 @@
  * step falls back to its default. Warnings do not block. The configuration is read at call time, so a
  * change from the Pipeline page applies to the next call with no restart.
  */
-import { AUTO_PROFILE, issuesForStep, validatePipelineConfig, type HarnessInfo, type PipelineConfig } from '../../../../src/shared/pipeline-config'
+import {
+  AUTO_PROFILE,
+  getProfile,
+  issuesForStep,
+  validatePipelineConfig,
+  type HarnessInfo,
+  type PipelineConfig
+} from '../../../../src/shared/pipeline-config'
 import type { BrainEffort, BrainId } from '../brains'
 import type { PlanSource } from './plans'
 import { DEFAULT_PLANS, type DirectProfile, type Plan, type Profile, type TextStepId } from './steps'
@@ -18,10 +25,12 @@ export interface ConfigPlanDeps {
 }
 
 export function createConfigPlanSource(deps: ConfigPlanDeps): PlanSource {
-  const reported = new Set<string>()
-  const reportOnce = (message: string): void => {
-    if (reported.has(message)) return
-    reported.add(message)
+  // What was last said about each step: the same reason is not repeated while it lasts, and a plan that is fixed
+  // and breaks again is said again.
+  const reported = new Map<TextStepId, string>()
+  const reportOnce = (step: TextStepId, message: string): void => {
+    if (reported.get(step) === message) return
+    reported.set(step, message)
     console.warn(`[Pipeline] ${message}; the step runs as Automatic.`)
   }
 
@@ -33,13 +42,14 @@ export function createConfigPlanSource(deps: ConfigPlanDeps): PlanSource {
     const call = stepConfig.passes?.[0]?.calls?.[0]
     const blocking = issuesForStep(pipeline, validatePipelineConfig(pipeline, harnesses), step).filter((i) => i.severity === 'error')
     if (blocking.length > 0 || !call) {
-      reportOnce(`the plan of "${step}" is invalid (${blocking[0]?.message ?? 'it has no call'})`)
+      reportOnce(step, `the plan of "${step}" is invalid (${blocking[0]?.message ?? 'it has no call'})`)
       return null
     }
+    reported.delete(step)
 
     const expand = (ref: string): Profile => {
       if (ref === AUTO_PROFILE) return DEFAULT_PLANS[step].calls[0].profile
-      const p = pipeline.profiles[ref]
+      const p = getProfile(pipeline, ref)!
       const info = harnesses.find((h) => h.id === p.harness)
       const direct: DirectProfile = {
         kind: 'direct',
@@ -47,7 +57,8 @@ export function createConfigPlanSource(deps: ConfigPlanDeps): PlanSource {
         harness: p.harness as BrainId,
         // A harness that ignores the model would fail on one (kiro answers --model with an error): leave it out.
         ...(p.model && info?.modelSelectable ? { model: p.model } : {}),
-        ...(p.effort ? { effort: p.effort as BrainEffort } : {}),
+        // Likewise an effort for a harness that has no levels.
+        ...(p.effort && info?.effortLevels ? { effort: p.effort as BrainEffort } : {}),
         ...(p.temperature !== undefined ? { temperature: p.temperature } : {}),
         ...(p.maxTokens !== undefined ? { maxTokens: p.maxTokens } : {})
       }

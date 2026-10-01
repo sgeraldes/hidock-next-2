@@ -184,3 +184,48 @@ describe('issuesForStep', () => {
     expect(issuesForStep(config, validatePipelineConfig(config, HARNESSES), 'chat')).toEqual([])
   })
 })
+
+describe('review findings: names that look like inherited properties, and ids that collide', () => {
+  it('refuses a profile reference named like an inherited property of Object, as one that does not exist', () => {
+    for (const ref of ['constructor', 'toString', 'valueOf', 'hasOwnProperty', '__proto__']) {
+      const [issue] = errors(withStep({}, 'notes', ref))
+      expect(issue?.message, ref).toMatch(/does not exist/)
+    }
+    expect(errors(withStep({ g: { harness: 'gemini-api' } }, 'notes', 'g', 'constructor'))[0].message).toMatch(/constructor/)
+  })
+
+  it('gives two different drafts that slug to the same name different profiles, and each step keeps its own', () => {
+    let config = applyStepDraft(emptyPipelineConfig(), 'notes', { harness: 'claude-code', model: 'haiku', effort: 'low' }, null)
+    config = applyStepDraft(config, 'reformat', { harness: 'claude-code', model: 'haiku-low' }, null)
+    const notes = config.steps.notes!.passes[0].calls[0].profile
+    const reformat = config.steps.reformat!.passes[0].calls[0].profile
+    expect(notes).not.toBe(reformat)
+    expect(config.profiles[notes]).toEqual({ harness: 'claude-code', model: 'haiku', effort: 'low' })
+    expect(config.profiles[reformat]).toEqual({ harness: 'claude-code', model: 'haiku-low' })
+    expect(errors(config)).toEqual([])
+  })
+
+  it('keeps ids within the limit and distinct when two long model names share their first 64 characters', () => {
+    const long = 'org/some-very-long-model-name-that-goes-on-and-on-and-on-and-on-and-on'
+    let config = applyStepDraft(emptyPipelineConfig(), 'notes', { harness: 'ollama', model: `${long}-a` }, null)
+    config = applyStepDraft(config, 'reformat', { harness: 'ollama', model: `${long}-b` }, null)
+    const ids = Object.keys(config.profiles)
+    expect(ids).toHaveLength(2)
+    for (const id of ids) expect(id).toMatch(/^[a-z0-9][a-z0-9-]{0,63}$/)
+    expect(errors(config)).toEqual([])
+  })
+
+  it('still reuses one profile for two steps that choose the same thing', () => {
+    const draft = { harness: 'claude-code', model: 'haiku', effort: 'low' as const }
+    let config = applyStepDraft(emptyPipelineConfig(), 'notes', draft, null)
+    config = applyStepDraft(config, 'reformat', draft, null)
+    expect(Object.keys(config.profiles)).toEqual(['claude-code-haiku-low'])
+  })
+
+  it('uses the same id when a step is saved again with the profile it already has', () => {
+    const draft = { harness: 'ollama', model: 'qwen3:8b' }
+    const once = applyStepDraft(emptyPipelineConfig(), 'notes', draft, null)
+    const twice = applyStepDraft(once, 'notes', draft, null)
+    expect(twice).toEqual(once)
+  })
+})
