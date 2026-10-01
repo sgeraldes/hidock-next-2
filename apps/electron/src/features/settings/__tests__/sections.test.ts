@@ -24,6 +24,14 @@ describe('settings sections', () => {
     expect(searchSettingsSections('nothing like this')).toEqual([])
   })
 
+  it('puts the Pipeline page in Services after AI providers, findable by what it holds', () => {
+    const services = SETTINGS_SECTIONS.filter((s) => s.group === 'services').map((s) => s.id)
+    expect(services.indexOf('pipeline')).toBe(services.indexOf('ai-providers') + 1)
+    for (const word of ['harness', 'model', 'effort', 'fallback', 'claude', 'gemini', 'ollama', 'cost']) {
+      expect(searchSettingsSections(word).map((s) => s.id), word).toContain('pipeline')
+    }
+  })
+
   it('maps the old single-page anchors to a section', () => {
     expect(sectionFromLegacyHash('#features')).toBe('features')
     expect(sectionFromLegacyHash('#nope')).toBeNull()

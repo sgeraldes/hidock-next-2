@@ -6,6 +6,7 @@ import type {
   IngestionOutcome,
   SourceContainer,
 } from '@hidock/connectors'
+import type { ModelOption, PipelineSettingsState, SaveStepArgs, SaveStepResult } from '../../src/shared/pipeline-config'
 /**
  * AI Brains renderer-facing types (H10). Mirror of the main-process contract in
  * `electron/main/services/brains/types.ts` + `ipc/brains-handlers.ts`, declared
@@ -1262,6 +1263,16 @@ export interface ElectronAPI {
     setTaskRouting: (args: { task: BrainTask; id: BrainId | null }) => Promise<{ success: boolean }>
     getRouting: () => Promise<Partial<Record<BrainTask, BrainId>>>
     setCredential: (args: { id: BrainId; field: string; value: string | null }) => Promise<{ success: boolean }>
+    // The local OpenAI-compatible server: address, models, and whether a key is stored (never the key).
+    getOpenAiCompatible: () => Promise<{ baseUrl: string; model: string; embeddingModel: string; hasKey: boolean }>
+    setOpenAiCompatible: (args: { baseUrl: string; model: string; embeddingModel: string }) => Promise<{ success: boolean; error?: string }>
+  }
+
+  // Pipeline (phase 3a) — the owner's choice of harness, model and effort for each text step.
+  pipeline: {
+    getState: () => Promise<PipelineSettingsState>
+    saveStep: (args: SaveStepArgs) => Promise<SaveStepResult>
+    listModels: (args: { harness: string }) => Promise<ModelOption[]>
   }
 
   // Handover (H9) — write a handover BUNDLE into a target repo and optionally run
@@ -1971,7 +1982,15 @@ const electronAPI: ElectronAPI = {
     setDefault: (args) => callIPC('brains:setDefault', args),
     setTaskRouting: (args) => callIPC('brains:setTaskRouting', args),
     getRouting: () => callIPC('brains:getRouting'),
-    setCredential: (args) => callIPC('brains:setCredential', args)
+    setCredential: (args) => callIPC('brains:setCredential', args),
+    getOpenAiCompatible: () => callIPC('brains:getOpenAiCompatible'),
+    setOpenAiCompatible: (args) => callIPC('brains:setOpenAiCompatible', args)
+  },
+
+  pipeline: {
+    getState: () => callIPC('pipeline:getState'),
+    saveStep: (args) => callIPC('pipeline:saveStep', args),
+    listModels: (args) => callIPC('pipeline:listModels', args)
   },
 
   handover: {

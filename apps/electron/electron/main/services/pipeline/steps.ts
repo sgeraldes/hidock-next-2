@@ -11,19 +11,11 @@
  * router profiles, so with no configuration nothing moves.
  */
 import type { BrainEffort, BrainId, BrainTask } from '../brains'
+import { TEXT_STEP_IDS, type TextStepId } from '../../../../src/shared/pipeline-config'
 
-export const TEXT_STEPS = [
-  'chat',
-  'rag-summarize',
-  'rag-action-items',
-  'self-id',
-  'speaker-roster',
-  'meeting-pick',
-  'reformat',
-  'notes',
-  'outputs'
-] as const
-export type TextStepId = (typeof TEXT_STEPS)[number]
+/** The text steps live in the shared module so the Pipeline page and this runner list the same ones. */
+export const TEXT_STEPS = TEXT_STEP_IDS
+export type { TextStepId }
 
 export const OBSERVED_STEPS = ['handover', 'evaluate', 'meeting-match', 'speaker-names'] as const
 export type StepId = TextStepId | (typeof OBSERVED_STEPS)[number]

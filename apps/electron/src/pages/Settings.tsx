@@ -48,6 +48,7 @@ import { OverviewSection } from '@/features/settings/OverviewSection'
 import { AboutSection } from '@/features/settings/AboutSection'
 import { ReleasesSection } from '@/features/settings/ReleasesSection'
 import { DecisionsSection } from '@/features/settings/DecisionsSection'
+import { PipelineSection } from '@/features/settings/PipelineSection'
 import {
   DEFAULT_SETTINGS_SECTION,
   getSettingsSection,
@@ -882,6 +883,7 @@ export function Settings({
           {section === 'overview' && <OverviewSection storageInfo={storageInfo} onNavigate={(id) => onSectionChange?.(id)} />}
           {section === 'releases' && <ReleasesSection />}
           {section === 'decisions' && <DecisionsSection />}
+          {section === 'pipeline' && <PipelineSection />}
           {section === 'player' && <PlayerSection />}
           {section === 'display' && <DisplaySection />}
           {section === 'recording' && <RecordingSection />}

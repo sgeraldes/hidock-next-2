@@ -8,6 +8,8 @@ vi.mock('@/components/ui/toaster', () => ({ toast: { error: vi.fn(), success: vi
 const mockList = vi.fn()
 const mockSetEnabled = vi.fn()
 const mockSetDefault = vi.fn()
+const mockGetConnection = vi.fn()
+const mockSetConnection = vi.fn()
 
 /** Two brains: one configured (Gemini, default) + one unconfigured (Claude Code). */
 const BRAINS = [
@@ -34,8 +36,16 @@ beforeEach(() => {
   mockList.mockResolvedValue(BRAINS)
   mockSetEnabled.mockResolvedValue({ success: true })
   mockSetDefault.mockResolvedValue({ success: true })
+  mockGetConnection.mockResolvedValue({ baseUrl: 'http://localhost:1234/v1', model: '', embeddingModel: '', hasKey: false })
+  mockSetConnection.mockResolvedValue({ success: true })
   global.window.electronAPI = {
-    brains: { list: mockList, setEnabled: mockSetEnabled, setDefault: mockSetDefault },
+    brains: {
+      list: mockList,
+      setEnabled: mockSetEnabled,
+      setDefault: mockSetDefault,
+      getOpenAiCompatible: mockGetConnection,
+      setOpenAiCompatible: mockSetConnection,
+    },
   } as any
 })
 
@@ -83,6 +93,33 @@ describe('AIBrainsSettings', () => {
     await waitFor(() =>
       expect(mockSetEnabled).toHaveBeenCalledWith({ id: 'claude-code', enabled: true })
     )
+  })
+
+  it('shows the local server card only when the registry has that brain', async () => {
+    render(<AIBrainsSettings />)
+    await screen.findByText('Gemini (API key)')
+    expect(screen.queryByRole('region', { name: 'Local server (OpenAI-compatible)' })).not.toBeInTheDocument()
+    expect(mockGetConnection).not.toHaveBeenCalled()
+  })
+
+  it('shows the local server card, and reloads the brains after it saves, when the registry has that brain', async () => {
+    const local = {
+      id: 'openai-compatible',
+      label: 'Local server (OpenAI-compatible)',
+      capabilities: ['generate', 'chat', 'embed'],
+      enabled: true,
+      isDefault: false,
+      auth: { configured: false, method: 'none', detail: 'Not reachable' },
+    }
+    mockList.mockResolvedValue([...BRAINS, local])
+    render(<AIBrainsSettings />)
+    const card = await screen.findByRole('region', { name: 'Local server (OpenAI-compatible)' })
+    expect(card).toBeInTheDocument()
+    const callsBefore = mockList.mock.calls.length
+    fireEvent.change(await screen.findByLabelText('Model'), { target: { value: 'qwen3-8b' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save connection' }))
+    await waitFor(() => expect(mockSetConnection).toHaveBeenCalled())
+    await waitFor(() => expect(mockList.mock.calls.length).toBeGreaterThan(callsBefore))
   })
 
   it('renders the empty state when the registry is empty', async () => {

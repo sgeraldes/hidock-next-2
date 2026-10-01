@@ -44,6 +44,7 @@ import { registerNotesHandlers } from './notes-handlers'
 import { registerGitCommitsHandlers } from './git-commits-handlers'
 import { registerWaveformCacheHandlers } from './waveform-cache-handlers'
 import { registerBrainsHandlers } from './brains-handlers'
+import { registerPipelineHandlers } from './pipeline-handlers'
 import { registerHandoverHandlers } from './handover-handlers'
 import { registerValueBackfillHandlers } from './value-backfill-handlers'
 import { ipcMain } from 'electron'
@@ -111,6 +112,7 @@ export function registerIpcHandlers(): void {
   registerGitCommitsHandlers()
   registerWaveformCacheHandlers()
   registerBrainsHandlers()
+  registerPipelineHandlers()
   registerHandoverHandlers()
   registerValueBackfillHandlers()
 

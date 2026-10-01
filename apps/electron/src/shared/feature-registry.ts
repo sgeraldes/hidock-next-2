@@ -523,6 +523,9 @@ export const CORE_CHANNEL_PREFIXES: string[] = [
   'migration:',
   'repair:',
   'brains:',
+  // The Settings > Pipeline page: the owner's choice of harness, model and effort per text step. Like brains:,
+  // it is configuration of the AI providers, and it stays reachable under every preset.
+  'pipeline:',
   'knowledge:',
   // Hand-written notes. Writing one needs no transcription, no assistant and no
   // network, so it stays available under every preset — the same reason config

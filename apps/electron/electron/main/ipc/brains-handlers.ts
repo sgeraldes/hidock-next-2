@@ -13,9 +13,10 @@
  * `.claude/rules/electron-ipc.md`.
  */
 import { ipcMain } from 'electron'
-import { getConfig, updateConfig } from '../services/config'
+import { getConfig, replaceConfigSection, updateConfig } from '../services/config'
 import { getBrainRegistry } from '../services/brains/brain-registry'
 import { getBrainCredentialStore } from '../services/brains/brain-credential-store'
+import { DEFAULT_OPENAI_COMPATIBLE_SETTINGS } from '../services/brains/openai-compatible-brain'
 import { getVectorStore } from '../services/vector-store'
 
 /**
@@ -46,6 +47,16 @@ export interface BrainListItem {
   isDefault: boolean
   auth: BrainAuthStatus
 }
+
+/** What the AI providers page shows for the local server; the key itself never leaves the main process. */
+export interface OpenAiCompatibleConnection {
+  baseUrl: string
+  model: string
+  embeddingModel: string
+  hasKey: boolean
+}
+
+const MAX_MODEL_NAME = 200
 
 const UNKNOWN_AUTH: BrainAuthStatus = { configured: false, method: 'none', detail: 'Status unavailable' }
 
@@ -113,7 +124,8 @@ export function registerBrainsHandlers(): void {
     } else {
       routing[task] = id
     }
-    await updateConfig('brains', { taskRouting: routing })
+    // Replace the section: updateConfig merges deeply, so a cleared override would stay in the config.
+    await replaceConfigSection('brains', { ...current, taskRouting: routing })
     // Provider partitions: a new EMBED route means a new active partition —
     // start filling it in the background right away.
     if (task === 'embed') kickEmbedReindex(`routing embed→${id ?? 'auto'}`)
@@ -127,5 +139,52 @@ export function registerBrainsHandlers(): void {
     const { id, field, value } = args ?? ({} as { id: BrainId; field: string; value: string | null })
     getBrainCredentialStore().setSecret(id, field, value)
     return { success: true }
+  })
+
+  // The connection of a local server that speaks the OpenAI protocol (LM Studio, llama.cpp, vLLM). The key,
+  // when there is one, goes through brains:setCredential; here the page only learns whether one is stored.
+  ipcMain.handle('brains:getOpenAiCompatible', async (): Promise<OpenAiCompatibleConnection> => {
+    const saved = getConfig().brains?.openaiCompatible
+    let hasKey = false
+    try {
+      hasKey = getBrainCredentialStore().hasSecret('openai-compatible', 'apiKey')
+    } catch {
+      hasKey = false
+    }
+    return {
+      baseUrl: saved?.baseUrl ?? DEFAULT_OPENAI_COMPATIBLE_SETTINGS.baseUrl,
+      model: saved?.model ?? '',
+      embeddingModel: saved?.embeddingModel ?? '',
+      hasKey
+    }
+  })
+
+  ipcMain.handle('brains:setOpenAiCompatible', async (_e, args: unknown): Promise<{ success: boolean; error?: string }> => {
+    const a = typeof args === 'object' && args !== null ? (args as Record<string, unknown>) : null
+    if (!a) return { success: false, error: 'The request is not a valid connection.' }
+    const text = (value: unknown): string | null => (typeof value === 'string' ? value.trim() : null)
+    const baseUrl = text(a.baseUrl)
+    const model = text(a.model)
+    const embeddingModel = text(a.embeddingModel)
+    if (baseUrl === null || model === null || embeddingModel === null) {
+      return { success: false, error: 'The request is not a valid connection.' }
+    }
+    let valid = false
+    try {
+      const protocol = new URL(baseUrl).protocol
+      valid = protocol === 'http:' || protocol === 'https:'
+    } catch {
+      valid = false
+    }
+    if (!valid) return { success: false, error: 'The address must start with http:// or https://.' }
+    if (model.length > MAX_MODEL_NAME || embeddingModel.length > MAX_MODEL_NAME) {
+      return { success: false, error: `A model name can have at most ${MAX_MODEL_NAME} characters.` }
+    }
+    try {
+      await replaceConfigSection('brains', { ...getConfig().brains, openaiCompatible: { baseUrl, model, embeddingModel } })
+      return { success: true }
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) }
+    }
   })
 }

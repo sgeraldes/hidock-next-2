@@ -10,7 +10,7 @@ harness and model to process one shot, or multiple stacked steps one after the o
 combination? A new pipeline system needs to emerge from this."
 
 Status: approved by the owner on 30-sep-2026; the four decisions of section 16 were taken that day and
-are reflected below. Built so far: phase 0 (PR #113), phase 1 (PR #118) and phase 2a (PR #120).
+are reflected below. Built so far: phase 0 (PR #113), phase 1 (PR #118), phase 2a (PR #120) and phase 3a (Settings > Pipeline).
 
 ## 1. What we want
 
@@ -360,12 +360,13 @@ Each phase has its own plan, tests, adversarial review and PR series.
 | 1 | Capability descriptors on every adapter, audio and embedding engines included; OpenAI-compatible adapter (with Ollama); Jev harness wrapper; model discovery; lean flags for Gemini CLI and Kiro (measured); structured-output contract with repair; cost and usage for every adapter. Built (PR #118); the Gemini CLI flags were not measured for lack of a key in the shell | none visible |
 | 2a | Text runner with `single` and `fallback`, the `pipeline_calls` ledger, default plans that keep today's routing; the nine text call sites that go through the router and the three Jev call sites on it. Built (PR #120). | a ledger row per call with time, tokens and cost; no change in results |
 | 2b | The six text call sites that call the Gemini SDK directly (analysis bundle, action detection, timeline, LLM value rating, graph ingest, image description) on the runner | usage and cost for all text calls |
-| 3 | `pipeline` config, migration, Settings > Pipeline for single and fallback plans on the text steps, profiles, Test bench, `pipeline_results` and Adopt | the owner can choose harness, model and effort for every text step |
+| 3a | `pipeline` config section (empty means Automatic, so no data migration), shared validation, the configuration as the runner's plan source, `pipeline:*` channels, Settings > Pipeline for single and fallback plans on the nine text steps, the connection card of the OpenAI-compatible server. Built. | the owner can choose harness, model and effort for every text step |
+| 3b | Test bench, `pipeline_results` and Adopt, the profile manager (create, rename, duplicate, delete, test connection), presets. Needs each step's input, parser and writer pulled out of its call site into a task definition | the owner can try a plan on real data before adopting it |
 | 4 | The audio steps join: `transcribe`, `diarize`, `embed` and `live-transcribe` through the same runner and page, with the pairing rules and the reindex confirmation of section 6; their old pages show the engine read only | the owner can choose the engine of every audio step |
 | 5 | Stacked passes, ensembles and merge rules; splitting the `understand` bundle into separate tasks | new shapes available |
 | 6 | Gates on Jev signals, split-input and reduce, presets, recommendations from history | cost and time drop on gated steps |
 
-Phase 3 answers the first half of the request (a harness, a model and an effort per step) for the
+Phase 3 (3a and 3b) answers the first half of the request (a harness, a model and an effort per step) for the
 text steps and phase 4 completes it for every step. Phase 5 answers the second half (passes and
 splits), after the Test bench exists to judge them (owner decisions 1 and 3).
 
