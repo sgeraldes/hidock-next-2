@@ -551,7 +551,37 @@ describe('People Page', () => {
     fireEvent.click(screen.getByRole('button', { name: /Discover/ }))
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Discovery failed', 'boom'))
-    // Button returns to its idle label (not stuck on "Discovering…")
+    // Button returns to idle: enabled, no longer busy
     await waitFor(() => expect(screen.getByRole('button', { name: /^Discover$/ })).toBeEnabled())
+    expect(screen.getByRole('button', { name: /^Discover$/ })).not.toHaveAttribute('aria-busy')
+  })
+
+  // Busy buttons keep their label and spin; the state goes to the title (owner, 2-oct-2026)
+  it('discover: the button spins while discovering, without "Discovering…"', async () => {
+    ;(global.window.electronAPI as any).identity.discoverContacts.mockReturnValueOnce(new Promise(() => {}))
+    render(
+      <MemoryRouter>
+        <People />
+      </MemoryRouter>
+    )
+    await screen.findByText('Mario')
+
+    fireEvent.click(screen.getByRole('button', { name: /Discover/ }))
+
+    const busy = await screen.findByTitle('Discovering')
+    expect(busy).toHaveAttribute('aria-busy', 'true')
+    expect(busy).toHaveTextContent('Discover')
+    expect(busy.querySelector('[class*="animate-spin"]')).not.toBeNull()
+    expect(screen.queryByText('Discovering…')).toBeNull()
+  })
+
+  it('draws working cards while the first page of people loads', () => {
+    ;(global.window.electronAPI as any).contacts.getAll.mockReturnValueOnce(new Promise(() => {}))
+    render(
+      <MemoryRouter>
+        <People />
+      </MemoryRouter>
+    )
+    expect(screen.getByRole('status', { name: 'Loading people' })).toBeInTheDocument()
   })
 })

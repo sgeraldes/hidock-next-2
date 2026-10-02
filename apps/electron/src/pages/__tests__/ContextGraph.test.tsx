@@ -163,6 +163,26 @@ describe('ContextGraph page — lens first', () => {
     )
   })
 
+  // Loading looks like work, never a bare spinner or a sentence (owner, 2-oct-2026)
+  it('draws a working block while the graph loads, and a spinner pill while the lens loads', async () => {
+    let resolveLens: (v: unknown) => void = () => {}
+    global.window.electronAPI = mockAPI({
+      contextGraph: { getLens: vi.fn(() => new Promise((r) => { resolveLens = r })) },
+    }) as any
+    render(
+      <MemoryRouter>
+        <ContextGraph />
+      </MemoryRouter>
+    )
+    expect(screen.getByRole('status', { name: 'Loading the context graph' })).toBeInTheDocument()
+    const pill = await screen.findByRole('status', { name: 'Loading lens' })
+    expect(pill).toHaveAttribute('title', 'Loading lens')
+    expect(pill.textContent).toBe('')
+    expect(screen.queryByText('Loading lens…')).toBeNull()
+    resolveLens({ success: true, data: lens })
+    await waitFor(() => expect(screen.queryByRole('status', { name: 'Loading lens' })).toBeNull())
+  })
+
   it('clicking a node opens the inspector with identity, narrative + click-through', async () => {
     render(
       <MemoryRouter>

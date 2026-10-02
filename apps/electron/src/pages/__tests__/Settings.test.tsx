@@ -313,6 +313,77 @@ describe('Settings Page', () => {
     }
   })
 
+  it('shows page placeholders, not a sentence, while the config loads', async () => {
+    const { useConfigStore } = await import('@/store/domain/useConfigStore')
+    const mockedUseConfigStore = vi.mocked(useConfigStore)
+    const originalImpl = mockedUseConfigStore.getMockImplementation()
+    mockedUseConfigStore.mockImplementation((selector?: any) => {
+      const state = { config: null, loadConfig: mockLoadConfig, updateConfig: mockUpdateConfig, configLoading: true }
+      if (typeof selector === 'function') return selector(state)
+      return state
+    })
+    try {
+      render(<Settings />)
+      const working = screen.getByRole('status', { name: 'Loading settings' })
+      expect(working).toHaveAttribute('title', 'Loading settings')
+      expect(screen.queryByText(/Loading settings/)).not.toBeInTheDocument()
+    } finally {
+      if (originalImpl) mockedUseConfigStore.mockImplementation(originalImpl)
+    }
+  })
+
+  it('shows storage placeholders while the storage info loads, never the old sentence', async () => {
+    let resolveInfo: (v: unknown) => void = () => {}
+    vi.mocked(window.electronAPI.storage.getInfo).mockImplementationOnce(
+      () => new Promise((resolve) => { resolveInfo = resolve })
+    )
+    render(<Settings />)
+    expect(await screen.findByRole('status', { name: 'Loading storage info' })).toBeInTheDocument()
+    expect(screen.queryByText(/Loading storage info/)).not.toBeInTheDocument()
+    resolveInfo({ success: true, data: { dataPath: '/data', recordingsPath: '/r', transcriptsPath: '/t', cachePath: '/c', databasePath: '/db', totalSizeBytes: 1, recordingsCount: 0 } })
+    await waitFor(() => expect(screen.queryByRole('status', { name: 'Loading storage info' })).not.toBeInTheDocument())
+  })
+
+  it('draws the model list helper as a shimmering value while the models load', async () => {
+    vi.mocked(window.electronAPI.config.listGeminiModels).mockImplementationOnce(() => new Promise(() => {}))
+    render(<Settings />)
+    openTranscriptionPane(/^Gemini/)
+    expect(screen.getByRole('status', { name: 'Loading available models' })).toBeInTheDocument()
+    expect(screen.queryByText(/Loading available models/)).not.toBeInTheDocument()
+  })
+
+  it('shows a spinner pill with the words in its name while the speaker model access is checked', async () => {
+    const { useConfigStore } = await import('@/store/domain/useConfigStore')
+    const mockedUseConfigStore = vi.mocked(useConfigStore)
+    const originalImpl = mockedUseConfigStore.getMockImplementation()
+    mockedUseConfigStore.mockImplementation((selector?: any) => {
+      const state = {
+        config: {
+          calendar: { icsUrl: '', syncEnabled: false, syncIntervalMinutes: 15, lastSyncAt: null },
+          transcription: { geminiApiKey: '', geminiModel: 'gemini-3-pro-preview', localAsrHfToken: 'hf_saved' }, // pragma: allowlist secret
+          chat: { provider: 'gemini' as const },
+          embeddings: { ollamaBaseUrl: 'http://localhost:11434' }
+        },
+        loadConfig: mockLoadConfig,
+        updateConfig: mockUpdateConfig,
+        configLoading: false
+      }
+      if (typeof selector === 'function') return selector(state)
+      return state
+    })
+    vi.mocked(window.electronAPI.config.checkSpeakerModelAccess).mockImplementationOnce(() => new Promise(() => {}))
+    try {
+      render(<Settings />)
+      openTranscriptionPane(/^Gemini/)
+      const pill = await screen.findByRole('status', { name: 'Checking access' })
+      expect(pill).toHaveAttribute('title', 'Checking access')
+      expect(pill).toHaveAttribute('aria-busy', 'true')
+      expect(screen.queryByText(/Checking access/)).not.toBeInTheDocument()
+    } finally {
+      if (originalImpl) mockedUseConfigStore.mockImplementation(originalImpl)
+    }
+  })
+
   it('hides the kill-switch hint when valueClassificationEnabled is not explicitly false', async () => {
     render(<Settings />)
     expect(screen.queryByText(/Automatic rating of newly transcribed recordings is turned off/)).not.toBeInTheDocument()

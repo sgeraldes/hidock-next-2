@@ -14,8 +14,9 @@
  */
 
 import { useCallback, useState } from 'react'
-import { Sparkles, RefreshCw, Wand2, ListChecks } from 'lucide-react'
+import { Sparkles, Wand2, ListChecks } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { BusyIcon, WorkingValue } from '@/components/ui/working'
 import {
   Dialog,
   DialogContent,
@@ -163,9 +164,12 @@ export function TranscriptUpgradeButton({ compact = false }: { compact?: boolean
               This maintenance action is not available in the current build. Restart the app after updating to enable it.
             </p>
           ) : loading && !scan ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
-              <RefreshCw className="h-4 w-4 animate-spin" />
-              Scanning transcripts...
+            // The four counts shimmer while the scan runs; no sentence (owner, 2-oct-2026).
+            <div className="grid grid-cols-2 gap-3 py-2" data-testid="upgrade-scan-working">
+              <Stat label="Flat transcripts" value={null} />
+              <Stat label="Already reformatted" value={null} />
+              <Stat label="To reformat (cheap)" value={null} accent="primary" />
+              <Stat label="Flagged for re-transcription" value={null} accent="orange" />
             </div>
           ) : scan ? (
             <div className="grid grid-cols-2 gap-3 py-2">
@@ -191,18 +195,11 @@ export function TranscriptUpgradeButton({ compact = false }: { compact?: boolean
               size="sm"
               onClick={onReformat}
               disabled={unavailable || running || !scan || scan.toReformat === 0}
+              aria-busy={running || undefined}
+              title={running ? 'Starting' : undefined}
             >
-              {running ? (
-                <>
-                  <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                  Starting...
-                </>
-              ) : (
-                <>
-                  <Wand2 className="h-4 w-4 mr-2" />
-                  Reformat {scan?.toReformat ?? 0} now
-                </>
-              )}
+              {running ? <BusyIcon className="mr-2" /> : <Wand2 className="h-4 w-4 mr-2" />}
+              Reformat {scan?.toReformat ?? 0} now
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -211,7 +208,7 @@ export function TranscriptUpgradeButton({ compact = false }: { compact?: boolean
   )
 }
 
-function Stat({ label, value, accent }: { label: string; value: number; accent?: 'primary' | 'orange' }) {
+function Stat({ label, value, accent }: { label: string; value: number | null; accent?: 'primary' | 'orange' }) {
   const color =
     accent === 'primary'
       ? 'text-primary'
@@ -220,7 +217,9 @@ function Stat({ label, value, accent }: { label: string; value: number; accent?:
         : 'text-foreground'
   return (
     <div className="rounded-md border p-3">
-      <div className={`text-2xl font-bold ${color}`}>{value}</div>
+      <div className={`text-2xl font-bold ${color}`}>
+        {value === null ? <WorkingValue label={`Scanning transcripts: ${label}`} /> : value}
+      </div>
       <div className="text-xs text-muted-foreground">{label}</div>
     </div>
   )

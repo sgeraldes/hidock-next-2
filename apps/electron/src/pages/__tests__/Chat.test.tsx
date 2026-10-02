@@ -85,6 +85,49 @@ describe('Chat Component', () => {
     })
   })
 
+  // Loading states look like work, never a sentence (owner, 2-oct-2026)
+  it('shows a working page while the assistant initializes, without the old sentence', async () => {
+    render(
+      <MemoryRouter>
+        <Chat />
+      </MemoryRouter>
+    )
+    expect(screen.getByRole('status', { name: 'Initializing Knowledge Assistant' })).toBeInTheDocument()
+    expect(screen.queryByText('Initializing Knowledge Assistant...')).toBeNull()
+    await waitFor(() => expect(screen.getAllByText('Conversation 1').length).toBeGreaterThan(0))
+  })
+
+  it('header pill shows a spinner and the number while the index loads, a pulsing clock while queued', async () => {
+    const statusMock = window.electronAPI.rag.status as any
+    statusMock.mockResolvedValueOnce({
+      success: true,
+      data: { ready: false, indexState: 'loading', indexLoaded: 4, indexTotal: 10, documentCount: 0, meetingCount: 0 }
+    })
+    const { unmount } = render(
+      <MemoryRouter>
+        <Chat />
+      </MemoryRouter>
+    )
+    const loading = await screen.findByRole('status', { name: 'Loading knowledge, 40%' })
+    expect(loading).toHaveTextContent('40%')
+    expect(loading.querySelector('[class*="animate-spin"]')).not.toBeNull()
+    expect(screen.queryByText(/Loading knowledge ·/)).toBeNull()
+    unmount()
+
+    statusMock.mockResolvedValueOnce({
+      success: true,
+      data: { ready: false, indexState: 'queued', documentCount: 0, meetingCount: 0 }
+    })
+    render(
+      <MemoryRouter>
+        <Chat />
+      </MemoryRouter>
+    )
+    const queued = await screen.findByRole('status', { name: 'Knowledge index queued' })
+    expect(queued.querySelector('.lucide-clock')).not.toBeNull()
+    expect(queued.textContent).toBe('')
+  })
+
   it('should create a new chat when clicking New Chat button', async () => {
     render(
       <MemoryRouter>

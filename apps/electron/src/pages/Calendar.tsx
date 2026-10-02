@@ -38,6 +38,7 @@ import { useAudioControls } from '@/components/OperationController'
 import { useUIStore } from '@/store/useUIStore'
 import { useOperations } from '@/hooks/useOperations'
 import { toast } from '@/components/ui/toaster'
+import { Working, WorkingBar } from '@/components/ui/working'
 
 // Extracted calendar components
 import { CalendarHeader, CalendarStatsBar, StatusIcon, RecordingTooltipContent, MeetingOverlayTooltipContent } from '@/components/calendar'
@@ -826,16 +827,14 @@ export function Calendar() {
 
       {/* Main Content */}
       {(meetingsLoading || recordingsLoading) && meetings.length === 0 && unifiedRecordings.length === 0 ? (
-        <div className="flex-1 flex items-center justify-center">
-          <p className="text-muted-foreground">Loading...</p>
+        // Loading looks like work, never a sentence (owner, 2-oct-2026)
+        <div className="flex-1 overflow-hidden px-6">
+          <Working label="Loading calendar" shape="list" rows={8} />
         </div>
       ) : showListView ? (
         /* C-CAL-003: Show subtle sync indicator when resyncing with existing data */
         <>{calendarSyncing && (
-          <div className="flex items-center gap-2 px-6 py-1.5 bg-blue-50 dark:bg-blue-950/30 border-b text-xs text-blue-600 dark:text-blue-400 flex-shrink-0">
-            <RefreshCw className="h-3 w-3 animate-spin" />
-            <span>Syncing calendar...</span>
-          </div>
+          <WorkingBar label="Syncing calendar" className="flex-shrink-0 rounded-none" />
         )}
         {/* List/Cards View */}
         <div className="flex-1 flex flex-col overflow-hidden">
@@ -1191,10 +1190,7 @@ export function Calendar() {
         <div className="flex-1 flex flex-col min-h-0">
           {/* C-CAL-003: Sync indicator for calendar views */}
           {calendarSyncing && (
-            <div className="flex items-center gap-2 px-6 py-1.5 bg-blue-50 dark:bg-blue-950/30 border-b text-xs text-blue-600 dark:text-blue-400 flex-shrink-0">
-              <RefreshCw className="h-3 w-3 animate-spin" />
-              <span>Syncing calendar...</span>
-            </div>
+            <WorkingBar label="Syncing calendar" className="flex-shrink-0 rounded-none" />
           )}
           {/* Day of Week Headers */}
           <div className="grid grid-cols-7 border-b flex-shrink-0">
@@ -1312,10 +1308,7 @@ export function Calendar() {
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
           {/* C-CAL-003: Sync indicator for week/day views */}
           {calendarSyncing && (
-            <div className="flex items-center gap-2 px-6 py-1.5 bg-blue-50 dark:bg-blue-950/30 border-b text-xs text-blue-600 dark:text-blue-400 flex-shrink-0">
-              <RefreshCw className="h-3 w-3 animate-spin" />
-              <span>Syncing calendar...</span>
-            </div>
+            <WorkingBar label="Syncing calendar" className="flex-shrink-0 rounded-none" />
           )}
           {/* Day Headers - fixed, with scrollbar gutter to match content */}
           <div className="flex border-b flex-shrink-0 overflow-y-scroll" style={{ scrollbarGutter: 'stable' }}>

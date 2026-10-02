@@ -32,6 +32,16 @@ describe('getDisplayTitle', () => {
     })
   })
 
+  it('treats a stored title that is only the file name as no title (owner, 2-oct-2026)', () => {
+    // A recording with no speech gets no suggestion, and its capture stores the file name instead.
+    for (const stored of ['2026Sep24-110051-Rec52.hda', '2026sep24-110051-rec52', '2026Sep24-110051-Rec52.wav', ' 2026Sep24-110051-Rec52.hda ']) {
+      const title = getDisplayTitle({ ...baseRecording, title: stored })
+      expect(title.source, stored).toBe('date')
+      expect(title.primaryText).toMatch(/^Recording, /)
+    }
+    expect(getDisplayTitle({ ...baseRecording, userTitle: '2026Sep24-110051-Rec52.hda' }).source).toBe('date')
+  })
+
   it('then the suggested title', () => {
     expect(getDisplayTitle({ ...baseRecording, title: 'Budget review with Laura' })).toEqual({
       primaryText: 'Budget review with Laura',

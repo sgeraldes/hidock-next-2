@@ -34,6 +34,30 @@ describe('Settings > Secrets', () => {
     expect(screen.getByText('Slack: Bot token')).toBeInTheDocument()
   })
 
+  it('shows placeholder rows while the other keys are read, never the old word', async () => {
+    render(<SecretsSection />)
+    expect(screen.getByRole('status', { name: 'Reading the stored keys' })).toBeInTheDocument()
+    expect(screen.queryByText(/Reading…/)).not.toBeInTheDocument()
+    await screen.findByText('Anthropic (AI provider)')
+    expect(screen.queryByRole('status', { name: 'Reading the stored keys' })).not.toBeInTheDocument()
+  })
+
+  it('keeps the Save label and spins while a key is saved', async () => {
+    let finish: () => void = () => {}
+    updateConfig.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve }))
+    render(<SecretsSection />)
+    fireEvent.click(screen.getByTestId('secret-geminiApiKey').querySelector('button')!)
+    fireEvent.change(screen.getByLabelText('New google gemini api key'), { target: { value: 'AIzaNEW' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    const save = await screen.findByRole('button', { name: 'Save' })
+    await waitFor(() => expect(save).toHaveAttribute('aria-busy', 'true'))
+    expect(save).toHaveAttribute('title', 'Saving')
+    expect(save).toBeDisabled()
+    expect(screen.queryByText(/Saving…/)).not.toBeInTheDocument()
+    finish()
+    await screen.findByText('Anthropic (AI provider)')
+  })
+
   it('replaces a key, and removes one only after confirming', async () => {
     render(<SecretsSection />)
     const gemini = screen.getByTestId('secret-geminiApiKey')

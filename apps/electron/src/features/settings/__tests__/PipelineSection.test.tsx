@@ -60,6 +60,13 @@ beforeEach(() => {
 })
 
 describe('PipelineSection', () => {
+  it('shows placeholder rows while the settings load, never the old sentence', async () => {
+    render(<PipelineSection />)
+    expect(screen.getByRole('status', { name: 'Loading the pipeline settings' })).toBeInTheDocument()
+    expect(screen.queryByText(/Loading the pipeline settings/)).not.toBeInTheDocument()
+    await row('chat')
+  })
+
   it('shows every step under its group, each on Automatic with where its text goes and its numbers', async () => {
     render(<PipelineSection />)
     for (const group of ['Interactive', 'Speakers', 'Library']) {

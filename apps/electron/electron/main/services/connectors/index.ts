@@ -14,6 +14,7 @@ import { getConnectorStore } from './connector-store'
 import { createIngestionSink } from './ingestion'
 import { m365Descriptor, createM365Connector } from './m365/m365-connector'
 import { getConfig } from '../config'
+import { getEventBus } from '../event-bus'
 import { isFeatureEnabledIn } from '../../../../src/shared/feature-registry'
 
 let host: ConnectorHost | null = null
@@ -95,18 +96,28 @@ export async function syncConnectedConnectors(): Promise<void> {
   const config = getConfig()
   if (!config.calendar.syncEnabled || !isFeatureEnabledIn(config.features, 'calendar')) return
   scheduledRunInFlight = true
+  let meetings = 0
   try {
     const h = getConnectorHost()
     for (const id of h.listInstances()) {
       if (h.getStatus(id).state !== 'connected') continue
       try {
-        await h.syncNow(id)
+        meetings += (await h.syncNow(id)).meetings
       } catch (err) {
         console.warn(`[connectors] Scheduled sync of ${id} failed:`, err instanceof Error ? err.message : err)
       }
     }
   } finally {
     scheduledRunInFlight = false
+  }
+  // Same signal as a sync from the button: meeting views refetch and the
+  // time-only meeting links are checked against the new times (2-oct-2026).
+  if (meetings > 0) {
+    getEventBus().emitDomainEvent({
+      type: 'calendar:synced',
+      timestamp: new Date().toISOString(),
+      payload: { meetingsCount: meetings }
+    })
   }
 }
 

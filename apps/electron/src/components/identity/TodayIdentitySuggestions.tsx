@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router-dom'
 import { Sparkles, ArrowRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Working } from '@/components/ui/working'
 import { useIdentitySuggestions } from './useIdentitySuggestions'
 
 /**
@@ -13,7 +14,11 @@ export function TodayIdentitySuggestions() {
   const navigate = useNavigate()
   const { suggestions, loading, targetNames } = useIdentitySuggestions()
 
-  if (loading || suggestions.length === 0) return null
+  // While the queue loads, draw its coming rows instead of nothing (owner, 2-oct-2026)
+  if (loading && suggestions.length === 0) {
+    return <Working label="Loading identity suggestions" shape="list" rows={2} />
+  }
+  if (suggestions.length === 0) return null
 
   const top = suggestions.slice(0, 2)
 

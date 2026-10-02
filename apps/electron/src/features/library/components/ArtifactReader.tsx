@@ -12,6 +12,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { FolderOpen, Sparkles, FileText } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Working } from '@/components/ui/working'
 import { formatDateTime, formatBytes } from '@/lib/utils'
 import type { UnifiedRecording } from '@/types/unified-recording'
 
@@ -345,9 +346,7 @@ export function ArtifactReader({ recording, onAskAboutSource }: ArtifactReaderPr
 
   if (loading) {
     return (
-      <div className="text-center text-muted-foreground py-8">
-        <p className="text-sm">Loading artifact…</p>
-      </div>
+      <Working label="Loading artifact" shape="lines" rows={6} className="py-8" />
     )
   }
 

@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import type { LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { BusyIcon } from '@/components/ui/working'
 
 export type ServiceTone = 'ok' | 'attention' | 'error' | 'off' | 'busy'
 
@@ -11,6 +12,8 @@ export interface ServiceListItem {
   status: string
   tone: ServiceTone
   icon?: LucideIcon
+  /** The state is running (connecting, syncing): a spinner, the words go to the tooltip. */
+  busy?: boolean
 }
 
 const TONE_DOT: Record<ServiceTone, string> = {
@@ -65,10 +68,21 @@ export function ServiceList({
                   {Icon && <Icon className="h-5 w-5 shrink-0 text-muted-foreground" aria-hidden="true" />}
                   <span className="min-w-0 flex-1">
                     <span className={cn('block truncate text-sm', active && 'font-medium text-primary')}>{item.label}</span>
-                    <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                      <span className={cn('h-1.5 w-1.5 rounded-full', TONE_DOT[item.tone])} aria-hidden="true" />
-                      {item.status}
-                    </span>
+                    {item.busy ? (
+                      <span
+                        className="flex items-center gap-1.5 text-xs text-muted-foreground"
+                        title={item.status}
+                        aria-label={item.status}
+                        aria-busy={true}
+                      >
+                        <BusyIcon className="h-3 w-3" />
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <span className={cn('h-1.5 w-1.5 rounded-full', TONE_DOT[item.tone])} aria-hidden="true" />
+                        {item.status}
+                      </span>
+                    )}
                   </span>
                 </button>
               </li>

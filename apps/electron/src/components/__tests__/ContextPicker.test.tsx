@@ -14,6 +14,13 @@ global.window.electronAPI = {
 } as any
 
 describe('ContextPicker Component', () => {
+  it('shows placeholder rows while knowledge loads, never the old sentence', async () => {
+    render(<ContextPicker onSelect={vi.fn()} selectedIds={[]} />)
+    expect(screen.getByRole('status', { name: 'Loading knowledge' })).toBeInTheDocument()
+    expect(screen.queryByText(/Loading knowledge/)).not.toBeInTheDocument()
+    await screen.findByText('Knowledge 1')
+  })
+
   it('should render list of knowledge captures', async () => {
     const onSelect = vi.fn()
     render(<ContextPicker onSelect={onSelect} selectedIds={[]} />)

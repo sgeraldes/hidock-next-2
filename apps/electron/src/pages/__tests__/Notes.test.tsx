@@ -135,6 +135,35 @@ describe('the notes page', () => {
     )
   })
 
+  // Saving is a spinner with the word in its title; "Saved" stays a real state (owner, 2-oct-2026)
+  it('shows a spinner while the note saves, then "Saved"', async () => {
+    let finish: () => void = () => {}
+    ;(api.notes as Record<string, ReturnType<typeof vi.fn>>).update.mockImplementationOnce(
+      (request: { id: string } & Partial<Note>) =>
+        new Promise((resolve) => {
+          finish = () => resolve({ success: true, note: { ...notes.find((n) => n.id === request.id)!, ...request } })
+        })
+    )
+    render(<Notes />)
+    await waitFor(() => expect(screen.getByText('Presupuesto de septiembre')).toBeTruthy())
+    await act(async () => {
+      fireEvent.click(screen.getByText('Presupuesto de septiembre'))
+    })
+    await waitFor(() => expect(screen.getByText('Saved')).toBeTruthy())
+
+    fireEvent.change(screen.getByLabelText('Note'), { target: { value: 'Presupuesto de septiembre\nmás números' } })
+
+    const saving = await screen.findByRole('status', { name: 'Saving' }, { timeout: 3000 })
+    expect(saving).toHaveAttribute('title', 'Saving')
+    expect(saving.querySelector('[class*="animate-spin"]')).not.toBeNull()
+    expect(screen.queryByText('Saving…')).toBeNull()
+
+    await act(async () => {
+      finish()
+    })
+    await waitFor(() => expect(screen.getByText('Saved')).toBeTruthy())
+  })
+
   it('shows a meeting suggestion with its reason, and does not link it by itself', async () => {
     render(<Notes />)
     await waitFor(() => expect(screen.getByText('Presupuesto de septiembre')).toBeTruthy())

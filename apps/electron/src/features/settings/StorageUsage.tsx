@@ -9,6 +9,7 @@ import { HardDrive } from 'lucide-react'
 import { useConfigStore } from '@/store/domain/useConfigStore'
 import { useAppStore } from '@/store/useAppStore'
 import { toast } from '@/components/ui/toaster'
+import { Working } from '@/components/ui/working'
 import { formatBytes, cn } from '@/lib/utils'
 import { appLocale } from '@/lib/locale'
 import type { StorageLocationUsage } from '@/types'
@@ -34,7 +35,7 @@ export function StorageUsageLine({ usage, onLimitSaved }: { usage: StorageLocati
   const [draft, setDraft] = useState(saved ? String(saved) : '')
   useEffect(() => setDraft(saved ? String(saved) : ''), [saved])
 
-  if (!usage || !id) return <p className="mt-1 text-xs text-muted-foreground">Measuring…</p>
+  if (!usage || !id) return <Working label="Measuring the folder" shape="lines" rows={1} className="mt-1 py-1" />
 
   const saveLimit = () => {
     const value = draft.trim() === '' ? null : Number(draft)

@@ -10,6 +10,7 @@ import {
 } from '@/services/hidock-device'
 import { Progress } from '@/components/ui/progress'
 import { toast } from '@/components/ui/toaster'
+import { Working, WorkingValue, BusyIcon } from '@/components/ui/working'
 import { useAppStore } from '@/store/useAppStore'
 import { hasDeviceFile, type DeviceOnlyRecording, type BothLocationsRecording } from '@/types/unified-recording'
 import { useUnifiedRecordings } from '@/hooks/useUnifiedRecordings'
@@ -931,18 +932,27 @@ export function Device() {
                   </div>
                   {connecting ? (
                     <div className="space-y-3 max-w-sm mx-auto">
-                      <p className="text-sm font-medium">{connectionStatus.message}</p>
-                      {connectionStatus.progress !== undefined && (
-                        <Progress value={connectionStatus.progress} className="h-2" />
-                      )}
+                      {/* The step goes to the tooltip; on screen it is a spinner and the bar (owner, 2-oct-2026) */}
+                      <div
+                        role="status"
+                        aria-label={connectionStatus.message}
+                        title={`${connectionStatus.message}. Make sure your HiDock is connected via USB.`}
+                        className="flex items-center gap-2 text-yellow-600 dark:text-yellow-400"
+                      >
+                        <BusyIcon />
+                        {connectionStatus.progress !== undefined ? (
+                          <Progress value={connectionStatus.progress} className="h-2 flex-1" />
+                        ) : (
+                          <span className="relative h-1 flex-1 overflow-hidden rounded-full bg-muted" aria-hidden="true">
+                            <span className="absolute inset-y-0 left-0 w-1/3 rounded-full bg-yellow-500/70 motion-safe:animate-shimmer" />
+                          </span>
+                        )}
+                      </div>
                       <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
                         <span>Elapsed: {(connectionElapsed / 1000).toFixed(1)}s</span>
                         <span className="text-muted-foreground/50">|</span>
                         <span>Timeout in {Math.max(0, (CONNECTION_TIMEOUT_MS - connectionElapsed) / 1000).toFixed(0)}s</span>
                       </div>
-                      <p className="text-xs text-muted-foreground">
-                        Make sure your HiDock is connected via USB...
-                      </p>
                       <Button
                         variant="outline"
                         size="sm"
@@ -1025,8 +1035,13 @@ export function Device() {
                       }`} />
                       <div>
                         <p className="font-medium capitalize">{deviceState.model.replace('-', ' ')}</p>
-                        <p className="text-sm text-muted-foreground">
-                          {storeSyncing ? 'Syncing...' : `Firmware ${deviceState.firmwareVersion}`}
+                        <p className="text-sm text-muted-foreground flex items-center gap-1.5">
+                          {`Firmware ${deviceState.firmwareVersion}`}
+                          {storeSyncing && (
+                            <span role="status" aria-label="Syncing" title="Syncing" className="inline-flex text-blue-500">
+                              <BusyIcon className="h-3.5 w-3.5" />
+                            </span>
+                          )}
                         </p>
                       </div>
                     </div>
@@ -1075,10 +1090,7 @@ export function Device() {
                         )
                       ) : (
                         <div className="space-y-2">
-                          <div className="flex items-center gap-2 text-muted-foreground">
-                            <RefreshCw className="h-4 w-4 animate-spin" />
-                            <span className="text-sm">Loading...</span>
-                          </div>
+                          <WorkingValue label="Loading storage" className="w-24 text-2xl" />
                           <Button variant="ghost" size="sm" onClick={handleResetDevice} className="text-xs">
                             <RotateCcw className="h-3 w-3 mr-1" />
                             Reset if stuck
@@ -1159,9 +1171,11 @@ export function Device() {
                         className="w-full"
                         onClick={handleFormatStorage}
                         disabled={formatting || storeSyncing}
+                        aria-busy={formatting || undefined}
+                        title={formatting ? 'Formatting' : undefined}
                       >
-                        <Trash2 className="h-4 w-4 mr-2" />
-                        {formatting ? 'Formatting...' : 'Format Storage'}
+                        {formatting ? <BusyIcon className="h-4 w-4 mr-2" /> : <Trash2 className="h-4 w-4 mr-2" />}
+                        Format Storage
                       </Button>
                       <p className="text-[10px] text-muted-foreground mt-1 text-center">
                         Erases all recordings from device
@@ -1193,6 +1207,8 @@ export function Device() {
                           onClick={storeSyncing ? cancelDeviceSync : handleSyncAll}
                           disabled={(!storeSyncing && ((deviceAccessibleRecordings.length === 0 && !isLoadingList && deviceState.recordingCount === 0) || allSynced || isLoadingList))}
                           variant={storeSyncing ? 'destructive' : (allSynced ? 'secondary' : 'default')}
+                          aria-busy={(!storeSyncing && isLoadingList) || undefined}
+                          title={!storeSyncing && isLoadingList ? 'Loading file list' : undefined}
                         >
                           {storeSyncing ? (
                             <>
@@ -1208,8 +1224,8 @@ export function Device() {
                             </>
                           ) : isLoadingList ? (
                             <>
-                              <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                              Loading File List...
+                              <BusyIcon className="h-4 w-4 mr-2" />
+                              Sync Recordings
                             </>
                           ) : allSynced ? (
                             <>
@@ -1490,7 +1506,7 @@ export function Device() {
                           ))}
                         {liveTranscriptionFinal.length === 0 &&
                           !Object.values(liveTranscriptionInterim).some(Boolean) && (
-                            <p className="text-muted-foreground">Listening for speech…</p>
+                            <Working label="Listening for speech" shape="lines" rows={3} waiting className="py-0" />
                           )}
                       </div>
                     </div>
@@ -1542,7 +1558,7 @@ export function Device() {
                       </div>
                       <div>
                         <p className="font-medium">
-                          {batteryStatus ? `${batteryStatus.batteryLevel}%` : 'Loading...'}
+                          {batteryStatus ? `${batteryStatus.batteryLevel}%` : <WorkingValue label="Reading the battery" />}
                         </p>
                         <p className="text-xs text-muted-foreground capitalize">
                           {batteryStatus?.status ?? 'Unknown'}
@@ -1570,37 +1586,31 @@ export function Device() {
                 <CardContent>
                   <div className="space-y-4">
                     <div className="flex items-center justify-between p-4 border rounded-lg">
-                      <div className="flex items-center gap-3">
+                      <div className="flex min-w-0 flex-1 items-center gap-3">
                         <Bluetooth
-                          className={`h-5 w-5 ${
+                          className={`h-5 w-5 shrink-0 ${
                             bluetoothScanning ? 'text-blue-500 animate-pulse' : 'text-muted-foreground'
                           }`}
                         />
-                        <div>
-                          <p className="font-medium">
-                            {bluetoothScanning ? 'Scanning...' : 'Bluetooth Ready'}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            {bluetoothScanning
-                              ? 'Looking for nearby devices'
-                              : 'Tap Scan to find devices'}
-                          </p>
-                        </div>
+                        {bluetoothScanning ? (
+                          <Working label="Looking for nearby devices" shape="list" rows={2} className="py-0 pr-4" />
+                        ) : (
+                          <div>
+                            <p className="font-medium">Bluetooth Ready</p>
+                            <p className="text-xs text-muted-foreground">Tap Scan to find devices</p>
+                          </div>
+                        )}
                       </div>
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={handleBluetoothScan}
                         disabled={bluetoothScanning}
+                        aria-busy={bluetoothScanning || undefined}
+                        title={bluetoothScanning ? 'Scanning' : undefined}
                       >
-                        {bluetoothScanning ? (
-                          <>
-                            <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                            Scanning
-                          </>
-                        ) : (
-                          'Scan'
-                        )}
+                        {bluetoothScanning && <BusyIcon className="h-4 w-4 mr-2" />}
+                        Scan
                       </Button>
                     </div>
                     <p className="text-xs text-muted-foreground">

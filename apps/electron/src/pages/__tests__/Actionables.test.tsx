@@ -167,10 +167,37 @@ describe('Actionables Page', () => {
       expect(screen.getByRole('heading', { name: 'Interview feedback' })).toBeInTheDocument()
     })
 
-    // Check for the Processing button
-    const processingButton = screen.getByText('Processing...')
-    expect(processingButton).toBeInTheDocument()
-    expect(processingButton.closest('button')).toBeDisabled()
+    // The in_progress button keeps its action label, spins, and carries the
+    // state in its title, never the word on screen (owner, 2-oct-2026).
+    const processingButton = screen.getByTitle('Processing')
+    expect(processingButton.tagName).toBe('BUTTON')
+    expect(processingButton).toBeDisabled()
+    expect(processingButton).toHaveAttribute('aria-busy', 'true')
+    expect(processingButton.querySelector('[class*="animate-spin"]')).not.toBeNull()
+    expect(screen.queryByText('Processing...')).toBeNull()
+  })
+
+  it('shows the generation overlay as a working document, without the old sentences', async () => {
+    let resolveApproval: (v: unknown) => void = () => {}
+    ;(window.electronAPI.actionables.generateOutput as any).mockReturnValueOnce(
+      new Promise((r) => { resolveApproval = r })
+    )
+    render(
+      <MemoryRouter>
+        <Actionables />
+      </MemoryRouter>
+    )
+    await screen.findByText('Send meeting minutes')
+    fireEvent.click(screen.getByRole('button', { name: 'Generate meeting minutes' }))
+    expect(await screen.findByRole('status', { name: /^Generating / })).toBeInTheDocument()
+    // The approve button keeps its label and spins, with the state in its title.
+    const busy = screen.getByTitle('Generating')
+    expect(busy).toHaveAttribute('aria-busy', 'true')
+    expect(busy).toHaveTextContent('Generate meeting minutes')
+    expect(screen.queryByText(/This may take a few moments/)).toBeNull()
+    expect(screen.queryByText('Generating...')).toBeNull()
+    resolveApproval({ success: false, error: 'stop' })
+    await waitFor(() => expect(screen.queryByRole('status', { name: /^Generating / })).toBeNull())
   })
 
   // C-ACT-M05: Test copy to clipboard shows toast feedback

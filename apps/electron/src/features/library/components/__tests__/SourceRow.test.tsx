@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 
 vi.mock('@/components/ui/toaster', () => ({
   toast: Object.assign(vi.fn(), {
@@ -10,6 +10,8 @@ vi.mock('@/components/ui/toaster', () => ({
   }),
 }))
 import { SourceRow } from '../SourceRow'
+import { PLACE_WIDTH } from '../libraryColumns'
+import { useTranscriptionStore } from '@/store/features/useTranscriptionStore'
 import type { UnifiedRecording } from '@/types/unified-recording'
 import type { Meeting } from '@/types'
 
@@ -148,8 +150,10 @@ describe('SourceRow download state truthfulness', () => {
     transcriptionStatus: 'none' as const
   }
 
-  it('shows a restored pending item as queued, never as zero-percent downloading', () => {
-    render(
+  const statusPlace = (container: HTMLElement) => container.querySelector('[data-slot="status"]') as HTMLElement
+
+  it('shows a restored pending item as queued, in the file-status place, never as zero-percent downloading', () => {
+    const { container } = render(
       <SourceRow
         recording={deviceOnly}
         downloadStatus="pending"
@@ -159,12 +163,13 @@ describe('SourceRow download state truthfulness', () => {
       />
     )
 
-    expect(screen.getByText('Queued')).toBeInTheDocument()
+    expect(within(statusPlace(container)).getByLabelText('Waiting to download from the device')).toBeInTheDocument()
+    expect(screen.queryByText('Queued')).not.toBeInTheDocument()
     expect(screen.queryByText('0%')).not.toBeInTheDocument()
   })
 
   it('uses a starting state until the first real progress byte arrives', () => {
-    render(
+    const { container } = render(
       <SourceRow
         recording={deviceOnly}
         downloadStatus="downloading"
@@ -174,8 +179,68 @@ describe('SourceRow download state truthfulness', () => {
       />
     )
 
-    expect(screen.getByText('Starting')).toBeInTheDocument()
+    expect(within(statusPlace(container)).getByLabelText('Starting the download from the device')).toBeInTheDocument()
+    expect(screen.queryByText('Starting')).not.toBeInTheDocument()
     expect(screen.queryByText('0%')).not.toBeInTheDocument()
+  })
+
+  it('puts the download percentage in the file-status place and names it (owner, 2-oct-2026)', () => {
+    const { container } = render(
+      <SourceRow
+        recording={deviceOnly}
+        downloadStatus="downloading"
+        downloadProgress={60}
+        isDownloading
+        deviceConnected
+        compact
+        wide
+      />
+    )
+
+    const place = statusPlace(container)
+    expect(within(place).getByText('60%')).toBeInTheDocument()
+    expect(within(place).getByLabelText('Downloading from the device: 60%')).toBeInTheDocument()
+    // Nothing is appended after the places: the percentage appears once, inside its place.
+    expect(screen.getAllByText('60%')).toHaveLength(1)
+  })
+
+  it('keeps every place the same width whether or not a download is running, so the columns line up', () => {
+    const idle = render(<SourceRow recording={deviceOnly} compact wide />)
+    const idleWidths = Array.from(idle.container.querySelectorAll('[data-slot]')).map((el) => `${el.getAttribute('data-slot')}:${el.className}`)
+    idle.unmount()
+
+    const busy = render(
+      <SourceRow recording={deviceOnly} downloadStatus="downloading" downloadProgress={60} isDownloading deviceConnected compact wide />
+    )
+    const busyWidths = Array.from(busy.container.querySelectorAll('[data-slot]')).map((el) => `${el.getAttribute('data-slot')}:${el.className}`)
+    expect(busyWidths).toEqual(idleWidths)
+    expect(statusPlace(busy.container)).toHaveClass(PLACE_WIDTH.status)
+  })
+})
+
+describe('SourceRow transcription percentage', () => {
+  beforeEach(() => {
+    useTranscriptionStore.getState().clear()
+  })
+
+  it('shows the transcription percentage in the transcription place (owner, 2-oct-2026)', () => {
+    const rec = { ...baseRecording, transcriptionStatus: 'processing' as const }
+    useTranscriptionStore.getState().addToQueue('q1', rec.id, 'rec.wav')
+    useTranscriptionStore.getState().updateProgress('q1', 42)
+
+    const { container } = render(<SourceRow recording={rec} compact wide />)
+    const place = container.querySelector('[data-slot="transcription"]') as HTMLElement
+    expect(within(place).getByText('42%')).toBeInTheDocument()
+    expect(within(place).getByLabelText('Transcribing: 42%')).toBeInTheDocument()
+    expect(place).toHaveClass(PLACE_WIDTH.transcription)
+  })
+
+  it('keeps the spinning icon until the first progress arrives', () => {
+    const rec = { ...baseRecording, transcriptionStatus: 'processing' as const }
+    const { container } = render(<SourceRow recording={rec} compact wide />)
+    const place = container.querySelector('[data-slot="transcription"]') as HTMLElement
+    expect(within(place).getByLabelText('In Progress')).toBeInTheDocument()
+    expect(within(place).queryByText(/%$/)).toBeNull()
   })
 })
 
@@ -187,14 +252,18 @@ describe('SourceRow permanent deletion state', () => {
         {...defaultProps}
         compact
         isDeleting
-        deletionLabel="Erasing device copy…"
+        deletionLabel="Erasing device copy"
         onClick={onClick}
         onDeletePermanent={vi.fn()}
       />
     )
 
     const row = screen.getByRole('option')
-    expect(screen.getByRole('status')).toHaveTextContent('Erasing device copy…')
+    // A spinner only: the words are in the name and tooltip, not on screen.
+    const status = screen.getByRole('status', { name: 'Erasing device copy' })
+    expect(status).toHaveAttribute('title', 'Erasing device copy')
+    expect(status.textContent).toBe('')
+    expect(screen.queryByText(/Erasing device copy/)).not.toBeInTheDocument()
     expect(row).toHaveAttribute('aria-disabled', 'true')
     expect(row).toHaveAttribute('tabindex', '-1')
     expect(row).toHaveClass('h-11')

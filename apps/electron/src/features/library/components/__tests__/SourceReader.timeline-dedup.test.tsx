@@ -9,6 +9,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { SourceReader } from '../SourceReader'
 import { useUIStore } from '@/store/useUIStore'
 import { useLibraryStore } from '@/store/useLibraryStore'
+import { useTranscriptionStore } from '@/store/features/useTranscriptionStore'
 import type { UnifiedRecording } from '@/types/unified-recording'
 import type { Transcript } from '@/types'
 
@@ -152,6 +153,45 @@ beforeEach(() => {
   installElectronAPI()
 })
 
+describe('SourceReader — placeholder while the transcript loads (owner, 2-oct-2026)', () => {
+  it('shows transcript-shaped lines while the fetch is in flight, and says it is missing only after it returns empty', async () => {
+    let resolve!: (value: unknown) => void
+    getByRecordingId.mockReturnValue(new Promise((r) => { resolve = r }))
+
+    render(<MemoryRouter><SourceReader recording={makeRecording()} /></MemoryRouter>)
+
+    expect(await screen.findByRole('status', { name: 'Loading transcript' })).toBeInTheDocument()
+    expect(screen.queryByText(/transcript not available/i)).not.toBeInTheDocument()
+
+    await act(async () => { resolve(undefined) })
+    expect(screen.queryByRole('status', { name: 'Loading transcript' })).not.toBeInTheDocument()
+    expect(screen.getByText(/transcript not available/i)).toBeInTheDocument()
+  })
+})
+
+describe('SourceReader — transcription state in words and percent (owner, 2-oct-2026)', () => {
+  beforeEach(() => {
+    useTranscriptionStore.getState().clear()
+  })
+
+  it('a queued recording shows placeholder lines and a waiting clock, not a sentence', () => {
+    render(<MemoryRouter><SourceReader recording={makeRecording({ transcriptionStatus: 'pending' })} /></MemoryRouter>)
+    const state = screen.getByRole('status', { name: 'Waiting to be transcribed' })
+    expect(state.textContent?.trim()).toBe('')
+    expect(state.querySelector('.lucide-clock')).not.toBeNull()
+    expect(screen.queryByText(/transcription in progress/i)).not.toBeInTheDocument()
+  })
+
+  it('a running transcription shows placeholder lines, a spinner, a bar and the number', () => {
+    useTranscriptionStore.getState().addToQueue('q1', 'rec-1', 'meeting.wav')
+    useTranscriptionStore.getState().updateProgress('q1', 42)
+    render(<MemoryRouter><SourceReader recording={makeRecording({ transcriptionStatus: 'processing' })} /></MemoryRouter>)
+    const state = screen.getByRole('status', { name: 'Transcribing, 42%' })
+    expect(state.textContent?.trim()).toBe('42%')
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '42')
+  })
+})
+
 describe('SourceReader — H6: transcript + speaker colors render on selection', () => {
   it('fetches the transcript directly when the parent supplies none, then renders it + per-speaker colors', async () => {
     getByRecordingId.mockResolvedValue(makeTranscript())
@@ -165,6 +205,9 @@ describe('SourceReader — H6: transcript + speaker colors render on selection',
     // Transcript renders (not the "Transcript not available" placeholder).
     await waitFor(() => expect(screen.getByTestId('transcript-viewer')).toBeInTheDocument())
     expect(screen.queryByText(/transcript not available/i)).not.toBeInTheDocument()
+
+    // The loading placeholder is gone once the transcript is in.
+    expect(screen.queryByRole('status', { name: 'Loading transcript' })).not.toBeInTheDocument()
 
     // Per-speaker bar colors are derived and passed to the player (2 speakers).
     await waitFor(() => {

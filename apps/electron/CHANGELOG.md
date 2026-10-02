@@ -2,6 +2,34 @@
 
 Each entry is one day of merged work. The Releases page in Settings reads this file.
 
+## 2026-10-02 | Columns that stay put, and meetings that follow the calendar
+
+The Library list keeps every column in place while files download and transcribe, the reader shows
+something at once when you open a recording, and a meeting that moves on the calendar no longer
+keeps the recordings it used to cover.
+
+### Changes
+
+- **Waiting looks like work, everywhere.** No screen says "Loading...", "Syncing..." or "In
+  progress..." anymore. While something loads you see the shape of what is coming with a moving
+  shimmer and a spinner (a pulsing clock while it waits its turn), and a bar with the percentage
+  when it is known. Busy buttons keep their name and show a spinner. Hover to read what is
+  happening.
+- **Progress in its own place.** A download from the device shows in the file place (a clock while
+  it waits, then the percentage) and a running transcription shows its percentage in the transcript
+  place. Nothing is added at the end of the row, so date, time, length and icons line up with the
+  header on every row. The tooltip says what the number counts.
+- **Opening a recording.** The wave appears at once, drawn from the loudness the app already knows,
+  and the exact one replaces it a moment later. Until then the space holds a placeholder in the
+  shape of a wave; the transcript shows placeholder lines while it loads. A recording still being
+  transcribed says whether it waits in the queue or is running, with the percentage and a bar.
+- **Meeting links follow the calendar.** A recording linked to a meeting only by the time is
+  checked again after every calendar sync. When the meeting moved and no longer covers half of the
+  recording, the link is removed and the recording is matched again against the calendar as it is
+  now. Links you chose, and links chosen from the transcript, are never changed.
+- **No file names as titles.** A recording with no speech showed its file name in the list; it now
+  shows "Recording" with its date, like any recording without a title.
+
 ## 2026-10-01 | Choose which AI runs each step
 
 Settings has a Pipeline page: for each step the assistant and the library take, pick the harness,

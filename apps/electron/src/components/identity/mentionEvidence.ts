@@ -45,7 +45,8 @@ export interface MentionStatus {
  * timed-out lookup is reported distinctly so it never masquerades as "no mentions".
  */
 export function mentionStatus(mentions: MentionResult | undefined): MentionStatus {
-  if (!mentions) return { state: 'loading', text: 'checking transcripts…' }
+  // 'loading' is drawn as a shimmering value; this text is its tooltip and screen-reader name.
+  if (!mentions) return { state: 'loading', text: 'Checking transcripts' }
   if (mentions.error) return { state: 'error', text: "Couldn't check transcripts" }
   const count = mentions.recordingIds.length
   if (count > 0) {

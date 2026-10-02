@@ -5,6 +5,7 @@ import { Switch } from '@/components/ui/switch'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from '@/components/ui/toaster'
+import { Working } from '@/components/ui/working'
 import { useConfigStore } from '@/store/domain/useConfigStore'
 import { OpenAiCompatibleCard } from './OpenAiCompatibleCard'
 import type {
@@ -197,7 +198,7 @@ export function AIBrainsSettings() {
       </CardHeader>
       <CardContent className="space-y-4">
         {loading ? (
-          <p className="text-sm text-muted-foreground">Loading brains…</p>
+          <Working label="Loading brains" shape="list" rows={3} />
         ) : brains.length === 0 ? (
           <p className="text-sm text-muted-foreground">No AI brains available.</p>
         ) : (

@@ -75,6 +75,7 @@ import {
   getActiveProcessingRunsForRecording,
   getProcessingRunsForRecording,
   enrichRecordingScheduleMetadata,
+  recheckTimeLinks,
   getCandidatesForRecording,
   addRecordingMeetingCandidate,
   selectMeetingForRecordingByUser,
@@ -998,6 +999,84 @@ describe('Database Service', () => {
         is_ai_selected: false
       })
       expect(candidates.filter((candidate) => candidate.is_user_confirmed)).toHaveLength(1)
+    })
+
+    describe('recheckTimeLinks after a calendar sync (owner, 2-oct-2026: "Almuerzo")', () => {
+      const NOW = new Date('2026-10-02T20:21:00.000Z')
+
+      function seedLinked(id: string, start: string, seconds: number, meetingId: string, method: string): void {
+        seedRecording(id, { date_recorded: start, meeting_id: meetingId })
+        run('UPDATE recordings SET duration_seconds = ?, correlation_method = ?, correlation_confidence = 0.93 WHERE id = ?', [
+          seconds,
+          method,
+          id
+        ])
+        seedKnowledgeCapture(`cap-${id}`, id)
+        run('UPDATE knowledge_captures SET meeting_id = ?, correlation_method = ? WHERE id = ?', [meetingId, method, `cap-${id}`])
+      }
+
+      function seedTimedMeeting(id: string, subject: string, start: string, end: string): void {
+        run('INSERT INTO meetings (id, subject, start_time, end_time) VALUES (?, ?, ?, ?)', [id, subject, start, end])
+      }
+
+      it('drops a time-only link whose meeting moved away and scores the recording against the calendar as it is now', () => {
+        // Linked at app start against a day-old calendar: lunch was 13:00-14:00 then.
+        seedTimedMeeting('lunch', 'Almuerzo', '2026-10-02T22:30:00.000Z', '2026-10-02T23:30:00.000Z')
+        seedTimedMeeting('neobanco', 'Call Neobanco IO - AWS', '2026-10-02T16:00:00.000Z', '2026-10-02T16:45:00.000Z')
+        seedLinked('rec-lunch', '2026-10-02T16:00:46.000Z', 3965, 'lunch', 'schedule_candidate')
+        addRecordingMeetingCandidate('rec-lunch', 'lunch', 0.93, 'Overlaps 87% of the recording', false)
+
+        const result = recheckTimeLinks({ now: NOW })
+
+        expect(result).toMatchObject({ checked: 1, unlinked: 1 })
+        const rec = getRecordingById('rec-lunch')
+        expect(rec?.meeting_id).not.toBe('lunch')
+        const capture = queryOne<{ meeting_id: string | null }>('SELECT meeting_id FROM knowledge_captures WHERE id = ?', ['cap-rec-lunch'])
+        expect(capture?.meeting_id).not.toBe('lunch')
+        const candidates = getCandidatesForRecording('rec-lunch').map((c) => c.meeting_id)
+        expect(candidates).toContain('neobanco')
+        expect(candidates).not.toContain('lunch')
+      })
+
+      it('keeps a time-only link whose meeting still covers at least half of the recording', () => {
+        seedTimedMeeting('all-hands', 'Weekly Engineering All-Hands', '2026-10-02T14:00:00.000Z', '2026-10-02T15:00:00.000Z')
+        seedLinked('rec-ok', '2026-10-02T14:01:16.000Z', 3540, 'all-hands', 'schedule_candidate')
+
+        expect(recheckTimeLinks({ now: NOW })).toMatchObject({ checked: 1, unlinked: 0 })
+        expect(getRecordingById('rec-ok')?.meeting_id).toBe('all-hands')
+      })
+
+      it('also re-checks the older clock-only methods (time_proximity, calendar, auto)', () => {
+        seedTimedMeeting('gone-later', 'Moved meeting', '2026-10-02T22:00:00.000Z', '2026-10-02T23:00:00.000Z')
+        seedLinked('rec-prox', '2026-10-02T15:00:00.000Z', 1800, 'gone-later', 'time_proximity')
+        seedLinked('rec-cal', '2026-10-02T16:00:00.000Z', 1800, 'gone-later', 'calendar')
+        seedLinked('rec-auto', '2026-10-02T17:00:00.000Z', 1800, 'gone-later', 'auto')
+
+        expect(recheckTimeLinks({ now: NOW })).toMatchObject({ checked: 3, unlinked: 3 })
+        for (const id of ['rec-prox', 'rec-cal', 'rec-auto']) expect(getRecordingById(id)?.meeting_id, id).toBeNull()
+      })
+
+      it('never touches a link the owner chose or one chosen by reading the transcript', () => {
+        seedTimedMeeting('moved', 'Moved meeting', '2026-10-02T22:00:00.000Z', '2026-10-02T23:00:00.000Z')
+        seedLinked('rec-user', '2026-10-02T15:00:00.000Z', 1800, 'moved', 'user_override')
+        seedLinked('rec-ai', '2026-10-02T16:00:00.000Z', 1800, 'moved', 'ai_transcript_match')
+        seedLinked('rec-jev', '2026-10-02T17:00:00.000Z', 1800, 'moved', 'jev_content_match')
+        seedLinked('rec-manual', '2026-10-02T18:00:00.000Z', 1800, 'moved', 'manual')
+
+        expect(recheckTimeLinks({ now: NOW })).toMatchObject({ checked: 0, unlinked: 0 })
+        expect(getRecordingById('rec-jev')?.meeting_id).toBe('moved')
+        expect(getRecordingById('rec-manual')?.meeting_id).toBe('moved')
+        expect(getRecordingById('rec-user')?.meeting_id).toBe('moved')
+        expect(getRecordingById('rec-ai')?.meeting_id).toBe('moved')
+      })
+
+      it('leaves recordings older than the calendar window alone', () => {
+        seedTimedMeeting('old-moved', 'Old meeting', '2026-08-01T22:00:00.000Z', '2026-08-01T23:00:00.000Z')
+        seedLinked('rec-old', '2026-08-01T15:00:00.000Z', 1800, 'old-moved', 'time_overlap')
+
+        expect(recheckTimeLinks({ now: NOW })).toMatchObject({ checked: 0, unlinked: 0 })
+        expect(getRecordingById('rec-old')?.meeting_id).toBe('old-moved')
+      })
     })
   })
 

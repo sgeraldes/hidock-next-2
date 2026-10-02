@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { ChevronRight } from 'lucide-react'
+import { WorkingValue } from '@/components/ui/working'
 import { useConfigStore } from '@/store/domain/useConfigStore'
 import { formatBytes, cn } from '@/lib/utils'
 import type { StorageInfo } from '@/types'
@@ -83,7 +84,7 @@ export function OverviewSection({
   const connected = connectors?.filter((c) => c.state === 'connected') ?? []
   const needsSetup = connectors?.filter((c) => c.state !== 'connected') ?? []
 
-  const tiles: Array<{ id: SettingsSectionId; title: string; value: string; detail: string; tone: Tone }> = [
+  const tiles: Array<{ id: SettingsSectionId; title: string; value: ReactNode; detail: ReactNode; tone: Tone }> = [
     {
       id: 'transcription',
       title: 'Transcription',
@@ -101,10 +102,10 @@ export function OverviewSection({
     {
       id: 'connectors',
       title: 'Connectors',
-      value: connectors === null ? '…' : `${connected.length} connected`,
+      value: connectors === null ? <WorkingValue label="Checking the connectors" className="w-28" /> : `${connected.length} connected`,
       detail:
         connectors === null
-          ? 'Checking'
+          ? <WorkingValue label="Checking the connectors" className="w-40" />
           : needsSetup.length > 0
             ? `${needsSetup.map((c) => c.label).join(', ')} need setup`
             : connected.map((c) => c.label).join(', ') || 'None set up',
@@ -120,10 +121,10 @@ export function OverviewSection({
     {
       id: 'storage',
       title: 'On this computer',
-      value: storageInfo ? formatBytes(storageInfo.totalSizeBytes) : '…',
+      value: storageInfo ? formatBytes(storageInfo.totalSizeBytes) : <WorkingValue label="Measuring storage" className="w-24" />,
       detail: storageInfo
         ? `Recordings, transcripts and the database · ${storageInfo.recordingsCount.toLocaleString(appLocale())} recordings`
-        : 'Checking',
+        : <WorkingValue label="Measuring storage" className="w-40" />,
       tone: 'ok'
     },
     {

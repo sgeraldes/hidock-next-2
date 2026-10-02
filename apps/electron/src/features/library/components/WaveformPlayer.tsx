@@ -154,6 +154,11 @@ function scoreSentimentToSegments(points: SentimentScorePoint[]): SentimentSegme
 /** Full-mode stage dimensions + the subtle gradient panel (theme-aware). */
 const SENTIMENT_H = 68 // px — sentiment curve panel
 const WAVE_H = 58 // px — waveform band
+
+/** Heights (% of the band) of the placeholder bars shown until the peaks load: a fixed, speech-like shape. */
+const PLACEHOLDER_BARS: number[] = Array.from({ length: 96 }, (_, i) =>
+  Math.round(18 + 30 * Math.abs(Math.sin(i * 0.37)) * (0.55 + 0.45 * Math.abs(Math.cos(i * 0.11))))
+)
 const STAGE_GRADIENT = 'linear-gradient(180deg, hsl(var(--muted) / 0.9), hsl(var(--muted) / 0.35))'
 
 /** Shared playback state + transport, derived once and used by every mode. */
@@ -707,13 +712,17 @@ function FullTimeline({
             ) : hasAudio ? (
               // H5: clean, centered placeholder while (rarely) computing — never a
               // half-drawn wave with an overlaid label, and no partial bars.
+              // A placeholder in the shape of a wave holds the space until the
+              // first peaks arrive (owner, 2-oct-2026), never an empty band.
               <div
-                className="flex h-full items-center justify-center"
+                className="flex h-full items-center gap-[2px] overflow-hidden motion-safe:animate-pulse"
                 data-testid="waveform-preparing"
                 role="status"
                 aria-label="Preparing waveform"
               >
-                <span className="text-xs text-muted-foreground motion-safe:animate-pulse">Preparing waveform…</span>
+                {PLACEHOLDER_BARS.map((h, i) => (
+                  <span key={i} className="min-w-0 flex-1 rounded-sm bg-muted-foreground/20" style={{ height: `${h}%` }} />
+                ))}
               </div>
             ) : (
               <div className="flex h-full items-center justify-center text-xs text-muted-foreground">

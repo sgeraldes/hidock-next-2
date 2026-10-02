@@ -7,6 +7,7 @@ import { ChevronLeft, ChevronRight, RefreshCw, Calendar as CalendarIcon, List } 
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
+import { BusyIcon } from '@/components/ui/working'
 import type { CalendarViewType } from '@/lib/calendar-utils'
 
 interface CalendarHeaderProps {
@@ -73,9 +74,9 @@ export const CalendarHeader = memo(function CalendarHeader({
         {/* Sync status */}
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           {calendarSyncing ? (
-            <span className="flex items-center gap-1">
-              <RefreshCw className="h-3 w-3 animate-spin" />
-              Syncing...
+            // A spinner with the words in its title, never on screen (owner, 2-oct-2026)
+            <span className="flex items-center gap-1" role="status" aria-label="Syncing calendar" title="Syncing calendar">
+              <BusyIcon className="h-3 w-3" />
             </span>
           ) : (
             <>

@@ -175,7 +175,12 @@ describe('OperationsPanel', () => {
     })
     render(<OperationsPanel sidebarOpen={true} />)
     expect(screen.getByText('2 transcribing')).toBeInTheDocument()
-    expect(screen.getByText('Transcribing · progress unavailable')).toBeInTheDocument()
+    // The moving bar carries the state in its name; no sentence on screen.
+    expect(screen.getByRole('status', { name: 'Transcribing, progress unavailable' })).toHaveAttribute(
+      'title',
+      'Transcribing, progress unavailable'
+    )
+    expect(screen.queryByText(/progress unavailable/)).not.toBeInTheDocument()
     expect(screen.queryByText('25%')).not.toBeInTheDocument()
     // The full list does NOT render in the sidebar — only the badge.
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
@@ -367,7 +372,10 @@ describe('OperationsPanel', () => {
       // Named by its title, never the device file name.
       expect(screen.getByText('Weekly sync')).toBeInTheDocument()
       expect(screen.queryByText(/REC0001/)).not.toBeInTheDocument()
-      expect(screen.getByText(/Downloading… 42%/)).toBeInTheDocument()
+      // The state is an icon and the number; the words go to its label and tooltip.
+      expect(screen.getByRole('img', { name: 'Downloading, 42%' })).toHaveAttribute('title', 'Downloading, 42%')
+      expect(screen.getByText('42%')).toBeInTheDocument()
+      expect(screen.queryByText(/Downloading…/)).not.toBeInTheDocument()
       // The stale copy must never appear when a download is active.
       expect(screen.queryByText('No active transcriptions.')).not.toBeInTheDocument()
       expect(screen.queryByText('No active operations.')).not.toBeInTheDocument()
@@ -389,7 +397,8 @@ describe('OperationsPanel', () => {
       ])
       render(<OperationsPanel sidebarOpen={true} />)
 
-      expect(screen.getByText(/Cancelling…/)).toBeInTheDocument()
+      expect(screen.getByRole('img', { name: 'Cancelling' })).toBeInTheDocument()
+      expect(screen.queryByText(/Cancelling…/)).not.toBeInTheDocument()
       expect(screen.getByLabelText('Cancel download Weekly sync')).toBeDisabled()
     })
 

@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react'
 import { SourceReader } from '../SourceReader'
 import { useUIStore } from '@/store/useUIStore'
 import { useLibraryStore } from '@/store/useLibraryStore'
@@ -246,8 +246,11 @@ describe('SourceReader — timeline backfill', () => {
 
     render(<SourceReader recording={makeRecording({ transcriptionStatus: 'complete' })} />)
 
-    // Indicator appears while analyzeTimeline is pending (big mode is default).
-    expect(await screen.findByTestId('timeline-analyzing')).toBeInTheDocument()
+    // Indicator appears while analyzeTimeline is pending (big mode is default):
+    // a moving strip named for screen readers, no sentence on screen.
+    const strip = await screen.findByTestId('timeline-analyzing')
+    expect(within(strip).getByRole('status', { name: 'Analyzing timeline' })).toBeInTheDocument()
+    expect(screen.queryByText(/Analyzing timeline/)).not.toBeInTheDocument()
 
     await act(async () => { resolveAnalyze(emptyTimeline) })
     await waitFor(() => expect(screen.queryByTestId('timeline-analyzing')).not.toBeInTheDocument())

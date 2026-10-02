@@ -51,8 +51,9 @@ import { useLibraryStore, type ReaderSectionId, type ReaderSectionMode, type Rea
 import { UnifiedRecording, hasLocalPath, isDeviceOnly, isRecordingBacked } from '@/types/unified-recording'
 import type { DownloadStatus } from '@/store/useAppStore'
 import { Transcript, Meeting, MeetingAttendee, parseJsonArray } from '@/types'
-import { Calendar, CloudDownload, Download, Trash2, Wand2, RefreshCw, Play, Square, Pencil, Check, Edit2, Link, X, ExternalLink, FolderOpen, MoreHorizontal, Folder, Plus, EyeOff, Eye, Sparkles, ChevronDown, Cloud, Cpu, Users, Mail, UserCog, Scissors } from 'lucide-react'
+import { Calendar, CloudDownload, Download, Trash2, Wand2, RefreshCw, Clock, Play, Square, Pencil, Check, Edit2, Link, X, ExternalLink, FolderOpen, MoreHorizontal, Folder, Plus, EyeOff, Eye, Sparkles, ChevronDown, Cloud, Cpu, Users, Mail, UserCog, Scissors } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { BusyIcon, Working, WorkingBar } from '@/components/ui/working'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/hover-card'
 import { PersonHoverCard } from '@/components/entity/EntityHoverCards'
@@ -468,6 +469,14 @@ export function SourceReader({
   // Sidebar transcription dock mirror — kept in sync when we queue via the
   // explicit-method picker (same as useOperations does for the default path).
   const addToQueue = useTranscriptionStore((s) => s.addToQueue)
+  // Percentage of this recording's running transcription; null until the first progress event.
+  const transcriptionProgress = useTranscriptionStore((s) => {
+    if (!recording) return null
+    for (const item of s.queue.values()) {
+      if (item.recordingId === recording.id && item.status === 'processing') return item.progress
+    }
+    return null
+  })
 
   // Live duration: imported/watched files have no stored duration until the
   // waveform decode backfills it; show the freshly-decoded value meanwhile.
@@ -480,6 +489,8 @@ export function SourceReader({
   // transcript directly as a fallback so the transcript + per-speaker colors render
   // on first paint, regardless of how the recording was selected.
   const [fallbackTranscript, setFallbackTranscript] = useState<Transcript | undefined>(undefined)
+  /** Recording whose transcript the fallback fetch is reading; the reader shows a placeholder meanwhile. */
+  const [transcriptFetchingFor, setTranscriptFetchingFor] = useState<string | null>(null)
   // A manual correction must render immediately even when the Library parent is
   // still refreshing its transcript map. It stays scoped to this recording and
   // is cleared when another source is selected.
@@ -544,17 +555,24 @@ export function SourceReader({
     if (!recording || !hasLocalPath(recording)) return
     if (recording.transcriptionStatus !== 'complete') return
     let cancelled = false
+    const id = recording.id
+    setTranscriptFetchingFor(id)
     ;(async () => {
       try {
         // ADV13: owner-management detail viewer — use the owner accessor so the
         // owner can still read their OWN trashed/personal/value-excluded transcript.
-        const fetched = await window.electronAPI?.transcripts?.getByRecordingIdOwner(recording.id)
+        const fetched = await window.electronAPI?.transcripts?.getByRecordingIdOwner(id)
         if (!cancelled && fetched) setFallbackTranscript(fetched as Transcript)
       } catch (err) {
         console.error('[SourceReader] Transcript fallback fetch failed:', err)
+      } finally {
+        if (!cancelled) setTranscriptFetchingFor((current) => (current === id ? null : current))
       }
     })()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      setTranscriptFetchingFor((current) => (current === id ? null : current))
+    }
   }, [recording, transcript])
 
   useEffect(() => {
@@ -1270,9 +1288,14 @@ export function SourceReader({
       {isTranscribed && (
         <>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={reDiarize} disabled={reDiarizing}>
-            <UserCog className="h-4 w-4" aria-hidden="true" />
-            {reDiarizing ? 'Re-diarizing…' : 'Re-diarize this recording'}
+          <DropdownMenuItem
+            onClick={reDiarize}
+            disabled={reDiarizing}
+            aria-busy={reDiarizing || undefined}
+            title={reDiarizing ? 'Re-diarizing' : undefined}
+          >
+            {reDiarizing ? <BusyIcon /> : <UserCog className="h-4 w-4" aria-hidden="true" />}
+            Re-diarize this recording
           </DropdownMenuItem>
         </>
       )}
@@ -1402,12 +1425,21 @@ export function SourceReader({
               onClick={onDownload}
               disabled={!deviceConnected || isDownloading}
               className="gap-2"
-              title={!deviceConnected ? 'Device not connected' : 'Download recording from device'}
+              aria-busy={isDownloading || undefined}
+              aria-label={isDownloading
+                ? (downloadProgress ?? 0) > 0 ? `Downloading, ${downloadProgress}%` : 'Starting the download'
+                : undefined}
+              title={!deviceConnected
+                ? 'Device not connected'
+                : isDownloading
+                  ? (downloadProgress ?? 0) > 0 ? `Downloading, ${downloadProgress}%` : 'Starting the download'
+                  : 'Download recording from device'}
             >
+              {/* Spinner and the number only; the words go to the tooltip (owner, 2-oct-2026). */}
               {isDownloading ? (
                 <>
-                  <RefreshCw className="h-4 w-4 animate-spin" />
-                  {(downloadProgress ?? 0) > 0 ? `${downloadProgress}%` : 'Starting…'}
+                  <BusyIcon />
+                  {(downloadProgress ?? 0) > 0 && <span className="tabular-nums">{downloadProgress}%</span>}
                 </>
               ) : (
                 <>
@@ -1457,6 +1489,7 @@ export function SourceReader({
                   onClick={() => requestTranscribe(() => onTranscribe?.())}
                   disabled={isTranscribeBusy}
                   className="gap-2 rounded-r-none border-r-0"
+                  aria-busy={recording.transcriptionStatus === 'processing' || undefined}
                   title={
                     recording.transcriptionStatus === 'pending' ? 'Transcription queued' :
                     recording.transcriptionStatus === 'processing' ? 'Transcription in progress' :
@@ -1464,21 +1497,13 @@ export function SourceReader({
                   }
                 >
                   {recording.transcriptionStatus === 'processing' ? (
-                    <>
-                      <RefreshCw className="h-4 w-4 animate-spin" />
-                      In Progress
-                    </>
+                    <BusyIcon />
                   ) : recording.transcriptionStatus === 'pending' ? (
-                    <>
-                      <RefreshCw className="h-4 w-4" />
-                      Queued
-                    </>
+                    <Clock className="h-4 w-4 motion-safe:animate-pulse" aria-hidden="true" />
                   ) : (
-                    <>
-                      <Wand2 className="h-4 w-4" />
-                      Transcribe
-                    </>
+                    <Wand2 className="h-4 w-4" />
                   )}
+                  Transcribe
                 </Button>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
@@ -2100,14 +2125,23 @@ export function SourceReader({
                   </ReaderSection>
                 )}
               </div>
+            ) : recording.transcriptionStatus === 'complete' && transcriptFetchingFor === recording.id ? (
+              // Lines in the shape of a transcript hold the space while it is read
+              // (owner, 2-oct-2026), instead of a message that says it is missing.
+              <Working label="Loading transcript" shape="lines" rows={8} />
             ) : recording.transcriptionStatus === 'complete' ? (
               <div className="text-center text-muted-foreground py-8">
                 <p>Transcript not available</p>
               </div>
             ) : recording.transcriptionStatus === 'pending' || recording.transcriptionStatus === 'processing' ? (
-              <div className="text-center text-muted-foreground py-8">
-                <p>Transcription in progress...</p>
-              </div>
+              // Looks like work, not a sentence (owner, 2-oct-2026): the transcript's
+              // shape with a moving shimmer, a clock while it waits its turn, a
+              // spinner and the percentage while it runs.
+              recording.transcriptionStatus === 'processing' ? (
+                <Working label="Transcribing" shape="lines" rows={8} progress={transcriptionProgress} />
+              ) : (
+                <Working label="Waiting to be transcribed" shape="lines" rows={8} waiting />
+              )
             ) : (
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 py-3 text-sm text-muted-foreground">
                 <p className="font-medium text-foreground">No transcript</p>
@@ -2466,13 +2500,8 @@ function ReaderPlayer({
         {/* Subtle backfill indicator — sentiment + markers are still computing.
             Colored bars + playhead already render; this just explains the wait. */}
         {big && analyzing && (
-          <div
-            className="pointer-events-none absolute left-2 top-2 z-10 inline-flex items-center gap-1.5 rounded-full border bg-background/90 px-2 py-0.5 text-[11px] text-muted-foreground shadow-sm backdrop-blur"
-            data-testid="timeline-analyzing"
-            role="status"
-          >
-            <RefreshCw className="h-3 w-3 animate-spin" aria-hidden="true" />
-            Analyzing timeline…
+          <div className="pointer-events-none absolute inset-x-2 top-1 z-10" data-testid="timeline-analyzing">
+            <WorkingBar label="Analyzing timeline" />
           </div>
         )}
 

@@ -61,10 +61,20 @@ beforeEach(() => {
 })
 
 async function waitForArtifact() {
-  await waitFor(() => expect(screen.queryByText(/loading artifact/i)).not.toBeInTheDocument())
+  await waitFor(() => expect(screen.queryByRole('status', { name: 'Loading artifact' })).not.toBeInTheDocument())
 }
 
 describe('ArtifactReader', () => {
+  it('while loading, shows placeholder lines named "Loading artifact", not a sentence', async () => {
+    let finish: (v: unknown) => void = () => {}
+    mockGetForCapture.mockReturnValue(new Promise((res) => { finish = res }))
+    render(<ArtifactReader recording={makeRecording()} />)
+    expect(screen.getByRole('status', { name: 'Loading artifact' })).toBeInTheDocument()
+    expect(screen.queryByText(/loading artifact/i)).not.toBeInTheDocument()
+    finish({ success: true, data: [] })
+    await waitForArtifact()
+  })
+
   it('renders an image preview with a data URL and shows the vision description', async () => {
     const artifact: MockArtifactSummary = {
       id: 'art-img-1',

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { AlertCircle, CheckCircle2, AlertTriangle, RefreshCw, Wrench, ChevronDown, ChevronUp, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { BusyIcon } from '@/components/ui/working'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { useAppStore } from '@/store/useAppStore'
 import { appLocale } from '@/lib/locale'
@@ -167,15 +168,27 @@ export function HealthCheck() {
       <CardContent className="space-y-4">
         {/* Action Buttons */}
         <div className="flex items-center gap-2">
-          <Button onClick={runScan} disabled={scanning || repairing}>
-            <RefreshCw className={`h-4 w-4 mr-2 ${scanning ? 'animate-spin' : ''}`} />
-            {scanning ? 'Scanning...' : 'Run Health Check'}
+          {/* Busy buttons keep their label and show a spinner; the state goes to the tooltip (owner, 2-oct-2026). */}
+          <Button
+            onClick={runScan}
+            disabled={scanning || repairing}
+            aria-busy={scanning || undefined}
+            title={scanning ? 'Scanning' : undefined}
+          >
+            {scanning ? <BusyIcon className="mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+            Run Health Check
           </Button>
 
           {report && report.autoRepairableCount > 0 && (
-            <Button variant="outline" onClick={repairAll} disabled={scanning || repairing}>
-              <Wrench className={`h-4 w-4 mr-2 ${repairing ? 'animate-spin' : ''}`} />
-              {repairing ? 'Repairing...' : `Repair All (${report.autoRepairableCount})`}
+            <Button
+              variant="outline"
+              onClick={repairAll}
+              disabled={scanning || repairing}
+              aria-busy={repairing || undefined}
+              title={repairing ? 'Repairing' : undefined}
+            >
+              {repairing ? <BusyIcon className="mr-2" /> : <Wrench className="h-4 w-4 mr-2" />}
+              {`Repair All (${report.autoRepairableCount})`}
             </Button>
           )}
         </div>
@@ -367,9 +380,11 @@ export function HealthCheck() {
                   size="sm"
                   onClick={purgeMissingFiles}
                   disabled={purging || cleaning || scanning || repairing}
+                  aria-busy={purging || undefined}
+                  title={purging ? 'Purging' : undefined}
                 >
-                  <Trash2 className={`h-4 w-4 mr-2 ${purging ? 'animate-pulse' : ''}`} />
-                  {purging ? 'Purging...' : 'Purge Missing Files'}
+                  {purging ? <BusyIcon className="mr-2" /> : <Trash2 className="h-4 w-4 mr-2" />}
+                  Purge Missing Files
                 </Button>
               </div>
 
@@ -402,9 +417,11 @@ export function HealthCheck() {
                   size="sm"
                   onClick={cleanupWronglyNamed}
                   disabled={cleaning || scanning || repairing || purging}
+                  aria-busy={cleaning || undefined}
+                  title={cleaning ? 'Cleaning' : undefined}
                 >
-                  <Trash2 className={`h-4 w-4 mr-2 ${cleaning ? 'animate-pulse' : ''}`} />
-                  {cleaning ? 'Cleaning...' : 'Delete Wrongly-Named Files'}
+                  {cleaning ? <BusyIcon className="mr-2" /> : <Trash2 className="h-4 w-4 mr-2" />}
+                  Delete Wrongly-Named Files
                 </Button>
               </div>
             </div>

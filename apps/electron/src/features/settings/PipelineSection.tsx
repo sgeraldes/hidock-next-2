@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { RotateCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
+import { Working } from '@/components/ui/working'
 import { STEP_META, TEXT_STEP_IDS, type PipelineSettingsState, type TextStepId } from '@/shared/pipeline-config'
 import { StepRow } from './pipeline/StepRow'
 
@@ -54,7 +55,7 @@ export function PipelineSection() {
     )
   }
 
-  if (!state) return <p className="text-sm text-muted-foreground">Loading the pipeline settings…</p>
+  if (!state) return <Working label="Loading the pipeline settings" shape="list" rows={4} />
 
   return (
     <div className="space-y-6" data-testid="settings-pipeline">

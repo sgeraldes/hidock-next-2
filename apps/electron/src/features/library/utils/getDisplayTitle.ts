@@ -45,16 +45,34 @@ export function getDisplayTitle(
     return { primaryText: officialMeetingSubject, source: 'meeting-subject' }
   }
 
-  const userTitle = recording.userTitle?.trim()
+  const userTitle = realTitle(recording.userTitle, recording.filename)
   if (userTitle) return { primaryText: userTitle, source: 'user-title' }
 
-  const suggested = recording.title?.trim()
+  const suggested = realTitle(recording.title, recording.filename)
   if (suggested) return { primaryText: suggested, source: 'suggested' }
 
   if (getSourceType(recording) !== 'audio' && recording.filename?.trim()) {
     return { primaryText: recording.filename, source: 'filename' }
   }
   return { primaryText: dateTitle(recording), source: 'date' }
+}
+
+/** The file name without its extension, lower case: "2026sep24-110051-rec52". */
+function fileStem(name: string): string {
+  return name.trim().replace(/\.[a-z0-9]{2,4}$/i, '').toLowerCase()
+}
+
+/**
+ * A stored title, or undefined when it is empty or only the file name. A
+ * recording with no speech gets no suggestion, and its knowledge capture stores
+ * the file name as its title (the column cannot be empty); 14 of them reached
+ * the list on 2-oct-2026.
+ */
+function realTitle(value: string | undefined, filename: string | undefined): string | undefined {
+  const title = value?.trim()
+  if (!title) return undefined
+  if (filename?.trim() && fileStem(title) === fileStem(filename)) return undefined
+  return title
 }
 
 function dateTitle(recording: UnifiedRecording): string {

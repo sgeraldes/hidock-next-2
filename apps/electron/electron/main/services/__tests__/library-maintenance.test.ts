@@ -10,7 +10,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const state = {
   unlinked: [925, 700],
   oldest: '2025-05-12T14:41:41.000Z' as string | null,
-  profiles: [] as Array<{ id: string; file_path: string | null; duration_seconds: number | null }>
+  profiles: [] as Array<{ id: string; file_path: string | null; duration_seconds: number | null }>,
+  recording: null as { file_path: string | null; duration_seconds: number | null } | null
 }
 
 vi.mock('../database', () => ({
@@ -18,24 +19,31 @@ vi.mock('../database', () => ({
   queryOne: vi.fn((sql: string) => {
     if (/MIN\(date_recorded\)/.test(sql)) return { first: state.oldest }
     if (/meeting_id IS NULL/.test(sql)) return { n: state.unlinked.shift() ?? 0 }
+    if (/FROM recordings WHERE id = \?/.test(sql)) return state.recording
     return { n: 0 }
   }),
   run: vi.fn()
 }))
 
 const files = new Map<string, Uint8Array>()
+const sizes = new Map<string, number>()
 vi.mock('fs/promises', () => ({
-  readFile: async (p: string) => {
+  readFile: vi.fn(async (p: string) => {
     if (!files.has(p)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
     return Buffer.from(files.get(p)!)
-  },
+  }),
   stat: async (p: string) => {
     if (!files.has(p)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
-    return { size: 1234 }
+    return { size: sizes.get(p) ?? 1234 }
   }
 }))
+import * as fsPromises from 'fs/promises'
 
 vi.mock('../audio-profile-store', () => ({ envelopePath: (id: string) => `env/${id}.u8` }))
+// A device MP3 is marked in these tests by a first byte of 0xff; its "frame gains" are the rest.
+vi.mock('../audio-profile', () => ({
+  scanDeviceMp3: (buf: Buffer) => (buf[0] === 0xff ? new Uint8Array(buf.subarray(1)) : null)
+}))
 
 const cache = new Map<string, { coarse?: boolean }>()
 const setWaveformCache = vi.fn((id: string, _peaks: number[], _d: number, _s: number, coarse?: boolean) => {
@@ -43,6 +51,7 @@ const setWaveformCache = vi.fn((id: string, _peaks: number[], _d: number, _s: nu
   return true
 })
 vi.mock('../waveform-cache', () => ({
+  CACHE_VERSION: 1,
   getWaveformCache: (id: string) => cache.get(id) ?? null,
   setWaveformCache: (...args: Parameters<typeof setWaveformCache>) => setWaveformCache(...args)
 }))
@@ -72,12 +81,14 @@ vi.mock('../org-reconciler', () => ({ autoLinkRecordingsToMeetings: () => autoLi
 vi.mock('../meeting-candidate-list', () => ({}))
 vi.mock('../value-backfill', () => ({}))
 
-import { peaksFromEnvelope, redrawWaveforms, relinkRecordingsToMeetings, GAIN_AMPLITUDE_OFFSET } from '../library-maintenance'
+import { peaksFromEnvelope, redrawWaveforms, relinkRecordingsToMeetings, drawCoarseWaveform, GAIN_AMPLITUDE_OFFSET, COARSE_SCAN_MAX_BYTES } from '../library-maintenance'
 
 beforeEach(() => {
   state.unlinked = [925, 700]
   state.oldest = '2025-05-12T14:41:41.000Z'
+  state.recording = null
   files.clear()
+  sizes.clear()
   cache.clear()
   vi.clearAllMocks()
 })
@@ -96,6 +107,51 @@ describe('peaksFromEnvelope', () => {
   it('never returns more peaks than frames, and nothing for an empty envelope', () => {
     expect(peaksFromEnvelope(new Uint8Array([200, 200]), 1000)).toHaveLength(2)
     expect(peaksFromEnvelope(new Uint8Array(), 1000)).toEqual([])
+  })
+})
+
+describe('drawCoarseWaveform (first open of a recording, owner 2-oct-2026)', () => {
+  it('draws from the stored envelope and saves it as coarse', async () => {
+    state.recording = { file_path: 'a.hda', duration_seconds: 3965 }
+    files.set('a.hda', new Uint8Array([0x00]))
+    files.set('env/r1.u8', new Uint8Array(3000).fill(GAIN_AMPLITUDE_OFFSET))
+
+    const entry = await drawCoarseWaveform('r1')
+
+    expect(entry).not.toBeNull()
+    expect(entry!.coarse).toBe(true)
+    expect(entry!.peaks).toHaveLength(1000)
+    expect(entry!.duration).toBe(3965)
+    expect(setWaveformCache).toHaveBeenCalledWith('r1', expect.any(Array), 3965, 1234, true)
+  })
+
+  it('reads the frame gains of a device MP3 when no envelope is stored yet, without decoding', async () => {
+    state.recording = { file_path: 'b.hda', duration_seconds: 60 }
+    files.set('b.hda', new Uint8Array([0xff, ...new Array(1500).fill(GAIN_AMPLITUDE_OFFSET)]))
+
+    const entry = await drawCoarseWaveform('r2')
+
+    expect(entry?.coarse).toBe(true)
+    expect(entry?.peaks).toHaveLength(1000)
+  })
+
+  it('does not read an audio file larger than the limit into the main process (kiro review, 2-oct-2026)', async () => {
+    state.recording = { file_path: 'huge.wav', duration_seconds: 36000 }
+    files.set('huge.wav', new Uint8Array([0xff, 200, 200]))
+    sizes.set('huge.wav', COARSE_SCAN_MAX_BYTES + 1)
+    const read = vi.spyOn(fsPromises, 'readFile')
+
+    expect(await drawCoarseWaveform('r-huge')).toBeNull()
+    expect(read.mock.calls.map((c) => c[0])).not.toContain('huge.wav')
+  })
+
+  it('returns null when there is neither an envelope nor a device MP3, so the player decodes', async () => {
+    state.recording = { file_path: 'c.wav', duration_seconds: 60 }
+    files.set('c.wav', new Uint8Array([0x52, 0x49]))
+    expect(await drawCoarseWaveform('r3')).toBeNull()
+    state.recording = null
+    expect(await drawCoarseWaveform('missing')).toBeNull()
+    expect(setWaveformCache).not.toHaveBeenCalled()
   })
 })
 

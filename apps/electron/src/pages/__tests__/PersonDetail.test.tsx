@@ -122,9 +122,10 @@ describe('PersonDetail Page', () => {
   it('should show loading state initially', () => {
     renderPersonDetail()
 
-    // Loading spinner should be visible before data loads
-    const spinner = document.querySelector('.animate-spin')
-    expect(spinner).toBeTruthy()
+    // A working page shaped like the content, named for screen readers (owner, 2-oct-2026)
+    const state = screen.getByRole('status', { name: 'Loading person' })
+    expect(state.querySelectorAll('[data-working-block]').length).toBeGreaterThan(0)
+    expect(state.querySelector('[class*="animate-spin"]')).not.toBeNull()
   })
 
   it('should enter edit mode and show form fields', async () => {

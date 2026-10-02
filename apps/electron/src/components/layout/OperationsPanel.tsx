@@ -17,9 +17,11 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
-  Trash2
+  Trash2,
+  Clock
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { BusyIcon } from '@/components/ui/working'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { formatBytes } from '@/utils/formatters'
@@ -52,12 +54,37 @@ interface OperationsPanelProps {
   sidebarOpen: boolean
 }
 
-/** Human-readable status for a transcription queue item. */
-const STATUS_LABEL: Record<TranscriptionStatus, string> = {
-  pending: 'Queued',
-  processing: 'Transcribing…',
-  completed: 'Done',
-  failed: 'Failed'
+/**
+ * A running or waiting state drawn as an icon (and the percentage when known);
+ * the words go to the tooltip and screen readers (owner, 2-oct-2026). The row
+ * keeps the file name, so it still says WHICH file is in that state.
+ */
+function StateMark({ label, waiting, percent }: { label: string; waiting?: boolean; percent?: number }) {
+  const name = percent !== undefined ? `${label}, ${percent}%` : label
+  return (
+    <span role="img" aria-label={name} title={name} className="inline-flex items-center gap-1 align-middle">
+      {waiting ? (
+        <Clock className="h-3 w-3 motion-safe:animate-pulse" aria-hidden="true" />
+      ) : (
+        <BusyIcon className="h-3 w-3" />
+      )}
+      {percent !== undefined && <span aria-hidden="true" className="tabular-nums">{percent}%</span>}
+    </span>
+  )
+}
+
+/** Status of a transcription queue item: an icon while queued or running, words once it ends. */
+function transcriptionStatus(status: TranscriptionStatus): React.ReactNode {
+  switch (status) {
+    case 'pending':
+      return <StateMark label="Queued" waiting />
+    case 'processing':
+      return <StateMark label="Transcribing" />
+    case 'completed':
+      return 'Done'
+    default:
+      return 'Failed'
+  }
 }
 
 /** Display order: active first, then queued (by priority), then failed. */
@@ -90,13 +117,13 @@ function attemptLabel(item: TranscriptionItem): string {
   return `${attempts} attempt${attempts === 1 ? '' : 's'}`
 }
 
-/** Human-readable status line for a download row. */
-function downloadStatusLabel(dl: DownloadQueueEntry): string {
+/** Status of a download row: an icon (and the percentage) while it waits or runs, words once it ends. */
+function downloadStatus(dl: DownloadQueueEntry): React.ReactNode {
   switch (dl.status) {
     case 'pending':
-      return 'Queued'
+      return <StateMark label="Queued" waiting />
     case 'cancelling':
-      return 'Cancelling…'
+      return <StateMark label="Cancelling" />
     case 'cancelled':
       return 'Cancelled'
     case 'failed':
@@ -104,7 +131,9 @@ function downloadStatusLabel(dl: DownloadQueueEntry): string {
     case 'completed':
       return 'Done'
     default:
-      return dl.progress > 0 ? `Downloading… ${Math.round(dl.progress)}%` : 'Starting download…'
+      return dl.progress > 0
+        ? <StateMark label="Downloading" percent={Math.round(dl.progress)} />
+        : <StateMark label="Starting download" />
   }
 }
 
@@ -369,10 +398,14 @@ export function OperationsPanel({ sidebarOpen }: OperationsPanelProps) {
           </div>
           {activeTranscriptions > 0 && (
             <div className="mt-1.5 flex items-center gap-2">
-              <div className="h-1 flex-1 overflow-hidden rounded-full bg-slate-700" aria-hidden="true">
-                <div className="h-full w-1/2 animate-pulse rounded-full bg-purple-500" />
+              <div
+                role="status"
+                aria-label="Transcribing, progress unavailable"
+                title="Transcribing, progress unavailable"
+                className="h-1 flex-1 overflow-hidden rounded-full bg-slate-700"
+              >
+                <div className="h-full w-1/2 motion-safe:animate-pulse rounded-full bg-purple-500" />
               </div>
-              <span className="text-[9px] text-slate-400">Transcribing · progress unavailable</span>
             </div>
           )}
         </button>
@@ -598,7 +631,7 @@ function OperationsOverlay({
                         <div className="min-w-0 flex-1">
                           <div className="truncate text-sm text-slate-100">{dlLabel}</div>
                           <div className="truncate text-[11px] text-slate-500">
-                            {downloadStatusLabel(dl)}
+                            {downloadStatus(dl)}
                             {dl.size > 0 ? ` · ${formatBytes(dl.size)}` : ''}
                             {dl.error ? ` · ${dl.error}` : ''}
                           </div>
@@ -694,7 +727,7 @@ function OperationsOverlay({
                       <div className="min-w-0 flex-1 text-left">
                         <div className="truncate text-sm text-slate-100 hover:text-sky-300">{title}</div>
                         <div className="truncate text-[11px] tabular-nums text-slate-400">
-                          {STATUS_LABEL[item.status]} · {attemptLabel(item)}
+                          {transcriptionStatus(item.status)} · {attemptLabel(item)}
                           {eventTime ? ` · ${eventTime}` : ''}
                         </div>
                       </div>
@@ -728,14 +761,16 @@ function OperationsOverlay({
                               size="sm"
                               className="h-7 gap-1.5 px-2 text-xs text-slate-200 hover:text-white"
                               disabled={isBusy}
+                              aria-busy={isBusy || undefined}
+                              title={isBusy ? 'Updating' : undefined}
                               onClick={() => void withBusy(
                                 item.id,
                                 () => onRetry(item.id),
                                 transcriptionPaused ? 'Retry queued — transcription queue is paused' : 'Retry queued'
                               )}
                             >
-                              <RotateCcw className={cn('h-3.5 w-3.5', isBusy && 'animate-spin')} />
-                              {isBusy ? 'Updating…' : 'Retry'}
+                              {isBusy ? <BusyIcon className="h-3.5 w-3.5" /> : <RotateCcw className="h-3.5 w-3.5" />}
+                              Retry
                             </Button>
                             <Button
                               variant="ghost"
@@ -832,7 +867,7 @@ function OperationsOverlay({
                           <Download className="h-3.5 w-3.5 shrink-0 text-slate-500" />
                           <div className="min-w-0 flex-1">
                             <div className="truncate text-sm">{operationLabel(recordingForDownload(recordings, dl.filename))}</div>
-                            <div className="truncate text-[11px] text-slate-500">{downloadStatusLabel(dl)}{dl.error ? ` · ${dl.error}` : ''}</div>
+                            <div className="truncate text-[11px] text-slate-500">{downloadStatus(dl)}{dl.error ? ` · ${dl.error}` : ''}</div>
                           </div>
                         </li>
                       ))}

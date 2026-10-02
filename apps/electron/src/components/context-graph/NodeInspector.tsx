@@ -21,6 +21,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/components/ui/toaster'
+import { BusyIcon, Working } from '@/components/ui/working'
 import {
   Dialog,
   DialogContent,
@@ -343,9 +344,7 @@ export function NodeInspector({
 
       <div className="px-4 py-3 space-y-4 overflow-auto">
         {loading && !detail ? (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" /> Loading…
-          </div>
+          <Working label="Loading the node" shape="lines" rows={6} />
         ) : (
           <>
             {/* What this is — net-new identity facts, never a re-print of the label. */}
@@ -622,8 +621,14 @@ export function NodeInspector({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={(e) => { e.preventDefault(); void doConvert() }} disabled={busy}>
-              {busy ? 'Creating…' : 'Create contact'}
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); void doConvert() }}
+              disabled={busy}
+              aria-busy={busy || undefined}
+              title={busy ? 'Creating' : undefined}
+            >
+              {busy && <BusyIcon className="mr-2" />}
+              Create contact
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -644,9 +649,12 @@ export function NodeInspector({
             <AlertDialogAction
               onClick={(e) => { e.preventDefault(); void doDelete() }}
               disabled={busy}
+              aria-busy={busy || undefined}
+              title={busy ? 'Removing' : undefined}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {busy ? 'Removing…' : 'Remove'}
+              {busy && <BusyIcon className="mr-2" />}
+              Remove
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -823,9 +831,7 @@ function MergeNodeDialog({ open, onOpenChange, keeper, isDark, onMerged }: Merge
                   )}
                 </div>
               ) : (
-                <p className="mt-2 text-xs text-muted-foreground flex items-center gap-1.5">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Computing impact…
-                </p>
+                <Working label="Computing impact" shape="lines" rows={2} className="mt-2" />
               )}
             </div>
           </div>

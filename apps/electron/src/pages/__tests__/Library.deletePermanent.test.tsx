@@ -8,7 +8,7 @@
  * its own importOriginal harness.
  */
 
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import { Library } from '../Library'
@@ -398,6 +398,27 @@ describe('bulk permanent deletion — durable device erase', () => {
 })
 
 describe('executeDeletePermanent — device checkbox (D3/AR3-6)', () => {
+  it('while the local purge runs, the banner shows a spinner and puts the stage in its name, not on screen', async () => {
+    let finishPurge: (v: unknown) => void = () => {}
+    vi.mocked(window.electronAPI.recordings.deleteCascade).mockImplementationOnce(
+      () => new Promise((res) => { finishPurge = res }) as any
+    )
+    renderLibrary()
+    await openPermanentDeleteDialog()
+
+    fireEvent.click(screen.getByRole('button', { name: /^delete permanently$/i }))
+
+    const banner = await screen.findByTestId('permanent-delete-progress')
+    expect(banner).toHaveAttribute('aria-label', expect.stringMatching(/^Removing local data: /))
+    expect(banner).toHaveAttribute('title', 'Removing local data')
+    // The screen-reader live region still announces it; the banner itself shows no words for the stage.
+    expect(banner.textContent).not.toMatch(/Removing local data/)
+
+    await act(async () => {
+      finishPurge({ success: true, mode: 'hard', removed: baseRemoved, allFilesRemoved: true, pendingFileKinds: [], journalId: 'journal-1' })
+    })
+  })
+
   it('unchecked: local purge succeeds, device service is never called', async () => {
     renderLibrary()
     await openPermanentDeleteDialog()

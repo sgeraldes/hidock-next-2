@@ -84,6 +84,26 @@ describe('LibraryHeader — responsive action hierarchy', () => {
   })
 })
 
+describe('LibraryHeader — work in flight', () => {
+  it('a running download shows a spinner and the count; the word goes to the tooltip', () => {
+    renderHeader({ activeDownloadCount: 2, pendingDownloadCount: 1, bulkCounts: { deviceOnly: 3, needsTranscription: 0 } })
+    const button = screen.getByRole('button', { name: /Downloading 3 sources/i })
+    expect(button).toHaveAttribute('aria-busy', 'true')
+    expect(button).toHaveAttribute('title', 'Downloading 3 sources from the device')
+    expect(button).toHaveTextContent(/^3$/)
+    expect(screen.queryByText('Downloading')).not.toBeInTheDocument()
+  })
+
+  it('a running bulk process shows a spinner and the counts; the word goes to the tooltip', () => {
+    renderHeader({ bulkProcessing: true, bulkProgress: { current: 2, total: 5 }, bulkCounts: { deviceOnly: 0, needsTranscription: 5 } })
+    const button = screen.getByRole('button', { name: /Processing 5 audio sources/i })
+    expect(button).toHaveAttribute('aria-busy', 'true')
+    expect(button).toHaveAttribute('title', 'Processing, 2 of 5')
+    expect(button).toHaveTextContent(/^2\/5$/)
+    expect(screen.queryByText('Processing')).not.toBeInTheDocument()
+  })
+})
+
 describe('LibraryHeader — pause processing', () => {
   it('shows no pause control when nothing is downloading or queued and nothing is paused', () => {
     renderHeader()

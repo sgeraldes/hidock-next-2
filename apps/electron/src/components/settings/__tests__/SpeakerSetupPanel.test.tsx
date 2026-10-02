@@ -57,6 +57,13 @@ beforeEach(() => {
 })
 
 describe('SpeakerSetupPanel', () => {
+  it('shows option-card placeholders while the hardware is read, never the old sentence', async () => {
+    render(<SpeakerSetupPanel />)
+    expect(screen.getByRole('status', { name: 'Reading the hardware' })).toBeInTheDocument()
+    expect(screen.queryByText(/Reading the hardware/)).not.toBeInTheDocument()
+    expect(await screen.findByText('Recommended')).toBeInTheDocument()
+  })
+
   it('preselects the recommendation and shows the measured speed', async () => {
     render(<SpeakerSetupPanel initial={SETUP} />)
     expect(screen.getByText('Recommended')).toBeInTheDocument()

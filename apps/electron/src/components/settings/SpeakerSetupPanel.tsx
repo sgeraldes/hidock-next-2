@@ -13,6 +13,7 @@ import { useEffect, useState } from 'react'
 import { AlertOctagon, Cpu, MonitorSmartphone, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
+import { Working } from '@/components/ui/working'
 import type { SpeakerEngineId, SpeakerSetup, SpeakerSetupOption } from '@/types/speakers'
 import { appLocale } from '@/lib/locale'
 
@@ -77,9 +78,16 @@ export function SpeakerSetupPanel({ initial, onSaved }: SpeakerSetupPanelProps):
   }, [setup, selected])
 
   if (!setup) {
+    if (failure) {
+      return (
+        <div className="text-sm text-muted-foreground" data-testid="speaker-setup-loading">
+          {`Could not read the hardware: ${failure}`}
+        </div>
+      )
+    }
     return (
-      <div className="text-sm text-muted-foreground" data-testid="speaker-setup-loading">
-        {failure ? `Could not read the hardware: ${failure}` : 'Reading the hardware…'}
+      <div data-testid="speaker-setup-loading">
+        <Working label="Reading the hardware" shape="cards" rows={3} />
       </div>
     )
   }

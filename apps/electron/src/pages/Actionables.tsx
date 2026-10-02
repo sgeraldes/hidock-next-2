@@ -36,6 +36,7 @@ import { formatSmartDate, formatRelativeDate } from '@/lib/smartDate'
 import { pageContent } from '@/lib/pageLayout'
 import { toast } from '@/components/ui/toaster'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Working, BusyIcon } from '@/components/ui/working'
 import { EntityMention, useContactResolver } from '@/components/entity'
 import { ActionableDetail } from '@/components/actionables/ActionableDetail'
 import { HandoverDialog } from '@/components/actionables/HandoverDialog'
@@ -743,15 +744,15 @@ export function Actionables() {
                               size="sm"
                               className="flex-1 sm:flex-none gap-2 shadow-sm"
                               disabled={loadingActionableIds.has(actionable.id)}
+                              aria-busy={loadingActionableIds.has(actionable.id) || undefined}
+                              title={loadingActionableIds.has(actionable.id) ? 'Generating' : undefined}
                             >
                               {loadingActionableIds.has(actionable.id) ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
+                                <BusyIcon />
                               ) : (
                                 <Sparkles className="h-4 w-4" />
                               )}
-                              {loadingActionableIds.has(actionable.id)
-                                ? 'Generating...'
-                                : getTemplateInfo(actionable.suggestedTemplate).actionLabel}
+                              {getTemplateInfo(actionable.suggestedTemplate).actionLabel}
                             </Button>
                             <Button
                               onClick={() => handleDismiss(actionable.id)}
@@ -772,9 +773,11 @@ export function Actionables() {
                             size="sm"
                             className="flex-1 sm:flex-none gap-2"
                             disabled
+                            aria-busy={true}
+                            title="Processing"
                           >
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                            Processing...
+                            <BusyIcon />
+                            {getTemplateInfo(actionable.suggestedTemplate).actionLabel}
                           </Button>
                         )}
                         {actionable.status === 'generated' && (
@@ -936,14 +939,9 @@ export function Actionables() {
       {/* Loading Overlay - AC-08 FIX: Dynamic text based on template type */}
       {generating && (
         <div className="fixed inset-0 bg-background/80 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="animate-rise-in text-center space-y-4 bg-card p-8 rounded-xl shadow-lg border">
-            <Loader2 className="h-12 w-12 animate-spin mx-auto text-primary" />
-            <div>
-              <h3 className="text-lg font-semibold mb-1">
-                Generating {getTemplateInfo(currentGeneratingTemplate).name}...
-              </h3>
-              <p className="text-sm text-muted-foreground">This may take a few moments...</p>
-            </div>
+          <div className="animate-rise-in w-[min(32rem,90vw)] text-center space-y-4 bg-card p-8 rounded-xl shadow-lg border">
+            {/* The coming document drawn as lines, never a sentence (owner, 2-oct-2026) */}
+            <Working label={`Generating ${getTemplateInfo(currentGeneratingTemplate).name}`} shape="lines" rows={6} />
             <Button variant="outline" size="sm" onClick={() => cancelGeneration(cancellableActionableId)}>
               <X className="h-4 w-4 mr-2" />
               Cancel

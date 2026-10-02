@@ -69,9 +69,16 @@ describe('TitleBar device pill — Restart reachable in all states', () => {
       status: 'connecting',
       isConnecting: true,
       isDisconnected: false,
-      label: 'Connecting…',
+      label: 'Connect device',
     })
     renderTitleBar()
+
+    // The busy pill keeps its verb, spins, and carries "Connecting" in its name and tooltip.
+    const pill = screen.getByRole('button', { name: 'Connecting to device' })
+    expect(pill).toHaveAttribute('aria-busy', 'true')
+    expect(pill).toHaveAttribute('title', 'Connecting to device')
+    expect(pill).toBeDisabled()
+    expect(screen.queryByText(/Connecting…/)).not.toBeInTheDocument()
 
     fireEvent.keyDown(screen.getByRole('button', { name: /device options/i }), { key: 'Enter' })
     expect(await screen.findByRole('menuitem', { name: /restart app/i })).toBeInTheDocument()

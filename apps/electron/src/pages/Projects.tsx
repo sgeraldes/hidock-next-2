@@ -5,7 +5,6 @@ import {
   FolderOpen,
   Search,
   Plus,
-  RefreshCw,
   Clock,
   Trash2,
   Archive,
@@ -89,6 +88,7 @@ interface ProjectActionable {
 import { cn } from '@/lib/utils'
 import { pageContent } from '@/lib/pageLayout'
 import { toast } from '@/components/ui/toaster'
+import { Working, BusyIcon } from '@/components/ui/working'
 import { appLocale } from '@/lib/locale'
 
 export function Projects() {
@@ -586,13 +586,15 @@ export function Projects() {
               <Button
                 onClick={handleDiscover}
                 disabled={discovering}
+                aria-busy={discovering || undefined}
                 size="sm"
                 variant="outline"
                 className="h-8 gap-1"
-                title="Analyze projects for possible duplicates"
+                title={discovering ? 'Discovering' : 'Analyze projects for possible duplicates'}
               >
-                <Sparkles className={cn("h-4 w-4", discovering && "animate-pulse")} />
-                {discovering ? 'Discovering…' : 'Discover'}
+                {/* Busy buttons keep their label and spin (owner, 2-oct-2026) */}
+                {discovering ? <BusyIcon /> : <Sparkles className="h-4 w-4" />}
+                Discover
               </Button>
               <Button onClick={openCreateDialog} size="sm" className="h-8 gap-1">
                 <Plus className="h-4 w-4" />
@@ -629,9 +631,7 @@ export function Projects() {
 
         <div className="flex-1 overflow-auto p-2">
           {loading && projects.length === 0 ? (
-            <div className="flex items-center justify-center py-12">
-              <RefreshCw className="h-6 w-6 animate-spin text-muted-foreground" />
-            </div>
+            <Working label="Loading projects" shape="list" rows={6} className="px-2" />
           ) : filteredProjects.length === 0 ? (
             <div className="text-center py-12 px-4">
               <Folder className="h-8 w-8 mx-auto text-muted-foreground opacity-20 mb-3" />
@@ -750,9 +750,8 @@ export function Projects() {
         )}
         {!(activeProject && projectSuggestionCount > 0 && reviewExpanded) && (
           activeProject && detailLoading ? (
-          <div className="flex-1 flex flex-col items-center justify-center">
-            <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground mb-4" />
-            <p className="text-sm text-muted-foreground">Loading project details...</p>
+          <div className="flex-1 p-6">
+            <Working label="Loading project details" shape="page" rows={6} />
           </div>
         ) : activeProject ? (
           <div className="flex flex-col flex-1 min-h-0 overflow-hidden animate-in fade-in slide-in-from-right-2 duration-300">
@@ -924,10 +923,11 @@ export function Projects() {
                               className="h-8 gap-1.5"
                               onClick={handleDiscover}
                               disabled={discovering}
-                              title="Scan projects for a likely duplicate to merge this into"
+                              aria-busy={discovering || undefined}
+                              title={discovering ? 'Finding duplicates' : 'Scan projects for a likely duplicate to merge this into'}
                             >
-                              <Sparkles className={cn('h-3.5 w-3.5', discovering && 'animate-pulse')} />
-                              {discovering ? 'Finding duplicates…' : 'Merge into another project'}
+                              {discovering ? <BusyIcon className="h-3.5 w-3.5" /> : <Sparkles className="h-3.5 w-3.5" />}
+                              Merge into another project
                             </Button>
                             <Button
                               variant="ghost"

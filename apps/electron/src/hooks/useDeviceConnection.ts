@@ -48,7 +48,7 @@ export interface UseDeviceConnection {
   isFailed: boolean
   /** Formatted device model when connected (e.g. "H1E"), otherwise null. */
   deviceModel: string | null
-  /** Human label for the control: model name / "Connecting…" / "Connect device". */
+  /** Human label for the control: model name / "Connect device" (also while connecting) / "Connection failed — retry". */
   label: string
   /** Extra context for the failed state (e.g. the device-busy hint), else null. */
   failedHint: string | null
@@ -99,10 +99,12 @@ export function useDeviceConnection(
       : 'Device'
     : null
 
+  // While connecting the control keeps its verb and shows a spinner; "Connecting" goes
+  // to its tooltip (owner, 2-oct-2026).
   const label = isConnected
     ? deviceModel ?? 'Device'
     : isConnecting
-      ? 'Connecting…'
+      ? 'Connect device'
       : isFailed
         ? 'Connection failed — retry'
         : 'Connect device'

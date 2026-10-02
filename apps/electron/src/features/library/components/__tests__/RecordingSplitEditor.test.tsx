@@ -70,6 +70,9 @@ describe('RecordingSplitEditor', () => {
   it('loads automatic boundaries and applies a suggestion to the shared cut point', async () => {
     render(<Harness />)
     expect(detectSplitPoints).toHaveBeenCalledWith('rec-1')
+    // While detection runs: placeholder chips with a name, no sentence on screen.
+    expect(screen.getByRole('status', { name: 'Listening for longer silences and transcript gaps' })).toBeInTheDocument()
+    expect(screen.queryByText(/Listening for longer silences/)).not.toBeInTheDocument()
 
     const suggestion = await screen.findByRole('button', { name: /20:01\.0.*silence \+ transcript gap/i })
     fireEvent.click(suggestion)

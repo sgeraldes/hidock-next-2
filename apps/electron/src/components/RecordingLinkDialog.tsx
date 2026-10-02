@@ -9,6 +9,7 @@ import {
   DialogTitle
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { BusyIcon, Working } from '@/components/ui/working'
 import { Input } from '@/components/ui/input'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { cn, formatDuration, formatTime, formatDateTime } from '@/lib/utils'
@@ -422,7 +423,7 @@ export function RecordingLinkDialog({
             )}
 
             {loading && (
-              <div className="py-8 text-center text-muted-foreground">Loading...</div>
+              <Working label="Loading candidate meetings" shape="list" rows={4} />
             )}
 
             {linkError && (
@@ -517,8 +518,14 @@ export function RecordingLinkDialog({
           <Button variant="outline" onClick={onClose} disabled={saving}>
             Cancel
           </Button>
-          <Button onClick={handleSaveLink} disabled={saving || loading || selectedId === null}>
-            {saving ? 'Saving...' : (meeting ? 'Change Link' : 'Confirm')}
+          <Button
+            onClick={handleSaveLink}
+            disabled={saving || loading || selectedId === null}
+            aria-busy={saving || undefined}
+            title={saving ? 'Saving' : undefined}
+          >
+            {saving && <BusyIcon className="mr-2" />}
+            {meeting ? 'Change Link' : 'Confirm'}
           </Button>
         </DialogFooter>
       </DialogContent>

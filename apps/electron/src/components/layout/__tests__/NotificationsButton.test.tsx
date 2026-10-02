@@ -106,11 +106,15 @@ describe('NotificationsButton', () => {
     const trigger = screen.getByRole('button', { name: /Notifications: 2 operations in progress/i })
     fireEvent.click(trigger)
 
+    // Rows keep the name; the state is an icon (and the number) with the words in its label.
     expect(screen.getByText('Standup')).toBeInTheDocument()
-    expect(screen.getByText('Transcribing…')).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: 'Transcribing' })).toHaveAttribute('title', 'Transcribing')
+    expect(screen.queryByText(/Transcribing…/)).not.toBeInTheDocument()
     expect(screen.getByText('Notes')).toBeInTheDocument()
     expect(screen.queryByText(/2026-07-10/)).not.toBeInTheDocument()
-    expect(screen.getByText(/Downloading… 42%/)).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: 'Downloading, 42%' })).toBeInTheDocument()
+    expect(screen.getByText('42%')).toBeInTheDocument()
+    expect(screen.queryByText(/Downloading…/)).not.toBeInTheDocument()
   })
 
   it('routes "View all" to the shared Operations overlay', () => {
@@ -160,14 +164,15 @@ describe('NotificationsButton', () => {
     expect(mockCancelDownload).toHaveBeenCalledWith('2026-07-10-notes.wav')
   })
 
-  it('shows a "Cancelling…" row with the cancel control disabled while awaiting settlement', () => {
+  it('shows a cancelling row with the cancel control disabled while awaiting settlement', () => {
     setup({
       downloads: new Map([['d1', { filename: 'x.wav', progress: 80, size: 1000, status: 'cancelling' }]])
     })
     render(<NotificationsButton />)
 
     fireEvent.click(screen.getByRole('button', { name: /Notifications/i }))
-    expect(screen.getByText('Cancelling…')).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: 'Cancelling' })).toHaveAttribute('title', 'Cancelling')
+    expect(screen.queryByText(/Cancelling…/)).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Cancel download Recording' })).toBeDisabled()
   })
 

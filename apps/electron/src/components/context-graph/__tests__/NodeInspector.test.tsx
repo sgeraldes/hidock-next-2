@@ -120,6 +120,28 @@ beforeEach(() => {
 })
 
 describe('NodeInspector — discoverability', () => {
+  it('shows placeholder lines while the node loads, never the old word', async () => {
+    renderInspector()
+    expect(screen.getByRole('status', { name: 'Loading the node' })).toBeInTheDocument()
+    expect(screen.queryByText('Loading…')).not.toBeInTheDocument()
+    expect(await screen.findByText('Extracted name')).toBeInTheDocument()
+    expect(screen.queryByRole('status', { name: 'Loading the node' })).not.toBeInTheDocument()
+  })
+
+  it('keeps the Create contact label and spins while the contact is created', async () => {
+    let finish: (v: unknown) => void = () => {}
+    convertToContact.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    renderInspector()
+    fireEvent.click(await screen.findByRole('button', { name: /To contact/i }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Create contact' }))
+    const create = await screen.findByRole('button', { name: 'Create contact' })
+    await waitFor(() => expect(create).toHaveAttribute('aria-busy', 'true'))
+    expect(create).toHaveAttribute('title', 'Creating')
+    expect(screen.queryByText('Creating…')).not.toBeInTheDocument()
+    finish({ success: false, error: 'stop' })
+    await waitFor(() => expect(convertToContact).toHaveBeenCalledWith('person:jiarabi'))
+  })
+
   it('shows a name-only person as an EXTRACTED name with net-new identity facts', async () => {
     renderInspector()
     // Badge distinguishes extracted vs linked.

@@ -35,7 +35,7 @@ describe('computeCoMention', () => {
 
 describe('mentionStatus', () => {
   it('is a transient loading state while the lookup is unresolved', () => {
-    expect(mentionStatus(undefined)).toEqual({ state: 'loading', text: 'checking transcripts…' })
+    expect(mentionStatus(undefined)).toEqual({ state: 'loading', text: 'Checking transcripts' })
   })
 
   it('reports a resolved lookup with zero matches as extracted-from-analysis, not an error', () => {

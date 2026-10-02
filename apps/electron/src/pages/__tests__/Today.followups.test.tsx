@@ -70,6 +70,33 @@ afterEach(() => {
   useAppStore.setState({ deviceRecording: false })
 })
 
+// While the first load runs, each area draws its coming shape instead of an
+// empty state that is not true yet (owner, 2-oct-2026).
+describe('Today — first load', () => {
+  it('draws working placeholders, not the empty-state copy, until the briefing arrives', async () => {
+    let resolveBriefing: (v: unknown) => void = () => {}
+    global.window.electronAPI = {
+      briefing: { get: vi.fn(() => new Promise((r) => { resolveBriefing = r })) },
+      contacts: { getForMeeting: vi.fn().mockResolvedValue({ success: true, data: [] }) },
+      onDomainEvent: () => () => undefined
+    } as any
+
+    renderToday()
+
+    expect(screen.getByRole('status', { name: "Loading today's numbers" })).toBeInTheDocument()
+    expect(screen.getByRole('status', { name: 'Loading your day' })).toBeInTheDocument()
+    expect(screen.getByRole('status', { name: 'Loading next actions' })).toBeInTheDocument()
+    expect(screen.getByRole('status', { name: 'Loading recent knowledge' })).toBeInTheDocument()
+    expect(screen.queryByText(/isn.t connected yet/)).toBeNull()
+    expect(screen.queryByText(/Nothing pending/)).toBeNull()
+    expect(screen.queryByText(/they.ll show up here/)).toBeNull()
+
+    resolveBriefing({ success: true, data: briefing() })
+    await waitFor(() => expect(screen.queryByRole('status', { name: 'Loading your day' })).toBeNull())
+    expect(screen.getByText(/Nothing pending/)).toBeInTheDocument()
+  })
+})
+
 describe("Today — Today's follow-ups digest", () => {
   it('lists today\'s meetings newest-first with calendar subject, time chip and action count', async () => {
     setup({
@@ -156,9 +183,14 @@ describe("Today — Today's follow-ups digest", () => {
 
     renderToday()
     await screen.findByText("Today's follow-ups")
-    expect(screen.getByTestId('followup-pending')).toHaveTextContent(
-      "3 of today's recordings still processing"
-    )
+    // A spinner and the number on screen; the words go to the tooltip (owner, 2-oct-2026)
+    const pending = screen.getByTestId('followup-pending')
+    expect(pending).toHaveTextContent(/^3$/)
+    expect(pending).toHaveAttribute('role', 'status')
+    expect(pending).toHaveAttribute('aria-label', "3 of today's recordings still processing")
+    expect(pending).toHaveAttribute('title', "3 of today's recordings still processing")
+    expect(pending.querySelector('[class*="animate-spin"]')).not.toBeNull()
+    expect(screen.queryByText(/still processing/)).toBeNull()
   })
 
   it('shows only the processing count when nothing is analyzed yet today', async () => {
@@ -166,9 +198,10 @@ describe("Today — Today's follow-ups digest", () => {
 
     renderToday()
     await screen.findByText("Today's follow-ups")
-    expect(screen.getByTestId('followup-pending')).toHaveTextContent(
-      "2 of today's recordings still processing"
-    )
+    const pending = screen.getByTestId('followup-pending')
+    expect(pending).toHaveTextContent(/^2$/)
+    expect(screen.getByRole('status', { name: "2 of today's recordings still processing" })).toBe(pending)
+    expect(screen.queryByText(/still processing/)).toBeNull()
     expect(screen.queryAllByTestId('followup-row')).toHaveLength(0)
   })
 

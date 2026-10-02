@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { ChevronDown, ChevronRight, Users, Check, HelpCircle, Mic, CalendarCheck, MessageSquare, Link2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { Working } from '@/components/ui/working'
 import { cn, formatDate } from '@/lib/utils'
 import { RecordingLinkDialog } from '@/components/RecordingLinkDialog'
 import type { AmbiguousBucketSummary, BucketRecording, BucketResolution } from './useAmbiguousBuckets'
@@ -197,7 +198,7 @@ export function ResolvePerMeetingCard({
 
         {expanded && (
           <div className="space-y-3 pl-1">
-            {loading && <p className="text-xs text-muted-foreground">Loading recordings…</p>}
+            {loading && <Working label="Loading recordings" shape="list" rows={3} />}
             {!loading && groups.length === 0 && (
               <p className="text-xs text-muted-foreground">No linked recordings to resolve.</p>
             )}

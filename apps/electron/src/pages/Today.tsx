@@ -16,7 +16,6 @@ import {
   ChevronRight,
   ChevronDown,
   Link2Off,
-  Loader2,
   CheckCircle2,
   Info,
   Settings as SettingsIcon
@@ -26,6 +25,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { EntityMention, MeetingHoverCard, meetingHoverWillHaveContent } from '@/components/entity'
 import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/hover-card'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
+import { Working, WorkingValue, BusyIcon } from '@/components/ui/working'
 import { TodayIdentitySuggestions } from '@/components/identity/TodayIdentitySuggestions'
 import { LiveRecordingCard, parseRecordingStart } from '@/components/LiveRecordingCard'
 import { TodayCaptures } from '@/features/today/TodayCaptures'
@@ -979,6 +979,11 @@ export function Today() {
               {new Date().toLocaleDateString(appLocale(), { weekday: 'long', month: 'long', day: 'numeric' })}
             </div>
             <h1 className="mt-1 text-4xl font-bold tracking-tight">{greeting()}, Sebastián</h1>
+            {/* While the first load runs, each area draws its coming shape instead of
+                an empty state that is not true yet (owner, 2-oct-2026). */}
+            {!data && loading && (
+              <WorkingValue label="Loading today's numbers" className="mt-2 block w-96 max-w-full text-sm" />
+            )}
             {data && (
               <p className="mt-2 text-sm text-foreground/70">
                 <span className="font-semibold text-foreground">{data.stats.transcribedCount}</span> meetings in your
@@ -1038,7 +1043,9 @@ export function Today() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {!data?.calendar.configured ? (
+            {!data && loading ? (
+              <Working label="Loading your day" shape="list" rows={4} />
+            ) : !data?.calendar.configured ? (
               <div className="flex items-center justify-between gap-4 rounded-lg border border-dashed p-4">
                 <div className="text-sm text-muted-foreground">
                   Your Outlook calendar isn&apos;t connected yet. Add your Outlook ICS URL in Settings and your meetings
@@ -1168,9 +1175,12 @@ export function Today() {
                 <div
                   className="flex items-center gap-2 px-1 pt-1 text-xs text-muted-foreground"
                   data-testid="followup-pending"
+                  role="status"
+                  aria-label={`${pendingCount} of today's recordings still processing`}
+                  title={`${pendingCount} of today's recordings still processing`}
                 >
-                  <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-                  {pendingCount} of today&apos;s recordings still processing
+                  <BusyIcon className="h-3.5 w-3.5" />
+                  <span className="tabular-nums" aria-hidden="true">{pendingCount}</span>
                 </div>
               )}
             </CardContent>
@@ -1187,9 +1197,12 @@ export function Today() {
               <div
                 className="flex items-center gap-2 text-sm text-muted-foreground"
                 data-testid="followup-pending"
+                role="status"
+                aria-label={`${pendingCount} of today's recordings still processing`}
+                title={`${pendingCount} of today's recordings still processing`}
               >
-                <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-                {pendingCount} of today&apos;s recordings still processing
+                <BusyIcon />
+                <span className="tabular-nums" aria-hidden="true">{pendingCount}</span>
               </div>
             </CardContent>
           </Card>
@@ -1243,7 +1256,9 @@ export function Today() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              {!data || data.pendingActionables.length === 0 ? (
+              {!data && loading ? (
+                <Working label="Loading next actions" shape="list" rows={3} />
+              ) : !data || data.pendingActionables.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
                   Nothing pending. New suggestions appear here after each transcription.
                 </p>
@@ -1288,7 +1303,9 @@ export function Today() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              {!data || data.recentKnowledge.length === 0 ? (
+              {!data && loading ? (
+                <Working label="Loading recent knowledge" shape="list" rows={3} />
+              ) : !data || data.recentKnowledge.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
                   Transcribe recordings from your HiDock and they&apos;ll show up here.
                 </p>

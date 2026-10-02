@@ -37,7 +37,9 @@ describe('Explore Page', () => {
       </MemoryRouter>
     )
 
-    expect(screen.getByText('Loading recurring topics...')).toBeInTheDocument()
+    // A working placeholder named for screen readers, never the sentence (owner, 2-oct-2026)
+    expect(screen.getByRole('status', { name: 'Loading recurring topics' })).toBeInTheDocument()
+    expect(screen.queryByText('Loading recurring topics...')).toBeNull()
   })
 
   it('renders real recurring topics and searches when a topic is clicked', async () => {

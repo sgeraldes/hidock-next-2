@@ -198,15 +198,6 @@ export const SourceCard = memo(function SourceCard({
     onClick?.()
   }
 
-  const downloadLabel =
-    downloadStatus === 'pending'
-      ? 'Queued'
-      : downloadStatus === 'cancelling'
-        ? 'Cancelling'
-        : (downloadProgress ?? 0) > 0
-          ? `${downloadProgress}%`
-          : 'Starting'
-
   return (
     <TooltipProvider>
       <div
@@ -356,7 +347,13 @@ export const SourceCard = memo(function SourceCard({
 
         <div className="mt-2 flex items-center gap-1.5 border-t border-border pt-2">
           <div className="flex shrink-0 items-center gap-1.5" data-testid="card-status">
-            <StatusPlaceIcon recording={recording} error={error} />
+            {/* A download in flight shows in the file place, like the list rows: no words
+                in the footer (owner, 2-oct-2026). */}
+            <StatusPlaceIcon
+              recording={recording}
+              error={error}
+              download={deviceOnly && downloadStatus ? { status: downloadStatus, progress: downloadProgress } : undefined}
+            />
             <TranscriptionPlaceIcon recording={recording} transcript={transcript} />
           </div>
           {meeting ? (
@@ -372,12 +369,6 @@ export const SourceCard = memo(function SourceCard({
             </button>
           ) : (
             <span className="flex-1" />
-          )}
-          {deviceOnly && downloadStatus && (
-            <span className="flex shrink-0 items-center gap-1 px-1 text-xs text-muted-foreground" aria-live="polite">
-              <RefreshCw className={cn('h-3.5 w-3.5', isDownloading && 'animate-spin')} aria-hidden="true" />
-              {downloadLabel}
-            </span>
           )}
           {action && (
             <Button

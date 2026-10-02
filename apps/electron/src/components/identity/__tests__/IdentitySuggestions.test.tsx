@@ -140,7 +140,7 @@ describe('IdentitySuggestionsSection', () => {
     renderSection()
     expect((await screen.findAllByText(/extracted from meeting analysis/i)).length).toBeGreaterThan(0)
     // Both the keeper panel and the candidate row settle (keeper resolves a tick later).
-    await waitFor(() => expect(screen.queryByText(/checking transcripts/i)).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByRole('status', { name: /checking transcripts/i })).not.toBeInTheDocument())
     expect(screen.queryByText(/no transcript mentions/i)).not.toBeInTheDocument()
   })
 
@@ -166,7 +166,26 @@ describe('IdentitySuggestionsSection', () => {
     mockGetSuggestions.mockResolvedValue({ success: true, data: [] })
     renderSection()
     await waitFor(() => expect(mockGetSuggestions).toHaveBeenCalled())
-    expect(screen.queryByRole('region', { name: 'Identity suggestions' })).not.toBeInTheDocument()
+    // The placeholder rows give way to nothing once the empty queue has loaded.
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Identity suggestions' })).not.toBeInTheDocument())
+  })
+
+  it('draws the transcript check as a shimmering value, not words, while it runs', async () => {
+    mockGetMentionSnippets.mockImplementation(() => new Promise(() => {}))
+    renderSection()
+    const checking = await screen.findAllByRole('status', { name: 'Checking transcripts' })
+    expect(checking[0]).toHaveAttribute('title', 'Checking transcripts')
+    expect(screen.queryByText(/checking transcripts/i)).not.toBeInTheDocument()
+  })
+
+  it('shows placeholder rows while the suggestions load, instead of nothing', async () => {
+    let finish: (v: unknown) => void = () => {}
+    mockGetSuggestions.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    renderSection()
+    expect(screen.getByRole('status', { name: 'Loading identity suggestions' })).toBeInTheDocument()
+    finish({ success: true, data: [suggestion] })
+    expect(await screen.findByText(/Identity suggestions \(1\)/)).toBeInTheDocument()
+    expect(screen.queryByRole('status', { name: 'Loading identity suggestions' })).not.toBeInTheDocument()
   })
 
   it('accepting a suggestion calls acceptSuggestion and removes the card optimistically', async () => {
@@ -427,7 +446,7 @@ describe('IdentitySuggestionsSection', () => {
 
     // The candidate/duplicate panel resolves — never stuck on "checking transcripts…".
     expect((await screen.findAllByText(/extracted from meeting analysis/i)).length).toBeGreaterThan(0)
-    expect(screen.queryByText(/checking transcripts/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('status', { name: /checking transcripts/i })).not.toBeInTheDocument()
   })
 })
 
@@ -446,7 +465,7 @@ describe('IdentitySuggestionsSection — project transcript evidence (F1)', () =
     renderSection('project')
 
     expect((await screen.findAllByText(/extracted from meeting analysis/i)).length).toBeGreaterThan(0)
-    await waitFor(() => expect(screen.queryByText(/checking transcripts/i)).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByRole('status', { name: /checking transcripts/i })).not.toBeInTheDocument())
     expect(screen.queryByText(/Couldn't check transcripts/i)).not.toBeInTheDocument()
   })
 
@@ -516,7 +535,7 @@ describe('IdentitySuggestionsSection — project transcript evidence (F1)', () =
         batch.forEach((r) => r({ success: true, data: { snippets: [], recordingIds: [] } }))
       })
     }
-    await waitFor(() => expect(screen.queryByText(/checking transcripts/i)).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByRole('status', { name: /checking transcripts/i })).not.toBeInTheDocument())
   })
 })
 
@@ -542,6 +561,19 @@ describe('TodayIdentitySuggestions', () => {
       </MemoryRouter>
     )
     await waitFor(() => expect(mockGetSuggestions).toHaveBeenCalled())
-    expect(container).toBeEmptyDOMElement()
+    // The working rows give way to nothing once the empty queue has loaded.
+    await waitFor(() => expect(container).toBeEmptyDOMElement())
+  })
+
+  // While the queue loads, draw its coming rows instead of nothing (owner, 2-oct-2026)
+  it('draws working rows while the queue loads', () => {
+    mockGetSuggestions.mockReturnValueOnce(new Promise(() => {}))
+    render(
+      <MemoryRouter>
+        <TodayIdentitySuggestions />
+      </MemoryRouter>
+    )
+    const state = screen.getByRole('status', { name: 'Loading identity suggestions' })
+    expect(state.querySelectorAll('[data-working-block]').length).toBeGreaterThan(0)
   })
 })

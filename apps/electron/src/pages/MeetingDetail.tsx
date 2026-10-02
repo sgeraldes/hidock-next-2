@@ -30,6 +30,7 @@ import { MeetingActionables } from '@/components/MeetingActionables'
 import { useAudioControls } from '@/components/OperationController'
 import { useUIStore } from '@/store/useUIStore'
 import { toast } from '@/components/ui/toaster'
+import { Working, BusyIcon } from '@/components/ui/working'
 import { EntityMention } from '@/components/entity'
 import type { MeetingDetails } from '@/types'
 import { appLocale } from '@/lib/locale'
@@ -439,8 +440,8 @@ export function MeetingDetail() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <p className="text-muted-foreground">Loading meeting details...</p>
+      <div className="h-full p-6">
+        <Working label="Loading meeting details" shape="page" rows={6} />
       </div>
     )
   }
@@ -921,6 +922,27 @@ export function MeetingDetail() {
                                 : effectiveStatus === 'transcribing' || effectiveStatus === 'pending'
                                   ? 'bg-yellow-100 dark:bg-yellow-900 text-yellow-700 dark:text-yellow-300'
                                   : 'bg-secondary text-secondary-foreground'
+                            // Work in flight is an icon, the words go to the tooltip (owner, 2-oct-2026)
+                            // Rows may still carry the legacy vocabulary, so compare as plain strings.
+                            const rawStatus: string = effectiveStatus
+                            const isQueued = rawStatus === 'pending' || rawStatus === 'queued'
+                            const isRunning = rawStatus === 'processing' || rawStatus === 'transcribing'
+                            if (isQueued || isRunning) {
+                              return (
+                                <span
+                                  role="status"
+                                  className={`inline-flex items-center text-xs px-2 py-1 rounded-full ${statusStyle}`}
+                                  title={`Transcription status: ${statusLabel}`}
+                                  aria-label={`Transcription status: ${statusLabel}`}
+                                >
+                                  {isQueued ? (
+                                    <Clock className="h-3.5 w-3.5 motion-safe:animate-pulse" aria-hidden="true" />
+                                  ) : (
+                                    <BusyIcon className="h-3.5 w-3.5" />
+                                  )}
+                                </span>
+                              )
+                            }
                             return (
                               <span
                                 className={`text-xs px-2 py-1 rounded-full ${statusStyle}`}
@@ -1050,9 +1072,7 @@ export function MeetingDetail() {
             </DialogDescription>
           </DialogHeader>
           {linkLoading ? (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-            </div>
+            <Working label="Loading candidate meetings" shape="list" rows={4} />
           ) : availableMeetings.length === 0 ? (
             <p className="text-sm text-muted-foreground text-center py-8">
               No candidate meetings found.

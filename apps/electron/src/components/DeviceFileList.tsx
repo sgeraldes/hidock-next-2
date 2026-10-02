@@ -19,6 +19,7 @@ import {
   AlertDialogTitle
 } from '@/components/ui/alert-dialog'
 import { toast } from '@/components/ui/toaster'
+import { BusyIcon } from '@/components/ui/working'
 import { getHiDockDeviceService } from '@/services/hidock-device'
 import { hasDeviceFile, type DeviceOnlyRecording, type BothLocationsRecording } from '@/types/unified-recording'
 import { formatBytes, formatDuration } from '@/utils/formatters'
@@ -466,9 +467,12 @@ export function DeviceFileList({ recordings, syncedFilenames: _syncedFilenames, 
             <AlertDialogAction
               onClick={(e) => { e.preventDefault(); handleConfirmDelete() }}
               disabled={deleting}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              aria-busy={deleting || undefined}
+              title={deleting ? 'Deleting' : undefined}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90 gap-2"
             >
-              {deleting ? 'Deleting...' : 'Delete File'}
+              {deleting && <BusyIcon />}
+              Delete File
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

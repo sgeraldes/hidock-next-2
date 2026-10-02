@@ -255,6 +255,38 @@ describe('SourceReader — Transcribe split/dropdown', () => {
     await waitFor(() => expect(mockReprocessWith).toHaveBeenCalledWith('rec-1', 'local-asr'))
   })
 
+  it('a queued or running transcription keeps the Transcribe label, disabled, with the state in the tooltip', () => {
+    const { rerender } = render(
+      <SourceReader recording={makeRecording({ transcriptionStatus: 'pending' })} onTranscribe={vi.fn()} />
+    )
+    const queued = screen.getByRole('button', { name: /^transcribe$/i })
+    expect(queued).toBeDisabled()
+    expect(queued).toHaveAttribute('title', 'Transcription queued')
+    expect(screen.queryByText('Queued')).not.toBeInTheDocument()
+
+    rerender(<SourceReader recording={makeRecording({ transcriptionStatus: 'processing' })} onTranscribe={vi.fn()} />)
+    const running = screen.getByRole('button', { name: /^transcribe$/i })
+    expect(running).toBeDisabled()
+    expect(running).toHaveAttribute('aria-busy', 'true')
+    expect(running).toHaveAttribute('title', 'Transcription in progress')
+    expect(screen.queryByText('In Progress')).not.toBeInTheDocument()
+  })
+
+  it('a running download shows a spinner and the number; the words go to the tooltip', () => {
+    const deviceOnly = makeRecording({ location: 'device-only', localPath: undefined } as any)
+    const { rerender } = render(
+      <SourceReader recording={deviceOnly} onDownload={vi.fn()} deviceConnected isDownloading downloadProgress={0} />
+    )
+    const starting = screen.getByRole('button', { name: 'Starting the download' })
+    expect(starting).toHaveAttribute('aria-busy', 'true')
+    expect(starting).toHaveAttribute('title', 'Starting the download')
+    expect(screen.queryByText('Starting…')).not.toBeInTheDocument()
+
+    rerender(<SourceReader recording={deviceOnly} onDownload={vi.fn()} deviceConnected isDownloading downloadProgress={45} />)
+    const running = screen.getByRole('button', { name: 'Downloading, 45%' })
+    expect(running).toHaveTextContent(/^45%$/)
+  })
+
   it('a completed recording has a real primary Re-transcribe action and a separate method menu', async () => {
     const onTranscribe = vi.fn()
     render(<SourceReader recording={makeRecording({ transcriptionStatus: 'complete' })} onTranscribe={onTranscribe} />)
@@ -277,6 +309,22 @@ describe('SourceReader — Re-diarize', () => {
     fireEvent.keyDown(screen.getByRole('button', { name: /choose re-transcription method/i }), { key: 'Enter' })
     fireEvent.click(await screen.findByRole('menuitem', { name: /re-diarize this recording/i }))
     await waitFor(() => expect(mockReDiarize).toHaveBeenCalledWith('rec-1'))
+  })
+
+  it('while re-diarizing, the menu item keeps its label, disabled, with the state in the tooltip', async () => {
+    let finish: (v: unknown) => void = () => {}
+    mockReDiarize.mockImplementationOnce(() => new Promise((res) => { finish = res }))
+    render(<SourceReader recording={makeRecording({ transcriptionStatus: 'complete' })} onTranscribe={vi.fn()} />)
+    const trigger = screen.getByRole('button', { name: /choose re-transcription method/i })
+    fireEvent.keyDown(trigger, { key: 'Enter' })
+    fireEvent.click(await screen.findByRole('menuitem', { name: /re-diarize this recording/i }))
+    await waitFor(() => expect(mockReDiarize).toHaveBeenCalledWith('rec-1'))
+    fireEvent.keyDown(trigger, { key: 'Enter' })
+    const item = await screen.findByRole('menuitem', { name: /re-diarize this recording/i })
+    expect(item).toHaveAttribute('aria-disabled', 'true')
+    expect(item).toHaveAttribute('title', 'Re-diarizing')
+    expect(screen.queryByText('Re-diarizing…')).not.toBeInTheDocument()
+    finish({ success: true, queueItemId: 'd1' })
   })
 
   it('does NOT offer Re-diarize for a not-yet-transcribed recording', () => {

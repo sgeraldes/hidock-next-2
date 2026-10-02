@@ -2,6 +2,7 @@ import { useEffect, useState, type ElementType, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { FileText, Sparkles, Clock, Users, CalendarDays, ArrowRight } from 'lucide-react'
 import { formatDateTime } from '@/lib/utils'
+import { WorkingValue } from '@/components/ui/working'
 import { EntityMention, type ResolvedContact } from '@/components/entity'
 import { getTemplateInfo, OUTPUT_DESTINATION } from './templateInfo'
 import type { Actionable, KnowledgeCapture } from '@/types/knowledge'
@@ -131,7 +132,7 @@ export function ActionableDetail({ actionable, resolveRecipient }: ActionableDet
           Resolves a knowledge capture OR a raw recording id; honest fallback. */}
       <DetailSection icon={CalendarDays} label="Source">
         {sourceLoading ? (
-          <span className="text-xs text-muted-foreground">Loading source…</span>
+          <WorkingValue label="Loading source" className="w-40" />
         ) : capture?.meetingId ? (
           <span className="inline-flex items-center gap-1.5 flex-wrap">
             <EntityMention type="meeting" id={capture.meetingId} name={captureTitle} showIcon />
