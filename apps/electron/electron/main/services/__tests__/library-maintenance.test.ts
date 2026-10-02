@@ -26,16 +26,18 @@ vi.mock('../database', () => ({
 }))
 
 const files = new Map<string, Uint8Array>()
+const sizes = new Map<string, number>()
 vi.mock('fs/promises', () => ({
-  readFile: async (p: string) => {
+  readFile: vi.fn(async (p: string) => {
     if (!files.has(p)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
     return Buffer.from(files.get(p)!)
-  },
+  }),
   stat: async (p: string) => {
     if (!files.has(p)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
-    return { size: 1234 }
+    return { size: sizes.get(p) ?? 1234 }
   }
 }))
+import * as fsPromises from 'fs/promises'
 
 vi.mock('../audio-profile-store', () => ({ envelopePath: (id: string) => `env/${id}.u8` }))
 // A device MP3 is marked in these tests by a first byte of 0xff; its "frame gains" are the rest.
@@ -79,13 +81,14 @@ vi.mock('../org-reconciler', () => ({ autoLinkRecordingsToMeetings: () => autoLi
 vi.mock('../meeting-candidate-list', () => ({}))
 vi.mock('../value-backfill', () => ({}))
 
-import { peaksFromEnvelope, redrawWaveforms, relinkRecordingsToMeetings, drawCoarseWaveform, GAIN_AMPLITUDE_OFFSET } from '../library-maintenance'
+import { peaksFromEnvelope, redrawWaveforms, relinkRecordingsToMeetings, drawCoarseWaveform, GAIN_AMPLITUDE_OFFSET, COARSE_SCAN_MAX_BYTES } from '../library-maintenance'
 
 beforeEach(() => {
   state.unlinked = [925, 700]
   state.oldest = '2025-05-12T14:41:41.000Z'
   state.recording = null
   files.clear()
+  sizes.clear()
   cache.clear()
   vi.clearAllMocks()
 })
@@ -130,6 +133,16 @@ describe('drawCoarseWaveform (first open of a recording, owner 2-oct-2026)', () 
 
     expect(entry?.coarse).toBe(true)
     expect(entry?.peaks).toHaveLength(1000)
+  })
+
+  it('does not read an audio file larger than the limit into the main process (kiro review, 2-oct-2026)', async () => {
+    state.recording = { file_path: 'huge.wav', duration_seconds: 36000 }
+    files.set('huge.wav', new Uint8Array([0xff, 200, 200]))
+    sizes.set('huge.wav', COARSE_SCAN_MAX_BYTES + 1)
+    const read = vi.spyOn(fsPromises, 'readFile')
+
+    expect(await drawCoarseWaveform('r-huge')).toBeNull()
+    expect(read.mock.calls.map((c) => c[0])).not.toContain('huge.wav')
   })
 
   it('returns null when there is neither an envelope nor a device MP3, so the player decodes', async () => {

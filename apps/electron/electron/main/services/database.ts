@@ -13046,8 +13046,12 @@ export function enrichRecordingScheduleMetadata(recordingId: string): ScheduleEn
   }
 }
 
-/** Links chosen only from the clock. A sync that moves the meeting can make them wrong. */
-const TIME_ONLY_LINK_METHODS = ['schedule_candidate', 'time_overlap'] as const
+/**
+ * Links chosen only from the clock. A sync that moves the meeting can make them
+ * wrong. time_proximity, calendar and auto are older names for the same kind of
+ * link (one time_proximity link on the live database, 2-oct-2026).
+ */
+const TIME_ONLY_LINK_METHODS = ['schedule_candidate', 'time_overlap', 'time_proximity', 'calendar', 'auto'] as const
 
 /** How far back a calendar sync reaches, so how far back its changes can break a time-only link. */
 const TIME_LINK_RECHECK_DAYS = 30

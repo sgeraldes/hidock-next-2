@@ -53,6 +53,9 @@ export function peaksFromEnvelope(envelope: Uint8Array, count = WAVEFORM_PEAKS):
   return peaks
 }
 
+/** Largest audio file drawCoarseWaveform reads to find the device's frame gains (about 7 hours of device audio). */
+export const COARSE_SCAN_MAX_BYTES = 200 * 1024 * 1024
+
 export interface WaveformRedrawResult {
   total: number
   drawn: number
@@ -131,7 +134,9 @@ export async function drawCoarseWaveform(recordingId: string): Promise<WaveformC
   let envelope: Uint8Array | null = await readFile(envelopePath(recordingId))
     .then((buf) => new Uint8Array(buf))
     .catch(() => null)
-  if (!envelope) {
+  // The device writes 64 kbps MP3, about 29 MB an hour; a file past the limit
+  // is not the device's stream, and reading it would only fill memory.
+  if (!envelope && fileSize > 0 && fileSize <= COARSE_SCAN_MAX_BYTES) {
     const audio = await readFile(row.file_path).catch(() => null)
     envelope = audio ? scanDeviceMp3(audio) : null
   }

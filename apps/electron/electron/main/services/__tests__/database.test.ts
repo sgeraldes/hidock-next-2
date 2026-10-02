@@ -1046,12 +1046,26 @@ describe('Database Service', () => {
         expect(getRecordingById('rec-ok')?.meeting_id).toBe('all-hands')
       })
 
+      it('also re-checks the older clock-only methods (time_proximity, calendar, auto)', () => {
+        seedTimedMeeting('gone-later', 'Moved meeting', '2026-10-02T22:00:00.000Z', '2026-10-02T23:00:00.000Z')
+        seedLinked('rec-prox', '2026-10-02T15:00:00.000Z', 1800, 'gone-later', 'time_proximity')
+        seedLinked('rec-cal', '2026-10-02T16:00:00.000Z', 1800, 'gone-later', 'calendar')
+        seedLinked('rec-auto', '2026-10-02T17:00:00.000Z', 1800, 'gone-later', 'auto')
+
+        expect(recheckTimeLinks({ now: NOW })).toMatchObject({ checked: 3, unlinked: 3 })
+        for (const id of ['rec-prox', 'rec-cal', 'rec-auto']) expect(getRecordingById(id)?.meeting_id, id).toBeNull()
+      })
+
       it('never touches a link the owner chose or one chosen by reading the transcript', () => {
         seedTimedMeeting('moved', 'Moved meeting', '2026-10-02T22:00:00.000Z', '2026-10-02T23:00:00.000Z')
         seedLinked('rec-user', '2026-10-02T15:00:00.000Z', 1800, 'moved', 'user_override')
         seedLinked('rec-ai', '2026-10-02T16:00:00.000Z', 1800, 'moved', 'ai_transcript_match')
+        seedLinked('rec-jev', '2026-10-02T17:00:00.000Z', 1800, 'moved', 'jev_content_match')
+        seedLinked('rec-manual', '2026-10-02T18:00:00.000Z', 1800, 'moved', 'manual')
 
         expect(recheckTimeLinks({ now: NOW })).toMatchObject({ checked: 0, unlinked: 0 })
+        expect(getRecordingById('rec-jev')?.meeting_id).toBe('moved')
+        expect(getRecordingById('rec-manual')?.meeting_id).toBe('moved')
         expect(getRecordingById('rec-user')?.meeting_id).toBe('moved')
         expect(getRecordingById('rec-ai')?.meeting_id).toBe('moved')
       })
