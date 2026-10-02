@@ -22,7 +22,8 @@ interface EvaluationSavedPayload {
   kind?: string | null
   context?: string | null
   audioWarning?: string | null
-  transcriptInvented?: boolean | null
+  /** Jev's probability that the transcript is invented. */
+  transcriptInvented?: number | null
 }
 
 function fieldsOf(p: EvaluationSavedPayload): Partial<UnifiedRecording> {
@@ -53,7 +54,7 @@ export function useEvaluationUpdates(): void {
         const update = pending.get(recording.id)
         if (!update) return recording
         changed = true
-        return { ...recording, ...fieldsOf(update) }
+        return { ...recording, ...fieldsOf(update) } as UnifiedRecording
       })
       pending.clear()
       if (changed) setUnifiedRecordings(next)

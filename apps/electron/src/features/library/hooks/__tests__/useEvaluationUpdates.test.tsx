@@ -50,7 +50,7 @@ describe('useEvaluationUpdates', () => {
     act(() => {
       listener?.({
         type: 'evaluation:saved',
-        payload: { recordingId: 'r1', starLevel: 5, kind: 'team_meeting', context: 'work', audioWarning: null, transcriptInvented: false }
+        payload: { recordingId: 'r1', starLevel: 5, kind: 'team_meeting', context: 'work', audioWarning: null, transcriptInvented: 0.04 }
       })
       vi.advanceTimersByTime(EVALUATION_FLUSH_MS)
     })
