@@ -174,18 +174,20 @@ describe('SourceReader — transcription state in words and percent (owner, 2-oc
     useTranscriptionStore.getState().clear()
   })
 
-  it('says the recording is waiting in the queue', () => {
+  it('a queued recording shows placeholder lines and a waiting clock, not a sentence', () => {
     render(<MemoryRouter><SourceReader recording={makeRecording({ transcriptionStatus: 'pending' })} /></MemoryRouter>)
-    expect(screen.getByRole('status', { name: 'Transcription' })).toHaveTextContent('Waiting to be transcribed')
+    const state = screen.getByRole('status', { name: 'Waiting to be transcribed' })
+    expect(state.textContent?.trim()).toBe('')
+    expect(state.querySelector('.lucide-clock')).not.toBeNull()
     expect(screen.queryByText(/transcription in progress/i)).not.toBeInTheDocument()
   })
 
-  it('shows the percentage and a bar while it is transcribed', () => {
+  it('a running transcription shows placeholder lines, a spinner, a bar and the number', () => {
     useTranscriptionStore.getState().addToQueue('q1', 'rec-1', 'meeting.wav')
     useTranscriptionStore.getState().updateProgress('q1', 42)
     render(<MemoryRouter><SourceReader recording={makeRecording({ transcriptionStatus: 'processing' })} /></MemoryRouter>)
-    const state = screen.getByRole('status', { name: 'Transcription' })
-    expect(state).toHaveTextContent('Transcribing, 42%')
+    const state = screen.getByRole('status', { name: 'Transcribing, 42%' })
+    expect(state.textContent?.trim()).toBe('42%')
     expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '42')
   })
 })

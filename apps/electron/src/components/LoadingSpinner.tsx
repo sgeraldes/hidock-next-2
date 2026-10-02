@@ -1,15 +1,16 @@
-import { Loader2 } from 'lucide-react'
+import { Working } from '@/components/ui/working'
 
 interface LoadingSpinnerProps {
-  /** Custom message to display below the spinner */
+  /** What is loading, for the tooltip and screen readers ("Loading library..."). Never shown as text. */
   message?: string
   /** Additional CSS classes for the container */
   className?: string
 }
 
 /**
- * A loading spinner component for Suspense fallbacks during lazy loading.
- * Uses lucide-react for consistent iconography with the rest of the app.
+ * The fallback a page shows while it loads: the shape of a page with a moving
+ * shimmer and a spinner. The message goes to the tooltip and screen readers;
+ * a sentence on screen does not look like work (owner, 2-oct-2026).
  *
  * @example
  * <Suspense fallback={<LoadingSpinner message="Loading page..." />}>
@@ -17,17 +18,9 @@ interface LoadingSpinnerProps {
  * </Suspense>
  */
 export function LoadingSpinner({
-  message = 'Loading...',
+  message = 'Loading',
   className = ''
 }: LoadingSpinnerProps): React.ReactElement {
-  return (
-    <div
-      className={`flex flex-col items-center justify-center min-h-[200px] ${className}`}
-      role="status"
-      aria-live="polite"
-    >
-      <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      <p className="mt-3 text-sm text-muted-foreground">{message}</p>
-    </div>
-  )
+  const label = message.replace(/(\.\.\.|…)\s*$/, '').trim() || 'Loading'
+  return <Working label={label} shape="page" rows={6} className={`min-h-[200px] p-6 ${className}`} />
 }

@@ -59,10 +59,16 @@ module.exports = {
         'rise-in': {
           from: { opacity: '0', transform: 'translateY(10px)' },
           to: { opacity: '1', transform: 'none' }
+        },
+        // A soft light band crossing a placeholder: something is working (owner, 2-oct-2026).
+        shimmer: {
+          from: { transform: 'translateX(-100%)' },
+          to: { transform: 'translateX(100%)' }
         }
       },
       animation: {
-        'rise-in': 'rise-in var(--dur-entrance) var(--ease-out) both'
+        'rise-in': 'rise-in var(--dur-entrance) var(--ease-out) both',
+        shimmer: 'shimmer 1.6s ease-in-out infinite'
       }
     }
   },

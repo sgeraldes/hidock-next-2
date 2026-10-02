@@ -53,6 +53,7 @@ import type { DownloadStatus } from '@/store/useAppStore'
 import { Transcript, Meeting, MeetingAttendee, parseJsonArray } from '@/types'
 import { Calendar, CloudDownload, Download, Trash2, Wand2, RefreshCw, Play, Square, Pencil, Check, Edit2, Link, X, ExternalLink, FolderOpen, MoreHorizontal, Folder, Plus, EyeOff, Eye, Sparkles, ChevronDown, Cloud, Cpu, Users, Mail, UserCog, Scissors } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Working } from '@/components/ui/working'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/hover-card'
 import { PersonHoverCard } from '@/components/entity/EntityHoverCards'
@@ -104,9 +105,6 @@ const READER_SECTION_LABELS: Record<ReaderSectionId, string> = {
 
 /** Reader width (px) below which the docked bar drops to the bare scrubber. */
 const NARROW_WIDTH_BREAKPOINT = 420
-
-/** Widths (% of the line) of the placeholder lines shown while a transcript is read. */
-const TRANSCRIPT_PLACEHOLDER_LINES = [92, 78, 85, 64, 88, 71, 80, 58]
 
 const CATEGORY_OPTIONS = [
   { value: 'meeting', label: 'Meeting' },
@@ -2123,42 +2121,20 @@ export function SourceReader({
             ) : recording.transcriptionStatus === 'complete' && transcriptFetchingFor === recording.id ? (
               // Lines in the shape of a transcript hold the space while it is read
               // (owner, 2-oct-2026), instead of a message that says it is missing.
-              <div className="space-y-3 py-4 motion-safe:animate-pulse" role="status" aria-label="Loading transcript">
-                {TRANSCRIPT_PLACEHOLDER_LINES.map((width, i) => (
-                  <div key={i} className="flex items-start gap-3">
-                    <span className="h-3 w-12 shrink-0 rounded bg-muted-foreground/20" />
-                    <span className="h-3 rounded bg-muted-foreground/15" style={{ width: `${width}%` }} />
-                  </div>
-                ))}
-              </div>
+              <Working label="Loading transcript" shape="lines" rows={8} />
             ) : recording.transcriptionStatus === 'complete' ? (
               <div className="text-center text-muted-foreground py-8">
                 <p>Transcript not available</p>
               </div>
             ) : recording.transcriptionStatus === 'pending' || recording.transcriptionStatus === 'processing' ? (
-              // Says whether it waits or runs, and how far it got (owner, 2-oct-2026:
-              // the reader showed only "Transcription in progress...").
-              <div className="mx-auto max-w-sm py-8 text-center text-sm text-muted-foreground" role="status" aria-label="Transcription">
-                {recording.transcriptionStatus === 'processing' && transcriptionProgress !== null && transcriptionProgress > 0 ? (
-                  <>
-                    <p className="font-medium text-foreground">Transcribing, {Math.min(100, Math.round(transcriptionProgress))}%</p>
-                    <div
-                      className="mt-3 h-1.5 overflow-hidden rounded-full bg-muted"
-                      role="progressbar"
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-valuenow={Math.min(100, Math.round(transcriptionProgress))}
-                    >
-                      <div className="h-full bg-yellow-500 transition-[width] duration-500" style={{ width: `${Math.min(100, transcriptionProgress)}%` }} />
-                    </div>
-                  </>
-                ) : (
-                  <p className="font-medium text-foreground">
-                    {recording.transcriptionStatus === 'processing' ? 'Starting the transcription' : 'Waiting to be transcribed'}
-                  </p>
-                )}
-                <p className="mt-2">The transcript appears here when it is ready.</p>
-              </div>
+              // Looks like work, not a sentence (owner, 2-oct-2026): the transcript's
+              // shape with a moving shimmer, a clock while it waits its turn, a
+              // spinner and the percentage while it runs.
+              recording.transcriptionStatus === 'processing' ? (
+                <Working label="Transcribing" shape="lines" rows={8} progress={transcriptionProgress} />
+              ) : (
+                <Working label="Waiting to be transcribed" shape="lines" rows={8} waiting />
+              )
             ) : (
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 py-3 text-sm text-muted-foreground">
                 <p className="font-medium text-foreground">No transcript</p>
