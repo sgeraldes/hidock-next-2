@@ -228,8 +228,9 @@ describe('Projects Page', () => {
     // Click on the project to select it
     fireEvent.click(screen.getByText('Project Alpha'))
 
-    // Should show loading spinner
-    expect(await screen.findByText('Loading project details...')).toBeInTheDocument()
+    // A working page named for screen readers, never the sentence (owner, 2-oct-2026)
+    expect(await screen.findByRole('status', { name: 'Loading project details' })).toBeInTheDocument()
+    expect(screen.queryByText('Loading project details...')).toBeNull()
 
     // Resolve the getById call
     resolveGetById!({
@@ -321,6 +322,25 @@ describe('Projects Page', () => {
         expect.stringContaining('8 candidate pairs analyzed, 2 new suggestions, 0 high-confidence')
       )
     )
+  })
+
+  // Busy buttons keep their label and spin; the state goes to the title (owner, 2-oct-2026)
+  it('discover: the button spins while discovering, without "Discovering…"', async () => {
+    ;(global.window.electronAPI as any).identity.discoverProjects.mockReturnValueOnce(new Promise(() => {}))
+    render(
+      <MemoryRouter>
+        <Projects />
+      </MemoryRouter>
+    )
+    await screen.findByText('Project Alpha')
+
+    fireEvent.click(screen.getByRole('button', { name: /Discover/ }))
+
+    const busy = await screen.findByTitle('Discovering')
+    expect(busy).toHaveAttribute('aria-busy', 'true')
+    expect(busy).toHaveTextContent('Discover')
+    expect(busy.querySelector('[class*="animate-spin"]')).not.toBeNull()
+    expect(screen.queryByText('Discovering…')).toBeNull()
   })
 
   // The Projects suggestions section is filtered to kind='project' only

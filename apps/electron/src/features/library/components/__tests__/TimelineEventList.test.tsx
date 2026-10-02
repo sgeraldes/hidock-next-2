@@ -96,6 +96,31 @@ describe('TimelineEventList', () => {
     ))
   })
 
+  it('while saving, the Save button keeps its label, shows a spinner and puts "Saving" in its tooltip', async () => {
+    let finish: (ok: boolean) => void = () => {}
+    const onEventUpdate = vi.fn(() => new Promise<boolean>((res) => { finish = res }))
+    render(
+      <TimelineEventList
+        recordingId="rec-1"
+        onActivate={onActivate}
+        events={[{ id: 'e1', timeSec: 25, index: 1, label: 'Old text', kind: 'action', refId: 'row-1' }]}
+        eventDetails={{ 'row-1': { kind: 'action', fullText: 'Old text', editable: true, status: 'pending' } }}
+        onEventUpdate={onEventUpdate}
+      />
+    )
+    fireEvent.click(screen.getByText('Old text'))
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }))
+    fireEvent.change(screen.getByLabelText(/edit item 1 text/i), { target: { value: 'New text' } })
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+    const save = screen.getByRole('button', { name: /^save$/i })
+    expect(save).toBeDisabled()
+    expect(save).toHaveAttribute('aria-busy', 'true')
+    expect(save).toHaveAttribute('title', 'Saving')
+    expect(screen.queryByText('Saving…')).not.toBeInTheDocument()
+    finish(true)
+    await vi.waitFor(() => expect(screen.queryByRole('button', { name: /^save$/i })).not.toBeInTheDocument())
+  })
+
   it('mark complete toggles the action status via onEventUpdate', async () => {
     const onEventUpdate = vi.fn().mockResolvedValue(true)
     render(

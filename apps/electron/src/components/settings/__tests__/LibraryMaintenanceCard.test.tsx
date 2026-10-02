@@ -50,6 +50,17 @@ describe('LibraryMaintenanceCard', () => {
     await waitFor(() => expect(onRescanWithJev).toHaveBeenCalledTimes(1))
   })
 
+  it('keeps the rescan spinner for the whole scan, not only the start call', () => {
+    renderCard({ rescanRunning: true })
+    const button = screen.getByRole('button', { name: 'Rescan with Jev' })
+    expect(button).toBeDisabled()
+    expect(button).toHaveAttribute('aria-busy', 'true')
+    expect(button).toHaveAttribute('title', 'Scanning')
+    expect(button).toHaveTextContent('Rescan all')
+    expect(button.querySelector('.animate-spin, [class*="animate-spin"]')).not.toBeNull()
+    expect(screen.queryByText(/Scanning…/)).not.toBeInTheDocument()
+  })
+
   it('disables the rescan without a Jev key', () => {
     renderCard({ rescanAvailable: false })
     expect(screen.getByRole('button', { name: 'Rescan with Jev' })).toBeDisabled()

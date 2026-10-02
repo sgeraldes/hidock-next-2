@@ -18,9 +18,10 @@
  * the Operations overlay keeps in a collapsed "Earlier failures" group.
  */
 
-import { useEffect, useMemo, useState } from 'react'
-import { Bell, Download, AlertCircle, RefreshCw, ArrowRight, X } from 'lucide-react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { Bell, Download, AlertCircle, RefreshCw, ArrowRight, X, Clock } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { BusyIcon } from '@/components/ui/working'
 import { useDownloadQueue, useUnifiedRecordings } from '@/store/useAppStore'
 import type { DownloadQueueEntry } from '@/store/useAppStore'
 import { useTranscriptionStats, useTranscriptionStore } from '@/store/features/useTranscriptionStore'
@@ -33,11 +34,37 @@ import { isFeatureOffThisRun } from '@/lib/bootFeatures'
 import { isEarlierFailure, operationLabel, recordingForDownload } from './operationHistory'
 
 
-const STATUS_LABEL: Record<TranscriptionStatus, string> = {
-  pending: 'Queued',
-  processing: 'Transcribing…',
-  completed: 'Done',
-  failed: 'Failed'
+/**
+ * A running or waiting state drawn as an icon (and the percentage when known);
+ * the words go to the tooltip and screen readers (owner, 2-oct-2026). The row
+ * keeps the file name, so it still says WHICH file is in that state.
+ */
+function StateMark({ label, waiting, percent }: { label: string; waiting?: boolean; percent?: number }) {
+  const name = percent !== undefined ? `${label}, ${percent}%` : label
+  return (
+    <span role="img" aria-label={name} title={name} className="inline-flex items-center gap-1 align-middle">
+      {waiting ? (
+        <Clock className="h-3 w-3 motion-safe:animate-pulse" aria-hidden="true" />
+      ) : (
+        <BusyIcon className="h-3 w-3" />
+      )}
+      {percent !== undefined && <span aria-hidden="true" className="tabular-nums">{percent}%</span>}
+    </span>
+  )
+}
+
+/** Status of a transcription: an icon while queued or running, words once it ends. */
+function transcriptionStatus(status: TranscriptionStatus): ReactNode {
+  switch (status) {
+    case 'pending':
+      return <StateMark label="Queued" waiting />
+    case 'processing':
+      return <StateMark label="Transcribing" />
+    case 'completed':
+      return 'Done'
+    default:
+      return 'Failed'
+  }
 }
 
 /** Display order: active first, then queued, then failed. */
@@ -45,13 +72,13 @@ function statusRank(s: TranscriptionStatus): number {
   return s === 'processing' ? 0 : s === 'pending' ? 1 : s === 'failed' ? 2 : 3
 }
 
-/** Human-readable status line for a download row. */
-function downloadStatusLabel(dl: DownloadQueueEntry): string {
+/** Status of a download row: an icon (and the percentage) while it waits or runs, words once it ends. */
+function downloadStatus(dl: DownloadQueueEntry): ReactNode {
   switch (dl.status) {
     case 'pending':
-      return 'Queued'
+      return <StateMark label="Queued" waiting />
     case 'cancelling':
-      return 'Cancelling…'
+      return <StateMark label="Cancelling" />
     case 'cancelled':
       return 'Cancelled'
     case 'failed':
@@ -59,7 +86,9 @@ function downloadStatusLabel(dl: DownloadQueueEntry): string {
     case 'completed':
       return 'Done'
     default:
-      return dl.progress > 0 ? `Downloading… ${Math.round(dl.progress)}%` : 'Starting download…'
+      return dl.progress > 0
+        ? <StateMark label="Downloading" percent={Math.round(dl.progress)} />
+        : <StateMark label="Starting download" />
   }
 }
 
@@ -194,7 +223,7 @@ export function NotificationsButton() {
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm text-foreground">{operationLabel(recordings.find((r) => r.id === item.recordingId))}</div>
                     <div className="truncate text-[11px] text-muted-foreground">
-                      {STATUS_LABEL[item.status]}
+                      {transcriptionStatus(item.status)}
                       {item.error ? ` · ${item.error}` : ''}
                     </div>
                   </div>
@@ -219,7 +248,7 @@ export function NotificationsButton() {
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm text-foreground">{dlLabel}</div>
                     <div className="truncate text-[11px] text-muted-foreground">
-                      {downloadStatusLabel(dl)}{dl.error ? ` · ${dl.error}` : ''}
+                      {downloadStatus(dl)}{dl.error ? ` · ${dl.error}` : ''}
                     </div>
                   </div>
                   {(isCancelableDownload(dl) || dl.status === 'cancelling') && (

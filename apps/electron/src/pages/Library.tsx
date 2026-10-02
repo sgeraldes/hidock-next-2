@@ -6,6 +6,7 @@ import { coarseDateGroup, COARSE_GROUP_LABELS, type CoarseDateGroup } from '@/fe
 import { RefreshCw, AlertCircle, EyeOff, Trash2, Plus } from 'lucide-react'
 import { toast } from '@/components/ui/toaster'
 import { Button } from '@/components/ui/button'
+import { BusyIcon, WorkingValue } from '@/components/ui/working'
 import { getHiDockDeviceService } from '@/services/hidock-device'
 import { scanAndReconcile } from '@/services/device-sync-actions'
 import { recoverTruncated } from '@/services/truncated-recovery-actions'
@@ -2676,7 +2677,10 @@ export function Library() {
       <div className="flex flex-col h-full">
         <header className="border-b px-6 py-4">
           <h1 className="text-2xl font-bold">Knowledge Library</h1>
-          <p className="text-sm text-muted-foreground">Loading your captured conversations...</p>
+          {/* No sentence while loading: a shimmering value (owner, 2-oct-2026). */}
+          <p className="text-sm text-muted-foreground">
+            <WorkingValue label="Loading your captured conversations" className="w-56" />
+          </p>
         </header>
         {/* Skeleton filter bar */}
         <div className="px-6 py-4 flex gap-3">
@@ -3020,26 +3024,35 @@ export function Library() {
             sensible minimum (TriPaneLayout) so the title/date can't be starved. */}
         <div className={`w-full min-w-0 transition-opacity ${isFilterPending ? 'opacity-60' : 'opacity-100'}`}>
           {permanentDeleteProgress && (
-            <div
-              className="mx-3 mb-2 flex items-start gap-2 rounded-md bg-muted/60 px-3 py-2 text-xs"
-              data-testid="permanent-delete-progress"
-              role="status"
-              aria-live="polite"
-            >
-              <RefreshCw className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" aria-hidden="true" />
-              <div className="min-w-0">
-                <p className="font-medium text-foreground">
-                  {permanentDeleteProgress.stage === 'removing-local'
-                    ? 'Removing local data…'
-                    : bulkProgress.total > 1
-                      ? `Erasing device copies… ${bulkProgress.current} of ${bulkProgress.total}`
-                      : 'Erasing device copy…'}
-                </p>
-                <p className="truncate text-muted-foreground" title={permanentDeleteProgress.label}>
-                  {permanentDeleteProgress.label}
-                </p>
-              </div>
-            </div>
+            (() => {
+              const deleteStage = permanentDeleteProgress.stage === 'removing-local'
+                ? 'Removing local data'
+                : bulkProgress.total > 1
+                  ? `Erasing device copies, ${bulkProgress.current} of ${bulkProgress.total}`
+                  : 'Erasing device copy'
+              return (
+                <div
+                  className="mx-3 mb-2 flex items-start gap-2 rounded-md bg-muted/60 px-3 py-2 text-xs"
+                  data-testid="permanent-delete-progress"
+                  role="status"
+                  aria-live="polite"
+                  aria-label={`${deleteStage}: ${permanentDeleteProgress.label}`}
+                  title={deleteStage}
+                >
+                  <BusyIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <div className="min-w-0">
+                    {permanentDeleteProgress.stage !== 'removing-local' && bulkProgress.total > 1 && (
+                      <p className="font-medium tabular-nums text-foreground" aria-hidden="true">
+                        {bulkProgress.current} / {bulkProgress.total}
+                      </p>
+                    )}
+                    <p className="truncate text-muted-foreground" title={permanentDeleteProgress.label}>
+                      {permanentDeleteProgress.label}
+                    </p>
+                  </div>
+                </div>
+              )
+            })()
           )}
           {displayedRecordings.length === 0 ? (
             showTrash ? (
@@ -3231,8 +3244,8 @@ export function Library() {
                             deletionLabel={
                               permanentDeleteProgress?.recordingId === recording.id &&
                               permanentDeleteProgress.stage === 'erasing-device'
-                                ? 'Erasing device copy…'
-                                : 'Removing local data…'
+                                ? 'Erasing device copy'
+                                : 'Removing local data'
                             }
                             onSelectionChange={(id, shiftKey) =>
                               handleSelectionClick(id, shiftKey, displayedRecordings.map((r) => r.id))
@@ -3257,8 +3270,8 @@ export function Library() {
                             deletionLabel={
                               permanentDeleteProgress?.recordingId === recording.id &&
                               permanentDeleteProgress.stage === 'erasing-device'
-                                ? 'Erasing device copy…'
-                                : 'Removing local data…'
+                                ? 'Erasing device copy'
+                                : 'Removing local data'
                             }
                             searchQuery={deferredSearchQuery}
                             onSelectionChange={(id, shiftKey) =>

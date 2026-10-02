@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Loader2, Pause, Play, Scissors, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Slider } from '@/components/ui/slider'
+import { Working } from '@/components/ui/working'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { toast } from '@/components/ui/toaster'
 import { cn } from '@/lib/utils'
@@ -235,11 +236,12 @@ export function RecordingSplitEditor({
 
       <div className="mt-3 border-t border-border/60 pt-3">
         <div className="flex items-center gap-1.5 text-xs font-medium">
-          {detecting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 text-primary" />}
+          <Sparkles className="h-3.5 w-3.5 text-primary" />
           Suggested boundaries
         </div>
         {detecting ? (
-          <p className="mt-1 text-xs text-muted-foreground" role="status">Listening for longer silences and transcript gaps…</p>
+          // Placeholder chips while detection runs, no sentence (owner, 2-oct-2026).
+          <Working label="Listening for longer silences and transcript gaps" shape="lines" rows={2} className="py-1" />
         ) : suggestions.length > 0 ? (
           <div className="mt-2 flex flex-wrap gap-1.5">
             {suggestions.map((suggestion) => (

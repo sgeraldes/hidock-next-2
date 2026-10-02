@@ -440,6 +440,9 @@ describe('Library', () => {
       renderLibrary()
       // Library renders main element during loading
       expect(document.querySelector('main') || document.body).toBeTruthy()
+      // The subtitle is a shimmering value, not a sentence.
+      expect(screen.getByRole('status', { name: 'Loading your captured conversations' })).toBeInTheDocument()
+      expect(screen.queryByText(/Loading your captured conversations/)).not.toBeInTheDocument()
     })
   })
 

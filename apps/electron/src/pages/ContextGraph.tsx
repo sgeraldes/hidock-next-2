@@ -18,6 +18,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/components/ui/toaster'
+import { Working, BusyIcon } from '@/components/ui/working'
 import { cn } from '@/lib/utils'
 import { useUIStore } from '@/store/ui/useUIStore'
 import { useTheme } from '@/hooks/useTheme'
@@ -592,8 +593,9 @@ export function ContextGraph() {
       <div className="flex-1 min-h-0 flex">
         <div className="flex-1 min-w-0 relative">
           {loading ? (
-            <div className="absolute inset-0 flex items-center justify-center">
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            // Loading looks like work, never a bare spinner or a sentence (owner, 2-oct-2026)
+            <div className="absolute inset-0 p-6">
+              <Working label="Loading the context graph" shape="block" />
             </div>
           ) : isEmpty ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 p-8 text-center">
@@ -616,8 +618,8 @@ export function ContextGraph() {
             <>
               <Suspense
                 fallback={
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                  <div className="absolute inset-0 p-6">
+                    <Working label="Loading the lens view" shape="block" />
                   </div>
                 }
               >
@@ -633,9 +635,13 @@ export function ContextGraph() {
               </Suspense>
 
               {lensLoading && (
-                <div className="absolute top-3 right-3 rounded-full border bg-background/85 backdrop-blur px-3 py-1.5 text-[11px] text-muted-foreground shadow-sm flex items-center gap-1.5">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  Loading lens…
+                <div
+                  role="status"
+                  aria-label="Loading lens"
+                  title="Loading lens"
+                  className="absolute top-3 right-3 rounded-full border bg-background/85 backdrop-blur px-2 py-1.5 text-muted-foreground shadow-sm flex items-center"
+                >
+                  <BusyIcon className="h-3.5 w-3.5" />
                 </div>
               )}
 
@@ -686,8 +692,8 @@ export function ContextGraph() {
             <>
               <Suspense
                 fallback={
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                  <div className="absolute inset-0 p-6">
+                    <Working label="Loading the atlas view" shape="block" />
                   </div>
                 }
               >

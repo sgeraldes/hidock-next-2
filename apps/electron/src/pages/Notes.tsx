@@ -11,6 +11,7 @@ import { Plus, Sparkles, Trash2, Link2, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/components/ui/toaster'
+import { BusyIcon } from '@/components/ui/working'
 import { cn } from '@/lib/utils'
 import { useNotes } from '@/features/notes/useNotes'
 import { noteDisplayTitle, noteSubtitle } from '@/features/notes/noteTitle'
@@ -145,7 +146,14 @@ export default function Notes(): React.ReactElement {
               className="max-w-md"
               onChange={(event) => void patch(selected.id, { title: event.target.value })}
             />
-            <span className="text-xs text-muted-foreground">{saving ? 'Saving…' : 'Saved'}</span>
+            {/* Saving is a spinner with the word in its title; "Saved" is a real state (owner, 2-oct-2026) */}
+            {saving ? (
+              <span role="status" aria-label="Saving" title="Saving" className="inline-flex text-muted-foreground">
+                <BusyIcon className="h-3.5 w-3.5" />
+              </span>
+            ) : (
+              <span className="text-xs text-muted-foreground">Saved</span>
+            )}
             <div className="ml-auto flex gap-2">
               <Button
                 variant="outline"

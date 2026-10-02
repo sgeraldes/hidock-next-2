@@ -44,6 +44,7 @@ import type { Person, PersonType } from '@/types/knowledge'
 import { cn } from '@/lib/utils'
 import { pageWide } from '@/lib/pageLayout'
 import { toast } from '@/components/ui/toaster'
+import { Working, BusyIcon } from '@/components/ui/working'
 import { appLocale } from '@/lib/locale'
 
 /** Above this many links on BOTH sides, a merge requires typing the loser's name. */
@@ -338,10 +339,12 @@ export function People() {
               variant="outline"
               onClick={handleDiscover}
               disabled={discovering}
-              title="Analyze contacts for possible duplicates"
+              aria-busy={discovering || undefined}
+              title={discovering ? 'Discovering' : 'Analyze contacts for possible duplicates'}
             >
-              <Sparkles className={cn("h-4 w-4 mr-2", discovering && "animate-pulse")} />
-              {discovering ? 'Discovering…' : 'Discover'}
+              {/* Busy buttons keep their label and spin (owner, 2-oct-2026) */}
+              {discovering ? <BusyIcon className="h-4 w-4 mr-2" /> : <Sparkles className="h-4 w-4 mr-2" />}
+              Discover
             </Button>
             <Button
               size="sm"
@@ -441,9 +444,7 @@ export function People() {
             </p>
           )}
           {loading && people.length === 0 ? (
-            <div className="flex items-center justify-center py-20">
-              <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground" />
-            </div>
+            <Working label="Loading people" shape="cards" rows={8} />
           ) : people.length === 0 ? (
             <Card>
               <CardContent className="py-16 text-center">
@@ -600,12 +601,12 @@ export function People() {
                   variant="outline"
                   size="sm"
                   disabled={loadingMore}
+                  aria-busy={loadingMore || undefined}
+                  title={loadingMore ? 'Loading more people' : undefined}
                   onClick={() => loadPeople('append')}
                 >
-                  {loadingMore ? (
-                    <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                  ) : null}
-                  {loadingMore ? 'Loading…' : 'Load more'}
+                  {loadingMore ? <BusyIcon className="h-4 w-4 mr-2" /> : null}
+                  Load more
                 </Button>
               </div>
             )}

@@ -60,6 +60,42 @@ describe('ConnectorsSettings as a list and a detail pane', () => {
     expect(screen.getByText('Channels as living logs.')).toBeInTheDocument()
   })
 
+  it('shows placeholder rows while the connectors load, never the old sentence', async () => {
+    render(<ConnectorsSettings />)
+    expect(screen.getByRole('status', { name: 'Loading connectors' })).toBeInTheDocument()
+    expect(screen.queryByText(/Loading connectors/)).not.toBeInTheDocument()
+    await screen.findByRole('listbox', { name: 'Connectors' })
+  })
+
+  it('draws a running state in the list as a spinner with the words in its label', async () => {
+    list.mockResolvedValue([
+      summary('m365', 'm365', 'Microsoft 365', 'syncing', true),
+      summary('slack', 'slack', 'Slack', 'connecting')
+    ])
+    render(<ConnectorsSettings />)
+    const listbox = await screen.findByRole('listbox', { name: 'Connectors' })
+    const syncing = within(listbox).getByLabelText('Syncing')
+    expect(syncing).toHaveAttribute('title', 'Syncing')
+    expect(syncing).toHaveAttribute('aria-busy', 'true')
+    expect(within(listbox).getByLabelText('Connecting')).toHaveAttribute('title', 'Connecting')
+    expect(screen.queryByText(/Syncing…|Connecting…/)).not.toBeInTheDocument()
+    expect(within(listbox).getAllByRole('option').map((o) => o.textContent)).toEqual(['Microsoft 365', 'Slack'])
+  })
+
+  it('keeps the add-account label and spins while the account is added', async () => {
+    let finish: (v: unknown) => void = () => {}
+    addInstance.mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+    render(<ConnectorsSettings />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Add Microsoft 365 account' }))
+    const button = screen.getByRole('button', { name: 'Add Microsoft 365 account' })
+    expect(button).toBeDisabled()
+    expect(button).toHaveAttribute('aria-busy', 'true')
+    expect(button).toHaveAttribute('title', 'Adding')
+    expect(screen.queryByText(/Adding…/)).not.toBeInTheDocument()
+    finish(summary('m365:2', 'm365', 'Personal', 'auth-needed', true))
+    await screen.findByRole('option', { name: /Microsoft 365 · Personal/ })
+  })
+
   it('adds a second account under the list and selects it', async () => {
     addInstance.mockResolvedValue(summary('m365:2', 'm365', 'Personal', 'auth-needed', true))
     render(<ConnectorsSettings />)

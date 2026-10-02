@@ -12,6 +12,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Check, Search } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { cleanRole } from '@/lib/roleHygiene'
+import { Working } from '@/components/ui/working'
 
 /** Minimal contact shape the picker needs (from contacts:getAll). */
 interface PickerContact {
@@ -136,7 +137,7 @@ export function MergeIntoDialog({ open, onOpenChange, loserName, excludeIds, onP
 
         <div className="max-h-72 overflow-y-auto -mx-1 px-1">
           {loading ? (
-            <p className="px-2 py-4 text-center text-xs text-muted-foreground">Loading…</p>
+            <Working label="Loading people" shape="list" rows={4} className="px-2" />
           ) : visible.length === 0 ? (
             <p className="px-2 py-4 text-center text-xs text-muted-foreground">No matching people</p>
           ) : (

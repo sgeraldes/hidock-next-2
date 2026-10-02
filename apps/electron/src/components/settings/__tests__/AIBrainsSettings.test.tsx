@@ -59,6 +59,14 @@ describe('AIBrainsSettings', () => {
     await screen.findByText('Gemini (API key)')
   })
 
+  it('shows placeholder rows while the brains load, never the old sentence', async () => {
+    render(<AIBrainsSettings />)
+    expect(screen.getByRole('status', { name: 'Loading brains' })).toBeInTheDocument()
+    expect(screen.queryByText(/Loading brains/)).not.toBeInTheDocument()
+    await screen.findByText('Gemini (API key)')
+    expect(screen.queryByRole('status', { name: 'Loading brains' })).not.toBeInTheDocument()
+  })
+
   it('renders every brain from the registry, data-driven (not hardcoded)', async () => {
     render(<AIBrainsSettings />)
     expect(await screen.findByText('Gemini (API key)')).toBeInTheDocument()

@@ -235,6 +235,11 @@ describe('TranscriptViewer speaker assignment (recordingId)', () => {
     const editor = screen.getByRole('textbox', { name: 'Edit transcript turn 1' })
     fireEvent.change(editor, { target: { value: 'Aló Aló, Sorry recién te leo' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save correction' }))
+    // While saving: same label, a spinner, the state in the tooltip.
+    const saving = screen.getByRole('button', { name: 'Save correction' })
+    expect(saving).toHaveAttribute('aria-busy', 'true')
+    expect(saving).toHaveAttribute('title', 'Saving and rebuilding RAG')
+    expect(screen.queryByText(/Saving \+ rebuilding RAG/)).not.toBeInTheDocument()
 
     await waitFor(() => expect(mockUpdateContent).toHaveBeenCalledWith({
       recordingId: 'rec1',
@@ -273,6 +278,12 @@ describe('TranscriptViewer speaker assignment (recordingId)', () => {
 
     expect(await screen.findByText(/Transcript saved\. RAG search is pending/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Retry RAG' }))
+    const retrying = screen.queryByRole('button', { name: 'Retry RAG' })
+    if (retrying) {
+      expect(retrying).toHaveAttribute('aria-busy', 'true')
+      expect(retrying).toHaveAttribute('title', 'Updating RAG')
+    }
+    expect(screen.queryByText(/Updating RAG/)).not.toBeInTheDocument()
     await waitFor(() => expect(mockReindex).toHaveBeenCalledWith({ recordingId: 'rec1' }))
     await waitFor(() => expect(screen.queryByText(/RAG search is pending/)).not.toBeInTheDocument())
   })

@@ -211,7 +211,9 @@ describe('MeetingDetail', () => {
 
       renderMeetingDetail('m1')
 
-      expect(screen.getByText('Loading meeting details...')).toBeInTheDocument()
+      // A working page, never the sentence (owner, 2-oct-2026)
+      expect(screen.getByRole('status', { name: 'Loading meeting details' })).toBeInTheDocument()
+      expect(screen.queryByText('Loading meeting details...')).toBeNull()
     })
 
     it('should show error state on failure', async () => {
@@ -426,6 +428,36 @@ describe('MeetingDetail', () => {
       expect(badge).toHaveAttribute('title', 'Transcription status: Not transcribed')
       // The raw, meaningless "none" must not leak into the UI.
       expect(screen.queryByText('none')).not.toBeInTheDocument()
+    })
+
+    // Work in flight is an icon with the words in the tooltip (owner, 2-oct-2026)
+    it('a queued recording shows a pulsing clock, never the word "Queued"', async () => {
+      mockGetDetails.mockResolvedValue({
+        ...validMeetingDetails,
+        recordings: [recordingWithStatus('pending')],
+      })
+      mockGetByMeeting.mockResolvedValue([])
+
+      renderMeetingDetail('m1')
+
+      const badge = await screen.findByRole('status', { name: 'Transcription status: Queued' })
+      expect(badge).toHaveAttribute('title', 'Transcription status: Queued')
+      expect(badge.querySelector('.lucide-clock')).not.toBeNull()
+      expect(screen.queryByText('Queued')).toBeNull()
+    })
+
+    it('a transcribing recording shows a spinner, never the word "Transcribing"', async () => {
+      mockGetDetails.mockResolvedValue({
+        ...validMeetingDetails,
+        recordings: [recordingWithStatus('transcribing')],
+      })
+      mockGetByMeeting.mockResolvedValue([])
+
+      renderMeetingDetail('m1')
+
+      const badge = await screen.findByRole('status', { name: 'Transcription status: Transcribing' })
+      expect(badge.querySelector('[class*="animate-spin"]')).not.toBeNull()
+      expect(screen.queryByText('Transcribing')).toBeNull()
     })
   })
 

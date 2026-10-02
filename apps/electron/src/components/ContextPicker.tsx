@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Check, Search, BookOpen, Clock, RefreshCw } from 'lucide-react'
 import { Input } from '@/components/ui/input'
+import { Working } from '@/components/ui/working'
 import { formatDateTime } from '@/lib/utils'
 import type { KnowledgeCapture } from '@/types/knowledge'
 import { cn } from '@/lib/utils'
@@ -54,7 +55,7 @@ export function ContextPicker({ onSelect, selectedIds, className }: ContextPicke
 
       <div className="h-[300px] overflow-auto pr-2 space-y-1 custom-scrollbar">
         {loading ? (
-          <p className="text-center text-sm text-muted-foreground py-8">Loading knowledge...</p>
+          <Working label="Loading knowledge" shape="list" rows={5} />
         ) : error ? (
           <div className="flex flex-col items-center justify-center py-8 gap-2">
             <p className="text-sm text-muted-foreground">{error}</p>

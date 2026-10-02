@@ -14,6 +14,7 @@ import {
   DialogTitle
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { BusyIcon } from '@/components/ui/working'
 import { CheckCircle2, XCircle, Circle, Loader2, Ban, ChevronDown, ChevronRight } from 'lucide-react'
 import { BulkOperationItem, BulkItemStatus } from '@/hooks/useBulkOperation'
 import { LibraryError, getRecoveryAction } from '@/features/library/utils/errorHandling'
@@ -266,9 +267,18 @@ export function BulkProgressModal({
             variant={isRunning ? 'outline' : 'default'}
             disabled={isRunning}
             size="sm"
-            className="ml-auto"
+            className="ml-auto gap-2"
+            aria-busy={isRunning || undefined}
+            aria-label={isRunning ? `Running, ${progress.current} of ${progress.total}` : undefined}
+            title={isRunning ? `Running, ${progress.current} of ${progress.total}` : undefined}
           >
-            {isRunning ? 'Running...' : 'Close'}
+            {/* While running: spinner and counts, the word goes to the tooltip (owner, 2-oct-2026). */}
+            {isRunning ? (
+              <>
+                <BusyIcon />
+                <span className="tabular-nums">{progress.current} / {progress.total}</span>
+              </>
+            ) : 'Close'}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -130,4 +130,15 @@ describe('ActionableDetail source resolution', () => {
     expect(screen.queryByText('Source recording')).not.toBeInTheDocument()
     expect(mockRecordingsGetById).toHaveBeenCalledWith('missing-id')
   })
+
+  it('shows a shimmering value while the source resolves, never the old sentence', async () => {
+    mockKnowledgeGetById.mockResolvedValue(null)
+    mockRecordingsGetById.mockResolvedValue(null)
+
+    renderDetail('missing-id')
+
+    expect(screen.getByRole('status', { name: 'Loading source' })).toBeInTheDocument()
+    expect(screen.queryByText(/Loading source/)).not.toBeInTheDocument()
+    expect(await screen.findByText('Source unavailable')).toBeInTheDocument()
+  })
 })

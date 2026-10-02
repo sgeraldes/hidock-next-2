@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { RecordingLinkDialog } from '../RecordingLinkDialog'
 
 // Render Radix portals inline so the dialog content is queryable in jsdom.
@@ -111,6 +111,31 @@ describe('RecordingLinkDialog — decidable match', () => {
     // The candidate list stays up (no Loading flicker).
     expect(screen.getByText('Retro Belcorp')).toBeInTheDocument()
     expect(screen.queryByText(/loading/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('status', { name: 'Loading candidate meetings' })).not.toBeInTheDocument()
+  })
+
+  it('shows placeholder rows while the candidates load, never the old word', async () => {
+    render(<RecordingLinkDialog recording={RECORDING} open onClose={vi.fn()} onResolved={vi.fn()} />)
+    expect(screen.getByRole('status', { name: 'Loading candidate meetings' })).toBeInTheDocument()
+    expect(screen.queryByText('Loading...')).not.toBeInTheDocument()
+    expect(await screen.findByText('Retro Belcorp')).toBeInTheDocument()
+  })
+
+  it('keeps the Confirm label and spins while the link saves', async () => {
+    let finish: (v: { success: boolean }) => void = () => {}
+    vi.mocked(window.electronAPI.recordings.selectMeeting).mockImplementationOnce(
+      () => new Promise((resolve) => { finish = resolve })
+    )
+    render(<RecordingLinkDialog recording={RECORDING} open onClose={vi.fn()} onResolved={vi.fn()} />)
+    await screen.findByText('Retro Belcorp')
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+    const confirm = screen.getByRole('button', { name: 'Confirm' })
+    expect(confirm).toHaveAttribute('aria-busy', 'true')
+    expect(confirm).toHaveAttribute('title', 'Saving')
+    expect(confirm).toBeDisabled()
+    expect(screen.queryByText('Saving...')).not.toBeInTheDocument()
+    finish({ success: true })
+    await waitFor(() => expect(window.electronAPI.recordings.selectMeeting).toHaveBeenCalledWith('rec-46', 'retro'))
   })
 
   it('refetches when the recording id actually changes', async () => {

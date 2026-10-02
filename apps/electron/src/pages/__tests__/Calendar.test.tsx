@@ -25,6 +25,8 @@ vi.mock('@/components/RecordingLinkDialog', () => ({ RecordingLinkDialog: () => 
 vi.mock('@/components/ui/toaster', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 
 let meetingsFixture: any[] = []
+let meetingsLoadingFixture = false
+let syncingFixture = false
 // Mutable so individual tests can flip UI config (e.g. showListView) before render.
 let configFixture: Record<string, any> = {}
 
@@ -42,11 +44,11 @@ const currentDate = new Date()
 vi.mock('@/store/useAppStore', () => ({
   useAppStore: vi.fn((selector?: (s: any) => any) => (selector ? selector(appActions) : appActions)),
   useMeetings: () => meetingsFixture,
-  useMeetingsLoading: () => false,
+  useMeetingsLoading: () => meetingsLoadingFixture,
   useCurrentDate: () => currentDate,
   useCalendarView: () => 'week',
   useLastCalendarSync: () => null,
-  useCalendarSyncing: () => false,
+  useCalendarSyncing: () => syncingFixture,
   useDownloadQueue: () => new Map(),
   useSetLastCalendarSync: () => vi.fn(),
   // Counted acquire/release replaced the raw boolean setter: clear-and-sync can
@@ -121,8 +123,29 @@ function renderCalendar(recordings: any[], meetings: any[] = []) {
 beforeEach(() => {
   vi.clearAllMocks()
   meetingsFixture = []
+  meetingsLoadingFixture = false
+  syncingFixture = false
   configFixture = {}
   window.confirm = vi.fn(() => true)
+})
+
+// Loading and syncing look like work, never a sentence (owner, 2-oct-2026)
+describe('Calendar — working states', () => {
+  it('draws a working list while the first load runs, without "Loading..."', () => {
+    meetingsLoadingFixture = true
+    renderCalendar([])
+    expect(screen.getByRole('status', { name: 'Loading calendar' })).toBeInTheDocument()
+    expect(screen.queryByText('Loading...')).toBeNull()
+  })
+
+  it('shows a moving strip and a header spinner while the calendar syncs, without "Syncing calendar..."', () => {
+    syncingFixture = true
+    renderCalendar([recording({ id: 'r-sync' })])
+    // One strip over the grid, one spinner in the header.
+    expect(screen.getAllByRole('status', { name: 'Syncing calendar' }).length).toBeGreaterThanOrEqual(2)
+    expect(screen.queryByText('Syncing calendar...')).toBeNull()
+    expect(screen.queryByText('Syncing...')).toBeNull()
+  })
 })
 
 describe('Calendar — design language', () => {

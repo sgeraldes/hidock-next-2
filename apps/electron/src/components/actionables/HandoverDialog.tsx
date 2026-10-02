@@ -28,6 +28,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { toast } from '@/components/ui/toaster'
+import { Working } from '@/components/ui/working'
 import { useAppStore } from '@/store'
 import type { BrainListItem, HandoverCreateBundleResult } from '../../../electron/preload/index'
 
@@ -70,6 +71,7 @@ export function HandoverDialog({ open, onOpenChange, output }: HandoverDialogPro
   const [busy, setBusy] = useState<null | 'bundle' | 'run' | 'terminal' | 'copy'>(null)
   const [runLog, setRunLog] = useState<string>('')
   const [runOk, setRunOk] = useState<boolean | null>(null)
+  const [agentRunning, setAgentRunning] = useState(false)
 
   // Only agentic brains are relevant to a handover; keep them all (usable + greyed).
   const agenticBrains = useMemo(() => brains.filter((b) => b.capabilities.includes('agentic')), [brains])
@@ -103,6 +105,7 @@ export function HandoverDialog({ open, onOpenChange, output }: HandoverDialogPro
     if (open) {
       setRunLog('')
       setRunOk(null)
+      setAgentRunning(false)
     }
   }, [open])
 
@@ -185,11 +188,17 @@ export function HandoverDialog({ open, onOpenChange, output }: HandoverDialogPro
       // Only the opaque bundleId is passed back — the main process refuses paths.
       if (!bundle?.bundleId) return
       logActivity('info', 'Handover agent started', `${brainId} · ${bundle.bundleDir ?? bundle.bundleId}`)
-      setRunLog('Running the agent… this can take a while.')
-      const res = await window.electronAPI.handover.runAgent({
-        bundleId: bundle.bundleId,
-        brainId: brainId || undefined,
-      })
+      // The log area shows moving placeholder lines while the agent runs (owner, 2-oct-2026).
+      setAgentRunning(true)
+      let res: Awaited<ReturnType<typeof window.electronAPI.handover.runAgent>>
+      try {
+        res = await window.electronAPI.handover.runAgent({
+          bundleId: bundle.bundleId,
+          brainId: brainId || undefined,
+        })
+      } finally {
+        setAgentRunning(false)
+      }
       if (!res.success) {
         setRunOk(false)
         setRunLog(res.error?.message || 'The run failed.')
@@ -311,16 +320,22 @@ export function HandoverDialog({ open, onOpenChange, output }: HandoverDialogPro
           </div>
 
           {/* Run log */}
-          {runLog && (
+          {(runLog || agentRunning) && (
             <div className="space-y-1.5">
               <Label className="flex items-center gap-1.5">
                 {runOk === true && <CheckCircle2 className="h-4 w-4 text-green-500" />}
                 {runOk === false && <AlertCircle className="h-4 w-4 text-destructive" />}
                 Run log
               </Label>
-              <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-md border bg-muted/30 p-3 text-xs">
-                {runLog}
-              </pre>
+              {agentRunning ? (
+                <div className="rounded-md border bg-muted/30 px-3">
+                  <Working label="Running the agent, this can take a while" shape="lines" rows={4} />
+                </div>
+              ) : (
+                <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-md border bg-muted/30 p-3 text-xs">
+                  {runLog}
+                </pre>
+              )}
             </div>
           )}
         </div>

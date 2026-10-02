@@ -10,6 +10,11 @@ keeps the recordings it used to cover.
 
 ### Changes
 
+- **Waiting looks like work, everywhere.** No screen says "Loading...", "Syncing..." or "In
+  progress..." anymore. While something loads you see the shape of what is coming with a moving
+  shimmer and a spinner (a pulsing clock while it waits its turn), and a bar with the percentage
+  when it is known. Busy buttons keep their name and show a spinner. Hover to read what is
+  happening.
 - **Progress in its own place.** A download from the device shows in the file place (a clock while
   it waits, then the percentage) and a running transcription shows its percentage in the transcript
   place. Nothing is added at the end of the row, so date, time, length and icons line up with the

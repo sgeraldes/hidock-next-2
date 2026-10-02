@@ -14,7 +14,6 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
-  Loader2,
   Pencil,
   RefreshCw,
   TriangleAlert,
@@ -24,6 +23,7 @@ import { expandInlineStoredSegments } from '../utils/splitInlineTurns'
 import { useMediaQuery } from '@/hooks/useMediaQuery'
 import { toast } from '@/components/ui/toaster'
 import { cn } from '@/lib/utils'
+import { BusyIcon } from '@/components/ui/working'
 import type { Person } from '@/types/knowledge'
 import { lineIssues, isJumpableLineIssue, type LineIssueCode } from '@/shared/transcript-line-issues'
 import { ISSUE_TAGS } from '../utils/transcriptIntegrity'
@@ -987,10 +987,15 @@ export function TranscriptViewer({
                   type="button"
                   onClick={() => void retryRag()}
                   disabled={retryingRag}
+                  aria-busy={retryingRag || undefined}
+                  title={retryingRag ? 'Updating RAG' : undefined}
                   className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 font-semibold text-amber-100 transition-colors hover:bg-amber-500/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 disabled:cursor-wait disabled:opacity-60"
                 >
-                  <RefreshCw className={cn('h-3.5 w-3.5', retryingRag && 'animate-spin')} aria-hidden="true" />
-                  {retryingRag ? 'Updating RAG…' : 'Retry RAG'}
+                  {/* Busy keeps the verb; the state goes to the tooltip (owner, 2-oct-2026). */}
+                  {retryingRag
+                    ? <BusyIcon className="h-3.5 w-3.5" />
+                    : <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />}
+                  Retry RAG
                 </button>
               </div>
             )}
@@ -1154,14 +1159,16 @@ export function TranscriptViewer({
                             type="button"
                             onClick={() => void saveCorrection()}
                             disabled={savingIndex === i || !editDraft.trim()}
+                            aria-busy={savingIndex === i || undefined}
+                            title={savingIndex === i ? 'Saving and rebuilding RAG' : undefined}
                             className="inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-xs font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait disabled:opacity-50"
                           >
                             {savingIndex === i ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                              <BusyIcon className="h-3.5 w-3.5" />
                             ) : (
                               <Check className="h-3.5 w-3.5" aria-hidden="true" />
                             )}
-                            {savingIndex === i ? 'Saving + rebuilding RAG…' : 'Save correction'}
+                            Save correction
                           </button>
                         </div>
                         {editError && (

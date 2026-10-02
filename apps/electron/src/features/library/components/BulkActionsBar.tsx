@@ -1,6 +1,7 @@
 import { X, Download, Wand2, Trash2, CheckSquare, Square, EyeOff, Skull } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
+import { BusyIcon } from '@/components/ui/working'
 import { cn } from '@/lib/utils'
 
 interface BulkActionsBarProps {
@@ -112,10 +113,11 @@ export function BulkActionsBar({
           onClick={onProcess}
           disabled={isProcessing || disabledActions.process}
           className="gap-2"
-          title="Transcribe selected recordings"
+          aria-busy={isProcessing || undefined}
+          title={isProcessing ? 'Processing' : 'Transcribe selected recordings'}
         >
-          <Wand2 className="h-4 w-4" />
-          {isProcessing ? 'Processing...' : 'Transcribe'}
+          {isProcessing ? <BusyIcon /> : <Wand2 className="h-4 w-4" />}
+          Transcribe
         </Button>
 
         {/* Mark Personal Action */}

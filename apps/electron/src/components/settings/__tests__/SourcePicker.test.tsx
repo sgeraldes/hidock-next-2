@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import type { SourceContainer } from '@hidock/connectors'
 import { SourcePicker } from '../SourcePicker'
 
@@ -58,5 +58,20 @@ describe('SourcePicker', () => {
     await screen.findByRole('button', { name: 'Choose all 3 shown' })
     fireEvent.click(screen.getByRole('button', { name: 'Drop the 1 chosen here' }))
     expect(onToggleMany).toHaveBeenLastCalledWith(['C4'], false)
+  })
+
+  it('keeps the choose-all label and spins while the choice saves', async () => {
+    let finish: () => void = () => {}
+    const onToggleMany = vi.fn(() => new Promise<void>((resolve) => { finish = resolve }))
+    render(<SourcePicker containers={channels} isEnabled={() => false} onToggle={vi.fn()} onToggleMany={onToggleMany} />)
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Filter channels' }), { target: { value: 'd' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Choose all 3 shown' }))
+    const button = screen.getByRole('button', { name: 'Choose all 3 shown' })
+    expect(button).toHaveAttribute('aria-busy', 'true')
+    expect(button).toHaveAttribute('title', 'Saving')
+    expect(button).toBeDisabled()
+    expect(screen.queryByText(/Saving…/)).not.toBeInTheDocument()
+    finish()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Choose all 3 shown' })).not.toHaveAttribute('aria-busy'))
   })
 })

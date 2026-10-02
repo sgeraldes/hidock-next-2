@@ -2,6 +2,7 @@ import { useId, useMemo, useState } from 'react'
 import { X } from 'lucide-react'
 import type { SourceContainer } from '@hidock/connectors'
 import { Input } from '@/components/ui/input'
+import { BusyIcon } from '@/components/ui/working'
 
 /**
  * Type-to-filter picker for connectors with many sources (a Slack workspace
@@ -91,8 +92,11 @@ export function SourcePicker({
             className="font-medium text-primary hover:underline disabled:opacity-50 disabled:no-underline"
             disabled={bulkBusy || shownOff.length === 0}
             onClick={() => void bulk(shownOff.map((c) => c.externalId), true)}
+            aria-busy={bulkBusy || undefined}
+            title={bulkBusy ? 'Saving' : undefined}
           >
-            {bulkBusy ? 'Saving…' : `Choose all ${shown.length} shown`}
+            {bulkBusy && <BusyIcon className="mr-1 inline h-3 w-3" />}
+            {`Choose all ${shown.length} shown`}
           </button>
           {shownOn.length > 0 && (
             <button

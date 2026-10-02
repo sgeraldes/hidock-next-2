@@ -1,7 +1,8 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { Download, Trash2, Wand2, Sparkles, FileText, RefreshCw, AudioLines, MoreHorizontal, EyeOff, Eye, TrendingDown, Ban, RotateCcw, ArchiveRestore } from 'lucide-react'
+import { Download, Trash2, Wand2, Sparkles, FileText, Clock, AudioLines, MoreHorizontal, EyeOff, Eye, TrendingDown, Ban, RotateCcw, ArchiveRestore } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { BusyIcon } from '@/components/ui/working'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import {
   DropdownMenu,
@@ -148,7 +149,7 @@ export const SourceRow = memo(function SourceRow({
   isSelected = false,
   isActiveSource = false,
   isDeleting = false,
-  deletionLabel = 'Removing local data…',
+  deletionLabel = 'Removing local data',
   compact = false,
   wide = false,
   narrow = false,
@@ -451,13 +452,15 @@ export const SourceRow = memo(function SourceRow({
             </>
           )}
           {isDeleting && (
+            // A spinner only; the words live in the tooltip and aria-label (owner, 2-oct-2026).
             <div
-              className="flex max-w-44 items-center gap-1.5 text-xs font-medium text-muted-foreground"
+              className="flex items-center text-muted-foreground"
               role="status"
               aria-live="polite"
+              aria-label={deletionLabel}
+              title={deletionLabel}
             >
-              <RefreshCw className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden="true" />
-              <span className="truncate">{deletionLabel}</span>
+              <BusyIcon className="h-3.5 w-3.5 shrink-0" />
             </div>
           )}
           {/* Three fixed places, left to right: the calendar meeting, the status of the
@@ -556,13 +559,16 @@ export const SourceRow = memo(function SourceRow({
                 <DropdownMenuItem
                   onClick={(e) => { e.stopPropagation(); onTranscribe(); }}
                   disabled={recording.transcriptionStatus === 'pending' || recording.transcriptionStatus === 'processing'}
+                  aria-busy={recording.transcriptionStatus === 'processing' || undefined}
+                  title={recording.transcriptionStatus === 'pending' ? 'Transcription queued'
+                    : recording.transcriptionStatus === 'processing' ? 'Transcribing' : undefined}
                 >
                   {recording.transcriptionStatus === 'processing'
-                    ? <RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" />
-                    : <Wand2 className="h-4 w-4" aria-hidden="true" />}
-                  {recording.transcriptionStatus === 'pending' ? 'Transcription queued'
-                    : recording.transcriptionStatus === 'processing' ? 'Transcribing…'
-                      : 'Transcribe'}
+                    ? <BusyIcon />
+                    : recording.transcriptionStatus === 'pending'
+                      ? <Clock className="h-4 w-4 motion-safe:animate-pulse" aria-hidden="true" />
+                      : <Wand2 className="h-4 w-4" aria-hidden="true" />}
+                  Transcribe
                 </DropdownMenuItem>
               )}
               {hasLocalPath(recording) && onReprocessVibeVoice && (

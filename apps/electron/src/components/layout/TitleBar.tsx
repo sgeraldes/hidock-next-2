@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom'
 import {
   Search,
   CheckCircle2,
-  Loader2,
   Usb,
   ChevronDown,
   LogOut,
@@ -14,6 +13,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useDeviceConnection } from '@/hooks/useDeviceConnection'
+import { BusyIcon } from '@/components/ui/working'
 import { useAppStore } from '@/store'
 import { Brand, BRAND_DIVIDER_MODE, showBrandVerticalDivider, type BrandDividerMode } from '@/components/layout/Brand'
 import { NotificationsButton } from '@/components/layout/NotificationsButton'
@@ -283,10 +283,12 @@ function ConnectionControl({ status, label, failedHint, recording, onConnect, on
         <button
           type="button"
           disabled
-          title="Connecting to device…"
+          aria-busy={true}
+          aria-label="Connecting to device"
+          title="Connecting to device"
           className={cn(PILL_BASE, 'cursor-wait border-amber-700/50 bg-amber-900/40 text-amber-300')}
         >
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          <BusyIcon className="h-3.5 w-3.5" />
           <span className="hidden md:inline">{label}</span>
         </button>
         <MoreMenu>{restartMenuItem}</MoreMenu>

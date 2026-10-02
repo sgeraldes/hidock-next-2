@@ -24,6 +24,7 @@ import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
 import { SourcePicker } from './SourcePicker'
 import { toast } from '@/components/ui/toaster'
+import { BusyIcon, Working } from '@/components/ui/working'
 import type {
   ConnectorSummary,
   ConnectorStatus,
@@ -35,12 +36,12 @@ import { appLocale } from '@/lib/locale'
 /** More sources than this get the type-to-filter picker instead of one switch each. */
 const SOURCE_PICKER_THRESHOLD = 8
 
-const STATUS_META: Record<ConnectorStatusState, { label: string; className: string }> = {
+const STATUS_META: Record<ConnectorStatusState, { label: string; className: string; busy?: boolean }> = {
   disconnected: { label: 'Disconnected', className: 'border-border bg-muted text-muted-foreground' },
-  connecting: { label: 'Connecting…', className: 'border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-300' },
+  connecting: { label: 'Connecting', busy: true, className: 'border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-300' },
   'auth-needed': { label: 'Sign-in needed', className: 'border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-300' },
   connected: { label: 'Connected', className: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' },
-  syncing: { label: 'Syncing…', className: 'border-blue-500/20 bg-blue-500/10 text-blue-700 dark:text-blue-300' },
+  syncing: { label: 'Syncing', busy: true, className: 'border-blue-500/20 bg-blue-500/10 text-blue-700 dark:text-blue-300' },
   error: { label: 'Error', className: 'border-red-500/20 bg-red-500/10 text-red-700 dark:text-red-300' },
 }
 
@@ -60,6 +61,14 @@ const CONNECTOR_ICONS: Record<string, LucideIcon> = {
 
 function StatusBadge({ status }: { status: ConnectorStatus }) {
   const meta = STATUS_META[status.state] ?? STATUS_META.disconnected
+  // A running state shows the spinner; the words go to the tooltip (owner, 2-oct-2026).
+  if (meta.busy) {
+    return (
+      <Badge className={meta.className} title={meta.label} aria-label={meta.label} aria-busy={true}>
+        <BusyIcon className="h-3.5 w-3.5" />
+      </Badge>
+    )
+  }
   return <Badge className={meta.className}>{meta.label}</Badge>
 }
 
@@ -483,8 +492,18 @@ function AccountBlock({
 
       <div className="flex flex-wrap items-center gap-2">
         {visibleFields.length > 0 && (
-          <Button onClick={save} disabled={busy !== null || !dirty} size="sm">
-            {busy === 'save' ? 'Saving…' : dirty ? 'Save' : 'Saved'}
+          <Button
+            onClick={save}
+            disabled={busy !== null || !dirty}
+            size="sm"
+            aria-busy={busy === 'save' || undefined}
+            title={busy === 'save' ? 'Saving' : undefined}
+          >
+            {busy === 'save' ? (
+              <>
+                <BusyIcon className="mr-1.5" /> Save
+              </>
+            ) : dirty ? 'Save' : 'Saved'}
           </Button>
         )}
         {isConnected ? (
@@ -493,8 +512,14 @@ function AccountBlock({
           </Button>
         ) : (
           <>
-            <Button size="sm" onClick={() => connect('auth-code')} disabled={busy !== null}>
-              <Plug className="mr-1.5 h-4 w-4" /> {busy === 'connect' ? 'Connecting…' : 'Connect'}
+            <Button
+              size="sm"
+              onClick={() => connect('auth-code')}
+              disabled={busy !== null}
+              aria-busy={busy === 'connect' || undefined}
+              title={busy === 'connect' ? 'Connecting' : undefined}
+            >
+              {busy === 'connect' ? <BusyIcon className="mr-1.5" /> : <Plug className="mr-1.5 h-4 w-4" />} Connect
             </Button>
             {interactiveAuth && (
               <button
@@ -616,13 +641,14 @@ export function ConnectorsSettings({ extra = [] }: { extra?: ExtraConnector[] } 
       id: c.instanceId,
       label: sameType > 1 && c.label !== c.descriptor.displayName ? `${c.descriptor.displayName} · ${c.label}` : c.label,
       status: meta.label,
+      busy: meta.busy,
       tone: STATUS_TONE[c.status.state] ?? 'off',
       icon: CONNECTOR_ICONS[c.descriptor.id] ?? Plug
     }
   })
   const items = [...connectorItems, ...extra.map((e) => e.item)]
 
-  if (loading) return <p className="text-sm text-muted-foreground">Loading connectors…</p>
+  if (loading) return <Working label="Loading connectors" shape="list" rows={3} />
   if (groups.length === 0 && extra.length === 0) return <p className="text-sm text-muted-foreground">No connectors available.</p>
 
   return (
@@ -695,8 +721,16 @@ function AddAccountButton({
     }
   }
   return (
-    <Button variant="ghost" size="sm" className="w-full justify-start text-muted-foreground" onClick={add} disabled={adding}>
-      <Plus className="mr-1.5 h-4 w-4" /> {adding ? 'Adding…' : `Add ${name} account`}
+    <Button
+      variant="ghost"
+      size="sm"
+      className="w-full justify-start text-muted-foreground"
+      onClick={add}
+      disabled={adding}
+      aria-busy={adding || undefined}
+      title={adding ? 'Adding' : undefined}
+    >
+      {adding ? <BusyIcon className="mr-1.5" /> : <Plus className="mr-1.5 h-4 w-4" />} {`Add ${name} account`}
     </Button>
   )
 }

@@ -14,11 +14,12 @@ import type { DeviceOnlyRecording } from '@/types/unified-recording'
 
 // Default: a download that never settles, so the "in progress" state holds.
 const downloadRecordingToFile = vi.fn(() => new Promise<boolean>(() => {}))
+const deleteRecording = vi.fn(() => new Promise<boolean>(() => {}))
 
 vi.mock('@/services/hidock-device', () => ({
   getHiDockDeviceService: () => ({
     downloadRecordingToFile,
-    deleteRecording: vi.fn(),
+    deleteRecording,
   }),
 }))
 
@@ -91,5 +92,20 @@ describe('DeviceFileList — DL button download guard', () => {
       expect(useAppStore.getState().downloadQueue.has('rec-1')).toBe(false)
     })
     expect(screen.getByRole('button', { name: 'DL' })).toBeInTheDocument()
+  })
+
+  // Busy buttons keep their label and spin; the state goes to the title (owner, 2-oct-2026)
+  it('the delete confirm button spins while deleting, without "Deleting..."', async () => {
+    render(<DeviceFileList recordings={[rec]} syncedFilenames={new Set()} onRefresh={vi.fn()} onRecordingsRefresh={vi.fn()} />)
+
+    fireEvent.click(screen.getByTitle('Delete from device'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete File' }))
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Delete File' })).toHaveAttribute('aria-busy', 'true'))
+    const busy = screen.getByRole('button', { name: 'Delete File' })
+    expect(busy).toHaveAttribute('title', 'Deleting')
+    expect(busy).toBeDisabled()
+    expect(busy.querySelector('[class*="animate-spin"]')).not.toBeNull()
+    expect(screen.queryByText('Deleting...')).toBeNull()
   })
 })

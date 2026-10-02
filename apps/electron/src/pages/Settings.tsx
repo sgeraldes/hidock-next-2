@@ -14,7 +14,6 @@ import {
   CheckCircle2,
   ExternalLink,
   KeyRound,
-  LoaderCircle,
   TriangleAlert,
   CalendarDays,
   Workflow,
@@ -22,6 +21,7 @@ import {
   Radio
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { BusyIcon, Working, WorkingValue } from '@/components/ui/working'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -843,12 +843,11 @@ export function Settings({
     }
   }
 
-  // Loading state
+  // Loading state: placeholders shaped like the page, no words on screen (owner, 2-oct-2026)
   if (configLoading) {
     return (
-      <div className="flex flex-col items-center justify-center h-full">
-        <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground mb-4" />
-        <p className="text-muted-foreground">Loading settings...</p>
+      <div className="h-full p-6">
+        <Working label="Loading settings" shape="page" rows={6} />
       </div>
     )
   }
@@ -1292,7 +1291,7 @@ export function Settings({
                       </select>
                       <p id="geminiModel-description" className="text-xs text-muted-foreground mt-1">
                         {modelsLoading
-                          ? 'Loading available models…'
+                          ? <WorkingValue label="Loading available models" className="w-48" />
                           : modelsLive
                             ? 'Live list from your Gemini API key (audio-capable models only).'
                             : 'Showing built-in defaults — add/verify your API key to load the live model list.'}
@@ -1498,6 +1497,9 @@ export function Settings({
                     <div
                       role="status"
                       aria-live="polite"
+                      aria-label={speakerModelAccessChecking ? 'Checking access' : undefined}
+                      title={speakerModelAccessChecking ? 'Checking access' : undefined}
+                      aria-busy={speakerModelAccessChecking || undefined}
                       className={cn(
                         'inline-flex max-w-full items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium',
                         speakerModelAccess?.status === 'granted'
@@ -1508,7 +1510,7 @@ export function Settings({
                       )}
                     >
                       {speakerModelAccessChecking ? (
-                        <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden="true" />
+                        <BusyIcon className="h-3.5 w-3.5 shrink-0" />
                       ) : speakerModelAccess?.status === 'granted' ? (
                         <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                       ) : speakerModelAccess?.status === 'invalid-token' || speakerModelAccess?.status === 'terms-pending' ? (
@@ -1516,10 +1518,9 @@ export function Settings({
                       ) : (
                         <KeyRound className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                       )}
-                      <span className="truncate">
-                        {speakerModelAccessChecking
-                          ? 'Checking access…'
-                          : speakerModelAccess?.status === 'granted'
+                      {!speakerModelAccessChecking && (
+                        <span className="truncate">
+                          {speakerModelAccess?.status === 'granted'
                             ? isSpeakerTokenDirty ? 'Access valid · not saved yet' : 'Community-1 ready'
                             : speakerModelAccess?.status === 'terms-pending'
                               ? 'Acceptance required'
@@ -1530,7 +1531,8 @@ export function Settings({
                                   : localAsrHfToken.trim()
                                     ? 'Not checked'
                                     : 'Token required'}
-                      </span>
+                        </span>
+                      )}
                     </div>
                   </div>
 
@@ -1692,10 +1694,12 @@ export function Settings({
                     onClick={handleStartValueBackfill}
                     disabled={!hasValueProvider || valueBackfillRunning}
                     aria-label="Scan library for low-value recordings"
+                    aria-busy={valueBackfillRunning || undefined}
+                    title={valueBackfillRunning ? 'Scanning' : undefined}
                   >
-                    {valueBackfillRunning && <RefreshCw className="h-4 w-4 mr-2 animate-spin" aria-hidden="true" />}
+                    {valueBackfillRunning && <BusyIcon className="mr-2" />}
                     {valueBackfillRunning
-                      ? 'Scanning…'
+                      ? 'Scan unrated recordings'
                       : valueBackfillRemaining > 0
                         ? `Resume scan (${valueBackfillRemaining} left)`
                         : 'Scan unrated recordings'}
@@ -1710,7 +1714,7 @@ export function Settings({
                   <p className="text-xs text-muted-foreground" aria-live="polite">
                     {valueBackfillProgress
                       ? `Checked ${valueBackfillProgress.processed} of ${valueBackfillProgress.total} recordings · ${valueBackfillProgress.marked} marked low-value`
-                      : 'Starting…'}
+                      : <WorkingValue label="Starting the scan" className="w-40" />}
                   </p>
                 )}
               </CardContent>
@@ -1839,10 +1843,7 @@ export function Settings({
               <CardContent className="space-y-4">
                 {/* Storage loading indicator */}
                 {storageLoading && !storageInfo && (
-                  <div className="flex items-center gap-2 py-4 justify-center">
-                    <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" />
-                    <span className="text-sm text-muted-foreground">Loading storage info...</span>
-                  </div>
+                  <Working label="Loading storage info" shape="lines" rows={4} />
                 )}
                 {/* B-SET-002: Storage error with retry button */}
                 {storageError && (

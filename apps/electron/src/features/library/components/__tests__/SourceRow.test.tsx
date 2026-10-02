@@ -252,14 +252,18 @@ describe('SourceRow permanent deletion state', () => {
         {...defaultProps}
         compact
         isDeleting
-        deletionLabel="Erasing device copy…"
+        deletionLabel="Erasing device copy"
         onClick={onClick}
         onDeletePermanent={vi.fn()}
       />
     )
 
     const row = screen.getByRole('option')
-    expect(screen.getByRole('status')).toHaveTextContent('Erasing device copy…')
+    // A spinner only: the words are in the name and tooltip, not on screen.
+    const status = screen.getByRole('status', { name: 'Erasing device copy' })
+    expect(status).toHaveAttribute('title', 'Erasing device copy')
+    expect(status.textContent).toBe('')
+    expect(screen.queryByText(/Erasing device copy/)).not.toBeInTheDocument()
     expect(row).toHaveAttribute('aria-disabled', 'true')
     expect(row).toHaveAttribute('tabindex', '-1')
     expect(row).toHaveClass('h-11')

@@ -20,6 +20,7 @@ import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/h
 import { PersonHoverCard, ProjectHoverCard } from '@/components/entity'
 import { formatDateTime, cn } from '@/lib/utils'
 import { toast } from '@/components/ui/toaster'
+import { Working } from '@/components/ui/working'
 import { highlightMatch } from '@/utils/highlight'
 
 // C-EXP-005: Loading skeleton for search results
@@ -271,7 +272,9 @@ export function Explore() {
                 <CardContent className="space-y-4">
                   <p className="text-sm text-muted-foreground">Topics frequently mentioned in your recent meetings.</p>
                   {topicsLoading ? (
-                    <p className="text-sm text-muted-foreground animate-pulse">Loading recurring topics...</p>
+                    // Loading looks like work, never a sentence (owner, 2-oct-2026)
+                    <Working label="Loading recurring topics" shape="lines" rows={2} />
+
                   ) : recurringTopics.length > 0 ? (
                     <div className="flex flex-wrap gap-2">
                       {recurringTopics.map(({ topic }) => (

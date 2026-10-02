@@ -71,6 +71,25 @@ export function TranscriptionStatusBadge({ status, compact, className }: Transcr
     )
   }
 
+  // Work in flight shows an icon, not words; results keep their words (owner, 2-oct-2026).
+  if (status === 'pending' || status === 'processing') {
+    const label = TRANSCRIPTION_STATUS_LABELS[status]
+    return (
+      <span
+        className={`inline-flex items-center text-xs px-2 py-1 rounded-full ${STATUS_STYLES[status]} ${className || ''}`}
+        role="img"
+        aria-label={label}
+        title={label}
+      >
+        {status === 'pending' ? (
+          <Clock className="h-3.5 w-3.5 motion-safe:animate-pulse" aria-hidden="true" />
+        ) : (
+          <Loader2 className="h-3.5 w-3.5 motion-safe:animate-spin" aria-hidden="true" />
+        )}
+      </span>
+    )
+  }
+
   return (
     <span className={`text-xs px-2 py-1 rounded-full ${STATUS_STYLES[status]} ${className || ''}`}>
       {TRANSCRIPTION_STATUS_LABELS[status]}

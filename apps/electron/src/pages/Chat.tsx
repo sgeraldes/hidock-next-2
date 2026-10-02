@@ -13,6 +13,7 @@ import {
   History,
   CheckCircle2,
   Database,
+  Clock,
   Layers,
   BookOpen,
   Bot,
@@ -51,6 +52,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { toast } from '@/components/ui/toaster'
+import { Working, WorkingBar, BusyIcon } from '@/components/ui/working'
 import { ContextPicker } from '@/components/ContextPicker'
 import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/hover-card'
 import { MeetingHoverCard } from '@/components/entity'
@@ -951,11 +953,9 @@ export function Chat() {
 
   if (initialLoading) {
     return (
-      <div className="flex h-full items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
-          <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground" />
-          <p className="text-muted-foreground">Initializing Knowledge Assistant...</p>
-        </div>
+      // Loading looks like work, never a sentence (owner, 2-oct-2026)
+      <div className="h-full p-6">
+        <Working label="Initializing Knowledge Assistant" shape="page" rows={6} />
       </div>
     )
   }
@@ -1228,13 +1228,30 @@ export function Chat() {
                     </span>
                   </div>
                 ) : status.indexState === 'queued' || status.indexState === 'loading' ? (
-                  <div className="hidden @lg:flex items-center gap-1.5 text-blue-600 dark:text-blue-400 bg-blue-500/10 px-2 py-1 rounded-full border border-blue-500/20">
-                    <Database className="h-3.5 w-3.5" />
-                    <span>
-                      {status.indexTotal
-                        ? `Loading knowledge · ${Math.round(((status.indexLoaded ?? 0) / status.indexTotal) * 100)}%`
-                        : 'Knowledge index queued'}
-                    </span>
+                  <div
+                    className="hidden @lg:flex items-center gap-1.5 text-blue-600 dark:text-blue-400 bg-blue-500/10 px-2 py-1 rounded-full border border-blue-500/20"
+                    role="status"
+                    title={
+                      status.indexTotal
+                        ? `Loading knowledge, ${Math.round(((status.indexLoaded ?? 0) / status.indexTotal) * 100)}%`
+                        : 'Knowledge index queued'
+                    }
+                    aria-label={
+                      status.indexTotal
+                        ? `Loading knowledge, ${Math.round(((status.indexLoaded ?? 0) / status.indexTotal) * 100)}%`
+                        : 'Knowledge index queued'
+                    }
+                  >
+                    {status.indexTotal ? (
+                      <>
+                        <BusyIcon className="h-3.5 w-3.5" />
+                        <span className="tabular-nums" aria-hidden="true">
+                          {Math.round(((status.indexLoaded ?? 0) / status.indexTotal) * 100)}%
+                        </span>
+                      </>
+                    ) : (
+                      <Clock className="h-3.5 w-3.5 motion-safe:animate-pulse" aria-hidden="true" />
+                    )}
                   </div>
                 ) : status.indexState === 'failed' ? (
                   <div
@@ -1326,9 +1343,8 @@ export function Chat() {
 
         {/* Recording Context Loading */}
         {contextLoading && (
-          <div className="px-4 py-2 bg-muted/30 border-b flex items-center gap-2">
-            <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" />
-            <span className="text-sm text-muted-foreground">Loading recording context...</span>
+          <div className="px-4 py-2 bg-muted/30 border-b">
+            <WorkingBar label="Loading recording context" />
           </div>
         )}
 
@@ -1412,9 +1428,8 @@ export function Chat() {
                 </div>
               )}
               {loadingChunks ? (
-                <div className="flex items-center justify-center py-8">
-                  <RefreshCw className="h-5 w-5 animate-spin text-muted-foreground" />
-                </div>
+                <Working label="Loading indexed chunks" shape="cards" rows={4} />
+
               ) : chunks.length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground text-sm">
                   {chunkTotal === 0

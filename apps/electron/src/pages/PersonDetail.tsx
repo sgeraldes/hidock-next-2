@@ -56,6 +56,7 @@ import type { Person, PersonType } from '@/types/knowledge'
 import type { Meeting } from '@/types'
 import { cn } from '@/lib/utils'
 import { toast } from '@/components/ui/toaster'
+import { Working } from '@/components/ui/working'
 import { ResolvePerMeetingCard } from '@/components/identity/ResolvePerMeetingCard'
 import type { AmbiguousBucketSummary, BucketResolution } from '@/components/identity/useAmbiguousBuckets'
 import { Users } from 'lucide-react'
@@ -509,8 +510,9 @@ export function PersonDetail() {
 
   if (loading) {
     return (
-      <div className="flex h-full items-center justify-center">
-        <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground" />
+      // Loading looks like work, never a bare spinner (owner, 2-oct-2026)
+      <div className="h-full p-6">
+        <Working label="Loading person" shape="page" rows={6} />
       </div>
     )
   }

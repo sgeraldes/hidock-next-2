@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { StorageInfo } from '@/types'
+import { WorkingValue } from '@/components/ui/working'
 
 interface AppInfo {
   version: string
@@ -25,12 +26,12 @@ export function AboutSection({ storageInfo }: { storageInfo: StorageInfo | null 
     }
   }, [])
 
-  const rows: Array<[string, string]> = [
-    ['Version', info ? `${info.name} ${info.version}${info.isPackaged ? '' : ' (development build)'}` : '…'],
-    ['Platform', info?.platform ?? '…'],
-    ['Data folder', storageInfo?.dataPath ?? '…'],
-    ['Database', storageInfo?.databasePath ?? '…'],
-    ['Cache', storageInfo?.cachePath ?? '…']
+  const rows: Array<[string, string | null]> = [
+    ['Version', info ? `${info.name} ${info.version}${info.isPackaged ? '' : ' (development build)'}` : null],
+    ['Platform', info?.platform ?? null],
+    ['Data folder', storageInfo?.dataPath ?? null],
+    ['Database', storageInfo?.databasePath ?? null],
+    ['Cache', storageInfo?.cachePath ?? null]
   ]
 
   return (
@@ -38,7 +39,9 @@ export function AboutSection({ storageInfo }: { storageInfo: StorageInfo | null 
       {rows.map(([label, value]) => (
         <div key={label} className="flex flex-wrap items-baseline justify-between gap-2 px-4 py-3">
           <dt className="text-sm font-medium">{label}</dt>
-          <dd className="min-w-0 break-all text-right font-mono text-xs text-muted-foreground">{value}</dd>
+          <dd className="min-w-0 break-all text-right font-mono text-xs text-muted-foreground">
+            {value ?? <WorkingValue label={`Reading the ${label.toLowerCase()}`} className="w-32" />}
+          </dd>
         </div>
       ))}
     </dl>

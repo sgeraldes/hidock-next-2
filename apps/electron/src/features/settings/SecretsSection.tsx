@@ -9,6 +9,7 @@ import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/components/ui/toaster'
+import { BusyIcon, Working } from '@/components/ui/working'
 import { useConfigStore } from '@/store/domain/useConfigStore'
 import { isSavedSecret } from '@/shared/secret-fields'
 import type { SettingsSectionId } from './sections'
@@ -94,8 +95,15 @@ function ConfigSecretRow({ secret, isSet }: { secret: ConfigSecret; isSet: boole
             className="h-8 min-w-0 flex-1 font-mono text-xs"
             placeholder={`Paste the new ${secret.label.toLowerCase()}`}
           />
-          <Button size="sm" type="submit" disabled={busy || !draft.trim()}>
-            {busy ? 'Saving…' : 'Save'}
+          <Button
+            size="sm"
+            type="submit"
+            disabled={busy || !draft.trim()}
+            aria-busy={busy || undefined}
+            title={busy ? 'Saving' : undefined}
+          >
+            {busy && <BusyIcon className="mr-1.5" />}
+            Save
           </Button>
           <Button size="sm" type="button" variant="ghost" disabled={busy} onClick={() => { setMode('idle'); setDraft('') }}>
             Cancel
@@ -175,7 +183,7 @@ export function SecretsSection({ onNavigate }: { onNavigate?: (id: SettingsSecti
         <h3 className="text-sm font-semibold">Kept by AI providers and connectors</h3>
         <p className="text-xs text-muted-foreground">Each is changed on its own page.</p>
         {others === null ? (
-          <p className="py-3 text-xs text-muted-foreground">Reading…</p>
+          <Working label="Reading the stored keys" shape="list" rows={3} />
         ) : others.length === 0 ? (
           <p className="py-3 text-xs text-muted-foreground">None stored.</p>
         ) : (

@@ -23,6 +23,7 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
+import { BusyIcon } from '@/components/ui/working'
 import { TranscriptUpgradeButton } from './TranscriptUpgradeButton'
 import { appLocale } from '@/lib/locale'
 
@@ -162,14 +163,20 @@ export function LibraryHeader({
               onClick={onBulkDownload}
               disabled={activeDownloadCount > 0 || !deviceConnected}
               aria-label={`${downloadActionLabel} ${bulkCounts.deviceOnly} source${bulkCounts.deviceOnly === 1 ? '' : 's'}`}
-              title={`Download ${bulkCounts.deviceOnly} source${bulkCounts.deviceOnly === 1 ? '' : 's'} from the device`}
+              aria-busy={activeDownloadCount > 0 || undefined}
+              title={activeDownloadCount > 0
+                ? `Downloading ${queuedDownloadCount} source${queuedDownloadCount === 1 ? '' : 's'} from the device`
+                : `Download ${bulkCounts.deviceOnly} source${bulkCounts.deviceOnly === 1 ? '' : 's'} from the device`}
             >
+              {/* While working: spinner and the count, the words go to the tooltip (owner, 2-oct-2026). */}
               {activeDownloadCount > 0 ? (
-                <RefreshCw className="h-4 w-4 animate-spin xl:mr-2" aria-hidden="true" />
+                <BusyIcon />
               ) : (
-                <Download className="h-4 w-4 xl:mr-2" aria-hidden="true" />
+                <>
+                  <Download className="h-4 w-4 xl:mr-2" aria-hidden="true" />
+                  <span className="hidden xl:inline">{downloadActionLabel}</span>
+                </>
               )}
-              <span className="hidden xl:inline">{downloadActionLabel}</span>
               <span className="ml-1 tabular-nums">
                 {queuedDownloadCount > 0 ? queuedDownloadCount : bulkCounts.deviceOnly}
               </span>
@@ -183,14 +190,19 @@ export function LibraryHeader({
               onClick={onBulkProcess}
               disabled={bulkProcessing}
               aria-label={`${bulkProcessing ? 'Processing' : 'Process'} ${bulkCounts.needsTranscription} audio source${bulkCounts.needsTranscription === 1 ? '' : 's'}`}
-              title={`Queue ${bulkCounts.needsTranscription} audio source${bulkCounts.needsTranscription === 1 ? '' : 's'} for transcription`}
+              aria-busy={bulkProcessing || undefined}
+              title={bulkProcessing
+                ? `Processing, ${bulkProgress.current} of ${bulkProgress.total}`
+                : `Queue ${bulkCounts.needsTranscription} audio source${bulkCounts.needsTranscription === 1 ? '' : 's'} for transcription`}
             >
               {bulkProcessing ? (
-                <RefreshCw className="h-4 w-4 animate-spin xl:mr-2" aria-hidden="true" />
+                <BusyIcon />
               ) : (
-                <Zap className="h-4 w-4 xl:mr-2" aria-hidden="true" />
+                <>
+                  <Zap className="h-4 w-4 xl:mr-2" aria-hidden="true" />
+                  <span className="hidden xl:inline">Process</span>
+                </>
               )}
-              <span className="hidden xl:inline">{bulkProcessing ? 'Processing' : 'Process'}</span>
               <span className="ml-1 tabular-nums">
                 {bulkProcessing ? `${bulkProgress.current}/${bulkProgress.total}` : bulkCounts.needsTranscription}
               </span>

@@ -91,6 +91,20 @@ describe('HandoverDialog', () => {
     await waitFor(() => expect(addActivityLogEntry).toHaveBeenCalled())
   })
 
+  it('shows moving placeholder lines in the run log while the agent runs, not a sentence', async () => {
+    let finish: (v: unknown) => void = () => {}
+    runAgent.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    render(<HandoverDialog open onOpenChange={vi.fn()} output={OUTPUT} />)
+    await waitFor(() => expect(brainsList).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: /write \+ run agent/i }))
+    expect(await screen.findByRole('status', { name: 'Running the agent, this can take a while' })).toBeInTheDocument()
+    expect(screen.getByText('Run log')).toBeInTheDocument()
+    expect(screen.queryByText(/Running the agent/)).not.toBeInTheDocument()
+    finish({ success: true, data: { ok: true, brainId: 'claude-code', brainLabel: 'Claude Code', finalResponse: 'done', runLogPath: 'r' } })
+    expect(await screen.findByText('done')).toBeInTheDocument()
+    expect(screen.queryByRole('status', { name: 'Running the agent, this can take a while' })).not.toBeInTheDocument()
+  })
+
   it('shows the plain-language autonomous-agent disclosure', async () => {
     render(<HandoverDialog open onOpenChange={vi.fn()} output={OUTPUT} />)
     expect(

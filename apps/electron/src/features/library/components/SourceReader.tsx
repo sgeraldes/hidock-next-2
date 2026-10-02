@@ -51,9 +51,9 @@ import { useLibraryStore, type ReaderSectionId, type ReaderSectionMode, type Rea
 import { UnifiedRecording, hasLocalPath, isDeviceOnly, isRecordingBacked } from '@/types/unified-recording'
 import type { DownloadStatus } from '@/store/useAppStore'
 import { Transcript, Meeting, MeetingAttendee, parseJsonArray } from '@/types'
-import { Calendar, CloudDownload, Download, Trash2, Wand2, RefreshCw, Play, Square, Pencil, Check, Edit2, Link, X, ExternalLink, FolderOpen, MoreHorizontal, Folder, Plus, EyeOff, Eye, Sparkles, ChevronDown, Cloud, Cpu, Users, Mail, UserCog, Scissors } from 'lucide-react'
+import { Calendar, CloudDownload, Download, Trash2, Wand2, RefreshCw, Clock, Play, Square, Pencil, Check, Edit2, Link, X, ExternalLink, FolderOpen, MoreHorizontal, Folder, Plus, EyeOff, Eye, Sparkles, ChevronDown, Cloud, Cpu, Users, Mail, UserCog, Scissors } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Working } from '@/components/ui/working'
+import { BusyIcon, Working, WorkingBar } from '@/components/ui/working'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/hover-card'
 import { PersonHoverCard } from '@/components/entity/EntityHoverCards'
@@ -1288,9 +1288,14 @@ export function SourceReader({
       {isTranscribed && (
         <>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={reDiarize} disabled={reDiarizing}>
-            <UserCog className="h-4 w-4" aria-hidden="true" />
-            {reDiarizing ? 'Re-diarizing…' : 'Re-diarize this recording'}
+          <DropdownMenuItem
+            onClick={reDiarize}
+            disabled={reDiarizing}
+            aria-busy={reDiarizing || undefined}
+            title={reDiarizing ? 'Re-diarizing' : undefined}
+          >
+            {reDiarizing ? <BusyIcon /> : <UserCog className="h-4 w-4" aria-hidden="true" />}
+            Re-diarize this recording
           </DropdownMenuItem>
         </>
       )}
@@ -1420,12 +1425,21 @@ export function SourceReader({
               onClick={onDownload}
               disabled={!deviceConnected || isDownloading}
               className="gap-2"
-              title={!deviceConnected ? 'Device not connected' : 'Download recording from device'}
+              aria-busy={isDownloading || undefined}
+              aria-label={isDownloading
+                ? (downloadProgress ?? 0) > 0 ? `Downloading, ${downloadProgress}%` : 'Starting the download'
+                : undefined}
+              title={!deviceConnected
+                ? 'Device not connected'
+                : isDownloading
+                  ? (downloadProgress ?? 0) > 0 ? `Downloading, ${downloadProgress}%` : 'Starting the download'
+                  : 'Download recording from device'}
             >
+              {/* Spinner and the number only; the words go to the tooltip (owner, 2-oct-2026). */}
               {isDownloading ? (
                 <>
-                  <RefreshCw className="h-4 w-4 animate-spin" />
-                  {(downloadProgress ?? 0) > 0 ? `${downloadProgress}%` : 'Starting…'}
+                  <BusyIcon />
+                  {(downloadProgress ?? 0) > 0 && <span className="tabular-nums">{downloadProgress}%</span>}
                 </>
               ) : (
                 <>
@@ -1475,6 +1489,7 @@ export function SourceReader({
                   onClick={() => requestTranscribe(() => onTranscribe?.())}
                   disabled={isTranscribeBusy}
                   className="gap-2 rounded-r-none border-r-0"
+                  aria-busy={recording.transcriptionStatus === 'processing' || undefined}
                   title={
                     recording.transcriptionStatus === 'pending' ? 'Transcription queued' :
                     recording.transcriptionStatus === 'processing' ? 'Transcription in progress' :
@@ -1482,21 +1497,13 @@ export function SourceReader({
                   }
                 >
                   {recording.transcriptionStatus === 'processing' ? (
-                    <>
-                      <RefreshCw className="h-4 w-4 animate-spin" />
-                      In Progress
-                    </>
+                    <BusyIcon />
                   ) : recording.transcriptionStatus === 'pending' ? (
-                    <>
-                      <RefreshCw className="h-4 w-4" />
-                      Queued
-                    </>
+                    <Clock className="h-4 w-4 motion-safe:animate-pulse" aria-hidden="true" />
                   ) : (
-                    <>
-                      <Wand2 className="h-4 w-4" />
-                      Transcribe
-                    </>
+                    <Wand2 className="h-4 w-4" />
                   )}
+                  Transcribe
                 </Button>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
@@ -2493,13 +2500,8 @@ function ReaderPlayer({
         {/* Subtle backfill indicator — sentiment + markers are still computing.
             Colored bars + playhead already render; this just explains the wait. */}
         {big && analyzing && (
-          <div
-            className="pointer-events-none absolute left-2 top-2 z-10 inline-flex items-center gap-1.5 rounded-full border bg-background/90 px-2 py-0.5 text-[11px] text-muted-foreground shadow-sm backdrop-blur"
-            data-testid="timeline-analyzing"
-            role="status"
-          >
-            <RefreshCw className="h-3 w-3 animate-spin" aria-hidden="true" />
-            Analyzing timeline…
+          <div className="pointer-events-none absolute inset-x-2 top-1 z-10" data-testid="timeline-analyzing">
+            <WorkingBar label="Analyzing timeline" />
           </div>
         )}
 

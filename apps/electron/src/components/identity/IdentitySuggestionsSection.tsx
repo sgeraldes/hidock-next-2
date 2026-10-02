@@ -30,6 +30,7 @@ import {
   DropdownMenuSeparator
 } from '@/components/ui/dropdown-menu'
 import { toast } from '@/components/ui/toaster'
+import { Working, WorkingValue } from '@/components/ui/working'
 import { EntityMention } from '@/components/entity'
 import { cn, formatDate } from '@/lib/utils'
 import { cleanRole } from '@/lib/roleHygiene'
@@ -152,7 +153,7 @@ function ProfileFacts({ profile, mentions }: { profile?: MiniProfile; mentions?:
         )}
       >
         <FileText className="h-3 w-3 flex-shrink-0" />
-        <span>{status.text}</span>
+        {status.state === 'loading' ? <WorkingValue label={status.text} className="w-28" /> : <span>{status.text}</span>}
       </div>
     </div>
   )
@@ -694,7 +695,17 @@ export const IdentitySuggestionsSection = forwardRef<
 
   const hasBuckets = showBuckets && buckets.length > 0
   const hasMergeGroups = !loading && groups.length > 0
-  if ((loading || groups.length === 0) && (bucketsLoading || !hasBuckets)) return null
+  if ((loading || groups.length === 0) && (bucketsLoading || !hasBuckets)) {
+    // Still loading: placeholder rows instead of nothing (owner, 2-oct-2026).
+    if (loading || (showBuckets && bucketsLoading)) {
+      return (
+        <section className="mb-6" aria-label="Identity suggestions">
+          <Working label="Loading identity suggestions" shape="list" rows={3} />
+        </section>
+      )
+    }
+    return null
+  }
 
   const totalCount = groups.length + (hasBuckets ? buckets.length : 0)
 

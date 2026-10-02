@@ -22,6 +22,7 @@
 import { useEffect, useState } from 'react'
 import { ChevronDown, Pencil, CircleCheck, CircleDashed } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { BusyIcon } from '@/components/ui/working'
 import { Textarea } from '@/components/ui/textarea'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatTimestamp } from '@/utils/audioUtils'
@@ -123,8 +124,10 @@ export function TimelineEventList({
                           <span className="mt-1.5 flex items-center gap-2">
                             <Button
                               size="sm"
-                              className="h-6 px-2 text-xs"
+                              className="h-6 gap-1 px-2 text-xs"
                               disabled={editSaving || !editDraft.trim()}
+                              aria-busy={editSaving || undefined}
+                              title={editSaving ? 'Saving' : undefined}
                               onClick={() => {
                                 setEditSaving(true)
                                 void onEventUpdate?.(m, { content: editDraft.trim() }).then((ok) => {
@@ -133,7 +136,8 @@ export function TimelineEventList({
                                 })
                               }}
                             >
-                              {editSaving ? 'Saving…' : 'Save'}
+                              {editSaving && <BusyIcon className="h-3 w-3" />}
+                              Save
                             </Button>
                             <Button
                               size="sm"

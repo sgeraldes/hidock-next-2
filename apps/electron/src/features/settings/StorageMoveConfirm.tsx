@@ -5,6 +5,7 @@
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
+import { BusyIcon } from '@/components/ui/working'
 import { formatBytes } from '@/lib/utils'
 import { appLocale } from '@/lib/locale'
 import { useConfigStore } from '@/store/domain/useConfigStore'
@@ -124,8 +125,15 @@ export function StorageMoveConfirm({ plan, onDone, onCancel }: Props) {
         </div>
       )}
       <div className="flex flex-wrap gap-2">
-        <Button size="sm" disabled={!!plan.blocker || busy !== null || plan.files === 0} onClick={() => void run('move')}>
-          {busy === 'move' ? 'Moving…' : `Move ${count} and switch`}
+        <Button
+          size="sm"
+          disabled={!!plan.blocker || busy !== null || plan.files === 0}
+          onClick={() => void run('move')}
+          aria-busy={busy === 'move' || undefined}
+          title={busy === 'move' ? 'Moving' : undefined}
+        >
+          {busy === 'move' && <BusyIcon className="mr-1.5" />}
+          {`Move ${count} and switch`}
         </Button>
         {plan.canSwitchWithoutMoving && (
           <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => void run('switch')}>

@@ -68,7 +68,9 @@ describe('useDeviceConnection — status mapping', () => {
     const { result } = renderHook(() => useDeviceConnection())
     expect(result.current.status).toBe('connecting')
     expect(result.current.isConnecting).toBe(true)
-    expect(result.current.label).toBe('Connecting…')
+    // The control keeps its verb while connecting; the spinner and tooltip carry the state.
+    expect(result.current.label).toBe('Connect device')
+    expect(result.current.label).not.toMatch(/Connecting/)
   })
 
   it('treats error and ready as not-connecting', () => {

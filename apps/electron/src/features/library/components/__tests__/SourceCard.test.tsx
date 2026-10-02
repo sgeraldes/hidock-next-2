@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import { SourceCard } from '../SourceCard'
 import type { UnifiedRecording } from '@/types/unified-recording'
 import type { Meeting, Transcript } from '@/types'
@@ -350,7 +350,26 @@ describe('SourceCard actions', () => {
       />
     )
     expect(screen.queryByRole('button', { name: 'Download to computer' })).toBeNull()
-    expect(screen.getByText('40%')).toBeInTheDocument()
+    // The progress sits in the file-status place, like the list rows.
+    const place = screen.getByTestId('card-status')
+    expect(within(place).getByText('40%')).toBeInTheDocument()
+    expect(within(place).getByLabelText('Downloading from the device: 40%')).toBeInTheDocument()
+    expect(screen.getAllByText('40%')).toHaveLength(1)
+  })
+
+  it('a queued or starting download shows an icon in the file place, never the words', () => {
+    const deviceOnly = { ...baseRecording, location: 'device-only', localPath: undefined } as unknown as UnifiedRecording
+    const { rerender } = render(
+      <SourceCard {...makeProps({ recording: deviceOnly, deviceConnected: true, downloadStatus: 'pending', isDownloading: false })} />
+    )
+    const place = () => screen.getByTestId('card-status')
+    expect(within(place()).getByLabelText('Waiting to download from the device')).toBeInTheDocument()
+    expect(screen.queryByText('Queued')).not.toBeInTheDocument()
+    rerender(
+      <SourceCard {...makeProps({ recording: deviceOnly, deviceConnected: true, downloadStatus: 'downloading', downloadProgress: 0, isDownloading: true })} />
+    )
+    expect(within(place()).getByLabelText('Starting the download from the device')).toBeInTheDocument()
+    expect(screen.queryByText('Starting')).not.toBeInTheDocument()
   })
 
   it('an untranscribed local recording offers Transcribe, and none while the transcription is queued or running', () => {

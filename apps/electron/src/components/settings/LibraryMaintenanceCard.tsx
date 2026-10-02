@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { BusyIcon } from '@/components/ui/working'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { toast } from '@/components/ui/toaster'
 
@@ -45,14 +45,16 @@ export function LibraryMaintenanceCard({
     throw new Error(typeof err === 'string' ? err : err?.message || 'The job did not finish.')
   }
 
-  const rows: Array<{ job: Job; title: string; detail: string; action: string; disabled?: boolean; run: () => Promise<string> }> = [
+  // `running`: the job keeps going after its start call returns (the rescan), so the spinner stays until it ends.
+  const rows: Array<{ job: Job; title: string; detail: string; action: string; disabled?: boolean; running?: boolean; run: () => Promise<string> }> = [
     {
       job: 'rescan',
       title: 'Rescan with Jev',
       detail:
         'Evaluates every recording again: stars, kind, work or personal, transcript trust. About 2,000 requests, a few minutes and a few cents. Ratings you set are never changed.',
-      action: rescanRunning ? 'Scanning…' : 'Rescan all',
+      action: 'Rescan all',
       disabled: !rescanAvailable || rescanRunning,
+      running: rescanRunning,
       run: async () => {
         await onRescanWithJev()
         return 'Started. Progress shows in the Find low-value recordings card.'
@@ -115,7 +117,9 @@ export function LibraryMaintenanceCard({
         <CardDescription>Jobs that refresh what the Library shows. Each one works on data already on this computer unless it says otherwise.</CardDescription>
       </CardHeader>
       <CardContent className="divide-y divide-border">
-        {rows.map((row) => (
+        {rows.map((row) => {
+          const working = busy === row.job || !!row.running
+          return (
           <div key={row.job} className="flex flex-wrap items-start justify-between gap-3 py-3 first:pt-0 last:pb-0">
             <div className="min-w-0 max-w-prose">
               <p className="text-sm font-medium">{row.title}</p>
@@ -132,12 +136,15 @@ export function LibraryMaintenanceCard({
               onClick={() => runJob(row.job, row.run)}
               disabled={busy !== null || row.disabled}
               aria-label={row.title}
+              aria-busy={working || undefined}
+              title={working ? (row.job === 'rescan' ? 'Scanning' : 'Working') : undefined}
             >
-              {busy === row.job && <RefreshCw className="mr-1.5 h-4 w-4 animate-spin" aria-hidden="true" />}
+              {working && <BusyIcon className="mr-1.5" />}
               {row.action}
             </Button>
           </div>
-        ))}
+          )
+        })}
       </CardContent>
     </Card>
   )
