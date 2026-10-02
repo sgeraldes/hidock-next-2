@@ -9,6 +9,12 @@ interface LibraryColumnHeaderProps {
   sortBy: SortBy
   sortOrder: SortOrder
   onSort: (sortBy: SortBy) => void
+  /**
+   * The date group at the top of the scrolled list ("Today"). Shown here, next
+   * to Title, because a label pinned under the header covered the first row
+   * (owner, 2-oct-2026).
+   */
+  group?: string | null
 }
 
 interface ColumnProps {
@@ -103,7 +109,7 @@ function IconColumn({
  * show the icon the rows use in that place, and their tooltips say what it can
  * mean (owner, 30-sep-2026: "a header with each one as reference").
  */
-export function LibraryColumnHeader({ sortBy, sortOrder, onSort }: LibraryColumnHeaderProps) {
+export function LibraryColumnHeader({ sortBy, sortOrder, onSort, group }: LibraryColumnHeaderProps) {
   const col = (key: SortBy): ColumnProps => ({ sortKey: key, active: sortBy === key, order: sortOrder, onSort })
   return (
     <TooltipProvider delayDuration={300}>
@@ -114,8 +120,16 @@ export function LibraryColumnHeader({ sortBy, sortOrder, onSort }: LibraryColumn
         style={{ height: COLUMN_HEADER_HEIGHT_PX }}
         data-testid="library-column-header"
       >
-        <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
           <TextColumn {...col('name')} label="Title" hint="Sort by title" />
+          {group && (
+            <span
+              className="truncate rounded bg-muted px-1.5 py-0.5 font-medium uppercase tracking-wide text-muted-foreground"
+              data-testid="library-header-group"
+            >
+              {group}
+            </span>
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
           <span className={COLUMN_WIDTH.date}>

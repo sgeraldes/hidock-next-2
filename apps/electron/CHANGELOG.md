@@ -10,6 +10,16 @@ keeps the recordings it used to cover.
 
 ### Changes
 
+- **Stars and kind appear as soon as they are known.** A recording's evaluation (stars, team or
+  project meeting) shows on its row the moment it is saved, without waiting for a refresh.
+- **The date group no longer covers a row.** In the wide list, "Today", "This week" and the others
+  show in the column header, next to Title, while you scroll.
+- **A meeting recorded in pieces says so.** Two recordings of one meeting read "· part 1 of 2" and
+  "· part 2 of 2".
+- **Long recordings are not tied to one meeting by the clock.** A recording is linked by time only
+  when the meeting covers at least half of it. A four-hour recording that holds lunch and three
+  meetings is left for the transcript to decide.
+
 - **Waiting looks like work, everywhere.** No screen says "Loading...", "Syncing..." or "In
   progress..." anymore. While something loads you see the shape of what is coming with a moving
   shimmer and a spinner (a pulsing clock while it waits its turn), and a bar with the percentage

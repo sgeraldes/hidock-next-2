@@ -52,6 +52,7 @@ import {
   saveRecordingEvaluation
 } from './database'
 import { complete } from '@hidock/ai-providers'
+import { getEventBus } from './event-bus'
 import { getProviderConfigFromSettings } from './ai-provider-config'
 import { getConfig } from './config'
 import { createJevHarness } from './pipeline/jev-harness'
@@ -509,6 +510,30 @@ export function storeEvaluation(captureId: string, recordingId: string | null, e
   })
 }
 
+/**
+ * Tell the Library a recording's evaluation is saved, so its row shows the
+ * stars and kind without a full refresh (owner, 2-oct-2026: saved evaluations
+ * showed no chip). Call it only after the write has committed: an evaluation
+ * announced inside a transaction that then rolled back painted chips that
+ * vanished on the next refresh (kiro review of #125).
+ */
+export function announceEvaluation(recordingId: string | null, ev: RecordingEvaluation): void {
+  if (recordingId) {
+    getEventBus().emitDomainEvent({
+      type: 'evaluation:saved',
+      timestamp: new Date().toISOString(),
+      payload: {
+        recordingId,
+        starLevel: ev.starLevel,
+        kind: ev.kind,
+        context: ev.context,
+        audioWarning: ev.audioWarning ?? null,
+        transcriptInvented: ev.transcriptInvented
+      }
+    })
+  }
+}
+
 /** Audio numbers for the evaluation state, so Jev can judge a transcript against its file. */
 function evaluationAudio(row: CaptureForClassification): EvaluationAudio | null {
   if (row.duration_seconds === null && row.sound_seconds === null && row.word_count === null) return null
@@ -707,7 +732,10 @@ export async function classifyCaptureValueRaw(captureId: string): Promise<RawCla
  */
 export async function classifyCaptureValue(captureId: string): Promise<CaptureValueResult> {
   const raw = await classifyCaptureValueRaw(captureId)
-  if (raw.evaluation) storeEvaluation(captureId, raw.recordingId ?? null, raw.evaluation)
+  if (raw.evaluation) {
+    storeEvaluation(captureId, raw.recordingId ?? null, raw.evaluation)
+    announceEvaluation(raw.recordingId ?? null, raw.evaluation)
+  }
 
   if (raw.skipped) {
     return {
@@ -883,7 +911,6 @@ export async function recomputeAudioWarnings(recordingIds?: string[]): Promise<n
   }
   if (updates.length > 0) {
     try {
-      const { getEventBus } = await import('./event-bus')
       getEventBus().emitDomainEvent({
         type: 'evaluation:warnings-updated',
         timestamp: new Date().toISOString(),

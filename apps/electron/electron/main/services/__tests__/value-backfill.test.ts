@@ -95,6 +95,7 @@ import {
   _getYieldCountForTests
 } from '../value-backfill'
 import { JevError } from '../jev-client'
+import { getEventBus } from '../event-bus'
 
 function cleanupDbFiles(base: string): void {
   for (const suffix of ['', '-wal', '-shm', '.tmp']) {
@@ -1285,6 +1286,41 @@ describe('value-backfill', () => {
       expect(getBackfillStateRow('cap-good')?.status).toBe('classified')
       const completeCall = send.mock.calls.find((c) => c[0] === 'value:backfill-complete')
       expect(completeCall?.[1]).toMatchObject({ processed: 2, failed: 1 })
+    })
+
+    it('announces an evaluation only after its transaction commits (kiro review of #125)', async () => {
+      seedEligible('cap-bad', '2026-06-01T00:00:00.000Z')
+      seedEligible('cap-good', '2026-01-01T00:00:00.000Z')
+      const evaluation = {
+        version: 1, model: 'jev-test', stars: 4, starLevel: 4, starsConfidence: 0.9, kind: 'team_meeting',
+        kindConfidence: 0.9, context: 'work', contextConfidence: 0.9, transcriptInvented: 0.02, transcriptOverfull: 0.01,
+        hasActionItems: 0.5, sensitive: 0.1, reasons: [], inputTokens: 100, answers: {}, audioWarning: null
+      }
+      // The failure lands AFTER the evaluation is written: marking the item done fails for cap-bad.
+      for (const when of ['INSERT', 'UPDATE']) {
+        run(`CREATE TRIGGER fail_bad_${when.toLowerCase()} BEFORE ${when} ON value_backfill_state
+             WHEN NEW.capture_id = 'cap-bad' AND NEW.status = 'classified'
+             BEGIN SELECT RAISE(ABORT, 'database is locked'); END`)
+      }
+      classifyCaptureValueRawMock.mockImplementation(async (captureId: string) => ({
+        ...successReply('normal', 0.9),
+        evaluation,
+        recordingId: `rec-${captureId}`
+      }))
+      const emit = vi.spyOn(getEventBus(), 'emitDomainEvent')
+      try {
+        await startValueBackfill()
+
+        const announced = emit.mock.calls
+          .map((c) => c[0])
+          .filter((e) => e.type === 'evaluation:saved')
+          .map((e) => (e.payload as { recordingId: string }).recordingId)
+        expect(announced).toEqual(['rec-cap-good'])
+      } finally {
+        emit.mockRestore()
+        run('DROP TRIGGER IF EXISTS fail_bad_insert')
+        run('DROP TRIGGER IF EXISTS fail_bad_update')
+      }
     })
   })
 

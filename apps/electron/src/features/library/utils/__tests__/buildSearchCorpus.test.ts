@@ -44,6 +44,13 @@ describe('buildDateAliases', () => {
 })
 
 describe('buildSearchCorpus', () => {
+  it('leaves the "part 1 of 2" label out of the search text (kiro review of #125)', () => {
+    const corpus = buildSearchCorpus(makeRec({ meetingPart: { index: 1, total: 2 } }), makeMeeting())
+    // The corpus is lower case.
+    expect(corpus).toContain('sofia - ejercicio connect')
+    expect(corpus).not.toMatch(/part 1 of 2/)
+  })
+
   it('includes filename',              () => expect(buildSearchCorpus(makeRec())).toContain('2025sep25-213132-rec53.wav'))
   it('includes recording title',       () => expect(buildSearchCorpus(makeRec({ title: 'My Title' }))).toContain('my title'))
   it('includes meeting subject',       () => expect(buildSearchCorpus(makeRec(), makeMeeting())).toContain('sofia - ejercicio connect'))

@@ -1256,5 +1256,34 @@ describe('Library — time groups and Show older', () => {
     fireEvent.scroll(list)
     await waitFor(() => expect(screen.getByTestId('library-date-group')).toBeInTheDocument())
   })
+
+  // With the column header (a wide list), the pinned group sat under it and
+  // covered the first row: "TODAY" over "Call Neobanco IO..." (owner, 2-oct-2026).
+  // The group now shows inside the header row, next to Title.
+  it('in a wide list the pinned group lives in the column header and covers no row', async () => {
+    const width = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => 1400 })
+    try {
+      vi.mocked(useUnifiedRecordings).mockReturnValue({
+        recordings: [recent],
+        loading: false,
+        error: null,
+        refresh: mockRefresh,
+        deviceConnected: false,
+        stats: { total: 1, deviceOnly: 0, localOnly: 1, both: 0, synced: 1, unsynced: 0, onSource: 0, locallyAvailable: 1 }
+      } as any)
+
+      render(<MemoryRouter><Library /></MemoryRouter>)
+
+      const header = await screen.findByTestId('library-column-header')
+      const list = screen.getByTestId('library-list')
+      list.scrollTop = 200
+      fireEvent.scroll(list)
+      await waitFor(() => expect(within(header).getByTestId('library-header-group')).toHaveTextContent('Today'))
+      expect(screen.queryByTestId('library-date-group')).not.toBeInTheDocument()
+    } finally {
+      if (width) Object.defineProperty(HTMLElement.prototype, 'clientWidth', width)
+    }
+  })
 })
 

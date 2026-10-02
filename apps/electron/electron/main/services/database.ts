@@ -14,6 +14,7 @@ import { DatabaseEngine, getTableColumns, type BootProgress, type ExternalBackup
 import { normalizeName, isGenericSpeakerLabel, detectAmbiguousName } from './entity-normalize'
 import { getEventBus } from './event-bus'
 import { isCancelledMeetingSubject, scoreMeetingCandidates } from './recording-match-scoring'
+import { MIN_TIME_LINK_COVERAGE, meetingCoverage } from './meeting-coverage'
 import { isImpossibleTranscriptDensity, lowValueMaxSeconds } from './value-thresholds'
 import type { QualityRating } from '@/types/knowledge'
 
@@ -12975,7 +12976,17 @@ export function enrichRecordingScheduleMetadata(recordingId: string): ScheduleEn
     const explicitStandalone = recording.correlation_method === 'user_preassign_standalone'
       || recording.correlation_method === 'user_standalone'
     const top = scored[0]
-    const unambiguous = !!top && top.isBestMatch && top.hasOverlap && top.confidenceScore >= 0.75
+    // Same rule as the time-overlap pass and the re-check: a meeting that covers
+    // less than half of the recording is one of several in it.
+    const topMeeting = top ? meetings.find((meeting) => meeting.id === top.meetingId) : undefined
+    const recStartMs = new Date(recording.date_recorded).getTime()
+    const coversHalf = !!topMeeting && meetingCoverage(
+      recStartMs,
+      recStartMs + (recording.duration_seconds ?? 0) * 1000,
+      new Date(topMeeting.start_time).getTime(),
+      new Date(topMeeting.end_time).getTime()
+    ) >= MIN_TIME_LINK_COVERAGE
+    const unambiguous = !!top && top.isBestMatch && top.hasOverlap && top.confidenceScore >= 0.75 && coversHalf
     const selectedMeetingId = confirmed?.meeting_id
       ?? (!explicitStandalone && unambiguous ? top.meetingId : null)
 
@@ -13056,9 +13067,6 @@ const TIME_ONLY_LINK_METHODS = ['schedule_candidate', 'time_overlap', 'time_prox
 /** How far back a calendar sync reaches, so how far back its changes can break a time-only link. */
 const TIME_LINK_RECHECK_DAYS = 30
 
-/** A time-only link stands while its meeting still covers at least this share of the recording. */
-const TIME_LINK_MIN_COVERAGE = 0.5
-
 export interface TimeLinkRecheckResult {
   checked: number
   unlinked: number
@@ -13110,11 +13118,8 @@ export function recheckTimeLinks(options: { now?: Date } = {}): TimeLinkRecheckR
       stale.push(row.id)
       continue
     }
-    // A recording with no known length counts as covered when it starts inside the meeting.
-    const coverage = seconds > 0
-      ? Math.max(0, Math.min(end, meetingEnd) - Math.max(start, meetingStart)) / (end - start)
-      : start >= meetingStart && start < meetingEnd ? 1 : 0
-    if (coverage < TIME_LINK_MIN_COVERAGE) stale.push(row.id)
+    // The same rule the time-overlap pass links by, early-start tolerance included.
+    if (meetingCoverage(start, end, meetingStart, meetingEnd) < MIN_TIME_LINK_COVERAGE) stale.push(row.id)
   }
 
   for (const recordingId of stale) {

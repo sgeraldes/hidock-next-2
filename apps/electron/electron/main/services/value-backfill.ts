@@ -55,6 +55,7 @@ import {
   lowValueMaxSeconds,
   getValueClassifierKind,
   storeEvaluation,
+  announceEvaluation,
   type RawClassificationResult
 } from './value-classification'
 import { EVALUATION_VERSION } from './jev-evaluation'
@@ -617,6 +618,8 @@ async function processOneCapture(captureId: string, runId: string): Promise<Proc
       if (raw.evaluation) storeEvaluation(captureId, raw.recordingId ?? null, raw.evaluation)
       finalizeClassifiedInTransaction(captureId, runId, resultRating)
     })
+    // Only after the commit: a rolled-back evaluation must not reach the Library.
+    if (!captureGone && raw.evaluation) announceEvaluation(raw.recordingId ?? null, raw.evaluation)
   } catch (e) {
     // OP-L1: an environmental DB failure (disk full, locked, ...) in the
     // finalize transaction parks THIS item and lets the run continue — one

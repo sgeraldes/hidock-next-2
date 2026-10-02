@@ -41,6 +41,7 @@ import { isGenericSpeakerLabel, cleanRole } from './entity-normalize'
 import { decideProjectDiscovery, scoreProjectNameCandidate } from './project-discovery-gate'
 import { canUpgrade, methodConfidence } from './signal-tiers'
 import { LONG_MEETING_MS } from './recording-match-scoring'
+import { EARLY_START_TOLERANCE_MS, MIN_TIME_LINK_COVERAGE, meetingCoverage } from './meeting-coverage'
 import { randomUUID } from 'crypto'
 
 /** Resolver thresholds (INTELLIGENCE.md §2): ≥0.8 auto-link, 0.5–0.8 suggest, <0.5 create. */
@@ -80,8 +81,6 @@ const STANDALONE_METHOD = 'user_preassign_standalone'
 
 /** Estimated duration for recordings without one (seconds). */
 const DEFAULT_RECORDING_DURATION = 30 * 60
-/** Allow a recording to start this many ms before the meeting does. */
-const EARLY_START_TOLERANCE_MS = 15 * 60 * 1000
 
 /**
  * Minimum symmetric fit (intersection-over-union of the two windows) an auto-link
@@ -136,6 +135,10 @@ export function selectAutoLinkMeeting(
       declinedBridge = true
       continue
     }
+
+    // A meeting that covers less than half of the recording is one of several
+    // in it; the transcript match decides those (owner, 2-oct-2026: "Almuerzo").
+    if (meetingCoverage(recStart, recEnd, m.start, m.end, earlyStartToleranceMs) < MIN_TIME_LINK_COVERAGE) continue
 
     const unionMs = Math.max(recEnd, m.end) - Math.min(recStart, mStartTol)
     const fit = unionMs > 0 ? overlap / unionMs : 0
