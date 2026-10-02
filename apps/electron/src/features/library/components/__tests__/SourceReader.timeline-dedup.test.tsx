@@ -9,6 +9,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { SourceReader } from '../SourceReader'
 import { useUIStore } from '@/store/useUIStore'
 import { useLibraryStore } from '@/store/useLibraryStore'
+import { useTranscriptionStore } from '@/store/features/useTranscriptionStore'
 import type { UnifiedRecording } from '@/types/unified-recording'
 import type { Transcript } from '@/types'
 
@@ -165,6 +166,27 @@ describe('SourceReader — placeholder while the transcript loads (owner, 2-oct-
     await act(async () => { resolve(undefined) })
     expect(screen.queryByRole('status', { name: 'Loading transcript' })).not.toBeInTheDocument()
     expect(screen.getByText(/transcript not available/i)).toBeInTheDocument()
+  })
+})
+
+describe('SourceReader — transcription state in words and percent (owner, 2-oct-2026)', () => {
+  beforeEach(() => {
+    useTranscriptionStore.getState().clear()
+  })
+
+  it('says the recording is waiting in the queue', () => {
+    render(<MemoryRouter><SourceReader recording={makeRecording({ transcriptionStatus: 'pending' })} /></MemoryRouter>)
+    expect(screen.getByRole('status', { name: 'Transcription' })).toHaveTextContent('Waiting to be transcribed')
+    expect(screen.queryByText(/transcription in progress/i)).not.toBeInTheDocument()
+  })
+
+  it('shows the percentage and a bar while it is transcribed', () => {
+    useTranscriptionStore.getState().addToQueue('q1', 'rec-1', 'meeting.wav')
+    useTranscriptionStore.getState().updateProgress('q1', 42)
+    render(<MemoryRouter><SourceReader recording={makeRecording({ transcriptionStatus: 'processing' })} /></MemoryRouter>)
+    const state = screen.getByRole('status', { name: 'Transcription' })
+    expect(state).toHaveTextContent('Transcribing, 42%')
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '42')
   })
 })
 

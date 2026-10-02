@@ -16,7 +16,8 @@ keeps the recordings it used to cover.
   header on every row. The tooltip says what the number counts.
 - **Opening a recording.** The wave appears at once, drawn from the loudness the app already knows,
   and the exact one replaces it a moment later. Until then the space holds a placeholder in the
-  shape of a wave; the transcript shows placeholder lines while it loads.
+  shape of a wave; the transcript shows placeholder lines while it loads. A recording still being
+  transcribed says whether it waits in the queue or is running, with the percentage and a bar.
 - **Meeting links follow the calendar.** A recording linked to a meeting only by the time is
   checked again after every calendar sync. When the meeting moved and no longer covers half of the
   recording, the link is removed and the recording is matched again against the calendar as it is

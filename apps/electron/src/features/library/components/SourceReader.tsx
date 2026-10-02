@@ -471,6 +471,14 @@ export function SourceReader({
   // Sidebar transcription dock mirror — kept in sync when we queue via the
   // explicit-method picker (same as useOperations does for the default path).
   const addToQueue = useTranscriptionStore((s) => s.addToQueue)
+  // Percentage of this recording's running transcription; null until the first progress event.
+  const transcriptionProgress = useTranscriptionStore((s) => {
+    if (!recording) return null
+    for (const item of s.queue.values()) {
+      if (item.recordingId === recording.id && item.status === 'processing') return item.progress
+    }
+    return null
+  })
 
   // Live duration: imported/watched files have no stored duration until the
   // waveform decode backfills it; show the freshly-decoded value meanwhile.
@@ -2128,8 +2136,28 @@ export function SourceReader({
                 <p>Transcript not available</p>
               </div>
             ) : recording.transcriptionStatus === 'pending' || recording.transcriptionStatus === 'processing' ? (
-              <div className="text-center text-muted-foreground py-8">
-                <p>Transcription in progress...</p>
+              // Says whether it waits or runs, and how far it got (owner, 2-oct-2026:
+              // the reader showed only "Transcription in progress...").
+              <div className="mx-auto max-w-sm py-8 text-center text-sm text-muted-foreground" role="status" aria-label="Transcription">
+                {recording.transcriptionStatus === 'processing' && transcriptionProgress !== null && transcriptionProgress > 0 ? (
+                  <>
+                    <p className="font-medium text-foreground">Transcribing, {Math.min(100, Math.round(transcriptionProgress))}%</p>
+                    <div
+                      className="mt-3 h-1.5 overflow-hidden rounded-full bg-muted"
+                      role="progressbar"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={Math.min(100, Math.round(transcriptionProgress))}
+                    >
+                      <div className="h-full bg-yellow-500 transition-[width] duration-500" style={{ width: `${Math.min(100, transcriptionProgress)}%` }} />
+                    </div>
+                  </>
+                ) : (
+                  <p className="font-medium text-foreground">
+                    {recording.transcriptionStatus === 'processing' ? 'Starting the transcription' : 'Waiting to be transcribed'}
+                  </p>
+                )}
+                <p className="mt-2">The transcript appears here when it is ready.</p>
               </div>
             ) : (
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 py-3 text-sm text-muted-foreground">
