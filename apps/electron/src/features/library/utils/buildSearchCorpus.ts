@@ -36,7 +36,8 @@ export function buildSearchCorpus(
   transcript?: Transcript
 ): string {
   const parts: string[] = []
-  parts.push(getDisplayTitle(recording, meeting, transcript).primaryText)
+  // Without "· part 1 of 2": a search for "part" or "2" should not match every multi-part meeting.
+  parts.push(getDisplayTitle({ ...recording, meetingPart: undefined }, meeting, transcript).primaryText)
   if (recording.userTitle) parts.push(recording.userTitle)
   // Keep the legacy capture label searchable during the v52 ownership
   // transition even though it is no longer trusted as the displayed title.

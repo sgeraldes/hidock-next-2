@@ -508,8 +508,16 @@ export function storeEvaluation(captureId: string, recordingId: string | null, e
     input_tokens: ev.inputTokens,
     audio_warning: ev.audioWarning ?? null
   })
-  // The Library row shows its chips from this, without waiting for a full
-  // refresh (owner, 2-oct-2026: saved evaluations showed no chip).
+}
+
+/**
+ * Tell the Library a recording's evaluation is saved, so its row shows the
+ * stars and kind without a full refresh (owner, 2-oct-2026: saved evaluations
+ * showed no chip). Call it only after the write has committed: an evaluation
+ * announced inside a transaction that then rolled back painted chips that
+ * vanished on the next refresh (kiro review of #125).
+ */
+export function announceEvaluation(recordingId: string | null, ev: RecordingEvaluation): void {
   if (recordingId) {
     getEventBus().emitDomainEvent({
       type: 'evaluation:saved',
@@ -724,7 +732,10 @@ export async function classifyCaptureValueRaw(captureId: string): Promise<RawCla
  */
 export async function classifyCaptureValue(captureId: string): Promise<CaptureValueResult> {
   const raw = await classifyCaptureValueRaw(captureId)
-  if (raw.evaluation) storeEvaluation(captureId, raw.recordingId ?? null, raw.evaluation)
+  if (raw.evaluation) {
+    storeEvaluation(captureId, raw.recordingId ?? null, raw.evaluation)
+    announceEvaluation(raw.recordingId ?? null, raw.evaluation)
+  }
 
   if (raw.skipped) {
     return {

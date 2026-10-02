@@ -1047,6 +1047,18 @@ describe('Database Service', () => {
         expect(getRecordingById('rec-early')?.meeting_id).toBe('starts-later')
       })
 
+      it('schedule scoring never picks a meeting that covers less than half of the recording (same rule as the re-check)', () => {
+        // A 4-hour recording and a 1-hour meeting starting with it: no clear winner by coverage.
+        seedTimedMeeting('lunch-only', 'Almuerzo', '2026-09-30T15:30:00.000Z', '2026-09-30T16:30:00.000Z')
+        seedRecording('rec-long', { date_recorded: '2026-09-30T15:31:29.000Z' })
+        run('UPDATE recordings SET duration_seconds = 14398 WHERE id = ?', ['rec-long'])
+
+        const result = enrichRecordingScheduleMetadata('rec-long')
+
+        expect(result.selectedMeetingId).toBeNull()
+        expect(getRecordingById('rec-long')?.meeting_id).toBeNull()
+      })
+
       it('keeps a time-only link whose meeting still covers at least half of the recording', () => {
         seedTimedMeeting('all-hands', 'Weekly Engineering All-Hands', '2026-10-02T14:00:00.000Z', '2026-10-02T15:00:00.000Z')
         seedLinked('rec-ok', '2026-10-02T14:01:16.000Z', 3540, 'all-hands', 'schedule_candidate')

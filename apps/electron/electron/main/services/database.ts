@@ -12976,7 +12976,17 @@ export function enrichRecordingScheduleMetadata(recordingId: string): ScheduleEn
     const explicitStandalone = recording.correlation_method === 'user_preassign_standalone'
       || recording.correlation_method === 'user_standalone'
     const top = scored[0]
-    const unambiguous = !!top && top.isBestMatch && top.hasOverlap && top.confidenceScore >= 0.75
+    // Same rule as the time-overlap pass and the re-check: a meeting that covers
+    // less than half of the recording is one of several in it.
+    const topMeeting = top ? meetings.find((meeting) => meeting.id === top.meetingId) : undefined
+    const recStartMs = new Date(recording.date_recorded).getTime()
+    const coversHalf = !!topMeeting && meetingCoverage(
+      recStartMs,
+      recStartMs + (recording.duration_seconds ?? 0) * 1000,
+      new Date(topMeeting.start_time).getTime(),
+      new Date(topMeeting.end_time).getTime()
+    ) >= MIN_TIME_LINK_COVERAGE
+    const unambiguous = !!top && top.isBestMatch && top.hasOverlap && top.confidenceScore >= 0.75 && coversHalf
     const selectedMeetingId = confirmed?.meeting_id
       ?? (!explicitStandalone && unambiguous ? top.meetingId : null)
 
