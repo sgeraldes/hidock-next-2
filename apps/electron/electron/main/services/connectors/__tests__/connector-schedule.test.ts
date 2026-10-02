@@ -32,12 +32,16 @@ vi.mock('../connector-store', () => ({ getConnectorStore: () => ({}) }))
 vi.mock('../ingestion', () => ({ createIngestionSink: () => ({}) }))
 vi.mock('../m365/m365-connector', () => ({ m365Descriptor: {}, createM365Connector: vi.fn() }))
 vi.mock('../../config', () => ({ getConfig: () => cfg.value }))
+const bus = vi.hoisted(() => ({ emitDomainEvent: vi.fn() }))
+vi.mock('../../event-bus', () => ({ getEventBus: () => bus }))
 
 import { startConnectorSchedule, stopConnectorSchedule, syncConnectedConnectors } from '../index'
 
 beforeEach(() => {
   vi.useFakeTimers()
   host.syncNow.mockClear()
+  host.syncNow.mockImplementation(async () => ({ meetings: 0, contacts: 0, artifacts: 0, skipped: 0 }))
+  bus.emitDomainEvent.mockClear()
   cfg.value = { calendar: { syncEnabled: true, syncIntervalMinutes: 15 }, features: { preset: 'full', flags: {} } }
 })
 
@@ -50,6 +54,18 @@ describe('connector schedule', () => {
   it('syncs only the connected connectors', async () => {
     await syncConnectedConnectors()
     expect(host.syncNow.mock.calls.map((c) => c[0])).toEqual(['m365:a', 'slack:b'])
+  })
+
+  it('announces calendar:synced once when a scheduled run brought meetings, so meeting links are checked again', async () => {
+    host.syncNow.mockImplementation(async (id: string) => ({ meetings: id === 'm365:a' ? 42 : 0, contacts: 0, artifacts: 0, skipped: 0 }))
+    await syncConnectedConnectors()
+    expect(bus.emitDomainEvent).toHaveBeenCalledTimes(1)
+    expect(bus.emitDomainEvent.mock.calls[0][0]).toMatchObject({ type: 'calendar:synced', payload: { meetingsCount: 42 } })
+  })
+
+  it('stays quiet when a scheduled run brought no meetings', async () => {
+    await syncConnectedConnectors()
+    expect(bus.emitDomainEvent).not.toHaveBeenCalled()
   })
 
   it('runs two minutes after start, then every sync interval', async () => {

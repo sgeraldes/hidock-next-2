@@ -25,6 +25,7 @@ import { getJensenDevice, setAutoConnectChecker } from './services/jensen'
 import { initializeStartupStorage } from './storage-startup'
 import { registerIpcHandlers } from './ipc/handlers'
 import { stopAutoSync, initializeCalendarAutoSync } from './ipc/calendar-handlers'
+import { startMeetingLinkRecheck } from './services/meeting-link-recheck'
 import {
   startRecordingWatcher,
   stopRecordingWatcher,
@@ -249,6 +250,9 @@ async function initializeServices(): Promise<boolean> {
   // CS-010: Initialize calendar auto-sync after IPC handlers and DB are ready.
   // Track I: gated on the Calendar feature (skipped under library-only).
   if (isFeatureEnabled('calendar')) {
+    // Before the first sync: every sync ends by checking the time-only meeting
+    // links against the new times (a stale calendar linked a call to lunch, 2-oct-2026).
+    startMeetingLinkRecheck()
     initializeCalendarAutoSync()
   }
 

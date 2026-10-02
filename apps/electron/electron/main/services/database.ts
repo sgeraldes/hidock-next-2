@@ -13046,6 +13046,97 @@ export function enrichRecordingScheduleMetadata(recordingId: string): ScheduleEn
   }
 }
 
+/** Links chosen only from the clock. A sync that moves the meeting can make them wrong. */
+const TIME_ONLY_LINK_METHODS = ['schedule_candidate', 'time_overlap'] as const
+
+/** How far back a calendar sync reaches, so how far back its changes can break a time-only link. */
+const TIME_LINK_RECHECK_DAYS = 30
+
+/** A time-only link stands while its meeting still covers at least this share of the recording. */
+const TIME_LINK_MIN_COVERAGE = 0.5
+
+export interface TimeLinkRecheckResult {
+  checked: number
+  unlinked: number
+}
+
+/**
+ * Re-check the time-only meeting links of recent recordings against the
+ * calendar as it is now. Run after every calendar sync.
+ *
+ * Recordings are linked the moment they arrive, against whatever calendar the
+ * app has stored. On 2-oct-2026 that copy was a day old: lunch had been at
+ * 13:00, so a 13:00 recording was linked to "Almuerzo". The sync two minutes
+ * later moved lunch to 19:30 and brought the 13:00 call that really took
+ * place, and nothing looked at the link again. A link whose meeting no longer
+ * covers half of the recording is cleared here and the recording is scored
+ * again. Links the owner chose, and links chosen from the transcript, are
+ * never touched.
+ */
+export function recheckTimeLinks(options: { now?: Date } = {}): TimeLinkRecheckResult {
+  const now = options.now ?? new Date()
+  const since = new Date(now.getTime() - TIME_LINK_RECHECK_DAYS * 86_400_000).toISOString()
+  const placeholders = TIME_ONLY_LINK_METHODS.map(() => '?').join(', ')
+  const rows = queryAll<{
+    id: string
+    date_recorded: string
+    duration_seconds: number | null
+    meeting_id: string
+    start_time: string | null
+    end_time: string | null
+  }>(
+    `SELECT r.id, r.date_recorded, r.duration_seconds, r.meeting_id, m.start_time, m.end_time
+       FROM recordings r
+       LEFT JOIN meetings m ON m.id = r.meeting_id
+      WHERE r.meeting_id IS NOT NULL
+        AND r.deleted_at IS NULL
+        AND r.correlation_method IN (${placeholders})
+        AND r.date_recorded >= ?`,
+    [...TIME_ONLY_LINK_METHODS, since]
+  )
+
+  const stale: string[] = []
+  for (const row of rows) {
+    const start = new Date(row.date_recorded).getTime()
+    const seconds = row.duration_seconds && row.duration_seconds > 0 ? row.duration_seconds : 0
+    const end = start + seconds * 1000
+    const meetingStart = row.start_time ? new Date(row.start_time).getTime() : NaN
+    const meetingEnd = row.end_time ? new Date(row.end_time).getTime() : NaN
+    if (!Number.isFinite(meetingStart) || !Number.isFinite(meetingEnd)) {
+      stale.push(row.id)
+      continue
+    }
+    // A recording with no known length counts as covered when it starts inside the meeting.
+    const coverage = seconds > 0
+      ? Math.max(0, Math.min(end, meetingEnd) - Math.max(start, meetingStart)) / (end - start)
+      : start >= meetingStart && start < meetingEnd ? 1 : 0
+    if (coverage < TIME_LINK_MIN_COVERAGE) stale.push(row.id)
+  }
+
+  for (const recordingId of stale) {
+    runInTransaction(() => {
+      runNoSave(
+        `UPDATE recordings SET meeting_id = NULL, correlation_confidence = NULL, correlation_method = NULL
+          WHERE id = ? AND correlation_method IN (${placeholders})`,
+        [recordingId, ...TIME_ONLY_LINK_METHODS]
+      )
+      runNoSave(
+        `UPDATE knowledge_captures SET meeting_id = NULL, correlation_confidence = NULL, correlation_method = NULL,
+                updated_at = CURRENT_TIMESTAMP
+          WHERE source_recording_id = ? AND correlation_method IN (${placeholders})`,
+        [recordingId, ...TIME_ONLY_LINK_METHODS]
+      )
+    })
+    // Fresh candidates from the calendar as it is now; links again when one meeting clearly fits.
+    enrichRecordingScheduleMetadata(recordingId)
+  }
+
+  if (stale.length > 0) {
+    console.log(`[MeetingLinks] Re-checked ${rows.length} time-only links after a calendar sync; ${stale.length} no longer fit and were scored again`)
+  }
+  return { checked: rows.length, unlinked: stale.length }
+}
+
 /**
  * Add a candidate meeting for a recording
  */
