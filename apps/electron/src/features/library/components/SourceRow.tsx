@@ -18,7 +18,7 @@ import type { QualityRating } from '@/types/knowledge'
 import { UnifiedRecording, hasLocalPath, isRecordingBacked } from '@/types/unified-recording'
 import type { DownloadStatus } from '@/store/useAppStore'
 import { toast } from '@/components/ui/toaster'
-import { COLUMN_WIDTH } from './libraryColumns'
+import { COLUMN_WIDTH, PLACE_WIDTH, type PlaceName } from './libraryColumns'
 import { CHIPS_BOX_CLASS, RowChips, MeetingIcon, StatusPlaceIcon, TranscriptionPlaceIcon } from './RowIcons'
 import { useLibraryStore } from '@/store/useLibraryStore'
 import { getDisplayTitle } from '@/features/library/utils/getDisplayTitle'
@@ -47,9 +47,9 @@ import {
  * Every icon is always visible: the owner scans the list for each recording's
  * status, so nothing waits for a hover (29-sep-2026).
  */
-function IconSlot({ name, children }: { name: string; children?: ReactNode }) {
+function IconSlot({ name, children }: { name: PlaceName; children?: ReactNode }) {
   return (
-    <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center" data-slot={name}>
+    <span className={`inline-flex h-4 ${PLACE_WIDTH[name]} shrink-0 items-center justify-center`} data-slot={name}>
       {children}
     </span>
   )
@@ -471,28 +471,20 @@ export const SourceRow = memo(function SourceRow({
             </span>
           )}
           {!isDeleting && <IconSlot name="meeting"><MeetingIcon meeting={meeting} /></IconSlot>}
-          {!isDeleting && <IconSlot name="status"><StatusPlaceIcon recording={recording} error={error} /></IconSlot>}
+          {/* A download in flight shows in the file place, never as text after the places:
+              text there made the row wider and pushed every column of it out of line
+              (owner, 2-oct-2026). */}
+          {!isDeleting && (
+            <IconSlot name="status">
+              <StatusPlaceIcon
+                recording={recording}
+                error={error}
+                download={downloadStatus ? { status: downloadStatus, progress: downloadProgress } : undefined}
+              />
+            </IconSlot>
+          )}
           {!isDeleting && (
             <IconSlot name="transcription"><TranscriptionPlaceIcon recording={recording} transcript={transcript} /></IconSlot>
-          )}
-
-          {/* Download progress (device-only, in flight) */}
-          {!isDeleting && recording.location === 'device-only' && downloadStatus && (
-            <div className="flex items-center gap-1 text-xs text-muted-foreground px-2" aria-live="polite">
-              <RefreshCw
-                className={`h-3.5 w-3.5 ${downloadStatus === 'downloading' || downloadStatus === 'cancelling' ? 'animate-spin' : ''}`}
-                aria-hidden="true"
-              />
-              <span>
-                {downloadStatus === 'pending'
-                  ? 'Queued'
-                  : downloadStatus === 'cancelling'
-                    ? 'Cancelling'
-                    : (downloadProgress ?? 0) > 0
-                      ? `${downloadProgress}%`
-                      : 'Starting'}
-              </span>
-            </div>
           )}
 
           {/* Secondary actions: overflow menu (labeled, keeps the row uncluttered).

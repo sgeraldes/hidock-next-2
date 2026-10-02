@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { LibraryColumnHeader } from '../LibraryColumnHeader'
-import { COLUMN_HEADER_HEIGHT_PX, COLUMN_WIDTH } from '../libraryColumns'
+import { COLUMN_HEADER_HEIGHT_PX, COLUMN_WIDTH, PLACE_WIDTH } from '../libraryColumns'
 
 function renderHeader(sortBy: React.ComponentProps<typeof LibraryColumnHeader>['sortBy'] = 'date', sortOrder: 'asc' | 'desc' = 'desc') {
   const onSort = vi.fn()
@@ -23,6 +23,13 @@ describe('LibraryColumnHeader', () => {
       expect(container.querySelector(`span.${width}`), width).not.toBeNull()
     }
     expect((screen.getByTestId('library-column-header') as HTMLElement).style.height).toBe(`${COLUMN_HEADER_HEIGHT_PX}px`)
+  })
+
+  it('gives each icon cell the width of the place it names in the rows', () => {
+    const { container } = renderHeader()
+    for (const key of ['meeting', 'status', 'transcription'] as const) {
+      expect(container.querySelector(`[data-sort-key="${key}"]`), key).toHaveClass(PLACE_WIDTH[key])
+    }
   })
 
   it('sticks to the top of the list, above the rows', () => {

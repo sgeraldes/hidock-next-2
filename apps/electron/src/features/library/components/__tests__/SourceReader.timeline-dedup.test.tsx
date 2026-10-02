@@ -152,6 +152,22 @@ beforeEach(() => {
   installElectronAPI()
 })
 
+describe('SourceReader — placeholder while the transcript loads (owner, 2-oct-2026)', () => {
+  it('shows transcript-shaped lines while the fetch is in flight, and says it is missing only after it returns empty', async () => {
+    let resolve!: (value: unknown) => void
+    getByRecordingId.mockReturnValue(new Promise((r) => { resolve = r }))
+
+    render(<MemoryRouter><SourceReader recording={makeRecording()} /></MemoryRouter>)
+
+    expect(await screen.findByRole('status', { name: 'Loading transcript' })).toBeInTheDocument()
+    expect(screen.queryByText(/transcript not available/i)).not.toBeInTheDocument()
+
+    await act(async () => { resolve(undefined) })
+    expect(screen.queryByRole('status', { name: 'Loading transcript' })).not.toBeInTheDocument()
+    expect(screen.getByText(/transcript not available/i)).toBeInTheDocument()
+  })
+})
+
 describe('SourceReader — H6: transcript + speaker colors render on selection', () => {
   it('fetches the transcript directly when the parent supplies none, then renders it + per-speaker colors', async () => {
     getByRecordingId.mockResolvedValue(makeTranscript())
@@ -165,6 +181,9 @@ describe('SourceReader — H6: transcript + speaker colors render on selection',
     // Transcript renders (not the "Transcript not available" placeholder).
     await waitFor(() => expect(screen.getByTestId('transcript-viewer')).toBeInTheDocument())
     expect(screen.queryByText(/transcript not available/i)).not.toBeInTheDocument()
+
+    // The loading placeholder is gone once the transcript is in.
+    expect(screen.queryByRole('status', { name: 'Loading transcript' })).not.toBeInTheDocument()
 
     // Per-speaker bar colors are derived and passed to the player (2 speakers).
     await waitFor(() => {

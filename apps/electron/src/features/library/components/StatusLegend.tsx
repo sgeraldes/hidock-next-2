@@ -36,6 +36,8 @@ const LOCATION_ITEMS: LegendItem[] = [
   { Icon: Cloud, color: 'text-orange-600 dark:text-orange-400', label: 'On device only' },
   { Icon: HardDrive, color: 'text-blue-600 dark:text-blue-400', label: 'Downloaded to computer' },
   { Icon: Check, color: 'text-green-600 dark:text-green-400', label: 'Synced (device + computer)' },
+  { Icon: Clock, color: 'text-yellow-600 dark:text-yellow-400', label: 'Waiting to download from the device' },
+  { Icon: Loader2, color: 'text-yellow-600 dark:text-yellow-400', label: 'Downloading; shows the percentage once it starts' },
   { Icon: AlertCircle, color: 'text-destructive', label: 'Processing error (in place of the above)' }
 ]
 
@@ -43,7 +45,7 @@ const LOCATION_ITEMS: LegendItem[] = [
 const TRANSCRIPTION_ITEMS: LegendItem[] = [
   { Icon: Circle, color: 'text-muted-foreground/50', label: 'Not transcribed' },
   { Icon: Clock, color: 'text-yellow-600 dark:text-yellow-400', label: 'Queued' },
-  { Icon: Loader2, color: 'text-yellow-600 dark:text-yellow-400', label: 'Transcribing' },
+  { Icon: Loader2, color: 'text-yellow-600 dark:text-yellow-400', label: 'Transcribing; shows the percentage once it starts' },
   { Icon: CheckCircle2, color: 'text-green-600 dark:text-green-400', label: 'Transcribed' },
   { Icon: MicOff, color: 'text-slate-500 dark:text-slate-400', label: 'No intelligible speech' },
   { Icon: AlertCircle, color: 'text-destructive', label: 'Failed' }

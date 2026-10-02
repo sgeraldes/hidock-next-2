@@ -127,12 +127,13 @@ describe('WaveformPlayer', () => {
     })
   })
 
-  it('H5: shows a clean "Preparing waveform…" placeholder — never the old half-drawn "Loading waveform" overlay', () => {
+  it('H5: holds the band with a wave-shaped placeholder while the peaks load (owner, 2-oct-2026)', () => {
     render(<WaveformPlayer mode="full" recordingId="rec-1" filePath="/a.wav" />)
     expect(screen.getByTestId('waveform-player-full')).toBeInTheDocument()
-    // New clean placeholder…
-    expect(screen.getByTestId('waveform-preparing')).toBeInTheDocument()
-    expect(screen.getByText(/preparing waveform/i)).toBeInTheDocument()
+    // A placeholder in the shape of a wave, named for screen readers…
+    const placeholder = screen.getByTestId('waveform-preparing')
+    expect(placeholder).toHaveAttribute('aria-label', 'Preparing waveform')
+    expect(placeholder.children.length).toBeGreaterThan(20)
     // …and NONE of the old half-drawn-wave-with-overlay affordances.
     expect(screen.queryByTestId('waveform-loading')).not.toBeInTheDocument()
     expect(screen.queryByText(/loading waveform/i)).not.toBeInTheDocument()

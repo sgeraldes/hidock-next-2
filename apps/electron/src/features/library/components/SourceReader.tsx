@@ -105,6 +105,9 @@ const READER_SECTION_LABELS: Record<ReaderSectionId, string> = {
 /** Reader width (px) below which the docked bar drops to the bare scrubber. */
 const NARROW_WIDTH_BREAKPOINT = 420
 
+/** Widths (% of the line) of the placeholder lines shown while a transcript is read. */
+const TRANSCRIPT_PLACEHOLDER_LINES = [92, 78, 85, 64, 88, 71, 80, 58]
+
 const CATEGORY_OPTIONS = [
   { value: 'meeting', label: 'Meeting' },
   { value: 'interview', label: 'Interview' },
@@ -480,6 +483,8 @@ export function SourceReader({
   // transcript directly as a fallback so the transcript + per-speaker colors render
   // on first paint, regardless of how the recording was selected.
   const [fallbackTranscript, setFallbackTranscript] = useState<Transcript | undefined>(undefined)
+  /** Recording whose transcript the fallback fetch is reading; the reader shows a placeholder meanwhile. */
+  const [transcriptFetchingFor, setTranscriptFetchingFor] = useState<string | null>(null)
   // A manual correction must render immediately even when the Library parent is
   // still refreshing its transcript map. It stays scoped to this recording and
   // is cleared when another source is selected.
@@ -544,17 +549,24 @@ export function SourceReader({
     if (!recording || !hasLocalPath(recording)) return
     if (recording.transcriptionStatus !== 'complete') return
     let cancelled = false
+    const id = recording.id
+    setTranscriptFetchingFor(id)
     ;(async () => {
       try {
         // ADV13: owner-management detail viewer — use the owner accessor so the
         // owner can still read their OWN trashed/personal/value-excluded transcript.
-        const fetched = await window.electronAPI?.transcripts?.getByRecordingIdOwner(recording.id)
+        const fetched = await window.electronAPI?.transcripts?.getByRecordingIdOwner(id)
         if (!cancelled && fetched) setFallbackTranscript(fetched as Transcript)
       } catch (err) {
         console.error('[SourceReader] Transcript fallback fetch failed:', err)
+      } finally {
+        if (!cancelled) setTranscriptFetchingFor((current) => (current === id ? null : current))
       }
     })()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      setTranscriptFetchingFor((current) => (current === id ? null : current))
+    }
   }, [recording, transcript])
 
   useEffect(() => {
@@ -2099,6 +2111,17 @@ export function SourceReader({
                         />
                   </ReaderSection>
                 )}
+              </div>
+            ) : recording.transcriptionStatus === 'complete' && transcriptFetchingFor === recording.id ? (
+              // Lines in the shape of a transcript hold the space while it is read
+              // (owner, 2-oct-2026), instead of a message that says it is missing.
+              <div className="space-y-3 py-4 motion-safe:animate-pulse" role="status" aria-label="Loading transcript">
+                {TRANSCRIPT_PLACEHOLDER_LINES.map((width, i) => (
+                  <div key={i} className="flex items-start gap-3">
+                    <span className="h-3 w-12 shrink-0 rounded bg-muted-foreground/20" />
+                    <span className="h-3 rounded bg-muted-foreground/15" style={{ width: `${width}%` }} />
+                  </div>
+                ))}
               </div>
             ) : recording.transcriptionStatus === 'complete' ? (
               <div className="text-center text-muted-foreground py-8">

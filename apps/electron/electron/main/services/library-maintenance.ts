@@ -17,7 +17,8 @@
 import { readFile, stat } from 'fs/promises'
 import { queryAll, queryOne, run } from './database'
 import { envelopePath } from './audio-profile-store'
-import { getWaveformCache, setWaveformCache } from './waveform-cache'
+import { getWaveformCache, setWaveformCache, CACHE_VERSION, type WaveformCacheEntry } from './waveform-cache'
+import { scanDeviceMp3 } from './audio-profile'
 import { recomputeAudioWarnings } from './value-classification'
 import { getConnectorHost } from './connectors'
 import { getConnectorStore } from './connectors/connector-store'
@@ -109,6 +110,45 @@ export async function redrawWaveforms(onProgress?: (done: number, total: number)
     return result
   } finally {
     redrawRunning = false
+  }
+}
+
+/**
+ * A coarse waveform for one recording, drawn when the player finds nothing in
+ * the cache: from the stored loudness envelope, or else from the frame gains
+ * of the device's MP3 read straight from the file (no decoding, a few
+ * milliseconds). Saved as coarse, so the player still decodes the exact one and
+ * saves it over this. Null when neither source exists; the player then decodes
+ * as before. Owner, 2-oct-2026: opening a new recording showed nothing for seconds.
+ */
+export async function drawCoarseWaveform(recordingId: string): Promise<WaveformCacheEntry | null> {
+  const row = queryOne<{ file_path: string | null; duration_seconds: number | null }>(
+    'SELECT file_path, duration_seconds FROM recordings WHERE id = ?',
+    [recordingId]
+  )
+  if (!row?.file_path) return null
+  const fileSize = await fileSizeOf(row.file_path)
+  let envelope: Uint8Array | null = await readFile(envelopePath(recordingId))
+    .then((buf) => new Uint8Array(buf))
+    .catch(() => null)
+  if (!envelope) {
+    const audio = await readFile(row.file_path).catch(() => null)
+    envelope = audio ? scanDeviceMp3(audio) : null
+  }
+  if (!envelope) return null
+  const peaks = peaksFromEnvelope(envelope)
+  if (peaks.length === 0) return null
+  const duration = row.duration_seconds ?? 0
+  setWaveformCache(recordingId, peaks, duration, fileSize, true)
+  return {
+    version: CACHE_VERSION,
+    recordingId,
+    peaks,
+    sampleCount: peaks.length,
+    duration,
+    fileSize,
+    createdAt: new Date().toISOString(),
+    coarse: true
   }
 }
 

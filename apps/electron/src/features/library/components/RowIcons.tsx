@@ -1,4 +1,4 @@
-import { AlertCircle, AlertTriangle, Ban, Calendar, FileWarning, FileX, TrendingDown, XOctagon } from 'lucide-react'
+import { AlertCircle, AlertTriangle, Ban, Calendar, Clock, FileWarning, FileX, Loader2, TrendingDown, XOctagon } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatDateTime } from '@/lib/utils'
 import type { Meeting, Transcript } from '@/types'
@@ -9,6 +9,8 @@ import { audioLabel } from '@/features/library/utils/audioCheck'
 import { formatValueReasons } from '@/features/library/utils/valueReasons'
 import { transcriptProblems, showsTranscriptProblem, type TranscriptProblemKind } from '@/features/library/utils/rowState'
 import { useConfigStore } from '@/store/domain/useConfigStore'
+import { useTranscriptionStore } from '@/store/features/useTranscriptionStore'
+import type { DownloadStatus } from '@/store/useAppStore'
 import { StatusIcon } from './StatusIcon'
 import { TranscriptionStatusBadge, TRANSCRIPTION_STATUS_LABELS } from './TranscriptionStatusBadge'
 
@@ -151,7 +153,93 @@ export function MeetingIcon({ meeting }: { meeting?: Meeting }) {
  * processing error when the last attempt on it failed. The error takes the
  * place of the location icon instead of getting a place of its own.
  */
-export function StatusPlaceIcon({ recording, error }: { recording: UnifiedRecording; error?: LibraryError }) {
+/**
+ * A percentage shown in an icon place, with a tooltip that says what it counts.
+ * Until the first number arrives the place shows a spinner instead of "0%"
+ * (owner, 2-oct-2026: "60% de qué?").
+ */
+function ProgressInPlace({ percent, label, testId }: { percent: number | null; label: string; testId: string }) {
+  const known = percent !== null && percent > 0
+  const text = known ? `${Math.min(100, Math.round(percent))}%` : null
+  const aria = text ? `${label}: ${text}` : label
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className="inline-flex shrink-0 items-center text-yellow-600 dark:text-yellow-400"
+          role="img"
+          aria-label={aria}
+          data-testid={testId}
+        >
+          {text ? (
+            <span className="text-[10px] font-medium leading-none tabular-nums" aria-hidden="true">{text}</span>
+          ) : (
+            <Loader2 className="h-3.5 w-3.5 motion-safe:animate-spin" aria-hidden="true" />
+          )}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>
+        <p>{aria}</p>
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+/** A download from the device that is waiting, starting, running or being cancelled. */
+export interface PlaceDownload {
+  status: DownloadStatus
+  progress?: number
+}
+
+function DownloadInPlace({ download }: { download: PlaceDownload }) {
+  if (download.status === 'pending') {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            className="inline-flex shrink-0 text-yellow-600 dark:text-yellow-400"
+            role="img"
+            aria-label="Waiting to download from the device"
+            data-testid="download-in-place"
+          >
+            <Clock className="h-3.5 w-3.5" aria-hidden="true" />
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>
+          <p>Waiting to download from the device</p>
+        </TooltipContent>
+      </Tooltip>
+    )
+  }
+  if (download.status === 'cancelling') {
+    return <ProgressInPlace percent={null} label="Cancelling the download from the device" testId="download-in-place" />
+  }
+  const percent = download.progress ?? 0
+  return (
+    <ProgressInPlace
+      percent={percent > 0 ? percent : null}
+      label={percent > 0 ? 'Downloading from the device' : 'Starting the download from the device'}
+      testId="download-in-place"
+    />
+  )
+}
+
+/** Download states that take the file-status place while they last. */
+const IN_PLACE_DOWNLOADS: ReadonlySet<DownloadStatus> = new Set(['pending', 'downloading', 'cancelling'])
+
+export function StatusPlaceIcon({
+  recording,
+  error,
+  download
+}: {
+  recording: UnifiedRecording
+  error?: LibraryError
+  /** A download in flight shows its state here, in place of the location icon. */
+  download?: PlaceDownload
+}) {
+  if (download && recording.location === 'device-only' && IN_PLACE_DOWNLOADS.has(download.status)) {
+    return <DownloadInPlace download={download} />
+  }
   if (!error) return <StatusIcon recording={recording} />
   return (
     <Tooltip>
@@ -184,6 +272,16 @@ const PROBLEM_ICON: Record<TranscriptProblemKind, typeof XOctagon> = {
 export function TranscriptionPlaceIcon({ recording, transcript }: { recording: UnifiedRecording; transcript?: Transcript }) {
   // Subscribed, so a changed Settings > Quality checks threshold redraws the row.
   useConfigStore((s) => s.config?.quality?.inventedProbability)
+  // The percentage of a running transcription; null until the first progress event.
+  const progress = useTranscriptionStore((s) => {
+    for (const item of s.queue.values()) {
+      if (item.recordingId === recording.id && item.status === 'processing') return item.progress
+    }
+    return null
+  })
+  if (recording.transcriptionStatus === 'processing' && progress !== null && progress > 0) {
+    return <ProgressInPlace percent={progress} label="Transcribing" testId="transcription-in-place" />
+  }
   if (!showsTranscriptProblem(recording, transcript)) {
     return <TranscriptionStatusBadge status={recording.transcriptionStatus} compact />
   }

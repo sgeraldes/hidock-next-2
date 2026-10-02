@@ -3,7 +3,7 @@ import { Calendar, ChevronDown, ChevronUp, FileText, HardDrive } from 'lucide-re
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import type { SortBy, SortOrder } from '@/store/useLibraryStore'
-import { COLUMN_HEADER_HEIGHT_PX, COLUMN_WIDTH } from './libraryColumns'
+import { COLUMN_HEADER_HEIGHT_PX, COLUMN_WIDTH, PLACE_WIDTH, type PlaceName } from './libraryColumns'
 
 interface LibraryColumnHeaderProps {
   sortBy: SortBy
@@ -57,7 +57,7 @@ function TextColumn({
   )
 }
 
-/** An icon column: the icon the rows use in that place, over its 16 px place. */
+/** An icon column: the icon the rows use in that place, over a cell as wide as the place. */
 function IconColumn({
   sortKey,
   icon,
@@ -77,7 +77,8 @@ function IconColumn({
           aria-pressed={active}
           aria-label={`Sort by ${title}`}
           className={cn(
-            'relative flex h-6 w-4 shrink-0 items-center justify-center rounded transition-colors',
+            'relative flex h-6 shrink-0 items-center justify-center rounded transition-colors',
+            PLACE_WIDTH[sortKey as PlaceName],
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50',
             active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
           )}
@@ -139,13 +140,13 @@ export function LibraryColumnHeader({ sortBy, sortOrder, onSort }: LibraryColumn
             {...col('status')}
             icon={<HardDrive className="h-3.5 w-3.5" aria-hidden="true" />}
             title="File status"
-            hint="Where the file is: on the device only, downloaded, or both. A processing error takes this place. Sorts errors first."
+            hint="Where the file is: on the device only, downloaded, or both. A download from the device shows its percentage here, and a processing error takes this place. Sorts errors first."
           />
           <IconColumn
             {...col('transcription')}
             icon={<FileText className="h-3.5 w-3.5" aria-hidden="true" />}
             title="Transcript"
-            hint="Whether it is transcribed. A problem with the transcript (wrong timing, text that does not fit the audio, text that may be invented or missing) takes this place. Sorts problems first."
+            hint="Whether it is transcribed. A running transcription shows its percentage here. A problem with the transcript (wrong timing, text that does not fit the audio, text that may be invented or missing) takes this place. Sorts problems first."
           />
           <span className="h-6 w-6" aria-hidden="true" />
         </div>
