@@ -52,6 +52,7 @@ import {
   saveRecordingEvaluation
 } from './database'
 import { complete } from '@hidock/ai-providers'
+import { getEventBus } from './event-bus'
 import { getProviderConfigFromSettings } from './ai-provider-config'
 import { getConfig } from './config'
 import { createJevHarness } from './pipeline/jev-harness'
@@ -507,6 +508,22 @@ export function storeEvaluation(captureId: string, recordingId: string | null, e
     input_tokens: ev.inputTokens,
     audio_warning: ev.audioWarning ?? null
   })
+  // The Library row shows its chips from this, without waiting for a full
+  // refresh (owner, 2-oct-2026: saved evaluations showed no chip).
+  if (recordingId) {
+    getEventBus().emitDomainEvent({
+      type: 'evaluation:saved',
+      timestamp: new Date().toISOString(),
+      payload: {
+        recordingId,
+        starLevel: ev.starLevel,
+        kind: ev.kind,
+        context: ev.context,
+        audioWarning: ev.audioWarning ?? null,
+        transcriptInvented: ev.transcriptInvented
+      }
+    })
+  }
 }
 
 /** Audio numbers for the evaluation state, so Jev can judge a transcript against its file. */
@@ -883,7 +900,6 @@ export async function recomputeAudioWarnings(recordingIds?: string[]): Promise<n
   }
   if (updates.length > 0) {
     try {
-      const { getEventBus } = await import('./event-bus')
       getEventBus().emitDomainEvent({
         type: 'evaluation:warnings-updated',
         timestamp: new Date().toISOString(),

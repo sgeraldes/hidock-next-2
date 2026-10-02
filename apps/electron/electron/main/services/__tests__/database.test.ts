@@ -1038,6 +1038,15 @@ describe('Database Service', () => {
         expect(candidates).not.toContain('lunch')
       })
 
+      it('keeps a link whose recording started a few minutes before the meeting (the early-start tolerance)', () => {
+        seedTimedMeeting('starts-later', 'Sync', '2026-10-02T14:12:00.000Z', '2026-10-02T15:00:00.000Z')
+        // 20 minutes from 14:00: only 8 inside the meeting by the clock (40%), all of it with the 15-minute tolerance.
+        seedLinked('rec-early', '2026-10-02T14:00:00.000Z', 1200, 'starts-later', 'time_overlap')
+
+        expect(recheckTimeLinks({ now: NOW })).toMatchObject({ checked: 1, unlinked: 0 })
+        expect(getRecordingById('rec-early')?.meeting_id).toBe('starts-later')
+      })
+
       it('keeps a time-only link whose meeting still covers at least half of the recording', () => {
         seedTimedMeeting('all-hands', 'Weekly Engineering All-Hands', '2026-10-02T14:00:00.000Z', '2026-10-02T15:00:00.000Z')
         seedLinked('rec-ok', '2026-10-02T14:01:16.000Z', 3540, 'all-hands', 'schedule_candidate')

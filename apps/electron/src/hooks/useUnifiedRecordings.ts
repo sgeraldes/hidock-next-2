@@ -1,5 +1,6 @@
 import { useEffect, useCallback, useMemo, useRef } from 'react'
 import type { EvaluationFields } from '@/features/library/utils/evaluation'
+import { withMeetingParts } from '@/features/library/utils/meetingParts'
 import { getHiDockDeviceService, HiDockRecording } from '@/services/hidock-device'
 import { useAppStore } from '@/store/useAppStore'
 import {
@@ -522,9 +523,9 @@ export function buildRecordingMap(
     recordingMap.set(key, recording)
   }
 
-  // Sort by date (newest first)
-  return Array.from(recordingMap.values()).sort(
-    (a, b) => b.dateRecorded.getTime() - a.dateRecorded.getTime()
+  // Sort by date (newest first), then number the pieces of a meeting recorded in more than one.
+  return withMeetingParts(
+    Array.from(recordingMap.values()).sort((a, b) => b.dateRecorded.getTime() - a.dateRecorded.getTime())
   )
 }
 

@@ -73,6 +73,7 @@ import {
   type DeletePermanentDialogImpact
 } from '@/features/library/components'
 import { useSourceSelection, useKeyboardNavigation, useTransitionFilters, useValueSuggestionToasts } from '@/features/library/hooks'
+import { useEvaluationUpdates } from '@/features/library/hooks/useEvaluationUpdates'
 import { buildSearchCorpus } from '@/features/library/utils/buildSearchCorpus'
 import {
   BUILTIN_ARTIFACT_TYPES,
@@ -85,6 +86,7 @@ import { matchesDurationPreset } from '@/features/library/utils/durationFilter'
 import { trashRowToUnified } from '@/features/library/utils/trashRow'
 import type { DatabaseRecording } from '@/hooks/useUnifiedRecordings'
 import { getDisplayTitle } from '@/features/library/utils/getDisplayTitle'
+import { withMeetingParts } from '@/features/library/utils/meetingParts'
 import {
   softDeleteConfirmDescription,
   deviceDeleteConfirmDescription,
@@ -334,6 +336,8 @@ export function Library() {
     refresh,
     onReview: () => setQualityFilter('low-value')
   })
+  // A saved evaluation puts its chips on the row without a full refresh.
+  useEvaluationUpdates()
 
   // Source-type + duration filters (new) — read/set directly from the store.
   const sourceTypeFilter = useLibraryStore((state) => state.sourceTypeFilter)
@@ -751,7 +755,8 @@ export function Library() {
       })
 
       const appState = useAppStore.getState()
-      appState.setUnifiedRecordings(appState.unifiedRecordings.map((recording) => {
+      // The transcript match can move the recording to another meeting, so the part numbers are recomputed.
+      appState.setUnifiedRecordings(withMeetingParts(appState.unifiedRecordings.map((recording) => {
         if (recording.id !== recordingId) return recording
         return {
           ...recording,
@@ -767,7 +772,7 @@ export function Library() {
           status: capture?.status ?? recording.status,
           summary: capture?.summary ?? recording.summary
         }
-      }))
+      })))
       if (qaEnabled) {
         const payloadBytes = JSON.stringify(transcript).length
         requestAnimationFrame(() => {
@@ -3007,7 +3012,9 @@ export function Library() {
             >
         {/* Pinned date group. The negative bottom margin cancels its own height,
             so it overlays the list without moving any row (rows are fixed height). */}
-        {!showTrash && sortBy === 'date' && displayedRecordings.length > 0 && topDateGroup && (!compactView || listScrolled) && (
+        {/* A wide list names the group in its column header instead: pinned under
+            the header, this label covered the first row (owner, 2-oct-2026). */}
+        {!showColumnHeader && !showTrash && sortBy === 'date' && displayedRecordings.length > 0 && topDateGroup && (!compactView || listScrolled) && (
           <div
             className="pointer-events-none sticky z-10 -mb-6 flex h-6 items-center px-3"
             style={{ top: showColumnHeader ? COLUMN_HEADER_HEIGHT_PX : 0 }}
@@ -3134,7 +3141,12 @@ export function Library() {
                 </div>
               )}
               {showColumnHeader && (
-                <LibraryColumnHeader sortBy={sortBy} sortOrder={sortOrder} onSort={handleColumnSort} />
+                <LibraryColumnHeader
+                  sortBy={sortBy}
+                  sortOrder={sortOrder}
+                  onSort={handleColumnSort}
+                  group={!showTrash && sortBy === 'date' && listScrolled ? topDateGroup : null}
+                />
               )}
             <div
               style={{

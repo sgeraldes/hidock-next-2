@@ -132,6 +132,19 @@ describe('selectAutoLinkMeeting', () => {
     expect(d).toMatchObject({ declinedBridge: false })
   })
 
+  it('does not link a long recording to a meeting that covers less than half of it (owner, 2-oct-2026: "Almuerzo")', () => {
+    // A 4-hour recording; lunch is one hour of it. Four meetings overlap it equally.
+    const lunch: AutoLinkWindow = { id: 'almuerzo', start: ms('2026-09-30T16:00:00Z'), end: ms('2026-09-30T17:00:00Z') }
+    const d = selectAutoLinkMeeting(ms('2026-09-30T15:31:29Z'), ms('2026-09-30T19:31:27Z'), [lunch])
+    expect(d.id).toBeNull()
+  })
+
+  it('still links a recording that starts a few minutes before its meeting', () => {
+    const meeting: AutoLinkWindow = { id: 'sync', start: ms('2026-06-04T14:10:00Z'), end: ms('2026-06-04T15:00:00Z') }
+    // Starts 10 minutes early, inside the early-start tolerance.
+    expect(selectAutoLinkMeeting(ms('2026-06-04T14:00:00Z'), ms('2026-06-04T14:30:00Z'), [meeting]).id).toBe('sync')
+  })
+
   it('exposes a sane minimum-fit constant', () => {
     expect(MIN_AUTO_LINK_FIT).toBeGreaterThan(0)
     expect(MIN_AUTO_LINK_FIT).toBeLessThan(1)

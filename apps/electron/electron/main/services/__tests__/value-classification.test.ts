@@ -82,6 +82,7 @@ import {
   recomputeEvaluationReasons
 } from '../value-classification'
 import { applyQualityRules } from '../quality-rules'
+import { getEventBus } from '../event-bus'
 
 function cleanupDbFiles(base: string): void {
   for (const suffix of ['', '-wal', '-shm', '.tmp']) {
@@ -1295,6 +1296,20 @@ describe('Jev (TypeSafe AI) as the value classifier', () => {
     mockGetProviderConfig.mockReturnValue({ provider: 'google', model: 'gemini-3.5-flash', apiKey: 'test-key' }) // pragma: allowlist secret
     mockConfig.transcription.valueClassificationMinConfidence = 0.6
     mockConfig.transcription.jevApiKey = JEV_KEY
+  })
+
+  it('announces a saved evaluation so the Library row shows its chips at once (owner, 2-oct-2026)', async () => {
+    seedRecording('rec-jev-event')
+    seedTranscript('rec-jev-event', { fullText: 'Revisamos el roadmap del proyecto y las fechas de entrega.' })
+    seedCapture('cap-jev-event', 'rec-jev-event')
+    mockAskJev.mockResolvedValue(jevReply(5, 0.9, {}, { kind: 'project_meeting', context: 'work' }))
+    const emit = vi.spyOn(getEventBus(), 'emitDomainEvent')
+
+    await classifyCaptureValue('cap-jev-event')
+
+    const saved = emit.mock.calls.map((c) => c[0]).find((e) => e.type === 'evaluation:saved')
+    expect(saved?.payload).toMatchObject({ recordingId: 'rec-jev-event', starLevel: 5, kind: 'project_meeting', context: 'work' })
+    emit.mockRestore()
   })
 
   it('asks Jev, not the LLM, when a Jev key is set, and persists its verdict', async () => {

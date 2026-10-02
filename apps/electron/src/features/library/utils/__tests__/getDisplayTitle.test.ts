@@ -25,6 +25,16 @@ describe('getDisplayTitle', () => {
     })
   })
 
+  it('numbers the parts of a meeting recorded in pieces (owner chose, 2-oct-2026)', () => {
+    expect(getDisplayTitle({ ...baseRecording, meetingPart: { index: 1, total: 2 } }, meeting).primaryText).toBe(
+      'Weekly delivery review · part 1 of 2'
+    )
+    // A title the user typed is theirs: no number added.
+    expect(
+      getDisplayTitle({ ...baseRecording, userTitle: 'Mine', meetingPart: { index: 2, total: 2 } }).primaryText
+    ).toBe('Mine')
+  })
+
   it('then a title the user typed', () => {
     expect(getDisplayTitle({ ...baseRecording, userTitle: 'Antamina, la buena', title: 'AI' })).toEqual({
       primaryText: 'Antamina, la buena',

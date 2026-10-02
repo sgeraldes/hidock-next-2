@@ -32,6 +32,13 @@ describe('LibraryColumnHeader', () => {
     }
   })
 
+  it('names the date group at the top of the list next to Title, when one is given', () => {
+    const { rerender } = render(<LibraryColumnHeader sortBy="date" sortOrder="desc" onSort={vi.fn()} group="Today" />)
+    expect(screen.getByTestId('library-header-group')).toHaveTextContent('Today')
+    rerender(<LibraryColumnHeader sortBy="date" sortOrder="desc" onSort={vi.fn()} />)
+    expect(screen.queryByTestId('library-header-group')).not.toBeInTheDocument()
+  })
+
   it('sticks to the top of the list, above the rows', () => {
     renderHeader()
     const header = screen.getByTestId('library-column-header')

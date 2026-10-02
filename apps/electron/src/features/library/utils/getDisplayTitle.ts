@@ -42,7 +42,11 @@ export function getDisplayTitle(
   void transcript
   const officialMeetingSubject = meeting?.subject?.trim() || recording.meetingSubject?.trim()
   if (officialMeetingSubject) {
-    return { primaryText: officialMeetingSubject, source: 'meeting-subject' }
+    // A meeting recorded in pieces names each piece (owner chose, 2-oct-2026).
+    const part = recording.meetingPart && recording.meetingPart.total > 1
+      ? ` · part ${recording.meetingPart.index} of ${recording.meetingPart.total}`
+      : ''
+    return { primaryText: `${officialMeetingSubject}${part}`, source: 'meeting-subject' }
   }
 
   const userTitle = realTitle(recording.userTitle, recording.filename)
