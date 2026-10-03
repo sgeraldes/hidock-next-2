@@ -18,6 +18,14 @@ Outlook, and every speaker the app names now keeps a note of how it was named.
   saying their own name, by the voice, by Jev, by the meeting roster or by the microphone of a live
   recording now stores that source and how sure it was. Speakers named before today keep an empty
   source.
+- **Older recordings get their voices measured.** Recordings transcribed before voices were measured
+  now get them without being transcribed again, one at a time and at low priority, starting with the
+  meetings that have the fewest speakers. By default this runs at night, from 01:00 to 07:00; Settings >
+  Speakers & voices can move it to the background or turn it off, and it always waits while a
+  recording is transcribed. When the transcript's timing is sound, each voice is matched to the
+  transcript's speaker, so a voice you already named names that speaker too. The same block shows how
+  many recordings have voices, the last problem, and a "Measure one recording" button that times one
+  recording and estimates how long the rest would take.
 
 ## 2026-10-02 | Columns that stay put, and meetings that follow the calendar
 

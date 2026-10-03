@@ -47,6 +47,7 @@ import { registerBrainsHandlers } from './brains-handlers'
 import { registerPipelineHandlers } from './pipeline-handlers'
 import { registerHandoverHandlers } from './handover-handlers'
 import { registerValueBackfillHandlers } from './value-backfill-handlers'
+import { registerVoiceBackfillHandlers } from './voice-backfill-handlers'
 import { ipcMain } from 'electron'
 import { installFeatureGate } from '../services/feature-gate'
 
@@ -115,6 +116,7 @@ export function registerIpcHandlers(): void {
   registerPipelineHandlers()
   registerHandoverHandlers()
   registerValueBackfillHandlers()
+  registerVoiceBackfillHandlers()
 
   console.log('All IPC handlers registered')
 }

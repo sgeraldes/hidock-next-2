@@ -17,6 +17,7 @@ import { getBrainCredentialStore } from './brains/brain-credential-store'
 import type { FeaturesConfig } from '../../../src/shared/feature-registry'
 import { DEFAULT_FEATURES_CONFIG } from '../../../src/shared/feature-registry'
 import { emptyPipelineConfig, type PipelineConfig } from '../../../src/shared/pipeline-config'
+import { DEFAULT_VOICE_BACKFILL, type VoiceBackfillConfig } from '../../../src/shared/voice-backfill-schedule'
 import { applyRagSettings } from './rag-settings'
 import { applyQualityRules } from './quality-rules'
 import { DEFAULT_QUALITY_RULES, type QualityConfig } from './quality-rules'
@@ -192,6 +193,12 @@ export interface AppConfig {
      * the behaviour from before 24-sep-2026: the Model Host when paired, else here.
      */
     speakerEngine?: 'auto' | 'pyannote-local' | 'onnx-local' | 'signatures-from-turns' | 'model-host' | 'pyannoteai' | 'off'
+    /**
+     * Voice evidence for recordings transcribed before voices were measured (voice-backfill.ts).
+     * 'night' runs only between windowStart and windowEnd (local "HH:MM", may cross midnight),
+     * 'background' whenever nothing heavier runs, 'off' never. Where it runs is speakerEngine.
+     */
+    voiceBackfill?: VoiceBackfillConfig
     /** GPU fingerprint when the owner last confirmed the Speaker setup; a change reopens it. */
     speakerSetupFingerprint?: string
     /** When the owner last confirmed the Speaker setup (ISO). */
@@ -394,6 +401,7 @@ const DEFAULT_CONFIG: AppConfig = {
     modelHostToken: '',
     jevApiKey: '',
     speakerEngine: 'auto',
+    voiceBackfill: { ...DEFAULT_VOICE_BACKFILL },
     speakerSetupFingerprint: '',
     speakerSetupAt: '',
     speakerSetupDismissedFingerprint: '',

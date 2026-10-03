@@ -42,6 +42,7 @@ import { setMainWindowForValueBackfill } from './services/value-backfill'
 import { acquireSingleInstanceLock } from './single-instance'
 import { logWindow } from './services/error-log'
 import { startBootScheduler } from './services/boot-scheduler'
+import { startVoiceBackfill, stopVoiceBackfill } from './services/voice-backfill'
 import { registerGatedBootTasks } from './services/boot-tasks'
 import { isFeatureEnabled, captureBootEffectiveFeatures, getBootEffectiveFeatures } from './services/feature-gate'
 import { FEATURES, type FeatureId } from '../../src/shared/feature-registry'
@@ -442,6 +443,9 @@ app.whenReady().then(async () => {
     void reveal.then((reason) => {
       if (!reason) return
       startBootScheduler().catch((e) => console.error('[BootScheduler] error:', e))
+      // Voice evidence for older recordings (spec 2026-10-03, 1b): looks every two minutes,
+      // and each look waits for the boot tasks, a transcription, the value scan and its window.
+      if (isFeatureEnabled('transcription')) startVoiceBackfill()
     })
   }
 
@@ -483,6 +487,7 @@ app.on('before-quit', (event) => {
   finishLiveRecording() // a stream still playing is saved; the next start imports it
   stopRecordingWatcher()
   stopTranscriptionProcessor()
+  stopVoiceBackfill()
   void (async () => {
     let releaseTimer: NodeJS.Timeout | undefined
     try {
