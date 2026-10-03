@@ -1,8 +1,10 @@
 import { createRequire } from "module";
+import { defineConfig } from "eslint/config";
+import eslintReact from "@eslint-react/eslint-plugin";
+import localRules from "./eslint-local-rules.mjs";
 
 const require = createRequire(import.meta.url);
-const { configs, config } = require("@electron-toolkit/eslint-config-ts");
-const reactPlugin = require("eslint-plugin-react");
+const { configs } = require("@electron-toolkit/eslint-config-ts");
 
 // rules-of-hooks is the one correctness rule this gate most needs (a real
 // hooks-order crash happened in this codebase). It lives in
@@ -28,7 +30,9 @@ const reactHooksConfig = reactHooksPlugin
     ]
   : [];
 
-export default config(
+// defineConfig comes from ESLint itself; typescript-eslint 8.70 deprecated the
+// `config()` helper that @electron-toolkit/eslint-config-ts re-exports.
+export default defineConfig(
   // Base: @eslint/js recommended + typescript-eslint recommended (NOT
   // type-checked — keeps the gate fast) + browser/node globals.
   ...configs.recommended,
@@ -56,21 +60,57 @@ export default config(
   },
 
   // Renderer (React) — src/**
+  //
+  // These are the rules eslint-plugin-react's recommended set enabled, carried
+  // over one by one to @eslint-react (eslint-plugin-react stops at ESLint 9.7).
+  // The set is deliberately not @eslint-react's own recommended preset, which
+  // adds dozens of rules the old gate never had. Recommended rules with no
+  // @eslint-react counterpart are covered by tsc (jsx-no-duplicate-props,
+  // jsx-no-undef, no-is-mounted: `npm run typecheck` reports all three), by the
+  // scope analysis of ESLint and typescript-eslint (jsx-uses-vars), or by
+  // eslint-local-rules.mjs (require-render-return, no-string-refs,
+  // no-unescaped-entities, the react-dom part of no-deprecated). tsc misses
+  // require-render-return because ReactNode includes undefined. The old
+  // react-in-jsx-scope, jsx-uses-react and prop-types were off and stay gone.
   {
     files: ["src/**/*.{ts,tsx,js,jsx}"],
-    ...reactPlugin.configs.flat.recommended,
-    settings: { react: { version: "detect" } },
+    plugins: { "@eslint-react": eslintReact, "hidock-local": localRules },
+    settings: { "react-x": { version: "detect" } },
     rules: {
-      ...reactPlugin.configs.flat.recommended.rules,
-      // New JSX transform (React 18) — no need to import React in scope.
-      "react/react-in-jsx-scope": "off",
-      "react/jsx-uses-react": "off",
-      // TypeScript handles prop typing.
-      "react/prop-types": "off",
+      // react/jsx-key
+      "@eslint-react/no-missing-key": "error",
+      // react/jsx-no-comment-textnodes
+      "@eslint-react/jsx-no-comment-textnodes": "error",
+      // react/jsx-no-target-blank
+      "@eslint-react/dom-no-unsafe-target-blank": "error",
+      // react/no-children-prop
+      "@eslint-react/jsx-no-children-prop": "error",
+      // react/no-danger-with-children
+      "@eslint-react/dom-no-dangerously-set-innerhtml-with-children": "error",
+      // react/no-deprecated
+      "@eslint-react/dom-no-render": "error",
+      "@eslint-react/dom-no-hydrate": "error",
+      "@eslint-react/no-component-will-mount": "error",
+      "@eslint-react/no-component-will-receive-props": "error",
+      "@eslint-react/no-component-will-update": "error",
+      "hidock-local/no-deprecated-react-dom": "error",
+      // react/no-direct-mutation-state
+      "@eslint-react/no-direct-mutation-state": "error",
+      // react/no-find-dom-node
+      "@eslint-react/dom-no-find-dom-node": "error",
+      // react/no-render-return-value
+      "@eslint-react/dom-no-render-return-value": "error",
+      // react/no-string-refs
+      "hidock-local/no-string-refs": "error",
+      // react/require-render-return
+      "hidock-local/require-render-return": "error",
       // Low-signal stylistic rules downgraded to warnings.
-      "react/no-unescaped-entities": "warn",
-      "react/display-name": "warn",
-      "react/no-unknown-property": "warn",
+      // react/no-unescaped-entities
+      "hidock-local/no-unescaped-entities": "warn",
+      // react/display-name
+      "@eslint-react/no-missing-component-display-name": "warn",
+      // react/no-unknown-property
+      "@eslint-react/dom-no-unknown-property": "warn",
     },
   },
 

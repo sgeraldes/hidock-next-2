@@ -112,7 +112,7 @@ export function parseGitLog(stdout: string): RawCommit[] {
 
 /** Today's commits for a single already-resolved repo root, newest first. */
 async function commitsForRepo(root: string, branch: string, now: Date): Promise<TodayCommit[]> {
-  let stdout = ''
+  let stdout: string
   try {
     stdout = await runGit(root, [
       'log',

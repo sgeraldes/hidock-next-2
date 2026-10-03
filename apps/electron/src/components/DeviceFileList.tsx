@@ -222,7 +222,7 @@ export function DeviceFileList({ recordings, syncedFilenames: _syncedFilenames, 
   const sortedRecordings = useMemo(() => {
     const copy = [...deviceRecordings]
     copy.sort((a, b) => {
-      let cmp = 0
+      let cmp: number
       if (sortColumn === 'filename') {
         cmp = a.filename.localeCompare(b.filename)
       } else if (sortColumn === 'size') {

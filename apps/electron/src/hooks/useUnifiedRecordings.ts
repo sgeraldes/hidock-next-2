@@ -791,10 +791,7 @@ export function useUnifiedRecordings(): UseUnifiedRecordingsResult {
     } catch (e) {
       console.error('[useUnifiedRecordings] Error loading recordings:', e)
       setError(e instanceof Error ? e.message : 'Failed to load recordings')
-      if (!decremented) {
-        decrementLoading()
-        decremented = true
-      }
+      if (!decremented) decrementLoading()
     } finally {
       loadingRef.current = false
       if (pendingForceRefreshRef.current) {

@@ -43,7 +43,7 @@ export function registerAudioCheckHandlers(): void {
     if (!parsed.success) return error('VALIDATION_ERROR', 'Invalid recording id')
     const row = getAudioProfile(parsed.data)
     if (!row) return success(null)
-    let ranges: { start: number; end: number }[] = []
+    let ranges: { start: number; end: number }[]
     try {
       ranges = row.ranges_json ? JSON.parse(row.ranges_json) : []
     } catch {

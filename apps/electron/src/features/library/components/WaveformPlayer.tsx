@@ -339,7 +339,7 @@ export function WaveformPlayer({
     (e: React.KeyboardEvent<HTMLDivElement>) => {
       if (pb.liveDuration <= 0) return
       const STEP = 5
-      let next: number | null = null
+      let next: number
       switch (e.key) {
         case 'ArrowLeft':
         case 'ArrowDown':

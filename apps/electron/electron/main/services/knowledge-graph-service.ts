@@ -2470,7 +2470,7 @@ export function getNodeDetail(entityId: string): NodeDetailDTO {
   // subgraph — NOT the raw store (nodeGraphStats), which would count excluded
   // (personal/deleted/value-excluded/legacy-zero-provenance) neighbors and edges.
   const stats = exclusionFilteredNodeStats(store, nodeId, exclusion)
-  let narrative = ''
+  let narrative: string
   try {
     // RE4-1 / ADV31-3 (round-33): the narrative embeds neighbor meeting/person
     // LABELS. Derive it from the SAME exclusion-suppressed subgraph the stats use,
@@ -3230,7 +3230,7 @@ export function acceptIdentitySuggestionWithGraph(id: string): AcceptSuggestionR
   if (!s) throw new Error(`Identity suggestion ${id} not found`)
   if (isVoiceConflictSuggestion(s)) throw new Error(VOICE_CONFLICT_REFUSAL)
 
-  let evidence: { loserId?: string } = {}
+  let evidence: { loserId?: string }
   try {
     evidence = s.evidence ? (JSON.parse(s.evidence) as { loserId?: string }) : {}
   } catch {

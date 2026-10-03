@@ -130,7 +130,7 @@ async function pollRecordingOnce(): Promise<void> {
   // Do NOT interleave with an in-flight transfer / scan on the USB bus.
   if (device.isOperationInProgress() || getActiveTransferFilename() !== null) return
 
-  let result: { recording: string | null } | null = null
+  let result: { recording: string | null } | null
   try {
     result = await serializeDeviceOperation(() => device.getRecordingFile())
   } catch {
@@ -240,7 +240,7 @@ function startLiveRecording(): void {
 
 /** Close the live file, if one is open. Every way a stream ends comes through here, quitting included. */
 export function finishLiveRecording(): void {
-  let result: RecorderResult | null = null
+  let result: RecorderResult | null
   try {
     result = liveRecorder.finish()
   } catch (err) {

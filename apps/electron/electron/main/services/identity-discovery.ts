@@ -875,7 +875,7 @@ function makeRoleRecomputer(): (
   const cache = new Map<string, ContactRoleRow | null>()
   const fetchContact = (id: string): ContactRoleRow | null => {
     if (cache.has(id)) return cache.get(id) ?? null
-    let row: ContactRoleRow | null = null
+    let row: ContactRoleRow | null
     try {
       row =
         queryOne<ContactRoleRow>(
@@ -1167,7 +1167,7 @@ export function filterSuggestionsForNonOwnerDisplay(suggestions: IdentitySuggest
   const contactIds = new Set<string>()
   const projectIds = new Set<string>()
   const resolved = suggestions.map((s) => {
-    let ev: SuggestionEvidence = {}
+    let ev: SuggestionEvidence
     try {
       ev = s.evidence ? (JSON.parse(s.evidence) as SuggestionEvidence) : {}
     } catch {

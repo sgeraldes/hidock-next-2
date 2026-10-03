@@ -89,7 +89,8 @@ function encryptSensitive(value: string): string {
     return '__enc__' + safeStorage.encryptString(value).toString('base64')
   } catch (err) {
     throw new Error(
-      `The key or token could not be encrypted, so it was not saved: ${err instanceof Error ? err.message : String(err)}`
+      `The key or token could not be encrypted, so it was not saved: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err }
     )
   }
 }
@@ -714,7 +715,7 @@ export async function saveConfig(newConfig: Partial<AppConfig>): Promise<void> {
   // Capture the credential store's PRIOR gemini key so that, if the config.json
   // write fails AFTER the store write already committed a key change, we can
   // restore the store to exactly what it held before this save.
-  let priorStoreValue: string | null = null
+  let priorStoreValue: string | null
   try {
     priorStoreValue = getBrainCredentialStore().getSecret('gemini-api', 'apiKey')
   } catch {

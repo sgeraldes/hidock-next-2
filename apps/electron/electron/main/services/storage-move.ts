@@ -154,7 +154,7 @@ export async function planMove(folder: MovableFolder | 'data', to: string, ownLo
     blocker = err instanceof Error ? err.message : String(err)
   }
 
-  let targetFreeBytes: number | null = null
+  let targetFreeBytes: number | null
   let targetHasFiles = false
   try {
     const probe = existsSync(target) ? target : dirname(target)

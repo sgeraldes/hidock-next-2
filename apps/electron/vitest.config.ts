@@ -66,6 +66,16 @@ export default defineConfig({
       {
         extends: true,
         test: {
+          // The lint gate's own rules (eslint-local-rules.mjs), run with
+          // ESLint's RuleTester. Plain Node: no DOM, no database.
+          name: 'eslint-rules',
+          environment: 'node',
+          include: ['eslint-local-rules.test.mjs']
+        }
+      },
+      {
+        extends: true,
+        test: {
           name: 'native-binding',
           include: ['electron/**/__tests__/**/*.smoke.test.ts'],
           setupFiles: ['./src/test/setup.ts']

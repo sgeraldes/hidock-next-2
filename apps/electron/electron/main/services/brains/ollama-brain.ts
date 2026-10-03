@@ -51,7 +51,7 @@ export class OllamaBrain implements AIBrain {
   }
 
   async authStatus(): Promise<BrainAuthStatus> {
-    let available = false
+    let available: boolean
     try {
       available = await getOllamaService().isAvailable()
     } catch {

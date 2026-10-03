@@ -7714,7 +7714,7 @@ export function refreshTranscriptIntegrity(transcriptId: string): TranscriptInte
   )
   if (!row) return null
   const integrity = assessTranscriptIntegrity(row.speakers, integrityAudioSeconds(row.recording_id))
-  let previous: Parameters<typeof integrityProblemsKey>[0] = null
+  let previous: Parameters<typeof integrityProblemsKey>[0]
   try {
     previous = row.integrity_json ? JSON.parse(row.integrity_json) : null
   } catch {
@@ -12465,7 +12465,7 @@ export function supersedeSuggestionsForMergedLoser(
   )
   let superseded = 0
   for (const s of pending) {
-    let ev: Record<string, unknown> = {}
+    let ev: Record<string, unknown>
     try {
       ev = s.evidence ? (JSON.parse(s.evidence) as Record<string, unknown>) : {}
     } catch {
@@ -12503,7 +12503,7 @@ export function supersedeOrphanedSuggestions(kind?: 'person' | 'project'): numbe
     for (const s of pending) {
       const table = s.kind === 'person' ? 'contacts' : 'projects'
       if (queryOne<{ id: string }>(`SELECT id FROM ${table} WHERE id = ?`, [s.target_id])) continue
-      let ev: Record<string, unknown> = {}
+      let ev: Record<string, unknown>
       try {
         ev = s.evidence ? (JSON.parse(s.evidence) as Record<string, unknown>) : {}
       } catch {
@@ -12794,7 +12794,7 @@ function buildBucketResolution(
       meetingIds
     )) {
       const hasOrganizer = !!(row.organizer_email && row.organizer_email.trim())
-      let hasAttendees = false
+      let hasAttendees: boolean
       try {
         const parsed = row.attendees ? (JSON.parse(row.attendees) as unknown[]) : []
         hasAttendees = Array.isArray(parsed) && parsed.length > 0
@@ -13958,7 +13958,7 @@ export function getRecordingMeetingMatch(recordingId: string, version: number): 
     input_tokens: number | null
   }>('SELECT * FROM recording_meeting_matches WHERE recording_id = ? AND version = ?', [recordingId, version])
   if (!row) return null
-  let probabilities: Record<string, number> = {}
+  let probabilities: Record<string, number>
   try {
     probabilities = JSON.parse(row.probabilities_json) as Record<string, number>
   } catch {

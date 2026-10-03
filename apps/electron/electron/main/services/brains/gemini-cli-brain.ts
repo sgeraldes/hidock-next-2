@@ -157,7 +157,7 @@ export class GeminiCliBrain implements AIBrain {
     }
 
     // Presence probe — the CLI can be authed via OAuth even without a key.
-    let cliPresent = false
+    let cliPresent: boolean
     let version = 'installed'
     try {
       const res = await runCli('gemini', ['--version'], { timeoutMs: VERSION_TIMEOUT_MS, env: this.env }, this.spawn)

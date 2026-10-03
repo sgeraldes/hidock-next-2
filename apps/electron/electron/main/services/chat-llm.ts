@@ -58,7 +58,7 @@ class ChatLLMService {
   async getStatus(): Promise<ChatBackendStatus> {
     const geminiConfigured = !!this.geminiKey()
 
-    let ollamaAvailable = false
+    let ollamaAvailable: boolean
     try {
       ollamaAvailable = await getOllamaService().isAvailable()
     } catch {

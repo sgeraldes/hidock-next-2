@@ -48,7 +48,7 @@ export async function folderSize(root: string, exclude: string[] = []): Promise<
       // A folder that does not exist yet holds nothing; anything else (a
       // disconnected drive, no permission) is not a measurement.
       if (dir === root && (err as NodeJS.ErrnoException)?.code === 'ENOENT') return { bytes: 0, files: 0 }
-      throw new Error(`Cannot read ${dir}: ${err instanceof Error ? err.message : String(err)}`)
+      throw new Error(`Cannot read ${dir}: ${err instanceof Error ? err.message : String(err)}`, { cause: err })
     }
     for (const entry of entries) {
       const full = join(dir, entry.name)
