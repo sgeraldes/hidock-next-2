@@ -17,6 +17,7 @@ import type { FeatureId } from '../../../src/shared/feature-registry'
 import { markVectorStartupQueued } from './vector-startup-state'
 import { getIntegrityService } from './integrity-service'
 import { reconcileOrganizationYielding } from './org-reconciler'
+import { runVoiceLearning } from './voice-learning'
 import { backfillKnowledgeCaptures } from './knowledge-capture-backfill'
 import { backfillAudioProfiles } from './audio-profile-store'
 import { getQueueState, startTranscriptionProcessor } from './transcription'
@@ -94,6 +95,12 @@ export const BOOT_TASK_DEFS: GatedBootTask[] = [
         await reconcileOrganizationYielding()
       } catch (e) {
         console.error('[OrgReconciler] error:', e)
+      }
+      // Learn voices once the attendees are in place (spec 2026-10-03, Phase 2).
+      try {
+        await runVoiceLearning()
+      } catch (e) {
+        console.error('[VoiceLearning] error:', e)
       }
     },
   },

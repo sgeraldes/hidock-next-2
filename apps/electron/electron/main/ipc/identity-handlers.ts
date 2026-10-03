@@ -13,6 +13,8 @@ import { z } from 'zod'
 import {
   getIdentitySuggestions,
   getIdentitySuggestionById,
+  isVoiceConflictSuggestion,
+  VOICE_CONFLICT_REFUSAL,
   rejectIdentitySuggestion,
   supersedeOrphanedSuggestions,
   getMergeJournal,
@@ -86,7 +88,11 @@ export function registerIdentityHandlers(): void {
       // discovery straggler pairing an excluded-only ENTITY never surfaces its name
       // on Today / the People-Projects merge queue (whose entity LISTS already
       // suppress it). The accept path is gated separately on evidence, not here.
-      const surfaced = revalidateSuggestionsForSurfacing(getIdentitySuggestions(status))
+      // Voice conflicts (voice-learning, spec 2026-10-03 2d) are not name pairings: this
+      // page's accept and reject would write their key as an alias. They stay out until
+      // they get their own review.
+      const listed = getIdentitySuggestions(status).filter((s) => !isVoiceConflictSuggestion(s))
+      const surfaced = revalidateSuggestionsForSurfacing(listed)
       return success(filterSuggestionsForNonOwnerDisplay(surfaced))
     } catch (err) {
       console.error('identity:getSuggestions error:', err)
@@ -115,6 +121,9 @@ export function registerIdentityHandlers(): void {
       if (!row) {
         return error('NOT_FOUND', 'Identity suggestion not found')
       }
+      if (isVoiceConflictSuggestion(row)) {
+        return error('VOICE_CONFLICT', VOICE_CONFLICT_REFUSAL)
+      }
       if (!isSuggestionEligibleForAccept(row)) {
         return error(
           'SUGGESTION_STALE',
@@ -141,6 +150,10 @@ export function registerIdentityHandlers(): void {
       const parsed = IdSchema.safeParse(id)
       if (!parsed.success) {
         return error('VALIDATION_ERROR', 'Invalid suggestion id', parsed.error.format())
+      }
+      const row = getIdentitySuggestionById(parsed.data)
+      if (row && isVoiceConflictSuggestion(row)) {
+        return error('VOICE_CONFLICT', VOICE_CONFLICT_REFUSAL)
       }
       return success(rejectIdentitySuggestion(parsed.data))
     } catch (err) {

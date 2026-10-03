@@ -70,6 +70,8 @@ import {
   getMergeImpact,
   getIdentitySuggestionById,
   acceptIdentitySuggestion,
+  isVoiceConflictSuggestion,
+  VOICE_CONFLICT_REFUSAL,
   mergeJournalIdsFor,
   finalizeAcceptedMerge,
   captureLoserSubgraph,
@@ -3226,6 +3228,7 @@ export function mergeProjectsWithGraph(keeperProjectId: string, loserProjectId: 
 export function acceptIdentitySuggestionWithGraph(id: string): AcceptSuggestionResult {
   const s = getIdentitySuggestionById(id)
   if (!s) throw new Error(`Identity suggestion ${id} not found`)
+  if (isVoiceConflictSuggestion(s)) throw new Error(VOICE_CONFLICT_REFUSAL)
 
   let evidence: { loserId?: string } = {}
   try {

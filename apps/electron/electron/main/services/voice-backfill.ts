@@ -28,6 +28,7 @@ import {
 } from './speaker-linking'
 import { resolveSpeakerEngine } from './speaker-engines'
 import { getActiveTranscriptions } from './transcription-activity'
+import { runVoiceLearning } from './voice-learning'
 import {
   DEFAULT_VOICE_BACKFILL,
   type VoiceBackfillConfig,
@@ -68,6 +69,8 @@ export interface VoiceBackfillDeps {
   isBootDrainActive?: () => boolean
   runPreflight?: typeof runSpeakerLinkingPreflight
   emit?: (payload: VoiceBackfillProgress) => void
+  /** Voice learning (voice-learning.ts), run after a recording gets its voices. */
+  learnVoices?: () => Promise<unknown>
 }
 
 export interface VoiceBackfillProgress {
@@ -332,14 +335,17 @@ interface ResolvedDeps {
   isBootDrainActive: () => boolean
   runPreflight: typeof runSpeakerLinkingPreflight
   emit: (payload: VoiceBackfillProgress) => void
+  learnVoices: () => Promise<unknown>
 }
 
 /** The value scan and the boot scheduler are loaded only when the job really asks them. */
 async function resolveDeps(deps: VoiceBackfillDeps): Promise<ResolvedDeps> {
+  const isTranscribing = deps.isTranscribing ?? (() => getActiveTranscriptions().length > 0)
   return {
     now: deps.now ?? (() => new Date()),
     clock: deps.clock ?? (() => Date.now()),
-    isTranscribing: deps.isTranscribing ?? (() => getActiveTranscriptions().length > 0),
+    isTranscribing,
+    learnVoices: deps.learnVoices ?? (() => runVoiceLearning({ isTranscribing })),
     isValueBackfillRunning: deps.isValueBackfillRunning ?? (await import('./value-backfill')).isValueBackfillRunning,
     isBootDrainActive: deps.isBootDrainActive ?? (await import('./boot-scheduler')).isBootDrainActive,
     runPreflight: deps.runPreflight ?? runSpeakerLinkingPreflight,
@@ -416,6 +422,15 @@ async function processRecording(
     d.emit({ recordingId: next.recordingId, outcome: processed.outcome, ...countLibrary() })
   } catch (e) {
     console.warn('[VoiceBackfill] could not announce progress:', e)
+  }
+  if (processed.outcome === 'done') {
+    // New voices can teach who someone is (spec 2026-10-03, Phase 2). A failure there is not
+    // this recording's: its voices are stored either way.
+    try {
+      await d.learnVoices()
+    } catch (e) {
+      console.warn('[VoiceBackfill] voice learning failed:', e instanceof Error ? e.message : e)
+    }
   }
   return processed
 }

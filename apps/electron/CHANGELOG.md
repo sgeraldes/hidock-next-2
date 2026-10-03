@@ -26,6 +26,17 @@ Outlook, and every speaker the app names now keeps a note of how it was named.
   transcript's speaker, so a voice you already named names that speaker too. The same block shows how
   many recordings have voices, the last problem, and a "Measure one recording" button that times one
   recording and estimates how long the rest would take.
+- **The app learns voices from your meetings.** Your voice is learned from the microphone of a live
+  recording. In a meeting with only you and one other person, the other voice is that person. In a
+  bigger meeting where every voice but one is known and one guest has not been heard, the last voice
+  is that guest, once two recordings agree. Each voice learned names that person's speakers in your
+  other recordings. It runs after each recording gets its voices and once at startup, never while a
+  recording is transcribed, and every decision is recorded with its reason and the state before, so
+  it can be undone.
+- **A voice never overrides a speaker you named.** When a known voice disagrees with a speaker you
+  or a stronger signal named, the name stays and the disagreement is saved with both people. People
+  does not list these yet: they get their own review in a later update. When an automatic speaker
+  name is undone, no rule names that speaker after that person again.
 
 ## 2026-10-02 | Columns that stay put, and meetings that follow the calendar
 

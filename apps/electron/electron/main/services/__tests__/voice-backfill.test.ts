@@ -157,6 +157,7 @@ function deps(overrides: Partial<VoiceBackfillDeps> = {}): VoiceBackfillDeps {
     isValueBackfillRunning: () => false,
     isBootDrainActive: () => false,
     emit: vi.fn(),
+    learnVoices: vi.fn(async () => undefined),
     runPreflight: fakePreflight([{ local: 'SPEAKER_00', clusterId: 'aaaaaa00-0000', segments: [[0, 10]] }]),
     ...overrides
   }
@@ -437,6 +438,29 @@ describe('runVoiceBackfillOnce', () => {
       queryOne('SELECT contact_id, source FROM transcript_speakers WHERE recording_id = ? AND speaker_label = ?', ['r', 'Speaker 1'])
     ).toEqual({ contact_id: 'person', source: 'voice' })
     expect(emit).toHaveBeenCalledWith(expect.objectContaining({ recordingId: 'r', outcome: 'done', done: 1, remaining: 0 }))
+  })
+
+  it('learns voices after a recording gets its voices, and only then (spec 2026-10-03, Phase 2)', async () => {
+    seedRecording({ id: 'r1', duration: 60 })
+    seedRecording({ id: 'r2', duration: 120 })
+    seedRecording({ id: 'r3', duration: 180 })
+    const learnVoices = vi.fn(async () => undefined)
+
+    await runVoiceBackfillOnce(deps({ learnVoices }))
+    expect(learnVoices).toHaveBeenCalledTimes(1)
+
+    await runVoiceBackfillOnce(deps({ learnVoices, runPreflight: fakePreflight([]) }))
+    await runVoiceBackfillOnce(deps({ learnVoices, runPreflight: vi.fn().mockRejectedValue(new Error('boom')) }))
+    expect(learnVoices).toHaveBeenCalledTimes(1)
+  })
+
+  it('a failure while learning voices does not change the recording outcome', async () => {
+    seedRecording({ id: 'r' })
+    const learnVoices = vi.fn(async () => {
+      throw new Error('learning broke')
+    })
+    expect(await runVoiceBackfillOnce(deps({ learnVoices }))).toMatchObject({ outcome: 'done' })
+    expect(stateRow('r')?.status).toBe('done')
   })
 
   it('records a recording where no voice spoke long enough as skipped', async () => {

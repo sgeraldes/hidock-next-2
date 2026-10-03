@@ -34,7 +34,8 @@ vi.mock('../config', () => ({
 
 import { applyKnownVoiceBindings } from '../speaker-linking'
 import { consolidateVoiceIdentityForSpeaker } from '../voice-identity-consolidation'
-import { assignSpeaker, assignSpeakerFromHere, closeDatabase, initializeDatabase, queryOne, run } from '../database'
+import { assignSpeaker, assignSpeakerFromHere, closeDatabase, initializeDatabase, queryAll, queryOne, run } from '../database'
+import { listDecisions } from '../identity-decisions'
 
 function cleanup(): void {
   for (const suffix of ['', '-wal', '-shm']) {
@@ -104,6 +105,100 @@ describe('voice writers', () => {
     expect(applyKnownVoiceBindings('rec-2')).toBe(1)
 
     expect(provenance('rec-2', 'Voice AAAAAA')).toEqual({ contact_id: 'person', source: 'voice', confidence: 0.91 })
+  })
+
+  describe('when the speaker is already named after someone else (spec 2026-10-03, 2d)', () => {
+    beforeEach(() => {
+      run(`INSERT INTO contacts (id, name, type, first_seen_at, last_seen_at, source)
+           VALUES ('other', 'Bea Paz', 'unknown', '2026-10-01T10:00:00Z', '2026-10-01T10:00:00Z', 'user')`)
+      run(`INSERT INTO voice_clusters
+        (id, model, model_version, embedding_dimension, centroid_json, observation_count, total_speech_seconds, contact_id)
+        VALUES ('voice', 'community-1', '4.0.0', 3, '[1,0,0]', 2, 20, 'person')`)
+    })
+
+    const tie = (similarity: number | null) =>
+      run(`INSERT INTO recording_voice_clusters
+        (recording_id, local_speaker_label, transcript_speaker_label, voice_cluster_id, match_status, similarity)
+        VALUES ('rec-2', 'SPEAKER_00', 'Speaker 1', 'voice', 'matched', ?)`, [similarity])
+    const bound = (source: string | null) =>
+      run(`INSERT INTO transcript_speakers (id, recording_id, speaker_label, contact_id, source, confidence)
+           VALUES ('ts', 'rec-2', 'Speaker 1', 'other', ?, 0.7)`, [source])
+    const conflicts = () =>
+      queryAll<{ target_id: string; evidence: string; status: string; source_recording_ids: string | null }>(
+        "SELECT target_id, evidence, status, source_recording_ids FROM identity_suggestions WHERE json_extract(evidence, '$.type') = 'voice-conflict'"
+      )
+
+    it('replaces a lower-ranked source and journals the decision with the state before', () => {
+      tie(0.93)
+      bound('speaker-inference')
+
+      expect(applyKnownVoiceBindings('rec-2')).toBe(1)
+
+      expect(provenance('rec-2', 'Speaker 1')).toEqual({ contact_id: 'person', source: 'voice', confidence: 0.93 })
+      const decisions = listDecisions()
+      expect(decisions).toHaveLength(1)
+      expect(decisions[0]).toMatchObject({ kind: 'speaker', method: 'voice', contactId: 'person', subjectKey: 'recording:rec-2:speaker:Speaker 1' })
+      expect((decisions[0].before as { row: { contact_id: string } }).row.contact_id).toBe('other')
+      expect(conflicts()).toEqual([])
+    })
+
+    it('never replaces a manual speaker: one voice-conflict suggestion, not two', () => {
+      tie(0.93)
+      bound('manual')
+
+      expect(applyKnownVoiceBindings('rec-2')).toBe(0)
+      expect(applyKnownVoiceBindings('rec-2')).toBe(0)
+
+      expect(provenance('rec-2', 'Speaker 1')).toEqual({ contact_id: 'other', source: 'manual', confidence: 0.7 })
+      const rows = conflicts()
+      expect(rows).toHaveLength(1)
+      expect(rows[0]).toMatchObject({ target_id: 'person', status: 'pending', source_recording_ids: '["rec-2"]' })
+      expect(JSON.parse(rows[0].evidence)).toEqual({
+        type: 'voice-conflict',
+        recordingId: 'rec-2',
+        speakerLabel: 'Speaker 1',
+        voiceClusterId: 'voice',
+        similarity: 0.93,
+        voiceContactId: 'person',
+        voiceContactName: 'Ana Ruiz',
+        boundContactId: 'other',
+        boundContactName: 'Bea Paz',
+        boundSource: 'manual'
+      })
+    })
+
+    it('treats a binding with no source as possibly manual: a suggestion, never a replacement', () => {
+      tie(0.93)
+      bound(null)
+      applyKnownVoiceBindings('rec-2')
+      expect(provenance('rec-2', 'Speaker 1')!.contact_id).toBe('other')
+      expect(conflicts()).toHaveLength(1)
+    })
+
+    it('a higher-ranked source (self-identification) is kept and the conflict shown', () => {
+      tie(0.93)
+      bound('self-identification')
+      applyKnownVoiceBindings('rec-2')
+      expect(provenance('rec-2', 'Speaker 1')!.contact_id).toBe('other')
+      expect(conflicts()).toHaveLength(1)
+    })
+
+    it('a voice under 0.9 changes nothing and raises nothing', () => {
+      tie(0.8)
+      bound('speaker-inference')
+      expect(applyKnownVoiceBindings('rec-2')).toBe(0)
+      expect(provenance('rec-2', 'Speaker 1')!.contact_id).toBe('other')
+      expect(conflicts()).toEqual([])
+    })
+
+    it('the same person already named is left as it is', () => {
+      tie(0.93)
+      run(`INSERT INTO transcript_speakers (id, recording_id, speaker_label, contact_id, source, confidence)
+           VALUES ('ts', 'rec-2', 'Speaker 1', 'person', 'jev', 0.7)`)
+      expect(applyKnownVoiceBindings('rec-2')).toBe(0)
+      expect(provenance('rec-2', 'Speaker 1')).toEqual({ contact_id: 'person', source: 'jev', confidence: 0.7 })
+      expect(listDecisions()).toEqual([])
+    })
   })
 
   it('voice consolidation writes voice with the similarity that merged the cluster', () => {
