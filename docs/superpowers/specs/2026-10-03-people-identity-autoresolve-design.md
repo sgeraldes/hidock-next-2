@@ -1,6 +1,6 @@
 # People: identity questions that resolve themselves
 
-Owner request, 3-oct-2026. Status: design, waiting for the owner's approval.
+Owner request, 3-oct-2026. Status: approved by the owner on 3-oct-2026; built in five PRs (see Order of work).
 
 The People page asks the owner 834 identity questions ("'Sebas' appears in 280 recordings and may be
 Sebastian Geraldes, Sebas Giraldo"). Most of it was built before Outlook was connected. The goal is
