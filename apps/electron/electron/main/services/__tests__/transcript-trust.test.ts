@@ -34,6 +34,7 @@ import {
   insertTranscript,
   refreshTranscriptIntegrityForRecording,
   setTranscriptIntegrityAccepted,
+  backfillTranscriptIntegrity,
 } from '../database'
 import { isTranscriptUntrusted, syncTrustVerdicts, TRUST_REASON } from '../transcript-trust'
 import { applyCaptureValueClassification } from '../value-classification'
@@ -161,5 +162,48 @@ describe('transcript trust', () => {
     expect(rating('c-owned')).toMatchObject({ quality_rating: 'valuable', quality_source: 'user' })
     expect(rating('c-private')?.quality_rating).toBe('unrated')
     expect(rating('c-crackle')).toMatchObject({ quality_rating: 'garbage', quality_method: 'audio' })
+  })
+})
+
+describe('the library backfill and an old acceptance', () => {
+  it('clears an acceptance of a timing warning when the new rules find the text invented', async () => {
+    // Kiro review of #136: the owner accepted Rec02's "one cramped line" under
+    // the v2 rules; v3 finds text over noise. The acceptance covered the old
+    // problems only, so it must not keep the transcript trusted.
+    seedRecording('accepted-v2')
+    seedProfile('accepted-v2', 'noise', 3.74)
+    story('accepted-v2')
+    run(
+      `UPDATE transcripts SET integrity_status = 'suspect', integrity_version = 2,
+         integrity_json = '{"status":"suspect","issues":[{"code":"cramped_lines","count":1,"detail":""}]}',
+         integrity_accepted_at = '2026-09-30T10:00:00.000Z' WHERE recording_id = 'accepted-v2'`
+    )
+    await backfillTranscriptIntegrity()
+    const row = queryOne<{ integrity_status: string; integrity_accepted_at: string | null }>(
+      'SELECT integrity_status, integrity_accepted_at FROM transcripts WHERE recording_id = ?',
+      ['accepted-v2']
+    )
+    expect(row).toEqual({ integrity_status: 'broken', integrity_accepted_at: null })
+    expect(isTranscriptUntrusted('accepted-v2')).toBe(true)
+  })
+
+  it('keeps an acceptance when the new rules find the same problems', async () => {
+    seedRecording('accepted-same')
+    seedProfile('accepted-same', 'speech', 600)
+    insertTranscript({
+      id: 'trans_accepted-same', recording_id: 'accepted-same', full_text: 'a b', language: 'es',
+      speakers: JSON.stringify([{ speaker: 'A', start: 1, text: 'hola' }, { speaker: 'B', start: 1, text: 'chau' }]), word_count: 2,
+    })
+    const stored = queryOne<{ integrity_json: string }>('SELECT integrity_json FROM transcripts WHERE recording_id = ?', ['accepted-same'])
+    run(
+      `UPDATE transcripts SET integrity_version = 2, integrity_accepted_at = '2026-09-30T10:00:00.000Z' WHERE recording_id = 'accepted-same'`
+    )
+    expect(JSON.parse(stored!.integrity_json).status).toBe('suspect')
+    await backfillTranscriptIntegrity()
+    const row = queryOne<{ integrity_accepted_at: string | null }>(
+      'SELECT integrity_accepted_at FROM transcripts WHERE recording_id = ?',
+      ['accepted-same']
+    )
+    expect(row?.integrity_accepted_at).toBe('2026-09-30T10:00:00.000Z')
   })
 })

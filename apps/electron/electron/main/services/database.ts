@@ -7763,8 +7763,8 @@ export function refreshTranscriptIntegrityForRecording(recordingId: string): Tra
 
 /**
  * Check every transcript not yet checked under the current rules. Idempotent:
- * a transcript is read once per rule version. An acceptance survives, since
- * the text it covers has not changed.
+ * a transcript is read once per rule version. An acceptance survives when the
+ * rules find the same problems, and is cleared when they find new ones.
  */
 export async function backfillTranscriptIntegrity(
   options: { batchSize?: number } = {}
@@ -7776,8 +7776,8 @@ export async function backfillTranscriptIntegrity(
   const counts = { checked: 0, ok: 0, suspect: 0, broken: 0 }
   const seen = new Set<string>()
   for (;;) {
-    const rows = queryAll<{ id: string; recording_id: string; speakers: string | null }>(
-      `SELECT t.id, t.recording_id, t.speakers FROM transcripts t
+    const rows = queryAll<{ id: string; recording_id: string; speakers: string | null; integrity_json: string | null }>(
+      `SELECT t.id, t.recording_id, t.speakers, t.integrity_json FROM transcripts t
          JOIN recordings r ON r.id = t.recording_id
         WHERE r.deleted_at IS NULL
           AND (t.integrity_version IS NULL OR t.integrity_version < ?)
@@ -7795,9 +7795,20 @@ export async function backfillTranscriptIntegrity(
         integrityAudioSeconds(row.recording_id),
         integrityAudioProfile(row.recording_id)
       )
+      // An acceptance covers the problems it was given for. When the rules
+      // now find different ones (v3 judges the text against the audio), it is
+      // cleared, as refreshTranscriptIntegrity does (kiro review of #136).
+      let previous: Parameters<typeof integrityProblemsKey>[0]
+      try {
+        previous = row.integrity_json ? JSON.parse(row.integrity_json) : null
+      } catch {
+        previous = null
+      }
+      const sameProblems = previous !== null && integrityProblemsKey(previous) === integrityProblemsKey(integrity)
       runNoSave(
-        'UPDATE transcripts SET integrity_status = ?, integrity_json = ?, integrity_version = ? WHERE id = ?',
-        [integrity.status, JSON.stringify(integrity), INTEGRITY_VERSION, row.id]
+        `UPDATE transcripts SET integrity_status = ?, integrity_json = ?, integrity_version = ?,
+           integrity_accepted_at = CASE WHEN ? THEN integrity_accepted_at ELSE NULL END WHERE id = ?`,
+        [integrity.status, JSON.stringify(integrity), INTEGRITY_VERSION, sameProblems ? 1 : 0, row.id]
       )
       counts.checked++
       counts[integrity.status]++
