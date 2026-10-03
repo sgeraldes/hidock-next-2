@@ -22,6 +22,8 @@ export type KnownValueReason =
   // Set by the audio check, not by the model (recording checks, v59).
   | 'silent_audio'
   | 'noise_only'
+  // Set by the transcript trust check (3-oct-2026): the text cannot have come from this audio.
+  | 'transcript_untrusted'
 
 export const VALUE_REASON_LABELS: Record<KnownValueReason, string> = {
   personal_family: 'Personal / family',
@@ -30,7 +32,8 @@ export const VALUE_REASON_LABELS: Record<KnownValueReason, string> = {
   no_substance: 'No substance',
   off_topic_chatter: 'Off-topic chatter',
   silent_audio: 'Silent audio',
-  noise_only: 'Noise only'
+  noise_only: 'Noise only',
+  transcript_untrusted: 'Transcript does not match the audio'
 }
 
 function isKnownValueReason(reason: string): reason is KnownValueReason {

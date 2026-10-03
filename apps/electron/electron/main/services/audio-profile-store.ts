@@ -23,7 +23,7 @@
 import { existsSync, mkdirSync, statSync } from 'fs'
 import { readFile, writeFile } from 'fs/promises'
 import { join } from 'path'
-import { getRowsModified, queryAll, queryOne, run } from './database'
+import { getRowsModified, queryAll, queryOne, refreshTranscriptIntegrityForRecording, run } from './database'
 import { getCachePath } from './file-storage'
 import {
   AUDIO_PROFILE_VERSION,
@@ -32,6 +32,7 @@ import {
   type AudioProfile,
 } from './audio-profile'
 import { applyCaptureValueClassification, recomputeAudioWarnings, type ValueClassification } from './value-classification'
+import { syncTrustVerdicts } from './transcript-trust'
 
 export interface AudioProfileRow {
   recording_id: string
@@ -167,6 +168,14 @@ export async function profileRecording(
     ]
   )
   const capturesRated = applyAudioValueVerdict(recording.id, profile.category)
+  // The transcript is judged against this audio too (text over noise, more
+  // words than the sound holds), so a new profile checks it again.
+  try {
+    refreshTranscriptIntegrityForRecording(recording.id)
+    syncTrustVerdicts(recording.id)
+  } catch (error) {
+    console.warn(`[AudioProfile] ${recording.id}: transcript check failed: ${error instanceof Error ? error.message : error}`)
+  }
   return { recordingId: recording.id, profile, capturesRated }
 }
 

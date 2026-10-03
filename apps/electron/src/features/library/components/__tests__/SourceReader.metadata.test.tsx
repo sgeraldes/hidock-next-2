@@ -239,6 +239,18 @@ describe('SourceReader — metadata editing', () => {
     expect(screen.getByRole('heading', { name: 'Team Standup' })).toBeInTheDocument()
   })
 
+  it('does not show the summary of a transcript that does not match its audio, and says why', () => {
+    const rec = makeRecording({ transcriptionStatus: 'complete' })
+    render(<SourceReader recording={rec} transcript={{
+      id: 'tx-untrusted', recording_id: rec.id, full_text: 'Me engañó con mi mejor amiga.',
+      summary: 'Laura confiesa el crimen.', integrity_status: 'broken',
+      integrity_json: JSON.stringify({ issues: [{ code: 'text_over_noise', count: 1, detail: '' }] }),
+      integrity_accepted_at: null
+    } as any} />)
+    expect(screen.queryByText('Laura confiesa el crimen.')).not.toBeInTheDocument()
+    expect(screen.getByText('No summary: the transcript does not match the audio.')).toBeInTheDocument()
+  })
+
   it('renders stage-specific provider/tool provenance chips', async () => {
     vi.mocked(window.electronAPI.transcripts.getProcessingRuns).mockResolvedValueOnce({
       success: true,

@@ -851,6 +851,15 @@ export function registerRecordingHandlers(): void {
       // After the durations: the integrity check compares each transcript with
       // the audio's measured length, so it reads the lengths just settled.
       const integrity = await backfillTranscriptIntegrity()
+      // A transcript the check now calls broken rates its recording "no value",
+      // which keeps search, the graph and People away from it; an accepted or
+      // re-checked one gets the rating back. Library-wide and idempotent.
+      try {
+        const { syncTrustVerdicts } = await import('../services/transcript-trust')
+        syncTrustVerdicts()
+      } catch (err) {
+        console.warn('recordings:backfillDurations: transcript trust sync failed:', err)
+      }
       return {
         success: true,
         ...result,

@@ -187,7 +187,7 @@ export interface ApplyResult {
  *
  * 'user' still outranks both and is never overwritten.
  */
-export type CaptureRatingMethod = 'content' | 'duration' | 'audio'
+export type CaptureRatingMethod = 'content' | 'duration' | 'audio' | 'trust'
 
 /**
  * Methods whose rating comes from a measurement of the recording itself, not
@@ -195,9 +195,10 @@ export type CaptureRatingMethod = 'content' | 'duration' | 'audio'
  * is never replaced by an unmeasured one: until 3-oct-2026 a noise recording
  * rated "no value" by its audio could be rated "high" again by a model reading
  * the transcript the transcriber invented for it. The measurement that set it
- * takes it back itself when its evidence changes (clearAudioVerdict).
+ * takes it back itself when its evidence changes (clearAudioVerdict,
+ * syncTrustVerdicts).
  */
-export const MEASURED_RATING_METHODS: readonly CaptureRatingMethod[] = ['audio']
+export const MEASURED_RATING_METHODS: readonly CaptureRatingMethod[] = ['audio', 'trust']
 
 /**
  * Guarded, idempotent, never-downgrade, confidence-floored DB write. Writes

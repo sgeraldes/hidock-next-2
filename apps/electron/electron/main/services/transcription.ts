@@ -122,6 +122,7 @@ import {
   queryOne,
   queryAll,
   isValueExcludedRecording,
+  checkTranscriptIntegrity,
   isRecordingProcessable,
   isRecordingGraphIngestable,
   getFailedTranscriptsForReanalysis,
@@ -156,6 +157,7 @@ import { namingAllowed, parseAndAssessDiarization } from './diarization-quality'
 import { scheduleEvaluationCatchup } from './evaluation-catchup'
 import { analyzeAudioPreflight, type AudioPreflightReport } from './audio-preflight'
 import { audioProfileForTranscription } from './audio-profile-store'
+import { syncTrustVerdicts } from './transcript-trust'
 import { readAudioDuration } from './audio-duration'
 import { minRecordingSeconds, qualityRules } from './quality-rules'
 import { isAutomaticMeetingLinkTemporallyEligible } from './recording-match-scoring'
@@ -2561,7 +2563,24 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   }
 
   progressCallback?.('analyzing', 50) // spec-014: progress reporting
-  const hasGeminiAnalysis = !!resolveGeminiApiKey()
+  // Trust before analysis (owner, 3-oct-2026): Rec02's invented confession got
+  // a summary, actions and a title because the integrity check ran only when
+  // the transcript was stored, after the analysis. A transcript that cannot
+  // have come from this audio is stored without any of that; its recording is
+  // rated "no value" from trust below, which keeps every later step away.
+  // If the check itself cannot run, the transcript goes on as before; the same
+  // check runs again when it is stored and the trust sync follows from there.
+  let integrityNow: ReturnType<typeof checkTranscriptIntegrity> | null = null
+  try {
+    integrityNow = checkTranscriptIntegrity(recordingId, rawTranscript.speakers)
+  } catch (error) {
+    console.warn(
+      `[Transcription] ${recordingId}: trust check before analysis failed, analysing as usual: ` +
+        (error instanceof Error ? error.message : String(error))
+    )
+  }
+  const transcriptUntrusted = integrityNow?.status === 'broken'
+  const hasGeminiAnalysis = !!resolveGeminiApiKey() && !transcriptUntrusted
   const analysisProvider = hasGeminiAnalysis ? 'gemini' : 'hidock-next'
   const analysisModel = hasGeminiAnalysis ? (config.chat?.geminiModel || CURRENT_GEMINI_CHAT_MODEL) : null
   const summaryRun = createProcessingRun({
@@ -2578,13 +2597,28 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   // tokens and cost are recorded on the summary run only, so sums stay right.
   const summaryUsage = createGeminiUsageCollector()
   try {
-    analysis = await summaryUsage.run(() =>
-      analyzeTranscriptWithGemini(fullText, candidateMeetings, () => stillWanted(recordingId), recordingId)
-    )
-    completeProcessingRun(summaryRun.id, {
-      outputRefs: { summary: `trans_${recordingId}.summary` },
-      ...runUsageFields(summaryUsage.total())
-    })
+    if (transcriptUntrusted) {
+      analysis = {}
+      completeProcessingRun(summaryRun.id, {
+        status: 'cancelled',
+        outputRefs: {
+          skipped: 'transcript-untrusted',
+          findings: (integrityNow?.issues ?? []).map((issue) => issue.code)
+        }
+      })
+      console.log(
+        `[Transcription] ${recordingId}: transcript does not fit its audio ` +
+          `(${(integrityNow?.issues ?? []).map((issue) => issue.code).join(', ')}); no summary, title or analysis`
+      )
+    } else {
+      analysis = await summaryUsage.run(() =>
+        analyzeTranscriptWithGemini(fullText, candidateMeetings, () => stillWanted(recordingId), recordingId)
+      )
+      completeProcessingRun(summaryRun.id, {
+        outputRefs: { summary: `trans_${recordingId}.summary` },
+        ...runUsageFields(summaryUsage.total())
+      })
+    }
   } catch (error) {
     failProcessingRun(summaryRun.id, error instanceof Error ? error.message : String(error), false, runUsageFields(summaryUsage.total()))
     throw error
@@ -2785,7 +2819,16 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   // Only when the mapped rating is low-value/garbage (value was low/none) do
   // we emit capture:value-classified for T3's suggestion toast; high/normal
   // results (which leave the capture unrated) emit nothing.
-  if (captureId && config.transcription.valueClassificationEnabled !== false) {
+  if (transcriptUntrusted) {
+    // A measured verdict: rated "no value" from trust, which no model rating
+    // replaces and which value-excluded gates below (actions, timeline,
+    // naming, graph, search) all honour.
+    try {
+      syncTrustVerdicts(recordingId)
+    } catch (e) {
+      console.warn('[TranscriptTrust] rating failed (non-fatal):', e)
+    }
+  } else if (captureId && config.transcription.valueClassificationEnabled !== false) {
     try {
       // The stopwatch outranks the rubric at the bottom end (2026-09-22): a
       // recording too short to hold knowledge is worthless however confident
@@ -2865,6 +2908,11 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
       status: 'cancelled',
       outputRefs: { skipped: 'recording-ineligible' }
     })
+  } else if (transcriptUntrusted) {
+    // Gated on the verdict itself, not only on the rating it leads to: when
+    // the capture could not be created there is no rating to read (kiro
+    // review of #136).
+    completeProcessingRun(actionableRun.id, { status: 'cancelled', outputRefs: { skipped: 'transcript-untrusted', detected: 0 } })
   } else if (isValueExcludedRecording(recordingId)) {
     console.log(
       `[Actionable Detection] Skipped value-excluded recording ${recordingId} (no actionables extracted)`
@@ -2968,8 +3016,8 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   })
   const timelineUsage = createGeminiUsageCollector()
   try {
-    // RE-1 — re-check adjacent to the write.
-    if (stillProcessable()) {
+    // RE-1 — re-check adjacent to the write. An untrusted transcript gets no timeline.
+    if (stillProcessable() && !transcriptUntrusted) {
       // P2 (round-3) — also thread the gate INTO analyzeTimeline so its own
       // internal sentiment-LLM await is covered (re-checked before its UPDATE).
       const timeline = await timelineUsage.run(() =>
@@ -2989,7 +3037,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     } else {
       completeProcessingRun(timelineRun.id, {
         status: 'cancelled',
-        outputRefs: { skipped: 'recording-ineligible' }
+        outputRefs: { skipped: transcriptUntrusted ? 'transcript-untrusted' : 'recording-ineligible' }
       })
     }
   } catch (e) {
@@ -3066,7 +3114,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   const identityAllowed = namingAllowed(diarizationQuality)
   try {
     // RE-1 — re-check adjacent to the write.
-    if (stillProcessable() && identityAllowed) {
+    if (stillProcessable() && identityAllowed && !transcriptUntrusted) {
       // P2 (round-3) — thread the gate IN so self-id's own LLM await is covered
       // (its contacts/speaker-bindings/mention-resolutions/scan-marker writes
       // are all re-checked after the await).
@@ -3092,7 +3140,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   // context, written only when corroborated against a trusted roster. Runs
   // AFTER self-ID so only the remaining unbound labels are attempted.
   try {
-    if (stillProcessable() && identityAllowed) {
+    if (stillProcessable() && identityAllowed && !transcriptUntrusted) {
       const inferred = await runSpeakerInference(recordingId, {
         shouldPersist: () => isRecordingProcessable(recordingId)
       })
@@ -3150,7 +3198,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     const { getEventBus } = await import('./event-bus')
     // RE-1 — re-check AFTER the import await; the emit is synchronous, so this
     // fully closes the window (a purged recording never triggers graph ingest).
-    if (stillProcessable()) {
+    if (stillProcessable() && !transcriptUntrusted) {
       getEventBus().emitDomainEvent({
         type: 'entity:transcript-ready',
         timestamp: new Date().toISOString(),
@@ -3160,7 +3208,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     } else {
       completeProcessingRun(graphRun.id, {
         status: 'cancelled',
-        outputRefs: { skipped: 'recording-ineligible' }
+        outputRefs: { skipped: transcriptUntrusted ? 'transcript-untrusted' : 'recording-ineligible' }
       })
     }
   } catch (e) {
@@ -3203,7 +3251,8 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   // personal recording must not be indexed into the assistant's retrieval
   // store (the exclusion set filters SEARCH results, but not indexing new
   // ones for an in-flight transcription; skip it outright here).
-  if (stillProcessable()) {
+  // An untrusted transcript is not indexed for search either.
+  if (stillProcessable() && !transcriptUntrusted) {
     let embeddingProvider = 'not-configured'
     try {
       embeddingProvider = (await getEmbeddingsService().activeProviderId()) ?? 'not-configured'

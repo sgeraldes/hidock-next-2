@@ -16,6 +16,9 @@ export type IntegrityIssueCode =
   | 'past_audio_end'
   | 'too_many_words'
   | 'untimed_lines'
+  | 'text_over_noise'
+  | 'words_beyond_sound'
+  | 'repeated_text'
 
 export interface IntegrityIssue {
   code: IntegrityIssueCode
@@ -28,6 +31,9 @@ export type IntegrityLabel = 'ok' | 'suspect' | 'broken' | 'accepted' | 'uncheck
 
 /** Short tag names, one per finding. */
 export const ISSUE_TAGS: Record<IntegrityIssueCode, string> = {
+  text_over_noise: 'Text over noise',
+  words_beyond_sound: 'More words than sound',
+  repeated_text: 'Looping text',
   too_many_words: 'Text does not fit the audio',
   past_audio_end: 'Runs past the audio',
   repeated_start: 'Repeated times',
@@ -37,6 +43,9 @@ export const ISSUE_TAGS: Record<IntegrityIssueCode, string> = {
 }
 
 export const ISSUE_ORDER: IntegrityIssueCode[] = [
+  'text_over_noise',
+  'words_beyond_sound',
+  'repeated_text',
   'too_many_words',
   'past_audio_end',
   'repeated_start',
@@ -54,6 +63,30 @@ export function integrityLabel(transcript: IntegrityFields | null | undefined): 
   if (transcript?.integrity_accepted_at) return 'accepted'
   return status === 'broken' ? 'broken' : 'suspect'
 }
+
+/**
+ * Whether anything may be built on this transcript (summary, actions, search).
+ * Mirrors isTranscriptUntrusted in the main process: broken and not accepted
+ * by the owner means untrusted. An unchecked transcript is trusted.
+ */
+export function isTranscriptTrusted(transcript: IntegrityFields | null | undefined): boolean {
+  return integrityLabel(transcript) !== 'broken'
+}
+
+type TrustFields = Partial<IntegrityFields>
+
+/**
+ * The summary to show, or null when there is none or the transcript is not
+ * trusted: a summary of text the transcriber invented is itself invented.
+ */
+export function trustedSummary(transcript: (TrustFields & { summary?: string | null }) | null | undefined): string | null {
+  const summary = transcript?.summary?.trim()
+  if (!summary) return null
+  return isTranscriptTrusted(transcript as IntegrityFields) ? summary : null
+}
+
+/** Shown where a summary would be, when the transcript is not trusted. */
+export const UNTRUSTED_SUMMARY_NOTE = 'No summary: the transcript does not match the audio.'
 
 export function integrityIssues(transcript: IntegrityFields | null | undefined): IntegrityIssue[] {
   if (!transcript?.integrity_json) return []
