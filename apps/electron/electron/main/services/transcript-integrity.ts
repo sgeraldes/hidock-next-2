@@ -40,6 +40,9 @@ export type IntegrityIssueCode =
   | 'past_audio_end'
   | 'too_many_words'
   | 'untimed_lines'
+  | 'text_over_noise'
+  | 'words_beyond_sound'
+  | 'repeated_text'
 
 export interface IntegrityIssue {
   code: IntegrityIssueCode
@@ -61,13 +64,78 @@ export interface TranscriptIntegrity {
   lines: number
 }
 
-/** Bumped when the rules change, so stored results are recomputed. 2: edits saved before 28-sep-2026 were never checked again. */
-export const INTEGRITY_VERSION = 2
+/**
+ * Bumped when the rules change, so stored results are recomputed. 2: edits saved
+ * before 28-sep-2026 were never checked again. 3: the transcript is judged
+ * against the audio profile too (3-oct-2026).
+ */
+export const INTEGRITY_VERSION = 3
 
 /** Above this over a whole recording, the text does not fit in the audio. */
 export const MAX_WORDS_PER_AUDIO_SECOND = IMPOSSIBLE_WORDS_PER_SECOND
 /** Slack for a last line that ends a little after the audio does. */
 export const PAST_END_TOLERANCE_SECONDS = 2
+
+/**
+ * What the audio profile (audio-profile-store.ts) says about the recording:
+ * its category and how many seconds of it hold sound above the loudness line.
+ */
+export interface IntegrityAudio {
+  category: string
+  soundSeconds: number | null
+}
+
+/** Words a transcript may hold over silent or noise-only audio: a cough read as "sí", not a story. */
+export const MAX_WORDS_OVER_NOISE = 19
+/**
+ * Over this many words per second of measured sound, the text was not heard
+ * in this file. Measured on the owner's library (3-oct-2026): speech
+ * recordings run 2.8 at the median and 7.6 at p99; soft speech the loudness
+ * line undercounts reached 22.5; every recording above 40 had under 30 s of
+ * sound in 3 to 96 minutes.
+ */
+export const MAX_WORDS_PER_SOUND_SECOND = 40
+/** Only a transcript this long is judged against its seconds of sound. */
+export const MIN_WORDS_FOR_SOUND_CHECK = 100
+/** A repeated line counts when it has at least this many words... */
+export const REPEATED_LINE_MIN_WORDS = 6
+/** ...and appears at least this many times. */
+export const REPEATED_LINE_MIN_TIMES = 3
+/** Share of all words in repeated lines that makes the transcript a loop. */
+export const REPEATED_TEXT_MAX_SHARE = 0.5
+
+function normalizeLine(text: string): string {
+  return text
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+}
+
+/** Share of the transcript's words that sit in long lines repeated word for word. */
+function repeatedShare(lines: Line[], totalWords: number): number {
+  if (totalWords === 0) return 0
+  const counts = new Map<string, number>()
+  const keys = lines.map((line) => {
+    const key = normalizeLine(line.text)
+    if (countWords(key) >= REPEATED_LINE_MIN_WORDS) counts.set(key, (counts.get(key) ?? 0) + 1)
+    return key
+  })
+  let repeated = 0
+  for (const key of keys) {
+    if ((counts.get(key) ?? 0) >= REPEATED_LINE_MIN_TIMES) repeated += countWords(key)
+  }
+  return repeated / totalWords
+}
+
+/** Findings that mean the text cannot have come from this audio. */
+const BROKEN_CODES: ReadonlySet<IntegrityIssueCode> = new Set([
+  'too_many_words',
+  'text_over_noise',
+  'words_beyond_sound',
+  'repeated_text'
+])
 
 interface Line {
   start: number | null
@@ -107,7 +175,8 @@ function plural(n: number, one: string, many: string): string {
  */
 export function assessTranscriptIntegrity(
   speakersJson: string | null | undefined,
-  audioSeconds: number | null | undefined
+  audioSeconds: number | null | undefined,
+  audioProfile?: IntegrityAudio | null
 ): TranscriptIntegrity {
   const lines = toLines(speakersJson)
   const audio = typeof audioSeconds === 'number' && audioSeconds > 0 ? audioSeconds : null
@@ -171,7 +240,41 @@ export function assessTranscriptIntegrity(
     })
   }
 
-  const status: IntegrityStatus = issues.some((i) => i.code === 'too_many_words')
+  if (audioProfile && (audioProfile.category === 'silent' || audioProfile.category === 'noise') && words > MAX_WORDS_OVER_NOISE) {
+    issues.push({
+      code: 'text_over_noise',
+      count: 1,
+      detail:
+        `${words} words over audio that is ${audioProfile.category === 'silent' ? 'silent' : 'only noise'}; ` +
+        'the transcriber invented this text.',
+    })
+  }
+  const soundSeconds = audioProfile?.soundSeconds
+  if (
+    audioProfile &&
+    audioProfile.category === 'speech' &&
+    typeof soundSeconds === 'number' &&
+    words >= MIN_WORDS_FOR_SOUND_CHECK &&
+    words / Math.max(soundSeconds, 1) > MAX_WORDS_PER_SOUND_SECOND
+  ) {
+    issues.push({
+      code: 'words_beyond_sound',
+      count: 1,
+      detail:
+        `${words} words, but only ${formatClock(soundSeconds)} of the audio holds sound; ` +
+        'most of the text was not heard in this recording.',
+    })
+  }
+  const loop = repeatedShare(lines, words)
+  if (loop >= REPEATED_TEXT_MAX_SHARE) {
+    issues.push({
+      code: 'repeated_text',
+      count: 1,
+      detail: `${Math.round(loop * 100)}% of the words are the same lines repeated over and over.`,
+    })
+  }
+
+  const status: IntegrityStatus = issues.some((i) => BROKEN_CODES.has(i.code))
     ? 'broken'
     : issues.length > 0
       ? 'suspect'

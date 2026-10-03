@@ -156,7 +156,12 @@ vi.mock('../database', () => ({
   // RE-1 — the early eligibility gate (right after the analyze await, before
   // insertTranscript) calls this; default true so this suite's happy paths
   // persist as before. Real predicate covered by recording-deletion tests.
-  isRecordingProcessable: (...args: any[]) => mockIsRecordingProcessable(...args)
+  isRecordingProcessable: (...args: any[]) => mockIsRecordingProcessable(...args),
+  checkTranscriptIntegrity: (...args: any[]) => mockCheckTranscriptIntegrity(...args)
+}))
+
+vi.mock('../transcript-trust', () => ({
+  syncTrustVerdicts: (...args: any[]) => mockSyncTrustVerdicts(...args)
 }))
 
 // ADV40-1 (round-42) — transcription.ts gates the provider through the shared
@@ -172,6 +177,10 @@ vi.mock('../audio-preflight', () => ({
 
 // The stored audio profile the gate reads before any provider call. Default
 // null ("no profile"), which falls through to the ffmpeg preflight as before.
+// The trust check run on a fresh transcript before the analysis call. Default
+// ok, so the happy paths analyse as before.
+const mockCheckTranscriptIntegrity = vi.fn((..._args: unknown[]): any => ({ status: 'ok', issues: [] }))
+const mockSyncTrustVerdicts = vi.fn((..._args: unknown[]) => ({ rated: 0, cleared: 0 }))
 const mockAudioProfileForTranscription = vi.fn(async (..._args: unknown[]): Promise<any> => null)
 vi.mock('../audio-profile-store', () => ({
   audioProfileForTranscription: (...args: unknown[]) => mockAudioProfileForTranscription(...args)
@@ -278,6 +287,7 @@ describe('Transcription Service', () => {
     mockGetVectorStore.mockReturnValue(null as any)
     mockAddToQueue.mockReturnValue('queue-auto')
     mockAudioProfileForTranscription.mockResolvedValue(null)
+    mockCheckTranscriptIntegrity.mockReturnValue({ status: 'ok', issues: [] })
     mockAnalyzeAudioPreflight.mockResolvedValue({
       status: 'speech_present',
       durationSeconds: 60,
@@ -843,6 +853,88 @@ describe('Transcription Service', () => {
 
       expect(result).toBe(false)
       expect(mockAddToQueue).not.toHaveBeenCalled()
+    })
+  })
+
+  // Owner, 3-oct-2026: an invented transcript got a summary, actions and a
+  // title before anything judged it. The trust check now runs first.
+  describe('an untrusted transcript feeds nothing', () => {
+    function queueLocal(recordingId: string): void {
+      mockConfig = {
+        transcription: {
+          provider: 'local-asr',
+          geminiApiKey: 'test-api-key',
+          geminiModel: 'gemini-2.0-flash',
+          language: 'es',
+          autoTranscribe: false,
+          localAsrPath: 'G:\\Code\\claude-plugins\\plugins\\mcp-asr',
+          localAsrVocabularyFile: 'vocabulary.json',
+          localAsrDiarize: true,
+          localAsrNumBeams: 5
+        }
+      }
+      mockGetQueueItems.mockImplementation((status?: string) =>
+        status === 'pending'
+          ? [{ id: `queue-${recordingId}`, recording_id: recordingId, filename: 'x.wav', status: 'pending', attempts: 0 }]
+          : []
+      )
+      mockGetRecordingById.mockReturnValue({
+        id: recordingId,
+        filename: 'x.wav',
+        file_path: 'G:\\Recordings\\x.wav',
+        status: 'complete'
+      })
+      mockExecFile.mockImplementation(() =>
+        makeFakeChildProcess(JSON.stringify({
+          text: 'Speaker 1: Me engañó con mi mejor amiga.',
+          language: 'es',
+          duration_seconds: 12,
+          processing_time_seconds: 1
+        }))
+      )
+    }
+
+    async function runUntilStored(): Promise<void> {
+      const { startTranscriptionProcessor, stopTranscriptionProcessor } = await import('../transcription')
+      startTranscriptionProcessor()
+      try {
+        await vi.waitFor(() => {
+          expect(mockInsertTranscript).toHaveBeenCalled()
+          expect(mockUpdateRecordingStatus).toHaveBeenCalledWith(expect.any(String), 'complete')
+        }, { timeout: 15000, interval: 25 })
+      } finally {
+        stopTranscriptionProcessor()
+      }
+    }
+
+    it('stores a broken transcript without asking the model for a summary, and rates it from trust', { timeout: 20000 }, async () => {
+      queueLocal('rec-untrusted')
+      mockCheckTranscriptIntegrity.mockReturnValue({
+        status: 'broken',
+        issues: [{ code: 'text_over_noise', count: 1, detail: '' }]
+      })
+
+      await runUntilStored()
+
+      expect(mockCheckTranscriptIntegrity.mock.calls[0][0]).toBe('rec-untrusted')
+      // A Gemini key is set, so a trusted transcript would have gone to the
+      // analysis model here (whose mock cannot even be constructed).
+      expect(mockGenerateContent).not.toHaveBeenCalled()
+      const stored = mockInsertTranscript.mock.calls[0][0]
+      expect(stored.summary).toBeUndefined()
+      expect(stored.action_items).toBeUndefined()
+      expect(stored.title_suggestion).toBeUndefined()
+      expect(mockSyncTrustVerdicts).toHaveBeenCalledWith('rec-untrusted')
+    })
+
+    it('leaves a transcript the check trusts to the content rating, as before', { timeout: 20000 }, async () => {
+      queueLocal('rec-trusted')
+      mockConfig.transcription.geminiApiKey = '' // local analysis, so the run completes in this suite
+
+      await runUntilStored()
+
+      expect(mockCheckTranscriptIntegrity).toHaveBeenCalled()
+      expect(mockSyncTrustVerdicts).not.toHaveBeenCalled()
     })
   })
 

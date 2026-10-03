@@ -16,6 +16,7 @@ import { parseJsonArray } from '@/types'
 import { UnifiedRecording, hasLocalPath, isDeviceOnly } from '@/types/unified-recording'
 import { useLibraryStore } from '@/store/useLibraryStore'
 import { getRecoveryAction } from '@/features/library/utils/errorHandling'
+import { trustedSummary } from '@/features/library/utils/transcriptIntegrity'
 import { TranscriptionStatusBadge } from './TranscriptionStatusBadge'
 import { getDisplayTitle } from '../utils/getDisplayTitle'
 
@@ -36,6 +37,9 @@ interface Transcript {
   title_suggestion: string | null
   question_suggestions: string | null
   created_at: string
+  integrity_status?: 'ok' | 'suspect' | 'broken' | null
+  integrity_json?: string | null
+  integrity_accepted_at?: string | null
 }
 
 interface Meeting {
@@ -339,10 +343,10 @@ export function SourceDetailDrawer({
 
             <TabsContent value="transcript" className="mt-4 space-y-4">
               {/* Summary */}
-              {transcript.summary && (
+              {trustedSummary(transcript) && (
                 <div className="p-3 bg-muted rounded-lg">
                   <p className="text-xs font-medium text-muted-foreground mb-1">Summary</p>
-                  <p className="text-sm">{transcript.summary}</p>
+                  <p className="text-sm">{trustedSummary(transcript)}</p>
                 </div>
               )}
 

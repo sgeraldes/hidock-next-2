@@ -3,6 +3,7 @@ import { Calendar } from 'lucide-react'
 import { formatDateTime, formatDuration, formatBytes } from '@/lib/utils'
 import { Transcript, Meeting } from '@/types'
 import { UnifiedRecording, isDeviceOnly } from '@/types/unified-recording'
+import { trustedSummary } from '@/features/library/utils/transcriptIntegrity'
 
 interface SourceRowExpandedProps {
   recording: UnifiedRecording
@@ -82,10 +83,10 @@ export const SourceRowExpanded = memo(function SourceRowExpanded({
       )}
 
       {/* Transcript Summary */}
-      {transcript?.summary && (
+      {trustedSummary(transcript) && (
         <div className="p-3 bg-background border rounded-lg">
           <p className="text-xs font-medium text-muted-foreground mb-2">Summary</p>
-          <p className="text-sm leading-relaxed">{transcript.summary}</p>
+          <p className="text-sm leading-relaxed">{trustedSummary(transcript)}</p>
         </div>
       )}
 
@@ -110,6 +111,8 @@ export const SourceRowExpanded = memo(function SourceRowExpanded({
     prevProps.recording.size === nextProps.recording.size &&
     prevProps.transcript?.id === nextProps.transcript?.id &&
     prevProps.transcript?.summary === nextProps.transcript?.summary &&
+    prevProps.transcript?.integrity_status === nextProps.transcript?.integrity_status &&
+    prevProps.transcript?.integrity_accepted_at === nextProps.transcript?.integrity_accepted_at &&
     prevProps.meeting?.id === nextProps.meeting?.id
   )
 })

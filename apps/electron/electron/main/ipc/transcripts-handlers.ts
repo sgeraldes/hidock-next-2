@@ -294,6 +294,8 @@ export function registerTranscriptsHandlers(): void {
           const saved = queryOne<{ id: string }>('SELECT id FROM transcripts WHERE recording_id = ?', [recordingId])
           const checked = saved ? refreshTranscriptIntegrity(saved.id) : null
           if (checked) integrity = { status: checked.status, json: JSON.stringify(checked) }
+          const { syncTrustVerdicts } = await import('../services/transcript-trust')
+          syncTrustVerdicts(recordingId)
         } catch (err) {
           console.warn('[TranscriptEdit] Saved; the timing check could not run again:', safeErrorMessage(err))
         }

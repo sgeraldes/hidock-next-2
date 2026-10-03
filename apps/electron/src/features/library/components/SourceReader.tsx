@@ -39,6 +39,7 @@ import { SpeakerAssignPopover, type AssignScope } from './SpeakerAssignPopover'
 import { useReaderPeople, type ParticipantChip } from '../hooks/useReaderPeople'
 import { deriveSpeakerRanges, type DerivedSpeakerRange } from '@/features/library/utils/speakerRanges'
 import { getDisplayTitle } from '@/features/library/utils/getDisplayTitle'
+import { trustedSummary, UNTRUSTED_SUMMARY_NOTE } from '@/features/library/utils/transcriptIntegrity'
 import { getSourceType } from '@/features/library/utils/sourceType'
 import { ArtifactReader } from './ArtifactReader'
 import { RecordingSplitEditor } from './RecordingSplitEditor'
@@ -2084,9 +2085,11 @@ export function SourceReader({
                     sentinelRef={pins.sentinelRef('summary')}
                   >
                     <div className="max-w-[75ch] text-sm leading-relaxed text-foreground">
-                      {effectiveTranscript.summary
-                        ? <p className="whitespace-pre-wrap">{effectiveTranscript.summary}</p>
-                        : <p className="text-muted-foreground">No summary generated.</p>}
+                      {trustedSummary(effectiveTranscript)
+                        ? <p className="whitespace-pre-wrap">{trustedSummary(effectiveTranscript)}</p>
+                        : effectiveTranscript.summary?.trim()
+                          ? <p className="text-muted-foreground">{UNTRUSTED_SUMMARY_NOTE}</p>
+                          : <p className="text-muted-foreground">No summary generated.</p>}
                     </div>
                   </ReaderSection>
                 )}

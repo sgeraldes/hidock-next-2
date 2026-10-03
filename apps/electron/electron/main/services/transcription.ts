@@ -122,6 +122,7 @@ import {
   queryOne,
   queryAll,
   isValueExcludedRecording,
+  checkTranscriptIntegrity,
   isRecordingProcessable,
   isRecordingGraphIngestable,
   getFailedTranscriptsForReanalysis,
@@ -156,6 +157,7 @@ import { namingAllowed, parseAndAssessDiarization } from './diarization-quality'
 import { scheduleEvaluationCatchup } from './evaluation-catchup'
 import { analyzeAudioPreflight, type AudioPreflightReport } from './audio-preflight'
 import { audioProfileForTranscription } from './audio-profile-store'
+import { syncTrustVerdicts } from './transcript-trust'
 import { readAudioDuration } from './audio-duration'
 import { minRecordingSeconds, qualityRules } from './quality-rules'
 import { isAutomaticMeetingLinkTemporallyEligible } from './recording-match-scoring'
@@ -2561,7 +2563,14 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   }
 
   progressCallback?.('analyzing', 50) // spec-014: progress reporting
-  const hasGeminiAnalysis = !!resolveGeminiApiKey()
+  // Trust before analysis (owner, 3-oct-2026): Rec02's invented confession got
+  // a summary, actions and a title because the integrity check ran only when
+  // the transcript was stored, after the analysis. A transcript that cannot
+  // have come from this audio is stored without any of that; its recording is
+  // rated "no value" from trust below, which keeps every later step away.
+  const integrityNow = checkTranscriptIntegrity(recordingId, rawTranscript.speakers)
+  const transcriptUntrusted = integrityNow.status === 'broken'
+  const hasGeminiAnalysis = !!resolveGeminiApiKey() && !transcriptUntrusted
   const analysisProvider = hasGeminiAnalysis ? 'gemini' : 'hidock-next'
   const analysisModel = hasGeminiAnalysis ? (config.chat?.geminiModel || CURRENT_GEMINI_CHAT_MODEL) : null
   const summaryRun = createProcessingRun({
@@ -2578,13 +2587,28 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   // tokens and cost are recorded on the summary run only, so sums stay right.
   const summaryUsage = createGeminiUsageCollector()
   try {
-    analysis = await summaryUsage.run(() =>
-      analyzeTranscriptWithGemini(fullText, candidateMeetings, () => stillWanted(recordingId), recordingId)
-    )
-    completeProcessingRun(summaryRun.id, {
-      outputRefs: { summary: `trans_${recordingId}.summary` },
-      ...runUsageFields(summaryUsage.total())
-    })
+    if (transcriptUntrusted) {
+      analysis = {}
+      completeProcessingRun(summaryRun.id, {
+        status: 'cancelled',
+        outputRefs: {
+          skipped: 'transcript-untrusted',
+          findings: integrityNow.issues.map((issue) => issue.code)
+        }
+      })
+      console.log(
+        `[Transcription] ${recordingId}: transcript does not fit its audio ` +
+          `(${integrityNow.issues.map((issue) => issue.code).join(', ')}); no summary, title or analysis`
+      )
+    } else {
+      analysis = await summaryUsage.run(() =>
+        analyzeTranscriptWithGemini(fullText, candidateMeetings, () => stillWanted(recordingId), recordingId)
+      )
+      completeProcessingRun(summaryRun.id, {
+        outputRefs: { summary: `trans_${recordingId}.summary` },
+        ...runUsageFields(summaryUsage.total())
+      })
+    }
   } catch (error) {
     failProcessingRun(summaryRun.id, error instanceof Error ? error.message : String(error), false, runUsageFields(summaryUsage.total()))
     throw error
@@ -2785,7 +2809,16 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   // Only when the mapped rating is low-value/garbage (value was low/none) do
   // we emit capture:value-classified for T3's suggestion toast; high/normal
   // results (which leave the capture unrated) emit nothing.
-  if (captureId && config.transcription.valueClassificationEnabled !== false) {
+  if (transcriptUntrusted) {
+    // A measured verdict: rated "no value" from trust, which no model rating
+    // replaces and which value-excluded gates below (actions, timeline,
+    // naming, graph, search) all honour.
+    try {
+      syncTrustVerdicts(recordingId)
+    } catch (e) {
+      console.warn('[TranscriptTrust] rating failed (non-fatal):', e)
+    }
+  } else if (captureId && config.transcription.valueClassificationEnabled !== false) {
     try {
       // The stopwatch outranks the rubric at the bottom end (2026-09-22): a
       // recording too short to hold knowledge is worthless however confident

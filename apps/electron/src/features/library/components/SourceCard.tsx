@@ -42,6 +42,7 @@ import {
 } from '@/features/library/utils/deletionCopy'
 import { useLibraryStore } from '@/store/useLibraryStore'
 import { getDisplayTitle } from '@/features/library/utils/getDisplayTitle'
+import { trustedSummary } from '@/features/library/utils/transcriptIntegrity'
 import { getRowMeta } from '@/features/library/utils/rowMeta'
 import { sourceTypeLabel } from '@/features/library/utils/sourceType'
 import type { DownloadStatus } from '@/store/useAppStore'
@@ -172,7 +173,8 @@ export const SourceCard = memo(function SourceCard({
     .join(' · ')
 
   const transcribing = recording.transcriptionStatus === 'pending' || recording.transcriptionStatus === 'processing'
-  const summary = transcript?.summary?.trim()
+  // A summary of an untrusted transcript is not shown (owner, 3-oct-2026).
+  const summary = trustedSummary(transcript)
   const deviceOnly = isDeviceOnly(recording)
   const counts = cardCounts(transcript)
   const notice = cardNotice(recording, transcript, error)

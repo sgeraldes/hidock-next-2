@@ -34,6 +34,7 @@ import { Working, BusyIcon } from '@/components/ui/working'
 import { EntityMention } from '@/components/entity'
 import type { MeetingDetails } from '@/types'
 import { appLocale } from '@/lib/locale'
+import { trustedSummary } from '@/features/library/utils/transcriptIntegrity'
 
 const ATTENDEES_COLLAPSED_LIMIT = 8
 
@@ -1031,7 +1032,7 @@ export function MeetingDetail() {
                             onSeek={(startMs) => audioControls.seek(startMs / 1000)}
                             showSummary={true}
                             showActionItems={true}
-                            summary={recording.transcript.summary ?? undefined}
+                            summary={trustedSummary(recording.transcript) ?? undefined}
                             actionItems={parseJsonArray<string>(recording.transcript.action_items)}
                           />
                         </div>
