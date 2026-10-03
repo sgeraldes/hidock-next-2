@@ -66,10 +66,11 @@ export default defineConfig(
   // The set is deliberately not @eslint-react's own recommended preset, which
   // adds dozens of rules the old gate never had. Recommended rules with no
   // @eslint-react counterpart are covered by tsc (jsx-no-duplicate-props,
-  // jsx-no-undef, no-is-mounted, require-render-return: `npm run typecheck`
-  // reports all four), by the scope analysis of ESLint and typescript-eslint
-  // (jsx-uses-vars), or by eslint-local-rules.mjs (no-string-refs,
-  // no-unescaped-entities, the react-dom part of no-deprecated). The old
+  // jsx-no-undef, no-is-mounted: `npm run typecheck` reports all three), by the
+  // scope analysis of ESLint and typescript-eslint (jsx-uses-vars), or by
+  // eslint-local-rules.mjs (require-render-return, no-string-refs,
+  // no-unescaped-entities, the react-dom part of no-deprecated). tsc misses
+  // require-render-return because ReactNode includes undefined. The old
   // react-in-jsx-scope, jsx-uses-react and prop-types were off and stay gone.
   {
     files: ["src/**/*.{ts,tsx,js,jsx}"],
@@ -101,6 +102,8 @@ export default defineConfig(
       "@eslint-react/dom-no-render-return-value": "error",
       // react/no-string-refs
       "hidock-local/no-string-refs": "error",
+      // react/require-render-return
+      "hidock-local/require-render-return": "error",
       // Low-signal stylistic rules downgraded to warnings.
       // react/no-unescaped-entities
       "hidock-local/no-unescaped-entities": "warn",
