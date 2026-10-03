@@ -46,7 +46,16 @@ import {
 import { acceptIdentitySuggestionWithGraph } from '../services/knowledge-graph-service'
 import { autoSplitAmbiguousBuckets } from '../services/org-reconciler'
 import { isRecordingEligible } from '../services/recording-eligibility'
-import { success, error, Result } from '../types/api'
+import { undoDecision } from '../services/identity-decisions'
+import {
+  describeDecisions,
+  getQuestionCounts,
+  IdentityReviewError,
+  listVoiceConflicts,
+  resolveVoiceConflict
+} from '../services/identity-review'
+import type { DecisionView, QuestionCounts, VoiceConflictView } from '../../../src/shared/identity-review'
+import { success, error, Result, type ErrorResult } from '../types/api'
 
 const StatusSchema = z.enum(['pending', 'accepted', 'rejected'])
 const IdSchema = z.string().min(1).max(200)
@@ -65,6 +74,26 @@ const ResolveMentionRequestSchema = z.object({
   contactId: IdSchema.nullable(),
   method: z.string().min(1).max(40).optional()
 })
+const ListDecisionsRequestSchema = z
+  .object({
+    limit: z.number().int().min(1).max(2000).optional(),
+    includeUndone: z.boolean().optional()
+  })
+  .optional()
+const VoiceConflictChoiceSchema = z.enum(['keep', 'voice'])
+
+/** undoDecision's errors, in words the People page shows as they are. */
+function undoErrorResult(err: unknown): ErrorResult {
+  const message = err instanceof Error ? err.message : String(err)
+  if (/not found/i.test(message)) {
+    return error('NOT_FOUND', 'This decision no longer exists. Reload People to see the current list.')
+  }
+  if (/already undone/i.test(message)) {
+    return error('VALIDATION_ERROR', 'This decision was already undone.')
+  }
+  console.error('identity:undoDecision error:', err)
+  return error('DATABASE_ERROR', 'The decision could not be undone. Try again; if it keeps failing, restart HiDock.', err)
+}
 
 export function registerIdentityHandlers(): void {
   /**
@@ -89,8 +118,8 @@ export function registerIdentityHandlers(): void {
       // on Today / the People-Projects merge queue (whose entity LISTS already
       // suppress it). The accept path is gated separately on evidence, not here.
       // Voice conflicts (voice-learning, spec 2026-10-03 2d) are not name pairings: this
-      // page's accept and reject would write their key as an alias. They stay out until
-      // they get their own review.
+      // list's accept and reject would write their key as an alias. People shows them from
+      // identity:listVoiceConflicts and answers them with identity:resolveVoiceConflict.
       const listed = getIdentitySuggestions(status).filter((s) => !isVoiceConflictSuggestion(s))
       const surfaced = revalidateSuggestionsForSurfacing(listed)
       return success(filterSuggestionsForNonOwnerDisplay(surfaced))
@@ -394,6 +423,81 @@ export function registerIdentityHandlers(): void {
     } catch (err) {
       console.error('identity:autoSplitBuckets error:', err)
       return error('DATABASE_ERROR', 'Failed to auto-split buckets', err)
+    }
+  })
+
+  /**
+   * The automatic decisions (identity_decisions), newest first, with the names, recording
+   * title and date the People page needs to say each one in words. { limit?, includeUndone? }.
+   */
+  ipcMain.handle('identity:listDecisions', async (_, request?: unknown): Promise<Result<DecisionView[]>> => {
+    try {
+      const parsed = ListDecisionsRequestSchema.safeParse(request)
+      if (!parsed.success) {
+        return error('VALIDATION_ERROR', 'Invalid list-decisions request', parsed.error.format())
+      }
+      return success(describeDecisions(parsed.data ?? {}))
+    } catch (err) {
+      console.error('identity:listDecisions error:', err)
+      return error('DATABASE_ERROR', 'The automatic decisions could not be read. Reload People to try again.', err)
+    }
+  })
+
+  /** Undo one automatic decision: the state before comes back. { restored } says whether it did. */
+  ipcMain.handle('identity:undoDecision', async (_, id: unknown): Promise<Result<{ restored: boolean }>> => {
+    const parsed = IdSchema.safeParse(id)
+    if (!parsed.success) {
+      return error('VALIDATION_ERROR', 'Invalid decision id', parsed.error.format())
+    }
+    try {
+      return success(undoDecision(parsed.data))
+    } catch (err) {
+      return undoErrorResult(err)
+    }
+  })
+
+  /** The voice conflicts still waiting for the owner, with names, recording title and date. */
+  ipcMain.handle('identity:listVoiceConflicts', async (): Promise<Result<VoiceConflictView[]>> => {
+    try {
+      return success(listVoiceConflicts())
+    } catch (err) {
+      console.error('identity:listVoiceConflicts error:', err)
+      return error('DATABASE_ERROR', 'The voice questions could not be read. Reload People to try again.', err)
+    }
+  })
+
+  /**
+   * Decide one voice conflict: 'keep' leaves the speaker as named, 'voice' names it after the
+   * voice's person. The generic accept and reject above keep refusing these rows.
+   */
+  ipcMain.handle(
+    'identity:resolveVoiceConflict',
+    async (_, id: unknown, choice: unknown): Promise<Result<{ status: 'accepted' | 'rejected' }>> => {
+      const parsedId = IdSchema.safeParse(id)
+      const parsedChoice = VoiceConflictChoiceSchema.safeParse(choice)
+      if (!parsedId.success || !parsedChoice.success) {
+        return error('VALIDATION_ERROR', 'Invalid voice-conflict answer')
+      }
+      try {
+        return success(resolveVoiceConflict(parsedId.data, parsedChoice.data))
+      } catch (err) {
+        if (err instanceof IdentityReviewError) return error(err.code, err.message)
+        console.error('identity:resolveVoiceConflict error:', err)
+        const message = err instanceof Error && /not found|excluded|deleted/i.test(err.message)
+          ? 'This recording or person is no longer in the library. Reload People to see what is left.'
+          : 'The answer could not be saved. Try again; if it keeps failing, restart HiDock.'
+        return error('DATABASE_ERROR', message, err)
+      }
+    }
+  )
+
+  /** Settings > Speakers & voices: pending, decided automatically and decided by the owner, per kind. */
+  ipcMain.handle('identity:getQuestionCounts', async (): Promise<Result<QuestionCounts>> => {
+    try {
+      return success(getQuestionCounts())
+    } catch (err) {
+      console.error('identity:getQuestionCounts error:', err)
+      return error('DATABASE_ERROR', 'The question counts could not be read. Reopen Settings to try again.', err)
     }
   })
 }

@@ -2,10 +2,10 @@
 
 /**
  * Voice-conflict suggestions (spec 2026-10-03, 2d) are written by applyKnownVoiceBindings into
- * identity_suggestions, but today's People page has no way to decide them: its accept writes
- * candidate_name as an alias, and a voice conflict's candidate_name is a key
- * (voice-conflict:<recording>:<label>). Until they get their own review, the page does not list
- * them and accept and reject refuse them. REAL handlers, REAL DB.
+ * identity_suggestions. The generic accept writes candidate_name as an alias, and a voice
+ * conflict's candidate_name is a key (voice-conflict:<recording>:<label>), so the generic list
+ * leaves them out and the generic accept and reject refuse them. People answers them through
+ * identity:resolveVoiceConflict (identity-handlers.decisions.test.ts). REAL handlers, REAL DB.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -82,8 +82,8 @@ afterEach(() => {
   if (existsSync(dbPath)) rmSync(dbPath, { force: true })
 })
 
-describe('voice-conflict suggestions on the People page', () => {
-  it('are not listed; the other suggestions still are', async () => {
+describe('voice-conflict suggestions in the generic suggestion list', () => {
+  it('are not listed there; the other suggestions still are', async () => {
     seedConflict()
     // A discovery straggler (name signal only), which the page lists today.
     insertIdentitySuggestion('person', 'Carlitos', 'carl', 0.7, {

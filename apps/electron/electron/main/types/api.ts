@@ -91,7 +91,7 @@ export type ErrorCode =
   // became excluded/deleted between surfacing and accept (accept-time TOCTOU guard).
   | 'SUGGESTION_STALE'
   // A voice-conflict suggestion (spec 2026-10-03, 2d) sent to the alias accept/reject,
-  // which would write its key as an alias. Refused until it has its own review.
+  // which would write its key as an alias. It is answered by identity:resolveVoiceConflict.
   | 'VOICE_CONFLICT'
   // ADV27-4 (round-28) — a bucket-mention resolve targeting a recording that became
   // ineligible (excluded/deleted/hard-purged) between load and click (accept-time recheck).

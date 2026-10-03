@@ -47,6 +47,7 @@ import { computeSharedContext, type PersonContext, type SideContext } from './pe
 import { MergeIntoDialog } from './MergeIntoDialog'
 import { useAmbiguousBuckets } from './useAmbiguousBuckets'
 import { ResolvePerMeetingCard } from './ResolvePerMeetingCard'
+import { useVoiceConflicts, VoiceConflictCard } from './VoiceConflictCard'
 
 /** Confidence → badge styling. ≥80 emerald, 50–79 amber. */
 function confidenceBadge(confidence: number | null): { label: string; className: string } {
@@ -656,12 +657,22 @@ export const IdentitySuggestionsSection = forwardRef<
   // Ambiguous mention buckets are a person-only concept — skip them on the Projects page.
   const showBuckets = kind !== 'project'
   const {
-    buckets,
+    buckets: allBuckets,
     loading: bucketsLoading,
     fetchResolution,
     resolve: resolveMention,
     reload: reloadBuckets
   } = useAmbiguousBuckets(showBuckets)
+  // People lists only what is still undecided (spec 2026-10-03, Phase 4): a shared first
+  // name whose every recording is decided is no longer a question.
+  const buckets = useMemo(() => allBuckets.filter((b) => b.pendingCount > 0), [allBuckets])
+  // Voice conflicts are person questions with their own card and their own answer.
+  const {
+    conflicts,
+    loading: conflictsLoading,
+    reload: reloadConflicts,
+    answer: answerConflict
+  } = useVoiceConflicts(showBuckets)
 
   useImperativeHandle(
     ref,
@@ -669,9 +680,10 @@ export const IdentitySuggestionsSection = forwardRef<
       reload: () => {
         reload()
         reloadBuckets()
+        void reloadConflicts()
       }
     }),
-    [reload, reloadBuckets]
+    [reload, reloadBuckets, reloadConflicts]
   )
 
   const openRecording = (recordingId: string) => navigate('/library', { state: { selectedId: recordingId } })
@@ -682,7 +694,7 @@ export const IdentitySuggestionsSection = forwardRef<
   // A merge card whose keeper is itself an ambiguous bucket would merge distinct real
   // people INTO the bucket — wrong. Those are handled by the "Resolve per meeting"
   // cards, so drop any (possibly stale) merge group targeting a bucket.
-  const bucketIds = useMemo(() => new Set(buckets.map((b) => b.contactId)), [buckets])
+  const bucketIds = useMemo(() => new Set(allBuckets.map((b) => b.contactId)), [allBuckets])
   const groups = useMemo(
     () => groupSuggestions(visible).filter((g) => !bucketIds.has(g.targetId)),
     [visible, bucketIds]
@@ -693,11 +705,12 @@ export const IdentitySuggestionsSection = forwardRef<
     return targetNames[s.target_id] || ev.keeperName || (s.kind === 'person' ? 'this person' : 'this project')
   }
 
-  const hasBuckets = showBuckets && buckets.length > 0
+  const hasBuckets = showBuckets && !bucketsLoading && buckets.length > 0
+  const hasConflicts = showBuckets && !conflictsLoading && conflicts.length > 0
   const hasMergeGroups = !loading && groups.length > 0
-  if ((loading || groups.length === 0) && (bucketsLoading || !hasBuckets)) {
+  if (!hasMergeGroups && !hasBuckets && !hasConflicts) {
     // Still loading: placeholder rows instead of nothing (owner, 2-oct-2026).
-    if (loading || (showBuckets && bucketsLoading)) {
+    if (loading || (showBuckets && (bucketsLoading || conflictsLoading))) {
       return (
         <section className="mb-6" aria-label="Identity suggestions">
           <Working label="Loading identity suggestions" shape="list" rows={3} />
@@ -707,7 +720,8 @@ export const IdentitySuggestionsSection = forwardRef<
     return null
   }
 
-  const totalCount = groups.length + (hasBuckets ? buckets.length : 0)
+  const totalCount =
+    (hasMergeGroups ? groups.length : 0) + (hasBuckets ? buckets.length : 0) + (hasConflicts ? conflicts.length : 0)
 
   let lastTier: SuggestionTier | null = null
 
@@ -733,6 +747,20 @@ export const IdentitySuggestionsSection = forwardRef<
 
       {expanded && (
         <div className="space-y-3">
+          {hasConflicts && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 pt-1">
+                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  A voice disagrees with a name
+                </span>
+                <div className="h-px flex-1 bg-border" />
+              </div>
+              {conflicts.map((c) => (
+                <VoiceConflictCard key={c.id} conflict={c} onAnswer={answerConflict} />
+              ))}
+            </div>
+          )}
+
           {hasBuckets && (
             <div className="space-y-2">
               <div className="flex items-center gap-2 pt-1">

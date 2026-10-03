@@ -1164,8 +1164,8 @@ export interface VoiceConflict {
  * caller's transaction. The suggestion names the voice's person as target_id; candidate_name is
  * a key, `voice-conflict:<recording>:<label>`, so the queue's UNIQUE(kind, candidate_name,
  * target_id) keeps one row per speaker and person. Returns false when one is already pending.
- * The People page does not list these rows, and its accept and reject refuse them
- * (isVoiceConflictSuggestion), until they get their own review.
+ * The generic suggestion list leaves these rows out and its accept and reject refuse them
+ * (isVoiceConflictSuggestion); People shows them on their own card (identity-review.ts).
  */
 export function recordVoiceConflictNoSave(conflict: VoiceConflict): boolean {
   const candidateName = `${VOICE_CONFLICT_PREFIX}${conflict.recordingId}:${conflict.speakerLabel}`
