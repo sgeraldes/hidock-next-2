@@ -244,6 +244,26 @@ export async function profileNewRecording(recordingId: string): Promise<void> {
   }
 }
 
+/**
+ * The profile the transcription gate decides on: the stored one when it is
+ * current, otherwise computed now (milliseconds for a device file) and
+ * announced. Null when the file is missing. Throws when the file cannot be
+ * read or profiled; the caller falls back to the ffmpeg preflight.
+ */
+export async function audioProfileForTranscription(
+  recording: { id: string; file_path: string | null },
+  options: { decode?: (path: string) => Promise<Float32Array> } = {}
+): Promise<AudioProfileRow | null> {
+  const outcome = await profileRecording(recording, { decode: options.decode })
+  if (outcome.profile) {
+    const byCategory = { too_short: 0, silent: 0, noise: 0, speech: 0 } as Record<AudioCategory, number>
+    byCategory[outcome.profile.category] = 1
+    await announce({ profiled: 1, byCategory, capturesRated: outcome.capturesRated })
+  }
+  if (outcome.skipped === 'no-file') return null
+  return getAudioProfile(recording.id)
+}
+
 /** Profile one recording on request (Re-process, or a check that found something wrong) and announce it. */
 export async function profileRecordingNow(recordingId: string): Promise<ProfileOutcome> {
   const recording = queryOne<{ id: string; file_path: string | null }>(

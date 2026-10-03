@@ -190,6 +190,16 @@ export interface ApplyResult {
 export type CaptureRatingMethod = 'content' | 'duration' | 'audio'
 
 /**
+ * Methods whose rating comes from a measurement of the recording itself, not
+ * from a model reading its transcript or from the stopwatch. A measured rating
+ * is never replaced by an unmeasured one: until 3-oct-2026 a noise recording
+ * rated "no value" by its audio could be rated "high" again by a model reading
+ * the transcript the transcriber invented for it. The measurement that set it
+ * takes it back itself when its evidence changes (clearAudioVerdict).
+ */
+export const MEASURED_RATING_METHODS: readonly CaptureRatingMethod[] = ['audio']
+
+/**
  * Guarded, idempotent, never-downgrade, confidence-floored DB write. Writes
  * iff ALL of:
  *  - the capture is currently unrated/NULL OR was itself AI-set
@@ -243,8 +253,13 @@ export function applyCaptureValueClassification(
               quality_reasons = ?, quality_source = 'ai', quality_method = ?, updated_at = ?
         WHERE id = ?
           AND (quality_rating = 'unrated' OR quality_rating IS NULL OR quality_source = 'ai')
-          AND COALESCE(quality_source, '') != 'user'`,
-      [targetRating, cls.confidence, now, JSON.stringify(cls.reasons), method, now, captureId]
+          AND COALESCE(quality_source, '') != 'user'
+          AND (? = 1 OR COALESCE(quality_method, '') NOT IN (${MEASURED_RATING_METHODS.map(() => '?').join(', ')}))`,
+      [
+        targetRating, cls.confidence, now, JSON.stringify(cls.reasons), method, now, captureId,
+        MEASURED_RATING_METHODS.includes(method) ? 1 : 0,
+        ...MEASURED_RATING_METHODS
+      ]
     )
 
     if (getRowsModified() > 0) {

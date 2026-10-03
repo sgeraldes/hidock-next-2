@@ -226,6 +226,61 @@ describe('SourceReader — Transcribe split/dropdown', () => {
     expect(screen.getByRole('button', { name: /^transcribe$/i })).toBeInTheDocument()
   })
 
+  it('says a recording was skipped because its audio is only noise, with the measured sound', async () => {
+    ;(window.electronAPI as any).transcripts = {
+      getProcessingRuns: vi.fn().mockResolvedValue({
+        success: true,
+        data: [{
+          id: 'run-vad',
+          stage: 'vad',
+          provider: 'hidock-next',
+          tool: 'audio-profile',
+          model: 'audio-profile-v1',
+          version: null,
+          execution: 'local',
+          status: 'completed',
+          quality_status: 'no_speech',
+          quality_json: JSON.stringify({
+            status: 'no_speech',
+            reasonCodes: ['audio_noise'],
+            category: 'noise',
+            soundSeconds: 3.74,
+            durationSeconds: 789.48,
+            longestSoundSeconds: 0.61
+          }),
+          estimated_cost_amount: null,
+          estimated_cost_currency: null,
+          cost_method: null
+        }]
+      })
+    }
+    render(<SourceReader recording={makeRecording({ transcriptionStatus: 'no_speech' })} onTranscribe={vi.fn()} />)
+    expect(await screen.findByText('Only noise in the audio')).toBeInTheDocument()
+    expect(screen.getByText(/4 seconds of sound in 13 minutes, none of it longer than a second\./)).toBeInTheDocument()
+    expect(screen.getByText(/choose Clear rating in its row menu, then re-run transcription/)).toBeInTheDocument()
+    expect(screen.queryByText('No intelligible speech detected')).not.toBeInTheDocument()
+  })
+
+  it('says a recording was skipped because its audio is silent', async () => {
+    ;(window.electronAPI as any).transcripts = {
+      getProcessingRuns: vi.fn().mockResolvedValue({
+        success: true,
+        data: [{
+          id: 'run-vad', stage: 'vad', provider: 'hidock-next', tool: 'audio-profile', model: 'audio-profile-v1',
+          version: null, execution: 'local', status: 'completed', quality_status: 'no_speech',
+          quality_json: JSON.stringify({
+            status: 'no_speech', reasonCodes: ['audio_silent'], category: 'silent',
+            soundSeconds: 0, durationSeconds: 95, longestSoundSeconds: 0
+          }),
+          estimated_cost_amount: null, estimated_cost_currency: null, cost_method: null
+        }]
+      })
+    }
+    render(<SourceReader recording={makeRecording({ transcriptionStatus: 'no_speech' })} onTranscribe={vi.fn()} />)
+    expect(await screen.findByText('Silent audio')).toBeInTheDocument()
+    expect(screen.getByText(/No sound in 2 minutes\./)).toBeInTheDocument()
+  })
+
   it('renders a primary Transcribe button and a method picker (no raw "VibeVoice")', () => {
     render(<SourceReader recording={makeRecording()} onTranscribe={vi.fn()} />)
     expect(screen.getByRole('button', { name: /^transcribe$/i })).toBeInTheDocument()
