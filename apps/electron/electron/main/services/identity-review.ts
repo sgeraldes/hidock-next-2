@@ -11,16 +11,21 @@
 
 import {
   assignSpeaker,
+  getAmbiguousBucketIds,
   getAmbiguousBuckets,
   getIdentitySuggestionById,
+  getIdentitySuggestions,
   isVoiceConflictSuggestion,
   queryAll,
   queryOne,
   runInTransaction,
   runNoSave,
-  VOICE_CONFLICT_PREFIX
+  VOICE_CONFLICT_PREFIX,
+  type IdentitySuggestion
 } from './database'
+import { filterSuggestionsForNonOwnerDisplay, revalidateSuggestionsForSurfacing } from './identity-discovery'
 import { listDecisions, type IdentityDecision } from './identity-decisions'
+import { isRecordingEligible } from './recording-eligibility'
 import type {
   DecisionView,
   QuestionCounts,
@@ -31,12 +36,25 @@ import type {
 /** A request the owner can fix by reading the message (shown as is by the page). */
 export class IdentityReviewError extends Error {
   constructor(
-    readonly code: 'NOT_FOUND' | 'VALIDATION_ERROR' | 'SUGGESTION_STALE',
+    readonly code: 'NOT_FOUND' | 'VALIDATION_ERROR' | 'SUGGESTION_STALE' | 'RECORDING_INELIGIBLE',
     message: string
   ) {
     super(message)
     this.name = 'IdentityReviewError'
   }
+}
+
+export const RECORDING_LEFT_LIBRARY =
+  'That recording is no longer in the library (trashed or marked personal), so its speaker cannot be changed.'
+
+/**
+ * The suggestions the generic list shows (identity:getSuggestions): voice conflicts left out
+ * (they have their own card), then the same surfacing revalidation and non-owner display gate.
+ * The question counts go through this too, so Settings and People agree.
+ */
+export function listSurfacedSuggestions(status?: 'pending' | 'accepted' | 'rejected'): IdentitySuggestion[] {
+  const listed = getIdentitySuggestions(status).filter((s) => !isVoiceConflictSuggestion(s))
+  return filterSuggestionsForNonOwnerDisplay(revalidateSuggestionsForSurfacing(listed))
 }
 
 interface RecordingInfo {
@@ -194,12 +212,14 @@ export function listVoiceConflicts(): VoiceConflictView[] {
  * Decide one voice conflict. 'keep' leaves the speaker as named and marks the suggestion
  * rejected; no alias is written (the suggestion's name is a key, not a person's name). 'voice'
  * names the speaker after the voice's person by hand (assignSpeaker, source 'manual') and marks
- * it accepted.
+ * it accepted. When the recording left the library (trashed, personal, purged), its speaker can
+ * no longer change: the question is closed (rejected, no alias) and the error says so for good.
  *
- * @throws IdentityReviewError when the suggestion is missing, not a voice conflict, or already answered.
+ * @throws IdentityReviewError when the suggestion is missing, not a voice conflict, already
+ *   answered, or its recording left the library.
  */
 export function resolveVoiceConflict(id: string, choice: VoiceConflictChoice): { status: 'accepted' | 'rejected' } {
-  return runInTransaction(() => {
+  const result = runInTransaction((): { status: 'accepted' | 'rejected'; leftLibrary?: true } => {
     const suggestion = getIdentitySuggestionById(id)
     if (!suggestion) throw new IdentityReviewError('NOT_FOUND', 'This question no longer exists. Reload People to see what is left.')
     if (!isVoiceConflictSuggestion(suggestion)) {
@@ -214,12 +234,19 @@ export function resolveVoiceConflict(id: string, choice: VoiceConflictChoice): {
       if (!ev.recordingId || !ev.speakerLabel || !contactId) {
         throw new IdentityReviewError('VALIDATION_ERROR', 'This question has lost its recording. Keep the name, then name the speaker in the recording.')
       }
+      if (!isRecordingEligible(ev.recordingId)) {
+        runNoSave("UPDATE identity_suggestions SET status = 'rejected' WHERE id = ?", [id])
+        return { status: 'rejected', leftLibrary: true }
+      }
       assignSpeaker(ev.recordingId, ev.speakerLabel, { contactId, source: 'manual', confidence: 1 })
     }
     const status = choice === 'voice' ? 'accepted' : 'rejected'
     runNoSave('UPDATE identity_suggestions SET status = ? WHERE id = ?', [status, id])
     return { status }
   })
+  // Thrown after the commit, so the closed question stays closed.
+  if (result.leftLibrary) throw new IdentityReviewError('RECORDING_INELIGIBLE', RECORDING_LEFT_LIBRARY)
+  return { status: result.status }
 }
 
 const count = (sql: string, params: unknown[] = []): number => queryOne<{ n: number }>(sql, params)?.n ?? 0
@@ -231,6 +258,7 @@ export function getQuestionCounts(): QuestionCounts {
   const voiceConflict = `candidate_name LIKE '${VOICE_CONFLICT_PREFIX}%'`
 
   const sharedFirstNames = getAmbiguousBuckets().reduce((sum, b) => sum + b.pendingCount, 0)
+  const bucketIds = getAmbiguousBucketIds()
   // A suggestion a rule accepted is the rule's decision, not the owner's.
   const ruleAccepted = new Set(
     queryAll<{ suggestion_id: string | null }>(
@@ -254,9 +282,10 @@ export function getQuestionCounts(): QuestionCounts {
       },
       {
         kind: 'duplicate-people',
-        pending: count(
-          `SELECT COUNT(*) AS n FROM identity_suggestions WHERE kind = 'person' AND status = 'pending' AND NOT (${voiceConflict})`
-        ),
+        // What People shows: the surfaced list, without merges whose keeper is a shared first
+        // name (People answers those per meeting, IdentitySuggestionsSection).
+        pending: listSurfacedSuggestions('pending').filter((s) => s.kind === 'person' && !bucketIds.has(s.target_id))
+          .length,
         automatic: automatic('merge'),
         owner: ownerDuplicates
       },
@@ -275,6 +304,19 @@ export function getQuestionCounts(): QuestionCounts {
         ),
         automatic: automatic('speaker'),
         owner: count("SELECT COUNT(*) AS n FROM transcript_speakers WHERE source = 'manual'")
+      },
+      {
+        kind: 'voices',
+        // A voice heard in a recording that is tied to nobody yet.
+        pending: count(
+          `SELECT COUNT(*) AS n FROM voice_clusters vc
+            WHERE vc.contact_id IS NULL
+              AND EXISTS (SELECT 1 FROM recording_voice_clusters rvc
+                            JOIN recordings r ON r.id = rvc.recording_id AND r.deleted_at IS NULL
+                           WHERE rvc.voice_cluster_id = vc.id)`
+        ),
+        automatic: automatic('voice-anchor'),
+        owner: count("SELECT COUNT(*) AS n FROM voice_clusters WHERE contact_link_method = 'manual'")
       },
       {
         kind: 'voice-conflicts',

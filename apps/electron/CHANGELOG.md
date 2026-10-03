@@ -72,8 +72,9 @@ Outlook, and every speaker the app names now keeps a note of how it was named.
   Paz" and "It is Ana Ruiz". Keeping the name writes no alias; choosing the voice names the speaker
   as if you had picked it yourself.
 - **Settings counts the identity questions.** Settings > Speakers & voices has a small table with,
-  for shared first names, duplicate people, speakers and voice conflicts, how many are pending, how
-  many the app decided and how many you decided.
+  for shared first names, duplicate people, speakers, voices and voice conflicts, how many are
+  pending, how many the app decided and how many you decided. The app's column adds up to the
+  "Decided automatically" count in People, and duplicate people count only what People shows.
 
 ## 2026-10-02 | Columns that stay put, and meetings that follow the calendar
 

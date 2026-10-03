@@ -101,6 +101,17 @@ describe('voice-conflict card', () => {
     expect(screen.getByText(/sounds like/)).toBeInTheDocument()
   })
 
+  it('a recording that left the library closes the card and says why', async () => {
+    const message =
+      'That recording is no longer in the library (trashed or marked personal), so its speaker cannot be changed.'
+    identity.resolveVoiceConflict.mockResolvedValue({ success: false, error: { code: 'RECORDING_INELIGIBLE', message } })
+    renderSection()
+    fireEvent.click(within(await card()).getByRole('button', { name: 'It is Ana Ruiz' }))
+
+    await waitFor(() => expect(screen.queryByText(/sounds like/)).toBeNull())
+    expect(await screen.findByText(message)).toBeInTheDocument()
+  })
+
   it('names who named the speaker in plain words', async () => {
     identity.listVoiceConflicts.mockResolvedValue({
       success: true,

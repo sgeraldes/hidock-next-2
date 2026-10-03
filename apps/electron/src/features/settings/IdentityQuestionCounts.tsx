@@ -12,6 +12,7 @@ const KIND_LABEL: Record<QuestionKind, string> = {
   'shared-first-names': 'Shared first names',
   'duplicate-people': 'Duplicate people',
   speakers: 'Speakers',
+  voices: 'Voices',
   'voice-conflicts': 'Voice conflicts'
 }
 

@@ -14,6 +14,7 @@ beforeEach(() => {
         { kind: 'shared-first-names', pending: 412, automatic: 1203, owner: 37 },
         { kind: 'duplicate-people', pending: 377, automatic: 64, owner: 12 },
         { kind: 'speakers', pending: 2, automatic: 810, owner: 95 },
+        { kind: 'voices', pending: 40, automatic: 6, owner: 19 },
         { kind: 'voice-conflicts', pending: 3, automatic: 0, owner: 1 }
       ]
     }
@@ -33,6 +34,7 @@ describe('IdentityQuestionCounts', () => {
       'Shared first names',
       'Duplicate people',
       'Speakers',
+      'Voices',
       'Voice conflicts'
     ])
     const first = within(rows[0]).getAllByRole('cell')

@@ -11,7 +11,6 @@
 import { ipcMain } from 'electron'
 import { z } from 'zod'
 import {
-  getIdentitySuggestions,
   getIdentitySuggestionById,
   isVoiceConflictSuggestion,
   VOICE_CONFLICT_REFUSAL,
@@ -38,8 +37,6 @@ import {
 import {
   discoverContactMerges,
   discoverProjectMerges,
-  revalidateSuggestionsForSurfacing,
-  filterSuggestionsForNonOwnerDisplay,
   isSuggestionEligibleForAccept,
   DiscoveryResult
 } from '../services/identity-discovery'
@@ -51,6 +48,7 @@ import {
   describeDecisions,
   getQuestionCounts,
   IdentityReviewError,
+  listSurfacedSuggestions,
   listVoiceConflicts,
   resolveVoiceConflict
 } from '../services/identity-review'
@@ -120,9 +118,8 @@ export function registerIdentityHandlers(): void {
       // Voice conflicts (voice-learning, spec 2026-10-03 2d) are not name pairings: this
       // list's accept and reject would write their key as an alias. People shows them from
       // identity:listVoiceConflicts and answers them with identity:resolveVoiceConflict.
-      const listed = getIdentitySuggestions(status).filter((s) => !isVoiceConflictSuggestion(s))
-      const surfaced = revalidateSuggestionsForSurfacing(listed)
-      return success(filterSuggestionsForNonOwnerDisplay(surfaced))
+      // listSurfacedSuggestions does all three, and the Settings question counts reuse it.
+      return success(listSurfacedSuggestions(status))
     } catch (err) {
       console.error('identity:getSuggestions error:', err)
       return error('DATABASE_ERROR', 'Failed to fetch identity suggestions', err)

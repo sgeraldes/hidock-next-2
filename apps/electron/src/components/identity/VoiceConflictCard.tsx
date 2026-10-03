@@ -9,6 +9,7 @@ import { Check, Mic } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { BusyIcon } from '@/components/ui/working'
+import { toast } from '@/components/ui/toaster'
 import type { VoiceConflictChoice, VoiceConflictView } from '@/shared/identity-review'
 import { shortDate } from './decisionSentence'
 
@@ -75,7 +76,12 @@ export function useVoiceConflicts(enabled = true) {
   const answer = useCallback(async (id: string, choice: VoiceConflictChoice): Promise<string | null> => {
     try {
       const res = await window.electronAPI.identity.resolveVoiceConflict(id, choice)
-      if (!res.success) return res.error.message
+      if (!res.success) {
+        if (res.error.code !== 'RECORDING_INELIGIBLE') return res.error.message
+        // The recording left the library and the app closed the question: the card goes, the
+        // reason stays on screen for a while.
+        toast.info('Question closed', res.error.message)
+      }
       if (mounted.current) setConflicts((prev) => prev.filter((c) => c.id !== id))
       return null
     } catch {

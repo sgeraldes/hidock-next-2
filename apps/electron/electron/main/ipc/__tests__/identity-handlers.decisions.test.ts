@@ -376,6 +376,11 @@ describe('identity:getQuestionCounts', () => {
     insertIdentitySuggestion('person', 'Anita', 'ana', 0.7, { signals: { name: 0.7 }, composite: 0.7 })
     insertIdentitySuggestion('person', 'Bea P', 'bea', 0.7, { signals: { name: 0.7 }, composite: 0.7 })
     run("UPDATE identity_suggestions SET status = 'rejected' WHERE candidate_name = 'Bea P'")
+    // Voices: 'vx' is heard and tied to nobody; 'vm' was tied by the owner.
+    run(
+      `INSERT INTO voice_clusters (id, model, model_version, embedding_dimension, centroid_json, contact_id, contact_link_method, created_at, updated_at)
+       VALUES ('vm', 'wespeaker', '1', 2, '[0,1]', 'seb', 'manual', '2026-09-01', '2026-09-01')`
+    )
     // Voice conflicts: one pending.
     seedConflict()
 
@@ -387,11 +392,90 @@ describe('identity:getQuestionCounts', () => {
       'shared-first-names',
       'duplicate-people',
       'speakers',
+      'voices',
       'voice-conflicts'
     ])
     expect(row('speakers')).toEqual({ kind: 'speakers', pending: 1, automatic: 1, owner: 2 })
+    expect(row('voices')).toEqual({ kind: 'voices', pending: 1, automatic: 0, owner: 1 })
     expect(row('duplicate-people')).toEqual({ kind: 'duplicate-people', pending: 1, automatic: 0, owner: 1 })
     expect(row('voice-conflicts')).toEqual({ kind: 'voice-conflicts', pending: 1, automatic: 0, owner: 0 })
     expect(row('shared-first-names')).toMatchObject({ kind: 'shared-first-names', automatic: 0, owner: 0 })
+  })
+
+  it('the automatic column adds up to the decisions People lists, voices included', async () => {
+    speakerDecision('rec1', 'Speaker 1', 'ana', 'voice', '2026-10-01T10:00:00.000Z')
+    const undone = speakerDecision('rec1', 'Speaker 3', 'seb', 'voice', '2026-10-01T10:00:00.000Z')
+    run("UPDATE identity_decisions SET undone_at = '2026-10-02T00:00:00Z' WHERE id = ?", [undone])
+    runInTransaction(() => {
+      recordDecisionNoSave({
+        kind: 'voice-anchor',
+        subjectKey: voiceAnchorSubjectKey('v1'),
+        method: 'one-on-one',
+        contactId: 'ana',
+        evidence: { votes: [] },
+        before: { clusterId: 'v1', contactId: null, method: null, confidence: null }
+      })
+      recordDecisionNoSave({
+        kind: 'mention',
+        subjectKey: mentionSubjectKey('rec2', 'sebas'),
+        method: 'voice-presence',
+        contactId: 'seb',
+        evidence: { bucketName: 'Sebas' },
+        before: snapshotMentionNoSave('rec2', 'Sebas')
+      })
+      recordDecisionNoSave({
+        kind: 'merge',
+        subjectKey: mergeSubjectKey('ana', 'gone'),
+        method: 'exact-email',
+        contactId: 'ana',
+        evidence: { loserName: 'Ana R.' },
+        before: null
+      })
+    })
+
+    const counts = await invoke('identity:getQuestionCounts')
+    const listed = await invoke('identity:listDecisions', { limit: 100 })
+
+    const automatic = counts.data.rows.reduce((sum: number, r: any) => sum + r.automatic, 0)
+    expect(listed.data).toHaveLength(4)
+    expect(automatic).toBe(listed.data.length)
+  })
+
+  it('counts duplicate people the way People shows them: unreadable evidence and bucket targets left out', async () => {
+    insertIdentitySuggestion('person', 'Anita', 'ana', 0.7, { signals: { name: 0.7 }, composite: 0.7 })
+    // Revalidation drops a suggestion whose evidence cannot be read.
+    run(
+      `INSERT INTO identity_suggestions (id, kind, candidate_name, target_id, confidence, evidence, status)
+       VALUES ('bad-ev', 'person', 'Beatriz', 'bea', 0.7, 'not json', 'pending')`
+    )
+    // People drops a merge whose keeper is a shared first name ("Sergio" = two people).
+    contact('s-h', 'Sergio Hurtado')
+    contact('s-r', 'Sergio Reyes')
+    contact('s-bucket', 'Sergio')
+    insertIdentitySuggestion('person', 'Sergi', 's-bucket', 0.7, { signals: { name: 0.7 }, composite: 0.7 })
+
+    const listed = await invoke('identity:getSuggestions', 'pending')
+    expect(listed.data.map((s: any) => s.candidate_name).sort()).toEqual(['Anita', 'Sergi'])
+
+    const res = await invoke('identity:getQuestionCounts')
+    expect(res.data.rows.find((r: any) => r.kind === 'duplicate-people').pending).toBe(1)
+  })
+})
+
+describe('a voice conflict in a recording that left the library', () => {
+  it('"It is <voice person>" says so for good, changes no speaker, and closes the question', async () => {
+    const id = seedConflict()
+    run("UPDATE recordings SET deleted_at = '2026-10-03T00:00:00Z' WHERE id = 'rec1'")
+
+    const res = await invoke('identity:resolveVoiceConflict', id, 'voice')
+
+    expect(res.success).toBe(false)
+    expect(res.error.code).toBe('RECORDING_INELIGIBLE')
+    expect(res.error.message).toBe(
+      'That recording is no longer in the library (trashed or marked personal), so its speaker cannot be changed.'
+    )
+    expect(suggestionStatus(id)).toBe('rejected')
+    expect(speakerOf('rec1', 'Speaker 2')).toEqual({ contact_id: 'bea', source: 'manual' })
+    expect(aliases()).toEqual([])
   })
 })

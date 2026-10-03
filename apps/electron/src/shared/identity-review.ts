@@ -54,7 +54,7 @@ export interface VoiceConflictView {
 /** 'keep': the speaker stays as named. 'voice': the speaker is the voice's person. */
 export type VoiceConflictChoice = 'keep' | 'voice'
 
-export type QuestionKind = 'shared-first-names' | 'duplicate-people' | 'speakers' | 'voice-conflicts'
+export type QuestionKind = 'shared-first-names' | 'duplicate-people' | 'speakers' | 'voices' | 'voice-conflicts'
 
 export interface QuestionCountRow {
   kind: QuestionKind

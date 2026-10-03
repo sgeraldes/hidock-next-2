@@ -3,7 +3,7 @@
  * made by itself, newest first, each in one sentence with its reason and an Undo. Collapsed by
  * default with a count; hides itself when nothing was decided.
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, CheckCircle2, Undo2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { BusyIcon, Working } from '@/components/ui/working'
@@ -56,14 +56,26 @@ export function DecidedAutomaticallySection({ onChanged, defaultExpanded = false
     }
   }, [])
 
+  // Rows with an Undo on its way or done. A ref, so a second click before the page redraws
+  // (the button is not disabled yet) is refused without a second call.
+  const undoing = useRef<Set<string>>(new Set())
+
   const undo = useCallback(
     async (id: string) => {
+      if (undoing.current.has(id)) return
+      undoing.current.add(id)
       setRowState((prev) => ({ ...prev, [id]: { state: 'busy' } }))
+      let done = false
       try {
         const res = await window.electronAPI.identity.undoDecision(id)
         if (res.success) {
+          done = true
           setRowState((prev) => ({ ...prev, [id]: { state: 'undone', restored: res.data.restored } }))
           onChanged?.()
+        } else if (/already undone/i.test(res.error.message)) {
+          // Undone elsewhere (another window, or an earlier click): the row is undone either way.
+          done = true
+          setRowState((prev) => ({ ...prev, [id]: { state: 'undone', restored: true } }))
         } else {
           setRowState((prev) => ({ ...prev, [id]: { state: 'error', message: res.error.message } }))
         }
@@ -72,6 +84,9 @@ export function DecidedAutomaticallySection({ onChanged, defaultExpanded = false
           ...prev,
           [id]: { state: 'error', message: 'The decision could not be undone. Try again; if it keeps failing, restart HiDock.' }
         }))
+      } finally {
+        // An error leaves the Undo usable again; an undone row stays guarded.
+        if (!done) undoing.current.delete(id)
       }
     },
     [onChanged]
