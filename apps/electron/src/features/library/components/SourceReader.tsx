@@ -39,7 +39,7 @@ import { SpeakerAssignPopover, type AssignScope } from './SpeakerAssignPopover'
 import { useReaderPeople, type ParticipantChip } from '../hooks/useReaderPeople'
 import { deriveSpeakerRanges, type DerivedSpeakerRange } from '@/features/library/utils/speakerRanges'
 import { getDisplayTitle } from '@/features/library/utils/getDisplayTitle'
-import { trustedSummary, UNTRUSTED_SUMMARY_NOTE } from '@/features/library/utils/transcriptIntegrity'
+import { isTranscriptTrusted, trustedSummary, UNTRUSTED_SUMMARY_NOTE } from '@/features/library/utils/transcriptIntegrity'
 import { getSourceType } from '@/features/library/utils/sourceType'
 import { ArtifactReader } from './ArtifactReader'
 import { RecordingSplitEditor } from './RecordingSplitEditor'
@@ -687,20 +687,23 @@ export function SourceReader({
   // transcripts:updateExtractedItem) so every surface shows the corrected text.
   const [txEdits, setTxEdits] = useState<Record<string, string>>({})
   useEffect(() => { setTxEdits({}) }, [recordingId])
+  // Actions and key points made from an untrusted transcript are not shown,
+  // like its summary (kiro review of #136).
+  const transcriptTrusted = isTranscriptTrusted(effectiveTranscript)
   const actionItems = useMemo(
-    () => parseJsonArray<string>(effectiveTranscript?.action_items)
+    () => (transcriptTrusted ? parseJsonArray<string>(effectiveTranscript?.action_items) : [])
       .map((s) => s.trim())
       .filter(Boolean)
       .map((text, i) => txEdits[`txa_${i}`] ?? text),
-    [effectiveTranscript?.action_items, txEdits]
+    [effectiveTranscript?.action_items, txEdits, transcriptTrusted]
   )
   // Transcript-JSON key points (decision markers' fallback full text).
   const keyPoints = useMemo(
-    () => parseJsonArray<string>(effectiveTranscript?.key_points)
+    () => (transcriptTrusted ? parseJsonArray<string>(effectiveTranscript?.key_points) : [])
       .map((s) => s.trim())
       .filter(Boolean)
       .map((text, i) => txEdits[`txk_${i}`] ?? text),
-    [effectiveTranscript?.key_points, txEdits]
+    [effectiveTranscript?.key_points, txEdits, transcriptTrusted]
   )
 
   // First-class action_items / decisions rows for the event list's detail surface

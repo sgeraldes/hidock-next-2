@@ -925,6 +925,14 @@ describe('Transcription Service', () => {
       expect(stored.action_items).toBeUndefined()
       expect(stored.title_suggestion).toBeUndefined()
       expect(mockSyncTrustVerdicts).toHaveBeenCalledWith('rec-untrusted')
+      // Gated on the verdict itself: in this suite no capture is rated (the
+      // sync is a spy and nothing is value-excluded), and still nothing runs.
+      const database = await import('../database')
+      const skippedBy = (runId: string) =>
+        (vi.mocked(database.completeProcessingRun).mock.calls.find(([id]) => id === runId)?.[1] as any)?.outputRefs?.skipped
+      expect(skippedBy('run-actionable-detection')).toBe('transcript-untrusted')
+      expect(skippedBy('run-timeline-analysis')).toBe('transcript-untrusted')
+      expect(skippedBy('run-graph-sync')).toBe('transcript-untrusted')
     })
 
     it('leaves a transcript the check trusts to the content rating, as before', { timeout: 20000 }, async () => {

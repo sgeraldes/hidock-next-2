@@ -2908,6 +2908,11 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
       status: 'cancelled',
       outputRefs: { skipped: 'recording-ineligible' }
     })
+  } else if (transcriptUntrusted) {
+    // Gated on the verdict itself, not only on the rating it leads to: when
+    // the capture could not be created there is no rating to read (kiro
+    // review of #136).
+    completeProcessingRun(actionableRun.id, { status: 'cancelled', outputRefs: { skipped: 'transcript-untrusted', detected: 0 } })
   } else if (isValueExcludedRecording(recordingId)) {
     console.log(
       `[Actionable Detection] Skipped value-excluded recording ${recordingId} (no actionables extracted)`
@@ -3011,8 +3016,8 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   })
   const timelineUsage = createGeminiUsageCollector()
   try {
-    // RE-1 — re-check adjacent to the write.
-    if (stillProcessable()) {
+    // RE-1 — re-check adjacent to the write. An untrusted transcript gets no timeline.
+    if (stillProcessable() && !transcriptUntrusted) {
       // P2 (round-3) — also thread the gate INTO analyzeTimeline so its own
       // internal sentiment-LLM await is covered (re-checked before its UPDATE).
       const timeline = await timelineUsage.run(() =>
@@ -3032,7 +3037,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     } else {
       completeProcessingRun(timelineRun.id, {
         status: 'cancelled',
-        outputRefs: { skipped: 'recording-ineligible' }
+        outputRefs: { skipped: transcriptUntrusted ? 'transcript-untrusted' : 'recording-ineligible' }
       })
     }
   } catch (e) {
@@ -3109,7 +3114,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   const identityAllowed = namingAllowed(diarizationQuality)
   try {
     // RE-1 — re-check adjacent to the write.
-    if (stillProcessable() && identityAllowed) {
+    if (stillProcessable() && identityAllowed && !transcriptUntrusted) {
       // P2 (round-3) — thread the gate IN so self-id's own LLM await is covered
       // (its contacts/speaker-bindings/mention-resolutions/scan-marker writes
       // are all re-checked after the await).
@@ -3135,7 +3140,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   // context, written only when corroborated against a trusted roster. Runs
   // AFTER self-ID so only the remaining unbound labels are attempted.
   try {
-    if (stillProcessable() && identityAllowed) {
+    if (stillProcessable() && identityAllowed && !transcriptUntrusted) {
       const inferred = await runSpeakerInference(recordingId, {
         shouldPersist: () => isRecordingProcessable(recordingId)
       })
@@ -3193,7 +3198,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     const { getEventBus } = await import('./event-bus')
     // RE-1 — re-check AFTER the import await; the emit is synchronous, so this
     // fully closes the window (a purged recording never triggers graph ingest).
-    if (stillProcessable()) {
+    if (stillProcessable() && !transcriptUntrusted) {
       getEventBus().emitDomainEvent({
         type: 'entity:transcript-ready',
         timestamp: new Date().toISOString(),
@@ -3203,7 +3208,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     } else {
       completeProcessingRun(graphRun.id, {
         status: 'cancelled',
-        outputRefs: { skipped: 'recording-ineligible' }
+        outputRefs: { skipped: transcriptUntrusted ? 'transcript-untrusted' : 'recording-ineligible' }
       })
     }
   } catch (e) {
@@ -3246,7 +3251,8 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   // personal recording must not be indexed into the assistant's retrieval
   // store (the exclusion set filters SEARCH results, but not indexing new
   // ones for an in-flight transcription; skip it outright here).
-  if (stillProcessable()) {
+  // An untrusted transcript is not indexed for search either.
+  if (stillProcessable() && !transcriptUntrusted) {
     let embeddingProvider = 'not-configured'
     try {
       embeddingProvider = (await getEmbeddingsService().activeProviderId()) ?? 'not-configured'
