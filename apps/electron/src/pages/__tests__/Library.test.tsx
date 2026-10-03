@@ -1285,5 +1285,35 @@ describe('Library — time groups and Show older', () => {
       if (width) Object.defineProperty(HTMLElement.prototype, 'clientWidth', width)
     }
   })
+
+  // Chromium docks a sticky element below its scroll container's top padding:
+  // with py-2 the header stopped 8 px short of the edge and a row showed above
+  // it (owner screenshot, 3-oct-2026; measured in a hidden window: 8 px with the
+  // padding, 0 without). A list with the column header has no top padding on the
+  // scroll area; its content takes the 8 px, which leaves the docked header flush.
+  it('in a wide list the scroll area has no top padding, so the docked header leaves no gap', async () => {
+    const width = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => 1400 })
+    try {
+      vi.mocked(useUnifiedRecordings).mockReturnValue({
+        recordings: [recent],
+        loading: false,
+        error: null,
+        refresh: mockRefresh,
+        deviceConnected: false,
+        stats: { total: 1, deviceOnly: 0, localOnly: 1, both: 0, synced: 1, unsynced: 0, onSource: 0, locallyAvailable: 1 }
+      } as any)
+
+      render(<MemoryRouter><Library /></MemoryRouter>)
+
+      await screen.findByTestId('library-column-header')
+      const list = screen.getByTestId('library-list')
+      expect(list.className).not.toMatch(/\b(py|pt)-\d/)
+      expect(list.className).toMatch(/\bpb-2\b/)
+      expect(screen.getByTestId('library-list-content').className).toMatch(/\bpt-2\b/)
+    } finally {
+      if (width) Object.defineProperty(HTMLElement.prototype, 'clientWidth', width)
+    }
+  })
 })
 
