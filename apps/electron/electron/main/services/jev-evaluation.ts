@@ -278,6 +278,23 @@ export function withEvidence(ev: RecordingEvaluation, evidence: EvaluationEviden
   return { ...ev, stars: 1, starLevel: 1, starsConfidence: 1, kind: rules.kind, kindConfidence: 1, context: rules.context, contextConfidence: 1 }
 }
 
+/** Under this Jev kind confidence a small model is asked for the kind (kind-fallback.ts). */
+export const KIND_FALLBACK_MAX_JEV_CONFIDENCE = 0.4
+
+/**
+ * The kind to store: the small model's answer when Jev was under the line and
+ * the model answered, otherwise Jev's.
+ */
+export function kindWithFallback(
+  jev: { kind: RecordingKind | null; kindConfidence: number | null },
+  answers: Record<string, unknown> | null | undefined
+): { kind: RecordingKind | null; kindConfidence: number | null } {
+  if ((jev.kindConfidence ?? 0) >= KIND_FALLBACK_MAX_JEV_CONFIDENCE) return jev
+  const llm = answers?.kind_llm as { choice?: unknown; confidence?: unknown } | undefined
+  if (!llm || typeof llm.choice !== 'string' || !(llm.choice in RECORDING_KINDS)) return jev
+  return { kind: llm.choice as RecordingKind, kindConfidence: typeof llm.confidence === 'number' ? llm.confidence : null }
+}
+
 function clamp01(n: unknown): number | null {
   return typeof n === 'number' && Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : null
 }

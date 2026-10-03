@@ -74,6 +74,7 @@ export const DEFAULT_PLANS: Record<TextStepId, Plan> = {
   'self-id': chatRoute('chat'),
   'speaker-roster': chatRoute('chat'),
   'meeting-pick': chatRoute('chat'),
+  'kind-pick': chatRoute('chat'),
   reformat: chatRoute('chat'),
   notes: chatRoute('suggestions'),
   outputs: { calls: [{ profile: { kind: 'router', task: 'outputs', mode: 'generate' } }] }

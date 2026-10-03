@@ -70,6 +70,7 @@ import {
   evidenceCap,
   rulesEvaluation,
   withEvidence,
+  kindWithFallback,
   RULES_MODEL,
   type EvaluationAudio,
   type EvidenceCap,
@@ -1064,7 +1065,10 @@ export async function recomputeEvaluationsFromEvidence(recordingIds?: string[]):
     } catch {
       continue // an unreadable answer set is left as it was stored
     }
-    const derived = withEvidence(parseEvaluation({ model: row.model ?? '', answers } as JevResponse), evidence)
+    const parsed = parseEvaluation({ model: row.model ?? '', answers } as JevResponse)
+    // Tier 2: the small model's kind, where Jev was undecided (kind-fallback.ts).
+    const kind = kindWithFallback(parsed, answers as unknown as Record<string, unknown>)
+    const derived = withEvidence({ ...parsed, ...kind }, evidence)
     const same =
       derived.starLevel === row.star_level &&
       derived.kind === row.kind &&
