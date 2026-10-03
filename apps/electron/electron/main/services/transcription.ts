@@ -2568,8 +2568,18 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   // the transcript was stored, after the analysis. A transcript that cannot
   // have come from this audio is stored without any of that; its recording is
   // rated "no value" from trust below, which keeps every later step away.
-  const integrityNow = checkTranscriptIntegrity(recordingId, rawTranscript.speakers)
-  const transcriptUntrusted = integrityNow.status === 'broken'
+  // If the check itself cannot run, the transcript goes on as before; the same
+  // check runs again when it is stored and the trust sync follows from there.
+  let integrityNow: ReturnType<typeof checkTranscriptIntegrity> | null = null
+  try {
+    integrityNow = checkTranscriptIntegrity(recordingId, rawTranscript.speakers)
+  } catch (error) {
+    console.warn(
+      `[Transcription] ${recordingId}: trust check before analysis failed, analysing as usual: ` +
+        (error instanceof Error ? error.message : String(error))
+    )
+  }
+  const transcriptUntrusted = integrityNow?.status === 'broken'
   const hasGeminiAnalysis = !!resolveGeminiApiKey() && !transcriptUntrusted
   const analysisProvider = hasGeminiAnalysis ? 'gemini' : 'hidock-next'
   const analysisModel = hasGeminiAnalysis ? (config.chat?.geminiModel || CURRENT_GEMINI_CHAT_MODEL) : null
@@ -2593,12 +2603,12 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
         status: 'cancelled',
         outputRefs: {
           skipped: 'transcript-untrusted',
-          findings: integrityNow.issues.map((issue) => issue.code)
+          findings: (integrityNow?.issues ?? []).map((issue) => issue.code)
         }
       })
       console.log(
         `[Transcription] ${recordingId}: transcript does not fit its audio ` +
-          `(${integrityNow.issues.map((issue) => issue.code).join(', ')}); no summary, title or analysis`
+          `(${(integrityNow?.issues ?? []).map((issue) => issue.code).join(', ')}); no summary, title or analysis`
       )
     } else {
       analysis = await summaryUsage.run(() =>
