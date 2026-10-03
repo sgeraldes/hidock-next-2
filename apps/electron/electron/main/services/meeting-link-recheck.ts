@@ -7,11 +7,19 @@
  * the calendar had moved to 19:30). Every calendar sync, from the ICS feed or a
  * connector, ends with `calendar:synced`; this listener then re-checks the
  * links (database.recheckTimeLinks) and links what is left unlinked.
+ *
+ * Before that, meetings from the ICS feed (no attendees) take the attendees of
+ * their Outlook twin, and those attendees become contacts, so an Outlook sync
+ * helps the next identity pass at once instead of at the next start (3-oct-2026).
  */
 
 import { getEventBus } from './event-bus'
 import { recheckTimeLinks } from './database'
-import { autoLinkRecordingsToMeetings } from './org-reconciler'
+import {
+  autoLinkRecordingsToMeetings,
+  fillAttendeesFromOutlookTwins,
+  upsertContactsFromMeetings
+} from './org-reconciler'
 
 /** Syncs often come in a burst (ICS, then each connector account); run once after the last. */
 export const RECHECK_DEBOUNCE_MS = 2_000
@@ -24,6 +32,8 @@ export function startMeetingLinkRecheck(): () => void {
     timer = setTimeout(() => {
       timer = null
       try {
+        // The contact pass reads every meeting; run it only when one gained attendees.
+        if (fillAttendeesFromOutlookTwins().filled > 0) upsertContactsFromMeetings()
         recheckTimeLinks()
         autoLinkRecordingsToMeetings()
       } catch (error) {

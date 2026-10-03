@@ -33,6 +33,37 @@ describe('methodConfidence', () => {
   })
 })
 
+describe('the voice and calendar methods of the 3-oct-2026 spec', () => {
+  const table: Array<[string, number, number]> = [
+    ['voice', 85, 0.95],
+    ['one-on-one', 84, 0.94],
+    ['voice-presence', 82, 0.92],
+    ['elimination', 75, 0.85],
+    ['owner-presence', 70, 0.8],
+    ['jev-tiebreak', 60, 0.75]
+  ]
+
+  it.each(table)('%s ranks %i with confidence %d', (method, rank, confidence) => {
+    expect(methodPriority(method)).toBe(rank)
+    expect(methodConfidence(method)).toBe(confidence)
+  })
+
+  it('fits them between the existing tiers', () => {
+    expect(methodPriority('self-identification')).toBeGreaterThan(methodPriority('voice'))
+    expect(methodPriority('voice-presence')).toBeGreaterThan(methodPriority('attendee-email'))
+    expect(methodPriority('attendee-email')).toBeGreaterThan(methodPriority('elimination'))
+    expect(methodPriority('owner-presence')).toBeGreaterThan(methodPriority('speaker-map'))
+    expect(methodPriority('speaker-map')).toBeGreaterThan(methodPriority('jev-tiebreak'))
+    expect(methodPriority('jev-tiebreak')).toBeGreaterThan(methodPriority('attendee-context'))
+  })
+
+  it('never replaces manual, and a higher voice tier replaces a lower text one', () => {
+    for (const [method] of table) expect(canUpgrade('manual', method)).toBe(false)
+    expect(canUpgrade('jev-tiebreak', 'voice')).toBe(true)
+    expect(canUpgrade('voice', 'jev-tiebreak')).toBe(false)
+  })
+})
+
 describe('canUpgrade (upgrade-only sweep)', () => {
   it('allows resolving a not-yet-resolved recording', () => {
     expect(canUpgrade(null, 'attendee-context')).toBe(true)

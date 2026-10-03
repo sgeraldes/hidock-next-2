@@ -1300,6 +1300,77 @@ export function mergeDuplicateMeetingOccurrences(): number {
   return mergedGroups
 }
 
+/** A stored attendees value that names nobody. */
+const NO_ATTENDEES_SQL = `(attendees IS NULL OR TRIM(attendees) IN ('', '[]'))`
+
+/**
+ * Attendees from the Outlook twin (spec 2026-10-03, section 1a). The ICS feed carries no
+ * attendees, and every Outlook event also arrives as an `m365…` row with the same subject and
+ * start that does. A meeting that is not an Outlook row and has no attendees takes them from
+ * its twin, plus the organizer where it has none. When the twins disagree (two Outlook rows
+ * with the same subject and start and different attendees) nothing is copied and the meeting
+ * counts as ambiguous. Twins that agree count as one.
+ *
+ * Idempotent: a filled meeting has attendees and is not a target again. It does not touch
+ * updated_at, which mergeDuplicateMeetingOccurrences reads as "last synced". The contacts
+ * and meeting_contacts rows come from upsertContactsFromMeetings, which runs after this step
+ * and reads every meeting. An ICS resync keeps the copied attendees (upsertMeetingsBatch
+ * writes COALESCE(?, attendees)) but clears the organizer, which the next pass copies again.
+ */
+export function fillAttendeesFromOutlookTwins(): { filled: number; ambiguous: number } {
+  const targets = queryAll<{ id: string; subject: string; start_time: string }>(
+    `SELECT id, subject, start_time FROM meetings WHERE id NOT LIKE 'm365%' AND ${NO_ATTENDEES_SQL}`
+  )
+  if (targets.length === 0) return { filled: 0, ambiguous: 0 }
+
+  const twinsBySlot = new Map<
+    string,
+    Array<{ attendees: string; organizer_name: string | null; organizer_email: string | null }>
+  >()
+  for (const twin of queryAll<{
+    subject: string
+    start_time: string
+    attendees: string
+    organizer_name: string | null
+    organizer_email: string | null
+  }>(
+    `SELECT subject, start_time, attendees, organizer_name, organizer_email FROM meetings
+     WHERE id LIKE 'm365%' AND NOT ${NO_ATTENDEES_SQL} ORDER BY id`
+  )) {
+    const key = `${twin.subject}\u0000${twin.start_time}`
+    const list = twinsBySlot.get(key)
+    if (list) list.push(twin)
+    else twinsBySlot.set(key, [twin])
+  }
+
+  let filled = 0
+  let ambiguous = 0
+  runInTransaction(() => {
+    for (const target of targets) {
+      const twins = twinsBySlot.get(`${target.subject}\u0000${target.start_time}`)
+      if (!twins) continue
+      if (new Set(twins.map((t) => t.attendees)).size > 1) {
+        ambiguous++
+        continue
+      }
+      const twin = twins[0]
+      run(
+        `UPDATE meetings SET attendees = ?,
+           organizer_name = COALESCE(NULLIF(organizer_name, ''), ?),
+           organizer_email = COALESCE(NULLIF(organizer_email, ''), ?)
+         WHERE id = ?`,
+        [twin.attendees, twin.organizer_name, twin.organizer_email, target.id]
+      )
+      filled++
+    }
+  })
+
+  if (filled > 0 || ambiguous > 0) {
+    console.log(`[OrgReconciler] Attendees from the Outlook twin: ${filled} meetings filled, ${ambiguous} ambiguous`)
+  }
+  return { filled, ambiguous }
+}
+
 // ---------------------------------------------------------------------------
 // BUG A — misbundled-recording repair (gated, idempotent stale-data cleanup)
 // ---------------------------------------------------------------------------
@@ -1545,6 +1616,12 @@ export const RECONCILE_STEPS: readonly ReconcileStep[] = [
   },
   { name: 'recording-merge', failure: 'duplicate recording merge failed', run: mergeDuplicateRecordings },
   { name: 'recording-auto-link', failure: 'recording auto-link failed', run: autoLinkRecordingsToMeetings },
+  // Before the contact steps, so the attendees it copies become contacts in the same pass.
+  {
+    name: 'outlook-twin-attendees',
+    failure: 'attendees from the Outlook twin failed',
+    run: fillAttendeesFromOutlookTwins
+  },
   { name: 'contacts-upsert', failure: 'contacts upsert failed', run: upsertContactsFromMeetings },
   { name: 'contact-merge', failure: 'duplicate contact merge failed', run: mergeDuplicateContacts },
   { name: 'ambiguous-bucket-split', failure: 'ambiguous-bucket auto-split failed', run: autoSplitAmbiguousBuckets },

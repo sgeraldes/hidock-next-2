@@ -170,7 +170,9 @@ describe('runSpeakerInference', () => {
     const questions = (askJev.mock.calls[0] as unknown[])[2] as Record<string, { criteria: Record<string, string> }>
     expect(Object.values(questions.s1.criteria).slice(0, -1)).toEqual(['Óscar Pereda'])
     expect(res.bound).toBe(1)
-    expect(db.assignments).toEqual([{ label: 'Speaker 5', by: { newName: 'Óscar Pereda' } }])
+    expect(db.assignments).toEqual([
+      { label: 'Speaker 5', by: { newName: 'Óscar Pereda', source: 'jev', confidence: 0.95 } }
+    ])
   })
 
   it('records that the roster was asked, and not when it could not ask', async () => {
@@ -246,7 +248,9 @@ describe('runSpeakerInference', () => {
     generateText.mockResolvedValue('[{"speaker":"Speaker 5","name":"Óscar Pereda","confidence":"high","evidence":"gracias Óscar"}]')
     const res = await runSpeakerInference('rec-1')
     expect(res.bound).toBe(1)
-    expect(db.assignments).toEqual([{ label: 'Speaker 5', by: { newName: 'Óscar Pereda' } }])
+    expect(db.assignments).toEqual([
+      { label: 'Speaker 5', by: { newName: 'Óscar Pereda', source: 'speaker-inference', confidence: 0.7 } }
+    ])
     expect(db.mentions[0]?.[2]).toBe('c1')
     expect(db.mentions[0]?.[3]).toBe('speaker-inference')
   })
@@ -306,7 +310,9 @@ describe('runSpeakerInference', () => {
     generateText.mockResolvedValue('[{"speaker":"Speaker 5","name":"Babis","confidence":"high","evidence":"Babis is the tech lead"}]')
     const res = await runSpeakerInference('rec-1')
     expect(res.bound).toBe(1)
-    expect(db.assignments).toEqual([{ label: 'Speaker 5', by: { contactId: 'c-bhavesh' } }])
+    expect(db.assignments).toEqual([
+      { label: 'Speaker 5', by: { contactId: 'c-bhavesh', source: 'speaker-inference', confidence: 0.7 } }
+    ])
   })
 
   it('an ambiguous resolveContact bucket is NEVER an auto-link', async () => {

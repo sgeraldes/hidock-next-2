@@ -18,7 +18,7 @@ import { MIN_TIME_LINK_COVERAGE, meetingCoverage } from './meeting-coverage'
 import { isImpossibleTranscriptDensity, lowValueMaxSeconds } from './value-thresholds'
 import type { QualityRating } from '@/types/knowledge'
 
-const SCHEMA_VERSION = 64
+const SCHEMA_VERSION = 65
 
 const SCHEMA = `
 -- Calendar events from ICS
@@ -419,6 +419,24 @@ CREATE TABLE IF NOT EXISTS pipeline_calls (
 CREATE INDEX IF NOT EXISTS idx_pipeline_calls_step ON pipeline_calls(step, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_pipeline_calls_recording ON pipeline_calls(recording_id);
 
+-- Identity decision journal (v65, identity-decisions.ts). One row per automatic identity
+-- decision: what was decided (subject_key, e.g. recording:<id>:speaker:<label>), by which
+-- method, the evidence, and the state before so undo can put it back. An undone row stops
+-- the same method from deciding the same subject again.
+CREATE TABLE IF NOT EXISTS identity_decisions (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK(kind IN ('speaker', 'mention', 'merge', 'voice-anchor')),
+    subject_key TEXT NOT NULL,
+    method TEXT NOT NULL,
+    contact_id TEXT,
+    evidence_json TEXT NOT NULL,
+    before_json TEXT,
+    created_at TEXT NOT NULL,
+    undone_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_identity_decisions_subject ON identity_decisions(kind, subject_key);
+CREATE INDEX IF NOT EXISTS idx_identity_decisions_created ON identity_decisions(created_at DESC);
+
 -- Stage-level processing provenance (v52 / SPEC-009). One provider call can
 -- produce several output stages, but every displayed result references the
 -- exact immutable run that produced it.
@@ -683,13 +701,17 @@ CREATE TABLE IF NOT EXISTS meeting_contacts (
 );
 
 -- Speaker identity map: binds a transcript speaker label (e.g. "Speaker 1")
--- to a canonical contact, per recording (v25).
+-- to a canonical contact, per recording (v25). source / confidence (v65) say
+-- which writer made the binding (manual, self-identification, voice, ...).
+-- Rows written before v65 keep both NULL.
 CREATE TABLE IF NOT EXISTS transcript_speakers (
     id TEXT PRIMARY KEY,
     recording_id TEXT NOT NULL,
     speaker_label TEXT NOT NULL,
     contact_id TEXT NOT NULL,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    source TEXT,
+    confidence REAL,
     UNIQUE(recording_id, speaker_label),
     FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE,
     FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE
@@ -3263,6 +3285,33 @@ const MIGRATIONS: Record<number, () => void> = {
     getDatabase().run('CREATE INDEX IF NOT EXISTS idx_pipeline_calls_recording ON pipeline_calls(recording_id)')
     console.log('Migration v64 complete')
   },
+  65: () => {
+    // Where each speaker binding came from, and the identity decision journal. Additive:
+    // two nullable columns (existing rows stay NULL, "unknown writer") and a new table.
+    console.log('Running migration to schema v65: speaker source + identity_decisions')
+    const database = getDatabase()
+    for (const column of ['source TEXT', 'confidence REAL']) {
+      try {
+        database.run(`ALTER TABLE transcript_speakers ADD COLUMN ${column}`)
+      } catch {
+        // Already present on a database repaired before this migration ran.
+      }
+    }
+    database.run(`CREATE TABLE IF NOT EXISTS identity_decisions (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK(kind IN ('speaker', 'mention', 'merge', 'voice-anchor')),
+    subject_key TEXT NOT NULL,
+    method TEXT NOT NULL,
+    contact_id TEXT,
+    evidence_json TEXT NOT NULL,
+    before_json TEXT,
+    created_at TEXT NOT NULL,
+    undone_at TEXT
+)`)
+    database.run('CREATE INDEX IF NOT EXISTS idx_identity_decisions_subject ON identity_decisions(kind, subject_key)')
+    database.run('CREATE INDEX IF NOT EXISTS idx_identity_decisions_created ON identity_decisions(created_at DESC)')
+    console.log('Migration v65 complete')
+  },
 }
 
 /**
@@ -3851,6 +3900,8 @@ function repairPhase(): void {
         speaker_label TEXT NOT NULL,
         contact_id TEXT NOT NULL,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        source TEXT,
+        confidence REAL,
         UNIQUE(recording_id, speaker_label),
         FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE,
         FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE
@@ -10522,10 +10573,28 @@ function assertRecordingEligibleForSpeakerMutation(recordingId: string): void {
 }
 
 /**
+ * Which writer bound a transcript speaker (transcript_speakers.source, v65). The
+ * method names match signal-tiers.ts where a tier exists; 'live-channel' is the
+ * microphone channel of a live recording (live-channel-speakers.ts) and 'jev'
+ * is Jev's speaker-name pick (speaker-inference.ts).
+ */
+export type SpeakerSource =
+  | 'manual'
+  | 'self-identification'
+  | 'speaker-inference'
+  | 'jev'
+  | 'live-channel'
+  | 'voice'
+  | 'one-on-one'
+  | 'elimination'
+
+/**
  * Bind a transcript speaker label to a contact. Provide either an existing
  * contactId or a newName (upserted by case-insensitive name). Writes the map
  * row (replacing any prior binding for the label) and, when the recording is
  * linked to a meeting, links the contact to that meeting. Returns the contact.
+ * `source` and `confidence` record which writer made the binding (v65); a
+ * caller that passes neither leaves both NULL.
  *
  * @throws if neither contactId nor newName is usable, or contactId is unknown.
  */
@@ -10536,6 +10605,8 @@ export function assignSpeaker(
     contactId?: string
     newName?: string
     voiceAnchor?: { method: 'manual' | 'self-identification'; confidence: number }
+    source?: SpeakerSource
+    confidence?: number
   }
 ): Contact {
   return runInTransaction(() => {
@@ -10574,8 +10645,9 @@ export function assignSpeaker(
 
     // UNIQUE(recording_id, speaker_label) makes this an upsert of the binding.
     runNoSave(
-      'INSERT OR REPLACE INTO transcript_speakers (id, recording_id, speaker_label, contact_id) VALUES (?, ?, ?, ?)',
-      [randomUUID(), recordingId, speakerLabel, contact.id]
+      `INSERT OR REPLACE INTO transcript_speakers (id, recording_id, speaker_label, contact_id, source, confidence)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [randomUUID(), recordingId, speakerLabel, contact.id, opts.source ?? null, opts.confidence ?? null]
     )
 
     // A manual confirmation or explicit first-person self-identification can
@@ -10834,7 +10906,8 @@ export function assignSpeakerFromHere(
     // assignSpeaker each re-assert inside their own nested transactions).
     assertRecordingEligibleForSpeakerMutation(recordingId)
     const derivedLabel = splitSpeakerFrom(recordingId, baseLabel, fromTurnIndex)
-    const contact = assignSpeaker(recordingId, derivedLabel, opts)
+    // Only the owner splits a speaker, so the binding is manual.
+    const contact = assignSpeaker(recordingId, derivedLabel, { ...opts, source: 'manual', confidence: 1 })
     return { derivedLabel, contact }
   })
 }

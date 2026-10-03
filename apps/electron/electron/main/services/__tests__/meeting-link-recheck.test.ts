@@ -10,8 +10,15 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 const recheckTimeLinks = vi.fn(() => ({ checked: 3, unlinked: 1 }))
 vi.mock('../database', () => ({ recheckTimeLinks: (...args: unknown[]) => recheckTimeLinks(...(args as [])) }))
 
-const autoLink = vi.fn(() => 1)
-vi.mock('../org-reconciler', () => ({ autoLinkRecordingsToMeetings: () => autoLink() }))
+const calls: string[] = []
+const autoLink = vi.fn(() => { calls.push('autoLink'); return 1 })
+const fillTwins = vi.fn(() => { calls.push('fillTwins'); return { filled: 2, ambiguous: 0 } })
+const upsertContacts = vi.fn(() => { calls.push('upsertContacts'); return { contacts: 3, links: 4 } })
+vi.mock('../org-reconciler', () => ({
+  autoLinkRecordingsToMeetings: () => autoLink(),
+  fillAttendeesFromOutlookTwins: () => fillTwins(),
+  upsertContactsFromMeetings: () => upsertContacts()
+}))
 
 import { getEventBus } from '../event-bus'
 import { startMeetingLinkRecheck, RECHECK_DEBOUNCE_MS } from '../meeting-link-recheck'
@@ -27,6 +34,9 @@ describe('startMeetingLinkRecheck', () => {
     vi.useFakeTimers()
     recheckTimeLinks.mockClear()
     autoLink.mockClear()
+    fillTwins.mockClear()
+    upsertContacts.mockClear()
+    calls.length = 0
     stop = startMeetingLinkRecheck()
   })
 
@@ -43,6 +53,25 @@ describe('startMeetingLinkRecheck', () => {
     vi.advanceTimersByTime(RECHECK_DEBOUNCE_MS)
 
     expect(recheckTimeLinks).toHaveBeenCalledTimes(1)
+    expect(autoLink).toHaveBeenCalledTimes(1)
+  })
+
+  // An Outlook sync writes m365 rows; the ICS rows the recordings link to take
+  // their attendees right away, not at the next start (owner, 3-oct-2026).
+  it('copies attendees from Outlook twins and makes their contacts before re-checking links', () => {
+    emitSynced()
+    vi.advanceTimersByTime(RECHECK_DEBOUNCE_MS)
+
+    expect(calls).toEqual(['fillTwins', 'upsertContacts', 'autoLink'])
+  })
+
+  it('skips the contact pass when no meeting gained attendees', () => {
+    fillTwins.mockImplementationOnce(() => { calls.push('fillTwins'); return { filled: 0, ambiguous: 1 } })
+
+    emitSynced()
+    vi.advanceTimersByTime(RECHECK_DEBOUNCE_MS)
+
+    expect(upsertContacts).not.toHaveBeenCalled()
     expect(autoLink).toHaveBeenCalledTimes(1)
   })
 

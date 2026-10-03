@@ -122,7 +122,13 @@ export interface LiveOwnerDeps {
   ownerContactId: () => string | null
   /** The microphone channel noted with this file when it was recorded (not today's setting). */
   micChannel: (wavPath: string) => 0 | 1 | null
-  assign: (recordingId: string, label: string, contactId: string) => void
+  /** `from` is what transcript_speakers keeps as source and confidence. */
+  assign: (
+    recordingId: string,
+    label: string,
+    contactId: string,
+    from: { source: 'live-channel'; confidence: number }
+  ) => void
 }
 
 export type LiveOwnerResult =
@@ -143,6 +149,9 @@ export async function nameOwnerOnLiveRecording(recordingId: string, deps: LiveOw
   const label = microphoneSpeaker(energy)
   if (!label) return { named: false, reason: 'no single speaker is clearly on the microphone' }
   if (map.some((m) => m.speaker_label === label)) return { named: false, reason: 'that speaker is already named' }
-  deps.assign(recordingId, label, owner)
+  // The confidence is that speaker's share of the microphone energy (at least MIC_SHARE_MIN).
+  const e = energy.get(label)!
+  const micShare = Math.round((e.mic / (e.mic + e.other)) * 100) / 100
+  deps.assign(recordingId, label, owner, { source: 'live-channel', confidence: micShare })
   return { named: true, label }
 }
