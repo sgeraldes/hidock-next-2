@@ -30,6 +30,8 @@ import { resolveSpeakerEngine } from './speaker-engines'
 import { getActiveTranscriptions } from './transcription-activity'
 import { runVoiceLearning } from './voice-learning'
 import { runIdentityRules } from './identity-rules'
+import { isValueBackfillRunning } from './value-backfill'
+import { isBootDrainActive } from './boot-scheduler'
 import {
   DEFAULT_VOICE_BACKFILL,
   type VoiceBackfillConfig,
@@ -373,8 +375,8 @@ async function maybeApplyIdentityRules(d: ResolvedDeps, force: boolean): Promise
   }
 }
 
-/** The value scan and the boot scheduler are loaded only when the job really asks them. */
-async function resolveDeps(deps: VoiceBackfillDeps): Promise<ResolvedDeps> {
+/** Fills every dependency the caller did not inject with the real service. */
+function resolveDeps(deps: VoiceBackfillDeps): ResolvedDeps {
   const isTranscribing = deps.isTranscribing ?? (() => getActiveTranscriptions().length > 0)
   return {
     now: deps.now ?? (() => new Date()),
@@ -382,8 +384,8 @@ async function resolveDeps(deps: VoiceBackfillDeps): Promise<ResolvedDeps> {
     isTranscribing,
     learnVoices: deps.learnVoices ?? (() => runVoiceLearning({ isTranscribing })),
     applyIdentityRules: deps.applyIdentityRules ?? (() => runIdentityRules({ isTranscribing })),
-    isValueBackfillRunning: deps.isValueBackfillRunning ?? (await import('./value-backfill')).isValueBackfillRunning,
-    isBootDrainActive: deps.isBootDrainActive ?? (await import('./boot-scheduler')).isBootDrainActive,
+    isValueBackfillRunning: deps.isValueBackfillRunning ?? isValueBackfillRunning,
+    isBootDrainActive: deps.isBootDrainActive ?? isBootDrainActive,
     runPreflight: deps.runPreflight ?? runSpeakerLinkingPreflight,
     emit:
       deps.emit ??
@@ -478,7 +480,7 @@ async function processRecording(
  * starts, the window closes, the schedule changes or the recording leaves the library.
  */
 export async function runVoiceBackfillOnce(deps: VoiceBackfillDeps = {}): Promise<VoiceBackfillRun> {
-  const d = await resolveDeps(deps)
+  const d = resolveDeps(deps)
   const allowedNow = (): VoiceBackfillSkipReason | null => {
     const schedule = currentSchedule()
     if (schedule.schedule === 'off') return 'off'
@@ -511,7 +513,7 @@ export async function runVoiceBackfillOnce(deps: VoiceBackfillDeps = {}): Promis
  * The answer feeds the estimate for the rest of the library.
  */
 export async function measureOneRecording(deps: VoiceBackfillDeps = {}): Promise<VoiceBackfillMeasure> {
-  const d = await resolveDeps(deps)
+  const d = resolveDeps(deps)
   if (running) throw new Error('A recording is already being measured. Try again when it finishes.')
   const next = pickNextRecordingForVoice()
   if (!next) throw new Error('No recording is waiting for voice evidence.')
