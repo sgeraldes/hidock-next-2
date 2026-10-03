@@ -1231,6 +1231,12 @@ export function Library() {
     rowLayout === 'wide' ? WIDE_ROW_HEIGHT_PX : rowLayout === 'three' ? THREE_LINE_ROW_HEIGHT_PX : COMPACT_ROW_HEIGHT_PX
   // The sticky column header covers the top of the list; scrolling to a row leaves it clear.
   const showColumnHeader = (compactView || showTrash) && wideRows
+  // Chromium docks a sticky element below its scroll container's top padding: with
+  // padding on top, the column header stopped 8 px short of the edge and rows showed
+  // through above it (owner, 3-oct-2026). The inner wrapper takes that top space
+  // instead, so the list looks the same at rest and the header docks flush.
+  const listPadding = showColumnHeader ? 'pb-2' : 'py-2'
+  const listContentPadding = showColumnHeader ? 'pt-2' : ''
 
   // Fixed per-item heights + their prefix-sum offsets. Rows stay a strict 44px
   // (32px when wide); headers are 28px. Positioning the compact rows from these
@@ -3002,7 +3008,7 @@ export function Library() {
                 containerRef.current = el
                 setListScrollElement((current) => current === el ? current : el)
               }}
-              className="h-full overflow-y-auto overflow-x-hidden py-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-inset"
+              className={`h-full overflow-y-auto overflow-x-hidden ${listPadding} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-inset`}
               style={showColumnHeader ? { scrollPaddingTop: COLUMN_HEADER_HEIGHT_PX } : undefined}
               onKeyDown={handleKeyDown}
               tabIndex={0}
@@ -3029,7 +3035,10 @@ export function Library() {
         {/* min-w-0 so the list content always shrinks to the pane width and NEVER
             scrolls horizontally — rows truncate instead. The pane itself has a
             sensible minimum (TriPaneLayout) so the title/date can't be starved. */}
-        <div className={`w-full min-w-0 transition-opacity ${isFilterPending ? 'opacity-60' : 'opacity-100'}`}>
+        <div
+          className={`w-full min-w-0 ${listContentPadding} transition-opacity ${isFilterPending ? 'opacity-60' : 'opacity-100'}`}
+          data-testid="library-list-content"
+        >
           {permanentDeleteProgress && (
             (() => {
               const deleteStage = permanentDeleteProgress.stage === 'removing-local'

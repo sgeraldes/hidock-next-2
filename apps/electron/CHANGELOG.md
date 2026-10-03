@@ -14,6 +14,8 @@ keeps the recordings it used to cover.
   project meeting) shows on its row the moment it is saved, without waiting for a refresh.
 - **The date group no longer covers a row.** In the wide list, "Today", "This week" and the others
   show in the column header, next to Title, while you scroll.
+- **Nothing shows above the column header.** While you scroll, the header sits on the top edge of the
+  list; before, a strip of the row underneath showed above it.
 - **A meeting recorded in pieces says so.** Two recordings of one meeting read "· part 1 of 2" and
   "· part 2 of 2".
 - **Long recordings are not tied to one meeting by the clock.** A recording is linked by time only
