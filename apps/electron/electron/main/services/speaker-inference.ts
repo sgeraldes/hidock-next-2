@@ -33,7 +33,8 @@ import {
   queryAll,
   run,
   assignSpeaker,
-  resolveMention
+  resolveMention,
+  type SpeakerSource
 } from './database'
 import { resolveContact } from './entity-resolver'
 import { getConfig } from './config'
@@ -358,8 +359,11 @@ export async function runSpeakerInference(
   // Jev when it may run (Settings > Decisions (Jev) > Name the speakers): one
   // choice per speaker from the roster. Otherwise the LLM, as before. Either
   // way the proposals go through the same corroboration and write rules below.
-  let proposals: InferenceProposal[]
+  // Jev's picks carry its probability; the LLM's carry none, so its bindings
+  // take the fixed 0.7 the mention resolution below also uses.
+  let proposals: Array<InferenceProposal & { probability?: number }>
   const jevKey = (opts.jevKey ?? jevKeyFor)('speakerNames')
+  const source: SpeakerSource = jevKey ? 'jev' : 'speaker-inference'
   if (jevKey) {
     const request = buildSpeakerNameRequest(
       unboundSamples.filter((u) => u.label !== '(context from other speakers)'),
@@ -380,7 +384,12 @@ export async function runSpeakerInference(
     if (!isRecordingEligible(recordingId) || (opts.shouldPersist && !opts.shouldPersist())) {
       return { proposed: 0, bound: 0, skipped: true }
     }
-    proposals = parseSpeakerNames(res, request).map((pick) => ({ speaker: pick.label, name: pick.name, confidence: 'high' as const }))
+    proposals = parseSpeakerNames(res, request).map((pick) => ({
+      speaker: pick.label,
+      name: pick.name,
+      confidence: 'high' as const,
+      probability: pick.probability
+    }))
   } else {
     const prompt = buildInferencePrompt({
       boundNames: existing.map((e) => ({ label: e.speaker_label, name: e.name })),
@@ -440,10 +449,11 @@ export async function runSpeakerInference(
     try {
       // contactHit → bind the CANONICAL contact (identity correction: the
       // garbled proposal resolves to the real person); else bind the proposal.
+      const provenance = { source, confidence: p.probability ?? 0.7 }
       const contact =
         contactHit && res.id
-          ? assignSpeaker(recordingId, p.speaker, { contactId: res.id })
-          : assignSpeaker(recordingId, p.speaker, { newName: p.name })
+          ? assignSpeaker(recordingId, p.speaker, { contactId: res.id, ...provenance })
+          : assignSpeaker(recordingId, p.speaker, { newName: p.name, ...provenance })
       try {
         resolveMention(recordingId, p.name, contact.id, 'speaker-inference', 0.7)
       } catch (e) {

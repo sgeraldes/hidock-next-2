@@ -1148,11 +1148,14 @@ Segments: ${linking.segments.map((segment) =>
 /** Bind only clusters already anchored to a contact. Unknown clusters stay anonymous. */
 export function applyKnownVoiceBindings(recordingId: string): number {
   return runInTransaction(() => {
-    const rows = queryAll<{ transcript_speaker_label: string; contact_id: string }>(
-      `SELECT DISTINCT rvc.transcript_speaker_label, vc.contact_id
+    // similarity is the voice match that put this speaker in the cluster; NULL for a
+    // speaker that founded its cluster, and then the binding's confidence stays NULL too.
+    const rows = queryAll<{ transcript_speaker_label: string; contact_id: string; similarity: number | null }>(
+      `SELECT rvc.transcript_speaker_label, vc.contact_id, MAX(rvc.similarity) AS similarity
        FROM recording_voice_clusters rvc
        JOIN voice_clusters vc ON vc.id = rvc.voice_cluster_id
-       WHERE rvc.recording_id = ? AND rvc.transcript_speaker_label IS NOT NULL AND vc.contact_id IS NOT NULL`,
+       WHERE rvc.recording_id = ? AND rvc.transcript_speaker_label IS NOT NULL AND vc.contact_id IS NOT NULL
+       GROUP BY rvc.transcript_speaker_label, vc.contact_id`,
       [recordingId]
     )
     let inserted = 0
@@ -1163,8 +1166,9 @@ export function applyKnownVoiceBindings(recordingId: string): number {
       )
       if (existing) continue
       runNoSave(
-        'INSERT INTO transcript_speakers (id, recording_id, speaker_label, contact_id) VALUES (?, ?, ?, ?)',
-        [randomUUID(), recordingId, row.transcript_speaker_label, row.contact_id]
+        `INSERT INTO transcript_speakers (id, recording_id, speaker_label, contact_id, source, confidence)
+         VALUES (?, ?, ?, ?, 'voice', ?)`,
+        [randomUUID(), recordingId, row.transcript_speaker_label, row.contact_id, row.similarity]
       )
       inserted++
     }

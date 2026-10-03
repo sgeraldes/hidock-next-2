@@ -41,16 +41,23 @@ beforeAll(() => {
 })
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
-function deps(over: Partial<LiveOwnerDeps> = {}): LiveOwnerDeps & { assigned: string[] } {
+function deps(
+  over: Partial<LiveOwnerDeps> = {}
+): LiveOwnerDeps & { assigned: string[]; provenance: Array<{ source: string; confidence: number }> } {
   const assigned: string[] = []
+  const provenance: Array<{ source: string; confidence: number }> = []
   return {
     assigned,
+    provenance,
     recording: () => ({ filename: '2026Sep28-104512-Live.wav', file_path: wav }),
     segments: () => segments,
     speakerMap: () => [],
     ownerContactId: () => 'contact-me',
     micChannel: () => 0,
-    assign: (_id, label, contact) => assigned.push(`${label}=${contact}`),
+    assign: (_id, label, contact, from) => {
+      assigned.push(`${label}=${contact}`)
+      provenance.push(from)
+    },
     ...over
   }
 }
@@ -73,6 +80,11 @@ describe('live stream owner', () => {
     const d = deps()
     expect(await nameOwnerOnLiveRecording('r1', d)).toEqual({ named: true, label: 'SPEAKER_00' })
     expect(d.assigned).toEqual(['SPEAKER_00=contact-me'])
+    // The source is the live channel; the confidence is that speaker's share of the microphone energy.
+    expect(d.provenance).toHaveLength(1)
+    expect(d.provenance[0].source).toBe('live-channel')
+    expect(d.provenance[0].confidence).toBeGreaterThan(0.99)
+    expect(d.provenance[0].confidence).toBeLessThanOrEqual(1)
   })
 
   it('names nobody when it is not clear or not allowed', async () => {

@@ -2,6 +2,23 @@
 
 Each entry is one day of merged work. The Releases page in Settings reads this file.
 
+## 2026-10-03 | Attendees from Outlook, and speakers that know who named them
+
+Meetings that arrive from the calendar feed without a guest list take it from the same meeting in
+Outlook, and every speaker the app names now keeps a note of how it was named.
+
+### Changes
+
+- **Meetings from the calendar feed take their attendees from Outlook.** The calendar feed sends
+  meetings without attendees, and Outlook sends the same meeting again with them. A meeting with no
+  attendees now copies them from its Outlook copy (same subject, same start), and the organizer
+  when it has none, so its people appear under the meeting. When two Outlook meetings share that
+  subject and start and list different people, nothing is copied.
+- **Each speaker assignment remembers where it came from.** A speaker named by you, by the speaker
+  saying their own name, by the voice, by Jev, by the meeting roster or by the microphone of a live
+  recording now stores that source and how sure it was. Speakers named before today keep an empty
+  source.
+
 ## 2026-10-02 | Columns that stay put, and meetings that follow the calendar
 
 The Library list keeps every column in place while files download and transcribe, the reader shows

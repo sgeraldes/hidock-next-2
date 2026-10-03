@@ -17,17 +17,34 @@
  *                                      Near-certain — a person naming themselves — so it
  *                                      sits just below a connector email and ABOVE any
  *                                      calendar/attendee signal.
+ *   (85)    voice               0.95   the speaker's voice matches a cluster tied to that
+ *                                      person (0.9 or more)
+ *   (84)    one-on-one          0.94   a two-person meeting: the voice that is not the
+ *                                      owner's is the other attendee
+ *   (82)    voice-presence      0.92   a first-name mention resolved because only one
+ *                                      candidate's voice is in the recording
  *   TIER 2  attendee-email      0.90   linked-meeting attendee, from CALENDAR data
  *                                      (meetings.attendees / organizer_email present)
+ *   (75)    elimination         0.85   the last unknown voice in a meeting where every
+ *                                      other voice is known
+ *   (70)    owner-presence      0.80   the mention names the owner and the owner speaks
+ *                                      in the recording
  *   —       manual            (user) an explicit human pick in the "Resolve per
  *                                    meeting" UI. Sovereign: never auto-overwritten.
  *   TIER 3  speaker-map       0.85   a user-confirmed transcript speaker assignment
  *                                    (transcript_speakers)
+ *   (60)    jev-tiebreak      0.75   Jev chose among candidates that an objective signal
+ *                                    (calendar or voice) already supports. Owner decision
+ *                                    3-oct-2026: Jev breaks a tie only when that signal
+ *                                    exists; on its own a text signal still ties nobody.
  *   TIER 4  attendee-context  0.70   sole candidate among the meeting's people, but
  *                                    those people are TRANSCRIPT-derived, not calendar
  *                                    (the current reality until M365 lands — weak)
  *   TIER 5  lexical           0.60   full-name mention / co-presence in the transcript
  *   TIER 6  inferred          —      anything LLM-inferred. NEVER auto-links.
+ *
+ * The rows in parentheses (rank in METHOD_PRIORITY) are the voice and calendar methods of
+ * docs/superpowers/specs/2026-10-03-people-identity-autoresolve-design.md.
  *
  * CRITICAL (verified read-only on the live DB, 2026-07-09): 0 of 1,951 meetings carry
  * attendee JSON or organizer_email — the Outlook ICS feed strips them, so ALL current
@@ -39,7 +56,13 @@
 export type ResolutionMethod =
   | 'connector-email'
   | 'self-identification'
+  | 'voice'
+  | 'one-on-one'
+  | 'voice-presence'
   | 'attendee-email'
+  | 'elimination'
+  | 'owner-presence'
+  | 'jev-tiebreak'
   | 'manual'
   | 'speaker-map'
   | 'attendee-context'
@@ -54,8 +77,15 @@ export const METHOD_PRIORITY: Record<string, number> = {
   // A person naming themselves — just below a connector-confirmed email, above
   // any calendar/attendee signal.
   'self-identification': 88,
+  voice: 85,
+  'one-on-one': 84,
+  'voice-presence': 82,
   'attendee-email': 80,
+  elimination: 75,
+  'owner-presence': 70,
   'speaker-map': 65,
+  // Only among candidates an objective signal already supports (owner, 3-oct-2026).
+  'jev-tiebreak': 60,
   'attendee-context': 55,
   lexical: 50,
   inferred: 10,
@@ -77,12 +107,24 @@ export function methodConfidence(method: string | null | undefined): number {
       return 1.0
     case 'self-identification':
       return 0.97
+    case 'voice':
+      return 0.95
+    case 'one-on-one':
+      return 0.94
+    case 'voice-presence':
+      return 0.92
     case 'attendee-email':
       return 0.9
+    case 'elimination':
+      return 0.85
+    case 'owner-presence':
+      return 0.8
     case 'manual':
       return 1.0
     case 'speaker-map':
       return 0.85
+    case 'jev-tiebreak':
+      return 0.75
     case 'attendee-context':
       return 0.7
     case 'lexical':

@@ -176,7 +176,7 @@ export function consolidateVoiceIdentityForSpeaker(
 
     const mergedClusterIds: string[] = []
     const updatedRecordingIds = new Set<string>()
-    for (const { cluster } of candidates) {
+    for (const { cluster, score } of candidates) {
       const candidateRecordings = recordingIdsForCluster(cluster.id)
       if (setsOverlap(candidateRecordings, acceptedRecordings)) continue
 
@@ -206,10 +206,11 @@ export function consolidateVoiceIdentityForSpeaker(
       for (const mapping of mappings) {
         const oldLabel = mapping.transcript_speaker_label
         if (oldLabel) rewriteStoredTranscriptSpeakerNoSave(mapping.recording_id, oldLabel, canonicalLabel)
+        // The binding comes from the voice; its confidence is the similarity that merged the cluster.
         runNoSave(
           `INSERT OR IGNORE INTO transcript_speakers
-           (id, recording_id, speaker_label, contact_id) VALUES (?, ?, ?, ?)`,
-          [randomUUID(), mapping.recording_id, canonicalLabel, contactId]
+           (id, recording_id, speaker_label, contact_id, source, confidence) VALUES (?, ?, ?, ?, 'voice', ?)`,
+          [randomUUID(), mapping.recording_id, canonicalLabel, contactId, score]
         )
         if (oldLabel && oldLabel !== canonicalLabel) {
           runNoSave(

@@ -471,8 +471,8 @@ const liveOwnerDeps: LiveOwnerDeps = {
       return null
     }
   },
-  assign: (recordingId, label, contactId) => {
-    assignSpeaker(recordingId, label, { contactId })
+  assign: (recordingId, label, contactId, from) => {
+    assignSpeaker(recordingId, label, { contactId, ...from })
   }
 }
 

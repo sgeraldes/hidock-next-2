@@ -61,7 +61,9 @@ describe('Transcripts IPC Handlers', () => {
     expect(assignSpeaker).toHaveBeenCalledWith('rec-1', 'Speaker 1', {
       contactId: undefined,
       newName: 'Alice',
-      voiceAnchor: { method: 'manual', confidence: 1 }
+      voiceAnchor: { method: 'manual', confidence: 1 },
+      source: 'manual',
+      confidence: 1
     })
     expect(consolidateVoiceIdentityForSpeaker).toHaveBeenCalledWith('rec-1', 'Speaker 1', 'c1')
   })

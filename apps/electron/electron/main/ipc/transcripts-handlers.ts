@@ -181,7 +181,9 @@ export function registerTranscriptsHandlers(): void {
       const contact = assignSpeaker(recordingId, speakerLabel, {
         contactId,
         newName,
-        voiceAnchor: { method: 'manual', confidence: 1 }
+        voiceAnchor: { method: 'manual', confidence: 1 },
+        source: 'manual',
+        confidence: 1
       })
       try {
         const consolidated = consolidateVoiceIdentityForSpeaker(recordingId, speakerLabel, contact.id)

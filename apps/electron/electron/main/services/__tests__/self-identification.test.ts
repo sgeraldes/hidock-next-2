@@ -396,7 +396,9 @@ describe('runSelfIdentificationForRecording — binding', () => {
     expect(result).toMatchObject({ bound: 1, mergeSuspected: 0, skipped: false })
     expect(mockAssignSpeaker).toHaveBeenCalledWith('rec-1', 'Speaker 7', {
       newName: 'Santiago de la Colina',
-      voiceAnchor: { method: 'self-identification', confidence: 0.97 }
+      voiceAnchor: { method: 'self-identification', confidence: 0.97 },
+      source: 'self-identification',
+      confidence: 0.97
     })
     // Tiered mention-resolution recorded with the self-identification method.
     expect(mockResolveMention).toHaveBeenCalledWith(
@@ -499,7 +501,9 @@ describe('runSelfIdentificationForRecording — binding', () => {
 
     expect(mockAssignSpeaker).toHaveBeenCalledWith('rec-2', 'Speaker 7', {
       contactId: 'existing-9',
-      voiceAnchor: { method: 'self-identification', confidence: 0.97 }
+      voiceAnchor: { method: 'self-identification', confidence: 0.97 },
+      source: 'self-identification',
+      confidence: 0.97
     })
   })
 
@@ -529,7 +533,9 @@ describe('runSelfIdentificationForRecording — binding', () => {
     expect(result.bound).toBe(1)
     expect(mockAssignSpeaker).toHaveBeenCalledWith('rec-ok', 'Speaker 5', {
       newName: 'Mariana',
-      voiceAnchor: { method: 'self-identification', confidence: 0.97 }
+      voiceAnchor: { method: 'self-identification', confidence: 0.97 },
+      source: 'self-identification',
+      confidence: 0.97
     })
   })
 
