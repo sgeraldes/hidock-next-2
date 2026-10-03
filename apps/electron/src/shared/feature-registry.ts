@@ -93,6 +93,8 @@ export const FEATURES: Record<FeatureId, FeatureDefinition> = {
       // transcription and fails closed with it: with transcription off there is
       // nothing to send anywhere, so pairing would be a control with no effect.
       'model-host:',
+      // Voice evidence for older recordings: the same voice step transcription runs.
+      'voice-backfill:',
       'turn-speakers:',
       'self-id:',
       'transcript-upgrade:',

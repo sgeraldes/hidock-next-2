@@ -18,7 +18,7 @@ import { MIN_TIME_LINK_COVERAGE, meetingCoverage } from './meeting-coverage'
 import { isImpossibleTranscriptDensity, lowValueMaxSeconds } from './value-thresholds'
 import type { QualityRating } from '@/types/knowledge'
 
-const SCHEMA_VERSION = 65
+const SCHEMA_VERSION = 66
 
 const SCHEMA = `
 -- Calendar events from ICS
@@ -436,6 +436,17 @@ CREATE TABLE IF NOT EXISTS identity_decisions (
 );
 CREATE INDEX IF NOT EXISTS idx_identity_decisions_subject ON identity_decisions(kind, subject_key);
 CREATE INDEX IF NOT EXISTS idx_identity_decisions_created ON identity_decisions(created_at DESC);
+
+-- Voice evidence for older recordings (v66, voice-backfill.ts). One row per recording the
+-- backfill tried: done (voices stored), skipped (no voice spoke long enough) or failed (with
+-- the error). A row keeps the recording out of the next pick. Deleting it retries.
+CREATE TABLE IF NOT EXISTS voice_backfill_state (
+    recording_id TEXT PRIMARY KEY,
+    attempted_at TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('done', 'failed', 'skipped')),
+    error TEXT,
+    FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
+);
 
 -- Stage-level processing provenance (v52 / SPEC-009). One provider call can
 -- produce several output stages, but every displayed result references the
@@ -3311,6 +3322,18 @@ const MIGRATIONS: Record<number, () => void> = {
     database.run('CREATE INDEX IF NOT EXISTS idx_identity_decisions_subject ON identity_decisions(kind, subject_key)')
     database.run('CREATE INDEX IF NOT EXISTS idx_identity_decisions_created ON identity_decisions(created_at DESC)')
     console.log('Migration v65 complete')
+  },
+  66: () => {
+    // Voice evidence for older recordings: a new table, no change to existing data.
+    console.log('Running migration to schema v66: voice_backfill_state')
+    getDatabase().run(`CREATE TABLE IF NOT EXISTS voice_backfill_state (
+    recording_id TEXT PRIMARY KEY,
+    attempted_at TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('done', 'failed', 'skipped')),
+    error TEXT,
+    FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
+)`)
+    console.log('Migration v66 complete')
   },
 }
 

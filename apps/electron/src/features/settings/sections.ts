@@ -172,7 +172,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     label: 'Speakers & voices',
     description: 'How speakers are told apart and recognized, and the model host.',
     icon: Users,
-    keywords: ['hugging face', 'token', 'pyannote', 'diarization', 'voice', 'model host', 'gpu']
+    keywords: ['hugging face', 'token', 'pyannote', 'diarization', 'voice', 'model host', 'gpu', 'voice evidence', 'night']
   },
   {
     id: 'ai-providers',

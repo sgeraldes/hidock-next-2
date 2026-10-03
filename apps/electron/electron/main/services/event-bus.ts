@@ -110,8 +110,23 @@ export interface EvaluationWarningsUpdatedEvent extends DomainEvent {
   payload: { changed: number }
 }
 
+/** The voice backfill finished one recording (voice-backfill.ts): Settings refreshes its progress. */
+export interface VoiceBackfillProgressEvent extends DomainEvent {
+  type: 'voice-backfill:progress'
+  payload: {
+    recordingId: string
+    outcome: 'done' | 'skipped' | 'failed' | 'cancelled' | 'unavailable'
+    total: number
+    done: number
+    skipped: number
+    failed: number
+    remaining: number
+  }
+}
+
 export type KnownDomainEvent =
   | AudioProfilesUpdatedEvent
+  | VoiceBackfillProgressEvent
   | EvaluationWarningsUpdatedEvent
   | QualityAssessedEvent
   | StorageTierAssignedEvent

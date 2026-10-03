@@ -160,6 +160,7 @@ import type {
 import type { PipelineState } from '../main/types/device-pipeline'
 import type { Note, NoteRelatedItem, NoteMeetingSuggestion } from '../../src/types/notes'
 import type { SpeakerEngineId, SpeakerSetup } from '../../src/types/speakers'
+import type { VoiceBackfillMeasure, VoiceBackfillStatus } from '../../src/shared/voice-backfill-schedule'
 import type { AudioCheckResult } from '../../src/types/audio'
 
 /** A Context Graph node with its degree + click-through ids (mirrors the service DTO). */
@@ -810,6 +811,13 @@ export interface ElectronAPI {
     applySetup: (request: { engine: SpeakerEngineId; fingerprint: string; confirmOff?: boolean }) => Promise<Result<SpeakerSetup>>
     /** "Decide later": keep the setup closed on this hardware. */
     dismissSetup: () => Promise<Result<null>>
+  }
+
+  /** Voice evidence for older recordings (Settings > Speakers & voices). Progress arrives as voice-backfill:progress. */
+  voiceBackfill: {
+    getStatus: () => Promise<Result<VoiceBackfillStatus>>
+    /** Runs the next recording now, whatever the window says, and times it. */
+    measureOne: () => Promise<Result<VoiceBackfillMeasure>>
   }
 
   // Knowledge Captures
@@ -1831,6 +1839,11 @@ const electronAPI: ElectronAPI = {
     getSetup: (request) => callIPC('speakers:getSetup', request),
     applySetup: (request) => callIPC('speakers:applySetup', request),
     dismissSetup: () => callIPC('speakers:dismissSetup')
+  },
+
+  voiceBackfill: {
+    getStatus: () => callIPC('voice-backfill:getStatus'),
+    measureOne: () => callIPC('voice-backfill:measureOne')
   },
 
   knowledge: {

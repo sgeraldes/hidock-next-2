@@ -32,6 +32,7 @@ export type { Actionable } from './knowledge'
 import type { Actionable } from './knowledge'
 export type { FeaturesConfig } from '@/shared/feature-registry'
 import type { FeaturesConfig } from '@/shared/feature-registry'
+import type { VoiceBackfillConfig } from '@/shared/voice-backfill-schedule'
 
 // =============================================================================
 // Existing Types
@@ -276,6 +277,8 @@ export interface AppConfig {
     /** Jev (TypeSafe AI) key; when set, Jev classifies recording value. */
     jevApiKey?: string
     speakerEngine?: 'auto' | 'pyannote-local' | 'onnx-local' | 'signatures-from-turns' | 'model-host' | 'pyannoteai' | 'off'
+    /** When voice evidence is computed for older recordings (Settings > Speakers & voices). */
+    voiceBackfill?: VoiceBackfillConfig
     speakerSetupFingerprint?: string
     speakerSetupAt?: string
     speakerSetupDismissedFingerprint?: string
