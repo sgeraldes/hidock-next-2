@@ -1236,6 +1236,7 @@ export function SourceReader({
   // header always agree (no raw filename leaking through here).
   const { primaryText: displayTitle } = getDisplayTitle(recording, meeting, effectiveTranscript)
   const tooShortSkip = findTooShortSkip(processingRuns)
+  const audioSkip = findAudioSkip(processingRuns)
   const displayedProcessingRuns: ReaderProcessingRun[] = processingRuns.length > 0
     ? processingRuns
     : effectiveTranscript?.transcription_provider
@@ -2035,11 +2036,19 @@ export function SourceReader({
                     <p className="mt-2 text-sm text-muted-foreground">
                       {tooShortSkip.seconds} {tooShortSkip.seconds === 1 ? 'second' : 'seconds'} of audio.
                       Recordings under {tooShortSkip.minimumSeconds} seconds are skipped.
-                      To transcribe it anyway, choose Clear rating in its row menu, then re-run transcription.
+                      To transcribe it anyway, choose Clear rating in its row menu, then pick a method from the arrow next to Transcribe.
                       {/* A skipped clip is rated garbage, and the main process keeps
                           garbage-rated audio away from every provider even on an
                           explicit re-run. Clearing the rating is a user rating,
                           which no automatic rater overwrites. */}
+                    </p>
+                  </>
+                ) : audioSkip ? (
+                  <>
+                    <p className="font-medium text-foreground">{audioSkip.title}</p>
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      {audioSkip.detail} Transcription, summary and the other AI steps were skipped.
+                      To transcribe it anyway, choose Clear rating in its row menu, then pick a method from the arrow next to Transcribe.
                     </p>
                   </>
                 ) : (
@@ -2234,6 +2243,50 @@ function findTooShortSkip(runs: ReaderProcessingRun[]): { seconds: number; minim
       ? Math.round(quality.durationSeconds * 10) / 10
       : Math.round(quality.durationSeconds)
     return { seconds, minimumSeconds: quality.minimumDurationSeconds }
+  } catch {
+    return null
+  }
+}
+
+/** "4 seconds", "13 minutes": a length the way a person says it. */
+function spokenLength(seconds: number): string {
+  if (seconds < 60) {
+    const s = Math.round(seconds)
+    return `${s} ${s === 1 ? 'second' : 'seconds'}`
+  }
+  const m = Math.round(seconds / 60)
+  return `${m} ${m === 1 ? 'minute' : 'minutes'}`
+}
+
+/** The `vad` run's record of a recording the stored audio profile stopped
+ *  because it is silent or holds only noise. 'audio_silent' and 'audio_noise'
+ *  mirror AUDIO_SILENT_REASON_CODE and AUDIO_NOISE_REASON_CODE in the main
+ *  process (services/transcription.ts). Null otherwise. */
+function findAudioSkip(runs: ReaderProcessingRun[]): { title: string; detail: string } | null {
+  const vad = runs.find((processingRun) => processingRun.stage === 'vad')
+  if (!vad?.quality_json) return null
+  try {
+    const quality = JSON.parse(vad.quality_json) as {
+      reasonCodes?: unknown
+      soundSeconds?: unknown
+      durationSeconds?: unknown
+      longestSoundSeconds?: unknown
+    }
+    if (!Array.isArray(quality.reasonCodes)) return null
+    const duration = typeof quality.durationSeconds === 'number' ? quality.durationSeconds : null
+    if (quality.reasonCodes.includes('audio_silent')) {
+      return { title: 'Silent audio', detail: duration !== null ? `No sound in ${spokenLength(duration)}.` : 'No sound at all.' }
+    }
+    if (!quality.reasonCodes.includes('audio_noise')) return null
+    const sound = typeof quality.soundSeconds === 'number' ? quality.soundSeconds : null
+    const longest = typeof quality.longestSoundSeconds === 'number' ? quality.longestSoundSeconds : null
+    const parts: string[] = []
+    if (sound !== null && duration !== null) parts.push(`${spokenLength(sound)} of sound in ${spokenLength(duration)}`)
+    if (longest !== null) parts.push(`none of it longer than ${longest < 1 ? 'a second' : spokenLength(longest)}`)
+    return {
+      title: 'Only noise in the audio',
+      detail: parts.length > 0 ? `${parts.join(', ')}.` : 'Short clicks and crackle, no stretch of speech.'
+    }
   } catch {
     return null
   }

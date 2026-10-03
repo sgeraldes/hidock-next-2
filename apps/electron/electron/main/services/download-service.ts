@@ -1031,6 +1031,14 @@ export class DownloadService {
         console.error('[DownloadService] Failed to queue transcription:', err)
       }
 
+      // The audio check (silent, noise only, too short) now, as the watcher does,
+      // so the Library label is there before the queue reaches this file; until
+      // 3-oct-2026 a download waited for the next launch's pass. The transcription
+      // gate reads the same profile and computes it itself when this has not run.
+      void import('./audio-profile-store')
+        .then(({ profileNewRecording }) => profileNewRecording(recordingId))
+        .catch((err) => console.error('[DownloadService] The audio check failed:', err))
+
       // DL-07: Clean up completed items from queue after emitting final state.
       // Keep them briefly so the renderer sees the 100% state, then remove.
       setTimeout(() => {

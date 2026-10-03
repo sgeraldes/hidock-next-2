@@ -155,6 +155,7 @@ import {
 import { namingAllowed, parseAndAssessDiarization } from './diarization-quality'
 import { scheduleEvaluationCatchup } from './evaluation-catchup'
 import { analyzeAudioPreflight, type AudioPreflightReport } from './audio-preflight'
+import { audioProfileForTranscription } from './audio-profile-store'
 import { readAudioDuration } from './audio-duration'
 import { minRecordingSeconds, qualityRules } from './quality-rules'
 import { isAutomaticMeetingLinkTemporallyEligible } from './recording-match-scoring'
@@ -537,7 +538,11 @@ async function runQueueItem(
         'info',
         outcome.reason === TOO_SHORT_REASON_CODE
           ? `Too short to transcribe (under ${minRecordingSeconds()} seconds)`
-          : 'No intelligible speech detected',
+          : outcome.reason === AUDIO_SILENT_REASON_CODE
+            ? 'Silent audio, not transcribed'
+            : outcome.reason === AUDIO_NOISE_REASON_CODE
+              ? 'Only noise in the audio, not transcribed'
+              : 'No intelligible speech detected',
         `${recDone?.filename ?? item.recording_id}: transcription and AI analysis skipped`
       )
     } else {
@@ -1969,7 +1974,7 @@ type TranscribeOutcome =
   | { status: 'completed' | 'cancelled' }
   // `reason` separates "the audio is silent" from "the audio is too short to
   // be worth a transcriber call"; the queue's activity log words them apart.
-  | { status: 'no_speech'; reason: 'no_speech' | typeof TOO_SHORT_REASON_CODE }
+  | { status: 'no_speech'; reason: 'no_speech' | typeof TOO_SHORT_REASON_CODE | AudioSkipReason }
 
 /**
  * Reason code on the `vad` processing run when a recording ends `no_speech`
@@ -2004,6 +2009,63 @@ function measureTooShortClip(filePath: string): Record<string, unknown> | null {
     durationSeconds: Math.round(measured.seconds * 1000) / 1000,
     minimumDurationSeconds: minRecordingSeconds(),
     measuredBy: measured.how
+  }
+}
+
+/**
+ * Reason codes on the `vad` run when the stored audio profile stopped a
+ * recording before any provider call. Mirrored as literals in
+ * SourceReader.tsx, which says why in words.
+ */
+export const AUDIO_SILENT_REASON_CODE = 'audio_silent'
+export const AUDIO_NOISE_REASON_CODE = 'audio_noise'
+type AudioSkipReason = typeof AUDIO_SILENT_REASON_CODE | typeof AUDIO_NOISE_REASON_CODE
+
+/**
+ * The audio profile's verdict for the gate: silent or noise only ends the run.
+ * Null means "go on to the ffmpeg preflight": the profile found speech or a
+ * clip too short to judge (the length gate owns those), the file is missing,
+ * or it could not be read, which is logged and left to the preflight.
+ */
+async function audioProfileSkip(recording: { id: string; file_path: string | null }): Promise<{
+  reason: AudioSkipReason
+  profileVersion: number
+  quality: {
+    status: 'no_speech'
+    reasonCodes: AudioSkipReason[]
+    category: 'silent' | 'noise'
+    soundSeconds: number | null
+    durationSeconds: number | null
+    longestSoundSeconds: number | null
+    soundShare: number | null
+    method: string
+  }
+} | null> {
+  let profile: Awaited<ReturnType<typeof audioProfileForTranscription>>
+  try {
+    profile = await audioProfileForTranscription(recording)
+  } catch (error) {
+    console.warn(
+      `[Transcription] ${recording.id}: audio profile unavailable, the ffmpeg check decides: ` +
+        (error instanceof Error ? error.message : String(error))
+    )
+    return null
+  }
+  if (!profile || (profile.category !== 'silent' && profile.category !== 'noise')) return null
+  const reason: AudioSkipReason = profile.category === 'silent' ? AUDIO_SILENT_REASON_CODE : AUDIO_NOISE_REASON_CODE
+  return {
+    reason,
+    profileVersion: profile.version,
+    quality: {
+      status: 'no_speech',
+      reasonCodes: [reason],
+      category: profile.category,
+      soundSeconds: profile.sound_seconds,
+      durationSeconds: profile.duration_seconds,
+      longestSoundSeconds: profile.longest_sound_seconds,
+      soundShare: profile.sound_share,
+      method: profile.method
+    }
   }
 }
 
@@ -2122,6 +2184,31 @@ async function transcribeRecording(
           `${minRecordingSeconds()}s minimum; provider transcription and all downstream AI skipped`
       )
       return { status: 'no_speech', reason: TOO_SHORT_REASON_CODE }
+    }
+
+    // The stored audio profile decides before ffmpeg does. The preflight calls
+    // a file speech once it has 3 s of activity; the profile calls it noise
+    // when no stretch of sound reaches 1.5 s. Rec02 of 21-apr (3.74 s of
+    // crackle in 13 minutes) got a 2,554-word invented transcript that way.
+    const audioSkip = await audioProfileSkip(recording)
+    if (audioSkip) {
+      const profileRun = createProcessingRun({
+        recordingId,
+        stage: 'vad',
+        provider: 'hidock-next',
+        tool: 'audio-profile',
+        model: `audio-profile-v${audioSkip.profileVersion}`,
+        execution: 'local'
+      })
+      completeProcessingRun(profileRun.id, { qualityStatus: 'no_speech', quality: audioSkip.quality })
+      await retireNoSpeechGeneratedContent(recordingId)
+      updateRecordingTranscriptionStatus(recordingId, 'no_speech')
+      updateRecordingStatus(recordingId, 'no_speech')
+      console.log(
+        `[Transcription] ${recordingId} audio is ${audioSkip.quality.category} ` +
+          `(${audioSkip.quality.soundSeconds}s of sound); provider transcription and all downstream AI skipped`
+      )
+      return { status: 'no_speech', reason: audioSkip.reason }
     }
   }
 

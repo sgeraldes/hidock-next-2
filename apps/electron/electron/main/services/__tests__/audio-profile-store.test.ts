@@ -27,6 +27,7 @@ vi.mock('../event-bus', () => ({ getEventBus: () => ({ emitDomainEvent: vi.fn() 
 
 import { initializeDatabase, closeDatabase, run, queryOne, getRecordings } from '../database'
 import {
+  audioProfileForTranscription,
   backfillAudioProfiles,
   envelopePath,
   getAudioProfile,
@@ -34,6 +35,7 @@ import {
   recordingsNeedingProfile,
 } from '../audio-profile-store'
 import { FRAME_SECONDS, scanDeviceMp3 } from '../audio-profile'
+import { applyCaptureValueClassification } from '../value-classification'
 import { readFileSync } from 'fs'
 
 /** What decoding would find for these synthetic files: loud where the gain is loud. */
@@ -175,5 +177,36 @@ describe('audio profiles on the library', () => {
     expect(rating('c-silent-ai')).toMatchObject({ quality_rating: 'unrated', quality_method: null })
     // The owner's rating was never the audio check's to change.
     expect(rating('c-silent-user')?.quality_rating).toBe('valuable')
+  })
+})
+
+describe('measured ratings and the transcription gate', () => {
+  it('keeps the audio verdict when a model rates the transcript afterwards', () => {
+    // Owner, 3-oct-2026: a noise recording rated "no value" by its audio was
+    // free for any later model rating to replace, because both were "ai".
+    expect(rating('c-knocks')).toMatchObject({ quality_rating: 'garbage', quality_method: 'audio' })
+    const content = applyCaptureValueClassification('c-knocks', { value: 'high', reasons: [], confidence: 0.9 }, 'content')
+    expect(content.applied).toBe(false)
+    const duration = applyCaptureValueClassification('c-knocks', { value: 'low', reasons: [], confidence: 0.95 }, 'duration')
+    expect(duration.applied).toBe(false)
+    expect(rating('c-knocks')).toMatchObject({ quality_rating: 'garbage', quality_method: 'audio' })
+  })
+
+  it('still lets a model refresh a rating that a model made', () => {
+    seedRecording('chat', audio([[138, 5], [165, 20], [138, 5]]))
+    seedCapture('c-chat', 'chat', 'unrated', null)
+    expect(applyCaptureValueClassification('c-chat', { value: 'none', reasons: ['no_substance'], confidence: 0.9 }, 'content').applied).toBe(true)
+    expect(applyCaptureValueClassification('c-chat', { value: 'high', reasons: [], confidence: 0.9 }, 'content').applied).toBe(true)
+    expect(rating('c-chat')?.quality_rating).toBe('unrated')
+  })
+
+  it('gives the gate the stored profile, computes a missing one, and nothing for a missing file', async () => {
+    expect((await audioProfileForTranscription({ id: 'knocks', file_path: join(dir, 'knocks.wav') }))?.category).toBe('noise')
+    const fresh = seedRecording('fresh-noise', audio([[138, 12], [170, 0.3], [138, 12], [170, 0.3], [138, 12]]))
+    expect(getAudioProfile('fresh-noise')).toBeNull()
+    const computed = await audioProfileForTranscription({ id: 'fresh-noise', file_path: fresh }, { decode })
+    expect(computed?.category).toBe('noise')
+    expect(getAudioProfile('fresh-noise')?.category).toBe('noise')
+    expect(await audioProfileForTranscription({ id: 'gone', file_path: null })).toBeNull()
   })
 })

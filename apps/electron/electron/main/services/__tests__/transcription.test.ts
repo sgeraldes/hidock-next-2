@@ -170,6 +170,13 @@ vi.mock('../audio-preflight', () => ({
     mockAnalyzeAudioPreflight(filePath, durationSeconds)
 }))
 
+// The stored audio profile the gate reads before any provider call. Default
+// null ("no profile"), which falls through to the ffmpeg preflight as before.
+const mockAudioProfileForTranscription = vi.fn(async (..._args: unknown[]): Promise<any> => null)
+vi.mock('../audio-profile-store', () => ({
+  audioProfileForTranscription: (...args: unknown[]) => mockAudioProfileForTranscription(...args)
+}))
+
 vi.mock('../knowledge-graph-service', () => ({
   removeRecordingFromGraph: (...args: [string]) => mockRemoveRecordingFromGraph(...args)
 }))
@@ -270,6 +277,7 @@ describe('Transcription Service', () => {
     mockGenerateContent.mockRejectedValue(new Error('API rate limit exceeded'))
     mockGetVectorStore.mockReturnValue(null as any)
     mockAddToQueue.mockReturnValue('queue-auto')
+    mockAudioProfileForTranscription.mockResolvedValue(null)
     mockAnalyzeAudioPreflight.mockResolvedValue({
       status: 'speech_present',
       durationSeconds: 60,
@@ -642,6 +650,163 @@ describe('Transcription Service', () => {
       })
 
       expect(mockUpdateRecordingStatus).not.toHaveBeenCalledWith('rec-pcm', 'no_speech')
+    })
+  })
+
+  // Owner, 3-oct-2026: Rec02 of 21-apr (789 s of crackle, 3.74 s of sound, no
+  // run over 0.61 s) carried a 2,554-word invented transcript and a summary.
+  // The stored audio profile already said "noise". The ffmpeg preflight calls
+  // anything with 3 s of activity speech, so the profile decides first.
+  describe('noise and silence skip the transcriber', () => {
+    let gateDir: string
+
+    beforeAll(() => {
+      gateDir = mkdtempSync(joinPath(tmpdir(), 'hidock-audio-gate-'))
+    })
+
+    afterAll(() => {
+      rmSync(gateDir, { recursive: true, force: true })
+    })
+
+    /** 60 s of the device's MPEG format, so the too-short gate lets it through. */
+    function writeMinute(name: string): string {
+      const frameBytes = 288
+      const frames = Math.round((60 * 8000) / frameBytes)
+      const out = Buffer.alloc(frames * frameBytes)
+      for (let i = 0; i < frames; i++) Buffer.from([0xff, 0xf3, 0x88, 0xc4]).copy(out, i * frameBytes)
+      const path = joinPath(gateDir, name)
+      writeFileSync(path, out)
+      return path
+    }
+
+    function profile(category: string, soundSeconds: number) {
+      return {
+        recording_id: 'x',
+        version: 1,
+        method: 'mp3-frame-gain',
+        file_size: 1,
+        file_mtime_ms: 1,
+        duration_seconds: 789.48,
+        sound_seconds: soundSeconds,
+        sound_share: soundSeconds / 789.48,
+        longest_sound_seconds: 0.61,
+        median_level: -58.3,
+        spike_count: 26,
+        category,
+        ranges_json: '[]',
+        computed_at: '2026-09-25T23:29:04.713Z'
+      }
+    }
+
+    function queueOne(recordingId: string, filePath: string, provider?: string): void {
+      const queueItem = {
+        id: `queue-${recordingId}`,
+        recording_id: recordingId,
+        filename: `${recordingId}.hda`,
+        status: 'pending',
+        attempts: 0,
+        ...(provider ? { provider } : {})
+      }
+      mockGetQueueItems.mockImplementation((status?: string) => status === 'pending' ? [queueItem] : [])
+      mockGetRecordingById.mockReturnValue({
+        id: recordingId,
+        filename: queueItem.filename,
+        file_path: filePath,
+        duration_seconds: 789,
+        date_recorded: '2026-04-21T11:57:18.000Z',
+        status: 'none'
+      })
+    }
+
+    async function runQueueUntil(assertion: () => void): Promise<void> {
+      const { startTranscriptionProcessor, stopTranscriptionProcessor } = await import('../transcription')
+      startTranscriptionProcessor()
+      try {
+        await vi.waitFor(assertion, { timeout: 15000, interval: 25 })
+      } finally {
+        stopTranscriptionProcessor()
+      }
+    }
+
+    it('ends a noise-only recording as no_speech with the audio reason, before ffmpeg or any provider', async () => {
+      queueOne('rec-noise', writeMinute('noise.hda'))
+      mockAudioProfileForTranscription.mockResolvedValue(profile('noise', 3.74))
+      const database = await import('../database')
+
+      await runQueueUntil(() => {
+        expect(mockUpdateQueueItem).toHaveBeenCalledWith('queue-rec-noise', 'completed')
+      })
+
+      expect(mockAnalyzeAudioPreflight).not.toHaveBeenCalled()
+      expect(mockGeminiTranscribeCall).not.toHaveBeenCalled()
+      expect(mockGenerateContent).not.toHaveBeenCalled()
+      expect(mockInsertTranscript).not.toHaveBeenCalled()
+      expect(mockUpdateRecordingStatus).toHaveBeenCalledWith('rec-noise', 'no_speech')
+      expect(vi.mocked(database.retireGeneratedContentForNoSpeech)).toHaveBeenCalledWith('rec-noise')
+      expect(vi.mocked(database.createProcessingRun)).toHaveBeenCalledWith(
+        expect.objectContaining({ recordingId: 'rec-noise', stage: 'vad', tool: 'audio-profile', execution: 'local' })
+      )
+      const completion = vi.mocked(database.completeProcessingRun).mock.calls.find(([id]) => id === 'run-vad')
+      expect(completion?.[1]).toMatchObject({
+        qualityStatus: 'no_speech',
+        quality: {
+          status: 'no_speech',
+          reasonCodes: ['audio_noise'],
+          category: 'noise',
+          soundSeconds: 3.74,
+          durationSeconds: 789.48,
+          longestSoundSeconds: 0.61
+        }
+      })
+    })
+
+    it('ends a silent recording with the silent reason', async () => {
+      queueOne('rec-silent', writeMinute('silent.hda'))
+      mockAudioProfileForTranscription.mockResolvedValue(profile('silent', 0))
+      const database = await import('../database')
+
+      await runQueueUntil(() => {
+        expect(mockUpdateQueueItem).toHaveBeenCalledWith('queue-rec-silent', 'completed')
+      })
+
+      expect(mockGeminiTranscribeCall).not.toHaveBeenCalled()
+      const completion = vi.mocked(database.completeProcessingRun).mock.calls.find(([id]) => id === 'run-vad')
+      expect(completion?.[1]).toMatchObject({ quality: { reasonCodes: ['audio_silent'] } })
+    })
+
+    it('sends a recording whose profile found speech on to the ffmpeg check and the transcriber', async () => {
+      queueOne('rec-speech', writeMinute('speech.hda'))
+      mockAudioProfileForTranscription.mockResolvedValue(profile('speech', 600))
+
+      await runQueueUntil(() => {
+        expect(mockGeminiTranscribeCall).toHaveBeenCalled()
+      })
+
+      expect(mockAnalyzeAudioPreflight).toHaveBeenCalled()
+      expect(mockUpdateRecordingStatus).not.toHaveBeenCalledWith('rec-speech', 'no_speech')
+    })
+
+    it('falls back to the ffmpeg check when the profile cannot be read', async () => {
+      queueOne('rec-unprofiled', writeMinute('unprofiled.hda'))
+      mockAudioProfileForTranscription.mockRejectedValue(new Error('disk gone'))
+
+      await runQueueUntil(() => {
+        expect(mockGeminiTranscribeCall).toHaveBeenCalled()
+      })
+
+      expect(mockAnalyzeAudioPreflight).toHaveBeenCalled()
+    })
+
+    it('leaves an explicit re-run to the ffmpeg check, so the owner can transcribe it anyway', async () => {
+      queueOne('rec-noise-rerun', writeMinute('noise-rerun.hda'), 'gemini')
+      mockAudioProfileForTranscription.mockResolvedValue(profile('noise', 3.74))
+
+      await runQueueUntil(() => {
+        expect(mockGeminiTranscribeCall).toHaveBeenCalled()
+      })
+
+      expect(mockAudioProfileForTranscription).not.toHaveBeenCalled()
+      expect(mockAnalyzeAudioPreflight).toHaveBeenCalled()
     })
   })
 
