@@ -602,7 +602,7 @@ async function processOneCapture(captureId: string, runId: string): Promise<Proc
         return
       }
       if (!raw.skipped) {
-        const applied = applyCaptureValueClassification(captureId, raw.classification)
+        const applied = applyCaptureValueClassification(captureId, raw.classification, raw.method)
         resultRating = applied.rating
         // CX-T3-7: apply is deliberately non-throwing — a DB failure inside
         // it surfaces as reason:'error' with NO write performed. Marking

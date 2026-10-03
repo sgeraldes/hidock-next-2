@@ -1458,7 +1458,7 @@ describe('Jev (TypeSafe AI) as the value classifier', () => {
     expect(mockAskJev).not.toHaveBeenCalled()
   })
 
-  it('warns when a silent file carries a long transcript, and sends Jev the audio numbers', async () => {
+  it('evaluates a noise-only file by the rules, without Jev, and still warns about its long transcript', async () => {
     seedRecording('rec-j7', { durationSeconds: 789 })
     const invented = Array.from({ length: 400 }, (_, i) => `palabra${i}`).join(' ')
     seedTranscript('rec-j7', { fullText: invented })
@@ -1471,11 +1471,14 @@ describe('Jev (TypeSafe AI) as the value classifier', () => {
 
     await classifyCaptureValue('cap-j7')
 
-    const [, state] = mockAskJev.mock.calls[0]
-    expect(state.audio).toMatchObject({ audio_category: 'noise', sound_seconds: 4, duration_seconds: 789 })
-    const stored = queryOne<{ audio_warning: string }>('SELECT audio_warning FROM recording_evaluations WHERE capture_id = ?', [
-      'cap-j7'
-    ])
+    // Owner, 3-oct-2026: the audio decides a noise-only file; Jev reading its
+    // invented transcript rated Rec02 five stars.
+    expect(mockAskJev).not.toHaveBeenCalled()
+    const stored = queryOne<{ audio_warning: string; model: string; star_level: number; kind: string }>(
+      'SELECT audio_warning, model, star_level, kind FROM recording_evaluations WHERE capture_id = ?',
+      ['cap-j7']
+    )
+    expect(stored).toMatchObject({ model: 'rules-v1', star_level: 1, kind: 'noise_accidental' })
     expect(stored?.audio_warning).toBe('possible_invented_transcript')
   })
 

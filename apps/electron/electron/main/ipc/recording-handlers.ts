@@ -857,6 +857,9 @@ export function registerRecordingHandlers(): void {
       try {
         const { syncTrustVerdicts } = await import('../services/transcript-trust')
         syncTrustVerdicts()
+        // Stars, kind and context follow the trust verdicts just settled.
+        const { recomputeAudioWarnings } = await import('../services/value-classification')
+        await recomputeAudioWarnings()
       } catch (err) {
         console.warn('recordings:backfillDurations: transcript trust sync failed:', err)
       }

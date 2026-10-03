@@ -13,6 +13,11 @@ import {
   audioTranscriptWarning,
   STAR_LEVELS,
   EVALUATION_VERSION,
+  starLevelFor,
+  evidenceCap,
+  rulesEvaluation,
+  withEvidence,
+  RULES_MODEL,
   type EvaluationAudio
 } from '../jev-evaluation'
 
@@ -146,5 +151,56 @@ describe('audioTranscriptWarning', () => {
     expect(audioTranscriptWarning(audio(), 4)).toBeNull()
     expect(audioTranscriptWarning(audio({ audio_category: 'silent', sound_seconds: 0, transcript_words: 3 }), 1)).toBeNull()
     expect(audioTranscriptWarning(null, 5)).toBeNull()
+  })
+})
+
+// Owner, 3-oct-2026: Rec02 (noise only) showed "5★ Media playing". Jev's
+// answer was 20% one star and 50% five stars with confidence 0.
+describe('star level and the evidence', () => {
+  const rec02 = { '0': 0.2, '1': 0.16, '2': 0.05, '3': 0.09, '4': 0.5 }
+
+  it('never turns an answer with no confidence into four or five stars', () => {
+    expect(starLevelFor(3.51, rec02, 0)).toBe(3)
+    expect(starLevelFor(4.6, { '4': 0.6, '3': 0.4 }, 0.3)).toBe(3)
+    expect(starLevelFor(1.4, { '0': 0.6, '1': 0.4 }, 0.1)).toBe(1)
+  })
+
+  it('keeps the most probable level when Jev is confident', () => {
+    expect(starLevelFor(4.4, { '3': 0.6, '4': 0.4 }, 0.7)).toBe(4)
+    expect(starLevelFor(4.9, rec02, 0.5)).toBe(5)
+  })
+
+  it('parses Rec02 as three stars, not five', () => {
+    const ev = parseEvaluation(reply({ stars: { type: 'score', score: 2.51, confidence: 0, legend: {}, probabilities: rec02 } }))
+    expect(ev.stars).toBeCloseTo(3.51)
+    expect(ev.starLevel).toBe(3)
+  })
+
+  it('lets the measurements decide silent, noise-only, too-short audio and an untrusted transcript', () => {
+    expect(evidenceCap({ audioCategory: 'noise', transcriptUntrusted: false })).toBe('audio_noise')
+    expect(evidenceCap({ audioCategory: 'silent', transcriptUntrusted: false })).toBe('audio_silent')
+    expect(evidenceCap({ audioCategory: 'too_short', transcriptUntrusted: false })).toBe('audio_too_short')
+    expect(evidenceCap({ audioCategory: 'speech', transcriptUntrusted: true })).toBe('transcript_untrusted')
+    expect(evidenceCap({ audioCategory: 'speech', transcriptUntrusted: false })).toBeNull()
+    expect(evidenceCap({ audioCategory: null, transcriptUntrusted: false })).toBeNull()
+  })
+
+  it('makes the rules evaluation one star, noise or accidental, context unclear, with no Jev answers', () => {
+    const ev = rulesEvaluation('audio_noise')
+    expect(ev).toMatchObject({ model: RULES_MODEL, stars: 1, starLevel: 1, kind: 'noise_accidental', context: 'unclear', inputTokens: 0 })
+    expect(ev.answers).toEqual({})
+    expect(evaluationToValue(ev)?.value).toBe('none')
+  })
+
+  it('caps a Jev evaluation by the evidence and keeps its answers', () => {
+    const jev = parseEvaluation(reply({
+      stars: { type: 'score', score: 2.51, confidence: 0, legend: {}, probabilities: rec02 },
+      kind: { type: 'choice', choice: 'media_playback', probabilities: {}, confidence: 0.47 },
+      context: { type: 'choice', choice: 'personal', probabilities: {}, confidence: 0.95 }
+    }))
+    const capped = withEvidence(jev, { audioCategory: 'noise', transcriptUntrusted: true })
+    expect(capped).toMatchObject({ starLevel: 1, stars: 1, kind: 'noise_accidental', context: 'unclear', model: 'jev-1.13.0' })
+    expect(capped.answers).toBe(jev.answers)
+    expect(withEvidence(jev, { audioCategory: 'speech', transcriptUntrusted: false })).toBe(jev)
   })
 })

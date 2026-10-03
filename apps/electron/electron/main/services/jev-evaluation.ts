@@ -161,7 +161,7 @@ export interface RecordingEvaluation {
   model: string
   /** 1 to 5, probability-weighted (can land between levels). */
   stars: number | null
-  /** The most probable level, 1 to 5. */
+  /** The level shown, 1 to 5: the most probable one when Jev is confident, see starLevelFor. */
   starLevel: number | null
   starsConfidence: number | null
   kind: RecordingKind | null
@@ -177,6 +177,97 @@ export interface RecordingEvaluation {
   answers: JevResponse['answers']
   /** Audio versus transcript cross-check; set by the caller, which has the audio numbers. */
   audioWarning?: AudioTranscriptWarning | null
+}
+
+/**
+ * Below this confidence on the stars question, Jev's most probable level is
+ * not used. Rec02 of 21-apr-2026 (noise only) got 20% one star and 50% five
+ * stars with confidence 0, and showed as 5★. Measured on 3-oct-2026 over 2,072
+ * evaluations: 1,876 at 0.6 or more, 185 between 0.4 and 0.6, 11 under 0.4.
+ */
+export const STAR_LEVEL_MIN_CONFIDENCE = 0.5
+/** The highest level an uncertain answer can map to: "some value". */
+export const UNCERTAIN_MAX_STAR_LEVEL = 3
+
+/**
+ * The level shown for a stars answer: the most probable one when Jev is
+ * confident enough, otherwise the probability-weighted stars rounded and never
+ * above three. `stars` is 1 to 5 (the weighted score plus one).
+ */
+export function starLevelFor(
+  stars: number,
+  probabilities: Record<string, number> | undefined,
+  confidence: number | null
+): number {
+  const maxLevel = STAR_LEVELS.length - 1
+  if ((confidence ?? 0) >= STAR_LEVEL_MIN_CONFIDENCE) {
+    let best = -1
+    let bestP = -1
+    for (const [level, p] of Object.entries(probabilities ?? {})) {
+      const idx = Number(level)
+      if (Number.isInteger(idx) && idx >= 0 && idx <= maxLevel && p > bestP) {
+        best = idx
+        bestP = p
+      }
+    }
+    if (best >= 0) return best + 1
+    return Math.round(stars)
+  }
+  return Math.min(UNCERTAIN_MAX_STAR_LEVEL, Math.max(1, Math.round(stars)))
+}
+
+/** What the recording's own measurements say, read before and after any Jev call. */
+export interface EvaluationEvidence {
+  audioCategory: string | null
+  /** The transcript is broken and the owner has not accepted it (transcript-trust.ts). */
+  transcriptUntrusted: boolean
+}
+
+export type EvidenceCap = 'audio_silent' | 'audio_noise' | 'audio_too_short' | 'transcript_untrusted'
+
+/** Why the measurements alone decide this recording, or null when they do not. */
+export function evidenceCap(evidence: EvaluationEvidence): EvidenceCap | null {
+  if (evidence.audioCategory === 'silent') return 'audio_silent'
+  if (evidence.audioCategory === 'noise') return 'audio_noise'
+  if (evidence.audioCategory === 'too_short') return 'audio_too_short'
+  if (evidence.transcriptUntrusted) return 'transcript_untrusted'
+  return null
+}
+
+/** Name of the evaluations the rules make without a call. */
+export const RULES_MODEL = 'rules-v1'
+
+/**
+ * Tier 0: the evaluation the measurements decide on their own, with no Jev
+ * call. One star, an accidental or noise recording, context unclear.
+ */
+export function rulesEvaluation(cap: EvidenceCap): RecordingEvaluation {
+  return {
+    version: EVALUATION_VERSION,
+    model: RULES_MODEL,
+    stars: 1,
+    starLevel: 1,
+    starsConfidence: 1,
+    kind: 'noise_accidental',
+    kindConfidence: 1,
+    context: 'unclear',
+    contextConfidence: 1,
+    transcriptInvented: cap === 'transcript_untrusted' || cap === 'audio_silent' || cap === 'audio_noise' ? 1 : null,
+    transcriptOverfull: null,
+    hasActionItems: 0,
+    sensitive: null,
+    reasons: [],
+    inputTokens: 0,
+    answers: {}
+  }
+}
+
+/** An evaluation with the measurements applied on top: a capped one becomes the rules' verdict, keeping Jev's answers. */
+export function withEvidence(ev: RecordingEvaluation, evidence: EvaluationEvidence): RecordingEvaluation {
+  const cap = evidenceCap(evidence)
+  if (!cap) return ev
+  const rules = rulesEvaluation(cap)
+  return { ...ev, stars: 1, starLevel: 1, starsConfidence: 1, kind: rules.kind, kindConfidence: 1, context: rules.context, contextConfidence: 1 }
 }
 
 function clamp01(n: unknown): number | null {
@@ -219,17 +310,8 @@ export function parseEvaluation(res: JevResponse): RecordingEvaluation {
   if (s?.type === 'score' && Number.isFinite(s.score)) {
     const maxLevel = STAR_LEVELS.length - 1
     stars = Math.min(maxLevel, Math.max(0, s.score)) + 1
-    let best = -1
-    let bestP = -1
-    for (const [level, p] of Object.entries(s.probabilities ?? {})) {
-      const idx = Number(level)
-      if (Number.isInteger(idx) && idx >= 0 && idx <= maxLevel && p > bestP) {
-        best = idx
-        bestP = p
-      }
-    }
-    starLevel = best >= 0 ? best + 1 : Math.round(stars)
     starsConfidence = clamp01(s.confidence)
+    starLevel = starLevelFor(stars, s.probabilities, starsConfidence)
   }
   const kind = choice(res, 'kind', RECORDING_KINDS)
   const context = choice(res, 'context', RECORDING_CONTEXTS)

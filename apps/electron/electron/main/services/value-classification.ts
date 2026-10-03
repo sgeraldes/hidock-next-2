@@ -56,6 +56,7 @@ import { getEventBus } from './event-bus'
 import { getProviderConfigFromSettings } from './ai-provider-config'
 import { getConfig } from './config'
 import { createJevHarness } from './pipeline/jev-harness'
+import type { JevResponse } from './jev-client'
 import { withCallRecord } from './pipeline/track-call'
 import { jevKeyFor } from './jev-settings'
 import {
@@ -66,7 +67,12 @@ import {
   reasonsFromAnswers,
   audioTranscriptWarning,
   EVALUATION_VERSION,
+  evidenceCap,
+  rulesEvaluation,
+  withEvidence,
+  RULES_MODEL,
   type EvaluationAudio,
+  type EvidenceCap,
   type RecordingEvaluation
 } from './jev-evaluation'
 import {
@@ -317,6 +323,7 @@ interface CaptureForClassification {
   audio_category: string | null
   word_count: number | null
   integrity_status: string | null
+  integrity_accepted_at?: string | null
   evaluation_version: number | null
 }
 
@@ -580,6 +587,9 @@ export interface RawClassificationResult {
    *  and the other answers. */
   evaluation?: RecordingEvaluation
   recordingId?: string | null
+  /** The rating method for `classification`; 'content' when absent. A
+   *  measured verdict (tier 0) carries 'audio' or 'trust'. */
+  method?: CaptureRatingMethod
   /** True only when complete() was actually invoked (CX-T3-11): the skip
    *  paths return without any provider work, and the backfill's rate
    *  limiter must not bill a throttle slot for them. (A thrown complete()
@@ -619,6 +629,7 @@ export async function classifyCaptureValueRaw(captureId: string): Promise<RawCla
             ap.category AS audio_category,
             t.word_count AS word_count,
             t.integrity_status AS integrity_status,
+            t.integrity_accepted_at AS integrity_accepted_at,
             re.version AS evaluation_version
        FROM knowledge_captures kc
        LEFT JOIN transcripts t ON t.recording_id = kc.source_recording_id
@@ -658,10 +669,36 @@ export async function classifyCaptureValueRaw(captureId: string): Promise<RawCla
       recordingId: row.recording_id
     })
 
+  // Tier 0 (owner, 3-oct-2026): when the recording's own measurements decide
+  // (silent, noise only, too short, or a transcript that cannot have come from
+  // this audio), the rules give the evaluation and Jev is not asked. Rec02, a
+  // noise-only file, was rated 5 stars by Jev reading its invented transcript.
+  const cap = evidenceCap({
+    audioCategory: row.audio_category,
+    transcriptUntrusted: row.integrity_status === 'broken' && !row.integrity_accepted_at
+  })
+  const needsRules = !!cap && hasTranscript && (row.evaluation_version ?? 0) < EVALUATION_VERSION
+  const rules = (c: EvidenceCap): RecordingEvaluation => {
+    const ev = rulesEvaluation(c)
+    // The warning still says when a long transcript sits on audio with no speech.
+    ev.audioWarning = audioTranscriptWarning(evaluationAudio(row), ev.starLevel)
+    return ev
+  }
+
   const isUnrated = row.quality_rating === 'unrated' || row.quality_rating === null
   if (!isUnrated || row.quality_source === 'user') {
     const currentRating = (row.quality_rating as QualityRating | null) ?? 'unrated'
     // The rating stays as it is; the recording still gets its evaluation.
+    if (needsRules && cap) {
+      return {
+        classification: emptyClassification,
+        currentRating,
+        skipped: 'already-rated',
+        evaluation: rules(cap),
+        recordingId: row.recording_id,
+        providerCalled: false
+      }
+    }
     if (needsEvaluation) {
       const evaluation = await evaluate()
       return {
@@ -696,6 +733,18 @@ export async function classifyCaptureValueRaw(captureId: string): Promise<RawCla
       classification: emptyClassification,
       currentRating: 'unrated',
       skipped: 'no-transcript',
+      providerCalled: false
+    }
+  }
+
+  if (cap) {
+    const verdict = measuredVerdict(cap)
+    return {
+      classification: verdict.classification,
+      method: verdict.method,
+      currentRating: 'unrated',
+      evaluation: needsRules ? rules(cap) : undefined,
+      recordingId: row.recording_id,
       providerCalled: false
     }
   }
@@ -739,6 +788,20 @@ export async function classifyCaptureValueRaw(captureId: string): Promise<RawCla
   return { classification: cls, currentRating: 'unrated', providerCalled: true }
 }
 
+/** The "no value" rating a measurement gives, and under which method. */
+function measuredVerdict(cap: EvidenceCap): { classification: ValueClassification; method: CaptureRatingMethod } {
+  if (cap === 'transcript_untrusted') {
+    return { classification: { value: 'none', reasons: ['transcript_untrusted'], confidence: 1 }, method: 'trust' }
+  }
+  if (cap === 'audio_too_short') {
+    return { classification: { value: 'none', reasons: ['no_substance'], confidence: 1 }, method: 'duration' }
+  }
+  return {
+    classification: { value: 'none', reasons: [cap === 'audio_silent' ? 'silent_audio' : 'noise_only'], confidence: 1 },
+    method: 'audio'
+  }
+}
+
 /**
  * Standalone re-classifier for an EXISTING capture (no live analyze call in
  * flight) — the seam T3's backfill consumes for the ~1,900 already-
@@ -765,7 +828,7 @@ export async function classifyCaptureValue(captureId: string): Promise<CaptureVa
     }
   }
 
-  const applied = applyCaptureValueClassification(captureId, raw.classification)
+  const applied = applyCaptureValueClassification(captureId, raw.classification, raw.method)
 
   return {
     captureId,
@@ -873,6 +936,8 @@ export const WARNING_REFRESH_CHUNK = 200
  */
 export async function recomputeAudioWarnings(recordingIds?: string[]): Promise<number> {
   if (recordingIds && recordingIds.length === 0) return 0
+  // Stars, kind and context first: the warning reads the star level.
+  const evidenceChanged = await recomputeEvaluationsFromEvidence(recordingIds)
   const filter = recordingIds ? `WHERE kc.source_recording_id IN (${recordingIds.map(() => '?').join(', ')})` : ''
   const rows = queryAll<{
     capture_id: string
@@ -925,18 +990,112 @@ export async function recomputeAudioWarnings(recordingIds?: string[]): Promise<n
     })
     if (i + WARNING_REFRESH_CHUNK < updates.length) await new Promise<void>((resolve) => setImmediate(resolve))
   }
-  if (updates.length > 0) {
+  if (updates.length > 0 || evidenceChanged > 0) {
     try {
       getEventBus().emitDomainEvent({
         type: 'evaluation:warnings-updated',
         timestamp: new Date().toISOString(),
-        payload: { changed: updates.length }
+        payload: { changed: updates.length + evidenceChanged }
       })
     } catch (error) {
       console.warn('[Evaluation] could not announce the warning refresh:', error)
     }
   }
   return updates.length
+}
+
+/**
+ * Recompute the stored stars, kind and context of every evaluation from the
+ * answers Jev gave (answers_json) and the recording's measurements now: the
+ * star level rule (starLevelFor) and the evidence caps (withEvidence). No Jev
+ * call, so a rule change or a new audio profile or trust verdict reaches every
+ * stored evaluation for free. Jev's answers are never changed, so a cap that
+ * no longer applies gives the original verdict back. A rules evaluation (no
+ * Jev answers) whose cap no longer applies is marked outdated, so the next
+ * scan asks Jev. Returns how many evaluations changed.
+ */
+export async function recomputeEvaluationsFromEvidence(recordingIds?: string[]): Promise<number> {
+  if (recordingIds && recordingIds.length === 0) return 0
+  const filter = recordingIds ? `WHERE kc.source_recording_id IN (${recordingIds.map(() => '?').join(', ')})` : ''
+  const rows = queryAll<{
+    capture_id: string
+    model: string | null
+    version: number
+    answers_json: string
+    stars: number | null
+    star_level: number | null
+    stars_confidence: number | null
+    kind: string | null
+    kind_confidence: number | null
+    context: string | null
+    context_confidence: number | null
+    audio_category: string | null
+    integrity_status: string | null
+    integrity_accepted_at: string | null
+  }>(
+    `SELECT re.capture_id, re.model, re.version, re.answers_json, re.stars, re.star_level, re.stars_confidence,
+            re.kind, re.kind_confidence, re.context, re.context_confidence,
+            ap.category AS audio_category, t.integrity_status, t.integrity_accepted_at
+       FROM recording_evaluations re
+       JOIN knowledge_captures kc ON kc.id = re.capture_id
+       LEFT JOIN audio_profiles ap ON ap.recording_id = kc.source_recording_id
+       LEFT JOIN transcripts t ON t.recording_id = kc.source_recording_id
+       ${filter}`,
+    recordingIds ?? []
+  )
+  type Next = Pick<RecordingEvaluation, 'stars' | 'starLevel' | 'starsConfidence' | 'kind' | 'kindConfidence' | 'context' | 'contextConfidence'>
+  const updates: Array<{ captureId: string; next: Next | null }> = []
+  for (const row of rows) {
+    const evidence = {
+      audioCategory: row.audio_category,
+      transcriptUntrusted: row.integrity_status === 'broken' && !row.integrity_accepted_at
+    }
+    if (row.model === RULES_MODEL) {
+      if (!evidenceCap(evidence) && row.version > 0) updates.push({ captureId: row.capture_id, next: null })
+      continue
+    }
+    let answers: JevResponse['answers']
+    try {
+      answers = JSON.parse(row.answers_json) as JevResponse['answers']
+    } catch {
+      continue // an unreadable answer set is left as it was stored
+    }
+    const derived = withEvidence(parseEvaluation({ model: row.model ?? '', answers } as JevResponse), evidence)
+    const same =
+      derived.starLevel === row.star_level &&
+      derived.kind === row.kind &&
+      derived.context === row.context &&
+      sameNumber(derived.stars, row.stars) &&
+      sameNumber(derived.starsConfidence, row.stars_confidence) &&
+      sameNumber(derived.kindConfidence, row.kind_confidence) &&
+      sameNumber(derived.contextConfidence, row.context_confidence)
+    if (!same) updates.push({ captureId: row.capture_id, next: derived })
+  }
+  for (let i = 0; i < updates.length; i += WARNING_REFRESH_CHUNK) {
+    const chunk = updates.slice(i, i + WARNING_REFRESH_CHUNK)
+    runInTransaction(() => {
+      for (const u of chunk) {
+        if (!u.next) {
+          run('UPDATE recording_evaluations SET version = 0 WHERE capture_id = ?', [u.captureId])
+          continue
+        }
+        run(
+          `UPDATE recording_evaluations SET stars = ?, star_level = ?, stars_confidence = ?, kind = ?, kind_confidence = ?,
+             context = ?, context_confidence = ? WHERE capture_id = ?`,
+          [u.next.stars, u.next.starLevel, u.next.starsConfidence, u.next.kind, u.next.kindConfidence,
+            u.next.context, u.next.contextConfidence, u.captureId]
+        )
+      }
+    })
+    if (i + WARNING_REFRESH_CHUNK < updates.length) await new Promise<void>((resolve) => setImmediate(resolve))
+  }
+  if (updates.length > 0) console.log(`[Evaluation] ${updates.length} stored evaluation(s) brought in line with the evidence`)
+  return updates.length
+}
+
+function sameNumber(a: number | null | undefined, b: number | null | undefined): boolean {
+  if (a === null || a === undefined || b === null || b === undefined) return (a ?? null) === (b ?? null)
+  return Math.abs(a - b) < 1e-9
 }
 
 /**

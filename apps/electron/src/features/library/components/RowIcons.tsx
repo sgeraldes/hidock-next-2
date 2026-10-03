@@ -4,7 +4,7 @@ import { formatDateTime } from '@/lib/utils'
 import type { Meeting, Transcript } from '@/types'
 import type { UnifiedRecording } from '@/types/unified-recording'
 import type { LibraryError } from '@/features/library/utils/errorHandling'
-import { CONTEXT_LABELS, KIND_LABELS } from '@/features/library/utils/evaluation'
+import { CONTEXT_LABELS, KIND_LABELS, displayedEvaluation } from '@/features/library/utils/evaluation'
 import { audioLabel } from '@/features/library/utils/audioCheck'
 import { formatValueReasons } from '@/features/library/utils/valueReasons'
 import { transcriptProblems, showsTranscriptProblem, type TranscriptProblemKind } from '@/features/library/utils/rowState'
@@ -63,9 +63,10 @@ export function ValueBadge({ recording }: { recording: UnifiedRecording }) {
  */
 export function EvaluationLabel({ recording }: { recording: UnifiedRecording }) {
   if (!recording.evalStarLevel && !recording.evalKind) return null
-  const kind = recording.evalKind ? KIND_LABELS[recording.evalKind] : null
+  const shown = displayedEvaluation(recording)
+  const kind = shown.kind ? KIND_LABELS[shown.kind] : null
   const context = recording.evalContext ? CONTEXT_LABELS[recording.evalContext] : null
-  const stars = recording.evalStarLevel ?? null
+  const stars = shown.stars
   return (
     <Tooltip>
       <TooltipTrigger asChild>
