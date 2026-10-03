@@ -498,7 +498,11 @@ export async function evaluateWithJev(
   const response = await withCallRecord({ step: 'evaluate', route: 'jev', recordingId: input.recordingId ?? null }, () =>
     harness.ask(state, buildEvaluationQuestions(), { fetchImpl })
   )
-  const evaluation = parseEvaluation(response)
+  // The same caps the stored evaluations get (recomputeEvaluationsFromEvidence).
+  const evaluation = withEvidence(parseEvaluation(response), {
+    audioCategory: input.audio?.audio_category ?? null,
+    transcriptUntrusted: false
+  })
   evaluation.audioWarning = audioTranscriptWarning(input.audio, evaluation.starLevel)
   return evaluation
 }

@@ -83,10 +83,10 @@ export const SourceRowExpanded = memo(function SourceRowExpanded({
       )}
 
       {/* Transcript Summary */}
-      {trustedSummary(transcript) && (
+      {trustedSummary(transcript, recording.audioCategory) && (
         <div className="p-3 bg-background border rounded-lg">
           <p className="text-xs font-medium text-muted-foreground mb-2">Summary</p>
-          <p className="text-sm leading-relaxed">{trustedSummary(transcript)}</p>
+          <p className="text-sm leading-relaxed">{trustedSummary(transcript, recording.audioCategory)}</p>
         </div>
       )}
 
@@ -109,6 +109,7 @@ export const SourceRowExpanded = memo(function SourceRowExpanded({
     prevProps.recording.location === nextProps.recording.location &&
     prevProps.recording.duration === nextProps.recording.duration &&
     prevProps.recording.size === nextProps.recording.size &&
+    prevProps.recording.audioCategory === nextProps.recording.audioCategory &&
     prevProps.transcript?.id === nextProps.transcript?.id &&
     prevProps.transcript?.summary === nextProps.transcript?.summary &&
     prevProps.transcript?.integrity_status === nextProps.transcript?.integrity_status &&

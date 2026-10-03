@@ -265,7 +265,15 @@ export function rulesEvaluation(cap: EvidenceCap): RecordingEvaluation {
 /** An evaluation with the measurements applied on top: a capped one becomes the rules' verdict, keeping Jev's answers. */
 export function withEvidence(ev: RecordingEvaluation, evidence: EvaluationEvidence): RecordingEvaluation {
   const cap = evidenceCap(evidence)
-  if (!cap) return ev
+  if (!cap) {
+    // Jev itself reads the transcript as invented or looping (Settings >
+    // Quality checks, "inventedProbability"): the text is in doubt, so the
+    // recording cannot show four or five stars on its strength. Measured
+    // 3-oct-2026: 6 speech recordings at 0.8 or more were rated 4 stars.
+    const doubted = (ev.transcriptInvented ?? 0) >= qualityRules().inventedProbability
+    if (doubted && (ev.starLevel ?? 0) > UNCERTAIN_MAX_STAR_LEVEL) return { ...ev, starLevel: UNCERTAIN_MAX_STAR_LEVEL }
+    return ev
+  }
   const rules = rulesEvaluation(cap)
   return { ...ev, stars: 1, starLevel: 1, starsConfidence: 1, kind: rules.kind, kindConfidence: 1, context: rules.context, contextConfidence: 1 }
 }

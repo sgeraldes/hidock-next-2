@@ -2088,8 +2088,8 @@ export function SourceReader({
                     sentinelRef={pins.sentinelRef('summary')}
                   >
                     <div className="max-w-[75ch] text-sm leading-relaxed text-foreground">
-                      {trustedSummary(effectiveTranscript)
-                        ? <p className="whitespace-pre-wrap">{trustedSummary(effectiveTranscript)}</p>
+                      {trustedSummary(effectiveTranscript, recording.audioCategory)
+                        ? <p className="whitespace-pre-wrap">{trustedSummary(effectiveTranscript, recording.audioCategory)}</p>
                         : effectiveTranscript.summary?.trim()
                           ? <p className="text-muted-foreground">{UNTRUSTED_SUMMARY_NOTE}</p>
                           : <p className="text-muted-foreground">No summary generated.</p>}

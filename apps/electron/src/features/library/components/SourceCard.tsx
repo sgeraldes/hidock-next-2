@@ -174,7 +174,7 @@ export const SourceCard = memo(function SourceCard({
 
   const transcribing = recording.transcriptionStatus === 'pending' || recording.transcriptionStatus === 'processing'
   // A summary of an untrusted transcript is not shown (owner, 3-oct-2026).
-  const summary = trustedSummary(transcript)
+  const summary = trustedSummary(transcript, recording.audioCategory)
   const deviceOnly = isDeviceOnly(recording)
   const counts = cardCounts(transcript)
   const notice = cardNotice(recording, transcript, error)

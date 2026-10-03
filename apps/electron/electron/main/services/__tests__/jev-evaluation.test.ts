@@ -203,4 +203,15 @@ describe('star level and the evidence', () => {
     expect(capped.answers).toBe(jev.answers)
     expect(withEvidence(jev, { audioCategory: 'speech', transcriptUntrusted: false })).toBe(jev)
   })
+
+  it('keeps a transcript Jev reads as invented under four stars, even over speech', () => {
+    const jev = parseEvaluation(reply({
+      stars: { type: 'score', score: 3.1, confidence: 0.68, legend: {}, probabilities: { '3': 0.7, '4': 0.3 } },
+      transcript_invented: { type: 'noul', noul: 0.91 }
+    }))
+    expect(jev.starLevel).toBe(4)
+    expect(withEvidence(jev, { audioCategory: 'speech', transcriptUntrusted: false }).starLevel).toBe(3)
+    const believed = { ...jev, transcriptInvented: 0.2 }
+    expect(withEvidence(believed, { audioCategory: 'speech', transcriptUntrusted: false })).toBe(believed)
+  })
 })
