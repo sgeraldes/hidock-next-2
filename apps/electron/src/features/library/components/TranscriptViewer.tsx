@@ -586,6 +586,26 @@ export function TranscriptViewer({
     setRagPending(null)
   }, [recordingId])
 
+  // A newer transcript for the same recording (it finished loading, another
+  // window saved a correction, a reformat ran) becomes what the editor shows
+  // and the base a save is checked against. Without this the editor showed the
+  // new lines and sent the first version it was given as the base, so every
+  // correction failed with "The transcript changed while you were editing"
+  // (owner, 3-oct-2026). An edit already open keeps its base: a real
+  // concurrent change is still refused.
+  // Keyed by content: a parent that rebuilds the same array on every render
+  // must not throw away a correction just saved.
+  const incomingKey = `${transcript}\u0000${storedSegments ? JSON.stringify(storedSegments) : ''}`
+  const syncedKeyRef = useRef(incomingKey)
+  useEffect(() => {
+    // An open edit keeps its base; the newer transcript is taken when it closes.
+    if (syncedKeyRef.current === incomingKey || editingIndex !== null) return
+    syncedKeyRef.current = incomingKey
+    setLocalSegments(null)
+    setPersistedFullText(transcript)
+    setPersistedStored(storedSegments ?? null)
+  }, [incomingKey, transcript, storedSegments, editingIndex])
+
   // Problems per line, with the same rules the integrity warning counts.
   const issuesByLine = useMemo<LineIssueCode[][]>(
     () =>

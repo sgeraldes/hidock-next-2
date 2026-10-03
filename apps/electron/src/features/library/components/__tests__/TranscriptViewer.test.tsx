@@ -288,6 +288,50 @@ describe('TranscriptViewer speaker assignment (recordingId)', () => {
     await waitFor(() => expect(screen.queryByText(/RAG search is pending/)).not.toBeInTheDocument())
   })
 
+  it('saves against the transcript it shows, when that transcript arrived after the editor opened', async () => {
+    // Owner, 3-oct-2026 (Weekly Engineering All-Hands): every correction failed
+    // with "The transcript changed while you were editing". The editor kept the
+    // first version it was given as the base for the conflict check, and the
+    // transcript shown had changed since, for the same recording.
+    const first = [{ speaker: 'Speaker 1', start: 0, end: 5, text: 'Loading the line.' }]
+    const latest = [{ speaker: 'Farid Ozorio', start: 142.6, end: 145, text: 'Estar en el chal, en el chisme.' }]
+    const view = renderViewer({ transcript: 'Speaker 1: Loading the line.', segments: first })
+    view.rerender(
+      <MemoryRouter>
+        <TranscriptViewer transcript="Farid Ozorio: Estar en el chal, en el chisme." segments={latest} recordingId="rec1" onSeek={noop} />
+      </MemoryRouter>
+    )
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit transcript turn 1' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Edit transcript turn 1' }), {
+      target: { value: 'Estar en el chat, en el chisme.' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save correction' }))
+
+    await waitFor(() => expect(mockUpdateContent).toHaveBeenCalledWith(expect.objectContaining({
+      expectedFullText: 'Farid Ozorio: Estar en el chal, en el chisme.',
+      expectedSegments: latest
+    })))
+  })
+
+  it('keeps the base of an edit already open when a newer transcript arrives, so a real conflict is still refused', async () => {
+    const first = [{ speaker: 'Speaker 1', start: 0, end: 5, text: 'Hello there, everyone.' }]
+    const other = [{ speaker: 'Speaker 1', start: 0, end: 5, text: 'Someone else changed this.' }]
+    const view = renderViewer({ transcript: 'Speaker 1: Hello there, everyone.', segments: first })
+    fireEvent.click(screen.getByRole('button', { name: 'Edit transcript turn 1' }))
+    view.rerender(
+      <MemoryRouter>
+        <TranscriptViewer transcript="Speaker 1: Someone else changed this." segments={other} recordingId="rec1" onSeek={noop} />
+      </MemoryRouter>
+    )
+    fireEvent.change(screen.getByRole('textbox', { name: 'Edit transcript turn 1' }), { target: { value: 'My version.' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save correction' }))
+    await waitFor(() => expect(mockUpdateContent).toHaveBeenCalledWith(expect.objectContaining({
+      expectedFullText: 'Speaker 1: Hello there, everyone.',
+      expectedSegments: first
+    })))
+  })
+
   it('preserves the correction draft when saving fails', async () => {
     mockUpdateContent.mockResolvedValueOnce({
       success: false,
