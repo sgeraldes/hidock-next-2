@@ -88,6 +88,26 @@ export function loadConfig(file = paths().config) {
   }
 }
 
+/**
+ * Write the game mode settings into config.json, keeping everything else in
+ * it: setup wrote the runtime paths and the validated flag there, and the
+ * control page must not lose them by saving a checkbox.
+ */
+export function saveGameMode(settings, file = paths().config) {
+  let current = {}
+  if (existsSync(file)) {
+    try {
+      current = JSON.parse(readFileSync(file, 'utf8'))
+    } catch {
+      // Refuse rather than replace a config we cannot read with one that has
+      // only game mode in it: that would un-validate the host.
+      throw Object.assign(new Error('config.json could not be read, so game mode was not saved'), { status: 500 })
+    }
+  }
+  mkdirSync(join(file, '..'), { recursive: true })
+  writeFileSync(file, JSON.stringify({ ...current, gameMode: settings }, null, 2), 'utf8')
+}
+
 export function saveTokens(tokens, file = paths().tokens) {
   mkdirSync(join(file, '..'), { recursive: true })
   writeFileSync(file, JSON.stringify({ tokens }, null, 2), { encoding: 'utf8', mode: 0o600 })

@@ -70,6 +70,18 @@ Section "Model Host" SEC_MAIN
   CreateShortCut "$SMPROGRAMS\${PRODUCT}\Set up ${PRODUCT}.lnk" "$INSTDIR\Set up Model Host.cmd"
   CreateShortCut "$SMPROGRAMS\${PRODUCT}\Uninstall.lnk" "$INSTDIR\uninstall.exe"
 
+  ; Game mode by hand: one click pauses (the running job goes back to the
+  ; other computer) or resumes. On the desktop too, where it is found before
+  ; a game starts.
+  CreateShortCut "$SMPROGRAMS\${PRODUCT}\${PRODUCT} - pause or resume.lnk" \
+    "$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" \
+    '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\src\pause-resume.ps1"' \
+    "$INSTDIR\node.exe" 0 SW_SHOWMINIMIZED
+  CreateShortCut "$DESKTOP\${PRODUCT} - pause or resume.lnk" \
+    "$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" \
+    '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\src\pause-resume.ps1"' \
+    "$INSTDIR\node.exe" 0 SW_SHOWMINIMIZED
+
   WriteUninstaller "$INSTDIR\uninstall.exe"
 SectionEnd
 
@@ -88,6 +100,8 @@ Section "Uninstall"
   Delete "$SMPROGRAMS\${PRODUCT}\${PRODUCT}.lnk"
   Delete "$SMPROGRAMS\${PRODUCT}\Set up ${PRODUCT}.lnk"
   Delete "$SMPROGRAMS\${PRODUCT}\Uninstall.lnk"
+  Delete "$SMPROGRAMS\${PRODUCT}\${PRODUCT} - pause or resume.lnk"
+  Delete "$DESKTOP\${PRODUCT} - pause or resume.lnk"
   RMDir "$SMPROGRAMS\${PRODUCT}"
 
   ; $INSTDIR comes from a per-user registry value. Only delete it when it

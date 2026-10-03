@@ -11,7 +11,9 @@ import { fileURLToPath } from 'url'
 import { createHostServer } from './server.mjs'
 import { HostState, READY } from './state.mjs'
 import { PairingStore } from './auth.mjs'
-import { DEFAULTS, detectGpu, loadConfig, loadSecrets, loadTokens, paths, saveTokens } from './config.mjs'
+import { DEFAULTS, detectGpu, loadConfig, loadSecrets, loadTokens, paths, saveGameMode, saveTokens } from './config.mjs'
+import { GameWatcher, normalizeGameMode } from './game-mode.mjs'
+import { queryGpuProcesses, startProbe } from './probe.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -83,9 +85,24 @@ export async function start(options = {}) {
     save: (tokens) => saveTokens(tokens, dirs.tokens),
   })
 
+  let gameSettings = normalizeGameMode(config.gameMode)
+  const watcher = new GameWatcher({ settings: () => gameSettings })
+  const gameMode = {
+    settings: () => gameSettings,
+    save: async (raw) => {
+      const next = normalizeGameMode(raw)
+      saveGameMode(next, dirs.config)
+      gameSettings = next
+      console.log(`[game mode] settings saved (${next.enabled ? 'on' : 'off'})`)
+      return next
+    },
+    resumesAt: () => watcher.resumesAt(),
+  }
+
   const server = createHostServer({
     state,
     pairing,
+    gameMode,
     capabilities: () => ({
       // Both have to be true. The file being there says the program was
       // installed; `validated` says the model actually ran on this machine.
@@ -119,7 +136,47 @@ export async function start(options = {}) {
     console.log('[host] no NVIDIA driver answered; work would run on the CPU')
   }
   if (options.startReady) await state.apply('start')
-  return { server, state, pairing, config, port: address.port }
+
+  // Game mode watches only on Windows, where the probe runs. Tests that start
+  // the real server turn it off; the probe has its own tests.
+  let probe = null
+  if (options.watchGames !== false && process.platform === 'win32') {
+    const look = createGameLook({ state, watcher, settings: () => gameSettings, gpu, log: console.log })
+    probe = startProbe({ onSnapshot: look, log: console.log })
+    console.log('[game mode] watching for games')
+  }
+  server.on('close', () => probe?.stop())
+  return { server, state, pairing, config, port: address.port, watcher }
+}
+
+/**
+ * One look of game mode: add the CUDA programs to the probe's snapshot, let the
+ * watcher decide, and say in the host window when it paused or resumed.
+ *
+ * Looks never overlap: a slow nvidia-smi skips a look instead of stacking them.
+ * nvidia-smi is asked only while the answer can change something, so a host
+ * that is stopped or paused by the person costs nothing on the machine.
+ */
+export function createGameLook({ state, watcher, settings, gpu, log, queryGpu = queryGpuProcesses }) {
+  let looking = false
+  return async function look(snapshot) {
+    if (looking) return
+    looking = true
+    try {
+      const s = settings()
+      const mayChange = state.state === READY || state.pauseInfo()?.by === 'game'
+      const gpuProcesses = gpu && s.enabled && s.pauseOnOtherGpuWork && mayChange ? await queryGpu() : []
+      const before = state.pauseInfo()?.by
+      const why = await watcher.observe({ ...snapshot, gpuProcesses }, state)
+      const after = state.pauseInfo()?.by
+      if (before !== 'game' && after === 'game') log(`[game mode] paused: ${why}`)
+      if (before === 'game' && after !== 'game') log('[game mode] resumed')
+    } catch (error) {
+      log(`[game mode] look failed: ${error.message}`)
+    } finally {
+      looking = false
+    }
+  }
 }
 
 const invokedDirectly =
