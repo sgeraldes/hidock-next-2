@@ -18,6 +18,7 @@ import { markVectorStartupQueued } from './vector-startup-state'
 import { getIntegrityService } from './integrity-service'
 import { reconcileOrganizationYielding } from './org-reconciler'
 import { runVoiceLearning } from './voice-learning'
+import { runIdentityRules } from './identity-rules'
 import { backfillKnowledgeCaptures } from './knowledge-capture-backfill'
 import { backfillAudioProfiles } from './audio-profile-store'
 import { getQueueState, startTranscriptionProcessor } from './transcription'
@@ -101,6 +102,12 @@ export const BOOT_TASK_DEFS: GatedBootTask[] = [
         await runVoiceLearning()
       } catch (e) {
         console.error('[VoiceLearning] error:', e)
+      }
+      // Then the identity rules, which read the voices just learned (Phase 3).
+      try {
+        await runIdentityRules()
+      } catch (e) {
+        console.error('[IdentityRules] error:', e)
       }
     },
   },

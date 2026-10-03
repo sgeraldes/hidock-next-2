@@ -16,6 +16,7 @@ import { getEventBus } from './event-bus'
 import { isCancelledMeetingSubject, scoreMeetingCandidates } from './recording-match-scoring'
 import { MIN_TIME_LINK_COVERAGE, meetingCoverage } from './meeting-coverage'
 import { isImpossibleTranscriptDensity, lowValueMaxSeconds } from './value-thresholds'
+import { LIVE_FILENAME } from './live-channel-speakers'
 import type { QualityRating } from '@/types/knowledge'
 
 const SCHEMA_VERSION = 67
@@ -12683,8 +12684,14 @@ export interface BucketRecording {
   /** Best-guess real contact for THIS recording (null when unclear). */
   bestGuessId: string | null
   bestGuessName: string | null
-  /** How the best guess was derived (see signal-tiers.ts for the hierarchy). */
-  method: 'attendee-email' | 'speaker-map' | 'attendee-context' | 'unclear'
+  /** How the best guess was derived (see signal-tiers.ts for the hierarchy, docs/identity-rules.md for the order). */
+  method: 'voice-presence' | 'attendee-email' | 'speaker-map' | 'attendee-context' | 'owner-presence' | 'unclear'
+  /** Candidates with objective support here: they attended the meeting, or their voice is in the recording. */
+  supportedCandidateIds: string[]
+  /** Candidates whose voice (a cluster tied to them, matched at 0.9 or more) is in the recording. */
+  voicedCandidateIds: string[]
+  /** Candidates linked to the recording's meeting. */
+  attendingCandidateIds: string[]
   /** Human phrase for the signal ("Hurtado was an attendee"). */
   signal: string
   /** Existing stored decision: contact id, or null when explicitly marked Unclear. */
@@ -12715,10 +12722,30 @@ function inPlaceholders(n: number): string {
   return new Array(n).fill('?').join(',')
 }
 
-/** Compute the full per-recording resolution view for one bucket contact. */
+/** What the bucket rules need from outside the database. */
+export interface BucketRuleOptions {
+  /** The owner chosen in Settings (identity.ownerContactId); without it owner-presence does not apply. */
+  ownerContactId?: string | null
+}
+
+/** A voice says who is in the recording only when it matched its cluster this well (speaker-linking's anchored line). */
+const VOICE_PRESENCE_MIN_SIMILARITY = 0.9
+
+/**
+ * Compute the full per-recording resolution view for one bucket contact. The best guess per
+ * recording follows docs/identity-rules.md, first rule that applies:
+ *   1. voice-presence: exactly one candidate's voice is in the recording, no other candidate is
+ *      named as a speaker, and every other candidate who attended has a known voice (so their
+ *      absence from the recording means they did not speak);
+ *   2. speaker-map, attendee-email, attendee-context: today's order;
+ *   3. owner-presence: the owner is a candidate, speaks here (voice, or a Live recording), and no
+ *      other candidate attended or speaks.
+ * Otherwise 'unclear'; supportedCandidateIds then says whom Jev may choose between.
+ */
 function buildBucketResolution(
   contact: { id: string; name: string },
-  allContacts: Array<{ id: string; name: string }>
+  allContacts: Array<{ id: string; name: string }>,
+  opts: BucketRuleOptions = {}
 ): BucketResolution {
   const amb = detectAmbiguousName(contact.name, allContacts, contact.id)
   const candidates: AmbiguousCandidate[] = amb.matches.map((m) => ({ id: m.id, name: m.name }))
@@ -12805,6 +12832,34 @@ function buildBucketResolution(
     }
   }
 
+  // Voices: which candidates' voices are in each recording (a cluster tied to them, matched
+  // at 0.9 or more, or the cluster's founding observation), and which candidates have a known
+  // voice at all (so an attendee's silence can be told from an unknown voice).
+  const voicedByRec = new Map<string, Set<string>>()
+  const knownVoice = new Set<string>()
+  if (recIds.length > 0 && candIds.length > 0) {
+    for (const row of queryAll<{ recording_id: string; contact_id: string }>(
+      `SELECT DISTINCT rvc.recording_id, vc.contact_id
+         FROM recording_voice_clusters rvc
+         JOIN voice_clusters vc ON vc.id = rvc.voice_cluster_id
+        WHERE rvc.recording_id IN (${inPlaceholders(recIds.length)})
+          AND vc.contact_id IN (${inPlaceholders(candIds.length)})
+          AND (rvc.similarity IS NULL OR rvc.similarity >= ?)`,
+      [...recIds, ...candIds, VOICE_PRESENCE_MIN_SIMILARITY]
+    )) {
+      let s = voicedByRec.get(row.recording_id)
+      if (!s) voicedByRec.set(row.recording_id, (s = new Set()))
+      s.add(row.contact_id)
+    }
+    for (const row of queryAll<{ contact_id: string }>(
+      `SELECT DISTINCT contact_id FROM voice_clusters WHERE contact_id IN (${inPlaceholders(candIds.length)})`,
+      candIds
+    )) {
+      knownVoice.add(row.contact_id)
+    }
+  }
+  const owner = opts.ownerContactId && candNameById.has(opts.ownerContactId) ? opts.ownerContactId : null
+
   const resolutionByRec = new Map<string, { contactId: string | null; method: string | null }>()
   if (recIds.length > 0) {
     for (const row of queryAll<{ recording_id: string; resolved_contact_id: string | null; method: string | null }>(
@@ -12825,6 +12880,8 @@ function buildBucketResolution(
     const meetingLinked = !!r.meetingId
     const calendarBacked = !!r.meetingId && calendarMeetings.has(r.meetingId)
     const spoken = speakerByRec.get(r.recordingId)
+    const voiced = voicedByRec.get(r.recordingId) ?? new Set<string>()
+    const attendingHere = (r.meetingId ? attendeeByMeeting.get(r.meetingId) : undefined) ?? new Set<string>()
     let bestGuessId: string | null = null
     let method: BucketRecording['method'] = 'unclear'
     let signal: string
@@ -12835,7 +12892,19 @@ function buildBucketResolution(
       signal = 'No attendee or speaker signal — assign manually.'
     }
 
-    if (spoken && spoken.size === 1) {
+    // 1. voice-presence. Another candidate who attended with a voice nobody knows may have
+    // spoken unrecognized, and another candidate named as a speaker did speak: either leaves it open.
+    const onlyVoice = voiced.size === 1 ? [...voiced][0] : null
+    const voicePresence =
+      !!onlyVoice &&
+      ![...attendingHere].some((id) => id !== onlyVoice && !knownVoice.has(id)) &&
+      ![...(spoken ?? [])].some((id) => id !== onlyVoice)
+
+    if (voicePresence) {
+      bestGuessId = onlyVoice
+      method = 'voice-presence'
+      signal = `${lastName(candNameById.get(onlyVoice!) || '')}'s voice is in this recording`
+    } else if (spoken && spoken.size === 1) {
       // A user-confirmed speaker map is stronger than transcript co-presence.
       bestGuessId = [...spoken][0]
       method = 'speaker-map'
@@ -12860,6 +12929,18 @@ function buildBucketResolution(
       }
     }
 
+    // 3. owner-presence: the owner speaks here and no other candidate attended or speaks.
+    if (method === 'unclear' && owner) {
+      const ownerSpeaks = voiced.has(owner) || LIVE_FILENAME.test(r.filename ?? '')
+      const othersHere = [...attendingHere, ...voiced, ...(spoken ?? [])].some((id) => id !== owner)
+      if (ownerSpeaks && !othersHere) {
+        bestGuessId = owner
+        method = 'owner-presence'
+        signal = `${lastName(candNameById.get(owner) || '')} speaks in this recording`
+      }
+    }
+
+    const supported = new Set<string>([...attendingHere, ...voiced])
     const stored = resolutionByRec.get(r.recordingId)
     const decided = stored !== undefined
 
@@ -12874,6 +12955,9 @@ function buildBucketResolution(
       bestGuessName: bestGuessId ? candNameById.get(bestGuessId) ?? null : null,
       method,
       signal,
+      supportedCandidateIds: [...supported].sort(),
+      voicedCandidateIds: [...voiced].sort(),
+      attendingCandidateIds: [...attendingHere].sort(),
       resolvedContactId: decided ? stored!.contactId : null,
       resolvedMethod: decided ? stored!.method : null,
       resolved: decided
@@ -12888,13 +12972,15 @@ function buildBucketResolution(
  * startup auto-split needs both the summary and the resolution; asking for them
  * separately built every bucket's resolution twice (30-sep-2026).
  */
-export function getAmbiguousBucketResolutions(): Array<{ bucket: AmbiguousBucket; resolution: BucketResolution }> {
+export function getAmbiguousBucketResolutions(
+  opts: BucketRuleOptions = {}
+): Array<{ bucket: AmbiguousBucket; resolution: BucketResolution }> {
   const contacts = queryAll<{ id: string; name: string }>('SELECT id, name FROM contacts')
   const found: Array<{ bucket: AmbiguousBucket; resolution: BucketResolution }> = []
   for (const c of contacts) {
     const amb = detectAmbiguousName(c.name, contacts, c.id)
     if (!amb.ambiguous) continue
-    const res = buildBucketResolution(c, contacts)
+    const res = buildBucketResolution(c, contacts, opts)
     const resolvedCount = res.recordings.filter((r) => r.resolved).length
     found.push({
       resolution: res,
@@ -12929,13 +13015,13 @@ export function getAmbiguousBucketIds(): Set<string> {
 }
 
 /** Full per-recording resolution view for one bucket contact, or null if not a bucket. */
-export function getBucketResolution(contactId: string): BucketResolution | null {
+export function getBucketResolution(contactId: string, opts: BucketRuleOptions = {}): BucketResolution | null {
   const contacts = queryAll<{ id: string; name: string }>('SELECT id, name FROM contacts')
   const contact = contacts.find((c) => c.id === contactId)
   if (!contact) return null
   const amb = detectAmbiguousName(contact.name, contacts, contact.id)
   if (!amb.ambiguous) return null
-  return buildBucketResolution(contact, contacts)
+  return buildBucketResolution(contact, contacts, opts)
 }
 
 /** A stored per-recording mention decision (decided=false ⇒ resolve normally). */

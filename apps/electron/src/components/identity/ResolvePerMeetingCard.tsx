@@ -21,7 +21,9 @@ function candidateSummary(candidates: Array<{ name: string }>): string {
 
 /** Icon for the signal behind a best guess (mirrors the signal-tier hierarchy). */
 function SignalIcon({ method }: { method: BucketRecording['method'] }) {
-  if (method === 'speaker-map') return <Mic className="h-3 w-3 flex-shrink-0" aria-hidden />
+  if (method === 'speaker-map' || method === 'voice-presence' || method === 'owner-presence') {
+    return <Mic className="h-3 w-3 flex-shrink-0" aria-hidden />
+  }
   if (method === 'attendee-email') return <CalendarCheck className="h-3 w-3 flex-shrink-0" aria-hidden />
   if (method === 'attendee-context') return <MessageSquare className="h-3 w-3 flex-shrink-0" aria-hidden />
   return <HelpCircle className="h-3 w-3 flex-shrink-0" aria-hidden />

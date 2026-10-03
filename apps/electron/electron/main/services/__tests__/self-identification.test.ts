@@ -85,6 +85,7 @@ import {
   runSelfIdentificationForRecording,
   corroborateSelfIds,
   reliableSelfNames,
+  isJunkSelfName,
   SELF_ID_CONFIDENCE,
   type SpeakerTurn
 } from '../self-identification'
@@ -289,6 +290,64 @@ describe('corroborateSelfIds', () => {
     const res = corroborateSelfIds(analyzed, turns)
     expect(res.identifications).toEqual([])
     expect(res.mergeSuspected.map((m) => m.label)).toContain('Speaker 4')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Junk names (spec 2026-10-03, 3c; pending item 49): pronouns, auxiliaries, role
+// words and short function words are never a self-name, a contact or a warning.
+// ---------------------------------------------------------------------------
+
+describe('junk self-names', () => {
+  const JUNK = ['not', "i'm", "we're", 'service', 'cto', 'connect']
+
+  it('isJunkSelfName rejects the six words seen in the live warnings, in any case or apostrophe', () => {
+    for (const word of JUNK) {
+      expect(isJunkSelfName(word), word).toBe(true)
+      expect(isJunkSelfName(word.toUpperCase()), word).toBe(true)
+    }
+    expect(isJunkSelfName('I’m')).toBe(true)
+    expect(isJunkSelfName('Im')).toBe(true)
+    expect(isJunkSelfName('Nosotros')).toBe(true)
+    expect(isJunkSelfName('Gerente')).toBe(true)
+  })
+
+  it('isJunkSelfName lets real names through, including names that are also words', () => {
+    for (const name of ['Sebastián Geraldes', 'Óscar Pereda', 'Yaraví', 'Mariana', 'Will Smith', 'Mark', 'Santiago de la Colina']) {
+      expect(isJunkSelfName(name), name).toBe(false)
+    }
+  })
+
+  it('reliableSelfNames does not capture a junk word after a cue ("I\'m here", "Service here", "soy CTO")', () => {
+    expect(reliableSelfNames("I'm here, can you hear me?")).toEqual([])
+    expect(reliableSelfNames("We're here.")).toEqual([])
+    expect(reliableSelfNames('Not here yet.')).toEqual([])
+    expect(reliableSelfNames('Service here, ticket open.')).toEqual([])
+    expect(reliableSelfNames('Soy CTO de la empresa.')).toEqual([])
+    expect(reliableSelfNames('This is Connect, the contact center.')).toEqual([])
+    expect(reliableSelfNames('Soy Sebastián, del equipo.')).toEqual(['Sebastián'])
+  })
+
+  it('isPlausibleSelfName and the LLM parse drop a junk name', () => {
+    expect(isPlausibleSelfName('Service')).toBe(false)
+    expect(isPlausibleSelfName("We're")).toBe(false)
+    expect(isPlausibleSelfName('Not Sure')).toBe(false)
+    expect(isPlausibleSelfName('Mariana Duarte')).toBe(true)
+    expect(parseSelfIdResponse('[{"speaker":"Speaker 1","name":"CTO"},{"speaker":"Speaker 2","name":"Ana"}]')).toEqual([
+      { speaker: 'Speaker 2', name: 'Ana' }
+    ])
+  })
+
+  it('a label that says "I\'m here" and "Soy Santiago" is bound, never flagged as two people', () => {
+    const analyzed = { identifications: [{ label: 'Speaker 4', name: 'Santiago', confidence: SELF_ID_CONFIDENCE }], mergeSuspected: [] }
+    const turns: SpeakerTurn[] = [
+      { speaker: 'Speaker 4', text: "I'm here." },
+      { speaker: 'Speaker 4', text: 'Soy Santiago.' },
+      { speaker: 'Speaker 4', text: 'Service here, too.' }
+    ]
+    const res = corroborateSelfIds(analyzed, turns)
+    expect(res.mergeSuspected).toEqual([])
+    expect(res.identifications.map((i) => i.name)).toEqual(['Santiago'])
   })
 })
 

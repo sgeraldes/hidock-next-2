@@ -16,8 +16,19 @@ import { existsSync, rmSync, readFileSync } from 'fs'
 const dbPath = join(tmpdir(), `hidock-identity-decisions-${process.pid}.sqlite`)
 vi.mock('../file-storage', () => ({ getDatabasePath: () => dbPath }))
 
-import { initializeDatabase, closeDatabase, run, queryAll, queryOne, runInTransaction } from '../database'
 import {
+  initializeDatabase,
+  closeDatabase,
+  run,
+  queryAll,
+  queryOne,
+  runInTransaction,
+  mergeContacts,
+  mergeJournalIdsFor,
+  unmergeContacts
+} from '../database'
+import {
+  mergeSubjectKey,
   recordDecisionNoSave,
   listDecisions,
   wasUndone,
@@ -331,7 +342,56 @@ describe('undo', () => {
     expect(clusterRow('v2')).toEqual({ contact_id: 'bea', contact_link_method: 'manual', contact_link_confidence: 1 })
   })
 
-  it('refuses merge decisions for now, and a decision already undone', () => {
+  it('undoes a merge through merge_journal: the loser comes back and the suggestion asks again', () => {
+    run(`UPDATE contacts SET email = 'ana@dfx5.com' WHERE id = 'ana'`)
+    run(
+      `INSERT INTO identity_suggestions (id, kind, candidate_name, target_id, confidence, evidence, status, created_at)
+       VALUES ('sug', 'person', 'Bea Paz', 'ana', 0.96, '{"loserId":"bea"}', 'accepted', '2026-10-01T10:00:00Z')`
+    )
+    let id = ''
+    runInTransaction(() => {
+      const before = mergeJournalIdsFor('contact', 'ana')
+      mergeContacts('ana', 'bea')
+      const journalId = [...mergeJournalIdsFor('contact', 'ana')].find((j) => !before.has(j))!
+      id = recordDecisionNoSave({
+        kind: 'merge',
+        subjectKey: mergeSubjectKey('ana', 'bea'),
+        method: 'exact-email',
+        contactId: 'ana',
+        evidence: {},
+        before: { mergeJournalId: journalId, keeperId: 'ana', loserId: 'bea', suggestionId: 'sug', suggestionStatus: 'pending' }
+      })
+    })
+    expect(queryOne(`SELECT id FROM contacts WHERE id = 'bea'`)).toBeUndefined()
+
+    expect(undoDecision(id)).toEqual({ restored: true })
+    expect(queryOne<{ name: string }>(`SELECT name FROM contacts WHERE id = 'bea'`)?.name).toBe('Bea Paz')
+    expect(queryOne<{ status: string }>(`SELECT status FROM identity_suggestions WHERE id = 'sug'`)?.status).toBe('pending')
+    expect(wasUndone('merge', mergeSubjectKey('ana', 'bea'), 'exact-email')).toBe(true)
+  })
+
+  it('a merge the owner already unmerged by hand is only marked', () => {
+    let id = ''
+    let journalId = ''
+    runInTransaction(() => {
+      const before = mergeJournalIdsFor('contact', 'ana')
+      mergeContacts('ana', 'bea')
+      journalId = [...mergeJournalIdsFor('contact', 'ana')].find((j) => !before.has(j))!
+      id = recordDecisionNoSave({
+        kind: 'merge',
+        subjectKey: mergeSubjectKey('ana', 'bea'),
+        method: 'voice',
+        contactId: 'ana',
+        evidence: {},
+        before: { mergeJournalId: journalId, keeperId: 'ana', loserId: 'bea', suggestionId: null, suggestionStatus: null }
+      })
+    })
+    unmergeContacts(journalId)
+    expect(undoDecision(id)).toEqual({ restored: false })
+    expect(queryOne<{ name: string }>(`SELECT name FROM contacts WHERE id = 'bea'`)?.name).toBe('Bea Paz')
+  })
+
+  it('refuses a merge decision with no state to restore, and a decision already undone', () => {
     let merge = ''
     let speaker = ''
     runInTransaction(() => {
@@ -352,7 +412,7 @@ describe('undo', () => {
         before: snapshotSpeakerNoSave('rec', 'Speaker 9')
       })
     })
-    expect(() => undoDecision(merge)).toThrow(/not yet/)
+    expect(() => undoDecision(merge)).toThrow(/no state to restore/)
     undoDecision(speaker)
     expect(() => undoDecision(speaker)).toThrow(/already undone/)
     expect(() => undoDecision('missing')).toThrow(/not found/)

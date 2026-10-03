@@ -1592,7 +1592,7 @@ export interface ElectronAPI {
           meetingHasCalendarAttendees: boolean
           bestGuessId: string | null
           bestGuessName: string | null
-          method: 'attendee-email' | 'speaker-map' | 'attendee-context' | 'unclear'
+          method: 'voice-presence' | 'attendee-email' | 'speaker-map' | 'attendee-context' | 'owner-presence' | 'unclear'
           signal: string
           resolvedContactId: string | null
           resolvedMethod: string | null

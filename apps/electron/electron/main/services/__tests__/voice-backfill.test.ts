@@ -25,6 +25,8 @@ vi.mock('../config', () => ({
   getDataPath: () => tmpdir(),
   updateConfig: vi.fn()
 }))
+const identityRules = vi.hoisted(() => vi.fn(async (_deps?: unknown) => ({ ran: true })))
+vi.mock('../identity-rules', () => ({ runIdentityRules: (deps?: unknown) => identityRules(deps) }))
 
 import { closeDatabase, initializeDatabase, queryAll, queryOne, run } from '../database'
 import type { SpeakerLinkingResult } from '../speaker-linking'
@@ -452,6 +454,14 @@ describe('runVoiceBackfillOnce', () => {
     await runVoiceBackfillOnce(deps({ learnVoices, runPreflight: fakePreflight([]) }))
     await runVoiceBackfillOnce(deps({ learnVoices, runPreflight: vi.fn().mockRejectedValue(new Error('boom')) }))
     expect(learnVoices).toHaveBeenCalledTimes(1)
+  })
+
+  it('by default, the identity rules run after the voice learning pass (spec 2026-10-03, Phase 3)', async () => {
+    seedRecording({ id: 'r' })
+    identityRules.mockClear()
+    await runVoiceBackfillOnce(deps({ learnVoices: undefined }))
+    expect(identityRules).toHaveBeenCalledTimes(1)
+    expect(identityRules).toHaveBeenCalledWith(expect.objectContaining({ isTranscribing: expect.any(Function) }))
   })
 
   it('a failure while learning voices does not change the recording outcome', async () => {

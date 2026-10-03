@@ -22,6 +22,8 @@ export const OBSERVED_STEPS = [
   'evaluate',
   'meeting-match',
   'speaker-names',
+  // Jev breaks a tie between people an objective signal supports (identity-rules.ts).
+  'identity-tiebreak',
   // Phase 2b: the sites that call a model without the router. They keep their own code and leave a ledger row.
   'analysis',
   'actionable-detection',

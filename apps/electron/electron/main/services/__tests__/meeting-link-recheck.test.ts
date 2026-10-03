@@ -19,6 +19,8 @@ vi.mock('../org-reconciler', () => ({
   fillAttendeesFromOutlookTwins: () => fillTwins(),
   upsertContactsFromMeetings: () => upsertContacts()
 }))
+const identityRules = vi.fn(async () => { calls.push('identityRules'); return { ran: true } })
+vi.mock('../identity-rules', () => ({ runIdentityRules: () => identityRules() }))
 
 import { getEventBus } from '../event-bus'
 import { startMeetingLinkRecheck, RECHECK_DEBOUNCE_MS } from '../meeting-link-recheck'
@@ -62,7 +64,30 @@ describe('startMeetingLinkRecheck', () => {
     emitSynced()
     vi.advanceTimersByTime(RECHECK_DEBOUNCE_MS)
 
-    expect(calls).toEqual(['fillTwins', 'upsertContacts', 'autoLink'])
+    expect(calls.slice(0, 3)).toEqual(['fillTwins', 'upsertContacts', 'autoLink'])
+  })
+
+  // New attendees can decide shared first names and duplicates (spec 2026-10-03, Phase 3).
+  it('applies the identity rules after the links, once per burst', () => {
+    identityRules.mockClear()
+    emitSynced()
+    emitSynced()
+    vi.advanceTimersByTime(RECHECK_DEBOUNCE_MS)
+
+    expect(calls).toEqual(['fillTwins', 'upsertContacts', 'autoLink', 'identityRules'])
+    expect(identityRules).toHaveBeenCalledTimes(1)
+  })
+
+  it('a failing identity pass is logged and does not throw out of the timer', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    identityRules.mockImplementationOnce(async () => { throw new Error('jev down') })
+
+    emitSynced()
+    vi.advanceTimersByTime(RECHECK_DEBOUNCE_MS)
+    await vi.runAllTimersAsync()
+
+    expect(error).toHaveBeenCalledWith('[MeetingLinks] Identity rules after calendar sync failed:', expect.any(Error))
+    error.mockRestore()
   })
 
   it('skips the contact pass when no meeting gained attendees', () => {

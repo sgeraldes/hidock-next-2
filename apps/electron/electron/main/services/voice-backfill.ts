@@ -29,6 +29,7 @@ import {
 import { resolveSpeakerEngine } from './speaker-engines'
 import { getActiveTranscriptions } from './transcription-activity'
 import { runVoiceLearning } from './voice-learning'
+import { runIdentityRules } from './identity-rules'
 import {
   DEFAULT_VOICE_BACKFILL,
   type VoiceBackfillConfig,
@@ -345,7 +346,13 @@ async function resolveDeps(deps: VoiceBackfillDeps): Promise<ResolvedDeps> {
     now: deps.now ?? (() => new Date()),
     clock: deps.clock ?? (() => Date.now()),
     isTranscribing,
-    learnVoices: deps.learnVoices ?? (() => runVoiceLearning({ isTranscribing })),
+    // Learn voices, then apply the identity rules that read them (spec 2026-10-03, Phases 2 and 3).
+    learnVoices:
+      deps.learnVoices ??
+      (async () => {
+        await runVoiceLearning({ isTranscribing })
+        await runIdentityRules({ isTranscribing })
+      }),
     isValueBackfillRunning: deps.isValueBackfillRunning ?? (await import('./value-backfill')).isValueBackfillRunning,
     isBootDrainActive: deps.isBootDrainActive ?? (await import('./boot-scheduler')).isBootDrainActive,
     runPreflight: deps.runPreflight ?? runSpeakerLinkingPreflight,

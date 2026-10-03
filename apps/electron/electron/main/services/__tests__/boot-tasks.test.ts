@@ -38,6 +38,12 @@ vi.mock('../voice-learning', () => ({
     return { ran: true }
   }),
 }))
+vi.mock('../identity-rules', () => ({
+  runIdentityRules: vi.fn(async () => {
+    bootOrder.push('identity-rules')
+    return { ran: true }
+  }),
+}))
 
 import { BOOT_TASK_DEFS, registerGatedBootTasks } from '../boot-tasks'
 
@@ -80,10 +86,10 @@ describe('BOOT_TASK_DEFS', () => {
     }
   })
 
-  it('org-reconcile learns voices once the reconcile is done (spec 2026-10-03, Phase 2)', async () => {
+  it('org-reconcile learns voices once the reconcile is done, then applies the identity rules (spec 2026-10-03, Phases 2 and 3)', async () => {
     bootOrder.length = 0
     await BOOT_TASK_DEFS.find((candidate) => candidate.name === 'org-reconcile')!.run()
-    expect(bootOrder).toEqual(['reconcile', 'voice-learning'])
+    expect(bootOrder).toEqual(['reconcile', 'voice-learning', 'identity-rules'])
   })
 
   it('restores the existing semantic index without starting an embedding backfill', async () => {
