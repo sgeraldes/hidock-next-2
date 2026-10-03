@@ -112,9 +112,11 @@ describe('vector-cache round-trip', () => {
     )
     // Wait until the writer has genuinely opened its temp file; this exercises
     // cancellation during streamed work rather than before its first microtask.
-    for (let attempt = 0; attempt < 100; attempt++) {
-      if (readdirSync(DIR).some((file) => file.includes('.tmp-'))) break
-      await new Promise<void>((resolve) => setImmediate(resolve))
+    // A deadline, not a tick count: 100 ticks were not enough on the slower CI
+    // runner (#130, 3-oct-2026), and the 128 MB write takes far longer than this.
+    const deadline = Date.now() + 5_000
+    while (Date.now() < deadline && !readdirSync(DIR).some((file) => file.includes('.tmp-'))) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 5))
     }
     expect(readdirSync(DIR).some((file) => file.includes('.tmp-'))).toBe(true)
     cancelVectorCacheWrites(path)
