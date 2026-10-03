@@ -107,9 +107,15 @@ voice cluster, method `voice`. Without an anchored owner voice, 2b and 2c do not
 ### 2b. One-on-one meetings
 
 A recording linked to a meeting whose attendees are the owner and one other person, with exactly
-two voices of at least 30 seconds each, one of them the owner's (0.9 or more): the other voice is
-anchored to the other attendee, method `one-on-one`. The anchor is not made when that voice already
-matches a cluster tied to someone else.
+two voices of at least 30 seconds each, one of them the owner's (0.9 or more): the recording votes
+the other voice to the other attendee. One recording is not enough. The invitee may have stayed
+silent while a guest who was not on the invite spoke, and one such meeting would then tie the
+guest's voice to the invitee and spread that error to every recording with that voice. The voice is
+anchored when two different recordings vote it to the same person and no recording votes it to
+someone else. One-on-one and elimination votes (2c) count together; the anchor's method is
+`one-on-one` when any agreeing vote came from a one-on-one, else `elimination`. The speakers in the
+voting recordings are named when the anchor is made, not before. No vote is cast when that voice
+already matches a cluster tied to someone else.
 
 ### 2c. Elimination
 
@@ -118,9 +124,12 @@ already tied to an attendee, and exactly one attendee has no voice yet, the rema
 attendee, method `elimination`, under three guards:
 
 - the remaining voice speaks for 30 seconds or more and matches no cluster tied to someone else;
-- the recording has no more voices than the meeting has attendees;
-- the same voice must be resolved to the same person in two different recordings before it is used
-  to name anyone else. Until then it is stored but does not propagate.
+- the recording has no more voices than the meeting has attendees. V is every voice the recording
+  stores, short ones included: a guest who spoke 15 seconds still shows that the room was bigger
+  than the invite, so only the remaining voice needs 30 seconds;
+- the same voice must be resolved to the same person in two different recordings (elimination or
+  one-on-one votes, 2b) before it is used to name anyone else. Until then it is stored but does not
+  propagate.
 
 Each new anchor can unlock other meetings, so the step repeats until it finds nothing new.
 

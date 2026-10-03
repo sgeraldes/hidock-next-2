@@ -292,7 +292,46 @@ describe('undo', () => {
     expect(wasUndone('mention', mentionSubjectKey('rec', 'bucket-sebas'), 'owner-presence')).toBe(true)
   })
 
-  it('refuses merge and voice-anchor decisions for now, and a decision already undone', () => {
+  it('undoes a voice anchor: the cluster gets back the person it had, unless someone changed it since', () => {
+    run(`INSERT INTO voice_clusters
+      (id, model, model_version, embedding_dimension, centroid_json, contact_id, contact_link_method, contact_link_confidence)
+      VALUES ('v1', 'community-1', '4.0.0', 3, '[1,0,0]', 'ana', 'one-on-one', 0.94)`)
+    run(`INSERT INTO voice_clusters
+      (id, model, model_version, embedding_dimension, centroid_json, contact_id, contact_link_method, contact_link_confidence)
+      VALUES ('v2', 'community-1', '4.0.0', 3, '[1,0,0]', 'bea', 'manual', 1)`)
+    let first = ''
+    let second = ''
+    runInTransaction(() => {
+      first = recordDecisionNoSave({
+        kind: 'voice-anchor',
+        subjectKey: 'cluster:v1',
+        method: 'one-on-one',
+        contactId: 'ana',
+        evidence: {},
+        before: { clusterId: 'v1', contactId: null, method: null, confidence: null }
+      })
+      second = recordDecisionNoSave({
+        kind: 'voice-anchor',
+        subjectKey: 'cluster:v2',
+        method: 'elimination',
+        contactId: 'ana',
+        evidence: {},
+        before: { clusterId: 'v2', contactId: null, method: null, confidence: null }
+      })
+    })
+    const clusterRow = (id: string) =>
+      queryOne('SELECT contact_id, contact_link_method, contact_link_confidence FROM voice_clusters WHERE id = ?', [id])
+
+    expect(undoDecision(first)).toEqual({ restored: true })
+    expect(clusterRow('v1')).toEqual({ contact_id: null, contact_link_method: null, contact_link_confidence: null })
+    expect(wasUndone('voice-anchor', 'cluster:v1', 'one-on-one')).toBe(true)
+
+    // v2 was tied to Bea by hand after the decision: that stays.
+    expect(undoDecision(second)).toEqual({ restored: false })
+    expect(clusterRow('v2')).toEqual({ contact_id: 'bea', contact_link_method: 'manual', contact_link_confidence: 1 })
+  })
+
+  it('refuses merge decisions for now, and a decision already undone', () => {
     let merge = ''
     let speaker = ''
     runInTransaction(() => {

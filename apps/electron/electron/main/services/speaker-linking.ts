@@ -5,7 +5,9 @@ import { randomUUID } from 'crypto'
 import { availableParallelism, constants as osConstants, setPriority } from 'os'
 import ffmpegPath from 'ffmpeg-static'
 import { getConfig, getDataPath, updateConfig } from './config'
-import { queryAll, queryOne, runInTransaction, runNoSave } from './database'
+import { queryAll, queryOne, runInTransaction, runNoSave, VOICE_CONFLICT_PREFIX } from './database'
+import { recordDecisionNoSave, snapshotSpeakerNoSave, speakerSubjectKey, wasSpeakerUndoneFor } from './identity-decisions'
+import { canUpgrade, methodConfidence } from './signal-tiers'
 import { diarizeOnModelHost, ModelHostUnavailableError } from './model-host-client'
 import { CANONICAL_VOICE_MODEL, resolveSpeakerEngine } from './speaker-engines'
 import { detectHardware, gpuFingerprint } from './hardware-profile'
@@ -1145,34 +1147,150 @@ Segments: ${linking.segments.map((segment) =>
   ).join(', ')}`
 }
 
-/** Bind only clusters already anchored to a contact. Unknown clusters stay anonymous. */
+/** A voice that disagrees with a speaker binding it may not replace. */
+export interface VoiceConflict {
+  recordingId: string
+  speakerLabel: string
+  voiceClusterId: string | null
+  similarity: number | null
+  voiceContactId: string
+  boundContactId: string
+  boundSource: string | null
+}
+
+/**
+ * Show a voice that disagrees with a speaker already named (spec 2026-10-03, 2d, the 28-sep
+ * conflict rule): one pending 'voice-conflict' suggestion per recording and speaker, inside the
+ * caller's transaction. The suggestion names the voice's person as target_id; candidate_name is
+ * a key, `voice-conflict:<recording>:<label>`, so the queue's UNIQUE(kind, candidate_name,
+ * target_id) keeps one row per speaker and person. Returns false when one is already pending.
+ * The People page does not list these rows, and its accept and reject refuse them
+ * (isVoiceConflictSuggestion), until they get their own review.
+ */
+export function recordVoiceConflictNoSave(conflict: VoiceConflict): boolean {
+  const candidateName = `${VOICE_CONFLICT_PREFIX}${conflict.recordingId}:${conflict.speakerLabel}`
+  const pending = queryOne(
+    "SELECT 1 FROM identity_suggestions WHERE kind = 'person' AND candidate_name = ? AND status = 'pending'",
+    [candidateName]
+  )
+  if (pending) return false
+  const nameOf = (id: string) => queryOne<{ name: string }>('SELECT name FROM contacts WHERE id = ?', [id])?.name ?? null
+  const evidence = {
+    type: 'voice-conflict',
+    recordingId: conflict.recordingId,
+    speakerLabel: conflict.speakerLabel,
+    voiceClusterId: conflict.voiceClusterId,
+    similarity: conflict.similarity,
+    voiceContactId: conflict.voiceContactId,
+    voiceContactName: nameOf(conflict.voiceContactId),
+    boundContactId: conflict.boundContactId,
+    boundContactName: nameOf(conflict.boundContactId),
+    boundSource: conflict.boundSource
+  }
+  runNoSave(
+    `INSERT OR IGNORE INTO identity_suggestions
+       (id, kind, candidate_name, target_id, confidence, evidence, status, created_at, source_recording_ids)
+     VALUES (?, 'person', ?, ?, ?, ?, 'pending', ?, ?)`,
+    [
+      randomUUID(),
+      candidateName,
+      conflict.voiceContactId,
+      conflict.similarity ?? methodConfidence('voice'),
+      JSON.stringify(evidence),
+      new Date().toISOString(),
+      JSON.stringify([conflict.recordingId])
+    ]
+  )
+  return true
+}
+
+/**
+ * Whether an automatic writer may replace a speaker binding made by `existingSource`. A
+ * binding with no source was made before v65 and may be the owner's own pick, so it is
+ * treated like manual: never replaced, only shown as a conflict.
+ */
+export function mayReplaceSpeaker(existingSource: string | null | undefined, method: string): boolean {
+  if (!existingSource) return false
+  return canUpgrade(existingSource, method)
+}
+
+/**
+ * Bind only clusters already anchored to a contact. Unknown clusters stay anonymous.
+ *
+ * A speaker already named after someone else (spec 2026-10-03, 2d) is replaced only when the
+ * voice matched at ANCHORED_VOICE_MATCH_THRESHOLD or more (or founded the cluster) and its
+ * rank beats the binding's source; the replacement is journaled with the state before.
+ * Otherwise a strong match leaves a 'voice-conflict' suggestion and a weak one changes nothing.
+ */
 export function applyKnownVoiceBindings(recordingId: string): number {
   return runInTransaction(() => {
     // similarity is the voice match that put this speaker in the cluster; NULL for a
     // speaker that founded its cluster, and then the binding's confidence stays NULL too.
-    const rows = queryAll<{ transcript_speaker_label: string; contact_id: string; similarity: number | null }>(
-      `SELECT rvc.transcript_speaker_label, vc.contact_id, MAX(rvc.similarity) AS similarity
+    const rows = queryAll<{
+      transcript_speaker_label: string
+      contact_id: string
+      similarity: number | null
+      voice_cluster_id: string
+    }>(
+      `SELECT rvc.transcript_speaker_label, vc.contact_id, MAX(rvc.similarity) AS similarity,
+              MIN(rvc.voice_cluster_id) AS voice_cluster_id
        FROM recording_voice_clusters rvc
        JOIN voice_clusters vc ON vc.id = rvc.voice_cluster_id
        WHERE rvc.recording_id = ? AND rvc.transcript_speaker_label IS NOT NULL AND vc.contact_id IS NOT NULL
        GROUP BY rvc.transcript_speaker_label, vc.contact_id`,
       [recordingId]
     )
-    let inserted = 0
+    let written = 0
     for (const row of rows) {
-      const existing = queryOne(
-        'SELECT 1 FROM transcript_speakers WHERE recording_id = ? AND speaker_label = ?',
-        [recordingId, row.transcript_speaker_label]
+      const label = row.transcript_speaker_label
+      // The owner undid naming this speaker after this person: no method names it again.
+      if (wasSpeakerUndoneFor(recordingId, label, row.contact_id)) continue
+      const existing = queryOne<{ contact_id: string; source: string | null }>(
+        'SELECT contact_id, source FROM transcript_speakers WHERE recording_id = ? AND speaker_label = ?',
+        [recordingId, label]
       )
-      if (existing) continue
-      runNoSave(
-        `INSERT INTO transcript_speakers (id, recording_id, speaker_label, contact_id, source, confidence)
-         VALUES (?, ?, ?, ?, 'voice', ?)`,
-        [randomUUID(), recordingId, row.transcript_speaker_label, row.contact_id, row.similarity]
-      )
-      inserted++
+      if (!existing) {
+        runNoSave(
+          `INSERT INTO transcript_speakers (id, recording_id, speaker_label, contact_id, source, confidence)
+           VALUES (?, ?, ?, ?, 'voice', ?)`,
+          [randomUUID(), recordingId, label, row.contact_id, row.similarity]
+        )
+        written++
+        continue
+      }
+      if (existing.contact_id === row.contact_id) continue
+      const strong = row.similarity === null || row.similarity >= ANCHORED_VOICE_MATCH_THRESHOLD
+      if (!strong) continue
+      const subjectKey = speakerSubjectKey(recordingId, label)
+      if (mayReplaceSpeaker(existing.source, 'voice')) {
+        const before = snapshotSpeakerNoSave(recordingId, label)
+        runNoSave(
+          `INSERT OR REPLACE INTO transcript_speakers (id, recording_id, speaker_label, contact_id, source, confidence)
+           VALUES (?, ?, ?, ?, 'voice', ?)`,
+          [randomUUID(), recordingId, label, row.contact_id, row.similarity]
+        )
+        recordDecisionNoSave({
+          kind: 'speaker',
+          subjectKey,
+          method: 'voice',
+          contactId: row.contact_id,
+          evidence: { voiceClusterId: row.voice_cluster_id, similarity: row.similarity, replacedSource: existing.source },
+          before
+        })
+        written++
+        continue
+      }
+      recordVoiceConflictNoSave({
+        recordingId,
+        speakerLabel: label,
+        voiceClusterId: row.voice_cluster_id,
+        similarity: row.similarity,
+        voiceContactId: row.contact_id,
+        boundContactId: existing.contact_id,
+        boundSource: existing.source
+      })
     }
-    return inserted
+    return written
   })
 }
 

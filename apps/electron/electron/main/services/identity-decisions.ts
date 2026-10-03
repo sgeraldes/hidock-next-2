@@ -13,8 +13,8 @@
  *   merge:<keeperId>:<loserId>                 a contact merge
  *   cluster:<voiceClusterId>                   a voice cluster tied to a person
  *
- * Undo of 'merge' and 'voice-anchor' comes with the PRs that make those decisions; merges
- * already have merge_journal.
+ * Undo of 'voice-anchor' (voice-learning.ts) puts the cluster's person back. Undo of 'merge'
+ * comes with the PR that makes those decisions; merges already have merge_journal.
  */
 
 import { randomUUID } from 'crypto'
@@ -50,13 +50,39 @@ export interface MentionBefore {
   } | null
 }
 
+/** The person a voice cluster was tied to before a voice-anchor decision (all null: nobody). */
+export interface VoiceAnchorBefore {
+  clusterId: string
+  contactId: string | null
+  method: string | null
+  confidence: number | null
+}
+
+/** The state before a voice-anchor decision. Read it inside the caller's transaction, before the write. */
+export function snapshotVoiceAnchorNoSave(clusterId: string): VoiceAnchorBefore {
+  const row = queryOne<{ contact_id: string | null; contact_link_method: string | null; contact_link_confidence: number | null }>(
+    'SELECT contact_id, contact_link_method, contact_link_confidence FROM voice_clusters WHERE id = ?',
+    [clusterId]
+  )
+  return {
+    clusterId,
+    contactId: row?.contact_id ?? null,
+    method: row?.contact_link_method ?? null,
+    confidence: row?.contact_link_confidence ?? null
+  }
+}
+
+export function voiceAnchorSubjectKey(clusterId: string): string {
+  return `cluster:${clusterId}`
+}
+
 export interface DecisionInput {
   kind: DecisionKind
   subjectKey: string
   method: string
   contactId: string | null
   evidence: unknown
-  /** SpeakerBefore for 'speaker', MentionBefore for 'mention'; whatever undo needs for the rest. */
+  /** SpeakerBefore for 'speaker', MentionBefore for 'mention', VoiceAnchorBefore for 'voice-anchor'. */
   before: unknown
 }
 
@@ -170,6 +196,31 @@ export function wasUndone(kind: DecisionKind, subjectKey: string, method: string
 }
 
 /**
+ * True when a decision naming `contactId` for this transcript speaker was undone, whatever
+ * method made it. The owner's undo holds against every method: no automatic writer names that
+ * speaker after that person again (a different person is a different decision).
+ */
+export function wasSpeakerUndoneFor(recordingId: string, speakerLabel: string, contactId: string): boolean {
+  return !!queryOne(
+    `SELECT 1 FROM identity_decisions
+     WHERE kind = 'speaker' AND subject_key = ? AND contact_id = ? AND undone_at IS NOT NULL LIMIT 1`,
+    [speakerSubjectKey(recordingId, speakerLabel), contactId]
+  )
+}
+
+/**
+ * True when a decision tying this voice cluster to `contactId` was undone, whatever method made
+ * it: no learning rule ties that voice to that person again.
+ */
+export function wasAnchorUndoneFor(clusterId: string, contactId: string): boolean {
+  return !!queryOne(
+    `SELECT 1 FROM identity_decisions
+     WHERE kind = 'voice-anchor' AND subject_key = ? AND contact_id = ? AND undone_at IS NOT NULL LIMIT 1`,
+    [voiceAnchorSubjectKey(clusterId), contactId]
+  )
+}
+
+/**
  * Undo one decision: put the state before back and mark the row undone. The state is put back
  * only while the subject still holds what the decision wrote; when someone changed it since
  * (the owner picked another person), that change stays and only the mark is written, and the
@@ -187,6 +238,7 @@ export function undoDecision(id: string): { restored: boolean } {
     let restored: boolean
     if (decision.kind === 'speaker') restored = undoSpeakerNoSave(decision)
     else if (decision.kind === 'mention') restored = undoMentionNoSave(decision)
+    else if (decision.kind === 'voice-anchor') restored = undoVoiceAnchorNoSave(decision)
     else throw new Error(`Undo of a ${decision.kind} decision is not yet available`)
 
     runNoSave('UPDATE identity_decisions SET undone_at = ? WHERE id = ?', [new Date().toISOString(), id])
@@ -224,6 +276,21 @@ function undoSpeakerNoSave(decision: IdentityDecision): boolean {
       ]
     )
   }
+  return true
+}
+
+function undoVoiceAnchorNoSave(decision: IdentityDecision): boolean {
+  const before = decision.before as VoiceAnchorBefore | null
+  if (!before) throw new Error(`Identity decision ${decision.id} has no state to restore`)
+  const current = queryOne<{ contact_id: string | null }>('SELECT contact_id FROM voice_clusters WHERE id = ?', [
+    before.clusterId
+  ])
+  if (!current || current.contact_id !== decision.contactId) return false
+  runNoSave(
+    `UPDATE voice_clusters SET contact_id = ?, contact_link_method = ?, contact_link_confidence = ?, updated_at = ?
+     WHERE id = ?`,
+    [before.contactId, before.method, before.confidence, new Date().toISOString(), before.clusterId]
+  )
   return true
 }
 

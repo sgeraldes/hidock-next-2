@@ -43,9 +43,9 @@ afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
 function deps(
   over: Partial<LiveOwnerDeps> = {}
-): LiveOwnerDeps & { assigned: string[]; provenance: Array<{ source: string; confidence: number }> } {
+): LiveOwnerDeps & { assigned: string[]; provenance: Array<Parameters<LiveOwnerDeps['assign']>[3]> } {
   const assigned: string[] = []
-  const provenance: Array<{ source: string; confidence: number }> = []
+  const provenance: Array<Parameters<LiveOwnerDeps['assign']>[3]> = []
   return {
     assigned,
     provenance,
@@ -85,6 +85,8 @@ describe('live stream owner', () => {
     expect(d.provenance[0].source).toBe('live-channel')
     expect(d.provenance[0].confidence).toBeGreaterThan(0.99)
     expect(d.provenance[0].confidence).toBeLessThanOrEqual(1)
+    // The owner's voice is anchored too (spec 2026-10-03, 2a), with the same confidence.
+    expect(d.provenance[0].voiceAnchor).toEqual({ method: 'live-channel', confidence: d.provenance[0].confidence })
   })
 
   it('names nobody when it is not clear or not allowed', async () => {

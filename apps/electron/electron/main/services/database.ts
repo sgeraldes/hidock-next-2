@@ -18,7 +18,7 @@ import { MIN_TIME_LINK_COVERAGE, meetingCoverage } from './meeting-coverage'
 import { isImpossibleTranscriptDensity, lowValueMaxSeconds } from './value-thresholds'
 import type { QualityRating } from '@/types/knowledge'
 
-const SCHEMA_VERSION = 66
+const SCHEMA_VERSION = 67
 
 const SCHEMA = `
 -- Calendar events from ICS
@@ -775,6 +775,22 @@ CREATE TABLE IF NOT EXISTS recording_voice_clusters (
     PRIMARY KEY (recording_id, local_speaker_label),
     FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE,
     FOREIGN KEY (voice_cluster_id) REFERENCES voice_clusters(id) ON DELETE CASCADE
+);
+
+-- Pending voice votes (v67, voice-learning.ts). One row per recording that names an unknown
+-- voice: a one-on-one (the voice that is not the owner) or an elimination (the last unknown
+-- voice, one attendee not heard yet). Two recordings voting the same person, and none voting
+-- anyone else, anchor the voice. Conflicting votes stay here and anchor nothing.
+CREATE TABLE IF NOT EXISTS voice_elimination_votes (
+    cluster_id TEXT NOT NULL,
+    contact_id TEXT NOT NULL,
+    recording_id TEXT NOT NULL,
+    method TEXT NOT NULL CHECK(method IN ('one-on-one', 'elimination')),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (cluster_id, recording_id),
+    FOREIGN KEY (cluster_id) REFERENCES voice_clusters(id) ON DELETE CASCADE,
+    FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+    FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
 );
 
 -- Mention resolutions: per-recording assignment of an ambiguous bucket name
@@ -3334,6 +3350,22 @@ const MIGRATIONS: Record<number, () => void> = {
     FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
 )`)
     console.log('Migration v66 complete')
+  },
+  67: () => {
+    // Pending voice votes for voice learning: a new table, no change to existing data.
+    console.log('Running migration to schema v67: voice_elimination_votes')
+    getDatabase().run(`CREATE TABLE IF NOT EXISTS voice_elimination_votes (
+    cluster_id TEXT NOT NULL,
+    contact_id TEXT NOT NULL,
+    recording_id TEXT NOT NULL,
+    method TEXT NOT NULL CHECK(method IN ('one-on-one', 'elimination')),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (cluster_id, recording_id),
+    FOREIGN KEY (cluster_id) REFERENCES voice_clusters(id) ON DELETE CASCADE,
+    FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+    FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
+)`)
+    console.log('Migration v67 complete')
   },
 }
 
@@ -10627,7 +10659,10 @@ export function assignSpeaker(
   opts: {
     contactId?: string
     newName?: string
-    voiceAnchor?: { method: 'manual' | 'self-identification'; confidence: number }
+    voiceAnchor?: {
+      method: 'manual' | 'self-identification' | 'live-channel' | 'one-on-one' | 'elimination'
+      confidence: number
+    }
     source?: SpeakerSource
     confidence?: number
   }
@@ -10673,8 +10708,10 @@ export function assignSpeaker(
       [randomUUID(), recordingId, speakerLabel, contact.id, opts.source ?? null, opts.confidence ?? null]
     )
 
-    // A manual confirmation or explicit first-person self-identification can
-    // anchor the anonymous acoustic cluster to this contact. Calendar/LLM
+    // A manual confirmation, an explicit first-person self-identification, the
+    // microphone channel of a live recording (the owner) or a voice learned from
+    // a one-on-one or by elimination (voice-learning.ts) can anchor the
+    // anonymous acoustic cluster to this contact. Calendar/LLM
     // inference intentionally does not receive voiceAnchor and therefore can
     // never turn contextual guessing into persistent acoustic identity.
     if (opts.voiceAnchor) {
@@ -12353,6 +12390,27 @@ export function insertIdentitySuggestion(
   )
 }
 
+/**
+ * candidate_name prefix of a voice-conflict suggestion (speaker-linking.ts,
+ * recordVoiceConflictNoSave): `voice-conflict:<recordingId>:<speakerLabel>`. The name is a
+ * key, not a person's name, so the alias-writing accept and reject below must never see it.
+ */
+export const VOICE_CONFLICT_PREFIX = 'voice-conflict:'
+
+export const VOICE_CONFLICT_REFUSAL =
+  'This is a voice conflict: a known voice disagrees with a named speaker. It cannot be accepted or rejected here yet.'
+
+/** True for a voice-conflict suggestion, by its key or by its evidence type. */
+export function isVoiceConflictSuggestion(s: Pick<IdentitySuggestion, 'candidate_name' | 'evidence'>): boolean {
+  if (typeof s.candidate_name === 'string' && s.candidate_name.startsWith(VOICE_CONFLICT_PREFIX)) return true
+  if (!s.evidence) return false
+  try {
+    return (JSON.parse(s.evidence) as { type?: unknown } | null)?.type === 'voice-conflict'
+  } catch {
+    return false
+  }
+}
+
 /** List identity suggestions, optionally filtered by status. Highest confidence first. */
 export function getIdentitySuggestions(status?: 'pending' | 'accepted' | 'rejected'): IdentitySuggestion[] {
   if (status) {
@@ -12507,6 +12565,7 @@ export function finalizeAcceptedMerge(
 export function acceptIdentitySuggestion(id: string): AcceptSuggestionResult {
   const s = queryOne<IdentitySuggestion>('SELECT * FROM identity_suggestions WHERE id = ?', [id])
   if (!s) throw new Error(`Identity suggestion ${id} not found`)
+  if (isVoiceConflictSuggestion(s)) throw new Error(VOICE_CONFLICT_REFUSAL)
 
   let evidence: { meetingId?: string; loserId?: string } = {}
   try {
@@ -12582,6 +12641,7 @@ export function rejectIdentitySuggestion(id: string): IdentitySuggestion {
   return runInTransaction(() => {
     const s = queryOne<IdentitySuggestion>('SELECT * FROM identity_suggestions WHERE id = ?', [id])
     if (!s) throw new Error(`Identity suggestion ${id} not found`)
+    if (isVoiceConflictSuggestion(s)) throw new Error(VOICE_CONFLICT_REFUSAL)
 
     if (s.kind === 'person') {
       upsertContactAliasNoSave(s.target_id, s.candidate_name, 'rejected', 0)

@@ -26,6 +26,19 @@ vi.mock('../vector-store', () => ({
   }),
 }))
 
+const bootOrder = vi.hoisted(() => [] as string[])
+vi.mock('../org-reconciler', () => ({
+  reconcileOrganizationYielding: vi.fn(async () => {
+    bootOrder.push('reconcile')
+  }),
+}))
+vi.mock('../voice-learning', () => ({
+  runVoiceLearning: vi.fn(async () => {
+    bootOrder.push('voice-learning')
+    return { ran: true }
+  }),
+}))
+
 import { BOOT_TASK_DEFS, registerGatedBootTasks } from '../boot-tasks'
 
 const ALL_TASK_NAMES = [
@@ -65,6 +78,12 @@ describe('BOOT_TASK_DEFS', () => {
         `${def.name} must be listed under FEATURES['${def.feature}'].backgroundTasks`
       ).toContain(def.name)
     }
+  })
+
+  it('org-reconcile learns voices once the reconcile is done (spec 2026-10-03, Phase 2)', async () => {
+    bootOrder.length = 0
+    await BOOT_TASK_DEFS.find((candidate) => candidate.name === 'org-reconcile')!.run()
+    expect(bootOrder).toEqual(['reconcile', 'voice-learning'])
   })
 
   it('restores the existing semantic index without starting an embedding backfill', async () => {

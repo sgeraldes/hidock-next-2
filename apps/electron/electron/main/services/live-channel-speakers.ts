@@ -122,12 +122,19 @@ export interface LiveOwnerDeps {
   ownerContactId: () => string | null
   /** The microphone channel noted with this file when it was recorded (not today's setting). */
   micChannel: (wavPath: string) => 0 | 1 | null
-  /** `from` is what transcript_speakers keeps as source and confidence. */
+  /**
+   * `from` is what transcript_speakers keeps as source and confidence; voiceAnchor ties the
+   * speaker's voice cluster to the owner (spec 2026-10-03, 2a), so the owner's voice is known.
+   */
   assign: (
     recordingId: string,
     label: string,
     contactId: string,
-    from: { source: 'live-channel'; confidence: number }
+    from: {
+      source: 'live-channel'
+      confidence: number
+      voiceAnchor: { method: 'live-channel'; confidence: number }
+    }
   ) => void
 }
 
@@ -152,6 +159,10 @@ export async function nameOwnerOnLiveRecording(recordingId: string, deps: LiveOw
   // The confidence is that speaker's share of the microphone energy (at least MIC_SHARE_MIN).
   const e = energy.get(label)!
   const micShare = Math.round((e.mic / (e.mic + e.other)) * 100) / 100
-  deps.assign(recordingId, label, owner, { source: 'live-channel', confidence: micShare })
+  deps.assign(recordingId, label, owner, {
+    source: 'live-channel',
+    confidence: micShare,
+    voiceAnchor: { method: 'live-channel', confidence: micShare }
+  })
   return { named: true, label }
 }
