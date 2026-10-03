@@ -125,6 +125,35 @@ describe('fillAttendeesFromOutlookTwins', () => {
     expect(row('m365:empty').attendees).toBeNull()
   })
 
+  // Review of #128: an ICS resync writes the feed's empty organizer over the copied one, and the
+  // meeting, which now has attendees, was never a target again.
+  it('puts the organizer back after an ICS resync cleared it, without counting a new fill', () => {
+    meeting('ics-1', { attendees: null })
+    meeting('m365:evt-1', { attendees: JSON.stringify(ANA), organizerName: 'Ana Ruiz', organizerEmail: 'ana@acme.com' })
+    fillAttendeesFromOutlookTwins()
+    run('UPDATE meetings SET organizer_name = NULL, organizer_email = NULL WHERE id = ?', ['ics-1'])
+
+    expect(fillAttendeesFromOutlookTwins()).toEqual({ filled: 0, ambiguous: 0 })
+
+    expect(row('ics-1')).toEqual({
+      attendees: JSON.stringify(ANA),
+      organizer_name: 'Ana Ruiz',
+      organizer_email: 'ana@acme.com'
+    })
+  })
+
+  // Review of #128: a blank subject says nothing about which meeting it is.
+  it('does not pair meetings that have no subject', () => {
+    meeting('ics-blank', { subject: '', attendees: null })
+    meeting('m365:blank', { subject: '', attendees: JSON.stringify(ANA) })
+    meeting('ics-spaces', { subject: '   ', start: '2026-10-02T14:00:00.000Z', attendees: null })
+    meeting('m365:spaces', { subject: '   ', start: '2026-10-02T14:00:00.000Z', attendees: JSON.stringify(ANA) })
+
+    expect(fillAttendeesFromOutlookTwins()).toEqual({ filled: 0, ambiguous: 0 })
+    expect(row('ics-blank').attendees).toBeNull()
+    expect(row('ics-spaces').attendees).toBeNull()
+  })
+
   it('copies the organizer only where the meeting has none', () => {
     meeting('ics-1', { attendees: null, organizerName: 'Calendar Owner', organizerEmail: 'owner@acme.com' })
     meeting('m365:evt-1', { attendees: JSON.stringify(ANA), organizerName: 'Ana Ruiz', organizerEmail: 'ana@acme.com' })

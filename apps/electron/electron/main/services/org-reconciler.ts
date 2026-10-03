@@ -1315,11 +1315,15 @@ const NO_ATTENDEES_SQL = `(attendees IS NULL OR TRIM(attendees) IN ('', '[]'))`
  * updated_at, which mergeDuplicateMeetingOccurrences reads as "last synced". The contacts
  * and meeting_contacts rows come from upsertContactsFromMeetings, which runs after this step
  * and reads every meeting. An ICS resync keeps the copied attendees (upsertMeetingsBatch
- * writes COALESCE(?, attendees)) but clears the organizer, which the next pass copies again.
+ * writes COALESCE(?, attendees)) but writes the feed's empty organizer over the copied one,
+ * so a meeting whose attendees equal its twin's and that has no organizer gets the organizer
+ * back (not counted as filled). A blank subject names no meeting: those are never paired.
  */
 export function fillAttendeesFromOutlookTwins(): { filled: number; ambiguous: number } {
-  const targets = queryAll<{ id: string; subject: string; start_time: string }>(
-    `SELECT id, subject, start_time FROM meetings WHERE id NOT LIKE 'm365%' AND ${NO_ATTENDEES_SQL}`
+  const targets = queryAll<{ id: string; subject: string; start_time: string; attendees: string | null }>(
+    `SELECT id, subject, start_time, attendees FROM meetings
+     WHERE id NOT LIKE 'm365%' AND TRIM(COALESCE(subject, '')) != ''
+       AND (${NO_ATTENDEES_SQL} OR TRIM(COALESCE(organizer_email, '')) = '')`
   )
   if (targets.length === 0) return { filled: 0, ambiguous: 0 }
 
@@ -1349,11 +1353,22 @@ export function fillAttendeesFromOutlookTwins(): { filled: number; ambiguous: nu
     for (const target of targets) {
       const twins = twinsBySlot.get(`${target.subject}\u0000${target.start_time}`)
       if (!twins) continue
+      const hasAttendees = !!target.attendees && !['', '[]'].includes(target.attendees.trim())
       if (new Set(twins.map((t) => t.attendees)).size > 1) {
-        ambiguous++
+        if (!hasAttendees) ambiguous++
         continue
       }
       const twin = twins[0]
+      if (hasAttendees) {
+        // Filled earlier and its organizer since cleared by a resync: only the organizer comes back.
+        if (target.attendees !== twin.attendees || !twin.organizer_email) continue
+        run('UPDATE meetings SET organizer_name = COALESCE(NULLIF(organizer_name, \'\'), ?), organizer_email = ? WHERE id = ?', [
+          twin.organizer_name,
+          twin.organizer_email,
+          target.id
+        ])
+        continue
+      }
       run(
         `UPDATE meetings SET attendees = ?,
            organizer_name = COALESCE(NULLIF(organizer_name, ''), ?),
