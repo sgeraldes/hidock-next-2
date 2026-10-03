@@ -29,6 +29,7 @@ import {
 import { resolveSpeakerEngine } from './speaker-engines'
 import { getActiveTranscriptions } from './transcription-activity'
 import { runVoiceLearning } from './voice-learning'
+import { runIdentityRules } from './identity-rules'
 import {
   DEFAULT_VOICE_BACKFILL,
   type VoiceBackfillConfig,
@@ -71,7 +72,15 @@ export interface VoiceBackfillDeps {
   emit?: (payload: VoiceBackfillProgress) => void
   /** Voice learning (voice-learning.ts), run after a recording gets its voices. */
   learnVoices?: () => Promise<unknown>
+  /**
+   * The identity rules (identity-rules.ts). They read the whole library, so the backfill runs
+   * them at most every IDENTITY_RULES_INTERVAL_MS and once more when nothing is left.
+   */
+  applyIdentityRules?: () => Promise<unknown>
 }
+
+/** The backfill applies the identity rules at most this often (review of PR 4, F2). */
+export const IDENTITY_RULES_INTERVAL_MS = 30 * 60_000
 
 export interface VoiceBackfillProgress {
   recordingId: string
@@ -96,9 +105,14 @@ let lastError: string | null = null
 let lastMeasure: VoiceBackfillMeasure | null = null
 let schedulerActive = false
 let timer: ReturnType<typeof setTimeout> | null = null
+/** When the backfill last applied the identity rules (clock milliseconds), and whether voices came since. */
+let identityRulesAt: number | null = null
+let identityRulesPending = false
 
 /** Test-only: forget the in-memory state between tests. */
 export function resetVoiceBackfillForTests(): void {
+  identityRulesAt = null
+  identityRulesPending = false
   running = false
   stopRequested = false
   lastRunAt = null
@@ -336,6 +350,27 @@ interface ResolvedDeps {
   runPreflight: typeof runSpeakerLinkingPreflight
   emit: (payload: VoiceBackfillProgress) => void
   learnVoices: () => Promise<unknown>
+  applyIdentityRules: () => Promise<unknown>
+}
+
+/**
+ * Apply the identity rules (spec 2026-10-03, Phase 3) after new voices, at most every
+ * IDENTITY_RULES_INTERVAL_MS; `force` runs a pass that was held back (the backfill has nothing
+ * left). A failure there is not the recording's.
+ */
+async function maybeApplyIdentityRules(d: ResolvedDeps, force: boolean): Promise<void> {
+  const now = d.clock()
+  if (!force && identityRulesAt !== null && now - identityRulesAt < IDENTITY_RULES_INTERVAL_MS) {
+    identityRulesPending = true
+    return
+  }
+  identityRulesAt = now
+  identityRulesPending = false
+  try {
+    await d.applyIdentityRules()
+  } catch (e) {
+    console.warn('[VoiceBackfill] identity rules failed:', e instanceof Error ? e.message : e)
+  }
 }
 
 /** The value scan and the boot scheduler are loaded only when the job really asks them. */
@@ -346,6 +381,7 @@ async function resolveDeps(deps: VoiceBackfillDeps): Promise<ResolvedDeps> {
     clock: deps.clock ?? (() => Date.now()),
     isTranscribing,
     learnVoices: deps.learnVoices ?? (() => runVoiceLearning({ isTranscribing })),
+    applyIdentityRules: deps.applyIdentityRules ?? (() => runIdentityRules({ isTranscribing })),
     isValueBackfillRunning: deps.isValueBackfillRunning ?? (await import('./value-backfill')).isValueBackfillRunning,
     isBootDrainActive: deps.isBootDrainActive ?? (await import('./boot-scheduler')).isBootDrainActive,
     runPreflight: deps.runPreflight ?? runSpeakerLinkingPreflight,
@@ -431,6 +467,7 @@ async function processRecording(
     } catch (e) {
       console.warn('[VoiceBackfill] voice learning failed:', e instanceof Error ? e.message : e)
     }
+    await maybeApplyIdentityRules(d, false)
   }
   return processed
 }
@@ -459,7 +496,11 @@ export async function runVoiceBackfillOnce(deps: VoiceBackfillDeps = {}): Promis
   if (running) return { ran: false, reason: 'already-running' }
 
   const next = pickNextRecordingForVoice()
-  if (!next) return { ran: false, reason: 'nothing-left' }
+  if (!next) {
+    // The last recordings' voices may not have reached the identity rules yet: run them once.
+    if (identityRulesPending) await maybeApplyIdentityRules(d, true)
+    return { ran: false, reason: 'nothing-left' }
+  }
   const shouldContinue = () => !stopRequested && allowedNow() === null && isRecordingEligible(next.recordingId)
   const processed = await processRecording(next, shouldContinue, d)
   return { ran: true, recordingId: next.recordingId, outcome: processed.outcome }

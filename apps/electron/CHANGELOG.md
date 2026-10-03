@@ -39,6 +39,27 @@ Outlook, and every speaker the app names now keeps a note of how it was named.
   or a stronger signal named, the name stays and the disagreement is saved with both people. People
   does not list these yet: they get their own review in a later update. When an automatic speaker
   name is undone, no rule names that speaker after that person again.
+- **A shared first name is settled from voices and attendance.** When "Sergio" could be two people,
+  a recording now picks the one whose voice is heard in it, provided every other Sergio who attended
+  has a known voice. It still picks the only Sergio who attended, and it picks you when you are one
+  of the Sergios, you speak in the recording (or it is a live recording) and no other Sergio
+  attended or speaks. When two or more of them attended or speak, Jev reads the lines that say the
+  name and chooses, and its choice counts only when it is at least 80% sure and 30 points ahead of
+  the next person. Each decision is recorded with its reason and can be undone, and an undone one is
+  not made again.
+- **Duplicate people merge by themselves when the evidence is clear.** Two people with the same
+  personal email address and names that fit one person are merged. A shared mailbox (info@,
+  support@ and the like, or an address with a "+") or an address that one meeting lists under two
+  names stays a question for you. Two people whose voices are the same voice are merged too,
+  unless both voices are heard in one recording or their email addresses differ. Two people with similar names who share
+  meetings or a company email domain are put to Jev, and merged only when it is sure they are one
+  person; the rest stay in People for you. Each merge keeps its Undo.
+- **Words are no longer taken for names.** "I'm here", "Service here" or "soy CTO" no longer create a
+  person called "I'm", "Service" or "CTO", nor a warning that two people share one speaker.
+  Pronouns, helper verbs, role words and short words in English and Spanish are skipped.
+- **The identity rules are written down.** The file docs/identity-rules.md lists each kind of
+  identity question, the rule that answers it, the signals in order and when it stays a question
+  for you.
 
 ## 2026-10-02 | Columns that stay put, and meetings that follow the calendar
 

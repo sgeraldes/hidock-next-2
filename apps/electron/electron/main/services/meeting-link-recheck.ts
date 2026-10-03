@@ -11,6 +11,7 @@
  * Before that, meetings from the ICS feed (no attendees) take the attendees of
  * their Outlook twin, and those attendees become contacts, so an Outlook sync
  * helps the next identity pass at once instead of at the next start (3-oct-2026).
+ * After the links, the identity rules run over the library (identity-rules.ts).
  */
 
 import { getEventBus } from './event-bus'
@@ -20,6 +21,7 @@ import {
   fillAttendeesFromOutlookTwins,
   upsertContactsFromMeetings
 } from './org-reconciler'
+import { runIdentityRules } from './identity-rules'
 
 /** Syncs often come in a burst (ICS, then each connector account); run once after the last. */
 export const RECHECK_DEBOUNCE_MS = 2_000
@@ -39,6 +41,11 @@ export function startMeetingLinkRecheck(): () => void {
       } catch (error) {
         console.error('[MeetingLinks] Re-check after calendar sync failed:', error)
       }
+      // New attendees can decide shared first names and duplicates (spec 2026-10-03, Phase 3).
+      // The pass waits for no one: it skips itself while a transcription runs.
+      void runIdentityRules().catch((error: unknown) =>
+        console.error('[MeetingLinks] Identity rules after calendar sync failed:', error)
+      )
     }, RECHECK_DEBOUNCE_MS)
     timer.unref?.()
   })

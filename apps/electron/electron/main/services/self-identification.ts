@@ -249,14 +249,79 @@ function stripCodeFence(raw: string): string {
 }
 
 /**
+ * Words that follow a self-introduction cue but are never a name (spec 2026-10-03, 3c;
+ * pending item 49): "I'm here" captured "I'm", "Service here" captured "Service", "soy CTO"
+ * captured "CTO". Pronouns, auxiliaries, role words and short function words, in English and
+ * Spanish, stored without accents or apostrophes. Words that are also common first names or
+ * surnames stay out of the list (Will, May, Ella, Dale, Vale, Una, Nada, Son, He, Su, Ha, Tu): a
+ * real person named that way must still be bound.
+ */
+const SELF_NAME_STOP_WORDS = new Set([
+  // English pronouns and contractions
+  'i', 'im', 'ive', 'ill', 'id', 'me', 'my', 'mine', 'you', 'youre', 'youve', 'your', 'hes', 'she', 'shes',
+  'it', 'its', 'we', 'were', 'weve', 'us', 'our', 'they', 'theyre', 'them', 'their', 'this', 'that', 'thats',
+  'these', 'those', 'who', 'what', 'everyone', 'everybody', 'someone', 'somebody', 'nobody', 'lets',
+  // English auxiliaries and negations
+  'am', 'is', 'are', 'was', 'be', 'been', 'being', 'do', 'does', 'did', 'done', 'have', 'has', 'had', 'can',
+  'could', 'would', 'should', 'shall', 'must', 'might', 'not', 'no', 'yes', 'dont', 'cant', 'wont', 'isnt',
+  // English function words
+  'a', 'an', 'the', 'and', 'or', 'but', 'so', 'if', 'then', 'here', 'there', 'now', 'just', 'also', 'too',
+  'of', 'on', 'in', 'at', 'to', 'for', 'with', 'from', 'by', 'ok', 'okay', 'hi', 'hello', 'hey', 'thanks',
+  'sorry', 'well', 'sure', 'good', 'great', 'right', 'back', 'going', 'gonna', 'still', 'really', 'all',
+  // English role words
+  'ceo', 'cto', 'cfo', 'coo', 'cio', 'ciso', 'vp', 'pm', 'po', 'manager', 'director', 'engineer', 'developer',
+  'lead', 'head', 'admin', 'support', 'service', 'services', 'sales', 'team', 'client', 'customer', 'partner',
+  'consultant', 'architect', 'analyst', 'owner', 'founder', 'president', 'boss', 'host', 'moderator', 'guest',
+  'speaker', 'user', 'agent', 'connect', 'account', 'product', 'project', 'operations', 'ops', 'hr', 'finance',
+  'legal', 'marketing', 'security', 'company', 'office', 'coordinator', 'cofounder', 'co-founder', 'intern',
+  'specialist', 'designer', 'assistant',
+  // Spanish pronouns
+  'yo', 'usted', 'el', 'nosotros', 'nosotras', 'ustedes', 'ellos', 'ellas', 'vos', 'te', 'se', 'nos', 'mi',
+  'este', 'esta', 'esto', 'ese', 'esa', 'eso', 'aqui', 'alla', 'alli',
+  // Spanish auxiliaries
+  'soy', 'eres', 'es', 'somos', 'estoy', 'estamos', 'estan', 'era', 'fue', 'ser', 'estar', 'hay', 'tengo',
+  'tiene', 'tenemos', 'voy', 'va', 'vamos', 'hemos', 'si',
+  // Spanish function words
+  'la', 'los', 'las', 'un', 'unos', 'unas', 'de', 'del', 'al', 'y', 'o', 'pero', 'que', 'con', 'por', 'para',
+  'en', 'ya', 'bueno', 'hola', 'gracias', 'perdon', 'claro', 'listo', 'tambien', 'aca', 'muy', 'bien',
+  'todos', 'todas',
+  // Spanish role words
+  'gerente', 'directora', 'jefe', 'jefa', 'ingeniero', 'ingeniera', 'desarrollador', 'desarrolladora',
+  'analista', 'consultor', 'consultora', 'cliente', 'soporte', 'servicio', 'servicios', 'ventas', 'equipo',
+  'socio', 'socia', 'presidente', 'coordinador', 'coordinadora', 'lider', 'arquitecto', 'arquitecta',
+  'encargado', 'encargada', 'responsable'
+])
+
+/** A word as the stop list stores it: lower case, no accents, no apostrophes or edge punctuation. */
+function stopWordKey(word: string): string {
+  return word
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .replace(/['’]/g, '')
+    .replace(/^[^\p{L}]+|[^\p{L}]+$/gu, '')
+}
+
+/**
+ * True when a proposed self-name is a word and not a name: its first word is a pronoun, an
+ * auxiliary, a role word or a short function word ("I'm", "Not sure", "Service", "CTO").
+ */
+export function isJunkSelfName(name: string): boolean {
+  const first = (name || '').trim().split(/\s+/)[0] ?? ''
+  const key = stopWordKey(first)
+  return !key || SELF_NAME_STOP_WORDS.has(key)
+}
+
+/**
  * Whether a string is a plausible person name to bind (not a generic speaker
- * label, has a real alphabetic token). Conservative — a self-ID we cannot vouch
- * for is dropped rather than turned into a junk contact.
+ * label, has a real alphabetic token, not a junk word). Conservative — a self-ID
+ * we cannot vouch for is dropped rather than turned into a junk contact.
  */
 export function isPlausibleSelfName(name: string): boolean {
   const t = (name || '').trim()
   if (t.length < 3) return false
   if (isGenericSpeakerLabel(t)) return false
+  if (isJunkSelfName(t)) return false
   const tokens = t.split(/\s+/).filter((w) => /\p{L}/u.test(w))
   if (tokens.length === 0) return false
   // Require at least one token of ≥2 letters so "A." / initials-only are rejected.
@@ -352,7 +417,8 @@ export function reliableSelfNames(text: string): string[] {
   const out: string[] = []
   for (const re of RELIABLE_NAME_CAPTURE_PATTERNS) {
     const m = re.exec(t)
-    if (m && m[1]) out.push(m[1].trim())
+    // "I'm here", "Service here", "soy CTO": the cue matched a word, not a name.
+    if (m && m[1] && !isJunkSelfName(m[1])) out.push(m[1].trim())
   }
   return out
 }

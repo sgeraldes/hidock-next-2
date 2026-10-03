@@ -14,11 +14,11 @@
  *   cluster:<voiceClusterId>                   a voice cluster tied to a person
  *
  * Undo of 'voice-anchor' (voice-learning.ts) puts the cluster's person back. Undo of 'merge'
- * comes with the PR that makes those decisions; merges already have merge_journal.
+ * (identity-rules.ts) delegates to the merge_journal Undo (unmergeContacts).
  */
 
 import { randomUUID } from 'crypto'
-import { queryAll, queryOne, runNoSave, runInTransaction } from './database'
+import { queryAll, queryOne, runNoSave, runInTransaction, unmergeContacts } from './database'
 import { normalizeName } from './entity-normalize'
 
 export type DecisionKind = 'speaker' | 'mention' | 'merge' | 'voice-anchor'
@@ -74,6 +74,45 @@ export function snapshotVoiceAnchorNoSave(clusterId: string): VoiceAnchorBefore 
 
 export function voiceAnchorSubjectKey(clusterId: string): string {
   return `cluster:${clusterId}`
+}
+
+export function mergeSubjectKey(keeperId: string, loserId: string): string {
+  return `merge:${keeperId}:${loserId}`
+}
+
+/**
+ * The state before a merge decision: the merge_journal row the merge wrote (its Undo), and the
+ * identity suggestion it accepted with that suggestion's status before (null for a merge that
+ * no suggestion proposed, such as the voice rule's).
+ */
+export interface MergeBefore {
+  mergeJournalId: string
+  keeperId: string
+  loserId: string
+  suggestionId: string | null
+  suggestionStatus: string | null
+}
+
+/**
+ * True when the owner undid a merge of these two contacts, in either direction: through this
+ * journal (undoDecision) or by hand in People (merge_journal undone). No rule merges them again.
+ */
+export function wasMergeUndone(a: string, b: string): boolean {
+  if (
+    queryOne(
+      `SELECT 1 FROM identity_decisions
+       WHERE kind = 'merge' AND subject_key IN (?, ?) AND undone_at IS NOT NULL LIMIT 1`,
+      [mergeSubjectKey(a, b), mergeSubjectKey(b, a)]
+    )
+  ) {
+    return true
+  }
+  return !!queryOne(
+    `SELECT 1 FROM merge_journal
+     WHERE kind = 'contact' AND undone_at IS NOT NULL
+       AND ((keeper_id = ? AND loser_id = ?) OR (keeper_id = ? AND loser_id = ?)) LIMIT 1`,
+    [a, b, b, a]
+  )
 }
 
 export interface DecisionInput {
@@ -209,6 +248,18 @@ export function wasSpeakerUndoneFor(recordingId: string, speakerLabel: string, c
 }
 
 /**
+ * True when a decision naming `contactId` for this first-name mention was undone, whatever
+ * method made it: no rule resolves that mention to that person again.
+ */
+export function wasMentionUndoneFor(recordingId: string, bucketContactId: string, contactId: string): boolean {
+  return !!queryOne(
+    `SELECT 1 FROM identity_decisions
+     WHERE kind = 'mention' AND subject_key = ? AND contact_id = ? AND undone_at IS NOT NULL LIMIT 1`,
+    [mentionSubjectKey(recordingId, bucketContactId), contactId]
+  )
+}
+
+/**
  * True when a decision tying this voice cluster to `contactId` was undone, whatever method made
  * it: no learning rule ties that voice to that person again.
  */
@@ -239,7 +290,8 @@ export function undoDecision(id: string): { restored: boolean } {
     if (decision.kind === 'speaker') restored = undoSpeakerNoSave(decision)
     else if (decision.kind === 'mention') restored = undoMentionNoSave(decision)
     else if (decision.kind === 'voice-anchor') restored = undoVoiceAnchorNoSave(decision)
-    else throw new Error(`Undo of a ${decision.kind} decision is not yet available`)
+    else if (decision.kind === 'merge') restored = undoMergeNoSave(decision)
+    else throw new Error(`Undo of a ${String(decision.kind)} decision is not available`)
 
     runNoSave('UPDATE identity_decisions SET undone_at = ? WHERE id = ?', [new Date().toISOString(), id])
     return { restored }
@@ -291,6 +343,28 @@ function undoVoiceAnchorNoSave(decision: IdentityDecision): boolean {
      WHERE id = ?`,
     [before.contactId, before.method, before.confidence, new Date().toISOString(), before.clusterId]
   )
+  return true
+}
+
+/**
+ * Undo a merge through the existing merge_journal Undo (unmergeContacts: the loser comes back
+ * with its links), and put the accepted suggestion back to its status before, so People asks
+ * again. When the merge was already undone by hand, only the mark is written.
+ */
+function undoMergeNoSave(decision: IdentityDecision): boolean {
+  const before = decision.before as MergeBefore | null
+  if (!before?.mergeJournalId) throw new Error(`Identity decision ${decision.id} has no state to restore`)
+  const journal = queryOne<{ undone_at: string | null }>('SELECT undone_at FROM merge_journal WHERE id = ?', [
+    before.mergeJournalId
+  ])
+  if (!journal || journal.undone_at) return false
+  unmergeContacts(before.mergeJournalId)
+  if (before.suggestionId && before.suggestionStatus) {
+    runNoSave("UPDATE identity_suggestions SET status = ? WHERE id = ? AND status = 'accepted'", [
+      before.suggestionStatus,
+      before.suggestionId
+    ])
+  }
   return true
 }
 

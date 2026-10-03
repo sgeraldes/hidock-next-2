@@ -32,8 +32,17 @@ import {
   clearProjectDiscoveryObservations,
   getProjectDiscoveryCorroborations,
   type RecordingPreassignment,
-  type BucketResolution
+  type BucketRecording,
+  type BucketResolution,
+  type BucketRuleOptions
 } from './database'
+import {
+  mentionSubjectKey,
+  recordDecisionNoSave,
+  snapshotMentionNoSave,
+  wasMentionUndoneFor,
+  wasUndone
+} from './identity-decisions'
 import { filterEligibleRecordingIds } from './recording-eligibility'
 import { mergeContactsWithGraph } from './knowledge-graph-service'
 import { resolveContact, resolveProject } from './entity-resolver'
@@ -1582,11 +1591,60 @@ export function repairMisbundledRecordings(
  * is what lets a re-sweep upgrade transcript-derived guesses to 'attendee-email' once
  * the M365 connector backfills real calendar attendees.
  */
-export function autoSplitAmbiguousBuckets(): { buckets: number; resolved: number } {
-  const found = getAmbiguousBucketResolutions()
+export interface MentionDecisionInput {
+  recordingId: string
+  meetingId: string | null
+  bucketContactId: string
+  /** The spoken name as the bucket contact holds it ("Sergio"). */
+  bucketName: string
+  contactId: string
+  method: string
+  confidence: number
+  evidence: Record<string, unknown>
+}
+
+/**
+ * Resolve one first-name mention to a person, inside the caller's transaction, and journal it
+ * with the state before. The one writer for every automatic mention rule (auto-split and the
+ * Jev tiebreak). Writes nothing, and returns false, when the owner undid this method's decision
+ * on the mention or any decision naming this person there, or when the stored decision is
+ * manual or ranks the same or higher (canUpgrade).
+ */
+export function applyMentionDecisionNoSave(input: MentionDecisionInput): boolean {
+  const subjectKey = mentionSubjectKey(input.recordingId, input.bucketContactId)
+  if (wasUndone('mention', subjectKey, input.method)) return false
+  if (wasMentionUndoneFor(input.recordingId, input.bucketContactId, input.contactId)) return false
+  const before = snapshotMentionNoSave(input.recordingId, input.bucketName)
+  if (before.row && !canUpgrade(before.row.method, input.method)) return false
+  recordMentionResolutionNoSave(input.recordingId, input.bucketName, input.contactId, input.method, input.confidence)
+  linkContactToMeeting(input.contactId, input.meetingId ?? undefined, new Date().toISOString(), input.recordingId)
+  recordDecisionNoSave({
+    kind: 'mention',
+    subjectKey,
+    method: input.method,
+    contactId: input.contactId,
+    evidence: input.evidence,
+    before
+  })
+  return true
+}
+
+/** What the journal keeps about why a bucket recording was resolved. */
+function bucketEvidence(res: BucketResolution, r: BucketRecording): Record<string, unknown> {
+  return {
+    bucketContactId: res.contactId,
+    bucketName: res.name,
+    meetingId: r.meetingId,
+    signal: r.signal,
+    voicedCandidateIds: r.voicedCandidateIds,
+    attendingCandidateIds: r.attendingCandidateIds
+  }
+}
+
+export function autoSplitAmbiguousBuckets(opts: BucketRuleOptions = {}): { buckets: number; resolved: number } {
+  const found = getAmbiguousBucketResolutions(opts)
   const buckets = found.map((item) => item.bucket)
   let resolvedTotal = 0
-  const now = new Date().toISOString()
   const toResolveIn = (res: BucketResolution) =>
     res.recordings.filter((r) => r.method !== 'unclear' && r.bestGuessId && canUpgrade(r.resolvedMethod, r.method))
   for (const item of found) {
@@ -1595,15 +1653,23 @@ export function autoSplitAmbiguousBuckets(): { buckets: number; resolved: number
     // it may have written links it depends on. (It used to be built again for every
     // bucket, on every start and after every calendar sync.)
     if (toResolveIn(item.resolution).length === 0) continue
-    const res = getBucketResolution(item.bucket.contactId)
+    const res = getBucketResolution(item.bucket.contactId, opts)
     if (!res) continue
     const toResolve = toResolveIn(res)
     if (toResolve.length === 0) continue
     runInTransaction(() => {
       for (const r of toResolve) {
-        recordMentionResolutionNoSave(r.recordingId, res.name, r.bestGuessId as string, r.method, methodConfidence(r.method))
-        linkContactToMeeting(r.bestGuessId as string, r.meetingId ?? undefined, now, r.recordingId)
-        resolvedTotal++
+        const applied = applyMentionDecisionNoSave({
+          recordingId: r.recordingId,
+          meetingId: r.meetingId,
+          bucketContactId: res.contactId,
+          bucketName: res.name,
+          contactId: r.bestGuessId as string,
+          method: r.method,
+          confidence: methodConfidence(r.method),
+          evidence: bucketEvidence(res, r)
+        })
+        if (applied) resolvedTotal++
       }
     })
   }
