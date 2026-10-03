@@ -575,7 +575,7 @@ export async function extractSelfIdentifications(
   // BrainRouter (primary + fallback rechecks). An injected mock is used as-is.
   const llm =
     deps.llm ?? ((prompt: string, systemPrompt: string) => defaultLLM(prompt, systemPrompt, deps.shouldGenerate))
-  let raw: string | null = null
+  let raw: string | null
   try {
     raw = await llm(buildSelfIdPrompt(cues), SELF_ID_SYSTEM_PROMPT)
   } catch (e) {

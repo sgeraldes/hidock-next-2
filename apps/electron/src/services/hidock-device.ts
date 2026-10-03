@@ -1400,7 +1400,7 @@ class HiDockDeviceService {
 
     this.logActivity('usb-out', 'CMD: Format Card', 'Formatting device storage')
 
-    let result: { result: string } | null = null
+    let result: { result: string } | null
     try {
       result = await this.jensen.formatCard()
     } catch (err) {
@@ -1410,7 +1410,7 @@ class HiDockDeviceService {
       // Invalidate cache to force re-read on next access since state is unknown
       this.cachedRecordings = null
       this.cachedRecordingCount = -1
-      throw new Error(`Format storage failed: ${message}. Check device connection and try again.`)
+      throw new Error(`Format storage failed: ${message}. Check device connection and try again.`, { cause: err })
     }
 
     if (result?.result === 'success') {

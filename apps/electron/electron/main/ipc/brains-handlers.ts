@@ -145,7 +145,7 @@ export function registerBrainsHandlers(): void {
   // when there is one, goes through brains:setCredential; here the page only learns whether one is stored.
   ipcMain.handle('brains:getOpenAiCompatible', async (): Promise<OpenAiCompatibleConnection> => {
     const saved = getConfig().brains?.openaiCompatible
-    let hasKey = false
+    let hasKey: boolean
     try {
       hasKey = getBrainCredentialStore().hasSecret('openai-compatible', 'apiKey')
     } catch {
@@ -169,7 +169,7 @@ export function registerBrainsHandlers(): void {
     if (baseUrl === null || model === null || embeddingModel === null) {
       return { success: false, error: 'The request is not a valid connection.' }
     }
-    let valid = false
+    let valid: boolean
     try {
       const protocol = new URL(baseUrl).protocol
       valid = protocol === 'http:' || protocol === 'https:'

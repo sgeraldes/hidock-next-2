@@ -69,7 +69,8 @@ exports.default = async function afterPackCheckNative(context) {
       throw new Error(
         `native check: the packed app cannot load ${binding}. Rebuild it for Electron ` +
           '(npx node-gyp rebuild --target=<electron version> --arch=x64 --dist-url=https://electronjs.org/headers ' +
-          `in each node_modules/better-sqlite3) and package again. Electron said: ${said}`
+          `in each node_modules/better-sqlite3) and package again. Electron said: ${said}`,
+        { cause: error }
       )
     }
   }

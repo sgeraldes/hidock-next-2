@@ -69,7 +69,7 @@ const Slider = React.forwardRef<HTMLDivElement, SliderProps>(
       (e: React.KeyboardEvent) => {
         if (disabled) return
 
-        let newValue = currentValue[0]
+        let newValue: number
 
         switch (e.key) {
           case 'ArrowRight':

@@ -494,7 +494,7 @@ export function useDownloadOrchestrator() {
 
     // Slice 1: scope to the user's explicit request when auto-download is off,
     // so a single download never drains unrelated/stale pending items.
-    let autoDownload = false
+    let autoDownload: boolean
     try {
       const result = await window.electronAPI.config.get()
       const cfg = result?.success ? (result.data as { device?: { autoDownload?: boolean } }) : null

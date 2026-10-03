@@ -927,7 +927,9 @@ async function runSyncCalendar(
       activateCalendarSyncToken(calendarSyncToken)
     } catch (dbError) {
       console.error('Failed to save meetings to database:', dbError)
-      throw new Error(`Database error: ${dbError instanceof Error ? dbError.message : 'Unknown database error'}`)
+      throw new Error(`Database error: ${dbError instanceof Error ? dbError.message : 'Unknown database error'}`, {
+        cause: dbError
+      })
     }
 
     // Tie the new meetings into the rest of the app: auto-link overlapping

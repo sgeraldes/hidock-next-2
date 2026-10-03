@@ -605,7 +605,7 @@ ${windowBlock}`
   })
   recordGeminiUsage(modelId, result.response.usageMetadata)
 
-  let text = ''
+  let text: string
   try {
     text = result.response.text()
   } catch {

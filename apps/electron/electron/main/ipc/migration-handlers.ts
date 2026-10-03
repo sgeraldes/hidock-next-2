@@ -132,7 +132,7 @@ function loadV11Schema(): string {
     return readFileSync(schemaPath, 'utf-8')
   } catch (error) {
     console.error('Failed to load V11 schema file:', error)
-    throw new Error('V11 schema file not found. Cannot proceed with migration.')
+    throw new Error('V11 schema file not found. Cannot proceed with migration.', { cause: error })
   }
 }
 
@@ -149,7 +149,7 @@ function createMigrationBackup(): void {
   db.run('DROP TABLE IF EXISTS _backup_transcripts')
 
   // Check if migration_status column exists
-  let hasMigrationStatus = false
+  let hasMigrationStatus: boolean
   try {
     const stmt = db.prepare('SELECT migration_status FROM recordings LIMIT 1')
     stmt.free()

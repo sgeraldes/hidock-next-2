@@ -623,7 +623,7 @@ export function applyTranscriptEntities(opts: {
       const name = (person.name || '').trim()
       if (!name || name.length < 2 || isGenericSpeakerLabel(name)) continue
 
-      let contactId: string | null = null
+      let contactId: string
 
       // 0. Honor a stored per-recording resolution first (user pick or auto-split) —
       // it overrides the resolver so a re-analysis never re-buckets a settled mention.

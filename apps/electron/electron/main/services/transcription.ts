@@ -1304,7 +1304,9 @@ async function transcribeWithLocalAsr(
   try {
     parsed = JSON.parse(stdout)
   } catch (error) {
-    throw new Error(`Local ASR returned invalid JSON: ${error instanceof Error ? error.message : 'parse failed'}`)
+    throw new Error(`Local ASR returned invalid JSON: ${error instanceof Error ? error.message : 'parse failed'}`, {
+      cause: error
+    })
   }
 
   if (parsed.error) {
@@ -1426,7 +1428,9 @@ async function transcribeWithVibeVoice(
   try {
     parsed = JSON.parse(stdout)
   } catch (error) {
-    throw new Error(`VibeVoice returned invalid JSON: ${error instanceof Error ? error.message : 'parse failed'}`)
+    throw new Error(`VibeVoice returned invalid JSON: ${error instanceof Error ? error.message : 'parse failed'}`, {
+      cause: error
+    })
   }
 
   if (parsed.error) {

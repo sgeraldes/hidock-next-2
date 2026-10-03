@@ -48,7 +48,7 @@ const CAPABILITIES: ReadonlySet<BrainCapability> = new Set<BrainCapability>([
  * back to the legacy plaintext config field. Never throws.
  */
 export function resolveGeminiApiKey(): string {
-  let fromStore: string | null = null
+  let fromStore: string | null
   try {
     fromStore = getBrainCredentialStore().getSecret('gemini-api', 'apiKey')
   } catch {

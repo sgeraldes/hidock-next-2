@@ -69,7 +69,7 @@ export function parseWmiAdapters(json: string | null): Omit<DetectedGpu, 'cuda'>
   if (json === null) return null
   // No video controller at all prints nothing.
   if (!json.trim()) return []
-  let rows: WmiAdapter[] = []
+  let rows: WmiAdapter[]
   try {
     const parsed = JSON.parse(json) as WmiAdapter | WmiAdapter[]
     rows = Array.isArray(parsed) ? parsed : [parsed]

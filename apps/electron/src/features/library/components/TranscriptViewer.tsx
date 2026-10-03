@@ -245,7 +245,7 @@ function parseTimestamp(timestampStr: string): number | null {
     return null
   }
 
-  let totalSeconds = 0
+  let totalSeconds: number
 
   if (parts.length === 2) {
     // MM:SS format

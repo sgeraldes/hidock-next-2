@@ -76,7 +76,7 @@ try {
 }
 
 if (problems.length === 0) {
-  let tree = ''
+  let tree
   let spawnFailure = null
   try {
     // One fixed string, no interpolation: npm is a shell script on Windows, and

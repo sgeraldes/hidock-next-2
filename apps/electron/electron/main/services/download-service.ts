@@ -1000,7 +1000,7 @@ export class DownloadService {
           console.log(`[DownloadService] ${filename} was purged and has been downloaded again: restored (${cleared} tombstones cleared)`)
         } catch (error) {
           const reason = error instanceof Error ? error.message : String(error)
-          throw new Error(`Failed to restore purged recording ${filename}: ${reason}`)
+          throw new Error(`Failed to restore purged recording ${filename}: ${reason}`, { cause: error })
         }
       }
       const recordingId = markRecordingDownloaded(filename, filePath, {

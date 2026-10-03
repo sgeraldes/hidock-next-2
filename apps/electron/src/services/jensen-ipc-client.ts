@@ -265,7 +265,6 @@ export class JensenIpcClient {
     if (signal?.aborted) return false
 
     // Subscribe to chunk and progress push events before starting the download
-    let cleanupChunk: (() => void) | null = null
     let cleanupProgress: (() => void) | null = null
 
     // The `jensen:download-chunk` events travel on a different IPC channel than
@@ -276,7 +275,7 @@ export class JensenIpcClient {
     // before cleanup.
     let received = 0
 
-    cleanupChunk = window.electronAPI.jensen.onDownloadChunk(
+    const cleanupChunk = window.electronAPI.jensen.onDownloadChunk(
       (data: { filename: string; data: Uint8Array }) => {
         if (data.filename === filename) {
           const chunk = new Uint8Array(data.data)

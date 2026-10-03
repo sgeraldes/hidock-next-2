@@ -61,7 +61,7 @@ export function measuredLocalSpeedRatio(device: 'cuda' | 'cpu', model: string): 
   )
   const ratios: number[] = []
   for (const row of rows) {
-    let runDevice: string | null = null
+    let runDevice: string | null
     try {
       runDevice = row.quality_json ? (JSON.parse(row.quality_json) as { device?: string }).device ?? null : null
     } catch {
