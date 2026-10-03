@@ -41,6 +41,7 @@ import {
   startVoiceBackfill,
   stopVoiceBackfill,
   tieTranscriptSpeakers,
+  IDENTITY_RULES_INTERVAL_MS,
   type VoiceBackfillDeps
 } from '../voice-backfill'
 
@@ -459,9 +460,50 @@ describe('runVoiceBackfillOnce', () => {
   it('by default, the identity rules run after the voice learning pass (spec 2026-10-03, Phase 3)', async () => {
     seedRecording({ id: 'r' })
     identityRules.mockClear()
-    await runVoiceBackfillOnce(deps({ learnVoices: undefined }))
+    await runVoiceBackfillOnce(deps({ applyIdentityRules: undefined }))
     expect(identityRules).toHaveBeenCalledTimes(1)
     expect(identityRules).toHaveBeenCalledWith(expect.objectContaining({ isTranscribing: expect.any(Function) }))
+  })
+
+  // Review of PR 4 (F2): the rules read the whole library, so they run at most every 30
+  // minutes while the backfill works, and once more when it has nothing left.
+  it('learns voices after every recording but applies the identity rules at most every 30 minutes', async () => {
+    for (const id of ['r1', 'r2', 'r3', 'r4']) seedRecording({ id })
+    let ms = 1_000_000
+    const learnVoices = vi.fn(async () => undefined)
+    const applyIdentityRules = vi.fn(async () => undefined)
+    const d = () => deps({ learnVoices, applyIdentityRules, clock: () => ms })
+
+    await runVoiceBackfillOnce(d())
+    ms += 10 * 60_000
+    await runVoiceBackfillOnce(d())
+    ms += 10 * 60_000
+    await runVoiceBackfillOnce(d())
+    expect(learnVoices).toHaveBeenCalledTimes(3)
+    expect(applyIdentityRules).toHaveBeenCalledTimes(1)
+
+    ms += IDENTITY_RULES_INTERVAL_MS
+    await runVoiceBackfillOnce(d())
+    expect(applyIdentityRules).toHaveBeenCalledTimes(2)
+  })
+
+  it('applies the identity rules once when the backfill has nothing left, and not on every idle look', async () => {
+    seedRecording({ id: 'r1' })
+    seedRecording({ id: 'r2' })
+    let ms = 1_000_000
+    const applyIdentityRules = vi.fn(async () => undefined)
+    const d = () => deps({ applyIdentityRules, clock: () => ms })
+
+    await runVoiceBackfillOnce(d())
+    ms += 60_000
+    await runVoiceBackfillOnce(d())
+    expect(applyIdentityRules).toHaveBeenCalledTimes(1)
+
+    ms += 60_000
+    expect(await runVoiceBackfillOnce(d())).toMatchObject({ reason: 'nothing-left' })
+    expect(applyIdentityRules).toHaveBeenCalledTimes(2)
+    await runVoiceBackfillOnce(d())
+    expect(applyIdentityRules).toHaveBeenCalledTimes(2)
   })
 
   it('a failure while learning voices does not change the recording outcome', async () => {

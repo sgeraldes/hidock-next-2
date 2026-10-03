@@ -253,7 +253,7 @@ function stripCodeFence(raw: string): string {
  * pending item 49): "I'm here" captured "I'm", "Service here" captured "Service", "soy CTO"
  * captured "CTO". Pronouns, auxiliaries, role words and short function words, in English and
  * Spanish, stored without accents or apostrophes. Words that are also common first names or
- * surnames stay out of the list (Will, May, Ella, Dale, Una, Nada, Son, He, Su, Ha, Tu): a
+ * surnames stay out of the list (Will, May, Ella, Dale, Vale, Una, Nada, Son, He, Su, Ha, Tu): a
  * real person named that way must still be bound.
  */
 const SELF_NAME_STOP_WORDS = new Set([
@@ -273,7 +273,8 @@ const SELF_NAME_STOP_WORDS = new Set([
   'lead', 'head', 'admin', 'support', 'service', 'services', 'sales', 'team', 'client', 'customer', 'partner',
   'consultant', 'architect', 'analyst', 'owner', 'founder', 'president', 'boss', 'host', 'moderator', 'guest',
   'speaker', 'user', 'agent', 'connect', 'account', 'product', 'project', 'operations', 'ops', 'hr', 'finance',
-  'legal', 'marketing', 'security', 'company', 'office',
+  'legal', 'marketing', 'security', 'company', 'office', 'coordinator', 'cofounder', 'co-founder', 'intern',
+  'specialist', 'designer', 'assistant',
   // Spanish pronouns
   'yo', 'usted', 'el', 'nosotros', 'nosotras', 'ustedes', 'ellos', 'ellas', 'vos', 'te', 'se', 'nos', 'mi',
   'este', 'esta', 'esto', 'ese', 'esa', 'eso', 'aqui', 'alla', 'alli',
@@ -282,7 +283,7 @@ const SELF_NAME_STOP_WORDS = new Set([
   'tiene', 'tenemos', 'voy', 'va', 'vamos', 'hemos', 'si',
   // Spanish function words
   'la', 'los', 'las', 'un', 'unos', 'unas', 'de', 'del', 'al', 'y', 'o', 'pero', 'que', 'con', 'por', 'para',
-  'en', 'ya', 'bueno', 'hola', 'gracias', 'perdon', 'claro', 'vale', 'listo', 'tambien', 'aca', 'muy', 'bien',
+  'en', 'ya', 'bueno', 'hola', 'gracias', 'perdon', 'claro', 'listo', 'tambien', 'aca', 'muy', 'bien',
   'todos', 'todas',
   // Spanish role words
   'gerente', 'directora', 'jefe', 'jefa', 'ingeniero', 'ingeniera', 'desarrollador', 'desarrolladora',

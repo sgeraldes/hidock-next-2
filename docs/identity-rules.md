@@ -73,11 +73,25 @@ these when both are on the same side of the visibility boundary; discovery
 Rule (`autoMergeExactEmail` in `identity-rules.ts`): a pending suggestion marked `autoMergeable`
 with an exact email match is accepted through the People accept path
 (`acceptIdentitySuggestionWithGraph`), after the same accept-time revalidation the accept button
-runs (`isSuggestionEligibleForAccept`). Method `exact-email`.
+runs (`isSuggestionEligibleForAccept`). Method `exact-email`. It merges only a personal address:
+one address can belong to a team, and two people on one shared mailbox are two people.
 
-Stays a question when the two contacts are on different sides of the visibility boundary (one
-visible, one hidden because every recording it came from is excluded), when the suggestion fails
-the accept-time revalidation, or when the owner undid a merge of the two before (here or in People).
+Stays a question when:
+
+- the address is a role or shared mailbox (`isSharedMailbox`): its local part is info, support,
+  sales, admin, team, contact, hello, office, billing, hr, jobs, careers, marketing, help, service,
+  servicio, soporte, ventas, contacto, noreply, no-reply, notifications, calendar, booking,
+  reservas, recepcion and similar words, alone or followed by a separator ("support-latam"), or it
+  has a "+"; the evidence says `autoMergeBlocked: "role-mailbox"`;
+- the two display names do not fit one person: not the same first name or nickname
+  (`firstNameNicknameMatch`), neither name inside the other as whole words, and neither is just
+  the address; `autoMergeBlocked: "names-differ"`;
+- one meeting lists the address under two different display names, as a distribution list does;
+  `autoMergeBlocked: "shared-address"`;
+- the two contacts are on different sides of the visibility boundary (one visible, one hidden
+  because every recording it came from is excluded);
+- the suggestion fails the accept-time revalidation;
+- the owner undid a merge of the two before (here or in People).
 
 Test: `.../__tests__/identity-rules.test.ts` ("merge by exact email").
 
@@ -128,7 +142,8 @@ Rule (`isJunkSelfName` in `self-identification.ts`): a name whose first word is 
 verb, a role word or a short function word, in English or Spanish, is dropped where
 self-identification reads names (the cue capture and the model's answer). It never becomes a
 contact, a speaker name or a warning that two people share one speaker. Words that are also common
-first names stay out of the stop list (Will, May, Ella, Dale, Una, Nada, Son, He, Su, Ha, Tu).
+first names or nicknames stay out of the stop list (Will, May, Ella, Dale, Vale, Una, Nada, Son,
+He, Su, Ha, Tu).
 
 Nothing to ask the owner: a dropped word leaves the speaker as "Speaker N".
 
@@ -148,9 +163,11 @@ library.
 then the merges by email, voice and similar name. It runs:
 
 - at startup, after the organization reconcile and the voice learning pass (`boot-tasks.ts`);
-- after the voice backfill gives a recording its voices and the voices are learned (`voice-backfill.ts`);
+- from the voice backfill (`voice-backfill.ts`): voices are learned after every recording, but the
+  rules run at most every 30 minutes, and once more when the backfill has nothing left;
 - after each calendar sync, once the links are re-checked (`meeting-link-recheck.ts`).
 
 It never runs while a recording is transcribed, stops between steps and between Jev calls when one
-starts, hands the event loop back between steps, and makes at most 50 Jev calls per run. The
+starts, hands the event loop back between steps, and makes at most 50 Jev calls per run and 300
+a day (counted in the config table under `identity_rules:jev-calls-per-day`). The
 reconcile step after every sync also applies the shared-first-name rules without the owner rule.

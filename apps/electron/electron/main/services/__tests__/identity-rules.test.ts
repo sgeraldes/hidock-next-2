@@ -30,7 +30,8 @@ import {
   autoMergeSameVoice,
   resolveBucketTiesWithJev,
   resolveSimilarNameMerges,
-  runIdentityRules
+  runIdentityRules,
+  MAX_JEV_CALLS_PER_DAY
 } from '../identity-rules'
 
 const T = '2026-10-01T10:00:00Z'
@@ -242,6 +243,31 @@ describe('jev-tiebreak for a shared first name', () => {
     expect(askJev).not.toHaveBeenCalled()
   })
 
+  // Review of PR 4 (F2): at most 300 Jev tiebreaks a day, counted in the config table.
+  it('stops at the daily Jev cap, counts each call, and starts again the next day', async () => {
+    const day = (d: number) => () => new Date(2026, 9, d, 12, 0, 0)
+    const counter = () =>
+      JSON.parse(queryOne<{ value: string }>(`SELECT value FROM config WHERE key = 'identity_rules:jev-calls-per-day'`)!.value)
+    const setCount = (date: string, count: number) =>
+      run(`INSERT OR REPLACE INTO config (key, value, updated_at) VALUES ('identity_rules:jev-calls-per-day', ?, ?)`, [
+        JSON.stringify({ date, count }),
+        T
+      ])
+    const askJev = jevAnswering(favour('Hurtado', 0.6))
+
+    setCount('2026-10-03', MAX_JEV_CALLS_PER_DAY)
+    expect(await resolveBucketTiesWithJev({ jevKey: () => 'k', askJev, now: day(3) })).toMatchObject({ asked: 0 })
+    expect(askJev).not.toHaveBeenCalled()
+
+    setCount('2026-10-03', MAX_JEV_CALLS_PER_DAY - 1)
+    expect(await resolveBucketTiesWithJev({ jevKey: () => 'k', askJev, now: day(3) })).toMatchObject({ asked: 1 })
+    expect(counter()).toEqual({ date: '2026-10-03', count: MAX_JEV_CALLS_PER_DAY })
+
+    run(`DELETE FROM config WHERE key LIKE 'identity_rules:jev-asked:%'`)
+    expect(await resolveBucketTiesWithJev({ jevKey: () => 'k', askJev, now: day(4) })).toMatchObject({ asked: 1 })
+    expect(counter()).toEqual({ date: '2026-10-04', count: 1 })
+  })
+
   it('an undone tiebreak is not asked or made again', async () => {
     const askJev = jevAnswering(favour('Hurtado', 0.9))
     await resolveBucketTiesWithJev({ jevKey: () => 'k', askJev })
@@ -286,6 +312,52 @@ describe('merge by exact email', () => {
     expect(autoMergeExactEmail()).toEqual({ merged: 0 })
     expect(exists('ana2')).toBe(true)
     expect(status('s1')).toBe('pending')
+  })
+
+  const blockedReason = () =>
+    (JSON.parse(queryOne<{ evidence: string }>(`SELECT evidence FROM identity_suggestions WHERE id = 's1'`)!.evidence) as {
+      autoMergeBlocked?: string
+    }).autoMergeBlocked
+
+  it('a distribution list (two names on one address in one meeting) is not merged, and says why', () => {
+    run(`UPDATE contacts SET name = 'Ana Gómez', email = 'pm-latam@acme.com' WHERE id = 'ana2'`)
+    run(`UPDATE contacts SET email = 'pm-latam@acme.com' WHERE id = 'ana'`)
+    run(`UPDATE identity_suggestions SET candidate_name = 'Ana Gómez' WHERE id = 's1'`)
+    run(`INSERT INTO meetings (id, subject, start_time, end_time, attendees) VALUES ('m-dl', 'Planning', ?, ?, ?)`, [
+      T,
+      '2026-10-01T11:00:00Z',
+      JSON.stringify([
+        { name: 'Ana Ruiz', email: 'pm-latam@acme.com' },
+        { name: 'Ana Gómez', email: 'PM-LATAM@acme.com' }
+      ])
+    ])
+    expect(autoMergeExactEmail()).toEqual({ merged: 0 })
+    expect(exists('ana2')).toBe(true)
+    expect(status('s1')).toBe('pending')
+    expect(blockedReason()).toBe('shared-address')
+  })
+
+  it('a role or shared mailbox (info@, a plus address) is not merged', () => {
+    run(`UPDATE contacts SET email = 'info@dfx5.com' WHERE id IN ('ana', 'ana2')`)
+    expect(autoMergeExactEmail()).toEqual({ merged: 0 })
+    expect(blockedReason()).toBe('role-mailbox')
+
+    run(`UPDATE contacts SET email = 'ana+news@dfx5.com' WHERE id IN ('ana', 'ana2')`)
+    expect(autoMergeExactEmail()).toEqual({ merged: 0 })
+    expect(exists('ana2')).toBe(true)
+  })
+
+  it('two names that do not fit one person are not merged', () => {
+    run(`UPDATE contacts SET name = 'Diana Soto' WHERE id = 'ana2'`)
+    expect(autoMergeExactEmail()).toEqual({ merged: 0 })
+    expect(blockedReason()).toBe('names-differ')
+  })
+
+  it('a name that is just the address fits the other name', () => {
+    run(`UPDATE contacts SET email = 'aruiz@dfx5.com' WHERE id IN ('ana', 'ana2')`)
+    run(`UPDATE contacts SET name = 'aruiz' WHERE id = 'ana2'`)
+    run(`UPDATE identity_suggestions SET candidate_name = 'aruiz' WHERE id = 's1'`)
+    expect(autoMergeExactEmail()).toEqual({ merged: 1 })
   })
 
   it('leaves a suggestion that is not marked auto-mergeable', () => {

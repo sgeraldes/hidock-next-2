@@ -47,9 +47,11 @@ Outlook, and every speaker the app names now keeps a note of how it was named.
   name and chooses, and its choice counts only when it is at least 80% sure and 30 points ahead of
   the next person. Each decision is recorded with its reason and can be undone, and an undone one is
   not made again.
-- **Duplicate people merge by themselves when the evidence is clear.** Two people with the same email
-  address are merged, and so are two people whose voices are the same voice, unless both voices are
-  heard in one recording or their email addresses differ. Two people with similar names who share
+- **Duplicate people merge by themselves when the evidence is clear.** Two people with the same
+  personal email address and names that fit one person are merged. A shared mailbox (info@,
+  support@ and the like, or an address with a "+") or an address that one meeting lists under two
+  names stays a question for you. Two people whose voices are the same voice are merged too,
+  unless both voices are heard in one recording or their email addresses differ. Two people with similar names who share
   meetings or a company email domain are put to Jev, and merged only when it is sure they are one
   person; the rest stay in People for you. Each merge keeps its Undo.
 - **Words are no longer taken for names.** "I'm here", "Service here" or "soy CTO" no longer create a

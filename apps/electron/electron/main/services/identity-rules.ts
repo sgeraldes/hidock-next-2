@@ -42,6 +42,7 @@ import { askJev } from './jev-client'
 import { createJevHarness } from './pipeline/jev-harness'
 import { withCallRecord } from './pipeline/track-call'
 import { isRecordingEligible } from './recording-eligibility'
+import { accentFoldedKey, firstNameNicknameMatch } from './entity-normalize'
 import { getActiveTranscriptions } from './transcription-activity'
 import {
   buildMentionTiebreakRequest,
@@ -74,6 +75,14 @@ export interface IdentityRulesDeps {
   askJev?: typeof askJev
   ownerContactId?: () => string | null
   maxJevCalls?: number
+  /** The day the daily Jev cap counts against. */
+  now?: () => Date
+}
+
+/** The Jev calls this run may still make, and the day they count against. */
+interface JevBudget {
+  left: number
+  now: () => Date
 }
 
 interface Resolved {
@@ -82,10 +91,39 @@ interface Resolved {
   jevKey: () => string | null
   askJev: typeof askJev
   ownerContactId: () => string | null
-  budget: { left: number }
+  budget: JevBudget
 }
 
-function resolve(deps: IdentityRulesDeps, budget?: { left: number }): Resolved {
+/** Jev tiebreaks a day, across every run (review of PR 4, F2); the per-run cap alone repeats per run. */
+export const MAX_JEV_CALLS_PER_DAY = 300
+const DAILY_JEV_KEY = 'identity_rules:jev-calls-per-day'
+
+function localDate(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+/** Jev calls already made on that day. Another day's count is a count of zero. */
+function jevCallsOn(day: string): number {
+  const row = queryOne<{ value: string }>('SELECT value FROM config WHERE key = ?', [DAILY_JEV_KEY])
+  const stored = parseJson<{ date?: unknown; count?: unknown }>(row?.value, {})
+  return stored.date === day && typeof stored.count === 'number' ? stored.count : 0
+}
+
+/** Take one Jev call from the budget and count it for the day. */
+function spendJevCall(budget: JevBudget): void {
+  budget.left--
+  const day = localDate(budget.now())
+  const value = JSON.stringify({ date: day, count: jevCallsOn(day) + 1 })
+  run('INSERT OR REPLACE INTO config (key, value, updated_at) VALUES (?, ?, ?)', [
+    DAILY_JEV_KEY,
+    value,
+    new Date().toISOString()
+  ])
+}
+
+function resolve(deps: IdentityRulesDeps, budget?: JevBudget): Resolved {
+  const now = deps.now ?? (() => new Date())
   return {
     isTranscribing: deps.isTranscribing ?? (() => getActiveTranscriptions().length > 0),
     yieldToLoop: deps.yieldToLoop ?? (() => new Promise<void>((done) => setTimeout(done, 0))),
@@ -93,7 +131,10 @@ function resolve(deps: IdentityRulesDeps, budget?: { left: number }): Resolved {
     jevKey: deps.jevKey ?? (() => jevKeyFor('speakerNames')),
     askJev: deps.askJev ?? askJev,
     ownerContactId: deps.ownerContactId ?? (() => getConfig().identity?.ownerContactId || null),
-    budget: budget ?? { left: deps.maxJevCalls ?? MAX_JEV_CALLS_PER_RUN }
+    budget: budget ?? {
+      left: Math.min(deps.maxJevCalls ?? MAX_JEV_CALLS_PER_RUN, MAX_JEV_CALLS_PER_DAY - jevCallsOn(localDate(now()))),
+      now
+    }
   }
 }
 
@@ -148,7 +189,7 @@ function meetingPeopleNames(meetingId: string | null, recordingId: string, excep
  */
 export async function resolveBucketTiesWithJev(
   deps: IdentityRulesDeps = {},
-  budget?: { left: number }
+  budget?: JevBudget
 ): Promise<{ asked: number; resolved: number; stopped?: 'transcription-active' }> {
   const d = resolve(deps, budget)
   const result: { asked: number; resolved: number; stopped?: 'transcription-active' } = { asked: 0, resolved: 0 }
@@ -191,7 +232,7 @@ export async function resolveBucketTiesWithJev(
       if (d.budget.left <= 0) return result
       if (d.isTranscribing()) return { ...result, stopped: 'transcription-active' }
 
-      d.budget.left--
+      spendJevCall(d.budget)
       let answer
       try {
         const res = await withCallRecord({ step: 'identity-tiebreak', route: 'jev', recordingId: r.recordingId }, () =>
@@ -314,15 +355,104 @@ function pendingPersonSuggestions(): Array<{ s: IdentitySuggestion; ev: Suggesti
 }
 
 /**
+ * Local parts of role and shared mailboxes: one address, several people (review of PR 4, F1).
+ * A local part matches when it is one of these, or starts with one followed by a separator
+ * ("support-latam", "info.es").
+ */
+const SHARED_MAILBOX_LOCAL_PARTS = [
+  'info', 'support', 'sales', 'admin', 'administracion', 'team', 'equipo', 'contact', 'contacto', 'hello', 'hola',
+  'office', 'oficina', 'billing', 'facturacion', 'accounts', 'accounting', 'finance', 'finanzas', 'hr', 'rrhh',
+  'jobs', 'careers', 'empleos', 'talento', 'marketing', 'help', 'helpdesk', 'service', 'services', 'servicio',
+  'servicios', 'soporte', 'ventas', 'noreply', 'no-reply', 'donotreply', 'do-not-reply', 'notifications',
+  'notificaciones', 'calendar', 'booking', 'bookings', 'reservas', 'recepcion', 'reception', 'it', 'ops',
+  'operations', 'legal', 'press', 'prensa', 'media', 'security', 'compras', 'purchasing', 'mail', 'all', 'everyone',
+  'todos', 'staff', 'group', 'grupo', 'list', 'lista'
+]
+
+/** True when an address belongs to a role or shared mailbox, or is a plus address. */
+export function isSharedMailbox(email: string): boolean {
+  const local = email.trim().toLowerCase().split('@')[0] ?? ''
+  if (!local || local.includes('+')) return true
+  return SHARED_MAILBOX_LOCAL_PARTS.some((word) => local === word || new RegExp(`^${word}[._-]`).test(local))
+}
+
+/** Whether two display names on one address can be one person. */
+function namesCompatible(a: string, b: string, email: string): boolean {
+  const address = email.trim().toLowerCase()
+  const local = address.split('@')[0]
+  const isJustTheAddress = (name: string) => {
+    const n = name.trim().toLowerCase()
+    return n === address || n === local
+  }
+  if (isJustTheAddress(a) || isJustTheAddress(b)) return true
+  const fa = accentFoldedKey(a)
+  const fb = accentFoldedKey(b)
+  if (!fa || !fb) return false
+  // One name inside the other, as whole words ("Ana" in "Diana Soto" does not count).
+  if (` ${fa} `.includes(` ${fb} `) || ` ${fb} `.includes(` ${fa} `)) return true
+  const firstA = fa.split(' ')[0]
+  return firstNameNicknameMatch(firstA, b)
+}
+
+/** True when one meeting lists this address under two different display names (a distribution list). */
+function addressSharedInAMeeting(email: string): boolean {
+  const address = email.trim().toLowerCase()
+  const escaped = address.replace(/[\\%_]/g, (c) => `\\${c}`)
+  const meetings = queryAll<{ attendees: string | null }>(
+    `SELECT attendees FROM meetings WHERE LOWER(attendees) LIKE ? ESCAPE '\\'`,
+    [`%${escaped}%`]
+  )
+  for (const m of meetings) {
+    const people = parseJson<unknown>(m.attendees, [])
+    if (!Array.isArray(people)) continue
+    const names = new Set<string>()
+    for (const p of people) {
+      if (!p || typeof p !== 'object') continue
+      const entry = p as { email?: unknown; name?: unknown }
+      if (typeof entry.email !== 'string' || entry.email.trim().toLowerCase() !== address) continue
+      const name = typeof entry.name === 'string' ? accentFoldedKey(entry.name) : ''
+      if (name && name !== address && name !== address.split('@')[0]) names.add(name)
+    }
+    if (names.size > 1) return true
+  }
+  return false
+}
+
+type ExactEmailBlock = 'role-mailbox' | 'names-differ' | 'shared-address'
+
+/** Why an exact-email pair must stay a question for the owner, or null when it may merge. */
+function exactEmailBlock(keeper: ContactRow, loser: ContactRow): ExactEmailBlock | null {
+  const email = (keeper.email || loser.email || '').trim()
+  if (!email || isSharedMailbox(email)) return 'role-mailbox'
+  if (!namesCompatible(keeper.name, loser.name, email)) return 'names-differ'
+  if (addressSharedInAMeeting(email)) return 'shared-address'
+  return null
+}
+
+/**
  * 3b, the same exact email: every pending suggestion discovery marked `autoMergeable` (0.95 or
  * more, corroborated by an exact email) is accepted through the existing accept path, after the
  * same accept-time revalidation the People accept button runs. Method 'exact-email'.
+ *
+ * Only for a personal address (review of PR 4, F1): not a role or shared mailbox, the two names
+ * fit one person, and no meeting lists the address under two names. Otherwise the suggestion
+ * stays for the owner with the reason in evidence.autoMergeBlocked.
  */
 export function autoMergeExactEmail(): { merged: number } {
   let merged = 0
   for (const { s, ev } of pendingPersonSuggestions()) {
     if (ev.autoMergeable !== true || ev.emailMatch !== 'exact') continue
     if (!mergeAllowed(s.target_id, ev.loserId)) continue
+    const block = exactEmailBlock(contactRow(s.target_id)!, contactRow(ev.loserId)!)
+    if (block) {
+      if (ev.autoMergeBlocked !== block) {
+        run('UPDATE identity_suggestions SET evidence = ? WHERE id = ?', [
+          JSON.stringify({ ...ev, autoMergeBlocked: block }),
+          s.id
+        ])
+      }
+      continue
+    }
     const fresh = getIdentitySuggestionById(s.id)
     if (!fresh || fresh.status !== 'pending' || !isSuggestionEligibleForAccept(fresh)) continue
     if (acceptMergeSuggestion(fresh, ev.loserId!, 'exact-email', { emailMatch: 'exact', confidence: fresh.confidence })) merged++
@@ -475,7 +605,7 @@ function hasVoice(contactId: string): boolean {
  */
 export async function resolveSimilarNameMerges(
   deps: IdentityRulesDeps = {},
-  budget?: { left: number }
+  budget?: JevBudget
 ): Promise<{ rescored: number; asked: number; merged: number; stopped?: 'transcription-active' }> {
   const d = resolve(deps, budget)
   const result: { rescored: number; asked: number; merged: number; stopped?: 'transcription-active' } = {
@@ -528,7 +658,7 @@ export async function resolveSimilarNameMerges(
       sharedMeetings: subjects,
       sameDomain
     })
-    d.budget.left--
+    spendJevCall(d.budget)
     let answer
     try {
       const res = await withCallRecord({ step: 'identity-tiebreak', route: 'jev', recordingId: null }, () =>

@@ -318,6 +318,23 @@ describe('junk self-names', () => {
     }
   })
 
+  it('"Vale" is a nickname (Valentina, Valeria), not a word: "Soy Vale" binds', () => {
+    expect(isJunkSelfName('Vale')).toBe(false)
+    expect(reliableSelfNames('Soy Vale, de producto.')).toEqual(['Vale'])
+    expect(isPlausibleSelfName('Vale')).toBe(true)
+  })
+
+  it('English role words are junk next to their Spanish ones', () => {
+    for (const word of [
+      'coordinator', 'cofounder', 'co-founder', 'intern', 'specialist', 'consultant', 'analyst', 'engineer',
+      'developer', 'designer', 'director', 'assistant'
+    ]) {
+      expect(isJunkSelfName(word), word).toBe(true)
+    }
+    expect(reliableSelfNames('Soy Co-founder de la empresa.')).toEqual([])
+    expect(reliableSelfNames("I'm Designer here.")).toEqual([])
+  })
+
   it('reliableSelfNames does not capture a junk word after a cue ("I\'m here", "Service here", "soy CTO")', () => {
     expect(reliableSelfNames("I'm here, can you hear me?")).toEqual([])
     expect(reliableSelfNames("We're here.")).toEqual([])
