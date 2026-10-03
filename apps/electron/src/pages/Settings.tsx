@@ -68,6 +68,7 @@ import { RecordingSection } from '@/features/settings/RecordingSection'
 import { CalendarPreferences } from '@/features/settings/CalendarPreferences'
 import { DiarizationCpuShare, OllamaModelFields } from '@/features/settings/ModelFields'
 import { VoiceBackfillPanel } from '@/features/settings/VoiceBackfillPanel'
+import { IdentityQuestionCounts } from '@/features/settings/IdentityQuestionCounts'
 import { AdvancedSettings } from '@/features/settings/AdvancedSettings'
 import { SecretsSection } from '@/features/settings/SecretsSection'
 import { ShortcutsSection } from '@/features/settings/ShortcutsSection'
@@ -1482,6 +1483,7 @@ export function Settings({
               <CardContent className="space-y-4">
                 <DiarizationCpuShare />
                 <VoiceBackfillPanel />
+                <IdentityQuestionCounts />
                 <section
                   aria-labelledby="speaker-model-heading"
                   className="rounded-xl bg-muted/45 p-4 shadow-sm"

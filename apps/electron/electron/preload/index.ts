@@ -161,6 +161,12 @@ import type { PipelineState } from '../main/types/device-pipeline'
 import type { Note, NoteRelatedItem, NoteMeetingSuggestion } from '../../src/types/notes'
 import type { SpeakerEngineId, SpeakerSetup } from '../../src/types/speakers'
 import type { VoiceBackfillMeasure, VoiceBackfillStatus } from '../../src/shared/voice-backfill-schedule'
+import type {
+  DecisionView,
+  QuestionCounts,
+  VoiceConflictChoice,
+  VoiceConflictView
+} from '../../src/shared/identity-review'
 import type { AudioCheckResult } from '../../src/types/audio'
 
 /** A Context Graph node with its degree + click-through ids (mirrors the service DTO). */
@@ -1612,6 +1618,15 @@ export interface ElectronAPI {
       data?: { buckets: number; resolved: number }
       error?: string
     }>
+    // People shows what is left and how the app decided (spec 2026-10-03, Phase 4)
+    listDecisions: (request?: { limit?: number; includeUndone?: boolean }) => Promise<Result<DecisionView[]>>
+    undoDecision: (id: string) => Promise<Result<{ restored: boolean }>>
+    listVoiceConflicts: () => Promise<Result<VoiceConflictView[]>>
+    resolveVoiceConflict: (
+      id: string,
+      choice: VoiceConflictChoice
+    ) => Promise<Result<{ status: 'accepted' | 'rejected' }>>
+    getQuestionCounts: () => Promise<Result<QuestionCounts>>
   }
 
   // Domain Events - Event-driven architecture
@@ -2369,7 +2384,12 @@ const electronAPI: ElectronAPI = {
     getBucketResolution: (contactId: string) => callIPC('identity:getBucketResolution', contactId),
     resolveMention: (request: { recordingId: string; sourceName: string; contactId: string | null; method?: string }) =>
       callIPC('identity:resolveMention', request),
-    autoSplitBuckets: () => callIPC('identity:autoSplitBuckets')
+    autoSplitBuckets: () => callIPC('identity:autoSplitBuckets'),
+    listDecisions: (request) => callIPC('identity:listDecisions', request),
+    undoDecision: (id) => callIPC('identity:undoDecision', id),
+    listVoiceConflicts: () => callIPC('identity:listVoiceConflicts'),
+    resolveVoiceConflict: (id, choice) => callIPC('identity:resolveVoiceConflict', id, choice),
+    getQuestionCounts: () => callIPC('identity:getQuestionCounts')
   },
 
   // Domain Event Listener

@@ -12399,7 +12399,7 @@ export function insertIdentitySuggestion(
 export const VOICE_CONFLICT_PREFIX = 'voice-conflict:'
 
 export const VOICE_CONFLICT_REFUSAL =
-  'This is a voice conflict: a known voice disagrees with a named speaker. It cannot be accepted or rejected here yet.'
+  'This is a voice conflict: a known voice disagrees with a named speaker. Answer it from its own card in People.'
 
 /** True for a voice-conflict suggestion, by its key or by its evidence type. */
 export function isVoiceConflictSuggestion(s: Pick<IdentitySuggestion, 'candidate_name' | 'evidence'>): boolean {

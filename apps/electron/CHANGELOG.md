@@ -36,9 +36,9 @@ Outlook, and every speaker the app names now keeps a note of how it was named.
   recording is transcribed, and every decision is recorded with its reason and the state before, so
   it can be undone.
 - **A voice never overrides a speaker you named.** When a known voice disagrees with a speaker you
-  or a stronger signal named, the name stays and the disagreement is saved with both people. People
-  does not list these yet: they get their own review in a later update. When an automatic speaker
-  name is undone, no rule names that speaker after that person again.
+  or a stronger signal named, the name stays and the disagreement is saved with both people for you
+  to answer in People. When an automatic speaker name is undone, no rule names that speaker after
+  that person again.
 - **A shared first name is settled from voices and attendance.** When "Sergio" could be two people,
   a recording now picks the one whose voice is heard in it, provided every other Sergio who attended
   has a known voice. It still picks the only Sergio who attended, and it picks you when you are one
@@ -60,6 +60,21 @@ Outlook, and every speaker the app names now keeps a note of how it was named.
 - **The identity rules are written down.** The file docs/identity-rules.md lists each kind of
   identity question, the rule that answers it, the signals in order and when it stays a question
   for you.
+- **People shows what the app decided, and lets you undo it.** A "Decided automatically" list,
+  closed until you open it, shows each decision the app made by itself in one sentence with its
+  reason, newest first: "Speaker 2 in 'Weekly sync' (12 Sep) is Ana Ruiz: Ana Ruiz was the only
+  other person in this one-on-one", or "Merged 'Ana R.' into Ana Ruiz: same email". Each row has an
+  Undo; an undone row says so and the count drops, and a question it brings back appears again
+  above it.
+- **People asks only what is still open.** A shared first name whose recordings are all decided no
+  longer shows. A voice that disagrees with a name gets its own card: "In 'Weekly sync' (12 Sep),
+  Speaker 2's voice sounds like Ana Ruiz, but it is named Bea Paz (named by you)", with "Keep Bea
+  Paz" and "It is Ana Ruiz". Keeping the name writes no alias; choosing the voice names the speaker
+  as if you had picked it yourself.
+- **Settings counts the identity questions.** Settings > Speakers & voices has a small table with,
+  for shared first names, duplicate people, speakers, voices and voice conflicts, how many are
+  pending, how many the app decided and how many you decided. The app's column adds up to the
+  "Decided automatically" count in People, and duplicate people count only what People shows.
 
 ## 2026-10-02 | Columns that stay put, and meetings that follow the calendar
 

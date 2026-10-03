@@ -90,6 +90,19 @@ global.window.electronAPI = {
       }
     }),
     openFolder: vi.fn()
+  },
+  identity: {
+    getQuestionCounts: vi.fn().mockResolvedValue({
+      success: true,
+      data: {
+        rows: [
+          { kind: 'shared-first-names', pending: 4, automatic: 9, owner: 1 },
+          { kind: 'duplicate-people', pending: 3, automatic: 2, owner: 0 },
+          { kind: 'speakers', pending: 0, automatic: 5, owner: 7 },
+          { kind: 'voice-conflicts', pending: 1, automatic: 0, owner: 0 }
+        ]
+      }
+    })
   }
 } as any
 
@@ -492,6 +505,13 @@ describe('Settings Page', () => {
     render(<Settings />)
     const speakers = screen.getByTestId('speakers-and-voices')
     expect(speakers).toContainElement(screen.getByRole('heading', { name: 'Speaker identification model' }))
+  })
+
+  it('shows the identity question counts in Speakers and voices', async () => {
+    render(<Settings />)
+    const speakers = screen.getByTestId('speakers-and-voices')
+    const table = await within(speakers).findByRole('table', { name: 'Identity questions' })
+    expect(within(table).getByRole('rowheader', { name: 'Voice conflicts' })).toBeInTheDocument()
   })
 
   it('saves a changed Hugging Face token on its own, without the Transcription Save button', async () => {

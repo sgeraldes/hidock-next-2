@@ -30,6 +30,7 @@ import {
   IdentitySuggestionsSection,
   type IdentitySuggestionsSectionHandle
 } from '@/components/identity/IdentitySuggestionsSection'
+import { DecidedAutomaticallySection } from '@/components/identity/DecidedAutomaticallySection'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -423,6 +424,10 @@ export function People() {
         <div className={pageWide}>
           {/* Identity suggestions review queue (self-hides when empty) */}
           {!mergeMode && <IdentitySuggestionsSection ref={suggestionsRef} />}
+
+          {/* What the app decided by itself, with Undo (spec 2026-10-03, Phase 4). An Undo can
+              bring a question back, so the queue above reloads. */}
+          {!mergeMode && <DecidedAutomaticallySection onChanged={() => suggestionsRef.current?.reload()} />}
 
           {/* Merge-mode instruction banner */}
           {mergeMode && (

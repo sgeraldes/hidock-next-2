@@ -80,7 +80,30 @@ global.window.electronAPI = {
     }),
     // v30: low link counts by default → no high-stakes type-to-confirm gate.
     getMergeImpact: vi.fn().mockResolvedValue({ success: true, data: { keeper: 1, loser: 1 } }),
-    getMergeJournal: vi.fn().mockResolvedValue({ success: true, data: [] })
+    getMergeJournal: vi.fn().mockResolvedValue({ success: true, data: [] }),
+    // Phase 4 (spec 2026-10-03): what the app decided by itself.
+    listDecisions: vi.fn().mockResolvedValue({
+      success: true,
+      data: [
+        {
+          id: 'd1',
+          kind: 'merge',
+          method: 'exact-email',
+          createdAt: '2026-10-03T10:00:00.000Z',
+          undoneAt: null,
+          contactId: 'p1',
+          personName: 'Mario',
+          subjectName: 'Mario R.',
+          recordingId: null,
+          recordingTitle: null,
+          recordingDate: null,
+          meetingSubject: null,
+          probability: null,
+          votes: null
+        }
+      ]
+    }),
+    undoDecision: vi.fn().mockResolvedValue({ success: true, data: { restored: true } })
   }
 } as any
 
@@ -99,6 +122,24 @@ describe('People Page', () => {
     const item = await screen.findByText('Mario')
     expect(item).toBeInTheDocument()
     expect(screen.getByText('team')).toBeInTheDocument()
+  })
+
+  it('shows what the app decided by itself, collapsed, and reloads the questions after an Undo', async () => {
+    render(
+      <MemoryRouter>
+        <People />
+      </MemoryRouter>
+    )
+
+    const header = await screen.findByRole('button', { name: /decided automatically \(1\)/i })
+    expect(header).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(header)
+    expect(screen.getByText("Merged 'Mario R.' into Mario: same email")).toBeInTheDocument()
+
+    const getSuggestions = (global.window.electronAPI as any).identity.getSuggestions
+    const before = getSuggestions.mock.calls.length
+    fireEvent.click(screen.getByRole('button', { name: /^undo:/i }))
+    await waitFor(() => expect(getSuggestions.mock.calls.length).toBeGreaterThan(before))
   })
 
   it('should render sort dropdown with options', async () => {
