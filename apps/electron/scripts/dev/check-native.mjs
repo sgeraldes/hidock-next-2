@@ -12,7 +12,8 @@
  *   1. back up the current binaries — BOTH copies: the app-local one and the
  *      packages/database one (the rebuild step resolves better-sqlite3 through
  *      the @hidock/database link and can rebuild that copy too),
- *   2. rebuild better-sqlite3 for Electron's ABI (@electron/rebuild),
+ *   2. rebuild better-sqlite3 for Electron's ABI (scripts/rebuild-electron.mjs,
+ *      the @electron/rebuild that electron-builder ships, forced),
  *   3. load it inside Electron's own runtime and exercise a WAL round-trip,
  *   4. restore the backed-up binaries so the Vitest suites keep passing,
  *   5. verify the packages/database copy still loads under the CURRENT Node —
@@ -26,7 +27,7 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { existsSync, copyFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, copyFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, relative } from 'node:path'
@@ -40,7 +41,9 @@ const binaryPaths = [
   join(appDir, 'node_modules', 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node'),
   join(packagesDbDir, 'node_modules', 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node'),
 ]
-const backupOf = (p) => `${p}.node-abi.bak`
+// The backup sits in the package root (node_modules/better-sqlite3/), NOT next to the binary:
+// a forced rebuild deletes and recreates build/, which would take a backup kept there with it.
+const backupOf = (p) => join(p, '..', '..', '..', 'better_sqlite3.node-abi.bak')
 // Probe lives inside the app dir so `require('better-sqlite3')` resolves against
 // the app's node_modules (require resolves relative to the script's location).
 const probePath = join(appDir, '.check-native-probe.cjs')
@@ -52,9 +55,9 @@ function electronBinary() {
   return p
 }
 
-// electron-rebuild resolves via a .cmd shim on Windows, so it needs a shell.
-function runShell(cmd, args, opts = {}) {
-  execFileSync(cmd, args, { cwd: appDir, stdio: 'inherit', shell: process.platform === 'win32', ...opts })
+// Runs a Node script with the current Node binary, no shell.
+function runNodeScript(script) {
+  execFileSync(process.execPath, [join(appDir, script)], { cwd: appDir, stdio: 'inherit', shell: false })
 }
 
 // The Electron executable is a real binary — run it WITHOUT a shell so argument
@@ -69,6 +72,7 @@ function restoreNodeAbi() {
   for (const binaryPath of binaryPaths) {
     const backupPath = backupOf(binaryPath)
     if (existsSync(backupPath)) {
+      mkdirSync(dirname(binaryPath), { recursive: true })
       copyFileSync(backupPath, binaryPath)
       rmSync(backupPath, { force: true })
       console.log(`[check-native] Restored pre-check binary: ${relative(appDir, binaryPath)}`)
@@ -112,7 +116,7 @@ try {
   }
 
   console.log('[check-native] Rebuilding better-sqlite3 for the Electron ABI...')
-  runShell('npx', ['electron-rebuild', '-f', '-w', 'better-sqlite3'])
+  runNodeScript(join('scripts', 'rebuild-electron.mjs'))
 
   console.log('[check-native] Loading better-sqlite3 inside the Electron runtime...')
   const probe = [
