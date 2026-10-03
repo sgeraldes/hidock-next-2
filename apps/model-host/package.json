@@ -1,6 +1,6 @@
 {
   "name": "@hidock/model-host",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "HiDock Model Host: runs the model tools on the machine that has the GPU and lends them over the LAN",
   "private": true,
   "type": "module",

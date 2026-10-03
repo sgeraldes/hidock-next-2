@@ -12,7 +12,7 @@ import { READY, STOPPED, HostState } from './state.mjs'
 import { PairingStore } from './auth.mjs'
 import { runDiarization } from './diarize.mjs'
 
-export const VERSION = '0.1.1'
+export const VERSION = '0.1.2'
 /** Two hours of 16 kHz mono WAV is about 230 MB; round up and stop there. */
 export const MAX_AUDIO_BYTES = 512 * 1024 * 1024
 

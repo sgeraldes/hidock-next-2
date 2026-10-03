@@ -13,7 +13,7 @@ SetCompressor /SOLID lzma
 !define PRODUCT "HiDock Model Host"
 !define PRODUCT_KEY "HiDockModelHost"
 !ifndef VERSION
-  !define VERSION "0.1.1"
+  !define VERSION "0.1.2"
 !endif
 
 Name "${PRODUCT} ${VERSION}"
