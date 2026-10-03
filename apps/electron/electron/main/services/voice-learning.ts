@@ -6,15 +6,17 @@
  *   recording (live-channel-speakers.ts) and by the owner's self-identification. Without it,
  *   nothing here runs.
  * - One-on-one (2b): a meeting of the owner and one other person, recorded with exactly two
- *   voices of 30 s or more, one of them the owner's. The other voice is that person.
+ *   voices of 30 s or more, one of them the owner's. The other voice votes for that person.
  * - Elimination (2c): when every voice but one is known to be an attendee and exactly one
- *   attendee has no voice yet, the remaining voice votes for that attendee. Two recordings
- *   voting the same person, and none voting anyone else, anchor the voice.
+ *   attendee has no voice yet, the remaining voice votes for that attendee.
+ * - Votes of both kinds share voice_elimination_votes. Two recordings voting the same person,
+ *   and none voting anyone else, anchor the voice; one recording never does, since an invitee
+ *   may stay silent while an off-invite guest speaks.
  * - Propagation (2d): every new anchor names that voice's speakers in the other recordings
  *   through applyKnownVoiceBindings, which also applies the conflict rule.
  *
  * Every anchor and speaker named here is journaled in identity_decisions and can be undone;
- * an undone decision is never made again by the same method for the same subject.
+ * an undone decision is never made again for the same subject and person, by any method.
  */
 
 import { getConfig } from './config'
@@ -25,6 +27,7 @@ import {
   snapshotVoiceAnchorNoSave,
   speakerSubjectKey,
   voiceAnchorSubjectKey,
+  wasAnchorUndoneFor,
   wasSpeakerUndoneFor,
   wasUndone
 } from './identity-decisions'
@@ -42,8 +45,12 @@ import { getActiveTranscriptions } from './transcription-activity'
 export const MIN_LEARNING_SPEECH_SECONDS = 30
 export const ONE_ON_ONE_CONFIDENCE = methodConfidence('one-on-one')
 export const ELIMINATION_CONFIDENCE = methodConfidence('elimination')
-/** Elimination anchors a voice once this many different recordings vote the same person. */
-export const ELIMINATION_VOTES_NEEDED = 2
+/**
+ * A voice is anchored once this many different recordings vote it the same person. One
+ * recording is not enough even for a one-on-one: the invitee may have stayed silent while an
+ * off-invite guest spoke.
+ */
+export const VOTES_NEEDED = 2
 /** A learning run stops after this many passes even if each pass still learns something. */
 export const MAX_LEARNING_PASSES = 10
 
@@ -167,16 +174,16 @@ export function recordingVoices(recordingId: string): RecordingVoice[] {
   })
 }
 
-export interface LearningResult {
+/** What one recording taught: the vote it cast, and the anchor that vote completed, if any. */
+export interface VoteResult {
   anchored: boolean
-  clusterId?: string
-  contactId?: string
-  reason?: string
-}
-
-export interface EliminationResult extends LearningResult {
   /** The vote this recording cast, or null when it could not cast one. */
   voted: { clusterId: string; contactId: string } | null
+  clusterId?: string
+  contactId?: string
+  /** The anchor's method: 'one-on-one' when any agreeing vote came from a one-on-one. */
+  method?: LearningMethod
+  reason?: string
 }
 
 function isVisibleContact(contactId: string): boolean {
@@ -258,131 +265,138 @@ function substantialVoices(recordingId: string): RecordingVoice[] {
   return recordingVoices(recordingId).filter((v) => v.speechSeconds >= MIN_LEARNING_SPEECH_SECONDS)
 }
 
+const CONFIDENCE: Record<LearningMethod, number> = {
+  'one-on-one': ONE_ON_ONE_CONFIDENCE,
+  elimination: ELIMINATION_CONFIDENCE
+}
+
+/**
+ * Cast this recording's vote for a voice, then anchor the voice when two different recordings
+ * agree on the person (one-on-one or elimination votes, any mix) and no vote names anyone
+ * else. The anchor's method is 'one-on-one' when any agreeing vote came from a one-on-one,
+ * else 'elimination'. Only then are the voice's speakers named in the voting recordings, each
+ * by the rule that voted there. An anchor the owner undid for that person, by any method, is
+ * never made again.
+ */
+function voteAndMaybeAnchor(
+  recordingId: string,
+  clusterId: string,
+  contactId: string,
+  method: LearningMethod,
+  evidence: Record<string, unknown>
+): VoteResult {
+  runNoSave(
+    `INSERT INTO voice_elimination_votes (cluster_id, contact_id, recording_id, method, created_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(cluster_id, recording_id) DO UPDATE SET contact_id = excluded.contact_id, method = excluded.method`,
+    [clusterId, contactId, recordingId, method, new Date().toISOString()]
+  )
+  const voted = { clusterId, contactId }
+  const votes = queryAll<{ contact_id: string; recording_id: string; method: LearningMethod }>(
+    'SELECT contact_id, recording_id, method FROM voice_elimination_votes WHERE cluster_id = ? ORDER BY recording_id',
+    [clusterId]
+  )
+  const people = new Set(votes.map((v) => v.contact_id))
+  if (people.size > 1) return { anchored: false, voted, reason: 'the votes disagree' }
+  if (new Set(votes.map((v) => v.recording_id)).size < VOTES_NEEDED) {
+    return { anchored: false, voted, reason: 'waiting for a second recording' }
+  }
+  const anchorMethod: LearningMethod = votes.some((v) => v.method === 'one-on-one') ? 'one-on-one' : 'elimination'
+  if (
+    wasUndone('voice-anchor', voiceAnchorSubjectKey(clusterId), anchorMethod) ||
+    wasAnchorUndoneFor(clusterId, contactId)
+  ) {
+    return { anchored: false, voted, reason: 'the owner undid this before' }
+  }
+  if (!isVisibleContact(contactId)) return { anchored: false, voted, reason: 'the person is hidden' }
+
+  runInTransaction(() => {
+    anchorClusterNoSave(clusterId, contactId, anchorMethod, CONFIDENCE[anchorMethod], {
+      ...evidence,
+      votes: votes.map((v) => ({ recordingId: v.recording_id, method: v.method }))
+    })
+    for (const vote of votes) {
+      const labels = queryAll<{ transcript_speaker_label: string }>(
+        `SELECT DISTINCT transcript_speaker_label FROM recording_voice_clusters
+          WHERE recording_id = ? AND voice_cluster_id = ? AND transcript_speaker_label IS NOT NULL`,
+        [vote.recording_id, clusterId]
+      )
+      for (const { transcript_speaker_label: label } of labels) {
+        bindLearnedSpeakerNoSave(vote.recording_id, label, contactId, vote.method, CONFIDENCE[vote.method], clusterId)
+      }
+    }
+  })
+  return { anchored: true, voted, clusterId, contactId, method: anchorMethod }
+}
+
+const noVote = (reason: string): VoteResult => ({ anchored: false, voted: null, reason })
+
 /**
  * One-on-one (2b): a meeting of exactly the owner and X, recorded with exactly two voices of
  * 30 s or more, one of them the owner's (matched at 0.9 or more), the other tied to nobody.
- * The other voice is X: its cluster is anchored to X and its transcript speaker named.
+ * The recording votes the other voice to X. It takes two agreeing recordings to anchor it
+ * (voteAndMaybeAnchor): X may have stayed silent while an off-invite guest spoke.
  */
-export function learnFromOneOnOne(recordingId: string): LearningResult {
+export function learnFromOneOnOne(recordingId: string): VoteResult {
   const owner = ownerContactId()
-  if (!owner) return { anchored: false, reason: 'no owner chosen in Settings' }
-  if (!ownerVoiceClusterIds().length) return { anchored: false, reason: "the owner's voice is not known yet" }
+  if (!owner) return noVote('no owner chosen in Settings')
+  if (!ownerVoiceClusterIds().length) return noVote("the owner's voice is not known yet")
   const meetingId = queryOne<{ meeting_id: string | null }>('SELECT meeting_id FROM recordings WHERE id = ?', [
     recordingId
   ])?.meeting_id
-  if (!meetingId) return { anchored: false, reason: 'the recording has no meeting' }
+  if (!meetingId) return noVote('the recording has no meeting')
 
   const attendees = meetingAttendeeContacts(meetingId)
   if (attendees.contactIds.length !== 2 || !attendees.ownerAttends) {
-    return { anchored: false, reason: 'the meeting is not the owner and one other person' }
+    return noVote('the meeting is not the owner and one other person')
   }
   const other = attendees.contactIds.find((id) => id !== owner)!
 
   const voices = substantialVoices(recordingId)
-  if (voices.length !== 2) return { anchored: false, reason: 'the recording does not have exactly two voices' }
+  if (voices.length !== 2) return noVote('the recording does not have exactly two voices')
   const ownerVoice = voices.find((v) => v.knownContactId === owner)
   const otherVoice = voices.find((v) => v !== ownerVoice)
-  if (!ownerVoice || !otherVoice) return { anchored: false, reason: "the owner's voice is not in the recording" }
-  if (otherVoice.clusterId === ownerVoice.clusterId) return { anchored: false, reason: 'both voices are the owner' }
-  if (otherVoice.clusterContactId) return { anchored: false, reason: 'the other voice already belongs to someone' }
-  if (wasUndone('voice-anchor', voiceAnchorSubjectKey(otherVoice.clusterId), 'one-on-one')) {
-    return { anchored: false, reason: 'the owner undid this before' }
-  }
-  if (!isVisibleContact(other)) return { anchored: false, reason: 'the other attendee is hidden' }
+  if (!ownerVoice || !otherVoice) return noVote("the owner's voice is not in the recording")
+  if (otherVoice.clusterId === ownerVoice.clusterId) return noVote('both voices are the owner')
+  if (otherVoice.clusterContactId) return noVote('the other voice already belongs to someone')
 
-  runInTransaction(() => {
-    anchorClusterNoSave(otherVoice.clusterId, other, 'one-on-one', ONE_ON_ONE_CONFIDENCE, {
-      recordingId,
-      meetingId,
-      ownerVoiceClusterId: ownerVoice.clusterId,
-      speechSeconds: otherVoice.speechSeconds
-    })
-    if (otherVoice.transcriptLabel) {
-      bindLearnedSpeakerNoSave(
-        recordingId,
-        otherVoice.transcriptLabel,
-        other,
-        'one-on-one',
-        ONE_ON_ONE_CONFIDENCE,
-        otherVoice.clusterId
-      )
-    }
+  return voteAndMaybeAnchor(recordingId, otherVoice.clusterId, other, 'one-on-one', {
+    meetingId,
+    ownerVoiceClusterId: ownerVoice.clusterId
   })
-  return { anchored: true, clusterId: otherVoice.clusterId, contactId: other }
 }
 
 /**
- * Elimination (2c) for one recording: attendees A, voices V of 30 s or more. When exactly one
- * voice is not known to be an attendee, exactly one attendee has no known voice, |V| <= |A|
- * and that voice's cluster is tied to nobody, the recording votes the voice to that attendee.
- * Once two recordings vote the same person, and none votes anyone else, the voice is anchored
- * and its speakers in the voting recordings are named.
+ * Elimination (2c) for one recording: attendees A, and V every voice stored for the recording
+ * (the voice step already drops voices too short to measure). When |V| <= |A|, exactly one
+ * voice is not known to be an attendee, exactly one attendee has no known voice, and that
+ * voice speaks 30 s or more and is tied to nobody, the recording votes the voice to that
+ * attendee. A short voice still counts as someone in the room: it is never left out of V.
  */
-export function learnByElimination(recordingId: string): EliminationResult {
-  const none = (reason: string): EliminationResult => ({ anchored: false, voted: null, reason })
-  if (!ownerContactId()) return none('no owner chosen in Settings')
-  if (!ownerVoiceClusterIds().length) return none("the owner's voice is not known yet")
+export function learnByElimination(recordingId: string): VoteResult {
+  if (!ownerContactId()) return noVote('no owner chosen in Settings')
+  if (!ownerVoiceClusterIds().length) return noVote("the owner's voice is not known yet")
   const meetingId = queryOne<{ meeting_id: string | null }>('SELECT meeting_id FROM recordings WHERE id = ?', [
     recordingId
   ])?.meeting_id
-  if (!meetingId) return none('the recording has no meeting')
+  if (!meetingId) return noVote('the recording has no meeting')
 
   const attendees = new Set(meetingAttendeeContacts(meetingId).contactIds)
-  const voices = substantialVoices(recordingId)
-  if (!attendees.size || !voices.length) return none('no attendees or no voices')
-  if (voices.length > attendees.size) return none('more voices than attendees')
+  const voices = recordingVoices(recordingId)
+  if (!attendees.size || !voices.length) return noVote('no attendees or no voices')
+  if (voices.length > attendees.size) return noVote('more voices than attendees')
 
   const known = voices.filter((v) => v.knownContactId && attendees.has(v.knownContactId))
   const unknown = voices.filter((v) => !known.includes(v))
-  if (unknown.length !== 1) return none('not exactly one unknown voice')
+  if (unknown.length !== 1) return noVote('not exactly one unknown voice')
   const heard = new Set(known.map((v) => v.knownContactId!))
   const silent = [...attendees].filter((id) => !heard.has(id))
-  if (silent.length !== 1) return none('not exactly one attendee without a voice')
+  if (silent.length !== 1) return noVote('not exactly one attendee without a voice')
   const voice = unknown[0]
-  const contactId = silent[0]
-  if (voice.clusterContactId) return none('the remaining voice already belongs to someone')
+  if (voice.speechSeconds < MIN_LEARNING_SPEECH_SECONDS) return noVote('the remaining voice speaks too little')
+  if (voice.clusterContactId) return noVote('the remaining voice already belongs to someone')
 
-  runNoSave(
-    `INSERT INTO voice_elimination_votes (cluster_id, contact_id, recording_id, created_at) VALUES (?, ?, ?, ?)
-     ON CONFLICT(cluster_id, recording_id) DO UPDATE SET contact_id = excluded.contact_id`,
-    [voice.clusterId, contactId, recordingId, new Date().toISOString()]
-  )
-  const voted = { clusterId: voice.clusterId, contactId }
-
-  const tally = queryAll<{ contact_id: string; recordings: number }>(
-    `SELECT contact_id, COUNT(DISTINCT recording_id) AS recordings FROM voice_elimination_votes
-      WHERE cluster_id = ? GROUP BY contact_id`,
-    [voice.clusterId]
-  )
-  if (tally.length !== 1 || tally[0].recordings < ELIMINATION_VOTES_NEEDED) {
-    return { anchored: false, voted, reason: tally.length > 1 ? 'the votes disagree' : 'waiting for a second recording' }
-  }
-  if (wasUndone('voice-anchor', voiceAnchorSubjectKey(voice.clusterId), 'elimination')) {
-    return { anchored: false, voted, reason: 'the owner undid this before' }
-  }
-  if (!isVisibleContact(contactId)) return { anchored: false, voted, reason: 'the attendee is hidden' }
-
-  const voters = queryAll<{ recording_id: string }>(
-    'SELECT recording_id FROM voice_elimination_votes WHERE cluster_id = ? ORDER BY recording_id',
-    [voice.clusterId]
-  ).map((row) => row.recording_id)
-  runInTransaction(() => {
-    anchorClusterNoSave(voice.clusterId, contactId, 'elimination', ELIMINATION_CONFIDENCE, {
-      recordingIds: voters,
-      meetingId
-    })
-    for (const voter of voters) {
-      const labels = queryAll<{ transcript_speaker_label: string }>(
-        `SELECT DISTINCT transcript_speaker_label FROM recording_voice_clusters
-          WHERE recording_id = ? AND voice_cluster_id = ? AND transcript_speaker_label IS NOT NULL`,
-        [voter, voice.clusterId]
-      )
-      for (const { transcript_speaker_label: label } of labels) {
-        bindLearnedSpeakerNoSave(voter, label, contactId, 'elimination', ELIMINATION_CONFIDENCE, voice.clusterId)
-      }
-    }
-  })
-  return { anchored: true, voted, clusterId: voice.clusterId, contactId }
+  return voteAndMaybeAnchor(recordingId, voice.clusterId, silent[0], 'elimination', { meetingId })
 }
 
 export interface VoiceLearningDeps {
@@ -465,13 +479,15 @@ export async function runVoiceLearning(deps: VoiceLearningDeps = {}): Promise<Vo
           summary.stopped = 'transcription-active'
           return summary
         }
-        for (const [method, learn] of [
-          ['one-on-one', learnFromOneOnOne],
-          ['elimination', learnByElimination]
-        ] as const) {
+        for (const learn of [learnFromOneOnOne, learnByElimination]) {
           const result = learn(recordingId)
-          if (!result.anchored || !result.clusterId || !result.contactId) continue
-          summary.anchored.push({ clusterId: result.clusterId, contactId: result.contactId, method, recordingId })
+          if (!result.anchored || !result.clusterId || !result.contactId || !result.method) continue
+          summary.anchored.push({
+            clusterId: result.clusterId,
+            contactId: result.contactId,
+            method: result.method,
+            recordingId
+          })
           summary.propagated += propagate(result.clusterId)
           learnedThisPass++
         }

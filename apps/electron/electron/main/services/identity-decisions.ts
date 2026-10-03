@@ -209,6 +209,18 @@ export function wasSpeakerUndoneFor(recordingId: string, speakerLabel: string, c
 }
 
 /**
+ * True when a decision tying this voice cluster to `contactId` was undone, whatever method made
+ * it: no learning rule ties that voice to that person again.
+ */
+export function wasAnchorUndoneFor(clusterId: string, contactId: string): boolean {
+  return !!queryOne(
+    `SELECT 1 FROM identity_decisions
+     WHERE kind = 'voice-anchor' AND subject_key = ? AND contact_id = ? AND undone_at IS NOT NULL LIMIT 1`,
+    [voiceAnchorSubjectKey(clusterId), contactId]
+  )
+}
+
+/**
  * Undo one decision: put the state before back and mark the row undone. The state is put back
  * only while the subject still holds what the decision wrote; when someone changed it since
  * (the owner picked another person), that change stays and only the mark is written, and the

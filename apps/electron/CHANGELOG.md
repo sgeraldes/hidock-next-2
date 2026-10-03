@@ -27,9 +27,11 @@ Outlook, and every speaker the app names now keeps a note of how it was named.
   many recordings have voices, the last problem, and a "Measure one recording" button that times one
   recording and estimates how long the rest would take.
 - **The app learns voices from your meetings.** Your voice is learned from the microphone of a live
-  recording. In a meeting with only you and one other person, the other voice is that person. In a
-  bigger meeting where every voice but one is known and one guest has not been heard, the last voice
-  is that guest, once two recordings agree. Each voice learned names that person's speakers in your
+  recording. In a meeting with only you and one other person, the other voice points to that person.
+  In a bigger meeting where every voice but one is known and one guest has not been heard, the last
+  voice points to that guest. A voice is tied to someone only when two recordings point it to the same
+  person and none points elsewhere, because an invited person may stay silent while someone who was
+  not invited speaks. Each voice learned names that person's speakers in your
   other recordings. It runs after each recording gets its voices and once at startup, never while a
   recording is transcribed, and every decision is recorded with its reason and the state before, so
   it can be undone.

@@ -777,14 +777,15 @@ CREATE TABLE IF NOT EXISTS recording_voice_clusters (
     FOREIGN KEY (voice_cluster_id) REFERENCES voice_clusters(id) ON DELETE CASCADE
 );
 
--- Pending eliminations (v67, voice-learning.ts). One row per recording where an unknown
--- voice was the last one left and one attendee had no voice yet: that recording votes the
--- voice to that attendee. Two recordings voting the same person, and none voting anyone
--- else, anchor the voice. Conflicting votes stay here and anchor nothing.
+-- Pending voice votes (v67, voice-learning.ts). One row per recording that names an unknown
+-- voice: a one-on-one (the voice that is not the owner) or an elimination (the last unknown
+-- voice, one attendee not heard yet). Two recordings voting the same person, and none voting
+-- anyone else, anchor the voice. Conflicting votes stay here and anchor nothing.
 CREATE TABLE IF NOT EXISTS voice_elimination_votes (
     cluster_id TEXT NOT NULL,
     contact_id TEXT NOT NULL,
     recording_id TEXT NOT NULL,
+    method TEXT NOT NULL CHECK(method IN ('one-on-one', 'elimination')),
     created_at TEXT NOT NULL,
     PRIMARY KEY (cluster_id, recording_id),
     FOREIGN KEY (cluster_id) REFERENCES voice_clusters(id) ON DELETE CASCADE,
@@ -3351,12 +3352,13 @@ const MIGRATIONS: Record<number, () => void> = {
     console.log('Migration v66 complete')
   },
   67: () => {
-    // Pending eliminations for voice learning: a new table, no change to existing data.
+    // Pending voice votes for voice learning: a new table, no change to existing data.
     console.log('Running migration to schema v67: voice_elimination_votes')
     getDatabase().run(`CREATE TABLE IF NOT EXISTS voice_elimination_votes (
     cluster_id TEXT NOT NULL,
     contact_id TEXT NOT NULL,
     recording_id TEXT NOT NULL,
+    method TEXT NOT NULL CHECK(method IN ('one-on-one', 'elimination')),
     created_at TEXT NOT NULL,
     PRIMARY KEY (cluster_id, recording_id),
     FOREIGN KEY (cluster_id) REFERENCES voice_clusters(id) ON DELETE CASCADE,

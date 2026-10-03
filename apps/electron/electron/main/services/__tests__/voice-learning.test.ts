@@ -185,15 +185,32 @@ afterEach(() => {
 })
 
 describe('schema', () => {
-  it('creates voice_elimination_votes keyed by cluster and recording', () => {
+  it('creates voice_elimination_votes keyed by cluster and recording, with the method that voted', () => {
     const columns = queryAll<{ name: string; pk: number }>('PRAGMA table_info(voice_elimination_votes)')
-    expect(columns.map((c) => c.name)).toEqual(['cluster_id', 'contact_id', 'recording_id', 'created_at'])
+    expect(columns.map((c) => c.name)).toEqual(['cluster_id', 'contact_id', 'recording_id', 'method', 'created_at'])
     expect(columns.filter((c) => c.pk > 0).map((c) => c.name)).toEqual(['cluster_id', 'recording_id'])
     expect(EXPECTED_SCHEMA_VERSION).toBeGreaterThanOrEqual(67)
     expect(queryOne<{ v: number }>('SELECT MAX(version) AS v FROM schema_version')!.v).toBe(EXPECTED_SCHEMA_VERSION)
   })
 
-  it('the migration creates the table on a database that predates v67', async () => {
+  it('accepts only one-on-one and elimination votes', () => {
+    recording('r1', null)
+    voice('r1', { cluster: 'v-x' })
+    expect(() =>
+      run(`INSERT INTO voice_elimination_votes (cluster_id, contact_id, recording_id, method, created_at)
+           VALUES ('v-x', 'bea', 'r1', 'guess', ?)`, [T])
+    ).toThrow()
+    run(`INSERT INTO voice_elimination_votes (cluster_id, contact_id, recording_id, method, created_at)
+         VALUES ('v-x', 'bea', 'r1', 'one-on-one', ?)`, [T])
+  })
+
+  it('the migration creates the same table on a database that predates v67', async () => {
+    const fresh = queryAll('PRAGMA table_info(voice_elimination_votes)')
+    const freshKeys = queryAll('PRAGMA foreign_key_list(voice_elimination_votes)')
+    const ddl = () =>
+      queryOne<{ sql: string }>("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'voice_elimination_votes'")!
+        .sql.replace(/\s+/g, ' ')
+    const freshDdl = ddl()
     closeDatabase()
     const Database = (await import('better-sqlite3')).default
     const raw = new Database(dbPath)
@@ -203,7 +220,9 @@ describe('schema', () => {
 
     await initializeDatabase()
 
-    expect(queryAll('PRAGMA table_info(voice_elimination_votes)')).toHaveLength(4)
+    expect(queryAll('PRAGMA table_info(voice_elimination_votes)')).toEqual(fresh)
+    expect(queryAll('PRAGMA foreign_key_list(voice_elimination_votes)')).toEqual(freshKeys)
+    expect(ddl()).toBe(freshDdl)
     expect(queryOne<{ v: number }>('SELECT MAX(version) AS v FROM schema_version')!.v).toBe(EXPECTED_SCHEMA_VERSION)
   })
 })
@@ -268,42 +287,96 @@ describe('recordingVoices', () => {
 })
 
 describe('learnFromOneOnOne', () => {
-  it('ties the voice that is not the owner to the other attendee, binds its speaker and journals both', () => {
+  /** Two one-on-ones with Bea, r1 and r2, each with the owner's voice and the same other voice. */
+  function twoOneOnOnes(other: VoiceSeed = { cluster: 'v-bea' }): ReturnType<typeof learnFromOneOnOne> {
+    oneOnOne('r1', other)
+    oneOnOne('r2', other)
+    learnFromOneOnOne('r1')
+    return learnFromOneOnOne('r2')
+  }
+
+  it('one recording only votes: the voice is not tied and no speaker is named yet', () => {
     oneOnOne()
 
-    const result = learnFromOneOnOne('r1')
+    expect(learnFromOneOnOne('r1')).toMatchObject({ anchored: false, voted: { clusterId: 'v-bea', contactId: 'bea' } })
 
-    expect(result).toMatchObject({ anchored: true, clusterId: 'v-bea', contactId: 'bea' })
+    expect(votes('v-bea')).toEqual([{ contact_id: 'bea', recording_id: 'r1' }])
+    expect(queryOne<{ method: string }>("SELECT method FROM voice_elimination_votes WHERE recording_id = 'r1'")!.method).toBe(
+      'one-on-one'
+    )
+    expect(cluster('v-bea')!.contact_id).toBeNull()
+    expect(speaker('r1', 'Voice v-bea')).toBeUndefined()
+    expect(listDecisions()).toEqual([])
+  })
+
+  it('two agreeing one-on-ones tie the voice, name its speaker in both and journal it all', () => {
+    const result = twoOneOnOnes()
+
+    expect(result).toMatchObject({ anchored: true, clusterId: 'v-bea', contactId: 'bea', method: 'one-on-one' })
     expect(cluster('v-bea')).toEqual({
       contact_id: 'bea',
       contact_link_method: 'one-on-one',
       contact_link_confidence: ONE_ON_ONE_CONFIDENCE
     })
-    expect(speaker('r1', 'Voice v-bea')).toEqual({ contact_id: 'bea', source: 'one-on-one', confidence: ONE_ON_ONE_CONFIDENCE })
+    for (const id of ['r1', 'r2']) {
+      expect(speaker(id, 'Voice v-bea')).toEqual({ contact_id: 'bea', source: 'one-on-one', confidence: ONE_ON_ONE_CONFIDENCE })
+    }
     const decisions = listDecisions()
     expect(decisions.map((d) => [d.kind, d.subjectKey, d.method, d.contactId]).sort()).toEqual([
       ['speaker', 'recording:r1:speaker:Voice v-bea', 'one-on-one', 'bea'],
+      ['speaker', 'recording:r2:speaker:Voice v-bea', 'one-on-one', 'bea'],
       ['voice-anchor', 'cluster:v-bea', 'one-on-one', 'bea']
     ])
     const anchor = decisions.find((d) => d.kind === 'voice-anchor')!
     expect(anchor.before).toEqual({ clusterId: 'v-bea', contactId: null, method: null, confidence: null })
   })
 
+  it('a silent invitee and a guest who spoke: the guest is voted, and a second meeting that disagrees ties nobody', () => {
+    // r1: Bea was invited but stayed silent, and an off-invite guest spoke instead.
+    oneOnOne('r1', { cluster: 'v-guest' })
+    // r2: a one-on-one with Carl where the same guest spoke (Carl silent too).
+    meeting('m-r2', ['owner@dfx5.com', 'carl@dfx5.com'])
+    recording('r2', 'm-r2')
+    voice('r2', OWNER_VOICE)
+    voice('r2', { cluster: 'v-guest' })
+
+    learnFromOneOnOne('r1')
+    expect(learnFromOneOnOne('r2').anchored).toBe(false)
+    expect(cluster('v-guest')!.contact_id).toBeNull()
+    expect(votes('v-guest').map((v) => v.contact_id)).toEqual(['bea', 'carl'])
+  })
+
+  it('a one-on-one and an elimination that agree tie the voice, as one-on-one', () => {
+    oneOnOne('r1', { cluster: 'v-carl' })
+    run(`UPDATE meetings SET attendees = ? WHERE id = 'm-r1'`, [
+      JSON.stringify([{ email: 'owner@dfx5.com' }, { email: 'carl@dfx5.com' }])
+    ])
+    threeWithCarlUnknown('r2')
+
+    learnFromOneOnOne('r1')
+    const result = learnByElimination('r2')
+
+    expect(result).toMatchObject({ anchored: true, clusterId: 'v-carl', contactId: 'carl', method: 'one-on-one' })
+    expect(cluster('v-carl')).toMatchObject({ contact_id: 'carl', contact_link_method: 'one-on-one' })
+    // Each recording names its speaker by the rule that voted there.
+    expect(speaker('r1', 'Voice v-carl')).toMatchObject({ contact_id: 'carl', source: 'one-on-one' })
+    expect(speaker('r2', 'Voice v-carl')).toMatchObject({ contact_id: 'carl', source: 'elimination' })
+  })
+
   it('anchors without binding when the voice has no transcript speaker', () => {
-    oneOnOne('r1', { cluster: 'v-bea', label: null })
-    expect(learnFromOneOnOne('r1')).toMatchObject({ anchored: true })
+    expect(twoOneOnOnes({ cluster: 'v-bea', label: null })).toMatchObject({ anchored: true })
     expect(listDecisions().map((d) => d.kind)).toEqual(['voice-anchor'])
   })
 
-  it('does not anchor a voice that already belongs to someone else', () => {
+  it('does not vote for a voice that already belongs to someone else', () => {
     oneOnOne('r1', { cluster: 'v-dana', contactId: 'dana', similarity: 0.95 })
-    expect(learnFromOneOnOne('r1').anchored).toBe(false)
+    expect(learnFromOneOnOne('r1')).toMatchObject({ anchored: false, voted: null })
     expect(cluster('v-dana')!.contact_id).toBe('dana')
   })
 
-  it('does not anchor a cluster tied to someone else even when this voice matched it weakly', () => {
+  it('does not vote for a cluster tied to someone else even when this voice matched it weakly', () => {
     oneOnOne('r1', { cluster: 'v-dana', contactId: 'dana', similarity: 0.8 })
-    expect(learnFromOneOnOne('r1').anchored).toBe(false)
+    expect(learnFromOneOnOne('r1')).toMatchObject({ anchored: false, voted: null })
     expect(cluster('v-dana')!.contact_id).toBe('dana')
   })
 
@@ -329,42 +402,73 @@ describe('learnFromOneOnOne', () => {
     voice('re', { cluster: 'v-e' })
 
     for (const id of ['ra', 'rb', 'rc', 'rd', 're']) {
-      expect(learnFromOneOnOne(id).anchored, id).toBe(false)
+      expect(learnFromOneOnOne(id).voted, id).toBeNull()
     }
-    expect(queryAll('SELECT 1 FROM voice_clusters WHERE contact_id = ?', ['bea'])).toHaveLength(0)
+    expect(queryAll('SELECT * FROM voice_elimination_votes')).toEqual([])
   })
 
   it('ignores a short third voice: two voices of 30 s or more is what counts', () => {
     oneOnOne('r1')
     voice('r1', { cluster: 'v-blip', seconds: 6 })
-    expect(learnFromOneOnOne('r1')).toMatchObject({ anchored: true, clusterId: 'v-bea' })
+    expect(learnFromOneOnOne('r1')).toMatchObject({ voted: { clusterId: 'v-bea', contactId: 'bea' } })
   })
 
   it('does nothing without an owner, or when the owner voice is not known', () => {
     oneOnOne()
     identityConfig.ownerContactId = undefined
-    expect(learnFromOneOnOne('r1').anchored).toBe(false)
+    expect(learnFromOneOnOne('r1').voted).toBeNull()
     identityConfig.ownerContactId = 'owner'
     run(`UPDATE voice_clusters SET contact_id = NULL WHERE id = 'v-owner'`)
-    expect(learnFromOneOnOne('r1').anchored).toBe(false)
+    expect(learnFromOneOnOne('r1').voted).toBeNull()
   })
 
   it('never repeats an anchor the owner undid', () => {
-    oneOnOne()
-    learnFromOneOnOne('r1')
+    twoOneOnOnes()
     const anchor = listDecisions().find((d) => d.kind === 'voice-anchor')!
 
     expect(undoDecision(anchor.id)).toEqual({ restored: true })
     expect(cluster('v-bea')).toEqual({ contact_id: null, contact_link_method: null, contact_link_confidence: null })
 
-    expect(learnFromOneOnOne('r1').anchored).toBe(false)
+    expect(learnFromOneOnOne('r2').anchored).toBe(false)
     expect(cluster('v-bea')!.contact_id).toBeNull()
   })
 
+  it('an anchor undone after a one-on-one is not made again by elimination', () => {
+    // v-carl is tied to Carl by two one-on-ones, and the owner undoes it.
+    for (const id of ['r1', 'r2']) {
+      meeting(`m-${id}`, ['owner@dfx5.com', 'carl@dfx5.com'])
+      recording(id, `m-${id}`)
+      voice(id, OWNER_VOICE)
+      voice(id, { cluster: 'v-carl' })
+      learnFromOneOnOne(id)
+    }
+    undoDecision(listDecisions().find((d) => d.kind === 'voice-anchor')!.id)
+    // Two meetings of the owner, Bea and Carl now vote v-carl to Carl by elimination.
+    threeWithCarlUnknown('r3')
+    threeWithCarlUnknown('r4')
+
+    learnByElimination('r3')
+    expect(learnByElimination('r4').anchored).toBe(false)
+    expect(cluster('v-carl')!.contact_id).toBeNull()
+  })
+
+  it('an undone anchor holds against every method: elimination votes alone do not make it again', () => {
+    // The owner undid v-carl = Carl, made by a one-on-one whose votes are gone since.
+    run(`INSERT INTO voice_clusters (id, model, model_version, embedding_dimension, centroid_json)
+         VALUES ('v-carl', 'community-1', '4.0.0', 3, '[1,0,0]')`)
+    run(`INSERT INTO identity_decisions (id, kind, subject_key, method, contact_id, evidence_json, created_at, undone_at)
+         VALUES ('d-anchor', 'voice-anchor', 'cluster:v-carl', 'one-on-one', 'carl', '{}', ?, ?)`, [T, T])
+    threeWithCarlUnknown('r3')
+    threeWithCarlUnknown('r4')
+
+    learnByElimination('r3')
+    expect(learnByElimination('r4').anchored).toBe(false)
+    expect(cluster('v-carl')!.contact_id).toBeNull()
+  })
+
   it('an undone speaker stays undone, whatever method would decide it again', () => {
-    oneOnOne()
-    learnFromOneOnOne('r1')
-    const named = listDecisions().find((d) => d.kind === 'speaker')!
+    twoOneOnOnes()
+    const named = listDecisions().find((d) => d.kind === 'speaker' && d.subjectKey.startsWith('recording:r1:'))!
     undoDecision(named.id)
     expect(speaker('r1', 'Voice v-bea')).toBeUndefined()
 
@@ -376,17 +480,16 @@ describe('learnFromOneOnOne', () => {
   })
 
   it('a speaker undone after the voice named it is not named again by the one-on-one', () => {
-    oneOnOne()
     run(`INSERT INTO identity_decisions (id, kind, subject_key, method, contact_id, evidence_json, created_at, undone_at)
          VALUES ('d-old', 'speaker', 'recording:r1:speaker:Voice v-bea', 'voice', 'bea', '{}', ?, ?)`, [T, T])
-    expect(learnFromOneOnOne('r1').anchored).toBe(true)
+    expect(twoOneOnOnes().anchored).toBe(true)
     expect(speaker('r1', 'Voice v-bea')).toBeUndefined()
+    expect(speaker('r2', 'Voice v-bea')).toMatchObject({ contact_id: 'bea', source: 'one-on-one' })
   })
 
   it('an undone speaker blocks only the person it named', () => {
-    oneOnOne()
-    learnFromOneOnOne('r1')
-    undoDecision(listDecisions().find((d) => d.kind === 'speaker')!.id)
+    twoOneOnOnes()
+    undoDecision(listDecisions().find((d) => d.kind === 'speaker' && d.subjectKey.startsWith('recording:r1:'))!.id)
     // Another person's voice for that speaker is a different decision.
     run(`UPDATE voice_clusters SET contact_id = 'dana' WHERE id = 'v-bea'`)
     applyKnownVoiceBindings('r1')
@@ -394,10 +497,12 @@ describe('learnFromOneOnOne', () => {
   })
 
   it('leaves a manual speaker alone', () => {
-    oneOnOne()
+    oneOnOne('r1')
     run(`INSERT INTO transcript_speakers (id, recording_id, speaker_label, contact_id, source, confidence)
          VALUES ('ts1', 'r1', 'Voice v-bea', 'dana', 'manual', 1)`)
-    expect(learnFromOneOnOne('r1').anchored).toBe(true)
+    oneOnOne('r2')
+    learnFromOneOnOne('r1')
+    expect(learnFromOneOnOne('r2').anchored).toBe(true)
     expect(speaker('r1', 'Voice v-bea')).toEqual({ contact_id: 'dana', source: 'manual', confidence: 1 })
   })
 })
@@ -465,6 +570,18 @@ describe('learnByElimination', () => {
     expect(votes('v-x')).toEqual([])
   })
 
+  it('counts every stored voice, short ones too: a 15 s guest means the room is bigger than the invite', () => {
+    meeting('m1', ['owner@dfx5.com', 'bea@dfx5.com', 'carl@dfx5.com'])
+    recording('r1', 'm1')
+    voice('r1', OWNER_VOICE)
+    voice('r1', { cluster: 'v-bea-known', contactId: 'bea' })
+    voice('r1', { cluster: 'v-guest-x', seconds: 120 })
+    voice('r1', { cluster: 'v-guest-y', seconds: 15 })
+
+    expect(learnByElimination('r1')).toMatchObject({ anchored: false, voted: null })
+    expect(queryAll('SELECT * FROM voice_elimination_votes')).toEqual([])
+  })
+
   it('does nothing with two unknown voices, a short unknown voice, or an unknown voice tied to someone else', () => {
     // Two unknown voices.
     meeting('m1', ['owner@dfx5.com', 'bea@dfx5.com', 'carl@dfx5.com'])
@@ -472,7 +589,7 @@ describe('learnByElimination', () => {
     voice('r1', OWNER_VOICE)
     voice('r1', { cluster: 'v-p' })
     voice('r1', { cluster: 'v-q' })
-    // The unknown voice speaks 20 s: it is left out, and nobody is left to name.
+    // The one unknown voice speaks 20 s: too little to name Carl by.
     meeting('m2', ['owner@dfx5.com', 'bea@dfx5.com', 'carl@dfx5.com'])
     recording('r2', 'm2')
     voice('r2', OWNER_VOICE)
@@ -502,13 +619,14 @@ describe('learnByElimination', () => {
 
 describe('runVoiceLearning', () => {
   /**
-   * r1: a one-on-one with Bea teaches Bea's voice.
+   * r1, r1b: two one-on-ones with Bea teach Bea's voice.
    * r2, r3: meetings of the owner, Bea and Carl. Once Bea is known, Carl is the last voice
    *         in both, so he is learned by elimination.
    * r4: no meeting. Carl's voice there names its speaker by propagation.
    */
   function library(): void {
     oneOnOne('r1', { cluster: 'v-bea' })
+    oneOnOne('r1b', { cluster: 'v-bea', similarity: 0.94 })
     for (const id of ['r2', 'r3']) {
       meeting(`m-${id}`, ['owner@dfx5.com', 'bea@dfx5.com', 'carl@dfx5.com'])
       recording(id, `m-${id}`)
@@ -539,8 +657,8 @@ describe('runVoiceLearning', () => {
 
   it('runs again when a later recording unlocks an earlier one', async () => {
     // r0 and rx (three voices each) are visited first, by date, but need Bea, who is learned
-    // only from r1 (also three voices, one of them a short blip, and the newest): the second
-    // pass gets r0 and rx.
+    // only from r1 and r1b (two one-on-ones, also three voices, one of them a short blip, and
+    // the newest): the second pass gets r0 and rx.
     for (const [id, date] of [['r0', '2026-09-01T10:00:00Z'], ['rx', '2026-09-02T10:00:00Z']]) {
       meeting(`m-${id}`, ['owner@dfx5.com', 'bea@dfx5.com', 'carl@dfx5.com'])
       recording(id, `m-${id}`, date)
@@ -548,11 +666,13 @@ describe('runVoiceLearning', () => {
       voice(id, { cluster: 'v-bea', similarity: 0.93 })
       voice(id, { cluster: 'v-carl' })
     }
-    meeting('m-r1', ['owner@dfx5.com', 'bea@dfx5.com'])
-    recording('r1', 'm-r1', '2026-10-01T10:00:00Z')
-    voice('r1', OWNER_VOICE)
-    voice('r1', { cluster: 'v-bea' })
-    voice('r1', { cluster: 'v-blip', seconds: 5 })
+    for (const [id, date] of [['r1', '2026-10-01T10:00:00Z'], ['r1b', '2026-10-02T10:00:00Z']]) {
+      meeting(`m-${id}`, ['owner@dfx5.com', 'bea@dfx5.com'])
+      recording(id, `m-${id}`, date)
+      voice(id, OWNER_VOICE)
+      voice(id, { cluster: 'v-bea', similarity: 0.94 })
+      voice(id, { cluster: `v-blip-${id}`, seconds: 5 })
+    }
 
     const summary = await runVoiceLearning({ isTranscribing: () => false })
 
