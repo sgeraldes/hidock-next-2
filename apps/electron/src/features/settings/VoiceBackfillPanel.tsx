@@ -24,6 +24,14 @@ const SCHEDULES: Array<{ value: VoiceBackfillSchedule; label: string }> = [
   { value: 'off', label: 'Off' }
 ]
 
+/** 00:00, 00:30 … 23:30: the window in the 24-hour form the rest of the app uses. */
+const HALF_HOURS = Array.from({ length: 48 }, (_, i) => `${String(Math.floor(i / 2)).padStart(2, '0')}:${i % 2 ? '30' : '00'}`)
+
+/** The half hours, plus a saved time that is not on one, in order. */
+function timeChoices(current: string): string[] {
+  return HALF_HOURS.includes(current) ? HALF_HOURS : [...HALF_HOURS, current].sort()
+}
+
 /** "1 h", "13 h 20 min", "1 min 30 s", "45 s". */
 export function spokenDuration(totalSeconds: number): string {
   const rounded = Math.max(0, Math.round(totalSeconds))
@@ -104,7 +112,8 @@ export function VoiceBackfillPanel() {
           ? `${count(status.remaining)} to go (${spokenDuration(status.remainingAudioSeconds)} of audio)`
           : 'Nothing left to measure',
         status.failed > 0 ? `${count(status.failed)} failed` : null,
-        status.skipped > 0 ? `${count(status.skipped)} with no voice long enough` : null
+        status.skipped > 0 ? `${count(status.skipped)} with no voice long enough` : null,
+        status.noAudio > 0 ? `${count(status.noAudio)} without their audio on this computer` : null
       ]
         .filter(Boolean)
         .join(', ') + '.'
@@ -116,7 +125,7 @@ export function VoiceBackfillPanel() {
         <h3 id="voice-backfill-heading" className="text-sm font-semibold">
           Voice evidence for older recordings
         </h3>
-        <p className="mt-1 max-w-prose text-xs text-muted-foreground">
+        <p className="mt-1 text-xs text-muted-foreground">
           Recordings transcribed before voices were measured get their voices here, one at a time, at low priority. It
           runs where the speaker engine above runs and waits while a recording is transcribed.
         </p>
@@ -143,23 +152,33 @@ export function VoiceBackfillPanel() {
             <label htmlFor="voiceBackfillStart" className="text-sm">
               Starts at
             </label>
-            <input
+            <select
               id="voiceBackfillStart"
-              type="time"
-              className="rounded-md border border-input bg-background px-2 py-1 text-sm"
+              className="rounded-md border border-input bg-background px-2 py-1 text-sm tabular-nums"
               value={schedule.windowStart}
               onChange={(e) => saveTime('windowStart', e.target.value)}
-            />
+            >
+              {timeChoices(schedule.windowStart).map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
             <label htmlFor="voiceBackfillEnd" className="text-sm">
               Ends at
             </label>
-            <input
+            <select
               id="voiceBackfillEnd"
-              type="time"
-              className="rounded-md border border-input bg-background px-2 py-1 text-sm"
+              className="rounded-md border border-input bg-background px-2 py-1 text-sm tabular-nums"
               value={schedule.windowEnd}
               onChange={(e) => saveTime('windowEnd', e.target.value)}
-            />
+            >
+              {timeChoices(schedule.windowEnd).map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
           </>
         )}
       </div>
@@ -172,7 +191,7 @@ export function VoiceBackfillPanel() {
             </p>
             <p className="text-xs text-muted-foreground">{rest}</p>
             {status.lastError && <p className="text-xs text-amber-800 dark:text-amber-300">Last problem: {status.lastError}</p>}
-            {status.running && !measuring && <WorkingBar label="Measuring a recording now" />}
+            {status.running && !measuring && <WorkingBar label="Computing voice evidence" />}
           </>
         ) : (
           <WorkingValue label="Counting recordings" className="w-48" />

@@ -274,11 +274,19 @@ interface Counts {
   failed: number
   remaining: number
   remainingAudioSeconds: number
+  /** Not measurable here: no audio file on this computer. Kept out of remaining and the estimate. */
+  noAudio: number
 }
 
 function countLibrary(): Counts {
-  const rows = queryAll<{ id: string; duration_seconds: number | null; has_voices: number; status: string | null }>(
-    `SELECT r.id, r.duration_seconds,
+  const rows = queryAll<{
+    id: string
+    file_path: string | null
+    duration_seconds: number | null
+    has_voices: number
+    status: string | null
+  }>(
+    `SELECT r.id, r.file_path, r.duration_seconds,
             EXISTS (SELECT 1 FROM recording_voice_clusters rvc WHERE rvc.recording_id = r.id) AS has_voices,
             s.status
        FROM recordings r
@@ -287,13 +295,14 @@ function countLibrary(): Counts {
       WHERE r.deleted_at IS NULL`
   )
   const { eligible } = filterEligibleRecordingIds(rows.map((row) => row.id))
-  const counts: Counts = { total: 0, done: 0, skipped: 0, failed: 0, remaining: 0, remainingAudioSeconds: 0 }
+  const counts: Counts = { total: 0, done: 0, skipped: 0, failed: 0, remaining: 0, remainingAudioSeconds: 0, noAudio: 0 }
   for (const row of rows) {
     if (!eligible.has(row.id)) continue
     counts.total++
     if (row.has_voices || row.status === 'done') counts.done++
     else if (row.status === 'failed') counts.failed++
     else if (row.status === 'skipped') counts.skipped++
+    else if (!row.file_path || !existsSync(row.file_path)) counts.noAudio++
     else {
       counts.remaining++
       counts.remainingAudioSeconds += Math.max(0, row.duration_seconds ?? 0)

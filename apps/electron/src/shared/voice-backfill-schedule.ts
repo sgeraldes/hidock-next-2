@@ -38,6 +38,8 @@ export interface VoiceBackfillStatus {
   remaining: number
   /** Audio still to measure, for the estimate in Settings. */
   remainingAudioSeconds: number
+  /** Recordings whose audio is not on this computer: they cannot be measured here. */
+  noAudio: number
   lastRunAt: string | null
   lastError: string | null
   running: boolean

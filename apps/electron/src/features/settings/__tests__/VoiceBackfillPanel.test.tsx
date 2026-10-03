@@ -23,6 +23,7 @@ const status = (overrides: Record<string, unknown> = {}) => ({
     failed: 2,
     remaining: 1957,
     remainingAudioSeconds: 48_000,
+    noAudio: 0,
     lastRunAt: null,
     lastError: null,
     running: false,
@@ -87,6 +88,30 @@ describe('VoiceBackfillPanel', () => {
     await screen.findByText(/recordings have voice evidence/)
     expect(screen.getByLabelText('When to compute voice evidence')).toHaveValue('night')
     expect(screen.getByLabelText('Starts at')).toHaveValue('01:00')
+  })
+
+  // The app writes the window as 01:00 to 07:00; a native time field showed "01:00 AM" with a clock
+  // icon that was dark on dark (screenshot review, 3-oct-2026).
+  it('offers the window times in 24-hour form, every half hour, keeping a saved time that is not on one', async () => {
+    act(() => setSchedule({ schedule: 'night', windowStart: '01:00', windowEnd: '06:45' }))
+    render(<VoiceBackfillPanel />)
+    await screen.findByText(/recordings have voice evidence/)
+    const start = screen.getByLabelText('Starts at')
+    expect(start.tagName).toBe('SELECT')
+    const options = Array.from((start as HTMLSelectElement).options).map((o) => o.textContent)
+    expect(options).toHaveLength(48)
+    expect(options).toContain('13:30')
+    expect(options.some((o) => /AM|PM/.test(o ?? ''))).toBe(false)
+    expect(screen.getByLabelText('Ends at')).toHaveValue('06:45')
+  })
+
+  // Review of #129: the scheduled run is not a measurement; the bar named it wrong.
+  it('names a scheduled run as computing voice evidence, and counts recordings without audio', async () => {
+    getStatus.mockResolvedValue(status({ running: true, noAudio: 12 }))
+    render(<VoiceBackfillPanel />)
+    expect(await screen.findByLabelText('Computing voice evidence')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Measuring a recording now')).not.toBeInTheDocument()
+    expect(screen.getByText(/12 without their audio on this computer/)).toBeInTheDocument()
   })
 
   it('saves a new window time', async () => {

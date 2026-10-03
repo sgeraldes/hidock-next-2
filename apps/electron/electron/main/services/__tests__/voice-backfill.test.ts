@@ -559,6 +559,17 @@ describe('getVoiceBackfillStatus', () => {
     })
   })
 
+  // Review of #129: a recording whose audio is not on this computer can never be measured, so it
+  // must not stay in "to go" or in the time estimate for ever.
+  it('counts recordings without their audio file apart, not as remaining', () => {
+    seedRecording({ id: 'left', duration: 600 })
+    seedRecording({ id: 'gone', duration: 3600, file: 'missing' })
+    run(`UPDATE recordings SET file_path = '' WHERE id = 'gone'`)
+    seedRecording({ id: 'moved', duration: 1200, file: 'missing' })
+
+    expect(getVoiceBackfillStatus()).toMatchObject({ total: 3, remaining: 1, remainingAudioSeconds: 600, noAudio: 2 })
+  })
+
   it('falls back to the default schedule when the config has none', () => {
     delete transcriptionConfig.current.voiceBackfill
     expect(getVoiceBackfillStatus()).toMatchObject({ schedule: 'night', window: { start: '01:00', end: '07:00' } })
