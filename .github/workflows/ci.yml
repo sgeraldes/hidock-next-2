@@ -21,6 +21,7 @@ jobs:
           cache-dependency-path: |
             apps/electron/package-lock.json
             packages/*/package-lock.json
+            apps/model-host/package-lock.json
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -41,6 +42,11 @@ jobs:
           for n in ai-providers calendar-sync connectors connectors-slack database jensen-protocol knowledge-graph transcription; do
             (cd "packages/$n" && npm run lint --if-present && npm test)
           done
+      - name: Model Host tests
+        # The host ships to another machine on its own installer; nothing else
+        # in this workflow runs its tests.
+        working-directory: apps/model-host
+        run: npm ci && npm test
       - name: Install app
         working-directory: apps/electron
         run: npm ci

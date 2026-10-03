@@ -11,8 +11,10 @@
 param(
   [string] $HostRoot = (Join-Path $env:LOCALAPPDATA 'HiDock Model Host'),
   [string] $HuggingFaceToken = '',
-  # 12.1 matches the wheels pyannote's torch is built against today.
-  [string] $CudaTag = 'cu121',
+  # The client's venv runs torch 2.13 built for CUDA 12.6. cu121 stopped at
+  # torch 2.5, which pyannote 4 rejects, and pip then replaced it with the CPU
+  # build from PyPI: a host on a 4090 that diarized on its CPU.
+  [string] $CudaTag = 'cu126',
   [switch] $SkipValidation
 )
 
@@ -26,6 +28,11 @@ $PythonDir = Join-Path $RuntimeDir 'python'
 $PythonExe = Join-Path $PythonDir 'python.exe'
 $ModelsDir = Join-Path $HostRoot 'models'
 $ConfigFile = Join-Path $HostRoot 'config.json'
+$LogsDir = Join-Path $HostRoot 'logs'
+# The exact package versions of the client's working venv.
+$Constraints = Join-Path $InstallDir 'constraints.txt'
+# The worker decodes every file with ffmpeg; the installer ships one.
+$Ffmpeg = Join-Path $InstallDir 'ffmpeg.exe'
 
 function Say($text) { Write-Host "  $text" }
 function Step($text) { Write-Host ''; Write-Host "== $text" -ForegroundColor Cyan }
@@ -107,14 +114,19 @@ if (Test-Path $PythonExe) {
 }
 
 Step 'Model runtime'
+if (-not (Test-Path -LiteralPath $Constraints)) { throw "The installer is missing $Constraints. Reinstall the Model Host." }
+if (-not (Test-Path -LiteralPath $Ffmpeg)) { throw "The installer is missing $Ffmpeg. Reinstall the Model Host." }
+$torchPins = @(Get-Content -LiteralPath $Constraints | Where-Object { $_ -match '^(torch|torchaudio)==' })
+if ($torchPins.Count -ne 2) { throw "constraints.txt does not pin torch and torchaudio." }
 $torchIndex = if ($gpuName) { "https://download.pytorch.org/whl/$CudaTag" } else { 'https://download.pytorch.org/whl/cpu' }
-Say "torch from $torchIndex (about 2.5 GB on CUDA)"
-& $PythonExe -m pip install --no-warn-script-location --index-url $torchIndex torch torchaudio
+Say "$($torchPins -join ', ') from $torchIndex (about 2.5 GB on CUDA)"
+& $PythonExe -m pip install --no-warn-script-location --index-url $torchIndex @torchPins
 if ($LASTEXITCODE -ne 0) { throw 'Installing torch failed. Nothing else was changed.' }
 
 $requirements = Join-Path $InstallDir 'resources\speaker-linking\requirements.txt'
-Say "pyannote from $requirements"
-& $PythonExe -m pip install --no-warn-script-location -r $requirements
+Say "pyannote from $requirements, at the client's versions"
+# The constraints keep pip from swapping the CUDA torch for PyPI's CPU build.
+& $PythonExe -m pip install --no-warn-script-location -r $requirements -c $Constraints
 if ($LASTEXITCODE -ne 0) { throw 'Installing pyannote failed. Nothing else was changed.' }
 
 Step 'Diarization model'
@@ -156,7 +168,7 @@ function Write-HostConfig {
     timeoutMs = 3600000
     pythonPath = $PythonExe
     workerPath = (Join-Path $InstallDir 'resources\speaker-linking\worker.py')
-    ffmpegPath = ''
+    ffmpegPath = $Ffmpeg
     validated = $true
   }
   $config | ConvertTo-Json | Set-Content -LiteralPath $ConfigFile -Encoding utf8
@@ -197,14 +209,33 @@ Remove-Item -LiteralPath $tmpScript -Force
 
 $env:HF_TOKEN = $HuggingFaceToken
 $env:HUGGINGFACE_HUB_TOKEN = $HuggingFaceToken
+$env:FFMPEG_PATH = $Ffmpeg
 $worker = Join-Path $InstallDir 'resources\speaker-linking\worker.py'
-$output = & $PythonExe $worker --audio $wav --model 'pyannote/speaker-diarization-3.1' --fallback-model 'pyannote/speaker-diarization-3.1' --min-speech-seconds 0.5 2>&1
-$code = $LASTEXITCODE
+# The worker writes its diagnostics to stderr and exactly one JSON document to
+# stdout. Merging the two made the JSON unreadable, and in Windows PowerShell
+# 5.1 a redirected stderr line is a terminating error under 'Stop'. So the two
+# streams go to two files through Start-Process.
+New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
+$workerLog = Join-Path $LogsDir 'setup-validation.log'
+$workerOut = Join-Path $LogsDir 'setup-validation.json'
+Say 'Loading the model (the first time it downloads about 30 MB of weights)'
+$workerArgs = @(
+  "`"$worker`"", '--audio', "`"$wav`"",
+  '--model', 'pyannote/speaker-diarization-3.1',
+  '--fallback-model', 'pyannote/speaker-diarization-3.1',
+  '--min-speech-seconds', '0.5'
+)
+$process = Start-Process -FilePath $PythonExe -ArgumentList $workerArgs -NoNewWindow -Wait -PassThru `
+  -RedirectStandardOutput $workerOut -RedirectStandardError $workerLog
+$code = $process.ExitCode
+$output = Get-Content -LiteralPath $workerOut -Raw -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $wav -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $workerOut -Force -ErrorAction SilentlyContinue
 
 if ($code -ne 0) {
   Write-Host '  Diarization did not run on this machine.' -ForegroundColor Red
-  Write-Host ($output | Select-Object -Last 15)
+  Get-Content -LiteralPath $workerLog -Tail 15 | ForEach-Object { Write-Host "  $_" }
+  Say "Full log: $workerLog"
   throw 'Setup installed the runtime but could not prove it works. Fix the error above and run setup again.'
 }
 
@@ -213,7 +244,9 @@ try {
   Write-HostConfig
   Say "Model: $($result.model) $($result.modelVersion)"
   Say "Device: $($result.device)"
-  Say "Turns found on the test clip: $($result.segments.Count)"
+  # The clip is two tones, not speech, so pyannote usually finds no turns in
+  # it. What this step proves is that the model loaded and ran on this device.
+  Say "Turns found on the test clip: $($result.segments.Count) (tones, not speech; 0 is normal)"
   if ($gpuName -and $result.device -notlike 'cuda*') {
     Write-Host '  The GPU is present but the model ran on the CPU.' -ForegroundColor Yellow
     Write-Host '  Check that the torch build matches the driver; the host still works, slower.'

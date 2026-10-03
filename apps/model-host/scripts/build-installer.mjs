@@ -2,7 +2,7 @@
  * Build HiDock-Model-Host-<version>-Setup.exe.
  *
  * The payload is deliberately small: the host's own source, a copy of Node to
- * run it, and the diarization worker. Everything heavy — the CUDA build of
+ * run it, ffmpeg, and the diarization worker. Everything heavy — the CUDA build of
  * torch, pyannote, the model weights — arrives on first run, where the person
  * can see the size, cancel and retry.
  *
@@ -15,6 +15,7 @@ import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, write
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
 import { homedir } from 'os'
+import { createRequire } from 'module'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const packageRoot = join(here, '..')
@@ -37,13 +38,46 @@ function findMakensis() {
   return null
 }
 
-export function stage(stageDir) {
+/**
+ * The ffmpeg the client ships (ffmpeg-static).
+ *
+ * The worker decodes every recording with ffmpeg, WAV included, and a gaming PC
+ * has no reason to have one on PATH. Without this copy every job failed on the
+ * host and quietly went back to the client's CPU.
+ */
+function findFfmpeg() {
+  if (process.env.FFMPEG_PATH && existsSync(process.env.FFMPEG_PATH)) return process.env.FFMPEG_PATH
+  try {
+    const require = createRequire(join(repoRoot, 'apps', 'electron', 'package.json'))
+    return require('ffmpeg-static')
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * @param {string} stageDir
+ * @param {object} [sources] injected for tests; the real build copies the
+ *   running Node and the client's ffmpeg-static
+ */
+export function stage(stageDir, sources = {}) {
+  const nodePath = sources.nodePath || process.execPath
+  const ffmpegPath = sources.ffmpegPath ?? findFfmpeg()
+  if (!ffmpegPath || !existsSync(ffmpegPath)) {
+    throw new Error(
+      `ffmpeg was not found (${ffmpegPath || 'ffmpeg-static is not installed'}). ` +
+        'Install the client once (npm ci in apps/electron) or set FFMPEG_PATH.'
+    )
+  }
+
   rmSync(stageDir, { recursive: true, force: true })
   mkdirSync(stageDir, { recursive: true })
 
   cpSync(join(packageRoot, 'src'), join(stageDir, 'src'), { recursive: true })
   cpSync(join(packageRoot, 'package.json'), join(stageDir, 'package.json'))
   cpSync(join(packageRoot, 'installer', 'setup.ps1'), join(stageDir, 'setup.ps1'))
+  cpSync(join(packageRoot, 'installer', 'constraints.txt'), join(stageDir, 'constraints.txt'))
+  cpSync(ffmpegPath, join(stageDir, 'ffmpeg.exe'))
 
   // One worker.py in this repository. The client owns it; the host ships a
   // copy of that exact file so a remote result and a local result match.
@@ -54,7 +88,7 @@ export function stage(stageDir) {
   }
 
   // The host is plain Node with no dependencies, so the runtime is one file.
-  cpSync(process.execPath, join(stageDir, 'node.exe'))
+  cpSync(nodePath, join(stageDir, 'node.exe'))
 
   writeFileSync(
     join(stageDir, 'Start Model Host.cmd'),

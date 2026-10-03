@@ -13,7 +13,7 @@ SetCompressor /SOLID lzma
 !define PRODUCT "HiDock Model Host"
 !define PRODUCT_KEY "HiDockModelHost"
 !ifndef VERSION
-  !define VERSION "0.1.0"
+  !define VERSION "0.1.1"
 !endif
 
 Name "${PRODUCT} ${VERSION}"
@@ -76,9 +76,10 @@ SectionEnd
 Section -Finish
   ; Offer setup. Installing is not authorization to download models or start
   ; holding the GPU, so nothing runs unless the person says yes here.
+  ; A silent install (/S) is an upgrade over a working runtime: never set up.
   MessageBox MB_YESNO|MB_ICONQUESTION \
     "Set up ${PRODUCT} now?$\r$\n$\r$\nSetup checks the GPU and downloads the model runtime (about 2.5 GB). You can do it later from the Start Menu." \
-    IDNO skip_setup
+    /SD IDNO IDNO skip_setup
     Exec '"$INSTDIR\Set up Model Host.cmd"'
   skip_setup:
 SectionEnd

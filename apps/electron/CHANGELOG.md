@@ -75,6 +75,10 @@ Outlook, and every speaker the app names now keeps a note of how it was named.
   for shared first names, duplicate people, speakers, voices and voice conflicts, how many are
   pending, how many the app decided and how many you decided. The app's column adds up to the
   "Decided automatically" count in People, and duplicate people count only what People shows.
+- **The Model Host installer works on a machine that has never had HiDock.** Version 0.1.1 brings
+  its own ffmpeg (the voice step reads every recording through it, and a gaming PC has none), and
+  installs the exact package versions this machine uses, with torch built for CUDA 12.6. The
+  0.1.0 installer would have put a CPU-only torch on the RTX machine and then failed every job.
 
 ## 2026-10-02 | Columns that stay put, and meetings that follow the calendar
 
