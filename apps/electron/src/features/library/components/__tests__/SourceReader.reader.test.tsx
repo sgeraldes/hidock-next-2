@@ -221,7 +221,7 @@ describe('SourceReader — Transcribe split/dropdown', () => {
     render(<SourceReader recording={makeRecording({ transcriptionStatus: 'no_speech' })} onTranscribe={vi.fn()} />)
     expect(await screen.findByText('Too short to transcribe')).toBeInTheDocument()
     expect(screen.getByText(/6 seconds of audio\. Recordings under 10 seconds are skipped\./)).toBeInTheDocument()
-    expect(screen.getByText(/choose Clear rating in its row menu, then re-run transcription/)).toBeInTheDocument()
+    expect(screen.getByText(/choose Clear rating in its row menu, then pick a method from the arrow next to Transcribe/)).toBeInTheDocument()
     expect(screen.queryByText('No intelligible speech detected')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^transcribe$/i })).toBeInTheDocument()
   })
@@ -257,7 +257,7 @@ describe('SourceReader — Transcribe split/dropdown', () => {
     render(<SourceReader recording={makeRecording({ transcriptionStatus: 'no_speech' })} onTranscribe={vi.fn()} />)
     expect(await screen.findByText('Only noise in the audio')).toBeInTheDocument()
     expect(screen.getByText(/4 seconds of sound in 13 minutes, none of it longer than a second\./)).toBeInTheDocument()
-    expect(screen.getByText(/choose Clear rating in its row menu, then re-run transcription/)).toBeInTheDocument()
+    expect(screen.getByText(/choose Clear rating in its row menu, then pick a method from the arrow next to Transcribe/)).toBeInTheDocument()
     expect(screen.queryByText('No intelligible speech detected')).not.toBeInTheDocument()
   })
 

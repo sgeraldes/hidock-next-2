@@ -2036,7 +2036,7 @@ export function SourceReader({
                     <p className="mt-2 text-sm text-muted-foreground">
                       {tooShortSkip.seconds} {tooShortSkip.seconds === 1 ? 'second' : 'seconds'} of audio.
                       Recordings under {tooShortSkip.minimumSeconds} seconds are skipped.
-                      To transcribe it anyway, choose Clear rating in its row menu, then re-run transcription.
+                      To transcribe it anyway, choose Clear rating in its row menu, then pick a method from the arrow next to Transcribe.
                       {/* A skipped clip is rated garbage, and the main process keeps
                           garbage-rated audio away from every provider even on an
                           explicit re-run. Clearing the rating is a user rating,
@@ -2048,7 +2048,7 @@ export function SourceReader({
                     <p className="font-medium text-foreground">{audioSkip.title}</p>
                     <p className="mt-2 text-sm text-muted-foreground">
                       {audioSkip.detail} Transcription, summary and the other AI steps were skipped.
-                      To transcribe it anyway, choose Clear rating in its row menu, then re-run transcription.
+                      To transcribe it anyway, choose Clear rating in its row menu, then pick a method from the arrow next to Transcribe.
                     </p>
                   </>
                 ) : (
