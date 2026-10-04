@@ -37,6 +37,24 @@ function resolveWorker(configured) {
   return join(here, '..', '..', 'electron', 'resources', 'speaker-linking', 'worker.py')
 }
 
+/**
+ * The ffmpeg the worker decodes with. The installer ships one next to the
+ * host because a GPU machine bought for games has no reason to have one on
+ * PATH, and without it every job failed and went back to the client's CPU.
+ * Empty means the worker searches PATH itself.
+ */
+export function resolveFfmpeg(
+  configured,
+  installDir = join(here, '..'),
+  env = process.env,
+  exists = existsSync
+) {
+  if (configured) return configured
+  const bundled = join(installDir, 'ffmpeg.exe')
+  if (exists(bundled)) return bundled
+  return env.FFMPEG_PATH || ''
+}
+
 export async function start(options = {}) {
   const dirs = paths(options.root)
   for (const dir of [dirs.root, dirs.models, dirs.runtime, dirs.logs]) {
@@ -51,6 +69,7 @@ export async function start(options = {}) {
   }
   const pythonPath = resolvePython(config.pythonPath, dirs)
   const workerPath = resolveWorker(config.workerPath)
+  const ffmpegPath = resolveFfmpeg(config.ffmpegPath)
   const gpu = await detectGpu()
 
   const state = new HostState({
@@ -88,7 +107,7 @@ export async function start(options = {}) {
       cpuPercent: config.cpuPercent,
       timeoutMs: config.timeoutMs,
       hfToken: config.hfToken || process.env.HF_TOKEN,
-      ffmpegPath: config.ffmpegPath || process.env.FFMPEG_PATH,
+      ffmpegPath,
     }),
   })
 

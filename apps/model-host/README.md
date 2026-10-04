@@ -26,7 +26,11 @@ npm --prefix apps/model-host run build:installer
 ```
 
 That writes `apps/model-host/build/HiDock-Model-Host-<version>-Setup.exe`, about
-26 MB. It is **not code-signed**, so SmartScreen warns on first run.
+48 MB: the host, a copy of Node, the client's `worker.py`, and the client's
+ffmpeg (`ffmpeg-static`). The worker decodes every recording through ffmpeg,
+WAV included, and a GPU machine bought for games has none on PATH. In a git
+worktree without its own `node_modules`, point the build at one with
+`FFMPEG_PATH`. It is **not code-signed**, so SmartScreen warns on first run.
 
 Copy it to the GPU machine and run it. Installation is per-user, needs no
 administrator, installs no service, and touches no system Python, PATH, CUDA
@@ -37,11 +41,18 @@ Setup runs after install, or later from the Start Menu. It:
 1. reports the actual GPU, driver, RAM and free disk, and says plainly when
    there is no NVIDIA driver instead of implying acceleration that is not there;
 2. puts a private Python 3.11 under `%LOCALAPPDATA%\HiDock Model Host\runtime`;
-3. installs the CUDA build of torch (about 2.5 GB) and pyannote into it;
+3. installs the CUDA 12.6 build of torch (about 2.5 GB) and pyannote into it, at
+   the versions in `installer/constraints.txt`, which is a freeze of the
+   client's working venv. Without the pins, pyannote 4 asks for a newer torch
+   than the CUDA index step installed and pip replaces it with PyPI's CPU build.
+   Regenerate the file when the client's venv changes:
+   `uv pip freeze --python <venv python>`, minus the `+cuNNN` tags;
 4. asks for a Hugging Face token, because the pyannote weights need one and
    their licence is accepted by the person, not by the installer;
-5. diarizes a synthetic two-tone clip and reports the model, the device and the
-   turns it found. A green light that never ran the model is not a result.
+5. diarizes a synthetic two-tone clip and reports the model and the device.
+   Tones are not speech, so zero turns is normal; `Device: cuda` is the line
+   that matters. The worker's diagnostics go to `logs\setup-validation.log`.
+   A green light that never ran the model is not a result.
 
 ## Run it
 
@@ -49,6 +60,10 @@ Start Menu → **HiDock Model Host**. It opens `http://localhost:8765/` and star
 **stopped**: installing something is not permission to hold a GPU.
 
 On that page: **Start**, **Pause**, **Stop**, and **Show a pairing code**.
+
+The first time the host listens, Windows Defender Firewall asks whether
+`node.exe` may accept connections. Allow it on **private** networks, or the
+client on the other machine never reaches it.
 
 ## Pair the client
 
@@ -144,4 +159,5 @@ npm --prefix apps/model-host test
 
 Unit tests drive the handler directly; `tests/smoke.test.mjs` starts the real
 server on a real socket, because a fake request cannot catch a listener that
-never binds.
+never binds; `tests/installer.test.mjs` checks the installer payload. CI runs
+them on every pull request.

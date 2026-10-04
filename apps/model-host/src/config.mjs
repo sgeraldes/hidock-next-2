@@ -16,6 +16,15 @@ const execFileAsync = promisify(execFile)
 
 export const DEFAULT_PORT = 8765
 
+/**
+ * Parse a JSON file that setup.ps1 may have written. Windows PowerShell 5.1's
+ * `Set-Content -Encoding utf8` starts the file with a byte-order mark, which
+ * JSON.parse rejects; the host then started unvalidated and without its token.
+ */
+function readJson(file) {
+  return JSON.parse(readFileSync(file, 'utf8').replace(/^﻿/, ''))
+}
+
 export function hostRoot() {
   if (process.env.HIDOCK_HOST_ROOT) return process.env.HIDOCK_HOST_ROOT
   const base =
@@ -68,7 +77,7 @@ export const DEFAULTS = {
 export function loadSecrets(file = join(hostRoot(), 'secrets.json')) {
   if (!existsSync(file)) return { hfToken: '' }
   try {
-    const parsed = JSON.parse(readFileSync(file, 'utf8'))
+    const parsed = readJson(file)
     return { hfToken: typeof parsed.hfToken === 'string' ? parsed.hfToken : '' }
   } catch {
     console.warn('[host] secrets.json could not be read')
@@ -79,7 +88,7 @@ export function loadSecrets(file = join(hostRoot(), 'secrets.json')) {
 export function loadConfig(file = paths().config) {
   if (!existsSync(file)) return { ...DEFAULTS }
   try {
-    return { ...DEFAULTS, ...JSON.parse(readFileSync(file, 'utf8')) }
+    return { ...DEFAULTS, ...readJson(file) }
   } catch {
     // A corrupt config must not stop the host from starting; it starts on the
     // defaults and says so in the log.
@@ -96,7 +105,7 @@ export function saveTokens(tokens, file = paths().tokens) {
 export function loadTokens(file = paths().tokens) {
   if (!existsSync(file)) return { tokens: [] }
   try {
-    const parsed = JSON.parse(readFileSync(file, 'utf8'))
+    const parsed = readJson(file)
     return { tokens: Array.isArray(parsed.tokens) ? parsed.tokens : [] }
   } catch {
     return { tokens: [] }
