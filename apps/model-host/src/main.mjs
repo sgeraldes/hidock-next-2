@@ -79,6 +79,7 @@ export async function start(options = {}) {
       // Pause and Stop have to mean something to a job already running.
       state.activeJob?.abort()
     },
+    onChange: () => syncProbe(),
   })
   const pairing = new PairingStore({
     persisted: loadTokens(dirs.tokens),
@@ -87,6 +88,27 @@ export async function start(options = {}) {
 
   let gameSettings = normalizeGameMode(config.gameMode)
   const watcher = new GameWatcher({ settings: () => gameSettings })
+
+  // Game mode looks only on Windows, where the probe runs, and only while a
+  // look can change something: the host is working, or a game paused it. A
+  // host that is stopped or paused by hand costs the machine nothing. Tests
+  // that start the real server turn it off; the probe has its own tests.
+  const watchGames = options.watchGames !== false && process.platform === 'win32'
+  let probe = null
+  let closed = false
+  const look = createGameLook({ state, watcher, settings: () => gameSettings, gpu, log: console.log })
+  function syncProbe() {
+    if (!watchGames || closed) return
+    const needed = state.state === READY || state.pauseInfo()?.by === 'game'
+    if (needed && !probe) {
+      probe = startProbe({ onSnapshot: look, log: console.log })
+      console.log('[game mode] watching for games')
+    } else if (!needed && probe) {
+      probe.stop()
+      probe = null
+      console.log('[game mode] not watching while the host is stopped or paused by hand')
+    }
+  }
   const gameMode = {
     settings: () => gameSettings,
     save: async (raw) => {
@@ -135,18 +157,13 @@ export async function start(options = {}) {
   if (!gpu) {
     console.log('[host] no NVIDIA driver answered; work would run on the CPU')
   }
+  server.on('close', () => {
+    closed = true
+    probe?.stop()
+    probe = null
+  })
   if (options.startReady) await state.apply('start')
-
-  // Game mode watches only on Windows, where the probe runs. Tests that start
-  // the real server turn it off; the probe has its own tests.
-  let probe = null
-  if (options.watchGames !== false && process.platform === 'win32') {
-    const look = createGameLook({ state, watcher, settings: () => gameSettings, gpu, log: console.log })
-    probe = startProbe({ onSnapshot: look, log: console.log })
-    console.log('[game mode] watching for games')
-  }
-  server.on('close', () => probe?.stop())
-  return { server, state, pairing, config, port: address.port, watcher }
+  return { server, state, pairing, config, port: address.port, watcher, watching: () => probe !== null }
 }
 
 /**

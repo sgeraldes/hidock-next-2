@@ -46,6 +46,20 @@ describe('pause and resume from one control', () => {
   })
 })
 
+describe('telling the host what changed', () => {
+  it('calls onChange after every change of state, and only then', async () => {
+    const seen = []
+    const state = new HostState({ onChange: (s) => seen.push(`${s.state}:${s.pauseInfo()?.by ?? '-'}`) })
+    await state.apply('start')
+    await state.gamePause('x')
+    await state.gamePause('x again')
+    state.gameResume()
+    await state.apply('pause')
+    await state.apply('stop')
+    expect(seen).toEqual(['ready:-', 'paused:game', 'ready:-', 'paused:you', 'stopped:-'])
+  })
+})
+
 describe('pauses caused by a game', () => {
   it('pause a working host, cancel its job and say which game', async () => {
     const asked = []

@@ -1,10 +1,20 @@
 # What is running on this machine, for game mode. One JSON line per look:
 #   {"notificationState": <SHQueryUserNotificationState>, "processes": [{"name","path"}]}
+# or, when the programs are the same as at the last look,
+#   {"notificationState": <state>, "unchanged": true}
 # notificationState 2 means a full-screen app has the screen, 3 a Direct3D
-# full-screen one. Paths are read once per process and cached.
+# full-screen one.
 #
-# It runs for as long as the host does and exits on its own when the host's
-# process is gone, so a host killed hard does not leave it looping.
+# It runs while someone may be playing, so a look is one call into C# compiled
+# once at start. Measured on a desktop with 700 processes: the PowerShell
+# pipeline cost 0.9 s of CPU per 10 s, Process.GetProcesses() 55 ms per call
+# and Get-Process -Id 98 ms (both read performance counters for every
+# process), Process.MainModule 14 s per pass. A Toolhelp snapshot gives the PID
+# and executable name for a fraction of that, and paths are read once per
+# process with QueryFullProcessImageName. The script runs below normal priority.
+#
+# It exits on its own when the host's process is gone, so a host killed hard
+# does not leave it looping.
 
 param(
   [int] $IntervalMs = 2000,
@@ -14,55 +24,137 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# QueryFullProcessImageName needs only limited query rights and costs one call
-# per process. Process.MainModule enumerates every loaded module and took 14 s
-# for one pass over a desktop's processes.
-Add-Type -Namespace HiDockModelHost -Name Screen -MemberDefinition @'
-[DllImport("shell32.dll")]
-public static extern int SHQueryUserNotificationState(out int state);
+Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
 
-[DllImport("kernel32.dll", SetLastError = true)]
-static extern System.IntPtr OpenProcess(int access, bool inherit, int pid);
+public static class HiDockModelHostProbe {
+  [DllImport("shell32.dll")]
+  static extern int SHQueryUserNotificationState(out int state);
 
-[DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-static extern bool QueryFullProcessImageName(System.IntPtr process, int flags, System.Text.StringBuilder name, ref int size);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint pid);
 
-[DllImport("kernel32.dll")]
-static extern bool CloseHandle(System.IntPtr handle);
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  struct PROCESSENTRY32W {
+    public uint dwSize;
+    public uint cntUsage;
+    public uint th32ProcessID;
+    public IntPtr th32DefaultHeapID;
+    public uint th32ModuleID;
+    public uint cntThreads;
+    public uint th32ParentProcessID;
+    public int pcPriClassBase;
+    public uint dwFlags;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+    public string szExeFile;
+  }
 
-public static string PathOf(int pid) {
-  System.IntPtr handle = OpenProcess(0x1000, false, pid);
-  if (handle == System.IntPtr.Zero) return "";
-  try {
-    var name = new System.Text.StringBuilder(1024);
-    int size = name.Capacity;
-    return QueryFullProcessImageName(handle, 0, name, ref size) ? name.ToString(0, size) : "";
-  } finally {
-    CloseHandle(handle);
+  [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+  static extern bool Process32FirstW(IntPtr snapshot, ref PROCESSENTRY32W entry);
+
+  [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+  static extern bool Process32NextW(IntPtr snapshot, ref PROCESSENTRY32W entry);
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern IntPtr OpenProcess(int access, bool inherit, int pid);
+
+  [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+  static extern bool QueryFullProcessImageName(IntPtr process, int flags, StringBuilder name, ref int size);
+
+  [DllImport("kernel32.dll")]
+  static extern bool CloseHandle(IntPtr handle);
+
+  static readonly IntPtr Invalid = new IntPtr(-1);
+  static readonly Dictionary<string, string> Paths = new Dictionary<string, string>();
+  static string lastKeys = "";
+
+  static string PathOf(uint pid) {
+    IntPtr handle = OpenProcess(0x1000, false, (int)pid);
+    if (handle == IntPtr.Zero) return "";
+    try {
+      var name = new StringBuilder(1024);
+      int size = name.Capacity;
+      return QueryFullProcessImageName(handle, 0, name, ref size) ? name.ToString(0, size) : "";
+    } finally {
+      CloseHandle(handle);
+    }
+  }
+
+  static void Str(StringBuilder sb, string value) {
+    sb.Append('"');
+    foreach (char c in value) {
+      if (c == '"' || c == '\\') { sb.Append('\\').Append(c); }
+      else if (c < ' ') { sb.Append("\\u").Append(((int)c).ToString("x4")); }
+      else { sb.Append(c); }
+    }
+    sb.Append('"');
+  }
+
+  /// <summary>One look, as a JSON line; null when the parent process is gone.</summary>
+  public static string Look(int parentPid) {
+    int state = 0;
+    try { SHQueryUserNotificationState(out state); } catch { state = 0; }
+
+    var entries = new List<KeyValuePair<uint, string>>();
+    IntPtr snapshot = CreateToolhelp32Snapshot(0x2, 0);
+    if (snapshot == Invalid) return "{\"notificationState\":" + state + ",\"unchanged\":true}";
+    try {
+      var entry = new PROCESSENTRY32W();
+      entry.dwSize = (uint)Marshal.SizeOf(typeof(PROCESSENTRY32W));
+      if (Process32FirstW(snapshot, ref entry)) {
+        do { entries.Add(new KeyValuePair<uint, string>(entry.th32ProcessID, entry.szExeFile)); }
+        while (Process32NextW(snapshot, ref entry));
+      }
+    } finally {
+      CloseHandle(snapshot);
+    }
+
+    var keys = new List<string>(entries.Count);
+    bool parentAlive = parentPid <= 0;
+    foreach (var e in entries) {
+      keys.Add(e.Key + ":" + e.Value);
+      if (e.Key == (uint)parentPid) parentAlive = true;
+    }
+    if (!parentAlive) return null;
+    keys.Sort(StringComparer.Ordinal);
+    string joined = String.Join("|", keys);
+    if (joined == lastKeys) {
+      return "{\"notificationState\":" + state + ",\"unchanged\":true}";
+    }
+    lastKeys = joined;
+
+    var seen = new HashSet<string>();
+    var sb = new StringBuilder("{\"notificationState\":").Append(state).Append(",\"processes\":[");
+    bool first = true;
+    foreach (var e in entries) {
+      string key = e.Key + ":" + e.Value;
+      seen.Add(key);
+      string path;
+      // Protected processes refuse; their name is still reported.
+      if (!Paths.TryGetValue(key, out path)) { path = PathOf(e.Key); Paths[key] = path; }
+      if (!first) sb.Append(',');
+      first = false;
+      sb.Append("{\"name\":");
+      Str(sb, e.Value);
+      sb.Append(",\"path\":");
+      Str(sb, path);
+      sb.Append('}');
+    }
+    sb.Append("]}");
+    foreach (string key in new List<string>(Paths.Keys)) { if (!seen.Contains(key)) Paths.Remove(key); }
+    return sb.ToString();
   }
 }
 '@
 
-$paths = @{}
+try { [System.Diagnostics.Process]::GetCurrentProcess().PriorityClass = 'BelowNormal' } catch { }
+
 while ($true) {
-  if ($ParentPid -gt 0 -and -not (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue)) { exit 0 }
-
-  $state = 0
-  try { [void][HiDockModelHost.Screen]::SHQueryUserNotificationState([ref]$state) } catch { $state = 0 }
-
-  $seen = @{}
-  $list = foreach ($p in [System.Diagnostics.Process]::GetProcesses()) {
-    $key = "$($p.Id):$($p.ProcessName)"
-    $seen[$key] = $true
-    if (-not $paths.ContainsKey($key)) {
-      # Protected processes refuse; their name is still reported.
-      $paths[$key] = [HiDockModelHost.Screen]::PathOf($p.Id)
-    }
-    [pscustomobject]@{ name = "$($p.ProcessName).exe"; path = $paths[$key] }
-  }
-  foreach ($k in @($paths.Keys)) { if (-not $seen.ContainsKey($k)) { $paths.Remove($k) } }
-
-  $line = [pscustomobject]@{ notificationState = $state; processes = @($list) } | ConvertTo-Json -Compress -Depth 3
+  $line = [HiDockModelHostProbe]::Look($ParentPid)
+  if ($null -eq $line) { exit 0 }
   [Console]::Out.WriteLine($line)
   [Console]::Out.Flush()
   if ($Once) { break }

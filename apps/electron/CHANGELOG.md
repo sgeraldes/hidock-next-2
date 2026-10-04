@@ -80,6 +80,14 @@ Outlook, and every speaker the app names now keeps a note of how it was named.
   installs the exact package versions this machine uses, with torch built for CUDA 12.6. The
   0.1.0 installer would have put a CPU-only torch on the RTX machine and then failed every job, and
   the host could not read the settings file its own setup wrote, so it never offered to work.
+- **The Model Host steps aside for games.** Version 0.2.0 pauses by itself within a couple of
+  seconds when a game starts on the gamestation (a program from a Steam, Epic, Xbox, GOG, Riot, EA
+  or Ubisoft games folder, a full-screen app, another program computing on the GPU, or one on its
+  always-pause list) and works again five minutes after the game closes. The recording it was on
+  goes back to this computer instead of failing. A "pause or resume" shortcut on its desktop does
+  the same by hand, and a pause made by hand waits for a hand to resume it. Settings > Transcription
+  > Model host and the voice evidence panel say in words what the host is doing: working, paused
+  for a game (which one, and until when), paused by hand, stopped, or off.
 
 ## 2026-10-02 | Columns that stay put, and meetings that follow the calendar
 

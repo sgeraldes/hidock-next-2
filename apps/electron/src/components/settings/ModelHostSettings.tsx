@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useConfigStore } from '@/store/domain/useConfigStore'
 import { toast } from '@/components/ui/toaster'
+import { ModelHostStatusLine } from './ModelHostStatusLine'
 
 type Health = NonNullable<
   Awaited<ReturnType<NonNullable<typeof window.electronAPI>['modelHost']['check']>>['health']
@@ -81,6 +82,7 @@ export function ModelHostSettings(): React.ReactElement {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        {savedUrl && <ModelHostStatusLine />}
         <div className="space-y-2">
           <label className="text-sm font-medium" htmlFor="model-host-url">
             Host address

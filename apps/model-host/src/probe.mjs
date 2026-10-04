@@ -22,6 +22,11 @@ export function parseProbeLine(line) {
   if (!text.startsWith('{')) return null
   try {
     const parsed = JSON.parse(text)
+    // Most looks find the same programs as the last one; the script then
+    // sends only the screen state and the caller keeps the last list.
+    if (parsed.unchanged === true) {
+      return { notificationState: Number(parsed.notificationState) || 0, processes: null }
+    }
     if (!Array.isArray(parsed.processes)) return null
     return {
       notificationState: Number(parsed.notificationState) || 0,
@@ -77,6 +82,7 @@ export function startProbe(options) {
 
   const launch = () => {
     let buffer = ''
+    let lastProcesses = []
     const current = spawnFn(
       'powershell.exe',
       [
@@ -96,7 +102,10 @@ export function startProbe(options) {
       while ((newline = buffer.indexOf('\n')) >= 0) {
         const snapshot = parseProbeLine(buffer.slice(0, newline))
         buffer = buffer.slice(newline + 1)
-        if (snapshot) options.onSnapshot(snapshot)
+        if (!snapshot) continue
+        if (snapshot.processes === null) snapshot.processes = lastProcesses
+        else lastProcesses = snapshot.processes
+        options.onSnapshot(snapshot)
       }
     })
     current.stderr.on('data', (chunk) => log(`[game mode] probe: ${String(chunk).trim().slice(0, 300)}`))

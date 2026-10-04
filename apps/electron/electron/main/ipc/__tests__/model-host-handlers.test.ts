@@ -60,6 +60,49 @@ describe('Model Host IPC handlers', () => {
     )
   })
 
+  it('reports the saved host, whether speaker work goes there, and what it said', async () => {
+    vi.mocked(getConfig).mockReturnValue({
+      transcription: {
+        modelHostUrl: 'gamestation:8765',
+        modelHostToken: 'saved-token',
+        speakerLinkingEnabled: true,
+        speakerEngine: 'auto',
+      },
+    } as ReturnType<typeof getConfig>)
+    const health = { version: '0.2.0', state: 'paused', capabilities: ['diarize'], pause: { by: 'game' } }
+    vi.mocked(checkModelHost).mockResolvedValue(health as never)
+
+    await expect(handlerFor(handlers, 'model-host:status')({})).resolves.toEqual({
+      success: true,
+      status: { configured: true, paired: true, usedForSpeakers: true, address: 'gamestation:8765', health },
+    })
+    // The status line polls; it shares the diarization path's short cache.
+    expect(checkModelHost).toHaveBeenCalledWith({ url: 'gamestation:8765', token: 'saved-token' })
+  })
+
+  it('says a host is paired but unused when the speaker engine runs here', async () => {
+    vi.mocked(getConfig).mockReturnValue({
+      transcription: {
+        modelHostUrl: 'gamestation:8765',
+        modelHostToken: 'saved-token',
+        speakerLinkingEnabled: true,
+        speakerEngine: 'onnx-local',
+      },
+    } as ReturnType<typeof getConfig>)
+    vi.mocked(checkModelHost).mockResolvedValue(null)
+
+    const result = (await handlerFor(handlers, 'model-host:status')({})) as { status: { usedForSpeakers: boolean } }
+    expect(result.status.usedForSpeakers).toBe(false)
+  })
+
+  it('does not call anything when no host is saved', async () => {
+    await expect(handlerFor(handlers, 'model-host:status')({})).resolves.toEqual({
+      success: true,
+      status: { configured: false, paired: true, usedForSpeakers: false, address: '', health: null },
+    })
+    expect(checkModelHost).not.toHaveBeenCalled()
+  })
+
   it('clears the health cache when Settings forgets a host', async () => {
     await expect(handlerFor(handlers, 'model-host:forget')({})).resolves.toEqual({ success: true })
 

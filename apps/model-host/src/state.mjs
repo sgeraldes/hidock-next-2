@@ -37,6 +37,8 @@ export class HostState {
     this.state = options.initial || STOPPED
     this.onLeaveReady = options.onLeaveReady || (async () => {})
     this.now = options.now || Date.now
+    /** Told after every change of state; main.mjs starts and stops game mode's probe on it. */
+    this.onChange = options.onChange || (() => {})
     /** The one heavy job, or null. Small control calls never take this. */
     this.activeJob = null
     /** Why the host is not accepting work, in the user's words. */
@@ -107,6 +109,7 @@ export class HostState {
     this.state = READY
     this.pause = null
     this.reason = ''
+    this.onChange(this)
   }
 
   async #enter(to, pause) {
@@ -115,6 +118,7 @@ export class HostState {
     this.pause = pause ? { ...pause, since: this.now() } : null
     this.reason =
       to === READY ? '' : to === PAUSED ? REASONS[pause.by] : 'The host is stopped.'
+    this.onChange(this)
     if (previous === READY && to !== READY) {
       await this.onLeaveReady()
     }

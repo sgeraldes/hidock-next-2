@@ -17,6 +17,13 @@ describe('probe output', () => {
     ])
   })
 
+  it('reads a look where the programs did not change', () => {
+    expect(parseProbeLine('{"notificationState":2,"unchanged":true}')).toEqual({
+      notificationState: 2,
+      processes: null,
+    })
+  })
+
   it('ignores a line that is not a snapshot instead of pausing on it', () => {
     expect(parseProbeLine('')).toBeNull()
     expect(parseProbeLine('WARNING: something')).toBeNull()
@@ -69,6 +76,16 @@ describe('the probe process', () => {
     probe.stop()
   })
 
+  it('fills a look without a program list with the last list it had', () => {
+    const { spawnFn, children } = fakeSpawn()
+    const seen = []
+    const probe = startProbe({ onSnapshot: (s) => seen.push(s), spawnFn })
+    children[0].stdout.emit('data', '{"notificationState":5,"processes":[{"name":"a.exe","path":"C:\\\\a.exe"}]}\n')
+    children[0].stdout.emit('data', '{"notificationState":3,"unchanged":true}\n')
+    expect(seen[1]).toEqual({ notificationState: 3, processes: [{ name: 'a.exe', path: 'C:\\a.exe' }] })
+    probe.stop()
+  })
+
   it('tells the script whose child it is, so it exits with the host', () => {
     const { spawnFn, children } = fakeSpawn()
     const probe = startProbe({ onSnapshot: () => {}, spawnFn })
@@ -87,6 +104,31 @@ describe('the probe process', () => {
     expect(children[1].killed).toBe(true)
     await new Promise((r) => setTimeout(r, 20))
     expect(children.length).toBe(2)
+  })
+})
+
+describe.runIf(process.platform === 'win32')('the host and its probe', () => {
+  it('looks only while it is working or paused for a game', async () => {
+    const { start } = await import('../src/main.mjs')
+    const { mkdtempSync, rmSync } = await import('fs')
+    const { tmpdir } = await import('os')
+    const root = mkdtempSync(join(tmpdir(), 'hidock-probe-host-'))
+    const host = await start({ root, overrides: { port: 0 } })
+    try {
+      expect(host.watching()).toBe(false)
+      await host.state.apply('start')
+      expect(host.watching()).toBe(true)
+      await host.state.apply('pause')
+      expect(host.watching()).toBe(false)
+      await host.state.apply('toggle')
+      await host.state.gamePause('cs2.exe is running')
+      expect(host.watching()).toBe(true)
+      await host.state.apply('stop')
+      expect(host.watching()).toBe(false)
+    } finally {
+      await new Promise((r) => host.server.close(r))
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })
 
