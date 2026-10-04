@@ -395,16 +395,24 @@ export function stripLyingWavHeader(audio: Buffer): { audio: Buffer; stripped: b
       let position = 0
       const first = parseMp3FrameHeader(payload, 0)
       if (!first) return unchanged
-      for (let frame = 0; frame < 3; frame++) {
+      let frames = 0
+      while (frames < 16 && position + 4 <= payload.length) {
         const header = parseMp3FrameHeader(payload, position)
+        if (frames >= 3 && payload.length - position < (header?.frameLen ?? first.frameLen)) break
         // Version, layer, sample rate and channel mode must agree. Bitrate and
         // padding may vary in a valid MPEG stream.
         if (!header || position + header.frameLen > payload.length ||
             (payload[position + 1] & 0x1e) !== (payload[1] & 0x1e) ||
             (payload[position + 2] & 0x0c) !== (payload[2] & 0x0c) ||
             (payload[position + 3] & 0xc0) !== (payload[3] & 0xc0)) return unchanged
+        const body = payload.subarray(position + 4, position + header.frameLen)
+        // Zero-filled frame bodies occur in device streams. Other constant
+        // bodies are insufficient evidence that PCM bytes are MPEG audio.
+        if (body.length === 0 || (body[0] !== 0 && body.every((byte) => byte === body[0]))) return unchanged
         position += header.frameLen
+        frames++
       }
+      if (frames < 3 || (frames < 16 && payload.length - position >= first.frameLen)) return unchanged
       return { audio: payload, stripped: true, headerBytes: start }
     }
     offset = start + size + (size % 2)
@@ -1611,14 +1619,28 @@ Calendar and meeting context are spelling hints only; never invent speech from t
     audio = normalized.audio
     if (normalized.stripped) {
       let durationSeconds = 0
-      for (let position = 0; position + 4 <= audio.length;) {
+      let position = 0
+      let complete = true
+      while (position + 4 <= audio.length) {
         const header = parseMp3FrameHeader(audio, position)
-        if (!header || position + header.frameLen > audio.length) break
+        if (!header) {
+          complete = false
+          let next = position + 1
+          const limit = Math.min(audio.length - 4, position + 4096)
+          while (next <= limit && !parseMp3FrameHeader(audio, next)) next++
+          if (next > limit) break
+          position = next
+          continue
+        }
+        if (position + header.frameLen > audio.length) break
         durationSeconds += header.frameDurationSec
         position += header.frameLen
       }
       // Caller metadata may also have used the false PCM byte rate.
-      options = { ...options, durationSeconds }
+      complete = complete && position === audio.length
+      options = { ...options, durationSeconds: complete
+        ? durationSeconds
+        : Math.max(options.durationSeconds ?? 0, durationSeconds) }
     }
     if (!this.apiKey) {
       throw new Error('Gemini API key not configured')

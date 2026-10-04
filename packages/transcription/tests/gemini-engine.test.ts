@@ -130,6 +130,36 @@ describe('lying-wav', () => {
     expect(stripLyingWavHeader(input).audio).toBe(input)
   })
 
+  it('leaves PCM containing three fake MPEG headers untouched', () => {
+    const input = buildWav(32000, 32000)
+    input.fill(0, 44)
+    for (const offset of [0, 288, 576]) Buffer.from([0xff, 0xf3, 0x88, 0xc0]).copy(input, 44 + offset)
+    expect(stripLyingWavHeader(input).audio).toBe(input)
+    expect(stripLyingWavHeader(input).stripped).toBe(false)
+  })
+
+  it('accepts short clean streams and zero padding but rejects constant nonzero bodies', () => {
+    for (const frames of [3, 15, 16]) {
+      const input = lyingWav(frames * MP3_FRAME_DUR)
+      expect(stripLyingWavHeader(input).stripped).toBe(true)
+      input.fill(1, 48, 44 + 288)
+      expect(stripLyingWavHeader(input).stripped).toBe(false)
+    }
+  })
+
+  it('preserves full caller duration after a damaged sync and resynchronizes past it', async () => {
+    const input = lyingWav(1800)
+    input[44 + 40000 * 288] = 0
+    const engine = new GeminiEngine({ apiKey: 'x' })
+    const rolling = vi.spyOn(engine as any, 'transcribeLongRecordingWithInteractions').mockResolvedValue([])
+    await collect(engine.transcribe(input, { source: 'mic', filePath: 'recording.wav', durationSeconds: 1800 }))
+    expect(rolling).toHaveBeenCalled()
+    expect(rolling.mock.calls[0]).toContain(1800)
+    rolling.mockClear()
+    await collect(engine.transcribe(input, { source: 'mic', filePath: 'recording.wav', durationSeconds: 450 }))
+    expect(rolling.mock.calls[0]).toContainEqual(expect.closeTo(1800 - MP3_FRAME_DUR, 5))
+  })
+
   it('garbage-after-header-untouched', () => {
     const input = buildWav(2000, 32000)
     expect(stripLyingWavHeader(input).audio).toBe(input)
