@@ -43,7 +43,7 @@
  *   4. Full Schema       — re-run all statements to apply indexes/constraints
  */
 
-import { existsSync, linkSync, readdirSync, renameSync, rmSync, statSync } from 'fs'
+import { existsSync, linkSync, readdirSync, renameSync, rmSync, statSync, statfsSync } from 'fs'
 import { dirname, basename, join } from 'path'
 import { randomUUID } from 'crypto'
 
@@ -674,6 +674,15 @@ export class DatabaseEngine {
       const dir = dirname(this.dbPath)
       const base = basename(this.dbPath)
       const prefix = `${base}.bak-`
+      if (failClosed) {
+        // Only this exact engine-owned naming convention is eligible. Remove
+        // interrupted copies before the free-space check so retries can recover.
+        for (const file of readdirSync(dir)) {
+          if (file.startsWith(prefix) && /^pre-v\d+\.partial$/.test(file.slice(prefix.length))) {
+            rmSync(join(dir, file), { force: true })
+          }
+        }
+      }
       const day = new Date().toISOString().slice(0, 10)
       const version = failClosed ? this.readSchemaVersion() : 0
       const bak = join(dir, failClosed
@@ -700,11 +709,19 @@ export class DatabaseEngine {
         // Node event loop and includes committed WAL pages. A raw copyFileSync
         // of the 2.79 GB main file blocked Electron startup for ~153 seconds and
         // could omit WAL state.
-        const partial = `${bak}.partial`
-        rmSync(partial, { force: true })
+        const partial = failClosed ? join(dir, `${prefix}pre-v${this.config.schemaVersion}.partial`) : `${bak}.partial`
+        if (!failClosed) rmSync(partial, { force: true })
         const source = new this.config.betterSqlite3(this.dbPath, { readonly: true, fileMustExist: true })
         try {
           const pageSize = Number(source.pragma('page_size', { simple: true })) || 4096
+          if (failClosed) {
+            const needed = Math.max(statSync(this.dbPath).size, Number(source.pragma('page_count', { simple: true })) * pageSize)
+            const space = statfsSync(dir, { bigint: true })
+            const available = space.bavail * space.bsize
+            if (available < BigInt(needed)) {
+              throw new Error(`Insufficient free space for pre-migration backup: need ${needed} bytes, available ${available} bytes`)
+            }
+          }
           let lastReport = 0
           await source.backup(partial, {
             progress: ({ totalPages, remainingPages }) => {
@@ -747,19 +764,10 @@ export class DatabaseEngine {
         console.log(`[Database] Migration v${version} -> v${this.config.schemaVersion} restore point: ${bak}`)
       }
       const directoryEntries = readdirSync(dir)
-      for (const stalePartial of directoryEntries.filter(
-        (file) => file.startsWith(prefix) && file.endsWith('.partial')
-      )) {
-        try {
-          rmSync(join(dir, stalePartial), { force: true })
-        } catch {
-          /* best-effort partial cleanup */
-        }
-      }
       const existing = directoryEntries
         .filter((file) => file.startsWith(prefix) && /^\d{4}-\d{2}-\d{2}$/.test(file.slice(prefix.length)))
         .sort()
-      for (const stale of existing.slice(0, Math.max(0, existing.length - (cfg?.keep ?? 3)))) {
+      for (const stale of cfg && cfg.keep > 0 ? existing.slice(0, Math.max(0, existing.length - cfg.keep)) : []) {
         try {
           rmSync(join(dir, stale), { force: true })
         } catch {

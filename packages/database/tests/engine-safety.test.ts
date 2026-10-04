@@ -14,8 +14,11 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { copyFileSync, existsSync, rmSync, readdirSync, statSync, writeFileSync } from 'fs'
+import * as fs from 'fs'
 import Database from 'better-sqlite3'
 import { DatabaseEngine, MassDeleteError, parseDestructiveStatement } from '../src/index.js'
+
+vi.mock('fs', { spy: true })
 
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);
@@ -207,7 +210,7 @@ describe('rotating on-boot backup', () => {
     e2.closeDatabase()
 
     const baks = siblingFiles(path)
-      .filter((f) => f.includes('.bak-'))
+      .filter((f) => /\.bak-\d{4}-\d{2}-\d{2}$/.test(f))
       .map((f) => f.split(/[\\/]/).pop() as string)
       .sort()
     expect(baks).toHaveLength(2)
@@ -215,7 +218,7 @@ describe('rotating on-boot backup', () => {
     expect(baks.some((f) => f.endsWith('.bak-2020-01-01'))).toBe(false)
     expect(baks.some((f) => f.endsWith('.bak-2020-01-02'))).toBe(false)
     expect(baks.some((f) => f.endsWith('.bak-2020-01-03'))).toBe(true)
-    expect(siblingFiles(path).some((f) => f.endsWith('.partial'))).toBe(false)
+    expect(fs.readFileSync(`${path}.bak-2020-01-04.partial`, 'utf8')).toBe('interrupted')
   })
 
   it('returns from a schema-current boot before a deferred routine backup', async () => {
@@ -305,6 +308,64 @@ describe('rotating on-boot backup', () => {
       const e = v2Engine(path, () => [{ path: external, ...stateOf(path) }])
       try { await e.initialize({ onProgress: p => seen.push(p.phase) }) } finally { e.closeDatabase() }
       expect(seen).not.toContain('backup-reused')
+      expect(todays(path)).toHaveLength(1)
+    })
+
+    it('removes an interrupted owned partial before checking space and recovers without removing other files', async () => {
+      const path = await v1File('backup-interrupted')
+      const partial = `${path}.bak-pre-v2.partial`
+      const unrelated = `${path}.bak-pre-v2-user.partial`
+      const otherVersion = `${path}.bak-pre-v1.partial`
+      writeFileSync(unrelated, 'user file')
+      writeFileSync(otherVersion, 'interrupted older target')
+      const backup = vi.spyOn(Database.prototype, 'backup').mockImplementationOnce(async destination => {
+        writeFileSync(destination, 'interrupted copy')
+        throw new Error('interrupted')
+      })
+      const first = v2Engine(path)
+      try { await expect(first.initialize()).rejects.toThrow('interrupted') }
+      finally { first.closeDatabase(); backup.mockRestore() }
+      expect(existsSync(partial)).toBe(true)
+      const space = vi.spyOn(fs, 'statfsSync').mockImplementation(() => {
+        expect(existsSync(partial)).toBe(false)
+        expect(existsSync(otherVersion)).toBe(false)
+        return { bavail: 1000000n, bsize: 4096n } as ReturnType<typeof fs.statfsSync>
+      })
+      const second = v2Engine(path)
+      try { await second.initialize(); expect(space).toHaveBeenCalled() }
+      finally { second.closeDatabase(); space.mockRestore() }
+      expect(existsSync(partial)).toBe(false)
+      expect(fs.readFileSync(unrelated, 'utf8')).toBe('user file')
+      expect(todays(path)).toHaveLength(1)
+      const snapshot = new Database(todays(path)[0], { readonly: true })
+      try { expect(snapshot.pragma('quick_check', { simple: true })).toBe('ok') }
+      finally { snapshot.close() }
+    })
+
+    it('fails before copying or migrating when free space is smaller than the snapshot', async () => {
+      const path = await v1File('backup-no-space')
+      const space = vi.spyOn(fs, 'statfsSync').mockReturnValue({ bavail: 0n, bsize: 4096n } as ReturnType<typeof fs.statfsSync>)
+      const backup = vi.spyOn(Database.prototype, 'backup')
+      const migration = vi.fn()
+      const e = v2Engine(path, undefined, migration)
+      try {
+        await expect(e.initialize()).rejects.toThrow(`Insufficient free space for pre-migration backup: need ${statSync(path).size} bytes, available 0 bytes`)
+        expect(backup).not.toHaveBeenCalled()
+      }
+      finally { e.closeDatabase(); space.mockRestore(); backup.mockRestore() }
+      expect(migration).not.toHaveBeenCalled()
+    })
+
+    it('preserves all existing daily backups when routine backups are disabled', async () => {
+      const path = await v1File('backup-disabled-retention')
+      const dailies = ['2020-01-01', '2020-01-02', '2020-01-03'].map(day => `${path}.bak-${day}`)
+      for (const daily of dailies) copyFileSync(path, daily)
+      const e = new DatabaseEngine({
+        betterSqlite3: Database, dbPathProvider: () => path, schemaVersion: 2,
+        schema: SCHEMA, migrations: { 2: () => {} }, backupOnBoot: { keep: 0 },
+      })
+      try { await e.initialize() } finally { e.closeDatabase() }
+      for (const daily of dailies) expect(existsSync(daily)).toBe(true)
       expect(todays(path)).toHaveLength(1)
     })
 
