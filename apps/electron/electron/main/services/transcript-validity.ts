@@ -100,7 +100,7 @@ export interface ValidityInput {
   /** The owner accepted this transcript as it is. */
   accepted: boolean
   /** A sample of this transcript's audio, transcribed again and compared (transcript-sampler.ts). */
-  sample?: 'confirmed' | 'contradicted' | 'inconclusive' | null
+  sample?: 'confirmed' | 'contradicted' | 'inconclusive' | 'incomplete' | null
 }
 
 // Thresholds, measured on the owner's library on 4-oct-2026 (plan, "The deterministic checks").
@@ -178,9 +178,16 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
   if (input.integrityStatus === 'broken') {
     return result('invalid', [{ code: 'integrity', detail: 'The text does not fit this audio (integrity check).' }])
   }
-  // Doubts settle as doubtful, or as valid when a sample of the audio confirmed the text.
+  // Doubts settle as doubtful, or as valid when a sample of the audio confirmed
+  // the text. A confirmed transcript keeps its reasons: a compressed clock is
+  // still compressed, and the clock repair reads it.
   const settle = (reasons: ValidityReason[]): TranscriptValidity =>
-    reasons.length === 0 || input.sample === 'confirmed' ? result('valid', []) : result('doubtful', reasons)
+    reasons.length === 0 ? result('valid', []) : input.sample === 'confirmed' ? result('valid', reasons) : result('doubtful', reasons)
+  if (input.sample === 'incomplete') {
+    return result('incomplete', [
+      { code: 'speech_after_the_end', detail: 'Speech goes on after the transcript ends: a sample of the audio after it holds talk.' }
+    ])
+  }
   if (input.sample === 'contradicted') {
     return result('invalid', [
       { code: 'sample_contradicts', detail: 'A few minutes of the audio, transcribed again, tell a different conversation.' }

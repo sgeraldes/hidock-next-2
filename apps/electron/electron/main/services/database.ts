@@ -369,7 +369,7 @@ CREATE TABLE IF NOT EXISTS audio_profiles (
 CREATE TABLE IF NOT EXISTS transcript_samples (
     recording_id TEXT PRIMARY KEY,
     transcript_fingerprint TEXT NOT NULL,
-    verdict TEXT NOT NULL CHECK(verdict IN ('confirmed', 'contradicted', 'inconclusive')),
+    verdict TEXT NOT NULL CHECK(verdict IN ('confirmed', 'contradicted', 'inconclusive', 'incomplete')),
     windows_json TEXT NOT NULL,
     model TEXT,
     cost_usd REAL,
@@ -3429,7 +3429,7 @@ const MIGRATIONS: Record<number, () => void> = {
     getDatabase().run(`CREATE TABLE IF NOT EXISTS transcript_samples (
     recording_id TEXT PRIMARY KEY,
     transcript_fingerprint TEXT NOT NULL,
-    verdict TEXT NOT NULL CHECK(verdict IN ('confirmed', 'contradicted', 'inconclusive')),
+    verdict TEXT NOT NULL CHECK(verdict IN ('confirmed', 'contradicted', 'inconclusive', 'incomplete')),
     windows_json TEXT NOT NULL,
     model TEXT,
     cost_usd REAL,

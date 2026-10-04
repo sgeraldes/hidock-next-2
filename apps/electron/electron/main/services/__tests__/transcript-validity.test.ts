@@ -142,6 +142,15 @@ describe('assessTranscriptValidity', () => {
     expect(contradicted.status).toBe('invalid')
     expect(contradicted.reasons.map((r) => r.code)).toContain('sample_contradicts')
     expect(assessTranscriptValidity(base({ envelope: env, segments, sample: 'inconclusive' })).status).toBe('doubtful')
+    expect(assessTranscriptValidity(base({ envelope: env, segments, sample: 'incomplete' })).status).toBe('incomplete')
+  })
+
+  it('keeps the reasons of a transcript the sample confirmed: a compressed clock stays known', () => {
+    const env = envelope([[160, 2290]])
+    const segments = Array.from({ length: 100 }, (_, i) => ({ speaker: 'A', start: i * 9.34, end: i * 9.34 + 9, text: words(56, `-${i}`) }))
+    const v = assessTranscriptValidity(base({ envelope: env, segments, sample: 'confirmed' }))
+    expect(v.status).toBe('valid')
+    expect(v.reasons.map((r) => r.code)).toContain('clock_compressed')
   })
 
   it('never lets a sample override the audio, the integrity check, or a transcript that stops early', () => {

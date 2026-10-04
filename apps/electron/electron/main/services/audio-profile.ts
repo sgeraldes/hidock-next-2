@@ -18,6 +18,7 @@
  */
 
 import { spawn } from 'child_process'
+import { closeSync, fstatSync, openSync, readSync } from 'fs'
 import bundledFfmpeg from 'ffmpeg-static'
 import { minRecordingSeconds } from './quality-rules'
 
@@ -146,30 +147,47 @@ function isDeviceFrameAt(buf: Buffer, i: number): boolean {
   )
 }
 
+/** Bytes of one frame of the device's stream: 72 * 64000 / 16000, so it never needs padding. */
+const DEVICE_FRAME_BYTES = 288
+
 /**
- * The device's frames from startSec for `seconds`, as a plain MP3 stream (no
- * RIFF header), or null when the file is not the device's stream. Cut on frame
- * boundaries, so the slice plays and transcribes like any MP3 without ffmpeg,
+ * The device's frames from startSec for `seconds`, read straight from the
+ * file as a plain MP3 stream (no RIFF header), or null when the file is not
+ * the device's stream. Only the window's bytes are read (about 480 KB a
+ * minute) after a 64 KB look at the start to recognise the stream. Cut on
+ * frame boundaries, so the slice transcribes like any MP3 without ffmpeg,
  * which would read the older files' lying PCM header as noise.
  */
-export function sliceDeviceMp3(buf: Buffer, startSec: number, seconds: number): Buffer | null {
-  if (!scanDeviceMp3(buf)) return null
-  const first = Math.max(0, Math.floor(startSec / FRAME_SECONDS))
-  const last = first + Math.ceil(seconds / FRAME_SECONDS)
-  let i = buf.length >= 12 && buf.toString('latin1', 0, 4) === 'RIFF' ? 44 : 0
-  let frame = 0
-  let from = -1
-  while (i + 9 <= buf.length && frame < last) {
-    if (!isDeviceFrameAt(buf, i)) {
-      i++
-      continue
+export function readDeviceWindow(filePath: string, startSec: number, seconds: number): Buffer | null {
+  const fd = openSync(filePath, 'r')
+  try {
+    const size = fstatSync(fd).size
+    const head = Buffer.alloc(Math.min(size, 64 * 1024))
+    readSync(fd, head, 0, head.length, 0)
+    if (!scanDeviceMp3(head)) return null
+    const base = head.length >= 12 && head.toString('latin1', 0, 4) === 'RIFF' ? 44 : 0
+    const count = Math.ceil(seconds / FRAME_SECONDS)
+    const from = base + Math.max(0, Math.floor(startSec / FRAME_SECONDS)) * DEVICE_FRAME_BYTES
+    if (from >= size) return null
+    // A few frames of slack, in case stray bytes sit before the window.
+    const chunk = Buffer.alloc(Math.min(size - from, (count + 8) * DEVICE_FRAME_BYTES))
+    readSync(fd, chunk, 0, chunk.length, from)
+    let i = 0
+    while (i + 9 <= chunk.length && !isDeviceFrameAt(chunk, i)) i++
+    const first = i
+    let frames = 0
+    while (i + 9 <= chunk.length && frames < count) {
+      if (!isDeviceFrameAt(chunk, i)) {
+        i++
+        continue
+      }
+      i += DEVICE_FRAME_BYTES + ((chunk[i + 2] >> 1) & 1)
+      frames++
     }
-    if (frame === first) from = i
-    i += 288 + ((buf[i + 2] >> 1) & 1)
-    frame++
+    return frames > 0 ? chunk.subarray(first, Math.min(i, chunk.length)) : null
+  } finally {
+    closeSync(fd)
   }
-  if (from < 0) return null
-  return buf.subarray(from, Math.min(i, buf.length))
 }
 
 /** The ffmpeg the app ships (ffmpeg-static), outside the asar archive when packaged. */

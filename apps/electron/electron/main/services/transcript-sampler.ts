@@ -8,19 +8,20 @@
  * something does not add up. Settings > Quality checks "Samples per day"
  * caps the spend (about 0.01 USD a recording); 0 stops it.
  *
- * One recording at a time, one window at a time, at most a few hundred
- * kilobytes of audio in memory: the pass never competes with the app.
+ * One recording at a time, one window at a time, about half a megabyte of
+ * audio in memory (only the window is read from disk): the pass never
+ * competes with the app.
  */
 
 import { spawn } from 'child_process'
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { GeminiEngine } from '@hidock/transcription'
 import { resolveGeminiApiKey } from './brains'
 import { getConfig } from './config'
 import { queryAll, run } from './database'
 import { getCachePath } from './file-storage'
-import { bundledFfmpegPath, FRAME_SECONDS, sliceDeviceMp3 } from './audio-profile'
+import { bundledFfmpegPath, FRAME_SECONDS, readDeviceWindow } from './audio-profile'
 import { createGeminiUsageCollector, recordGeminiUsage, runUsageFields } from './gemini-usage'
 import { CURRENT_GEMINI_TRANSCRIPTION_MODEL } from './gemini-model-ids'
 import type { JevQuestion } from './jev-client'
@@ -34,6 +35,8 @@ import { audioFrameTest, type TranscriptValidity, type ValiditySegment } from '.
 import { readEnvelope, transcriptFingerprint } from './transcript-validity-store'
 import { syncTrustVerdicts } from './transcript-trust'
 import {
+  afterEndVerdict,
+  planAfterEndWindows,
   planSampleWindows,
   precheckWindow,
   sampleVerdict,
@@ -128,49 +131,98 @@ function parseValidity(json: string | null): TranscriptValidity | null {
   }
 }
 
+export interface SamplePlan {
+  /** 'after-end': the transcript stops while the audio goes on, so the windows look for speech after its end. */
+  mode: 'compare' | 'after-end'
+  windows: SampleWindow[]
+}
+
 /** The windows to sample for one recording, from its stored lines, its validity measures and its envelope. */
-export function windowsFor(row: Pick<Candidate, 'recording_id' | 'speakers' | 'validity_json' | 'method'>): SampleWindow[] {
+export function windowsFor(row: Pick<Candidate, 'recording_id' | 'speakers' | 'validity_json' | 'method'>): SamplePlan {
   const validity = parseValidity(row.validity_json)
   const env = readEnvelope(row.recording_id, row.method)
   const fileSeconds = validity?.measures.fileSeconds ?? (env ? env.length * FRAME_SECONDS : 0)
-  if (!fileSeconds) return []
+  if (!fileSeconds) return { mode: 'compare', windows: [] }
   const frameHasAudio = env ? audioFrameTest(env, row.method === 'decoded' ? 'db' : 'gain') : null
-  const compressed = validity?.reasons.some((r) => r.code === 'clock_compressed') ?? false
-  return planSampleWindows({
-    segments: parseSegments(row.speakers),
-    fileSeconds,
-    timeFactor: validity?.measures.timeFactor ?? 1,
-    compressedTo: compressed ? fileSeconds : null,
-    hasAudioAt: frameHasAudio && env ? (second) => frameHasAudio(Math.min(env.length - 1, Math.floor(second / FRAME_SECONDS))) : undefined
-  })
-}
-
-/** Sample one recording: transcribe its windows, compare, store the verdict, settle its validity. */
-export async function sampleRecording(row: Candidate, deps: SamplerDeps): Promise<SampleOutcome | null> {
-  const windows = windowsFor(row)
-  if (windows.length === 0) return null
-  const fresh: Array<{ window: SampleWindow; transcript: WindowTranscript | null }> = []
-  for (const window of windows) {
-    const audio = await deps.readWindow(row.file_path, window.start, window.end - window.start)
-    if (!audio) {
-      fresh.push({ window, transcript: null })
-      continue
-    }
-    fresh.push({ window, transcript: await deps.transcribeWindow(audio, row.recording_id, window.end - window.start) })
+  const hasAudioAt =
+    frameHasAudio && env ? (second: number) => frameHasAudio(Math.min(env.length - 1, Math.floor(second / FRAME_SECONDS))) : undefined
+  const codes = new Set((validity?.reasons ?? []).map((r) => r.code))
+  if (codes.has('audio_after_the_end') && typeof validity?.measures.endSeconds === 'number') {
+    return { mode: 'after-end', windows: planAfterEndWindows({ endSeconds: validity.measures.endSeconds, fileSeconds, hasAudioAt }) }
   }
-  const matches: WindowMatch[] = fresh.map(({ window, transcript }) =>
-    transcript ? (precheckWindow(transcript.text, window.storedText) ?? 'unclear') : 'unclear'
-  )
-  const toCompare = fresh
-    .map((f, i) => ({ i, stored: f.window.storedText, fresh: f.transcript?.text ?? '' }))
-    .filter(({ i }) => fresh[i].transcript && precheckWindow(fresh[i].transcript!.text, fresh[i].window.storedText) === null)
-  if (toCompare.length > 0) {
-    const answers = await deps.compare(toCompare.map(({ stored, fresh: text }) => ({ stored, fresh: text })), row.recording_id)
-    toCompare.forEach(({ i }, k) => {
-      matches[i] = answers[k] ?? 'unclear'
+  return {
+    mode: 'compare',
+    windows: planSampleWindows({
+      segments: parseSegments(row.speakers),
+      fileSeconds,
+      timeFactor: validity?.measures.timeFactor ?? 1,
+      compressedTo: codes.has('clock_compressed') ? fileSeconds : null,
+      hasAudioAt
     })
   }
-  const verdict = sampleVerdict(matches)
+}
+
+/** Transcribe one window, or null when it could not be read or transcribed (the reason is logged). */
+async function transcribeOne(row: Candidate, window: SampleWindow, deps: SamplerDeps): Promise<WindowTranscript | null> {
+  const seconds = window.end - window.start
+  try {
+    const audio = await deps.readWindow(row.file_path, window.start, seconds)
+    return audio ? await deps.transcribeWindow(audio, row.recording_id, seconds) : null
+  } catch (error) {
+    console.warn(`[Sampling] ${row.recording_id} at ${window.start} s: ${error instanceof Error ? error.message : String(error)}`)
+    return null
+  }
+}
+
+/**
+ * Sample one recording: transcribe its windows, compare, store the verdict,
+ * settle its validity. Once any window was transcribed (and billed) the
+ * sample is stored, whatever fails after, so the daily allowance counts it and
+ * the recording is not transcribed again on the next pass. When no window
+ * could be transcribed nothing was spent, and it throws so the next pass
+ * tries again.
+ */
+export async function sampleRecording(row: Candidate, deps: SamplerDeps): Promise<SampleOutcome | null> {
+  const plan = windowsFor(row)
+  if (plan.windows.length === 0) return null
+  const fresh: Array<{ window: SampleWindow; transcript: WindowTranscript | null }> = []
+  for (const window of plan.windows) {
+    let transcript = await transcribeOne(row, window, deps)
+    // An empty answer under stored text would count against the transcript:
+    // ask once more before believing it (a flaky empty candidate is not silence).
+    if (plan.mode === 'compare' && transcript && precheckWindow(transcript.text, window.storedText) === 'no_speech') {
+      const again = await transcribeOne(row, window, deps)
+      if (again) transcript = { ...again, costUsd: sumCosts([transcript.costUsd, again.costUsd]) }
+    }
+    fresh.push({ window, transcript })
+  }
+  if (fresh.every((f) => f.transcript === null)) throw new Error('no window could be transcribed')
+
+  let matches: WindowMatch[]
+  let verdict: SampleVerdict
+  let error: string | null = null
+  if (plan.mode === 'after-end') {
+    verdict = afterEndVerdict(fresh.map((f) => f.transcript?.text ?? null))
+    matches = fresh.map((f) => (f.transcript ? (wordCount(f.transcript.text) > 0 ? 'different' : 'no_speech') : 'unclear'))
+  } else {
+    matches = fresh.map(({ window, transcript }) => (transcript ? (precheckWindow(transcript.text, window.storedText) ?? 'unclear') : 'unclear'))
+    const toCompare = fresh
+      .map((f, i) => ({ i, stored: f.window.storedText, fresh: f.transcript?.text ?? '' }))
+      .filter(({ i }) => fresh[i].transcript && precheckWindow(fresh[i].transcript!.text, fresh[i].window.storedText) === null)
+    if (toCompare.length > 0) {
+      try {
+        const answers = await deps.compare(toCompare.map(({ stored, fresh: text }) => ({ stored, fresh: text })), row.recording_id)
+        toCompare.forEach(({ i }, k) => {
+          matches[i] = answers[k] ?? 'unclear'
+        })
+      } catch (e) {
+        // Already paid for the transcription: keep the sample, inconclusive on these windows.
+        error = e instanceof Error ? e.message : String(e)
+        console.warn(`[Sampling] ${row.recording_id}: comparison failed, stored as inconclusive: ${error}`)
+      }
+    }
+    verdict = sampleVerdict(matches)
+  }
   const costs = fresh.map((f) => f.transcript?.costUsd).filter((c): c is number => typeof c === 'number')
   const costUsd = costs.length ? Math.round(costs.reduce((a, b) => a + b, 0) * 1e6) / 1e6 : null
   const model = fresh.find((f) => f.transcript)?.transcript?.model ?? null
@@ -184,7 +236,11 @@ export async function sampleRecording(row: Candidate, deps: SamplerDeps): Promis
       row.recording_id,
       transcriptFingerprint(row.speakers),
       verdict,
-      JSON.stringify(fresh.map((f, i) => ({ start: f.window.start, end: f.window.end, match: matches[i], words: wordCount(f.transcript?.text) }))),
+      JSON.stringify({
+        mode: plan.mode,
+        windows: fresh.map((f, i) => ({ start: f.window.start, end: f.window.end, match: matches[i], words: wordCount(f.transcript?.text) })),
+        ...(error ? { error } : {})
+      }),
       model,
       costUsd,
       deps.now().toISOString()
@@ -197,6 +253,25 @@ export async function sampleRecording(row: Candidate, deps: SamplerDeps): Promis
 
 function wordCount(text: string | null | undefined): number {
   return (text ?? '').trim().split(/\s+/).filter(Boolean).length
+}
+
+function sumCosts(costs: Array<number | null>): number | null {
+  const known = costs.filter((c): c is number => typeof c === 'number')
+  return known.length ? known.reduce((a, b) => a + b, 0) : null
+}
+
+/** Window audio left behind by a crash between writing and removing it: meeting audio, never kept. */
+function sweepLeftoverSamples(now: Date): void {
+  const dir = join(getCachePath(), 'samples')
+  if (!existsSync(dir)) return
+  for (const name of readdirSync(dir)) {
+    const path = join(dir, name)
+    try {
+      if (now.getTime() - statSync(path).mtimeMs > 3_600_000) unlinkSync(path)
+    } catch {
+      // Gone already, or in use by a pass that is still running.
+    }
+  }
 }
 
 let running = false
@@ -213,6 +288,7 @@ export async function runSamplingPass(deps: SamplerDeps = defaultSamplerDeps()):
   if (running) return { sampled: [], failed: 0 }
   running = true
   try {
+    sweepLeftoverSamples(deps.now())
     const remaining = perDay - samplesSince(startOfDay(deps.now()))
     if (remaining <= 0) return { sampled: [], skipped: 'daily-limit', failed: 0 }
     const sampled: SampleOutcome[] = []
@@ -232,7 +308,7 @@ export async function runSamplingPass(deps: SamplerDeps = defaultSamplerDeps()):
       const cost = sampled.reduce((sum, s) => sum + (s.costUsd ?? 0), 0)
       console.log(
         `[Sampling] ${sampled.length} sampled (${count('confirmed')} confirmed, ${count('contradicted')} contradicted, ` +
-          `${count('inconclusive')} inconclusive), ${failed} failed, ${cost.toFixed(4)} USD`
+          `${count('incomplete')} incomplete, ${count('inconclusive')} inconclusive), ${failed} failed, ${cost.toFixed(4)} USD`
       )
     }
     return { sampled, failed }
@@ -242,17 +318,12 @@ export async function runSamplingPass(deps: SamplerDeps = defaultSamplerDeps()):
 }
 
 /**
- * One window of any audio file: the device's frames cut directly, anything
- * else through the bundled ffmpeg. The file is read once for all the windows
- * of a recording (the pass samples one recording at a time).
+ * One window of any audio file: the device's frames read straight from disk
+ * (only the window's bytes), anything else cut by the bundled ffmpeg, which
+ * streams the file itself.
  */
-export function createWindowReader(): (filePath: string, start: number, seconds: number) => Promise<Buffer | null> {
-  let last: { path: string; bytes: Buffer } | null = null
-  return async (filePath, start, seconds) => {
-    if (last?.path !== filePath) last = { path: filePath, bytes: readFileSync(filePath) }
-    const slice = sliceDeviceMp3(last.bytes, start, seconds)
-    return slice ? Buffer.from(slice) : readWithFfmpeg(filePath, start, seconds)
-  }
+export async function readWindowAudio(filePath: string, start: number, seconds: number): Promise<Buffer | null> {
+  return readDeviceWindow(filePath, start, seconds) ?? readWithFfmpeg(filePath, start, seconds)
 }
 
 function readWithFfmpeg(filePath: string, start: number, seconds: number): Promise<Buffer | null> {
@@ -346,7 +417,7 @@ async function compareWithJev(pairs: Array<{ stored: string; fresh: string }>, r
 
 export function defaultSamplerDeps(): SamplerDeps {
   return {
-    readWindow: createWindowReader(),
+    readWindow: readWindowAudio,
     transcribeWindow: transcribeWindowWithGemini,
     compare: compareWithJev,
     now: () => new Date()
