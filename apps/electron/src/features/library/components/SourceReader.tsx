@@ -2116,6 +2116,7 @@ export function SourceReader({
                           <TranscriptIntegrityPanel
                             recordingId={recording.id}
                             transcript={transcript}
+                            durationSeconds={recording.duration}
                             onRetranscribe={onTranscribe}
                             onChanged={onIntegrityChanged}
                             onJump={(code) => setIssueJump({ code, nonce: Date.now() })}

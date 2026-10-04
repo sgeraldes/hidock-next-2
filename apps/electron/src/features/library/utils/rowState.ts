@@ -13,8 +13,9 @@ import type { Transcript } from '@/types'
 import type { UnifiedRecording } from '@/types/unified-recording'
 import { WARNING_LABELS, effectiveWarning } from './evaluation'
 import { ISSUE_TAGS, integrityIssues, integrityLabel } from './transcriptIntegrity'
+import { VALIDITY_LABELS, heldValidity, validityReasons } from './transcriptValidity'
 
-export type TranscriptProblemKind = 'broken' | 'invented' | 'missed' | 'suspect'
+export type TranscriptProblemKind = 'broken' | 'invalid' | 'incomplete' | 'invented' | 'missed' | 'doubtful' | 'suspect'
 
 export interface TranscriptProblem {
   kind: TranscriptProblemKind
@@ -30,10 +31,18 @@ export function transcriptProblems(recording: UnifiedRecording, transcript?: Tra
   if (integrity === 'broken') {
     problems.push({ kind: 'broken', label: 'Transcript does not fit the audio', detail: tags })
   }
+  // The validity verdict (owner, 4-oct-2026); broken already says "invalid".
+  const held = integrity === 'broken' ? null : heldValidity(transcript)
+  if (held === 'invalid' || held === 'incomplete') {
+    problems.push({ kind: held, label: VALIDITY_LABELS[held].label, detail: validityReasons(transcript).join(' · ') })
+  }
   const warning = effectiveWarning(recording)
   if (warning) {
     const { label, detail } = WARNING_LABELS[warning]
     problems.push({ kind: warning === 'possible_invented_transcript' ? 'invented' : 'missed', label, detail })
+  }
+  if (held === 'doubtful') {
+    problems.push({ kind: 'doubtful', label: VALIDITY_LABELS.doubtful.label, detail: validityReasons(transcript).join(' · ') })
   }
   if (integrity === 'suspect') {
     problems.push({ kind: 'suspect', label: 'Transcript timing is wrong', detail: tags })

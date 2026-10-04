@@ -8,6 +8,7 @@
  */
 
 import type { Transcript } from '@/types'
+import { heldValidity, VALIDITY_LABELS, type HeldValidity } from './transcriptValidity'
 
 export type IntegrityIssueCode =
   | 'repeated_start'
@@ -127,16 +128,20 @@ export function integrityIssues(transcript: IntegrityFields | null | undefined):
 
 /**
  * Library filter values: 'flagged' (anything not green), 'broken', 'accepted',
- * or one finding as `issue:<code>`. A finding filter matches flagged
+ * one finding as `issue:<code>`, or one validity verdict as `validity:<status>`
+ * (in doubt, not categorized, incomplete). A finding filter matches flagged
  * transcripts only: an accepted one has been dealt with.
  */
-export type IntegrityFilter = 'flagged' | 'broken' | 'accepted' | `issue:${IntegrityIssueCode}`
+export type IntegrityFilter = 'flagged' | 'broken' | 'accepted' | `issue:${IntegrityIssueCode}` | `validity:${HeldValidity}`
+
+export const VALIDITY_FILTER_ORDER: HeldValidity[] = ['invalid', 'incomplete', 'doubtful']
 
 export function matchesIntegrityFilter(
   transcript: IntegrityFields | null | undefined,
   filter: IntegrityFilter | null
 ): boolean {
   if (filter === null) return true
+  if (filter.startsWith('validity:')) return heldValidity(transcript) === filter.slice('validity:'.length)
   const label = integrityLabel(transcript)
   if (filter === 'flagged') return label === 'suspect' || label === 'broken'
   if (filter === 'broken') return label === 'broken'
@@ -150,10 +155,12 @@ export function integrityFilterLabel(filter: IntegrityFilter): string {
   if (filter === 'flagged') return 'Transcript problems'
   if (filter === 'broken') return 'Text does not fit the audio'
   if (filter === 'accepted') return 'Accepted as is'
+  if (filter.startsWith('validity:')) return VALIDITY_LABELS[filter.slice('validity:'.length) as HeldValidity]?.chip ?? filter
   return ISSUE_TAGS[filter.slice('issue:'.length) as IntegrityIssueCode] ?? filter
 }
 
 export function isIntegrityFilter(value: string): value is IntegrityFilter {
   if (value === 'flagged' || value === 'broken' || value === 'accepted') return true
+  if (value.startsWith('validity:')) return (VALIDITY_FILTER_ORDER as string[]).includes(value.slice('validity:'.length))
   return value.startsWith('issue:') && value.slice('issue:'.length) in ISSUE_TAGS
 }
