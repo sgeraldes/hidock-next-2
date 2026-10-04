@@ -38,7 +38,9 @@ let excludedResult: { ids: Set<string>; failClosed: boolean } = { ids: new Set<s
 /** When set, queryOne resolves per-id (backfill tests); otherwise currentRow. */
 let rowById: ((id: string) => FakeWikiRow | null) | null = null
 /** fs syscall counters — the quadratic-regression assertion reads these. */
-const fsCalls = { readFile: 0, readdir: 0, write: 0 }
+let missingRecordingIds = new Set<string>()
+let blockedUnlink: string | null = null
+const fsCalls = { readFile: 0, readdir: 0, write: 0, open: 0 }
 
 // Count the fs calls the exporter makes, delegating to the real implementations
 // so the tests still exercise a real directory.
@@ -47,6 +49,14 @@ vi.mock('fs', async (importOriginal) => {
   return {
     ...real,
     default: real,
+    unlinkSync: (path: Parameters<typeof real.unlinkSync>[0]) => {
+      if (String(path) === blockedUnlink) throw Object.assign(new Error('sharing violation'), { code: 'EBUSY' })
+      return real.unlinkSync(path)
+    },
+    openSync: (...a: Parameters<typeof real.openSync>) => {
+      fsCalls.open++
+      return real.openSync(...a)
+    },
     readFileSync: (...a: Parameters<typeof real.readFileSync>) => {
       fsCalls.readFile++
       return real.readFileSync(...a)
@@ -105,11 +115,14 @@ vi.mock('../database', () => ({
   // filterEligibleRecordingIds (from ./recording-eligibility, which reads the
   // POSITIVE allowlist getEligibleRecordingIds from here). Derive both from the
   // same mutable exclusion set.
+  getExistingRecordingIds: (ids: Iterable<string>) => ({
+    ids: new Set([...ids].filter((id) => !missingRecordingIds.has(id))), failClosed: false
+  }),
   getExcludedRecordingIds: () => excludedResult,
   getEligibleRecordingIds: (ids: Iterable<string>) =>
     excludedResult.failClosed
       ? { eligible: new Set<string>(), failClosed: true }
-      : { eligible: new Set([...ids].filter((i) => i && !excludedResult.ids.has(i))), failClosed: false }
+      : { eligible: new Set([...ids].filter((i) => i && !missingRecordingIds.has(i) && !excludedResult.ids.has(i))), failClosed: false }
 }))
 
 describe('exportMeetingWiki — stale page cleanup (ISSUE-8)', () => {
@@ -120,6 +133,7 @@ describe('exportMeetingWiki — stale page cleanup (ISSUE-8)', () => {
     // tests or one test's rotation leaks into the next.
     await resetBackfillCursor()
     currentRow = null
+    missingRecordingIds = new Set<string>()
     backfillRows = []
     rowById = null
     configStore = new Map<string, string>()
@@ -232,6 +246,7 @@ describe('wiki page ownership — safe for deletion (adversarial review #1)', ()
     // tests or one test's rotation leaks into the next.
     await resetBackfillCursor()
     currentRow = null
+    missingRecordingIds = new Set<string>()
     backfillRows = []
     rowById = null
     configStore = new Map<string, string>()
@@ -966,6 +981,7 @@ describe('backfillMeetingWiki — bounded, yielding, resumable (F15)', () => {
     // tests or one test's rotation leaks into the next.
     await resetBackfillCursor()
     currentRow = null
+    missingRecordingIds = new Set<string>()
     backfillRows = []
     configStore = new Map<string, string>()
     excludedResult = { ids: new Set<string>(), failClosed: false }
@@ -1000,6 +1016,261 @@ describe('backfillMeetingWiki — bounded, yielding, resumable (F15)', () => {
     }
   }
 
+  it('preserves an unknown recording owner while purging an existing personal owner without a transcript', async () => {
+    const { backfillMeetingWiki } = await import('../meeting-wiki')
+    backfillRows = []
+    missingRecordingIds.add('unknown')
+    excludedResult.ids.add('personal-no-transcript')
+    mkdirSync(join(tmpRoot, 'wiki'), { recursive: true })
+    const unknownPage = join(tmpRoot, 'wiki', 'unknown.md')
+    const personalPage = join(tmpRoot, 'wiki', 'personal.md')
+    const unknownBytes = '---\nrecording_id: unknown\n---\nnewer than restored database'
+    writeFileSync(unknownPage, unknownBytes)
+    writeFileSync(personalPage, '---\nrecording_id: personal-no-transcript\n---\nprivate')
+    try {
+      await backfillMeetingWiki({ batchSize: 1, budgetMs: 0 })
+      expect(readFileSync(unknownPage, 'utf8')).toBe(unknownBytes)
+      expect(() => readFileSync(personalPage, 'utf8')).toThrow(/ENOENT/)
+    } finally { missingRecordingIds.clear() }
+  })
+
+  it('purges an external private rewrite by the next pass despite export budget and retry loss', async () => {
+    const { backfillMeetingWiki, reconcileWikiEligibility } = await import('../meeting-wiki')
+    backfillRows = [{ recording_id: 'aaa-public' }, { recording_id: 'private' }]
+    mkdirSync(join(tmpRoot, 'wiki'), { recursive: true })
+    const page = join(tmpRoot, 'wiki', 'shared.md')
+    writeFileSync(page, '---\nrecording_id: foreign\n---\nbody')
+    let yields = 0
+    const helper = await import('../event-loop')
+    const spy = vi.spyOn(helper, 'yieldToEventLoop').mockImplementation(async () => {
+      // Rewrite after the retry sweep: this external write has no HiDock journal entry.
+      if (++yields === 3) {
+        writeFileSync(page, '---\nrecording_id: private\n---\nprivate replacement')
+        blockedUnlink = page
+        excludedResult.ids.add('private')
+        expect(reconcileWikiEligibility('private')?.ok).toBe(false)
+        expect(configStore.has('wiki_cleanup_pending:private')).toBe(true)
+      }
+    })
+    try {
+      await backfillMeetingWiki({ batchSize: 1 })
+      expect(readFileSync(page, 'utf8')).toContain('private replacement')
+    } finally { blockedUnlink = null; spy.mockRestore() }
+    // Pass one may clear the retry against its stale index. Prove cleanup does not
+    // depend on that ledger, and cannot be starved by missing exports or their cursor.
+    configStore.delete('wiki_cleanup_pending:private')
+    backfillRows.unshift({ recording_id: 'aaa-next-public' })
+    await backfillMeetingWiki({ batchSize: 1, budgetMs: 0 })
+    expect(() => readFileSync(page, 'utf8')).toThrow(/ENOENT/)
+    expect(configStore.has('wiki_cleanup_pending:private')).toBe(false)
+  })
+
+  it.each([true, false])('review3: defers lookup failure with existing page=%s', async (existing) => {
+    const { backfillMeetingWiki, exportMeetingWiki } = await import('../meeting-wiki')
+    backfillRows = [{ recording_id: 'public' }]
+    const page = existing ? exportMeetingWiki('public')! : null
+    const before = page ? readFileSync(page, 'utf8') : null
+    let yields = 0
+    const helper = await import('../event-loop')
+    const spy = vi.spyOn(helper, 'yieldToEventLoop').mockImplementation(async () => {
+      // A failed point-of-use lookup is unknown eligibility, not permission to purge.
+      if (++yields === (existing ? 4 : 2)) {
+        excludedResult.failClosed = true
+        configStore.set('wiki_cleanup_pending:public', 'public')
+      }
+    })
+    try {
+      const result = await backfillMeetingWiki({ batchSize: 10 })
+      if (page) expect(readFileSync(page, 'utf8')).toBe(before)
+      else expect(listWiki()).toEqual([])
+      expect(configStore.has('wiki_cleanup_pending:public')).toBe(true)
+      expect(result).toMatchObject({ written: 0, unchanged: 0, remaining: 1, remainingMissing: existing ? 0 : 1 })
+    } finally { spy.mockRestore() }
+  })
+
+  it.each(['personal', 'soft-delete'])('privacy yield: does not recreate a successfully purged %s page', async () => {
+    const { backfillMeetingWiki, exportMeetingWiki, reconcileWikiEligibility } = await import('../meeting-wiki')
+    backfillRows = [{ recording_id: 'private' }]
+    const page = exportMeetingWiki('private')!
+    let yields = 0
+    const helper = await import('../event-loop')
+    const spy = vi.spyOn(helper, 'yieldToEventLoop').mockImplementation(async () => {
+      // Ownership scan, metadata refresh, cleanup, then the post-eligibility yield.
+      if (++yields === 4) {
+        excludedResult.ids.add('private')
+        expect(reconcileWikiEligibility('private')?.ok).toBe(true)
+        expect(configStore.has('wiki_cleanup_pending:private')).toBe(false)
+      }
+    })
+    try {
+      await backfillMeetingWiki({ batchSize: 10 })
+      expect(listWiki()).not.toContain(page.split(/[\\/]/).pop())
+      expect(configStore.has('wiki_cleanup_pending:private')).toBe(false)
+    } finally { spy.mockRestore() }
+  })
+
+  it('privacy yield: retains a failed cleanup retry for a page created during the scan', async () => {
+    const { backfillMeetingWiki, exportMeetingWiki, reconcileWikiEligibility } = await import('../meeting-wiki')
+    backfillRows = [{ recording_id: 'private' }]
+    mkdirSync(join(tmpRoot, 'wiki'), { recursive: true })
+    writeFileSync(join(tmpRoot, 'wiki', 'seed.md'), 'foreign document')
+    let mutated = false
+    const helper = await import('../event-loop')
+    const spy = vi.spyOn(helper, 'yieldToEventLoop').mockImplementation(async () => {
+      if (mutated) return
+      mutated = true
+      // The initial listing lacks this page; a failed transition must keep its durable retry.
+      blockedUnlink = exportMeetingWiki('private')!
+      excludedResult.ids.add('private')
+      expect(reconcileWikiEligibility('private')?.ok).toBe(false)
+      expect(configStore.has('wiki_cleanup_pending:private')).toBe(true)
+    })
+    try {
+      await backfillMeetingWiki({ batchSize: 1 })
+      expect(readFileSync(blockedUnlink!, 'utf8')).toContain('recording_id: private')
+      expect(configStore.has('wiki_cleanup_pending:private')).toBe(true)
+    } finally { blockedUnlink = null; spy.mockRestore() }
+  })
+
+  it('privacy yield: does not retain a phantom unreadable page deleted before its scan turn', async () => {
+    const { backfillMeetingWiki, reconcileWikiEligibility } = await import('../meeting-wiki')
+    backfillRows = [{ recording_id: 'private' }]
+    mkdirSync(join(tmpRoot, 'wiki'), { recursive: true })
+    writeFileSync(join(tmpRoot, 'wiki', 'a-seed.md'), 'foreign document')
+    writeFileSync(join(tmpRoot, 'wiki', 'z-private.md'), '---\nrecording_id: private\n---\nprivate transcript')
+    let mutated = false
+    const helper = await import('../event-loop')
+    const spy = vi.spyOn(helper, 'yieldToEventLoop').mockImplementation(async () => {
+      if (mutated) return
+      mutated = true
+      // Delete a later scan entry while the first entry gives IPC a turn.
+      excludedResult.ids.add('private')
+      expect(reconcileWikiEligibility('private')?.ok).toBe(true)
+    })
+    try {
+      const result = await backfillMeetingWiki({ batchSize: 1 })
+      expect(result.failed).toBe(0)
+      expect(listWiki()).toEqual(['a-seed.md'])
+      expect(configStore.has('wiki_cleanup_pending:private')).toBe(false)
+    } finally { spy.mockRestore() }
+  })
+
+  it.each(['size', 'mtime'])('privacy yield: re-reads changed %s ownership before clearing a cleanup retry', async (change) => {
+    const { backfillMeetingWiki } = await import('../meeting-wiki')
+    const realFs = await vi.importActual<typeof import('fs')>('fs')
+    backfillRows = [{ recording_id: 'private' }]
+    excludedResult.ids.add('private')
+    configStore.set('wiki_cleanup_pending:private', 'private')
+    mkdirSync(join(tmpRoot, 'wiki'), { recursive: true })
+    const page = join(tmpRoot, 'wiki', 'changed.md')
+    writeFileSync(page, '---\nrecording_id: foreign\n---\nbody')
+    const old = realFs.statSync(page)
+    let mutated = false
+    const helper = await import('../event-loop')
+    const spy = vi.spyOn(helper, 'yieldToEventLoop').mockImplementation(async () => {
+      if (mutated) return
+      mutated = true
+      // Equal-length owner replacement pins mtime detection; restored mtime pins size detection.
+      writeFileSync(page, '---\nrecording_id: private\n---\nbody' + (change === 'size' ? ' extended' : ''))
+      realFs.utimesSync(page, old.atime, change === 'size' ? old.mtime : new Date(old.mtimeMs + 2000))
+    })
+    try {
+      await backfillMeetingWiki({ batchSize: 1 })
+      expect(listWiki()).toEqual([])
+      expect(configStore.has('wiki_cleanup_pending:private')).toBe(false)
+    } finally { spy.mockRestore() }
+  })
+
+  it('privacy yield: drops a scanned unreadable entry that disappears during a yield', async () => {
+    const { backfillMeetingWiki } = await import('../meeting-wiki')
+    const realFs = await vi.importActual<typeof import('fs')>('fs')
+    backfillRows = [{ recording_id: 'private' }]
+    excludedResult.ids.add('private')
+    configStore.set('wiki_cleanup_pending:private', 'private')
+    mkdirSync(join(tmpRoot, 'wiki'), { recursive: true })
+    const page = join(tmpRoot, 'wiki', 'broken.md')
+    writeFileSync(page, '---\nwiki_generator: hidock-meeting-wiki\nwiki_schema: 1\nrecording_id: "unterminated\n---\n')
+    let mutated = false
+    const helper = await import('../event-loop')
+    const spy = vi.spyOn(helper, 'yieldToEventLoop').mockImplementation(async () => {
+      if (mutated) return
+      mutated = true
+      realFs.unlinkSync(page)
+    })
+    try {
+      const result = await backfillMeetingWiki({ batchSize: 1 })
+      expect(result.failed).toBe(0)
+      expect(configStore.has('wiki_cleanup_pending:private')).toBe(false)
+    } finally { spy.mockRestore() }
+  })
+
+  it('privacy yield: checks eligibility again after an export batch yield', async () => {
+    const { backfillMeetingWiki, exportMeetingWiki, reconcileWikiEligibility } = await import('../meeting-wiki')
+    backfillRows = [{ recording_id: 'a-public' }, { recording_id: 'z-private' }]
+    exportMeetingWiki('a-public')
+    exportMeetingWiki('z-private')
+    let yields = 0
+    const helper = await import('../event-loop')
+    const spy = vi.spyOn(helper, 'yieldToEventLoop').mockImplementation(async () => {
+      // Two ownership yields, two metadata yields, cleanup, eligibility, then export.
+      if (++yields === 7) {
+        excludedResult.ids.add('z-private')
+        expect(reconcileWikiEligibility('z-private')?.ok).toBe(true)
+      }
+    })
+    try {
+      const result = await backfillMeetingWiki({ batchSize: 1 })
+      expect(result.written).toBe(0)
+      expect(result.unchanged).toBe(1)
+      expect(listWiki()).toHaveLength(1)
+      expect(configStore.has('wiki_cleanup_pending:z-private')).toBe(false)
+    } finally { spy.mockRestore() }
+  })
+
+  it('privacy yield: journals an ownership replacement after its metadata was refreshed', async () => {
+    const { backfillMeetingWiki, exportMeetingWiki, reconcileWikiEligibility } = await import('../meeting-wiki')
+    backfillRows = [{ recording_id: 'private' }]
+    rowById = (id) => ({ recording_id: id, full_text: 'same length body', title_suggestion: 'Shared', date_recorded: '2026-07-07' })
+    exportMeetingWiki('foreign')
+    let yields = 0
+    const helper = await import('../event-loop')
+    const spy = vi.spyOn(helper, 'yieldToEventLoop').mockImplementation(async () => {
+      // The only file was already statted in the refresh when this yield runs.
+      if (++yields === 2) {
+        blockedUnlink = exportMeetingWiki('private')!
+        excludedResult.ids.add('private')
+        expect(reconcileWikiEligibility('private')?.ok).toBe(false)
+      }
+    })
+    try {
+      await backfillMeetingWiki({ batchSize: 1 })
+      expect(readFileSync(blockedUnlink!, 'utf8')).toContain('recording_id: private')
+      expect(configStore.has('wiki_cleanup_pending:private')).toBe(true)
+    } finally { blockedUnlink = null; spy.mockRestore() }
+  })
+
+  it('yields through the shared helper after each ownership batch and preserves page bytes', async () => {
+    const { backfillMeetingWiki } = await import('../meeting-wiki')
+    await backfillMeetingWiki()
+    const names = listWiki()
+    const before = names.map((name) => readFileSync(join(tmpRoot, 'wiki', name), 'utf8'))
+    fsCalls.open = 0
+    const opensAtYield: number[] = []
+    const helper = await import('../event-loop')
+    const spy = vi.spyOn(helper, 'yieldToEventLoop').mockImplementation(async () => {
+      opensAtYield.push(fsCalls.open)
+    })
+    try {
+      const result = await backfillMeetingWiki({ batchSize: 10 })
+      expect(opensAtYield.slice(0, N / 10)).toEqual([10, 20, 30, 40, 50, 60])
+      expect(result).toEqual({ written: 0, unchanged: N, failed: 0, remaining: 0, remainingMissing: 0 })
+      expect(listWiki()).toEqual(names)
+      expect(names.map((name) => readFileSync(join(tmpRoot, 'wiki', name), 'utf8'))).toEqual(before)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   it('writes every page on a cold pass', async () => {
     const { backfillMeetingWiki } = await import('../meeting-wiki')
     const result = await backfillMeetingWiki()
@@ -1011,7 +1282,7 @@ describe('backfillMeetingWiki — bounded, yielding, resumable (F15)', () => {
     expect(listWiki()).toHaveLength(N)
   })
 
-  it('scans the directory ONCE and stays linear in reads — the quadratic regression guard', async () => {
+  it('shares the ownership scan and stays linear in reads — the quadratic regression guard', async () => {
     const { backfillMeetingWiki } = await import('../meeting-wiki')
     await backfillMeetingWiki()
 
@@ -1021,8 +1292,9 @@ describe('backfillMeetingWiki — bounded, yielding, resumable (F15)', () => {
     const result = await backfillMeetingWiki()
 
     expect(result.unchanged).toBe(N)
-    // One directory listing for the entire pass, not one per recording.
-    expect(fsCalls.readdir).toBe(1)
+    // One ownership scan plus a metadata reconciliation after each resumed batch.
+    // Cleanup batches refresh metadata after yields, without reparsing unchanged pages.
+    expect(fsCalls.readdir).toBeLessThanOrEqual(3 + Math.ceil(N / 25))
     // Linear in N. The old code read N*(N-1) = 3,540 whole files for N=60; the
     // ceiling here is deliberately loose (2N) so the test pins the ORDER of
     // growth rather than an exact call count.
@@ -1030,36 +1302,41 @@ describe('backfillMeetingWiki — bounded, yielding, resumable (F15)', () => {
   })
 
   it('reuses the single pass-wide scan when cleaning up excluded recordings too (F15 mixed-corpus guard)', async () => {
-    // The all-eligible guard above cannot catch a re-scan on the EXCLUDED-cleanup
-    // path: each excluded recording used to call removeMeetingWiki, which re-listed
-    // and re-read the whole directory (O(excluded × pages)) — the exact quadratic
-    // boot freeze F15 removed, hidden from the guard because it had no excluded rows.
-    const { backfillMeetingWiki } = await import('../meeting-wiki')
-    vi.spyOn(console, 'log').mockImplementation(() => {})
+    // Pin time so batch-count assertions do not depend on filesystem speed.
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(0)
+    try {
+      // The all-eligible guard above cannot catch a re-scan on the EXCLUDED-cleanup
+      // path: each excluded recording used to call removeMeetingWiki, which re-listed
+      // and re-read the whole directory (O(excluded × pages)) — the exact quadratic
+      // boot freeze F15 removed, hidden from the guard because it had no excluded rows.
+      const { backfillMeetingWiki } = await import('../meeting-wiki')
+      vi.spyOn(console, 'log').mockImplementation(() => {})
 
-    // Cold pass writes a page for all N (all eligible).
-    await backfillMeetingWiki()
-    expect(listWiki()).toHaveLength(N)
+      // Cold pass writes a page for all N (all eligible).
+      await backfillMeetingWiki()
+      expect(listWiki()).toHaveLength(N)
 
-    // Now exclude HALF of them — each still has a stale page on disk the backfill
-    // must remove. Reset the resume cursor so the pass revisits everything.
-    await resetBackfillCursor()
-    const excluded = new Set<string>()
-    for (let i = 0; i < N; i += 2) excluded.add(`rec-${String(i).padStart(3, '0')}`)
-    excludedResult = { ids: excluded, failClosed: false }
+      // Now exclude HALF of them — each still has a stale page on disk the backfill
+      // must remove. Reset the resume cursor so the pass revisits everything.
+      await resetBackfillCursor()
+      const excluded = new Set<string>()
+      for (let i = 0; i < N; i += 2) excluded.add(`rec-${String(i).padStart(3, '0')}`)
+      excludedResult = { ids: excluded, failClosed: false }
 
-    fsCalls.readFile = 0
-    fsCalls.readdir = 0
-    const result = await backfillMeetingWiki()
+      fsCalls.readFile = 0
+      fsCalls.readdir = 0
+      const result = await backfillMeetingWiki()
 
-    // Assert the scan count BEFORE listWiki() (which itself lists the directory):
-    // ONE listing for the entire pass — eligible re-verify AND excluded cleanup.
-    expect(fsCalls.readdir).toBe(1)
-    expect(fsCalls.readFile).toBeLessThanOrEqual(2 * N)
-    expect(result.failed).toBe(0)
+      // Assert the scan count BEFORE listWiki() (which itself lists the directory):
+      // ONE listing for the entire pass — eligible re-verify AND excluded cleanup.
+      // Cleanup batches refresh metadata after yields, without reparsing unchanged pages.
+      expect(fsCalls.readdir).toBeLessThanOrEqual(3 + Math.ceil(N / 25))
+      expect(fsCalls.readFile).toBeLessThanOrEqual(2 * N)
+      expect(result.failed).toBe(0)
 
-    // The excluded half's stale pages are gone; the eligible half remain.
-    expect(listWiki()).toHaveLength(N - excluded.size)
+      // The excluded half's stale pages are gone; the eligible half remain.
+      expect(listWiki()).toHaveLength(N - excluded.size)
+    } finally { clock.mockRestore() }
   }, 20_000)
 
   it('drains MANY pending cleanup retries within the SAME single boot scan (F15 recovery-path guard)', async () => {
@@ -1070,7 +1347,7 @@ describe('backfillMeetingWiki — bounded, yielding, resumable (F15)', () => {
     // transient failure parked N retries, boot did O(N) full directory scans
     // before the single-scan backfill even began, reintroducing the F15 freeze on
     // exactly this path. The fix shares ONE pass-wide index across the sweep and
-    // the pass, so the entire boot lists the directory once.
+    // the pass; metadata reconciliation after yields keeps that shared index current.
     const { backfillMeetingWiki } = await import('../meeting-wiki')
     vi.spyOn(console, 'log').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -1099,7 +1376,8 @@ describe('backfillMeetingWiki — bounded, yielding, resumable (F15)', () => {
     // backfill pass share the single pass-wide index. Asserted BEFORE listWiki()
     // (which lists the directory itself). Old code: one readdir per pending id
     // PLUS one for the pass (4 here).
-    expect(fsCalls.readdir).toBe(1)
+    // Cleanup batches refresh metadata after yields, without reparsing unchanged pages.
+    expect(fsCalls.readdir).toBeLessThanOrEqual(3 + Math.ceil(N / 25))
     expect(fsCalls.readFile).toBeLessThanOrEqual(2 * N)
     expect(result.failed).toBe(0)
 
@@ -1180,33 +1458,37 @@ describe('backfillMeetingWiki — bounded, yielding, resumable (F15)', () => {
   })
 
   it('resumes across restarts — each budgeted pass advances the pages still missing', async () => {
-    const { backfillMeetingWiki } = await import('../meeting-wiki')
+    // Pin time so batch-count assertions do not depend on filesystem speed.
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(0)
+    try {
+      const { backfillMeetingWiki } = await import('../meeting-wiki')
 
-    // Every "boot" gets exactly one batch (budget 0 stops at the first boundary).
-    // Missing-first ordering is what makes this converge: a pass never burns its
-    // whole budget re-verifying what it already wrote and stalls at the same spot.
-    const missingPerPass: number[] = []
-    let passes = 0
-    let last = await backfillMeetingWiki({ batchSize: 20, budgetMs: 0 })
-    missingPerPass.push(last.remainingMissing)
-    while (last.remainingMissing > 0 && passes < 10) {
-      passes++
-      last = await backfillMeetingWiki({ batchSize: 20, budgetMs: 0 })
+      // Every "boot" gets exactly one batch (budget 0 stops at the first boundary).
+      // Missing-first ordering is what makes this converge: a pass never burns its
+      // whole budget re-verifying what it already wrote and stalls at the same spot.
+      const missingPerPass: number[] = []
+      let passes = 0
+      let last = await backfillMeetingWiki({ batchSize: 20, budgetMs: 0 })
       missingPerPass.push(last.remainingMissing)
-    }
+      while (last.remainingMissing > 0 && passes < 10) {
+        passes++
+        last = await backfillMeetingWiki({ batchSize: 20, budgetMs: 0 })
+        missingPerPass.push(last.remainingMissing)
+      }
 
-    // Converged, and strictly monotonically: 40 -> 20 -> 0 for N=60 in batches of 20.
-    expect(last.remainingMissing).toBe(0)
-    expect(missingPerPass).toEqual([40, 20, 0])
-    expect(listWiki()).toHaveLength(N)
+      // Converged, and strictly monotonically: 40 -> 20 -> 0 for N=60 in batches of 20.
+      expect(last.remainingMissing).toBe(0)
+      expect(missingPerPass).toEqual([40, 20, 0])
+      expect(listWiki()).toHaveLength(N)
 
-    // Every recording ended up with exactly one page, no duplicates from the
-    // partial passes.
-    const owners = listWiki().map((f) => {
-      const head = readFileSync(join(tmpRoot, 'wiki', f), 'utf-8').slice(0, 500)
-      return head.match(/^recording_id:\s*(\S+)\s*$/m)?.[1]
-    })
-    expect(new Set(owners).size).toBe(N)
+      // Every recording ended up with exactly one page, no duplicates from the
+      // partial passes.
+      const owners = listWiki().map((f) => {
+        const head = readFileSync(join(tmpRoot, 'wiki', f), 'utf-8').slice(0, 500)
+        return head.match(/^recording_id:\s*(\S+)\s*$/m)?.[1]
+      })
+      expect(new Set(owners).size).toBe(N)
+    } finally { clock.mockRestore() }
   })
 
   it('a persistently failing page does not starve the pages behind it', async () => {
@@ -1494,6 +1776,7 @@ describe('meeting-wiki — eligibility gating (RE7-1)', () => {
     cacheDirOverride = null
     await resetBackfillCursor()
     currentRow = null
+    missingRecordingIds = new Set<string>()
     backfillRows = []
     rowById = null
     configStore = new Map<string, string>()
@@ -1610,6 +1893,7 @@ describe('removeMeetingWiki — cleanup result (RE7-P1b)', () => {
     cacheDirOverride = null
     await resetBackfillCursor()
     currentRow = null
+    missingRecordingIds = new Set<string>()
     backfillRows = []
     rowById = null
     configStore = new Map<string, string>()
@@ -1646,6 +1930,7 @@ describe('meeting-wiki — cleanup-retry ledger (RE8-P1)', () => {
     cacheDirOverride = null
     await resetBackfillCursor()
     currentRow = null
+    missingRecordingIds = new Set<string>()
     backfillRows = []
     rowById = null
     configStore = new Map<string, string>()
