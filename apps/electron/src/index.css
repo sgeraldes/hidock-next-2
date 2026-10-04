@@ -8,6 +8,9 @@
 @plugin '@tailwindcss/typography';
 
 @custom-variant dark (&:is(.dark *));
+/* Tailwind 3's hover: applies on every device. Tailwind 4 limits it to
+ * @media (hover: hover), which drops hover styles on a 2-in-1 in tablet mode. */
+@custom-variant hover (&:hover);
 
 /* inline: utilities carry hsl(var(--token)) themselves, so a nested .dark
  * subtree resolves its own palette instead of inheriting the root's. */
@@ -236,9 +239,15 @@
 }
 
 /* Tailwind 3 defaults that Tailwind 4 changed, kept so the app looks and
- * behaves as before: borders default to gray-200 (v4: currentcolor), and
- * buttons show the pointer (v4: the default arrow). */
+ * behaves as before: borders default to gray-200 (v4: currentcolor),
+ * placeholders are gray-400 (v4: half the text color), and buttons show the
+ * pointer (v4: the default arrow). */
 @layer base {
+  input::placeholder,
+  textarea::placeholder {
+    opacity: 1;
+    color: var(--color-gray-400);
+  }
   *,
   ::after,
   ::before,

@@ -59,7 +59,8 @@ Three things in that file keep the app looking as it did on Tailwind 3; keep the
   Tailwind 4's more saturated value, so add its shades there before using it.
 - Elevation tokens are `--elevation-sm/md/lg`. Tailwind 4 owns `--shadow-*`, and
   `shadow-sm`, `shadow` and `shadow-md` map onto the elevation tokens.
-- Borders default to gray-200, and buttons show the pointer cursor.
+- Borders default to gray-200, placeholders to gray-400, and buttons show the pointer cursor.
+- `hover:` applies on every device, as in Tailwind 3 (Tailwind 4 limits it to devices with a mouse).
 
 Radix enter and exit animations (`animate-in`, `fade-in-0`, `slide-in-from-*`) come from
 `tw-animate-css`. Container queries (`@container`, `@lg:`) are built in.
