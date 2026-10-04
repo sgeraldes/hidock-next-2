@@ -101,7 +101,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
         {toasts.map((t) => (
           <ToastItem key={t.id} toast={t} onClose={() => removeToast(t.id)} />
         ))}
-        <ToastPrimitive.Viewport className="fixed bottom-0 right-0 flex flex-col p-4 gap-2 w-[390px] max-w-[100vw] m-0 list-none z-50 outline-none" />
+        <ToastPrimitive.Viewport className="fixed bottom-0 right-0 flex flex-col p-4 gap-2 w-[390px] max-w-[100vw] m-0 list-none z-50 outline-hidden" />
       </ToastPrimitive.Provider>
     </ToastContext.Provider>
   )
@@ -138,7 +138,7 @@ function ToastItem({ toast: t, onClose }: { toast: Toast; onClose: () => void })
       )}
       duration={t.duration}
     >
-      <Icon className={cn('h-5 w-5 flex-shrink-0 mt-0.5', iconColor)} />
+      <Icon className={cn('h-5 w-5 shrink-0 mt-0.5', iconColor)} />
       <div className="flex-1 min-w-0">
         {t.title && (
           <ToastPrimitive.Title className="text-sm font-semibold">
@@ -154,7 +154,7 @@ function ToastItem({ toast: t, onClose }: { toast: Toast; onClose: () => void })
       {t.action && (
         <ToastPrimitive.Action
           altText={t.action.label}
-          className="flex-shrink-0 self-center rounded-md border px-2.5 py-1 text-xs font-medium hover:bg-accent transition-colors"
+          className="shrink-0 self-center rounded-md border px-2.5 py-1 text-xs font-medium hover:bg-accent transition-colors"
           onClick={(e) => {
             e.preventDefault()
             t.action?.onClick()

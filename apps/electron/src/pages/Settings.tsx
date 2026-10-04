@@ -922,7 +922,7 @@ export function Settings({
                       aria-pressed={chatPlacement === 'floating'}
                       onClick={() => setChatPlacement('floating')}
                       className={cn(
-                        'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                        'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring',
                         chatPlacement === 'floating'
                           ? 'bg-background font-medium text-foreground shadow-sm'
                           : 'text-muted-foreground hover:text-foreground'
@@ -936,7 +936,7 @@ export function Settings({
                       aria-pressed={chatPlacement === 'embedded'}
                       onClick={() => setChatPlacement('embedded')}
                       className={cn(
-                        'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                        'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring',
                         chatPlacement === 'embedded'
                           ? 'bg-background font-medium text-foreground shadow-sm'
                           : 'text-muted-foreground hover:text-foreground'
@@ -966,7 +966,7 @@ export function Settings({
                       aria-pressed={chatPosition === 'left'}
                       onClick={() => setChatPosition('left')}
                       className={cn(
-                        'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                        'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring',
                         chatPosition === 'left'
                           ? 'bg-background font-medium text-foreground shadow-sm'
                           : 'text-muted-foreground hover:text-foreground'
@@ -980,7 +980,7 @@ export function Settings({
                       aria-pressed={chatPosition === 'right'}
                       onClick={() => setChatPosition('right')}
                       className={cn(
-                        'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                        'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring',
                         chatPosition === 'right'
                           ? 'bg-background font-medium text-foreground shadow-sm'
                           : 'text-muted-foreground hover:text-foreground'
@@ -1208,7 +1208,7 @@ export function Settings({
                     onChange={(e) => setTranscriptionProvider(e.target.value as typeof transcriptionProvider)}
                     disabled={saving}
                     aria-describedby="transcriptionProvider-description"
-                    className="mt-1 w-full max-w-sm rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                    className="mt-1 w-full max-w-sm rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-hidden focus:ring-2 focus:ring-ring focus:ring-offset-2"
                   >
                     {TRANSCRIPTION_PROVIDERS.map((provider) => (
                       <option key={provider.value} value={provider.value}>
@@ -1283,7 +1283,7 @@ export function Settings({
                         disabled={saving}
                         aria-label="Transcription Model"
                         aria-describedby="geminiModel-description"
-                        className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                        className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-hidden focus:ring-2 focus:ring-ring focus:ring-offset-2"
                       >
                         {geminiModelOptions.map((model) => (
                           <option key={model.value} value={model.value}>
@@ -1852,7 +1852,7 @@ export function Settings({
                 {/* B-SET-002: Storage error with retry button */}
                 {storageError && (
                   <div className="flex items-center gap-3 p-3 rounded-md bg-destructive/10 text-destructive border border-destructive/20">
-                    <AlertCircle className="h-5 w-5 flex-shrink-0" />
+                    <AlertCircle className="h-5 w-5 shrink-0" />
                     <div className="flex-1 text-sm">{storageError}</div>
                     <Button variant="outline" size="sm" onClick={loadStorageInfo}>
                       <RefreshCw className="h-3 w-3 mr-1" />

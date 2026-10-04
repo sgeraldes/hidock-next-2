@@ -51,7 +51,7 @@ export const CalendarHeader = memo(function CalendarHeader({
   onCalendarViewChange,
 }: CalendarHeaderProps) {
   return (
-    <header className="flex items-center justify-between border-b px-6 py-4 flex-shrink-0">
+    <header className="flex items-center justify-between border-b px-6 py-4 shrink-0">
       <div className="flex items-center gap-4">
         <h1 className="text-2xl font-bold">{title}</h1>
         {/* Date navigation - only show in calendar view */}

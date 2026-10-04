@@ -361,7 +361,7 @@ export function Layout({ children }: LayoutProps) {
           aria-label={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
           aria-pressed={sidebarOpen}
           title={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
-          className="absolute right-0 top-1/2 z-50 flex h-5 w-5 -translate-y-1/2 translate-x-1/2 items-center justify-center rounded-[3px] border border-slate-600 bg-slate-800 text-slate-300 shadow-sm transition-colors hover:bg-slate-700 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+          className="absolute right-0 top-1/2 z-50 flex h-5 w-5 -translate-y-1/2 translate-x-1/2 items-center justify-center rounded-[3px] border border-slate-600 bg-slate-800 text-slate-300 shadow-sm transition-colors hover:bg-slate-700 hover:text-white focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-sky-400"
         >
           {sidebarOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
         </button>
@@ -399,7 +399,7 @@ export function Layout({ children }: LayoutProps) {
                           !sidebarOpen && 'justify-center'
                         )}
                       >
-                        <item.icon className="h-5 w-5 flex-shrink-0" />
+                        <item.icon className="h-5 w-5 shrink-0" />
                         {sidebarOpen && (
                           <span className="flex min-w-0 flex-col leading-tight">
                             <span>{item.name}</span>
@@ -419,7 +419,7 @@ export function Layout({ children }: LayoutProps) {
                       to={item.href}
                       aria-label={!sidebarOpen ? item.name : undefined}
                       className={cn(
-                        'relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400',
+                        'relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-sky-400',
                         !sidebarOpen && 'justify-center',
                         isActive
                           ? 'bg-sky-600 text-white font-medium shadow-sm'
@@ -427,7 +427,7 @@ export function Layout({ children }: LayoutProps) {
                       )}
                       aria-current={isActive ? 'page' : undefined}
                     >
-                      <item.icon className="h-5 w-5 flex-shrink-0" />
+                      <item.icon className="h-5 w-5 shrink-0" />
                       {sidebarOpen && <span>{item.name}</span>}
                       <NavCountBadge
                         href={item.href}
@@ -454,7 +454,7 @@ export function Layout({ children }: LayoutProps) {
               to="/settings"
               aria-label={!sidebarOpen ? 'Settings' : undefined}
               className={cn(
-                'flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400',
+                'flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-sky-400',
                 !sidebarOpen && 'justify-center',
                 location.pathname.startsWith('/settings')
                   ? 'bg-sky-600 text-white font-medium shadow-sm'
@@ -462,7 +462,7 @@ export function Layout({ children }: LayoutProps) {
               )}
               aria-current={location.pathname.startsWith('/settings') ? 'page' : undefined}
             >
-              <Settings className="h-5 w-5 flex-shrink-0" />
+              <Settings className="h-5 w-5 shrink-0" />
               {sidebarOpen && <span>Settings</span>}
             </Link>
             </RailTooltip>

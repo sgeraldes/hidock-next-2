@@ -1000,7 +1000,7 @@ export function TranscriptViewer({
                 role="status"
               >
                 <TriangleAlert className="h-4 w-4 shrink-0" aria-hidden="true" />
-                <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                <span className="min-w-0 flex-1 wrap-anywhere">
                   Transcript saved. RAG search is pending: {ragPending}
                 </span>
                 <button
@@ -1009,7 +1009,7 @@ export function TranscriptViewer({
                   disabled={retryingRag}
                   aria-busy={retryingRag || undefined}
                   title={retryingRag ? 'Updating RAG' : undefined}
-                  className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 font-semibold text-amber-100 transition-colors hover:bg-amber-500/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 disabled:cursor-wait disabled:opacity-60"
+                  className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 font-semibold text-amber-100 transition-colors hover:bg-amber-500/15 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-amber-300 disabled:cursor-wait disabled:opacity-60"
                 >
                   {/* Busy keeps the verb; the state goes to the tooltip (owner, 2-oct-2026). */}
                   {retryingRag
@@ -1135,7 +1135,7 @@ export function TranscriptViewer({
                           rows={Math.min(8, Math.max(2, editDraft.split('\n').length + 1))}
                           aria-label={`Edit transcript turn ${i + 1}`}
                           aria-describedby={`transcript-edit-hint-${i}${editError ? ` transcript-edit-error-${i}` : ''}`}
-                          className="w-full resize-y rounded-lg border border-primary/50 bg-background px-3 py-2 text-sm leading-relaxed text-foreground shadow-sm outline-none transition-[border-color,box-shadow] placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/25 disabled:cursor-wait disabled:opacity-70"
+                          className="w-full resize-y rounded-lg border border-primary/50 bg-background px-3 py-2 text-sm leading-relaxed text-foreground shadow-sm outline-hidden transition-[border-color,box-shadow] placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/25 disabled:cursor-wait disabled:opacity-70"
                         />
                         <div className="flex flex-wrap items-center gap-2">
                           {hasTimestamps && (
@@ -1159,7 +1159,7 @@ export function TranscriptViewer({
                                 disabled={savingIndex === i}
                                 inputMode="decimal"
                                 aria-label={`Start time of transcript turn ${i + 1}`}
-                                className="w-20 rounded-md border border-input bg-background px-2 py-1 font-mono text-xs text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/25"
+                                className="w-20 rounded-md border border-input bg-background px-2 py-1 font-mono text-xs text-foreground outline-hidden focus:border-primary focus:ring-2 focus:ring-primary/25"
                               />
                             </label>
                           )}
@@ -1170,7 +1170,7 @@ export function TranscriptViewer({
                             type="button"
                             onClick={cancelEditing}
                             disabled={savingIndex === i}
-                            className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait disabled:opacity-50"
+                            className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait disabled:opacity-50"
                           >
                             <X className="h-3.5 w-3.5" aria-hidden="true" />
                             Cancel
@@ -1181,7 +1181,7 @@ export function TranscriptViewer({
                             disabled={savingIndex === i || !editDraft.trim()}
                             aria-busy={savingIndex === i || undefined}
                             title={savingIndex === i ? 'Saving and rebuilding RAG' : undefined}
-                            className="inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-xs font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait disabled:opacity-50"
+                            className="inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-xs font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait disabled:opacity-50"
                           >
                             {savingIndex === i ? (
                               <BusyIcon className="h-3.5 w-3.5" />
@@ -1199,13 +1199,13 @@ export function TranscriptViewer({
                       </div>
                     ) : (
                       <div className="relative min-w-0">
-                        <p className="whitespace-pre-wrap pr-9 leading-relaxed [overflow-wrap:anywhere]">{segment.text}</p>
+                        <p className="whitespace-pre-wrap pr-9 leading-relaxed wrap-anywhere">{segment.text}</p>
                         {editEnabled && (
                           <button
                             type="button"
                             onClick={() => startEditing(i)}
                             disabled={savingIndex !== null}
-                            className="absolute -top-1 right-0 inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground opacity-40 transition-[color,background-color,opacity] hover:bg-accent hover:text-foreground hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait disabled:opacity-20 group-hover/turn:opacity-100"
+                            className="absolute -top-1 right-0 inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground opacity-40 transition-[color,background-color,opacity] hover:bg-accent hover:text-foreground hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait disabled:opacity-20 group-hover/turn:opacity-100"
                             aria-label={`Edit transcript turn ${i + 1}`}
                             title="Edit this transcript turn"
                           >
@@ -1221,7 +1221,7 @@ export function TranscriptViewer({
             ) : (
               <div className="space-y-2">
                 {toParagraphs(transcript).map((para, i) => (
-                  <p key={i} className="text-sm whitespace-pre-wrap leading-relaxed [overflow-wrap:anywhere]">
+                  <p key={i} className="text-sm whitespace-pre-wrap leading-relaxed wrap-anywhere">
                     {para}
                   </p>
                 ))}

@@ -50,7 +50,7 @@ import type { ReaderSectionId, ReaderSectionMode } from '@/store/useLibraryStore
 const PIN_TRANSITION =
   'motion-safe:transition-[background-color,box-shadow,border-color] motion-safe:[transition-duration:180ms] motion-safe:ease-out'
 const PINNED_LOOK =
-  'border-b border-border bg-background/95 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/80'
+  'border-b border-border bg-background/95 shadow-sm backdrop-blur-sm supports-backdrop-filter:bg-background/80'
 const UNPINNED_LOOK = 'border-b border-transparent bg-transparent'
 
 interface ReaderSectionProps {

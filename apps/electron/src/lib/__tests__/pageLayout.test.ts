@@ -21,7 +21,7 @@ describe('pageLayout width scale', () => {
     expect(pageWide).toContain('mx-auto')
     expect(pageWide).toContain('w-full')
     expect(pageWide).toContain('max-w-6xl')
-    expect(pageWide).toContain('xl:max-w-[84rem]')
+    expect(pageWide).toContain('xl:max-w-336')
     expect(pageWide).toContain('2xl:max-w-[100rem]')
   })
 

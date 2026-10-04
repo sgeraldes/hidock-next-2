@@ -41,7 +41,7 @@ function ContactRow({ contact, onSelect }: { contact: PickerContact; onSelect: (
     <button
       type="button"
       onClick={onSelect}
-      className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+      className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left hover:bg-accent focus-visible:bg-accent focus-visible:outline-hidden"
     >
       <span
         aria-hidden="true"
@@ -131,7 +131,7 @@ export function MergeIntoDialog({ open, onOpenChange, loserName, excludeIds, onP
             placeholder="Search people…"
             aria-label="Search people"
             autoFocus
-            className="w-full rounded-md border bg-background py-1.5 pl-8 pr-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+            className="w-full rounded-md border bg-background py-1.5 pl-8 pr-2 text-sm focus:outline-hidden focus:ring-1 focus:ring-ring"
           />
         </div>
 

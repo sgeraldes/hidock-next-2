@@ -180,7 +180,7 @@ function DecisionRow({
         <Button
           size="sm"
           variant="outline"
-          className="h-7 flex-shrink-0"
+          className="h-7 shrink-0"
           disabled={state.state === 'busy'}
           aria-busy={state.state === 'busy' || undefined}
           aria-label={`Undo: ${sentence}`}

@@ -114,7 +114,7 @@ export function LibraryHeader({
                 aria-label={`Show ${stats.deviceOnly} source${stats.deviceOnly === 1 ? '' : 's'} that need download`}
                 className={cn(
                   'inline-flex h-6 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium transition-colors',
-                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+                  'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
                   deviceOnlyActive
                     ? 'border-orange-400/60 bg-orange-500/15 text-orange-700 dark:text-orange-300'
                     : 'border-orange-400/30 bg-orange-500/5 text-orange-700 hover:border-orange-400/60 hover:bg-orange-500/10 dark:text-orange-300'

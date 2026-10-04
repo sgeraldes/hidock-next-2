@@ -361,7 +361,7 @@ export const SourceCard = memo(function SourceCard({
           {meeting ? (
             <button
               type="button"
-              className="flex min-w-0 flex-1 items-center gap-1 rounded px-0.5 text-left text-xs text-foreground/80 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+              className="flex min-w-0 flex-1 items-center gap-1 rounded px-0.5 text-left text-xs text-foreground/80 hover:text-primary focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/50"
               onClick={(e) => { e.stopPropagation(); onNavigateToMeeting(meeting.id) }}
               title={`Open the meeting: ${meeting.subject}`}
               data-testid="card-meeting"

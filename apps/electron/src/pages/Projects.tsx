@@ -663,7 +663,7 @@ export function Projects() {
                     style={{ animationDelay: `${Math.min(index, 8) * 35}ms` }}
                     className={cn(
                       "animate-rise-in lift w-full text-left p-3 rounded-xl cursor-pointer group",
-                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
                       isActive
                         ? "bg-primary text-primary-foreground shadow-md"
                         : "border border-transparent bg-card/40 text-muted-foreground hover:text-foreground hover:border-border"
@@ -714,7 +714,7 @@ export function Projects() {
               <button
                 type="button"
                 onClick={collapseReview}
-                className="flex items-center gap-2 px-8 pt-6 pb-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 rounded"
+                className="flex items-center gap-2 px-8 pt-6 pb-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/50 rounded"
                 aria-label={`Back to ${activeProject.name}`}
               >
                 <ChevronLeft className="h-4 w-4" />
@@ -728,10 +728,10 @@ export function Projects() {
             <button
               type="button"
               onClick={() => setReviewExpanded(true)}
-              className="mx-8 mt-6 mb-2 flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2 text-sm hover:bg-amber-500/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+              className="mx-8 mt-6 mb-2 flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/6 px-3 py-2 text-sm hover:bg-amber-500/10 transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/50"
               aria-label={`Review ${projectSuggestionCount} project name ${projectSuggestionCount === 1 ? 'suggestion' : 'suggestions'}`}
             >
-              <Sparkles className="h-4 w-4 text-amber-500 flex-shrink-0" />
+              <Sparkles className="h-4 w-4 text-amber-500 shrink-0" />
               <span className="font-medium">
                 {projectSuggestionCount} project name {projectSuggestionCount === 1 ? 'suggestion' : 'suggestions'}
               </span>
@@ -787,7 +787,7 @@ export function Projects() {
                       <h2 className="text-2xl font-bold truncate" title={activeProject.name}>{activeProject.name}</h2>
                       <button
                         onClick={() => { setEditName(activeProject.name); setIsEditingName(true) }}
-                        className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 transition-opacity p-1 rounded hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                        className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 transition-opacity p-1 rounded hover:bg-muted focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/50"
                         aria-label="Edit project name"
                         title="Rename project"
                       >
@@ -891,7 +891,7 @@ export function Projects() {
 
                   if (knowledgeCount === 0 && peopleCount === 0) {
                     return (
-                      <Card className="animate-rise-in border-amber-500/30 bg-amber-500/[0.06]">
+                      <Card className="animate-rise-in border-amber-500/30 bg-amber-500/6">
                         <CardContent className="p-6 space-y-4">
                           <div className="flex items-start gap-3">
                             <span title="Automatically discovered from a transcript">
@@ -1047,7 +1047,7 @@ export function Projects() {
                               key={k.id}
                               onClick={() => navigate('/library', { state: { selectedId: k.id } })}
                               title={`Open "${k.title || 'Untitled'}" in Library`}
-                              className="w-full flex items-center gap-3 p-2.5 rounded-lg text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group"
+                              className="w-full flex items-center gap-3 p-2.5 rounded-lg text-left transition-colors hover:bg-muted focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring group"
                             >
                               <FileText className="h-4 w-4 shrink-0 text-muted-foreground group-hover:text-primary transition-colors" aria-hidden="true" />
                               <div className="min-w-0 flex-1">
@@ -1064,7 +1064,7 @@ export function Projects() {
                           {knowledgeItems.length > 5 && (
                             <button
                               onClick={() => navigate('/library')}
-                              className="w-full text-center text-xs text-muted-foreground hover:text-primary transition-colors py-1.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                              className="w-full text-center text-xs text-muted-foreground hover:text-primary transition-colors py-1.5 rounded-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                             >
                               +{knowledgeItems.length - 5} more in Library
                             </button>
@@ -1236,7 +1236,7 @@ export function Projects() {
                             key={a.id}
                             onClick={() => navigate('/actionables')}
                             title={`Open "${a.title}" in Actionables`}
-                            className="w-full flex items-center gap-3 p-2.5 rounded-lg text-left hover:bg-muted transition-colors group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            className="w-full flex items-center gap-3 p-2.5 rounded-lg text-left hover:bg-muted transition-colors group focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                           >
                             <div className="min-w-0 flex-1">
                               <p className="text-sm font-medium truncate group-hover:text-primary transition-colors">{a.title}</p>
@@ -1287,7 +1287,7 @@ export function Projects() {
                       <textarea
                         value={editDescription}
                         onChange={(e) => setEditDescription(e.target.value)}
-                        className="w-full text-sm border rounded-xl px-4 py-3 bg-background min-h-[80px] leading-relaxed focus:outline-none focus:ring-2 focus:ring-ring"
+                        className="w-full text-sm border rounded-xl px-4 py-3 bg-background min-h-[80px] leading-relaxed focus:outline-hidden focus:ring-2 focus:ring-ring"
                         placeholder="Add a project description..."
                         autoFocus
                       />

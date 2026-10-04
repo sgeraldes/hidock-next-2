@@ -45,9 +45,9 @@ function getTitle(result: BulkOperationResult, operation: string): string {
  */
 function ErrorIcon({ error }: { error: LibraryError }) {
   if (error.retryable) {
-    return <AlertCircle className="h-4 w-4 text-yellow-500 flex-shrink-0" aria-label="Retryable error" />
+    return <AlertCircle className="h-4 w-4 text-yellow-500 shrink-0" aria-label="Retryable error" />
   }
-  return <XCircle className="h-4 w-4 text-destructive flex-shrink-0" aria-label="Permanent error" />
+  return <XCircle className="h-4 w-4 text-destructive shrink-0" aria-label="Permanent error" />
 }
 
 export function BulkResultSummary({ isOpen, onClose, operation, result, onRetryFailed }: BulkResultSummaryProps) {

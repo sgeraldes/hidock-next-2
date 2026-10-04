@@ -22,7 +22,7 @@ function RepoHeader({ group }: { group: RepoCommitGroup }) {
       {group.branch && (
         <span className="flex min-w-0 items-center gap-1 text-muted-foreground">
           ·
-          <GitBranch className="h-3 w-3 flex-shrink-0" aria-hidden="true" />
+          <GitBranch className="h-3 w-3 shrink-0" aria-hidden="true" />
           <span className="truncate font-mono">{group.branch}</span>
         </span>
       )}
@@ -56,8 +56,8 @@ function CommitRow({ commit, index }: { commit: TodayCommit; index: number }) {
         title={copied ? 'Copied' : `Copy ${commit.hash}`}
         aria-label={copied ? 'Commit hash copied' : `Copy full hash for ${commit.shortHash}`}
         className={cn(
-          'flex flex-shrink-0 items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11px] font-medium text-foreground/70 transition-colors',
-          'hover:bg-muted-foreground/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+          'flex shrink-0 items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11px] font-medium text-foreground/70 transition-colors',
+          'hover:bg-muted-foreground/20 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring'
         )}
       >
         {copied ? (
@@ -68,7 +68,7 @@ function CommitRow({ commit, index }: { commit: TodayCommit; index: number }) {
         {commit.shortHash}
       </button>
       <span className="min-w-0 flex-1 truncate text-sm text-foreground/85">{commit.subject}</span>
-      {time && <span className="flex-shrink-0 text-[11px] tabular-nums text-muted-foreground">{time}</span>}
+      {time && <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{time}</span>}
     </div>
   )
 }

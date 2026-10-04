@@ -181,7 +181,7 @@ export function NotificationsButton() {
           }
           aria-haspopup="dialog"
           title="Notifications & operations"
-          className="titlebar-no-drag relative flex h-7 w-7 items-center justify-center rounded-md text-slate-300 transition-colors hover:bg-slate-700 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 data-[state=open]:bg-slate-700 data-[state=open]:text-white"
+          className="titlebar-no-drag relative flex h-7 w-7 items-center justify-center rounded-md text-slate-300 transition-colors hover:bg-slate-700 hover:text-white focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-sky-400 data-[state=open]:bg-slate-700 data-[state=open]:text-white"
         >
           <Bell className={cn('h-4 w-4', active > 0 && 'animate-pulse motion-reduce:animate-none')} />
           {total > 0 && (
@@ -258,7 +258,7 @@ export function NotificationsButton() {
                       disabled={dl.status === 'cancelling'}
                       aria-label={`Cancel download ${dlLabel}`}
                       title="Cancel download"
-                      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-red-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-red-500 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <X className="h-3.5 w-3.5" />
                     </button>
@@ -277,7 +277,7 @@ export function NotificationsButton() {
                 type="button"
                 onClick={() => cancelAllDownloads()}
                 aria-label="Cancel all downloads"
-                className="flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 dark:text-red-400"
+                className="flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-500/10 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-red-400 dark:text-red-400"
               >
                 <X className="h-3.5 w-3.5" />
                 Cancel all downloads
@@ -286,7 +286,7 @@ export function NotificationsButton() {
             <button
               type="button"
               onClick={viewAll}
-              className="ml-auto flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+              className="ml-auto flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-sky-400"
             >
               View all in Operations
               <ArrowRight className="h-3.5 w-3.5" />

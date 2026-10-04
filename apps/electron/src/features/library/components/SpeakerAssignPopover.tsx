@@ -112,7 +112,7 @@ function ContactRow({
     <button
       type="button"
       onClick={onSelect}
-      className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+      className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left hover:bg-accent focus-visible:bg-accent focus-visible:outline-hidden"
     >
       <Avatar name={contact.name} />
       <span className="flex min-w-0 flex-1 flex-col">
@@ -315,8 +315,8 @@ export function SpeakerAssignPopover({
               }
               className={
                 isAssigned
-                  ? 'font-semibold text-primary hover:underline decoration-dotted underline-offset-2 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50'
-                  : 'font-semibold text-foreground/80 hover:text-foreground hover:underline decoration-dotted underline-offset-2 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50'
+                  ? 'font-semibold text-primary hover:underline decoration-dotted underline-offset-2 rounded focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/50'
+                  : 'font-semibold text-foreground/80 hover:text-foreground hover:underline decoration-dotted underline-offset-2 rounded focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/50'
               }
             >
               {displayText}
@@ -338,7 +338,7 @@ export function SpeakerAssignPopover({
               <button
                 type="button"
                 onClick={split}
-                className="mt-1 flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-amber-700 hover:bg-accent focus-visible:bg-accent focus-visible:outline-none dark:text-amber-400"
+                className="mt-1 flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-amber-700 hover:bg-accent focus-visible:bg-accent focus-visible:outline-hidden dark:text-amber-400"
               >
                 <Scissors className="h-4 w-4" aria-hidden="true" />
                 Split speaker from here
@@ -353,7 +353,7 @@ export function SpeakerAssignPopover({
                 <button
                   type="button"
                   onClick={viewPerson}
-                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent focus-visible:bg-accent focus-visible:outline-hidden"
                 >
                   <ExternalLink className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
                   View person
@@ -366,7 +366,7 @@ export function SpeakerAssignPopover({
                     setScope('everywhere')
                   }}
                   aria-expanded={changing}
-                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent focus-visible:bg-accent focus-visible:outline-hidden"
                 >
                   <UserCog className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
                   Change identity
@@ -374,7 +374,7 @@ export function SpeakerAssignPopover({
                 <button
                   type="button"
                   onClick={reset}
-                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:outline-none"
+                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:outline-hidden"
                 >
                   <UserX className="h-4 w-4" aria-hidden="true" />
                   {resetLabel}
@@ -395,7 +395,7 @@ export function SpeakerAssignPopover({
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder="Search or create person..."
                   aria-label="Search or create person"
-                  className="w-full text-sm px-2 py-1.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                  className="w-full text-sm px-2 py-1.5 rounded border bg-background focus:outline-hidden focus:ring-1 focus:ring-ring"
                   autoFocus
                 />
               </div>
@@ -405,7 +405,7 @@ export function SpeakerAssignPopover({
                   <button
                     type="button"
                     onClick={assignNew}
-                    className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-primary hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+                    className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-primary hover:bg-accent focus-visible:bg-accent focus-visible:outline-hidden"
                   >
                     <UserPlus className="h-4 w-4" aria-hidden="true" />
                     Create &ldquo;{trimmed}&rdquo;
@@ -434,7 +434,7 @@ export function SpeakerAssignPopover({
                 <button
                   type="button"
                   onClick={mergeSplit}
-                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:outline-none"
+                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:outline-hidden"
                 >
                   <Undo2 className="h-4 w-4" aria-hidden="true" />
                   Merge back into {label.replace(/ · [A-Z0-9]+$/, '')}
@@ -443,7 +443,7 @@ export function SpeakerAssignPopover({
                 <button
                   type="button"
                   onClick={split}
-                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:outline-none"
+                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:outline-hidden"
                 >
                   <Users className="h-4 w-4" aria-hidden="true" />
                   Split speaker from here

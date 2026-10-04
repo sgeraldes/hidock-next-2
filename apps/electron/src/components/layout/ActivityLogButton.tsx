@@ -52,7 +52,7 @@ export function ActivityLogButton() {
             : 'Activity log'
         }
         title="Activity log"
-        className="titlebar-no-drag relative flex h-7 w-7 items-center justify-center rounded-md text-slate-300 transition-colors hover:bg-slate-700 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+        className="titlebar-no-drag relative flex h-7 w-7 items-center justify-center rounded-md text-slate-300 transition-colors hover:bg-slate-700 hover:text-white focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-sky-400"
       >
         <Activity className="h-4 w-4" />
         {count > 0 && (
@@ -150,7 +150,7 @@ function ActivityLogOverlay({ open, onClose, entries, onClear }: ActivityLogOver
       <div
         ref={panelRef}
         tabIndex={-1}
-        className="relative z-10 flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-slate-700 bg-slate-900 text-slate-100 shadow-2xl outline-none"
+        className="relative z-10 flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-slate-700 bg-slate-900 text-slate-100 shadow-2xl outline-hidden"
       >
         <div className="flex items-center justify-between border-b border-slate-700 px-4 py-3">
           <div className="flex items-center gap-2">

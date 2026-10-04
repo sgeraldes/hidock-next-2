@@ -23,7 +23,7 @@ export function TodayIdentitySuggestions() {
   const top = suggestions.slice(0, 2)
 
   return (
-    <Card className="border-amber-500/30 bg-amber-500/[0.03]">
+    <Card className="border-amber-500/30 bg-amber-500/3">
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center justify-between text-base">
           <span className="flex items-center gap-2">
@@ -49,7 +49,7 @@ export function TodayIdentitySuggestions() {
                 Is <span className="font-semibold">&lsquo;{s.candidate_name}&rsquo;</span> the same as{' '}
                 <span className="font-semibold">{targetNames[s.target_id] ?? 'a known ' + s.kind}</span>?
               </span>
-              <span className="text-xs text-muted-foreground flex-shrink-0">
+              <span className="text-xs text-muted-foreground shrink-0">
                 {Math.round((s.confidence ?? 0) * 100)}%
               </span>
             </button>

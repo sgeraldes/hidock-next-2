@@ -115,7 +115,7 @@ function renderTokens(tokens: DescToken[]): ReactNode {
         href={token.href}
         target="_blank"
         rel="noopener noreferrer"
-        className="text-primary hover:underline [overflow-wrap:anywhere]"
+        className="text-primary hover:underline wrap-anywhere"
       >
         {token.value}
       </a>
@@ -732,7 +732,7 @@ export function MeetingDetail() {
                               <button
                                 type="button"
                                 onClick={() => navigate(`/person/${contact.id}`)}
-                                className="hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 rounded"
+                                className="hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/50 rounded"
                                 title={`View ${contact.name}`}
                               >
                                 {labelText}
@@ -817,7 +817,7 @@ export function MeetingDetail() {
                           key={contact.id}
                           type="button"
                           onClick={() => navigate(`/person/${contact.id}`)}
-                          className="inline-flex items-center gap-1 px-2 py-1 bg-secondary text-secondary-foreground rounded-full text-xs hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                          className="inline-flex items-center gap-1 px-2 py-1 bg-secondary text-secondary-foreground rounded-full text-xs hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/50"
                           title={`View ${contact.name}`}
                         >
                           {contact.name || contact.email}
@@ -840,7 +840,7 @@ export function MeetingDetail() {
                       placeholder="Meeting description..."
                     />
                   ) : descriptionBlocks.length > 0 ? (
-                    <div className="text-sm text-muted-foreground [overflow-wrap:anywhere] max-h-64 overflow-y-auto space-y-2">
+                    <div className="text-sm text-muted-foreground wrap-anywhere max-h-64 overflow-y-auto space-y-2">
                       {descriptionBlocks.map((block, bi) =>
                         block.type === 'list' ? (
                           <ul key={bi} className="list-disc pl-5 space-y-1">

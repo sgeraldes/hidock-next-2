@@ -529,7 +529,7 @@ export function PersonDetail() {
   return (
     <div className="flex flex-col h-full bg-background">
       {/* Sticky Header */}
-      <header className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-10">
+      <header className="border-b bg-background/95 backdrop-blur-sm supports-backdrop-filter:bg-background/60 sticky top-0 z-10">
         <div className="px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <Button variant="ghost" size="icon" onClick={() => navigate('/people')}>
@@ -640,9 +640,9 @@ export function PersonDetail() {
         <div className="max-w-5xl mx-auto p-6 space-y-6">
           {bucketSummary && bucketSummary.recordingCount > 0 && (
             <div className="space-y-3">
-              <div className="flex flex-col gap-2 rounded-lg border border-blue-500/30 bg-blue-500/[0.06] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-col gap-2 rounded-lg border border-blue-500/30 bg-blue-500/6 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-start gap-2">
-                  <Users className="h-4 w-4 mt-0.5 flex-shrink-0 text-blue-500" />
+                  <Users className="h-4 w-4 mt-0.5 shrink-0 text-blue-500" />
                   <p className="text-sm">
                     This may be several people —{' '}
                     <span className="font-medium">{bucketSummary.resolvedCount} resolved</span>,{' '}
@@ -869,7 +869,7 @@ export function PersonDetail() {
                         <Button
                           variant="outline"
                           size="sm"
-                          className="flex-shrink-0"
+                          className="shrink-0"
                           onClick={() => setUnmergeTarget(entry)}
                           title={`Undo merge with ${entry.loserName}`}
                         >
@@ -921,7 +921,7 @@ export function PersonDetail() {
                         <HoverCard key={meeting.id}>
                           <HoverCardTrigger asChild>
                             <Card
-                              className="group lift cursor-pointer overflow-hidden shadow-sm border-border/70 dark:border-white/[0.06] hover:border-primary/40"
+                              className="group lift cursor-pointer overflow-hidden shadow-sm border-border/70 dark:border-white/6 hover:border-primary/40"
                               onClick={() => navigate(`/meeting/${meeting.id}`)}
                             >
                               <div className="p-4">
@@ -932,7 +932,7 @@ export function PersonDetail() {
                                       {formatDateTime(meeting.start_time)}
                                     </p>
                                   </div>
-                                  <ExternalLink className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+                                  <ExternalLink className="h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
                                 </div>
                               </div>
                             </Card>
@@ -1048,7 +1048,7 @@ export function PersonDetail() {
           )}
 
           {mergeTarget && highStakesMerge && (
-            <div className="rounded-lg border border-amber-500/40 bg-amber-500/[0.06] px-3 py-2 text-xs">
+            <div className="rounded-lg border border-amber-500/40 bg-amber-500/6 px-3 py-2 text-xs">
               <p className="text-amber-700 dark:text-amber-400 font-medium">
                 High-stakes merge: {person.name} has {mergeImpact!.keeper} links and {mergeTarget.name} has{' '}
                 {mergeImpact!.loser}. To confirm, type <span className="font-semibold">{mergeTarget.name}</span>.

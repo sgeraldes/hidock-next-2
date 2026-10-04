@@ -88,7 +88,7 @@ export function TranscriptIntegrityPanel({ recordingId, transcript, onRetranscri
                   type="button"
                   title={`${issue.detail ?? ''}${issue.detail ? ' ' : ''}Click to go to the next one.`}
                   onClick={() => onJump(code)}
-                  className="rounded-full border border-amber-500/50 bg-background px-2 py-0.5 hover:bg-amber-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="rounded-full border border-amber-500/50 bg-background px-2 py-0.5 hover:bg-amber-500/10 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                   data-testid={`integrity-jump-${code}`}
                 >
                   {text}

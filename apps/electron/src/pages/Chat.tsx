@@ -1009,7 +1009,7 @@ export function Chat() {
               >
                 <div className="flex flex-col gap-0.5 overflow-hidden flex-1">
                   <div className="flex items-center gap-2 overflow-hidden">
-                    <MessageSquare className={cn("h-4 w-4 flex-shrink-0", activeConversation?.id === conv.id ? "text-primary-foreground" : "text-muted-foreground")} />
+                    <MessageSquare className={cn("h-4 w-4 shrink-0", activeConversation?.id === conv.id ? "text-primary-foreground" : "text-muted-foreground")} />
                     <span className="truncate">{conv.title || 'Untitled'}</span>
                   </div>
                   <span className={cn(
@@ -1023,7 +1023,7 @@ export function Chat() {
                   variant="ghost"
                   size="icon"
                   className={cn(
-                    "h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0",
+                    "h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity shrink-0",
                     activeConversation?.id === conv.id ? "text-primary-foreground hover:bg-primary-foreground/20" : "hover:text-destructive"
                   )}
                   onClick={(e) => handleDeleteClick(e, conv.id)}
@@ -1109,7 +1109,7 @@ export function Chat() {
               e.preventDefault()
               historyToggleRef.current?.focus()
             }}
-            className="absolute inset-y-0 left-0 z-30 flex w-64 max-w-[80%] flex-col border-r bg-background shadow-xl focus:outline-none"
+            className="absolute inset-y-0 left-0 z-30 flex w-64 max-w-[80%] flex-col border-r bg-background shadow-xl focus:outline-hidden"
           >
             <div className="flex shrink-0 items-center justify-between border-b px-3 py-2">
               <DialogTitle className="text-sm font-semibold leading-none">History</DialogTitle>
@@ -1544,7 +1544,7 @@ export function Chat() {
                   >
                     <div
                       className={cn(
-                        'flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center shadow-sm border',
+                        'shrink-0 w-10 h-10 rounded-xl flex items-center justify-center shadow-sm border',
                         message.role === 'user' ? 'bg-primary border-primary' : 'bg-background border-border'
                       )}
                     >
@@ -1626,7 +1626,7 @@ export function Chat() {
                                       type="button"
                                       onClick={() => navigate(`/meeting/${source.meetingId}`)}
                                       aria-label={`Open meeting ${source.subject || 'Reference'}`}
-                                      className="flex items-center gap-1.5 text-[10px] px-2 py-1 bg-muted rounded-full border border-border/50 hover:bg-muted/80 hover:underline transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                      className="flex items-center gap-1.5 text-[10px] px-2 py-1 bg-muted rounded-full border border-border/50 hover:bg-muted/80 hover:underline transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                                     >
                                       {chipInner}
                                     </button>
@@ -1659,7 +1659,7 @@ export function Chat() {
             {/* B-CHAT-005: Loading indicator with cancel button */}
             {loading && (
               <div className="flex gap-4">
-                <div className="flex-shrink-0 w-10 h-10 rounded-xl bg-background border border-border flex items-center justify-center shadow-sm">
+                <div className="shrink-0 w-10 h-10 rounded-xl bg-background border border-border flex items-center justify-center shadow-sm">
                   <Bot className="h-5 w-5" />
                 </div>
                 <div className="flex items-center gap-3">

@@ -49,6 +49,21 @@ better-sqlite3 binding (the prebuilt for the target platform, and any `better_sq
 the packed executable and fails the build if one does not load. `npm run check:native` does the
 same against the checkout.
 
+### Styles: Tailwind 4, configured in CSS
+
+There is no `tailwind.config.js`. Theme tokens, plugins and the dark variant live in
+`src/index.css` (`@theme`, `@plugin`, `@custom-variant`), and PostCSS runs `@tailwindcss/postcss`.
+Three things in that file keep the app looking as it did on Tailwind 3; keep them when editing:
+
+- The Tailwind 3 palette is pinned for every hue the app uses. A hue not in that block gets
+  Tailwind 4's more saturated value, so add its shades there before using it.
+- Elevation tokens are `--elevation-sm/md/lg`. Tailwind 4 owns `--shadow-*`, and
+  `shadow-sm`, `shadow` and `shadow-md` map onto the elevation tokens.
+- Borders default to gray-200, and buttons show the pointer cursor.
+
+Radix enter and exit animations (`animate-in`, `fade-in-0`, `slide-in-from-*`) come from
+`tw-animate-css`. Container queries (`@container`, `@lg:`) are built in.
+
 ## Pull requests
 
 Include:

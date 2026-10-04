@@ -209,7 +209,7 @@ export function AddPersonDialog({ open, onOpenChange, onCreated, onOpenExisting 
             </div>
 
             {duplicate && (
-              <div className="rounded-lg border border-amber-500/40 bg-amber-500/[0.06] px-3 py-2.5 text-xs">
+              <div className="rounded-lg border border-amber-500/40 bg-amber-500/6 px-3 py-2.5 text-xs">
                 <p className="font-medium text-amber-700 dark:text-amber-400">
                   A contact named {duplicate.name} already exists.
                 </p>

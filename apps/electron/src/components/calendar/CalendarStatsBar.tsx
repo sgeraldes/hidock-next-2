@@ -37,7 +37,7 @@ export const CalendarStatsBar = memo(function CalendarStatsBar({
   onSortChange,
 }: CalendarStatsBarProps) {
   return (
-    <div className="flex items-center gap-2 px-6 py-2 bg-muted/30 text-xs border-b flex-shrink-0">
+    <div className="flex items-center gap-2 px-6 py-2 bg-muted/30 text-xs border-b shrink-0">
       {/* All recordings chip */}
       <button
         onClick={() => onLocationFilterChange('all')}

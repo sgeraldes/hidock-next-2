@@ -159,7 +159,7 @@ export function RecordingSplitEditor({
 
   return (
     <section
-      className="mt-2 rounded-lg border border-primary/35 bg-primary/[0.04] p-3 shadow-sm"
+      className="mt-2 rounded-lg border border-primary/35 bg-primary/4 p-3 shadow-sm"
       aria-label="Split recording editor"
       data-testid="recording-split-editor"
     >
@@ -250,7 +250,7 @@ export function RecordingSplitEditor({
                 type="button"
                 onClick={() => changePoint(suggestion.timeSec)}
                 className={cn(
-                  'rounded-full border px-2.5 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60',
+                  'rounded-full border px-2.5 py-1 text-xs transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/60',
                   Math.abs(selected - suggestion.timeSec) < 0.05
                     ? 'border-primary bg-primary text-primary-foreground'
                     : 'border-border bg-background hover:border-primary/60 hover:bg-primary/5'

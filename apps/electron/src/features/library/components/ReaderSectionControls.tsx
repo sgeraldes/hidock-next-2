@@ -211,7 +211,7 @@ export function ReaderSectionControls({
     >
       <button
         type="button"
-        className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-1 text-left text-sm font-semibold text-foreground hover:text-foreground/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+        className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-1 text-left text-sm font-semibold text-foreground hover:text-foreground/80 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/50"
         onClick={() => onModeChange(expanded ? 'compact' : 'expanded')}
         aria-expanded={expanded}
         aria-controls={`reader-${section}-content`}
@@ -249,7 +249,7 @@ export function HiddenReaderSections({ hidden, onRestore }: HiddenReaderSections
           key={id}
           type="button"
           onClick={() => onRestore(id)}
-          className="rounded-full border bg-background px-2.5 py-1 font-medium text-foreground hover:border-primary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+          className="rounded-full border bg-background px-2.5 py-1 font-medium text-foreground hover:border-primary hover:text-primary focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/50"
         >
           Show {label}
         </button>

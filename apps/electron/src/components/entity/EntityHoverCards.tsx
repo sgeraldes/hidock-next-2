@@ -181,7 +181,7 @@ export function PersonHoverCard({
               key={m.id as string}
               type="button"
               onClick={() => navigate(`/meeting/${m.id as string}`)}
-              className="flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left text-xs hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left text-xs hover:bg-muted focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
             >
               <CalendarDays className="h-3 w-3 shrink-0 text-violet-600" />
               <span className="truncate flex-1">{(m.subject as string) || 'Meeting'}</span>
@@ -417,7 +417,7 @@ export function MeetingHoverCard({
           href={joinUrl}
           target="_blank"
           rel="noreferrer"
-          className="flex items-center gap-1.5 text-xs font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="flex items-center gap-1.5 text-xs font-medium text-primary hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
         >
           <Video className="h-3 w-3 shrink-0" />
           <span className="truncate">Join meeting</span>

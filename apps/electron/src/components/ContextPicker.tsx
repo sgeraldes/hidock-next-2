@@ -84,7 +84,7 @@ export function ContextPicker({ onSelect, selectedIds, className }: ContextPicke
                 )}
               >
                 <div className={cn(
-                  "flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center border",
+                  "shrink-0 w-8 h-8 rounded-full flex items-center justify-center border",
                   isSelected ? "bg-primary border-primary text-primary-foreground" : "bg-background border-border text-muted-foreground"
                 )}>
                   {isSelected ? <Check className="h-4 w-4" /> : <BookOpen className="h-4 w-4" />}

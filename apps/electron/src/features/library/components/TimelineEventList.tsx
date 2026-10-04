@@ -103,7 +103,7 @@ export function TimelineEventList({
                       onClick={() => setExpandedEventId(isExpanded ? null : m.id)}
                       aria-expanded={isExpanded}
                       aria-label={`${isExpanded ? 'Collapse' : 'Expand'} details for item ${m.index ?? ''}`}
-                      className="flex min-w-0 flex-1 items-start gap-2 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 rounded"
+                      className="flex min-w-0 flex-1 items-start gap-2 text-left text-xs focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/40 rounded"
                     >
                       <span
                         className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold text-white"
@@ -155,7 +155,7 @@ export function TimelineEventList({
                           <TooltipTrigger asChild>
                             <span
                               className={cn(
-                                'min-w-0 flex-1 whitespace-normal break-words leading-snug',
+                                'min-w-0 flex-1 whitespace-normal wrap-break-word leading-snug',
                                 isCompleted && 'line-through text-muted-foreground'
                               )}
                             >
@@ -184,7 +184,7 @@ export function TimelineEventList({
                       onClick={() => onActivate(m)}
                       aria-pressed={isActive}
                       title={`Seek to ${formatTimestamp(m.timeSec)}`}
-                      className="shrink-0 rounded px-1 tabular-nums text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                      className="shrink-0 rounded px-1 tabular-nums text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/40"
                     >
                       {formatTimestamp(m.timeSec)}
                     </button>

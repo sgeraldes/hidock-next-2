@@ -163,7 +163,7 @@ const RelativeBadge = ({ vm, subtle }: { vm: MeetingVM; subtle?: boolean }) => {
   return (
     <span
       className={cn(
-        'flex items-center gap-1.5 text-xs whitespace-nowrap rounded-full px-2 py-0.5 flex-shrink-0',
+        'flex items-center gap-1.5 text-xs whitespace-nowrap rounded-full px-2 py-0.5 shrink-0',
         vm.runningOver
           ? 'bg-red-500/10 text-red-600 dark:text-red-400 font-medium'
           : vm.inProgress || vm.isHero || vm.timing.isNextUp
@@ -176,7 +176,7 @@ const RelativeBadge = ({ vm, subtle }: { vm: MeetingVM; subtle?: boolean }) => {
       {(vm.inProgress || vm.runningOver) && (
         <span
           className={cn(
-            'h-1.5 w-1.5 rounded-full flex-shrink-0 animate-pulse motion-reduce:animate-none',
+            'h-1.5 w-1.5 rounded-full shrink-0 animate-pulse motion-reduce:animate-none',
             vm.recording || vm.runningOver ? 'bg-red-500' : 'bg-primary'
           )}
         />
@@ -190,10 +190,10 @@ const RelativeBadge = ({ vm, subtle }: { vm: MeetingVM; subtle?: boolean }) => {
 
 const RecordingMic = ({ vm }: { vm: MeetingVM }) =>
   vm.hasRecording ? (
-    <Mic className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-500 flex-shrink-0" aria-label="Recording linked" />
+    <Mic className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-500 shrink-0" aria-label="Recording linked" />
   ) : vm.recordedOnDevice ? (
     <span
-      className="flex items-center gap-1 flex-shrink-0 text-amber-600 dark:text-amber-500"
+      className="flex items-center gap-1 shrink-0 text-amber-600 dark:text-amber-500"
       aria-label="Recorded — on device, not yet downloaded"
     >
       <Mic className="h-3.5 w-3.5" />
@@ -204,7 +204,7 @@ const RecordingMic = ({ vm }: { vm: MeetingVM }) =>
 const RecordingChip = ({ vm }: { vm: MeetingVM }) =>
   vm.recording || vm.runningOver ? (
     <span
-      className="flex items-center gap-1 flex-shrink-0 rounded-full bg-red-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-600 dark:text-red-400"
+      className="flex items-center gap-1 shrink-0 rounded-full bg-red-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-600 dark:text-red-400"
       aria-label="Recording in progress"
     >
       <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse motion-reduce:animate-none" />
@@ -220,7 +220,7 @@ const RecordingChip = ({ vm }: { vm: MeetingVM }) =>
 const CategoryDot = ({ vm, className }: { vm: MeetingVM; className?: string }) => (
   <span
     className={cn(
-      'flex-shrink-0 rounded-full',
+      'shrink-0 rounded-full',
       CATEGORY_DOT[vm.category],
       vm.dimmed && 'opacity-50',
       className
@@ -636,10 +636,10 @@ export function Today() {
         style={{ animationDelay: `${Math.min(index, 6) * 45}ms` }}
         className={cn(
           'group animate-rise-in lift w-full rounded-xl border bg-card p-4 text-left',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+          'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring',
           vm.isHero
             ? 'border-primary/40 shadow-lg ring-1 ring-primary/15'
-            : 'border-border/70 shadow-sm dark:border-white/[0.06]',
+            : 'border-border/70 shadow-sm dark:border-white/6',
           vm.runningOver && 'border-red-500/40 ring-1 ring-red-500/15',
           vm.dimmed && 'opacity-70'
         )}
@@ -649,7 +649,7 @@ export function Today() {
           {/* Time chip carries the category tint. */}
           <span
             className={cn(
-              'mt-0.5 flex-shrink-0 rounded-md px-2 py-1 text-xs font-semibold tabular-nums',
+              'mt-0.5 shrink-0 rounded-md px-2 py-1 text-xs font-semibold tabular-nums',
               CATEGORY_CHIP[vm.category],
               vm.cancelled && 'line-through opacity-70'
             )}
@@ -670,7 +670,7 @@ export function Today() {
                 {m.subject}
               </span>
               {vm.online && (
-                <Video className="h-3.5 w-3.5 text-foreground/50 flex-shrink-0" aria-label="Online meeting" />
+                <Video className="h-3.5 w-3.5 text-foreground/50 shrink-0" aria-label="Online meeting" />
               )}
               <RecordingMic vm={vm} />
               <RecordingChip vm={vm} />
@@ -688,7 +688,7 @@ export function Today() {
               </div>
             )}
           </div>
-          <div className="flex-shrink-0 self-center">
+          <div className="shrink-0 self-center">
             <RelativeBadge vm={vm} />
           </div>
         </div>
@@ -707,15 +707,15 @@ export function Today() {
         style={{ animationDelay: `${Math.min(index, 6) * 40}ms` }}
         className={cn(
           'group animate-rise-in flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition-colors',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring hover:bg-muted/50',
+          'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring hover:bg-muted/50',
           vm.runningOver
-            ? 'border-red-500/40 bg-red-500/[0.05] ring-1 ring-red-500/10'
+            ? 'border-red-500/40 bg-red-500/5 ring-1 ring-red-500/10'
             : 'border-transparent',
           !vm.runningOver && 'opacity-70 hover:opacity-100'
         )}
       >
         <CategoryDot vm={vm} className="h-2 w-2" />
-        <span className="w-28 flex-shrink-0 whitespace-nowrap text-xs font-medium tabular-nums text-foreground/55">
+        <span className="w-28 shrink-0 whitespace-nowrap text-xs font-medium tabular-nums text-foreground/55">
           {formatTimeRange(m.start_time, m.end_time, true)}
         </span>
         <span className="min-w-0 flex-1">
@@ -741,12 +741,12 @@ export function Today() {
         style={{ animationDelay: `${Math.min(index, 6) * 40}ms` }}
         className={cn(
           'group animate-rise-in flex w-full items-center gap-3 rounded-lg border border-transparent px-3 py-1.5 text-left transition-colors',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring hover:bg-muted/50',
+          'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring hover:bg-muted/50',
           vm.cancelled && 'opacity-60'
         )}
       >
         <CategoryDot vm={vm} className="h-2 w-2 opacity-70" />
-        <span className="w-28 flex-shrink-0 whitespace-nowrap text-xs font-medium tabular-nums text-foreground/50">
+        <span className="w-28 shrink-0 whitespace-nowrap text-xs font-medium tabular-nums text-foreground/50">
           {formatTimeRange(m.start_time, m.end_time, true)}
         </span>
         <span
@@ -757,7 +757,7 @@ export function Today() {
         >
           {m.subject}
         </span>
-        {vm.online && <Video className="h-3.5 w-3.5 flex-shrink-0 text-foreground/40" aria-label="Online meeting" />}
+        {vm.online && <Video className="h-3.5 w-3.5 shrink-0 text-foreground/40" aria-label="Online meeting" />}
         <RecordingMic vm={vm} />
         <RelativeBadge vm={vm} subtle />
       </button>
@@ -776,10 +776,10 @@ export function Today() {
           onClick={() => toggleGroup(key)}
           aria-expanded={expanded}
           data-testid="group-capsule"
-          className="group flex w-full items-center gap-2 rounded-lg border border-transparent bg-muted/40 px-3 py-2 text-left transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="group flex w-full items-center gap-2 rounded-lg border border-transparent bg-muted/40 px-3 py-2 text-left transition-colors hover:bg-muted/70 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
         >
           <ChevronRight
-            className={cn('h-3.5 w-3.5 flex-shrink-0 text-foreground/45 transition-transform', expanded && 'rotate-90')}
+            className={cn('h-3.5 w-3.5 shrink-0 text-foreground/45 transition-transform', expanded && 'rotate-90')}
           />
           <span className="text-xs font-semibold uppercase tracking-wide text-foreground/55">{group.label}</span>
           <span className="text-xs text-foreground/50">
@@ -817,10 +817,10 @@ export function Today() {
                 <button
                   onClick={() => navigate(`/meeting/${m.id}`)}
                   data-testid="capsule-row"
-                  className="flex w-full items-center gap-3 rounded-md px-3 py-1.5 text-left text-sm opacity-80 transition-colors hover:bg-muted/50 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="flex w-full items-center gap-3 rounded-md px-3 py-1.5 text-left text-sm opacity-80 transition-colors hover:bg-muted/50 hover:opacity-100 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <CategoryDot vm={vm} className="h-2 w-2" />
-                  <span className="w-28 flex-shrink-0 whitespace-nowrap text-xs tabular-nums text-foreground/55">
+                  <span className="w-28 shrink-0 whitespace-nowrap text-xs tabular-nums text-foreground/55">
                     {formatTimeRange(m.start_time, m.end_time, true)}
                   </span>
                   <span className={cn('min-w-0 flex-1 truncate text-foreground/80', vm.cancelled && 'line-through')}>
@@ -862,7 +862,7 @@ export function Today() {
     if (!item.meetingSubject) {
       return (
         <div className="flex items-center gap-1.5 text-xs font-medium text-foreground/55">
-          <Link2Off className="h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
+          <Link2Off className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
           {UNLINKED_STATE_LABEL}
         </div>
       )
@@ -872,7 +872,7 @@ export function Today() {
       <div className="flex min-w-0 items-center gap-2">
         <span className="truncate text-sm font-semibold text-foreground">{item.meetingSubject}</span>
         {time && (
-          <span className="flex-shrink-0 rounded-md bg-primary/10 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-primary">
+          <span className="shrink-0 rounded-md bg-primary/10 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-primary">
             {time}
           </span>
         )}
@@ -942,17 +942,17 @@ export function Today() {
       <div
         key={item.recordingId}
         style={{ animationDelay: `${Math.min(index, 6) * 45}ms` }}
-        className="animate-rise-in rounded-xl border border-border/70 bg-card dark:border-white/[0.06]"
+        className="animate-rise-in rounded-xl border border-border/70 bg-card dark:border-white/6"
       >
         <button
           onClick={() => toggleFollowUp(item.recordingId)}
           aria-expanded={expanded}
           data-testid="followup-row"
-          className="lift flex w-full items-start gap-3 rounded-xl px-4 py-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="lift flex w-full items-start gap-3 rounded-xl px-4 py-3 text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
         >
           <ChevronDown
             className={cn(
-              'mt-0.5 h-4 w-4 flex-shrink-0 text-foreground/45 transition-transform',
+              'mt-0.5 h-4 w-4 shrink-0 text-foreground/45 transition-transform',
               !expanded && '-rotate-90'
             )}
             aria-hidden="true"
@@ -1021,7 +1021,7 @@ export function Today() {
               <Popover>
                 <PopoverTrigger asChild>
                   <button
-                    className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-normal text-foreground/45 transition-colors hover:text-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-normal text-foreground/45 transition-colors hover:text-foreground/70 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                     aria-label="Meeting category legend"
                   >
                     <Info className="h-3.5 w-3.5" />
@@ -1071,7 +1071,7 @@ export function Today() {
 
                   {/* NOW line */}
                   <div ref={nowLineRef} className="flex items-center gap-2 py-1.5" aria-label="Current time">
-                    <span className="relative flex h-3 w-3 flex-shrink-0">
+                    <span className="relative flex h-3 w-3 shrink-0">
                       <span className="absolute inline-flex h-full w-full rounded-full bg-primary opacity-60 animate-ping motion-reduce:hidden" />
                       <span className="relative inline-flex h-3 w-3 rounded-full bg-primary" />
                     </span>
@@ -1079,7 +1079,7 @@ export function Today() {
                       {formatClock(now)}
                     </span>
                     <span className="ml-1 text-[11px] font-medium uppercase tracking-wider text-primary/60">Now</span>
-                    <span className="h-px flex-1 bg-gradient-to-r from-primary/40 to-transparent" aria-hidden="true" />
+                    <span className="h-px flex-1 bg-linear-to-r from-primary/40 to-transparent" aria-hidden="true" />
                   </div>
 
                   {/* Live recording card slots directly under the now-line */}
@@ -1093,7 +1093,7 @@ export function Today() {
                   {/* pre-first-meeting hero countdown */}
                   {preFirstMeeting && firstUpcoming && (
                     <div>
-                      <div className="rounded-xl border border-primary/30 bg-primary/[0.04] p-5 shadow-sm">
+                      <div className="rounded-xl border border-primary/30 bg-primary/4 p-5 shadow-sm">
                         <div className="text-xs font-medium uppercase tracking-wide text-primary/70">First meeting</div>
                         <div className="mt-1 text-2xl font-bold tracking-tight text-foreground">
                           {formatMinutesUntil(firstUpcomingTiming?.minutes ?? 0).replace(/^in /, '')}
@@ -1157,7 +1157,7 @@ export function Today() {
 
         {/* Today's follow-ups — the day's recorded + transcribed meetings, newest first */}
         {followUps.length > 0 ? (
-          <Card className="animate-rise-in border-primary/30 bg-primary/[0.03]">
+          <Card className="animate-rise-in border-primary/30 bg-primary/3">
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center justify-between text-base">
                 <span className="flex items-center gap-2">
@@ -1186,7 +1186,7 @@ export function Today() {
             </CardContent>
           </Card>
         ) : pendingCount > 0 ? (
-          <Card className="animate-rise-in border-primary/30 bg-primary/[0.03]">
+          <Card className="animate-rise-in border-primary/30 bg-primary/3">
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center gap-2 text-base">
                 <Sparkles className="h-4 w-4 text-amber-500" />
@@ -1207,7 +1207,7 @@ export function Today() {
             </CardContent>
           </Card>
         ) : latest ? (
-          <Card className="animate-rise-in border-primary/30 bg-primary/[0.03]">
+          <Card className="animate-rise-in border-primary/30 bg-primary/3">
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center gap-2 text-base">
                 <Sparkles className="h-4 w-4 text-amber-500" />
@@ -1275,7 +1275,7 @@ export function Today() {
                       <Button
                         size="sm"
                         variant="outline"
-                        className="flex-shrink-0"
+                        className="shrink-0"
                         onClick={() => generateFor(a.sourceKnowledgeId, a.suggestedTemplate || 'meeting_minutes')}
                       >
                         <Sparkles className="mr-1 h-4 w-4" />
@@ -1318,7 +1318,7 @@ export function Today() {
                     >
                       <button
                         onClick={() => navigate('/library', { state: { selectedId: k.recordingId } })}
-                        className="min-w-0 flex-1 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        className="min-w-0 flex-1 rounded text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                       >
                         <div className="truncate text-sm font-medium">{k.title}</div>
                       </button>

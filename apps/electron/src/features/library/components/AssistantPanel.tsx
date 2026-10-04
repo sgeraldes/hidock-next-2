@@ -179,7 +179,7 @@ export function AssistantPanel({ recording, transcript, onAskAssistant, onGenera
       <div className="p-4 border-t space-y-2">
         {isRateLimited && (
           <div className="flex items-start gap-2 p-2 bg-destructive/10 text-destructive text-xs rounded">
-            <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+            <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
             <p>Rate limit reached. Wait {Math.ceil((rateLimitReset! - Date.now()) / 1000)}s before submitting more queries.</p>
           </div>
         )}

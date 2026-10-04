@@ -88,7 +88,7 @@ export function EntityMention({ type, id, name, date, showIcon = false, classNam
       aria-label={ariaLabel}
       className={cn(
         badgeVariants({ variant: type }),
-        'cursor-pointer hover:brightness-105 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        'cursor-pointer hover:brightness-105 hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring',
         className
       )}
       title={label}

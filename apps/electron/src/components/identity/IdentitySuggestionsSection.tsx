@@ -127,19 +127,19 @@ function ProfileFacts({ profile, mentions }: { profile?: MiniProfile; mentions?:
     <div className="mt-1.5 space-y-0.5 text-xs text-muted-foreground">
       {roleCompany && (
         <div className="flex items-center gap-1 truncate">
-          <Briefcase className="h-3 w-3 flex-shrink-0" />
+          <Briefcase className="h-3 w-3 shrink-0" />
           <span className="truncate">{roleCompany}</span>
         </div>
       )}
       {profile?.email && (
         <div className="flex items-center gap-1 truncate">
-          <Mail className="h-3 w-3 flex-shrink-0" />
+          <Mail className="h-3 w-3 shrink-0" />
           <span className="truncate">{profile.email}</span>
         </div>
       )}
       {typeof profile?.meetingCount === 'number' && (
         <div className="flex items-center gap-1">
-          <CalendarDays className="h-3 w-3 flex-shrink-0" />
+          <CalendarDays className="h-3 w-3 shrink-0" />
           <span>
             {profile.meetingCount} meeting{profile.meetingCount === 1 ? '' : 's'}
           </span>
@@ -153,7 +153,7 @@ function ProfileFacts({ profile, mentions }: { profile?: MiniProfile; mentions?:
           status.state === 'error' && 'text-amber-600 dark:text-amber-400'
         )}
       >
-        <FileText className="h-3 w-3 flex-shrink-0" />
+        <FileText className="h-3 w-3 shrink-0" />
         {status.state === 'loading' ? <WorkingValue label={status.text} className="w-28" /> : <span>{status.text}</span>}
       </div>
     </div>
@@ -185,7 +185,7 @@ function KeeperPanel({
 }) {
   const displayName = profile?.name || name
   return (
-    <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/[0.04] p-2.5">
+    <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/4 p-2.5">
       <div className="flex items-center gap-1.5 mb-1">
         <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">
           Keeps
@@ -329,7 +329,7 @@ function CandidateRow({
           </div>
           <span
             className={cn(
-              'inline-flex flex-shrink-0 items-center rounded-full border px-2 py-0.5 text-xs font-medium',
+              'inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-xs font-medium',
               badge.className
             )}
           >
@@ -344,22 +344,22 @@ function CandidateRow({
       </div>
 
       {candidateContext && candidateContext.topics.some((c) => c.shared) && (
-        <div className="flex items-start gap-2 rounded-md border border-primary/30 bg-primary/[0.06] px-2.5 py-1.5 text-[11px] text-primary">
-          <Link2 className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" aria-hidden />
+        <div className="flex items-start gap-2 rounded-md border border-primary/30 bg-primary/6 px-2.5 py-1.5 text-[11px] text-primary">
+          <Link2 className="h-3.5 w-3.5 shrink-0 mt-0.5" aria-hidden />
           <span>Related topics — the two discuss the same subjects (same circle).</span>
         </div>
       )}
 
       {candidateContext && isDisjoint(candidateContext) && (
-        <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/[0.06] px-2.5 py-1.5 text-[11px] text-amber-700 dark:text-amber-300">
-          <Network className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" aria-hidden />
+        <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/6 px-2.5 py-1.5 text-[11px] text-amber-700 dark:text-amber-300">
+          <Network className="h-3.5 w-3.5 shrink-0 mt-0.5" aria-hidden />
           <span>Different circles — no shared people or topics between the two.</span>
         </div>
       )}
 
       {isCommonName && (
-        <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/[0.06] px-2.5 py-1.5 text-[11px] text-amber-700 dark:text-amber-300">
-          <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" aria-hidden />
+        <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/6 px-2.5 py-1.5 text-[11px] text-amber-700 dark:text-amber-300">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" aria-hidden />
           <span>Common name — verify carefully; the name alone is weak evidence.</span>
         </div>
       )}
@@ -369,7 +369,7 @@ function CandidateRow({
           role="alert"
           className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-2.5 py-2 text-xs text-red-700 dark:text-red-300"
         >
-          <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+          <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
           <span>
             Both names appear in the same conversation — <span className="font-semibold">likely different people</span>.
           </span>
@@ -431,7 +431,7 @@ function CandidateRow({
             onChange={(e) => setConfirmText(e.target.value)}
             placeholder={loserName}
             aria-label={`Type ${loserName} to confirm merge`}
-            className="w-full rounded-md border bg-background px-2 py-1 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="w-full rounded-md border bg-background px-2 py-1 text-xs outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
           />
         </div>
       )}
@@ -548,7 +548,7 @@ function GroupCanonicalChooser({
   const canConfirm = finalName.length > 0
 
   return (
-    <div className="rounded-lg border border-primary/30 bg-primary/[0.04] p-3 space-y-2">
+    <div className="rounded-lg border border-primary/30 bg-primary/4 p-3 space-y-2">
       <p className="text-xs font-medium">All of these are the same person. Which spelling is correct?</p>
       <div className="space-y-1">
         {names.map((n) => (
@@ -580,7 +580,7 @@ function GroupCanonicalChooser({
             onChange={(e) => setCustom(e.target.value)}
             placeholder="Correct name"
             aria-label="Correct canonical name"
-            className="ml-6 w-[calc(100%-1.5rem)] rounded-md border bg-background px-2 py-1 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="ml-6 w-[calc(100%-1.5rem)] rounded-md border bg-background px-2 py-1 text-sm outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
           />
         )}
       </div>
@@ -905,14 +905,14 @@ function GroupCard({
         </div>
       )}
 
-      <Card className="border-amber-500/20 bg-amber-500/[0.03]">
+      <Card className="border-amber-500/20 bg-amber-500/3">
         <CardContent className="p-4 space-y-3">
           {isMulti && (
             <div className="flex items-start gap-2">
               {kind === 'project' ? (
-                <Sparkles className="h-4 w-4 text-emerald-500 mt-0.5 flex-shrink-0" />
+                <Sparkles className="h-4 w-4 text-emerald-500 mt-0.5 shrink-0" />
               ) : (
-                <Users className="h-4 w-4 text-blue-500 mt-0.5 flex-shrink-0" />
+                <Users className="h-4 w-4 text-blue-500 mt-0.5 shrink-0" />
               )}
               <p className="text-sm leading-snug">
                 {candidates.length} names may be <span className="font-semibold">{keeperName}</span>:{' '}

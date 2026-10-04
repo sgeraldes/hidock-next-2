@@ -204,7 +204,7 @@ export default function Notes(): React.ReactElement {
               spellCheck
               autoFocus
               placeholder="Write. Everything else happens afterwards."
-              className="min-h-0 flex-1 resize-none bg-transparent p-4 font-mono text-sm outline-none"
+              className="min-h-0 flex-1 resize-none bg-transparent p-4 font-mono text-sm outline-hidden"
               onChange={(event) => edit(event.target.value)}
             />
 

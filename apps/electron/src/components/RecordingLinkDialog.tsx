@@ -463,7 +463,7 @@ export function RecordingLinkDialog({
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         {option.isAiSelected && (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-primary flex-shrink-0">
+                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-primary shrink-0">
                             <Star className="h-3.5 w-3.5 fill-current" aria-hidden="true" />
                             Best match
                           </span>
@@ -482,7 +482,7 @@ export function RecordingLinkDialog({
                     {hasCandidates && matchScore(option) > 0 && (
                       <span
                         className={cn(
-                          'text-xs px-2 py-0.5 rounded-full flex-shrink-0 font-medium',
+                          'text-xs px-2 py-0.5 rounded-full shrink-0 font-medium',
                           matchScore(option) > 0.7 &&
                             'bg-green-100 text-green-800 dark:bg-green-500/15 dark:text-green-300',
                           matchScore(option) > 0.4 &&
@@ -514,7 +514,7 @@ export function RecordingLinkDialog({
           </div>
         </div>
 
-        <DialogFooter className="flex-shrink-0">
+        <DialogFooter className="shrink-0">
           <Button variant="outline" onClick={onClose} disabled={saving}>
             Cancel
           </Button>
