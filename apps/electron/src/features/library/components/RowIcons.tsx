@@ -65,7 +65,7 @@ export function EvaluationLabel({ recording }: { recording: UnifiedRecording }) 
   if (!recording.evalStarLevel && !recording.evalKind) return null
   const shown = displayedEvaluation(recording)
   const kind = shown.kind ? KIND_LABELS[shown.kind] : null
-  const context = recording.evalContext ? CONTEXT_LABELS[recording.evalContext] : null
+  const context = shown.context ? CONTEXT_LABELS[shown.context] : null
   const stars = shown.stars
   return (
     <Tooltip>

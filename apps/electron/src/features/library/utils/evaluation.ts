@@ -106,12 +106,13 @@ export const isWarningFilter = (v: string): v is WarningFilter => has(WARNING_FI
 export function displayedEvaluation(r: {
   evalStarLevel?: number | null
   evalKind?: RecordingKind | null
+  evalContext?: RecordingContext | null
   audioCategory?: string | null
-}): { stars: number | null; kind: RecordingKind | null } {
+}): { stars: number | null; kind: RecordingKind | null; context: RecordingContext | null } {
   if (r.audioCategory === 'silent' || r.audioCategory === 'noise' || r.audioCategory === 'too_short') {
-    return { stars: 1, kind: 'noise_accidental' }
+    return { stars: 1, kind: 'noise_accidental', context: 'unclear' }
   }
-  return { stars: r.evalStarLevel ?? null, kind: r.evalKind ?? null }
+  return { stars: r.evalStarLevel ?? null, kind: r.evalKind ?? null, context: r.evalContext ?? null }
 }
 
 export interface EvaluationFields {

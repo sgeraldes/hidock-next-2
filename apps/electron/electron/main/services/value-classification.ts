@@ -730,7 +730,7 @@ export async function classifyCaptureValueRaw(captureId: string): Promise<RawCla
   // no throttle slot is billed for a stopwatch reading.
   const durationVerdict = classifyByDuration(row.duration_seconds, row.file_size)
   if (durationVerdict) {
-    return { classification: durationVerdict, currentRating: 'unrated', providerCalled: false }
+    return { classification: durationVerdict, method: 'duration', currentRating: 'unrated', providerCalled: false }
   }
 
   if (!row.transcript_full_text || row.transcript_full_text.trim() === '') {
