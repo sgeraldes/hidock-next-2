@@ -4049,34 +4049,50 @@ function repairPhase(): void {
 
   // Reference labels (v71), like Notes: fresh installs and upgrades share the
   // migration DDL, while SCHEMA remains a literal list of SQL statements.
-  database.run(DECISION_LABELS_DDL)
-  // v71 is unreleased: repair development databases even if already at v71.
-  const labelSetColumns = getTableColumns(database, 'decision_label_sets')
-  if (!labelSetColumns.includes('sampling_rule')) {
-    database.run('ALTER TABLE decision_label_sets ADD COLUMN sampling_rule TEXT')
-  }
-  if (labelSetColumns.includes('confident_count')) {
-    database.run('ALTER TABLE decision_label_sets RENAME COLUMN confident_count TO random_count')
-  }
-  if (!labelSetColumns.includes('sample_size')) {
-    database.run('ALTER TABLE decision_label_sets ADD COLUMN sample_size INTEGER NOT NULL DEFAULT 0 CHECK(sample_size >= 0)')
-    database.run('ALTER TABLE decision_label_sets ADD COLUMN doubtful_count INTEGER NOT NULL DEFAULT 0 CHECK(doubtful_count >= 0)')
-    database.run('ALTER TABLE decision_label_sets ADD COLUMN random_count INTEGER NOT NULL DEFAULT 0 CHECK(random_count >= 0)')
-    database.run(`UPDATE decision_label_sets SET
-      sample_size = (SELECT COUNT(*) FROM decision_label_items WHERE set_id = decision_label_sets.id),
-      doubtful_count = (SELECT COUNT(*) FROM decision_label_items WHERE set_id = decision_label_sets.id AND stratum = 'doubtful'),
-      random_count = (SELECT COUNT(*) FROM decision_label_items WHERE set_id = decision_label_sets.id AND stratum IN ('confident', 'random'))`)
-  }
-  const labelItemsSql = database.exec("SELECT sql FROM sqlite_master WHERE name = 'decision_label_items'")[0]?.values[0]?.[0]
-  if (typeof labelItemsSql === 'string' && labelItemsSql.includes("'confident'")) {
-    // Rebuild the CHECK constraint and translate legacy membership without losing labels.
-    database.run('ALTER TABLE decision_label_items RENAME TO decision_label_items_legacy')
-    database.run(DECISION_LABELS_DDL)
+  const recoverLabelItems = (): void => {
+    if (getTableColumns(database, 'decision_label_items_legacy').length === 0) return
     database.run(`INSERT INTO decision_label_items (set_id, recording_id, stratum, position)
       SELECT set_id, recording_id, CASE WHEN stratum = 'confident' THEN 'random' ELSE stratum END, position
-      FROM decision_label_items_legacy`)
+      FROM decision_label_items_legacy WHERE true
+      ON CONFLICT(set_id, recording_id) DO NOTHING`)
     database.run('DROP TABLE decision_label_items_legacy')
     database.run(DECISION_LABELS_DDL)
+  }
+  // Recover interrupted older repairs before counting members or exposing sets.
+  // A savepoint makes recovery and constraint rebuilding atomic, even at boot.
+  database.run('SAVEPOINT decision_label_repair')
+  try {
+    database.run(DECISION_LABELS_DDL)
+    recoverLabelItems()
+    // v71 is unreleased: repair development databases even if already at v71.
+    const labelSetColumns = getTableColumns(database, 'decision_label_sets')
+    if (!labelSetColumns.includes('sampling_rule')) {
+      database.run('ALTER TABLE decision_label_sets ADD COLUMN sampling_rule TEXT')
+    }
+    if (labelSetColumns.includes('confident_count')) {
+      database.run('ALTER TABLE decision_label_sets RENAME COLUMN confident_count TO random_count')
+    }
+    if (!labelSetColumns.includes('sample_size')) {
+      database.run('ALTER TABLE decision_label_sets ADD COLUMN sample_size INTEGER NOT NULL DEFAULT 0 CHECK(sample_size >= 0)')
+      database.run('ALTER TABLE decision_label_sets ADD COLUMN doubtful_count INTEGER NOT NULL DEFAULT 0 CHECK(doubtful_count >= 0)')
+      database.run('ALTER TABLE decision_label_sets ADD COLUMN random_count INTEGER NOT NULL DEFAULT 0 CHECK(random_count >= 0)')
+      database.run(`UPDATE decision_label_sets SET
+        sample_size = (SELECT COUNT(*) FROM decision_label_items WHERE set_id = decision_label_sets.id),
+        doubtful_count = (SELECT COUNT(*) FROM decision_label_items WHERE set_id = decision_label_sets.id AND stratum = 'doubtful'),
+        random_count = (SELECT COUNT(*) FROM decision_label_items WHERE set_id = decision_label_sets.id AND stratum IN ('confident', 'random'))`)
+    }
+    const labelItemsSql = database.exec("SELECT sql FROM sqlite_master WHERE name = 'decision_label_items'")[0]?.values[0]?.[0]
+    if (typeof labelItemsSql === 'string' && labelItemsSql.includes("'confident'")) {
+      // Rebuild the CHECK constraint and translate legacy membership without losing labels.
+      database.run('ALTER TABLE decision_label_items RENAME TO decision_label_items_legacy')
+      database.run(DECISION_LABELS_DDL)
+      recoverLabelItems()
+    }
+    database.run('RELEASE decision_label_repair')
+  } catch (error) {
+    database.run('ROLLBACK TO decision_label_repair')
+    database.run('RELEASE decision_label_repair')
+    throw error
   }
 
   // Repair transcript_speakers (v25): a new table has no columns to ALTER, but

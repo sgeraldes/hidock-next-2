@@ -3,6 +3,7 @@ import { beforeAll, afterAll, beforeEach, describe, expect, it, vi } from 'vites
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { existsSync, rmSync } from 'fs'
+import SQLite from 'better-sqlite3'
 
 const paths = vi.hoisted(() => ({ db: '' }))
 paths.db = join(tmpdir(), `hidock-labels-${process.pid}-${Date.now()}.db`)
@@ -196,6 +197,55 @@ describe('reference labels on real SQLite', () => {
     seed('new')
     expect(getLabelSet()).toMatchObject({ id: old.id, size: 1, unavailable: 1 })
     expect(queryOne('SELECT answer FROM decision_labels')).toEqual({ answer: 'interview' })
+  })
+  it.each([false, true])('recovers interrupted membership rebuild before reads (new table exists: %s)', async newTableExists => {
+    seed('stranded')
+    const original = getLabelSet()
+    saveLabel({ setId: original.id, recordingId: 'stranded', answer: 'interview' })
+    const labeled = getLabelSet()
+    run('UPDATE decision_label_sets SET sampling_rule = NULL')
+    run('ALTER TABLE decision_label_items RENAME TO decision_label_items_legacy')
+    if (newTableExists) {
+      run("CREATE TABLE decision_label_items (set_id TEXT NOT NULL REFERENCES decision_label_sets(id) ON DELETE CASCADE, recording_id TEXT NOT NULL REFERENCES recordings(id) ON DELETE CASCADE, stratum TEXT NOT NULL CHECK(stratum IN ('doubtful', 'random')), position INTEGER NOT NULL, PRIMARY KEY(set_id, recording_id), UNIQUE(set_id, position))")
+    }
+    closeDatabase()
+    await initializeDatabase()
+    expect(queryAll('SELECT set_id, recording_id, stratum, position FROM decision_label_items')).toEqual([
+      { set_id: original.id, recording_id: 'stranded', stratum: 'doubtful', position: 0 }
+    ])
+    expect(queryAll("SELECT name FROM sqlite_master WHERE name = 'decision_label_items_legacy'")).toEqual([])
+    expect(getLabelSet()).toEqual(labeled)
+    expect(queryOne('SELECT answer FROM decision_labels')).toEqual({ answer: 'interview' })
+    closeDatabase()
+    await initializeDatabase()
+    expect(getLabelSet()).toEqual(labeled)
+    expect(queryAll('SELECT * FROM decision_label_items')).toHaveLength(1)
+  })
+  it('rolls back the rebuild when interrupted between rename and copy', async () => {
+    seed('rollback')
+    const set = getLabelSet()
+    saveLabel({ setId: set.id, recordingId: 'rollback', answer: 'interview' })
+    run('DROP TABLE decision_label_items')
+    run("CREATE TABLE decision_label_items (set_id TEXT NOT NULL REFERENCES decision_label_sets(id) ON DELETE CASCADE, recording_id TEXT NOT NULL REFERENCES recordings(id) ON DELETE CASCADE, stratum TEXT NOT NULL CHECK(stratum IN ('doubtful', 'confident')), position INTEGER NOT NULL, PRIMARY KEY(set_id, recording_id), UNIQUE(set_id, position))")
+    run("INSERT INTO decision_label_items VALUES (?, 'rollback', 'confident', 0)", [set.id])
+    const prototype = Object.getPrototypeOf(database.getDatabase())
+    const originalRun = prototype.run
+    closeDatabase()
+    const spy = vi.spyOn(prototype, 'run').mockImplementation(function (this: unknown, ...args: unknown[]) {
+      if (String(args[0]).includes('INSERT INTO decision_label_items')) throw new Error('Interrupted before member copy')
+      return originalRun.apply(this, args)
+    })
+    try {
+      await expect(initializeDatabase()).rejects.toThrow('Interrupted before member copy')
+    } finally { spy.mockRestore() }
+    const persisted = new SQLite(paths.db)
+    try {
+      expect(persisted.prepare('SELECT stratum FROM decision_label_items').all()).toEqual([{ stratum: 'confident' }])
+      expect(persisted.prepare("SELECT name FROM sqlite_master WHERE name = 'decision_label_items_legacy'").all()).toEqual([])
+    } finally { persisted.close() }
+    await initializeDatabase()
+    expect(getLabelSet()).toMatchObject({ id: set.id, labeled: 1 })
+    expect(queryOne('SELECT stratum FROM decision_label_items')).toEqual({ stratum: 'random' })
   })
   it('repairs live v71 without the rule column, preserving labeled legacy counts', async () => {
     seed('legacy-random')
