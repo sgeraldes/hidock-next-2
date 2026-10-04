@@ -38,11 +38,12 @@ export const VALIDITY_LABELS: Record<HeldValidity, { chip: string; label: string
 }
 
 /** The reasons the check gave, in the owner's words, as stored. */
-export function validityReasons(transcript: ValidityFields | null | undefined): string[] {
+export function validityReasons(transcript: ValidityFields | null | undefined, coveredCodes: readonly string[] = []): string[] {
   if (!transcript?.validity_json) return []
   try {
-    const parsed = JSON.parse(transcript.validity_json) as { reasons?: Array<{ detail?: unknown }> }
-    return (parsed.reasons ?? []).map((r) => (typeof r.detail === 'string' ? r.detail : '')).filter(Boolean)
+    const parsed = JSON.parse(transcript.validity_json) as { reasons?: Array<{ code?: string; detail?: unknown }> }
+    return (parsed.reasons ?? []).filter((r) => !r.code || !coveredCodes.includes(r.code))
+      .map((r) => (typeof r.detail === 'string' ? r.detail : '')).filter(Boolean)
   } catch {
     return []
   }

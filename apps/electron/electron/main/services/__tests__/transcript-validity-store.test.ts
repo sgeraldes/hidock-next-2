@@ -23,7 +23,8 @@ vi.mock('../file-storage', () => ({
 vi.mock('../config', () => ({
   getConfig: () => ({ transcription: { valueClassificationMinConfidence: 0.6 } }),
 }))
-vi.mock('../event-bus', () => ({ getEventBus: () => ({ emitDomainEvent: vi.fn() }) }))
+const emitDomainEvent = vi.hoisted(() => vi.fn())
+vi.mock('../event-bus', () => ({ getEventBus: () => ({ emitDomainEvent }) }))
 
 import { initializeDatabase, closeDatabase, run, queryOne, insertTranscript } from '../database'
 import {
@@ -93,13 +94,15 @@ describe('transcript validity store', () => {
     seed('talk', [[160, 600]])
     const counts = await backfillTranscriptValidity()
     expect(counts).toMatchObject({ checked: 2, invalid: 1, valid: 1 })
+    expect(counts.changedIds).toEqual(['quiet', 'talk'])
+    expect(emitDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'transcript:verdicts-updated', payload: { recordingIds: ['quiet', 'talk'] } }))
     expect(stored('quiet')?.validity_status).toBe('invalid')
     expect(JSON.parse(stored('quiet')!.validity_json!).reasons.map((r: { code: string }) => r.code)).toContain('text_without_audio')
     expect(stored('talk')?.validity_status).toBe('valid')
   })
 
   it('checks each transcript once', async () => {
-    expect(await backfillTranscriptValidity()).toEqual({ checked: 0 })
+    expect(await backfillTranscriptValidity()).toEqual({ checked: 0, changedIds: [] })
   })
 
   it('checks again when a meeting is linked later and the speakers outnumber its invitees', async () => {
@@ -108,9 +111,9 @@ describe('transcript validity store', () => {
     ])
     run(`UPDATE recordings SET meeting_id = 'm1' WHERE id = 'talk'`)
     // Two speakers against one invitee is still within "invitees plus one".
-    expect(await backfillTranscriptValidity()).toMatchObject({ checked: 1, valid: 1 })
+    expect(await backfillTranscriptValidity()).toMatchObject({ checked: 1, valid: 1, changedIds: [] })
     expect(JSON.parse(stored('talk')!.validity_json!).measures.attendees).toBe(1)
-    expect(await backfillTranscriptValidity()).toEqual({ checked: 0 })
+    expect(await backfillTranscriptValidity()).toEqual({ checked: 0, changedIds: [] })
   })
 
   it('refreshes one recording, and previews lines not stored yet', () => {

@@ -55,6 +55,33 @@ function seedRecording(id: string, opts: { personal?: boolean; deleted?: boolean
   ])
 }
 
+describe('transcripts:getVerdicts owner read', () => {
+  it('returns only verdict fields, including excluded owners and omitting missing rows', async () => {
+    seedRecording('owner', { personal: true, deleted: true })
+    seedTranscript('owner', 'Full text must not cross this channel')
+    run("UPDATE transcripts SET integrity_status = 'suspect', validity_status = 'doubtful' WHERE recording_id = 'owner'")
+    const result = await invoke('transcripts:getVerdicts', { recordingIds: ['owner', 'missing'] })
+    expect(Object.keys(result)).toEqual(['owner'])
+    expect(Object.keys(result.owner).sort()).toEqual([
+      'integrity_status', 'integrity_json', 'integrity_version', 'integrity_accepted_at',
+      'validity_status', 'validity_json', 'validity_version'
+    ].sort())
+    expect(result.owner).toMatchObject({ integrity_status: 'suspect', validity_status: 'doubtful' })
+  })
+
+  it('rejects malformed requests and more than 5,000 ids', async () => {
+    for (const payload of [null, { recordingIds: 'owner' }, { recordingIds: [1] }, { recordingIds: Array(5001).fill('owner') }]) {
+      await expect(invoke('transcripts:getVerdicts', payload)).rejects.toThrow()
+    }
+    expect(await invoke('transcripts:getVerdicts', { recordingIds: [] })).toEqual({})
+  })
+
+  it('fails closed when the owner visibility lookup cannot read recordings', async () => {
+    closeDatabase()
+    expect(await invoke('transcripts:getVerdicts', { recordingIds: ['owner'] })).toEqual({})
+  })
+})
+
 /** Attach a garbage-rated capture (no keep) so the recording is value-excluded. */
 function valueExclude(recordingId: string): void {
   run(

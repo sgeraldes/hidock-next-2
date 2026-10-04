@@ -840,7 +840,7 @@ export function registerRecordingHandlers(): void {
   // Bring duration_seconds in line with the audio on disk, then rate what the
   // corrected lengths now allow. Measures each file once (see audio-duration.ts)
   // and remembers it, so this stays cheap on every Library mount.
-  ipcMain.handle('recordings:backfillDurations', async (): Promise<{ success: boolean; scanned?: number; updated?: number; measured?: number; truncated?: number; rerateable?: number; markedLowValue?: number; markedByDuration?: number; integrityChecked?: number; error?: string }> => {
+  ipcMain.handle('recordings:backfillDurations', async (): Promise<{ success: boolean; scanned?: number; updated?: number; measured?: number; truncated?: number; rerateable?: number; markedLowValue?: number; markedByDuration?: number; integrityChecked?: number; validityChecked?: number; error?: string }> => {
     try {
       const result = backfillRecordingDurations()
       // Classify AFTER the duration backfill so both classifiers can use the
@@ -856,8 +856,9 @@ export function registerRecordingHandlers(): void {
       // Then the validity verdict, which reads the integrity just settled: a
       // transcript that is invalid, in doubt or incomplete is not categorized
       // and nothing is built on it. Library-wide and idempotent.
+      let validityChecked = 0
       try {
-        await backfillTranscriptValidity()
+        validityChecked = (await backfillTranscriptValidity()).checked
         syncTrustVerdicts()
         // Stars, kind and context follow the validity verdicts just settled.
         await recomputeAudioWarnings()
@@ -870,6 +871,7 @@ export function registerRecordingHandlers(): void {
         markedLowValue: quality.markedLowValue,
         markedByDuration: byDuration.marked,
         integrityChecked: integrity.checked,
+        validityChecked,
       }
     } catch (error) {
       console.error('recordings:backfillDurations error:', error)

@@ -1,5 +1,8 @@
 import { ipcMain } from 'electron'
+import { z } from 'zod'
+import type { TranscriptVerdicts } from '../../../src/shared/transcript-verdicts'
 import {
+  queryAll,
   getMeetings,
   getMeetingsByIds,
   getMeetingById,
@@ -176,6 +179,25 @@ export function registerDatabaseHandlers(): void {
     if (existingIds.length === 0) return {}
     const transcriptsMap = getTranscriptsByRecordingIds(existingIds)
     return Object.fromEntries(transcriptsMap)
+  })
+
+  ipcMain.handle('transcripts:getVerdicts', async (_, payload: unknown) => {
+    const { recordingIds } = z.object({ recordingIds: z.array(z.string().min(1)).max(5000) }).parse(payload)
+    const { ids: existing, failClosed } = existingRecordings(recordingIds)
+    if (failClosed) return {}
+    const ids = [...new Set(recordingIds)].filter((id) => existing.has(id))
+    const verdicts: Record<string, TranscriptVerdicts> = {}
+    for (let offset = 0; offset < ids.length; offset += 500) {
+      const chunk = ids.slice(offset, offset + 500)
+      const rows = queryAll<TranscriptVerdicts & { recording_id: string }>(
+        `SELECT recording_id, integrity_status, integrity_json, integrity_version, integrity_accepted_at,
+                validity_status, validity_json, validity_version
+           FROM transcripts WHERE recording_id IN (${chunk.map(() => '?').join(',')})`,
+        chunk
+      )
+      for (const { recording_id, ...verdict } of rows) verdicts[recording_id] = verdict
+    }
+    return verdicts
   })
 
   // Queue
