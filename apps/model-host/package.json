@@ -1,6 +1,6 @@
 {
   "name": "@hidock/model-host",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "HiDock Model Host: runs the model tools on the machine that has the GPU and lends them over the LAN",
   "private": true,
   "type": "module",
@@ -9,6 +9,7 @@
     "start": "node src/main.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
+    "build:tray": "node scripts/build-tray.mjs",
     "build:installer": "node scripts/build-installer.mjs"
   },
   "engines": {

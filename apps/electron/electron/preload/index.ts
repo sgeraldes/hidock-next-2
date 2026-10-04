@@ -161,7 +161,12 @@ import type { PipelineState } from '../main/types/device-pipeline'
 import type { Note, NoteRelatedItem, NoteMeetingSuggestion } from '../../src/types/notes'
 import type { SpeakerEngineId, SpeakerSetup } from '../../src/types/speakers'
 import type { VoiceBackfillMeasure, VoiceBackfillStatus } from '../../src/shared/voice-backfill-schedule'
-import type { ModelHostHealthReport, ModelHostStatus } from '../../src/shared/model-host-status'
+import type {
+  ModelHostHealthReport,
+  ModelHostSetupReport,
+  ModelHostStatus,
+  ModelHostStepAside,
+} from '../../src/shared/model-host-status'
 import type {
   DecisionView,
   QuestionCounts,
@@ -803,7 +808,16 @@ export interface ElectronAPI {
     }>
     /** The saved host's state, for the status line in Settings (describeModelHost words it). */
     status: () => Promise<{ success: boolean; status: ModelHostStatus }>
-    pair: (request: { url: string; code: string }) => Promise<{ success: boolean; error?: string }>
+    /** An empty code pairs while the host's automatic pairing is open. */
+    pair: (request: { url: string; code: string }) => Promise<{
+      success: boolean
+      error?: string
+      setup?: ModelHostSetupReport
+      /** Paired, but the host did not get the token or the step-aside choice. */
+      warning?: string
+    }>
+    /** The one setting for the gamestation; sent to the host when it answers. */
+    setStepAside: (request: { value: ModelHostStepAside }) => Promise<{ success: boolean; sent?: boolean; error?: string }>
     forget: () => Promise<{ success: boolean }>
   }
 
@@ -1844,6 +1858,7 @@ const electronAPI: ElectronAPI = {
     check: (request) => callIPC('model-host:check', request),
     status: () => callIPC('model-host:status'),
     pair: (request) => callIPC('model-host:pair', request),
+    setStepAside: (request) => callIPC('model-host:set-step-aside', request),
     forget: () => callIPC('model-host:forget')
   },
 

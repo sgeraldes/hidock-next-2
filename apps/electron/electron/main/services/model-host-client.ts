@@ -15,7 +15,11 @@
 import { readFile } from 'fs/promises'
 import { extname } from 'path'
 import type { AcousticWorkerResult } from './speaker-linking'
-import type { ModelHostHealthReport } from '../../../src/shared/model-host-status'
+import type {
+  ModelHostHealthReport,
+  ModelHostSetupReport,
+  ModelHostStepAside,
+} from '../../../src/shared/model-host-status'
 
 /** The host answers health in well under a second on a LAN. */
 const HEALTH_TIMEOUT_MS = 2000
@@ -57,8 +61,8 @@ export interface ModelHostSettings {
 /**
  * What /health says. `gpu` null means the host looked and found no NVIDIA
  * driver; absent means this machine is not paired yet and was not told. Those
- * are different sentences to the person. `pause` says who paused it (the
- * person, or game mode and which game), from host 0.2.0 on.
+ * are different sentences to the person. From host 0.3.0, a paired client also
+ * hears how setup is going, when it steps aside, and the pairing window.
  */
 export type ModelHostHealth = ModelHostHealthReport
 
@@ -144,6 +148,49 @@ export async function pairWithModelHost(
     throw new Error(body.error || `The host refused the code (HTTP ${response.status}).`)
   }
   return { token: body.token }
+}
+
+async function putToHost<T>(
+  settings: ModelHostSettings,
+  path: string,
+  body: unknown,
+  fetchFn: typeof fetch
+): Promise<T> {
+  const base = normalizeBase(settings.url)
+  if (!base) throw new Error('No model host is configured.')
+  const response = await fetchFn(`${base}${path}`, {
+    method: 'PUT',
+    headers: { authorization: `Bearer ${settings.token}`, 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS * 5),
+  })
+  const answer = (await response.json().catch(() => ({}))) as T & { error?: string }
+  if (!response.ok) throw new Error(answer.error || `The model host refused it (HTTP ${response.status}).`)
+  invalidateModelHostHealthCache()
+  return answer
+}
+
+/**
+ * Hand the host this computer's Hugging Face token. HiDock is in charge: the
+ * person never looks for a token on the gamestation. The host keeps it, runs
+ * the voice model once, and only then offers to diarize.
+ */
+export async function sendHfTokenToModelHost(
+  settings: ModelHostSettings,
+  hfToken: string,
+  fetchFn: typeof fetch = fetch
+): Promise<ModelHostSetupReport> {
+  const answer = await putToHost<{ setup: ModelHostSetupReport }>(settings, '/secrets/hf-token', { token: hfToken }, fetchFn)
+  return answer.setup
+}
+
+/** When the gamestation's tray icon stops the service: any use, games, or never. */
+export async function setModelHostStepAside(
+  settings: ModelHostSettings,
+  value: ModelHostStepAside,
+  fetchFn: typeof fetch = fetch
+): Promise<void> {
+  await putToHost(settings, '/settings/step-aside', { value }, fetchFn)
 }
 
 /**

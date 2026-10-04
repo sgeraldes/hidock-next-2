@@ -8,11 +8,11 @@
  */
 
 import { createServer } from 'http'
-import { READY, STOPPED, HostState } from './state.mjs'
+import { READY, HostState } from './state.mjs'
 import { PairingStore } from './auth.mjs'
 import { runDiarization } from './diarize.mjs'
 
-export const VERSION = '0.2.0'
+export const VERSION = '0.3.0'
 /** Two hours of 16 kHz mono WAV is about 230 MB; round up and stop there. */
 export const MAX_AUDIO_BYTES = 512 * 1024 * 1024
 
@@ -48,6 +48,17 @@ export function readBody(req, limit = MAX_AUDIO_BYTES) {
     req.on('error', (error) => settle(reject, error))
     req.on('end', () => settle(resolve, Buffer.concat(chunks)))
   })
+}
+
+/** A small JSON body; a body that is not JSON is the caller's mistake, so 400. */
+async function readJsonBody(req) {
+  const text = (await readBody(req, 4096)).toString('utf8')
+  if (!text) return {}
+  try {
+    return JSON.parse(text)
+  } catch {
+    throw Object.assign(new Error('the body is not JSON'), { status: 400 })
+  }
 }
 
 function sendJson(res, status, body) {
@@ -110,127 +121,20 @@ export function isLocalRequest(req) {
   return name === 'localhost' || name === '127.0.0.1' || name === '::1'
 }
 
-/** Process names and paths come from the machine; nothing reaches the page raw. */
-function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
-}
+/** The step-aside positions HiDock may set. */
+export const STEP_ASIDE = new Set(['any-use', 'games', 'never'])
 
-function clock(ms) {
-  return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-}
-
-/** The host's state as a sentence for the person at the machine. */
-export function describeState(state, resumesAt) {
-  const pause = state.pauseInfo()
-  if (pause?.by === 'game') {
-    const back = resumesAt ? ` Work resumes at ${clock(resumesAt)} if no game starts.` : ' Work resumes a few minutes after it closes.'
-    return `Paused for a game: ${pause.detail}.${back}`
-  }
-  if (pause?.by === 'you') return 'Paused by you. Nothing new runs here until you resume.'
-  const current = state.publicState()
-  if (current === 'busy') return 'Working on a recording.'
-  if (current === READY) return state.gameOverride ? 'Working, although a game is running: you resumed it.' : 'Ready for work.'
-  return 'Stopped. Press Start to lend this GPU.'
-}
-
-function lines(values) {
-  return escapeHtml(values.join('\n'))
-}
-
-function checkbox(name, checked, label) {
-  return `<label><input type="checkbox" name="${name}"${checked ? ' checked' : ''}> ${label}</label>`
-}
-
-function controlPage(state, pairingCode, gameMode) {
-  const settings = gameMode?.settings()
-  const rows = [
-    ['State', describeState(state, gameMode?.resumesAt())],
-    ['Version', VERSION],
-    pairingCode ? ['Pairing code', pairingCode] : null,
-  ].filter(Boolean)
-  const gameForm = settings
-    ? `<h2>Game mode</h2>
-<p>The host pauses by itself while a game runs, cancels the recording it was working on (the other computer does it instead), and resumes after the game closes.</p>
-<form method="post" action="/control" class="settings">
- <input type="hidden" name="action" value="game-mode">
- ${checkbox('enabled', settings.enabled, 'Pause by itself while a game runs')}
- ${checkbox('pauseOnGameFolders', settings.pauseOnGameFolders, 'A program installed in a game folder is a game')}
- <label>Game folders, one per line<textarea name="gameFolders" rows="5">${lines(settings.gameFolders)}</textarea></label>
- <label>Programs that never count as games, one per line<textarea name="ignoreProcesses" rows="4">${lines(settings.ignoreProcesses)}</textarea></label>
- ${checkbox('pauseOnFullscreen', settings.pauseOnFullscreen, 'Any full-screen app counts as a game')}
- ${checkbox('pauseOnOtherGpuWork', settings.pauseOnOtherGpuWork, 'Another program computing on the GPU counts as a game')}
- <label>Programs that may share the GPU, one per line<textarea name="ignoreGpu" rows="2">${lines(settings.ignoreGpu)}</textarea></label>
- <label>Programs that always pause the host, one per line<textarea name="alwaysPause" rows="3">${lines(settings.alwaysPause)}</textarea></label>
- <label>Minutes after the game closes before work resumes <input type="number" name="resumeAfterMinutes" min="0" max="120" value="${settings.resumeAfterMinutes}"></label>
- <button>Save game mode</button>
-</form>`
-    : ''
-  return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>HiDock Model Host</title>
-<style>
- :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
- *, *::before, *::after { box-sizing: border-box; }
- body { margin: 0; padding: 2rem 1rem; }
- main { max-width: 38rem; margin: 0 auto; overflow-wrap: anywhere; }
- h1 { font-size: 1.25rem; margin: 0 0 1rem; }
- h2 { font-size: 1.05rem; margin: 2rem 0 .5rem; }
- table { border-collapse: collapse; width: 100%; margin-bottom: 1.5rem; }
- th, td { text-align: left; padding: .5rem 0; border-bottom: 1px solid #8884; vertical-align: top; }
- th { width: 8rem; }
- form { display: flex; gap: .5rem; flex-wrap: wrap; }
- form.settings { flex-direction: column; align-items: stretch; }
- form.settings label { display: flex; flex-direction: column; gap: .25rem; }
- form.settings label:has(input[type=checkbox]) { flex-direction: row; align-items: center; }
- textarea, input[type=number] { font: 13px ui-monospace, monospace; width: 100%; }
- button { padding: .6rem 1rem; font: inherit; cursor: pointer; align-self: flex-start; }
-</style></head>
-<body><main>
-<h1>HiDock Model Host</h1>
-<table><tbody>${rows.map(([k, v]) => `<tr><th>${k}</th><td>${escapeHtml(v)}</td></tr>`).join('')}</tbody></table>
-<form method="post" action="/control">
- ${state.state === STOPPED ? '<button name="action" value="start">Start</button>' : `<button name="action" value="toggle">${state.state === READY ? 'Pause' : 'Resume'}</button>`}
- <button name="action" value="stop">Stop</button>
- <button name="action" value="pair">Show a pairing code</button>
-</form>
-${gameForm}
-</main></body></html>`
-}
-
-/** Game mode settings from the control page's form. Unchecked boxes are absent. */
-function gameModeFromForm(form) {
-  const listField = (name) => (form.get(name) ?? '').split(/\r?\n/)
-  return {
-    enabled: form.has('enabled'),
-    pauseOnGameFolders: form.has('pauseOnGameFolders'),
-    pauseOnFullscreen: form.has('pauseOnFullscreen'),
-    pauseOnOtherGpuWork: form.has('pauseOnOtherGpuWork'),
-    resumeAfterMinutes: form.get('resumeAfterMinutes') ?? '',
-    gameFolders: listField('gameFolders'),
-    ignoreProcesses: listField('ignoreProcesses'),
-    ignoreGpu: listField('ignoreGpu'),
-    alwaysPause: listField('alwaysPause'),
-  }
-}
-
-/** Who paused the host, why, and when a game pause lifts; null when working. */
-function pauseReport(deps) {
-  const pause = deps.state.pauseInfo()
-  if (!pause) return null
-  return {
-    by: pause.by,
-    detail: pause.detail || undefined,
-    since: pause.since,
-    resumesAt: pause.by === 'game' ? deps.gameMode?.resumesAt() ?? null : null,
-  }
+/** What the tray icon and a paired HiDock are told about pairing. */
+function pairingReport(pairing) {
+  const auto = pairing.automatic()
+  return { automatic: auto.open, remainingMs: auto.remainingMs, cancelled: auto.cancelled, paired: auto.paired }
 }
 
 /**
  * @param {object} deps
  * @param {HostState} deps.state
- * @param {{ settings: () => object, save: (raw: object) => Promise<object>,
- *   resumesAt: () => number | null }} [deps.gameMode]
+ * @param {import('./host-setup.mjs').HostSetup} [deps.setup] the token and the model check
+ * @param {{ get: () => string, set: (value: string) => void }} [deps.stepAside]
  * @param {PairingStore} deps.pairing
  * @param {() => object} deps.jobOptions options for runDiarization
  * @param {() => object} deps.capabilities what /health reports
@@ -255,16 +159,18 @@ export function createHandler(deps) {
           version: VERSION,
           state: deps.state.publicState(),
           reason: deps.state.reason || undefined,
-          // Which game is running is the person's business; a paired client
-          // shows it to them, a stranger gets only "paused".
-          ...(known ? { pause: pauseReport(deps) } : {}),
+          // How setup is going, when it steps aside and the pairing window
+          // are for HiDock, which is in charge; a stranger gets none of it.
+          ...(known && deps.setup ? { setup: deps.setup.report() } : {}),
+          ...(known && deps.stepAside ? { stepAside: deps.stepAside.get() } : {}),
+          ...(known ? { pairing: pairingReport(deps.pairing) } : {}),
           ...(known ? deps.capabilities() : { capabilities: deps.capabilities().capabilities }),
         })
         return
       }
 
       if (req.method === 'POST' && path === '/pair') {
-        const body = JSON.parse((await readBody(req, 4096)).toString('utf8') || '{}')
+        const body = await readJsonBody(req)
         const result = deps.pairing.redeem(body.code)
         if (!result.ok) {
           sendJson(res, 403, { error: result.reason })
@@ -274,43 +180,65 @@ export function createHandler(deps) {
         return
       }
 
-      // The control page and its form are for the person at this machine only.
-      if (path === '/' || path === '/control') {
+      // HiDock sends its Hugging Face token; the person never types it here.
+      if (req.method === 'PUT' && path === '/secrets/hf-token') {
+        if (!deps.pairing.accepts(req.headers.authorization)) {
+          sendJson(res, 401, { error: 'This host does not know that client. Pair it first.' })
+          return
+        }
+        if (!deps.setup) throw Object.assign(new Error('this host takes no token'), { status: 404 })
+        const body = await readJsonBody(req)
+        const setup = await deps.setup.receiveToken(body.token)
+        sendJson(res, 202, { setup })
+        return
+      }
+
+      // HiDock's only setting for the gamestation: when the tray icon steps aside.
+      if (req.method === 'PUT' && path === '/settings/step-aside') {
+        if (!deps.pairing.accepts(req.headers.authorization)) {
+          sendJson(res, 401, { error: 'This host does not know that client. Pair it first.' })
+          return
+        }
+        const body = await readJsonBody(req)
+        if (!STEP_ASIDE.has(body.value) || !deps.stepAside) {
+          sendJson(res, 400, { error: 'stepAside is any-use, games or never' })
+          return
+        }
+        deps.stepAside.set(body.value)
+        sendJson(res, 200, { stepAside: body.value })
+        return
+      }
+
+      // The tray icon's control, from this machine only. No page: the
+      // gamestation has no settings, and the icon has its own menu.
+      if (path === '/control') {
         if (!isLocalRequest(req)) {
-          sendJson(res, 403, { error: 'The control page only answers on this machine.' })
+          sendJson(res, 403, { error: 'The control only answers on this machine.' })
           return
         }
-        if (req.method === 'POST' && path === '/control') {
-          const form = new URLSearchParams((await readBody(req, 64 * 1024)).toString('utf8'))
-          const action = form.get('action')
-          if (action === 'pair') {
-            deps.pairing.openPairing()
-          } else if (action === 'game-mode') {
-            if (!deps.gameMode) throw Object.assign(new Error('game mode is not available'), { status: 400 })
-            await deps.gameMode.save(gameModeFromForm(form))
-          } else {
-            await deps.state.apply(action)
-          }
-          // The pause/resume shortcut asks for JSON so it can say what happened.
-          // It asks with ?format=json: Windows PowerShell 5.1 refuses to set
-          // an Accept header on Invoke-RestMethod.
-          if (
-            url.searchParams.get('format') === 'json' ||
-            String(req.headers.accept || '').includes('application/json')
-          ) {
-            sendJson(res, 200, { state: deps.state.publicState(), pause: pauseReport(deps), text: describeState(deps.state, deps.gameMode?.resumesAt()) })
-            return
-          }
-          res.writeHead(303, { location: '/' })
-          res.end()
+        if (req.method !== 'POST') {
+          sendJson(res, 405, { error: 'POST an action' })
           return
         }
-        const page = controlPage(deps.state, deps.pairing.pending?.code, deps.gameMode)
-        res.writeHead(200, {
-          'content-type': 'text/html; charset=utf-8',
-          'content-length': Buffer.byteLength(page),
+        const form = new URLSearchParams((await readBody(req, 4096)).toString('utf8'))
+        const action = form.get('action')
+        if (action === 'pair-code') {
+          const code = deps.pairing.openPairing()
+          sendJson(res, 200, { code, pairing: pairingReport(deps.pairing) })
+          return
+        }
+        if (action === 'pair-open') deps.pairing.resumeAutomatic()
+        else if (action === 'pair-cancel') deps.pairing.cancelAutomatic()
+        else if (action === 'pair-reset') deps.pairing.resetPairing()
+        else if (action !== 'status') {
+          sendJson(res, 400, { error: `unknown action: ${action}` })
+          return
+        }
+        sendJson(res, 200, {
+          state: deps.state.publicState(),
+          setup: deps.setup?.report(),
+          pairing: pairingReport(deps.pairing),
         })
-        res.end(page)
         return
       }
 
@@ -323,6 +251,13 @@ export function createHandler(deps) {
           sendJson(res, 503, {
             error: deps.state.reason || 'The host is not accepting work.',
             state: deps.state.publicState(),
+          })
+          return
+        }
+        if (deps.setup && !deps.setup.canDiarize()) {
+          sendJson(res, 503, {
+            error: 'The host has not run the voice model yet. HiDock sends it the token when it pairs.',
+            setup: deps.setup.report(),
           })
           return
         }
@@ -366,10 +301,6 @@ export function createHandler(deps) {
               ...(pinned ? { model: pinned, fallbackModel: pinned } : {}),
               extension: safeExtension(url.searchParams.get('ext')),
               signal: controller.signal,
-              // Game mode must know which CUDA program is this job's worker.
-              onSpawn: (pid) => {
-                deps.state.workerPid = pid ?? null
-              },
             })
           } catch (error) {
             // Cancelled by a pause or a stop: the same answer as a host that was
@@ -388,7 +319,6 @@ export function createHandler(deps) {
         } finally {
           res.off?.('close', onDisconnect)
           deps.state.activeJob = null
-          deps.state.workerPid = null
         }
         return
       }

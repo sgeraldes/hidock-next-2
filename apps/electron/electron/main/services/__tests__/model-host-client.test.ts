@@ -9,6 +9,8 @@ import {
   ModelHostUnavailableError,
   MODEL_HOST_HEALTH_CACHE_MS,
   resetModelHostHealthCache,
+  sendHfTokenToModelHost,
+  setModelHostStepAside,
 } from '../model-host-client'
 
 const HEALTHY = {
@@ -122,6 +124,41 @@ describe('pairing from the client', () => {
   it('surfaces the host’s reason when it refuses', async () => {
     const fetchFn = vi.fn(async () => jsonResponse({ error: 'That code expired.' }, 403))
     await expect(pairWithModelHost('x:1', '000', fetchFn as never)).rejects.toThrow(/expired/)
+  })
+})
+
+describe('what HiDock sends the host it is in charge of', () => {
+  it('pairs with no code while the host’s automatic pairing is open', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(jsonResponse({ token: 'tok' }))
+    await pairWithModelHost('gamestation:8765', '', fetchFn as never)
+    expect(JSON.parse(calls(fetchFn)[0][1].body)).toEqual({ code: '' })
+  })
+
+  it('sends its Hugging Face token with the pairing token, by PUT, and never in the URL', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(jsonResponse({ setup: { status: 'validating' } }, 202))
+    const setup = await sendHfTokenToModelHost({ url: 'gamestation:8765', token: 'tok' }, 'hf_abc', fetchFn as never)
+    expect(setup).toEqual({ status: 'validating' })
+    const [url, init] = calls(fetchFn)[0]
+    expect(url).toBe('http://gamestation:8765/secrets/hf-token')
+    expect((init as unknown as { method: string }).method).toBe('PUT')
+    expect(init.headers.authorization).toBe('Bearer tok')
+    expect(JSON.parse(init.body)).toEqual({ token: 'hf_abc' })
+    expect(url).not.toMatch(/hf_abc/)
+  })
+
+  it('says why the host refused the token', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(jsonResponse({ error: 'that is not a Hugging Face token' }, 400))
+    await expect(sendHfTokenToModelHost({ url: 'x:1', token: 'tok' }, 'bad', fetchFn as never)).rejects.toThrow(
+      /not a Hugging Face token/
+    )
+  })
+
+  it('sends when to step aside', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(jsonResponse({ stepAside: 'any-use' }))
+    await setModelHostStepAside({ url: 'x:1', token: 'tok' }, 'any-use', fetchFn as never)
+    const [url, init] = calls(fetchFn)[0]
+    expect(url).toBe('http://x:1/settings/step-aside')
+    expect(JSON.parse(init.body)).toEqual({ value: 'any-use' })
   })
 })
 

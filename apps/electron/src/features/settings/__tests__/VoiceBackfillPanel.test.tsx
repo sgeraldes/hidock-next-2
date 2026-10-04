@@ -53,7 +53,7 @@ beforeEach(() => {
 })
 
 describe('VoiceBackfillPanel', () => {
-  it('says where the work runs when a model host is paused for a game', async () => {
+  it('says where the work runs when the model host is not answering (paused, in use or off)', async () => {
     ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI.modelHost = {
       status: vi.fn().mockResolvedValue({
         success: true,
@@ -61,18 +61,16 @@ describe('VoiceBackfillPanel', () => {
           configured: true,
           paired: true,
           usedForSpeakers: true,
+          hasHfToken: true,
           address: 'gamestation:8765',
-          health: {
-            version: '0.2.0',
-            state: 'paused',
-            capabilities: ['diarize'],
-            pause: { by: 'game', detail: 'cs2.exe is running', resumesAt: null }
-          }
+          health: null
         }
       })
     }
     render(<VoiceBackfillPanel />)
-    expect(await screen.findByText(/gamestation:8765 is paused for a game \(cs2\.exe is running\)/)).toBeInTheDocument()
+    expect(
+      await screen.findByText('gamestation:8765 is not answering: paused, in use or off. Speaker work runs on this computer.')
+    ).toBeInTheDocument()
   })
 
   it('shows a working placeholder while the progress loads', () => {

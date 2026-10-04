@@ -10,6 +10,7 @@ const answer = (overrides: Record<string, unknown> = {}) => ({
     configured: true,
     paired: true,
     usedForSpeakers: true,
+    hasHfToken: true,
     address: 'gamestation:8765',
     health: { version: '0.2.0', state: 'ready', capabilities: ['diarize'] },
     ...overrides
@@ -32,25 +33,20 @@ describe('ModelHostStatusLine', () => {
     expect(await screen.findByText('gamestation:8765 is working: speaker work goes there.')).toBeInTheDocument()
   })
 
-  it('says the host is paused for a game, and which one', async () => {
+  it('says the host is testing the voice model with the token it just got', async () => {
     status.mockResolvedValue(
       answer({
-        health: {
-          version: '0.2.0',
-          state: 'paused',
-          capabilities: ['diarize'],
-          pause: { by: 'game', detail: 'cs2.exe is running', resumesAt: null }
-        }
+        health: { version: '0.3.0', state: 'ready', capabilities: [], setup: { status: 'validating' } }
       })
     )
     render(<ModelHostStatusLine />)
-    expect(await screen.findByText(/paused for a game \(cs2\.exe is running\)/)).toBeInTheDocument()
+    expect(await screen.findByText(/is testing the voice model/)).toBeInTheDocument()
   })
 
-  it('says the host is off', async () => {
+  it('says the host is not answering: paused, in use or off', async () => {
     status.mockResolvedValue(answer({ health: null }))
     render(<ModelHostStatusLine />)
-    expect(await screen.findByText(/is off or not answering/)).toBeInTheDocument()
+    expect(await screen.findByText(/is not answering: paused, in use or off/)).toBeInTheDocument()
   })
 
   it('asks again while it is on screen, so a game starting there shows up here', async () => {

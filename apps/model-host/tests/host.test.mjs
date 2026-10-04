@@ -294,13 +294,13 @@ describe('routes', () => {
     expect(deps.state.canAdmit()).toBe(true)
   })
 
-  it('keeps the control page off the network', async () => {
+  it('keeps the tray control off the network', async () => {
     const res = response()
-    await createHandler(deps)(request({ url: '/', local: false }), res)
+    await createHandler(deps)(request({ method: 'POST', url: '/control', body: 'action=pair-reset', local: false }), res)
     expect(res.statusCode).toBe(403)
   })
 
-  it('keeps the control page away from a rebound name that resolves here', async () => {
+  it('keeps the tray control away from a rebound name that resolves here', async () => {
     // DNS rebinding: a page in a browser ON this machine is pointed at an
     // attacker domain that resolves to 127.0.0.1, so its POST arrives from
     // loopback like any other. The Host header is what it cannot forge.
@@ -437,22 +437,57 @@ describe('routes', () => {
     expect(body.paired).toBe(1)
   })
 
-  it('serves the control page on this machine', async () => {
+  it('has no page: the gamestation has no settings', async () => {
     const res = response()
     await createHandler(deps)(request({ url: '/' }), res)
-    expect(res.statusCode).toBe(200)
-    expect(res.body).toContain('HiDock Model Host')
-    expect(res.body).toContain('value="start"')
+    expect(res.statusCode).toBe(404)
   })
 
-  it('the control form starts the host', async () => {
+  it('gives the tray icon a pairing code in JSON', async () => {
     const res = response()
-    await createHandler(deps)(
-      request({ method: 'POST', url: '/control', body: 'action=start' }),
-      res
-    )
-    expect(res.statusCode).toBe(303)
-    expect(deps.state.state).toBe(READY)
+    await createHandler(deps)(request({ method: 'POST', url: '/control', body: 'action=pair-code' }), res)
+    expect(res.statusCode).toBe(200)
+    const { code } = JSON.parse(res.body)
+    expect(code).toMatch(/^\d{8}$/)
+    expect(deps.pairing.redeem(code).ok).toBe(true)
+  })
+
+  it('lets the tray icon cancel, resume and reset automatic pairing', async () => {
+    const handle = createHandler(deps)
+    const act = async (action) => {
+      const res = response()
+      await handle(request({ method: 'POST', url: '/control', body: `action=${action}` }), res)
+      return JSON.parse(res.body).pairing
+    }
+    expect(await act('pair-open')).toMatchObject({ automatic: true })
+    expect(await act('pair-cancel')).toMatchObject({ automatic: false, cancelled: true })
+    expect(await act('pair-open')).toMatchObject({ automatic: true, cancelled: false })
+    deps.pairing.redeem('')
+    expect(await act('pair-reset')).toMatchObject({ automatic: true, paired: 0 })
+  })
+
+  it('refuses an action the tray icon does not have', async () => {
+    const res = response()
+    await createHandler(deps)(request({ method: 'POST', url: '/control', body: 'action=start' }), res)
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('takes when to step aside from a paired HiDock only', async () => {
+    let saved = 'games'
+    deps.stepAside = { get: () => saved, set: (v) => (saved = v) }
+    const { token } = deps.pairing.redeem(deps.pairing.openPairing())
+    const put = async (headers, value) => {
+      const res = response()
+      await createHandler(deps)(
+        request({ method: 'PUT', url: '/settings/step-aside', headers, body: JSON.stringify({ value }), local: false }),
+        res
+      )
+      return res.statusCode
+    }
+    expect(await put({}, 'never')).toBe(401)
+    expect(await put({ authorization: `Bearer ${token}` }, 'sometimes')).toBe(400)
+    expect(await put({ authorization: `Bearer ${token}` }, 'any-use')).toBe(200)
+    expect(saved).toBe('any-use')
   })
 
   it('pairs over the network with a code shown on the host', async () => {

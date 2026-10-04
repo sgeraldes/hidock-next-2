@@ -5,11 +5,20 @@ const base: ModelHostStatus = {
   configured: true,
   paired: true,
   usedForSpeakers: true,
+  hasHfToken: true,
   address: 'gamestation:8765',
-  health: { version: '0.2.0', state: 'ready', capabilities: ['diarize'], acceleration: 'cuda' }
+  health: {
+    version: '0.3.0',
+    state: 'ready',
+    capabilities: ['diarize'],
+    acceleration: 'cuda',
+    setup: { status: 'ready', device: 'cuda' }
+  }
 }
 
 const at = (overrides: Partial<ModelHostStatus>) => describeModelHost({ ...base, ...overrides })
+const withSetup = (setup: NonNullable<ModelHostStatus['health']>['setup'], capabilities: string[] = []) =>
+  at({ health: { ...base.health!, capabilities, setup } })
 
 describe('the model host in words', () => {
   it('says nothing is there when no host is set', () => {
@@ -21,64 +30,52 @@ describe('the model host in words', () => {
 
   it('working', () => {
     expect(at({})).toMatchObject({ tone: 'working', text: 'gamestation:8765 is working: speaker work goes there.' })
-    expect(at({ health: { ...base.health!, state: 'busy' } }).text).toBe(
-      'gamestation:8765 is working on a recording.'
-    )
+    expect(at({ health: { ...base.health!, state: 'busy' } }).text).toBe('gamestation:8765 is working on a recording.')
   })
 
-  it('paused for a game, which one, and when it comes back', () => {
-    const resumesAt = new Date(2026, 9, 3, 23, 40).getTime()
-    const result = at({
-      health: { ...base.health!, state: 'paused', pause: { by: 'game', detail: 'eldenring.exe is running', resumesAt } }
+  it('not answering: paused from its tray, in use, or off', () => {
+    expect(at({ health: null })).toEqual({
+      tone: 'off',
+      text: 'gamestation:8765 is not answering: paused, in use or off. Speaker work runs on this computer.'
     })
-    expect(result.tone).toBe('paused')
-    expect(result.text).toMatch(/^gamestation:8765 is paused for a game \(eldenring\.exe is running\)\. /)
-    expect(result.text).toMatch(/Back at .*23.*40/)
-    expect(result.text).toMatch(/runs on this computer meanwhile\.$/)
   })
 
-  it('paused for a game that is still running', () => {
-    const result = at({ health: { ...base.health!, state: 'paused', pause: { by: 'game', detail: 'A full-screen app is running', resumesAt: null } } })
-    expect(result.text).toMatch(/Back a few minutes after the game closes\./)
-  })
-
-  it('paused by the person at that machine', () => {
-    expect(at({ health: { ...base.health!, state: 'paused', pause: { by: 'you' } } })).toEqual({
+  it('testing the voice model it just received', () => {
+    expect(withSetup({ status: 'validating' })).toEqual({
       tone: 'paused',
-      text: 'gamestation:8765 is paused by hand. Speaker work runs on this computer until it is resumed there.'
+      text: 'gamestation:8765 is testing the voice model with the token from this computer. Speaker work runs here meanwhile.'
     })
   })
 
-  it('paused, by an older host that does not say why', () => {
-    expect(at({ health: { ...base.health!, state: 'paused', reason: 'The host is paused.' } }).text).toBe(
-      'gamestation:8765 is paused. Speaker work runs on this computer meanwhile.'
+  it('could not run the voice model, and why', () => {
+    expect(withSetup({ status: 'failed', reason: '401 gated repo pyannote/segmentation-3.0' }).text).toBe(
+      'gamestation:8765 could not run the voice model: 401 gated repo pyannote/segmentation-3.0. Speaker work runs on this computer.'
     )
+  })
+
+  it('waiting for the token, which this computer sends', () => {
+    expect(withSetup({ status: 'needs-token' }).text).toBe(
+      'gamestation:8765 is waiting for the Hugging Face token from this computer. Press Check to send it.'
+    )
+  })
+
+  it('waiting for a token this computer does not have', () => {
+    expect(at({ hasHfToken: false, health: { ...base.health!, capabilities: [], setup: { status: 'needs-token' } } }).text).toBe(
+      'gamestation:8765 needs a Hugging Face token and this computer has none. Add it in Settings > Secrets.'
+    )
+  })
+
+  it('a host from before 0.3 with its setup unfinished', () => {
+    expect(at({ health: { ...base.health!, capabilities: [], setup: undefined } })).toMatchObject({
+      tone: 'off',
+      text: 'gamestation:8765 answers, but its setup has not finished. Speaker work runs on this computer.'
+    })
   })
 
   it('a state this version does not know still gets a sentence', () => {
     expect(at({ health: { ...base.health!, state: 'warming-up' as never } })).toEqual({
       tone: 'off',
       text: 'gamestation:8765 answers, but in a state this version does not know (warming-up). Speaker work runs on this computer.'
-    })
-  })
-
-  it('off or not answering', () => {
-    expect(at({ health: null })).toEqual({
-      tone: 'off',
-      text: 'gamestation:8765 is off or not answering. Speaker work runs on this computer.'
-    })
-  })
-
-  it('stopped on that machine', () => {
-    expect(at({ health: { ...base.health!, state: 'stopped' } }).text).toBe(
-      'gamestation:8765 is stopped. Speaker work runs on this computer until someone presses Start there.'
-    )
-  })
-
-  it('set up but not finished', () => {
-    expect(at({ health: { ...base.health!, capabilities: [] } })).toMatchObject({
-      tone: 'off',
-      text: 'gamestation:8765 answers, but its setup has not finished. Speaker work runs on this computer.'
     })
   })
 
