@@ -25,7 +25,8 @@ import {
   mergeDuplicateRecordings, mergeDuplicateRecordingsYielding,
   repairEscapedMeetingText, repairEscapedMeetingTextYielding,
   renameAddressNamedContacts, renameAddressNamedContactsYielding,
-  autoSplitAmbiguousBuckets, autoSplitAmbiguousBucketsYielding
+  autoSplitAmbiguousBuckets, autoSplitAmbiguousBucketsYielding,
+  RECONCILE_STEPS, reconcileOrganizationYielding
 } from '../org-reconciler'
 
 function contact(id: string, name = 'Alex Stone', email = `${id}@example.com`): void {
@@ -84,6 +85,105 @@ beforeEach(async () => {
 afterEach(() => { closeDatabase(); if (existsSync(dbPath)) rmSync(dbPath); vi.restoreAllMocks(); vi.useRealTimers() })
 
 describe('organization batches on real SQLite', () => {
+  it('serializes passes and shares the queued follow-up promise', async () => {
+    const events: string[] = []
+    const releases: Array<() => void> = []
+    let pass = 0
+    for (const step of RECONCILE_STEPS) {
+      vi.spyOn(step, 'run').mockImplementation(() => undefined)
+      if (step.runYielding) vi.spyOn(step, 'runYielding').mockResolvedValue(undefined)
+    }
+    vi.spyOn(RECONCILE_STEPS[0], 'runYielding').mockImplementation(async () => {
+      const id = ++pass
+      events.push(`start${id}`)
+      await new Promise<void>((resolve) => releases.push(resolve))
+      events.push(`end${id}`)
+    })
+    const first = reconcileOrganizationYielding()
+    const second = reconcileOrganizationYielding()
+    const third = reconcileOrganizationYielding()
+    const shared = second === third
+    const initial = [...events]
+    releases.shift()?.()
+    // Drain the real pass's promise continuations without wall-clock timers.
+    for (let i = 0; i < 100; i++) await Promise.resolve()
+    const middle = [...events]
+    releases.splice(0).forEach((release) => release())
+    await Promise.all([first, second, third])
+    expect(shared).toBe(true)
+    expect(initial).toEqual(['start1'])
+    expect(middle).toEqual(['start1', 'end1', 'start2'])
+    expect(events).toEqual(['start1', 'end1', 'start2', 'end2'])
+  })
+
+  it('queues a later pass for a caller arriving after the follow-up starts', async () => {
+    const releases: Array<() => void> = []
+    for (const step of RECONCILE_STEPS) {
+      vi.spyOn(step, 'run').mockImplementation(() => undefined)
+      if (step.runYielding) vi.spyOn(step, 'runYielding').mockResolvedValue(undefined)
+    }
+    const start = vi.spyOn(RECONCILE_STEPS[0], 'runYielding').mockImplementation(
+      () => new Promise<void>((resolve) => releases.push(resolve)))
+    const first = reconcileOrganizationYielding()
+    const second = reconcileOrganizationYielding()
+    releases.shift()?.()
+    await first
+    const third = reconcileOrganizationYielding()
+    const fourth = reconcileOrganizationYielding()
+    expect(third).toBe(fourth)
+    expect(third).not.toBe(second)
+    expect(start).toHaveBeenCalledTimes(2)
+    releases.shift()?.()
+    await second
+    expect(start).toHaveBeenCalledTimes(3)
+    releases.shift()?.()
+    await Promise.all([third, fourth])
+  })
+
+  it('rejects callers of a throwing pass and still runs the queued and next passes', async () => {
+    for (const step of RECONCILE_STEPS) {
+      vi.spyOn(step, 'run').mockImplementation(() => undefined)
+      if (step.runYielding) vi.spyOn(step, 'runYielding').mockResolvedValue(undefined)
+    }
+    let release!: () => void
+    const failure = new Error('pass failed')
+    const start = vi.spyOn(RECONCILE_STEPS[0], 'runYielding')
+      .mockResolvedValueOnce(undefined)
+      .mockImplementationOnce(async () => {
+        await new Promise<void>((resolve) => { release = resolve })
+        throw failure
+      })
+      .mockResolvedValue(undefined)
+    const first = reconcileOrganizationYielding()
+    const second = reconcileOrganizationYielding()
+    const third = reconcileOrganizationYielding()
+    const rejected = expect(second).rejects.toBe(failure)
+    const alsoRejected = expect(third).rejects.toBe(failure)
+    await first
+    release()
+    await Promise.all([rejected, alsoRejected])
+    await reconcileOrganizationYielding()
+    expect(start).toHaveBeenCalledTimes(3)
+  })
+
+  it('finishes a step under a writer mutating on every yield', async () => {
+    seed()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    let writes = 0
+    function write(): void {
+      // Stop the old unbounded implementation safely, so the red test cannot hang.
+      if (++writes > 12) throw new Error('unbounded restart loop')
+      run("UPDATE contacts SET name = 'Owner', source = 'user' WHERE id = 'person'")
+      hooks.write = write
+    }
+    hooks.write = write
+    await expect(upsertContactsFromMeetingsYielding()).resolves.toEqual({ contacts: 0, links: 160 })
+    expect(writes).toBe(3)
+    expect(warn.mock.calls.filter(([message]) => String(message).includes('restarts'))).toHaveLength(1)
+    expect(queryAll('SELECT meeting_count, name FROM contacts')).toEqual([{ meeting_count: 160, name: 'Owner' }])
+    expect(queryAll('PRAGMA wal_autocheckpoint')).toEqual([{ wal_autocheckpoint: 1000 }])
+  })
+
   it('restores the automatic checkpoint setting after success and a failed write', async () => {
     seed()
     run('PRAGMA wal_autocheckpoint = 400')

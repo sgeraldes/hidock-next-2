@@ -2023,6 +2023,10 @@ const ORG_BATCH_SIZE = 32
 // Small transactions are checkpoints, not mandatory timers. Coalesce cheap work
 // until 20 ms has elapsed; leave headroom for the next indivisible batch.
 const ORG_YIELD_TARGET_MS = 20
+// Three invalidated slices allow transient IPC bursts without indefinite retries.
+// The exceptional fresh synchronous drain trades responsiveness for completion;
+// measured hourly synchronous heavy steps were 0.5 to 4.5 seconds.
+const ORG_MAX_CONSECUTIVE_RESTARTS = 3
 export const ORG_RECONCILE_BATCH_BUDGET_MS = 100
 
 function databaseMutationStamp(): string {
@@ -2036,6 +2040,7 @@ async function runOrganizationBatches(name: string, work: () => Generator<void>)
   const releaseCheckpointBudget = acquireOrganizationCheckpointBudget()
   try {
     let batches = work()
+    let restarts = 0
     for (;;) {
       const startedAt = performance.now()
       let batch = batches.next()
@@ -2053,7 +2058,12 @@ async function runOrganizationBatches(name: string, work: () => Generator<void>)
         // mention decision cannot be overwritten using pre-yield evidence.
         batches.return(undefined)
         batches = work()
-      }
+        if (++restarts >= ORG_MAX_CONSECUTIVE_RESTARTS) {
+          console.warn(`[OrgReconciler] step "${name}" reached ${restarts} consecutive mutation restarts; finishing from fresh reads synchronously`)
+          while (!batches.next().done) { /* No await: cached reads cannot cross another event-loop writer. */ }
+          return
+        }
+      } else restarts = 0
     }
   } finally {
     releaseCheckpointBudget()
@@ -2187,12 +2197,13 @@ export const RECONCILE_STEPS: readonly ReconcileStep[] = [
 /** A step that holds the main thread this long is named in the log. */
 export const SLOW_RECONCILE_STEP_MS = 500
 
-function runReconcileStep(step: ReconcileStep): void {
+function runReconcileStep(step: ReconcileStep, propagateError = false): void {
   const startedAt = performance.now()
   try {
     step.run()
   } catch (e) {
     console.error(`[OrgReconciler] ${step.failure}:`, e)
+    if (propagateError) throw e
   }
   const tookMs = Math.round(performance.now() - startedAt)
   if (tookMs >= SLOW_RECONCILE_STEP_MS) {
@@ -2210,15 +2221,63 @@ export function reconcileOrganization(): void {
  * Boot and hourly calendar sync share this path; synchronous callers drain the
  * same algorithms without returning to the event loop.
  */
-export async function reconcileOrganizationYielding(): Promise<void> {
+async function runYieldingPass(): Promise<void> {
+  const errors: unknown[] = []
   for (const step of RECONCILE_STEPS) {
-    if (step.runYielding) {
-      try {
-        await step.runYielding()
-      } catch (e) {
-        console.error(`[OrgReconciler] ${step.failure}:`, e)
-      }
-    } else runReconcileStep(step)
+    try {
+      if (step.runYielding) {
+        try { await step.runYielding() }
+        catch (e) {
+          console.error(`[OrgReconciler] ${step.failure}:`, e)
+          throw e
+        }
+      } else runReconcileStep(step, true)
+    } catch (e) { errors.push(e) }
     await yieldToEventLoop()
   }
+  // Preserve best-effort later steps, but expose failure to this pass's callers.
+  if (errors.length) throw errors[0]
+}
+
+interface PendingReconciliation {
+  promise: Promise<void>
+  resolve: () => void
+  reject: (error: unknown) => void
+}
+let reconciliationRunning = false
+let queuedReconciliation: PendingReconciliation | undefined
+
+function pendingReconciliation(): PendingReconciliation {
+  let resolve!: () => void
+  let reject!: (error: unknown) => void
+  const promise = new Promise<void>((yes, no) => { resolve = yes; reject = no })
+  return { promise, resolve, reject }
+}
+
+async function drainReconciliations(current: PendingReconciliation): Promise<void> {
+  for (;;) {
+    try {
+      await runYieldingPass()
+      current.resolve()
+    } catch (error) { current.reject(error) }
+    if (!queuedReconciliation) {
+      reconciliationRunning = false
+      return
+    }
+    current = queuedReconciliation
+    queuedReconciliation = undefined
+    // From here, new callers require a new pass after this one starts.
+  }
+}
+
+/** One running pass and at most one shared, not-yet-started follow-up. */
+export function reconcileOrganizationYielding(): Promise<void> {
+  if (reconciliationRunning) {
+    queuedReconciliation ??= pendingReconciliation()
+    return queuedReconciliation.promise
+  }
+  reconciliationRunning = true
+  const first = pendingReconciliation()
+  void drainReconciliations(first)
+  return first.promise
 }

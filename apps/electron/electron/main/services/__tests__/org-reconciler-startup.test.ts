@@ -462,7 +462,7 @@ describe('reconcileOrganizationYielding', () => {
     mockSteps(events, [1])
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
 
-    await reconcileOrganizationYielding()
+    await expect(reconcileOrganizationYielding()).rejects.toThrow('boom 1')
 
     expect(events.filter((e) => e.startsWith('run:'))).toHaveLength(RECONCILE_STEPS.length)
     expect(error).toHaveBeenCalledTimes(1)
