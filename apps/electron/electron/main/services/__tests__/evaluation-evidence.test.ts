@@ -108,11 +108,23 @@ describe('stored evaluations follow the evidence', () => {
     expect(evaluation('rec02')).toMatchObject({ star_level: 3, kind: 'media_playback', context: 'personal' })
   })
 
-  it('caps an untrusted transcript over speech audio too', async () => {
+  // Owner, 4-oct-2026: over speech, a transcript that is not valid is not
+  // categorized at all; "noise or accidental" would be a categorization too.
+  it('leaves a recording uncategorized when its transcript is not valid over speech', async () => {
     seed('rec41', 'speech', 'broken')
+    run("UPDATE transcripts SET validity_status = 'invalid' WHERE recording_id = 'rec41'")
     storeJev('rec41', REC02_ANSWERS, 5, 'team_meeting')
     await recomputeEvaluationsFromEvidence(['rec41'])
-    expect(evaluation('rec41')).toMatchObject({ star_level: 1, kind: 'noise_accidental' })
+    expect(evaluation('rec41')).toMatchObject({ star_level: null, kind: null, context: null })
+  })
+
+  it('never sends a transcript that is not valid to Jev, and rates nothing from it', async () => {
+    seed('rec42', 'speech')
+    run("UPDATE transcripts SET validity_status = 'doubtful' WHERE recording_id = 'rec42'")
+    const raw = await classifyCaptureValueRaw('c-rec42')
+    expect(jevAsk).not.toHaveBeenCalled()
+    expect(raw).toMatchObject({ skipped: 'transcript-held', providerCalled: false })
+    expect(raw.evaluation).toBeUndefined()
   })
 
   it('evaluates a capped recording with the rules, without asking Jev', async () => {

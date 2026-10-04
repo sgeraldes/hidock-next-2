@@ -15,12 +15,10 @@ export const QUALITY_BOUNDS = Object.freeze({
   quietMinDurationSeconds: { min: 0, max: 3600, integer: true } as Bound,
   meaningfulWords: { min: 1, max: 10000, integer: true } as Bound,
   // 1 star is every rated recording: at least 2 keeps "meaningful" meaningful.
-  meaningfulStars: { min: 2, max: 5, integer: true } as Bound,
   maxWordsPerMinuteOfRecording: { min: 50, max: 2000, integer: true } as Bound,
   busySoundSeconds: { min: 10, max: 7200, integer: true } as Bound,
   minWordsPerMinuteOfSound: { min: 0, max: 300, integer: true } as Bound,
   // At 0 every recording, rated or not, would match.
-  inventedProbability: { min: 0.05, max: 1 } as Bound,
   reasonProbability: { min: 0.05, max: 1 } as Bound,
   lowValueMaxSeconds: { min: 0, max: 600, integer: true } as Bound,
   maxRetries: { min: 0, max: 10, integer: true } as Bound,

@@ -739,7 +739,6 @@ export const SourceRow = memo(function SourceRow({
     prevProps.recording.evalKind === nextProps.recording.evalKind &&
     prevProps.recording.evalContext === nextProps.recording.evalContext &&
     prevProps.recording.evalAudioWarning === nextProps.recording.evalAudioWarning &&
-    prevProps.recording.evalTranscriptInvented === nextProps.recording.evalTranscriptInvented &&
     prevProps.recording.category === nextProps.recording.category &&
     prevProps.recording.quality === nextProps.recording.quality &&
     prevProps.recording.qualityReasons?.join('|') === nextProps.recording.qualityReasons?.join('|') &&

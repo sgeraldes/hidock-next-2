@@ -56,7 +56,6 @@ export interface DatabaseRecording {
   eval_kind?: string | null
   eval_context?: string | null
   eval_audio_warning?: string | null
-  eval_transcript_invented?: number | null
   // FL-001: transcription_status is the authoritative column; status is the legacy fallback
   transcription_status?: string
   status: string
@@ -203,7 +202,6 @@ export function evaluationFields(dbRec: DatabaseRecording | undefined): Evaluati
     evalKind: (dbRec.eval_kind ?? undefined) as EvaluationFields['evalKind'],
     evalContext: (dbRec.eval_context ?? undefined) as EvaluationFields['evalContext'],
     evalAudioWarning: (dbRec.eval_audio_warning ?? undefined) as EvaluationFields['evalAudioWarning'],
-    evalTranscriptInvented: dbRec.eval_transcript_invented ?? undefined
   }
 }
 

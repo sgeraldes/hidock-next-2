@@ -12,11 +12,9 @@ const quality = {
   quietSoundShare: 0.05,
   quietMinDurationSeconds: 60,
   meaningfulWords: 100,
-  meaningfulStars: 3,
   maxWordsPerMinuteOfRecording: 250,
   busySoundSeconds: 300,
   minWordsPerMinuteOfSound: 20,
-  inventedProbability: 0.8,
   reasonProbability: 0.5,
   lowValueMaxSeconds: 30,
   maxRetries: 3,
@@ -55,7 +53,7 @@ describe('Settings > Quality checks', () => {
 
   it('refuses a value out of range', async () => {
     render(<QualitySettings />)
-    const field = await screen.findByLabelText('Invented transcript probability')
+    const field = await screen.findByLabelText('Reason probability')
     fireEvent.change(field, { target: { value: '1.5' } })
     fireEvent.blur(field)
     expect(await screen.findByText('At most 1')).toBeInTheDocument()

@@ -141,7 +141,7 @@ import { addActiveTranscription, getActiveTranscriptions, removeActiveTranscript
 import { resolveSpeakerEngine } from './speaker-engines'
 import { BrowserWindow } from 'electron'
 import { emitActivityLog } from './activity-log'
-import { isRecordingEligible } from './recording-eligibility'
+import { isRecordingEligible, isRecordingTranscribable } from './recording-eligibility'
 import { getVectorStore } from './vector-store'
 import {
   ensureKnowledgeCaptureForRecording,
@@ -157,7 +157,9 @@ import { namingAllowed, parseAndAssessDiarization } from './diarization-quality'
 import { scheduleEvaluationCatchup } from './evaluation-catchup'
 import { analyzeAudioPreflight, type AudioPreflightReport } from './audio-preflight'
 import { audioProfileForTranscription } from './audio-profile-store'
-import { syncTrustVerdicts } from './transcript-trust'
+import { isTranscriptUntrusted, syncTrustVerdicts } from './transcript-trust'
+import { previewTranscriptValidity } from './transcript-validity-store'
+import { isUnusableValidity } from './transcript-validity'
 import { readAudioDuration } from './audio-duration'
 import { minRecordingSeconds, qualityRules } from './quality-rules'
 import { isAutomaticMeetingLinkTemporallyEligible } from './recording-match-scoring'
@@ -413,7 +415,9 @@ export function orderPendingForProcessing<T extends OrderableQueueItem>(items: T
 const cancelledRecordings = new Set<string>()
 
 function stillWanted(recordingId: string): boolean {
-  return !cancelledRecordings.has(recordingId) && isRecordingEligible(recordingId)
+  // The transcription path's boundary: an unusable old transcript must not
+  // stop the new one (plan 2026-10-04-validation-order).
+  return !cancelledRecordings.has(recordingId) && isRecordingTranscribable(recordingId)
 }
 
 /** The queued id and the recording id the pipeline will use for it (they differ for legacy synced-file ids). */
@@ -2142,7 +2146,7 @@ async function transcribeRecording(
   // exception here exists so no-speech proof can retire a false transcript.
   const isExplicitReprocess = typeof providerOverride === 'string' && providerOverride.length > 0
   const isProcessable = isRecordingProcessable(recordingId)
-  const isEligibleForAutomaticProcessing = isExplicitReprocess || isRecordingEligible(recordingId)
+  const isEligibleForAutomaticProcessing = isExplicitReprocess || isRecordingTranscribable(recordingId)
   if (!isProcessable || !isEligibleForAutomaticProcessing) {
     console.log(
       `[Transcription] Recording ${recordingId} is ineligible (soft-deleted / personal / ` +
@@ -2326,7 +2330,7 @@ Meeting ${i + 1}: "${m.subject}"
   // retried three times into an error, or, with speaker linking off, the status
   // stayed 'processing' forever with a dead Transcribe button. The owner lifts
   // the rating with "Clear rating", and the next re-run then goes through.
-  if (isExplicitReprocess && !isRecordingEligible(recordingId)) {
+  if (isExplicitReprocess && !isRecordingTranscribable(recordingId)) {
     updateRecordingTranscriptionStatus(recordingId, statusBeforeRun)
     console.log(
       `[Transcription] ${recordingId} has speech but its rating keeps it from any provider; ` +
@@ -2568,18 +2572,28 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   // the transcript was stored, after the analysis. A transcript that cannot
   // have come from this audio is stored without any of that; its recording is
   // rated "no value" from trust below, which keeps every later step away.
+  // The validity verdict (owner, 4-oct-2026) adds the audio-against-text
+  // checks: text where there is no audio, times that cannot be placed, more
+  // speakers than invited, a transcript that stops while the speech goes on.
+  // Invalid, in doubt or incomplete gets no summary or analysis either.
   // If the check itself cannot run, the transcript goes on as before; the same
   // check runs again when it is stored and the trust sync follows from there.
   let integrityNow: ReturnType<typeof checkTranscriptIntegrity> | null = null
+  let validityNow: ReturnType<typeof previewTranscriptValidity> = null
   try {
     integrityNow = checkTranscriptIntegrity(recordingId, rawTranscript.speakers)
+    validityNow = previewTranscriptValidity(recordingId, rawTranscript.speakers, { integrityStatus: integrityNow.status })
   } catch (error) {
     console.warn(
       `[Transcription] ${recordingId}: trust check before analysis failed, analysing as usual: ` +
         (error instanceof Error ? error.message : String(error))
     )
   }
-  const transcriptUntrusted = integrityNow?.status === 'broken'
+  let transcriptUntrusted = integrityNow?.status === 'broken' || isUnusableValidity(validityNow?.status)
+  const trustFindings = [
+    ...(integrityNow?.issues ?? []).map((issue) => issue.code),
+    ...(validityNow?.reasons ?? []).map((reason) => reason.code)
+  ]
   const hasGeminiAnalysis = !!resolveGeminiApiKey() && !transcriptUntrusted
   const analysisProvider = hasGeminiAnalysis ? 'gemini' : 'hidock-next'
   const analysisModel = hasGeminiAnalysis ? (config.chat?.geminiModel || CURRENT_GEMINI_CHAT_MODEL) : null
@@ -2603,12 +2617,12 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
         status: 'cancelled',
         outputRefs: {
           skipped: 'transcript-untrusted',
-          findings: (integrityNow?.issues ?? []).map((issue) => issue.code)
+          findings: trustFindings
         }
       })
       console.log(
         `[Transcription] ${recordingId}: transcript does not fit its audio ` +
-          `(${(integrityNow?.issues ?? []).map((issue) => issue.code).join(', ')}); no summary, title or analysis`
+          `(${trustFindings.join(', ')}); no summary, title or analysis`
       )
     } else {
       analysis = await summaryUsage.run(() =>
@@ -2819,15 +2833,17 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   // Only when the mapped rating is low-value/garbage (value was low/none) do
   // we emit capture:value-classified for T3's suggestion toast; high/normal
   // results (which leave the capture unrated) emit nothing.
+  // Store the validity verdict on what was saved, now that the meeting is
+  // linked (its invite count is one of the checks). A transcript that is not
+  // valid is not categorized, and every later step leaves it out.
+  try {
+    syncTrustVerdicts(recordingId)
+    transcriptUntrusted = transcriptUntrusted || isTranscriptUntrusted(recordingId)
+  } catch (e) {
+    console.warn('[TranscriptTrust] validity check failed (non-fatal):', e)
+  }
   if (transcriptUntrusted) {
-    // A measured verdict: rated "no value" from trust, which no model rating
-    // replaces and which value-excluded gates below (actions, timeline,
-    // naming, graph, search) all honour.
-    try {
-      syncTrustVerdicts(recordingId)
-    } catch (e) {
-      console.warn('[TranscriptTrust] rating failed (non-fatal):', e)
-    }
+    // Not categorized: no content rating (transcript-trust.ts).
   } else if (captureId && config.transcription.valueClassificationEnabled !== false) {
     try {
       // The stopwatch outranks the rubric at the bottom end (2026-09-22): a

@@ -113,6 +113,10 @@ export interface Transcript {
   integrity_json?: string | null
   integrity_version?: number | null
   integrity_accepted_at?: string | null
+  /** Transcript validity (v69): 'audio', 'invalid', 'incomplete', 'doubtful' or 'valid' (services/transcript-validity.ts). */
+  validity_status?: 'audio' | 'invalid' | 'incomplete' | 'doubtful' | 'valid' | null
+  validity_json?: string | null
+  validity_version?: number | null
   created_at: string
 }
 
@@ -334,11 +338,9 @@ export interface AppConfig {
     quietSoundShare?: number
     quietMinDurationSeconds?: number
     meaningfulWords?: number
-    meaningfulStars?: number
     maxWordsPerMinuteOfRecording?: number
     busySoundSeconds?: number
     minWordsPerMinuteOfSound?: number
-    inventedProbability?: number
     reasonProbability?: number
     lowValueMaxSeconds?: number
     maxRetries?: number

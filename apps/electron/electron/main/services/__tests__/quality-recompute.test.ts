@@ -35,7 +35,7 @@ describe('recomputeForQualityChange', () => {
     const j = jobs()
     await recomputeForQualityChange(
       base,
-      resolveQualityRules({ maxRetries: 5, retranscribeScore: 70, liveSilenceRms: 80, inventedProbability: 0.9, lowValueMaxSeconds: 40 }),
+      resolveQualityRules({ maxRetries: 5, retranscribeScore: 70, liveSilenceRms: 80, lowValueMaxSeconds: 40 }),
       j
     )
     expect(j.recomputeAudioWarnings).not.toHaveBeenCalled()

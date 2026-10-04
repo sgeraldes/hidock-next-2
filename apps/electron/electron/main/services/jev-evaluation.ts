@@ -12,10 +12,11 @@
  *  - stars: a Score over five described levels (1 to 5 stars of value).
  *  - kind: a Choice of what the recording is (interview, team meeting, ...).
  *  - context: a Choice of work, personal, mixed or unclear.
- *  - transcript_invented / transcript_overfull: Nouls on whether the text is
- *    trustworthy, judged against the audio numbers in the state. Jev reads
- *    only text, so without these numbers it cannot tell a transcript invented
- *    for a silent file from a real one.
+ *  - nothing about whether the transcript is real. An LLM reads only text and
+ *    cannot tell invented text (owner, 4-oct-2026); validity is decided from
+ *    the audio before this call (transcript-validity.ts), and a transcript
+ *    that is not valid is never categorized. Old answers to the removed
+ *    transcript_invented / transcript_overfull questions stay stored, unused.
  *  - has_action_items, sensitive: Nouls that later stages can gate on.
  *  - the five value reason tags, as Nouls, as before.
  *
@@ -26,6 +27,7 @@
 
 import type { JevQuestion, JevResponse } from './jev-client'
 import { DEFAULT_QUALITY_RULES, qualityRules } from './quality-rules'
+import { isUnusableValidity } from './transcript-validity'
 
 /** Bump when a question is added, removed or reworded. */
 export const EVALUATION_VERSION = 1
@@ -126,19 +128,6 @@ export function buildEvaluationQuestions(): Record<string, JevQuestion> {
       instructions: 'Is this recording about work or personal life? ' + MATERIAL_NOTE,
       criteria: { ...RECORDING_CONTEXTS }
     },
-    transcript_invented: {
-      type: 'noul',
-      instructions:
-        'Does `transcript_excerpt` read as invented, looping or repeated text (a script, a scene, the same lines over ' +
-        'and over) rather than a real conversation that was recorded? ' + MATERIAL_NOTE
-    },
-    transcript_overfull: {
-      type: 'noul',
-      instructions:
-        'Given `audio` (how many seconds of the file hold sound, and how many words the transcript has), does the ' +
-        'transcript hold far more speech than this recording could contain? Speech runs about 120 to 170 words ' +
-        'per minute.'
-    },
     has_action_items: {
       type: 'noul',
       instructions: 'Did anyone commit to doing something, or was a task assigned, in this recording? ' + MATERIAL_NOTE
@@ -219,19 +208,27 @@ export function starLevelFor(
 /** What the recording's own measurements say, read before and after any Jev call. */
 export interface EvaluationEvidence {
   audioCategory: string | null
-  /** The transcript is broken and the owner has not accepted it (transcript-trust.ts). */
-  transcriptUntrusted: boolean
+  /** The transcript's validity verdict (transcript-validity.ts), null when not checked yet. */
+  transcriptValidity: string | null
 }
 
-export type EvidenceCap = 'audio_silent' | 'audio_noise' | 'audio_too_short' | 'transcript_untrusted'
+export type EvidenceCap = 'audio_silent' | 'audio_noise' | 'audio_too_short'
 
-/** Why the measurements alone decide this recording, or null when they do not. */
+/** Why the audio alone decides this recording, or null when it does not. */
 export function evidenceCap(evidence: EvaluationEvidence): EvidenceCap | null {
   if (evidence.audioCategory === 'silent') return 'audio_silent'
   if (evidence.audioCategory === 'noise') return 'audio_noise'
   if (evidence.audioCategory === 'too_short') return 'audio_too_short'
-  if (evidence.transcriptUntrusted) return 'transcript_untrusted'
   return null
+}
+
+/**
+ * True when the transcript is invalid, in doubt or incomplete: nothing may be
+ * categorized from it (owner, 4-oct-2026, "categorizations are valid only if
+ * the transcript is valid").
+ */
+export function isTranscriptHeld(evidence: EvaluationEvidence): boolean {
+  return isUnusableValidity(evidence.transcriptValidity)
 }
 
 /** Name of the evaluations the rules make without a call. */
@@ -239,9 +236,10 @@ export const RULES_MODEL = 'rules-v1'
 
 /**
  * Tier 0: the evaluation the measurements decide on their own, with no Jev
- * call. One star, an accidental or noise recording, context unclear.
+ * call. One star, an accidental or noise recording, context unclear: the same
+ * for every audio cap.
  */
-export function rulesEvaluation(cap: EvidenceCap): RecordingEvaluation {
+export function rulesEvaluation(_cap: EvidenceCap): RecordingEvaluation {
   return {
     version: EVALUATION_VERSION,
     model: RULES_MODEL,
@@ -252,7 +250,7 @@ export function rulesEvaluation(cap: EvidenceCap): RecordingEvaluation {
     kindConfidence: 1,
     context: 'unclear',
     contextConfidence: 1,
-    transcriptInvented: cap === 'transcript_untrusted' || cap === 'audio_silent' || cap === 'audio_noise' ? 1 : null,
+    transcriptInvented: null,
     transcriptOverfull: null,
     hasActionItems: 0,
     sensitive: null,
@@ -262,17 +260,16 @@ export function rulesEvaluation(cap: EvidenceCap): RecordingEvaluation {
   }
 }
 
-/** An evaluation with the measurements applied on top: a capped one becomes the rules' verdict, keeping Jev's answers. */
+/**
+ * An evaluation with the measurements applied on top, keeping Jev's answers:
+ * audio with no speech becomes the rules' verdict, and a transcript that is
+ * not valid leaves the recording uncategorized (no stars, kind or context).
+ */
 export function withEvidence(ev: RecordingEvaluation, evidence: EvaluationEvidence): RecordingEvaluation {
   const cap = evidenceCap(evidence)
   if (!cap) {
-    // Jev itself reads the transcript as invented or looping (Settings >
-    // Quality checks, "inventedProbability"): the text is in doubt, so the
-    // recording cannot show four or five stars on its strength. Measured
-    // 3-oct-2026: 6 speech recordings at 0.8 or more were rated 4 stars.
-    const doubted = (ev.transcriptInvented ?? 0) >= qualityRules().inventedProbability
-    if (doubted && (ev.starLevel ?? 0) > UNCERTAIN_MAX_STAR_LEVEL) return { ...ev, starLevel: UNCERTAIN_MAX_STAR_LEVEL }
-    return ev
+    if (!isTranscriptHeld(evidence)) return ev
+    return { ...ev, stars: null, starLevel: null, starsConfidence: null, kind: null, kindConfidence: null, context: null, contextConfidence: null }
   }
   const rules = rulesEvaluation(cap)
   return { ...ev, stars: 1, starLevel: 1, starsConfidence: 1, kind: rules.kind, kindConfidence: 1, context: rules.context, contextConfidence: 1 }
@@ -396,9 +393,8 @@ export const WARNING_RULES = {
   /** Under this share of the file holding sound (in a file at least this long), a real transcript cannot be long. */
   quietSoundShare: DEFAULT_QUALITY_RULES.quietSoundShare,
   quietMinDurationSeconds: DEFAULT_QUALITY_RULES.quietMinDurationSeconds,
-  /** A transcript this long, or rated this well, is "plenty of meaning". */
+  /** A transcript this long is "plenty of meaning". */
   meaningfulWords: DEFAULT_QUALITY_RULES.meaningfulWords,
-  meaningfulStars: DEFAULT_QUALITY_RULES.meaningfulStars,
   /** Faster than anyone talks over the whole recording: text that cannot have come from its audio. */
   maxWordsPerMinuteOfRecording: DEFAULT_QUALITY_RULES.maxWordsPerMinuteOfRecording,
   /** This much sound with almost no words: the transcription likely missed it. */
@@ -413,12 +409,10 @@ export const WARNING_RULES = {
  *  - Little or no sound, yet a meaningful transcript: the text was likely
  *    invented (the Rec02 case, 28-sep-2026: a scripted scene on a -58 dB file).
  *  - A lot of sound, yet almost no words: the transcription likely missed it.
- * Returns null when there is not enough to judge, or nothing is wrong.
+ * Returns null when there is not enough to judge, or nothing is wrong. It
+ * reads no stars: a categorization never feeds a validation (owner, 4-oct-2026).
  */
-export function audioTranscriptWarning(
-  audio: EvaluationAudio | null,
-  starLevel: number | null
-): AudioTranscriptWarning | null {
+export function audioTranscriptWarning(audio: EvaluationAudio | null): AudioTranscriptWarning | null {
   if (!audio) return null
   const rules = qualityRules()
   const words = audio.transcript_words ?? 0
@@ -430,7 +424,7 @@ export function audioTranscriptWarning(
     (audio.sound_share !== null &&
       audio.sound_share < rules.quietSoundShare &&
       (duration ?? 0) >= rules.quietMinDurationSeconds)
-  const meaningful = words >= rules.meaningfulWords || (starLevel ?? 0) >= rules.meaningfulStars
+  const meaningful = words >= rules.meaningfulWords
   if (quiet && meaningful) return 'possible_invented_transcript'
   if (
     duration !== null &&

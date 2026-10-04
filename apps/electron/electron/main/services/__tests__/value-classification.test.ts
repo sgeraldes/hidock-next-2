@@ -1267,7 +1267,7 @@ describe('Jev (TypeSafe AI) as the value classifier', () => {
         confidence
       }
     }
-    for (const id of [...VALUE_REASON_TAGS, 'transcript_invented', 'transcript_overfull', 'has_action_items', 'sensitive']) {
+    for (const id of [...VALUE_REASON_TAGS, 'has_action_items', 'sensitive']) {
       answers[id] = { type: 'noul', noul: nouls[id] ?? 0.1 }
     }
     return { model: 'jev-1.13.0', answers, usage: { input_tokens: 900, output_tokens: 40 } }
@@ -1333,7 +1333,7 @@ describe('Jev (TypeSafe AI) as the value classifier', () => {
     expect(questions.kind.type).toBe('choice')
     expect(Object.keys(questions.kind.criteria)).toContain('interview')
     expect(Object.keys(questions.context.criteria).sort()).toEqual(['mixed', 'personal', 'unclear', 'work'])
-    for (const id of [...VALUE_REASON_TAGS, 'transcript_invented', 'transcript_overfull', 'has_action_items', 'sensitive']) {
+    for (const id of [...VALUE_REASON_TAGS, 'has_action_items', 'sensitive']) {
       expect(questions[id].type).toBe('noul')
     }
 

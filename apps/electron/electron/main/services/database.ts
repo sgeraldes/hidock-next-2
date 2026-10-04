@@ -27,7 +27,7 @@ import { isImpossibleTranscriptDensity, lowValueMaxSeconds } from './value-thres
 import { LIVE_FILENAME } from './live-channel-speakers'
 import type { QualityRating } from '@/types/knowledge'
 
-const SCHEMA_VERSION = 68
+const SCHEMA_VERSION = 69
 
 const SCHEMA = `
 -- Calendar events from ICS
@@ -325,6 +325,13 @@ CREATE TABLE IF NOT EXISTS transcripts (
     integrity_json TEXT,
     integrity_version INTEGER,
     integrity_accepted_at TEXT,
+    -- Transcript validity (v69): whether anything may be built on the transcript,
+    -- decided from the audio envelope and the lines (transcript-validity.ts).
+    -- Status audio/invalid/incomplete/doubtful/valid, the reasons and numbers as
+    -- JSON, and the rule version.
+    validity_status TEXT,
+    validity_json TEXT,
+    validity_version INTEGER,
     -- Meeting-timeline data (v39): windowed sentiment + event markers, both JSON.
     -- sentiment_segments: [{startSec,endSec,score:-1..1}] time-series across the recording.
     -- event_markers: [{id,kind,atSec,label,refId}] action/decision markers with audio offsets.
@@ -3387,6 +3394,20 @@ const MIGRATIONS: Record<number, () => void> = {
     )
     console.log('Migration v68 complete')
   },
+  69: () => {
+    // Transcript validity columns. Filled by backfillTranscriptValidity() after
+    // launch, not here: the check reads the audio envelopes.
+    console.log('Running migration to schema v69: transcript validity')
+    const database = getDatabase()
+    for (const column of ['validity_status TEXT', 'validity_json TEXT', 'validity_version INTEGER']) {
+      try {
+        database.run(`ALTER TABLE transcripts ADD COLUMN ${column}`)
+      } catch {
+        // Already present on a database repaired before this migration ran.
+      }
+    }
+    console.log('Migration v69 complete')
+  },
 }
 
 /**
@@ -4139,6 +4160,9 @@ function repairPhase(): void {
       ['integrity_json', 'TEXT'],
       ['integrity_version', 'INTEGER'],
       ['integrity_accepted_at', 'TEXT'],
+      ['validity_status', 'TEXT'],
+      ['validity_json', 'TEXT'],
+      ['validity_version', 'INTEGER'],
     ]) {
       if (!transcriptCols.includes(col)) {
         console.log(`[Database] Repairing transcripts: adding ${col}`)
@@ -4847,7 +4871,6 @@ export interface Recording {
   eval_kind?: string | null
   eval_context?: string | null
   eval_audio_warning?: string | null
-  eval_transcript_invented?: number | null
   correlation_confidence?: number
   correlation_method?: string
   status: string  // Legacy field for backwards compatibility
@@ -4886,7 +4909,7 @@ export function getRecordings(): Recording[] {
             ap.category AS audio_category, ap.sound_seconds AS audio_sound_seconds,
             ap.duration_seconds AS audio_duration_seconds,
             ev.star_level AS eval_star_level, ev.kind AS eval_kind, ev.context AS eval_context,
-            ev.audio_warning AS eval_audio_warning, ev.transcript_invented AS eval_transcript_invented
+            ev.audio_warning AS eval_audio_warning
        FROM recordings r
        LEFT JOIN meetings m ON m.id = r.meeting_id
        LEFT JOIN audio_profiles ap ON ap.recording_id = r.id
@@ -5044,7 +5067,15 @@ export function isRecordingGraphIngestable(recordingId: string): boolean {
     [recordingId]
   )
   if (!rec) return false
-  return !isValueExcludedRecording(recordingId)
+  if (isValueExcludedRecording(recordingId)) return false
+  // A transcript that is invalid, in doubt or incomplete feeds no graph
+  // (validation order, 4-oct-2026); the eligibility boundary says the same.
+  const unusable = queryOne<{ x: number }>(
+    `SELECT 1 AS x FROM transcripts t WHERE t.recording_id = ?
+        AND t.validity_status IN ('invalid', 'incomplete', 'doubtful') AND t.integrity_accepted_at IS NULL`,
+    [recordingId]
+  )
+  return !unusable
 }
 
 /**
@@ -5125,7 +5156,23 @@ export interface RecordingEligibility {
  * the LIVE excluded set for other purposes; all ELIGIBILITY decisions go through
  * this positive query via recording-eligibility.ts.
  */
-export function getEligibleRecordingIds(candidateIds: Iterable<string>): RecordingEligibility {
+/**
+ * A recording whose transcript nothing may be built on (validity invalid,
+ * incomplete or doubtful, and not accepted by the owner) is kept from every
+ * surface that reads the transcript's content: search, graph, documents,
+ * people, summaries and categorization (plan 2026-10-04-validation-order).
+ * Transcription itself is exempt: a new transcript is the way out.
+ */
+const UNUSABLE_TRANSCRIPT_EXCLUSION = `AND NOT EXISTS (
+              SELECT 1 FROM transcripts t
+               WHERE t.recording_id = r.id
+                 AND t.validity_status IN ('invalid', 'incomplete', 'doubtful')
+                 AND t.integrity_accepted_at IS NULL)`
+
+export function getEligibleRecordingIds(
+  candidateIds: Iterable<string>,
+  options: { forTranscription?: boolean } = {}
+): RecordingEligibility {
   const unique = [...new Set([...candidateIds].filter((id): id is string => !!id))]
   if (unique.length === 0) return { eligible: new Set<string>(), failClosed: false }
   try {
@@ -5143,7 +5190,8 @@ export function getEligibleRecordingIds(candidateIds: Iterable<string>): Recordi
               SELECT 1 FROM knowledge_captures kc
                WHERE kc.source_recording_id = r.id
                  AND kc.deleted_at IS NULL
-                 AND ${VALUE_EXCLUSION_PREDICATE})`,
+                 AND ${VALUE_EXCLUSION_PREDICATE})
+            ${options.forTranscription ? '' : UNUSABLE_TRANSCRIPT_EXCLUSION}`,
         [...chunk, ...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS]
       )
       for (const row of rows) eligible.add(row.id)
@@ -7459,6 +7507,9 @@ export interface Transcript {
   integrity_json?: string
   integrity_version?: number
   integrity_accepted_at?: string | null
+  validity_status?: string | null
+  validity_json?: string | null
+  validity_version?: number | null
   created_at: string
 }
 
@@ -7843,7 +7894,7 @@ export async function backfillTranscriptIntegrity(
       }
       const sameProblems = previous !== null && integrityProblemsKey(previous) === integrityProblemsKey(integrity)
       runNoSave(
-        `UPDATE transcripts SET integrity_status = ?, integrity_json = ?, integrity_version = ?,
+        `UPDATE transcripts SET integrity_status = ?, integrity_json = ?, integrity_version = ?, validity_version = NULL,
            integrity_accepted_at = CASE WHEN ? THEN integrity_accepted_at ELSE NULL END WHERE id = ?`,
         [integrity.status, JSON.stringify(integrity), INTEGRITY_VERSION, sameProblems ? 1 : 0, row.id]
       )

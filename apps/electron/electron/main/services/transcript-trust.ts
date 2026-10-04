@@ -1,88 +1,101 @@
 /**
- * Whether anything may be built on a recording's transcript, and the rating
- * that follows from it.
+ * Whether anything may be built on a recording's transcript, and what follows
+ * from it.
  *
- * Spec: docs/superpowers/specs/2026-10-03-pipeline-trust-design.md, sections 3 and 4.
+ * Plan: docs/superpowers/plans/2026-10-04-validation-order.md. Owner,
+ * 4-oct-2026: categorizations are valid only if the transcript is valid.
  *
- * A transcript is untrusted when its integrity check says 'broken' (the text
- * cannot have come from this audio: invented over noise, far more words than
- * the sound holds, looping lines, or faster than anyone speaks) and the owner
- * has not accepted it. An untrusted transcript rates its recording "no value"
- * with method 'trust'. That one rating is what keeps search, the graph, the
- * timeline, People and identity rules, speaker naming and handover away from
- * it: every one of them already honours a value exclusion. Nothing stored is
- * deleted; accepting the transcript, or a new trusted one, takes the rating
- * back.
+ * The verdict is the transcript's validity (transcript-validity.ts), decided
+ * from the audio and the text alone: invalid, in doubt or incomplete means
+ * nothing may be built on it. Search, the graph, the timeline, People and
+ * identity rules leave it out through the eligibility boundary
+ * (getEligibleRecordingIds), and the recording is not categorized: no stars,
+ * kind or context, and no rating from its content. Nothing stored is deleted;
+ * a new transcript, an accepted one, or one sampling confirms gives it back.
+ *
+ * Until 4-oct a broken transcript rated its recording "no value" (method
+ * 'trust'). An invalid transcript over speech says nothing about the
+ * recording's value, so those ratings are taken back.
  */
 
-import { queryAll, queryOne, run, getRowsModified } from './database'
-import { applyCaptureValueClassification, type ValueClassification } from './value-classification'
+import { queryOne, run, getRowsModified } from './database'
+import { HELD_METHOD, recomputeAudioWarnings } from './value-classification'
+import { isUnusableValidity } from './transcript-validity'
+import { refreshTranscriptValidity } from './transcript-validity-store'
 
-export const TRUST_REASON = 'transcript_untrusted'
-
-const UNTRUSTED: ValueClassification = { value: 'none', reasons: [TRUST_REASON], confidence: 1 }
-
-/** True when the recording's transcript is broken and the owner has not accepted it. */
+/**
+ * True when the recording's transcript is invalid, in doubt or incomplete, or
+ * broken and not accepted. Over silence or noise the validity says "decided by
+ * the audio", but text the integrity check calls broken is still not to be
+ * built on.
+ */
 export function isTranscriptUntrusted(recordingId: string): boolean {
-  const row = queryOne<{ untrusted: number }>(
-    `SELECT 1 AS untrusted FROM transcripts
-      WHERE recording_id = ? AND integrity_status = 'broken' AND integrity_accepted_at IS NULL`,
+  const row = queryOne<{ validity_status: string | null; integrity_status: string | null; integrity_accepted_at: string | null }>(
+    'SELECT validity_status, integrity_status, integrity_accepted_at FROM transcripts WHERE recording_id = ?',
     [recordingId]
   )
-  return !!row
+  if (!row) return false
+  return isUnusableValidity(row.validity_status) || (row.integrity_status === 'broken' && !row.integrity_accepted_at)
 }
 
 export interface TrustSyncResult {
-  rated: number
+  /** Content ratings taken back because the transcript is not valid. */
   cleared: number
+  /** Old 'trust' ratings taken back. */
+  withdrawn: number
 }
 
 /**
- * Bring the 'trust' ratings in line with the transcripts: rate the recordings
- * whose transcript is untrusted, and take the rating back where it no longer
- * is. One recording, or the whole library when no id is given. Owner ratings
- * and personal recordings are never touched, and a recording the audio already
- * rated "no value" keeps that verdict, which says more (silent or noise).
+ * Bring a recording in line with its transcript after the transcript, its
+ * audio profile or the owner's acceptance changed: check the validity again,
+ * take back ratings read from a transcript that is not valid, and recompute
+ * the stored stars, kind and context. The whole library when no id is given
+ * (then the caller has run the validity backfill and recomputes itself).
+ * Owner ratings, and the audio's own verdicts, are never touched.
  */
 export function syncTrustVerdicts(recordingId?: string): TrustSyncResult {
-  const scope = recordingId ? 'AND r.id = ?' : ''
+  if (recordingId) refreshTranscriptValidity(recordingId)
+  const scope = recordingId ? 'AND source_recording_id = ?' : ''
   const params = recordingId ? [recordingId] : []
-  const toRate = queryAll<{ id: string }>(
-    `SELECT kc.id FROM knowledge_captures kc
-       JOIN recordings r ON r.id = kc.source_recording_id
-       JOIN transcripts t ON t.recording_id = r.id
-      WHERE t.integrity_status = 'broken' AND t.integrity_accepted_at IS NULL
-        AND kc.deleted_at IS NULL AND r.deleted_at IS NULL
-        AND COALESCE(r.personal, 0) = 0
-        AND COALESCE(kc.quality_source, '') != 'user'
-        AND NOT (COALESCE(kc.quality_method, '') = 'audio' AND kc.quality_rating = 'garbage')
-        AND NOT (COALESCE(kc.quality_method, '') = 'trust' AND kc.quality_rating = 'garbage')
-        ${scope}`,
-    params
-  )
-  let rated = 0
-  for (const capture of toRate) {
-    if (applyCaptureValueClassification(capture.id, UNTRUSTED, 'trust').applied) rated++
-  }
 
   run(
     `UPDATE knowledge_captures
         SET quality_rating = 'unrated', quality_reasons = NULL, quality_source = NULL,
             quality_method = NULL, quality_confidence = NULL, quality_assessed_at = NULL
-      WHERE quality_source = 'ai' AND quality_method = 'trust'
+      WHERE quality_source = 'ai' AND quality_method = 'trust' ${scope}`,
+    params
+  )
+  const withdrawn = getRowsModified()
+
+  // Marked 'held' so the rating comes back, from the stored evaluation, when
+  // the transcript turns valid (recomputeEvaluationsFromEvidence). Personal
+  // and deleted recordings are left as they are.
+  run(
+    `UPDATE knowledge_captures
+        SET quality_rating = 'unrated', quality_reasons = NULL, quality_source = NULL,
+            quality_method = '${HELD_METHOD}', quality_confidence = NULL, quality_assessed_at = NULL
+      WHERE quality_source = 'ai' AND quality_method = 'content' AND deleted_at IS NULL
         AND source_recording_id IN (
-          SELECT r.id FROM recordings r
-           WHERE NOT EXISTS (
-             SELECT 1 FROM transcripts t
-              WHERE t.recording_id = r.id AND t.integrity_status = 'broken' AND t.integrity_accepted_at IS NULL
-           )
-           ${scope}
-        )`,
+          SELECT t.recording_id FROM transcripts t JOIN recordings r ON r.id = t.recording_id
+           WHERE t.validity_status IN ('invalid', 'incomplete', 'doubtful')
+             AND r.deleted_at IS NULL AND COALESCE(r.personal, 0) = 0
+        )
+        ${scope}`,
     params
   )
   const cleared = getRowsModified()
-  if (rated > 0 || cleared > 0) {
-    console.log(`[TranscriptTrust] ${rated} recording(s) rated no value for an untrusted transcript, ${cleared} taken back`)
+
+  if (recordingId) {
+    // After the caller's own writes: the recompute announces the change, and
+    // an open Library reloads the row.
+    setImmediate(() => {
+      recomputeAudioWarnings([recordingId]).catch((error) =>
+        console.warn(`[TranscriptTrust] ${recordingId}: evaluation recompute failed:`, error)
+      )
+    })
   }
-  return { rated, cleared }
+  if (withdrawn > 0 || cleared > 0) {
+    console.log(`[TranscriptTrust] ${withdrawn} 'trust' rating(s) and ${cleared} content rating(s) on transcripts not valid taken back`)
+  }
+  return { cleared, withdrawn }
 }

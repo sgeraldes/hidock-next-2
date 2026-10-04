@@ -39,7 +39,7 @@ import { SpeakerAssignPopover, type AssignScope } from './SpeakerAssignPopover'
 import { useReaderPeople, type ParticipantChip } from '../hooks/useReaderPeople'
 import { deriveSpeakerRanges, type DerivedSpeakerRange } from '@/features/library/utils/speakerRanges'
 import { getDisplayTitle } from '@/features/library/utils/getDisplayTitle'
-import { isTranscriptTrusted, trustedSummary, UNTRUSTED_SUMMARY_NOTE } from '@/features/library/utils/transcriptIntegrity'
+import { isTranscriptTrusted, trustedSummary, untrustedSummaryNote } from '@/features/library/utils/transcriptIntegrity'
 import { getSourceType } from '@/features/library/utils/sourceType'
 import { ArtifactReader } from './ArtifactReader'
 import { RecordingSplitEditor } from './RecordingSplitEditor'
@@ -2091,7 +2091,7 @@ export function SourceReader({
                       {trustedSummary(effectiveTranscript, recording.audioCategory)
                         ? <p className="whitespace-pre-wrap">{trustedSummary(effectiveTranscript, recording.audioCategory)}</p>
                         : effectiveTranscript.summary?.trim()
-                          ? <p className="text-muted-foreground">{UNTRUSTED_SUMMARY_NOTE}</p>
+                          ? <p className="text-muted-foreground">{untrustedSummaryNote(effectiveTranscript)}</p>
                           : <p className="text-muted-foreground">No summary generated.</p>}
                     </div>
                   </ReaderSection>

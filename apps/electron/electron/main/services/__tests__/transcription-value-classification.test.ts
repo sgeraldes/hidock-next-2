@@ -176,7 +176,8 @@ vi.mock('../database', () => ({
 // through the shared recording-eligibility boundary. Mock it here (default
 // eligible) so the existing happy paths persist; the ADV40-1 describe flips it.
 vi.mock('../recording-eligibility', () => ({
-  isRecordingEligible: (...args: any[]) => mockIsRecordingEligible(...args)
+  isRecordingEligible: (...args: any[]) => mockIsRecordingEligible(...args),
+  isRecordingTranscribable: (...args: any[]) => mockIsRecordingEligible(...args)
 }))
 
 vi.mock('electron', () => ({

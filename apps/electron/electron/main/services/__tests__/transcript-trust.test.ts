@@ -1,12 +1,13 @@
 // @vitest-environment node
 
 /**
- * Transcript trust against a real SQLite database: a transcript stored over
- * noise is checked against the audio profile and comes out broken, an
- * untrusted transcript rates its recording "no value" with method 'trust', a
- * model rating cannot undo that, and accepting the transcript (or the audio
- * turning out to hold speech) takes it back. The owner's rating and personal
- * recordings are never touched.
+ * Transcript trust against a real SQLite database. A transcript stored over
+ * noise is checked against the audio profile and comes out broken. Over
+ * speech, a transcript that is not valid leaves its recording uncategorized
+ * (owner, 4-oct-2026): the old 'trust' "no value" ratings and the ratings read
+ * from its content are taken back, the stored stars, kind and context go, and
+ * accepting the transcript gives them back. The owner's rating and the audio's
+ * own verdicts are never touched.
  */
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
@@ -32,12 +33,12 @@ import {
   run,
   queryOne,
   insertTranscript,
-  refreshTranscriptIntegrityForRecording,
   setTranscriptIntegrityAccepted,
   backfillTranscriptIntegrity,
+  saveRecordingEvaluation,
 } from '../database'
-import { isTranscriptUntrusted, syncTrustVerdicts, TRUST_REASON } from '../transcript-trust'
-import { applyCaptureValueClassification } from '../value-classification'
+import { isTranscriptUntrusted, syncTrustVerdicts } from '../transcript-trust'
+import { applyCaptureValueClassification, recomputeEvaluationsFromEvidence } from '../value-classification'
 
 function seedRecording(id: string, personal = false): void {
   run(
@@ -116,52 +117,118 @@ describe('transcript trust', () => {
     expect(isTranscriptUntrusted('rec02')).toBe(true)
   })
 
-  it('rates an untrusted transcript "no value" with method trust, and a model cannot undo it', () => {
+  it('never rates a transcript "no value" for being broken', () => {
     seedCapture('c-rec02', 'rec02', 'unrated', null)
-    expect(syncTrustVerdicts()).toMatchObject({ rated: 1 })
-    expect(rating('c-rec02')).toMatchObject({ quality_rating: 'garbage', quality_method: 'trust', quality_source: 'ai' })
-    expect(JSON.parse(rating('c-rec02')!.quality_reasons!)).toEqual([TRUST_REASON])
-    expect(applyCaptureValueClassification('c-rec02', { value: 'high', reasons: [], confidence: 0.99 }, 'content').applied).toBe(false)
-    expect(rating('c-rec02')?.quality_rating).toBe('garbage')
-    // Idempotent: a second pass changes nothing.
-    expect(syncTrustVerdicts()).toEqual({ rated: 0, cleared: 0 })
-  })
-
-  it('takes the rating back when the owner accepts the transcript', () => {
-    expect(setTranscriptIntegrityAccepted('rec02', true)).toBe(true)
-    expect(isTranscriptUntrusted('rec02')).toBe(false)
-    expect(syncTrustVerdicts('rec02')).toEqual({ rated: 0, cleared: 1 })
-    expect(rating('c-rec02')).toMatchObject({ quality_rating: 'unrated', quality_method: null })
-    setTranscriptIntegrityAccepted('rec02', false)
-    expect(syncTrustVerdicts('rec02')).toEqual({ rated: 1, cleared: 0 })
-  })
-
-  it('trusts the transcript again when the audio turns out to hold speech', () => {
-    seedProfile('rec02', 'speech', 600)
-    expect(refreshTranscriptIntegrityForRecording('rec02')?.status).not.toBe('broken')
-    expect(syncTrustVerdicts('rec02')).toEqual({ rated: 0, cleared: 1 })
+    expect(syncTrustVerdicts('rec02')).toEqual({ cleared: 0, withdrawn: 0 })
     expect(rating('c-rec02')?.quality_rating).toBe('unrated')
   })
+})
 
-  it('never touches the owner rating, a personal recording, or an audio verdict', () => {
+describe('a transcript that is not valid, over speech', () => {
+  const validity = (id: string) =>
+    queryOne<{ validity_status: string | null }>('SELECT validity_status FROM transcripts WHERE recording_id = ?', [id])
+      ?.validity_status
+  const evaluation = (captureId: string) =>
+    queryOne<{ star_level: number | null; kind: string | null; context: string | null; answers_json: string }>(
+      'SELECT star_level, kind, context, answers_json FROM recording_evaluations WHERE capture_id = ?',
+      [captureId]
+    )
+
+  it('is invalid: 2,500 words over 30 seconds of sound', () => {
+    seedRecording('inv')
+    seedProfile('inv', 'speech', 30)
+    story('inv')
+    syncTrustVerdicts('inv')
+    expect(validity('inv')).toBe('invalid')
+    expect(isTranscriptUntrusted('inv')).toBe(true)
+  })
+
+  it('takes back the old trust rating and the rating read from its content', () => {
+    seedCapture('c-inv', 'inv', 'garbage', 'ai')
+    run(`UPDATE knowledge_captures SET quality_method = 'trust', quality_reasons = '["transcript_untrusted"]' WHERE id = 'c-inv'`)
+    seedRecording('inv2')
+    seedProfile('inv2', 'speech', 30)
+    story('inv2')
+    seedCapture('c-inv2', 'inv2', 'garbage', 'ai')
+    run(`UPDATE knowledge_captures SET quality_method = 'content' WHERE id = 'c-inv2'`)
+
+    expect(syncTrustVerdicts('inv')).toEqual({ cleared: 0, withdrawn: 1 })
+    expect(syncTrustVerdicts('inv2')).toEqual({ cleared: 1, withdrawn: 0 })
+    expect(rating('c-inv')).toMatchObject({ quality_rating: 'unrated', quality_method: null, quality_source: null })
+    expect(rating('c-inv2')).toMatchObject({ quality_rating: 'unrated', quality_method: 'held', quality_source: null })
+    expect(syncTrustVerdicts()).toEqual({ cleared: 0, withdrawn: 0 })
+  })
+
+  it('loses its stars, kind and context, keeps Jev answers, and gets them back when accepted', async () => {
+    const answers = {
+      stars: { type: 'score', score: 3.2, confidence: 0.8, legend: {}, probabilities: { '3': 0.8, '4': 0.2 } },
+      kind: { type: 'choice', choice: 'team_meeting', probabilities: {}, confidence: 0.9 },
+      context: { type: 'choice', choice: 'work', probabilities: {}, confidence: 0.9 },
+    }
+    saveRecordingEvaluation({
+      capture_id: 'c-inv', recording_id: 'inv', version: 1, model: 'jev-1.13.0', stars: 4.2, star_level: 4,
+      stars_confidence: 0.8, kind: 'team_meeting', kind_confidence: 0.9, context: 'work', context_confidence: 0.9,
+      transcript_invented: null, transcript_overfull: null, has_action_items: null, sensitive: null,
+      reasons_json: '[]', answers_json: JSON.stringify(answers), input_tokens: 1200, audio_warning: null,
+    })
+    await recomputeEvaluationsFromEvidence(['inv'])
+    expect(evaluation('c-inv')).toMatchObject({ star_level: null, kind: null, context: null })
+    expect(JSON.parse(evaluation('c-inv')!.answers_json)).toEqual(answers)
+
+    expect(setTranscriptIntegrityAccepted('inv', true)).toBe(true)
+    syncTrustVerdicts('inv')
+    expect(validity('inv')).toBe('valid')
+    expect(isTranscriptUntrusted('inv')).toBe(false)
+    await recomputeEvaluationsFromEvidence(['inv'])
+    expect(evaluation('c-inv')).toMatchObject({ star_level: 4, kind: 'team_meeting', context: 'work' })
+  })
+
+  // Kiro review of #149: a rating taken back must come back when the
+  // transcript turns valid, not stay unrated until some later scan.
+  it('gives the held content rating back from the stored evaluation once the transcript is valid', async () => {
+    saveRecordingEvaluation({
+      capture_id: 'c-inv2', recording_id: 'inv2', version: 1, model: 'jev-1.13.0', stars: 1.1, star_level: 1,
+      stars_confidence: 0.9, kind: 'device_test', kind_confidence: 0.9, context: 'unclear', context_confidence: 0.9,
+      transcript_invented: null, transcript_overfull: null, has_action_items: null, sensitive: null,
+      reasons_json: '["no_substance"]',
+      answers_json: JSON.stringify({ stars: { type: 'score', score: 0.1, confidence: 0.9, legend: {}, probabilities: { '0': 0.9, '1': 0.1 } } }),
+      input_tokens: 1200, audio_warning: null,
+    })
+    await recomputeEvaluationsFromEvidence(['inv2'])
+    expect(rating('c-inv2')).toMatchObject({ quality_rating: 'unrated', quality_method: 'held' })
+
+    setTranscriptIntegrityAccepted('inv2', true)
+    syncTrustVerdicts('inv2')
+    await recomputeEvaluationsFromEvidence(['inv2'])
+    expect(rating('c-inv2')).toMatchObject({ quality_rating: 'garbage', quality_method: 'content', quality_source: 'ai' })
+  })
+
+  it('leaves a personal recording rating as it is', () => {
+    seedRecording('priv', true)
+    seedProfile('priv', 'speech', 30)
+    story('priv')
+    seedCapture('c-priv', 'priv', 'low-value', 'ai')
+    run(`UPDATE knowledge_captures SET quality_method = 'content' WHERE id = 'c-priv'`)
+    expect(syncTrustVerdicts('priv')).toEqual({ cleared: 0, withdrawn: 0 })
+    expect(rating('c-priv')).toMatchObject({ quality_rating: 'low-value', quality_method: 'content' })
+  })
+
+  it('never touches the owner rating or an audio verdict', () => {
     seedRecording('owned')
-    seedProfile('owned', 'noise', 2)
+    seedProfile('owned', 'speech', 30)
     story('owned')
     seedCapture('c-owned', 'owned', 'valuable', 'user')
-    seedRecording('private', true)
-    seedProfile('private', 'noise', 2)
-    story('private')
-    seedCapture('c-private', 'private', 'unrated', null)
     seedRecording('crackle')
     seedProfile('crackle', 'noise', 2)
     story('crackle')
     seedCapture('c-crackle', 'crackle', 'unrated', null)
     expect(applyCaptureValueClassification('c-crackle', { value: 'none', reasons: ['noise_only'], confidence: 1 }, 'audio').applied).toBe(true)
 
-    syncTrustVerdicts()
+    syncTrustVerdicts('owned')
+    syncTrustVerdicts('crackle')
     expect(rating('c-owned')).toMatchObject({ quality_rating: 'valuable', quality_source: 'user' })
-    expect(rating('c-private')?.quality_rating).toBe('unrated')
     expect(rating('c-crackle')).toMatchObject({ quality_rating: 'garbage', quality_method: 'audio' })
+    expect(validity('crackle')).toBe('audio')
   })
 })
 
