@@ -137,6 +137,35 @@ describe('assessTranscriptValidity', () => {
     expect(v.status).toBe('valid')
   })
 
+  // Kiro review of #149: errors were divided by every line, timed or not, so
+  // untimed lines hid a broken clock.
+  it('measures timing errors against the timed lines only', () => {
+    const env = envelope([[160, 600]])
+    const timedBad = Array.from({ length: 20 }, (_, i) => ({ speaker: 'A', start: Math.floor(i / 2) * 60, end: Math.floor(i / 2) * 60 + 50, text: words(10, `-${i}`) }))
+    const untimed = Array.from({ length: 80 }, (_, i) => ({ speaker: 'A', text: words(3, `-u${i}`) }))
+    const v = assessTranscriptValidity(base({ envelope: env, segments: [...timedBad, ...untimed] }))
+    expect(v.reasons.map((r) => r.code)).toContain('timestamps_consistently_wrong')
+  })
+
+  // Kiro review of #149: an imported MP3 or FLAC keeps a decoded envelope in
+  // dB, and was passed as valid with no peak check at all.
+  it('reads a decoded envelope in dB against its own floor', () => {
+    const decoded = (pieces: Array<[number, number]>) => envelope(pieces) // the same shape, the bytes are dBFS + 100
+    const segments = Array.from({ length: 50 }, (_, i) => ({ speaker: 'A', start: i * 11, end: i * 11 + 10, text: words(20, `-${i}`) }))
+    const quiet = assessTranscriptValidity(base({ fileName: 'import.mp3', envelope: decoded([[20, 590], [60, 10]]), envelopeUnit: 'db', segments }))
+    expect(quiet.status).toBe('invalid')
+    const talk = assessTranscriptValidity(base({ fileName: 'import.mp3', envelope: decoded([[20, 60], [48, 540]]), envelopeUnit: 'db', segments }))
+    expect(talk.status).toBe('valid')
+  })
+
+  it('doubts a long timed transcript whose audio could not be read, instead of passing it', () => {
+    const segments = Array.from({ length: 50 }, (_, i) => ({ speaker: 'A', start: i * 11, end: i * 11 + 10, text: words(20, `-${i}`) }))
+    const v = assessTranscriptValidity(base({ envelope: null, segments }))
+    expect(v.status).toBe('doubtful')
+    expect(v.reasons.map((r) => r.code)).toContain('audio_not_checked')
+    expect(assessTranscriptValidity(base({ envelope: null, segments: segments.slice(0, 2) })).status).toBe('valid')
+  })
+
   it('doubts a long transcript with no times at all, since nothing can be checked against the audio', () => {
     const v = assessTranscriptValidity(base({ envelope: envelope([[160, 600]]), segments: [{ speaker: 'A', text: words(300) }] }))
     expect(v.status).toBe('doubtful')

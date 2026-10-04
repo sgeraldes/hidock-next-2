@@ -26,7 +26,7 @@
  * sample of its audio and comparing meaning.
  */
 
-import { FRAME_SECONDS, LOUD_GAIN } from './audio-profile'
+import { FRAME_SECONDS, LOUD_DB, LOUD_GAIN } from './audio-profile'
 
 /** Bumped when a rule changes, so stored verdicts are recomputed. */
 export const VALIDITY_VERSION = 1
@@ -45,6 +45,7 @@ export type ValidityReasonCode =
   | 'clock_compressed'
   | 'audio_after_the_end'
   | 'no_times'
+  | 'audio_not_checked'
 
 export interface ValidityReason {
   code: ValidityReasonCode
@@ -84,8 +85,13 @@ export interface ValiditySegment {
 export interface ValidityInput {
   fileName: string
   segments: ValiditySegment[]
-  /** One gain byte per MP3 frame (audio-profile-store envelope), or null when there is none. */
+  /** One level byte per frame (audio-profile-store envelope), or null when there is none. */
   envelope: Uint8Array | null
+  /**
+   * What the envelope bytes are: MP3 global gain ('gain', the device's files,
+   * the default) or dBFS + 100 ('db', a decoded import such as an MP3 or FLAC).
+   */
+  envelopeUnit?: 'gain' | 'db'
   audioCategory: string | null
   /** Invitees of the linked meeting; 0 when unknown. */
   attendees: number
@@ -97,6 +103,8 @@ export interface ValidityInput {
 // Thresholds, measured on the owner's library on 4-oct-2026 (plan, "The deterministic checks").
 /** Above floor plus this many gain steps (1.5 dB each) a frame has audio. */
 export const FLOOR_MARGIN = 2
+/** The same margin for a decoded envelope, whose bytes are dB: two gain steps. */
+export const FLOOR_MARGIN_DB = 3
 /** Words in a transcript before the text-versus-audio checks judge it. */
 export const MIN_WORDS = 100
 /** Placeable words needed for the "without audio" share to mean anything. */
@@ -171,8 +179,8 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
     const cur = timed[i].start as number
     if (Math.round(prev * 100) === Math.round(cur * 100) || cur < prev - 0.5) timingErrors++
   }
-  measures.timingErrorShare = timed.length ? timingErrors / input.segments.length : 0
-  if (input.segments.length >= MIN_LINES_FOR_TIMING && measures.timingErrorShare >= DOUBT_TIMING_SHARE) {
+  measures.timingErrorShare = timed.length > 1 ? timingErrors / (timed.length - 1) : 0
+  if (timed.length >= MIN_LINES_FOR_TIMING && measures.timingErrorShare >= DOUBT_TIMING_SHARE) {
     reasons.push({
       code: 'timestamps_consistently_wrong',
       detail: `${percent(measures.timingErrorShare)} of the lines start at a repeated or earlier time.`
@@ -187,10 +195,19 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
   }
 
   const env = input.envelope
-  if (env && env.length > 0) {
+  if (!env || env.length === 0) {
+    // No envelope to check against: a long transcript is in doubt until
+    // sampling confirms it, never passed as valid unchecked.
+    if (totalWords >= MIN_WORDS) {
+      reasons.push({ code: 'audio_not_checked', detail: 'The audio levels could not be read, so the text was not checked against them.' })
+    }
+  } else {
     const sorted = Uint8Array.from(env).sort()
     const floor = sorted[Math.floor(sorted.length * 0.05)]
-    const hasAudio = (f: number) => env[f] >= floor + FLOOR_MARGIN || env[f] > LOUD_GAIN
+    const decoded = input.envelopeUnit === 'db'
+    const margin = decoded ? FLOOR_MARGIN_DB : FLOOR_MARGIN
+    const loud = decoded ? LOUD_DB + 100 : LOUD_GAIN
+    const hasAudio = (f: number) => env[f] >= floor + margin || env[f] > loud
     const fileSeconds = env.length * FRAME_SECONDS
     measures.fileSeconds = fileSeconds
 

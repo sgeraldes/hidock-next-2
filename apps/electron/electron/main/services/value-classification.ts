@@ -209,6 +209,14 @@ export type CaptureRatingMethod = 'content' | 'duration' | 'audio'
 export const MEASURED_RATING_METHODS: readonly CaptureRatingMethod[] = ['audio']
 
 /**
+ * quality_method of a capture whose content rating was taken back because its
+ * transcript is not valid (transcript-trust.ts). Unrated with no source, so
+ * every rater may write it; recomputeEvaluationsFromEvidence gives the rating
+ * back from the stored evaluation once the transcript is valid again.
+ */
+export const HELD_METHOD = 'held'
+
+/**
  * Guarded, idempotent, never-downgrade, confidence-floored DB write. Writes
  * iff ALL of:
  *  - the capture is currently unrated/NULL OR was itself AI-set
@@ -1107,7 +1115,47 @@ export async function recomputeEvaluationsFromEvidence(recordingIds?: string[]):
     if (i + WARNING_REFRESH_CHUNK < updates.length) await new Promise<void>((resolve) => setImmediate(resolve))
   }
   if (updates.length > 0) console.log(`[Evaluation] ${updates.length} stored evaluation(s) brought in line with the evidence`)
+  restoreHeldRatings(recordingIds)
   return updates.length
+}
+
+/**
+ * Give back the content ratings taken back while a transcript was not valid,
+ * now that it is: from the stored evaluation when it has stars, otherwise the
+ * mark is cleared so the next value scan rates it. Owner ratings were never
+ * taken, and a rating written since is no longer marked.
+ */
+function restoreHeldRatings(recordingIds?: string[]): void {
+  const filter = recordingIds ? `AND kc.source_recording_id IN (${recordingIds.map(() => '?').join(', ')})` : ''
+  const rows = queryAll<{ capture_id: string; star_level: number | null; stars_confidence: number | null; reasons_json: string | null }>(
+    `SELECT kc.id AS capture_id, re.star_level, re.stars_confidence, re.reasons_json
+       FROM knowledge_captures kc
+       LEFT JOIN transcripts t ON t.recording_id = kc.source_recording_id
+       LEFT JOIN recording_evaluations re ON re.capture_id = kc.id
+      WHERE kc.quality_method = ? AND kc.quality_source IS NULL
+        AND COALESCE(t.validity_status, '') NOT IN ('invalid', 'incomplete', 'doubtful')
+        ${filter}`,
+    [HELD_METHOD, ...(recordingIds ?? [])]
+  )
+  for (const row of rows) {
+    if (row.star_level === null) {
+      run('UPDATE knowledge_captures SET quality_method = NULL WHERE id = ? AND quality_method = ?', [row.capture_id, HELD_METHOD])
+      continue
+    }
+    let reasons: string[]
+    try {
+      reasons = row.reasons_json ? (JSON.parse(row.reasons_json) as string[]) : []
+    } catch {
+      reasons = []
+    }
+    const value = evaluationToValue({ starLevel: row.star_level, starsConfidence: row.stars_confidence, reasons } as RecordingEvaluation)
+    const applied = applyCaptureValueClassification(row.capture_id, parseValueClassification(value ?? undefined), 'content')
+    // Below the confidence floor nothing is written; the mark goes anyway.
+    if (!applied.applied) {
+      run('UPDATE knowledge_captures SET quality_method = NULL WHERE id = ? AND quality_method = ?', [row.capture_id, HELD_METHOD])
+    }
+  }
+  if (rows.length > 0) console.log(`[Evaluation] ${rows.length} rating(s) held for a transcript not valid brought back`)
 }
 
 function sameNumber(a: number | null | undefined, b: number | null | undefined): boolean {

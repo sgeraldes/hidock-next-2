@@ -57,7 +57,6 @@ interface RecordingBase {
   evalContext?: RecordingContext
   /** Audio versus transcript cross-check: possible invented or missed transcription. */
   evalAudioWarning?: AudioWarning
-  /** Jev's probability that the transcript is invented. */
   transcript?: TranscriptSummary
   // Knowledge Capture integration
   knowledgeCaptureId?: string

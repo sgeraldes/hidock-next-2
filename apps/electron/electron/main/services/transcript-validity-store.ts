@@ -29,9 +29,9 @@ interface ValidityRow {
 }
 
 function readEnvelope(recordingId: string, method: string | null): Uint8Array | null {
-  // Only the device's MP3 frame gains have a floor to measure against; a
-  // decoded envelope stores dBFS and the gain rules do not apply to it.
-  if (method !== 'mp3-frame-gain') return null
+  // MP3 frame gains for the device's files, dBFS + 100 for a decoded import;
+  // envelopeUnit tells the verdict which.
+  if (method !== 'mp3-frame-gain' && method !== 'decoded') return null
   // The path envelopePath (audio-profile-store.ts) writes; importing it here
   // would close an import cycle through transcript-trust.ts.
   const path = join(getCachePath(), 'audio-envelope', `${recordingId}.u8`)
@@ -81,6 +81,7 @@ function assess(row: ValidityRow, speakersJson: string | null): TranscriptValidi
     fileName: row.filename,
     segments: parseSegments(speakersJson),
     envelope: readEnvelope(row.recording_id, row.method),
+    envelopeUnit: row.method === 'decoded' ? 'db' : 'gain',
     audioCategory: row.category,
     attendees: attendeeCount(row.attendees),
     integrityStatus: row.integrity_status,

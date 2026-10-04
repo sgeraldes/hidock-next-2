@@ -19,7 +19,7 @@
  */
 
 import { queryOne, run, getRowsModified } from './database'
-import { recomputeAudioWarnings } from './value-classification'
+import { HELD_METHOD, recomputeAudioWarnings } from './value-classification'
 import { isUnusableValidity } from './transcript-validity'
 import { refreshTranscriptValidity } from './transcript-validity-store'
 
@@ -67,13 +67,18 @@ export function syncTrustVerdicts(recordingId?: string): TrustSyncResult {
   )
   const withdrawn = getRowsModified()
 
+  // Marked 'held' so the rating comes back, from the stored evaluation, when
+  // the transcript turns valid (recomputeEvaluationsFromEvidence). Personal
+  // and deleted recordings are left as they are.
   run(
     `UPDATE knowledge_captures
         SET quality_rating = 'unrated', quality_reasons = NULL, quality_source = NULL,
-            quality_method = NULL, quality_confidence = NULL, quality_assessed_at = NULL
-      WHERE quality_source = 'ai' AND quality_method = 'content'
+            quality_method = '${HELD_METHOD}', quality_confidence = NULL, quality_assessed_at = NULL
+      WHERE quality_source = 'ai' AND quality_method = 'content' AND deleted_at IS NULL
         AND source_recording_id IN (
-          SELECT recording_id FROM transcripts WHERE validity_status IN ('invalid', 'incomplete', 'doubtful')
+          SELECT t.recording_id FROM transcripts t JOIN recordings r ON r.id = t.recording_id
+           WHERE t.validity_status IN ('invalid', 'incomplete', 'doubtful')
+             AND r.deleted_at IS NULL AND COALESCE(r.personal, 0) = 0
         )
         ${scope}`,
     params
