@@ -12,7 +12,7 @@ import { READY, HostState } from './state.mjs'
 import { PairingStore } from './auth.mjs'
 import { runDiarization } from './diarize.mjs'
 
-export const VERSION = '0.3.1'
+export const VERSION = '0.3.2'
 /** Two hours of 16 kHz mono WAV is about 230 MB; round up and stop there. */
 export const MAX_AUDIO_BYTES = 512 * 1024 * 1024
 
@@ -230,9 +230,10 @@ export function createHandler(deps) {
           const body = await readBody(req, 200 * 1024 * 1024)
           deps.maintenance.stageUpdate(body)
           sendJson(res, 202, { staged: true })
-          // Applying ends this process; let the answer reach HiDock first.
+          // Applying ends this process; let the answer reach HiDock first. 'close' follows 'finish',
+          // and also comes alone when HiDock hangs up first, which would otherwise leave it unapplied.
           const apply = () => deps.maintenance.applyUpdate()
-          if (res.writableFinished === false && typeof res.once === 'function') res.once('finish', () => setTimeout(apply, 200))
+          if (res.writableFinished === false && typeof res.once === 'function') res.once('close', () => setTimeout(apply, 200))
           else setTimeout(apply, 20)
           return
         }
