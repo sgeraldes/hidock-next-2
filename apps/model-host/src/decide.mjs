@@ -148,7 +148,7 @@ export class DecideModels {
       this.#startDownload(name)
       const busy = this.download && this.download.name !== name
       const message = busy
-        ? `${this.download.name} is downloading first; ${name} comes after it`
+        ? `${this.download.name} is downloading; ask for ${name} again when it is on disk, and its download starts then`
         : `${name} is downloading to this host; ask again when it is on disk`
       throw new DecisionError(message, 503, { decide: this.report() })
     }
