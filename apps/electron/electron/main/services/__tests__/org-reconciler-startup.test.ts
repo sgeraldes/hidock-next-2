@@ -132,6 +132,52 @@ describe('upsertContactsFromMeetings', () => {
     expect(links()).toHaveLength(2)
   })
 
+  // 4-oct-2026, a copy of the real library: 480 ms on every start and after every
+  // calendar sync, parsing 6,615 attendee lists that had not changed.
+  it('does not read the attendees again when the meetings, contacts and links did not change', () => {
+    meeting('m1', { organizerEmail: 'boss@x.com', attendees: [{ name: 'Gwen Stacy', email: 'gwen@x.com' }] })
+    upsertContactsFromMeetings()
+
+    const parse = vi.spyOn(JSON, 'parse')
+    expect(upsertContactsFromMeetings()).toEqual({ contacts: 0, links: 0 })
+    expect(parse).not.toHaveBeenCalled()
+    parse.mockRestore()
+  })
+
+  it('runs again when a meeting, a contact or a link changed since the last pass', () => {
+    meeting('m1', { attendees: [{ name: 'Gwen Stacy', email: 'gwen@x.com' }] })
+    upsertContactsFromMeetings()
+
+    meeting('m2', { attendees: [{ name: 'Gwen Stacy', email: 'gwen@x.com' }] })
+    expect(upsertContactsFromMeetings()).toEqual({ contacts: 0, links: 1 })
+
+    run(`DELETE FROM meeting_contacts WHERE meeting_id = 'm1'`)
+    expect(upsertContactsFromMeetings()).toEqual({ contacts: 0, links: 1 })
+
+    run(`DELETE FROM meeting_contacts`)
+    run(`DELETE FROM contacts`)
+    expect(upsertContactsFromMeetings()).toEqual({ contacts: 1, links: 2 })
+
+    run(`UPDATE contacts SET name = 'gwen'`)
+    upsertContactsFromMeetings()
+    expect(contacts()[0].name).toBe('Gwen Stacy')
+  })
+
+  // Review of PR 151, F1: last_seen_at follows the meetings' start times, and a reschedule
+  // can leave every count, length and MAX(updated_at) as they were (updated_at is written
+  // in two formats, so a same-day sync write can sort below a hand edit's).
+  it('runs again when a meeting was rescheduled, and moves last_seen_at with it', () => {
+    meeting('m1', { attendees: [{ name: 'Gwen Stacy', email: 'gwen@x.com' }], start: '2026-01-02T10:00:00Z' })
+    upsertContactsFromMeetings()
+
+    run(`UPDATE meetings SET start_time = '2026-03-09T10:00:00Z' WHERE id = 'm1'`)
+    upsertContactsFromMeetings()
+
+    expect(queryAll<{ last_seen_at: string }>('SELECT last_seen_at FROM contacts')[0].last_seen_at).toBe(
+      '2026-03-09T10:00:00Z'
+    )
+  })
+
   it('lists a person who appears twice in one meeting once', () => {
     meeting('m1', { organizerEmail: 'gwen@x.com', attendees: [{ name: 'Gwen Stacy', email: 'gwen@x.com' }] })
 

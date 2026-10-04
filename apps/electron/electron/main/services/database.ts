@@ -27,7 +27,7 @@ import { isImpossibleTranscriptDensity, lowValueMaxSeconds } from './value-thres
 import { LIVE_FILENAME } from './live-channel-speakers'
 import type { QualityRating } from '@/types/knowledge'
 
-const SCHEMA_VERSION = 67
+const SCHEMA_VERSION = 68
 
 const SCHEMA = `
 -- Calendar events from ICS
@@ -938,6 +938,7 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_captures_status ON knowledge_captures(s
 CREATE INDEX IF NOT EXISTS idx_knowledge_captures_category ON knowledge_captures(category);
 CREATE INDEX IF NOT EXISTS idx_knowledge_title ON knowledge_captures(title);
 CREATE INDEX IF NOT EXISTS idx_knowledge_summary ON knowledge_captures(summary);
+CREATE INDEX IF NOT EXISTS idx_knowledge_captures_source_recording ON knowledge_captures(source_recording_id);
 CREATE INDEX IF NOT EXISTS idx_quality_recording ON quality_assessments(recording_id);
 CREATE INDEX IF NOT EXISTS idx_quality_level ON quality_assessments(quality);
 
@@ -3375,6 +3376,16 @@ const MIGRATIONS: Record<number, () => void> = {
     FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
 )`)
     console.log('Migration v67 complete')
+  },
+  68: () => {
+    // The eligibility check looks captures up by source_recording_id for every
+    // recording it is given, and without an index that was a full scan each time
+    // (99 ms for 400 recordings on the real library, 2.3 ms with it, 4-oct-2026).
+    console.log('Running migration to schema v68: knowledge_captures(source_recording_id) index')
+    getDatabase().run(
+      'CREATE INDEX IF NOT EXISTS idx_knowledge_captures_source_recording ON knowledge_captures(source_recording_id)'
+    )
+    console.log('Migration v68 complete')
   },
 }
 
@@ -12801,6 +12812,21 @@ export interface BucketRuleOptions {
   ownerContactId?: string | null
 }
 
+/**
+ * The recordings of the meetings a bucket contact is linked to, newest first. CROSS JOIN
+ * keeps SQLite from reordering the join: it starts from the contact's links
+ * (idx_meeting_contacts_contact) instead of walking every recording, which cost 336 ms
+ * against 121 ms for 40 buckets on the real library at every boot (4-oct-2026).
+ */
+export const BUCKET_RECORDINGS_SQL = `SELECT DISTINCT r.id AS recordingId, r.filename AS filename, r.date_recorded AS date,
+        r.meeting_id AS meetingId, m.subject AS subject
+   FROM meeting_contacts mc
+  CROSS JOIN recordings r ON r.meeting_id = mc.meeting_id
+   JOIN meetings m ON m.id = r.meeting_id
+  WHERE mc.contact_id = ?
+    AND COALESCE(r.personal, 0) = 0 AND r.deleted_at IS NULL
+  ORDER BY r.date_recorded DESC`
+
 /** A voice says who is in the recording only when it matched its cluster this well (speaker-linking's anchored line). */
 const VOICE_PRESENCE_MIN_SIMILARITY = 0.9
 
@@ -12830,14 +12856,7 @@ function buildBucketResolution(
     candIds.length === 0
       ? []
       : queryAll<{ recordingId: string; filename: string | null; date: string | null; meetingId: string | null; subject: string | null }>(
-          `SELECT DISTINCT r.id AS recordingId, r.filename AS filename, r.date_recorded AS date,
-                  r.meeting_id AS meetingId, m.subject AS subject
-             FROM recordings r
-             JOIN meetings m ON m.id = r.meeting_id
-             JOIN meeting_contacts mc ON mc.meeting_id = m.id
-            WHERE mc.contact_id = ?
-              AND COALESCE(r.personal, 0) = 0 AND r.deleted_at IS NULL
-            ORDER BY r.date_recorded DESC`,
+          BUCKET_RECORDINGS_SQL,
           [contact.id]
         )
 
