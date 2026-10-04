@@ -11,8 +11,11 @@ import { createServer } from 'http'
 import { READY, HostState } from './state.mjs'
 import { PairingStore } from './auth.mjs'
 import { runDiarization } from './diarize.mjs'
+import { checkDecisionRequest } from './decide.mjs'
 
-export const VERSION = '0.3.2'
+export const VERSION = '0.4.0'
+/** A decision request is a state and its questions; a long meeting transcript fits well under this. */
+export const MAX_DECISION_BYTES = 1024 * 1024
 /** Two hours of 16 kHz mono WAV is about 230 MB; round up and stop there. */
 export const MAX_AUDIO_BYTES = 512 * 1024 * 1024
 
@@ -51,8 +54,8 @@ export function readBody(req, limit = MAX_AUDIO_BYTES) {
 }
 
 /** A small JSON body; a body that is not JSON is the caller's mistake, so 400. */
-async function readJsonBody(req) {
-  const text = (await readBody(req, 4096)).toString('utf8')
+async function readJsonBody(req, limit = 4096) {
+  const text = (await readBody(req, limit)).toString('utf8')
   if (!text) return {}
   try {
     return JSON.parse(text)
@@ -164,6 +167,7 @@ export function createHandler(deps) {
           ...(known && deps.setup ? { setup: deps.setup.report() } : {}),
           ...(known && deps.stepAside ? { stepAside: deps.stepAside.get() } : {}),
           ...(known ? { pairing: pairingReport(deps.pairing) } : {}),
+          ...(known && deps.decide ? { decide: deps.decide.report() } : {}),
           ...(known ? deps.capabilities() : { capabilities: deps.capabilities().capabilities }),
         })
         return
@@ -271,6 +275,42 @@ export function createHandler(deps) {
           setup: deps.setup?.report(),
           pairing: pairingReport(deps.pairing),
         })
+        return
+      }
+
+      // Clef and Clef-Flash, with the body Jev takes. Decisions are short, so they do not take
+      // the diarization lane: the voice backlog keeps running beside them.
+      if (path === '/v1/systemone') {
+        if (!deps.pairing.accepts(req.headers.authorization)) {
+          sendJson(res, 401, { error: 'This host does not know that client. Pair it first.' })
+          return
+        }
+        if (!deps.decide) {
+          sendJson(res, 404, { error: 'This host does not run decision models.' })
+          return
+        }
+        if (req.method !== 'POST') {
+          sendJson(res, 405, { error: 'POST a decision request' })
+          return
+        }
+        if (deps.state.state !== READY) {
+          sendJson(res, 503, {
+            error: deps.state.reason || 'The host is not accepting work.',
+            state: deps.state.publicState(),
+          })
+          return
+        }
+        const body = await readJsonBody(req, MAX_DECISION_BYTES)
+        const problem = checkDecisionRequest(body)
+        if (problem) {
+          sendJson(res, 400, { error: problem })
+          return
+        }
+        try {
+          sendJson(res, 200, await deps.decide.decide(body))
+        } catch (error) {
+          sendJson(res, error?.status || 500, { error: error?.message || 'the decision failed', ...(error?.extra || {}) })
+        }
         return
       }
 

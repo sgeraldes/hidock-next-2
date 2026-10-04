@@ -15,6 +15,7 @@
 import { readFile } from 'fs/promises'
 import { basename, extname } from 'path'
 import type { AcousticWorkerResult } from './speaker-linking'
+import type { JevQuestion, JevResponse, JevStructured } from './jev-client'
 import type {
   ModelHostDiagnostics,
   ModelHostHealthReport,
@@ -252,6 +253,67 @@ export async function sendModelHostUpdate(
   }
   const installer = await readFile(installerPath)
   await callHost(settings, 'PUT', '/update', installer, fetchFn, 5 * 60 * 1000)
+}
+
+/** The decision models the host can run: Cloudflare's Clef (27B, 4-bit) and Clef-Flash (9B). */
+export type ModelHostDecisionModel = 'clef' | 'clef-flash'
+
+export interface ModelHostDecisionRequest {
+  model: ModelHostDecisionModel
+  state: JevStructured
+  questions: Record<string, JevQuestion>
+}
+
+/** A decision the host did not answer, with its HTTP status and, for 503, where each model is. */
+export class ModelHostDecisionError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly decide?: Record<string, unknown>
+  ) {
+    super(message)
+    this.name = 'ModelHostDecisionError'
+  }
+}
+
+/**
+ * Ask Clef or Clef-Flash on the host. The body and the answer are Jev's (`/v1/systemone`), so a
+ * caller can send the same questions to either. The first request for a model starts its
+ * download on the host and comes back 503 with the progress; the first one after a download, or
+ * after the host let the model go, waits while it loads, which is why the timeout is long.
+ */
+export async function decideOnModelHost(
+  settings: ModelHostSettings,
+  request: ModelHostDecisionRequest,
+  fetchFn: typeof fetch = fetch,
+  timeoutMs = 15 * 60 * 1000
+): Promise<JevResponse> {
+  const base = normalizeBase(settings.url)
+  if (!base) throw new ModelHostDecisionError('No model host is configured.', 0)
+  const response = await fetchFn(`${base}/v1/systemone`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${settings.token}`, 'content-type': 'application/json' },
+    body: JSON.stringify(request),
+    signal: AbortSignal.timeout(timeoutMs),
+  })
+  const answer = (await response.json().catch(() => ({}))) as JevResponse & {
+    error?: string
+    decide?: Record<string, unknown>
+  }
+  if (response.status === 404) {
+    throw new ModelHostDecisionError(
+      'The host has no decision models: it is older than 0.4.0, or its setup did not install them (see its diagnostics).',
+      404
+    )
+  }
+  if (!response.ok) {
+    throw new ModelHostDecisionError(
+      answer.error || `The model host refused it (HTTP ${response.status}).`,
+      response.status,
+      answer.decide
+    )
+  }
+  return answer
 }
 
 /**

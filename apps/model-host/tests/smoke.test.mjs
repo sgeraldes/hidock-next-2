@@ -10,7 +10,8 @@
 import { describe, it, expect, afterAll } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { dirname, join } from 'path'
+import { fileURLToPath } from 'url'
 import { start } from '../src/main.mjs'
 
 // A made-up token: the shape of a Hugging Face token, the value of nothing.
@@ -36,12 +37,37 @@ const fresh = await start({
 })
 const freshBase = `http://127.0.0.1:${fresh.port}`
 
+// A third one whose setup installed the decision runtime, with the stand-in worker.
+const decideRoot = mkdtempSync(join(tmpdir(), 'hidock-host-decide-'))
+const decider = await start({
+  root: decideRoot,
+  startReady: true,
+  overrides: {
+    port: 0,
+    bindAddress: '127.0.0.1',
+    decideRuntime: true,
+    pythonPath: process.execPath,
+    decideWorkerPath: join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'fake-decide-worker.mjs'),
+  },
+})
+const deciderBase = `http://127.0.0.1:${decider.port}`
+
 afterAll(async () => {
+  decider.decide?.stop()
   await new Promise((resolve) => host.server.close(resolve))
   await new Promise((resolve) => fresh.server.close(resolve))
+  await new Promise((resolve) => decider.server.close(resolve))
   rmSync(root, { recursive: true, force: true })
   rmSync(freshRoot, { recursive: true, force: true })
+  rmSync(decideRoot, { recursive: true, force: true })
 })
+
+const pairWith = async (b) =>
+  (await (await fetch(`${b}/pair`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ code: (await control(b, 'pair-code')).code }),
+  })).json()).token
 
 const control = (b, action) =>
   fetch(`${b}/control?format=json`, {
@@ -135,6 +161,36 @@ describe('the service over a real socket', () => {
     const config = readFileSync(join(freshRoot, 'config.json'), 'utf8')
     expect(JSON.parse(config).validated).toBe(true)
     expect(config).not.toMatch(/hf_/)
+  })
+
+  it('downloads Clef-Flash when HiDock first asks, then answers the decision with it', async () => {
+    const auth = { authorization: `Bearer ${await pairWith(deciderBase)}`, 'content-type': 'application/json' }
+    const health = await (await fetch(`${deciderBase}/health`, { headers: auth })).json()
+    expect(health.capabilities).toContain('decide')
+    expect(health.decide['clef-flash'].state).toBe('absent')
+
+    const body = JSON.stringify({ model: 'clef-flash', state: 'orders are blocked', questions: { outage: { type: 'noul' } } })
+    const first = await fetch(`${deciderBase}/v1/systemone`, { method: 'POST', headers: auth, body })
+    expect(first.status).toBe(503)
+    const deadline = Date.now() + 10_000
+    let state = ''
+    while (state !== 'on-disk' && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 50))
+      state = (await (await fetch(`${deciderBase}/health`, { headers: auth })).json()).decide['clef-flash'].state
+    }
+    expect(state).toBe('on-disk')
+
+    const answer = await fetch(`${deciderBase}/v1/systemone`, { method: 'POST', headers: auth, body })
+    expect(answer.status).toBe(200)
+    expect((await answer.json()).model).toBe('clef-flash')
+  })
+
+  it('has no decision models where setup did not install them', async () => {
+    const auth = { authorization: `Bearer ${await pairWith(base)}` }
+    const health = await (await fetch(`${base}/health`, { headers: auth })).json()
+    expect(health.capabilities).not.toContain('decide')
+    expect(health.decide).toBeUndefined()
+    expect((await fetch(`${base}/v1/systemone`, { method: 'POST', headers: auth, body: '{}' })).status).toBe(404)
   })
 
   it('has no route it did not mean to have', async () => {
