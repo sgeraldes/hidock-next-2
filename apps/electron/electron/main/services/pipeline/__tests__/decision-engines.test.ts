@@ -26,7 +26,7 @@ function engines(): DecisionEngine[] {
     isAvailable: vi.fn().mockResolvedValue(true), ask: vi.fn().mockResolvedValue(response)
   }))
 }
-afterEach(() => setCallSink(null))
+afterEach(() => { setCallSink(null); vi.useRealTimers() })
 describe('decision presets', () => {
   it.each([
     ['zero-cost', ['clef-flash', 'clef', 'gemini-flash', 'haiku', 'jev']],
@@ -54,7 +54,8 @@ describe('decision presets', () => {
     setCallSink((_id, row) => rows.push(row))
     expect((await askDecision('evaluate', 'state', questions, { engines: list, recordingId: 'rec' })).engine).toBe('gemini-flash')
     expect(list[1].ask).not.toHaveBeenCalled()
-    expect(rows.map(r => [r.route, r.status])).toEqual([['decision:clef-flash', 'failed'], ['decision:gemini-flash', 'completed']])
+    expect(rows.map(r => [r.route, r.status])).toEqual([['decision:clef-flash', 'failed'], ['decision:clef', 'failed'], ['decision:gemini-flash', 'completed']])
+    expect(rows[1]).toMatchObject({ step: 'evaluate', recordingId: 'rec', errorMessage: 'unavailable: engine is not available' })
     expect(rows[0]).toMatchObject({ step: 'evaluate', recordingId: 'rec', errorMessage: 'ModelHostDecisionError: Downloading' })
     expect(rows.every(r => r.durationMs >= 0)).toBe(true)
   })
@@ -69,6 +70,38 @@ describe('decision presets', () => {
     vi.mocked(list[2].ask).mockRejectedValue(Object.assign(new Error('Bad key'), { status: 401 }))
     await expect(askDecision('evaluate', '', questions, { engines: list })).rejects.toMatchObject({ status: 401 })
   })
+  it('records every skipped engine, including availability errors', async () => {
+    const list = engines()
+    list.forEach(e => vi.mocked(e.isAvailable).mockResolvedValue(false))
+    vi.mocked(list[1].isAvailable).mockRejectedValue(new Error('health failed'))
+    const rows: CallRecord[] = []
+    setCallSink((_id, row) => rows.push(row))
+    await expect(askDecision('meeting-match', '', questions, { engines: list, recordingId: 'rec' })).rejects.toThrow('health failed')
+    expect(rows.map(row => row.route)).toEqual(decisionChain('zero-cost', list, {}).map(id => `decision:${id}`))
+    expect(rows).toHaveLength(5)
+    for (const row of rows) {
+      expect(row).toMatchObject({ step: 'meeting-match', recordingId: 'rec', status: 'failed' })
+      expect(row.errorMessage).toMatch(/^unavailable: /)
+    }
+    expect(rows[1].errorMessage).toBe('unavailable: Error: health failed')
+    list.forEach(e => expect(e.ask).not.toHaveBeenCalled())
+  })
+  it.each([60746, 98799])('records the full %i ms Haiku duration on parsing failure', async duration => {
+    vi.useFakeTimers()
+    const list = engines()
+    vi.mocked(list[3].ask).mockImplementation(async () => {
+      vi.setSystemTime(Date.now() + duration)
+      return parseDecisionReply('invalid JSON', questions, 'haiku')
+    })
+    const rows: CallRecord[] = []
+    setCallSink((_id, row) => rows.push(row))
+    await expect(askDecision('meeting-match', '', questions, {
+      engines: list, recordingId: 'rec', config: { preset: 'zero-cost', overrides: { 'meeting-match': 'haiku' } }
+    })).rejects.toThrow()
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ route: 'decision:haiku', status: 'failed', durationMs: duration })
+    expect(rows[0].errorMessage).toMatch(/^SyntaxError:/)
+  })
 })
 describe('strict text decision parsing', () => {
   it('converts all three question types', () => {
@@ -77,7 +110,14 @@ describe('strict text decision parsing', () => {
     expect(parsed.answers.useful).toEqual({ type: 'noul', noul: 0.7 })
     expect(parsed.answers.stars).toMatchObject({ type: 'score', score: 1.5, probabilities: { '0': 0, '1': 0.5, '2': 0.5 } })
   })
-  it.each([reply.replace('media', 'unknown'), '{}', `Sure: ${reply}`, '```json\n' + reply + '\n```', reply.replace('0.8', '1.8'), reply.replace('1.5', '3')])('rejects malformed answers: %s', raw => {
+  it.each([reply, '```json\n' + reply + '\n```', '```\n' + reply + '\n```', ' \r\n```json\r\n' + reply + '\r\n``` \n'])('accepts bare JSON or one fence: %s', raw => {
+    expect(parseDecisionReply(raw, questions, 'haiku')).toEqual(parseDecisionReply(reply, questions, 'haiku'))
+  })
+  it.each(['Prose\n```json\n' + reply + '\n```', '```json\n' + reply + '\n```\nProse',
+    '```json\n' + reply + '\n```\n```json\n' + reply + '\n```', '```javascript\n' + reply + '\n```'])('rejects prose, multiple fences and other languages: %s', raw => {
+    expect(() => parseDecisionReply(raw, questions, 'haiku')).toThrow()
+  })
+  it.each([reply.replace('media', 'unknown'), '{}', `Sure: ${reply}`, reply.replace('0.8', '1.8'), reply.replace('1.5', '3')])('rejects malformed answers: %s', raw => {
     expect(() => parseDecisionReply(raw, questions, 'haiku')).toThrow()
   })
 })

@@ -1,8 +1,8 @@
 import type { JevAnswer, JevQuestion, JevResponse, JevStructured } from '../jev-client'
 import type { JevHarness } from './jev-harness'
 import { checkModelHost, decideOnModelHost } from '../model-host-client'
-import { trackCall } from './track-call'
-import { getDecisionLatencies } from './call-store'
+import { describeError, trackCall } from './track-call'
+import { getDecisionLatencies, writeCall } from './call-store'
 import {
   DECISION_ENGINE_IDS, type DecisionConfig, type DecisionEngineId, type DecisionPreset, type DecisionStep
 } from '../../../../src/shared/pipeline-config'
@@ -36,9 +36,11 @@ function number(value: unknown, max = 1): number {
   return value
 }
 
-/** Reject prose, fences, missing questions and invalid option ids rather than fabricating a verdict. */
+/** Accept bare JSON or one Markdown fence; reject prose, missing questions and invalid option ids. */
 export function parseDecisionReply(raw: string, questions: Record<string, JevQuestion>, model: string): JevResponse {
-  const parsed = object(JSON.parse(raw))
+  const fenced = /^\s*```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```\s*$/.exec(raw)
+  if (fenced && fenced[1].includes('```')) throw new Error('Expected exactly one decision fence')
+  const parsed = object(JSON.parse(fenced ? fenced[1] : raw))
   if (Object.keys(parsed).length !== Object.keys(questions).length) throw new Error('Unexpected or missing decision questions')
   const answers: Record<string, JevAnswer> = {}
   for (const [id, q] of Object.entries(questions)) {
@@ -164,9 +166,21 @@ export async function askDecision(step: DecisionStep, state: JevStructured, ques
   let parentCallId: string | null = null
   for (const id of chain) {
     const engine = engines.find(e => e.id === id)!
+    const started = new Date()
+    let unavailable: string | null = null
     try {
-      if (!(await engine.isAvailable())) { reasons.push(`${id}: unavailable`); continue }
-    } catch (error) { reasons.push(`${id}: ${String(error)}`); continue }
+      if (!(await engine.isAvailable())) unavailable = 'engine is not available'
+    } catch (error) { unavailable = describeError(error) }
+    if (unavailable !== null) {
+      const completed = new Date()
+      writeCall({ step, route: `decision:${id}`, recordingId: deps.recordingId ?? null,
+        provider: null, model: null, status: 'failed', startedAt: started.toISOString(),
+        completedAt: completed.toISOString(), durationMs: completed.getTime() - started.getTime(),
+        parentCallId, usage: null, estimatedCostAmount: null, estimatedCostCurrency: null,
+        costMethod: null, errorMessage: `unavailable: ${unavailable}` })
+      reasons.push(`${id}: unavailable: ${unavailable}`)
+      continue
+    }
     if (deps.shouldGenerate && !deps.shouldGenerate()) throw new Error('Decision source is no longer eligible')
     const attempt = await trackCall({ step, route: `decision:${id}`, recordingId: deps.recordingId, parentCallId }, () => engine.ask(state, questions))
     if (attempt.ok) return { response: attempt.value, engine: id }

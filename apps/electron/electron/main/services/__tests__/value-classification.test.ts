@@ -1351,7 +1351,7 @@ describe('Jev (TypeSafe AI) as the value classifier', () => {
     expect(JSON.parse(stored!.reasons_json)).toEqual(['personal_family'])
   })
 
-  it('leaves one ledger row for the Jev evaluation, linked to the recording', async () => {
+  it('records skipped engines and one ledger row for the Jev evaluation, linked to the recording', async () => {
     seedRecording('rec-j1c')
     seedTranscript('rec-j1c', { fullText: 'Hola mamá, ¿qué cocinamos hoy? Pasta con salsa.' })
     seedCapture('cap-j1c', 'rec-j1c', { summary: 'Family chat about dinner.' })
@@ -1365,8 +1365,15 @@ describe('Jev (TypeSafe AI) as the value classifier', () => {
     } finally {
       setCallSink(null)
     }
-    expect(rows).toHaveLength(1)
-    expect(rows[0]).toMatchObject({
+    expect(rows).toHaveLength(5)
+    expect(rows.slice(0, 4).map(row => row.route)).toEqual([
+      'decision:clef-flash', 'decision:clef', 'decision:gemini-flash', 'decision:haiku'
+    ])
+    for (const row of rows.slice(0, 4)) {
+      expect(row).toMatchObject({ status: 'failed', recordingId: 'rec-j1c' })
+      expect(row.errorMessage).toMatch(/^unavailable: /)
+    }
+    expect(rows[4]).toMatchObject({
       step: 'evaluate',
       route: 'decision:jev',
       provider: 'jev',
@@ -1374,7 +1381,7 @@ describe('Jev (TypeSafe AI) as the value classifier', () => {
       recordingId: 'rec-j1c',
       status: 'completed'
     })
-    expect(rows[0].usage).toMatchObject({ tokens: { input: 900, output: 40 } })
+    expect(rows[4].usage).toMatchObject({ tokens: { input: 900, output: 40 } })
   })
 
   it('keeps a low-confidence Jev downgrade from persisting (same floor as the LLM)', async () => {

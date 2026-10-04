@@ -107,7 +107,7 @@ describe('matchMeetingWithJev', () => {
     expect(stored!.candidateKey).toBe(matchRequestKey(context, [lunch, daily]))
   })
 
-  it('leaves one ledger row for the call, linked to the recording, and none when the stored answer is reused', async () => {
+  it('records skipped engines and one ledger row for the call, linked to the recording, and none when the stored answer is reused', async () => {
     const rows: CallRecord[] = []
     setCallSink((_id, record) => {
       rows.push(record)
@@ -121,9 +121,16 @@ describe('matchMeetingWithJev', () => {
     } finally {
       setCallSink(null)
     }
-    expect(rows).toHaveLength(1)
-    expect(rows[0]).toMatchObject({ step: 'meeting-match', route: 'decision:jev', provider: 'jev', model: 'jev-1.13.0', recordingId: 'rec-1', status: 'completed' })
-    expect(rows[0].usage).toMatchObject({ tokens: { input: 1800, output: 20 } })
+    expect(rows).toHaveLength(5)
+    expect(rows.slice(0, 4).map(row => row.route)).toEqual([
+      'decision:clef-flash', 'decision:clef', 'decision:gemini-flash', 'decision:haiku'
+    ])
+    for (const row of rows.slice(0, 4)) {
+      expect(row).toMatchObject({ status: 'failed', recordingId: 'rec-1' })
+      expect(row.errorMessage).toMatch(/^unavailable: /)
+    }
+    expect(rows[4]).toMatchObject({ step: 'meeting-match', route: 'decision:jev', provider: 'jev', model: 'jev-1.13.0', recordingId: 'rec-1', status: 'completed' })
+    expect(rows[4].usage).toMatchObject({ tokens: { input: 1800, output: 20 } })
   })
 
   it('asks again when the evidence changes but the meetings stay the same', async () => {

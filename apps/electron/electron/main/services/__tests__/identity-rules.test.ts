@@ -195,9 +195,13 @@ describe('jev-tiebreak for a shared first name', () => {
     expect(decision.evidence).toMatchObject({ probabilities: { sh: 0.9 }, supportedCandidateIds: ['sh', 'sr'] })
     expect((decision.evidence as { margin: number }).margin).toBeCloseTo(0.85, 5)
 
-    // One ledger row, on the Jev route.
-    expect(calls).toHaveLength(1)
-    expect(calls[0]).toMatchObject({ step: 'identity-tiebreak', route: 'decision:jev', recordingId: 'r1', status: 'completed' })
+    // Unavailable engines leave rows before the Jev attempt.
+    expect(calls).toHaveLength(5)
+    for (const call of calls.slice(0, 4)) {
+      expect(call).toMatchObject({ step: 'identity-tiebreak', status: 'failed', recordingId: 'r1' })
+      expect(call.errorMessage).toMatch(/^unavailable: /)
+    }
+    expect(calls[4]).toMatchObject({ step: 'identity-tiebreak', route: 'decision:jev', recordingId: 'r1', status: 'completed' })
 
     // Asked once: a second pass does not call Jev again.
     await resolveBucketTiesWithJev({ jevKey: () => 'k', askJev })
@@ -452,7 +456,7 @@ describe('similar names without email or voice', () => {
     const [decision] = listDecisions()
     expect(decision).toMatchObject({ kind: 'merge', method: 'jev-tiebreak', contactId: 'edu' })
     expect(decision.evidence).toMatchObject({ sharedMeetings: 1, sameDomain: false })
-    expect(calls[0]).toMatchObject({ step: 'identity-tiebreak', route: 'decision:jev', status: 'completed' })
+    expect(calls[4]).toMatchObject({ step: 'identity-tiebreak', route: 'decision:jev', status: 'completed' })
     const [, state] = askJev.mock.calls[0]
     expect(JSON.stringify(state)).toContain('Pricing review')
   })
