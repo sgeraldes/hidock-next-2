@@ -345,7 +345,10 @@ export async function diarizeOnModelHost(
   if (!health.capabilities.includes('diarize')) {
     throw new ModelHostUnavailableError('The model host cannot diarize; its setup has not finished.')
   }
-  if (health.state !== 'ready') {
+  // `busy` passes: it may be a cached answer from a job that has finished (the backlog sends
+  // the next recording two seconds after the last one), and the job endpoint answers 429 when
+  // the host is really still busy.
+  if (health.state !== 'ready' && health.state !== 'busy') {
     throw new ModelHostUnavailableError(
       health.reason || `The model host is ${health.state}.`
     )
