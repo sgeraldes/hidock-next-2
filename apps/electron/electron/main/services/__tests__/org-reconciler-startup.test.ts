@@ -163,6 +163,21 @@ describe('upsertContactsFromMeetings', () => {
     expect(contacts()[0].name).toBe('Gwen Stacy')
   })
 
+  // Review of PR 151, F1: last_seen_at follows the meetings' start times, and a reschedule
+  // can leave every count, length and MAX(updated_at) as they were (updated_at is written
+  // in two formats, so a same-day sync write can sort below a hand edit's).
+  it('runs again when a meeting was rescheduled, and moves last_seen_at with it', () => {
+    meeting('m1', { attendees: [{ name: 'Gwen Stacy', email: 'gwen@x.com' }], start: '2026-01-02T10:00:00Z' })
+    upsertContactsFromMeetings()
+
+    run(`UPDATE meetings SET start_time = '2026-03-09T10:00:00Z' WHERE id = 'm1'`)
+    upsertContactsFromMeetings()
+
+    expect(queryAll<{ last_seen_at: string }>('SELECT last_seen_at FROM contacts')[0].last_seen_at).toBe(
+      '2026-03-09T10:00:00Z'
+    )
+  })
+
   it('lists a person who appears twice in one meeting once', () => {
     meeting('m1', { organizerEmail: 'gwen@x.com', attendees: [{ name: 'Gwen Stacy', email: 'gwen@x.com' }] })
 

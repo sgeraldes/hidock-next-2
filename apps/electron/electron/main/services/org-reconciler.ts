@@ -625,6 +625,11 @@ function contactsUpsertFingerprint(): string {
   const links = queryOne<{ n: number; last_row: number }>(
     'SELECT COUNT(*) AS n, COALESCE(MAX(rowid), 0) AS last_row FROM meeting_contacts'
   )
+  // last_seen_at follows the meetings' start times, so a reschedule must change the
+  // fingerprint even when MAX(updated_at) does not move (it is written in two formats).
+  const startTimes = queryOne<{ seconds: number }>(
+    "SELECT COALESCE(SUM(CAST(strftime('%s', start_time) AS INTEGER)), 0) AS seconds FROM meetings"
+  )
   // rowid, not seq: seq has no index and the rows carry large snapshots, so MAX(seq)
   // read the whole table (50 ms on the real library). Every merge appends a row.
   const merges = queryOne<{ n: number; last_row: number; undone: number }>(
@@ -635,6 +640,7 @@ function contactsUpsertFingerprint(): string {
       [
         CONTACTS_UPSERT_RULES_VERSION,
         addressRenameMeetingsShape(),
+        JSON.stringify(startTimes),
         JSON.stringify(contacts),
         JSON.stringify(links),
         JSON.stringify(merges)
