@@ -2,6 +2,8 @@ import { defineConfig, configDefaults } from 'vitest/config'
 import { resolve } from 'path'
 
 export default defineConfig({
+  // Worktrees may share node_modules via junctions; keep runner caches local.
+  cacheDir: resolve(__dirname, 'out/vitest-cache'),
   test: {
     globals: true,
     environment: 'jsdom',

@@ -16,8 +16,13 @@ import { discoverModels, getBrainRegistry, getBrainRouter, type BrainId } from '
 import { isBrainCoolingDown } from '../services/brains/brain-cooldown'
 import { getStepStats } from '../services/pipeline/call-store'
 import { listHarnessInfos } from '../services/pipeline/harness-info'
+import { createDecisionEngines } from '../services/pipeline/decision-engines'
 import {
   TEXT_STEP_IDS,
+  DECISION_PRESETS,
+  DECISION_STEPS,
+  DECISION_ENGINE_IDS,
+  type DecisionConfig,
   applyStepDraft,
   emptyPipelineConfig,
   issuesForStep,
@@ -68,7 +73,11 @@ export async function buildState(): Promise<PipelineSettingsState> {
       .filter((h) => h.textCapable)
       .map(harnessState)
   )
-  return { config: getConfig().pipeline ?? emptyPipelineConfig(), harnesses, stats: readStats() }
+  const engines = await createDecisionEngines('evaluate')
+  const decisionEngines = await Promise.all(engines.map(async engine => ({
+    id: engine.id, ...engine.descriptor, available: await Promise.resolve(engine.isAvailable()).catch(() => false)
+  })))
+  return { config: getConfig().pipeline ?? emptyPipelineConfig(), harnesses, stats: readStats(), decisionEngines }
 }
 
 const isChoice = (value: unknown): value is StepChoice =>
@@ -117,9 +126,28 @@ export async function listModels(harness: string): Promise<ModelOption[]> {
   return brain ? discoverModels(brain) : []
 }
 
+export async function saveDecisions(raw: unknown): Promise<SaveStepResult> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { success: false, error: 'Invalid decision settings.' }
+  const value = raw as DecisionConfig
+  const choices: readonly string[] = [...DECISION_PRESETS, ...DECISION_ENGINE_IDS]
+  if (!DECISION_PRESETS.includes(value.preset) || !value.overrides || typeof value.overrides !== 'object' || Array.isArray(value.overrides) ||
+    Object.entries(value.overrides).some(([step, choice]) => !(DECISION_STEPS as readonly string[]).includes(step) || !choices.includes(choice))) {
+    return { success: false, error: 'Invalid decision preset or override.' }
+  }
+  const decisions: DecisionConfig = { preset: value.preset, overrides: { ...value.overrides } }
+  const run = queue.then(async () => {
+    const current = getConfig().pipeline ?? emptyPipelineConfig()
+    await replaceConfigSection('pipeline', { ...current, decisions })
+    return { success: true }
+  })
+  queue = run.catch(() => undefined)
+  try { return await run } catch (error) { return { success: false, error: error instanceof Error ? error.message : String(error) } }
+}
+
 export function registerPipelineHandlers(): void {
   ipcMain.handle('pipeline:getState', () => buildState())
   ipcMain.handle('pipeline:saveStep', (_e, args: unknown) => saveStep(args))
+  ipcMain.handle('pipeline:saveDecisions', (_e, args: unknown) => saveDecisions(args))
   ipcMain.handle('pipeline:listModels', (_e, args: { harness?: unknown } | null) =>
     listModels(typeof args?.harness === 'string' ? args.harness : '')
   )

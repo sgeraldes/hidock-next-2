@@ -5,6 +5,7 @@ import { toast } from '@/components/ui/toaster'
 import { Working } from '@/components/ui/working'
 import { STEP_META, TEXT_STEP_IDS, type PipelineSettingsState, type TextStepId } from '@/shared/pipeline-config'
 import { StepRow } from './pipeline/StepRow'
+import { Decisions } from './pipeline/Decisions'
 
 const GROUPS = ['Interactive', 'Speakers', 'Library'] as const
 
@@ -64,8 +65,10 @@ export function PipelineSection() {
         the median of the last 30 days of calls.
       </p>
 
+      <Decisions key={JSON.stringify(state.config.decisions)} state={state} onSaved={load} />
+
       {GROUPS.map((group) => {
-        const steps = TEXT_STEP_IDS.filter((id) => STEP_META[id].group === group)
+        const steps = TEXT_STEP_IDS.filter((id) => STEP_META[id].group === group && id !== 'kind-pick')
         return (
           <section key={group} aria-labelledby={`pipeline-group-${group}`} className="space-y-2">
             <h3 id={`pipeline-group-${group}`} className="text-sm font-semibold">

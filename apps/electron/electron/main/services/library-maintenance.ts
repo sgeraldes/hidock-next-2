@@ -289,10 +289,10 @@ export async function matchMeetingsWithJev(
   options: { dryRun?: boolean } = {}
 ): Promise<MeetingMatchJobResult | { busy: true } | { noKey: true }> {
   if (matchRunning) return { busy: true }
-  const deps = jevMeetingMatchDeps()
-  if (!deps) return { noKey: true }
   matchRunning = true
   try {
+    const deps = await jevMeetingMatchDeps()
+    if (!deps) return { noKey: true }
     const { getRecordingById, getRecordingMeetingMatch, getMeetingById, linkRecordingToMeeting } = await import('./database')
     const { filterEligibleRecordingIds } = await import('./recording-eligibility')
 

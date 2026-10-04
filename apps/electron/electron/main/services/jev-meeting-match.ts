@@ -15,7 +15,8 @@
 import { createHash } from 'crypto'
 import { askJev, JEV_MODEL, type JevQuestion, type JevResponse, type JevStructured } from './jev-client'
 import { createJevHarness } from './pipeline/jev-harness'
-import { withCallRecord } from './pipeline/track-call'
+import { isRecordingEligible } from './recording-eligibility'
+import { askDecision, hasDecisionEngine } from './pipeline/decision-engines'
 import { DEFAULT_QUALITY_RULES, qualityRules } from './quality-rules'
 
 export const MEETING_MATCH_VERSION = 1
@@ -208,7 +209,7 @@ export async function matchMeetingWithJev(
   deps: MeetingMatchDeps
 ): Promise<MeetingMatch | null> {
   const candidates = pickMatchCandidates(allCandidates)
-  if (candidates.length < 2 || !deps.apiKey.trim()) return null
+  if (candidates.length < 2) return null
   if (!context.transcriptText && !context.summary) return null
   const { state, questions, keys } = buildMeetingMatchRequest(context, candidates)
   // The stored answer is reused only for the same question: a corrected
@@ -218,7 +219,8 @@ export async function matchMeetingWithJev(
   if (stored && stored.candidateKey === key) return stored
 
   const harness = createJevHarness({ getKey: () => deps.apiKey, askImpl: deps.ask ?? askJev })
-  const res = await withCallRecord({ step: 'meeting-match', route: 'jev', recordingId }, () => harness.ask(state, questions))
+  if (!(await hasDecisionEngine('meeting-match', { jev: harness }))) return null
+  const { response: res } = await askDecision('meeting-match', state, questions, { jev: harness, recordingId, shouldGenerate: () => isRecordingEligible(recordingId) })
   const match = parseMeetingMatch(res, keys, key)
   if (match) deps.save(recordingId, match)
   return match

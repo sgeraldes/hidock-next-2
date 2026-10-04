@@ -9,6 +9,10 @@ pairs with it, gives it the Hugging Face token and decides when it steps aside.
 
 ### Changes
 
+- **Decision engines and presets.** Pipeline settings choose Clef Flash, Clef, Jev, Haiku or Gemini
+  Flash for five decision steps, with a global preset and per-step overrides. Presets fall back when
+  an engine cannot answer, and each attempt is recorded in the call ledger.
+
 - **Installing on the gamestation is a double click.** Model Host 0.3.0 asks no questions: it
   installs its runtime in a console that closes by itself, starts a tray icon and starts it again
   with Windows. The control page, its game mode settings and the "pause or resume" shortcut of

@@ -4,8 +4,17 @@ import { describe, it, expect, vi } from 'vitest'
 
 vi.mock('../database', () => ({}))
 vi.mock('../config', () => ({ getConfig: () => ({ transcription: {} }) }))
+const decisionStatus = vi.hoisted(() => ({ available: true }))
+vi.mock('../pipeline/decision-engines', () => ({ hasDecisionEngine: async () => decisionStatus.available }))
 
-import { collapseMeetingCopies, meetingCopyKey } from '../meeting-candidate-list'
+import { collapseMeetingCopies, jevMeetingMatchDeps, meetingCopyKey } from '../meeting-candidate-list'
+
+it('permits meeting decisions without a Jev key when another engine is available', async () => {
+  expect(await jevMeetingMatchDeps()).toMatchObject({ apiKey: '' })
+  decisionStatus.available = false
+  expect(await jevMeetingMatchDeps()).toBeNull()
+  decisionStatus.available = true
+})
 
 function row(meetingId: string, subject: string, startTime: string, over: Record<string, unknown> = {}) {
   return {

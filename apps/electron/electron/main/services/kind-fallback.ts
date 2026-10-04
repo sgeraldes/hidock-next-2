@@ -8,15 +8,15 @@
  * noise-only, too-short and untrusted recordings (tier 0, no call); Jev decides
  * the rest (tier 1); this runs only where Jev's kind confidence is under
  * KIND_FALLBACK_MAX_JEV_CONFIDENCE (57 of 2,072 evaluations on 3-oct). The
- * call goes through the pipeline runner as the text step 'kind-pick', so
- * Settings > Pipeline chooses the harness and model (a small one: Haiku or
- * Luna). Jev's answers are kept; the model's answer is stored beside them in
+ * call goes through the decision engines as 'kind-pick', so Settings >
+ * Pipeline chooses the preset or engine. Jev's answers are kept; the
+ * model's answer is stored beside them in
  * answers_json as `kind_llm`, and the stored kind is derived from both, so the
  * choice can be recomputed or undone without calling anything.
  */
 
 import { queryAll, queryOne, run } from './database'
-import { getChatLLMService } from './chat-llm'
+import { askDecision } from './pipeline/decision-engines'
 import { isRecordingEligible } from './recording-eligibility'
 import { KIND_FALLBACK_MAX_JEV_CONFIDENCE, RECORDING_KINDS, type RecordingKind } from './jev-evaluation'
 import { neutralizeDelimiters } from './value-classification'
@@ -32,8 +32,6 @@ export interface KindAnswer {
   choice: RecordingKind
   confidence: number
 }
-
-const SYSTEM = 'You classify recordings. Answer with one JSON object only, no prose.'
 
 export function buildKindPrompt(input: { excerpt: string; meetingSubject: string | null; minutes: number | null }): string {
   const kinds = Object.entries(RECORDING_KINDS)
@@ -114,14 +112,15 @@ export async function resolveKind(captureId: string, recordingId: string): Promi
     meetingSubject: row.subject,
     minutes: row.duration_seconds ? Math.round(row.duration_seconds / 60) : null
   })
-  const raw = await getChatLLMService().generateText(prompt, SYSTEM, {
-    step: 'kind-pick',
+  const { response } = await askDecision('kind-pick', prompt, {
+    kind: { type: 'choice', instructions: 'What kind of recording is this? Pick exactly one criteria id.', criteria: RECORDING_KINDS }
+  }, {
     recordingId,
     shouldGenerate: () => isRecordingEligible(recordingId)
   })
-  if (raw === null) return 'skipped'
-  const answer = parseKindReply(raw)
-  if (!answer) return 'unparsed'
+  const answer = response.answers.kind
+  if (answer?.type !== 'choice' || !Object.prototype.hasOwnProperty.call(RECORDING_KINDS, answer.choice) ||
+    !Number.isFinite(answer.confidence) || answer.confidence < 0 || answer.confidence > 1) return 'unparsed'
   // Post-await gate, adjacent to the write.
   if (!isRecordingEligible(recordingId)) return 'skipped'
   run(

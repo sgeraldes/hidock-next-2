@@ -24,11 +24,11 @@ vi.mock('../config', () => ({
 }))
 vi.mock('../event-bus', () => ({ getEventBus: () => ({ emitDomainEvent: vi.fn() }) }))
 const generateText = vi.hoisted(() => vi.fn())
-vi.mock('../chat-llm', () => ({ getChatLLMService: () => ({ generateText }) }))
+vi.mock('../pipeline/decision-engines', () => ({ askDecision: generateText }))
 
 import { initializeDatabase, closeDatabase, run, queryOne, saveRecordingEvaluation } from '../database'
 import { buildKindPrompt, evaluationsNeedingKind, parseKindReply, runKindFallbackPass } from '../kind-fallback'
-import { kindWithFallback } from '../jev-evaluation'
+import { RECORDING_KINDS, kindWithFallback } from '../jev-evaluation'
 import { recomputeEvaluationsFromEvidence } from '../value-classification'
 
 function seed(id: string, kind: string, kindConfidence: number, opts: { rating?: string; personal?: boolean } = {}): void {
@@ -120,11 +120,13 @@ describe('kind fallback', () => {
   })
 
   it('asks the kind-pick step, stores the answer beside Jev, and the stored kind follows', async () => {
-    generateText.mockResolvedValue('{"kind": "media_playback", "confidence": 0.82}')
+    generateText.mockResolvedValue({ engine: 'clef', response: { answers: { kind: { type: 'choice', choice: 'media_playback', confidence: 0.82 } } } })
     const result = await runKindFallbackPass({ recompute: (ids) => recomputeEvaluationsFromEvidence(ids) })
     expect(result).toEqual({ asked: 1, resolved: 1 })
     expect(generateText).toHaveBeenCalledTimes(1)
-    expect(generateText.mock.calls[0][2]).toMatchObject({ step: 'kind-pick', recordingId: 'undecided' })
+    expect(generateText.mock.calls[0][0]).toBe('kind-pick')
+    expect(generateText.mock.calls[0][2].kind).toMatchObject({ type: 'choice', criteria: RECORDING_KINDS })
+    expect(generateText.mock.calls[0][3]).toMatchObject({ recordingId: 'undecided' })
     const row = stored('undecided')
     expect(row).toMatchObject({ kind: 'media_playback', kind_confidence: 0.82 })
     const answers = JSON.parse(row!.answers_json)
@@ -135,3 +137,4 @@ describe('kind fallback', () => {
     expect(await runKindFallbackPass()).toEqual({ asked: 0, resolved: 0 })
   })
 })
+

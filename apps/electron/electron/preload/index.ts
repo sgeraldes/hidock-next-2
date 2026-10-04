@@ -7,7 +7,7 @@ import type {
   IngestionOutcome,
   SourceContainer,
 } from '@hidock/connectors'
-import type { ModelOption, PipelineSettingsState, SaveStepArgs, SaveStepResult } from '../../src/shared/pipeline-config'
+import type { DecisionConfig, ModelOption, PipelineSettingsState, SaveStepArgs, SaveStepResult } from '../../src/shared/pipeline-config'
 /**
  * AI Brains renderer-facing types (H10). Mirror of the main-process contract in
  * `electron/main/services/brains/types.ts` + `ipc/brains-handlers.ts`, declared
@@ -1321,6 +1321,7 @@ export interface ElectronAPI {
   pipeline: {
     getState: () => Promise<PipelineSettingsState>
     saveStep: (args: SaveStepArgs) => Promise<SaveStepResult>
+    saveDecisions: (args: DecisionConfig) => Promise<SaveStepResult>
     listModels: (args: { harness: string }) => Promise<ModelOption[]>
   }
 
@@ -2060,6 +2061,7 @@ const electronAPI: ElectronAPI = {
   pipeline: {
     getState: () => callIPC('pipeline:getState'),
     saveStep: (args) => callIPC('pipeline:saveStep', args),
+    saveDecisions: (args) => callIPC('pipeline:saveDecisions', args),
     listModels: (args) => callIPC('pipeline:listModels', args)
   },
 
