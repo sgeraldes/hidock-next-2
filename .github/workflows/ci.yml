@@ -42,11 +42,16 @@ jobs:
           for n in ai-providers calendar-sync connectors connectors-slack database jensen-protocol knowledge-graph transcription; do
             (cd "packages/$n" && npm run lint --if-present && npm test)
           done
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
       - name: Model Host tests
         # The host ships to another machine on its own installer; nothing else
-        # in this workflow runs its tests.
+        # in this workflow runs its tests. build:tray compiles the tray icon
+        # with -Werror and runs its decision tests; the tray end-to-end test
+        # then runs against that build.
         working-directory: apps/model-host
-        run: npm ci && npm test
+        run: npm ci && npm run build:tray && npm test
       - name: Install app
         working-directory: apps/electron
         run: npm ci

@@ -1,9 +1,11 @@
 /**
  * IPC for the HiDock Model Host, the machine with the GPU.
  *
- * Two channels, both for Settings: ask a host whether it is there, and trade a
- * code shown on its screen for a token this machine keeps. Diarization itself
- * never comes through here — it is decided inside speaker-linking, where the
+ * HiDock is in charge and the gamestation has no settings of its own (Sebastián,
+ * 4-oct-2026). So pairing here also hands the host what it needs: this computer's
+ * Hugging Face token (the host runs the voice model once with it) and when to step
+ * aside. Check sends the token again to a host still waiting for it. Diarization
+ * itself never comes through here; it is decided inside speaker-linking, where the
  * fall back to the local worker lives.
  */
 
@@ -13,35 +15,98 @@ import {
   checkModelHost,
   pairWithModelHost,
   resetModelHostHealthCache,
+  sendHfTokenToModelHost,
+  setModelHostStepAside,
+  type ModelHostSettings,
 } from '../services/model-host-client'
 import { getConfig, saveConfig } from '../services/config'
 import { resolveSpeakerEngine } from '../services/speaker-engines'
-import type { ModelHostStatus } from '../../../src/shared/model-host-status'
+import type {
+  ModelHostHealthReport,
+  ModelHostSetupReport,
+  ModelHostStatus,
+  ModelHostStepAside,
+} from '../../../src/shared/model-host-status'
 
 const AddressSchema = z.object({
   url: z.string().trim().min(1).max(2048),
 })
 
 const PairSchema = AddressSchema.extend({
-  // Eight digits, as the host prints them.
-  code: z.string().trim().regex(/^\d{4,12}$/),
+  // Eight digits from the host's tray icon, or nothing while its automatic
+  // pairing is open.
+  code: z.string().trim().regex(/^(\d{4,12})?$/),
 })
+
+const StepAsideSchema = z.object({ value: z.enum(['any-use', 'games', 'never']) })
+
+function stepAsideFromConfig(): ModelHostStepAside {
+  return getConfig().transcription.modelHostStepAside ?? 'games'
+}
+
+/**
+ * Give a freshly paired host what it needs. Pairing already succeeded, so a
+ * failure here is a warning to show, not a reason to undo the pairing: Check
+ * sends it again.
+ */
+async function provision(settings: ModelHostSettings): Promise<{ setup?: ModelHostSetupReport; warning?: string }> {
+  const config = getConfig().transcription
+  const warnings: string[] = []
+  let setup: ModelHostSetupReport | undefined
+  if (config.localAsrHfToken) {
+    try {
+      setup = await sendHfTokenToModelHost(settings, config.localAsrHfToken)
+    } catch (error) {
+      warnings.push(`The host did not take the Hugging Face token: ${(error as Error).message}`)
+    }
+  } else {
+    warnings.push('This computer has no Hugging Face token to give the host. Add it in Settings > Secrets, then press Check.')
+  }
+  try {
+    await setModelHostStepAside(settings, stepAsideFromConfig())
+  } catch (error) {
+    warnings.push(`The host did not take when to step aside: ${(error as Error).message}`)
+  }
+  return { ...(setup ? { setup } : {}), ...(warnings.length ? { warning: warnings.join(' ') } : {}) }
+}
+
+/** On Check: a paired host still waiting for the token gets it, and a stale step-aside is corrected. */
+async function topUp(settings: ModelHostSettings, health: ModelHostHealthReport): Promise<boolean> {
+  const config = getConfig().transcription
+  let changed = false
+  const waiting = health.setup?.status === 'needs-token' || health.setup?.status === 'failed'
+  if (waiting && config.localAsrHfToken) {
+    try {
+      await sendHfTokenToModelHost(settings, config.localAsrHfToken)
+      changed = true
+    } catch {
+      // The status line says what the host is waiting for.
+    }
+  }
+  const wanted = stepAsideFromConfig()
+  if (health.stepAside && health.stepAside !== wanted) {
+    try {
+      await setModelHostStepAside(settings, wanted)
+      changed = true
+    } catch {
+      // Sent again on the next Check.
+    }
+  }
+  return changed
+}
 
 export function registerModelHostHandlers(): void {
   ipcMain.handle('model-host:check', async (_event, raw: unknown) => {
     const parsed = AddressSchema.safeParse(raw)
     if (!parsed.success) return { success: false, error: 'Enter the host address.' }
     const config = getConfig().transcription
-    const health = await checkModelHost(
-      {
-        url: parsed.data.url,
-        token: config.modelHostToken || '',
-      },
-      fetch,
-      { forceRefresh: true }
-    )
+    const settings = { url: parsed.data.url, token: config.modelHostToken || '' }
+    let health = await checkModelHost(settings, fetch, { forceRefresh: true })
     if (!health) {
       return { success: false, error: 'No host answered at that address.' }
+    }
+    if (settings.token && (await topUp(settings, health))) {
+      health = (await checkModelHost(settings, fetch, { forceRefresh: true })) ?? health
     }
     return { success: true, health }
   })
@@ -60,6 +125,7 @@ export function registerModelHostHandlers(): void {
       configured,
       paired: Boolean(config.modelHostToken),
       usedForSpeakers: configured && resolveSpeakerEngine(config) === 'model-host',
+      hasHfToken: Boolean(config.localAsrHfToken),
       address,
       health,
     }
@@ -69,7 +135,7 @@ export function registerModelHostHandlers(): void {
   ipcMain.handle('model-host:pair', async (_event, raw: unknown) => {
     const parsed = PairSchema.safeParse(raw)
     if (!parsed.success) {
-      return { success: false, error: 'Enter the address and the code the host is showing.' }
+      return { success: false, error: 'Enter the address, and the code from the host’s tray icon if it shows one.' }
     }
     try {
       const { token } = await pairWithModelHost(parsed.data.url, parsed.data.code)
@@ -78,9 +144,28 @@ export function registerModelHostHandlers(): void {
       await saveConfig({
         transcription: { modelHostUrl: parsed.data.url, modelHostToken: token },
       } as Parameters<typeof saveConfig>[0])
-      return { success: true }
+      const provisioned = await provision({ url: parsed.data.url, token })
+      return { success: true, ...provisioned }
     } catch (error) {
       return { success: false, error: (error as Error).message }
+    }
+  })
+
+  // The one setting for the gamestation. Saved here first; the host gets it now
+  // if it answers, and on the next Check or pairing if it does not.
+  ipcMain.handle('model-host:set-step-aside', async (_event, raw: unknown) => {
+    const parsed = StepAsideSchema.safeParse(raw)
+    if (!parsed.success) return { success: false, error: 'Choose any use, games or never.' }
+    await saveConfig({
+      transcription: { modelHostStepAside: parsed.data.value },
+    } as Parameters<typeof saveConfig>[0])
+    const config = getConfig().transcription
+    if (!config.modelHostUrl || !config.modelHostToken) return { success: true, sent: false }
+    try {
+      await setModelHostStepAside({ url: config.modelHostUrl, token: config.modelHostToken }, parsed.data.value)
+      return { success: true, sent: true }
+    } catch {
+      return { success: true, sent: false }
     }
   })
 

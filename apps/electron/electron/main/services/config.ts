@@ -186,6 +186,11 @@ export interface AppConfig {
     modelHostUrl?: string
     /** Token this machine got when it paired with that host. */
     modelHostToken?: string
+    /**
+     * When the gamestation steps aside: whenever it is used, only for games, or never.
+     * The only setting for the host; HiDock sends it, the host's tray icon applies it.
+     */
+    modelHostStepAside?: 'any-use' | 'games' | 'never'
     // Jev (TypeSafe AI) key. When set, Jev classifies recording value instead
     // of the LLM. Encrypted at rest like modelHostToken.
     jevApiKey?: string
@@ -400,6 +405,7 @@ const DEFAULT_CONFIG: AppConfig = {
     speakerLinkingCpuPercent: 40,
     modelHostUrl: '',
     modelHostToken: '',
+    modelHostStepAside: 'games',
     jevApiKey: '',
     speakerEngine: 'auto',
     voiceBackfill: { ...DEFAULT_VOICE_BACKFILL },

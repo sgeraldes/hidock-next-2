@@ -3,7 +3,10 @@ import { ipcMain } from 'electron'
 import { registerModelHostHandlers } from '../model-host-handlers'
 import {
   checkModelHost,
+  pairWithModelHost,
   resetModelHostHealthCache,
+  sendHfTokenToModelHost,
+  setModelHostStepAside,
 } from '../../services/model-host-client'
 import { getConfig, saveConfig } from '../../services/config'
 
@@ -15,6 +18,8 @@ vi.mock('../../services/model-host-client', () => ({
   checkModelHost: vi.fn(),
   pairWithModelHost: vi.fn(),
   resetModelHostHealthCache: vi.fn(),
+  sendHfTokenToModelHost: vi.fn(),
+  setModelHostStepAside: vi.fn(),
 }))
 
 vi.mock('../../services/config', () => ({
@@ -30,6 +35,19 @@ function handlerFor(handlers: Record<string, Handler>, channel: string): Handler
   return handler
 }
 
+function configWith(transcription: Record<string, unknown>) {
+  vi.mocked(getConfig).mockReturnValue({ transcription } as ReturnType<typeof getConfig>)
+}
+
+const PAIRED = {
+  modelHostUrl: 'gamestation:8765',
+  modelHostToken: 'saved-token',
+  localAsrHfToken: 'hf_local',
+  modelHostStepAside: 'games',
+  speakerLinkingEnabled: true,
+  speakerEngine: 'auto',
+}
+
 describe('Model Host IPC handlers', () => {
   let handlers: Record<string, Handler>
 
@@ -40,10 +58,10 @@ describe('Model Host IPC handlers', () => {
       handlers[channel] = handler
       return undefined as never
     })
-    vi.mocked(getConfig).mockReturnValue({
-      transcription: { modelHostToken: 'saved-token' },
-    } as ReturnType<typeof getConfig>)
+    configWith({ modelHostToken: 'saved-token' })
     vi.mocked(saveConfig).mockResolvedValue(undefined)
+    vi.mocked(sendHfTokenToModelHost).mockResolvedValue({ status: 'validating' })
+    vi.mocked(setModelHostStepAside).mockResolvedValue(undefined)
     registerModelHostHandlers()
   })
 
@@ -60,37 +78,106 @@ describe('Model Host IPC handlers', () => {
     )
   })
 
-  it('reports the saved host, whether speaker work goes there, and what it said', async () => {
-    vi.mocked(getConfig).mockReturnValue({
-      transcription: {
-        modelHostUrl: 'gamestation:8765',
-        modelHostToken: 'saved-token',
-        speakerLinkingEnabled: true,
-        speakerEngine: 'auto',
-      },
-    } as ReturnType<typeof getConfig>)
-    const health = { version: '0.2.0', state: 'paused', capabilities: ['diarize'], pause: { by: 'game' } }
+  it('pairs with an empty code (the host’s automatic window), then hands the host its token and the step-aside choice', async () => {
+    configWith({ ...PAIRED, modelHostToken: '' })
+    vi.mocked(pairWithModelHost).mockResolvedValue({ token: 'new-token' })
+
+    const result = await handlerFor(handlers, 'model-host:pair')({}, { url: 'gamestation:8765', code: '' })
+
+    expect(pairWithModelHost).toHaveBeenCalledWith('gamestation:8765', '')
+    expect(saveConfig).toHaveBeenCalledWith({
+      transcription: { modelHostUrl: 'gamestation:8765', modelHostToken: 'new-token' },
+    })
+    const settings = { url: 'gamestation:8765', token: 'new-token' }
+    expect(sendHfTokenToModelHost).toHaveBeenCalledWith(settings, 'hf_local')
+    expect(setModelHostStepAside).toHaveBeenCalledWith(settings, 'games')
+    expect(result).toEqual({ success: true, setup: { status: 'validating' } })
+  })
+
+  it('pairs even when this computer has no Hugging Face token, and says so', async () => {
+    configWith({ ...PAIRED, localAsrHfToken: '' })
+    vi.mocked(pairWithModelHost).mockResolvedValue({ token: 'new-token' })
+    const result = (await handlerFor(handlers, 'model-host:pair')({}, { url: 'gamestation:8765', code: '' })) as {
+      success: boolean
+      warning?: string
+    }
+    expect(result.success).toBe(true)
+    expect(result.warning).toMatch(/Hugging Face token/)
+    expect(sendHfTokenToModelHost).not.toHaveBeenCalled()
+  })
+
+  it('on Check, sends the token again to a host that is still waiting for it', async () => {
+    configWith(PAIRED)
+    vi.mocked(checkModelHost)
+      .mockResolvedValueOnce({ version: '0.3.0', state: 'ready', capabilities: [], setup: { status: 'needs-token' }, stepAside: 'games' } as never)
+      .mockResolvedValueOnce({ version: '0.3.0', state: 'ready', capabilities: [], setup: { status: 'validating' }, stepAside: 'games' } as never)
+    const result = (await handlerFor(handlers, 'model-host:check')({}, { url: 'gamestation:8765' })) as {
+      health: { setup: { status: string } }
+    }
+    expect(sendHfTokenToModelHost).toHaveBeenCalledWith({ url: 'gamestation:8765', token: 'saved-token' }, 'hf_local')
+    expect(result.health.setup.status).toBe('validating')
+  })
+
+  it('on Check, leaves a ready host alone', async () => {
+    configWith(PAIRED)
+    vi.mocked(checkModelHost).mockResolvedValue({
+      version: '0.3.0', state: 'ready', capabilities: ['diarize'], setup: { status: 'ready' }, stepAside: 'games',
+    } as never)
+    await handlerFor(handlers, 'model-host:check')({}, { url: 'gamestation:8765' })
+    expect(sendHfTokenToModelHost).not.toHaveBeenCalled()
+    expect(setModelHostStepAside).not.toHaveBeenCalled()
+  })
+
+  it('saves when to step aside and sends it to the paired host', async () => {
+    configWith(PAIRED)
+    await expect(handlerFor(handlers, 'model-host:set-step-aside')({}, { value: 'any-use' })).resolves.toEqual({
+      success: true,
+      sent: true,
+    })
+    expect(saveConfig).toHaveBeenCalledWith({ transcription: { modelHostStepAside: 'any-use' } })
+    expect(setModelHostStepAside).toHaveBeenCalledWith({ url: 'gamestation:8765', token: 'saved-token' }, 'any-use')
+  })
+
+  it('keeps the choice when the host is not answering; it goes over on the next Check or pairing', async () => {
+    configWith(PAIRED)
+    vi.mocked(setModelHostStepAside).mockRejectedValue(new Error('fetch failed'))
+    await expect(handlerFor(handlers, 'model-host:set-step-aside')({}, { value: 'never' })).resolves.toEqual({
+      success: true,
+      sent: false,
+    })
+    expect(saveConfig).toHaveBeenCalled()
+  })
+
+  it('refuses a step-aside value that is not one of the three', async () => {
+    const result = (await handlerFor(handlers, 'model-host:set-step-aside')({}, { value: 'sometimes' })) as {
+      success: boolean
+    }
+    expect(result.success).toBe(false)
+    expect(saveConfig).not.toHaveBeenCalled()
+  })
+
+  it('reports the saved host, whether speaker work goes there, whether there is a token to send, and what it said', async () => {
+    configWith(PAIRED)
+    const health = { version: '0.3.0', state: 'ready', capabilities: ['diarize'], setup: { status: 'ready' } }
     vi.mocked(checkModelHost).mockResolvedValue(health as never)
 
     await expect(handlerFor(handlers, 'model-host:status')({})).resolves.toEqual({
       success: true,
-      status: { configured: true, paired: true, usedForSpeakers: true, address: 'gamestation:8765', health },
+      status: {
+        configured: true,
+        paired: true,
+        usedForSpeakers: true,
+        hasHfToken: true,
+        address: 'gamestation:8765',
+        health,
+      },
     })
-    // The status line polls; it shares the diarization path's short cache.
     expect(checkModelHost).toHaveBeenCalledWith({ url: 'gamestation:8765', token: 'saved-token' })
   })
 
   it('says a host is paired but unused when the speaker engine runs here', async () => {
-    vi.mocked(getConfig).mockReturnValue({
-      transcription: {
-        modelHostUrl: 'gamestation:8765',
-        modelHostToken: 'saved-token',
-        speakerLinkingEnabled: true,
-        speakerEngine: 'onnx-local',
-      },
-    } as ReturnType<typeof getConfig>)
+    configWith({ ...PAIRED, speakerEngine: 'onnx-local' })
     vi.mocked(checkModelHost).mockResolvedValue(null)
-
     const result = (await handlerFor(handlers, 'model-host:status')({})) as { status: { usedForSpeakers: boolean } }
     expect(result.status.usedForSpeakers).toBe(false)
   })
@@ -98,7 +185,7 @@ describe('Model Host IPC handlers', () => {
   it('does not call anything when no host is saved', async () => {
     await expect(handlerFor(handlers, 'model-host:status')({})).resolves.toEqual({
       success: true,
-      status: { configured: false, paired: true, usedForSpeakers: false, address: '', health: null },
+      status: { configured: false, paired: true, usedForSpeakers: false, hasHfToken: false, address: '', health: null },
     })
     expect(checkModelHost).not.toHaveBeenCalled()
   })

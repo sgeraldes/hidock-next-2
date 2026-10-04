@@ -274,6 +274,8 @@ export interface AppConfig {
     modelHostUrl?: string
     /** Token this computer got when it paired with that host. */
     modelHostToken?: string
+    /** When the gamestation steps aside: any use, only games, or never. */
+    modelHostStepAside?: 'any-use' | 'games' | 'never'
     /** Jev (TypeSafe AI) key; when set, Jev classifies recording value. */
     jevApiKey?: string
     speakerEngine?: 'auto' | 'pyannote-local' | 'onnx-local' | 'signatures-from-turns' | 'model-host' | 'pyannoteai' | 'off'

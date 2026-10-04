@@ -2,6 +2,31 @@
 
 Each entry is one day of merged work. The Releases page in Settings reads this file.
 
+## 2026-10-04 | The gamestation only helps, and gets out of the way
+
+The Model Host on the gamestation is now a small tray icon and nothing else to set up there. HiDock
+pairs with it, gives it the Hugging Face token and decides when it steps aside.
+
+### Changes
+
+- **Installing on the gamestation is a double click.** Model Host 0.3.0 asks no questions: it
+  installs its runtime in a console that closes by itself, starts a tray icon and starts it again
+  with Windows. The control page, its game mode settings and the "pause or resume" shortcut of
+  0.2.0 are gone.
+- **Paused means nothing running.** The tray icon (93 KB, written in C) stops the whole service
+  when it steps aside or when you press Pause: no Node, no Python, no model in memory. Measured
+  while a game runs: 336 KB for the icon and no CPU.
+- **One setting, in HiDock.** Settings > Transcription > Model host > "When the gamestation is in
+  use": step aside whenever it is used, only for games (the default), or never. A game is a program
+  from a Steam, Xbox, Epic, GOG, Riot, EA or Ubisoft games folder, or a full-screen window. Work
+  starts again five minutes after the game closes. Start in the tray during a game keeps it working
+  until that game ends.
+- **Pairing without a code, and the token goes with it.** For five minutes after the host is
+  installed, Pair with an empty code connects to it; the tray can cancel that window, resume it, or
+  disconnect HiDock and start again, and still shows an 8-digit code if you prefer. Pairing gives
+  the host this computer's Hugging Face token; the host tests the voice model with it and only then
+  takes work. You never type a token on the gamestation.
+
 ## 2026-10-03 | Attendees from Outlook, and speakers that know who named them
 
 Meetings that arrive from the calendar feed without a guest list take it from the same meeting in
