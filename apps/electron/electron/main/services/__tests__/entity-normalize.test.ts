@@ -18,7 +18,11 @@ import {
   isSingleToken,
   hasSurname,
   firstNameNicknameMatch,
-  detectAmbiguousName
+  detectAmbiguousName,
+  isNotAPersonName,
+  calendarDisplayName,
+  isSharedMailbox,
+  addressesUnderTwoNames
 } from '../entity-normalize'
 
 describe('normalizeName', () => {
@@ -258,5 +262,129 @@ describe('detectAmbiguousName', () => {
     const r = detectAmbiguousName('Sergio', withBucket, 'c-bucket')
     expect(r.matches.some((m) => m.id === 'c-bucket')).toBe(false)
     expect(r.ambiguous).toBe(true)
+  })
+})
+
+// 3-oct-2026, live database: contacts named "juanchobq2017@gmail.com" and
+// "edgar.anzola@segurosbolivar.com" were shared-first-name buckets, because the
+// address's leading letters matched Juan and Edgar.
+describe('isNotAPersonName', () => {
+  it('rejects email addresses and anything carrying an @', () => {
+    expect(isNotAPersonName('juanchobq2017@gmail.com')).toBe(true)
+    expect(isNotAPersonName('edgar.anzola@segurosbolivar.com')).toBe(true)
+    expect(isNotAPersonName('Marisel Lopez <mmauleon@segurosmultiples.com>')).toBe(true)
+    expect(isNotAPersonName('@juan')).toBe(true)
+  })
+
+  it('rejects URLs and bare domains', () => {
+    expect(isNotAPersonName('https://juan.com')).toBe(true)
+    expect(isNotAPersonName('www.juanperez.com')).toBe(true)
+    expect(isNotAPersonName('rappi.com')).toBe(true)
+  })
+
+  it('rejects phone numbers, digits and strings with no letters', () => {
+    expect(isNotAPersonName('+57 300 123 4567')).toBe(true)
+    expect(isNotAPersonName('(511) 555-0100')).toBe(true)
+    expect(isNotAPersonName('12345')).toBe(true)
+    expect(isNotAPersonName('---')).toBe(true)
+    expect(isNotAPersonName('   ')).toBe(true)
+  })
+
+  it('rejects a single token shaped like the start of an address', () => {
+    expect(isNotAPersonName('edgar.anzola')).toBe(true)
+    expect(isNotAPersonName('juanchobq2017')).toBe(true)
+    expect(isNotAPersonName('julik_100')).toBe(true)
+  })
+
+  // Review of PR 143, F4: a dotted name written with capitals is a name.
+  it('keeps a dotted name with a capital on each part, and rejects the lowercase address shape', () => {
+    expect(isNotAPersonName('J.Perez')).toBe(false)
+    expect(isNotAPersonName('José.García')).toBe(false)
+    expect(isNotAPersonName('Edgar.anzola')).toBe(true)
+    expect(isNotAPersonName('edgar.anzola')).toBe(true)
+    expect(isNotAPersonName('Rappi.com')).toBe(true)
+    expect(isNotAPersonName('www.Juan.Perez')).toBe(true)
+  })
+
+  it('keeps real names, accented, hyphenated or with an apostrophe', () => {
+    expect(isNotAPersonName('Juan')).toBe(false)
+    expect(isNotAPersonName('José')).toBe(false)
+    expect(isNotAPersonName('Se-young')).toBe(false)
+    expect(isNotAPersonName("O'Neil")).toBe(false)
+    expect(isNotAPersonName('Juan Pérez')).toBe(false)
+    expect(isNotAPersonName('Vargas, Marino')).toBe(false)
+  })
+})
+
+describe('calendarDisplayName', () => {
+  // Review of PR 143, F1: only the lowercase start of the address is a placeholder.
+  it('keeps a real name that spells the start of the address with a capital', () => {
+    expect(calendarDisplayName('Carmen', 'carmen@acme.com')).toBe('Carmen')
+  })
+
+  it('gives null for the lowercase start of the address, the address itself, or nothing', () => {
+    expect(calendarDisplayName('carmen', 'carmen@acme.com')).toBeNull()
+    expect(calendarDisplayName('carmen@acme.com', 'carmen@acme.com')).toBeNull()
+    expect(calendarDisplayName('', 'carmen@acme.com')).toBeNull()
+  })
+})
+
+describe('shared addresses', () => {
+  // Review of PR 143, F3: the rule moved here from identity-rules.ts so the reconciler can use it.
+  it('isSharedMailbox flags role mailboxes and plus addresses, not people', () => {
+    expect(isSharedMailbox('info@acme.com')).toBe(true)
+    expect(isSharedMailbox('support-latam@acme.com')).toBe(true)
+    expect(isSharedMailbox('ana+news@acme.com')).toBe(true)
+    expect(isSharedMailbox('ana.soto@acme.com')).toBe(false)
+  })
+
+  it('addressesUnderTwoNames finds an address one meeting lists under two different names', () => {
+    const shared = addressesUnderTwoNames([
+      { name: 'Ana Soto', email: 'dl-proyecto@acme.com' },
+      { name: 'Luis Rojas', email: 'DL-proyecto@acme.com' },
+      { name: 'Carmen Diaz', email: 'carmen@acme.com' },
+      { name: 'carmen', email: 'carmen@acme.com' },
+      { name: 'Carmen Díaz', email: 'carmen@acme.com' }
+    ])
+    expect([...shared]).toEqual(['dl-proyecto@acme.com'])
+  })
+})
+
+describe('email and other junk names are never buckets', () => {
+  const corpus = [
+    { id: 'c-jp', name: 'Juan Perez' },
+    { id: 'c-jg', name: 'Juan Gomez' },
+    { id: 'c-ea', name: 'Edgar Anzola' },
+    { id: 'c-er', name: 'Edgar Ruiz' }
+  ]
+
+  it('an email-named contact is not a bucket', () => {
+    expect(detectAmbiguousName('juanchobq2017@gmail.com', corpus)).toEqual({ ambiguous: false, token: '', matches: [] })
+    expect(detectAmbiguousName('edgar.anzola@segurosbolivar.com', corpus).ambiguous).toBe(false)
+  })
+
+  it('an address local part, a phone number or a URL is not a bucket', () => {
+    expect(detectAmbiguousName('edgar.anzola', corpus).ambiguous).toBe(false)
+    expect(detectAmbiguousName('juanchobq2017', corpus).ambiguous).toBe(false)
+    expect(detectAmbiguousName('3001234567', corpus).ambiguous).toBe(false)
+    expect(detectAmbiguousName('www.juan.com', corpus).ambiguous).toBe(false)
+  })
+
+  it('an email never matches a first name, on either side', () => {
+    expect(firstNameNicknameMatch('juanchobq2017@gmail.com', 'Juan Perez')).toBe(false)
+    expect(firstNameNicknameMatch('Juan', 'juan.perez@x.com Perez')).toBe(false)
+  })
+
+  it('a junk-named contact is not counted as a candidate for a real first name', () => {
+    const withJunk = [
+      { id: 'c-ml', name: 'Marisel Lopez <mmauleon@segurosmultiples.com>' },
+      { id: 'c-mg', name: 'Marisel Gomez' }
+    ]
+    expect(detectAmbiguousName('Marisel', withJunk).ambiguous).toBe(false)
+  })
+
+  it('real first names still bucket', () => {
+    expect(detectAmbiguousName('Juan', corpus).ambiguous).toBe(true)
+    expect(detectAmbiguousName('Edgar', corpus).ambiguous).toBe(true)
   })
 })

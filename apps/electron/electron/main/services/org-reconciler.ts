@@ -46,12 +46,20 @@ import {
 import { filterEligibleRecordingIds } from './recording-eligibility'
 import { mergeContactsWithGraph } from './knowledge-graph-service'
 import { resolveContact, resolveProject } from './entity-resolver'
-import { isGenericSpeakerLabel, cleanRole } from './entity-normalize'
+import {
+  isGenericSpeakerLabel,
+  cleanRole,
+  isNotAPersonName,
+  calendarDisplayName,
+  addressLocalPart,
+  addressesUnderTwoNames,
+  isSharedMailbox
+} from './entity-normalize'
 import { decideProjectDiscovery, scoreProjectNameCandidate } from './project-discovery-gate'
 import { canUpgrade, methodConfidence } from './signal-tiers'
 import { LONG_MEETING_MS } from './recording-match-scoring'
 import { EARLY_START_TOLERANCE_MS, MIN_TIME_LINK_COVERAGE, meetingCoverage } from './meeting-coverage'
-import { randomUUID } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 
 /** Resolver thresholds (INTELLIGENCE.md §2): ≥0.8 auto-link, 0.5–0.8 suggest, <0.5 create. */
 const AUTO_LINK_THRESHOLD = 0.8
@@ -384,6 +392,84 @@ interface AttendeeJson {
   email?: string
 }
 
+/** A contact as the calendar passes read it: enough to find, link and rename it. */
+interface KnownContact {
+  id: string
+  name: string
+  source: string | null
+}
+
+/** The organizer and the attendees with an address on a meeting row, addresses lowercased. */
+function calendarPeople(meeting: {
+  attendees?: string | null
+  organizer_name?: string | null
+  organizer_email?: string | null
+}): Array<{ name?: string; email: string; role: string }> {
+  const people: Array<{ name?: string; email: string; role: string }> = []
+  if (meeting.organizer_email) {
+    people.push({
+      name: meeting.organizer_name ?? undefined,
+      email: meeting.organizer_email.toLowerCase(),
+      role: 'organizer'
+    })
+  }
+  if (meeting.attendees) {
+    try {
+      const parsed = JSON.parse(meeting.attendees) as AttendeeJson[]
+      for (const a of parsed) {
+        if (a.email) people.push({ name: a.name, email: a.email.toLowerCase(), role: 'attendee' })
+      }
+    } catch {
+      // malformed attendees JSON — skip
+    }
+  }
+  return people
+}
+
+/** What the calendar says about the names of each address, read once per pass. */
+interface CalendarNames {
+  /** How many times each display name is given for an address. */
+  namesByAddress: Map<string, Map<string, number>>
+  /** Addresses that may not take a person's name: shared mailboxes, and addresses a
+   *  meeting lists under two different names (a distribution list). */
+  notOnePerson: Set<string>
+}
+
+function readCalendarNames(peopleByMeeting: ReadonlyArray<ReadonlyArray<{ name?: string; email: string }>>): CalendarNames {
+  const namesByAddress = new Map<string, Map<string, number>>()
+  const notOnePerson = new Set<string>()
+  for (const people of peopleByMeeting) {
+    for (const address of addressesUnderTwoNames(people)) notOnePerson.add(address)
+    for (const person of people) {
+      if (isSharedMailbox(person.email)) notOnePerson.add(person.email)
+      const name = calendarDisplayName(person.name, person.email)
+      if (!name) continue
+      let counts = namesByAddress.get(person.email)
+      if (!counts) namesByAddress.set(person.email, (counts = new Map()))
+      counts.set(name, (counts.get(name) ?? 0) + 1)
+    }
+  }
+  return { namesByAddress, notOnePerson }
+}
+
+/**
+ * Whether a contact's name is a placeholder the calendar should replace: not a name at
+ * all (the address, "Name <address>", a phone number), or the start of its own address
+ * as upsertContactsFromMeetings stores it when the calendar gave no name.
+ */
+function hasPlaceholderName(name: string, email: string | null): boolean {
+  if (isNotAPersonName(name)) return true
+  return !!email && name === addressLocalPart(email)
+}
+
+/** The address a contact stands for: its email, or one written inside its name. */
+function contactAddress(contact: { name: string; email: string | null }): string | null {
+  const stored = (contact.email || '').trim().toLowerCase()
+  if (stored) return stored
+  const inName = /[^\s<>()@"']+@[^\s<>()@"']+\.[^\s<>()@"']+/.exec(contact.name || '')
+  return inName ? inName[0].toLowerCase() : null
+}
+
 /**
  * Create/update contacts from meeting attendees + organizers and link them to
  * their meetings. Idempotent — safe to run after every sync.
@@ -403,12 +489,12 @@ export function upsertContactsFromMeetings(): { contacts: number; links: number 
     // 1,611 contacts froze the window for seconds at boot (30-sep-2026). The key
     // is SQLite's own LOWER(email), and the first row by rowid wins, exactly as
     // the query it replaces returned.
-    const contactsByEmail = new Map<string, { id: string; name: string }>()
-    const contactsById = new Map<string, { id: string; name: string }>()
-    for (const known of queryAll<{ id: string; name: string; email_key: string | null }>(
-      `SELECT id, name, LOWER(email) AS email_key FROM contacts ORDER BY rowid`
+    const contactsByEmail = new Map<string, KnownContact>()
+    const contactsById = new Map<string, KnownContact>()
+    for (const known of queryAll<{ id: string; name: string; email_key: string | null; source: string | null }>(
+      `SELECT id, name, LOWER(email) AS email_key, source FROM contacts ORDER BY rowid`
     )) {
-      const entry = { id: known.id, name: known.name }
+      const entry = { id: known.id, name: known.name, source: known.source }
       contactsById.set(known.id, entry)
       if (known.email_key !== null && !contactsByEmail.has(known.email_key)) contactsByEmail.set(known.email_key, entry)
     }
@@ -432,7 +518,7 @@ export function upsertContactsFromMeetings(): { contacts: number; links: number 
       if (row.loser_id) mergedInto.set(row.loser_id, row.keeper_id)
       if (row.email && row.email.trim()) mergedEmailOwner.set(row.email.trim().toLowerCase(), row.keeper_id)
     }
-    const survivorOfMergedEmail = (email: string): { id: string; name: string } | undefined => {
+    const survivorOfMergedEmail = (email: string): KnownContact | undefined => {
       let owner = mergedEmailOwner.get(email)
       // The keeper may itself have been merged later: follow the chain to a contact that still exists.
       for (let hops = 0; owner && !contactsById.has(owner) && hops < 20; hops++) owner = mergedInto.get(owner)
@@ -444,42 +530,36 @@ export function upsertContactsFromMeetings(): { contacts: number; links: number 
       )
     )
 
-    for (const meeting of meetings) {
-      const people: Array<{ name?: string; email: string; role: string }> = []
+    // Parsed once: the name rules need every meeting before the first contact is named,
+    // since a later meeting may show an address is a distribution list.
+    const peopleByMeeting = meetings.map((meeting) => calendarPeople(meeting))
+    const calendarNames = readCalendarNames(peopleByMeeting)
 
-      if (meeting.organizer_email) {
-        people.push({ name: meeting.organizer_name, email: meeting.organizer_email.toLowerCase(), role: 'organizer' })
-      }
-      if (meeting.attendees) {
-        try {
-          const parsed = JSON.parse(meeting.attendees) as AttendeeJson[]
-          for (const a of parsed) {
-            if (a.email) people.push({ name: a.name, email: a.email.toLowerCase(), role: 'attendee' })
-          }
-        } catch {
-          // malformed attendees JSON — skip
-        }
-      }
-
-      for (const person of people) {
+    for (const [index, meeting] of meetings.entries()) {
+      for (const person of peopleByMeeting[index]) {
         let contact = contactsByEmail.get(person.email) ?? survivorOfMergedEmail(person.email)
+        // A calendar often lists the address itself as the name: that is no name. A
+        // shared mailbox or a distribution list is not one person, so it keeps the placeholder.
+        const displayName = calendarNames.notOnePerson.has(person.email)
+          ? null
+          : calendarDisplayName(person.name, person.email)
         if (!contact) {
           const id = randomUUID()
           const now = meeting.start_time || new Date().toISOString()
-          const storedName = person.name || person.email.split('@')[0]
+          const storedName = displayName ?? addressLocalPart(person.email)
           run(
             `INSERT INTO contacts (id, name, email, type, first_seen_at, last_seen_at, meeting_count)
              VALUES (?, ?, ?, 'unknown', ?, ?, 0)`,
             [id, storedName, person.email, now, now]
           )
-          contact = { id, name: storedName }
+          contact = { id, name: storedName, source: null }
           contactsByEmail.set(person.email, contact)
           contactsById.set(id, contact)
           newContacts++
-        } else if (person.name && contact.name === person.email.split('@')[0]) {
-          // upgrade email-derived placeholder names when a real name appears
-          run(`UPDATE contacts SET name = ? WHERE id = ?`, [person.name, contact.id])
-          contact.name = person.name
+        } else if (displayName && contact.source !== 'user' && hasPlaceholderName(contact.name, person.email)) {
+          // upgrade a placeholder name (the address, or its start) when a real name appears
+          run(`UPDATE contacts SET name = ? WHERE id = ?`, [displayName, contact.id])
+          contact.name = displayName
         }
 
         const pair = `${meeting.id}\u0000${contact.id}`
@@ -517,6 +597,96 @@ export function upsertContactsFromMeetings(): { contacts: number; links: number 
     console.log(`[OrgReconciler] Contacts: +${newContacts} people, +${newLinks} meeting links`)
   }
   return { contacts: newContacts, links: newLinks }
+}
+
+/**
+ * Give a contact named after its address the name the calendar uses for that address.
+ * 3-oct-2026 on the live database: 299 contacts were named after an address (the
+ * meeting sync stored the address when the calendar gave no name), 53 of them had a
+ * display name in the calendar, and "juanchobq2017@gmail.com" had become a shared
+ * first-name bucket for Juan. The most frequent display name wins (ties: the one with
+ * more words, then alphabetical). A contact the owner made (source 'user') is never
+ * renamed, and neither is a shared mailbox (info@) or an address a meeting lists under
+ * two different names (a distribution list). There is no identity-decision kind for a
+ * rename, so each one is logged. Idempotent: a renamed contact has a real name and is
+ * not picked again.
+ *
+ * The addresses with no calendar name stay placeholders, so there are always targets.
+ * To keep a reconcile with nothing new from parsing every meeting again (review of PR
+ * 143, F2), the pass stores a fingerprint of the meetings (count, last row, last
+ * update, and the total length of the attendee and organizer fields, which SQLite sums
+ * without the app reading them) and of the remaining targets, and skips when both are
+ * unchanged. Known gap: an edit that keeps every one of those numbers equal (a display
+ * name changed to one of the same length, with no updated_at bump) waits for the next
+ * change to the meetings or the contacts.
+ */
+export function renameAddressNamedContacts(): number {
+  const targets = queryAll<{ id: string; name: string; email: string | null; source: string | null }>(
+    `SELECT id, name, email, source FROM contacts WHERE source IS NULL OR source <> 'user'`
+  )
+    .map((c) => ({ ...c, address: contactAddress(c) }))
+    .filter((c): c is typeof c & { address: string } => !!c.address && hasPlaceholderName(c.name, c.address))
+  if (targets.length === 0) return 0
+
+  const meetingsShape = addressRenameMeetingsShape()
+  if (readConfigValue(ADDRESS_RENAME_FINGERPRINT_KEY) === addressRenameFingerprint(meetingsShape, targets)) return 0
+
+  const calendarNames = readCalendarNames(
+    queryAll<{ attendees: string | null; organizer_name: string | null; organizer_email: string | null }>(
+      `SELECT attendees, organizer_name, organizer_email FROM meetings`
+    ).map((meeting) => calendarPeople(meeting))
+  )
+
+  const words = (name: string) => name.split(/\s+/).length
+  const renamedIds = new Set<string>()
+  runInTransaction(() => {
+    for (const contact of targets) {
+      if (calendarNames.notOnePerson.has(contact.address)) continue
+      const counts = calendarNames.namesByAddress.get(contact.address)
+      if (!counts) continue
+      const [best] = [...counts.entries()].sort(
+        ([a, ca], [b, cb]) => cb - ca || words(b) - words(a) || a.localeCompare(b)
+      )
+      run(`UPDATE contacts SET name = ? WHERE id = ?`, [best[0], contact.id])
+      console.log(`[OrgReconciler] Renamed contact ${contact.id} from its address to its calendar name "${best[0]}"`)
+      renamedIds.add(contact.id)
+    }
+    const remaining = targets.filter((c) => !renamedIds.has(c.id))
+    writeConfigValue(ADDRESS_RENAME_FINGERPRINT_KEY, addressRenameFingerprint(meetingsShape, remaining))
+  })
+  if (renamedIds.size > 0) console.log(`[OrgReconciler] Renamed ${renamedIds.size} contact(s) named after an address`)
+  return renamedIds.size
+}
+
+/** Config key of the last address-rename pass's fingerprint. */
+const ADDRESS_RENAME_FINGERPRINT_KEY = 'orgReconciler.addressRename.fingerprint'
+/** Bump when the rename rules change, so the next pass runs in full. */
+const ADDRESS_RENAME_RULES_VERSION = 1
+
+/** Counts and lengths of the meetings table, summed in SQLite: no attendee list is read into the app. */
+function addressRenameMeetingsShape(): string {
+  const shape = queryOne<{ n: number; last_row: number; last_update: string; attendees: number; organizer: number }>(
+    `SELECT COUNT(*) AS n, COALESCE(MAX(rowid), 0) AS last_row, COALESCE(MAX(updated_at), '') AS last_update,
+            COALESCE(SUM(LENGTH(attendees)), 0) AS attendees,
+            COALESCE(SUM(LENGTH(organizer_email)), 0) + COALESCE(SUM(LENGTH(organizer_name)), 0) AS organizer
+       FROM meetings`
+  )
+  return shape ? [shape.n, shape.last_row, shape.last_update, shape.attendees, shape.organizer].join('|') : ''
+}
+
+function addressRenameFingerprint(meetingsShape: string, targets: ReadonlyArray<{ id: string; address: string }>): string {
+  const ids = targets.map((t) => `${t.id}:${t.address}`).sort()
+  return createHash('sha256')
+    .update(`${ADDRESS_RENAME_RULES_VERSION}\n${meetingsShape}\n${ids.join('\n')}`)
+    .digest('hex')
+}
+
+function readConfigValue(key: string): string | null {
+  return queryOne<{ value: string | null }>('SELECT value FROM config WHERE key = ?', [key])?.value ?? null
+}
+
+function writeConfigValue(key: string, value: string): void {
+  run('INSERT OR REPLACE INTO config (key, value, updated_at) VALUES (?, ?, ?)', [key, value, new Date().toISOString()])
 }
 
 /**
@@ -1704,6 +1874,12 @@ export const RECONCILE_STEPS: readonly ReconcileStep[] = [
     run: fillAttendeesFromOutlookTwins
   },
   { name: 'contacts-upsert', failure: 'contacts upsert failed', run: upsertContactsFromMeetings },
+  // Before the merge and the bucket split, so both see real names and not addresses.
+  {
+    name: 'contacts-rename-from-calendar',
+    failure: 'renaming contacts named after an address failed',
+    run: renameAddressNamedContacts
+  },
   { name: 'contact-merge', failure: 'duplicate contact merge failed', run: mergeDuplicateContacts },
   { name: 'ambiguous-bucket-split', failure: 'ambiguous-bucket auto-split failed', run: autoSplitAmbiguousBuckets },
   {

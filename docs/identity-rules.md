@@ -37,7 +37,8 @@ Merges are not ranked against each other: a merge either happens or not, and its
 ## A shared first name in a recording
 
 "Sergio" is linked to a meeting and two or more contacts are called Sergio (a bucket,
-`detectAmbiguousName`). The question is which Sergio this recording means.
+`detectAmbiguousName`). The question is which Sergio this recording means. An address, a URL or a
+phone number is never a bucket (see "Junk names: addresses, URLs and phone numbers").
 
 Rule (`buildBucketResolution` in `database.ts`, applied by `autoSplitAmbiguousBuckets` in
 `org-reconciler.ts` and by the Jev tiebreak in `identity-rules.ts`). The first signal that applies
@@ -148,6 +149,55 @@ He, Su, Ha, Tu).
 Nothing to ask the owner: a dropped word leaves the speaker as "Speaker N".
 
 Test: `.../__tests__/self-identification.test.ts` ("junk self-names").
+
+## Junk names: addresses, URLs and phone numbers
+
+A contact named after an address ("juanchobq2017@gmail.com", "edgar.anzola@segurosbolivar.com").
+Calendars often list the address as the display name, and the meeting sync stored it as the name.
+On 3-oct-2026 the live library had 299 such contacts, and some of them were shared-first-name
+buckets because the address starts with a first name ("juancho..." matched Juan).
+
+Rule (`isNotAPersonName` in `entity-normalize.ts`): a string is not a person's name when it has an
+"@" (an address, or "Name <address>"), is a URL or a bare domain, has no letters (a phone number,
+digits), or is a single word with characters a name never has, which is how the start of an
+address looks ("edgar.anzola", "juanchobq2017", "julik_100"). Hyphens and apostrophes are fine
+(Se-young, O'Neil), and so is a dotted word with a capital at the start of each part ("J.Perez",
+"José.García"). A bare domain counts as a URL only with a real top-level domain (a common generic
+one such as .com, or a two-letter country one in lowercase). Such a string:
+
+- is never a shared-first-name bucket and never one of a bucket's candidates (`detectAmbiguousName`);
+- never matches a first name (`firstNameNicknameMatch`), on either side;
+- is never stored as a contact's name from calendar data (`calendarDisplayName`). A new contact the
+  calendar gives no real name for gets the start of its address as a placeholder ("edgar.anzola"),
+  and an existing name is not overwritten by an address. Only the start of the address in
+  lowercase, exactly as the placeholder writes it, counts as no name: "Carmen" for
+  carmen@acme.com is a real name and replaces the placeholder "carmen".
+
+A shared mailbox (`isSharedMailbox`: info@, support@ and the other role words listed under "the
+same email", or a plus address) and an address one meeting lists under two different names
+(`addressesUnderTwoNames`, a distribution list) are not one person. They never take a person's
+name from the calendar: new contacts keep the placeholder, and the upgrade and the rename below
+skip them.
+
+Renaming (`renameAddressNamedContacts` in `org-reconciler.ts`, reconcile step
+`contacts-rename-from-calendar`, after the contacts upsert and before the merge and the bucket
+split): a contact whose name is not a name, or is the start of its own address, takes the display
+name the calendar uses most for that address (ties: more words, then alphabetical). The address is
+the contact's email, or the one written inside its name. The start of the address is never taken
+as the new name. The upsert applies the same upgrade as meetings arrive. The addresses with no
+calendar name stay placeholders, so the step stores a fingerprint in `config`
+(`orgReconciler.addressRename.fingerprint`): the meetings' count, last row, last update and the
+summed length of their attendee and organizer fields, plus the remaining placeholder contacts.
+When neither changed, it skips without reading any attendee list. An edit that keeps all of those
+equal waits for the next change.
+
+Never renamed: a contact the owner made (source `user`), and a contact with no display name in
+the calendar. Contact aliases are not used as a source: they are stored lowercased. There is no
+identity-decision kind for a rename, so each rename is written to the log with the contact id.
+
+Test: `.../__tests__/entity-normalize.test.ts` ("isNotAPersonName", "email and other junk names are
+never buckets"), `.../__tests__/org-reconciler-startup.test.ts` ("renameAddressNamedContacts"),
+`.../__tests__/database.test.ts` ("never stores an address as a new contact name").
 
 ## Projects
 
