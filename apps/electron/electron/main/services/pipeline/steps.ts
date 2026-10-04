@@ -74,7 +74,17 @@ export const DEFAULT_PLANS: Record<TextStepId, Plan> = {
   'self-id': chatRoute('chat'),
   'speaker-roster': chatRoute('chat'),
   'meeting-pick': chatRoute('chat'),
-  'kind-pick': chatRoute('chat'),
+  // A small model is enough to pick one of eleven kinds (owner, 3-oct-2026:
+  // "small low-cost LLMs, e.g. Luna or Haiku"). Measured: 4,002 input tokens,
+  // 0.0075 USD, 11 s per call on Haiku. Without Claude Code the router decides.
+  'kind-pick': {
+    calls: [
+      {
+        profile: { kind: 'direct', id: 'kind-pick-haiku', harness: 'claude-code', model: 'haiku', effort: 'low' },
+        onFail: { kind: 'router', task: 'chat', mode: 'chat' }
+      }
+    ]
+  },
   reformat: chatRoute('chat'),
   notes: chatRoute('suggestions'),
   outputs: { calls: [{ profile: { kind: 'router', task: 'outputs', mode: 'generate' } }] }
