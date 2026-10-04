@@ -25,7 +25,8 @@ vi.mock('../file-storage', () => ({
 vi.mock('../config', () => ({
   getConfig: () => ({ transcription: { valueClassificationMinConfidence: 0.6 } }),
 }))
-vi.mock('../event-bus', () => ({ getEventBus: () => ({ emitDomainEvent: vi.fn() }) }))
+const emitDomainEvent = vi.hoisted(() => vi.fn())
+vi.mock('../event-bus', () => ({ getEventBus: () => ({ emitDomainEvent }) }))
 
 import {
   initializeDatabase,
@@ -273,4 +274,18 @@ describe('the library backfill and an old acceptance', () => {
     )
     expect(row?.integrity_accepted_at).toBe('2026-09-30T10:00:00.000Z')
   })
+})
+
+it('announces one recording after syncing its verdict and never an empty scope', async () => {
+  seedRecording('event-recording')
+  story('event-recording')
+  emitDomainEvent.mockClear()
+  syncTrustVerdicts('event-recording')
+  const events = emitDomainEvent.mock.calls.filter(([event]) => event.type === 'transcript:verdicts-updated')
+  expect(events).toHaveLength(1)
+  expect(events[0][0].payload).toEqual({ recordingIds: ['event-recording'] })
+  emitDomainEvent.mockClear()
+  syncTrustVerdicts()
+  expect(emitDomainEvent.mock.calls.filter(([event]) => event.type === 'transcript:verdicts-updated')).toHaveLength(0)
+  await new Promise<void>((resolve) => setImmediate(resolve))
 })

@@ -1,3 +1,4 @@
+import type { TranscriptVerdicts } from '../../src/shared/transcript-verdicts'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
   ConnectorSummary,
@@ -482,6 +483,7 @@ export interface ElectronAPI {
       markedByDuration?: number
       /** Transcripts checked for timing and text that cannot fit the audio. */
       integrityChecked?: number
+      validityChecked?: number
       error?: string
     }>
     linkToMeeting: (recordingId: string, meetingId: string, confidence: number, method: string) => Promise<any>
@@ -664,6 +666,7 @@ export interface ElectronAPI {
      */
     getByRecordingIdOwner: (recordingId: string) => Promise<any>
     getByRecordingIdsOwner: (recordingIds: string[]) => Promise<Record<string, any>>
+    getVerdicts: (request: { recordingIds: string[] }) => Promise<Record<string, TranscriptVerdicts>>
     /** Manual path to green: accept a flagged transcript as it is, or undo that. */
     setIntegrityAccepted: (request: { recordingId: string; accepted: boolean }) => Promise<Result<{ accepted: boolean }>>
     /** Automatic path to green: queue new transcriptions; each is checked when stored. */
@@ -1814,6 +1817,7 @@ const electronAPI: ElectronAPI = {
     getByRecordingIds: (recordingIds) => callIPC('db:get-transcripts-by-recording-ids', recordingIds),
     getByRecordingIdOwner: (recordingId) => callIPC('db:get-transcript-owner', recordingId),
     getByRecordingIdsOwner: (recordingIds) => callIPC('db:get-transcripts-by-recording-ids-owner', recordingIds),
+    getVerdicts: (request) => callIPC('transcripts:getVerdicts', request),
     setIntegrityAccepted: (request) => callIPC('transcripts:setIntegrityAccepted', request),
     retranscribeMany: (request) => callIPC('transcripts:retranscribeMany', request),
     search: (query) => callIPC('db:search-transcripts', query),

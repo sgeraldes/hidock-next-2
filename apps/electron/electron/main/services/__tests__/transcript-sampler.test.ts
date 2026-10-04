@@ -29,7 +29,8 @@ vi.mock('../file-storage', () => ({
   getCachePath: () => paths.cache,
 }))
 vi.mock('../config', () => ({ getConfig: () => config.value }))
-vi.mock('../event-bus', () => ({ getEventBus: () => ({ emitDomainEvent: vi.fn() }) }))
+const emitDomainEvent = vi.hoisted(() => vi.fn())
+vi.mock('../event-bus', () => ({ getEventBus: () => ({ emitDomainEvent }) }))
 const available = vi.hoisted(() => ({ gemini: false }))
 vi.mock('../brains', () => ({ resolveGeminiApiKey: () => config.value.transcription.geminiApiKey, getBrainRouter: () => ({ canServe: (id: string) => available.gemini && id === 'gemini-api' }) }))
 const decisionAsk = vi.hoisted(() => vi.fn())
@@ -142,7 +143,10 @@ describe('runSamplingPass', () => {
     expect(validity('new')).toBe('doubtful')
 
     const d = deps('same')
+    emitDomainEvent.mockClear()
     const result = await runSamplingPass(d)
+    const events = emitDomainEvent.mock.calls.filter(([event]) => event.type === 'transcript:verdicts-updated')
+    expect(events.map(([event]) => event.payload.recordingIds)).toEqual([['new'], ['mid']])
     expect(result.sampled.map((s) => s.recordingId)).toEqual(['new', 'mid'])
     expect(result.sampled.every((s) => s.verdict === 'confirmed')).toBe(true)
     expect(d.calls.compare).toBe(2) // one Jev call per recording

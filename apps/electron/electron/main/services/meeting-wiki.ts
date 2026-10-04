@@ -23,12 +23,13 @@ import {
   readSync,
   closeSync
 } from 'fs'
-import { join } from 'path'
+import { join, dirname, basename } from 'path'
 import { StringDecoder } from 'string_decoder'
 import { getTranscriptsPath, getCachePath } from './file-storage'
 import { queryAll, queryOne, run } from './database'
-import { isRecordingEligible, filterEligibleRecordingIds } from './recording-eligibility'
+import { isRecordingEligible, filterEligibleRecordingIds, existingRecordings } from './recording-eligibility'
 import { refuseWhileTranscriptsMove } from './storage-move-state'
+import { yieldToEventLoop } from './event-loop'
 
 /**
  * Ownership of a wiki page, as declared by the `recording_id` in its YAML
@@ -42,6 +43,7 @@ import { refuseWhileTranscriptsMove } from './storage-move-state'
 type PageOwner =
   | { kind: 'owned'; recordingId: string }
   | { kind: 'unowned' }
+  | { kind: 'absent' }
   | { kind: 'error'; reason: string }
 
 /** Bytes per read while scanning for the frontmatter terminator. */
@@ -234,6 +236,7 @@ interface WikiIndex {
    * deleted, and callers that delete on ownership must surface them.
    */
   unreadable: Map<string, string>
+  stats: Map<string, { mtimeMs: number; size: number }>
 }
 
 /**
@@ -376,6 +379,8 @@ function readPageOwner(path: string): PageOwner {
         : 'a generated page declares no recording_id'
     }
   } catch (e) {
+    // A successful privacy purge during a boot yield leaves no ownership to verify.
+    if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return { kind: 'absent' }
     return { kind: 'error', reason: e instanceof Error ? e.message : String(e) }
   } finally {
     if (fd !== undefined) {
@@ -389,7 +394,7 @@ function readPageOwner(path: string): PageOwner {
 }
 
 /**
- * Scan the wiki directory ONCE and map every page to the recording it belongs
+ * Parse ownership once per unchanged page and map it to the recording it belongs
  * to. The backfill reuses this across all recordings instead of re-listing and
  * re-reading the directory for each one, which is what made a restart quadratic.
  *
@@ -397,9 +402,10 @@ function readPageOwner(path: string): PageOwner {
  * other exporters write between batches — so every deletion re-reads the page's
  * ownership immediately beforehand (see `unlinkIfStillOwnedBy`).
  */
-function buildWikiIndex(dir: string): WikiIndex {
+function* wikiIndexSteps(dir: string): Generator<void, WikiIndex> {
   const owner = new Map<string, string>()
   const unreadable = new Map<string, string>()
+  const stats: WikiIndex['stats'] = new Map()
   let entries: string[]
   try {
     entries = readdirSync(dir)
@@ -411,15 +417,148 @@ function buildWikiIndex(dir: string): WikiIndex {
     // status on the index lets removeMeetingWiki keep those fail-closed semantics
     // while the backfill reuses ONE index instead of re-scanning per recording.
     const status = (e as NodeJS.ErrnoException)?.code === 'ENOENT' ? 'absent' : 'unreadable'
-    return { dir, status, owner, unreadable }
+    return { dir, status, owner, unreadable, stats }
   }
   for (const entry of entries) {
     if (!entry.endsWith('.md')) continue
+    // Record metadata before reading so a replacement is detected on reconciliation.
+    try {
+      stats.set(entry, statSync(join(dir, entry)))
+    } catch {
+      // readPageOwner classifies absence versus unverifiable ownership below.
+    }
     const result = readPageOwner(join(dir, entry))
     if (result.kind === 'owned') owner.set(entry, result.recordingId)
     else if (result.kind === 'error') unreadable.set(entry, result.reason)
+    yield
   }
-  return { dir, status: 'ok', owner, unreadable }
+  return { dir, status: 'ok', owner, unreadable, stats }
+}
+
+interface WikiMutationJournal {
+  dir: string
+  changed: Set<string>
+}
+
+// Each concurrent boot pass observes every synchronous writer and purge. This
+// closes the last-yield window without a blocking stat of every unchanged file.
+const wikiMutationJournals = new Set<WikiMutationJournal>()
+function noteWikiMutation(path: string): void {
+  for (const journal of wikiMutationJournals) {
+    if (journal.dir === dirname(path)) journal.changed.add(basename(path))
+  }
+}
+
+/** Gather fresh metadata in bounded batches; writes during yields are journaled. */
+async function refreshWikiMetadataForBoot(
+  index: WikiIndex,
+  batchSize: number,
+  journal: WikiMutationJournal
+): Promise<void> {
+  let entries: string[]
+  try {
+    entries = readdirSync(index.dir)
+  } catch {
+    // Final synchronous reconciliation handles absence versus unreadable directories.
+    return
+  }
+  let processed = 0
+  let stretchStarted = Date.now()
+  for (const entry of entries) {
+    if (!entry.endsWith('.md')) continue
+    const previous = index.stats.get(entry)
+    try {
+      const current = statSync(join(index.dir, entry))
+      if (!previous || previous.mtimeMs !== current.mtimeMs || previous.size !== current.size) {
+        journal.changed.add(entry)
+      }
+    } catch {
+      journal.changed.add(entry)
+    }
+    if (++processed % batchSize === 0 || Date.now() - stretchStarted >= 25) {
+      await yieldToEventLoop()
+      stretchStarted = Date.now()
+    }
+  }
+  // Separate the final partial metadata batch from synchronous reconciliation.
+  if (processed % batchSize !== 0) await yieldToEventLoop()
+}
+
+/**
+ * A yielding scan is only a snapshot. Refresh it without yielding before any
+ * cleanup can declare success and clear a durable privacy retry. Unchanged
+ * metadata comes from the yielding refresh; the mutation journal covers writes
+ * since that refresh. New or changed files need ownership parsing again.
+ */
+function reconcileWikiIndex(index: WikiIndex, journal: WikiMutationJournal): void {
+  let entries: string[]
+  try {
+    entries = readdirSync(index.dir).filter((entry) => entry.endsWith('.md'))
+    index.status = 'ok'
+  } catch (e) {
+    index.status = (e as NodeJS.ErrnoException)?.code === 'ENOENT' ? 'absent' : 'unreadable'
+    if (index.status === 'absent') {
+      index.owner.clear()
+      index.unreadable.clear()
+      index.stats.clear()
+    }
+    return
+  }
+  const present = new Set(entries)
+  for (const map of [index.owner, index.unreadable, index.stats]) {
+    for (const entry of map.keys()) if (!present.has(entry)) map.delete(entry)
+  }
+  for (const entry of entries) {
+    const path = join(index.dir, entry)
+    if (index.stats.has(entry) && !journal.changed.has(entry)) continue
+    let current: { mtimeMs: number; size: number }
+    try {
+      current = statSync(path)
+    } catch (e) {
+      index.owner.delete(entry)
+      index.stats.delete(entry)
+      if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') index.unreadable.delete(entry)
+      else index.unreadable.set(entry, e instanceof Error ? e.message : String(e))
+      continue
+    }
+    index.stats.set(entry, current)
+    index.owner.delete(entry)
+    index.unreadable.delete(entry)
+    const result = readPageOwner(path)
+    if (result.kind === 'owned') index.owner.set(entry, result.recordingId)
+    else if (result.kind === 'error') index.unreadable.set(entry, result.reason)
+  }
+  journal.changed.clear()
+}
+
+/** Keep point-of-use privacy cleanup synchronous; boot consumes the same scan in batches. */
+function buildWikiIndex(dir: string): WikiIndex {
+  const steps = wikiIndexSteps(dir)
+  let step = steps.next()
+  while (!step.done) step = steps.next()
+  return step.value
+}
+
+/**
+ * 2026-10-04: indexing 1,490 real pages held the main thread for 462 ms,
+ * with a 572 ms stretch before the first yield. Share the ownership parser
+ * with synchronous callers, but let renderer IPC run after each boot batch.
+ */
+async function buildWikiIndexForBoot(dir: string, batchSize: number): Promise<WikiIndex> {
+  const steps = wikiIndexSteps(dir)
+  let processed = 0
+  let stretchStarted = Date.now()
+  let step = steps.next()
+  while (!step.done) {
+    if (++processed % batchSize === 0 || Date.now() - stretchStarted >= 25) {
+      await yieldToEventLoop()
+      stretchStarted = Date.now()
+    }
+    step = steps.next()
+  }
+  // Separate the final partial scan batch from cleanup and SQL preparation.
+  if (processed % batchSize !== 0) await yieldToEventLoop()
+  return step.value
 }
 
 /**
@@ -450,12 +589,14 @@ function unlinkIfStillOwnedBy(
   if (current.kind !== 'owned' || current.recordingId !== recordingId) {
     // Reclassified since the index was built — leave it and correct the index.
     index?.owner.delete(entry)
+    index?.unreadable.delete(entry)
     if (current.kind === 'owned') index?.owner.set(entry, current.recordingId)
     return false
   }
 
   try {
     unlinkSync(full)
+    noteWikiMutation(full)
     index?.owner.delete(entry)
     return true
   } catch (e) {
@@ -825,7 +966,7 @@ function clearWikiCleanupRetry(recordingId: string): void {
  * recording, and per-id fail-closed semantics survive index reuse via the index
  * `status` (see `removeMeetingWikiUsingIndex`).
  */
-export function retryPendingWikiCleanups(index?: WikiIndex): { cleared: number; stillPending: number } {
+export function retryPendingWikiCleanups(index?: WikiIndex): { cleared: number; stillPending: number; index?: WikiIndex } {
   let cleared = 0
   let stillPending = 0
   let rows: Array<{ value: string | null }>
@@ -835,10 +976,11 @@ export function retryPendingWikiCleanups(index?: WikiIndex): { cleared: number; 
     console.warn('[MeetingWiki] could not read pending wiki cleanups:', e)
     return { cleared: 0, stillPending: 0 }
   }
-  // Reuse the backfill's pass-wide index when supplied; otherwise build one ONCE,
-  // lazily, the first time a still-ineligible id actually needs a removal. Never
-  // scans when every pending id turned eligible again. `buildWikiIndex` never
-  // throws (readdir errors are captured as an index `status`).
+  // Standalone callers build one index lazily; boot reuses its bounded scan and
+  // synchronous journal reconciliation. HiDock's journaled writes are covered in
+  // this pass; external rewrites are purged on the next interference-free pass.
+  // Avoid a synchronous full rescan at boot: 1,490 pages measured 250 ms for
+  // stat and 683 ms for parsing, blocking renderer IPC throughout those stretches.
   let sweepIndex = index
   for (const r of rows) {
     const recordingId = r.value
@@ -862,7 +1004,7 @@ export function retryPendingWikiCleanups(index?: WikiIndex): { cleared: number; 
       stillPending++
     }
   }
-  return { cleared, stillPending }
+  return { cleared, stillPending, index: sweepIndex }
 }
 
 /** Load the transcript+recording row a wiki page is rendered from. */
@@ -899,6 +1041,8 @@ function writeIfChanged(path: string, content: string): boolean {
     /* missing / unreadable — fall through and write */
   }
   refuseWhileTranscriptsMove()
+  // Record the mutation even if a write partially succeeds before throwing.
+  noteWikiMutation(path)
   writeFileSync(path, content, 'utf-8')
   return true
 }
@@ -979,11 +1123,6 @@ const DEFAULT_BUDGET_MS = 15000
  * disk full, permissions revoked — would grind through every row on every boot.
  */
 const DEFAULT_FAILURE_LIMIT = 50
-
-/** Yield to the event loop so queued renderer IPC is serviced. */
-function yieldToEventLoop(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0))
-}
 
 /**
  * Where the backfill resumes.
@@ -1108,8 +1247,10 @@ export function _resetBackfillCursorForTests(): void {
  * All of it synchronous on the main process, so no renderer IPC was serviced for
  * the entire stretch — the window went "Not Responding" (F15, evidence img #145).
  *
- * Now: the directory is indexed ONCE (one readdir + one frontmatter read per
- * page), pages whose bytes are unchanged are left alone, and the loop yields
+ * Now: ownership is indexed once (one frontmatter read per unchanged
+ * page), metadata is refreshed in bounded batches, and fresh listings plus a
+ * mutation journal reconcile the index synchronously before privacy cleanup.
+ * Pages whose bytes are unchanged are left alone, and the loop yields
  * every `batchSize` recordings with a per-pass time budget.
  *
  * ## Idempotent, resumable, and starvation-free
@@ -1133,21 +1274,35 @@ export function _resetBackfillCursorForTests(): void {
 export async function backfillMeetingWiki(
   options: WikiBackfillOptions = {}
 ): Promise<WikiBackfillResult> {
-  const dir = getWikiDir()
-  // ONE directory scan for the ENTIRE boot — the fix for the quadratic blowup.
-  // Built here, before the cleanup-retry sweep, so BOTH the sweep and the pass
-  // below share this single listing. Letting retryPendingWikiCleanups build its
-  // own (per-id) scans was O(pending × pages) of synchronous FS work on the boot
-  // recovery path — the F15 freeze on exactly that path (post-merge review).
-  const index = buildWikiIndex(dir)
+  const journal: WikiMutationJournal = { dir: getWikiDir(), changed: new Set() }
+  wikiMutationJournals.add(journal)
+  try {
+    return await backfillMeetingWikiPass(options, journal)
+  } finally {
+    wikiMutationJournals.delete(journal)
+  }
+}
+
+async function backfillMeetingWikiPass(
+  options: WikiBackfillOptions,
+  journal: WikiMutationJournal
+): Promise<WikiBackfillResult> {
+  const dir = journal.dir
+  const batchSize = Math.max(1, options.batchSize ?? DEFAULT_BATCH_SIZE)
+  // Every boot shares one bounded ownership scan across cleanup and export.
+  let index = await buildWikiIndexForBoot(dir, batchSize)
 
   // RE8-P1 (round-9) — first drain any wiki-cleanup retries enqueued by a failed
   // transition cleanup, so an excluded recording's page is removed on boot even
   // if the mark-personal / soft-delete / value-rating attempt failed earlier.
-  // Reuses the pass-wide index (no scans of its own); any page it removes is also
-  // dropped from `index.owner`, so the pass below sees the post-cleanup state.
-  retryPendingWikiCleanups(index)
-  const batchSize = Math.max(1, options.batchSize ?? DEFAULT_BATCH_SIZE)
+  // The sweep returns its current index, with removed owners dropped, so later
+  // decisions share the journal-reconciled ownership and post-cleanup state.
+  await refreshWikiMetadataForBoot(index, batchSize, journal)
+  reconcileWikiIndex(index, journal)
+  const cleanupRetries = retryPendingWikiCleanups(index)
+  // Carry successful cleanup mutations forward into export decisions.
+  index = cleanupRetries.index ?? index
+  await yieldToEventLoop()
   const budgetMs = options.budgetMs ?? DEFAULT_BUDGET_MS
   const failureLimit = Math.max(1, options.maxFailures ?? DEFAULT_FAILURE_LIMIT)
   let deadline = Date.now() + budgetMs
@@ -1158,11 +1313,18 @@ export async function backfillMeetingWiki(
   // RE7-1 — filter candidates through the shared boundary FAIL-CLOSED: if
   // eligibility can't be established, write nothing rather than export excluded
   // transcripts to disk on boot.
-  const { eligible, failClosed } = filterEligibleRecordingIds(rows.map((r) => r.recording_id))
+  const indexedOwners = [...new Set(index.owner.values())]
+  const { eligible, failClosed } = filterEligibleRecordingIds([
+    ...rows.map((r) => r.recording_id), ...indexedOwners
+  ])
   if (failClosed) {
     console.error('[MeetingWiki] Backfill skipped — recording eligibility unavailable (fail closed)')
     return { written: 0, unchanged: 0, failed: 0, remaining: 0, remainingMissing: 0 }
   }
+
+  await yieldToEventLoop()
+  // Ordering and missing-page accounting start from current filenames and owners.
+  reconcileWikiIndex(index, journal)
 
   // Recordings with no page yet go first, rotated so each pass starts past
   // whatever the last one attempted (see the resume-cursor note above).
@@ -1181,7 +1343,21 @@ export async function backfillMeetingWiki(
     rotateAt = next === -1 ? 0 : next // past the end -> wrap to the start
   }
   const missing = [...missingSorted.slice(rotateAt), ...missingSorted.slice(0, rotateAt)]
-  const ordered = [...missing, ...rows.filter((r) => !isMissing(r.recording_id))]
+  // Purge existing indexed excluded owners before budgeted exports, even without a
+  // transcript row or durable retry. A cursor/budget cannot strand private pages
+  // discovered by this pass after an unjournaled external rewrite in the last one.
+  // An absent row may mean this database was restored from an older backup.
+  // Ineligibility alone cannot authorize deletion of that owner's newer page.
+  const existingOwners = existingRecordings(indexedOwners)
+  const privacyOwners = existingOwners.failClosed
+    ? []
+    : indexedOwners.filter((id) => existingOwners.ids.has(id) && !eligible.has(id))
+  const privacyOwnerSet = new Set(privacyOwners)
+  const ordered = [
+    ...privacyOwners.map((recording_id) => ({ recording_id })),
+    ...missing.filter((r) => !privacyOwnerSet.has(r.recording_id)),
+    ...rows.filter((r) => !isMissing(r.recording_id) && !privacyOwnerSet.has(r.recording_id))
+  ]
   /** Last missing recording this pass touched; becomes the next resume point. */
   let lastAttemptedMissingId: string | null = null
 
@@ -1194,6 +1370,11 @@ export async function backfillMeetingWiki(
   let unchanged = 0
   let failed = 0
   let processed = 0
+  let deferred = 0
+  // Reconcile new and journaled pages before the first cleanup after any yield. Eligible
+  // exports verify ownership at deletion time and cannot clear a privacy retry.
+  let indexNeedsReconcile = false
+  let stretchStarted = Date.now()
 
   for (const { recording_id } of ordered) {
     const startedAt = Date.now()
@@ -1201,7 +1382,14 @@ export async function backfillMeetingWiki(
     // advance past everything this pass tried, or a failing group pins it.
     if (stillMissing.has(recording_id)) lastAttemptedMissingId = recording_id
 
-    if (!eligible.has(recording_id)) {
+    // IPC can make a recording private during any yield; never export a cached allowlist decision.
+    const eligibility = filterEligibleRecordingIds([recording_id])
+    if (eligibility.failClosed) {
+      // Unknown eligibility suppresses export but cannot authorize purge or retry clearance.
+      // Leave missing work unresolved and count even existing pages for the next pass.
+      deferred++
+      console.warn(`[MeetingWiki] Backfill deferred ${recording_id} - eligibility unavailable (fail closed)`)
+    } else if (!eligibility.eligible.has(recording_id)) {
       // RE7-P1a (round-8) — an excluded transcript (already personal/deleted/
       // low-value, or newly value-classified) may STILL have a stale markdown
       // page from when it was eligible. Don't merely skip — actively remove it,
@@ -1219,6 +1407,10 @@ export async function backfillMeetingWiki(
       // is resolved (and any stale retry cleared); on failure it is counted, left
       // UNRESOLVED so remainingMissing reflects the outstanding work, and enqueued
       // for a durable retry — mirroring reconcileWikiEligibility.
+      if (indexNeedsReconcile) {
+        reconcileWikiIndex(index, journal)
+        indexNeedsReconcile = false
+      }
       const cleanup = removeMeetingWikiUsingIndex(recording_id, index)
       if (cleanup.ok) {
         clearWikiCleanupRetry(recording_id)
@@ -1258,14 +1450,16 @@ export async function backfillMeetingWiki(
     }
     processed++
 
-    if (processed % batchSize === 0) {
+    if (processed % batchSize === 0 || Date.now() - stretchStarted >= 25) {
       // Give the renderer's queued IPC a turn before the next batch.
       await yieldToEventLoop()
-      if (Date.now() >= deadline) break
+      if (Date.now() >= deadline && processed >= privacyOwners.length) break
+      indexNeedsReconcile = true
+      stretchStarted = Date.now()
     }
   }
 
-  const remaining = ordered.length - processed
+  const remaining = ordered.length - processed + deferred
   const remainingMissing = missing.length - resolvedMissing.size
 
   // Advance the resume point past everything this pass attempted.

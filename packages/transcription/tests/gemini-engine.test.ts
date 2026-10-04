@@ -26,6 +26,7 @@ import {
   GeminiEngine,
   splitWavIntoChunks,
   splitMp3IntoChunks,
+  stripLyingWavHeader,
   parseTurns,
   detectAudioMimeType,
   hasReliableTurnTiming,
@@ -99,6 +100,170 @@ function buildMp3(frameCount: number): Buffer {
   return Buffer.concat(Array.from({ length: frameCount }, buildMp3Frame))
 }
 const MP3_FRAME_DUR = 576 / 16000 // 0.036s
+
+function lyingWav(seconds: number): Buffer {
+  const payload = buildMp3(Math.round(seconds / MP3_FRAME_DUR))
+  const header = buildWav(0, 32000).subarray(0, 44)
+  header.writeUInt32LE(16000, 24)
+  header.writeUInt16LE(2, 32)
+  header.writeUInt16LE(16, 34)
+  header.writeUInt32LE(payload.length, 40)
+  return Buffer.concat([header, payload])
+}
+
+describe('lying-wav', () => {
+  beforeEach(() => vi.resetAllMocks())
+
+  it('strips-header-and-keeps-payload', () => {
+    const input = lyingWav(180)
+    const result = stripLyingWavHeader(input)
+    expect(result).toMatchObject({ stripped: true, headerBytes: 44 })
+    expect(result.audio.equals(input.subarray(44))).toBe(true)
+    expect(result.audio.buffer).toBe(input.buffer)
+    expect(result.audio.length).toBe(5000 * 288)
+  })
+
+  it('pcm-wav-untouched', () => {
+    const input = buildWav(32000, 32000)
+    input.fill(0, 44)
+    expect(stripLyingWavHeader(input)).toEqual({ audio: input, stripped: false, headerBytes: 0 })
+    expect(stripLyingWavHeader(input).audio).toBe(input)
+  })
+
+  it('leaves PCM containing three fake MPEG headers untouched', () => {
+    const input = buildWav(32000, 32000)
+    input.fill(0, 44)
+    for (const offset of [0, 288, 576]) Buffer.from([0xff, 0xf3, 0x88, 0xc0]).copy(input, 44 + offset)
+    expect(stripLyingWavHeader(input).audio).toBe(input)
+    expect(stripLyingWavHeader(input).stripped).toBe(false)
+  })
+
+  it('accepts short clean streams and zero padding but rejects constant nonzero bodies', () => {
+    for (const frames of [3, 15, 16]) {
+      const input = lyingWav(frames * MP3_FRAME_DUR)
+      expect(stripLyingWavHeader(input).stripped).toBe(true)
+      input.fill(1, 48, 44 + 288)
+      expect(stripLyingWavHeader(input).stripped).toBe(false)
+    }
+  })
+
+  it('preserves full caller duration after a damaged sync and resynchronizes past it', async () => {
+    const input = lyingWav(1800)
+    input[44 + 40000 * 288] = 0
+    const engine = new GeminiEngine({ apiKey: 'x' })
+    const rolling = vi.spyOn(engine as any, 'transcribeLongRecordingWithInteractions').mockResolvedValue([])
+    await collect(engine.transcribe(input, { source: 'mic', filePath: 'recording.wav', durationSeconds: 1800 }))
+    expect(rolling).toHaveBeenCalled()
+    expect(rolling.mock.calls[0]).toContain(1800)
+    rolling.mockClear()
+    await collect(engine.transcribe(input, { source: 'mic', filePath: 'recording.wav', durationSeconds: 450 }))
+    expect(rolling.mock.calls[0]).toContainEqual(expect.closeTo(1800 - MP3_FRAME_DUR, 5))
+  })
+
+  it('garbage-after-header-untouched', () => {
+    const input = buildWav(2000, 32000)
+    expect(stripLyingWavHeader(input).audio).toBe(input)
+    expect(stripLyingWavHeader(input).stripped).toBe(false)
+  })
+
+  it('wrong-data-size', () => {
+    for (const size of [0, 0xffffffff]) {
+      const input = lyingWav(180)
+      input.writeUInt32LE(size, 40)
+      expect(stripLyingWavHeader(input).audio.equals(input.subarray(44))).toBe(true)
+      expect(stripLyingWavHeader(input).stripped).toBe(true)
+    }
+  })
+
+  it('walks-padded-riff-chunks', () => {
+    const input = lyingWav(180)
+    const extra = Buffer.alloc(10)
+    extra.write('JUNK')
+    extra.writeUInt32LE(1, 4)
+    const padded = Buffer.concat([input.subarray(0, 36), extra, input.subarray(36)])
+    const result = stripLyingWavHeader(padded)
+    expect(result.headerBytes).toBe(54)
+    expect(result.audio.equals(input.subarray(44))).toBe(true)
+  })
+
+  it('requires-three-complete-consistent-frames', () => {
+    for (const input of [lyingWav(180).subarray(0, 44 + 2 * 288), lyingWav(180)]) {
+      if (input.length > 44 + 2 * 288) input[44 + 288 + 2] = 0x84
+      expect(stripLyingWavHeader(input).audio).toBe(input)
+      expect(stripLyingWavHeader(input).stripped).toBe(false)
+    }
+  })
+
+  it('plain-mp3-and-hda-bytes-untouched', () => {
+    const input = buildMp3(5000)
+    expect(stripLyingWavHeader(input).audio).toBe(input)
+    expect(stripLyingWavHeader(input).stripped).toBe(false)
+  })
+
+  it('chunks-have-real-durations', () => {
+    const input = lyingWav(1500)
+    const chunks = splitMp3IntoChunks(stripLyingWavHeader(input).audio)!
+    expect(Math.abs(chunks.reduce((sum, chunk) => sum + chunk.durationSec, 0) - 1500)).toBeLessThan(MP3_FRAME_DUR)
+    expect(chunks.every((chunk, i) => i === 0 || chunk.startSec > chunks[i - 1].startSec)).toBe(true)
+    // The old PCM byte rate reports one quarter of the MP3 frame duration.
+    const old = splitWavIntoChunks(input, 100)!
+    expect(old.reduce((sum, chunk) => sum + chunk.durationSec, 0)).toBeCloseTo(375, 1)
+  })
+
+  it('transcribe-sends-mp3', async () => {
+    mockGenerateContentStream.mockImplementation(async () => streamResponse(JSON.stringify({
+      hasSpeech: true, segments: [{ timestamp: mockGenerateContentStream.mock.calls.length === 3 ? '04:59' : '09:59',
+        speaker: 'Speaker 1', content: `chunk ${mockGenerateContentStream.mock.calls.length}` }],
+    })))
+    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-2.5-flash' })
+    const segments = await collect(engine.transcribe(lyingWav(1500), { source: 'mic', durationSeconds: 375 }))
+    for (const [request] of mockGenerateContentStream.mock.calls) {
+      const part = request.contents[0].parts.find((p: any) => p.inlineData).inlineData
+      expect(part.mimeType).toBe('audio/mp3')
+      const bytes = Buffer.from(part.data, 'base64')
+      expect(bytes[0]).toBe(0xff)
+      expect(bytes[1] & 0xe0).toBe(0xe0)
+    }
+    expect(segments.at(-1)!.endTime).toBeGreaterThan(1498)
+    expect(segments.at(-1)!.endTime).toBeLessThanOrEqual(1500 + MP3_FRAME_DUR)
+  })
+
+  it('file-upload-path', async () => {
+    const input = lyingWav(1500)
+    mockFilesUpload.mockImplementation(async ({ file, config }) => {
+      expect(config.mimeType).toBe('audio/mp3')
+      expect(file).toBeInstanceOf(Blob)
+      expect(Buffer.from(await file.arrayBuffer()).equals(input.subarray(44))).toBe(true)
+      throw new Error('upload failed')
+    })
+    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-flash' })
+    await expect(collect(engine.transcribe(input, {
+      source: 'mic', filePath: 'old.wav', durationSeconds: 375,
+    }))).rejects.toThrow('upload failed')
+    expect(mockFilesUpload).toHaveBeenCalledTimes(1)
+  })
+
+  it('native-upload-and-segments-use-real-timeline', async () => {
+    const input = lyingWav(1500)
+    mockFilesUpload.mockImplementation(async ({ file, config }) => {
+      const bytes = Buffer.from(await file.arrayBuffer())
+      expect(config.mimeType).toBe('audio/mp3')
+      expect(bytes[0]).toBe(0xff)
+      expect(bytes[1] & 0xe0).toBe(0xe0)
+      return { name: 'files/normalized', state: 'ACTIVE', uri: 'files://normalized', mimeType: config.mimeType }
+    })
+    mockFilesDelete.mockResolvedValue(undefined)
+    mockInteractionsCreate.mockImplementation(async () => ({
+      status: 'completed', output_text: `native chunk ${mockInteractionsCreate.mock.calls.length}`,
+    }))
+    const segments = await collect(new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+      .transcribe(input, { source: 'mic', filePath: 'old.wav', durationSeconds: 375 }))
+    expect(mockFilesUpload).toHaveBeenCalledTimes(2)
+    expect(segments[1].startTime).toBeCloseTo(1200, 1)
+    expect(segments.at(-1)!.endTime).toBeCloseTo(1500, 1)
+    expect(mockFilesDelete).toHaveBeenCalledTimes(2)
+  })
+})
 
 describe('GeminiEngine', () => {
   beforeEach(() => {

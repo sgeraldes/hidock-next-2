@@ -34,6 +34,7 @@ import { filterTranscribableRecordingIds, isRecordingTranscribable } from './rec
 import { languageFor } from './transcription-language'
 import { audioFrameTest, type TranscriptValidity, type ValiditySegment } from './transcript-validity'
 import { readEnvelope, transcriptFingerprint } from './transcript-validity-store'
+import { getEventBus } from './event-bus'
 import { syncTrustVerdicts } from './transcript-trust'
 import {
   afterEndVerdict,
@@ -250,7 +251,7 @@ export async function sampleRecording(row: Candidate, deps: SamplerDeps): Promis
     ]
   )
   // Refreshes the validity with the sample, takes ratings back or gives them back, recomputes stars.
-  syncTrustVerdicts(row.recording_id)
+  syncTrustVerdicts(row.recording_id, { announce: false })
   return { recordingId: row.recording_id, verdict, matches, costUsd }
 }
 
@@ -299,7 +300,13 @@ export async function runSamplingPass(deps: SamplerDeps = defaultSamplerDeps()):
     for (const row of candidates(remaining)) {
       try {
         const outcome = await sampleRecording(row, deps)
-        if (outcome) sampled.push(outcome)
+        if (outcome) {
+          sampled.push(outcome)
+          getEventBus().emitDomainEvent({
+            type: 'transcript:verdicts-updated', timestamp: new Date().toISOString(),
+            payload: { recordingIds: [outcome.recordingId] }
+          })
+        }
       } catch (error) {
         failed++
         console.warn(`[Sampling] ${row.recording_id}: ${error instanceof Error ? error.message : String(error)}`)
