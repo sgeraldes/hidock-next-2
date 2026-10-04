@@ -118,3 +118,12 @@ Decisions taken in the review of PR 1 (kiro, 4-oct):
 | Verdict: confirmed by most windows, contradicted by most, inconclusive otherwise. Stored per recording with the transcript's fingerprint (schema v70, `transcript_samples`): a new or edited transcript is sampled again | `services/transcript-sampling.ts`, `services/database.ts` |
 | Confirmed makes a doubtful transcript valid (keeping its reasons, so a compressed clock stays known for the repair), contradicted makes it invalid (`sample_contradicts`), incomplete makes it incomplete. A sample never overrides the audio, the integrity check, the owner's acceptance or a transcript that stops early. Stars, kind, context and held ratings follow through the trust sync | `services/transcript-validity.ts`, `services/transcript-validity-store.ts` |
 | Boot task `transcript-sampling`: five minutes after launch, then every six hours, newest recordings first, up to Settings > Quality checks "Samples per day" (25 by default, about 0.25 USD a day; 0 stops it). Needs a Jev key and a Gemini key | `services/boot-tasks.ts`, `services/quality-rules.ts` |
+
+## What PR 3 does in the code
+
+| Piece | Where |
+|---|---|
+| A chip where the stars would be: "Not categorized" (red), "Transcript in doubt" and "Transcript incomplete" (amber), with the stored reasons in its tooltip. An accepted transcript shows none | `src/features/library/components/RowIcons.tsx` `ValidityLabel`, `src/features/library/utils/transcriptValidity.ts` |
+| The transcription place shows not categorized and incomplete before the audio warnings and doubt after them; a broken transcript is not repeated as not categorized | `src/features/library/utils/rowState.ts` |
+| The Transcript filter has one value per verdict, with counts | `src/features/library/utils/transcriptIntegrity.ts`, `LibraryFilters.tsx`, `pages/Library.tsx` |
+| The transcript panel explains the verdict and its reasons, offers Transcribe again with the estimated cost (0.0034 USD a minute, measured on gemini-3.5-transcribe on 3-oct) and Accept as is; a doubt is left to the sample. The bulk Transcribe again bar states the cost and the minutes before queueing | `TranscriptIntegrityPanel.tsx`, `pages/Library.tsx` |
