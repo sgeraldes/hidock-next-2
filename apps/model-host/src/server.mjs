@@ -171,8 +171,9 @@ function controlPage(state, pairingCode, gameMode) {
 <title>HiDock Model Host</title>
 <style>
  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
- body { margin: 0; padding: 2rem 1rem; display: grid; justify-items: center; }
- main { width: min(38rem, 100%); }
+ *, *::before, *::after { box-sizing: border-box; }
+ body { margin: 0; padding: 2rem 1rem; }
+ main { max-width: 38rem; margin: 0 auto; overflow-wrap: anywhere; }
  h1 { font-size: 1.25rem; margin: 0 0 1rem; }
  h2 { font-size: 1.05rem; margin: 2rem 0 .5rem; }
  table { border-collapse: collapse; width: 100%; margin-bottom: 1.5rem; }
@@ -182,7 +183,7 @@ function controlPage(state, pairingCode, gameMode) {
  form.settings { flex-direction: column; align-items: stretch; }
  form.settings label { display: flex; flex-direction: column; gap: .25rem; }
  form.settings label:has(input[type=checkbox]) { flex-direction: row; align-items: center; }
- textarea { font: 13px ui-monospace, monospace; }
+ textarea, input[type=number] { font: 13px ui-monospace, monospace; width: 100%; }
  button { padding: .6rem 1rem; font: inherit; cursor: pointer; align-self: flex-start; }
 </style></head>
 <body><main>
