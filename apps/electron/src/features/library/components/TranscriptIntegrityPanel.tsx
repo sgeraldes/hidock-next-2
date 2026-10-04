@@ -78,7 +78,7 @@ export function TranscriptIntegrityPanel({ recordingId, transcript, durationSeco
           </ul>
         )}
         <div className="flex flex-wrap items-center gap-2">
-          {onRetranscribe && held !== 'doubtful' && (
+          {onRetranscribe && (
             <Button size="sm" variant="outline" className="h-7 text-xs" disabled={busy} onClick={onRetranscribe}>
               <RotateCcw className="mr-1 h-3 w-3" aria-hidden="true" /> {retranscribeLabel}
             </Button>
@@ -98,7 +98,9 @@ export function TranscriptIntegrityPanel({ recordingId, transcript, durationSeco
       <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-xs text-muted-foreground" data-testid="transcript-integrity" data-integrity="accepted">
         <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" aria-hidden="true" />
         <span>
-          Accepted as is{when ? ` on ${when}` : ''}, with {issues.length === 1 ? 'one problem' : `${issues.length} problems`} found in its timing.
+          Accepted as is{when ? ` on ${when}` : ''}, {issues.length > 0
+            ? `with ${issues.length === 1 ? 'one problem' : `${issues.length} problems`} found in its timing.`
+            : 'though the audio check did not match the text.'}
         </span>
         <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" disabled={busy} onClick={() => void setAccepted(false)}>
           Undo

@@ -157,7 +157,7 @@ export function RowChips({ recording, transcript }: { recording: UnifiedRecordin
       <ValueBadge recording={recording} />
       <AudioLabel recording={recording} />
       <ValidityLabel transcript={transcript} />
-      <EvaluationLabel recording={recording} />
+      {!heldValidity(transcript) && <EvaluationLabel recording={recording} />}
     </>
   )
 }

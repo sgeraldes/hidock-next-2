@@ -988,6 +988,32 @@ describe('Library — transcript integrity labels', () => {
     expect(toastMock.warning).not.toHaveBeenCalled()
   })
 
+  it('counts held validity once alongside timing problems and shows both under Any problem', async () => {
+    integrityHarness.filter = 'flagged'
+    vi.mocked(window.electronAPI.transcripts.getByRecordingIdsOwner).mockResolvedValue({
+      'clean-1': { ...transcriptsById['clean-1'], validity_status: 'invalid' },
+      'shaky-1': { ...transcriptsById['shaky-1'], validity_status: 'doubtful' },
+    } as any)
+    render(<MemoryRouter><Library /></MemoryRouter>)
+    fireEvent.click(screen.getByRole('button', { name: 'More filters and sorting' }))
+    expect(await screen.findByRole('option', { name: 'Any problem (2)' })).toBeInTheDocument()
+    expect(screen.getByText('Clean one')).toBeInTheDocument()
+    expect(screen.getByText('Shaky one')).toBeInTheDocument()
+  })
+
+  it('counts and filters accepted validity with clean timing', async () => {
+    integrityHarness.filter = 'accepted'
+    vi.mocked(window.electronAPI.transcripts.getByRecordingIdsOwner).mockResolvedValue({
+      ...transcriptsById,
+      'clean-1': { ...transcriptsById['clean-1'], validity_status: 'valid', integrity_accepted_at: '2026-10-04T10:00:00Z' },
+    } as any)
+    render(<MemoryRouter><Library /></MemoryRouter>)
+    fireEvent.click(screen.getByRole('button', { name: 'More filters and sorting' }))
+    expect(await screen.findByRole('option', { name: 'Accepted as is (1)' })).toBeInTheDocument()
+    expect(screen.getByText('Clean one')).toBeInTheDocument()
+    expect(screen.queryByText('Shaky one')).not.toBeInTheDocument()
+  })
+
   it('shows only flagged transcripts under the filter, and queues them again on confirmation', async () => {
     integrityHarness.filter = 'flagged'
 

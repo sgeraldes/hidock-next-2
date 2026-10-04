@@ -58,10 +58,10 @@ export const ISSUE_ORDER: IntegrityIssueCode[] = [
 type IntegrityFields = Pick<Transcript, 'integrity_status' | 'integrity_json' | 'integrity_accepted_at' | 'validity_status'>
 
 export function integrityLabel(transcript: IntegrityFields | null | undefined): IntegrityLabel {
+  if (transcript?.integrity_accepted_at) return 'accepted'
   const status = transcript?.integrity_status
   if (!status) return 'unchecked'
   if (status === 'ok') return 'ok'
-  if (transcript?.integrity_accepted_at) return 'accepted'
   return status === 'broken' ? 'broken' : 'suspect'
 }
 
@@ -143,7 +143,7 @@ export function matchesIntegrityFilter(
   if (filter === null) return true
   if (filter.startsWith('validity:')) return heldValidity(transcript) === filter.slice('validity:'.length)
   const label = integrityLabel(transcript)
-  if (filter === 'flagged') return label === 'suspect' || label === 'broken'
+  if (filter === 'flagged') return label === 'suspect' || label === 'broken' || heldValidity(transcript) !== null
   if (filter === 'broken') return label === 'broken'
   if (filter === 'accepted') return label === 'accepted'
   if (label !== 'suspect' && label !== 'broken') return false

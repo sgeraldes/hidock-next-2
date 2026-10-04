@@ -1006,8 +1006,8 @@ export function Library() {
       if (held) counts[`validity:${held}`]++
       const label = integrityLabel(t)
       if (label === 'accepted') counts.accepted++
+      if (matchesIntegrityFilter(t, 'flagged')) counts.flagged++
       if (label !== 'suspect' && label !== 'broken') continue
-      counts.flagged++
       for (const issue of integrityIssues(t)) counts[`issue:${issue.code}`]++
     }
     return counts

@@ -105,3 +105,18 @@ describe('isTranscriptTrusted', () => {
     expect(integrityFilterLabel('issue:text_over_noise')).toBe('Text over noise')
   })
 })
+
+
+describe('validity problems in integrity filters', () => {
+  it.each(['invalid', 'incomplete', 'doubtful'] as const)('includes held %s in Any problem', (validity_status) => {
+    expect(matchesIntegrityFilter({ ...ok, validity_status }, 'flagged')).toBe(true)
+    expect(matchesIntegrityFilter({ ...ok, validity_status, integrity_accepted_at: '2026-10-04' }, 'flagged')).toBe(false)
+  })
+  it('labels and filters recomputed validity acceptance even with clean timing', () => {
+    const t = { ...ok, validity_status: 'valid' as const, integrity_accepted_at: '2026-10-04' }
+    expect(integrityLabel(t)).toBe('accepted')
+    expect(matchesIntegrityFilter(t, 'accepted')).toBe(true)
+    expect(matchesIntegrityFilter(t, 'flagged')).toBe(false)
+    expect(integrityLabel({ ...t, integrity_status: null })).toBe('accepted')
+  })
+})

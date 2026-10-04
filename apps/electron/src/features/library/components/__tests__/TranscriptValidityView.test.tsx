@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { TranscriptIntegrityPanel } from '../TranscriptIntegrityPanel'
-import { ValidityLabel } from '../RowIcons'
+import { RowChips, ValidityLabel } from '../RowIcons'
 import { transcriptProblems } from '@/features/library/utils/rowState'
 import { isIntegrityFilter, integrityFilterLabel, matchesIntegrityFilter } from '@/features/library/utils/transcriptIntegrity'
 import type { Transcript } from '@/types'
@@ -85,10 +85,28 @@ describe('the transcript panel', () => {
     expect(onRetranscribe).toHaveBeenCalledTimes(1)
   })
 
-  it('leaves a transcript in doubt to the sample, and lets the owner accept it', () => {
-    render(<TranscriptIntegrityPanel recordingId="r1" transcript={transcript({ validity_status: 'doubtful' })} onRetranscribe={vi.fn()} />)
-    expect(screen.queryByRole('button', { name: /Transcribe again/ })).toBeNull()
+  it('offers priced retranscription for doubt and lets the owner accept it', () => {
+    const onRetranscribe = vi.fn()
+    render(<TranscriptIntegrityPanel recordingId="r1" transcript={transcript({ validity_status: 'doubtful' })} durationSeconds={3600} onRetranscribe={onRetranscribe} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Transcribe again (about 0.20 USD)' }))
+    expect(onRetranscribe).toHaveBeenCalledTimes(1)
     fireEvent.click(screen.getByRole('button', { name: 'Accept as is' }))
     expect(setIntegrityAccepted).toHaveBeenCalledWith({ recordingId: 'r1', accepted: true })
+  })
+})
+
+
+describe('held evaluation chips', () => {
+  it.each(['invalid', 'incomplete', 'doubtful'] as const)('hides stale evaluation for %s and restores it when valid or accepted', (status) => {
+    const recording = { id: 'r1', evalStarLevel: 5, evalKind: 'team_meeting' } as UnifiedRecording
+    const view = (t: Transcript) => <TooltipProvider><RowChips recording={recording} transcript={t} /></TooltipProvider>
+    const { rerender } = render(view(transcript({ validity_status: status })))
+    expect(screen.getByTestId('validity-label')).toBeInTheDocument()
+    expect(screen.queryByTestId('evaluation-label')).toBeNull()
+    rerender(view(transcript({ validity_status: 'valid' })))
+    expect(screen.getByTestId('evaluation-label')).toHaveTextContent('Team meeting')
+    rerender(view(transcript({ validity_status: status, integrity_accepted_at: '2026-10-04' })))
+    expect(screen.queryByTestId('validity-label')).toBeNull()
+    expect(screen.getByTestId('evaluation-label')).toBeInTheDocument()
   })
 })
