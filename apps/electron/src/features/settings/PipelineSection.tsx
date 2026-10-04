@@ -6,6 +6,7 @@ import { Working } from '@/components/ui/working'
 import { STEP_META, TEXT_STEP_IDS, type PipelineSettingsState, type TextStepId } from '@/shared/pipeline-config'
 import { StepRow } from './pipeline/StepRow'
 import { Decisions } from './pipeline/Decisions'
+import { ReferenceLabels } from './pipeline/ReferenceLabels'
 
 const GROUPS = ['Interactive', 'Speakers', 'Library'] as const
 
@@ -66,6 +67,7 @@ export function PipelineSection() {
       </p>
 
       <Decisions key={JSON.stringify(state.config.decisions)} state={state} onSaved={load} />
+      <ReferenceLabels />
 
       {GROUPS.map((group) => {
         const steps = TEXT_STEP_IDS.filter((id) => STEP_META[id].group === group && id !== 'kind-pick')

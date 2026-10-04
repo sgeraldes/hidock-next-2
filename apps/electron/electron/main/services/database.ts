@@ -27,7 +27,43 @@ import { isImpossibleTranscriptDensity, lowValueMaxSeconds } from './value-thres
 import { LIVE_FILENAME } from './live-channel-speakers'
 import type { QualityRating } from '@/types/knowledge'
 
-const SCHEMA_VERSION = 70
+let decisionLabelRecoveryFailed = false
+
+/** Failed boot repair must never authorize replacing an existing reference set. */
+export function hasDecisionLabelRecoveryFailed(): boolean {
+  return decisionLabelRecoveryFailed
+}
+
+const SCHEMA_VERSION = 71
+
+const DECISION_LABELS_DDL = `CREATE TABLE IF NOT EXISTS decision_label_sets (
+    id TEXT PRIMARY KEY,
+    question TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    sampling_rule TEXT,
+    sample_size INTEGER NOT NULL DEFAULT 0 CHECK(sample_size >= 0),
+    doubtful_count INTEGER NOT NULL DEFAULT 0 CHECK(doubtful_count >= 0),
+    random_count INTEGER NOT NULL DEFAULT 0 CHECK(random_count >= 0),
+    CHECK(sample_size = doubtful_count + random_count)
+);
+CREATE TABLE IF NOT EXISTS decision_label_items (
+    set_id TEXT NOT NULL REFERENCES decision_label_sets(id) ON DELETE CASCADE,
+    recording_id TEXT NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+    stratum TEXT NOT NULL CHECK(stratum IN ('doubtful', 'random')),
+    position INTEGER NOT NULL CHECK(position >= 0),
+    PRIMARY KEY (set_id, recording_id),
+    UNIQUE (set_id, position)
+);
+CREATE INDEX IF NOT EXISTS idx_decision_label_items_recording ON decision_label_items(recording_id);
+CREATE TABLE IF NOT EXISTS decision_labels (
+    recording_id TEXT NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    labeled_at TEXT NOT NULL,
+    PRIMARY KEY (recording_id, question)
+);
+CREATE INDEX IF NOT EXISTS idx_decision_labels_question ON decision_labels(question, labeled_at);
+`
 
 const SCHEMA = `
 -- Calendar events from ICS
@@ -3443,6 +3479,9 @@ const MIGRATIONS: Record<number, () => void> = {
 )`)
     console.log('Migration v70 complete')
   },
+  71: () => {
+    getDatabase().run(DECISION_LABELS_DDL)
+  },
 }
 
 /**
@@ -4018,6 +4057,86 @@ function repairPhase(): void {
     database.run(NOTES_TABLE_DDL)
   } catch (e) {
     console.warn('[Database] notes create skipped:', (e as Error).message)
+  }
+
+  // Reference labels (v71), like Notes: fresh installs and upgrades share the
+  // migration DDL, while SCHEMA remains a literal list of SQL statements.
+  try {
+    decisionLabelRecoveryFailed = false
+    const recoverLabelItems = (): void => {
+      if (!database.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'decision_label_items_legacy'").length) return
+      let unrecovered = false
+      try {
+        const hasPosition = getTableColumns(database, 'decision_label_items_legacy').includes('position')
+        const rows = database.exec(`SELECT set_id, recording_id, stratum${hasPosition ? ', position' : ''} FROM decision_label_items_legacy`)[0]?.values ?? []
+        for (const [index, row] of rows.entries()) {
+          try {
+            const [setId, recordingId, stratum] = row
+            if (database.exec('SELECT 1 FROM decision_label_items WHERE set_id = ? AND recording_id = ?', [setId, recordingId]).length) continue
+            let position = hasPosition ? row[3] : index
+            if (database.exec('SELECT 1 FROM decision_label_items WHERE set_id = ? AND position = ?', [setId, position]).length) {
+              position = Number(database.exec('SELECT COALESCE(MAX(position), -1) + 1 FROM decision_label_items WHERE set_id = ?', [setId])[0].values[0][0])
+            }
+            database.run('INSERT INTO decision_label_items (set_id, recording_id, stratum, position) VALUES (?, ?, ?, ?)',
+              [setId, recordingId, stratum === 'confident' ? 'random' : stratum, position])
+          } catch { unrecovered = true }
+        }
+        if (!unrecovered) database.run('DROP TABLE decision_label_items_legacy')
+      } catch { unrecovered = true }
+      if (unrecovered) {
+        let name = `decision_label_items_legacy_unrecovered_${Date.now()}`
+        while (database.exec('SELECT 1 FROM sqlite_master WHERE name = ?', [name]).length) name += '_1'
+        database.run(`ALTER TABLE decision_label_items_legacy RENAME TO ${name}`)
+        console.warn(`[Database] Unrecovered label membership retained in ${name}; label set replacement disabled`)
+      }
+      database.run(DECISION_LABELS_DDL)
+    }
+    // Recover interrupted older repairs before counting members or exposing sets.
+    // A savepoint makes recovery and constraint rebuilding atomic, even at boot.
+    database.run('SAVEPOINT decision_label_repair')
+    database.run(DECISION_LABELS_DDL)
+    recoverLabelItems()
+    // v71 is unreleased: repair development databases even if already at v71.
+    const labelSetColumns = getTableColumns(database, 'decision_label_sets')
+    if (!labelSetColumns.includes('sampling_rule')) {
+      database.run('ALTER TABLE decision_label_sets ADD COLUMN sampling_rule TEXT')
+    }
+    if (labelSetColumns.includes('confident_count')) {
+      database.run('ALTER TABLE decision_label_sets RENAME COLUMN confident_count TO random_count')
+    }
+    if (!labelSetColumns.includes('sample_size')) {
+      database.run('ALTER TABLE decision_label_sets ADD COLUMN sample_size INTEGER NOT NULL DEFAULT 0 CHECK(sample_size >= 0)')
+      database.run('ALTER TABLE decision_label_sets ADD COLUMN doubtful_count INTEGER NOT NULL DEFAULT 0 CHECK(doubtful_count >= 0)')
+      database.run('ALTER TABLE decision_label_sets ADD COLUMN random_count INTEGER NOT NULL DEFAULT 0 CHECK(random_count >= 0)')
+      database.run(`UPDATE decision_label_sets SET
+        sample_size = (SELECT COUNT(*) FROM decision_label_items WHERE set_id = decision_label_sets.id),
+        doubtful_count = (SELECT COUNT(*) FROM decision_label_items WHERE set_id = decision_label_sets.id AND stratum = 'doubtful'),
+        random_count = (SELECT COUNT(*) FROM decision_label_items WHERE set_id = decision_label_sets.id AND stratum IN ('confident', 'random'))`)
+    }
+    const labelItemsSql = database.exec("SELECT sql FROM sqlite_master WHERE name = 'decision_label_items'")[0]?.values[0]?.[0]
+    if (typeof labelItemsSql === 'string' && labelItemsSql.includes("'confident'")) {
+      // Rebuild the CHECK constraint and translate legacy membership without losing labels.
+      database.run('ALTER TABLE decision_label_items RENAME TO decision_label_items_legacy')
+      database.run(DECISION_LABELS_DDL)
+      recoverLabelItems()
+    }
+    // Preserve historical missing members while bringing each stratum up to
+    // recovered membership. Keep the size/stratum CHECK valid in one UPDATE.
+    const doubtful = "MAX(doubtful_count, (SELECT COUNT(*) FROM decision_label_items WHERE set_id = decision_label_sets.id AND stratum = 'doubtful'))"
+    const random = "MAX(random_count, (SELECT COUNT(*) FROM decision_label_items WHERE set_id = decision_label_sets.id AND stratum IN ('confident', 'random')))"
+    database.run(`UPDATE decision_label_sets SET
+      sample_size = MAX(sample_size, ${doubtful} + ${random}),
+      doubtful_count = ${doubtful}, random_count = ${random}`)
+    database.run('RELEASE decision_label_repair')
+  } catch (error) {
+    decisionLabelRecoveryFailed = true
+    try {
+      database.run('ROLLBACK TO decision_label_repair')
+      database.run('RELEASE decision_label_repair')
+    } catch {
+      try { database.run('ROLLBACK') } catch { /* no active transaction, or cleanup itself unavailable */ }
+    }
+    console.warn(`[Database] Decision label recovery failed: ${String(error instanceof Error ? error.message : error).replace(/[\r\n]+/g, ' ')}; label set replacement disabled`)
   }
 
   // Repair transcript_speakers (v25): a new table has no columns to ALTER, but

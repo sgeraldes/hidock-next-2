@@ -1,3 +1,4 @@
+import type { ReferenceLabelSet, ReferenceLabelItem, LabelItemArgs, SaveLabelArgs } from '../../src/shared/decision-labels'
 import type { TranscriptVerdicts } from '../../src/shared/transcript-verdicts'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
@@ -1319,6 +1320,10 @@ export interface ElectronAPI {
 
   // Pipeline (phase 3a) — the owner's choice of harness, model and effort for each text step.
   pipeline: {
+    getLabelSet: () => Promise<ReferenceLabelSet>
+    getLabelItem: (args: LabelItemArgs) => Promise<ReferenceLabelItem | null>
+    saveLabel: (args: SaveLabelArgs) => Promise<void>
+    clearLabel: (args: LabelItemArgs) => Promise<void>
     getState: () => Promise<PipelineSettingsState>
     saveStep: (args: SaveStepArgs) => Promise<SaveStepResult>
     saveDecisions: (args: DecisionConfig) => Promise<SaveStepResult>
@@ -2059,6 +2064,10 @@ const electronAPI: ElectronAPI = {
   },
 
   pipeline: {
+    getLabelSet: () => callIPC('pipeline:getLabelSet'),
+    getLabelItem: (args) => callIPC('pipeline:getLabelItem', args),
+    saveLabel: (args) => callIPC('pipeline:saveLabel', args),
+    clearLabel: (args) => callIPC('pipeline:clearLabel', args),
     getState: () => callIPC('pipeline:getState'),
     saveStep: (args) => callIPC('pipeline:saveStep', args),
     saveDecisions: (args) => callIPC('pipeline:saveDecisions', args),

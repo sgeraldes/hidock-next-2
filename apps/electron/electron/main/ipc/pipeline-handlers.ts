@@ -11,6 +11,7 @@
  * more than a few seconds.
  */
 import { ipcMain } from 'electron'
+import { getLabelSet, getLabelItem, saveLabel, clearLabel } from '../services/pipeline/decision-labels'
 import { getConfig, replaceConfigSection } from '../services/config'
 import { discoverModels, getBrainRegistry, getBrainRouter, type BrainId } from '../services/brains'
 import { isBrainCoolingDown } from '../services/brains/brain-cooldown'
@@ -145,6 +146,10 @@ export async function saveDecisions(raw: unknown): Promise<SaveStepResult> {
 }
 
 export function registerPipelineHandlers(): void {
+  ipcMain.handle('pipeline:getLabelSet', () => getLabelSet())
+  ipcMain.handle('pipeline:getLabelItem', (_e, args: unknown) => getLabelItem(args))
+  ipcMain.handle('pipeline:saveLabel', (_e, args: unknown) => saveLabel(args))
+  ipcMain.handle('pipeline:clearLabel', (_e, args: unknown) => clearLabel(args))
   ipcMain.handle('pipeline:getState', () => buildState())
   ipcMain.handle('pipeline:saveStep', (_e, args: unknown) => saveStep(args))
   ipcMain.handle('pipeline:saveDecisions', (_e, args: unknown) => saveDecisions(args))

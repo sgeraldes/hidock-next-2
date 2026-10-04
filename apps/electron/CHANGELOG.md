@@ -9,6 +9,8 @@ pairs with it, gives it the Hugging Face token and decides when it steps aside.
 
 ### Changes
 
+- **Reference labels for recording kinds.** Settings > Pipeline keeps a sample of up to 40 valid
+  recordings for your own labels, with keyboard choices and progress, ready for engine comparisons.
 - **A fresh restore point before database updates.** Schema migrations now verify a current backup,
   even when today's daily backup already exists. The newest three migration backups are kept.
 
