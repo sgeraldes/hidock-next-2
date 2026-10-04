@@ -15,6 +15,7 @@
 import { readFile } from 'fs/promises'
 import { extname } from 'path'
 import type { AcousticWorkerResult } from './speaker-linking'
+import type { ModelHostHealthReport } from '../../../src/shared/model-host-status'
 
 /** The host answers health in well under a second on a LAN. */
 const HEALTH_TIMEOUT_MS = 2000
@@ -53,19 +54,13 @@ export interface ModelHostSettings {
   token: string
 }
 
-export interface ModelHostHealth {
-  version: string
-  state: 'stopped' | 'ready' | 'paused' | 'busy'
-  capabilities: string[]
-  /**
-   * The GPU, when the host was willing to say. `null` means it looked and
-   * found no NVIDIA driver; absent means this machine is not paired yet and
-   * was not told. Those are different sentences to the person.
-   */
-  gpu?: { name: string; vramMiB: number | null; driver: string } | null
-  acceleration?: 'cuda' | 'cpu'
-  reason?: string
-}
+/**
+ * What /health says. `gpu` null means the host looked and found no NVIDIA
+ * driver; absent means this machine is not paired yet and was not told. Those
+ * are different sentences to the person. `pause` says who paused it (the
+ * person, or game mode and which game), from host 0.2.0 on.
+ */
+export type ModelHostHealth = ModelHostHealthReport
 
 /** Why the recording is not going to the host. Always a sentence for a person. */
 export class ModelHostUnavailableError extends Error {

@@ -161,6 +161,7 @@ import type { PipelineState } from '../main/types/device-pipeline'
 import type { Note, NoteRelatedItem, NoteMeetingSuggestion } from '../../src/types/notes'
 import type { SpeakerEngineId, SpeakerSetup } from '../../src/types/speakers'
 import type { VoiceBackfillMeasure, VoiceBackfillStatus } from '../../src/shared/voice-backfill-schedule'
+import type { ModelHostHealthReport, ModelHostStatus } from '../../src/shared/model-host-status'
 import type {
   DecisionView,
   QuestionCounts,
@@ -794,19 +795,14 @@ export interface ElectronAPI {
    * to diarize here is made in the main process.
    */
   modelHost: {
+    /** Ask an address now. GPU and acceleration are absent until this machine is paired. */
     check: (request: { url: string }) => Promise<{
       success: boolean
       error?: string
-      health?: {
-        version: string
-        state: 'stopped' | 'ready' | 'paused' | 'busy'
-        capabilities: string[]
-        /** Absent until this machine is paired: a stranger is not told. */
-        acceleration?: 'cuda' | 'cpu'
-        gpu?: { name: string; vramMiB: number | null; driver: string } | null
-        reason?: string
-      }
+      health?: ModelHostHealthReport
     }>
+    /** The saved host's state, for the status line in Settings (describeModelHost words it). */
+    status: () => Promise<{ success: boolean; status: ModelHostStatus }>
     pair: (request: { url: string; code: string }) => Promise<{ success: boolean; error?: string }>
     forget: () => Promise<{ success: boolean }>
   }
@@ -1846,6 +1842,7 @@ const electronAPI: ElectronAPI = {
 
   modelHost: {
     check: (request) => callIPC('model-host:check', request),
+    status: () => callIPC('model-host:status'),
     pair: (request) => callIPC('model-host:pair', request),
     forget: () => callIPC('model-host:forget')
   },

@@ -10,6 +10,7 @@ import { BusyIcon, WorkingBar, WorkingValue } from '@/components/ui/working'
 import { toast } from '@/components/ui/toaster'
 import { appLocale } from '@/lib/locale'
 import { useConfigStore } from '@/store/domain/useConfigStore'
+import { ModelHostStatusLine } from '@/components/settings/ModelHostStatusLine'
 import {
   DEFAULT_VOICE_BACKFILL,
   type VoiceBackfillConfig,
@@ -129,6 +130,9 @@ export function VoiceBackfillPanel() {
           Recordings transcribed before voices were measured get their voices here, one at a time, at low priority. It
           runs where the speaker engine above runs and waits while a recording is transcribed.
         </p>
+        <div className="mt-1">
+          <ModelHostStatusLine hideWhenNone />
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-3">

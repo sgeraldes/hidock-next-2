@@ -15,6 +15,8 @@ import {
   resetModelHostHealthCache,
 } from '../services/model-host-client'
 import { getConfig, saveConfig } from '../services/config'
+import { resolveSpeakerEngine } from '../services/speaker-engines'
+import type { ModelHostStatus } from '../../../src/shared/model-host-status'
 
 const AddressSchema = z.object({
   url: z.string().trim().min(1).max(2048),
@@ -42,6 +44,26 @@ export function registerModelHostHandlers(): void {
       return { success: false, error: 'No host answered at that address.' }
     }
     return { success: true, health }
+  })
+
+  // The host's state in words, for Settings and the voice evidence panel. Uses
+  // the same short-lived health answer as the diarization path, so a status
+  // line that polls does not add traffic or disagree with what a job would see.
+  ipcMain.handle('model-host:status', async () => {
+    const config = getConfig().transcription
+    const address = config.modelHostUrl?.trim() || ''
+    const configured = Boolean(address)
+    const health = configured
+      ? await checkModelHost({ url: address, token: config.modelHostToken || '' })
+      : null
+    const status: ModelHostStatus = {
+      configured,
+      paired: Boolean(config.modelHostToken),
+      usedForSpeakers: configured && resolveSpeakerEngine(config) === 'model-host',
+      address,
+      health,
+    }
+    return { success: true, status }
   })
 
   ipcMain.handle('model-host:pair', async (_event, raw: unknown) => {

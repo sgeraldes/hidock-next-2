@@ -59,7 +59,58 @@ Setup runs after install, or later from the Start Menu. It:
 Start Menu → **HiDock Model Host**. It opens `http://localhost:8765/` and starts
 **stopped**: installing something is not permission to hold a GPU.
 
-On that page: **Start**, **Pause**, **Stop**, and **Show a pairing code**.
+On that page: **Start** (while stopped), **Pause** or **Resume**, **Stop**, and
+**Show a pairing code**. The State row says in words what the host is doing.
+
+The first time the host listens, Windows Defender Firewall asks whether
+`node.exe` may accept connections. Allow it on **private** networks, or the
+client on the other machine never reaches it.
+
+## Game mode
+
+The host is on a machine people play on, so it steps aside by itself.
+
+**By hand.** The installer puts **HiDock Model Host - pause or resume** on the
+desktop and in the Start Menu. One click pauses a working host and resumes any
+other; a small window says what happened and closes after five seconds. The
+control page has the same button. Pausing cancels the job that is running: the
+worker is killed, its temp audio deleted, and the client gets 503 and diarizes
+that recording itself, so nothing is marked failed. A paused host refuses new
+jobs until someone resumes it; game mode never resumes a pause made by hand.
+
+**By itself.** While the host runs, `src/probe.ps1` looks every two seconds at
+what is running (one long-lived PowerShell, not one per look; it exits when the
+host's process is gone) and `nvidia-smi --query-compute-apps` lists programs
+holding a CUDA context. The host pauses within one look when it sees:
+
+| Signal | Default | Notes |
+|---|---|---|
+| a program whose path contains a game folder | on | `steamapps\common`, `XboxGames`, `Epic Games`, `GOG Galaxy\Games`, `GOG Games`, `Riot Games`, `EA Games`, `Ubisoft Game Launcher\games` |
+| a program on the always-pause list | empty | by name, with or without `.exe` |
+| another program computing on the GPU | on | the host's own worker is ignored; others can be allowed by name |
+| a full-screen app (`SHQueryUserNotificationState` 2 or 3) | on | covers exclusive and borderless full screen, and also a full-screen video |
+
+Launchers that live in those folders and run all day (Epic, Riot Client,
+Wallpaper Engine, crash reporters) are on a "never a game" list. The control
+page shows the program that caused a pause, so a false positive is one line
+added to that list.
+
+Work resumes when no signal has been seen for **5 minutes** (0 to 120). A
+person who resumes during a game keeps the host working until that game ends;
+the next game pauses it again. Everything is editable under **Game mode** on
+the control page and saved in `config.json` under `gameMode`; running setup
+again keeps it.
+
+Why not "any process on the GPU": on Windows every program with a window
+(explorer, the browser, Discord) holds a graphics context, so nvidia-smi's
+process table is never empty. Games are recognised by where they are
+installed, by the list, and by taking the screen.
+
+**What the other computer sees.** `/health` tells a paired client who paused
+the host, the game, and when a game pause lifts. HiDock Next says it in words
+in Settings → Transcription → Model host and in the voice evidence panel of
+Settings → Speakers & voices: working, paused for a game (which, and until
+when), paused by hand, stopped, or off.
 
 The first time the host listens, Windows Defender Firewall asks whether
 `node.exe` may accept connections. Allow it on **private** networks, or the
@@ -80,7 +131,8 @@ found, then type the code and press **Pair**.
 |---|---|
 | `GET /health` | version and state to anyone; GPU, driver and paired count only to a paired client |
 | `POST /pair` | trades a code for a token, five wrong guesses and the code dies |
-| `POST /jobs/diarize` | audio in the body, the worker's result back |
+| `POST /jobs/diarize` | audio in the body, the worker's result back; 503 when paused or when a pause cancels it |
+| `POST /control?format=json` | this machine only: the pause/resume shortcut, answered in JSON |
 
 `/` and `/control` answer only from this machine, checked on both the socket
 address and the `Host` header. The address alone is beaten by DNS rebinding: a
@@ -142,10 +194,13 @@ its first slice. Not in it:
   GUI toolkit and the only way to test one is to look at it.
 - A Win32 supervisor with Job Objects. Killing the host process should take the
   Python worker with it; without a Job Object a hard kill can orphan it.
-- A shared resource governor. There is a CPU share and one heavy job at a time,
-  and no VRAM or memory admission.
+- A shared resource governor. There is a CPU share, one heavy job at a time and
+  game mode, and no VRAM or memory admission: a windowed game that game mode
+  does not recognise shares the GPU until someone adds it to the always-pause
+  list.
 - Signed pack manifests, resumable model downloads, atomic activation.
-- A durable job queue, gaming mode that survives a reboot, start with Windows.
+- A durable job queue, and start with Windows. The host starts stopped after
+  every launch; game mode's settings survive a restart, its pause does not.
 - Code signing.
 - A pairing window that is hard rather than merely expensive to brute-force.
   Eight digits, five wrong guesses and five minutes is a home-LAN threat model,

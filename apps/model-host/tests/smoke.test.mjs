@@ -8,6 +8,8 @@
 
 import { describe, it, expect, afterAll } from 'vitest'
 import { mkdtempSync } from 'fs'
+import { execFile } from 'child_process'
+import { promisify } from 'util'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { start } from '../src/main.mjs'
@@ -17,6 +19,7 @@ const root = mkdtempSync(join(tmpdir(), 'hidock-host-test-'))
 // fail THERE, which proves the door opened, without waiting on pyannote.
 const host = await start({
   root,
+  watchGames: false,
   overrides: { port: 0, pythonPath: join(root, 'no-such-python.exe'), timeoutMs: 5000 },
 })
 const base = `http://127.0.0.1:${host.port}`
@@ -34,16 +37,16 @@ describe('the host over a real socket', () => {
     expect(body.version).toMatch(/^\d+\.\d+\.\d+$/)
   })
 
-  it('serves a control page with the three controls', async () => {
+  it('serves a control page with Start, Stop and pairing while stopped', async () => {
     const res = await fetch(`${base}/`)
     const html = await res.text()
     expect(res.status).toBe(200)
-    for (const action of ['start', 'pause', 'stop']) {
+    for (const action of ['start', 'stop', 'pair']) {
       expect(html).toContain(`value="${action}"`)
     }
   })
 
-  it('starts from the control form and reports it', async () => {
+  it('starts from the control form and reports it, then offers Pause', async () => {
     const res = await fetch(`${base}/control`, {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
@@ -52,6 +55,8 @@ describe('the host over a real socket', () => {
     })
     expect(res.status).toBe(303)
     expect((await (await fetch(`${base}/health`)).json()).state).toBe('ready')
+    const html = await (await fetch(`${base}/`)).text()
+    expect(html).toMatch(/value="toggle">Pause</)
   })
 
   it('turns a pairing code into a token, and refuses work without one', async () => {
@@ -105,6 +110,33 @@ describe('the host over a real socket', () => {
     })
     expect(res.status).toBe(400)
   })
+
+  it.runIf(process.platform === 'win32')('the pause or resume shortcut flips the host and says so', async () => {
+    const script = join(import.meta.dirname, '..', 'src', 'pause-resume.ps1')
+    const run = () =>
+      promisify(execFile)(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-Port', String(host.port), '-NoPopup'],
+        { windowsHide: true, timeout: 60_000 }
+      )
+    if (host.state.state !== 'ready') await host.state.apply('start')
+    const paused = await run()
+    expect(paused.stdout).toMatch(/Paused by you/)
+    expect(host.state.pauseInfo().by).toBe('you')
+    const resumed = await run()
+    expect(resumed.stdout).toMatch(/Ready for work/)
+    expect(host.state.state).toBe('ready')
+  }, 60_000)
+
+  it.runIf(process.platform === 'win32')('the shortcut says plainly when the host is not running', async () => {
+    const script = join(import.meta.dirname, '..', 'src', 'pause-resume.ps1')
+    const { stdout } = await promisify(execFile)(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-Port', '1', '-NoPopup'],
+      { windowsHide: true, timeout: 60_000 }
+    )
+    expect(stdout).toMatch(/not running/)
+  }, 60_000)
 
   it('has no route it did not mean to have', async () => {
     expect((await fetch(`${base}/jobs`)).status).toBe(404)

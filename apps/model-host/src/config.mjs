@@ -22,7 +22,8 @@ export const DEFAULT_PORT = 8765
  * JSON.parse rejects; the host then started unvalidated and without its token.
  */
 function readJson(file) {
-  return JSON.parse(readFileSync(file, 'utf8').replace(/^﻿/, ''))
+  const text = readFileSync(file, 'utf8')
+  return JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text)
 }
 
 export function hostRoot() {
@@ -95,6 +96,26 @@ export function loadConfig(file = paths().config) {
     console.warn('[host] config.json could not be read; using defaults')
     return { ...DEFAULTS }
   }
+}
+
+/**
+ * Write the game mode settings into config.json, keeping everything else in
+ * it: setup wrote the runtime paths and the validated flag there, and the
+ * control page must not lose them by saving a checkbox.
+ */
+export function saveGameMode(settings, file = paths().config) {
+  let current = {}
+  if (existsSync(file)) {
+    try {
+      current = readJson(file)
+    } catch {
+      // Refuse rather than replace a config we cannot read with one that has
+      // only game mode in it: that would un-validate the host.
+      throw Object.assign(new Error('config.json could not be read, so game mode was not saved'), { status: 500 })
+    }
+  }
+  mkdirSync(join(file, '..'), { recursive: true })
+  writeFileSync(file, JSON.stringify({ ...current, gameMode: settings }, null, 2), 'utf8')
 }
 
 export function saveTokens(tokens, file = paths().tokens) {

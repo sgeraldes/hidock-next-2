@@ -171,7 +171,16 @@ function Write-HostConfig {
     ffmpegPath = $Ffmpeg
     validated = $true
   }
-  $config | ConvertTo-Json | Set-Content -LiteralPath $ConfigFile -Encoding utf8
+  # Running setup again must not reset the game mode the person configured.
+  if (Test-Path -LiteralPath $ConfigFile) {
+    try {
+      $previous = Get-Content -LiteralPath $ConfigFile -Raw | ConvertFrom-Json
+      if ($previous.gameMode) { $config.gameMode = $previous.gameMode }
+    } catch {
+      Say 'The previous config.json could not be read; game mode starts from its defaults.'
+    }
+  }
+  $config | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $ConfigFile -Encoding utf8
   Say "Wrote $ConfigFile"
 }
 
