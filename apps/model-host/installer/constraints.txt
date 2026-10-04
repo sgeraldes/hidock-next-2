@@ -4,13 +4,18 @@
 # packages as the client and a new upstream release cannot change it under us.
 # Regenerate from the client venv with: uv pip freeze --python <venv python>
 # (drop the +cuNNN local tags).
+# Clef and Clef-Flash (decide-requirements.txt) add transformers, accelerate and bitsandbytes;
+# resolved with uv pip compile under these same constraints for Python 3.11 on Windows.
+accelerate==1.15.0
 aiohappyeyeballs==2.7.1
 aiohttp==3.14.3
 aiosignal==1.4.0
 alembic==1.19.1
+annotated-doc==0.0.5
 anyio==4.14.2
 asteroid-filterbanks==0.4.0
 attrs==26.1.0
+bitsandbytes==0.50.2
 certifi==2026.7.22
 charset-normalizer==3.5.1
 click==8.4.2
@@ -69,6 +74,7 @@ pillow==12.3.0
 primepy==1.3
 propcache==0.5.2
 protobuf==7.36.0
+psutil==7.2.2
 pyannote-audio==4.0.7
 pyannote-core==6.0.1
 pyannote-database==6.1.1
@@ -81,17 +87,20 @@ python-dateutil==2.9.0.post0
 pytorch-lightning==2.6.5
 pytorch-metric-learning==2.9.0
 pyyaml==6.0.3
+regex==2026.9.29
 requests==2.34.2
 rich==15.0.0
 safetensors==0.8.0
 scikit-learn==1.9.0
 scipy==1.17.1
 setuptools==78.1.0
+shellingham==1.5.4
 six==1.17.0
 sortedcontainers==2.4.0
 sqlalchemy==2.0.52
 sympy==1.14.0
 threadpoolctl==3.6.0
+tokenizers==0.22.2
 torch==2.13.0
 torch-audiomentations==0.12.0
 torch-pitch-shift==1.2.5
@@ -99,6 +108,8 @@ torchaudio==2.11.0
 torchcodec==0.16.0
 torchmetrics==1.9.0
 tqdm==4.70.0
+transformers==5.10.2
+typer==0.27.2
 typing-extensions==4.16.0
 tzdata==2026.3
 urllib3==2.7.0

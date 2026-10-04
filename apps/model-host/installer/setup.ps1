@@ -159,6 +159,27 @@ if ($gpuName) {
   }
 }
 
+Step 'Decision models runtime (Clef and Clef-Flash)'
+# transformers, accelerate and bitsandbytes at the constrained versions; the weights come later,
+# the first time HiDock asks for a model. Diarization does not depend on this step.
+$decideRequirements = Join-Path $InstallDir 'decide-requirements.txt'
+$decideRuntime = $false
+if (-not $gpuName) {
+  Say 'No NVIDIA GPU: the decision models need one and are not installed.'
+} elseif (-not (Test-Path -LiteralPath $decideRequirements)) {
+  Say "The installer is missing $decideRequirements; the decision models are not installed."
+} else {
+  & $PythonExe -m pip install --no-warn-script-location -r $decideRequirements -c $Constraints
+  if ($LASTEXITCODE -eq 0) {
+    $versions = & $PythonExe -c "import transformers, bitsandbytes; print('transformers', transformers.__version__, 'bitsandbytes', bitsandbytes.__version__)"
+    $decideRuntime = ($LASTEXITCODE -eq 0)
+    Say "$versions"
+  }
+  if (-not $decideRuntime) {
+    Write-Host '  The decision runtime did not install. Diarization works as before; HiDock sees no decide capability.' -ForegroundColor Yellow
+  }
+}
+
 Step 'Settings for the service'
 # validated stays false: the service runs the model once, by itself, after
 # HiDock sends its Hugging Face token. The port and what HiDock chose for
@@ -175,6 +196,7 @@ $config = [ordered]@{
   ffmpegPath = $Ffmpeg
   validated = $false
   stepAside = 'games'
+  decideRuntime = $decideRuntime
 }
 if (Test-Path -LiteralPath $ConfigFile) {
   try {

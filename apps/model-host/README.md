@@ -13,8 +13,15 @@ and nothing of the host runs while the machine is being used (design:
 
 ## What it does today
 
-One capability: **diarization**. It is the most expensive thing the client does
-on CPU and the only one with a settled input and output contract.
+Two capabilities:
+
+- **diarization**, the most expensive thing the client does on CPU;
+- **decisions** with Cloudflare's Clef (27B, loaded in 4-bit) and Clef-Flash
+  (9B, BF16), from 0.4.0. The body and the answer are Jev's
+  `POST /v1/systemone`, and `model` picks one. Each model downloads the first
+  time HiDock asks for it, at a pinned revision (19 GB and 55 GB), and stays on
+  the GPU between requests until 10 minutes pass without one. Design:
+  `docs/superpowers/specs/2026-10-04-model-host-clef.md`.
 
 A host that is off, paused, in use or unreachable changes nothing: the recording
 diarizes on the client, exactly as it does on a machine that never had a host.
@@ -121,6 +128,7 @@ still waiting for it. The person never types a token on the gamestation.
 | `GET /health` | anyone; detail to a paired client | version and state; to a paired client also GPU, driver, paired count, `setup`, `stepAside`, `pairing` |
 | `POST /pair` | anyone | trades a code, or nothing during the automatic window, for a token |
 | `POST /jobs/diarize` | paired | audio in the body, the worker's result back; 503 until the model has run once |
+| `POST /v1/systemone` | paired | Jev's body (`state`, `questions`) with `model` `clef` or `clef-flash`, up to 1 MB, text and JSON state only; Jev's answer back. 503 with each model's state while it downloads; 404 where setup did not install the decision runtime |
 | `PUT /secrets/hf-token` | paired | HiDock's Hugging Face token; answers 202 and validates in the background |
 | `PUT /settings/step-aside` | paired | `any-use`, `games` or `never`, written to `config.json` for the tray icon |
 | `GET /diagnostics` | paired | the end of `setup.log`, `service.log` and `repair.log`, and what torch says about CUDA |
@@ -177,7 +185,7 @@ hangs up aborts the job instead of holding the lane for an hour.
 | `%LOCALAPPDATA%\HiDock Model Host\secrets.json` | the Hugging Face token HiDock sent |
 | `%LOCALAPPDATA%\HiDock Model Host\tokens.json` | paired clients, and whether automatic pairing was cancelled |
 | `%LOCALAPPDATA%\HiDock Model Host\runtime` | private Python and torch |
-| `%LOCALAPPDATA%\HiDock Model Host\models` | downloaded weights |
+| `%LOCALAPPDATA%\HiDock Model Host\models` | downloaded weights; Clef in `clef@<revision>` and `clef-flash@<revision>`, each with a `.complete` marker once fully on disk |
 | `%LOCALAPPDATA%\HiDock Model Host\logs` | `setup.log`, `service.log` |
 
 Uninstalling closes the tray icon (which ends the service), removes the program,
@@ -216,4 +224,7 @@ handler directly; `tests/smoke.test.mjs` starts the real service on a real
 socket; `tests/tray.e2e.test.mjs` runs the real icon with a fake game started
 from a `steamapps\common` folder and checks the service stays down, comes back
 after the quiet period and leaves nothing behind; `tests/installer.test.mjs`
-checks the installer payload. CI runs all of them on every pull request.
+checks the installer payload; `tests/decide-worker.test.mjs` runs the real
+`decide_worker.py` against a stand-in for the model's code, and
+`tests/decide.test.mjs` drives downloads, loading, idling and timeouts with a
+fake worker. CI runs all of them on every pull request.

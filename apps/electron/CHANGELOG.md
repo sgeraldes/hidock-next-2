@@ -39,6 +39,11 @@ pairs with it, gives it the Hugging Face token and decides when it steps aside.
   Windows gave it the 32-bit PowerShell, which cannot see the NVIDIA driver; 0.3.0 and 0.3.1
   therefore installed the CPU build. 0.3.2 runs the 64-bit PowerShell. Its window also closes by
   itself when the install worked, and stays open only when setup failed, to show the error.
+- **Clef and Clef-Flash on the gamestation (Model Host 0.4.0).** The host answers decisions with
+  Cloudflare's decision models, using the same questions and answers as Jev: Clef-Flash (9B)
+  as published, Clef (27B) in 4 bits so it fits the RTX 4090. HiDock picks the model in each
+  request. A model downloads to the gamestation the first time it is asked for (19 GB and 55 GB)
+  and leaves the GPU after ten minutes without requests. No HiDock feature uses it yet.
 
 ## 2026-10-03 | Attendees from Outlook, and speakers that know who named them
 

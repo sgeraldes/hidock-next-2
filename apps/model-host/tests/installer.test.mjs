@@ -67,6 +67,18 @@ describe('the installer payload', () => {
     expect(existsSync(join(out, 'resources', 'speaker-linking', 'worker.py'))).toBe(true)
   })
 
+  it('ships the decision worker and its requirements, every one of them pinned', () => {
+    const out = build()
+    expect(existsSync(join(out, 'src', 'decide_worker.py'))).toBe(true)
+    const requirements = readFileSync(join(out, 'decide-requirements.txt'), 'utf8')
+    expect(requirements).toMatch(/^transformers==5\.10\.2$/m)
+    expect(requirements).toMatch(/^bitsandbytes==/m)
+    const constraints = readFileSync(join(out, 'constraints.txt'), 'utf8')
+    for (const name of ['transformers', 'accelerate', 'bitsandbytes', 'tokenizers']) {
+      expect(constraints).toMatch(new RegExp(`^${name}==\\d`, 'm'))
+    }
+  })
+
   it('refuses to build without ffmpeg instead of shipping a host that fails every job', () => {
     expect(() =>
       stage(join(dir, 'stage'), {

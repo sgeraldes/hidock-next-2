@@ -823,6 +823,21 @@ export interface ElectronAPI {
     repair: () => Promise<{ success: boolean; error?: string; setup?: ModelHostSetupReport }>
     /** Send the host a Model Host installer; it installs it by itself. */
     update: (request: { path: string }) => Promise<{ success: boolean; error?: string }>
+    /**
+     * Clef or Clef-Flash on the host, with Jev's /v1/systemone body and answer. 503 with
+     * `decide` while the model downloads to the host.
+     */
+    decide: (request: {
+      model: 'clef' | 'clef-flash'
+      state: string | Record<string, unknown> | unknown[]
+      questions: Record<string, { type: 'noul' | 'choice' | 'score'; instructions?: unknown; criteria?: unknown }>
+    }) => Promise<{
+      success: boolean
+      response?: { model: string; answers: Record<string, unknown>; usage: { input_tokens: number; output_tokens: number } }
+      error?: string
+      status?: number
+      decide?: Record<string, unknown>
+    }>
     /** The one setting for the gamestation; sent to the host when it answers. */
     setStepAside: (request: { value: ModelHostStepAside }) => Promise<{ success: boolean; sent?: boolean; error?: string }>
     forget: () => Promise<{ success: boolean }>
@@ -1869,6 +1884,7 @@ const electronAPI: ElectronAPI = {
     diagnostics: () => callIPC('model-host:diagnostics'),
     repair: () => callIPC('model-host:repair'),
     update: (request) => callIPC('model-host:update', request),
+    decide: (request) => callIPC('model-host:decide', request),
     forget: () => callIPC('model-host:forget')
   },
 
