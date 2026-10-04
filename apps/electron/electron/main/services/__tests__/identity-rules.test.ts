@@ -197,7 +197,7 @@ describe('jev-tiebreak for a shared first name', () => {
 
     // One ledger row, on the Jev route.
     expect(calls).toHaveLength(1)
-    expect(calls[0]).toMatchObject({ step: 'identity-tiebreak', route: 'jev', recordingId: 'r1', status: 'completed' })
+    expect(calls[0]).toMatchObject({ step: 'identity-tiebreak', route: 'decision:jev', recordingId: 'r1', status: 'completed' })
 
     // Asked once: a second pass does not call Jev again.
     await resolveBucketTiesWithJev({ jevKey: () => 'k', askJev })
@@ -452,7 +452,7 @@ describe('similar names without email or voice', () => {
     const [decision] = listDecisions()
     expect(decision).toMatchObject({ kind: 'merge', method: 'jev-tiebreak', contactId: 'edu' })
     expect(decision.evidence).toMatchObject({ sharedMeetings: 1, sameDomain: false })
-    expect(calls[0]).toMatchObject({ step: 'identity-tiebreak', route: 'jev', status: 'completed' })
+    expect(calls[0]).toMatchObject({ step: 'identity-tiebreak', route: 'decision:jev', status: 'completed' })
     const [, state] = askJev.mock.calls[0]
     expect(JSON.stringify(state)).toContain('Pricing review')
   })
@@ -542,3 +542,4 @@ describe('runIdentityRules', () => {
     await first
   })
 })
+

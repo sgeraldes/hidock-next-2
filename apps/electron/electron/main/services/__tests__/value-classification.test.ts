@@ -46,7 +46,7 @@ vi.mock('../ai-provider-config', () => ({
 // (Codex adversarial review AR-2a) — mock it directly rather than the real
 // config.ts, which needs `electron`'s app.getPath() at module scope.
 const mockConfig = vi.hoisted(() => ({
-  transcription: { valueClassificationMinConfidence: 0.6, jevApiKey: '' }
+  transcription: { valueClassificationMinConfidence: 0.6, jevApiKey: '', modelHostUrl: '', modelHostToken: '' }
 }))
 vi.mock('../config', () => ({
   getConfig: () => mockConfig
@@ -1368,7 +1368,7 @@ describe('Jev (TypeSafe AI) as the value classifier', () => {
     expect(rows).toHaveLength(1)
     expect(rows[0]).toMatchObject({
       step: 'evaluate',
-      route: 'jev',
+      route: 'decision:jev',
       provider: 'jev',
       model: 'jev-1.13.0',
       recordingId: 'rec-j1c',
@@ -1546,6 +1546,17 @@ describe('Jev (TypeSafe AI) as the value classifier', () => {
     mockGetProviderConfig.mockReturnValue(null)
     expect(getValueClassifierKind()).toBeNull()
   })
+
+  it('permits the evaluation backlog with a paired host and no Jev key', () => {
+    mockConfig.transcription.jevApiKey = ''
+    mockGetProviderConfig.mockReturnValue(null)
+    mockConfig.transcription.modelHostUrl = 'http://127.0.0.1:9999'
+    mockConfig.transcription.modelHostToken = 'test-token' // pragma: allowlist secret
+    try { expect(getValueClassifierKind()).toBe('jev') } finally {
+      mockConfig.transcription.modelHostUrl = ''
+      mockConfig.transcription.modelHostToken = ''
+    }
+  })
 })
 
 describe('standalone value rating leaves a ledger row (phase 2b)', () => {
@@ -1625,3 +1636,4 @@ describe('standalone value rating leaves a ledger row (phase 2b)', () => {
     expect(valueRows()).toEqual([])
   })
 })
+

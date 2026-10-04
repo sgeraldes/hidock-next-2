@@ -28,6 +28,7 @@ import type { JevQuestion } from './jev-client'
 import { jevKeyFor } from './jev-settings'
 import { createJevHarness } from './pipeline/jev-harness'
 import { withCallRecord } from './pipeline/track-call'
+import { askDecision, hasDecisionEngine } from './pipeline/decision-engines'
 import { qualityRules } from './quality-rules'
 import { filterTranscribableRecordingIds } from './recording-eligibility'
 import { languageFor } from './transcription-language'
@@ -284,7 +285,7 @@ let running = false
 export async function runSamplingPass(deps: SamplerDeps = defaultSamplerDeps()): Promise<SamplingPassResult> {
   const perDay = qualityRules().samplesPerDay
   if (perDay <= 0) return { sampled: [], skipped: 'off', failed: 0 }
-  if (!jevKeyFor('value') || !resolveGeminiApiKey()) return { sampled: [], skipped: 'no-engine', failed: 0 }
+  if (!(await hasDecisionEngine('sample-compare')) || !resolveGeminiApiKey()) return { sampled: [], skipped: 'no-engine', failed: 0 }
   if (running) return { sampled: [], failed: 0 }
   running = true
   try {
@@ -387,7 +388,7 @@ async function transcribeWindowWithGemini(audio: Buffer, recordingId: string, se
   }
 }
 
-function compareQuestion(i: number): JevQuestion {
+export function compareQuestion(i: number): JevQuestion {
   return {
     type: 'choice',
     instructions:
@@ -401,13 +402,13 @@ function compareQuestion(i: number): JevQuestion {
   }
 }
 
-/** Jev's verdict for each pair, in one call. */
-async function compareWithJev(pairs: Array<{ stored: string; fresh: string }>, recordingId: string): Promise<WindowMatch[]> {
+/** The decision engine's verdict for each pair, in one call. */
+export async function compareWithDecisions(pairs: Array<{ stored: string; fresh: string }>, recordingId: string): Promise<WindowMatch[]> {
   const harness = createJevHarness({ getKey: () => jevKeyFor('value') })
   const questions: Record<string, JevQuestion> = {}
   pairs.forEach((_, i) => (questions[`w${i}`] = compareQuestion(i)))
   const state = { windows: pairs.map((p) => ({ new_transcript: p.fresh, stored_excerpt: p.stored })) }
-  const res = await withCallRecord({ step: 'sample-compare', route: 'jev', recordingId }, () => harness.ask(state, questions))
+  const { response: res } = await askDecision('sample-compare', state, questions, { jev: harness, recordingId })
   return pairs.map((_, i) => {
     const a = res.answers[`w${i}`]
     if (a?.type !== 'choice' || (a.confidence ?? 0) < COMPARE_MIN_CONFIDENCE) return 'unclear'
@@ -419,7 +420,7 @@ export function defaultSamplerDeps(): SamplerDeps {
   return {
     readWindow: readWindowAudio,
     transcribeWindow: transcribeWindowWithGemini,
-    compare: compareWithJev,
+    compare: compareWithDecisions,
     now: () => new Date()
   }
 }

@@ -58,6 +58,7 @@ import { getConfig } from './config'
 import { createJevHarness } from './pipeline/jev-harness'
 import type { JevResponse } from './jev-client'
 import { withCallRecord } from './pipeline/track-call'
+import { askDecision, hasDecisionEngine } from './pipeline/decision-engines'
 import { jevKeyFor } from './jev-settings'
 import {
   buildEvaluationQuestions,
@@ -479,6 +480,9 @@ export type ValueClassifierKind = 'jev' | 'llm'
  *  (27-sep-2026) as the decider for the value backlog. */
 export function getValueClassifierKind(): ValueClassifierKind | null {
   if (jevKeyFor('value')) return 'jev'
+  const config = getConfig()
+  // `jev` is the legacy backlog's structured-evaluation mode, now shared by all decision engines.
+  if (config.pipeline?.decisions || (config.transcription?.modelHostUrl && config.transcription?.modelHostToken) || config.brains?.enabled?.['claude-code']) return 'jev'
   return getProviderConfigFromSettings() ? 'llm' : null
 }
 
@@ -506,9 +510,9 @@ export async function evaluateWithJev(
     audio: input.audio
   })
   const harness = createJevHarness({ getKey: () => apiKey })
-  const response = await withCallRecord({ step: 'evaluate', route: 'jev', recordingId: input.recordingId ?? null }, () =>
-    harness.ask(state, buildEvaluationQuestions(), { fetchImpl })
-  )
+  const { response } = await askDecision('evaluate', state, buildEvaluationQuestions(), {
+    jev: { ...harness, ask: (s, q) => harness.ask(s, q, { fetchImpl }) }, recordingId: input.recordingId ?? null
+  })
   // The same caps the stored evaluations get (recomputeEvaluationsFromEvidence).
   const evaluation = withEvidence(parseEvaluation(response), {
     audioCategory: input.audio?.audio_category ?? null,
@@ -668,15 +672,16 @@ export async function classifyCaptureValueRaw(captureId: string): Promise<RawCla
   }
 
   const jevKey = jevKeyFor('value')
+  const decisionAvailable = await hasDecisionEngine('evaluate')
   const hasTranscript = !!row.transcript_full_text && row.transcript_full_text.trim() !== ''
   // Short clips get the free duration verdict and are never sent to Jev; the
   // scan's eligibility query applies the same line, but it belongs here too so
   // no other caller can send one.
   const longEnough = row.duration_seconds === null || row.duration_seconds >= lowValueMaxSeconds()
   const needsEvaluation =
-    !!jevKey && hasTranscript && longEnough && (row.evaluation_version ?? 0) < EVALUATION_VERSION
+    decisionAvailable && hasTranscript && longEnough && (row.evaluation_version ?? 0) < EVALUATION_VERSION
   const evaluate = () =>
-    evaluateWithJev(jevKey as string, {
+    evaluateWithJev(jevKey ?? '', {
       summary: row.summary,
       transcriptExcerpt: truncateTranscript(row.transcript_full_text as string),
       meetingSubject: row.meeting_subject,
@@ -773,7 +778,7 @@ export async function classifyCaptureValueRaw(captureId: string): Promise<RawCla
 
   const transcriptExcerpt = truncateTranscript(row.transcript_full_text)
 
-  if (jevKey) {
+  if (decisionAvailable) {
     // Not wrapped in try/catch, like complete() below: a Jev failure must
     // reach the caller's retry/park logic.
     const evaluation = await evaluate()

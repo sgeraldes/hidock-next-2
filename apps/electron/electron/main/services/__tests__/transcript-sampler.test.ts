@@ -31,10 +31,14 @@ vi.mock('../file-storage', () => ({
 vi.mock('../config', () => ({ getConfig: () => config.value }))
 vi.mock('../event-bus', () => ({ getEventBus: () => ({ emitDomainEvent: vi.fn() }) }))
 vi.mock('../brains', () => ({ resolveGeminiApiKey: () => config.value.transcription.geminiApiKey }))
+const decisionAsk = vi.hoisted(() => vi.fn())
+vi.mock('../pipeline/decision-engines', async importOriginal => ({
+  ...await importOriginal<typeof import('../pipeline/decision-engines')>(), askDecision: decisionAsk
+}))
 
 import { initializeDatabase, closeDatabase, run, queryOne, insertTranscript } from '../database'
 import { refreshTranscriptValidity } from '../transcript-validity-store'
-import { runSamplingPass, type SamplerDeps } from '../transcript-sampler'
+import { compareWithDecisions, compareQuestion, runSamplingPass, type SamplerDeps } from '../transcript-sampler'
 import { applyQualityRules } from '../quality-rules'
 import { FRAME_SECONDS } from '../audio-profile'
 
@@ -101,6 +105,15 @@ afterAll(() => {
 })
 
 describe('runSamplingPass', () => {
+  it('sends the unchanged sample questions and excerpts through the decision router', async () => {
+    const pairs = [{ stored: 'stored excerpt', fresh: 'fresh minute' }, { stored: 'second excerpt', fresh: 'second minute' }]
+    decisionAsk.mockResolvedValue({ engine: 'clef', response: { answers: {
+      w0: { type: 'choice', choice: 'same', confidence: 0.9 }, w1: { type: 'choice', choice: 'different', confidence: 0.9 }
+    } } })
+    expect(await compareWithDecisions(pairs, 'sample-rec')).toEqual(['same', 'different'])
+    expect(decisionAsk).toHaveBeenCalledWith('sample-compare', { windows: pairs.map(pair => ({ new_transcript: pair.fresh, stored_excerpt: pair.stored })) },
+      { w0: compareQuestion(0), w1: compareQuestion(1) }, expect.objectContaining({ recordingId: 'sample-rec' }))
+  })
   it('samples the newest doubtful transcripts up to the daily allowance and settles them', async () => {
     seedDoubtful('old', '2026-09-01T10:00:00Z')
     seedDoubtful('mid', '2026-09-15T10:00:00Z')

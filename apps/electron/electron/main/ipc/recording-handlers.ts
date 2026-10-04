@@ -387,7 +387,7 @@ export function registerRecordingHandlers(): void {
       // time score gave a lunch and a working session the same 72%). Stored per
       // candidate set, so reopening the recording does not ask again.
       let jevMatch: MeetingMatch | null = null
-      const jevDeps = confirmedMeetingId ? null : jevMeetingMatchDeps()
+      const jevDeps = confirmedMeetingId ? null : await jevMeetingMatchDeps()
       if (jevDeps && recordingContext.hasTranscript) {
         try {
           jevMatch = await matchMeetingWithJev(recording.id, toMatchContext(recording, list), toMatchCandidates(list), jevDeps)

@@ -1,11 +1,17 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { askDecision, decisionChain, parseDecisionReply, type DecisionEngine } from '../decision-engines'
+import { askDecision, createDecisionEngines, decisionChain, parseDecisionReply, type DecisionEngine } from '../decision-engines'
 import { setCallSink, type CallRecord } from '../call-store'
 import { ModelHostDecisionError } from '../../model-host-client'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 
-vi.mock('../../config', () => ({ getConfig: () => ({ transcription: {} }) }))
-vi.mock('../../brains', () => ({ getBrainRouter: vi.fn(), getBrainRegistry: vi.fn() }))
+const runtime = vi.hoisted(() => ({ config: { transcription: {} as Record<string, string> }, chat: vi.fn(), canServe: vi.fn().mockResolvedValue(false) }))
+vi.mock('../../config', () => ({ getConfig: () => runtime.config }))
+vi.mock('../../brains', () => ({
+  getBrainRouter: () => ({ canServe: runtime.canServe }),
+  getBrainRegistry: () => ({ get: () => ({ chat: runtime.chat }) })
+}))
 
 const questions = {
   kind: { type: 'choice' as const, instructions: 'Kind?', criteria: { meeting: 'Meeting', media: 'Media', noise: 'Noise' } },
@@ -57,6 +63,12 @@ describe('decision presets', () => {
     list.forEach(e => vi.mocked(e.isAvailable).mockResolvedValue(false))
     await expect(askDecision('evaluate', '', questions, { engines: list })).rejects.toThrow(/clef-flash.*clef.*gemini-flash.*haiku.*jev/)
   })
+  it('preserves an all-auth failure status for backlog stop logic', async () => {
+    const list = engines()
+    list.forEach(e => vi.mocked(e.isAvailable).mockResolvedValue(e.id === 'jev'))
+    vi.mocked(list[2].ask).mockRejectedValue(Object.assign(new Error('Bad key'), { status: 401 }))
+    await expect(askDecision('evaluate', '', questions, { engines: list })).rejects.toMatchObject({ status: 401 })
+  })
 })
 describe('strict text decision parsing', () => {
   it('converts all three question types', () => {
@@ -67,5 +79,47 @@ describe('strict text decision parsing', () => {
   })
   it.each([reply.replace('media', 'unknown'), '{}', `Sure: ${reply}`, '```json\n' + reply + '\n```', reply.replace('0.8', '1.8'), reply.replace('1.5', '3')])('rejects malformed answers: %s', raw => {
     expect(() => parseDecisionReply(raw, questions, 'haiku')).toThrow()
+  })
+})
+
+describe('decision adapters', () => {
+  it.each(['haiku', 'gemini-flash'] as const)('uses a direct profile for %s without a second ledger row', async id => {
+    runtime.canServe.mockResolvedValue(true)
+    runtime.chat.mockResolvedValue(reply)
+    const list = await createDecisionEngines('evaluate')
+    const rows: CallRecord[] = []
+    setCallSink((_id, row) => rows.push(row))
+    const out = await askDecision('evaluate', 'excerpt', questions, { engines: list, config: { preset: 'zero-cost', overrides: { evaluate: id } } })
+    expect(out.response.answers.useful).toEqual({ type: 'noul', noul: 0.7 })
+    expect(runtime.chat).toHaveBeenLastCalledWith([{ role: 'user', content: expect.stringContaining(JSON.stringify(questions)) }], expect.objectContaining({ model: id === 'haiku' ? 'haiku' : 'gemini-3.8-flash' }))
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ route: `decision:${id}`, status: 'completed' })
+    runtime.canServe.mockResolvedValue(false)
+  })
+  it('falls back after a real HTTP 503 from the host and sends the same questions to both models', async () => {
+    const requests: unknown[] = []
+    const server = createServer(async (req, res) => {
+      res.setHeader('Content-Type', 'application/json')
+      if (req.url === '/health') { res.end(JSON.stringify({ state: 'ready', capabilities: ['decide'] })); return }
+      const chunks: Buffer[] = []
+      for await (const chunk of req) chunks.push(Buffer.from(chunk))
+      const body = JSON.parse(Buffer.concat(chunks).toString())
+      requests.push(body)
+      if (body.model === 'clef-flash') { res.statusCode = 503; res.end(JSON.stringify({ error: 'Downloading' })) }
+      else res.end(JSON.stringify({ ...response, model: 'clef' }))
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    runtime.config.transcription = { modelHostUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, modelHostToken: 'test-pairing-token' } // pragma: allowlist secret
+    const rows: CallRecord[] = []
+    setCallSink((_id, row) => rows.push(row))
+    try {
+      const out = await askDecision('evaluate', 'state', questions, { engines: await createDecisionEngines('evaluate') })
+      expect(out.engine).toBe('clef')
+      expect(requests).toEqual([{ model: 'clef-flash', state: 'state', questions }, { model: 'clef', state: 'state', questions }])
+      expect(rows.map(row => row.status)).toEqual(['failed', 'completed'])
+    } finally {
+      runtime.config.transcription = {}
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+    }
   })
 })

@@ -289,7 +289,7 @@ export async function matchMeetingsWithJev(
   options: { dryRun?: boolean } = {}
 ): Promise<MeetingMatchJobResult | { busy: true } | { noKey: true }> {
   if (matchRunning) return { busy: true }
-  const deps = jevMeetingMatchDeps()
+  const deps = await jevMeetingMatchDeps()
   if (!deps) return { noKey: true }
   matchRunning = true
   try {

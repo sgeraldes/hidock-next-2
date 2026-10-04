@@ -122,7 +122,7 @@ describe('matchMeetingWithJev', () => {
       setCallSink(null)
     }
     expect(rows).toHaveLength(1)
-    expect(rows[0]).toMatchObject({ step: 'meeting-match', route: 'jev', provider: 'jev', model: 'jev-1.13.0', recordingId: 'rec-1', status: 'completed' })
+    expect(rows[0]).toMatchObject({ step: 'meeting-match', route: 'decision:jev', provider: 'jev', model: 'jev-1.13.0', recordingId: 'rec-1', status: 'completed' })
     expect(rows[0].usage).toMatchObject({ tokens: { input: 1800, output: 20 } })
   })
 
@@ -145,3 +145,4 @@ describe('matchMeetingWithJev', () => {
     expect(ask).not.toHaveBeenCalled()
   })
 })
+

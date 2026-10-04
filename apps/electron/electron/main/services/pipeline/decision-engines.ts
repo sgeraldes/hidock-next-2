@@ -14,7 +14,11 @@ export interface DecisionEngine {
   ask(state: JevStructured, questions: Record<string, JevQuestion>): Promise<JevResponse>
 }
 
-/** Cost estimates use a representative 4,000 input / 200 output token call, not a fixed provider fee. */
+/**
+ * Cost estimates use a representative 4,000 input / 200 output token call, not a fixed provider fee.
+ * Haiku: $1/$5 per million tokens (https://platform.claude.com/docs/en/about-claude/pricing).
+ * Gemini: the app's current Flash list price in gemini-usage.ts ($0.75/$3.75 per million).
+ */
 export const DECISION_DESCRIPTORS: Record<DecisionEngineId, DecisionEngine['descriptor']> = {
   'clef-flash': { label: 'Clef Flash', costPerCallUsd: 0, dataLeavesMachine: 'lan' },
   clef: { label: 'Clef', costPerCallUsd: 0, dataLeavesMachine: 'lan' },
@@ -90,6 +94,17 @@ export interface DecisionDeps {
   latencies?: Partial<Record<DecisionEngineId, number>>
 }
 
+/** Keep each failure and preserve the auth stop signal only when every attempted engine rejected auth. */
+export class DecisionEnginesError extends AggregateError {
+  readonly status: number | null
+  constructor(reasons: string[], errors: unknown[]) {
+    super(errors, `No decision engine answered: ${reasons.join('; ')}`)
+    this.name = 'DecisionEnginesError'
+    const statuses = errors.map(error => error && typeof error === 'object' && 'status' in error ? error.status : null)
+    this.status = statuses.length > 0 && statuses.every(status => status === 401 || status === 403) ? statuses[0] as number : null
+  }
+}
+
 /** Create per request so current credentials, pairing and provider switches are respected. */
 export async function createDecisionEngines(step: DecisionStep, deps: Pick<DecisionDeps, 'jev' | 'shouldGenerate'> = {}): Promise<DecisionEngine[]> {
   const [{ getConfig }, brains, { createTextRunner }, { createJevHarness }, { jevKeyFor }, { CURRENT_GEMINI_CHAT_MODEL }] = await Promise.all([
@@ -145,6 +160,7 @@ export async function askDecision(step: DecisionStep, state: JevStructured, ques
   const selection = config?.overrides?.[step] ?? config?.preset ?? 'zero-cost'
   const chain = decisionChain(selection, engines, deps.latencies ?? getDecisionLatencies())
   const reasons: string[] = []
+  const errors: unknown[] = []
   let parentCallId: string | null = null
   for (const id of chain) {
     const engine = engines.find(e => e.id === id)!
@@ -155,7 +171,8 @@ export async function askDecision(step: DecisionStep, state: JevStructured, ques
     const attempt = await trackCall({ step, route: `decision:${id}`, recordingId: deps.recordingId, parentCallId }, () => engine.ask(state, questions))
     if (attempt.ok) return { response: attempt.value, engine: id }
     parentCallId = attempt.callId
+    errors.push(attempt.error)
     reasons.push(`${id}: ${String(attempt.error)}`)
   }
-  throw new Error(`No decision engine answered: ${reasons.join('; ')}`)
+  throw new DecisionEnginesError(reasons, errors)
 }
