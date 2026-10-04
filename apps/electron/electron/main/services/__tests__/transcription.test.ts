@@ -161,13 +161,19 @@ vi.mock('../database', () => ({
 }))
 
 vi.mock('../transcript-trust', () => ({
-  syncTrustVerdicts: (...args: any[]) => mockSyncTrustVerdicts(...args)
+  syncTrustVerdicts: (...args: any[]) => mockSyncTrustVerdicts(...args),
+  isTranscriptUntrusted: () => false
+}))
+
+vi.mock('../transcript-validity-store', () => ({
+  previewTranscriptValidity: (...args: any[]) => mockPreviewValidity(...args)
 }))
 
 // ADV40-1 (round-42) — transcription.ts gates the provider through the shared
 // recording-eligibility boundary. Default eligible; flipped in the ADV40-1 test.
 vi.mock('../recording-eligibility', () => ({
-  isRecordingEligible: (...args: any[]) => mockIsRecordingEligible(...args)
+  isRecordingEligible: (...args: any[]) => mockIsRecordingEligible(...args),
+  isRecordingTranscribable: (...args: any[]) => mockIsRecordingEligible(...args)
 }))
 
 vi.mock('../audio-preflight', () => ({
@@ -180,7 +186,11 @@ vi.mock('../audio-preflight', () => ({
 // The trust check run on a fresh transcript before the analysis call. Default
 // ok, so the happy paths analyse as before.
 const mockCheckTranscriptIntegrity = vi.fn((..._args: unknown[]): any => ({ status: 'ok', issues: [] }))
-const mockSyncTrustVerdicts = vi.fn((..._args: unknown[]) => ({ rated: 0, cleared: 0 }))
+const mockSyncTrustVerdicts = vi.fn((..._args: unknown[]) => ({ cleared: 0, withdrawn: 0 }))
+const mockPreviewValidity = vi.fn((..._args: unknown[]): { status: string; reasons: Array<{ code: string }> } | null => ({
+  status: 'valid',
+  reasons: []
+}))
 const mockAudioProfileForTranscription = vi.fn(async (..._args: unknown[]): Promise<any> => null)
 vi.mock('../audio-profile-store', () => ({
   audioProfileForTranscription: (...args: unknown[]) => mockAudioProfileForTranscription(...args)
@@ -935,14 +945,36 @@ describe('Transcription Service', () => {
       expect(skippedBy('run-graph-sync')).toBe('transcript-untrusted')
     })
 
-    it('leaves a transcript the check trusts to the content rating, as before', { timeout: 20000 }, async () => {
+    it('leaves a transcript the check trusts to the content rating, and stores its validity', { timeout: 20000 }, async () => {
       queueLocal('rec-trusted')
       mockConfig.transcription.geminiApiKey = '' // local analysis, so the run completes in this suite
 
       await runUntilStored()
 
       expect(mockCheckTranscriptIntegrity).toHaveBeenCalled()
-      expect(mockSyncTrustVerdicts).not.toHaveBeenCalled()
+      expect(mockPreviewValidity.mock.calls[0][0]).toBe('rec-trusted')
+      expect(mockSyncTrustVerdicts).toHaveBeenCalledWith('rec-trusted')
+      const database = await import('../database')
+      const skippedBy = (runId: string) =>
+        (vi.mocked(database.completeProcessingRun).mock.calls.find(([id]) => id === runId)?.[1] as any)?.outputRefs?.skipped
+      expect(skippedBy('run-actionable-detection')).not.toBe('transcript-untrusted')
+    })
+
+    // Owner, 4-oct-2026: a transcript in doubt shows nothing derived from it.
+    it('asks no summary for a transcript in doubt, though the integrity check passes it', { timeout: 20000 }, async () => {
+      queueLocal('rec-doubtful')
+      mockPreviewValidity.mockReturnValueOnce({ status: 'doubtful', reasons: [{ code: 'text_not_placeable_in_time' }] })
+
+      await runUntilStored()
+
+      expect(mockGenerateContent).not.toHaveBeenCalled()
+      const stored = mockInsertTranscript.mock.calls[0][0]
+      expect(stored.summary).toBeUndefined()
+      const database = await import('../database')
+      const refs = (runId: string) =>
+        (vi.mocked(database.completeProcessingRun).mock.calls.find(([id]) => id === runId)?.[1] as any)?.outputRefs
+      expect(refs('run-summary')?.findings).toEqual(['text_not_placeable_in_time'])
+      expect(refs('run-actionable-detection')?.skipped).toBe('transcript-untrusted')
     })
   })
 

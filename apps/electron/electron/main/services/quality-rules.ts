@@ -26,12 +26,9 @@ export interface QualityConfig {
   quietSoundShare: number
   quietMinDurationSeconds: number
   meaningfulWords: number
-  meaningfulStars: number
   maxWordsPerMinuteOfRecording: number
   busySoundSeconds: number
   minWordsPerMinuteOfSound: number
-  /** Jev's "invented" probability at or above this is a warning (Library). */
-  inventedProbability: number
   /** A reason tag is attached when Jev's probability is at or above this. */
   reasonProbability: number
   /** Clips shorter than this are rated low-value by duration alone. */
@@ -54,11 +51,9 @@ export const DEFAULT_QUALITY_RULES: Readonly<QualityConfig> = Object.freeze({
   quietSoundShare: 0.05,
   quietMinDurationSeconds: 60,
   meaningfulWords: 100,
-  meaningfulStars: 3,
   maxWordsPerMinuteOfRecording: 250,
   busySoundSeconds: 300,
   minWordsPerMinuteOfSound: 20,
-  inventedProbability: 0.8,
   reasonProbability: 0.5,
   lowValueMaxSeconds: 30,
   maxRetries: 3,
@@ -76,7 +71,6 @@ export const WARNING_RULE_KEYS: readonly QualityKey[] = [
   'quietSoundShare',
   'quietMinDurationSeconds',
   'meaningfulWords',
-  'meaningfulStars',
   'maxWordsPerMinuteOfRecording',
   'busySoundSeconds',
   'minWordsPerMinuteOfSound'

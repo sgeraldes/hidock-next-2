@@ -454,7 +454,6 @@ export const SourceCard = memo(function SourceCard({
     prevProps.recording.evalKind === nextProps.recording.evalKind &&
     prevProps.recording.evalContext === nextProps.recording.evalContext &&
     prevProps.recording.evalAudioWarning === nextProps.recording.evalAudioWarning &&
-    prevProps.recording.evalTranscriptInvented === nextProps.recording.evalTranscriptInvented &&
     prevProps.recording.audioCategory === nextProps.recording.audioCategory &&
     prevProps.recording.qualityReasons?.join('|') === nextProps.recording.qualityReasons?.join('|') &&
     prevProps.recording.qualitySource === nextProps.recording.qualitySource &&

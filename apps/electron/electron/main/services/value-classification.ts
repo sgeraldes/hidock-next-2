@@ -68,6 +68,7 @@ import {
   audioTranscriptWarning,
   EVALUATION_VERSION,
   evidenceCap,
+  isTranscriptHeld,
   rulesEvaluation,
   withEvidence,
   kindWithFallback,
@@ -194,7 +195,7 @@ export interface ApplyResult {
  *
  * 'user' still outranks both and is never overwritten.
  */
-export type CaptureRatingMethod = 'content' | 'duration' | 'audio' | 'trust'
+export type CaptureRatingMethod = 'content' | 'duration' | 'audio'
 
 /**
  * Methods whose rating comes from a measurement of the recording itself, not
@@ -202,10 +203,10 @@ export type CaptureRatingMethod = 'content' | 'duration' | 'audio' | 'trust'
  * is never replaced by an unmeasured one: until 3-oct-2026 a noise recording
  * rated "no value" by its audio could be rated "high" again by a model reading
  * the transcript the transcriber invented for it. The measurement that set it
- * takes it back itself when its evidence changes (clearAudioVerdict,
- * syncTrustVerdicts).
+ * takes it back itself when its evidence changes (clearAudioVerdict). A
+ * transcript that is not valid gives no rating at all (transcript-trust.ts).
  */
-export const MEASURED_RATING_METHODS: readonly CaptureRatingMethod[] = ['audio', 'trust']
+export const MEASURED_RATING_METHODS: readonly CaptureRatingMethod[] = ['audio']
 
 /**
  * Guarded, idempotent, never-downgrade, confidence-floored DB write. Writes
@@ -307,7 +308,7 @@ export interface CaptureValueResult {
   reasons: string[]
   confidence: number
   changed: boolean
-  skipped?: 'no-transcript' | 'already-rated' | 'no-provider'
+  skipped?: 'no-transcript' | 'already-rated' | 'no-provider' | 'transcript-held'
 }
 
 interface CaptureForClassification {
@@ -325,6 +326,7 @@ interface CaptureForClassification {
   word_count: number | null
   integrity_status: string | null
   integrity_accepted_at?: string | null
+  validity_status?: string | null
   evaluation_version: number | null
 }
 
@@ -474,8 +476,8 @@ export function getValueClassifierKind(): ValueClassifierKind | null {
 
 /**
  * One Jev evaluation of a capture: the full question set of jev-evaluation.ts
- * (stars, kind, work or personal, transcript trust, action items, sensitive,
- * reason tags) in a single call. Text passed in is delimiter-neutralized like
+ * (stars, kind, work or personal, action items, sensitive, reason tags) in a
+ * single call. Callers send only a transcript that is valid. Text passed in is delimiter-neutralized like
  * every other untrusted input.
  */
 export async function evaluateWithJev(
@@ -502,9 +504,9 @@ export async function evaluateWithJev(
   // The same caps the stored evaluations get (recomputeEvaluationsFromEvidence).
   const evaluation = withEvidence(parseEvaluation(response), {
     audioCategory: input.audio?.audio_category ?? null,
-    transcriptUntrusted: false
+    transcriptValidity: null
   })
-  evaluation.audioWarning = audioTranscriptWarning(input.audio, evaluation.starLevel)
+  evaluation.audioWarning = audioTranscriptWarning(input.audio)
   return evaluation
 }
 
@@ -555,8 +557,7 @@ export function announceEvaluation(recordingId: string | null, ev: RecordingEval
         starLevel: ev.starLevel,
         kind: ev.kind,
         context: ev.context,
-        audioWarning: ev.audioWarning ?? null,
-        transcriptInvented: ev.transcriptInvented
+        audioWarning: ev.audioWarning ?? null
       }
     })
   }
@@ -584,7 +585,7 @@ export interface RawClassificationResult {
   /** The capture's rating at load time — lets classifyCaptureValue report an
    *  accurate `rating` on a skip without a second query. */
   currentRating: QualityRating | 'unrated'
-  skipped?: 'no-transcript' | 'already-rated' | 'no-provider'
+  skipped?: 'no-transcript' | 'already-rated' | 'no-provider' | 'transcript-held'
   /** Jev's evaluation of this capture, when one was made. The caller stores
    *  it (storeEvaluation) inside its own transaction; this function writes
    *  nothing. Present even on an already-rated skip: a rating the owner or an
@@ -635,6 +636,7 @@ export async function classifyCaptureValueRaw(captureId: string): Promise<RawCla
             t.word_count AS word_count,
             t.integrity_status AS integrity_status,
             t.integrity_accepted_at AS integrity_accepted_at,
+            t.validity_status AS validity_status,
             re.version AS evaluation_version
        FROM knowledge_captures kc
        LEFT JOIN transcripts t ON t.recording_id = kc.source_recording_id
@@ -674,25 +676,28 @@ export async function classifyCaptureValueRaw(captureId: string): Promise<RawCla
       recordingId: row.recording_id
     })
 
-  // Tier 0 (owner, 3-oct-2026): when the recording's own measurements decide
-  // (silent, noise only, too short, or a transcript that cannot have come from
-  // this audio), the rules give the evaluation and Jev is not asked. Rec02, a
-  // noise-only file, was rated 5 stars by Jev reading its invented transcript.
-  const cap = evidenceCap({
-    audioCategory: row.audio_category,
-    transcriptUntrusted: row.integrity_status === 'broken' && !row.integrity_accepted_at
-  })
+  // Tier 0 (owner, 3-oct-2026): when the audio alone decides (silent, noise
+  // only, too short), the rules give the evaluation and Jev is not asked.
+  // Rec02, a noise-only file, was rated 5 stars by Jev reading its invented
+  // transcript. Over speech, a transcript that is not valid is not
+  // categorized at all (owner, 4-oct-2026): Jev never reads it.
+  const evidence = { audioCategory: row.audio_category, transcriptValidity: row.validity_status ?? null }
+  const cap = evidenceCap(evidence)
+  const held = !cap && isTranscriptHeld(evidence)
   const needsRules = !!cap && hasTranscript && (row.evaluation_version ?? 0) < EVALUATION_VERSION
   const rules = (c: EvidenceCap): RecordingEvaluation => {
     const ev = rulesEvaluation(c)
     // The warning still says when a long transcript sits on audio with no speech.
-    ev.audioWarning = audioTranscriptWarning(evaluationAudio(row), ev.starLevel)
+    ev.audioWarning = audioTranscriptWarning(evaluationAudio(row))
     return ev
   }
 
   const isUnrated = row.quality_rating === 'unrated' || row.quality_rating === null
   if (!isUnrated || row.quality_source === 'user') {
     const currentRating = (row.quality_rating as QualityRating | null) ?? 'unrated'
+    if (held) {
+      return { classification: emptyClassification, currentRating, skipped: 'transcript-held', providerCalled: false }
+    }
     // The rating stays as it is; the recording still gets its evaluation.
     if (needsRules && cap) {
       return {
@@ -740,6 +745,10 @@ export async function classifyCaptureValueRaw(captureId: string): Promise<RawCla
       skipped: 'no-transcript',
       providerCalled: false
     }
+  }
+
+  if (held) {
+    return { classification: emptyClassification, currentRating: 'unrated', skipped: 'transcript-held', providerCalled: false }
   }
 
   if (cap) {
@@ -795,9 +804,6 @@ export async function classifyCaptureValueRaw(captureId: string): Promise<RawCla
 
 /** The "no value" rating a measurement gives, and under which method. */
 function measuredVerdict(cap: EvidenceCap): { classification: ValueClassification; method: CaptureRatingMethod } {
-  if (cap === 'transcript_untrusted') {
-    return { classification: { value: 'none', reasons: ['transcript_untrusted'], confidence: 1 }, method: 'trust' }
-  }
   if (cap === 'audio_too_short') {
     return { classification: { value: 'none', reasons: ['no_substance'], confidence: 1 }, method: 'duration' }
   }
@@ -929,7 +935,7 @@ export const WARNING_REFRESH_CHUNK = 200
 
 /**
  * Recompute stored audio-versus-transcript warnings from the numbers the
- * database already holds (audio profile, transcript words, stored stars). No
+ * database already holds (audio profile, transcript words). No
  * Jev call: the rule is local. Runs at boot, after an audio-profile pass, and
  * from Settings, so a rule change or a new profile reaches the Library without
  * a new scan. `recordingIds` limits it to those recordings.
@@ -941,7 +947,7 @@ export const WARNING_REFRESH_CHUNK = 200
  */
 export async function recomputeAudioWarnings(recordingIds?: string[]): Promise<number> {
   if (recordingIds && recordingIds.length === 0) return 0
-  // Stars, kind and context first: the warning reads the star level.
+  // Stars, kind and context first, so the announcement below covers both.
   const evidenceChanged = await recomputeEvaluationsFromEvidence(recordingIds)
   const filter = recordingIds ? `WHERE kc.source_recording_id IN (${recordingIds.map(() => '?').join(', ')})` : ''
   const rows = queryAll<{
@@ -985,7 +991,7 @@ export async function recomputeAudioWarnings(recordingIds?: string[]): Promise<n
       integrity_status: row.integrity_status,
       evaluation_version: null
     })
-    const next = audioTranscriptWarning(audio, row.star_level)
+    const next = audioTranscriptWarning(audio)
     if ((next ?? null) !== (row.audio_warning ?? null)) updates.push({ captureId: row.capture_id, warning: next })
   }
   for (let i = 0; i < updates.length; i += WARNING_REFRESH_CHUNK) {
@@ -1012,12 +1018,14 @@ export async function recomputeAudioWarnings(recordingIds?: string[]): Promise<n
 /**
  * Recompute the stored stars, kind and context of every evaluation from the
  * answers Jev gave (answers_json) and the recording's measurements now: the
- * star level rule (starLevelFor) and the evidence caps (withEvidence). No Jev
- * call, so a rule change or a new audio profile or trust verdict reaches every
- * stored evaluation for free. Jev's answers are never changed, so a cap that
- * no longer applies gives the original verdict back. A rules evaluation (no
- * Jev answers) whose cap no longer applies is marked outdated, so the next
- * scan asks Jev. Returns how many evaluations changed.
+ * star level rule (starLevelFor) and the evidence (withEvidence): the audio
+ * caps, and no categorization while the transcript is not valid. No Jev call,
+ * so a rule change or a new audio profile or validity verdict reaches every
+ * stored evaluation for free. Jev's answers are never changed, so evidence
+ * that no longer applies gives the original verdict back. A rules evaluation
+ * (no Jev answers) whose cap no longer applies loses its categorization and is
+ * marked outdated, so the next scan asks Jev once the transcript is valid.
+ * Returns how many evaluations changed.
  */
 export async function recomputeEvaluationsFromEvidence(recordingIds?: string[]): Promise<number> {
   if (recordingIds && recordingIds.length === 0) return 0
@@ -1035,12 +1043,11 @@ export async function recomputeEvaluationsFromEvidence(recordingIds?: string[]):
     context: string | null
     context_confidence: number | null
     audio_category: string | null
-    integrity_status: string | null
-    integrity_accepted_at: string | null
+    validity_status: string | null
   }>(
     `SELECT re.capture_id, re.model, re.version, re.answers_json, re.stars, re.star_level, re.stars_confidence,
             re.kind, re.kind_confidence, re.context, re.context_confidence,
-            ap.category AS audio_category, t.integrity_status, t.integrity_accepted_at
+            ap.category AS audio_category, t.validity_status
        FROM recording_evaluations re
        JOIN knowledge_captures kc ON kc.id = re.capture_id
        LEFT JOIN audio_profiles ap ON ap.recording_id = kc.source_recording_id
@@ -1051,12 +1058,10 @@ export async function recomputeEvaluationsFromEvidence(recordingIds?: string[]):
   type Next = Pick<RecordingEvaluation, 'stars' | 'starLevel' | 'starsConfidence' | 'kind' | 'kindConfidence' | 'context' | 'contextConfidence'>
   const updates: Array<{ captureId: string; next: Next | null }> = []
   for (const row of rows) {
-    const evidence = {
-      audioCategory: row.audio_category,
-      transcriptUntrusted: row.integrity_status === 'broken' && !row.integrity_accepted_at
-    }
+    const evidence = { audioCategory: row.audio_category, transcriptValidity: row.validity_status }
     if (row.model === RULES_MODEL) {
-      if (!evidenceCap(evidence) && row.version > 0) updates.push({ captureId: row.capture_id, next: null })
+      const stale = row.version > 0 || row.star_level !== null || row.kind !== null || row.context !== null
+      if (!evidenceCap(evidence) && stale) updates.push({ captureId: row.capture_id, next: null })
       continue
     }
     let answers: JevResponse['answers']
@@ -1084,7 +1089,11 @@ export async function recomputeEvaluationsFromEvidence(recordingIds?: string[]):
     runInTransaction(() => {
       for (const u of chunk) {
         if (!u.next) {
-          run('UPDATE recording_evaluations SET version = 0 WHERE capture_id = ?', [u.captureId])
+          run(
+            `UPDATE recording_evaluations SET version = 0, stars = NULL, star_level = NULL, stars_confidence = NULL,
+               kind = NULL, kind_confidence = NULL, context = NULL, context_confidence = NULL WHERE capture_id = ?`,
+            [u.captureId]
+          )
           continue
         }
         run(

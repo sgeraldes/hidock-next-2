@@ -102,6 +102,28 @@ export function isRecordingEligible(recordingId: string): boolean {
 }
 
 /**
+ * The transcription path's own boundary: the same allowlist without the
+ * transcript-validity exclusion. A recording whose current transcript is
+ * invalid, incomplete or doubtful must still be transcribable, since a new
+ * transcript is the way out (plan 2026-10-04-validation-order). Fail-closed.
+ */
+export function filterTranscribableRecordingIds(candidateIds: Iterable<string>): EligibilityResult {
+  try {
+    const { eligible, failClosed } = getEligibleRecordingIds(candidateIds, { forTranscription: true })
+    if (failClosed) return { eligible: new Set<string>(), failClosed: true }
+    return { eligible, failClosed: false }
+  } catch (e) {
+    console.error('[Eligibility] transcription allowlist threw — failing closed:', e)
+    return { eligible: new Set<string>(), failClosed: true }
+  }
+}
+
+export function isRecordingTranscribable(recordingId: string): boolean {
+  const { eligible, failClosed } = filterTranscribableRecordingIds([recordingId])
+  return !failClosed && eligible.has(recordingId)
+}
+
+/**
  * ADV15 (round-16) — F16 value ratings that exclude a STANDALONE capture (one
  * with NO source recording) from assistant/DISPLAY surfaces. Mirrors
  * database.ts VALUE_EXCLUDED_RATINGS; kept here as the single source of truth for

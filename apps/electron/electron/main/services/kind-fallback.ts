@@ -70,7 +70,10 @@ export function parseKindReply(raw: string | null | undefined): KindAnswer | nul
   }
 }
 
-/** Evaluations Jev left undecided on the kind, not yet asked, on recordings the AI may read. */
+/**
+ * Evaluations Jev left undecided on the kind, not yet asked, on recordings the
+ * AI may read. Only a valid transcript is categorized (owner, 4-oct-2026).
+ */
 export function evaluationsNeedingKind(limit = KIND_FALLBACK_PER_PASS): Array<{ capture_id: string; recording_id: string }> {
   return queryAll<{ capture_id: string; recording_id: string }>(
     `SELECT re.capture_id, re.recording_id
@@ -82,6 +85,7 @@ export function evaluationsNeedingKind(limit = KIND_FALLBACK_PER_PASS): Array<{ 
         AND (re.kind_confidence IS NULL OR re.kind_confidence < ?)
         AND json_extract(re.answers_json, '$.kind_llm') IS NULL
         AND r.deleted_at IS NULL AND COALESCE(r.personal, 0) = 0
+        AND COALESCE(t.validity_status, '') NOT IN ('invalid', 'incomplete', 'doubtful')
       ORDER BY r.date_recorded DESC
       LIMIT ?`,
     [KIND_FALLBACK_MAX_JEV_CONFIDENCE, limit]

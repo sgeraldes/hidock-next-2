@@ -22,8 +22,6 @@ interface EvaluationSavedPayload {
   kind?: string | null
   context?: string | null
   audioWarning?: string | null
-  /** Jev's probability that the transcript is invented. */
-  transcriptInvented?: number | null
 }
 
 function fieldsOf(p: EvaluationSavedPayload): Partial<UnifiedRecording> {
@@ -31,8 +29,7 @@ function fieldsOf(p: EvaluationSavedPayload): Partial<UnifiedRecording> {
     evalStarLevel: p.starLevel ?? undefined,
     evalKind: (p.kind ?? undefined) as UnifiedRecording['evalKind'],
     evalContext: (p.context ?? undefined) as UnifiedRecording['evalContext'],
-    evalAudioWarning: (p.audioWarning ?? undefined) as UnifiedRecording['evalAudioWarning'],
-    evalTranscriptInvented: p.transcriptInvented ?? undefined
+    evalAudioWarning: (p.audioWarning ?? undefined) as UnifiedRecording['evalAudioWarning']
   }
 }
 

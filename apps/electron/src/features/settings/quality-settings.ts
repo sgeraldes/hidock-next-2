@@ -36,11 +36,6 @@ const ENTRIES: AdvancedSetting[] = [
     detail: `A transcript with at least this many words counts as meaningful. ${RECOMPUTED}`
   },
   {
-    section: 'quality', key: 'meaningfulStars', group: 'Audio versus transcript', kind: 'number', step: 1, unit: 'stars',
-    label: 'Meaningful transcript: stars',
-    detail: `A recording Jev rated at least this many stars also counts as meaningful. ${RECOMPUTED}`
-  },
-  {
     section: 'quality', key: 'maxWordsPerMinuteOfRecording', group: 'Audio versus transcript', kind: 'number', step: 10, unit: 'words per minute',
     label: 'Fastest believable speech',
     detail: `A transcript with more words per minute of recording than this is marked "may be invented". ${RECOMPUTED}`
@@ -54,11 +49,6 @@ const ENTRIES: AdvancedSetting[] = [
     section: 'quality', key: 'minWordsPerMinuteOfSound', group: 'Audio versus transcript', kind: 'number', step: 1, unit: 'words per minute',
     label: 'Busy file: fewest words',
     detail: `A busy file with fewer words per minute of sound than this is marked "may be missing". ${RECOMPUTED}`
-  },
-  {
-    section: 'quality', key: 'inventedProbability', group: 'Jev', kind: 'number', step: 0.05,
-    label: 'Invented transcript probability',
-    detail: 'When Jev puts the chance that a transcript is invented at or above this, the Library marks it "may be invented". The Library uses the new value at once.'
   },
   {
     section: 'quality', key: 'reasonProbability', group: 'Jev', kind: 'number', step: 0.05,

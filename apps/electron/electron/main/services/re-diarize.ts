@@ -33,7 +33,7 @@
  */
 
 import { queryAll, run, addToQueue, updateRecordingTranscriptionStatus, runInTransaction } from './database'
-import { isRecordingEligible } from './recording-eligibility'
+import { isRecordingTranscribable } from './recording-eligibility'
 import { markUserPriority, processQueueManually } from './transcription'
 
 // Config-KV marker prefixes written by the self-identification pass
@@ -194,7 +194,7 @@ export class ReDiarizeError extends Error {
 export async function reDiarizeRecording(recordingId: string, provider?: string): Promise<ReDiarizeResult> {
   const { cleared, queueItemId } = runInTransaction((): ReDiarizeResult => {
     // (1) Assert eligibility BEFORE reading/deleting ANY identity state.
-    if (!isRecordingEligible(recordingId)) {
+    if (!isRecordingTranscribable(recordingId)) {
       throw new ReDiarizeError(
         RE_DIARIZE_INELIGIBLE,
         `Recording ${recordingId} is excluded from AI re-processing (deleted, personal, or low-value) and cannot be re-diarized.`

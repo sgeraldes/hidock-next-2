@@ -8,7 +8,6 @@ import { CONTEXT_LABELS, KIND_LABELS, displayedEvaluation } from '@/features/lib
 import { audioLabel } from '@/features/library/utils/audioCheck'
 import { formatValueReasons } from '@/features/library/utils/valueReasons'
 import { transcriptProblems, showsTranscriptProblem, type TranscriptProblemKind } from '@/features/library/utils/rowState'
-import { useConfigStore } from '@/store/domain/useConfigStore'
 import { useTranscriptionStore } from '@/store/features/useTranscriptionStore'
 import type { DownloadStatus } from '@/store/useAppStore'
 import { StatusIcon } from './StatusIcon'
@@ -271,8 +270,6 @@ const PROBLEM_ICON: Record<TranscriptProblemKind, typeof XOctagon> = {
  * of the state; the tooltip lists every problem and still says the state.
  */
 export function TranscriptionPlaceIcon({ recording, transcript }: { recording: UnifiedRecording; transcript?: Transcript }) {
-  // Subscribed, so a changed Settings > Quality checks threshold redraws the row.
-  useConfigStore((s) => s.config?.quality?.inventedProbability)
   // The percentage of a running transcription; null until the first progress event.
   const progress = useTranscriptionStore((s) => {
     for (const item of s.queue.values()) {

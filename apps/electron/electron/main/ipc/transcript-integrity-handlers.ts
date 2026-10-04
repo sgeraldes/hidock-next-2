@@ -16,7 +16,7 @@ import { ipcMain } from 'electron'
 import { z } from 'zod'
 import { addToQueue, resolveRecordingId, setTranscriptIntegrityAccepted } from '../services/database'
 import { processQueueManually } from '../services/transcription'
-import { filterEligibleRecordingIds } from '../services/recording-eligibility'
+import { filterTranscribableRecordingIds } from '../services/recording-eligibility'
 import { syncTrustVerdicts } from '../services/transcript-trust'
 import { success, error, type Result } from '../types/api'
 
@@ -72,7 +72,7 @@ export function registerTranscriptIntegrityHandlers(): void {
     // the provider boundary, so counting it as queued would promise a new
     // transcript that never comes. Fails closed: if eligibility cannot be
     // read, nothing is queued.
-    const { eligible } = filterEligibleRecordingIds(recordings.flatMap((r) => (r ? [r.id] : [])))
+    const { eligible } = filterTranscribableRecordingIds(recordings.flatMap((r) => (r ? [r.id] : [])))
     for (const recording of recordings) {
       // addToQueue refuses personal and deleted recordings and ones already queued.
       if (recording && eligible.has(recording.id) && addToQueue(recording.id)) queued++

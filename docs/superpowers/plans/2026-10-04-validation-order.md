@@ -1,6 +1,6 @@
 # Validation order: categorize only a transcript that is valid
 
-Date: 4-oct-2026. Status: plan, revised with the owner's answers of the same day. Follows `docs/superpowers/specs/2026-10-03-pipeline-trust-design.md` (PRs #135, #136, #139).
+Date: 4-oct-2026. Status: PR 1 built (branch `fix/validity-order`); PRs 2 and 3 to come. Revised with the owner's answers of the same day. Follows `docs/superpowers/specs/2026-10-03-pipeline-trust-design.md` (PRs #135, #136, #139).
 
 ## The request
 
@@ -87,3 +87,16 @@ The thresholds above are starting points; the sample in step 3 checks them befor
 - Ends long before the audio: it depends on the audio after the end. No real audio there: valid. Sustained sound there: incomplete.
 - Sampling: 20 first, then the rest, without asking again unless something does not add up.
 - Re-transcription of the 121 truncated ones: see the ask of 4-oct.
+
+## What PR 1 does in the code
+
+| Piece | Where |
+|---|---|
+| The verdict: audio, invalid, incomplete, doubtful, valid, with reason codes and measures | `services/transcript-validity.ts` |
+| Stored on the transcript (schema v68: `validity_status`, `validity_json`, `validity_version`), refreshed with every integrity change, and walked over the library on each Library mount; a meeting linked later is checked again | `services/transcript-validity-store.ts`, `ipc/recording-handlers.ts` |
+| Before the analysis call: invalid, doubtful or incomplete gets no summary, title or analysis, and no actions, timeline, identity, graph or search | `services/transcription.ts` |
+| Not categorized: Jev is not called, stored stars, kind and context are cleared (Jev's answers are kept and come back when the transcript turns valid), the old 'trust' ratings and the ratings read from the content are taken back | `services/jev-evaluation.ts` `withEvidence`, `services/value-classification.ts`, `services/transcript-trust.ts` |
+| Jev no longer asked whether the text is invented; its old answer no longer caps stars or raises a warning; the warning no longer reads the stars | `services/jev-evaluation.ts`, `src/features/library/utils/evaluation.ts` |
+| The settings that fed those (`meaningfulStars`, `inventedProbability`) are gone | `services/quality-rules.ts`, `src/features/settings/quality-settings.ts` |
+| Eligibility for search, the graph and the kind fallback leaves these transcripts out; transcription is the way out, so it stays allowed | `services/database.ts` `getEligibleRecordingIds`, `isRecordingGraphIngestable`, `services/kind-fallback.ts`, `services/recording-eligibility.ts` |
+| The summary is hidden with a note in the words of the verdict | `src/features/library/utils/transcriptIntegrity.ts` |

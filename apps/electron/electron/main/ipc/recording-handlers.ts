@@ -37,6 +37,7 @@ import { jevMeetingMatchDeps, listMeetingCandidates, toMatchCandidates, toMatchC
 import { filterEligibleRecordingIds } from '../services/recording-eligibility'
 import { applyDurationValueGate, recomputeAudioWarnings } from '../services/value-classification'
 import { syncTrustVerdicts } from '../services/transcript-trust'
+import { backfillTranscriptValidity } from '../services/transcript-validity-store'
 import { copyFileSync, existsSync, statSync } from 'fs'
 import { basename, join, extname } from 'path'
 import { randomUUID } from 'crypto'
@@ -852,12 +853,13 @@ export function registerRecordingHandlers(): void {
       // After the durations: the integrity check compares each transcript with
       // the audio's measured length, so it reads the lengths just settled.
       const integrity = await backfillTranscriptIntegrity()
-      // A transcript the check now calls broken rates its recording "no value",
-      // which keeps search, the graph and People away from it; an accepted or
-      // re-checked one gets the rating back. Library-wide and idempotent.
+      // Then the validity verdict, which reads the integrity just settled: a
+      // transcript that is invalid, in doubt or incomplete is not categorized
+      // and nothing is built on it. Library-wide and idempotent.
       try {
+        await backfillTranscriptValidity()
         syncTrustVerdicts()
-        // Stars, kind and context follow the trust verdicts just settled.
+        // Stars, kind and context follow the validity verdicts just settled.
         await recomputeAudioWarnings()
       } catch (err) {
         console.warn('recordings:backfillDurations: transcript trust sync failed:', err)

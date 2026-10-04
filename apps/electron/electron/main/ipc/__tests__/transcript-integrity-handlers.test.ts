@@ -18,7 +18,9 @@ vi.mock('../../services/transcription', () => transcription)
 
 const eligibility = vi.hoisted(() => ({ excluded: new Set<string>(), failClosed: false }))
 vi.mock('../../services/recording-eligibility', () => ({
-  filterEligibleRecordingIds: (ids: Iterable<string>) =>
+  // Re-transcription is the way out of a transcript that is not valid, so the
+  // handler asks the transcription boundary, not the AI-surface one.
+  filterTranscribableRecordingIds: (ids: Iterable<string>) =>
     eligibility.failClosed
       ? { eligible: new Set<string>(), failClosed: true }
       : { eligible: new Set([...ids].filter((id) => !eligibility.excluded.has(id))), failClosed: false },

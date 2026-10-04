@@ -42,11 +42,9 @@ describe('qualityRules (Settings > Quality checks)', () => {
       quietSoundShare: 0.05,
       quietMinDurationSeconds: 60,
       meaningfulWords: 100,
-      meaningfulStars: 3,
       maxWordsPerMinuteOfRecording: 250,
       busySoundSeconds: 300,
       minWordsPerMinuteOfSound: 20,
-      inventedProbability: 0.8,
       reasonProbability: 0.5,
       lowValueMaxSeconds: 30,
       maxRetries: 3,
@@ -63,18 +61,18 @@ describe('qualityRules (Settings > Quality checks)', () => {
   })
 
   it('reads saved values and clamps them to their bounds', () => {
-    applyQualityRules({ quality: { maxRetries: 5, reasonProbability: 1.7, meaningfulStars: 0, liveSilenceRms: 40.6 } })
+    applyQualityRules({ quality: { maxRetries: 5, reasonProbability: 1.7, quietSoundShare: 2, liveSilenceRms: 40.6 } })
     const r = qualityRules()
     expect(r.maxRetries).toBe(5)
     expect(r.reasonProbability).toBe(1)
-    expect(r.meaningfulStars).toBe(2) // at least 2: 1 star is every rated recording
+    expect(r.quietSoundShare).toBe(1)
     expect(r.liveSilenceRms).toBe(41)
     expect(r.busySoundSeconds).toBe(300)
   })
 
   it('falls back to the default for anything that is not a finite number', () => {
     applyQualityRules({
-      quality: { maxRetries: '7', inventedProbability: Number.NaN, retranscribeScore: null, busySoundSeconds: Infinity }
+      quality: { maxRetries: '7', reasonProbability: Number.NaN, retranscribeScore: null, busySoundSeconds: Infinity }
     })
     expect(qualityRules()).toEqual(DEFAULT_QUALITY_RULES)
     applyQualityRules({ quality: 'nonsense' })
@@ -106,9 +104,9 @@ describe('the services read the rules in force', () => {
 
   it('audio-versus-transcript warning', () => {
     // 1,100 words in 10 minutes: 110 per minute of recording.
-    expect(audioTranscriptWarning(audio, 3)).toBeNull()
+    expect(audioTranscriptWarning(audio)).toBeNull()
     applyQualityRules({ quality: { maxWordsPerMinuteOfRecording: 100 } })
-    expect(audioTranscriptWarning(audio, 3)).toBe('possible_invented_transcript')
+    expect(audioTranscriptWarning(audio)).toBe('possible_invented_transcript')
   })
 
   it('reason tags', () => {

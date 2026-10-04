@@ -54,7 +54,7 @@ export const ISSUE_ORDER: IntegrityIssueCode[] = [
   'untimed_lines',
 ]
 
-type IntegrityFields = Pick<Transcript, 'integrity_status' | 'integrity_json' | 'integrity_accepted_at'>
+type IntegrityFields = Pick<Transcript, 'integrity_status' | 'integrity_json' | 'integrity_accepted_at' | 'validity_status'>
 
 export function integrityLabel(transcript: IntegrityFields | null | undefined): IntegrityLabel {
   const status = transcript?.integrity_status
@@ -64,13 +64,19 @@ export function integrityLabel(transcript: IntegrityFields | null | undefined): 
   return status === 'broken' ? 'broken' : 'suspect'
 }
 
+/** Validity verdicts on which nothing may be built (services/transcript-validity.ts). */
+const UNUSABLE_VALIDITY = new Set(['invalid', 'incomplete', 'doubtful'])
+
 /**
  * Whether anything may be built on this transcript (summary, actions, search).
  * Mirrors isTranscriptUntrusted in the main process: broken and not accepted
- * by the owner means untrusted. An unchecked transcript is trusted.
+ * by the owner, or a validity verdict of invalid, in doubt or incomplete
+ * (owner, 4-oct-2026: a doubtful transcript shows nothing derived from it).
+ * An unchecked transcript is trusted.
  */
 export function isTranscriptTrusted(transcript: IntegrityFields | null | undefined): boolean {
-  return integrityLabel(transcript) !== 'broken'
+  if (integrityLabel(transcript) === 'broken') return false
+  return !UNUSABLE_VALIDITY.has(transcript?.validity_status ?? '')
 }
 
 type TrustFields = Partial<IntegrityFields>
@@ -93,6 +99,14 @@ export function trustedSummary(
 
 /** Shown where a summary would be, when the transcript is not trusted. */
 export const UNTRUSTED_SUMMARY_NOTE = 'No summary: the transcript does not match the audio.'
+
+/** The note for a summary held back, in the words of the transcript's verdict. */
+export function untrustedSummaryNote(transcript: Partial<IntegrityFields> | null | undefined): string {
+  if (integrityLabel(transcript as IntegrityFields) === 'broken') return UNTRUSTED_SUMMARY_NOTE
+  if (transcript?.validity_status === 'doubtful') return 'No summary: the transcript is in doubt until it is checked against the audio.'
+  if (transcript?.validity_status === 'incomplete') return 'No summary: the transcript stops before the speech in the audio ends.'
+  return UNTRUSTED_SUMMARY_NOTE
+}
 
 export function integrityIssues(transcript: IntegrityFields | null | undefined): IntegrityIssue[] {
   if (!transcript?.integrity_json) return []

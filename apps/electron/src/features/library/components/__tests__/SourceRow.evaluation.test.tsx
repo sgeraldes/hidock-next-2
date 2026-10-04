@@ -161,9 +161,11 @@ describe('evaluation filters', () => {
     expect(matchesKindFilter({ evalKind: 'interview' }, 'interview')).toBe(true)
   })
 
-  it('a sure "invented" answer from Jev counts as a warning even when the audio rule did not fire', () => {
-    expect(effectiveWarning({ evalTranscriptInvented: 0.9 })).toBe('possible_invented_transcript')
-    expect(effectiveWarning({ evalTranscriptInvented: 0.5 })).toBeNull()
+  // Owner, 4-oct-2026: an LLM cannot tell invented text, so only the
+  // audio-against-text rule warns.
+  it('warns only from the stored audio rule', () => {
+    expect(effectiveWarning({})).toBeNull()
+    expect(effectiveWarning({ evalAudioWarning: 'possible_invented_transcript' })).toBe('possible_invented_transcript')
     expect(matchesWarningFilter({ evalAudioWarning: 'possible_missed_transcription' }, 'any')).toBe(true)
     expect(matchesWarningFilter({ evalAudioWarning: 'possible_missed_transcription' }, 'possible_invented_transcript')).toBe(false)
   })
