@@ -16,7 +16,7 @@ SetCompressor /SOLID lzma
 !define TRAY_EXE "HiDockModelHost.exe"
 !define TRAY_CLASS "HiDockModelHostTray"
 !ifndef VERSION
-  !define VERSION "0.3.1"
+  !define VERSION "0.3.2"
 !endif
 
 Name "${PRODUCT} ${VERSION}"
@@ -90,7 +90,13 @@ SectionEnd
 Section -Setup
   ; No questions. The console shows the download and closes when it is done.
   DetailPrint "Setting up the model runtime (about 2.5 GB the first time)..."
-  ExecWait '"$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\setup.ps1"' $0
+  ; This installer is 32-bit, and Windows sends a 32-bit process's System32 to SysWOW64: the
+  ; 32-bit PowerShell there cannot see nvidia-smi (64-bit only), so 0.3.0 and 0.3.1 decided the
+  ; RTX 4090 had no driver and installed the CPU build of torch. Sysnative is the real System32.
+  StrCpy $1 "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+  IfFileExists $1 +2
+    StrCpy $1 "$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe"
+  ExecWait '"$1" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\setup.ps1"' $0
   IntCmp $0 0 setup_ok
     DetailPrint "Setup ended with code $0. The details are in $LOCALAPPDATA\${PRODUCT}\logs\setup.log."
   setup_ok:

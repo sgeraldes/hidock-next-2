@@ -39,6 +39,7 @@ import {
   resetVoiceBackfillForTests,
   runVoiceBackfillOnce,
   startVoiceBackfill,
+  VOICE_BACKFILL_GPU_TICK_MS,
   stopVoiceBackfill,
   tieTranscriptSpeakers,
   IDENTITY_RULES_INTERVAL_MS,
@@ -678,5 +679,35 @@ describe('startVoiceBackfill', () => {
     release()
     await vi.advanceTimersByTimeAsync(10 * 60_000)
     expect(runOnce).toHaveBeenCalledTimes(2)
+  })
+
+  it('goes straight to the next recording when the last one ran on a GPU', async () => {
+    vi.useFakeTimers()
+    const runOnce = vi.fn(async () => ({ ran: true, outcome: 'done', device: 'cuda' }))
+    startVoiceBackfill({ runOnce })
+    await vi.advanceTimersByTimeAsync(2 * 60_000)
+    expect(runOnce).toHaveBeenCalledTimes(1)
+    // A 4090 takes seconds per recording; two minutes between them would take days for a library.
+    await vi.advanceTimersByTimeAsync(VOICE_BACKFILL_GPU_TICK_MS)
+    expect(runOnce).toHaveBeenCalledTimes(2)
+    stopVoiceBackfill()
+  })
+
+  it('keeps two minutes between recordings that ran on the CPU, or that did not run', async () => {
+    vi.useFakeTimers()
+    const results = [
+      { ran: true, outcome: 'done', device: 'cpu' },
+      { ran: false, reason: 'outside-window' },
+    ]
+    const runOnce = vi.fn(async () => results.shift() ?? { ran: false, reason: 'nothing-left' })
+    startVoiceBackfill({ runOnce })
+    await vi.advanceTimersByTimeAsync(2 * 60_000)
+    await vi.advanceTimersByTimeAsync(VOICE_BACKFILL_GPU_TICK_MS)
+    expect(runOnce).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(2 * 60_000)
+    expect(runOnce).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(VOICE_BACKFILL_GPU_TICK_MS)
+    expect(runOnce).toHaveBeenCalledTimes(2)
+    stopVoiceBackfill()
   })
 })

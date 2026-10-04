@@ -44,6 +44,13 @@ export type { VoiceBackfillMeasure, VoiceBackfillStatus }
 /** How often the scheduler looks for the next recording. */
 export const VOICE_BACKFILL_TICK_MS = 2 * 60_000
 
+/**
+ * After a recording that ran on a GPU (the Model Host's RTX card), the next one starts at once:
+ * there it takes seconds, and two minutes between recordings would take days for a library.
+ * The two-minute pace stays for the CPU, where it keeps this computer usable.
+ */
+export const VOICE_BACKFILL_GPU_TICK_MS = 2_000
+
 export type VoiceBackfillOutcome = 'done' | 'skipped' | 'failed' | 'cancelled' | 'unavailable'
 
 export type VoiceBackfillSkipReason =
@@ -61,6 +68,8 @@ export interface VoiceBackfillRun {
   reason?: VoiceBackfillSkipReason
   recordingId?: string
   outcome?: VoiceBackfillOutcome
+  /** Where the voice step ran ('cuda', 'cpu'...), when it ran. */
+  device?: string | null
 }
 
 export interface VoiceBackfillDeps {
@@ -505,7 +514,7 @@ export async function runVoiceBackfillOnce(deps: VoiceBackfillDeps = {}): Promis
   }
   const shouldContinue = () => !stopRequested && allowedNow() === null && isRecordingEligible(next.recordingId)
   const processed = await processRecording(next, shouldContinue, d)
-  return { ran: true, recordingId: next.recordingId, outcome: processed.outcome }
+  return { ran: true, recordingId: next.recordingId, outcome: processed.outcome, device: processed.device }
 }
 
 /**
@@ -536,25 +545,28 @@ export async function measureOneRecording(deps: VoiceBackfillDeps = {}): Promise
  * only after the current one finished, so two never overlap.
  */
 export function startVoiceBackfill(
-  options: { runOnce?: () => Promise<unknown>; intervalMs?: number } = {}
+  options: { runOnce?: () => Promise<Partial<VoiceBackfillRun> | unknown>; intervalMs?: number } = {}
 ): void {
   if (schedulerActive) return
   schedulerActive = true
   stopRequested = false
   const runOnce = options.runOnce ?? (() => runVoiceBackfillOnce())
   const intervalMs = options.intervalMs ?? VOICE_BACKFILL_TICK_MS
-  const scheduleNext = () => {
+  const scheduleNext = (delayMs = intervalMs) => {
     if (!schedulerActive) return
-    timer = setTimeout(() => void tick(), intervalMs)
+    timer = setTimeout(() => void tick(), delayMs)
   }
   const tick = async () => {
     timer = null
+    let delayMs = intervalMs
     try {
-      await runOnce()
+      const result = (await runOnce()) as Partial<VoiceBackfillRun> | undefined
+      const onGpu = result?.ran === true && /^cuda/i.test(String(result.device ?? ''))
+      if (onGpu && (result.outcome === 'done' || result.outcome === 'skipped')) delayMs = VOICE_BACKFILL_GPU_TICK_MS
     } catch (e) {
       console.warn('[VoiceBackfill] step failed:', e instanceof Error ? e.message : e)
     } finally {
-      scheduleNext()
+      scheduleNext(delayMs)
     }
   }
   scheduleNext()

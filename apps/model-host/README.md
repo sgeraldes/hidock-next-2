@@ -137,6 +137,11 @@ keeps only a Windows executable; HiDock sends only a file named
 `HiDock-Model-Host-<version>-Setup.exe`. In HiDock, the status line offers
 **Repair** when the host has an NVIDIA GPU and still ran the model on its CPU.
 
+The installer is 32-bit NSIS, and Windows redirects a 32-bit process's
+`System32` to `SysWOW64`. It runs `setup.ps1` through `Sysnative`, the 64-bit
+PowerShell: the 32-bit one cannot find `nvidia-smi`, and 0.3.0 and 0.3.1
+installed the CPU build of torch on the RTX 4090 for that reason.
+
 There is no page. `/control` answers only from this machine, checked on both
 the socket address and the `Host` header. The address alone is beaten by DNS
 rebinding: a page in a browser here can be pointed at an attacker domain that
