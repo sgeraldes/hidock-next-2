@@ -35,6 +35,14 @@ pairs with it, gives it the Hugging Face token and decides when it steps aside.
 - **The voice backlog runs back to back on the gamestation's GPU.** A recording measured on the
   host's RTX card takes seconds, so the next one starts two seconds later instead of two minutes.
   On this computer's CPU the two-minute pace stays.
+- **No recording goes to this computer's CPU for a stale "busy".** HiDock keeps the gamestation's
+  status for 15 seconds, and a status read while one recording was being processed sent the next
+  one, two seconds later, to this computer's CPU. Now only the gamestation's answer to the job
+  itself can send a recording back here.
+- **A speaker without a usable voiceprint no longer spoils the whole recording.** The voice model
+  sometimes returns no voiceprint (NaN) for a speaker with little speech; the result was then
+  unreadable and the recording was processed again on this computer. That speaker is now left out,
+  as one with too little speech already was, and the rest is kept.
 - **Model Host 0.3.2 installs the GPU build of torch.** The installer is a 32-bit program, and
   Windows gave it the 32-bit PowerShell, which cannot see the NVIDIA driver; 0.3.0 and 0.3.1
   therefore installed the CPU build. 0.3.2 runs the 64-bit PowerShell. Its window also closes by

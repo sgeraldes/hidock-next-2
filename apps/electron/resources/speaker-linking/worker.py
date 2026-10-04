@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import importlib.metadata
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -346,28 +347,44 @@ def main() -> int:
         segments.append({"start": start, "end": end, "speaker": str(label)})
         speech_seconds[str(label)] = speech_seconds.get(str(label), 0.0) + (end - start)
 
-    speakers = []
-    for label, embedding in zip(labels, embedding_rows):
-        duration = round(speech_seconds.get(str(label), 0.0), 3)
-        if duration < args.min_speech_seconds:
-            continue
-        speakers.append(
-            {
-                "label": str(label),
-                "embedding": embedding,
-                "speechSeconds": duration,
-            }
-        )
-
     result = {
         "model": actual_model,
         "modelVersion": importlib.metadata.version("pyannote.audio"),
         "device": device,
         "segments": segments,
-        "speakers": speakers,
+        "speakers": voiced_speakers(labels, embedding_rows, speech_seconds, args.min_speech_seconds),
     }
-    json.dump(result, result_stdout, ensure_ascii=False, separators=(",", ":"))
+    result_stdout.write(result_json(result))
     return 0
+
+
+def voiced_speakers(
+    labels: list[Any],
+    embedding_rows: list[list[float]],
+    speech_seconds: dict[str, float],
+    min_speech_seconds: float,
+) -> list[dict[str, Any]]:
+    """The speakers with enough speech and a usable voiceprint, in pyannote's order.
+
+    pyannote returns NaN for a speaker it could not embed. JSON has no NaN, and the client
+    refused the whole result for one such speaker (on the Model Host, 4-oct-2026), so that
+    speaker is left out like one with too little speech: its segments stay, unnamed.
+    """
+    speakers = []
+    for label, embedding in zip(labels, embedding_rows):
+        duration = round(speech_seconds.get(str(label), 0.0), 3)
+        if duration < min_speech_seconds:
+            continue
+        if not all(math.isfinite(value) for value in embedding):
+            log(f"{label}: pyannote returned no usable voiceprint ({duration} s of speech); left out")
+            continue
+        speakers.append({"label": str(label), "embedding": embedding, "speechSeconds": duration})
+    return speakers
+
+
+def result_json(result: dict[str, Any]) -> str:
+    """The result as strict JSON: a NaN that got through fails here, not in the client."""
+    return json.dumps(result, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
 
 if __name__ == "__main__":

@@ -293,6 +293,21 @@ describe('diarizeOnModelHost', () => {
     ],
   ]
 
+  it('sends the job to a host whose health said busy; only the job answer decides', async () => {
+    // 4-oct: the Settings status line cached "busy" during one backlog job, and the next one,
+    // two seconds later, ran on this computer's CPU although the host was free by then.
+    const fetchFn = vi.fn(async (url: string) =>
+      String(url).endsWith('/health') ? jsonResponse({ ...HEALTHY, state: 'busy' }) : jsonResponse(RESULT)
+    )
+    const result = await diarizeOnModelHost(
+      audioPath,
+      { url: 'http://gamestation:8765', token: 'tok' },
+      { timeoutMs: 5000 },
+      fetchFn as never
+    )
+    expect(result).toEqual(RESULT)
+  })
+
   for (const [name, makeFetch, expected] of fallbacks) {
     it(`falls back: ${name}`, async () => {
       const token = name === 'not paired' ? '' : 'tok'
