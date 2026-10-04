@@ -473,8 +473,17 @@ function contactAddress(contact: { name: string; email: string | null }): string
 /**
  * Create/update contacts from meeting attendees + organizers and link them to
  * their meetings. Idempotent — safe to run after every sync.
+ *
+ * A pass that would find nothing new is skipped: the shape of the meetings, the
+ * contacts, the links and the merge journal is stored after each pass, and the next
+ * one runs only when it differs (480 ms on every start and calendar sync on the real
+ * library, parsing 6,615 unchanged attendee lists, 4-oct-2026). Known gap, the same
+ * as the address rename's: an edit that keeps every count and length equal waits
+ * for the next change.
  */
 export function upsertContactsFromMeetings(): { contacts: number; links: number } {
+  if (readConfigValue(CONTACTS_UPSERT_FINGERPRINT_KEY) === contactsUpsertFingerprint()) return { contacts: 0, links: 0 }
+
   const meetings = queryAll<MeetingRow>(
     `SELECT id, subject, start_time, attendees, organizer_name, organizer_email FROM meetings`
   )
@@ -593,10 +602,45 @@ export function upsertContactsFromMeetings(): { contacts: number; links: number 
     `)
   })
 
+  writeConfigValue(CONTACTS_UPSERT_FINGERPRINT_KEY, contactsUpsertFingerprint())
+
   if (newContacts > 0 || newLinks > 0) {
     console.log(`[OrgReconciler] Contacts: +${newContacts} people, +${newLinks} meeting links`)
   }
   return { contacts: newContacts, links: newLinks }
+}
+
+/** Config key of the state the last contacts upsert left behind. */
+const CONTACTS_UPSERT_FINGERPRINT_KEY = 'orgReconciler.contactsUpsert.fingerprint'
+/** Bump when the upsert rules change, so the next pass runs in full. */
+const CONTACTS_UPSERT_RULES_VERSION = 1
+
+/** Counts and lengths of everything the upsert reads, summed in SQLite. */
+function contactsUpsertFingerprint(): string {
+  const contacts = queryOne<{ n: number; last_row: number; names: number; emails: number; owned: number }>(
+    `SELECT COUNT(*) AS n, COALESCE(MAX(rowid), 0) AS last_row, COALESCE(SUM(LENGTH(name)), 0) AS names,
+            COALESCE(SUM(LENGTH(email)), 0) AS emails, COALESCE(SUM(source = 'user'), 0) AS owned
+       FROM contacts`
+  )
+  const links = queryOne<{ n: number; last_row: number }>(
+    'SELECT COUNT(*) AS n, COALESCE(MAX(rowid), 0) AS last_row FROM meeting_contacts'
+  )
+  // rowid, not seq: seq has no index and the rows carry large snapshots, so MAX(seq)
+  // read the whole table (50 ms on the real library). Every merge appends a row.
+  const merges = queryOne<{ n: number; last_row: number; undone: number }>(
+    'SELECT COUNT(*) AS n, COALESCE(MAX(rowid), 0) AS last_row, COUNT(undone_at) AS undone FROM merge_journal'
+  )
+  return createHash('sha256')
+    .update(
+      [
+        CONTACTS_UPSERT_RULES_VERSION,
+        addressRenameMeetingsShape(),
+        JSON.stringify(contacts),
+        JSON.stringify(links),
+        JSON.stringify(merges)
+      ].join('\n')
+    )
+    .digest('hex')
 }
 
 /**

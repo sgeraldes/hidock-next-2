@@ -132,6 +132,37 @@ describe('upsertContactsFromMeetings', () => {
     expect(links()).toHaveLength(2)
   })
 
+  // 4-oct-2026, a copy of the real library: 480 ms on every start and after every
+  // calendar sync, parsing 6,615 attendee lists that had not changed.
+  it('does not read the attendees again when the meetings, contacts and links did not change', () => {
+    meeting('m1', { organizerEmail: 'boss@x.com', attendees: [{ name: 'Gwen Stacy', email: 'gwen@x.com' }] })
+    upsertContactsFromMeetings()
+
+    const parse = vi.spyOn(JSON, 'parse')
+    expect(upsertContactsFromMeetings()).toEqual({ contacts: 0, links: 0 })
+    expect(parse).not.toHaveBeenCalled()
+    parse.mockRestore()
+  })
+
+  it('runs again when a meeting, a contact or a link changed since the last pass', () => {
+    meeting('m1', { attendees: [{ name: 'Gwen Stacy', email: 'gwen@x.com' }] })
+    upsertContactsFromMeetings()
+
+    meeting('m2', { attendees: [{ name: 'Gwen Stacy', email: 'gwen@x.com' }] })
+    expect(upsertContactsFromMeetings()).toEqual({ contacts: 0, links: 1 })
+
+    run(`DELETE FROM meeting_contacts WHERE meeting_id = 'm1'`)
+    expect(upsertContactsFromMeetings()).toEqual({ contacts: 0, links: 1 })
+
+    run(`DELETE FROM meeting_contacts`)
+    run(`DELETE FROM contacts`)
+    expect(upsertContactsFromMeetings()).toEqual({ contacts: 1, links: 2 })
+
+    run(`UPDATE contacts SET name = 'gwen'`)
+    upsertContactsFromMeetings()
+    expect(contacts()[0].name).toBe('Gwen Stacy')
+  })
+
   it('lists a person who appears twice in one meeting once', () => {
     meeting('m1', { organizerEmail: 'gwen@x.com', attendees: [{ name: 'Gwen Stacy', email: 'gwen@x.com' }] })
 
