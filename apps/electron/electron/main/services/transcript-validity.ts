@@ -46,6 +46,7 @@ export type ValidityReasonCode =
   | 'audio_after_the_end'
   | 'no_times'
   | 'audio_not_checked'
+  | 'sample_contradicts'
 
 export interface ValidityReason {
   code: ValidityReasonCode
@@ -98,6 +99,8 @@ export interface ValidityInput {
   integrityStatus: string | null
   /** The owner accepted this transcript as it is. */
   accepted: boolean
+  /** A sample of this transcript's audio, transcribed again and compared (transcript-sampler.ts). */
+  sample?: 'confirmed' | 'contradicted' | 'inconclusive' | null
 }
 
 // Thresholds, measured on the owner's library on 4-oct-2026 (plan, "The deterministic checks").
@@ -123,6 +126,20 @@ export const EARLY_END_MIN_FILE_SECONDS = 300
 export const AFTER_END_MIN_AUDIO_SECONDS = 120
 /** Above this many words per second of the stated span, the clock was compressed. */
 export const COMPRESSED_SPAN_RATE = 4
+
+/**
+ * Whether a frame of the envelope holds audio: at least the recording's own
+ * floor (5th percentile) plus a margin, or above the loudness line. Shared
+ * with the sampler, which places its windows where there is audio.
+ */
+export function audioFrameTest(env: Uint8Array, unit: 'gain' | 'db' = 'gain'): (frame: number) => boolean {
+  const sorted = Uint8Array.from(env).sort()
+  const floor = sorted[Math.floor(sorted.length * 0.05)]
+  const decoded = unit === 'db'
+  const margin = decoded ? FLOOR_MARGIN_DB : FLOOR_MARGIN
+  const loud = decoded ? LOUD_DB + 100 : LOUD_GAIN
+  return (f) => env[f] >= floor + margin || env[f] > loud
+}
 
 function countWords(text: string | null | undefined): number {
   return (text ?? '').trim().split(/\s+/).filter(Boolean).length
@@ -161,6 +178,14 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
   if (input.integrityStatus === 'broken') {
     return result('invalid', [{ code: 'integrity', detail: 'The text does not fit this audio (integrity check).' }])
   }
+  // Doubts settle as doubtful, or as valid when a sample of the audio confirmed the text.
+  const settle = (reasons: ValidityReason[]): TranscriptValidity =>
+    reasons.length === 0 || input.sample === 'confirmed' ? result('valid', []) : result('doubtful', reasons)
+  if (input.sample === 'contradicted') {
+    return result('invalid', [
+      { code: 'sample_contradicts', detail: 'A few minutes of the audio, transcribed again, tell a different conversation.' }
+    ])
+  }
 
   const reasons: ValidityReason[] = []
   const timed = input.segments.filter((s) => typeof s.start === 'number' && Number.isFinite(s.start))
@@ -169,7 +194,7 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
     if (totalWords >= MIN_WORDS) {
       reasons.push({ code: 'no_times', detail: 'The transcript has no times, so nothing can be checked against the audio.' })
     }
-    return result(reasons.length ? 'doubtful' : 'valid', reasons)
+    return settle(reasons)
   }
 
   // Timing errors: starts repeated to the hundredth, or more than half a second before the previous one.
@@ -202,12 +227,7 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
       reasons.push({ code: 'audio_not_checked', detail: 'The audio levels could not be read, so the text was not checked against them.' })
     }
   } else {
-    const sorted = Uint8Array.from(env).sort()
-    const floor = sorted[Math.floor(sorted.length * 0.05)]
-    const decoded = input.envelopeUnit === 'db'
-    const margin = decoded ? FLOOR_MARGIN_DB : FLOOR_MARGIN
-    const loud = decoded ? LOUD_DB + 100 : LOUD_GAIN
-    const hasAudio = (f: number) => env[f] >= floor + margin || env[f] > loud
+    const hasAudio = audioFrameTest(env, input.envelopeUnit)
     const fileSeconds = env.length * FRAME_SECONDS
     measures.fileSeconds = fileSeconds
 
@@ -313,7 +333,7 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
     }
   }
 
-  return result(reasons.length ? 'doubtful' : 'valid', reasons)
+  return settle(reasons)
 }
 
 /** A transcript nothing may be built on (summary, categorization, search, people). */

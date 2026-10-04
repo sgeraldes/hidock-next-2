@@ -348,6 +348,7 @@ export interface AppConfig {
     meetingAutoLinkProbability?: number
     meetingAutoLinkMargin?: number
     liveSilenceRms?: number
+    samplesPerDay?: number
   }
   ui: {
     /** Library title for sources with no calendar event. */

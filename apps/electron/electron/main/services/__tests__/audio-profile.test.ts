@@ -20,6 +20,7 @@ import {
   profileAudioFile,
   profileFromGains,
   scanDeviceMp3,
+  sliceDeviceMp3,
   soundRanges,
 } from '../audio-profile'
 
@@ -224,5 +225,24 @@ describe('decoding', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('sliceDeviceMp3', () => {
+  it('cuts the device stream on frame boundaries, past the RIFF header of the older files', () => {
+    const buf = stream([[QUIET, 10], [LOUD, 10], [QUIET, 10]], { riff: true })
+    // Each piece holds 278 frames; cut 200 frames from the middle of the loud one.
+    const slice = sliceDeviceMp3(buf, 278.5 * FRAME_SECONDS, 200 * FRAME_SECONDS)!
+    expect(slice[0]).toBe(0xff)
+    const gains = scanDeviceMp3(slice)!
+    expect(gains.length).toBe(200)
+    expect(gains.every((g) => g === LOUD)).toBe(true)
+  })
+
+  it('stops at the end of the file and refuses a stream that is not the device', () => {
+    const buf = stream([[LOUD, 5]])
+    expect(scanDeviceMp3(sliceDeviceMp3(buf, 3, 60)!)!.length).toBe(Math.round(5 / FRAME_SECONDS) - Math.floor(3 / FRAME_SECONDS))
+    expect(sliceDeviceMp3(buf, 30, 10)).toBeNull()
+    expect(sliceDeviceMp3(Buffer.alloc(10000), 0, 10)).toBeNull()
   })
 })

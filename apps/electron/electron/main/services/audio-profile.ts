@@ -108,14 +108,7 @@ export function scanDeviceMp3(buf: Buffer): Uint8Array | null {
   while (i + 9 <= buf.length) {
     const b1 = buf[i + 1]
     const b2 = buf[i + 2]
-    const b3 = buf[i + 3]
-    const isDeviceFrame =
-      buf[i] === 0xff &&
-      (b1 & 0xfe) === 0xf2 && // sync, MPEG-2, Layer III (protection bit either way)
-      b2 >> 4 === 8 && // 64 kbps
-      ((b2 >> 2) & 0x3) === 2 && // 16 kHz
-      b3 >> 6 === 3 // mono
-    if (!isDeviceFrame) {
+    if (!isDeviceFrameAt(buf, i)) {
       i++
       skipped++
       // Far more junk than frames: not this stream.
@@ -137,6 +130,46 @@ export function scanDeviceMp3(buf: Buffer): Uint8Array | null {
   // Same format, another encoder: its gains do not mean what the device's mean.
   if (deviceShaped < frames * DEVICE_FINGERPRINT_SHARE) return null
   return gains.subarray(0, frames)
+}
+
+/** A frame header of the device's stream at byte i: MPEG-2 Layer III, 64 kbps, 16 kHz, mono. */
+function isDeviceFrameAt(buf: Buffer, i: number): boolean {
+  const b1 = buf[i + 1]
+  const b2 = buf[i + 2]
+  const b3 = buf[i + 3]
+  return (
+    buf[i] === 0xff &&
+    (b1 & 0xfe) === 0xf2 && // sync, MPEG-2, Layer III (protection bit either way)
+    b2 >> 4 === 8 && // 64 kbps
+    ((b2 >> 2) & 0x3) === 2 && // 16 kHz
+    b3 >> 6 === 3 // mono
+  )
+}
+
+/**
+ * The device's frames from startSec for `seconds`, as a plain MP3 stream (no
+ * RIFF header), or null when the file is not the device's stream. Cut on frame
+ * boundaries, so the slice plays and transcribes like any MP3 without ffmpeg,
+ * which would read the older files' lying PCM header as noise.
+ */
+export function sliceDeviceMp3(buf: Buffer, startSec: number, seconds: number): Buffer | null {
+  if (!scanDeviceMp3(buf)) return null
+  const first = Math.max(0, Math.floor(startSec / FRAME_SECONDS))
+  const last = first + Math.ceil(seconds / FRAME_SECONDS)
+  let i = buf.length >= 12 && buf.toString('latin1', 0, 4) === 'RIFF' ? 44 : 0
+  let frame = 0
+  let from = -1
+  while (i + 9 <= buf.length && frame < last) {
+    if (!isDeviceFrameAt(buf, i)) {
+      i++
+      continue
+    }
+    if (frame === first) from = i
+    i += 288 + ((buf[i + 2] >> 1) & 1)
+    frame++
+  }
+  if (from < 0) return null
+  return buf.subarray(from, Math.min(i, buf.length))
 }
 
 /** The ffmpeg the app ships (ffmpeg-static), outside the asar archive when packaged. */

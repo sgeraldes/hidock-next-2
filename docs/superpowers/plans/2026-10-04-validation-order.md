@@ -105,3 +105,14 @@ Decisions taken in the review of PR 1 (kiro, 4-oct):
 
 - The check before the analysis call runs before the meeting is linked, since the analysis is what picks the meeting. A transcript found in doubt only by its speaker count (more speakers than invited) can therefore still get a summary. The summary is stored and never shown or used: the stored verdict, taken after the link, hides it and keeps it out of search, the graph and actions.
 - Between PR 1 and PR 2 the doubtful recordings (about 433) show no stars, kind or summary. This is the owner's rule ("a doubtful transcript shows nothing derived from it"); PR 2's sampling gives them back as they are confirmed.
+
+## What PR 2 does in the code
+
+| Piece | Where |
+|---|---|
+| Three one-minute windows spread over the covered span, slid onto stretches with audio; the stored text of the same minutes plus two minutes on each side, and every line that cannot be placed in time. A compressed clock is stretched onto the file first, an old WAV's quarter timeline mapped | `services/transcript-sampling.ts` |
+| The device's frames cut directly (no ffmpeg, which reads the old files' PCM header as noise); imports cut by the bundled ffmpeg. One file read per recording | `services/audio-profile.ts` `sliceDeviceMp3`, `services/transcript-sampler.ts` |
+| Each window transcribed by the configured Gemini transcription model (step `sample-transcribe`), compared by Jev in one call per recording (step `sample-compare`, a choice per window: same or different conversation, unclear under 0.5 confidence). No speech under stored text counts against | `services/transcript-sampler.ts` |
+| Verdict: confirmed by most windows, contradicted by most, inconclusive otherwise. Stored per recording with the transcript's fingerprint (schema v70, `transcript_samples`): a new or edited transcript is sampled again | `services/transcript-sampling.ts`, `services/database.ts` |
+| Confirmed makes a doubtful transcript valid, contradicted makes it invalid (`sample_contradicts`). A sample never overrides the audio, the integrity check, the owner's acceptance or a transcript that stops early. Stars, kind, context and held ratings follow through the trust sync | `services/transcript-validity.ts`, `services/transcript-validity-store.ts` |
+| Boot task `transcript-sampling`: five minutes after launch, then every six hours, newest recordings first, up to Settings > Quality checks "Samples per day" (25 by default, about 0.25 USD a day; 0 stops it). Needs a Jev key and a Gemini key | `services/boot-tasks.ts`, `services/quality-rules.ts` |

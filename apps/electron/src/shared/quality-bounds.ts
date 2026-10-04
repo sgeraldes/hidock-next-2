@@ -26,7 +26,8 @@ export const QUALITY_BOUNDS = Object.freeze({
   // At 0/0 any answer, however unsure, would link a meeting.
   meetingAutoLinkProbability: { min: 0.3, max: 1 } as Bound,
   meetingAutoLinkMargin: { min: 0.01, max: 1 } as Bound,
-  liveSilenceRms: { min: 0, max: 2000, integer: true } as Bound
+  liveSilenceRms: { min: 0, max: 2000, integer: true } as Bound,
+  samplesPerDay: { min: 0, max: 1000, integer: true } as Bound
 })
 
 export type QualityBoundKey = keyof typeof QUALITY_BOUNDS
