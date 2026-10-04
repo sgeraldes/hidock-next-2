@@ -17,6 +17,7 @@ import { z } from 'zod'
 import { addToQueue, resolveRecordingId, setTranscriptIntegrityAccepted } from '../services/database'
 import { processQueueManually } from '../services/transcription'
 import { filterEligibleRecordingIds } from '../services/recording-eligibility'
+import { syncTrustVerdicts } from '../services/transcript-trust'
 import { success, error, type Result } from '../types/api'
 
 const RecordingIdSchema = z.string().min(1).max(200)
@@ -53,7 +54,6 @@ export function registerTranscriptIntegrityHandlers(): void {
     }
     // Accepting a broken transcript makes it trusted again, and the reverse.
     try {
-      const { syncTrustVerdicts } = await import('../services/transcript-trust')
       syncTrustVerdicts(recording.id)
     } catch (err) {
       console.warn('[TranscriptIntegrity] trust sync failed:', err)

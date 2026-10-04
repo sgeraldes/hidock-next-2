@@ -19,6 +19,10 @@
  * Version skew between the two copies is guarded by the version-pin test in
  * better-sqlite3-binding.smoke.test.ts.
  *
+ * Since better-sqlite3 13 (Node-API, one prebuilt binary for Node and Electron)
+ * the two copies load the same kind of binary, so the ABI reason above no longer
+ * applies; the redirect stays because it is also where trackDatabases() hooks in.
+ *
  * The shim also wraps the constructor with trackDatabases() and sweeps in an
  * afterAll: DB-backed suites mint fresh temp SQLite files per test and never
  * deleted them (8000+ hidock-*-test-*.sqlite files piled up in %TEMP%), so

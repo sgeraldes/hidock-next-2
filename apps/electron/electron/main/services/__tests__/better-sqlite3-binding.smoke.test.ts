@@ -39,16 +39,27 @@ function readPkg(dir: string): { version: string } {
   return JSON.parse(readFileSync(join(dir, 'package.json'), 'utf-8'))
 }
 
+// better-sqlite3 13+ is a Node-API addon: it ships one prebuilt binary per platform
+// (prebuilds/<platform>-<arch>.node) that loads under Node and Electron alike, and loads
+// it before any node-gyp build/Release copy (lib/binding.js). A platform without a
+// prebuilt compiles into build/Release at install time instead.
+function hasBinding(dir: string): boolean {
+  return (
+    existsSync(join(dir, 'prebuilds', `${process.platform}-${process.arch}.node`)) ||
+    existsSync(join(dir, 'build', 'Release', 'better_sqlite3.node'))
+  )
+}
+
 describe('better-sqlite3 native binding (unmocked)', () => {
-  it('the production (Electron-ABI) binary exists on disk', () => {
+  it('the production binary exists on disk', () => {
     // A missing binary means the packaged app cannot open its database at all.
     expect(existsSync(join(appCopy, 'package.json'))).toBe(true)
-    expect(existsSync(join(appCopy, 'build', 'Release', 'better_sqlite3.node'))).toBe(true)
+    expect(hasBinding(appCopy)).toBe(true)
   })
 
-  it('the Node-ABI copy the test shim depends on exists on disk', () => {
+  it('the copy the test shim depends on exists on disk', () => {
     expect(existsSync(join(nodeCopy, 'package.json'))).toBe(true)
-    expect(existsSync(join(nodeCopy, 'build', 'Release', 'better_sqlite3.node'))).toBe(true)
+    expect(hasBinding(nodeCopy)).toBe(true)
   })
 
   it("loading the app's binding under Node either works or fails with the SPECIFIC ABI-mismatch error", () => {
@@ -115,7 +126,7 @@ describe('better-sqlite3 native binding (unmocked)', () => {
   })
 
   it('knowledge-graph declares a Node engines floor compatible with its better-sqlite3 pin (CX-T4-2)', () => {
-    // better-sqlite3 12.x requires Node >=20; an engines floor of 18 would
+    // better-sqlite3 13.x requires Node >=22; a lower engines floor would
     // advertise a runtime the package's own test harness cannot run on.
     const kgPkg = JSON.parse(
       readFileSync(join(repoRoot, 'packages', 'knowledge-graph', 'package.json'), 'utf-8')
@@ -123,6 +134,6 @@ describe('better-sqlite3 native binding (unmocked)', () => {
     const engines: string = kgPkg.engines?.node ?? ''
     const floor = /(\d+)/.exec(engines)?.[1]
     expect(floor).toBeTruthy()
-    expect(Number(floor)).toBeGreaterThanOrEqual(20)
+    expect(Number(floor)).toBeGreaterThanOrEqual(22)
   })
 })

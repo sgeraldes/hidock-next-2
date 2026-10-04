@@ -215,8 +215,11 @@ Each requirement has an ID. The acceptance criteria in section 7 refer to these 
 - C5. Downloads come from official sources only, with checksums pinned in the app.
 - C6. UI copy in plain Spanish (rioplatense) for Sebastián's build and plain English for the
   default, with no emoji. Errors state what happened and the action to take.
-- C7. Windows 10 1903+ and Windows 11. `onnxruntime-node` stays at 1.24.3 unless the DirectML
-  work requires a newer one, and then the change goes into the same PR.
+- C7. Windows 10 1903+ and Windows 11. `onnxruntime-node` is pinned at 1.30.0 (3-oct-2026, was
+  1.24.3): it is the exact version `@huggingface/transformers` 4.3 depends on, so the app and the
+  tokenizer stack share one build, and it drops the deprecated `boolean` package that 1.24.3 pulled
+  through `global-agent` 3. Its Windows x64 build still ships `DirectML.dll`. Any further change
+  to the pin goes into the PR of the work that needs it.
 
 ## 7. Acceptance criteria
 

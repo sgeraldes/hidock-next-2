@@ -38,18 +38,16 @@ same lock only while it upgrades the database for a new build. A launch during t
 
 ### Native modules: one binary, two runtimes
 
-`better-sqlite3` is compiled for one runtime at a time. The test suite runs under Node
-(`NODE_MODULE_VERSION` 147) and the app under Electron (149). Before `npm test`, run
-`npm rebuild better-sqlite3` in `packages/database` and `apps/electron`. Before running the app from
-the checkout, rebuild for Electron in each `node_modules/better-sqlite3`:
+Since 13.0, `better-sqlite3` is a Node-API addon. Its package ships one prebuilt binary per platform
+(`prebuilds/win32-x64.node` and so on) that loads under Node, where the test suite runs, and under
+Electron, where the app runs. No rebuild is needed when switching between `npm test` and the app;
+`npm rebuild` and `npm run rebuild:electron` leave the prebuilt in place.
 
-```bash
-npx node-gyp rebuild --target=44.4.1 --arch=x64 --dist-url=https://electronjs.org/headers
-```
-
-Packaging rebuilds it for Electron too, but not reliably: on 2026-09-25 an installer shipped the
-Node binary and exited 0. `scripts/after-pack-check-native.cjs` now loads every packed
-`better_sqlite3.node` with the packed executable and fails the build if one does not load.
+Up to 12.x the binary was compiled for one runtime at a time, and on 2026-09-25 an installer shipped
+the Node build and exited 0. `scripts/after-pack-check-native.cjs` still loads every packed
+better-sqlite3 binding (the prebuilt for the target platform, and any `better_sqlite3.node`) with
+the packed executable and fails the build if one does not load. `npm run check:native` does the
+same against the checkout.
 
 ## Pull requests
 

@@ -21,14 +21,18 @@
 
 const { execFileSync } = require('child_process')
 const { existsSync, readdirSync, statSync } = require('fs')
-const { join } = require('path')
+const { basename, dirname, join } = require('path')
 
-function findBindings(dir, out = []) {
+// better-sqlite3 13+ ships Node-API prebuilts as better-sqlite3/prebuilds/<platform>-<arch>.node
+// and loads that file first; a node-gyp build lands in build/Release/better_sqlite3.node.
+// Only the prebuilt for the packed platform is loaded: the others are for other machines.
+function findBindings(dir, prebuiltName, out = []) {
   for (const name of readdirSync(dir)) {
     const path = join(dir, name)
     const st = statSync(path)
-    if (st.isDirectory()) findBindings(path, out)
+    if (st.isDirectory()) findBindings(path, prebuiltName, out)
     else if (name === 'better_sqlite3.node') out.push(path)
+    else if (name === prebuiltName && basename(dir) === 'prebuilds' && basename(dirname(dir)) === 'better-sqlite3') out.push(path)
   }
   return out
 }
@@ -55,8 +59,11 @@ exports.default = async function afterPackCheckNative(context) {
   if (!existsSync(exe) || !existsSync(unpacked)) {
     throw new Error(`native check: expected ${exe} and ${unpacked} after packing`)
   }
-  const bindings = findBindings(unpacked)
-  if (bindings.length === 0) throw new Error(`native check: no better_sqlite3.node under ${unpacked}`)
+  const prebuiltName = `${electronPlatformName}-${archName}.node`
+  const bindings = findBindings(unpacked, prebuiltName)
+  if (bindings.length === 0) {
+    throw new Error(`native check: no better-sqlite3 binding (better_sqlite3.node or prebuilds/${prebuiltName}) under ${unpacked}`)
+  }
   for (const binding of bindings) {
     try {
       execFileSync(exe, ['-e', `require(${JSON.stringify(binding)})`], {
