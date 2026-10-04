@@ -1445,16 +1445,23 @@ describe('backfillMeetingWiki — bounded, yielding, resumable (F15)', () => {
   })
 
   it('stops at the time budget and reports what it deferred', async () => {
-    const { backfillMeetingWiki } = await import('../meeting-wiki')
+    // Pin time: the export loop also yields once a stretch reaches 25 ms, and on a
+    // loaded machine that early yield hit the deadline after 8 pages, not 10.
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(0)
+    try {
+      const { backfillMeetingWiki } = await import('../meeting-wiki')
 
-    // Budget of 0 => the deadline has passed by the first batch boundary, so the
-    // pass stops after exactly one batch.
-    const result = await backfillMeetingWiki({ batchSize: 10, budgetMs: 0 })
+      // Budget of 0 => the deadline has passed by the first batch boundary, so the
+      // pass stops after exactly one batch.
+      const result = await backfillMeetingWiki({ batchSize: 10, budgetMs: 0 })
 
-    expect(result.written).toBe(10)
-    expect(result.remaining).toBe(N - 10)
-    expect(result.remainingMissing).toBe(N - 10)
-    expect(listWiki()).toHaveLength(10)
+      expect(result.written).toBe(10)
+      expect(result.remaining).toBe(N - 10)
+      expect(result.remainingMissing).toBe(N - 10)
+      expect(listWiki()).toHaveLength(10)
+    } finally {
+      clock.mockRestore()
+    }
   })
 
   it('resumes across restarts — each budgeted pass advances the pages still missing', async () => {
