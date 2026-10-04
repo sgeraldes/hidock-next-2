@@ -14,6 +14,7 @@ export const TEXT_STEP_IDS = [
   'self-id',
   'speaker-roster',
   'meeting-pick',
+  'kind-pick',
   'reformat',
   'notes',
   'outputs'
@@ -42,6 +43,7 @@ export const STEP_META: Record<TextStepId, StepMeta> = {
   'self-id': { label: 'Speaker introductions', group: 'Speakers', description: 'Finds who introduces themselves in a transcript.', bulk: true },
   'speaker-roster': { label: 'Speaker names from the guest list', group: 'Speakers', description: 'Matches unnamed speakers to the people invited.', bulk: true },
   'meeting-pick': { label: 'Meeting pick', group: 'Library', description: 'Chooses one of several meetings that overlap a recording.', bulk: true },
+  'kind-pick': { label: 'Kind of recording', group: 'Library', description: 'Names the kind of a recording when Jev could not decide it. A small model is enough.', bulk: true },
   reformat: { label: 'Transcript reformat', group: 'Library', description: 'Turns an old flat transcript into speaker turns.', bulk: true },
   notes: { label: 'Note analysis', group: 'Library', description: 'Gives a note a title, a summary, a category and tags.', bulk: false }
 }

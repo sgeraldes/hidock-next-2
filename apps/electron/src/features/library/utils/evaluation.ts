@@ -96,6 +96,25 @@ export const isContextFilter = (v: string): v is ContextFilter => has(CONTEXT_FI
 export const isStarsFilter = (v: string): v is StarsFilter => has(STARS_FILTERS, v)
 export const isWarningFilter = (v: string): v is WarningFilter => has(WARNING_FILTERS, v)
 
+/**
+ * Stars and kind as the Library shows them. The main process caps a silent,
+ * noise-only or too-short recording at one star and "Noise or accidental"
+ * (stored evaluations are recomputed when the audio profile changes); the
+ * renderer applies the same cap so an evaluation older than its audio profile
+ * can never put "5★" next to "Noise only" (owner, 3-oct-2026).
+ */
+export function displayedEvaluation(r: {
+  evalStarLevel?: number | null
+  evalKind?: RecordingKind | null
+  evalContext?: RecordingContext | null
+  audioCategory?: string | null
+}): { stars: number | null; kind: RecordingKind | null; context: RecordingContext | null } {
+  if (r.audioCategory === 'silent' || r.audioCategory === 'noise' || r.audioCategory === 'too_short') {
+    return { stars: 1, kind: 'noise_accidental', context: 'unclear' }
+  }
+  return { stars: r.evalStarLevel ?? null, kind: r.evalKind ?? null, context: r.evalContext ?? null }
+}
+
 export interface EvaluationFields {
   evalStarLevel?: number
   evalKind?: RecordingKind

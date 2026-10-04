@@ -78,7 +78,7 @@ describe('PipelineSection', () => {
     expect(within(chat).getByText('Follows AI providers')).toBeInTheDocument()
     expect(within(chat).getByText('No calls yet')).toBeInTheDocument()
     expect(within(await row('notes')).getByText('Median 2.1 s · $0.0003 · 12 calls · 1 failed')).toBeInTheDocument()
-    expect(screen.getAllByRole('button', { name: /^Edit / })).toHaveLength(9)
+    expect(screen.getAllByRole('button', { name: /^Edit / })).toHaveLength(10)
   })
 
   it('opens the editor, offers the harnesses, and greys out the one that cannot serve with its reason', async () => {

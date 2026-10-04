@@ -76,12 +76,18 @@ export function isTranscriptTrusted(transcript: IntegrityFields | null | undefin
 type TrustFields = Partial<IntegrityFields>
 
 /**
- * The summary to show, or null when there is none or the transcript is not
- * trusted: a summary of text the transcriber invented is itself invented.
+ * The summary to show, or null when there is none, the transcript is not
+ * trusted, or the audio holds no speech (silent, noise only, too short): a
+ * summary of text the transcriber invented is itself invented, and three words
+ * read over a crackle make no summary either.
  */
-export function trustedSummary(transcript: (TrustFields & { summary?: string | null }) | null | undefined): string | null {
+export function trustedSummary(
+  transcript: (TrustFields & { summary?: string | null }) | null | undefined,
+  audioCategory?: string | null
+): string | null {
   const summary = transcript?.summary?.trim()
   if (!summary) return null
+  if (audioCategory === 'silent' || audioCategory === 'noise' || audioCategory === 'too_short') return null
   return isTranscriptTrusted(transcript as IntegrityFields) ? summary : null
 }
 

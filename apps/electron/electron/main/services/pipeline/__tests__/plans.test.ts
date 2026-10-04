@@ -26,8 +26,18 @@ describe('default plans', () => {
     expect(DEFAULT_PLANS.outputs.calls[0].profile).toEqual({ kind: 'router', task: 'outputs', mode: 'generate' })
   })
 
-  it('has no fallback in any default plan: the router walks its own chain', () => {
-    for (const step of TEXT_STEPS) expect(DEFAULT_PLANS[step].calls[0].onFail).toBeUndefined()
+  it('has no fallback in any default plan but the kind pick: the router walks its own chain', () => {
+    for (const step of TEXT_STEPS) {
+      if (step === 'kind-pick') continue
+      expect(DEFAULT_PLANS[step].calls[0].onFail).toBeUndefined()
+    }
+  })
+
+  it('sends the kind pick to a small model first, then to the router', () => {
+    expect(DEFAULT_PLANS['kind-pick'].calls[0]).toEqual({
+      profile: { kind: 'direct', id: 'kind-pick-haiku', harness: 'claude-code', model: 'haiku', effort: 'low' },
+      onFail: { kind: 'router', task: 'chat', mode: 'chat' }
+    })
   })
 })
 

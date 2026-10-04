@@ -343,10 +343,10 @@ export function SourceDetailDrawer({
 
             <TabsContent value="transcript" className="mt-4 space-y-4">
               {/* Summary */}
-              {trustedSummary(transcript) && (
+              {trustedSummary(transcript, source.audioCategory) && (
                 <div className="p-3 bg-muted rounded-lg">
                   <p className="text-xs font-medium text-muted-foreground mb-1">Summary</p>
-                  <p className="text-sm">{trustedSummary(transcript)}</p>
+                  <p className="text-sm">{trustedSummary(transcript, source.audioCategory)}</p>
                 </div>
               )}
 

@@ -243,7 +243,7 @@ describe('SourceCard layout — a fixed card', () => {
     expect(meta).not.toContain('.wav')
   })
 
-  it('shows the chips: stars and kind, the audio check and a low value', () => {
+  it('shows the chips: stars and kind capped by the audio check, and a low value', () => {
     render(
       <SourceCard
         {...makeProps({
@@ -251,13 +251,17 @@ describe('SourceCard layout — a fixed card', () => {
             ...baseRecording,
             evalStarLevel: 4,
             evalKind: 'team_meeting',
+            evalContext: 'work',
             audioCategory: 'silent',
             quality: 'low-value'
           } as UnifiedRecording
         })}
       />
     )
-    expect(screen.getByTestId('evaluation-label')).toHaveTextContent('4★')
+    // Never "4★ Team meeting" next to "Silent" (owner, 3-oct-2026).
+    expect(screen.getByTestId('evaluation-label')).toHaveTextContent('1★')
+    expect(screen.getByTestId('evaluation-label')).not.toHaveTextContent('Team meeting')
+    expect(screen.getByTestId('evaluation-label')).toHaveAttribute('aria-label', expect.not.stringContaining('Work'))
     expect(screen.getByTestId('audio-label')).toHaveTextContent('Silent')
     expect(screen.getByLabelText('Low value')).toBeInTheDocument()
   })

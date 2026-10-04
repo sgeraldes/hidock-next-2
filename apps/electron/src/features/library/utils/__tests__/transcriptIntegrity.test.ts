@@ -84,6 +84,9 @@ describe('trustedSummary', () => {
     expect(trustedSummary({ ...broken, integrity_accepted_at: '2026-10-03T10:00:00.000Z', summary: 'Laura confiesa.' })).toBe('Laura confiesa.')
     expect(trustedSummary({ summary: 'Sin chequeo.' })).toBe('Sin chequeo.')
     expect(trustedSummary({ ...ok, summary: '  ' })).toBeNull()
+    // A three-word transcript over a crackle is trusted, but its summary is not shown.
+    expect(trustedSummary({ ...ok, summary: 'Un saludo breve.' }, 'noise')).toBeNull()
+    expect(trustedSummary({ ...ok, summary: 'Un saludo breve.' }, 'speech')).toBe('Un saludo breve.')
   })
 })
 

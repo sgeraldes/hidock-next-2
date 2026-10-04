@@ -24,6 +24,7 @@ import { backfillAudioProfiles } from './audio-profile-store'
 import { getQueueState, startTranscriptionProcessor } from './transcription'
 import { recomputeAudioWarnings } from './value-classification'
 import { scheduleEvaluationCatchup } from './evaluation-catchup'
+import { runKindFallbackPass } from './kind-fallback'
 import { backfillMeetingWiki } from './meeting-wiki'
 import { getVectorStore } from './vector-store'
 
@@ -159,6 +160,21 @@ export const BOOT_TASK_DEFS: GatedBootTask[] = [
     feature: 'transcription',
     run: () => {
       scheduleEvaluationCatchup()
+    },
+  },
+  {
+    // Tier 2 of the evaluation (owner, 3-oct-2026): a small model names the
+    // kind where Jev was undecided (kind confidence under 0.4), one call at a
+    // time through the pipeline step 'kind-pick'. Starts two minutes after
+    // launch so it never competes with startup, and returns at once.
+    name: 'kind-fallback',
+    feature: 'transcription',
+    run: () => {
+      setTimeout(() => {
+        void runKindFallbackPass({ recompute: (ids) => recomputeAudioWarnings(ids) }).catch((e) =>
+          console.error('[KindFallback] pass error:', e)
+        )
+      }, 120_000)
     },
   },
   {

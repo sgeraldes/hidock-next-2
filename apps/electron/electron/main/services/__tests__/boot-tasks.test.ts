@@ -53,7 +53,7 @@ const ALL_TASK_NAMES = [
   'integrity-check',
   'org-reconcile',
   'knowledge-capture-backfill',
-  'audio-profile-backfill', 'evaluation-warning-refresh', 'evaluation-catchup',
+  'audio-profile-backfill', 'evaluation-warning-refresh', 'evaluation-catchup', 'kind-fallback',
   'meeting-wiki-backfill',
   'start-transcription-processor',
   'semantic-index-restore',
@@ -123,7 +123,7 @@ describe('registerGatedBootTasks', () => {
     expect(registered).toEqual(['database-backup', 'integrity-check', 'knowledge-capture-backfill', 'audio-profile-backfill', 'evaluation-warning-refresh'])
   })
 
-  it('library-transcription adds exactly the two transcription tasks', () => {
+  it('library-transcription adds exactly the three transcription tasks', () => {
     const registered: string[] = []
     registerGatedBootTasks({
       isFeatureEnabled: enabledUnder({ preset: 'library-transcription', flags: {} }),
@@ -133,7 +133,7 @@ describe('registerGatedBootTasks', () => {
       'database-backup',
       'integrity-check',
       'knowledge-capture-backfill',
-      'audio-profile-backfill', 'evaluation-warning-refresh', 'evaluation-catchup',
+      'audio-profile-backfill', 'evaluation-warning-refresh', 'evaluation-catchup', 'kind-fallback',
       'start-transcription-processor',
     ])
   })
