@@ -4307,8 +4307,8 @@ const engine = new DatabaseEngine({
   repairPhase,
   // Safety net (P0 knowledge_captures loss): refuse any single statement that
   // would wipe >50% of these entity tables (when >20 rows), and keep the last
-  // 3 daily on-boot backups before migrations run. Intentional bulk purges use
-  // runWithMassDeleteAllowed().
+  // three daily backups plus three independently retained migration restore points.
+  // Intentional bulk purges use runWithMassDeleteAllowed().
   protectedTables: ['knowledge_captures', 'transcripts', 'recordings', 'meetings', 'contacts'],
   backupOnBoot: { keep: 3 },
   deferBackupOnBoot: true,
@@ -4326,13 +4326,14 @@ export function listHourlyBackups(): ExternalBackup[] {
   const dir = join(dirname(dirname(getDatabasePath())), 'backups')
   if (!existsSync(dir)) return []
   const out: ExternalBackup[] = []
-  for (const name of readdirSync(dir)) {
+  for (const name of readdirSync(dir).sort().reverse()) {
     if (!/^hidock-\d{8}-\d{6}\.db$/.test(name)) continue
     const sidecar = join(dir, `${name}.source.json`)
     if (!existsSync(sidecar)) continue
     try {
-      const s = JSON.parse(readFileSync(sidecar, 'utf8')) as { exact?: boolean; db_mtime_ns?: string; db_size?: number }
-      if (s.exact !== true || typeof s.db_mtime_ns !== 'string' || typeof s.db_size !== 'number') continue
+      const s = JSON.parse(readFileSync(sidecar, 'utf8')) as { exact?: boolean; db_mtime_ns?: string; db_size?: number; wal_size?: number }
+      if (s.exact !== true || s.wal_size !== 0 || typeof s.db_mtime_ns !== 'string' || !/^\d+$/.test(s.db_mtime_ns)
+        || typeof s.db_size !== 'number' || !Number.isSafeInteger(s.db_size) || s.db_size <= 0) continue
       out.push({ path: join(dir, name), sourceMtimeNs: BigInt(s.db_mtime_ns), sourceSize: s.db_size })
     } catch {
       /* an unreadable record is no proof */
