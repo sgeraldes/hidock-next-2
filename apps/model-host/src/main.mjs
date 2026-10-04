@@ -8,12 +8,12 @@
 import { existsSync, mkdirSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
-import { createHostServer } from './server.mjs'
-import { HostState, READY } from './state.mjs'
+import { createHostServer, STEP_ASIDE } from './server.mjs'
+import { HostState } from './state.mjs'
 import { PairingStore } from './auth.mjs'
-import { DEFAULTS, detectGpu, loadConfig, loadSecrets, loadTokens, paths, saveGameMode, saveTokens } from './config.mjs'
-import { GameWatcher, normalizeGameMode } from './game-mode.mjs'
-import { queryGpuProcesses, startProbe } from './probe.mjs'
+import { DEFAULTS, detectGpu, loadConfig, loadSecrets, loadTokens, paths, saveSecrets, saveTokens, updateConfigFile } from './config.mjs'
+import { HostSetup } from './host-setup.mjs'
+import { runDiarization } from './diarize.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -62,11 +62,12 @@ export async function start(options = {}) {
   for (const dir of [dirs.root, dirs.models, dirs.runtime, dirs.logs]) {
     mkdirSync(dir, { recursive: true })
   }
+  const secretsFile = join(dirs.root, 'secrets.json')
 
   const config = {
     ...DEFAULTS,
     ...loadConfig(dirs.config),
-    ...loadSecrets(join(dirs.root, 'secrets.json')),
+    ...loadSecrets(secretsFile),
     ...(options.overrides || {}),
   }
   const pythonPath = resolvePython(config.pythonPath, dirs)
@@ -76,130 +77,84 @@ export async function start(options = {}) {
 
   const state = new HostState({
     onLeaveReady: async () => {
-      // Pause and Stop have to mean something to a job already running.
+      // Stop has to mean something to a job already running.
       state.activeJob?.abort()
     },
-    onChange: () => syncProbe(),
   })
   const pairing = new PairingStore({
     persisted: loadTokens(dirs.tokens),
-    save: (tokens) => saveTokens(tokens, dirs.tokens),
+    save: (tokens, meta) => saveTokens(tokens, dirs.tokens, meta),
   })
 
-  let gameSettings = normalizeGameMode(config.gameMode)
-  const watcher = new GameWatcher({ settings: () => gameSettings })
-
-  // Game mode looks only on Windows, where the probe runs, and only while a
-  // look can change something: the host is working, or a game paused it. A
-  // host that is stopped or paused by hand costs the machine nothing. Tests
-  // that start the real server turn it off; the probe has its own tests.
-  const watchGames = options.watchGames !== false && process.platform === 'win32'
-  let probe = null
-  let closed = false
-  const look = createGameLook({ state, watcher, settings: () => gameSettings, gpu, log: console.log })
-  function syncProbe() {
-    if (!watchGames || closed) return
-    const needed = state.state === READY || state.pauseInfo()?.by === 'game'
-    if (needed && !probe) {
-      probe = startProbe({ onSnapshot: look, log: console.log })
-      console.log('[game mode] watching for games')
-    } else if (!needed && probe) {
-      probe.stop()
-      probe = null
-      console.log('[game mode] not watching while the host is stopped or paused by hand')
-    }
-  }
-  const gameMode = {
-    settings: () => gameSettings,
-    save: async (raw) => {
-      const next = normalizeGameMode(raw)
-      saveGameMode(next, dirs.config)
-      gameSettings = next
-      console.log(`[game mode] settings saved (${next.enabled ? 'on' : 'off'})`)
-      return next
+  const jobOptions = () => ({
+    pythonPath,
+    workerPath,
+    model: config.model,
+    fallbackModel: config.fallbackModel,
+    minSpeechSeconds: config.minSpeechSeconds,
+    cpuPercent: config.cpuPercent,
+    timeoutMs: config.timeoutMs,
+    hfToken: setup.token() || process.env.HF_TOKEN,
+    ffmpegPath,
+  })
+  // The last step of setup happens here, with the token HiDock sends.
+  const setup = new HostSetup({
+    validated: config.validated === true && existsSync(workerPath),
+    hfToken: config.hfToken,
+    diarize: options.diarize || runDiarization,
+    jobOptions,
+    saveToken: (token) => saveSecrets(token, secretsFile),
+    saveValidated: (patch) => updateConfigFile(patch, dirs.config),
+    log: console.log,
+  })
+  // HiDock's one setting; the tray icon reads it from config.json.
+  let stepAside = STEP_ASIDE.has(config.stepAside) ? config.stepAside : 'games'
+  const stepAsideStore = {
+    get: () => stepAside,
+    set: (value) => {
+      updateConfigFile({ stepAside: value }, dirs.config)
+      stepAside = value
+      console.log(`[host] HiDock set when to step aside: ${value}`)
     },
-    resumesAt: () => watcher.resumesAt(),
   }
 
   const server = createHostServer({
     state,
     pairing,
-    gameMode,
+    setup,
+    stepAside: stepAsideStore,
     capabilities: () => ({
-      // Both have to be true. The file being there says the program was
-      // installed; `validated` says the model actually ran on this machine.
-      // Advertising on the first alone is how a host ends up refusing every
-      // job while claiming it can do them.
-      capabilities: existsSync(workerPath) && config.validated ? ['diarize'] : [],
+      // `diarize` only after the model ran on this machine: a green light
+      // that never ran the model is how a host refuses every job while
+      // claiming it can do them.
+      capabilities: setup.canDiarize() ? ['diarize'] : [],
       gpu,
       // Say it plainly rather than letting a green light imply acceleration
       // that is not there.
       acceleration: gpu ? 'cuda' : 'cpu',
       paired: pairing.tokens.size,
     }),
-    jobOptions: () => ({
-      pythonPath,
-      workerPath,
-      model: config.model,
-      fallbackModel: config.fallbackModel,
-      minSpeechSeconds: config.minSpeechSeconds,
-      cpuPercent: config.cpuPercent,
-      timeoutMs: config.timeoutMs,
-      hfToken: config.hfToken || process.env.HF_TOKEN,
-      ffmpegPath,
-    }),
+    jobOptions,
   })
 
   await new Promise((resolve) => server.listen(config.port, resolve))
   const address = server.address()
   console.log(`[host] listening on ${address.port}, state ${state.publicState()}`)
-  console.log(`[host] control page: http://localhost:${address.port}/`)
   if (!gpu) {
     console.log('[host] no NVIDIA driver answered; work would run on the CPU')
   }
-  server.on('close', () => {
-    closed = true
-    probe?.stop()
-    probe = null
-  })
+  pairing.startAutomatic()
+  if (pairing.automatic().open) console.log('[host] automatic pairing is open for 5 minutes')
+  setup.start()
   if (options.startReady) await state.apply('start')
-  return { server, state, pairing, config, port: address.port, watcher, watching: () => probe !== null }
-}
-
-/**
- * One look of game mode: add the CUDA programs to the probe's snapshot, let the
- * watcher decide, and say in the host window when it paused or resumed.
- *
- * Looks never overlap: a slow nvidia-smi skips a look instead of stacking them.
- * nvidia-smi is asked only while the answer can change something, so a host
- * that is stopped or paused by the person costs nothing on the machine.
- */
-export function createGameLook({ state, watcher, settings, gpu, log, queryGpu = queryGpuProcesses }) {
-  let looking = false
-  return async function look(snapshot) {
-    if (looking) return
-    looking = true
-    try {
-      const s = settings()
-      const mayChange = state.state === READY || state.pauseInfo()?.by === 'game'
-      const gpuProcesses = gpu && s.enabled && s.pauseOnOtherGpuWork && mayChange ? await queryGpu() : []
-      const before = state.pauseInfo()?.by
-      const ownPids = state.workerPid ? [state.workerPid] : []
-      const why = await watcher.observe({ ...snapshot, gpuProcesses, ownPids }, state)
-      const after = state.pauseInfo()?.by
-      if (before !== 'game' && after === 'game') log(`[game mode] paused: ${why}`)
-      if (before === 'game' && after !== 'game') log('[game mode] resumed')
-    } catch (error) {
-      log(`[game mode] look failed: ${error.message}`)
-    } finally {
-      looking = false
-    }
-  }
+  return { server, state, pairing, setup, config, port: address.port }
 }
 
 const invokedDirectly =
   process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]
 if (invokedDirectly) {
+  // The tray icon starts the service with --ready and stops it by ending its
+  // Job Object; there is nothing to pause in here.
   start({ startReady: process.argv.includes('--ready') }).catch((error) => {
     console.error('[host] failed to start:', error.message)
     process.exitCode = 1

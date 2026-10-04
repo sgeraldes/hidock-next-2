@@ -38,12 +38,19 @@ export function secretsMatch(a, b) {
   return timingSafeEqual(left, right)
 }
 
+/**
+ * How long a host with nobody paired accepts the first HiDock without a code.
+ * Sebastián's choice (4-oct-2026): five minutes, cancellable, resumable while
+ * nobody has connected, and undone by "disconnect and start again".
+ */
+export const AUTO_PAIRING_MS = 5 * 60 * 1000
+
 export class PairingStore {
   /**
    * @param {object} [options]
    * @param {() => number} [options.now] injected clock, for tests
-   * @param {{tokens: string[]}} [options.persisted] tokens from disk
-   * @param {(tokens: string[]) => void} [options.save] persist the token list
+   * @param {{tokens: string[], autoPairingCancelled?: boolean}} [options.persisted] from disk
+   * @param {(tokens: string[], meta: {autoPairingCancelled: boolean}) => void} [options.save]
    */
   constructor(options = {}) {
     this.now = options.now || (() => Date.now())
@@ -51,6 +58,62 @@ export class PairingStore {
     this.save = options.save || (() => {})
     /** @type {{code: string, expiresAt: number} | null} */
     this.pending = null
+    /** When the automatic window closes, or null when it is not open. */
+    this.autoUntil = null
+    this.autoCancelled = options.persisted?.autoPairingCancelled === true
+  }
+
+  #persist() {
+    this.save([...this.tokens], { autoPairingCancelled: this.autoCancelled })
+  }
+
+  /** At service start: open the automatic window if nobody is paired and it was not cancelled. */
+  startAutomatic() {
+    if (this.tokens.size === 0 && !this.autoCancelled) this.autoUntil = this.now() + AUTO_PAIRING_MS
+  }
+
+  cancelAutomatic() {
+    this.autoUntil = null
+    this.autoCancelled = true
+    this.#persist()
+  }
+
+  /** Another five minutes, only while nobody has paired. */
+  resumeAutomatic() {
+    if (this.tokens.size > 0) return
+    this.autoCancelled = false
+    this.autoUntil = this.now() + AUTO_PAIRING_MS
+    this.#persist()
+  }
+
+  /** Disconnect every HiDock and start over with a fresh automatic window. */
+  resetPairing() {
+    this.tokens.clear()
+    this.pending = null
+    this.autoCancelled = false
+    this.autoUntil = this.now() + AUTO_PAIRING_MS
+    this.#persist()
+  }
+
+  automatic() {
+    const open = this.autoUntil !== null && this.now() < this.autoUntil
+    if (!open) this.autoUntil = null
+    return {
+      open,
+      remainingMs: open ? this.autoUntil - this.now() : 0,
+      cancelled: this.autoCancelled,
+      paired: this.tokens.size,
+    }
+  }
+
+  #issue() {
+    const token = randomBytes(TOKEN_BYTES).toString('hex')
+    this.tokens.add(token)
+    this.pending = null
+    // The first HiDock in closes the automatic window for everyone else.
+    this.autoUntil = null
+    this.#persist()
+    return { ok: true, token }
   }
 
   /** Show a fresh code. Only one is ever outstanding. */
@@ -72,6 +135,10 @@ export class PairingStore {
    * @returns {{ok: true, token: string} | {ok: false, reason: string}}
    */
   redeem(code) {
+    if (String(code ?? '').trim() === '') {
+      if (this.automatic().open) return this.#issue()
+      return { ok: false, reason: 'Automatic pairing is not open on the host. Use the code from its tray icon.' }
+    }
     if (!this.pending) return { ok: false, reason: 'Pairing is not open on the host.' }
     if (this.now() > this.pending.expiresAt) {
       this.pending = null
@@ -91,11 +158,7 @@ export class PairingStore {
       }
       return { ok: false, reason: 'That code does not match.' }
     }
-    const token = randomBytes(TOKEN_BYTES).toString('hex')
-    this.tokens.add(token)
-    this.pending = null
-    this.save([...this.tokens])
-    return { ok: true, token }
+    return this.#issue()
   }
 
   /** Is this Authorization header one of ours? */
@@ -112,6 +175,6 @@ export class PairingStore {
 
   revokeAll() {
     this.tokens.clear()
-    this.save([])
+    this.#persist()
   }
 }

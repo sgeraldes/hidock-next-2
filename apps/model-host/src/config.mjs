@@ -62,6 +62,12 @@ export const DEFAULTS = {
    * capability it never demonstrated.
    */
   validated: false,
+  /**
+   * When the tray icon stops the service: 'any-use' (keyboard or mouse in the
+   * last 5 minutes, or a game), 'games' (a game or a full-screen app) or
+   * 'never'. Set from HiDock; the gamestation has no settings of its own.
+   */
+  stepAside: 'games',
   pythonPath: '',
   workerPath: '',
   ffmpegPath: '',
@@ -99,35 +105,47 @@ export function loadConfig(file = paths().config) {
 }
 
 /**
- * Write the game mode settings into config.json, keeping everything else in
- * it: setup wrote the runtime paths and the validated flag there, and the
- * control page must not lose them by saving a checkbox.
+ * Merge a few keys into config.json, keeping everything else in it: setup
+ * wrote the runtime paths there, and the tray icon reads `stepAside` from it.
  */
-export function saveGameMode(settings, file = paths().config) {
+export function updateConfigFile(patch, file = paths().config) {
   let current = {}
   if (existsSync(file)) {
     try {
       current = readJson(file)
     } catch {
       // Refuse rather than replace a config we cannot read with one that has
-      // only game mode in it: that would un-validate the host.
-      throw Object.assign(new Error('config.json could not be read, so game mode was not saved'), { status: 500 })
+      // only this patch in it: that would lose the runtime paths.
+      throw Object.assign(new Error('config.json could not be read, so it was not changed'), { status: 500 })
     }
   }
   mkdirSync(join(file, '..'), { recursive: true })
-  writeFileSync(file, JSON.stringify({ ...current, gameMode: settings }, null, 2), 'utf8')
+  writeFileSync(file, JSON.stringify({ ...current, ...patch }, null, 2), 'utf8')
 }
 
-export function saveTokens(tokens, file = paths().tokens) {
+/**
+ * The Hugging Face token HiDock sent. Its own file, so config.json (which the
+ * tray icon reads) never holds it; the folder is under the user's
+ * %LOCALAPPDATA%, which only that account, SYSTEM and administrators can read.
+ */
+export function saveSecrets(hfToken, file = join(hostRoot(), 'secrets.json')) {
   mkdirSync(join(file, '..'), { recursive: true })
-  writeFileSync(file, JSON.stringify({ tokens }, null, 2), { encoding: 'utf8', mode: 0o600 })
+  writeFileSync(file, JSON.stringify({ hfToken }, null, 2), { encoding: 'utf8', mode: 0o600 })
+}
+
+export function saveTokens(tokens, file = paths().tokens, meta = {}) {
+  mkdirSync(join(file, '..'), { recursive: true })
+  writeFileSync(file, JSON.stringify({ tokens, ...meta }, null, 2), { encoding: 'utf8', mode: 0o600 })
 }
 
 export function loadTokens(file = paths().tokens) {
   if (!existsSync(file)) return { tokens: [] }
   try {
     const parsed = readJson(file)
-    return { tokens: Array.isArray(parsed.tokens) ? parsed.tokens : [] }
+    return {
+      tokens: Array.isArray(parsed.tokens) ? parsed.tokens : [],
+      autoPairingCancelled: parsed.autoPairingCancelled === true,
+    }
   } catch {
     return { tokens: [] }
   }
