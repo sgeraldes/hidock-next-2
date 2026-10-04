@@ -34,6 +34,7 @@ import {
   refreshTranscriptIntegrity,
 } from './database'
 import { isRecordingEligible, filterEligibleRecordingIds } from './recording-eligibility'
+import { syncTrustVerdicts } from './transcript-trust'
 import { DEFAULT_QUALITY_RULES, qualityRules } from './quality-rules'
 import {
   classifyTranscriptFormat,
@@ -473,6 +474,11 @@ export async function reformatOne(transcriptId: string): Promise<'done' | 'faile
   // New segments, new timing: check them again rather than keep the verdict
   // (or the owner's acceptance) that belonged to the old ones.
   refreshTranscriptIntegrity(transcriptId)
+  try {
+    syncTrustVerdicts(recordingId)
+  } catch (err) {
+    console.warn('[TranscriptUpgrade] trust sync failed:', err)
+  }
   saveDatabase()
   return 'done'
 }

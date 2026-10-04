@@ -112,6 +112,10 @@ in Settings → Transcription → Model host and in the voice evidence panel of
 Settings → Speakers & voices: working, paused for a game (which, and until
 when), paused by hand, stopped, or off.
 
+The first time the host listens, Windows Defender Firewall asks whether
+`node.exe` may accept connections. Allow it on **private** networks, or the
+client on the other machine never reaches it.
+
 ## Pair the client
 
 On the host, press **Show a pairing code**. The code is eight digits and lasts

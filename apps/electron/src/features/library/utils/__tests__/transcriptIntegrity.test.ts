@@ -4,6 +4,8 @@ import {
   integrityIssues,
   integrityLabel,
   isIntegrityFilter,
+  isTranscriptTrusted,
+  trustedSummary,
   matchesIntegrityFilter,
 } from '../transcriptIntegrity'
 
@@ -72,5 +74,31 @@ describe('filter values', () => {
     expect(isIntegrityFilter('all')).toBe(false)
     expect(integrityFilterLabel('issue:past_audio_end')).toBe('Runs past the audio')
     expect(integrityFilterLabel('flagged')).toBe('Transcript problems')
+  })
+})
+
+describe('trustedSummary', () => {
+  it('shows a summary only for a trusted transcript', () => {
+    expect(trustedSummary({ ...ok, summary: ' Plan de abril. ' })).toBe('Plan de abril.')
+    expect(trustedSummary({ ...broken, summary: 'Laura confiesa.' })).toBeNull()
+    expect(trustedSummary({ ...broken, integrity_accepted_at: '2026-10-03T10:00:00.000Z', summary: 'Laura confiesa.' })).toBe('Laura confiesa.')
+    expect(trustedSummary({ summary: 'Sin chequeo.' })).toBe('Sin chequeo.')
+    expect(trustedSummary({ ...ok, summary: '  ' })).toBeNull()
+  })
+})
+
+describe('isTranscriptTrusted', () => {
+  it('trusts everything but a broken transcript the owner has not accepted', () => {
+    expect(isTranscriptTrusted(undefined)).toBe(true)
+    expect(isTranscriptTrusted(ok)).toBe(true)
+    expect(isTranscriptTrusted(suspect)).toBe(true)
+    expect(isTranscriptTrusted(broken)).toBe(false)
+    expect(isTranscriptTrusted({ ...broken, integrity_accepted_at: '2026-10-03T10:00:00.000Z' })).toBe(true)
+  })
+
+  it('names the findings that come from the audio, ahead of the rest', () => {
+    const t = { ...broken, integrity_json: json(['cramped_lines', 'repeated_text', 'text_over_noise', 'words_beyond_sound']) }
+    expect(integrityIssues(t).map((i) => i.code)).toEqual(['text_over_noise', 'words_beyond_sound', 'repeated_text', 'cramped_lines'])
+    expect(integrityFilterLabel('issue:text_over_noise')).toBe('Text over noise')
   })
 })

@@ -51,6 +51,13 @@ export function registerTranscriptIntegrityHandlers(): void {
     if (!setTranscriptIntegrityAccepted(recording.id, parsed.data.accepted)) {
       return error('NOT_FOUND', 'This recording has no transcript')
     }
+    // Accepting a broken transcript makes it trusted again, and the reverse.
+    try {
+      const { syncTrustVerdicts } = await import('../services/transcript-trust')
+      syncTrustVerdicts(recording.id)
+    } catch (err) {
+      console.warn('[TranscriptIntegrity] trust sync failed:', err)
+    }
     return success({ accepted: parsed.data.accepted })
   })
 

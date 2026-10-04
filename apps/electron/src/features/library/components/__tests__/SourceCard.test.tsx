@@ -281,6 +281,24 @@ describe('SourceCard layout — a fixed card', () => {
     expect(onClick).not.toHaveBeenCalled()
   })
 
+  it('hides the summary of a transcript that does not match its audio', () => {
+    render(
+      <SourceCard
+        {...makeProps({
+          transcript: {
+            id: 't1',
+            summary: 'Laura confiesa que lo mató.',
+            integrity_status: 'broken',
+            integrity_json: JSON.stringify({ issues: [{ code: 'text_over_noise', count: 1, detail: '' }] }),
+            integrity_accepted_at: null
+          } as unknown as Transcript
+        })}
+      />
+    )
+    expect(screen.queryByTestId('card-summary')).toBeNull()
+    expect(screen.queryByText(/Laura confiesa/)).toBeNull()
+  })
+
   it('says what to do next when there is no transcript', () => {
     const { rerender } = render(
       <SourceCard {...makeProps({ recording: { ...baseRecording, transcriptionStatus: 'none' } })} />

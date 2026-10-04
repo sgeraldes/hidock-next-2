@@ -4,7 +4,7 @@ import { existsSync, readdirSync, readFileSync } from 'fs'
 import { dirname, join, normalize, resolve as resolvePath } from 'path'
 import { randomUUID } from 'crypto'
 import { readAudioDuration } from './audio-duration'
-import { assessTranscriptIntegrity, INTEGRITY_VERSION, type TranscriptIntegrity } from './transcript-integrity'
+import { assessTranscriptIntegrity, INTEGRITY_VERSION, type IntegrityAudio, type TranscriptIntegrity } from './transcript-integrity'
 import { getDatabasePath } from './file-storage'
 
 // Re-exported so consumers (e.g. vector-store's binary cache) can locate the
@@ -7635,7 +7635,8 @@ export function insertTranscript(transcript: Omit<Transcript, 'created_at'>): vo
   // earlier acceptance goes with the old text: the owner accepted that one.
   const integrity = assessTranscriptIntegrity(
     transcript.speakers ?? null,
-    integrityAudioSeconds(transcript.recording_id)
+    integrityAudioSeconds(transcript.recording_id),
+    integrityAudioProfile(transcript.recording_id)
   )
   run(
     `INSERT OR REPLACE INTO transcripts (id, recording_id, full_text, language, summary, action_items,
@@ -7695,6 +7696,18 @@ function integrityAudioSeconds(recordingId: string): number | null {
   return null
 }
 
+/**
+ * What the audio profile says about the recording, for the checks that judge
+ * the text against its sound. Null when the recording was never profiled.
+ */
+export function integrityAudioProfile(recordingId: string): IntegrityAudio | null {
+  const row = queryOne<{ category: string; sound_seconds: number | null }>(
+    'SELECT category, sound_seconds FROM audio_profiles WHERE recording_id = ?',
+    [recordingId]
+  )
+  return row ? { category: row.category, soundSeconds: row.sound_seconds } : null
+}
+
 /** The problems a verdict names, as a comparable key (status plus each code and count). */
 function integrityProblemsKey(integrity: { status?: string; issues?: Array<{ code: string; count?: number }> } | null): string {
   if (!integrity) return ''
@@ -7713,7 +7726,11 @@ export function refreshTranscriptIntegrity(transcriptId: string): TranscriptInte
     [transcriptId]
   )
   if (!row) return null
-  const integrity = assessTranscriptIntegrity(row.speakers, integrityAudioSeconds(row.recording_id))
+  const integrity = assessTranscriptIntegrity(
+    row.speakers,
+    integrityAudioSeconds(row.recording_id),
+    integrityAudioProfile(row.recording_id)
+  )
   let previous: Parameters<typeof integrityProblemsKey>[0]
   try {
     previous = row.integrity_json ? JSON.parse(row.integrity_json) : null
@@ -7730,9 +7747,24 @@ export function refreshTranscriptIntegrity(transcriptId: string): TranscriptInte
 }
 
 /**
+ * The integrity verdict a transcript would get if stored now, from the same
+ * inputs insertTranscript uses. The transcription pipeline asks before the
+ * analysis call, so an untrusted transcript never gets a summary.
+ */
+export function checkTranscriptIntegrity(recordingId: string, speakersJson: string | null | undefined): TranscriptIntegrity {
+  return assessTranscriptIntegrity(speakersJson, integrityAudioSeconds(recordingId), integrityAudioProfile(recordingId))
+}
+
+/** Check a recording's transcript again (its audio profile changed). Null when it has none. */
+export function refreshTranscriptIntegrityForRecording(recordingId: string): TranscriptIntegrity | null {
+  const row = queryOne<{ id: string }>('SELECT id FROM transcripts WHERE recording_id = ?', [recordingId])
+  return row ? refreshTranscriptIntegrity(row.id) : null
+}
+
+/**
  * Check every transcript not yet checked under the current rules. Idempotent:
- * a transcript is read once per rule version. An acceptance survives, since
- * the text it covers has not changed.
+ * a transcript is read once per rule version. An acceptance survives when the
+ * rules find the same problems, and is cleared when they find new ones.
  */
 export async function backfillTranscriptIntegrity(
   options: { batchSize?: number } = {}
@@ -7744,8 +7776,8 @@ export async function backfillTranscriptIntegrity(
   const counts = { checked: 0, ok: 0, suspect: 0, broken: 0 }
   const seen = new Set<string>()
   for (;;) {
-    const rows = queryAll<{ id: string; recording_id: string; speakers: string | null }>(
-      `SELECT t.id, t.recording_id, t.speakers FROM transcripts t
+    const rows = queryAll<{ id: string; recording_id: string; speakers: string | null; integrity_json: string | null }>(
+      `SELECT t.id, t.recording_id, t.speakers, t.integrity_json FROM transcripts t
          JOIN recordings r ON r.id = t.recording_id
         WHERE r.deleted_at IS NULL
           AND (t.integrity_version IS NULL OR t.integrity_version < ?)
@@ -7758,10 +7790,25 @@ export async function backfillTranscriptIntegrity(
     if (fresh.length === 0) break
     for (const row of fresh) {
       seen.add(row.id)
-      const integrity = assessTranscriptIntegrity(row.speakers, integrityAudioSeconds(row.recording_id))
+      const integrity = assessTranscriptIntegrity(
+        row.speakers,
+        integrityAudioSeconds(row.recording_id),
+        integrityAudioProfile(row.recording_id)
+      )
+      // An acceptance covers the problems it was given for. When the rules
+      // now find different ones (v3 judges the text against the audio), it is
+      // cleared, as refreshTranscriptIntegrity does (kiro review of #136).
+      let previous: Parameters<typeof integrityProblemsKey>[0]
+      try {
+        previous = row.integrity_json ? JSON.parse(row.integrity_json) : null
+      } catch {
+        previous = null
+      }
+      const sameProblems = previous !== null && integrityProblemsKey(previous) === integrityProblemsKey(integrity)
       runNoSave(
-        'UPDATE transcripts SET integrity_status = ?, integrity_json = ?, integrity_version = ? WHERE id = ?',
-        [integrity.status, JSON.stringify(integrity), INTEGRITY_VERSION, row.id]
+        `UPDATE transcripts SET integrity_status = ?, integrity_json = ?, integrity_version = ?,
+           integrity_accepted_at = CASE WHEN ? THEN integrity_accepted_at ELSE NULL END WHERE id = ?`,
+        [integrity.status, JSON.stringify(integrity), INTEGRITY_VERSION, sameProblems ? 1 : 0, row.id]
       )
       counts.checked++
       counts[integrity.status]++
