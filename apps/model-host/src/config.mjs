@@ -46,6 +46,8 @@ export function paths(root = hostRoot()) {
 
 export const DEFAULTS = {
   port: DEFAULT_PORT,
+  /** Empty: every interface. Tests use 127.0.0.1 so the firewall asks nothing. */
+  bindAddress: '',
   /** Half the machine, the same share the client gives its own worker. */
   cpuPercent: 50,
   // 3.1 built the voice library; the client pins it on every job anyway.

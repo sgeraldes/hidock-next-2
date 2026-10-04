@@ -58,7 +58,7 @@ function stage(base, port) {
   copyFileSync(trayExe, join(app, 'HiDockModelHost.exe'))
   copyFileSync(process.execPath, join(app, 'node.exe'))
   cpSync(join(packageRoot, 'src'), join(app, 'src'), { recursive: true })
-  writeFileSync(join(root, 'config.json'), JSON.stringify({ port, stepAside: 'games' }))
+  writeFileSync(join(root, 'config.json'), JSON.stringify({ port, bindAddress: '127.0.0.1', stepAside: 'games' }))
   return { app, root }
 }
 

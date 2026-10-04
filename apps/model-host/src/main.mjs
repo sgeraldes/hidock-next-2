@@ -137,7 +137,9 @@ export async function start(options = {}) {
     jobOptions,
   })
 
-  await new Promise((resolve) => server.listen(config.port, resolve))
+  // Every interface by default, because HiDock is on another machine. Tests bind
+  // to loopback: Windows Firewall asks nothing for a loopback-only listener.
+  await new Promise((resolve) => server.listen(config.port, config.bindAddress || undefined, resolve))
   const address = server.address()
   console.log(`[host] listening on ${address.port}, state ${state.publicState()}`)
   if (!gpu) {

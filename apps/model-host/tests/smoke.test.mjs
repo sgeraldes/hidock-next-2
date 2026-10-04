@@ -19,7 +19,7 @@ const root = mkdtempSync(join(tmpdir(), 'hidock-host-test-'))
 const host = await start({
   root,
   startReady: true,
-  overrides: { port: 0, pythonPath: join(root, 'no-such-python.exe'), timeoutMs: 5000, validated: true },
+  overrides: { port: 0, bindAddress: '127.0.0.1', pythonPath: join(root, 'no-such-python.exe'), timeoutMs: 5000, validated: true },
 })
 const base = `http://127.0.0.1:${host.port}`
 
@@ -28,7 +28,7 @@ const freshRoot = mkdtempSync(join(tmpdir(), 'hidock-host-fresh-'))
 const fresh = await start({
   root: freshRoot,
   startReady: true,
-  overrides: { port: 0 },
+  overrides: { port: 0, bindAddress: '127.0.0.1' },
   diarize: async () => ({ model: 'pyannote/speaker-diarization-3.1', modelVersion: '4.0.7', device: 'cuda', segments: [], speakers: [] }),
 })
 const freshBase = `http://127.0.0.1:${fresh.port}`
@@ -54,6 +54,11 @@ describe('the service over a real socket', () => {
     expect(res.status).toBe(200)
     expect(body.state).toBe('ready')
     expect(body.version).toMatch(/^\d+\.\d+\.\d+$/)
+  })
+
+  it('listens on loopback in tests, so Windows Firewall never asks the person running them', () => {
+    expect(host.server.address().address).toBe('127.0.0.1')
+    expect(fresh.server.address().address).toBe('127.0.0.1')
   })
 
   it('has no page', async () => {
