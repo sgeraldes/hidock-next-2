@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { askDecision, createDecisionEngines, decisionChain, parseDecisionReply, type DecisionEngine } from '../decision-engines'
+import { askDecision, createDecisionEngines, decisionChain, decisionPrompt, parseDecisionReply, type DecisionEngine } from '../decision-engines'
 import { setCallSink, type CallRecord } from '../call-store'
 import { ModelHostDecisionError, resetModelHostHealthCache } from '../../model-host-client'
 import { createServer } from 'node:http'
@@ -104,6 +104,35 @@ describe('decision presets', () => {
   })
 })
 describe('strict text decision parsing', () => {
+  it.each([
+    ['{}', 'expected keys [kind, useful, stars], missing [kind, useful, stars], unexpected []'],
+    ['{"answers":{"private":"payload"}}', 'expected keys [kind, useful, stars], missing [kind, useful, stars], unexpected [answers]'],
+    ['{"kind":{},"useful":{},"other":{}}', 'expected keys [kind, useful, stars], missing [stars], unexpected [other]']
+  ])('reports only key structure for %s', (raw, message) => {
+    expect(() => parseDecisionReply(raw, questions, 'haiku')).toThrow(message)
+  })
+  it('bounds all key lists to ten ids and each id to forty characters', () => {
+    const expected = Array.from({ length: 12 }, (_, i) => `${i}-${'q'.repeat(50)}`)
+    const unexpected = Array.from({ length: 12 }, (_, i) => `${i}-${'x'.repeat(50)}`)
+    const qs = Object.fromEntries(expected.map(id => [id, questions.useful]))
+    const raw = JSON.stringify(Object.fromEntries(unexpected.map(id => [id, 'private payload'])))
+    const list = (ids: string[]) => ids.slice(0, 10).map(id => id.slice(0, 40)).join(', ')
+    expect(() => parseDecisionReply(raw, qs, 'haiku')).toThrow(`expected keys [${list(expected)}], missing [${list(expected)}], unexpected [${list(unexpected)}]`)
+  })
+  it('reports the question and wrong option id', () => {
+    expect(() => parseDecisionReply(reply.replace('media', 'none'), questions, 'haiku')).toThrow('Invalid option for kind: none')
+  })
+  it.each([['null', 'null'], ['[]', 'array'], ['"private payload"', 'string'], ['42', 'number'], ['true', 'boolean']])('reports JSON type for %s without content', (raw, type) => {
+    expect(() => parseDecisionReply(raw, questions, 'haiku')).toThrow(`Expected a JSON object, got ${type}`)
+  })
+  it('reports JSON type for a non-object answer', () => {
+    expect(() => parseDecisionReply(reply.replace('{"noul":0.7}', 'null'), questions, 'haiku')).toThrow('Expected a JSON object, got null')
+  })
+  it('enumerates exact top-level question ids and prohibits wrappers or omissions', () => {
+    const prompt = decisionPrompt('evidence', questions)
+    expect(prompt).toContain('Use exactly these top-level keys: ["kind","useful","stars"].')
+    expect(prompt).toContain('Include one answer for every question, with no missing or extra keys. Do not wrap the object in "answers" or any other key.')
+  })
   it('converts all three question types', () => {
     const parsed = parseDecisionReply(reply, questions, 'haiku')
     expect(parsed.answers.kind).toEqual({ type: 'choice', choice: 'media', confidence: 0.8, probabilities: { meeting: 0.09999999999999998, media: 0.8, noise: 0.09999999999999998 } })
