@@ -163,10 +163,17 @@ static void trim(void) { SetProcessWorkingSetSize(GetCurrentProcess(), (SIZE_T)-
 
 /* ---------- the service ---------- */
 
+/*
+ * Which start a service exit belongs to. A process that dies on its own just
+ * before a stop and a new start would otherwise deliver its exit after the new
+ * job exists, and closing that job (kill on close) would take the new service
+ * down with it.
+ */
+static UINT_PTR g_service_gen;
+
 static void CALLBACK on_service_exit(PVOID ctx, BOOLEAN timed_out) {
-  (void)ctx;
   (void)timed_out;
-  PostMessageW(g_wnd, WM_APP_SERVICE_EXIT, 0, 0);
+  PostMessageW(g_wnd, WM_APP_SERVICE_EXIT, (WPARAM)ctx, 0);
 }
 
 static void stop_service(void) {
@@ -227,7 +234,9 @@ static void start_service(void) {
   ResumeThread(pi.hThread);
   CloseHandle(pi.hThread);
   g_service = pi.hProcess;
-  RegisterWaitForSingleObject(&g_service_wait, g_service, on_service_exit, NULL, INFINITE, WT_EXECUTEONLYONCE);
+  g_service_gen++;
+  RegisterWaitForSingleObject(&g_service_wait, g_service, on_service_exit, (PVOID)g_service_gen, INFINITE,
+                              WT_EXECUTEONLYONCE);
 }
 
 /* ---------- deciding ---------- */
@@ -503,6 +512,7 @@ static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       evaluate();
       return 0;
     case WM_APP_SERVICE_EXIT:
+      if ((UINT_PTR)wp != g_service_gen) return 0; /* an exit from a service already replaced */
       if (g_service_wait) {
         UnregisterWaitEx(g_service_wait, NULL);
         g_service_wait = NULL;
