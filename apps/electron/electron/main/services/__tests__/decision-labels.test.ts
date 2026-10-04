@@ -76,6 +76,23 @@ describe('reference labels on real SQLite', () => {
     expect(getLabelItem({ setId: set.id, recordingId: 'ok' })).toBeNull()
     expect(() => saveLabel({ setId: set.id, recordingId: 'ok', answer: 'interview' })).toThrow()
   })
+  it('uses the latest evaluation once per recording and preserves an empty set', () => {
+    const empty = getLabelSet()
+    seed('late')
+    expect(getLabelSet()).toEqual(empty)
+    run('DELETE FROM decision_label_sets')
+    run("INSERT INTO knowledge_captures (id, title, captured_at, source_recording_id) VALUES ('new-capture', 'New', '2026-10-05', 'late')")
+    run(`INSERT INTO recording_evaluations (capture_id, recording_id, version, model, kind_confidence, answers_json, evaluated_at)
+      VALUES ('new-capture', 'late', 1, 'jev-1.13.0', 0.9, '{}', '2026-10-05')`)
+    const sampled = getLabelSet()
+    expect(sampled.items).toHaveLength(1)
+    expect(sampled.counts).toEqual({ doubtful: 0, confident: 1 })
+  })
+  it('rejects malformed read and clear requests before querying', () => {
+    expect(() => getLabelItem({ setId: '', recordingId: 'ok' })).toThrow()
+    expect(() => clearLabel(null)).toThrow()
+    expect(() => saveLabel({ setId: 'set', recordingId: 'ok', answer: 'made-up' })).toThrow()
+  })
   it('saves, changes and clears a label, rejecting invalid answers and ids', () => {
     seed('ok')
     const args = { setId: getLabelSet().id, recordingId: 'ok' }

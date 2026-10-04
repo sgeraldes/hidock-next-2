@@ -54,7 +54,6 @@ CREATE INDEX IF NOT EXISTS idx_decision_labels_question ON decision_labels(quest
 `
 
 const SCHEMA = `
-${DECISION_LABELS_DDL}
 -- Calendar events from ICS
 CREATE TABLE IF NOT EXISTS meetings (
     id TEXT PRIMARY KEY,
@@ -4042,6 +4041,10 @@ function repairPhase(): void {
   } catch (e) {
     console.warn('[Database] notes create skipped:', (e as Error).message)
   }
+
+  // Reference labels (v71), like Notes: fresh installs and upgrades share the
+  // migration DDL, while SCHEMA remains a literal list of SQL statements.
+  database.run(DECISION_LABELS_DDL)
 
   // Repair transcript_speakers (v25): a new table has no columns to ALTER, but
   // force-create it here so an older on-disk DB that skipped the migration still
