@@ -41,7 +41,7 @@ With the fixed line, Rec59 of 1-apr (two hours, 20,825 words) showed sound in on
 | Timestamps consistently wrong | repeated or backwards starts in 20% or more of the lines | 6 |
 | More speakers than invited | more transcript speakers than calendar attendees plus one | 90 |
 | More words than sound | over 8 words per second of loud sound | 6 |
-| Ends long before the audio | the transcript ends before 60% of a file over 5 minutes | 238 |
+| Ends long before the audio | the transcript ends before 60% of a file over 5 minutes, and is judged by what comes after (owner, 4-oct: "it depends on whether that audio holds something real") | 238: 5 with no audio after the end (valid); 121 truncated, with more than two minutes of sustained sound after the end and a normal speaking rate on what exists; 78 with a compressed clock, the text complete over the real length (2.45 words per second there, 6 on the stated span); 32 without times |
 
 | Verdict | Recordings | Show 4 or 5 stars today |
 |---|---|---|
@@ -72,7 +72,9 @@ The thresholds above are starting points; the sample in step 3 checks them befor
 | Deterministic verdict, and recompute of the stored categorizations under the new order | 2,140 | none, minutes of CPU |
 | Sampling of the doubtful ones: first 20 to check the thresholds and the comparison, then the rest | 433 | about 4.30 USD in all, 0.20 USD for the first 20 |
 | Jev again, only for transcripts that become valid after sampling and have no categorization | as many as come out valid | 1,200 input tokens each at 0.042 USD per million |
-| Re-transcription of the invalid and incomplete ones | per batch, only with the owner's approval and the cost of each | 0.0034 USD per minute |
+| Re-transcription of the 121 truncated ones (all from the July 2026 gemini-3.5-flash batch) | 121, 7,312 minutes | about 24.57 USD, with the owner's approval |
+| Re-transcription of the invalid ones over speech | per batch, only with the owner's approval and the cost of each | 0.0034 USD per minute |
+| Clock repair of the 78 compressed ones | 78 | none: once sampling confirms the text, the times are rescaled to the real length |
 
 ## PRs
 
@@ -80,6 +82,8 @@ The thresholds above are starting points; the sample in step 3 checks them befor
 2. Sampling: windows transcribed by the configured engine, Jev comparison by meaning, the pass over the doubtful (first 20, then the rest).
 3. Library: "Transcript in doubt", "Not categorized" and "Transcript incomplete" chips; the re-transcription offer with its cost.
 
-## Decision for the owner
+## Decisions taken (owner, 4-oct)
 
-How "ends long before the audio" (238) counts while unresolved: doubtful like the rest (nothing derived until sampling says), or flagged as incomplete with what exists still categorized.
+- Ends long before the audio: it depends on the audio after the end. No real audio there: valid. Sustained sound there: incomplete.
+- Sampling: 20 first, then the rest, without asking again unless something does not add up.
+- Re-transcription of the 121 truncated ones: see the ask of 4-oct.
