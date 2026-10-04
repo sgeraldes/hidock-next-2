@@ -1,19 +1,22 @@
 ; HiDock Model Host installer.
 ;
-; Per-user by default: no elevation, no service, nothing machine-wide. The host
-; runs as the signed-in person and holds a GPU only while they say so.
-;
-; It installs the program and leaves the heavy parts to first run, because a
-; CUDA build of torch is 2.5 GB and downloading it inside a setup wizard with no
-; way to pause is worse than asking for it once the person can see progress.
+; Per-user: no elevation, no Windows service, nothing machine-wide. A double
+; click and nothing else (Sebastián, 4-oct-2026): no folder page, no questions.
+; It copies the program, runs setup without prompts (hardware check, private
+; Python, CUDA torch and pyannote, about 2.5 GB, progress in a console that
+; closes by itself), then starts the tray icon and registers it to start with
+; Windows. The Hugging Face token is never asked for: HiDock sends it.
 
 Unicode true
 SetCompressor /SOLID lzma
+!include WinMessages.nsh
 
 !define PRODUCT "HiDock Model Host"
 !define PRODUCT_KEY "HiDockModelHost"
+!define TRAY_EXE "HiDockModelHost.exe"
+!define TRAY_CLASS "HiDockModelHostTray"
 !ifndef VERSION
-  !define VERSION "0.2.0"
+  !define VERSION "0.3.0"
 !endif
 
 Name "${PRODUCT} ${VERSION}"
@@ -24,14 +27,21 @@ InstallDirRegKey HKCU "Software\${PRODUCT_KEY}" "InstallDir"
 ShowInstDetails show
 ShowUninstDetails show
 
-Page directory
 Page instfiles
 UninstPage uninstConfirm
 UninstPage instfiles
 
+; Close a running tray icon, which ends the service with it, so its files can
+; be replaced or removed.
+!macro CloseTray
+  FindWindow $0 "${TRAY_CLASS}"
+  IntCmp $0 0 +3
+    SendMessage $0 ${WM_CLOSE} 0 0
+    Sleep 1500
+!macroend
+
 Function .onInit
-  ; One host per machine. A second copy would fight the first for the GPU and
-  ; for the port, and the person would have no way to tell which one answered.
+  ; One installer at a time.
   System::Call 'kernel32::CreateMutex(p 0, i 0, t "HiDockModelHostSetup") p .r1 ?e'
   Pop $R0
   StrCmp $R0 0 +3
@@ -41,11 +51,12 @@ FunctionEnd
 
 Section "Model Host" SEC_MAIN
   SectionIn RO
+  !insertmacro CloseTray
   SetOutPath "$INSTDIR"
   File /r "${STAGE}\*.*"
 
-  ; Program, models, jobs and credentials each get their own place, so removing
-  ; the program does not remove a 2.5 GB download or a paired client's token.
+  ; Program, models and credentials each get their own place, so removing the
+  ; program does not remove a 2.5 GB download or a paired client's token.
   CreateDirectory "$LOCALAPPDATA\${PRODUCT}"
   CreateDirectory "$LOCALAPPDATA\${PRODUCT}\models"
   CreateDirectory "$LOCALAPPDATA\${PRODUCT}\runtime"
@@ -65,41 +76,34 @@ Section "Model Host" SEC_MAIN
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_KEY}" \
     "NoModify" 1
 
-  CreateDirectory "$SMPROGRAMS\${PRODUCT}"
-  CreateShortCut "$SMPROGRAMS\${PRODUCT}\${PRODUCT}.lnk" "$INSTDIR\Start Model Host.cmd" "" "" 0 SW_SHOWMINIMIZED
-  CreateShortCut "$SMPROGRAMS\${PRODUCT}\Set up ${PRODUCT}.lnk" "$INSTDIR\Set up Model Host.cmd"
-  CreateShortCut "$SMPROGRAMS\${PRODUCT}\Uninstall.lnk" "$INSTDIR\uninstall.exe"
+  ; The icon starts with Windows: HiDock can use the GPU without anyone
+  ; opening anything on this machine.
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCT_KEY}" "$\"$INSTDIR\${TRAY_EXE}$\""
 
-  ; Game mode by hand: one click pauses (the running job goes back to the
-  ; other computer) or resumes. On the desktop too, where it is found before
-  ; a game starts.
-  CreateShortCut "$SMPROGRAMS\${PRODUCT}\${PRODUCT} - pause or resume.lnk" \
-    "$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" \
-    '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\src\pause-resume.ps1"' \
-    "$INSTDIR\node.exe" 0 SW_SHOWMINIMIZED
-  CreateShortCut "$DESKTOP\${PRODUCT} - pause or resume.lnk" \
-    "$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" \
-    '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\src\pause-resume.ps1"' \
-    "$INSTDIR\node.exe" 0 SW_SHOWMINIMIZED
+  CreateDirectory "$SMPROGRAMS\${PRODUCT}"
+  CreateShortCut "$SMPROGRAMS\${PRODUCT}\${PRODUCT}.lnk" "$INSTDIR\${TRAY_EXE}"
+  CreateShortCut "$SMPROGRAMS\${PRODUCT}\Uninstall.lnk" "$INSTDIR\uninstall.exe"
 
   WriteUninstaller "$INSTDIR\uninstall.exe"
 SectionEnd
 
-Section -Finish
-  ; Offer setup. Installing is not authorization to download models or start
-  ; holding the GPU, so nothing runs unless the person says yes here.
-  ; A silent install (/S) is an upgrade over a working runtime: never set up.
-  MessageBox MB_YESNO|MB_ICONQUESTION \
-    "Set up ${PRODUCT} now?$\r$\n$\r$\nSetup checks the GPU and downloads the model runtime (about 2.5 GB). You can do it later from the Start Menu." \
-    /SD IDNO IDNO skip_setup
-    Exec '"$INSTDIR\Set up Model Host.cmd"'
-  skip_setup:
+Section -Setup
+  ; No questions. The console shows the download and closes when it is done.
+  DetailPrint "Setting up the model runtime (about 2.5 GB the first time)..."
+  ExecWait '"$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\setup.ps1"' $0
+  IntCmp $0 0 setup_ok
+    DetailPrint "Setup ended with code $0. The details are in $LOCALAPPDATA\${PRODUCT}\logs\setup.log."
+  setup_ok:
+  Exec '"$INSTDIR\${TRAY_EXE}"'
 SectionEnd
 
 Section "Uninstall"
+  !insertmacro CloseTray
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCT_KEY}"
   Delete "$SMPROGRAMS\${PRODUCT}\${PRODUCT}.lnk"
-  Delete "$SMPROGRAMS\${PRODUCT}\Set up ${PRODUCT}.lnk"
   Delete "$SMPROGRAMS\${PRODUCT}\Uninstall.lnk"
+  ; Shortcuts of 0.1 and 0.2, when this uninstall follows an upgrade.
+  Delete "$SMPROGRAMS\${PRODUCT}\Set up ${PRODUCT}.lnk"
   Delete "$SMPROGRAMS\${PRODUCT}\${PRODUCT} - pause or resume.lnk"
   Delete "$DESKTOP\${PRODUCT} - pause or resume.lnk"
   RMDir "$SMPROGRAMS\${PRODUCT}"

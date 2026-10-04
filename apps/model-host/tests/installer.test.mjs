@@ -14,6 +14,7 @@ describe('the installer payload', () => {
     fakes = mkdtempSync(join(tmpdir(), 'hidock-stage-fakes-'))
     writeFileSync(join(fakes, 'node.exe'), 'node')
     writeFileSync(join(fakes, 'ffmpeg.exe'), 'ffmpeg')
+    writeFileSync(join(fakes, 'HiDockModelHost.exe'), 'tray')
   })
 
   afterEach(() => {
@@ -25,8 +26,27 @@ describe('the installer payload', () => {
     return stage(join(dir, 'stage'), {
       nodePath: join(fakes, 'node.exe'),
       ffmpegPath: join(fakes, 'ffmpeg.exe'),
+      trayPath: join(fakes, 'HiDockModelHost.exe'),
     })
   }
+
+  it('ships the tray icon, and no scripts or pages for the person to run', () => {
+    const out = build()
+    expect(readFileSync(join(out, 'HiDockModelHost.exe'), 'utf8')).toBe('tray')
+    expect(existsSync(join(out, 'Start Model Host.cmd'))).toBe(false)
+    expect(existsSync(join(out, 'Set up Model Host.cmd'))).toBe(false)
+    expect(existsSync(join(out, 'src', 'pause-resume.ps1'))).toBe(false)
+  })
+
+  it('refuses to build without the tray icon', () => {
+    expect(() =>
+      stage(join(dir, 'stage'), {
+        nodePath: join(fakes, 'node.exe'),
+        ffmpegPath: join(fakes, 'ffmpeg.exe'),
+        trayPath: join(fakes, 'missing.exe'),
+      })
+    ).toThrow(/tray icon/)
+  })
 
   it('ships ffmpeg, because the worker decodes every file with it and the GPU machine has none', () => {
     const out = build()
@@ -49,7 +69,11 @@ describe('the installer payload', () => {
 
   it('refuses to build without ffmpeg instead of shipping a host that fails every job', () => {
     expect(() =>
-      stage(join(dir, 'stage'), { nodePath: join(fakes, 'node.exe'), ffmpegPath: join(fakes, 'missing.exe') })
+      stage(join(dir, 'stage'), {
+        nodePath: join(fakes, 'node.exe'),
+        ffmpegPath: join(fakes, 'missing.exe'),
+        trayPath: join(fakes, 'HiDockModelHost.exe'),
+      })
     ).toThrow(/ffmpeg/i)
   })
 })

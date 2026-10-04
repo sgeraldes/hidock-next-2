@@ -11,11 +11,12 @@
  */
 
 import { execFileSync } from 'child_process'
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'fs'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
 import { homedir } from 'os'
 import { createRequire } from 'module'
+import { buildTray } from './build-tray.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const packageRoot = join(here, '..')
@@ -62,6 +63,10 @@ function findFfmpeg() {
  */
 export function stage(stageDir, sources = {}) {
   const nodePath = sources.nodePath || process.execPath
+  const trayPath = sources.trayPath || join(packageRoot, 'build', 'HiDockModelHost.exe')
+  if (!existsSync(trayPath)) {
+    throw new Error(`the tray icon was not built (${trayPath}). Run npm run build:tray, which needs zig.`)
+  }
   const ffmpegPath = sources.ffmpegPath ?? findFfmpeg()
   if (!ffmpegPath || !existsSync(ffmpegPath)) {
     throw new Error(
@@ -87,34 +92,10 @@ export function stage(stageDir, sources = {}) {
     cpSync(join(worker, file), join(stageDir, 'resources', 'speaker-linking', file))
   }
 
-  // The host is plain Node with no dependencies, so the runtime is one file.
+  // The service is plain Node with no dependencies, so the runtime is one file.
   cpSync(nodePath, join(stageDir, 'node.exe'))
-
-  writeFileSync(
-    join(stageDir, 'Start Model Host.cmd'),
-    [
-      '@echo off',
-      'rem Starts the host and opens its control page. It starts STOPPED:',
-      'rem nothing runs on the GPU until you press Start on that page.',
-      'cd /d "%~dp0"',
-      'start "" http://localhost:8765/',
-      '"%~dp0node.exe" "%~dp0src\\main.mjs"',
-      '',
-    ].join('\r\n'),
-    'utf8'
-  )
-  writeFileSync(
-    join(stageDir, 'Set up Model Host.cmd'),
-    [
-      '@echo off',
-      'rem First run: hardware check, private Python, torch, pyannote, and a',
-      'rem synthetic clip to prove the chain works on THIS machine.',
-      'powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup.ps1"',
-      'pause',
-      '',
-    ].join('\r\n'),
-    'utf8'
-  )
+  // The tray icon: the only thing that stays running on the gamestation.
+  cpSync(trayPath, join(stageDir, 'HiDockModelHost.exe'))
   return stageDir
 }
 
@@ -132,6 +113,7 @@ function main() {
   const stageDir = join(packageRoot, 'build', 'stage')
   const outDir = join(packageRoot, 'build')
   const outFile = join(outDir, `HiDock-Model-Host-${version}-Setup.exe`)
+  buildTray()
   stage(stageDir)
   mkdirSync(outDir, { recursive: true })
 
