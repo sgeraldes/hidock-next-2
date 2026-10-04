@@ -9,6 +9,9 @@ pairs with it, gives it the Hugging Face token and decides when it steps aside.
 
 ### Changes
 
+- **A fresh restore point before database updates.** Schema migrations now verify a current backup,
+  even when today's daily backup already exists. The newest three migration backups are kept.
+
 - **Decision engines and presets.** Pipeline settings choose Clef Flash, Clef, Jev, Haiku or Gemini
   Flash for five decision steps, with a global preset and per-step overrides. Presets fall back when
   an engine cannot answer, and each attempt is recorded in the call ledger.
