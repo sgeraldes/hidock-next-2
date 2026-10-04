@@ -113,7 +113,7 @@ export interface Transcript {
   integrity_json?: string | null
   integrity_version?: number | null
   integrity_accepted_at?: string | null
-  /** Transcript validity (v68): 'audio', 'invalid', 'incomplete', 'doubtful' or 'valid' (services/transcript-validity.ts). */
+  /** Transcript validity (v69): 'audio', 'invalid', 'incomplete', 'doubtful' or 'valid' (services/transcript-validity.ts). */
   validity_status?: 'audio' | 'invalid' | 'incomplete' | 'doubtful' | 'valid' | null
   validity_json?: string | null
   validity_version?: number | null
