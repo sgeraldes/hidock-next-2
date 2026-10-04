@@ -1122,6 +1122,11 @@ CREATE INDEX IF NOT EXISTS idx_contact_aliases_contact ON contact_aliases(contac
 CREATE INDEX IF NOT EXISTS idx_project_aliases_project ON project_aliases(project_id);
 CREATE INDEX IF NOT EXISTS idx_identity_suggestions_status ON identity_suggestions(status);
 CREATE INDEX IF NOT EXISTS idx_merge_journal_kind_keeper ON merge_journal(kind, keeper_id);
+-- MAX(seq) runs inside every atomic merge: avoid scanning multi-kilobyte snapshots.
+CREATE INDEX IF NOT EXISTS idx_merge_journal_seq ON merge_journal(seq);
+-- Cover ordered contact-journal discovery without reading snapshot pages.
+-- keeper_id retains the old kind/keeper index's tie order for equal sequences.
+CREATE INDEX IF NOT EXISTS idx_merge_journal_contact_order ON merge_journal(kind, undone_at, seq, keeper_id);
 
 -- Entity-type artifacts (C0 / v28). Every concrete imported file/blob (pdf, md,
 -- txt, json, image…). A knowledge_capture can own many artifacts. Text is
@@ -4426,6 +4431,33 @@ export function queryOne<T>(sql: string, params: any[] = []): T | undefined {
 
 export function run(sql: string, params: any[] = []): void {
   engine.run(sql, params)
+}
+
+// A default 1000-page automatic checkpoint can turn one otherwise small merge
+// COMMIT into a >250 ms stall. Lower the main connection's threshold while
+// yielding reconciliation is active, without changing WAL durability or turning
+// checkpoints off. Reference counting preserves the setting across overlapping
+// callers; an explicitly disabled (0) or already smaller limit is left alone.
+let organizationCheckpointUsers = 0
+let organizationCheckpointPrevious: number | undefined
+
+export function acquireOrganizationCheckpointBudget(): () => void {
+  if (organizationCheckpointUsers === 0) {
+    const previous = queryOne<{ wal_autocheckpoint: number }>('PRAGMA wal_autocheckpoint')?.wal_autocheckpoint
+    organizationCheckpointPrevious = previous !== undefined && previous > 128 ? previous : undefined
+    if (organizationCheckpointPrevious !== undefined) queryOne('PRAGMA wal_autocheckpoint = 128')
+  }
+  organizationCheckpointUsers++
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    if (--organizationCheckpointUsers === 0 && organizationCheckpointPrevious !== undefined) {
+      const previous = organizationCheckpointPrevious
+      organizationCheckpointPrevious = undefined
+      queryOne(`PRAGMA wal_autocheckpoint = ${previous}`)
+    }
+  }
 }
 
 /** Rows modified by the most recent run()/runInTransaction() write — lets a
@@ -12922,24 +12954,30 @@ const VOICE_PRESENCE_MIN_SIMILARITY = 0.9
  *      other candidate attended or speaks.
  * Otherwise 'unclear'; supportedCandidateIds then says whom Jev may choose between.
  */
+interface BucketRecordingRow {
+  recordingId: string
+  filename: string | null
+  date: string | null
+  meetingId: string | null
+  subject: string | null
+}
+
 function buildBucketResolution(
   contact: { id: string; name: string },
   allContacts: Array<{ id: string; name: string }>,
-  opts: BucketRuleOptions = {}
+  opts: BucketRuleOptions = {},
+  recordingRows?: BucketRecordingRow[],
+  ambiguity?: ReturnType<typeof detectAmbiguousName>
 ): BucketResolution {
-  const amb = detectAmbiguousName(contact.name, allContacts, contact.id)
+  const amb = ambiguity ?? detectAmbiguousName(contact.name, allContacts, contact.id)
   const candidates: AmbiguousCandidate[] = amb.matches.map((m) => ({ id: m.id, name: m.name }))
   const candNameById = new Map(candidates.map((c) => [c.id, c.name]))
   const candIds = candidates.map((c) => c.id)
   const nameKey = normalizeName(contact.name)
 
-  const rawRecRows =
-    candIds.length === 0
-      ? []
-      : queryAll<{ recordingId: string; filename: string | null; date: string | null; meetingId: string | null; subject: string | null }>(
-          BUCKET_RECORDINGS_SQL,
-          [contact.id]
-        )
+  const rawRecRows = candIds.length === 0
+    ? []
+    : recordingRows ?? queryAll<BucketRecordingRow>(BUCKET_RECORDINGS_SQL, [contact.id])
 
   // ADV27-4 (round-28) — the bucket-resolution recordings feed identity display
   // (getAmbiguousBuckets / getBucketResolution) AND the startup autoSplit WRITER
@@ -13195,6 +13233,58 @@ export function getBucketResolution(contactId: string, opts: BucketRuleOptions =
   const amb = detectAmbiguousName(contact.name, contacts, contact.id)
   if (!amb.ambiguous) return null
   return buildBucketResolution(contact, contacts, opts)
+}
+
+interface BucketResolutionContext {
+  contacts: Array<{ id: string; name: string }>
+  contact: { id: string; name: string }
+  ambiguity: ReturnType<typeof detectAmbiguousName>
+}
+
+/** Rebuild bounded evidence; the runner invalidates discovery context after interleaved writes. */
+export function getBucketResolutionBatch(
+  contactId: string,
+  opts: BucketRuleOptions,
+  offset: number,
+  limit: number,
+  context?: BucketResolutionContext
+): { resolution: BucketResolution | null; hasMore: boolean } {
+  const contacts = context?.contacts ?? queryAll<{ id: string; name: string }>('SELECT id, name FROM contacts')
+  const contact = context?.contact ?? contacts.find((c) => c.id === contactId)
+  const ambiguity = contact ? context?.ambiguity ?? detectAmbiguousName(contact.name, contacts, contact.id) : null
+  if (!contact || !ambiguity?.ambiguous) return { resolution: null, hasMore: false }
+  // The page already contains the complete ordered recording rows. Pass it
+  // through directly instead of querying the same joins again with an IN filter.
+  const rows = queryAll<BucketRecordingRow>(`${BUCKET_RECORDINGS_SQL} LIMIT ? OFFSET ?`, [contactId, limit, offset])
+  const resolution = buildBucketResolution(contact, contacts, opts, rows, ambiguity)
+  return {
+    resolution,
+    // Count raw rows, before eligibility filtering: an excluded page must not hide later eligible recordings.
+    hasMore: rows.length === limit
+  }
+}
+
+/** Same bucket ordering as the synchronous view, without building every resolution in one stretch. */
+export function* ambiguousBucketBatches(opts: BucketRuleOptions, batchSize: number): Generator<void, BucketResolution[]> {
+  const contacts = queryAll<{ id: string; name: string }>('SELECT id, name FROM contacts')
+  const found: BucketResolution[] = []
+  for (const c of contacts) {
+    const ambiguity = detectAmbiguousName(c.name, contacts, c.id)
+    if (!ambiguity.ambiguous) continue
+    const context = { contacts, contact: c, ambiguity }
+    let combined: BucketResolution | null = null
+    for (let offset = 0; ; offset += batchSize) {
+      const { resolution, hasMore } = getBucketResolutionBatch(c.id, opts, offset, batchSize, context)
+      if (!resolution) break
+      if (!combined) combined = resolution
+      else combined.recordings.push(...resolution.recordings)
+      yield
+      if (!hasMore) break
+    }
+    if (combined) found.push(combined)
+  }
+  found.sort((a, b) => b.recordings.length - a.recordings.length)
+  return found
 }
 
 /** A stored per-recording mention decision (decided=false ⇒ resolve normally). */

@@ -427,11 +427,13 @@ describe('renameAddressNamedContacts', () => {
 describe('reconcileOrganizationYielding', () => {
   function mockSteps(events: string[], failing: number[] = []) {
     RECONCILE_STEPS.forEach((step, index) => {
-      vi.spyOn(step, 'run').mockImplementation(() => {
+      const run = () => {
         events.push(`run:${index}`)
         setTimeout(() => events.push(`tick:${index}`), 0)
         if (failing.includes(index)) throw new Error(`boom ${index}`)
-      })
+      }
+      vi.spyOn(step, 'run').mockImplementation(run)
+      if (step.runYielding) vi.spyOn(step, 'runYielding').mockImplementation(async () => run())
     })
   }
 
@@ -460,7 +462,7 @@ describe('reconcileOrganizationYielding', () => {
     mockSteps(events, [1])
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
 
-    await reconcileOrganizationYielding()
+    await expect(reconcileOrganizationYielding()).rejects.toThrow('boom 1')
 
     expect(events.filter((e) => e.startsWith('run:'))).toHaveLength(RECONCILE_STEPS.length)
     expect(error).toHaveBeenCalledTimes(1)
@@ -470,16 +472,18 @@ describe('reconcileOrganizationYielding', () => {
   it('names a step that held the main thread too long', async () => {
     mockSteps([])
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
-    // start and end of each step, in order: only the third step is slow.
+    // The batched steps measure their own stretches; this tests the synchronous fallback.
     const readings: number[] = []
-    RECONCILE_STEPS.forEach((_, index) => readings.push(0, index === 2 ? 700 : SLOW_RECONCILE_STEP_MS - 1))
+    RECONCILE_STEPS.forEach((step) => {
+      if (!step.runYielding) readings.push(0, step.name === 'recording-auto-link' ? 700 : SLOW_RECONCILE_STEP_MS - 1)
+    })
     let call = 0
     vi.spyOn(performance, 'now').mockImplementation(() => readings[call++] ?? 0)
 
     await reconcileOrganizationYielding()
 
     expect(warn).toHaveBeenCalledTimes(1)
-    expect(warn).toHaveBeenCalledWith('[OrgReconciler] step "recording-merge" held the main thread for 700ms')
+    expect(warn).toHaveBeenCalledWith('[OrgReconciler] step "recording-auto-link" held the main thread for 700ms')
   })
 
   it('runs against a real, empty database without error', async () => {
