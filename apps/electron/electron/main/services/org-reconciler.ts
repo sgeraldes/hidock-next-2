@@ -16,6 +16,7 @@ import { yieldToEventLoop } from './event-loop'
 import {
   queryAll,
   queryOne,
+  acquireOrganizationCheckpointBudget,
   run,
   runInTransaction,
   meetingBaseUid,
@@ -25,6 +26,8 @@ import {
   recordMentionResolutionNoSave,
   getAmbiguousBucketResolutions,
   getBucketResolution,
+  getBucketResolutionBatch,
+  ambiguousBucketBatches,
   getActiveCalendarSyncToken,
   healRecordingStatusFromTranscripts,
   isProjectDiscoveryRejected,
@@ -453,6 +456,15 @@ function readCalendarNames(peopleByMeeting: ReadonlyArray<ReadonlyArray<{ name?:
   return { namesByAddress, notOnePerson }
 }
 
+function addCalendarNames(target: CalendarNames, names: CalendarNames): void {
+  for (const address of names.notOnePerson) target.notOnePerson.add(address)
+  for (const [address, counts] of names.namesByAddress) {
+    let combined = target.namesByAddress.get(address)
+    if (!combined) target.namesByAddress.set(address, (combined = new Map()))
+    for (const [name, count] of counts) combined.set(name, (combined.get(name) ?? 0) + count)
+  }
+}
+
 /**
  * Whether a contact's name is a placeholder the calendar should replace: not a name at
  * all (the address, "Name <address>", a phone number), or the start of its own address
@@ -483,132 +495,189 @@ function contactAddress(contact: { name: string; email: string | null }): string
  * for the next change.
  */
 export function upsertContactsFromMeetings(): { contacts: number; links: number } {
-  if (readConfigValue(CONTACTS_UPSERT_FINGERPRINT_KEY) === contactsUpsertFingerprint()) return { contacts: 0, links: 0 }
-
-  const meetings = queryAll<MeetingRow>(
-    `SELECT id, subject, start_time, attendees, organizer_name, organizer_email FROM meetings`
-  )
-
-  let newContacts = 0
-  let newLinks = 0
-
+  const totals = { contacts: 0, links: 0 }
   runInTransaction(() => {
-    // One read of the contacts and of the links, then lookups in memory. The
-    // per-person queries this replaces filtered on LOWER(email), which no index
-    // serves, and prepared a statement on every call: 15,920 person slots against
-    // 1,611 contacts froze the window for seconds at boot (30-sep-2026). The key
-    // is SQLite's own LOWER(email), and the first row by rowid wins, exactly as
-    // the query it replaces returned.
-    const contactsByEmail = new Map<string, KnownContact>()
-    const contactsById = new Map<string, KnownContact>()
-    for (const known of queryAll<{ id: string; name: string; email_key: string | null; source: string | null }>(
-      `SELECT id, name, LOWER(email) AS email_key, source FROM contacts ORDER BY rowid`
-    )) {
-      const entry = { id: known.id, name: known.name, source: known.source }
-      contactsById.set(known.id, entry)
-      if (known.email_key !== null && !contactsByEmail.has(known.email_key)) contactsByEmail.set(known.email_key, entry)
-    }
+    const batches = upsertContactsBatches(totals)
+    while (!batches.next().done) { /* Synchronous callers retain one atomic pass. */ }
+  })
+  if (totals.contacts > 0 || totals.links > 0) {
+    console.log(`[OrgReconciler] Contacts: +${totals.contacts} people, +${totals.links} meeting links`)
+  }
+  return totals
+}
 
-    // The email of a contact that was merged into another belongs to the survivor.
-    // A merge keeps the survivor's own email and drops the loser's, and the loser's
-    // address is still on the meetings that named it: without this the next pass
-    // saw an address nobody owned, created the contact again, and the name merge
-    // folded it away again. Measured on the real data: the same 34 contacts were
-    // created and merged on every start and after every calendar sync, and the
-    // merge journal grew by about 1,000 rows a day (30-sep-2026). The journal is
-    // the record of who took whom; a merge that was undone is not in it.
-    // Known trade-off: an address that was reassigned to another person after a merge (or a
-    // shared mailbox) resolves to the survivor of that merge until the merge is undone.
-    const mergedInto = new Map<string, string>() // loser id -> keeper id
-    const mergedEmailOwner = new Map<string, string>() // loser email -> keeper id
-    for (const row of queryAll<{ loser_id: string | null; keeper_id: string; email: string | null }>(
-      `SELECT loser_id, keeper_id, json_extract(loser_snapshot, '$.email') AS email
-         FROM merge_journal WHERE kind = 'contact' AND undone_at IS NULL ORDER BY seq`
-    )) {
+/** Retain table-row order while bounding attendee materialization before name parsing. */
+function* calendarMeetingBatches(): Generator<void, MeetingRow[]> {
+  const meetings: MeetingRow[] = []
+  let rowid: number | undefined
+  for (;;) {
+    const page = queryAll<MeetingRow & { rowid: number }>(
+      `SELECT rowid, id, subject, start_time, attendees, organizer_name, organizer_email
+         FROM meetings ${rowid === undefined ? '' : 'WHERE rowid > ?'} ORDER BY rowid LIMIT ?`,
+      rowid === undefined ? [ORG_BATCH_SIZE] : [rowid, ORG_BATCH_SIZE]
+    )
+    meetings.push(...page)
+    if (page.length < ORG_BATCH_SIZE) return meetings
+    rowid = page[page.length - 1].rowid
+    yield
+  }
+}
+
+function* upsertContactsBatches(totals: { contacts: number; links: number }): Generator<void> {
+  if (readConfigValue(CONTACTS_UPSERT_FINGERPRINT_KEY) === contactsUpsertFingerprint()) return
+
+  const meetings = yield* calendarMeetingBatches()
+
+  // Read contacts once and links in bounded pages, then look up in memory. The
+  // per-person queries this replaces filtered on LOWER(email), which no index
+  // serves, and prepared a statement on every call: 15,920 person slots against
+  // 1,611 contacts froze the window for seconds at boot (30-sep-2026). The key
+  // is SQLite's own LOWER(email), and the first row by rowid wins, exactly as
+  // the query it replaces returned.
+  const contactsByEmail = new Map<string, KnownContact>()
+  const contactsById = new Map<string, KnownContact>()
+  for (const known of queryAll<{ id: string; name: string; email_key: string | null; source: string | null }>(
+    `SELECT id, name, LOWER(email) AS email_key, source FROM contacts ORDER BY rowid`
+  )) {
+    const entry = { id: known.id, name: known.name, source: known.source }
+    contactsById.set(known.id, entry)
+    if (known.email_key !== null && !contactsByEmail.has(known.email_key)) contactsByEmail.set(known.email_key, entry)
+  }
+
+  // The email of a contact that was merged into another belongs to the survivor.
+  // A merge keeps the survivor's own email and drops the loser's, and the loser's
+  // address is still on the meetings that named it: without this the next pass
+  // saw an address nobody owned, created the contact again, and the name merge
+  // folded it away again. Measured on the real data: the same 34 contacts were
+  // created and merged on every start and after every calendar sync, and the
+  // merge journal grew by about 1,000 rows a day (30-sep-2026). The journal is
+  // the record of who took whom; a merge that was undone is not in it.
+  // Known trade-off: an address that was reassigned to another person after a merge (or a
+  // shared mailbox) resolves to the survivor of that merge until the merge is undone.
+  const mergedInto = new Map<string, string>() // loser id -> keeper id
+  const mergedEmailOwner = new Map<string, string>() // loser email -> keeper id
+  // Sort lightweight row ids once, then parse the large journal snapshots in
+  // bounded pages. Keep the original ORDER BY seq (including SQLite tie order).
+  const journal = queryAll<{ rowid: number }>(
+    `SELECT rowid FROM merge_journal WHERE kind = 'contact' AND undone_at IS NULL ORDER BY seq`
+  )
+  yield
+  for (let offset = 0; offset < journal.length; offset += ORG_BATCH_SIZE) {
+    const page = journal.slice(offset, offset + ORG_BATCH_SIZE)
+    const rows = queryAll<{ rowid: number; loser_id: string | null; keeper_id: string; email: string | null }>(
+      `SELECT rowid, loser_id, keeper_id, json_extract(loser_snapshot, '$.email') AS email
+         FROM merge_journal WHERE rowid IN (${page.map(() => '?').join(',')})`, page.map((r) => r.rowid)
+    )
+    const byRow = new Map(rows.map((r) => [r.rowid, r]))
+    for (const entry of page) {
+      const row = byRow.get(entry.rowid)!
       if (row.loser_id) mergedInto.set(row.loser_id, row.keeper_id)
       if (row.email && row.email.trim()) mergedEmailOwner.set(row.email.trim().toLowerCase(), row.keeper_id)
     }
-    const survivorOfMergedEmail = (email: string): KnownContact | undefined => {
-      let owner = mergedEmailOwner.get(email)
-      // The keeper may itself have been merged later: follow the chain to a contact that still exists.
-      for (let hops = 0; owner && !contactsById.has(owner) && hops < 20; hops++) owner = mergedInto.get(owner)
-      return owner ? contactsById.get(owner) : undefined
-    }
-    const linkedPairs = new Set(
-      queryAll<{ meeting_id: string; contact_id: string }>(`SELECT meeting_id, contact_id FROM meeting_contacts`).map(
-        (link) => `${link.meeting_id}\u0000${link.contact_id}`
-      )
+    yield
+  }
+  const survivorOfMergedEmail = (email: string): KnownContact | undefined => {
+    let owner = mergedEmailOwner.get(email)
+    // The keeper may itself have been merged later: follow the chain to a contact that still exists.
+    for (let hops = 0; owner && !contactsById.has(owner) && hops < 20; hops++) owner = mergedInto.get(owner)
+    return owner ? contactsById.get(owner) : undefined
+  }
+  const linkedPairs = new Set<string>()
+  let linkRow: number | undefined
+  for (;;) {
+    const page = queryAll<{ rowid: number; meeting_id: string; contact_id: string }>(
+      `SELECT rowid, meeting_id, contact_id FROM meeting_contacts ${linkRow === undefined ? '' : 'WHERE rowid > ?'} ORDER BY rowid LIMIT 256`,
+      linkRow === undefined ? [] : [linkRow]
     )
+    for (const link of page) linkedPairs.add(`${link.meeting_id}\u0000${link.contact_id}`)
+    if (page.length < 256) break
+    linkRow = page[page.length - 1].rowid
+    yield
+  }
+  yield
 
-    // Parsed once: the name rules need every meeting before the first contact is named,
-    // since a later meeting may show an address is a distribution list.
-    const peopleByMeeting = meetings.map((meeting) => calendarPeople(meeting))
-    const calendarNames = readCalendarNames(peopleByMeeting)
+  // Parsed once: the name rules need every meeting before the first contact is named,
+  // since a later meeting may show an address is a distribution list.
+  const peopleByMeeting: ReturnType<typeof calendarPeople>[] = []
+  const calendarNames: CalendarNames = { namesByAddress: new Map(), notOnePerson: new Set() }
+  for (let offset = 0; offset < meetings.length; offset += ORG_BATCH_SIZE) {
+    const people = meetings.slice(offset, offset + ORG_BATCH_SIZE).map(calendarPeople)
+    peopleByMeeting.push(...people)
+    const names = readCalendarNames(people)
+    addCalendarNames(calendarNames, names)
+    yield
+  }
 
-    for (const [index, meeting] of meetings.entries()) {
-      for (const person of peopleByMeeting[index]) {
-        let contact = contactsByEmail.get(person.email) ?? survivorOfMergedEmail(person.email)
-        // A calendar often lists the address itself as the name: that is no name. A
-        // shared mailbox or a distribution list is not one person, so it keeps the placeholder.
-        const displayName = calendarNames.notOnePerson.has(person.email)
-          ? null
-          : calendarDisplayName(person.name, person.email)
-        if (!contact) {
-          const id = randomUUID()
-          const now = meeting.start_time || new Date().toISOString()
-          const storedName = displayName ?? addressLocalPart(person.email)
-          run(
-            `INSERT INTO contacts (id, name, email, type, first_seen_at, last_seen_at, meeting_count)
-             VALUES (?, ?, ?, 'unknown', ?, ?, 0)`,
-            [id, storedName, person.email, now, now]
-          )
-          contact = { id, name: storedName, source: null }
-          contactsByEmail.set(person.email, contact)
-          contactsById.set(id, contact)
-          newContacts++
-        } else if (displayName && contact.source !== 'user' && hasPlaceholderName(contact.name, person.email)) {
-          // upgrade a placeholder name (the address, or its start) when a real name appears
-          run(`UPDATE contacts SET name = ? WHERE id = ?`, [displayName, contact.id])
-          contact.name = displayName
-        }
+  for (let offset = 0; offset < meetings.length; offset += ORG_BATCH_SIZE) {
+    runInTransaction(() => {
+      for (let index = offset; index < Math.min(offset + ORG_BATCH_SIZE, meetings.length); index++) {
+        const meeting = meetings[index]
+        for (const person of peopleByMeeting[index]) {
+          let contact = contactsByEmail.get(person.email) ?? survivorOfMergedEmail(person.email)
+          // A calendar often lists the address itself as the name: that is no name. A
+          // shared mailbox or a distribution list is not one person, so it keeps the placeholder.
+          const displayName = calendarNames.notOnePerson.has(person.email)
+            ? null
+            : calendarDisplayName(person.name, person.email)
+          if (!contact) {
+            const id = randomUUID()
+            const now = meeting.start_time || new Date().toISOString()
+            const storedName = displayName ?? addressLocalPart(person.email)
+            run(
+              `INSERT INTO contacts (id, name, email, type, first_seen_at, last_seen_at, meeting_count)
+               VALUES (?, ?, ?, 'unknown', ?, ?, 0)`,
+              [id, storedName, person.email, now, now]
+            )
+            contact = { id, name: storedName, source: null }
+            contactsByEmail.set(person.email, contact)
+            contactsById.set(id, contact)
+            totals.contacts++
+          } else if (displayName && contact.source !== 'user' && hasPlaceholderName(contact.name, person.email)) {
+            // upgrade a placeholder name (the address, or its start) when a real name appears
+            run(`UPDATE contacts SET name = ? WHERE id = ?`, [displayName, contact.id])
+            contact.name = displayName
+          }
 
-        const pair = `${meeting.id}\u0000${contact.id}`
-        if (!linkedPairs.has(pair)) {
-          // These people come straight from the meeting's calendar organizer/
-          // attendee data, so the membership is CALENDAR-authored (structural) —
-          // tag it 'calendar' so the non-owner identity boundary treats it as
-          // always-eligible, matching the sibling calendar path in database.ts
-          // (syncMeetingContacts). Omitting the source left it NULL = legacy =
-          // fail-closed suppressed, which would wrongly hide a real calendar
-          // contact and (round-30) mis-partition it in mergeDuplicateContacts.
-          run(
-            `INSERT INTO meeting_contacts (meeting_id, contact_id, role, source) VALUES (?, ?, ?, 'calendar')`,
-            [meeting.id, contact.id, person.role]
-          )
-          linkedPairs.add(pair)
-          newLinks++
+          const pair = `${meeting.id}\u0000${contact.id}`
+          if (!linkedPairs.has(pair)) {
+            // These people come straight from the meeting's calendar organizer/
+            // attendee data, so the membership is CALENDAR-authored (structural) —
+            // tag it 'calendar' so the non-owner identity boundary treats it as
+            // always-eligible, matching the sibling calendar path in database.ts
+            // (syncMeetingContacts). Omitting the source left it NULL = legacy =
+            // fail-closed suppressed, which would wrongly hide a real calendar
+            // contact and (round-30) mis-partition it in mergeDuplicateContacts.
+            run(
+              `INSERT INTO meeting_contacts (meeting_id, contact_id, role, source) VALUES (?, ?, ?, 'calendar')`,
+              [meeting.id, contact.id, person.role]
+            )
+            linkedPairs.add(pair)
+            totals.links++
+          }
         }
       }
-    }
+    })
+    yield
+  }
 
-    // Refresh meeting counts + last_seen from actual links
-    run(`
-      UPDATE contacts SET
-        meeting_count = (SELECT COUNT(1) FROM meeting_contacts mc WHERE mc.contact_id = contacts.id),
-        last_seen_at = COALESCE(
-          (SELECT MAX(m.start_time) FROM meeting_contacts mc JOIN meetings m ON m.id = mc.meeting_id
-           WHERE mc.contact_id = contacts.id),
-          last_seen_at
-        )
-    `)
-  })
+  // Refresh meeting counts + last_seen from actual links
+  const ids = [...contactsById.keys()]
+  for (let offset = 0; offset < ids.length; offset += ORG_BATCH_SIZE) {
+    const batch = ids.slice(offset, offset + ORG_BATCH_SIZE)
+    runInTransaction(() => run(`
+    UPDATE contacts SET
+      meeting_count = (SELECT COUNT(1) FROM meeting_contacts mc WHERE mc.contact_id = contacts.id),
+      last_seen_at = COALESCE(
+        (SELECT MAX(m.start_time) FROM meeting_contacts mc JOIN meetings m ON m.id = mc.meeting_id
+         WHERE mc.contact_id = contacts.id),
+        last_seen_at
+      )
+    WHERE id IN (${batch.map(() => '?').join(',')})
+  `, batch))
+    yield
+  }
 
   writeConfigValue(CONTACTS_UPSERT_FINGERPRINT_KEY, contactsUpsertFingerprint())
-
-  if (newContacts > 0 || newLinks > 0) {
-    console.log(`[OrgReconciler] Contacts: +${newContacts} people, +${newLinks} meeting links`)
-  }
-  return { contacts: newContacts, links: newLinks }
 }
 
 /** Config key of the state the last contacts upsert left behind. */
@@ -672,41 +741,56 @@ function contactsUpsertFingerprint(): string {
  * change to the meetings or the contacts.
  */
 export function renameAddressNamedContacts(): number {
+  const totals = { renamed: 0 }
+  runInTransaction(() => {
+    const batches = renameAddressContactBatches(totals)
+    while (!batches.next().done) { /* Preserve the synchronous rollback boundary. */ }
+  })
+  return totals.renamed
+}
+
+function* renameAddressContactBatches(totals: { renamed: number }): Generator<void> {
   const targets = queryAll<{ id: string; name: string; email: string | null; source: string | null }>(
     `SELECT id, name, email, source FROM contacts WHERE source IS NULL OR source <> 'user'`
   )
     .map((c) => ({ ...c, address: contactAddress(c) }))
     .filter((c): c is typeof c & { address: string } => !!c.address && hasPlaceholderName(c.name, c.address))
-  if (targets.length === 0) return 0
+  if (targets.length === 0) return
 
   const meetingsShape = addressRenameMeetingsShape()
-  if (readConfigValue(ADDRESS_RENAME_FINGERPRINT_KEY) === addressRenameFingerprint(meetingsShape, targets)) return 0
+  if (readConfigValue(ADDRESS_RENAME_FINGERPRINT_KEY) === addressRenameFingerprint(meetingsShape, targets)) return
 
-  const calendarNames = readCalendarNames(
-    queryAll<{ attendees: string | null; organizer_name: string | null; organizer_email: string | null }>(
-      `SELECT attendees, organizer_name, organizer_email FROM meetings`
-    ).map((meeting) => calendarPeople(meeting))
-  )
+  const meetings = yield* calendarMeetingBatches()
+  const calendarNames: CalendarNames = { namesByAddress: new Map(), notOnePerson: new Set() }
+  for (let offset = 0; offset < meetings.length; offset += ORG_BATCH_SIZE) {
+    addCalendarNames(calendarNames, readCalendarNames(meetings.slice(offset, offset + ORG_BATCH_SIZE).map(calendarPeople)))
+    yield
+  }
 
   const words = (name: string) => name.split(/\s+/).length
   const renamedIds = new Set<string>()
+  for (let offset = 0; offset < targets.length; offset += ORG_BATCH_SIZE) {
+    runInTransaction(() => {
+      for (const contact of targets.slice(offset, offset + ORG_BATCH_SIZE)) {
+        if (calendarNames.notOnePerson.has(contact.address)) continue
+        const counts = calendarNames.namesByAddress.get(contact.address)
+        if (!counts) continue
+        const [best] = [...counts.entries()].sort(
+          ([a, ca], [b, cb]) => cb - ca || words(b) - words(a) || a.localeCompare(b)
+        )
+        run(`UPDATE contacts SET name = ? WHERE id = ?`, [best[0], contact.id])
+        console.log(`[OrgReconciler] Renamed contact ${contact.id} from its address to its calendar name "${best[0]}"`)
+        renamedIds.add(contact.id)
+        totals.renamed++
+      }
+    })
+    yield
+  }
   runInTransaction(() => {
-    for (const contact of targets) {
-      if (calendarNames.notOnePerson.has(contact.address)) continue
-      const counts = calendarNames.namesByAddress.get(contact.address)
-      if (!counts) continue
-      const [best] = [...counts.entries()].sort(
-        ([a, ca], [b, cb]) => cb - ca || words(b) - words(a) || a.localeCompare(b)
-      )
-      run(`UPDATE contacts SET name = ? WHERE id = ?`, [best[0], contact.id])
-      console.log(`[OrgReconciler] Renamed contact ${contact.id} from its address to its calendar name "${best[0]}"`)
-      renamedIds.add(contact.id)
-    }
     const remaining = targets.filter((c) => !renamedIds.has(c.id))
     writeConfigValue(ADDRESS_RENAME_FINGERPRINT_KEY, addressRenameFingerprint(meetingsShape, remaining))
   })
   if (renamedIds.size > 0) console.log(`[OrgReconciler] Renamed ${renamedIds.size} contact(s) named after an address`)
-  return renamedIds.size
 }
 
 /** Config key of the last address-rename pass's fingerprint. */
@@ -745,29 +829,43 @@ function writeConfigValue(key: string, value: string): void {
  * "\n" and "\," sequences. Detect and unescape them in place.
  */
 export function repairEscapedMeetingText(): number {
-  const rows = queryAll<{ id: string; subject: string; description?: string; location?: string }>(
-    `SELECT id, subject, description, location FROM meetings
-     WHERE description LIKE '%\\n%' OR subject LIKE '%\\,%' OR location LIKE '%\\,%'`
-  )
-  let repaired = 0
+  const totals = { repaired: 0 }
   runInTransaction(() => {
-    for (const row of rows) {
-      const subject = unescapeIcsText(row.subject || '')
-      const description = row.description ? unescapeIcsText(row.description) : row.description
-      const location = row.location ? unescapeIcsText(row.location) : row.location
-      if (subject !== row.subject || description !== row.description || location !== row.location) {
-        run(`UPDATE meetings SET subject = ?, description = ?, location = ? WHERE id = ?`, [
-          subject,
-          description ?? null,
-          location ?? null,
-          row.id
-        ])
-        repaired++
-      }
-    }
+    const batches = repairMeetingTextBatches(totals)
+    while (!batches.next().done) { /* Preserve the synchronous rollback boundary. */ }
   })
-  if (repaired > 0) console.log(`[OrgReconciler] Unescaped ICS text on ${repaired} meetings`)
-  return repaired
+  if (totals.repaired > 0) console.log(`[OrgReconciler] Unescaped ICS text on ${totals.repaired} meetings`)
+  return totals.repaired
+}
+
+function* repairMeetingTextBatches(totals: { repaired: number }): Generator<void> {
+  const ids = queryAll<{ rowid: number }>('SELECT rowid FROM meetings ORDER BY rowid')
+  for (let offset = 0; offset < ids.length; offset += 128) {
+    const page = ids.slice(offset, offset + 128)
+    const rows = queryAll<{ id: string; subject: string; description?: string; location?: string }>(
+      `SELECT id, subject, description, location FROM meetings
+       WHERE rowid IN (${page.map(() => '?').join(',')})
+         AND (description LIKE '%\\n%' OR subject LIKE '%\\,%' OR location LIKE '%\\,%')
+       ORDER BY rowid`, page.map((r) => r.rowid)
+    )
+    if (rows.length > 0) runInTransaction(() => {
+      for (const row of rows) {
+        const subject = unescapeIcsText(row.subject || '')
+        const description = row.description ? unescapeIcsText(row.description) : row.description
+        const location = row.location ? unescapeIcsText(row.location) : row.location
+        if (subject !== row.subject || description !== row.description || location !== row.location) {
+          run(`UPDATE meetings SET subject = ?, description = ?, location = ? WHERE id = ?`, [
+            subject,
+            description ?? null,
+            location ?? null,
+            row.id
+          ])
+          totals.repaired++
+        }
+      }
+    })
+    yield
+  }
 }
 
 /**
@@ -1147,10 +1245,20 @@ export function pickKeeperRecording<T extends DuplicateRecordingRow>(rows: T[]):
  * transaction so the whole sql.js DB is persisted once, not per row.
  */
 export function mergeDuplicateRecordings(): number {
+  const totals = { groups: 0, rows: 0 }
+  runInTransaction(() => {
+    const batches = mergeRecordingBatches(totals)
+    while (!batches.next().done) { /* Keep the synchronous whole-pass rollback boundary. */ }
+  })
+  if (totals.rows > 0) console.log(`[OrgReconciler] Merged ${totals.groups} duplicate recording groups (removed ${totals.rows} rows)`)
+  return totals.groups
+}
+
+function* mergeRecordingBatches(totals: { groups: number; rows: number }): Generator<void> {
   const recordings = queryAll<DuplicateRecordingRow>(
     `SELECT id, filename, file_path, created_at, on_device, on_local, meeting_id FROM recordings`
   )
-  if (recordings.length === 0) return 0
+  if (recordings.length === 0) return
 
   // Which recordings already have a transcript — drives keeper selection.
   const withTranscript = new Set(
@@ -1166,7 +1274,7 @@ export function mergeDuplicateRecordings(): number {
   }
 
   const dupGroups = [...groups.values()].filter((g) => g.length > 1)
-  if (dupGroups.length === 0) return 0
+  if (dupGroups.length === 0) return
 
   // ADV28-3 (round-30) — NEVER merge recordings across an eligibility boundary.
   // This reconcile REPARENTS a loser's knowledge_captures (and transcript / vector
@@ -1191,20 +1299,18 @@ export function mergeDuplicateRecordings(): number {
     queryAll<{ name: string }>(`SELECT name FROM sqlite_master WHERE type = 'table'`).map((r) => r.name)
   )
 
-  let mergedGroups = 0
-  let removedRows = 0
+  if (eligFailClosed) return
+  yield
+  for (const group of dupGroups) {
+    // Only the eligible members of the group may be collapsed together.
+    const eligibleGroup = group.filter((r) => eligibleRecIds.has(r.id))
+    if (eligibleGroup.length < 2) continue
+    const rows = eligibleGroup.map((r) => ({ ...r, hasTranscript: withTranscript.has(r.id) }))
+    const keeper = pickKeeperRecording(rows)
+    const losers = rows.filter((r) => r.id !== keeper.id)
+    if (losers.length === 0) continue
 
-  runInTransaction(() => {
-    if (eligFailClosed) return
-    for (const group of dupGroups) {
-      // Only the eligible members of the group may be collapsed together.
-      const eligibleGroup = group.filter((r) => eligibleRecIds.has(r.id))
-      if (eligibleGroup.length < 2) continue
-      const rows = eligibleGroup.map((r) => ({ ...r, hasTranscript: withTranscript.has(r.id) }))
-      const keeper = pickKeeperRecording(rows)
-      const losers = rows.filter((r) => r.id !== keeper.id)
-      if (losers.length === 0) continue
-
+    runInTransaction(() => {
       // Keeper selection sorts transcript-holders first, so the keeper already
       // owns a transcript whenever the group has one; the repoint branch below
       // is defensive for the inverse case only.
@@ -1264,16 +1370,13 @@ export function mergeDuplicateRecordings(): number {
 
       for (const loser of losers) {
         run(`DELETE FROM recordings WHERE id = ?`, [loser.id])
-        removedRows++
+        totals.rows++
       }
-      mergedGroups++
-    }
-  })
-
-  if (mergedGroups > 0) {
-    console.log(`[OrgReconciler] Merged ${mergedGroups} duplicate recording groups (removed ${removedRows} rows)`)
+      totals.groups++
+    })
+    yield
   }
-  return mergedGroups
+
 }
 
 interface DuplicateContactRow {
@@ -1323,9 +1426,15 @@ export function pickKeeperContact<T extends DuplicateContactRow>(rows: T[]): T {
  * Returns the number of contacts removed by merging.
  */
 export function mergeDuplicateContacts(): number {
-  let removed = 0
+  const totals = { removed: 0 }
+  const batches = mergeContactBatches(totals)
+  while (!batches.next().done) { /* Preserve the synchronous pair-by-pair merge policy. */ }
+  if (totals.removed > 0) console.log(`[OrgReconciler] Merged ${totals.removed} duplicate contacts (email/name match)`)
+  return totals.removed
+}
 
-  const collapseGroups = (keyOf: (c: DuplicateContactRow) => string | null): void => {
+function* mergeContactBatches(totals: { removed: number }): Generator<void> {
+  const collapseGroups = function* (keyOf: (c: DuplicateContactRow) => string | null): Generator<void> {
     const contacts = queryAll<DuplicateContactRow>(
       'SELECT id, name, email, role, company, meeting_count, created_at FROM contacts'
     )
@@ -1337,6 +1446,7 @@ export function mergeDuplicateContacts(): number {
       if (list) list.push(c)
       else groups.set(key, [c])
     }
+    yield
     for (const group of groups.values()) {
       if (group.length < 2) continue
       const keeper = pickKeeperContact(group)
@@ -1359,19 +1469,16 @@ export function mergeDuplicateContacts(): number {
         // relational merge (was bare mergeContacts, which left the loser's graph node +
         // provenance stranded under the deleted loser contact id whenever the
         // post-commit name event no-opped for contact-keyed nodes or graph sync was off).
-        mergeContactsWithGraph(keeper.id, loser.id)
-        removed++
+        runInTransaction(() => mergeContactsWithGraph(keeper.id, loser.id))
+        totals.removed++
+        yield
       }
     }
   }
 
-  collapseGroups((c) => (c.email && c.email.trim() ? c.email.trim().toLowerCase() : null))
-  collapseGroups((c) => (c.name && c.name.trim() ? c.name.trim().toLowerCase() : null))
+  yield* collapseGroups((c) => (c.email && c.email.trim() ? c.email.trim().toLowerCase() : null))
+  yield* collapseGroups((c) => (c.name && c.name.trim() ? c.name.trim().toLowerCase() : null))
 
-  if (removed > 0) {
-    console.log(`[OrgReconciler] Merged ${removed} duplicate contacts (email/name match)`)
-  }
-  return removed
 }
 
 interface DuplicateMeetingRow {
@@ -1875,7 +1982,7 @@ export function autoSplitAmbiguousBuckets(opts: BucketRuleOptions = {}): { bucke
     // bucket, on every start and after every calendar sync.)
     if (toResolveIn(item.resolution).length === 0) continue
     const res = getBucketResolution(item.bucket.contactId, opts)
-    if (!res) continue
+    if (!res || !res.recordings.some((r) => r.method !== 'unclear' && r.bestGuessId && canUpgrade(r.resolvedMethod, r.method))) continue
     const toResolve = toResolveIn(res)
     if (toResolve.length === 0) continue
     runInTransaction(() => {
@@ -1906,17 +2013,150 @@ export interface ReconcileStep {
   /** What the log says when the step throws. */
   failure: string
   run: () => unknown
+  runYielding?: () => Promise<unknown>
+}
+
+// 4-Oct-2026: the live sync log showed 1,214–3,013 ms in contacts-upsert,
+// 524–1,810 ms in bucket splitting and 905 ms in contact merging. Commit small
+// batches before yielding; never leave a SQLite transaction open across IPC.
+const ORG_BATCH_SIZE = 32
+// Small transactions are checkpoints, not mandatory timers. Coalesce cheap work
+// until 20 ms has elapsed; leave headroom for the next indivisible batch.
+const ORG_YIELD_TARGET_MS = 20
+export const ORG_RECONCILE_BATCH_BUDGET_MS = 100
+
+function databaseMutationStamp(): string {
+  // total_changes catches main-connection writes, including same-length edits;
+  // data_version catches commits by another SQLite connection. Fingerprints are
+  // only a no-change optimization, not a safe guard for suspended decisions.
+  return `${queryOne<{ n: number }>('SELECT total_changes() AS n')?.n}:${queryOne<{ data_version: number }>('PRAGMA data_version')?.data_version}`
+}
+
+async function runOrganizationBatches(name: string, work: () => Generator<void>): Promise<void> {
+  const releaseCheckpointBudget = acquireOrganizationCheckpointBudget()
+  try {
+    let batches = work()
+    for (;;) {
+      const startedAt = performance.now()
+      let batch = batches.next()
+      while (!batch.done && performance.now() - startedAt < ORG_YIELD_TARGET_MS) batch = batches.next()
+      const tookMs = Math.round(performance.now() - startedAt)
+      if (tookMs >= ORG_RECONCILE_BATCH_BUDGET_MS) {
+        console.warn(`[OrgReconciler] step "${name}" batch held the main thread for ${tookMs}ms`)
+      }
+      if (batch.done) return
+      const stamp = databaseMutationStamp()
+      await yieldToEventLoop()
+      if (databaseMutationStamp() !== stamp) {
+        // All writes already committed are idempotent. Discard every cached read
+        // before resuming, so a calendar sync, edit, deletion, merge or manual
+        // mention decision cannot be overwritten using pre-yield evidence.
+        batches.return(undefined)
+        batches = work()
+      }
+    }
+  } finally {
+    releaseCheckpointBudget()
+  }
+}
+
+export async function repairEscapedMeetingTextYielding(): Promise<number> {
+  const totals = { repaired: 0 }
+  await runOrganizationBatches('text-repair', () => repairMeetingTextBatches(totals))
+  if (totals.repaired > 0) console.log(`[OrgReconciler] Unescaped ICS text on ${totals.repaired} meetings`)
+  return totals.repaired
+}
+
+export async function renameAddressNamedContactsYielding(): Promise<number> {
+  const totals = { renamed: 0 }
+  await runOrganizationBatches('contacts-rename-from-calendar', () => renameAddressContactBatches(totals))
+  return totals.renamed
+}
+
+export async function upsertContactsFromMeetingsYielding(): Promise<{ contacts: number; links: number }> {
+  const totals = { contacts: 0, links: 0 }
+  await runOrganizationBatches('contacts-upsert', () => upsertContactsBatches(totals))
+  if (totals.contacts > 0 || totals.links > 0) console.log(`[OrgReconciler] Contacts: +${totals.contacts} people, +${totals.links} meeting links`)
+  return totals
+}
+
+export async function mergeDuplicateRecordingsYielding(): Promise<number> {
+  const totals = { groups: 0, rows: 0 }
+  await runOrganizationBatches('recording-merge', () => mergeRecordingBatches(totals))
+  if (totals.rows > 0) console.log(`[OrgReconciler] Merged ${totals.groups} duplicate recording groups (removed ${totals.rows} rows)`)
+  return totals.groups
+}
+
+export async function mergeDuplicateContactsYielding(): Promise<number> {
+  const totals = { removed: 0 }
+  await runOrganizationBatches('contact-merge', () => mergeContactBatches(totals))
+  if (totals.removed > 0) console.log(`[OrgReconciler] Merged ${totals.removed} duplicate contacts (email/name match)`)
+  return totals.removed
+}
+
+function* splitBucketBatches(opts: BucketRuleOptions, totals: { buckets: number; resolved: number }): Generator<void> {
+  const found = yield* ambiguousBucketBatches(opts, ORG_BATCH_SIZE)
+  totals.buckets = found.length
+  let wrotePreviousBucket = false
+  for (const bucket of found) {
+    if (!bucket.recordings.some((r) => r.method !== 'unclear' && r.bestGuessId && canUpgrade(r.resolvedMethod, r.method))) continue
+    // 4-Oct-2026: preserve the synchronous bucket snapshot. An early page can
+    // add attendee links used by later recordings in the SAME bucket; rebuilding
+    // after our own writes would change those later decisions. External writes
+    // instead restart this generator before any cached evidence can be applied.
+    // Discovery evidence is still current until an earlier bucket writes.
+    // The runner discards all cached reads after an external write across a yield.
+    // Rebuild after our own writes, since they can change a later bucket's rules.
+    let res: BucketResolution | null = bucket
+    if (wrotePreviousBucket) {
+      res = null
+      for (let offset = 0; ; offset += ORG_BATCH_SIZE) {
+        const { resolution, hasMore } = getBucketResolutionBatch(bucket.contactId, opts, offset, ORG_BATCH_SIZE)
+        if (!resolution) break
+        if (!res) res = resolution
+        else res.recordings.push(...resolution.recordings)
+        yield
+        if (!hasMore) break
+      }
+    }
+    if (!res) continue
+    const snapshot = res
+    for (let offset = 0; offset < snapshot.recordings.length; offset += ORG_BATCH_SIZE) {
+      runInTransaction(() => {
+        for (const r of snapshot.recordings.slice(offset, offset + ORG_BATCH_SIZE)) {
+          if (r.method === 'unclear' || !r.bestGuessId || !canUpgrade(r.resolvedMethod, r.method)) continue
+          if (applyMentionDecisionNoSave({
+            recordingId: r.recordingId, meetingId: r.meetingId,
+            bucketContactId: snapshot.contactId, bucketName: snapshot.name,
+            contactId: r.bestGuessId, method: r.method,
+            confidence: methodConfidence(r.method), evidence: bucketEvidence(snapshot, r)
+          })) {
+            totals.resolved++
+            wrotePreviousBucket = true
+          }
+        }
+      })
+      yield
+    }
+  }
+}
+
+export async function autoSplitAmbiguousBucketsYielding(opts: BucketRuleOptions = {}): Promise<{ buckets: number; resolved: number }> {
+  const totals = { buckets: 0, resolved: 0 }
+  await runOrganizationBatches('ambiguous-bucket-split', () => splitBucketBatches(opts, totals))
+  if (totals.resolved > 0) console.log(`[OrgReconciler] Auto-split ${totals.resolved} bucket mentions across ${totals.buckets} buckets`)
+  return totals
 }
 
 /** The reconciliation steps, in the order they run. */
 export const RECONCILE_STEPS: readonly ReconcileStep[] = [
-  { name: 'text-repair', failure: 'text repair failed', run: repairEscapedMeetingText },
+  { name: 'text-repair', failure: 'text repair failed', run: repairEscapedMeetingText, runYielding: repairEscapedMeetingTextYielding },
   {
     name: 'meeting-occurrence-merge',
     failure: 'duplicate meeting-occurrence merge failed',
     run: mergeDuplicateMeetingOccurrences
   },
-  { name: 'recording-merge', failure: 'duplicate recording merge failed', run: mergeDuplicateRecordings },
+  { name: 'recording-merge', failure: 'duplicate recording merge failed', run: mergeDuplicateRecordings, runYielding: mergeDuplicateRecordingsYielding },
   { name: 'recording-auto-link', failure: 'recording auto-link failed', run: autoLinkRecordingsToMeetings },
   // Before the contact steps, so the attendees it copies become contacts in the same pass.
   {
@@ -1924,15 +2164,16 @@ export const RECONCILE_STEPS: readonly ReconcileStep[] = [
     failure: 'attendees from the Outlook twin failed',
     run: fillAttendeesFromOutlookTwins
   },
-  { name: 'contacts-upsert', failure: 'contacts upsert failed', run: upsertContactsFromMeetings },
+  { name: 'contacts-upsert', failure: 'contacts upsert failed', run: upsertContactsFromMeetings, runYielding: upsertContactsFromMeetingsYielding },
   // Before the merge and the bucket split, so both see real names and not addresses.
   {
     name: 'contacts-rename-from-calendar',
     failure: 'renaming contacts named after an address failed',
-    run: renameAddressNamedContacts
+    run: renameAddressNamedContacts,
+    runYielding: renameAddressNamedContactsYielding
   },
-  { name: 'contact-merge', failure: 'duplicate contact merge failed', run: mergeDuplicateContacts },
-  { name: 'ambiguous-bucket-split', failure: 'ambiguous-bucket auto-split failed', run: autoSplitAmbiguousBuckets },
+  { name: 'contact-merge', failure: 'duplicate contact merge failed', run: mergeDuplicateContacts, runYielding: mergeDuplicateContactsYielding },
+  { name: 'ambiguous-bucket-split', failure: 'ambiguous-bucket auto-split failed', run: autoSplitAmbiguousBuckets, runYielding: autoSplitAmbiguousBucketsYielding },
   {
     // BUG B self-heal: advance recordings.status for rows with a joined transcript
     // whose status drifted (never advanced past its insert-time default).
@@ -1965,14 +2206,19 @@ export function reconcileOrganization(): void {
 }
 
 /**
- * The same pass, giving the event loop back between steps, so the window and the
- * IPC handlers are only held for the longest step and not for all of them at
- * once (org-reconcile froze the window for 4.9 s at boot, 29-sep-2026). The boot
- * task and the post-sync pass use this one.
+ * The same pass, yielding between steps and committed batches of heavy steps.
+ * Boot and hourly calendar sync share this path; synchronous callers drain the
+ * same algorithms without returning to the event loop.
  */
 export async function reconcileOrganizationYielding(): Promise<void> {
   for (const step of RECONCILE_STEPS) {
-    runReconcileStep(step)
+    if (step.runYielding) {
+      try {
+        await step.runYielding()
+      } catch (e) {
+        console.error(`[OrgReconciler] ${step.failure}:`, e)
+      }
+    } else runReconcileStep(step)
     await yieldToEventLoop()
   }
 }
