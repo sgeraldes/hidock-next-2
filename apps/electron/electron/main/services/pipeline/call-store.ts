@@ -17,6 +17,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import type { StepStats } from '../../../../src/shared/pipeline-config'
+import { DECISION_ENGINE_IDS, type DecisionEngineId } from '../../../../src/shared/pipeline-config'
 
 export type CallStatus = 'completed' | 'failed' | 'cancelled'
 
@@ -178,6 +179,19 @@ function median(values: number[]): number | null {
   const sorted = [...values].sort((a, b) => a - b)
   const mid = Math.floor(sorted.length / 2)
   return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
+}
+
+export function getDecisionLatencies(): Partial<Record<DecisionEngineId, number>> {
+  if (!installed) return {}
+  const rows = installed.queryAll<{ route: string; duration_ms: number }>(
+    "SELECT route, duration_ms FROM pipeline_calls WHERE route LIKE 'decision:%' AND status = 'completed'"
+  )
+  const result: Partial<Record<DecisionEngineId, number>> = {}
+  for (const id of DECISION_ENGINE_IDS) {
+    const value = median(rows.filter(row => row.route === `decision:${id}`).map(row => row.duration_ms))
+    if (value !== null) result[id] = value
+  }
+  return result
 }
 
 interface StatsRow {
