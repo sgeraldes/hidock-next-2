@@ -17,7 +17,13 @@ function voicedSpeakers(input: unknown): string {
     'rows = [[nan if v == "nan" else v for v in row] for row in args["rows"]]',
     'print(result_json({"speakers": voiced_speakers(args["labels"], rows, args["seconds"], args["min"])}))',
   ].join('\n')
-  return execFileSync(python, ['-c', script], { input: JSON.stringify(input), encoding: 'utf8', windowsHide: true })
+  return execFileSync(python, ['-c', script], {
+    input: JSON.stringify(input),
+    encoding: 'utf8',
+    windowsHide: true,
+    // No __pycache__ next to worker.py: the folder ships inside the app.
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
+  })
 }
 
 describe('the speakers the diarization worker reports', () => {
