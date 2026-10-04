@@ -70,6 +70,16 @@ describe('looking after the host from HiDock', () => {
     expect(calls.updates).toContain('applied')
   })
 
+  it('still applies the update when HiDock hangs up before the answer is out', async () => {
+    const res = Object.assign(response(), { writableFinished: false })
+    const exe = Buffer.concat([Buffer.from('MZ'), Buffer.alloc(2048)])
+    await createHandler(deps)(request({ method: 'PUT', url: '/update', headers: auth(), body: exe, local: false }), res)
+    // A dropped connection never emits 'finish'; it always emits 'close'.
+    res.emit('close')
+    await new Promise((r) => setTimeout(r, 300))
+    expect(calls.updates).toContain('applied')
+  })
+
   it('refuses an update that is not a Windows program, and one from a stranger', async () => {
     const bad = response()
     await createHandler(deps)(request({ method: 'PUT', url: '/update', headers: auth(), body: 'echo hi', local: false }), bad)
