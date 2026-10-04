@@ -87,5 +87,11 @@ export function describeModelHost(status: ModelHostStatus): ModelHostSentence {
       }
       return { tone: 'paused', text: `${name} is paused. ${HERE} meanwhile.` }
     }
+    default:
+      // A newer or older host may report a state this build has no words for.
+      return {
+        tone: 'off',
+        text: `${name} answers, but in a state this version does not know (${String(health.state)}). ${HERE}.`
+      }
   }
 }

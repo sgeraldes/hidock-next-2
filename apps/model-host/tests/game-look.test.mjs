@@ -47,6 +47,23 @@ describe('one look of game mode', () => {
     expect(gpuCalls()).toBe(0)
   })
 
+  it('tells the watcher which GPU program is the host’s own worker', async () => {
+    const state = new HostState()
+    await state.apply('start')
+    state.workerPid = 4242
+    const settings = normalizeGameMode({})
+    const look = createGameLook({
+      state,
+      watcher: new GameWatcher({ settings: () => settings }),
+      settings: () => settings,
+      gpu: { name: 'x' },
+      log: () => {},
+      queryGpu: async () => [{ pid: 4242, name: 'C:\\Python311\\python.exe' }],
+    })
+    await look(QUIET)
+    expect(state.state).toBe('ready')
+  })
+
   it('never runs two looks at once', async () => {
     const state = new HostState()
     await state.apply('start')

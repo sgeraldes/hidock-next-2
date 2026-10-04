@@ -55,6 +55,13 @@ describe('the model host in words', () => {
     )
   })
 
+  it('a state this version does not know still gets a sentence', () => {
+    expect(at({ health: { ...base.health!, state: 'warming-up' as never } })).toEqual({
+      tone: 'off',
+      text: 'gamestation:8765 answers, but in a state this version does not know (warming-up). Speaker work runs on this computer.'
+    })
+  })
+
   it('off or not answering', () => {
     expect(at({ health: null })).toEqual({
       tone: 'off',

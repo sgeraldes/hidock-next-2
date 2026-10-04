@@ -87,7 +87,9 @@ public static class HiDockModelHostProbe {
     sb.Append('"');
     foreach (char c in value) {
       if (c == '"' || c == '\\') { sb.Append('\\').Append(c); }
-      else if (c < ' ') { sb.Append("\\u").Append(((int)c).ToString("x4")); }
+      // Everything outside printable ASCII is escaped, so a path such as
+      // C:\Users\Sebastián reaches Node intact whatever the console code page.
+      else if (c < ' ' || c > '~') { sb.Append("\\u").Append(((int)c).ToString("x4")); }
       else { sb.Append(c); }
     }
     sb.Append('"');

@@ -67,6 +67,7 @@ export function parseWorkerOutput(stdout) {
  * @param {string} [options.ffmpegPath]
  * @param {string} [options.extension] container extension, for ffmpeg's benefit
  * @param {AbortSignal} [options.signal]
+ * @param {(pid: number | undefined) => void} [options.onSpawn] told the worker's PID
  * @param {typeof spawn} [options.spawnFn] injected for tests
  */
 export async function runDiarization(audio, options) {
@@ -105,6 +106,7 @@ export async function runDiarization(audio, options) {
         }
       )
 
+      options.onSpawn?.(child.pid)
       let stdout = ''
       let stderr = ''
       let settled = false

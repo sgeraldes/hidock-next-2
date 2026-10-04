@@ -132,7 +132,11 @@ export function decideGamePause(snapshot, settings) {
 
   if (settings.pauseOnOtherGpuWork) {
     const allowed = new Set(settings.ignoreGpu.map(programKey))
+    // The host's own worker, by PID (any Python can run it) and by the
+    // install folder (between its start and the PID being known).
+    const own = new Set(snapshot.ownPids || [])
     for (const g of snapshot.gpuProcesses || []) {
+      if (own.has(g.pid)) continue
       if (normalizePath(g.name).includes(OWN_RUNTIME)) continue
       if (allowed.has(programKey(g.name))) continue
       return `${baseName(g.name)} is using the GPU`
@@ -184,8 +188,12 @@ export class GameWatcher {
       this.lastReason = why
       await state.gamePause(why)
     } else {
-      // The game the person resumed during is over; the next one pauses again.
-      state.gameOverride = false
+      const quietFor = this.lastSeen === null ? Infinity : this.now() - this.lastSeen
+      const gone = quietFor >= settings.resumeAfterMinutes * 60_000
+      // The game the person resumed during is over; the next one pauses
+      // again. "Over" means gone for the same wait as a resume: an alt-tab or
+      // a loading screen drops the full-screen signal for a moment.
+      if (gone) state.gameOverride = false
       if (
         state.pauseInfo()?.by === 'game' &&
         this.lastSeen !== null &&

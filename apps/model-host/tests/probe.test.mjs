@@ -94,6 +94,20 @@ describe('the probe process', () => {
     probe.stop()
   })
 
+  it('starts again when PowerShell could not even be launched', async () => {
+    const { spawnFn, children } = fakeSpawn()
+    const probe = startProbe({ onSnapshot: () => {}, spawnFn, restartDelayMs: 5 })
+    children[0].emit('error', new Error('spawn powershell.exe ENOENT'))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(children.length).toBe(2)
+    // An error followed by an exit is still one restart, not two.
+    children[1].emit('error', new Error('again'))
+    children[1].emit('exit', 1)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(children.length).toBe(3)
+    probe.stop()
+  })
+
   it('starts again after the script dies, and not after stop', async () => {
     const { spawnFn, children } = fakeSpawn()
     const probe = startProbe({ onSnapshot: () => {}, spawnFn, restartDelayMs: 5 })
@@ -132,6 +146,34 @@ describe.runIf(process.platform === 'win32')('the host and its probe', () => {
   })
 })
 
+describe.runIf(process.platform === 'win32')('the real probe script with an accented path', () => {
+  it('reports C:\\...\\Sebastián\\... intact', async () => {
+    const { mkdtempSync, mkdirSync, copyFileSync, rmSync } = await import('fs')
+    const { tmpdir } = await import('os')
+    const { spawn } = await import('child_process')
+    const root = mkdtempSync(join(tmpdir(), 'hidock-probe-accent-'))
+    const dir = join(root, 'Sebastián', 'steamapps', 'common', 'Juego')
+    mkdirSync(dir, { recursive: true })
+    const exe = join(dir, 'juego.exe')
+    copyFileSync('C:\\Windows\\System32\\PING.EXE', exe)
+    const game = spawn(exe, ['-n', '30', '127.0.0.1'], { windowsHide: true, stdio: 'ignore' })
+    try {
+      const { stdout } = await promisify(execFile)(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', PROBE_SCRIPT, '-Once'],
+        { windowsHide: true, timeout: 60_000 }
+      )
+      const snapshot = parseProbeLine(stdout.trim().split('\n').pop())
+      const found = snapshot.processes.find((p) => p.name.toLowerCase() === 'juego.exe')
+      expect(found?.path.toLowerCase()).toBe(exe.toLowerCase())
+    } finally {
+      game.kill()
+      await new Promise((r) => game.once('exit', r))
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 60_000)
+})
+
 describe.runIf(process.platform === 'win32')('the real probe script', () => {
   it('reports the screen state and the running programs with their paths', async () => {
     const { stdout } = await promisify(execFile)(
@@ -139,7 +181,10 @@ describe.runIf(process.platform === 'win32')('the real probe script', () => {
       ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', PROBE_SCRIPT, '-Once'],
       { windowsHide: true, timeout: 60_000 }
     )
-    const snapshot = parseProbeLine(stdout.trim().split('\n').pop())
+    const line = stdout.trim().split('\n').pop()
+    // Non-ASCII is escaped, so a path like C:\Users\Sebastián survives any console code page.
+    expect(/^[\x20-\x7e]*$/.test(line.trim())).toBe(true)
+    const snapshot = parseProbeLine(line)
     expect(snapshot).not.toBeNull()
     expect(Number.isInteger(snapshot.notificationState)).toBe(true)
     const node = snapshot.processes.find((p) => p.path && p.path.toLowerCase() === process.execPath.toLowerCase())

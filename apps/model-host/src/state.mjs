@@ -41,6 +41,8 @@ export class HostState {
     this.onChange = options.onChange || (() => {})
     /** The one heavy job, or null. Small control calls never take this. */
     this.activeJob = null
+    /** PID of that job's worker, so game mode never pauses for the host's own GPU work. */
+    this.workerPid = null
     /** Why the host is not accepting work, in the user's words. */
     this.reason = 'The host has not been started.'
     /** { by: 'you' | 'game', detail, since } while paused, else null. */

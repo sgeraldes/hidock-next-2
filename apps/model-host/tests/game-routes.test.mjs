@@ -102,6 +102,21 @@ describe('game mode on the wire', () => {
     expect(deps.state.activeJob).toBeNull()
   })
 
+  it('remembers the worker process of the running job, so game mode never pauses for it', async () => {
+    let seenDuringJob = null
+    deps.diarize = async (_audio, options) => {
+      options.onSpawn(4242)
+      seenDuringJob = deps.state.workerPid
+      return RESULT
+    }
+    await createHandler(deps)(
+      request({ method: 'POST', url: '/jobs/diarize', headers: { authorization: `Bearer ${token}` }, body: 'audio', local: false }),
+      response()
+    )
+    expect(seenDuringJob).toBe(4242)
+    expect(deps.state.workerPid).toBeNull()
+  })
+
   it('refuses new work while a game runs', async () => {
     await deps.state.gamePause('eldenring.exe is running')
     const res = response()

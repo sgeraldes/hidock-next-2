@@ -366,6 +366,10 @@ export function createHandler(deps) {
               ...(pinned ? { model: pinned, fallbackModel: pinned } : {}),
               extension: safeExtension(url.searchParams.get('ext')),
               signal: controller.signal,
+              // Game mode must know which CUDA program is this job's worker.
+              onSpawn: (pid) => {
+                deps.state.workerPid = pid ?? null
+              },
             })
           } catch (error) {
             // Cancelled by a pause or a stop: the same answer as a host that was
@@ -384,6 +388,7 @@ export function createHandler(deps) {
         } finally {
           res.off?.('close', onDisconnect)
           deps.state.activeJob = null
+          deps.state.workerPid = null
         }
         return
       }

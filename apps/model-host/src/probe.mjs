@@ -109,13 +109,19 @@ export function startProbe(options) {
       }
     })
     current.stderr.on('data', (chunk) => log(`[game mode] probe: ${String(chunk).trim().slice(0, 300)}`))
-    current.on('error', (error) => log(`[game mode] probe could not start: ${error.message}`))
-    current.on('exit', (code) => {
+    // A launch failure emits 'error' and no 'exit'; a crash emits 'exit',
+    // sometimes after an 'error'. Either way it is one death and one restart.
+    let dead = false
+    const died = (why) => {
+      if (dead) return
+      dead = true
       if (child === current) child = null
       if (stopped) return
-      log(`[game mode] probe exited (${code}); starting it again in ${Math.round(restartDelayMs / 1000)} s`)
+      log(`[game mode] probe ${why}; starting it again in ${Math.round(restartDelayMs / 1000)} s`)
       restartTimer = setTimeout(launch, restartDelayMs)
-    })
+    }
+    current.on('error', (error) => died(`could not run: ${error.message}`))
+    current.on('exit', (code) => died(`exited (${code})`))
   }
 
   launch()

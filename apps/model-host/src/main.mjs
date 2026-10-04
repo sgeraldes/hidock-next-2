@@ -184,7 +184,8 @@ export function createGameLook({ state, watcher, settings, gpu, log, queryGpu = 
       const mayChange = state.state === READY || state.pauseInfo()?.by === 'game'
       const gpuProcesses = gpu && s.enabled && s.pauseOnOtherGpuWork && mayChange ? await queryGpu() : []
       const before = state.pauseInfo()?.by
-      const why = await watcher.observe({ ...snapshot, gpuProcesses }, state)
+      const ownPids = state.workerPid ? [state.workerPid] : []
+      const why = await watcher.observe({ ...snapshot, gpuProcesses, ownPids }, state)
       const after = state.pauseInfo()?.by
       if (before !== 'game' && after === 'game') log(`[game mode] paused: ${why}`)
       if (before === 'game' && after !== 'game') log('[game mode] resumed')

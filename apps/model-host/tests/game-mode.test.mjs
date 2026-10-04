@@ -235,6 +235,30 @@ describe('the watcher', () => {
     expect(state.state).toBe(PAUSED)
   })
 
+  it('a resume during a game survives an alt-tab out of it', async () => {
+    const { watcher, advance } = setup({ resumeAfterMinutes: 5 })
+    const state = await readyState()
+    const fullScreen = { ...QUIET, notificationState: 3 }
+    await watcher.observe(fullScreen, state)
+    await state.apply('toggle')
+    advance(2000)
+    await watcher.observe(QUIET, state) // alt-tab to the desktop
+    advance(2000)
+    await watcher.observe(fullScreen, state) // back in the game
+    expect(state.state).toBe(READY)
+    advance(5 * 60_000)
+    await watcher.observe(QUIET, state) // the game really ended
+    expect(state.gameOverride).toBe(false)
+  })
+
+  it('never takes the host’s own worker for other GPU work', async () => {
+    const { watcher } = setup()
+    const state = await readyState()
+    const ownWorker = { ...QUIET, gpuProcesses: [{ pid: 4242, name: 'C:\\Python311\\python.exe' }], ownPids: [4242] }
+    await watcher.observe(ownWorker, state)
+    expect(state.state).toBe(READY)
+  })
+
   it('turned off, it never pauses and gives back a pause it made', async () => {
     const { watcher, set } = setup()
     const state = await readyState()
