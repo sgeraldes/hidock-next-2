@@ -71,12 +71,31 @@ vi.mock('../../services/brains', () => ({
 }))
 
 import { registerPipelineHandlers } from '../pipeline-handlers'
+vi.mock('../../services/pipeline/decision-engines', () => ({
+  createDecisionEngines: async () => [{ id: 'clef', descriptor: { label: 'Clef', costPerCallUsd: 0, dataLeavesMachine: 'lan' }, isAvailable: async () => true }]
+}))
 import { replaceConfigSection } from '../../services/config'
 import { discoverModels } from '../../services/brains'
 
 type IpcHandler = (event: unknown, ...args: unknown[]) => Promise<any>
 let handlers: Record<string, IpcHandler>
 const call = (channel: string, arg?: unknown) => handlers[channel]({}, arg)
+
+describe('decision settings', () => {
+  it('replaces removable overrides while preserving text plans', async () => {
+    state.config.pipeline = { ...emptyPipelineConfig(), decisions: { preset: 'zero-cost', overrides: { evaluate: 'jev' } } }
+    expect(await call('pipeline:saveDecisions', { preset: 'fastest', overrides: {} })).toEqual({ success: true })
+    expect(state.config.pipeline).toEqual({ ...emptyPipelineConfig(), decisions: { preset: 'fastest', overrides: {} } })
+  })
+  it('rejects unknown presets, steps and engines', async () => {
+    for (const config of [{ preset: 'bad', overrides: {} }, { preset: 'fastest', overrides: { notes: 'jev' } }, { preset: 'fastest', overrides: { evaluate: 'bad' } }]) {
+      expect(await call('pipeline:saveDecisions', config)).toMatchObject({ success: false })
+    }
+  })
+  it('reports decision engine availability and cost', async () => {
+    expect((await call('pipeline:getState')).decisionEngines).toEqual([{ id: 'clef', label: 'Clef', costPerCallUsd: 0, dataLeavesMachine: 'lan', available: true }])
+  })
+})
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -96,8 +115,8 @@ beforeEach(() => {
 })
 
 describe('registerPipelineHandlers', () => {
-  it('registers exactly the three channels', () => {
-    expect(Object.keys(handlers).sort()).toEqual(['pipeline:getState', 'pipeline:listModels', 'pipeline:saveStep'])
+  it('registers the four pipeline channels', () => {
+    expect(Object.keys(handlers).sort()).toEqual(['pipeline:getState', 'pipeline:listModels', 'pipeline:saveDecisions', 'pipeline:saveStep'])
   })
 })
 

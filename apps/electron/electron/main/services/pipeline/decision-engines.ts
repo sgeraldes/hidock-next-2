@@ -120,7 +120,7 @@ export async function createDecisionEngines(step: DecisionStep, deps: Pick<Decis
       async isAvailable() {
         if (!settings.url || !settings.token) return false
         const health = await checkModelHost(settings)
-        return health?.state === 'ready'
+        return !!health && (health.state === 'ready' || health.state === 'busy') && health.capabilities.includes('decide')
       },
       ask: (state, questions) => decideOnModelHost(settings, { model: id, state, questions })
     }

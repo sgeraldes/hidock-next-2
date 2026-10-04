@@ -8,6 +8,7 @@ vi.mock('@/components/ui/toaster', () => ({ toast: toasts }))
 
 const getState = vi.fn()
 const saveStep = vi.fn()
+const saveDecisions = vi.fn()
 const listModels = vi.fn()
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
@@ -56,10 +57,28 @@ beforeEach(() => {
   getState.mockResolvedValue(stateWith())
   saveStep.mockResolvedValue({ success: true, issues: [] })
   listModels.mockResolvedValue([])
-  global.window.electronAPI = { pipeline: { getState, saveStep, listModels } } as never
+  saveDecisions.mockResolvedValue({ success: true })
+  global.window.electronAPI = { pipeline: { getState, saveStep, saveDecisions, listModels } } as never
 })
 
 describe('PipelineSection', () => {
+  it('shows Spanish decision presets, engine status, and saves a removable override', async () => {
+    getState.mockResolvedValue({ ...stateWith(), decisionEngines: [{ id: 'clef', label: 'Clef', costPerCallUsd: 0, available: true, dataLeavesMachine: 'lan' }] })
+    render(<PipelineSection />)
+    const preset = await screen.findByRole('combobox', { name: 'Preset global' })
+    expect(within(preset).getByRole('option', { name: 'Costo cero' })).toBeInTheDocument()
+    expect(screen.getByText(/Clef.*Disponible.*US\$ 0/)).toBeInTheDocument()
+    fireEvent.change(screen.getByRole('combobox', { name: 'Evaluación' }), { target: { value: 'jev' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Guardar decisiones' }))
+    await waitFor(() => expect(saveDecisions).toHaveBeenCalledWith({ preset: 'zero-cost', overrides: { evaluate: 'jev' } }))
+  })
+  it('removes a step override when Como el preset is selected', async () => {
+    getState.mockResolvedValue(stateWith({ ...emptyPipelineConfig(), decisions: { preset: 'cheapest', overrides: { evaluate: 'jev' } } }))
+    render(<PipelineSection />)
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Evaluación' }), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Guardar decisiones' }))
+    await waitFor(() => expect(saveDecisions).toHaveBeenCalledWith({ preset: 'cheapest', overrides: {} }))
+  })
   it('shows placeholder rows while the settings load, never the old sentence', async () => {
     render(<PipelineSection />)
     expect(screen.getByRole('status', { name: 'Loading the pipeline settings' })).toBeInTheDocument()
@@ -78,7 +97,7 @@ describe('PipelineSection', () => {
     expect(within(chat).getByText('Follows AI providers')).toBeInTheDocument()
     expect(within(chat).getByText('No calls yet')).toBeInTheDocument()
     expect(within(await row('notes')).getByText('Median 2.1 s · $0.0003 · 12 calls · 1 failed')).toBeInTheDocument()
-    expect(screen.getAllByRole('button', { name: /^Edit / })).toHaveLength(10)
+    expect(screen.getAllByRole('button', { name: /^Edit / })).toHaveLength(9)
   })
 
   it('opens the editor, offers the harnesses, and greys out the one that cannot serve with its reason', async () => {

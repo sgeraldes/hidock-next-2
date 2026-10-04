@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { askDecision, createDecisionEngines, decisionChain, parseDecisionReply, type DecisionEngine } from '../decision-engines'
 import { setCallSink, type CallRecord } from '../call-store'
-import { ModelHostDecisionError } from '../../model-host-client'
+import { ModelHostDecisionError, resetModelHostHealthCache } from '../../model-host-client'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 
@@ -83,6 +83,49 @@ describe('strict text decision parsing', () => {
 })
 
 describe('decision adapters', () => {
+  it.each([
+    ['ready', ['decide'], true],
+    ['busy', ['decide'], true],
+    ['paused', ['decide'], false],
+    ['stopped', ['decide'], false],
+    ['ready', ['diarize'], false],
+    ['busy', ['diarize'], false],
+    ['ready', undefined, false],
+    ['no answer', ['decide'], false]
+  ])('checks both local engines for host %s with capabilities %j', async (state, capabilities, available) => {
+    resetModelHostHealthCache()
+    const requests: unknown[] = []
+    const server = createServer(async (req, res) => {
+      res.setHeader('Content-Type', 'application/json')
+      if (req.url === '/health') {
+        if (state === 'no answer') res.statusCode = 503
+        res.end(JSON.stringify({ state, capabilities }))
+        return
+      }
+      const chunks: Buffer[] = []
+      for await (const chunk of req) chunks.push(Buffer.from(chunk))
+      const body = JSON.parse(Buffer.concat(chunks).toString())
+      requests.push(body)
+      res.end(JSON.stringify({ ...response, model: body.model }))
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    runtime.config.transcription = { modelHostUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, modelHostToken: 'test-pairing-token' } // pragma: allowlist secret
+    try {
+      const local = (await createDecisionEngines('evaluate')).filter(engine => engine.id === 'clef' || engine.id === 'clef-flash')
+      for (const engine of local) {
+        expect(await engine.isAvailable()).toBe(available)
+        if (available) {
+          const out = await askDecision('evaluate', 'state', questions, { engines: local, config: { preset: 'zero-cost', overrides: { evaluate: engine.id } } })
+          expect(out.engine).toBe(engine.id)
+        }
+      }
+      expect(requests).toEqual(available ? local.map(engine => ({ model: engine.id, state: 'state', questions })) : [])
+    } finally {
+      runtime.config.transcription = {}
+      resetModelHostHealthCache()
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+    }
+  })
   it.each(['haiku', 'gemini-flash'] as const)('uses a direct profile for %s without a second ledger row', async id => {
     runtime.canServe.mockResolvedValue(true)
     runtime.chat.mockResolvedValue(reply)
