@@ -12,6 +12,7 @@
  */
 
 import { unescapeIcsText } from '@hidock/calendar-sync'
+import { yieldToEventLoop } from './event-loop'
 import {
   queryAll,
   queryOne,
@@ -1972,6 +1973,6 @@ export function reconcileOrganization(): void {
 export async function reconcileOrganizationYielding(): Promise<void> {
   for (const step of RECONCILE_STEPS) {
     runReconcileStep(step)
-    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    await yieldToEventLoop()
   }
 }
