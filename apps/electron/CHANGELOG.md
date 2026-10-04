@@ -63,7 +63,8 @@ Outlook, and every speaker the app names now keeps a note of how it was named.
   because the address starts with one. An address, a web address or a phone number is no longer
   taken for a first name. A person named after an address takes the name the calendar uses most for
   that address, when it has one (53 of the 299), and new people from the calendar never get an
-  address as their name. People you added yourself are never renamed.
+  address as their name. People you added yourself are never renamed, and neither are shared
+  mailboxes such as info@ or addresses a meeting lists under two names, which are not one person.
 - **The identity rules are written down.** The file docs/identity-rules.md lists each kind of
   identity question, the rule that answers it, the signals in order and when it stays a question
   for you.

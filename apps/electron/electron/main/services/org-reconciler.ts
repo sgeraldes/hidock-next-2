@@ -51,13 +51,15 @@ import {
   cleanRole,
   isNotAPersonName,
   calendarDisplayName,
-  addressLocalPart
+  addressLocalPart,
+  addressesUnderTwoNames,
+  isSharedMailbox
 } from './entity-normalize'
 import { decideProjectDiscovery, scoreProjectNameCandidate } from './project-discovery-gate'
 import { canUpgrade, methodConfidence } from './signal-tiers'
 import { LONG_MEETING_MS } from './recording-match-scoring'
 import { EARLY_START_TOLERANCE_MS, MIN_TIME_LINK_COVERAGE, meetingCoverage } from './meeting-coverage'
-import { randomUUID } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 
 /** Resolver thresholds (INTELLIGENCE.md §2): ≥0.8 auto-link, 0.5–0.8 suggest, <0.5 create. */
 const AUTO_LINK_THRESHOLD = 0.8
@@ -424,6 +426,32 @@ function calendarPeople(meeting: {
   return people
 }
 
+/** What the calendar says about the names of each address, read once per pass. */
+interface CalendarNames {
+  /** How many times each display name is given for an address. */
+  namesByAddress: Map<string, Map<string, number>>
+  /** Addresses that may not take a person's name: shared mailboxes, and addresses a
+   *  meeting lists under two different names (a distribution list). */
+  notOnePerson: Set<string>
+}
+
+function readCalendarNames(peopleByMeeting: ReadonlyArray<ReadonlyArray<{ name?: string; email: string }>>): CalendarNames {
+  const namesByAddress = new Map<string, Map<string, number>>()
+  const notOnePerson = new Set<string>()
+  for (const people of peopleByMeeting) {
+    for (const address of addressesUnderTwoNames(people)) notOnePerson.add(address)
+    for (const person of people) {
+      if (isSharedMailbox(person.email)) notOnePerson.add(person.email)
+      const name = calendarDisplayName(person.name, person.email)
+      if (!name) continue
+      let counts = namesByAddress.get(person.email)
+      if (!counts) namesByAddress.set(person.email, (counts = new Map()))
+      counts.set(name, (counts.get(name) ?? 0) + 1)
+    }
+  }
+  return { namesByAddress, notOnePerson }
+}
+
 /**
  * Whether a contact's name is a placeholder the calendar should replace: not a name at
  * all (the address, "Name <address>", a phone number), or the start of its own address
@@ -502,11 +530,19 @@ export function upsertContactsFromMeetings(): { contacts: number; links: number 
       )
     )
 
-    for (const meeting of meetings) {
-      for (const person of calendarPeople(meeting)) {
+    // Parsed once: the name rules need every meeting before the first contact is named,
+    // since a later meeting may show an address is a distribution list.
+    const peopleByMeeting = meetings.map((meeting) => calendarPeople(meeting))
+    const calendarNames = readCalendarNames(peopleByMeeting)
+
+    for (const [index, meeting] of meetings.entries()) {
+      for (const person of peopleByMeeting[index]) {
         let contact = contactsByEmail.get(person.email) ?? survivorOfMergedEmail(person.email)
-        // A calendar often lists the address itself as the name: that is no name.
-        const displayName = calendarDisplayName(person.name, person.email)
+        // A calendar often lists the address itself as the name: that is no name. A
+        // shared mailbox or a distribution list is not one person, so it keeps the placeholder.
+        const displayName = calendarNames.notOnePerson.has(person.email)
+          ? null
+          : calendarDisplayName(person.name, person.email)
         if (!contact) {
           const id = randomUUID()
           const now = meeting.start_time || new Date().toISOString()
@@ -570,8 +606,19 @@ export function upsertContactsFromMeetings(): { contacts: number; links: number 
  * display name in the calendar, and "juanchobq2017@gmail.com" had become a shared
  * first-name bucket for Juan. The most frequent display name wins (ties: the one with
  * more words, then alphabetical). A contact the owner made (source 'user') is never
- * renamed. There is no identity-decision kind for a rename, so each one is logged.
- * Idempotent: a renamed contact has a real name and is not picked again.
+ * renamed, and neither is a shared mailbox (info@) or an address a meeting lists under
+ * two different names (a distribution list). There is no identity-decision kind for a
+ * rename, so each one is logged. Idempotent: a renamed contact has a real name and is
+ * not picked again.
+ *
+ * The addresses with no calendar name stay placeholders, so there are always targets.
+ * To keep a reconcile with nothing new from parsing every meeting again (review of PR
+ * 143, F2), the pass stores a fingerprint of the meetings (count, last row, last
+ * update, and the total length of the attendee and organizer fields, which SQLite sums
+ * without the app reading them) and of the remaining targets, and skips when both are
+ * unchanged. Known gap: an edit that keeps every one of those numbers equal (a display
+ * name changed to one of the same length, with no updated_at bump) waits for the next
+ * change to the meetings or the contacts.
  */
 export function renameAddressNamedContacts(): number {
   const targets = queryAll<{ id: string; name: string; email: string | null; source: string | null }>(
@@ -581,35 +628,65 @@ export function renameAddressNamedContacts(): number {
     .filter((c): c is typeof c & { address: string } => !!c.address && hasPlaceholderName(c.name, c.address))
   if (targets.length === 0) return 0
 
-  const namesByAddress = new Map<string, Map<string, number>>()
-  for (const meeting of queryAll<{ attendees: string | null; organizer_name: string | null; organizer_email: string | null }>(
-    `SELECT attendees, organizer_name, organizer_email FROM meetings`
-  )) {
-    for (const person of calendarPeople(meeting)) {
-      const name = calendarDisplayName(person.name, person.email)
-      if (!name) continue
-      let counts = namesByAddress.get(person.email)
-      if (!counts) namesByAddress.set(person.email, (counts = new Map()))
-      counts.set(name, (counts.get(name) ?? 0) + 1)
-    }
-  }
+  const meetingsShape = addressRenameMeetingsShape()
+  if (readConfigValue(ADDRESS_RENAME_FINGERPRINT_KEY) === addressRenameFingerprint(meetingsShape, targets)) return 0
+
+  const calendarNames = readCalendarNames(
+    queryAll<{ attendees: string | null; organizer_name: string | null; organizer_email: string | null }>(
+      `SELECT attendees, organizer_name, organizer_email FROM meetings`
+    ).map((meeting) => calendarPeople(meeting))
+  )
 
   const words = (name: string) => name.split(/\s+/).length
-  let renamed = 0
+  const renamedIds = new Set<string>()
   runInTransaction(() => {
     for (const contact of targets) {
-      const counts = namesByAddress.get(contact.address)
+      if (calendarNames.notOnePerson.has(contact.address)) continue
+      const counts = calendarNames.namesByAddress.get(contact.address)
       if (!counts) continue
       const [best] = [...counts.entries()].sort(
         ([a, ca], [b, cb]) => cb - ca || words(b) - words(a) || a.localeCompare(b)
       )
       run(`UPDATE contacts SET name = ? WHERE id = ?`, [best[0], contact.id])
       console.log(`[OrgReconciler] Renamed contact ${contact.id} from its address to its calendar name "${best[0]}"`)
-      renamed++
+      renamedIds.add(contact.id)
     }
+    const remaining = targets.filter((c) => !renamedIds.has(c.id))
+    writeConfigValue(ADDRESS_RENAME_FINGERPRINT_KEY, addressRenameFingerprint(meetingsShape, remaining))
   })
-  if (renamed > 0) console.log(`[OrgReconciler] Renamed ${renamed} contact(s) named after an address`)
-  return renamed
+  if (renamedIds.size > 0) console.log(`[OrgReconciler] Renamed ${renamedIds.size} contact(s) named after an address`)
+  return renamedIds.size
+}
+
+/** Config key of the last address-rename pass's fingerprint. */
+const ADDRESS_RENAME_FINGERPRINT_KEY = 'orgReconciler.addressRename.fingerprint'
+/** Bump when the rename rules change, so the next pass runs in full. */
+const ADDRESS_RENAME_RULES_VERSION = 1
+
+/** Counts and lengths of the meetings table, summed in SQLite: no attendee list is read into the app. */
+function addressRenameMeetingsShape(): string {
+  const shape = queryOne<{ n: number; last_row: number; last_update: string; attendees: number; organizer: number }>(
+    `SELECT COUNT(*) AS n, COALESCE(MAX(rowid), 0) AS last_row, COALESCE(MAX(updated_at), '') AS last_update,
+            COALESCE(SUM(LENGTH(attendees)), 0) AS attendees,
+            COALESCE(SUM(LENGTH(organizer_email)), 0) + COALESCE(SUM(LENGTH(organizer_name)), 0) AS organizer
+       FROM meetings`
+  )
+  return shape ? [shape.n, shape.last_row, shape.last_update, shape.attendees, shape.organizer].join('|') : ''
+}
+
+function addressRenameFingerprint(meetingsShape: string, targets: ReadonlyArray<{ id: string; address: string }>): string {
+  const ids = targets.map((t) => `${t.id}:${t.address}`).sort()
+  return createHash('sha256')
+    .update(`${ADDRESS_RENAME_RULES_VERSION}\n${meetingsShape}\n${ids.join('\n')}`)
+    .digest('hex')
+}
+
+function readConfigValue(key: string): string | null {
+  return queryOne<{ value: string | null }>('SELECT value FROM config WHERE key = ?', [key])?.value ?? null
+}
+
+function writeConfigValue(key: string, value: string): void {
+  run('INSERT OR REPLACE INTO config (key, value, updated_at) VALUES (?, ?, ?)', [key, value, new Date().toISOString()])
 }
 
 /**

@@ -16,7 +16,9 @@ import {
   isGenericSpeakerLabel,
   detectAmbiguousName,
   calendarDisplayName,
-  addressLocalPart
+  addressLocalPart,
+  addressesUnderTwoNames,
+  isSharedMailbox
 } from './entity-normalize'
 import { getEventBus } from './event-bus'
 import { isCancelledMeetingSubject, scoreMeetingCandidates } from './recording-match-scoring'
@@ -4758,8 +4760,19 @@ function extractContactsFromMeetingDataInternal(meeting: Omit<Meeting, 'created_
   // as a name: a new contact gets the start of the address as a placeholder (as in
   // org-reconciler's upsertContactsFromMeetings), and an existing name is kept (3-oct-2026,
   // 297 contacts were named after their own address).
+  // A shared mailbox (info@) or an address this meeting lists under two names (a
+  // distribution list) is not one person: it never takes a person's name (review of PR 143, F3).
+  const listedUnderTwoNames = addressesUnderTwoNames([
+    { name: meeting.organizer_name, email: meeting.organizer_email },
+    ...attendees
+  ])
+  const personName = (name: string | null | undefined, email: string | null | undefined): string | null => {
+    const address = (email || '').trim().toLowerCase()
+    if (address && (isSharedMailbox(address) || listedUnderTwoNames.has(address))) return null
+    return calendarDisplayName(name, email)
+  }
   const nameForNewContact = (name: string | null | undefined, email: string | null | undefined): string =>
-    calendarDisplayName(name, email) ?? (addressLocalPart(email) || 'Unknown')
+    personName(name, email) ?? (addressLocalPart(email) || 'Unknown')
 
   // Handle organizer
   if (meeting.organizer_email || meeting.organizer_name) {
@@ -4768,7 +4781,7 @@ function extractContactsFromMeetingDataInternal(meeting: Omit<Meeting, 'created_
 
     if (existing) {
       runNoSave(`UPDATE contacts SET name = COALESCE(?, name), last_seen_at = MAX(last_seen_at, ?) WHERE id = ?`,
-        [calendarDisplayName(meeting.organizer_name, meeting.organizer_email), meeting.start_time, existing.id])
+        [personName(meeting.organizer_name, meeting.organizer_email), meeting.start_time, existing.id])
       contactId = existing.id
     } else {
       contactId = crypto.randomUUID()
@@ -4789,7 +4802,7 @@ function extractContactsFromMeetingDataInternal(meeting: Omit<Meeting, 'created_
 
     if (existing) {
       runNoSave(`UPDATE contacts SET name = COALESCE(?, name), last_seen_at = MAX(last_seen_at, ?) WHERE id = ?`,
-        [calendarDisplayName(attendee.name, attendee.email), meeting.start_time, existing.id])
+        [personName(attendee.name, attendee.email), meeting.start_time, existing.id])
       contactId = existing.id
     } else {
       contactId = crypto.randomUUID()

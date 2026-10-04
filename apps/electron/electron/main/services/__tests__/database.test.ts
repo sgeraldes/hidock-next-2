@@ -1227,6 +1227,27 @@ describe('Database Service', () => {
       ])
     })
 
+    // Review of PR 143, F1 and F3.
+    it('stores "Carmen" for carmen@, and never names a shared mailbox or a list shown under two names', () => {
+      upsertMeetingsBatch([
+        {
+          ...meeting,
+          id: 'meeting-review',
+          attendees: JSON.stringify([
+            { name: 'Carmen', email: 'carmen@example.com' },
+            { name: 'Maria Lopez', email: 'info@example.com' },
+            { name: 'Ana Soto', email: 'dl-rv@example.com' },
+            { name: 'Luis Rojas', email: 'dl-rv@example.com' }
+          ])
+        }
+      ])
+
+      const nameOf = (email: string) => queryOne<{ name: string }>('SELECT name FROM contacts WHERE email = ?', [email])?.name
+      expect(nameOf('carmen@example.com')).toBe('Carmen')
+      expect(nameOf('info@example.com')).toBe('info')
+      expect(nameOf('dl-rv@example.com')).toBe('dl-rv')
+    })
+
     it('does not overwrite a contact name with an address the calendar lists as the name', () => {
       upsertMeetingsBatch([
         { ...meeting, id: 'meeting-keep-1', attendees: JSON.stringify([{ name: 'Keep Real', email: 'keep@example.com' }]) }

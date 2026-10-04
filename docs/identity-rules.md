@@ -161,20 +161,35 @@ Rule (`isNotAPersonName` in `entity-normalize.ts`): a string is not a person's n
 "@" (an address, or "Name <address>"), is a URL or a bare domain, has no letters (a phone number,
 digits), or is a single word with characters a name never has, which is how the start of an
 address looks ("edgar.anzola", "juanchobq2017", "julik_100"). Hyphens and apostrophes are fine
-(Se-young, O'Neil). Such a string:
+(Se-young, O'Neil), and so is a dotted word with a capital at the start of each part ("J.Perez",
+"José.García"). A bare domain counts as a URL only with a real top-level domain (a common generic
+one such as .com, or a two-letter country one in lowercase). Such a string:
 
 - is never a shared-first-name bucket and never one of a bucket's candidates (`detectAmbiguousName`);
 - never matches a first name (`firstNameNicknameMatch`), on either side;
 - is never stored as a contact's name from calendar data (`calendarDisplayName`). A new contact the
   calendar gives no real name for gets the start of its address as a placeholder ("edgar.anzola"),
-  and an existing name is not overwritten by an address.
+  and an existing name is not overwritten by an address. Only the start of the address in
+  lowercase, exactly as the placeholder writes it, counts as no name: "Carmen" for
+  carmen@acme.com is a real name and replaces the placeholder "carmen".
+
+A shared mailbox (`isSharedMailbox`: info@, support@ and the other role words listed under "the
+same email", or a plus address) and an address one meeting lists under two different names
+(`addressesUnderTwoNames`, a distribution list) are not one person. They never take a person's
+name from the calendar: new contacts keep the placeholder, and the upgrade and the rename below
+skip them.
 
 Renaming (`renameAddressNamedContacts` in `org-reconciler.ts`, reconcile step
 `contacts-rename-from-calendar`, after the contacts upsert and before the merge and the bucket
 split): a contact whose name is not a name, or is the start of its own address, takes the display
 name the calendar uses most for that address (ties: more words, then alphabetical). The address is
 the contact's email, or the one written inside its name. The start of the address is never taken
-as the new name. The upsert applies the same upgrade as meetings arrive.
+as the new name. The upsert applies the same upgrade as meetings arrive. The addresses with no
+calendar name stay placeholders, so the step stores a fingerprint in `config`
+(`orgReconciler.addressRename.fingerprint`): the meetings' count, last row, last update and the
+summed length of their attendee and organizer fields, plus the remaining placeholder contacts.
+When neither changed, it skips without reading any attendee list. An edit that keeps all of those
+equal waits for the next change.
 
 Never renamed: a contact the owner made (source `user`), and a contact with no display name in
 the calendar. Contact aliases are not used as a source: they are stored lowercased. There is no

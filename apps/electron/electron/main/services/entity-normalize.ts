@@ -55,27 +55,90 @@ export function looksLikeEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((value || '').trim())
 }
 
-/** A URL, or a bare domain like "rappi.com" or "www.juan.com". */
-const URL_SHAPED = /^(?:[a-z][a-z0-9+.-]*:\/\/|www\.)|^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}(?:\/\S*)?$/i
+/** The start of a URL: a scheme ("https://") or "www.". */
+const URL_START = /^(?:[a-z][a-z0-9+.-]*:\/\/|www\.)/i
+/** A bare domain ("rappi.com"); its top-level domain is checked separately. */
+const BARE_DOMAIN = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.([a-z]{2,})(?:\/\S*)?$/i
+/** Generic top-level domains common enough to tell "Rappi.com" from "J.Perez". */
+const GENERIC_TLDS = new Set([
+  'com', 'net', 'org', 'edu', 'gov', 'mil', 'int', 'info', 'biz', 'io', 'co', 'ai', 'app', 'dev', 'me', 'tv',
+  'xyz', 'online', 'site', 'tech', 'cloud', 'store', 'shop'
+])
 /** A one-word name: letters and marks, joined by a hyphen or apostrophe (Se-young, O'Neil). */
 const NAME_WORD = /^[\p{L}\p{M}]+(?:['’-][\p{L}\p{M}]+)*$/u
 const ANY_LETTER = /\p{L}/u
+const STARTS_UPPERCASE = /^\p{Lu}/u
+
+/** A URL, or a bare domain with a real top-level domain (a generic one, or a two-letter country one in lowercase). */
+function isUrlShaped(text: string): boolean {
+  if (URL_START.test(text)) return true
+  const domain = BARE_DOMAIN.exec(text)
+  if (!domain) return false
+  const tld = domain[1]
+  return GENERIC_TLDS.has(tld.toLowerCase()) || /^[a-z]{2}$/.test(tld)
+}
 
 /**
  * Whether a string cannot be a person's name: anything with an "@" (an address, or
- * "Name <address>"), a URL or bare domain, a string with no letters (a phone number,
+ * "Name <address>"), a URL or a bare domain, a string with no letters (a phone number,
  * digits), or a single word with characters a name never has, which is how the start
- * of an address looks ("edgar.anzola", "juanchobq2017", "julik_100"). Such a string is
- * never a shared-first-name bucket, never matches a first name, and is never stored as
- * a contact's name when the calendar gives one. 3-oct-2026: contacts named after their
- * address were buckets, because "juanchobq2017@gmail.com" starts with Juan.
+ * of an address looks ("edgar.anzola", "juanchobq2017", "julik_100"). A dotted word
+ * with a capital at the start of each part is a name ("J.Perez", "José.García").
+ * Such a string is never a shared-first-name bucket, never matches a first name, and
+ * is never stored as a contact's name when the calendar gives one. 3-oct-2026: contacts
+ * named after their address were buckets, because "juanchobq2017@gmail.com" starts with Juan.
  */
 export function isNotAPersonName(value: string): boolean {
   const text = (value || '').trim()
   if (!text || text.includes('@')) return true
-  if (URL_SHAPED.test(text)) return true
+  if (isUrlShaped(text)) return true
   if (!ANY_LETTER.test(text)) return true
-  return !/\s/.test(text) && !NAME_WORD.test(text)
+  if (/\s/.test(text) || NAME_WORD.test(text)) return false
+  const parts = text.split('.')
+  return !(parts.length > 1 && parts.every((part) => NAME_WORD.test(part) && STARTS_UPPERCASE.test(part)))
+}
+
+/**
+ * Local parts of role and shared mailboxes: one address, several people (review of PR 4, F1).
+ * A local part matches when it is one of these, or starts with one followed by a separator
+ * ("support-latam", "info.es").
+ */
+const SHARED_MAILBOX_LOCAL_PARTS = [
+  'info', 'support', 'sales', 'admin', 'administracion', 'team', 'equipo', 'contact', 'contacto', 'hello', 'hola',
+  'office', 'oficina', 'billing', 'facturacion', 'accounts', 'accounting', 'finance', 'finanzas', 'hr', 'rrhh',
+  'jobs', 'careers', 'empleos', 'talento', 'marketing', 'help', 'helpdesk', 'service', 'services', 'servicio',
+  'servicios', 'soporte', 'ventas', 'noreply', 'no-reply', 'donotreply', 'do-not-reply', 'notifications',
+  'notificaciones', 'calendar', 'booking', 'bookings', 'reservas', 'recepcion', 'reception', 'it', 'ops',
+  'operations', 'legal', 'press', 'prensa', 'media', 'security', 'compras', 'purchasing', 'mail', 'all', 'everyone',
+  'todos', 'staff', 'group', 'grupo', 'list', 'lista'
+]
+
+/** True when an address belongs to a role or shared mailbox, or is a plus address. */
+export function isSharedMailbox(email: string): boolean {
+  const local = email.trim().toLowerCase().split('@')[0] ?? ''
+  if (!local || local.includes('+')) return true
+  return SHARED_MAILBOX_LOCAL_PARTS.some((word) => local === word || new RegExp(`^${word}[._-]`).test(local))
+}
+
+/**
+ * The addresses one meeting lists under two different display names, as a distribution
+ * list does (lowercased). Names compare accent-folded; the address itself and its start
+ * do not count as names.
+ */
+export function addressesUnderTwoNames(
+  people: ReadonlyArray<{ name?: string | null; email?: string | null }>
+): Set<string> {
+  const namesByAddress = new Map<string, Set<string>>()
+  for (const person of people) {
+    const address = (person.email || '').trim().toLowerCase()
+    if (!address) continue
+    const name = person.name ? accentFoldedKey(person.name) : ''
+    if (!name || name === address || name === address.split('@')[0]) continue
+    let names = namesByAddress.get(address)
+    if (!names) namesByAddress.set(address, (names = new Set()))
+    names.add(name)
+  }
+  return new Set([...namesByAddress].filter(([, names]) => names.size > 1).map(([address]) => address))
 }
 
 /** The part of an address before the "@", lowercased: the placeholder name of a contact the calendar gave no name for. */
@@ -85,14 +148,15 @@ export function addressLocalPart(email: string | null | undefined): string {
 
 /**
  * The person's name as a calendar gives it for an address, or null when it gives none:
- * no name, a string that is not a name (often the address itself), or just the start of
- * the address ("csiccha" for csiccha@antamina.com), which is a placeholder, not a name.
+ * no name, a string that is not a name (often the address itself), or the start of the
+ * address exactly as the placeholder writes it ("csiccha" for csiccha@antamina.com).
+ * "Carmen" for carmen@acme.com is a real name (review of PR 143, F1).
  */
 export function calendarDisplayName(name: string | null | undefined, email: string | null | undefined): string | null {
   const text = (name || '').trim()
   if (!text || isNotAPersonName(text)) return null
   const local = addressLocalPart(email)
-  if (local && text.toLowerCase() === local) return null
+  if (local && text === local) return null
   return text
 }
 

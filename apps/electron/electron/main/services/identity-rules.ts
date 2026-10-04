@@ -42,7 +42,7 @@ import { askJev } from './jev-client'
 import { createJevHarness } from './pipeline/jev-harness'
 import { withCallRecord } from './pipeline/track-call'
 import { isRecordingEligible } from './recording-eligibility'
-import { accentFoldedKey, firstNameNicknameMatch } from './entity-normalize'
+import { accentFoldedKey, addressesUnderTwoNames, firstNameNicknameMatch, isSharedMailbox } from './entity-normalize'
 import { getActiveTranscriptions } from './transcription-activity'
 import {
   buildMentionTiebreakRequest,
@@ -354,27 +354,8 @@ function pendingPersonSuggestions(): Array<{ s: IdentitySuggestion; ev: Suggesti
   ).map((s) => ({ s, ev: parseJson<SuggestionEvidence>(s.evidence, {}) }))
 }
 
-/**
- * Local parts of role and shared mailboxes: one address, several people (review of PR 4, F1).
- * A local part matches when it is one of these, or starts with one followed by a separator
- * ("support-latam", "info.es").
- */
-const SHARED_MAILBOX_LOCAL_PARTS = [
-  'info', 'support', 'sales', 'admin', 'administracion', 'team', 'equipo', 'contact', 'contacto', 'hello', 'hola',
-  'office', 'oficina', 'billing', 'facturacion', 'accounts', 'accounting', 'finance', 'finanzas', 'hr', 'rrhh',
-  'jobs', 'careers', 'empleos', 'talento', 'marketing', 'help', 'helpdesk', 'service', 'services', 'servicio',
-  'servicios', 'soporte', 'ventas', 'noreply', 'no-reply', 'donotreply', 'do-not-reply', 'notifications',
-  'notificaciones', 'calendar', 'booking', 'bookings', 'reservas', 'recepcion', 'reception', 'it', 'ops',
-  'operations', 'legal', 'press', 'prensa', 'media', 'security', 'compras', 'purchasing', 'mail', 'all', 'everyone',
-  'todos', 'staff', 'group', 'grupo', 'list', 'lista'
-]
-
-/** True when an address belongs to a role or shared mailbox, or is a plus address. */
-export function isSharedMailbox(email: string): boolean {
-  const local = email.trim().toLowerCase().split('@')[0] ?? ''
-  if (!local || local.includes('+')) return true
-  return SHARED_MAILBOX_LOCAL_PARTS.some((word) => local === word || new RegExp(`^${word}[._-]`).test(local))
-}
+// The shared-mailbox and two-names rules (isSharedMailbox, addressesUnderTwoNames) live in
+// entity-normalize.ts, so the reconciler's calendar passes use them too (review of PR 143, F3).
 
 /** Whether two display names on one address can be one person. */
 function namesCompatible(a: string, b: string, email: string): boolean {
@@ -405,15 +386,13 @@ function addressSharedInAMeeting(email: string): boolean {
   for (const m of meetings) {
     const people = parseJson<unknown>(m.attendees, [])
     if (!Array.isArray(people)) continue
-    const names = new Set<string>()
-    for (const p of people) {
-      if (!p || typeof p !== 'object') continue
-      const entry = p as { email?: unknown; name?: unknown }
-      if (typeof entry.email !== 'string' || entry.email.trim().toLowerCase() !== address) continue
-      const name = typeof entry.name === 'string' ? accentFoldedKey(entry.name) : ''
-      if (name && name !== address && name !== address.split('@')[0]) names.add(name)
-    }
-    if (names.size > 1) return true
+    const entries = people
+      .filter((p): p is { email?: unknown; name?: unknown } => !!p && typeof p === 'object')
+      .map((p) => ({
+        email: typeof p.email === 'string' ? p.email : null,
+        name: typeof p.name === 'string' ? p.name : null
+      }))
+    if (addressesUnderTwoNames(entries).has(address)) return true
   }
   return false
 }

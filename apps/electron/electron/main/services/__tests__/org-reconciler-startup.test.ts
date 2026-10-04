@@ -209,6 +209,39 @@ describe('upsertContactsFromMeetings', () => {
     })
   })
 
+  // Review of PR 143, F1: "Carmen" for carmen@acme.com is a real name, not the placeholder.
+  it('stores a real name that spells the start of the address, and upgrades the placeholder to it', () => {
+    meeting('m1', { attendees: [{ name: 'Carmen', email: 'carmen@acme.com' }] })
+    contact('c-pl', 'pedro', 'pedro@acme.com')
+    meeting('m2', { attendees: [{ name: 'Pedro', email: 'pedro@acme.com' }] })
+
+    upsertContactsFromMeetings()
+
+    expect(contacts().map((c) => [c.email, c.name])).toEqual([
+      ['pedro@acme.com', 'Pedro'],
+      ['carmen@acme.com', 'Carmen']
+    ])
+  })
+
+  // Review of PR 143, F3: a shared mailbox or a distribution list is not one person.
+  it('never names a shared mailbox or an address listed under two names in one meeting', () => {
+    contact('c-dl', 'dl-proyecto', 'dl-proyecto@acme.com')
+    meeting('m1', {
+      attendees: [
+        { name: 'Maria Lopez', email: 'info@acme.com' },
+        { name: 'Ana Soto', email: 'dl-proyecto@acme.com' },
+        { name: 'Luis Rojas', email: 'dl-proyecto@acme.com' }
+      ]
+    })
+
+    upsertContactsFromMeetings()
+
+    expect(contacts().map((c) => [c.email, c.name])).toEqual([
+      ['dl-proyecto@acme.com', 'dl-proyecto'],
+      ['info@acme.com', 'info']
+    ])
+  })
+
   it('never renames a contact the owner made', () => {
     run(
       `INSERT INTO contacts (id, name, email, type, first_seen_at, last_seen_at, meeting_count, source)
@@ -287,6 +320,43 @@ describe('renameAddressNamedContacts', () => {
     expect(nameOf('c-real')).toBe('Peter Parker')
     expect(nameOf('c-none')).toBe('nobody@x.com')
     expect(nameOf('c-user')).toBe('gwen@x.com')
+  })
+
+  it('leaves a shared mailbox and an address listed under two names in one meeting alone', () => {
+    contact('c-info', 'info@acme.com', 'info@acme.com')
+    contact('c-dl', 'dl-proyecto@acme.com', 'dl-proyecto@acme.com')
+    meeting('m1', {
+      attendees: [
+        { name: 'Maria Lopez', email: 'info@acme.com' },
+        { name: 'Ana Soto', email: 'dl-proyecto@acme.com' },
+        { name: 'Luis Rojas', email: 'dl-proyecto@acme.com' }
+      ]
+    })
+    meeting('m2', { attendees: [{ name: 'Ana Soto', email: 'dl-proyecto@acme.com' }] })
+
+    expect(renameAddressNamedContacts()).toBe(0)
+
+    expect(nameOf('c-info')).toBe('info@acme.com')
+    expect(nameOf('c-dl')).toBe('dl-proyecto@acme.com')
+  })
+
+  // Review of PR 143, F2: the addresses with no calendar name stay placeholders, so the
+  // step used to parse every meeting on every reconcile.
+  it('does not read the attendees again when neither the meetings nor the contacts changed', () => {
+    contact('c-mv', 'mvargs@amazon.com', 'mvargs@amazon.com')
+    contact('c-none', 'nobody@x.com', 'nobody@x.com')
+    meeting('m1', { attendees: [{ name: 'Marino Vargas', email: 'mvargs@amazon.com' }] })
+    vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    expect(renameAddressNamedContacts()).toBe(1)
+
+    const parse = vi.spyOn(JSON, 'parse')
+    expect(renameAddressNamedContacts()).toBe(0)
+    expect(parse).not.toHaveBeenCalled()
+    parse.mockRestore()
+
+    meeting('m2', { attendees: [{ name: 'Nobody Known', email: 'nobody@x.com' }] })
+    expect(renameAddressNamedContacts()).toBe(1)
+    expect(nameOf('c-none')).toBe('Nobody Known')
   })
 
   it('does nothing on a second run', () => {

@@ -19,7 +19,10 @@ import {
   hasSurname,
   firstNameNicknameMatch,
   detectAmbiguousName,
-  isNotAPersonName
+  isNotAPersonName,
+  calendarDisplayName,
+  isSharedMailbox,
+  addressesUnderTwoNames
 } from '../entity-normalize'
 
 describe('normalizeName', () => {
@@ -293,6 +296,16 @@ describe('isNotAPersonName', () => {
     expect(isNotAPersonName('julik_100')).toBe(true)
   })
 
+  // Review of PR 143, F4: a dotted name written with capitals is a name.
+  it('keeps a dotted name with a capital on each part, and rejects the lowercase address shape', () => {
+    expect(isNotAPersonName('J.Perez')).toBe(false)
+    expect(isNotAPersonName('José.García')).toBe(false)
+    expect(isNotAPersonName('Edgar.anzola')).toBe(true)
+    expect(isNotAPersonName('edgar.anzola')).toBe(true)
+    expect(isNotAPersonName('Rappi.com')).toBe(true)
+    expect(isNotAPersonName('www.Juan.Perez')).toBe(true)
+  })
+
   it('keeps real names, accented, hyphenated or with an apostrophe', () => {
     expect(isNotAPersonName('Juan')).toBe(false)
     expect(isNotAPersonName('José')).toBe(false)
@@ -300,6 +313,40 @@ describe('isNotAPersonName', () => {
     expect(isNotAPersonName("O'Neil")).toBe(false)
     expect(isNotAPersonName('Juan Pérez')).toBe(false)
     expect(isNotAPersonName('Vargas, Marino')).toBe(false)
+  })
+})
+
+describe('calendarDisplayName', () => {
+  // Review of PR 143, F1: only the lowercase start of the address is a placeholder.
+  it('keeps a real name that spells the start of the address with a capital', () => {
+    expect(calendarDisplayName('Carmen', 'carmen@acme.com')).toBe('Carmen')
+  })
+
+  it('gives null for the lowercase start of the address, the address itself, or nothing', () => {
+    expect(calendarDisplayName('carmen', 'carmen@acme.com')).toBeNull()
+    expect(calendarDisplayName('carmen@acme.com', 'carmen@acme.com')).toBeNull()
+    expect(calendarDisplayName('', 'carmen@acme.com')).toBeNull()
+  })
+})
+
+describe('shared addresses', () => {
+  // Review of PR 143, F3: the rule moved here from identity-rules.ts so the reconciler can use it.
+  it('isSharedMailbox flags role mailboxes and plus addresses, not people', () => {
+    expect(isSharedMailbox('info@acme.com')).toBe(true)
+    expect(isSharedMailbox('support-latam@acme.com')).toBe(true)
+    expect(isSharedMailbox('ana+news@acme.com')).toBe(true)
+    expect(isSharedMailbox('ana.soto@acme.com')).toBe(false)
+  })
+
+  it('addressesUnderTwoNames finds an address one meeting lists under two different names', () => {
+    const shared = addressesUnderTwoNames([
+      { name: 'Ana Soto', email: 'dl-proyecto@acme.com' },
+      { name: 'Luis Rojas', email: 'DL-proyecto@acme.com' },
+      { name: 'Carmen Diaz', email: 'carmen@acme.com' },
+      { name: 'carmen', email: 'carmen@acme.com' },
+      { name: 'Carmen Díaz', email: 'carmen@acme.com' }
+    ])
+    expect([...shared]).toEqual(['dl-proyecto@acme.com'])
   })
 })
 
