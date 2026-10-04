@@ -13,6 +13,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
+import { tmpdir } from 'os'
 
 interface FakeWikiRow {
   recording_id: string
@@ -122,7 +123,7 @@ vi.mock('../database', () => ({
 
 describe('exportMeetingWiki — stale page cleanup (ISSUE-8)', () => {
   beforeEach(async () => {
-    tmpRoot = mkdtempSync(join(process.cwd(), 'hidock-wiki-'))
+    tmpRoot = mkdtempSync(join(tmpdir(), 'hidock-wiki-'))
     cacheDirOverride = null
     // The resume cursor is also held in memory, so it must be cleared between
     // tests or one test's rotation leaks into the next.
@@ -234,7 +235,7 @@ describe('exportMeetingWiki — stale page cleanup (ISSUE-8)', () => {
  */
 describe('wiki page ownership — safe for deletion (adversarial review #1)', () => {
   beforeEach(async () => {
-    tmpRoot = mkdtempSync(join(process.cwd(), 'hidock-wiki-own-'))
+    tmpRoot = mkdtempSync(join(tmpdir(), 'hidock-wiki-own-'))
     cacheDirOverride = null
     // The resume cursor is also held in memory, so it must be cleared between
     // tests or one test's rotation leaks into the next.
@@ -968,7 +969,7 @@ describe('backfillMeetingWiki — bounded, yielding, resumable (F15)', () => {
   const N = 60
 
   beforeEach(async () => {
-    tmpRoot = mkdtempSync(join(process.cwd(), 'hidock-wiki-bf-'))
+    tmpRoot = mkdtempSync(join(tmpdir(), 'hidock-wiki-bf-'))
     cacheDirOverride = null
     // The resume cursor is also held in memory, so it must be cleared between
     // tests or one test's rotation leaks into the next.
@@ -1007,6 +1008,56 @@ describe('backfillMeetingWiki — bounded, yielding, resumable (F15)', () => {
       return []
     }
   }
+
+  it('review3: preserves retry for external rewrite after metadata refresh', async () => {
+    const { backfillMeetingWiki, reconcileWikiEligibility } = await import('../meeting-wiki')
+    backfillRows = [{ recording_id: 'private' }]
+    mkdirSync(join(tmpRoot, 'wiki'), { recursive: true })
+    const page = join(tmpRoot, 'wiki', 'shared.md')
+    writeFileSync(page, '---\nrecording_id: foreign\n---\nbody')
+    let yields = 0
+    const helper = await import('../event-loop')
+    const spy = vi.spyOn(helper, 'yieldToEventLoop').mockImplementation(async () => {
+      // The external rewrite bypasses the journal after metadata has been refreshed.
+      if (++yields === 2) {
+        writeFileSync(page, '---\nrecording_id: private\n---\nprivate replacement')
+        blockedUnlink = page
+        excludedResult.ids.add('private')
+        expect(reconcileWikiEligibility('private')?.ok).toBe(false)
+        expect(configStore.has('wiki_cleanup_pending:private')).toBe(true)
+      }
+    })
+    try {
+      const result = await backfillMeetingWiki({ batchSize: 1 })
+      expect(readFileSync(page, 'utf8')).toContain('private replacement')
+      expect(configStore.has('wiki_cleanup_pending:private')).toBe(true)
+      expect(result.failed).toBe(1)
+      expect(result.remainingMissing).toBe(0)
+    } finally { blockedUnlink = null; spy.mockRestore() }
+  })
+
+  it.each([true, false])('review3: defers lookup failure with existing page=%s', async (existing) => {
+    const { backfillMeetingWiki, exportMeetingWiki } = await import('../meeting-wiki')
+    backfillRows = [{ recording_id: 'public' }]
+    const page = existing ? exportMeetingWiki('public')! : null
+    const before = page ? readFileSync(page, 'utf8') : null
+    let yields = 0
+    const helper = await import('../event-loop')
+    const spy = vi.spyOn(helper, 'yieldToEventLoop').mockImplementation(async () => {
+      // A failed point-of-use lookup is unknown eligibility, not permission to purge.
+      if (++yields === (existing ? 4 : 2)) {
+        excludedResult.failClosed = true
+        configStore.set('wiki_cleanup_pending:public', 'public')
+      }
+    })
+    try {
+      const result = await backfillMeetingWiki({ batchSize: 10 })
+      if (page) expect(readFileSync(page, 'utf8')).toBe(before)
+      else expect(listWiki()).toEqual([])
+      expect(configStore.has('wiki_cleanup_pending:public')).toBe(true)
+      expect(result).toMatchObject({ written: 0, unchanged: 0, remaining: 1, remainingMissing: existing ? 0 : 1 })
+    } finally { spy.mockRestore() }
+  })
 
   it.each(['personal', 'soft-delete'])('privacy yield: does not recreate a successfully purged %s page', async () => {
     const { backfillMeetingWiki, exportMeetingWiki, reconcileWikiEligibility } = await import('../meeting-wiki')
@@ -1222,37 +1273,41 @@ describe('backfillMeetingWiki — bounded, yielding, resumable (F15)', () => {
   })
 
   it('reuses the single pass-wide scan when cleaning up excluded recordings too (F15 mixed-corpus guard)', async () => {
-    // The all-eligible guard above cannot catch a re-scan on the EXCLUDED-cleanup
-    // path: each excluded recording used to call removeMeetingWiki, which re-listed
-    // and re-read the whole directory (O(excluded × pages)) — the exact quadratic
-    // boot freeze F15 removed, hidden from the guard because it had no excluded rows.
-    const { backfillMeetingWiki } = await import('../meeting-wiki')
-    vi.spyOn(console, 'log').mockImplementation(() => {})
+    // Pin time so batch-count assertions do not depend on filesystem speed.
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(0)
+    try {
+      // The all-eligible guard above cannot catch a re-scan on the EXCLUDED-cleanup
+      // path: each excluded recording used to call removeMeetingWiki, which re-listed
+      // and re-read the whole directory (O(excluded × pages)) — the exact quadratic
+      // boot freeze F15 removed, hidden from the guard because it had no excluded rows.
+      const { backfillMeetingWiki } = await import('../meeting-wiki')
+      vi.spyOn(console, 'log').mockImplementation(() => {})
 
-    // Cold pass writes a page for all N (all eligible).
-    await backfillMeetingWiki()
-    expect(listWiki()).toHaveLength(N)
+      // Cold pass writes a page for all N (all eligible).
+      await backfillMeetingWiki()
+      expect(listWiki()).toHaveLength(N)
 
-    // Now exclude HALF of them — each still has a stale page on disk the backfill
-    // must remove. Reset the resume cursor so the pass revisits everything.
-    await resetBackfillCursor()
-    const excluded = new Set<string>()
-    for (let i = 0; i < N; i += 2) excluded.add(`rec-${String(i).padStart(3, '0')}`)
-    excludedResult = { ids: excluded, failClosed: false }
+      // Now exclude HALF of them — each still has a stale page on disk the backfill
+      // must remove. Reset the resume cursor so the pass revisits everything.
+      await resetBackfillCursor()
+      const excluded = new Set<string>()
+      for (let i = 0; i < N; i += 2) excluded.add(`rec-${String(i).padStart(3, '0')}`)
+      excludedResult = { ids: excluded, failClosed: false }
 
-    fsCalls.readFile = 0
-    fsCalls.readdir = 0
-    const result = await backfillMeetingWiki()
+      fsCalls.readFile = 0
+      fsCalls.readdir = 0
+      const result = await backfillMeetingWiki()
 
-    // Assert the scan count BEFORE listWiki() (which itself lists the directory):
-    // ONE listing for the entire pass — eligible re-verify AND excluded cleanup.
-    // Cleanup batches refresh metadata after yields, without reparsing unchanged pages.
-    expect(fsCalls.readdir).toBeLessThanOrEqual(3 + Math.ceil(N / 25))
-    expect(fsCalls.readFile).toBeLessThanOrEqual(2 * N)
-    expect(result.failed).toBe(0)
+      // Assert the scan count BEFORE listWiki() (which itself lists the directory):
+      // ONE listing for the entire pass — eligible re-verify AND excluded cleanup.
+      // Cleanup batches refresh metadata after yields, without reparsing unchanged pages.
+      expect(fsCalls.readdir).toBeLessThanOrEqual(3 + Math.ceil(N / 25))
+      expect(fsCalls.readFile).toBeLessThanOrEqual(2 * N)
+      expect(result.failed).toBe(0)
 
-    // The excluded half's stale pages are gone; the eligible half remain.
-    expect(listWiki()).toHaveLength(N - excluded.size)
+      // The excluded half's stale pages are gone; the eligible half remain.
+      expect(listWiki()).toHaveLength(N - excluded.size)
+    } finally { clock.mockRestore() }
   }, 20_000)
 
   it('drains MANY pending cleanup retries within the SAME single boot scan (F15 recovery-path guard)', async () => {
@@ -1374,33 +1429,37 @@ describe('backfillMeetingWiki — bounded, yielding, resumable (F15)', () => {
   })
 
   it('resumes across restarts — each budgeted pass advances the pages still missing', async () => {
-    const { backfillMeetingWiki } = await import('../meeting-wiki')
+    // Pin time so batch-count assertions do not depend on filesystem speed.
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(0)
+    try {
+      const { backfillMeetingWiki } = await import('../meeting-wiki')
 
-    // Every "boot" gets exactly one batch (budget 0 stops at the first boundary).
-    // Missing-first ordering is what makes this converge: a pass never burns its
-    // whole budget re-verifying what it already wrote and stalls at the same spot.
-    const missingPerPass: number[] = []
-    let passes = 0
-    let last = await backfillMeetingWiki({ batchSize: 20, budgetMs: 0 })
-    missingPerPass.push(last.remainingMissing)
-    while (last.remainingMissing > 0 && passes < 10) {
-      passes++
-      last = await backfillMeetingWiki({ batchSize: 20, budgetMs: 0 })
+      // Every "boot" gets exactly one batch (budget 0 stops at the first boundary).
+      // Missing-first ordering is what makes this converge: a pass never burns its
+      // whole budget re-verifying what it already wrote and stalls at the same spot.
+      const missingPerPass: number[] = []
+      let passes = 0
+      let last = await backfillMeetingWiki({ batchSize: 20, budgetMs: 0 })
       missingPerPass.push(last.remainingMissing)
-    }
+      while (last.remainingMissing > 0 && passes < 10) {
+        passes++
+        last = await backfillMeetingWiki({ batchSize: 20, budgetMs: 0 })
+        missingPerPass.push(last.remainingMissing)
+      }
 
-    // Converged, and strictly monotonically: 40 -> 20 -> 0 for N=60 in batches of 20.
-    expect(last.remainingMissing).toBe(0)
-    expect(missingPerPass).toEqual([40, 20, 0])
-    expect(listWiki()).toHaveLength(N)
+      // Converged, and strictly monotonically: 40 -> 20 -> 0 for N=60 in batches of 20.
+      expect(last.remainingMissing).toBe(0)
+      expect(missingPerPass).toEqual([40, 20, 0])
+      expect(listWiki()).toHaveLength(N)
 
-    // Every recording ended up with exactly one page, no duplicates from the
-    // partial passes.
-    const owners = listWiki().map((f) => {
-      const head = readFileSync(join(tmpRoot, 'wiki', f), 'utf-8').slice(0, 500)
-      return head.match(/^recording_id:\s*(\S+)\s*$/m)?.[1]
-    })
-    expect(new Set(owners).size).toBe(N)
+      // Every recording ended up with exactly one page, no duplicates from the
+      // partial passes.
+      const owners = listWiki().map((f) => {
+        const head = readFileSync(join(tmpRoot, 'wiki', f), 'utf-8').slice(0, 500)
+        return head.match(/^recording_id:\s*(\S+)\s*$/m)?.[1]
+      })
+      expect(new Set(owners).size).toBe(N)
+    } finally { clock.mockRestore() }
   })
 
   it('a persistently failing page does not starve the pages behind it', async () => {
@@ -1684,7 +1743,7 @@ describe('backfillMeetingWiki — bounded, yielding, resumable (F15)', () => {
  */
 describe('meeting-wiki — eligibility gating (RE7-1)', () => {
   beforeEach(async () => {
-    tmpRoot = mkdtempSync(join(process.cwd(), 'hidock-wiki-'))
+    tmpRoot = mkdtempSync(join(tmpdir(), 'hidock-wiki-'))
     cacheDirOverride = null
     await resetBackfillCursor()
     currentRow = null
@@ -1800,7 +1859,7 @@ describe('meeting-wiki — eligibility gating (RE7-1)', () => {
  */
 describe('removeMeetingWiki — cleanup result (RE7-P1b)', () => {
   beforeEach(async () => {
-    tmpRoot = mkdtempSync(join(process.cwd(), 'hidock-wiki-'))
+    tmpRoot = mkdtempSync(join(tmpdir(), 'hidock-wiki-'))
     cacheDirOverride = null
     await resetBackfillCursor()
     currentRow = null
@@ -1836,7 +1895,7 @@ describe('removeMeetingWiki — cleanup result (RE7-P1b)', () => {
  */
 describe('meeting-wiki — cleanup-retry ledger (RE8-P1)', () => {
   beforeEach(async () => {
-    tmpRoot = mkdtempSync(join(process.cwd(), 'hidock-wiki-'))
+    tmpRoot = mkdtempSync(join(tmpdir(), 'hidock-wiki-'))
     cacheDirOverride = null
     await resetBackfillCursor()
     currentRow = null

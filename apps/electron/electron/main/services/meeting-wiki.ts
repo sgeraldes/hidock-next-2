@@ -966,7 +966,7 @@ function clearWikiCleanupRetry(recordingId: string): void {
  * recording, and per-id fail-closed semantics survive index reuse via the index
  * `status` (see `removeMeetingWikiUsingIndex`).
  */
-export function retryPendingWikiCleanups(index?: WikiIndex): { cleared: number; stillPending: number } {
+export function retryPendingWikiCleanups(index?: WikiIndex): { cleared: number; stillPending: number; index?: WikiIndex } {
   let cleared = 0
   let stillPending = 0
   let rows: Array<{ value: string | null }>
@@ -976,11 +976,12 @@ export function retryPendingWikiCleanups(index?: WikiIndex): { cleared: number; 
     console.warn('[MeetingWiki] could not read pending wiki cleanups:', e)
     return { cleared: 0, stillPending: 0 }
   }
-  // Reuse the backfill's pass-wide index when supplied; otherwise build one ONCE,
-  // lazily, the first time a still-ineligible id actually needs a removal. Never
-  // scans when every pending id turned eligible again. `buildWikiIndex` never
-  // throws (readdir errors are captured as an index `status`).
-  let sweepIndex = index
+  // Standalone callers build one index lazily for all ineligible retries.
+  // Boot callers supply the bounded index; refresh it only when retries exist.
+  // Pending retries require current ownership, including external rewrites of existing
+  // filenames that bypass the service journal. Drain the full scan synchronously so
+  // no yield can invalidate it before cleanup; the usual zero-retry boot stays bounded.
+  let sweepIndex = index && rows.length > 0 ? buildWikiIndex(index.dir) : index
   for (const r of rows) {
     const recordingId = r.value
     if (!recordingId) continue
@@ -1003,7 +1004,7 @@ export function retryPendingWikiCleanups(index?: WikiIndex): { cleared: number; 
       stillPending++
     }
   }
-  return { cleared, stillPending }
+  return { cleared, stillPending, index: sweepIndex }
 }
 
 /** Load the transcript+recording row a wiki page is rendered from. */
@@ -1288,21 +1289,20 @@ async function backfillMeetingWikiPass(
 ): Promise<WikiBackfillResult> {
   const dir = journal.dir
   const batchSize = Math.max(1, options.batchSize ?? DEFAULT_BATCH_SIZE)
-  // ONE directory scan for the ENTIRE boot — the fix for the quadratic blowup.
-  // Built here, before the cleanup-retry sweep, so BOTH the sweep and the pass
-  // below share this reconciled index. Letting retryPendingWikiCleanups build its
-  // own (per-id) scans was O(pending × pages) of synchronous FS work on the boot
-  // recovery path — the F15 freeze on exactly that path (post-merge review).
-  const index = await buildWikiIndexForBoot(dir, batchSize)
+  // Normal boots share one bounded ownership scan across cleanup and export.
+  // Rare pending privacy retries replace it with a fresh synchronous scan below.
+  let index = await buildWikiIndexForBoot(dir, batchSize)
 
   // RE8-P1 (round-9) — first drain any wiki-cleanup retries enqueued by a failed
   // transition cleanup, so an excluded recording's page is removed on boot even
   // if the mark-personal / soft-delete / value-rating attempt failed earlier.
-  // Reuses the pass-wide index (no scans of its own); any page it removes is also
-  // dropped from `index.owner`, so the pass below sees the post-cleanup state.
+  // The sweep returns its current index, with removed owners dropped, so later
+  // decisions share both freshly verified ownership and the post-cleanup state.
   await refreshWikiMetadataForBoot(index, batchSize, journal)
   reconcileWikiIndex(index, journal)
-  retryPendingWikiCleanups(index)
+  const cleanupRetries = retryPendingWikiCleanups(index)
+  // Carry fresh ownership forward so subsequent exclusions cannot clear failed retries.
+  index = cleanupRetries.index ?? index
   await yieldToEventLoop()
   const budgetMs = options.budgetMs ?? DEFAULT_BUDGET_MS
   const failureLimit = Math.max(1, options.maxFailures ?? DEFAULT_FAILURE_LIMIT)
@@ -1354,6 +1354,7 @@ async function backfillMeetingWikiPass(
   let unchanged = 0
   let failed = 0
   let processed = 0
+  let deferred = 0
   // Reconcile new and journaled pages before the first cleanup after any yield. Eligible
   // exports verify ownership at deletion time and cannot clear a privacy retry.
   let indexNeedsReconcile = false
@@ -1366,7 +1367,13 @@ async function backfillMeetingWikiPass(
     if (stillMissing.has(recording_id)) lastAttemptedMissingId = recording_id
 
     // IPC can make a recording private during any yield; never export a cached allowlist decision.
-    if (!isRecordingEligible(recording_id)) {
+    const eligibility = filterEligibleRecordingIds([recording_id])
+    if (eligibility.failClosed) {
+      // Unknown eligibility suppresses export but cannot authorize purge or retry clearance.
+      // Leave missing work unresolved and count even existing pages for the next pass.
+      deferred++
+      console.warn(`[MeetingWiki] Backfill deferred ${recording_id} - eligibility unavailable (fail closed)`)
+    } else if (!eligibility.eligible.has(recording_id)) {
       // RE7-P1a (round-8) — an excluded transcript (already personal/deleted/
       // low-value, or newly value-classified) may STILL have a stale markdown
       // page from when it was eligible. Don't merely skip — actively remove it,
@@ -1436,7 +1443,7 @@ async function backfillMeetingWikiPass(
     }
   }
 
-  const remaining = ordered.length - processed
+  const remaining = ordered.length - processed + deferred
   const remainingMissing = missing.length - resolvedMissing.size
 
   // Advance the resume point past everything this pass attempted.
