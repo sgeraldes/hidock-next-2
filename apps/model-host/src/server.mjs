@@ -12,7 +12,7 @@ import { READY, HostState } from './state.mjs'
 import { PairingStore } from './auth.mjs'
 import { runDiarization } from './diarize.mjs'
 
-export const VERSION = '0.3.0'
+export const VERSION = '0.3.1'
 /** Two hours of 16 kHz mono WAV is about 230 MB; round up and stop there. */
 export const MAX_AUDIO_BYTES = 512 * 1024 * 1024
 
@@ -206,6 +206,37 @@ export function createHandler(deps) {
         }
         deps.stepAside.set(body.value)
         sendJson(res, 200, { stepAside: body.value })
+        return
+      }
+
+      // Looking after the host from HiDock: the person is not at this machine
+      // and Windows does not let the main PC read its files.
+      if (path === '/diagnostics' || path === '/runtime/repair' || path === '/update') {
+        if (!deps.pairing.accepts(req.headers.authorization)) {
+          sendJson(res, 401, { error: 'This host does not know that client. Pair it first.' })
+          return
+        }
+        if (req.method === 'GET' && path === '/diagnostics' && deps.maintenance) {
+          sendJson(res, 200, { version: VERSION, setup: deps.setup?.report(), ...(await deps.maintenance.diagnostics()) })
+          return
+        }
+        if (req.method === 'POST' && path === '/runtime/repair' && deps.setup?.repair) {
+          // Answer now; the reinstall takes minutes and /health shows "repairing".
+          void deps.setup.repair().catch(() => {})
+          sendJson(res, 202, { setup: deps.setup.report() })
+          return
+        }
+        if (req.method === 'PUT' && path === '/update' && deps.maintenance) {
+          const body = await readBody(req, 200 * 1024 * 1024)
+          deps.maintenance.stageUpdate(body)
+          sendJson(res, 202, { staged: true })
+          // Applying ends this process; let the answer reach HiDock first.
+          const apply = () => deps.maintenance.applyUpdate()
+          if (res.writableFinished === false && typeof res.once === 'function') res.once('finish', () => setTimeout(apply, 200))
+          else setTimeout(apply, 20)
+          return
+        }
+        sendJson(res, 405, { error: 'not here' })
         return
       }
 

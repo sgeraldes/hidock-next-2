@@ -14,6 +14,7 @@ import { PairingStore } from './auth.mjs'
 import { DEFAULTS, detectGpu, loadConfig, loadSecrets, loadTokens, paths, saveSecrets, saveTokens, updateConfigFile } from './config.mjs'
 import { HostSetup } from './host-setup.mjs'
 import { runDiarization } from './diarize.mjs'
+import { collectDiagnostics, repairRuntime, stageUpdate, UPDATE_EXIT_CODE } from './maintenance.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -105,8 +106,27 @@ export async function start(options = {}) {
     jobOptions,
     saveToken: (token) => saveSecrets(token, secretsFile),
     saveValidated: (patch) => updateConfigFile(patch, dirs.config),
+    // HiDock asks for this when the model ran on the CPU of a machine with a GPU.
+    repair: () =>
+      repairRuntime({
+        pythonPath,
+        constraintsPath: join(here, '..', 'constraints.txt'),
+        logFile: join(dirs.logs, 'repair.log'),
+      }),
     log: console.log,
   })
+  const maintenance = {
+    diagnostics: () => collectDiagnostics({ dirs, pythonPath }),
+    stageUpdate: (body) => stageUpdate({ root: dirs.root }, body),
+    // The tray icon sees this exit code, runs the staged installer, and the
+    // installer starts it again.
+    applyUpdate:
+      options.applyUpdate ||
+      (() => {
+        console.log('[host] an update from HiDock is staged; handing over to the tray icon')
+        process.exit(UPDATE_EXIT_CODE)
+      }),
+  }
   // HiDock's one setting; the tray icon reads it from config.json.
   let stepAside = STEP_ASIDE.has(config.stepAside) ? config.stepAside : 'games'
   const stepAsideStore = {
@@ -123,6 +143,7 @@ export async function start(options = {}) {
     pairing,
     setup,
     stepAside: stepAsideStore,
+    maintenance,
     capabilities: () => ({
       // `diarize` only after the model ran on this machine: a green light
       // that never ran the model is how a host refuses every job while

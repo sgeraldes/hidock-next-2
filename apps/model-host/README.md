@@ -47,8 +47,9 @@ Windows service, no system Python, PATH, CUDA toolkit or Ollama touched. It:
    12.6 build of torch (about 2.5 GB) and pyannote at the versions in
    `installer/constraints.txt` (a freeze of the client's working venv; without
    the pins pip swaps in PyPI's CPU torch; regenerate with
-   `uv pip freeze --python <venv python>`, minus the `+cuNNN` tags). Its output
-   also goes to `logs\setup.log`;
+   `uv pip freeze --python <venv python>`, minus the `+cuNNN` tags). With a GPU it
+   then checks that torch sees CUDA and, if not, reinstalls the CUDA build once.
+   Its output also goes to `logs\setup.log`;
 3. starts the tray icon and registers it to start with Windows (`HKCU\...\Run`).
 
 The first time the service listens, Windows Defender Firewall asks whether
@@ -81,9 +82,13 @@ When to step aside is HiDock's one setting for the gamestation
 
 A game is a program installed under `steamapps\common`, `XboxGames`,
 `Epic Games`, `GOG Galaxy\Games`, `GOG Games`, `Riot Games`, `EA Games` or
-`Ubisoft Game Launcher\games` (launchers and helpers that live there and run all
-day are not), or any window that covers its monitor apart from the desktop and
-the lock screen. Work starts again 5 minutes after the last game closes. With no
+`Ubisoft Game Launcher\games` **whose window comes to the front** (launchers and
+helpers that live there and run all day in the background never do), or a
+window without a title bar that covers its monitor, apart from the desktop and
+the lock screen. A maximized window keeps its title bar and is not a game. The
+tooltip names the program it took for a game. 0.3.0 also swept every running
+process at start, and on the gamestation a background helper in a game folder
+kept the service down with no game open; 0.3.1 looks only at windows. Work starts again 5 minutes after the last game closes. With no
 monitor attached (the KVM on the other PC) no window is full screen and nothing
 fires. Another program using CUDA does not stop the service: noticing it means
 polling nvidia-smi.
@@ -118,7 +123,19 @@ still waiting for it. The person never types a token on the gamestation.
 | `POST /jobs/diarize` | paired | audio in the body, the worker's result back; 503 until the model has run once |
 | `PUT /secrets/hf-token` | paired | HiDock's Hugging Face token; answers 202 and validates in the background |
 | `PUT /settings/step-aside` | paired | `any-use`, `games` or `never`, written to `config.json` for the tray icon |
+| `GET /diagnostics` | paired | the end of `setup.log`, `service.log` and `repair.log`, and what torch says about CUDA |
+| `POST /runtime/repair` | paired | reinstalls the pinned torch and torchaudio from the CUDA index (`--force-reinstall --no-deps`), then tests the model again; answers 202, `/health` shows `repairing` |
+| `PUT /update` | paired | a Model Host installer; the service keeps it and exits with code 75, and the tray icon runs it with `/S` outside its job and quits; the installer starts the icon again |
 | `POST /control?format=json` | this machine only | the tray icon: `status`, `pair-code`, `pair-open`, `pair-cancel`, `pair-reset` |
+
+The last three exist because nobody sits at the gamestation and Windows does not
+let the main PC read its files (the account saved there is not the one the host
+runs as). A paired HiDock is therefore trusted to run a new version of the host:
+that is what being in charge of it means, and the reason pairing is limited to
+the first HiDock in the automatic window or one holding the code. The service
+keeps only a Windows executable; HiDock sends only a file named
+`HiDock-Model-Host-<version>-Setup.exe`. In HiDock, the status line offers
+**Repair** when the host has an NVIDIA GPU and still ran the model on its CPU.
 
 There is no page. `/control` answers only from this machine, checked on both
 the socket address and the `Host` header. The address alone is beaten by DNS

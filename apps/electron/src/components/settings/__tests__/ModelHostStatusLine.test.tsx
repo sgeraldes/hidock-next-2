@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, act } from '@testing-library/react'
+import { render, screen, act, fireEvent, waitFor } from '@testing-library/react'
 import { ModelHostStatusLine, MODEL_HOST_STATUS_POLL_MS } from '../ModelHostStatusLine'
 
 const status = vi.fn()
@@ -47,6 +47,32 @@ describe('ModelHostStatusLine', () => {
     status.mockResolvedValue(answer({ health: null }))
     render(<ModelHostStatusLine />)
     expect(await screen.findByText(/is not answering: paused, in use or off/)).toBeInTheDocument()
+  })
+
+  it('offers Repair when the host has a GPU but ran the model on its CPU', async () => {
+    const repair = vi.fn().mockResolvedValue({ success: true, setup: { status: 'repairing' } })
+    ;(window as unknown as { electronAPI: unknown }).electronAPI = { modelHost: { status, repair } }
+    status.mockResolvedValue(
+      answer({
+        health: {
+          version: '0.3.1',
+          state: 'ready',
+          capabilities: ['diarize'],
+          gpu: { name: 'NVIDIA GeForce RTX 4090', vramMiB: 23028, driver: '616.56' },
+          setup: { status: 'ready', device: 'cpu' }
+        }
+      })
+    )
+    render(<ModelHostStatusLine />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Repair' }))
+    await waitFor(() => expect(repair).toHaveBeenCalledTimes(1))
+    expect(status).toHaveBeenCalledTimes(2) // asks again right away, to show "reinstalling"
+  })
+
+  it('does not offer Repair to a host that is fine', async () => {
+    render(<ModelHostStatusLine />)
+    await screen.findByText(/is working/)
+    expect(screen.queryByRole('button', { name: 'Repair' })).toBeNull()
   })
 
   it('asks again while it is on screen, so a game starting there shows up here', async () => {

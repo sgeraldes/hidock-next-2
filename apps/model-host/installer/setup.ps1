@@ -48,16 +48,26 @@ Say "Installed RAM: $ramGiB GiB"
 
 $gpuName = $null
 $driver = $null
-try {
-  $smi = & nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader,nounits 2>$null
-  if ($LASTEXITCODE -eq 0 -and $smi) {
-    $parts = ($smi -split "`n")[0] -split ','
+# No stderr redirection: in Windows PowerShell 5.1 a redirected stderr line is a
+# terminating error under 'Stop', and the catch then read a GPU that answered
+# as "no NVIDIA driver", which installs the CPU build of torch.
+$smiExe = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+if ($smiExe) {
+  $previous = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  $smi = & $smiExe.Source --query-gpu=name,memory.total,driver_version --format=csv,noheader,nounits
+  $smiCode = $LASTEXITCODE
+  $ErrorActionPreference = $previous
+  if ($smiCode -eq 0 -and $smi) {
+    $parts = (@($smi)[0]) -split ','
     $gpuName = $parts[0].Trim()
     $vram = $parts[1].Trim()
     $driver = $parts[2].Trim()
     Say "GPU: $gpuName, $vram MiB, driver $driver"
+  } else {
+    Say "nvidia-smi answered with code $smiCode"
   }
-} catch { }
+}
 
 if (-not $gpuName) {
   Say 'No NVIDIA driver answered.'
@@ -131,6 +141,23 @@ Say "pyannote from $requirements, at the client's versions"
 # The constraints keep pip from swapping the CUDA torch for PyPI's CPU build.
 & $PythonExe -m pip install --no-warn-script-location -r $requirements -c $Constraints
 if ($LASTEXITCODE -ne 0) { throw 'Installing pyannote failed. Nothing else was changed.' }
+
+# With a GPU, torch has to see CUDA. If it does not (a CPU build arrived some
+# other way), reinstall the pinned CUDA build over it, once, and say so.
+function Test-Cuda {
+  $out = & $PythonExe -c "import torch; print('cuda' if torch.cuda.is_available() else 'cpu', torch.__version__)"
+  Say "torch says: $out"
+  return "$out" -like 'cuda*'
+}
+if ($gpuName) {
+  if (-not (Test-Cuda)) {
+    Say "torch does not see the GPU; reinstalling $($torchPins -join ', ') from $torchIndex"
+    & $PythonExe -m pip install --no-warn-script-location --force-reinstall --no-deps --index-url $torchIndex @torchPins
+    if (-not (Test-Cuda)) {
+      Write-Host '  torch still does not see the GPU. The host works on the CPU, slower; HiDock shows it and can ask for a repair.' -ForegroundColor Yellow
+    }
+  }
+}
 
 Step 'Settings for the service'
 # validated stays false: the service runs the model once, by itself, after

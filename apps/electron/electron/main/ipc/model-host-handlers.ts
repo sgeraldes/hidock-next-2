@@ -17,6 +17,9 @@ import {
   resetModelHostHealthCache,
   sendHfTokenToModelHost,
   setModelHostStepAside,
+  getModelHostDiagnostics,
+  repairModelHostRuntime,
+  sendModelHostUpdate,
   type ModelHostSettings,
 } from '../services/model-host-client'
 import { getConfig, saveConfig } from '../services/config'
@@ -166,6 +169,49 @@ export function registerModelHostHandlers(): void {
       return { success: true, sent: true }
     } catch {
       return { success: true, sent: false }
+    }
+  })
+
+  // Looking after the host: HiDock is in charge, and nobody needs to sit at the
+  // gamestation to read its logs, repair its runtime or update it.
+  const pairedSettings = (): ModelHostSettings | null => {
+    const config = getConfig().transcription
+    return config.modelHostUrl && config.modelHostToken
+      ? { url: config.modelHostUrl, token: config.modelHostToken }
+      : null
+  }
+  const notPaired = { success: false, error: 'This computer is not paired with a model host.' }
+
+  ipcMain.handle('model-host:diagnostics', async () => {
+    const settings = pairedSettings()
+    if (!settings) return notPaired
+    try {
+      return { success: true, diagnostics: await getModelHostDiagnostics(settings) }
+    } catch (error) {
+      return { success: false, error: (error as Error).message }
+    }
+  })
+
+  ipcMain.handle('model-host:repair', async () => {
+    const settings = pairedSettings()
+    if (!settings) return notPaired
+    try {
+      return { success: true, setup: await repairModelHostRuntime(settings) }
+    } catch (error) {
+      return { success: false, error: (error as Error).message }
+    }
+  })
+
+  ipcMain.handle('model-host:update', async (_event, raw: unknown) => {
+    const parsed = z.object({ path: z.string().min(1).max(4096) }).safeParse(raw)
+    if (!parsed.success) return { success: false, error: 'Choose the installer to send.' }
+    const settings = pairedSettings()
+    if (!settings) return notPaired
+    try {
+      await sendModelHostUpdate(settings, parsed.data.path)
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: (error as Error).message }
     }
   })
 

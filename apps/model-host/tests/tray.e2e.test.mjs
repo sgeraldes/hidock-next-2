@@ -7,13 +7,14 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { cpSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { cpSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { spawn, execFileSync } from 'child_process'
 
 const packageRoot = join(import.meta.dirname, '..')
 const trayExe = join(packageRoot, 'build', 'HiDockModelHost.exe')
+const fakeUpdateExe = join(packageRoot, 'build', 'fake_update.exe')
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 async function healthy(port) {
@@ -112,11 +113,12 @@ describe.runIf(process.platform === 'win32' && existsSync(trayExe))('the tray ic
 
     const tray = spawn(
       join(app, 'HiDockModelHost.exe'),
-      ['--no-icon', '--no-foreground', '--root', root, '--quiet-seconds', '3', '--exit-after', '25'],
+      // --track-pid stands in for the game coming to the front: a test must not take the screen.
+      ['--no-icon', '--no-foreground', '--track-pid', String(game.pid), '--root', root, '--quiet-seconds', '3', '--exit-after', '25'],
       { stdio: 'ignore' }
     )
     try {
-      // A game was running when the icon started: the service stays down.
+      // A game is running: the service stays down.
       await sleep(3000)
       expect(await healthy(port)).toBe(false)
       expect(processesUnder(app)).toBe(1) // the icon alone
@@ -136,6 +138,41 @@ describe.runIf(process.platform === 'win32' && existsSync(trayExe))('the tray ic
     } finally {
       if (tray.exitCode === null) tray.kill()
       if (game.exitCode === null) game.kill()
+      await sleep(500)
+      rmSync(base, { recursive: true, force: true })
+    }
+  }, 60_000)
+})
+
+describe.runIf(process.platform === 'win32' && existsSync(trayExe) && existsSync(fakeUpdateExe))('an update from HiDock', () => {
+  it('the service stages it and exits, the icon runs it outside its job and quits', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'hidock-tray-update-'))
+    const port = 30000 + Math.floor(Math.random() * 9000)
+    const { app, root } = stage(base, port)
+    const tray = spawn(join(app, 'HiDockModelHost.exe'), ['--no-icon', '--no-foreground', '--root', root, '--exit-after', '40'], {
+      stdio: 'ignore',
+    })
+    try {
+      expect(await waitFor(() => healthy(port), 10_000)).toBe(true)
+      const { token } = await (await fetch(`http://127.0.0.1:${port}/pair`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ code: '' }),
+      })).json()
+      const put = await fetch(`http://127.0.0.1:${port}/update`, {
+        method: 'PUT',
+        headers: { authorization: `Bearer ${token}` },
+        body: readFileSync(fakeUpdateExe),
+      })
+      expect(put.status).toBe(202)
+      // The icon quits after starting the "installer"; the fake writes ran.txt next to itself.
+      await new Promise((r) => tray.once('exit', r))
+      const marker = join(root, 'update', 'ran.txt')
+      expect(await waitFor(async () => existsSync(marker), 5000)).toBe(true)
+      expect(readFileSync(marker, 'utf8')).toMatch(/\/S/)
+      expect(processesUnder(app)).toBe(0)
+    } finally {
+      if (tray.exitCode === null) tray.kill()
       await sleep(500)
       rmSync(base, { recursive: true, force: true })
     }

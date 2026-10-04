@@ -26,6 +26,12 @@ pairs with it, gives it the Hugging Face token and decides when it steps aside.
   disconnect HiDock and start again, and still shows an 8-digit code if you prefer. Pairing gives
   the host this computer's Hugging Face token; the host tests the voice model with it and only then
   takes work. You never type a token on the gamestation.
+- **HiDock looks after the gamestation from here (Model Host 0.3.1).** It reads the host's logs and
+  CUDA check over the paired connection, asks it to reinstall its GPU runtime (a Repair link appears
+  when the host has an NVIDIA card and still ran the model on its CPU), and sends it new versions,
+  which it installs by itself. 0.3.0 counted a launcher helper running in the background of a games
+  folder as a game and stayed paused with no game open; now only a window that comes to the front
+  counts, and the tray icon names the program it took for a game.
 
 ## 2026-10-03 | Attendees from Outlook, and speakers that know who named them
 

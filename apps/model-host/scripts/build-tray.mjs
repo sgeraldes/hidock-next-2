@@ -26,6 +26,10 @@ export function buildTray({ test = true } = {}) {
       stdio: 'inherit',
     })
     execFileSync(testExe, [], { stdio: 'inherit' })
+    // Stands in for the installer in the update end-to-end test.
+    execFileSync(zig, [...common, join(trayDir, 'fake_update.c'), '-o', join(outDir, 'fake_update.exe')], {
+      stdio: 'inherit',
+    })
   }
   const exe = join(outDir, 'HiDockModelHost.exe')
   execFileSync(

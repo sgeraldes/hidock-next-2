@@ -7,6 +7,9 @@ import {
   resetModelHostHealthCache,
   sendHfTokenToModelHost,
   setModelHostStepAside,
+  getModelHostDiagnostics,
+  repairModelHostRuntime,
+  sendModelHostUpdate,
 } from '../../services/model-host-client'
 import { getConfig, saveConfig } from '../../services/config'
 
@@ -20,6 +23,9 @@ vi.mock('../../services/model-host-client', () => ({
   resetModelHostHealthCache: vi.fn(),
   sendHfTokenToModelHost: vi.fn(),
   setModelHostStepAside: vi.fn(),
+  getModelHostDiagnostics: vi.fn(),
+  repairModelHostRuntime: vi.fn(),
+  sendModelHostUpdate: vi.fn(),
 }))
 
 vi.mock('../../services/config', () => ({
@@ -188,6 +194,32 @@ describe('Model Host IPC handlers', () => {
       status: { configured: false, paired: true, usedForSpeakers: false, hasHfToken: false, address: '', health: null },
     })
     expect(checkModelHost).not.toHaveBeenCalled()
+  })
+
+  it('reads diagnostics, repairs and updates the paired host with the saved token', async () => {
+    configWith(PAIRED)
+    vi.mocked(getModelHostDiagnostics).mockResolvedValue({ torch: { cudaAvailable: false } })
+    vi.mocked(repairModelHostRuntime).mockResolvedValue({ status: 'repairing' })
+    vi.mocked(sendModelHostUpdate).mockResolvedValue(undefined)
+    const settings = { url: 'gamestation:8765', token: 'saved-token' }
+
+    await expect(handlerFor(handlers, 'model-host:diagnostics')({})).resolves.toEqual({
+      success: true,
+      diagnostics: { torch: { cudaAvailable: false } },
+    })
+    await expect(handlerFor(handlers, 'model-host:repair')({})).resolves.toEqual({ success: true, setup: { status: 'repairing' } })
+    await expect(
+      handlerFor(handlers, 'model-host:update')({}, { path: 'G:\\x\\HiDock-Model-Host-0.3.1-Setup.exe' })
+    ).resolves.toEqual({ success: true })
+    expect(getModelHostDiagnostics).toHaveBeenCalledWith(settings)
+    expect(repairModelHostRuntime).toHaveBeenCalledWith(settings)
+    expect(sendModelHostUpdate).toHaveBeenCalledWith(settings, 'G:\\x\\HiDock-Model-Host-0.3.1-Setup.exe')
+  })
+
+  it('says why when there is no paired host to look after', async () => {
+    const result = (await handlerFor(handlers, 'model-host:repair')({})) as { success: boolean; error: string }
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/not paired/)
   })
 
   it('clears the health cache when Settings forgets a host', async () => {

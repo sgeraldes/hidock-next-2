@@ -67,6 +67,7 @@ static wchar_t g_dir[MAX_PATH];  /* where the program is installed */
 static wchar_t g_root[MAX_PATH]; /* %LOCALAPPDATA%\HiDock Model Host */
 static int g_port = 8765;
 static presence_t g_p;
+static wchar_t g_game[64]; /* the program last taken for a game, for the tooltip */
 static game_t g_games[MAX_GAMES];
 static HANDLE g_job, g_service, g_service_wait;
 static int g_stopping;
@@ -136,6 +137,11 @@ static HICON make_dot(COLORREF color) {
 }
 
 static const wchar_t *why_text(why_t why) {
+  static wchar_t game_text[128];
+  if (why == WHY_GAME && g_game[0]) {
+    swprintf(game_text, 128, L"HiDock Model Host: paused while a game runs (%ls)", g_game);
+    return game_text;
+  }
   switch (why) {
     case WHY_RUNNING: return L"HiDock Model Host: working";
     case WHY_PAUSED_BY_YOU: return L"HiDock Model Host: paused by you";
@@ -284,7 +290,13 @@ static void CALLBACK on_game_exit(PVOID ctx, BOOLEAN timed_out) {
   PostMessageW(g_wnd, WM_APP_GAME_EXIT, (WPARAM)ctx, 0);
 }
 
-static void track_game(DWORD pid) {
+static void remember_game(const wchar_t *path) {
+  const wchar_t *name = wcsrchr(path, L'\\');
+  wcsncpy(g_game, name ? name + 1 : path, 63);
+  g_game[63] = 0;
+}
+
+static void track_game(DWORD pid, const wchar_t *path) {
   int free_slot = -1;
   for (int i = 0; i < MAX_GAMES; i++) {
     if (g_games[i].process && g_games[i].pid == pid) return;
@@ -302,6 +314,7 @@ static void track_game(DWORD pid) {
     return;
   }
   g_p.games_running++;
+  remember_game(path);
 }
 
 static void game_exited(int slot) {
@@ -345,7 +358,7 @@ static void look_at(HWND hwnd) {
     GetWindowThreadProcessId(hwnd, &pid);
     wchar_t path[1024];
     path_of(pid, path, 1024);
-    if (is_game_path(path)) track_game(pid);
+    if (is_game_path(path)) track_game(pid, path);
     if (!is_shell_window(hwnd, path)) {
       HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL); /* no monitor (KVM away): never full screen */
       MONITORINFO mi;
@@ -358,6 +371,7 @@ static void look_at(HWND hwnd) {
         int has_caption = (style & WS_CAPTION) == WS_CAPTION;
         g_p.fullscreen = is_full_screen(wr.left, wr.top, wr.right, wr.bottom, mi.rcMonitor.left, mi.rcMonitor.top,
                                         mi.rcMonitor.right, mi.rcMonitor.bottom, has_caption);
+        if (g_p.fullscreen) remember_game(path[0] ? path : L"a full-screen window");
       }
     }
   }
@@ -370,19 +384,6 @@ static void CALLBACK on_foreground(HWINEVENTHOOK h, DWORD ev, HWND hwnd, LONG ob
   /* A game often comes to the front as a window and goes full screen a moment later. */
   SetTimer(g_wnd, TIMER_FS_RECHECK, 3000, NULL);
   evaluate();
-}
-
-/* Games already running when the icon starts (after a restart, say). Once. */
-static void find_running_games(void) {
-  HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-  if (snap == INVALID_HANDLE_VALUE) return;
-  PROCESSENTRY32W e;
-  e.dwSize = sizeof e;
-  wchar_t path[1024];
-  for (BOOL more = Process32FirstW(snap, &e); more; more = Process32NextW(snap, &e)) {
-    if (path_of(e.th32ProcessID, path, 1024) && is_game_path(path)) track_game(e.th32ProcessID);
-  }
-  CloseHandle(snap);
 }
 
 /* ---------- talking to the service (loopback, for pairing) ---------- */
@@ -502,6 +503,27 @@ static void show_menu(void) {
   trim();
 }
 
+static void update_path(wchar_t *out) { swprintf(out, MAX_PATH, L"%ls\\update\\HiDock-Model-Host-Setup.exe", g_root); }
+
+static void quit(void);
+
+/* The service exits with 75 after staging an installer HiDock sent. */
+static int run_staged_update(void) {
+  wchar_t exe[MAX_PATH], cmd[MAX_PATH + 16];
+  update_path(exe);
+  if (GetFileAttributesW(exe) == INVALID_FILE_ATTRIBUTES) return 0;
+  swprintf(cmd, MAX_PATH + 16, L"\"%ls\" /S", exe);
+  STARTUPINFOW si;
+  ZeroMemory(&si, sizeof si);
+  si.cb = sizeof si;
+  PROCESS_INFORMATION pi;
+  if (!CreateProcessW(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) return 0;
+  CloseHandle(pi.hThread);
+  CloseHandle(pi.hProcess);
+  quit();
+  return 1;
+}
+
 static void quit(void) {
   stop_service();
   if (g_hook) UnhookWinEvent(g_hook);
@@ -524,6 +546,10 @@ static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       return 0;
     case WM_APP_SERVICE_EXIT:
       if ((UINT_PTR)wp != g_service_gen) return 0; /* an exit from a service already replaced */
+      {
+        DWORD code = 0;
+        if (g_service && GetExitCodeProcess(g_service, &code) && code == 75 && run_staged_update()) return 0;
+      }
       if (g_service_wait) {
         UnregisterWaitEx(g_service_wait, NULL);
         g_service_wait = NULL;
@@ -585,10 +611,12 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show) {
 
   int exit_after = 0;
   int no_foreground = 0;
+  DWORD track_pid = 0;
   int argc = 0;
   wchar_t **argv = CommandLineToArgvW(GetCommandLineW(), &argc);
   for (int i = 1; argv && i < argc; i++) {
     if (wcscmp(argv[i], L"--no-icon") == 0) g_no_icon = 1; /* tests */
+    if (wcscmp(argv[i], L"--track-pid") == 0 && i + 1 < argc) track_pid = (DWORD)_wtoi(argv[++i]); /* tests */
     if (wcscmp(argv[i], L"--no-foreground") == 0) no_foreground = 1; /* tests: the runner's own desktop must not decide */
     if (wcscmp(argv[i], L"--exit-after") == 0 && i + 1 < argc) exit_after = _wtoi(argv[++i]);
     if (wcscmp(argv[i], L"--root") == 0 && i + 1 < argc) wcsncpy(g_root, argv[++i], MAX_PATH - 1);
@@ -621,7 +649,12 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show) {
   g_icons[2] = make_dot(RGB(140, 140, 140));
 
   read_config();
-  find_running_games();
+  {
+    wchar_t old[MAX_PATH];
+    update_path(old);
+    DeleteFileW(old);
+  }
+  if (track_pid) track_game(track_pid, L"test.exe"); /* tests: a game without a window */
   if (!no_foreground) look_at(GetForegroundWindow());
   why_t first = decide(&g_p, now_ms());
   g_last_why = first;
