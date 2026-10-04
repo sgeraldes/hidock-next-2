@@ -70,6 +70,9 @@ class Holder:
         if spec is None or spec.loader is None:
             raise RuntimeError(f"cannot import {source}")
         module = importlib.util.module_from_spec(spec)
+        # Registered before it runs: its dataclasses look their module up in sys.modules to
+        # resolve the postponed annotations, and find None otherwise.
+        sys.modules[name] = module
         spec.loader.exec_module(module)
 
         kwargs = {}

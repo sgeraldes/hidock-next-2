@@ -11,7 +11,19 @@ import { fileURLToPath } from 'url'
 const worker = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'decide_worker.py')
 const python = process.env.HIDOCK_TEST_PYTHON || 'python'
 
+// Like the real file: future annotations and dataclasses, which only resolve when the module is
+// registered in sys.modules while it runs.
 const STUB = `
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class EncodedQuestion:
+    question_id: str
+
+
 LOADS = []
 
 def load_release_model(path, device="cuda", **kwargs):
