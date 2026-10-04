@@ -169,9 +169,16 @@ if (-not $gpuName) {
 } elseif (-not (Test-Path -LiteralPath $decideRequirements)) {
   Say "The installer is missing $decideRequirements; the decision models are not installed."
 } else {
-  & $PythonExe -m pip install --no-warn-script-location -r $decideRequirements -c $Constraints
+  # Clef's Qwen processor needs torchvision. It comes from the same CUDA index as torch, at the
+  # build made for it; --no-deps leaves torch alone.
+  $visionPin = @(Get-Content -LiteralPath $Constraints | Where-Object { $_ -match '^torchvision==' })
+  if ($visionPin.Count -ne 1) { throw 'constraints.txt does not pin torchvision.' }
+  & $PythonExe -m pip install --no-warn-script-location --no-deps --index-url $torchIndex @visionPin
   if ($LASTEXITCODE -eq 0) {
-    $versions = & $PythonExe -c "import transformers, bitsandbytes; print('transformers', transformers.__version__, 'bitsandbytes', bitsandbytes.__version__)"
+    & $PythonExe -m pip install --no-warn-script-location -r $decideRequirements -c $Constraints
+  }
+  if ($LASTEXITCODE -eq 0) {
+    $versions = & $PythonExe -c "import torchvision, transformers, bitsandbytes; print('torchvision', torchvision.__version__, 'transformers', transformers.__version__, 'bitsandbytes', bitsandbytes.__version__)"
     $decideRuntime = ($LASTEXITCODE -eq 0)
     Say "$versions"
   }

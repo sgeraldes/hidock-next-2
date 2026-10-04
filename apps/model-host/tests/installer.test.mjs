@@ -74,7 +74,7 @@ describe('the installer payload', () => {
     expect(requirements).toMatch(/^transformers==5\.10\.2$/m)
     expect(requirements).toMatch(/^bitsandbytes==/m)
     const constraints = readFileSync(join(out, 'constraints.txt'), 'utf8')
-    for (const name of ['transformers', 'accelerate', 'bitsandbytes', 'tokenizers']) {
+    for (const name of ['transformers', 'accelerate', 'bitsandbytes', 'tokenizers', 'torchvision']) {
       expect(constraints).toMatch(new RegExp(`^${name}==\\d`, 'm'))
     }
   })
