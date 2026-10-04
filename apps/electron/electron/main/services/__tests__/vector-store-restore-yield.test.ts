@@ -3,6 +3,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import initSqlJs from 'sql.js'
 const deps = vi.hoisted(() => ({
   yield: vi.fn(async () => {}),
+  generateEmbeddings: vi.fn(async (chunks: string[]) =>
+    chunks.map(() => new Array(768).fill(0))
+  ),
   progress: [] as number[],
   cache: null as null | {
     rows: Array<{
@@ -23,8 +26,12 @@ vi.mock('../database', () => ({
 vi.mock('../embeddings', () => ({
   getEmbeddingsService: () => ({
     activeProviderId: async () => 'ollama',
+    generateEmbeddings: deps.generateEmbeddings,
     generateEmbedding: async () => [1, 0]
   })
+}))
+vi.mock('../rag-settings', () => ({
+  ragSettings: () => ({ chunkSize: 500, chunkOverlap: 50 })
 }))
 vi.mock('../recording-eligibility', () => ({
   filterEligibleRecordingIds: (ids: string[]) => ({
@@ -47,7 +54,9 @@ beforeEach(async () => {
   const SQL = await initSqlJs()
   db = new SQL.Database()
   new VectorStore().ensureSchema()
-  deps.yield.mockClear()
+  deps.yield.mockReset()
+  deps.yield.mockImplementation(async () => {})
+  deps.generateEmbeddings.mockClear()
   deps.progress = []
   deps.cache = null
 })
@@ -69,6 +78,83 @@ function seed(n: number, legacy = false): void {
     )
 }
 describe('semantic restore bounded scans', () => {
+  it('waits for the in-flight repair before concurrent transcript backfill', async () => {
+    seed(257, true)
+    db.run('CREATE TABLE transcripts(recording_id TEXT, full_text TEXT)')
+    db.run(
+      'CREATE TABLE recordings(id TEXT, personal INTEGER, deleted_at TEXT, date_recorded TEXT, filename TEXT)'
+    )
+    db.run(
+      "UPDATE vector_embeddings SET recording_id = 'recording' WHERE id = '00200'"
+    )
+    db.run("INSERT INTO transcripts VALUES('recording', 'legacy transcript')")
+    db.run(
+      "INSERT INTO recordings VALUES('recording', 0, NULL, '2026-10-04', 'file')"
+    )
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    deps.yield.mockImplementationOnce(() => gate)
+    const store = new VectorStore()
+    const restoring = store.initialize()
+    const backfilling = store.backfillMissingTranscripts()
+    // Let maintenance reach the provider on the broken implementation while
+    // keeping the legacy row beyond the first 128 repairs unlabelled.
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(deps.generateEmbeddings).not.toHaveBeenCalled()
+    } finally {
+      release()
+      await Promise.all([restoring, backfilling])
+    }
+    expect(deps.generateEmbeddings).not.toHaveBeenCalled()
+    expect(
+      db.exec(
+        "SELECT COUNT(*) FROM vector_embeddings WHERE recording_id = 'recording'"
+      )[0].values
+    ).toEqual([[1]])
+    expect(await backfilling).toEqual({ indexed: 0, skipped: 0 })
+  })
+  it('skips NULL ids without repeating the first statistics page', async () => {
+    seed(1)
+    for (let i = 0; i < 1024; i++) {
+      db.run(
+        'INSERT INTO vector_embeddings(id, content, embedding, embed_provider, embed_dims) VALUES(NULL, ?, ?, ?, ?)',
+        ['invalid key', new Uint8Array(new Float32Array(2).buffer), 'ollama', 2]
+      )
+    }
+    let yields = 0
+    // Abort deterministically instead of leaving a regressed restore spinning.
+    deps.yield.mockImplementation(async () => {
+      if (++yields > 10) throw new Error('restore repeated a statistics page')
+    })
+    const store = new VectorStore()
+    await store.initialize()
+    expect(store.getAllDocuments().map((document) => document.id)).toEqual([
+      '00000'
+    ])
+  })
+  it('preserves fresh labels written after the repair page was read', async () => {
+    seed(257, true)
+    deps.yield.mockImplementationOnce(async () => {
+      db.run(
+        'UPDATE vector_embeddings SET embedding = ?, embed_dims = ?, embed_provider = ? WHERE id = ?',
+        [
+          new Uint8Array(new Float32Array(3072).buffer),
+          3072,
+          'gemini-api',
+          '00200'
+        ]
+      )
+    })
+    await new VectorStore().initialize()
+    expect(
+      db.exec(
+        "SELECT embed_dims, embed_provider, length(embedding) / 4 FROM vector_embeddings WHERE id = '00200'"
+      )[0].values
+    ).toEqual([[3072, 'gemini-api', 3072]])
+  })
   it('batches cache lookup construction and metadata, preserving SQL-loaded vectors and search', async () => {
     seed(2050)
     const sqlStore = new VectorStore()

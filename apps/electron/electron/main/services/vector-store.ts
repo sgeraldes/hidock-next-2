@@ -252,6 +252,7 @@ class VectorStore {
   private initialized = false
   private schemaReady = false
   private initialization: Promise<void> | null = null
+  private labelRepair: Promise<void> | null = null
 
   async initialize(onProgress?: (loaded: number, total: number) => void): Promise<void> {
     if (this.initialized) return
@@ -278,7 +279,14 @@ class VectorStore {
     if (this.initialized) return
 
     this.ensureSchema(false)
-    await this.backfillProviderLabelsYielding()
+    this.labelRepair = this.backfillProviderLabelsYielding()
+    try {
+      await this.labelRepair
+      // Provider-scoped absence queries are safe only after legacy labels exist.
+      this.schemaReady = true
+    } finally {
+      this.labelRepair = null
+    }
 
     const activeProvider = await getEmbeddingsService().activeProviderId()
     if (!activeProvider) {
@@ -348,7 +356,9 @@ class VectorStore {
     db.run(`CREATE INDEX IF NOT EXISTS idx_vector_embeddings_meeting ON vector_embeddings(meeting_id)`)
     db.run(`CREATE INDEX IF NOT EXISTS idx_vector_embeddings_recording ON vector_embeddings(recording_id)`)
     db.run(`CREATE INDEX IF NOT EXISTS idx_vector_embeddings_provider_id ON vector_embeddings(embed_provider, id)`)
-    this.schemaReady = true
+    // Synchronous callers still complete repair themselves if restore is paused.
+    // Schema creation alone must not advertise repaired provider partitions.
+    this.schemaReady = backfillLabels
   }
 
   /** Chunk buffers backing the cache-loaded Float32Array views (kept alive). */
@@ -655,7 +665,9 @@ class VectorStore {
         }
         const label = provider ?? (dims === null ? null : providers[dims] ?? null)
         if (dims !== storedDims || label !== provider) {
-          db.run('UPDATE vector_embeddings SET embed_dims = ?, embed_provider = ? WHERE id = ?', [dims, label, id])
+          // A writer may replace labels while this materialized page yields.
+          // Only repair the values we read, preserving the writer's fresh labels.
+          db.run('UPDATE vector_embeddings SET embed_dims = ?, embed_provider = ? WHERE id = ? AND embed_dims IS ? AND embed_provider IS ?', [dims, label, id, storedDims, provider])
           // Legacy repairs include synchronous commits, unlike metadata reads.
           // Give IPC a turn after at most 128 writes within the scanned page.
           if (++repairs % 128 === 0) await yieldToEventLoop()
@@ -743,11 +755,17 @@ class VectorStore {
     for (;;) {
       const rows = db.exec(
         `SELECT id, embed_dims FROM vector_embeddings
-          WHERE embed_provider = ? ${statsAfterId === null ? '' : 'AND id > ?'}
+          WHERE embed_provider = ? AND id IS NOT NULL ${statsAfterId === null ? '' : 'AND id > ?'}
           ORDER BY id LIMIT ?`,
         statsAfterId === null ? [activeProvider, RESTORE_SCAN_BATCH] : [activeProvider, statsAfterId, RESTORE_SCAN_BATCH]
       )[0]?.values ?? []
       if (rows.length === 0) break
+      // Never reuse the first-page sentinel or a stalled cursor, even if a
+      // malformed database adapter returns rows outside the keyset predicate.
+      const nextStatsId = rows[rows.length - 1][0]
+      if (typeof nextStatsId !== 'string' || (statsAfterId !== null && nextStatsId === statsAfterId)) {
+        throw new Error('[VectorStore] Statistics paging cursor did not advance')
+      }
       total += rows.length
       for (const [, value] of rows) {
         if (value === null) continue
@@ -755,7 +773,7 @@ class VectorStore {
         minDims = minDims === null ? dims : Math.min(minDims, dims)
         maxDims = maxDims === null ? dims : Math.max(maxDims, dims)
       }
-      statsAfterId = rows[rows.length - 1][0] as string
+      statsAfterId = nextStatsId
       await yieldToEventLoop()
       if (rows.length < RESTORE_SCAN_BATCH) break
     }
@@ -1194,6 +1212,9 @@ class VectorStore {
    * knowledge base, not just newly transcribed recordings.
    */
   async backfillMissingTranscripts(): Promise<{ indexed: number; skipped: number }> {
+    // Waiting preserves bounded restore work and avoids treating legacy rows as
+    // missing while the yielding repair has only labelled its first page.
+    if (this.labelRepair) await this.labelRepair
     this.ensureSchema()
     const db = getDatabase()
     // PROVIDER PARTITION — "missing" means missing FOR THE ACTIVE PROVIDER.
