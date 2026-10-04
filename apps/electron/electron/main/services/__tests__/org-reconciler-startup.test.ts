@@ -28,6 +28,7 @@ import {
   SLOW_RECONCILE_STEP_MS,
   reconcileOrganization,
   reconcileOrganizationYielding,
+  renameAddressNamedContacts,
   upsertContactsFromMeetings
 } from '../org-reconciler'
 
@@ -177,6 +178,49 @@ describe('upsertContactsFromMeetings', () => {
     expect(contacts()).toHaveLength(2)
   })
 
+  // 3-oct-2026: 297 contacts on the live database were named after their own address,
+  // because the calendar listed the address as the display name.
+  it('never stores an address as the name: it keeps the placeholder and upgrades it to a real name later', () => {
+    meeting('m1', { attendees: [{ name: 'gwen@x.com', email: 'gwen@x.com' }], start: '2026-01-02T10:00:00Z' })
+
+    upsertContactsFromMeetings()
+    expect(contacts().map((c) => c.name)).toEqual(['gwen'])
+
+    meeting('m2', { attendees: [{ name: 'Gwen Stacy', email: 'gwen@x.com' }], start: '2026-01-03T10:00:00Z' })
+    upsertContactsFromMeetings()
+    expect(contacts().map((c) => c.name)).toEqual(['Gwen Stacy'])
+  })
+
+  it('upgrades an existing contact named after its address, and never takes an address as the new name', () => {
+    contact('c-addr', 'gwen@x.com', 'gwen@x.com')
+    contact('c-addr2', 'peter@x.com', 'peter@x.com')
+    meeting('m1', {
+      attendees: [
+        { name: 'Gwen Stacy', email: 'gwen@x.com' },
+        { name: 'PETER@X.COM', email: 'peter@x.com' }
+      ]
+    })
+
+    upsertContactsFromMeetings()
+
+    expect(Object.fromEntries(contacts().map((c) => [c.id, c.name]))).toEqual({
+      'c-addr': 'Gwen Stacy',
+      'c-addr2': 'peter@x.com'
+    })
+  })
+
+  it('never renames a contact the owner made', () => {
+    run(
+      `INSERT INTO contacts (id, name, email, type, first_seen_at, last_seen_at, meeting_count, source)
+       VALUES ('c-user', 'gwen', 'gwen@x.com', 'unknown', '2026-01-01', '2026-01-01', 0, 'user')`
+    )
+    meeting('m1', { attendees: [{ name: 'Gwen Stacy', email: 'gwen@x.com' }] })
+
+    upsertContactsFromMeetings()
+
+    expect(contacts().map((c) => c.name)).toEqual(['gwen'])
+  })
+
   it('skips a meeting with malformed attendees and still handles the others', () => {
     meeting('m-bad', { attendees: '{not json', organizerEmail: 'boss@x.com' })
     meeting('m-ok', { attendees: [{ name: 'Gwen Stacy', email: 'gwen@x.com' }] })
@@ -184,6 +228,83 @@ describe('upsertContactsFromMeetings', () => {
     const result = upsertContactsFromMeetings()
 
     expect(result).toEqual({ contacts: 2, links: 2 })
+  })
+})
+
+describe('renameAddressNamedContacts', () => {
+  const nameOf = (id: string) => contacts().find((c) => c.id === id)?.name
+
+  it('renames a contact named after its address to the display name the calendar uses most for it', () => {
+    contact('c-mv', 'mvargs@amazon.com', 'mvargs@amazon.com')
+    meeting('m1', { attendees: [{ name: 'Vargas, Marino', email: 'MVARGS@amazon.com' }] })
+    meeting('m2', { attendees: [{ name: 'Vargas, Marino', email: 'mvargs@amazon.com' }] })
+    meeting('m3', { organizerName: 'Marino Vargas', organizerEmail: 'mvargs@amazon.com' })
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+
+    expect(renameAddressNamedContacts()).toBe(1)
+
+    expect(nameOf('c-mv')).toBe('Vargas, Marino')
+    expect(log.mock.calls.some((call) => String(call[0]).includes('c-mv'))).toBe(true)
+  })
+
+  it('does not take the start of the address or another address as the name', () => {
+    contact('c-cs', 'csiccha@antamina.com', 'csiccha@antamina.com')
+    meeting('m1', { attendees: [{ name: 'csiccha', email: 'csiccha@antamina.com' }] })
+    meeting('m2', { attendees: [{ name: 'csiccha', email: 'csiccha@antamina.com' }] })
+    meeting('m3', { attendees: [{ name: 'other@antamina.com', email: 'csiccha@antamina.com' }] })
+    meeting('m4', { attendees: [{ name: 'Siccha Maco, Carlos', email: 'csiccha@antamina.com' }] })
+
+    renameAddressNamedContacts()
+
+    expect(nameOf('c-cs')).toBe('Siccha Maco, Carlos')
+  })
+
+  it('reads the address out of a name like "Name <address>" when the email column is empty', () => {
+    contact('c-ml', 'Marisel Lopez <mmauleon@seguros.com>', null)
+    meeting('m1', { attendees: [{ name: 'Marisel Mauleon Lopez', email: 'mmauleon@seguros.com' }] })
+
+    renameAddressNamedContacts()
+
+    expect(nameOf('c-ml')).toBe('Marisel Mauleon Lopez')
+  })
+
+  it('leaves real names, owner-made contacts and addresses with no calendar name alone', () => {
+    contact('c-real', 'Peter Parker', 'peter@x.com')
+    contact('c-none', 'nobody@x.com', 'nobody@x.com')
+    run(
+      `INSERT INTO contacts (id, name, email, type, first_seen_at, last_seen_at, meeting_count, source)
+       VALUES ('c-user', 'gwen@x.com', 'gwen@x.com', 'unknown', '2026-01-01', '2026-01-01', 0, 'user')`
+    )
+    meeting('m1', {
+      attendees: [
+        { name: 'Someone Else', email: 'peter@x.com' },
+        { name: 'Gwen Stacy', email: 'gwen@x.com' }
+      ]
+    })
+
+    expect(renameAddressNamedContacts()).toBe(0)
+
+    expect(nameOf('c-real')).toBe('Peter Parker')
+    expect(nameOf('c-none')).toBe('nobody@x.com')
+    expect(nameOf('c-user')).toBe('gwen@x.com')
+  })
+
+  it('does nothing on a second run', () => {
+    contact('c-mv', 'mvargs@amazon.com', 'mvargs@amazon.com')
+    meeting('m1', { attendees: [{ name: 'Marino Vargas', email: 'mvargs@amazon.com' }] })
+    vi.spyOn(console, 'log').mockImplementation(() => undefined)
+
+    expect(renameAddressNamedContacts()).toBe(1)
+    expect(renameAddressNamedContacts()).toBe(0)
+    expect(nameOf('c-mv')).toBe('Marino Vargas')
+  })
+
+  it('runs after the contacts upsert and before the merge and the bucket split', () => {
+    const names = RECONCILE_STEPS.map((s) => s.name)
+    const at = names.indexOf('contacts-rename-from-calendar')
+    expect(at).toBeGreaterThan(names.indexOf('contacts-upsert'))
+    expect(at).toBeLessThan(names.indexOf('contact-merge'))
+    expect(at).toBeLessThan(names.indexOf('ambiguous-bucket-split'))
   })
 })
 

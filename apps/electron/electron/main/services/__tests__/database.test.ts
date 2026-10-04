@@ -1201,6 +1201,42 @@ describe('Database Service', () => {
 
       expect(getMeetingById(meeting.id)?.attendees).toBe('[]')
     })
+
+    // 3-oct-2026: this path stored the address as the name when the calendar gave none,
+    // and 297 contacts on the live database were named after their own address.
+    it('never stores an address as a new contact name', () => {
+      upsertMeetingsBatch([
+        {
+          ...meeting,
+          id: 'meeting-addr',
+          organizer_email: 'boss.addr@example.com',
+          attendees: JSON.stringify([
+            { email: 'noname.addr@example.com' },
+            { name: 'echo.addr@example.com', email: 'echo.addr@example.com' }
+          ])
+        }
+      ])
+
+      const names = queryAll<{ email: string; name: string }>(
+        "SELECT email, name FROM contacts WHERE email LIKE '%.addr@example.com' ORDER BY email"
+      )
+      expect(names).toEqual([
+        { email: 'boss.addr@example.com', name: 'boss.addr' },
+        { email: 'echo.addr@example.com', name: 'echo.addr' },
+        { email: 'noname.addr@example.com', name: 'noname.addr' }
+      ])
+    })
+
+    it('does not overwrite a contact name with an address the calendar lists as the name', () => {
+      upsertMeetingsBatch([
+        { ...meeting, id: 'meeting-keep-1', attendees: JSON.stringify([{ name: 'Keep Real', email: 'keep@example.com' }]) }
+      ])
+      upsertMeetingsBatch([
+        { ...meeting, id: 'meeting-keep-2', attendees: JSON.stringify([{ name: 'keep@example.com', email: 'keep@example.com' }]) }
+      ])
+
+      expect(queryOne<{ name: string }>("SELECT name FROM contacts WHERE email = 'keep@example.com'")?.name).toBe('Keep Real')
+    })
   })
 
   // =========================================================================

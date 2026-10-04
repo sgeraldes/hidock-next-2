@@ -11,7 +11,13 @@ import { getDatabasePath } from './file-storage'
 // DB file without pulling the file-storage module graph into their tests.
 export { getDatabasePath }
 import { DatabaseEngine, getTableColumns, type BootProgress, type ExternalBackup, type SqlJsDatabase } from '@hidock/database'
-import { normalizeName, isGenericSpeakerLabel, detectAmbiguousName } from './entity-normalize'
+import {
+  normalizeName,
+  isGenericSpeakerLabel,
+  detectAmbiguousName,
+  calendarDisplayName,
+  addressLocalPart
+} from './entity-normalize'
 import { getEventBus } from './event-bus'
 import { isCancelledMeetingSubject, scoreMeetingCandidates } from './recording-match-scoring'
 import { MIN_TIME_LINK_COVERAGE, meetingCoverage } from './meeting-coverage'
@@ -4748,6 +4754,13 @@ function extractContactsFromMeetingDataInternal(meeting: Omit<Meeting, 'created_
   // Single batch query for all contacts
   const existingContacts = getContactsByEmails(emailsToLookup)
 
+  // A calendar often lists the address itself as the display name. That is never stored
+  // as a name: a new contact gets the start of the address as a placeholder (as in
+  // org-reconciler's upsertContactsFromMeetings), and an existing name is kept (3-oct-2026,
+  // 297 contacts were named after their own address).
+  const nameForNewContact = (name: string | null | undefined, email: string | null | undefined): string =>
+    calendarDisplayName(name, email) ?? (addressLocalPart(email) || 'Unknown')
+
   // Handle organizer
   if (meeting.organizer_email || meeting.organizer_name) {
     const existing = meeting.organizer_email ? existingContacts.get(meeting.organizer_email) : undefined
@@ -4755,12 +4768,12 @@ function extractContactsFromMeetingDataInternal(meeting: Omit<Meeting, 'created_
 
     if (existing) {
       runNoSave(`UPDATE contacts SET name = COALESCE(?, name), last_seen_at = MAX(last_seen_at, ?) WHERE id = ?`,
-        [meeting.organizer_name, meeting.start_time, existing.id])
+        [calendarDisplayName(meeting.organizer_name, meeting.organizer_email), meeting.start_time, existing.id])
       contactId = existing.id
     } else {
       contactId = crypto.randomUUID()
       runNoSave(`INSERT INTO contacts (id, name, email, first_seen_at, last_seen_at, meeting_count) VALUES (?, ?, ?, ?, ?, 1)`,
-        [contactId, meeting.organizer_name || 'Unknown', meeting.organizer_email || null, meeting.start_time, meeting.start_time])
+        [contactId, nameForNewContact(meeting.organizer_name, meeting.organizer_email), meeting.organizer_email || null, meeting.start_time, meeting.start_time])
     }
     // v44 provenance: calendar-authored (structural) — from ICS/M365 organizer field.
     runNoSave("INSERT OR IGNORE INTO meeting_contacts (meeting_id, contact_id, role, source) VALUES (?, ?, ?, 'calendar')",
@@ -4776,12 +4789,12 @@ function extractContactsFromMeetingDataInternal(meeting: Omit<Meeting, 'created_
 
     if (existing) {
       runNoSave(`UPDATE contacts SET name = COALESCE(?, name), last_seen_at = MAX(last_seen_at, ?) WHERE id = ?`,
-        [attendee.name, meeting.start_time, existing.id])
+        [calendarDisplayName(attendee.name, attendee.email), meeting.start_time, existing.id])
       contactId = existing.id
     } else {
       contactId = crypto.randomUUID()
       runNoSave(`INSERT INTO contacts (id, name, email, first_seen_at, last_seen_at, meeting_count) VALUES (?, ?, ?, ?, ?, 1)`,
-        [contactId, attendee.name || attendee.email || 'Unknown', attendee.email || null, meeting.start_time, meeting.start_time])
+        [contactId, nameForNewContact(attendee.name, attendee.email), attendee.email || null, meeting.start_time, meeting.start_time])
     }
     // v44 provenance: calendar-authored (structural) — from ICS/M365 attendee list.
     runNoSave("INSERT OR IGNORE INTO meeting_contacts (meeting_id, contact_id, role, source) VALUES (?, ?, ?, 'calendar')",

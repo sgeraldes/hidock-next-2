@@ -18,7 +18,8 @@ import {
   isSingleToken,
   hasSurname,
   firstNameNicknameMatch,
-  detectAmbiguousName
+  detectAmbiguousName,
+  isNotAPersonName
 } from '../entity-normalize'
 
 describe('normalizeName', () => {
@@ -258,5 +259,85 @@ describe('detectAmbiguousName', () => {
     const r = detectAmbiguousName('Sergio', withBucket, 'c-bucket')
     expect(r.matches.some((m) => m.id === 'c-bucket')).toBe(false)
     expect(r.ambiguous).toBe(true)
+  })
+})
+
+// 3-oct-2026, live database: contacts named "juanchobq2017@gmail.com" and
+// "edgar.anzola@segurosbolivar.com" were shared-first-name buckets, because the
+// address's leading letters matched Juan and Edgar.
+describe('isNotAPersonName', () => {
+  it('rejects email addresses and anything carrying an @', () => {
+    expect(isNotAPersonName('juanchobq2017@gmail.com')).toBe(true)
+    expect(isNotAPersonName('edgar.anzola@segurosbolivar.com')).toBe(true)
+    expect(isNotAPersonName('Marisel Lopez <mmauleon@segurosmultiples.com>')).toBe(true)
+    expect(isNotAPersonName('@juan')).toBe(true)
+  })
+
+  it('rejects URLs and bare domains', () => {
+    expect(isNotAPersonName('https://juan.com')).toBe(true)
+    expect(isNotAPersonName('www.juanperez.com')).toBe(true)
+    expect(isNotAPersonName('rappi.com')).toBe(true)
+  })
+
+  it('rejects phone numbers, digits and strings with no letters', () => {
+    expect(isNotAPersonName('+57 300 123 4567')).toBe(true)
+    expect(isNotAPersonName('(511) 555-0100')).toBe(true)
+    expect(isNotAPersonName('12345')).toBe(true)
+    expect(isNotAPersonName('---')).toBe(true)
+    expect(isNotAPersonName('   ')).toBe(true)
+  })
+
+  it('rejects a single token shaped like the start of an address', () => {
+    expect(isNotAPersonName('edgar.anzola')).toBe(true)
+    expect(isNotAPersonName('juanchobq2017')).toBe(true)
+    expect(isNotAPersonName('julik_100')).toBe(true)
+  })
+
+  it('keeps real names, accented, hyphenated or with an apostrophe', () => {
+    expect(isNotAPersonName('Juan')).toBe(false)
+    expect(isNotAPersonName('José')).toBe(false)
+    expect(isNotAPersonName('Se-young')).toBe(false)
+    expect(isNotAPersonName("O'Neil")).toBe(false)
+    expect(isNotAPersonName('Juan Pérez')).toBe(false)
+    expect(isNotAPersonName('Vargas, Marino')).toBe(false)
+  })
+})
+
+describe('email and other junk names are never buckets', () => {
+  const corpus = [
+    { id: 'c-jp', name: 'Juan Perez' },
+    { id: 'c-jg', name: 'Juan Gomez' },
+    { id: 'c-ea', name: 'Edgar Anzola' },
+    { id: 'c-er', name: 'Edgar Ruiz' }
+  ]
+
+  it('an email-named contact is not a bucket', () => {
+    expect(detectAmbiguousName('juanchobq2017@gmail.com', corpus)).toEqual({ ambiguous: false, token: '', matches: [] })
+    expect(detectAmbiguousName('edgar.anzola@segurosbolivar.com', corpus).ambiguous).toBe(false)
+  })
+
+  it('an address local part, a phone number or a URL is not a bucket', () => {
+    expect(detectAmbiguousName('edgar.anzola', corpus).ambiguous).toBe(false)
+    expect(detectAmbiguousName('juanchobq2017', corpus).ambiguous).toBe(false)
+    expect(detectAmbiguousName('3001234567', corpus).ambiguous).toBe(false)
+    expect(detectAmbiguousName('www.juan.com', corpus).ambiguous).toBe(false)
+  })
+
+  it('an email never matches a first name, on either side', () => {
+    expect(firstNameNicknameMatch('juanchobq2017@gmail.com', 'Juan Perez')).toBe(false)
+    expect(firstNameNicknameMatch('Juan', 'juan.perez@x.com Perez')).toBe(false)
+  })
+
+  it('a junk-named contact is not counted as a candidate for a real first name', () => {
+    const withJunk = [
+      { id: 'c-ml', name: 'Marisel Lopez <mmauleon@segurosmultiples.com>' },
+      { id: 'c-mg', name: 'Marisel Gomez' }
+    ]
+    expect(detectAmbiguousName('Marisel', withJunk).ambiguous).toBe(false)
+  })
+
+  it('real first names still bucket', () => {
+    expect(detectAmbiguousName('Juan', corpus).ambiguous).toBe(true)
+    expect(detectAmbiguousName('Edgar', corpus).ambiguous).toBe(true)
   })
 })

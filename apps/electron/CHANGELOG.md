@@ -57,6 +57,13 @@ Outlook, and every speaker the app names now keeps a note of how it was named.
 - **Words are no longer taken for names.** "I'm here", "Service here" or "soy CTO" no longer create a
   person called "I'm", "Service" or "CTO", nor a warning that two people share one speaker.
   Pronouns, helper verbs, role words and short words in English and Spanish are skipped.
+- **People named after an email address get their real name.** A calendar often lists the address
+  as the person's name, and the app stored it: 299 people in the library were called
+  "juanchobq2017@gmail.com" and the like, and some showed up in People as a shared first name ("Juan")
+  because the address starts with one. An address, a web address or a phone number is no longer
+  taken for a first name. A person named after an address takes the name the calendar uses most for
+  that address, when it has one (53 of the 299), and new people from the calendar never get an
+  address as their name. People you added yourself are never renamed.
 - **The identity rules are written down.** The file docs/identity-rules.md lists each kind of
   identity question, the rule that answers it, the signals in order and when it stays a question
   for you.

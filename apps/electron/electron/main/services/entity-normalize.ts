@@ -55,6 +55,47 @@ export function looksLikeEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((value || '').trim())
 }
 
+/** A URL, or a bare domain like "rappi.com" or "www.juan.com". */
+const URL_SHAPED = /^(?:[a-z][a-z0-9+.-]*:\/\/|www\.)|^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}(?:\/\S*)?$/i
+/** A one-word name: letters and marks, joined by a hyphen or apostrophe (Se-young, O'Neil). */
+const NAME_WORD = /^[\p{L}\p{M}]+(?:['’-][\p{L}\p{M}]+)*$/u
+const ANY_LETTER = /\p{L}/u
+
+/**
+ * Whether a string cannot be a person's name: anything with an "@" (an address, or
+ * "Name <address>"), a URL or bare domain, a string with no letters (a phone number,
+ * digits), or a single word with characters a name never has, which is how the start
+ * of an address looks ("edgar.anzola", "juanchobq2017", "julik_100"). Such a string is
+ * never a shared-first-name bucket, never matches a first name, and is never stored as
+ * a contact's name when the calendar gives one. 3-oct-2026: contacts named after their
+ * address were buckets, because "juanchobq2017@gmail.com" starts with Juan.
+ */
+export function isNotAPersonName(value: string): boolean {
+  const text = (value || '').trim()
+  if (!text || text.includes('@')) return true
+  if (URL_SHAPED.test(text)) return true
+  if (!ANY_LETTER.test(text)) return true
+  return !/\s/.test(text) && !NAME_WORD.test(text)
+}
+
+/** The part of an address before the "@", lowercased: the placeholder name of a contact the calendar gave no name for. */
+export function addressLocalPart(email: string | null | undefined): string {
+  return (email || '').trim().toLowerCase().split('@')[0] ?? ''
+}
+
+/**
+ * The person's name as a calendar gives it for an address, or null when it gives none:
+ * no name, a string that is not a name (often the address itself), or just the start of
+ * the address ("csiccha" for csiccha@antamina.com), which is a placeholder, not a name.
+ */
+export function calendarDisplayName(name: string | null | undefined, email: string | null | undefined): string | null {
+  const text = (name || '').trim()
+  if (!text || isNotAPersonName(text)) return null
+  const local = addressLocalPart(email)
+  if (local && text.toLowerCase() === local) return null
+  return text
+}
+
 /** A generic transcript speaker label ("Speaker", "Speaker 2") carries no identity. */
 export function isGenericSpeakerLabel(value: string): boolean {
   return /^speaker\s*\d*$/i.test((value || '').trim())
@@ -246,13 +287,17 @@ export function hasSurname(name: string): boolean {
  * Accent-folded; matches when the full name's first token equals the bucket token, or
  * one is a prefix of the other — a Spanish nickname is a prefix of the full first
  * name (Sergi→Sergio, Santi→Santiago, Sebas→Sebastián). Requires ≥3 chars on each so
- * a two-letter fragment never collides half the directory.
+ * a two-letter fragment never collides half the directory. A string that is not a
+ * name ({@link isNotAPersonName}) on either side never matches: "juanchobq2017@gmail.com"
+ * starts with "juan" but is not Juan.
  */
 export function firstNameNicknameMatch(bucketToken: string, fullName: string): boolean {
   const b = accentFoldedKey(bucketToken)
   const first = nameTokens(fullName)[0] || ''
   if (b.length < 3 || first.length < 3) return false
-  return b === first || first.startsWith(b) || b.startsWith(first)
+  if (!(b === first || first.startsWith(b) || b.startsWith(first))) return false
+  // Checked last: the bucket pass calls this once per pair of contacts.
+  return !isNotAPersonName(bucketToken) && !isNotAPersonName(fullName)
 }
 
 export interface AmbiguityMatch {
@@ -279,14 +324,16 @@ const MIN_BUCKET_TOKEN = 3
  * it is a single token (or nickname prefix) that {@link firstNameNicknameMatch}es
  * ≥2 DISTINCT surname-bearing contacts. Distinctness is by accent-folded full name
  * (so duplicate rows of one person do not manufacture ambiguity); `selfId` excludes
- * the bucket's own row.
+ * the bucket's own row. A name that is not a person's name (an address, a URL, a phone
+ * number: {@link isNotAPersonName}) is never a bucket, and a contact with such a name is
+ * never one of a bucket's candidates.
  */
 export function detectAmbiguousName(
   name: string,
   contacts: Array<{ id: string; name: string }>,
   selfId?: string
 ): AmbiguityResult {
-  if (!isSingleToken(name)) return { ambiguous: false, token: '', matches: [] }
+  if (!isSingleToken(name) || isNotAPersonName(name)) return { ambiguous: false, token: '', matches: [] }
   const token = nameTokens(name)[0] || ''
   if (token.length < MIN_BUCKET_TOKEN) return { ambiguous: false, token, matches: [] }
 
