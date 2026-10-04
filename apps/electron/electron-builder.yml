@@ -31,6 +31,8 @@ win:
   # Each loader picks the win32-x64 file at runtime: onnxruntime-node bin/napi-v6/win32/x64,
   # better-sqlite3 prebuilds/win32-x64.node, usb prebuilds/win32-x64 (node-gyp-build).
   # Adding an arm64 target means removing the win32-arm64 lines.
+  # Only exclusions (!) here: a positive pattern would replace the default include set and silently
+  # drop runtime files from the Windows build.
   files:
     - '!node_modules/onnxruntime-node/bin/napi-v6/darwin/**'
     - '!node_modules/onnxruntime-node/bin/napi-v6/linux/**'
