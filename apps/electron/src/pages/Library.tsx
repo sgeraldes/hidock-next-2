@@ -187,6 +187,36 @@ export function Library() {
   // Enrichment: transcripts for the loaded recordings (meetings load below).
   const [transcripts, setTranscripts] = useState<Map<string, Transcript>>(new Map())
   const recordingsRef = useRef<UnifiedRecording[]>([])
+  const enrichmentLoadRef = useRef<Promise<void>>(Promise.resolve())
+  const transcriptsRef = useRef(transcripts)
+  transcriptsRef.current = transcripts
+
+  /** Refresh verdicts while retaining text and all other enrichment. */
+  const reloadVerdicts = useCallback(async (ids: string[]): Promise<Map<string, Transcript>> => {
+    await enrichmentLoadRef.current
+    const targets = [...new Set(ids)]
+    for (let offset = 0; offset < targets.length; offset += 5000) {
+      const verdicts = await window.electronAPI.transcripts.getVerdicts({ recordingIds: targets.slice(offset, offset + 5000) })
+      const merged = new Map(transcriptsRef.current)
+      for (const [id, verdict] of Object.entries(verdicts)) {
+        const transcript = merged.get(id)
+        if (!transcript) continue
+        merged.set(id, {
+          ...transcript,
+          integrity_status: verdict.integrity_status,
+          integrity_json: verdict.integrity_json,
+          integrity_version: verdict.integrity_version,
+          integrity_accepted_at: verdict.integrity_accepted_at,
+          validity_status: verdict.validity_status,
+          validity_json: verdict.validity_json,
+          validity_version: verdict.validity_version,
+        })
+      }
+      transcriptsRef.current = merged
+      setTranscripts(merged)
+    }
+    return transcriptsRef.current
+  }, [])
 
   /**
    * Re-read transcripts (all local ones, or the given ids) and merge them into
@@ -602,13 +632,14 @@ export function Library() {
         // right. It runs once per transcript, so this notice appears on the
         // mount that first checked them; after that the labels and the
         // Library's Transcript filter are where they live.
-        if (result?.success && (result.integrityChecked ?? 0) > 0) {
-          const checked = await reloadTranscripts()
-          const flagged = [...checked.values()].filter((t) => {
+        if (result?.success && ((result.integrityChecked ?? 0) > 0 || (result.validityChecked ?? 0) > 0)) {
+          const localIds = new Set(recordingsRef.current.filter((rec) => hasLocalPath(rec)).map((rec) => rec.id))
+          const checked = await reloadVerdicts([...localIds])
+          const flagged = [...checked.entries()].filter(([id, t]) => {
             const label = integrityLabel(t)
-            return label === 'suspect' || label === 'broken'
+            return localIds.has(id) && (label === 'suspect' || label === 'broken')
           }).length
-          if (flagged > 0) {
+          if ((result.integrityChecked ?? 0) > 0 && flagged > 0) {
             toast.warning(
               `${flagged} transcript${flagged === 1 ? ' has' : 's have'} problems in their timing or text`,
               'Each one is labelled in the list. Filter by Transcript to review them: transcribe again, or accept as is.',
@@ -652,7 +683,7 @@ export function Library() {
         console.error('[Library] Duration backfill failed:', e)
       }
     })()
-  }, [loading, recordings.length, refresh, reloadTranscripts, setIntegrityFilter])
+  }, [loading, recordings.length, refresh, reloadVerdicts, setIntegrityFilter])
 
   // spec-005/F17 T5 §D1 — loads the Trash *data* (for the toggle's count),
   // independent of *entering* Trash (showTrash). Cheap: idx_recordings_deleted_at
@@ -868,11 +899,10 @@ export function Library() {
         // result. Replacing the map on every load made the calendar/meeting chip and
         // other meeting-derived chrome flicker or vanish mid-refresh. Merging keeps
         // last-known meeting/transcript data on the rows so the chrome stays stable.
-        setTranscripts((prev) => {
-          const merged = new Map(prev)
-          for (const [id, t] of newTranscripts) merged.set(id, t)
-          return merged
-        })
+        const mergedTranscripts = new Map(transcriptsRef.current)
+        for (const [id, t] of newTranscripts) mergedTranscripts.set(id, t)
+        transcriptsRef.current = mergedTranscripts
+        setTranscripts(mergedTranscripts)
         setMeetings((prev) => {
           const merged = new Map(prev)
           for (const [id, m] of newMeetings) merged.set(id, m)
@@ -885,7 +915,7 @@ export function Library() {
     }
 
     if (recordings.length > 0) {
-      loadEnrichment()
+      enrichmentLoadRef.current = loadEnrichment()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enrichmentKey])
@@ -987,12 +1017,31 @@ export function Library() {
 
   // The audio check finished a pass or a recording: labels and ratings changed.
   useEffect(() => {
-    const api = window.electronAPI as { onDomainEvent?: (cb: (e: { type?: string }) => void) => () => void } | undefined
+    const api = window.electronAPI
     if (!api?.onDomainEvent) return
-    return api.onDomainEvent((event) => {
-      if (event?.type === 'audio:profiles-updated' || event?.type === 'evaluation:warnings-updated') void refreshLocal?.()
+    const pending = new Set<string>()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const unsubscribe = api.onDomainEvent((event) => {
+      if (event?.type === 'audio:profiles-updated' || event?.type === 'evaluation:warnings-updated') {
+        void refreshLocal?.()
+        for (const id of transcriptsRef.current.keys()) pending.add(id)
+      } else if (event?.type === 'transcript:verdicts-updated') {
+        for (const id of event.payload?.recordingIds ?? []) pending.add(id)
+      } else return
+      if (pending.size === 0) return
+      clearTimeout(timer)
+      timer = setTimeout(() => {
+        const ids = [...pending]
+        pending.clear()
+        void reloadVerdicts(ids).catch((error) => console.warn('[Library] Verdict refresh failed:', error))
+      }, 1500)
     })
-  }, [refreshLocal])
+    return () => {
+      unsubscribe()
+      clearTimeout(timer)
+      pending.clear()
+    }
+  }, [refreshLocal, reloadVerdicts])
 
   // How many transcripts each Transcript-filter value matches, over the same
   // population the other facets count.

@@ -35,6 +35,16 @@ export function TranscriptIntegrityPanel({ recordingId, transcript, durationSeco
   const retranscribeLabel = durationSeconds ? `Transcribe again (${formatTranscriptionCost(durationSeconds)})` : 'Transcribe again'
   if ((label === 'ok' || label === 'unchecked') && !held) return null
   const issues = integrityIssues(transcript)
+  const coveredCodes = ['integrity']
+  for (const issue of issues) {
+    if (issue.code === 'untimed_lines') coveredCodes.push('no_times')
+    if (issue.code === 'repeated_start' || issue.code === 'backwards_start') coveredCodes.push('timestamps_consistently_wrong')
+    if (issue.code === 'too_many_words' || issue.code === 'words_beyond_sound') coveredCodes.push('more_words_than_audio')
+    if (issue.code === 'text_over_noise') coveredCodes.push('text_without_audio', 'much_text_without_audio')
+  }
+  const extraReasons = validityReasons(transcript, coveredCodes).filter((reason) =>
+    !issues.some((issue) => issue.detail === reason || ISSUE_TAGS[issue.code] === reason)
+  )
 
   const setAccepted = async (accepted: boolean) => {
     setBusy(true)
@@ -119,6 +129,16 @@ export function TranscriptIntegrityPanel({ recordingId, transcript, durationSeco
       data-integrity={label}
       role="status"
     >
+      {label === 'suspect' && held && (
+        <div data-testid="transcript-validity" data-validity={held} className="space-y-1">
+          <p className="text-foreground">{VALIDITY_LABELS[held].label}.</p>
+          {extraReasons.length > 0 && (
+            <ul className="list-disc space-y-0.5 pl-5 text-muted-foreground" aria-label="Why">
+              {extraReasons.map((reason) => <li key={reason}>{reason}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
       <div className="flex items-start gap-2">
         <Icon className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${broken ? 'text-red-600' : 'text-amber-600'}`} aria-hidden="true" />
         <p className="text-foreground">

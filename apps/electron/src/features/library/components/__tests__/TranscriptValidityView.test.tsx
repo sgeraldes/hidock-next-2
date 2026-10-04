@@ -69,6 +69,24 @@ describe('the Transcript filter', () => {
 })
 
 describe('the transcript panel', () => {
+  it('shows doubt above suspect timing, without repeating integrity reasons', () => {
+    render(<TranscriptIntegrityPanel recordingId="r1" durationSeconds={3600} onRetranscribe={vi.fn()}
+      transcript={transcript({ integrity_status: 'suspect',
+        integrity_json: JSON.stringify({ issues: [{ code: 'repeated_start', count: 2, detail: 'Repeated times.' }] }),
+        validity_status: 'doubtful', validity_json: JSON.stringify({ reasons: [
+          { code: 'integrity', detail: 'Repeated times.' },
+          { code: 'timestamps_consistently_wrong', detail: '60% of lines start at a repeated or earlier time.' },
+          { code: 'audio_not_checked', detail: 'The audio is being checked.' }
+        ] }) })} />)
+    expect(screen.getByTestId('transcript-validity')).toHaveTextContent('Transcript in doubt: being checked against the audio')
+    expect(screen.getByTestId('transcript-validity')).toHaveTextContent('The audio is being checked.')
+    expect(screen.getByTestId('transcript-validity')).not.toHaveTextContent('Repeated times.')
+    expect(screen.getByTestId('transcript-validity')).not.toHaveTextContent('60% of lines')
+    expect(screen.getByTestId('transcript-integrity')).toHaveTextContent('The times in this transcript are wrong.')
+    expect(screen.getByRole('button', { name: 'Transcribe again (about 0.20 USD)' })).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Accept as is' })).toHaveLength(1)
+  })
+
   it('explains a transcript not categorized and offers to transcribe it again with the cost', () => {
     const onRetranscribe = vi.fn()
     render(

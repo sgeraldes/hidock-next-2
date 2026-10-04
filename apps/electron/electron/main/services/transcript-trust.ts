@@ -18,6 +18,7 @@
  * recording's value, so those ratings are taken back.
  */
 
+import { getEventBus } from './event-bus'
 import { queryOne, run, getRowsModified } from './database'
 import { HELD_METHOD, recomputeAudioWarnings } from './value-classification'
 import { isUnusableValidity } from './transcript-validity'
@@ -53,7 +54,7 @@ export interface TrustSyncResult {
  * (then the caller has run the validity backfill and recomputes itself).
  * Owner ratings, and the audio's own verdicts, are never touched.
  */
-export function syncTrustVerdicts(recordingId?: string): TrustSyncResult {
+export function syncTrustVerdicts(recordingId?: string, options: { announce?: boolean } = {}): TrustSyncResult {
   if (recordingId) refreshTranscriptValidity(recordingId)
   const scope = recordingId ? 'AND source_recording_id = ?' : ''
   const params = recordingId ? [recordingId] : []
@@ -96,6 +97,12 @@ export function syncTrustVerdicts(recordingId?: string): TrustSyncResult {
   }
   if (withdrawn > 0 || cleared > 0) {
     console.log(`[TranscriptTrust] ${withdrawn} 'trust' rating(s) and ${cleared} content rating(s) on transcripts not valid taken back`)
+  }
+  if (recordingId && options.announce !== false) {
+    getEventBus().emitDomainEvent({
+      type: 'transcript:verdicts-updated', timestamp: new Date().toISOString(),
+      payload: { recordingIds: [recordingId] }
+    })
   }
   return { cleared, withdrawn }
 }

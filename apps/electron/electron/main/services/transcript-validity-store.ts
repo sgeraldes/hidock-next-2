@@ -6,6 +6,7 @@
  * Plan: docs/superpowers/plans/2026-10-04-validation-order.md
  */
 
+import { getEventBus } from './event-bus'
 import { createHash } from 'crypto'
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
@@ -22,6 +23,7 @@ interface ValidityRow {
   recording_id: string
   filename: string
   speakers: string | null
+  validity_status?: string | null
   integrity_status: string | null
   integrity_accepted_at: string | null
   category: string | null
@@ -73,7 +75,7 @@ function attendeeCount(json: string | null): number {
 
 function rowFor(recordingId: string): ValidityRow | undefined {
   return queryOne<ValidityRow>(
-    `SELECT t.recording_id, r.filename, t.speakers, t.integrity_status, t.integrity_accepted_at,
+    `SELECT t.recording_id, r.filename, t.speakers, t.validity_status, t.integrity_status, t.integrity_accepted_at,
             ap.category, ap.method, m.attendees,
             s.transcript_fingerprint AS sample_fingerprint, s.verdict AS sample_verdict
        FROM transcripts t
@@ -167,9 +169,10 @@ export function refreshTranscriptValidity(recordingId: string): TranscriptValidi
  */
 export async function backfillTranscriptValidity(
   options: { batchSize?: number } = {}
-): Promise<Record<string, number>> {
+): Promise<{ checked: number; changedIds: string[]; [status: string]: number | string[] }> {
   const batchSize = options.batchSize ?? 50
   const counts: Record<string, number> = { checked: 0 }
+  const changedIds: string[] = []
   const seen = new Set<string>()
   for (;;) {
     const ids = queryAll<{ recording_id: string }>(
@@ -198,6 +201,7 @@ export async function backfillTranscriptValidity(
         VALIDITY_VERSION,
         recording_id
       ])
+      if (row.validity_status !== validity.status) changedIds.push(recording_id)
       counts.checked++
       counts[validity.status] = (counts[validity.status] ?? 0) + 1
     }
@@ -207,5 +211,11 @@ export async function backfillTranscriptValidity(
     saveDatabase()
     console.log(`[transcript-validity] checked ${counts.checked} transcript(s): ${JSON.stringify(counts)}`)
   }
-  return counts
+  if (changedIds.length > 0) {
+    getEventBus().emitDomainEvent({
+      type: 'transcript:verdicts-updated', timestamp: new Date().toISOString(),
+      payload: { recordingIds: changedIds }
+    })
+  }
+  return { ...counts, checked: counts.checked, changedIds }
 }
