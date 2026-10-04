@@ -26,6 +26,9 @@ InstallDir "$LOCALAPPDATA\Programs\${PRODUCT}"
 InstallDirRegKey HKCU "Software\${PRODUCT_KEY}" "InstallDir"
 ShowInstDetails show
 ShowUninstDetails show
+; The window closes by itself when the install worked; a failed setup keeps it
+; open (SetAutoClose false below) so the error can be read.
+AutoCloseWindow true
 
 Page instfiles
 UninstPage uninstConfirm
@@ -99,6 +102,7 @@ Section -Setup
   ExecWait '"$1" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\setup.ps1"' $0
   IntCmp $0 0 setup_ok
     DetailPrint "Setup ended with code $0. The details are in $LOCALAPPDATA\${PRODUCT}\logs\setup.log."
+    SetAutoClose false
   setup_ok:
   Exec '"$INSTDIR\${TRAY_EXE}"'
 SectionEnd

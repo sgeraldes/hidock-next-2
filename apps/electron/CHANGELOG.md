@@ -37,7 +37,8 @@ pairs with it, gives it the Hugging Face token and decides when it steps aside.
   On this computer's CPU the two-minute pace stays.
 - **Model Host 0.3.2 installs the GPU build of torch.** The installer is a 32-bit program, and
   Windows gave it the 32-bit PowerShell, which cannot see the NVIDIA driver; 0.3.0 and 0.3.1
-  therefore installed the CPU build. 0.3.2 runs the 64-bit PowerShell.
+  therefore installed the CPU build. 0.3.2 runs the 64-bit PowerShell. Its window also closes by
+  itself when the install worked, and stays open only when setup failed, to show the error.
 
 ## 2026-10-03 | Attendees from Outlook, and speakers that know who named them
 
