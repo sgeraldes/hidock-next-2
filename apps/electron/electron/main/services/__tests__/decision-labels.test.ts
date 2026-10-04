@@ -29,7 +29,10 @@ afterAll(() => {
   closeDatabase()
   for (const suffix of ['', '-wal', '-shm']) if (existsSync(paths.db + suffix)) rmSync(paths.db + suffix)
 })
-beforeEach(() => runWithMassDeleteAllowed(() => {
+beforeEach(async () => {
+  closeDatabase()
+  await initializeDatabase()
+  runWithMassDeleteAllowed(() => {
   for (const { name } of queryAll<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name GLOB 'decision_label_items_legacy*'")) {
     run(`DROP TABLE "${name}"`)
   }
@@ -40,7 +43,8 @@ beforeEach(() => runWithMassDeleteAllowed(() => {
   run('DELETE FROM knowledge_captures')
   run('DELETE FROM transcripts')
   run('DELETE FROM recordings')
-}))
+  })
+})
 describe('reference labels on real SQLite', () => {
   const transcriptChanges = [
     ['missing', "DELETE FROM transcripts WHERE recording_id = 'changed'", []],
@@ -238,6 +242,82 @@ describe('reference labels on real SQLite', () => {
       { recording_id: 'recovered', position: 1, stratum: 'random' }
     ])
     expect(queryAll("SELECT name FROM sqlite_master WHERE name = 'decision_label_items_legacy'")).toEqual([])
+  })
+  it('raises recovered counts without reducing historical counts', async () => {
+    seed('count-current')
+    const set = getLabelSet()
+    seed('count-random')
+    seed('count-doubtful')
+    run('CREATE TABLE decision_label_items_legacy (set_id TEXT, recording_id TEXT, stratum TEXT)')
+    run("INSERT INTO decision_label_items_legacy VALUES (?, 'count-random', 'confident'), (?, 'count-doubtful', 'doubtful')", [set.id, set.id])
+    closeDatabase()
+    await initializeDatabase()
+    expect(getLabelSet()).toMatchObject({ size: 3, unavailable: 0, counts: { doubtful: 2, random: 1 } })
+    expect(queryOne('SELECT sample_size, doubtful_count, random_count FROM decision_label_sets')).toEqual({ sample_size: 3, doubtful_count: 2, random_count: 1 })
+    run('UPDATE decision_label_sets SET sample_size = 8, doubtful_count = 5, random_count = 3')
+    closeDatabase()
+    await initializeDatabase()
+    expect(getLabelSet()).toMatchObject({ size: 8, unavailable: 5, counts: { doubtful: 5, random: 3 } })
+  })
+  it('clamps unavailable below zero', () => {
+    seed('under-counted')
+    getLabelSet()
+    run('UPDATE decision_label_sets SET sample_size = 0, doubtful_count = 0, random_count = 0')
+    expect(getLabelSet()).toMatchObject({ size: 0, unavailable: 0 })
+  })
+  it('contains malformed-view fallback rename failure on every boot', async () => {
+    seed('view-member')
+    const set = getLabelSet()
+    run('UPDATE decision_label_sets SET sampling_rule = NULL')
+    run('CREATE TABLE decision_label_items_legacy (set_id TEXT, recording_id TEXT, stratum TEXT)')
+    run("INSERT INTO decision_label_items_legacy VALUES (?, 'missing', 'invalid')", [set.id])
+    run('CREATE VIEW legacy_positions AS SELECT position FROM decision_label_items_legacy')
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      for (let boot = 0; boot < 2; boot++) {
+        closeDatabase()
+        await expect(initializeDatabase()).resolves.not.toThrow()
+        expect(getLabelSet().id).toBe(set.id)
+      }
+      const failures = warning.mock.calls.filter(args => String(args[0]).includes('label recovery failed'))
+      expect(failures).toHaveLength(2)
+      expect(failures.every(args => args.length === 1 && String(args[0]).includes('no such column: position'))).toBe(true)
+    } finally {
+      warning.mockRestore()
+      run('DROP VIEW legacy_positions')
+    }
+  })
+  it.each([
+    ['run', 'SAVEPOINT decision_label_repair'],
+    ['run', 'CREATE TABLE IF NOT EXISTS decision_label_sets'],
+    ['exec', "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'decision_label_items_legacy'"],
+    ['exec', 'PRAGMA table_info(decision_label_sets)'],
+    ['exec', "SELECT sql FROM sqlite_master WHERE name = 'decision_label_items'"],
+    ['run', 'UPDATE decision_label_sets SET'],
+    ['run', 'RELEASE decision_label_repair'],
+    ['run', 'ROLLBACK TO decision_label_repair']
+  ] as const)('contains failure at %s %s with guard active', async (method, statement) => {
+    seed('failure-member')
+    const set = getLabelSet()
+    run('UPDATE decision_label_sets SET sampling_rule = NULL')
+    const prototype = Object.getPrototypeOf(database.getDatabase())
+    const original = prototype[method]
+    closeDatabase()
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const spy = vi.spyOn(prototype, method).mockImplementation(function (this: unknown, ...args: unknown[]) {
+      const sql = String(args[0])
+      if (sql.startsWith(statement) || (statement.startsWith('ROLLBACK') && sql.startsWith('CREATE TABLE IF NOT EXISTS decision_label_sets'))) {
+        throw new Error('Injected repair failure')
+      }
+      return original.apply(this, args)
+    })
+    try { await expect(initializeDatabase()).resolves.not.toThrow() } finally { spy.mockRestore() }
+    try {
+      expect(getLabelSet().id).toBe(set.id)
+      expect(warning.mock.calls.filter(args => String(args[0]).includes('label recovery failed'))).toEqual([
+        ['[Database] Decision label recovery failed: Injected repair failure; label set replacement disabled']
+      ])
+    } finally { warning.mockRestore() }
   })
   it('boots with an unreadable legacy table and preserves sets on subsequent boots', async () => {
     seed('unreadable')

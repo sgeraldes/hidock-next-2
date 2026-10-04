@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto'
 import { z } from 'zod'
-import { queryAll, queryOne, run, runInTransaction } from '../database'
+import { queryAll, queryOne, run, runInTransaction, hasDecisionLabelRecoveryFailed } from '../database'
 import { filterEligibleRecordingIds } from '../recording-eligibility'
 import { buildKindExcerpt } from '../kind-fallback'
 import { RECORDING_KINDS, type RecordingKind, type ReferenceLabelSet, type ReferenceLabelItem } from '../../../../src/shared/decision-labels'
@@ -29,8 +29,8 @@ function availableRecordingIds(recordingIds: string[], sampling = false): Set<st
 export function getLabelSet(): ReferenceLabelSet {
   return runInTransaction(() => {
     let set = queryOne<StoredSet>("SELECT id, created_at, sample_size, doubtful_count, random_count, sampling_rule FROM decision_label_sets WHERE question = 'kind'")
-    if (set && set.sampling_rule !== SAMPLING_RULE && !queryOne(
-      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name GLOB 'decision_label_items_legacy_unrecovered_*' LIMIT 1"
+    if (set && !hasDecisionLabelRecoveryFailed() && set.sampling_rule !== SAMPLING_RULE && !queryOne(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND (name = 'decision_label_items_legacy' OR name GLOB 'decision_label_items_legacy_unrecovered_*') LIMIT 1"
     ) && !queryOne(`
       SELECT 1 FROM decision_label_items i JOIN decision_labels l
         ON l.recording_id = i.recording_id AND l.question = 'kind'
@@ -86,7 +86,7 @@ export function getLabelSet(): ReferenceLabelSet {
     const available = rows.filter(row => eligible.has(row.recording_id))
     return {
       id: set.id, question: 'kind', createdAt: set.created_at,
-      size: set.sample_size, unavailable: set.sample_size - available.length,
+      size: set.sample_size, unavailable: Math.max(0, set.sample_size - available.length),
       items: available.map(row => ({ recordingId: row.recording_id, position: row.position, answer: row.answer })),
       counts: { doubtful: set.doubtful_count, random: set.random_count },
       labeled: available.filter(row => row.answer !== null).length
