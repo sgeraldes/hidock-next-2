@@ -30,7 +30,7 @@ import { createJevHarness } from './pipeline/jev-harness'
 import { withCallRecord } from './pipeline/track-call'
 import { askDecision, hasDecisionEngine } from './pipeline/decision-engines'
 import { qualityRules } from './quality-rules'
-import { filterTranscribableRecordingIds, isRecordingEligible } from './recording-eligibility'
+import { filterTranscribableRecordingIds, isRecordingTranscribable } from './recording-eligibility'
 import { languageFor } from './transcription-language'
 import { audioFrameTest, type TranscriptValidity, type ValiditySegment } from './transcript-validity'
 import { readEnvelope, transcriptFingerprint } from './transcript-validity-store'
@@ -167,8 +167,9 @@ export function windowsFor(row: Pick<Candidate, 'recording_id' | 'speakers' | 'v
 async function transcribeOne(row: Candidate, window: SampleWindow, deps: SamplerDeps): Promise<WindowTranscript | null> {
   const seconds = window.end - window.start
   try {
+    if (!isRecordingTranscribable(row.recording_id)) return null
     const audio = await deps.readWindow(row.file_path, window.start, seconds)
-    return audio ? await deps.transcribeWindow(audio, row.recording_id, seconds) : null
+    return audio && isRecordingTranscribable(row.recording_id) ? await deps.transcribeWindow(audio, row.recording_id, seconds) : null
   } catch (error) {
     console.warn(`[Sampling] ${row.recording_id} at ${window.start} s: ${error instanceof Error ? error.message : String(error)}`)
     return null
@@ -212,6 +213,7 @@ export async function sampleRecording(row: Candidate, deps: SamplerDeps): Promis
       .filter(({ i }) => fresh[i].transcript && precheckWindow(fresh[i].transcript!.text, fresh[i].window.storedText) === null)
     if (toCompare.length > 0) {
       try {
+        if (!isRecordingTranscribable(row.recording_id)) throw new Error('Decision source is no longer eligible')
         const answers = await deps.compare(toCompare.map(({ stored, fresh: text }) => ({ stored, fresh: text })), row.recording_id)
         toCompare.forEach(({ i }, k) => {
           matches[i] = answers[k] ?? 'unclear'
@@ -408,7 +410,7 @@ export async function compareWithDecisions(pairs: Array<{ stored: string; fresh:
   const questions: Record<string, JevQuestion> = {}
   pairs.forEach((_, i) => (questions[`w${i}`] = compareQuestion(i)))
   const state = { windows: pairs.map((p) => ({ new_transcript: p.fresh, stored_excerpt: p.stored })) }
-  const { response: res } = await askDecision('sample-compare', state, questions, { jev: harness, recordingId, shouldGenerate: () => isRecordingEligible(recordingId) })
+  const { response: res } = await askDecision('sample-compare', state, questions, { jev: harness, recordingId, shouldGenerate: () => isRecordingTranscribable(recordingId) })
   return pairs.map((_, i) => {
     const a = res.answers[`w${i}`]
     if (a?.type !== 'choice' || (a.confidence ?? 0) < COMPARE_MIN_CONFIDENCE) return 'unclear'

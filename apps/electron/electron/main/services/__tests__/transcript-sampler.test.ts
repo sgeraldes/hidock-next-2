@@ -201,4 +201,42 @@ describe('runSamplingPass', () => {
     expect(await runSamplingPass(deps('same'))).toMatchObject({ skipped: 'no-engine' })
     config.value.transcription.jevApiKey = 'jev-test' // pragma: allowlist secret
   })
+  it('compares a doubtful recording through the transcription eligibility guard', async () => {
+    seedDoubtful('guard-doubtful', '2026-10-04T10:00:00Z')
+    const d = deps('same', new Date('2026-11-01T09:00:00'))
+    d.compare = compareWithDecisions
+    decisionAsk.mockImplementation(async (_step, _state, questions, options) => {
+      if (!options.shouldGenerate()) throw new Error('Decision source is no longer eligible')
+      return { response: { answers: Object.fromEntries(Object.keys(questions).map(key =>
+        [key, { type: 'choice', choice: 'same', confidence: 0.9 }])) } }
+    })
+    expect(validity('guard-doubtful')).toBe('doubtful')
+    const result = await runSamplingPass(d)
+    expect(result.sampled.find(sample => sample.recordingId === 'guard-doubtful')).toMatchObject({ verdict: 'confirmed' })
+    expect(d.calls.transcribe).toBeGreaterThan(0)
+    const row = queryOne<{ windows_json: string }>('SELECT windows_json FROM transcript_samples WHERE recording_id = ?', ['guard-doubtful'])
+    expect(JSON.parse(row!.windows_json).error).toBeUndefined()
+    decisionAsk.mockReset()
+  })
+
+  it.each(['read', 'transcribe'] as const)('stops purchases and comparison when a recording becomes personal during %s', async stage => {
+    const id = `guard-personal-${stage}`
+    seedDoubtful(id, '2026-10-04T10:00:00Z')
+    const d = deps('same', new Date('2026-11-02T09:00:00'))
+    const read = d.readWindow
+    const transcribe = d.transcribeWindow
+    if (stage === 'read') d.readWindow = async (...args) => {
+      run('UPDATE recordings SET personal = 1 WHERE id = ?', [id])
+      return read(...args)
+    }
+    else d.transcribeWindow = async (...args) => {
+      const result = await transcribe(...args)
+      run('UPDATE recordings SET personal = 1 WHERE id = ?', [id])
+      return result
+    }
+    await runSamplingPass(d)
+    expect(d.calls.transcribe).toBe(stage === 'read' ? 0 : 1)
+    expect(d.calls.compare).toBe(0)
+  })
+
 })
