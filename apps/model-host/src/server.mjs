@@ -50,6 +50,17 @@ export function readBody(req, limit = MAX_AUDIO_BYTES) {
   })
 }
 
+/** A small JSON body; a body that is not JSON is the caller's mistake, so 400. */
+async function readJsonBody(req) {
+  const text = (await readBody(req, 4096)).toString('utf8')
+  if (!text) return {}
+  try {
+    return JSON.parse(text)
+  } catch {
+    throw Object.assign(new Error('the body is not JSON'), { status: 400 })
+  }
+}
+
 function sendJson(res, status, body) {
   const payload = JSON.stringify(body)
   res.writeHead(status, {
@@ -159,7 +170,7 @@ export function createHandler(deps) {
       }
 
       if (req.method === 'POST' && path === '/pair') {
-        const body = JSON.parse((await readBody(req, 4096)).toString('utf8') || '{}')
+        const body = await readJsonBody(req)
         const result = deps.pairing.redeem(body.code)
         if (!result.ok) {
           sendJson(res, 403, { error: result.reason })
@@ -176,7 +187,7 @@ export function createHandler(deps) {
           return
         }
         if (!deps.setup) throw Object.assign(new Error('this host takes no token'), { status: 404 })
-        const body = JSON.parse((await readBody(req, 4096)).toString('utf8') || '{}')
+        const body = await readJsonBody(req)
         const setup = await deps.setup.receiveToken(body.token)
         sendJson(res, 202, { setup })
         return
@@ -188,7 +199,7 @@ export function createHandler(deps) {
           sendJson(res, 401, { error: 'This host does not know that client. Pair it first.' })
           return
         }
-        const body = JSON.parse((await readBody(req, 4096)).toString('utf8') || '{}')
+        const body = await readJsonBody(req)
         if (!STEP_ASIDE.has(body.value) || !deps.stepAside) {
           sendJson(res, 400, { error: 'stepAside is any-use, games or never' })
           return

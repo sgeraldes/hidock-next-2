@@ -60,6 +60,8 @@ export class HostSetup {
     this.reason = ''
     this.device = ''
     this.running = null
+    /** A different token arrived while a test was running. */
+    this.rerun = false
   }
 
   /** The token the worker gets. */
@@ -92,7 +94,10 @@ export class HostSetup {
     if (token === this.hfToken && (this.status === 'ready' || this.running)) return this.report()
     this.deps.saveToken(token)
     this.hfToken = token
-    this.#validate()
+    // A test already running uses the previous token; this one is tested right
+    // after it, so the token on disk is always the one the status speaks for.
+    if (this.running) this.rerun = true
+    else this.#validate()
     return this.report()
   }
 
@@ -106,6 +111,7 @@ export class HostSetup {
     this.status = 'validating'
     this.reason = ''
     this.log('[setup] running the voice model once on a test clip')
+    this.rerun = false
     this.running = (async () => {
       try {
         const result = await this.deps.diarize(makeTestClip(), {
@@ -127,6 +133,7 @@ export class HostSetup {
         this.log(`[setup] the voice model did not run: ${this.reason}`)
       } finally {
         this.running = null
+        if (this.rerun) this.#validate()
       }
     })()
   }

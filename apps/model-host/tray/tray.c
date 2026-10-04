@@ -70,6 +70,7 @@ static presence_t g_p;
 static game_t g_games[MAX_GAMES];
 static HANDLE g_job, g_service, g_service_wait;
 static int g_stopping;
+static UINT g_restart_ms = 30 * 1000; /* a service that died starts again after this; tests shorten it */
 static why_t g_last_why = (why_t)-1;
 static HICON g_icons[3];
 
@@ -147,14 +148,16 @@ static const wchar_t *why_text(why_t why) {
 
 static void show_icon(why_t why, int add) {
   if (g_no_icon) return;
-  int which = why == WHY_RUNNING ? 0 : why == WHY_PAUSED_BY_YOU ? 2 : 1;
+  /* It should be working but the service is not up (it died, or could not start): say so. */
+  int down = why == WHY_RUNNING && !g_job;
+  int which = why == WHY_RUNNING && !down ? 0 : why == WHY_PAUSED_BY_YOU ? 2 : 1;
   g_nid.cbSize = sizeof g_nid;
   g_nid.hWnd = g_wnd;
   g_nid.uID = 1;
   g_nid.uFlags = NIF_ICON | NIF_TIP | NIF_MESSAGE;
   g_nid.uCallbackMessage = WM_APP_TRAY;
   g_nid.hIcon = g_icons[which];
-  wcsncpy(g_nid.szTip, why_text(why), 127);
+  wcsncpy(g_nid.szTip, down ? L"HiDock Model Host: the service stopped; starting it again" : why_text(why), 127);
   Shell_NotifyIconW(add ? NIM_ADD : NIM_MODIFY, &g_nid);
 }
 
@@ -217,10 +220,13 @@ static void start_service(void) {
   STARTUPINFOW si;
   ZeroMemory(&si, sizeof si);
   si.cb = sizeof si;
-  si.dwFlags = STARTF_USESTDHANDLES;
-  si.hStdInput = NULL;
-  si.hStdOutput = log;
-  si.hStdError = log;
+  if (log != INVALID_HANDLE_VALUE) {
+    /* No log file is no reason not to run: without it the service just writes nowhere. */
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = NULL;
+    si.hStdOutput = log;
+    si.hStdError = log;
+  }
   PROCESS_INFORMATION pi;
   BOOL ok = CreateProcessW(NULL, cmd, NULL, NULL, TRUE,
                            CREATE_NO_WINDOW | CREATE_SUSPENDED | BELOW_NORMAL_PRIORITY_CLASS, NULL, g_dir, &si, &pi);
@@ -228,6 +234,7 @@ static void start_service(void) {
   if (!ok) {
     CloseHandle(g_job);
     g_job = NULL;
+    SetTimer(g_wnd, TIMER_RESTART, g_restart_ms, NULL); /* try again; the icon says it is down meanwhile */
     return;
   }
   AssignProcessToJobObject(g_job, pi.hProcess);
@@ -262,8 +269,9 @@ static void evaluate(void) {
   uint64_t wait = next_change_in(&g_p, now);
   if (wait) SetTimer(g_wnd, TIMER_QUIET, (UINT)(wait + 500), NULL);
   else KillTimer(g_wnd, TIMER_QUIET);
+  /* Always: whether the service is actually up can change without the reason changing. */
+  show_icon(why, 0);
   if (why != g_last_why) {
-    show_icon(why, 0);
     g_last_why = why;
     trim();
   }
@@ -345,8 +353,11 @@ static void look_at(HWND hwnd) {
       mi.cbSize = sizeof mi;
       RECT wr;
       if (mon && GetMonitorInfoW(mon, &mi) && GetWindowRect(hwnd, &wr)) {
-        g_p.fullscreen = covers_monitor(wr.left, wr.top, wr.right, wr.bottom, mi.rcMonitor.left, mi.rcMonitor.top,
-                                        mi.rcMonitor.right, mi.rcMonitor.bottom);
+        /* A maximized browser covers the monitor too, but keeps its title bar. */
+        LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        int has_caption = (style & WS_CAPTION) == WS_CAPTION;
+        g_p.fullscreen = is_full_screen(wr.left, wr.top, wr.right, wr.bottom, mi.rcMonitor.left, mi.rcMonitor.top,
+                                        mi.rcMonitor.right, mi.rcMonitor.bottom, has_caption);
       }
     }
   }
@@ -525,7 +536,8 @@ static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
           CloseHandle(g_service);
           g_service = NULL;
         }
-        SetTimer(hwnd, TIMER_RESTART, 30 * 1000, NULL);
+        SetTimer(hwnd, TIMER_RESTART, g_restart_ms, NULL);
+        show_icon(decide(&g_p, now_ms()), 0); /* not "working" while it is down */
       }
       return 0;
     case WM_TIMER:
@@ -572,12 +584,15 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show) {
   if (GetLastError() == ERROR_ALREADY_EXISTS) return 0;
 
   int exit_after = 0;
+  int no_foreground = 0;
   int argc = 0;
   wchar_t **argv = CommandLineToArgvW(GetCommandLineW(), &argc);
   for (int i = 1; argv && i < argc; i++) {
     if (wcscmp(argv[i], L"--no-icon") == 0) g_no_icon = 1; /* tests */
+    if (wcscmp(argv[i], L"--no-foreground") == 0) no_foreground = 1; /* tests: the runner's own desktop must not decide */
     if (wcscmp(argv[i], L"--exit-after") == 0 && i + 1 < argc) exit_after = _wtoi(argv[++i]);
     if (wcscmp(argv[i], L"--root") == 0 && i + 1 < argc) wcsncpy(g_root, argv[++i], MAX_PATH - 1);
+    if (wcscmp(argv[i], L"--restart-seconds") == 0 && i + 1 < argc) g_restart_ms = (UINT)_wtoi(argv[++i]) * 1000; /* tests */
     if (wcscmp(argv[i], L"--quiet-seconds") == 0 && i + 1 < argc) quiet_ms = (uint64_t)_wtoi(argv[++i]) * 1000ull; /* tests */
   }
   if (argv) LocalFree(argv);
@@ -607,11 +622,11 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show) {
 
   read_config();
   find_running_games();
-  look_at(GetForegroundWindow());
+  if (!no_foreground) look_at(GetForegroundWindow());
   why_t first = decide(&g_p, now_ms());
   g_last_why = first;
   show_icon(first, 1);
-  g_hook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, NULL, on_foreground, 0, 0,
+  if (!no_foreground) g_hook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, NULL, on_foreground, 0, 0,
                            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
   g_last_why = (why_t)-1;
   evaluate();

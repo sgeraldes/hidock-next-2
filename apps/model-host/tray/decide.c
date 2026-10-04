@@ -91,8 +91,8 @@ int is_game_path(const wchar_t *path) {
   return 0;
 }
 
-int covers_monitor(long wl, long wt, long wr, long wb, long ml, long mt, long mr, long mb) {
-  return wl <= ml && wt <= mt && wr >= mr && wb >= mb;
+int is_full_screen(long wl, long wt, long wr, long wb, long ml, long mt, long mr, long mb, int has_caption) {
+  return !has_caption && wl <= ml && wt <= mt && wr >= mr && wb >= mb;
 }
 
 /* The text after "key": , or NULL. Enough for the flat config.json the service writes. */

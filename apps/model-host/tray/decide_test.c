@@ -107,11 +107,14 @@ static void test_game_folders(void) {
   CHECK(!is_game_path(L"C:\\notsteamapps\\commonplace\\x.exe"));
 }
 
-static void test_covers_monitor(void) {
-  CHECK(covers_monitor(0, 0, 2560, 1440, 0, 0, 2560, 1440));
-  CHECK(covers_monitor(-8, -8, 2568, 1448, 0, 0, 2560, 1440));
-  CHECK(!covers_monitor(0, 0, 2560, 1400, 0, 0, 2560, 1440));
-  CHECK(covers_monitor(2560, 0, 5120, 1440, 2560, 0, 5120, 1440));
+static void test_full_screen_is_covering_the_monitor_without_a_title_bar(void) {
+  /* Exclusive or borderless full screen: no caption, covers the monitor. */
+  CHECK(is_full_screen(0, 0, 2560, 1440, 0, 0, 2560, 1440, 0));
+  CHECK(is_full_screen(2560, 0, 5120, 1440, 2560, 0, 5120, 1440, 0));
+  /* A maximized window overhangs by its border and covers the monitor, but has a title bar. */
+  CHECK(!is_full_screen(-8, -8, 2568, 1448, 0, 0, 2560, 1440, 1));
+  /* Borderless but smaller than the monitor. */
+  CHECK(!is_full_screen(0, 0, 2560, 1400, 0, 0, 2560, 1440, 0));
 }
 
 static void test_parse_config(void) {
@@ -136,7 +139,7 @@ int main(void) {
   test_games_mode_ignores_input();
   test_start_during_a_game_holds_until_that_game_ends();
   test_game_folders();
-  test_covers_monitor();
+  test_full_screen_is_covering_the_monitor_without_a_title_bar();
   test_parse_config();
   if (failures) {
     fprintf(stderr, "%d failed\n", failures);

@@ -2,7 +2,8 @@
  * The real tray icon, the real service, a fake game. Windows only, and only
  * when build/HiDockModelHost.exe exists (npm run build:tray).
  *
- * --no-icon keeps it out of the taskbar of whoever runs the tests.
+ * --no-icon keeps it out of the taskbar of whoever runs the tests, and --no-foreground keeps
+ * their desktop (a full-screen window, say) from deciding the result: the game here is\n * found at start and waited on by its process, which is the path being tested.
  */
 
 import { describe, it, expect } from 'vitest'
@@ -49,18 +50,60 @@ function memoryOf(pid) {
   return { workingSet: out[0], private: out[1], cpuMs: out[2] }
 }
 
+function stage(base, port) {
+  const app = join(base, 'app')
+  const root = join(base, 'root')
+  mkdirSync(app, { recursive: true })
+  mkdirSync(root, { recursive: true })
+  copyFileSync(trayExe, join(app, 'HiDockModelHost.exe'))
+  copyFileSync(process.execPath, join(app, 'node.exe'))
+  cpSync(join(packageRoot, 'src'), join(app, 'src'), { recursive: true })
+  writeFileSync(join(root, 'config.json'), JSON.stringify({ port, stepAside: 'games' }))
+  return { app, root }
+}
+
+/** The service's node.exe: the copy inside this test's app folder. */
+function serviceNodeIn(app) {
+  const exe = join(app, 'node.exe').replace(/'/g, "''")
+  const out = execFileSync('powershell.exe', [
+    '-NoProfile', '-Command',
+    `(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.ExecutablePath -eq '${exe}' } | Select-Object -First 1).ProcessId`,
+  ]).toString().trim()
+  return Number(out) || 0
+}
+
+describe.runIf(process.platform === 'win32' && existsSync(trayExe))('the tray icon keeps the service alive', () => {
+  it('starts the service again after it dies on its own', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'hidock-tray-restart-'))
+    const port = 30000 + Math.floor(Math.random() * 9000)
+    const { app, root } = stage(base, port)
+    const tray = spawn(
+      join(app, 'HiDockModelHost.exe'),
+      ['--no-icon', '--no-foreground', '--root', root, '--restart-seconds', '2', '--exit-after', '25'],
+      { stdio: 'ignore' }
+    )
+    try {
+      expect(await waitFor(() => healthy(port), 10_000)).toBe(true)
+      const node = serviceNodeIn(app)
+      expect(node).toBeGreaterThan(0)
+      process.kill(node)
+      expect(await waitFor(async () => !(await healthy(port)), 5000)).toBe(true)
+      expect(await waitFor(() => healthy(port), 12_000)).toBe(true)
+      await new Promise((r) => tray.once('exit', r))
+      expect(processesUnder(app)).toBe(0)
+    } finally {
+      if (tray.exitCode === null) tray.kill()
+      await sleep(500)
+      rmSync(base, { recursive: true, force: true })
+    }
+  }, 60_000)
+})
+
 describe.runIf(process.platform === 'win32' && existsSync(trayExe))('the tray icon', () => {
   it('keeps the service down while a game runs, brings it up after, and leaves nothing behind', async () => {
     const base = mkdtempSync(join(tmpdir(), 'hidock-tray-e2e-'))
-    const app = join(base, 'app')
-    const root = join(base, 'root')
-    mkdirSync(app, { recursive: true })
-    mkdirSync(root, { recursive: true })
-    copyFileSync(trayExe, join(app, 'HiDockModelHost.exe'))
-    copyFileSync(process.execPath, join(app, 'node.exe'))
-    cpSync(join(packageRoot, 'src'), join(app, 'src'), { recursive: true })
     const port = 30000 + Math.floor(Math.random() * 9000)
-    writeFileSync(join(root, 'config.json'), JSON.stringify({ port, stepAside: 'games' }))
+    const { app, root } = stage(base, port)
 
     const gameDir = join(base, 'Library', 'steamapps', 'common', 'Fake Game')
     mkdirSync(gameDir, { recursive: true })
@@ -69,7 +112,7 @@ describe.runIf(process.platform === 'win32' && existsSync(trayExe))('the tray ic
 
     const tray = spawn(
       join(app, 'HiDockModelHost.exe'),
-      ['--no-icon', '--root', root, '--quiet-seconds', '3', '--exit-after', '25'],
+      ['--no-icon', '--no-foreground', '--root', root, '--quiet-seconds', '3', '--exit-after', '25'],
       { stdio: 'ignore' }
     )
     try {

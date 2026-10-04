@@ -44,8 +44,9 @@ uint64_t next_change_in(const presence_t *p, uint64_t now_ms);
 /* A program installed in a game library, and not a launcher that runs all day. */
 int is_game_path(const wchar_t *path);
 
-/* The window covers the whole monitor. */
-int covers_monitor(long wl, long wt, long wr, long wb, long ml, long mt, long mr, long mb);
+/* A window in exclusive or borderless full screen: it covers its monitor and has no title bar.
+ * A maximized window also covers the monitor (it overhangs by its border) but keeps its caption. */
+int is_full_screen(long wl, long wt, long wr, long wb, long ml, long mt, long mr, long mb, int has_caption);
 
 /* "stepAside": "any-use" | "games" | "never" in config.json text; games when absent. */
 step_aside_t parse_step_aside(const char *json);
