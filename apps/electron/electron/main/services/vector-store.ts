@@ -253,6 +253,13 @@ class VectorStore {
   private schemaReady = false
   private initialization: Promise<void> | null = null
   private labelRepair: Promise<void> | null = null
+  private cacheWrite: Promise<void> | null = null
+
+  /** Drain initialization and its deferred cache write before closing owned resources. */
+  async waitForIdle(): Promise<void> {
+    await this.initialization
+    await this.cacheWrite
+  }
 
   async initialize(onProgress?: (loaded: number, total: number) => void): Promise<void> {
     if (this.initialized) return
@@ -566,7 +573,7 @@ class VectorStore {
    * main event loop. Unknown-provider rows are excluded (unservable by design).
    */
   private scheduleCacheWrite(): void {
-    void (async () => {
+    this.cacheWrite = (async () => {
       await new Promise((resolve) => setImmediate(resolve))
       try {
         const documents = this.documents
