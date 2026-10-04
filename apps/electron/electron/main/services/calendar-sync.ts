@@ -11,6 +11,7 @@ import { whenBootTasksSettled, areBootTasksSettled } from './boot-scheduler'
 import { emitActivityLog } from './activity-log'
 import { getEventBus } from './event-bus'
 import { reconcileOrganizationYielding } from './org-reconciler'
+import { yieldToEventLoop } from './event-loop'
 
 // Re-export package types and correlate for consumers (e.g. recording-watcher)
 export { correlate } from '@hidock/calendar-sync'
@@ -365,12 +366,6 @@ function validateCalendarUrl(url: string): { valid: boolean; error?: string } {
   } catch {
     return { valid: false, error: 'Invalid URL format' }
   }
-}
-
-// Helper to yield to event loop and prevent UI blocking
-// Uses setTimeout(0) which gives renderer process priority over setImmediate
-function yieldToEventLoop(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0))
 }
 
 /**
