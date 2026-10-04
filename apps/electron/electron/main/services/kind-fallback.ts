@@ -33,6 +33,17 @@ export interface KindAnswer {
   confidence: number
 }
 
+/** The exact evidence shown to the owner and sent to kind-pick. */
+export function buildKindExcerpt(input: { full_text: string; subject: string | null; duration_seconds: number | null }): {
+  excerpt: string; meetingSubject: string | null; minutes: number | null
+} {
+  return {
+    excerpt: neutralizeDelimiters(input.full_text.slice(0, KIND_EXCERPT_CHARS)),
+    meetingSubject: input.subject === null ? null : neutralizeDelimiters(input.subject),
+    minutes: input.duration_seconds ? Math.round(input.duration_seconds / 60) : null
+  }
+}
+
 export function buildKindPrompt(input: { excerpt: string; meetingSubject: string | null; minutes: number | null }): string {
   const kinds = Object.entries(RECORDING_KINDS)
     .map(([id, description]) => `- "${id}": ${description}`)
@@ -107,11 +118,7 @@ export async function resolveKind(captureId: string, recordingId: string): Promi
     [recordingId]
   )
   if (!row?.full_text?.trim()) return 'skipped'
-  const prompt = buildKindPrompt({
-    excerpt: row.full_text.slice(0, KIND_EXCERPT_CHARS),
-    meetingSubject: row.subject,
-    minutes: row.duration_seconds ? Math.round(row.duration_seconds / 60) : null
-  })
+  const prompt = buildKindPrompt(buildKindExcerpt({ ...row, full_text: row.full_text }))
   const { response } = await askDecision('kind-pick', prompt, {
     kind: { type: 'choice', instructions: 'What kind of recording is this? Pick exactly one criteria id.', criteria: RECORDING_KINDS }
   }, {

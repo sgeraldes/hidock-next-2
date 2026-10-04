@@ -19,6 +19,8 @@ export interface ReferenceLabelSet {
   id: string
   question: 'kind'
   createdAt: string
+  size: number
+  unavailable: number
   items: Array<{ recordingId: string; position: number; answer: RecordingKind | null }>
   counts: { doubtful: number; confident: number }
   labeled: number
@@ -27,6 +29,7 @@ export interface ReferenceLabelItem {
   recordingId: string
   date: string
   durationSeconds: number | null
+  minutes: number | null
   meetingSubject: string | null
   excerpt: string
   answer: RecordingKind | null

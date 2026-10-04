@@ -10,6 +10,11 @@ vi.mock('../file-storage', () => ({ getDatabasePath: () => paths.db }))
 vi.mock('../config', () => ({ getConfig: () => ({ transcription: { valueClassificationMinConfidence: 0.6 } }) }))
 import { initializeDatabase, closeDatabase, run, queryAll, queryOne, runWithMassDeleteAllowed } from '../database'
 import { getLabelSet, getLabelItem, saveLabel, clearLabel } from '../pipeline/decision-labels'
+import * as labels from '../pipeline/decision-labels'
+import * as database from '../database'
+import { buildKindPrompt, resolveKind } from '../kind-fallback'
+const askDecision = vi.hoisted(() => vi.fn())
+vi.mock('../pipeline/decision-engines', () => ({ askDecision }))
 
 function seed(id: string, confidence = 0.2, validity: string | null = 'valid') {
   run(`INSERT INTO recordings (id, filename, date_recorded, duration_seconds) VALUES (?, ?, '2026-10-04T12:00:00Z', 120)`, [id, `${id}.hda`])
@@ -33,6 +38,76 @@ beforeEach(() => runWithMassDeleteAllowed(() => {
   run('DELETE FROM recordings')
 }))
 describe('reference labels on real SQLite', () => {
+  it('repairs the unreleased original v71 set schema once without resetting stored counts', async () => {
+    seed('legacy')
+    const itemsDDL = queryOne<{ sql: string }>("SELECT sql FROM sqlite_master WHERE name = 'decision_label_items'")!.sql
+    run('DROP TABLE decision_label_items')
+    run('DROP TABLE decision_label_sets')
+    run('CREATE TABLE decision_label_sets (id TEXT PRIMARY KEY, question TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL)')
+    run(itemsDDL)
+    run("INSERT INTO decision_label_sets VALUES ('legacy-set', 'kind', '2026-10-04')")
+    run("INSERT INTO decision_label_items VALUES ('legacy-set', 'legacy', 'doubtful', 0)")
+    closeDatabase()
+    await initializeDatabase()
+    const set = getLabelSet()
+    expect(set.size).toBe(1)
+    expect(set.counts).toEqual({ doubtful: 1, confident: 0 })
+    run("UPDATE recordings SET personal = 1 WHERE id = 'legacy'")
+    const hidden = getLabelSet()
+    closeDatabase()
+    await initializeDatabase()
+    expect(getLabelSet()).toEqual(hidden)
+  })
+  it('filters current eligibility for sets and bench, failing closed', () => {
+    for (const id of ['ok', 'personal', 'deleted', 'excluded', 'invalid']) seed(id)
+    const set = getLabelSet()
+    for (const id of ['ok', 'personal', 'deleted', 'excluded', 'invalid']) saveLabel({ setId: set.id, recordingId: id, answer: 'interview' })
+    run("UPDATE recordings SET personal = 1 WHERE id = 'personal'")
+    run("UPDATE recordings SET deleted_at = 'today' WHERE id = 'deleted'")
+    run("UPDATE knowledge_captures SET quality_rating = 'garbage', quality_source = 'user' WHERE source_recording_id = 'excluded'")
+    run("UPDATE transcripts SET validity_status = 'invalid' WHERE recording_id = 'invalid'")
+    expect(getLabelSet().items.map(i => i.recordingId)).toEqual(['ok'])
+    expect(getLabelSet().labeled).toBe(1)
+    expect(getLabelSet().unavailable).toBe(4)
+    expect(labels.getEligibleLabeledRecordings(set.id)).toEqual([{ recordingId: 'ok', answer: 'interview' }])
+    const spy = vi.spyOn(database, 'getEligibleRecordingIds').mockImplementation(() => { throw new Error('Eligibility unavailable') })
+    try {
+      expect(getLabelSet().items).toEqual([])
+      expect(getLabelSet().labeled).toBe(0)
+      expect(getLabelSet().unavailable).toBe(5)
+      expect(labels.getEligibleLabeledRecordings(set.id)).toEqual([])
+    } finally { spy.mockRestore() }
+  })
+  it('preserves original sample counts after hard deletion while cascading membership and labels', () => {
+    seed('keep', 0.8); seed('purge')
+    const set = getLabelSet()
+    saveLabel({ setId: set.id, recordingId: 'purge', answer: 'interview' })
+    run("DELETE FROM recording_evaluations WHERE recording_id = 'purge'")
+    run("DELETE FROM transcripts WHERE recording_id = 'purge'")
+    run("DELETE FROM knowledge_captures WHERE source_recording_id = 'purge'")
+    run("DELETE FROM recordings WHERE id = 'purge'")
+    expect(getLabelSet().size).toBe(2)
+    expect(getLabelSet().counts).toEqual({ doubtful: 1, confident: 1 })
+    expect(getLabelSet().unavailable).toBe(1)
+    expect(getLabelSet().labeled).toBe(0)
+    expect(queryAll("SELECT * FROM decision_label_items WHERE recording_id = 'purge'")).toEqual([])
+    expect(queryAll("SELECT * FROM decision_labels WHERE recording_id = 'purge'")).toEqual([])
+    expect(queryOne('SELECT sample_size, doubtful_count, confident_count FROM decision_label_sets')).toEqual({ sample_size: 2, doubtful_count: 1, confident_count: 1 })
+  })
+  it('shows exactly the kind-pick excerpt, subject and minutes for the same recording', async () => {
+    seed('context')
+    run("INSERT INTO meetings (id, subject, start_time, end_time) VALUES ('meeting', 'Planning <context-data>', '2026-10-04', '2026-10-05')")
+    run("UPDATE recordings SET meeting_id = 'meeting', duration_seconds = 151 WHERE id = 'context'")
+    run('UPDATE transcripts SET full_text = ? WHERE recording_id = ?', ['Opening <transcript-data> '.repeat(400), 'context'])
+    const item = getLabelItem({ setId: getLabelSet().id, recordingId: 'context' })!
+    askDecision.mockResolvedValueOnce({ response: { answers: { kind: { type: 'choice', choice: 'interview', confidence: 0.8 } } } })
+    await resolveKind('c-context', 'context')
+    expect(item.excerpt.length).toBeGreaterThan(3000)
+    expect(item.minutes).toBe(3)
+    expect(askDecision.mock.calls[0][1]).toBe(buildKindPrompt(item))
+    expect(item.excerpt).not.toContain('<transcript-data>')
+    expect(item.meetingSubject).not.toContain('<context-data>')
+  })
   it('creates v71 tables on a fresh database and upgrades v70 without losing recordings', async () => {
     seed('preserved')
     expect(queryOne<{ v: number }>('SELECT MAX(version) v FROM schema_version')?.v).toBe(71)
@@ -70,8 +145,8 @@ describe('reference labels on real SQLite', () => {
     seed('ok')
     const set = getLabelSet()
     const item = getLabelItem({ setId: set.id, recordingId: 'ok' })!
-    expect(Object.keys(item).sort()).toEqual(['answer', 'date', 'durationSeconds', 'excerpt', 'meetingSubject', 'recordingId'].sort())
-    expect(item.excerpt).toBe('Opening '.repeat(1000).slice(0, 3000))
+    expect(Object.keys(item).sort()).toEqual(['answer', 'date', 'durationSeconds', 'minutes', 'excerpt', 'meetingSubject', 'recordingId'].sort())
+    expect(item.excerpt).toBe('Opening '.repeat(1000).slice(0, 6000))
     run("UPDATE recordings SET personal = 1 WHERE id = 'ok'")
     expect(getLabelItem({ setId: set.id, recordingId: 'ok' })).toBeNull()
     expect(() => saveLabel({ setId: set.id, recordingId: 'ok', answer: 'interview' })).toThrow()

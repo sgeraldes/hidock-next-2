@@ -32,7 +32,11 @@ const SCHEMA_VERSION = 71
 const DECISION_LABELS_DDL = `CREATE TABLE IF NOT EXISTS decision_label_sets (
     id TEXT PRIMARY KEY,
     question TEXT NOT NULL UNIQUE,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    sample_size INTEGER NOT NULL DEFAULT 0 CHECK(sample_size >= 0),
+    doubtful_count INTEGER NOT NULL DEFAULT 0 CHECK(doubtful_count >= 0),
+    confident_count INTEGER NOT NULL DEFAULT 0 CHECK(confident_count >= 0),
+    CHECK(sample_size = doubtful_count + confident_count)
 );
 CREATE TABLE IF NOT EXISTS decision_label_items (
     set_id TEXT NOT NULL REFERENCES decision_label_sets(id) ON DELETE CASCADE,
@@ -4045,6 +4049,18 @@ function repairPhase(): void {
   // Reference labels (v71), like Notes: fresh installs and upgrades share the
   // migration DDL, while SCHEMA remains a literal list of SQL statements.
   database.run(DECISION_LABELS_DDL)
+  // v71 is unreleased. Preserve samples created by its original development
+  // schema; backfill once from stored membership, never from current eligibility.
+  const labelSetColumns = getTableColumns(database, 'decision_label_sets')
+  if (!labelSetColumns.includes('sample_size')) {
+    database.run('ALTER TABLE decision_label_sets ADD COLUMN sample_size INTEGER NOT NULL DEFAULT 0 CHECK(sample_size >= 0)')
+    database.run('ALTER TABLE decision_label_sets ADD COLUMN doubtful_count INTEGER NOT NULL DEFAULT 0 CHECK(doubtful_count >= 0)')
+    database.run('ALTER TABLE decision_label_sets ADD COLUMN confident_count INTEGER NOT NULL DEFAULT 0 CHECK(confident_count >= 0)')
+    database.run(`UPDATE decision_label_sets SET
+      sample_size = (SELECT COUNT(*) FROM decision_label_items WHERE set_id = decision_label_sets.id),
+      doubtful_count = (SELECT COUNT(*) FROM decision_label_items WHERE set_id = decision_label_sets.id AND stratum = 'doubtful'),
+      confident_count = (SELECT COUNT(*) FROM decision_label_items WHERE set_id = decision_label_sets.id AND stratum = 'confident')`)
+  }
 
   // Repair transcript_speakers (v25): a new table has no columns to ALTER, but
   // force-create it here so an older on-disk DB that skipped the migration still

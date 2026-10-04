@@ -3,17 +3,17 @@ import { z } from 'zod'
 import { queryAll, queryOne, run, runInTransaction } from '../database'
 import { filterEligibleRecordingIds, isRecordingEligible } from '../recording-eligibility'
 import { KIND_FALLBACK_MAX_JEV_CONFIDENCE } from '../jev-evaluation'
-import { KIND_EXCERPT_CHARS } from '../kind-fallback'
+import { buildKindExcerpt } from '../kind-fallback'
 import { RECORDING_KINDS, type RecordingKind, type ReferenceLabelSet, type ReferenceLabelItem } from '../../../../src/shared/decision-labels'
 
 const itemSchema = z.object({ setId: z.string().min(1).max(100), recordingId: z.string().min(1).max(200) }).strict()
 const saveSchema = itemSchema.extend({ answer: z.enum(Object.keys(RECORDING_KINDS) as [RecordingKind, ...RecordingKind[]]) })
-const SCREEN_EXCERPT_CHARS = Math.min(3000, KIND_EXCERPT_CHARS)
+interface StoredSet { id: string; created_at: string; sample_size: number; doubtful_count: number; confident_count: number }
 
 /** Synchronous transaction: two first-use requests cannot create different samples. */
 export function getLabelSet(): ReferenceLabelSet {
   return runInTransaction(() => {
-    let set = queryOne<{ id: string; created_at: string }>("SELECT id, created_at FROM decision_label_sets WHERE question = 'kind'")
+    let set = queryOne<StoredSet>("SELECT id, created_at, sample_size, doubtful_count, confident_count FROM decision_label_sets WHERE question = 'kind'")
     if (!set) {
       const candidates = queryAll<{ recording_id: string; kind_confidence: number }>(`
         SELECT re.recording_id, re.kind_confidence FROM recording_evaluations re
@@ -30,7 +30,7 @@ export function getLabelSet(): ReferenceLabelSet {
         ORDER BY RANDOM()`)
       const { eligible, failClosed } = filterEligibleRecordingIds(candidates.map(row => row.recording_id))
       if (failClosed) throw new Error('Recording eligibility could not be checked. Try again.')
-      set = { id: randomUUID(), created_at: new Date().toISOString() }
+      set = { id: randomUUID(), created_at: new Date().toISOString(), sample_size: 0, doubtful_count: 0, confident_count: 0 }
       run("INSERT INTO decision_label_sets (id, question, created_at) VALUES (?, 'kind', ?)", [set.id, set.created_at])
       const counts = { doubtful: 0, confident: 0 }
       let position = 0
@@ -43,32 +43,54 @@ export function getLabelSet(): ReferenceLabelSet {
         counts[stratum]++
         seen.add(row.recording_id)
       }
+      set.sample_size = position
+      set.doubtful_count = counts.doubtful
+      set.confident_count = counts.confident
+      run('UPDATE decision_label_sets SET sample_size = ?, doubtful_count = ?, confident_count = ? WHERE id = ?',
+        [position, counts.doubtful, counts.confident, set.id])
     }
     const rows = queryAll<{ recording_id: string; position: number; stratum: 'doubtful' | 'confident'; answer: RecordingKind | null }>(`
       SELECT i.recording_id, i.position, i.stratum, l.answer FROM decision_label_items i
       LEFT JOIN decision_labels l ON l.recording_id = i.recording_id AND l.question = 'kind'
       WHERE i.set_id = ? ORDER BY i.position`, [set.id])
+    const { eligible, failClosed } = filterEligibleRecordingIds(rows.map(row => row.recording_id))
+    const available = rows.filter(row => !failClosed && eligible.has(row.recording_id))
     return {
       id: set.id, question: 'kind', createdAt: set.created_at,
-      items: rows.map(row => ({ recordingId: row.recording_id, position: row.position, answer: row.answer })),
-      counts: { doubtful: rows.filter(row => row.stratum === 'doubtful').length, confident: rows.filter(row => row.stratum === 'confident').length },
-      labeled: rows.filter(row => row.answer !== null).length
+      size: set.sample_size, unavailable: set.sample_size - available.length,
+      items: available.map(row => ({ recordingId: row.recording_id, position: row.position, answer: row.answer })),
+      counts: { doubtful: set.doubtful_count, confident: set.confident_count },
+      labeled: available.filter(row => row.answer !== null).length
     }
   })
+}
+
+/** Part 3 bench input: only currently eligible, labeled members of this sample. */
+export function getEligibleLabeledRecordings(setId: string): Array<{ recordingId: string; answer: RecordingKind }> {
+  const rows = queryAll<{ recordingId: string; answer: RecordingKind }>(`
+    SELECT i.recording_id AS recordingId, l.answer FROM decision_label_items i
+    JOIN decision_label_sets s ON s.id = i.set_id AND s.question = 'kind'
+    JOIN decision_labels l ON l.recording_id = i.recording_id AND l.question = s.question
+    WHERE i.set_id = ? ORDER BY i.position`, [z.string().min(1).max(100).parse(setId)])
+  const { eligible, failClosed } = filterEligibleRecordingIds(rows.map(row => row.recordingId))
+  return rows.filter(row => !failClosed && eligible.has(row.recordingId))
 }
 
 export function getLabelItem(raw: unknown): ReferenceLabelItem | null {
   const args = itemSchema.parse(raw)
   if (!isRecordingEligible(args.recordingId)) return null
-  return queryOne<ReferenceLabelItem>(`
+  const row = queryOne<Omit<ReferenceLabelItem, 'excerpt' | 'minutes' | 'meetingSubject'> & { full_text: string; subject: string | null }>(`
     SELECT r.id AS recordingId, r.date_recorded AS date, r.duration_seconds AS durationSeconds,
-      m.subject AS meetingSubject, SUBSTR(t.full_text, 1, ?) AS excerpt, l.answer
+      m.subject, t.full_text, l.answer
     FROM decision_label_items i JOIN decision_label_sets s ON s.id = i.set_id AND s.question = 'kind'
     JOIN recordings r ON r.id = i.recording_id
     JOIN transcripts t ON t.recording_id = r.id AND t.validity_status = 'valid'
     LEFT JOIN meetings m ON m.id = r.meeting_id
     LEFT JOIN decision_labels l ON l.recording_id = r.id AND l.question = s.question
-    WHERE i.set_id = ? AND i.recording_id = ?`, [SCREEN_EXCERPT_CHARS, args.setId, args.recordingId]) ?? null
+    WHERE i.set_id = ? AND i.recording_id = ?`, [args.setId, args.recordingId])
+  if (!row) return null
+  const { full_text, subject, ...item } = row
+  return { ...item, ...buildKindExcerpt({ full_text, subject, duration_seconds: item.durationSeconds }) }
 }
 
 export function saveLabel(raw: unknown): void {

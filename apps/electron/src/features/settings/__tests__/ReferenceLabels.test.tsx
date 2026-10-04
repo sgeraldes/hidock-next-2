@@ -6,12 +6,12 @@ import type { ReferenceLabelSet, RecordingKind } from '@/shared/decision-labels'
 let answers: Record<string, RecordingKind | null>
 const getLabelSet = vi.fn(async (): Promise<ReferenceLabelSet> => ({
   id: 'set', question: 'kind', createdAt: '2026-10-04',
-  counts: { doubtful: 1, confident: 2 }, labeled: Object.values(answers).filter(Boolean).length,
+  size: 3, unavailable: 0, counts: { doubtful: 1, confident: 2 }, labeled: Object.values(answers).filter(Boolean).length,
   items: ['a', 'b', 'c'].map((recordingId, position) => ({ recordingId, position, answer: answers[recordingId] ?? null }))
 }))
 const getLabelItem = vi.fn(async ({ recordingId }: { recordingId: string }) => ({
   recordingId, date: '2026-10-04T12:00:00Z', durationSeconds: 120,
-  meetingSubject: 'Planning', excerpt: `Opening ${recordingId}`, answer: answers[recordingId] ?? null
+  meetingSubject: 'Planning', minutes: 2, excerpt: `Opening ${recordingId}`, answer: answers[recordingId] ?? null
 }))
 const saveLabel = vi.fn(async ({ recordingId, answer }: { recordingId: string; answer: RecordingKind }) => { answers[recordingId] = answer })
 const clearLabel = vi.fn(async ({ recordingId }: { recordingId: string }) => { answers[recordingId] = null })
@@ -21,6 +21,15 @@ beforeEach(() => {
   window.electronAPI = { pipeline: { getLabelSet, getLabelItem, saveLabel, clearLabel } } as never
 })
 describe('Reference labels', () => {
+  it('shows original size and unavailable count with a scrollable excerpt', async () => {
+    getLabelSet.mockResolvedValueOnce({ id: 'set', question: 'kind', createdAt: '2026-10-04', size: 40, unavailable: 39,
+      counts: { doubtful: 20, confident: 20 }, labeled: 0, items: [{ recordingId: 'a', position: 0, answer: null }] })
+    render(<ReferenceLabels />)
+    await screen.findByText('Opening a')
+    expect(screen.getByText('0 of 40 labeled')).toBeInTheDocument()
+    expect(screen.getByText('39 no longer available')).toBeInTheDocument()
+    expect(screen.getByLabelText('Transcript opening')).toHaveClass('overflow-y-auto')
+  })
   it('picks, advances, counts, skips, goes back, changes and clears', async () => {
     render(<ReferenceLabels />)
     expect(await screen.findByText('Opening a')).toBeInTheDocument()

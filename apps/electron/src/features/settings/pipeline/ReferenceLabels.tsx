@@ -92,14 +92,15 @@ export function ReferenceLabels() {
       {!set && !loading && <Button variant="outline" onClick={() => setRetry(value => value + 1)}>Retry labels</Button>}
       {set && (
         <>
-          <p role="status" className="text-sm tabular-nums">{set.labeled} of {set.items.length} labeled</p>
+          <p role="status" className="text-sm tabular-nums">{set.labeled} of {set.size} labeled</p>
+          {set.unavailable > 0 && <p className="text-sm text-muted-foreground">{set.unavailable} no longer available</p>}
           {(set.counts.doubtful < 20 || set.counts.confident < 20) && <p className="text-sm text-muted-foreground">Only {set.counts.doubtful} doubtful and {set.counts.confident} confident recordings were available when this set was created (target: 20 each).</p>}
           {set.items.length === 0 ? <p className="text-sm">No eligible recordings with valid transcripts are available in this set.</p> : (
             <div className="space-y-4 rounded-lg border border-border bg-card p-4" aria-busy={loading || saving}>
               <p className="text-sm tabular-nums">{index < set.items.length ? `Recording ${index + 1} of ${set.items.length}` : 'You have reached the end of this set.'}</p>
               {loading ? <p className="text-sm">Loading recording…</p> : recordingId && !item ? <p className="text-sm">This recording is unavailable for labeling. You can skip it or go back.</p> : item && (
                 <>
-                  <p className="text-sm text-muted-foreground">{new Date(item.date).toLocaleString('en-US')}{item.durationSeconds !== null ? ` · ${Math.round(item.durationSeconds / 60)} min` : ''}</p>
+                  <p className="text-sm text-muted-foreground">{new Date(item.date).toLocaleString('en-US')}{item.minutes !== null ? ` · ${item.minutes} min` : ''}</p>
                   {item.meetingSubject && <p className="text-sm">Calendar meeting: {item.meetingSubject}</p>}
                   <div className="max-h-64 overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed" tabIndex={0} aria-label="Transcript opening">{item.excerpt}</div>
                   <p className="text-xs text-muted-foreground">Pick a kind with the number keys below. Use 0 for Device test and Shift+1 for Noise accidental. To change a label, go back and pick another kind.</p>
