@@ -38,6 +38,7 @@ let excludedResult: { ids: Set<string>; failClosed: boolean } = { ids: new Set<s
 /** When set, queryOne resolves per-id (backfill tests); otherwise currentRow. */
 let rowById: ((id: string) => FakeWikiRow | null) | null = null
 /** fs syscall counters — the quadratic-regression assertion reads these. */
+let missingRecordingIds = new Set<string>()
 let blockedUnlink: string | null = null
 const fsCalls = { readFile: 0, readdir: 0, write: 0, open: 0 }
 
@@ -114,11 +115,14 @@ vi.mock('../database', () => ({
   // filterEligibleRecordingIds (from ./recording-eligibility, which reads the
   // POSITIVE allowlist getEligibleRecordingIds from here). Derive both from the
   // same mutable exclusion set.
+  getExistingRecordingIds: (ids: Iterable<string>) => ({
+    ids: new Set([...ids].filter((id) => !missingRecordingIds.has(id))), failClosed: false
+  }),
   getExcludedRecordingIds: () => excludedResult,
   getEligibleRecordingIds: (ids: Iterable<string>) =>
     excludedResult.failClosed
       ? { eligible: new Set<string>(), failClosed: true }
-      : { eligible: new Set([...ids].filter((i) => i && !excludedResult.ids.has(i))), failClosed: false }
+      : { eligible: new Set([...ids].filter((i) => i && !missingRecordingIds.has(i) && !excludedResult.ids.has(i))), failClosed: false }
 }))
 
 describe('exportMeetingWiki — stale page cleanup (ISSUE-8)', () => {
@@ -129,6 +133,7 @@ describe('exportMeetingWiki — stale page cleanup (ISSUE-8)', () => {
     // tests or one test's rotation leaks into the next.
     await resetBackfillCursor()
     currentRow = null
+    missingRecordingIds = new Set<string>()
     backfillRows = []
     rowById = null
     configStore = new Map<string, string>()
@@ -241,6 +246,7 @@ describe('wiki page ownership — safe for deletion (adversarial review #1)', ()
     // tests or one test's rotation leaks into the next.
     await resetBackfillCursor()
     currentRow = null
+    missingRecordingIds = new Set<string>()
     backfillRows = []
     rowById = null
     configStore = new Map<string, string>()
@@ -975,6 +981,7 @@ describe('backfillMeetingWiki — bounded, yielding, resumable (F15)', () => {
     // tests or one test's rotation leaks into the next.
     await resetBackfillCursor()
     currentRow = null
+    missingRecordingIds = new Set<string>()
     backfillRows = []
     configStore = new Map<string, string>()
     excludedResult = { ids: new Set<string>(), failClosed: false }
@@ -1009,17 +1016,35 @@ describe('backfillMeetingWiki — bounded, yielding, resumable (F15)', () => {
     }
   }
 
-  it('review3: preserves retry for external rewrite after metadata refresh', async () => {
+  it('preserves an unknown recording owner while purging an existing personal owner without a transcript', async () => {
+    const { backfillMeetingWiki } = await import('../meeting-wiki')
+    backfillRows = []
+    missingRecordingIds.add('unknown')
+    excludedResult.ids.add('personal-no-transcript')
+    mkdirSync(join(tmpRoot, 'wiki'), { recursive: true })
+    const unknownPage = join(tmpRoot, 'wiki', 'unknown.md')
+    const personalPage = join(tmpRoot, 'wiki', 'personal.md')
+    const unknownBytes = '---\nrecording_id: unknown\n---\nnewer than restored database'
+    writeFileSync(unknownPage, unknownBytes)
+    writeFileSync(personalPage, '---\nrecording_id: personal-no-transcript\n---\nprivate')
+    try {
+      await backfillMeetingWiki({ batchSize: 1, budgetMs: 0 })
+      expect(readFileSync(unknownPage, 'utf8')).toBe(unknownBytes)
+      expect(() => readFileSync(personalPage, 'utf8')).toThrow(/ENOENT/)
+    } finally { missingRecordingIds.clear() }
+  })
+
+  it('purges an external private rewrite by the next pass despite export budget and retry loss', async () => {
     const { backfillMeetingWiki, reconcileWikiEligibility } = await import('../meeting-wiki')
-    backfillRows = [{ recording_id: 'private' }]
+    backfillRows = [{ recording_id: 'aaa-public' }, { recording_id: 'private' }]
     mkdirSync(join(tmpRoot, 'wiki'), { recursive: true })
     const page = join(tmpRoot, 'wiki', 'shared.md')
     writeFileSync(page, '---\nrecording_id: foreign\n---\nbody')
     let yields = 0
     const helper = await import('../event-loop')
     const spy = vi.spyOn(helper, 'yieldToEventLoop').mockImplementation(async () => {
-      // The external rewrite bypasses the journal after metadata has been refreshed.
-      if (++yields === 2) {
+      // Rewrite after the retry sweep: this external write has no HiDock journal entry.
+      if (++yields === 3) {
         writeFileSync(page, '---\nrecording_id: private\n---\nprivate replacement')
         blockedUnlink = page
         excludedResult.ids.add('private')
@@ -1028,12 +1053,16 @@ describe('backfillMeetingWiki — bounded, yielding, resumable (F15)', () => {
       }
     })
     try {
-      const result = await backfillMeetingWiki({ batchSize: 1 })
+      await backfillMeetingWiki({ batchSize: 1 })
       expect(readFileSync(page, 'utf8')).toContain('private replacement')
-      expect(configStore.has('wiki_cleanup_pending:private')).toBe(true)
-      expect(result.failed).toBe(1)
-      expect(result.remainingMissing).toBe(0)
     } finally { blockedUnlink = null; spy.mockRestore() }
+    // Pass one may clear the retry against its stale index. Prove cleanup does not
+    // depend on that ledger, and cannot be starved by missing exports or their cursor.
+    configStore.delete('wiki_cleanup_pending:private')
+    backfillRows.unshift({ recording_id: 'aaa-next-public' })
+    await backfillMeetingWiki({ batchSize: 1, budgetMs: 0 })
+    expect(() => readFileSync(page, 'utf8')).toThrow(/ENOENT/)
+    expect(configStore.has('wiki_cleanup_pending:private')).toBe(false)
   })
 
   it.each([true, false])('review3: defers lookup failure with existing page=%s', async (existing) => {
@@ -1747,6 +1776,7 @@ describe('meeting-wiki — eligibility gating (RE7-1)', () => {
     cacheDirOverride = null
     await resetBackfillCursor()
     currentRow = null
+    missingRecordingIds = new Set<string>()
     backfillRows = []
     rowById = null
     configStore = new Map<string, string>()
@@ -1863,6 +1893,7 @@ describe('removeMeetingWiki — cleanup result (RE7-P1b)', () => {
     cacheDirOverride = null
     await resetBackfillCursor()
     currentRow = null
+    missingRecordingIds = new Set<string>()
     backfillRows = []
     rowById = null
     configStore = new Map<string, string>()
@@ -1899,6 +1930,7 @@ describe('meeting-wiki — cleanup-retry ledger (RE8-P1)', () => {
     cacheDirOverride = null
     await resetBackfillCursor()
     currentRow = null
+    missingRecordingIds = new Set<string>()
     backfillRows = []
     rowById = null
     configStore = new Map<string, string>()

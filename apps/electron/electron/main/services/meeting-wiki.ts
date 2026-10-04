@@ -27,7 +27,7 @@ import { join, dirname, basename } from 'path'
 import { StringDecoder } from 'string_decoder'
 import { getTranscriptsPath, getCachePath } from './file-storage'
 import { queryAll, queryOne, run } from './database'
-import { isRecordingEligible, filterEligibleRecordingIds } from './recording-eligibility'
+import { isRecordingEligible, filterEligibleRecordingIds, existingRecordings } from './recording-eligibility'
 import { refuseWhileTranscriptsMove } from './storage-move-state'
 import { yieldToEventLoop } from './event-loop'
 
@@ -976,12 +976,12 @@ export function retryPendingWikiCleanups(index?: WikiIndex): { cleared: number; 
     console.warn('[MeetingWiki] could not read pending wiki cleanups:', e)
     return { cleared: 0, stillPending: 0 }
   }
-  // Standalone callers build one index lazily for all ineligible retries.
-  // Boot callers supply the bounded index; refresh it only when retries exist.
-  // Pending retries require current ownership, including external rewrites of existing
-  // filenames that bypass the service journal. Drain the full scan synchronously so
-  // no yield can invalidate it before cleanup; the usual zero-retry boot stays bounded.
-  let sweepIndex = index && rows.length > 0 ? buildWikiIndex(index.dir) : index
+  // Standalone callers build one index lazily; boot reuses its bounded scan and
+  // synchronous journal reconciliation. HiDock's journaled writes are covered in
+  // this pass; external rewrites are purged on the next interference-free pass.
+  // Avoid a synchronous full rescan at boot: 1,490 pages measured 250 ms for
+  // stat and 683 ms for parsing, blocking renderer IPC throughout those stretches.
+  let sweepIndex = index
   for (const r of rows) {
     const recordingId = r.value
     if (!recordingId) continue
@@ -1289,19 +1289,18 @@ async function backfillMeetingWikiPass(
 ): Promise<WikiBackfillResult> {
   const dir = journal.dir
   const batchSize = Math.max(1, options.batchSize ?? DEFAULT_BATCH_SIZE)
-  // Normal boots share one bounded ownership scan across cleanup and export.
-  // Rare pending privacy retries replace it with a fresh synchronous scan below.
+  // Every boot shares one bounded ownership scan across cleanup and export.
   let index = await buildWikiIndexForBoot(dir, batchSize)
 
   // RE8-P1 (round-9) — first drain any wiki-cleanup retries enqueued by a failed
   // transition cleanup, so an excluded recording's page is removed on boot even
   // if the mark-personal / soft-delete / value-rating attempt failed earlier.
   // The sweep returns its current index, with removed owners dropped, so later
-  // decisions share both freshly verified ownership and the post-cleanup state.
+  // decisions share the journal-reconciled ownership and post-cleanup state.
   await refreshWikiMetadataForBoot(index, batchSize, journal)
   reconcileWikiIndex(index, journal)
   const cleanupRetries = retryPendingWikiCleanups(index)
-  // Carry fresh ownership forward so subsequent exclusions cannot clear failed retries.
+  // Carry successful cleanup mutations forward into export decisions.
   index = cleanupRetries.index ?? index
   await yieldToEventLoop()
   const budgetMs = options.budgetMs ?? DEFAULT_BUDGET_MS
@@ -1314,7 +1313,10 @@ async function backfillMeetingWikiPass(
   // RE7-1 — filter candidates through the shared boundary FAIL-CLOSED: if
   // eligibility can't be established, write nothing rather than export excluded
   // transcripts to disk on boot.
-  const { failClosed } = filterEligibleRecordingIds(rows.map((r) => r.recording_id))
+  const indexedOwners = [...new Set(index.owner.values())]
+  const { eligible, failClosed } = filterEligibleRecordingIds([
+    ...rows.map((r) => r.recording_id), ...indexedOwners
+  ])
   if (failClosed) {
     console.error('[MeetingWiki] Backfill skipped — recording eligibility unavailable (fail closed)')
     return { written: 0, unchanged: 0, failed: 0, remaining: 0, remainingMissing: 0 }
@@ -1341,7 +1343,21 @@ async function backfillMeetingWikiPass(
     rotateAt = next === -1 ? 0 : next // past the end -> wrap to the start
   }
   const missing = [...missingSorted.slice(rotateAt), ...missingSorted.slice(0, rotateAt)]
-  const ordered = [...missing, ...rows.filter((r) => !isMissing(r.recording_id))]
+  // Purge existing indexed excluded owners before budgeted exports, even without a
+  // transcript row or durable retry. A cursor/budget cannot strand private pages
+  // discovered by this pass after an unjournaled external rewrite in the last one.
+  // An absent row may mean this database was restored from an older backup.
+  // Ineligibility alone cannot authorize deletion of that owner's newer page.
+  const existingOwners = existingRecordings(indexedOwners)
+  const privacyOwners = existingOwners.failClosed
+    ? []
+    : indexedOwners.filter((id) => existingOwners.ids.has(id) && !eligible.has(id))
+  const privacyOwnerSet = new Set(privacyOwners)
+  const ordered = [
+    ...privacyOwners.map((recording_id) => ({ recording_id })),
+    ...missing.filter((r) => !privacyOwnerSet.has(r.recording_id)),
+    ...rows.filter((r) => !isMissing(r.recording_id) && !privacyOwnerSet.has(r.recording_id))
+  ]
   /** Last missing recording this pass touched; becomes the next resume point. */
   let lastAttemptedMissingId: string | null = null
 
@@ -1437,7 +1453,7 @@ async function backfillMeetingWikiPass(
     if (processed % batchSize === 0 || Date.now() - stretchStarted >= 25) {
       // Give the renderer's queued IPC a turn before the next batch.
       await yieldToEventLoop()
-      if (Date.now() >= deadline) break
+      if (Date.now() >= deadline && processed >= privacyOwners.length) break
       indexNeedsReconcile = true
       stretchStarted = Date.now()
     }
