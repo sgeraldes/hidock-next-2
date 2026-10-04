@@ -24,6 +24,12 @@
  *
  * Exit code 0 = better-sqlite3 is Electron-ABI-loadable AND the vitest binding
  * contract holds. Non-zero = one of the two is broken.
+ *
+ * Since better-sqlite3 13 the package loads a Node-API prebuilt
+ * (prebuilds/<platform>-<arch>.node) that serves both runtimes, the rebuild
+ * step builds nothing, and there is no build/Release binary to back up. The
+ * gate still proves both loads, which is what matters if a platform ever falls
+ * back to a source build.
  */
 
 import { execFileSync } from 'node:child_process'

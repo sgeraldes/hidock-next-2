@@ -42,6 +42,7 @@ import { existsSync } from 'fs'
 import { join, basename, dirname } from 'path'
 import { resetStorageLimitCache } from './storage-usage'
 import { queueTranscriptionIfEnabled } from './transcription'
+import { profileNewRecording } from './audio-profile-store'
 
 /**
  * D-022 — why a requested file did not enter the queue.
@@ -1035,8 +1036,8 @@ export class DownloadService {
       // so the Library label is there before the queue reaches this file; until
       // 3-oct-2026 a download waited for the next launch's pass. The transcription
       // gate reads the same profile and computes it itself when this has not run.
-      void import('./audio-profile-store')
-        .then(({ profileNewRecording }) => profileNewRecording(recordingId))
+      void Promise.resolve()
+        .then(() => profileNewRecording(recordingId))
         .catch((err) => console.error('[DownloadService] The audio check failed:', err))
 
       // DL-07: Clean up completed items from queue after emitting final state.

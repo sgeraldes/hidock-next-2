@@ -26,7 +26,7 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "license": "MIT",
   "devDependencies": {
@@ -34,7 +34,7 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.0.0",
     "@types/sql.js": "1.4.9",
-    "better-sqlite3": "^12.11.1",
+    "better-sqlite3": "^13.0.3",
     "sql.js": "^1.11.0",
     "tsup": "^8.5.1",
     "typescript": "^5.6.0",
@@ -46,7 +46,7 @@
     "postcss": "^8.5.23"
   },
   "allowScripts": {
-    "better-sqlite3": true,
+    "better-sqlite3": false,
     "esbuild": true,
     "file:../../../database": true
   }

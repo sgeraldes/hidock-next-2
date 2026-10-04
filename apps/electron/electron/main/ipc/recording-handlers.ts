@@ -35,7 +35,8 @@ import { disambiguateOverlappingCandidates } from '../services/meeting-disambigu
 import { matchMeetingWithJev, type MeetingMatch } from '../services/jev-meeting-match'
 import { jevMeetingMatchDeps, listMeetingCandidates, toMatchCandidates, toMatchContext } from '../services/meeting-candidate-list'
 import { filterEligibleRecordingIds } from '../services/recording-eligibility'
-import { applyDurationValueGate } from '../services/value-classification'
+import { applyDurationValueGate, recomputeAudioWarnings } from '../services/value-classification'
+import { syncTrustVerdicts } from '../services/transcript-trust'
 import { copyFileSync, existsSync, statSync } from 'fs'
 import { basename, join, extname } from 'path'
 import { randomUUID } from 'crypto'
@@ -855,10 +856,8 @@ export function registerRecordingHandlers(): void {
       // which keeps search, the graph and People away from it; an accepted or
       // re-checked one gets the rating back. Library-wide and idempotent.
       try {
-        const { syncTrustVerdicts } = await import('../services/transcript-trust')
         syncTrustVerdicts()
         // Stars, kind and context follow the trust verdicts just settled.
-        const { recomputeAudioWarnings } = await import('../services/value-classification')
         await recomputeAudioWarnings()
       } catch (err) {
         console.warn('recordings:backfillDurations: transcript trust sync failed:', err)

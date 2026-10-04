@@ -27,6 +27,23 @@ win:
       arch:
         - x64
   executableName: HiDock Next
+  # Native packages ship binaries for every platform; the Windows x64 build needs only its own.
+  # Each loader picks the win32-x64 file at runtime: onnxruntime-node bin/napi-v6/win32/x64,
+  # better-sqlite3 prebuilds/win32-x64.node, usb prebuilds/win32-x64 (node-gyp-build).
+  # Adding an arm64 target means removing the win32-arm64 lines.
+  files:
+    - '!node_modules/onnxruntime-node/bin/napi-v6/darwin/**'
+    - '!node_modules/onnxruntime-node/bin/napi-v6/linux/**'
+    - '!node_modules/onnxruntime-node/bin/napi-v6/win32/arm64/**'
+    - '!node_modules/better-sqlite3/prebuilds/darwin-*.node'
+    - '!node_modules/better-sqlite3/prebuilds/linux-*.node'
+    - '!node_modules/better-sqlite3/prebuilds/linuxmusl-*.node'
+    - '!node_modules/better-sqlite3/prebuilds/win32-arm64.node'
+    - '!node_modules/usb/prebuilds/android-*/**'
+    - '!node_modules/usb/prebuilds/darwin-*/**'
+    - '!node_modules/usb/prebuilds/linux-*/**'
+    - '!node_modules/usb/prebuilds/win32-arm64/**'
+    - '!node_modules/usb/prebuilds/win32-ia32/**'
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}
