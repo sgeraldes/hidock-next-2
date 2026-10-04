@@ -1122,7 +1122,7 @@ CREATE INDEX IF NOT EXISTS idx_contact_aliases_contact ON contact_aliases(contac
 CREATE INDEX IF NOT EXISTS idx_project_aliases_project ON project_aliases(project_id);
 CREATE INDEX IF NOT EXISTS idx_identity_suggestions_status ON identity_suggestions(status);
 CREATE INDEX IF NOT EXISTS idx_merge_journal_kind_keeper ON merge_journal(kind, keeper_id);
--- MAX(seq) runs inside every atomic merge; avoid scanning multi-kilobyte snapshots.
+-- MAX(seq) runs inside every atomic merge: avoid scanning multi-kilobyte snapshots.
 CREATE INDEX IF NOT EXISTS idx_merge_journal_seq ON merge_journal(seq);
 -- Cover ordered contact-journal discovery without reading snapshot pages.
 -- keeper_id retains the old kind/keeper index's tie order for equal sequences.
