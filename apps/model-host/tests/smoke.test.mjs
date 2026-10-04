@@ -13,6 +13,9 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { start } from '../src/main.mjs'
 
+// A made-up token: the shape of a Hugging Face token, the value of nothing.
+const FAKE_TOKEN = 'hf_abcdefghijklmnopqrstuvwxyz' // pragma: allowlist secret
+
 const root = mkdtempSync(join(tmpdir(), 'hidock-host-test-'))
 // A python that does not exist: a job has to reach the worker and fail THERE,
 // which proves the door opened, without waiting on pyannote.
@@ -120,7 +123,7 @@ describe('the service over a real socket', () => {
     const put = await fetch(`${freshBase}/secrets/hf-token`, {
       method: 'PUT',
       headers: { ...auth, 'content-type': 'application/json' },
-      body: JSON.stringify({ token: 'hf_abcdefghijklmnopqrstuvwxyz' }),
+      body: JSON.stringify({ token: FAKE_TOKEN }),
     })
     expect(put.status).toBe(202)
     await fresh.setup.idle()
@@ -128,7 +131,7 @@ describe('the service over a real socket', () => {
     expect(after.setup).toMatchObject({ status: 'ready', device: 'cuda' })
     expect(after.capabilities).toEqual(['diarize'])
     // Kept for the next start, in secrets.json, never in config.json.
-    expect(JSON.parse(readFileSync(join(freshRoot, 'secrets.json'), 'utf8')).hfToken).toBe('hf_abcdefghijklmnopqrstuvwxyz')
+    expect(JSON.parse(readFileSync(join(freshRoot, 'secrets.json'), 'utf8')).hfToken).toBe(FAKE_TOKEN)
     const config = readFileSync(join(freshRoot, 'config.json'), 'utf8')
     expect(JSON.parse(config).validated).toBe(true)
     expect(config).not.toMatch(/hf_/)
