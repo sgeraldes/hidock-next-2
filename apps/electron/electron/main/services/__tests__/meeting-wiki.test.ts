@@ -38,7 +38,7 @@ let excludedResult: { ids: Set<string>; failClosed: boolean } = { ids: new Set<s
 /** When set, queryOne resolves per-id (backfill tests); otherwise currentRow. */
 let rowById: ((id: string) => FakeWikiRow | null) | null = null
 /** fs syscall counters — the quadratic-regression assertion reads these. */
-const fsCalls = { readFile: 0, readdir: 0, write: 0 }
+const fsCalls = { readFile: 0, readdir: 0, write: 0, open: 0 }
 
 // Count the fs calls the exporter makes, delegating to the real implementations
 // so the tests still exercise a real directory.
@@ -47,6 +47,10 @@ vi.mock('fs', async (importOriginal) => {
   return {
     ...real,
     default: real,
+    openSync: (...a: Parameters<typeof real.openSync>) => {
+      fsCalls.open++
+      return real.openSync(...a)
+    },
     readFileSync: (...a: Parameters<typeof real.readFileSync>) => {
       fsCalls.readFile++
       return real.readFileSync(...a)
@@ -999,6 +1003,28 @@ describe('backfillMeetingWiki — bounded, yielding, resumable (F15)', () => {
       return []
     }
   }
+
+  it('yields through the shared helper after each ownership batch and preserves page bytes', async () => {
+    const { backfillMeetingWiki } = await import('../meeting-wiki')
+    await backfillMeetingWiki()
+    const names = listWiki()
+    const before = names.map((name) => readFileSync(join(tmpRoot, 'wiki', name), 'utf8'))
+    fsCalls.open = 0
+    const opensAtYield: number[] = []
+    const helper = await import('../event-loop')
+    const spy = vi.spyOn(helper, 'yieldToEventLoop').mockImplementation(async () => {
+      opensAtYield.push(fsCalls.open)
+    })
+    try {
+      const result = await backfillMeetingWiki({ batchSize: 10 })
+      expect(opensAtYield.slice(0, N / 10)).toEqual([10, 20, 30, 40, 50, 60])
+      expect(result).toEqual({ written: 0, unchanged: N, failed: 0, remaining: 0, remainingMissing: 0 })
+      expect(listWiki()).toEqual(names)
+      expect(names.map((name) => readFileSync(join(tmpRoot, 'wiki', name), 'utf8'))).toEqual(before)
+    } finally {
+      spy.mockRestore()
+    }
+  })
 
   it('writes every page on a cold pass', async () => {
     const { backfillMeetingWiki } = await import('../meeting-wiki')

@@ -29,6 +29,7 @@ import { getTranscriptsPath, getCachePath } from './file-storage'
 import { queryAll, queryOne, run } from './database'
 import { isRecordingEligible, filterEligibleRecordingIds } from './recording-eligibility'
 import { refuseWhileTranscriptsMove } from './storage-move-state'
+import { yieldToEventLoop } from './event-loop'
 
 /**
  * Ownership of a wiki page, as declared by the `recording_id` in its YAML
@@ -397,7 +398,7 @@ function readPageOwner(path: string): PageOwner {
  * other exporters write between batches — so every deletion re-reads the page's
  * ownership immediately beforehand (see `unlinkIfStillOwnedBy`).
  */
-function buildWikiIndex(dir: string): WikiIndex {
+function* wikiIndexSteps(dir: string): Generator<void, WikiIndex> {
   const owner = new Map<string, string>()
   const unreadable = new Map<string, string>()
   let entries: string[]
@@ -418,8 +419,35 @@ function buildWikiIndex(dir: string): WikiIndex {
     const result = readPageOwner(join(dir, entry))
     if (result.kind === 'owned') owner.set(entry, result.recordingId)
     else if (result.kind === 'error') unreadable.set(entry, result.reason)
+    yield
   }
   return { dir, status: 'ok', owner, unreadable }
+}
+
+/** Keep point-of-use privacy cleanup synchronous; boot consumes the same scan in batches. */
+function buildWikiIndex(dir: string): WikiIndex {
+  const steps = wikiIndexSteps(dir)
+  let step = steps.next()
+  while (!step.done) step = steps.next()
+  return step.value
+}
+
+/**
+ * 2026-10-04: indexing 1,490 real pages held the main thread for 462 ms,
+ * with a 572 ms stretch before the first yield. Share the ownership parser
+ * with synchronous callers, but let renderer IPC run after each boot batch.
+ */
+async function buildWikiIndexForBoot(dir: string, batchSize: number): Promise<WikiIndex> {
+  const steps = wikiIndexSteps(dir)
+  let processed = 0
+  let step = steps.next()
+  while (!step.done) {
+    if (++processed % batchSize === 0) await yieldToEventLoop()
+    step = steps.next()
+  }
+  // Separate the final partial scan batch from cleanup and SQL preparation.
+  if (processed % batchSize !== 0) await yieldToEventLoop()
+  return step.value
 }
 
 /**
@@ -980,11 +1008,6 @@ const DEFAULT_BUDGET_MS = 15000
  */
 const DEFAULT_FAILURE_LIMIT = 50
 
-/** Yield to the event loop so queued renderer IPC is serviced. */
-function yieldToEventLoop(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0))
-}
-
 /**
  * Where the backfill resumes.
  *
@@ -1134,12 +1157,13 @@ export async function backfillMeetingWiki(
   options: WikiBackfillOptions = {}
 ): Promise<WikiBackfillResult> {
   const dir = getWikiDir()
+  const batchSize = Math.max(1, options.batchSize ?? DEFAULT_BATCH_SIZE)
   // ONE directory scan for the ENTIRE boot — the fix for the quadratic blowup.
   // Built here, before the cleanup-retry sweep, so BOTH the sweep and the pass
   // below share this single listing. Letting retryPendingWikiCleanups build its
   // own (per-id) scans was O(pending × pages) of synchronous FS work on the boot
   // recovery path — the F15 freeze on exactly that path (post-merge review).
-  const index = buildWikiIndex(dir)
+  const index = await buildWikiIndexForBoot(dir, batchSize)
 
   // RE8-P1 (round-9) — first drain any wiki-cleanup retries enqueued by a failed
   // transition cleanup, so an excluded recording's page is removed on boot even
@@ -1147,7 +1171,7 @@ export async function backfillMeetingWiki(
   // Reuses the pass-wide index (no scans of its own); any page it removes is also
   // dropped from `index.owner`, so the pass below sees the post-cleanup state.
   retryPendingWikiCleanups(index)
-  const batchSize = Math.max(1, options.batchSize ?? DEFAULT_BATCH_SIZE)
+  await yieldToEventLoop()
   const budgetMs = options.budgetMs ?? DEFAULT_BUDGET_MS
   const failureLimit = Math.max(1, options.maxFailures ?? DEFAULT_FAILURE_LIMIT)
   let deadline = Date.now() + budgetMs
@@ -1163,6 +1187,8 @@ export async function backfillMeetingWiki(
     console.error('[MeetingWiki] Backfill skipped — recording eligibility unavailable (fail closed)')
     return { written: 0, unchanged: 0, failed: 0, remaining: 0, remainingMissing: 0 }
   }
+
+  await yieldToEventLoop()
 
   // Recordings with no page yet go first, rotated so each pass starts past
   // whatever the last one attempted (see the resume-cursor note above).
