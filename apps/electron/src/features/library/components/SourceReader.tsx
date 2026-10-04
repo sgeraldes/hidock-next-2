@@ -1365,7 +1365,7 @@ export function SourceReader({
             <button
               type="button"
               onClick={onClose}
-              className="-mr-1 -mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="-mr-1 -mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
               aria-label="Close"
               title="Close (Esc)"
               data-testid="reader-close"
@@ -1789,7 +1789,7 @@ export function SourceReader({
                           setIsEditingTitle(true)
                           setEditedTitle(recording.userTitle || effectiveTranscript?.title_suggestion || '')
                         }}
-                        className="shrink-0 rounded p-0.5 opacity-0 transition-opacity hover:bg-muted focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 group-hover:opacity-100 group-focus-within:opacity-100"
+                        className="shrink-0 rounded p-0.5 opacity-0 transition-opacity hover:bg-muted focus-visible:opacity-100 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/50 group-hover:opacity-100 group-focus-within:opacity-100"
                         aria-label="Edit title"
                         title="Edit content title"
                       >
@@ -1812,7 +1812,7 @@ export function SourceReader({
             {isAudioSource && !meeting && !isDeviceOnly(recording) && (
               <button
                 type="button"
-                className="mt-2 flex max-w-full flex-wrap items-center gap-1.5 rounded-md border border-dashed px-2.5 py-1.5 text-left transition-colors hover:border-primary hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                className="mt-2 flex max-w-full flex-wrap items-center gap-1.5 rounded-md border border-dashed px-2.5 py-1.5 text-left transition-colors hover:border-primary hover:bg-primary/5 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/50"
                 onClick={() => setLinkDialogOpen(true)}
                 aria-label="Link this recording to a meeting"
               >
@@ -2570,7 +2570,7 @@ function ReaderPlayer({
             policy is timer-free). The explicit Retry works in both cases. */}
         {big && !analyzing && analysisFailure && (
           <div
-            className="absolute left-2 top-2 z-10 inline-flex items-center gap-1.5 rounded-full border bg-background/90 px-2 py-0.5 text-[11px] text-muted-foreground shadow-sm backdrop-blur"
+            className="absolute left-2 top-2 z-10 inline-flex items-center gap-1.5 rounded-full border bg-background/90 px-2 py-0.5 text-[11px] text-muted-foreground shadow-sm backdrop-blur-sm"
             data-testid="timeline-analysis-failed"
             data-failure={analysisFailure}
             role="status"
@@ -2581,7 +2581,7 @@ function ReaderPlayer({
             <button
               type="button"
               onClick={onRetryAnalysis}
-              className="rounded font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+              className="rounded font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/50"
               data-testid="timeline-analysis-retry"
             >
               {analysisFailure === 'permanent' ? 'Retry' : 'Retry now'}
@@ -2771,7 +2771,7 @@ function ParticipantsChips({
                   <button
                     type="button"
                     onClick={() => navigate(`/person/${p.contactId}`)}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-secondary text-secondary-foreground text-xs hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-secondary text-secondary-foreground text-xs hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/50"
                     title={`View ${p.name}${turnHint}`}
                   >
                     {swatch && <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: swatch }} aria-hidden="true" />}
@@ -2855,7 +2855,7 @@ function InvitedChips({
                 key={`inv-${i}`}
                 type="button"
                 onClick={() => navigate(`/person/${contact.id}`)}
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-secondary text-secondary-foreground text-xs hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-secondary text-secondary-foreground text-xs hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/50"
                 title={`View ${label}`}
               >
                 {label}

@@ -124,7 +124,7 @@ function ItemRow({ item }: { item: BulkOperationItem }) {
   return (
     <li className="py-2 border-b last:border-b-0" aria-label={`${title}: ${getStatusText(item.status)}`}>
       <div className="flex items-start gap-3">
-        <div className="flex-shrink-0 mt-0.5">
+        <div className="shrink-0 mt-0.5">
           <StatusIcon status={item.status} />
         </div>
 

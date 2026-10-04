@@ -67,7 +67,7 @@ export function PlayerSection() {
                   disabled={speed === 1}
                   onClick={() => toggleSpeed(speed)}
                   className={cn(
-                    'rounded-full border px-2.5 py-0.5 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                    'rounded-full border px-2.5 py-0.5 text-xs focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring',
                     on ? 'border-primary bg-primary/10 text-foreground' : 'border-border text-muted-foreground hover:bg-accent',
                     speed === 1 && 'cursor-default'
                   )}

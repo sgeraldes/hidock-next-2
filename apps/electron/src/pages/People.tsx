@@ -383,7 +383,7 @@ export function People() {
 
           <div className="flex items-center gap-4 overflow-x-auto pb-2 sm:pb-0 w-full sm:w-auto">
             <div className="flex items-center gap-2">
-              <Filter className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+              <Filter className="h-4 w-4 text-muted-foreground shrink-0" />
               <div className="flex gap-1">
                 {(['all', 'team', 'candidate', 'customer', 'external'] as const).map((t) => (
                   <button
@@ -407,7 +407,7 @@ export function People() {
               <select
                 value={sortBy}
                 onChange={(e) => setSortBy(e.target.value as 'name' | 'lastSeen' | 'interactions')}
-                className="text-xs rounded-md border border-input bg-background px-2 py-1 ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                className="text-xs rounded-md border border-input bg-background px-2 py-1 ring-offset-background focus:outline-hidden focus:ring-2 focus:ring-ring focus:ring-offset-2"
                 aria-label="Sort contacts"
               >
                 <option value="name">Name</option>
@@ -431,7 +431,7 @@ export function People() {
 
           {/* Merge-mode instruction banner */}
           {mergeMode && (
-            <div className="mb-4 rounded-lg border border-primary/30 bg-primary/[0.04] px-4 py-3 text-sm">
+            <div className="mb-4 rounded-lg border border-primary/30 bg-primary/4 px-4 py-3 text-sm">
               <span className="font-medium">Merge mode:</span> pick two people to combine into one.
               {' '}
               {selectedForMerge.length === 0
@@ -471,7 +471,7 @@ export function People() {
                 const card = (
                 <Card
                   className={cn(
-                    "group animate-rise-in lift cursor-pointer overflow-hidden shadow-sm border-border/70 dark:border-white/[0.06]",
+                    "group animate-rise-in lift cursor-pointer overflow-hidden shadow-sm border-border/70 dark:border-white/6",
                     mergeMode ? "hover:border-primary/70" : "hover:border-primary/50",
                     isSelected && "ring-2 ring-primary border-primary"
                   )}
@@ -623,16 +623,16 @@ export function People() {
       {/* Floating merge action bar — appears once exactly two people are selected */}
       {mergeMode && keeper && loser && (
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 w-[min(640px,calc(100%-2rem))]">
-          <div className="flex flex-col gap-3 rounded-xl border bg-background/95 backdrop-blur shadow-lg px-4 py-3">
+          <div className="flex flex-col gap-3 rounded-xl border bg-background/95 backdrop-blur-sm shadow-lg px-4 py-3">
             <div className="flex flex-col sm:flex-row items-center gap-3">
               <div className="flex items-center gap-2 text-sm min-w-0 flex-1">
-                <GitMerge className="h-4 w-4 text-primary flex-shrink-0" />
+                <GitMerge className="h-4 w-4 text-primary shrink-0" />
                 <span className="text-muted-foreground">Keep</span>
                 <span className="font-semibold truncate max-w-[120px]" title={keeper.name}>{keeper.name}</span>
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-7 w-7 p-0 flex-shrink-0"
+                  className="h-7 w-7 p-0 shrink-0"
                   onClick={swapKeeper}
                   title="Swap merge direction"
                   aria-label="Swap merge direction"
@@ -644,7 +644,7 @@ export function People() {
                   {loser.name}
                 </span>
               </div>
-              <div className="flex items-center gap-2 flex-shrink-0">
+              <div className="flex items-center gap-2 shrink-0">
                 <Button variant="outline" size="sm" onClick={toggleMergeMode} disabled={merging}>
                   <X className="h-4 w-4 mr-1" />
                   Cancel
@@ -660,7 +660,7 @@ export function People() {
               </div>
             </div>
             {highStakesMerge && (
-              <div className="rounded-lg border border-amber-500/40 bg-amber-500/[0.06] px-3 py-2 text-xs">
+              <div className="rounded-lg border border-amber-500/40 bg-amber-500/6 px-3 py-2 text-xs">
                 <p className="text-amber-700 dark:text-amber-400 font-medium">
                   High-stakes merge: {keeper.name} has {mergeImpact!.keeper} links and {loser.name} has{' '}
                   {mergeImpact!.loser}. To confirm, type <span className="font-semibold">{loser.name}</span>.

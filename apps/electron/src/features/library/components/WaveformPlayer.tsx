@@ -426,7 +426,7 @@ export function WaveformPlayer({
           {pb.isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
         </Button>
         <div
-          className="group relative h-6 min-w-0 flex-1 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-full"
+          className="group relative h-6 min-w-0 flex-1 cursor-pointer focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring rounded-full"
           onClick={trackSeek}
           onKeyDown={trackKeyDown}
           role="slider"
@@ -681,7 +681,7 @@ function FullTimeline({
                   aria-label={`Jump to marker ${m.index ?? ''} (${kind})${m.label ? `: ${m.label}` : ''}`.trim()}
                   aria-pressed={isActive}
                   className={cn(
-                    'absolute z-10 flex h-[18px] w-[18px] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 bg-background text-[9px] font-bold leading-none shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60',
+                    'absolute z-10 flex h-[18px] w-[18px] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 bg-background text-[9px] font-bold leading-none shadow focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/60',
                     isActive && 'ring-2 ring-foreground/50'
                   )}
                   style={{ left: `${m.leftPct}%`, top: `${topPct}%`, borderColor: color, color }}
@@ -745,7 +745,7 @@ function FullTimeline({
                 style={{ left: `${playedProgress * 100}%`, transform: 'translateX(-1px)' }}
                 aria-hidden="true"
               >
-                <span className="absolute -left-[3px] -top-0.5 h-2 w-2 rounded-full bg-foreground" />
+                <span className="absolute left-[-3px] -top-0.5 h-2 w-2 rounded-full bg-foreground" />
               </div>
             </>
           )}

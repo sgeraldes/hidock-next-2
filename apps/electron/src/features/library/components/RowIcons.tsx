@@ -71,7 +71,7 @@ export function EvaluationLabel({ recording }: { recording: UnifiedRecording }) 
     <Tooltip>
       <TooltipTrigger asChild>
         <span
-          className="inline-flex min-w-[2.75rem] max-w-max flex-1 basis-[2.75rem] items-center gap-1 rounded border border-border px-1.5 py-px text-[10px] leading-4 text-muted-foreground"
+          className="inline-flex min-w-11 max-w-max flex-1 basis-11 items-center gap-1 rounded border border-border px-1.5 py-px text-[10px] leading-4 text-muted-foreground"
           data-testid="evaluation-label"
           aria-label={[stars ? `${stars} of 5 stars` : null, kind, context].filter(Boolean).join(', ')}
         >

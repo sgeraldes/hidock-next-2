@@ -42,7 +42,7 @@ function Block({ className, style }: { className?: string; style?: React.CSSProp
       className={cn('relative block overflow-hidden rounded bg-muted-foreground/15', className)}
       style={style}
     >
-      <span className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-foreground/10 to-transparent motion-safe:animate-shimmer" />
+      <span className="absolute inset-0 -translate-x-full bg-linear-to-r from-transparent via-foreground/10 to-transparent motion-safe:animate-shimmer" />
     </span>
   )
 }

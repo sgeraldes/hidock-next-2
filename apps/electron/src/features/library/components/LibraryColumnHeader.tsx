@@ -46,7 +46,7 @@ function TextColumn({
           aria-label={`Sort by ${label}`}
           className={cn(
             'inline-flex h-6 max-w-full items-center gap-0.5 rounded px-0.5 font-medium uppercase tracking-wide transition-colors',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50',
+            'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/50',
             align === 'right' && 'w-full justify-end',
             active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
           )}
@@ -85,7 +85,7 @@ function IconColumn({
           className={cn(
             'relative flex h-6 shrink-0 items-center justify-center rounded transition-colors',
             PLACE_WIDTH[sortKey as PlaceName],
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50',
+            'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/50',
             active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
           )}
           data-sort-key={sortKey}

@@ -144,7 +144,7 @@ export function ActionableDetail({ actionable, resolveRecipient }: ActionableDet
             onClick={() =>
               navigate('/library', { state: { selectedId: capture.sourceRecordingId } })
             }
-            className="inline-flex items-center gap-1.5 text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
+            className="inline-flex items-center gap-1.5 text-primary hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring rounded"
           >
             <FileText className="h-3.5 w-3.5 shrink-0" />
             <span className="font-medium">{captureTitle}</span>
@@ -167,7 +167,7 @@ export function ActionableDetail({ actionable, resolveRecipient }: ActionableDet
           <button
             type="button"
             onClick={() => navigate('/library', { state: { selectedId: recording.id } })}
-            className="inline-flex items-center gap-1.5 text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
+            className="inline-flex items-center gap-1.5 text-primary hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring rounded"
           >
             <FileText className="h-3.5 w-3.5 shrink-0" />
             <span className="font-medium">{recordingTitle}</span>

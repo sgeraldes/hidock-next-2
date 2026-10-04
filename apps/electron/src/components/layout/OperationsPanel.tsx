@@ -793,7 +793,7 @@ function OperationsOverlay({
 
                     {isFailed && (
                       <details className="group mt-2 ms-7 rounded-md bg-slate-950/70">
-                        <summary className="flex cursor-pointer list-none items-center gap-2 rounded-md px-3 py-2 text-xs font-medium text-red-200 outline-none hover:bg-slate-800/80 focus-visible:ring-1 focus-visible:ring-red-400 [&::-webkit-details-marker]:hidden">
+                        <summary className="flex cursor-pointer list-none items-center gap-2 rounded-md px-3 py-2 text-xs font-medium text-red-200 outline-hidden hover:bg-slate-800/80 focus-visible:ring-1 focus-visible:ring-red-400 [&::-webkit-details-marker]:hidden">
                           <ChevronDown className="h-3.5 w-3.5 shrink-0 transition-transform group-open:rotate-180" />
                           <span>Failure details</span>
                           {failedAt && <span className="ms-auto tabular-nums font-normal text-slate-400">{failedAt}</span>}
@@ -806,7 +806,7 @@ function OperationsOverlay({
                             <div><dt className="inline text-slate-500">Last started: </dt><dd className="inline tabular-nums text-slate-200">{startedAt ?? 'Unknown'}</dd></div>
                           </dl>
                           <div className="rounded-md bg-red-950/30 px-3 py-2">
-                            <pre className="select-text whitespace-pre-wrap break-words font-sans text-xs leading-5 text-red-100">{item.error || 'No error details were recorded.'}</pre>
+                            <pre className="select-text whitespace-pre-wrap wrap-break-word font-sans text-xs leading-5 text-red-100">{item.error || 'No error details were recorded.'}</pre>
                           </div>
                           {item.error && (
                             <Button

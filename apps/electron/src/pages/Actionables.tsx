@@ -520,10 +520,10 @@ export function Actionables() {
   // contrast against `bg-card`.
   const getStatusTint = (status: ActionableStatus): string => {
     switch (status) {
-      case 'pending': return 'bg-amber-500/[0.05] dark:bg-amber-400/[0.04]'
-      case 'in_progress': return 'bg-blue-500/[0.05] dark:bg-blue-400/[0.04]'
-      case 'generated': return 'bg-emerald-500/[0.05] dark:bg-emerald-400/[0.04]'
-      case 'shared': return 'bg-violet-500/[0.05] dark:bg-violet-400/[0.04]'
+      case 'pending': return 'bg-amber-500/5 dark:bg-amber-400/4'
+      case 'in_progress': return 'bg-blue-500/5 dark:bg-blue-400/4'
+      case 'generated': return 'bg-emerald-500/5 dark:bg-emerald-400/4'
+      case 'shared': return 'bg-violet-500/5 dark:bg-violet-400/4'
       case 'dismissed': return 'bg-muted/30'
     }
   }
@@ -618,7 +618,7 @@ export function Actionables() {
               {renderGroups.map((group) => (
                 <div key={group.key} className="space-y-4">
                   {group.label && (
-                    <div className="flex items-center gap-2 sticky top-0 z-10 -mx-1 px-1 py-1 bg-background/95 backdrop-blur-sm">
+                    <div className="flex items-center gap-2 sticky top-0 z-10 -mx-1 px-1 py-1 bg-background/95 backdrop-blur-xs">
                       <h2 className="text-xs font-bold uppercase tracking-widest text-muted-foreground">{group.label}</h2>
                       <span className="text-[10px] font-semibold text-muted-foreground/70 tabular-nums">{group.items.length}</span>
                       <div className="flex-1 h-px bg-border" />
@@ -656,7 +656,7 @@ export function Actionables() {
                           type="button"
                           onClick={() => toggleExpanded(actionable.id)}
                           aria-expanded={expandedId === actionable.id}
-                          className="text-left w-full group/exp rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          className="text-left w-full group/exp rounded focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                         >
                           <div className="flex items-center gap-2 mb-1">
                             {getStatusIcon(actionable.status)}
@@ -735,7 +735,7 @@ export function Actionables() {
                           <ActionableDetail actionable={actionable} resolveRecipient={resolveRecipient} />
                         )}
                       </div>
-                      <div className="flex items-center gap-2 flex-shrink-0 w-full sm:w-auto border-t sm:border-0 pt-4 sm:pt-0">
+                      <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto border-t sm:border-0 pt-4 sm:pt-0">
                         {actionable.status === 'pending' && (
                           <>
                             {/* B-ACT-002: Per-actionable spinner, disabled during operation */}
@@ -922,7 +922,7 @@ export function Actionables() {
       {generationError && (
         <div className="animate-rise-in fixed bottom-4 left-1/2 -translate-x-1/2 z-40 px-4 py-3 bg-destructive/10 border border-destructive/20 rounded-xl flex items-center justify-between gap-4 max-w-2xl w-full shadow-lg">
           <div className="flex items-center gap-2 flex-1">
-            <AlertCircle className="h-5 w-5 text-destructive flex-shrink-0" />
+            <AlertCircle className="h-5 w-5 text-destructive shrink-0" />
             <span className="text-sm text-destructive font-medium">{generationError}</span>
           </div>
           <Button
@@ -938,7 +938,7 @@ export function Actionables() {
 
       {/* Loading Overlay - AC-08 FIX: Dynamic text based on template type */}
       {generating && (
-        <div className="fixed inset-0 bg-background/80 backdrop-blur-sm flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-background/80 backdrop-blur-xs flex items-center justify-center z-50">
           <div className="animate-rise-in w-[min(32rem,90vw)] text-center space-y-4 bg-card p-8 rounded-xl shadow-lg border">
             {/* The coming document drawn as lines, never a sentence (owner, 2-oct-2026) */}
             <Working label={`Generating ${getTemplateInfo(currentGeneratingTemplate).name}`} shape="lines" rows={6} />

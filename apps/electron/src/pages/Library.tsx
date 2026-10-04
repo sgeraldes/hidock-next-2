@@ -3008,7 +3008,7 @@ export function Library() {
                 containerRef.current = el
                 setListScrollElement((current) => current === el ? current : el)
               }}
-              className={`h-full overflow-y-auto overflow-x-hidden ${listPadding} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-inset`}
+              className={`h-full overflow-y-auto overflow-x-hidden ${listPadding} focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-inset`}
               style={showColumnHeader ? { scrollPaddingTop: COLUMN_HEADER_HEIGHT_PX } : undefined}
               onKeyDown={handleKeyDown}
               tabIndex={0}
@@ -3140,7 +3140,7 @@ export function Library() {
                         type="button"
                         onClick={toggleSelectAllShown}
                         aria-pressed={allShownSelected}
-                        className="text-xs font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 rounded"
+                        className="text-xs font-medium text-primary hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/50 rounded"
                       >
                         {allShownSelected ? 'Deselect all' : 'Select all'}
                       </button>

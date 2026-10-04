@@ -82,7 +82,7 @@ function SideRail({
     >
       <button
         onClick={onExpand}
-        className="flex flex-col items-center gap-2 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="flex flex-col items-center gap-2 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-primary focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
         aria-label={expandLabel}
         title={expandTitle}
       >
@@ -172,7 +172,7 @@ export function TriPaneLayout({ leftPanel, centerPanel, rightPanel, hasSelection
       extra={
         <button
           onClick={handleUnpin}
-          className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
           aria-label="Unpin assistant (float as overlay)"
           title="Unpin — float the assistant as an overlay"
         >
@@ -326,7 +326,7 @@ export function TriPaneLayout({ leftPanel, centerPanel, rightPanel, hasSelection
           <div
             role="region"
             aria-label="AI Assistant"
-            className="w-80 max-w-[80vw] border-l border-border overflow-hidden shadow-lg bg-card flex-shrink-0 z-10 flex flex-col"
+            className="w-80 max-w-[80vw] border-l border-border overflow-hidden shadow-lg bg-card shrink-0 z-10 flex flex-col"
           >
             <div className="flex justify-between items-center px-3 py-2 border-b border-border bg-muted/40">
               <div className="flex items-center gap-2">
@@ -335,7 +335,7 @@ export function TriPaneLayout({ leftPanel, centerPanel, rightPanel, hasSelection
               </div>
               <button
                 onClick={() => setShowRightPanelTablet(false)}
-                className="p-1.5 hover:bg-muted rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="p-1.5 hover:bg-muted rounded-md transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                 aria-label="Close AI assistant panel"
               >
                 <X className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
@@ -348,7 +348,7 @@ export function TriPaneLayout({ leftPanel, centerPanel, rightPanel, hasSelection
         {!showRightPanelTablet && (
           <button
             onClick={() => setShowRightPanelTablet(true)}
-            className="fixed bottom-6 right-6 bg-primary text-primary-foreground px-4 py-3 rounded-full shadow-lg hover:bg-primary/90 transition-colors flex items-center gap-2 z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="fixed bottom-6 right-6 bg-primary text-primary-foreground px-4 py-3 rounded-full shadow-lg hover:bg-primary/90 transition-colors flex items-center gap-2 z-10 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
             aria-label="Open AI assistant panel"
           >
             <Sparkles className="w-5 h-5" aria-hidden="true" />
@@ -533,7 +533,7 @@ function SidePaneChromeWithCollapse({
           {extra}
           <button
             onClick={onCollapse}
-            className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
             aria-label={collapseLabel}
             title={collapseTitle}
           >

@@ -175,7 +175,7 @@ export function LiveRecordingCard({ inProgressMeetings, allMeetings }: LiveRecor
             onClick={() => chooseMeeting(m.id)}
             className={cn(
               'w-full flex items-center gap-2 rounded-md border px-3 py-2 text-left text-sm transition-colors',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+              'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring',
               active
                 ? 'border-primary bg-primary/10 text-foreground'
                 : 'border-border hover:bg-muted/60'
@@ -184,14 +184,14 @@ export function LiveRecordingCard({ inProgressMeetings, allMeetings }: LiveRecor
           >
             <span
               className={cn(
-                'flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full border',
+                'flex h-4 w-4 shrink-0 items-center justify-center rounded-full border',
                 active ? 'border-primary bg-primary text-primary-foreground' : 'border-muted-foreground/40'
               )}
             >
               {active && <Check className="h-3 w-3" />}
             </span>
             <span className="min-w-0 flex-1 truncate font-medium">{m.subject || 'Untitled meeting'}</span>
-            <span className="flex-shrink-0 text-xs text-muted-foreground">{meetingTimeLabel(m)}</span>
+            <span className="shrink-0 text-xs text-muted-foreground">{meetingTimeLabel(m)}</span>
           </button>
         )
       })}
@@ -199,37 +199,37 @@ export function LiveRecordingCard({ inProgressMeetings, allMeetings }: LiveRecor
         onClick={markStandalone}
         className={cn(
           'w-full flex items-center gap-2 rounded-md border px-3 py-2 text-left text-sm transition-colors',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+          'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring',
           isStandalone ? 'border-primary bg-primary/10 text-foreground' : 'border-dashed border-border hover:bg-muted/60'
         )}
         aria-pressed={isStandalone}
       >
         <span
           className={cn(
-            'flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full border',
+            'flex h-4 w-4 shrink-0 items-center justify-center rounded-full border',
             isStandalone ? 'border-primary bg-primary text-primary-foreground' : 'border-muted-foreground/40'
           )}
         >
           {isStandalone && <Check className="h-3 w-3" />}
         </span>
-        <CircleSlash className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+        <CircleSlash className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1">Not a calendar meeting (standalone)</span>
       </button>
     </div>
   )
 
   return (
-    <Card className="border-red-500/40 bg-red-500/[0.04]" data-testid="live-recording-card">
+    <Card className="border-red-500/40 bg-red-500/4" data-testid="live-recording-card">
       <CardContent className="py-4 space-y-3">
         {/* Header: live status + elapsed */}
         <div className="flex items-center gap-3">
-          <span className="relative flex h-3 w-3 flex-shrink-0">
+          <span className="relative flex h-3 w-3 shrink-0">
             <span className="absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75 animate-ping motion-reduce:hidden" />
             <span className="relative inline-flex h-3 w-3 rounded-full bg-red-500" />
           </span>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <Mic className="h-4 w-4 text-red-600 dark:text-red-500 flex-shrink-0" />
+              <Mic className="h-4 w-4 text-red-600 dark:text-red-500 shrink-0" />
               <span className="text-sm font-semibold uppercase tracking-wide text-red-600 dark:text-red-500">
                 Recording now
               </span>
@@ -248,12 +248,12 @@ export function LiveRecordingCard({ inProgressMeetings, allMeetings }: LiveRecor
           {/* Decided: explicit meeting */}
           {explicitMeeting && !picking && (
             <div className="flex items-center gap-2">
-              <CalendarClock className="h-4 w-4 flex-shrink-0 text-primary" />
+              <CalendarClock className="h-4 w-4 shrink-0 text-primary" />
               <div className="min-w-0 flex-1 text-sm">
                 <span className="text-muted-foreground">Will be attributed to </span>
                 <span className="font-medium text-foreground">{explicitMeeting.subject || 'Untitled meeting'}</span>
               </div>
-              <Button size="sm" variant="ghost" className="flex-shrink-0" onClick={() => setPicking(true)}>
+              <Button size="sm" variant="ghost" className="shrink-0" onClick={() => setPicking(true)}>
                 <Pencil className="h-3.5 w-3.5 mr-1" />
                 Change
               </Button>
@@ -263,11 +263,11 @@ export function LiveRecordingCard({ inProgressMeetings, allMeetings }: LiveRecor
           {/* Decided: explicit standalone */}
           {isStandalone && !picking && (
             <div className="flex items-center gap-2">
-              <CircleSlash className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+              <CircleSlash className="h-4 w-4 shrink-0 text-muted-foreground" />
               <div className="min-w-0 flex-1 text-sm text-muted-foreground">
                 Standalone — won&apos;t be linked to any meeting.
               </div>
-              <Button size="sm" variant="ghost" className="flex-shrink-0" onClick={() => setPicking(true)}>
+              <Button size="sm" variant="ghost" className="shrink-0" onClick={() => setPicking(true)}>
                 <Pencil className="h-3.5 w-3.5 mr-1" />
                 Change
               </Button>
@@ -278,7 +278,7 @@ export function LiveRecordingCard({ inProgressMeetings, allMeetings }: LiveRecor
           {autoSingle && !picking && (
             <div className="space-y-2">
               <div className="flex items-center gap-2">
-                <CalendarClock className="h-4 w-4 flex-shrink-0 text-primary" />
+                <CalendarClock className="h-4 w-4 shrink-0 text-primary" />
                 <div className="min-w-0 flex-1 text-sm">
                   <span className="text-muted-foreground">Will be attributed to </span>
                   <span className="font-medium text-foreground">{autoSingle.subject || 'Untitled meeting'}</span>
@@ -308,12 +308,12 @@ export function LiveRecordingCard({ inProgressMeetings, allMeetings }: LiveRecor
           {/* Auto: no calendar meeting right now */}
           {autoStandalone && !picking && (
             <div className="flex items-center gap-2">
-              <CircleSlash className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+              <CircleSlash className="h-4 w-4 shrink-0 text-muted-foreground" />
               <div className="min-w-0 flex-1 text-sm text-muted-foreground">
                 No calendar meeting right now — will be standalone.
               </div>
               {allMeetings.length > 0 && (
-                <Button size="sm" variant="ghost" className="flex-shrink-0" onClick={() => setPicking(true)}>
+                <Button size="sm" variant="ghost" className="shrink-0" onClick={() => setPicking(true)}>
                   <Pencil className="h-3.5 w-3.5 mr-1" />
                   Assign
                 </Button>

@@ -22,11 +22,11 @@ function candidateSummary(candidates: Array<{ name: string }>): string {
 /** Icon for the signal behind a best guess (mirrors the signal-tier hierarchy). */
 function SignalIcon({ method }: { method: BucketRecording['method'] }) {
   if (method === 'speaker-map' || method === 'voice-presence' || method === 'owner-presence') {
-    return <Mic className="h-3 w-3 flex-shrink-0" aria-hidden />
+    return <Mic className="h-3 w-3 shrink-0" aria-hidden />
   }
-  if (method === 'attendee-email') return <CalendarCheck className="h-3 w-3 flex-shrink-0" aria-hidden />
-  if (method === 'attendee-context') return <MessageSquare className="h-3 w-3 flex-shrink-0" aria-hidden />
-  return <HelpCircle className="h-3 w-3 flex-shrink-0" aria-hidden />
+  if (method === 'attendee-email') return <CalendarCheck className="h-3 w-3 shrink-0" aria-hidden />
+  if (method === 'attendee-context') return <MessageSquare className="h-3 w-3 shrink-0" aria-hidden />
+  return <HelpCircle className="h-3 w-3 shrink-0" aria-hidden />
 }
 
 /** A single recording row: signal, and either a per-recording assignment select or,
@@ -83,7 +83,7 @@ function RecordingRow({
           disabled={busy}
           onChange={(e) => onAssign(rec, e.target.value === UNCLEAR_VALUE ? null : e.target.value)}
           aria-label={`Assign '${rec.title}' to a person`}
-          className="h-7 max-w-[9rem] rounded-md border bg-background px-1.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="h-7 max-w-36 rounded-md border bg-background px-1.5 text-xs outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
         >
           {candidates.map((c) => (
             <option key={c.id} value={c.id}>
@@ -94,7 +94,7 @@ function RecordingRow({
         </select>
       )}
       {rec.resolved && rec.resolvedContactId && (
-        <Check className="h-3.5 w-3.5 flex-shrink-0 text-emerald-500" aria-label="Resolved" />
+        <Check className="h-3.5 w-3.5 shrink-0 text-emerald-500" aria-label="Resolved" />
       )}
     </div>
   )
@@ -172,7 +172,7 @@ export function ResolvePerMeetingCard({
   const showNoCalendarNote = !!resolution && resolution.recordings.length > 0 && !anyCalendarAttendees
 
   return (
-    <Card className="border-blue-500/20 bg-blue-500/[0.03]">
+    <Card className="border-blue-500/20 bg-blue-500/3">
       <CardContent className="p-4 space-y-3">
         <button
           type="button"
@@ -181,11 +181,11 @@ export function ResolvePerMeetingCard({
           aria-expanded={expanded}
         >
           {expanded ? (
-            <ChevronDown className="h-4 w-4 mt-0.5 flex-shrink-0 text-muted-foreground" />
+            <ChevronDown className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
           ) : (
-            <ChevronRight className="h-4 w-4 mt-0.5 flex-shrink-0 text-muted-foreground" />
+            <ChevronRight className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
           )}
-          <Users className="h-4 w-4 mt-0.5 flex-shrink-0 text-blue-500" />
+          <Users className="h-4 w-4 mt-0.5 shrink-0 text-blue-500" />
           <div className="min-w-0 flex-1">
             <p className="text-sm leading-snug">
               <span className="font-semibold">&lsquo;{bucket.name}&rsquo;</span> appears in {bucket.recordingCount}{' '}
@@ -205,8 +205,8 @@ export function ResolvePerMeetingCard({
               <p className="text-xs text-muted-foreground">No linked recordings to resolve.</p>
             )}
             {showNoCalendarNote && (
-              <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/[0.06] px-2.5 py-1.5 text-[11px] text-amber-700 dark:text-amber-300">
-                <CalendarCheck className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" aria-hidden />
+              <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/6 px-2.5 py-1.5 text-[11px] text-amber-700 dark:text-amber-300">
+                <CalendarCheck className="h-3.5 w-3.5 shrink-0 mt-0.5" aria-hidden />
                 <span>
                   No calendar attendee lists yet — guesses below are from transcript context. Connect Microsoft 365 for
                   automatic, attendee-based resolution.
@@ -222,7 +222,7 @@ export function ResolvePerMeetingCard({
                     key={group.candidateId ?? '__unclear__'}
                     className={cn(
                       'rounded-lg border p-2.5',
-                      isUnclear ? 'border-border bg-muted/30' : 'border-emerald-500/25 bg-emerald-500/[0.04]'
+                      isUnclear ? 'border-border bg-muted/30' : 'border-emerald-500/25 bg-emerald-500/4'
                     )}
                   >
                     <div className="mb-1.5 flex items-center justify-between gap-2">

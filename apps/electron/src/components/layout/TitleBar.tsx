@@ -177,7 +177,7 @@ export function TitleBar({ sidebarOpen, dividerMode = BRAND_DIVIDER_MODE }: Titl
               placeholder="Search knowledge, people, projects…"
               aria-label="Search knowledge, people and projects"
               aria-keyshortcuts={isMac ? 'Meta+K' : 'Control+K'}
-              className="h-7 w-full select-text rounded-md border border-slate-700 bg-slate-800/80 pl-8 pr-12 text-xs text-slate-100 placeholder:text-slate-500 focus-visible:border-sky-500 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sky-500"
+              className="h-7 w-full select-text rounded-md border border-slate-700 bg-slate-800/80 pl-8 pr-12 text-xs text-slate-100 placeholder:text-slate-500 focus-visible:border-sky-500 focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-sky-500"
             />
             {/* Subtle ⌘K / Ctrl+K affordance. Decorative (the shortcut is wired on
                 the window); pointer-events-none so it never blocks typing. */}
@@ -205,7 +205,7 @@ export function TitleBar({ sidebarOpen, dividerMode = BRAND_DIVIDER_MODE }: Titl
               onClick={() => navigate('/settings')}
               aria-label="Settings"
               title="Settings"
-              className="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded-md text-slate-300 transition-colors hover:bg-slate-700 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+              className="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded-md text-slate-300 transition-colors hover:bg-slate-700 hover:text-white focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-sky-400"
             >
               <SettingsIcon className="h-4 w-4" />
             </button>
@@ -232,7 +232,7 @@ export function TitleBar({ sidebarOpen, dividerMode = BRAND_DIVIDER_MODE }: Titl
 }
 
 const PILL_BASE =
-  'titlebar-no-drag flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400'
+  'titlebar-no-drag flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-sky-400'
 
 interface ConnectionControlProps {
   status: 'connected' | 'connecting' | 'disconnected' | 'failed'

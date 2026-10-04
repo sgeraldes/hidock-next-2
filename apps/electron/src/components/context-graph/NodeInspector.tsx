@@ -87,7 +87,7 @@ function Fact({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex items-baseline justify-between gap-3 py-1">
       <span className="text-[11px] uppercase tracking-wider text-muted-foreground shrink-0">{label}</span>
-      <span className="text-sm text-foreground text-right min-w-0 break-words">{value}</span>
+      <span className="text-sm text-foreground text-right min-w-0 wrap-break-word">{value}</span>
     </div>
   )
 }
@@ -326,7 +326,7 @@ export function NodeInspector({
                 </span>
               ))}
           </div>
-          <h3 className="text-sm font-semibold mt-1 break-words leading-snug">{label}</h3>
+          <h3 className="text-sm font-semibold mt-1 wrap-break-word leading-snug">{label}</h3>
           {detail?.pronouns && (
             <span className="mt-1 inline-block rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
               {detail.pronouns}
@@ -335,7 +335,7 @@ export function NodeInspector({
         </div>
         <button
           onClick={onClose}
-          className="text-muted-foreground hover:text-foreground shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
+          className="text-muted-foreground hover:text-foreground shrink-0 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring rounded"
           aria-label="Close details"
         >
           <X className="h-4 w-4" />
@@ -568,7 +568,7 @@ export function NodeInspector({
                           return (
                             <li key={`${e.id}-${i}`}>
                               <button
-                                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group"
+                                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted/60 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring group"
                                 onClick={() =>
                                   navigable
                                     ? onOpenEntity({
@@ -786,7 +786,7 @@ function MergeNodeDialog({ open, onOpenChange, keeper, isDark, onMerged }: Merge
                   <button
                     key={n.id}
                     onClick={() => void choose(n)}
-                    className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+                    className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent focus-visible:bg-accent focus-visible:outline-hidden"
                   >
                     <span
                       className="h-2.5 w-2.5 rounded-full shrink-0"

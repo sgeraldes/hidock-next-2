@@ -101,7 +101,7 @@ export function Brand({ placement = 'titlebar', collapsed = false, onHome, class
         data-placement={placement}
         data-testid="app-brand"
         className={cn(
-          'titlebar-no-drag flex h-full items-center rounded-md transition-colors hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400',
+          'titlebar-no-drag flex h-full items-center rounded-md transition-colors hover:bg-white/5 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-sky-400',
           className
         )}
       >
@@ -125,7 +125,7 @@ export function Brand({ placement = 'titlebar', collapsed = false, onHome, class
  */
 export function AppMark() {
   return (
-    <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-sky-500 to-indigo-600 shadow-sm">
+    <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-linear-to-br from-sky-500 to-indigo-600 shadow-sm">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
         <circle cx="12" cy="12" r="3.4" fill="white" />
         <circle cx="4.5" cy="6" r="1.7" fill="white" fillOpacity="0.85" />

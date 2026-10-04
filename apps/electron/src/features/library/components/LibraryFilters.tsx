@@ -231,7 +231,7 @@ export function LibraryFilters({
           )}
         </div>
 
-        <div className="relative min-w-[12rem] flex-1">
+        <div className="relative min-w-48 flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
           <Input
             placeholder={`Search ${filterableCount} source${filterableCount === 1 ? '' : 's'}…`}
@@ -241,7 +241,7 @@ export function LibraryFilters({
             aria-label="Search the sources shown in this list"
           />
           {searchQuery && (
-            <button onClick={() => onSearchQueryChange('')} className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Clear list filter">
+            <button onClick={() => onSearchQueryChange('')} className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded text-muted-foreground hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring" aria-label="Clear list filter">
               <X className="h-3.5 w-3.5" aria-hidden="true" />
             </button>
           )}
@@ -249,7 +249,7 @@ export function LibraryFilters({
 
         <Popover>
           <PopoverTrigger asChild>
-            <button className="inline-flex items-center gap-1.5 h-8 rounded-md border border-input bg-background px-3 text-xs font-medium hover:bg-muted transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="More filters and sorting">
+            <button className="inline-flex items-center gap-1.5 h-8 rounded-md border border-input bg-background px-3 text-xs font-medium hover:bg-muted transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring" aria-label="More filters and sorting">
               <Filter className="h-3.5 w-3.5" aria-hidden="true" />
               Filters
               {advancedActiveCount > 0 && <span className="ml-0.5 inline-flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-semibold tabular-nums">{advancedActiveCount}</span>}
@@ -258,7 +258,7 @@ export function LibraryFilters({
           <PopoverContent align="end" className="w-80 p-0">
             <div className="flex items-center justify-between px-4 py-2.5 border-b">
               <span className="text-sm font-semibold">Filters &amp; sort</span>
-              {anyFilterActive && <button onClick={onClearFilters} className="text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:underline">Clear all</button>}
+              {anyFilterActive && <button onClick={onClearFilters} className="text-xs text-muted-foreground hover:text-foreground focus-visible:outline-hidden focus-visible:underline">Clear all</button>}
             </div>
             <div className="max-h-[70vh] overflow-y-auto p-4 space-y-4">
               {onSortByChange && onSortOrderChange && (

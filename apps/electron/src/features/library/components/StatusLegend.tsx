@@ -76,7 +76,7 @@ export function StatusLegend() {
     <Popover>
       <PopoverTrigger asChild>
         <button
-          className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-normal text-foreground/45 transition-colors hover:text-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-normal text-foreground/45 transition-colors hover:text-foreground/70 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
           aria-label="Status icon legend"
         >
           <Info className="h-3.5 w-3.5" aria-hidden="true" />

@@ -282,7 +282,7 @@ export function HandoverDialog({ open, onOpenChange, output }: HandoverDialogPro
                 placeholder="Auto-resolved from the source project or your default handoff folder"
                 spellCheck={false}
               />
-              <Button type="button" variant="outline" onClick={browseFolder} disabled={anyBusy} className="flex-shrink-0">
+              <Button type="button" variant="outline" onClick={browseFolder} disabled={anyBusy} className="shrink-0">
                 <FolderOpen className="h-4 w-4" />
                 <span className="ml-2 hidden sm:inline">Browse</span>
               </Button>

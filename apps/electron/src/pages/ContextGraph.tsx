@@ -78,9 +78,9 @@ function ProviderAwareError({ message }: { message: string }) {
       )}
     >
       {isProviderError ? (
-        <Info className="h-4 w-4 mt-0.5 flex-shrink-0" />
+        <Info className="h-4 w-4 mt-0.5 shrink-0" />
       ) : (
-        <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+        <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
       )}
       <span>{message}</span>
     </div>
@@ -639,14 +639,14 @@ export function ContextGraph() {
                   role="status"
                   aria-label="Loading lens"
                   title="Loading lens"
-                  className="absolute top-3 right-3 rounded-full border bg-background/85 backdrop-blur px-2 py-1.5 text-muted-foreground shadow-sm flex items-center"
+                  className="absolute top-3 right-3 rounded-full border bg-background/85 backdrop-blur-sm px-2 py-1.5 text-muted-foreground shadow-sm flex items-center"
                 >
                   <BusyIcon className="h-3.5 w-3.5" />
                 </div>
               )}
 
               {lens.nodes.length === 0 && !lensLoading && (
-                <div className="absolute top-3 left-1/2 -translate-x-1/2 rounded-full border bg-background/85 backdrop-blur px-3 py-1.5 text-[11px] text-muted-foreground shadow-sm">
+                <div className="absolute top-3 left-1/2 -translate-x-1/2 rounded-full border bg-background/85 backdrop-blur-sm px-3 py-1.5 text-[11px] text-muted-foreground shadow-sm">
                   Nothing in this window — widen the time range or pick another lens.
                 </div>
               )}
@@ -654,7 +654,7 @@ export function ContextGraph() {
               {/* Band rail — reasoning strata, top→down. Each band reports how many
                   nodes it shows out of how many are in scope, so a capped band reads
                   "Decisions · 20 of 214" rather than silently truncating. */}
-              <div className="absolute top-3 left-3 hidden sm:flex flex-col gap-1 rounded-lg border bg-background/85 backdrop-blur px-3 py-2 text-[11px] max-w-[46%]">
+              <div className="absolute top-3 left-3 hidden sm:flex flex-col gap-1 rounded-lg border bg-background/85 backdrop-blur-sm px-3 py-2 text-[11px] max-w-[46%]">
                 <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-0.5">
                   Reasoning strata
                 </span>
@@ -708,7 +708,7 @@ export function ContextGraph() {
               </Suspense>
 
               {!atlasFocus && (
-                <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-2 rounded-full border bg-background/85 backdrop-blur px-3 py-1.5 text-[11px] text-muted-foreground shadow-sm max-w-[90%]">
+                <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-2 rounded-full border bg-background/85 backdrop-blur-sm px-3 py-1.5 text-[11px] text-muted-foreground shadow-sm max-w-[90%]">
                   <Info className="h-3.5 w-3.5 shrink-0 text-violet-500" />
                   <span className="truncate">
                     Atlas — the{' '}
@@ -732,7 +732,7 @@ export function ContextGraph() {
 
           {/* Type legend (kept — user likes it) */}
           {!isEmpty && !loading && (
-            <div className="absolute bottom-3 left-3 flex flex-wrap gap-x-3 gap-y-1 rounded-lg border bg-background/85 backdrop-blur px-3 py-2 text-[11px] max-w-[70%]">
+            <div className="absolute bottom-3 left-3 flex flex-wrap gap-x-3 gap-y-1 rounded-lg border bg-background/85 backdrop-blur-sm px-3 py-2 text-[11px] max-w-[70%]">
               {Object.entries(ENTITY_COLORS).map(([type, c]) => (
                 <span key={type} className="flex items-center gap-1.5 text-muted-foreground">
                   <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: isDark ? c.dark : c.light }} />

@@ -6,7 +6,7 @@ import type { ChoiceFields as Fields } from './describe'
 
 /** A native select in the look of the kit's Input: it works with the keyboard and in a test without a popover. */
 export const SELECT_CLASS =
-  'flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50'
+  'flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50'
 
 interface Props {
   /** Prefix of the element ids, unique on the page: the step and the role of the choice. */

@@ -25,7 +25,7 @@ export function ThemeToggle({ className }: { className?: string }) {
       className={cn(
         'titlebar-no-drag relative flex h-7 w-7 items-center justify-center rounded-md text-slate-300',
         'transition-colors hover:bg-slate-700 hover:text-white',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400',
+        'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-sky-400',
         className
       )}
     >

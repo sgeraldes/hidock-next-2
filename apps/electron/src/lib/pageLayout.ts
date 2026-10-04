@@ -27,7 +27,7 @@ export const pageContent = 'mx-auto w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl'
  * multiple columns, so they can and should use much more of a wide window.
  * 1152px → 1344px → 1600px.
  */
-export const pageWide = 'mx-auto w-full max-w-6xl xl:max-w-[84rem] 2xl:max-w-[100rem]'
+export const pageWide = 'mx-auto w-full max-w-6xl xl:max-w-336 2xl:max-w-[100rem]'
 
 /**
  * Readable measure (~70ch) for a long prose block that lives inside one of the

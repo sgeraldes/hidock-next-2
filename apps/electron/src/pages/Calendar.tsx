@@ -834,13 +834,13 @@ export function Calendar() {
       ) : showListView ? (
         /* C-CAL-003: Show subtle sync indicator when resyncing with existing data */
         <>{calendarSyncing && (
-          <WorkingBar label="Syncing calendar" className="flex-shrink-0 rounded-none" />
+          <WorkingBar label="Syncing calendar" className="shrink-0 rounded-none" />
         )}
         {/* List/Cards View */}
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Bulk Actions Bar */}
           {selectedIds.size > 0 && (
-            <div className="flex items-center gap-4 px-6 py-2 bg-primary/10 border-b flex-shrink-0">
+            <div className="flex items-center gap-4 px-6 py-2 bg-primary/10 border-b shrink-0">
               <span className="text-sm font-medium">{selectedIds.size} selected</span>
               <Button variant="outline" size="sm" onClick={clearSelection}>Clear</Button>
               <Button
@@ -856,7 +856,7 @@ export function Calendar() {
           )}
 
           {/* View Mode Toggle */}
-          <div className="flex items-center justify-between px-6 py-2 border-b flex-shrink-0">
+          <div className="flex items-center justify-between px-6 py-2 border-b shrink-0">
             <div className="flex items-center gap-2">
               <Button variant="ghost" size="sm" onClick={selectAll} className="h-7 text-xs">
                 Select All
@@ -920,7 +920,7 @@ export function Calendar() {
                       }}
                       className={cn(
                         'relative p-3 rounded-lg border cursor-pointer transition-all hover:shadow-md',
-                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1',
+                        'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1',
                         isSelected ? 'ring-2 ring-primary bg-primary/5' : 'hover:bg-muted/50'
                       )}
                     >
@@ -1052,7 +1052,7 @@ export function Calendar() {
                       {/* Checkbox */}
                       <button
                         onClick={() => toggleSelection(recording.id)}
-                        className="flex-shrink-0 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                        className="shrink-0 rounded focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary"
                         aria-pressed={isSelected}
                         aria-label={`${isSelected ? 'Deselect' : 'Select'} ${displayTitle}`}
                       >
@@ -1067,12 +1067,12 @@ export function Calendar() {
                       <StatusIcon location={recording.location} />
 
                       {/* Date */}
-                      <span className="w-20 flex-shrink-0 text-muted-foreground text-xs">
+                      <span className="w-20 shrink-0 text-muted-foreground text-xs">
                         {formatShortDate(recording.dateRecorded)}
                       </span>
 
                       {/* Time */}
-                      <span className="w-16 flex-shrink-0 text-muted-foreground text-xs">
+                      <span className="w-16 shrink-0 text-muted-foreground text-xs">
                         {formatShortTime(recording.dateRecorded)}
                       </span>
 
@@ -1082,18 +1082,18 @@ export function Calendar() {
                       </span>
 
                       {/* Duration */}
-                      <span className="w-14 flex-shrink-0 text-right text-xs text-muted-foreground">
+                      <span className="w-14 shrink-0 text-right text-xs text-muted-foreground">
                         {recording.duration ? formatDuration(recording.duration) : '—'}
                       </span>
 
                       {/* Status icon */}
-                      <span className="w-6 flex-shrink-0 text-center">
+                      <span className="w-6 shrink-0 text-center">
                         {recording.transcriptionStatus === 'complete' && <FileText className="h-3 w-3 text-green-500 inline" />}
                         {recording.transcriptionStatus === 'processing' && <RefreshCw className="h-3 w-3 text-yellow-500 animate-spin inline" />}
                       </span>
 
                       {/* Actions */}
-                      <div className="flex gap-1 flex-shrink-0">
+                      <div className="flex gap-1 shrink-0">
                         {isDeviceOnly(recording) && (
                           <Button variant="ghost" size="icon" className="h-6 w-6"
                             onClick={(e) => { e.stopPropagation(); handleDownload(recording) }}
@@ -1164,7 +1164,7 @@ export function Calendar() {
 
           {/* Audio player */}
           {currentlyPlayingId && (
-            <div className="border-t bg-background p-4 flex-shrink-0">
+            <div className="border-t bg-background p-4 shrink-0">
               {(() => {
                 const rec = filteredRecordings.find(r => r.id === currentlyPlayingId)
                 if (rec && hasLocalPath(rec)) {
@@ -1190,10 +1190,10 @@ export function Calendar() {
         <div className="flex-1 flex flex-col min-h-0">
           {/* C-CAL-003: Sync indicator for calendar views */}
           {calendarSyncing && (
-            <WorkingBar label="Syncing calendar" className="flex-shrink-0 rounded-none" />
+            <WorkingBar label="Syncing calendar" className="shrink-0 rounded-none" />
           )}
           {/* Day of Week Headers */}
-          <div className="grid grid-cols-7 border-b flex-shrink-0">
+          <div className="grid grid-cols-7 border-b shrink-0">
             {weekdayHeaders(weekStartsOn).map(({ day, label }) => (
               <div key={label} className={cn(
                 'text-center py-2 text-xs font-medium border-l first:border-l-0',
@@ -1270,7 +1270,7 @@ export function Calendar() {
                           className={cn(
                             'w-full text-left text-xs p-1 rounded truncate transition-colors',
                             'hover:ring-1 hover:ring-ring',
-                            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:relative focus-visible:z-10',
+                            'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:relative focus-visible:z-10',
                             // Unmatched recording placeholder → amber exception style
                             meeting.isPlaceholder && UNMATCHED_BLOCK,
                             // Recorded meeting → its category color (a badge, below, marks "recorded")
@@ -1285,7 +1285,7 @@ export function Calendar() {
                               <StatusIcon location={meeting.recordingLocation} />
                             )}
                             {meeting.hasRecording && !meeting.recordingLocation && (
-                              <Mic className="h-3 w-3 flex-shrink-0" />
+                              <Mic className="h-3 w-3 shrink-0" />
                             )}
                             <span className="truncate">{meeting.subject}</span>
                           </span>
@@ -1308,11 +1308,11 @@ export function Calendar() {
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
           {/* C-CAL-003: Sync indicator for week/day views */}
           {calendarSyncing && (
-            <WorkingBar label="Syncing calendar" className="flex-shrink-0 rounded-none" />
+            <WorkingBar label="Syncing calendar" className="shrink-0 rounded-none" />
           )}
           {/* Day Headers - fixed, with scrollbar gutter to match content */}
-          <div className="flex border-b flex-shrink-0 overflow-y-scroll" style={{ scrollbarGutter: 'stable' }}>
-            <div className="w-14 flex-shrink-0" />
+          <div className="flex border-b shrink-0 overflow-y-scroll" style={{ scrollbarGutter: 'stable' }}>
+            <div className="w-14 shrink-0" />
             {viewDates.map((date) => {
               const key = toLocalDayKey(date)
               const today = isToday(date)
@@ -1350,7 +1350,7 @@ export function Calendar() {
           <div ref={scrollContainerRef} className="flex-1 overflow-auto" style={{ scrollbarGutter: 'stable' }}>
             <div className="flex min-h-full animate-rise-in">
               {/* Time Labels - B-CAL-003: Uses dynamic visibleHours */}
-              <div className="w-14 flex-shrink-0 bg-background">
+              <div className="w-14 shrink-0 bg-background">
                 {visibleHours.map((hour) => (
                   <div
                     key={hour}
@@ -1425,7 +1425,7 @@ export function Calendar() {
                                 'border-2 border-dashed border-slate-300 dark:border-slate-600',
                                 'bg-slate-50/30 dark:bg-slate-800/20 text-slate-500 dark:text-slate-400',
                                 'hover:bg-slate-100/60 dark:hover:bg-slate-700/30 hover:border-slate-400 hover:z-30',
-                                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:z-30 focus-visible:opacity-100',
+                                'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:z-30 focus-visible:opacity-100',
                                 'opacity-70 hover:opacity-90'
                               )}
                               style={{
@@ -1488,7 +1488,7 @@ export function Calendar() {
                           className={cn(
                             'absolute rounded-md px-2 py-1 text-xs overflow-hidden text-left transition-[filter,box-shadow]',
                             'shadow-sm hover:z-30 hover:ring-2 hover:ring-ring/60 hover:brightness-[1.03]',
-                            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:z-30',
+                            'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:z-30',
                             isUnmatched ? UNMATCHED_BLOCK : CATEGORY_BLOCK[category]
                           )}
                           style={{
@@ -1503,10 +1503,10 @@ export function Calendar() {
                           <div className="flex items-start gap-1 h-full">
                             {isUnmatched ? (
                               // Unlinked-state glyph — this recording matched no meeting.
-                              <Link2Off className="mt-0.5 h-3 w-3 flex-shrink-0 opacity-80" aria-hidden="true" />
+                              <Link2Off className="mt-0.5 h-3 w-3 shrink-0 opacity-80" aria-hidden="true" />
                             ) : (
                               <span
-                                className={cn('mt-1 h-2 w-2 flex-shrink-0 rounded-full', CATEGORY_DOT[category])}
+                                className={cn('mt-1 h-2 w-2 shrink-0 rounded-full', CATEGORY_DOT[category])}
                                 aria-hidden="true"
                               />
                             )}
@@ -1530,7 +1530,7 @@ export function Calendar() {
                             </div>
                             {/* Recorded badge: mic + where the audio lives */}
                             <span
-                              className="flex flex-shrink-0 items-center gap-0.5 rounded bg-background/40 px-1 py-0.5"
+                              className="flex shrink-0 items-center gap-0.5 rounded bg-background/40 px-1 py-0.5"
                               title="Recorded"
                             >
                               <Mic className="h-3 w-3" aria-hidden="true" />

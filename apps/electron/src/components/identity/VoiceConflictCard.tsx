@@ -116,7 +116,7 @@ export function VoiceConflictCard({
     <Card data-testid="voice-conflict">
       <CardContent className="space-y-2.5 p-4">
         <div className="flex items-start gap-2">
-          <Mic className="mt-0.5 h-4 w-4 flex-shrink-0 text-muted-foreground" aria-hidden />
+          <Mic className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
           <p className="text-sm leading-snug">{voiceConflictSentence(conflict)}</p>
         </div>
         {message && (

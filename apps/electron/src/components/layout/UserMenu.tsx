@@ -75,7 +75,7 @@ export function UserMenu() {
             type="button"
             aria-label="App menu"
             title="App menu"
-            className="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-slate-600 to-slate-700 text-slate-100 ring-1 ring-slate-500/50 transition-colors hover:from-slate-500 hover:to-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 data-[state=open]:ring-sky-400"
+            className="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded-full bg-linear-to-br from-slate-600 to-slate-700 text-slate-100 ring-1 ring-slate-500/50 transition-colors hover:from-slate-500 hover:to-slate-600 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-sky-400 data-[state=open]:ring-sky-400"
           >
             <User className="h-4 w-4" />
           </button>

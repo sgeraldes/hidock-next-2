@@ -252,7 +252,7 @@ export function Explore() {
           
           {searchError && (
             <div className="flex items-center gap-3 p-4 rounded-xl border border-destructive/50 bg-destructive/5 text-sm">
-              <AlertCircle className="h-5 w-5 text-destructive flex-shrink-0" />
+              <AlertCircle className="h-5 w-5 text-destructive shrink-0" />
               <div>
                 <p className="font-semibold text-destructive">Search failed</p>
                 <p className="text-muted-foreground mt-0.5">{searchError}</p>
