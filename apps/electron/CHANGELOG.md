@@ -9,6 +9,9 @@ pairs with it, gives it the Hugging Face token and decides when it steps aside.
 
 ### Changes
 
+- **Reference labels for recording kinds.** Settings > Pipeline keeps a sample of up to 40 valid
+  recordings for your own labels, with keyboard choices and progress, ready for engine comparisons.
+
 - **Decision engines and presets.** Pipeline settings choose Clef Flash, Clef, Jev, Haiku or Gemini
   Flash for five decision steps, with a global preset and per-step overrides. Presets fall back when
   an engine cannot answer, and each attempt is recorded in the call ledger.
