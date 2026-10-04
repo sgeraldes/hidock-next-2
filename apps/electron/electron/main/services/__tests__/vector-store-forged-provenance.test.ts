@@ -15,12 +15,14 @@
  * ONLY when its captureId names a real knowledge_captures row.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { existsSync, rmSync } from 'fs'
+import { existsSync, mkdtempSync, rmSync } from 'fs'
 
-const dbPath = join(tmpdir(), `hidock-adv11-forged-${process.pid}.sqlite`)
+const testDir = mkdtempSync(join(tmpdir(), 'hidock-adv11-forged-'))
+const dbPath = join(testDir, 'test.sqlite')
+const cachePath = join(testDir, 'vector-cache-v1.bin')
 vi.mock('../file-storage', () => ({ getDatabasePath: () => dbPath }))
 
 // Deterministic offline embeddings so search runs without a provider.
@@ -34,6 +36,9 @@ vi.mock('../embeddings', () => ({
 
 import { initializeDatabase, closeDatabase, run } from '../database'
 import { VectorStore } from '../vector-store'
+import * as vectorCache from '../vector-cache'
+
+const stores: VectorStore[] = []
 
 function seedRecording(id: string, opts: { personal?: boolean; deleted?: boolean } = {}): void {
   run('INSERT INTO recordings (id, filename, date_recorded, personal, deleted_at) VALUES (?, ?, ?, ?, ?)', [
@@ -54,21 +59,56 @@ function seedCapture(id: string, recordingId: string | null, rating = 'unrated')
 
 async function newStore(): Promise<VectorStore> {
   const store = new VectorStore()
+  stores.push(store)
   await store.initialize()
   return store
 }
 
 beforeEach(async () => {
   if (existsSync(dbPath)) rmSync(dbPath, { force: true })
+  if (existsSync(cachePath)) rmSync(cachePath, { force: true })
   await initializeDatabase()
 })
 
-afterEach(() => {
+afterEach(async () => {
+  await Promise.all(stores.splice(0).map((store) => store.waitForIdle()))
   closeDatabase()
   if (existsSync(dbPath)) rmSync(dbPath, { force: true })
+  if (existsSync(cachePath)) rmSync(cachePath, { force: true })
 })
 
+afterAll(() => rmSync(testDir, { recursive: true, force: true }))
+
 describe('ADV11 — forged captureId cannot bypass the recording allowlist', () => {
+  it('waits for the deferred cache writer and its completion before teardown', async () => {
+    let release!: () => void
+    let started!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const writing = new Promise<void>((resolve) => { started = resolve })
+    const realWrite = vectorCache.writeVectorCacheAsync
+    const writer = vi.spyOn(vectorCache, 'writeVectorCacheAsync').mockImplementation(async (...args) => {
+      started()
+      await gate
+      return realWrite(...args)
+    })
+    const store = await newStore()
+    try {
+      await writing
+      let drained = false
+      const pending = store.waitForIdle().then(() => { drained = true })
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(drained).toBe(false)
+      release()
+      await pending
+      expect(drained).toBe(true)
+      expect(existsSync(cachePath)).toBe(true)
+    } finally {
+      release()
+      await vectorCache.waitForVectorCacheWrites(cachePath)
+      writer.mockRestore()
+    }
+  })
+
   it('a value-excluded recording with a FORGED captureId is dropped from search', async () => {
     // A real recording that is value-excluded (garbage-rated capture, no keep).
     seedRecording('rec-excluded')
