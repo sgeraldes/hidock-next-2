@@ -316,7 +316,7 @@ export const SourceCard = memo(function SourceCard({
                 Personal
               </span>
             )}
-            <RowChips recording={recording} />
+            <RowChips recording={recording} transcript={transcript} />
           </div>
           <PersonAvatars people={people} />
         </div>
@@ -474,6 +474,8 @@ export const SourceCard = memo(function SourceCard({
     prevProps.transcript?.integrity_status === nextProps.transcript?.integrity_status &&
     prevProps.transcript?.integrity_accepted_at === nextProps.transcript?.integrity_accepted_at &&
     prevProps.transcript?.integrity_json === nextProps.transcript?.integrity_json &&
+    prevProps.transcript?.validity_status === nextProps.transcript?.validity_status &&
+    prevProps.transcript?.validity_json === nextProps.transcript?.validity_json &&
     prevProps.meeting?.id === nextProps.meeting?.id
   )
 })

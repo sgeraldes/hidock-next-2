@@ -8,6 +8,7 @@ import { CONTEXT_LABELS, KIND_LABELS, displayedEvaluation } from '@/features/lib
 import { audioLabel } from '@/features/library/utils/audioCheck'
 import { formatValueReasons } from '@/features/library/utils/valueReasons'
 import { transcriptProblems, showsTranscriptProblem, type TranscriptProblemKind } from '@/features/library/utils/rowState'
+import { VALIDITY_LABELS, heldValidity, validityReasons } from '@/features/library/utils/transcriptValidity'
 import { useTranscriptionStore } from '@/store/features/useTranscriptionStore'
 import type { DownloadStatus } from '@/store/useAppStore'
 import { StatusIcon } from './StatusIcon'
@@ -115,13 +116,48 @@ export function AudioLabel({ recording }: { recording: UnifiedRecording }) {
  */
 export const CHIPS_BOX_CLASS = 'flex h-5 min-w-0 flex-wrap content-start items-center gap-1 overflow-hidden'
 
-/** The chips of a recording, in one run: value, audio check, stars and kind. */
-export function RowChips({ recording }: { recording: UnifiedRecording }) {
+/**
+ * The verdict chip of a transcript nothing may be built on: "Not categorized",
+ * "Transcript in doubt" or "Transcript incomplete". It stands where the stars
+ * and kind would be, since those wait for a valid transcript.
+ */
+export function ValidityLabel({ transcript }: { transcript?: Transcript }) {
+  const held = heldValidity(transcript)
+  if (!held) return null
+  const { chip, label, detail } = VALIDITY_LABELS[held]
+  const reasons = validityReasons(transcript)
+  const tone =
+    held === 'invalid'
+      ? 'border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-300'
+      : 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className={`inline-flex shrink-0 items-center rounded border px-1.5 py-px text-[10px] font-medium leading-4 ${tone}`}
+          data-testid="validity-label"
+          data-validity={held}
+        >
+          {chip}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>
+        <p>{label}</p>
+        {reasons.length > 0 && <p className="text-xs text-muted-foreground mt-0.5">{reasons.join(' · ')}</p>}
+        <p className="text-xs text-muted-foreground mt-0.5">{detail}</p>
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+/** The chips of a recording, in one run: value, audio check, transcript verdict, stars and kind. */
+export function RowChips({ recording, transcript }: { recording: UnifiedRecording; transcript?: Transcript }) {
   return (
     <>
       <ValueBadge recording={recording} />
       <AudioLabel recording={recording} />
-      <EvaluationLabel recording={recording} />
+      <ValidityLabel transcript={transcript} />
+      {!heldValidity(transcript) && <EvaluationLabel recording={recording} />}
     </>
   )
 }
@@ -258,8 +294,11 @@ export function StatusPlaceIcon({
 
 const PROBLEM_ICON: Record<TranscriptProblemKind, typeof XOctagon> = {
   broken: XOctagon,
+  invalid: XOctagon,
+  incomplete: FileX,
   invented: FileWarning,
   missed: FileX,
+  doubtful: AlertTriangle,
   suspect: AlertTriangle
 }
 
@@ -286,7 +325,7 @@ export function TranscriptionPlaceIcon({ recording, transcript }: { recording: U
   const problems = transcriptProblems(recording, transcript)
   const worst = problems[0]
   const Icon = PROBLEM_ICON[worst.kind]
-  const red = worst.kind === 'broken'
+  const red = worst.kind === 'broken' || worst.kind === 'invalid'
   return (
     <Tooltip>
       <TooltipTrigger asChild>

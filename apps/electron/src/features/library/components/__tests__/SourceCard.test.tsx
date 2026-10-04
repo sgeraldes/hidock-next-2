@@ -540,3 +540,15 @@ describe('SourceCard carries more, in the space it has', () => {
     expect(footer.contains(screen.getByRole('button', { name: 'Play' }))).toBe(true)
   })
 })
+
+
+it.each(['invalid', 'incomplete', 'doubtful'] as const)('hides stale card evaluation while %s and restores it after acceptance', (validity_status) => {
+  const recording = { ...baseRecording, evalStarLevel: 5 as const, evalKind: 'team_meeting' as const }
+  const transcript = { integrity_status: 'ok', validity_status, integrity_accepted_at: null } as Transcript
+  const { rerender } = render(<SourceCard {...makeProps({ recording, transcript })} />)
+  expect(screen.getByTestId('validity-label')).toBeInTheDocument()
+  expect(screen.queryByTestId('evaluation-label')).toBeNull()
+  rerender(<SourceCard {...makeProps({ recording, transcript: { ...transcript, validity_status: 'valid', integrity_accepted_at: '2026-10-04' } })} />)
+  expect(screen.queryByTestId('validity-label')).toBeNull()
+  expect(screen.getByTestId('evaluation-label')).toHaveTextContent('Team meeting')
+})

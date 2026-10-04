@@ -17,12 +17,14 @@ import {
 } from '@/features/library/utils/truncatedRecoveryCopy'
 import {
   ISSUE_ORDER,
+  VALIDITY_FILTER_ORDER,
   integrityIssues,
   integrityLabel,
   isIntegrityFilter,
   matchesIntegrityFilter,
   type IntegrityFilter
 } from '@/features/library/utils/transcriptIntegrity'
+import { formatTranscriptionCost, heldValidity } from '@/features/library/utils/transcriptValidity'
 import { AUDIO_FILTERS, isAudioFilter, matchesAudioFilter, type AudioFilter } from '@/features/library/utils/audioCheck'
 import {
   CONTEXT_FILTERS,
@@ -997,12 +999,15 @@ export function Library() {
   const integrityCounts = useMemo(() => {
     const counts: Record<string, number> = { flagged: 0, accepted: 0 }
     for (const code of ISSUE_ORDER) counts[`issue:${code}`] = 0
+    for (const status of VALIDITY_FILTER_ORDER) counts[`validity:${status}`] = 0
     for (const rec of baseRecordings) {
       const t = transcripts.get(rec.id)
+      const held = heldValidity(t)
+      if (held) counts[`validity:${held}`]++
       const label = integrityLabel(t)
       if (label === 'accepted') counts.accepted++
+      if (matchesIntegrityFilter(t, 'flagged')) counts.flagged++
       if (label !== 'suspect' && label !== 'broken') continue
-      counts.flagged++
       for (const issue of integrityIssues(t)) counts[`issue:${issue.code}`]++
     }
     return counts
@@ -2853,7 +2858,11 @@ export function Library() {
                   </Button>
                 ) : (
                   <>
-                    <span>This sends the audio to the transcription provider again and may cost money.</span>
+                    <span>
+                      This sends the audio to the transcription provider again:{' '}
+                      {formatTranscriptionCost(filteredRecordings.reduce((sum, rec) => sum + (rec.duration || 0), 0))} for{' '}
+                      {Math.round(filteredRecordings.reduce((sum, rec) => sum + (rec.duration || 0), 0) / 60)} minutes.
+                    </span>
                     <Button
                       size="sm"
                       className="h-7 text-xs"

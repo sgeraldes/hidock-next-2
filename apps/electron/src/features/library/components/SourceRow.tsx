@@ -417,14 +417,14 @@ export const SourceRow = memo(function SourceRow({
                 </span>
                 {!threeLines && !isDeleting && (
                   <span className={CHIPS_BOX_CLASS} data-slot="labels">
-                    <RowChips recording={recording} />
+                    <RowChips recording={recording} transcript={transcript} />
                   </span>
                 )}
               </div>
             )}
             {threeLines && !isDeleting && (
               <div className={`mt-0.5 ${CHIPS_BOX_CLASS}`} data-slot="labels">
-                <RowChips recording={recording} />
+                <RowChips recording={recording} transcript={transcript} />
               </div>
             )}
           </div>
@@ -470,7 +470,7 @@ export const SourceRow = memo(function SourceRow({
               chips form a column of their own before the places (owner, 30-sep-2026). */}
           {columns && !isDeleting && (
             <span className={`ml-2 ${COLUMN_WIDTH.chips} shrink-0 ${CHIPS_BOX_CLASS}`} data-slot="labels">
-              <RowChips recording={recording} />
+              <RowChips recording={recording} transcript={transcript} />
             </span>
           )}
           {!isDeleting && <IconSlot name="meeting"><MeetingIcon meeting={meeting} /></IconSlot>}
@@ -758,6 +758,8 @@ export const SourceRow = memo(function SourceRow({
     prevProps.transcript?.integrity_status === nextProps.transcript?.integrity_status &&
     prevProps.transcript?.integrity_accepted_at === nextProps.transcript?.integrity_accepted_at &&
     prevProps.transcript?.integrity_json === nextProps.transcript?.integrity_json &&
+    prevProps.transcript?.validity_status === nextProps.transcript?.validity_status &&
+    prevProps.transcript?.validity_json === nextProps.transcript?.validity_json &&
     prevProps.meeting?.id === nextProps.meeting?.id &&
     prevProps.meeting?.subject === nextProps.meeting?.subject &&
     prevProps.searchQuery === nextProps.searchQuery &&
