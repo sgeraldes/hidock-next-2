@@ -20,6 +20,9 @@ import {
   getModelHostDiagnostics,
   repairModelHostRuntime,
   sendModelHostUpdate,
+  decideOnModelHost,
+  ModelHostDecisionError,
+  type ModelHostDecisionRequest,
   type ModelHostSettings,
 } from '../services/model-host-client'
 import { getConfig, saveConfig } from '../services/config'
@@ -42,6 +45,16 @@ const PairSchema = AddressSchema.extend({
 })
 
 const StepAsideSchema = z.object({ value: z.enum(['any-use', 'games', 'never']) })
+
+// Jev's body with the host's two models; the host checks each question's shape itself.
+const DecisionSchema = z.object({
+  model: z.enum(['clef', 'clef-flash']),
+  state: z.union([z.string(), z.record(z.string(), z.unknown()), z.array(z.unknown())]),
+  questions: z.record(z.string(), z.object({ type: z.enum(['noul', 'choice', 'score']) }).passthrough()).refine(
+    (questions) => Object.keys(questions).length > 0,
+    'at least one question is required'
+  ),
+})
 
 function stepAsideFromConfig(): ModelHostStepAside {
   return getConfig().transcription.modelHostStepAside ?? 'games'
@@ -211,6 +224,22 @@ export function registerModelHostHandlers(): void {
       await sendModelHostUpdate(settings, parsed.data.path)
       return { success: true }
     } catch (error) {
+      return { success: false, error: (error as Error).message }
+    }
+  })
+
+  // Clef or Clef-Flash on the host, with Jev's body. Which feature uses which is decided later.
+  ipcMain.handle('model-host:decide', async (_event, raw: unknown) => {
+    const parsed = DecisionSchema.safeParse(raw)
+    if (!parsed.success) return { success: false, error: parsed.error.issues.map((issue) => issue.message).join('; ') }
+    const settings = pairedSettings()
+    if (!settings) return notPaired
+    try {
+      return { success: true, response: await decideOnModelHost(settings, parsed.data as ModelHostDecisionRequest) }
+    } catch (error) {
+      if (error instanceof ModelHostDecisionError) {
+        return { success: false, error: error.message, status: error.status, ...(error.decide ? { decide: error.decide } : {}) }
+      }
       return { success: false, error: (error as Error).message }
     }
   })

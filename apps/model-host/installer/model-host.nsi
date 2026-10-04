@@ -16,7 +16,7 @@ SetCompressor /SOLID lzma
 !define TRAY_EXE "HiDockModelHost.exe"
 !define TRAY_CLASS "HiDockModelHostTray"
 !ifndef VERSION
-  !define VERSION "0.3.2"
+  !define VERSION "0.4.0"
 !endif
 
 Name "${PRODUCT} ${VERSION}"
