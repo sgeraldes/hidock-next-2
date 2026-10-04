@@ -45,6 +45,7 @@
 
 import { existsSync, linkSync, readdirSync, renameSync, rmSync, statSync } from 'fs'
 import { dirname, basename, join } from 'path'
+import { randomUUID } from 'crypto'
 
 /* -------------------------------------------------------------------------- */
 /*  better-sqlite3 minimal structural types (kept independent of the exact    */
@@ -529,9 +530,10 @@ export interface DatabaseEngineConfig {
   protectedTables?: string[]
   /**
    * When set, creates a SQLite online backup at `<dbPath>.bak-<YYYY-MM-DD>` and
-   * keeps the newest `keep` complete daily backups. Pending migrations await a
-   * successful snapshot before schema mutation; routine snapshots may be
-   * deferred by {@link deferBackupOnBoot}. Omit to disable.
+   * keeps the newest `keep` complete daily backups. Omit to disable routine
+   * snapshots, which may be deferred by {@link deferBackupOnBoot}. Pending
+   * migrations always require a verified, uniquely named pre-migration snapshot,
+   * retaining three independently of the daily backups.
    */
   backupOnBoot?: { keep: number }
   /**
@@ -610,15 +612,32 @@ export class DatabaseEngine {
     this.lastChanges = changes
   }
 
-  /* --- Backup + destructive guard (unchanged semantics) ------------------- */
+  /* --- Backup + destructive guard --------------------------------------- */
 
   /**
-   * The newest external backup that holds exactly what the database holds:
-   * it started after the main file was last written, and the WAL is empty (a
-   * non-empty WAL means commits the main file does not show yet). Measured
-   * before this boot opened the file, so the open itself cannot count as a change.
+   * Verify the restore point with SQLite before allowing schema mutation.
    */
-  private reusableExternalBackup(before: BeforeOpen | null): string | null {
+  private verifyMigrationBackup(path: string, version: number): void {
+    const backup = new this.config.betterSqlite3(path, { readonly: true, fileMustExist: true })
+    try {
+      if (backup.pragma('quick_check', { simple: true }) !== 'ok') {
+        throw new Error(`Backup integrity verification failed: ${path}`)
+      }
+      let backupVersion = 0
+      if (backup.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_version'").get()) {
+        backupVersion = Number((backup.prepare('SELECT MAX(version) AS version FROM schema_version').get() as { version: number | null }).version ?? 0)
+      }
+      if (backupVersion !== version) throw new Error(`Backup schema mismatch: ${path} (v${backupVersion}, expected v${version})`)
+    } finally {
+      backup.close()
+    }
+  }
+
+  /**
+   * Reuse only when source metadata still matches, its WAL was empty before
+   * this boot opened the file, and the snapshot has the same schema version.
+   */
+  private reusableExternalBackup(before: BeforeOpen | null, version: number): string | null {
     if (!before || before.walBytes > 0 || !this.config.externalBackups) return null
     let candidates: ExternalBackup[]
     try {
@@ -630,6 +649,11 @@ export class DatabaseEngine {
       if (c.sourceMtimeNs !== before.mtimeNs || c.sourceSize !== before.size) continue
       // The copy itself must be whole: a truncated file is never the snapshot.
       if (!existsSync(c.path) || this.fileSize(c.path) !== before.size) continue
+      try {
+        this.verifyMigrationBackup(c.path, version)
+      } catch {
+        continue
+      }
       return c.path
     }
     return null
@@ -641,18 +665,24 @@ export class DatabaseEngine {
     before: BeforeOpen | null = null
   ): Promise<void> {
     const cfg = this.config.backupOnBoot
-    if (!cfg || cfg.keep <= 0) return
+    if (!failClosed && (!cfg || cfg.keep <= 0)) return
     try {
-      if (!existsSync(this.dbPath)) return
+      if (!existsSync(this.dbPath)) {
+        if (failClosed) throw new Error('Required migration backup source is missing')
+        return
+      }
       const dir = dirname(this.dbPath)
       const base = basename(this.dbPath)
       const prefix = `${base}.bak-`
       const day = new Date().toISOString().slice(0, 10)
-      const bak = join(dir, `${prefix}${day}`)
+      const version = failClosed ? this.readSchemaVersion() : 0
+      const bak = join(dir, failClosed
+        ? `${prefix}pre-v${this.config.schemaVersion}-${new Date().toISOString().replace(/[-:.]/g, '')}-${randomUUID()}`
+        : `${prefix}${day}`)
       let reused = false
-      const reusable = !existsSync(bak) && failClosed ? this.reusableExternalBackup(before) : null
+      const reusable = failClosed ? this.reusableExternalBackup(before, version) : null
       if (reusable) {
-        // A hard link gives the dated name without copying a byte, and it keeps
+        // A hard link gives a unique migration name without copying a byte and keeps
         // the snapshot alive when the hourly rotation deletes its own name. A
         // disk without hard links (exFAT) gets the full copy below instead:
         // the snapshot must not depend on a file another program rotates.
@@ -660,7 +690,7 @@ export class DatabaseEngine {
           linkSync(reusable, bak)
           reused = true
           onProgress?.({ phase: 'backup-reused', path: reusable })
-          console.log(`[Database] Pre-migration backup: linked ${reusable} (identical to the database)`)
+          console.log(`[Database] Pre-migration backup: linked ${reusable} as ${bak}`)
         } catch (e) {
           console.warn(`[Database] Could not link ${reusable} (${(e as Error).message}); copying instead`)
         }
@@ -700,11 +730,21 @@ export class DatabaseEngine {
         } finally {
           source.close()
         }
-        // Only the final dated name denotes a complete backup. A crash leaves a
+        if (failClosed) {
+          // Make the restore point a standalone file, including any WAL pages.
+          const snapshot = new this.config.betterSqlite3(partial, { fileMustExist: true })
+          try { snapshot.pragma('journal_mode = DELETE') } finally { snapshot.close() }
+          this.verifyMigrationBackup(partial, version)
+        }
+        // Only the final name denotes a complete backup. A crash leaves a
         // .partial file that the next boot removes and retries instead of
         // accepting a permanently truncated snapshot.
         renameSync(partial, bak)
         console.log(`[Database] Boot backup written: ${bak}`)
+      }
+      if (failClosed) {
+        this.verifyMigrationBackup(bak, version)
+        console.log(`[Database] Migration v${version} -> v${this.config.schemaVersion} restore point: ${bak}`)
       }
       const directoryEntries = readdirSync(dir)
       for (const stalePartial of directoryEntries.filter(
@@ -719,12 +759,22 @@ export class DatabaseEngine {
       const existing = directoryEntries
         .filter((file) => file.startsWith(prefix) && /^\d{4}-\d{2}-\d{2}$/.test(file.slice(prefix.length)))
         .sort()
-      for (const stale of existing.slice(0, Math.max(0, existing.length - cfg.keep))) {
+      for (const stale of existing.slice(0, Math.max(0, existing.length - (cfg?.keep ?? 3)))) {
         try {
           rmSync(join(dir, stale), { force: true })
         } catch {
           /* best-effort prune */
         }
+      }
+      // Independent retention: target version is not chronological, so sort by
+      // the timestamp, and protect this boot's restore point even after clock drift.
+      const migrationBackups = directoryEntries
+        .filter(file => file.startsWith(prefix) && /^pre-v\d+-\d{8}T\d{9}Z-[\w-]+$/.test(file.slice(prefix.length)))
+        .filter(file => join(dir, file) !== bak)
+        .sort((a, b) => a.replace(/^.*\.bak-pre-v\d+-/, '').localeCompare(b.replace(/^.*\.bak-pre-v\d+-/, '')))
+      const keepOthers = failClosed ? 2 : 3
+      for (const stale of migrationBackups.slice(0, Math.max(0, migrationBackups.length - keepOthers))) {
+        try { rmSync(join(dir, stale), { force: true }) } catch { /* best-effort prune */ }
       }
     } catch (e) {
       console.warn(

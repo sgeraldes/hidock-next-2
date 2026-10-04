@@ -9,6 +9,7 @@ import { defineConfig } from 'vitest/config'
 // project for the same reason. A test that genuinely hangs still fails; it
 // just stops being a coin flip.
 export default defineConfig({
+  cacheDir: 'out/vitest-cache',
   test: {
     testTimeout: 30000,
     hookTimeout: 60000
