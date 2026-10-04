@@ -33,6 +33,26 @@ describe('the model host in words', () => {
     expect(at({ health: { ...base.health!, state: 'busy' } }).text).toBe('gamestation:8765 is working on a recording.')
   })
 
+  it('working, but on its CPU although it has a GPU: says so and points at Repair', () => {
+    const result = at({
+      health: {
+        ...base.health!,
+        gpu: { name: 'NVIDIA GeForce RTX 4090', vramMiB: 23028, driver: '616.56' },
+        setup: { status: 'ready', device: 'cpu' }
+      }
+    })
+    expect(result).toEqual({
+      tone: 'paused',
+      text: 'gamestation:8765 works, but on its CPU: its runtime does not see the NVIDIA GeForce RTX 4090. Press Repair to reinstall it.'
+    })
+  })
+
+  it('repairing its runtime', () => {
+    expect(withSetup({ status: 'repairing' }).text).toBe(
+      'gamestation:8765 is reinstalling its GPU runtime (a few minutes). Speaker work runs here meanwhile.'
+    )
+  })
+
   it('not answering: paused from its tray, in use, or off', () => {
     expect(at({ health: null })).toEqual({
       tone: 'off',

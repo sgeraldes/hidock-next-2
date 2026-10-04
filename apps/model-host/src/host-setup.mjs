@@ -101,6 +101,34 @@ export class HostSetup {
     return this.report()
   }
 
+  /**
+   * Reinstall the CUDA build of torch (HiDock asks, over the paired
+   * connection), then prove the model again. Answers when the reinstall ends;
+   * the model test follows in the background like after a token.
+   */
+  async repair() {
+    if (!this.deps.repair) throw Object.assign(new Error('this host cannot repair its runtime'), { status: 404 })
+    // Synchronous when nothing runs, so the status says repairing at once.
+    if (this.running) await this.idle()
+    this.status = 'repairing'
+    this.reason = ''
+    this.running = (async () => {
+      try {
+        await this.deps.repair()
+        return true
+      } catch (error) {
+        this.status = 'failed'
+        this.reason = String(error?.message || error).slice(0, 400)
+        this.log(`[setup] repairing the runtime failed: ${this.reason}`)
+        return false
+      } finally {
+        this.running = null
+      }
+    })()
+    if (await this.running) this.#validate()
+    return this.report()
+  }
+
   /** Resolves when no validation is running. For tests and for shutdown. */
   async idle() {
     while (this.running) await this.running

@@ -13,13 +13,16 @@
  */
 
 import { readFile } from 'fs/promises'
-import { extname } from 'path'
+import { basename, extname } from 'path'
 import type { AcousticWorkerResult } from './speaker-linking'
 import type {
+  ModelHostDiagnostics,
   ModelHostHealthReport,
   ModelHostSetupReport,
   ModelHostStepAside,
 } from '../../../src/shared/model-host-status'
+
+export type { ModelHostDiagnostics }
 
 /** The host answers health in well under a second on a LAN. */
 const HEALTH_TIMEOUT_MS = 2000
@@ -191,6 +194,64 @@ export async function setModelHostStepAside(
   fetchFn: typeof fetch = fetch
 ): Promise<void> {
   await putToHost(settings, '/settings/step-aside', { value }, fetchFn)
+}
+
+async function callHost<T>(
+  settings: ModelHostSettings,
+  method: 'GET' | 'POST' | 'PUT',
+  path: string,
+  body: BodyInit | undefined,
+  fetchFn: typeof fetch,
+  timeoutMs = HEALTH_TIMEOUT_MS * 30
+): Promise<T> {
+  const base = normalizeBase(settings.url)
+  if (!base) throw new Error('No model host is configured.')
+  const response = await fetchFn(`${base}${path}`, {
+    method,
+    headers: { authorization: `Bearer ${settings.token}` },
+    ...(body !== undefined ? { body } : {}),
+    signal: AbortSignal.timeout(timeoutMs),
+  })
+  const answer = (await response.json().catch(() => ({}))) as T & { error?: string }
+  if (response.status === 404) {
+    throw new Error('The host is older than 0.3.1 and cannot do this. Install 0.3.1 on it once; after that HiDock updates it.')
+  }
+  if (!response.ok) throw new Error(answer.error || `The model host refused it (HTTP ${response.status}).`)
+  invalidateModelHostHealthCache()
+  return answer
+}
+
+/** The host's logs and CUDA check, read over the paired connection. */
+export async function getModelHostDiagnostics(
+  settings: ModelHostSettings,
+  fetchFn: typeof fetch = fetch
+): Promise<ModelHostDiagnostics> {
+  return callHost<ModelHostDiagnostics>(settings, 'GET', '/diagnostics', undefined, fetchFn)
+}
+
+/** Ask the host to reinstall the CUDA build of torch; it answers at once and tests the model after. */
+export async function repairModelHostRuntime(
+  settings: ModelHostSettings,
+  fetchFn: typeof fetch = fetch
+): Promise<ModelHostSetupReport> {
+  const answer = await callHost<{ setup: ModelHostSetupReport }>(settings, 'POST', '/runtime/repair', undefined, fetchFn)
+  return answer.setup
+}
+
+/**
+ * Send the host a new version of itself. Only a Model Host installer: the host
+ * runs what it receives, which is why only its paired HiDock may send it.
+ */
+export async function sendModelHostUpdate(
+  settings: ModelHostSettings,
+  installerPath: string,
+  fetchFn: typeof fetch = fetch
+): Promise<void> {
+  if (!/^HiDock-Model-Host-\d+\.\d+\.\d+-Setup\.exe$/.test(basename(installerPath))) {
+    throw new Error('That is not a Model Host installer (HiDock-Model-Host-<version>-Setup.exe).')
+  }
+  const installer = await readFile(installerPath)
+  await callHost(settings, 'PUT', '/update', installer, fetchFn, 5 * 60 * 1000)
 }
 
 /**

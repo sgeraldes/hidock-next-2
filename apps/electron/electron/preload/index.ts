@@ -162,6 +162,7 @@ import type { Note, NoteRelatedItem, NoteMeetingSuggestion } from '../../src/typ
 import type { SpeakerEngineId, SpeakerSetup } from '../../src/types/speakers'
 import type { VoiceBackfillMeasure, VoiceBackfillStatus } from '../../src/shared/voice-backfill-schedule'
 import type {
+  ModelHostDiagnostics,
   ModelHostHealthReport,
   ModelHostSetupReport,
   ModelHostStatus,
@@ -816,6 +817,12 @@ export interface ElectronAPI {
       /** Paired, but the host did not get the token or the step-aside choice. */
       warning?: string
     }>
+    /** The host's logs and whether torch sees CUDA, over the paired connection. */
+    diagnostics: () => Promise<{ success: boolean; error?: string; diagnostics?: ModelHostDiagnostics }>
+    /** Reinstall the CUDA build of torch on the host; it tests the model again after. */
+    repair: () => Promise<{ success: boolean; error?: string; setup?: ModelHostSetupReport }>
+    /** Send the host a Model Host installer; it installs it by itself. */
+    update: (request: { path: string }) => Promise<{ success: boolean; error?: string }>
     /** The one setting for the gamestation; sent to the host when it answers. */
     setStepAside: (request: { value: ModelHostStepAside }) => Promise<{ success: boolean; sent?: boolean; error?: string }>
     forget: () => Promise<{ success: boolean }>
@@ -1859,6 +1866,9 @@ const electronAPI: ElectronAPI = {
     status: () => callIPC('model-host:status'),
     pair: (request) => callIPC('model-host:pair', request),
     setStepAside: (request) => callIPC('model-host:set-step-aside', request),
+    diagnostics: () => callIPC('model-host:diagnostics'),
+    repair: () => callIPC('model-host:repair'),
+    update: (request) => callIPC('model-host:update', request),
     forget: () => callIPC('model-host:forget')
   },
 

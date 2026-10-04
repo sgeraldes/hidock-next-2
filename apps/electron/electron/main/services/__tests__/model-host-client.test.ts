@@ -11,6 +11,9 @@ import {
   resetModelHostHealthCache,
   sendHfTokenToModelHost,
   setModelHostStepAside,
+  getModelHostDiagnostics,
+  repairModelHostRuntime,
+  sendModelHostUpdate,
 } from '../model-host-client'
 
 const HEALTHY = {
@@ -159,6 +162,49 @@ describe('what HiDock sends the host it is in charge of', () => {
     const [url, init] = calls(fetchFn)[0]
     expect(url).toBe('http://x:1/settings/step-aside')
     expect(JSON.parse(init.body)).toEqual({ value: 'any-use' })
+  })
+})
+
+describe('looking after the host from HiDock', () => {
+  it('reads its diagnostics with the pairing token', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(jsonResponse({ setupLog: 'GPU: RTX 4090', torch: { cudaAvailable: false } }))
+    const report = await getModelHostDiagnostics({ url: 'x:1', token: 'tok' }, fetchFn as never)
+    expect(report.torch).toEqual({ cudaAvailable: false })
+    const [url, init] = calls(fetchFn)[0]
+    expect(url).toBe('http://x:1/diagnostics')
+    expect(init.headers.authorization).toBe('Bearer tok')
+  })
+
+  it('asks it to repair its runtime', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(jsonResponse({ setup: { status: 'repairing' } }, 202))
+    await expect(repairModelHostRuntime({ url: 'x:1', token: 'tok' }, fetchFn as never)).resolves.toEqual({ status: 'repairing' })
+    expect((calls(fetchFn)[0][1] as unknown as { method: string }).method).toBe('POST')
+  })
+
+  it('says plainly when the host is too old to repair itself', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(jsonResponse({ error: 'no such route' }, 404))
+    await expect(repairModelHostRuntime({ url: 'x:1', token: 'tok' }, fetchFn as never)).rejects.toThrow(/0\.3\.1/)
+  })
+
+  it('sends it an installer to run', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hidock-update-'))
+    try {
+      const exe = join(dir, 'HiDock-Model-Host-0.3.1-Setup.exe')
+      writeFileSync(exe, Buffer.concat([Buffer.from('MZ'), Buffer.alloc(2048)]))
+      const fetchFn = vi.fn().mockResolvedValue(jsonResponse({ staged: true }, 202))
+      await sendModelHostUpdate({ url: 'x:1', token: 'tok' }, exe, fetchFn as never)
+      const [url, init] = calls(fetchFn)[0]
+      expect(url).toBe('http://x:1/update')
+      expect((init as unknown as { method: string; body: Buffer }).body.length).toBe(2050)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses to send anything but a Model Host installer', async () => {
+    const fetchFn = vi.fn()
+    await expect(sendModelHostUpdate({ url: 'x:1', token: 'tok' }, 'C:\\Windows\\notepad.exe', fetchFn as never)).rejects.toThrow(/installer/)
+    expect(fetchFn).not.toHaveBeenCalled()
   })
 })
 

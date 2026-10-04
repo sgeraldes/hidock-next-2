@@ -11,7 +11,7 @@ export type ModelHostStepAside = 'any-use' | 'games' | 'never'
 
 export interface ModelHostSetupReport {
   /** The host runs the voice model once, with the token HiDock sent, before it diarizes. */
-  status: 'needs-token' | 'not-validated' | 'validating' | 'ready' | 'failed'
+  status: 'needs-token' | 'not-validated' | 'validating' | 'repairing' | 'ready' | 'failed'
   reason?: string
   device?: string
 }
@@ -27,6 +27,16 @@ export interface ModelHostHealthReport {
   setup?: ModelHostSetupReport
   stepAside?: ModelHostStepAside
   pairing?: { automatic: boolean; remainingMs: number; cancelled: boolean; paired: number }
+}
+
+/** What the host's /diagnostics says: the end of its logs and whether torch sees CUDA. */
+export interface ModelHostDiagnostics {
+  version?: string
+  setup?: ModelHostSetupReport
+  setupLog?: string
+  serviceLog?: string
+  repairLog?: string
+  torch?: { torch?: string; cudaBuild?: string | null; cudaAvailable?: boolean; device?: string | null; error?: string }
 }
 
 export interface ModelHostStatus {
@@ -49,6 +59,11 @@ export interface ModelHostSentence {
 }
 
 const HERE = 'Speaker work runs on this computer'
+
+/** The host has an NVIDIA GPU, but the voice model ran on its CPU: torch without CUDA. Repair fixes it. */
+export function cpuDespiteGpu(health: ModelHostHealthReport | null | undefined): boolean {
+  return Boolean(health?.gpu && health.setup?.status === 'ready' && health.setup.device === 'cpu')
+}
 
 export function describeModelHost(status: ModelHostStatus): ModelHostSentence {
   if (!status.configured) return { tone: 'none', text: `No model host. ${HERE}.` }
@@ -73,6 +88,8 @@ export function describeModelHost(status: ModelHostStatus): ModelHostSentence {
           : { tone: 'off', text: `${name} needs a Hugging Face token and this computer has none. Add it in Settings > Secrets.` }
       case 'failed':
         return { tone: 'off', text: `${name} could not run the voice model: ${setup.reason || 'no reason given'}. ${HERE}.` }
+      case 'repairing':
+        return { tone: 'paused', text: `${name} is reinstalling its GPU runtime (a few minutes). Speaker work runs here meanwhile.` }
       default:
         return {
           tone: 'paused',
@@ -82,6 +99,13 @@ export function describeModelHost(status: ModelHostStatus): ModelHostSentence {
   }
   if (!health.capabilities.includes('diarize')) {
     return { tone: 'off', text: `${name} answers, but its setup has not finished. ${HERE}.` }
+  }
+
+  if (cpuDespiteGpu(health)) {
+    return {
+      tone: 'paused',
+      text: `${name} works, but on its CPU: its runtime does not see the ${health.gpu!.name}. Press Repair to reinstall it.`
+    }
   }
 
   switch (health.state) {
