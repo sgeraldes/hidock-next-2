@@ -58,7 +58,7 @@ beforeEach(() => {
   saveStep.mockResolvedValue({ success: true, issues: [] })
   listModels.mockResolvedValue([])
   saveDecisions.mockResolvedValue({ success: true })
-  global.window.electronAPI = { pipeline: { getState, saveStep, saveDecisions, listModels, getLabelSet: vi.fn().mockResolvedValue({ id: 'set', items: [], counts: { doubtful: 0, confident: 0 }, labeled: 0 }) } } as never
+  global.window.electronAPI = { pipeline: { getState, saveStep, saveDecisions, listModels, getLabelSet: vi.fn().mockResolvedValue({ id: 'set', items: [], counts: { doubtful: 0, random: 0 }, labeled: 0 }) } } as never
 })
 
 describe('PipelineSection', () => {

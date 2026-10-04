@@ -2,13 +2,14 @@ import { randomUUID } from 'crypto'
 import { z } from 'zod'
 import { queryAll, queryOne, run, runInTransaction } from '../database'
 import { filterEligibleRecordingIds } from '../recording-eligibility'
-import { KIND_FALLBACK_MAX_JEV_CONFIDENCE } from '../jev-evaluation'
 import { buildKindExcerpt } from '../kind-fallback'
 import { RECORDING_KINDS, type RecordingKind, type ReferenceLabelSet, type ReferenceLabelItem } from '../../../../src/shared/decision-labels'
 
+const SAMPLING_RULE = 'lowest20-random20-v1'
+
 const itemSchema = z.object({ setId: z.string().min(1).max(100), recordingId: z.string().min(1).max(200) }).strict()
 const saveSchema = itemSchema.extend({ answer: z.enum(Object.keys(RECORDING_KINDS) as [RecordingKind, ...RecordingKind[]]) })
-interface StoredSet { id: string; created_at: string; sample_size: number; doubtful_count: number; confident_count: number }
+interface StoredSet { sampling_rule: string | null; id: string; created_at: string; sample_size: number; doubtful_count: number; random_count: number }
 
 /** Shared sampling/read/write rule: fail-closed eligibility and a usable valid transcript. */
 function availableRecordingIds(recordingIds: string[], sampling = false): Set<string> {
@@ -27,7 +28,14 @@ function availableRecordingIds(recordingIds: string[], sampling = false): Set<st
 /** Synchronous transaction: two first-use requests cannot create different samples. */
 export function getLabelSet(): ReferenceLabelSet {
   return runInTransaction(() => {
-    let set = queryOne<StoredSet>("SELECT id, created_at, sample_size, doubtful_count, confident_count FROM decision_label_sets WHERE question = 'kind'")
+    let set = queryOne<StoredSet>("SELECT id, created_at, sample_size, doubtful_count, random_count, sampling_rule FROM decision_label_sets WHERE question = 'kind'")
+    if (set && set.sampling_rule !== SAMPLING_RULE && !queryOne(`
+      SELECT 1 FROM decision_label_items i JOIN decision_labels l
+        ON l.recording_id = i.recording_id AND l.question = 'kind'
+      WHERE i.set_id = ? LIMIT 1`, [set.id])) {
+      run('DELETE FROM decision_label_sets WHERE id = ?', [set.id])
+      set = undefined
+    }
     if (!set) {
       const candidates = queryAll<{ recording_id: string; kind_confidence: number }>(`
         SELECT re.recording_id, re.kind_confidence FROM recording_evaluations re
@@ -43,26 +51,32 @@ export function getLabelSet(): ReferenceLabelSet {
           AND t.validity_status = 'valid' AND LENGTH(TRIM(t.full_text)) > 0
         ORDER BY RANDOM()`)
       const eligible = availableRecordingIds(candidates.map(row => row.recording_id), true)
-      set = { id: randomUUID(), created_at: new Date().toISOString(), sample_size: 0, doubtful_count: 0, confident_count: 0 }
-      run("INSERT INTO decision_label_sets (id, question, created_at) VALUES (?, 'kind', ?)", [set.id, set.created_at])
-      const counts = { doubtful: 0, confident: 0 }
+      set = { sampling_rule: SAMPLING_RULE, id: randomUUID(), created_at: new Date().toISOString(), sample_size: 0, doubtful_count: 0, random_count: 0 }
+      run("INSERT INTO decision_label_sets (id, question, created_at, sampling_rule) VALUES (?, 'kind', ?, ?)", [set.id, set.created_at, SAMPLING_RULE])
+      const counts = { doubtful: 0, random: 0 }
       let position = 0
       const seen = new Set<string>()
-      for (const row of candidates) {
-        const stratum = row.kind_confidence < KIND_FALLBACK_MAX_JEV_CONFIDENCE ? 'doubtful' : 'confident'
-        if (!eligible.has(row.recording_id) || seen.has(row.recording_id) || counts[stratum] >= 20) continue
+      const usable = candidates.filter(row => {
+        if (!eligible.has(row.recording_id) || seen.has(row.recording_id)) return false
+        seen.add(row.recording_id)
+        return true
+      })
+      const lowest = [...usable].sort((a, b) => a.kind_confidence - b.kind_confidence || a.recording_id.localeCompare(b.recording_id)).slice(0, 20)
+      const doubtfulIds = new Set(lowest.map(row => row.recording_id))
+      const sample = [...lowest, ...usable.filter(row => !doubtfulIds.has(row.recording_id)).slice(0, 20)]
+      for (const row of sample) {
+        const stratum = doubtfulIds.has(row.recording_id) ? 'doubtful' : 'random'
         run('INSERT INTO decision_label_items (set_id, recording_id, stratum, position) VALUES (?, ?, ?, ?)',
           [set.id, row.recording_id, stratum, position++])
         counts[stratum]++
-        seen.add(row.recording_id)
       }
       set.sample_size = position
       set.doubtful_count = counts.doubtful
-      set.confident_count = counts.confident
-      run('UPDATE decision_label_sets SET sample_size = ?, doubtful_count = ?, confident_count = ? WHERE id = ?',
-        [position, counts.doubtful, counts.confident, set.id])
+      set.random_count = counts.random
+      run('UPDATE decision_label_sets SET sample_size = ?, doubtful_count = ?, random_count = ? WHERE id = ?',
+        [position, counts.doubtful, counts.random, set.id])
     }
-    const rows = queryAll<{ recording_id: string; position: number; stratum: 'doubtful' | 'confident'; answer: RecordingKind | null }>(`
+    const rows = queryAll<{ recording_id: string; position: number; stratum: 'doubtful' | 'random'; answer: RecordingKind | null }>(`
       SELECT i.recording_id, i.position, i.stratum, l.answer FROM decision_label_items i
       LEFT JOIN decision_labels l ON l.recording_id = i.recording_id AND l.question = 'kind'
       WHERE i.set_id = ? ORDER BY i.position`, [set.id])
@@ -72,7 +86,7 @@ export function getLabelSet(): ReferenceLabelSet {
       id: set.id, question: 'kind', createdAt: set.created_at,
       size: set.sample_size, unavailable: set.sample_size - available.length,
       items: available.map(row => ({ recordingId: row.recording_id, position: row.position, answer: row.answer })),
-      counts: { doubtful: set.doubtful_count, confident: set.confident_count },
+      counts: { doubtful: set.doubtful_count, random: set.random_count },
       labeled: available.filter(row => row.answer !== null).length
     }
   })

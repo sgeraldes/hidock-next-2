@@ -6,7 +6,7 @@ import type { ReferenceLabelSet, RecordingKind } from '@/shared/decision-labels'
 let answers: Record<string, RecordingKind | null>
 const getLabelSet = vi.fn(async (): Promise<ReferenceLabelSet> => ({
   id: 'set', question: 'kind', createdAt: '2026-10-04',
-  size: 3, unavailable: 0, counts: { doubtful: 1, confident: 2 }, labeled: Object.values(answers).filter(Boolean).length,
+  size: 3, unavailable: 0, counts: { doubtful: 1, random: 2 }, labeled: Object.values(answers).filter(Boolean).length,
   items: ['a', 'b', 'c'].map((recordingId, position) => ({ recordingId, position, answer: answers[recordingId] ?? null }))
 }))
 const getLabelItem = vi.fn(async ({ recordingId }: { recordingId: string }) => ({
@@ -23,7 +23,7 @@ beforeEach(() => {
 describe('Reference labels', () => {
   it('shows original size and unavailable count with a scrollable excerpt', async () => {
     getLabelSet.mockResolvedValueOnce({ id: 'set', question: 'kind', createdAt: '2026-10-04', size: 40, unavailable: 39,
-      counts: { doubtful: 20, confident: 20 }, labeled: 0, items: [{ recordingId: 'a', position: 0, answer: null }] })
+      counts: { doubtful: 20, random: 20 }, labeled: 0, items: [{ recordingId: 'a', position: 0, answer: null }] })
     render(<ReferenceLabels />)
     await screen.findByText('Opening a')
     expect(screen.getByText('0 of 40 labeled')).toBeInTheDocument()
@@ -34,7 +34,7 @@ describe('Reference labels', () => {
     render(<ReferenceLabels />)
     expect(await screen.findByText('Opening a')).toBeInTheDocument()
     expect(screen.getByText('0 of 3 labeled')).toBeInTheDocument()
-    expect(screen.getByText(/Only 1 doubtful and 2 confident/)).toBeInTheDocument()
+    expect(screen.getByText(/Only 3 usable recordings/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /Interview/ }))
     expect(await screen.findByText('Opening b')).toBeInTheDocument()
     expect(screen.getByText('1 of 3 labeled')).toBeInTheDocument()

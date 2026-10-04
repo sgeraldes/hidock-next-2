@@ -33,15 +33,16 @@ const DECISION_LABELS_DDL = `CREATE TABLE IF NOT EXISTS decision_label_sets (
     id TEXT PRIMARY KEY,
     question TEXT NOT NULL UNIQUE,
     created_at TEXT NOT NULL,
+    sampling_rule TEXT,
     sample_size INTEGER NOT NULL DEFAULT 0 CHECK(sample_size >= 0),
     doubtful_count INTEGER NOT NULL DEFAULT 0 CHECK(doubtful_count >= 0),
-    confident_count INTEGER NOT NULL DEFAULT 0 CHECK(confident_count >= 0),
-    CHECK(sample_size = doubtful_count + confident_count)
+    random_count INTEGER NOT NULL DEFAULT 0 CHECK(random_count >= 0),
+    CHECK(sample_size = doubtful_count + random_count)
 );
 CREATE TABLE IF NOT EXISTS decision_label_items (
     set_id TEXT NOT NULL REFERENCES decision_label_sets(id) ON DELETE CASCADE,
     recording_id TEXT NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
-    stratum TEXT NOT NULL CHECK(stratum IN ('doubtful', 'confident')),
+    stratum TEXT NOT NULL CHECK(stratum IN ('doubtful', 'random')),
     position INTEGER NOT NULL CHECK(position >= 0),
     PRIMARY KEY (set_id, recording_id),
     UNIQUE (set_id, position)
@@ -4049,17 +4050,33 @@ function repairPhase(): void {
   // Reference labels (v71), like Notes: fresh installs and upgrades share the
   // migration DDL, while SCHEMA remains a literal list of SQL statements.
   database.run(DECISION_LABELS_DDL)
-  // v71 is unreleased. Preserve samples created by its original development
-  // schema; backfill once from stored membership, never from current eligibility.
+  // v71 is unreleased: repair development databases even if already at v71.
   const labelSetColumns = getTableColumns(database, 'decision_label_sets')
+  if (!labelSetColumns.includes('sampling_rule')) {
+    database.run('ALTER TABLE decision_label_sets ADD COLUMN sampling_rule TEXT')
+  }
+  if (labelSetColumns.includes('confident_count')) {
+    database.run('ALTER TABLE decision_label_sets RENAME COLUMN confident_count TO random_count')
+  }
   if (!labelSetColumns.includes('sample_size')) {
     database.run('ALTER TABLE decision_label_sets ADD COLUMN sample_size INTEGER NOT NULL DEFAULT 0 CHECK(sample_size >= 0)')
     database.run('ALTER TABLE decision_label_sets ADD COLUMN doubtful_count INTEGER NOT NULL DEFAULT 0 CHECK(doubtful_count >= 0)')
-    database.run('ALTER TABLE decision_label_sets ADD COLUMN confident_count INTEGER NOT NULL DEFAULT 0 CHECK(confident_count >= 0)')
+    database.run('ALTER TABLE decision_label_sets ADD COLUMN random_count INTEGER NOT NULL DEFAULT 0 CHECK(random_count >= 0)')
     database.run(`UPDATE decision_label_sets SET
       sample_size = (SELECT COUNT(*) FROM decision_label_items WHERE set_id = decision_label_sets.id),
       doubtful_count = (SELECT COUNT(*) FROM decision_label_items WHERE set_id = decision_label_sets.id AND stratum = 'doubtful'),
-      confident_count = (SELECT COUNT(*) FROM decision_label_items WHERE set_id = decision_label_sets.id AND stratum = 'confident')`)
+      random_count = (SELECT COUNT(*) FROM decision_label_items WHERE set_id = decision_label_sets.id AND stratum IN ('confident', 'random'))`)
+  }
+  const labelItemsSql = database.exec("SELECT sql FROM sqlite_master WHERE name = 'decision_label_items'")[0]?.values[0]?.[0]
+  if (typeof labelItemsSql === 'string' && labelItemsSql.includes("'confident'")) {
+    // Rebuild the CHECK constraint and translate legacy membership without losing labels.
+    database.run('ALTER TABLE decision_label_items RENAME TO decision_label_items_legacy')
+    database.run(DECISION_LABELS_DDL)
+    database.run(`INSERT INTO decision_label_items (set_id, recording_id, stratum, position)
+      SELECT set_id, recording_id, CASE WHEN stratum = 'confident' THEN 'random' ELSE stratum END, position
+      FROM decision_label_items_legacy`)
+    database.run('DROP TABLE decision_label_items_legacy')
+    database.run(DECISION_LABELS_DDL)
   }
 
   // Repair transcript_speakers (v25): a new table has no columns to ALTER, but

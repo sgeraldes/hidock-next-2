@@ -22,7 +22,7 @@ export interface ReferenceLabelSet {
   size: number
   unavailable: number
   items: Array<{ recordingId: string; position: number; answer: RecordingKind | null }>
-  counts: { doubtful: number; confident: number }
+  counts: { doubtful: number; random: number }
   labeled: number
 }
 export interface ReferenceLabelItem {

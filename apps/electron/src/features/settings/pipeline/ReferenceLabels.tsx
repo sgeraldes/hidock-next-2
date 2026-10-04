@@ -94,7 +94,8 @@ export function ReferenceLabels() {
         <>
           <p role="status" className="text-sm tabular-nums">{set.labeled} of {set.size} labeled</p>
           {set.unavailable > 0 && <p className="text-sm text-muted-foreground">{set.unavailable} no longer available</p>}
-          {(set.counts.doubtful < 20 || set.counts.confident < 20) && <p className="text-sm text-muted-foreground">Only {set.counts.doubtful} doubtful and {set.counts.confident} confident recordings were available when this set was created (target: 20 each).</p>}
+          <p className="text-sm text-muted-foreground">The 20 most doubtful recordings by latest Jev kind confidence, plus 20 at random from the rest. A full set contains 40 usable recordings.</p>
+          {set.size < 40 && <p className="text-sm text-muted-foreground">Only {set.size} usable recordings were available when this set was created (target: 40): {set.counts.doubtful} doubtful and {set.counts.random} random.</p>}
           {set.items.length === 0 ? <p className="text-sm">No eligible recordings with valid transcripts are available in this set.</p> : (
             <div className="space-y-4 rounded-lg border border-border bg-card p-4" aria-busy={loading || saving}>
               <p className="text-sm tabular-nums">{index < set.items.length ? `Recording ${index + 1} of ${set.items.length}` : 'You have reached the end of this set.'}</p>
