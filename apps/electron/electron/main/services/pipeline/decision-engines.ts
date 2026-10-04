@@ -1,5 +1,6 @@
 import type { JevAnswer, JevQuestion, JevResponse, JevStructured } from '../jev-client'
 import type { JevHarness } from './jev-harness'
+import { recordHarnessUsage } from '../brains/harness-usage'
 import { checkModelHost, decideOnModelHost } from '../model-host-client'
 import { describeError, trackCall } from './track-call'
 import { getDecisionLatencies, writeCall } from './call-store'
@@ -137,7 +138,13 @@ export async function createDecisionEngines(step: DecisionStep, deps: Pick<Decis
         const health = await checkModelHost(settings)
         return !!health && (health.state === 'ready' || health.state === 'busy') && health.capabilities.includes('decide')
       },
-      ask: (state, questions) => decideOnModelHost(settings, { model: id, state, questions })
+      async ask(state, questions) {
+        const startedAt = Date.now()
+        const response = await decideOnModelHost(settings, { model: id, state, questions })
+        recordHarnessUsage({ harness: id, model: response.model, inputTokens: response.usage?.input_tokens,
+          outputTokens: response.usage?.output_tokens, durationMs: Date.now() - startedAt, reportedCostUsd: 0 })
+        return response
+      }
     }
     if (id === 'jev') return { id, descriptor, isAvailable: () => jev.isConfigured(), ask: (state, questions) => jev.ask(state, questions) }
     const harness = id === 'haiku' ? 'claude-code' : 'gemini-api'
@@ -161,19 +168,24 @@ export async function createDecisionEngines(step: DecisionStep, deps: Pick<Decis
   })
 }
 
-export async function hasDecisionEngine(step: DecisionStep, deps: Pick<DecisionDeps, 'jev'> = {}): Promise<boolean> {
-  const engines = await createDecisionEngines(step, deps)
-  for (const engine of engines) {
-    try { if (await engine.isAvailable()) return true } catch { /* Try the next engine. */ }
+async function resolveDecisionChain(step: DecisionStep, deps: DecisionDeps): Promise<{ engines: DecisionEngine[]; chain: DecisionEngineId[] }> {
+  const engines = deps.engines ?? await createDecisionEngines(step, deps)
+  const config = deps.config ?? (deps.engines ? undefined : (await import('../config')).getConfig().pipeline?.decisions)
+  const selection = config?.overrides?.[step] ?? config?.preset ?? 'zero-cost'
+  return { engines, chain: decisionChain(selection, engines, deps.latencies ?? getDecisionLatencies()) }
+}
+
+export async function hasDecisionEngine(step: DecisionStep, deps: DecisionDeps = {}): Promise<boolean> {
+  const { engines, chain } = await resolveDecisionChain(step, deps)
+  for (const id of chain) {
+    const engine = engines.find(e => e.id === id)
+    try { if (engine && await engine.isAvailable()) return true } catch { /* Try the next engine. */ }
   }
   return false
 }
 
 export async function askDecision(step: DecisionStep, state: JevStructured, questions: Record<string, JevQuestion>, deps: DecisionDeps = {}): Promise<{ response: JevResponse; engine: DecisionEngineId }> {
-  const engines = deps.engines ?? await createDecisionEngines(step, deps)
-  const config = deps.config ?? (deps.engines ? undefined : (await import('../config')).getConfig().pipeline?.decisions)
-  const selection = config?.overrides?.[step] ?? config?.preset ?? 'zero-cost'
-  const chain = decisionChain(selection, engines, deps.latencies ?? getDecisionLatencies())
+  const { engines, chain } = await resolveDecisionChain(step, deps)
   const reasons: string[] = []
   const errors: unknown[] = []
   let parentCallId: string | null = null

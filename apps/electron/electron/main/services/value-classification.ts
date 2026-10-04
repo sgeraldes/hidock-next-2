@@ -58,6 +58,7 @@ import { getConfig } from './config'
 import { createJevHarness } from './pipeline/jev-harness'
 import type { JevResponse } from './jev-client'
 import { withCallRecord } from './pipeline/track-call'
+import { isRecordingEligible } from './recording-eligibility'
 import { askDecision, hasDecisionEngine } from './pipeline/decision-engines'
 import { jevKeyFor } from './jev-settings'
 import {
@@ -511,7 +512,8 @@ export async function evaluateWithJev(
   })
   const harness = createJevHarness({ getKey: () => apiKey })
   const { response } = await askDecision('evaluate', state, buildEvaluationQuestions(), {
-    jev: { ...harness, ask: (s, q) => harness.ask(s, q, { fetchImpl }) }, recordingId: input.recordingId ?? null
+    jev: { ...harness, ask: (s, q) => harness.ask(s, q, { fetchImpl }) }, recordingId: input.recordingId ?? null,
+    shouldGenerate: () => !input.recordingId || isRecordingEligible(input.recordingId)
   })
   // The same caps the stored evaluations get (recomputeEvaluationsFromEvidence).
   const evaluation = withEvidence(parseEvaluation(response), {

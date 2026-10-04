@@ -19,6 +19,11 @@ import {
 } from '../jev-meeting-match'
 import { setCallSink, type CallRecord } from '../pipeline/call-store'
 
+const eligibility = vi.hoisted(() => ({ allowed: true, health: vi.fn() }))
+vi.mock('../recording-eligibility', () => ({ isRecordingEligible: () => eligibility.allowed }))
+vi.mock('../config', () => ({ getConfig: () => ({ transcription: { modelHostUrl: 'http://test-host', modelHostToken: 'test-token' } }) })) // pragma: allowlist secret
+vi.mock('../model-host-client', () => ({ checkModelHost: eligibility.health, decideOnModelHost: vi.fn() }))
+
 const context = {
   title: 'Configuración de certificados y coordinación ALB',
   summary: 'The team set up TLS certificates on the load balancer for Antamina.',
@@ -96,6 +101,25 @@ describe('pickMatchCandidates', () => {
 })
 
 describe('matchMeetingWithJev', () => {
+  it('sends no content when exclusion occurs during availability checks', async () => {
+    eligibility.allowed = true
+    eligibility.health.mockImplementation(async () => {
+      await Promise.resolve()
+      eligibility.allowed = false
+      return null
+    })
+    const ask = vi.fn(async () => reply({ m1: 0.02, m2: 0.93, none: 0.05 }))
+    const save = vi.fn()
+    try {
+      await matchMeetingWithJev('excluded', context, [lunch, daily], { apiKey: 'k', load: () => null, save, ask }).catch(() => null)
+      expect(ask).not.toHaveBeenCalled()
+      expect(save).not.toHaveBeenCalled()
+    } finally {
+      eligibility.allowed = true
+      eligibility.health.mockReset()
+    }
+  })
+
   it('asks Jev once, then reuses the stored answer for the same candidates', async () => {
     let stored: MeetingMatch | null = null
     const ask = vi.fn(async () => reply({ m1: 0.02, m2: 0.93, none: 0.05 }))

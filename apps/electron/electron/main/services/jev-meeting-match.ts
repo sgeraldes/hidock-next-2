@@ -15,6 +15,7 @@
 import { createHash } from 'crypto'
 import { askJev, JEV_MODEL, type JevQuestion, type JevResponse, type JevStructured } from './jev-client'
 import { createJevHarness } from './pipeline/jev-harness'
+import { isRecordingEligible } from './recording-eligibility'
 import { askDecision, hasDecisionEngine } from './pipeline/decision-engines'
 import { DEFAULT_QUALITY_RULES, qualityRules } from './quality-rules'
 
@@ -219,7 +220,7 @@ export async function matchMeetingWithJev(
 
   const harness = createJevHarness({ getKey: () => deps.apiKey, askImpl: deps.ask ?? askJev })
   if (!(await hasDecisionEngine('meeting-match', { jev: harness }))) return null
-  const { response: res } = await askDecision('meeting-match', state, questions, { jev: harness, recordingId })
+  const { response: res } = await askDecision('meeting-match', state, questions, { jev: harness, recordingId, shouldGenerate: () => isRecordingEligible(recordingId) })
   const match = parseMeetingMatch(res, keys, key)
   if (match) deps.save(recordingId, match)
   return match

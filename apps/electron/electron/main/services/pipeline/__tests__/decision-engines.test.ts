@@ -175,7 +175,7 @@ describe('decision adapters', () => {
       for await (const chunk of req) chunks.push(Buffer.from(chunk))
       const body = JSON.parse(Buffer.concat(chunks).toString())
       requests.push(body)
-      res.end(JSON.stringify({ ...response, model: body.model }))
+      res.end(JSON.stringify({ ...response, model: `${body.model}-actual`, usage: { input_tokens: 123, output_tokens: 45 } }))
     })
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
     runtime.config.transcription = { modelHostUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, modelHostToken: 'test-pairing-token' } // pragma: allowlist secret
@@ -184,8 +184,11 @@ describe('decision adapters', () => {
       for (const engine of local) {
         expect(await engine.isAvailable()).toBe(available)
         if (available) {
+          const rows: CallRecord[] = []
+          setCallSink((_id, row) => rows.push(row))
           const out = await askDecision('evaluate', 'state', questions, { engines: local, config: { preset: 'zero-cost', overrides: { evaluate: engine.id } } })
           expect(out.engine).toBe(engine.id)
+          expect(rows[0]).toMatchObject({ route: `decision:${engine.id}`, status: 'completed', provider: engine.id, model: `${engine.id}-actual`, usage: { tokens: { input: 123, output: 45 } }, estimatedCostAmount: 0, estimatedCostCurrency: 'USD' })
         }
       }
       expect(requests).toEqual(available ? local.map(engine => ({ model: engine.id, state: 'state', questions })) : [])

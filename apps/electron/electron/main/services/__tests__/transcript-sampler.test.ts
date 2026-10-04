@@ -30,7 +30,8 @@ vi.mock('../file-storage', () => ({
 }))
 vi.mock('../config', () => ({ getConfig: () => config.value }))
 vi.mock('../event-bus', () => ({ getEventBus: () => ({ emitDomainEvent: vi.fn() }) }))
-vi.mock('../brains', () => ({ resolveGeminiApiKey: () => config.value.transcription.geminiApiKey }))
+const available = vi.hoisted(() => ({ gemini: false }))
+vi.mock('../brains', () => ({ resolveGeminiApiKey: () => config.value.transcription.geminiApiKey, getBrainRouter: () => ({ canServe: (id: string) => available.gemini && id === 'gemini-api' }) }))
 const decisionAsk = vi.hoisted(() => vi.fn())
 vi.mock('../pipeline/decision-engines', async importOriginal => ({
   ...await importOriginal<typeof import('../pipeline/decision-engines')>(), askDecision: decisionAsk
@@ -114,6 +115,26 @@ describe('runSamplingPass', () => {
     expect(decisionAsk).toHaveBeenCalledWith('sample-compare', { windows: pairs.map(pair => ({ new_transcript: pair.fresh, stored_excerpt: pair.stored })) },
       { w0: compareQuestion(0), w1: compareQuestion(1) }, expect.objectContaining({ recordingId: 'sample-rec' }))
   })
+  it('buys no transcription when the comparison override has no Jev key despite usable Gemini', async () => {
+    seedDoubtful('override-no-key', '2026-10-03T10:00:00Z')
+    config.value.pipeline = { decisions: { preset: 'zero-cost', overrides: { 'sample-compare': 'jev' } } }
+    config.value.transcription.jevApiKey = ''
+    available.gemini = true
+    const d = deps('same')
+    try {
+      const result = await runSamplingPass(d)
+      expect(d.calls.transcribe).toBe(0)
+      expect(result).toMatchObject({ skipped: 'no-engine', sampled: [] })
+      expect(queryOne('SELECT 1 FROM transcript_samples WHERE recording_id = ?', ['override-no-key'])).toBeUndefined()
+    } finally {
+      config.value.pipeline = undefined
+      config.value.transcription.jevApiKey = 'jev-test' // pragma: allowlist secret
+      available.gemini = false
+      run('DELETE FROM transcripts WHERE recording_id = ?', ['override-no-key'])
+      run('DELETE FROM recordings WHERE id = ?', ['override-no-key'])
+    }
+  })
+
   it('samples the newest doubtful transcripts up to the daily allowance and settles them', async () => {
     seedDoubtful('old', '2026-09-01T10:00:00Z')
     seedDoubtful('mid', '2026-09-15T10:00:00Z')

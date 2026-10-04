@@ -30,7 +30,7 @@ import { createJevHarness } from './pipeline/jev-harness'
 import { withCallRecord } from './pipeline/track-call'
 import { askDecision, hasDecisionEngine } from './pipeline/decision-engines'
 import { qualityRules } from './quality-rules'
-import { filterTranscribableRecordingIds } from './recording-eligibility'
+import { filterTranscribableRecordingIds, isRecordingEligible } from './recording-eligibility'
 import { languageFor } from './transcription-language'
 import { audioFrameTest, type TranscriptValidity, type ValiditySegment } from './transcript-validity'
 import { readEnvelope, transcriptFingerprint } from './transcript-validity-store'
@@ -408,7 +408,7 @@ export async function compareWithDecisions(pairs: Array<{ stored: string; fresh:
   const questions: Record<string, JevQuestion> = {}
   pairs.forEach((_, i) => (questions[`w${i}`] = compareQuestion(i)))
   const state = { windows: pairs.map((p) => ({ new_transcript: p.fresh, stored_excerpt: p.stored })) }
-  const { response: res } = await askDecision('sample-compare', state, questions, { jev: harness, recordingId })
+  const { response: res } = await askDecision('sample-compare', state, questions, { jev: harness, recordingId, shouldGenerate: () => isRecordingEligible(recordingId) })
   return pairs.map((_, i) => {
     const a = res.answers[`w${i}`]
     if (a?.type !== 'choice' || (a.confidence ?? 0) < COMPARE_MIN_CONFIDENCE) return 'unclear'
