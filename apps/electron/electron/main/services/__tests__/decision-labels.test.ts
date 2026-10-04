@@ -38,6 +38,41 @@ beforeEach(() => runWithMassDeleteAllowed(() => {
   run('DELETE FROM recordings')
 }))
 describe('reference labels on real SQLite', () => {
+  const transcriptChanges = [
+    ['missing', "DELETE FROM transcripts WHERE recording_id = 'changed'", []],
+    ['null validity', "UPDATE transcripts SET validity_status = NULL WHERE recording_id = 'changed'", []],
+    ...['invalid', 'incomplete', 'doubtful', 'unexpected'].map(status =>
+      [status, "UPDATE transcripts SET validity_status = ? WHERE recording_id = 'changed'", [status]] as const),
+    ['empty text', "UPDATE transcripts SET full_text = '' WHERE recording_id = 'changed'", []],
+    ['whitespace text', "UPDATE transcripts SET full_text = '   ' WHERE recording_id = 'changed'", []]
+  ] as const
+  describe.each(transcriptChanges)('after transcript becomes %s', (_name, sql, params) => {
+    function changeTranscript() {
+      seed('changed')
+      const args = { setId: getLabelSet().id, recordingId: 'changed' }
+      saveLabel({ ...args, answer: 'interview' })
+      run(sql, [...params])
+      return args
+    }
+    it('hides ids and answers from the set and counts unavailable instead of labeled', () => {
+      changeTranscript()
+      expect(getLabelSet()).toMatchObject({ size: 1, items: [], labeled: 0, unavailable: 1 })
+    })
+    it('hides ids and answers from bench input', () => {
+      const args = changeTranscript()
+      expect(labels.getEligibleLabeledRecordings(args.setId)).toEqual([])
+    })
+    it('returns no item', () => {
+      expect(getLabelItem(changeTranscript())).toBeNull()
+    })
+    it('rejects saving and preserves the owner label until membership-only clearing', () => {
+      const args = changeTranscript()
+      expect(() => saveLabel({ ...args, answer: 'team_meeting' })).toThrow('no longer available')
+      expect(queryOne('SELECT answer FROM decision_labels')).toEqual({ answer: 'interview' })
+      clearLabel(args)
+      expect(queryAll('SELECT * FROM decision_labels')).toEqual([])
+    })
+  })
   it('repairs the unreleased original v71 set schema once without resetting stored counts', async () => {
     seed('legacy')
     const itemsDDL = queryOne<{ sql: string }>("SELECT sql FROM sqlite_master WHERE name = 'decision_label_items'")!.sql

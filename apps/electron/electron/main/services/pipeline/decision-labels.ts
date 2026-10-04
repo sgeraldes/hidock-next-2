@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto'
 import { z } from 'zod'
 import { queryAll, queryOne, run, runInTransaction } from '../database'
-import { filterEligibleRecordingIds, isRecordingEligible } from '../recording-eligibility'
+import { filterEligibleRecordingIds } from '../recording-eligibility'
 import { KIND_FALLBACK_MAX_JEV_CONFIDENCE } from '../jev-evaluation'
 import { buildKindExcerpt } from '../kind-fallback'
 import { RECORDING_KINDS, type RecordingKind, type ReferenceLabelSet, type ReferenceLabelItem } from '../../../../src/shared/decision-labels'
@@ -9,6 +9,20 @@ import { RECORDING_KINDS, type RecordingKind, type ReferenceLabelSet, type Refer
 const itemSchema = z.object({ setId: z.string().min(1).max(100), recordingId: z.string().min(1).max(200) }).strict()
 const saveSchema = itemSchema.extend({ answer: z.enum(Object.keys(RECORDING_KINDS) as [RecordingKind, ...RecordingKind[]]) })
 interface StoredSet { id: string; created_at: string; sample_size: number; doubtful_count: number; confident_count: number }
+
+/** Shared sampling/read/write rule: fail-closed eligibility and a usable valid transcript. */
+function availableRecordingIds(recordingIds: string[], sampling = false): Set<string> {
+  const { eligible, failClosed } = filterEligibleRecordingIds(recordingIds)
+  if (failClosed) {
+    if (sampling) throw new Error('Recording eligibility could not be checked. Try again.')
+    return new Set()
+  }
+  return new Set([...eligible].filter(id => {
+    const transcript = queryOne<{ full_text: string | null }>(
+      "SELECT full_text FROM transcripts WHERE recording_id = ? AND validity_status = 'valid'", [id])
+    return !!transcript?.full_text?.trim()
+  }))
+}
 
 /** Synchronous transaction: two first-use requests cannot create different samples. */
 export function getLabelSet(): ReferenceLabelSet {
@@ -28,8 +42,7 @@ export function getLabelSet(): ReferenceLabelSet {
           AND r.deleted_at IS NULL AND COALESCE(r.personal, 0) = 0
           AND t.validity_status = 'valid' AND LENGTH(TRIM(t.full_text)) > 0
         ORDER BY RANDOM()`)
-      const { eligible, failClosed } = filterEligibleRecordingIds(candidates.map(row => row.recording_id))
-      if (failClosed) throw new Error('Recording eligibility could not be checked. Try again.')
+      const eligible = availableRecordingIds(candidates.map(row => row.recording_id), true)
       set = { id: randomUUID(), created_at: new Date().toISOString(), sample_size: 0, doubtful_count: 0, confident_count: 0 }
       run("INSERT INTO decision_label_sets (id, question, created_at) VALUES (?, 'kind', ?)", [set.id, set.created_at])
       const counts = { doubtful: 0, confident: 0 }
@@ -53,8 +66,8 @@ export function getLabelSet(): ReferenceLabelSet {
       SELECT i.recording_id, i.position, i.stratum, l.answer FROM decision_label_items i
       LEFT JOIN decision_labels l ON l.recording_id = i.recording_id AND l.question = 'kind'
       WHERE i.set_id = ? ORDER BY i.position`, [set.id])
-    const { eligible, failClosed } = filterEligibleRecordingIds(rows.map(row => row.recording_id))
-    const available = rows.filter(row => !failClosed && eligible.has(row.recording_id))
+    const eligible = availableRecordingIds(rows.map(row => row.recording_id))
+    const available = rows.filter(row => eligible.has(row.recording_id))
     return {
       id: set.id, question: 'kind', createdAt: set.created_at,
       size: set.sample_size, unavailable: set.sample_size - available.length,
@@ -72,13 +85,13 @@ export function getEligibleLabeledRecordings(setId: string): Array<{ recordingId
     JOIN decision_label_sets s ON s.id = i.set_id AND s.question = 'kind'
     JOIN decision_labels l ON l.recording_id = i.recording_id AND l.question = s.question
     WHERE i.set_id = ? ORDER BY i.position`, [z.string().min(1).max(100).parse(setId)])
-  const { eligible, failClosed } = filterEligibleRecordingIds(rows.map(row => row.recordingId))
-  return rows.filter(row => !failClosed && eligible.has(row.recordingId))
+  const eligible = availableRecordingIds(rows.map(row => row.recordingId))
+  return rows.filter(row => eligible.has(row.recordingId))
 }
 
 export function getLabelItem(raw: unknown): ReferenceLabelItem | null {
   const args = itemSchema.parse(raw)
-  if (!isRecordingEligible(args.recordingId)) return null
+  if (!availableRecordingIds([args.recordingId]).has(args.recordingId)) return null
   const row = queryOne<Omit<ReferenceLabelItem, 'excerpt' | 'minutes' | 'meetingSubject'> & { full_text: string; subject: string | null }>(`
     SELECT r.id AS recordingId, r.date_recorded AS date, r.duration_seconds AS durationSeconds,
       m.subject, t.full_text, l.answer
@@ -106,6 +119,7 @@ function argsWithoutAnswer(args: { setId: string; recordingId: string }) {
 }
 
 export function clearLabel(raw: unknown): void {
+  // Membership-only: removing the owner's own label exposes no recording content.
   const args = itemSchema.parse(raw)
   if (!queryOne(`SELECT 1 FROM decision_label_items i JOIN decision_label_sets s ON s.id = i.set_id
     WHERE i.set_id = ? AND i.recording_id = ? AND s.question = 'kind'`, [args.setId, args.recordingId])) {
