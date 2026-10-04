@@ -108,10 +108,52 @@ export function planSampleWindows(input: WindowPlanInput): SampleWindow[] {
   return windows
 }
 
+/**
+ * Windows after the transcript's end, for a transcript that stops while the
+ * file goes on with audio (plan step 3: "the windows come from after its
+ * end instead"). Nothing is stored there, so the question is only whether
+ * the audio holds speech.
+ */
+export function planAfterEndWindows(input: {
+  endSeconds: number
+  fileSeconds: number
+  hasAudioAt?: (second: number) => boolean
+}): SampleWindow[] {
+  const span = input.fileSeconds - input.endSeconds
+  if (span < SAMPLE_WINDOW_SECONDS / 2) return []
+  const windows: SampleWindow[] = []
+  const usable = Math.max(0, span - SAMPLE_WINDOW_SECONDS)
+  for (let k = 0; k < SAMPLE_WINDOWS; k++) {
+    let start = input.endSeconds + usable * ((2 * k + 1) / (2 * SAMPLE_WINDOWS))
+    if (input.hasAudioAt) {
+      let found = -1
+      for (let d = 0; d <= usable && found < 0; d += 15) {
+        const fwd = start + d
+        const back = start - d
+        if (fwd <= input.endSeconds + usable && input.hasAudioAt(fwd + SAMPLE_WINDOW_SECONDS / 2)) found = fwd
+        else if (back >= input.endSeconds && input.hasAudioAt(back + SAMPLE_WINDOW_SECONDS / 2)) found = back
+      }
+      if (found < 0) continue
+      start = found
+    }
+    start = Math.round(start)
+    if (windows.some((w) => Math.abs(w.start - start) < SAMPLE_WINDOW_SECONDS)) continue
+    windows.push({ start, end: Math.min(input.fileSeconds, start + SAMPLE_WINDOW_SECONDS), storedText: '' })
+  }
+  return windows
+}
+
+/** Speech in any window after the end makes the transcript incomplete; none at all confirms it. */
+export function afterEndVerdict(freshTexts: Array<string | null>): SampleVerdict {
+  const heard = freshTexts.filter((t): t is string => t !== null)
+  if (heard.length === 0) return 'inconclusive'
+  return heard.some((t) => words(t) >= MIN_WINDOW_WORDS) ? 'incomplete' : 'confirmed'
+}
+
 /** What Jev found for one window. */
 export type WindowMatch = 'same' | 'different' | 'no_speech' | 'unclear'
 
-export type SampleVerdict = 'confirmed' | 'contradicted' | 'inconclusive'
+export type SampleVerdict = 'confirmed' | 'contradicted' | 'inconclusive' | 'incomplete'
 
 /**
  * The verdict of a sample: confirmed when most windows tell the same

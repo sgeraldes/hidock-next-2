@@ -101,9 +101,13 @@ function assess(row: ValidityRow, speakersJson: string | null): TranscriptValidi
 }
 
 /** The stored sample's verdict, when it was taken of these very lines. */
-function sampleFor(row: ValidityRow, speakersJson: string | null): 'confirmed' | 'contradicted' | 'inconclusive' | null {
+function sampleFor(
+  row: ValidityRow,
+  speakersJson: string | null
+): 'confirmed' | 'contradicted' | 'inconclusive' | 'incomplete' | null {
   if (!row.sample_verdict || row.sample_fingerprint !== transcriptFingerprint(speakersJson)) return null
-  return row.sample_verdict === 'confirmed' || row.sample_verdict === 'contradicted' ? row.sample_verdict : 'inconclusive'
+  const v = row.sample_verdict
+  return v === 'confirmed' || v === 'contradicted' || v === 'incomplete' ? v : 'inconclusive'
 }
 
 /**

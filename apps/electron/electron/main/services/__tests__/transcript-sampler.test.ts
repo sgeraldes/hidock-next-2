@@ -115,7 +115,7 @@ describe('runSamplingPass', () => {
     expect(validity('new')).toBe('valid')
     expect(validity('old')).toBe('doubtful')
     const row = queryOne<{ cost_usd: number; windows_json: string }>('SELECT cost_usd, windows_json FROM transcript_samples WHERE recording_id = ?', ['new'])
-    expect(row!.cost_usd).toBeCloseTo(0.0034 * JSON.parse(row!.windows_json).length)
+    expect(row!.cost_usd).toBeCloseTo(0.0034 * JSON.parse(row!.windows_json).windows.length)
   })
 
   it('stops at the allowance for the day, and goes on the next day', async () => {
@@ -129,6 +129,34 @@ describe('runSamplingPass', () => {
     const d = deps('same', new Date('2026-10-06T09:00:00'))
     expect((await runSamplingPass(d)).sampled).toEqual([])
     expect(d.calls.transcribe).toBe(0)
+  })
+
+  // Kiro review of PR 2: a failure after the paid transcription left no row,
+  // so the recording was transcribed again on every pass.
+  it('stores a sample whose comparison failed, so the allowance counts it and it is not paid for twice', async () => {
+    seedDoubtful('jevdown', '2026-10-02T10:00:00Z')
+    const d = deps('same', new Date('2026-10-07T09:00:00'))
+    d.compare = async () => {
+      throw new Error('Jev returned HTTP 503')
+    }
+    const first = await runSamplingPass(d)
+    expect(first.sampled.map((s) => [s.recordingId, s.verdict])).toEqual([['jevdown', 'inconclusive']])
+    const row = queryOne<{ windows_json: string }>('SELECT windows_json FROM transcript_samples WHERE recording_id = ?', ['jevdown'])
+    expect(JSON.parse(row!.windows_json).error).toContain('503')
+    const again = deps('same', new Date('2026-10-08T09:00:00'))
+    expect((await runSamplingPass(again)).sampled).toEqual([])
+    expect(again.calls.transcribe).toBe(0)
+  })
+
+  it('stores nothing when no window could be transcribed, so the next pass tries again at no cost', async () => {
+    seedDoubtful('offline', '2026-10-03T10:00:00Z')
+    const d = deps('same', new Date('2026-10-09T09:00:00'))
+    d.transcribeWindow = async () => {
+      throw new Error('network down')
+    }
+    const result = await runSamplingPass(d)
+    expect(result).toMatchObject({ sampled: [], failed: 1 })
+    expect(queryOne('SELECT 1 AS x FROM transcript_samples WHERE recording_id = ?', ['offline'])).toBeUndefined()
   })
 
   it('does nothing when switched off or with no engine', async () => {

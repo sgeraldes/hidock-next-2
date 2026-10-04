@@ -7,6 +7,8 @@
 
 import { describe, it, expect } from 'vitest'
 import {
+  afterEndVerdict,
+  planAfterEndWindows,
   planSampleWindows,
   precheckWindow,
   sampleVerdict,
@@ -81,5 +83,25 @@ describe('precheckWindow', () => {
     expect(precheckWindow('', words(40))).toBe('no_speech')
     expect(precheckWindow('mm', '')).toBe('unclear')
     expect(precheckWindow(words(40), words(40))).toBeNull()
+  })
+})
+
+// Kiro review of PR 2: a transcript that stops early was sampled over the
+// part it already covers, and confirmed the part that was never in doubt.
+describe('a transcript that stops while the audio goes on', () => {
+  it('samples after its end, where there is audio', () => {
+    const w = planAfterEndWindows({ endSeconds: 1400, fileSeconds: 3600, hasAudioAt: (s) => s > 2000 })
+    expect(w.length).toBeGreaterThan(0)
+    for (const window of w) {
+      expect(window.start).toBeGreaterThanOrEqual(1400)
+      expect(window.storedText).toBe('')
+    }
+    expect(planAfterEndWindows({ endSeconds: 3590, fileSeconds: 3600 })).toEqual([])
+  })
+
+  it('is incomplete when speech follows, confirmed when nothing does', () => {
+    expect(afterEndVerdict(['', words(30)])).toBe('incomplete')
+    expect(afterEndVerdict(['', 'mm'])).toBe('confirmed')
+    expect(afterEndVerdict([null, null])).toBe('inconclusive')
   })
 })
