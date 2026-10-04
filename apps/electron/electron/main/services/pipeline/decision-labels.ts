@@ -29,7 +29,9 @@ function availableRecordingIds(recordingIds: string[], sampling = false): Set<st
 export function getLabelSet(): ReferenceLabelSet {
   return runInTransaction(() => {
     let set = queryOne<StoredSet>("SELECT id, created_at, sample_size, doubtful_count, random_count, sampling_rule FROM decision_label_sets WHERE question = 'kind'")
-    if (set && set.sampling_rule !== SAMPLING_RULE && !queryOne(`
+    if (set && set.sampling_rule !== SAMPLING_RULE && !queryOne(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name GLOB 'decision_label_items_legacy_unrecovered_*' LIMIT 1"
+    ) && !queryOne(`
       SELECT 1 FROM decision_label_items i JOIN decision_labels l
         ON l.recording_id = i.recording_id AND l.question = 'kind'
       WHERE i.set_id = ? LIMIT 1`, [set.id])) {

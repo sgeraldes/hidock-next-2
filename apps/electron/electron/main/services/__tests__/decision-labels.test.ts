@@ -30,6 +30,9 @@ afterAll(() => {
   for (const suffix of ['', '-wal', '-shm']) if (existsSync(paths.db + suffix)) rmSync(paths.db + suffix)
 })
 beforeEach(() => runWithMassDeleteAllowed(() => {
+  for (const { name } of queryAll<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name GLOB 'decision_label_items_legacy*'")) {
+    run(`DROP TABLE "${name}"`)
+  }
   run('DELETE FROM decision_label_items')
   run('DELETE FROM decision_label_sets')
   run('DELETE FROM decision_labels')
@@ -221,7 +224,62 @@ describe('reference labels on real SQLite', () => {
     expect(getLabelSet()).toEqual(labeled)
     expect(queryAll('SELECT * FROM decision_label_items')).toHaveLength(1)
   })
-  it('rolls back the rebuild when interrupted between rename and copy', async () => {
+  it.each([true, false])('boots and recovers stranded members with position column: %s', async hasPosition => {
+    seed('current')
+    const set = getLabelSet()
+    seed('recovered')
+    run(`CREATE TABLE decision_label_items_legacy (set_id TEXT, recording_id TEXT, stratum TEXT${hasPosition ? ', position INTEGER' : ''}, extra TEXT)`)
+    run(`INSERT INTO decision_label_items_legacy VALUES (?, 'recovered', 'confident'${hasPosition ? ', 0' : ''}, 'ignored')`, [set.id])
+    run(`INSERT INTO decision_label_items_legacy VALUES (?, 'current', 'confident'${hasPosition ? ', 0' : ''}, 'ignored')`, [set.id])
+    closeDatabase()
+    await expect(initializeDatabase()).resolves.not.toThrow()
+    expect(queryAll('SELECT recording_id, position, stratum FROM decision_label_items ORDER BY position')).toEqual([
+      { recording_id: 'current', position: 0, stratum: 'doubtful' },
+      { recording_id: 'recovered', position: 1, stratum: 'random' }
+    ])
+    expect(queryAll("SELECT name FROM sqlite_master WHERE name = 'decision_label_items_legacy'")).toEqual([])
+  })
+  it('boots with an unreadable legacy table and preserves sets on subsequent boots', async () => {
+    seed('unreadable')
+    const set = getLabelSet()
+    run('UPDATE decision_label_sets SET sampling_rule = NULL')
+    run('CREATE TABLE decision_label_items_legacy (set_id TEXT, recording_id TEXT, stratum TEXT)')
+    const prototype = Object.getPrototypeOf(database.getDatabase())
+    const originalExec = prototype.exec
+    closeDatabase()
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const spy = vi.spyOn(prototype, 'exec').mockImplementation(function (this: unknown, ...args: unknown[]) {
+      if (/SELECT .* FROM decision_label_items_legacy/.test(String(args[0]))) throw new Error('Unreadable legacy table')
+      return originalExec.apply(this, args)
+    })
+    try { await expect(initializeDatabase()).resolves.not.toThrow() } finally { spy.mockRestore() }
+    expect(warning.mock.calls.filter(args => String(args[0]).includes('decision_label_items_legacy_unrecovered_'))).toHaveLength(1)
+    warning.mockRestore()
+    expect(queryAll("SELECT name FROM sqlite_master WHERE name GLOB 'decision_label_items_legacy_unrecovered_*'")).toHaveLength(1)
+    expect(getLabelSet().id).toBe(set.id)
+    closeDatabase()
+    await expect(initializeDatabase()).resolves.not.toThrow()
+    expect(getLabelSet().id).toBe(set.id)
+  })
+  it('recovers valid rows around an invalid member and retains the remainder', async () => {
+    seed('existing')
+    const set = getLabelSet()
+    seed('first')
+    seed('last')
+    run('UPDATE decision_label_sets SET sampling_rule = NULL')
+    run('CREATE TABLE decision_label_items_legacy (set_id TEXT, recording_id TEXT, stratum TEXT, position INTEGER)')
+    for (const [id, stratum] of [['first', 'confident'], ['missing-recording', 'invalid'], ['last', 'doubtful']]) {
+      run('INSERT INTO decision_label_items_legacy VALUES (?, ?, ?, 0)', [set.id, id, stratum])
+    }
+    closeDatabase()
+    await expect(initializeDatabase()).resolves.not.toThrow()
+    expect(queryAll('SELECT recording_id, position FROM decision_label_items ORDER BY position')).toEqual([
+      { recording_id: 'existing', position: 0 }, { recording_id: 'first', position: 1 }, { recording_id: 'last', position: 2 }
+    ])
+    expect(queryAll("SELECT name FROM sqlite_master WHERE name GLOB 'decision_label_items_legacy_unrecovered_*'")).toHaveLength(1)
+    expect(getLabelSet().id).toBe(set.id)
+  })
+  it('boots and preserves unrecovered membership when copy fails', async () => {
     seed('rollback')
     const set = getLabelSet()
     saveLabel({ setId: set.id, recordingId: 'rollback', answer: 'interview' })
@@ -236,16 +294,17 @@ describe('reference labels on real SQLite', () => {
       return originalRun.apply(this, args)
     })
     try {
-      await expect(initializeDatabase()).rejects.toThrow('Interrupted before member copy')
+      await expect(initializeDatabase()).resolves.not.toThrow()
     } finally { spy.mockRestore() }
     const persisted = new SQLite(paths.db)
     try {
-      expect(persisted.prepare('SELECT stratum FROM decision_label_items').all()).toEqual([{ stratum: 'confident' }])
+      const remnant = persisted.prepare("SELECT name FROM sqlite_master WHERE name GLOB 'decision_label_items_legacy_unrecovered_*'").get() as { name: string }
+      expect(persisted.prepare(`SELECT stratum FROM "${remnant.name}"`).all()).toEqual([{ stratum: 'confident' }])
       expect(persisted.prepare("SELECT name FROM sqlite_master WHERE name = 'decision_label_items_legacy'").all()).toEqual([])
     } finally { persisted.close() }
     await initializeDatabase()
-    expect(getLabelSet()).toMatchObject({ id: set.id, labeled: 1 })
-    expect(queryOne('SELECT stratum FROM decision_label_items')).toEqual({ stratum: 'random' })
+    expect(getLabelSet()).toMatchObject({ id: set.id })
+    expect(queryOne('SELECT answer FROM decision_labels')).toEqual({ answer: 'interview' })
   })
   it('repairs live v71 without the rule column, preserving labeled legacy counts', async () => {
     seed('legacy-random')

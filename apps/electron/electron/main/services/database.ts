@@ -4050,12 +4050,31 @@ function repairPhase(): void {
   // Reference labels (v71), like Notes: fresh installs and upgrades share the
   // migration DDL, while SCHEMA remains a literal list of SQL statements.
   const recoverLabelItems = (): void => {
-    if (getTableColumns(database, 'decision_label_items_legacy').length === 0) return
-    database.run(`INSERT INTO decision_label_items (set_id, recording_id, stratum, position)
-      SELECT set_id, recording_id, CASE WHEN stratum = 'confident' THEN 'random' ELSE stratum END, position
-      FROM decision_label_items_legacy WHERE true
-      ON CONFLICT(set_id, recording_id) DO NOTHING`)
-    database.run('DROP TABLE decision_label_items_legacy')
+    if (!database.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'decision_label_items_legacy'").length) return
+    let unrecovered = false
+    try {
+      const hasPosition = getTableColumns(database, 'decision_label_items_legacy').includes('position')
+      const rows = database.exec(`SELECT set_id, recording_id, stratum${hasPosition ? ', position' : ''} FROM decision_label_items_legacy`)[0]?.values ?? []
+      for (const [index, row] of rows.entries()) {
+        try {
+          const [setId, recordingId, stratum] = row
+          if (database.exec('SELECT 1 FROM decision_label_items WHERE set_id = ? AND recording_id = ?', [setId, recordingId]).length) continue
+          let position = hasPosition ? row[3] : index
+          if (database.exec('SELECT 1 FROM decision_label_items WHERE set_id = ? AND position = ?', [setId, position]).length) {
+            position = Number(database.exec('SELECT COALESCE(MAX(position), -1) + 1 FROM decision_label_items WHERE set_id = ?', [setId])[0].values[0][0])
+          }
+          database.run('INSERT INTO decision_label_items (set_id, recording_id, stratum, position) VALUES (?, ?, ?, ?)',
+            [setId, recordingId, stratum === 'confident' ? 'random' : stratum, position])
+        } catch { unrecovered = true }
+      }
+      if (!unrecovered) database.run('DROP TABLE decision_label_items_legacy')
+    } catch { unrecovered = true }
+    if (unrecovered) {
+      let name = `decision_label_items_legacy_unrecovered_${Date.now()}`
+      while (database.exec('SELECT 1 FROM sqlite_master WHERE name = ?', [name]).length) name += '_1'
+      database.run(`ALTER TABLE decision_label_items_legacy RENAME TO ${name}`)
+      console.warn(`[Database] Unrecovered label membership retained in ${name}; label set replacement disabled`)
+    }
     database.run(DECISION_LABELS_DDL)
   }
   // Recover interrupted older repairs before counting members or exposing sets.
