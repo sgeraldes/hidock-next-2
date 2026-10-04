@@ -81,7 +81,7 @@ export const FEATURES: Record<FeatureId, FeatureDefinition> = {
     id: 'transcription',
     label: 'Transcription',
     description: 'Turn recordings into searchable, speaker-labelled transcripts.',
-    backgroundTasks: ['start-transcription-processor', 'evaluation-catchup', 'kind-fallback'],
+    backgroundTasks: ['start-transcription-processor', 'evaluation-catchup', 'kind-fallback', 'transcript-sampling'],
     routes: [],
     navItems: [],
     ipcNamespaces: [

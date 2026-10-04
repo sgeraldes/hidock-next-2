@@ -51,7 +51,8 @@ describe('qualityRules (Settings > Quality checks)', () => {
       retranscribeScore: 60,
       meetingAutoLinkProbability: 0.7,
       meetingAutoLinkMargin: 0.25,
-      liveSilenceRms: 58
+      liveSilenceRms: 58,
+      samplesPerDay: 25
     })
     expect(WARNING_RULES.meaningfulWords).toBe(100)
     expect(REASON_THRESHOLD).toBe(0.5)

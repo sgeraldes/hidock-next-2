@@ -19,6 +19,7 @@ import {
   LOUD_GAIN,
   profileAudioFile,
   profileFromGains,
+  readDeviceWindow,
   scanDeviceMp3,
   soundRanges,
 } from '../audio-profile'
@@ -224,5 +225,32 @@ describe('decoding', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('readDeviceWindow', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hidock-window-'))
+  const file = (name: string, buf: Buffer) => {
+    const path = join(dir, name)
+    writeFileSync(path, buf)
+    return path
+  }
+
+  it('reads only the window, on frame boundaries, past the RIFF header of the older files', () => {
+    const path = file('riff.wav', stream([[QUIET, 10], [LOUD, 10], [QUIET, 10]], { riff: true }))
+    // Each piece holds 278 frames; read 200 frames from the middle of the loud one.
+    const slice = readDeviceWindow(path, 278.5 * FRAME_SECONDS, 200 * FRAME_SECONDS)!
+    expect(slice[0]).toBe(0xff)
+    const gains = scanDeviceMp3(slice)!
+    expect(gains.length).toBe(200)
+    expect(gains.every((g) => g === LOUD)).toBe(true)
+  })
+
+  it('stops at the end of the file and refuses a stream that is not the device', () => {
+    const path = file('short.hda', stream([[LOUD, 5]]))
+    expect(scanDeviceMp3(readDeviceWindow(path, 3, 60)!)!.length).toBe(Math.round(5 / FRAME_SECONDS) - Math.floor(3 / FRAME_SECONDS))
+    expect(readDeviceWindow(path, 30, 10)).toBeNull()
+    expect(readDeviceWindow(file('zeros.bin', Buffer.alloc(10000)), 0, 10)).toBeNull()
+    rmSync(dir, { recursive: true, force: true })
   })
 })

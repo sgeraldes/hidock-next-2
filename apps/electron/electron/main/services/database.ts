@@ -27,7 +27,7 @@ import { isImpossibleTranscriptDensity, lowValueMaxSeconds } from './value-thres
 import { LIVE_FILENAME } from './live-channel-speakers'
 import type { QualityRating } from '@/types/knowledge'
 
-const SCHEMA_VERSION = 69
+const SCHEMA_VERSION = 70
 
 const SCHEMA = `
 -- Calendar events from ICS
@@ -360,6 +360,20 @@ CREATE TABLE IF NOT EXISTS audio_profiles (
     category TEXT NOT NULL,
     ranges_json TEXT,
     computed_at TEXT NOT NULL,
+    FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
+);
+
+-- Transcript samples (v70): a doubtful transcript checked by transcribing
+-- a few minutes of its audio again and comparing meaning (transcript-sampler.ts).
+-- The verdict counts only while the transcript is the one sampled (fingerprint).
+CREATE TABLE IF NOT EXISTS transcript_samples (
+    recording_id TEXT PRIMARY KEY,
+    transcript_fingerprint TEXT NOT NULL,
+    verdict TEXT NOT NULL CHECK(verdict IN ('confirmed', 'contradicted', 'inconclusive', 'incomplete')),
+    windows_json TEXT NOT NULL,
+    model TEXT,
+    cost_usd REAL,
+    sampled_at TEXT NOT NULL,
     FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
 );
 
@@ -3407,6 +3421,22 @@ const MIGRATIONS: Record<number, () => void> = {
       }
     }
     console.log('Migration v69 complete')
+  },
+  70: () => {
+    // Samples of doubtful transcripts. Written by the sampling pass, read by
+    // the validity check.
+    console.log('Running migration to schema v70: transcript samples')
+    getDatabase().run(`CREATE TABLE IF NOT EXISTS transcript_samples (
+    recording_id TEXT PRIMARY KEY,
+    transcript_fingerprint TEXT NOT NULL,
+    verdict TEXT NOT NULL CHECK(verdict IN ('confirmed', 'contradicted', 'inconclusive', 'incomplete')),
+    windows_json TEXT NOT NULL,
+    model TEXT,
+    cost_usd REAL,
+    sampled_at TEXT NOT NULL,
+    FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
+)`)
+    console.log('Migration v70 complete')
   },
 }
 

@@ -132,6 +132,35 @@ describe('assessTranscriptValidity', () => {
     expect(assessTranscriptValidity(base({ audioCategory: 'too_short' })).status).toBe('audio')
   })
 
+  // Plan step 3: a doubtful transcript is resolved by a sample of its audio.
+  it('lets a sample of the audio settle a doubt either way', () => {
+    const env = envelope([[160, 600]])
+    const segments = Array.from({ length: 20 }, (_, i) => ({ speaker: 'A', start: Math.floor(i / 2) * 60, end: Math.floor(i / 2) * 60 + 50, text: words(10, `-${i}`) }))
+    expect(assessTranscriptValidity(base({ envelope: env, segments })).status).toBe('doubtful')
+    expect(assessTranscriptValidity(base({ envelope: env, segments, sample: 'confirmed' })).status).toBe('valid')
+    const contradicted = assessTranscriptValidity(base({ envelope: env, segments, sample: 'contradicted' }))
+    expect(contradicted.status).toBe('invalid')
+    expect(contradicted.reasons.map((r) => r.code)).toContain('sample_contradicts')
+    expect(assessTranscriptValidity(base({ envelope: env, segments, sample: 'inconclusive' })).status).toBe('doubtful')
+    expect(assessTranscriptValidity(base({ envelope: env, segments, sample: 'incomplete' })).status).toBe('incomplete')
+  })
+
+  it('keeps the reasons of a transcript the sample confirmed: a compressed clock stays known', () => {
+    const env = envelope([[160, 2290]])
+    const segments = Array.from({ length: 100 }, (_, i) => ({ speaker: 'A', start: i * 9.34, end: i * 9.34 + 9, text: words(56, `-${i}`) }))
+    const v = assessTranscriptValidity(base({ envelope: env, segments, sample: 'confirmed' }))
+    expect(v.status).toBe('valid')
+    expect(v.reasons.map((r) => r.code)).toContain('clock_compressed')
+  })
+
+  it('never lets a sample override the audio, the integrity check, or a transcript that stops early', () => {
+    expect(assessTranscriptValidity(base({ audioCategory: 'noise', sample: 'confirmed' })).status).toBe('audio')
+    expect(assessTranscriptValidity(base({ integrityStatus: 'broken', segments: [{ speaker: 'A', start: 0, text: 'hola' }], sample: 'confirmed' })).status).toBe('invalid')
+    const env = envelope([[160, 1200]])
+    const segments = Array.from({ length: 40 }, (_, i) => ({ speaker: 'A', start: i * 10, end: i * 10 + 9, text: words(20, `-${i}`) }))
+    expect(assessTranscriptValidity(base({ envelope: env, segments, sample: 'confirmed' })).status).toBe('incomplete')
+  })
+
   it('takes the owner acceptance as valid', () => {
     const v = assessTranscriptValidity(base({ integrityStatus: 'broken', accepted: true, segments: [{ speaker: 'A', start: 0, text: 'hola' }] }))
     expect(v.status).toBe('valid')

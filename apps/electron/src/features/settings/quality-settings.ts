@@ -16,7 +16,8 @@ export const QUALITY_GROUPS: string[] = [
   'Jev',
   'Ratings and re-transcription',
   'Meetings',
-  'Live transcription'
+  'Live transcription',
+  'Transcripts in doubt'
 ]
 
 const ENTRIES: AdvancedSetting[] = [
@@ -84,6 +85,11 @@ const ENTRIES: AdvancedSetting[] = [
     section: 'quality', key: 'liveSilenceRms', group: 'Live transcription', kind: 'number', step: 1, unit: 'RMS',
     label: 'Silence level',
     detail: 'A live channel quieter than this is not sent for transcription. 58 is about -55 dBFS. A running session uses the new value at once.'
+  },
+  {
+    section: 'quality', key: 'samplesPerDay', group: 'Transcripts in doubt', kind: 'number', step: 5, unit: 'per day',
+    label: 'Samples per day',
+    detail: `How many transcripts in doubt get three minutes of their audio transcribed again and compared, each day. About 0.01 USD each. 0 stops sampling. ${FROM_NOW_ON}`
   }
 ]
 
