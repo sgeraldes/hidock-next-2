@@ -27,9 +27,34 @@ import { isImpossibleTranscriptDensity, lowValueMaxSeconds } from './value-thres
 import { LIVE_FILENAME } from './live-channel-speakers'
 import type { QualityRating } from '@/types/knowledge'
 
-const SCHEMA_VERSION = 70
+const SCHEMA_VERSION = 71
+
+const DECISION_LABELS_DDL = `CREATE TABLE IF NOT EXISTS decision_label_sets (
+    id TEXT PRIMARY KEY,
+    question TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS decision_label_items (
+    set_id TEXT NOT NULL REFERENCES decision_label_sets(id) ON DELETE CASCADE,
+    recording_id TEXT NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+    stratum TEXT NOT NULL CHECK(stratum IN ('doubtful', 'confident')),
+    position INTEGER NOT NULL CHECK(position >= 0),
+    PRIMARY KEY (set_id, recording_id),
+    UNIQUE (set_id, position)
+);
+CREATE INDEX IF NOT EXISTS idx_decision_label_items_recording ON decision_label_items(recording_id);
+CREATE TABLE IF NOT EXISTS decision_labels (
+    recording_id TEXT NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    labeled_at TEXT NOT NULL,
+    PRIMARY KEY (recording_id, question)
+);
+CREATE INDEX IF NOT EXISTS idx_decision_labels_question ON decision_labels(question, labeled_at);
+`
 
 const SCHEMA = `
+${DECISION_LABELS_DDL}
 -- Calendar events from ICS
 CREATE TABLE IF NOT EXISTS meetings (
     id TEXT PRIMARY KEY,
@@ -3437,6 +3462,9 @@ const MIGRATIONS: Record<number, () => void> = {
     FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
 )`)
     console.log('Migration v70 complete')
+  },
+  71: () => {
+    getDatabase().run(DECISION_LABELS_DDL)
   },
 }
 
