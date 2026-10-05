@@ -21,6 +21,7 @@ vi.mock('../database', () => ({
   addToQueue: vi.fn(),
   getRecordingById: (id?: string) => mockGetRecordingById(id),
   resolveRecordingId: vi.fn(),
+  isRecordingProcessable: vi.fn(() => false),
   updateRecordingTranscriptionStatus: vi.fn(),
   updateRecordingStatus: vi.fn(),
   insertTranscript: vi.fn(),
