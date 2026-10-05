@@ -1,3 +1,6 @@
+import type { RetranscribeResult } from '../../src/shared/retranscribe'
+import type { ReferenceLabelSet, ReferenceLabelItem, LabelItemArgs, SaveLabelArgs } from '../../src/shared/decision-labels'
+import type { TranscriptVerdicts } from '../../src/shared/transcript-verdicts'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
   ConnectorSummary,
@@ -6,7 +9,7 @@ import type {
   IngestionOutcome,
   SourceContainer,
 } from '@hidock/connectors'
-import type { ModelOption, PipelineSettingsState, SaveStepArgs, SaveStepResult } from '../../src/shared/pipeline-config'
+import type { DecisionConfig, ModelOption, PipelineSettingsState, SaveStepArgs, SaveStepResult } from '../../src/shared/pipeline-config'
 /**
  * AI Brains renderer-facing types (H10). Mirror of the main-process contract in
  * `electron/main/services/brains/types.ts` + `ipc/brains-handlers.ts`, declared
@@ -159,6 +162,7 @@ import type {
 } from '../../src/types/knowledge'
 import type { PipelineState } from '../main/types/device-pipeline'
 import type { Note, NoteRelatedItem, NoteMeetingSuggestion } from '../../src/types/notes'
+import type { PasteLibraryAPI } from '../../src/shared/paste-to-library'
 import type { SpeakerEngineId, SpeakerSetup } from '../../src/types/speakers'
 import type { VoiceBackfillMeasure, VoiceBackfillStatus } from '../../src/shared/voice-backfill-schedule'
 import type {
@@ -456,6 +460,13 @@ export interface ElectronAPI {
   }
 
   // Database - Recordings
+  pcRecorder: {
+    start: () => Promise<string>
+    append: (id: string, index: number, data: Uint8Array) => Promise<void>
+    finish: (id: string) => Promise<{ success: boolean; error?: string }>
+    resumeUnload: () => Promise<void>
+    onStopRequested: (callback: () => void) => () => void
+  }
   recordings: {
     getAll: () => Promise<any[]>
     // Soft-deleted (tombstoned) recordings feeding the Trash UI (spec-005/F17
@@ -482,6 +493,7 @@ export interface ElectronAPI {
       markedByDuration?: number
       /** Transcripts checked for timing and text that cannot fit the audio. */
       integrityChecked?: number
+      validityChecked?: number
       error?: string
     }>
     linkToMeeting: (recordingId: string, meetingId: string, confidence: number, method: string) => Promise<any>
@@ -613,7 +625,7 @@ export interface ElectronAPI {
     }>
     // Transcription
     transcribe: (recordingId: string) => Promise<void>
-    addToQueue: (recordingId: string, priority?: boolean) => Promise<string | false>
+    addToQueue: (recordingId: string, priority?: boolean) => Promise<string | false | { success: false; error: string }>
     reprocessWith: (recordingId: string, provider: 'gemini' | 'local-asr' | 'vibevoice') => Promise<{ success: boolean; queueItemId?: string; error?: string }>
     reDiarize: (recordingId: string) => Promise<{ success: boolean; queueItemId?: string; cleared?: { clearedLabelBindings: number; clearedMentions: number; clearedMarkers: number }; error?: string }>
     repairContradictedLinks: (dryRun?: boolean) => Promise<{ success: boolean; cleared?: Array<{ recordingId: string; filename: string; meetingId: string; correlationMethod: string | null; correlationConfidence: number | null }>; error?: string }>
@@ -664,10 +676,11 @@ export interface ElectronAPI {
      */
     getByRecordingIdOwner: (recordingId: string) => Promise<any>
     getByRecordingIdsOwner: (recordingIds: string[]) => Promise<Record<string, any>>
+    getVerdicts: (request: { recordingIds: string[] }) => Promise<Record<string, TranscriptVerdicts>>
     /** Manual path to green: accept a flagged transcript as it is, or undo that. */
     setIntegrityAccepted: (request: { recordingId: string; accepted: boolean }) => Promise<Result<{ accepted: boolean }>>
     /** Automatic path to green: queue new transcriptions; each is checked when stored. */
-    retranscribeMany: (request: { recordingIds: string[] }) => Promise<Result<{ queued: number; skipped: number }>>
+    retranscribeMany: (request: { recordingIds: string[] }) => Promise<Result<RetranscribeResult>>
     search: (query: string) => Promise<any[]>
     getRecurringTopics: () => Promise<Array<{ topic: string; recordingCount: number }>>
     assignSpeaker: (request: { recordingId: string; speakerLabel: string; contactId?: string; newName?: string }) => Promise<Result<Contact>>
@@ -789,7 +802,7 @@ export interface ElectronAPI {
       recordingId?: string | null
       linkSource?: 'live' | 'user' | 'suggested' | null
     }) => Promise<{ success: boolean; note?: Note; error?: string }>
-    delete: (request: { id: string }) => Promise<{ success: boolean }>
+    delete: (request: { id: string; onlyIfEmpty?: boolean }) => Promise<{ success: boolean }>
     analyze: (request: { id: string; force?: boolean }) => Promise<{ success: boolean; note?: Note; error?: string }>
     related: (request: { id: string }) => Promise<{ success: boolean; items?: NoteRelatedItem[]; error?: string }>
     meetingSuggestions: (request: { id: string }) => Promise<{ success: boolean; suggestions?: NoteMeetingSuggestion[]; error?: string }>
@@ -823,6 +836,21 @@ export interface ElectronAPI {
     repair: () => Promise<{ success: boolean; error?: string; setup?: ModelHostSetupReport }>
     /** Send the host a Model Host installer; it installs it by itself. */
     update: (request: { path: string }) => Promise<{ success: boolean; error?: string }>
+    /**
+     * Clef or Clef-Flash on the host, with Jev's /v1/systemone body and answer. 503 with
+     * `decide` while the model downloads to the host.
+     */
+    decide: (request: {
+      model: 'clef' | 'clef-flash'
+      state: string | Record<string, unknown> | unknown[]
+      questions: Record<string, { type: 'noul' | 'choice' | 'score'; instructions?: unknown; criteria?: unknown }>
+    }) => Promise<{
+      success: boolean
+      response?: { model: string; answers: Record<string, unknown>; usage: { input_tokens: number; output_tokens: number } }
+      error?: string
+      status?: number
+      decide?: Record<string, unknown>
+    }>
     /** The one setting for the gamestation; sent to the host when it answers. */
     setStepAside: (request: { value: ModelHostStepAside }) => Promise<{ success: boolean; sent?: boolean; error?: string }>
     forget: () => Promise<{ success: boolean }>
@@ -952,6 +980,7 @@ export interface ElectronAPI {
       version: number
       recordingId: string
       peaks: number[]
+      channels?: number[][]
       sampleCount: number
       duration: number
       fileSize: number
@@ -959,7 +988,7 @@ export interface ElectronAPI {
       /** Drawn from the loudness envelope; the player replaces it with the decoded one. */
       coarse?: boolean
     } | null>
-    setCache: (recordingId: string, peaks: number[], duration?: number, fileSize?: number) => Promise<boolean>
+    setCache: (recordingId: string, peaks: number[], duration?: number, fileSize?: number, channels?: number[][]) => Promise<boolean>
     clearCache: (recordingId: string) => Promise<boolean>
   }
 
@@ -1256,6 +1285,7 @@ export interface ElectronAPI {
 
   // Artifacts - entity-type foundation (C0): import files as captures
   artifacts: ArtifactsAPI
+  pasteLibrary: PasteLibraryAPI
 
   // Clipboard screenshot capture — paste-to-add + optional auto-watch
   clipboardCapture: {
@@ -1301,8 +1331,13 @@ export interface ElectronAPI {
 
   // Pipeline (phase 3a) — the owner's choice of harness, model and effort for each text step.
   pipeline: {
+    getLabelSet: () => Promise<ReferenceLabelSet>
+    getLabelItem: (args: LabelItemArgs) => Promise<ReferenceLabelItem | null>
+    saveLabel: (args: SaveLabelArgs) => Promise<void>
+    clearLabel: (args: LabelItemArgs) => Promise<void>
     getState: () => Promise<PipelineSettingsState>
     saveStep: (args: SaveStepArgs) => Promise<SaveStepResult>
+    saveDecisions: (args: DecisionConfig) => Promise<SaveStepResult>
     listModels: (args: { harness: string }) => Promise<ModelOption[]>
   }
 
@@ -1673,6 +1708,17 @@ export interface ElectronAPI {
 const BOOT_DISABLED_ARG = '--hidock-boot-disabled-features='
 
 const electronAPI: ElectronAPI = {
+  pcRecorder: {
+    resumeUnload: () => callIPC('pc-recorder:resume-unload'),
+    start: () => callIPC('pc-recorder:start'),
+    append: (id, index, data) => callIPC('pc-recorder:append', id, index, data),
+    finish: (id) => callIPC('pc-recorder:finish', id),
+    onStopRequested: (callback) => {
+      const listener = () => callback()
+      ipcRenderer.on('pc-recorder:request-stop', listener)
+      return () => ipcRenderer.removeListener('pc-recorder:request-stop', listener)
+    }
+  },
   bootDisabledFeatures: (
     process.argv.find((arg) => arg.startsWith(BOOT_DISABLED_ARG))?.slice(BOOT_DISABLED_ARG.length) ?? ''
   )
@@ -1798,6 +1844,7 @@ const electronAPI: ElectronAPI = {
     getByRecordingIds: (recordingIds) => callIPC('db:get-transcripts-by-recording-ids', recordingIds),
     getByRecordingIdOwner: (recordingId) => callIPC('db:get-transcript-owner', recordingId),
     getByRecordingIdsOwner: (recordingIds) => callIPC('db:get-transcripts-by-recording-ids-owner', recordingIds),
+    getVerdicts: (request) => callIPC('transcripts:getVerdicts', request),
     setIntegrityAccepted: (request) => callIPC('transcripts:setIntegrityAccepted', request),
     retranscribeMany: (request) => callIPC('transcripts:retranscribeMany', request),
     search: (query) => callIPC('db:search-transcripts', query),
@@ -1869,6 +1916,7 @@ const electronAPI: ElectronAPI = {
     diagnostics: () => callIPC('model-host:diagnostics'),
     repair: () => callIPC('model-host:repair'),
     update: (request) => callIPC('model-host:update', request),
+    decide: (request) => callIPC('model-host:decide', request),
     forget: () => callIPC('model-host:forget')
   },
 
@@ -1963,8 +2011,8 @@ const electronAPI: ElectronAPI = {
 
   waveform: {
     getCache: (recordingId, fileSize) => callIPC('waveform:getCache', recordingId, fileSize),
-    setCache: (recordingId, peaks, duration, fileSize) =>
-      callIPC('waveform:setCache', recordingId, peaks, duration, fileSize),
+    setCache: (recordingId, peaks, duration, fileSize, channels) =>
+      callIPC('waveform:setCache', recordingId, peaks, duration, fileSize, channels),
     clearCache: (recordingId) => callIPC('waveform:clearCache', recordingId)
   },
 
@@ -1984,6 +2032,11 @@ const electronAPI: ElectronAPI = {
     clear: () => callIPC('deviceCache:clear')
   },
 
+  pasteLibrary: {
+    paste: (snapshot) => callIPC('library:paste', snapshot),
+    pickFiles: () => callIPC('library:pickFiles'),
+    newNote: () => callIPC('library:newNote')
+  },
   artifacts: {
     listTypes: () => callIPC('artifacts:listTypes'),
     import: (filePaths) => callIPC('artifacts:import', filePaths),
@@ -2038,8 +2091,13 @@ const electronAPI: ElectronAPI = {
   },
 
   pipeline: {
+    getLabelSet: () => callIPC('pipeline:getLabelSet'),
+    getLabelItem: (args) => callIPC('pipeline:getLabelItem', args),
+    saveLabel: (args) => callIPC('pipeline:saveLabel', args),
+    clearLabel: (args) => callIPC('pipeline:clearLabel', args),
     getState: () => callIPC('pipeline:getState'),
     saveStep: (args) => callIPC('pipeline:saveStep', args),
+    saveDecisions: (args) => callIPC('pipeline:saveDecisions', args),
     listModels: (args) => callIPC('pipeline:listModels', args)
   },
 

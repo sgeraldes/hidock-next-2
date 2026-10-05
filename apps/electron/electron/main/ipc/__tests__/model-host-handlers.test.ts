@@ -10,6 +10,8 @@ import {
   getModelHostDiagnostics,
   repairModelHostRuntime,
   sendModelHostUpdate,
+  decideOnModelHost,
+  ModelHostDecisionError,
 } from '../../services/model-host-client'
 import { getConfig, saveConfig } from '../../services/config'
 
@@ -26,6 +28,16 @@ vi.mock('../../services/model-host-client', () => ({
   getModelHostDiagnostics: vi.fn(),
   repairModelHostRuntime: vi.fn(),
   sendModelHostUpdate: vi.fn(),
+  decideOnModelHost: vi.fn(),
+  ModelHostDecisionError: class extends Error {
+    constructor(
+      message: string,
+      readonly status: number,
+      readonly decide?: Record<string, unknown>
+    ) {
+      super(message)
+    }
+  },
 }))
 
 vi.mock('../../services/config', () => ({
@@ -214,6 +226,38 @@ describe('Model Host IPC handlers', () => {
     expect(getModelHostDiagnostics).toHaveBeenCalledWith(settings)
     expect(repairModelHostRuntime).toHaveBeenCalledWith(settings)
     expect(sendModelHostUpdate).toHaveBeenCalledWith(settings, 'G:\\x\\HiDock-Model-Host-0.3.1-Setup.exe')
+  })
+
+  it('asks the paired host for a decision with the model HiDock chose', async () => {
+    configWith(PAIRED)
+    const answer = { model: 'clef', answers: { outage: { type: 'noul', noul: 0.9 } }, usage: { input_tokens: 1, output_tokens: 0 } }
+    vi.mocked(decideOnModelHost).mockResolvedValue(answer as never)
+    const request = { model: 'clef', state: { ticket: 'x' }, questions: { outage: { type: 'noul', instructions: 'Down?' } } }
+
+    await expect(handlerFor(handlers, 'model-host:decide')({}, request)).resolves.toEqual({ success: true, response: answer })
+    expect(decideOnModelHost).toHaveBeenCalledWith({ url: 'gamestation:8765', token: 'saved-token' }, request)
+  })
+
+  it('passes on the download progress when the model is not on the host yet', async () => {
+    configWith(PAIRED)
+    const decide = { clef: { state: 'downloading', bytes: 1, totalBytes: 2 } }
+    vi.mocked(decideOnModelHost).mockRejectedValue(new ModelHostDecisionError('clef is downloading', 503, decide))
+    const request = { model: 'clef', state: 'x', questions: { a: { type: 'noul', instructions: 'a' } } }
+    await expect(handlerFor(handlers, 'model-host:decide')({}, request)).resolves.toEqual({
+      success: false,
+      error: 'clef is downloading',
+      status: 503,
+      decide,
+    })
+  })
+
+  it('refuses a decision for a model the host does not run, before calling it', async () => {
+    configWith(PAIRED)
+    const result = (await handlerFor(handlers, 'model-host:decide')({}, { model: 'jev-latest', state: 'x', questions: {} })) as {
+      success: boolean
+    }
+    expect(result.success).toBe(false)
+    expect(decideOnModelHost).not.toHaveBeenCalled()
   })
 
   it('says why when there is no paired host to look after', async () => {

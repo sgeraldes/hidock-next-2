@@ -30,6 +30,7 @@ export interface NotesState {
 export function useNotes() {
   const [notes, setNotes] = useState<Note[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [openedNote, setOpenedNote] = useState<Note | null>(null)
   const [draft, setDraft] = useState('')
   const [saving, setSaving] = useState(false)
   const [search, setSearch] = useState('')
@@ -52,7 +53,7 @@ export function useNotes() {
   const draftRef = useRef('')
   const selectedIdRef = useRef<string | null>(null)
 
-  const selected = notes.find((note) => note.id === selectedId) ?? null
+  const selected = notes.find((note) => note.id === selectedId) ?? (openedNote?.id === selectedId ? openedNote : null)
 
   const refresh = useCallback(async (term = search) => {
     const result = await window.electronAPI.notes.list({ search: term || undefined })
@@ -61,6 +62,9 @@ export function useNotes() {
 
   useEffect(() => {
     void refresh()
+    const onImported = () => { void refresh() }
+    window.addEventListener('hidock:downloads-completed', onImported)
+    return () => window.removeEventListener('hidock:downloads-completed', onImported)
   }, [refresh])
 
   /** Write the draft now. Called by the debounce, on switching note, and on unmount. */
@@ -80,6 +84,14 @@ export function useNotes() {
     }
   }, [])
 
+  const leave = useCallback(async (id: string, content: string) => {
+    await flush(id, content)
+    if (!content.trim()) {
+      const result = await window.electronAPI.notes.delete({ id, onlyIfEmpty: true })
+      if (result.success) setNotes((current) => current.filter((note) => note.id !== id))
+    }
+  }, [flush])
+
   /**
    * Open a note, after putting the one that was open on disk.
    *
@@ -96,8 +108,9 @@ export function useNotes() {
       if (analyzeTimer.current) clearTimeout(analyzeTimer.current)
       const leaving = selectedIdRef.current
       const leavingDraft = draftRef.current
-      if (leaving && leaving !== note?.id) void flush(leaving, leavingDraft)
+      if (leaving && leaving !== note?.id) void leave(leaving, leavingDraft)
 
+      setOpenedNote(note)
       setSelectedId(note?.id ?? null)
       selectedIdRef.current = note?.id ?? null
       setDraft(note?.content ?? '')
@@ -106,8 +119,17 @@ export function useNotes() {
       setRelated([])
       setSuggestions([])
     },
-    [flush]
+    [leave]
   )
+
+  const selectById = useCallback(async (id: string) => {
+    const result = await window.electronAPI.notes.get({ id })
+    if (!result.success || !result.note) return false
+    setSearch('')
+    setNotes((current) => [result.note!, ...current.filter((note) => note.id !== id)])
+    select(result.note)
+    return true
+  }, [select])
 
   const edit = useCallback(
     (content: string) => {
@@ -135,7 +157,7 @@ export function useNotes() {
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current)
       if (analyzeTimer.current) clearTimeout(analyzeTimer.current)
-      if (selectedIdRef.current) void flush(selectedIdRef.current, draftRef.current)
+      if (selectedIdRef.current) void leave(selectedIdRef.current, draftRef.current)
     }
     // Empty on purpose: this runs when the editor really goes away, not on
     // every keystroke. See draftRef above.
@@ -208,6 +230,7 @@ export function useNotes() {
     setSearch,
     refresh,
     select,
+    selectById,
     edit,
     create,
     remove,

@@ -6,6 +6,8 @@
  * Plan: docs/superpowers/plans/2026-10-04-validation-order.md
  */
 
+import { getEventBus } from './event-bus'
+import { createHash } from 'crypto'
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { queryAll, queryOne, run, runNoSave, saveDatabase } from './database'
@@ -21,14 +23,22 @@ interface ValidityRow {
   recording_id: string
   filename: string
   speakers: string | null
+  validity_status?: string | null
   integrity_status: string | null
   integrity_accepted_at: string | null
   category: string | null
   method: string | null
   attendees: string | null
+  sample_fingerprint?: string | null
+  sample_verdict?: string | null
 }
 
-function readEnvelope(recordingId: string, method: string | null): Uint8Array | null {
+/** Identifies the transcript a sample was taken of: a new or edited transcript has another. */
+export function transcriptFingerprint(speakersJson: string | null | undefined): string {
+  return createHash('sha1').update(speakersJson ?? '').digest('hex')
+}
+
+export function readEnvelope(recordingId: string, method: string | null): Uint8Array | null {
   // MP3 frame gains for the device's files, dBFS + 100 for a decoded import;
   // envelopeUnit tells the verdict which.
   if (method !== 'mp3-frame-gain' && method !== 'decoded') return null
@@ -65,12 +75,14 @@ function attendeeCount(json: string | null): number {
 
 function rowFor(recordingId: string): ValidityRow | undefined {
   return queryOne<ValidityRow>(
-    `SELECT t.recording_id, r.filename, t.speakers, t.integrity_status, t.integrity_accepted_at,
-            ap.category, ap.method, m.attendees
+    `SELECT t.recording_id, r.filename, t.speakers, t.validity_status, t.integrity_status, t.integrity_accepted_at,
+            ap.category, ap.method, m.attendees,
+            s.transcript_fingerprint AS sample_fingerprint, s.verdict AS sample_verdict
        FROM transcripts t
        JOIN recordings r ON r.id = t.recording_id
        LEFT JOIN audio_profiles ap ON ap.recording_id = t.recording_id
        LEFT JOIN meetings m ON m.id = r.meeting_id
+       LEFT JOIN transcript_samples s ON s.recording_id = t.recording_id
       WHERE t.recording_id = ?`,
     [recordingId]
   )
@@ -85,8 +97,19 @@ function assess(row: ValidityRow, speakersJson: string | null): TranscriptValidi
     audioCategory: row.category,
     attendees: attendeeCount(row.attendees),
     integrityStatus: row.integrity_status,
-    accepted: !!row.integrity_accepted_at
+    accepted: !!row.integrity_accepted_at,
+    sample: sampleFor(row, speakersJson)
   })
+}
+
+/** The stored sample's verdict, when it was taken of these very lines. */
+function sampleFor(
+  row: ValidityRow,
+  speakersJson: string | null
+): 'confirmed' | 'contradicted' | 'inconclusive' | 'incomplete' | null {
+  if (!row.sample_verdict || row.sample_fingerprint !== transcriptFingerprint(speakersJson)) return null
+  const v = row.sample_verdict
+  return v === 'confirmed' || v === 'contradicted' || v === 'incomplete' ? v : 'inconclusive'
 }
 
 /**
@@ -146,9 +169,10 @@ export function refreshTranscriptValidity(recordingId: string): TranscriptValidi
  */
 export async function backfillTranscriptValidity(
   options: { batchSize?: number } = {}
-): Promise<Record<string, number>> {
+): Promise<{ checked: number; changedIds: string[]; [status: string]: number | string[] }> {
   const batchSize = options.batchSize ?? 50
   const counts: Record<string, number> = { checked: 0 }
+  const changedIds: string[] = []
   const seen = new Set<string>()
   for (;;) {
     const ids = queryAll<{ recording_id: string }>(
@@ -177,6 +201,7 @@ export async function backfillTranscriptValidity(
         VALIDITY_VERSION,
         recording_id
       ])
+      if (row.validity_status !== validity.status) changedIds.push(recording_id)
       counts.checked++
       counts[validity.status] = (counts[validity.status] ?? 0) + 1
     }
@@ -186,5 +211,11 @@ export async function backfillTranscriptValidity(
     saveDatabase()
     console.log(`[transcript-validity] checked ${counts.checked} transcript(s): ${JSON.stringify(counts)}`)
   }
-  return counts
+  if (changedIds.length > 0) {
+    getEventBus().emitDomainEvent({
+      type: 'transcript:verdicts-updated', timestamp: new Date().toISOString(),
+      payload: { recordingIds: changedIds }
+    })
+  }
+  return { ...counts, checked: counts.checked, changedIds }
 }

@@ -29,6 +29,12 @@ vi.mock('../config', () => ({
   }),
 }))
 
+const transcribable = vi.hoisted(() => ({ allowed: true }))
+vi.mock('../recording-eligibility', () => ({
+  isRecordingTranscribable: () => transcribable.allowed,
+  isRecordingEligible: () => transcribable.allowed
+}))
+
 // Heavy/irrelevant deps of the transcription module — inert mocks.
 vi.mock('@hidock/transcription', () => ({ GeminiEngine: class {} }))
 vi.mock('@google/generative-ai', () => ({ GoogleGenerativeAI: class {} }))
@@ -106,9 +112,15 @@ beforeEach(() => {
   ])
   featuresConfig = undefined
   autoTranscribe = true
+  transcribable.allowed = true
 })
 
 describe('queueTranscriptionIfEnabled × transcription feature gate', () => {
+  it('can enqueue durably during quit without starting the processor', () => {
+    expect(queueTranscriptionIfEnabled('quit-recording', { deferProcessing: true })).toBe(true)
+    expect(dbSpies.spies['addToQueue']).toHaveBeenCalledWith('quit-recording')
+    expect(dbSpies.spies['acquireTranscriptionLock']).not.toHaveBeenCalled()
+  })
   it('with ALL optional features disabled + autoTranscribe true: queue stays empty, no processor starts', () => {
     featuresConfig = { preset: 'library-only', flags: {} } // transcription feature OFF
     autoTranscribe = true // legacy setting still on — must NOT win
@@ -133,6 +145,12 @@ describe('queueTranscriptionIfEnabled × transcription feature gate', () => {
     featuresConfig = { preset: 'library-transcription', flags: {} } // transcription ON
     expect(queueTranscriptionIfEnabled('rec-3')).toBe(true)
     expect(dbSpies.spies['addToQueue']).toHaveBeenCalledWith('rec-3')
+  })
+
+  it('refuses a value-excluded recording during automatic enqueue', () => {
+    transcribable.allowed = false
+    expect(queueTranscriptionIfEnabled('garbage-rec')).toBe(false)
+    expect(dbSpies.spies['addToQueue']).not.toHaveBeenCalled()
   })
 
   it('still respects the legacy autoTranscribe=false setting when the feature is on', () => {

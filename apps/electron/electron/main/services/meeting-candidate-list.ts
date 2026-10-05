@@ -23,6 +23,7 @@ import {
   scoreMeetingCandidates
 } from './recording-match-scoring'
 import { jevKeyFor } from './jev-settings'
+import { hasDecisionEngine } from './pipeline/decision-engines'
 import { JEV_MODEL, MEETING_MATCH_VERSION, meetingCopyKey, type MatchCandidate, type MatchContext, type MeetingMatchDeps } from './jev-meeting-match'
 
 export type CandidateRow = ReturnType<typeof getCandidatesForRecordingWithDetails>[number]
@@ -162,12 +163,12 @@ export function toMatchContext(recording: Recording, list: ReturnType<typeof lis
   }
 }
 
-/** Store and key for the Jev meeting match, or null when no Jev key is set. */
-export function jevMeetingMatchDeps(): MeetingMatchDeps | null {
+/** Store and Jev credentials for meeting decisions, or null when no engine can serve. */
+export async function jevMeetingMatchDeps(): Promise<MeetingMatchDeps | null> {
   const apiKey = jevKeyFor('meetingMatch')
-  if (!apiKey) return null
+  if (!(await hasDecisionEngine('meeting-match'))) return null
   return {
-    apiKey,
+    apiKey: apiKey ?? '',
     load: (recordingId) => getRecordingMeetingMatch(recordingId, MEETING_MATCH_VERSION),
     save: (recordingId, match) => saveRecordingMeetingMatch(recordingId, MEETING_MATCH_VERSION, JEV_MODEL, match)
   }

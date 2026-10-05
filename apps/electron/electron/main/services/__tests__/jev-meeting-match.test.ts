@@ -19,6 +19,11 @@ import {
 } from '../jev-meeting-match'
 import { setCallSink, type CallRecord } from '../pipeline/call-store'
 
+const eligibility = vi.hoisted(() => ({ allowed: true, health: vi.fn() }))
+vi.mock('../recording-eligibility', () => ({ isRecordingEligible: () => eligibility.allowed }))
+vi.mock('../config', () => ({ getConfig: () => ({ transcription: { modelHostUrl: 'http://test-host', modelHostToken: 'test-token' } }) })) // pragma: allowlist secret
+vi.mock('../model-host-client', () => ({ checkModelHost: eligibility.health, decideOnModelHost: vi.fn() }))
+
 const context = {
   title: 'Configuración de certificados y coordinación ALB',
   summary: 'The team set up TLS certificates on the load balancer for Antamina.',
@@ -96,6 +101,25 @@ describe('pickMatchCandidates', () => {
 })
 
 describe('matchMeetingWithJev', () => {
+  it('sends no content when exclusion occurs during availability checks', async () => {
+    eligibility.allowed = true
+    eligibility.health.mockImplementation(async () => {
+      await Promise.resolve()
+      eligibility.allowed = false
+      return null
+    })
+    const ask = vi.fn(async () => reply({ m1: 0.02, m2: 0.93, none: 0.05 }))
+    const save = vi.fn()
+    try {
+      await matchMeetingWithJev('excluded', context, [lunch, daily], { apiKey: 'k', load: () => null, save, ask }).catch(() => null)
+      expect(ask).not.toHaveBeenCalled()
+      expect(save).not.toHaveBeenCalled()
+    } finally {
+      eligibility.allowed = true
+      eligibility.health.mockReset()
+    }
+  })
+
   it('asks Jev once, then reuses the stored answer for the same candidates', async () => {
     let stored: MeetingMatch | null = null
     const ask = vi.fn(async () => reply({ m1: 0.02, m2: 0.93, none: 0.05 }))
@@ -107,7 +131,7 @@ describe('matchMeetingWithJev', () => {
     expect(stored!.candidateKey).toBe(matchRequestKey(context, [lunch, daily]))
   })
 
-  it('leaves one ledger row for the call, linked to the recording, and none when the stored answer is reused', async () => {
+  it('records skipped engines and one ledger row for the call, linked to the recording, and none when the stored answer is reused', async () => {
     const rows: CallRecord[] = []
     setCallSink((_id, record) => {
       rows.push(record)
@@ -121,9 +145,16 @@ describe('matchMeetingWithJev', () => {
     } finally {
       setCallSink(null)
     }
-    expect(rows).toHaveLength(1)
-    expect(rows[0]).toMatchObject({ step: 'meeting-match', route: 'jev', provider: 'jev', model: 'jev-1.13.0', recordingId: 'rec-1', status: 'completed' })
-    expect(rows[0].usage).toMatchObject({ tokens: { input: 1800, output: 20 } })
+    expect(rows).toHaveLength(5)
+    expect(rows.slice(0, 4).map(row => row.route)).toEqual([
+      'decision:clef-flash', 'decision:clef', 'decision:gemini-flash', 'decision:haiku'
+    ])
+    for (const row of rows.slice(0, 4)) {
+      expect(row).toMatchObject({ status: 'failed', recordingId: 'rec-1' })
+      expect(row.errorMessage).toMatch(/^unavailable: /)
+    }
+    expect(rows[4]).toMatchObject({ step: 'meeting-match', route: 'decision:jev', provider: 'jev', model: 'jev-1.13.0', recordingId: 'rec-1', status: 'completed' })
+    expect(rows[4].usage).toMatchObject({ tokens: { input: 1800, output: 20 } })
   })
 
   it('asks again when the evidence changes but the meetings stay the same', async () => {
@@ -145,3 +176,4 @@ describe('matchMeetingWithJev', () => {
     expect(ask).not.toHaveBeenCalled()
   })
 })
+

@@ -56,6 +56,10 @@ export const useUIStore = create<UIStore>()(
   playbackCurrentTime: 0,
   playbackDuration: 0,
   isPlaying: false,
+  playbackWaveformChannels: null,
+  waveformDuration: 0,
+  mutedChannelsForId: null,
+  playbackMutedChannels: [false, false],
   playbackWaveformData: null,
   playbackSentimentData: null,
 
@@ -172,8 +176,8 @@ export const useUIStore = create<UIStore>()(
     set({ isPlaying: playing })
   },
 
-  setWaveformData: (waveformData: Float32Array | null) => {
-    set({ playbackWaveformData: waveformData })
+  setWaveformData: (waveformData: Float32Array | null, channels?: Float32Array[], duration = 0) => {
+    set({ playbackWaveformData: waveformData, playbackWaveformChannels: channels ?? null, waveformDuration: duration })
   },
 
   setSentimentData: (sentimentData) => {

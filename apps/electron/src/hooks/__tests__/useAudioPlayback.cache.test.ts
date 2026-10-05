@@ -6,7 +6,7 @@
  * computes the peaks and persists them.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { renderHook } from '@testing-library/react'
+import { act, renderHook } from '@testing-library/react'
 import { useAudioPlayback } from '../useAudioPlayback'
 import { useUIStore } from '@/store/useUIStore'
 
@@ -41,6 +41,65 @@ beforeEach(() => {
 })
 
 describe('useAudioPlayback — H5 disk cache', () => {
+  it.each([
+    [Infinity, 118], [NaN, 118], [Infinity, 0], [NaN, NaN], [Infinity, Infinity]
+  ])('rejects non-finite seeks with WebM duration %s and decoded duration %s and resumes safely', async (duration, cachedDuration) => {
+    const assigned: number[] = []
+    class WebMAudio extends EventTarget {
+      private time = 0
+      get currentTime() { return this.time }
+      set currentTime(value: number) {
+        if (!Number.isFinite(value)) throw new TypeError('currentTime non-finite')
+        assigned.push(value)
+        this.time = value
+      }
+      duration = duration
+      readyState = 1
+      src = ''
+      playbackRate = 1
+      play = vi.fn().mockResolvedValue(undefined)
+      pause = vi.fn()
+    }
+    vi.stubGlobal('Audio', WebMAudio)
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:webm')
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined)
+    getCache.mockResolvedValue({ peaks: [0.2], duration: cachedDuration })
+    readRecording.mockResolvedValue({ success: true, data: btoa('webm') })
+    const { unmount } = renderHook(() => useAudioPlayback())
+    try {
+      await act(async () => { await window.__audioControls!.play('webm', '/headerless.webm', 42) })
+      expect(assigned).toEqual([42])
+      act(() => {
+        window.__audioControls!.pause()
+        window.__audioControls!.seek(NaN)
+        window.__audioControls!.seek(Infinity)
+        window.__audioControls!.seek(-Infinity)
+        window.__audioControls!.seek(-5)
+        window.__audioControls!.seek(200)
+        window.__audioControls!.resume()
+      })
+      expect(assigned).toEqual([42, 0, cachedDuration === 118 ? 118 : 200])
+    } finally {
+      unmount()
+      vi.unstubAllGlobals()
+      vi.restoreAllMocks()
+    }
+  })
+  it('does not start a recording after Stop while its audio read is pending', async () => {
+    let finishRead!: (value: { success: boolean; data: string }) => void
+    readRecording.mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve }))
+    const { unmount } = renderHook(() => useAudioPlayback())
+    await act(async () => {
+      const pending = window.__audioControls!.play('leaving', '/x/leaving.mp3')
+      window.__audioControls!.stop()
+      finishRead({ success: true, data: btoa('audio-bytes') })
+      await pending
+    })
+    expect(getCache).not.toHaveBeenCalled()
+    expect(useUIStore.getState().currentlyPlayingId).toBeNull()
+    expect(useUIStore.getState().isPlaying).toBe(false)
+    unmount()
+  })
   it('loads peaks from cache WITHOUT recomputing (no decode, no read, no loading state)', async () => {
     getCache.mockResolvedValue({
       version: 1,
@@ -151,4 +210,25 @@ describe('useAudioPlayback — H5 disk cache', () => {
     unmount()
     vi.unstubAllGlobals()
   })
+})
+
+
+it('restores both cached channels and decoded duration without reading the file', async () => {
+  getCache.mockResolvedValue({ peaks: [0.2], channels: [[0.2], [0.8]], duration: 118 })
+  renderHook(() => useAudioPlayback())
+  await window.__audioControls!.loadWaveformOnly('stereo', '/pc-recording-test.webm')
+  const state = useUIStore.getState()
+  expect(state.playbackWaveformChannels?.map(channel => Array.from(channel))).toEqual([[expect.closeTo(0.2)], [expect.closeTo(0.8)]])
+  expect(state.waveformDuration).toBe(118)
+  expect(readRecording).not.toHaveBeenCalled()
+})
+it('computes and persists each decoded channel once on the same peak path', async () => {
+  getCache.mockResolvedValue(null)
+  readRecording.mockResolvedValue({ success: true, data: btoa('stereo') })
+  decodeAudioData.mockResolvedValue({ numberOfChannels: 2, duration: 118 })
+  generateWaveformData.mockImplementation(async (_buffer, _samples, channel) => new Float32Array([channel ? 0.8 : 0.2]))
+  renderHook(() => useAudioPlayback())
+  await window.__audioControls!.loadWaveformOnly('stereo', '/pc-recording-test.webm')
+  expect(generateWaveformData.mock.calls.map(call => call[2])).toEqual([0, 1])
+  expect(setCache.mock.calls[0][4]).toEqual([[expect.closeTo(0.2)], [expect.closeTo(0.8)]])
 })

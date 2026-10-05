@@ -6,6 +6,7 @@ interface AudioControls {
   resume: () => void
   stop: () => void
   seek: (time: number) => void
+  setChannelMuted?: (recordingId: string, channel: number, muted: boolean) => void
   setPlaybackRate: (rate: number) => void
   loadWaveformOnly: (recordingId: string, filePath: string) => void
 }

@@ -821,10 +821,18 @@ describe('Recording IPC Handlers', () => {
 
       const result = await handlers['recordings:addToQueue'](null, 'rec-1')
 
-      expect(addToQueue).toHaveBeenCalledWith('rec-1')
+      expect(addToQueue).toHaveBeenCalledWith('rec-1', undefined, { ownerRequested: false })
       // Queue insertion owns the durable pending-status transition atomically.
       expect(updateRecordingTranscriptionStatus).not.toHaveBeenCalled()
       expect(result).toBe('queue-item-id')
+    })
+
+    it('marks the single explicit Transcribe again request as an owner override', async () => {
+      const { addToQueue, resolveRecordingId } = await import('../../services/database')
+      vi.mocked(resolveRecordingId).mockReturnValue({ id: 'garbage-rec' } as any)
+      vi.mocked(addToQueue).mockReturnValue('manual-queue')
+      expect(await handlers['recordings:addToQueue'](null, 'garbage-rec', true)).toBe('manual-queue')
+      expect(addToQueue).toHaveBeenCalledWith('garbage-rec', undefined, { ownerRequested: true })
     })
 
     it('resolves a stale/synced id to the canonical recording id before queueing', async () => {
@@ -836,7 +844,7 @@ describe('Recording IPC Handlers', () => {
       const result = await handlers['recordings:addToQueue'](null, 'synced-file-id')
 
       expect(resolveRecordingId).toHaveBeenCalledWith('synced-file-id')
-      expect(addToQueue).toHaveBeenCalledWith('real-rec-id')
+      expect(addToQueue).toHaveBeenCalledWith('real-rec-id', undefined, { ownerRequested: false })
       expect(updateRecordingTranscriptionStatus).not.toHaveBeenCalled()
       expect(result).toBe('queue-item-id')
     })

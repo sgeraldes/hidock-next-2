@@ -21,13 +21,14 @@ import { join } from 'path'
 import { getCachePath } from './file-storage'
 
 /** Bump to invalidate all previously written cache entries. */
-export const CACHE_VERSION = 1
+export const CACHE_VERSION = 2
 
 export interface WaveformCacheEntry {
   version: number
   recordingId: string
   /** Normalised amplitude peaks in [0, 1]. */
   peaks: number[]
+  channels?: number[][]
   /** Number of peaks (== peaks.length). */
   sampleCount: number
   /** Audio duration in seconds (0 if unknown at write time). */
@@ -90,7 +91,8 @@ export function setWaveformCache(
   peaks: number[],
   duration = 0,
   fileSize = 0,
-  coarse = false
+  coarse = false,
+  channels?: number[][]
 ): boolean {
   if (!recordingId || !Array.isArray(peaks) || peaks.length === 0) return false
   try {
@@ -98,6 +100,7 @@ export function setWaveformCache(
       version: CACHE_VERSION,
       recordingId,
       peaks,
+      ...(channels ? { channels } : {}),
       sampleCount: peaks.length,
       duration: Number.isFinite(duration) ? duration : 0,
       fileSize: Number.isFinite(fileSize) ? fileSize : 0,

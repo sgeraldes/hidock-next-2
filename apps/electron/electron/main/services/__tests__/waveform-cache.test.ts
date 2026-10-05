@@ -73,3 +73,9 @@ describe('waveform-cache service', () => {
     expect(getWaveformCache('../../evil/../id')).not.toBeNull()
   })
 })
+
+
+it('persists independent stereo peaks and duration on disk', () => {
+  expect(setWaveformCache('stereo', [0.2], 118, 1024, false, [[0.2], [0.8]])).toBe(true)
+  expect(getWaveformCache('stereo')).toMatchObject({ version: CACHE_VERSION, channels: [[0.2], [0.8]], duration: 118 })
+})

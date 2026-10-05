@@ -25,6 +25,7 @@ import { getQueueState, startTranscriptionProcessor } from './transcription'
 import { recomputeAudioWarnings } from './value-classification'
 import { scheduleEvaluationCatchup } from './evaluation-catchup'
 import { runKindFallbackPass } from './kind-fallback'
+import { runSamplingPass } from './transcript-sampler'
 import { backfillMeetingWiki } from './meeting-wiki'
 import { getVectorStore } from './vector-store'
 
@@ -175,6 +176,20 @@ export const BOOT_TASK_DEFS: GatedBootTask[] = [
           console.error('[KindFallback] pass error:', e)
         )
       }, 120_000)
+    },
+  },
+  {
+    // Transcripts in doubt get a few minutes of their audio transcribed again
+    // and compared by meaning (transcript-sampler.ts), up to Settings > Quality
+    // checks "Samples per day". Five minutes after launch, then every six
+    // hours; the daily allowance holds however often it runs.
+    name: 'transcript-sampling',
+    feature: 'transcription',
+    run: () => {
+      const pass = () =>
+        void runSamplingPass().catch((e) => console.error('[Sampling] pass error:', e))
+      setTimeout(pass, 300_000).unref?.()
+      setInterval(pass, 6 * 3_600_000).unref?.()
     },
   },
   {

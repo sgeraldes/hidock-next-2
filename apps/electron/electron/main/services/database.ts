@@ -1,3 +1,4 @@
+import { MIN_MEETING_CONFIDENCE } from '../../../src/shared/meeting-confidence'
 import Database from 'better-sqlite3'
 import { RECORDING_AUDIO_EXTENSIONS } from '../../../src/shared/audio-extensions'
 import { existsSync, readdirSync, readFileSync } from 'fs'
@@ -27,7 +28,43 @@ import { isImpossibleTranscriptDensity, lowValueMaxSeconds } from './value-thres
 import { LIVE_FILENAME } from './live-channel-speakers'
 import type { QualityRating } from '@/types/knowledge'
 
-const SCHEMA_VERSION = 69
+let decisionLabelRecoveryFailed = false
+
+/** Failed boot repair must never authorize replacing an existing reference set. */
+export function hasDecisionLabelRecoveryFailed(): boolean {
+  return decisionLabelRecoveryFailed
+}
+
+const SCHEMA_VERSION = 72
+
+const DECISION_LABELS_DDL = `CREATE TABLE IF NOT EXISTS decision_label_sets (
+    id TEXT PRIMARY KEY,
+    question TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    sampling_rule TEXT,
+    sample_size INTEGER NOT NULL DEFAULT 0 CHECK(sample_size >= 0),
+    doubtful_count INTEGER NOT NULL DEFAULT 0 CHECK(doubtful_count >= 0),
+    random_count INTEGER NOT NULL DEFAULT 0 CHECK(random_count >= 0),
+    CHECK(sample_size = doubtful_count + random_count)
+);
+CREATE TABLE IF NOT EXISTS decision_label_items (
+    set_id TEXT NOT NULL REFERENCES decision_label_sets(id) ON DELETE CASCADE,
+    recording_id TEXT NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+    stratum TEXT NOT NULL CHECK(stratum IN ('doubtful', 'random')),
+    position INTEGER NOT NULL CHECK(position >= 0),
+    PRIMARY KEY (set_id, recording_id),
+    UNIQUE (set_id, position)
+);
+CREATE INDEX IF NOT EXISTS idx_decision_label_items_recording ON decision_label_items(recording_id);
+CREATE TABLE IF NOT EXISTS decision_labels (
+    recording_id TEXT NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    labeled_at TEXT NOT NULL,
+    PRIMARY KEY (recording_id, question)
+);
+CREATE INDEX IF NOT EXISTS idx_decision_labels_question ON decision_labels(question, labeled_at);
+`
 
 const SCHEMA = `
 -- Calendar events from ICS
@@ -363,6 +400,20 @@ CREATE TABLE IF NOT EXISTS audio_profiles (
     FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
 );
 
+-- Transcript samples (v70): a doubtful transcript checked by transcribing
+-- a few minutes of its audio again and comparing meaning (transcript-sampler.ts).
+-- The verdict counts only while the transcript is the one sampled (fingerprint).
+CREATE TABLE IF NOT EXISTS transcript_samples (
+    recording_id TEXT PRIMARY KEY,
+    transcript_fingerprint TEXT NOT NULL,
+    verdict TEXT NOT NULL CHECK(verdict IN ('confirmed', 'contradicted', 'inconclusive', 'incomplete')),
+    windows_json TEXT NOT NULL,
+    model TEXT,
+    cost_usd REAL,
+    sampled_at TEXT NOT NULL,
+    FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
+);
+
 -- Jev evaluation (v61): one System One pass per capture. Stars, kind, work or
 -- personal, transcript trust and more (jev-evaluation.ts). Only the value ever
 -- changes a rating. The rest is read by the Library and later stages.
@@ -524,6 +575,7 @@ CREATE TABLE IF NOT EXISTS transcription_queue (
     progress INTEGER DEFAULT 0,
     error_message TEXT,
     provider TEXT,
+    owner_requested INTEGER NOT NULL DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     started_at TEXT,
     completed_at TEXT,
@@ -1108,6 +1160,11 @@ CREATE INDEX IF NOT EXISTS idx_contact_aliases_contact ON contact_aliases(contac
 CREATE INDEX IF NOT EXISTS idx_project_aliases_project ON project_aliases(project_id);
 CREATE INDEX IF NOT EXISTS idx_identity_suggestions_status ON identity_suggestions(status);
 CREATE INDEX IF NOT EXISTS idx_merge_journal_kind_keeper ON merge_journal(kind, keeper_id);
+-- MAX(seq) runs inside every atomic merge: avoid scanning multi-kilobyte snapshots.
+CREATE INDEX IF NOT EXISTS idx_merge_journal_seq ON merge_journal(seq);
+-- Cover ordered contact-journal discovery without reading snapshot pages.
+-- keeper_id retains the old kind/keeper index's tie order for equal sequences.
+CREATE INDEX IF NOT EXISTS idx_merge_journal_contact_order ON merge_journal(kind, undone_at, seq, keeper_id);
 
 -- Entity-type artifacts (C0 / v28). Every concrete imported file/blob (pdf, md,
 -- txt, json, image…). A knowledge_capture can own many artifacts. Text is
@@ -3408,6 +3465,31 @@ const MIGRATIONS: Record<number, () => void> = {
     }
     console.log('Migration v69 complete')
   },
+  70: () => {
+    // Samples of doubtful transcripts. Written by the sampling pass, read by
+    // the validity check.
+    console.log('Running migration to schema v70: transcript samples')
+    getDatabase().run(`CREATE TABLE IF NOT EXISTS transcript_samples (
+    recording_id TEXT PRIMARY KEY,
+    transcript_fingerprint TEXT NOT NULL,
+    verdict TEXT NOT NULL CHECK(verdict IN ('confirmed', 'contradicted', 'inconclusive', 'incomplete')),
+    windows_json TEXT NOT NULL,
+    model TEXT,
+    cost_usd REAL,
+    sampled_at TEXT NOT NULL,
+    FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
+)`)
+    console.log('Migration v70 complete')
+  },
+  71: () => {
+    getDatabase().run(DECISION_LABELS_DDL)
+  },
+  72: () => {
+    const database = getDatabase()
+    if (!getTableColumns(database, 'transcription_queue').includes('owner_requested')) {
+      database.run('ALTER TABLE transcription_queue ADD COLUMN owner_requested INTEGER NOT NULL DEFAULT 0')
+    }
+  },
 }
 
 /**
@@ -3985,6 +4067,86 @@ function repairPhase(): void {
     console.warn('[Database] notes create skipped:', (e as Error).message)
   }
 
+  // Reference labels (v71), like Notes: fresh installs and upgrades share the
+  // migration DDL, while SCHEMA remains a literal list of SQL statements.
+  try {
+    decisionLabelRecoveryFailed = false
+    const recoverLabelItems = (): void => {
+      if (!database.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'decision_label_items_legacy'").length) return
+      let unrecovered = false
+      try {
+        const hasPosition = getTableColumns(database, 'decision_label_items_legacy').includes('position')
+        const rows = database.exec(`SELECT set_id, recording_id, stratum${hasPosition ? ', position' : ''} FROM decision_label_items_legacy`)[0]?.values ?? []
+        for (const [index, row] of rows.entries()) {
+          try {
+            const [setId, recordingId, stratum] = row
+            if (database.exec('SELECT 1 FROM decision_label_items WHERE set_id = ? AND recording_id = ?', [setId, recordingId]).length) continue
+            let position = hasPosition ? row[3] : index
+            if (database.exec('SELECT 1 FROM decision_label_items WHERE set_id = ? AND position = ?', [setId, position]).length) {
+              position = Number(database.exec('SELECT COALESCE(MAX(position), -1) + 1 FROM decision_label_items WHERE set_id = ?', [setId])[0].values[0][0])
+            }
+            database.run('INSERT INTO decision_label_items (set_id, recording_id, stratum, position) VALUES (?, ?, ?, ?)',
+              [setId, recordingId, stratum === 'confident' ? 'random' : stratum, position])
+          } catch { unrecovered = true }
+        }
+        if (!unrecovered) database.run('DROP TABLE decision_label_items_legacy')
+      } catch { unrecovered = true }
+      if (unrecovered) {
+        let name = `decision_label_items_legacy_unrecovered_${Date.now()}`
+        while (database.exec('SELECT 1 FROM sqlite_master WHERE name = ?', [name]).length) name += '_1'
+        database.run(`ALTER TABLE decision_label_items_legacy RENAME TO ${name}`)
+        console.warn(`[Database] Unrecovered label membership retained in ${name}; label set replacement disabled`)
+      }
+      database.run(DECISION_LABELS_DDL)
+    }
+    // Recover interrupted older repairs before counting members or exposing sets.
+    // A savepoint makes recovery and constraint rebuilding atomic, even at boot.
+    database.run('SAVEPOINT decision_label_repair')
+    database.run(DECISION_LABELS_DDL)
+    recoverLabelItems()
+    // v71 is unreleased: repair development databases even if already at v71.
+    const labelSetColumns = getTableColumns(database, 'decision_label_sets')
+    if (!labelSetColumns.includes('sampling_rule')) {
+      database.run('ALTER TABLE decision_label_sets ADD COLUMN sampling_rule TEXT')
+    }
+    if (labelSetColumns.includes('confident_count')) {
+      database.run('ALTER TABLE decision_label_sets RENAME COLUMN confident_count TO random_count')
+    }
+    if (!labelSetColumns.includes('sample_size')) {
+      database.run('ALTER TABLE decision_label_sets ADD COLUMN sample_size INTEGER NOT NULL DEFAULT 0 CHECK(sample_size >= 0)')
+      database.run('ALTER TABLE decision_label_sets ADD COLUMN doubtful_count INTEGER NOT NULL DEFAULT 0 CHECK(doubtful_count >= 0)')
+      database.run('ALTER TABLE decision_label_sets ADD COLUMN random_count INTEGER NOT NULL DEFAULT 0 CHECK(random_count >= 0)')
+      database.run(`UPDATE decision_label_sets SET
+        sample_size = (SELECT COUNT(*) FROM decision_label_items WHERE set_id = decision_label_sets.id),
+        doubtful_count = (SELECT COUNT(*) FROM decision_label_items WHERE set_id = decision_label_sets.id AND stratum = 'doubtful'),
+        random_count = (SELECT COUNT(*) FROM decision_label_items WHERE set_id = decision_label_sets.id AND stratum IN ('confident', 'random'))`)
+    }
+    const labelItemsSql = database.exec("SELECT sql FROM sqlite_master WHERE name = 'decision_label_items'")[0]?.values[0]?.[0]
+    if (typeof labelItemsSql === 'string' && labelItemsSql.includes("'confident'")) {
+      // Rebuild the CHECK constraint and translate legacy membership without losing labels.
+      database.run('ALTER TABLE decision_label_items RENAME TO decision_label_items_legacy')
+      database.run(DECISION_LABELS_DDL)
+      recoverLabelItems()
+    }
+    // Preserve historical missing members while bringing each stratum up to
+    // recovered membership. Keep the size/stratum CHECK valid in one UPDATE.
+    const doubtful = "MAX(doubtful_count, (SELECT COUNT(*) FROM decision_label_items WHERE set_id = decision_label_sets.id AND stratum = 'doubtful'))"
+    const random = "MAX(random_count, (SELECT COUNT(*) FROM decision_label_items WHERE set_id = decision_label_sets.id AND stratum IN ('confident', 'random')))"
+    database.run(`UPDATE decision_label_sets SET
+      sample_size = MAX(sample_size, ${doubtful} + ${random}),
+      doubtful_count = ${doubtful}, random_count = ${random}`)
+    database.run('RELEASE decision_label_repair')
+  } catch (error) {
+    decisionLabelRecoveryFailed = true
+    try {
+      database.run('ROLLBACK TO decision_label_repair')
+      database.run('RELEASE decision_label_repair')
+    } catch {
+      try { database.run('ROLLBACK') } catch { /* no active transaction, or cleanup itself unavailable */ }
+    }
+    console.warn(`[Database] Decision label recovery failed: ${String(error instanceof Error ? error.message : error).replace(/[\r\n]+/g, ' ')}; label set replacement disabled`)
+  }
+
   // Repair transcript_speakers (v25): a new table has no columns to ALTER, but
   // force-create it here so an older on-disk DB that skipped the migration still
   // gets it before any assignSpeaker write. Idempotent.
@@ -4272,8 +4434,8 @@ const engine = new DatabaseEngine({
   repairPhase,
   // Safety net (P0 knowledge_captures loss): refuse any single statement that
   // would wipe >50% of these entity tables (when >20 rows), and keep the last
-  // 3 daily on-boot backups before migrations run. Intentional bulk purges use
-  // runWithMassDeleteAllowed().
+  // three daily backups plus three independently retained migration restore points.
+  // Intentional bulk purges use runWithMassDeleteAllowed().
   protectedTables: ['knowledge_captures', 'transcripts', 'recordings', 'meetings', 'contacts'],
   backupOnBoot: { keep: 3 },
   deferBackupOnBoot: true,
@@ -4291,13 +4453,14 @@ export function listHourlyBackups(): ExternalBackup[] {
   const dir = join(dirname(dirname(getDatabasePath())), 'backups')
   if (!existsSync(dir)) return []
   const out: ExternalBackup[] = []
-  for (const name of readdirSync(dir)) {
+  for (const name of readdirSync(dir).sort().reverse()) {
     if (!/^hidock-\d{8}-\d{6}\.db$/.test(name)) continue
     const sidecar = join(dir, `${name}.source.json`)
     if (!existsSync(sidecar)) continue
     try {
-      const s = JSON.parse(readFileSync(sidecar, 'utf8')) as { exact?: boolean; db_mtime_ns?: string; db_size?: number }
-      if (s.exact !== true || typeof s.db_mtime_ns !== 'string' || typeof s.db_size !== 'number') continue
+      const s = JSON.parse(readFileSync(sidecar, 'utf8')) as { exact?: boolean; db_mtime_ns?: string; db_size?: number; wal_size?: number }
+      if (s.exact !== true || s.wal_size !== 0 || typeof s.db_mtime_ns !== 'string' || !/^\d+$/.test(s.db_mtime_ns)
+        || typeof s.db_size !== 'number' || !Number.isSafeInteger(s.db_size) || s.db_size <= 0) continue
       out.push({ path: join(dir, name), sourceMtimeNs: BigInt(s.db_mtime_ns), sourceSize: s.db_size })
     } catch {
       /* an unreadable record is no proof */
@@ -4396,6 +4559,33 @@ export function queryOne<T>(sql: string, params: any[] = []): T | undefined {
 
 export function run(sql: string, params: any[] = []): void {
   engine.run(sql, params)
+}
+
+// A default 1000-page automatic checkpoint can turn one otherwise small merge
+// COMMIT into a >250 ms stall. Lower the main connection's threshold while
+// yielding reconciliation is active, without changing WAL durability or turning
+// checkpoints off. Reference counting preserves the setting across overlapping
+// callers; an explicitly disabled (0) or already smaller limit is left alone.
+let organizationCheckpointUsers = 0
+let organizationCheckpointPrevious: number | undefined
+
+export function acquireOrganizationCheckpointBudget(): () => void {
+  if (organizationCheckpointUsers === 0) {
+    const previous = queryOne<{ wal_autocheckpoint: number }>('PRAGMA wal_autocheckpoint')?.wal_autocheckpoint
+    organizationCheckpointPrevious = previous !== undefined && previous > 128 ? previous : undefined
+    if (organizationCheckpointPrevious !== undefined) queryOne('PRAGMA wal_autocheckpoint = 128')
+  }
+  organizationCheckpointUsers++
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    if (--organizationCheckpointUsers === 0 && organizationCheckpointPrevious !== undefined) {
+      const previous = organizationCheckpointPrevious
+      organizationCheckpointPrevious = undefined
+      queryOne(`PRAGMA wal_autocheckpoint = ${previous}`)
+    }
+  }
 }
 
 /** Rows modified by the most recent run()/runInTransaction() write — lets a
@@ -4852,6 +5042,9 @@ function extractContactsFromMeetingDataInternal(meeting: Omit<Meeting, 'created_
 
 // Recording queries
 export interface Recording {
+  /** Read projection from the linked video artifact; no new parent/child schema. */
+  parent_video_capture_id?: string | null
+  video_audio_title?: string | null
   id: string
   filename: string
   original_filename?: string
@@ -4877,6 +5070,7 @@ export interface Recording {
   created_at: string
   // New lifecycle fields
   location: 'device-only' | 'local-only' | 'both' | 'deleted'
+  transcription_error?: string | null
   transcription_status: 'none' | 'pending' | 'processing' | 'complete' | 'error'
   on_device: number
   device_last_seen?: string
@@ -4906,11 +5100,22 @@ export interface Recording {
 export function getRecordings(): Recording[] {
   return queryAll<Recording>(
     `SELECT r.*, m.subject AS meeting_subject,
+            (SELECT tq.error_message FROM transcription_queue tq WHERE tq.recording_id = r.id
+              AND tq.status = 'failed' ORDER BY tq.created_at DESC, tq.rowid DESC LIMIT 1) AS transcription_error,
+            video.knowledge_capture_id AS parent_video_capture_id,
+            CASE WHEN video.id IS NOT NULL THEN vc.title || ' · audio' END AS video_audio_title,
             ap.category AS audio_category, ap.sound_seconds AS audio_sound_seconds,
             ap.duration_seconds AS audio_duration_seconds,
             ev.star_level AS eval_star_level, ev.kind AS eval_kind, ev.context AS eval_context,
             ev.audio_warning AS eval_audio_warning
        FROM recordings r
+       LEFT JOIN artifacts video ON video.id = (
+         SELECT a.id FROM artifacts a JOIN knowledge_captures c ON c.id = a.knowledge_capture_id
+          WHERE a.kind = 'video' AND c.deleted_at IS NULL
+            AND json_extract(CASE WHEN json_valid(a.metadata) THEN a.metadata ELSE '{}' END, '$.audioRecordingId') = r.id
+          ORDER BY a.created_at LIMIT 1
+       )
+       LEFT JOIN knowledge_captures vc ON vc.id = video.knowledge_capture_id
        LEFT JOIN meetings m ON m.id = r.meeting_id
        LEFT JOIN audio_profiles ap ON ap.recording_id = r.id
        -- One evaluation per recording (the table is keyed by capture): the latest.
@@ -5171,7 +5376,7 @@ const UNUSABLE_TRANSCRIPT_EXCLUSION = `AND NOT EXISTS (
 
 export function getEligibleRecordingIds(
   candidateIds: Iterable<string>,
-  options: { forTranscription?: boolean } = {}
+  options: { forTranscription?: boolean; ignoreValueExclusion?: boolean } = {}
 ): RecordingEligibility {
   const unique = [...new Set([...candidateIds].filter((id): id is string => !!id))]
   if (unique.length === 0) return { eligible: new Set<string>(), failClosed: false }
@@ -5186,13 +5391,15 @@ export function getEligibleRecordingIds(
           WHERE r.id IN (${placeholders})
             AND r.deleted_at IS NULL
             AND COALESCE(r.personal, 0) = 0
-            AND NOT EXISTS (
+            ${options.forTranscription && options.ignoreValueExclusion ? '' : `AND NOT EXISTS (
               SELECT 1 FROM knowledge_captures kc
                WHERE kc.source_recording_id = r.id
                  AND kc.deleted_at IS NULL
-                 AND ${VALUE_EXCLUSION_PREDICATE})
+                 AND ${VALUE_EXCLUSION_PREDICATE})`}
             ${options.forTranscription ? '' : UNUSABLE_TRANSCRIPT_EXCLUSION}`,
-        [...chunk, ...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS]
+        options.forTranscription && options.ignoreValueExclusion
+          ? chunk
+          : [...chunk, ...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS]
       )
       for (const row of rows) eligible.add(row.id)
     }
@@ -8067,23 +8274,22 @@ export interface QueueItem {
   progress: number
   error_message?: string
   provider?: string
+  owner_requested?: boolean
   created_at: string
   started_at?: string
   completed_at?: string
 }
 
-export function addToQueue(recordingId: string, provider?: string): string {
-  // Honor the privacy flags at the single enqueue chokepoint: a personal
-  // ("ignored") or soft-deleted recording is never transcribed. Every path
-  // (auto-transcribe, manual, bulk backlog) funnels through here.
-  const rec = queryOne<{ personal?: number; deleted_at?: string | null }>(
-    'SELECT personal, deleted_at FROM recordings WHERE id = ?',
-    [recordingId]
-  )
-  if (rec && (rec.personal === 1 || rec.deleted_at)) {
-    console.log(`[Transcription] Skipping enqueue of personal/deleted recording ${recordingId}`)
-    return ''
-  }
+export function addToQueue(
+  recordingId: string,
+  provider?: string,
+  options: { ownerRequested?: boolean } = {}
+): string {
+  const { eligible, failClosed } = getEligibleRecordingIds([recordingId], {
+    forTranscription: true,
+    ignoreValueExclusion: options.ownerRequested === true
+  })
+  if (failClosed || !eligible.has(recordingId)) return ''
 
   // A recording may be rediscovered by auto-sync while it is already queued
   // (or the user may click Process All before the renderer has refreshed). A
@@ -8095,13 +8301,18 @@ export function addToQueue(recordingId: string, provider?: string): string {
     ORDER BY created_at ASC
     LIMIT 1
   `, [recordingId])
-  if (existing) return existing.id
+  if (existing) {
+    if (options.ownerRequested === true) {
+      run('UPDATE transcription_queue SET owner_requested = 1 WHERE id = ?', [existing.id])
+    }
+    return existing.id
+  }
 
   const id = crypto.randomUUID()
   runInTransaction(() => {
     run(
-      'INSERT INTO transcription_queue (id, recording_id, provider) VALUES (?, ?, ?)',
-      [id, recordingId, provider ?? null]
+      'INSERT INTO transcription_queue (id, recording_id, provider, owner_requested) VALUES (?, ?, ?, ?)',
+      [id, recordingId, provider ?? null, options.ownerRequested === true ? 1 : 0]
     )
     // Keep the durable recording projection aligned at the enqueue chokepoint.
     // This covers auto-download, manual, and bulk enqueue paths immediately.
@@ -8122,10 +8333,8 @@ export function getQueueItems(status?: string): (QueueItem & { filename?: string
     LEFT JOIN recordings r ON tq.recording_id = r.id
     ${status ? 'WHERE tq.status = ?' : ''}
     ORDER BY r.date_recorded DESC, tq.created_at ASC`
-  if (status) {
-    return queryAll<QueueItem & { filename?: string; date_recorded?: string }>(sql, [status])
-  }
-  return queryAll<QueueItem & { filename?: string; date_recorded?: string }>(sql)
+  const rows = queryAll<QueueItem & { filename?: string; date_recorded?: string }>(sql, status ? [status] : [])
+  return rows.map((row) => ({ ...row, owner_requested: Number(row.owner_requested) === 1 }))
 }
 
 /**
@@ -12892,24 +13101,30 @@ const VOICE_PRESENCE_MIN_SIMILARITY = 0.9
  *      other candidate attended or speaks.
  * Otherwise 'unclear'; supportedCandidateIds then says whom Jev may choose between.
  */
+interface BucketRecordingRow {
+  recordingId: string
+  filename: string | null
+  date: string | null
+  meetingId: string | null
+  subject: string | null
+}
+
 function buildBucketResolution(
   contact: { id: string; name: string },
   allContacts: Array<{ id: string; name: string }>,
-  opts: BucketRuleOptions = {}
+  opts: BucketRuleOptions = {},
+  recordingRows?: BucketRecordingRow[],
+  ambiguity?: ReturnType<typeof detectAmbiguousName>
 ): BucketResolution {
-  const amb = detectAmbiguousName(contact.name, allContacts, contact.id)
+  const amb = ambiguity ?? detectAmbiguousName(contact.name, allContacts, contact.id)
   const candidates: AmbiguousCandidate[] = amb.matches.map((m) => ({ id: m.id, name: m.name }))
   const candNameById = new Map(candidates.map((c) => [c.id, c.name]))
   const candIds = candidates.map((c) => c.id)
   const nameKey = normalizeName(contact.name)
 
-  const rawRecRows =
-    candIds.length === 0
-      ? []
-      : queryAll<{ recordingId: string; filename: string | null; date: string | null; meetingId: string | null; subject: string | null }>(
-          BUCKET_RECORDINGS_SQL,
-          [contact.id]
-        )
+  const rawRecRows = candIds.length === 0
+    ? []
+    : recordingRows ?? queryAll<BucketRecordingRow>(BUCKET_RECORDINGS_SQL, [contact.id])
 
   // ADV27-4 (round-28) — the bucket-resolution recordings feed identity display
   // (getAmbiguousBuckets / getBucketResolution) AND the startup autoSplit WRITER
@@ -13167,6 +13382,58 @@ export function getBucketResolution(contactId: string, opts: BucketRuleOptions =
   return buildBucketResolution(contact, contacts, opts)
 }
 
+interface BucketResolutionContext {
+  contacts: Array<{ id: string; name: string }>
+  contact: { id: string; name: string }
+  ambiguity: ReturnType<typeof detectAmbiguousName>
+}
+
+/** Rebuild bounded evidence; the runner invalidates discovery context after interleaved writes. */
+export function getBucketResolutionBatch(
+  contactId: string,
+  opts: BucketRuleOptions,
+  offset: number,
+  limit: number,
+  context?: BucketResolutionContext
+): { resolution: BucketResolution | null; hasMore: boolean } {
+  const contacts = context?.contacts ?? queryAll<{ id: string; name: string }>('SELECT id, name FROM contacts')
+  const contact = context?.contact ?? contacts.find((c) => c.id === contactId)
+  const ambiguity = contact ? context?.ambiguity ?? detectAmbiguousName(contact.name, contacts, contact.id) : null
+  if (!contact || !ambiguity?.ambiguous) return { resolution: null, hasMore: false }
+  // The page already contains the complete ordered recording rows. Pass it
+  // through directly instead of querying the same joins again with an IN filter.
+  const rows = queryAll<BucketRecordingRow>(`${BUCKET_RECORDINGS_SQL} LIMIT ? OFFSET ?`, [contactId, limit, offset])
+  const resolution = buildBucketResolution(contact, contacts, opts, rows, ambiguity)
+  return {
+    resolution,
+    // Count raw rows, before eligibility filtering: an excluded page must not hide later eligible recordings.
+    hasMore: rows.length === limit
+  }
+}
+
+/** Same bucket ordering as the synchronous view, without building every resolution in one stretch. */
+export function* ambiguousBucketBatches(opts: BucketRuleOptions, batchSize: number): Generator<void, BucketResolution[]> {
+  const contacts = queryAll<{ id: string; name: string }>('SELECT id, name FROM contacts')
+  const found: BucketResolution[] = []
+  for (const c of contacts) {
+    const ambiguity = detectAmbiguousName(c.name, contacts, c.id)
+    if (!ambiguity.ambiguous) continue
+    const context = { contacts, contact: c, ambiguity }
+    let combined: BucketResolution | null = null
+    for (let offset = 0; ; offset += batchSize) {
+      const { resolution, hasMore } = getBucketResolutionBatch(c.id, opts, offset, batchSize, context)
+      if (!resolution) break
+      if (!combined) combined = resolution
+      else combined.recordings.push(...resolution.recordings)
+      yield
+      if (!hasMore) break
+    }
+    if (combined) found.push(combined)
+  }
+  found.sort((a, b) => b.recordings.length - a.recordings.length)
+  return found
+}
+
 /** A stored per-recording mention decision (decided=false ⇒ resolve normally). */
 export interface MentionDecision {
   decided: boolean
@@ -13420,7 +13687,7 @@ export function enrichRecordingScheduleMetadata(recordingId: string): ScheduleEn
       }
     })
 
-    const credibleOverlaps = scored.filter((candidate) => candidate.hasOverlap && candidate.confidenceScore >= 0.5)
+    const credibleOverlaps = scored.filter((candidate) => candidate.hasOverlap && candidate.confidenceScore >= MIN_MEETING_CONFIDENCE)
     const result = {
       recordingId,
       candidateCount: scored.length,

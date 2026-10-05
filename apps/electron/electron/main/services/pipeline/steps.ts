@@ -30,7 +30,10 @@ export const OBSERVED_STEPS = [
   'timeline',
   'value-llm',
   'graph-extract',
-  'image-describe'
+  'image-describe',
+  // Sampling of a doubtful transcript (transcript-sampler.ts): a minute transcribed again, then compared by Jev.
+  'sample-transcribe',
+  'sample-compare'
 ] as const
 export type StepId = TextStepId | (typeof OBSERVED_STEPS)[number]
 

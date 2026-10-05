@@ -1,5 +1,7 @@
+import { MIN_MEETING_CONFIDENCE } from '../../../src/shared/meeting-confidence'
 import { watch, existsSync, statSync, readdirSync } from 'fs'
 import { RECORDING_AUDIO_EXTENSIONS } from '../../../src/shared/audio-extensions'
+import { isPcRecordingFilename } from '../../../src/shared/pc-recording'
 import { join, extname, basename } from 'path'
 import { randomUUID } from 'crypto'
 import { getRecordingsPath } from './file-storage'
@@ -151,6 +153,9 @@ export function isPurgedFile(filename: string): boolean {
 async function processNewRecording(filePath: string): Promise<void> {
   try {
     const filename = basename(filePath)
+    // PC files belong exclusively to the shared import/recovery path. An orphaned
+    // copy from a failed insert must never become a duplicate device row.
+    if (isPcRecordingFilename(filename)) return
     const stats = statSync(filePath)
 
     // Match any extension variant of the same base name — device rows are .hda
@@ -283,7 +288,7 @@ function correlateWithMeeting(recordingId: string, recordingDate: Date): void {
       }
     }
 
-    if (bestMatch && bestMatch.confidence >= 0.5) {
+    if (bestMatch && bestMatch.confidence >= MIN_MEETING_CONFIDENCE) {
       linkRecordingToMeeting(
         recordingId,
         bestMatch.meetingId,

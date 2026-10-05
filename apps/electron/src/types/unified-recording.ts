@@ -35,12 +35,15 @@ export interface TranscriptSummary {
 
 // Base fields common to all recording types
 interface RecordingBase {
+  parentVideoCaptureId?: string
+  videoAudioTitle?: string
   id: string
   filename: string
   size: number
   duration: number
   dateRecorded: Date
   transcriptionStatus: 'none' | 'pending' | 'processing' | 'complete' | 'no_speech' | 'error'
+  transcriptionError?: string
   meetingId?: string
   meetingSubject?: string
   /** Which piece of its meeting this recording is, when the meeting was recorded in more than one. */

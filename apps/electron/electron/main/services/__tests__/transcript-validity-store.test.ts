@@ -23,10 +23,16 @@ vi.mock('../file-storage', () => ({
 vi.mock('../config', () => ({
   getConfig: () => ({ transcription: { valueClassificationMinConfidence: 0.6 } }),
 }))
-vi.mock('../event-bus', () => ({ getEventBus: () => ({ emitDomainEvent: vi.fn() }) }))
+const emitDomainEvent = vi.hoisted(() => vi.fn())
+vi.mock('../event-bus', () => ({ getEventBus: () => ({ emitDomainEvent }) }))
 
 import { initializeDatabase, closeDatabase, run, queryOne, insertTranscript } from '../database'
-import { backfillTranscriptValidity, refreshTranscriptValidity, previewTranscriptValidity } from '../transcript-validity-store'
+import {
+  backfillTranscriptValidity,
+  refreshTranscriptValidity,
+  previewTranscriptValidity,
+  transcriptFingerprint,
+} from '../transcript-validity-store'
 import { FRAME_SECONDS } from '../audio-profile'
 
 const FILE_SECONDS = 600
@@ -88,13 +94,15 @@ describe('transcript validity store', () => {
     seed('talk', [[160, 600]])
     const counts = await backfillTranscriptValidity()
     expect(counts).toMatchObject({ checked: 2, invalid: 1, valid: 1 })
+    expect(counts.changedIds).toEqual(['quiet', 'talk'])
+    expect(emitDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'transcript:verdicts-updated', payload: { recordingIds: ['quiet', 'talk'] } }))
     expect(stored('quiet')?.validity_status).toBe('invalid')
     expect(JSON.parse(stored('quiet')!.validity_json!).reasons.map((r: { code: string }) => r.code)).toContain('text_without_audio')
     expect(stored('talk')?.validity_status).toBe('valid')
   })
 
   it('checks each transcript once', async () => {
-    expect(await backfillTranscriptValidity()).toEqual({ checked: 0 })
+    expect(await backfillTranscriptValidity()).toEqual({ checked: 0, changedIds: [] })
   })
 
   it('checks again when a meeting is linked later and the speakers outnumber its invitees', async () => {
@@ -103,9 +111,9 @@ describe('transcript validity store', () => {
     ])
     run(`UPDATE recordings SET meeting_id = 'm1' WHERE id = 'talk'`)
     // Two speakers against one invitee is still within "invitees plus one".
-    expect(await backfillTranscriptValidity()).toMatchObject({ checked: 1, valid: 1 })
+    expect(await backfillTranscriptValidity()).toMatchObject({ checked: 1, valid: 1, changedIds: [] })
     expect(JSON.parse(stored('talk')!.validity_json!).measures.attendees).toBe(1)
-    expect(await backfillTranscriptValidity()).toEqual({ checked: 0 })
+    expect(await backfillTranscriptValidity()).toEqual({ checked: 0, changedIds: [] })
   })
 
   it('refreshes one recording, and previews lines not stored yet', () => {
@@ -114,5 +122,26 @@ describe('transcript validity store', () => {
     const lines = JSON.stringify(Array.from({ length: 50 }, (_, i) => ({ speaker: 'A', start: i * 11, end: i * 11 + 10, text: 'x '.repeat(20) })))
     expect(previewTranscriptValidity('quiet', lines)?.status).toBe('invalid')
     expect(previewTranscriptValidity('quiet', lines, { integrityStatus: 'broken' })?.reasons[0].code).toBe('integrity')
+  })
+})
+
+describe('a sample of the audio', () => {
+  it('settles a doubtful transcript only while it is the transcript that was sampled', () => {
+    seed('doubt', [[160, 600]])
+    const lines = Array.from({ length: 20 }, (_, i) => ({ speaker: 'A', start: Math.floor(i / 2) * 60, end: Math.floor(i / 2) * 60 + 50, text: `w ${i} `.repeat(10) }))
+    run('UPDATE transcripts SET speakers = ? WHERE recording_id = ?', [JSON.stringify(lines), 'doubt'])
+    expect(refreshTranscriptValidity('doubt')?.status).toBe('doubtful')
+
+    const speakers = queryOne<{ speakers: string }>('SELECT speakers FROM transcripts WHERE recording_id = ?', ['doubt'])!.speakers
+    run(
+      `INSERT INTO transcript_samples (recording_id, transcript_fingerprint, verdict, windows_json, model, cost_usd, sampled_at)
+       VALUES ('doubt', ?, 'confirmed', '[]', 'gemini-3.5-transcribe', 0.0102, '2026-10-04T12:00:00Z')`,
+      [transcriptFingerprint(speakers)]
+    )
+    expect(refreshTranscriptValidity('doubt')?.status).toBe('valid')
+
+    // A new transcript is not the one sampled: the doubt comes back.
+    run('UPDATE transcripts SET speakers = ? WHERE recording_id = ?', [JSON.stringify(lines.slice(1)), 'doubt'])
+    expect(refreshTranscriptValidity('doubt')?.status).toBe('doubtful')
   })
 })

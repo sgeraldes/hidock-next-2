@@ -8,6 +8,7 @@ vi.mock('@/components/ui/toaster', () => ({ toast: toasts }))
 
 const getState = vi.fn()
 const saveStep = vi.fn()
+const saveDecisions = vi.fn()
 const listModels = vi.fn()
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
@@ -56,10 +57,55 @@ beforeEach(() => {
   getState.mockResolvedValue(stateWith())
   saveStep.mockResolvedValue({ success: true, issues: [] })
   listModels.mockResolvedValue([])
-  global.window.electronAPI = { pipeline: { getState, saveStep, listModels } } as never
+  saveDecisions.mockResolvedValue({ success: true })
+  global.window.electronAPI = { pipeline: { getState, saveStep, saveDecisions, listModels, getLabelSet: vi.fn().mockResolvedValue({ id: 'set', items: [], counts: { doubtful: 0, random: 0 }, labeled: 0 }) } } as never
 })
 
 describe('PipelineSection', () => {
+  it('shows English decision presets, engine status, and saves a removable override', async () => {
+    getState.mockResolvedValue({ ...stateWith(), decisionEngines: [{ id: 'clef', label: 'Clef', costPerCallUsd: 0, available: true, dataLeavesMachine: 'lan' }] })
+    render(<PipelineSection />)
+    const preset = await screen.findByRole('combobox', { name: 'Global preset' })
+    expect(within(preset).getByRole('option', { name: 'Zero cost' })).toBeInTheDocument()
+    expect(screen.getByText('Clef · Available · US$ 0 · Local network')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Decisions' })).toBeInTheDocument()
+    expect(screen.getByText('Choose how decisions are made. If an engine cannot answer, the preset tries the next one.')).toBeInTheDocument()
+    expect(within(preset).getAllByRole('option').map(option => option.textContent)).toEqual(['Zero cost', 'Cheapest', 'Most accurate', 'Fastest'])
+    for (const name of ['Identity tiebreak', 'Meeting match', 'Evaluation', 'Sample comparison', 'Recording kind']) {
+      expect(within(screen.getByRole('combobox', { name })).getByRole('option', { name: 'Same as preset' })).toBeInTheDocument()
+    }
+    expect(screen.getByText('Estimated cost per call with 4,000 input tokens and 200 output tokens. Actual billing depends on usage.')).toBeInTheDocument()
+    fireEvent.change(screen.getByRole('combobox', { name: 'Evaluation' }), { target: { value: 'jev' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save decisions' }))
+    await waitFor(() => expect(saveDecisions).toHaveBeenCalledWith({ preset: 'zero-cost', overrides: { evaluate: 'jev' } }))
+  })
+  it('removes a step override when Same as preset is selected', async () => {
+    getState.mockResolvedValue(stateWith({ ...emptyPipelineConfig(), decisions: { preset: 'cheapest', overrides: { evaluate: 'jev' } } }))
+    render(<PipelineSection />)
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Evaluation' }), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save decisions' }))
+    await waitFor(() => expect(saveDecisions).toHaveBeenCalledWith({ preset: 'cheapest', overrides: {} }))
+  })
+  it('shows unavailable cloud engines with unknown cost in English', async () => {
+    getState.mockResolvedValue({ ...stateWith(), decisionEngines: [{ id: 'jev', label: 'Jev', costPerCallUsd: null, available: false, dataLeavesMachine: 'cloud' }] })
+    render(<PipelineSection />)
+    expect(await screen.findByText('Jev · Unavailable · Unknown cost · Cloud')).toBeInTheDocument()
+  })
+  it('shows English saving and success messages', async () => {
+    let finish!: (result: { success: boolean }) => void
+    saveDecisions.mockReturnValue(new Promise(resolve => { finish = resolve }))
+    render(<PipelineSection />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Save decisions' }))
+    expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled()
+    finish({ success: true })
+    await waitFor(() => expect(toasts.success).toHaveBeenCalledWith('Decisions saved.'))
+  })
+  it('shows the English fallback error when saving fails without a reason', async () => {
+    saveDecisions.mockResolvedValue({ success: false })
+    render(<PipelineSection />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Save decisions' }))
+    await waitFor(() => expect(toasts.error).toHaveBeenCalledWith('Could not save decisions: Could not save.'))
+  })
   it('shows placeholder rows while the settings load, never the old sentence', async () => {
     render(<PipelineSection />)
     expect(screen.getByRole('status', { name: 'Loading the pipeline settings' })).toBeInTheDocument()
@@ -78,7 +124,7 @@ describe('PipelineSection', () => {
     expect(within(chat).getByText('Follows AI providers')).toBeInTheDocument()
     expect(within(chat).getByText('No calls yet')).toBeInTheDocument()
     expect(within(await row('notes')).getByText('Median 2.1 s · $0.0003 · 12 calls · 1 failed')).toBeInTheDocument()
-    expect(screen.getAllByRole('button', { name: /^Edit / })).toHaveLength(10)
+    expect(screen.getAllByRole('button', { name: /^Edit / })).toHaveLength(9)
   })
 
   it('opens the editor, offers the harnesses, and greys out the one that cannot serve with its reason', async () => {

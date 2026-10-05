@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import { Library } from '../Library'
+import { BUILTIN_ARTIFACT_TYPES } from '@/features/library/utils/sourceType'
 
 /**
  * Rows are located by the text the row shows. Since 2026-09-22 an unassigned
@@ -255,6 +256,7 @@ vi.mock('@/features/library/hooks', () => ({
 }))
 
 const mockRefresh = vi.fn()
+const domainListeners = new Set<(event: { type: string; payload?: { recordingIds: string[] } }) => void>()
 const transcriptionCompletedListeners: Array<(data: { recordingId: string }) => void> = []
 const transcriptionFailedListeners: Array<() => void> = []
 const transcriptionCancelledListeners: Array<() => void> = []
@@ -265,8 +267,9 @@ global.window.electronAPI = {
   transcripts: {
     getByRecordingIds: vi.fn().mockResolvedValue({}),
     getByRecordingIdsOwner: vi.fn().mockResolvedValue({}),
+    getVerdicts: vi.fn().mockResolvedValue({}),
     setIntegrityAccepted: vi.fn().mockResolvedValue({ success: true, data: { accepted: true } }),
-    retranscribeMany: vi.fn().mockResolvedValue({ success: true, data: { queued: 1, skipped: 0 } })
+    retranscribeMany: vi.fn().mockResolvedValue({ success: true, data: { queued: 1, skipped: 0, skippedReasons: {} } })
   },
   meetings: { getByIds: vi.fn().mockResolvedValue({}) },
   knowledge: { getById: vi.fn().mockResolvedValue(null) },
@@ -289,6 +292,10 @@ global.window.electronAPI = {
     truncatedRecoveryPlan: vi.fn().mockResolvedValue(null),
     recoverTruncated: vi.fn().mockResolvedValue({ queued: [], skipped: [] })
   },
+  onDomainEvent: vi.fn((callback) => {
+    domainListeners.add(callback)
+    return () => { domainListeners.delete(callback) }
+  }),
   onTranscriptionCompleted: vi.fn((callback) => {
     transcriptionCompletedListeners.push(callback)
     return vi.fn()
@@ -354,6 +361,20 @@ describe('Library', () => {
       </MemoryRouter>
     )
   }
+
+  it('renders one row of every registered source type', () => {
+    const recordings = BUILTIN_ARTIFACT_TYPES.map((type) => ({
+      ...mockRecording, id: type.id, title: `Registered ${type.id}`,
+      filename: `fixture.${type.extensions[0]}`, sourceKind: 'capture' as const
+    }))
+    vi.mocked(useUnifiedRecordings).mockReturnValue({
+      ...vi.mocked(useUnifiedRecordings).mock.results[0]?.value,
+      recordings, loading: false, error: null, refresh: mockRefresh,
+      deviceConnected: false, stats: { total: recordings.length }
+    } as ReturnType<typeof useUnifiedRecordings>)
+    renderLibrary()
+    for (const type of BUILTIN_ARTIFACT_TYPES) expect(screen.getByText(`Registered ${type.id}`)).toBeInTheDocument()
+  })
 
   describe('Manual refresh', () => {
     it('forces device reconciliation before rebuilding the Library view', async () => {
@@ -961,6 +982,35 @@ describe('Library — transcript integrity labels', () => {
     } as any)
     vi.mocked(window.electronAPI.transcripts.getByRecordingIdsOwner).mockResolvedValue(transcriptsById as any)
     vi.mocked(window.electronAPI.transcripts.retranscribeMany).mockClear()
+    vi.mocked(window.electronAPI.transcripts.getVerdicts).mockResolvedValue(transcriptsById as any)
+  })
+
+  it('refreshes the chip through the light channel and coalesces three events for 1,500 ms', async () => {
+    vi.mocked(window.electronAPI.recordings.backfillDurations).mockResolvedValue({ success: true })
+    vi.mocked(window.electronAPI.transcripts.getVerdicts).mockClear().mockResolvedValue({
+      'clean-1': { integrity_status: 'ok', validity_status: 'doubtful', validity_json: null },
+      'shaky-1': { integrity_status: 'suspect', validity_status: 'valid' },
+    } as any)
+    render(<MemoryRouter><Library /></MemoryRouter>)
+    await waitFor(() => expect(screen.getByText('Clean one')).toBeInTheDocument())
+    await waitFor(() => expect(window.electronAPI.transcripts.getByRecordingIdsOwner).toHaveBeenCalled())
+    const fullReads = vi.mocked(window.electronAPI.transcripts.getByRecordingIdsOwner).mock.calls.length
+    vi.useFakeTimers()
+    try {
+      act(() => {
+        for (const id of ['clean-1', 'shaky-1', 'clean-1']) {
+          for (const callback of domainListeners) callback({ type: 'transcript:verdicts-updated', payload: { recordingIds: [id] } })
+        }
+      })
+      await act(async () => { await vi.advanceTimersByTimeAsync(1499) })
+      expect(window.electronAPI.transcripts.getVerdicts).not.toHaveBeenCalled()
+      await act(async () => { await vi.advanceTimersByTimeAsync(1) })
+      expect(window.electronAPI.transcripts.getVerdicts).toHaveBeenCalledExactlyOnceWith({ recordingIds: ['clean-1', 'shaky-1'] })
+      expect(screen.getByTestId('validity-label')).toHaveTextContent('Transcript in doubt')
+      expect(window.electronAPI.transcripts.getByRecordingIdsOwner).toHaveBeenCalledTimes(fullReads)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('announces flagged transcripts once, on the mount that checked them, and Review opens the filter', async () => {
@@ -979,6 +1029,18 @@ describe('Library — transcript integrity labels', () => {
     expect(integrityHarness.set).toHaveBeenCalledWith('flagged')
   })
 
+  it('keeps the backfill toast scoped to current local recordings', async () => {
+    let settle!: (result: { success: boolean; integrityChecked: number }) => void
+    vi.mocked(window.electronAPI.recordings.backfillDurations).mockReturnValueOnce(new Promise((resolve) => { settle = resolve }))
+    const mounted = render(<MemoryRouter><Library /></MemoryRouter>)
+    await waitFor(() => expect(screen.getByRole('img', { name: 'Transcript timing is wrong' })).toBeInTheDocument())
+    vi.mocked(useUnifiedRecordings).mockReturnValue({ ...useUnifiedRecordings(), recordings: [clean] })
+    mounted.rerender(<MemoryRouter><Library /></MemoryRouter>)
+    await waitFor(() => expect(screen.queryByText('Shaky one')).toBeNull())
+    await act(async () => { settle({ success: true, integrityChecked: 2 }) })
+    expect(toastMock.warning).not.toHaveBeenCalled()
+  })
+
   it('says nothing when the check found no transcript to label', async () => {
     vi.mocked(window.electronAPI.recordings.backfillDurations).mockResolvedValueOnce({ success: true, integrityChecked: 0 })
 
@@ -986,6 +1048,32 @@ describe('Library — transcript integrity labels', () => {
 
     await waitFor(() => expect(window.electronAPI.recordings.backfillDurations).toHaveBeenCalled())
     expect(toastMock.warning).not.toHaveBeenCalled()
+  })
+
+  it('counts held validity once alongside timing problems and shows both under Any problem', async () => {
+    integrityHarness.filter = 'flagged'
+    vi.mocked(window.electronAPI.transcripts.getByRecordingIdsOwner).mockResolvedValue({
+      'clean-1': { ...transcriptsById['clean-1'], validity_status: 'invalid' },
+      'shaky-1': { ...transcriptsById['shaky-1'], validity_status: 'doubtful' },
+    } as any)
+    render(<MemoryRouter><Library /></MemoryRouter>)
+    fireEvent.click(screen.getByRole('button', { name: 'More filters and sorting' }))
+    expect(await screen.findByRole('option', { name: 'Any problem (2)' })).toBeInTheDocument()
+    expect(screen.getByText('Clean one')).toBeInTheDocument()
+    expect(screen.getByText('Shaky one')).toBeInTheDocument()
+  })
+
+  it('counts and filters accepted validity with clean timing', async () => {
+    integrityHarness.filter = 'accepted'
+    vi.mocked(window.electronAPI.transcripts.getByRecordingIdsOwner).mockResolvedValue({
+      ...transcriptsById,
+      'clean-1': { ...transcriptsById['clean-1'], validity_status: 'valid', integrity_accepted_at: '2026-10-04T10:00:00Z' },
+    } as any)
+    render(<MemoryRouter><Library /></MemoryRouter>)
+    fireEvent.click(screen.getByRole('button', { name: 'More filters and sorting' }))
+    expect(await screen.findByRole('option', { name: 'Accepted as is (1)' })).toBeInTheDocument()
+    expect(screen.getByText('Clean one')).toBeInTheDocument()
+    expect(screen.queryByText('Shaky one')).not.toBeInTheDocument()
   })
 
   it('shows only flagged transcripts under the filter, and queues them again on confirmation', async () => {
@@ -999,12 +1087,15 @@ describe('Library — transcript integrity labels', () => {
 
     fireEvent.click(within(bar).getByRole('button', { name: 'Transcribe it again' }))
     expect(window.electronAPI.transcripts.retranscribeMany).not.toHaveBeenCalled()
+    vi.mocked(window.electronAPI.transcripts.retranscribeMany).mockResolvedValueOnce({
+      success: true, data: { queued: 0, skipped: 1, skippedReasons: { personal: 1 } }
+    })
     fireEvent.click(within(bar).getByRole('button', { name: 'Queue 1' }))
 
     await waitFor(() =>
       expect(window.electronAPI.transcripts.retranscribeMany).toHaveBeenCalledWith({ recordingIds: ['shaky-1'] })
     )
-    await waitFor(() => expect(toastMock.success).toHaveBeenCalledWith('Queued 1 transcription', expect.any(String)))
+    await waitFor(() => expect(toastMock.success).toHaveBeenCalledWith('Queued 0 transcriptions', '1 skipped: 1 personal.'))
   })
 
   it('counts and queues only what the search leaves on screen', async () => {

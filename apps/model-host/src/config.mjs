@@ -70,6 +70,12 @@ export const DEFAULTS = {
    * 'never'. Set from HiDock; the gamestation has no settings of its own.
    */
   stepAside: 'games',
+  /**
+   * True when setup installed the decision runtime (transformers, bitsandbytes) for Clef and
+   * Clef-Flash. Without it the host has no /v1/systemone and diarization works as before.
+   */
+  decideRuntime: false,
+  decideWorkerPath: '',
   pythonPath: '',
   workerPath: '',
   ffmpegPath: '',

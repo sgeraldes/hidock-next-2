@@ -72,6 +72,25 @@ export interface PipelineConfig {
   version: 1
   profiles: Record<string, ProfileConfig>
   steps: Partial<Record<TextStepId, StepConfig>>
+  decisions?: DecisionConfig
+}
+
+export const DECISION_ENGINE_IDS = ['clef-flash', 'clef', 'jev', 'haiku', 'gemini-flash'] as const
+export type DecisionEngineId = (typeof DECISION_ENGINE_IDS)[number]
+export const DECISION_PRESETS = ['zero-cost', 'cheapest', 'most-accurate', 'fastest'] as const
+export type DecisionPreset = (typeof DECISION_PRESETS)[number]
+export const DECISION_STEPS = ['identity-tiebreak', 'meeting-match', 'evaluate', 'sample-compare', 'kind-pick'] as const
+export type DecisionStep = (typeof DECISION_STEPS)[number]
+export interface DecisionConfig {
+  preset: DecisionPreset
+  overrides: Partial<Record<DecisionStep, DecisionPreset | DecisionEngineId>>
+}
+export interface DecisionEngineState {
+  id: DecisionEngineId
+  label: string
+  costPerCallUsd: number | null
+  dataLeavesMachine: 'lan' | 'cloud'
+  available: boolean
 }
 
 export function emptyPipelineConfig(): PipelineConfig {
@@ -250,7 +269,7 @@ export function applyStepDraft(config: PipelineConfig, step: TextStepId, primary
     }
   }
   for (const id of Object.keys(profiles)) if (!used.has(id)) delete profiles[id]
-  return { version: 1, profiles, steps }
+  return { ...config, version: 1, profiles, steps }
 }
 
 /** The measured time and cost of one step over a window of the call ledger (read by the Pipeline page). */
@@ -275,6 +294,7 @@ export interface PipelineSettingsState {
   config: PipelineConfig
   harnesses: HarnessState[]
   stats: Record<string, StepStats>
+  decisionEngines?: DecisionEngineState[]
 }
 
 export interface SaveStepArgs {

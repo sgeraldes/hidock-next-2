@@ -4,10 +4,30 @@ Each entry is one day of merged work. The Releases page in Settings reads this f
 
 ## 2026-10-04 | The gamestation only helps, and gets out of the way
 
+- Paste files, screenshots, text and links into Library from anywhere outside an editor, or use the header's New menu to paste, import a file or start a note; videos keep their original file and link to extracted audio for transcription.
+
 The Model Host on the gamestation is now a small tray icon and nothing else to set up there. HiDock
 pairs with it, gives it the Hugging Face token and decides when it steps aside.
 
 ### Changes
+
+- **Record meetings on your PC.** New > Record opens a bar that stays across pages, with separate
+  microphone and system levels. Stereo WebM keeps mic on the left and system audio on the right;
+  saved and recovered recordings enter the Library through the file-import path.
+
+- **Listen while labeling.** Reference labels include the original local audio with play/pause,
+  seeking, 15-second jumps and a Space shortcut; unavailable audio never blocks labeling.
+  A clear Library-category question now includes calendar title and attendees, recording date,
+  duration, summary and full transcript; the engines' excerpt is collapsed and their answers stay
+  hidden. "Don't know / not applicable" counts as labeled and is excluded from engine accuracy.
+- **Reference labels for recording kinds.** Settings > Pipeline keeps a sample of up to 40 valid
+  recordings for your own labels, with keyboard choices and progress, ready for engine comparisons.
+- **A fresh restore point before database updates.** Schema migrations now verify a current backup,
+  even when today's daily backup already exists. The newest three migration backups are kept.
+
+- **Decision engines and presets.** Pipeline settings choose Clef Flash, Clef, Jev, Haiku or Gemini
+  Flash for five decision steps, with a global preset and per-step overrides. Presets fall back when
+  an engine cannot answer, and each attempt is recorded in the call ledger.
 
 - **Installing on the gamestation is a double click.** Model Host 0.3.0 asks no questions: it
   installs its runtime in a console that closes by itself, starts a tray icon and starts it again
@@ -47,6 +67,11 @@ pairs with it, gives it the Hugging Face token and decides when it steps aside.
   Windows gave it the 32-bit PowerShell, which cannot see the NVIDIA driver; 0.3.0 and 0.3.1
   therefore installed the CPU build. 0.3.2 runs the 64-bit PowerShell. Its window also closes by
   itself when the install worked, and stays open only when setup failed, to show the error.
+- **Clef and Clef-Flash on the gamestation (Model Host 0.4.0).** The host answers decisions with
+  Cloudflare's decision models, using the same questions and answers as Jev: Clef-Flash (9B)
+  as published, Clef (27B) in 4 bits so it fits the RTX 4090. HiDock picks the model in each
+  request. A model downloads to the gamestation the first time it is asked for (19 GB and 55 GB)
+  and leaves the GPU after ten minutes without requests. No HiDock feature uses it yet.
 
 ## 2026-10-03 | Attendees from Outlook, and speakers that know who named them
 

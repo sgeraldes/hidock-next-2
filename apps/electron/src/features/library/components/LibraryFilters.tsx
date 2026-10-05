@@ -26,7 +26,8 @@ import type {
   SourceTypeFilter
 } from '@/features/library/utils/sourceType'
 import { DURATION_PRESET_LABELS, type DurationPreset } from '@/features/library/utils/durationFilter'
-import { ISSUE_ORDER, ISSUE_TAGS, integrityFilterLabel, isIntegrityFilter } from '@/features/library/utils/transcriptIntegrity'
+import { ISSUE_ORDER, ISSUE_TAGS, VALIDITY_FILTER_ORDER, integrityFilterLabel, isIntegrityFilter } from '@/features/library/utils/transcriptIntegrity'
+import { VALIDITY_LABELS } from '@/features/library/utils/transcriptValidity'
 import { AUDIO_FILTERS, isAudioFilter } from '@/features/library/utils/audioCheck'
 import { CONTEXT_FILTERS, KIND_FILTERS, STARS_FILTERS, WARNING_FILTERS } from '@/features/library/utils/evaluation'
 
@@ -200,7 +201,10 @@ export function LibraryFilters({
     }
   }
   const showAudio = !!onAudioFilterChange
-  const showIntegrity = !!onIntegrityFilterChange && ((integrityCounts.flagged ?? 0) > 0 || (integrityCounts.accepted ?? 0) > 0 || integrityFilter !== 'all')
+  const heldCount = VALIDITY_FILTER_ORDER.reduce((sum, status) => sum + (integrityCounts[`validity:${status}`] ?? 0), 0)
+  const showIntegrity =
+    !!onIntegrityFilterChange &&
+    ((integrityCounts.flagged ?? 0) > 0 || (integrityCounts.accepted ?? 0) > 0 || heldCount > 0 || integrityFilter !== 'all')
 
   return (
     <div className="space-y-2 pt-3">
@@ -356,6 +360,9 @@ export function LibraryFilters({
                   <select value={integrityFilter} onChange={(event) => onIntegrityFilterChange?.(event.target.value)} className="h-8 w-full rounded-md border border-input bg-background px-3 py-1 text-xs" aria-label="Filter by transcript problems">
                     <option value="all">Any transcript</option>
                     <option value="flagged">Any problem ({integrityCounts.flagged ?? 0})</option>
+                    {VALIDITY_FILTER_ORDER.filter((status) => (integrityCounts[`validity:${status}`] ?? 0) > 0 || integrityFilter === `validity:${status}`).map((status) => (
+                      <option key={status} value={`validity:${status}`}>{VALIDITY_LABELS[status].chip} ({integrityCounts[`validity:${status}`] ?? 0})</option>
+                    ))}
                     {ISSUE_ORDER.filter((code) => (integrityCounts[`issue:${code}`] ?? 0) > 0 || integrityFilter === `issue:${code}`).map((code) => (
                       <option key={code} value={`issue:${code}`}>{ISSUE_TAGS[code]} ({integrityCounts[`issue:${code}`] ?? 0})</option>
                     ))}

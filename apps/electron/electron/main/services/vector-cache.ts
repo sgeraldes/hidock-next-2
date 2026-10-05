@@ -30,6 +30,7 @@ import { createHash } from 'crypto'
 import { closeSync, existsSync, mkdirSync, openSync, readSync, renameSync, writeSync } from 'fs'
 import { mkdir, open, rename, rm, type FileHandle } from 'fs/promises'
 import { dirname, join } from 'path'
+import { yieldToEventLoop } from './event-loop'
 
 /**
  * Electron's Node caps a single Buffer at 2^31-1 bytes — a >2.1 GB float
@@ -41,6 +42,7 @@ const WRITE_SLICE_BYTES = 64 * 1024 * 1024 // 64 MB staging buffer per flush
 const READ_CHUNK_BYTES = 512 * 1024 * 1024 // 512 MB per matrix chunk buffer
 const ASYNC_WRITE_SLICE_BYTES = 8 * 1024 * 1024
 const ASYNC_READ_CHUNK_BYTES = 32 * 1024 * 1024
+const ASYNC_READ_ROW_BATCH = 1024
 const cacheWriteQueues = new Map<string, Promise<{ totalCount: number; fingerprint: string }>>()
 const cacheWriteGenerations = new Map<string, number>()
 let asyncWriteSequence = 0
@@ -472,7 +474,8 @@ async function writePreparedVectorCache(
  */
 export async function readVectorCacheAsync(
   filePath: string,
-  providerFilter?: string
+  providerFilter?: string,
+  expectedCount?: number
 ): Promise<VectorCacheData | null> {
   let handle: FileHandle
   try {
@@ -490,6 +493,13 @@ export async function readVectorCacheAsync(
     if (!(await readExactly(handle, headerBuf, 4))) return null
     const header = JSON.parse(headerBuf.toString('utf-8')) as CacheHeader
     if (header.version !== CACHE_VERSION || !Array.isArray(header.groups)) return null
+
+    const expectedRows = providerFilter
+      ? header.groups.filter((group) => group.provider === providerFilter).reduce((sum, group) => sum + group.count, 0)
+      : header.totalCount
+    // Reject the same count mismatch before reading gigabytes that the store
+    // would discard. SQLite remains authoritative, including per-row checks.
+    if (expectedCount !== undefined && expectedRows !== expectedCount) return null
 
     const rows: VectorCacheRow[] = []
     const buffers: Buffer[] = []
@@ -514,10 +524,14 @@ export async function readVectorCacheAsync(
         if (p + len > group.idsLen) return null
         ids.push(idsBuf.subarray(p, p + len).toString('utf-8'))
         p += len
+        if ((i + 1) % ASYNC_READ_ROW_BATCH === 0) await yieldToEventLoop()
       }
+      if (group.count % ASYNC_READ_ROW_BATCH !== 0) await yieldToEventLoop()
 
       const rowBytes = group.dims * 4
-      const rowsPerChunk = Math.max(1, Math.floor(ASYNC_READ_CHUNK_BYTES / rowBytes))
+      // Bound view construction as well as bytes: small dimensions must not
+      // turn a bounded disk read into an unbounded synchronous row loop.
+      const rowsPerChunk = Math.min(ASYNC_READ_ROW_BATCH, Math.max(1, Math.floor(ASYNC_READ_CHUNK_BYTES / rowBytes)))
       let rowsDone = 0
       let position = offset + group.idsLen
       while (rowsDone < group.count) {
@@ -536,13 +550,10 @@ export async function readVectorCacheAsync(
         }
         rowsDone += count
         position += chunk.length
-        await new Promise<void>((resolve) => setImmediate(resolve))
+        await yieldToEventLoop()
       }
       offset = position
     }
-    const expectedRows = providerFilter
-      ? header.groups.filter((group) => group.provider === providerFilter).reduce((sum, group) => sum + group.count, 0)
-      : header.totalCount
     if (rows.length !== expectedRows) return null
     return { rows, buffers, fingerprint: header.fingerprint, groups: header.groups }
   } catch {

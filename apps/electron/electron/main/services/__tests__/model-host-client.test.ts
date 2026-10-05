@@ -14,6 +14,8 @@ import {
   getModelHostDiagnostics,
   repairModelHostRuntime,
   sendModelHostUpdate,
+  decideOnModelHost,
+  ModelHostDecisionError,
 } from '../model-host-client'
 
 const HEALTHY = {
@@ -205,6 +207,41 @@ describe('looking after the host from HiDock', () => {
     const fetchFn = vi.fn()
     await expect(sendModelHostUpdate({ url: 'x:1', token: 'tok' }, 'C:\\Windows\\notepad.exe', fetchFn as never)).rejects.toThrow(/installer/)
     expect(fetchFn).not.toHaveBeenCalled()
+  })
+})
+
+describe('decisions on the host (Clef and Clef-Flash)', () => {
+  const request = {
+    model: 'clef-flash' as const,
+    state: 'orders are blocked',
+    questions: { outage: { type: 'noul' as const, instructions: 'Is a service down?' } },
+  }
+  const ANSWER = { model: 'clef-flash', answers: { outage: { type: 'noul', noul: 0.97 } }, usage: { input_tokens: 40, output_tokens: 0 } }
+
+  it('posts the Jev body to the host and returns its answer', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(jsonResponse(ANSWER))
+    const answer = await decideOnModelHost({ url: 'x:1', token: 'tok' }, request, fetchFn as never)
+    expect(answer.answers.outage).toEqual({ type: 'noul', noul: 0.97 })
+    const [url, init] = calls(fetchFn)[0]
+    expect(url).toBe('http://x:1/v1/systemone')
+    expect(init.headers.authorization).toBe('Bearer tok')
+    expect(init.headers['content-type']).toBe('application/json')
+    expect(JSON.parse(init.body)).toEqual(request)
+  })
+
+  it('keeps the status and the download progress when the model is not on the host yet', async () => {
+    const decide = { 'clef-flash': { state: 'downloading', bytes: 5, totalBytes: 10 } }
+    const fetchFn = vi.fn().mockResolvedValue(jsonResponse({ error: 'clef-flash is downloading to this host', decide }, 503))
+    const error = await decideOnModelHost({ url: 'x:1', token: 'tok' }, request, fetchFn as never).catch((e) => e)
+    expect(error).toBeInstanceOf(ModelHostDecisionError)
+    expect(error.status).toBe(503)
+    expect(error.decide).toEqual(decide)
+    expect(error.message).toMatch(/downloading/)
+  })
+
+  it('says plainly when the host has no decision models', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(jsonResponse({ error: 'no such route' }, 404))
+    await expect(decideOnModelHost({ url: 'x:1', token: 'tok' }, request, fetchFn as never)).rejects.toThrow(/0\.4\.0/)
   })
 })
 

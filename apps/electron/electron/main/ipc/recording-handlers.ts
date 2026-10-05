@@ -1,3 +1,4 @@
+import { importExternalRecording } from '../services/external-recording-import'
 import { ipcMain, dialog, BrowserWindow } from 'electron'
 import { RECORDING_AUDIO_EXTENSIONS } from '../../../src/shared/audio-extensions'
 import { rankRecordingsByMeetingCoverage } from '../services/recording-match-scoring'
@@ -387,7 +388,7 @@ export function registerRecordingHandlers(): void {
       // time score gave a lunch and a working session the same 72%). Stored per
       // candidate set, so reopening the recording does not ask again.
       let jevMatch: MeetingMatch | null = null
-      const jevDeps = confirmedMeetingId ? null : jevMeetingMatchDeps()
+      const jevDeps = confirmedMeetingId ? null : await jevMeetingMatchDeps()
       if (jevDeps && recordingContext.hasTranscript) {
         try {
           jevMatch = await matchMeetingWithJev(recording.id, toMatchContext(recording, list), toMatchCandidates(list), jevDeps)
@@ -568,74 +569,8 @@ export function registerRecordingHandlers(): void {
     }
   })
 
-  // Add external recording by file path (used by drag-and-drop import)
-  ipcMain.handle('recordings:addExternalByPath', async (_, filePath: string): Promise<{ success: boolean; recording?: Recording; error?: string }> => {
-    try {
-      // Validate file extension
-      const allowedExtensions: readonly string[] = RECORDING_AUDIO_EXTENSIONS
-      const fileExtension = extname(filePath).toLowerCase()
-      if (!allowedExtensions.includes(fileExtension)) {
-        return { success: false, error: `Unsupported file type: ${fileExtension}. Supported: ${allowedExtensions.join(', ')}` }
-      }
-
-      // Check if file exists
-      if (!existsSync(filePath)) {
-        return { success: false, error: 'File does not exist' }
-      }
-
-      // Get file stats
-      const stats = statSync(filePath)
-      const originalFilename = basename(filePath)
-
-      // Generate a unique filename for the recordings folder
-      const recordingsPath = getRecordingsPath()
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').split('T')
-      const newFilename = `external-${timestamp[0]}-${timestamp[1].substring(0, 8)}${fileExtension}`
-      const destinationPath = join(recordingsPath, newFilename)
-
-      // Copy the file to the recordings folder
-      copyFileSync(filePath, destinationPath)
-
-      // Create database entry
-      const recordingId = randomUUID()
-
-      const recording: Omit<Recording, 'created_at'> = {
-        id: recordingId,
-        filename: newFilename,
-        original_filename: originalFilename,
-        file_path: destinationPath,
-        file_size: stats.size,
-        duration_seconds: undefined,
-        date_recorded: parseHiDockFilenameDateIso(originalFilename) ?? stats.mtime.toISOString(),
-        meeting_id: undefined,
-        correlation_confidence: undefined,
-        correlation_method: undefined,
-        status: 'ready',
-        location: 'local-only',
-        transcription_status: 'none',
-        on_device: 0,
-        device_last_seen: undefined,
-        on_local: 1,
-        source: 'external',
-        is_imported: 1
-      }
-
-      insertRecording(recording)
-
-      const insertedRecording = getRecordingById(recordingId)
-      if (!insertedRecording) {
-        return { success: false, error: 'Failed to retrieve recording after insert' }
-      }
-
-      return { success: true, recording: insertedRecording }
-    } catch (error) {
-      console.error('recordings:addExternalByPath error:', error)
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error occurred'
-      }
-    }
-  })
+  // Shared by drag-and-drop, paste imports and the PC recorder.
+  ipcMain.handle('recordings:addExternalByPath', async (_, filePath: string) => importExternalRecording(filePath))
 
   // Select a meeting for a recording (manual linking from dialog)
   ipcMain.handle('recordings:selectMeeting', async (_, recordingId: string, meetingId: string | null) => {
@@ -682,8 +617,8 @@ export function registerRecordingHandlers(): void {
         }
       }
 
-      const queueItemId = addToQueue(recording.id)
-      if (!queueItemId) return false
+      const queueItemId = addToQueue(recording.id, undefined, { ownerRequested: priority === true })
+      if (!queueItemId) return { success: false, error: 'Recording is personal, deleted, missing, value-excluded, or eligibility could not be checked.' }
       if (priority) markUserPriority(recording.id)
       // spec-005: Trigger immediate queue processing after adding
       processQueueManually()
@@ -731,7 +666,7 @@ export function registerRecordingHandlers(): void {
           return { success: false, error: `Recording not found: ${recordingId}. Try refreshing the library.` }
         }
 
-        const queueItemId = addToQueue(recording.id, provider)
+        const queueItemId = addToQueue(recording.id, provider, { ownerRequested: true })
         if (!queueItemId) return { success: false, error: 'Recording is not eligible for transcription' }
         markUserPriority(recording.id) // explicit single-recording reprocess
         processQueueManually()
@@ -768,7 +703,8 @@ export function registerRecordingHandlers(): void {
         return { success: false, error: `Recording not found: ${result.data.recordingId}` }
       }
 
-      const queueItemId = addToQueue(recording.id)
+      const queueItemId = addToQueue(recording.id, undefined, { ownerRequested: true })
+      if (!queueItemId) return { success: false, error: 'Recording is personal, deleted, missing, or eligibility could not be checked.' }
       markUserPriority(recording.id) // explicit user retry jumps the backlog
       updateRecordingTranscriptionStatus(recording.id, 'pending')
       processQueueManually()
@@ -840,7 +776,7 @@ export function registerRecordingHandlers(): void {
   // Bring duration_seconds in line with the audio on disk, then rate what the
   // corrected lengths now allow. Measures each file once (see audio-duration.ts)
   // and remembers it, so this stays cheap on every Library mount.
-  ipcMain.handle('recordings:backfillDurations', async (): Promise<{ success: boolean; scanned?: number; updated?: number; measured?: number; truncated?: number; rerateable?: number; markedLowValue?: number; markedByDuration?: number; integrityChecked?: number; error?: string }> => {
+  ipcMain.handle('recordings:backfillDurations', async (): Promise<{ success: boolean; scanned?: number; updated?: number; measured?: number; truncated?: number; rerateable?: number; markedLowValue?: number; markedByDuration?: number; integrityChecked?: number; validityChecked?: number; error?: string }> => {
     try {
       const result = backfillRecordingDurations()
       // Classify AFTER the duration backfill so both classifiers can use the
@@ -856,8 +792,9 @@ export function registerRecordingHandlers(): void {
       // Then the validity verdict, which reads the integrity just settled: a
       // transcript that is invalid, in doubt or incomplete is not categorized
       // and nothing is built on it. Library-wide and idempotent.
+      let validityChecked = 0
       try {
-        await backfillTranscriptValidity()
+        validityChecked = (await backfillTranscriptValidity()).checked
         syncTrustVerdicts()
         // Stars, kind and context follow the validity verdicts just settled.
         await recomputeAudioWarnings()
@@ -870,6 +807,7 @@ export function registerRecordingHandlers(): void {
         markedLowValue: quality.markedLowValue,
         markedByDuration: byDuration.marked,
         integrityChecked: integrity.checked,
+        validityChecked,
       }
     } catch (error) {
       console.error('recordings:backfillDurations error:', error)

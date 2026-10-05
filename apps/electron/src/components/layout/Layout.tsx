@@ -18,6 +18,8 @@ import {
   PanelLeftOpen
 } from 'lucide-react'
 import { TitleBar } from '@/components/layout/TitleBar'
+import { RecordingBar } from '@/components/layout/PcRecording'
+import { installPcRecorderCloseGuard } from '@/store/usePcRecorderStore'
 import { showBrandHorizontalDivider } from '@/components/layout/Brand'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
@@ -174,6 +176,7 @@ export function RailTooltip({ collapsed, label, children }: { collapsed: boolean
 }
 
 export function Layout({ children }: LayoutProps) {
+  useEffect(() => installPcRecorderCloseGuard(), [])
   const location = useLocation()
   // Track I: resolved feature state drives nav filtering/graying below.
   const resolvedFeatures = useFeatureStore((s) => s.resolved)
@@ -317,6 +320,7 @@ export function Layout({ children }: LayoutProps) {
       {/* Office-365-style unified titlebar (window chrome merged with the app). The
           sidebar-collapse handle lives on the sidebar's right edge (below), not here. */}
       <TitleBar sidebarOpen={sidebarOpen} />
+      <RecordingBar />
 
       {/* Divider row under the titlebar. Rendered as its own row BELOW the 40px
           titlebar band so the Windows native-controls overlay can't paint over its

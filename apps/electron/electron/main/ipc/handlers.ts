@@ -3,6 +3,7 @@ import { registerDatabaseHandlers } from './database-handlers'
 import { registerCalendarHandlers } from './calendar-handlers'
 import { registerStorageHandlers } from './storage-handlers'
 import { registerRecordingHandlers } from './recording-handlers'
+import { registerPcRecorderHandlers } from './pc-recorder-handlers'
 import { registerRAGHandlers } from './rag-handlers'
 import { registerAppHandlers } from './app-handlers'
 import { registerContactsHandlers } from './contacts-handlers'
@@ -69,6 +70,7 @@ export function registerIpcHandlers(): void {
   registerCalendarHandlers()
   registerStorageHandlers()
   registerRecordingHandlers()
+  registerPcRecorderHandlers()
   registerRAGHandlers()
   registerAppHandlers()
   registerContactsHandlers()

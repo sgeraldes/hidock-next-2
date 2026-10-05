@@ -9,12 +9,16 @@ import { AlertTriangle, CheckCircle2, RotateCcw, XOctagon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import type { Transcript } from '@/types'
 import { ISSUE_TAGS, integrityIssues, integrityLabel } from '@/features/library/utils/transcriptIntegrity'
+import { VALIDITY_LABELS, formatTranscriptionCost, heldValidity, validityReasons } from '@/features/library/utils/transcriptValidity'
 import { isJumpableLineIssue, type LineIssueCode } from '@/shared/transcript-line-issues'
 import { appLocale } from '@/lib/locale'
 
 interface TranscriptIntegrityPanelProps {
   recordingId: string
-  transcript: Pick<Transcript, 'integrity_status' | 'integrity_json' | 'integrity_accepted_at'>
+  transcript: Pick<Transcript, 'integrity_status' | 'integrity_json' | 'integrity_accepted_at'> &
+    Partial<Pick<Transcript, 'validity_status' | 'validity_json'>>
+  /** Length of the recording, for the cost of transcribing it again. */
+  durationSeconds?: number
   /** Queue a new transcription; absent when transcription is unavailable. */
   onRetranscribe?: () => void
   /** Called after the owner accepted or un-accepted, so the caller can reload. */
@@ -23,12 +27,24 @@ interface TranscriptIntegrityPanelProps {
   onJump?: (code: LineIssueCode) => void
 }
 
-export function TranscriptIntegrityPanel({ recordingId, transcript, onRetranscribe, onChanged, onJump }: TranscriptIntegrityPanelProps) {
+export function TranscriptIntegrityPanel({ recordingId, transcript, durationSeconds, onRetranscribe, onChanged, onJump }: TranscriptIntegrityPanelProps) {
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
   const label = integrityLabel(transcript)
-  if (label === 'ok' || label === 'unchecked') return null
+  const held = label === 'broken' ? null : heldValidity(transcript)
+  const retranscribeLabel = durationSeconds ? `Transcribe again (${formatTranscriptionCost(durationSeconds)})` : 'Transcribe again'
+  if ((label === 'ok' || label === 'unchecked') && !held) return null
   const issues = integrityIssues(transcript)
+  const coveredCodes = ['integrity']
+  for (const issue of issues) {
+    if (issue.code === 'untimed_lines') coveredCodes.push('no_times')
+    if (issue.code === 'repeated_start' || issue.code === 'backwards_start') coveredCodes.push('timestamps_consistently_wrong')
+    if (issue.code === 'too_many_words' || issue.code === 'words_beyond_sound') coveredCodes.push('more_words_than_audio')
+    if (issue.code === 'text_over_noise') coveredCodes.push('text_without_audio', 'much_text_without_audio')
+  }
+  const extraReasons = validityReasons(transcript, coveredCodes).filter((reason) =>
+    !issues.some((issue) => issue.detail === reason || ISSUE_TAGS[issue.code] === reason)
+  )
 
   const setAccepted = async (accepted: boolean) => {
     setBusy(true)
@@ -44,13 +60,57 @@ export function TranscriptIntegrityPanel({ recordingId, transcript, onRetranscri
     }
   }
 
+  // The validity verdict, when the integrity check itself found nothing to say.
+  if ((label === 'ok' || label === 'unchecked') && held) {
+    const { label: heading, detail } = VALIDITY_LABELS[held]
+    const reasons = validityReasons(transcript)
+    const red = held === 'invalid'
+    const ValidityIcon = red ? XOctagon : AlertTriangle
+    return (
+      <div
+        className={`mb-3 space-y-2 rounded-md border px-3 py-2 text-xs ${red ? 'border-red-500/40 bg-red-500/5' : 'border-amber-500/40 bg-amber-500/5'}`}
+        data-testid="transcript-validity"
+        data-validity={held}
+        role="status"
+      >
+        <div className="flex items-start gap-2">
+          <ValidityIcon className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${red ? 'text-red-600' : 'text-amber-600'}`} aria-hidden="true" />
+          <div className="space-y-0.5">
+            <p className="text-foreground">{heading}.</p>
+            <p className="text-muted-foreground">{detail}</p>
+          </div>
+        </div>
+        {reasons.length > 0 && (
+          <ul className="list-disc space-y-0.5 pl-5 text-muted-foreground" aria-label="Why">
+            {reasons.map((reason) => (
+              <li key={reason}>{reason}</li>
+            ))}
+          </ul>
+        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {onRetranscribe && (
+            <Button size="sm" variant="outline" className="h-7 text-xs" disabled={busy} onClick={onRetranscribe}>
+              <RotateCcw className="mr-1 h-3 w-3" aria-hidden="true" /> {retranscribeLabel}
+            </Button>
+          )}
+          <Button size="sm" variant="ghost" className="h-7 text-xs" disabled={busy} onClick={() => void setAccepted(true)}>
+            Accept as is
+          </Button>
+          {failure && <span className="text-destructive">{failure}</span>}
+        </div>
+      </div>
+    )
+  }
+
   if (label === 'accepted') {
     const when = transcript.integrity_accepted_at ? new Date(transcript.integrity_accepted_at).toLocaleDateString(appLocale()) : ''
     return (
       <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-xs text-muted-foreground" data-testid="transcript-integrity" data-integrity="accepted">
         <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" aria-hidden="true" />
         <span>
-          Accepted as is{when ? ` on ${when}` : ''}, with {issues.length === 1 ? 'one problem' : `${issues.length} problems`} found in its timing.
+          Accepted as is{when ? ` on ${when}` : ''}, {issues.length > 0
+            ? `with ${issues.length === 1 ? 'one problem' : `${issues.length} problems`} found in its timing.`
+            : 'though the audio check did not match the text.'}
         </span>
         <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" disabled={busy} onClick={() => void setAccepted(false)}>
           Undo
@@ -69,6 +129,16 @@ export function TranscriptIntegrityPanel({ recordingId, transcript, onRetranscri
       data-integrity={label}
       role="status"
     >
+      {label === 'suspect' && held && (
+        <div data-testid="transcript-validity" data-validity={held} className="space-y-1">
+          <p className="text-foreground">{VALIDITY_LABELS[held].label}.</p>
+          {extraReasons.length > 0 && (
+            <ul className="list-disc space-y-0.5 pl-5 text-muted-foreground" aria-label="Why">
+              {extraReasons.map((reason) => <li key={reason}>{reason}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
       <div className="flex items-start gap-2">
         <Icon className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${broken ? 'text-red-600' : 'text-amber-600'}`} aria-hidden="true" />
         <p className="text-foreground">
@@ -105,7 +175,7 @@ export function TranscriptIntegrityPanel({ recordingId, transcript, onRetranscri
       <div className="flex flex-wrap items-center gap-2">
         {onRetranscribe && (
           <Button size="sm" variant="outline" className="h-7 text-xs" disabled={busy} onClick={onRetranscribe}>
-            <RotateCcw className="mr-1 h-3 w-3" aria-hidden="true" /> Transcribe again
+            <RotateCcw className="mr-1 h-3 w-3" aria-hidden="true" /> {retranscribeLabel}
           </Button>
         )}
         <Button size="sm" variant="ghost" className="h-7 text-xs" disabled={busy} onClick={() => void setAccepted(true)}>

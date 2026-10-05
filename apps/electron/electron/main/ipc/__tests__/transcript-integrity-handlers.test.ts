@@ -8,6 +8,7 @@ vi.mock('electron', () => ({
 
 const db = vi.hoisted(() => ({
   addToQueue: vi.fn(),
+  getQueueItems: vi.fn(),
   resolveRecordingId: vi.fn(),
   setTranscriptIntegrityAccepted: vi.fn(),
 }))
@@ -20,10 +21,10 @@ const eligibility = vi.hoisted(() => ({ excluded: new Set<string>(), failClosed:
 vi.mock('../../services/recording-eligibility', () => ({
   // Re-transcription is the way out of a transcript that is not valid, so the
   // handler asks the transcription boundary, not the AI-surface one.
-  filterTranscribableRecordingIds: (ids: Iterable<string>) =>
+  filterTranscribableRecordingIds: (ids: Iterable<string>, options?: { ignoreValueExclusion?: boolean }) =>
     eligibility.failClosed
       ? { eligible: new Set<string>(), failClosed: true }
-      : { eligible: new Set([...ids].filter((id) => !eligibility.excluded.has(id))), failClosed: false },
+      : { eligible: new Set([...ids].filter((id) => options?.ignoreValueExclusion || !eligibility.excluded.has(id))), failClosed: false },
 }))
 
 import { registerTranscriptIntegrityHandlers } from '../transcript-integrity-handlers'
@@ -36,6 +37,7 @@ beforeEach(() => {
   registerTranscriptIntegrityHandlers()
   eligibility.excluded = new Set()
   eligibility.failClosed = false
+  db.getQueueItems.mockReturnValue([])
   db.resolveRecordingId.mockImplementation((id: string) => (id.startsWith('missing') ? undefined : { id }))
 })
 
@@ -45,12 +47,12 @@ describe('transcripts:retranscribeMany', () => {
 
     const result = await call('transcripts:retranscribeMany', { recordingIds: ['a', 'b', 'a', 'personal', 'missing-1'] })
 
-    expect(result).toEqual({ success: true, data: { queued: 2, skipped: 2 } })
+    expect(result).toEqual({ success: true, data: { queued: 2, skipped: 2, skippedReasons: { ineligible: 1, missing: 1 } } })
     expect(db.addToQueue).toHaveBeenCalledTimes(3)
     expect(transcription.processQueueManually).toHaveBeenCalledTimes(1)
   })
 
-  it('does not count a recording rated too low to send as queued', async () => {
+  it('queues a garbage-rated recording with an explicit owner override', async () => {
     // Review of PR #32: addToQueue accepts a value-excluded recording, and the
     // provider boundary then cancels it; the toast said "Queued" regardless.
     db.addToQueue.mockImplementation((id: string) => `q-${id}`)
@@ -58,24 +60,34 @@ describe('transcripts:retranscribeMany', () => {
 
     const result = await call('transcripts:retranscribeMany', { recordingIds: ['a', 'garbage-1'] })
 
-    expect(result.data).toEqual({ queued: 1, skipped: 1 })
-    expect(db.addToQueue).toHaveBeenCalledTimes(1)
-    expect(db.addToQueue).toHaveBeenCalledWith('a')
+    expect(result.data).toEqual({ queued: 2, skipped: 0, skippedReasons: {} })
+    expect(db.addToQueue).toHaveBeenCalledTimes(2)
+    expect(db.addToQueue).toHaveBeenCalledWith('garbage-1', undefined, { ownerRequested: true })
   })
 
   it('queues nothing when eligibility cannot be read', async () => {
     db.addToQueue.mockImplementation((id: string) => `q-${id}`)
     eligibility.failClosed = true
     const result = await call('transcripts:retranscribeMany', { recordingIds: ['a', 'b'] })
-    expect(result.data).toEqual({ queued: 0, skipped: 2 })
+    expect(result.data).toEqual({ queued: 0, skipped: 2, skippedReasons: { lookup_error: 2 } })
     expect(db.addToQueue).not.toHaveBeenCalled()
   })
 
   it('does not start the queue when nothing was queued', async () => {
     db.addToQueue.mockReturnValue('')
     const result = await call('transcripts:retranscribeMany', { recordingIds: ['a'] })
-    expect(result.data).toEqual({ queued: 0, skipped: 1 })
+    expect(result.data).toEqual({ queued: 0, skipped: 1, skippedReasons: { ineligible: 1 } })
     expect(transcription.processQueueManually).not.toHaveBeenCalled()
+  })
+
+  it('reports personal, deleted, missing and already queued separately', async () => {
+    db.resolveRecordingId.mockImplementation((id: string) => id === 'missing' ? undefined : {
+      id, personal: id === 'personal' ? 1 : 0, deleted_at: id === 'deleted' ? '2026-10-04' : null
+    })
+    db.getQueueItems.mockReturnValue([{ recording_id: 'waiting', status: 'pending' }])
+    const result = await call('transcripts:retranscribeMany', { recordingIds: ['personal', 'deleted', 'missing', 'waiting'] })
+    expect(result.data).toEqual({ queued: 0, skipped: 4, skippedReasons: { personal: 1, deleted: 1, missing: 1, already_queued: 1 } })
+    expect(db.addToQueue).not.toHaveBeenCalled()
   })
 
   it('refuses a malformed request', async () => {

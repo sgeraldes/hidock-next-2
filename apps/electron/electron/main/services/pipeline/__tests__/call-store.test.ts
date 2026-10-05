@@ -22,6 +22,7 @@ import {
   getCallsForRecording,
   getRecentCalls,
   getStepStats,
+  getDecisionLatencies,
   installCallStore,
   setCallSink,
   writeCall,
@@ -88,6 +89,13 @@ describe('pipeline call ledger', () => {
       run('DELETE FROM recordings')
     })
     installCallStore(db)
+  })
+
+  it('reads per-engine median latency from persisted completed decision calls', () => {
+    for (const durationMs of [30, 10, 20, 100]) writeCall(record({ route: 'decision:clef', durationMs }))
+    writeCall(record({ route: 'decision:clef', durationMs: 1000, status: 'failed' }))
+    writeCall(record({ route: 'decision:haiku', durationMs: 5 }))
+    expect(getDecisionLatencies()).toEqual({ clef: 25, haiku: 5 })
   })
 
   it('the migration creates the table and the schema version is the one in database.ts', () => {

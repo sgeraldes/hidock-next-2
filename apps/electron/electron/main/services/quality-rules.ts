@@ -43,6 +43,8 @@ export interface QualityConfig {
   meetingAutoLinkMargin: number
   /** Live transcription: a channel whose level stays under this RMS is not sent. */
   liveSilenceRms: number
+  /** Doubtful transcripts sampled per day (transcript-sampler.ts); about 0.01 USD each. 0 stops sampling. */
+  samplesPerDay: number
 }
 
 export type QualityKey = keyof QualityConfig
@@ -60,7 +62,8 @@ export const DEFAULT_QUALITY_RULES: Readonly<QualityConfig> = Object.freeze({
   retranscribeScore: 60,
   meetingAutoLinkProbability: 0.7,
   meetingAutoLinkMargin: 0.25,
-  liveSilenceRms: 58
+  liveSilenceRms: 58,
+  samplesPerDay: 25
 })
 
 /** Allowed range per key (src/shared/quality-bounds.ts, shared with the Settings page). */

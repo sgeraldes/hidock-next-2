@@ -85,7 +85,9 @@ describe.runIf(process.platform === 'win32' && existsSync(trayExe))('the tray ic
     )
     try {
       expect(await waitFor(() => healthy(port), 10_000)).toBe(true)
-      const node = serviceNodeIn(app)
+      // WMI can list a process a moment after it already answers on its port (CI, 4-oct).
+      let node = 0
+      await waitFor(() => (node = serviceNodeIn(app)) > 0, 5000)
       expect(node).toBeGreaterThan(0)
       process.kill(node)
       expect(await waitFor(async () => !(await healthy(port)), 5000)).toBe(true)

@@ -72,6 +72,7 @@ describe('TranscriptIntegrityPanel', () => {
       />
     )
     expect(screen.getByTestId('transcript-integrity')).toHaveAttribute('data-integrity', 'accepted')
+    expect(screen.getByText(/with one problem found in its timing/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
     await waitFor(() => expect(setIntegrityAccepted).toHaveBeenCalledWith({ recordingId: 'r1', accepted: false }))
   })
@@ -90,4 +91,15 @@ describe('TranscriptIntegrityPanel', () => {
     expect(await screen.findByText('This recording has no transcript')).toBeInTheDocument()
     expect(onChanged).not.toHaveBeenCalled()
   })
+})
+
+
+it('keeps accepted validity and Undo after timing and validity recompute clean', async () => {
+  const onChanged = vi.fn()
+  render(<TranscriptIntegrityPanel recordingId="r1" transcript={{ integrity_status: 'ok', integrity_json: issues([]), validity_status: 'valid', integrity_accepted_at: '2026-10-04T10:00:00Z' }} onChanged={onChanged} />)
+  expect(screen.getByTestId('transcript-integrity')).toHaveAttribute('data-integrity', 'accepted')
+  expect(screen.getByText(/Accepted as is on .+, though the audio check did not match the text/)).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+  await waitFor(() => expect(setIntegrityAccepted).toHaveBeenCalledWith({ recordingId: 'r1', accepted: false }))
+  expect(onChanged).toHaveBeenCalledTimes(1)
 })

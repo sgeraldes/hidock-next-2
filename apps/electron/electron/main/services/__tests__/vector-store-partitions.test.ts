@@ -20,11 +20,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import initSqlJs from 'sql.js'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { existsSync, mkdirSync, rmSync } from 'fs'
+import { existsSync, mkdtempSync, rmSync } from 'fs'
 import { VECTOR_CACHE_FILENAME } from '../vector-cache'
+import * as vectorCache from '../vector-cache'
 
-const CACHE_DIR = join(tmpdir(), 'vs-partitions-cache-test')
-const CACHE_FILE = join(CACHE_DIR, VECTOR_CACHE_FILENAME)
+let CACHE_DIR: string
+let CACHE_FILE: string
 
 const deps = vi.hoisted(() => ({
   activeProvider: 'gemini-api' as string | null,
@@ -66,10 +67,17 @@ vi.mock('../database', () => ({
 import { VectorStore } from '../vector-store'
 
 let SQL: initSqlJs.SqlJsStatic
+const stores: VectorStore[] = []
+
+function createStore(): VectorStore {
+  const store = new VectorStore()
+  stores.push(store)
+  return store
+}
 
 beforeEach(async () => {
-  rmSync(CACHE_DIR, { recursive: true, force: true })
-  mkdirSync(CACHE_DIR, { recursive: true })
+  CACHE_DIR = mkdtempSync(join(tmpdir(), 'vs-partitions-cache-test-'))
+  CACHE_FILE = join(CACHE_DIR, VECTOR_CACHE_FILENAME)
   deps.activeProvider = 'gemini-api'
   deps.embedCalls = []
   deps.queryEmbedding = [1, 0, 0]
@@ -77,18 +85,42 @@ beforeEach(async () => {
   dbInstance = new SQL.Database()
 })
 
-afterEach(() => {
+afterEach(async () => {
+  await Promise.all(stores.splice(0).map((store) => store.waitForIdle()))
   dbInstance?.close()
   dbInstance = null
+  rmSync(CACHE_DIR, { recursive: true, force: true })
+  vi.restoreAllMocks()
 })
 
 async function freshStore(): Promise<VectorStore> {
-  const store = new VectorStore()
+  const store = createStore()
   await store.initialize()
   return store
 }
 
 describe('VectorStore provider partitions', () => {
+  it('finishes a delayed cache publication before closing the database', async () => {
+    let published = false
+    const realWrite = vectorCache.writeVectorCacheAsync
+    vi.spyOn(vectorCache, 'writeVectorCacheAsync').mockImplementationOnce(async (...args) => {
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      const result = await realWrite(...args)
+      published = true
+      return result
+    })
+    const realClose = dbInstance!.close.bind(dbInstance)
+    vi.spyOn(dbInstance!, 'close').mockImplementationOnce(() => {
+      try {
+        expect(published).toBe(true)
+      } finally {
+        realClose()
+      }
+    })
+    await freshStore()
+    // The afterEach hook must drain the real writer before invoking close.
+  })
+
   it('stamps chunks with the active provider + dims on insert', async () => {
     const store = await freshStore()
     const n = await store.indexTranscript('some meeting transcript text', { recordingId: 'rec-1' })
@@ -238,7 +270,7 @@ describe('VectorStore provider partitions', () => {
     }
     expect(existsSync(CACHE_FILE)).toBe(true)
 
-    const store2 = new VectorStore()
+    const store2 = createStore()
     await store2.initialize()
     expect(store2.isCacheBacked()).toBe(true)
     expect(store2.getDocumentCount()).toBe(store.getEligibleDocumentCount('gemini-api'))
@@ -258,14 +290,14 @@ describe('VectorStore provider partitions', () => {
     // mutate the table AFTER the cache was written
     await store.indexTranscript('second transcript', { recordingId: 'rec-b' })
 
-    const store2 = new VectorStore()
+    const store2 = createStore()
     await store2.initialize()
     expect(store2.isCacheBacked()).toBe(false) // fingerprint drift ⇒ SQL fallback
     expect(store2.getDocumentCount()).toBe(store.getDocumentCount())
   })
 
   it('allows event-loop work to run before a multi-page SQL restore finishes', async () => {
-    const seed = new VectorStore()
+    const seed = createStore()
     seed.ensureSchema()
     const insert = dbInstance!.prepare(
       'INSERT INTO vector_embeddings (id, content, embedding, embed_provider, embed_dims) VALUES (?, ?, ?, ?, ?)'
@@ -274,7 +306,7 @@ describe('VectorStore provider partitions', () => {
       insert.run([String(i).padStart(5, '0'), 'test', '[1,0,0]', 'gemini-api', 3])
     }
     insert.free()
-    const restored = new VectorStore()
+    const restored = createStore()
     const observed: number[] = []
     await restored.initialize((loaded) => {
       if (loaded < 385) setImmediate(() => observed.push(restored.getDocumentCount()))
@@ -291,7 +323,7 @@ describe('VectorStore provider partitions', () => {
     }
     expect(existsSync(CACHE_FILE)).toBe(true)
     dbInstance!.run('UPDATE vector_embeddings SET embed_dims = 2')
-    const restored = new VectorStore()
+    const restored = createStore()
     await restored.initialize()
     expect(restored.isCacheBacked()).toBe(false)
     expect(restored.getDocumentCount()).toBe(store.getDocumentCount())

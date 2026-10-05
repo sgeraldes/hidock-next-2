@@ -1,0 +1,5 @@
+# Clef and Clef-Flash on the host. Installed by setup.ps1 with -c constraints.txt, which pins
+# every version, so the CUDA torch already installed stays as it is.
+transformers==5.10.2
+accelerate==1.15.0
+bitsandbytes==0.50.2

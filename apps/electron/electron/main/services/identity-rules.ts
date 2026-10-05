@@ -40,7 +40,7 @@ import { canUpgrade, methodConfidence } from './signal-tiers'
 import { jevKeyFor } from './jev-settings'
 import { askJev } from './jev-client'
 import { createJevHarness } from './pipeline/jev-harness'
-import { withCallRecord } from './pipeline/track-call'
+import { askDecision, hasDecisionEngine } from './pipeline/decision-engines'
 import { isRecordingEligible } from './recording-eligibility'
 import { accentFoldedKey, addressesUnderTwoNames, firstNameNicknameMatch, isSharedMailbox } from './entity-normalize'
 import { getActiveTranscriptions } from './transcription-activity'
@@ -194,8 +194,8 @@ export async function resolveBucketTiesWithJev(
   const d = resolve(deps, budget)
   const result: { asked: number; resolved: number; stopped?: 'transcription-active' } = { asked: 0, resolved: 0 }
   const key = d.jevKey()
-  if (!key) return result
   const harness = createJevHarness({ getKey: () => key, askImpl: d.askJev })
+  if (!(await hasDecisionEngine('identity-tiebreak', { jev: harness }))) return result
 
   for (const { resolution } of getAmbiguousBucketResolutions({ ownerContactId: d.ownerContactId() })) {
     const nameById = new Map(resolution.candidates.map((c) => [c.id, c.name]))
@@ -235,9 +235,9 @@ export async function resolveBucketTiesWithJev(
       spendJevCall(d.budget)
       let answer
       try {
-        const res = await withCallRecord({ step: 'identity-tiebreak', route: 'jev', recordingId: r.recordingId }, () =>
-          harness.ask(request.state, request.questions)
-        )
+        const { response: res } = await askDecision('identity-tiebreak', request.state, request.questions, {
+          jev: harness, recordingId: r.recordingId, shouldGenerate: () => isRecordingEligible(r.recordingId)
+        })
         answer = parseMentionTiebreak(res, request)
       } catch (e) {
         console.warn(`[IdentityRules] Jev tiebreak for ${r.recordingId} failed:`, e instanceof Error ? e.message : e)
@@ -593,7 +593,8 @@ export async function resolveSimilarNameMerges(
     merged: 0
   }
   const key = d.jevKey()
-  const harness = key ? createJevHarness({ getKey: () => key, askImpl: d.askJev }) : null
+  const harness = createJevHarness({ getKey: () => key, askImpl: d.askJev })
+  const available = await hasDecisionEngine('identity-tiebreak', { jev: harness })
   const buckets = getAmbiguousBucketIds()
 
   for (const { s, ev } of pendingPersonSuggestions()) {
@@ -619,7 +620,7 @@ export async function resolveSimilarNameMerges(
       result.rescored++
     }
 
-    if (!harness || (shared.length === 0 && !sameDomain)) continue
+    if (!available || (shared.length === 0 && !sameDomain)) continue
     const askedKey = `merge:${keeper.id}:${loser.id}:${shared.length}:${sameDomain ? 1 : 0}`
     if (wasAsked(askedKey) || !mergeAllowed(keeper.id, loser.id)) continue
     if (d.budget.left <= 0) break
@@ -640,9 +641,7 @@ export async function resolveSimilarNameMerges(
     spendJevCall(d.budget)
     let answer
     try {
-      const res = await withCallRecord({ step: 'identity-tiebreak', route: 'jev', recordingId: null }, () =>
-        harness.ask(request.state, request.questions)
-      )
+      const { response: res } = await askDecision('identity-tiebreak', request.state, request.questions, { jev: harness })
       answer = parseMergeTiebreak(res)
     } catch (e) {
       console.warn(`[IdentityRules] Jev merge tiebreak for ${s.id} failed:`, e instanceof Error ? e.message : e)

@@ -54,6 +54,7 @@ const ALL_TASK_NAMES = [
   'org-reconcile',
   'knowledge-capture-backfill',
   'audio-profile-backfill', 'evaluation-warning-refresh', 'evaluation-catchup', 'kind-fallback',
+  'transcript-sampling',
   'meeting-wiki-backfill',
   'start-transcription-processor',
   'semantic-index-restore',
@@ -134,6 +135,7 @@ describe('registerGatedBootTasks', () => {
       'integrity-check',
       'knowledge-capture-backfill',
       'audio-profile-backfill', 'evaluation-warning-refresh', 'evaluation-catchup', 'kind-fallback',
+      'transcript-sampling',
       'start-transcription-processor',
     ])
   })

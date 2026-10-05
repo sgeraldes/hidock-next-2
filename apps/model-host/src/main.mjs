@@ -13,7 +13,8 @@ import { HostState } from './state.mjs'
 import { PairingStore } from './auth.mjs'
 import { DEFAULTS, detectGpu, loadConfig, loadSecrets, loadTokens, paths, saveSecrets, saveTokens, updateConfigFile } from './config.mjs'
 import { HostSetup } from './host-setup.mjs'
-import { runDiarization } from './diarize.mjs'
+import { runDiarization, threadEnv } from './diarize.mjs'
+import { DecideModels } from './decide.mjs'
 import { collectDiagnostics, repairRuntime, stageUpdate, UPDATE_EXIT_CODE } from './maintenance.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -76,10 +77,29 @@ export async function start(options = {}) {
   const ffmpegPath = resolveFfmpeg(config.ffmpegPath)
   const gpu = await detectGpu()
 
+  // Clef and Clef-Flash, when setup installed their runtime (transformers, bitsandbytes).
+  const decide = config.decideRuntime === true
+    ? new DecideModels({
+        pythonPath,
+        workerPath: config.decideWorkerPath || join(here, 'decide_worker.py'),
+        modelsDir: dirs.models,
+        env: {
+          ...threadEnv(config.cpuPercent),
+          // Everything Hugging Face keeps stays under the host's folder, and the weights are
+          // not stored twice: the models folder is the copy.
+          HF_HOME: join(dirs.models, 'hf-home'),
+          HF_XET_CHUNK_CACHE_SIZE_BYTES: '0',
+          HF_HUB_DISABLE_TELEMETRY: '1',
+        },
+        log: console.log,
+      })
+    : null
+
   const state = new HostState({
     onLeaveReady: async () => {
       // Stop has to mean something to a job already running.
       state.activeJob?.abort()
+      decide?.stop()
     },
   })
   const pairing = new PairingStore({
@@ -144,11 +164,13 @@ export async function start(options = {}) {
     setup,
     stepAside: stepAsideStore,
     maintenance,
+    ...(decide ? { decide } : {}),
     capabilities: () => ({
       // `diarize` only after the model ran on this machine: a green light
       // that never ran the model is how a host refuses every job while
-      // claiming it can do them.
-      capabilities: setup.canDiarize() ? ['diarize'] : [],
+      // claiming it can do them. `decide` means the runtime is installed; /health
+      // says which model is on disk.
+      capabilities: [...(setup.canDiarize() ? ['diarize'] : []), ...(decide ? ['decide'] : [])],
       gpu,
       // Say it plainly rather than letting a green light imply acceleration
       // that is not there.
@@ -170,7 +192,7 @@ export async function start(options = {}) {
   if (pairing.automatic().open) console.log('[host] automatic pairing is open for 5 minutes')
   setup.start()
   if (options.startReady) await state.apply('start')
-  return { server, state, pairing, setup, config, port: address.port }
+  return { server, state, pairing, setup, decide, config, port: address.port }
 }
 
 const invokedDirectly =

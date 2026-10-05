@@ -382,6 +382,44 @@ interface Mp3FrameHeader {
   frameDurationSec: number
 }
 
+/** Remove a device PCM wrapper only when its data starts with consistent MP3 frames. */
+export function stripLyingWavHeader(audio: Buffer): { audio: Buffer; stripped: boolean; headerBytes: number } {
+  const unchanged = { audio, stripped: false, headerBytes: 0 }
+  if (audio.length < 12 || audio.toString('ascii', 0, 4) !== 'RIFF' || audio.toString('ascii', 8, 12) !== 'WAVE') return unchanged
+  for (let offset = 12; offset + 8 <= audio.length;) {
+    const size = audio.readUInt32LE(offset + 4)
+    const start = offset + 8
+    if (audio.toString('ascii', offset, offset + 4) === 'data') {
+      // Old device headers sometimes declare zero or more bytes than exist.
+      const payload = audio.subarray(start, size === 0 ? audio.length : Math.min(audio.length, start + size))
+      let position = 0
+      const first = parseMp3FrameHeader(payload, 0)
+      if (!first) return unchanged
+      let frames = 0
+      while (frames < 16 && position + 4 <= payload.length) {
+        const header = parseMp3FrameHeader(payload, position)
+        if (frames >= 3 && payload.length - position < (header?.frameLen ?? first.frameLen)) break
+        // Version, layer, sample rate and channel mode must agree. Bitrate and
+        // padding may vary in a valid MPEG stream.
+        if (!header || position + header.frameLen > payload.length ||
+            (payload[position + 1] & 0x1e) !== (payload[1] & 0x1e) ||
+            (payload[position + 2] & 0x0c) !== (payload[2] & 0x0c) ||
+            (payload[position + 3] & 0xc0) !== (payload[3] & 0xc0)) return unchanged
+        const body = payload.subarray(position + 4, position + header.frameLen)
+        // Zero-filled frame bodies occur in device streams. Other constant
+        // bodies are insufficient evidence that PCM bytes are MPEG audio.
+        if (body.length === 0 || (body[0] !== 0 && body.every((byte) => byte === body[0]))) return unchanged
+        position += header.frameLen
+        frames++
+      }
+      if (frames < 3 || (frames < 16 && payload.length - position >= first.frameLen)) return unchanged
+      return { audio: payload, stripped: true, headerBytes: start }
+    }
+    offset = start + size + (size % 2)
+  }
+  return unchanged
+}
+
 /** Parse an MPEG-1/2/2.5 Layer III frame header at `p`, or null if invalid. */
 function parseMp3FrameHeader(audio: Buffer, p: number): Mp3FrameHeader | null {
   if (p + 4 > audio.length) return null
@@ -1001,8 +1039,14 @@ export class GeminiEngine implements TranscriptionEngine {
     genAI: GoogleGenAI,
     filePath: string,
     mimeType: string,
-    shouldGenerate?: () => boolean
+    shouldGenerate?: () => boolean,
+    normalizedAudio?: Buffer
   ): Promise<{ name: string; uri: string; mimeType: string }> {
+    // The disk file still has the false WAV header. Upload the payload through
+    // the existing bytes path, avoiding a temporary file and its cleanup.
+    if (normalizedAudio) return this.uploadAudioChunk(genAI, {
+      data: normalizedAudio, mimeType, startSec: 0, durationSec: 0,
+    }, shouldGenerate)
     assertStillEligible(shouldGenerate)
     let file = await genAI.files.upload({ file: filePath, config: { mimeType } })
     const deadline = Date.now() + 5 * 60 * 1000
@@ -1293,9 +1337,10 @@ export class GeminiEngine implements TranscriptionEngine {
     genAI: GoogleGenAI,
     filePath: string,
     mimeType: string,
-    shouldGenerate?: () => boolean
+    shouldGenerate?: () => boolean,
+    normalizedAudio?: Buffer
   ): Promise<Part> {
-    const file = await this.uploadAudioFile(genAI, filePath, mimeType, shouldGenerate)
+    const file = await this.uploadAudioFile(genAI, filePath, mimeType, shouldGenerate, normalizedAudio)
     return { fileData: { mimeType: file.mimeType, fileUri: file.uri } }
   }
 
@@ -1311,7 +1356,8 @@ export class GeminiEngine implements TranscriptionEngine {
     filePath: string,
     mimeType: string,
     _durationSeconds?: number,
-    shouldGenerate?: () => boolean
+    shouldGenerate?: () => boolean,
+    normalizedAudio?: Buffer
   ): Promise<AudioChunk[]> {
     const supportsWholeRecording = /^gemini-(?:3(?:\.|$)|[4-9])/i.test(this.model)
     if (supportsWholeRecording) {
@@ -1327,7 +1373,7 @@ export class GeminiEngine implements TranscriptionEngine {
     // Single call: inline when small, Files API when large (needs a filePath).
     const part =
       audio.length > GeminiEngine.INLINE_LIMIT_BYTES && filePath
-        ? await this.uploadViaFilesApi(genAI, filePath, mimeType, shouldGenerate)
+        ? await this.uploadViaFilesApi(genAI, filePath, mimeType, shouldGenerate, normalizedAudio)
         : { inlineData: { mimeType, data: audio.toString('base64') } }
     // startSec/durationSec unknown for a single whole-file part.
     return [{ data: audio, mimeType, startSec: 0, durationSec: 0, part } as AudioChunk & { part: Part }]
@@ -1505,10 +1551,11 @@ Calendar and meeting context are spelling hints only; never invent speech from t
     filePath: string,
     mimeType: string,
     durationSeconds: number,
-    options: TranscribeOptions
+    options: TranscribeOptions,
+    normalizedAudio?: Buffer
   ): Promise<TranscriptSegment[]> {
     const shouldGenerate = options.shouldGenerate
-    const uploaded = await this.uploadAudioFile(genAI, filePath, mimeType, shouldGenerate)
+    const uploaded = await this.uploadAudioFile(genAI, filePath, mimeType, shouldGenerate, normalizedAudio)
     const totalRanges = Math.ceil(durationSeconds / GeminiEngine.ROLLING_CHUNK_SECONDS)
     const allSegments: TranscriptSegment[] = []
     const deduper = new TurnDeduper()
@@ -1568,6 +1615,33 @@ Calendar and meeting context are spelling hints only; never invent speech from t
     audio: Buffer,
     options: TranscribeOptions & { filePath?: string }
   ): AsyncIterable<TranscriptSegment> {
+    const normalized = stripLyingWavHeader(audio)
+    audio = normalized.audio
+    if (normalized.stripped) {
+      let durationSeconds = 0
+      let position = 0
+      let complete = true
+      while (position + 4 <= audio.length) {
+        const header = parseMp3FrameHeader(audio, position)
+        if (!header) {
+          complete = false
+          let next = position + 1
+          const limit = Math.min(audio.length - 4, position + 4096)
+          while (next <= limit && !parseMp3FrameHeader(audio, next)) next++
+          if (next > limit) break
+          position = next
+          continue
+        }
+        if (position + header.frameLen > audio.length) break
+        durationSeconds += header.frameDurationSec
+        position += header.frameLen
+      }
+      // Caller metadata may also have used the false PCM byte rate.
+      complete = complete && position === audio.length
+      options = { ...options, durationSeconds: complete
+        ? durationSeconds
+        : Math.max(options.durationSeconds ?? 0, durationSeconds) }
+    }
     if (!this.apiKey) {
       throw new Error('Gemini API key not configured')
     }
@@ -1626,7 +1700,8 @@ Calendar and meeting context are spelling hints only; never invent speech from t
         filePath,
         mimeType,
         options.durationSeconds,
-        options
+        options,
+        normalized.stripped ? audio : undefined
       )
       for (const segment of segments) yield segment
       return
@@ -1638,7 +1713,8 @@ Calendar and meeting context are spelling hints only; never invent speech from t
       filePath,
       mimeType,
       options.durationSeconds,
-      shouldGenerate
+      shouldGenerate,
+      normalized.stripped ? audio : undefined
     )
     const defaultSpeaker = options.source === 'mic' ? 'you' : 'them'
     const contextSection = options.context ? `\n${options.context}` : ''

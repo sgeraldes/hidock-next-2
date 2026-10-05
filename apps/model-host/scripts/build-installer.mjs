@@ -82,6 +82,7 @@ export function stage(stageDir, sources = {}) {
   cpSync(join(packageRoot, 'package.json'), join(stageDir, 'package.json'))
   cpSync(join(packageRoot, 'installer', 'setup.ps1'), join(stageDir, 'setup.ps1'))
   cpSync(join(packageRoot, 'installer', 'constraints.txt'), join(stageDir, 'constraints.txt'))
+  cpSync(join(packageRoot, 'installer', 'decide-requirements.txt'), join(stageDir, 'decide-requirements.txt'))
   cpSync(ffmpegPath, join(stageDir, 'ffmpeg.exe'))
 
   // One worker.py in this repository. The client owns it; the host ships a

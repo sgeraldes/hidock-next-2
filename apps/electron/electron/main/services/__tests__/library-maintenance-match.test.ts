@@ -36,6 +36,7 @@ vi.mock('../audio-profile-store', () => ({ envelopePath: (id: string) => id }))
 vi.mock('../waveform-cache', () => ({ getWaveformCache: () => null, setWaveformCache: () => true }))
 vi.mock('../value-classification', () => ({ recomputeAudioWarnings: async () => 0 }))
 vi.mock('../recording-eligibility', () => ({
+  isRecordingEligible: () => true,
   filterEligibleRecordingIds: (ids: string[]) => ({ eligible: new Set(ids), failClosed: false })
 }))
 vi.mock('../value-backfill', () => ({ isClassifierAuthError: (e: { status?: number }) => e?.status === 401 }))
@@ -49,8 +50,9 @@ const candidates = [
   { meetingId: 'lunch', subject: 'Almuerzo', startTime: 'a', endTime: 'b', hasOverlap: true, timeScore: 0.72, attendees: [] },
   { meetingId: 'daily', subject: 'Daily Cloud', startTime: 'a', endTime: 'b', hasOverlap: true, timeScore: 0.72, attendees: [] }
 ]
+const matchDeps = vi.hoisted(() => vi.fn())
 vi.mock('../meeting-candidate-list', () => ({
-  jevMeetingMatchDeps: () => ({ apiKey: 'k', load: () => null, save: () => undefined }),
+  jevMeetingMatchDeps: matchDeps,
   listMeetingCandidates: () => ({}),
   toMatchCandidates: () => candidates,
   toMatchContext: () => ({ title: 't', summary: 's', transcriptText: 'x', recordingStart: 'a', durationSeconds: 60 })
@@ -68,9 +70,27 @@ function reply(m1: number, m2: number, none: number) {
 beforeEach(() => {
   recordings.clear()
   vi.clearAllMocks()
+  matchDeps.mockResolvedValue({ apiKey: 'k', load: () => null, save: () => undefined })
 })
 
 describe('matchMeetingsWithJev', () => {
+  it('holds the guard while dependencies are pending', async () => {
+    await import('../database')
+    recordings.set('overlap', { id: 'overlap', meeting_id: null, correlation_method: null, date_recorded: 'a', duration_seconds: 60 })
+    let releaseDeps!: (value: unknown) => void
+    const pendingDeps = new Promise(resolve => { releaseDeps = resolve })
+    matchDeps.mockReturnValue(pendingDeps)
+    askJev.mockResolvedValue(reply(0.03, 0.9, 0.07))
+    const first = matchMeetingsWithJev()
+    const second = matchMeetingsWithJev()
+    releaseDeps({ apiKey: 'k', load: () => null, save: () => undefined })
+    const [, secondResult] = await Promise.all([first, second])
+    expect(secondResult).toEqual({ busy: true })
+    expect(matchDeps).toHaveBeenCalledTimes(1)
+    expect(askJev).toHaveBeenCalledTimes(1)
+    expect(linkRecordingToMeeting).toHaveBeenCalledTimes(1)
+  })
+
   it('links a clear answer, moves a wrong time link, and leaves a link the person set', async () => {
     recordings.set('unlinked', { id: 'unlinked', meeting_id: null, correlation_method: null, date_recorded: 'a', duration_seconds: 60 })
     recordings.set('wrong', { id: 'wrong', meeting_id: 'lunch', correlation_method: 'time_overlap', date_recorded: 'a', duration_seconds: 60 })

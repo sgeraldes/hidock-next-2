@@ -26,6 +26,11 @@ import {
 } from './recording-eligibility'
 import { getEmbeddingsService } from './embeddings'
 import { ragSettings } from './rag-settings'
+import { yieldToEventLoop } from './event-loop'
+
+// 2026-10-04: 1024-row metadata scans kept the copied-library restore's
+// longest stretch at 40 ms without the timer overhead of 128-row scans.
+const RESTORE_SCAN_BATCH = 1024
 
 interface VectorDocument {
   id: string
@@ -247,6 +252,14 @@ class VectorStore {
   private initialized = false
   private schemaReady = false
   private initialization: Promise<void> | null = null
+  private labelRepair: Promise<void> | null = null
+  private cacheWrite: Promise<void> | null = null
+
+  /** Drain initialization and its deferred cache write before closing owned resources. */
+  async waitForIdle(): Promise<void> {
+    await this.initialization
+    await this.cacheWrite
+  }
 
   async initialize(onProgress?: (loaded: number, total: number) => void): Promise<void> {
     if (this.initialized) return
@@ -272,7 +285,15 @@ class VectorStore {
   private async initializeInternal(onProgress?: (loaded: number, total: number) => void): Promise<void> {
     if (this.initialized) return
 
-    this.ensureSchema()
+    this.ensureSchema(false)
+    this.labelRepair = this.backfillProviderLabelsYielding()
+    try {
+      await this.labelRepair
+      // Provider-scoped absence queries are safe only after legacy labels exist.
+      this.schemaReady = true
+    } finally {
+      this.labelRepair = null
+    }
 
     const activeProvider = await getEmbeddingsService().activeProviderId()
     if (!activeProvider) {
@@ -303,7 +324,7 @@ class VectorStore {
    * search index. Keeping this seam separate prevents 200k+ vectors from being
    * restored merely to discover there is no missing transcript to index.
    */
-  ensureSchema(): void {
+  ensureSchema(backfillLabels = true): void {
     if (this.schemaReady) return
 
     const db = getDatabase()
@@ -336,13 +357,15 @@ class VectorStore {
     this.ensureColumns(db, ['source_type', 'capture_id', 'embed_provider', { name: 'embed_dims', type: 'INTEGER' }])
 
     // Backfill partition labels for pre-partition rows (see method docs).
-    this.backfillProviderLabels(db)
+    if (backfillLabels) this.backfillProviderLabels(db)
 
     // Create index for faster lookups
     db.run(`CREATE INDEX IF NOT EXISTS idx_vector_embeddings_meeting ON vector_embeddings(meeting_id)`)
     db.run(`CREATE INDEX IF NOT EXISTS idx_vector_embeddings_recording ON vector_embeddings(recording_id)`)
     db.run(`CREATE INDEX IF NOT EXISTS idx_vector_embeddings_provider_id ON vector_embeddings(embed_provider, id)`)
-    this.schemaReady = true
+    // Synchronous callers still complete repair themselves if restore is paused.
+    // Schema creation alone must not advertise repaired provider partitions.
+    this.schemaReady = backfillLabels
   }
 
   /** Chunk buffers backing the cache-loaded Float32Array views (kept alive). */
@@ -477,12 +500,16 @@ class VectorStore {
 
     const cachePath = this.vectorCachePath()
     await waitForVectorCacheWrites(cachePath)
-    const cache = await readVectorCacheAsync(cachePath, activeProvider)
+    const cache = await readVectorCacheAsync(cachePath, activeProvider, liveCount)
     if (!cache) return false
     if (cache.rows.length !== liveCount) return false
 
-    const byId = new Map(cache.rows.map((r) => [r.id, r]))
-    const BATCH = 128
+    const BATCH = RESTORE_SCAN_BATCH
+    const byId = new Map<string, (typeof cache.rows)[number]>()
+    for (let start = 0; start < cache.rows.length; start += RESTORE_SCAN_BATCH) {
+      for (const row of cache.rows.slice(start, start + RESTORE_SCAN_BATCH)) byId.set(row.id, row)
+      await yieldToEventLoop()
+    }
     let loaded = 0
     let afterId = ''
     let matched = 0
@@ -529,8 +556,8 @@ class VectorStore {
       loaded += rows[0].values.length
       afterId = rows[0].values[rows[0].values.length - 1][0] as string
       onProgress?.(Math.min(loaded, cache.rows.length), cache.rows.length)
+      await yieldToEventLoop()
       if (rows[0].values.length < BATCH) break
-      await new Promise((resolve) => setImmediate(resolve))
     }
     if (matched !== cache.rows.length) {
       this.documents.clear()
@@ -546,7 +573,7 @@ class VectorStore {
    * main event loop. Unknown-provider rows are excluded (unservable by design).
    */
   private scheduleCacheWrite(): void {
-    void (async () => {
+    this.cacheWrite = (async () => {
       await new Promise((resolve) => setImmediate(resolve))
       try {
         const documents = this.documents
@@ -617,6 +644,48 @@ class VectorStore {
     }
   }
 
+  private async backfillProviderLabelsYielding(): Promise<void> {
+    const db = getDatabase()
+    const providers: Record<number, string> = { 3072: 'gemini-api', 2048: 'local-onnx-embed', 768: 'ollama' }
+    let afterRowid: number | null = null
+    // 2026-10-04: the NULL-label probe scanned the whole 2.9 GB copy in
+    // 4436 ms. Bound rows SCANNED, not just missing labels returned; an empty
+    // repair pass must yield too. Fetch vector bytes only for missing dims.
+    for (;;) {
+      const rows = db.exec(
+        `SELECT id, embed_provider, embed_dims,
+                CASE WHEN embed_dims IS NULL THEN embedding ELSE NULL END, rowid
+           FROM vector_embeddings ${afterRowid === null ? '' : 'WHERE rowid > ?'}
+          ORDER BY rowid LIMIT ?`,
+        afterRowid === null ? [RESTORE_SCAN_BATCH] : [afterRowid, RESTORE_SCAN_BATCH]
+      )[0]?.values ?? []
+      if (rows.length === 0) break
+      let repairs = 0
+      for (const [id, provider, storedDims, raw] of rows) {
+        let dims = storedDims as number | null
+        if (dims === null) {
+          if (raw instanceof Uint8Array) dims = Math.floor(raw.byteLength / 4)
+          else {
+            const parsed = blobToEmbedding(raw).length
+            if (parsed > 0) dims = parsed
+          }
+        }
+        const label = provider ?? (dims === null ? null : providers[dims] ?? null)
+        if (dims !== storedDims || label !== provider) {
+          // A writer may replace labels while this materialized page yields.
+          // Only repair the values we read, preserving the writer's fresh labels.
+          db.run('UPDATE vector_embeddings SET embed_dims = ?, embed_provider = ? WHERE id = ? AND embed_dims IS ? AND embed_provider IS ?', [dims, label, id, storedDims, provider])
+          // Legacy repairs include synchronous commits, unlike metadata reads.
+          // Give IPC a turn after at most 128 writes within the scanned page.
+          if (++repairs % 128 === 0) await yieldToEventLoop()
+        }
+      }
+      afterRowid = rows[rows.length - 1][4] as number
+      await yieldToEventLoop()
+      if (rows.length < RESTORE_SCAN_BATCH) break
+    }
+  }
+
   /**
    * Idempotently add nullable TEXT columns to vector_embeddings, FAIL-CLOSED.
    *
@@ -681,18 +750,40 @@ class VectorStore {
     onProgress?: (loaded: number, total: number) => void
   ): Promise<void> {
     const db = getDatabase()
-    // One round trip for both numbers: the row count sizes the arena and the
+    // The row count sizes the arena and the
     // dimension makes every row's offset arithmetic, not a per-row allocation.
     // MIN/MAX disagree only on a corrupt partition, which falls back below.
-    const statsRes = db.exec(
-      `SELECT COUNT(*), MIN(embed_dims), MAX(embed_dims)
-         FROM vector_embeddings WHERE embed_provider = ?`,
-      [activeProvider]
-    )
-    const stats = statsRes.length > 0 ? statsRes[0].values[0] : null
-    const total = (stats?.[0] as number | undefined) ?? 0
-    const minDims = (stats?.[1] as number | null | undefined) ?? null
-    const maxDims = (stats?.[2] as number | null | undefined) ?? null
+    // 2026-10-04: COUNT/MIN/MAX held the loop for 5137 ms on the backup.
+    // Preserve SQLite's NULL-ignoring aggregates, but page the dimension read.
+    let total = 0
+    let minDims: number | null = null
+    let maxDims: number | null = null
+    let statsAfterId: string | null = null
+    for (;;) {
+      const rows = db.exec(
+        `SELECT id, embed_dims FROM vector_embeddings
+          WHERE embed_provider = ? AND id IS NOT NULL ${statsAfterId === null ? '' : 'AND id > ?'}
+          ORDER BY id LIMIT ?`,
+        statsAfterId === null ? [activeProvider, RESTORE_SCAN_BATCH] : [activeProvider, statsAfterId, RESTORE_SCAN_BATCH]
+      )[0]?.values ?? []
+      if (rows.length === 0) break
+      // Never reuse the first-page sentinel or a stalled cursor, even if a
+      // malformed database adapter returns rows outside the keyset predicate.
+      const nextStatsId = rows[rows.length - 1][0]
+      if (typeof nextStatsId !== 'string' || (statsAfterId !== null && nextStatsId === statsAfterId)) {
+        throw new Error('[VectorStore] Statistics paging cursor did not advance')
+      }
+      total += rows.length
+      for (const [, value] of rows) {
+        if (value === null) continue
+        const dims = value as number
+        minDims = minDims === null ? dims : Math.min(minDims, dims)
+        maxDims = maxDims === null ? dims : Math.max(maxDims, dims)
+      }
+      statsAfterId = nextStatsId
+      await yieldToEventLoop()
+      if (rows.length < RESTORE_SCAN_BATCH) break
+    }
 
     // PERF (the 2026-09 OOM): the previous loader called blobToEmbedding per
     // row, and that does `bytes.buffer.slice(...)` — a FRESH ArrayBuffer for
@@ -786,8 +877,8 @@ class VectorStore {
       loaded += rows[0].values.length
       afterId = rows[0].values[rows[0].values.length - 1][I.id] as string
       onProgress?.(Math.min(loaded, total), total)
+      await yieldToEventLoop()
       if (rows[0].values.length < BATCH) break
-      await new Promise((resolve) => setImmediate(resolve))
     }
   }
 
@@ -1128,6 +1219,9 @@ class VectorStore {
    * knowledge base, not just newly transcribed recordings.
    */
   async backfillMissingTranscripts(): Promise<{ indexed: number; skipped: number }> {
+    // Waiting preserves bounded restore work and avoids treating legacy rows as
+    // missing while the yielding repair has only labelled its first page.
+    if (this.labelRepair) await this.labelRepair
     this.ensureSchema()
     const db = getDatabase()
     // PROVIDER PARTITION — "missing" means missing FOR THE ACTIVE PROVIDER.

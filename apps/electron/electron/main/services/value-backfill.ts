@@ -60,6 +60,7 @@ import {
 } from './value-classification'
 import { EVALUATION_VERSION } from './jev-evaluation'
 import { JevError } from './jev-client'
+import { DecisionEnginesError } from './pipeline/decision-engines'
 
 // ---------------------------------------------------------------------------
 // Tunables — `let` (not `const`) so tests can shrink delays/chunk sizes to
@@ -409,7 +410,7 @@ function finalizeClassifiedInTransaction(captureId: string, runId: string, resul
  *  Retrying cannot help and every later item would fail the same way, so
  *  the run stops at the first one instead of burning 1,900 items of retries. */
 export function isClassifierAuthError(e: unknown): boolean {
-  return e instanceof JevError && (e.status === 401 || e.status === 403)
+  return (e instanceof JevError || e instanceof DecisionEnginesError) && (e.status === 401 || e.status === 403)
 }
 
 function isRateLimitError(e: unknown): boolean {
