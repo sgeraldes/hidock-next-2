@@ -1,5 +1,6 @@
 import { watch, existsSync, statSync, readdirSync } from 'fs'
 import { RECORDING_AUDIO_EXTENSIONS } from '../../../src/shared/audio-extensions'
+import { isPcRecordingFilename } from '../../../src/shared/pc-recording'
 import { join, extname, basename } from 'path'
 import { randomUUID } from 'crypto'
 import { getRecordingsPath } from './file-storage'
@@ -151,6 +152,9 @@ export function isPurgedFile(filename: string): boolean {
 async function processNewRecording(filePath: string): Promise<void> {
   try {
     const filename = basename(filePath)
+    // PC files belong exclusively to the shared import/recovery path. An orphaned
+    // copy from a failed insert must never become a device row or auto-upload.
+    if (isPcRecordingFilename(filename)) return
     const stats = statSync(filePath)
 
     // Match any extension variant of the same base name — device rows are .hda

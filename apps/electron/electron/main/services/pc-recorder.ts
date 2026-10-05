@@ -1,6 +1,7 @@
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, renameSync, statSync, unlinkSync, writeSync } from 'fs'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
+import { isPcRecordingFilename } from '../../../src/shared/pc-recording'
 
 export interface PcImportResult { success: boolean; error?: string }
 type ImportRecording = (path: string) => Promise<PcImportResult>
@@ -53,7 +54,7 @@ export class PcRecorder {
   async recover(): Promise<void> {
     if (!existsSync(this.folder)) return
     for (const name of readdirSync(this.folder)) {
-      if (!/^Recording .* [0-9a-f-]{36}\.webm(?:\.partial)?$/.test(name)) continue
+      if (!isPcRecordingFilename(name)) continue
       const path = join(this.folder, name)
       if (path === this.active?.path) continue
       try {

@@ -24,6 +24,7 @@ import { initializeConfig, getConfig } from './services/config'
 import { getJensenDevice, setAutoConnectChecker } from './services/jensen'
 import { initializeStartupStorage } from './storage-startup'
 import { registerIpcHandlers } from './ipc/handlers'
+import { configurePcLoopback, stopPcRecorderBeforeQuit } from './ipc/pc-recorder-handlers'
 import { stopAutoSync, initializeCalendarAutoSync } from './ipc/calendar-handlers'
 import { startMeetingLinkRecheck } from './services/meeting-link-recheck'
 import {
@@ -132,6 +133,7 @@ function createWindow(): void {
     }
   })
   startup.mainWindow = mainWindow
+  configurePcLoopback(mainWindow)
   if (startup.errorLog) logWindow(startup.errorLog, mainWindow.webContents)
 
   mainWindowReveal = revealMainWindow(mainWindow, {
@@ -489,6 +491,7 @@ app.on('before-quit', (event) => {
   stopTranscriptionProcessor()
   stopVoiceBackfill()
   void (async () => {
+    await stopPcRecorderBeforeQuit()
     let releaseTimer: NodeJS.Timeout | undefined
     try {
       await Promise.race([

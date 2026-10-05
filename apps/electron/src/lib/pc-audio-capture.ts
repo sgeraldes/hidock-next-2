@@ -83,7 +83,7 @@ export class PcAudioCapture {
       recorder.onerror = () => this.fail(new Error('Audio recording failed; saved chunks will be recovered on restart'))
       for (const [channel, stream] of this.streams.entries()) {
         for (const track of stream.getAudioTracks()) {
-          track.addEventListener('ended', () => this.fail(new Error(`${channel === 0 ? 'Microphone' : 'System audio'} source stopped. Recording stopped and saved.`)), { once: true })
+          track.addEventListener('ended', () => this.fail(new Error(`${channel === 0 ? 'Microphone' : 'System audio'} source stopped. Saving captured audio.`)), { once: true })
         }
       }
       recorder.start(1000)

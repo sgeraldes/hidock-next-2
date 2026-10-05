@@ -33,7 +33,8 @@ export function importExternalRecording(filePath: string, options: { preserveFil
     insertRecording({
       id, filename, original_filename: originalFilename, file_path: destination,
       file_size: stats.size, duration_seconds: undefined,
-      date_recorded: parseHiDockFilenameDateIso(originalFilename) ?? stats.mtime.toISOString(),
+      // PC staging is created at Record. Never feed its UUID to the device-name parser.
+      date_recorded: options.preserveFilename ? stats.birthtime.toISOString() : parseHiDockFilenameDateIso(originalFilename) ?? stats.mtime.toISOString(),
       meeting_id: undefined, correlation_confidence: undefined, correlation_method: undefined,
       status: 'ready', location: 'local-only', transcription_status: 'none', on_device: 0,
       device_last_seen: undefined, on_local: 1, source: 'external', is_imported: 1

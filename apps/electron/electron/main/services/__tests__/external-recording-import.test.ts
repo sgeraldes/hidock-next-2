@@ -23,6 +23,8 @@ describe('shared external-file import', () => {
     expect(importExternalRecording(source, { preserveFilename: true }).success).toBe(true)
     expect(readFileSync(join(library, 'Recording 2026-10-04 18-40 id.webm'))).toEqual(Buffer.from([1, 2, 3]))
     expect(insertRecording).toHaveBeenCalledWith(expect.objectContaining({ is_imported: 1, source: 'external', location: 'local-only', transcription_status: 'none' }))
+    const inserted = vi.mocked(insertRecording).mock.calls[0][0]
+    expect(Math.abs(Date.parse(inserted.date_recorded) - Date.now())).toBeLessThan(10000)
     vi.mocked(getRecordingByFilename).mockReturnValue({ id: 'saved' } as never)
     expect(importExternalRecording(source, { preserveFilename: true }).recording?.id).toBe('saved')
     expect(insertRecording).toHaveBeenCalledOnce()

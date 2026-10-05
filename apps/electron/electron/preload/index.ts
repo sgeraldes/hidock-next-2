@@ -458,6 +458,12 @@ export interface ElectronAPI {
   }
 
   // Database - Recordings
+  pcRecorder: {
+    start: () => Promise<string>
+    append: (id: string, index: number, data: Uint8Array) => Promise<void>
+    finish: (id: string) => Promise<{ success: boolean; error?: string }>
+    onStopRequested: (callback: () => void) => () => void
+  }
   recordings: {
     getAll: () => Promise<any[]>
     // Soft-deleted (tombstoned) recordings feeding the Trash UI (spec-005/F17
@@ -1697,6 +1703,16 @@ export interface ElectronAPI {
 const BOOT_DISABLED_ARG = '--hidock-boot-disabled-features='
 
 const electronAPI: ElectronAPI = {
+  pcRecorder: {
+    start: () => callIPC('pc-recorder:start'),
+    append: (id, index, data) => callIPC('pc-recorder:append', id, index, data),
+    finish: (id) => callIPC('pc-recorder:finish', id),
+    onStopRequested: (callback) => {
+      const listener = () => callback()
+      ipcRenderer.on('pc-recorder:request-stop', listener)
+      return () => ipcRenderer.removeListener('pc-recorder:request-stop', listener)
+    }
+  },
   bootDisabledFeatures: (
     process.argv.find((arg) => arg.startsWith(BOOT_DISABLED_ARG))?.slice(BOOT_DISABLED_ARG.length) ?? ''
   )
