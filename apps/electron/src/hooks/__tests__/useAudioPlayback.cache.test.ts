@@ -41,6 +41,20 @@ beforeEach(() => {
 })
 
 describe('useAudioPlayback — H5 disk cache', () => {
+  it('loads and seeks a find result without starting playback', async () => {
+    const play = vi.fn().mockResolvedValue(undefined)
+    const audio = { play, pause: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(), load: vi.fn(), readyState: 4, currentTime: 0, duration: 125, src: '', playbackRate: 1 }
+    vi.stubGlobal('Audio', class { constructor() { return audio } })
+    readRecording.mockResolvedValue({ success: true, data: btoa('audio-bytes') })
+    getCache.mockResolvedValue({ peaks: [0.1, 0.2], duration: 125 })
+    const { unmount } = renderHook(() => useAudioPlayback())
+    await act(async () => { await window.__audioControls!.play('find-rec', '/x/find.wav', 30, false) })
+    expect(audio.currentTime).toBe(30)
+    expect(play).not.toHaveBeenCalled()
+    expect(useUIStore.getState().isPlaying).toBe(false)
+    unmount()
+    vi.unstubAllGlobals()
+  })
   it('does not start a recording after Stop while its audio read is pending', async () => {
     let finishRead!: (value: { success: boolean; data: string }) => void
     readRecording.mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve }))

@@ -70,7 +70,7 @@ export function useAudioPlayback() {
 
   // ---- Play Audio ----
 
-  const playAudio = useCallback(async (recordingId: string, filePath: string, startTimeSec = 0) => {
+  const playAudio = useCallback(async (recordingId: string, filePath: string, startTimeSec = 0, autoPlay = true) => {
     const generation = playbackGenerationRef.current
     const cancelled = () => generation !== playbackGenerationRef.current
     if (shouldLogQa()) console.log(`[QA-MONITOR][Operation] Playing: ${recordingId}, path: ${filePath}`)
@@ -266,7 +266,7 @@ export function useAudioPlayback() {
           setPlaybackProgress(audioRef.current.currentTime, duration)
         }
         if (shouldLogQa()) console.log('[QA-MONITOR][Operation] Calling audio.play()')
-        await audioRef.current.play()
+        if (autoPlay) await audioRef.current.play()
         if (shouldLogQa()) console.log('[QA-MONITOR][Operation] audio.play() resolved successfully')
       } catch (error) {
         if (cancelled()) return
