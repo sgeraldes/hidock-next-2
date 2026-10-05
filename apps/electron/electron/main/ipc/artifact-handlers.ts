@@ -178,7 +178,7 @@ export function registerArtifactHandlers(): void {
         return error('NOT_FOUND', 'Artifact not found')
       }
 
-      const TEXT_KINDS = ['pdf', 'md', 'txt', 'json', 'note', 'data']
+      const TEXT_KINDS = ['pdf', 'md', 'txt', 'json', 'note', 'data', 'link']
       const isTextKind = TEXT_KINDS.includes(artifact.kind)
       const isBinaryKind = artifact.kind === 'image' || artifact.kind === 'pdf'
 

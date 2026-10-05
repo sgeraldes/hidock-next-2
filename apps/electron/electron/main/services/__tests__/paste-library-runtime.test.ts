@@ -1,0 +1,150 @@
+// @vitest-environment node
+import { beforeAll, afterAll, expect, it, vi } from 'vitest'
+import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, unlinkSync, rmdirSync, readdirSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { execFileSync } from 'child_process'
+import ffmpeg from 'ffmpeg-static'
+import { createRequire } from 'module'
+import { dirname } from 'path'
+
+const mocks = vi.hoisted(() => ({
+  list: vi.fn<() => Array<{ descriptor: { id: string }; instanceId: string }>>(() => []),
+  secret: vi.fn<() => string | null>(() => null)
+}))
+
+const root = mkdtempSync(join(tmpdir(), 'hidock-paste-runtime-'))
+vi.mock('../file-storage', () => ({ getDatabasePath: () => join(root, 'test.db'), getCapturesPath: () => join(root, 'artifacts'), getRecordingsPath: () => join(root, 'recordings') }))
+vi.mock('../config', () => ({ getDataPath: () => root, getConfig: () => ({ transcription: { geminiApiKey: '' } }) }))
+vi.mock('../transcription', () => ({ queueTranscriptionIfEnabled: vi.fn(() => false) }))
+vi.mock('../connectors', () => ({ getConnectorHost: () => ({ list: mocks.list }) }))
+vi.mock('../connectors/connector-store', () => ({ getConnectorStore: () => ({ getSecret: mocks.secret }) }))
+vi.mock('../vector-store', () => ({ getVectorStore: vi.fn(() => { throw new Error('Paste must not embed') }), chunkText: (text: string) => [text] }))
+vi.mock('electron', () => ({ clipboard: { read: vi.fn() }, net: { fetch: vi.fn(async () => new Response('<title>Example</title><p>Readable body</p>', { headers: { 'content-type': 'text/html' } })) }, BrowserWindow: { getAllWindows: () => [] } }))
+import { initializeDatabase, closeDatabase, queryOne } from '../database'
+import { pasteLibrary, newLibraryNote } from '../paste-library-runtime'
+import { getArtifactType } from '../artifact-types'
+import { queueTranscriptionIfEnabled } from '../transcription'
+import { getVectorStore } from '../vector-store'
+import { net } from 'electron'
+
+beforeAll(async () => { mkdirSync(join(root, 'recordings')); await initializeDatabase() })
+// All cleanup targets are fixture-owned literal paths under this unique temp root.
+function clean(path: string): void {
+  for (const entry of readdirSync(path, { withFileTypes: true })) {
+    const target = join(path, entry.name)
+    if (entry.isDirectory()) clean(target)
+    else unlinkSync(target)
+  }
+  rmdirSync(path)
+}
+afterAll(() => { closeDatabase(); clean(root) })
+
+it('persists pasted note content and an 80-character display title into the existing artifact/capture schema', async () => {
+  const text = `${'a'.repeat(100)}\nDetails`
+  const [result] = await pasteLibrary({ text })
+  expect(result.title).toHaveLength(80)
+  const row = queryOne<{ extracted_text: string; storage_path: string }>('SELECT extracted_text, storage_path FROM artifacts WHERE knowledge_capture_id = ?', [result.id!])!
+  expect(row.extracted_text).toBe(text)
+  expect(readFileSync(row.storage_path, 'utf8')).toBe(text)
+  expect(getVectorStore).not.toHaveBeenCalled()
+})
+it('stores screenshot PNG without calling image vision or embeddings', async () => {
+  const image = getArtifactType('image')!
+  const spy = vi.spyOn(image, 'extractText')
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jN1cAAAAASUVORK5CYII=', 'base64')
+  const [result] = await pasteLibrary({ png })
+  const row = queryOne<{ kind: string; storage_path: string }>('SELECT kind, storage_path FROM artifacts WHERE knowledge_capture_id = ?', [result.id!])!
+  expect(row.kind).toBe('image')
+  expect(readFileSync(row.storage_path)).toEqual(png)
+  expect(spy).not.toHaveBeenCalled()
+  spy.mockRestore()
+})
+it('persists URL, title and readable page text as a link artifact', async () => {
+  const [result] = await pasteLibrary({ text: 'https://example.test/page' })
+  const row = queryOne<{ kind: string; extracted_text: string; metadata: string }>('SELECT kind, extracted_text, metadata FROM artifacts WHERE knowledge_capture_id = ?', [result.id!])!
+  expect(row.kind).toBe('link')
+  expect(row.extracted_text).toContain('Readable body')
+  expect(JSON.parse(row.metadata).url).toBe('https://example.test/page')
+  expect(result.title).toBe('Example')
+})
+it('stores a video and imports its real extracted audio, linked by artifact metadata', async () => {
+  const path = join(root, 'fixture.mp4')
+  execFileSync(ffmpeg!, ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=black:s=32x32:d=0.2', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=0.2', '-shortest', path], { windowsHide: true })
+  const [result] = await pasteLibrary({ files: [path] })
+  expect(result.error).toBeUndefined()
+  const row = queryOne<{ kind: string; metadata: string }>('SELECT kind, metadata FROM artifacts WHERE knowledge_capture_id = ?', [result.id!])!
+  expect(row.kind).toBe('video')
+  const audioId = JSON.parse(row.metadata).audioRecordingId
+  const audio = queryOne<{ file_path: string; source: string }>('SELECT file_path, source FROM recordings WHERE id = ?', [audioId])!
+  expect(audio.source).toBe('external')
+  expect(readFileSync(audio.file_path).subarray(0, 4).toString()).toBe('RIFF')
+  expect(queueTranscriptionIfEnabled).toHaveBeenCalledWith(audioId)
+})
+it('imports audio through external recording storage and creates an empty editor note', async () => {
+  const path = join(root, 'voice.wav')
+  writeFileSync(path, 'fixture-audio')
+  const [result] = await pasteLibrary({ files: [path] })
+  expect(queryOne('SELECT id FROM recordings WHERE id = ?', [result.id!])).toBeDefined()
+  const note = newLibraryNote()
+  expect(queryOne<{ content: string }>('SELECT content FROM notes WHERE id = ?', [note.id!])!.content).toBe('')
+})
+
+it('keeps a silent video and explains why its audio import failed', async () => {
+  const path = join(root, 'silent.mp4')
+  execFileSync(ffmpeg!, ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=32x32:d=0.2', path], { windowsHide: true })
+  const [result] = await pasteLibrary({ files: [path] })
+  expect(result.error).toContain('Video was saved')
+  expect(result.error).toContain('audio')
+  expect(queryOne('SELECT id FROM artifacts WHERE knowledge_capture_id = ?', [result.id!])).toBeDefined()
+})
+
+it('reports a PDF extraction failure while preserving the imported original', async () => {
+  const path = join(root, 'broken.pdf')
+  writeFileSync(path, 'This is not a PDF')
+  const [result] = await pasteLibrary({ files: [path] })
+  expect(result.error).toBeUndefined()
+  expect(result.warning).toContain('extraction')
+  expect(queryOne('SELECT id FROM artifacts WHERE knowledge_capture_id = ?', [result.id!])).toBeDefined()
+})
+
+it('imports PDF and text file fixtures through the existing artifact extraction path', async () => {
+  const req = createRequire(import.meta.url)
+  const pdfRoot = dirname(req.resolve('pdf-parse/package.json'))
+  const pdf = join(root, 'paper.pdf')
+  writeFileSync(pdf, readFileSync(join(pdfRoot, 'test/data/05-versions-space.pdf')))
+  const text = join(root, 'file-note.txt')
+  writeFileSync(text, 'File note\nOffline contents')
+  const results = await pasteLibrary({ files: [pdf, text] })
+  expect(results.every((result) => !result.error)).toBe(true)
+  for (const result of results) {
+    const row = queryOne<{ kind: string; storage_path: string; extracted_text: string }>('SELECT kind, storage_path, extracted_text FROM artifacts WHERE knowledge_capture_id = ?', [result.id!])!
+    expect(['pdf', 'txt']).toContain(row.kind)
+    expect(readFileSync(row.storage_path).length).toBeGreaterThan(0)
+    expect(row.extracted_text).toBeTruthy()
+  }
+})
+
+it('uses the real Slack client with mocked HTTP and stores connector provenance without sending credentials to the pasted host', async () => {
+  mocks.list.mockReturnValue([{ descriptor: { id: 'slack' }, instanceId: 'slack-fixture' }])
+  mocks.secret.mockReturnValue('fixture-only')
+  vi.mocked(net.fetch).mockImplementation(async (input) => {
+    const method = new URL(String(input)).pathname.split('/').pop()
+    const body = method === 'auth.test' ? { ok: true, url: 'https://team.slack.com/', team_id: 'T123' }
+      : method === 'conversations.list' ? { ok: true, channels: [{ id: 'C123', name: 'fixture-channel' }] }
+        : { ok: true, messages: [{ ts: '1234567890.123456', user: 'U123', text: 'Connector message' }] }
+    return new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } })
+  })
+  const before = vi.mocked(net.fetch).mock.calls.length
+  const [result] = await pasteLibrary({ text: 'https://team.slack.com/archives/C123/p1234567890123456' })
+  expect(result.error).toBeUndefined()
+  const row = queryOne<{ source_connector_id: string; extracted_text: string }>('SELECT source_connector_id, extracted_text FROM artifacts WHERE knowledge_capture_id = ?', [result.id!])!
+  expect(row.source_connector_id).toBe('slack-fixture')
+  expect(row.extracted_text).toContain('Connector message')
+  for (const [input, init] of vi.mocked(net.fetch).mock.calls.slice(before)) {
+    expect(new URL(String(input)).origin).toBe('https://slack.com')
+    expect(init?.redirect).toBe('error')
+  }
+  mocks.list.mockReturnValue([])
+  mocks.secret.mockReturnValue(null)
+})
