@@ -12,6 +12,8 @@ export default defineConfig({
       reporter: ['text', 'json', 'html']
     },
     alias: {
+      // Test this checkout's migration safety, not a stale junctioned package build.
+      '@hidock/database': resolve(__dirname, '../../packages/database/src/index.ts'),
       '@': resolve(__dirname, 'src'),
       '@components': resolve(__dirname, 'src/components'),
       '@pages': resolve(__dirname, 'src/pages'),

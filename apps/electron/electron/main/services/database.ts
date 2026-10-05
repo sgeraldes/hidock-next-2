@@ -34,7 +34,7 @@ export function hasDecisionLabelRecoveryFailed(): boolean {
   return decisionLabelRecoveryFailed
 }
 
-const SCHEMA_VERSION = 71
+const SCHEMA_VERSION = 72
 
 const DECISION_LABELS_DDL = `CREATE TABLE IF NOT EXISTS decision_label_sets (
     id TEXT PRIMARY KEY,
@@ -65,7 +65,18 @@ CREATE TABLE IF NOT EXISTS decision_labels (
 CREATE INDEX IF NOT EXISTS idx_decision_labels_question ON decision_labels(question, labeled_at);
 `
 
+const DIARIZED_SEGMENTS_DDL = `CREATE TABLE IF NOT EXISTS diarized_segments (
+  recording_id TEXT NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+  run_id TEXT NOT NULL REFERENCES processing_runs(id),
+  segment_index INTEGER NOT NULL CHECK(segment_index >= 0),
+  start REAL NOT NULL CHECK(start >= 0),
+  end REAL NOT NULL CHECK(end > start),
+  voice_label TEXT NOT NULL,
+  PRIMARY KEY(recording_id, segment_index)
+)`
+
 const SCHEMA = `
+${DIARIZED_SEGMENTS_DDL};
 -- Calendar events from ICS
 CREATE TABLE IF NOT EXISTS meetings (
     id TEXT PRIMARY KEY,
@@ -3481,6 +3492,10 @@ const MIGRATIONS: Record<number, () => void> = {
   },
   71: () => {
     getDatabase().run(DECISION_LABELS_DDL)
+  },
+  72: () => {
+    // Additive migration; the shared engine creates a verified restore point first.
+    getDatabase().run(DIARIZED_SEGMENTS_DDL)
   },
 }
 

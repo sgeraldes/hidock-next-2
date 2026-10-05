@@ -27,6 +27,7 @@ import { consolidateVoiceIdentityForSpeaker } from '../services/voice-identity-c
 import { getVectorStore } from '../services/vector-store'
 import { exportMeetingWiki } from '../services/meeting-wiki'
 import { syncTrustVerdicts } from '../services/transcript-trust'
+import { getDiarizedSegments } from '../services/diarization-store'
 import { success, error, Result } from '../types/api'
 import { UUIDSchema } from '../validation/common'
 
@@ -157,6 +158,14 @@ async function indexCorrectedTranscript(recordingId: string, fullText: string): 
 }
 
 export function registerTranscriptsHandlers(): void {
+  ipcMain.handle('transcripts:getDiarizedSegments', async (_, request: unknown) => {
+    const parsed = GetSpeakerMapRequestSchema.safeParse(request)
+    if (!parsed.success) return error('VALIDATION_ERROR', 'Invalid recording request')
+    const recording = getRecordingById(parsed.data.recordingId) ?? resolveRecordingId(parsed.data.recordingId)
+    if (!recording) return error('NOT_FOUND', 'Recording not found')
+    try { return success(getDiarizedSegments(recording.id)) }
+    catch (err) { return error('DATABASE_ERROR', 'Could not read diarized segments', err) }
+  })
   ipcMain.handle('transcripts:getProcessingRuns', async (_, request: unknown) => {
     const parsed = GetSpeakerMapRequestSchema.safeParse(request)
     if (!parsed.success) return error('VALIDATION_ERROR', 'Invalid processing-runs request', parsed.error.format())

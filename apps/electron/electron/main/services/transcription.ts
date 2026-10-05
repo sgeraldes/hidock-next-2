@@ -161,6 +161,7 @@ import { isTranscriptUntrusted, syncTrustVerdicts } from './transcript-trust'
 import { previewTranscriptValidity } from './transcript-validity-store'
 import { assessTranscriptValidity, isUnusableValidity } from './transcript-validity'
 import { retryInSmallerChunks } from './transcription-completeness-retry'
+import { storeDiarizedSegments } from './diarization-store'
 import { readAudioDuration } from './audio-duration'
 import { minRecordingSeconds, qualityRules } from './quality-rules'
 import { isAutomaticMeetingLinkTemporallyEligible } from './recording-match-scoring'
@@ -2367,6 +2368,9 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
       () => stillWanted(recordingId),
       recording.duration_seconds
     )
+    if (speakerLinking.available && stillWanted(recordingId)) {
+      storeDiarizedSegments(recordingId, acousticDiarizationRun.id, speakerLinking.segments)
+    }
     completeProcessingRun(acousticDiarizationRun.id, {
       status: speakerLinking.available ? 'completed' : 'degraded',
       tool: speakerLinking.available

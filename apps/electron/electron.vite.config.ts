@@ -4,7 +4,10 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
+    // Bundle the shared engine from this checkout so migration safety cannot
+    // depend on an older compiled package behind a worktree junction.
+    resolve: { alias: { '@hidock/database': resolve(__dirname, '../../packages/database/src/index.ts') } },
+    plugins: [externalizeDepsPlugin({ exclude: ['@hidock/database'] })],
     build: {
       rollupOptions: {
         input: {

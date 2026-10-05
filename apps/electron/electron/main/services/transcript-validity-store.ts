@@ -103,10 +103,13 @@ export function readSpeechEvidence(recordingId: string): SpeechEvidence {
   }
   const v = parse(vad?.quality_json)
   const d = parse(diarization?.quality_json)
+  const persisted = queryAll<{ start: number; end: number }>(
+    `SELECT start, end FROM diarized_segments WHERE recording_id = ? AND run_id =
+      (SELECT diarization_run_id FROM transcripts WHERE recording_id = ?) ORDER BY segment_index`, [recordingId, recordingId])
   return {
     vadSpeechSeconds: typeof v.nonSilentSeconds === 'number' ? v.nonSilentSeconds : null,
     durationSeconds: typeof v.durationSeconds === 'number' ? v.durationSeconds : null,
-    diarizedSegments: Array.isArray(d.segments) ? d.segments as Array<{ start: number; end: number }> : undefined
+    diarizedSegments: persisted.length ? persisted : Array.isArray(d.segments) ? d.segments as Array<{ start: number; end: number }> : undefined
   }
 }
 
