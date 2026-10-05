@@ -13,24 +13,32 @@ export const RECORDING_KINDS = {
   noise_accidental: 'Noise or an accidental recording with no real conversation.'
 } as const
 export type RecordingKind = keyof typeof RECORDING_KINDS
+export type ReferenceLabelAnswer = RecordingKind | 'unknown'
 export interface LabelItemArgs { setId: string; recordingId: string }
-export interface SaveLabelArgs extends LabelItemArgs { answer: RecordingKind }
+export interface SaveLabelArgs extends LabelItemArgs { answer: ReferenceLabelAnswer }
 export interface ReferenceLabelSet {
   id: string
   question: 'kind'
   createdAt: string
   size: number
   unavailable: number
-  items: Array<{ recordingId: string; position: number; answer: RecordingKind | null }>
+  items: Array<{ recordingId: string; displayIndex: number; answer: ReferenceLabelAnswer | null }>
   counts: { doubtful: number; random: number }
   labeled: number
+  unknown: number
 }
 export interface ReferenceLabelItem {
   recordingId: string
+  /** Existing local recording path, or null for device-only/missing audio. */
+  filePath: string | null
   date: string
   durationSeconds: number | null
   minutes: number | null
   meetingSubject: string | null
+  meetingTitle: string | null
+  attendees: string[]
+  summary: string | null
+  transcript: string
   excerpt: string
-  answer: RecordingKind | null
+  answer: ReferenceLabelAnswer | null
 }
