@@ -1,8 +1,19 @@
-import { app, ipcMain, desktopCapturer, type BrowserWindow } from 'electron'
+import { app, ipcMain, desktopCapturer, BrowserWindow } from 'electron'
 import { join } from 'path'
 import { PcRecorder } from '../services/pc-recorder'
 import { importExternalRecording } from '../services/external-recording-import'
 import { measurePcRecordingDuration } from '../services/pc-recording-duration'
+
+const unloads = new WeakMap<Electron.WebContents, { close: boolean; prevented: boolean }>()
+
+/** Remember the operation Electron blocked; renderer acknowledges its completed flush. */
+export function configurePcRecorderUnload(window: BrowserWindow): void {
+  const state = { close: false, prevented: false }
+  unloads.set(window.webContents, state)
+  window.on('close', () => { state.close = true })
+  window.webContents.on('will-prevent-unload', () => { state.prevented = true })
+  window.webContents.on('did-finish-load', () => { state.close = false; state.prevented = false })
+}
 
 let requestStop: (() => Promise<void>) | null = null
 let quitting = false
@@ -24,6 +35,15 @@ export function configurePcLoopback(window: BrowserWindow): void {
 
 export function registerPcRecorderHandlers(): void {
   quitting = false
+  ipcMain.handle('pc-recorder:resume-unload', (event) => {
+    const state = unloads.get(event.sender)
+    if (!state?.prevented || event.sender.isDestroyed()) return
+    const close = state.close
+    state.close = false
+    state.prevented = false
+    if (close) BrowserWindow.fromWebContents(event.sender)?.close()
+    else event.sender.reload()
+  })
   const recorder = new PcRecorder(join(app.getPath('userData'), 'pc-recordings'), async (path, elapsedSeconds) => {
     const measured = await measurePcRecordingDuration(path)
     return importExternalRecording(path, {

@@ -462,6 +462,7 @@ export interface ElectronAPI {
     start: () => Promise<string>
     append: (id: string, index: number, data: Uint8Array) => Promise<void>
     finish: (id: string) => Promise<{ success: boolean; error?: string }>
+    resumeUnload: () => Promise<void>
     onStopRequested: (callback: () => void) => () => void
   }
   recordings: {
@@ -1705,6 +1706,7 @@ const BOOT_DISABLED_ARG = '--hidock-boot-disabled-features='
 
 const electronAPI: ElectronAPI = {
   pcRecorder: {
+    resumeUnload: () => callIPC('pc-recorder:resume-unload'),
     start: () => callIPC('pc-recorder:start'),
     append: (id, index, data) => callIPC('pc-recorder:append', id, index, data),
     finish: (id) => callIPC('pc-recorder:finish', id),

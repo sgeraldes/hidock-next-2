@@ -24,7 +24,7 @@ import { initializeConfig, getConfig } from './services/config'
 import { getJensenDevice, setAutoConnectChecker } from './services/jensen'
 import { initializeStartupStorage } from './storage-startup'
 import { registerIpcHandlers } from './ipc/handlers'
-import { configurePcLoopback, stopPcRecorderBeforeQuit } from './ipc/pc-recorder-handlers'
+import { configurePcLoopback, configurePcRecorderUnload, stopPcRecorderBeforeQuit } from './ipc/pc-recorder-handlers'
 import { createQuitCleanup } from './quit-cleanup'
 import { stopAutoSync, initializeCalendarAutoSync } from './ipc/calendar-handlers'
 import { startMeetingLinkRecheck } from './services/meeting-link-recheck'
@@ -135,6 +135,7 @@ function createWindow(): void {
   })
   startup.mainWindow = mainWindow
   configurePcLoopback(mainWindow)
+  configurePcRecorderUnload(mainWindow)
   if (startup.errorLog) logWindow(startup.errorLog, mainWindow.webContents)
 
   mainWindowReveal = revealMainWindow(mainWindow, {

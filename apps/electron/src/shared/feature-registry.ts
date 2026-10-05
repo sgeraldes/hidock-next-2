@@ -604,6 +604,7 @@ export const CORE_CHANNELS: string[] = [
   'pc-recorder:start',
   'pc-recorder:append',
   'pc-recorder:finish',
+  'pc-recorder:resume-unload',
   'recordings:backfillDurations',
   'recordings:clearPreassignment',
   'recordings:delete',

@@ -36,6 +36,7 @@
  *    fed (converted) into WaveformCanvas's bar-coloring hook for the gaps.
  */
 
+import { isPcRecordingFilename } from '@/shared/pc-recording'
 import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { Play, Pause, Square, SkipBack, SkipForward, Volume2, Scissors } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -273,7 +274,7 @@ export function WaveformPlayer({
   const totalDuration = playback.liveDuration || (Number.isFinite(durationSec) && (durationSec ?? 0) > 0 ? durationSec! : wf.duration)
   const pb = { ...playback, liveDuration: totalDuration, rawDuration: totalDuration }
   const stereo = wf.channels?.length === 2
-  const pcRecording = /(?:^|[\\/])pc-recording-[^\\/]+\.webm$/i.test(filePath ?? '')
+  const pcRecording = isPcRecordingFilename((filePath ?? '').split(/[\\/]/).pop() ?? '')
   const playerPrefs = usePlayerPreferences()
   const [playbackRate, setPlaybackRate] = useState(() => String(currentPlayerPreferences().defaultPlaybackSpeed))
 

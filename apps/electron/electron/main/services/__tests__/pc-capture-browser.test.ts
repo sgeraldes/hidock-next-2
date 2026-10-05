@@ -8,6 +8,7 @@ import { build } from 'esbuild'
 import postcss from 'postcss'
 import tailwind from '@tailwindcss/postcss'
 import { expect, it } from 'vitest'
+import { scoreMeetingCandidates } from '../recording-match-scoring'
 
 async function runElectron(folder: string, payload: string, mode?: string): Promise<string> {
   const electron = readFileSync(resolve('node_modules/electron/path.txt'), 'utf8').trim()
@@ -167,6 +168,10 @@ it('renders the real recording bar with visible light/dark meters and exercises 
 
 
 it('recording detail decodes headerless stereo, shows lanes and failure, and mutes the real playback graph in Chromium', async () => {
+  const best = scoreMeetingCandidates({ dateRecorded: '2026-10-05T10:20:00Z', durationSeconds: 600, contentText: 'Belcorp' }, [
+    { meetingId: 'credible', subject: 'Retro Belcorp', startTime: '2026-10-05T09:00:00Z', endTime: '2026-10-05T10:00:00Z' }
+  ])[0]
+  expect(best).toMatchObject({ confidenceScore: 0.48, isBestMatch: true })
   const folder = mkdtempSync(join(tmpdir(), 'pc-detail-ui-'))
   try {
     const bundled = await build({ stdin: { contents: `
@@ -180,12 +185,14 @@ it('recording detail decodes headerless stereo, shows lanes and failure, and mut
       window.electronAPI = { storage: { readRecording: async () => ({success: true, data: window.mediaBase64}) },
         waveform: { getCache: async () => window.cacheEntry, setCache: async (_id, peaks, duration, _size, channels) => { window.cacheEntry = {peaks, duration, channels}; return true } },
         recordings: { updateDuration: async () => ({success: true}), getCandidates: async () => ({success: true, data: [
-          {meetingId:'weak',subject:'Colegio',confidenceScore:0.05}, {meetingId:'credible',subject:'Planning',confidenceScore:0.5}
+          {meetingId:'weak',subject:'Colegio',confidenceScore:0.05}, {meetingId:'credible',subject:'Retro Belcorp',confidenceScore:${best.confidenceScore},isBestMatch:${best.isBestMatch}}
         ]}) }, projects: { getForKnowledge: async () => ({success:true,data:[]}) } };
-      const recording = { id: 'detail', filename:'pc-recording-test.webm', localPath:'/pc-recording-test.webm', location:'local-only',
+      const recording = { id: 'detail', filename:'Recording 2026-10-05 01-30 12345678-1234-1234-1234-123456789abc.webm', localPath:'/Recording 2026-10-05 01-30 12345678-1234-1234-1234-123456789abc.webm', location:'local-only',
         size:1024, duration:0, dateRecorded:new Date(), transcriptionStatus:'error', transcriptionError:'Provider timed out', syncStatus:'synced' };
-      function Detail() { useAudioPlayback(); return <SourceReader recording={recording} onPlay={() => window.__audioControls.play('detail',recording.localPath)}
+      window.detailTranscript = undefined;
+      function Detail() { useAudioPlayback(); return <SourceReader recording={recording} transcript={window.detailTranscript} onPlay={() => window.__audioControls.play('detail',recording.localPath)}
         onStop={() => window.__audioControls.stop()} onTranscribe={() => window.retries++}/> }
+      window.renderDetail = () => window.root.render(<Detail/>);
       window.mountDetail = () => { window.root = createRoot(document.body); window.root.render(<Detail/>); };
     `, resolveDir: resolve('.'), loader: 'tsx' }, bundle: true, write: false, format: 'iife', jsx: 'automatic',
       alias: { '@': resolve('src') }, define: { 'process.env.NODE_ENV': '"production"', 'import.meta.env': '{"DEV":false,"PROD":true}' } })
@@ -203,17 +210,27 @@ it('recording detail decodes headerless stereo, shows lanes and failure, and mut
       window.mediaBase64=btoa(String.fromCharCode(...new Uint8Array(encoded)));
       const decoded=await context.decodeAudioData(encoded.slice(0));
       window.mountDetail(); await new Promise(resolve=>setTimeout(resolve,50));
-      await window.__audioControls.loadWaveformOnly('detail','/pc-recording-test.webm');
+      await window.__audioControls.loadWaveformOnly('detail','/Recording 2026-10-05 01-30 12345678-1234-1234-1234-123456789abc.webm');
       for(let i=0;i<100 && !document.querySelector('[data-testid="stereo-lanes"]');i++) await new Promise(resolve=>setTimeout(resolve,20));
       const lanes=[...document.querySelectorAll('[data-channel]')].map(lane=>({channel:lane.getAttribute('data-channel'), label:lane.textContent, canvas:!!lane.querySelector('canvas')}));
       const text=document.body.textContent;
       const before={lanes, stereo:text.includes('Stereo · Mic left · System right'), failure:text.includes('Failed: Provider timed out'),
         retry:[...document.querySelectorAll('button')].some(b=>b.textContent==='Retry'), idleStop:[...document.querySelectorAll('button')].some(b=>b.textContent==='Stop'),
-        weakCandidate:text.includes('Colegio'), credibleCandidate:text.includes('Planning'), duration:window.uiStore.getState().waveformDuration,
+        weakCandidate:text.includes('Colegio'), credibleCandidate:text.includes('Retro Belcorp'), duration:window.uiStore.getState().waveformDuration,
         peaks:window.cacheEntry.channels.map(peaks=>Math.max(...peaks))};
+      window.detailTranscript = {id:'t',recording_id:'detail',full_text:'Belcorp retrospective discussion'};
+      window.renderDetail(); await new Promise(resolve=>setTimeout(resolve,100));
+      const manualSuggestions = document.body.textContent.includes('Retro Belcorp · 48%') && document.body.textContent.includes('Colegio · 5%');
+      const heldSuggestions = [];
+      for (const validity_status of ['invalid','incomplete','doubtful']) {
+        window.detailTranscript = {...window.detailTranscript,validity_status}; window.renderDetail();
+        await new Promise(resolve=>setTimeout(resolve,50));
+        heldSuggestions.push(document.querySelectorAll('[data-testid="meeting-candidate-chip"]').length);
+      }
+      window.detailTranscript = undefined; window.renderDetail(); await new Promise(resolve=>setTimeout(resolve,50));
       document.querySelector('[aria-label="Mute Mic"]').click(); await new Promise(resolve=>setTimeout(resolve,30));
       const mutedBeforePlay=window.uiStore.getState().playbackMutedChannels;
-      await window.__audioControls.play('detail','/pc-recording-test.webm'); await new Promise(resolve=>setTimeout(resolve,200));
+      await window.__audioControls.play('detail','/Recording 2026-10-05 01-30 12345678-1234-1234-1234-123456789abc.webm'); await new Promise(resolve=>setTimeout(resolve,200));
       const during={duration:window.uiStore.getState().playbackDuration, playing:window.uiStore.getState().isPlaying,
         mutedLabel:!!document.querySelector('[aria-label="Unmute Mic"]')};
       window.__audioControls.pause(); await new Promise(resolve=>setTimeout(resolve,30));
@@ -229,7 +246,7 @@ it('recording detail decodes headerless stereo, shows lanes and failure, and mut
       const player=document.querySelector('[data-testid="waveform-player-full"]');
       const transportVisible=player.getBoundingClientRect().bottom <= player.parentElement.parentElement.getBoundingClientRect().bottom + 1;
       [...document.querySelectorAll('button')].find(button=>button.textContent==='Retry').click();
-      return {before, during, mutedBeforePlay, pausedStop, renders, decodedDuration:decoded.duration, transportVisible, retries:window.retries};
+      return {before, manualSuggestions, heldSuggestions, during, mutedBeforePlay, pausedStop, renders, decodedDuration:decoded.duration, transportVisible, retries:window.retries};
     })()`
     const compactScript = `(async () => {
       document.documentElement.className='dark'; document.querySelector('[aria-label="Minimize Player"]').click();
@@ -249,7 +266,9 @@ it('recording detail decodes headerless stereo, shows lanes and failure, and mut
     expect(reports[2]).toEqual({expanded:true})
     expect(result.before.lanes).toHaveLength(2)
     expect(result.before.lanes.every((lane: {canvas: boolean}) => lane.canvas)).toBe(true)
-    expect(result.before).toMatchObject({stereo:true,failure:true,retry:true,idleStop:false,weakCandidate:false,credibleCandidate:true})
+    expect(result.manualSuggestions).toBe(true)
+    expect(result.heldSuggestions).toEqual([0,0,0])
+    expect(result.before).toMatchObject({stereo:true,failure:true,retry:true,idleStop:false,weakCandidate:false,credibleCandidate:false})
     expect(result.before.duration).toBeGreaterThan(1.5)
     expect(result.before.duration).toBe(result.decodedDuration)
     expect(result.transportVisible).toBe(true)
@@ -268,3 +287,61 @@ it('recording detail decodes headerless stereo, shows lanes and failure, and mut
     }
   } finally { rmSync(folder, { recursive: true }) }
 }, 30000)
+
+for (const failureAfter of [700, 1700]) {
+  it(`real Chromium encoder error at ${failureAfter} ms imports the terminal chunk after stop`, async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'pc-encoder-error-'))
+    try {
+      const compiled = ts.transpileModule(readFileSync(resolve('src/lib/pc-audio-capture.ts'), 'utf8').replace(/^export /gm, ''), {
+        compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }
+      }).outputText
+      const payload = join(folder, 'error.js')
+      writeFileSync(payload, compiled + `\n(async()=>{
+ const context=new AudioContext();await context.resume();
+ const sources=[400,1000].map(f=>{const osc=context.createOscillator();osc.frequency.value=f;const dest=context.createMediaStreamDestination();osc.connect(dest);osc.start();return {osc,stream:dest.stream}});
+ Object.defineProperty(navigator,'mediaDevices',{value:{getUserMedia:async()=>sources[0].stream,getDisplayMedia:async()=>sources[1].stream}});
+ const RealRecorder=MediaRecorder;let media;
+ window.MediaRecorder=class extends RealRecorder{constructor(...args){super(...args);media=this;}};
+ const events=[],chunks=[],errors=[];let imported=false,finishBytes=0;
+ const capture=new PcAudioCapture({start:async()=>'test',append:async(_id,index,data)=>{events.push(['append',index,data.length,imported]);if(imported)throw new Error('Unknown recording owner');chunks.push(data)},finish:async()=>{events.push(['finish']);finishBytes=chunks.reduce((n,c)=>n+c.length,0);imported=true;return {success:true}}},e=>{errors.push(e);events.push(['fail',e])});
+ await capture.start();
+ media.addEventListener('dataavailable',e=>events.push(['dataavailable',e.data.size]));
+ media.addEventListener('error',e=>events.push(['error',e.error.name]));
+ media.addEventListener('stop',()=>events.push(['stop']));
+ await new Promise(r=>setTimeout(r,${failureAfter}));
+ media.stream.removeTrack(media.stream.getAudioTracks()[0]);
+ await new Promise(r=>setTimeout(r,1400));
+ let stopError;try{await capture.stop()}catch(e){stopError=e.message}
+ const encoded=await new Blob(chunks).arrayBuffer();let duration=null;try{duration=(await context.decodeAudioData(encoded)).duration}catch(e){}
+ sources.forEach(s=>s.osc.stop());await context.close();
+ return {events,errors,finishBytes,duration,stopError};
+})()`)
+      const stdout = await runElectron(folder, payload)
+      const result = JSON.parse(stdout.split('PC_CAPTURE_RESULT=')[1].split('\n')[0])
+      console.log('Chromium terminal encoder chunk:', JSON.stringify(result))
+      expect(result.finishBytes).toBeGreaterThan(0)
+      expect(result.duration).toBeGreaterThan((failureAfter - 200) / 1000)
+      const events = result.events.map((event: unknown[]) => event[0])
+      expect(events.indexOf('finish')).toBeGreaterThan(events.indexOf('stop'))
+      expect(result.events.filter((event: unknown[]) => event[0] === 'append').every((event: unknown[]) => event[3] === false)).toBe(true)
+    } finally { rmSync(folder, { recursive: true }) }
+  }, 30000)
+}
+for (const operation of ['reload', 'restart', 'close']) {
+  it(`real Electron ${operation} flushes and resumes the requested operation`, async () => {
+    const stdout = await new Promise<string>((resolveOutput, reject) => {
+      const child = spawn(process.execPath, [resolve('scripts/test-pc-recorder-unload.cjs'), operation], { windowsHide: true, stdio: ['ignore', 'pipe', 'inherit'] })
+      let output = ''
+      child.stdout.on('data', data => { output += data.toString() })
+      child.on('error', reject)
+      child.on('close', code => code === 0 ? resolveOutput(output) : reject(new Error(output)))
+    })
+    const result = JSON.parse(stdout.split('PC_UNLOAD_RESULT=')[1].split('\n')[0])
+    console.log('Electron unload boundary:', JSON.stringify(result))
+    expect(result.imports).toHaveLength(1)
+    expect(result.imports[0].bytes).toBeGreaterThan(0)
+    expect(result.files).toEqual([])
+    expect(result.destroyed).toBe(operation === 'close')
+    if (operation !== 'close') expect(result.events.filter((event: string) => event === 'NAVIGATION')).toHaveLength(2)
+  }, 30000)
+}

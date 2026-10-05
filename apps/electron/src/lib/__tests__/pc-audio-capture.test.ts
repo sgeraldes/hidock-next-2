@@ -45,6 +45,30 @@ function capture() {
   return new PcAudioCapture({ start: async () => 'session', append, finish }, vi.fn())
 }
 describe('PC stereo capture', () => {
+  it('waits for an inactive encoder error final chunk and stop before importing', async () => {
+    const recorder = capture(); await recorder.start()
+    const media = FakeRecorder.instance
+    media.state = 'inactive'; media.onerror?.()
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(finish).not.toHaveBeenCalled()
+    media.ondataavailable?.({ data: { size: 1, arrayBuffer: async () => new Uint8Array([7]).buffer } as Blob })
+    media.onstop?.()
+    await expect(recorder.stop()).rejects.toThrow(/Audio recording failed/)
+    expect(append).toHaveBeenCalledWith('session', 0, new Uint8Array([7]))
+    expect(finish).toHaveBeenCalledWith('session')
+  })
+  it('bounds the wait when an inactive encoder error never emits stop', async () => {
+    vi.useFakeTimers()
+    try {
+      const recorder = capture(); await recorder.start()
+      FakeRecorder.instance.state = 'inactive'; FakeRecorder.instance.onerror?.()
+      const stopped = expect(recorder.stop()).rejects.toThrow(/Audio recording failed/)
+      await vi.advanceTimersByTimeAsync(5000)
+      await stopped
+      expect(finish).toHaveBeenCalledWith('session')
+      expect(mic.track.stop).toHaveBeenCalled()
+    } finally { vi.useRealTimers() }
+  })
   it('saves and releases capture when MediaRecorder stops by itself', async () => {
     const onError = vi.fn()
     const recorder = new PcAudioCapture({ start: async () => 'session', append, finish }, onError)

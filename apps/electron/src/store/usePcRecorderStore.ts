@@ -14,7 +14,6 @@ interface PcRecorderState {
 }
 let capture: PcAudioCapture | null = null
 let timer: ReturnType<typeof setInterval> | null = null
-let closing = false
 let savedTimer: ReturnType<typeof setTimeout> | null = null
 function clearSavedTimer() { if (savedTimer) clearTimeout(savedTimer); savedTimer = null }
 
@@ -76,10 +75,10 @@ export function installPcRecorderCloseGuard(): () => void {
   }
   const unsubscribe = window.electronAPI?.pcRecorder?.onStopRequested?.(() => { void flush() })
   const beforeUnload = (event: BeforeUnloadEvent) => {
-    if (closing || ['idle', 'saved'].includes(usePcRecorderStore.getState().status)) return
+    if (['idle', 'saved'].includes(usePcRecorderStore.getState().status)) return
     event.preventDefault()
     event.returnValue = ''
-    void flush().then(() => { closing = true; window.close() })
+    void flush().then(() => window.electronAPI.pcRecorder.resumeUnload())
   }
   window.addEventListener('beforeunload', beforeUnload)
   return () => { window.removeEventListener('beforeunload', beforeUnload); unsubscribe?.() }

@@ -365,7 +365,7 @@ describe('stereo recorder detail regressions', () => {
   it('shows independently labelled lanes and mute controls for PC stereo', () => {
     useUIStore.setState({ waveformLoadedForId: 'rec-1', playbackWaveformData: new Float32Array([0.2]),
       playbackWaveformChannels: [new Float32Array([0.2]), new Float32Array([0.8])] } as never)
-    render(<WaveformPlayer mode="full" recordingId="rec-1" filePath="/pc-recording-abc.webm" durationSec={118} />)
+    render(<WaveformPlayer mode="full" recordingId="rec-1" filePath="/Recording 2026-10-05 01-30 12345678-1234-1234-1234-123456789abc.webm" durationSec={118} />)
     expect(screen.getByText('Mic')).toBeInTheDocument()
     expect(screen.getByText('System')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Mute Mic' })).toBeInTheDocument()
@@ -373,7 +373,7 @@ describe('stereo recorder detail regressions', () => {
   })
   it('uses stored duration when the media element reports Infinity', () => {
     useUIStore.setState({ currentlyPlayingId: 'rec-1', playbackDuration: Infinity, playbackCurrentTime: 5 })
-    render(<WaveformPlayer mode="full" recordingId="rec-1" filePath="/pc-recording-abc.webm" durationSec={118} />)
+    render(<WaveformPlayer mode="full" recordingId="rec-1" filePath="/Recording 2026-10-05 01-30 12345678-1234-1234-1234-123456789abc.webm" durationSec={118} />)
     expect(screen.getByText('0:05 / 1:58')).toBeInTheDocument()
   })
 })

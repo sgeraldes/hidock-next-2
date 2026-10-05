@@ -672,13 +672,22 @@ it('failed transcription shows the stored reason and Retry without idle Stop', (
   expect(screen.getByText('Failed: Provider timed out')).toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
 })
-it('hides 5 percent meeting suggestions, retaining the existing 50 percent floor', async () => {
+it('keeps low-confidence manual suggestions including the 48 percent best match with usable transcript', async () => {
   installElectronAPI()
   ;(window.electronAPI.recordings as any).getCandidates = vi.fn().mockResolvedValue({ success: true, data: [
     { meetingId: 'weak', subject: 'Colegio', confidenceScore: 0.05 },
-    { meetingId: 'credible', subject: 'Planning', confidenceScore: 0.5 }
+    { meetingId: 'best', subject: 'Retro Belcorp', confidenceScore: 0.48, isBestMatch: true }
   ] })
-  render(<SourceReader recording={makeRecording()} />)
-  await screen.findByText('Planning · 50%')
+  render(<SourceReader recording={makeRecording({ transcriptionStatus: 'complete' })} transcript={{ id: 't', recording_id: 'rec-1', full_text: 'Belcorp retrospective discussion' } as any} />)
+  await screen.findByText(/Retro Belcorp/)
+  expect(screen.getByText('Colegio · 5%')).toBeInTheDocument()
+})
+it.each([undefined, 'invalid', 'incomplete', 'doubtful', 'empty'])('does not request meeting suggestions without usable transcript (%s)', async validity => {
+  installElectronAPI()
+  const getCandidates = vi.fn().mockResolvedValue({ success: true, data: [{ meetingId: 'weak', subject: 'Colegio', confidenceScore: 0.05 }] })
+  ;(window.electronAPI.recordings as any).getCandidates = getCandidates
+  render(<SourceReader recording={makeRecording()} transcript={validity ? { id: 't', recording_id: 'rec-1', full_text: validity === 'empty' ? ' ' : 'words', validity_status: validity } as any : undefined} />)
+  await act(async () => { await Promise.resolve() })
+  expect(getCandidates).not.toHaveBeenCalled()
   expect(screen.queryByText(/Colegio/)).not.toBeInTheDocument()
 })

@@ -19,6 +19,7 @@ export class PcAudioCapture {
   private analysers: AnalyserNode[] = []
   private failure: Error | null = null
   private persistenceFailed = false
+  private terminalStop = false
   private resolveStop: (() => void) | null = null
   private trackListeners: Array<{ track: MediaStreamTrack; ended: () => void }> = []
   constructor(private readonly bridge: PcRecorderBridge, private readonly onError: (message: string) => void) {}
@@ -31,6 +32,7 @@ export class PcAudioCapture {
     this.pending = Promise.resolve()
     this.index = 0
     this.stopPromise = null
+    this.terminalStop = false
     try {
       // Request display capture before awaiting a permission prompt: Chromium
       // requires transient user activation for getDisplayMedia.
@@ -89,6 +91,7 @@ export class PcAudioCapture {
         }).catch((error: unknown) => { this.persistenceFailed = true; this.fail(error) })
       }
       recorder.onstop = () => {
+        this.terminalStop = true
         if (this.resolveStop) this.resolveStop()
         else this.fail(new Error('Audio recording stopped unexpectedly. Saving captured audio.'))
       }
@@ -133,7 +136,7 @@ export class PcAudioCapture {
     const recorder = this.recorder
     if (!recorder) return
     try {
-      if (recorder.state !== 'inactive') {
+      if (!this.terminalStop) {
         await new Promise<void>((resolve) => {
           const timeout = setTimeout(() => {
             this.failure ??= new Error('Audio recording stop timed out; saved chunks retained')
@@ -141,7 +144,7 @@ export class PcAudioCapture {
             resolve()
           }, 5000)
           this.resolveStop = () => { clearTimeout(timeout); this.resolveStop = null; resolve() }
-          try { recorder.stop() }
+          try { if (recorder.state !== 'inactive') recorder.stop() }
           catch (error) { this.failure ??= error instanceof Error ? error : new Error(String(error)); this.resolveStop() }
         })
       }
