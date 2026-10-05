@@ -6,7 +6,10 @@
  * and auto-scrolls during playback.
  */
 
-import { useCallback, useEffect, useRef, useMemo, useState } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
+import { useCallback, useEffect, useRef, useMemo, useState, useLayoutEffect } from 'react'
+import { useReaderFind, ReaderFindBar, FindText, type ReaderFindState } from './ReaderFind'
+import type { FindDocument } from '../utils/transcriptFind'
 import { TimeAnchor } from './TimeAnchor'
 import { SpeakerAssignPopover, type AssignScope } from './SpeakerAssignPopover'
 import {
@@ -41,6 +44,8 @@ export interface StoredSegment {
 }
 
 interface TranscriptViewerProps {
+  find?: ReaderFindState
+  onFindDocuments?: (documents: FindDocument[]) => void
   transcript: string
   currentTimeMs?: number
   onSeek: (startMs: number, endMs?: number) => void
@@ -138,7 +143,9 @@ export function TranscriptViewer({
   isPlaying,
   highlightRequest,
   issueJump,
-  onTranscriptUpdated
+  onTranscriptUpdated,
+  find: externalFind,
+  onFindDocuments
 }: TranscriptViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const activeSegmentRef = useRef<HTMLDivElement | null>(null)
@@ -701,11 +708,90 @@ export function TranscriptViewer({
     if (hasTimestamps) setAutoFollow(false)
   }, [hasTimestamps])
 
+  const firstTurnBySpeaker = useMemo(() => {
+    const first = new Map<string, number>()
+    segments.forEach((segment, i) => {
+      if (segment.speaker && !first.has(segment.speaker)) first.set(segment.speaker, i)
+    })
+    return first
+  }, [segments])
+
+  const findDocuments = useMemo<FindDocument[]>(() => segments.flatMap((segment, i) => {
+    const effective = segment.speaker ? effectiveLabelFor(segment.speaker, i, splits) : undefined
+    const name = turnOverrides.get(i)?.name ?? (effective ? speakerMap.get(effective)?.name : undefined) ?? effective
+    return [
+      ...(name ? [{ key: `speaker:${i}`, section: 'transcript' as const, text: name, timeMs: segment.startMs }] : []),
+      { key: `turn:${i}`, section: 'transcript' as const, text: segment.text, timeMs: segment.startMs }
+    ]
+  }), [segments, splits, speakerMap, turnOverrides])
+  useEffect(() => { onFindDocuments?.(findDocuments) }, [findDocuments, onFindDocuments])
+  const standaloneDocuments = useMemo<FindDocument[]>(() => [
+    ...(showSummary && summary ? [{ key: 'summary', section: 'summary' as const, text: summary }] : []),
+    ...(showActionItems ? (actionItems ?? []).map((text, i) => ({ key: `action:${i}`, section: 'moments' as const, text })) : []),
+    ...findDocuments
+  ], [findDocuments, showSummary, summary, showActionItems, actionItems])
+  const localFind = useReaderFind({ sourceId: recordingId ?? (transcript || 'standalone-transcript'), documents: standaloneDocuments, onSeek, enabled: !externalFind,
+    onReveal: match => {
+      setAutoFollow(false)
+      if (match.section === 'summary') setSummaryExpanded(true)
+      else if (match.section === 'moments') setActionItemsExpanded(true)
+      else setTranscriptExpanded(true)
+    }
+  })
+  const find = externalFind ?? localFind
+  const activeFindMatch = find.current
+  useEffect(() => { if (activeFindMatch) setAutoFollow(false) }, [activeFindMatch])
+
+  const turnsRef = useRef<HTMLDivElement>(null)
+  const [turnScrollElement, setTurnScrollElement] = useState<HTMLElement | null>(null)
+  const [turnScrollMargin, setTurnScrollMargin] = useState(0)
+  const virtualTurns = segments.length > 300 && typeof ResizeObserver !== 'undefined'
+  useLayoutEffect(() => {
+    if (!virtualTurns || !turnsRef.current) return
+    let parent = turnsRef.current.parentElement
+    while (parent && !/(auto|scroll)/.test(getComputedStyle(parent).overflowY)) parent = parent.parentElement
+    if (!parent) return
+    setTurnScrollElement(parent)
+    const update = () => {
+      if (turnsRef.current) setTurnScrollMargin(turnsRef.current.getBoundingClientRect().top - parent!.getBoundingClientRect().top + parent!.scrollTop)
+    }
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(parent)
+    observer.observe(turnsRef.current)
+    return () => observer.disconnect()
+  }, [virtualTurns, transcriptExpanded, find.open, summaryExpanded, actionItemsExpanded, externalFind])
+  const turnVirtualizer = useVirtualizer({
+    count: segments.length,
+    getScrollElement: () => turnScrollElement,
+    estimateSize: () => 100,
+    overscan: 8,
+    scrollMargin: turnScrollMargin,
+    initialRect: { width: 600, height: 600 },
+    enabled: virtualTurns
+  })
+  const currentFindTurn = activeFindMatch?.section === 'transcript' ? Number(activeFindMatch.key.split(':')[1]) : -1
+  useEffect(() => {
+    if (!virtualTurns || !turnScrollElement || currentFindTurn < 0) return
+    turnVirtualizer.scrollToIndex(currentFindTurn, { align: 'center' })
+    // After the virtual turn mounts, put the specific occurrence below the pinned strips.
+    const frame = requestAnimationFrame(() => turnsRef.current?.querySelector<HTMLElement>('[data-find-current="true"]')?.scrollIntoView({ block: 'center' }))
+    return () => cancelAnimationFrame(frame)
+  }, [currentFindTurn, activeFindMatch, virtualTurns, turnScrollElement, turnVirtualizer])
+  useEffect(() => {
+    if (virtualTurns && pulse) turnVirtualizer.scrollToIndex(pulse.index, { align: 'center' })
+  }, [pulse, virtualTurns, turnVirtualizer])
+  useEffect(() => {
+    if (virtualTurns && autoFollow && isPlaying !== false && currentSegmentIndex >= 0) turnVirtualizer.scrollToIndex(currentSegmentIndex, { align: 'center' })
+  }, [virtualTurns, autoFollow, isPlaying, currentSegmentIndex, turnVirtualizer])
+  const visibleTurns = virtualTurns ? turnVirtualizer.getVirtualItems().map(item => ({ segment: segments[item.index], i: item.index, item })) : segments.map((segment, i) => ({ segment, i, item: undefined }))
+
   // Render structured turns when we have timestamps or detected speakers; else plain text
   const hasStructure = hasTimestamps || segments.some((seg) => seg.speaker)
 
   return (
-    <div className="divide-y divide-border">
+    <div data-reader-find={!externalFind ? true : undefined} ref={!externalFind ? find.rootRef : undefined} className="divide-y divide-border">
+      {!externalFind && <ReaderFindBar find={find} />}
       {/* Summary Section */}
       {showSummary && summary && (
         <section className="py-3 first:pt-0">
@@ -722,7 +808,7 @@ export function TranscriptViewer({
             )}
           </button>
           {summaryExpanded && (
-            <p className="text-sm whitespace-pre-wrap leading-relaxed mt-2">{summary}</p>
+            <p className="text-sm whitespace-pre-wrap leading-relaxed mt-2"><FindText find={find} documentKey="summary" text={summary} /></p>
           )}
         </section>
       )}
@@ -745,7 +831,7 @@ export function TranscriptViewer({
           {actionItemsExpanded && (
             <ul className="list-disc list-inside text-sm space-y-1 mt-2">
               {actionItems.map((item, i) => (
-                <li key={i}>{item}</li>
+                <li key={i}><FindText find={find} documentKey={`action:${i}`} text={item} /></li>
               ))}
             </ul>
           )}
@@ -832,9 +918,9 @@ export function TranscriptViewer({
                 </button>
               </div>
             )}
-            {hasStructure || editEnabled ? (
-              <div className="space-y-1">
-                {segments.map((segment, i) => {
+            {hasStructure || editEnabled || find.open ? (
+              <div ref={turnsRef} className={virtualTurns ? "relative" : "space-y-1"} style={virtualTurns ? { height: turnVirtualizer.getTotalSize() } : undefined}>
+                {visibleTurns.map(({ segment, i, item }) => {
                   // Per-turn identity resolution (v37). base = raw diarization
                   // label; effective = base or its split-derived label; a per-turn
                   // override supersedes the label map for display + reset.
@@ -851,14 +937,17 @@ export function TranscriptViewer({
                       : undefined
                   const hasSplitHere = base ? splits.some((s) => s.baseLabel === base && s.fromIndex === i) : false
                   const canSplitHere = base
-                    ? segments.slice(0, i).some((s) => s.speaker === base)
+                    ? (firstTurnBySpeaker.get(base) ?? i) < i
                     : false
                   const mergeSuspected = base ? mergeHints.has(base) : false
                   const lineProblems = issuesByLine[i] ?? []
                   return (
                   <div
                     key={i}
+                    data-index={i}
+                    style={item ? { position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${item.start - turnScrollMargin}px)` } : undefined}
                     ref={(el) => {
+                      if (virtualTurns) turnVirtualizer.measureElement(el)
                       if (hasTimestamps && i === currentSegmentIndex) activeSegmentRef.current = el
                       if (i === pulse?.index) pulseSegmentRef.current = el
                     }}
@@ -883,7 +972,7 @@ export function TranscriptViewer({
                             startMs={segment.startMs}
                             endMs={segment.endMs}
                             isActive={i === currentSegmentIndex}
-                            onSeek={onSeek}
+                            onSeek={(startMs, endMs) => find.open ? find.seekTo(startMs) : onSeek(startMs, endMs)}
                           >
                             {null}
                           </TimeAnchor>
@@ -891,6 +980,7 @@ export function TranscriptViewer({
                         {segment.speaker && effective && (
                           assignEnabled ? (
                             <SpeakerAssignPopover
+                              findHighlight={<FindText find={find} documentKey={`speaker:${i}`} text={assignedName ?? effective} />}
                               label={effective}
                               turnIndex={i}
                               assignedContactId={assignedContactId}
@@ -912,7 +1002,7 @@ export function TranscriptViewer({
                             />
                           ) : (
                             <span className="font-semibold text-foreground">
-                              {segment.speaker}
+                              <FindText find={find} documentKey={`speaker:${i}`} text={segment.speaker} />
                             </span>
                           )
                         )}
@@ -1012,7 +1102,7 @@ export function TranscriptViewer({
                       </div>
                     ) : (
                       <div className="relative min-w-0">
-                        <p className="whitespace-pre-wrap pr-9 leading-relaxed wrap-anywhere">{segment.text}</p>
+                        <p className="whitespace-pre-wrap pr-9 leading-relaxed wrap-anywhere"><FindText find={find} documentKey={`turn:${i}`} text={segment.text} /></p>
                         {editEnabled && (
                           <button
                             type="button"

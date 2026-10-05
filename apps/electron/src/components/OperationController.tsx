@@ -70,9 +70,10 @@ export const useAudioControls = () => {
   // reference the latest implementation.
   return useMemo(() => ({
     play: (recordingId: string, filePath: string, startTimeSec?: number, autoPlay?: boolean) => {
+      if (autoPlay !== undefined) return window.__audioControls?.play(recordingId, filePath, startTimeSec, autoPlay)
       return startTimeSec === undefined
         ? window.__audioControls?.play(recordingId, filePath)
-        : window.__audioControls?.play(recordingId, filePath, startTimeSec, autoPlay)
+        : window.__audioControls?.play(recordingId, filePath, startTimeSec)
     },
     pause: () => {
       window.__audioControls?.pause()

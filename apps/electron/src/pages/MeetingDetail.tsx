@@ -1029,7 +1029,11 @@ export function MeetingDetail() {
                                 ? Math.round(playbackCurrentTime * 1000)
                                 : undefined
                             }
-                            onSeek={(startMs) => audioControls.seek(startMs / 1000)}
+                            onSeek={(startMs) => {
+                              if (!recording.file_path) return
+                              if (currentlyPlayingId === recording.id) audioControls.seek(startMs / 1000)
+                              else void audioControls.play(recording.id, recording.file_path, startMs / 1000, false)
+                            }}
                             showSummary={true}
                             showActionItems={true}
                             summary={trustedSummary(recording.transcript) ?? undefined}
