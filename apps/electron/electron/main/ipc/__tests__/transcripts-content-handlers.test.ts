@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ipcMain } from 'electron'
 import { registerTranscriptsHandlers } from '../transcripts-handlers'
 
+const getTranscriptTiming = vi.hoisted(() => vi.fn())
+vi.mock('../../services/transcript-timing-store', () => ({ getTranscriptTiming }))
+
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }))
 
 const db = vi.hoisted(() => ({
@@ -168,5 +171,35 @@ describe('transcript content editing IPC', () => {
     expect(result).toMatchObject({ success: false, error: { code: 'RETRYABLE_ERROR' } })
     expect(db.runNoSave).not.toHaveBeenCalled()
     expect(vectorStore.indexTranscript).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('timing review persistence', () => {
+  const segments = [{ start: 494.8, end: 505.7, text: 'opening greeting' }, { start: 13, end: 14, text: 'good morning' }]
+  const fingerprint = 'a'.repeat(40)
+  beforeEach(async () => {
+    const { transcriptFingerprint } = await import('../../services/transcript-validity-store')
+    const realFingerprint = transcriptFingerprint(JSON.stringify(segments))
+    getTranscriptTiming.mockResolvedValue({ fingerprint: realFingerprint, findings: [{ index: 0, classification: 'out_of_place', suggestedStart: 11 }], hiddenIndices: [] })
+    db.queryOne.mockReturnValue({ id: 't-1', speakers: JSON.stringify(segments) })
+  })
+  it('refuses stale review without writing', async () => {
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint, index: 0, action: 'hide' }) as any
+    expect(result.success).toBe(false)
+    expect(db.runNoSave).not.toHaveBeenCalled()
+  })
+  it('stores hidden text with a flag, and leaves the summary untouched', async () => {
+    const { transcriptFingerprint } = await import('../../services/transcript-validity-store')
+    // Trust refresh is covered at the real database boundary in the isolated app.
+    registerTranscriptsHandlers()
+    await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint: transcriptFingerprint(JSON.stringify(segments)), index: 0, action: 'hide' })
+    const update = db.runNoSave.mock.calls.find(([sql]) => sql.startsWith('UPDATE transcripts SET speakers'))
+    expect(update).toBeDefined()
+    const stored = JSON.parse(update![1][0])
+    expect(stored[0]).toMatchObject({ text: 'opening greeting', timingHidden: true })
+    expect(update![1][1]).toBe('good morning')
+    expect(db.runNoSave.mock.calls.some(([sql]) => /SET summary/.test(sql))).toBe(false)
   })
 })

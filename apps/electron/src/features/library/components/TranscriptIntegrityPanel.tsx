@@ -24,7 +24,7 @@ interface TranscriptIntegrityPanelProps {
   /** Called after the owner accepted or un-accepted, so the caller can reload. */
   onChanged?: () => void
   /** Go to the next line with this problem in the transcript below. */
-  onJump?: (code: LineIssueCode) => void
+  onJump?: (code: LineIssueCode | 'past_audio_end') => void
 }
 
 export function TranscriptIntegrityPanel({ recordingId, transcript, durationSeconds, onRetranscribe, onChanged, onJump }: TranscriptIntegrityPanelProps) {
@@ -153,7 +153,7 @@ export function TranscriptIntegrityPanel({ recordingId, transcript, durationSeco
           const code = issue.code
           return (
             <li key={code}>
-              {onJump && isJumpableLineIssue(code) ? (
+              {onJump && (isJumpableLineIssue(code) || code === 'past_audio_end') ? (
                 <button
                   type="button"
                   title={`${issue.detail ?? ''}${issue.detail ? ' ' : ''}Click to go to the next one.`}

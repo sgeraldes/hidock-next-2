@@ -69,7 +69,7 @@ export interface TranscriptIntegrity {
  * before 28-sep-2026 were never checked again. 3: the transcript is judged
  * against the audio profile too (3-oct-2026).
  */
-export const INTEGRITY_VERSION = 3
+export const INTEGRITY_VERSION = 4
 
 /** Above this over a whole recording, the text does not fit in the audio. */
 export const MAX_WORDS_PER_AUDIO_SECOND = IMPOSSIBLE_WORDS_PER_SECOND
@@ -141,6 +141,7 @@ interface Line {
   start: number | null
   end: number | null
   text: string
+  timingHidden?: boolean
 }
 
 function toLines(speakersJson: string | null | undefined): Line[] {
@@ -158,7 +159,7 @@ function toLines(speakersJson: string | null | undefined): Line[] {
     const seg = raw as Record<string, unknown>
     const start = typeof seg.start === 'number' && Number.isFinite(seg.start) ? seg.start : null
     const end = typeof seg.end === 'number' && Number.isFinite(seg.end) ? seg.end : null
-    lines.push({ start, end, text: typeof seg.text === 'string' ? seg.text : '' })
+    lines.push({ start, end, text: typeof seg.text === 'string' ? seg.text : '', timingHidden: seg.timingHidden === true })
   }
   return lines
 }
@@ -191,6 +192,7 @@ export function assessTranscriptIntegrity(
   let words = 0
   let lastTime = 0
   for (const line of lines) {
+    if (line.timingHidden) continue
     words += countWords(line.text)
     if (line.start !== null) lastTime = Math.max(lastTime, line.start, line.end ?? line.start)
   }
@@ -206,7 +208,7 @@ export function assessTranscriptIntegrity(
     issues.push({
       code: 'backwards_start',
       count: backwards,
-      detail: `${plural(backwards, 'line starts', 'lines start')} before the line above it.`,
+      detail: `${plural(backwards, 'line starts', 'lines start')} outside the ordered sequence of surrounding lines.`,
     })
   }
   if (cramped > 0) {
@@ -265,7 +267,7 @@ export function assessTranscriptIntegrity(
         'most of the text was not heard in this recording.',
     })
   }
-  const loop = repeatedShare(lines, words)
+  const loop = repeatedShare(lines.filter(line => !line.timingHidden), words)
   if (loop >= REPEATED_TEXT_MAX_SHARE) {
     issues.push({
       code: 'repeated_text',

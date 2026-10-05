@@ -55,14 +55,14 @@ export function splitStoredSegmentOnInlineTurns(segment: StoredSegment): StoredS
   // Text before the first marker keeps the original segment's speaker/start.
   const preamble = text.slice(0, markers[0].markerStart).replace(/\s+/g, ' ').trim()
   if (preamble) {
-    out.push({ speaker: segment.speaker, start: base, text: preamble })
+    out.push({ ...segment, speaker: segment.speaker, start: base, text: preamble })
   }
 
   for (let i = 0; i < markers.length; i++) {
     const contentEnd = i + 1 < markers.length ? markers[i + 1].markerStart : text.length
     const body = text.slice(markers[i].contentStart, contentEnd).replace(/\s+/g, ' ').trim()
     if (!body) continue
-    out.push({ speaker: markers[i].speaker, start: toAbsolute(markers[i].tsSec), text: body })
+    out.push({ ...segment, speaker: markers[i].speaker, start: toAbsolute(markers[i].tsSec), text: body })
   }
 
   if (out.length === 0) return [segment]

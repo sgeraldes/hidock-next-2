@@ -8,7 +8,7 @@
 export type LineIssueCode = 'repeated_start' | 'backwards_start' | 'cramped_lines' | 'untimed_lines'
 
 /** The codes a person can jump to in the transcript: each marks specific lines. */
-export const JUMPABLE_LINE_ISSUES: readonly LineIssueCode[] = ['repeated_start', 'backwards_start', 'cramped_lines']
+export const JUMPABLE_LINE_ISSUES: readonly LineIssueCode[] = ['repeated_start', 'backwards_start', 'cramped_lines', 'untimed_lines']
 
 export function isJumpableLineIssue(code: string): code is LineIssueCode {
   return (JUMPABLE_LINE_ISSUES as readonly string[]).includes(code)
@@ -28,6 +28,8 @@ export interface TimedLine {
   start: number | null
   end: number | null
   text: string
+  /** Retained source line omitted from derived content at the owner's request. */
+  timingHidden?: boolean
 }
 
 const WORD = /[\p{L}\p{N}]+/gu
@@ -36,30 +38,61 @@ export function countWords(text: string): number {
   return text.match(WORD)?.length ?? 0
 }
 
-/**
- * The issues of each line, in line order. A repeated start is marked on the
- * later line; a backwards start on the line that goes back; a cramped line on
- * the line whose words do not fit before the next stated start.
+/** Indices outside the longest non-decreasing sequence, allowing small overlap.
+ * O(n log n); equal starts remain in the sequence and keep their separate flag.
+ * Hidden source lines retain their indices but no longer distort the sequence.
  */
+export function timingOutlierIndices(lines: TimedLine[]): number[] {
+  const tails: number[] = []
+  const indices: number[] = []
+  const parents = new Map<number, number>()
+  const timed: number[] = []
+  lines.forEach((line, index) => {
+    if (line.timingHidden || line.start === null || !Number.isFinite(line.start)) return
+    timed.push(index)
+    let lo = 0
+    let hi = tails.length
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1
+      if (tails[mid] <= line.start + BACKWARDS_TOLERANCE_SECONDS) lo = mid + 1
+      else hi = mid
+    }
+    parents.set(index, lo > 0 ? indices[lo - 1] : -1)
+    tails[lo] = Math.max(line.start, lo > 0 ? tails[lo - 1] : line.start)
+    indices[lo] = index
+  })
+  const kept = new Set<number>()
+  let cursor = indices.at(-1) ?? -1
+  while (cursor >= 0) {
+    kept.add(cursor)
+    cursor = parents.get(cursor) ?? -1
+  }
+  return timed.filter(index => !kept.has(index))
+}
+
+/** One source for counts and row marks: flag the outlier, not its neighbour. */
 export function lineIssues(lines: TimedLine[]): LineIssueCode[][] {
   const out: LineIssueCode[][] = lines.map(() => [])
+  const outliers = new Set(timingOutlierIndices(lines))
   const seenStarts = new Set<number>()
-  let previousStart: number | null = null
   for (let i = 0; i < lines.length; i++) {
-    const start = lines[i].start
-    if (start === null) {
+    const { start, timingHidden } = lines[i]
+    if (timingHidden) continue
+    if (start === null || !Number.isFinite(start)) {
       out[i].push('untimed_lines')
+      continue
+    }
+    if (outliers.has(i)) {
+      out[i].push('backwards_start')
       continue
     }
     const instant = Math.round(start * SAME_START_RESOLUTION)
     if (seenStarts.has(instant)) out[i].push('repeated_start')
     seenStarts.add(instant)
-    if (previousStart !== null && start < previousStart - BACKWARDS_TOLERANCE_SECONDS) out[i].push('backwards_start')
-    previousStart = start
   }
-
-  // Pace per line: words over the time until the next stated start.
-  const timed = lines.map((l, i) => ({ l, i })).filter(({ l }) => l.start !== null)
+  // Pace uses the ordered sequence, never a rejected timestamp as a boundary.
+  const timed = lines.map((l, i) => ({ l, i }))
+    .filter(({ l, i }) => l.start !== null && !l.timingHidden && !outliers.has(i))
   for (let k = 0; k < timed.length; k++) {
     const { l, i } = timed[k]
     const n = countWords(l.text)

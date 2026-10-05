@@ -1,3 +1,4 @@
+import { useTranscriptSegmentNavigation } from '../../utils/transcriptSegmentNavigation'
 /**
  * B1 — marker → transcript cross-highlight (the WIRING).
  *
@@ -31,10 +32,12 @@ vi.mock('../WaveformPlayer', () => ({
 }))
 
 // TranscriptViewer mock: records every highlightRequest it receives.
+const issueRequests: Array<{ index?: number; nonce: number } | null | undefined> = []
 const highlightRequests: Array<{ atMs: number; nonce: number } | null | undefined> = []
 vi.mock('../TranscriptViewer', () => ({
   TranscriptViewer: (props: any) => {
     highlightRequests.push(props.highlightRequest)
+    issueRequests.push(props.issueJump)
     return <div data-testid="transcript-viewer" />
   },
 }))
@@ -84,6 +87,8 @@ function makeTranscript(): Transcript {
 beforeEach(() => {
   vi.clearAllMocks()
   highlightRequests.length = 0
+  issueRequests.length = 0
+  useTranscriptSegmentNavigation.setState({ request: null })
   useUIStore.setState({ waveformLoadedForId: null, waveformLoadingId: null, playbackDuration: 0 })
   useLibraryStore.setState({ waveformPinned: false })
   ;(window as any).__audioControls = { loadWaveformOnly: vi.fn() }
@@ -141,4 +146,42 @@ describe('SourceReader — marker → transcript cross-highlight wiring', () => 
       expect(highlightRequests[highlightRequests.length - 1]).toEqual({ atMs: 30000, nonce: 2 })
     )
   })
+})
+
+
+describe('SourceReader timing warning navigation', () => {
+  it('shows the warning above the scroll body and leaves a maximized section to jump to the outlier', async () => {
+    const transcript = { ...makeTranscript(), speakers: JSON.stringify([
+      { start: 494.8, end: 505.7, text: 'hello there' },
+      { start: 13, end: 13.7, text: 'good morning' },
+      { start: 14.9, end: 15.8, text: 'good morning to you' }
+    ]), integrity_status: 'suspect', integrity_json: JSON.stringify({ version: 4, status: 'suspect', issues: [
+      { code: 'backwards_start', count: 1, detail: 'One outlier' }
+    ] }) } as Transcript
+    useLibraryStore.setState({ readerMaximizedSection: 'summary', readerSectionModes: {
+      player: 'expanded', metadata: 'expanded', moments: 'expanded', summary: 'expanded', transcript: 'compact'
+    } })
+    const { rerender } = render(<MemoryRouter><SourceReader key="before" recording={makeRecording()} transcript={transcript} /></MemoryRouter>)
+    const top = screen.getByTestId('reader-timing-warning')
+    expect(top.parentElement).toBe(screen.getByTestId('reader-scroll-body').parentElement)
+    fireEvent.click(top.querySelector('[data-testid="integrity-jump-backwards_start"]')!)
+    await waitFor(() => expect(issueRequests.at(-1)?.index).toBe(0))
+    expect(useLibraryStore.getState().readerMaximizedSection).toBeNull()
+    expect(useLibraryStore.getState().readerSectionModes.transcript).toBe('expanded')
+    // ResizablePanelGroup remounts the reader when the list rail is restored.
+    rerender(<MemoryRouter><SourceReader key="after" recording={makeRecording()} transcript={transcript} /></MemoryRouter>)
+    expect(issueRequests.at(-1)?.index).toBe(0)
+    useLibraryStore.getState().resetReaderLayout()
+  })
+})
+
+
+it('provides a top warning and jump for a past-audio-end finding with otherwise ordered times', async () => {
+  const transcript = { ...makeTranscript(), integrity_status: 'suspect', integrity_json: JSON.stringify({ version: 4, status: 'suspect', issues: [
+    { code: 'past_audio_end', count: 1, detail: 'Ends after audio' }
+  ] }) } as Transcript
+  render(<MemoryRouter><SourceReader recording={makeRecording()} transcript={transcript} /></MemoryRouter>)
+  const top = screen.getByTestId('reader-timing-warning')
+  fireEvent.click(top.querySelector('[data-testid="integrity-jump-past_audio_end"]')!)
+  await waitFor(() => expect(issueRequests.at(-1)?.index).toBe(0))
 })

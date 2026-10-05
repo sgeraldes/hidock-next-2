@@ -1,3 +1,4 @@
+import type { TimingAssessment, TimingReviewAction, TimingSegment, TimingSummaryResult } from '../../src/shared/transcript-timing'
 import type { RetranscribeResult } from '../../src/shared/retranscribe'
 import type { ReferenceLabelSet, ReferenceLabelItem, LabelItemArgs, SaveLabelArgs } from '../../src/shared/decision-labels'
 import type { TranscriptVerdicts } from '../../src/shared/transcript-verdicts'
@@ -686,6 +687,11 @@ export interface ElectronAPI {
     assignSpeaker: (request: { recordingId: string; speakerLabel: string; contactId?: string; newName?: string }) => Promise<Result<Contact>>
     getSpeakerMap: (request: { recordingId: string }) => Promise<Result<Array<{ speaker_label: string; contact_id: string; name: string }>>>
     unassignSpeaker: (request: { recordingId: string; speakerLabel: string }) => Promise<Result<void>>
+    getTiming: (request: { recordingId: string }) => Promise<Result<TimingAssessment>>
+    reviewTiming: (request: { recordingId: string; fingerprint: string; index: number; action: TimingReviewAction }) => Promise<Result<{
+      fullText: string; segments: TimingSegment[]; wordCount: number; integrity?: { status: 'ok' | 'suspect' | 'broken'; json: string }
+    }>>
+    regenerateSummary: (request: { recordingId: string }) => Promise<Result<TimingSummaryResult>>
     updateContent: (request: {
       recordingId: string
       expectedFullText: string
@@ -1852,6 +1858,9 @@ const electronAPI: ElectronAPI = {
     assignSpeaker: (request) => callIPC('transcripts:assignSpeaker', request),
     getSpeakerMap: (request) => callIPC('transcripts:getSpeakerMap', request),
     unassignSpeaker: (request) => callIPC('transcripts:unassignSpeaker', request),
+    getTiming: (request) => callIPC('transcripts:getTiming', request),
+    reviewTiming: (request) => callIPC('transcripts:reviewTiming', request),
+    regenerateSummary: (request) => callIPC('transcripts:regenerateSummary', request),
     updateContent: (request) => callIPC('transcripts:updateContent', request),
     reindex: (request) => callIPC('transcripts:reindex', request),
     updateExtractedItem: (request) => callIPC('transcripts:updateExtractedItem', request),

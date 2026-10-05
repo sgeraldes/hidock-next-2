@@ -1,3 +1,4 @@
+import type { TimingSummaryResult } from '../../../src/shared/transcript-timing'
 import {
   GeminiEngine,
   NoSpeechDetectedError,
@@ -3368,5 +3369,34 @@ export function getTranscriptionStatus(): {
 function notifyRenderer(channel: string, data: unknown): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, data)
+  }
+}
+
+/** Explicit owner request after timing review; no automatic regeneration on edits. */
+export async function regenerateTranscriptSummary(recordingId: string): Promise<TimingSummaryResult> {
+  if (!isRecordingEligible(recordingId)) throw new Error('Recording not available')
+  if (!resolveGeminiApiKey()) throw new Error('Configure Gemini before regenerating the summary')
+  const row = queryOne<{ full_text: string; speakers: string | null }>(
+    'SELECT full_text, speakers FROM transcripts WHERE recording_id = ?', [recordingId])
+  if (!row) throw new Error('Transcript not found')
+  const config = getConfig()
+  const processingRun = createProcessingRun({ recordingId, stage: 'summary', provider: 'gemini', tool: 'gemini-analysis',
+    model: config.chat?.geminiModel || CURRENT_GEMINI_CHAT_MODEL, execution: 'cloud' })
+  const usage = createGeminiUsageCollector()
+  try {
+    const analysis = await usage.run(() => analyzeTranscriptWithGemini(row.full_text, [], () => isRecordingEligible(recordingId), recordingId))
+    if (!analysis.summary || analysis.summary === 'Analysis failed') throw new Error('Summary generation returned no usable summary')
+    if (!isRecordingEligible(recordingId)) throw new Error('Recording became unavailable')
+    const current = queryOne<{ full_text: string; speakers: string | null }>(
+      'SELECT full_text, speakers FROM transcripts WHERE recording_id = ?', [recordingId])
+    if (!current || current.full_text !== row.full_text || current.speakers !== row.speakers) throw new Error('Transcript changed during summary generation; try again')
+    const reviewedSegments = row.speakers ? JSON.stringify(JSON.parse(row.speakers).map((s: Record<string, unknown>) => ({ ...s, timingReviewed: false }))) : null
+    run(`UPDATE transcripts SET summary = ?, action_items = ?, key_points = ?, summary_run_id = ?, speakers = ? WHERE recording_id = ?`,
+      [analysis.summary, JSON.stringify(analysis.action_items ?? []), JSON.stringify(analysis.key_points ?? []), processingRun.id, reviewedSegments, recordingId])
+    completeProcessingRun(processingRun.id, { outputRefs: { summary: `trans_${recordingId}.summary` }, ...runUsageFields(usage.total()) })
+    return { summary: analysis.summary, actionItems: analysis.action_items ?? [], keyPoints: analysis.key_points ?? [] }
+  } catch (err) {
+    failProcessingRun(processingRun.id, err instanceof Error ? err.message : String(err), false, runUsageFields(usage.total()))
+    throw err
   }
 }

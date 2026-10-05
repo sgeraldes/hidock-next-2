@@ -119,7 +119,7 @@ describe('TranscriptViewer edits a line start time', () => {
 })
 
 describe('TranscriptIntegrityPanel labels jump to the lines', () => {
-  it('makes line problems buttons and leaves whole-recording problems as text', () => {
+  it('makes timing problems buttons, including the line defining the audio end', () => {
     const onJump = vi.fn()
     render(
       <TranscriptIntegrityPanel
@@ -139,7 +139,8 @@ describe('TranscriptIntegrityPanel labels jump to the lines', () => {
     )
     fireEvent.click(screen.getByTestId('integrity-jump-repeated_start'))
     expect(onJump).toHaveBeenCalledWith('repeated_start')
-    expect(screen.queryByTestId('integrity-jump-past_audio_end')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('integrity-jump-past_audio_end'))
+    expect(onJump).toHaveBeenCalledWith('past_audio_end')
     expect(screen.getByText('Runs past the audio')).toBeInTheDocument()
   })
 })

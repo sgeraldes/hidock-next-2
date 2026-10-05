@@ -25,6 +25,7 @@
  * sample of its audio and comparing meaning.
  */
 
+import { lineIssues } from '../../../src/shared/transcript-line-issues'
 import { FRAME_SECONDS, LOUD_DB, LOUD_GAIN } from './audio-profile'
 
 /** Bumped when a rule changes, so stored verdicts are recomputed. */
@@ -78,6 +79,7 @@ export interface TranscriptValidity {
 }
 
 export interface ValiditySegment {
+  timingHidden?: boolean
   speaker?: string | null
   start?: number | null
   end?: number | null
@@ -153,6 +155,7 @@ function percent(n: number): string {
 }
 
 export function assessTranscriptValidity(input: ValidityInput): TranscriptValidity {
+  input = { ...input, segments: input.segments.filter(s => !s.timingHidden) }
   const totalWords = input.segments.reduce((sum, s) => sum + countWords(s.text), 0)
   const speakers = new Set(input.segments.map((s) => s.speaker).filter((s): s is string => !!s)).size
   const measures: TranscriptValidity['measures'] = {
@@ -208,13 +211,9 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
     return settle(reasons)
   }
 
-  // Timing errors: starts repeated to the hundredth, or more than half a second before the previous one.
-  let timingErrors = 0
-  for (let i = 1; i < timed.length; i++) {
-    const prev = timed[i - 1].start as number
-    const cur = timed[i].start as number
-    if (Math.round(prev * 100) === Math.round(cur * 100) || cur < prev - 0.5) timingErrors++
-  }
+  // Shared sequence rule: count the outlier rather than its ordered neighbour.
+  const timingIssues = lineIssues(timed.map(s => ({ start: s.start ?? null, end: s.end ?? null, text: s.text ?? '' })))
+  const timingErrors = timingIssues.filter(codes => codes.includes('repeated_start') || codes.includes('backwards_start')).length
   measures.timingErrorShare = timed.length > 1 ? timingErrors / (timed.length - 1) : 0
   if (timed.length >= MIN_LINES_FOR_TIMING && measures.timingErrorShare >= DOUBT_TIMING_SHARE) {
     reasons.push({
@@ -254,12 +253,20 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
     let unplaceable = 0
     let audioFrames = 0
     for (let f = 0; f < env.length; f++) if (hasAudio(f)) audioFrames++
+    const nextOrdered: Array<number | null> = []
+    let nextIndex: number | null = null
+    for (let i = timed.length - 1; i >= 0; i--) {
+      nextOrdered[i] = nextIndex
+      if (!timingIssues[i]?.includes('backwards_start')) nextIndex = i
+    }
     for (let i = 0; i < timed.length; i++) {
       const w = countWords(timed[i].text)
       if (!w) continue
+      if (timingIssues[i]?.includes('backwards_start')) { unplaceable += w; continue }
       const a = (timed[i].start as number) * factor
       const ownEnd = typeof timed[i].end === 'number' ? (timed[i].end as number) * factor : a
-      const next = i + 1 < timed.length ? (timed[i + 1].start as number) * factor : Math.min(fileSeconds, ownEnd)
+      const nextLine = nextOrdered[i] !== null ? timed[nextOrdered[i] as number] : undefined
+      const next = nextLine ? (nextLine.start as number) * factor : Math.min(fileSeconds, ownEnd)
       const length = next - a
       if (length <= 0 || w / length > MAX_WORDS_PER_SECOND) {
         unplaceable += w

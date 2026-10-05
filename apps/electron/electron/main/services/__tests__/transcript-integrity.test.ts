@@ -31,9 +31,9 @@ describe('assessTranscriptIntegrity', () => {
     expect(r.issues).toContainEqual(expect.objectContaining({ code: 'repeated_start', count: 2 }))
   })
 
-  it('flags a start that goes back in time, as at a chunk seam', () => {
+  it('flags the two lines outside the ordered sequence at a chunk seam', () => {
     const r = assessTranscriptIntegrity(json([seg(6665, 'a'), seg(6669, 'b'), seg(5400, 'c'), seg(5423, 'd')]), 7000)
-    expect(r.issues).toContainEqual(expect.objectContaining({ code: 'backwards_start', count: 1 }))
+    expect(r.issues).toContainEqual(expect.objectContaining({ code: 'backwards_start', count: 2 }))
   })
 
   it('flags a line with more words than its time allows', () => {

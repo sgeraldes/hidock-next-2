@@ -28,6 +28,10 @@ import { getVectorStore } from '../services/vector-store'
 import { exportMeetingWiki } from '../services/meeting-wiki'
 import { syncTrustVerdicts } from '../services/transcript-trust'
 import { success, error, Result } from '../types/api'
+import { getTranscriptTiming } from '../services/transcript-timing-store'
+import { applyTimingReview } from '../services/transcript-timing-evidence'
+import { transcriptFingerprint } from '../services/transcript-validity-store'
+import type { TimingSegment } from '../../../src/shared/transcript-timing'
 import { UUIDSchema } from '../validation/common'
 
 // Recording ids are UUIDs post-migration, but keep this permissive so a legacy
@@ -71,7 +75,11 @@ const EditableTranscriptSegmentSchema = z
     // How the speaker was attributed (speaker-linking.ts). Kept through an edit so
     // correcting a word does not erase the diarization quality marks.
     speakerAttribution: z.string().trim().min(1).max(40).optional(),
-    speakerConfidence: z.number().finite().min(0).max(1).optional()
+    speakerConfidence: z.number().finite().min(0).max(1).optional(),
+    timingHidden: z.boolean().optional(),
+    timingOriginalStart: z.number().finite().min(0).optional(),
+    timingOriginalEnd: z.number().finite().min(0).optional(),
+    timingReviewed: z.boolean().optional()
   })
   .refine((segment) => segment.end === undefined || segment.end >= segment.start, {
     message: 'Segment end must not precede its start'
@@ -129,6 +137,7 @@ interface TranscriptEditResult {
 
 function canonicalTranscriptText(segments: EditableTranscriptSegment[]): string {
   return segments
+    .filter(segment => !segment.timingHidden)
     .map((segment) => (segment.speaker ? `${segment.speaker}: ${segment.text}` : segment.text))
     .join('\n')
 }
@@ -157,6 +166,61 @@ async function indexCorrectedTranscript(recordingId: string, fullText: string): 
 }
 
 export function registerTranscriptsHandlers(): void {
+  ipcMain.handle('transcripts:getTiming', async (_, request: unknown) => {
+    const parsed = z.object({ recordingId: RecordingIdSchema }).safeParse(request)
+    if (!parsed.success) return error('VALIDATION_ERROR', 'Invalid timing request')
+    try { return success(await getTranscriptTiming(parsed.data.recordingId)) }
+    catch (err) { return error('DATABASE_ERROR', safeErrorMessage(err)) }
+  })
+
+  ipcMain.handle('transcripts:reviewTiming', async (_, request: unknown) => {
+    const parsed = z.object({ recordingId: RecordingIdSchema, fingerprint: z.string().length(40),
+      index: z.number().int().min(0).max(50000), action: z.enum(['move', 'hide', 'show', 'undo_move']) }).safeParse(request)
+    if (!parsed.success) return error('VALIDATION_ERROR', 'Invalid timing review')
+    const { recordingId, fingerprint, index, action } = parsed.data
+    try {
+      if (!isRecordingEligible(recordingId)) return error('RECORDING_INELIGIBLE', 'Recording not available')
+      const assessment = await getTranscriptTiming(recordingId)
+      if (assessment.fingerprint !== fingerprint) return error('INVALID_INPUT', 'Transcript changed; reopen the review')
+      const finding = assessment.findings.find(f => f.index === index)
+      if (action === 'move' && finding?.classification !== 'out_of_place') return error('VALIDATION_ERROR', 'Audio does not support a move')
+      if (action === 'hide' && !finding) return error('VALIDATION_ERROR', 'This line is no longer an outlier')
+      const vectorStore = getVectorStore()
+      vectorStore.ensureSchema()
+      let segments: TimingSegment[] = []
+      let fullText = ''
+      let transcriptId = ''
+      runInTransaction(() => {
+        if (!isRecordingEligible(recordingId)) throw new Error('Recording not available')
+        const row = queryOne<{ id: string; speakers: string | null }>('SELECT id, speakers FROM transcripts WHERE recording_id = ?', [recordingId])
+        if (!row || transcriptFingerprint(row.speakers) !== fingerprint) throw new Error('Transcript changed; reopen the review')
+        segments = applyTimingReview(JSON.parse(row.speakers ?? '[]'), index, action, finding?.suggestedStart ?? undefined)
+        transcriptId = row.id
+        fullText = segments.filter(s => !s.timingHidden).map(s => s.speaker ? `${s.speaker}: ${s.text}` : s.text).join('\n')
+        runNoSave('UPDATE transcripts SET speakers = ?, full_text = ?, word_count = ?, validity_version = NULL WHERE id = ?',
+          [JSON.stringify(segments), fullText, fullText.split(/\s+/u).filter(Boolean).length, row.id])
+        // Never leave hidden text in the searchable semantic index.
+        runNoSave('DELETE FROM vector_embeddings WHERE recording_id = ?', [recordingId])
+      })
+      vectorStore.dropByRecordingFromMemory(recordingId)
+      const checked = refreshTranscriptIntegrity(transcriptId)
+      syncTrustVerdicts(recordingId)
+      // Summary, actions and title remain untouched until the owner asks.
+      return success({ fullText, segments, wordCount: fullText.split(/\s+/u).filter(Boolean).length,
+        ...(checked ? { integrity: { status: checked.status, json: JSON.stringify(checked) } } : {}) })
+    } catch (err) { return error('DATABASE_ERROR', safeErrorMessage(err)) }
+  })
+
+  ipcMain.handle('transcripts:regenerateSummary', async (_, request: unknown) => {
+    const parsed = z.object({ recordingId: RecordingIdSchema }).safeParse(request)
+    if (!parsed.success) return error('VALIDATION_ERROR', 'Invalid summary request')
+    try {
+      const { regenerateTranscriptSummary } = await import('../services/transcription')
+      return success(await regenerateTranscriptSummary(parsed.data.recordingId))
+    }
+    catch (err) { return error('INTERNAL_ERROR', safeErrorMessage(err)) }
+  })
+
   ipcMain.handle('transcripts:getProcessingRuns', async (_, request: unknown) => {
     const parsed = GetSpeakerMapRequestSchema.safeParse(request)
     if (!parsed.success) return error('VALIDATION_ERROR', 'Invalid processing-runs request', parsed.error.format())
