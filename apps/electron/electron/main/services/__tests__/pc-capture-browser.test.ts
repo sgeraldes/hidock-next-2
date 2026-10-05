@@ -104,6 +104,20 @@ it('renders the real recording bar with visible light/dark meters and exercises 
     expect(bundled.warnings).toEqual([])
     const css = await postcss([tailwind()]).process(readFileSync(resolve('src/index.css'), 'utf8'), { from: resolve('src/index.css') })
     const meterReport = `
+      // Wait for actual analyser data and its rendered fill, rather than a fixed delay.
+      let ready = false;
+      for (let attempt = 0; attempt < 200; attempt++) {
+        const nodes = [...document.querySelectorAll('[role="meter"]')];
+        ready = nodes.length === 2 && nodes.every(meter => {
+          const level = Number(meter.getAttribute('aria-valuenow'));
+          const width = meter.getBoundingClientRect().width;
+          const filled = meter.firstElementChild.getBoundingClientRect().width;
+          return level > 0.1 && width > 50 && Math.abs(filled / width - level) < 0.005;
+        });
+        if (ready) break;
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      if (!ready) throw new Error('Recording analyser data/rendered meter did not become ready');
       const meters = [...document.querySelectorAll('[role="meter"]')].map(meter => ({
         label: meter.getAttribute('aria-label'), level: Number(meter.getAttribute('aria-valuenow')),
         track: getComputedStyle(meter).backgroundColor, fill: getComputedStyle(meter.firstElementChild).backgroundColor,
@@ -291,7 +305,9 @@ it('recording detail decodes headerless stereo, shows lanes and failure, and mut
     expect(result.heldSuggestions).toEqual([0,0,0])
     expect(result.before).toMatchObject({stereo:true,failure:true,retry:true,idleStop:false,weakCandidate:false,credibleCandidate:false})
     expect(result.before.duration).toBeGreaterThan(1.5)
-    expect(result.before.duration).toBe(result.decodedDuration)
+    // Opus uses 20 ms frames (960 samples at 48 kHz); resampling can
+    // round the final PCM sample. Bound decoded duration drift to one frame.
+    expect(Math.abs(result.before.duration - result.decodedDuration)).toBeLessThanOrEqual(960 / 48000)
     expect(result.transportVisible).toBe(true)
     expect(result.retries).toBe(1)
     expect(result.before.peaks[1]).toBeGreaterThan(result.before.peaks[0] * 2)

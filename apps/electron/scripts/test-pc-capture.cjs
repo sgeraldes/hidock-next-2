@@ -5,6 +5,9 @@ const { readFileSync, mkdirSync, writeFileSync } = require('fs')
 const { join } = require('path')
 app.setPath('userData', process.argv[2])
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
+// Exercise hardware-free output at the hosted runner fallback sample rate.
+app.commandLine.appendSwitch('disable-audio-output')
+app.commandLine.appendSwitch('audio-output-sample-rate', '44100')
 if (process.argv[4] === 'fake-devices') {
   app.commandLine.appendSwitch('use-fake-device-for-media-stream')
   app.commandLine.appendSwitch('use-fake-ui-for-media-stream')
