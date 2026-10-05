@@ -2,19 +2,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useUIStore } from '@/store/useUIStore'
 import { ReferenceLabels } from '../pipeline/ReferenceLabels'
-import type { ReferenceLabelSet, RecordingKind } from '@/shared/decision-labels'
+import type { ReferenceLabelSet, ReferenceLabelAnswer } from '@/shared/decision-labels'
 
-let answers: Record<string, RecordingKind | null>
+let answers: Record<string, ReferenceLabelAnswer | null>
 const getLabelSet = vi.fn(async (): Promise<ReferenceLabelSet> => ({
   id: 'set', question: 'kind', createdAt: '2026-10-04',
-  size: 3, unavailable: 0, counts: { doubtful: 1, random: 2 }, labeled: Object.values(answers).filter(Boolean).length,
+  size: 3, unavailable: 0, unknown: Object.values(answers).filter(answer => answer === 'unknown').length, counts: { doubtful: 1, random: 2 }, labeled: Object.values(answers).filter(Boolean).length,
   items: ['a', 'b', 'c'].map((recordingId, position) => ({ recordingId, position, answer: answers[recordingId] ?? null }))
 }))
 const getLabelItem = vi.fn(async ({ recordingId }: { recordingId: string }) => ({
   recordingId, date: '2026-10-04T12:00:00Z', durationSeconds: 120, filePath: `/audio/${recordingId}.wav` as string | null,
   meetingSubject: 'Planning', minutes: 2, excerpt: `Opening ${recordingId}`, answer: answers[recordingId] ?? null
 }))
-const saveLabel = vi.fn(async ({ recordingId, answer }: { recordingId: string; answer: RecordingKind }) => { answers[recordingId] = answer })
+const saveLabel = vi.fn(async ({ recordingId, answer }: { recordingId: string; answer: ReferenceLabelAnswer }) => { answers[recordingId] = answer })
 const clearLabel = vi.fn(async ({ recordingId }: { recordingId: string }) => { answers[recordingId] = null })
 beforeEach(() => {
   vi.clearAllMocks()
@@ -27,6 +27,49 @@ beforeEach(() => {
   window.electronAPI = { pipeline: { getLabelSet, getLabelItem, saveLabel, clearLabel } } as never
 })
 describe('Reference labels', () => {
+  it('explains the independent Library category decision and shows full context', async () => {
+    getLabelItem.mockResolvedValueOnce({ recordingId: 'a', date: '2026-10-04T12:00:00Z', durationSeconds: 120,
+      filePath: null, meetingSubject: 'Planning', minutes: 2, excerpt: 'Engine opening', answer: null,
+      meetingTitle: 'Project planning', attendees: ['Ada', 'Grace'], summary: 'Discussed milestones',
+      transcript: 'Full context '.repeat(700) + 'Final decision', kind: 'SECRET_ENGINE_KIND',
+      kind_llm: 'SECRET_LLM', evaluation: 'SECRET_JEV' } as never)
+    render(<ReferenceLabels />)
+    await screen.findByText('Project planning')
+    expect(screen.getByRole('heading', { name: 'What kind of recording is this?' })).toBeInTheDocument()
+    expect(screen.getByText("This is the category HiDock shows and filters by in the Library; your answer is the reference used to measure which decision engine gets it right, and no engine’s answer is shown so your answer stays independent.")).toBeInTheDocument()
+    expect(screen.getByText('Ada, Grace')).toBeInTheDocument()
+    expect(screen.getByText(/Duration: 2 min/)).toBeInTheDocument()
+    expect(screen.getByText('Discussed milestones')).toBeInTheDocument()
+    expect(screen.getByLabelText('Full transcript')).toHaveTextContent('Final decision')
+    expect(screen.getByLabelText('Full transcript')).toHaveClass('overflow-y-auto')
+    expect(screen.getByText('What the engines read').closest('details')).not.toHaveAttribute('open')
+    expect(screen.getByLabelText('Transcript opening')).toHaveTextContent('Engine opening')
+    expect(document.body.textContent).not.toMatch(/SECRET_ENGINE_KIND|SECRET_LLM|SECRET_JEV/)
+  })
+  it('supports missing calendar, summary and duration while retaining the transcript', async () => {
+    getLabelItem.mockResolvedValueOnce({ recordingId: 'a', date: '2026-10-04', durationSeconds: null,
+      filePath: null, meetingSubject: null, meetingTitle: null, attendees: [], summary: null,
+      transcript: 'Only the dialogue is available', minutes: null, excerpt: 'Opening a', answer: null } as never)
+    render(<ReferenceLabels />)
+    await screen.findByText('Only the dialogue is available')
+    expect(screen.queryByText('Summary')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Attendees:/)).not.toBeInTheDocument()
+    fireEvent.keyDown(window, { key: '1' })
+    await screen.findByText('Opening b')
+    expect(saveLabel).toHaveBeenCalledWith({ setId: 'set', recordingId: 'a', answer: 'interview' })
+  })
+  it('saves an unknown answer, counts it as labeled and allows changing it', async () => {
+    render(<ReferenceLabels />)
+    await screen.findByText('Opening a')
+    fireEvent.click(screen.getByRole('button', { name: "Don't know / not applicable" }))
+    await screen.findByText('Opening b')
+    expect(saveLabel).toHaveBeenCalledWith({ setId: 'set', recordingId: 'a', answer: 'unknown' })
+    expect(screen.getByText('1 of 3 labeled')).toBeInTheDocument()
+    expect(screen.getByText(/1 don't know \/ not applicable/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    await screen.findByText('Opening a')
+    expect(screen.getByRole('button', { name: "Don't know / not applicable" })).toHaveAttribute('aria-pressed', 'true')
+  })
   it('plays the original audio and shows a seek bar, time and 15-second jumps', async () => {
     render(<ReferenceLabels />)
     await screen.findByText('Opening a')
@@ -101,7 +144,7 @@ describe('Reference labels', () => {
     expect(saveLabel).toHaveBeenCalledWith({ setId: 'set', recordingId: 'a', answer: 'team_meeting' })
   })
   it('shows original size and unavailable count with a scrollable excerpt', async () => {
-    getLabelSet.mockResolvedValueOnce({ id: 'set', question: 'kind', createdAt: '2026-10-04', size: 40, unavailable: 39,
+    getLabelSet.mockResolvedValueOnce({ id: 'set', question: 'kind', createdAt: '2026-10-04', size: 40, unavailable: 39, unknown: 0,
       counts: { doubtful: 20, random: 20 }, labeled: 0, items: [{ recordingId: 'a', position: 0, answer: null }] })
     render(<ReferenceLabels />)
     await screen.findByText('Opening a')
