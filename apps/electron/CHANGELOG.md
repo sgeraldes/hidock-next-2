@@ -9,6 +9,10 @@ pairs with it, gives it the Hugging Face token and decides when it steps aside.
 
 ### Changes
 
+- Operations and Notifications show the current transcription step, progress and elapsed time, with Stop, Retry and queue ordering actions. Recording dates and operation times are clearly separated, and View source opens the transcript or processing status.
+- Stopping transcription aborts provider requests and local workers, keeps a cancellation reason, and discards unfinished transcript output.
+- Audio checks decode WebM recordings that have no duration header before deciding whether they can be transcribed.
+- Library backfills read transcript text only when needed and yield between committed batches. Fresh search vectors use compact memory storage. Operations errors stay contained, including during development reloads.
 - Graph updates skip recordings already processed or excluded before loading transcript text, and yield between batches so background work stays responsive.
 - **Listen while labeling.** Reference labels include the original local audio with play/pause,
   seeking, 15-second jumps and a Space shortcut; unavailable audio never blocks labeling.
