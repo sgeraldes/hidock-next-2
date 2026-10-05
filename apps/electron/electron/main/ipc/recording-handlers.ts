@@ -682,8 +682,8 @@ export function registerRecordingHandlers(): void {
         }
       }
 
-      const queueItemId = addToQueue(recording.id)
-      if (!queueItemId) return false
+      const queueItemId = addToQueue(recording.id, undefined, { ownerRequested: priority === true })
+      if (!queueItemId) return { success: false, error: 'Recording is personal, deleted, missing, value-excluded, or eligibility could not be checked.' }
       if (priority) markUserPriority(recording.id)
       // spec-005: Trigger immediate queue processing after adding
       processQueueManually()
@@ -731,7 +731,7 @@ export function registerRecordingHandlers(): void {
           return { success: false, error: `Recording not found: ${recordingId}. Try refreshing the library.` }
         }
 
-        const queueItemId = addToQueue(recording.id, provider)
+        const queueItemId = addToQueue(recording.id, provider, { ownerRequested: true })
         if (!queueItemId) return { success: false, error: 'Recording is not eligible for transcription' }
         markUserPriority(recording.id) // explicit single-recording reprocess
         processQueueManually()
@@ -768,7 +768,8 @@ export function registerRecordingHandlers(): void {
         return { success: false, error: `Recording not found: ${result.data.recordingId}` }
       }
 
-      const queueItemId = addToQueue(recording.id)
+      const queueItemId = addToQueue(recording.id, undefined, { ownerRequested: true })
+      if (!queueItemId) return { success: false, error: 'Recording is personal, deleted, missing, or eligibility could not be checked.' }
       markUserPriority(recording.id) // explicit user retry jumps the backlog
       updateRecordingTranscriptionStatus(recording.id, 'pending')
       processQueueManually()

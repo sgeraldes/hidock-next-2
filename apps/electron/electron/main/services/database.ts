@@ -4502,6 +4502,7 @@ export function getDatabase(): SqlJsDatabase {
 }
 
 export function closeDatabase(): void {
+  ownerRequestedQueueIds.clear()
   engine.closeDatabase()
 }
 
@@ -5353,7 +5354,7 @@ const UNUSABLE_TRANSCRIPT_EXCLUSION = `AND NOT EXISTS (
 
 export function getEligibleRecordingIds(
   candidateIds: Iterable<string>,
-  options: { forTranscription?: boolean } = {}
+  options: { forTranscription?: boolean; ignoreValueExclusion?: boolean } = {}
 ): RecordingEligibility {
   const unique = [...new Set([...candidateIds].filter((id): id is string => !!id))]
   if (unique.length === 0) return { eligible: new Set<string>(), failClosed: false }
@@ -5368,13 +5369,15 @@ export function getEligibleRecordingIds(
           WHERE r.id IN (${placeholders})
             AND r.deleted_at IS NULL
             AND COALESCE(r.personal, 0) = 0
-            AND NOT EXISTS (
+            ${options.forTranscription && options.ignoreValueExclusion ? '' : `AND NOT EXISTS (
               SELECT 1 FROM knowledge_captures kc
                WHERE kc.source_recording_id = r.id
                  AND kc.deleted_at IS NULL
-                 AND ${VALUE_EXCLUSION_PREDICATE})
+                 AND ${VALUE_EXCLUSION_PREDICATE})`}
             ${options.forTranscription ? '' : UNUSABLE_TRANSCRIPT_EXCLUSION}`,
-        [...chunk, ...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS]
+        options.forTranscription && options.ignoreValueExclusion
+          ? chunk
+          : [...chunk, ...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS]
       )
       for (const row of rows) eligible.add(row.id)
     }
@@ -8249,23 +8252,26 @@ export interface QueueItem {
   progress: number
   error_message?: string
   provider?: string
+  owner_requested?: boolean
   created_at: string
   started_at?: string
   completed_at?: string
 }
 
-export function addToQueue(recordingId: string, provider?: string): string {
-  // Honor the privacy flags at the single enqueue chokepoint: a personal
-  // ("ignored") or soft-deleted recording is never transcribed. Every path
-  // (auto-transcribe, manual, bulk backlog) funnels through here.
-  const rec = queryOne<{ personal?: number; deleted_at?: string | null }>(
-    'SELECT personal, deleted_at FROM recordings WHERE id = ?',
-    [recordingId]
-  )
-  if (rec && (rec.personal === 1 || rec.deleted_at)) {
-    console.log(`[Transcription] Skipping enqueue of personal/deleted recording ${recordingId}`)
-    return ''
-  }
+// Scoped to queue row ids, so later automatic jobs cannot inherit an override.
+// A restart drops these requests and restores the default value exclusion.
+const ownerRequestedQueueIds = new Set<string>()
+
+export function addToQueue(
+  recordingId: string,
+  provider?: string,
+  options: { ownerRequested?: boolean } = {}
+): string {
+  const { eligible, failClosed } = getEligibleRecordingIds([recordingId], {
+    forTranscription: true,
+    ignoreValueExclusion: options.ownerRequested === true
+  })
+  if (failClosed || !eligible.has(recordingId)) return ''
 
   // A recording may be rediscovered by auto-sync while it is already queued
   // (or the user may click Process All before the renderer has refreshed). A
@@ -8277,7 +8283,10 @@ export function addToQueue(recordingId: string, provider?: string): string {
     ORDER BY created_at ASC
     LIMIT 1
   `, [recordingId])
-  if (existing) return existing.id
+  if (existing) {
+    if (options.ownerRequested === true) ownerRequestedQueueIds.add(existing.id)
+    return existing.id
+  }
 
   const id = crypto.randomUUID()
   runInTransaction(() => {
@@ -8289,6 +8298,7 @@ export function addToQueue(recordingId: string, provider?: string): string {
     // This covers auto-download, manual, and bulk enqueue paths immediately.
     updateRecordingTranscriptionStatus(recordingId, 'pending')
   })
+  if (options.ownerRequested === true) ownerRequestedQueueIds.add(id)
   return id
 }
 
@@ -8304,10 +8314,8 @@ export function getQueueItems(status?: string): (QueueItem & { filename?: string
     LEFT JOIN recordings r ON tq.recording_id = r.id
     ${status ? 'WHERE tq.status = ?' : ''}
     ORDER BY r.date_recorded DESC, tq.created_at ASC`
-  if (status) {
-    return queryAll<QueueItem & { filename?: string; date_recorded?: string }>(sql, [status])
-  }
-  return queryAll<QueueItem & { filename?: string; date_recorded?: string }>(sql)
+  const rows = queryAll<QueueItem & { filename?: string; date_recorded?: string }>(sql, status ? [status] : [])
+  return rows.map((row) => ({ ...row, owner_requested: ownerRequestedQueueIds.has(row.id) }))
 }
 
 /**
@@ -8369,6 +8377,7 @@ export function getActionableQueueItems(): ActionableQueueItem[] {
 }
 
 export function updateQueueItem(id: string, status: string, errorMessage?: string): void {
+  if (status !== 'pending' && status !== 'processing') ownerRequestedQueueIds.delete(id)
   if (status === 'processing') {
     run(
       `UPDATE transcription_queue

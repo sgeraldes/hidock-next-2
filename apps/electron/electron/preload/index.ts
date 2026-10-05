@@ -1,3 +1,4 @@
+import type { RetranscribeResult } from '../../src/shared/retranscribe'
 import type { ReferenceLabelSet, ReferenceLabelItem, LabelItemArgs, SaveLabelArgs } from '../../src/shared/decision-labels'
 import type { TranscriptVerdicts } from '../../src/shared/transcript-verdicts'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
@@ -616,7 +617,7 @@ export interface ElectronAPI {
     }>
     // Transcription
     transcribe: (recordingId: string) => Promise<void>
-    addToQueue: (recordingId: string, priority?: boolean) => Promise<string | false>
+    addToQueue: (recordingId: string, priority?: boolean) => Promise<string | false | { success: false; error: string }>
     reprocessWith: (recordingId: string, provider: 'gemini' | 'local-asr' | 'vibevoice') => Promise<{ success: boolean; queueItemId?: string; error?: string }>
     reDiarize: (recordingId: string) => Promise<{ success: boolean; queueItemId?: string; cleared?: { clearedLabelBindings: number; clearedMentions: number; clearedMarkers: number }; error?: string }>
     repairContradictedLinks: (dryRun?: boolean) => Promise<{ success: boolean; cleared?: Array<{ recordingId: string; filename: string; meetingId: string; correlationMethod: string | null; correlationConfidence: number | null }>; error?: string }>
@@ -671,7 +672,7 @@ export interface ElectronAPI {
     /** Manual path to green: accept a flagged transcript as it is, or undo that. */
     setIntegrityAccepted: (request: { recordingId: string; accepted: boolean }) => Promise<Result<{ accepted: boolean }>>
     /** Automatic path to green: queue new transcriptions; each is checked when stored. */
-    retranscribeMany: (request: { recordingIds: string[] }) => Promise<Result<{ queued: number; skipped: number }>>
+    retranscribeMany: (request: { recordingIds: string[] }) => Promise<Result<RetranscribeResult>>
     search: (query: string) => Promise<any[]>
     getRecurringTopics: () => Promise<Array<{ topic: string; recordingCount: number }>>
     assignSpeaker: (request: { recordingId: string; speakerLabel: string; contactId?: string; newName?: string }) => Promise<Result<Contact>>

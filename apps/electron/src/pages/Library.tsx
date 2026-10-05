@@ -1,3 +1,4 @@
+import { describeRetranscribeSkips } from '../shared/retranscribe'
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, useDeferredValue } from 'react'
 import { isRecordingAudioFile } from '@/shared/audio-extensions'
 import { useNavigate, useLocation } from 'react-router-dom'
@@ -2924,11 +2925,11 @@ export function Library() {
                           toast.error('Could not queue the transcriptions', result.error.message)
                           return
                         }
-                        const { queued, skipped } = result.data
+                        const { queued, skipped, skippedReasons } = result.data
                         toast.success(
                           `Queued ${queued} transcription${queued === 1 ? '' : 's'}`,
                           skipped > 0
-                            ? `${skipped} could not be queued: personal, deleted, rated too low to send, or already waiting.`
+                            ? `${skipped} skipped: ${describeRetranscribeSkips(skippedReasons)}.`
                             : 'Each new transcript is checked when it is stored.'
                         )
                         void refresh(false)

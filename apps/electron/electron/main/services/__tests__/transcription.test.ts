@@ -173,7 +173,8 @@ vi.mock('../transcript-validity-store', () => ({
 // recording-eligibility boundary. Default eligible; flipped in the ADV40-1 test.
 vi.mock('../recording-eligibility', () => ({
   isRecordingEligible: (...args: any[]) => mockIsRecordingEligible(...args),
-  isRecordingTranscribable: (...args: any[]) => mockIsRecordingEligible(...args)
+  isRecordingTranscribable: (id: string, options?: { ignoreValueExclusion?: boolean }) =>
+    options?.ignoreValueExclusion ? mockIsRecordingProcessable(id) : mockIsRecordingEligible(id)
 }))
 
 vi.mock('../audio-preflight', () => ({
@@ -233,8 +234,8 @@ vi.mock('@google/generative-ai', () => ({
 // orchestration tests fast and deterministic.
 vi.mock('@hidock/transcription', () => {
   // eslint-disable-next-line require-yield -- intentional: async generator that throws before yielding
-  const mockGeminiTranscribe = async function* () {
-    mockGeminiTranscribeCall()
+  const mockGeminiTranscribe = async function* (_audio: unknown, options?: { shouldGenerate?: () => boolean }) {
+    mockGeminiTranscribeCall(options?.shouldGenerate)
     throw new Error('API rate limit exceeded')
   }
   function GeminiEngine(_options: { apiKey: string; model?: string; language?: string }) {
@@ -389,8 +390,8 @@ describe('Transcription Service', () => {
         filename: '2026Aug14-170410-Rec73.wav',
         status: 'pending',
         attempts: 0,
-        // A provider on the queue row identifies the explicit reprocess path.
-        provider: 'gemini'
+        // The queue row carries the explicit owner request.
+        provider: 'gemini', owner_requested: true
       }
       mockGetQueueItems.mockImplementation((status?: string) => status === 'pending' ? [queueItem] : [])
       mockGetRecordingById.mockReturnValue({
@@ -516,13 +517,14 @@ describe('Transcription Service', () => {
       return path
     }
 
-    function queueOne(recordingId: string, filePath: string, provider?: string): void {
+    function queueOne(recordingId: string, filePath: string, provider?: string, ownerRequested = false): void {
       const queueItem = {
         id: `queue-${recordingId}`,
         recording_id: recordingId,
         filename: `${recordingId}.wav`,
         status: 'pending',
         attempts: 0,
+        owner_requested: ownerRequested || !!provider,
         ...(provider ? { provider } : {})
       }
       mockGetQueueItems.mockImplementation((status?: string) => status === 'pending' ? [queueItem] : [])
@@ -614,13 +616,8 @@ describe('Transcription Service', () => {
       expect(mockUpdateRecordingStatus).not.toHaveBeenCalledWith('rec-short-rerun', 'no_speech')
     })
 
-    it('stops an explicit re-run of a rated clip once the local check finds speech, and hands the status back', async () => {
-      // Review of PR #25: a garbage-rated clip re-run explicitly got past the
-      // gate (so the local check could prove silence), found speech, and then
-      // died later — speaker linking killed mid-run into three retries and an
-      // error, or with speaker linking off, 'processing' forever. It must stop
-      // right after the local check, before any provider, status restored.
-      queueOne('rec-rated', writeMpegClip('rated.wav', 5), 'gemini')
+    it('sends a garbage-rated recording to the provider when the owner explicitly requests it', async () => {
+      queueOne('rec-rated', writeMpegClip('rated.wav', 30), undefined, true)
       mockGetRecordingById.mockReturnValue({
         id: 'rec-rated',
         filename: 'rec-rated.wav',
@@ -633,14 +630,25 @@ describe('Transcription Service', () => {
       mockIsRecordingEligible.mockReturnValue(false) // rated garbage: value-excluded
 
       await runQueueUntil(() => {
-        expect(mockUpdateQueueItem).toHaveBeenCalledWith('queue-rec-rated', 'cancelled')
+        expect(mockGeminiTranscribeCall).toHaveBeenCalled()
       })
 
-      expect(mockAnalyzeAudioPreflight).toHaveBeenCalled() // the local check still ran
+      expect(mockAnalyzeAudioPreflight).toHaveBeenCalled()
+      expect(mockUpdateQueueItem).not.toHaveBeenCalledWith('queue-rec-rated', 'cancelled')
+      const providerGate = mockGeminiTranscribeCall.mock.calls[0][0] as () => boolean
+      expect(providerGate()).toBe(true)
+      mockIsRecordingProcessable.mockReturnValue(false)
+      expect(providerGate()).toBe(false)
+    })
+
+    it('refuses a personal recording even with an owner override', async () => {
+      queueOne('rec-personal', writeMpegClip('personal.wav', 30), undefined, true)
+      mockIsRecordingProcessable.mockReturnValue(false)
+      await runQueueUntil(() => {
+        expect(mockUpdateQueueItem).toHaveBeenCalledWith('queue-rec-personal', 'cancelled')
+      })
       expect(mockGeminiTranscribeCall).not.toHaveBeenCalled()
-      expect(mockGenerateContent).not.toHaveBeenCalled()
-      const statuses = mockUpdateRecordingStatus.mock.calls.filter(([id]) => id === 'rec-rated').map(([, s]) => s)
-      expect(statuses).toEqual(['processing', 'no_speech'])
+      expect(mockAnalyzeAudioPreflight).not.toHaveBeenCalled()
     })
 
     it('never skips on a PCM measurement, which reads a lying container at a quarter of its length', async () => {
@@ -725,7 +733,7 @@ describe('Transcription Service', () => {
         filename: `${recordingId}.hda`,
         status: 'pending',
         attempts: 0,
-        ...(provider ? { provider } : {})
+        ...(provider ? { provider, owner_requested: true } : {})
       }
       mockGetQueueItems.mockImplementation((status?: string) => status === 'pending' ? [queueItem] : [])
       mockGetRecordingById.mockReturnValue({

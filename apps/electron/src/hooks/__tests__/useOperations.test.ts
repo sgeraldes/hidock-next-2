@@ -194,6 +194,22 @@ describe('useOperations', () => {
       expect(mockAddToQueue).toHaveBeenCalledWith('queue-item-1', 'rec-3', 'eligible.wav')
     })
 
+    it('shows the eligibility refusal instead of treating an IPC error as a queue id', async () => {
+      mockAddToQueueIPC.mockResolvedValueOnce({ success: false, error: 'Recording is personal' })
+      const { result } = renderHook(() => useOperations())
+      let success: boolean | undefined
+      await act(async () => {
+        success = await result.current.queueTranscription({
+          id: 'personal', filename: 'personal.wav', location: 'local-only', localPath: '/path/personal.wav',
+          syncStatus: 'synced', transcriptionStatus: 'none', size: 1024, duration: 60, dateRecorded: new Date()
+        } as any)
+      })
+      const { toast } = await import('@/components/ui/toaster')
+      expect(success).toBe(false)
+      expect(mockAddToQueue).not.toHaveBeenCalled()
+      expect(toast).toHaveBeenCalledWith(expect.objectContaining({ description: 'Recording is personal', variant: 'error' }))
+    })
+
     it('routes the primary Re-transcribe action through an explicit provider reprocess', async () => {
       const { result } = renderHook(() => useOperations())
       const completed = {
