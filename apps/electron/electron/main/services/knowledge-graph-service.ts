@@ -227,6 +227,8 @@ function trackedExtractor(providerConfig: Parameters<typeof complete>[1], record
     withCallRecord({ step: 'graph-extract', recordingId, route: 'direct:ai-sdk' }, () => complete(prompt, providerConfig))
 }
 
+const transcriptsInFlight = new Set<string>()
+
 export async function ingestFromDbTranscripts(): Promise<IngestResult> {
   const providerConfig = getGraphProviderConfig()
   if (!providerConfig) {
@@ -257,7 +259,15 @@ export async function ingestFromDbTranscripts(): Promise<IngestResult> {
   for (const candidate of rows) {
     await checkpoint()
     const row = candidate as TranscriptRow
+    // Claim synchronously before any text load or provider await. Each pass has
+    // a run-start snapshot; another pass may already own or have finished it.
+    let ownsClaim = false
     try {
+      if (transcriptsInFlight.has(row.id) || queryOne(
+        'SELECT transcript_id FROM graph_ingested_transcripts WHERE transcript_id = ?', [row.id]
+      )) { result.skipped++; continue }
+      transcriptsInFlight.add(row.id)
+      ownsClaim = true
       // P1 (round-3, FAIL CLOSED) — SQL pre-filter failure falls back to IDs,
       // without proving value eligibility. Gate the provider call on an
       // AUTHORITATIVE fresh point-read (exists AND not deleted AND not personal
@@ -349,6 +359,8 @@ export async function ingestFromDbTranscripts(): Promise<IngestResult> {
       const msg = e instanceof Error ? e.message : String(e)
       result.errors.push({ transcriptId: row.id, error: msg })
       console.error(`[KnowledgeGraph] Failed to ingest transcript ${row.id}:`, e)
+    } finally {
+      if (ownsClaim) transcriptsInFlight.delete(row.id)
     }
   }
 

@@ -10,6 +10,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { SourceReader } from '../SourceReader'
+import { useLibraryStore } from '@/store/useLibraryStore'
 import { useUIStore } from '@/store/useUIStore'
 import type { UnifiedRecording } from '@/types/unified-recording'
 
@@ -418,3 +419,13 @@ describe('SourceReader — close', () => {
     expect(screen.queryByTestId('reader-close')).not.toBeInTheDocument()
   })
 })
+
+ describe('View source processing focus', () => {
+   it.each(['summary', 'player', 'metadata', 'moments'] as const)('restores a maximized %s before opening the transcript', async (section) => {
+     useLibraryStore.setState({ readerMaximizedSection: section })
+     render(<SourceReader recording={makeRecording({ transcriptionStatus: 'complete' })} transcript={{ id: 't-focus', recording_id: 'rec-1', full_text: 'Saved transcript', created_at: '2026-01-01', language: 'en', summary: null, action_items: null, topics: null, key_points: null, sentiment: null, speakers: null, word_count: null, transcription_provider: null, transcription_model: null, title_suggestion: null, question_suggestions: null }} processingFocus={1} />)
+     await waitFor(() => expect(useLibraryStore.getState().readerMaximizedSection).toBeNull())
+     expect(useLibraryStore.getState().readerSectionModes.transcript).toBe('expanded')
+     expect(screen.getByTestId('reader-section-transcript')).toBeVisible()
+   })
+ })

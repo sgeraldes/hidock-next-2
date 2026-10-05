@@ -1685,7 +1685,7 @@ export interface ElectronAPI {
   onTranscriptionProgress: (callback: (data: { queueItemId: string; progress: number; stage: string }) => void) => () => void
   onTranscriptionCompleted: (callback: (data: { queueItemId?: string; recordingId: string }) => void) => () => void
   onTranscriptionFailed: (callback: (data: { queueItemId?: string; recordingId: string; error: string }) => void) => () => void
-  onTranscriptionCancelled: (callback: (data: { recordingId: string }) => void) => () => void
+  onTranscriptionCancelled: (callback: (data: { recordingId: string; reason?: string }) => void) => () => void
   onTranscriptionAllCancelled: (callback: (data: { count: number }) => void) => () => void
   onTranscriptionQueueState: (callback: (state: TranscriptionQueueState) => void) => () => void
 
@@ -2513,7 +2513,7 @@ const electronAPI: ElectronAPI = {
     }
   },
 
-  onTranscriptionCancelled: (callback: (data: { recordingId: string }) => void) => {
+  onTranscriptionCancelled: (callback: (data: { recordingId: string; reason?: string }) => void) => {
     const handler = (_event: any, data: { recordingId: string }) => callback(data)
     ipcRenderer.on('transcription:cancelled', handler)
     return () => {

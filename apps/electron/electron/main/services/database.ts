@@ -8393,9 +8393,12 @@ export function getActionableQueueItems(): ActionableQueueItem[] {
       END AS from_previous_session
     FROM transcription_queue tq
     LEFT JOIN recordings r ON tq.recording_id = r.id
-    WHERE tq.status IN ('pending', 'processing', 'failed')
+    WHERE (tq.status IN ('pending', 'processing', 'failed') OR (
+        tq.status = 'cancelled' AND tq.error_message LIKE 'Stopped by you%'
+        AND datetime(tq.completed_at) >= datetime('now', '-24 hours')
+      ))
       AND NOT (
-        tq.status = 'failed'
+        tq.status IN ('failed', 'cancelled')
         AND EXISTS (
           SELECT 1
           FROM transcription_queue newer
@@ -8437,7 +8440,11 @@ export function updateQueueItem(id: string, status: string, errorMessage?: strin
     ])
   } else if (status === 'pending') {
     // When retrying, increment retry_count and reset progress
-    run('UPDATE transcription_queue SET status = ?, retry_count = retry_count + 1, progress = 0 WHERE id = ?', [status, id])
+    run(`UPDATE transcription_queue SET status = ?, retry_count = retry_count + 1, progress = 0,
+      provider = CASE WHEN status = 'cancelled' AND error_message =
+        'Stopped by you after the transcript was saved; summary/actions/search not updated'
+        THEN 'saved-transcript' ELSE provider END
+      WHERE id = ?`, [status, id])
   } else {
     run('UPDATE transcription_queue SET status = ? WHERE id = ?', [status, id])
   }

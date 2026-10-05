@@ -64,6 +64,8 @@ function transcriptionStatus(status: TranscriptionStatus): ReactNode {
       return <StateMark label="Transcribing" />
     case 'completed':
       return 'Done'
+    case 'cancelled':
+      return 'Stopped'
     default:
       return 'Failed'
   }
@@ -107,6 +109,7 @@ export function NotificationsButton() {
   const openOperationsOverlay = useUIStore((s) => s.openOperationsOverlay)
   const { cancelDownload, cancelAllDownloads, cancelTranscription } = useOperations()
   const retry = useTranscriptionStore((s) => s.retry)
+  const dismiss = useTranscriptionStore((s) => s.dismiss)
   const prioritize = useTranscriptionStore((s) => s.prioritize)
   const deprioritize = useTranscriptionStore((s) => s.deprioritize)
   const navigate = useNavigate()
@@ -168,7 +171,7 @@ export function NotificationsButton() {
   const total = active + errors
   // Keep the popover populated while a cancelled row flashes, even if the badge count
   // has already dropped to zero.
-  const hasActivity = total > 0 || downloads.length > 0
+  const hasActivity = total > 0 || downloads.length > 0 || transcriptions.length > 0
 
   const viewAll = () => {
     setOpen(false)
@@ -231,7 +234,7 @@ export function NotificationsButton() {
                     <div className="truncate text-[11px] text-muted-foreground">
                       {transcriptionStatus(item.status)}
                     </div>
-                    <TranscriptionActivity item={item} onStop={cancelTranscription} onRetry={(id) => { void retry(id) }} />
+                    <TranscriptionActivity item={item} onStop={cancelTranscription} onRetry={(id) => { void retry(id) }} onDismiss={(id) => { void dismiss(id) }} />
                     {item.status === 'pending' && <div className="flex flex-wrap gap-1 text-xs">
                       <button type="button" className="rounded px-2 py-1 hover:bg-accent" onClick={() => prioritize(item.id)}>Move up</button>
                       <button type="button" className="rounded px-2 py-1 hover:bg-accent" onClick={() => deprioritize(item.id)}>Move down</button>

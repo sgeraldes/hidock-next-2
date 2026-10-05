@@ -24,12 +24,13 @@ vi.mock('@/hooks/useDownloadOrchestrator', () => ({
 const mockAddToQueue = vi.fn()
 const mockRemove = vi.fn()
 const mockClear = vi.fn()
+const mockMarkAllStopped = vi.fn()
 vi.mock('@/store/features/useTranscriptionStore', () => ({
   useTranscriptionStore: vi.fn((selector) => {
     const state = {
       addToQueue: mockAddToQueue,
       remove: mockRemove,
-      clear: mockClear,
+      markAllStopped: mockMarkAllStopped, clear: mockClear,
       queue: new Map()
     }
     if (typeof selector === 'function') return selector(state)
@@ -41,7 +42,7 @@ vi.mock('@/store/features/useTranscriptionStore', () => ({
 import { useTranscriptionStore } from '@/store/features/useTranscriptionStore'
 ;(useTranscriptionStore as any).getState = vi.fn(() => ({
   remove: mockRemove,
-  clear: mockClear
+  markAllStopped: mockMarkAllStopped, clear: mockClear
 }))
 
 // Mock electronAPI
@@ -412,7 +413,7 @@ describe('useOperations', () => {
   })
 
   describe('cancelAllTranscriptions', () => {
-    it('calls IPC and clears store', async () => {
+    it('calls IPC and retains stopped outcomes', async () => {
       const { result } = renderHook(() => useOperations())
 
       await act(async () => {
@@ -420,7 +421,7 @@ describe('useOperations', () => {
       })
 
       expect(mockCancelAllTranscriptions).toHaveBeenCalled()
-      expect(mockClear).toHaveBeenCalled()
+      expect(mockMarkAllStopped).toHaveBeenCalled()
     })
   })
 

@@ -83,6 +83,8 @@ function transcriptionStatus(status: TranscriptionStatus): React.ReactNode {
       return <StateMark label="Transcribing" />
     case 'completed':
       return 'Done'
+    case 'cancelled':
+      return 'Stopped'
     default:
       return 'Failed'
   }
@@ -286,7 +288,7 @@ export function OperationsPanel({ sidebarOpen }: OperationsPanelProps) {
   const hasDownloads = activeDownloadCount > 0
   const hasFailedDownloads = failedDownloadCount > 0
   const hasTranscriptions =
-    transcriptionStats.pending > 0 || transcriptionStats.processing > 0 || transcriptionStats.failed > 0
+    transcriptionStats.pending > 0 || transcriptionStats.processing > 0 || transcriptionStats.failed > 0 || Array.from(transcriptionQueue.values()).some((item) => item.status === 'cancelled')
   // Stay visible while paused, so Resume is always one click away.
   if (!hasDownloads && !hasFailedDownloads && !hasTranscriptions && downloadHistory.earlier.length === 0 && !processingPaused) return null
 
@@ -729,7 +731,7 @@ function OperationsOverlay({
                         <div className="truncate text-[11px] tabular-nums text-slate-400">
                           {transcriptionStatus(item.status)} · {attemptLabel(item)}
                         </div>
-                        <TranscriptionActivity item={item} onStop={onCancel} />
+                        <TranscriptionActivity item={item} onStop={onCancel} onRetry={item.status === 'cancelled' ? (id) => { void onRetry(id) } : undefined} onDismiss={(id) => { void onDismiss(id) }} />
                       </div>
 
                       <div className="flex shrink-0 items-center gap-1">

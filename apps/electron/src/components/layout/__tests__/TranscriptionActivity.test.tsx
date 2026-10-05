@@ -34,3 +34,11 @@ describe('shared transcription activity', () => {
     expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '33')
   })
 })
+
+ it('renders the saved-result stop reason and Finish processing', () => {
+    const retry = vi.fn()
+    render(<TranscriptionActivity item={{ ...item, status: 'cancelled', error: 'Stopped by you after the transcript was saved; summary/actions/search not updated', completedAt: new Date() }} onRetry={retry} />)
+    expect(screen.getByText('Stopped by you after the transcript was saved; summary/actions/search not updated')).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Finish processing' }))
+    expect(retry).toHaveBeenCalledWith('q')
+  })

@@ -332,11 +332,26 @@ export function orderPendingForProcessing<T extends OrderableQueueItem>(items: T
  * Recordings cancelled while a lane was transcribing them. Every continuation
  * gate of the pipeline (voice step, provider calls, the check before analysis,
  * analysis) asks `stillWanted`, so a cancelled job stops at the next gate and
- * persists nothing. Only live jobs are added, and a job's entries are cleared
+ * saves nothing before the transcript cutoff and skips remaining derived steps
+ * after it. Only live jobs are added, and a job's entries are cleared
  * when it ends, so cancelling never blocks a later request for the same recording.
  */
 const cancelledRecordings = new Set<string>()
 const activeAbortControllers = new Map<string, AbortController>()
+// Attempt-local cutoff, never inferred from a previous corrective transcript.
+const savedTranscripts = new Set<string>()
+const statusBeforeAttempts = new Map<string, string>()
+const SAVED_STOP_REASON = 'Stopped by you after the transcript was saved; summary/actions/search not updated'
+function stopReason(recordingId: string): string {
+  return idsFor(recordingId).some((id) => savedTranscripts.has(id)) ? SAVED_STOP_REASON : 'Stopped by you'
+}
+function restoreStoppedStatus(recordingId: string): void {
+  recordingId = getRecordingById(recordingId)?.id ?? resolveRecordingId(recordingId)?.id ?? recordingId
+  if (isRecordingProcessable(recordingId)) {
+    updateRecordingTranscriptionStatus(recordingId, savedTranscripts.has(recordingId)
+      ? 'complete' : statusBeforeAttempts.get(recordingId) ?? 'none')
+  }
+}
 
 function stillWanted(recordingId: string): boolean {
   // The transcription path's boundary: an unusable old transcript must not
@@ -359,21 +374,22 @@ export function cancelTranscription(recordingId: string): void {
   cancelIfRunning(recordingId)
   const ids = new Set(idsFor(recordingId))
   const running = getQueueItems('processing').filter((item) => ids.has(item.recording_id))
-  for (const item of running) updateQueueItem(item.id, 'cancelled', 'Stopped by you')
+  for (const item of running) updateQueueItem(item.id, 'cancelled', stopReason(item.recording_id))
   for (const id of ids) activeAbortControllers.get(id)?.abort(new Error('Stopped by you'))
   // Queued Remove keeps its existing semantics; running Stop keeps a durable outcome.
   if (running.length === 0) removeFromQueueByRecordingId(recordingId)
   clearQueueHints(recordingId)
-  updateRecordingTranscriptionStatus(recordingId, 'none')
-  notifyRenderer('transcription:cancelled', { recordingId, reason: 'Stopped by you' })
+  restoreStoppedStatus(recordingId)
+  notifyRenderer('transcription:cancelled', { recordingId, reason: running.length ? stopReason(recordingId) : undefined })
   emitQueueState()
 }
 
 export function cancelAllTranscriptions(): number {
   cancelRequested = true
   for (const id of getActiveTranscriptions()) cancelledRecordings.add(id)
-  for (const controller of activeAbortControllers.values()) controller.abort(new Error('Stopped by you'))
-  const count = cancelPendingTranscriptions()
+  const running = getQueueItems('processing')
+  for (const item of running) cancelTranscription(item.recording_id)
+  const count = cancelPendingTranscriptions() + running.length
   userPriorityIds.clear()
   queuePriorityRank.clear()
   notifyRenderer('transcription:all-cancelled', { count })
@@ -442,6 +458,7 @@ async function runQueueItem(
     // 90% solely because wall-clock time passed, even while Gemini was stuck
     // retrying the first interval; that made a failed job look nearly done.
     const progressCallback = (stage: string, progress: number) => {
+      if (controller.signal.aborted) return
       onStage?.(stage)
       updateQueueProgress(item.id, progress)
       notifyRenderer('transcription:progress', {
@@ -467,7 +484,11 @@ async function runQueueItem(
       // would overwrite the soft-delete's 'cancelled' tombstone with
       // 'completed', jump progress to 100, and emit transcription:completed
       // for content that does not exist. Leave it cancelled.
-      updateQueueItem(item.id, 'cancelled', controller.signal.aborted ? 'Stopped by you' : 'Source no longer eligible')
+      updateQueueItem(item.id, 'cancelled', controller.signal.aborted ? stopReason(item.recording_id) : 'Source no longer eligible')
+      if (controller.signal.aborted) {
+        restoreStoppedStatus(item.recording_id)
+        notifyRenderer('transcription:cancelled', { recordingId: item.recording_id, reason: stopReason(item.recording_id) })
+      }
       clearQueueHints(item.recording_id)
       console.log(`[Transcription] ${item.recording_id} cancelled mid-run (ineligible) — queue item marked cancelled`)
     } else if (outcome.status === 'no_speech') {
@@ -503,10 +524,11 @@ async function runQueueItem(
     if (ids.some((id) => cancelledRecordings.has(id))) {
       // Cancelled by the user while running: the step it was in threw because
       // its gate said stop. That is a cancellation, not a failure.
-      updateQueueItem(item.id, 'cancelled', 'Stopped by you')
-      updateRecordingTranscriptionStatus(item.recording_id, 'none')
+      updateQueueItem(item.id, 'cancelled', stopReason(item.recording_id))
+      restoreStoppedStatus(item.recording_id)
+      notifyRenderer('transcription:cancelled', { recordingId: item.recording_id, reason: stopReason(item.recording_id) })
       clearQueueHints(item.recording_id)
-      console.log(`[Transcription] ${item.recording_id} stopped after cancel; nothing saved`)
+      console.log(`[Transcription] ${item.recording_id} stopped after cancel`)
       return
     }
     const errorMessage = error instanceof Error ? error.message : 'Unknown error'
@@ -539,6 +561,8 @@ async function runQueueItem(
       removeActiveTranscription(id)
       cancelledRecordings.delete(id)
       activeAbortControllers.delete(id)
+      savedTranscripts.delete(id)
+      statusBeforeAttempts.delete(id)
     }
   }
 }
@@ -1143,7 +1167,7 @@ async function transcribeWithGemini(
     onTrace: (event: TranscriptionTraceEvent) => {
       providerTimeline.push(event)
       if (event.phase === 'provider-transcription' && event.status === 'started') {
-        progressCallback?.(`transcribing_part_${event.chunkIndex + 1}_of_${event.chunkCount}`, 20)
+        progressCallback?.(`transcribing_part_${event.chunkIndex}_of_${event.chunkCount}`, 20)
       }
     },
     // Every response is billed, the discarded ones too; the collector opened by
@@ -2034,6 +2058,7 @@ function isCancelledMeetingSubject(subject: string | null | undefined): boolean 
 }
 
 async function retireNoSpeechGeneratedContent(recordingId: string): Promise<void> {
+  if (cancelledRecordings.has(recordingId)) throw new TranscriptionCancelledError('Stopped by you')
   // Remove graph provenance while the old transcript row still exists, so the
   // graph cleanup can resolve every transcript/source edge. A cleanup failure
   // is visible in logs but cannot resurrect a disproven transcript in the UI.
@@ -2068,9 +2093,10 @@ async function transcribeRecording(
   // Resolve stale/foreign IDs (e.g. a synced_files id queued by an older
   // renderer build) to the real recordings row before failing.
   const recording = getRecordingById(recordingId) ?? resolveRecordingId(recordingId)
-  if (!recording || !recording.file_path) {
+  if (!recording || (!recording.file_path && providerOverride !== 'saved-transcript')) {
     throw new Error(`Recording not found or no local file: ${recordingId}`)
   }
+  const filePath = recording.file_path ?? ""
   // Continue with the canonical id so status updates hit the real row.
   recordingId = recording.id
 
@@ -2110,13 +2136,21 @@ async function transcribeRecording(
     return { status: 'cancelled' }
   }
 
-  if (!existsSync(recording.file_path)) {
-    throw new Error(`Recording file not found: ${recording.file_path}`)
+  // A durable retry marker selects derived processing, never audio transcription.
+  const finishingSavedTranscript = providerOverride === 'saved-transcript'
+  const savedTranscript = finishingSavedTranscript
+    ? queryOne<Transcript>('SELECT * FROM transcripts WHERE recording_id = ?', [recordingId])
+    : undefined
+  if (finishingSavedTranscript && !savedTranscript) throw new Error('Saved transcript is missing; transcribe the recording again')
+  if (savedTranscript) savedTranscripts.add(recordingId)
+
+  if (!savedTranscript && !existsSync(filePath)) {
+    throw new Error(`Recording file not found: ${filePath}`)
   }
 
   // Manual/reprocess calls bypass the auto-queue funnel, so enforce the same
   // metadata + schedule gate here too. No provider call occurs before this.
-  if (!ensureTranscriptionPrerequisites(recordingId)) {
+  if (!savedTranscript && !ensureTranscriptionPrerequisites(recordingId)) {
     throw new Error('Recording metadata or schedule matching is not ready')
   }
 
@@ -2124,8 +2158,8 @@ async function transcribeRecording(
   // audio before ffmpeg or any provider runs. An explicit user re-run (a
   // provider override from recordings:reprocessWith) is the escape hatch and
   // skips this check. An unmeasurable file falls through to the normal path.
-  if (!isExplicitReprocess) {
-    const tooShort = measureTooShortClip(recording.file_path)
+  if (!isExplicitReprocess && !savedTranscript) {
+    const tooShort = measureTooShortClip(filePath)
     if (tooShort) {
       const durationRun = createProcessingRun({
         recordingId,
@@ -2174,6 +2208,8 @@ async function transcribeRecording(
 
   console.log(`Transcribing: ${recording.filename}`)
   const statusBeforeRun = recording.transcription_status ?? 'none'
+  if (!savedTranscript) savedTranscripts.delete(recordingId)
+  statusBeforeAttempts.set(recordingId, statusBeforeRun)
   // AI-13: Use standard enum values matching Recording.transcription_status
   updateRecordingTranscriptionStatus(recordingId, 'processing')
 
@@ -2233,7 +2269,7 @@ Meeting ${i + 1}: "${m.subject}"
   }
 
   const config = getConfig()
-  const transcriptionProvider = providerOverride || config.transcription.provider || 'gemini'
+  const transcriptionProvider = savedTranscript?.transcription_provider || providerOverride || config.transcription.provider || 'gemini'
   const transcriptionModel = transcriptionProvider === 'local-asr'
     ? 'CohereLabs/cohere-transcribe-03-2026'
     : transcriptionProvider === 'vibevoice'
@@ -2243,266 +2279,290 @@ Meeting ${i + 1}: "${m.subject}"
   // SPEC-009 / CHANGE-2026-08-14-001: this provider-independent local safety
   // gate MUST complete before diarization, ASR, summarization, meeting
   // resolution, or any provider call. It fails closed when ffmpeg cannot run.
-  const vadRun = createProcessingRun({
-    recordingId,
-    stage: 'vad',
-    provider: 'hidock-next',
-    tool: 'ffmpeg-silencedetect',
-    model: 'energy-vad-safety-v1',
-    execution: 'local'
-  })
-  let audioPreflight: AudioPreflightReport
-  try {
-    progressCallback?.('vad', 1)
-    audioPreflight = await analyzeAudioPreflight(recording.file_path, recording.duration_seconds, activeAbortControllers.get(recordingId)?.signal)
-    completeProcessingRun(vadRun.id, {
-      qualityStatus: audioPreflight.status,
-      quality: audioPreflight as unknown as Record<string, unknown>,
-      outputRefs: { activityManifest: `processing_runs.${vadRun.id}.quality_json` }
-    })
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    failProcessingRun(vadRun.id, message)
-    throw error
-  }
-
-  if (audioPreflight.status === 'no_speech') {
-    await retireNoSpeechGeneratedContent(recordingId)
-    updateRecordingTranscriptionStatus(recordingId, 'no_speech')
-    updateRecordingStatus(recordingId, 'no_speech')
-    console.log(
-      `[Transcription] ${recordingId} has ${audioPreflight.nonSilentSeconds}s of local audio activity ` +
-        `(${(audioPreflight.nonSilentRatio * 100).toFixed(2)}%); provider transcription and all downstream AI skipped`
-    )
-    return { status: 'no_speech', reason: 'no_speech' }
-  }
-
-  // An explicit re-run of a value-excluded recording gets past the gate above
-  // for one reason: so this local preflight can prove silence and retire a false
-  // transcript. It found speech, so the rating still stands and no provider may
-  // see this audio. Stop here, before pyannote. Leaving it to the downstream
-  // checks ended the run badly: speaker linking was killed mid-run and the row
-  // retried three times into an error, or, with speaker linking off, the status
-  // stayed 'processing' forever with a dead Transcribe button. The owner lifts
-  // the rating with "Clear rating", and the next re-run then goes through.
-  if (isExplicitReprocess && !isRecordingTranscribable(recordingId)) {
-    updateRecordingTranscriptionStatus(recordingId, statusBeforeRun)
-    console.log(
-      `[Transcription] ${recordingId} has speech but its rating keeps it from any provider; ` +
-        'explicit re-run stopped after the local check. Clear the rating to transcribe it.'
-    )
-    return { status: 'cancelled' }
-  }
-
-  meetingContext += `\n\nLOCAL AUDIO ACTIVITY EVIDENCE (authoritative safety constraint):
-Non-silent audio: ${audioPreflight.nonSilentSeconds}s (${(audioPreflight.nonSilentRatio * 100).toFixed(2)}%)
-Activity intervals: ${audioPreflight.activityIntervals.map((i) => `${i.start}-${i.end}s`).join(', ')}
-Do not create speaker turns outside these intervals except for up to 1.5 seconds of timestamp-boundary tolerance.`
-
-  // SPEC-009 / v53: acoustic diarization and persistent cross-recording voice
-  // linking run BEFORE the provider. They do not require a dedicated enrollment
-  // recording and do not claim a human identity unless the anonymous cluster is
-  // independently anchored to a contact.
-  const acousticDiarizationRun = createProcessingRun({
-    recordingId,
-    stage: 'diarization',
-    provider: 'pyannote',
-    tool: 'pyannote',
-    model: pinnedVoiceModel(),
-    execution: 'local',
-    parentRunIds: [vadRun.id]
-  })
-  let speakerLinking: SpeakerLinkingResult
-  progressCallback?.('voices', 3)
-  try {
-    speakerLinking = await runSpeakerLinkingPreflight(
+  let rawTranscript: RawTranscriptionResult
+  let transcriptionRun: { id: string }
+  let diarizationRun: { id: string }
+  let voiceIdRun: { id: string }
+  let diarizationQuality: ReturnType<typeof parseAndAssessDiarization>
+  if (savedTranscript) {
+    rawTranscript = {
+      fullText: savedTranscript.full_text,
+      speakers: savedTranscript.speakers,
+      language: savedTranscript.language || 'unknown',
+      provider: (savedTranscript.transcription_provider || 'gemini') as RawTranscriptionResult['provider'],
+      model: savedTranscript.transcription_model || 'unknown'
+    }
+    // Reuse the saved audio provenance. This run describes a local read, not a
+    // new provider request or a claim that audio/diarization ran again.
+    const reuseRun = createProcessingRun({ recordingId, stage: 'transcription',
+      provider: 'hidock-next', tool: 'saved-transcript', execution: 'local' })
+    completeProcessingRun(reuseRun.id, { outputRefs: { transcriptId: savedTranscript.id } })
+    transcriptionRun = { id: savedTranscript.transcription_run_id || reuseRun.id }
+    diarizationRun = { id: savedTranscript.diarization_run_id || reuseRun.id }
+    voiceIdRun = reuseRun
+    diarizationQuality = parseAndAssessDiarization(savedTranscript.speakers, recording.duration_seconds)
+  } else {
+    const vadRun = createProcessingRun({
       recordingId,
-      recording.file_path,
-      () => stillWanted(recordingId),
-      recording.duration_seconds
-    )
-    completeProcessingRun(acousticDiarizationRun.id, {
-      status: speakerLinking.available ? 'completed' : 'degraded',
-      tool: speakerLinking.available
-        ? speakerLinking.model.split('/').pop() || speakerLinking.model
-        : 'not-available',
-      model: speakerLinking.model,
-      version: speakerLinking.modelVersion,
-      outputRefs: {
-        segments: speakerLinking.segments.length,
-        voices: speakerLinking.matches.length
-      },
-      qualityStatus: speakerLinking.available ? 'completed' : 'unavailable',
-      quality: {
-        modelVersion: speakerLinking.modelVersion,
-        device: speakerLinking.device,
-        reason: speakerLinking.reason ?? null
-      }
+      stage: 'vad',
+      provider: 'hidock-next',
+      tool: 'ffmpeg-silencedetect',
+      model: 'energy-vad-safety-v1',
+      execution: 'local'
     })
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error)
-    if (!(error instanceof SpeakerLinkingUnavailableError)) {
-      failProcessingRun(acousticDiarizationRun.id, reason)
+    let audioPreflight: AudioPreflightReport
+    try {
+      progressCallback?.('vad', 1)
+      audioPreflight = await analyzeAudioPreflight(filePath, recording.duration_seconds, activeAbortControllers.get(recordingId)?.signal)
+      completeProcessingRun(vadRun.id, {
+        qualityStatus: audioPreflight.status,
+        quality: audioPreflight as unknown as Record<string, unknown>,
+        outputRefs: { activityManifest: `processing_runs.${vadRun.id}.quality_json` }
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      failProcessingRun(vadRun.id, message)
       throw error
     }
-    speakerLinking = {
-      available: false,
-      model: pinnedVoiceModel(),
-      modelVersion: null,
-      device: null,
-      segments: [],
-      matches: [],
-      reason
-    }
-    completeProcessingRun(acousticDiarizationRun.id, {
-      status: 'degraded',
-      qualityStatus: 'unavailable',
-      quality: { reason, fallback: 'provider-managed diarization' }
-    })
-  }
 
-  const voiceIdRun = createProcessingRun({
-    recordingId,
-    stage: 'voice-id',
-    provider: 'hidock-next',
-    tool: 'persistent-acoustic-speaker-linking',
-    model: speakerLinking.model,
-    version: speakerLinking.modelVersion,
-    execution: 'local',
-    parentRunIds: [acousticDiarizationRun.id]
-  })
-  completeProcessingRun(voiceIdRun.id, {
-    status: speakerLinking.available ? 'completed' : 'degraded',
-    outputRefs: {
-      matched: speakerLinking.matches.filter((match) => match.status === 'matched').length,
-      newAnonymous: speakerLinking.matches.filter((match) => match.status === 'new').length,
-      needsReview: speakerLinking.matches.filter((match) => match.status === 'needs_review').length,
-      contactAnchored: speakerLinking.matches.filter((match) => !!match.contactId).length
-    },
-    qualityStatus: speakerLinking.available ? 'completed' : 'unavailable',
-    quality: {
-      reason: speakerLinking.reason ?? null,
-      identityPolicy: 'anonymous unless manually or independently anchored to a contact',
-      matchThreshold: config.transcription.speakerLinkingMatchThreshold,
-      requiredMargin: config.transcription.speakerLinkingMatchMargin
-    }
-  })
-  meetingContext += `\n\n${buildSpeakerLinkingContext(speakerLinking)}`
-
-  // Provider-managed diarization is a compatibility fallback only when the
-  // independent acoustic stage is unavailable. A successful local run remains
-  // the authoritative diarization provenance for the transcript.
-  const diarizationTool = transcriptionProvider === 'local-asr'
-    ? (config.transcription.localAsrDiarize === false ? 'disabled' : 'pyannote')
-    : transcriptionProvider
-  const diarizationRun = speakerLinking.available
-    ? acousticDiarizationRun
-    : createProcessingRun({
-        recordingId,
-        stage: 'diarization',
-        provider: transcriptionProvider,
-        tool: diarizationTool,
-        model: transcriptionModel,
-        execution: 'provider-managed',
-        parentRunIds: [vadRun.id, acousticDiarizationRun.id]
-      })
-  const transcriptionRun = createProcessingRun({
-    recordingId,
-    stage: 'transcription',
-    provider: transcriptionProvider,
-    tool: transcriptionProvider === 'local-asr' ? 'asr-mcp' : transcriptionProvider,
-    model: transcriptionModel,
-    execution,
-    parentRunIds: [vadRun.id, diarizationRun.id, voiceIdRun.id]
-  })
-  let rawTranscript: RawTranscriptionResult
-  const transcriptionUsage = createGeminiUsageCollector()
-  const providerFilePath = recording.file_path // narrowed here; a closure below would lose it
-  try {
-    rawTranscript = transcriptionProvider === 'vibevoice'
-      ? await transcribeWithVibeVoice(recording.file_path, meetingContext, progressCallback, activeAbortControllers.get(recordingId)?.signal)
-      : transcriptionProvider === 'local-asr'
-        ? await transcribeWithLocalAsr(recording.file_path, meetingContext, progressCallback, activeAbortControllers.get(recordingId)?.signal)
-        // ADV43-1 (round-45) — thread the SAME fail-closed eligibility check into
-        // GeminiEngine's internal chunk/upload/retry loop. If the owner excludes
-        // the recording WHILE the engine is mid-pipeline, the engine throws
-        // TranscriptionCancelledError (caught below) so we stop sending audio to
-        // Gemini and persist nothing — the up-front + second-stage checks cannot
-        // observe an exclusion that lands between the engine's own provider calls.
-        : await transcriptionUsage.run(() =>
-            transcribeWithGemini(
-              providerFilePath,
-              meetingContext,
-              progressCallback,
-              () => stillWanted(recordingId),
-              recording.duration_seconds ?? undefined,
-              activeAbortControllers.get(recordingId)?.signal
-            )
-          )
-  } catch (e) {
-    if (e instanceof TranscriptionCancelledError) {
-      failProcessingRun(transcriptionRun.id, e.message, true, runUsageFields(transcriptionUsage.total()))
-      if (!speakerLinking.available) failProcessingRun(diarizationRun.id, e.message, true)
-      console.log(
-        `[Transcription] Recording ${recordingId} became ineligible during the transcription ` +
-          'provider pipeline (chunk/upload/retry) — aborted before further audio was sent; nothing persisted'
-      )
-      // Hand the status back: 'processing' with nothing running is a dead
-      // Transcribe button, because the UI ignores clicks on a run in progress.
-      updateRecordingTranscriptionStatus(recordingId, statusBeforeRun)
-      return { status: 'cancelled' }
-    }
-    if (e instanceof NoSpeechDetectedError) {
-      failProcessingRun(transcriptionRun.id, e.message, true, runUsageFields(transcriptionUsage.total()))
-      if (!speakerLinking.available) failProcessingRun(diarizationRun.id, e.message, true)
+    if (audioPreflight.status === 'no_speech') {
       await retireNoSpeechGeneratedContent(recordingId)
       updateRecordingTranscriptionStatus(recordingId, 'no_speech')
       updateRecordingStatus(recordingId, 'no_speech')
-      console.log(`[Transcription] Provider confirmed no intelligible speech for ${recordingId}; downstream AI skipped`)
+      console.log(
+        `[Transcription] ${recordingId} has ${audioPreflight.nonSilentSeconds}s of local audio activity ` +
+          `(${(audioPreflight.nonSilentRatio * 100).toFixed(2)}%); provider transcription and all downstream AI skipped`
+      )
       return { status: 'no_speech', reason: 'no_speech' }
     }
-    const message = e instanceof Error ? e.message : String(e)
-    failProcessingRun(transcriptionRun.id, message, false, runUsageFields(transcriptionUsage.total()))
-    if (!speakerLinking.available) failProcessingRun(diarizationRun.id, message)
-    throw e
-  }
-  // Reconcile provider turn labels against the local acoustic segmentation.
-  // Text and provider timestamps are retained; unknown/unmatched turns are not
-  // force-assigned.
-  rawTranscript.speakers = reconcileProviderSpeakers(rawTranscript.speakers, speakerLinking)
-  const fullText = rawTranscript.fullText
-  const diarizationQuality = parseAndAssessDiarization(
-    rawTranscript.speakers,
-    recording.duration_seconds,
-    audioPreflight.activityIntervals
-  )
-  if (diarizationQuality.status === 'failed') {
-    const message = `Provider timestamps failed local audio grounding: ${diarizationQuality.reasons.join('; ')}`
-    failProcessingRun(transcriptionRun.id, message, false, runUsageFields(transcriptionUsage.total()))
-    if (!speakerLinking.available) failProcessingRun(diarizationRun.id, message)
-    throw new Error(message)
-  }
-  completeProcessingRun(transcriptionRun.id, {
-    outputRefs: { fullText: `trans_${recordingId}.full_text`, speakers: `trans_${recordingId}.speakers` },
-    // The provider timeline stays in `usage`; the tokens and the cost estimate join it.
-    ...runUsageFields(
-      transcriptionUsage.total(),
-      rawTranscript.providerTimeline?.length
-        ? {
-            providerTimeline: rawTranscript.providerTimeline,
-            chunkCount: Math.max(...rawTranscript.providerTimeline.map((event) => event.chunkCount))
-          }
-        : {}
-    )
-  })
-  if (!speakerLinking.available) {
-    completeProcessingRun(diarizationRun.id, {
-      status: diarizationQuality.status === 'high' ? 'completed' : 'degraded',
-      outputRefs: { speakers: `trans_${recordingId}.speakers` },
-      qualityStatus: diarizationQuality.status,
-      quality: diarizationQuality as unknown as Record<string, unknown>
+
+    // An explicit re-run of a value-excluded recording gets past the gate above
+    // for one reason: so this local preflight can prove silence and retire a false
+    // transcript. It found speech, so the rating still stands and no provider may
+    // see this audio. Stop here, before pyannote. Leaving it to the downstream
+    // checks ended the run badly: speaker linking was killed mid-run and the row
+    // retried three times into an error, or, with speaker linking off, the status
+    // stayed 'processing' forever with a dead Transcribe button. The owner lifts
+    // the rating with "Clear rating", and the next re-run then goes through.
+    if (isExplicitReprocess && !isRecordingTranscribable(recordingId)) {
+      updateRecordingTranscriptionStatus(recordingId, statusBeforeRun)
+      console.log(
+        `[Transcription] ${recordingId} has speech but its rating keeps it from any provider; ` +
+          'explicit re-run stopped after the local check. Clear the rating to transcribe it.'
+      )
+      return { status: 'cancelled' }
+    }
+
+    meetingContext += `\n\nLOCAL AUDIO ACTIVITY EVIDENCE (authoritative safety constraint):
+  Non-silent audio: ${audioPreflight.nonSilentSeconds}s (${(audioPreflight.nonSilentRatio * 100).toFixed(2)}%)
+  Activity intervals: ${audioPreflight.activityIntervals.map((i) => `${i.start}-${i.end}s`).join(', ')}
+  Do not create speaker turns outside these intervals except for up to 1.5 seconds of timestamp-boundary tolerance.`
+
+    // SPEC-009 / v53: acoustic diarization and persistent cross-recording voice
+    // linking run BEFORE the provider. They do not require a dedicated enrollment
+    // recording and do not claim a human identity unless the anonymous cluster is
+    // independently anchored to a contact.
+    const acousticDiarizationRun = createProcessingRun({
+      recordingId,
+      stage: 'diarization',
+      provider: 'pyannote',
+      tool: 'pyannote',
+      model: pinnedVoiceModel(),
+      execution: 'local',
+      parentRunIds: [vadRun.id]
     })
+    let speakerLinking: SpeakerLinkingResult
+    progressCallback?.('voices', 3)
+    try {
+      speakerLinking = await runSpeakerLinkingPreflight(
+        recordingId,
+        filePath,
+        () => stillWanted(recordingId),
+        recording.duration_seconds
+      )
+      completeProcessingRun(acousticDiarizationRun.id, {
+        status: speakerLinking.available ? 'completed' : 'degraded',
+        tool: speakerLinking.available
+          ? speakerLinking.model.split('/').pop() || speakerLinking.model
+          : 'not-available',
+        model: speakerLinking.model,
+        version: speakerLinking.modelVersion,
+        outputRefs: {
+          segments: speakerLinking.segments.length,
+          voices: speakerLinking.matches.length
+        },
+        qualityStatus: speakerLinking.available ? 'completed' : 'unavailable',
+        quality: {
+          modelVersion: speakerLinking.modelVersion,
+          device: speakerLinking.device,
+          reason: speakerLinking.reason ?? null
+        }
+      })
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      if (!(error instanceof SpeakerLinkingUnavailableError)) {
+        failProcessingRun(acousticDiarizationRun.id, reason)
+        throw error
+      }
+      speakerLinking = {
+        available: false,
+        model: pinnedVoiceModel(),
+        modelVersion: null,
+        device: null,
+        segments: [],
+        matches: [],
+        reason
+      }
+      completeProcessingRun(acousticDiarizationRun.id, {
+        status: 'degraded',
+        qualityStatus: 'unavailable',
+        quality: { reason, fallback: 'provider-managed diarization' }
+      })
+    }
+
+    voiceIdRun = createProcessingRun({
+      recordingId,
+      stage: 'voice-id',
+      provider: 'hidock-next',
+      tool: 'persistent-acoustic-speaker-linking',
+      model: speakerLinking.model,
+      version: speakerLinking.modelVersion,
+      execution: 'local',
+      parentRunIds: [acousticDiarizationRun.id]
+    })
+    completeProcessingRun(voiceIdRun.id, {
+      status: speakerLinking.available ? 'completed' : 'degraded',
+      outputRefs: {
+        matched: speakerLinking.matches.filter((match) => match.status === 'matched').length,
+        newAnonymous: speakerLinking.matches.filter((match) => match.status === 'new').length,
+        needsReview: speakerLinking.matches.filter((match) => match.status === 'needs_review').length,
+        contactAnchored: speakerLinking.matches.filter((match) => !!match.contactId).length
+      },
+      qualityStatus: speakerLinking.available ? 'completed' : 'unavailable',
+      quality: {
+        reason: speakerLinking.reason ?? null,
+        identityPolicy: 'anonymous unless manually or independently anchored to a contact',
+        matchThreshold: config.transcription.speakerLinkingMatchThreshold,
+        requiredMargin: config.transcription.speakerLinkingMatchMargin
+      }
+    })
+    meetingContext += `\n\n${buildSpeakerLinkingContext(speakerLinking)}`
+
+    // Provider-managed diarization is a compatibility fallback only when the
+    // independent acoustic stage is unavailable. A successful local run remains
+    // the authoritative diarization provenance for the transcript.
+    const diarizationTool = transcriptionProvider === 'local-asr'
+      ? (config.transcription.localAsrDiarize === false ? 'disabled' : 'pyannote')
+      : transcriptionProvider
+    diarizationRun = speakerLinking.available
+      ? acousticDiarizationRun
+      : createProcessingRun({
+          recordingId,
+          stage: 'diarization',
+          provider: transcriptionProvider,
+          tool: diarizationTool,
+          model: transcriptionModel,
+          execution: 'provider-managed',
+          parentRunIds: [vadRun.id, acousticDiarizationRun.id]
+        })
+    transcriptionRun = createProcessingRun({
+      recordingId,
+      stage: 'transcription',
+      provider: transcriptionProvider,
+      tool: transcriptionProvider === 'local-asr' ? 'asr-mcp' : transcriptionProvider,
+      model: transcriptionModel,
+      execution,
+      parentRunIds: [vadRun.id, diarizationRun.id, voiceIdRun.id]
+    })
+    const transcriptionUsage = createGeminiUsageCollector()
+    const providerFilePath = filePath // narrowed here; a closure below would lose it
+    try {
+      rawTranscript = transcriptionProvider === 'vibevoice'
+        ? await transcribeWithVibeVoice(filePath, meetingContext, progressCallback, activeAbortControllers.get(recordingId)?.signal)
+        : transcriptionProvider === 'local-asr'
+          ? await transcribeWithLocalAsr(filePath, meetingContext, progressCallback, activeAbortControllers.get(recordingId)?.signal)
+          // ADV43-1 (round-45) — thread the SAME fail-closed eligibility check into
+          // GeminiEngine's internal chunk/upload/retry loop. If the owner excludes
+          // the recording WHILE the engine is mid-pipeline, the engine throws
+          // TranscriptionCancelledError (caught below) so we stop sending audio to
+          // Gemini and persist nothing — the up-front + second-stage checks cannot
+          // observe an exclusion that lands between the engine's own provider calls.
+          : await transcriptionUsage.run(() =>
+              transcribeWithGemini(
+                providerFilePath,
+                meetingContext,
+                progressCallback,
+                () => stillWanted(recordingId),
+                recording.duration_seconds ?? undefined,
+                activeAbortControllers.get(recordingId)?.signal
+              )
+            )
+    } catch (e) {
+      if (e instanceof TranscriptionCancelledError) {
+        failProcessingRun(transcriptionRun.id, e.message, true, runUsageFields(transcriptionUsage.total()))
+        if (!speakerLinking.available) failProcessingRun(diarizationRun.id, e.message, true)
+        console.log(
+          `[Transcription] Recording ${recordingId} became ineligible during the transcription ` +
+            'provider pipeline (chunk/upload/retry) — aborted before further audio was sent; nothing persisted'
+        )
+        // Hand the status back: 'processing' with nothing running is a dead
+        // Transcribe button, because the UI ignores clicks on a run in progress.
+        updateRecordingTranscriptionStatus(recordingId, statusBeforeRun)
+        return { status: 'cancelled' }
+      }
+      if (e instanceof NoSpeechDetectedError) {
+        failProcessingRun(transcriptionRun.id, e.message, true, runUsageFields(transcriptionUsage.total()))
+        if (!speakerLinking.available) failProcessingRun(diarizationRun.id, e.message, true)
+        await retireNoSpeechGeneratedContent(recordingId)
+        updateRecordingTranscriptionStatus(recordingId, 'no_speech')
+        updateRecordingStatus(recordingId, 'no_speech')
+        console.log(`[Transcription] Provider confirmed no intelligible speech for ${recordingId}; downstream AI skipped`)
+        return { status: 'no_speech', reason: 'no_speech' }
+      }
+      const message = e instanceof Error ? e.message : String(e)
+      failProcessingRun(transcriptionRun.id, message, false, runUsageFields(transcriptionUsage.total()))
+      if (!speakerLinking.available) failProcessingRun(diarizationRun.id, message)
+      throw e
+    }
+    // Reconcile provider turn labels against the local acoustic segmentation.
+    // Text and provider timestamps are retained; unknown/unmatched turns are not
+    // force-assigned.
+    rawTranscript.speakers = reconcileProviderSpeakers(rawTranscript.speakers, speakerLinking)
+    diarizationQuality = parseAndAssessDiarization(
+      rawTranscript.speakers,
+      recording.duration_seconds,
+      audioPreflight.activityIntervals
+    )
+    if (diarizationQuality.status === 'failed') {
+      const message = `Provider timestamps failed local audio grounding: ${diarizationQuality.reasons.join('; ')}`
+      failProcessingRun(transcriptionRun.id, message, false, runUsageFields(transcriptionUsage.total()))
+      if (!speakerLinking.available) failProcessingRun(diarizationRun.id, message)
+      throw new Error(message)
+    }
+    completeProcessingRun(transcriptionRun.id, {
+      outputRefs: { fullText: `trans_${recordingId}.full_text`, speakers: `trans_${recordingId}.speakers` },
+      // The provider timeline stays in `usage`; the tokens and the cost estimate join it.
+      ...runUsageFields(
+        transcriptionUsage.total(),
+        rawTranscript.providerTimeline?.length
+          ? {
+              providerTimeline: rawTranscript.providerTimeline,
+              chunkCount: Math.max(...rawTranscript.providerTimeline.map((event) => event.chunkCount))
+            }
+          : {}
+      )
+    })
+    if (!speakerLinking.available) {
+      completeProcessingRun(diarizationRun.id, {
+        status: diarizationQuality.status === 'high' ? 'completed' : 'degraded',
+        outputRefs: { speakers: `trans_${recordingId}.speakers` },
+        qualityStatus: diarizationQuality.status,
+        quality: diarizationQuality as unknown as Record<string, unknown>
+      })
+    }
+
   }
+  const fullText = rawTranscript.fullText
 
   // ADV42-1 (round-44, HIGH) — SECOND-STAGE eligibility recheck. The up-front
   // gate ran before audio transcription; that transcription is an await, so the
@@ -2766,6 +2826,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   }
 
   insertTranscript(transcript)
+  savedTranscripts.add(recordingId)
   try {
     const acousticallyBound = applyKnownVoiceBindings(recordingId)
     if (acousticallyBound > 0) {

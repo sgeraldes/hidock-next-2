@@ -231,3 +231,14 @@ describe('NotificationsButton', () => {
     expect(screen.getByText('No recent activity')).toBeInTheDocument()
   })
 })
+
+ it('shows a stopped-only notification with its saved-result reason and Finish processing', async () => {
+   setup({ queue: new Map([['t1', txItem({ status: 'cancelled', error: 'Stopped by you after the transcript was saved; summary/actions/search not updated' })]]) })
+   render(<NotificationsButton />)
+   fireEvent.click(screen.getByRole('button', { name: /Notifications/ }))
+   expect(await screen.findByText('Stopped by you after the transcript was saved; summary/actions/search not updated')).toBeVisible()
+   expect(screen.getByText('Stopped', {exact:true})).toBeVisible()
+   fireEvent.click(screen.getByRole('button', { name: 'Finish processing' }))
+   expect(mockRetry).toHaveBeenCalled()
+   expect(screen.getByRole('button', { name: 'Dismiss' })).toBeVisible()
+ })

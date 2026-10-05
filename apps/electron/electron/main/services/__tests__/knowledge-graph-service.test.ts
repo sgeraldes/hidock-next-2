@@ -128,6 +128,34 @@ import {
 // ---------------------------------------------------------------------------
 
 describe('knowledge-graph-service', () => {
+  it('shares in-flight claims and rechecks fresh markers across overlapping snapshots', async () => {
+    for (const id of ['overlap-a', 'overlap-b']) {
+      dbRun('INSERT INTO recordings (id, filename, date_recorded) VALUES (?, ?, ?)', [id, `${id}.hda`, '2026-01-01'])
+      dbRun('INSERT INTO transcripts (id, recording_id, full_text) VALUES (?, ?, ?)', [`tx-${id}`, id, `Alice discussed ${id}.`])
+    }
+    let release!: (text: string) => void
+    let entered!: () => void
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    vi.mocked(complete).mockImplementationOnce(() => {
+      entered()
+      return new Promise<string>((resolve) => { release = resolve })
+    })
+    const slow = ingestFromDbTranscripts()
+    await started
+    const fast = await ingestFromDbTranscripts()
+    release(FAKE_JSON)
+    const first = await slow
+    expect(first.ingested + fast.ingested).toBe(2)
+    expect(complete).toHaveBeenCalledTimes(2)
+  })
+  it('releases a failed in-flight claim so a later pass can retry', async () => {
+    dbRun('INSERT INTO recordings (id, filename, date_recorded) VALUES (?, ?, ?)', ['retry-claim', 'retry.hda', '2026-01-01'])
+    dbRun('INSERT INTO transcripts (id, recording_id, full_text) VALUES (?, ?, ?)', ['retry-claim-t', 'retry-claim', 'Alice discussed TypeScript.'])
+    vi.mocked(complete).mockRejectedValueOnce(new Error('provider unavailable'))
+    expect((await ingestFromDbTranscripts()).errors).toHaveLength(1)
+    expect((await ingestFromDbTranscripts()).ingested).toBe(1)
+  })
+
   it('filters incremental candidates in SQL and reads text only for extraction', async () => {
     getKnowledgeGraphStore()
     dbRun('INSERT INTO recordings (id, filename, date_recorded) VALUES (?, ?, ?)', ['filtered', 'filtered.hda', '2025-10-10'])

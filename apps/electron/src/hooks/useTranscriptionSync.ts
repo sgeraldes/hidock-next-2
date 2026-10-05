@@ -147,7 +147,8 @@ export function useTranscriptionSync() {
             const items = Array.from(store.queue.values())
             const item = items.find((i) => i.recordingId === data.recordingId)
             if (item) {
-              store.remove(item.id)
+              if (data.reason) store.markStopped(item.id, data.reason)
+              else store.remove(item.id)
             }
           })
         )
@@ -158,7 +159,7 @@ export function useTranscriptionSync() {
         unsubscribers.push(
           window.electronAPI.onTranscriptionAllCancelled(() => {
             const store = useTranscriptionStore.getState()
-            store.clear()
+            store.markAllStopped()
           })
         )
       }

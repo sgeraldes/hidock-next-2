@@ -120,4 +120,26 @@ describe('useTranscriptionSync', () => {
       'rec-1': { created_at: '2026-08-22 01:30:33' }
     })).toEqual(items)
   })
+
+ it('keeps stopped outcomes when the all-cancelled event follows individual stops', async () => {
+   let allCancelled: (() => void) | undefined
+   ;(window as any).electronAPI.onTranscriptionAllCancelled = vi.fn((callback) => { allCancelled = callback; return vi.fn() })
+   const { unmount } = renderHook(() => useTranscriptionSync())
+   await act(async () => { await Promise.resolve() })
+   useTranscriptionStore.getState().markStopped('q-1', 'Stopped by you after the transcript was saved; summary/actions/search not updated')
+   act(() => allCancelled?.())
+   expect(useTranscriptionStore.getState().queue.get('q-1')).toMatchObject({ status: 'cancelled', error: 'Stopped by you after the transcript was saved; summary/actions/search not updated' })
+   unmount()
+ })
+
+ it('keeps a user stop event in the queue with its reason until reconciliation', async () => {
+   let cancelled: ((data: any) => void) | undefined
+   ;(window as any).electronAPI.onTranscriptionCancelled = vi.fn((callback) => { cancelled = callback; return vi.fn() })
+   const { unmount } = renderHook(() => useTranscriptionSync())
+   await act(async () => { await Promise.resolve() })
+   act(() => cancelled?.({ recordingId: 'rec-1', reason: 'Stopped by you' }))
+   expect(useTranscriptionStore.getState().queue.get('q-1')).toMatchObject({ status: 'cancelled', error: 'Stopped by you' })
+   unmount()
+ })
+
 })

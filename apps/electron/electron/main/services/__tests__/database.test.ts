@@ -368,6 +368,29 @@ describe('Database Service', () => {
       expect(getActionableQueueItems().find((row) => row.id === id)?.stage).toBe('diarization')
     })
 
+    it('marks Finish processing retries to reuse the saved transcript', () => {
+      seedRecording('finish-processing')
+      const id = addToQueue('finish-processing')
+      updateQueueItem(id, 'cancelled', 'Stopped by you after the transcript was saved; summary/actions/search not updated')
+      updateQueueItem(id, 'pending')
+      expect(getQueueItems('pending').find((item) => item.id === id)?.provider).toBe('saved-transcript')
+    })
+
+    it('retains recent user stops until dismissed and excludes expired or superseded stops', () => {
+      for (const id of ['recent-stop', 'old-stop', 'dismissed-stop', 'superseded-stop']) seedRecording(id)
+      const recent = addToQueue('recent-stop')
+      const old = addToQueue('old-stop')
+      const dismissed = addToQueue('dismissed-stop')
+      const superseded = addToQueue('superseded-stop')
+      for (const id of [recent, old, dismissed, superseded]) updateQueueItem(id, 'cancelled', 'Stopped by you')
+      run("UPDATE transcription_queue SET completed_at = datetime('now', '-25 hours') WHERE id = ?", [old])
+      updateQueueItem(dismissed, 'cancelled')
+      addToQueue('superseded-stop')
+      const stopped = getActionableQueueItems().filter((item) => item.status === 'cancelled')
+      expect(stopped.map((item) => item.id)).toEqual([recent])
+      expect(stopped[0].error_message).toBe('Stopped by you')
+    })
+
     it('returns only actionable rows for the renderer projection', () => {
       seedRecording('rec-pending')
       seedRecording('rec-processing')

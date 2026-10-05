@@ -160,6 +160,22 @@ describe('OperationsPanel', () => {
     expect(container.firstChild).toBeNull()
   })
 
+  it('keeps stopped-only Operations visible with Finish processing and Dismiss', async () => {
+    const queue = new Map([['stopped-q', { id: 'stopped-q', recordingId: 'stopped-r', filename: 'stop.wav', status: 'cancelled',
+      error: 'Stopped by you after the transcript was saved; summary/actions/search not updated',
+      progress: 60, priority: 0, retryCount: 0, attempts: 1, completedAt: new Date() }]])
+    vi.mocked(useTranscriptionStore).mockImplementation((selector: any) => selector(makeTranscriptionState(queue)))
+    useUIStore.setState({ operationsOverlayOpen: true })
+    render(<OperationsPanel sidebarOpen={false} />)
+    expect(screen.getByText('Stopped by you after the transcript was saved; summary/actions/search not updated')).toBeVisible()
+    expect(screen.getByText(/^Stopped .*attempt/)).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Finish processing' }))
+    await waitFor(() => expect(mockRetry).toHaveBeenCalledWith('stopped-q'))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Dismiss' })).not.toBeDisabled())
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+    await waitFor(() => expect(mockDismiss).toHaveBeenCalledWith('stopped-q'))
+  })
+
   it('shows a compact download badge (not a list) when downloads are active', () => {
     const downloadQueue = new Map([['dl-1', { filename: 'REC0001.WAV', progress: 50, size: 1000, status: 'downloading' }]])
     vi.mocked(useDownloadQueue).mockReturnValue(downloadQueue as any)

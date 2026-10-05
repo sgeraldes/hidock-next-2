@@ -36,10 +36,11 @@ export function transcriptionFailure(error?: string): string {
 }
 
 /** Projection of existing queue progress events; shared by Operations and Notifications. */
-export function TranscriptionActivity({ item, onStop, onRetry }: {
+export function TranscriptionActivity({ item, onStop, onRetry, onDismiss }: {
   item: TranscriptionItem
   onStop?: (recordingId: string) => void
   onRetry?: (queueId: string) => void
+  onDismiss?: (queueId: string) => void
 }) {
   const [now, setNow] = useState(Date.now)
   useEffect(() => {
@@ -49,8 +50,8 @@ export function TranscriptionActivity({ item, onStop, onRetry }: {
   }, [item.status])
   const stage = activityStage(item.stage)
   const elapsed = Math.max(0, Math.floor((now - (item.startedAt?.getTime() ?? now)) / 1000))
-  const stamp = item.status === 'failed' ? item.completedAt : item.status === 'processing' ? item.startedAt : item.createdAt
-  const timeLabel = item.status === 'failed' ? 'Failed' : item.status === 'processing' ? 'Started' : 'Queued'
+  const stamp = (item.status === 'failed' || item.status === 'cancelled') ? item.completedAt : item.status === 'processing' ? item.startedAt : item.createdAt
+  const timeLabel = item.status === 'cancelled' ? 'Stopped' : item.status === 'failed' ? 'Failed' : item.status === 'processing' ? 'Started' : 'Queued'
   return <div className="space-y-1 text-xs">
     {item.status === 'processing' && <>
       <div>{stage.label} · step {stage.step} of {steps.length} · {Math.floor(elapsed / 60)}m {elapsed % 60}s elapsed</div>
@@ -58,9 +59,12 @@ export function TranscriptionActivity({ item, onStop, onRetry }: {
         aria-valuenow={stage.fraction ?? Math.round((stage.step - 1) / steps.length * 100)} className="h-1.5 w-full accent-sky-500" />
     </>}
     {item.status === 'pending' && <div>Waiting to transcribe</div>}
+    {item.status === 'cancelled' && <div className="select-text whitespace-normal text-muted-foreground">{item.error || 'Stopped by you'}</div>}
     {item.status === 'failed' && <div className="select-text whitespace-normal text-red-400">{transcriptionFailure(item.error)}</div>}
     {stamp && <div className="text-muted-foreground">{timeLabel} {stamp.toLocaleTimeString('en', { hour: 'numeric', minute: '2-digit' })}</div>}
     {item.status === 'processing' && onStop && <button type="button" onClick={() => onStop(item.recordingId)} className="rounded px-2 py-1 text-red-400 hover:bg-red-500/10 focus-visible:ring-2">Stop</button>}
+    {item.status === 'cancelled' && onRetry && <button type="button" onClick={() => onRetry(item.id)} className="rounded px-2 py-1 hover:bg-accent focus-visible:ring-2">{item.error?.includes('after the transcript was saved') ? 'Finish processing' : 'Retry'}</button>}
+    {item.status === 'cancelled' && onDismiss && <button type="button" onClick={() => onDismiss(item.id)} className="rounded px-2 py-1 hover:bg-accent focus-visible:ring-2">Dismiss</button>}
     {item.status === 'failed' && onRetry && <button type="button" onClick={() => onRetry(item.id)} className="rounded px-2 py-1 hover:bg-accent focus-visible:ring-2">Retry</button>}
   </div>
 }

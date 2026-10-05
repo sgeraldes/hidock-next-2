@@ -402,6 +402,7 @@ export function SourceReader({
   const setReaderSectionMode = useLibraryStore((s) => s.setReaderSectionMode)
   useEffect(() => {
     if (!processingFocus) return
+    useLibraryStore.getState().restoreReaderSection()
     setReaderSectionMode('transcript', 'expanded')
     const timer = setTimeout(() => {
       const target = sourceRoot.current?.querySelector('[data-testid="reader-section-transcript"]') ?? sourceRoot.current?.querySelector('[data-processing-status]')

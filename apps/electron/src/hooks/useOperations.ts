@@ -215,7 +215,8 @@ export function useOperations() {
       const items = Array.from(store.queue.values())
       const item = items.find((i) => i.recordingId === recordingId)
       if (item) {
-        store.remove(item.id)
+        if (item.status === 'pending') store.remove(item.id)
+        else if (item.status === 'processing') store.markStopped(item.id, 'Stopped by you')
       }
       toast({ title: 'Transcription cancelled' })
     } catch (e) {
@@ -226,7 +227,7 @@ export function useOperations() {
   const cancelAllTranscriptions = useCallback(async () => {
     try {
       const result = await window.electronAPI.recordings.cancelAllTranscriptions()
-      useTranscriptionStore.getState().clear()
+      useTranscriptionStore.getState().markAllStopped()
       toast({ title: 'All transcriptions cancelled', description: `${result.count} items removed from queue.` })
     } catch (e) {
       console.error('Failed to cancel transcriptions:', e)
