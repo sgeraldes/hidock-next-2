@@ -40,6 +40,8 @@ export { UNKNOWN_DATE, isUnknownDate }
 // Exported (spec-005/F17 T5 §D5) so features/library/utils/trashRow.ts can type
 // the recordings:getTrash row shape without duplicating this interface.
 export interface DatabaseRecording {
+  parent_video_capture_id?: string | null
+  video_audio_title?: string | null
   id: string
   filename: string
   file_path: string | null
@@ -396,6 +398,8 @@ export function buildRecordingMap(
         continue
       }
       const shared = {
+        parentVideoCaptureId: dbRec.parent_video_capture_id || undefined,
+        videoAudioTitle: dbRec.video_audio_title || undefined,
         id: dbRec.id,
         filename: dbRec.filename,
         size: dbRec.file_size,

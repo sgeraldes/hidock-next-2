@@ -211,7 +211,7 @@ const IMAGE_MIME_BY_EXT: Record<string, string> = {
 registerArtifactType({
   kind: 'image',
   mimes: ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'],
-  exts: ['png', 'jpg', 'jpeg', 'webp', 'svg'],
+  exts: ['png', 'jpg', 'jpeg', 'webp', 'svg', 'gif', 'bmp', 'heic', 'heif', 'tif', 'tiff'],
   chunk: chunkText,
   presentation: { label: 'Image', pluralLabel: 'Images', capabilities: ['rateable', 'previewable'] },
   extractText: async (filePath, buffer) => {
@@ -288,4 +288,16 @@ registerArtifactType({
       }
     }
   }
+})
+
+// Paste kinds reuse the artifact store and knowledge capture linkage.
+registerArtifactType({
+  kind: 'link', mimes: ['text/x-url'], exts: ['url'], chunk: chunkText,
+  presentation: { label: 'Link', pluralLabel: 'Links', capabilities: ['rateable', 'previewable'] },
+  extractText: async (path, buffer) => ({ text: readText(path, buffer) })
+})
+registerArtifactType({
+  kind: 'video', mimes: ['video/mp4'], exts: ['mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v'], chunk: chunkText,
+  presentation: { label: 'Video', pluralLabel: 'Videos', capabilities: ['rateable', 'previewable'] },
+  extractText: async () => ({ text: '' })
 })

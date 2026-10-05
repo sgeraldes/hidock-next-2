@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 interface Props {
   children: ReactNode
   fallback?: ReactNode
+  resetKeys?: readonly unknown[]
 }
 
 interface State {
@@ -25,6 +26,14 @@ export class ErrorBoundary extends Component<Props, State> {
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     // Plain strings, so the error log on disk gets the stack and the component stack.
     console.error(`ErrorBoundary caught an error: ${error?.stack ?? String(error)}\nComponent stack:${errorInfo.componentStack ?? ''}`)
+  }
+
+  componentDidUpdate(previous: Props): void {
+    const before = previous.resetKeys ?? []
+    const after = this.props.resetKeys ?? []
+    if (this.state.hasError && (before.length !== after.length || after.some((key, i) => !Object.is(key, before[i])))) {
+      this.setState({ hasError: false, error: null })
+    }
   }
 
   render() {

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { NewMenu } from '@/components/layout/PcRecording'
 import {
   Search,
   CheckCircle2,
@@ -166,6 +167,7 @@ export function TitleBar({ sidebarOpen, dividerMode = BRAND_DIVIDER_MODE }: Titl
 
       {/* CONTENT COLUMN — centred search + right cluster. */}
       <div className="flex h-full min-w-0 flex-1 items-center gap-2 pl-4 pr-3">
+        <NewMenu />
         {/* Global search — routes to Explore. Shrinks first at narrow widths. */}
         <form onSubmit={submitSearch} className="titlebar-no-drag mx-auto w-full max-w-md min-w-0">
           <div className="relative">
