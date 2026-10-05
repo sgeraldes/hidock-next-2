@@ -1368,6 +1368,7 @@ export function SourceReader({
             <h2 className="text-lg font-semibold line-clamp-2 leading-tight" title={displayTitle}>
               {displayTitle}
             </h2>
+            {recording.parentVideoCaptureId && <VideoBackLink captureId={recording.parentVideoCaptureId} />}
           </div>
           {onClose && (
             <button
@@ -2895,4 +2896,9 @@ function InvitedChips({
       )}
     </div>
   )
+}
+
+function VideoBackLink({ captureId }: { captureId: string }) {
+  const navigate = useNavigate()
+  return <Button variant="link" size="sm" className="px-0" onClick={() => navigate('/library', { state: { selectedId: captureId } })}>Back to video</Button>
 }

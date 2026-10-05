@@ -12,7 +12,10 @@
  */
 
 import { createHash, randomUUID } from 'crypto'
-import { existsSync, mkdirSync, readFileSync, copyFileSync, rmSync } from 'fs'
+import { existsSync, createReadStream, createWriteStream, rmSync } from 'fs'
+import { stat, mkdir, readFile, unlink } from 'node:fs/promises'
+import { pipeline } from 'node:stream/promises'
+import { Transform } from 'node:stream'
 import { join, extname, basename } from 'path'
 import { queryOne, queryAll, run, runInTransaction } from './database'
 import { resolveType, getArtifactType, listArtifactTypes, ArtifactExtractionError } from './artifact-types'
@@ -39,6 +42,9 @@ export interface ArtifactRow {
 }
 
 export interface ImportArtifactOptions {
+  /** Paste/import must store locally without vision, enrichment or embeddings. */
+  localOnly?: boolean
+  metadata?: Record<string, unknown>
   knowledgeCaptureId?: string
   /** Provenance for connector-fed imports (Layer 2); optional for manual imports. */
   sourceConnectorId?: string
@@ -98,14 +104,29 @@ export async function importArtifact(
   }
 }
 
+export const MAX_VIDEO_BYTES = 512 * 1024 * 1024
+const inFlightImports = new Map<string, Promise<ImportArtifactResult>>()
+
 async function importArtifactNow(filePath: string, opts: ImportArtifactOptions): Promise<ImportArtifactResult> {
-  if (!existsSync(filePath)) {
-    throw new Error(`File not found: ${filePath}`)
+  const size = (await stat(filePath)).size
+  const type = resolveType(filePath)
+  if (type?.kind === 'video' && size > MAX_VIDEO_BYTES) throw new Error('Video exceeds the 512 MB limit.')
+  const hash = createHash('sha256')
+  let hashed = 0
+  for await (const chunk of createReadStream(filePath)) {
+    hashed += chunk.length
+    if (type?.kind === 'video' && hashed > MAX_VIDEO_BYTES) throw new Error('Video exceeds the 512 MB limit.')
+    hash.update(chunk)
   }
+  const contentHash = hash.digest('hex')
+  const pending = inFlightImports.get(contentHash)
+  if (pending) return { ...await pending, deduped: true }
+  const work = importReservedArtifact(filePath, opts, contentHash, size)
+  inFlightImports.set(contentHash, work)
+  try { return await work } finally { inFlightImports.delete(contentHash) }
+}
 
-  const buffer = readFileSync(filePath)
-  const contentHash = createHash('sha256').update(buffer).digest('hex')
-
+async function importReservedArtifact(filePath: string, opts: ImportArtifactOptions, contentHash: string, size: number): Promise<ImportArtifactResult> {
   // Dedup by content hash — return the existing artifact untouched.
   const existing = queryOne<ArtifactRow>('SELECT * FROM artifacts WHERE content_hash = ?', [contentHash])
   if (existing) {
@@ -124,21 +145,31 @@ async function importArtifactNow(filePath: string, opts: ImportArtifactOptions):
 
   // Copy into <dataRoot>/artifacts/<kind>/<hash-prefix>/<id>.<ext>
   const destDir = join(getArtifactsPath(), kind, contentHash.slice(0, 2))
-  mkdirSync(destDir, { recursive: true })
+  await mkdir(destDir, { recursive: true })
   const destPath = join(destDir, ext ? `${id}.${ext}` : id)
-  copyFileSync(filePath, destPath)
+  // Recheck bytes while copying, bounding a source that grows after stat/hash.
+  let copied = 0
+  const copiedHash = createHash('sha256')
+  try {
+    await pipeline(createReadStream(filePath), new Transform({ transform(chunk, _encoding, callback) {
+      copied += chunk.length
+      copiedHash.update(chunk)
+      callback(kind === 'video' && copied > MAX_VIDEO_BYTES ? new Error('Video exceeds the 512 MB limit.') : null, chunk)
+    } }), createWriteStream(destPath, { flags: 'wx' }))
+    if (copied !== size || copiedHash.digest('hex') !== contentHash) throw new Error('File changed during import. Please try again.')
+  } catch (error) { await unlink(destPath).catch(() => {}); throw error }
 
   // Type-dispatched extraction (+ optional enrichment). Failures are recorded on
   // the artifact's metadata rather than aborting the import.
   let extractedText: string | null = null
-  const metadata: Record<string, unknown> = {}
-  if (type) {
+  const metadata: Record<string, unknown> = { ...opts.metadata }
+  if (type && kind !== 'video' && !(opts.localOnly && kind === 'image')) {
     try {
-      const extraction = await type.extractText(filePath, buffer)
+      const extraction = await type.extractText(destPath, await readFile(destPath))
       extractedText = extraction.text ? extraction.text : null
       if (extraction.metadata) Object.assign(metadata, extraction.metadata)
 
-      if (type.enrich) {
+      if (type.enrich && !opts.localOnly) {
         const enriched = await type.enrich({ text: extractedText ?? '', metadata })
         if (enriched.text) extractedText = enriched.text
         if (enriched.metadata) Object.assign(metadata, enriched.metadata)
@@ -152,7 +183,7 @@ async function importArtifactNow(filePath: string, opts: ImportArtifactOptions):
         metadata.extractionMessage = e instanceof Error ? e.message : String(e)
       }
     }
-  } else {
+  } else if (!type) {
     metadata.extractionError = 'NO_TYPE'
     metadata.extractionMessage = `No registered artifact type for ".${ext}"`
   }
@@ -184,7 +215,7 @@ async function importArtifactNow(filePath: string, opts: ImportArtifactOptions):
         kind,
         mime,
         destPath,
-        buffer.length,
+        size,
         contentHash,
         extractedText,
         JSON.stringify(metadata),
@@ -217,7 +248,7 @@ async function importArtifactNow(filePath: string, opts: ImportArtifactOptions):
   // (sourceType) and owning capture id so RAG can label + cite them — e.g. an
   // image capture surfaces as "[Screenshot: <description>]". No-op without text.
   let indexedChunks = 0
-  if (extractedText && extractedText.trim().length > 0) {
+  if (!opts.localOnly && extractedText && extractedText.trim().length > 0) {
     try {
       const store = getVectorStore()
       store.ensureSchema()

@@ -33,6 +33,9 @@ describe('New menu and global recording bar', () => {
     render(<><NewMenu /><RecordingBar /></>)
     expect(screen.queryByRole('region', { name: 'PC recording' })).not.toBeInTheDocument()
     fireEvent.keyDown(screen.getByRole('button', { name: 'New' }), { key: 'Enter' })
+    for (const name of ['Paste', 'Import file', 'New note', 'Record']) {
+      expect(await screen.findByRole('menuitem', { name })).toBeInTheDocument()
+    }
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Record' }))
     expect(screen.getByRole('region', { name: 'PC recording' })).toBeInTheDocument()
     expect(start).not.toHaveBeenCalled()

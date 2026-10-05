@@ -1,14 +1,32 @@
-import { Mic, Plus, Square, X } from 'lucide-react'
+import { ClipboardPaste, FilePlus, Mic, NotebookPen, Plus, Square, X } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { usePcRecorderStore } from '@/store/usePcRecorderStore'
+import { toast } from '@/components/ui/toaster'
+import { pasteToLibrary, showPasteResults } from '@/lib/paste-library-actions'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 
-const buttonClass = 'rounded-md px-3 py-1 text-sm hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50'
+import { usePcRecorderStore } from '@/store/usePcRecorderStore'
 
+const buttonClass = 'rounded-md px-3 py-1 text-sm hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50'
 export function NewMenu() {
+  const navigate = useNavigate()
   const open = usePcRecorderStore((state) => state.open)
-  // Future creation actions (Paste, Import file, New note) belong in this list.
-  const actions = [{ label: 'Record', icon: Mic, onSelect: open }]
+  const actions = [
+    { label: 'Paste', icon: ClipboardPaste, onSelect: () => void pasteToLibrary(navigate) },
+    { label: 'Import file', icon: FilePlus, onSelect: () => {
+      void window.electronAPI.pasteLibrary.pickFiles().then((results) => showPasteResults(results, navigate))
+        .catch((error: unknown) => toast.error('Could not import file', error instanceof Error ? error.message : String(error)))
+    } },
+    { label: 'New note', icon: NotebookPen, onSelect: () => {
+      void window.electronAPI.pasteLibrary.newNote().then((result) => {
+        if (result.error) toast.error('Could not create note', result.error)
+        else {
+          window.dispatchEvent(new Event('hidock:downloads-completed'))
+          navigate(`/notes?note=${encodeURIComponent(result.id!)}`)
+        }
+      }).catch((error: unknown) => toast.error('Could not create note', error instanceof Error ? error.message : String(error)))
+    } },
+    { label: 'Record', icon: Mic, onSelect: open }
+  ]
   return <DropdownMenu>
     <DropdownMenuTrigger asChild>
       <button type="button" className="titlebar-no-drag flex h-7 shrink-0 items-center gap-1 rounded-md border border-slate-600 px-2 text-xs hover:bg-slate-700 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-sky-400">

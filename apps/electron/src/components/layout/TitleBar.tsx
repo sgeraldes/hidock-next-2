@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { NewMenu } from '@/components/layout/PcRecording'
 import {
   Search,
   CheckCircle2,
@@ -19,7 +20,6 @@ import { Brand, BRAND_DIVIDER_MODE, showBrandVerticalDivider, type BrandDividerM
 import { NotificationsButton } from '@/components/layout/NotificationsButton'
 import { ActivityLogButton } from '@/components/layout/ActivityLogButton'
 import { UserMenu } from '@/components/layout/UserMenu'
-import { NewMenu } from '@/components/layout/PcRecording'
 import {
   DropdownMenu,
   DropdownMenuTrigger,

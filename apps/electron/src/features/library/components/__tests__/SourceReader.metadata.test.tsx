@@ -25,6 +25,7 @@ import type { Meeting } from '@/types'
 // Mock electronAPI
 // ---------------------------------------------------------------------------
 const mockKnowledgeUpdate = vi.fn().mockResolvedValue({ success: true })
+const mockNavigate = vi.hoisted(() => vi.fn())
 const mockSelectMeeting = vi.fn().mockResolvedValue({ success: true })
 // Projects assignment (v29)
 const mockGetForKnowledge = vi.fn().mockResolvedValue({ success: true, data: [] })
@@ -35,7 +36,7 @@ const mockSetProjects = vi.fn().mockResolvedValue({ success: true })
 // without a Router, so stub navigation to keep them Router-independent.
 vi.mock('react-router-dom', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react-router-dom')>()
-  return { ...actual, useNavigate: () => vi.fn() }
+  return { ...actual, useNavigate: () => mockNavigate }
 })
 
 // Silence @radix-ui portal issues in jsdom
@@ -201,6 +202,11 @@ beforeEach(() => {
 // Test suite
 // ---------------------------------------------------------------------------
 describe('SourceReader — metadata editing', () => {
+  it('links extracted audio back to its source video', () => {
+    render(<SourceReader recording={makeRecording({ parentVideoCaptureId: 'video-capture', videoAudioTitle: 'Clip.mp4 · audio' })} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Back to video' }))
+    expect(mockNavigate).toHaveBeenCalledWith('/library', { state: { selectedId: 'video-capture' } })
+  })
 
   // 1. Title shows as static text by default
   it('shows title as static text when not editing', () => {

@@ -7,6 +7,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Plus, Sparkles, Trash2, Link2, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -28,6 +29,7 @@ export default function Notes(): React.ReactElement {
     setSearch,
     refresh,
     select,
+    selectById,
     edit,
     create,
     remove,
@@ -38,6 +40,16 @@ export default function Notes(): React.ReactElement {
   } = useNotes()
 
   const [busy, setBusy] = useState(false)
+  const [params, setParams] = useSearchParams()
+  useEffect(() => {
+    const id = params.get('note')
+    if (!id) return
+    let active = true
+    void selectById(id).then((opened) => {
+      if (active && opened) setParams({}, { replace: true })
+    })
+    return () => { active = false }
+  }, [params, selectById, setParams])
 
   useEffect(() => {
     const timer = setTimeout(() => void refresh(search), 250)

@@ -569,7 +569,7 @@ export function registerRecordingHandlers(): void {
     }
   })
 
-  // Shared by drag-and-drop import and the PC recorder.
+  // Shared by drag-and-drop, paste imports and the PC recorder.
   ipcMain.handle('recordings:addExternalByPath', async (_, filePath: string) => importExternalRecording(filePath))
 
   // Select a meeting for a recording (manual linking from dialog)

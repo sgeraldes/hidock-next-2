@@ -34,6 +34,10 @@ vi.mock('@/components/ui/toaster', () => ({
 }))
 
 describe('mapTranscriptionStatus', () => {
+  it('projects a local video audio row with its display title and backlink', () => {
+    const [audio] = buildRecordingMap([], [{ id: 'audio', filename: 'external.wav', file_path: '/fixture/audio.wav', file_size: 10, status: 'none', parent_video_capture_id: 'video', video_audio_title: 'Clip.mp4 · audio' }], [], [], false)
+    expect(audio).toMatchObject({ parentVideoCaptureId: 'video', videoAudioTitle: 'Clip.mp4 · audio' })
+  })
   it('preserves no_speech even when a stale previous capture is ready', () => {
     expect(mapTranscriptionStatus('no_speech', 'ready')).toBe('no_speech')
   })

@@ -161,6 +161,7 @@ import type {
 } from '../../src/types/knowledge'
 import type { PipelineState } from '../main/types/device-pipeline'
 import type { Note, NoteRelatedItem, NoteMeetingSuggestion } from '../../src/types/notes'
+import type { PasteLibraryAPI } from '../../src/shared/paste-to-library'
 import type { SpeakerEngineId, SpeakerSetup } from '../../src/types/speakers'
 import type { VoiceBackfillMeasure, VoiceBackfillStatus } from '../../src/shared/voice-backfill-schedule'
 import type {
@@ -800,7 +801,7 @@ export interface ElectronAPI {
       recordingId?: string | null
       linkSource?: 'live' | 'user' | 'suggested' | null
     }) => Promise<{ success: boolean; note?: Note; error?: string }>
-    delete: (request: { id: string }) => Promise<{ success: boolean }>
+    delete: (request: { id: string; onlyIfEmpty?: boolean }) => Promise<{ success: boolean }>
     analyze: (request: { id: string; force?: boolean }) => Promise<{ success: boolean; note?: Note; error?: string }>
     related: (request: { id: string }) => Promise<{ success: boolean; items?: NoteRelatedItem[]; error?: string }>
     meetingSuggestions: (request: { id: string }) => Promise<{ success: boolean; suggestions?: NoteMeetingSuggestion[]; error?: string }>
@@ -1283,6 +1284,7 @@ export interface ElectronAPI {
 
   // Artifacts - entity-type foundation (C0): import files as captures
   artifacts: ArtifactsAPI
+  pasteLibrary: PasteLibraryAPI
 
   // Clipboard screenshot capture — paste-to-add + optional auto-watch
   clipboardCapture: {
@@ -2029,6 +2031,11 @@ const electronAPI: ElectronAPI = {
     clear: () => callIPC('deviceCache:clear')
   },
 
+  pasteLibrary: {
+    paste: (snapshot) => callIPC('library:paste', snapshot),
+    pickFiles: () => callIPC('library:pickFiles'),
+    newNote: () => callIPC('library:newNote')
+  },
   artifacts: {
     listTypes: () => callIPC('artifacts:listTypes'),
     import: (filePaths) => callIPC('artifacts:import', filePaths),
