@@ -17,6 +17,19 @@ function setup() {
   return { folder, imported, recorder: new PcRecorder(folder, imported) }
 }
 describe('durable PC recording', () => {
+  it('does not import twice when recovery calls overlap', async () => {
+    const { recorder, imported } = setup()
+    const id = recorder.start(); recorder.append(id, 0, new Uint8Array([1, 2, 3, 4])); recorder.close()
+    let complete!: () => void
+    imported.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => { complete = resolve })
+      return { success: true, recording: { id: 'library-id' } }
+    })
+    const first = recorder.recover()
+    const second = recorder.recover()
+    expect(imported).toHaveBeenCalledOnce()
+    complete(); await Promise.all([first, second])
+  })
   it('writes ordered chunks immediately and imports on stop', async () => {
     const { recorder, imported, folder } = setup()
     const id = recorder.start()

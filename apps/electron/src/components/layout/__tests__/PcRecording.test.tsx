@@ -5,7 +5,9 @@ import { usePcRecorderStore } from '@/store/usePcRecorderStore'
 
 const start = vi.fn(async () => undefined)
 const stop = vi.fn(async () => undefined)
+let captureError: ((error: string) => void) | null = null
 vi.mock('@/lib/pc-audio-capture', () => ({ PcAudioCapture: class {
+  constructor(_bridge: unknown, onError: (error: string) => void) { captureError = onError }
   start = start
   stop = stop
   levels = () => [0.2, 0.4]
@@ -16,6 +18,15 @@ beforeEach(() => {
   usePcRecorderStore.setState({ visible: false, status: 'idle', error: null, elapsed: 0, levels: [0, 0] })
 })
 describe('New menu and global recording bar', () => {
+  it('does not leave the bar recording when capture fails during startup', async () => {
+    start.mockImplementationOnce(async () => { captureError?.('Audio source stopped') })
+    usePcRecorderStore.getState().open()
+    render(<RecordingBar />)
+    fireEvent.click(screen.getByRole('button', { name: 'Record' }))
+    await waitFor(() => expect(usePcRecorderStore.getState().status).toBe('idle'))
+    expect(stop).toHaveBeenCalledOnce()
+    expect(screen.getByRole('alert')).toHaveTextContent('Audio source stopped')
+  })
   it('opens Record without capturing until the explicit Record button is pressed', async () => {
     render(<><NewMenu /><RecordingBar /></>)
     expect(screen.queryByRole('region', { name: 'PC recording' })).not.toBeInTheDocument()

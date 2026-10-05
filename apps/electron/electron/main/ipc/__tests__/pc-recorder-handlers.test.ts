@@ -22,6 +22,14 @@ function handlers() {
   return Object.fromEntries(vi.mocked(ipcMain.handle).mock.calls) as Record<string, (...args: unknown[]) => unknown>
 }
 describe('PC recorder IPC', () => {
+  it('a stale finish cannot abandon the active recording', async () => {
+    const ipc = handlers()
+    const sender = Object.assign(new EventEmitter(), { id: 1 })
+    const id = await ipc['pc-recorder:start']({ sender })
+    await expect(Promise.resolve().then(() => ipc['pc-recorder:finish']({ sender }, 'stale'))).rejects.toThrow(/session/)
+    ipc['pc-recorder:append']({ sender }, id, 0, new Uint8Array([1]))
+    expect(await ipc['pc-recorder:finish']({ sender }, id)).toMatchObject({ success: true })
+  })
   it('stops through the shared import path and rejects another renderer', async () => {
     const ipc = handlers()
     const sender = Object.assign(new EventEmitter(), { id: 1 })
@@ -64,10 +72,24 @@ describe('PC recorder IPC', () => {
     const id = await ipc['pc-recorder:start']({ sender })
     ipc['pc-recorder:append']({ sender }, id, 0, new Uint8Array([1]))
     const quitting = stopPcRecorderBeforeQuit()
+    const alsoQuitting = stopPcRecorderBeforeQuit()
     expect(sender.send).toHaveBeenCalledWith('pc-recorder:request-stop')
     await ipc['pc-recorder:finish']({ sender }, id)
     await quitting
+    await alsoQuitting
     expect(importExternalRecording).toHaveBeenCalledOnce()
+    expect(sender.send).toHaveBeenCalledOnce()
+    expect(importExternalRecording).toHaveBeenCalledWith(expect.any(String), { preserveFilename: true, deferProcessing: true })
+  })
+  it('abandons on main-frame reload and recovers before another recording', async () => {
+    const ipc = handlers()
+    const sender = Object.assign(new EventEmitter(), { id: 1 })
+    const id = await ipc['pc-recorder:start']({ sender })
+    ipc['pc-recorder:append']({ sender }, id, 0, new Uint8Array([1]))
+    sender.emit('did-start-navigation', {}, 'file://app', false, true)
+    const next = await ipc['pc-recorder:start']({ sender })
+    expect(importExternalRecording).toHaveBeenCalledOnce()
+    await ipc['pc-recorder:finish']({ sender }, next)
   })
   it('returns no source when desktop capture fails', async () => {
     const setHandler = vi.fn(), frame = {}, callback = vi.fn()

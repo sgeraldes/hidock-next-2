@@ -12,10 +12,12 @@ type ImportRecording = (path: string) => Promise<PcImportResult>
 export class PcRecorder {
   private active: { id: string; path: string; index: number } | null = null
   private finishing = false
+  private finishingPath: string | null = null
+  private recovery: Promise<void> | null = null
   constructor(private readonly folder: string, private readonly importRecording: ImportRecording) {}
 
   start(): string {
-    if (this.active || this.finishing) throw new Error('A PC recording is already active or saving')
+    if (this.active || this.finishing || this.recovery) throw new Error('A PC recording is already active or saving')
     mkdirSync(this.folder, { recursive: true })
     const id = randomUUID()
     const date = new Date()
@@ -44,19 +46,26 @@ export class PcRecorder {
     const active = this.requireSession(id)
     this.active = null
     this.finishing = true
+    this.finishingPath = active.path
     try { return await this.importPartial(active.path) }
-    finally { this.finishing = false }
+    finally { this.finishing = false; this.finishingPath = null }
   }
 
   // Every chunk is closed and synced already; a process exit leaves a recoverable file.
   close(): void { this.active = null }
 
-  async recover(): Promise<void> {
+  recover(): Promise<void> {
+    if (this.recovery) return this.recovery
+    this.recovery = this.recoverFiles().finally(() => { this.recovery = null })
+    return this.recovery
+  }
+
+  private async recoverFiles(): Promise<void> {
     if (!existsSync(this.folder)) return
     for (const name of readdirSync(this.folder)) {
       if (!isPcRecordingFilename(name)) continue
       const path = join(this.folder, name)
-      if (path === this.active?.path) continue
+      if (path === this.active?.path || path === this.finishingPath || path === this.finishingPath?.slice(0, -8)) continue
       try {
         const result = await this.importPartial(path)
         if (!result.success) console.error('[PcRecorder] Recovery failed:', result.error)

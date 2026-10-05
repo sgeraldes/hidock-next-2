@@ -18,12 +18,16 @@ export class PcAudioCapture {
   private starting = false
   private analysers: AnalyserNode[] = []
   private failure: Error | null = null
+  private persistenceFailed = false
+  private resolveStop: (() => void) | null = null
+  private trackListeners: Array<{ track: MediaStreamTrack; ended: () => void }> = []
   constructor(private readonly bridge: PcRecorderBridge, private readonly onError: (message: string) => void) {}
 
   async start(): Promise<void> {
-    if (this.starting || this.recorder) throw new Error('A recording is already active')
+    if (this.starting || this.recorder || this.context) throw new Error('A recording is already active')
     this.starting = true
     this.failure = null
+    this.persistenceFailed = false
     this.pending = Promise.resolve()
     this.index = 0
     this.stopPromise = null
@@ -31,9 +35,9 @@ export class PcAudioCapture {
       // Request display capture before awaiting a permission prompt: Chromium
       // requires transient user activation for getDisplayMedia.
       const displayRequest = navigator.mediaDevices.getDisplayMedia({ audio: true, video: { width: 1, height: 1 } })
-      const micRequest = navigator.mediaDevices.getUserMedia({ audio: {
+      const micRequest = (async () => navigator.mediaDevices.getUserMedia({ audio: {
         deviceId: 'default', echoCancellation: false, noiseSuppression: false, autoGainControl: false
-      } })
+      } }))()
       const [micResult, displayResult] = await Promise.allSettled([micRequest, displayRequest])
       if (micResult.status === 'fulfilled') this.streams.push(micResult.value)
       if (displayResult.status === 'fulfilled') this.streams.push(displayResult.value)
@@ -55,6 +59,7 @@ export class PcAudioCapture {
       const merger = context.createChannelMerger(2)
       const destination = context.createMediaStreamDestination()
       destination.channelCount = 2
+      this.streams.push(destination.stream)
       this.analysers = [mic, system].map((stream, channel) => {
         const source = context.createMediaStreamSource(stream)
         const mono = context.createGain()
@@ -75,25 +80,37 @@ export class PcAudioCapture {
       recorder.ondataavailable = (event) => {
         if (!event.data.size) return
         const index = this.index++
+        const session = this.session
         this.pending = this.pending.then(async () => {
+          if (this.persistenceFailed) return
           const data = new Uint8Array(await event.data.arrayBuffer())
-          await this.bridge.append(this.session, index, data)
-        }).catch((error: unknown) => { this.fail(error) })
+          if (this.session !== session) return
+          await this.bridge.append(session, index, data)
+        }).catch((error: unknown) => { this.persistenceFailed = true; this.fail(error) })
+      }
+      recorder.onstop = () => {
+        if (this.resolveStop) this.resolveStop()
+        else this.fail(new Error('Audio recording stopped unexpectedly. Saving captured audio.'))
       }
       recorder.onerror = () => this.fail(new Error('Audio recording failed; saved chunks will be recovered on restart'))
-      for (const [channel, stream] of this.streams.entries()) {
+      for (const [channel, stream] of [mic, system].entries()) {
         for (const track of stream.getAudioTracks()) {
-          track.addEventListener('ended', () => this.fail(new Error(`${channel === 0 ? 'Microphone' : 'System audio'} source stopped. Saving captured audio.`)), { once: true })
+          const ended = () => this.fail(new Error(`${channel === 0 ? 'Microphone' : 'System audio'} source stopped. Saving captured audio.`))
+          this.trackListeners.push({ track, ended })
+          track.addEventListener('ended', ended, { once: true })
         }
+      }
+      if ([mic, system].some((stream) => stream.getAudioTracks().some((track) => track.readyState === 'ended'))) {
+        throw new Error('An audio source stopped before recording could start')
       }
       recorder.start(1000)
     } catch (error) {
-      await this.release()
       if (this.session) {
         await this.bridge.finish(this.session).catch(() => undefined)
         this.session = ''
       }
       this.recorder = null
+      await this.release()
       throw error
     } finally { this.starting = false }
   }
@@ -117,13 +134,36 @@ export class PcAudioCapture {
     if (!recorder) return
     try {
       if (recorder.state !== 'inactive') {
-        await new Promise<void>((resolve) => { recorder.onstop = () => resolve(); recorder.stop() })
+        await new Promise<void>((resolve) => {
+          const timeout = setTimeout(() => {
+            this.failure ??= new Error('Audio recording stop timed out; saved chunks retained')
+            this.resolveStop = null
+            resolve()
+          }, 5000)
+          this.resolveStop = () => { clearTimeout(timeout); this.resolveStop = null; resolve() }
+          try { recorder.stop() }
+          catch (error) { this.failure ??= error instanceof Error ? error : new Error(String(error)); this.resolveStop() }
+        })
       }
-      await this.pending
+      await new Promise<void>((resolve) => {
+        const timeout = setTimeout(() => {
+          this.failure ??= new Error('Audio recording flush timed out; saved chunks retained')
+          this.persistenceFailed = true
+          resolve()
+        }, 3000)
+        void this.pending.finally(() => { clearTimeout(timeout); resolve() })
+      })
+      recorder.ondataavailable = null
+      recorder.onstop = null
+      recorder.onerror = null
+      await this.release()
       const result = await this.bridge.finish(this.session)
       if (!result.success) throw new Error(result.error ?? 'Recording could not be imported; it will be recovered on restart')
       if (this.failure) throw this.failure
     } finally {
+      recorder.ondataavailable = null
+      recorder.onstop = null
+      recorder.onerror = null
       this.recorder = null
       this.session = ''
       await this.release()
@@ -138,9 +178,12 @@ export class PcAudioCapture {
   }
 
   private async release(): Promise<void> {
+    this.trackListeners.splice(0).forEach(({ track, ended }) => track.removeEventListener('ended', ended))
     this.streams.splice(0).forEach((stream) => stream.getTracks().forEach((track) => track.stop()))
     this.analysers = []
-    await this.context?.close()
+    const context = this.context
     this.context = null
+    try { await context?.close() }
+    catch (error) { console.error('[PcRecorder] AudioContext cleanup failed:', error) }
   }
 }

@@ -30,6 +30,7 @@ export const usePcRecorderStore = create<PcRecorderState>((set, get) => ({
       })
       await capture.start()
       set({ status: 'recording' })
+      if (get().error) { await get().stop(); return }
       const started = Date.now()
       timer = setInterval(() => set({ elapsed: Math.floor((Date.now() - started) / 1000), levels: capture?.levels() ?? [0, 0] }), 100)
     } catch (error) {

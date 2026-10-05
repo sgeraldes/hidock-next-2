@@ -36,10 +36,11 @@ chunk (normally around one second; MediaRecorder timeslices are not a real-time 
 Previously acknowledged chunks survive. A recovered WebM may have an incomplete final packet;
 the preserved prefix remains decodable without rewriting the original stereo channels.
 
-The recorder and its recovery do not upload or start an AI provider. The recording is available
-to the existing **Transcribe** controls in the Library. Those controls use the owner's configured
-pipeline, which may upload to a cloud provider when explicitly requested. Automatic provider
-execution from the recorder is excluded to honor this phase's no-upload requirement.
+The recorder itself sends no audio to a provider. After stop or recovery completes the file import,
+the recording enters the existing transcription pipeline through `queueTranscriptionIfEnabled`,
+just like device downloads. Automatic transcription follows the owner's auto-transcribe setting
+and transcription feature setting; the configured pipeline may upload audio to a cloud provider.
+When automatic transcription is disabled, the Library's **Transcribe** controls remain available.
 
 ## Phase 1b
 

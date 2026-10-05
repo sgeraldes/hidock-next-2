@@ -25,6 +25,7 @@ import { getJensenDevice, setAutoConnectChecker } from './services/jensen'
 import { initializeStartupStorage } from './storage-startup'
 import { registerIpcHandlers } from './ipc/handlers'
 import { configurePcLoopback, stopPcRecorderBeforeQuit } from './ipc/pc-recorder-handlers'
+import { createQuitCleanup } from './quit-cleanup'
 import { stopAutoSync, initializeCalendarAutoSync } from './ipc/calendar-handlers'
 import { startMeetingLinkRecheck } from './services/meeting-link-recheck'
 import {
@@ -473,15 +474,10 @@ app.on('window-all-closed', () => {
 
 /** How long quitting waits for the USB device to let go before leaving anyway. */
 const USB_RELEASE_TIMEOUT_MS = 2000
-let quitCleanupDone = false
-
-app.on('before-quit', (event) => {
-  if (quitCleanupDone) return
+app.on('before-quit', createQuitCleanup(async () => {
   // The first quit is held back once so the USB device can be released. The
   // app used to exit with the device still open, and the process then crashed
   // inside libusb's teardown (exit code 139) after this cleanup had run.
-  event.preventDefault()
-  quitCleanupDone = true
   // Release the brain lock first, so an agent asking a moment later starts a
   // headless brain instead of knocking on a door that is closing.
   void stopAppBrain().catch(() => {})
@@ -490,23 +486,20 @@ app.on('before-quit', (event) => {
   stopRecordingWatcher()
   stopTranscriptionProcessor()
   stopVoiceBackfill()
-  void (async () => {
-    await stopPcRecorderBeforeQuit()
-    let releaseTimer: NodeJS.Timeout | undefined
-    try {
-      await Promise.race([
-        getJensenDevice().disconnect(),
-        new Promise((resolve) => {
-          releaseTimer = setTimeout(resolve, USB_RELEASE_TIMEOUT_MS)
-        }),
-      ])
-    } catch (error) {
-      console.warn('[Quit] releasing the USB device failed:', error)
-    } finally {
-      clearTimeout(releaseTimer)
-    }
-    closeDatabase()
-    console.log('Cleanup complete')
-    app.quit()
-  })()
-})
+  await stopPcRecorderBeforeQuit()
+  let releaseTimer: NodeJS.Timeout | undefined
+  try {
+    await Promise.race([
+      getJensenDevice().disconnect(),
+      new Promise((resolve) => {
+        releaseTimer = setTimeout(resolve, USB_RELEASE_TIMEOUT_MS)
+      }),
+    ])
+  } catch (error) {
+    console.warn('[Quit] releasing the USB device failed:', error)
+  } finally {
+    clearTimeout(releaseTimer)
+  }
+  closeDatabase()
+  console.log('Cleanup complete')
+}, () => app.quit()))

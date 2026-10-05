@@ -153,7 +153,7 @@ async function processNewRecording(filePath: string): Promise<void> {
   try {
     const filename = basename(filePath)
     // PC files belong exclusively to the shared import/recovery path. An orphaned
-    // copy from a failed insert must never become a device row or auto-upload.
+    // copy from a failed insert must never become a duplicate device row.
     if (isPcRecordingFilename(filename)) return
     const stats = statSync(filePath)
 

@@ -32,7 +32,7 @@ beforeEach(() => {
   vi.stubGlobal('MediaRecorder', FakeRecorder)
   vi.stubGlobal('AudioContext', class {
     createChannelMerger = vi.fn(() => ({ connect: vi.fn() }))
-    createMediaStreamDestination = () => ({ stream: 'stereo', channelCount: 2 })
+    createMediaStreamDestination = () => ({ stream: stream(), channelCount: 2 })
     createMediaStreamSource() { const source = { connect: vi.fn() }; sources.push(source); return source }
     createGain = () => { const mono = { channelCount: 1, channelCountMode: '', connect: vi.fn() }; monoNodes.push(mono); return mono }
     createAnalyser = () => ({ fftSize: 256, getFloatTimeDomainData: vi.fn(), connect: vi.fn() })
@@ -45,6 +45,48 @@ function capture() {
   return new PcAudioCapture({ start: async () => 'session', append, finish }, vi.fn())
 }
 describe('PC stereo capture', () => {
+  it('saves and releases capture when MediaRecorder stops by itself', async () => {
+    const onError = vi.fn()
+    const recorder = new PcAudioCapture({ start: async () => 'session', append, finish }, onError)
+    await recorder.start()
+    FakeRecorder.instance.state = 'inactive'
+    FakeRecorder.instance.onstop?.()
+    await vi.waitFor(() => expect(finish).toHaveBeenCalledWith('session'))
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining('stopped unexpectedly'))
+    expect(mic.track.stop).toHaveBeenCalled()
+  })
+  it('releases sources if MediaRecorder never sends its stop event', async () => {
+    vi.useFakeTimers()
+    try {
+      const recorder = capture(); await recorder.start()
+      FakeRecorder.instance.stop = () => { FakeRecorder.instance.state = 'inactive' }
+      const stopped = expect(recorder.stop()).rejects.toThrow(/timed out/)
+      await vi.advanceTimersByTimeAsync(5000)
+      await stopped
+      expect(mic.track.stop).toHaveBeenCalled()
+      expect(system.track.stop).toHaveBeenCalled()
+      expect(finish).toHaveBeenCalledWith('session')
+    } finally { vi.useRealTimers() }
+  })
+  it('releases the display stream if requesting the microphone throws synchronously', async () => {
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockImplementation(() => { throw new Error('unavailable') })
+    await expect(capture().start()).rejects.toThrow(/Microphone capture failed/)
+    expect(system.track.stop).toHaveBeenCalled()
+  })
+  it('stops source and destination tracks before waiting for a stalled import', async () => {
+    let imported!: (value: { success: boolean }) => void
+    finish.mockImplementationOnce(() => new Promise((resolve) => { imported = resolve }))
+    const recorder = capture(); await recorder.start()
+    const destination = FakeRecorder.instance.stream as ReturnType<typeof stream>
+    const stopped = recorder.stop()
+    await vi.waitFor(() => expect(finish).toHaveBeenCalled())
+    expect(mic.track.stop).toHaveBeenCalled()
+    expect(system.track.stop).toHaveBeenCalled()
+    expect(mic.track.removeEventListener).toHaveBeenCalledWith('ended', expect.any(Function))
+    expect(system.track.removeEventListener).toHaveBeenCalledWith('ended', expect.any(Function))
+    expect(destination.track.stop).toHaveBeenCalled()
+    imported({ success: true }); await stopped
+  })
   it('routes mono mic to left and mono system to right, then flushes before import', async () => {
     const recorder = capture()
     await recorder.start()
@@ -54,7 +96,7 @@ describe('PC stereo capture', () => {
     // Sources connect through mono gain nodes; merger input order is fixed.
     expect(monoNodes[0].connect.mock.calls[0].slice(1)).toEqual([0, 0])
     expect(monoNodes[1].connect.mock.calls[0].slice(1)).toEqual([0, 1])
-    expect(media.stream).toBe('stereo')
+    expect(media.stream).toHaveProperty('getTracks')
     expect(media.options).toEqual({ mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 128000 })
     const blob = { size: 4, arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer } as Blob
     media.ondataavailable?.({ data: blob })

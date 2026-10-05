@@ -109,6 +109,11 @@ beforeEach(() => {
 })
 
 describe('queueTranscriptionIfEnabled × transcription feature gate', () => {
+  it('can enqueue durably during quit without starting the processor', () => {
+    expect(queueTranscriptionIfEnabled('quit-recording', { deferProcessing: true })).toBe(true)
+    expect(dbSpies.spies['addToQueue']).toHaveBeenCalledWith('quit-recording')
+    expect(dbSpies.spies['acquireTranscriptionLock']).not.toHaveBeenCalled()
+  })
   it('with ALL optional features disabled + autoTranscribe true: queue stays empty, no processor starts', () => {
     featuresConfig = { preset: 'library-only', flags: {} } // transcription feature OFF
     autoTranscribe = true // legacy setting still on — must NOT win

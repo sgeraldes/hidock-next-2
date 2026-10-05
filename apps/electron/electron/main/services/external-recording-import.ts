@@ -6,15 +6,19 @@ import { getRecordingById, getRecordingByFilename, insertRecording, type Recordi
 import { getRecordingsPath } from './file-storage'
 import { parseHiDockFilenameDateIso } from './hidock-filename'
 import { BrowserWindow } from 'electron'
+import { queueTranscriptionIfEnabled } from './transcription'
 
 /** The recordings:addExternalByPath import path, shared with PC capture/recovery.
  * PC filenames include a UUID, so re-import after an interrupted cleanup is idempotent.
- * Import itself does not start a provider or upload audio.
+ * Completed files enter the same settings-gated transcription funnel as downloads.
  */
-export function importExternalRecording(filePath: string, options: { preserveFilename?: boolean } = {}): {
+export function importExternalRecording(filePath: string, options: { preserveFilename?: boolean; deferProcessing?: boolean } = {}): {
   success: boolean; recording?: Recording; error?: string
 } {
   try {
+    const queue = (id: string) => options.deferProcessing
+      ? queueTranscriptionIfEnabled(id, { deferProcessing: true })
+      : queueTranscriptionIfEnabled(id)
     const extension = extname(filePath).toLowerCase()
     if (!(RECORDING_AUDIO_EXTENSIONS as readonly string[]).includes(extension)) {
       return { success: false, error: `Unsupported file type: ${extension}. Supported: ${RECORDING_AUDIO_EXTENSIONS.join(', ')}` }
@@ -25,7 +29,10 @@ export function importExternalRecording(filePath: string, options: { preserveFil
     const filename = options.preserveFilename ? originalFilename : `external-${id}${extension}`
     if (options.preserveFilename) {
       const existing = getRecordingByFilename(filename)
-      if (existing) return { success: true, recording: existing }
+      if (existing) {
+        if (existing.transcription_status === 'none') queue(existing.id)
+        return { success: true, recording: existing }
+      }
     }
     const stats = statSync(filePath)
     const destination = join(getRecordingsPath(), filename)
@@ -41,6 +48,7 @@ export function importExternalRecording(filePath: string, options: { preserveFil
     })
     const recording = getRecordingById(id)
     if (!recording) return { success: false, error: 'Failed to retrieve recording after insert' }
+    queue(recording.id)
     if (options.preserveFilename) {
       for (const window of BrowserWindow.getAllWindows()) {
         if (!window.isDestroyed()) window.webContents.send('recording:new', { recording })
