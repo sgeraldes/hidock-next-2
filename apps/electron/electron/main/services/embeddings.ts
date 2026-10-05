@@ -63,7 +63,7 @@ class EmbeddingsService {
 
   async generateEmbedding(
     text: string,
-    opts: { shouldGenerate?: () => boolean; purpose?: 'query' | 'passage' } = {}
+    opts: { shouldGenerate?: () => boolean; purpose?: 'query' | 'passage'; signal?: AbortSignal } = {}
   ): Promise<number[] | null> {
     const results = await this.generateEmbeddings([text], opts)
     return results[0] ?? null
@@ -71,7 +71,7 @@ class EmbeddingsService {
 
   async generateEmbeddings(
     texts: string[],
-    opts: { shouldGenerate?: () => boolean; purpose?: 'query' | 'passage' } = {}
+    opts: { shouldGenerate?: () => boolean; purpose?: 'query' | 'passage'; signal?: AbortSignal } = {}
   ): Promise<(number[] | null)[]> {
     // Delegate to the BrainRouter: Gemini `gemini-embedding-001` first (when a
     // key is configured), else Ollama — the same routing as before, now shared

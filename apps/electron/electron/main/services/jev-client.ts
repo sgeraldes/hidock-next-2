@@ -56,6 +56,7 @@ export class JevError extends Error {
 }
 
 export interface AskJevOptions {
+  signal?: AbortSignal
   fetchImpl?: typeof fetch
   timeoutMs?: number
 }
@@ -66,6 +67,7 @@ export async function askJev(
   questions: Record<string, JevQuestion>,
   opts: AskJevOptions = {}
 ): Promise<JevResponse> {
+  opts.signal?.throwIfAborted()
   if (!apiKey.trim()) throw new JevError('Jev API key is empty', null)
   const fetchImpl = opts.fetchImpl ?? fetch
   const controller = new AbortController()
@@ -77,9 +79,10 @@ export async function askJev(
       method: 'POST',
       headers: { Authorization: `Bearer ${apiKey.trim()}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ state, model: JEV_MODEL, questions }),
-      signal: controller.signal
+      signal: opts.signal ? AbortSignal.any([controller.signal, opts.signal]) : controller.signal
     })
   } catch (e) {
+    if (opts.signal?.aborted) throw opts.signal.reason
     const reason = controller.signal.aborted ? 'timed out' : e instanceof Error ? e.message : String(e)
     throw new JevError(`Jev request failed: ${reason}`, null)
   } finally {

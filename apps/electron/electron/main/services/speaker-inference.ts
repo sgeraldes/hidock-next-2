@@ -260,6 +260,7 @@ function ownerOrgNames(limit = 15): string[] {
 export async function runSpeakerInference(
   recordingId: string,
   opts: {
+    signal?: AbortSignal
     shouldPersist?: () => boolean
     /** Tests: which Jev key a job gets, and the Jev call. */
     jevKey?: (job: 'speakerNames') => string | null
@@ -379,7 +380,7 @@ export async function runSpeakerInference(
     if (!request) return { proposed: 0, bound: 0, skipped: true }
     const harness = createJevHarness({ getKey: () => jevKey, askImpl: opts.askJev ?? askJev })
     const res = await withCallRecord({ step: 'speaker-names', route: 'jev', recordingId }, () =>
-      harness.ask(request.state, request.questions)
+      opts.signal ? harness.ask(request.state, request.questions, { signal: opts.signal }) : harness.ask(request.state, request.questions)
     )
     if (!isRecordingEligible(recordingId) || (opts.shouldPersist && !opts.shouldPersist())) {
       return { proposed: 0, bound: 0, skipped: true }
@@ -406,8 +407,9 @@ export async function runSpeakerInference(
 
     const raw = await getChatLLMService().generateText(prompt, 'You answer with a JSON array only. No prose.', {
       step: 'speaker-roster',
+      ...(opts.signal ? { signal: opts.signal } : {}),
       recordingId,
-      shouldGenerate: () => isRecordingEligible(recordingId)
+      shouldGenerate: () => !opts.signal?.aborted && isRecordingEligible(recordingId)
     })
     if (!raw) return { proposed: 0, bound: 0, skipped: true }
 

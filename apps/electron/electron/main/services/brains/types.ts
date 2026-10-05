@@ -118,6 +118,7 @@ export interface GenerateOptions {
  * gate (legacy behaviour).
  */
 export interface EmbedOptions {
+  signal?: AbortSignal
   shouldGenerate?: () => boolean
   /**
    * Asymmetric-retrieval purpose. Embedding models trained for retrieval
