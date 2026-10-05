@@ -3,6 +3,9 @@
 On Windows, choose **New > Record** in the top bar, then press **Record** in the compact bar.
 Opening the bar never opens a microphone. **Stop** flushes the recording into the Library.
 The bar shows elapsed time and independent Mic/System levels and survives page navigation.
+After saving, it shows **Saved to Library** and **Open** for five seconds, then hides and
+resets. Dismiss hides the bar in any state without stopping capture; **New > Record**
+reopens it so an active recording can still be stopped.
 The system default microphone is used; a device picker is deferred.
 
 ## Capture and file format
@@ -30,6 +33,11 @@ On the next startup, partial and interrupted-import files are recovered through 
 copy/Library-insert path as `recordings:addExternalByPath`: local-only, external, `is_imported=1`.
 Stable filenames make recovery idempotent. The staging copy is removed only after successful
 import; import errors leave it for retry. The Library's existing date-based title is used.
+
+Before PC import or recovery, bundled FFmpeg decodes the audio and counts samples to store
+the actual length with duration source `file`, even when WebM has no duration header. If
+decoding is unavailable, normal stop retains monotonic elapsed time with source `recorder`.
+Recovery never invents an elapsed time. The stereo file is preserved without remuxing.
 
 A hard crash can lose audio still buffered by Chromium or IPC since the last acknowledged
 chunk (normally around one second; MediaRecorder timeslices are not a real-time guarantee).
@@ -62,5 +70,18 @@ additional New menu actions are later work.
 Mocked media tests cover routing, start/stop, source failures, menu/bar and navigation lifetime.
 Filesystem/temporary SQLite tests exercise the shared import path, crash recovery and Library
 query with generated stereo tones; FFmpeg decodes the saved and truncated/recovered media.
-No live audio or the owner's database is accessed. A separate live Windows check must verify
-actual default mic/loopback capture, left/right playback, meters, page navigation and quit/restart.
+An isolated hidden Electron test runs the real capture class with 400 Hz microphone and
+1,000 Hz system oscillators, encodes using MediaRecorder, decodes and requires less than
+-30 dB crosstalk. It also checks the independent analysers at known input gains. A second
+hidden-browser test renders the real bar and app CSS in both themes and exercises recording,
+dismiss/reopen, stop, Saved, Open and the five-second reset. IPC tests reject failed desktop
+capture before a recording session starts. Tests never open the owner's app or database.
+
+Chromium's `--use-fake-device-for-media-stream` can also supply synthetic display audio.
+Do not use its beep to identify which recorded channel contains microphone input. The
+diagnostic `scripts/probe-pc-fake-sources.js` measures both raw sources independently:
+run it via `scripts/test-pc-capture.cjs <temporary-userData> <probe-script> fake-devices`
+under Electron. In the observed Windows runtime the display source carries the 400 Hz beep,
+while the microphone source has strong low-frequency content. The generated oscillator
+test is the source-separation check; actual hardware loopback and integrated quit/restart
+remain separate live checks.

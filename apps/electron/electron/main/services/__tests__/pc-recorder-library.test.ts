@@ -19,9 +19,10 @@ vi.mock('../database', async (importOriginal) => ({
 }))
 vi.mock('../file-storage', () => ({ getDatabasePath: () => paths.db, getRecordingsPath: () => paths.recordings }))
 vi.mock('electron', () => ({ BrowserWindow: { getAllWindows: () => [] }, app: { getPath: () => tmpdir() } }))
-import { initializeDatabase, closeDatabase, getRecordings, getQueueItems, getRecordingByFilename, acquireTranscriptionLock } from '../database'
+import { initializeDatabase, closeDatabase, getRecordings, getQueueItems, getRecordingByFilename, acquireTranscriptionLock, queryOne } from '../database'
 import { importExternalRecording } from '../external-recording-import'
 import { PcRecorder } from '../pc-recorder'
+import { measurePcRecordingDuration } from '../pc-recording-duration'
 
 let folder: string
 beforeAll(() => {
@@ -42,7 +43,7 @@ describe('PC recordings at the filesystem and SQLite boundary', () => {
       '-ac', '2', '-c:a', 'libopus', '-f', 'webm', 'pipe:1'
     ], { windowsHide: true, stdio: ['ignore', 'pipe', 'inherit'] })
     const staging = join(folder, 'staging')
-    const importer = async (path: string) => importExternalRecording(path, { preserveFilename: true })
+    const importer = async (path: string) => importExternalRecording(path, { preserveFilename: true, durationSeconds: await measurePcRecordingDuration(path) ?? undefined, durationSource: 'file' })
     const recorder = new PcRecorder(staging, importer)
     const id = recorder.start()
     const middle = Math.floor(audio.length / 2)
@@ -52,6 +53,8 @@ describe('PC recordings at the filesystem and SQLite boundary', () => {
     expect(await recorder.finish(id)).toMatchObject({ success: true })
     const saved = getRecordings().find((row) => row.is_imported === 1)!
     expect(saved).toMatchObject({ on_local: 1, on_device: 0, transcription_status: 'pending', source: 'external' })
+    expect(saved.duration_seconds).toBe(2)
+    expect(queryOne('SELECT duration_source FROM recordings WHERE id = ?', [saved.id])).toEqual({ duration_source: 'file' })
     expect(getQueueItems()).toMatchObject([{ recording_id: saved.id, status: 'pending' }])
     expect(readFileSync(saved.file_path!)).toEqual(audio)
     const pcm = execFileSync(ffmpegPath!, ['-hide_banner', '-loglevel', 'error', '-i', saved.file_path!, '-c:a', 'pcm_s16le', '-f', 's16le', 'pipe:1'], { windowsHide: true, stdio: ['ignore', 'pipe', 'inherit'] })
@@ -69,8 +72,11 @@ describe('PC recordings at the filesystem and SQLite boundary', () => {
     expect(library).toHaveLength(2)
     expect(getQueueItems()).toHaveLength(2)
     const partial = library.find((row) => row.id !== saved.id)!
+    expect(partial.duration_seconds).toBeGreaterThan(0)
     const recovered = execFileSync(ffmpegPath!, ['-hide_banner', '-loglevel', 'error', '-i', partial.file_path!, '-f', 's16le', 'pipe:1'], { windowsHide: true, stdio: ['ignore', 'pipe', 'inherit'] })
     expect(recovered.length).toBeGreaterThan(0)
+    expect(partial.duration_seconds).toBe(Math.round(recovered.length / (48000 * 2 * 2)))
+    expect(queryOne('SELECT duration_source FROM recordings WHERE id = ?', [partial.id])).toEqual({ duration_source: 'file' })
     await recorder.recover()
     expect(getRecordings()).toHaveLength(2)
     expect(getQueueItems()).toHaveLength(2)

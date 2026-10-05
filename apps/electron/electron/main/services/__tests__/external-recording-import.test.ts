@@ -8,7 +8,7 @@ import { getRecordingById, getRecordingByFilename, insertRecording } from '../da
 import { getRecordingsPath } from '../file-storage'
 import { queueTranscriptionIfEnabled } from '../transcription'
 
-vi.mock('../database', () => ({ getRecordingById: vi.fn(), getRecordingByFilename: vi.fn(), insertRecording: vi.fn() }))
+vi.mock('../database', () => ({ getRecordingById: vi.fn(), getRecordingByFilename: vi.fn(), insertRecording: vi.fn(), updateRecordingDuration: vi.fn() }))
 vi.mock('../file-storage', () => ({ getRecordingsPath: vi.fn() }))
 vi.mock('electron', () => ({ BrowserWindow: { getAllWindows: () => [] } }))
 vi.mock('../transcription', () => ({ queueTranscriptionIfEnabled: vi.fn() }))

@@ -2,6 +2,7 @@ import { app, ipcMain, desktopCapturer, type BrowserWindow } from 'electron'
 import { join } from 'path'
 import { PcRecorder } from '../services/pc-recorder'
 import { importExternalRecording } from '../services/external-recording-import'
+import { measurePcRecordingDuration } from '../services/pc-recording-duration'
 
 let requestStop: (() => Promise<void>) | null = null
 let quitting = false
@@ -23,8 +24,15 @@ export function configurePcLoopback(window: BrowserWindow): void {
 
 export function registerPcRecorderHandlers(): void {
   quitting = false
-  const recorder = new PcRecorder(join(app.getPath('userData'), 'pc-recordings'), async (path) => importExternalRecording(path,
-    quitting ? { preserveFilename: true, deferProcessing: true } : { preserveFilename: true }))
+  const recorder = new PcRecorder(join(app.getPath('userData'), 'pc-recordings'), async (path, elapsedSeconds) => {
+    const measured = await measurePcRecordingDuration(path)
+    return importExternalRecording(path, {
+      preserveFilename: true,
+      ...(quitting ? { deferProcessing: true } : {}),
+      durationSeconds: measured ?? elapsedSeconds,
+      durationSource: measured !== null ? 'file' : 'recorder'
+    })
+  })
   const recovery = recorder.recover().catch((error) => { console.error('[PcRecorder] Startup recovery failed:', error) })
   let owner: number | null = null
   let sessionId: string | null = null

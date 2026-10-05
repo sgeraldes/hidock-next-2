@@ -1,27 +1,67 @@
 /** @vitest-environment node */
 import { EventEmitter } from 'events'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, readdirSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { app, desktopCapturer, ipcMain, type BrowserWindow } from 'electron'
 import { configurePcLoopback, registerPcRecorderHandlers, stopPcRecorderBeforeQuit } from '../pc-recorder-handlers'
 import { importExternalRecording } from '../../services/external-recording-import'
+import { measurePcRecordingDuration } from '../../services/pc-recording-duration'
 
 vi.mock('electron', () => ({ app: { getPath: vi.fn() }, ipcMain: { handle: vi.fn() }, desktopCapturer: { getSources: vi.fn() } }))
 vi.mock('../../services/external-recording-import', () => ({ importExternalRecording: vi.fn(() => ({ success: true })) }))
+vi.mock('../../services/pc-recording-duration', () => ({ measurePcRecordingDuration: vi.fn(async () => 2) }))
 let folder: string
 beforeEach(() => {
   vi.clearAllMocks()
   folder = mkdtempSync(join(tmpdir(), 'pc-ipc-test-'))
   vi.mocked(app.getPath).mockReturnValue(folder)
 })
-afterEach(() => rmSync(folder, { recursive: true }))
+afterEach(() => { vi.unstubAllGlobals(); rmSync(folder, { recursive: true }) })
 function handlers() {
   registerPcRecorderHandlers()
   return Object.fromEntries(vi.mocked(ipcMain.handle).mock.calls) as Record<string, (...args: unknown[]) => unknown>
 }
 describe('PC recorder IPC', () => {
+  it('retains elapsed time with recorder provenance if decoding is unavailable', async () => {
+    const ipc = handlers()
+    const sender = Object.assign(new EventEmitter(), { id: 1 })
+    const id = await ipc['pc-recorder:start']({ sender })
+    ipc['pc-recorder:append']({ sender }, id, 0, new Uint8Array([1]))
+    vi.mocked(measurePcRecordingDuration).mockResolvedValueOnce(null)
+    await ipc['pc-recorder:finish']({ sender }, id)
+    expect(importExternalRecording).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      durationSeconds: expect.any(Number), durationSource: 'recorder'
+    }))
+    expect(vi.mocked(importExternalRecording).mock.calls[0][1]!.durationSeconds).toBeGreaterThan(0)
+  })
+  it('desktop capture handler failure rejects renderer capture before a persistence session starts', async () => {
+    // Load the real renderer module at runtime: it belongs to the separate web
+    // composite project, not the main-process TypeScript project's file list.
+    const rendererModule = '../../../../src/lib/pc-audio-capture'
+    const { PcAudioCapture } = await import(/* @vite-ignore */ rendererModule)
+    const ipc = handlers()
+    const setHandler = vi.fn(), frame = {}
+    configurePcLoopback({ webContents: { session: { setDisplayMediaRequestHandler: setHandler }, mainFrame: frame }, isDestroyed: () => false } as unknown as BrowserWindow)
+    vi.mocked(desktopCapturer.getSources).mockRejectedValue(new Error('loopback unavailable'))
+    const track = { stop: vi.fn() }
+    vi.stubGlobal('navigator', { mediaDevices: {
+      getUserMedia: async () => ({ getTracks: () => [track], getAudioTracks: () => [track] }),
+      getDisplayMedia: () => new Promise((_resolve, reject) => {
+        setHandler.mock.calls[0][0]({ frame, userGesture: true }, (sources: object) => {
+          expect(sources).toEqual({})
+          reject(new Error('loopback unavailable'))
+        })
+      })
+    } })
+    const start = vi.fn(async () => String(await ipc['pc-recorder:start']({ sender: Object.assign(new EventEmitter(), { id: 1 }) })))
+    const capture = new PcAudioCapture({ start, append: vi.fn(), finish: vi.fn() }, vi.fn())
+    await expect(capture.start()).rejects.toThrow(/System audio capture failed.*loopback unavailable/)
+    expect(start).not.toHaveBeenCalled()
+    expect(track.stop).toHaveBeenCalledOnce()
+    expect(readdirSync(folder)).toEqual([])
+  })
   it('a stale finish cannot abandon the active recording', async () => {
     const ipc = handlers()
     const sender = Object.assign(new EventEmitter(), { id: 1 })
@@ -37,7 +77,7 @@ describe('PC recorder IPC', () => {
     expect(() => ipc['pc-recorder:append']({ sender: { id: 2 } }, id, 0, new Uint8Array([1]))).toThrow(/owner/)
     ipc['pc-recorder:append']({ sender }, id, 0, new Uint8Array([1, 2]))
     expect(await ipc['pc-recorder:finish']({ sender }, id)).toMatchObject({ success: true })
-    expect(importExternalRecording).toHaveBeenCalledWith(expect.stringMatching(/Recording .*\.webm$/), { preserveFilename: true })
+    expect(importExternalRecording).toHaveBeenCalledWith(expect.stringMatching(/Recording .*\.webm$/), { preserveFilename: true, durationSeconds: 2, durationSource: 'file' })
   })
   it('abandons a crashed renderer and imports its partial on the next startup', async () => {
     const ipc = handlers()
@@ -79,7 +119,7 @@ describe('PC recorder IPC', () => {
     await alsoQuitting
     expect(importExternalRecording).toHaveBeenCalledOnce()
     expect(sender.send).toHaveBeenCalledOnce()
-    expect(importExternalRecording).toHaveBeenCalledWith(expect.any(String), { preserveFilename: true, deferProcessing: true })
+    expect(importExternalRecording).toHaveBeenCalledWith(expect.any(String), { preserveFilename: true, deferProcessing: true, durationSeconds: 2, durationSource: 'file' })
   })
   it('abandons on main-frame reload and recovers before another recording', async () => {
     const ipc = handlers()

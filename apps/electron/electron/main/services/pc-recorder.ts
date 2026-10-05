@@ -4,13 +4,13 @@ import { randomUUID } from 'crypto'
 import { isPcRecordingFilename } from '../../../src/shared/pc-recording'
 
 export interface PcImportResult { success: boolean; error?: string }
-type ImportRecording = (path: string) => Promise<PcImportResult>
+type ImportRecording = (path: string, elapsedSeconds?: number) => Promise<PcImportResult>
 
 /** MediaRecorder WebM chunks are fragments of ONE container, appended in order.
  * Like realtime-recorder, unfinished files stay outside the Library until recovery.
  */
 export class PcRecorder {
-  private active: { id: string; path: string; index: number } | null = null
+  private active: { id: string; path: string; index: number; started: number } | null = null
   private finishing = false
   private finishingPath: string | null = null
   private recovery: Promise<void> | null = null
@@ -25,7 +25,7 @@ export class PcRecorder {
     const title = `Recording ${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())} ${two(date.getHours())}-${two(date.getMinutes())}`
     const path = join(this.folder, `${title} ${id}.webm.partial`)
     closeSync(openSync(path, 'wx'))
-    this.active = { id, path, index: 0 }
+    this.active = { id, path, index: 0, started: performance.now() }
     return id
   }
 
@@ -47,7 +47,7 @@ export class PcRecorder {
     this.active = null
     this.finishing = true
     this.finishingPath = active.path
-    try { return await this.importPartial(active.path) }
+    try { return await this.importPartial(active.path, (performance.now() - active.started) / 1000) }
     finally { this.finishing = false; this.finishingPath = null }
   }
 
@@ -78,14 +78,14 @@ export class PcRecorder {
     return this.active
   }
 
-  private async importPartial(path: string): Promise<PcImportResult> {
+  private async importPartial(path: string, elapsedSeconds?: number): Promise<PcImportResult> {
     if (statSync(path).size === 0) {
       unlinkSync(path)
       return { success: false, error: 'No audio was recorded' }
     }
     const final = path.endsWith('.partial') ? path.slice(0, -8) : path
     if (final !== path) renameSync(path, final)
-    const result = await this.importRecording(final)
+    const result = await this.importRecording(final, elapsedSeconds)
     if (result.success) unlinkSync(final)
     return result
   }

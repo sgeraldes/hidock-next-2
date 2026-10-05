@@ -3,7 +3,7 @@ import { PcAudioCapture } from '@/lib/pc-audio-capture'
 
 interface PcRecorderState {
   visible: boolean
-  status: 'idle' | 'starting' | 'recording' | 'saving'
+  status: 'idle' | 'starting' | 'recording' | 'saving' | 'saved'
   error: string | null
   elapsed: number
   levels: number[]
@@ -15,13 +15,16 @@ interface PcRecorderState {
 let capture: PcAudioCapture | null = null
 let timer: ReturnType<typeof setInterval> | null = null
 let closing = false
+let savedTimer: ReturnType<typeof setTimeout> | null = null
+function clearSavedTimer() { if (savedTimer) clearTimeout(savedTimer); savedTimer = null }
 
 export const usePcRecorderStore = create<PcRecorderState>((set, get) => ({
   visible: false, status: 'idle', error: null, elapsed: 0, levels: [0, 0],
   open: () => set({ visible: true }),
-  dismiss: () => { if (get().status === 'idle') set({ visible: false }) },
+  dismiss: () => set({ visible: false }),
   start: async () => {
     if (get().status !== 'idle') return
+    clearSavedTimer()
     set({ status: 'starting', error: null, elapsed: 0, levels: [0, 0] })
     try {
       capture = new PcAudioCapture(window.electronAPI.pcRecorder, (error) => {
@@ -43,9 +46,17 @@ export const usePcRecorderStore = create<PcRecorderState>((set, get) => ({
     set({ status: 'saving' })
     if (timer) clearInterval(timer)
     timer = null
-    try { await capture?.stop() }
+    let saved = false
+    try { await capture?.stop(); saved = !get().error }
     catch (error) { set({ error: error instanceof Error ? error.message : String(error) }) }
-    finally { capture = null; set({ status: 'idle', levels: [0, 0] }) }
+    finally {
+      capture = null
+      set({ status: saved ? 'saved' : 'idle', levels: [0, 0] })
+      if (saved) {
+        clearSavedTimer()
+        savedTimer = setTimeout(() => { savedTimer = null; set({ visible: false, status: 'idle', elapsed: 0 }) }, 5000)
+      }
+    }
   }
 }))
 
@@ -57,7 +68,7 @@ export function installPcRecorderCloseGuard(): () => void {
     if (['starting', 'saving'].includes(usePcRecorderStore.getState().status)) {
       await new Promise<void>((resolve) => {
         const unsubscribe = usePcRecorderStore.subscribe((state) => {
-          if (state.status === 'recording' || state.status === 'idle') { unsubscribe(); resolve() }
+          if (['recording', 'idle', 'saved'].includes(state.status)) { unsubscribe(); resolve() }
         })
       })
     }
@@ -65,7 +76,7 @@ export function installPcRecorderCloseGuard(): () => void {
   }
   const unsubscribe = window.electronAPI?.pcRecorder?.onStopRequested?.(() => { void flush() })
   const beforeUnload = (event: BeforeUnloadEvent) => {
-    if (closing || usePcRecorderStore.getState().status === 'idle') return
+    if (closing || ['idle', 'saved'].includes(usePcRecorderStore.getState().status)) return
     event.preventDefault()
     event.returnValue = ''
     void flush().then(() => { closing = true; window.close() })
