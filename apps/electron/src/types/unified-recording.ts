@@ -41,6 +41,7 @@ interface RecordingBase {
   duration: number
   dateRecorded: Date
   transcriptionStatus: 'none' | 'pending' | 'processing' | 'complete' | 'no_speech' | 'error'
+  transcriptionError?: string
   meetingId?: string
   meetingSubject?: string
   /** Which piece of its meeting this recording is, when the meeting was recorded in more than one. */

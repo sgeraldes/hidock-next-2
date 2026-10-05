@@ -27,17 +27,17 @@ function getAudioContext(): AudioContext {
  */
 export async function generateWaveformData(
   audioBuffer: AudioBuffer,
-  sampleCount: number = 1000
+  sampleCount: number = 1000,
+  channel: number = 0
 ): Promise<Float32Array> {
-  // Get mono or left channel data
-  const rawData = audioBuffer.getChannelData(0)
-  const blockSize = Math.floor(rawData.length / sampleCount)
+  // Sample the requested channel; keep one shared block/time grid.
+  const rawData = audioBuffer.getChannelData(channel)
   const waveformData = new Float32Array(sampleCount)
 
   // Calculate peak amplitude for each block
   for (let i = 0; i < sampleCount; i++) {
-    const start = i * blockSize
-    const end = start + blockSize
+    const start = Math.floor(i * rawData.length / sampleCount)
+    const end = Math.max(start + 1, Math.floor((i + 1) * rawData.length / sampleCount))
     let max = 0
 
     // Find peak amplitude in this block

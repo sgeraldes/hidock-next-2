@@ -1,3 +1,4 @@
+import { MIN_MEETING_CONFIDENCE } from '../../../src/shared/meeting-confidence'
 import { watch, existsSync, statSync, readdirSync } from 'fs'
 import { RECORDING_AUDIO_EXTENSIONS } from '../../../src/shared/audio-extensions'
 import { isPcRecordingFilename } from '../../../src/shared/pc-recording'
@@ -287,7 +288,7 @@ function correlateWithMeeting(recordingId: string, recordingDate: Date): void {
       }
     }
 
-    if (bestMatch && bestMatch.confidence >= 0.5) {
+    if (bestMatch && bestMatch.confidence >= MIN_MEETING_CONFIDENCE) {
       linkRecordingToMeeting(
         recordingId,
         bestMatch.meetingId,

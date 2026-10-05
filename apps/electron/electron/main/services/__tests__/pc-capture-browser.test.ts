@@ -99,7 +99,7 @@ it('renders the real recording bar with visible light/dark meters and exercises 
         finish: async () => { window.finishCalls++; return { success: true } } } };
       createRoot(document.body).render(<MemoryRouter><RecordingBar/><Location/></MemoryRouter>);
     `, resolveDir: resolve('.'), loader: 'tsx' }, bundle: true, write: false, format: 'iife', jsx: 'automatic',
-    alias: { '@': resolve('src') }, define: { 'process.env.NODE_ENV': '"production"' } })
+    alias: { '@': resolve('src') }, define: { 'process.env.NODE_ENV': '"production"', 'import.meta.env': '{"DEV":false,"PROD":true}' } })
     const css = await postcss([tailwind()]).process(readFileSync(resolve('src/index.css'), 'utf8'), { from: resolve('src/index.css') })
     const meterReport = `
       const meters = [...document.querySelectorAll('[role="meter"]')].map(meter => ({
@@ -161,6 +161,110 @@ it('renders the real recording bar with visible light/dark meters and exercises 
       const { copyFileSync, mkdirSync } = await import('fs')
       mkdirSync(process.env.PC_RECORDER_UI_ARTIFACTS, { recursive: true })
       for (const index of [0, 1]) copyFileSync(join(folder, `stage-${index}.png`), join(process.env.PC_RECORDER_UI_ARTIFACTS, `stage-${index}.png`))
+    }
+  } finally { rmSync(folder, { recursive: true }) }
+}, 30000)
+
+
+it('recording detail decodes headerless stereo, shows lanes and failure, and mutes the real playback graph in Chromium', async () => {
+  const folder = mkdtempSync(join(tmpdir(), 'pc-detail-ui-'))
+  try {
+    const bundled = await build({ stdin: { contents: `
+      import React from 'react'; import { createRoot } from 'react-dom/client';
+      import { SourceReader } from './src/features/library/components/SourceReader';
+      import { useAudioPlayback } from './src/hooks/useAudioPlayback';
+      import { useUIStore } from './src/store/useUIStore';
+      import { connectStereoPlayback } from './src/lib/stereo-playback';
+      window.uiStore = useUIStore; window.connectStereoPlayback = connectStereoPlayback;
+      window.cacheEntry = null; window.retries = 0;
+      window.electronAPI = { storage: { readRecording: async () => ({success: true, data: window.mediaBase64}) },
+        waveform: { getCache: async () => window.cacheEntry, setCache: async (_id, peaks, duration, _size, channels) => { window.cacheEntry = {peaks, duration, channels}; return true } },
+        recordings: { updateDuration: async () => ({success: true}), getCandidates: async () => ({success: true, data: [
+          {meetingId:'weak',subject:'Colegio',confidenceScore:0.05}, {meetingId:'credible',subject:'Planning',confidenceScore:0.5}
+        ]}) }, projects: { getForKnowledge: async () => ({success:true,data:[]}) } };
+      const recording = { id: 'detail', filename:'pc-recording-test.webm', localPath:'/pc-recording-test.webm', location:'local-only',
+        size:1024, duration:0, dateRecorded:new Date(), transcriptionStatus:'error', transcriptionError:'Provider timed out', syncStatus:'synced' };
+      function Detail() { useAudioPlayback(); return <SourceReader recording={recording} onPlay={() => window.__audioControls.play('detail',recording.localPath)}
+        onStop={() => window.__audioControls.stop()} onTranscribe={() => window.retries++}/> }
+      window.mountDetail = () => { window.root = createRoot(document.body); window.root.render(<Detail/>); };
+    `, resolveDir: resolve('.'), loader: 'tsx' }, bundle: true, write: false, format: 'iife', jsx: 'automatic',
+      alias: { '@': resolve('src') }, define: { 'process.env.NODE_ENV': '"production"', 'import.meta.env': '{"DEV":false,"PROD":true}' } })
+    const css = await postcss([tailwind()]).process(readFileSync(resolve('src/index.css'), 'utf8'), { from: resolve('src/index.css') })
+    const script = `(async () => {
+      document.head.innerHTML = '<style>' + ${JSON.stringify(css.css)} + '</style>'; ${bundled.outputFiles[0].text}
+      const context = new AudioContext({sampleRate:48000}); await context.resume();
+      const merger = context.createChannelMerger(2); const destination = context.createMediaStreamDestination(); merger.connect(destination);
+      const sources = [400,1000].map((frequency,channel) => { const oscillator=context.createOscillator(); oscillator.frequency.value=frequency;
+        const gain=context.createGain(); gain.gain.value=channel ? 0.6 : 0.2; oscillator.connect(gain).connect(merger,0,channel); oscillator.start(); return oscillator; });
+      const chunks=[]; const recorder=new MediaRecorder(destination.stream,{mimeType:'audio/webm;codecs=opus'});
+      recorder.ondataavailable=event=>chunks.push(event.data); recorder.start(100);
+      await new Promise(resolve=>setTimeout(resolve,2200)); await new Promise(resolve=>{recorder.onstop=resolve;recorder.stop()});
+      const encoded=await new Blob(chunks).arrayBuffer();
+      window.mediaBase64=btoa(String.fromCharCode(...new Uint8Array(encoded)));
+      const decoded=await context.decodeAudioData(encoded.slice(0));
+      window.mountDetail(); await new Promise(resolve=>setTimeout(resolve,50));
+      await window.__audioControls.loadWaveformOnly('detail','/pc-recording-test.webm');
+      for(let i=0;i<100 && !document.querySelector('[data-testid="stereo-lanes"]');i++) await new Promise(resolve=>setTimeout(resolve,20));
+      const lanes=[...document.querySelectorAll('[data-channel]')].map(lane=>({channel:lane.getAttribute('data-channel'), label:lane.textContent, canvas:!!lane.querySelector('canvas')}));
+      const text=document.body.textContent;
+      const before={lanes, stereo:text.includes('Stereo · Mic left · System right'), failure:text.includes('Failed: Provider timed out'),
+        retry:[...document.querySelectorAll('button')].some(b=>b.textContent==='Retry'), idleStop:[...document.querySelectorAll('button')].some(b=>b.textContent==='Stop'),
+        weakCandidate:text.includes('Colegio'), credibleCandidate:text.includes('Planning'), duration:window.uiStore.getState().waveformDuration,
+        peaks:window.cacheEntry.channels.map(peaks=>Math.max(...peaks))};
+      document.querySelector('[aria-label="Mute Mic"]').click(); await new Promise(resolve=>setTimeout(resolve,30));
+      const mutedBeforePlay=window.uiStore.getState().playbackMutedChannels;
+      await window.__audioControls.play('detail','/pc-recording-test.webm'); await new Promise(resolve=>setTimeout(resolve,200));
+      const during={duration:window.uiStore.getState().playbackDuration, playing:window.uiStore.getState().isPlaying,
+        mutedLabel:!!document.querySelector('[aria-label="Unmute Mic"]')};
+      window.__audioControls.pause(); await new Promise(resolve=>setTimeout(resolve,30));
+      const pausedStop=[...document.querySelectorAll('button')].some(b=>b.textContent==='Stop'); window.__audioControls.stop();
+      // Exercise the exact production splitter/gain graph with decoded WebM PCM in an OfflineAudioContext.
+      const renders=[];
+      for(const mute of [null,0,1]) { const offline=new OfflineAudioContext(2,decoded.length,decoded.sampleRate);
+        const source=offline.createBufferSource(); source.buffer=decoded;
+        const graph=window.connectStereoPlayback(offline,source,offline.destination); if(mute!==null) graph.setMuted(mute,true);
+        source.start(); const result=await offline.startRendering(); renders.push([0,1].map(ch=>{const samples=result.getChannelData(ch);return Math.sqrt(samples.reduce((sum,v)=>sum+v*v,0)/samples.length)})); graph.disconnect(); }
+      sources.forEach(source=>source.stop()); destination.stream.getTracks().forEach(track=>track.stop()); await context.close();
+      await new Promise(resolve=>setTimeout(resolve,450));
+      const player=document.querySelector('[data-testid="waveform-player-full"]');
+      const transportVisible=player.getBoundingClientRect().bottom <= player.parentElement.parentElement.getBoundingClientRect().bottom + 1;
+      [...document.querySelectorAll('button')].find(button=>button.textContent==='Retry').click();
+      return {before, during, mutedBeforePlay, pausedStop, renders, decodedDuration:decoded.duration, transportVisible, retries:window.retries};
+    })()`
+    const compactScript = `(async () => {
+      document.documentElement.className='dark'; document.querySelector('[aria-label="Minimize Player"]').click();
+      await new Promise(resolve=>setTimeout(resolve,450));
+      const player=document.querySelector('[data-testid="waveform-player-pill"]');
+      return {height:player.getBoundingClientRect().height, lanes:player.querySelectorAll('canvas').length,
+        mic:player.textContent.includes('Mic'), system:player.textContent.includes('System')};
+    })()`
+    const payload = join(folder, 'detail.json'); writeFileSync(payload, JSON.stringify([script,compactScript,`(async () => {
+      document.documentElement.className=''; document.querySelector('[aria-label="Expand Player"]').click();
+      await new Promise(resolve=>setTimeout(resolve,450)); return {expanded:!!document.querySelector('[data-testid="waveform-player-full"]')};
+    })()`]))
+    const stdout = await runElectron(folder, payload, 'ui-stages')
+    const reports = JSON.parse(stdout.split('PC_CAPTURE_RESULT=')[1].split('\n')[0]); const result = reports[0]
+    console.log('Chromium recording detail:', JSON.stringify(reports))
+    expect(reports[1]).toMatchObject({height:32, lanes:2, mic:true, system:true})
+    expect(reports[2]).toEqual({expanded:true})
+    expect(result.before.lanes).toHaveLength(2)
+    expect(result.before.lanes.every((lane: {canvas: boolean}) => lane.canvas)).toBe(true)
+    expect(result.before).toMatchObject({stereo:true,failure:true,retry:true,idleStop:false,weakCandidate:false,credibleCandidate:true})
+    expect(result.before.duration).toBeGreaterThan(1.5)
+    expect(result.before.duration).toBe(result.decodedDuration)
+    expect(result.transportVisible).toBe(true)
+    expect(result.retries).toBe(1)
+    expect(result.before.peaks[1]).toBeGreaterThan(result.before.peaks[0] * 2)
+    expect(result.during.duration).toBeCloseTo(result.before.duration,1)
+    expect(result.during).toMatchObject({playing:true,mutedLabel:true})
+    expect(result.mutedBeforePlay).toEqual([true,false])
+    expect(result.pausedStop).toBe(false)
+    expect(result.renders[1][0]).toBe(0); expect(result.renders[1][1]).toBeCloseTo(result.renders[0][1],5)
+    expect(result.renders[2][1]).toBe(0); expect(result.renders[2][0]).toBeCloseTo(result.renders[0][0],5)
+    if (process.env.PC_RECORDER_UI_ARTIFACTS) {
+      const {copyFileSync,mkdirSync} = await import('fs'); mkdirSync(process.env.PC_RECORDER_UI_ARTIFACTS,{recursive:true})
+      copyFileSync(join(folder,'stage-2.png'),join(process.env.PC_RECORDER_UI_ARTIFACTS,'detail.png'))
+      copyFileSync(join(folder,'stage-1.png'),join(process.env.PC_RECORDER_UI_ARTIFACTS,'detail-dark-compact.png'))
     }
   } finally { rmSync(folder, { recursive: true }) }
 }, 30000)

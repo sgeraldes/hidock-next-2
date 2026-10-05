@@ -663,3 +663,22 @@ describe('SourceReader — timeline backfill', () => {
     )
   })
 })
+
+
+it('failed transcription shows the stored reason and Retry without idle Stop', () => {
+  useUIStore.setState({ currentlyPlayingId: 'rec-1', isPlaying: false })
+  render(<SourceReader recording={makeRecording({ transcriptionStatus: 'error', transcriptionError: 'Provider timed out' } as never)} isPlaying onPlay={vi.fn()} onStop={vi.fn()} onTranscribe={vi.fn()} />)
+  expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument()
+  expect(screen.getByText('Failed: Provider timed out')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+})
+it('hides 5 percent meeting suggestions, retaining the existing 50 percent floor', async () => {
+  installElectronAPI()
+  ;(window.electronAPI.recordings as any).getCandidates = vi.fn().mockResolvedValue({ success: true, data: [
+    { meetingId: 'weak', subject: 'Colegio', confidenceScore: 0.05 },
+    { meetingId: 'credible', subject: 'Planning', confidenceScore: 0.5 }
+  ] })
+  render(<SourceReader recording={makeRecording()} />)
+  await screen.findByText('Planning · 50%')
+  expect(screen.queryByText(/Colegio/)).not.toBeInTheDocument()
+})

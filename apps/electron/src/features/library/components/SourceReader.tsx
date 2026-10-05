@@ -34,6 +34,7 @@ import { TranscriptIntegrityPanel } from './TranscriptIntegrityPanel'
 import type { LineIssueCode } from '@/shared/transcript-line-issues'
 import { TranscriptionStatusBadge } from './TranscriptionStatusBadge'
 import { StatusIcon } from './StatusIcon'
+import { MIN_MEETING_CONFIDENCE, meetingCandidateConfidence } from '@/shared/meeting-confidence'
 import { WaveformPlayer, type TimelineEvent, type TimelineEventDetail, type TimelineEventPatch, type SentimentScorePoint, type WaveformPlayerMode } from './WaveformPlayer'
 import { SpeakerAssignPopover, type AssignScope } from './SpeakerAssignPopover'
 import { useReaderPeople, type ParticipantChip } from '../hooks/useReaderPeople'
@@ -160,6 +161,7 @@ interface ReaderProcessingRun {
   estimated_cost_amount: number | null
   estimated_cost_currency: string | null
   cost_method: string | null
+  error_message?: string | null
 }
 
 interface ReaderMeetingCandidate {
@@ -481,7 +483,10 @@ export function SourceReader({
 
   // Live duration: imported/watched files have no stored duration until the
   // waveform decode backfills it; show the freshly-decoded value meanwhile.
-  const livePlaybackDuration = useUIStore((s) => s.playbackDuration)
+  const activePlayback = useUIStore(s => s.isPlaying && s.currentlyPlayingId === recording?.id)
+  const waveformChannels = useUIStore(s => s.waveformLoadedForId === recording?.id ? s.playbackWaveformChannels : null)
+  const queueFailure = useTranscriptionStore(s => Array.from(s.queue.values()).find(item => item.recordingId === recording?.id && item.status === 'failed')?.error)
+  const livePlaybackDuration = useUIStore((s) => s.waveformDuration || (Number.isFinite(s.playbackDuration) ? s.playbackDuration : 0))
   const waveformLoadedForId = useUIStore((s) => s.waveformLoadedForId)
 
   // H6: When a transcribed recording is opened via the sidebar Library nav, the
@@ -598,7 +603,7 @@ export function SourceReader({
     ;(async () => {
       try {
         const result = await window.electronAPI?.recordings?.getCandidates?.(recordingId)
-        if (!cancelled) setMeetingCandidates(result?.success ? result.data as ReaderMeetingCandidate[] : [])
+        if (!cancelled) setMeetingCandidates(result?.success ? (result.data as ReaderMeetingCandidate[]).filter(candidate => meetingCandidateConfidence(candidate) >= MIN_MEETING_CONFIDENCE) : [])
       } catch {
         if (!cancelled) setMeetingCandidates([])
       }
@@ -1397,6 +1402,7 @@ export function SourceReader({
             <>
               <span aria-hidden="true" className="text-muted-foreground/40">•</span>
               <span>{durationSeconds > 0 ? formatDuration(durationSeconds) : 'Unknown duration'}</span>
+              {waveformChannels?.length === 2 && <span>{/(?:^|[\\/])pc-recording-[^\\/]+\.webm$/i.test(localPath ?? '') ? 'Stereo · Mic left · System right' : 'Stereo · Channel 0 left · Channel 1 right'}</span>}
             </>
           )}
           <span aria-hidden="true" className="text-muted-foreground/40">•</span>
@@ -1404,7 +1410,11 @@ export function SourceReader({
             <StatusIcon recording={recording} />
           </span>
           {isAudioSource ? (
-            <TranscriptionStatusBadge status={recording.transcriptionStatus} />
+            recording.transcriptionStatus === 'error' ? (
+              <span className="rounded-full bg-destructive/10 px-2 py-0.5 text-destructive">
+                Failed: {recording.transcriptionError || queueFailure || processingRuns.find(run => run.status === 'failed')?.error_message || 'Reason unavailable'}
+              </span>
+            ) : <TranscriptionStatusBadge status={recording.transcriptionStatus} />
           ) : (
             <span className="rounded-full bg-muted px-2 py-0.5 font-medium capitalize text-foreground">{sourceType}</span>
           )}
@@ -1413,7 +1423,7 @@ export function SourceReader({
         <div className="flex flex-wrap items-center gap-2 px-4 pb-3 pt-3">
           {/* Primary action: Play/Stop for local files, Download for device-only */}
           {canPlay && onPlay ? (
-            isPlaying ? (
+            activePlayback ? (
               <Button size="sm" onClick={onStop} className="gap-2" title="Stop playback">
                 <Square className="h-4 w-4" />
                 Stop
@@ -1508,7 +1518,7 @@ export function SourceReader({
                   ) : (
                     <Wand2 className="h-4 w-4" />
                   )}
-                  Transcribe
+                  {recording.transcriptionStatus === 'error' ? 'Retry' : 'Transcribe'}
                 </Button>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
@@ -2538,7 +2548,8 @@ function ReaderPlayer({
     >
       <div
         className="relative min-w-0 flex-1 overflow-hidden rounded-lg motion-safe:transition-[max-height] motion-safe:duration-300 motion-safe:ease-out"
-        style={{ maxHeight }}
+        // Decoded stereo adds a lane asynchronously; never clip the expanded transport.
+        style={{ maxHeight: big ? undefined : maxHeight }}
       >
         <div ref={innerRef} className="motion-safe:transition-opacity motion-safe:duration-200">
           <WaveformPlayer

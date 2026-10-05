@@ -12,6 +12,7 @@ import { toast } from '@/components/ui/toaster'
 import { parseError, getErrorMessage } from '@/features/library/utils/errorHandling'
 import { generateWaveformData, decodeAudioData, getAudioMimeType } from '@/utils/audioUtils'
 import { shouldLogQa } from '@/services/qa-monitor'
+import { connectStereoPlayback } from '@/lib/stereo-playback'
 import { currentPlayerPreferences } from '@/lib/player-preferences'
 
 /**
@@ -20,13 +21,13 @@ import { currentPlayerPreferences } from '@/lib/player-preferences'
  */
 async function tryLoadCachedWaveform(
   recordingId: string
-): Promise<{ peaks: Float32Array; duration: number; coarse: boolean } | null> {
+): Promise<{ peaks: Float32Array; channels?: Float32Array[]; duration: number; coarse: boolean } | null> {
   try {
     const cache = window.electronAPI?.waveform
     if (!cache) return null
     const entry = await cache.getCache(recordingId)
     if (entry && Array.isArray(entry.peaks) && entry.peaks.length > 0) {
-      return { peaks: Float32Array.from(entry.peaks), duration: entry.duration ?? 0, coarse: entry.coarse === true }
+      return { channels: entry.channels?.map(channel => Float32Array.from(channel)), peaks: Float32Array.from(entry.peaks), duration: entry.duration ?? 0, coarse: entry.coarse === true }
     }
   } catch (err) {
     console.warn('[useAudioPlayback] Waveform cache read failed:', err)
@@ -39,18 +40,33 @@ async function persistWaveform(
   recordingId: string,
   peaks: Float32Array,
   duration: number,
-  fileSize: number
+  fileSize: number,
+  channels: Float32Array[]
 ): Promise<void> {
   try {
     const cache = window.electronAPI?.waveform
     if (!cache) return
-    await cache.setCache(recordingId, Array.from(peaks), duration, fileSize)
+    await cache.setCache(recordingId, Array.from(peaks), duration, fileSize, channels.map(channel => Array.from(channel)))
   } catch (err) {
     console.warn('[useAudioPlayback] Waveform cache write failed:', err)
   }
 }
 
 export function useAudioPlayback() {
+  const stereoRef = useRef<ReturnType<typeof connectStereoPlayback> | null>(null)
+  const playbackContextRef = useRef<AudioContext | null>(null)
+  const measuredDurationRef = useRef(0)
+  const releaseStereo = useCallback(() => {
+    stereoRef.current?.disconnect()
+    stereoRef.current = null
+    const context = playbackContextRef.current
+    playbackContextRef.current = null
+    if (context) void context.close().catch(error => console.warn('[useAudioPlayback] AudioContext close failed:', error))
+  }, [])
+  const mediaDuration = useCallback(() => {
+    const duration = audioRef.current?.duration ?? 0
+    return Number.isFinite(duration) && duration > 0 ? duration : measuredDurationRef.current
+  }, [])
   const rateRef = useRef<number | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const audioBlobUrlRef = useRef<string | null>(null)
@@ -78,6 +94,8 @@ export function useAudioPlayback() {
     // Create new lock for this operation
     playbackLockRef.current = (async () => {
       try {
+        releaseStereo()
+        measuredDurationRef.current = 0
         // Stop current playback
         if (audioRef.current) {
           // Clean up event listeners before stopping
@@ -124,7 +142,7 @@ export function useAudioPlayback() {
           // Define event handlers as named functions so they can be properly removed
           const handleTimeUpdate = () => {
             if (audioRef.current) {
-              setPlaybackProgress(audioRef.current.currentTime, audioRef.current.duration)
+              setPlaybackProgress(audioRef.current.currentTime, mediaDuration())
             }
           }
 
@@ -138,6 +156,7 @@ export function useAudioPlayback() {
           }
 
           const handleEnded = () => {
+            releaseStereo()
             setIsPlaying(false)
             setCurrentlyPlaying(null, null)
             setPlaybackProgress(0, 0)
@@ -149,6 +168,7 @@ export function useAudioPlayback() {
           }
 
           const handleError = (e: ErrorEvent) => {
+            releaseStereo()
             const mediaError = audioRef.current?.error
             console.error('[useAudioPlayback] Audio element error:', {
               code: mediaError?.code,
@@ -191,21 +211,24 @@ export function useAudioPlayback() {
 
         // Generate waveform data for visualization (skip if already loaded)
         const { waveformLoadedForId } = useUIStore.getState()
-        if (waveformLoadedForId !== recordingId) {
+        if (waveformLoadedForId !== recordingId || !useUIStore.getState().playbackWaveformChannels?.length) {
           // H5: prefer the disk cache — instant, no recompute.
           const cachedPeaks = await tryLoadCachedWaveform(recordingId)
-          if (cachedPeaks) {
-            setWaveformData(cachedPeaks.peaks)
+          if (cachedPeaks && !cachedPeaks.coarse) {
+            setWaveformData(cachedPeaks.peaks, cachedPeaks.channels, cachedPeaks.duration)
+            measuredDurationRef.current = cachedPeaks.duration
             useUIStore.getState().setWaveformLoadedFor(recordingId)
             if (shouldLogQa()) console.log('[useAudioPlayback] Waveform loaded from cache during play')
           } else {
             try {
               const audioBuffer = await decodeAudioData(base64, mimeType)
-              const waveformData = await generateWaveformData(audioBuffer, 1000)
-              setWaveformData(waveformData)
+              const channels = await Promise.all(Array.from({ length: audioBuffer.numberOfChannels || 1 }, (_, channel) => generateWaveformData(audioBuffer, 1000, channel)))
+              const waveformData = channels[0]
+              setWaveformData(waveformData, channels, audioBuffer.duration)
+              measuredDurationRef.current = audioBuffer.duration
               useUIStore.getState().setWaveformLoadedFor(recordingId)
               const fileSizeBytes = Math.ceil((base64.length * 3) / 4)
-              void persistWaveform(recordingId, waveformData, audioBuffer.duration, fileSizeBytes)
+              void persistWaveform(recordingId, waveformData, audioBuffer.duration, fileSizeBytes, channels)
             } catch (waveformError) {
               console.warn('[useAudioPlayback] Failed to generate waveform:', waveformError)
               setWaveformData(null)
@@ -216,6 +239,18 @@ export function useAudioPlayback() {
           if (shouldLogQa()) console.log('[useAudioPlayback] Skipping waveform generation - already loaded')
         }
 
+        const state = useUIStore.getState()
+        if (state.waveformLoadedForId === recordingId) {
+          measuredDurationRef.current = state.waveformDuration || measuredDurationRef.current
+          if (state.playbackWaveformChannels?.length === 2) {
+            const context = new AudioContext()
+            playbackContextRef.current = context
+            stereoRef.current = connectStereoPlayback(context, context.createMediaElementSource(audioRef.current), context.destination)
+            if (state.mutedChannelsForId === recordingId) state.playbackMutedChannels.forEach((muted, channel) => stereoRef.current?.setMuted(channel, muted))
+            await context.resume()
+          }
+        }
+        setPlaybackProgress(0, measuredDurationRef.current)
         // Convert base64 to Blob URL (more reliable than data URI for larger files)
         const binaryData = atob(base64)
         const uint8Array = new Uint8Array(binaryData.length)
@@ -248,7 +283,7 @@ export function useAudioPlayback() {
               audio.addEventListener('error', onError, { once: true })
             })
           }
-          const duration = audioRef.current.duration
+          const duration = mediaDuration()
           audioRef.current.currentTime = Math.min(Number.isFinite(duration) ? duration : startTimeSec, startTimeSec)
           setPlaybackProgress(audioRef.current.currentTime, duration)
         }
@@ -263,6 +298,7 @@ export function useAudioPlayback() {
           description: getErrorMessage(libraryError.type),
           variant: 'error'
         })
+        releaseStereo()
         setIsPlaying(false)
         setCurrentlyPlaying(null, null)
         setWaveformData(null)
@@ -273,7 +309,7 @@ export function useAudioPlayback() {
     })()
 
     return playbackLockRef.current
-  }, [setCurrentlyPlaying, setPlaybackProgress, setIsPlaying, setWaveformData])
+  }, [setCurrentlyPlaying, setPlaybackProgress, setIsPlaying, setWaveformData, releaseStereo, mediaDuration])
 
   // ---- Waveform-Only Load ----
 
@@ -300,12 +336,12 @@ export function useAudioPlayback() {
       const cached = await tryLoadCachedWaveform(recordingId)
       if (signal.aborted) return
       if (cached) {
-        setWaveformData(cached.peaks)
+        setWaveformData(cached.peaks, cached.channels, cached.duration)
         setWaveformLoadedFor(recordingId)
         // Backfill the real duration from the cache so the rich timeline axis is
         // correct on a silent open, without decoding the file again.
         if (Number.isFinite(cached.duration) && cached.duration > 0) {
-          useUIStore.getState().setPlaybackProgress(0, cached.duration)
+          if (!useUIStore.getState().currentlyPlayingId) useUIStore.getState().setPlaybackProgress(0, cached.duration)
         }
         if (shouldLogQa()) console.log(`[QA-MONITOR][Operation] Waveform loaded from cache: ${recordingId}`)
         // A coarse waveform (drawn from the loudness envelope) stays on screen
@@ -337,21 +373,22 @@ export function useAudioPlayback() {
 
       if (signal.aborted) return
 
-      const waveformData = await generateWaveformData(audioBuffer, 1000)
+      const channels = await Promise.all(Array.from({ length: audioBuffer.numberOfChannels || 1 }, (_, channel) => generateWaveformData(audioBuffer, 1000, channel)))
+      const waveformData = channels[0]
 
       if (signal.aborted) return
 
-      setWaveformData(waveformData)
+      setWaveformData(waveformData, channels, audioBuffer.duration)
       setWaveformLoadedFor(recordingId)
 
       // H5: Persist peaks to disk so the next open is instant (no recompute).
-      void persistWaveform(recordingId, waveformData, audioBuffer.duration, fileSizeBytes)
+      void persistWaveform(recordingId, waveformData, audioBuffer.duration, fileSizeBytes, channels)
 
       // Backfill duration: imported/watched files store none, so the Library
       // shows "Unknown". The decode gives us the real value — surface it now
       // (player + detail) and persist it so it survives restarts.
       if (Number.isFinite(audioBuffer.duration) && audioBuffer.duration > 0) {
-        useUIStore.getState().setPlaybackProgress(0, audioBuffer.duration)
+        if (!useUIStore.getState().currentlyPlayingId) useUIStore.getState().setPlaybackProgress(0, audioBuffer.duration)
         void window.electronAPI.recordings.updateDuration(recordingId, audioBuffer.duration)
       }
 
@@ -374,10 +411,12 @@ export function useAudioPlayback() {
   }, [])
 
   const resumeAudio = useCallback(() => {
-    if (audioRef.current) audioRef.current.play()
+    if (playbackContextRef.current) void playbackContextRef.current.resume()
+    if (audioRef.current) void audioRef.current.play()
   }, [])
 
   const stopAudio = useCallback(() => {
+    releaseStereo()
     if (audioRef.current) {
       // Clean up event listeners when stopping
       if ((audioRef.current as any)._eventCleanup) {
@@ -399,7 +438,7 @@ export function useAudioPlayback() {
     // showing the recording's waveform. Clearing here — while `waveformLoadedForId`
     // still names this recording — made the guarded reload a no-op, leaving the
     // reader on "Press play to load the waveform" until the user pressed Play.
-  }, [setCurrentlyPlaying, setIsPlaying, setPlaybackProgress])
+  }, [setCurrentlyPlaying, setIsPlaying, setPlaybackProgress, releaseStereo])
 
   const seekAudio = useCallback((time: number) => {
     if (audioRef.current) audioRef.current.currentTime = time
@@ -408,6 +447,15 @@ export function useAudioPlayback() {
   const setPlaybackRate = useCallback((rate: number) => {
     rateRef.current = rate
     if (audioRef.current) audioRef.current.playbackRate = rate
+  }, [])
+
+  const setChannelMuted = useCallback((recordingId: string, channel: number, muted: boolean) => {
+    if (channel !== 0 && channel !== 1) return
+    const state = useUIStore.getState()
+    const channels = state.mutedChannelsForId === recordingId ? [...state.playbackMutedChannels] : [false, false]
+    channels[channel] = muted
+    useUIStore.setState({ mutedChannelsForId: recordingId, playbackMutedChannels: channels })
+    if (state.currentlyPlayingId === recordingId) stereoRef.current?.setMuted(channel, muted)
   }, [])
 
   // ---- Expose controls globally via window.__audioControls ----
@@ -419,6 +467,7 @@ export function useAudioPlayback() {
       resume: resumeAudio,
       stop: stopAudio,
       seek: seekAudio,
+      setChannelMuted,
       setPlaybackRate,
       loadWaveformOnly
     }
@@ -426,12 +475,13 @@ export function useAudioPlayback() {
     return () => {
       delete window.__audioControls
     }
-  }, [playAudio, pauseAudio, resumeAudio, stopAudio, seekAudio, setPlaybackRate, loadWaveformOnly])
+  }, [playAudio, pauseAudio, resumeAudio, stopAudio, seekAudio, setPlaybackRate, setChannelMuted, loadWaveformOnly])
 
   // ---- Cleanup on unmount ----
 
   useEffect(() => {
     return () => {
+      releaseStereo()
       // Clean up audio element
       if (audioRef.current) {
         // Remove event listeners first to prevent memory leaks
@@ -451,5 +501,5 @@ export function useAudioPlayback() {
         waveformAbortControllerRef.current.abort()
       }
     }
-  }, [])
+  }, [releaseStereo])
 }

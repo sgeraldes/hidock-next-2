@@ -152,3 +152,24 @@ describe('useAudioPlayback — H5 disk cache', () => {
     vi.unstubAllGlobals()
   })
 })
+
+
+it('restores both cached channels and decoded duration without reading the file', async () => {
+  getCache.mockResolvedValue({ peaks: [0.2], channels: [[0.2], [0.8]], duration: 118 })
+  renderHook(() => useAudioPlayback())
+  await window.__audioControls!.loadWaveformOnly('stereo', '/pc-recording-test.webm')
+  const state = useUIStore.getState()
+  expect(state.playbackWaveformChannels?.map(channel => Array.from(channel))).toEqual([[expect.closeTo(0.2)], [expect.closeTo(0.8)]])
+  expect(state.waveformDuration).toBe(118)
+  expect(readRecording).not.toHaveBeenCalled()
+})
+it('computes and persists each decoded channel once on the same peak path', async () => {
+  getCache.mockResolvedValue(null)
+  readRecording.mockResolvedValue({ success: true, data: btoa('stereo') })
+  decodeAudioData.mockResolvedValue({ numberOfChannels: 2, duration: 118 })
+  generateWaveformData.mockImplementation(async (_buffer, _samples, channel) => new Float32Array([channel ? 0.8 : 0.2]))
+  renderHook(() => useAudioPlayback())
+  await window.__audioControls!.loadWaveformOnly('stereo', '/pc-recording-test.webm')
+  expect(generateWaveformData.mock.calls.map(call => call[2])).toEqual([0, 1])
+  expect(setCache.mock.calls[0][4]).toEqual([[expect.closeTo(0.2)], [expect.closeTo(0.8)]])
+})

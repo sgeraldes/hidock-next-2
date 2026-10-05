@@ -977,6 +977,7 @@ export interface ElectronAPI {
       version: number
       recordingId: string
       peaks: number[]
+      channels?: number[][]
       sampleCount: number
       duration: number
       fileSize: number
@@ -984,7 +985,7 @@ export interface ElectronAPI {
       /** Drawn from the loudness envelope; the player replaces it with the decoded one. */
       coarse?: boolean
     } | null>
-    setCache: (recordingId: string, peaks: number[], duration?: number, fileSize?: number) => Promise<boolean>
+    setCache: (recordingId: string, peaks: number[], duration?: number, fileSize?: number, channels?: number[][]) => Promise<boolean>
     clearCache: (recordingId: string) => Promise<boolean>
   }
 
@@ -2005,8 +2006,8 @@ const electronAPI: ElectronAPI = {
 
   waveform: {
     getCache: (recordingId, fileSize) => callIPC('waveform:getCache', recordingId, fileSize),
-    setCache: (recordingId, peaks, duration, fileSize) =>
-      callIPC('waveform:setCache', recordingId, peaks, duration, fileSize),
+    setCache: (recordingId, peaks, duration, fileSize, channels) =>
+      callIPC('waveform:setCache', recordingId, peaks, duration, fileSize, channels),
     clearCache: (recordingId) => callIPC('waveform:clearCache', recordingId)
   },
 
