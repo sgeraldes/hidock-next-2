@@ -8,7 +8,8 @@ let answers: Record<string, ReferenceLabelAnswer | null>
 const getLabelSet = vi.fn(async (): Promise<ReferenceLabelSet> => ({
   id: 'set', question: 'kind', createdAt: '2026-10-04',
   size: 3, unavailable: 0, unknown: Object.values(answers).filter(answer => answer === 'unknown').length, counts: { doubtful: 1, random: 2 }, labeled: Object.values(answers).filter(Boolean).length,
-  items: ['a', 'b', 'c'].map((recordingId, position) => ({ recordingId, position, answer: answers[recordingId] ?? null }))
+  // Stored order differs from display order for this fixed set ID.
+  items: ['b', 'a', 'c'].map((recordingId, position) => ({ recordingId, position, answer: answers[recordingId] ?? null }))
 }))
 const getLabelItem = vi.fn(async ({ recordingId }: { recordingId: string }) => ({
   recordingId, date: '2026-10-04T12:00:00Z', durationSeconds: 120, filePath: `/audio/${recordingId}.wav` as string | null,
@@ -27,6 +28,34 @@ beforeEach(() => {
   window.electronAPI = { pipeline: { getLabelSet, getLabelItem, saveLabel, clearLabel } } as never
 })
 describe('Reference labels', () => {
+  it('displays a stable mixed sample and saves answers for the displayed recording', async () => {
+    const sample: ReferenceLabelSet = { id: 'fixed-set-id', question: 'kind', createdAt: '2026-10-04',
+      size: 40, unavailable: 0, unknown: 0, counts: { doubtful: 20, random: 20 }, labeled: 0,
+      items: Array.from({ length: 40 }, (_, position) => ({ recordingId: `r${position}`, position, answer: null })) }
+    getLabelSet.mockResolvedValueOnce(sample)
+    const firstVisit = render(<ReferenceLabels />)
+    await screen.findByText(/^Opening r/)
+    const firstId = getLabelItem.mock.calls.at(-1)![0].recordingId
+    const visited = [firstId]
+    for (let i = 1; i < 20; i++) {
+      fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
+      await screen.findByText(`Recording ${i + 1} of 40`)
+      await waitFor(() => expect(screen.getByText(/^Opening r/)).toHaveTextContent(`Opening ${getLabelItem.mock.calls.at(-1)![0].recordingId}`))
+      visited.push(getLabelItem.mock.calls.at(-1)![0].recordingId)
+    }
+    expect(visited.some(id => Number(id.slice(1)) < 20)).toBe(true)
+    expect(visited.some(id => Number(id.slice(1)) >= 20)).toBe(true)
+    expect(document.body.textContent).not.toMatch(/stratum|doubtful|random recording/i)
+    firstVisit.unmount()
+    getLabelSet.mockResolvedValueOnce(sample)
+    render(<ReferenceLabels />)
+    await screen.findByText(`Opening ${firstId}`)
+    fireEvent.click(screen.getByRole('button', { name: /Interview/ }))
+    await waitFor(() => expect(saveLabel).toHaveBeenCalledWith({ setId: sample.id, recordingId: firstId, answer: 'interview' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    await screen.findByText(`Opening ${firstId}`)
+    expect(screen.getByRole('button', { name: /Interview/ })).toHaveAttribute('aria-pressed', 'true')
+  })
   it('explains the independent Library category decision and shows full context', async () => {
     getLabelItem.mockResolvedValueOnce({ recordingId: 'a', date: '2026-10-04T12:00:00Z', durationSeconds: 120,
       filePath: null, meetingSubject: 'Planning', minutes: 2, excerpt: 'Engine opening', answer: null,

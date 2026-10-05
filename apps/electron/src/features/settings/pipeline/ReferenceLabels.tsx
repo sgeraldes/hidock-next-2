@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { AudioPlayer } from '@/components/AudioPlayer'
 import { useAudioControls } from '@/components/OperationController'
+import { labelDisplayOrder } from '@/shared/label-display-order'
 import { RECORDING_KINDS, type RecordingKind, type ReferenceLabelAnswer, type ReferenceLabelItem, type ReferenceLabelSet } from '@/shared/decision-labels'
 
 const KINDS = Object.entries(RECORDING_KINDS) as Array<[RecordingKind, string]>
@@ -25,9 +26,10 @@ export function ReferenceLabels() {
     setError(null)
     void window.electronAPI.pipeline.getLabelSet().then(next => {
       if (!active) return
-      setSet(next)
-      const first = next.items.findIndex(row => !row.answer)
-      setIndex(first < 0 ? next.items.length : first)
+      const items = labelDisplayOrder(next.id, next.items)
+      setSet({ ...next, items })
+      const first = items.findIndex(row => !row.answer)
+      setIndex(first < 0 ? items.length : first)
     }).catch(e => { if (active) setError(`Could not load reference labels: ${String(e)}`) })
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
