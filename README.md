@@ -54,6 +54,12 @@ On Windows, `build-electron.bat` installs dependencies and builds the app. `run-
 
 HiDock Next is local-first. API keys and account tokens must never be committed. Device operations are serialized, and the app uses a continuous polled read path to avoid locking the HiDock USB interface. Do not run exploratory USB scripts against a connected device.
 
+Query recording is on by default: queries from the chat, Explore and agents are recorded locally in
+`<data folder>\traces\retrieval-traces.db`. Query text is encrypted and erased after 30 days; traces
+are deleted after 90 days, with a 1 GiB cap. Settings > Assistant has two switches: "Record queries"
+and "Keep the text of my queries". Turning off the second erases stored query text. Nothing leaves
+the machine through query recording.
+
 ## Community work carried into 2.0
 
 The 2.0 extraction includes community fixes for local-calendar day handling and the H1 `0xB00C` product ID, plus field-tested P1 duration behavior. See [Community migration notes](docs/community-migration.md) for attribution and remaining roadmap items.

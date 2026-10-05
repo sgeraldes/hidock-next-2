@@ -21,6 +21,7 @@
  * also notices on its own by watching the lock file.
  */
 
+import { recordRetrievalTrace, closeRetrievalTraces, startRetrievalTraces } from './services/retrieval-trace-service'
 import { app } from 'electron'
 import { spawn } from 'child_process'
 import { randomBytes, randomUUID } from 'crypto'
@@ -129,6 +130,7 @@ export async function runBrainOnly(): Promise<void> {
   try {
     await initializeConfig({ persist: false })
     await openDatabaseForReading()
+    startRetrievalTraces()
   } catch (error) {
     report({ event: 'failed', error: error instanceof Error ? error.message : String(error) })
     app.exit(1)
@@ -153,6 +155,7 @@ export async function runBrainOnly(): Promise<void> {
     // delete. Requests already in flight still finish before the server closes.
     removeBrainLockIfOwned(lockPath, instanceId)
     if (server) await server.close()
+    await closeRetrievalTraces()
     try {
       closeDatabase()
     } catch {
@@ -168,6 +171,7 @@ export async function runBrainOnly(): Promise<void> {
   }
 
   server = await startBrainServer({
+    recordTrace: recordRetrievalTrace,
     kind: 'service',
     token,
     instanceId,

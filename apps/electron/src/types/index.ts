@@ -317,6 +317,8 @@ export interface AppConfig {
     provider: 'gemini' | 'ollama'
     geminiModel: string
     ollamaModel: string
+    recordQueries?: boolean
+    keepQueryText?: boolean
     maxContextChunks: number
   }
   device: {

@@ -111,7 +111,10 @@ async function runOne(deps: RunnerDeps, profile: Profile, request: TextRequest, 
     const brain = await deps.router.resolve(profile.task, 'generate')
     if (!brain) return unavailable()
     if (!eligibleToGenerate(options.shouldGenerate)) return ineligible()
-    return settle(await deps.track(meta(`router:${profile.task}:generate`), () => brain.generate(request.messages, options), judgeAnswer(options)), options)
+    return settle(await deps.track(meta(`router:${profile.task}:generate`), () => {
+      if (!options.signal?.aborted) { try { options.onDispatch?.() } catch { /* telemetry only */ } }
+      return brain.generate(request.messages, options)
+    }, judgeAnswer(options)), options)
   }
 
   if (!(await deps.router.canServe(profile.harness, 'chat'))) return unavailable()
@@ -119,7 +122,10 @@ async function runOne(deps: RunnerDeps, profile: Profile, request: TextRequest, 
   if (!brain) return unavailable()
   if (!eligibleToGenerate(options.shouldGenerate)) return ineligible()
   return settle(
-    await deps.track(meta(`direct:${profile.id}`), () => brain.chat(request.messages, withProfile(options, profile)), judgeAnswer(options)),
+    await deps.track(meta(`direct:${profile.id}`), () => {
+      if (!options.signal?.aborted) { try { options.onDispatch?.() } catch { /* telemetry only */ } }
+      return brain.chat(request.messages, withProfile(options, profile))
+    }, judgeAnswer(options)),
     options
   )
 }

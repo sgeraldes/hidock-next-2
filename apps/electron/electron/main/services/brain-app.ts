@@ -13,6 +13,7 @@
  * same query functions; there is no HTTP between the app and its data.
  */
 
+import { recordRetrievalTrace } from './retrieval-trace-service'
 import { app } from 'electron'
 import { randomBytes, randomUUID } from 'crypto'
 import {
@@ -132,6 +133,7 @@ export async function startAppBrain(options: {
   if (mine !== generation) return
 
   const started = await startBrainServer({
+    recordTrace: recordRetrievalTrace,
     kind: 'app',
     token,
     instanceId,

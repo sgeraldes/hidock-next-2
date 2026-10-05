@@ -1,3 +1,4 @@
+import { closeRetrievalTraces, startRetrievalTraces } from './services/retrieval-trace-service'
 import { app, shell, BrowserWindow, session, ipcMain, dialog } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -192,6 +193,7 @@ async function initializeServices(): Promise<boolean> {
     },
   })
   console.log('Database initialized')
+  startRetrievalTraces()
   installPipeline({ run, queryAll })
 
   // The semantic index can exceed 2 GB. It is restored after the renderer's
@@ -502,6 +504,7 @@ app.on('before-quit', (event) => {
     } finally {
       clearTimeout(releaseTimer)
     }
+    await closeRetrievalTraces()
     closeDatabase()
     console.log('Cleanup complete')
     app.quit()

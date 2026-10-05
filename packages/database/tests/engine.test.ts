@@ -33,6 +33,21 @@ const SCHEMA = `
 `
 
 describe('DatabaseEngine', () => {
+  it('incrementalVacuum limits reclaimed pages through native exec', async () => {
+    const engine = makeEngine('bounded-vacuum')
+    await engine.initialize()
+    try {
+      engine.getDatabase().run('PRAGMA auto_vacuum = INCREMENTAL')
+      engine.getDatabase().run('VACUUM')
+      for (let i = 0; i < 40; i++) engine.run('INSERT INTO items VALUES (?, ?)', [String(i), 'x'.repeat(8192)])
+      engine.run('DELETE FROM items')
+      const free = () => Number(engine.getDatabase().exec('PRAGMA freelist_count')[0].values[0][0])
+      const before = free()
+      expect(before).toBeGreaterThan(10)
+      engine.incrementalVacuum(3)
+      expect(before - free()).toBe(3)
+    } finally { engine.closeDatabase() }
+  })
   const paths: string[] = []
 
   afterEach(() => {
@@ -463,6 +478,24 @@ describe('DatabaseEngine', () => {
   it('getDatabase throws before initialize', () => {
     const engine = makeEngine('uninit')
     expect(() => engine.getDatabase()).toThrow('Database not initialized')
+  })
+
+  it('incrementalVacuum() frees every free page, not one per call', async () => {
+    // A prepared PRAGMA incremental_vacuum frees one page per step, and run()
+    // takes one step: 120 free pages became 119. The engine steps it to the end.
+    const engine = makeEngine('incremental-vacuum')
+    await engine.initialize()
+    try {
+      engine.getDatabase().run('PRAGMA auto_vacuum = INCREMENTAL')
+      engine.getDatabase().exec('VACUUM')
+      for (let i = 0; i < 80; i++) engine.run('INSERT INTO items (id, name) VALUES (?, ?)', [String(i), 'x'.repeat(6000)])
+      engine.runWithMassDeleteAllowed(() => engine.run('DELETE FROM items'))
+      expect(engine.queryOne<{ freelist_count: number }>('PRAGMA freelist_count')!.freelist_count).toBeGreaterThan(1)
+      engine.incrementalVacuum()
+      expect(engine.queryOne<{ freelist_count: number }>('PRAGMA freelist_count')!.freelist_count).toBe(0)
+    } finally {
+      engine.closeDatabase()
+    }
   })
 
   it('saveDatabase() and flushNow() are safe checkpoints (no export model)', async () => {

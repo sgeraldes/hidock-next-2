@@ -2,6 +2,19 @@
 
 Each entry is one day of merged work. The Releases page in Settings reads this file.
 
+## 2026-10-05 | A record of what you ask
+
+HiDock now keeps a local record of each question and of what retrieval found for it, so later changes to
+search can be measured against real use.
+
+### Changes
+
+- **A local record of queries.** Query recording is on by default for the chat, Explore and agents,
+  in `<data folder>\traces\retrieval-traces.db`. Query text is encrypted and erased after 30 days;
+  traces are deleted after 90 days, with a 1 GiB cap. Settings > Assistant has "Record queries" and
+  "Keep the text of my queries"; turning off the second erases stored query text. Nothing leaves the
+  machine through query recording.
+
 ## 2026-10-04 | The gamestation only helps, and gets out of the way
 
 The Model Host on the gamestation is now a small tray icon and nothing else to set up there. HiDock

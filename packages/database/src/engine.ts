@@ -507,6 +507,8 @@ export interface DatabaseEngineConfig {
    * `import Database from 'better-sqlite3'`.
    */
   betterSqlite3: BetterSqlite3Constructor
+  /** Lock wait budget for this connection; telemetry uses a short main-process budget. */
+  busyTimeoutMs?: number
   /** @deprecated ignored — retained for source-compat with the sql.js engine. */
   initSqlJs?: unknown
   /** Returns the absolute path to the .sqlite file (resolved at init time). */
@@ -891,7 +893,7 @@ export class DatabaseEngine {
     try {
       // Connection settings only. journal_mode is a property of the file and a
       // read-only connection must not try to change it.
-      bdb.pragma('busy_timeout = 5000')
+      bdb.pragma(`busy_timeout = ${this.config.busyTimeoutMs ?? 5000}`)
       bdb.pragma('foreign_keys = ON')
       this.bdb = bdb
       const onDisk = this.readSchemaVersion()
@@ -947,9 +949,9 @@ export class DatabaseEngine {
       this.bdb = new Ctor(this.dbPath)
       // One-time conversion from a legacy sql.js (rollback-journal) file is just
       // switching the journaling mode — the on-disk format is identical.
+      this.bdb.pragma(`busy_timeout = ${this.config.busyTimeoutMs ?? 5000}`)
       this.bdb.pragma('journal_mode = WAL')
       this.bdb.pragma('synchronous = NORMAL')
-      this.bdb.pragma('busy_timeout = 5000')
       // Foreign keys, stated rather than inherited.
       //
       // This comment used to say enforcement was deliberately left OFF to match
@@ -1129,6 +1131,18 @@ export class DatabaseEngine {
       console.warn('[Database] VACUUM failed (non-fatal):', (e as Error).message)
       return false
     }
+  }
+
+  /**
+   * Return the free pages of an auto_vacuum=INCREMENTAL database to the OS
+   * without rewriting the file. Native exec steps the pragma to completion; a
+   * prepared statement's run() takes one step and frees a single page.
+   */
+  incrementalVacuum(pages?: number): void {
+    if (pages !== undefined && (!Number.isSafeInteger(pages) || pages <= 0)) {
+      throw new RangeError('Incremental vacuum pages must be a positive integer')
+    }
+    this.getBdb().exec(pages === undefined ? 'PRAGMA incremental_vacuum' : `PRAGMA incremental_vacuum(${pages})`)
   }
 
   /* --- Persistence (WAL — no export/flush model) -------------------------- */

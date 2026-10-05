@@ -1229,8 +1229,8 @@ export function pruneGenericGraphNodes(): { removedNodes: number; removedEdges: 
  * Resolve an arbitrary entity id (graph node id, contact id, meeting id, project
  * id, or a bare name) to a graph node id, so callers can pass a domain id.
  */
-export function resolveEntityToNodeId(entityId: string): string | null {
-  const store = getKnowledgeGraphStore()
+export function resolveEntityToNodeId(entityId: string, initializeSchema = true): string | null {
+  const store = initializeSchema ? getKnowledgeGraphStore() : new KnowledgeGraphStore(graphDbAdapter)
   const db = store.db
 
   // 1. Direct graph node id.
@@ -1787,6 +1787,13 @@ function isNodeVisibleUnderExclusion(
   if (incident.length === 0) return isIsolatedNodeVisible(store, nodeId, exclusion) // node-level provenance
   const suppressed = provenanceSuppressedEdgeIds(store, incident.map((e) => e.id), exclusion)
   return suppressed.size < incident.length // ≥1 edge survived ⇒ visible
+}
+
+/** Trace reads reuse graph visibility without initializing schema in a read-only brain. */
+export function isTraceGraphNodeEligible(nodeId: string): boolean {
+  const store = new KnowledgeGraphStore(graphDbAdapter)
+  if (!store.getNode(nodeId)) return false
+  return isNodeVisibleUnderExclusion(store, nodeId, getGroundingExclusionSet(true))
 }
 
 /**
