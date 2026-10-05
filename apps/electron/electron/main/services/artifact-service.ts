@@ -39,6 +39,9 @@ export interface ArtifactRow {
 }
 
 export interface ImportArtifactOptions {
+  /** Paste/import must store locally without vision, enrichment or embeddings. */
+  localOnly?: boolean
+  metadata?: Record<string, unknown>
   knowledgeCaptureId?: string
   /** Provenance for connector-fed imports (Layer 2); optional for manual imports. */
   sourceConnectorId?: string
@@ -131,14 +134,14 @@ async function importArtifactNow(filePath: string, opts: ImportArtifactOptions):
   // Type-dispatched extraction (+ optional enrichment). Failures are recorded on
   // the artifact's metadata rather than aborting the import.
   let extractedText: string | null = null
-  const metadata: Record<string, unknown> = {}
-  if (type) {
+  const metadata: Record<string, unknown> = { ...opts.metadata }
+  if (type && !(opts.localOnly && kind === 'image')) {
     try {
       const extraction = await type.extractText(filePath, buffer)
       extractedText = extraction.text ? extraction.text : null
       if (extraction.metadata) Object.assign(metadata, extraction.metadata)
 
-      if (type.enrich) {
+      if (type.enrich && !opts.localOnly) {
         const enriched = await type.enrich({ text: extractedText ?? '', metadata })
         if (enriched.text) extractedText = enriched.text
         if (enriched.metadata) Object.assign(metadata, enriched.metadata)
@@ -152,7 +155,7 @@ async function importArtifactNow(filePath: string, opts: ImportArtifactOptions):
         metadata.extractionMessage = e instanceof Error ? e.message : String(e)
       }
     }
-  } else {
+  } else if (!type) {
     metadata.extractionError = 'NO_TYPE'
     metadata.extractionMessage = `No registered artifact type for ".${ext}"`
   }
@@ -217,7 +220,7 @@ async function importArtifactNow(filePath: string, opts: ImportArtifactOptions):
   // (sourceType) and owning capture id so RAG can label + cite them — e.g. an
   // image capture surfaces as "[Screenshot: <description>]". No-op without text.
   let indexedChunks = 0
-  if (extractedText && extractedText.trim().length > 0) {
+  if (!opts.localOnly && extractedText && extractedText.trim().length > 0) {
     try {
       const store = getVectorStore()
       store.ensureSchema()
