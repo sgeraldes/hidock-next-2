@@ -77,7 +77,7 @@ export function registerTranscriptIntegrityHandlers(): void {
         else if (recording.deleted_at) skip('deleted')
         else if (!eligible.has(recording.id)) skip('ineligible')
         else if (active.has(recording.id)) skip('already_queued')
-        else if (addToQueue(recording.id, undefined, true)) {
+        else if (addToQueue(recording.id, undefined, { ownerRequested: true })) {
           queued++
           active.add(recording.id)
         } else skip('ineligible')

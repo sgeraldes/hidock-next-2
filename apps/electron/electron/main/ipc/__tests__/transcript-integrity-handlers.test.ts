@@ -62,7 +62,7 @@ describe('transcripts:retranscribeMany', () => {
 
     expect(result.data).toEqual({ queued: 2, skipped: 0, skippedReasons: {} })
     expect(db.addToQueue).toHaveBeenCalledTimes(2)
-    expect(db.addToQueue).toHaveBeenCalledWith('garbage-1', undefined, true)
+    expect(db.addToQueue).toHaveBeenCalledWith('garbage-1', undefined, { ownerRequested: true })
   })
 
   it('queues nothing when eligibility cannot be read', async () => {

@@ -328,6 +328,7 @@ export function Library() {
 
   // Centralized audio controls (persists across navigation)
   const audioControls = useAudioControls()
+  const playbackActive = useUIStore(state => state.isPlaying)
   const currentlyPlayingId = useUIStore((state) => state.currentlyPlayingId)
   const playbackCurrentTime = useUIStore((state) => state.playbackCurrentTime)
   const qaEnabled = useUIStore((state) => state.qaLogsEnabled)
@@ -3422,7 +3423,7 @@ export function Library() {
                             recording={recording}
                             transcript={transcript}
                             meeting={meeting}
-                            isPlaying={currentlyPlayingId === recording.id}
+                            isPlaying={playbackActive && currentlyPlayingId === recording.id}
                             isActiveSource={selectedSourceId === recording.id}
                             isDownloading={isDeviceOnly(recording) && ['downloading', 'cancelling'].includes(
                               downloadQueue.get(recording.deviceFilename)?.status ?? ''
@@ -3495,7 +3496,7 @@ export function Library() {
               recording={selectedRecording ?? null}
               transcript={selectedTranscript}
               meeting={selectedMeeting}
-              isPlaying={selectedRecording ? currentlyPlayingId === selectedRecording.id : false}
+              isPlaying={selectedRecording ? playbackActive && currentlyPlayingId === selectedRecording.id : false}
               currentTimeMs={playbackCurrentTime * 1000}
               onPlay={() => {
                 if (selectedRecording && hasLocalPath(selectedRecording)) {

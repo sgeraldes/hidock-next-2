@@ -58,6 +58,18 @@ beforeEach(() => {
 })
 
 describe('creating and writing', () => {
+  it('discards only empty drafts and preserves a title or body added before cleanup', () => {
+    const empty = createNote()
+    expect(deleteNote(empty.id, true)).toBe(true)
+    expect(getNote(empty.id)).toBeNull()
+    const titled = createNote()
+    updateNote(titled.id, { title: 'Keep the title' })
+    expect(deleteNote(titled.id, true)).toBe(false)
+    expect(getNote(titled.id)?.title).toBe('Keep the title')
+    const body = createNote({ content: 'Keep the body' })
+    expect(deleteNote(body.id, true)).toBe(false)
+    expect(getNote(body.id)?.content).toBe('Keep the body')
+  })
   it('a new note is a row with nothing in it', () => {
     const note = createNote()
     expect(note.content).toBe('')

@@ -23,6 +23,15 @@ export type SourceTypeFilter = 'all' | (string & {})
 
 export const BUILTIN_ARTIFACT_TYPES: LibraryArtifactTypeDescriptor[] = [
   {
+    id: 'video', label: 'Video', pluralLabel: 'Videos',
+    extensions: ['mp4', 'mov', 'mkv', 'avi', 'm4v', 'webm'],
+    capabilities: ['rateable', 'previewable']
+  },
+  {
+    id: 'link', label: 'Link', pluralLabel: 'Links', extensions: ['url'],
+    capabilities: ['rateable', 'previewable']
+  },
+  {
     id: 'audio',
     label: 'Audio',
     pluralLabel: 'Audio',
@@ -90,13 +99,15 @@ export function normalizeArtifactTypeDescriptors(
 }
 
 export function getSourceType(
-  recording: Pick<UnifiedRecording, 'filename' | 'location'>,
+  recording: Pick<UnifiedRecording, 'filename' | 'location'> & { sourceKind?: string },
   descriptors: LibraryArtifactTypeDescriptor[] = BUILTIN_ARTIFACT_TYPES
 ): LibrarySourceType {
   if (recording.location === 'device-only' || recording.location === 'both') return 'audio'
 
   const ext = getExtension(recording.filename)
   if (!ext) return 'audio'
+  // webm can be either a recording or a pasted video; source backing decides.
+  if (ext === 'webm') return recording.sourceKind === 'capture' ? 'video' : 'audio'
   return descriptors.find((descriptor) => descriptor.extensions.includes(ext))?.id ?? 'unknown'
 }
 

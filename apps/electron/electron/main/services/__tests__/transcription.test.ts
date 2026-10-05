@@ -178,7 +178,8 @@ vi.mock('../transcript-validity-store', () => ({
 // recording-eligibility boundary. Default eligible; flipped in the ADV40-1 test.
 vi.mock('../recording-eligibility', () => ({
   isRecordingEligible: (...args: any[]) => mockIsRecordingEligible(...args),
-  isRecordingTranscribable: (...args: any[]) => mockIsRecordingEligible(...args)
+  isRecordingTranscribable: (id: string, options?: { ignoreValueExclusion?: boolean }) =>
+    options?.ignoreValueExclusion ? mockIsRecordingProcessable(id) : mockIsRecordingEligible(id)
 }))
 
 vi.mock('../audio-preflight', () => ({
@@ -405,8 +406,8 @@ describe('Transcription Service', () => {
         filename: '2026Aug14-170410-Rec73.wav',
         status: 'pending',
         attempts: 0,
-        // A provider on the queue row identifies the explicit reprocess path.
-        provider: 'gemini'
+        // The queue row carries the explicit owner request.
+        provider: 'gemini', owner_requested: true
       }
       mockGetQueueItems.mockImplementation((status?: string) => status === 'pending' ? [queueItem] : [])
       mockGetRecordingById.mockReturnValue({
@@ -534,13 +535,14 @@ describe('Transcription Service', () => {
       return path
     }
 
-    function queueOne(recordingId: string, filePath: string, provider?: string): void {
+    function queueOne(recordingId: string, filePath: string, provider?: string, ownerRequested = false): void {
       const queueItem = {
         id: `queue-${recordingId}`,
         recording_id: recordingId,
         filename: `${recordingId}.wav`,
         status: 'pending',
         attempts: 0,
+        owner_requested: ownerRequested || !!provider,
         ...(provider ? { provider } : {})
       }
       mockGetQueueItems.mockImplementation((status?: string) => status === 'pending' ? [queueItem] : [])
@@ -834,7 +836,7 @@ describe('Transcription Service', () => {
         filename: `${recordingId}.hda`,
         status: 'pending',
         attempts: 0,
-        ...(provider ? { provider } : {})
+        ...(provider ? { provider, owner_requested: true } : {})
       }
       mockGetQueueItems.mockImplementation((status?: string) => status === 'pending' ? [queueItem] : [])
       mockGetRecordingById.mockReturnValue({

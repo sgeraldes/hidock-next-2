@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import { Library } from '../Library'
+import { BUILTIN_ARTIFACT_TYPES } from '@/features/library/utils/sourceType'
 
 /**
  * Rows are located by the text the row shows. Since 2026-09-22 an unassigned
@@ -360,6 +361,20 @@ describe('Library', () => {
       </MemoryRouter>
     )
   }
+
+  it('renders one row of every registered source type', () => {
+    const recordings = BUILTIN_ARTIFACT_TYPES.map((type) => ({
+      ...mockRecording, id: type.id, title: `Registered ${type.id}`,
+      filename: `fixture.${type.extensions[0]}`, sourceKind: 'capture' as const
+    }))
+    vi.mocked(useUnifiedRecordings).mockReturnValue({
+      ...vi.mocked(useUnifiedRecordings).mock.results[0]?.value,
+      recordings, loading: false, error: null, refresh: mockRefresh,
+      deviceConnected: false, stats: { total: recordings.length }
+    } as ReturnType<typeof useUnifiedRecordings>)
+    renderLibrary()
+    for (const type of BUILTIN_ARTIFACT_TYPES) expect(screen.getByText(`Registered ${type.id}`)).toBeInTheDocument()
+  })
 
   describe('Manual refresh', () => {
     it('forces device reconciliation before rebuilding the Library view', async () => {

@@ -561,6 +561,10 @@ export const CORE_CHANNEL_PREFIXES: string[] = [
  * Anything new on these namespaces is `unclassified` until explicitly added.
  */
 export const CORE_CHANNELS: string[] = [
+  // User-initiated Library creation remains available in every preset.
+  'library:paste',
+  'library:pickFiles',
+  'library:newNote',
   // Audio checks (silent, noise only, too short; where the sound is). Reading a
   // file's frame gains needs no provider, no network and no feature. Listed one
   // by one, not as an 'audio:' prefix: a later paid check on that namespace
@@ -601,6 +605,10 @@ export const CORE_CHANNELS: string[] = [
   'value:startBackfill',
   'recordings:addExternal',
   'recordings:addExternalByPath',
+  'pc-recorder:start',
+  'pc-recorder:append',
+  'pc-recorder:finish',
+  'pc-recorder:resume-unload',
   'recordings:backfillDurations',
   'recordings:clearPreassignment',
   'recordings:delete',

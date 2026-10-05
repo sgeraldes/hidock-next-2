@@ -1,3 +1,4 @@
+import { MIN_MEETING_CONFIDENCE } from '../../../src/shared/meeting-confidence'
 import Database from 'better-sqlite3'
 import { RECORDING_AUDIO_EXTENSIONS } from '../../../src/shared/audio-extensions'
 import { existsSync, readdirSync, readFileSync } from 'fs'
@@ -34,7 +35,7 @@ export function hasDecisionLabelRecoveryFailed(): boolean {
   return decisionLabelRecoveryFailed
 }
 
-const SCHEMA_VERSION = 73
+const SCHEMA_VERSION = 74
 
 const DECISION_LABELS_DDL = `CREATE TABLE IF NOT EXISTS decision_label_sets (
     id TEXT PRIMARY KEY,
@@ -597,6 +598,7 @@ CREATE TABLE IF NOT EXISTS transcription_queue (
     error_message TEXT,
     provider TEXT,
     explicit_request INTEGER NOT NULL DEFAULT 0,
+    owner_requested INTEGER NOT NULL DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     started_at TEXT,
     completed_at TEXT,
@@ -3508,9 +3510,28 @@ const MIGRATIONS: Record<number, () => void> = {
   72: () => {
     // Additive migration; the shared engine creates a verified restore point first.
     getDatabase().run(DIARIZED_SEGMENTS_DDL)
+    const database = getDatabase()
+    if (!getTableColumns(database, 'transcription_queue').includes('owner_requested')) {
+      database.run('ALTER TABLE transcription_queue ADD COLUMN owner_requested INTEGER NOT NULL DEFAULT 0')
+    }
   },
   73: () => {
     getDatabase().run(WITHHELD_METADATA_DDL)
+  },
+  74: () => {
+    // Both released branches used v72 differently. Repair either lineage and
+    // preserve durable owner intent under both compatible queue interfaces.
+    const database = getDatabase()
+    database.run(DIARIZED_SEGMENTS_DDL)
+    database.run(WITHHELD_METADATA_DDL)
+    for (const column of ['explicit_request', 'owner_requested']) {
+      if (!getTableColumns(database, 'transcription_queue').includes(column)) {
+        database.run(`ALTER TABLE transcription_queue ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`)
+      }
+    }
+    database.run(`UPDATE transcription_queue SET
+      explicit_request = CASE WHEN explicit_request = 1 OR owner_requested = 1 THEN 1 ELSE 0 END,
+      owner_requested = CASE WHEN explicit_request = 1 OR owner_requested = 1 THEN 1 ELSE 0 END`)
   },
 }
 
@@ -3990,7 +4011,8 @@ function repairPhase(): void {
       { name: 'retry_count', def: 'INTEGER DEFAULT 0' },
       { name: 'progress', def: 'INTEGER DEFAULT 0' },
       { name: 'provider', def: 'TEXT' },
-      { name: 'explicit_request', def: 'INTEGER NOT NULL DEFAULT 0' }
+      { name: 'explicit_request', def: 'INTEGER NOT NULL DEFAULT 0' },
+      { name: 'owner_requested', def: 'INTEGER NOT NULL DEFAULT 0' }
     ]
     for (const col of queueRepairs) {
       if (!queueCols.includes(col.name)) {
@@ -5071,6 +5093,9 @@ function extractContactsFromMeetingDataInternal(meeting: Omit<Meeting, 'created_
 
 // Recording queries
 export interface Recording {
+  /** Read projection from the linked video artifact; no new parent/child schema. */
+  parent_video_capture_id?: string | null
+  video_audio_title?: string | null
   id: string
   filename: string
   original_filename?: string
@@ -5096,6 +5121,7 @@ export interface Recording {
   created_at: string
   // New lifecycle fields
   location: 'device-only' | 'local-only' | 'both' | 'deleted'
+  transcription_error?: string | null
   transcription_status: 'none' | 'pending' | 'processing' | 'complete' | 'error'
   on_device: number
   device_last_seen?: string
@@ -5125,11 +5151,22 @@ export interface Recording {
 export function getRecordings(): Recording[] {
   return queryAll<Recording>(
     `SELECT r.*, m.subject AS meeting_subject,
+            (SELECT tq.error_message FROM transcription_queue tq WHERE tq.recording_id = r.id
+              AND tq.status = 'failed' ORDER BY tq.created_at DESC, tq.rowid DESC LIMIT 1) AS transcription_error,
+            video.knowledge_capture_id AS parent_video_capture_id,
+            CASE WHEN video.id IS NOT NULL THEN vc.title || ' · audio' END AS video_audio_title,
             ap.category AS audio_category, ap.sound_seconds AS audio_sound_seconds,
             ap.duration_seconds AS audio_duration_seconds,
             ev.star_level AS eval_star_level, ev.kind AS eval_kind, ev.context AS eval_context,
             ev.audio_warning AS eval_audio_warning
        FROM recordings r
+       LEFT JOIN artifacts video ON video.id = (
+         SELECT a.id FROM artifacts a JOIN knowledge_captures c ON c.id = a.knowledge_capture_id
+          WHERE a.kind = 'video' AND c.deleted_at IS NULL
+            AND json_extract(CASE WHEN json_valid(a.metadata) THEN a.metadata ELSE '{}' END, '$.audioRecordingId') = r.id
+          ORDER BY a.created_at LIMIT 1
+       )
+       LEFT JOIN knowledge_captures vc ON vc.id = video.knowledge_capture_id
        LEFT JOIN meetings m ON m.id = r.meeting_id
        LEFT JOIN audio_profiles ap ON ap.recording_id = r.id
        -- One evaluation per recording (the table is keyed by capture): the latest.
@@ -8300,12 +8337,14 @@ export interface QueueItem {
   error_message?: string
   provider?: string
   explicit_request?: number
+  owner_requested?: boolean
   created_at: string
   started_at?: string
   completed_at?: string
 }
 
-export function addToQueue(recordingId: string, provider?: string, explicitRequest = false): string {
+export function addToQueue(recordingId: string, provider?: string, request: boolean | { ownerRequested?: boolean } = false): string {
+  const explicitRequest = typeof request === 'boolean' ? request : request.ownerRequested === true
   // Explicit requests override value only; missing/private/deleted rows and
   // lookup errors still fail closed at the durable enqueue boundary.
   const { eligible, failClosed } = getEligibleRecordingIds([recordingId], {
@@ -8324,15 +8363,15 @@ export function addToQueue(recordingId: string, provider?: string, explicitReque
     LIMIT 1
   `, [recordingId])
   if (existing) {
-    if (explicitRequest) run('UPDATE transcription_queue SET explicit_request = 1 WHERE id = ?', [existing.id])
+    if (explicitRequest) run('UPDATE transcription_queue SET explicit_request = 1, owner_requested = 1 WHERE id = ?', [existing.id])
     return existing.id
   }
 
   const id = crypto.randomUUID()
   runInTransaction(() => {
     run(
-      'INSERT INTO transcription_queue (id, recording_id, provider, explicit_request) VALUES (?, ?, ?, ?)',
-      [id, recordingId, provider ?? null, explicitRequest ? 1 : 0]
+      'INSERT INTO transcription_queue (id, recording_id, provider, explicit_request, owner_requested) VALUES (?, ?, ?, ?, ?)',
+      [id, recordingId, provider ?? null, explicitRequest ? 1 : 0, explicitRequest ? 1 : 0]
     )
     // Keep the durable recording projection aligned at the enqueue chokepoint.
     // This covers auto-download, manual, and bulk enqueue paths immediately.
@@ -8353,10 +8392,8 @@ export function getQueueItems(status?: string): (QueueItem & { filename?: string
     LEFT JOIN recordings r ON tq.recording_id = r.id
     ${status ? 'WHERE tq.status = ?' : ''}
     ORDER BY r.date_recorded DESC, tq.created_at ASC`
-  if (status) {
-    return queryAll<QueueItem & { filename?: string; date_recorded?: string }>(sql, [status])
-  }
-  return queryAll<QueueItem & { filename?: string; date_recorded?: string }>(sql)
+  const rows = queryAll<QueueItem & { filename?: string; date_recorded?: string }>(sql, status ? [status] : [])
+  return rows.map((row) => ({ ...row, owner_requested: Number(row.owner_requested) === 1 }))
 }
 
 /**
@@ -13709,7 +13746,7 @@ export function enrichRecordingScheduleMetadata(recordingId: string): ScheduleEn
       }
     })
 
-    const credibleOverlaps = scored.filter((candidate) => candidate.hasOverlap && candidate.confidenceScore >= 0.5)
+    const credibleOverlaps = scored.filter((candidate) => candidate.hasOverlap && candidate.confidenceScore >= MIN_MEETING_CONFIDENCE)
     const result = {
       recordingId,
       candidateCount: scored.length,

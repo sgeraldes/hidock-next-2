@@ -663,3 +663,43 @@ describe('SourceReader — timeline backfill', () => {
     )
   })
 })
+
+
+it('failed transcription shows the stored reason and Retry without idle Stop', () => {
+  useUIStore.setState({ currentlyPlayingId: 'rec-1', isPlaying: false })
+  render(<SourceReader recording={makeRecording({ transcriptionStatus: 'error', transcriptionError: 'Provider timed out' } as never)} isPlaying onPlay={vi.fn()} onStop={vi.fn()} onTranscribe={vi.fn()} />)
+  expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument()
+  expect(screen.getByText('Failed: Provider timed out')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+})
+it('keeps low-confidence manual suggestions including the 48 percent best match with usable transcript', async () => {
+  installElectronAPI()
+  ;(window.electronAPI.recordings as any).getCandidates = vi.fn().mockResolvedValue({ success: true, data: [
+    { meetingId: 'weak', subject: 'Colegio', confidenceScore: 0.05 },
+    { meetingId: 'best', subject: 'Retro Belcorp', confidenceScore: 0.48, isBestMatch: true }
+  ] })
+  render(<SourceReader recording={makeRecording({ transcriptionStatus: 'complete' })} transcript={{ id: 't', recording_id: 'rec-1', full_text: 'Belcorp retrospective discussion' } as any} />)
+  await screen.findByText(/Retro Belcorp/)
+  expect(screen.getByText('Colegio · 5%')).toBeInTheDocument()
+})
+it.each([undefined, 'invalid', 'incomplete', 'empty'])('does not request meeting suggestions without usable transcript (%s)', async validity => {
+  installElectronAPI()
+  const getCandidates = vi.fn().mockResolvedValue({ success: true, data: [{ meetingId: 'weak', subject: 'Colegio', confidenceScore: 0.05 }] })
+  ;(window.electronAPI.recordings as any).getCandidates = getCandidates
+  render(<SourceReader recording={makeRecording()} transcript={validity ? { id: 't', recording_id: 'rec-1', full_text: validity === 'empty' ? ' ' : 'words', validity_status: validity } as any : undefined} />)
+  await act(async () => { await Promise.resolve() })
+  expect(getCandidates).not.toHaveBeenCalled()
+  expect(screen.queryByText(/Colegio/)).not.toBeInTheDocument()
+})
+
+it.each([
+  { validity_status: 'doubtful', validity_json: JSON.stringify({ reasons: [{ code: 'no_times' }] }) },
+  { validity_status: 'incomplete', validity_json: JSON.stringify({ reasons: [{ code: 'uncovered_speech' }] }) }
+])('keeps meeting suggestions for retained transcript metadata ($validity_status)', async verdict => {
+  installElectronAPI()
+  const getCandidates = vi.fn().mockResolvedValue({ success: true, data: [{ meetingId: 'weak', subject: 'Colegio', confidenceScore: 0.05 }] })
+  ;(window.electronAPI.recordings as any).getCandidates = getCandidates
+  render(<SourceReader recording={makeRecording()} transcript={{ id: 't', recording_id: 'rec-1', full_text: 'words', ...verdict } as any} />)
+  expect(await screen.findByText('Colegio · 5%')).toBeInTheDocument()
+  expect(getCandidates).toHaveBeenCalledWith('rec-1')
+})

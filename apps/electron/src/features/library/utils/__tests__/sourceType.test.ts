@@ -28,6 +28,10 @@ describe('getExtension', () => {
 
 describe('getSourceType', () => {
   it('classifies by extension', () => {
+    expect(getSourceType(rec('clip.mp4'))).toBe('video')
+    expect(getSourceType(rec('Page.url'))).toBe('link')
+    expect(getSourceType({ ...rec('clip.webm'), sourceKind: 'capture' })).toBe('video')
+    expect(getSourceType({ ...rec('sound.webm'), sourceKind: 'recording' })).toBe('audio')
     expect(getSourceType(rec('a.mp3'))).toBe('audio')
     expect(getSourceType(rec('a.wav'))).toBe('audio')
     expect(getSourceType(rec('shot.png'))).toBe('image')

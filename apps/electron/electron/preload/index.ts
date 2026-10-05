@@ -162,6 +162,7 @@ import type {
 } from '../../src/types/knowledge'
 import type { PipelineState } from '../main/types/device-pipeline'
 import type { Note, NoteRelatedItem, NoteMeetingSuggestion } from '../../src/types/notes'
+import type { PasteLibraryAPI } from '../../src/shared/paste-to-library'
 import type { SpeakerEngineId, SpeakerSetup } from '../../src/types/speakers'
 import type { VoiceBackfillMeasure, VoiceBackfillStatus } from '../../src/shared/voice-backfill-schedule'
 import type {
@@ -460,6 +461,13 @@ export interface ElectronAPI {
   }
 
   // Database - Recordings
+  pcRecorder: {
+    start: () => Promise<string>
+    append: (id: string, index: number, data: Uint8Array) => Promise<void>
+    finish: (id: string) => Promise<{ success: boolean; error?: string }>
+    resumeUnload: () => Promise<void>
+    onStopRequested: (callback: () => void) => () => void
+  }
   recordings: {
     getAll: () => Promise<any[]>
     // Soft-deleted (tombstoned) recordings feeding the Trash UI (spec-005/F17
@@ -799,7 +807,7 @@ export interface ElectronAPI {
       recordingId?: string | null
       linkSource?: 'live' | 'user' | 'suggested' | null
     }) => Promise<{ success: boolean; note?: Note; error?: string }>
-    delete: (request: { id: string }) => Promise<{ success: boolean }>
+    delete: (request: { id: string; onlyIfEmpty?: boolean }) => Promise<{ success: boolean }>
     analyze: (request: { id: string; force?: boolean }) => Promise<{ success: boolean; note?: Note; error?: string }>
     related: (request: { id: string }) => Promise<{ success: boolean; items?: NoteRelatedItem[]; error?: string }>
     meetingSuggestions: (request: { id: string }) => Promise<{ success: boolean; suggestions?: NoteMeetingSuggestion[]; error?: string }>
@@ -977,6 +985,7 @@ export interface ElectronAPI {
       version: number
       recordingId: string
       peaks: number[]
+      channels?: number[][]
       sampleCount: number
       duration: number
       fileSize: number
@@ -984,7 +993,7 @@ export interface ElectronAPI {
       /** Drawn from the loudness envelope; the player replaces it with the decoded one. */
       coarse?: boolean
     } | null>
-    setCache: (recordingId: string, peaks: number[], duration?: number, fileSize?: number) => Promise<boolean>
+    setCache: (recordingId: string, peaks: number[], duration?: number, fileSize?: number, channels?: number[][]) => Promise<boolean>
     clearCache: (recordingId: string) => Promise<boolean>
   }
 
@@ -1281,6 +1290,7 @@ export interface ElectronAPI {
 
   // Artifacts - entity-type foundation (C0): import files as captures
   artifacts: ArtifactsAPI
+  pasteLibrary: PasteLibraryAPI
 
   // Clipboard screenshot capture — paste-to-add + optional auto-watch
   clipboardCapture: {
@@ -1703,6 +1713,17 @@ export interface ElectronAPI {
 const BOOT_DISABLED_ARG = '--hidock-boot-disabled-features='
 
 const electronAPI: ElectronAPI = {
+  pcRecorder: {
+    resumeUnload: () => callIPC('pc-recorder:resume-unload'),
+    start: () => callIPC('pc-recorder:start'),
+    append: (id, index, data) => callIPC('pc-recorder:append', id, index, data),
+    finish: (id) => callIPC('pc-recorder:finish', id),
+    onStopRequested: (callback) => {
+      const listener = () => callback()
+      ipcRenderer.on('pc-recorder:request-stop', listener)
+      return () => ipcRenderer.removeListener('pc-recorder:request-stop', listener)
+    }
+  },
   bootDisabledFeatures: (
     process.argv.find((arg) => arg.startsWith(BOOT_DISABLED_ARG))?.slice(BOOT_DISABLED_ARG.length) ?? ''
   )
@@ -1996,8 +2017,8 @@ const electronAPI: ElectronAPI = {
 
   waveform: {
     getCache: (recordingId, fileSize) => callIPC('waveform:getCache', recordingId, fileSize),
-    setCache: (recordingId, peaks, duration, fileSize) =>
-      callIPC('waveform:setCache', recordingId, peaks, duration, fileSize),
+    setCache: (recordingId, peaks, duration, fileSize, channels) =>
+      callIPC('waveform:setCache', recordingId, peaks, duration, fileSize, channels),
     clearCache: (recordingId) => callIPC('waveform:clearCache', recordingId)
   },
 
@@ -2017,6 +2038,11 @@ const electronAPI: ElectronAPI = {
     clear: () => callIPC('deviceCache:clear')
   },
 
+  pasteLibrary: {
+    paste: (snapshot) => callIPC('library:paste', snapshot),
+    pickFiles: () => callIPC('library:pickFiles'),
+    newNote: () => callIPC('library:newNote')
+  },
   artifacts: {
     listTypes: () => callIPC('artifacts:listTypes'),
     import: (filePaths) => callIPC('artifacts:import', filePaths),

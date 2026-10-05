@@ -1,0 +1,141 @@
+/** @vitest-environment node */
+import { EventEmitter } from 'events'
+import { mkdtempSync, readdirSync, rmSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
+import { app, desktopCapturer, ipcMain, type BrowserWindow } from 'electron'
+import { configurePcLoopback, registerPcRecorderHandlers, stopPcRecorderBeforeQuit } from '../pc-recorder-handlers'
+import { importExternalRecording } from '../../services/external-recording-import'
+import { measurePcRecordingDuration } from '../../services/pc-recording-duration'
+
+vi.mock('electron', () => ({ app: { getPath: vi.fn() }, ipcMain: { handle: vi.fn() }, desktopCapturer: { getSources: vi.fn() } }))
+vi.mock('../../services/external-recording-import', () => ({ importExternalRecording: vi.fn(() => ({ success: true })) }))
+vi.mock('../../services/pc-recording-duration', () => ({ measurePcRecordingDuration: vi.fn(async () => 2) }))
+let folder: string
+beforeEach(() => {
+  vi.clearAllMocks()
+  folder = mkdtempSync(join(tmpdir(), 'pc-ipc-test-'))
+  vi.mocked(app.getPath).mockReturnValue(folder)
+})
+afterEach(() => { vi.unstubAllGlobals(); rmSync(folder, { recursive: true }) })
+function handlers() {
+  registerPcRecorderHandlers()
+  return Object.fromEntries(vi.mocked(ipcMain.handle).mock.calls) as Record<string, (...args: unknown[]) => unknown>
+}
+describe('PC recorder IPC', () => {
+  it('retains elapsed time with recorder provenance if decoding is unavailable', async () => {
+    const ipc = handlers()
+    const sender = Object.assign(new EventEmitter(), { id: 1 })
+    const id = await ipc['pc-recorder:start']({ sender })
+    ipc['pc-recorder:append']({ sender }, id, 0, new Uint8Array([1]))
+    vi.mocked(measurePcRecordingDuration).mockResolvedValueOnce(null)
+    await ipc['pc-recorder:finish']({ sender }, id)
+    expect(importExternalRecording).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      durationSeconds: expect.any(Number), durationSource: 'recorder'
+    }))
+    expect(vi.mocked(importExternalRecording).mock.calls[0][1]!.durationSeconds).toBeGreaterThan(0)
+  })
+  it('desktop capture handler failure rejects renderer capture before a persistence session starts', async () => {
+    // Load the real renderer module at runtime: it belongs to the separate web
+    // composite project, not the main-process TypeScript project's file list.
+    const rendererModule = '../../../../src/lib/pc-audio-capture'
+    const { PcAudioCapture } = await import(/* @vite-ignore */ rendererModule)
+    const ipc = handlers()
+    const setHandler = vi.fn(), frame = {}
+    configurePcLoopback({ webContents: { session: { setDisplayMediaRequestHandler: setHandler }, mainFrame: frame }, isDestroyed: () => false } as unknown as BrowserWindow)
+    vi.mocked(desktopCapturer.getSources).mockRejectedValue(new Error('loopback unavailable'))
+    const track = { stop: vi.fn() }
+    vi.stubGlobal('navigator', { mediaDevices: {
+      getUserMedia: async () => ({ getTracks: () => [track], getAudioTracks: () => [track] }),
+      getDisplayMedia: () => new Promise((_resolve, reject) => {
+        setHandler.mock.calls[0][0]({ frame, userGesture: true }, (sources: object) => {
+          expect(sources).toEqual({})
+          reject(new Error('loopback unavailable'))
+        })
+      })
+    } })
+    const start = vi.fn(async () => String(await ipc['pc-recorder:start']({ sender: Object.assign(new EventEmitter(), { id: 1 }) })))
+    const capture = new PcAudioCapture({ start, append: vi.fn(), finish: vi.fn() }, vi.fn())
+    await expect(capture.start()).rejects.toThrow(/System audio capture failed.*loopback unavailable/)
+    expect(start).not.toHaveBeenCalled()
+    expect(track.stop).toHaveBeenCalledOnce()
+    expect(readdirSync(folder)).toEqual([])
+  })
+  it('a stale finish cannot abandon the active recording', async () => {
+    const ipc = handlers()
+    const sender = Object.assign(new EventEmitter(), { id: 1 })
+    const id = await ipc['pc-recorder:start']({ sender })
+    await expect(Promise.resolve().then(() => ipc['pc-recorder:finish']({ sender }, 'stale'))).rejects.toThrow(/session/)
+    ipc['pc-recorder:append']({ sender }, id, 0, new Uint8Array([1]))
+    expect(await ipc['pc-recorder:finish']({ sender }, id)).toMatchObject({ success: true })
+  })
+  it('stops through the shared import path and rejects another renderer', async () => {
+    const ipc = handlers()
+    const sender = Object.assign(new EventEmitter(), { id: 1 })
+    const id = await ipc['pc-recorder:start']({ sender })
+    expect(() => ipc['pc-recorder:append']({ sender: { id: 2 } }, id, 0, new Uint8Array([1]))).toThrow(/owner/)
+    ipc['pc-recorder:append']({ sender }, id, 0, new Uint8Array([1, 2]))
+    expect(await ipc['pc-recorder:finish']({ sender }, id)).toMatchObject({ success: true })
+    expect(importExternalRecording).toHaveBeenCalledWith(expect.stringMatching(/Recording .*\.webm$/), { preserveFilename: true, durationSeconds: 2, durationSource: 'file' })
+  })
+  it('abandons a crashed renderer and imports its partial on the next startup', async () => {
+    const ipc = handlers()
+    const sender = Object.assign(new EventEmitter(), { id: 1 })
+    const id = await ipc['pc-recorder:start']({ sender })
+    ipc['pc-recorder:append']({ sender }, id, 0, new Uint8Array([1, 2]))
+    sender.emit('render-process-gone')
+    registerPcRecorderHandlers()
+    await vi.waitFor(() => expect(importExternalRecording).toHaveBeenCalledOnce())
+  })
+  it('uses Windows loopback only for a user gesture in the main frame', async () => {
+    const setHandler = vi.fn()
+    const frame = {}
+    const window = { webContents: { session: { setDisplayMediaRequestHandler: setHandler }, mainFrame: frame }, isDestroyed: () => false }
+    configurePcLoopback(window as unknown as BrowserWindow)
+    const callback = vi.fn()
+    const handler = setHandler.mock.calls[0][0]
+    vi.mocked(desktopCapturer.getSources).mockResolvedValue([{ id: 'screen' }] as never)
+    handler({ frame, userGesture: true }, callback)
+    await vi.waitFor(() => expect(callback).toHaveBeenCalled())
+    expect(callback).toHaveBeenCalledWith(process.platform === 'win32' ? { video: { id: 'screen' }, audio: 'loopback' } : {})
+    callback.mockClear()
+    handler({ frame: {}, userGesture: true }, callback)
+    expect(callback).toHaveBeenCalledWith({})
+    callback.mockClear()
+    handler({ frame, userGesture: false }, callback)
+    expect(callback).toHaveBeenCalledWith({})
+  })
+  it('asks the renderer to flush and holds quit until the file is imported', async () => {
+    const ipc = handlers()
+    const sender = Object.assign(new EventEmitter(), { id: 1, send: vi.fn() })
+    const id = await ipc['pc-recorder:start']({ sender })
+    ipc['pc-recorder:append']({ sender }, id, 0, new Uint8Array([1]))
+    const quitting = stopPcRecorderBeforeQuit()
+    const alsoQuitting = stopPcRecorderBeforeQuit()
+    expect(sender.send).toHaveBeenCalledWith('pc-recorder:request-stop')
+    await ipc['pc-recorder:finish']({ sender }, id)
+    await quitting
+    await alsoQuitting
+    expect(importExternalRecording).toHaveBeenCalledOnce()
+    expect(sender.send).toHaveBeenCalledOnce()
+    expect(importExternalRecording).toHaveBeenCalledWith(expect.any(String), { preserveFilename: true, deferProcessing: true, durationSeconds: 2, durationSource: 'file' })
+  })
+  it('abandons on main-frame reload and recovers before another recording', async () => {
+    const ipc = handlers()
+    const sender = Object.assign(new EventEmitter(), { id: 1 })
+    const id = await ipc['pc-recorder:start']({ sender })
+    ipc['pc-recorder:append']({ sender }, id, 0, new Uint8Array([1]))
+    sender.emit('did-start-navigation', {}, 'file://app', false, true)
+    const next = await ipc['pc-recorder:start']({ sender })
+    expect(importExternalRecording).toHaveBeenCalledOnce()
+    await ipc['pc-recorder:finish']({ sender }, next)
+  })
+  it('returns no source when desktop capture fails', async () => {
+    const setHandler = vi.fn(), frame = {}, callback = vi.fn()
+    configurePcLoopback({ webContents: { session: { setDisplayMediaRequestHandler: setHandler }, mainFrame: frame }, isDestroyed: () => false } as unknown as BrowserWindow)
+    vi.mocked(desktopCapturer.getSources).mockRejectedValue(new Error('unavailable'))
+    setHandler.mock.calls[0][0]({ frame, userGesture: true }, callback)
+    await vi.waitFor(() => expect(callback).toHaveBeenCalledWith({}))
+  })
+})

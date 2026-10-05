@@ -40,6 +40,8 @@ export { UNKNOWN_DATE, isUnknownDate }
 // Exported (spec-005/F17 T5 §D5) so features/library/utils/trashRow.ts can type
 // the recordings:getTrash row shape without duplicating this interface.
 export interface DatabaseRecording {
+  parent_video_capture_id?: string | null
+  video_audio_title?: string | null
   id: string
   filename: string
   file_path: string | null
@@ -57,6 +59,7 @@ export interface DatabaseRecording {
   eval_context?: string | null
   eval_audio_warning?: string | null
   // FL-001: transcription_status is the authoritative column; status is the legacy fallback
+  transcription_error?: string | null
   transcription_status?: string
   status: string
   // v38: personal ("ignored") flag — 1 = kept but excluded from AI + default surfaces
@@ -310,6 +313,7 @@ export function buildRecordingMap(
         size: deviceRec.size,
         duration: deviceRec.duration || dbRec?.duration_seconds || 0,
         dateRecorded,
+        transcriptionError: dbRec?.transcription_error ?? undefined,
         transcriptionStatus: mapTranscriptionStatus(dbRec?.transcription_status ?? dbRec?.status, capture?.status ?? undefined),
         meetingId: dbRec?.meeting_id,
         meetingSubject: dbRec?.meeting_subject,
@@ -396,6 +400,8 @@ export function buildRecordingMap(
         continue
       }
       const shared = {
+        parentVideoCaptureId: dbRec.parent_video_capture_id || undefined,
+        videoAudioTitle: dbRec.video_audio_title || undefined,
         id: dbRec.id,
         filename: dbRec.filename,
         size: dbRec.file_size,
@@ -403,6 +409,7 @@ export function buildRecordingMap(
         dateRecorded,
         // FL-001: prefer the authoritative transcription_status column; fall back
         // to the legacy status only when it's absent (matches the 'both' branch).
+        transcriptionError: dbRec.transcription_error ?? undefined,
         transcriptionStatus: mapTranscriptionStatus(dbRec.transcription_status ?? dbRec.status, capture?.status ?? undefined),
         meetingId: dbRec.meeting_id,
         meetingSubject: dbRec.meeting_subject,

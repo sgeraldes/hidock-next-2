@@ -46,6 +46,7 @@ import {
   queryAll,
   runWithMassDeleteAllowed,
   getRecordingById,
+  getRecordings,
   resolveRecordingId,
   insertRecording,
   commitRecordingSplit,
@@ -1458,6 +1459,14 @@ describe('Database Service', () => {
       expect(rows[2].filename).toBe('c.wav')
     })
   })
+  it('Library read projects the latest persisted transcription failure reason', () => {
+    seedRecording('failure-detail')
+    const queued = addToQueue('failure-detail')
+    updateQueueItem(queued, 'failed', 'Provider timed out')
+    updateRecordingTranscriptionStatus('failure-detail', 'error')
+    expect(getRecordings().find(row => row.id === 'failure-detail')).toMatchObject({ transcription_status: 'error', transcription_error: 'Provider timed out' })
+  })
+
 })
 
 // ---------------------------------------------------------------------------
