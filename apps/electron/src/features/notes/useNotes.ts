@@ -161,7 +161,6 @@ export function useNotes() {
     }
     // Empty on purpose: this runs when the editor really goes away, not on
     // every keystroke. See draftRef above.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const create = useCallback(
