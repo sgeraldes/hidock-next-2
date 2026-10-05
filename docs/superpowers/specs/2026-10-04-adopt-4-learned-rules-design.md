@@ -191,15 +191,22 @@ Begin with one scope and 15 new explicit corrections.
 Rollback disables learning and rule application; retain owner edits, journals and proposals.
 Undo individual applied changes through existing journalled operations.
 
-## Risks and open decisions
+## Risks
 
 Small samples can overfit; dry-run agreement needs later held-out evidence.
 Natural-language consolidation can weaken negative identity constraints; typed guards remain authoritative.
 Existing historical correction coverage is to verify before planning a learning backfill.
 
-- Recommended **review**. Activation: **review** or **automatic**?
-  Review costs owner attention; automatic requires stronger prospective evidence and rollback controls.
-- Recommended **suggest**. Identity effect: **suggest** or **merge**?
-  Suggest costs acceptance clicks; merge adds journalled automation and a larger false-merge risk.
-- Recommended **fifteen**. Extraction threshold: **fifteen** or **thirty**?
-  Fifteen learns sooner with more calls; thirty lowers spend and delays useful proposals.
+## Decisions taken
+
+Source: [decision matrix](../../decisions/decisions.json).
+
+4.1 — Activate learned rules only after owner acceptance. Sparse corrections can overfit and silently change classifications; dry-run review and the active-rule cap bound the owner's review effort.
+
+4.2 — Suggest identity merges for acceptance through the normal owner path. A false merge mixes people and is difficult to undo cleanly; the existing path preserves merge journals, undo and owner splits.
+
+4.3 — Propose rules after fifteen new corrections. This follows Laya's threshold and learns sooner while the four-call and $0.05 daily caps bound spending. Medium confidence: the first PR measures the owner's correction count, and proposal quality determines whether to raise the configurable threshold.
+
+## Order and migration
+
+Follow the rollout dependencies above. Schema migration numbers are assigned at merge time; other branches also add migrations. Main is at v72 as of 5 October 2026, and this spec reserves no migration number.

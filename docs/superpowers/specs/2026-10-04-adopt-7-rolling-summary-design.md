@@ -129,10 +129,12 @@ Actual provider/model prices are to verify before enabling paid synthesis.
 At those scenario rates, 30 one-call days cost $0.21; retry every day costs $0.42.
 The hard 30-day cap is $0.60, before taxes or external subscription costs.
 For verified rates `Ri` and `Ro`, reserve `(12000*Ri + 2000*Ro)/1000000` per call.
-If the reservation exceeds remaining dollars, skip the call or use an allowed local model.
+If the reservation exceeds remaining dollars, skip the call and visibly mark synthesis stale.
+Keep the last safe synthesis with its original date; local fallback awaits gamestation Model Host validation.
 If rates are unknown, block paid synthesis and report cost unknown.
 Never treat subscription CLI inference as a proven zero-cost API substitute.
-Prefer priced API or local inference initially; CLI quota accounting is an open integration decision.
+Use a priced, privacy-permitted API initially; local synthesis awaits gamestation Model Host validation.
+CLI quota accounting remains an open integration decision.
 Reserve all provider attempts including fallback; disallow unpriced fallback.
 Use provider-enforced output limits and count complete prompts before sending.
 Record actual usage when available; retain worst-case reservation when usage is missing.
@@ -188,7 +190,8 @@ Write these failing tests first.
 
 Use real better-sqlite3 state, leases, snapshots and budget reservations.
 Crash after reservation and after publication; reopen and verify state plus spend accounting.
-Use an actual permitted local model for structured synthesis and inspect source-supported layers.
+After gamestation Model Host validation, use its permitted model to inspect source-supported layers.
+Verify budget exhaustion skips synthesis with a visible stale date and makes zero local fallback calls.
 Paid-model measurement belongs to the rollout PR with verified rates and bounded authority.
 Exercise the renderer with source correction, deletion and budget exhaustion.
 Measure full-size latency, memory and disk; retain per-call token/cost evidence.
@@ -201,19 +204,30 @@ Measure full-size latency, memory and disk; retain per-call token/cost evidence.
 
 Backfill only the recent seven-day digest window initially, one idle batch at a time.
 Older Period/Milestone history is a bounded explicit task within the same daily cap.
-Start with 20 eligible sources and one local synthesis before paid enablement.
+Start with 20 eligible sources and one bounded, privacy-permitted synthesis within the daily cap.
 Rollback stops synthesis and hides the view; retain snapshots, sources and budget records.
 Existing timelines and digests remain authoritative and require no schema downgrade.
 
-## Risks and open decisions
+## Risks
 
 Daily compression can omit unresolved items or invent completion; enforce evidence and pins.
 Provider rate drift invalidates estimates; paid attempts require a current verified rate revision.
 Exact timezone configuration and digest production hooks are to verify.
 
-- Recommended **twocents**. Daily cap: **twocents** or **fivecents**?
-  Twocents may skip expensive models; fivecents permits more retries at $1.50 per 30 days.
-- Recommended **seven**. Recent window: **seven** or **fourteen**?
-  Seven keeps prompts compact; fourteen needs tighter item selection within the same token bound.
-- Recommended **local**. Unaffordable call: **local** or **skip**?
-  Local needs an available validated model and CPU budget; skip retains visibly stale synthesis.
+## Decisions taken
+
+Source: [decision matrix](../../decisions/decisions.json).
+
+7.1 — Set the daily synthesis cap to $0.02. At the matrix's scenario rates, a full call costs about $0.007, so the cap covers one call and one retry; the owner can raise the configuration if needed.
+
+7.2 — Use a seven-day Recent window. This keeps the model request compact within the 12,000-input-token limit.
+
+7.3 — Skip an unaffordable call and mark the synthesis stale. Local inference on this machine competes with diarization and transcription; the matrix records a 24 September overload that froze the PC. Medium confidence: local fallback can be reconsidered after the gamestation Model Host is validated for model quality and CPU/resource contention; retain the last synthesis and its date meanwhile.
+
+## Order and migration
+
+Follow the rollout dependencies above. Schema migration numbers are assigned at merge time; other branches also add migrations. Main is at v72 as of 5 October 2026, and this spec reserves no migration number.
+
+## Still open
+
+How should subscription CLI quota usage be accounted for and reserved within the daily synthesis cap?

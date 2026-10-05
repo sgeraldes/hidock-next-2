@@ -117,7 +117,7 @@ Never merge contacts merely because a note uses the same display name.
 `note-intelligence.ts` may display inferred related items below explicit links.
 It cannot overwrite explicit relations or promote its output to `user-text` provenance.
 `knowledge-graph-service.ts` projects explicit edges with relation IDs and source note IDs.
-Avoid storing a second persistent graph copy until its schema/provenance path is verified.
+Read explicit graph edges directly from `note_relations` at query time.
 The first release uses a query-time graph overlay backed by `note_relations`.
 Graph queries retain connecting-edge eligibility, including source note visibility.
 Add proposed `notes.backlinksEnabled=false` to AppConfig during rollout.
@@ -184,15 +184,22 @@ Rollback disables parsing and views; retain authored notes and derived rows.
 Re-enable reconciles source fingerprints before showing stored backlinks.
 No graph-wide rebuild, schema downgrade or source deletion is required.
 
-## Risks and open decisions
+## Risks
 
 Freeform names can collide with contact aliases and title normalization.
 Storing snippets duplicates private authored text; keep them bounded and policy-protected.
 Identity redirect and editor selection boundaries are to verify before implementation.
 
-- Recommended **typed**. Mentions: **typed** or **bare**?
-  Typed costs target selection; bare requires ambiguity UI and increases false links.
-- Recommended **overlay**. Graph integration: **overlay** or **persist**?
-  Overlay costs indexed reads; persist adds graph schema, duplicate state and reconciliation.
-- Recommended **exact**. Title resolution: **exact** or **fuzzy**?
-  Exact leaves more unresolved links; fuzzy adds candidate ranking and owner confirmation.
+## Decisions taken
+
+Source: [decision matrix](../../decisions/decisions.json).
+
+5.1 — Use typed person mentions with explicit person selection. Stable identifiers avoid false links caused by aliases and namesakes.
+
+5.2 — Build a query-time graph overlay from the relations table. A single relation source avoids duplicate persistent graph state and reconciliation, while preserving each note's visibility.
+
+5.3 — Resolve note titles only by an exact, unique match. Ambiguous links remain unresolved and visible to their author, preventing links to the wrong note.
+
+## Order and migration
+
+Follow the rollout dependencies above. Schema migration numbers are assigned at merge time; other branches also add migrations. Main is at v72 as of 5 October 2026, and this spec reserves no migration number.

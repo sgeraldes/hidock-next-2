@@ -186,15 +186,22 @@ Export defaults only for owner-selected entries.
 Rollback disables file reads and watching, then returns all lookups to built-ins.
 Retain authored files and config; no file deletion or schema downgrade is required.
 
-## Risks and open decisions
+## Risks
 
 Placeholder grammar differs across callers; each new entry needs a specific contract test.
 Edited prose can reduce model quality even when syntactically valid.
 The initial pipeline prompt inventory and result hash storage are to verify.
 
-- Recommended **default**. Invalid saved override: **default** or **lastgood**?
-  Default makes fallback predictable; lastgood needs retained revision state and clearer UI.
-- Recommended **fixed**. Override roots: **fixed** or **custom**?
-  Fixed keeps boundary checks small; custom adds path validation and watcher support cases.
-- Recommended **phased**. Pipeline exposure: **phased** or **all**?
-  Phased needs per-caller PRs; all needs a larger verified contract inventory before release.
+## Decisions taken
+
+Source: [decision matrix](../../decisions/decisions.json).
+
+2.1 — Fall back to the built-in default for an invalid override. This makes the active text predictable and avoids retained revisions whose text differs from the file on disk.
+
+2.2 — Fixed override folders within the profile. This reduces path validation and the risk of reading outside the profile, including symlink and file-watching cases.
+
+2.3 — Expose pipeline prompts in phases, one caller at a time. Each caller needs its substitution contract and output validation inventoried before edited text is allowed to affect structured output.
+
+## Order and migration
+
+Follow the rollout dependencies above. Schema migration numbers are assigned at merge time; other branches also add migrations. Main is at v72 as of 5 October 2026, and this spec reserves no migration number.

@@ -74,7 +74,7 @@ Add source/generation indexes for bounded slice replacement.
 The next migration creates the base table and an external-content `search_documents_fts`.
 FTS columns are `title` and `body`, with `content='search_documents'`.
 Set `content_rowid='rowid'` and `tokenize='unicode61 remove_diacritics 2'`.
-Set prefix indexes to `2 3 4`; benchmark their space cost before rollout.
+Set prefix indexes to `3 4`; benchmark disk cost and query latency in the first PR.
 Keep IDs, revisions and lifecycle metadata outside tokenized columns.
 INSERT triggers add the new row and DELETE triggers issue the FTS delete command.
 UPDATE triggers use `AFTER UPDATE OF title, body` with a value-change guard.
@@ -91,7 +91,7 @@ Persist backfill checkpoints separately from schema completion.
 1. Normalize whitespace; cap input at 512 characters and 12 distinct terms.
 2. Tokenize Unicode letters and numbers; retain short IDs as exact literals.
 3. Escape double quotes and bind the generated MATCH expression as a parameter.
-4. Prefix tokens of at least two characters with a trailing `*` outside quotes.
+4. Prefix tokens of at least three characters with a trailing `*` outside quotes.
 5. OR the terms for general search; never pass user FTS operators through.
 6. Resolve intent and temporal range through the existing orchestrator.
 7. Fetch lexical candidates ordered by ascending `bm25()`, then document key.
@@ -188,16 +188,23 @@ Keep triggers installed while rollback reads LIKE so re-enabling can recover con
 An older binary may leave new derived rows stale; reconciliation detects revision mismatch.
 Never roll schema backwards or remove recordings, notes or existing vector rows.
 
-## Risks and open decisions
+## Risks
 
 Prefix matching broadens recall and can increase false positives on common roots.
 Measure prefix disk cost and EN/ES precision before changing weights.
 The existing dense-search latency on the full library is to verify.
 New canonical chunks must map correctly to legacy vector boundaries and citations.
 
-- Recommended **equal**. Fusion weighting: **equal** or **lexical**?
-  Equal costs no language tuning; lexical adds a weighted-RRF evaluation matrix.
-- Recommended **prefix**. Prefix index storage: **prefix** or **scan**?
-  Prefix spends extra FTS disk for speed; scan saves disk and needs measured query proof.
-- Recommended **source**. Global knowledge grouping: **source** or **chunk**?
-  Source preserves current cards; chunk requires new response and renderer behavior.
+## Decisions taken
+
+Source: [decision matrix](../../decisions/decisions.json).
+
+1.1 — Equal weights (standard RRF). Equal-weight RRF needs no language-specific tuning; revisit only if recall@10 on labelled English and Spanish queries supports a different weight.
+
+1.2 — Prefix indexes of 3 and 4 characters, with a minimum prefix-query length of 3 characters. Two-character prefixes add indexing cost and noisy matches; prefix indexing trades disk space for latency. Medium confidence: the first PR measures the real library against the 300 MiB disk cap and lexical-query target of 80 ms or less, and adjusts the indexes if needed.
+
+1.3 — Group global search results by source. This preserves the existing cards and response contract.
+
+## Order and migration
+
+Follow the rollout dependencies above. Schema migration numbers are assigned at merge time; other branches also add migrations. Main is at v72 as of 5 October 2026, and this spec reserves no migration number.

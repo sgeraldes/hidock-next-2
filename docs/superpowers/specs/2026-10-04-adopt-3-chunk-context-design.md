@@ -184,15 +184,22 @@ No historical topic synthesis runs during backfill.
 Rollback disables context reads and jobs, retaining columns and source text.
 Retain revision data so a later re-enable can refresh changed sources.
 
-## Risks and open decisions
+## Risks
 
 Repeated meeting titles can flood retrieval with weak context-only evidence.
 An existing topic label may itself be unreliable or absent; provenance must be explicit.
 Builder changes require a lexical refresh whose full-corpus duration is to verify.
 
-- Recommended **lexical**. Context representation: **lexical** or **embedded**?
-  Lexical costs one FTS refresh; embedded costs new provider partitions and paid re-embedding.
-- Recommended **current**. Title policy: **current** or **snapshot**?
-  Current costs refresh on relink/edit; snapshot is cheaper and preserves stale title terms.
-- Recommended **quarter**. Context BM25 weight: **quarter** or **equal**?
-  Quarter limits repeated-title dominance; equal needs more precision tuning on terse queries.
+## Decisions taken
+
+Source: [decision matrix](../../decisions/decisions.json).
+
+3.1 — Store context only in the lexical index. This supports reversible lexical refreshes without the time, cost and vector-space partitioning of recalculating 240,000 vectors.
+
+3.2 — Store the current title and refresh it after edits or meeting relinks. Stale titles can retrieve chunks under the wrong meeting's words; refreshing costs one lexical source write.
+
+3.3 — Give context one quarter of the body's BM25 weight. Recurring meeting titles otherwise risk flooding results. Medium confidence: labelled-query retrieval quality and context-only precision determine whether to tune this internal constant; no migration is required.
+
+## Order and migration
+
+Follow the rollout dependencies above. Schema migration numbers are assigned at merge time; other branches also add migrations. Main is at v72 as of 5 October 2026, and this spec reserves no migration number.

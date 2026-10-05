@@ -107,13 +107,15 @@ Enforce eligibility first, then privacy, then capability and provider availabili
 
 Provider descriptors add a verified endpoint class: local, cloud or unknown.
 Local ONNX is local because it performs inference without a remote request.
-Ollama is local only when configured to a verified loopback endpoint.
-LAN endpoints and remote OpenAI-compatible servers are cloud unless explicitly verified under a later policy.
+Ollama and OpenAI-compatible endpoints are local when their IP is verified as loopback or a private-range address on the local network.
+The owner permits the whole local network; hostname-based trust and unknown addresses cannot qualify.
+Public-address endpoints are cloud. HTTP plus token over the LAN without TLS is an owner-accepted risk.
+Revisit this policy if the network ceases to be trusted.
 Claude Code, Codex, Gemini CLI and Kiro inference are cloud-backed for this policy.
 A locally installed CLI does not imply local model processing.
 Unknown endpoint class cannot process tier 3.
-Reject redirects from a loopback model endpoint to a remote host.
-DNS names resolving unpredictably are not accepted as verified loopback.
+Reject redirects from a local model endpoint to a public host.
+Verify any permitted endpoint or redirect by IP; hostname-based locality is insufficient.
 Local providers that cannot transcribe or generate must return blocked/unavailable by capability.
 No implicit cloud fallback is permitted when the local capability is absent.
 
@@ -123,8 +125,8 @@ No implicit cloud fallback is permitted when the local capability is absent.
 2. Resolve all derived contributions to their original source set.
 3. Read current lifecycle eligibility, effective tiers and purpose grants.
 4. Build a permit bound to payload hash, source revisions, policy revision and provider endpoint.
-5. Remove prohibited sources only when the caller's defined operation permits a partial answer.
-6. Recompute the payload and disclose omitted sources when a partial answer is supported.
+5. For mixed cloud RAG, omit private sources and show a visible exclusion notice.
+6. Recompute the payload and acquire a fresh permit for the remaining permitted context.
 7. For source-specific transcription/analysis, block rather than silently truncate the source.
 8. Immediately before SDK send or CLI stdin, recheck permit revisions and endpoint identity.
 9. Record a content-free allowed/blocked decision and dispatch only an allowed attempt.
@@ -188,7 +190,9 @@ Write these failing tests first.
 - `privacy-tiers.fallback-rechecks`: local failure cannot route private text to Gemini.
 - `privacy-tiers.direct-sdk`: timeline scorer checks the permit before generateContent.
 - `privacy-tiers.cli-is-cloud`: installed CLI location cannot imply local inference.
-- `privacy-tiers.remote-ollama`: remote endpoints and loopback redirects cannot pass as local.
+- `privacy-tiers.remote-ollama`: public endpoints, public redirects and unknown addresses cannot pass as local.
+- `privacy-tiers.private-lan`: verified private-IP LAN endpoints qualify under the owner override; hostnames alone do not.
+- `privacy-tiers.mixed-rag-omit`: private sources are omitted with notice and a fresh permit for the remaining payload.
 - `privacy-tiers.unknown-provenance`: legacy text and history fail closed.
 - `privacy-tiers.revocation-before-send`: changed policy after setup prevents dispatch.
 - `privacy-tiers.media-and-query-embed`: audio upload and query embedding enforce policy.
@@ -220,15 +224,22 @@ Retain policies, grants and audit; never reopen a forbidden cloud path during ro
 If a guard fails, block that adapter until repaired and expose its unavailable status.
 No content deletion, remote retention claim or schema downgrade is part of rollback.
 
-## Risks and open decisions
+## Risks
 
 Legacy graph/history provenance can be incomplete; unknown text must remain local-only.
 Local endpoints and cloud-backed CLIs need endpoint-level evidence, not marketing labels.
 Owner downgrade is an explicit policy change whose effect must be visible before future sends.
 
-- Recommended **controlled**. Existing ordinary sources: **controlled** or **private**?
-  Controlled requires cloud grants; private blocks all cloud until explicit source downgrades.
-- Recommended **loopback**. Local endpoint scope: **loopback** or **lan**?
-  Loopback is narrow; LAN needs endpoint trust, transport security and administrator policy.
-- Recommended **omit**. Mixed RAG context: **omit** or **block**?
-  Omit needs visible exclusions and fresh payload permits; block reduces answer availability.
+## Decisions taken
+
+Source: [decision matrix](../../decisions/decisions.json).
+
+8.1 — Default existing ordinary sources to controlled, requiring an owner grant for cloud processing, with enforcement disabled until review. Current transcription depends on cloud processing; staged owner review of counts and purpose grants supports activation without an immediate product break.
+
+8.2 — Treat this computer and the whole local network as local, as the owner decided on 4 October, overriding the matrix's narrower recommendation. Although the option label refers to owner-paired hosts, the recorded owner answer and reasoning authorize the whole local network: only loopback and private-range addresses verified by IP qualify, with no hostname-based trust, redirects to public hosts or unknown addresses; HTTP plus token over the LAN without TLS is an owner-accepted risk. Medium confidence: revisit endpoint trust and transport protection if the network ceases to be trusted.
+
+8.3 — Omit private sources from mixed cloud RAG context and show a visible notice. The options tie on score and both prevent private egress; omission preserves answer availability. Medium confidence: revisit using measured mixed-context answer quality and usefulness with visible exclusions; the matrix provides no numerical threshold.
+
+## Order and migration
+
+Follow the rollout dependencies above. Schema migration numbers are assigned at merge time; other branches also add migrations. Main is at v72 as of 5 October 2026, and this spec reserves no migration number.

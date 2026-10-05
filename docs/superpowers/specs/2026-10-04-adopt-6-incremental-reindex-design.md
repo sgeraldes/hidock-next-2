@@ -154,7 +154,8 @@ Atomic replacement of a very large source may exceed the transaction limit.
 If measured above 50 ms, switch canonical reads to generation-pointer publication
 and maintain staged FTS rows filtered by active generation before release.
 Do not claim yielding between transaction statements provides atomic responsiveness.
-Measure both largest-source size and typical source size before choosing that implementation.
+Start with one replacement transaction and measure the largest and typical sources in the first PR.
+Add generation-pointer publication only when the largest-source transaction exceeds 50 ms.
 One low-priority heavy parsing/embedding job runs at a time, shared with index backfills.
 Main writer batches stage at most 250 chunks or 4 MiB, then `setImmediate` yields.
 Pause for USB work, transcription, foreground generation and high event-loop delay.
@@ -200,15 +201,22 @@ Rollback disables the new scheduler and keeps current canonical slices and marke
 Resume the prior per-source path only after its cache invalidation contract is verified.
 Retain jobs and staged rows; no authored-content deletion or schema downgrade is needed.
 
-## Risks and open decisions
+## Risks
 
 FTS and vectors have different readiness times; UI and RRF must expose that truthfully.
 Legacy vector chunk boundaries and invalidation APIs are to verify.
 Large atomic SQL deletes can block the main thread despite bounded staging.
 
-- Recommended **lexical**. Publication readiness: **lexical** or **together**?
-  Lexical gives immediate current text; together blocks search updates during provider outages.
-- Recommended **reuse**. Unchanged embeddings: **reuse** or **replace**?
-  Reuse needs hash/version tests; replace costs more provider time and money.
-- Recommended **pointer**. Large-source publication: **pointer** or **transaction**?
-  Pointer adds active-generation filtering; transaction is simpler if real timing meets the bound.
+## Decisions taken
+
+Source: [decision matrix](../../decisions/decisions.json).
+
+6.1 — Publish lexical text immediately and vectors when available. Lexical search can show current text even during an embedding-provider outage.
+
+6.2 — Reuse unchanged embeddings by hash. This avoids provider time and cost on every edit; the implementation plan must test hash and version boundaries.
+
+6.3 — Start with one replacement transaction; add generation-pointer publication only if it measures above 50 ms. A transaction keeps the initial implementation simple and the pointer can be added later without migrating data. Medium confidence: the first PR times the largest source and switches to the pointer only if the 50 ms limit is exceeded.
+
+## Order and migration
+
+Follow the rollout dependencies above. Schema migration numbers are assigned at merge time; other branches also add migrations. Main is at v72 as of 5 October 2026, and this spec reserves no migration number.
