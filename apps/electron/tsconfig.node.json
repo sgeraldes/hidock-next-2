@@ -5,18 +5,22 @@
     "electron/**/*",
     "src/types/**/*",
     "src/shared/**/*",
-    "src/test/temp-db-tracker.ts"
+    "src/test/temp-db-tracker.ts",
+    "../../packages/transcription/src/**/*"
   ],
   "exclude": [
     "electron/main/services/__tests__/benchmark.test.ts"
   ],
   "compilerOptions": {
     "composite": true,
+    "rootDir": "../..",
     "types": ["node"],
     "outDir": "./out",
     "baseUrl": ".",
     "paths": {
       "@shared/*": ["./shared/*"],
+      "@hidock/transcription": ["../../packages/transcription/src/index.ts"],
+      "@google/genai": ["./node_modules/@google/genai/dist/genai.d.ts"],
       "@/*": ["./src/*"]
     }
   }
