@@ -33,7 +33,7 @@ export const VALIDITY_LABELS: Record<HeldValidity, { chip: string; label: string
   doubtful: {
     chip: 'Transcript in doubt',
     label: 'Transcript in doubt: being checked against the audio',
-    detail: 'A few minutes of the audio are transcribed again and compared. Until then nothing is built on it.'
+    detail: 'A few minutes of the audio are transcribed again and compared. Its title and summary remain available while the timing is in doubt.'
   }
 }
 

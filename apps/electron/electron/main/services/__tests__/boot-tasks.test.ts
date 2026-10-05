@@ -32,6 +32,7 @@ vi.mock('../org-reconciler', () => ({
     bootOrder.push('reconcile')
   }),
 }))
+vi.mock('../transcript-validity-store', () => ({ backfillTranscriptValidity: vi.fn(async () => { bootOrder.push('validity'); return { checked: 0 } }) }))
 vi.mock('../voice-learning', () => ({
   runVoiceLearning: vi.fn(async () => {
     bootOrder.push('voice-learning')
@@ -90,7 +91,7 @@ describe('BOOT_TASK_DEFS', () => {
   it('org-reconcile learns voices once the reconcile is done, then applies the identity rules (spec 2026-10-03, Phases 2 and 3)', async () => {
     bootOrder.length = 0
     await BOOT_TASK_DEFS.find((candidate) => candidate.name === 'org-reconcile')!.run()
-    expect(bootOrder).toEqual(['reconcile', 'voice-learning', 'identity-rules'])
+    expect(bootOrder).toEqual(['reconcile', 'validity', 'voice-learning', 'identity-rules'])
   })
 
   it('restores the existing semantic index without starting an embedding backfill', async () => {

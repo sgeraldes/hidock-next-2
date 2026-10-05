@@ -361,7 +361,7 @@ export function LibraryFilters({
                     <option value="all">Any transcript</option>
                     <option value="flagged">Transcription problems ({integrityCounts.flagged ?? 0})</option>
                     {VALIDITY_FILTER_ORDER.filter((status) => (integrityCounts[`validity:${status}`] ?? 0) > 0 || integrityFilter === `validity:${status}`).map((status) => (
-                      <option key={status} value={`validity:${status}`}>{VALIDITY_LABELS[status].chip} ({integrityCounts[`validity:${status}`] ?? 0})</option>
+                      <option key={status} value={`validity:${status}`}>{status === 'doubtful' ? 'Doubtful transcripts' : VALIDITY_LABELS[status].chip} ({integrityCounts[`validity:${status}`] ?? 0})</option>
                     ))}
                     {ISSUE_ORDER.filter((code) => (integrityCounts[`issue:${code}`] ?? 0) > 0 || integrityFilter === `issue:${code}`).map((code) => (
                       <option key={code} value={`issue:${code}`}>{ISSUE_TAGS[code]} ({integrityCounts[`issue:${code}`] ?? 0})</option>

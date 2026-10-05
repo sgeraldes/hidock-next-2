@@ -6,17 +6,18 @@
  * Plan: docs/superpowers/plans/2026-10-04-validation-order.md
  */
 
+import { yieldToEventLoop } from './event-loop'
 import { getEventBus } from './event-bus'
 import { createHash } from 'crypto'
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
-import { queryAll, queryOne, run, runNoSave, runInTransaction, saveDatabase } from './database'
+import { queryAll, queryOne, run, runNoSave, runInTransaction, saveDatabase, acquireOrganizationCheckpointBudget } from './database'
 import { getCachePath } from './file-storage'
 import {
   assessTranscriptValidity,
   VALIDITY_VERSION,
   isUnusableValidity,
-  isGapOnlyValidity,
+  shouldWithholdDerivedContent,
   type TranscriptValidity,
   type ValidityInput,
   type ValiditySegment
@@ -206,7 +207,7 @@ export function refreshTranscriptValidity(recordingId: string): TranscriptValidi
     retractContentRating(recordingId)
     if (shouldWithhold(validity)) retireUnusableDerivedMetadata(recordingId)
   }
-  if (validity.status === 'valid') restoreWithheldMetadata(recordingId)
+  if (!shouldWithhold(validity)) restoreWithheldMetadata(recordingId)
   validity.measures.attendees = attendeeCount(rowFor(recordingId)?.attendees ?? null)
   run('UPDATE transcripts SET validity_json = ? WHERE recording_id = ?', [JSON.stringify(validity), recordingId])
   return validity
@@ -225,22 +226,22 @@ const derivedFields = ['summary', 'title_suggestion', 'action_items', 'topics', 
   'sentiment_segments', 'event_markers', 'question_suggestions', 'mentioned_people'] as const
 
 function shouldWithhold(validity: TranscriptValidity): boolean {
-  return !isGapOnlyValidity(validity) && !validity.reasons.every(r => ['no_times', 'audio_not_checked'].includes(r.code))
+  return shouldWithholdDerivedContent(validity)
 }
 
 function metadataFingerprint(row: { speakers?: unknown; full_text?: unknown }): string {
   return transcriptFingerprint(JSON.stringify([row.speakers ?? null, row.full_text ?? null]))
 }
 
-function restoreWithheldMetadata(recordingId: string): void {
-  runInTransaction(() => restoreWithheldMetadataInTransaction(recordingId))
+function restoreWithheldMetadata(recordingId: string): boolean {
+  return runInTransaction(() => restoreWithheldMetadataInTransaction(recordingId))
 }
 
-function restoreWithheldMetadataInTransaction(recordingId: string): void {
+function restoreWithheldMetadataInTransaction(recordingId: string): boolean {
   const saved = queryOne<{ transcript_fingerprint: string; values_json: string }>(
     'SELECT * FROM transcript_withheld_metadata WHERE recording_id = ?', [recordingId])
   const current = queryOne<{ speakers: string | null; full_text: string }>('SELECT speakers, full_text FROM transcripts WHERE recording_id = ?', [recordingId])
-  if (!saved || !current || saved.transcript_fingerprint !== metadataFingerprint(current)) return
+  if (!saved || !current || saved.transcript_fingerprint !== metadataFingerprint(current)) return false
   const values = JSON.parse(saved.values_json) as { transcript: Record<string, unknown>; captures: Array<Record<string, unknown>>; recording?: Record<string, unknown>; candidates?: Array<{ id: string; is_selected: number }> }
   for (const field of derivedFields) runNoSave(`UPDATE transcripts SET ${field} = COALESCE(${field}, ?) WHERE recording_id = ?`, [values.transcript[field] ?? null, recordingId])
   for (const capture of values.captures) {
@@ -255,6 +256,7 @@ function restoreWithheldMetadataInTransaction(recordingId: string): void {
       WHERE r.id = recording_meeting_candidates.recording_id AND r.correlation_method = 'ai_transcript_match'
         AND r.meeting_id = recording_meeting_candidates.meeting_id)`, [candidate.is_selected, candidate.id])
   runNoSave('DELETE FROM transcript_withheld_metadata WHERE recording_id = ?', [recordingId])
+  return true
 }
 
 /** Retract machine results only. Audio, transcript text and owner decisions survive. */
@@ -299,73 +301,108 @@ function retireUnusableDerivedMetadataInTransaction(recordingId: string): void {
  * main thread. Idempotent: a transcript is read again only when one of those
  * changes. The integrity backfill clears validity_version on what it re-checks.
  */
-export async function backfillTranscriptValidity(
-  options: { batchSize?: number } = {}
+let backfillTail: Promise<void> = Promise.resolve()
+type BackfillOptions = { batchSize?: number; onHold?: (ms: number) => void }
+type BackfillResult = { checked: number; changedIds: string[]; [status: string]: number | string[] }
+
+/** Serialize Library and deferred organization passes so neither samples half-settled links. */
+export function backfillTranscriptValidity(options: BackfillOptions = {}): Promise<BackfillResult> {
+  const pass = backfillTail.then(() => runValidityBackfill(options))
+  backfillTail = pass.then(() => undefined, () => undefined)
+  return pass
+}
+
+async function runValidityBackfill(
+  options: { batchSize?: number; onHold?: (ms: number) => void } = {}
 ): Promise<{ checked: number; changedIds: string[]; [status: string]: number | string[] }> {
-  const batchSize = options.batchSize ?? 50
+  const batchSize = Math.max(1, Math.min(options.batchSize ?? 1, 1))
+  let rowsInSlice = 0
+  let sliceStart = performance.now()
+  let worstHoldMs = 0
+  const checkpoint = async (): Promise<void> => {
+    const hold = performance.now() - sliceStart
+    worstHoldMs = Math.max(worstHoldMs, hold)
+    options.onHold?.(hold)
+    if (hold >= 100) console.warn(`[transcript-validity] batch held the main thread for ${Math.round(hold)}ms`)
+    await yieldToEventLoop()
+    rowsInSlice = 0
+    sliceStart = performance.now()
+  }
   const counts: Record<string, number> = { checked: 0 }
   const changedIds: string[] = []
+  const metadataChangedIds: string[] = []
   let afterId = ''
-  for (;;) {
-    const ids = queryAll<{ recording_id: string }>(
-      `SELECT t.recording_id FROM transcripts t
-         JOIN recordings r ON r.id = t.recording_id
-         LEFT JOIN meetings m ON m.id = r.meeting_id
-        WHERE r.deleted_at IS NULL AND t.recording_id > ?
-          AND (t.validity_version IS NULL OR t.validity_version < ?
-               OR NOT json_valid(t.validity_json)
-               OR COALESCE(json_extract(t.validity_json, '$.measures.attendees'), -1) !=
-                  CASE WHEN json_valid(m.attendees) AND json_type(m.attendees) = 'array'
-                       THEN json_array_length(m.attendees) ELSE 0 END)
-        ORDER BY t.recording_id LIMIT ?`,
-      [afterId, VALIDITY_VERSION, batchSize]
-    )
-    const fresh = ids
-    if (fresh.length === 0) break
-    for (const { recording_id } of fresh) {
-      afterId = recording_id
-      const row = rowFor(recording_id)
-      if (!row) continue
-      const validity = assess(row, row.speakers)
-      runNoSave('UPDATE transcripts SET validity_status = ?, validity_json = ?, validity_version = ? WHERE recording_id = ?', [
-        validity.status,
-        JSON.stringify(validity),
-        VALIDITY_VERSION,
-        recording_id
-      ])
-      if (isUnusableValidity(validity.status)) {
-        retractContentRating(recording_id)
-        if (shouldWithhold(validity)) retireUnusableDerivedMetadata(recording_id)
-        // Graph and RAG reads already share the validity eligibility gate. A wiki
-        // is an external file, so explicitly reconcile it when a verdict changes.
-        if (!isGapOnlyValidity(validity) && row.validity_status !== validity.status) {
-          try {
-            const { reconcileWikiEligibility } = await import('./meeting-wiki')
-            reconcileWikiEligibility(recording_id)
-          } catch (error) {
-            console.warn(`[transcript-validity] Wiki cleanup failed for ${recording_id}:`, error)
+  const releaseCheckpointBudget = acquireOrganizationCheckpointBudget()
+  try {
+    for (;;) {
+      const ids = queryAll<{ recording_id: string; stale: number }>(
+        `SELECT t.recording_id, CASE WHEN
+             t.validity_version IS NULL OR t.validity_version < ?
+             OR NOT json_valid(t.validity_json)
+             OR COALESCE(json_extract(CASE WHEN json_valid(t.validity_json) THEN t.validity_json ELSE '{}' END, '$.measures.attendees'), -1) !=
+                CASE WHEN json_valid(m.attendees) AND json_type(m.attendees) = 'array'
+                     THEN json_array_length(m.attendees) ELSE 0 END
+           THEN 1 ELSE 0 END AS stale
+           FROM transcripts t
+           JOIN recordings r ON r.id = t.recording_id
+           LEFT JOIN meetings m ON m.id = r.meeting_id
+          WHERE r.deleted_at IS NULL AND t.recording_id > ?
+          ORDER BY t.recording_id LIMIT ?`,
+        [VALIDITY_VERSION, afterId, 128]
+      )
+      if (ids.length === 0) break
+      afterId = ids[ids.length - 1].recording_id
+      const fresh = ids.filter(row => row.stale === 1)
+      for (const { recording_id } of fresh) {
+        const row = rowFor(recording_id)
+        if (!row) continue
+        const validity = assess(row, row.speakers)
+        runNoSave('UPDATE transcripts SET validity_status = ?, validity_json = ?, validity_version = ? WHERE recording_id = ?', [
+          validity.status,
+          JSON.stringify(validity),
+          VALIDITY_VERSION,
+          recording_id
+        ])
+        if (isUnusableValidity(validity.status)) {
+          retractContentRating(recording_id)
+          if (shouldWithhold(validity)) retireUnusableDerivedMetadata(recording_id)
+          // Graph and RAG reads already share the validity eligibility gate. A wiki
+          // is an external file, so explicitly reconcile it when a verdict changes.
+          if (shouldWithhold(validity) && row.validity_status !== validity.status) {
+            try {
+              await checkpoint()
+              const { reconcileWikiEligibility } = await import('./meeting-wiki')
+              rowsInSlice = 0
+              sliceStart = performance.now()
+              reconcileWikiEligibility(recording_id)
+            } catch (error) {
+              console.warn(`[transcript-validity] Wiki cleanup failed for ${recording_id}:`, error)
+            }
           }
         }
+        const restoredMetadata = !shouldWithhold(validity) && restoreWithheldMetadata(recording_id)
+        const linked = queryOne<{ attendees: string | null }>(`SELECT m.attendees FROM recordings r LEFT JOIN meetings m ON m.id = r.meeting_id WHERE r.id = ?`, [recording_id])
+        validity.measures.attendees = attendeeCount(linked?.attendees ?? null)
+        runNoSave('UPDATE transcripts SET validity_json = ? WHERE recording_id = ?', [JSON.stringify(validity), recording_id])
+        if (restoredMetadata || row.validity_status !== validity.status) changedIds.push(recording_id)
+        if (restoredMetadata || (shouldWithhold(validity) && row.validity_status !== validity.status)) metadataChangedIds.push(recording_id)
+        counts.checked++
+        counts[validity.status] = (counts[validity.status] ?? 0) + 1
+        if (++rowsInSlice >= batchSize || performance.now() - sliceStart >= 20) await checkpoint()
       }
-      if (validity.status === 'valid') restoreWithheldMetadata(recording_id)
-      const linked = queryOne<{ attendees: string | null }>(`SELECT m.attendees FROM recordings r LEFT JOIN meetings m ON m.id = r.meeting_id WHERE r.id = ?`, [recording_id])
-      validity.measures.attendees = attendeeCount(linked?.attendees ?? null)
-      runNoSave('UPDATE transcripts SET validity_json = ? WHERE recording_id = ?', [JSON.stringify(validity), recording_id])
-      if (row.validity_status !== validity.status) changedIds.push(recording_id)
-      counts.checked++
-      counts[validity.status] = (counts[validity.status] ?? 0) + 1
+      await checkpoint()
     }
-    await new Promise<void>((resolve) => setImmediate(resolve))
-  }
+  } finally { releaseCheckpointBudget() }
   if (counts.checked > 0) {
     saveDatabase()
-    console.log(`[transcript-validity] checked ${counts.checked} transcript(s): ${JSON.stringify(counts)}`)
+    console.log(`[transcript-validity] checked ${counts.checked} transcript(s): ${JSON.stringify(counts)}; worst main-thread hold ${worstHoldMs.toFixed(1)}ms`)
   }
+  if (counts.checked === 0) console.log('[transcript-validity] checked 0 transcript(s)')
   if (changedIds.length > 0) {
     getEventBus().emitDomainEvent({
       type: 'transcript:verdicts-updated', timestamp: new Date().toISOString(),
-      payload: { recordingIds: changedIds }
+      payload: { recordingIds: changedIds, metadataChangedIds }
     })
   }
-  return { ...counts, checked: counts.checked, changedIds }
+  return { ...counts, checked: counts.checked, changedIds, ...(counts.checked > 0 ? { worstHoldMs } : {}) }
 }

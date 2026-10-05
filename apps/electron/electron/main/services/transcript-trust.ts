@@ -1,42 +1,30 @@
 /**
- * Whether anything may be built on a recording's transcript, and what follows
- * from it.
- *
- * Plan: docs/superpowers/plans/2026-10-04-validation-order.md. Owner,
- * 4-oct-2026: categorizations are valid only if the transcript is valid.
- *
- * The verdict is the transcript's validity (transcript-validity.ts), decided
- * from the audio and the text alone: invalid, in doubt or incomplete means
- * nothing may be built on it. Search, the graph, the timeline, People and
- * identity rules leave it out through the eligibility boundary
- * (getEligibleRecordingIds), and the recording is not categorized: no stars,
- * kind or context, and no rating from its content. Nothing stored is deleted;
- * a new transcript, an accepted one, or one sampling confirms gives it back.
- *
- * Until 4-oct a broken transcript rated its recording "no value" (method
- * 'trust'). An invalid transcript over speech says nothing about the
- * recording's value, so those ratings are taken back.
+ * Content ratings require a clean validity verdict. Derived content has a
+ * narrower gate: only invalid text and density failures are withheld;
+ * doubtful and gap-only transcripts keep their useful title and summary.
  */
 
 import { getEventBus } from './event-bus'
 import { queryOne, run, getRowsModified } from './database'
 import { recomputeAudioWarnings } from './value-classification'
-import { isUnusableValidity } from './transcript-validity'
+import { shouldWithholdDerivedContent } from './transcript-validity'
 import { refreshTranscriptValidity } from './transcript-validity-store'
 
 /**
- * True when the recording's transcript is invalid, in doubt or incomplete, or
- * broken and not accepted. Over silence or noise the validity says "decided by
- * the audio", but text the integrity check calls broken is still not to be
- * built on.
+ * True when derived content must be withheld: invalid text or a density
+ * failure, unless the owner accepted it.
  */
 export function isTranscriptUntrusted(recordingId: string): boolean {
-  const row = queryOne<{ validity_status: string | null; integrity_status: string | null; integrity_accepted_at: string | null }>(
-    'SELECT validity_status, integrity_status, integrity_accepted_at FROM transcripts WHERE recording_id = ?',
+  const row = queryOne<{ validity_json: string | null; validity_status: string | null; integrity_status: string | null; integrity_accepted_at: string | null }>(
+    'SELECT validity_json, validity_status, integrity_status, integrity_accepted_at FROM transcripts WHERE recording_id = ?',
     [recordingId]
   )
   if (!row) return false
-  return isUnusableValidity(row.validity_status) || (row.integrity_status === 'broken' && !row.integrity_accepted_at)
+  if (row.integrity_accepted_at) return false
+  if (row.validity_status === 'doubtful') return false
+  try {
+    return shouldWithholdDerivedContent({ status: row.validity_status as 'invalid', reasons: JSON.parse(row.validity_json ?? '{}').reasons ?? [] }) || (!row.validity_status && row.integrity_status === 'broken')
+  } catch { return row.validity_status === 'incomplete' || row.integrity_status === 'broken' }
 }
 
 export interface TrustSyncResult {

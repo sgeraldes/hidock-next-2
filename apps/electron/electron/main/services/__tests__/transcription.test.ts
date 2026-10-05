@@ -121,6 +121,7 @@ let mockConfig = {
 
 // Mock database
 vi.mock('../database', () => ({
+  queryAll: vi.fn(() => []),
   addToQueue: (...args: any[]) => mockAddToQueue(...args),
   getRecordingById: (...args: any[]) => mockGetRecordingById(...args),
   updateRecordingStatus: (...args: any[]) => mockUpdateRecordingStatus(...args),
@@ -224,11 +225,9 @@ vi.mock('../config', () => ({
 // Mock google generative AI - make it fail
 // Used by analyzeTranscriptWithGemini and detectActionables which still call the SDK directly.
 vi.mock('@google/generative-ai', () => ({
-  GoogleGenerativeAI: vi.fn(() => ({
-    getGenerativeModel: vi.fn(() => ({
-      generateContent: (...args: any[]) => mockGenerateContent(...args)
-    }))
-  }))
+  GoogleGenerativeAI: vi.fn(function () {
+    return { getGenerativeModel: vi.fn(() => ({ generateContent: (...args: any[]) => mockGenerateContent(...args) })) }
+  })
 }))
 
 // Mock @hidock/transcription so GeminiEngine throws fast (avoids real network calls
@@ -1088,21 +1087,14 @@ describe('Transcription Service', () => {
       expect(skippedBy('run-actionable-detection')).not.toBe('transcript-untrusted')
     })
 
-    // Owner, 4-oct-2026: a transcript in doubt shows nothing derived from it.
-    it('asks no summary for a transcript in doubt, though the integrity check passes it', { timeout: 20000 }, async () => {
+    it('allows analysis of a doubtful transcript while retaining its verdict', { timeout: 20000 }, async () => {
       queueLocal('rec-doubtful')
       mockPreviewValidity.mockReturnValueOnce({ status: 'doubtful', reasons: [{ code: 'text_not_placeable_in_time' }] })
-
       await runUntilStored()
-
-      expect(mockGenerateContent).not.toHaveBeenCalled()
-      const stored = mockInsertTranscript.mock.calls[0][0]
-      expect(stored.summary).toBeUndefined()
+      expect(mockGenerateContent).toHaveBeenCalled()
       const database = await import('../database')
-      const refs = (runId: string) =>
-        (vi.mocked(database.completeProcessingRun).mock.calls.find(([id]) => id === runId)?.[1] as any)?.outputRefs
-      expect(refs('run-summary')?.findings).toEqual(['text_not_placeable_in_time'])
-      expect(refs('run-actionable-detection')?.skipped).toBe('transcript-untrusted')
+      const refs = (runId: string) => (vi.mocked(database.completeProcessingRun).mock.calls.find(([id]) => id === runId)?.[1] as any)?.outputRefs
+      expect(refs('run-actionable-detection')?.skipped).not.toBe('transcript-untrusted')
     })
   })
 
@@ -1784,3 +1776,17 @@ describe('repairJsonString — bracket balancing (ISSUE-9)', () => {
 // Recency-first queue ordering (orderPendingForProcessing) is covered in the
 // lightweight queue-ordering.test.ts — kept separate so those tests don't share
 // this file's worker, which OOMs at collection under Node 26 / vitest 4.
+
+it('warns once per session and leaves the queue paused when Gemini has no key', async () => {
+  mockConfig.transcription.provider = 'gemini'
+  mockConfig.transcription.geminiApiKey = ''
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+  const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+  const { processQueueManually, getQueueState } = await import('../transcription')
+  await processQueueManually()
+  await processQueueManually()
+  expect(warn.mock.calls.filter(c => String(c[0]).includes('no Gemini key'))).toHaveLength(1)
+  expect(error.mock.calls.filter(c => String(c[0]).includes('key not configured'))).toHaveLength(0)
+  expect(getQueueState().pauseReason).toBe('no_gemini_key')
+  warn.mockRestore(); error.mockRestore()
+})

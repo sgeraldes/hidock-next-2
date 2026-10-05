@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { getDisplayTitle } from '../getDisplayTitle'
 import type { UnifiedRecording } from '@/types/unified-recording'
-import type { Meeting } from '@/types'
+import type { Meeting, Transcript } from '@/types'
 
 const baseRecording: UnifiedRecording = {
   id: 'rec-1',
@@ -18,6 +18,17 @@ const baseRecording: UnifiedRecording = {
 const meeting = { id: 'm-1', subject: 'Weekly delivery review' } as Meeting
 
 describe('getDisplayTitle', () => {
+  it('restores transcript suggestions for doubtful and gap-only recordings while withholding density and invalid titles', () => {
+    for (const validity_status of ['doubtful', 'incomplete']) {
+      const transcript = { validity_status, validity_json: '{"reasons":[{"code":"sparse_long_segment"}]}', title_suggestion: 'Retained meeting title' } as Transcript
+      expect(getDisplayTitle(baseRecording, undefined, transcript).primaryText).toBe('Retained meeting title')
+    }
+    for (const validity_status of ['invalid', 'incomplete']) {
+      const transcript = { validity_status, validity_json: '{"reasons":[{"code":"sparse_speech"}]}', title_suggestion: 'Withheld title' } as Transcript
+      expect(getDisplayTitle({ ...baseRecording, title: 'Machine title' }, undefined, transcript).source).toBe('date')
+      expect(getDisplayTitle({ ...baseRecording, userTitle: 'Owner title' }, undefined, transcript).primaryText).toBe('Owner title')
+    }
+  })
   it('uses the calendar subject when the source is assigned', () => {
     expect(getDisplayTitle({ ...baseRecording, userTitle: 'Mine', title: 'AI' }, meeting)).toEqual({
       primaryText: 'Weekly delivery review',

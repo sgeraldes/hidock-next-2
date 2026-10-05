@@ -2089,8 +2089,11 @@ export function SourceReader({
                   >
                     <div className="max-w-[75ch] text-sm leading-relaxed text-foreground">
                       {trustedSummary(effectiveTranscript, recording.audioCategory)
-                        ? <p className="whitespace-pre-wrap">{trustedSummary(effectiveTranscript, recording.audioCategory)}</p>
-                        : effectiveTranscript.summary?.trim()
+                        ? <>
+                            {(effectiveTranscript.validity_status === 'doubtful' || effectiveTranscript.validity_status === 'incomplete') && <p className="mb-2 text-xs text-muted-foreground">{untrustedSummaryNote(effectiveTranscript)}</p>}
+                            <p className="whitespace-pre-wrap">{trustedSummary(effectiveTranscript, recording.audioCategory)}</p>
+                          </>
+                        : !isTranscriptTrusted(effectiveTranscript)
                           ? <p className="text-muted-foreground">{untrustedSummaryNote(effectiveTranscript)}</p>
                           : <p className="text-muted-foreground">No summary generated.</p>}
                     </div>

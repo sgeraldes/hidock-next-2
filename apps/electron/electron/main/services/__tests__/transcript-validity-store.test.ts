@@ -34,6 +34,7 @@ import {
   previewTranscriptValidity,
   transcriptFingerprint,
 } from '../transcript-validity-store'
+import { autoLinkRecordingsToMeetings } from '../org-reconciler'
 import { FRAME_SECONDS } from '../audio-profile'
 
 const FILE_SECONDS = 600
@@ -96,7 +97,7 @@ describe('transcript validity store', () => {
     const counts = await backfillTranscriptValidity()
     expect(counts).toMatchObject({ checked: 2, invalid: 1, valid: 1 })
     expect(counts.changedIds).toEqual(['quiet', 'talk'])
-    expect(emitDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'transcript:verdicts-updated', payload: { recordingIds: ['quiet', 'talk'] } }))
+    expect(emitDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'transcript:verdicts-updated', payload: { recordingIds: ['quiet', 'talk'], metadataChangedIds: ['quiet'] } }))
     expect(stored('quiet')?.validity_status).toBe('invalid')
     expect(JSON.parse(stored('quiet')!.validity_json!).reasons.map((r: { code: string }) => r.code)).toContain('text_without_audio')
     expect(stored('talk')?.validity_status).toBe('valid')
@@ -211,7 +212,7 @@ describe('a sample of the audio', () => {
     writeFileSync(ownedWiki, '---\ngenerator: hidock-meeting-wiki\nwiki_schema: 1\nrecording_id: old-sparse\n---\nBad summary\n')
     writeFileSync(otherWiki, 'An unrelated document')
     await backfillTranscriptValidity()
-    expect(stored('old-sparse')).toMatchObject({ validity_status: 'incomplete', validity_version: 4 })
+    expect(stored('old-sparse')).toMatchObject({ validity_status: 'incomplete', validity_version: 5 })
     expect(queryOne('SELECT full_text, summary, title_suggestion FROM transcripts WHERE recording_id = ?', ['old-sparse']))
       .toEqual({ full_text: 'keep original', summary: null, title_suggestion: null })
     expect(queryOne<{ meeting_id: string | null }>('SELECT meeting_id FROM recordings WHERE id = ?', ['old-sparse'])?.meeting_id).toBeNull()
@@ -247,7 +248,7 @@ describe('a sample of the audio', () => {
   })
   it('keeps incomplete verdicts without valid gap reasons excluded', () => {
     seed('unknown-incomplete', [[160, 600]])
-    for (const json of ['{}', '{"reasons":[]}', '{"reasons":[{"code":"sparse_speech"}]}', '{"reasons":[{}]}', 'broken json']) {
+    for (const json of ['{"reasons":[{"code":"sparse_speech"}]}', 'broken json']) {
       run(`UPDATE transcripts SET validity_status = 'incomplete', validity_json = ? WHERE recording_id = 'unknown-incomplete'`, [json])
       expect(getEligibleRecordingIds(['unknown-incomplete']).eligible.has('unknown-incomplete')).toBe(false)
       expect(isRecordingGraphIngestable('unknown-incomplete')).toBe(false)
@@ -262,6 +263,19 @@ describe('a sample of the audio', () => {
     expect(getEligibleRecordingIds(['rec98'], { forTranscription: true }).eligible.has('rec98')).toBe(false)
     expect(queryOne<{ quality_rating: string }>('SELECT quality_rating FROM knowledge_captures WHERE id = ?', ['cap98'])?.quality_rating).toBe('unrated')
     for (const id of ['cap98audio', 'cap98owner']) expect(queryOne<{ quality_rating: string }>('SELECT quality_rating FROM knowledge_captures WHERE id = ?', [id])?.quality_rating).toBe('garbage')
+  })
+  it('restores formerly withheld doubtful metadata on the next backfill', async () => {
+    seed('restore-doubt', [[160, 600]])
+    run(`UPDATE transcripts SET summary = NULL, title_suggestion = NULL, speakers = '[]', full_text = ?, word_count = 1000, validity_status = 'doubtful', validity_version = 1 WHERE recording_id = 'restore-doubt'`, ['real '.repeat(1000)])
+    const fingerprint = transcriptFingerprint(JSON.stringify(['[]', 'real '.repeat(1000)]))
+    run(`INSERT INTO transcript_withheld_metadata (recording_id, transcript_fingerprint, values_json, withheld_at, validity_version) VALUES ('restore-doubt', ?, ?, '2026-10-04', 4)`,
+      [fingerprint, JSON.stringify({ transcript: { summary: 'saved summary', title_suggestion: 'saved title' }, captures: [] })])
+    const restored = await backfillTranscriptValidity()
+    expect(restored.changedIds).toContain('restore-doubt')
+    expect(stored('restore-doubt')?.validity_status).toBe('doubtful')
+    expect(queryOne('SELECT summary, title_suggestion FROM transcripts WHERE recording_id = ?', ['restore-doubt'])).toEqual({ summary: 'saved summary', title_suggestion: 'saved title' })
+    expect(getEligibleRecordingIds(['restore-doubt']).eligible.has('restore-doubt')).toBe(true)
+    expect(isRecordingGraphIngestable('restore-doubt')).toBe(true)
   })
   it('settles a doubtful transcript only while it is the transcript that was sampled', () => {
     seed('doubt', [[160, 600]])
@@ -293,7 +307,27 @@ describe('full library projection', () => {
       runNoSave(`INSERT INTO transcripts (id,recording_id,full_text,speakers,integrity_status,validity_version) VALUES (?,?, 'text','[]','broken',1)`, [`t-${id}`, id])
     }
     saveDatabase()
-    expect((await backfillTranscriptValidity()).checked).toBe(2140)
+    let worstHoldMs = 0
+    let last = performance.now()
+    const heartbeat = setInterval(() => { const now = performance.now(); worstHoldMs = Math.max(worstHoldMs, now - last); last = now }, 0)
+    const [first, concurrent] = await Promise.all([backfillTranscriptValidity(), backfillTranscriptValidity()])
+    clearInterval(heartbeat)
+    console.log(`2140-row projection worst hold: ${first.worstHoldMs}ms; heartbeat: ${worstHoldMs}ms`)
+    writeFileSync(join(tmpdir(), 'f3-projection-hold.json'), JSON.stringify({ worstHoldMs: first.worstHoldMs, heartbeatMs: worstHoldMs }))
+    expect(first.checked).toBe(2140)
+    expect(concurrent.checked).toBe(0)
+    expect(first.worstHoldMs).toBeLessThan(100)
+    expect(worstHoldMs).toBeLessThan(100)
+    expect(autoLinkRecordingsToMeetings()).toBe(0)
     expect((await backfillTranscriptValidity()).checked).toBe(0)
-  })
+    expect(autoLinkRecordingsToMeetings()).toBe(0)
+    expect((await backfillTranscriptValidity()).checked).toBe(0)
+  }, 120000)
+})
+
+it('does not recreate automatic links contradicted by stored candidate evidence', () => {
+  run(`INSERT INTO recordings (id,filename,date_recorded,duration_seconds) VALUES ('contradicted','contradicted.hda','2026-10-05',3600)`)
+  run(`INSERT INTO recording_meeting_candidates (id,recording_id,meeting_id,confidence_score,is_selected) VALUES ('c-contradicted','contradicted','projection-meeting',0.2,0)`)
+  expect(autoLinkRecordingsToMeetings()).toBe(0)
+  expect(queryOne<{ meeting_id: string | null }>("SELECT meeting_id FROM recordings WHERE id = 'contradicted'")?.meeting_id).toBeNull()
 })

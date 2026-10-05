@@ -1,3 +1,4 @@
+import { toNamespacedPath } from 'path'
 /**
  * @hidock/database — reusable SQLite engine (better-sqlite3 + WAL).
  *
@@ -678,16 +679,16 @@ export class DatabaseEngine {
         // Only this exact engine-owned naming convention is eligible. Remove
         // interrupted copies before the free-space check so retries can recover.
         for (const file of readdirSync(dir)) {
-          if (file.startsWith(prefix) && /^pre-v\d+\.partial$/.test(file.slice(prefix.length))) {
+          if (file === `${base}.p` || (file.startsWith(prefix) && /^pre-v\d+\.partial$/.test(file.slice(prefix.length)))) {
             rmSync(join(dir, file), { force: true })
           }
         }
       }
       const day = new Date().toISOString().slice(0, 10)
       const version = failClosed ? this.readSchemaVersion() : 0
-      const bak = join(dir, failClosed
-        ? `${prefix}pre-v${this.config.schemaVersion}-${new Date().toISOString().replace(/[-:.]/g, '')}-${randomUUID()}`
-        : `${prefix}${day}`)
+      const bak = toNamespacedPath(join(dir, failClosed
+        ? `${prefix}pre-v${this.config.schemaVersion}-${Date.now().toString(36)}-${randomUUID().slice(0, 4)}`
+        : `${prefix}${day}`))
       let reused = false
       const reusable = failClosed ? this.reusableExternalBackup(before, version) : null
       if (reusable) {
@@ -709,7 +710,7 @@ export class DatabaseEngine {
         // Node event loop and includes committed WAL pages. A raw copyFileSync
         // of the 2.79 GB main file blocked Electron startup for ~153 seconds and
         // could omit WAL state.
-        const partial = failClosed ? join(dir, `${prefix}pre-v${this.config.schemaVersion}.partial`) : `${bak}.partial`
+        const partial = failClosed ? toNamespacedPath(join(dir, `${base}.p`)) : `${bak}.partial`
         if (!failClosed) rmSync(partial, { force: true })
         const source = new this.config.betterSqlite3(this.dbPath, { readonly: true, fileMustExist: true })
         try {
@@ -777,8 +778,8 @@ export class DatabaseEngine {
       // Independent retention: target version is not chronological, so sort by
       // the timestamp, and protect this boot's restore point even after clock drift.
       const migrationBackups = directoryEntries
-        .filter(file => file.startsWith(prefix) && /^pre-v\d+-\d{8}T\d{9}Z-[\w-]+$/.test(file.slice(prefix.length)))
-        .filter(file => join(dir, file) !== bak)
+        .filter(file => file.startsWith(prefix) && /^pre-v\d+-(?:\d{8}T\d{9}Z-[\w-]+|[a-z0-9]+-[a-f0-9]{4})$/.test(file.slice(prefix.length)))
+        .filter(file => toNamespacedPath(join(dir, file)) !== bak)
         .sort((a, b) => a.replace(/^.*\.bak-pre-v\d+-/, '').localeCompare(b.replace(/^.*\.bak-pre-v\d+-/, '')))
       const keepOthers = failClosed ? 2 : 3
       for (const stale of migrationBackups.slice(0, Math.max(0, migrationBackups.length - keepOthers))) {

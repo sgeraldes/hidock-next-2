@@ -28,7 +28,7 @@
 import { FRAME_SECONDS, LOUD_DB, LOUD_GAIN } from './audio-profile'
 
 /** Bumped when a rule changes, so stored verdicts are recomputed. */
-export const VALIDITY_VERSION = 4
+export const VALIDITY_VERSION = 5
 
 export type ValidityStatus = 'audio' | 'invalid' | 'incomplete' | 'doubtful' | 'valid'
 
@@ -179,8 +179,17 @@ export const MIN_WORDS_PER_SOUND_MINUTE = 90
  * with the sampler, which places its windows where there is audio.
  */
 export function audioFrameTest(env: Uint8Array, unit: 'gain' | 'db' = 'gain'): (frame: number) => boolean {
-  const sorted = Uint8Array.from(env).sort()
-  const floor = sorted[Math.floor(sorted.length * 0.05)]
+  // Bytes have only 256 values: an exact histogram avoids sorting a copy of
+  // every long envelope on the main thread during library backfill.
+  const histogram = new Uint32Array(256)
+  for (const value of env) histogram[value]++
+  const rank = Math.floor(env.length * 0.05)
+  let floor = 0
+  let count = 0
+  for (; floor < 255; floor++) {
+    count += histogram[floor]
+    if (count > rank) break
+  }
   const decoded = unit === 'db'
   const margin = decoded ? FLOOR_MARGIN_DB : FLOOR_MARGIN
   const loud = decoded ? LOUD_DB + 100 : LOUD_GAIN
@@ -418,6 +427,10 @@ export function isUnusableValidity(status: string | null | undefined): boolean {
 
 /** Gap-only text remains useful; density failures cannot support derived content. */
 export function isGapOnlyValidity(validity: TranscriptValidity): boolean {
-  return validity.status === 'incomplete' && validity.reasons.length > 0 &&
-    validity.reasons.every(r => ['sparse_long_segment', 'uncovered_speech', 'speech_after_the_end'].includes(r.code))
+  return validity.status === 'incomplete' && !validity.reasons.some(r => r.code === 'sparse_speech')
+}
+
+/** Coordinator: timing doubts and missing spans retain their useful derived content. */
+export function shouldWithholdDerivedContent(validity: Pick<TranscriptValidity, 'status' | 'reasons'>): boolean {
+  return validity.status === 'invalid' || validity.reasons.some(r => r.code === 'sparse_speech')
 }

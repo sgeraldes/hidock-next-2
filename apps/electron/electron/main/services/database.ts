@@ -5288,14 +5288,13 @@ export function isRecordingGraphIngestable(recordingId: string): boolean {
   if (!rec) return false
   if (isValueExcludedRecording(recordingId)) return false
   // Gap-only transcripts keep their real content. Density-failed, invalid and
-  // doubtful transcripts feed no graph; the reader boundary uses the same rule.
+  // timing doubts retain their graph; the reader boundary uses the same rule.
   const unusable = queryOne<{ x: number }>(
     `SELECT 1 AS x FROM transcripts t WHERE t.recording_id = ?
-        AND (t.validity_status IN ('invalid', 'doubtful') OR
-          (t.validity_status = 'incomplete' AND NOT (
-            json_valid(t.validity_json) AND COALESCE(json_array_length(CASE WHEN json_valid(t.validity_json) THEN t.validity_json ELSE '{}' END, '$.reasons'), 0) > 0
-            AND NOT EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(t.validity_json) THEN t.validity_json ELSE '{}' END, '$.reasons') reason
-              WHERE COALESCE(json_extract(reason.value, '$.code'), '') NOT IN ('sparse_long_segment', 'uncovered_speech', 'speech_after_the_end'))))) AND t.integrity_accepted_at IS NULL`,
+        AND (t.validity_status = 'invalid' OR
+          (t.validity_status = 'incomplete' AND (NOT json_valid(t.validity_json) OR
+            EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(t.validity_json) THEN t.validity_json ELSE '{}' END, '$.reasons') reason
+              WHERE json_extract(reason.value, '$.code') = 'sparse_speech')))) AND t.integrity_accepted_at IS NULL`,
     [recordingId]
   )
   return !unusable
@@ -5389,11 +5388,10 @@ export interface RecordingEligibility {
 const UNUSABLE_TRANSCRIPT_EXCLUSION = `AND NOT EXISTS (
               SELECT 1 FROM transcripts t
                WHERE t.recording_id = r.id
-                 AND (t.validity_status IN ('invalid', 'doubtful') OR
-          (t.validity_status = 'incomplete' AND NOT (
-            json_valid(t.validity_json) AND COALESCE(json_array_length(CASE WHEN json_valid(t.validity_json) THEN t.validity_json ELSE '{}' END, '$.reasons'), 0) > 0
-            AND NOT EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(t.validity_json) THEN t.validity_json ELSE '{}' END, '$.reasons') reason
-              WHERE COALESCE(json_extract(reason.value, '$.code'), '') NOT IN ('sparse_long_segment', 'uncovered_speech', 'speech_after_the_end')))))
+                 AND (t.validity_status = 'invalid' OR
+          (t.validity_status = 'incomplete' AND (NOT json_valid(t.validity_json) OR
+            EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(t.validity_json) THEN t.validity_json ELSE '{}' END, '$.reasons') reason
+              WHERE json_extract(reason.value, '$.code') = 'sparse_speech'))))
                  AND t.integrity_accepted_at IS NULL)`
 
 export function getEligibleRecordingIds(

@@ -177,6 +177,7 @@ export function OperationsPanel({ sidebarOpen }: OperationsPanelProps) {
   const dismissManyItems = useTranscriptionStore((s) => s.dismissMany)
   // One switch for downloads + transcriptions, shared with the Library header.
   const { paused: processingPaused, transcriptionPaused, toggle: toggleProcessing } = useProcessingPause()
+  const pauseReason = useTranscriptionStore((s) => s.pauseReason)
   const applyQueueState = useTranscriptionStore((s) => s.applyQueueState)
   const recordings = useUnifiedRecordings()
   const { cancelTranscription, cancelDownload, cancelAllDownloads, retryFailedDownloads } = useOperations()
@@ -287,7 +288,7 @@ export function OperationsPanel({ sidebarOpen }: OperationsPanelProps) {
   const hasTranscriptions =
     transcriptionStats.pending > 0 || transcriptionStats.processing > 0 || transcriptionStats.failed > 0
   // Stay visible while paused, so Resume is always one click away.
-  if (!hasDownloads && !hasFailedDownloads && !hasTranscriptions && downloadHistory.earlier.length === 0 && !processingPaused) return null
+  if (!hasDownloads && !hasFailedDownloads && !hasTranscriptions && downloadHistory.earlier.length === 0 && !processingPaused && !pauseReason) return null
 
   const activeTranscriptions = transcriptionStats.processing + transcriptionStats.pending
   const transcriptionHistory = splitBySession(
@@ -337,7 +338,7 @@ export function OperationsPanel({ sidebarOpen }: OperationsPanelProps) {
           <button
             type="button"
             onClick={openOverlay}
-            aria-label={`Operations: ${activeTranscriptions} transcribing${errorCount ? `, ${errorCount} error(s)` : ''}`}
+            aria-label={`Operations: ${pauseReason === 'no_gemini_key' ? 'Transcription paused: no Gemini key, ' : ''}${activeTranscriptions} transcribing${errorCount ? `, ${errorCount} error(s)` : ''}`}
             className="relative flex w-full flex-col items-center gap-1 rounded-md py-1 text-slate-300 hover:bg-slate-800"
           >
             {hasTranscriptions && (
@@ -364,6 +365,7 @@ export function OperationsPanel({ sidebarOpen }: OperationsPanelProps) {
 
   // Expanded sidebar: activity + honest indeterminate stage + error count.
   const primaryLabel =
+    pauseReason === 'no_gemini_key' ? 'Transcription paused: no Gemini key' :
     activeTranscriptions > 0
       ? `${activeTranscriptions} transcribing`
       : hasDownloads
@@ -475,6 +477,7 @@ function OperationsOverlay({
   onDismissDownload,
   onRetryFailedDownloads
 }: OperationsOverlayProps) {
+  const pauseReason = useTranscriptionStore((s) => s.pauseReason)
   const [copiedErrorId, setCopiedErrorId] = useState<string | null>(null)
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set())
   const [earlierOpen, setEarlierOpen] = useState(false)
@@ -532,6 +535,7 @@ function OperationsOverlay({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-6" role="dialog" aria-modal="true" aria-label="Operations detail">
       <button type="button" aria-label="Close" className="absolute inset-0 bg-black/50" onClick={onClose} />
       <div className="relative z-10 flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-slate-700 bg-slate-900 text-slate-100 shadow-2xl">
+        {pauseReason === 'no_gemini_key' && <p className="px-4 py-2 text-xs text-amber-300">Transcription paused: no Gemini key</p>}
         <div className="flex items-center justify-between border-b border-slate-700 px-4 py-3">
           <div className="flex items-center gap-2">
             <Sparkles className="h-4 w-4 text-purple-400" />

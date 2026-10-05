@@ -159,7 +159,7 @@ import { analyzeAudioPreflight, type AudioPreflightReport } from './audio-prefli
 import { audioProfileForTranscription } from './audio-profile-store'
 import { isTranscriptUntrusted, syncTrustVerdicts } from './transcript-trust'
 import { previewTranscriptValidity } from './transcript-validity-store'
-import { assessTranscriptValidity, isUnusableValidity, MIN_COMPLETENESS_SPEECH_SECONDS } from './transcript-validity'
+import { assessTranscriptValidity, shouldWithholdDerivedContent, MIN_COMPLETENESS_SPEECH_SECONDS } from './transcript-validity'
 import { retryInSmallerChunks } from './transcription-completeness-retry'
 import { sliceContext } from './transcription-slice-context'
 import { storeDiarizedSegments } from './diarization-store'
@@ -341,7 +341,10 @@ export function isQueuePaused(): boolean {
   return queuePaused
 }
 
+let missingGeminiKeyWarned = false
+
 export interface TranscriptionQueueState {
+  pauseReason?: 'no_gemini_key' | null
   paused: boolean
   isProcessing: boolean
   processingId: string | null
@@ -354,6 +357,7 @@ export interface TranscriptionQueueState {
 /** Snapshot of the queue processor for the renderer (dock) to reflect. */
 export function getQueueState(): TranscriptionQueueState {
   return {
+    pauseReason: (getConfig().transcription.provider || 'gemini') === 'gemini' && !resolveGeminiApiKey() ? 'no_gemini_key' : null,
     paused: queuePaused,
     isProcessing,
     processingId: currentProcessingId,
@@ -713,27 +717,11 @@ async function processQueue(): Promise<void> {
     const config = getConfig()
     const provider = config.transcription.provider || 'gemini'
     if (provider === 'gemini' && !resolveGeminiApiKey()) {
-      console.error('[Transcription] Cannot process queue: Gemini API key not configured')
-
-      // Mark all pending items as failed with clear error message
-      const pendingItems = getQueueItems('pending')
-      const processingItems = getQueueItems('processing')
-
-      const allStuckItems = [...pendingItems, ...processingItems]
-      if (allStuckItems.length > 0) {
-        console.log(`[Transcription] Marking ${allStuckItems.length} stuck items as failed (no API key)`)
-
-        for (const item of allStuckItems) {
-          updateQueueItem(item.id, 'failed', 'Gemini API key not configured. Please add your API key in Settings.')
-          updateRecordingTranscriptionStatus(item.recording_id, 'error')
-          notifyRenderer('transcription:failed', {
-            queueItemId: item.id,
-            recordingId: item.recording_id,
-            error: 'Gemini API key not configured. Please add your API key in Settings.'
-          })
-        }
+      if (!missingGeminiKeyWarned) {
+        missingGeminiKeyWarned = true
+        console.warn('[Transcription] Transcription paused: no Gemini key')
       }
-
+      emitQueueState()
       return
     } else if (provider === 'local-asr' || provider === 'vibevoice') {
       const asrPath = config.transcription.localAsrPath
@@ -2655,7 +2643,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     )
   }
   if (completeness.status === 'incomplete') validityNow = completeness
-  let transcriptUntrusted = integrityNow?.status === 'broken' || isUnusableValidity(validityNow?.status)
+  let transcriptUntrusted = integrityNow?.status === 'broken' || (validityNow ? shouldWithholdDerivedContent(validityNow) : false)
   const trustFindings = [
     ...(integrityNow?.issues ?? []).map((issue) => issue.code),
     ...(validityNow?.reasons ?? []).map((reason) => reason.code)

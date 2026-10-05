@@ -269,7 +269,7 @@ describe('rotating on-boot backup', () => {
         externalBackups,
       })
     }
-    const todays = (path: string) => siblingFiles(path).filter((f) => /\.bak-pre-v2-\d{8}T\d{9}Z-[\w-]+$/.test(f) && !/-wal$|-shm$/.test(f))
+    const todays = (path: string) => siblingFiles(path).filter((f) => /\.bak-pre-v2-(?:\d{8}T\d{9}Z-[\w-]+|[a-z0-9]+-[a-f0-9]{4})$/.test(f) && !/-wal$|-shm$/.test(f))
 
     it('ignores a stale same-day daily backup and verifies current contents before migration', async () => {
       const path = await v1File('backup-same-day')
@@ -313,7 +313,7 @@ describe('rotating on-boot backup', () => {
 
     it('removes an interrupted owned partial before checking space and recovers without removing other files', async () => {
       const path = await v1File('backup-interrupted')
-      const partial = `${path}.bak-pre-v2.partial`
+      const partial = `${path}.p`
       const unrelated = `${path}.bak-pre-v2-user.partial`
       const otherVersion = `${path}.bak-pre-v1.partial`
       writeFileSync(unrelated, 'user file')

@@ -484,3 +484,10 @@ describe('OperationsPanel', () => {
     })
   })
 })
+
+it('shows a missing Gemini key even when the queue is empty', () => {
+  setupDefaultMocks()
+  vi.mocked(useTranscriptionStore).mockImplementation((selector: any) => selector({ ...makeTranscriptionState(new Map()), pauseReason: 'no_gemini_key' }))
+  render(<OperationsPanel sidebarOpen />)
+  expect(screen.getAllByText('Transcription paused: no Gemini key').length).toBeGreaterThan(0)
+})

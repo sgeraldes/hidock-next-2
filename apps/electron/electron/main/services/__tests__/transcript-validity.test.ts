@@ -276,3 +276,19 @@ describe('assessTranscriptValidity', () => {
     expect(v.reasons.map((r) => r.code)).toContain('no_times')
   })
 })
+
+it('frame floor agrees with the exact sorted fifth percentile for long envelopes', async () => {
+  const { audioFrameTest } = await import('../transcript-validity')
+  const env = Uint8Array.from({ length: 300000 }, (_, i) => (i * 31) % 256)
+  const sorted = Uint8Array.from(env).sort()
+  const floor = sorted[Math.floor(sorted.length * 0.05)]
+  const test = audioFrameTest(env)
+  for (let i = 0; i < env.length; i += 97) expect(test(i)).toBe(env[i] >= floor + 2 || env[i] > 142)
+})
+
+it.each([[440, 1150.669], [847, 2012.507]])('historical Rec44/Rec91 remain density failures (%s words)', (words, speech) => {
+  const verdict = assessTranscriptValidity({ fileName: 'historical.wav', segments: [], fullText: 'word '.repeat(words), envelope: null, audioCategory: 'speech', attendees: 0, integrityStatus: 'ok', accepted: false, vadSpeechSeconds: speech })
+  expect(verdict.status).toBe('incomplete')
+  expect(verdict.reasons).toContainEqual(expect.objectContaining({ code: 'sparse_speech' }))
+  expect(verdict.measures.wordsPerSpeechMinute).toBeLessThan(30)
+})

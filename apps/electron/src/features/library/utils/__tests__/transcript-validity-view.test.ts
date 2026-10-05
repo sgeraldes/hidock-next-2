@@ -14,18 +14,21 @@ describe('transcript validity in the Library', () => {
     expect(isTranscriptTrusted({ integrity_status: 'ok', validity_status: 'audio' })).toBe(true)
   })
 
-  it('holds back a transcript that is invalid, in doubt or incomplete, though the integrity check passes it', () => {
-    for (const validity_status of ['invalid', 'doubtful', 'incomplete'] as const) {
-      expect(isTranscriptTrusted({ integrity_status: 'ok', validity_status })).toBe(false)
-      expect(trustedSummary({ integrity_status: 'ok', validity_status, summary: 'Resumen.' }, 'speech')).toBeNull()
+  it('keeps doubtful and gap-only summaries but withholds invalid and density failures', () => {
+    for (const validity_status of ['doubtful', 'incomplete'] as const) {
+      const t = { integrity_status: 'ok' as const, validity_status, validity_json: JSON.stringify({ reasons: [{ code: 'speech_after_the_end' }] }), summary: 'Resumen.' }
+      expect(isTranscriptTrusted(t)).toBe(true)
+      expect(trustedSummary(t, 'speech')).toBe('Resumen.')
+      expect(untrustedSummaryNote(t)).not.toMatch(/No summary/)
     }
-    expect(trustedSummary({ integrity_status: 'ok', validity_status: 'valid', summary: 'Resumen.' }, 'speech')).toBe('Resumen.')
+    expect(trustedSummary({ validity_status: 'invalid', summary: 'Resumen.' }, 'speech')).toBeNull()
+    expect(trustedSummary({ validity_status: 'incomplete', validity_json: JSON.stringify({ reasons: [{ code: 'sparse_speech' }] }), summary: 'Resumen.' }, 'speech')).toBeNull()
   })
 
   it('says why the summary is missing', () => {
     expect(untrustedSummaryNote({ integrity_status: 'broken' })).toBe(UNTRUSTED_SUMMARY_NOTE)
     expect(untrustedSummaryNote({ integrity_status: 'ok', validity_status: 'invalid' })).toBe(UNTRUSTED_SUMMARY_NOTE)
     expect(untrustedSummaryNote({ integrity_status: 'ok', validity_status: 'doubtful' })).toMatch(/in doubt/)
-    expect(untrustedSummaryNote({ integrity_status: 'ok', validity_status: 'incomplete' })).toMatch(/stops before/)
+    expect(untrustedSummaryNote({ integrity_status: 'ok', validity_status: 'incomplete' })).toMatch(/No summary/)
   })
 })

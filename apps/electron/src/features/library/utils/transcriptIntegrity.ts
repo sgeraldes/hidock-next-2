@@ -55,7 +55,7 @@ export const ISSUE_ORDER: IntegrityIssueCode[] = [
   'untimed_lines',
 ]
 
-type IntegrityFields = Pick<Transcript, 'integrity_status' | 'integrity_json' | 'integrity_accepted_at' | 'validity_status'>
+type IntegrityFields = Pick<Transcript, 'integrity_status' | 'integrity_json' | 'integrity_accepted_at' | 'validity_status' | 'validity_json'>
 
 export function integrityLabel(transcript: IntegrityFields | null | undefined): IntegrityLabel {
   if (transcript?.integrity_accepted_at) return 'accepted'
@@ -65,19 +65,18 @@ export function integrityLabel(transcript: IntegrityFields | null | undefined): 
   return status === 'broken' ? 'broken' : 'suspect'
 }
 
-/** Validity verdicts on which nothing may be built (services/transcript-validity.ts). */
-const UNUSABLE_VALIDITY = new Set(['invalid', 'incomplete', 'doubtful'])
-
-/**
- * Whether anything may be built on this transcript (summary, actions, search).
- * Mirrors isTranscriptUntrusted in the main process: broken and not accepted
- * by the owner, or a validity verdict of invalid, in doubt or incomplete
- * (owner, 4-oct-2026: a doubtful transcript shows nothing derived from it).
- * An unchecked transcript is trusted.
- */
-export function isTranscriptTrusted(transcript: IntegrityFields | null | undefined): boolean {
-  if (integrityLabel(transcript) === 'broken') return false
-  return !UNUSABLE_VALIDITY.has(transcript?.validity_status ?? '')
+/** Only invalid text and density failures withhold derived content. */
+export function isTranscriptTrusted(transcript: Partial<IntegrityFields> | null | undefined): boolean {
+  if (transcript?.integrity_accepted_at) return true
+  if (transcript?.validity_status === 'invalid') return false
+  if (transcript?.validity_status === 'doubtful') return true
+  if (transcript?.validity_status === 'incomplete') {
+    try {
+      const verdict = JSON.parse(transcript.validity_json ?? '{}')
+      return Array.isArray(verdict.reasons) && !verdict.reasons.some((r: { code?: string }) => r.code === 'sparse_speech')
+    } catch { return false }
+  }
+  return integrityLabel(transcript as IntegrityFields) !== 'broken'
 }
 
 type TrustFields = Partial<IntegrityFields>
@@ -103,9 +102,13 @@ export const UNTRUSTED_SUMMARY_NOTE = 'No summary: the transcript does not match
 
 /** The note for a summary held back, in the words of the transcript's verdict. */
 export function untrustedSummaryNote(transcript: Partial<IntegrityFields> | null | undefined): string {
+  if (isTranscriptTrusted(transcript)) {
+    if (transcript?.validity_status === 'doubtful') return 'The transcript is in doubt; parts of the recording may be missing.'
+    return 'Parts of the recording are missing from the transcript.'
+  }
   if (integrityLabel(transcript as IntegrityFields) === 'broken') return UNTRUSTED_SUMMARY_NOTE
   if (transcript?.validity_status === 'doubtful') return 'No summary: the transcript is in doubt until it is checked against the audio.'
-  if (transcript?.validity_status === 'incomplete') return 'No summary: the transcript stops before the speech in the audio ends.'
+  if (transcript?.validity_status === 'incomplete') return 'No summary: too little text for the detected speech.'
   return UNTRUSTED_SUMMARY_NOTE
 }
 
@@ -143,7 +146,7 @@ export function matchesIntegrityFilter(
   if (filter === null) return true
   if (filter.startsWith('validity:')) return heldValidity(transcript) === filter.slice('validity:'.length)
   const label = integrityLabel(transcript)
-  if (filter === 'flagged') return label === 'suspect' || label === 'broken' || heldValidity(transcript) !== null
+  if (filter === 'flagged') return heldValidity(transcript) === 'invalid' || heldValidity(transcript) === 'incomplete' || (!transcript?.validity_status && label === 'broken')
   if (filter === 'broken') return label === 'broken'
   if (filter === 'accepted') return label === 'accepted'
   if (label !== 'suspect' && label !== 'broken') return false
@@ -155,6 +158,7 @@ export function integrityFilterLabel(filter: IntegrityFilter): string {
   if (filter === 'flagged') return 'Transcription problems'
   if (filter === 'broken') return 'Text does not fit the audio'
   if (filter === 'accepted') return 'Accepted as is'
+  if (filter === 'validity:doubtful') return 'Doubtful transcripts'
   if (filter.startsWith('validity:')) return VALIDITY_LABELS[filter.slice('validity:'.length) as HeldValidity]?.chip ?? filter
   return ISSUE_TAGS[filter.slice('issue:'.length) as IntegrityIssueCode] ?? filter
 }

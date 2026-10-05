@@ -334,6 +334,7 @@ interface MergeJournalEntry {
 
 /** Snapshot of the main-process transcription queue processor (dock reflects this). */
 export interface TranscriptionQueueState {
+  pauseReason?: 'no_gemini_key' | null
   paused: boolean
   isProcessing: boolean
   processingId: string | null
