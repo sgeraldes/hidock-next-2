@@ -460,6 +460,13 @@ export interface ElectronAPI {
   }
 
   // Database - Recordings
+  pcRecorder: {
+    start: () => Promise<string>
+    append: (id: string, index: number, data: Uint8Array) => Promise<void>
+    finish: (id: string) => Promise<{ success: boolean; error?: string }>
+    resumeUnload: () => Promise<void>
+    onStopRequested: (callback: () => void) => () => void
+  }
   recordings: {
     getAll: () => Promise<any[]>
     // Soft-deleted (tombstoned) recordings feeding the Trash UI (spec-005/F17
@@ -973,6 +980,7 @@ export interface ElectronAPI {
       version: number
       recordingId: string
       peaks: number[]
+      channels?: number[][]
       sampleCount: number
       duration: number
       fileSize: number
@@ -980,7 +988,7 @@ export interface ElectronAPI {
       /** Drawn from the loudness envelope; the player replaces it with the decoded one. */
       coarse?: boolean
     } | null>
-    setCache: (recordingId: string, peaks: number[], duration?: number, fileSize?: number) => Promise<boolean>
+    setCache: (recordingId: string, peaks: number[], duration?: number, fileSize?: number, channels?: number[][]) => Promise<boolean>
     clearCache: (recordingId: string) => Promise<boolean>
   }
 
@@ -1700,6 +1708,17 @@ export interface ElectronAPI {
 const BOOT_DISABLED_ARG = '--hidock-boot-disabled-features='
 
 const electronAPI: ElectronAPI = {
+  pcRecorder: {
+    resumeUnload: () => callIPC('pc-recorder:resume-unload'),
+    start: () => callIPC('pc-recorder:start'),
+    append: (id, index, data) => callIPC('pc-recorder:append', id, index, data),
+    finish: (id) => callIPC('pc-recorder:finish', id),
+    onStopRequested: (callback) => {
+      const listener = () => callback()
+      ipcRenderer.on('pc-recorder:request-stop', listener)
+      return () => ipcRenderer.removeListener('pc-recorder:request-stop', listener)
+    }
+  },
   bootDisabledFeatures: (
     process.argv.find((arg) => arg.startsWith(BOOT_DISABLED_ARG))?.slice(BOOT_DISABLED_ARG.length) ?? ''
   )
@@ -1992,8 +2011,8 @@ const electronAPI: ElectronAPI = {
 
   waveform: {
     getCache: (recordingId, fileSize) => callIPC('waveform:getCache', recordingId, fileSize),
-    setCache: (recordingId, peaks, duration, fileSize) =>
-      callIPC('waveform:setCache', recordingId, peaks, duration, fileSize),
+    setCache: (recordingId, peaks, duration, fileSize, channels) =>
+      callIPC('waveform:setCache', recordingId, peaks, duration, fileSize, channels),
     clearCache: (recordingId) => callIPC('waveform:clearCache', recordingId)
   },
 

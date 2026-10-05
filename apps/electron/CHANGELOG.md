@@ -11,6 +11,10 @@ pairs with it, gives it the Hugging Face token and decides when it steps aside.
 
 ### Changes
 
+- **Record meetings on your PC.** New > Record opens a bar that stays across pages, with separate
+  microphone and system levels. Stereo WebM keeps mic on the left and system audio on the right;
+  saved and recovered recordings enter the Library through the file-import path.
+
 - **Listen while labeling.** Reference labels include the original local audio with play/pause,
   seeking, 15-second jumps and a Space shortcut; unavailable audio never blocks labeling.
   A clear Library-category question now includes calendar title and attendees, recording date,

@@ -940,7 +940,7 @@ function ensureTranscriptionPrerequisites(recordingId: string): string | null {
   return recording.id
 }
 
-export function queueTranscriptionIfEnabled(recordingId: string): boolean {
+export function queueTranscriptionIfEnabled(recordingId: string, options: { deferProcessing?: boolean } = {}): boolean {
   if (getConfig().transcription.autoTranscribe !== true) return false
   if (!isFeatureEnabled('transcription')) return false
   const canonicalId = ensureTranscriptionPrerequisites(recordingId)
@@ -952,7 +952,7 @@ export function queueTranscriptionIfEnabled(recordingId: string): boolean {
     recordingId: canonicalId,
     filename: getRecordingById(canonicalId)?.filename
   })
-  processQueueManually()
+  if (!options.deferProcessing) processQueueManually()
   return true
 }
 

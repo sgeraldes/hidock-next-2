@@ -28,8 +28,8 @@ export function registerWaveformCacheHandlers(): void {
 
   ipcMain.handle(
     'waveform:setCache',
-    async (_event, recordingId: string, peaks: number[], duration?: number, fileSize?: number) => {
-      return setWaveformCache(recordingId, peaks, duration ?? 0, fileSize ?? 0)
+    async (_event, recordingId: string, peaks: number[], duration?: number, fileSize?: number, channels?: number[][]) => {
+      return setWaveformCache(recordingId, peaks, duration ?? 0, fileSize ?? 0, false, channels)
     }
   )
 

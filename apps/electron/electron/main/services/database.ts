@@ -1,3 +1,4 @@
+import { MIN_MEETING_CONFIDENCE } from '../../../src/shared/meeting-confidence'
 import Database from 'better-sqlite3'
 import { RECORDING_AUDIO_EXTENSIONS } from '../../../src/shared/audio-extensions'
 import { existsSync, readdirSync, readFileSync } from 'fs'
@@ -5069,6 +5070,7 @@ export interface Recording {
   created_at: string
   // New lifecycle fields
   location: 'device-only' | 'local-only' | 'both' | 'deleted'
+  transcription_error?: string | null
   transcription_status: 'none' | 'pending' | 'processing' | 'complete' | 'error'
   on_device: number
   device_last_seen?: string
@@ -5098,6 +5100,8 @@ export interface Recording {
 export function getRecordings(): Recording[] {
   return queryAll<Recording>(
     `SELECT r.*, m.subject AS meeting_subject,
+            (SELECT tq.error_message FROM transcription_queue tq WHERE tq.recording_id = r.id
+              AND tq.status = 'failed' ORDER BY tq.created_at DESC, tq.rowid DESC LIMIT 1) AS transcription_error,
             video.knowledge_capture_id AS parent_video_capture_id,
             CASE WHEN video.id IS NOT NULL THEN vc.title || ' · audio' END AS video_audio_title,
             ap.category AS audio_category, ap.sound_seconds AS audio_sound_seconds,
@@ -13683,7 +13687,7 @@ export function enrichRecordingScheduleMetadata(recordingId: string): ScheduleEn
       }
     })
 
-    const credibleOverlaps = scored.filter((candidate) => candidate.hasOverlap && candidate.confidenceScore >= 0.5)
+    const credibleOverlaps = scored.filter((candidate) => candidate.hasOverlap && candidate.confidenceScore >= MIN_MEETING_CONFIDENCE)
     const result = {
       recordingId,
       candidateCount: scored.length,

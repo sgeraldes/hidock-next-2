@@ -35,6 +35,8 @@ beforeEach(() => {
     playbackCurrentTime: 0,
     playbackDuration: 0,
     playbackWaveformData: null,
+    playbackWaveformChannels: null,
+    waveformDuration: 0,
     playbackSentimentData: null,
     waveformLoadingId: null,
     waveformLoadingError: null,
@@ -356,4 +358,42 @@ describe('WaveformPlayer', () => {
     // Edge anchors (0 and 100) wrap the two segment midpoints (30 and 50).
     expect(screen.getByTestId('sentiment-curve')).toHaveAttribute('points', '0,25 30,25 50,75 100,75')
   })
+})
+
+
+describe('stereo recorder detail regressions', () => {
+  it('shows independently labelled lanes and mute controls for PC stereo', () => {
+    useUIStore.setState({ waveformLoadedForId: 'rec-1', playbackWaveformData: new Float32Array([0.2]),
+      playbackWaveformChannels: [new Float32Array([0.2]), new Float32Array([0.8])] } as never)
+    render(<WaveformPlayer mode="full" recordingId="rec-1" filePath="/Recording 2026-10-05 01-30 12345678-1234-1234-1234-123456789abc.webm" durationSec={118} />)
+    expect(screen.getByText('Mic')).toBeInTheDocument()
+    expect(screen.getByText('System')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Mute Mic' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Mute System' })).toBeInTheDocument()
+    expect(screen.queryByTestId('sentiment-panel')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Mute Mic' }).querySelector('svg')).not.toBeNull()
+    expect(screen.getByRole('button', { name: 'Mute Mic' })).toHaveClass('border')
+  })
+  it('uses stored duration when the media element reports Infinity', () => {
+    useUIStore.setState({ currentlyPlayingId: 'rec-1', playbackDuration: Infinity, playbackCurrentTime: 5 })
+    render(<WaveformPlayer mode="full" recordingId="rec-1" filePath="/Recording 2026-10-05 01-30 12345678-1234-1234-1234-123456789abc.webm" durationSec={118} />)
+    expect(screen.getByText('0:05 / 1:58')).toBeInTheDocument()
+  })
+})
+
+
+it('keeps two labelled stereo lanes inside the minimized 32px player', () => {
+  useUIStore.setState({ waveformLoadedForId: 'rec-1', playbackWaveformData: new Float32Array([0.2]), playbackWaveformChannels: [new Float32Array([0.2]),new Float32Array([0.8])] })
+  render(<WaveformPlayer mode="pill" recordingId="rec-1" filePath="/stereo.wav" durationSec={118}/>)
+  expect(screen.getByTestId('waveform-player-pill')).toHaveClass('h-8')
+  expect(screen.getByText('Channel 0')).toBeInTheDocument()
+  expect(screen.getByText('Channel 1')).toBeInTheDocument()
+})
+it('mono keeps a single waveform without channel mute controls', () => {
+  useUIStore.setState({ waveformLoadedForId:'rec-1', playbackWaveformData: new Float32Array([0.3]), playbackWaveformChannels:[new Float32Array([0.3])] })
+  render(<WaveformPlayer mode="full" recordingId="rec-1" filePath="/mono.wav" durationSec={118}/>)
+  expect(screen.queryByTestId('stereo-lanes')).not.toBeInTheDocument()
+  expect(screen.queryByRole('button',{name:/Mute/})).not.toBeInTheDocument()
+  expect(screen.getByTestId('sentiment-panel')).toHaveTextContent('positive')
+  expect(screen.getByTestId('sentiment-panel')).toHaveTextContent('negative')
 })

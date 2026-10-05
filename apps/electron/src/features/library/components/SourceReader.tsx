@@ -27,6 +27,7 @@
  * docs/superpowers/specs/2026-09-22-reader-sticky-sections-design.md.
  */
 
+import { isPcRecordingFilename } from '@/shared/pc-recording'
 import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { TranscriptViewer, type StoredSegment, type TranscriptContentUpdate } from './TranscriptViewer'
@@ -160,6 +161,7 @@ interface ReaderProcessingRun {
   estimated_cost_amount: number | null
   estimated_cost_currency: string | null
   cost_method: string | null
+  error_message?: string | null
 }
 
 interface ReaderMeetingCandidate {
@@ -481,7 +483,10 @@ export function SourceReader({
 
   // Live duration: imported/watched files have no stored duration until the
   // waveform decode backfills it; show the freshly-decoded value meanwhile.
-  const livePlaybackDuration = useUIStore((s) => s.playbackDuration)
+  const activePlayback = useUIStore(s => s.isPlaying && s.currentlyPlayingId === recording?.id)
+  const waveformChannels = useUIStore(s => s.waveformLoadedForId === recording?.id ? s.playbackWaveformChannels : null)
+  const queueFailure = useTranscriptionStore(s => Array.from(s.queue.values()).find(item => item.recordingId === recording?.id && item.status === 'failed')?.error)
+  const livePlaybackDuration = useUIStore((s) => s.waveformDuration || (Number.isFinite(s.playbackDuration) ? s.playbackDuration : 0))
   const waveformLoadedForId = useUIStore((s) => s.waveformLoadedForId)
 
   // H6: When a transcribed recording is opened via the sidebar Library nav, the
@@ -498,7 +503,7 @@ export function SourceReader({
   const [editedTranscript, setEditedTranscript] = useState<Transcript | undefined>(undefined)
   const effectiveTranscript = editedTranscript ?? transcript ?? fallbackTranscript
   const [processingRuns, setProcessingRuns] = useState<ReaderProcessingRun[]>([])
-  const [meetingCandidates, setMeetingCandidates] = useState<ReaderMeetingCandidate[]>([])
+  const [storedMeetingCandidates, setMeetingCandidates] = useState<ReaderMeetingCandidate[]>([])
   const recordingId = recording?.id
   const recordingSourceType = recording ? getSourceType(recording) : null
   const localPath = recording && recordingSourceType === 'audio' && hasLocalPath(recording) ? recording.localPath : undefined
@@ -592,19 +597,22 @@ export function SourceReader({
     // the status flip is the only signal that a new `vad` run exists to read.
   }, [recordingId, effectiveTranscript?.id, recording?.transcriptionStatus])
 
+  const canSuggestMeetings = !!effectiveTranscript?.full_text?.trim() && isTranscriptTrusted(effectiveTranscript)
+  const meetingCandidates = canSuggestMeetings ? storedMeetingCandidates : []
   useEffect(() => {
-    if (!recordingId) return
+    setMeetingCandidates([])
+    if (!recordingId || !canSuggestMeetings) return
     let cancelled = false
     ;(async () => {
       try {
         const result = await window.electronAPI?.recordings?.getCandidates?.(recordingId)
-        if (!cancelled) setMeetingCandidates(result?.success ? result.data as ReaderMeetingCandidate[] : [])
+        if (!cancelled) setMeetingCandidates(result?.success ? (result.data as ReaderMeetingCandidate[]) : [])
       } catch {
         if (!cancelled) setMeetingCandidates([])
       }
     })()
     return () => { cancelled = true }
-  }, [recordingId, meeting?.id])
+  }, [recordingId, meeting?.id, canSuggestMeetings, effectiveTranscript?.id, effectiveTranscript?.full_text])
 
   // Preload the waveform as soon as a playable recording is opened, so the
   // reader shows the visualization immediately instead of "Press Play to load
@@ -1398,6 +1406,7 @@ export function SourceReader({
             <>
               <span aria-hidden="true" className="text-muted-foreground/40">•</span>
               <span>{durationSeconds > 0 ? formatDuration(durationSeconds) : 'Unknown duration'}</span>
+              {waveformChannels?.length === 2 && <span>{isPcRecordingFilename((localPath ?? '').split(/[\\/]/).pop() ?? '') ? 'Stereo · Mic left · System right' : 'Stereo · Channel 0 left · Channel 1 right'}</span>}
             </>
           )}
           <span aria-hidden="true" className="text-muted-foreground/40">•</span>
@@ -1405,7 +1414,11 @@ export function SourceReader({
             <StatusIcon recording={recording} />
           </span>
           {isAudioSource ? (
-            <TranscriptionStatusBadge status={recording.transcriptionStatus} />
+            recording.transcriptionStatus === 'error' ? (
+              <span className="rounded-full bg-destructive/10 px-2 py-0.5 text-destructive">
+                Failed: {recording.transcriptionError || queueFailure || processingRuns.find(run => run.status === 'failed')?.error_message || 'Reason unavailable'}
+              </span>
+            ) : <TranscriptionStatusBadge status={recording.transcriptionStatus} />
           ) : (
             <span className="rounded-full bg-muted px-2 py-0.5 font-medium capitalize text-foreground">{sourceType}</span>
           )}
@@ -1414,7 +1427,7 @@ export function SourceReader({
         <div className="flex flex-wrap items-center gap-2 px-4 pb-3 pt-3">
           {/* Primary action: Play/Stop for local files, Download for device-only */}
           {canPlay && onPlay ? (
-            isPlaying ? (
+            activePlayback ? (
               <Button size="sm" onClick={onStop} className="gap-2" title="Stop playback">
                 <Square className="h-4 w-4" />
                 Stop
@@ -1509,7 +1522,7 @@ export function SourceReader({
                   ) : (
                     <Wand2 className="h-4 w-4" />
                   )}
-                  Transcribe
+                  {recording.transcriptionStatus === 'error' ? 'Retry' : 'Transcribe'}
                 </Button>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
@@ -2539,7 +2552,8 @@ function ReaderPlayer({
     >
       <div
         className="relative min-w-0 flex-1 overflow-hidden rounded-lg motion-safe:transition-[max-height] motion-safe:duration-300 motion-safe:ease-out"
-        style={{ maxHeight }}
+        // Decoded stereo adds a lane asynchronously; never clip the expanded transport.
+        style={{ maxHeight: big ? undefined : maxHeight }}
       >
         <div ref={innerRef} className="motion-safe:transition-opacity motion-safe:duration-200">
           <WaveformPlayer
