@@ -6667,14 +6667,19 @@ export function getRecordingsByIds(ids: string[]): Map<string, Recording> {
 // stores the device name in original_filename. Prefer the local canonical row
 // when both exist so a device snapshot cannot create a second shadow row.
 export function getRecordingByFilename(filename: string): Recording | undefined {
+  // Legacy downloads also stored the local .wav in original_filename. Match
+  // the complete stem (including time and Rec number), never just the date.
+  const base = filename.replace(/\.(hda|wav|mp3|m4a|aac|ogg|flac)$/i, '')
+  const variants = base === filename ? [filename] : [filename, ...RECORDING_EXTENSIONS.map((ext) => `${base}.${ext}`)]
+  const placeholders = variants.map(() => '?').join(', ')
   return queryOne<Recording>(
     `SELECT * FROM recordings
-      WHERE filename = ? OR original_filename = ?
+      WHERE filename COLLATE NOCASE IN (${placeholders}) OR original_filename COLLATE NOCASE IN (${placeholders})
       ORDER BY on_local DESC,
-               CASE WHEN filename = ? THEN 0 ELSE 1 END,
+               CASE WHEN filename = ? COLLATE NOCASE THEN 0 ELSE 1 END,
                created_at ASC
       LIMIT 1`,
-    [filename, filename, filename]
+    [...variants, ...variants, filename]
   )
 }
 
