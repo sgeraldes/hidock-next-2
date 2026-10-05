@@ -12,9 +12,10 @@
  * Spec: docs/superpowers/specs/2026-09-23-transcript-integrity-design.md
  */
 
+import type { RetranscribeResult, RetranscribeSkipReason } from '../../../src/shared/retranscribe'
 import { ipcMain } from 'electron'
 import { z } from 'zod'
-import { addToQueue, resolveRecordingId, setTranscriptIntegrityAccepted } from '../services/database'
+import { addToQueue, getQueueItems, resolveRecordingId, setTranscriptIntegrityAccepted } from '../services/database'
 import { processQueueManually } from '../services/transcription'
 import { filterTranscribableRecordingIds } from '../services/recording-eligibility'
 import { syncTrustVerdicts } from '../services/transcript-trust'
@@ -34,14 +35,6 @@ const RetranscribeSchema = z.object({
   recordingIds: z.array(RecordingIdSchema).min(1).max(MAX_RETRANSCRIBE_BATCH),
 })
 
-export interface RetranscribeResult {
-  queued: number
-  /**
-   * Not found, or not eligible: personal, deleted, rated too low to send to a
-   * provider, or already queued.
-   */
-  skipped: number
-}
 
 export function registerTranscriptIntegrityHandlers(): void {
   ipcMain.handle('transcripts:setIntegrityAccepted', async (_, payload: unknown): Promise<Result<{ accepted: boolean }>> => {
@@ -66,21 +59,37 @@ export function registerTranscriptIntegrityHandlers(): void {
     if (!parsed.success) return error('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid request')
     let queued = 0
     let skipped = 0
-    const recordings = [...new Set(parsed.data.recordingIds)].map((id) => resolveRecordingId(id))
-    // The same gate the queue applies before any audio leaves the machine. A
-    // value-excluded recording would pass addToQueue and then be cancelled at
-    // the provider boundary, so counting it as queued would promise a new
-    // transcript that never comes. Fails closed: if eligibility cannot be
-    // read, nothing is queued.
-    const { eligible } = filterTranscribableRecordingIds(recordings.flatMap((r) => (r ? [r.id] : [])))
-    for (const recording of recordings) {
-      // addToQueue refuses personal and deleted recordings and ones already queued.
-      if (recording && eligible.has(recording.id) && addToQueue(recording.id)) queued++
-      else skipped++
+    const skippedReasons: RetranscribeResult['skippedReasons'] = {}
+    const skip = (reason: RetranscribeSkipReason): void => {
+      skipped++
+      skippedReasons[reason] = (skippedReasons[reason] ?? 0) + 1
+    }
+    try {
+      const recordings = [...new Set(parsed.data.recordingIds)].map((id) => resolveRecordingId(id))
+      const { eligible, failClosed } = filterTranscribableRecordingIds(
+        recordings.flatMap((r) => r ? [r.id] : []), { ignoreValueExclusion: true }
+      )
+      const active = new Set([...getQueueItems('pending'), ...getQueueItems('processing')].map((r) => r.recording_id))
+      for (const recording of recordings) {
+        if (failClosed) skip('lookup_error')
+        else if (!recording) skip('missing')
+        else if (recording.personal) skip('personal')
+        else if (recording.deleted_at) skip('deleted')
+        else if (!eligible.has(recording.id)) skip('ineligible')
+        else if (active.has(recording.id)) skip('already_queued')
+        else if (addToQueue(recording.id, undefined, true)) {
+          queued++
+          active.add(recording.id)
+        } else skip('ineligible')
+      }
+    } catch (err) {
+      console.warn('[TranscriptIntegrity] eligibility lookup failed:', err)
+      const remaining = new Set(parsed.data.recordingIds).size - queued - skipped
+      for (let i = 0; i < remaining; i++) skip('lookup_error')
     }
     // Queued in the normal order, not ahead of the owner's own requests: a
     // library-wide re-run should not push a single explicit re-transcribe back.
     if (queued > 0) processQueueManually()
-    return success({ queued, skipped })
+    return success({ queued, skipped, skippedReasons })
   })
 }

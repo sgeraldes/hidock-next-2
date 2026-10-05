@@ -154,6 +154,32 @@ describe('assessTranscriptValidity', () => {
     expect(v.reasons.map((r) => r.code)).toContain('speech_after_the_end')
   })
 
+  it.each([
+    [130, 'doubtful', 'clock_compressed'],
+    [40, 'incomplete', 'speech_after_the_end'],
+    [89, 'incomplete', 'speech_after_the_end'],
+    [90, 'doubtful', 'clock_compressed']
+  ] as const)('judges an early end at %i words per sound-minute as %s', (rate, status, reason) => {
+    // Nine minutes of sound in a thirty-six-minute file; the text ends at 25%.
+    const env = envelope([[160, 270], [138, 270], [160, 270], [138, 1350]])
+    const segments = [{ speaker: 'A', start: 0, end: 540, text: words(rate * 9) }]
+    const v = assessTranscriptValidity(base({ envelope: env, segments }))
+    expect(v.status).toBe(status)
+    expect(v.measures.wordsPerSoundMinute).toBeCloseTo(rate)
+    expect(v.reasons.map((r) => r.code)).toContain(reason)
+    if (status === 'doubtful') expect(v.reasons.map((r) => r.code)).not.toContain('speech_after_the_end')
+  })
+
+  it('keeps a sampled incomplete verdict even for dense text', () => {
+    const v = assessTranscriptValidity(base({
+      envelope: envelope([[160, 600], [138, 600]]),
+      segments: [{ speaker: 'A', start: 0, end: 300, text: words(1300) }],
+      sample: 'incomplete'
+    }))
+    expect(v.status).toBe('incomplete')
+    expect(v.reasons.map((r) => r.code)).toEqual(['speech_after_the_end', 'clock_compressed'])
+  })
+
   it('accepts a transcript that ends early when nothing real follows', () => {
     const env = envelope([[160, 400], [138, 800]])
     const segments = Array.from({ length: 40 }, (_, i) => ({ speaker: 'A', start: i * 10, end: i * 10 + 9, text: words(20, `-${i}`) }))

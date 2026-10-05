@@ -56,6 +56,10 @@ export function useAudioPlayback() {
   const audioBlobUrlRef = useRef<string | null>(null)
   const waveformAbortControllerRef = useRef<AbortController | null>(null)
   const playbackLockRef = useRef<Promise<void> | null>(null)
+  const playbackGenerationRef = useRef(0)
+  const cancelPendingPlayback = useCallback(() => {
+    playbackGenerationRef.current++
+  }, [])
 
   const {
     setCurrentlyPlaying,
@@ -67,6 +71,8 @@ export function useAudioPlayback() {
   // ---- Play Audio ----
 
   const playAudio = useCallback(async (recordingId: string, filePath: string, startTimeSec = 0) => {
+    const generation = playbackGenerationRef.current
+    const cancelled = () => generation !== playbackGenerationRef.current
     if (shouldLogQa()) console.log(`[QA-MONITOR][Operation] Playing: ${recordingId}, path: ${filePath}`)
 
     // Wait for any pending operation to complete to prevent race conditions
@@ -74,6 +80,7 @@ export function useAudioPlayback() {
       if (shouldLogQa()) console.log('[useAudioPlayback] Waiting for previous playback operation to complete')
       await playbackLockRef.current
     }
+    if (cancelled()) return
 
     // Create new lock for this operation
     playbackLockRef.current = (async () => {
@@ -102,6 +109,7 @@ export function useAudioPlayback() {
         // Load audio file via IPC
         if (shouldLogQa()) console.log(`[QA-MONITOR][Operation] Reading audio file: ${filePath}`)
         const response = await window.electronAPI.storage.readRecording(filePath)
+        if (cancelled()) return
         if (!response.success || !response.data) {
           const errorMsg = response.error || 'Failed to load audio file'
           console.error(`[useAudioPlayback] readRecording failed:`, errorMsg)
@@ -194,6 +202,7 @@ export function useAudioPlayback() {
         if (waveformLoadedForId !== recordingId) {
           // H5: prefer the disk cache — instant, no recompute.
           const cachedPeaks = await tryLoadCachedWaveform(recordingId)
+          if (cancelled()) return
           if (cachedPeaks) {
             setWaveformData(cachedPeaks.peaks)
             useUIStore.getState().setWaveformLoadedFor(recordingId)
@@ -201,12 +210,15 @@ export function useAudioPlayback() {
           } else {
             try {
               const audioBuffer = await decodeAudioData(base64, mimeType)
+              if (cancelled()) return
               const waveformData = await generateWaveformData(audioBuffer, 1000)
+              if (cancelled()) return
               setWaveformData(waveformData)
               useUIStore.getState().setWaveformLoadedFor(recordingId)
               const fileSizeBytes = Math.ceil((base64.length * 3) / 4)
               void persistWaveform(recordingId, waveformData, audioBuffer.duration, fileSizeBytes)
             } catch (waveformError) {
+              if (cancelled()) return
               console.warn('[useAudioPlayback] Failed to generate waveform:', waveformError)
               setWaveformData(null)
               useUIStore.getState().setWaveformLoadingError(recordingId, 'Failed to generate waveform')
@@ -248,6 +260,7 @@ export function useAudioPlayback() {
               audio.addEventListener('error', onError, { once: true })
             })
           }
+          if (cancelled()) return
           const duration = audioRef.current.duration
           audioRef.current.currentTime = Math.min(Number.isFinite(duration) ? duration : startTimeSec, startTimeSec)
           setPlaybackProgress(audioRef.current.currentTime, duration)
@@ -256,6 +269,7 @@ export function useAudioPlayback() {
         await audioRef.current.play()
         if (shouldLogQa()) console.log('[QA-MONITOR][Operation] audio.play() resolved successfully')
       } catch (error) {
+        if (cancelled()) return
         const libraryError = parseError(error, 'audio playback')
         console.error('[useAudioPlayback] Play error:', error)
         toast({
@@ -378,6 +392,8 @@ export function useAudioPlayback() {
   }, [])
 
   const stopAudio = useCallback(() => {
+    // Navigation must also cancel reads/decodes that have not reached play yet.
+    cancelPendingPlayback()
     if (audioRef.current) {
       // Clean up event listeners when stopping
       if ((audioRef.current as any)._eventCleanup) {
@@ -399,7 +415,7 @@ export function useAudioPlayback() {
     // showing the recording's waveform. Clearing here — while `waveformLoadedForId`
     // still names this recording — made the guarded reload a no-op, leaving the
     // reader on "Press play to load the waveform" until the user pressed Play.
-  }, [setCurrentlyPlaying, setIsPlaying, setPlaybackProgress])
+  }, [cancelPendingPlayback, setCurrentlyPlaying, setIsPlaying, setPlaybackProgress])
 
   const seekAudio = useCallback((time: number) => {
     if (audioRef.current) audioRef.current.currentTime = time
@@ -432,6 +448,7 @@ export function useAudioPlayback() {
 
   useEffect(() => {
     return () => {
+      cancelPendingPlayback()
       // Clean up audio element
       if (audioRef.current) {
         // Remove event listeners first to prevent memory leaks
@@ -451,5 +468,5 @@ export function useAudioPlayback() {
         waveformAbortControllerRef.current.abort()
       }
     }
-  }, [])
+  }, [cancelPendingPlayback])
 }

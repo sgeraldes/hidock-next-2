@@ -532,6 +532,15 @@ async function runQueueItem(
       // for content that does not exist. Leave it cancelled.
       if (outcome.reason) updateQueueItem(item.id, 'cancelled', outcome.reason)
       else updateQueueItem(item.id, 'cancelled')
+      const cancelledRecording = getRecordingById(item.recording_id)
+      const transcriptionWasActive = cancelledRecording?.transcription_status === 'pending' || cancelledRecording?.transcription_status === 'processing'
+      const legacyWasActive = cancelledRecording?.status === 'pending' || cancelledRecording?.status === 'processing'
+      if (transcriptionWasActive || legacyWasActive) {
+        const restoredStatus = queryOne<{ id: string }>('SELECT id FROM transcripts WHERE recording_id = ? LIMIT 1', [item.recording_id])
+          ? 'complete' : 'none'
+        if (transcriptionWasActive) updateRecordingTranscriptionStatus(item.recording_id, restoredStatus)
+        if (legacyWasActive) updateRecordingStatus(item.recording_id, restoredStatus)
+      }
       notifyRenderer('transcription:cancelled', { recordingId: item.recording_id, reason: outcome.reason })
       if (outcome.reason) emitActivityLog('warning', 'Transcription stopped', outcome.reason)
       clearQueueHints(item.recording_id)

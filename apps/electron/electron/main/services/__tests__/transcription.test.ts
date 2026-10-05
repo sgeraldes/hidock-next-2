@@ -651,6 +651,41 @@ describe('Transcription Service', () => {
       } finally { service.clearUserPriority('rec-rated') }
     })
 
+    it('refuses a personal recording even with an owner override', async () => {
+      queueOne('rec-personal', writeMpegClip('personal.wav', 30), undefined)
+      const item = mockGetQueueItems('pending')[0]
+      item.explicit_request = 1
+      mockGetRecordingById.mockReturnValue({ id: 'rec-personal', filename: 'personal.wav', file_path: joinPath(clipDir, 'personal.wav'), transcription_status: 'pending', status: 'pending' })
+      mockIsRecordingProcessable.mockReturnValue(false)
+      await runQueueUntil(() => {
+        expect(mockUpdateQueueItem).toHaveBeenCalledWith('queue-rec-personal', 'cancelled')
+      })
+      expect(mockGeminiTranscribeCall).not.toHaveBeenCalled()
+      expect(mockAnalyzeAudioPreflight).not.toHaveBeenCalled()
+      expect(mockUpdateRecordingStatus).toHaveBeenCalledWith('rec-personal', 'none')
+    })
+
+    it('restores a prior transcript after an eligibility cancellation', async () => {
+      queueOne('rec-restore', writeMpegClip('restore.wav', 30))
+      mockGetRecordingById.mockReturnValue({ id: 'rec-restore', filename: 'restore.wav', file_path: joinPath(clipDir, 'restore.wav'), transcription_status: 'pending', status: 'pending' })
+      const database = await import('../database')
+      vi.mocked(database.queryOne).mockReturnValueOnce({ id: 'prior-transcript' })
+      mockIsRecordingEligible.mockReturnValue(false)
+      await runQueueUntil(() => {
+        expect(mockUpdateRecordingStatus).toHaveBeenCalledWith('rec-restore', 'complete')
+      })
+    })
+
+    it('preserves a terminal no-speech status when a later gate cancels work', async () => {
+      queueOne('rec-terminal', writeMpegClip('terminal.wav', 30))
+      mockGetRecordingById.mockReturnValue({ id: 'rec-terminal', filename: 'terminal.wav', file_path: joinPath(clipDir, 'terminal.wav'), transcription_status: 'no_speech', status: 'no_speech' })
+      mockIsRecordingEligible.mockReturnValue(false)
+      await runQueueUntil(() => {
+        expect(mockUpdateQueueItem).toHaveBeenCalledWith('queue-rec-terminal', 'cancelled')
+      })
+      expect(mockUpdateRecordingStatus).not.toHaveBeenCalled()
+    })
+
     it('records both sparse Gemini attempts and retries only once before holding all derived work', async () => {
       queueOne('rec-retry', writeMpegClip('retry.wav', 1565), 'gemini')
       mockAnalyzeAudioPreflight.mockResolvedValue({ status: 'speech_present', durationSeconds: 1565,

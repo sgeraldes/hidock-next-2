@@ -683,7 +683,7 @@ export function registerRecordingHandlers(): void {
       }
 
       const queueItemId = priority ? addToQueue(recording.id, undefined, true) : addToQueue(recording.id)
-      if (!queueItemId) return false
+      if (!queueItemId) return { success: false, error: 'Recording is personal, deleted, missing, or eligibility could not be checked.' }
       if (priority) markUserPriority(recording.id)
       // spec-005: Trigger immediate queue processing after adding
       processQueueManually()

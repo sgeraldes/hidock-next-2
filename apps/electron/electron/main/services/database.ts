@@ -5398,7 +5398,7 @@ const UNUSABLE_TRANSCRIPT_EXCLUSION = `AND NOT EXISTS (
 
 export function getEligibleRecordingIds(
   candidateIds: Iterable<string>,
-  options: { forTranscription?: boolean; forTextReformat?: boolean } = {}
+  options: { forTranscription?: boolean; forTextReformat?: boolean; ignoreValueExclusion?: boolean } = {}
 ): RecordingEligibility {
   const unique = [...new Set([...candidateIds].filter((id): id is string => !!id))]
   if (unique.length === 0) return { eligible: new Set<string>(), failClosed: false }
@@ -5413,11 +5413,11 @@ export function getEligibleRecordingIds(
           WHERE r.id IN (${placeholders})
             AND r.deleted_at IS NULL
             AND COALESCE(r.personal, 0) = 0
-            AND NOT EXISTS (
+            ${options.forTranscription && options.ignoreValueExclusion ? '' : `AND NOT EXISTS (
               SELECT 1 FROM knowledge_captures kc
                WHERE kc.source_recording_id = r.id
                  AND kc.deleted_at IS NULL
-                 AND ${VALUE_EXCLUSION_PREDICATE})
+                 AND ${VALUE_EXCLUSION_PREDICATE})`}
             ${options.forTranscription ? '' : options.forTextReformat ? UNUSABLE_TRANSCRIPT_EXCLUSION.replace(
               'AND t.integrity_accepted_at IS NULL', `AND NOT (t.validity_status = 'doubtful'
                 AND COALESCE(t.integrity_status, '') != 'broken' AND TRIM(COALESCE(t.full_text, '')) != ''
@@ -5426,7 +5426,7 @@ export function getEligibleRecordingIds(
                 AND NOT EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(t.validity_json) THEN t.validity_json ELSE '{}' END, '$.reasons') reason
                   WHERE COALESCE(json_extract(reason.value, '$.code'), '') NOT IN ('no_times', 'audio_not_checked')))
                 AND t.integrity_accepted_at IS NULL`) : UNUSABLE_TRANSCRIPT_EXCLUSION}`,
-        [...chunk, ...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS]
+        options.forTranscription && options.ignoreValueExclusion ? chunk : [...chunk, ...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS]
       )
       for (const row of rows) eligible.add(row.id)
     }
@@ -8308,17 +8308,12 @@ export interface QueueItem {
 }
 
 export function addToQueue(recordingId: string, provider?: string, explicitRequest = false): string {
-  // Honor the privacy flags at the single enqueue chokepoint: a personal
-  // ("ignored") or soft-deleted recording is never transcribed. Every path
-  // (auto-transcribe, manual, bulk backlog) funnels through here.
-  const rec = queryOne<{ personal?: number; deleted_at?: string | null }>(
-    'SELECT personal, deleted_at FROM recordings WHERE id = ?',
-    [recordingId]
-  )
-  if (rec && (rec.personal === 1 || rec.deleted_at)) {
-    console.log(`[Transcription] Skipping enqueue of personal/deleted recording ${recordingId}`)
-    return ''
-  }
+  // Explicit requests override value only; missing/private/deleted rows and
+  // lookup errors still fail closed at the durable enqueue boundary.
+  const { eligible, failClosed } = getEligibleRecordingIds([recordingId], {
+    forTranscription: true, ignoreValueExclusion: explicitRequest
+  })
+  if (failClosed || !eligible.has(recordingId)) return ''
 
   // A recording may be rediscovered by auto-sync while it is already queued
   // (or the user may click Process All before the renderer has refreshed). A

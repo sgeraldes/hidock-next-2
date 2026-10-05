@@ -107,9 +107,9 @@ export function isRecordingEligible(recordingId: string): boolean {
  * invalid, incomplete or doubtful must still be transcribable, since a new
  * transcript is the way out (plan 2026-10-04-validation-order). Fail-closed.
  */
-export function filterTranscribableRecordingIds(candidateIds: Iterable<string>): EligibilityResult {
+export function filterTranscribableRecordingIds(candidateIds: Iterable<string>, options: { ignoreValueExclusion?: boolean } = {}): EligibilityResult {
   try {
-    const { eligible, failClosed } = getEligibleRecordingIds(candidateIds, { forTranscription: true })
+    const { eligible, failClosed } = getEligibleRecordingIds(candidateIds, { forTranscription: true, ...options })
     if (failClosed) return { eligible: new Set<string>(), failClosed: true }
     return { eligible, failClosed: false }
   } catch (e) {

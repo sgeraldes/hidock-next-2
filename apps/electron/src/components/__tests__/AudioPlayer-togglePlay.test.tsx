@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, fireEvent } from '@testing-library/react'
+import { render, fireEvent, screen } from '@testing-library/react'
 import { AudioPlayer } from '@/components/AudioPlayer'
 import { useUIStore } from '@/store/useUIStore'
 
@@ -93,5 +93,20 @@ describe('AudioPlayer reader Play button — initial load+play', () => {
 
     expect((window as any).__audioControls.play).not.toHaveBeenCalled()
     expect((window as any).__audioControls.resume).not.toHaveBeenCalled()
+  })
+
+  it('keeps the duration from a silent waveform load before playback starts', () => {
+    useUIStore.setState({ currentlyPlayingId: null, waveformLoadedForId: 'rec-1', playbackDuration: 120 })
+    render(<AudioPlayer recordingId="rec-1" filePath="/audio/rec-1.wav" />)
+    expect(screen.getByText('2:00')).toBeInTheDocument()
+  })
+
+  it('does not show another recording playback time or pause state', () => {
+    useUIStore.setState({ currentlyPlayingId: 'other', isPlaying: true, playbackCurrentTime: 42, playbackDuration: 300 })
+    render(<AudioPlayer recordingId="rec-1" filePath="/audio/rec-1.wav" durationSeconds={120} showSeekBar />)
+    expect(screen.getByRole('button', { name: 'Play' })).toBeInTheDocument()
+    expect(screen.getByRole('slider', { name: 'Seek audio' })).toHaveValue('0')
+    expect(screen.getByText('2:00')).toBeInTheDocument()
+    expect(screen.queryByText('5:00')).not.toBeInTheDocument()
   })
 })

@@ -268,7 +268,7 @@ global.window.electronAPI = {
     getByRecordingIdsOwner: vi.fn().mockResolvedValue({}),
     getVerdicts: vi.fn().mockResolvedValue({}),
     setIntegrityAccepted: vi.fn().mockResolvedValue({ success: true, data: { accepted: true } }),
-    retranscribeMany: vi.fn().mockResolvedValue({ success: true, data: { queued: 1, skipped: 0 } })
+    retranscribeMany: vi.fn().mockResolvedValue({ success: true, data: { queued: 1, skipped: 0, skippedReasons: {} } })
   },
   meetings: { getByIds: vi.fn().mockResolvedValue({}) },
   knowledge: { getById: vi.fn().mockResolvedValue(null) },
@@ -1072,12 +1072,15 @@ describe('Library — transcript integrity labels', () => {
 
     fireEvent.click(within(bar).getByRole('button', { name: 'Transcribe it again' }))
     expect(window.electronAPI.transcripts.retranscribeMany).not.toHaveBeenCalled()
+    vi.mocked(window.electronAPI.transcripts.retranscribeMany).mockResolvedValueOnce({
+      success: true, data: { queued: 0, skipped: 1, skippedReasons: { personal: 1 } }
+    })
     fireEvent.click(within(bar).getByRole('button', { name: 'Queue 1' }))
 
     await waitFor(() =>
       expect(window.electronAPI.transcripts.retranscribeMany).toHaveBeenCalledWith({ recordingIds: ['shaky-1'] })
     )
-    await waitFor(() => expect(toastMock.success).toHaveBeenCalledWith('Queued 1 transcription', expect.any(String)))
+    await waitFor(() => expect(toastMock.success).toHaveBeenCalledWith('Queued 0 transcriptions', '1 skipped: 1 personal.'))
   })
 
   it('counts and queues only what the search leaves on screen', async () => {
