@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto'
+import { labelDisplayOrder } from '../../../../src/shared/label-display-order'
 import { statSync } from 'fs'
 import { z } from 'zod'
 import { queryAll, queryOne, run, runInTransaction, hasDecisionLabelRecoveryFailed } from '../database'
@@ -79,8 +80,8 @@ export function getLabelSet(): ReferenceLabelSet {
       run('UPDATE decision_label_sets SET sample_size = ?, doubtful_count = ?, random_count = ? WHERE id = ?',
         [position, counts.doubtful, counts.random, set.id])
     }
-    const rows = queryAll<{ recording_id: string; position: number; stratum: 'doubtful' | 'random'; answer: ReferenceLabelAnswer | null }>(`
-      SELECT i.recording_id, i.position, i.stratum, l.answer FROM decision_label_items i
+    const rows = queryAll<{ recording_id: string; position: number; answer: ReferenceLabelAnswer | null }>(`
+      SELECT i.recording_id, i.position, l.answer FROM decision_label_items i
       LEFT JOIN decision_labels l ON l.recording_id = i.recording_id AND l.question = 'kind'
       WHERE i.set_id = ? ORDER BY i.position`, [set.id])
     const eligible = availableRecordingIds(rows.map(row => row.recording_id))
@@ -88,7 +89,7 @@ export function getLabelSet(): ReferenceLabelSet {
     return {
       id: set.id, question: 'kind', createdAt: set.created_at,
       size: set.sample_size, unavailable: Math.max(0, set.sample_size - available.length),
-      items: available.map(row => ({ recordingId: row.recording_id, position: row.position, answer: row.answer })),
+      items: labelDisplayOrder(set.id, available).map((row, index) => ({ recordingId: row.recording_id, displayIndex: index + 1, answer: row.answer })),
       counts: { doubtful: set.doubtful_count, random: set.random_count },
       labeled: available.filter(row => row.answer !== null).length,
       unknown: available.filter(row => row.answer === 'unknown').length

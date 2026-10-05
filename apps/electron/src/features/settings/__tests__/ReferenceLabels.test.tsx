@@ -8,8 +8,8 @@ let answers: Record<string, ReferenceLabelAnswer | null>
 const getLabelSet = vi.fn(async (): Promise<ReferenceLabelSet> => ({
   id: 'set', question: 'kind', createdAt: '2026-10-04',
   size: 3, unavailable: 0, unknown: Object.values(answers).filter(answer => answer === 'unknown').length, counts: { doubtful: 1, random: 2 }, labeled: Object.values(answers).filter(Boolean).length,
-  // Stored order differs from display order for this fixed set ID.
-  items: ['b', 'a', 'c'].map((recordingId, position) => ({ recordingId, position, answer: answers[recordingId] ?? null }))
+  // Main-process order must be preserved.
+  items: ['a', 'b', 'c'].map((recordingId, index) => ({ recordingId, displayIndex: index + 1, answer: answers[recordingId] ?? null }))
 }))
 const getLabelItem = vi.fn(async ({ recordingId }: { recordingId: string }) => ({
   recordingId, date: '2026-10-04T12:00:00Z', durationSeconds: 120, filePath: `/audio/${recordingId}.wav` as string | null,
@@ -31,17 +31,19 @@ describe('Reference labels', () => {
   it('displays a stable mixed sample and saves answers for the displayed recording', async () => {
     const sample: ReferenceLabelSet = { id: 'fixed-set-id', question: 'kind', createdAt: '2026-10-04',
       size: 40, unavailable: 0, unknown: 0, counts: { doubtful: 20, random: 20 }, labeled: 0,
-      items: Array.from({ length: 40 }, (_, position) => ({ recordingId: `r${position}`, position, answer: null })) }
+      items: Array.from({ length: 40 }, (_, index) => ({ recordingId: `r${index % 2 === 0 ? index / 2 : 20 + (index - 1) / 2}`, displayIndex: index + 1, answer: null })) }
     getLabelSet.mockResolvedValueOnce(sample)
     const firstVisit = render(<ReferenceLabels />)
     await screen.findByText(/^Opening r/)
     const firstId = getLabelItem.mock.calls.at(-1)![0].recordingId
+    expect(firstId).toBe(sample.items[0].recordingId)
     const visited = [firstId]
     for (let i = 1; i < 20; i++) {
       fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
       await screen.findByText(`Recording ${i + 1} of 40`)
       await waitFor(() => expect(screen.getByText(/^Opening r/)).toHaveTextContent(`Opening ${getLabelItem.mock.calls.at(-1)![0].recordingId}`))
       visited.push(getLabelItem.mock.calls.at(-1)![0].recordingId)
+      expect(visited[i]).toBe(sample.items[i].recordingId)
     }
     expect(visited.some(id => Number(id.slice(1)) < 20)).toBe(true)
     expect(visited.some(id => Number(id.slice(1)) >= 20)).toBe(true)
@@ -174,7 +176,7 @@ describe('Reference labels', () => {
   })
   it('shows original size and unavailable count with a scrollable excerpt', async () => {
     getLabelSet.mockResolvedValueOnce({ id: 'set', question: 'kind', createdAt: '2026-10-04', size: 40, unavailable: 39, unknown: 0,
-      counts: { doubtful: 20, random: 20 }, labeled: 0, items: [{ recordingId: 'a', position: 0, answer: null }] })
+      counts: { doubtful: 20, random: 20 }, labeled: 0, items: [{ recordingId: 'a', displayIndex: 1, answer: null }] })
     render(<ReferenceLabels />)
     await screen.findByText('Opening a')
     expect(screen.getByText('0 of 40 labeled')).toBeInTheDocument()

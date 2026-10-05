@@ -46,6 +46,24 @@ beforeEach(async () => {
   })
 })
 describe('reference labels on real SQLite', () => {
+  it('delivers stable shuffled display indices without sampling metadata', () => {
+    for (let i = 0; i < 40; i++) seed(`payload-${i}`, i / 100)
+    const first = getLabelSet()
+    expect(first.items.map(item => Object.keys(item).sort())).toEqual(first.items.map(() => ['answer', 'displayIndex', 'recordingId']))
+    expect(first.items.map(item => item.displayIndex)).toEqual(Array.from({ length: 40 }, (_, i) => i + 1))
+    const stored = queryAll<{ recording_id: string; stratum: string; position: number }>('SELECT recording_id, stratum, position FROM decision_label_items ORDER BY position')
+    expect(first.items.map(item => item.recordingId)).not.toEqual(stored.map(row => row.recording_id))
+    expect(getLabelSet()).toEqual(first)
+    saveLabel({ setId: first.id, recordingId: first.items[0].recordingId, answer: 'interview' })
+    expect(getLabelSet().items.map(item => item.recordingId)).toEqual(first.items.map(item => item.recordingId))
+    expect(getLabelSet().items[0].answer).toBe('interview')
+    run('UPDATE recordings SET personal = 1 WHERE id = ?', [first.items[1].recordingId])
+    const remaining = getLabelSet().items
+    expect(remaining.map(item => item.recordingId)).toEqual(first.items.filter((_, i) => i !== 1).map(item => item.recordingId))
+    expect(remaining.map(item => item.displayIndex)).toEqual(Array.from({ length: 39 }, (_, i) => i + 1))
+    expect(queryAll('SELECT recording_id, stratum, position FROM decision_label_items ORDER BY position')).toEqual(stored)
+  })
+
   it('returns full context, only attendee names and the exact engine excerpt', () => {
     seed('context')
     run("INSERT INTO meetings (id, subject, start_time, end_time, attendees) VALUES ('context-meeting', 'Planning', '2026-10-04T12:00:00Z', '2026-10-04T13:00:00Z', ?)",
