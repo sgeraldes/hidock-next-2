@@ -94,6 +94,19 @@ describe('request hooks to real temporary trace SQLite', () => {
     expect(candidates.find(c => c.source_id === 'b')?.rank_after).toBe(1)
     expect(candidates.find(c => c.source_id === 'a')?.rank_after).toBe(2)
   })
+  it('records the relevance-threshold drop and the adjusted score the ranking actually used', async () => {
+    state.search.mockResolvedValue([
+      { score: 0.6, document: { id: 'a', content: 'recent', embedding: [1, 2], metadata: { recordingId: 'a', chunkIndex: 0, timestamp: new Date().toISOString() } } },
+      { score: 0.5, document: { id: 'b', content: 'older', embedding: [1, 2], metadata: { recordingId: 'b', chunkIndex: 0, timestamp: '2020-01-01' } } },
+      { score: 0.1, document: { id: 'c', content: 'weak', embedding: [1, 2], metadata: { recordingId: 'c', chunkIndex: 0 } } }
+    ])
+    await getRAGService().chat('session', 'what happened this week?')
+    await store.flush()
+    const candidates = (await store.read())[0].candidates.filter(c => c.channel === 'vector' && c.rank_before !== null)
+    expect(candidates.find(c => c.source_id === 'a')?.adjusted_score).toBeCloseTo(0.75)
+    expect(candidates.find(c => c.source_id === 'b')?.adjusted_score).toBeCloseTo(0.5)
+    expect(candidates.find(c => c.source_id === 'c')).toMatchObject({ kept: false, drop_reason: 'threshold', adjusted_score: null })
+  })
   it('writes one chat trace with vector diversity drops, pinned and graph parts and generation identity', async () => {
     const answer = await getRAGService().chat('session', 'question')
     await store.flush()

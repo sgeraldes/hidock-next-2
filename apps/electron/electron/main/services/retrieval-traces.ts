@@ -20,7 +20,7 @@ export interface TraceCandidate {
   raw_score?: number | null
   adjusted_score?: number | null
   kept: boolean
-  drop_reason?: 'diversity-cap' | 'eligibility' | 'budget' | 'recheck'
+  drop_reason?: 'threshold' | 'diversity-cap' | 'eligibility' | 'budget' | 'empty' | 'recheck'
   sent_to_model: boolean
 }
 export interface TraceEvent {
@@ -72,6 +72,9 @@ export interface StoredTrace extends Omit<TraceEvent, 'query'> {
 }
 interface QueuedTrace { event: TraceEvent; normalized: string; queryHmac?: string; nonce: Buffer; tag: Buffer; candidateCount: number; truncated: boolean; textAllowed: boolean; epoch: number }
 type QueueItem = QueuedTrace | { link: string; message: string; epoch: number }
+// open() puts the file in auto_vacuum INCREMENTAL mode, so eviction returns freed
+// pages to the OS without a full VACUUM, which rewrites the whole file
+// synchronously on the main process (seconds at the 1 GiB cap).
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);
   CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -140,6 +143,14 @@ export class RetrievalTraceStore {
         mkdirSync(dirname(this.path), { recursive: true })
         await this.engine.initialize()
         this.engine.getDatabase().run('PRAGMA busy_timeout = 5000')
+        // The engine touches the file before the schema runs, so the schema's
+        // auto_vacuum line is too late. Switching an existing file needs one VACUUM;
+        // do it only while the store is empty, where it costs nothing.
+        if (Number(this.engine.getDatabase().exec('PRAGMA auto_vacuum')[0].values[0][0]) !== 2 &&
+            this.engine.queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM traces')!.count === 0) {
+          this.engine.getDatabase().run('PRAGMA auto_vacuum = INCREMENTAL')
+          this.engine.getDatabase().run('VACUUM')
+        }
         this.engine.getDatabase().run('PRAGMA secure_delete = ON')
         this.engine.run("INSERT OR IGNORE INTO meta VALUES ('schema_version', '1')")
         if (this.options.storage.isEncryptionAvailable()) {
@@ -310,11 +321,20 @@ export class RetrievalTraceStore {
       try { return total + statSync(this.path + suffix).size } catch { return total }
     }, 0)
   }
+  /** Test seam: observes the maintenance statements eviction runs. */
+  onStatement?: (sql: string) => void
+  private checkpoint(): void {
+    this.onStatement?.('PRAGMA wal_checkpoint(TRUNCATE)')
+    this.engine.getDatabase().run('PRAGMA wal_checkpoint(TRUNCATE)')
+  }
+  private reclaim(): void {
+    this.onStatement?.('PRAGMA incremental_vacuum')
+    this.engine.incrementalVacuum()
+  }
   private evict(): void {
     const cap = this.options.maxFileBytes ?? 1024 ** 3
     if (this.fileBytes() <= cap) return
-    const db = this.engine.getDatabase()
-    db.run('PRAGMA wal_checkpoint(TRUNCATE)')
+    this.checkpoint()
     while (this.fileBytes() > cap) {
       const count = this.engine.queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM traces')!.count
       const batchSize = count < 1000 ? 1 : Math.max(1, Math.floor(count * 0.1))
@@ -323,8 +343,8 @@ export class RetrievalTraceStore {
       this.engine.runInTransaction(() => {
         for (const row of oldest) this.engine.run('DELETE FROM traces WHERE trace_id = ?', [row.trace_id])
       })
-      db.run('VACUUM')
-      db.run('PRAGMA wal_checkpoint(TRUNCATE)')
+      this.reclaim()
+      this.checkpoint()
     }
   }
   applySettings(settings: TraceSettings): void {
@@ -363,15 +383,13 @@ export class RetrievalTraceStore {
   }
   async stats(): Promise<TraceStats> {
     await this.open()
+    // Counts expose no content, so they skip the per-candidate eligibility check
+    // that read() applies; that check is a query per candidate on the main process.
     const consumers = { chat: 0, explore: 0, brain: 0 }
     const since = new Date(Date.now() - 7 * 86400000).toISOString()
-    const rows = this.engine.queryAll<{ trace_id: string; consumer: TraceEvent['consumer'] }>(
-      'SELECT trace_id, consumer FROM traces WHERE started_at >= ?', [since])
-    for (const row of rows) {
-      const candidates = this.engine.queryAll<{ candidate: string }>('SELECT candidate FROM candidates WHERE trace_id = ?', [row.trace_id])
-        .map(c => JSON.parse(c.candidate) as TraceCandidate)
-      if (await this.candidatesEligible(candidates)) consumers[row.consumer]++
-    }
+    const rows = this.engine.queryAll<{ consumer: TraceEvent['consumer']; count: number }>(
+      'SELECT consumer, COUNT(*) AS count FROM traces WHERE started_at >= ? GROUP BY consumer', [since])
+    for (const row of rows) if (row.consumer in consumers) consumers[row.consumer] = row.count
     const counts = this.engine.queryOne<{ dropped: number; errors: number }>('SELECT COALESCE(SUM(dropped), 0) AS dropped, COALESCE(SUM(errors), 0) AS errors FROM counters')!
     for (const c of this.counters.values()) { counts.dropped += c.dropped; counts.errors += c.errors }
     return { consumers, dropped_events: counts.dropped, write_errors: counts.errors, file_bytes: this.fileBytes() }
@@ -383,6 +401,7 @@ export class RetrievalTraceStore {
     return true
   }
   async schemaVersion(): Promise<number> { await this.open(); return Number(this.engine.queryOne<{ value: string }>("SELECT value FROM meta WHERE key = 'schema_version'")!.value) }
+  async autoVacuumMode(): Promise<number> { await this.open(); return Number(this.engine.getDatabase().exec('PRAGMA auto_vacuum')[0].values[0][0]) }
   async journalMode(): Promise<string> { await this.open(); return String(this.engine.getDatabase().exec('PRAGMA journal_mode')[0].values[0][0]) }
   async close(): Promise<void> {
     if (this.closed) return

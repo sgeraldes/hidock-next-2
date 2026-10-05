@@ -33,7 +33,7 @@ import { caps, type HarnessDescriptor, type ModelInfo } from './descriptor'
 import { reportGeminiCall } from '../pipeline/gemini-call'
 
 const DEFAULT_MODEL = CURRENT_GEMINI_CHAT_MODEL
-const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001'
+export const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001'
 const GEMINI_BATCH_LIMIT = 100
 
 const CAPABILITIES: ReadonlySet<BrainCapability> = new Set<BrainCapability>([

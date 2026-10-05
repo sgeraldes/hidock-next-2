@@ -905,8 +905,7 @@ class RAGService {
           recording_id: doc.metadata.recordingId, capture_id: doc.metadata.captureId,
           chunk_index: doc.metadata.chunkIndex, content_hash: contentHash(doc.content ?? ''),
           rank_before: index + 1, rank_after: null, raw_score: result.score,
-          adjusted_score: inRange(doc.metadata.timestamp, temporalRange) ? result.score * 1.25 : result.score,
-          kept: false, drop_reason: 'eligibility', sent_to_model: false }
+          adjusted_score: null, kept: false, drop_reason: 'threshold', sent_to_model: false }
         trace.candidates.push(candidate)
         vectorCandidates.set(doc, candidate)
       })
@@ -995,12 +994,12 @@ class RAGService {
       const gated: SearchResult[] = []
       for (const result of searchResults) {
         if (result.score < relevanceThreshold) continue
-        gated.push({
-          document: result.document,
-          score: inRange(result.document.metadata.timestamp, temporalRange)
-            ? result.score * 1.25
-            : result.score,
-        })
+        const adjusted = inRange(result.document.metadata.timestamp, temporalRange)
+          ? result.score * 1.25
+          : result.score
+        gated.push({ document: result.document, score: adjusted })
+        const candidate = vectorCandidates.get(result.document)
+        if (candidate) { candidate.adjusted_score = adjusted; candidate.drop_reason = undefined }
       }
       gated.sort((a, b) => b.score - a.score)
 
@@ -1032,8 +1031,11 @@ class RAGService {
         // empty excerpt — and never interpolated raw, which would have put the
         // literal string "undefined" into the context handed to the model.
         const chunkText = doc.content
-        if (chunkText === undefined || chunkText === '') continue
         const candidate = vectorCandidates.get(doc)
+        if (chunkText === undefined || chunkText === '') {
+          if (candidate) candidate.drop_reason = 'empty'
+          continue
+        }
         if (candidate) { candidate.kept = true; candidate.drop_reason = undefined; candidate.rank_after = vectorParts.length + 1 }
         const excerpt = chunkText.substring(0, 200) + (chunkText.length > 200 ? '...' : '')
 

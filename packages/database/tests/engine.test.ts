@@ -465,6 +465,24 @@ describe('DatabaseEngine', () => {
     expect(() => engine.getDatabase()).toThrow('Database not initialized')
   })
 
+  it('incrementalVacuum() frees every free page, not one per call', async () => {
+    // A prepared PRAGMA incremental_vacuum frees one page per step, and run()
+    // takes one step: 120 free pages became 119. The engine steps it to the end.
+    const engine = makeEngine('incremental-vacuum')
+    await engine.initialize()
+    try {
+      engine.getDatabase().run('PRAGMA auto_vacuum = INCREMENTAL')
+      engine.getDatabase().exec('VACUUM')
+      for (let i = 0; i < 80; i++) engine.run('INSERT INTO items (id, name) VALUES (?, ?)', [String(i), 'x'.repeat(6000)])
+      engine.runWithMassDeleteAllowed(() => engine.run('DELETE FROM items'))
+      expect(engine.queryOne<{ freelist_count: number }>('PRAGMA freelist_count')!.freelist_count).toBeGreaterThan(1)
+      engine.incrementalVacuum()
+      expect(engine.queryOne<{ freelist_count: number }>('PRAGMA freelist_count')!.freelist_count).toBe(0)
+    } finally {
+      engine.closeDatabase()
+    }
+  })
+
   it('saveDatabase() and flushNow() are safe checkpoints (no export model)', async () => {
     const engine = makeEngine('checkpoint')
     await engine.initialize()

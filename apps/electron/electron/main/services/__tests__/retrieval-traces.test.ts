@@ -155,7 +155,8 @@ describe('retrieval trace store (real SQLite)', () => {
     expect(rows.map(r => r.trace_id)).toEqual(['text', 'recent'])
     expect(rows[0].query_text).toBeNull()
     expect(rows[0].query_hmac).toBeTruthy()
-    expect((await s.stats()).consumers.chat).toBe(1)
+    // Counts carry no content: 'recent' and 'excluded' are both inside the last 7 days.
+    expect((await s.stats()).consumers.chat).toBe(2)
   })
   it('erases stored and queued text when text retention is disabled; recording off drops everything', async () => {
     const s = store()
@@ -182,6 +183,30 @@ describe('retrieval trace store (real SQLite)', () => {
     expect(rows.length).toBeLessThan(80)
     expect(rows.at(-1)?.trace_id).toBe('79')
     expect((await s.stats()).file_bytes).toBeLessThanOrEqual(128 * 1024)
+  })
+  it('reclaims space with incremental vacuum, never a full VACUUM on the main process', async () => {
+    const s = store({ maxFileBytes: 128 * 1024 })
+    expect(await s.autoVacuumMode()).toBe(2) // INCREMENTAL
+    const statements: string[] = []
+    for (let i = 0; i < 80; i++) {
+      const e = event(String(i), randomBytes(3000).toString('hex'))
+      e.started_at = new Date(Date.now() - (80 - i) * 1000).toISOString()
+      s.record(e)
+    }
+    s.onStatement = sql => statements.push(sql)
+    await s.flush()
+    expect(statements.some(sql => /^\s*VACUUM\b/i.test(sql))).toBe(false)
+    expect(statements.some(sql => /incremental_vacuum/i.test(sql))).toBe(true)
+    expect((await s.stats()).file_bytes).toBeLessThanOrEqual(128 * 1024)
+  })
+  it('counts traces for the stats line without revalidating every candidate', async () => {
+    const eligible = vi.fn(() => true)
+    const s = store({ eligible })
+    s.record(event('a'))
+    s.record({ ...event('b'), consumer: 'brain' })
+    await s.flush()
+    expect((await s.stats()).consumers).toEqual({ chat: 1, explore: 0, brain: 1 })
+    expect(eligible).not.toHaveBeenCalled()
   })
   it('links an answer before or after its queued trace commits', async () => {
     const s = store()

@@ -51,12 +51,15 @@ database and never part of its migrations or restore points. Schema version live
   On overflow the event is dropped and a per-day drop counter goes up. A write error is logged at most once
   per minute and counted.
 - Limits: 100 candidates per channel, 64 KiB per event (candidates beyond the cap are cut and the trace marks
-  truncation), 1 GiB for the file. Over the cap, the oldest traces go first.
+  truncation), 1 GiB for the file. Over the cap, the oldest traces go first. The file runs in
+  `auto_vacuum = INCREMENTAL` mode and eviction returns freed pages with `incremental_vacuum`; a full
+  `VACUUM` would rewrite up to 1 GiB synchronously on the main process.
 - Retention, run at startup and daily: query text erased after 30 days, traces deleted after 90 days.
   Deleting rows only ever touches this file.
-- Eligibility: the store keeps ids, not content. Anything that reads traces (the stats line now, the
-  evaluation tools later) revalidates eligibility at read time, so a recording marked personal, deleted or
-  value-excluded after the fact never surfaces from a trace.
+- Eligibility: the store keeps ids, not content. Anything that reads traces (the evaluation tools later)
+  revalidates eligibility at read time, so a recording marked personal, deleted or value-excluded after the
+  fact never surfaces from a trace. The stats line only counts traces per consumer, which exposes no
+  content, so it skips that per-candidate check.
 
 ## Hooks
 

@@ -1131,6 +1131,15 @@ export class DatabaseEngine {
     }
   }
 
+  /**
+   * Return the free pages of an auto_vacuum=INCREMENTAL database to the OS
+   * without rewriting the file. Native exec steps the pragma to completion; a
+   * prepared statement's run() takes one step and frees a single page.
+   */
+  incrementalVacuum(): void {
+    this.getBdb().exec('PRAGMA incremental_vacuum')
+  }
+
   /* --- Persistence (WAL — no export/flush model) -------------------------- */
 
   /** Checkpoint the WAL into the main database file (best-effort). */

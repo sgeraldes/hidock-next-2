@@ -23,6 +23,10 @@
 import { getConfig } from './config'
 import { getBrainRouter } from './brains'
 import type { BrainId } from './brains'
+import { GEMINI_EMBEDDING_MODEL } from './brains/gemini-api-brain'
+
+/** The model the local-onnx-embed worker loads (local-embedder.ts, models/nemotron-3-embed-1b). */
+const LOCAL_EMBEDDING_MODEL = 'Nemotron-3-Embed-1B'
 
 /**
  * Per-provider RAG relevance gate (used by rag.ts). Cosine SCORE SCALES are
@@ -41,8 +45,8 @@ const DEFAULT_RELEVANCE_THRESHOLD = 0.3
 
 class EmbeddingsService {
   modelForProvider(provider: string | null | undefined): string | null {
-    if (provider === 'gemini-api') return 'gemini-embedding-001'
-    if (provider === 'local-onnx-embed') return 'Nemotron-3-Embed-1B'
+    if (provider === 'gemini-api') return GEMINI_EMBEDDING_MODEL
+    if (provider === 'local-onnx-embed') return LOCAL_EMBEDDING_MODEL
     if (provider === 'ollama') return getConfig().embeddings.ollamaModel
     if (provider === 'openai-compatible') return getConfig().brains.openaiCompatible?.embeddingModel || null
     return null
