@@ -152,7 +152,7 @@ export function matchesIntegrityFilter(
 }
 
 export function integrityFilterLabel(filter: IntegrityFilter): string {
-  if (filter === 'flagged') return 'Transcript problems'
+  if (filter === 'flagged') return 'Transcription problems'
   if (filter === 'broken') return 'Text does not fit the audio'
   if (filter === 'accepted') return 'Accepted as is'
   if (filter.startsWith('validity:')) return VALIDITY_LABELS[filter.slice('validity:'.length) as HeldValidity]?.chip ?? filter

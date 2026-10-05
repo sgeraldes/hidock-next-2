@@ -1043,7 +1043,7 @@ describe('Library — transcript integrity labels', () => {
     } as any)
     render(<MemoryRouter><Library /></MemoryRouter>)
     fireEvent.click(screen.getByRole('button', { name: 'More filters and sorting' }))
-    expect(await screen.findByRole('option', { name: 'Any problem (2)' })).toBeInTheDocument()
+    expect(await screen.findByRole('option', { name: 'Transcription problems (2)' })).toBeInTheDocument()
     expect(screen.getByText('Clean one')).toBeInTheDocument()
     expect(screen.getByText('Shaky one')).toBeInTheDocument()
   })

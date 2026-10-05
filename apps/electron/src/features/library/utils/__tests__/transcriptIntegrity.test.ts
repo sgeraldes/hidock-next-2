@@ -73,7 +73,7 @@ describe('filter values', () => {
     expect(isIntegrityFilter('issue:mystery')).toBe(false)
     expect(isIntegrityFilter('all')).toBe(false)
     expect(integrityFilterLabel('issue:past_audio_end')).toBe('Runs past the audio')
-    expect(integrityFilterLabel('flagged')).toBe('Transcript problems')
+    expect(integrityFilterLabel('flagged')).toBe('Transcription problems')
   })
 })
 

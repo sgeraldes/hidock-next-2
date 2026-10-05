@@ -359,7 +359,7 @@ export function LibraryFilters({
                   <div className="text-xs font-semibold text-foreground/70">Transcript</div>
                   <select value={integrityFilter} onChange={(event) => onIntegrityFilterChange?.(event.target.value)} className="h-8 w-full rounded-md border border-input bg-background px-3 py-1 text-xs" aria-label="Filter by transcript problems">
                     <option value="all">Any transcript</option>
-                    <option value="flagged">Any problem ({integrityCounts.flagged ?? 0})</option>
+                    <option value="flagged">Transcription problems ({integrityCounts.flagged ?? 0})</option>
                     {VALIDITY_FILTER_ORDER.filter((status) => (integrityCounts[`validity:${status}`] ?? 0) > 0 || integrityFilter === `validity:${status}`).map((status) => (
                       <option key={status} value={`validity:${status}`}>{VALIDITY_LABELS[status].chip} ({integrityCounts[`validity:${status}`] ?? 0})</option>
                     ))}
