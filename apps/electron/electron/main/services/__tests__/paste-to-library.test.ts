@@ -26,6 +26,15 @@ describe('paste classifier', () => {
   })
 })
 describe('paste import paths', () => {
+  it.each([
+    ['https://team.slack.com/archives/C123', 'Slack'],
+    ['https://team.atlassian.net/browse/ABC-1', 'Jira']
+  ])('explains missing and failed connectors for %s', async (text, name) => {
+    const deps = setup()
+    expect((await importPaste({ text }, deps))[0].connectorFallback).toBe(`the ${name} connector is not set up`)
+    vi.mocked(deps.connector).mockRejectedValueOnce(new Error('HTTP 403'))
+    expect((await importPaste({ text }, deps))[0].connectorFallback).toBe(`the ${name} connector failed: HTTP 403`)
+  })
   it('routes every file kind independently and continues after a failed file', async () => {
     const deps = setup()
     vi.mocked(deps.artifact).mockRejectedValueOnce(new Error('Unreadable PDF'))

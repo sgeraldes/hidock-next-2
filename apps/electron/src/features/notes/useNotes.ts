@@ -61,6 +61,9 @@ export function useNotes() {
 
   useEffect(() => {
     void refresh()
+    const onImported = () => { void refresh() }
+    window.addEventListener('hidock:downloads-completed', onImported)
+    return () => window.removeEventListener('hidock:downloads-completed', onImported)
   }, [refresh])
 
   /** Write the draft now. Called by the debounce, on switching note, and on unmount. */
@@ -80,6 +83,14 @@ export function useNotes() {
     }
   }, [])
 
+  const leave = useCallback(async (id: string, content: string) => {
+    await flush(id, content)
+    if (!content.trim()) {
+      const result = await window.electronAPI.notes.delete({ id, onlyIfEmpty: true })
+      if (result.success) setNotes((current) => current.filter((note) => note.id !== id))
+    }
+  }, [flush])
+
   /**
    * Open a note, after putting the one that was open on disk.
    *
@@ -96,7 +107,7 @@ export function useNotes() {
       if (analyzeTimer.current) clearTimeout(analyzeTimer.current)
       const leaving = selectedIdRef.current
       const leavingDraft = draftRef.current
-      if (leaving && leaving !== note?.id) void flush(leaving, leavingDraft)
+      if (leaving && leaving !== note?.id) void leave(leaving, leavingDraft)
 
       setSelectedId(note?.id ?? null)
       selectedIdRef.current = note?.id ?? null
@@ -106,7 +117,7 @@ export function useNotes() {
       setRelated([])
       setSuggestions([])
     },
-    [flush]
+    [leave]
   )
 
   const edit = useCallback(
@@ -135,7 +146,7 @@ export function useNotes() {
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current)
       if (analyzeTimer.current) clearTimeout(analyzeTimer.current)
-      if (selectedIdRef.current) void flush(selectedIdRef.current, draftRef.current)
+      if (selectedIdRef.current) void leave(selectedIdRef.current, draftRef.current)
     }
     // Empty on purpose: this runs when the editor really goes away, not on
     // every keystroke. See draftRef above.

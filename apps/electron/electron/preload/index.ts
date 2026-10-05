@@ -794,7 +794,7 @@ export interface ElectronAPI {
       recordingId?: string | null
       linkSource?: 'live' | 'user' | 'suggested' | null
     }) => Promise<{ success: boolean; note?: Note; error?: string }>
-    delete: (request: { id: string }) => Promise<{ success: boolean }>
+    delete: (request: { id: string; onlyIfEmpty?: boolean }) => Promise<{ success: boolean }>
     analyze: (request: { id: string; force?: boolean }) => Promise<{ success: boolean; note?: Note; error?: string }>
     related: (request: { id: string }) => Promise<{ success: boolean; items?: NoteRelatedItem[]; error?: string }>
     meetingSuggestions: (request: { id: string }) => Promise<{ success: boolean; suggestions?: NoteMeetingSuggestion[]; error?: string }>

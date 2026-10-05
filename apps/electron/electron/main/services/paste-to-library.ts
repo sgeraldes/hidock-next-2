@@ -40,6 +40,22 @@ export function isConnectorLink(raw: string): boolean {
     || (url.hostname === 'app.slack.com' && /^\/client\/T[A-Z0-9]+\/[CDG][A-Z0-9]+/.test(url.pathname))
 }
 
+/** Identity remains useful even when a provider returns only a login page. */
+export function connectorLinkIdentity(raw: string): { name: string; title: string } | null {
+  if (!isConnectorLink(raw)) return null
+  const url = new URL(raw)
+  if (url.hostname.endsWith('.slack.com')) {
+    const archive = url.pathname.match(/\/archives\/([^/]+)(?:\/p(\d+))?/)
+    const client = url.pathname.match(/\/client\/([^/]+)\/([^/]+)/)
+    const workspace = client?.[1] ?? url.hostname.split('.')[0]
+    const channel = archive?.[1] ?? client?.[2]
+    const digits = archive?.[2]
+    const thread = url.searchParams.get('thread_ts') ?? (digits ? `${digits.slice(0, -6)}.${digits.slice(-6)}` : null)
+    return { name: 'Slack', title: `${workspace} · ${channel}${thread ? ` · thread ${thread}` : ' · channel'}` }
+  }
+  return { name: 'Jira', title: `${url.hostname} · ${url.pathname.split('/').filter(Boolean).pop()}` }
+}
+
 export async function importPaste(snapshot: PasteSnapshot, deps: PasteDeps): Promise<PasteResult[]> {
   const items = classifyPaste(snapshot)
   if (!items.length) return [{ title: 'Clipboard', error: 'The clipboard is empty or has no supported content.' }]
@@ -51,14 +67,18 @@ export async function importPaste(snapshot: PasteSnapshot, deps: PasteDeps): Pro
       } else if (item.png) results.push(await deps.bitmap(item.png))
       else if (item.kind === 'url') {
         let connected: PasteResult | null = null
-        let warning: string | undefined
-        if (isConnectorLink(item.text!)) {
-          try { connected = await deps.connector(item.text!) } catch (error) {
-            warning = `Connector failed; saved as a link: ${error instanceof Error ? error.message : String(error)}`
+        let connectorFallback: string | undefined
+        const identity = connectorLinkIdentity(item.text!)
+        if (identity) {
+          try {
+            connected = await deps.connector(item.text!)
+            if (!connected) connectorFallback = `the ${identity.name} connector is not set up`
+          } catch (error) {
+            connectorFallback = `the ${identity.name} connector failed: ${error instanceof Error ? error.message : String(error)}`
           }
         }
         const result = connected ?? await deps.link(item.text!)
-        results.push({ ...result, warning: warning ?? result.warning })
+        results.push({ ...result, connectorFallback })
       } else results.push(await deps.note(item.text!))
     } catch (error) {
       results.push({ title: item.path ?? item.text?.slice(0, 80) ?? 'Screenshot', error: error instanceof Error ? error.message : String(error) })

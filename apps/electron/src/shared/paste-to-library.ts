@@ -9,6 +9,9 @@ export interface PasteResult {
   title: string
   error?: string
   warning?: string
+  destination?: 'note'
+  connectorFallback?: string
+  textUnreadable?: boolean
 }
 
 export interface PasteLibraryAPI {

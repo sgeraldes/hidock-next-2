@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, writeFileSync, unlinkSync, rmdirSync, existsSyn
 import { basename, join } from 'path'
 import { SlackClient, messageToSourceItems } from '@hidock/connectors-slack'
 import type { PasteResult, PasteSnapshot } from '../../../src/shared/paste-to-library'
-import { importPaste, type PasteDeps } from './paste-to-library'
+import { importPaste, connectorLinkIdentity, type PasteDeps } from './paste-to-library'
 import { readPasteClipboard } from './paste-clipboard'
 import { fetchPastePage } from './paste-page'
 import { importArtifact, type ImportArtifactOptions } from './artifact-service'
@@ -14,7 +14,7 @@ import { getDataPath } from './config'
 import { getConnectorHost } from './connectors'
 import { getConnectorStore } from './connectors/connector-store'
 import { queryOne, run } from './database'
-import { createNote } from './notes'
+import { createNote, updateNote } from './notes'
 import { queueTranscriptionIfEnabled } from './transcription'
 
 async function staged<T>(name: string, bytes: Uint8Array | string, action: (path: string) => Promise<T>): Promise<T> {
@@ -31,8 +31,9 @@ async function artifact(path: string, opts: ImportArtifactOptions = {}): Promise
   const title = queryOne<{ title: string; user_title: string | null }>('SELECT title, user_title FROM knowledge_captures WHERE id = ?', [imported.knowledgeCaptureId])
   const metadata = JSON.parse(imported.artifact.metadata || '{}') as Record<string, unknown>
   const warning = metadata.extractionError && metadata.extractionError !== 'NO_TYPE'
-    ? `File saved; text extraction failed: ${String(metadata.extractionMessage || metadata.extractionError)}` : undefined
-  return { id: imported.knowledgeCaptureId, title: title?.user_title || title?.title || opts.title || basename(path), warning }
+    ? `Search cannot find this file's contents. Text extraction failed: ${String(metadata.extractionMessage || metadata.extractionError)}` : undefined
+  return { id: imported.knowledgeCaptureId, title: title?.user_title || title?.title || opts.title || basename(path), warning,
+    textUnreadable: warning ? true : undefined }
 }
 
 async function textArtifact(text: string, title: string, extension: string, opts: ImportArtifactOptions = {}): Promise<PasteResult> {
@@ -78,10 +79,12 @@ async function connectorLink(raw: string): Promise<PasteResult | null> {
   if (!archive && !clientLink) return null
   const channelId = archive?.[1] ?? clientLink![2]
   const timestamp = url.searchParams.get('thread_ts') ?? (archive?.[2] ? `${archive[2].slice(0, -6)}.${archive[2].slice(-6)}` : undefined)
+  let configured = false
   for (const summary of getConnectorHost().list()) {
     if (summary.descriptor.id !== 'slack') continue
     const token = getConnectorStore().getSecret(summary.instanceId, 'token')
     if (!token) continue
+    configured = true
     const client = new SlackClient(token, { maxRetries: 0, fetchFn: async (input, init) => {
       const requestUrl = new URL(String(input))
       if (requestUrl.origin !== 'https://slack.com' || !requestUrl.pathname.startsWith('/api/')) throw new Error('Refused credentials for an unknown Slack API host.')
@@ -111,6 +114,7 @@ async function connectorLink(raw: string): Promise<PasteResult | null> {
       sourceConnectorId: summary.instanceId, sourceRef: raw, metadata: { url: raw, channelId, threadTs: timestamp }
     })
   }
+  if (configured) throw new Error('No configured Slack connector matches this workspace.')
   return null
 }
 
@@ -118,10 +122,17 @@ const deps: PasteDeps = {
   artifact: (path) => artifact(path),
   audio: importAudio,
   video: importVideo,
-  note: (text) => textArtifact(text, text.split(/\r?\n/)[0].trim().slice(0, 80) || 'Pasted note', 'txt'),
+  note: async (text) => {
+    const title = text.split(/\r?\n/)[0].trim().slice(0, 80) || 'Pasted note'
+    const note = createNote({ content: text })
+    updateNote(note.id, { title })
+    return { id: note.id, title, destination: 'note' }
+  },
   bitmap: (png) => staged(`Screenshot ${new Date().toISOString().replace(/[:.]/g, '-')}.png`, png, (path) => artifact(path)),
   connector: connectorLink,
   link: async (url) => {
+    const identity = connectorLinkIdentity(url)
+    if (identity) return textArtifact(url, identity.title, 'url', { metadata: { url, pageTitle: identity.title } })
     let page: { title: string; text: string } = { title: new URL(url).hostname, text: '' }
     let warning: string | undefined
     try { page = await fetchPastePage(url, (input, init) => net.fetch(input, init)) }

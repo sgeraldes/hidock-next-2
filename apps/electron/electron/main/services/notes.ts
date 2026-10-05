@@ -297,9 +297,10 @@ export function needsAnalysis(id: string): boolean {
  * An orphan vector would make the assistant quote a note that no longer exists,
  * which is worse than not finding it. Same transaction, no window.
  */
-export function deleteNote(id: string): boolean {
+export function deleteNote(id: string, onlyIfEmpty = false): boolean {
   const existing = getNote(id)
   if (!existing) return false
+  if (onlyIfEmpty && (existing.title?.trim() || existing.content.trim())) return false
   runInTransaction(() => {
     runNoSave('UPDATE notes SET deleted_at = ? WHERE id = ?', [new Date().toISOString(), id])
     runNoSave(`DELETE FROM vector_embeddings WHERE source_type = 'note' AND capture_id = ?`, [id])

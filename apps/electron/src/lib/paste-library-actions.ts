@@ -7,8 +7,15 @@ export function showPasteResults(results: PasteResult[], navigate: NavigateFunct
     if (result.error) {
       toast.error(`Could not add ${result.title}`, result.error)
     } else {
-      toast({ variant: 'success', title: `Added to Library: ${result.title}`, description: result.warning,
-        action: { label: 'Open', onClick: () => navigate('/library', { state: { selectedId: result.id } }) } })
+      toast({ variant: result.connectorFallback || result.textUnreadable ? 'warning' : 'success',
+        title: result.connectorFallback ? `Saved as a link: ${result.connectorFallback}`
+          : result.textUnreadable ? 'Added, but its text could not be read' : `Added to Library: ${result.title}`,
+        description: result.warning,
+        action: result.connectorFallback
+          ? { label: 'Connector settings', onClick: () => navigate('/settings/connectors') }
+          : { label: 'Open', onClick: () => result.destination === 'note'
+            ? navigate(`/notes?note=${encodeURIComponent(result.id!)}`)
+            : navigate('/library', { state: { selectedId: result.id } }) } })
     }
   }
   if (results.some((result) => !result.error)) window.dispatchEvent(new Event('hidock:downloads-completed'))

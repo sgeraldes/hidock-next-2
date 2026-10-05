@@ -40,13 +40,15 @@ function clean(path: string): void {
 }
 afterAll(() => { closeDatabase(); clean(root) })
 
-it('persists pasted note content and an 80-character display title into the existing artifact/capture schema', async () => {
+it('persists pasted text in notes with a first-line title and no artifact', async () => {
   const text = `${'a'.repeat(100)}\nDetails`
   const [result] = await pasteLibrary({ text })
   expect(result.title).toHaveLength(80)
-  const row = queryOne<{ extracted_text: string; storage_path: string }>('SELECT extracted_text, storage_path FROM artifacts WHERE knowledge_capture_id = ?', [result.id!])!
-  expect(row.extracted_text).toBe(text)
-  expect(readFileSync(row.storage_path, 'utf8')).toBe(text)
+  const row = queryOne<{ content: string; title: string }>('SELECT content, title FROM notes WHERE id = ?', [result.id!])!
+  expect(row.content).toBe(text)
+  expect(row.title).toBe('a'.repeat(80))
+  expect(result.destination).toBe('note')
+  expect(queryOne('SELECT id FROM artifacts WHERE knowledge_capture_id = ?', [result.id!])).toBeUndefined()
   expect(getVectorStore).not.toHaveBeenCalled()
 })
 it('stores screenshot PNG without calling image vision or embeddings', async () => {
@@ -105,7 +107,20 @@ it('reports a PDF extraction failure while preserving the imported original', as
   const [result] = await pasteLibrary({ files: [path] })
   expect(result.error).toBeUndefined()
   expect(result.warning).toContain('extraction')
+  expect(result.textUnreadable).toBe(true)
   expect(queryOne('SELECT id FROM artifacts WHERE knowledge_capture_id = ?', [result.id!])).toBeDefined()
+})
+
+it('uses Slack URL identity and explains a missing connector without fetching its login page', async () => {
+  mocks.list.mockReturnValue([])
+  const calls = vi.mocked(net.fetch).mock.calls.length
+  const [result] = await pasteLibrary({ text: 'https://team.slack.com/archives/C123/p1234567890123456' })
+  expect(result.title).toContain('team')
+  expect(result.title).toContain('C123')
+  expect(result.title).toContain('1234567890.123456')
+  expect(result.connectorFallback).toBe('the Slack connector is not set up')
+  expect(vi.mocked(net.fetch).mock.calls.length).toBe(calls)
+  expect(queryOne<{ kind: string }>('SELECT kind FROM artifacts WHERE knowledge_capture_id = ?', [result.id!])!.kind).toBe('link')
 })
 
 it('imports PDF and text file fixtures through the existing artifact extraction path', async () => {

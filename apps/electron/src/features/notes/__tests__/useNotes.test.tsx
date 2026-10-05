@@ -82,6 +82,37 @@ async function settle() {
   })
 }
 
+it('discards an untouched empty draft when leaving the editor', async () => {
+  const { result, unmount } = renderHook(() => useNotes())
+  await settle()
+  await act(async () => { await result.current.create() })
+  const id = result.current.selected!.id
+  unmount()
+  await settle()
+  expect(window.electronAPI.notes.delete).toHaveBeenCalledWith({ id, onlyIfEmpty: true })
+})
+
+it('refreshes notes pasted while the Notes page is already open', async () => {
+  const { result } = renderHook(() => useNotes())
+  await settle()
+  notes = [makeNote('pasted', 'Pasted here'), ...notes]
+  act(() => window.dispatchEvent(new Event('hidock:downloads-completed')))
+  await settle()
+  expect(result.current.notes.some((note) => note.id === 'pasted')).toBe(true)
+})
+
+it('keeps text typed just before leaving', async () => {
+  const { result, unmount } = renderHook(() => useNotes())
+  await settle()
+  await act(async () => { await result.current.create() })
+  const id = result.current.selected!.id
+  act(() => result.current.edit('Keep this'))
+  unmount()
+  await settle()
+  expect(updates).toContainEqual({ id, content: 'Keep this' })
+  expect(window.electronAPI.notes.delete).not.toHaveBeenCalled()
+})
+
 describe('saving', () => {
   it('writes once for a burst of keystrokes, not once per keystroke', async () => {
     const { result } = renderHook(() => useNotes())
