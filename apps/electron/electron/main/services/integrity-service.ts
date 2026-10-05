@@ -1096,6 +1096,19 @@ class IntegrityService {
   // Repair Methods
   // ==========================================================================
 
+  private retainDeviceRecording(issue: IntegrityIssue): RepairResult | undefined {
+    const recording = queryAll<Recording>('SELECT * FROM recordings WHERE id = ?', [issue.recordingId])[0]
+    if (!recording || recording.on_device === 0) return undefined
+    // Local absence says nothing about a disconnected device. Unknown legacy
+    // flags are also insufficient evidence to delete a durable identity.
+    return {
+      issueId: issue.id,
+      success: false,
+      action: 'repair',
+      error: 'The recording may still be on the device — leaving its row and references untouched'
+    }
+  }
+
   private repairOrphanedDownload(issue: IntegrityIssue): RepairResult {
     if (!issue.recordingId) {
       console.error('[IntegrityService] repairOrphanedDownload: No recording ID for issue', issue.id)
@@ -1129,8 +1142,9 @@ class IntegrityService {
         }
       }
 
-      // Delete the orphaned recording record - the file is already gone
-      // When device reconnects, a fresh record will be created with correct filename
+      const retained = this.retainDeviceRecording(issue)
+      if (retained) return retained
+      // Only a confirmed local-only orphan may be removed.
       console.log('[IntegrityService] Deleting orphaned recording:', issue.recordingId, issue.filename)
       run(`DELETE FROM recordings WHERE id = ?`, [issue.recordingId])
       saveDatabase()
@@ -1311,6 +1325,8 @@ class IntegrityService {
         }
       }
 
+      const retained = this.retainDeviceRecording(issue)
+      if (retained) return retained
       run(`DELETE FROM recordings WHERE id = ?`, [issue.recordingId])
       return { issueId: issue.id, success: true, action: 'Deleted orphaned recording record' }
     } catch (error) {

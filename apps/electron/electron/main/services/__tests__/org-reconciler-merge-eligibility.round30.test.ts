@@ -60,8 +60,8 @@ function recording(
   opts: { personal?: boolean; deleted?: boolean; filePath?: string | null } = {}
 ): void {
   run(
-    `INSERT INTO recordings (id, filename, file_path, date_recorded, personal, deleted_at, meeting_id, on_local)
-     VALUES (?, ?, ?, '2026-01-02T10:00:00Z', ?, ?, ?, 1)`,
+    `INSERT INTO recordings (id, filename, file_path, date_recorded, personal, deleted_at, meeting_id, on_local, on_device)
+     VALUES (?, ?, ?, '2026-01-02T10:00:00Z', ?, ?, ?, 1, 0)`,
     [id, filename, opts.filePath ?? `/tmp/${filename}`, opts.personal ? 1 : 0, opts.deleted ? '2026-07-01T00:00:00Z' : null, meetingId]
   )
 }

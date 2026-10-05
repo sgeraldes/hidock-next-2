@@ -271,8 +271,8 @@ describe('organization batches on real SQLite', () => {
   function seedDuplicateRecordings(): void {
     runInTransaction(() => {
       for (let i = 0; i < 40; i++) {
-        run(`INSERT INTO recordings (id, filename, file_path, date_recorded, created_at, on_local)
-          VALUES (?, ?, '/unused', '2026-09-24T10:00:00Z', '2026-09-24T10:00:00Z', 1)`,
+        run(`INSERT INTO recordings (id, filename, file_path, date_recorded, created_at, on_local, on_device)
+          VALUES (?, ?, '/unused', '2026-09-24T10:00:00Z', '2026-09-24T10:00:00Z', 1, 0)`,
         [`r${i}`, `take${Math.floor(i / 2)}.${i % 2 ? 'wav' : 'hda'}`])
       }
     })

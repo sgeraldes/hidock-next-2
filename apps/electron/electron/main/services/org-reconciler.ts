@@ -1302,6 +1302,11 @@ function* mergeRecordingBatches(totals: { groups: number; rows: number }): Gener
   if (eligFailClosed) return
   yield
   for (const group of dupGroups) {
+    // Local audio is not proof that an on-device row is disposable. Boot runs
+    // without the device and cannot verify that identity or safely move every
+    // user reference. Keep possible on-device rows stable; discovery resolves
+    // extension variants to the local canonical row instead of recreating them.
+    if (group.some((r) => r.on_device !== 0)) continue
     // Only the eligible members of the group may be collapsed together.
     const eligibleGroup = group.filter((r) => eligibleRecIds.has(r.id))
     if (eligibleGroup.length < 2) continue
