@@ -29,7 +29,7 @@
 import { FRAME_SECONDS, LOUD_DB, LOUD_GAIN } from './audio-profile'
 
 /** Bumped when a rule changes, so stored verdicts are recomputed. */
-export const VALIDITY_VERSION = 1
+export const VALIDITY_VERSION = 2
 
 export type ValidityStatus = 'audio' | 'invalid' | 'incomplete' | 'doubtful' | 'valid'
 

@@ -139,6 +139,25 @@ describe('a sample of the audio', () => {
       diarizedSegments: [{ start: 0, end: 1057 }] })?.measures.detectedSpeechSeconds).toBe(1057)
     expect(stored('rec98')?.validity_status).toBe('incomplete')
   })
+  it('rechecks v1 verdicts and retracts derived metadata, preserving text and owner links', async () => {
+    seed('old-sparse', [[160, 600]])
+    run(`INSERT INTO meetings (id, subject, start_time, end_time) VALUES ('old-meeting', 'Meeting', '2026-10-04', '2026-10-05')`)
+    run(`UPDATE recordings SET meeting_id = 'old-meeting', correlation_method = 'ai_transcript_match' WHERE id = 'old-sparse'`)
+    run(`UPDATE transcripts SET speakers = ?, full_text = 'keep original', word_count = 17,
+      summary = 'bad summary', title_suggestion = 'bad title', validity_status = 'valid', validity_version = 1,
+      validity_json = '{"measures":{"attendees":0}}' WHERE recording_id = 'old-sparse'`,
+      [JSON.stringify([{ start: 0, end: 600, text: 'word '.repeat(17) }])])
+    run(`INSERT INTO processing_runs (id, recording_id, stage, provider, tool, execution, status, started_at, quality_json)
+      VALUES ('old-vad', 'old-sparse', 'vad', 'hidock-next', 'vad', 'local', 'completed', '2026-10-04', '{"nonSilentSeconds":598}')`)
+    await backfillTranscriptValidity()
+    expect(stored('old-sparse')).toMatchObject({ validity_status: 'incomplete', validity_version: 2 })
+    expect(queryOne('SELECT full_text, summary, title_suggestion FROM transcripts WHERE recording_id = ?', ['old-sparse']))
+      .toEqual({ full_text: 'keep original', summary: null, title_suggestion: null })
+    expect(queryOne<{ meeting_id: string | null }>('SELECT meeting_id FROM recordings WHERE id = ?', ['old-sparse'])?.meeting_id).toBeNull()
+    run(`UPDATE recordings SET meeting_id = 'old-meeting', correlation_method = 'manual' WHERE id = 'old-sparse'`)
+    refreshTranscriptValidity('old-sparse')
+    expect(queryOne<{ meeting_id: string | null }>('SELECT meeting_id FROM recordings WHERE id = ?', ['old-sparse'])?.meeting_id).toBe('old-meeting')
+  })
   it('settles a doubtful transcript only while it is the transcript that was sampled', () => {
     seed('doubt', [[160, 600]])
     const lines = Array.from({ length: 20 }, (_, i) => ({ speaker: 'A', start: Math.floor(i / 2) * 60, end: Math.floor(i / 2) * 60 + 50, text: `w ${i} `.repeat(10) }))

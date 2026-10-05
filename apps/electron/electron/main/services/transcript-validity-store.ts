@@ -15,6 +15,7 @@ import { getCachePath } from './file-storage'
 import {
   assessTranscriptValidity,
   VALIDITY_VERSION,
+  isUnusableValidity,
   type TranscriptValidity,
   type ValidityInput,
   type ValiditySegment
@@ -180,7 +181,24 @@ export function refreshTranscriptValidity(recordingId: string): TranscriptValidi
     VALIDITY_VERSION,
     recordingId
   ])
+  if (isUnusableValidity(validity.status)) retireUnusableDerivedMetadata(recordingId)
   return validity
+}
+
+/** Retract machine results only. Audio, transcript text and owner decisions survive. */
+function retireUnusableDerivedMetadata(recordingId: string): void {
+  runNoSave(`UPDATE transcripts SET summary = NULL, title_suggestion = NULL, action_items = NULL,
+    topics = NULL, key_points = NULL, sentiment = NULL, sentiment_segments = NULL, event_markers = NULL,
+    question_suggestions = NULL, mentioned_people = NULL WHERE recording_id = ?`, [recordingId])
+  runNoSave(`UPDATE knowledge_captures SET summary = NULL,
+    title = COALESCE(user_title, (SELECT filename FROM recordings WHERE id = ?), title)
+    WHERE source_recording_id = ?`, [recordingId, recordingId])
+  // A calendar time match is independent of the transcript; only text-made links go.
+  runNoSave(`UPDATE knowledge_captures SET meeting_id = NULL, correlation_confidence = NULL, correlation_method = NULL
+    WHERE source_recording_id = ? AND correlation_method = 'ai_transcript_match'`, [recordingId])
+  runNoSave(`UPDATE recordings SET meeting_id = NULL, correlation_confidence = NULL, correlation_method = NULL
+    WHERE id = ? AND correlation_method = 'ai_transcript_match'`, [recordingId])
+  runNoSave(`UPDATE recording_meeting_candidates SET is_selected = 0 WHERE recording_id = ?`, [recordingId])
 }
 
 /**
@@ -224,6 +242,19 @@ export async function backfillTranscriptValidity(
         VALIDITY_VERSION,
         recording_id
       ])
+      if (isUnusableValidity(validity.status)) {
+        retireUnusableDerivedMetadata(recording_id)
+        // Graph and RAG reads already share the validity eligibility gate. A wiki
+        // is an external file, so explicitly reconcile it when a verdict changes.
+        if (row.validity_status !== validity.status) {
+          try {
+            const { reconcileWikiEligibility } = await import('./meeting-wiki')
+            reconcileWikiEligibility(recording_id)
+          } catch (error) {
+            console.warn(`[transcript-validity] Wiki cleanup failed for ${recording_id}:`, error)
+          }
+        }
+      }
       if (row.validity_status !== validity.status) changedIds.push(recording_id)
       counts.checked++
       counts[validity.status] = (counts[validity.status] ?? 0) + 1
