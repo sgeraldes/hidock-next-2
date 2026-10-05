@@ -4,6 +4,8 @@ import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { randomBytes } from 'crypto'
+import Database from 'better-sqlite3'
+import { DatabaseEngine } from '@hidock/database'
 import { RetrievalTraceStore, contentHash, type TraceEvent } from '../retrieval-traces'
 
 const directories: string[] = []
@@ -34,6 +36,28 @@ afterEach(async () => {
 })
 
 describe('retrieval trace store (real SQLite)', () => {
+  it('stops eviction for a pinned reader, bounds delete batches, and reclaims after release', async () => {
+    const s = store({ maxFileBytes: 128 * 1024 })
+    await s.schemaVersion()
+    s.record(event('initial'))
+    await s.flush()
+    const reader = new Database(s.path)
+    reader.exec('BEGIN')
+    reader.prepare('SELECT * FROM traces').all()
+    const engine = (s as unknown as { engine: DatabaseEngine }).engine
+    engine.getDatabase().run('PRAGMA busy_timeout = 50')
+    const transactions = vi.spyOn(engine, 'runInTransaction')
+    try {
+      for (let i = 0; i < 40; i++) s.record(event(String(i), randomBytes(3000).toString('hex')))
+      await s.flush()
+      expect(transactions.mock.calls.length).toBeLessThanOrEqual(6) // insert + at most five delete batches
+      expect((await s.read()).length).toBeGreaterThan(0)
+      reader.exec('ROLLBACK')
+      for (let i = 0; i < 30; i++) await s.flush()
+      expect((await s.stats()).file_bytes).toBeLessThanOrEqual(128 * 1024)
+      expect((await s.read()).length).toBeGreaterThan(0)
+    } finally { reader.close() }
+  })
   it('keeps full HMAC identity for long queries without retaining their full text in an initialized queue', async () => {
     const s = store()
     await s.schemaVersion()

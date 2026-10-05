@@ -1136,8 +1136,11 @@ export class DatabaseEngine {
    * without rewriting the file. Native exec steps the pragma to completion; a
    * prepared statement's run() takes one step and frees a single page.
    */
-  incrementalVacuum(): void {
-    this.getBdb().exec('PRAGMA incremental_vacuum')
+  incrementalVacuum(pages?: number): void {
+    if (pages !== undefined && (!Number.isSafeInteger(pages) || pages <= 0)) {
+      throw new RangeError('Incremental vacuum pages must be a positive integer')
+    }
+    this.getBdb().exec(pages === undefined ? 'PRAGMA incremental_vacuum' : `PRAGMA incremental_vacuum(${pages})`)
   }
 
   /* --- Persistence (WAL — no export/flush model) -------------------------- */

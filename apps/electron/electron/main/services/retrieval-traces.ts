@@ -319,7 +319,6 @@ export class RetrievalTraceStore {
         [new Date(now - 30 * 86400000).toISOString()])
       this.engine.run('DELETE FROM traces WHERE started_at < ?', [new Date(now - 90 * 86400000).toISOString()])
     })
-    this.engine.getDatabase().run('PRAGMA wal_checkpoint(TRUNCATE)')
     this.evict()
   }
   async retain(): Promise<void> {
@@ -332,29 +331,32 @@ export class RetrievalTraceStore {
   }
   /** Test seam: observes the maintenance statements eviction runs. */
   onStatement?: (sql: string) => void
-  private checkpoint(): void {
+  private checkpoint(): boolean {
     this.onStatement?.('PRAGMA wal_checkpoint(TRUNCATE)')
-    this.engine.getDatabase().run('PRAGMA wal_checkpoint(TRUNCATE)')
+    const result = this.engine.getDatabase().exec('PRAGMA wal_checkpoint(TRUNCATE)')
+    return Number(result[0].values[0][0]) === 0
   }
   private reclaim(): void {
-    this.onStatement?.('PRAGMA incremental_vacuum')
-    this.engine.incrementalVacuum()
+    this.onStatement?.('PRAGMA incremental_vacuum(2000)')
+    this.engine.incrementalVacuum(2000)
   }
   private evict(): void {
     const cap = this.options.maxFileBytes ?? 1024 ** 3
-    if (this.fileBytes() <= cap) return
-    this.checkpoint()
-    while (this.fileBytes() > cap) {
+    if (!this.checkpoint()) return
+    const pragma = (name: string) => Number(this.engine.getDatabase().exec(`PRAGMA ${name}`)[0].values[0][0])
+    const logicalBytes = () => (pragma('page_count') - pragma('freelist_count')) * pragma('page_size')
+    for (let batch = 0; batch < 5 && logicalBytes() > cap; batch++) {
       const count = this.engine.queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM traces')!.count
-      const batchSize = count < 1000 ? 1 : Math.max(1, Math.floor(count * 0.1))
+      const batchSize = Math.max(1, Math.min(1000, Math.ceil(count / 2)))
       const oldest = this.engine.queryAll<{ trace_id: string }>('SELECT trace_id FROM traces ORDER BY started_at LIMIT ?', [batchSize])
       if (!oldest.length) break
       this.engine.runInTransaction(() => {
         for (const row of oldest) this.engine.run('DELETE FROM traces WHERE trace_id = ?', [row.trace_id])
       })
-      this.reclaim()
-      this.checkpoint()
+      if (!this.checkpoint()) return
     }
+    if (pragma('freelist_count') > 0) this.reclaim()
+    this.checkpoint()
   }
   applySettings(settings: TraceSettings): void {
     if (!settings.recordQueries && this.settings.recordQueries) this.epoch++

@@ -33,6 +33,21 @@ const SCHEMA = `
 `
 
 describe('DatabaseEngine', () => {
+  it('incrementalVacuum limits reclaimed pages through native exec', async () => {
+    const engine = makeEngine('bounded-vacuum')
+    await engine.initialize()
+    try {
+      engine.getDatabase().run('PRAGMA auto_vacuum = INCREMENTAL')
+      engine.getDatabase().run('VACUUM')
+      for (let i = 0; i < 40; i++) engine.run('INSERT INTO items VALUES (?, ?)', [String(i), 'x'.repeat(8192)])
+      engine.run('DELETE FROM items')
+      const free = () => Number(engine.getDatabase().exec('PRAGMA freelist_count')[0].values[0][0])
+      const before = free()
+      expect(before).toBeGreaterThan(10)
+      engine.incrementalVacuum(3)
+      expect(before - free()).toBe(3)
+    } finally { engine.closeDatabase() }
+  })
   const paths: string[] = []
 
   afterEach(() => {
