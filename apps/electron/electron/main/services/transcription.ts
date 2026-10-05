@@ -159,7 +159,8 @@ import { analyzeAudioPreflight, type AudioPreflightReport } from './audio-prefli
 import { audioProfileForTranscription } from './audio-profile-store'
 import { isTranscriptUntrusted, syncTrustVerdicts } from './transcript-trust'
 import { previewTranscriptValidity } from './transcript-validity-store'
-import { isUnusableValidity } from './transcript-validity'
+import { assessTranscriptValidity, isUnusableValidity } from './transcript-validity'
+import { retryInSmallerChunks } from './transcription-completeness-retry'
 import { readAudioDuration } from './audio-duration'
 import { minRecordingSeconds, qualityRules } from './quality-rules'
 import { isAutomaticMeetingLinkTemporallyEligible } from './recording-match-scoring'
@@ -2381,7 +2382,8 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
       quality: {
         modelVersion: speakerLinking.modelVersion,
         device: speakerLinking.device,
-        reason: speakerLinking.reason ?? null
+        reason: speakerLinking.reason ?? null,
+        segments: speakerLinking.segments
       }
     })
   } catch (error) {
@@ -2451,7 +2453,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
         execution: 'provider-managed',
         parentRunIds: [vadRun.id, acousticDiarizationRun.id]
       })
-  const transcriptionRun = createProcessingRun({
+  let transcriptionRun = createProcessingRun({
     recordingId,
     stage: 'transcription',
     provider: transcriptionProvider,
@@ -2461,7 +2463,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     parentRunIds: [vadRun.id, diarizationRun.id, voiceIdRun.id]
   })
   let rawTranscript: RawTranscriptionResult
-  const transcriptionUsage = createGeminiUsageCollector()
+  let transcriptionUsage = createGeminiUsageCollector()
   const providerFilePath = recording.file_path // narrowed here; a closure below would lose it
   try {
     rawTranscript = transcriptionProvider === 'vibevoice'
@@ -2514,19 +2516,69 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   // Text and provider timestamps are retained; unknown/unmatched turns are not
   // force-assigned.
   rawTranscript.speakers = reconcileProviderSpeakers(rawTranscript.speakers, speakerLinking)
+  const completenessEvidence = {
+    diarizedSegments: speakerLinking.available ? speakerLinking.segments : undefined,
+    vadSpeechSeconds: audioPreflight.nonSilentSeconds,
+    durationSeconds: audioPreflight.durationSeconds
+  }
+  const checkCompleteness = () => assessTranscriptValidity({
+    fileName: recording.filename, segments: JSON.parse(rawTranscript.speakers ?? '[]'),
+    envelope: null, audioCategory: 'speech', attendees: 0, integrityStatus: null, accepted: false,
+    ...completenessEvidence,
+    providerSeconds: (rawTranscript.providerTimeline ?? []).filter(e => e.phase === 'provider-transcription' && e.status === 'completed')
+      .reduce((sum, e) => sum + (e.elapsedMs ?? 0), 0) / 1000
+  })
+  let completeness = checkCompleteness()
+  if (completeness.status === 'incomplete' && transcriptionProvider === 'gemini' && audioPreflight.durationSeconds > 0) {
+    completeProcessingRun(transcriptionRun.id, {
+      status: 'degraded', qualityStatus: 'incomplete', quality: completeness as unknown as Record<string, unknown>,
+      outputRefs: { attempt: 1, fullText: rawTranscript.fullText, speakers: rawTranscript.speakers },
+      ...runUsageFields(transcriptionUsage.total(), { providerTimeline: rawTranscript.providerTimeline ?? [] })
+    })
+    const firstAttempt = rawTranscript
+    const firstRun = transcriptionRun
+    const retryRun = createProcessingRun({ recordingId, stage: 'transcription', provider: 'gemini',
+      tool: 'gemini-smaller-chunks-retry', model: transcriptionModel, execution, parentRunIds: [firstRun.id] })
+    const retryUsage = createGeminiUsageCollector()
+    try {
+      progressCallback?.('retrying_incomplete_transcription', 25)
+      const retried = await retryUsage.run(() => retryInSmallerChunks(providerFilePath, audioPreflight.durationSeconds,
+        () => stillWanted(recordingId),
+        (path, seconds) => transcribeWithGemini(path, meetingContext, progressCallback, () => stillWanted(recordingId), seconds),
+        audioPreflight.activityIntervals))
+      rawTranscript = { ...firstAttempt, ...retried }
+      rawTranscript.speakers = reconcileProviderSpeakers(rawTranscript.speakers, speakerLinking)
+      completeness = checkCompleteness()
+      transcriptionRun = retryRun
+      transcriptionUsage = retryUsage
+    } catch (error) {
+      failProcessingRun(retryRun.id, error instanceof Error ? error.message : String(error),
+        error instanceof TranscriptionCancelledError, runUsageFields(retryUsage.total()))
+      if (error instanceof TranscriptionCancelledError) {
+        updateRecordingTranscriptionStatus(recordingId, statusBeforeRun)
+        return { status: 'cancelled' }
+      }
+      // Keep the first transcript visible with its failure reasons, even when
+      // retry extraction/provider fails. Never turn it into a successful result.
+      console.warn('[Transcription] Completeness retry failed; retaining incomplete text:', error)
+    }
+  }
   const fullText = rawTranscript.fullText
   const diarizationQuality = parseAndAssessDiarization(
     rawTranscript.speakers,
     recording.duration_seconds,
     audioPreflight.activityIntervals
   )
-  if (diarizationQuality.status === 'failed') {
+  if (diarizationQuality.status === 'failed' && completeness.status !== 'incomplete') {
     const message = `Provider timestamps failed local audio grounding: ${diarizationQuality.reasons.join('; ')}`
     failProcessingRun(transcriptionRun.id, message, false, runUsageFields(transcriptionUsage.total()))
     if (!speakerLinking.available) failProcessingRun(diarizationRun.id, message)
     throw new Error(message)
   }
   completeProcessingRun(transcriptionRun.id, {
+    status: completeness.status === 'incomplete' ? 'degraded' : 'completed',
+    qualityStatus: completeness.status === 'incomplete' ? 'incomplete' : 'completed',
+    quality: completeness as unknown as Record<string, unknown>,
     outputRefs: { fullText: `trans_${recordingId}.full_text`, speakers: `trans_${recordingId}.speakers` },
     // The provider timeline stays in `usage`; the tokens and the cost estimate join it.
     ...runUsageFields(
@@ -2582,13 +2634,14 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   let validityNow: ReturnType<typeof previewTranscriptValidity> = null
   try {
     integrityNow = checkTranscriptIntegrity(recordingId, rawTranscript.speakers)
-    validityNow = previewTranscriptValidity(recordingId, rawTranscript.speakers, { integrityStatus: integrityNow.status })
+    validityNow = previewTranscriptValidity(recordingId, rawTranscript.speakers, { integrityStatus: integrityNow.status, ...completenessEvidence, providerSeconds: completeness.measures.providerSeconds })
   } catch (error) {
     console.warn(
       `[Transcription] ${recordingId}: trust check before analysis failed, analysing as usual: ` +
         (error instanceof Error ? error.message : String(error))
     )
   }
+  if (completeness.status === 'incomplete') validityNow = completeness
   let transcriptUntrusted = integrityNow?.status === 'broken' || isUnusableValidity(validityNow?.status)
   const trustFindings = [
     ...(integrityNow?.issues ?? []).map((issue) => issue.code),
@@ -2646,7 +2699,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     execution: hasGeminiAnalysis ? 'cloud' : 'local',
     parentRunIds: [summaryRun.id]
   })
-  completeProcessingRun(titleRun.id, { outputRefs: { titleSuggestion: `trans_${recordingId}.title_suggestion` } })
+  completeProcessingRun(titleRun.id, { status: transcriptUntrusted ? 'cancelled' : 'completed', outputRefs: { titleSuggestion: `trans_${recordingId}.title_suggestion` } })
   const meetingResolutionRun = createProcessingRun({
     recordingId,
     stage: 'meeting-resolution',
@@ -2657,6 +2710,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     parentRunIds: [summaryRun.id]
   })
   completeProcessingRun(meetingResolutionRun.id, {
+    status: transcriptUntrusted ? 'cancelled' : 'completed',
     outputRefs: {
       selectedMeetingId: analysis.selected_meeting_id ?? null,
       confidence: analysis.meeting_confidence ?? null
@@ -2696,7 +2750,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   }
 
   // Process AI meeting selection
-  if (candidateMeetings.length > 0) {
+  if (!transcriptUntrusted && candidateMeetings.length > 0) {
     // Automatic linking is intentionally conservative. Time overlap alone is
     // never sufficient; a cancelled event is never eligible; ambiguous winners
     // remain candidates for the user/LLM rather than becoming a false link.
@@ -2811,7 +2865,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
 
   insertTranscript(transcript)
   try {
-    const acousticallyBound = applyKnownVoiceBindings(recordingId)
+    const acousticallyBound = transcriptUntrusted ? 0 : applyKnownVoiceBindings(recordingId)
     if (acousticallyBound > 0) {
       console.log(`[SpeakerLinking] Recording ${recordingId}: ${acousticallyBound} known voice binding(s) applied`)
     }
@@ -3077,7 +3131,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   try {
     // RE-1 — re-check adjacent to the write; applyTranscriptEntities is a
     // synchronous write, so this fully closes the race window.
-    if (stillProcessable()) {
+    if (stillProcessable() && !transcriptUntrusted) {
       const linkedMeetingId =
         (analysis.selected_meeting_id && analysis.selected_meeting_id !== 'none'
           ? analysis.selected_meeting_id
@@ -3174,7 +3228,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   // channel is the owner ("This is you" in Settings). Not gated on diarization
   // quality: the evidence is the channel, not a voice match (28-sep-2026).
   try {
-    if (stillProcessable()) {
+    if (stillProcessable() && !transcriptUntrusted) {
       const owner = await nameOwnerOnLiveRecording(recordingId, liveOwnerDeps)
       if (owner.named) {
         identityBound += 1
@@ -3186,7 +3240,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     console.error('[LiveOwner] Naming the microphone speaker failed:', e)
   }
   completeProcessingRun(speakerIdentityRun.id, {
-    status: !identityAllowed || identityErrors.length > 0 ? 'degraded' : 'completed',
+    status: transcriptUntrusted ? 'cancelled' : !identityAllowed || identityErrors.length > 0 ? 'degraded' : 'completed',
     outputRefs: { boundSpeakers: identityBound, mergeSuspected: identityMergeSuspected },
     qualityStatus: identityAllowed ? (identityErrors.length > 0 ? 'degraded' : 'completed') : 'blocked',
     quality: {
@@ -3246,7 +3300,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   try {
     // RE-1 — re-check adjacent to the write; exportMeetingWiki is a synchronous
     // file write, so this fully closes the window.
-    if (stillProcessable()) {
+    if (stillProcessable() && !transcriptUntrusted) {
       const wikiPath = exportMeetingWiki(recordingId)
       if (wikiPath) console.log(`[MeetingWiki] Exported ${wikiPath}`)
       completeProcessingRun(wikiRun.id, { outputRefs: { path: wikiPath ?? null } })

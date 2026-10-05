@@ -869,6 +869,21 @@ describe('Transcription Service', () => {
   // Owner, 3-oct-2026: an invented transcript got a summary, actions and a
   // title before anything judged it. The trust check now runs first.
   describe('an untrusted transcript feeds nothing', () => {
+    it('holds sparse speech before every derived stage and records failed quality', { timeout: 20000 }, async () => {
+      queueLocal('rec-sparse')
+      mockAnalyzeAudioPreflight.mockResolvedValueOnce({ status: 'speech_present', durationSeconds: 1565,
+        nonSilentSeconds: 598, nonSilentRatio: 0.38, activityIntervals: [{ start: 0, end: 1565 }] })
+      await runUntilStored()
+      expect(mockGenerateContent).not.toHaveBeenCalled()
+      const database = await import('../database')
+      const results = vi.mocked(database.completeProcessingRun).mock.calls
+      expect(results.find(([id]) => id === 'run-transcription')?.[1]).toMatchObject({ qualityStatus: 'incomplete' })
+      for (const stage of ['summary', 'title', 'meeting-resolution', 'actionable-detection', 'timeline-analysis',
+        'org-reconciliation', 'speaker-identity', 'graph-sync', 'wiki-export']) {
+        expect(results.find(([id]) => id === `run-${stage}`)?.[1]).toMatchObject({ status: 'cancelled' })
+      }
+      expect(mockInsertTranscript.mock.calls[0][0].summary).toBeUndefined()
+    })
     function queueLocal(recordingId: string): void {
       mockConfig = {
         transcription: {
