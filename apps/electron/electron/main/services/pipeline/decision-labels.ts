@@ -1,14 +1,16 @@
 import { randomUUID } from 'crypto'
+import { labelDisplayOrder } from '../../../../src/shared/label-display-order'
+import { statSync } from 'fs'
 import { z } from 'zod'
 import { queryAll, queryOne, run, runInTransaction, hasDecisionLabelRecoveryFailed } from '../database'
 import { filterEligibleRecordingIds } from '../recording-eligibility'
 import { buildKindExcerpt } from '../kind-fallback'
-import { RECORDING_KINDS, type RecordingKind, type ReferenceLabelSet, type ReferenceLabelItem } from '../../../../src/shared/decision-labels'
+import { RECORDING_KINDS, type RecordingKind, type ReferenceLabelAnswer, type ReferenceLabelSet, type ReferenceLabelItem } from '../../../../src/shared/decision-labels'
 
 const SAMPLING_RULE = 'lowest20-random20-v1'
 
 const itemSchema = z.object({ setId: z.string().min(1).max(100), recordingId: z.string().min(1).max(200) }).strict()
-const saveSchema = itemSchema.extend({ answer: z.enum(Object.keys(RECORDING_KINDS) as [RecordingKind, ...RecordingKind[]]) })
+const saveSchema = itemSchema.extend({ answer: z.union([z.enum(Object.keys(RECORDING_KINDS) as [RecordingKind, ...RecordingKind[]]), z.literal('unknown')]) })
 interface StoredSet { sampling_rule: string | null; id: string; created_at: string; sample_size: number; doubtful_count: number; random_count: number }
 
 /** Shared sampling/read/write rule: fail-closed eligibility and a usable valid transcript. */
@@ -78,8 +80,8 @@ export function getLabelSet(): ReferenceLabelSet {
       run('UPDATE decision_label_sets SET sample_size = ?, doubtful_count = ?, random_count = ? WHERE id = ?',
         [position, counts.doubtful, counts.random, set.id])
     }
-    const rows = queryAll<{ recording_id: string; position: number; stratum: 'doubtful' | 'random'; answer: RecordingKind | null }>(`
-      SELECT i.recording_id, i.position, i.stratum, l.answer FROM decision_label_items i
+    const rows = queryAll<{ recording_id: string; position: number; answer: ReferenceLabelAnswer | null }>(`
+      SELECT i.recording_id, i.position, l.answer FROM decision_label_items i
       LEFT JOIN decision_labels l ON l.recording_id = i.recording_id AND l.question = 'kind'
       WHERE i.set_id = ? ORDER BY i.position`, [set.id])
     const eligible = availableRecordingIds(rows.map(row => row.recording_id))
@@ -87,9 +89,10 @@ export function getLabelSet(): ReferenceLabelSet {
     return {
       id: set.id, question: 'kind', createdAt: set.created_at,
       size: set.sample_size, unavailable: Math.max(0, set.sample_size - available.length),
-      items: available.map(row => ({ recordingId: row.recording_id, position: row.position, answer: row.answer })),
+      items: labelDisplayOrder(set.id, available).map((row, index) => ({ recordingId: row.recording_id, displayIndex: index + 1, answer: row.answer })),
       counts: { doubtful: set.doubtful_count, random: set.random_count },
-      labeled: available.filter(row => row.answer !== null).length
+      labeled: available.filter(row => row.answer !== null).length,
+      unknown: available.filter(row => row.answer === 'unknown').length
     }
   })
 }
@@ -100,7 +103,7 @@ export function getEligibleLabeledRecordings(setId: string): Array<{ recordingId
     SELECT i.recording_id AS recordingId, l.answer FROM decision_label_items i
     JOIN decision_label_sets s ON s.id = i.set_id AND s.question = 'kind'
     JOIN decision_labels l ON l.recording_id = i.recording_id AND l.question = s.question
-    WHERE i.set_id = ? ORDER BY i.position`, [z.string().min(1).max(100).parse(setId)])
+    WHERE i.set_id = ? AND l.answer != 'unknown' ORDER BY i.position`, [z.string().min(1).max(100).parse(setId)])
   const eligible = availableRecordingIds(rows.map(row => row.recordingId))
   return rows.filter(row => eligible.has(row.recordingId))
 }
@@ -108,9 +111,9 @@ export function getEligibleLabeledRecordings(setId: string): Array<{ recordingId
 export function getLabelItem(raw: unknown): ReferenceLabelItem | null {
   const args = itemSchema.parse(raw)
   if (!availableRecordingIds([args.recordingId]).has(args.recordingId)) return null
-  const row = queryOne<Omit<ReferenceLabelItem, 'excerpt' | 'minutes' | 'meetingSubject'> & { full_text: string; subject: string | null }>(`
+  const row = queryOne<{ recordingId: string; date: string; durationSeconds: number | null; filePath: string | null; answer: ReferenceLabelAnswer | null; full_text: string; summary: string | null; subject: string | null; attendees: string | null }>(`
     SELECT r.id AS recordingId, r.date_recorded AS date, r.duration_seconds AS durationSeconds,
-      m.subject, t.full_text, l.answer
+      r.file_path AS filePath, m.subject, m.attendees, t.summary, t.full_text, l.answer
     FROM decision_label_items i JOIN decision_label_sets s ON s.id = i.set_id AND s.question = 'kind'
     JOIN recordings r ON r.id = i.recording_id
     JOIN transcripts t ON t.recording_id = r.id AND t.validity_status = 'valid'
@@ -118,8 +121,20 @@ export function getLabelItem(raw: unknown): ReferenceLabelItem | null {
     LEFT JOIN decision_labels l ON l.recording_id = r.id AND l.question = s.question
     WHERE i.set_id = ? AND i.recording_id = ?`, [args.setId, args.recordingId])
   if (!row) return null
-  const { full_text, subject, ...item } = row
-  return { ...item, ...buildKindExcerpt({ full_text, subject, duration_seconds: item.durationSeconds }) }
+  const { full_text, subject, attendees: rawAttendees, ...item } = row
+  let attendees: string[] = []
+  try {
+    const parsed: unknown = JSON.parse(rawAttendees ?? '[]')
+    if (Array.isArray(parsed)) attendees = parsed.flatMap(person =>
+      person && typeof person.name === 'string' && person.name.trim() ? [person.name.trim()] : [])
+  } catch { /* Missing or malformed calendar attendees do not block labeling. */ }
+  // Availability only: audio bytes still go through the shared player's storage IPC.
+  try {
+    if (!item.filePath?.trim() || !statSync(item.filePath).isFile()) item.filePath = null
+  } catch {
+    item.filePath = null
+  }
+  return { ...item, attendees, meetingTitle: subject, transcript: full_text, ...buildKindExcerpt({ full_text, subject, duration_seconds: item.durationSeconds }) }
 }
 
 export function saveLabel(raw: unknown): void {

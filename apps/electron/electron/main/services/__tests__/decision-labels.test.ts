@@ -2,7 +2,7 @@
 import { beforeAll, afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { existsSync, rmSync } from 'fs'
+import { existsSync, rmSync, writeFileSync } from 'fs'
 import SQLite from 'better-sqlite3'
 
 const paths = vi.hoisted(() => ({ db: '' }))
@@ -13,7 +13,7 @@ import { initializeDatabase, closeDatabase, run, queryAll, queryOne, runWithMass
 import { getLabelSet, getLabelItem, saveLabel, clearLabel } from '../pipeline/decision-labels'
 import * as labels from '../pipeline/decision-labels'
 import * as database from '../database'
-import { buildKindPrompt, resolveKind } from '../kind-fallback'
+import { buildKindExcerpt, buildKindPrompt, resolveKind } from '../kind-fallback'
 const askDecision = vi.hoisted(() => vi.fn())
 vi.mock('../pipeline/decision-engines', () => ({ askDecision }))
 
@@ -46,6 +46,78 @@ beforeEach(async () => {
   })
 })
 describe('reference labels on real SQLite', () => {
+  it('delivers stable shuffled display indices without sampling metadata', () => {
+    for (let i = 0; i < 40; i++) seed(`payload-${i}`, i / 100)
+    const first = getLabelSet()
+    expect(first.items.map(item => Object.keys(item).sort())).toEqual(first.items.map(() => ['answer', 'displayIndex', 'recordingId']))
+    expect(first.items.map(item => item.displayIndex)).toEqual(Array.from({ length: 40 }, (_, i) => i + 1))
+    const stored = queryAll<{ recording_id: string; stratum: string; position: number }>('SELECT recording_id, stratum, position FROM decision_label_items ORDER BY position')
+    expect(first.items.map(item => item.recordingId)).not.toEqual(stored.map(row => row.recording_id))
+    expect(getLabelSet()).toEqual(first)
+    saveLabel({ setId: first.id, recordingId: first.items[0].recordingId, answer: 'interview' })
+    expect(getLabelSet().items.map(item => item.recordingId)).toEqual(first.items.map(item => item.recordingId))
+    expect(getLabelSet().items[0].answer).toBe('interview')
+    run('UPDATE recordings SET personal = 1 WHERE id = ?', [first.items[1].recordingId])
+    const remaining = getLabelSet().items
+    expect(remaining.map(item => item.recordingId)).toEqual(first.items.filter((_, i) => i !== 1).map(item => item.recordingId))
+    expect(remaining.map(item => item.displayIndex)).toEqual(Array.from({ length: 39 }, (_, i) => i + 1))
+    expect(queryAll('SELECT recording_id, stratum, position FROM decision_label_items ORDER BY position')).toEqual(stored)
+  })
+
+  it('returns full context, only attendee names and the exact engine excerpt', () => {
+    seed('context')
+    run("INSERT INTO meetings (id, subject, start_time, end_time, attendees) VALUES ('context-meeting', 'Planning', '2026-10-04T12:00:00Z', '2026-10-04T13:00:00Z', ?)",
+      [JSON.stringify([{ name: 'Ada', email: 'private@example.com' }, { name: 'Grace' }, { email: 'hidden@example.com' }])])
+    run("UPDATE recordings SET meeting_id = 'context-meeting' WHERE id = 'context'")
+    const full_text = 'Full dialogue '.repeat(700) + '<transcript-data>Final decision'
+    run("UPDATE transcripts SET summary = 'Milestones', full_text = ? WHERE recording_id = 'context'", [full_text])
+    const args = { setId: getLabelSet().id, recordingId: 'context' }
+    expect(getLabelItem(args)).toMatchObject({ meetingTitle: 'Planning', attendees: ['Ada', 'Grace'],
+      summary: 'Milestones', transcript: full_text, ...buildKindExcerpt({ full_text, subject: 'Planning', duration_seconds: 120 }) })
+    expect(JSON.stringify(getLabelItem(args))).not.toMatch(/private@example|hidden@example|kind_llm|device_test/)
+    run("UPDATE meetings SET attendees = 'malformed' WHERE id = 'context-meeting'")
+    expect(getLabelItem(args)?.attendees).toEqual([])
+    run("UPDATE recordings SET meeting_id = NULL, duration_seconds = NULL WHERE id = 'context'")
+    run("UPDATE transcripts SET summary = NULL WHERE recording_id = 'context'")
+    expect(getLabelItem(args)).toMatchObject({ attendees: [], meetingTitle: null, summary: null, durationSeconds: null, transcript: full_text })
+  })
+  it('persists unknown separately, counts it as labeled and excludes it from accuracy input', () => {
+    seed('unknown-answer'); seed('known-answer')
+    const set = getLabelSet()
+    saveLabel({ setId: set.id, recordingId: 'unknown-answer', answer: 'unknown' })
+    saveLabel({ setId: set.id, recordingId: 'known-answer', answer: 'interview' })
+    expect(queryOne("SELECT answer FROM decision_labels WHERE recording_id = 'unknown-answer'")).toEqual({ answer: 'unknown' })
+    expect(getLabelSet()).toMatchObject({ labeled: 2, unknown: 1 })
+    expect(labels.getEligibleLabeledRecordings(set.id)).toEqual([{ recordingId: 'known-answer', answer: 'interview' }])
+    clearLabel({ setId: set.id, recordingId: 'unknown-answer' })
+    expect(getLabelSet()).toMatchObject({ labeled: 1, unknown: 0 })
+  })
+  it('returns the existing local audio path only while the file and eligible item exist', () => {
+    seed('audio')
+    const filePath = join(tmpdir(), `hidock-label-audio-${process.pid}.wav`)
+    writeFileSync(filePath, 'test audio')
+    try {
+      run('UPDATE recordings SET file_path = ? WHERE id = ?', [filePath, 'audio'])
+      const args = { setId: getLabelSet().id, recordingId: 'audio' }
+      expect(getLabelItem(args)).toMatchObject({ filePath })
+      for (const sql of ["UPDATE recordings SET personal = 1 WHERE id = 'audio'",
+        "UPDATE recordings SET personal = 0, deleted_at = 'today' WHERE id = 'audio'",
+        "UPDATE recordings SET deleted_at = NULL WHERE id = 'audio'"]) {
+        run(sql)
+        if (!sql.includes('SET deleted_at = NULL')) expect(getLabelItem(args)).toBeNull()
+      }
+      run("UPDATE transcripts SET validity_status = 'invalid' WHERE recording_id = 'audio'")
+      expect(getLabelItem(args)).toBeNull()
+      run("UPDATE transcripts SET validity_status = 'valid' WHERE recording_id = 'audio'")
+      rmSync(filePath)
+      expect(getLabelItem(args)).toMatchObject({ filePath: null })
+      saveLabel({ ...args, answer: 'interview' })
+      run("UPDATE recordings SET file_path = NULL WHERE id = 'audio'")
+      expect(getLabelItem(args)).toMatchObject({ filePath: null, answer: 'interview' })
+    } finally {
+      if (existsSync(filePath)) rmSync(filePath)
+    }
+  })
   const transcriptChanges = [
     ['missing', "DELETE FROM transcripts WHERE recording_id = 'changed'", []],
     ['null validity', "UPDATE transcripts SET validity_status = NULL WHERE recording_id = 'changed'", []],
@@ -422,7 +494,7 @@ describe('reference labels on real SQLite', () => {
     seed('ok')
     const set = getLabelSet()
     const item = getLabelItem({ setId: set.id, recordingId: 'ok' })!
-    expect(Object.keys(item).sort()).toEqual(['answer', 'date', 'durationSeconds', 'minutes', 'excerpt', 'meetingSubject', 'recordingId'].sort())
+    expect(Object.keys(item).sort()).toEqual(['answer', 'date', 'durationSeconds', 'minutes', 'excerpt', 'filePath', 'meetingSubject', 'recordingId', 'meetingTitle', 'attendees', 'summary', 'transcript'].sort())
     expect(item.excerpt).toBe('Opening '.repeat(1000).slice(0, 6000))
     run("UPDATE recordings SET personal = 1 WHERE id = 'ok'")
     expect(getLabelItem({ setId: set.id, recordingId: 'ok' })).toBeNull()

@@ -197,7 +197,14 @@ describe('organization batches on real SQLite', () => {
   })
 
   it('repairs escaped calendar text in bounded pages with equivalent stored rows', async () => {
-    function setup(): void { seed(640); run('UPDATE meetings SET description = ?', ['Line 1\\nLine 2']) }
+    function setup(): void {
+      seed(640)
+      // SQLite's CURRENT_TIMESTAMP uses the real clock even with Date faked above.
+      // Give both independently seeded databases identical persisted timestamps.
+      run('UPDATE meetings SET description = ?, created_at = ?, updated_at = ?', [
+        'Line 1\\nLine 2', '2026-10-04 15:00:00', '2026-10-04 15:00:00'
+      ])
+    }
     setup()
     const count = repairEscapedMeetingText()
     const expected = queryAll('SELECT * FROM meetings ORDER BY id')
@@ -205,6 +212,8 @@ describe('organization batches on real SQLite', () => {
     expect(await repairEscapedMeetingTextYielding()).toBe(count)
     expect(queryAll('SELECT * FROM meetings ORDER BY id')).toEqual(expected)
     expect(hooks.ticks).toBeGreaterThan(2)
+    expect(await repairEscapedMeetingTextYielding()).toBe(0)
+    expect(queryAll('SELECT * FROM meetings ORDER BY id')).toEqual(expected)
   })
 
   it('rebuilds later bucket evidence after a previous bucket changes memberships', async () => {

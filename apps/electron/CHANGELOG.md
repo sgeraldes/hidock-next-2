@@ -11,6 +11,11 @@ pairs with it, gives it the Hugging Face token and decides when it steps aside.
 
 ### Changes
 
+- **Listen while labeling.** Reference labels include the original local audio with play/pause,
+  seeking, 15-second jumps and a Space shortcut; unavailable audio never blocks labeling.
+  A clear Library-category question now includes calendar title and attendees, recording date,
+  duration, summary and full transcript; the engines' excerpt is collapsed and their answers stay
+  hidden. "Don't know / not applicable" counts as labeled and is excluded from engine accuracy.
 - **Reference labels for recording kinds.** Settings > Pipeline keeps a sample of up to 40 valid
   recordings for your own labels, with keyboard choices and progress, ready for engine comparisons.
 - **A fresh restore point before database updates.** Schema migrations now verify a current backup,
