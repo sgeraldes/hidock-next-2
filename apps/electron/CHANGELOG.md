@@ -9,6 +9,8 @@ pairs with it, gives it the Hugging Face token and decides when it steps aside.
 
 ### Changes
 
+- **Listen while labeling.** Reference labels include the original local audio with play/pause,
+  seeking, 15-second jumps and a Space shortcut; unavailable audio never blocks labeling.
 - **Reference labels for recording kinds.** Settings > Pipeline keeps a sample of up to 40 valid
   recordings for your own labels, with keyboard choices and progress, ready for engine comparisons.
 - **A fresh restore point before database updates.** Schema migrations now verify a current backup,

@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto'
+import { statSync } from 'fs'
 import { z } from 'zod'
 import { queryAll, queryOne, run, runInTransaction, hasDecisionLabelRecoveryFailed } from '../database'
 import { filterEligibleRecordingIds } from '../recording-eligibility'
@@ -110,7 +111,7 @@ export function getLabelItem(raw: unknown): ReferenceLabelItem | null {
   if (!availableRecordingIds([args.recordingId]).has(args.recordingId)) return null
   const row = queryOne<Omit<ReferenceLabelItem, 'excerpt' | 'minutes' | 'meetingSubject'> & { full_text: string; subject: string | null }>(`
     SELECT r.id AS recordingId, r.date_recorded AS date, r.duration_seconds AS durationSeconds,
-      m.subject, t.full_text, l.answer
+      r.file_path AS filePath, m.subject, t.full_text, l.answer
     FROM decision_label_items i JOIN decision_label_sets s ON s.id = i.set_id AND s.question = 'kind'
     JOIN recordings r ON r.id = i.recording_id
     JOIN transcripts t ON t.recording_id = r.id AND t.validity_status = 'valid'
@@ -119,6 +120,12 @@ export function getLabelItem(raw: unknown): ReferenceLabelItem | null {
     WHERE i.set_id = ? AND i.recording_id = ?`, [args.setId, args.recordingId])
   if (!row) return null
   const { full_text, subject, ...item } = row
+  // Availability only: audio bytes still go through the shared player's storage IPC.
+  try {
+    if (!item.filePath?.trim() || !statSync(item.filePath).isFile()) item.filePath = null
+  } catch {
+    item.filePath = null
+  }
   return { ...item, ...buildKindExcerpt({ full_text, subject, duration_seconds: item.durationSeconds }) }
 }
 

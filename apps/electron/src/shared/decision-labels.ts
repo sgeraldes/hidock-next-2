@@ -27,6 +27,8 @@ export interface ReferenceLabelSet {
 }
 export interface ReferenceLabelItem {
   recordingId: string
+  /** Existing local recording path, or null for device-only/missing audio. */
+  filePath: string | null
   date: string
   durationSeconds: number | null
   minutes: number | null

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { AudioPlayer } from '@/components/AudioPlayer'
+import { useAudioControls } from '@/components/OperationController'
 import { RECORDING_KINDS, type RecordingKind, type ReferenceLabelItem, type ReferenceLabelSet } from '@/shared/decision-labels'
 
 const KINDS = Object.entries(RECORDING_KINDS) as Array<[RecordingKind, string]>
@@ -15,6 +17,7 @@ export function ReferenceLabels() {
   const [error, setError] = useState<string | null>(null)
   const locked = useRef(false)
   const [retry, setRetry] = useState(0)
+  const audioControls = useAudioControls()
 
   useEffect(() => {
     let active = true
@@ -32,6 +35,11 @@ export function ReferenceLabels() {
 
   const setId = set?.id
   const recordingId = set?.items[index]?.recordingId
+  useEffect(() => {
+    // Start each recording at zero, including one previously played elsewhere.
+    audioControls.stop()
+    return () => audioControls.stop()
+  }, [recordingId, audioControls])
   useEffect(() => {
     let active = true
     setItem(null)
@@ -72,8 +80,14 @@ export function ReferenceLabels() {
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
       const target = event.target instanceof HTMLElement ? event.target : null
-      if (event.repeat || event.ctrlKey || event.altKey || event.metaKey || target?.isContentEditable ||
-        target?.closest('input, textarea, select, [role="textbox"]')) return
+      if (event.ctrlKey || event.altKey || event.metaKey || target?.isContentEditable ||
+        target?.closest('input, textarea, select, [role="textbox"], [role="slider"], [role="combobox"], [role="listbox"]')) return
+      // Space belongs to playback, even when audio is missing or a save is pending.
+      if (event.key === ' ' && !event.shiftKey) {
+        event.preventDefault()
+        return
+      }
+      if (event.repeat) return
       const shortcut = event.key === '!' || (event.shiftKey && event.code === 'Digit1') ? 'Shift+1' : event.key
       const selected = SHORTCUTS.indexOf(shortcut)
       if (selected < 0 || !item || loading || saving) return
@@ -103,8 +117,12 @@ export function ReferenceLabels() {
                 <>
                   <p className="text-sm text-muted-foreground">{new Date(item.date).toLocaleString('en-US')}{item.minutes !== null ? ` · ${item.minutes} min` : ''}</p>
                   {item.meetingSubject && <p className="text-sm">Calendar meeting: {item.meetingSubject}</p>}
+                  {item.filePath ? (
+                    <AudioPlayer key={item.recordingId} recordingId={item.recordingId} filePath={item.filePath}
+                      durationSeconds={item.durationSeconds ?? undefined} skipSeconds={15} showSeekBar spaceShortcut />
+                  ) : <p className="text-sm text-muted-foreground">Audio is not available locally (on the device or missing).</p>}
                   <div className="max-h-64 overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed" tabIndex={0} aria-label="Transcript opening">{item.excerpt}</div>
-                  <p className="text-xs text-muted-foreground">Pick a kind with the number keys below. Use 0 for Device test and Shift+1 for Noise accidental. To change a label, go back and pick another kind.</p>
+                  <p className="text-xs text-muted-foreground">Space plays or pauses audio. Pick a kind with the number keys below. Use 0 for Device test and Shift+1 for Noise accidental. To change a label, go back and pick another kind.</p>
                   <div className="grid gap-2 sm:grid-cols-2">
                     {KINDS.map(([kind, description], position) => (
                       <Button key={kind} variant={item.answer === kind ? 'default' : 'outline'} aria-pressed={item.answer === kind}

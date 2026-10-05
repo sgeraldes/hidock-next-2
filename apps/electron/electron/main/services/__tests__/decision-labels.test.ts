@@ -2,7 +2,7 @@
 import { beforeAll, afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { existsSync, rmSync } from 'fs'
+import { existsSync, rmSync, writeFileSync } from 'fs'
 import SQLite from 'better-sqlite3'
 
 const paths = vi.hoisted(() => ({ db: '' }))
@@ -46,6 +46,32 @@ beforeEach(async () => {
   })
 })
 describe('reference labels on real SQLite', () => {
+  it('returns the existing local audio path only while the file and eligible item exist', () => {
+    seed('audio')
+    const filePath = join(tmpdir(), `hidock-label-audio-${process.pid}.wav`)
+    writeFileSync(filePath, 'test audio')
+    try {
+      run('UPDATE recordings SET file_path = ? WHERE id = ?', [filePath, 'audio'])
+      const args = { setId: getLabelSet().id, recordingId: 'audio' }
+      expect(getLabelItem(args)).toMatchObject({ filePath })
+      for (const sql of ["UPDATE recordings SET personal = 1 WHERE id = 'audio'",
+        "UPDATE recordings SET personal = 0, deleted_at = 'today' WHERE id = 'audio'",
+        "UPDATE recordings SET deleted_at = NULL WHERE id = 'audio'"]) {
+        run(sql)
+        if (!sql.includes('SET deleted_at = NULL')) expect(getLabelItem(args)).toBeNull()
+      }
+      run("UPDATE transcripts SET validity_status = 'invalid' WHERE recording_id = 'audio'")
+      expect(getLabelItem(args)).toBeNull()
+      run("UPDATE transcripts SET validity_status = 'valid' WHERE recording_id = 'audio'")
+      rmSync(filePath)
+      expect(getLabelItem(args)).toMatchObject({ filePath: null })
+      saveLabel({ ...args, answer: 'interview' })
+      run("UPDATE recordings SET file_path = NULL WHERE id = 'audio'")
+      expect(getLabelItem(args)).toMatchObject({ filePath: null, answer: 'interview' })
+    } finally {
+      if (existsSync(filePath)) rmSync(filePath)
+    }
+  })
   const transcriptChanges = [
     ['missing', "DELETE FROM transcripts WHERE recording_id = 'changed'", []],
     ['null validity', "UPDATE transcripts SET validity_status = NULL WHERE recording_id = 'changed'", []],
@@ -422,7 +448,7 @@ describe('reference labels on real SQLite', () => {
     seed('ok')
     const set = getLabelSet()
     const item = getLabelItem({ setId: set.id, recordingId: 'ok' })!
-    expect(Object.keys(item).sort()).toEqual(['answer', 'date', 'durationSeconds', 'minutes', 'excerpt', 'meetingSubject', 'recordingId'].sort())
+    expect(Object.keys(item).sort()).toEqual(['answer', 'date', 'durationSeconds', 'minutes', 'excerpt', 'filePath', 'meetingSubject', 'recordingId'].sort())
     expect(item.excerpt).toBe('Opening '.repeat(1000).slice(0, 6000))
     run("UPDATE recordings SET personal = 1 WHERE id = 'ok'")
     expect(getLabelItem({ setId: set.id, recordingId: 'ok' })).toBeNull()
