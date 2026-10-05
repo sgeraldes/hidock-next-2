@@ -107,6 +107,11 @@ function candidateArgs(args: TraceEvent['args'], candidates: TraceCandidate[]): 
     ids: args.ids?.filter(id => ids.has(id)) }
 }
 
+function isBusy(error: unknown): boolean {
+  return error instanceof Error && /SQLITE_BUSY|SQLITE_LOCKED|database is locked|database table is locked/.test(
+    `${(error as Error & { code?: string }).code} ${error.message}`)
+}
+
 /** Independent telemetry database; no business migrations, backups or attachment. */
 export class RetrievalTraceStore {
   readonly path: string
@@ -139,7 +144,7 @@ export class RetrievalTraceStore {
   }) {
     this.path = options.path
     this.engine = new DatabaseEngine({ betterSqlite3: Database, dbPathProvider: () => this.path,
-      schemaVersion: 1, schema: SCHEMA, migrations: {}, vacuumAfterMigration: false,
+      schemaVersion: 1, schema: SCHEMA, migrations: {}, vacuumAfterMigration: false, busyTimeoutMs: 50,
       repairPhase: () => this.engine.run('INSERT OR IGNORE INTO schema_version VALUES (1)') })
   }
   get pendingCount(): number { return this.queue.length }
@@ -151,7 +156,7 @@ export class RetrievalTraceStore {
       this.opening = (async () => {
         mkdirSync(dirname(this.path), { recursive: true })
         await this.engine.initialize()
-        this.engine.getDatabase().run('PRAGMA busy_timeout = 5000')
+        this.engine.getDatabase().run('PRAGMA busy_timeout = 50')
         // The engine touches the file before the schema runs, so the schema's
         // auto_vacuum line is too late. Switching an existing file needs one VACUUM;
         // do it only while the store is empty, where it costs nothing.
@@ -179,7 +184,7 @@ export class RetrievalTraceStore {
         this.retention()
         this.dailyTimer = setInterval(() => { void this.retain() }, 86400000)
         this.dailyTimer.unref()
-      })().catch(error => { this.opening = undefined; this.retryAfter = Date.now() + 60000; throw error })
+      })().catch(error => { this.opening = undefined; this.retryAfter = isBusy(error) ? 0 : Date.now() + 60000; throw error })
     }
     await this.opening
   }
@@ -224,12 +229,13 @@ export class RetrievalTraceStore {
     } catch { this.count('dropped') }
   }
 
-  private schedule(): void {
+  private schedule(mode: 'normal' | 'retry' | 'next' = 'normal'): void {
+    if (this.closed) return
     if (!this.timer) {
       this.timer = setTimeout(() => { this.timer = undefined; void this.flush() }, 2000)
       this.timer.unref()
     }
-    if (this.queue.length >= 50 && !this.batchTimer) {
+    if (mode !== 'retry' && (mode === 'next' || this.queue.length >= 50) && !this.batchTimer) {
       this.batchTimer = setTimeout(() => { this.batchTimer = undefined; void this.flush() }, 0)
       this.batchTimer.unref()
     }
@@ -250,12 +256,14 @@ export class RetrievalTraceStore {
   }
 
   flush(): Promise<void> {
-    if (this.flushing) return this.flushing.then(() => this.queue.length ? this.flush() : undefined)
+    if (this.flushing) return this.flushing
     if (this.timer) clearTimeout(this.timer)
     if (this.batchTimer) clearTimeout(this.batchTimer)
     this.timer = this.batchTimer = undefined
-    const batch = this.queue.splice(0)
+    const batch = this.queue.splice(0, 100)
     this.captured = batch
+    let busy = false
+    let committed = false
     this.flushing = (async () => {
       try {
         await this.open()
@@ -276,10 +284,22 @@ export class RetrievalTraceStore {
               dropped = dropped + excluded.dropped, errors = errors + excluded.errors`, [day, counts.dropped, counts.errors])
           }
         })
+        committed = true
         this.counters.clear()
         this.evict()
-      } catch { this.count('dropped', batch.length); this.failed() }
-    })().finally(() => { this.flushing = undefined; this.captured = [] })
+      } catch (error) {
+        busy = isBusy(error)
+        if (!committed && busy) {
+          const restored = [...batch.filter(item => item.epoch === this.epoch && this.settings.recordQueries), ...this.queue]
+          this.count('dropped', Math.max(0, restored.length - 1000))
+          this.queue = restored.slice(0, 1000)
+        } else if (!committed) this.count('dropped', batch.length)
+        this.failed()
+      }
+    })().finally(() => {
+      this.flushing = undefined; this.captured = []
+      if (this.queue.length) this.schedule(busy ? 'retry' : 'next')
+    })
     return this.flushing
   }
   private insert(item: QueuedTrace): void {
@@ -434,7 +454,12 @@ export class RetrievalTraceStore {
   async close(): Promise<void> {
     if (this.closed) return
     this.closed = true
-    await this.flush()
+    do {
+      const before = this.queue.length
+      await this.flush()
+      if (this.queue.length >= before) break // a busy writer will be retried by the next process
+      if (this.queue.length) await new Promise<void>(resolve => setImmediate(resolve))
+    } while (this.queue.length)
     if (this.dailyTimer) clearInterval(this.dailyTimer)
     try { this.engine.closeDatabase() } catch { /* an unsuccessful lazy open has no handle */ }
   }

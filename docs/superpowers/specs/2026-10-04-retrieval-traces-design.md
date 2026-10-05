@@ -46,6 +46,12 @@ database and never part of its migrations or restore points. Schema version live
 
 ## How it writes
 
+Why not a worker: the headless brain exits when the app starts, so two writers rarely coexist.
+The main process uses a 50 ms busy timeout, writes at most 100 events per transaction, and schedules
+the rest on the next tick. A busy write puts its batch back at the front of the bounded queue and
+retries on the next timer. Maintenance stops on a busy checkpoint, deletes at most five batches,
+and reclaims at most 2,000 pages per pass.
+
 - Recording never blocks or fails a request. Hooks hand an event to a bounded in-memory queue (1,000
   events); a flush writes batches in one transaction every 2 seconds or at 50 events, off the request path.
   On overflow the event is dropped and a per-day drop counter goes up. A write error is logged at most once

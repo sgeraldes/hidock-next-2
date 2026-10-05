@@ -286,6 +286,76 @@ describe('retrieval trace store (real SQLite)', () => {
 })
 
 describe('bounded non-throwing queue', () => {
+  it('also retries a busy lazy open quickly without dropping queued events', async () => {
+    const initial = store()
+    await initial.schemaVersion()
+    await initial.close()
+    const s = store({ path: initial.path })
+    const writer = new Database(s.path)
+    writer.exec('BEGIN IMMEDIATE')
+    try {
+      s.record(event('cold-busy'))
+      const started = performance.now()
+      await s.flush()
+      expect(performance.now() - started).toBeLessThan(500)
+      expect(s.pendingCount).toBe(1)
+      writer.exec('ROLLBACK')
+      await s.flush()
+      expect((await s.read())[0].trace_id).toBe('cold-busy')
+    } finally { writer.close() }
+  })
+  it('requeues a busy batch before newer events and counts drops at the 1000 cap', async () => {
+    const s = store()
+    await s.schemaVersion()
+    const writer = new Database(s.path)
+    writer.exec('BEGIN IMMEDIATE')
+    try {
+      for (let i = 0; i < 100; i++) s.record(event(`old-${i}`))
+      const flushing = s.flush()
+      for (let i = 0; i < 1000; i++) s.record(event(`new-${i}`))
+      await flushing
+      expect(s.pendingCount).toBe(1000)
+      writer.exec('ROLLBACK')
+      await s.flush()
+      expect((await s.read()).map(row => row.trace_id)).toEqual(Array.from({ length: 100 }, (_, i) => `old-${i}`))
+      expect((await s.stats()).dropped_events).toBe(100)
+      await s.close()
+      const reopened = store({ path: s.path })
+      expect(await reopened.read()).toHaveLength(1000)
+    } finally { writer.close() }
+  })
+  it('returns quickly under a writer lock, keeps the batch queued, and writes on a later flush', async () => {
+    const s = store()
+    await s.schemaVersion()
+    const writer = new Database(s.path)
+    writer.exec('BEGIN IMMEDIATE')
+    try {
+      s.record(event('busy'))
+      const started = performance.now()
+      await s.flush()
+      expect(performance.now() - started).toBeLessThan(500)
+      expect(s.pendingCount).toBe(1)
+      expect(await s.read()).toHaveLength(0)
+      writer.exec('ROLLBACK')
+      await s.flush()
+      expect(s.pendingCount).toBe(0)
+      expect((await s.read())[0].trace_id).toBe('busy')
+      expect((await s.stats()).dropped_events).toBe(0)
+    } finally { writer.close() }
+  })
+  it('writes at most 100 events per transaction and schedules the remainder on the next tick', async () => {
+    vi.useFakeTimers()
+    const s = store()
+    await s.schemaVersion()
+    for (let i = 0; i < 250; i++) s.record(event(String(i)))
+    await s.flush()
+    expect(await s.read()).toHaveLength(100)
+    expect(s.pendingCount).toBe(150)
+    await vi.advanceTimersByTimeAsync(0)
+    expect((await s.read()).length).toBeGreaterThan(100)
+    await s.flush()
+    expect(await s.read()).toHaveLength(250)
+  })
   it('writes off the caller path in batches of 50 or after 2 seconds', async () => {
     vi.useFakeTimers()
     const s = store()
