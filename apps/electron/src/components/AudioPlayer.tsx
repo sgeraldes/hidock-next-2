@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Play, Pause, Square, X, SkipBack, SkipForward } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -32,6 +32,10 @@ interface AudioPlayerProps {
    * `hasLocalPath(recording) ? recording.localPath : undefined`.
    */
   filePath?: string
+  durationSeconds?: number
+  skipSeconds?: number
+  showSeekBar?: boolean
+  spaceShortcut?: boolean
   onClose?: () => void
 }
 
@@ -41,12 +45,12 @@ interface AudioPlayerProps {
  * The actual audio playback is handled by OperationController.
  * This component displays the playback state, waveform, and controls.
  */
-export function AudioPlayer({ title, recordingId, filePath, onClose }: AudioPlayerProps) {
+export function AudioPlayer({ title, recordingId, filePath, durationSeconds, skipSeconds, showSeekBar = false, spaceShortcut = false, onClose }: AudioPlayerProps) {
   // Read playback state from UIStore
-  const isPlaying = useUIStore((state) => state.isPlaying)
+  const enginePlaying = useUIStore((state) => state.isPlaying)
   const currentlyPlayingId = useUIStore((state) => state.currentlyPlayingId)
-  const currentTime = useUIStore((state) => state.playbackCurrentTime)
-  const duration = useUIStore((state) => state.playbackDuration)
+  const engineTime = useUIStore((state) => state.playbackCurrentTime)
+  const engineDuration = useUIStore((state) => state.playbackDuration)
   const playbackWaveformData = useUIStore((state) => state.playbackWaveformData)
   const sentimentData = useUIStore((state) => state.playbackSentimentData)
 
@@ -74,6 +78,11 @@ export function AudioPlayer({ title, recordingId, filePath, onClose }: AudioPlay
   // When no recordingId is provided (legacy mount sites that only render while
   // their own recording is playing), treat it as loaded so pause/resume works.
   const isLoaded = !recordingId || currentlyPlayingId === recordingId
+  const isPlaying = isLoaded && enginePlaying
+  const currentTime = isLoaded ? engineTime : 0
+  const hasThisDuration = isLoaded || (!currentlyPlayingId && waveformLoadedForId === recordingId)
+  const duration = (hasThisDuration && engineDuration > 0 ? engineDuration : durationSeconds) ?? 0
+  const jumpSeconds = skipSeconds ?? playerPrefs.skipSeconds
 
   // The Play button can act when: this recording is already loaded (pause/resume),
   // OR it isn't loaded but we have what we need to load+play it (id + local path).
@@ -95,27 +104,41 @@ export function AudioPlayer({ title, recordingId, filePath, onClose }: AudioPlay
     }
   }, [isLoaded, isPlaying, audioControls, recordingId, filePath])
 
+  useEffect(() => {
+    if (!spaceShortcut) return
+    const keydown = (event: KeyboardEvent) => {
+      const target = event.target instanceof HTMLElement ? event.target : null
+      if (event.key !== ' ' || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey ||
+        target?.isContentEditable || target?.closest('input, textarea, select, [role="textbox"], [role="slider"], [role="combobox"], [role="listbox"]')) return
+      // Cancel native Space activation even when a kind/Skip/Back button has focus.
+      event.preventDefault()
+      if (!event.repeat && canPlayThis) togglePlay()
+    }
+    window.addEventListener('keydown', keydown)
+    return () => window.removeEventListener('keydown', keydown)
+  }, [spaceShortcut, canPlayThis, togglePlay])
+
   const handleStop = useCallback(() => {
     audioControls.stop()
   }, [audioControls])
 
   const seekAudio = useCallback(
     (time: number) => {
-      if (!duration || duration <= 0) return
+      if (!isLoaded || !duration || duration <= 0) return
       audioControls.seek(time)
     },
-    [duration, audioControls]
+    [isLoaded, duration, audioControls]
   )
 
   const skipBackward = useCallback(() => {
-    const newTime = Math.max(0, currentTime - playerPrefs.skipSeconds)
+    const newTime = Math.max(0, currentTime - jumpSeconds)
     audioControls.seek(newTime)
-  }, [currentTime, audioControls, playerPrefs.skipSeconds])
+  }, [currentTime, audioControls, jumpSeconds])
 
   const skipForward = useCallback(() => {
-    const newTime = Math.min(duration, currentTime + playerPrefs.skipSeconds)
+    const newTime = Math.min(duration, currentTime + jumpSeconds)
     audioControls.seek(newTime)
-  }, [currentTime, duration, audioControls, playerPrefs.skipSeconds])
+  }, [currentTime, duration, audioControls, jumpSeconds])
 
   const handlePlaybackRateChange = useCallback(
     (value: string) => {
@@ -166,6 +189,9 @@ export function AudioPlayer({ title, recordingId, filePath, onClose }: AudioPlay
       )}
 
       {/* Time display */}
+      {showSeekBar && <input type="range" aria-label="Seek audio" className="w-full accent-primary"
+        min={0} max={duration} step={0.1} value={currentTime} disabled={!isLoaded || duration <= 0}
+        onChange={event => seekAudio(Number(event.target.value))} />}
       <div className="flex justify-between text-xs text-muted-foreground">
         <span>{formatTimestamp(currentTime)}</span>
         <span>{formatTimestamp(duration)}</span>
@@ -179,7 +205,8 @@ export function AudioPlayer({ title, recordingId, filePath, onClose }: AudioPlay
             variant="ghost"
             size="sm"
             onClick={skipBackward}
-            disabled={currentTime <= 0}
+            aria-label={`Back ${jumpSeconds} seconds`}
+            disabled={!isLoaded || currentTime <= 0}
           >
             <SkipBack className="h-4 w-4" />
           </Button>
@@ -187,6 +214,7 @@ export function AudioPlayer({ title, recordingId, filePath, onClose }: AudioPlay
             variant="outline"
             size="icon"
             onClick={togglePlay}
+            aria-label={isPlaying ? 'Pause' : 'Play'}
             disabled={!canPlayThis}
             title={canPlayThis ? undefined : 'Download to play'}
             className="h-10 w-10"
@@ -201,11 +229,12 @@ export function AudioPlayer({ title, recordingId, filePath, onClose }: AudioPlay
             variant="ghost"
             size="sm"
             onClick={skipForward}
-            disabled={currentTime >= duration}
+            aria-label={`Forward ${jumpSeconds} seconds`}
+            disabled={!isLoaded || currentTime >= duration}
           >
             <SkipForward className="h-4 w-4" />
           </Button>
-          <Button variant="ghost" size="icon" onClick={handleStop}>
+          <Button variant="ghost" size="icon" onClick={handleStop} aria-label="Stop">
             <Square className="h-4 w-4" />
           </Button>
         </div>

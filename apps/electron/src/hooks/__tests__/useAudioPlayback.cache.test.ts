@@ -6,7 +6,7 @@
  * computes the peaks and persists them.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { renderHook } from '@testing-library/react'
+import { act, renderHook } from '@testing-library/react'
 import { useAudioPlayback } from '../useAudioPlayback'
 import { useUIStore } from '@/store/useUIStore'
 
@@ -41,6 +41,21 @@ beforeEach(() => {
 })
 
 describe('useAudioPlayback — H5 disk cache', () => {
+  it('does not start a recording after Stop while its audio read is pending', async () => {
+    let finishRead!: (value: { success: boolean; data: string }) => void
+    readRecording.mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve }))
+    const { unmount } = renderHook(() => useAudioPlayback())
+    await act(async () => {
+      const pending = window.__audioControls!.play('leaving', '/x/leaving.mp3')
+      window.__audioControls!.stop()
+      finishRead({ success: true, data: btoa('audio-bytes') })
+      await pending
+    })
+    expect(getCache).not.toHaveBeenCalled()
+    expect(useUIStore.getState().currentlyPlayingId).toBeNull()
+    expect(useUIStore.getState().isPlaying).toBe(false)
+    unmount()
+  })
   it('loads peaks from cache WITHOUT recomputing (no decode, no read, no loading state)', async () => {
     getCache.mockResolvedValue({
       version: 1,
