@@ -808,3 +808,31 @@ describe('BrainRouter.canServe', () => {
     expect(await build().canServe('codex', 'chat')).toBe(false)
   })
 })
+
+describe('running-operation cancellation', () => {
+  beforeEach(() => { mockBrainsConfig = undefined })
+  it('does not send embeddings to a fallback after Stop', async () => {
+    const controller = new AbortController()
+    const primary = makeBrain('gemini-api', ['embed'], true)
+    const fallback = makeBrain('ollama', ['embed'], true)
+    vi.mocked(primary.embed!).mockImplementationOnce(async () => {
+      controller.abort(new Error('Stopped by you'))
+      throw controller.signal.reason
+    })
+    const router = new BrainRouter(makeRegistry({ 'gemini-api': primary, ollama: fallback }))
+    expect(await router.embed(['source text'], { signal: controller.signal })).toEqual([null])
+    expect(fallback.embed).not.toHaveBeenCalled()
+  })
+  it('does not send speaker text to a fallback after Stop', async () => {
+    const controller = new AbortController()
+    const primary = makeBrain('gemini-api', ['chat'], true)
+    const fallback = makeBrain('ollama', ['chat'], true)
+    vi.mocked(primary.chat).mockImplementationOnce(async () => {
+      controller.abort(new Error('Stopped by you'))
+      throw controller.signal.reason
+    })
+    const router = new BrainRouter(makeRegistry({ 'gemini-api': primary, ollama: fallback }))
+    expect(await router.chat('chat', [{role:'user',content:'source text'}], { signal: controller.signal })).toBeNull()
+    expect(fallback.chat).not.toHaveBeenCalled()
+  })
+})

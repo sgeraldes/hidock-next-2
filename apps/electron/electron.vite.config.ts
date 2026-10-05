@@ -4,7 +4,8 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
+    plugins: [externalizeDepsPlugin({ exclude: ['@hidock/transcription'] })],
+    resolve: { alias: { '@hidock/transcription': resolve(__dirname, '../../packages/transcription/src/index.ts') } },
     build: {
       rollupOptions: {
         input: {

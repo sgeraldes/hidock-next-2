@@ -1,7 +1,28 @@
 import { describe, expect, it } from 'vitest'
-import { AudioPreflightError, parseAudioPreflightOutput } from '../audio-preflight'
+import { AudioPreflightError, parseAudioPreflightOutput, analyzeAudioPreflight } from '../audio-preflight'
+import { execFileSync } from 'child_process'
+import ffmpegPath from 'ffmpeg-static'
+import { writeFileSync, rmSync } from 'fs'
+import { join } from 'path'
+import { tmpdir } from 'os'
 
 describe('audio transcription preflight', () => {
+  it('decodes a real streaming WebM with no duration header', async () => {
+    const path = join(tmpdir(), `hidock-preflight-${process.pid}-${Date.now()}.webm`)
+    const bytes = execFileSync(ffmpegPath!, ['-hide_banner', '-f', 'lavfi', '-i', 'sine=frequency=440', '-t', '2', '-c:a', 'libopus', '-f', 'webm', 'pipe:1'], { windowsHide: true })
+    writeFileSync(path, bytes)
+    try {
+      const report = await analyzeAudioPreflight(path)
+      expect(report.durationSeconds).toBeGreaterThan(1.9)
+      expect(report.durationSeconds).toBeLessThan(2.2)
+      expect(report.status).toBe('speech_present')
+    } finally { rmSync(path) }
+  })
+  it('uses the decoded end time when a WebM duration header is missing', () => {
+    const report = parseAudioPreflightOutput('Duration: N/A\nout_time_us=62000000\nprogress=end\n')
+    expect(report.durationSeconds).toBe(62)
+    expect(report.nonSilentSeconds).toBe(62)
+  })
   it('classifies a long lobby recording containing only brief cough/noise as no_speech', () => {
     const output = `
 Duration: 00:02:54.85, start: 0.000000, bitrate: 64 kb/s

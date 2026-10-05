@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, act } from '@testing-library/react'
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import { SourceReader } from '../SourceReader'
 import { useLibraryStore } from '@/store/useLibraryStore'
 import { useUIStore } from '@/store/useUIStore'
@@ -306,6 +306,14 @@ describe('SourceReader — one scrolling column', () => {
 // 2. The two layers
 // ---------------------------------------------------------------------------
 describe('SourceReader — scrolling never writes the chosen mode', () => {
+  it('View source opens the transcript section and scrolls it into view', async () => {
+    const scroll = vi.fn()
+    HTMLElement.prototype.scrollIntoView = scroll
+    setModes({ transcript: 'hidden' })
+    render(<SourceReader recording={makeRecording()} transcript={TRANSCRIPT} processingFocus={1} />)
+    expect(await screen.findByTestId('reader-section-transcript')).toBeVisible()
+    await waitFor(() => expect(scroll).toHaveBeenCalled())
+  })
   it('pins an expanded section strip without touching readerSectionModes', () => {
     render(<SourceReader recording={makeRecording()} transcript={TRANSCRIPT} />)
     expect(strip('metadata')).toHaveAttribute('data-pinned', 'false')

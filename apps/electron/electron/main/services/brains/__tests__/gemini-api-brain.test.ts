@@ -51,6 +51,18 @@ describe('GeminiApiBrain', () => {
     brain = new GeminiApiBrain()
   })
 
+  it('aborts an embedding request with the queue signal', async () => {
+    mockGetSecret.mockReturnValue('store-key')
+    const controller = new AbortController()
+    mockBatchEmbedContents.mockImplementationOnce((_request, opts) => new Promise((_resolve, reject) => {
+      opts?.signal?.addEventListener('abort', () => reject(opts.signal.reason), { once: true })
+    }))
+    const pending = brain.embed(['source text'], { signal: controller.signal })
+    expect(mockBatchEmbedContents.mock.calls[0][1]).toEqual({ signal: controller.signal })
+    controller.abort(new Error('Stopped by you'))
+    await expect(pending).rejects.toThrow('Stopped by you')
+  })
+
   describe('key resolution', () => {
     it('prefers the credential-store secret over the plaintext config key', () => {
       mockGetSecret.mockReturnValue('store-key')

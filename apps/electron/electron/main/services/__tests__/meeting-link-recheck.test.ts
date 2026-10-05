@@ -15,9 +15,9 @@ const autoLink = vi.fn(() => { calls.push('autoLink'); return 1 })
 const fillTwins = vi.fn(() => { calls.push('fillTwins'); return { filled: 2, ambiguous: 0 } })
 const upsertContacts = vi.fn(() => { calls.push('upsertContacts'); return { contacts: 3, links: 4 } })
 vi.mock('../org-reconciler', () => ({
-  autoLinkRecordingsToMeetings: () => autoLink(),
+  autoLinkRecordingsToMeetingsYielding: () => autoLink(),
   fillAttendeesFromOutlookTwins: () => fillTwins(),
-  upsertContactsFromMeetings: () => upsertContacts()
+  upsertContactsFromMeetingsYielding: () => upsertContacts()
 }))
 const identityRules = vi.fn(async () => { calls.push('identityRules'); return { ran: true } })
 vi.mock('../identity-rules', () => ({ runIdentityRules: () => identityRules() }))
@@ -29,7 +29,7 @@ function emitSynced(): void {
   getEventBus().emitDomainEvent({ type: 'calendar:synced', timestamp: new Date().toISOString(), payload: { meetingsCount: 10 } })
 }
 
-describe('startMeetingLinkRecheck', () => {
+describe('startMeetingLinkRecheck', async () => {
   let stop: () => void
 
   beforeEach(() => {
@@ -47,12 +47,12 @@ describe('startMeetingLinkRecheck', () => {
     vi.useRealTimers()
   })
 
-  it('re-checks the links once after a burst of calendar syncs, then links what is left unlinked', () => {
+  it('re-checks the links once after a burst of calendar syncs, then links what is left unlinked', async () => {
     emitSynced()
     emitSynced()
     expect(recheckTimeLinks).not.toHaveBeenCalled()
 
-    vi.advanceTimersByTime(RECHECK_DEBOUNCE_MS)
+    await vi.advanceTimersByTimeAsync(RECHECK_DEBOUNCE_MS)
 
     expect(recheckTimeLinks).toHaveBeenCalledTimes(1)
     expect(autoLink).toHaveBeenCalledTimes(1)
@@ -60,19 +60,19 @@ describe('startMeetingLinkRecheck', () => {
 
   // An Outlook sync writes m365 rows; the ICS rows the recordings link to take
   // their attendees right away, not at the next start (owner, 3-oct-2026).
-  it('copies attendees from Outlook twins and makes their contacts before re-checking links', () => {
+  it('copies attendees from Outlook twins and makes their contacts before re-checking links', async () => {
     emitSynced()
-    vi.advanceTimersByTime(RECHECK_DEBOUNCE_MS)
+    await vi.advanceTimersByTimeAsync(RECHECK_DEBOUNCE_MS)
 
     expect(calls.slice(0, 3)).toEqual(['fillTwins', 'upsertContacts', 'autoLink'])
   })
 
   // New attendees can decide shared first names and duplicates (spec 2026-10-03, Phase 3).
-  it('applies the identity rules after the links, once per burst', () => {
+  it('applies the identity rules after the links, once per burst', async () => {
     identityRules.mockClear()
     emitSynced()
     emitSynced()
-    vi.advanceTimersByTime(RECHECK_DEBOUNCE_MS)
+    await vi.advanceTimersByTimeAsync(RECHECK_DEBOUNCE_MS)
 
     expect(calls).toEqual(['fillTwins', 'upsertContacts', 'autoLink', 'identityRules'])
     expect(identityRules).toHaveBeenCalledTimes(1)
@@ -83,41 +83,41 @@ describe('startMeetingLinkRecheck', () => {
     identityRules.mockImplementationOnce(async () => { throw new Error('jev down') })
 
     emitSynced()
-    vi.advanceTimersByTime(RECHECK_DEBOUNCE_MS)
+    await vi.advanceTimersByTimeAsync(RECHECK_DEBOUNCE_MS)
     await vi.runAllTimersAsync()
 
     expect(error).toHaveBeenCalledWith('[MeetingLinks] Identity rules after calendar sync failed:', expect.any(Error))
     error.mockRestore()
   })
 
-  it('skips the contact pass when no meeting gained attendees', () => {
+  it('skips the contact pass when no meeting gained attendees', async () => {
     fillTwins.mockImplementationOnce(() => { calls.push('fillTwins'); return { filled: 0, ambiguous: 1 } })
 
     emitSynced()
-    vi.advanceTimersByTime(RECHECK_DEBOUNCE_MS)
+    await vi.advanceTimersByTimeAsync(RECHECK_DEBOUNCE_MS)
 
     expect(upsertContacts).not.toHaveBeenCalled()
     expect(autoLink).toHaveBeenCalledTimes(1)
   })
 
-  it('a failure is logged and does not stop the next sync from re-checking', () => {
+  it('a failure is logged and does not stop the next sync from re-checking', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     recheckTimeLinks.mockImplementationOnce(() => { throw new Error('database busy') })
 
     emitSynced()
-    vi.advanceTimersByTime(RECHECK_DEBOUNCE_MS)
+    await vi.advanceTimersByTimeAsync(RECHECK_DEBOUNCE_MS)
     expect(error).toHaveBeenCalled()
 
     emitSynced()
-    vi.advanceTimersByTime(RECHECK_DEBOUNCE_MS)
+    await vi.advanceTimersByTimeAsync(RECHECK_DEBOUNCE_MS)
     expect(recheckTimeLinks).toHaveBeenCalledTimes(2)
     error.mockRestore()
   })
 
-  it('stops listening when stopped', () => {
+  it('stops listening when stopped', async () => {
     stop()
     emitSynced()
-    vi.advanceTimersByTime(RECHECK_DEBOUNCE_MS)
+    await vi.advanceTimersByTimeAsync(RECHECK_DEBOUNCE_MS)
     expect(recheckTimeLinks).not.toHaveBeenCalled()
   })
 })

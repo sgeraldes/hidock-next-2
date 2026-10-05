@@ -1,5 +1,8 @@
 import { defineConfig, configDefaults } from 'vitest/config'
 import { resolve } from 'path'
+import { fileURLToPath } from 'url'
+
+const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
 export default defineConfig({
   // Worktrees may share node_modules via junctions; keep runner caches local.
@@ -18,7 +21,9 @@ export default defineConfig({
       '@hooks': resolve(__dirname, 'src/hooks'),
       '@lib': resolve(__dirname, 'src/lib'),
       '@store': resolve(__dirname, 'src/store'),
-      '@types': resolve(__dirname, 'src/types')
+      '@types': resolve(__dirname, 'src/types'),
+      '@hidock/transcription': resolve(__dirname, '../../packages/transcription/src/index.ts'),
+      '@google/genai': resolve(__dirname, 'node_modules/@google/genai/dist/node/index.mjs')
     },
     // D3 follow-up (review): the better-sqlite3 dual-ABI shim is SCOPED, not
     // global. Only the `main-db` project (main-process, DB-backed tests) loads

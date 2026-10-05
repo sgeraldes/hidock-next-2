@@ -1,3 +1,4 @@
+import { createElement, StrictMode } from 'react'
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -29,6 +30,19 @@ describe('useTranscriptionSync', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it('resubscribes after a StrictMode effect replay and streams the current stage', async () => {
+    let progress: ((data:any)=>void) | undefined
+    const unsubscribe = vi.fn()
+    ;(window as any).electronAPI.onTranscriptionProgress = vi.fn((callback) => {progress=callback;return unsubscribe})
+    const {unmount} = renderHook(() => useTranscriptionSync(), {wrapper: ({children}) => createElement(StrictMode,null,children)})
+    await act(async () => {await Promise.resolve()})
+    expect(window.electronAPI.onTranscriptionProgress).toHaveBeenCalledTimes(2)
+    act(() => progress?.({queueItemId:'q-1',recordingId:'rec-1',stage:'diarization',progress:3}))
+    expect(useTranscriptionStore.getState().queue.get('q-1')).toMatchObject({stage:'diarization',status:'processing'})
+    unmount()
+    expect(unsubscribe).toHaveBeenCalledTimes(2)
   })
 
   it('hydrates and reconciles only actionable rows at the reduced cadence', async () => {

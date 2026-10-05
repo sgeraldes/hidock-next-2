@@ -47,7 +47,13 @@ function parseNumber(output: string, pattern: RegExp): number | null {
 
 function parseDuration(output: string): number | null {
   const match = output.match(/Duration:\s*(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)/)
-  if (!match) return null
+  if (!match) {
+    // MediaRecorder WebM commonly has no duration header. The same full decode
+    // used for activity detection reports its actual end timestamp in microseconds.
+    const times = [...output.matchAll(/^out_time_us=(\d+)\r?$/gm)].map((m) => Number(m[1]) / 1_000_000)
+    const decoded = Math.max(0, ...times)
+    return decoded > 0 && Number.isFinite(decoded) ? decoded : null
+  }
   const duration = Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3])
   return Number.isFinite(duration) && duration > 0 ? duration : null
 }
@@ -138,7 +144,8 @@ export function parseAudioPreflightOutput(
 
 export async function analyzeAudioPreflight(
   filePath: string,
-  knownDurationSeconds?: number | null
+  knownDurationSeconds?: number | null,
+  signal?: AbortSignal
 ): Promise<AudioPreflightReport> {
   if (!ffmpegPath) {
     throw new AudioPreflightError('Bundled ffmpeg is unavailable; automatic transcription was blocked')
@@ -151,17 +158,17 @@ export async function analyzeAudioPreflight(
     execFile(
       executable,
       [
-        '-hide_banner', '-nostats', '-i', filePath,
+        '-hide_banner', '-nostats', '-progress', 'pipe:1', '-i', filePath,
         '-af', `silencedetect=noise=${SILENCE_THRESHOLD_DB}dB:d=${MINIMUM_SILENCE_SECONDS},volumedetect`,
         '-f', 'null', '-'
       ],
-      { windowsHide: true, maxBuffer: 10 * 1024 * 1024 },
-      (error, _stdout, stderr) => {
+      { windowsHide: true, maxBuffer: 10 * 1024 * 1024, signal },
+      (error, stdout, stderr) => {
         if (error) {
           reject(new AudioPreflightError(`Audio preflight failed: ${error.message}`))
           return
         }
-        resolve(stderr)
+        resolve(`${stderr}\n${stdout}`)
       }
     )
   })

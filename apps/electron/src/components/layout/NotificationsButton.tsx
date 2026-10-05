@@ -18,6 +18,8 @@
  * the Operations overlay keeps in a collapsed "Earlier failures" group.
  */
 
+import { TranscriptionActivity } from './TranscriptionActivity'
+import { useNavigate } from 'react-router-dom'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Bell, Download, AlertCircle, RefreshCw, ArrowRight, X, Clock } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -103,7 +105,11 @@ export function NotificationsButton() {
   const txQueue = useTranscriptionStore((s) => s.queue)
   const recordings = useUnifiedRecordings()
   const openOperationsOverlay = useUIStore((s) => s.openOperationsOverlay)
-  const { cancelDownload, cancelAllDownloads } = useOperations()
+  const { cancelDownload, cancelAllDownloads, cancelTranscription } = useOperations()
+  const retry = useTranscriptionStore((s) => s.retry)
+  const prioritize = useTranscriptionStore((s) => s.prioritize)
+  const deprioritize = useTranscriptionStore((s) => s.deprioritize)
+  const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const [persistedDownloads, setPersistedDownloads] = useState<DownloadQueueEntry[]>([])
 
@@ -224,8 +230,14 @@ export function NotificationsButton() {
                     <div className="truncate text-sm text-foreground">{operationLabel(recordings.find((r) => r.id === item.recordingId))}</div>
                     <div className="truncate text-[11px] text-muted-foreground">
                       {transcriptionStatus(item.status)}
-                      {item.error ? ` · ${item.error}` : ''}
                     </div>
+                    <TranscriptionActivity item={item} onStop={cancelTranscription} onRetry={(id) => { void retry(id) }} />
+                    {item.status === 'pending' && <div className="flex flex-wrap gap-1 text-xs">
+                      <button type="button" className="rounded px-2 py-1 hover:bg-accent" onClick={() => prioritize(item.id)}>Move up</button>
+                      <button type="button" className="rounded px-2 py-1 hover:bg-accent" onClick={() => deprioritize(item.id)}>Move down</button>
+                      <button type="button" className="rounded px-2 py-1 hover:bg-accent" onClick={() => { void cancelTranscription(item.recordingId) }}>Remove from queue</button>
+                    </div>}
+                    <button type="button" className="rounded px-2 py-1 text-xs hover:bg-accent" onClick={() => { navigate('/library', { state: { selectedId: item.recordingId, focusProcessing: true } }); setOpen(false) }}>View source</button>
                   </div>
                 </li>
               ))}

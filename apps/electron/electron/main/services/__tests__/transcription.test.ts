@@ -633,7 +633,7 @@ describe('Transcription Service', () => {
       mockIsRecordingEligible.mockReturnValue(false) // rated garbage: value-excluded
 
       await runQueueUntil(() => {
-        expect(mockUpdateQueueItem).toHaveBeenCalledWith('queue-rec-rated', 'cancelled')
+        expect(mockUpdateQueueItem).toHaveBeenCalledWith('queue-rec-rated', 'cancelled', 'Source no longer eligible')
       })
 
       expect(mockAnalyzeAudioPreflight).toHaveBeenCalled() // the local check still ran
@@ -1067,7 +1067,7 @@ describe('Transcription Service', () => {
       startTranscriptionProcessor()
       try {
         await vi.waitFor(() => {
-          expect(mockUpdateQueueItem).toHaveBeenCalledWith('queue-cancel', 'cancelled')
+          expect(mockUpdateQueueItem).toHaveBeenCalledWith('queue-cancel', 'cancelled', 'Source no longer eligible')
         }, { timeout: 15000, interval: 25 })
       } finally {
         stopTranscriptionProcessor()

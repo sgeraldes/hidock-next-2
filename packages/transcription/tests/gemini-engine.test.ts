@@ -266,6 +266,17 @@ describe('lying-wav', () => {
 })
 
 describe('GeminiEngine', () => {
+  it('passes the cancellation signal to the in-flight provider request', async () => {
+    const controller = new AbortController()
+    mockGenerateContentStream.mockImplementation(({ config }) => new Promise((_resolve, reject) => {
+      config.abortSignal?.addEventListener('abort', () => reject(new Error('Stopped by you')), { once: true })
+    }))
+    const pending = collect(new GeminiEngine({ apiKey: 'x', model: 'gemini-2.5-flash' }).transcribe(oneSecond, { source: 'mic', signal: controller.signal }))
+    await vi.waitFor(() => expect(mockGenerateContentStream).toHaveBeenCalled())
+    expect(mockGenerateContentStream.mock.calls[0][0].config.abortSignal).toBe(controller.signal)
+    controller.abort()
+    await expect(pending).rejects.toThrow('Stopped by you')
+  })
   beforeEach(() => {
     vi.clearAllMocks()
     mockGenerateContentStream.mockResolvedValue(streamResponse('Hello world'))

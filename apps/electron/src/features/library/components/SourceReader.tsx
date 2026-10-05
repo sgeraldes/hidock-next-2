@@ -289,6 +289,8 @@ function analysisFailurePolicy(f: AnalysisFailure): { canAutoRetry: boolean; dis
 }
 
 interface SourceReaderProps {
+  /** A new Operations navigation request focuses this source's processing/transcript. */
+  processingFocus?: number
   recording: UnifiedRecording | null
   transcript?: Transcript
   meeting?: Meeting
@@ -328,6 +330,7 @@ interface SourceReaderProps {
 }
 
 export function SourceReader({
+  processingFocus,
   recording,
   transcript,
   meeting,
@@ -360,6 +363,7 @@ export function SourceReader({
 
   // Title editing state
   const [isEditingTitle, setIsEditingTitle] = useState(false)
+  const sourceRoot = useRef<HTMLDivElement>(null)
   const [editedTitle, setEditedTitle] = useState('')
   const [isSavingTitle, setIsSavingTitle] = useState(false)
   const [metadataOpen, setMetadataOpen] = useState(false)
@@ -396,6 +400,15 @@ export function SourceReader({
   // right now) is derived below and lives only as long as this component does.
   const persistedSectionModes = useLibraryStore((s) => s.readerSectionModes)
   const setReaderSectionMode = useLibraryStore((s) => s.setReaderSectionMode)
+  useEffect(() => {
+    if (!processingFocus) return
+    setReaderSectionMode('transcript', 'expanded')
+    const timer = setTimeout(() => {
+      const target = sourceRoot.current?.querySelector('[data-testid="reader-section-transcript"]') ?? sourceRoot.current?.querySelector('[data-processing-status]')
+      target?.scrollIntoView?.({ block: 'start' })
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [processingFocus, recording?.id, transcript, setReaderSectionMode])
   // A store rehydrated by an older build, or a test that calls setState with a
   // partial map, can be missing a section. `migrate` covers the first case; this
   // covers the second, and costs nothing.
@@ -1327,7 +1340,7 @@ export function SourceReader({
     }))
 
   return (
-    <div className="@container flex flex-col h-full overflow-hidden">
+    <div ref={sourceRoot} className="@container flex flex-col h-full overflow-hidden">
       <HiddenReaderSections
         hidden={hiddenReaderSections}
         onRestore={(section) => changeSectionMode(section, 'expanded')}
@@ -1384,7 +1397,7 @@ export function SourceReader({
         <>
 
         {/* Curated meta strip: date · duration · location · status */}
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 pt-2 text-xs text-muted-foreground">
+        <div data-processing-status className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 pt-2 text-xs text-muted-foreground">
           <span className="inline-flex items-center gap-1">
             <Calendar className="h-3.5 w-3.5" aria-hidden="true" />
             {formatSmartDate(recording.dateRecorded, { fallback: 'Unknown' })}

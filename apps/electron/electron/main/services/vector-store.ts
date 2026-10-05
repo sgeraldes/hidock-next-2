@@ -3,7 +3,7 @@
  * Simple in-memory vector store with SQLite persistence for meeting transcript embeddings
  */
 
-import { getDatabase, getDatabasePath, isRecordingProcessable } from './database'
+import { getDatabase, getDatabasePath, isRecordingProcessable, queryOne, acquireOrganizationCheckpointBudget } from './database'
 import { dirname, join } from 'path'
 import { existsSync, unlinkSync } from 'fs'
 import {
@@ -26,7 +26,7 @@ import {
 } from './recording-eligibility'
 import { getEmbeddingsService } from './embeddings'
 import { ragSettings } from './rag-settings'
-import { yieldToEventLoop } from './event-loop'
+import { yieldToEventLoop, mainThreadBudget } from './event-loop'
 
 // 2026-10-04: 1024-row metadata scans kept the copied-library restore's
 // longest stretch at 40 ms without the timer overhead of 128-row scans.
@@ -50,7 +50,8 @@ interface VectorDocument {
    */
   content?: string
   /** Float32Array for DB-loaded docs (zero-copy view, no 338M-value boxing);
-   *  number[] for freshly embedded docs. Both are indexable array-likes. */
+   *  float32 views for freshly indexed transcripts too; number[] remains accepted
+   *  for single-document callers. Both are indexable array-likes. */
   embedding: number[] | Float32Array
   metadata: {
     meetingId?: string
@@ -1004,6 +1005,7 @@ class VectorStore {
        * while embeddings ran, so nothing is persisted (returns 0). Not stored on
        * any chunk's metadata.
        */
+      signal?: AbortSignal
       shouldPersist?: () => boolean
       /**
        * ADV41-2 (round-43) — PRE-PROVIDER eligibility gate. `shouldPersist`
@@ -1020,17 +1022,17 @@ class VectorStore {
   ): Promise<number> {
     this.ensureSchema()
     // Destructure the gates out so they never land on a stored chunk's metadata.
-    const { shouldPersist, shouldGenerate, ...chunkMeta } = metadata
+    const { shouldPersist, shouldGenerate, signal, ...chunkMeta } = metadata
+    if (signal?.aborted) return 0
     // Check if already indexed FOR THE ACTIVE PROVIDER'S PARTITION. Chunks
     // embedded by another provider do NOT count — that is exactly the
     // provider-switch reindex path (the same recording gets a second set of
     // chunks under the new partition; the old set stays as the backup).
     const partitionProvider = await getEmbeddingsService().activeProviderId()
     if (chunkMeta.recordingId && partitionProvider) {
-      const existing = Array.from(this.documents.values()).filter(
-        (d) => d.metadata.recordingId === chunkMeta.recordingId && d.metadata.embedProvider === partitionProvider
-      )
-      if (existing.length > 0) {
+      // Indexed SQL point-read avoids copying/scanning the growing corpus per recording.
+      const existing = queryOne('SELECT 1 FROM vector_embeddings WHERE recording_id = ? AND embed_provider = ? LIMIT 1', [chunkMeta.recordingId, partitionProvider])
+      if (existing) {
         console.log(`Transcript ${chunkMeta.recordingId} already indexed (provider ${partitionProvider})`)
         return 0
       }
@@ -1046,7 +1048,7 @@ class VectorStore {
     // caller/row was awaiting; re-validate immediately before sending this
     // content to the external embeddings provider. Fail-closed callers return
     // false ⇒ nothing is sent, nothing is persisted (returns 0).
-    if (shouldGenerate && !shouldGenerate()) {
+    if (signal?.aborted || (shouldGenerate && !shouldGenerate())) {
       console.log(
         `[VectorStore] ${chunkMeta.recordingId ?? 'doc'} not eligible — skipping index (pre-provider)`
       )
@@ -1059,60 +1061,81 @@ class VectorStore {
     // the moment before entering the router; if Gemini then fails and the router
     // falls back to Ollama, an exclusion committed during that window must not
     // reach the fallback provider either.
-    const embeddings = await getEmbeddingsService().generateEmbeddings(chunks, { shouldGenerate, purpose: 'passage' })
+    const embeddings = await getEmbeddingsService().generateEmbeddings(chunks, { shouldGenerate, purpose: 'passage', ...(signal ? { signal } : {}) })
 
+    // Provider adapters may resolve synchronously (local/cache). Give IPC a turn
+    // before the indivisible write and then re-read eligibility below.
+    await yieldToEventLoop()
     // RE-1 — re-check eligibility ADJACENT to the write, with no await between
     // here and the synchronous INSERT loop below. A hard purge that committed
     // while embeddings were generated must not leave orphaned vector rows.
-    if (shouldPersist && !shouldPersist()) {
+    if (signal?.aborted || (shouldPersist && !shouldPersist())) {
       console.log(`[VectorStore] ${chunkMeta.recordingId ?? 'doc'} no longer eligible — skipping index persist`)
       return 0
     }
 
     const db = getDatabase()
     const partition = partitionProvider ?? (await this.activePartitionLabel(embeddings.find(Boolean)?.length ?? 0))
+    // Persist one complete recording atomically; no await inside this savepoint.
+    if (signal?.aborted || (shouldPersist && !shouldPersist())) return 0
+    // Retain float32 views over one recording-sized arena, not the provider's
+    // boxed number arrays. Fresh backfills must have the same footprint as restore.
+    const arena = new Float32Array(embeddings.reduce((sum, vector) => sum + (vector?.length ?? 0), 0))
+    let offset = 0
+    const release = acquireOrganizationCheckpointBudget()
+    const added: VectorDocument[] = []
     let indexed = 0
-    for (let i = 0; i < chunks.length; i++) {
-      const embedding = embeddings[i]
-      if (!embedding) continue
+    db.run('SAVEPOINT vector_transcript')
+    try {
+      for (let i = 0; i < chunks.length; i++) {
+        const generated = embeddings[i]
+        if (!generated) continue
+        arena.set(generated, offset)
+        const embedding = arena.subarray(offset, offset + generated.length)
+        offset += generated.length
 
-      // The partition is part of the id: the same recording+chunk indexed
-      // under two providers must NEVER collide (INSERT OR REPLACE would
-      // silently overwrite the other partition's row).
-      const id = `${chunkMeta.recordingId || 'doc'}_${i}_${partition ?? 'unknown'}_${Date.now()}`
-      const doc: VectorDocument = {
-        id,
-        // No `content` — see addDocument. This is the path a full backfill
-        // takes, so holding the text here is exactly what would undo the
-        // change: 125k chunks reindexed would rebuild the ~206 MB.
-        embedding,
-        metadata: { ...chunkMeta, chunkIndex: i, embedProvider: partition, embedDims: embedding.length }
-      }
-      this.corpusRevision++
-      this.documents.set(id, doc)
-      db.run(
-        `INSERT OR REPLACE INTO vector_embeddings
-         (id, content, embedding, meeting_id, recording_id, chunk_index, timestamp, subject, source_type, capture_id, embed_provider, embed_dims)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
+        // The partition is part of the id: the same recording+chunk indexed
+        // under two providers must NEVER collide (INSERT OR REPLACE would
+        // silently overwrite the other partition's row).
+        const id = `${chunkMeta.recordingId || 'doc'}_${i}_${partition ?? 'unknown'}_${Date.now()}`
+        const doc: VectorDocument = {
           id,
-          chunks[i],
-          embeddingToBlob(embedding),
-          chunkMeta.meetingId || null,
-          chunkMeta.recordingId || null,
-          i,
-          chunkMeta.timestamp || null,
-          chunkMeta.subject || null,
-          chunkMeta.sourceType || null,
-          chunkMeta.captureId || null,
-          partition ?? null,
-          embedding.length
-        ]
-      )
-      indexed++
-    }
+          // No `content` — see addDocument. This is the path a full backfill
+          // takes, so holding the text here is exactly what would undo the
+          // change: 125k chunks reindexed would rebuild the ~206 MB.
+          embedding,
+          metadata: { ...chunkMeta, chunkIndex: i, embedProvider: partition, embedDims: embedding.length }
+        }
+        added.push(doc)
+        db.run(
+          `INSERT OR REPLACE INTO vector_embeddings
+           (id, content, embedding, meeting_id, recording_id, chunk_index, timestamp, subject, source_type, capture_id, embed_provider, embed_dims)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            id,
+            chunks[i],
+            Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength),
+            chunkMeta.meetingId || null,
+            chunkMeta.recordingId || null,
+            i,
+            chunkMeta.timestamp || null,
+            chunkMeta.subject || null,
+            chunkMeta.sourceType || null,
+            chunkMeta.captureId || null,
+            partition ?? null,
+            embedding.length
+          ]
+        )
+        indexed++
+      }
 
-    console.log(`Indexed ${indexed} chunks for transcript`)
+      db.run('RELEASE SAVEPOINT vector_transcript')
+    } catch (error) {
+      db.run('ROLLBACK TO SAVEPOINT vector_transcript')
+      db.run('RELEASE SAVEPOINT vector_transcript')
+      throw error
+    } finally { release() }
+    for (const doc of added) { this.corpusRevision++; this.documents.set(doc.id, doc) }
     return indexed
   }
 
@@ -1233,18 +1256,17 @@ class VectorStore {
       return { indexed: 0, skipped: 0 }
     }
     const stmt = db.prepare(`
-      SELECT t.recording_id, t.full_text, r.date_recorded, r.filename
+      SELECT t.recording_id, r.date_recorded, r.filename
       FROM transcripts t
       LEFT JOIN recordings r ON r.id = t.recording_id
-      WHERE TRIM(COALESCE(t.full_text, '')) != ''
-        AND COALESCE(r.personal, 0) = 0
+      WHERE COALESCE(r.personal, 0) = 0
         AND r.deleted_at IS NULL
         AND NOT EXISTS (
           SELECT 1 FROM vector_embeddings v WHERE v.recording_id = t.recording_id AND v.embed_provider = ?
         )
     `)
     stmt.bind([activeProvider])
-    const rows: Array<{ recording_id: string; full_text: string; date_recorded?: string; filename?: string }> = []
+    const rows: Array<{ recording_id: string; date_recorded?: string; filename?: string }> = []
     while (stmt.step()) {
       rows.push(stmt.getAsObject() as never)
     }
@@ -1264,7 +1286,9 @@ class VectorStore {
 
     let indexed = 0
     let skipped = rows.length - eligibleRows.length
+    const checkpoint = mainThreadBudget('VectorBackfill')
     for (const row of eligibleRows) {
+      await checkpoint()
       try {
         // ADV41-2 (round-43) — `eligibleRows` snapshotted eligibility ONCE
         // before the loop. While an EARLIER row's indexTranscript awaited its
@@ -1276,7 +1300,9 @@ class VectorStore {
           skipped++
           continue
         }
-        const count = await this.indexTranscript(row.full_text, {
+        const transcript = queryOne<{ full_text: string }>('SELECT full_text FROM transcripts WHERE recording_id = ?', [row.recording_id])
+        if (!transcript?.full_text?.trim()) { skipped++; continue }
+        const count = await this.indexTranscript(transcript.full_text, {
           recordingId: row.recording_id,
           timestamp: row.date_recorded,
           subject: row.filename,
@@ -1291,6 +1317,10 @@ class VectorStore {
           // adjacent to the write (inside indexTranscript, after embeddings,
           // before the INSERT loop) so nothing orphaned is persisted.
           shouldPersist: () => isRecordingProcessable(row.recording_id)
+        }).finally(async () => {
+          // Give even cached/failed providers a timer turn. Their wait is not a hold.
+          await yieldToEventLoop()
+          checkpoint.reset()
         })
         if (count > 0) indexed++
         else skipped++

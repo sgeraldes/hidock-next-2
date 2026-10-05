@@ -57,9 +57,9 @@ class OllamaService {
 
   // ── Model management (not in @hidock/ai-providers) ───────────────────────
 
-  async isAvailable(): Promise<boolean> {
+  async isAvailable(signal?: AbortSignal): Promise<boolean> {
     try {
-      const response = await fetch(`${this.baseUrl}/api/tags`)
+      const response = await (signal ? fetch(`${this.baseUrl}/api/tags`, { signal }) : fetch(`${this.baseUrl}/api/tags`))
       return response.ok
     } catch {
       return false
@@ -116,8 +116,20 @@ class OllamaService {
 
   // ── Embeddings (via @hidock/ai-providers) ────────────────────────────────
 
-  async generateEmbedding(text: string): Promise<number[] | null> {
+  async generateEmbedding(text: string, signal?: AbortSignal): Promise<number[] | null> {
     try {
+      // The shared adapter has no abort option; use its same REST contract for
+      // an owned running operation so Stop can terminate the pending request.
+      if (signal) {
+        signal.throwIfAborted()
+        const response = await fetch(`${this.baseUrl}/api/embed`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: this.embeddingModel, input: text }), signal
+        })
+        if (!response.ok) throw new Error(`Ollama embedding request failed: ${response.status}`)
+        const data = await response.json() as { embeddings?: number[][] }
+        return data.embeddings?.[0] ?? null
+      }
       const result = await embed(text, {
         provider: 'ollama',
         model: this.embeddingModel,
@@ -132,7 +144,7 @@ class OllamaService {
 
   async generateEmbeddings(
     texts: string[],
-    opts: { shouldGenerate?: () => boolean } = {}
+    opts: { shouldGenerate?: () => boolean; signal?: AbortSignal } = {}
   ): Promise<(number[] | null)[]> {
     const embeddings: (number[] | null)[] = []
     for (const text of texts) {
@@ -142,11 +154,11 @@ class OllamaService {
       // remaining texts with null (the "no embedding available" shape callers
       // persist as nothing), so an exclusion committed while an earlier request
       // was pending never sends the later texts to the provider.
-      if (!eligibleToGenerate(opts.shouldGenerate)) {
+      if (opts.signal?.aborted || !eligibleToGenerate(opts.shouldGenerate)) {
         while (embeddings.length < texts.length) embeddings.push(null)
         return embeddings
       }
-      const embedding = await this.generateEmbedding(text)
+      const embedding = await (opts.signal ? this.generateEmbedding(text, opts.signal) : this.generateEmbedding(text))
       embeddings.push(embedding)
     }
     return embeddings

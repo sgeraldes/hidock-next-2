@@ -18,6 +18,7 @@ export interface TranscriptionItem {
   filename: string
   status: TranscriptionStatus
   progress: number // 0-100 (estimated)
+  stage?: string
   error?: string
   retryCount: number
   attempts: number
@@ -55,6 +56,7 @@ export interface TranscriptionQueueSnapshotItem {
   filename?: string
   status: TranscriptionStatus
   progress?: number
+  stage?: string
   error_message?: string
   retry_count?: number
   attempts?: number
@@ -94,7 +96,7 @@ export interface TranscriptionQueueStore {
   addToQueue: (id: string, recordingId: string, filename: string) => void
   /** Replace the renderer projection from one bounded main-process snapshot. */
   reconcileQueue: (items: TranscriptionQueueSnapshotItem[]) => void
-  updateProgress: (id: string, progress: number) => void
+  updateProgress: (id: string, progress: number, stage?: string) => void
   markCompleted: (id: string, provider: string) => void
   markFailed: (id: string, error: string) => void
   retry: (id: string) => Promise<boolean>
@@ -169,6 +171,7 @@ export const useTranscriptionStore = create<TranscriptionQueueStore>()(
             filename: snapshot.filename || previous?.filename || 'Unknown',
             status: snapshot.status,
             progress: snapshot.progress ?? previous?.progress ?? 0,
+            stage: snapshot.stage ?? previous?.stage,
             error: snapshot.error_message,
             retryCount: snapshot.retry_count ?? previous?.retryCount ?? 0,
             attempts: snapshot.attempts ?? previous?.attempts ?? 0,
@@ -188,7 +191,7 @@ export const useTranscriptionStore = create<TranscriptionQueueStore>()(
       })
     },
 
-    updateProgress: (id, progress) => {
+    updateProgress: (id, progress, stage) => {
       set((state) => {
         const item = state.queue.get(id)
         if (!item) return state
@@ -197,6 +200,7 @@ export const useTranscriptionStore = create<TranscriptionQueueStore>()(
         queue.set(id, {
           ...item,
           progress,
+          stage: stage ?? item.stage,
           status: 'processing',
           startedAt: item.startedAt || new Date(),
           attempts: item.attempts + (item.startedAt ? 0 : 1)

@@ -31,6 +31,8 @@ const deps = vi.hoisted(() => ({
 }))
 
 vi.mock('../database', () => ({
+  acquireOrganizationCheckpointBudget: () => () => {},
+  queryOne: (sql: string, params: string[]) => sql.startsWith('SELECT 1') ? undefined : deps.backfillRows.find((row) => row.recording_id === params[0]),
   getDatabase: () => ({
     run: (sql: string, params?: any[]) => {
       if (typeof sql === 'string' && sql.includes('vector_embeddings') && sql.includes('INSERT') && params) {
@@ -359,4 +361,12 @@ describe('VectorStore eligible counts (rag:status honesty)', () => {
     expect(store.getEligibleDocumentCount()).toBe(0)
     expect(store.getEligibleMeetingCount()).toBe(0)
   })
+})
+
+it('does not persist search vectors after Stop even when the provider returns output', async () => {
+  const controller = new AbortController()
+  deps.onEmbeddings = () => controller.abort(new Error('Stopped by you'))
+  const store = new VectorStore()
+  expect(await store.indexTranscript('source text', { recordingId: 'r-stop', signal: controller.signal })).toBe(0)
+  expect(deps.indexedRecordingIds).toEqual([])
 })

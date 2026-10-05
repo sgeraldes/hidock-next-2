@@ -33,6 +33,7 @@ type LucideIcon = typeof FileText
 import { toast } from '@/components/ui/toaster'
 import { OperationController } from '@/components/OperationController'
 import { OperationsPanel } from '@/components/layout/OperationsPanel'
+import { OperationsBoundary } from './OperationsBoundary'
 import { useUIStore } from '@/store/ui/useUIStore'
 import { useActionablesPendingCount, useActionablesStore } from '@/store'
 import { useFeatureStore, describeDisableReason, featureForPath } from '@/store/useFeatureStore'
@@ -312,7 +313,7 @@ export function Layout({ children }: LayoutProps) {
   return (
     <div className="flex h-screen flex-col bg-background">
       {/* Background operations controller - never unmounts, handles ALL operations */}
-      <OperationController />
+      <OperationsBoundary><OperationController /></OperationsBoundary>
 
       {/* Office-365-style unified titlebar (window chrome merged with the app). The
           sidebar-collapse handle lives on the sidebar's right edge (below), not here. */}
@@ -471,7 +472,7 @@ export function Layout({ children }: LayoutProps) {
         </TooltipProvider>
 
         {/* Operations Panel - Downloads + Transcriptions */}
-        <OperationsPanel sidebarOpen={sidebarOpen} />
+        <OperationsBoundary><OperationsPanel sidebarOpen={sidebarOpen} /></OperationsBoundary>
 
         {/* Activity Log is NOT in the sidebar — it lives ONLY in the titlebar (the
             ⚡ ActivityLogButton owns the single overlay). Removed from here to kill

@@ -19,7 +19,7 @@ import { getIntegrityService } from './integrity-service'
 import { reconcileOrganizationYielding } from './org-reconciler'
 import { runVoiceLearning } from './voice-learning'
 import { runIdentityRules } from './identity-rules'
-import { backfillKnowledgeCaptures } from './knowledge-capture-backfill'
+import { backfillKnowledgeCapturesYielding } from './knowledge-capture-backfill'
 import { backfillAudioProfiles } from './audio-profile-store'
 import { getQueueState, startTranscriptionProcessor } from './transcription'
 import { recomputeAudioWarnings } from './value-classification'
@@ -119,7 +119,7 @@ export const BOOT_TASK_DEFS: GatedBootTask[] = [
     feature: null,
     run: async () => {
       try {
-        backfillKnowledgeCaptures()
+        await backfillKnowledgeCapturesYielding()
       } catch (e) {
         console.error('[KnowledgeCaptureBackfill] error:', e)
       }

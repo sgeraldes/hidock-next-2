@@ -17,6 +17,7 @@ import { BusyIcon } from '@/components/ui/working'
 import { useAppStore } from '@/store'
 import { Brand, BRAND_DIVIDER_MODE, showBrandVerticalDivider, type BrandDividerMode } from '@/components/layout/Brand'
 import { NotificationsButton } from '@/components/layout/NotificationsButton'
+import { OperationsBoundary } from './OperationsBoundary'
 import { ActivityLogButton } from '@/components/layout/ActivityLogButton'
 import { UserMenu } from '@/components/layout/UserMenu'
 import {
@@ -198,7 +199,7 @@ export function TitleBar({ sidebarOpen, dividerMode = BRAND_DIVIDER_MODE }: Titl
         <div className="flex shrink-0 items-center gap-3">
           {/* Icon-button trio — one visual group with comfortable inner rhythm. */}
           <div className="flex items-center gap-1">
-            <NotificationsButton />
+            <OperationsBoundary><NotificationsButton /></OperationsBoundary>
             <ActivityLogButton />
             <button
               type="button"

@@ -12,6 +12,9 @@
  * own long-running operations or hold critical state.
  */
 
+// Nested operation hooks change during dev pulls. Remount on HMR instead of
+// carrying their old hook cells into the updated implementation.
+// @refresh reset
 import { useEffect, useMemo } from 'react'
 import { useAppStore } from '@/store/useAppStore'
 import { useConfigStore } from '@/store/domain/useConfigStore'
