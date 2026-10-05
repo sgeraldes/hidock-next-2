@@ -12,6 +12,7 @@ import type { KnowledgeCapture } from '@/types/knowledge'
 import { UNKNOWN_DATE, isUnknownDate } from '@/lib/unknownDate'
 import { isFeatureOffThisRun } from '@/lib/bootFeatures'
 import { isFeatureDisabledRejection } from '@/lib/featureDisabled'
+import { createDeviceRecordingChangeTracker } from './deviceRecordingChanges'
 
 /**
  * Recordings still on the device that are not downloaded yet. With Device Sync
@@ -979,12 +980,11 @@ export function useUnifiedRecordings(): UseUnifiedRecordingsResult {
     }
   }, [refreshLocal])
 
-  // Poll device for file count changes (detect new recordings on device)
+  // Poll device for filename changes (detect new recordings on device)
   useEffect(() => {
     if (!deviceConnected) return
 
-    let previousRecordingCount = 0
-    let isInitialized = false
+    const trackDeviceChanges = createDeviceRecordingChangeTracker()
 
     const checkDeviceChanges = async () => {
       try {
@@ -999,35 +999,26 @@ export function useUnifiedRecordings(): UseUnifiedRecordingsResult {
         const cooldownElapsed = Date.now() - connectionEventCooldownRef.current
         if (cooldownElapsed < 5000) return
 
-        // Get current device recordings count
+        // Compare stable filenames rather than the size of a loading cache.
         const deviceRecs = deviceService.getCachedRecordings()
-        const currentCount = deviceRecs.length
-
-        // Initialize on first run
-        if (!isInitialized) {
-          previousRecordingCount = currentCount
-          isInitialized = true
-          return
-        }
+        const { changed, newCount } = trackDeviceChanges(deviceRecs.map((recording) => recording.filename))
 
         // Check for changes
-        if (currentCount !== previousRecordingCount) {
-          const diff = currentCount - previousRecordingCount
-          console.log(`[useUnifiedRecordings] Device recording count changed: ${previousRecordingCount} → ${currentCount}`)
+        if (changed) {
+          console.log('[useUnifiedRecordings] Device recording filenames changed')
 
-          if (diff > 0) {
+          if (newCount > 0) {
             // New recordings detected
             import('@/components/ui/toaster').then(({ toast }) => {
               toast.info(
-                `${diff} New Recording${diff > 1 ? 's' : ''} on Device`,
-                `Detected ${diff} new recording${diff > 1 ? 's' : ''}`
+                `${newCount} New Recording${newCount > 1 ? 's' : ''} on Device`,
+                `Detected ${newCount} new recording${newCount > 1 ? 's' : ''}`
               )
             })
           }
 
-          // Force device refresh when count changes
+          // Force device refresh when filenames change in either direction.
           loadRecordings(true)
-          previousRecordingCount = currentCount
         }
       } catch (error) {
         console.error('[useUnifiedRecordings] Error checking device changes:', error)
