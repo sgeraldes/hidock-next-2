@@ -2,10 +2,10 @@
 
 Each entry is one day of merged work. The Releases page in Settings reads this file.
 
-## 2026-10-04 | The gamestation only helps, and gets out of the way
+## 2026-10-05 | A record of what you ask
 
-The Model Host on the gamestation is now a small tray icon and nothing else to set up there. HiDock
-pairs with it, gives it the Hugging Face token and decides when it steps aside.
+HiDock now keeps a local record of each question and of what retrieval found for it, so later changes to
+search can be measured against real use.
 
 ### Changes
 
@@ -15,6 +15,18 @@ pairs with it, gives it the Hugging Face token and decides when it steps aside.
   "Keep the text of my queries"; turning off the second erases stored query text. Nothing leaves the
   machine through query recording.
 
+## 2026-10-04 | The gamestation only helps, and gets out of the way
+
+The Model Host on the gamestation is now a small tray icon and nothing else to set up there. HiDock
+pairs with it, gives it the Hugging Face token and decides when it steps aside.
+
+### Changes
+
+- **Listen while labeling.** Reference labels include the original local audio with play/pause,
+  seeking, 15-second jumps and a Space shortcut; unavailable audio never blocks labeling.
+  A clear Library-category question now includes calendar title and attendees, recording date,
+  duration, summary and full transcript; the engines' excerpt is collapsed and their answers stay
+  hidden. "Don't know / not applicable" counts as labeled and is excluded from engine accuracy.
 - **Reference labels for recording kinds.** Settings > Pipeline keeps a sample of up to 40 valid
   recordings for your own labels, with keyboard choices and progress, ready for engine comparisons.
 - **A fresh restore point before database updates.** Schema migrations now verify a current backup,
