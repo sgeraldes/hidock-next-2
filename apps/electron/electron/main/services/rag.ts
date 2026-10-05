@@ -3,6 +3,8 @@
  * Combines vector search with LLM to answer questions about meetings
  */
 
+import { recordRetrievalTrace } from './retrieval-trace-service'
+import { contentHash, type TraceCandidate, type TraceEvent } from './retrieval-traces'
 import { getVectorStore, SearchResult } from './vector-store'
 import type { OllamaChatMessage } from './ollama'
 import { getChatLLMService } from './chat-llm'
@@ -400,7 +402,8 @@ function detectNormalizedEntities(
 export async function buildGraphContext(
   message: string,
   meetingFilter?: string,
-  provOut?: NeighborhoodFactProvenance
+  provOut?: NeighborhoodFactProvenance,
+  traceCandidates?: TraceCandidate[]
 ): Promise<string[]> {
   const parts: string[] = []
   try {
@@ -422,10 +425,18 @@ export async function buildGraphContext(
       seenEntities.add(entityId)
       // ADV18-2 — thread provOut so the recording ids backing the EMITTED facts
       // are folded into the answer's persisted provenance union.
-      const facts = kg.neighborhoodFacts(entityId, hops, 20, exclusion, provOut)
+      const factProvenance: NeighborhoodFactProvenance = { recordingIds: new Set(), unresolved: false }
+      const facts = kg.neighborhoodFacts(entityId, hops, 20, exclusion, traceCandidates ? factProvenance : provOut)
+      if (traceCandidates && provOut) {
+        for (const id of factProvenance.recordingIds) provOut.recordingIds.add(id)
+        provOut.unresolved ||= factProvenance.unresolved
+      }
       if (!facts) return
       const cost = estimateTokens(facts)
-      if (usedTokens + cost > budget) return // per-brain graph budget spent
+      const kept = usedTokens + cost <= budget
+      traceCandidates?.push({ channel: 'graph', source_kind: 'graph-node', source_id: entityId,
+        recording_ids: [...factProvenance.recordingIds], content_hash: contentHash(facts), kept, sent_to_model: false, ...(!kept ? { drop_reason: 'budget' as const } : {}) })
+      if (!kept) return // per-brain graph budget spent
       usedTokens += cost
       parts.push(facts)
     }
@@ -801,532 +812,613 @@ class RAGService {
   ): Promise<RAGResponse> {
     const vectorStore = getVectorStore()
     const generationId = randomUUID()
+    const traceStart = performance.now()
+    const trace: TraceEvent = { trace_id: generationId, consumer: 'chat', session_ref: sessionId,
+      route: 'generateAnswer', started_at: new Date().toISOString(), duration_ms: 0, status: 'error',
+      query: message, candidates: [] }
+    try {
 
-    // B-CHAT-005: Create AbortController for this request
-    const controller = new AbortController()
-    this.activeControllers.set(sessionId, controller)
+      // B-CHAT-005: Create AbortController for this request
+      const controller = new AbortController()
+      this.activeControllers.set(sessionId, controller)
 
-    // Get or create session context (LRU cache)
-    let context = this.contexts.get(sessionId)
-    if (!context) {
-      context = { conversationHistory: [] }
-      this.contexts.set(sessionId, context)
-    }
+      // Get or create session context (LRU cache)
+      let context = this.contexts.get(sessionId)
+      if (!context) {
+        context = { conversationHistory: [] }
+        this.contexts.set(sessionId, context)
+      }
 
-    // Apply meeting filter if specified
-    if (meetingFilter) {
-      context.meetingId = meetingFilter
-    }
+      // Apply meeting filter if specified
+      if (meetingFilter) {
+        context.meetingId = meetingFilter
+      }
 
-    // ── Retrieval orchestration (2026-07) ─────────────────────────────────
-    // Intent routing + temporal grounding BEFORE retrieval: action/commitment
-    // questions pull the distilled actionables table, topic/report questions
-    // pull per-meeting digests and a wider, diversity-capped chunk net; every
-    // question gets DATE GROUNDING (the model's training date is stale).
-    const now = new Date()
-    const intent = detectIntent(message)
-    const temporalRange = resolveTemporalRange(message, now)
-    // Settings > Assistant "RAG Context Window" (chat.maxContextChunks); at the
-    // default of 10 this is 5, 10 and 16 as before the setting was read.
-    const topK = contextChunksFor(intent)
+      // ── Retrieval orchestration (2026-07) ─────────────────────────────────
+      // Intent routing + temporal grounding BEFORE retrieval: action/commitment
+      // questions pull the distilled actionables table, topic/report questions
+      // pull per-meeting digests and a wider, diversity-capped chunk net; every
+      // question gets DATE GROUNDING (the model's training date is stale).
+      const now = new Date()
+      const intent = detectIntent(message)
+      const temporalRange = resolveTemporalRange(message, now)
+      // Settings > Assistant "RAG Context Window" (chat.maxContextChunks); at the
+      // default of 10 this is 5, 10 and 16 as before the setting was read.
+      const topK = contextChunksFor(intent)
+      trace.intent = intent
+      trace.temporal_range = temporalRange ? { start: temporalRange.start, end: temporalRange.end } : null
+      trace.top_k = topK
 
-    // Search for relevant context
-    let searchResults: SearchResult[]
-    // Distinguish "no matches" from the two SILENT-FAILURE modes (2026-07):
-    // 'provider-failure' — the active partition HAS chunks but search returned
-    //   [] (the query embedding failed: provider unreachable/misrouted).
-    // 'reindex-pending' — the ACTIVE provider's partition is empty while other
-    //   partitions hold chunks (provider just switched, reindex not done).
-    let retrievalIssue: 'provider-failure' | 'reindex-pending' | null = null
-    if (context.meetingId) {
-      // Search within specific meeting. The re-rank used to be a cosine loop
-      // written out here over doc.embedding — a second copy of the store's own
-      // cosineSimilarity. Scoring now happens next to the vectors, which is
-      // what lets them live outside this process.
-      searchResults = await vectorStore.searchWithinMeeting(context.meetingId, message, 5)
-    } else {
-      // Global search — over-fetch 3x so the per-recording diversity cap can
-      // drop near-duplicate chunks from one dominant meeting without starving
-      // the excerpt budget.
-      searchResults = await vectorStore.search(message, topK * 3)
-      if (searchResults.length === 0) {
-        const activeProvider = await getEmbeddingsService().activeProviderId()
+      // Search for relevant context
+      let searchResults: SearchResult[]
+      // Distinguish "no matches" from the two SILENT-FAILURE modes (2026-07):
+      // 'provider-failure' — the active partition HAS chunks but search returned
+      //   [] (the query embedding failed: provider unreachable/misrouted).
+      // 'reindex-pending' — the ACTIVE provider's partition is empty while other
+      //   partitions hold chunks (provider just switched, reindex not done).
+      let retrievalIssue: 'provider-failure' | 'reindex-pending' | null = null
+      if (context.meetingId) {
+        // Search within specific meeting. The re-rank used to be a cosine loop
+        // written out here over doc.embedding — a second copy of the store's own
+        // cosineSimilarity. Scoring now happens next to the vectors, which is
+        // what lets them live outside this process.
+        searchResults = await vectorStore.searchWithinMeeting(context.meetingId, message, 5)
+      } else {
+        // Global search — over-fetch 3x so the per-recording diversity cap can
+        // drop near-duplicate chunks from one dominant meeting without starving
+        // the excerpt budget.
+        searchResults = await vectorStore.search(message, topK * 3)
+        if (searchResults.length === 0) {
+          const activeProvider = await getEmbeddingsService().activeProviderId()
+          trace.embedding_provider = activeProvider
         const partitionCount = activeProvider ? vectorStore.getEligibleDocumentCount(activeProvider) : 0
-        const anyEligible = vectorStore.getEligibleDocumentCount()
-        if (partitionCount > 0 || (!activeProvider && anyEligible > 0)) {
-          // search() returns [] ONLY when the query embedding failed or the
-          // active partition is empty — with chunks IN the active partition an
-          // empty result means RETRIEVAL broke, not "no matches".
-          retrievalIssue = 'provider-failure'
-          console.error(
-            '[RAG] Vector search returned no results despite eligible chunks in the active partition — query embedding likely failed (check embedding provider routing/credentials)'
-          )
-        } else if (partitionCount === 0 && anyEligible > 0) {
-          // Provider switched, new partition not yet re-embedded — the honest
-          // answer is "reindex pending", not "no transcripts exist".
-          retrievalIssue = 'reindex-pending'
-          console.warn(
-            `[RAG] Active embedding provider '${activeProvider ?? 'none'}' has 0 indexed chunks while other partitions hold ${anyEligible} — reindex pending`
-          )
+          const anyEligible = vectorStore.getEligibleDocumentCount()
+          if (partitionCount > 0 || (!activeProvider && anyEligible > 0)) {
+            // search() returns [] ONLY when the query embedding failed or the
+            // active partition is empty — with chunks IN the active partition an
+            // empty result means RETRIEVAL broke, not "no matches".
+            retrievalIssue = 'provider-failure'
+            console.error(
+              '[RAG] Vector search returned no results despite eligible chunks in the active partition — query embedding likely failed (check embedding provider routing/credentials)'
+            )
+          } else if (partitionCount === 0 && anyEligible > 0) {
+            // Provider switched, new partition not yet re-embedded — the honest
+            // answer is "reindex pending", not "no transcripts exist".
+            retrievalIssue = 'reindex-pending'
+            console.warn(
+              `[RAG] Active embedding provider '${activeProvider ?? 'none'}' has 0 indexed chunks while other partitions hold ${anyEligible} — reindex pending`
+            )
+          }
         }
       }
-    }
 
-    // --- Added: Fetch explicit conversation context (raw; eligibility applied
-    // AFTER the graph-context await below — INC round-5/6 stale-await race). ---
-    // A pinned capture is either RECORDING-BACKED (source_recording_id set →
-    // transcript text) or an ARTIFACT (pdf/image/note — no recording → the
-    // artifacts table's extracted_text). Previously ONLY the transcript path
-    // existed: a pinned PDF resolved to ZERO pinned parts and the assistant
-    // silently answered from generic vector search (2026-07-21).
-    const pinnedEntries: Array<{ recordingId?: string; captureId: string; part: string }> = []
-    try {
-      const db = getDatabase()
-      if (db) {
-        const contextRes = db.exec('SELECT knowledge_capture_id FROM conversation_context WHERE conversation_id = ?', [sessionId])
-        if (contextRes && contextRes.length > 0 && contextRes[0].values && contextRes[0].values.length > 0) {
-          const kcIds = contextRes[0].values.map(v => v[0] as string)
-          for (const id of kcIds) {
-            const capRes = db.exec('SELECT title, source_recording_id FROM knowledge_captures WHERE id = ?', [id])
-            if (!capRes || capRes.length === 0 || capRes[0].values.length === 0) continue
-            const [title, sourceRecordingId] = capRes[0].values[0] as [string, string | null]
+      trace.retrieval_issue = retrievalIssue
+      const firstDoc = searchResults[0]?.document
+      trace.embedding_provider = firstDoc?.metadata.embedProvider ?? trace.embedding_provider ?? null
+      trace.embedding_dimensions = firstDoc?.metadata.embedDims ?? firstDoc?.embedding?.length ?? null
+      const vectorCandidates = new Map<SearchResult['document'], TraceCandidate>()
+      searchResults.forEach((result, index) => {
+        const doc = result.document
+        const candidate: TraceCandidate = { channel: 'vector',
+          source_kind: doc.metadata.captureId ? 'capture' : 'recording',
+          source_id: doc.metadata.captureId ?? doc.metadata.recordingId ?? '',
+          recording_id: doc.metadata.recordingId, capture_id: doc.metadata.captureId,
+          chunk_index: doc.metadata.chunkIndex, content_hash: contentHash(doc.content ?? ''),
+          rank_before: index + 1, rank_after: null, raw_score: result.score,
+          adjusted_score: inRange(doc.metadata.timestamp, temporalRange) ? result.score * 1.25 : result.score,
+          kept: false, drop_reason: 'eligibility', sent_to_model: false }
+        trace.candidates.push(candidate)
+        vectorCandidates.set(doc, candidate)
+      })
 
-            if (sourceRecordingId) {
-              // Recording-backed: full transcript text.
-              const transcriptRes = db.exec('SELECT full_text FROM transcripts WHERE recording_id = ?', [sourceRecordingId])
-              if (transcriptRes && transcriptRes.length > 0 && transcriptRes[0].values.length > 0) {
-                const text = transcriptRes[0].values[0][0] as string
-                pinnedEntries.push({ recordingId: sourceRecordingId, captureId: id, part: `[PINNED CONTEXT: ${title}]
-${text}` })
-              }
-            } else {
-              // Artifact (pdf/image/note): extracted text from the artifacts table.
-              const artRes = db.exec(
-                'SELECT extracted_text FROM artifacts WHERE knowledge_capture_id = ? AND extracted_text IS NOT NULL ORDER BY created_at DESC LIMIT 1',
-                [id]
-              )
-              if (artRes && artRes.length > 0 && artRes[0].values.length > 0) {
-                const text = artRes[0].values[0][0] as string
-                pinnedEntries.push({ captureId: id, part: `[PINNED CONTEXT: ${title}]
-${text}` })
+      // --- Added: Fetch explicit conversation context (raw; eligibility applied
+      // AFTER the graph-context await below — INC round-5/6 stale-await race). ---
+      // A pinned capture is either RECORDING-BACKED (source_recording_id set →
+      // transcript text) or an ARTIFACT (pdf/image/note — no recording → the
+      // artifacts table's extracted_text). Previously ONLY the transcript path
+      // existed: a pinned PDF resolved to ZERO pinned parts and the assistant
+      // silently answered from generic vector search (2026-07-21).
+      const pinnedEntries: Array<{ recordingId?: string; captureId: string; part: string }> = []
+      try {
+        const db = getDatabase()
+        if (db) {
+          const contextRes = db.exec('SELECT knowledge_capture_id FROM conversation_context WHERE conversation_id = ?', [sessionId])
+          if (contextRes && contextRes.length > 0 && contextRes[0].values && contextRes[0].values.length > 0) {
+            const kcIds = contextRes[0].values.map(v => v[0] as string)
+            for (const id of kcIds) {
+              const capRes = db.exec('SELECT title, source_recording_id FROM knowledge_captures WHERE id = ?', [id])
+              if (!capRes || capRes.length === 0 || capRes[0].values.length === 0) continue
+              const [title, sourceRecordingId] = capRes[0].values[0] as [string, string | null]
+
+              if (sourceRecordingId) {
+                // Recording-backed: full transcript text.
+                const transcriptRes = db.exec('SELECT full_text FROM transcripts WHERE recording_id = ?', [sourceRecordingId])
+                if (transcriptRes && transcriptRes.length > 0 && transcriptRes[0].values.length > 0) {
+                  const text = transcriptRes[0].values[0][0] as string
+                  pinnedEntries.push({ recordingId: sourceRecordingId, captureId: id, part: `[PINNED CONTEXT: ${title}]
+  ${text}` })
+                }
+              } else {
+                // Artifact (pdf/image/note): extracted text from the artifacts table.
+                const artRes = db.exec(
+                  'SELECT extracted_text FROM artifacts WHERE knowledge_capture_id = ? AND extracted_text IS NOT NULL ORDER BY created_at DESC LIMIT 1',
+                  [id]
+                )
+                if (artRes && artRes.length > 0 && artRes[0].values.length > 0) {
+                  const text = artRes[0].values[0][0] as string
+                  pinnedEntries.push({ captureId: id, part: `[PINNED CONTEXT: ${title}]
+  ${text}` })
+                }
               }
             }
           }
         }
+      } catch (error) {
+        console.error('Failed to fetch pinned context:', error)
       }
-    } catch (error) {
-      console.error('Failed to fetch pinned context:', error)
-    }
-    // ------------------------------------------------
+      // ------------------------------------------------
 
-    // ADV18-2 / ADV19-2 (round-20) — the AUTHORITATIVE provenance union over EVERY
-    // prompt component (vector + pinned + graph); it is what the persisted answer is
-    // redacted against on re-read. Each vector part is retained WITH its recording/
-    // capture provenance so the FINAL post-await recheck below can DROP a component
-    // whose source is excluded DURING an await (it is never built into the union nor
-    // sent to the provider).
-    const provRecordingIds = new Set<string>()
-    const provCaptureIds = new Set<string>()
-    let provUnverifiable = false
+      // ADV18-2 / ADV19-2 (round-20) — the AUTHORITATIVE provenance union over EVERY
+      // prompt component (vector + pinned + graph); it is what the persisted answer is
+      // redacted against on re-read. Each vector part is retained WITH its recording/
+      // capture provenance so the FINAL post-await recheck below can DROP a component
+      // whose source is excluded DURING an await (it is never built into the union nor
+      // sent to the provider).
+      const provRecordingIds = new Set<string>()
+      const provCaptureIds = new Set<string>()
+      let provUnverifiable = false
 
-    // A vector doc is capture-backed when it carries a `captureId` (ALL artifact/
-    // capture indexing sets it; `recordingId` there is the artifact id) — discriminate
-    // exactly like vector-store.filterEligibleDocs; otherwise it is recording-backed
-    // via `recordingId`. A chunk with NEITHER id cannot be attributed ⇒ the answer is
-    // unverifiable. Provenance is FOLDED IN only for components that survive the
-    // recheck (below), never at build time.
-    interface TaggedVectorPart {
-      part: string
-      recordingId?: string
-      captureId?: string
-      chunkIndex?: number
-      source: RAGResponse['sources'][number]
-    }
-    const vectorParts: TaggedVectorPart[] = []
+      // A vector doc is capture-backed when it carries a `captureId` (ALL artifact/
+      // capture indexing sets it; `recordingId` there is the artifact id) — discriminate
+      // exactly like vector-store.filterEligibleDocs; otherwise it is recording-backed
+      // via `recordingId`. A chunk with NEITHER id cannot be attributed ⇒ the answer is
+      // unverifiable. Provenance is FOLDED IN only for components that survive the
+      // recheck (below), never at build time.
+      interface TaggedVectorPart {
+        part: string
+        recordingId?: string
+        captureId?: string
+        chunkIndex?: number
+        source: RAGResponse['sources'][number]
+      }
+      const vectorParts: TaggedVectorPart[] = []
 
-    // Per-provider gate (embeddings.RELEVANCE_THRESHOLDS): cosine scales are
-    // model-specific — 0.3 is right for Gemini/nomic but drops every Nemotron
-    // result (real-corpus top ≈ 0.27).
-    const relevanceThreshold = await getEmbeddingsService().relevanceThreshold()
+      // Per-provider gate (embeddings.RELEVANCE_THRESHOLDS): cosine scales are
+      // model-specific — 0.3 is right for Gemini/nomic but drops every Nemotron
+      // result (real-corpus top ≈ 0.27).
+      const relevanceThreshold = await getEmbeddingsService().relevanceThreshold()
 
-    // Gate on the RAW score, then TEMPORAL BOOST for ordering only: chunks
-    // recorded inside the asked range rank first (age-decay in reverse —
-    // Cerebras KB hybrid lesson). A weak out-of-range chunk can never boost
-    // its way past the gate.
-    const gated: SearchResult[] = []
-    for (const result of searchResults) {
-      if (result.score < relevanceThreshold) continue
-      gated.push({
-        document: result.document,
-        score: inRange(result.document.metadata.timestamp, temporalRange)
-          ? result.score * 1.25
-          : result.score,
-      })
-    }
-    gated.sort((a, b) => b.score - a.score)
+      // Gate on the RAW score, then TEMPORAL BOOST for ordering only: chunks
+      // recorded inside the asked range rank first (age-decay in reverse —
+      // Cerebras KB hybrid lesson). A weak out-of-range chunk can never boost
+      // its way past the gate.
+      const gated: SearchResult[] = []
+      for (const result of searchResults) {
+        if (result.score < relevanceThreshold) continue
+        gated.push({
+          document: result.document,
+          score: inRange(result.document.metadata.timestamp, temporalRange)
+            ? result.score * 1.25
+            : result.score,
+        })
+      }
+      gated.sort((a, b) => b.score - a.score)
 
-    // Per-recording diversity cap: one long meeting must not eat the whole
-    // excerpt budget (topics/report want CROSS-meeting synthesis).
-    const perRecordingCap = intent === 'report' ? 3 : 2
-    const seenPerRecording = new Map<string, number>()
-    for (const result of gated) {
-      if (vectorParts.length >= topK) break
-      const diversityKey =
-        result.document.metadata.recordingId ?? result.document.metadata.captureId ?? result.document.id
-      const seen = seenPerRecording.get(diversityKey) ?? 0
-      if (seen >= perRecordingCap) continue
-      seenPerRecording.set(diversityKey, seen + 1)
+      // Per-recording diversity cap: one long meeting must not eat the whole
+      // excerpt budget (topics/report want CROSS-meeting synthesis).
+      const perRecordingCap = intent === 'report' ? 3 : 2
+      const seenPerRecording = new Map<string, number>()
+      for (const result of gated) {
+        if (vectorParts.length >= topK) {
+          const candidate = vectorCandidates.get(result.document)
+          if (candidate) candidate.drop_reason = 'budget'
+          continue
+        }
+        const diversityKey =
+          result.document.metadata.recordingId ?? result.document.metadata.captureId ?? result.document.id
+        const seen = seenPerRecording.get(diversityKey) ?? 0
+        if (seen >= perRecordingCap) {
+          const candidate = vectorCandidates.get(result.document)
+          if (candidate) candidate.drop_reason = 'diversity-cap'
+          continue
+        }
+        seenPerRecording.set(diversityKey, seen + 1)
 
-      const { document: doc, score } = result
+        const { document: doc, score } = result
 
-      // The index no longer keeps chunk text resident; search() hydrates the
-      // results it returns. A chunk still missing text here was deleted between
-      // the search and the read, so it is DROPPED rather than contributed as an
-      // empty excerpt — and never interpolated raw, which would have put the
-      // literal string "undefined" into the context handed to the model.
-      const chunkText = doc.content
-      if (chunkText === undefined || chunkText === '') continue
-      const excerpt = chunkText.substring(0, 200) + (chunkText.length > 200 ? '...' : '')
+        // The index no longer keeps chunk text resident; search() hydrates the
+        // results it returns. A chunk still missing text here was deleted between
+        // the search and the read, so it is DROPPED rather than contributed as an
+        // empty excerpt — and never interpolated raw, which would have put the
+        // literal string "undefined" into the context handed to the model.
+        const chunkText = doc.content
+        if (chunkText === undefined || chunkText === '') continue
+        const candidate = vectorCandidates.get(doc)
+        if (candidate) { candidate.kept = true; candidate.drop_reason = undefined; candidate.rank_after = vectorParts.length + 1 }
+        const excerpt = chunkText.substring(0, 200) + (chunkText.length > 200 ? '...' : '')
 
-      const dateInfo = doc.metadata.timestamp
-        ? ` (${new Date(doc.metadata.timestamp).toLocaleDateString()})`
-        : ''
+        const dateInfo = doc.metadata.timestamp
+          ? ` (${new Date(doc.metadata.timestamp).toLocaleDateString()})`
+          : ''
 
-      // F5 (PixelRAG): an image capture surfaces as a Screenshot excerpt (its
-      // description is the chunk's subject) and carries the capture id so the
-      // renderer can cite/link the source image. Everything else stays a meeting.
-      if (doc.metadata.sourceType === 'image') {
-        const desc = doc.metadata.subject || 'Screenshot'
+        // F5 (PixelRAG): an image capture surfaces as a Screenshot excerpt (its
+        // description is the chunk's subject) and carries the capture id so the
+        // renderer can cite/link the source image. Everything else stays a meeting.
+        if (doc.metadata.sourceType === 'image') {
+          const desc = doc.metadata.subject || 'Screenshot'
+          vectorParts.push({
+            part: `[Screenshot: ${desc}${dateInfo}]\n${chunkText}`,
+            captureId: doc.metadata.captureId,
+            chunkIndex: doc.metadata.chunkIndex,
+            source: {
+              content: excerpt,
+              subject: doc.metadata.subject,
+              timestamp: doc.metadata.timestamp,
+              score,
+              sourceType: 'image',
+              captureId: doc.metadata.captureId
+            }
+          })
+          continue
+        }
+
+        const meetingInfo = doc.metadata.subject
+          ? `Meeting: ${doc.metadata.subject}`
+          : doc.metadata.meetingId
+            ? `Meeting ID: ${doc.metadata.meetingId}`
+            : 'Unknown meeting'
+
         vectorParts.push({
-          part: `[Screenshot: ${desc}${dateInfo}]\n${chunkText}`,
+          part: `[${meetingInfo}${dateInfo}]\n${chunkText}`,
+          // capture-backed chunks set captureId; transcript chunks set recordingId.
           captureId: doc.metadata.captureId,
+          recordingId: doc.metadata.captureId ? undefined : doc.metadata.recordingId,
           chunkIndex: doc.metadata.chunkIndex,
           source: {
             content: excerpt,
+            meetingId: doc.metadata.meetingId,
             subject: doc.metadata.subject,
             timestamp: doc.metadata.timestamp,
-            score,
-            sourceType: 'image',
-            captureId: doc.metadata.captureId
+            score
           }
         })
-        continue
       }
 
-      const meetingInfo = doc.metadata.subject
-        ? `Meeting: ${doc.metadata.subject}`
-        : doc.metadata.meetingId
-          ? `Meeting ID: ${doc.metadata.meetingId}`
-          : 'Unknown meeting'
+      // Ground with Context Graph facts (F4): the assistant walks graph edges, not
+      // just vector chunks, for entities named in the question — including under
+      // accent/alias spellings (resolver normalization tiers) — and, when the chat
+      // is scoped to a meeting, that meeting's neighborhood. Trimmed to a per-brain
+      // token budget. Loaded lazily inside buildGraphContext so RAG's static import
+      // graph stays free of the ingest/LLM stack.
+      // ADV18-2 — collect the recording ids backing the graph facts we actually emit,
+      // so the answer's provenance union covers graph grounding. `unresolved` (a
+      // provenance read threw, OR a zero-provenance legacy fact was emitted — ADV19-3)
+      // ⇒ the answer is unverifiable.
+      const graphProv: NeighborhoodFactProvenance = { recordingIds: new Set<string>(), unresolved: false }
+      const graphContextParts = await buildGraphContext(message, context.meetingId, graphProv, trace.candidates)
 
-      vectorParts.push({
-        part: `[${meetingInfo}${dateInfo}]\n${chunkText}`,
-        // capture-backed chunks set captureId; transcript chunks set recordingId.
-        captureId: doc.metadata.captureId,
-        recordingId: doc.metadata.captureId ? undefined : doc.metadata.recordingId,
-        chunkIndex: doc.metadata.chunkIndex,
-        source: {
-          content: excerpt,
-          meetingId: doc.metadata.meetingId,
-          subject: doc.metadata.subject,
-          timestamp: doc.metadata.timestamp,
-          score
+      // ADV19-2 (round-20) — POST-AWAIT RECHECK. Everything above involved awaits
+      // (search embeddings, the pinned DB read, buildGraphContext's dynamic import +
+      // router awaits); a recording/capture could have been trashed / marked personal /
+      // value-excluded DURING any of them. Revalidate ALL components (vector + pinned +
+      // graph) TOGETHER through the shared fail-closed boundary NOW — immediately before
+      // the provider messages are built — and DROP any now-ineligible component so its
+      // text is NEVER sent to Gemini/Ollama. Fail-closed on a lookup error (drop the
+      // component). An exclusion that lands AFTER the provider generation has already
+      // started cannot be un-sent, but the persisted answer's union will then be
+      // excluded/unverifiable ⇒ redacted on the next read.
+      const recCheck = filterEligibleRecordingIds([
+        ...vectorParts.filter((v) => v.recordingId).map((v) => v.recordingId!),
+        ...pinnedEntries.filter((e) => e.recordingId).map((e) => e.recordingId!),
+        ...graphProv.recordingIds
+      ])
+      const capCheck = filterEligibleCaptureIds([
+        ...vectorParts.filter((v) => v.captureId).map((v) => v.captureId!),
+        ...pinnedEntries.filter((e) => !e.recordingId).map((e) => e.captureId!)
+      ])
+      const recEligible = (id?: string): boolean => !!id && !recCheck.failClosed && recCheck.eligible.has(id)
+      const capEligible = (id?: string): boolean => !!id && !capCheck.failClosed && capCheck.eligible.has(id)
+
+      for (const candidate of vectorCandidates.values()) {
+        if (!candidate.kept) continue
+        const stillEligible = candidate.source_kind === 'capture' ? capEligible(candidate.source_id) : recEligible(candidate.source_id)
+        candidate.kept = stillEligible
+        if (!stillEligible) { candidate.drop_reason = 'recheck'; candidate.rank_after = null }
+      }
+      for (const entry of pinnedEntries) {
+        const kept = entry.recordingId ? recEligible(entry.recordingId) : capEligible(entry.captureId)
+        trace.candidates.push({ channel: 'pinned', source_kind: 'capture', source_id: entry.captureId,
+          recording_id: entry.recordingId, capture_id: entry.captureId, content_hash: contentHash(entry.part),
+          kept, sent_to_model: false, ...(!kept ? { drop_reason: 'recheck' as const } : {}) })
+      }
+
+      // Vector parts — keep only components whose recording/capture is still eligible;
+      // fold the surviving ids into the union + emit their chips.
+      const contextParts: string[] = []
+      const sources: RAGResponse['sources'] = []
+      for (const v of vectorParts) {
+        if (v.captureId) {
+          if (!capEligible(v.captureId)) continue // excluded during await ⇒ drop
+          provCaptureIds.add(v.captureId)
+        } else if (v.recordingId) {
+          if (!recEligible(v.recordingId)) continue
+          provRecordingIds.add(v.recordingId)
+        } else {
+          // ADV23-1 (round-24) — a chunk with NEITHER a resolvable eligible capture
+          // NOR recording has NO positive provenance (e.g. a legacy null-provenance
+          // vector row). DROP it from the prompt BEFORE constructing the provider
+          // messages so its text never crosses the LLM boundary. Previously it was
+          // kept and the answer merely marked unverifiable — which still SENT the
+          // text. The vector boundary (filterEligibleDocs) now drops these at search
+          // time too; this is defense-in-depth at prompt construction.
+          provUnverifiable = true
+          continue
         }
-      })
-    }
-
-    // Ground with Context Graph facts (F4): the assistant walks graph edges, not
-    // just vector chunks, for entities named in the question — including under
-    // accent/alias spellings (resolver normalization tiers) — and, when the chat
-    // is scoped to a meeting, that meeting's neighborhood. Trimmed to a per-brain
-    // token budget. Loaded lazily inside buildGraphContext so RAG's static import
-    // graph stays free of the ingest/LLM stack.
-    // ADV18-2 — collect the recording ids backing the graph facts we actually emit,
-    // so the answer's provenance union covers graph grounding. `unresolved` (a
-    // provenance read threw, OR a zero-provenance legacy fact was emitted — ADV19-3)
-    // ⇒ the answer is unverifiable.
-    const graphProv: NeighborhoodFactProvenance = { recordingIds: new Set<string>(), unresolved: false }
-    const graphContextParts = await buildGraphContext(message, context.meetingId, graphProv)
-
-    // ADV19-2 (round-20) — POST-AWAIT RECHECK. Everything above involved awaits
-    // (search embeddings, the pinned DB read, buildGraphContext's dynamic import +
-    // router awaits); a recording/capture could have been trashed / marked personal /
-    // value-excluded DURING any of them. Revalidate ALL components (vector + pinned +
-    // graph) TOGETHER through the shared fail-closed boundary NOW — immediately before
-    // the provider messages are built — and DROP any now-ineligible component so its
-    // text is NEVER sent to Gemini/Ollama. Fail-closed on a lookup error (drop the
-    // component). An exclusion that lands AFTER the provider generation has already
-    // started cannot be un-sent, but the persisted answer's union will then be
-    // excluded/unverifiable ⇒ redacted on the next read.
-    const recCheck = filterEligibleRecordingIds([
-      ...vectorParts.filter((v) => v.recordingId).map((v) => v.recordingId!),
-      ...pinnedEntries.filter((e) => e.recordingId).map((e) => e.recordingId!),
-      ...graphProv.recordingIds
-    ])
-    const capCheck = filterEligibleCaptureIds([
-      ...vectorParts.filter((v) => v.captureId).map((v) => v.captureId!),
-      ...pinnedEntries.filter((e) => !e.recordingId).map((e) => e.captureId!)
-    ])
-    const recEligible = (id?: string): boolean => !!id && !recCheck.failClosed && recCheck.eligible.has(id)
-    const capEligible = (id?: string): boolean => !!id && !capCheck.failClosed && capCheck.eligible.has(id)
-
-    // Vector parts — keep only components whose recording/capture is still eligible;
-    // fold the surviving ids into the union + emit their chips.
-    const contextParts: string[] = []
-    const sources: RAGResponse['sources'] = []
-    for (const v of vectorParts) {
-      if (v.captureId) {
-        if (!capEligible(v.captureId)) continue // excluded during await ⇒ drop
-        provCaptureIds.add(v.captureId)
-      } else if (v.recordingId) {
-        if (!recEligible(v.recordingId)) continue
-        provRecordingIds.add(v.recordingId)
-      } else {
-        // ADV23-1 (round-24) — a chunk with NEITHER a resolvable eligible capture
-        // NOR recording has NO positive provenance (e.g. a legacy null-provenance
-        // vector row). DROP it from the prompt BEFORE constructing the provider
-        // messages so its text never crosses the LLM boundary. Previously it was
-        // kept and the answer merely marked unverifiable — which still SENT the
-        // text. The vector boundary (filterEligibleDocs) now drops these at search
-        // time too; this is defense-in-depth at prompt construction.
-        provUnverifiable = true
-        continue
+        contextParts.push(v.part)
+        sources.push(v.source)
       }
-      contextParts.push(v.part)
-      sources.push(v.source)
-    }
 
-    // Neighbor re-attachment (Cerebras KB): each selected transcript chunk's
-    // ADJACENT chunks (chunkIndex±1, same recording + partition) ride along so
-    // excerpts carry the surrounding conversation. Read through the SAME
-    // eligibility boundary (getChunkNeighbors → filterEligibleDocs); provenance
-    // is the parent's recording, already folded into the union above.
-    const neighborProvider = await getEmbeddingsService().activeProviderId()
-    let neighborCount = 0
-    const NEIGHBOR_BUDGET = 4
-    for (const v of vectorParts) {
-      if (neighborCount >= NEIGHBOR_BUDGET) break
-      if (!v.recordingId || v.chunkIndex === undefined) continue
-      for (const n of vectorStore.getChunkNeighbors(v.recordingId, [v.chunkIndex], neighborProvider ?? undefined)) {
+      let finalVectorRank = 0
+      for (const result of gated) {
+        const candidate = vectorCandidates.get(result.document)
+        if (candidate?.kept) candidate.rank_after = ++finalVectorRank
+      }
+
+      // Neighbor re-attachment (Cerebras KB): each selected transcript chunk's
+      // ADJACENT chunks (chunkIndex±1, same recording + partition) ride along so
+      // excerpts carry the surrounding conversation. Read through the SAME
+      // eligibility boundary (getChunkNeighbors → filterEligibleDocs); provenance
+      // is the parent's recording, already folded into the union above.
+      const neighborProvider = await getEmbeddingsService().activeProviderId()
+      trace.embedding_provider ??= neighborProvider
+      trace.embedding_model = getEmbeddingsService().modelForProvider?.(trace.embedding_provider) ?? null
+      let neighborCount = 0
+      const NEIGHBOR_BUDGET = 4
+      for (const v of vectorParts) {
         if (neighborCount >= NEIGHBOR_BUDGET) break
-        const alreadySelected = vectorParts.some(
-          (x) => x.recordingId === n.metadata.recordingId && x.chunkIndex === n.metadata.chunkIndex
-        )
-        if (alreadySelected) continue
-        // getChunkNeighbors hydrates, but a neighbour deleted between the
-        // index read and the text read has no content. It is skipped: the
-        // template literal would otherwise put the word "undefined" into the
-        // context handed to the model, and TypeScript does not flag it.
-        if (!n.content) continue
-        const nDate = n.metadata.timestamp ? ` (${new Date(n.metadata.timestamp).toLocaleDateString()})` : ''
-        contextParts.push(`[Adjacent context: ${n.metadata.subject ?? 'meeting'}${nDate}]\n${n.content}`)
-        neighborCount++
-      }
-    }
-
-    // Pinned context (ADV5/INC round-5/6) — revalidated in the SAME post-await pass.
-    const pinnedContextParts: string[] = []
-    for (const e of pinnedEntries) {
-      if (e.recordingId) {
-        if (!recEligible(e.recordingId)) continue // now-excluded pinned recording ⇒ drop
-        pinnedContextParts.push(e.part)
-        provRecordingIds.add(e.recordingId)
-      } else {
-        // ARTIFACT pin (pdf/image — no recording) ⇒ gate on the capture.
-        if (!capEligible(e.captureId)) continue
-        pinnedContextParts.push(e.part)
-        provCaptureIds.add(e.captureId)
-      }
-    }
-
-    // Graph facts are a bundle with only AGGREGATE provenance. If ANY graph-backing
-    // recording became ineligible during the await (or the lookup failed closed),
-    // drop ALL graph parts (we can't attribute per-fact) so no excluded text is sent.
-    //
-    // ADV20-3 (round-21) — ALSO drop the ENTIRE graph bundle from the PROMPT whenever
-    // graphProv.unresolved is true (a zero-provenance legacy edge, OR a provenance
-    // read that threw). Such an edge may derive SOLELY from a now-excluded recording;
-    // its labels/relationships must NOT cross the external LLM boundary, and marking
-    // the persisted answer unverifiable AFTER the fact cannot undo that disclosure.
-    // (Round-20 kept unresolved graph text in the prompt and only flagged the answer
-    // unverifiable — that leaked the labels to the provider.) Because the bundle is
-    // dropped here, no unresolved graph text contributes to the answer, so we do NOT
-    // mark the union unverifiable for it — the answer stays grounded only on the
-    // attributed vector/pinned components.
-    let graphParts = graphContextParts
-    let dropGraph = graphProv.unresolved
-    if (!dropGraph) {
-      for (const id of graphProv.recordingIds) {
-        if (!recEligible(id)) { dropGraph = true; break }
-      }
-    }
-    if (dropGraph) {
-      graphParts = []
-    } else {
-      for (const id of graphProv.recordingIds) provRecordingIds.add(id)
-    }
-
-    // ── Structured context (retrieval orchestration) ──────────────────────
-    // Built LAST (post-await, synchronous DB reads — no stale-await race) and
-    // eligibility-gated at build time inside the orchestrator. DATE GROUNDING
-    // is always first; action/topic intent routes to the distilled tables.
-    const orchestratedParts: string[] = [dateGroundingPart(now, temporalRange)]
-    let structuredRowCount = 0
-
-    if (intent === 'actions') {
-      // Pending = still open: only a FULLY-PAST range scopes by extraction
-      // date ("commitments I took last month"); "actions this week" lists all
-      // open items (they're still actionable this week).
-      const todayIso = now.toISOString().slice(0, 10)
-      const dateScoped = !!temporalRange && temporalRange.end < todayIso
-      const structured = buildActionablesContext(temporalRange, 15, dateScoped)
-      for (const id of structured.recordingIds) provRecordingIds.add(id)
-      for (const id of structured.captureIds) provCaptureIds.add(id)
-      orchestratedParts.push(...structured.parts)
-      structuredRowCount += structured.rowCount
-    }
-
-    if (intent === 'topics' || intent === 'report') {
-      // No explicit range in the question ⇒ default to recent history
-      // (topics: 14 days; report: 30 days).
-      const DAY_MS = 24 * 60 * 60 * 1000
-      const digestRange: TemporalRange =
-        temporalRange ?? {
-          start: new Date(now.getTime() - (intent === 'report' ? 30 : 14) * DAY_MS).toISOString().slice(0, 10),
-          end: now.toISOString().slice(0, 10),
-          label: intent === 'report' ? 'the last 30 days' : 'the last 14 days',
+        if (!v.recordingId || v.chunkIndex === undefined) continue
+        for (const n of vectorStore.getChunkNeighbors(v.recordingId, [v.chunkIndex], neighborProvider ?? undefined)) {
+          if (neighborCount >= NEIGHBOR_BUDGET) break
+          const alreadySelected = vectorParts.some(
+            (x) => x.recordingId === n.metadata.recordingId && x.chunkIndex === n.metadata.chunkIndex
+          )
+          if (alreadySelected) continue
+          // getChunkNeighbors hydrates, but a neighbour deleted between the
+          // index read and the text read has no content. It is skipped: the
+          // template literal would otherwise put the word "undefined" into the
+          // context handed to the model, and TypeScript does not flag it.
+          if (!n.content) continue
+          const nDate = n.metadata.timestamp ? ` (${new Date(n.metadata.timestamp).toLocaleDateString()})` : ''
+          trace.candidates.push({ channel: 'vector', source_kind: 'recording', source_id: v.recordingId,
+            chunk_index: n.metadata.chunkIndex, content_hash: contentHash(n.content), kept: true, sent_to_model: false,
+            rank_before: null, rank_after: null, raw_score: null, adjusted_score: null })
+          contextParts.push(`[Adjacent context: ${n.metadata.subject ?? 'meeting'}${nDate}]\n${n.content}`)
+          neighborCount++
         }
-      const digests = buildDigestsContext(digestRange, intent === 'report' ? 20 : 12)
-      for (const id of digests.recordingIds) provRecordingIds.add(id)
-      for (const id of digests.captureIds) provCaptureIds.add(id)
-      orchestratedParts.push(...digests.parts)
-      structuredRowCount += digests.rowCount
-    }
-
-    // Combine: date grounding + structured sections, then pinned, graph, and
-    // transcript excerpts (incl. neighbor context). The retrieval-failure
-    // notes key off CONTENT parts (date grounding alone is not content).
-    const allContextParts = [...orchestratedParts, ...pinnedContextParts, ...graphParts, ...contextParts]
-    const hasContent =
-      structuredRowCount + pinnedContextParts.length + graphParts.length + contextParts.length > 0
-
-    // Prepare messages
-    const contextText = hasContent
-      ? `Grounded context follows — date grounding, structured meeting intelligence (action items / digests), pinned knowledge base items, graph facts, and relevant transcript excerpts:\n\n${allContextParts.join('\n\n---\n\n')}`
-      : retrievalIssue === 'provider-failure'
-        ? '[System note: semantic search is temporarily unavailable — the embedding provider could not be reached, so NO library lookup was performed for this question. Tell the user retrieval failed (suggest checking the embedding provider / API key in Settings) instead of saying no transcripts exist. Do NOT claim the knowledge base is empty.]'
-        : retrievalIssue === 'reindex-pending'
-          ? '[System note: the library was embedded with a DIFFERENT embedding provider than the currently active one, and re-indexing for the active provider has not completed. Tell the user answers are temporarily limited while the library re-indexes (progress in Settings → Embeddings) instead of saying no transcripts exist. Do NOT claim the knowledge base is empty.]'
-          : `No relevant meeting transcripts found for this query.\n\n${orchestratedParts.join('\n\n')}`
-
-    const userMessage = `Context:\n${contextText}\n\nQuestion: ${message}`
-
-    // ADV18-1 (round-19) — revalidate the CACHED conversation history through the
-    // shared fail-closed boundary IMMEDIATELY before prompt construction: DROP any
-    // prior ASSISTANT turn whose provenance is now excluded or unverifiable so it
-    // is NOT resent to the provider (a recording trashed/personal/value-excluded
-    // mid-session must not keep grounding via replayed history). User-authored
-    // turns are always kept. Revalidating on READ (rather than trusting the
-    // in-memory cache) covers eligibility transitions since the turn was cached.
-    const safeHistory = context.conversationHistory.filter(
-      (h) => h.role !== 'assistant' || !isProvenanceExcluded(h.prov)
-    )
-
-    // B-CHAT-006: Build messages for LLM with token-aware trimming
-    const trimmedHistory = trimHistoryByTokens(
-      safeHistory.map((h) => ({ role: h.role, content: h.content })),
-      4096
-    )
-    const messages: OllamaChatMessage[] = [
-      ...trimmedHistory,
-      { role: 'user', content: userMessage }
-    ]
-
-    // Add raw message to conversation history (after building messages to avoid duplicate)
-    context.conversationHistory.push({ role: 'user', content: message })
-
-    // B-CHAT-005: Generate response with abort signal support.
-    // Gemini-first (config.chat.geminiModel) with Ollama fallback — see chat-llm.ts.
-    // ADV42-2 (round-44) — gate the provider call (and every BrainRouter
-    // fallback attempt) on THIS answer's surviving provenance union. The union
-    // above was revalidated synchronously (no await between it and here), but the
-    // provider call and its fallback loop are awaits: a source trashed / marked
-    // personal / value-excluded while the primary attempt is pending or failing
-    // must not be re-sent to a fallback brain. Re-runs the shared fail-closed
-    // boundary on each attempt.
-    const answer = await getChatLLMService().generate(messages, {
-      step: 'chat',
-      systemPrompt: SYSTEM_PROMPT,
-      temperature: 0.7,
-      maxTokens: 1024,
-      signal: controller.signal,
-      shouldGenerate: makeProvenanceGate(provRecordingIds, provCaptureIds)
-    })
-
-    if (!answer) {
-      // A null answer means the chat brain chain failed (no cloud key, CLI not
-      // logged in, rate-limited, or offline). Name the brain that TERMINALLY
-      // failed — getLastChatFailure() records the last brain the router actually
-      // tried (primary OR fallback), so a Gemini-throw → Ollama-null chain blames
-      // Ollama, not Gemini. No re-resolution (re-resolving names the primary).
-      // Null failure info (user abort, or nothing enabled/configured) keeps the
-      // generic message. Fully defensive — must never mask the original failure.
-      let brainLabel = ''
-      try {
-        const { getBrainRouter, getBrainRegistry } = await import('./brains')
-        const failure = getBrainRouter().getLastChatFailure()
-        if (failure) brainLabel = getBrainRegistry().get(failure.brainId)?.label ?? failure.brainId
-      } catch {
-        /* keep the generic message */
       }
+
+      // Pinned context (ADV5/INC round-5/6) — revalidated in the SAME post-await pass.
+      const pinnedContextParts: string[] = []
+      for (const e of pinnedEntries) {
+        if (e.recordingId) {
+          if (!recEligible(e.recordingId)) continue // now-excluded pinned recording ⇒ drop
+          pinnedContextParts.push(e.part)
+          provRecordingIds.add(e.recordingId)
+        } else {
+          // ARTIFACT pin (pdf/image — no recording) ⇒ gate on the capture.
+          if (!capEligible(e.captureId)) continue
+          pinnedContextParts.push(e.part)
+          provCaptureIds.add(e.captureId)
+        }
+      }
+
+      // Graph facts are a bundle with only AGGREGATE provenance. If ANY graph-backing
+      // recording became ineligible during the await (or the lookup failed closed),
+      // drop ALL graph parts (we can't attribute per-fact) so no excluded text is sent.
+      //
+      // ADV20-3 (round-21) — ALSO drop the ENTIRE graph bundle from the PROMPT whenever
+      // graphProv.unresolved is true (a zero-provenance legacy edge, OR a provenance
+      // read that threw). Such an edge may derive SOLELY from a now-excluded recording;
+      // its labels/relationships must NOT cross the external LLM boundary, and marking
+      // the persisted answer unverifiable AFTER the fact cannot undo that disclosure.
+      // (Round-20 kept unresolved graph text in the prompt and only flagged the answer
+      // unverifiable — that leaked the labels to the provider.) Because the bundle is
+      // dropped here, no unresolved graph text contributes to the answer, so we do NOT
+      // mark the union unverifiable for it — the answer stays grounded only on the
+      // attributed vector/pinned components.
+      let graphParts = graphContextParts
+      let dropGraph = graphProv.unresolved
+      if (!dropGraph) {
+        for (const id of graphProv.recordingIds) {
+          if (!recEligible(id)) { dropGraph = true; break }
+        }
+      }
+      if (dropGraph) {
+        graphParts = []
+      } else {
+        for (const id of graphProv.recordingIds) provRecordingIds.add(id)
+      }
+
+      for (const candidate of trace.candidates.filter(c => c.channel === 'graph')) {
+        if (dropGraph && candidate.kept) { candidate.kept = false; candidate.drop_reason = 'recheck' }
+      }
+      // ── Structured context (retrieval orchestration) ──────────────────────
+      // Built LAST (post-await, synchronous DB reads — no stale-await race) and
+      // eligibility-gated at build time inside the orchestrator. DATE GROUNDING
+      // is always first; action/topic intent routes to the distilled tables.
+      const orchestratedParts: string[] = [dateGroundingPart(now, temporalRange)]
+      let structuredRowCount = 0
+
+      if (intent === 'actions') {
+        // Pending = still open: only a FULLY-PAST range scopes by extraction
+        // date ("commitments I took last month"); "actions this week" lists all
+        // open items (they're still actionable this week).
+        const todayIso = now.toISOString().slice(0, 10)
+        const dateScoped = !!temporalRange && temporalRange.end < todayIso
+        const structured = buildActionablesContext(temporalRange, 15, dateScoped)
+        for (const id of structured.recordingIds) provRecordingIds.add(id)
+        for (const id of structured.captureIds) provCaptureIds.add(id)
+        trace.candidates.push(...(structured.candidates ?? []))
+        orchestratedParts.push(...structured.parts)
+        structuredRowCount += structured.rowCount
+      }
+
+      if (intent === 'topics' || intent === 'report') {
+        // No explicit range in the question ⇒ default to recent history
+        // (topics: 14 days; report: 30 days).
+        const DAY_MS = 24 * 60 * 60 * 1000
+        const digestRange: TemporalRange =
+          temporalRange ?? {
+            start: new Date(now.getTime() - (intent === 'report' ? 30 : 14) * DAY_MS).toISOString().slice(0, 10),
+            end: now.toISOString().slice(0, 10),
+            label: intent === 'report' ? 'the last 30 days' : 'the last 14 days',
+          }
+        const digests = buildDigestsContext(digestRange, intent === 'report' ? 20 : 12)
+        for (const id of digests.recordingIds) provRecordingIds.add(id)
+        for (const id of digests.captureIds) provCaptureIds.add(id)
+        trace.candidates.push(...(digests.candidates ?? []))
+        orchestratedParts.push(...digests.parts)
+        structuredRowCount += digests.rowCount
+      }
+
+      // Combine: date grounding + structured sections, then pinned, graph, and
+      // transcript excerpts (incl. neighbor context). The retrieval-failure
+      // notes key off CONTENT parts (date grounding alone is not content).
+      const allContextParts = [...orchestratedParts, ...pinnedContextParts, ...graphParts, ...contextParts]
+      const hasContent =
+        structuredRowCount + pinnedContextParts.length + graphParts.length + contextParts.length > 0
+
+      // Prepare messages
+      const contextText = hasContent
+        ? `Grounded context follows — date grounding, structured meeting intelligence (action items / digests), pinned knowledge base items, graph facts, and relevant transcript excerpts:\n\n${allContextParts.join('\n\n---\n\n')}`
+        : retrievalIssue === 'provider-failure'
+          ? '[System note: semantic search is temporarily unavailable — the embedding provider could not be reached, so NO library lookup was performed for this question. Tell the user retrieval failed (suggest checking the embedding provider / API key in Settings) instead of saying no transcripts exist. Do NOT claim the knowledge base is empty.]'
+          : retrievalIssue === 'reindex-pending'
+            ? '[System note: the library was embedded with a DIFFERENT embedding provider than the currently active one, and re-indexing for the active provider has not completed. Tell the user answers are temporarily limited while the library re-indexes (progress in Settings → Embeddings) instead of saying no transcripts exist. Do NOT claim the knowledge base is empty.]'
+            : `No relevant meeting transcripts found for this query.\n\n${orchestratedParts.join('\n\n')}`
+
+      const userMessage = `Context:\n${contextText}\n\nQuestion: ${message}`
+
+      // ADV18-1 (round-19) — revalidate the CACHED conversation history through the
+      // shared fail-closed boundary IMMEDIATELY before prompt construction: DROP any
+      // prior ASSISTANT turn whose provenance is now excluded or unverifiable so it
+      // is NOT resent to the provider (a recording trashed/personal/value-excluded
+      // mid-session must not keep grounding via replayed history). User-authored
+      // turns are always kept. Revalidating on READ (rather than trusting the
+      // in-memory cache) covers eligibility transitions since the turn was cached.
+      const safeHistory = context.conversationHistory.filter(
+        (h) => h.role !== 'assistant' || !isProvenanceExcluded(h.prov)
+      )
+
+      // B-CHAT-006: Build messages for LLM with token-aware trimming
+      const trimmedHistory = trimHistoryByTokens(
+        safeHistory.map((h) => ({ role: h.role, content: h.content })),
+        4096
+      )
+      const messages: OllamaChatMessage[] = [
+        ...trimmedHistory,
+        { role: 'user', content: userMessage }
+      ]
+
+      // Add raw message to conversation history (after building messages to avoid duplicate)
+      context.conversationHistory.push({ role: 'user', content: message })
+
+      // B-CHAT-005: Generate response with abort signal support.
+      // Gemini-first (config.chat.geminiModel) with Ollama fallback — see chat-llm.ts.
+      // ADV42-2 (round-44) — gate the provider call (and every BrainRouter
+      // fallback attempt) on THIS answer's surviving provenance union. The union
+      // above was revalidated synchronously (no await between it and here), but the
+      // provider call and its fallback loop are awaits: a source trashed / marked
+      // personal / value-excluded while the primary attempt is pending or failing
+      // must not be re-sent to a fallback brain. Re-runs the shared fail-closed
+      // boundary on each attempt.
+      const answer = await getChatLLMService().generate(messages, {
+        step: 'chat',
+        onCall: (id) => { if (id) trace.pipeline_call_id = id },
+        onDispatch: () => { for (const candidate of trace.candidates) candidate.sent_to_model ||= candidate.kept },
+        systemPrompt: SYSTEM_PROMPT,
+        temperature: 0.7,
+        maxTokens: 1024,
+        signal: controller.signal,
+        shouldGenerate: makeProvenanceGate(provRecordingIds, provCaptureIds)
+      })
+
+      if (!answer) {
+        // A null answer means the chat brain chain failed (no cloud key, CLI not
+        // logged in, rate-limited, or offline). Name the brain that TERMINALLY
+        // failed — getLastChatFailure() records the last brain the router actually
+        // tried (primary OR fallback), so a Gemini-throw → Ollama-null chain blames
+        // Ollama, not Gemini. No re-resolution (re-resolving names the primary).
+        // Null failure info (user abort, or nothing enabled/configured) keeps the
+        // generic message. Fully defensive — must never mask the original failure.
+        let brainLabel = ''
+        try {
+          const { getBrainRouter, getBrainRegistry } = await import('./brains')
+          const failure = getBrainRouter().getLastChatFailure()
+          if (failure) brainLabel = getBrainRegistry().get(failure.brainId)?.label ?? failure.brainId
+        } catch {
+          /* keep the generic message */
+        }
+        this.activeControllers.delete(sessionId)
+        const errorText = brainLabel
+          ? `Failed to generate a response with ${brainLabel}. Check that it is configured and reachable, then try again.`
+          : 'Failed to generate response. Please try again.'
+        // ADV20-1 (round-21) — MAIN owns this error text too. Register it as a genuine
+        // NON-RAG emit under this generation's id so assistant:addMessage replays MAIN's
+        // string (not a renderer-supplied one) and stamps a trusted non-rag envelope.
+        this.registerPendingGeneration(generationId, sessionId, 'non-rag', errorText, '[]', UNVERIFIABLE_PROV)
+        trace.status = controller.signal.aborted ? 'cancelled' : 'error'
+        trace.error = controller.signal.aborted ? 'aborted' : 'generation-failed'
+        return { answer: '', sources: [], error: errorText, generationId }
+      }
+
+      // ADV18-2 / ADV19-4 (round-20) — the authoritative provenance union for THIS
+      // answer, over the SURVIVING vector + pinned + graph components. Attached to the
+      // cached history turn (so the resend gate above can revalidate it next turn) AND
+      // registered under THIS generation's unique id for the persist path (consumed by
+      // assistant:addMessage with the matching generationId — never the conversation's
+      // latest, so overlapping generations can't cross-consume).
+      const answerProv: MessageProvenance = {
+        recordingIds: [...provRecordingIds],
+        captureIds: [...provCaptureIds],
+        unverifiable: provUnverifiable
+      }
+
+      // Add assistant response to history (with its provenance for resend revalidation)
+      context.conversationHistory.push({ role: 'assistant', content: answer, prov: answerProv })
+
+      // B-CHAT-006: Token-aware history pruning replaces simple slice
+      // Keep the history manageable but let trimHistoryByTokens do the real work at query time
+      if (context.conversationHistory.length > 40) {
+        context.conversationHistory = context.conversationHistory.slice(-20)
+      }
+
+      // ADV20-1 (round-21) — bind this answer's CONTENT + citation sources + provenance
+      // to its unique generation id. The persist path (assistant:addMessage) consumes
+      // MAIN's stored content by this id; the renderer NEVER authors the assistant text.
+      this.registerPendingGeneration(
+        generationId,
+        sessionId,
+        'rag',
+        answer,
+        JSON.stringify(sources),
+        answerProv
+      )
+
+      // B-CHAT-005: Clean up controller after successful completion
       this.activeControllers.delete(sessionId)
-      const errorText = brainLabel
-        ? `Failed to generate a response with ${brainLabel}. Check that it is configured and reachable, then try again.`
-        : 'Failed to generate response. Please try again.'
-      // ADV20-1 (round-21) — MAIN owns this error text too. Register it as a genuine
-      // NON-RAG emit under this generation's id so assistant:addMessage replays MAIN's
-      // string (not a renderer-supplied one) and stamps a trusted non-rag envelope.
-      this.registerPendingGeneration(generationId, sessionId, 'non-rag', errorText, '[]', UNVERIFIABLE_PROV)
-      return { answer: '', sources: [], error: errorText, generationId }
+
+      trace.status = controller.signal.aborted ? 'cancelled' : retrievalIssue === 'provider-failure' ? 'error' : hasContent ? 'ok' : 'empty'
+      return { answer, sources, generationId }
+    } catch (error) {
+      trace.status = this.activeControllers.get(sessionId)?.signal.aborted ? 'cancelled' : 'error'
+      trace.error = trace.status === 'cancelled' ? 'aborted' : 'request-failed'
+      throw error
+    } finally {
+      trace.duration_ms = performance.now() - traceStart
+      this.activeControllers.delete(sessionId)
+      recordRetrievalTrace(trace)
     }
-
-    // ADV18-2 / ADV19-4 (round-20) — the authoritative provenance union for THIS
-    // answer, over the SURVIVING vector + pinned + graph components. Attached to the
-    // cached history turn (so the resend gate above can revalidate it next turn) AND
-    // registered under THIS generation's unique id for the persist path (consumed by
-    // assistant:addMessage with the matching generationId — never the conversation's
-    // latest, so overlapping generations can't cross-consume).
-    const answerProv: MessageProvenance = {
-      recordingIds: [...provRecordingIds],
-      captureIds: [...provCaptureIds],
-      unverifiable: provUnverifiable
-    }
-
-    // Add assistant response to history (with its provenance for resend revalidation)
-    context.conversationHistory.push({ role: 'assistant', content: answer, prov: answerProv })
-
-    // B-CHAT-006: Token-aware history pruning replaces simple slice
-    // Keep the history manageable but let trimHistoryByTokens do the real work at query time
-    if (context.conversationHistory.length > 40) {
-      context.conversationHistory = context.conversationHistory.slice(-20)
-    }
-
-    // ADV20-1 (round-21) — bind this answer's CONTENT + citation sources + provenance
-    // to its unique generation id. The persist path (assistant:addMessage) consumes
-    // MAIN's stored content by this id; the renderer NEVER authors the assistant text.
-    this.registerPendingGeneration(
-      generationId,
-      sessionId,
-      'rag',
-      answer,
-      JSON.stringify(sources),
-      answerProv
-    )
-
-    // B-CHAT-005: Clean up controller after successful completion
-    this.activeControllers.delete(sessionId)
-
-    return { answer, sources, generationId }
   }
 
   async summarizeMeeting(meetingId: string): Promise<string | null> {
@@ -1500,7 +1592,44 @@ ${transcript.substring(0, 8000)}`
    * B-EXP-003: Multi-term LIKE search with ranking by match count
    * (FTS5 is NOT available in sql.js WASM, so we use improved multi-term LIKE).
    */
-  async globalSearch(query: string, limit = 5): Promise<Result<{
+  async globalSearch(query: string, limit = 5): ReturnType<RAGService['searchGlobally']> {
+    const started = performance.now()
+    const trace: TraceEvent = { trace_id: randomUUID(), consumer: 'explore', route: 'globalSearch', args: { limit },
+      started_at: new Date().toISOString(), duration_ms: 0, status: 'error', query, candidates: [] }
+    try {
+      const result = await this.searchGlobally(query, limit)
+      if (result.success) {
+        trace.candidate_count = Object.values(result.data).reduce((count, rows) => count + rows.length, 0)
+        let resolveNode: ((id: string) => string | null) | undefined
+        if (result.data.people.length || result.data.projects.length) {
+          try {
+            const graph = await import('./knowledge-graph-service')
+            resolveNode = id => graph.resolveEntityToNodeId(id, false)
+          } catch { trace.truncated = true }
+        }
+        for (const [kind, rows] of Object.entries(result.data)) {
+          rows.forEach((row, index) => {
+            let sourceId = kind === 'knowledge' ? String(row.id) : null
+            if (kind !== 'knowledge') {
+              try { sourceId = resolveNode?.(String(row.id)) ?? null } catch { /* optional telemetry */ }
+            }
+            if (!sourceId) { trace.truncated = true; return }
+            trace.candidates.push({ channel: 'explore',
+            source_kind: kind === 'knowledge' ? 'capture' : 'graph-node', source_id: sourceId,
+            rank_before: index + 1, rank_after: index + 1, raw_score: row.matchRank ?? null,
+            adjusted_score: row.matchRank ?? null, kept: true, sent_to_model: false })
+          })
+        }
+        trace.status = trace.candidate_count ? 'ok' : 'empty'
+      } else trace.error = 'request-failed'
+      return result
+    } finally {
+      trace.duration_ms = performance.now() - started
+      recordRetrievalTrace(trace)
+    }
+  }
+
+  private async searchGlobally(query: string, limit = 5): Promise<Result<{
     knowledge: any[]
     people: any[]
     projects: any[]
@@ -1529,7 +1658,7 @@ ${transcript.substring(0, 8000)}`
             WHERE title LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\'
             LIMIT ? OFFSET ?
           `, [likeQuery, likeQuery, pageLimit, offset])
-          return res.length > 0 ? res[0].values.map(v => ({ id: v[0], title: v[1], summary: v[2], capturedAt: v[3] })) : []
+          return res.length > 0 ? res[0].values.map(v => ({ id: v[0], title: v[1], summary: v[2], capturedAt: v[3], matchRank: v[4] ?? null })) : []
         })
 
         const peopleRows = db.exec(`
@@ -1542,7 +1671,7 @@ ${transcript.substring(0, 8000)}`
           id: v[0],
           name: v[1],
           email: v[2],
-          type: v[3]
+          type: v[3], matchRank: v[4] ?? null
         })) : []
 
         const projectRows = db.exec(`
@@ -1554,7 +1683,7 @@ ${transcript.substring(0, 8000)}`
         const projects = projectRows.length > 0 ? projectRows[0].values.map(v => ({
           id: v[0],
           name: v[1],
-          status: v[3]
+          status: v[3], matchRank: v[4] ?? null
         })) : []
 
         return success({ knowledge, people, projects })
@@ -1603,7 +1732,7 @@ ${transcript.substring(0, 8000)}`
       const knowledge = this.collectEligibleKnowledge(db, limit, (pageLimit, offset) => {
         const kq = buildMultiTermQuery('knowledge_captures', ['title', 'summary'], 'id, title, summary, captured_at', pageLimit, offset)
         const rows = db.exec(kq.sql, kq.params)
-        return rows.length > 0 ? rows[0].values.map(v => ({ id: v[0], title: v[1], summary: v[2], capturedAt: v[3] })) : []
+        return rows.length > 0 ? rows[0].values.map(v => ({ id: v[0], title: v[1], summary: v[2], capturedAt: v[3], matchRank: v[4] ?? null })) : []
       })
 
       // 2. Search people with explicit columns + multi-term ranking
@@ -1613,7 +1742,7 @@ ${transcript.substring(0, 8000)}`
         id: v[0],
         name: v[1],
         email: v[2],
-        type: v[3]
+        type: v[3], matchRank: v[4] ?? null
       })) : []
 
       // 3. Search projects with explicit columns + multi-term ranking
@@ -1622,7 +1751,7 @@ ${transcript.substring(0, 8000)}`
       const projects = projectRows.length > 0 ? projectRows[0].values.map(v => ({
         id: v[0],
         name: v[1],
-        status: v[3]
+        status: v[3], matchRank: v[4] ?? null
       })) : []
 
       return success({ knowledge, people, projects })

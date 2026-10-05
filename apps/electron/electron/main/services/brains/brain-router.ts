@@ -280,6 +280,7 @@ export class BrainRouter {
       }
 
       try {
+        if (!opts.signal?.aborted) { try { opts.onDispatch?.() } catch { /* telemetry only */ } }
         const answer = await brain.chat(messages, opts)
         if (answer != null) return answer
         lastFailure = { brainId: brain.id, kind: 'null' }

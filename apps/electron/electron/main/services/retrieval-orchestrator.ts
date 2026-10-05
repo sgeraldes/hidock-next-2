@@ -24,6 +24,7 @@
  * The module is DB-injected for unit tests; rag.ts wires the real helpers.
  */
 
+import { contentHash, type TraceCandidate } from './retrieval-traces'
 import { getDatabase, queryAll } from './database'
 import { filterEligibleActionableRows } from './actionable-eligibility'
 import { filterEligibleRecordingIds, filterEligibleCaptureIds } from './recording-eligibility'
@@ -142,6 +143,7 @@ export function inRange(timestamp: string | undefined, range: TemporalRange | nu
 // ── Structured context: actionables ─────────────────────────────────────────
 
 export interface StructuredParts {
+  candidates?: TraceCandidate[]
   parts: string[]
   /** Provenance for the persisted-answer redaction union. */
   recordingIds: Set<string>
@@ -201,8 +203,8 @@ export function buildActionablesContext(
     [...params, String(limit * 3)] // over-fetch: the eligibility gate drops some
   )
 
-  const eligible = filterEligibleActionableRows(rows, (r) => r.source_knowledge_id).slice(0, limit)
-  if (eligible.length === 0) return empty
+  const allowed = filterEligibleActionableRows(rows, (r) => r.source_knowledge_id)
+  const eligible = allowed.slice(0, limit)
 
   const recordingIds = new Set<string>()
   const captureIds = new Set<string>()
@@ -221,12 +223,17 @@ export function buildActionablesContext(
       : ` (all currently OPEN — relevant ${range.label})`
     : ' (all currently OPEN)'
   return {
-    parts: [
+    parts: eligible.length ? [
       `[STRUCTURED ACTION ITEMS${rangeNote} — answer action/task/commitment questions from THESE first, then corroborate with excerpts:]`,
       ...lines,
-    ],
+    ] : [],
     recordingIds,
     captureIds,
+    candidates: rows.map((r, index) => ({ channel: 'actionables', source_kind: 'actionable', source_id: r.id,
+      recording_id: r.rec_id ?? undefined, capture_id: r.kc_id ?? undefined, content_hash: contentHash(`${r.title}\n${r.description ?? ''}`),
+      rank_before: index + 1, rank_after: eligible.indexOf(r) >= 0 ? eligible.indexOf(r) + 1 : null,
+      kept: eligible.includes(r), sent_to_model: false,
+      ...(!eligible.includes(r) ? { drop_reason: allowed.includes(r) ? 'budget' as const : 'eligibility' as const } : {}) })),
     rowCount: eligible.length,
   }
 }
@@ -272,11 +279,9 @@ export function buildDigestsContext(range: TemporalRange, limit = 12): Structure
   const { eligible: eligibleCaps } = filterEligibleCaptureIds(capIds)
   const recIds = new Set(rows.map((r) => r.rec_id).filter((x): x is string => !!x))
   const { eligible: eligibleRecs } = filterEligibleRecordingIds(recIds)
-  const eligible = rows
+  const allowed = rows
     .filter((r) => eligibleCaps.has(r.id) && (!r.rec_id || eligibleRecs.has(r.rec_id)))
-    .slice(0, limit)
-
-  if (eligible.length === 0) return empty
+  const eligible = allowed.slice(0, limit)
 
   const recordingIds = new Set<string>()
   const captureIds = new Set<string>()
@@ -290,12 +295,17 @@ export function buildDigestsContext(range: TemporalRange, limit = 12): Structure
   })
 
   return {
-    parts: [
+    parts: eligible.length ? [
       `[MEETING DIGESTS for ${range.label} — distilled per-meeting summaries; use THESE for topic/overview/report synthesis:]`,
       ...lines,
-    ],
+    ] : [],
     recordingIds,
     captureIds,
+    candidates: rows.map((r, index) => ({ channel: 'digests', source_kind: 'capture', source_id: r.id,
+      recording_id: r.rec_id ?? undefined, content_hash: contentHash(`${r.title ?? ''}\n${r.summary ?? ''}`),
+      rank_before: index + 1, rank_after: eligible.indexOf(r) >= 0 ? eligible.indexOf(r) + 1 : null,
+      kept: eligible.includes(r), sent_to_model: false,
+      ...(!eligible.includes(r) ? { drop_reason: allowed.includes(r) ? 'budget' as const : 'eligibility' as const } : {}) })),
     rowCount: eligible.length,
   }
 }

@@ -11,6 +11,7 @@ export interface TraceCandidate {
   source_kind: 'recording' | 'capture' | 'actionable' | 'meeting' | 'graph-node' | 'artifact'
   source_id: string
   recording_id?: string
+  recording_ids?: string[]
   capture_id?: string
   chunk_index?: number
   content_hash?: string
@@ -45,6 +46,8 @@ export interface TraceEvent {
   retrieval_issue?: 'provider-failure' | 'reindex-pending' | null
   pipeline_call_id?: string
   answer_message_id?: string
+  candidate_count?: number
+  truncated?: boolean
   query?: string
   candidates: TraceCandidate[]
 }
@@ -67,7 +70,7 @@ export interface StoredTrace extends Omit<TraceEvent, 'query'> {
   candidate_count: number
   truncated: boolean
 }
-interface QueuedTrace { event: TraceEvent; normalized: string; nonce: Buffer; tag: Buffer; candidateCount: number; truncated: boolean; textAllowed: boolean; epoch: number }
+interface QueuedTrace { event: TraceEvent; normalized: string; queryHmac?: string; nonce: Buffer; tag: Buffer; candidateCount: number; truncated: boolean; textAllowed: boolean; epoch: number }
 type QueueItem = QueuedTrace | { link: string; message: string; epoch: number }
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);
@@ -109,15 +112,17 @@ export class RetrievalTraceStore {
   private dailyTimer?: NodeJS.Timeout
   private flushing?: Promise<void>
   private key = randomBytes(32)
+  private keyReady = false
   private counters = new Map<string, { dropped: number; errors: number }>()
   private lastLog = -Infinity
+  private retryAfter = 0
   private closed = false
   writeErrors = 0
 
   constructor(private readonly options: {
     path: string
     storage: EncryptionStorage
-    eligible: (candidate: TraceCandidate) => boolean
+    eligible: (candidate: TraceCandidate) => boolean | Promise<boolean>
     maxFileBytes?: number
   }) {
     this.path = options.path
@@ -129,11 +134,13 @@ export class RetrievalTraceStore {
   get pendingBytes(): number { return this.queue.reduce((sum, item) => sum + Buffer.byteLength(JSON.stringify(item)), 0) }
 
   private async open(): Promise<void> {
+    if (Date.now() < this.retryAfter) throw new Error('Trace storage retry delayed')
     if (!this.opening) {
       this.opening = (async () => {
         mkdirSync(dirname(this.path), { recursive: true })
         await this.engine.initialize()
         this.engine.getDatabase().run('PRAGMA busy_timeout = 5000')
+        this.engine.getDatabase().run('PRAGMA secure_delete = ON')
         this.engine.run("INSERT OR IGNORE INTO meta VALUES ('schema_version', '1')")
         if (this.options.storage.isEncryptionAvailable()) {
           const saved = this.engine.queryOne<{ value: string }>("SELECT value FROM meta WHERE key = 'hmac_key'")
@@ -146,10 +153,11 @@ export class RetrievalTraceStore {
           }
           if (this.key.length !== 32) throw new Error('Invalid trace HMAC key')
         }
+        this.keyReady = true
         this.retention()
         this.dailyTimer = setInterval(() => { void this.retain() }, 86400000)
         this.dailyTimer.unref()
-      })().catch(error => { this.opening = undefined; throw error })
+      })().catch(error => { this.opening = undefined; this.retryAfter = Date.now() + 60000; throw error })
     }
     await this.opening
   }
@@ -160,12 +168,13 @@ export class RetrievalTraceStore {
       if (this.queue.length >= 1000) { this.count('dropped'); return }
       const { candidates, query, ...fields } = event
       const normalized = (query ?? '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase()
+      const queryHmac = this.keyReady ? createHmac('sha256', this.key).update(normalized).digest('hex') : undefined
       const nonce = randomBytes(12)
       const cipher = createCipheriv('aes-256-gcm', this.memoryKey, nonce)
-      const sealed = Buffer.concat([cipher.update(normalized, 'utf8'), cipher.final()])
+      const sealed = Buffer.concat([cipher.update(queryHmac ? '' : normalized, 'utf8'), cipher.final()])
       const copy: TraceEvent = { ...fields, query: this.settings.keepQueryText && query ? cappedText(query, 8192) : undefined, candidates: [] }
-      const item: QueuedTrace = { event: copy, normalized: sealed.toString('base64'), nonce, tag: cipher.getAuthTag(),
-        candidateCount: candidates.length, truncated: false, textAllowed: this.settings.keepQueryText, epoch: this.epoch }
+      const item: QueuedTrace = { event: copy, normalized: sealed.toString('base64'), queryHmac, nonce, tag: cipher.getAuthTag(),
+        candidateCount: event.candidate_count ?? candidates.length, truncated: event.truncated ?? false, textAllowed: this.settings.keepQueryText, epoch: this.epoch }
       let bytes = Buffer.byteLength(JSON.stringify(item)) + 2048
       if (bytes > 65536) { this.count('dropped'); return }
       const channels = new Map<TraceChannel, number>()
@@ -174,7 +183,7 @@ export class RetrievalTraceStore {
         if (count >= 100) { item.truncated = true; continue }
         const size = Buffer.byteLength(JSON.stringify(candidate)) + 2
         if (bytes + size > 65536) { item.truncated = true; continue }
-        copy.candidates.push({ ...candidate })
+        copy.candidates.push({ rank_before: null, rank_after: null, raw_score: null, adjusted_score: null, ...candidate })
         channels.set(candidate.channel, count + 1)
         bytes += size
       }
@@ -255,7 +264,7 @@ export class RetrievalTraceStore {
     const decipher = createDecipheriv('aes-256-gcm', this.memoryKey, item.nonce)
     decipher.setAuthTag(item.tag)
     const normalized = Buffer.concat([decipher.update(Buffer.from(item.normalized, 'base64')), decipher.final()]).toString('utf8')
-    const queryHmac = createHmac('sha256', this.key).update(normalized).digest('hex')
+    const queryHmac = item.queryHmac ?? createHmac('sha256', this.key).update(normalized).digest('hex')
     let text: string | null = null
     let textState: StoredTrace['text_state'] = this.settings.keepQueryText && item.textAllowed ? 'unavailable' : 'disabled'
     if (query && item.textAllowed && this.settings.keepQueryText && this.options.storage.isEncryptionAvailable()) {
@@ -290,6 +299,7 @@ export class RetrievalTraceStore {
         [new Date(now - 30 * 86400000).toISOString()])
       this.engine.run('DELETE FROM traces WHERE started_at < ?', [new Date(now - 90 * 86400000).toISOString()])
     })
+    this.engine.getDatabase().run('PRAGMA wal_checkpoint(TRUNCATE)')
     this.evict()
   }
   async retain(): Promise<void> {
@@ -306,7 +316,9 @@ export class RetrievalTraceStore {
     const db = this.engine.getDatabase()
     db.run('PRAGMA wal_checkpoint(TRUNCATE)')
     while (this.fileBytes() > cap) {
-      const oldest = this.engine.queryAll<{ trace_id: string }>('SELECT trace_id FROM traces ORDER BY started_at LIMIT 1')
+      const count = this.engine.queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM traces')!.count
+      const batchSize = count < 1000 ? 1 : Math.max(1, Math.floor(count * 0.1))
+      const oldest = this.engine.queryAll<{ trace_id: string }>('SELECT trace_id FROM traces ORDER BY started_at LIMIT ?', [batchSize])
       if (!oldest.length) break
       this.engine.runInTransaction(() => {
         for (const row of oldest) this.engine.run('DELETE FROM traces WHERE trace_id = ?', [row.trace_id])
@@ -329,6 +341,7 @@ export class RetrievalTraceStore {
       try {
         await this.open()
         this.engine.run("UPDATE traces SET query_text = NULL, text_state = 'disabled'")
+        this.engine.getDatabase().run('PRAGMA wal_checkpoint(TRUNCATE)')
       } catch { this.failed() }
     }
   }
@@ -342,20 +355,32 @@ export class RetrievalTraceStore {
       const candidates = this.engine.queryAll<{ candidate: string }>('SELECT candidate FROM candidates WHERE trace_id = ? ORDER BY ordinal', [fields.trace_id])
         .map(c => JSON.parse(c.candidate) as TraceCandidate)
       // Aggregate traces are hidden if any identity is no longer eligible.
-      if (!candidates.every(candidate => { try { return this.options.eligible(candidate) } catch { return false } })) continue
+      if (!await this.candidatesEligible(candidates)) continue
       result.push({ ...fields, candidates, query_text: row.query_text, query_hmac: row.query_hmac,
         text_state: row.text_state, answer_message_id: row.answer_message_id })
     }
     return result
   }
   async stats(): Promise<TraceStats> {
-    const rows = await this.read()
+    await this.open()
     const consumers = { chat: 0, explore: 0, brain: 0 }
     const since = new Date(Date.now() - 7 * 86400000).toISOString()
-    for (const row of rows) if (row.started_at >= since) consumers[row.consumer]++
+    const rows = this.engine.queryAll<{ trace_id: string; consumer: TraceEvent['consumer'] }>(
+      'SELECT trace_id, consumer FROM traces WHERE started_at >= ?', [since])
+    for (const row of rows) {
+      const candidates = this.engine.queryAll<{ candidate: string }>('SELECT candidate FROM candidates WHERE trace_id = ?', [row.trace_id])
+        .map(c => JSON.parse(c.candidate) as TraceCandidate)
+      if (await this.candidatesEligible(candidates)) consumers[row.consumer]++
+    }
     const counts = this.engine.queryOne<{ dropped: number; errors: number }>('SELECT COALESCE(SUM(dropped), 0) AS dropped, COALESCE(SUM(errors), 0) AS errors FROM counters')!
     for (const c of this.counters.values()) { counts.dropped += c.dropped; counts.errors += c.errors }
     return { consumers, dropped_events: counts.dropped, write_errors: counts.errors, file_bytes: this.fileBytes() }
+  }
+  private async candidatesEligible(candidates: TraceCandidate[]): Promise<boolean> {
+    for (const candidate of candidates) {
+      try { if (!await this.options.eligible(candidate)) return false } catch { return false }
+    }
+    return true
   }
   async schemaVersion(): Promise<number> { await this.open(); return Number(this.engine.queryOne<{ value: string }>("SELECT value FROM meta WHERE key = 'schema_version'")!.value) }
   async journalMode(): Promise<string> { await this.open(); return String(this.engine.getDatabase().exec('PRAGMA journal_mode')[0].values[0][0]) }

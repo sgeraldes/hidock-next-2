@@ -51,6 +51,8 @@ export interface BrainMessage {
 export type BrainEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 export interface GenerateOptions {
+  /** Observes a context handed to a provider after the caller's eligibility gate. */
+  onDispatch?: () => void
   systemPrompt?: string
   temperature?: number
   maxTokens?: number

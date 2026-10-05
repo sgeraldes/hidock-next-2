@@ -40,6 +40,13 @@ const RELEVANCE_THRESHOLDS: Partial<Record<BrainId, number>> = {
 const DEFAULT_RELEVANCE_THRESHOLD = 0.3
 
 class EmbeddingsService {
+  modelForProvider(provider: string | null | undefined): string | null {
+    if (provider === 'gemini-api') return 'gemini-embedding-001'
+    if (provider === 'local-onnx-embed') return 'Nemotron-3-Embed-1B'
+    if (provider === 'ollama') return getConfig().embeddings.ollamaModel
+    if (provider === 'openai-compatible') return getConfig().brains.openaiCompatible?.embeddingModel || null
+    return null
+  }
   /** Which provider is currently active ('gemini' | 'ollama' | 'none'). */
   provider(): 'gemini' | 'ollama' | 'none' {
     if (getConfig().transcription.geminiApiKey) return 'gemini'

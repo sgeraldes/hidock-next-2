@@ -268,6 +268,8 @@ export interface AppConfig {
     provider: 'gemini' | 'ollama'
     geminiModel: string
     ollamaModel: string
+    recordQueries?: boolean
+    keepQueryText?: boolean
     maxContextChunks: number
   }
   device: {
@@ -432,6 +434,8 @@ const DEFAULT_CONFIG: AppConfig = {
     provider: 'gemini',
     geminiModel: CURRENT_GEMINI_CHAT_MODEL,
     ollamaModel: 'llama3.2',
+    recordQueries: true,
+    keepQueryText: true,
     maxContextChunks: 10
   },
   device: {

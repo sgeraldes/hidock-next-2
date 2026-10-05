@@ -34,6 +34,20 @@ afterEach(async () => {
 })
 
 describe('retrieval trace store (real SQLite)', () => {
+  it('keeps full HMAC identity for long queries without retaining their full text in an initialized queue', async () => {
+    const s = store()
+    await s.schemaVersion()
+    const prefix = 'question '.repeat(20000)
+    s.record(event('long-a', prefix + 'a'))
+    s.record(event('long-b', prefix + 'b'))
+    expect(s.pendingCount).toBe(2)
+    expect(s.pendingBytes).toBeLessThan(2 * 65536)
+    await s.flush()
+    const rows = await s.read()
+    expect(rows).toHaveLength(2)
+    expect(rows[0].query_hmac).not.toBe(rows[1].query_hmac)
+    expect(Buffer.byteLength(storage.decryptString(Buffer.from(rows[0].query_text!, 'base64')))).toBeLessThanOrEqual(8192)
+  })
   it('HMACs the whole query, not just the retained prefix', async () => {
     const s = store()
     s.record(event('a', 'a'.repeat(9000) + 'one'))

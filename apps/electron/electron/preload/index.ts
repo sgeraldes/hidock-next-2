@@ -370,6 +370,8 @@ export interface TruncatedRecoveryCounts {
 }
 
 export interface ElectronAPI {
+  traces: { stats: () => Promise<Result<{ consumers: { chat: number; explore: number; brain: number }; dropped_events: number; write_errors: number; file_bytes: number }>> }
+
   /**
    * Features that are off for this whole run (disabled when the app started).
    * Their channels reject until the next launch, so the renderer does not call
@@ -1709,6 +1711,7 @@ const electronAPI: ElectronAPI = {
     setQaLogsEnabled: (enabled) => callIPC('qa:set-logs-enabled', enabled)
   },
 
+  traces: { stats: () => callIPC('traces:stats') },
   config: {
     get: () => callIPC('config:get'),
     set: (config) => callIPC('config:set', config),
