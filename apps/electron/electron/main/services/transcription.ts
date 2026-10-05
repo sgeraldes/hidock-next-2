@@ -1,3 +1,4 @@
+import { getEventBus } from './event-bus'
 import {
   GeminiEngine,
   NoSpeechDetectedError,
@@ -8,89 +9,11 @@ import { GoogleGenerativeAI } from '@google/generative-ai'
 import { getBrainRegistry, resolveGeminiApiKey } from './brains'
 import { readFile, readFileSync, existsSync } from 'fs'
 import { promisify } from 'util'
-import { spawn } from 'child_process'
+import { spawnStreaming } from './worker-process'
 import { join, isAbsolute } from 'path'
 
 const readFileAsync = promisify(readFile)
 
-/**
- * Spawn a long-running CLI and stream its stderr to the parent's console as
- * lines arrive (so the user sees progress live) while collecting stdout into
- * a buffer for the caller. Used for the VibeVoice/local-asr backends, where
- * the Python CLI logs model load, chunk progress, and generation status to
- * stderr over minutes — execFileBuffered would hide all of that until exit.
- *
- * The optional onStderrLine callback lets callers translate recognised log
- * lines into progress events (e.g. "Chunk 2/3" -> setProgress).
- */
-function spawnStreaming(
-  command: string,
-  args: string[],
-  options: {
-    cwd?: string
-    env?: NodeJS.ProcessEnv
-    maxStdoutBytes?: number
-    logPrefix?: string
-    onStderrLine?: (line: string) => void
-  } = {}
-): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd: options.cwd,
-      env: options.env,
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe']
-    })
-
-    const prefix = options.logPrefix ?? `[${command}]`
-    const cap = options.maxStdoutBytes ?? 50 * 1024 * 1024
-
-    const stdoutChunks: Buffer[] = []
-    let stdoutBytes = 0
-    let stderrBuf = ''
-    const stderrLines: string[] = []
-
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdoutBytes += chunk.length
-      if (stdoutBytes <= cap) stdoutChunks.push(chunk)
-    })
-
-    child.stderr.setEncoding('utf-8')
-    child.stderr.on('data', (chunk: string) => {
-      stderrBuf += chunk
-      // Emit every complete line live so the user sees progress.
-      let nl: number
-      while ((nl = stderrBuf.indexOf('\n')) !== -1) {
-        const line = stderrBuf.slice(0, nl).replace(/\r$/, '')
-        stderrBuf = stderrBuf.slice(nl + 1)
-        if (line) {
-          console.log(`${prefix} ${line}`)
-          stderrLines.push(line)
-          try { options.onStderrLine?.(line) } catch { /* ignore callback errors */ }
-        }
-      }
-    })
-
-    child.on('error', (err) => reject(new Error(`Failed to spawn ${command}: ${err.message}`)))
-
-    child.on('close', (code) => {
-      // Flush any trailing stderr without newline.
-      if (stderrBuf) {
-        console.log(`${prefix} ${stderrBuf}`)
-        stderrLines.push(stderrBuf)
-        stderrBuf = ''
-      }
-      const stdout = Buffer.concat(stdoutChunks).toString('utf-8')
-      const stderr = stderrLines.join('\n')
-      if (code !== 0) {
-        const tail = stderr.split('\n').slice(-30).join('\n')
-        reject(new Error(`${command} exited with code ${code}\n${tail}`))
-      } else {
-        resolve({ stdout, stderr })
-      }
-    })
-  })
-}
 import { getConfig } from './config'
 import { nameOwnerOnLiveRecording, type LiveOwnerDeps } from './live-channel-speakers'
 import { liveNotePath } from './realtime-recorder'
@@ -413,6 +336,7 @@ export function orderPendingForProcessing<T extends OrderableQueueItem>(items: T
  * when it ends, so cancelling never blocks a later request for the same recording.
  */
 const cancelledRecordings = new Set<string>()
+const activeAbortControllers = new Map<string, AbortController>()
 
 function stillWanted(recordingId: string): boolean {
   // The transcription path's boundary: an unusable old transcript must not
@@ -433,16 +357,22 @@ function cancelIfRunning(recordingId: string): void {
 
 export function cancelTranscription(recordingId: string): void {
   cancelIfRunning(recordingId)
-  removeFromQueueByRecordingId(recordingId)
+  const ids = new Set(idsFor(recordingId))
+  const running = getQueueItems('processing').filter((item) => ids.has(item.recording_id))
+  for (const item of running) updateQueueItem(item.id, 'cancelled', 'Stopped by you')
+  for (const id of ids) activeAbortControllers.get(id)?.abort(new Error('Stopped by you'))
+  // Queued Remove keeps its existing semantics; running Stop keeps a durable outcome.
+  if (running.length === 0) removeFromQueueByRecordingId(recordingId)
   clearQueueHints(recordingId)
   updateRecordingTranscriptionStatus(recordingId, 'none')
-  notifyRenderer('transcription:cancelled', { recordingId })
+  notifyRenderer('transcription:cancelled', { recordingId, reason: 'Stopped by you' })
   emitQueueState()
 }
 
 export function cancelAllTranscriptions(): number {
   cancelRequested = true
   for (const id of getActiveTranscriptions()) cancelledRecordings.add(id)
+  for (const controller of activeAbortControllers.values()) controller.abort(new Error('Stopped by you'))
   const count = cancelPendingTranscriptions()
   userPriorityIds.clear()
   queuePriorityRank.clear()
@@ -496,7 +426,10 @@ async function runQueueItem(
   onStage?: (stage: string) => void
 ): Promise<void> {
   const ids = idsFor(item.recording_id)
+  const controller = new AbortController()
+  for (const id of ids) activeAbortControllers.set(id, controller)
   for (const id of ids) addActiveTranscription(id)
+  let unsubscribeStage: (() => void) | undefined
   try {
     updateQueueItem(item.id, 'processing')
     updateQueueProgress(item.id, 0) // spec-014: reset progress
@@ -519,15 +452,22 @@ async function runQueueItem(
       })
     }
 
-    const outcome = await transcribeRecording(item.recording_id, progressCallback, item.provider)
+    let lastProgress = 0
+    unsubscribeStage = getEventBus().onDomainEvent('processing:stage-started', (event) => {
+      if (ids.includes(event.payload.recordingId)) progressCallback(event.payload.stage, lastProgress)
+    })
+    const outcome = await transcribeRecording(item.recording_id, (stage, progress) => {
+      lastProgress = progress
+      progressCallback(stage, progress)
+    }, item.provider)
 
-    if (outcome.status === 'cancelled') {
+    if (controller.signal.aborted || outcome.status === 'cancelled') {
       // INC-2 — the recording was trashed / marked personal / hard-purged
       // mid-run and NOTHING was persisted. Do NOT claim completion: that
       // would overwrite the soft-delete's 'cancelled' tombstone with
       // 'completed', jump progress to 100, and emit transcription:completed
       // for content that does not exist. Leave it cancelled.
-      updateQueueItem(item.id, 'cancelled')
+      updateQueueItem(item.id, 'cancelled', controller.signal.aborted ? 'Stopped by you' : 'Source no longer eligible')
       clearQueueHints(item.recording_id)
       console.log(`[Transcription] ${item.recording_id} cancelled mid-run (ineligible) — queue item marked cancelled`)
     } else if (outcome.status === 'no_speech') {
@@ -563,7 +503,7 @@ async function runQueueItem(
     if (ids.some((id) => cancelledRecordings.has(id))) {
       // Cancelled by the user while running: the step it was in threw because
       // its gate said stop. That is a cancellation, not a failure.
-      updateQueueItem(item.id, 'cancelled')
+      updateQueueItem(item.id, 'cancelled', 'Stopped by you')
       updateRecordingTranscriptionStatus(item.recording_id, 'none')
       clearQueueHints(item.recording_id)
       console.log(`[Transcription] ${item.recording_id} stopped after cancel; nothing saved`)
@@ -594,9 +534,11 @@ async function runQueueItem(
       console.log(`Recording ${item.recording_id} failed after ${retryCount} retries (max: ${maxRetries})`)
     }
   } finally {
+    unsubscribeStage?.()
     for (const id of ids) {
       removeActiveTranscription(id)
       cancelledRecordings.delete(id)
+      activeAbortControllers.delete(id)
     }
   }
 }
@@ -1020,7 +962,8 @@ Only include detections with confidence >= 0.6.`
           brain.generate([{ role: 'user', content: prompt }], {
             maxTokens: 8192,
             json: true,
-            disableThinking: true
+            disableThinking: true,
+            signal: metadata.recordingId ? activeAbortControllers.get(metadata.recordingId)?.signal : undefined
           })
       )) ?? ''
 
@@ -1147,7 +1090,8 @@ async function transcribeWithGemini(
   // second-stage checks in transcribeRecording (which cannot see an exclusion that
   // lands between the engine's own chunk/upload/retry calls).
   shouldGenerate?: () => boolean,
-  durationSeconds?: number
+  durationSeconds?: number,
+  signal?: AbortSignal
 ): Promise<RawTranscriptionResult> {
   const config = getConfig()
   if (!resolveGeminiApiKey()) {
@@ -1190,16 +1134,22 @@ async function transcribeWithGemini(
     filePath,
     // ADV43-1 (round-45) — re-checked inside the engine before each provider call.
     shouldGenerate,
+    signal,
     // Real per-chunk progress. Recordings above the safe whole-output duration
     // are transcribed in inline-safe slices; ordinary meetings remain one call.
     onProgress: (done: number, total: number) => {
       progressCallback?.('transcribing', Math.min(45, 20 + Math.round((done / total) * 25)))
     },
-    onTrace: (event: TranscriptionTraceEvent) => providerTimeline.push(event),
+    onTrace: (event: TranscriptionTraceEvent) => {
+      providerTimeline.push(event)
+      if (event.phase === 'provider-transcription' && event.status === 'started') {
+        progressCallback?.(`transcribing_part_${event.chunkIndex + 1}_of_${event.chunkCount}`, 20)
+      }
+    },
     // Every response is billed, the discarded ones too; the collector opened by
     // the transcription stage takes them (a call outside a stage drops them).
     onUsage: (event) => recordGeminiUsage(event.model, event.usage)
-  } as Parameters<typeof engine.transcribe>[1] & { filePath: string })) {
+  } as Parameters<typeof engine.transcribe>[1] & { filePath: string; signal?: AbortSignal })) {
     const text = segment.text?.trim()
     if (text) {
       segments.push({
@@ -1241,7 +1191,8 @@ function pythonCommand(): string {
 async function transcribeWithLocalAsr(
   filePath: string,
   metadataContext: string,
-  progressCallback?: (stage: string, progress: number) => void
+  progressCallback?: (stage: string, progress: number) => void,
+  signal?: AbortSignal
 ): Promise<RawTranscriptionResult> {
   const config = getConfig()
   const asrPath = config.transcription.localAsrPath || process.env.ASR_MCP_PATH
@@ -1283,6 +1234,7 @@ async function transcribeWithLocalAsr(
 
   progressCallback?.('local_asr_starting', 5)
   const { stdout } = await spawnStreaming(pythonCommand(), args, {
+    signal,
     cwd: asrPath,
     env: {
       ...process.env,
@@ -1351,7 +1303,8 @@ async function transcribeWithLocalAsr(
 async function transcribeWithVibeVoice(
   filePath: string,
   metadataContext: string,
-  progressCallback?: (stage: string, progress: number) => void
+  progressCallback?: (stage: string, progress: number) => void,
+  signal?: AbortSignal
 ): Promise<RawTranscriptionResult> {
   const config = getConfig()
   const asrPath = config.transcription.localAsrPath || process.env.ASR_MCP_PATH
@@ -1390,6 +1343,7 @@ async function transcribeWithVibeVoice(
 
   progressCallback?.('vibevoice_starting', 5)
   const { stdout } = await spawnStreaming(pythonCommand(), args, {
+    signal,
     cwd: asrPath,
     env: {
       ...process.env,
@@ -1660,7 +1614,7 @@ Respond in JSON format:
           const result = await model.generateContent({
             contents: [{ role: 'user', parts: [{ text: analysisPrompt }] }],
             generationConfig: attempt.generationConfig as never
-          })
+          }, { signal: recordingId ? activeAbortControllers.get(recordingId)?.signal : undefined })
           reportGeminiCall(analysisModelId, result.response.usageMetadata, startedAt)
           return result
         }
@@ -1809,7 +1763,7 @@ export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
   // lands mid-analysis.
   let rows: Array<{ recording_id: string; full_text: string }>
   try {
-    rows = getFailedTranscriptsForReanalysis(limit)
+    rows = await getFailedTranscriptsForReanalysis(limit)
   } catch (e) {
     console.error('[Reanalyze] eligibility query failed — aborting run (fail closed, zero provider calls):', e)
     return 0
@@ -2299,7 +2253,8 @@ Meeting ${i + 1}: "${m.subject}"
   })
   let audioPreflight: AudioPreflightReport
   try {
-    audioPreflight = await analyzeAudioPreflight(recording.file_path, recording.duration_seconds)
+    progressCallback?.('vad', 1)
+    audioPreflight = await analyzeAudioPreflight(recording.file_path, recording.duration_seconds, activeAbortControllers.get(recordingId)?.signal)
     completeProcessingRun(vadRun.id, {
       qualityStatus: audioPreflight.status,
       quality: audioPreflight as unknown as Record<string, unknown>,
@@ -2465,9 +2420,9 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   const providerFilePath = recording.file_path // narrowed here; a closure below would lose it
   try {
     rawTranscript = transcriptionProvider === 'vibevoice'
-      ? await transcribeWithVibeVoice(recording.file_path, meetingContext, progressCallback)
+      ? await transcribeWithVibeVoice(recording.file_path, meetingContext, progressCallback, activeAbortControllers.get(recordingId)?.signal)
       : transcriptionProvider === 'local-asr'
-        ? await transcribeWithLocalAsr(recording.file_path, meetingContext, progressCallback)
+        ? await transcribeWithLocalAsr(recording.file_path, meetingContext, progressCallback, activeAbortControllers.get(recordingId)?.signal)
         // ADV43-1 (round-45) — thread the SAME fail-closed eligibility check into
         // GeminiEngine's internal chunk/upload/retry loop. If the owner excludes
         // the recording WHILE the engine is mid-pipeline, the engine throws
@@ -2480,7 +2435,8 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
               meetingContext,
               progressCallback,
               () => stillWanted(recordingId),
-              recording.duration_seconds ?? undefined
+              recording.duration_seconds ?? undefined,
+              activeAbortControllers.get(recordingId)?.signal
             )
           )
   } catch (e) {
@@ -3037,7 +2993,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
       // P2 (round-3) — also thread the gate INTO analyzeTimeline so its own
       // internal sentiment-LLM await is covered (re-checked before its UPDATE).
       const timeline = await timelineUsage.run(() =>
-        analyzeTimeline(recordingId, undefined, undefined, () => isRecordingProcessable(recordingId))
+        analyzeTimeline(recordingId, undefined, { signal: activeAbortControllers.get(recordingId)?.signal }, stillProcessable)
       )
       console.log(
         `[Timeline] Recording ${recordingId}: ${timeline.sentimentSegments.length} sentiment segment(s), ` +
@@ -3135,7 +3091,8 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
       // (its contacts/speaker-bindings/mention-resolutions/scan-marker writes
       // are all re-checked after the await).
       const selfId = await runSelfIdentificationForRecording(recordingId, {
-        shouldPersist: () => isRecordingProcessable(recordingId)
+        signal: activeAbortControllers.get(recordingId)?.signal,
+        shouldPersist: stillProcessable
       })
       identityBound += selfId.bound
       identityMergeSuspected += selfId.mergeSuspected
@@ -3158,7 +3115,8 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   try {
     if (stillProcessable() && identityAllowed && !transcriptUntrusted) {
       const inferred = await runSpeakerInference(recordingId, {
-        shouldPersist: () => isRecordingProcessable(recordingId)
+        signal: activeAbortControllers.get(recordingId)?.signal,
+        shouldPersist: stillProcessable
       })
       identityBound += inferred.bound
       if (inferred.bound > 0) {
@@ -3307,6 +3265,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
       }
 
       const indexedCount = await vectorStore.indexTranscript(fullText, {
+        signal: activeAbortControllers.get(recordingId)?.signal,
         meetingId: meetingId || undefined,
         recordingId,
         timestamp: recording.created_at,
@@ -3316,7 +3275,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
         // loop persist orphaned vector rows. This callback is re-checked INSIDE
         // indexTranscript, immediately before the write loop, so the chunks are
         // dropped if the recording became ineligible while embeddings ran.
-        shouldPersist: () => isRecordingProcessable(recordingId)
+        shouldPersist: stillProcessable
       })
 
       console.log(`Indexed ${indexedCount} chunks into vector store`)
@@ -3338,7 +3297,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   // INC4 — the 'complete' 100% progress event fires ONLY on the completed
   // branch, AFTER the cancellation check, so a cancelled run never emits a
   // brief false 100%.
-  if (processabilitySkipLogged || !isRecordingProcessable(recordingId)) {
+  if (processabilitySkipLogged || cancelledRecordings.has(recordingId) || !isRecordingProcessable(recordingId)) {
     console.log(`Transcription of ${recording.filename} completed the transcript but the recording became ineligible mid-run — reporting cancelled`)
     return { status: 'cancelled' }
   }

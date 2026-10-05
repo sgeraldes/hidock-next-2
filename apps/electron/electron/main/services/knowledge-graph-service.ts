@@ -48,7 +48,7 @@ import type {
 } from '@hidock/knowledge-graph'
 import { complete } from '@hidock/ai-providers'
 import { withCallRecord } from './pipeline/track-call'
-import { yieldToEventLoop } from './event-loop'
+import { mainThreadBudget, yieldToEventLoop } from './event-loop'
 import {
   run,
   runInTransaction,
@@ -252,20 +252,14 @@ export async function ingestFromDbTranscripts(): Promise<IngestResult> {
         AND NOT EXISTS (SELECT 1 FROM graph_ingested_transcripts g WHERE g.transcript_id = t.id)`)
   }
 
-  // Same timer yield and 20ms target as OrgReconciler. Never suspend a transaction.
-  let batchStartedAt = performance.now()
+  // Shared OrgReconciler timer budget; never suspend a transaction.
+  const checkpoint = mainThreadBudget('KnowledgeGraph')
   for (const candidate of rows) {
-    const heldMs = performance.now() - batchStartedAt
-    if (heldMs >= 20) {
-      if (heldMs >= 100) console.warn(`[KnowledgeGraph] batch held the main thread for ${Math.round(heldMs)}ms`)
-      await yieldToEventLoop()
-      batchStartedAt = performance.now()
-    }
+    await checkpoint()
     const row = candidate as TranscriptRow
     try {
-      // P1 (round-3, FAIL CLOSED) — the value pre-filter Set above degrades to
-      // EMPTY on a lookup error (fail-open), which would send an excluded
-      // recording's full_text to the LLM. Gate the provider call on an
+      // P1 (round-3, FAIL CLOSED) — SQL pre-filter failure falls back to IDs,
+      // without proving value eligibility. Gate the provider call on an
       // AUTHORITATIVE fresh point-read (exists AND not deleted AND not personal
       // AND not value-excluded) so a transient exclusion-lookup failure never
       // leaks content to the provider.
@@ -288,11 +282,14 @@ export async function ingestFromDbTranscripts(): Promise<IngestResult> {
       // The LLM extraction call stays OUTSIDE the transaction (Codex
       // adversarial review AR-1) — it can take seconds and must not hold a
       // DB transaction open.
-      const extraction = await extractGraphFromTranscript(row.full_text, meta, trackedExtractor(providerConfig, row.recording_id))
+      const extraction = await extractGraphFromTranscript(row.full_text, meta, trackedExtractor(providerConfig, row.recording_id)).finally(async () => {
+        await yieldToEventLoop()
+        checkpoint.reset()
+      })
       // F16/spec-002 (AR-1, layer 2 of 2) + F18 (spec-004, Step 6): FINAL
       // eligibility is decided with a FRESH point-read at persistence time,
       // inside the SAME transaction as the graph writes + ingested-marker
-      // insert — the pre-filter Set above is only a run-start snapshot and
+      // insert — the SQL pre-filter above is only a run-start snapshot and
       // can go stale across this loop's awaits. isRecordingGraphIngestable is
       // a strict superset of the old value-only check: it ALSO closes the
       // purge/soft-delete-vs-ingest race (a hard-purged or soft-deleted

@@ -98,6 +98,12 @@ describe('transcription queue — pause/resume + reorder (main process)', () => 
     expect(resumed.paused).toBe(false)
     expect(getQueueState().paused).toBe(false)
   })
+  it('Stop retains the running queue item as cancelled with an owner-readable reason', async () => {
+    const { cancelTranscription } = await import('../transcription')
+    mockGetQueueItems.mockImplementation((status) => status === 'processing' ? [{ id: 'q-stop', recording_id: 'stop' }] : [])
+    cancelTranscription('stop')
+    expect(mockUpdateQueueItem).toHaveBeenCalledWith('q-stop', 'cancelled', 'Stopped by you')
+  })
 
   it('reorderQueueItem("up") makes an item win the pick order over recency', async () => {
     const { reorderQueueItem, orderPendingForProcessing } = await import('../transcription')

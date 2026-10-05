@@ -49,10 +49,12 @@ import {
   isValueExcludedRecording,
   removeRecordingVoiceEvidence,
   runInTransaction,
-  saveRecordingEvaluation
+  saveRecordingEvaluation,
+  acquireOrganizationCheckpointBudget
 } from './database'
 import { complete } from '@hidock/ai-providers'
 import { getEventBus } from './event-bus'
+import { mainThreadBudget } from './event-loop'
 import { getProviderConfigFromSettings } from './ai-provider-config'
 import { getConfig } from './config'
 import { createJevHarness } from './pipeline/jev-harness'
@@ -962,10 +964,20 @@ export const WARNING_REFRESH_CHUNK = 200
  */
 export async function recomputeAudioWarnings(recordingIds?: string[]): Promise<number> {
   if (recordingIds && recordingIds.length === 0) return 0
+  const release = acquireOrganizationCheckpointBudget()
+  try {
   // Stars, kind and context first, so the announcement below covers both.
   const evidenceChanged = await recomputeEvaluationsFromEvidence(recordingIds)
   const filter = recordingIds ? `WHERE kc.source_recording_id IN (${recordingIds.map(() => '?').join(', ')})` : ''
-  const rows = queryAll<{
+  const candidates = queryAll<{ capture_id: string }>(
+    `SELECT re.capture_id FROM recording_evaluations re JOIN knowledge_captures kc ON kc.id = re.capture_id ${filter}`,
+    recordingIds ?? []
+  )
+  const checkpoint = mainThreadBudget('EvaluationWarnings')
+  const updates: Array<{ captureId: string; warning: ReturnType<typeof audioTranscriptWarning> }> = []
+  for (const candidate of candidates) {
+    await checkpoint()
+    const row = queryOne<{
     capture_id: string
     star_level: number | null
     audio_warning: string | null
@@ -985,11 +997,8 @@ export async function recomputeAudioWarnings(recordingIds?: string[]): Promise<n
        LEFT JOIN recordings r ON r.id = kc.source_recording_id
        LEFT JOIN audio_profiles ap ON ap.recording_id = kc.source_recording_id
        LEFT JOIN transcripts t ON t.recording_id = kc.source_recording_id
-       ${filter}`,
-    recordingIds ?? []
-  )
-  const updates: Array<{ captureId: string; warning: ReturnType<typeof audioTranscriptWarning> }> = []
-  for (const row of rows) {
+       WHERE re.capture_id = ?`, [candidate.capture_id])
+    if (!row) continue
     const audio = evaluationAudio({
       recording_id: null,
       quality_rating: null,
@@ -1028,6 +1037,7 @@ export async function recomputeAudioWarnings(recordingIds?: string[]): Promise<n
     }
   }
   return updates.length
+  } finally { release() }
 }
 
 /**
@@ -1045,7 +1055,16 @@ export async function recomputeAudioWarnings(recordingIds?: string[]): Promise<n
 export async function recomputeEvaluationsFromEvidence(recordingIds?: string[]): Promise<number> {
   if (recordingIds && recordingIds.length === 0) return 0
   const filter = recordingIds ? `WHERE kc.source_recording_id IN (${recordingIds.map(() => '?').join(', ')})` : ''
-  const rows = queryAll<{
+  const candidates = queryAll<{ capture_id: string }>(
+    `SELECT re.capture_id FROM recording_evaluations re JOIN knowledge_captures kc ON kc.id = re.capture_id ${filter}`,
+    recordingIds ?? []
+  )
+  type Next = Pick<RecordingEvaluation, 'stars' | 'starLevel' | 'starsConfidence' | 'kind' | 'kindConfidence' | 'context' | 'contextConfidence'>
+  const updates: Array<{ captureId: string; next: Next | null }> = []
+  const checkpoint = mainThreadBudget('EvaluationEvidence')
+  for (const candidate of candidates) {
+    await checkpoint()
+    const row = queryOne<{
     capture_id: string
     model: string | null
     version: number
@@ -1067,12 +1086,8 @@ export async function recomputeEvaluationsFromEvidence(recordingIds?: string[]):
        JOIN knowledge_captures kc ON kc.id = re.capture_id
        LEFT JOIN audio_profiles ap ON ap.recording_id = kc.source_recording_id
        LEFT JOIN transcripts t ON t.recording_id = kc.source_recording_id
-       ${filter}`,
-    recordingIds ?? []
-  )
-  type Next = Pick<RecordingEvaluation, 'stars' | 'starLevel' | 'starsConfidence' | 'kind' | 'kindConfidence' | 'context' | 'contextConfidence'>
-  const updates: Array<{ captureId: string; next: Next | null }> = []
-  for (const row of rows) {
+       WHERE re.capture_id = ?`, [candidate.capture_id])
+    if (!row) continue
     const evidence = { audioCategory: row.audio_category, transcriptValidity: row.validity_status }
     if (row.model === RULES_MODEL) {
       const stale = row.version > 0 || row.star_level !== null || row.kind !== null || row.context !== null

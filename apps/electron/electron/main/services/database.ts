@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3'
+import { mainThreadBudget, yieldToEventLoop } from './event-loop'
 import { RECORDING_AUDIO_EXTENSIONS } from '../../../src/shared/audio-extensions'
 import { existsSync, readdirSync, readFileSync } from 'fs'
 import { dirname, join, normalize, resolve as resolvePath } from 'path'
@@ -5312,7 +5313,7 @@ export function isRecordingProcessable(recordingId: string): boolean {
  * Cross-reference (/simplify S-5): the graph ingest (knowledge-graph-service.ts
  * ingestFromDbTranscripts) composes the SAME two exclusions differently — its
  * base query filters `COALESCE(r.personal,0)=0 AND r.deleted_at IS NULL`
- * directly, then layers value-exclusion on top via the pre-filter Set /
+ * directly, then layers value-exclusion on top via the SQL candidate snapshot /
  * point-read pair above, rather than unioning everything into one Set like
  * this function does for RAG. Same net effect (both exclusions always apply
  * either way); this is a deliberate difference in composition, not drift.
@@ -5579,24 +5580,44 @@ export function getExcludedRecordingIds(): RecordingExclusion {
  * keep capture). Fails CLOSED by construction: a DB error throws to the caller,
  * which aborts the run (zero provider calls) rather than defaulting open.
  */
-export function getFailedTranscriptsForReanalysis(
+export async function getFailedTranscriptsForReanalysis(
   limit: number
-): Array<{ recording_id: string; full_text: string }> {
-  return queryAll<{ recording_id: string; full_text: string }>(
-    `SELECT t.recording_id AS recording_id, t.full_text AS full_text
-       FROM transcripts t JOIN recordings r ON r.id = t.recording_id
+): Promise<Array<{ recording_id: string; full_text: string }>> {
+  const eligibility = `FROM transcripts t JOIN recordings r ON r.id = t.recording_id
       WHERE (t.summary IS NULL OR t.summary = 'Analysis failed' OR t.title_suggestion IS NULL)
-        AND t.full_text IS NOT NULL AND TRIM(t.full_text) != ''
         AND r.deleted_at IS NULL AND COALESCE(r.personal, 0) = 0
         AND NOT EXISTS (
           SELECT 1 FROM knowledge_captures kc
            WHERE kc.source_recording_id = t.recording_id
              AND kc.deleted_at IS NULL
-             AND ${VALUE_EXCLUSION_PREDICATE})
-      ORDER BY t.created_at DESC
-      LIMIT ?`,
-    [...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS, limit]
-  )
+             AND ${VALUE_EXCLUSION_PREDICATE})`
+  // Snapshot through the primary-key index, then inspect one row per time slice.
+  // A single filtered/sorted SELECT still visits every wide transcript page.
+  const ids = queryAll<{ id: string }>('SELECT id FROM transcripts')
+  const candidates: Array<{ id: string; created_at: string }> = []
+  const checkpoint = mainThreadBudget('FailedAnalysisCandidates')
+  for (const candidate of ids) {
+    await checkpoint()
+    const row = queryOne<{ id: string; created_at: string }>(
+      `SELECT t.id, t.created_at ${eligibility} AND t.id = ?`,
+      [...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS, candidate.id]
+    )
+    if (row) candidates.push(row)
+  }
+  candidates.sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''))
+  const rows: Array<{ recording_id: string; full_text: string }> = []
+  for (const candidate of candidates) {
+    if (limit >= 0 && rows.length >= limit) break
+    await checkpoint()
+    // Fresh gates after every yield; blank text must not consume the eligible limit.
+    const row = queryOne<{ recording_id: string; full_text: string }>(
+      `SELECT t.recording_id, t.full_text ${eligibility}
+        AND t.id = ? AND t.full_text IS NOT NULL AND TRIM(t.full_text) != ''`,
+      [...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS, candidate.id]
+    )
+    if (row) rows.push(row)
+  }
+  return rows
 }
 
 /** All knowledge_capture ids owned by a recording (via source link or migration). */
@@ -7095,10 +7116,12 @@ export function retireGeneratedContentForNoSpeech(recordingId: string): void {
  * never re-touches rows already 'complete', and a second run heals nothing.
  * Returns the number of rows healed.
  */
-export function healRecordingStatusFromTranscripts(): number {
+export function healRecordingStatusFromTranscripts(recordingIds?: readonly string[]): number {
+  if (recordingIds?.length === 0) return 0
+  const scope = recordingIds ? ` AND r.id IN (${recordingIds.map(() => "?").join(",")})` : ""
   const before = queryOne<{ n: number }>(
     `SELECT COUNT(*) AS n FROM recordings r
-       WHERE r.status IS NOT 'complete'
+       WHERE r.status IS NOT 'complete' ${scope}
          AND r.status IS NOT 'deleted'
          AND r.deleted_at IS NULL
          AND EXISTS (
@@ -7106,14 +7129,14 @@ export function healRecordingStatusFromTranscripts(): number {
             WHERE t.recording_id = r.id
               AND t.full_text IS NOT NULL
               AND TRIM(t.full_text) != ''
-         )`
+         )`, recordingIds ? [...recordingIds] : []
   )
   const count = before?.n ?? 0
   if (count === 0) return 0
 
   run(
     `UPDATE recordings SET status = 'complete'
-       WHERE status IS NOT 'complete'
+       WHERE status IS NOT 'complete' ${scope.replaceAll('r.id', 'id')}
          AND status IS NOT 'deleted'
          AND deleted_at IS NULL
          AND EXISTS (
@@ -7121,9 +7144,9 @@ export function healRecordingStatusFromTranscripts(): number {
             WHERE t.recording_id = recordings.id
               AND t.full_text IS NOT NULL
               AND TRIM(t.full_text) != ''
-         )`
+         )`, recordingIds ? [...recordingIds] : []
   )
-  console.log(`[DB] healRecordingStatusFromTranscripts: advanced ${count} recording(s) to status='complete'`)
+  if (!recordingIds) console.log(`[DB] healRecordingStatusFromTranscripts: advanced ${count} recording(s) to status='complete'`)
   return count
 }
 
@@ -7793,6 +7816,12 @@ export function createProcessingRun(input: CreateProcessingRunInput): Processing
       input.parentRunIds?.length ? JSON.stringify(input.parentRunIds) : null
     ]
   )
+  // Publish the durable ledger stage only to a running queue subscriber.
+  const bus = getEventBus()
+  if (bus.listenerCount('processing:stage-started') > 0) bus.emitDomainEvent({
+    type: 'processing:stage-started', timestamp: startedAt,
+    payload: {recordingId: input.recordingId, stage: input.stage, runId: id}
+  })
   return queryOne<ProcessingRun>('SELECT * FROM processing_runs WHERE id = ?', [id])!
 }
 
@@ -8058,24 +8087,23 @@ export async function backfillTranscriptIntegrity(
   // In batches, yielding between them: the first launch after v58 labels every
   // transcript in the library, and doing all ~2,000 in one loop froze the main
   // thread for 2.2 s (measured 24-sep, startup benchmark).
-  const batchSize = options.batchSize ?? 100
-  const counts = { checked: 0, ok: 0, suspect: 0, broken: 0 }
-  const seen = new Set<string>()
-  for (;;) {
-    const rows = queryAll<{ id: string; recording_id: string; speakers: string | null; integrity_json: string | null }>(
-      `SELECT t.id, t.recording_id, t.speakers, t.integrity_json FROM transcripts t
-         JOIN recordings r ON r.id = t.recording_id
-        WHERE r.deleted_at IS NULL
-          AND (t.integrity_version IS NULL OR t.integrity_version < ?)
-        LIMIT ?`,
-      [INTEGRITY_VERSION, batchSize]
-    )
-    // A row the update could not move out of this query would come back
-    // forever; stop when a batch holds nothing new.
-    const fresh = rows.filter((row) => !seen.has(row.id))
-    if (fresh.length === 0) break
-    for (const row of fresh) {
-      seen.add(row.id)
+  const release = acquireOrganizationCheckpointBudget()
+  try {
+    // A metadata UPDATE still rewrites a wide transcript row. Give IPC a turn
+    // after each committed row even when the assessment itself was inexpensive.
+    const batchSize = options.batchSize ?? 1
+    const counts = { checked: 0, ok: 0, suspect: 0, broken: 0 }
+    const checkpoint = mainThreadBudget('TranscriptIntegrity')
+    const candidates = queryAll<{ id: string }>('SELECT id FROM transcripts')
+    let processed = 0
+    for (const candidate of candidates) {
+      await checkpoint()
+      const row = queryOne<{ id: string; recording_id: string; speakers: string | null; integrity_json: string | null }>(
+        `SELECT t.id, t.recording_id, t.speakers, t.integrity_json FROM transcripts t
+           JOIN recordings r ON r.id = t.recording_id
+          WHERE t.id = ? AND r.deleted_at IS NULL
+            AND (t.integrity_version IS NULL OR t.integrity_version < ?)`, [candidate.id, INTEGRITY_VERSION])
+      if (!row) continue
       const integrity = assessTranscriptIntegrity(
         row.speakers,
         integrityAudioSeconds(row.recording_id),
@@ -8098,17 +8126,20 @@ export async function backfillTranscriptIntegrity(
       )
       counts.checked++
       counts[integrity.status]++
+      if (++processed % batchSize === 0) {
+        await yieldToEventLoop()
+        checkpoint.reset()
+      }
     }
-    await new Promise<void>((resolve) => setImmediate(resolve))
-  }
-  if (counts.checked > 0) {
-    saveDatabase()
-    console.log(
-      `[transcript-integrity] checked ${counts.checked} transcript(s): ` +
-        `${counts.ok} ok, ${counts.suspect} suspect, ${counts.broken} broken`
-    )
-  }
-  return counts
+    if (counts.checked > 0) {
+      saveDatabase()
+      console.log(
+        `[transcript-integrity] checked ${counts.checked} transcript(s): ` +
+          `${counts.ok} ok, ${counts.suspect} suspect, ${counts.broken} broken`
+      )
+    }
+    return counts
+  } finally { release() }
 }
 
 /**
@@ -8338,6 +8369,7 @@ export function getQueueItems(status?: string): (QueueItem & { filename?: string
 const APP_SESSION_STARTED_AT_ISO = new Date().toISOString()
 
 export type ActionableQueueItem = QueueItem & {
+  stage?: string
   filename?: string
   date_recorded?: string
   /** 1 when a failed row was stamped before this app session started. */
@@ -8350,6 +8382,10 @@ export function getActionableQueueItems(): ActionableQueueItem[] {
   // Pending/processing rows always show; the processor reads getQueueItems.
   return queryAll<ActionableQueueItem>(`
     SELECT tq.*, r.filename, r.date_recorded,
+      (SELECT pr.stage FROM processing_runs pr
+        WHERE pr.recording_id = tq.recording_id AND pr.status = 'running'
+          AND datetime(pr.started_at) >= datetime(tq.started_at)
+        ORDER BY pr.started_at DESC, pr.rowid DESC LIMIT 1) AS stage,
       CASE
         WHEN tq.status = 'failed'
           AND datetime(COALESCE(tq.completed_at, tq.started_at, tq.created_at)) < datetime(?)
@@ -8393,7 +8429,7 @@ export function updateQueueItem(id: string, status: string, errorMessage?: strin
        WHERE id = ?`,
       [status, id]
     )
-  } else if (status === 'completed' || status === 'failed') {
+  } else if (status === 'completed' || status === 'failed' || status === 'cancelled') {
     run('UPDATE transcription_queue SET status = ?, completed_at = CURRENT_TIMESTAMP, error_message = ? WHERE id = ?', [
       status,
       errorMessage ?? null,

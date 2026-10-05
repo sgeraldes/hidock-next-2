@@ -68,7 +68,7 @@ export interface RepairResult {
 // Shared parser (single source of truth) — re-exported here so existing
 // consumers of this module keep working.
 import { parseHiDockFilenameDate } from './hidock-filename'
-import { autoLinkRecordingsToMeetings } from './org-reconciler'
+import { autoLinkRecordingsToMeetingsYielding } from './org-reconciler'
 export { parseHiDockFilenameDate } from './hidock-filename'
 
 /**
@@ -571,7 +571,7 @@ class IntegrityService {
       // that arrived with the copy time) get their meeting link now, not on
       // some later calendar sync.
       try {
-        const linked = autoLinkRecordingsToMeetings()
+        const linked = await autoLinkRecordingsToMeetingsYielding()
         if (linked > 0) {
           console.log(`[IntegrityService] Auto-linked ${linked} recording(s) after date repairs`)
         }

@@ -59,6 +59,11 @@ vi.mock('../recording-eligibility', () => ({
 
 let dbInstance: import('sql.js').Database | null = null
 vi.mock('../database', () => ({
+  acquireOrganizationCheckpointBudget: () => () => {},
+  queryOne: (sql: string, params: string[]) => {
+    const stmt = dbInstance!.prepare(sql)
+    try { stmt.bind(params); return stmt.step() ? stmt.getAsObject() : undefined } finally { stmt.free() }
+  },
   getDatabase: () => dbInstance,
   getDatabasePath: () => join(CACHE_DIR, 'test.db'),
   isRecordingProcessable: () => true,
@@ -157,6 +162,15 @@ describe('VectorStore provider partitions', () => {
       ['gemini-api', first],
       ['local-onnx-embed', second],
     ])
+  })
+
+  it('keeps freshly indexed vectors compact like restored vectors', async () => {
+    const store = await freshStore()
+    await store.indexTranscript('transcript about action items and deadlines', { recordingId: 'rec-compact' })
+    const hits = await store.search('action items', 5)
+    expect(hits.length).toBeGreaterThan(0)
+    expect(hits[0].document.embedding).toBeInstanceOf(Float32Array)
+    expect(Array.from(hits[0].document.embedding)).toEqual([1, 0, 0])
   })
 
   it('search() scores only the ACTIVE partition — switch hides, switch back restores', async () => {
@@ -264,10 +278,12 @@ describe('VectorStore provider partitions', () => {
     const store = await freshStore()
     await store.indexTranscript('cache me please', { recordingId: 'rec-cache' })
 
-    // let scheduleCacheWrite flush (setImmediate + file write)
-    for (let i = 0; i < 100 && !existsSync(CACHE_FILE); i++) {
-      await new Promise((r) => setTimeout(r, 10))
-    }
+    // Indexing now yields: do not rely on racing initialize's empty cache write.
+    // Publish a boot cache from the persisted corpus, and await its real completion.
+    await store.waitForIdle()
+    const publisher = createStore()
+    await publisher.initialize()
+    await publisher.waitForIdle()
     expect(existsSync(CACHE_FILE)).toBe(true)
 
     const store2 = createStore()

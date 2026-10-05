@@ -219,7 +219,7 @@ function lowerBound(values: number[], target: number): number {
   return lo
 }
 
-export function autoLinkRecordingsToMeetings(): number {
+export function autoLinkRecordingsToMeetings(recordingIds?: string[]): number {
   // Exclude rows the user forced standalone — their choice must survive every
   // reconcile pass, even after the preassignment row is consumed.
   const recordings = queryAll<RecordingRow>(
@@ -228,7 +228,9 @@ export function autoLinkRecordingsToMeetings(): number {
      WHERE meeting_id IS NULL AND date_recorded IS NOT NULL
        AND deleted_at IS NULL AND COALESCE(personal, 0) = 0
        AND COALESCE(transcription_status, 'none') != 'no_speech'
-       AND (correlation_method IS NULL OR correlation_method != '${STANDALONE_METHOD}')`
+       AND (correlation_method IS NULL OR correlation_method != '${STANDALONE_METHOD}')
+       ${recordingIds ? `AND id IN (${recordingIds.map(() => '?').join(',')})` : ''}`,
+    recordingIds ?? []
   )
   if (recordings.length === 0) return 0
 
@@ -381,7 +383,7 @@ export function autoLinkRecordingsToMeetings(): number {
     }
   })
 
-  if (linked > 0 || standaloneMarks.length > 0 || declinedBridgeCount > 0) {
+  if (!recordingIds && (linked > 0 || standaloneMarks.length > 0 || declinedBridgeCount > 0)) {
     console.log(
       `[OrgReconciler] Auto-linked ${linked} recordings ` +
       `(${preassignUpdates.length} pre-assigned, ${overlapUpdates.length} time-overlap, ` +
@@ -2070,6 +2072,35 @@ async function runOrganizationBatches(name: string, work: () => Generator<void>)
   }
 }
 
+async function healRecordingStatusYielding(): Promise<void> {
+  let healed = 0
+  await runOrganizationBatches('status-self-heal', function* () {
+    const ids = queryAll<{id:string}>("SELECT id FROM recordings WHERE status IS NOT 'complete' AND status IS NOT 'deleted' AND deleted_at IS NULL").map(row => row.id)
+    for (let offset = 0; offset < ids.length; offset += ORG_BATCH_SIZE) {
+      healed += healRecordingStatusFromTranscripts(ids.slice(offset, offset + ORG_BATCH_SIZE))
+      yield
+    }
+  })
+  if (healed) console.log(`[OrgReconciler] Advanced ${healed} recording(s) to complete`)
+}
+
+/** Fresh candidate reads per committed slice; explicit preassignments stay atomic. */
+export async function autoLinkRecordingsToMeetingsYielding(): Promise<number> {
+  let linked = 0
+  await runOrganizationBatches('recording-auto-link', function* () {
+    const ids = queryAll<{id:string}>("SELECT id FROM recordings WHERE meeting_id IS NULL AND deleted_at IS NULL").map(r => r.id)
+    // Matching visits the calendar corpus for every candidate, so use a smaller
+    // committed slice than the simple organization metadata repairs.
+    const batchSize = 8
+    for (let offset = 0; offset < ids.length; offset += batchSize) {
+      linked += autoLinkRecordingsToMeetings(ids.slice(offset, offset + batchSize))
+      yield
+    }
+  })
+  if (linked) console.log(`[OrgReconciler] Auto-linked ${linked} recordings in bounded batches`)
+  return linked
+}
+
 export async function repairEscapedMeetingTextYielding(): Promise<number> {
   const totals = { repaired: 0 }
   await runOrganizationBatches('text-repair', () => repairMeetingTextBatches(totals))
@@ -2167,7 +2198,7 @@ export const RECONCILE_STEPS: readonly ReconcileStep[] = [
     run: mergeDuplicateMeetingOccurrences
   },
   { name: 'recording-merge', failure: 'duplicate recording merge failed', run: mergeDuplicateRecordings, runYielding: mergeDuplicateRecordingsYielding },
-  { name: 'recording-auto-link', failure: 'recording auto-link failed', run: autoLinkRecordingsToMeetings },
+  { name: 'recording-auto-link', failure: 'recording auto-link failed', run: autoLinkRecordingsToMeetings, runYielding: autoLinkRecordingsToMeetingsYielding },
   // Before the contact steps, so the attendees it copies become contacts in the same pass.
   {
     name: 'outlook-twin-attendees',
@@ -2190,7 +2221,8 @@ export const RECONCILE_STEPS: readonly ReconcileStep[] = [
     name: 'status-self-heal',
     failure: 'recording status self-heal failed',
     // Called through an arrow so the import is read when the step runs, not when the module loads.
-    run: () => healRecordingStatusFromTranscripts()
+    run: () => healRecordingStatusFromTranscripts(),
+    runYielding: healRecordingStatusYielding
   }
 ]
 

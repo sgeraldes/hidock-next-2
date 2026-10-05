@@ -266,7 +266,7 @@ vi.mock('../value-classification', async (importOriginal) => {
 })
 
 vi.mock('../event-bus', () => ({
-  getEventBus: () => ({ emitDomainEvent: mockEmitDomainEvent })
+  getEventBus: () => ({ emitDomainEvent: mockEmitDomainEvent, onDomainEvent: vi.fn(() => vi.fn()) })
 }))
 
 vi.mock('../meeting-wiki', () => ({ exportMeetingWiki: vi.fn(() => null) }))
@@ -938,6 +938,35 @@ describe('transcribeRecording — the transcription stage records what the engin
   afterEach(() => {
     mockIsRecordingEligible.mockReset()
     mockGeminiEngineImpl = engineNotUsed
+  })
+
+  it('Stop aborts the in-flight provider and saves no partial transcript', async () => {
+    const { getQueueItems, updateQueueItem } = await import('../database')
+    const { processQueueManually, cancelTranscription } = await import('../transcription')
+    let status = 'pending'
+    const queueItem = { id:'q-stop', recording_id:'rec-tx', created_at:'2026-10-05', status, retry_count:0 }
+    vi.mocked(getQueueItems).mockImplementation((wanted) => wanted === status ? [{...queueItem,status}] as any : [])
+    vi.mocked(updateQueueItem).mockImplementation((_id, next) => { status = next })
+    mockIsRecordingEligible.mockReturnValue(true)
+    let signal: AbortSignal | undefined
+    mockGeminiEngineImpl = async function* (_audio: unknown, options: any) {
+      signal = options.signal
+      yield {speaker:'Speaker 1',startTime:0,endTime:1,text:'First partial response'}
+      await new Promise((_resolve, reject) => signal!.addEventListener('abort', () => reject(signal!.reason), {once:true}))
+    }
+    try {
+      const work = processQueueManually()
+      await vi.waitFor(() => expect(signal).toBeDefined())
+      cancelTranscription('rec-tx')
+      await work
+      expect(signal!.aborted).toBe(true)
+      expect(updateQueueItem).toHaveBeenCalledWith('q-stop', 'cancelled', 'Stopped by you')
+      expect(mockInsertTranscript).not.toHaveBeenCalled()
+      expect(mockGenerateContent).not.toHaveBeenCalled()
+    } finally {
+      vi.mocked(getQueueItems).mockReturnValue([])
+      vi.mocked(updateQueueItem).mockReset()
+    }
   })
 
   it('completes the run with the tokens of every response, the discarded one included, next to the provider timeline', async () => {

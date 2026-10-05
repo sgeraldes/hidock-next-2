@@ -1,3 +1,4 @@
+import { getEventBus } from '../event-bus'
 // @vitest-environment node
 
 /**
@@ -355,6 +356,17 @@ describe('Database Service', () => {
     it('returns an empty array when no queue items exist', () => {
       expect(getQueueItems()).toEqual([])
     })
+    it('restores the actual running stage from processing_runs after a renderer reload', () => {
+      seedRecording('rec-stage')
+      const id = addToQueue('rec-stage')
+      updateQueueItem(id, 'processing')
+      const event = vi.fn()
+      const off = getEventBus().onDomainEvent('processing:stage-started', event)
+      createProcessingRun({ recordingId: 'rec-stage', stage: 'diarization', provider: 'pyannote' })
+      off()
+      expect(event).toHaveBeenCalledWith(expect.objectContaining({payload: expect.objectContaining({recordingId:'rec-stage',stage:'diarization'})}))
+      expect(getActionableQueueItems().find((row) => row.id === id)?.stage).toBe('diarization')
+    })
 
     it('returns only actionable rows for the renderer projection', () => {
       seedRecording('rec-pending')
@@ -510,14 +522,15 @@ describe('Database Service', () => {
       expect(row?.error_message).toBe('API rate limit exceeded')
     })
 
-    it('only sets status for other values (e.g. "cancelled")', () => {
+    it('retains the cancellation reason and terminal time', () => {
       seedRecording('rec-1')
       const id = addToQueue('rec-1')
-      updateQueueItem(id, 'cancelled')
+      updateQueueItem(id, 'cancelled', 'Stopped by you')
       const row = queueRow(id)
       expect(row?.status).toBe('cancelled')
       expect(row?.started_at).toBeNull()
-      expect(row?.completed_at).toBeNull()
+      expect(row?.completed_at).not.toBeNull()
+      expect(row?.error_message).toBe('Stopped by you')
     })
   })
 
