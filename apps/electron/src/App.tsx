@@ -164,7 +164,7 @@ function App(): React.ReactElement {
           <Route
             path="/today"
             element={
-              <ErrorBoundary resetKeys={[location.key]}>
+              <ErrorBoundary resetKeys={[location]}>
                 <FeatureRoute feature="today">
                   <Suspense fallback={<LoadingSpinner message="Loading your day..." />}>
                     <Today />
@@ -176,7 +176,7 @@ function App(): React.ReactElement {
           <Route
             path="/calendar"
             element={
-              <ErrorBoundary resetKeys={[location.key]}>
+              <ErrorBoundary resetKeys={[location]}>
                 <FeatureRoute feature="calendar">
                   <Suspense fallback={<LoadingSpinner message="Loading calendar..." />}>
                     <Calendar />
@@ -188,7 +188,7 @@ function App(): React.ReactElement {
           <Route
             path="/meeting/:id"
             element={
-              <ErrorBoundary resetKeys={[location.key]}>
+              <ErrorBoundary resetKeys={[location]}>
                 <FeatureRoute feature="calendar">
                   <Suspense fallback={<LoadingSpinner message="Loading meeting..." />}>
                     <MeetingDetail />
@@ -200,7 +200,7 @@ function App(): React.ReactElement {
           <Route
             path="/assistant"
             element={
-              <ErrorBoundary resetKeys={[location.key]}>
+              <ErrorBoundary resetKeys={[location]}>
                 <FeatureRoute feature="assistant">
                   <Suspense fallback={<LoadingSpinner message="Loading assistant..." />}>
                     <Chat />
@@ -217,7 +217,7 @@ function App(): React.ReactElement {
           <Route
             path="/notes"
             element={
-              <ErrorBoundary resetKeys={[location.key]}>
+              <ErrorBoundary resetKeys={[location]}>
                 <Suspense fallback={<LoadingSpinner message="Loading notes..." />}>
                   <Notes />
                 </Suspense>
@@ -227,7 +227,7 @@ function App(): React.ReactElement {
           <Route
             path="/explore"
             element={
-              <ErrorBoundary resetKeys={[location.key]}>
+              <ErrorBoundary resetKeys={[location]}>
                 <FeatureRoute feature="explore">
                   <Suspense fallback={<LoadingSpinner message="Loading explore..." />}>
                     <Explore />
@@ -239,7 +239,7 @@ function App(): React.ReactElement {
           <Route
             path="/sync"
             element={
-              <ErrorBoundary resetKeys={[location.key]}>
+              <ErrorBoundary resetKeys={[location]}>
                 <FeatureRoute feature="device-sync">
                   <Suspense fallback={<LoadingSpinner message="Loading device sync..." />}>
                     <Device />
@@ -251,7 +251,7 @@ function App(): React.ReactElement {
           <Route
             path="/library"
             element={
-              <ErrorBoundary resetKeys={[location.key]}>
+              <ErrorBoundary resetKeys={[location]}>
                 <Suspense fallback={<LoadingSpinner message="Loading library..." />}>
                   <Library />
                 </Suspense>
@@ -261,7 +261,7 @@ function App(): React.ReactElement {
           <Route
             path="/people"
             element={
-              <ErrorBoundary resetKeys={[location.key]}>
+              <ErrorBoundary resetKeys={[location]}>
                 <FeatureRoute feature="people-projects">
                   <Suspense fallback={<LoadingSpinner message="Loading people..." />}>
                     <People />
@@ -273,7 +273,7 @@ function App(): React.ReactElement {
           <Route
             path="/person/:id"
             element={
-              <ErrorBoundary resetKeys={[location.key]}>
+              <ErrorBoundary resetKeys={[location]}>
                 <FeatureRoute feature="people-projects">
                   <Suspense fallback={<LoadingSpinner message="Loading person details..." />}>
                     <PersonDetail />
@@ -285,7 +285,7 @@ function App(): React.ReactElement {
           <Route
             path="/projects"
             element={
-              <ErrorBoundary resetKeys={[location.key]}>
+              <ErrorBoundary resetKeys={[location]}>
                 <FeatureRoute feature="people-projects">
                   <Suspense fallback={<LoadingSpinner message="Loading projects..." />}>
                     <Projects />
@@ -297,7 +297,7 @@ function App(): React.ReactElement {
           <Route
             path="/actionables"
             element={
-              <ErrorBoundary resetKeys={[location.key]}>
+              <ErrorBoundary resetKeys={[location]}>
                 <FeatureRoute feature="meeting-intelligence">
                   <Suspense fallback={<LoadingSpinner message="Loading actionables..." />}>
                     <Actionables />
@@ -309,7 +309,7 @@ function App(): React.ReactElement {
           <Route
             path="/settings/:section?"
             element={
-              <ErrorBoundary resetKeys={[location.key]}>
+              <ErrorBoundary resetKeys={[location]}>
                 <Suspense fallback={<LoadingSpinner message="Loading settings..." />}>
                   <Settings />
                 </Suspense>
@@ -319,7 +319,7 @@ function App(): React.ReactElement {
           <Route
             path="/context-graph"
             element={
-              <ErrorBoundary resetKeys={[location.key]}>
+              <ErrorBoundary resetKeys={[location]}>
                 <FeatureRoute feature="context-graph">
                   <Suspense fallback={<LoadingSpinner message="Loading context graph..." />}>
                     <ContextGraph />
