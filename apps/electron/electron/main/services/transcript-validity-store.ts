@@ -95,7 +95,9 @@ type SpeechEvidence = Pick<ValidityInput, 'diarizedSegments' | 'vadSpeechSeconds
 /** Independent evidence is retained in the ledger, including failed transcription attempts. */
 export function readSpeechEvidence(recordingId: string): SpeechEvidence {
   const vad = queryOne<{ quality_json: string | null }>(
-    "SELECT quality_json FROM processing_runs WHERE recording_id = ? AND stage = 'vad' AND status = 'completed' ORDER BY started_at DESC LIMIT 1", [recordingId])
+    `SELECT quality_json FROM processing_runs WHERE recording_id = ? AND stage = 'vad' AND status = 'completed'
+      AND json_valid(quality_json) AND json_type(quality_json, '$.nonSilentSeconds') IN ('integer', 'real')
+      ORDER BY started_at DESC LIMIT 1`, [recordingId])
   const diarization = queryOne<{ quality_json: string | null }>(
     "SELECT quality_json FROM processing_runs WHERE recording_id = ? AND stage = 'diarization' AND provider = 'pyannote' AND status = 'completed' ORDER BY started_at DESC LIMIT 1", [recordingId])
   const parse = (json: string | null | undefined): Record<string, unknown> => {
@@ -103,12 +105,23 @@ export function readSpeechEvidence(recordingId: string): SpeechEvidence {
   }
   const v = parse(vad?.quality_json)
   const d = parse(diarization?.quality_json)
+  const profile = queryOne<{ sound_seconds: number; duration_seconds: number }>(
+    "SELECT sound_seconds, duration_seconds FROM audio_profiles WHERE recording_id = ? AND category = 'speech'", [recordingId])
+  const provider = queryOne<{ usage_json: string | null }>(
+    `SELECT pr.usage_json FROM processing_runs pr JOIN transcripts t ON t.transcription_run_id = pr.id
+      WHERE t.recording_id = ?`, [recordingId])
+  const traces = parse(provider?.usage_json).providerTimeline
+  const completed = Array.isArray(traces) ? traces.filter(e => e.phase === 'provider-transcription' && e.status === 'completed' && typeof e.elapsedMs === 'number') : []
   const persisted = queryAll<{ start: number; end: number }>(
     `SELECT start, end FROM diarized_segments WHERE recording_id = ? AND run_id =
       (SELECT diarization_run_id FROM transcripts WHERE recording_id = ?) ORDER BY segment_index`, [recordingId, recordingId])
   return {
-    vadSpeechSeconds: typeof v.nonSilentSeconds === 'number' ? v.nonSilentSeconds : null,
-    durationSeconds: typeof v.durationSeconds === 'number' ? v.durationSeconds : null,
+    // Historical recordings predate the VAD ledger. Their independent frame
+    // activity profile retains non-silent seconds; use it only for speech audio,
+    // never transcript timestamps or file duration as a speech estimate.
+    vadSpeechSeconds: typeof v.nonSilentSeconds === 'number' ? v.nonSilentSeconds : profile?.sound_seconds ?? null,
+    durationSeconds: typeof v.durationSeconds === 'number' ? v.durationSeconds : profile?.duration_seconds ?? null,
+    providerSeconds: completed.length ? completed.reduce((sum, e) => sum + e.elapsedMs, 0) / 1000 : null,
     diarizedSegments: persisted.length ? persisted : Array.isArray(d.segments) ? d.segments as Array<{ start: number; end: number }> : undefined
   }
 }

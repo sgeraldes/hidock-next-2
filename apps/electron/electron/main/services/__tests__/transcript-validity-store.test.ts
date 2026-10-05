@@ -19,6 +19,7 @@ paths.cache = join(tmpdir(), `hidock-validity-cache-${process.pid}-${Date.now()}
 vi.mock('../file-storage', () => ({
   getDatabasePath: () => paths.db,
   getCachePath: () => paths.cache,
+  getTranscriptsPath: () => join(paths.cache, 'transcripts'),
 }))
 vi.mock('../config', () => ({
   getConfig: () => ({ transcription: { valueClassificationMinConfidence: 0.6 } }),
@@ -26,7 +27,7 @@ vi.mock('../config', () => ({
 const emitDomainEvent = vi.hoisted(() => vi.fn())
 vi.mock('../event-bus', () => ({ getEventBus: () => ({ emitDomainEvent }) }))
 
-import { initializeDatabase, closeDatabase, run, queryOne, insertTranscript } from '../database'
+import { initializeDatabase, closeDatabase, run, queryOne, insertTranscript, getEligibleRecordingIds } from '../database'
 import {
   backfillTranscriptValidity,
   refreshTranscriptValidity,
@@ -126,6 +127,14 @@ describe('transcript validity store', () => {
 })
 
 describe('a sample of the audio', () => {
+  it('checks historical sparse and empty transcripts without a VAD ledger using the stored speech activity profile', () => {
+    seed('historical-sparse', [[160, 600]])
+    run(`UPDATE transcripts SET speakers = '[{"start":0,"end":10,"text":"hello"}]', full_text = 'hello', word_count = 1
+      WHERE recording_id = 'historical-sparse'`)
+    expect(refreshTranscriptValidity('historical-sparse')?.status).toBe('incomplete')
+    run(`UPDATE transcripts SET speakers = '[]', full_text = '', word_count = 0 WHERE recording_id = 'historical-sparse'`)
+    expect(refreshTranscriptValidity('historical-sparse')?.status).toBe('incomplete')
+  })
   it('uses independent VAD evidence for a sparse stored transcript and a fresh preview', () => {
     seed('rec98', [[160, 600]])
     const lines = JSON.stringify([{ start: 0.9, end: 1010.8, text: 'one two three four five six seven eight nine' },
@@ -149,11 +158,21 @@ describe('a sample of the audio', () => {
       [JSON.stringify([{ start: 0, end: 600, text: 'word '.repeat(17) }])])
     run(`INSERT INTO processing_runs (id, recording_id, stage, provider, tool, execution, status, started_at, quality_json)
       VALUES ('old-vad', 'old-sparse', 'vad', 'hidock-next', 'vad', 'local', 'completed', '2026-10-04', '{"nonSilentSeconds":598}')`)
+    const wikiDir = join(paths.cache, 'transcripts', 'wiki')
+    mkdirSync(wikiDir, { recursive: true })
+    const ownedWiki = join(wikiDir, 'old-sparse.md')
+    const otherWiki = join(wikiDir, 'unrelated.md')
+    writeFileSync(ownedWiki, '---\ngenerator: hidock-meeting-wiki\nwiki_schema: 1\nrecording_id: old-sparse\n---\nBad summary\n')
+    writeFileSync(otherWiki, 'An unrelated document')
     await backfillTranscriptValidity()
     expect(stored('old-sparse')).toMatchObject({ validity_status: 'incomplete', validity_version: 2 })
     expect(queryOne('SELECT full_text, summary, title_suggestion FROM transcripts WHERE recording_id = ?', ['old-sparse']))
       .toEqual({ full_text: 'keep original', summary: null, title_suggestion: null })
     expect(queryOne<{ meeting_id: string | null }>('SELECT meeting_id FROM recordings WHERE id = ?', ['old-sparse'])?.meeting_id).toBeNull()
+    expect(existsSync(ownedWiki)).toBe(false)
+    expect(existsSync(otherWiki)).toBe(true)
+    expect(getEligibleRecordingIds(['old-sparse']).eligible.has('old-sparse')).toBe(false)
+    expect(getEligibleRecordingIds(['old-sparse'], { forTranscription: true }).eligible.has('old-sparse')).toBe(true)
     run(`UPDATE recordings SET meeting_id = 'old-meeting', correlation_method = 'manual' WHERE id = 'old-sparse'`)
     refreshTranscriptValidity('old-sparse')
     expect(queryOne<{ meeting_id: string | null }>('SELECT meeting_id FROM recordings WHERE id = ?', ['old-sparse'])?.meeting_id).toBe('old-meeting')

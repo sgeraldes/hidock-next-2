@@ -41,6 +41,9 @@ const mockGenerateContent = vi.fn(async (..._args: unknown[]) => {
   throw new Error('API rate limit exceeded')
 })
 const mockGeminiTranscribeCall = vi.fn()
+const mockGeminiResult = vi.fn((): any[] | Error | null => null)
+const mockSmallerRetry = vi.fn()
+vi.mock('../transcription-completeness-retry', () => ({ retryInSmallerChunks: (...args: any[]) => mockSmallerRetry(...args) }))
 const mockAnalyzeAudioPreflight = vi.fn(async (
   _filePath?: string,
   _durationSeconds?: number | null
@@ -232,10 +235,12 @@ vi.mock('@google/generative-ai', () => ({
 // @google/generative-ai calls into the package; mocking it here keeps the
 // orchestration tests fast and deterministic.
 vi.mock('@hidock/transcription', () => {
-  // eslint-disable-next-line require-yield -- intentional: async generator that throws before yielding
   const mockGeminiTranscribe = async function* () {
     mockGeminiTranscribeCall()
-    throw new Error('API rate limit exceeded')
+    const result = mockGeminiResult()
+    if (result instanceof Error) throw result
+    if (!result) throw new Error('API rate limit exceeded')
+    for (const segment of result) yield segment
   }
   function GeminiEngine(_options: { apiKey: string; model?: string; language?: string }) {
     return {
@@ -289,6 +294,8 @@ vi.mock('child_process', () => ({
 describe('Transcription Service', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockGeminiResult.mockReset().mockReturnValue(null)
+    mockSmallerRetry.mockReset()
     // clearAllMocks keeps mockReturnValue impls, so re-assert the defaults so an
     // INC-2/INC3 test that flips them cannot leak into others.
     mockIsRecordingProcessable.mockReturnValue(true)
@@ -644,6 +651,36 @@ describe('Transcription Service', () => {
       expect(statuses).toEqual(['processing', 'no_speech'])
     })
 
+    it('records both sparse Gemini attempts and retries only once before holding all derived work', async () => {
+      queueOne('rec-retry', writeMpegClip('retry.wav', 1565), 'gemini')
+      mockAnalyzeAudioPreflight.mockResolvedValue({ status: 'speech_present', durationSeconds: 1565,
+        nonSilentSeconds: 598, nonSilentRatio: 0.38, activityIntervals: [{ start: 0, end: 1565 }] })
+      const text = 'word '.repeat(17).trim()
+      mockGeminiResult.mockReturnValue([{ speaker: 'A', text, startTime: 0.9, endTime: 1010.8 }])
+      mockSmallerRetry.mockResolvedValue({ fullText: text, speakers: JSON.stringify([{ speaker: 'A', text, start: 0.9, end: 1010.8 }]) })
+      await runQueueUntil(() => expect(mockUpdateQueueItem).toHaveBeenCalledWith('queue-rec-retry', 'completed'))
+      expect(mockSmallerRetry).toHaveBeenCalledOnce()
+      expect(mockGenerateContent).not.toHaveBeenCalled()
+      const db = await import('../database')
+      expect(vi.mocked(db.createProcessingRun).mock.calls.filter(([r]) => r.stage === 'transcription')).toHaveLength(2)
+      const runs = vi.mocked(db.completeProcessingRun).mock.calls.filter(([id]) => id === 'run-transcription')
+      expect(runs).toHaveLength(2)
+      expect(runs.every(([, r]) => r?.qualityStatus === 'incomplete')).toBe(true)
+      expect((runs[0][1]?.outputRefs as any).fullText).toContain(text)
+    })
+
+    it('treats an empty Gemini response over sustained speech as incomplete and retries it once', async () => {
+      queueOne('rec-empty', writeMpegClip('empty.wav', 600), 'gemini')
+      mockAnalyzeAudioPreflight.mockResolvedValue({ status: 'speech_present', durationSeconds: 600,
+        nonSilentSeconds: 598, nonSilentRatio: 0.99, activityIntervals: [{ start: 0, end: 600 }] })
+      mockGeminiResult.mockReturnValue([])
+      mockSmallerRetry.mockResolvedValue({ fullText: '', speakers: '[]' })
+      await runQueueUntil(() => expect(mockUpdateQueueItem).toHaveBeenCalledWith('queue-rec-empty', 'completed'))
+      expect(mockSmallerRetry).toHaveBeenCalledOnce()
+      expect(mockInsertTranscript).toHaveBeenCalled()
+      expect(mockGenerateContent).not.toHaveBeenCalled()
+      expect(mockUpdateRecordingStatus).not.toHaveBeenCalledWith('rec-empty', 'no_speech')
+    })
     it('never skips on a PCM measurement, which reads a lying container at a quarter of its length', async () => {
       // An honest 16-bit PCM WAV of 5 s measures as PCM. The skip decision only
       // trusts MPEG frames, so this goes to the transcriber rather than being
@@ -885,6 +922,7 @@ describe('Transcription Service', () => {
       }
       expect(mockInsertTranscript.mock.calls[0][0].summary).toBeUndefined()
     })
+
     function queueLocal(recordingId: string): void {
       mockConfig = {
         transcription: {

@@ -159,7 +159,7 @@ import { analyzeAudioPreflight, type AudioPreflightReport } from './audio-prefli
 import { audioProfileForTranscription } from './audio-profile-store'
 import { isTranscriptUntrusted, syncTrustVerdicts } from './transcript-trust'
 import { previewTranscriptValidity } from './transcript-validity-store'
-import { assessTranscriptValidity, isUnusableValidity } from './transcript-validity'
+import { assessTranscriptValidity, isUnusableValidity, MIN_COMPLETENESS_SPEECH_SECONDS } from './transcript-validity'
 import { retryInSmallerChunks } from './transcription-completeness-retry'
 import { storeDiarizedSegments } from './diarization-store'
 import { readAudioDuration } from './audio-duration'
@@ -2506,7 +2506,12 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
       updateRecordingTranscriptionStatus(recordingId, statusBeforeRun)
       return { status: 'cancelled' }
     }
-    if (e instanceof NoSpeechDetectedError) {
+    if (e instanceof NoSpeechDetectedError && audioPreflight.nonSilentSeconds >= MIN_COMPLETENESS_SPEECH_SECONDS) {
+      // The provider returned no text over sustained independent speech. Treat
+      // this as an incomplete attempt, retry once and preserve the quality failure.
+      rawTranscript = { fullText: '', speakers: '[]', provider: transcriptionProvider === 'local-asr' ? 'local-asr' : transcriptionProvider === 'vibevoice' ? 'vibevoice' : 'gemini',
+        model: transcriptionModel, language: 'unknown' }
+    } else if (e instanceof NoSpeechDetectedError) {
       failProcessingRun(transcriptionRun.id, e.message, true, runUsageFields(transcriptionUsage.total()))
       if (!speakerLinking.available) failProcessingRun(diarizationRun.id, e.message, true)
       await retireNoSpeechGeneratedContent(recordingId)
@@ -2514,11 +2519,12 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
       updateRecordingStatus(recordingId, 'no_speech')
       console.log(`[Transcription] Provider confirmed no intelligible speech for ${recordingId}; downstream AI skipped`)
       return { status: 'no_speech', reason: 'no_speech' }
+    } else {
+      const message = e instanceof Error ? e.message : String(e)
+      failProcessingRun(transcriptionRun.id, message, false, runUsageFields(transcriptionUsage.total()))
+      if (!speakerLinking.available) failProcessingRun(diarizationRun.id, message)
+      throw e
     }
-    const message = e instanceof Error ? e.message : String(e)
-    failProcessingRun(transcriptionRun.id, message, false, runUsageFields(transcriptionUsage.total()))
-    if (!speakerLinking.available) failProcessingRun(diarizationRun.id, message)
-    throw e
   }
   // Reconcile provider turn labels against the local acoustic segmentation.
   // Text and provider timestamps are retained; unknown/unmatched turns are not
@@ -2533,8 +2539,8 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     fileName: recording.filename, segments: JSON.parse(rawTranscript.speakers ?? '[]'),
     envelope: null, audioCategory: 'speech', attendees: 0, integrityStatus: null, accepted: false,
     ...completenessEvidence,
-    providerSeconds: (rawTranscript.providerTimeline ?? []).filter(e => e.phase === 'provider-transcription' && e.status === 'completed')
-      .reduce((sum, e) => sum + (e.elapsedMs ?? 0), 0) / 1000
+    providerSeconds: rawTranscript.providerTimeline?.some(e => e.phase === 'provider-transcription' && e.status === 'completed' && typeof e.elapsedMs === 'number') ? (rawTranscript.providerTimeline ?? []).filter(e => e.phase === 'provider-transcription' && e.status === 'completed')
+      .reduce((sum, e) => sum + (e.elapsedMs ?? 0), 0) / 1000 : null
   })
   let completeness = checkCompleteness()
   if (completeness.status === 'incomplete' && transcriptionProvider === 'gemini' && audioPreflight.durationSeconds > 0) {

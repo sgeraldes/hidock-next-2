@@ -66,9 +66,9 @@ function seedDoubtful(id: string, date: string): void {
     speaker: 'A',
     start: Math.floor(i / 2) * 60,
     end: Math.floor(i / 2) * 60 + 50,
-    text: Array.from({ length: 10 }, (_, w) => `w${w}-${i}`).join(' '),
+    text: Array.from({ length: 20 }, (_, w) => `w${w}-${i}`).join(' '),
   }))
-  insertTranscript({ id: `trans_${id}`, recording_id: id, full_text: 'x', language: 'es', speakers: JSON.stringify(segments), word_count: 200 })
+  insertTranscript({ id: `trans_${id}`, recording_id: id, full_text: 'x', language: 'es', speakers: JSON.stringify(segments), word_count: 400 })
   refreshTranscriptValidity(id)
 }
 

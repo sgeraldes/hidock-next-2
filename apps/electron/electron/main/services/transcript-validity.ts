@@ -216,9 +216,6 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
     return result('audio', [])
   }
   if (input.accepted) return result('valid', [])
-  if (input.integrityStatus === 'broken') {
-    return result('invalid', [{ code: 'integrity', detail: 'The text does not fit this audio (integrity check).' }])
-  }
   const speech = mergeSpeechIntervals(input.diarizedSegments ?? [])
   const speechSeconds = speech.length ? speech.reduce((sum, s) => sum + s.end - s.start, 0)
     : typeof input.vadSpeechSeconds === 'number' && Number.isFinite(input.vadSpeechSeconds) ? Math.max(0, input.vadSpeechSeconds) : null
@@ -247,8 +244,11 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
     const duration = s.end - s.start
     const words = countWords(s.text)
     if (duration > LONG_SEGMENT_SECONDS && words / duration < MIN_LONG_SEGMENT_WORDS_PER_SECOND) {
-      completenessReasons.push({ code: 'sparse_long_segment', detail: `One segment covers ${clock(s.start)} to ${clock(s.end)} with ${words} words.` })
+      completenessReasons.push({ code: 'sparse_long_segment', detail: `One segment covers ${clock(s.start)} to ${clock(s.end)} with ${words} ${words === 1 ? 'word' : 'words'}.` })
     }
+  }
+  if (input.integrityStatus === 'broken') {
+    return result('invalid', [{ code: 'integrity', detail: 'The text does not fit this audio (integrity check).' }, ...completenessReasons])
   }
   if (completenessReasons.length) return result('incomplete', completenessReasons)
   // Doubts settle as doubtful, or as valid when a sample of the audio confirmed
