@@ -3,7 +3,7 @@ import { join } from 'path'
 import { getConfig, getDataPath } from './config'
 import { queryAll, queryOne } from './database'
 import { filterEligibleCaptureIds, filterEligibleRecordingIds, filterEligibleProvenanceRows } from './recording-eligibility'
-import { RetrievalTraceStore, type TraceCandidate, type TraceEvent, type TraceStats } from './retrieval-traces'
+import { RetrievalTraceStore, type StoredTrace, type TraceCandidate, type TraceEvent, type TraceStats } from './retrieval-traces'
 
 let store: RetrievalTraceStore | undefined
 async function eligible(candidate: TraceCandidate): Promise<boolean> {
@@ -63,6 +63,10 @@ export async function syncTraceSettings(): Promise<void> {
     const config = getConfig().chat
     await getStore().setSettings({ recordQueries: config.recordQueries !== false, keepQueryText: config.keepQueryText !== false })
   } catch { /* settings remain usable if telemetry storage fails */ }
+}
+/** Every stored trace whose sources are all still eligible right now. */
+export async function readRetrievalTraces(): Promise<StoredTrace[]> {
+  return getStore().read()
 }
 export async function retrievalTraceStats(): Promise<TraceStats> {
   await syncTraceSettings()

@@ -4,6 +4,10 @@ import { mkdtempSync, rmSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
+/** Traces read back through the eligibility gate, for one consumer. */
+async function visible(consumer: 'chat' | 'explore' | 'brain'): Promise<number> {
+  return (await readRetrievalTraces()).filter(trace => trace.consumer === consumer).length
+}
 const state = vi.hoisted(() => ({ directory: '', keepText: true, recording: true, handlers: {} as Record<string, (...args: any[]) => any> }))
 vi.mock('electron', () => ({
   ipcMain: { handle: (channel: string, handler: (...args: any[]) => any) => { state.handlers[channel] = handler } },
@@ -17,7 +21,7 @@ vi.mock('../../services/rag', () => ({ getRAGService: () => ({
   consumeAssistantAnswer: () => ({ kind: 'non-rag', content: 'main owned answer' }), clearSession: () => {}
 }) }))
 import { initializeDatabase, initializeDatabaseReadOnly, closeDatabase, run, queryOne } from '../../services/database'
-import { recordRetrievalTrace, retrievalTraceStats, closeRetrievalTraces, syncTraceSettings } from '../../services/retrieval-trace-service'
+import { recordRetrievalTrace, readRetrievalTraces, retrievalTraceStats, closeRetrievalTraces, syncTraceSettings } from '../../services/retrieval-trace-service'
 import { registerAssistantHandlers } from '../assistant-handlers'
 import Database from 'better-sqlite3'
 
@@ -36,7 +40,7 @@ afterEach(async () => {
   rmSync(state.directory, { recursive: true })
 })
 describe('answer persistence and privacy at the SQLite/IPC boundary', () => {
-  it('counts a meeting with an eligible recording even when its first recording is personal', async () => {
+  it('shows a meeting with an eligible recording even when its first recording is personal', async () => {
     run("INSERT INTO meetings (id, subject, start_time, end_time) VALUES ('meeting', 'Meeting', '2026-10-01', '2026-10-02')")
     run("INSERT INTO recordings (id, filename, date_recorded, meeting_id, personal) VALUES ('first', 'first.wav', '2026-10-01', 'meeting', 1)")
     run("INSERT INTO recordings (id, filename, date_recorded, meeting_id) VALUES ('second', 'second.wav', '2026-10-01', 'meeting')")
@@ -45,9 +49,9 @@ describe('answer persistence and privacy at the SQLite/IPC boundary', () => {
         channel: 'brain-row', source_kind: 'meeting', source_id: 'meeting', kept: true, sent_to_model: false
       }] })
     await closeRetrievalTraces()
-    expect((await retrievalTraceStats()).consumers.brain).toBe(1)
+    expect(await visible('brain')).toBe(1)
     run("UPDATE recordings SET personal = 1 WHERE id = 'second'")
-    expect((await retrievalTraceStats()).consumers.brain).toBe(0)
+    expect(await visible('brain')).toBe(0)
   })
   it('hides graph nodes when their current recording provenance becomes personal', async () => {
     const { getKnowledgeGraphStore } = await import('../../services/knowledge-graph-service')
@@ -59,11 +63,11 @@ describe('answer persistence and privacy at the SQLite/IPC boundary', () => {
         channel: 'explore', source_kind: 'graph-node', source_id: 'derived-node', kept: true, sent_to_model: false
       }] })
     await closeRetrievalTraces()
-    expect((await retrievalTraceStats()).consumers.explore).toBe(1)
+    expect(await visible('explore')).toBe(1)
     run("UPDATE recordings SET personal = 1 WHERE id = 'graph-recording'")
     closeDatabase()
     initializeDatabaseReadOnly()
-    expect((await retrievalTraceStats()).consumers.explore).toBe(0)
+    expect(await visible('explore')).toBe(0)
   })
   it('resolves Explore graph identities without schema writes against a read-only business database', async () => {
     const { getKnowledgeGraphStore, resolveEntityToNodeId } = await import('../../services/knowledge-graph-service')
@@ -87,16 +91,18 @@ describe('answer persistence and privacy at the SQLite/IPC boundary', () => {
       expect(queryOne("SELECT name FROM sqlite_master WHERE name = 'traces'")).toBeUndefined()
     } finally { db.close() }
   })
-  it('counts eligible requests and hides a source made personal after the trace was recorded', async () => {
+  it('hides a source made personal after the trace was recorded; the stats line still counts it', async () => {
     run("INSERT INTO recordings (id, filename, date_recorded) VALUES ('recording', 'temp.wav', '2026-10-01')")
     recordRetrievalTrace({ trace_id: 'trace', consumer: 'brain', route: '/recordings/:id',
       started_at: new Date().toISOString(), duration_ms: 1, status: 'ok', candidates: [{
         channel: 'brain-row', source_kind: 'recording', source_id: 'recording', kept: true, sent_to_model: false
       }] })
     await closeRetrievalTraces()
-    expect((await retrievalTraceStats()).consumers.brain).toBe(1)
+    expect(await visible('brain')).toBe(1)
     run("UPDATE recordings SET personal = 1 WHERE id = 'recording'")
-    expect((await retrievalTraceStats()).consumers.brain).toBe(0)
+    expect(await visible('brain')).toBe(0)
+    // A count exposes no content, so it is not filtered.
+    expect((await retrievalTraceStats()).consumers.brain).toBe(1)
     state.recording = false
     await syncTraceSettings()
     recordRetrievalTrace({ trace_id: 'disabled', consumer: 'explore', route: 'globalSearch', started_at: new Date().toISOString(), duration_ms: 1, status: 'empty', candidates: [] })
