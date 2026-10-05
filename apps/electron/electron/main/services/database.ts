@@ -35,7 +35,7 @@ export function hasDecisionLabelRecoveryFailed(): boolean {
   return decisionLabelRecoveryFailed
 }
 
-const SCHEMA_VERSION = 72
+const SCHEMA_VERSION = 74
 
 const DECISION_LABELS_DDL = `CREATE TABLE IF NOT EXISTS decision_label_sets (
     id TEXT PRIMARY KEY,
@@ -66,7 +66,28 @@ CREATE TABLE IF NOT EXISTS decision_labels (
 CREATE INDEX IF NOT EXISTS idx_decision_labels_question ON decision_labels(question, labeled_at);
 `
 
+const WITHHELD_METADATA_DDL = `CREATE TABLE IF NOT EXISTS transcript_withheld_metadata (
+  recording_id TEXT PRIMARY KEY,
+  transcript_fingerprint TEXT NOT NULL,
+  values_json TEXT NOT NULL,
+  withheld_at TEXT NOT NULL,
+  validity_version INTEGER NOT NULL,
+  FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
+)`
+
+const DIARIZED_SEGMENTS_DDL = `CREATE TABLE IF NOT EXISTS diarized_segments (
+  recording_id TEXT NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+  run_id TEXT NOT NULL REFERENCES processing_runs(id),
+  segment_index INTEGER NOT NULL CHECK(segment_index >= 0),
+  start REAL NOT NULL CHECK(start >= 0),
+  end REAL NOT NULL CHECK(end > start),
+  voice_label TEXT NOT NULL,
+  PRIMARY KEY(recording_id, segment_index)
+)`
+
 const SCHEMA = `
+${DIARIZED_SEGMENTS_DDL};
+${WITHHELD_METADATA_DDL};
 -- Calendar events from ICS
 CREATE TABLE IF NOT EXISTS meetings (
     id TEXT PRIMARY KEY,
@@ -147,6 +168,7 @@ CREATE TABLE IF NOT EXISTS knowledge_captures (
     -- subjects live on meetings. These fields must never overwrite each other.
     user_title TEXT,
     summary TEXT,
+    summary_source TEXT,
     category TEXT CHECK(category IN ('meeting', 'interview', '1:1', 'brainstorm', 'note', 'other')) DEFAULT 'meeting',
     status TEXT CHECK(status IN ('processing', 'ready', 'enriched')) DEFAULT 'ready',
 
@@ -575,6 +597,7 @@ CREATE TABLE IF NOT EXISTS transcription_queue (
     progress INTEGER DEFAULT 0,
     error_message TEXT,
     provider TEXT,
+    explicit_request INTEGER NOT NULL DEFAULT 0,
     owner_requested INTEGER NOT NULL DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     started_at TEXT,
@@ -3485,10 +3508,30 @@ const MIGRATIONS: Record<number, () => void> = {
     getDatabase().run(DECISION_LABELS_DDL)
   },
   72: () => {
+    // Additive migration; the shared engine creates a verified restore point first.
+    getDatabase().run(DIARIZED_SEGMENTS_DDL)
     const database = getDatabase()
     if (!getTableColumns(database, 'transcription_queue').includes('owner_requested')) {
       database.run('ALTER TABLE transcription_queue ADD COLUMN owner_requested INTEGER NOT NULL DEFAULT 0')
     }
+  },
+  73: () => {
+    getDatabase().run(WITHHELD_METADATA_DDL)
+  },
+  74: () => {
+    // Both released branches used v72 differently. Repair either lineage and
+    // preserve durable owner intent under both compatible queue interfaces.
+    const database = getDatabase()
+    database.run(DIARIZED_SEGMENTS_DDL)
+    database.run(WITHHELD_METADATA_DDL)
+    for (const column of ['explicit_request', 'owner_requested']) {
+      if (!getTableColumns(database, 'transcription_queue').includes(column)) {
+        database.run(`ALTER TABLE transcription_queue ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`)
+      }
+    }
+    database.run(`UPDATE transcription_queue SET
+      explicit_request = CASE WHEN explicit_request = 1 OR owner_requested = 1 THEN 1 ELSE 0 END,
+      owner_requested = CASE WHEN explicit_request = 1 OR owner_requested = 1 THEN 1 ELSE 0 END`)
   },
 }
 
@@ -3954,6 +3997,12 @@ function repairPhase(): void {
     console.warn('[Database] knowledge_captures table unavailable during structural repair; skipping capture repair')
   }
 
+  database.run(WITHHELD_METADATA_DDL)
+  const summaryColumns = getTableColumns(database, 'knowledge_captures')
+  if (summaryColumns.length && !summaryColumns.includes('summary_source')) {
+    database.run('ALTER TABLE knowledge_captures ADD COLUMN summary_source TEXT')
+  }
+
   // Repair transcription_queue (spec-014: retry persistence and real-time progress)
   const queueInfo = database.exec("PRAGMA table_info(transcription_queue)")
   if (queueInfo.length > 0 && queueInfo[0].values) {
@@ -3961,7 +4010,9 @@ function repairPhase(): void {
     const queueRepairs = [
       { name: 'retry_count', def: 'INTEGER DEFAULT 0' },
       { name: 'progress', def: 'INTEGER DEFAULT 0' },
-      { name: 'provider', def: 'TEXT' }
+      { name: 'provider', def: 'TEXT' },
+      { name: 'explicit_request', def: 'INTEGER NOT NULL DEFAULT 0' },
+      { name: 'owner_requested', def: 'INTEGER NOT NULL DEFAULT 0' }
     ]
     for (const col of queueRepairs) {
       if (!queueCols.includes(col.name)) {
@@ -5273,11 +5324,14 @@ export function isRecordingGraphIngestable(recordingId: string): boolean {
   )
   if (!rec) return false
   if (isValueExcludedRecording(recordingId)) return false
-  // A transcript that is invalid, in doubt or incomplete feeds no graph
-  // (validation order, 4-oct-2026); the eligibility boundary says the same.
+  // Gap-only transcripts keep their real content. Density-failed, invalid and
+  // timing doubts retain their graph; the reader boundary uses the same rule.
   const unusable = queryOne<{ x: number }>(
     `SELECT 1 AS x FROM transcripts t WHERE t.recording_id = ?
-        AND t.validity_status IN ('invalid', 'incomplete', 'doubtful') AND t.integrity_accepted_at IS NULL`,
+        AND (t.validity_status = 'invalid' OR
+          (t.validity_status = 'incomplete' AND (NOT json_valid(t.validity_json) OR
+            EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(t.validity_json) THEN t.validity_json ELSE '{}' END, '$.reasons') reason
+              WHERE json_extract(reason.value, '$.code') = 'sparse_speech')))) AND t.integrity_accepted_at IS NULL`,
     [recordingId]
   )
   return !unusable
@@ -5371,12 +5425,15 @@ export interface RecordingEligibility {
 const UNUSABLE_TRANSCRIPT_EXCLUSION = `AND NOT EXISTS (
               SELECT 1 FROM transcripts t
                WHERE t.recording_id = r.id
-                 AND t.validity_status IN ('invalid', 'incomplete', 'doubtful')
+                 AND (t.validity_status = 'invalid' OR
+          (t.validity_status = 'incomplete' AND (NOT json_valid(t.validity_json) OR
+            EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(t.validity_json) THEN t.validity_json ELSE '{}' END, '$.reasons') reason
+              WHERE json_extract(reason.value, '$.code') = 'sparse_speech'))))
                  AND t.integrity_accepted_at IS NULL)`
 
 export function getEligibleRecordingIds(
   candidateIds: Iterable<string>,
-  options: { forTranscription?: boolean; ignoreValueExclusion?: boolean } = {}
+  options: { forTranscription?: boolean; forTextReformat?: boolean; ignoreValueExclusion?: boolean } = {}
 ): RecordingEligibility {
   const unique = [...new Set([...candidateIds].filter((id): id is string => !!id))]
   if (unique.length === 0) return { eligible: new Set<string>(), failClosed: false }
@@ -5396,10 +5453,15 @@ export function getEligibleRecordingIds(
                WHERE kc.source_recording_id = r.id
                  AND kc.deleted_at IS NULL
                  AND ${VALUE_EXCLUSION_PREDICATE})`}
-            ${options.forTranscription ? '' : UNUSABLE_TRANSCRIPT_EXCLUSION}`,
-        options.forTranscription && options.ignoreValueExclusion
-          ? chunk
-          : [...chunk, ...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS]
+            ${options.forTranscription ? '' : options.forTextReformat ? UNUSABLE_TRANSCRIPT_EXCLUSION.replace(
+              'AND t.integrity_accepted_at IS NULL', `AND NOT (t.validity_status = 'doubtful'
+                AND COALESCE(t.integrity_status, '') != 'broken' AND TRIM(COALESCE(t.full_text, '')) != ''
+                AND json_valid(t.validity_json)
+                AND COALESCE(json_array_length(CASE WHEN json_valid(t.validity_json) THEN t.validity_json ELSE '{}' END, '$.reasons'), 0) > 0
+                AND NOT EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(t.validity_json) THEN t.validity_json ELSE '{}' END, '$.reasons') reason
+                  WHERE COALESCE(json_extract(reason.value, '$.code'), '') NOT IN ('no_times', 'audio_not_checked')))
+                AND t.integrity_accepted_at IS NULL`) : UNUSABLE_TRANSCRIPT_EXCLUSION}`,
+        options.forTranscription && options.ignoreValueExclusion ? chunk : [...chunk, ...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS]
       )
       for (const row of rows) eligible.add(row.id)
     }
@@ -8274,20 +8336,19 @@ export interface QueueItem {
   progress: number
   error_message?: string
   provider?: string
+  explicit_request?: number
   owner_requested?: boolean
   created_at: string
   started_at?: string
   completed_at?: string
 }
 
-export function addToQueue(
-  recordingId: string,
-  provider?: string,
-  options: { ownerRequested?: boolean } = {}
-): string {
+export function addToQueue(recordingId: string, provider?: string, request: boolean | { ownerRequested?: boolean } = false): string {
+  const explicitRequest = typeof request === 'boolean' ? request : request.ownerRequested === true
+  // Explicit requests override value only; missing/private/deleted rows and
+  // lookup errors still fail closed at the durable enqueue boundary.
   const { eligible, failClosed } = getEligibleRecordingIds([recordingId], {
-    forTranscription: true,
-    ignoreValueExclusion: options.ownerRequested === true
+    forTranscription: true, ignoreValueExclusion: explicitRequest
   })
   if (failClosed || !eligible.has(recordingId)) return ''
 
@@ -8302,17 +8363,15 @@ export function addToQueue(
     LIMIT 1
   `, [recordingId])
   if (existing) {
-    if (options.ownerRequested === true) {
-      run('UPDATE transcription_queue SET owner_requested = 1 WHERE id = ?', [existing.id])
-    }
+    if (explicitRequest) run('UPDATE transcription_queue SET explicit_request = 1, owner_requested = 1 WHERE id = ?', [existing.id])
     return existing.id
   }
 
   const id = crypto.randomUUID()
   runInTransaction(() => {
     run(
-      'INSERT INTO transcription_queue (id, recording_id, provider, owner_requested) VALUES (?, ?, ?, ?)',
-      [id, recordingId, provider ?? null, options.ownerRequested === true ? 1 : 0]
+      'INSERT INTO transcription_queue (id, recording_id, provider, explicit_request, owner_requested) VALUES (?, ?, ?, ?, ?)',
+      [id, recordingId, provider ?? null, explicitRequest ? 1 : 0, explicitRequest ? 1 : 0]
     )
     // Keep the durable recording projection aligned at the enqueue chokepoint.
     // This covers auto-download, manual, and bulk enqueue paths immediately.
@@ -8404,7 +8463,7 @@ export function updateQueueItem(id: string, status: string, errorMessage?: strin
        WHERE id = ?`,
       [status, id]
     )
-  } else if (status === 'completed' || status === 'failed') {
+  } else if (status === 'completed' || status === 'failed' || status === 'cancelled') {
     run('UPDATE transcription_queue SET status = ?, completed_at = CURRENT_TIMESTAMP, error_message = ? WHERE id = ?', [
       status,
       errorMessage ?? null,

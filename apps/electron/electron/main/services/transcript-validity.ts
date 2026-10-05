@@ -28,7 +28,7 @@
 import { FRAME_SECONDS, LOUD_DB, LOUD_GAIN } from './audio-profile'
 
 /** Bumped when a rule changes, so stored verdicts are recomputed. */
-export const VALIDITY_VERSION = 2
+export const VALIDITY_VERSION = 5
 
 export type ValidityStatus = 'audio' | 'invalid' | 'incomplete' | 'doubtful' | 'valid'
 
@@ -46,6 +46,9 @@ export type ValidityReasonCode =
   | 'no_times'
   | 'audio_not_checked'
   | 'sample_contradicts'
+  | 'sparse_speech'
+  | 'uncovered_speech'
+  | 'sparse_long_segment'
 
 export interface ValidityReason {
   code: ValidityReasonCode
@@ -74,6 +77,11 @@ export interface TranscriptValidity {
     fileSeconds: number | null
     /** Factor applied to the line times (4 for an old WAV whose header lied). */
     timeFactor: number
+    detectedSpeechSeconds?: number | null
+    wordsPerSpeechMinute?: number | null
+    uncoveredDiarizedSpeechShare?: number | null
+    providerSeconds?: number | null
+    providerTimeSuspicious?: boolean
   }
 }
 
@@ -87,6 +95,8 @@ export interface ValiditySegment {
 export interface ValidityInput {
   fileName: string
   segments: ValiditySegment[]
+  fullText?: string | null
+  storedWordCount?: number | null
   /** One level byte per frame (audio-profile-store envelope), or null when there is none. */
   envelope: Uint8Array | null
   /**
@@ -102,6 +112,39 @@ export interface ValidityInput {
   accepted: boolean
   /** A sample of this transcript's audio, transcribed again and compared (transcript-sampler.ts). */
   sample?: 'confirmed' | 'contradicted' | 'inconclusive' | 'incomplete' | null
+  /** Independent acoustic turns, never the provider's transcript timestamps. */
+  diarizedSegments?: Array<{ start: number; end: number }>
+  vadSpeechSeconds?: number | null
+  providerSeconds?: number | null
+  durationSeconds?: number | null
+}
+
+/** Far below normal speech (120-160 wpm), with enough audio to avoid short-clip noise. */
+export const MIN_COMPLETENESS_SPEECH_SECONDS = 120
+export const MIN_WORDS_PER_SPEECH_MINUTE = 30
+/** Missing most independent speech is a failure even when word count looks plausible. */
+export const MAX_UNCOVERED_SPEECH_SHARE = 0.5
+/** A three-minute line with less than one word per ten seconds cannot represent a speech turn. */
+export const LONG_SEGMENT_SECONDS = 180
+export const MIN_LONG_SEGMENT_WORDS_PER_SECOND = 0.1
+/** Diagnostic only: fast cloud inference is possible; timing alone never rejects text. */
+export const SUSPICIOUS_PROVIDER_AUDIO_RATIO = 0.01
+
+export function mergeSpeechIntervals(intervals: Array<{ start: number; end: number }>): Array<{ start: number; end: number }> {
+  const sorted = intervals.filter(s => Number.isFinite(s.start) && Number.isFinite(s.end) && s.start >= 0 && s.end > s.start)
+    .map(s => ({ ...s })).sort((a, b) => a.start - b.start)
+  const merged: Array<{ start: number; end: number }> = []
+  for (const s of sorted) {
+    const last = merged[merged.length - 1]
+    if (last && s.start <= last.end) last.end = Math.max(last.end, s.end)
+    else merged.push(s)
+  }
+  return merged
+}
+
+function clock(seconds: number): string {
+  const n = Math.floor(seconds)
+  return `${Math.floor(n / 60)}:${String(n % 60).padStart(2, '0')}`
 }
 
 // Thresholds, measured on the owner's library on 4-oct-2026 (plan, "The deterministic checks").
@@ -136,8 +179,17 @@ export const MIN_WORDS_PER_SOUND_MINUTE = 90
  * with the sampler, which places its windows where there is audio.
  */
 export function audioFrameTest(env: Uint8Array, unit: 'gain' | 'db' = 'gain'): (frame: number) => boolean {
-  const sorted = Uint8Array.from(env).sort()
-  const floor = sorted[Math.floor(sorted.length * 0.05)]
+  // Bytes have only 256 values: an exact histogram avoids sorting a copy of
+  // every long envelope on the main thread during library backfill.
+  const histogram = new Uint32Array(256)
+  for (const value of env) histogram[value]++
+  const rank = Math.floor(env.length * 0.05)
+  let floor = 0
+  let count = 0
+  for (; floor < 255; floor++) {
+    count += histogram[floor]
+    if (count > rank) break
+  }
   const decoded = unit === 'db'
   const margin = decoded ? FLOOR_MARGIN_DB : FLOOR_MARGIN
   const loud = decoded ? LOUD_DB + 100 : LOUD_GAIN
@@ -153,7 +205,8 @@ function percent(n: number): string {
 }
 
 export function assessTranscriptValidity(input: ValidityInput): TranscriptValidity {
-  const totalWords = input.segments.reduce((sum, s) => sum + countWords(s.text), 0)
+  const totalWords = input.segments.length ? input.segments.reduce((sum, s) => sum + countWords(s.text), 0)
+    : countWords(input.fullText) || Math.max(0, input.storedWordCount ?? 0)
   const speakers = new Set(input.segments.map((s) => s.speaker).filter((s): s is string => !!s)).size
   const measures: TranscriptValidity['measures'] = {
     words: totalWords,
@@ -179,27 +232,64 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
     return result('audio', [])
   }
   if (input.accepted) return result('valid', [])
-  if (input.integrityStatus === 'broken') {
-    return result('invalid', [{ code: 'integrity', detail: 'The text does not fit this audio (integrity check).' }])
+  const speech = mergeSpeechIntervals(input.diarizedSegments ?? [])
+  const speechSeconds = speech.length ? speech.reduce((sum, s) => sum + s.end - s.start, 0)
+    : typeof input.vadSpeechSeconds === 'number' && Number.isFinite(input.vadSpeechSeconds) ? Math.max(0, input.vadSpeechSeconds) : null
+  measures.detectedSpeechSeconds = speechSeconds
+  measures.wordsPerSpeechMinute = speechSeconds ? totalWords * 60 / speechSeconds : null
+  measures.providerSeconds = input.providerSeconds ?? null
+  measures.providerTimeSuspicious = typeof input.providerSeconds === 'number' && input.providerSeconds >= 0 &&
+    !!input.durationSeconds && input.providerSeconds / input.durationSeconds < SUSPICIOUS_PROVIDER_AUDIO_RATIO
+  const completenessReasons: ValidityReason[] = []
+  if (speechSeconds !== null && speechSeconds >= MIN_COMPLETENESS_SPEECH_SECONDS &&
+      totalWords * 60 / speechSeconds < MIN_WORDS_PER_SPEECH_MINUTE) {
+    completenessReasons.push({ code: 'sparse_speech', detail: `${totalWords} words for ${(speechSeconds / 60).toFixed(1)} minutes of detected speech.` })
   }
-  // Doubts settle as doubtful, or as valid when a sample of the audio confirmed
-  // the text. A confirmed transcript keeps its reasons: a compressed clock is
-  // still compressed, and the clock repair reads it.
-  const settle = (reasons: ValidityReason[]): TranscriptValidity =>
-    reasons.length === 0 ? result('valid', []) : input.sample === 'confirmed' ? result('valid', reasons) : result('doubtful', reasons)
-  if (input.sample === 'incomplete') {
-    return result('incomplete', [
-      { code: 'speech_after_the_end', detail: 'Speech goes on after the transcript ends: a sample of the audio after it holds talk.' }
-    ])
+  if (speech.length && speechSeconds && input.segments.some(s => typeof s.start === 'number' && typeof s.end === 'number')) {
+    const coverage = mergeSpeechIntervals(input.segments.filter(s => countWords(s.text) > 0)
+      .map(s => ({ start: s.start ?? NaN, end: s.end ?? NaN })))
+    let covered = 0
+    for (const s of speech) for (const t of coverage) covered += Math.max(0, Math.min(s.end, t.end) - Math.max(s.start, t.start))
+    measures.uncoveredDiarizedSpeechShare = Math.max(0, 1 - covered / speechSeconds)
+    if (measures.uncoveredDiarizedSpeechShare > MAX_UNCOVERED_SPEECH_SHARE) {
+      const missing: Array<{ start: number; end: number }> = []
+      for (const turn of speech) {
+        let cursor = turn.start
+        for (const text of coverage) {
+          if (text.end <= cursor || text.start >= turn.end) continue
+          if (text.start > cursor) missing.push({ start: cursor, end: Math.min(text.start, turn.end) })
+          cursor = Math.max(cursor, Math.min(text.end, turn.end))
+        }
+        if (cursor < turn.end) missing.push({ start: cursor, end: turn.end })
+      }
+      const ranges = missing.map(s => `${clock(s.start)} to ${clock(s.end)}`).join(', ')
+      completenessReasons.push({ code: 'uncovered_speech', detail: `${percent(measures.uncoveredDiarizedSpeechShare)} of detected speech has no transcript segment: ${ranges}.` })
+    }
   }
-  if (input.sample === 'contradicted') {
-    return result('invalid', [
-      { code: 'sample_contradicts', detail: 'A few minutes of the audio, transcribed again, tell a different conversation.' }
-    ])
+  for (const s of input.segments) {
+    if (typeof s.start !== 'number' || typeof s.end !== 'number') continue
+    const duration = s.end - s.start
+    const words = countWords(s.text)
+    if (duration > LONG_SEGMENT_SECONDS && words / duration < MIN_LONG_SEGMENT_WORDS_PER_SECOND) {
+      completenessReasons.push({ code: 'sparse_long_segment', detail: `${clock(s.start)} to ${clock(s.end)} has ${words} ${words === 1 ? 'word' : 'words'}.` })
+    }
   }
-
+  const invalidReasons: ValidityReason[] = []
+  if (input.integrityStatus === 'broken') invalidReasons.push({ code: 'integrity', detail: 'The text does not fit this audio (integrity check).' })
+  if (input.sample === 'contradicted') invalidReasons.push({ code: 'sample_contradicts', detail: 'A few minutes of the audio, transcribed again, tell a different conversation.' })
+  if (input.sample === 'incomplete') completenessReasons.push({ code: 'speech_after_the_end', detail: 'Speech goes on after the transcript ends: a sample of the audio after it holds talk.' })
+  // Independent checks accumulate. Invalid wins over incomplete, then doubt.
+  const settle = (reasons: ValidityReason[]): TranscriptValidity => {
+    const all = [...invalidReasons, ...completenessReasons, ...reasons]
+    return result(invalidReasons.length ? 'invalid' : completenessReasons.length ? 'incomplete'
+      : reasons.length && input.sample !== 'confirmed' ? 'doubtful' : 'valid', all)
+  }
   const reasons: ValidityReason[] = []
   const timed = input.segments.filter((s) => typeof s.start === 'number' && Number.isFinite(s.start))
+
+  if (input.attendees > 0 && speakers > input.attendees + 1) {
+    reasons.push({ code: 'more_speakers_than_invited', detail: `${speakers} speakers in the transcript, ${input.attendees} people invited.` })
+  }
 
   if (timed.length === 0) {
     if (totalWords >= MIN_WORDS) {
@@ -220,13 +310,6 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
     reasons.push({
       code: 'timestamps_consistently_wrong',
       detail: `${percent(measures.timingErrorShare)} of the lines start at a repeated or earlier time.`
-    })
-  }
-
-  if (input.attendees > 0 && speakers > input.attendees + 1) {
-    reasons.push({
-      code: 'more_speakers_than_invited',
-      detail: `${speakers} speakers in the transcript, ${input.attendees} people invited.`
     })
   }
 
@@ -281,12 +364,10 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
     measures.silentShare = placeable ? silent / placeable : 0
 
     if (totalWords >= MIN_WORDS && placeable >= MIN_PLACEABLE_WORDS && measures.silentShare >= INVALID_SILENT_SHARE) {
-      return result('invalid', [
-        {
-          code: 'text_without_audio',
-          detail: `${percent(measures.silentShare)} of the text sits where the recording has no audio at all.`
-        }
-      ])
+      invalidReasons.push({
+        code: 'text_without_audio',
+        detail: `${percent(measures.silentShare)} of the text sits where the recording has no audio at all.`
+      })
     }
     if (totalWords >= MIN_WORDS && placeable >= MIN_PLACEABLE_WORDS && measures.silentShare >= DOUBT_SILENT_SHARE) {
       reasons.push({
@@ -327,13 +408,10 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
               'the dense text suggests a compressed clock and needs sampling.'
           })
         } else {
-          return result('incomplete', [
-            ...reasons,
-            {
-              code: 'speech_after_the_end',
-              detail: `The transcript stops at ${Math.round(end)} s, and ${Math.round(afterSeconds)} s of audio follow it.`
-            }
-          ])
+          completenessReasons.push({
+            code: 'speech_after_the_end',
+            detail: `The transcript stops at ${Math.round(end)} s, and ${Math.round(afterSeconds)} s of audio follow it.`
+          })
         }
       }
     }
@@ -345,4 +423,14 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
 /** A transcript nothing may be built on (summary, categorization, search, people). */
 export function isUnusableValidity(status: string | null | undefined): boolean {
   return status === 'invalid' || status === 'incomplete' || status === 'doubtful'
+}
+
+/** Gap-only text remains useful; density failures cannot support derived content. */
+export function isGapOnlyValidity(validity: TranscriptValidity): boolean {
+  return validity.status === 'incomplete' && !validity.reasons.some(r => r.code === 'sparse_speech')
+}
+
+/** Coordinator: timing doubts and missing spans retain their useful derived content. */
+export function shouldWithholdDerivedContent(validity: Pick<TranscriptValidity, 'status' | 'reasons'>): boolean {
+  return validity.status === 'invalid' || validity.reasons.some(r => r.code === 'sparse_speech')
 }

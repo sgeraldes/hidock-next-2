@@ -99,6 +99,12 @@ export const BOOT_TASK_DEFS: GatedBootTask[] = [
       } catch (e) {
         console.error('[OrgReconciler] error:', e)
       }
+      // Settle invite-count changes in the same boot, before downstream readers.
+      // The Library has already painted; this pass yields between bounded slices.
+      try {
+        const { backfillTranscriptValidity } = await import('./transcript-validity-store')
+        await backfillTranscriptValidity()
+      } catch (e) { console.warn('[TranscriptValidity] post-reconcile check failed:', e) }
       // Learn voices once the attendees are in place (spec 2026-10-03, Phase 2).
       try {
         await runVoiceLearning()

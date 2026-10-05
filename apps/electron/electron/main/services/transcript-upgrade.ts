@@ -33,7 +33,7 @@ import {
   getQueueItems,
   refreshTranscriptIntegrity,
 } from './database'
-import { isRecordingEligible, filterEligibleRecordingIds } from './recording-eligibility'
+import { isRecordingTextReformatEligible as isRecordingEligible, filterTextReformatEligibleRecordingIds as filterEligibleRecordingIds } from './recording-eligibility'
 import { syncTrustVerdicts } from './transcript-trust'
 import { DEFAULT_QUALITY_RULES, qualityRules } from './quality-rules'
 import {

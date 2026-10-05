@@ -638,12 +638,11 @@ export function Library() {
           const localIds = new Set(recordingsRef.current.filter((rec) => hasLocalPath(rec)).map((rec) => rec.id))
           const checked = await reloadVerdicts([...localIds])
           const flagged = [...checked.entries()].filter(([id, t]) => {
-            const label = integrityLabel(t)
-            return localIds.has(id) && (label === 'suspect' || label === 'broken')
+            return localIds.has(id) && matchesIntegrityFilter(t, 'flagged')
           }).length
           if ((result.integrityChecked ?? 0) > 0 && flagged > 0) {
             toast.warning(
-              `${flagged} transcript${flagged === 1 ? ' has' : 's have'} problems in their timing or text`,
+              `${flagged} transcript${flagged === 1 ? ' has' : 's have'} invalid or incomplete transcripts`,
               'Each one is labelled in the list. Filter by Transcript to review them: transcribe again, or accept as is.',
               { duration: 30_000, action: { label: 'Review', onClick: () => setIntegrityFilter('flagged') } }
             )
@@ -1022,12 +1021,15 @@ export function Library() {
     const api = window.electronAPI
     if (!api?.onDomainEvent) return
     const pending = new Set<string>()
+    const pendingMetadata = new Set<string>()
     let timer: ReturnType<typeof setTimeout> | undefined
     const unsubscribe = api.onDomainEvent((event) => {
       if (event?.type === 'audio:profiles-updated' || event?.type === 'evaluation:warnings-updated') {
         void refreshLocal?.()
         for (const id of transcriptsRef.current.keys()) pending.add(id)
       } else if (event?.type === 'transcript:verdicts-updated') {
+        for (const id of event.payload?.metadataChangedIds ?? []) pendingMetadata.add(id)
+        if (pendingMetadata.size > 0) void refreshLocal?.()
         for (const id of event.payload?.recordingIds ?? []) pending.add(id)
       } else return
       if (pending.size === 0) return
@@ -1035,7 +1037,12 @@ export function Library() {
       timer = setTimeout(() => {
         const ids = [...pending]
         pending.clear()
-        void reloadVerdicts(ids).catch((error) => console.warn('[Library] Verdict refresh failed:', error))
+        const metadataIds = [...pendingMetadata]
+        pendingMetadata.clear()
+        void (async () => {
+          if (metadataIds.length > 0) await reloadTranscripts(metadataIds)
+          await reloadVerdicts(ids)
+        })().catch((error) => console.warn('[Library] Verdict refresh failed:', error))
       }, 1500)
     })
     return () => {
@@ -1043,7 +1050,7 @@ export function Library() {
       clearTimeout(timer)
       pending.clear()
     }
-  }, [refreshLocal, reloadVerdicts])
+  }, [refreshLocal, reloadVerdicts, reloadTranscripts])
 
   // How many transcripts each Transcript-filter value matches, over the same
   // population the other facets count.
@@ -1066,7 +1073,6 @@ export function Library() {
 
   // Automatic path to green for everything the current Transcript filter shows.
   const [retranscribeArmed, setRetranscribeArmed] = useState(false)
-  useEffect(() => setRetranscribeArmed(false), [integrityFilter])
 
   // Filter recordings based on scoped set + search, then sort.
   const filteredRecordings = useMemo(() => {
@@ -1231,6 +1237,9 @@ export function Library() {
   // same database id. A filename-qualified key prevents React from retaining a
   // stale sibling DOM node on the same virtual track while the local rebuild
   // corrects the data.
+  const retranscribeScopeKey = filteredRecordings.map(rec => `${rec.id}:${rec.duration ?? 0}`).join('|')
+  useEffect(() => setRetranscribeArmed(false), [integrityFilter, retranscribeScopeKey])
+
   const itemRenderKeys = useMemo(() => {
     const idCounts = new Map<string, number>()
     for (const recording of displayedRecordings) {
@@ -2905,12 +2914,12 @@ export function Library() {
                 </span>
                 {!retranscribeArmed ? (
                   <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setRetranscribeArmed(true)}>
-                    Transcribe {filteredRecordings.length === 1 ? 'it' : `all ${filteredRecordings.length}`} again
+                    Transcribe {filteredRecordings.length === 1 ? 'it' : `all ${filteredRecordings.length}`} again ({formatTranscriptionCost(filteredRecordings.reduce((sum, rec) => sum + (rec.duration || 0), 0))})
                   </Button>
                 ) : (
                   <>
                     <span>
-                      This sends the audio to the transcription provider again:{' '}
+                      Confirm transcription of {filteredRecordings.length} recordings:{' '}
                       {formatTranscriptionCost(filteredRecordings.reduce((sum, rec) => sum + (rec.duration || 0), 0))} for{' '}
                       {Math.round(filteredRecordings.reduce((sum, rec) => sum + (rec.duration || 0), 0) / 60)} minutes.
                     </span>

@@ -72,17 +72,39 @@ describe('manual transcription value override', () => {
     // Retain the original column under another name to model the old schema
     // without discarding test data. v71 had no owner_requested column.
     run('ALTER TABLE transcription_queue RENAME COLUMN owner_requested TO owner_requested_before_migration')
+    run('ALTER TABLE transcription_queue RENAME COLUMN explicit_request TO explicit_request_before_migration')
     run('ALTER TABLE schema_version RENAME TO schema_version_before_migration')
     run('CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT DEFAULT CURRENT_TIMESTAMP)')
     run('INSERT INTO schema_version (version) VALUES (71)')
     closeDatabase()
     await initializeDatabase()
-    expect(queryOne<{ version: number }>('SELECT MAX(version) AS version FROM schema_version')?.version).toBe(72)
+    expect(queryOne<{ version: number }>('SELECT MAX(version) AS version FROM schema_version')?.version).toBe(74)
     expect(getQueueItems().map((row) => row.id)).toEqual(queueIds)
     expect(getQueueItems().every((row) => row.owner_requested === false)).toBe(true)
     const column = queryOne<{ notnull: number; dflt_value: string }>(
       "SELECT [notnull], dflt_value FROM pragma_table_info('transcription_queue') WHERE name = 'owner_requested'"
     )
     expect(column).toEqual({ notnull: 1, dflt_value: '0' })
+  })
+
+  it.each([72, 73])('preserves durable owner intent when upgrading the v%s branch lineage', async (version) => {
+    const id = `legacy-${version}`
+    run('INSERT INTO recordings (id, filename, date_recorded) VALUES (?, ?, CURRENT_TIMESTAMP)', [id, `${id}.wav`])
+    const queueId = addToQueue(id, undefined, true)
+    expect(queueId).not.toBe('')
+    const missingColumn = version === 72 ? 'explicit_request' : 'owner_requested'
+    run(`ALTER TABLE transcription_queue RENAME COLUMN ${missingColumn} TO ${missingColumn}_before_v${version}`)
+    run(`ALTER TABLE schema_version RENAME TO schema_version_before_v${version}`)
+    run('CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT DEFAULT CURRENT_TIMESTAMP)')
+    run('INSERT INTO schema_version (version) VALUES (?)', [version])
+    closeDatabase()
+    await initializeDatabase()
+    const restored = getQueueItems('pending').find(row => row.id === queueId)
+    expect(restored).toMatchObject({ explicit_request: 1, owner_requested: true })
+    expect(queryOne<{ version: number }>('SELECT MAX(version) AS version FROM schema_version')?.version).toBe(74)
+    for (const table of ['diarized_segments', 'transcript_withheld_metadata']) {
+      expect(queryOne('SELECT name FROM sqlite_master WHERE type = ? AND name = ?', ['table', table])).toEqual({ name: table })
+    }
+    expect(addToQueue(id, undefined, { ownerRequested: true })).toBe(queueId)
   })
 })

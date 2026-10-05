@@ -127,6 +127,20 @@ export function isRecordingTranscribable(recordingId: string, options: { ignoreV
   return !failClosed && eligible.has(recordingId)
 }
 
+/** Text-only repair may add turns to preserved legacy text with timing-only doubts. */
+export function filterTextReformatEligibleRecordingIds(candidateIds: Iterable<string>): EligibilityResult {
+  try {
+    return getEligibleRecordingIds(candidateIds, { forTextReformat: true })
+  } catch {
+    return { eligible: new Set<string>(), failClosed: true }
+  }
+}
+
+export function isRecordingTextReformatEligible(recordingId: string): boolean {
+  const result = filterTextReformatEligibleRecordingIds([recordingId])
+  return !result.failClosed && result.eligible.has(recordingId)
+}
+
 /**
  * ADV15 (round-16) — F16 value ratings that exclude a STANDALONE capture (one
  * with NO source recording) from assistant/DISPLAY surfaces. Mirrors

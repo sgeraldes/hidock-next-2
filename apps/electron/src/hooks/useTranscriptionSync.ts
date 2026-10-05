@@ -7,6 +7,7 @@
  */
 
 import { useEffect, useRef } from 'react'
+import { toast } from '@/components/ui/toaster'
 import { useTranscriptionStore } from '@/store/features/useTranscriptionStore'
 
 export const TRANSCRIPTION_RECONCILE_INTERVAL_MS = 30_000
@@ -145,6 +146,7 @@ export function useTranscriptionSync() {
       if (window.electronAPI.onTranscriptionCancelled) {
         unsubscribers.push(
           window.electronAPI.onTranscriptionCancelled((data) => {
+            if (data.reason) toast.warning('Transcription stopped', data.reason)
             const store = useTranscriptionStore.getState()
             // Find queue item by recordingId and remove it
             const items = Array.from(store.queue.values())

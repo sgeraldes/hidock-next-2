@@ -511,14 +511,15 @@ describe('Database Service', () => {
       expect(row?.error_message).toBe('API rate limit exceeded')
     })
 
-    it('only sets status for other values (e.g. "cancelled")', () => {
+    it('records completion and the reason when cancelled', () => {
       seedRecording('rec-1')
       const id = addToQueue('rec-1')
-      updateQueueItem(id, 'cancelled')
+      updateQueueItem(id, 'cancelled', 'Clear the rating to transcribe again.')
       const row = queueRow(id)
       expect(row?.status).toBe('cancelled')
       expect(row?.started_at).toBeNull()
-      expect(row?.completed_at).toBeNull()
+      expect(row?.completed_at).not.toBeNull()
+      expect(row?.error_message).toBe('Clear the rating to transcribe again.')
     })
   })
 

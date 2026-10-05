@@ -11,8 +11,14 @@ vi.mock('electron', () => ({
 vi.mock('../../services/database', () => ({
   assignSpeaker: vi.fn(),
   getSpeakerMap: vi.fn(),
-  unassignSpeaker: vi.fn()
+  unassignSpeaker: vi.fn(),
+  getRecordingById: vi.fn(),
+  resolveRecordingId: vi.fn()
 }))
+
+vi.mock('../../services/diarization-store', () => ({ getDiarizedSegments: vi.fn(() => [
+  { recording_id: 'rec-1', run_id: 'run-1', segment_index: 0, start: 0, end: 10, voice_label: 'voice-0' }
+]) }))
 
 vi.mock('../../services/meeting-wiki', () => ({ exportMeetingWiki: vi.fn(() => null) }))
 
@@ -42,6 +48,19 @@ describe('Transcripts IPC Handlers', () => {
     expect(ipcMain.handle).toHaveBeenCalledWith('transcripts:assignSpeaker', expect.any(Function))
     expect(ipcMain.handle).toHaveBeenCalledWith('transcripts:getSpeakerMap', expect.any(Function))
     expect(ipcMain.handle).toHaveBeenCalledWith('transcripts:unassignSpeaker', expect.any(Function))
+  })
+
+  it('exposes independent diarization to the owner, validates requests and rejects missing recordings', async () => {
+    const { getRecordingById, resolveRecordingId } = await import('../../services/database')
+    vi.mocked(getRecordingById).mockReturnValue({ id: 'rec-1' } as any)
+    registerTranscriptsHandlers()
+    const handle = handlerFor('transcripts:getDiarizedSegments')!
+    const result = await handle({} as any, { recordingId: 'rec-1' }) as any
+    expect(result).toMatchObject({ success: true, data: [{ start: 0, end: 10, voice_label: 'voice-0' }] })
+    expect(await handle({} as any, { recordingId: '' })).toMatchObject({ success: false })
+    vi.mocked(getRecordingById).mockReturnValue(null as any)
+    vi.mocked(resolveRecordingId).mockReturnValue(null as any)
+    expect(await handle({} as any, { recordingId: 'missing' })).toMatchObject({ success: false })
   })
 
   it('assignSpeaker delegates with newName and returns the contact', async () => {

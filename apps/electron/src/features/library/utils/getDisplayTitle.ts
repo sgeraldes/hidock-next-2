@@ -2,6 +2,7 @@ import type { Meeting, Transcript } from '@/types'
 import type { UnifiedRecording } from '@/types/unified-recording'
 import { formatSmartDate } from '@/lib/smartDate'
 import { getSourceType, sourceTypeLabel } from './sourceType'
+import { isTranscriptTrusted } from './transcriptIntegrity'
 
 export type DisplayTitleSource =
   | 'meeting-subject'
@@ -39,7 +40,6 @@ export function getDisplayTitle(
   meeting?: Meeting,
   transcript?: Transcript
 ): DisplayTitle {
-  void transcript
   const officialMeetingSubject = meeting?.subject?.trim() || recording.meetingSubject?.trim()
   if (officialMeetingSubject) {
     // A meeting recorded in pieces names each piece (owner chose, 2-oct-2026).
@@ -61,7 +61,9 @@ export function getDisplayTitle(
   const userTitle = realTitle(recording.userTitle, recording.filename)
   if (userTitle) return { primaryText: userTitle, source: 'user-title' }
 
-  const suggested = realTitle(recording.title, recording.filename)
+  const suggested = isTranscriptTrusted(transcript)
+    ? realTitle(recording.title, recording.filename) || realTitle(transcript?.title_suggestion ?? undefined, recording.filename)
+    : undefined
   if (suggested) return { primaryText: suggested, source: 'suggested' }
 
   if (getSourceType(recording) !== 'audio' && recording.filename?.trim()) {

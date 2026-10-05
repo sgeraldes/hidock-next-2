@@ -302,7 +302,8 @@ it('recording detail decodes headerless stereo, shows lanes and failure, and mut
     expect(result.resumed).toBe(true)
     expect(result.before.lanes.every((lane: {canvas: boolean}) => lane.canvas)).toBe(true)
     expect(result.manualSuggestions).toBe(true)
-    expect(result.heldSuggestions).toEqual([0,0,0])
+    // Doubtful transcripts retain suggestions; invalid and unknown incomplete verdicts withhold them.
+    expect(result.heldSuggestions).toEqual([0,0,2])
     expect(result.before).toMatchObject({stereo:true,failure:true,retry:true,idleStop:false,weakCandidate:false,credibleCandidate:false})
     expect(result.before.duration).toBeGreaterThan(1.5)
     // Opus uses 20 ms frames (960 samples at 48 kHz); resampling can

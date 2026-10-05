@@ -1095,11 +1095,12 @@ export function reconcileProviderSpeakers(
     const rewritten = turns.map((turn) => {
       const start = Number(turn.start)
       const end = Number(turn.end)
+      const unresolvedSlice = turn.crossSliceIdentity === 'unresolved'
       const unresolved = (): Record<string, unknown> => ({
         ...turn,
         // Keep an already-stable label if the provider happened to echo one;
         // otherwise never leave a foreign scheme in place.
-        speaker: knownStable.has(String(turn.speaker)) ? turn.speaker : UNRESOLVED_SPEAKER_LABEL,
+        speaker: unresolvedSlice || knownStable.has(String(turn.speaker)) ? turn.speaker : UNRESOLVED_SPEAKER_LABEL,
         speakerAttribution: 'unresolved',
         speakerConfidence: 0
       })
@@ -1114,11 +1115,12 @@ export function reconcileProviderSpeakers(
       if (!best) return unresolved()
       const ratio = best[1] / (end - start)
       const stable = stableByLocal.get(best[0])
-      if (!stable || ratio < WEAK_SPEAKER_OVERLAP) return unresolved()
+      if (!stable || ratio < WEAK_SPEAKER_OVERLAP || (unresolvedSlice && ratio < STRONG_SPEAKER_OVERLAP)) return unresolved()
       return {
         ...turn,
         speaker: stable,
         speakerAttribution: ratio >= STRONG_SPEAKER_OVERLAP ? 'acoustic' : 'acoustic-weak',
+        ...(turn.crossSliceIdentity ? { crossSliceIdentity: ratio >= STRONG_SPEAKER_OVERLAP ? 'acoustic' : 'unresolved' } : {}),
         speakerConfidence: Math.round(Math.min(1, ratio) * 100) / 100
       }
     })

@@ -113,7 +113,7 @@ export interface EvaluationWarningsUpdatedEvent extends DomainEvent {
 /** Transcript verdicts changed: owner readers refresh only these recordings. */
 export interface TranscriptVerdictsUpdatedEvent extends DomainEvent {
   type: 'transcript:verdicts-updated'
-  payload: { recordingIds: string[] }
+  payload: { recordingIds: string[]; metadataChangedIds?: string[] }
 }
 
 /** The voice backfill finished one recording (voice-backfill.ts): Settings refreshes its progress. */

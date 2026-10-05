@@ -6,8 +6,19 @@ import {
   useTranscriptionSync
 } from '../useTranscriptionSync'
 import { useTranscriptionStore } from '@/store/features/useTranscriptionStore'
+const warning = vi.hoisted(() => vi.fn())
+vi.mock('@/components/ui/toaster', () => ({ toast: { warning } }))
 
 describe('useTranscriptionSync', () => {
+  it('shows the reason an explicitly requested transcription was stopped', async () => {
+    let cancelled: ((data: { recordingId: string; reason?: string }) => void) | undefined
+    ;(window as any).electronAPI.onTranscriptionCancelled = (callback: typeof cancelled) => { cancelled = callback; return vi.fn() }
+    const { unmount } = renderHook(() => useTranscriptionSync())
+    await act(async () => { await Promise.resolve() })
+    act(() => cancelled?.({ recordingId: 'rec-1', reason: 'Clear the rating to transcribe again.' }))
+    expect(warning).toHaveBeenCalledWith('Transcription stopped', 'Clear the rating to transcribe again.')
+    unmount()
+  })
   const getTranscriptionQueue = vi.fn()
   let queuedCallback: ((data: { queueItemId: string; recordingId: string; filename?: string }) => void) | undefined
 

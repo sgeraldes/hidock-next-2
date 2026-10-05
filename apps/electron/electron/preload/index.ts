@@ -335,6 +335,7 @@ interface MergeJournalEntry {
 
 /** Snapshot of the main-process transcription queue processor (dock reflects this). */
 export interface TranscriptionQueueState {
+  pauseReason?: 'no_gemini_key' | null
   paused: boolean
   isProcessing: boolean
   processingId: string | null
@@ -665,6 +666,10 @@ export interface ElectronAPI {
 
   // Database - Transcripts
   transcripts: {
+    /** Owner timeline evidence, including held transcripts. Anonymous voices only. */
+    getDiarizedSegments: (request: { recordingId: string }) => Promise<Result<Array<{
+      recording_id: string; run_id: string; segment_index: number; start: number; end: number; voice_label: string
+    }>>>
     getByRecordingId: (recordingId: string) => Promise<any>
     getByRecordingIds: (recordingIds: string[]) => Promise<Record<string, any>>
     /**
@@ -1696,7 +1701,7 @@ export interface ElectronAPI {
   onTranscriptionProgress: (callback: (data: { queueItemId: string; progress: number; stage: string }) => void) => () => void
   onTranscriptionCompleted: (callback: (data: { queueItemId?: string; recordingId: string }) => void) => () => void
   onTranscriptionFailed: (callback: (data: { queueItemId?: string; recordingId: string; error: string }) => void) => () => void
-  onTranscriptionCancelled: (callback: (data: { recordingId: string }) => void) => () => void
+  onTranscriptionCancelled: (callback: (data: { recordingId: string; reason?: string }) => void) => () => void
   onTranscriptionAllCancelled: (callback: (data: { count: number }) => void) => () => void
   onTranscriptionQueueState: (callback: (state: TranscriptionQueueState) => void) => () => void
 
@@ -1840,6 +1845,7 @@ const electronAPI: ElectronAPI = {
   },
 
   transcripts: {
+    getDiarizedSegments: (request) => callIPC('transcripts:getDiarizedSegments', request),
     getByRecordingId: (recordingId) => callIPC('db:get-transcript', recordingId),
     getByRecordingIds: (recordingIds) => callIPC('db:get-transcripts-by-recording-ids', recordingIds),
     getByRecordingIdOwner: (recordingId) => callIPC('db:get-transcript-owner', recordingId),
@@ -2540,7 +2546,7 @@ const electronAPI: ElectronAPI = {
     }
   },
 
-  onTranscriptionCancelled: (callback: (data: { recordingId: string }) => void) => {
+  onTranscriptionCancelled: (callback: (data: { recordingId: string; reason?: string }) => void) => {
     const handler = (_event: any, data: { recordingId: string }) => callback(data)
     ipcRenderer.on('transcription:cancelled', handler)
     return () => {

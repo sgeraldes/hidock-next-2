@@ -29,7 +29,7 @@ export function transcriptProblems(recording: UnifiedRecording, transcript?: Tra
   const integrity = integrityLabel(transcript)
   const tags = integrityIssues(transcript).map((i) => ISSUE_TAGS[i.code]).join(' Â· ')
   if (integrity === 'broken') {
-    problems.push({ kind: 'broken', label: 'Transcript does not fit the audio', detail: tags })
+    problems.push({ kind: 'broken', label: 'Transcript does not fit the audio', detail: [tags, ...validityReasons(transcript)].filter(Boolean).join(' · ') })
   }
   // The validity verdict (owner, 4-oct-2026); broken already says "invalid".
   const held = integrity === 'broken' ? null : heldValidity(transcript)
