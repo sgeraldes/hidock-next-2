@@ -18,7 +18,7 @@ export async function retryInSmallerChunks(
   audioPath: string,
   durationSeconds: number,
   shouldGenerate: () => boolean,
-  transcribe: (path: string, seconds: number) => Promise<ChunkTranscript>,
+  transcribe: (path: string, seconds: number, startSeconds: number) => Promise<ChunkTranscript>,
   activity?: Array<{ start: number; end: number }>,
   chunkSeconds = COMPLETENESS_RETRY_CHUNK_SECONDS
 ): Promise<ChunkTranscript> {
@@ -46,10 +46,14 @@ export async function retryInSmallerChunks(
       })
       if (!shouldGenerate()) throw new TranscriptionCancelledError()
       try {
-        const result = await transcribe(path, seconds)
+        const result = await transcribe(path, seconds, start)
         text.push(result.fullText)
         const segments = JSON.parse(result.speakers ?? '[]') as typeof turns
-        turns.push(...segments.map(s => ({ ...s, start: s.start + start, end: s.end + start })))
+        // Provider labels identify voices only within one request. Acoustic
+        // reconciliation after stitching may resolve these distinct labels.
+        turns.push(...segments.map(s => ({ ...s, start: s.start + start, end: s.end + start,
+          speaker: s.speaker ? `Slice ${Math.floor(start / chunkSeconds) + 1} / ${s.speaker}` : undefined,
+          crossSliceIdentity: 'unresolved' })))
         timeline.push(...(result.providerTimeline ?? []).map(event => ({ ...event,
           chunkIndex: Math.floor(start / chunkSeconds), chunkCount: Math.ceil(durationSeconds / chunkSeconds),
           audioStartSec: event.audioStartSec + start, audioEndSec: event.audioEndSec + start })))

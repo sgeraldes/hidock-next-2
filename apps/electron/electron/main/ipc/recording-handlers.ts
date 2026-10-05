@@ -682,7 +682,7 @@ export function registerRecordingHandlers(): void {
         }
       }
 
-      const queueItemId = addToQueue(recording.id)
+      const queueItemId = priority ? addToQueue(recording.id, undefined, true) : addToQueue(recording.id)
       if (!queueItemId) return false
       if (priority) markUserPriority(recording.id)
       // spec-005: Trigger immediate queue processing after adding
@@ -731,7 +731,7 @@ export function registerRecordingHandlers(): void {
           return { success: false, error: `Recording not found: ${recordingId}. Try refreshing the library.` }
         }
 
-        const queueItemId = addToQueue(recording.id, provider)
+      const queueItemId = addToQueue(recording.id, provider, true)
         if (!queueItemId) return { success: false, error: 'Recording is not eligible for transcription' }
         markUserPriority(recording.id) // explicit single-recording reprocess
         processQueueManually()
@@ -768,7 +768,7 @@ export function registerRecordingHandlers(): void {
         return { success: false, error: `Recording not found: ${result.data.recordingId}` }
       }
 
-      const queueItemId = addToQueue(recording.id)
+      const queueItemId = addToQueue(recording.id, undefined, true)
       markUserPriority(recording.id) // explicit user retry jumps the backlog
       updateRecordingTranscriptionStatus(recording.id, 'pending')
       processQueueManually()

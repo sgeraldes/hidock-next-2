@@ -29,7 +29,7 @@
 import { FRAME_SECONDS, LOUD_DB, LOUD_GAIN } from './audio-profile'
 
 /** Bumped when a rule changes, so stored verdicts are recomputed. */
-export const VALIDITY_VERSION = 3
+export const VALIDITY_VERSION = 4
 
 export type ValidityStatus = 'audio' | 'invalid' | 'incomplete' | 'doubtful' | 'valid'
 
@@ -94,6 +94,8 @@ export interface ValiditySegment {
 export interface ValidityInput {
   fileName: string
   segments: ValiditySegment[]
+  fullText?: string | null
+  storedWordCount?: number | null
   /** One level byte per frame (audio-profile-store envelope), or null when there is none. */
   envelope: Uint8Array | null
   /**
@@ -191,7 +193,8 @@ function percent(n: number): string {
 }
 
 export function assessTranscriptValidity(input: ValidityInput): TranscriptValidity {
-  const totalWords = input.segments.reduce((sum, s) => sum + countWords(s.text), 0)
+  const totalWords = input.segments.length ? input.segments.reduce((sum, s) => sum + countWords(s.text), 0)
+    : countWords(input.fullText) || Math.max(0, input.storedWordCount ?? 0)
   const speakers = new Set(input.segments.map((s) => s.speaker).filter((s): s is string => !!s)).size
   const measures: TranscriptValidity['measures'] = {
     words: totalWords,
@@ -229,7 +232,7 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
       totalWords * 60 / speechSeconds < MIN_WORDS_PER_SPEECH_MINUTE) {
     completenessReasons.push({ code: 'sparse_speech', detail: `${totalWords} words for ${(speechSeconds / 60).toFixed(1)} minutes of detected speech.` })
   }
-  if (speech.length && speechSeconds) {
+  if (speech.length && speechSeconds && input.segments.some(s => typeof s.start === 'number' && typeof s.end === 'number')) {
     const coverage = mergeSpeechIntervals(input.segments.filter(s => countWords(s.text) > 0)
       .map(s => ({ start: s.start ?? NaN, end: s.end ?? NaN })))
     let covered = 0
@@ -258,28 +261,22 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
       completenessReasons.push({ code: 'sparse_long_segment', detail: `${clock(s.start)} to ${clock(s.end)} has ${words} ${words === 1 ? 'word' : 'words'}.` })
     }
   }
-  if (input.integrityStatus === 'broken') {
-    return result('invalid', [{ code: 'integrity', detail: 'The text does not fit this audio (integrity check).' }, ...completenessReasons])
+  const invalidReasons: ValidityReason[] = []
+  if (input.integrityStatus === 'broken') invalidReasons.push({ code: 'integrity', detail: 'The text does not fit this audio (integrity check).' })
+  if (input.sample === 'contradicted') invalidReasons.push({ code: 'sample_contradicts', detail: 'A few minutes of the audio, transcribed again, tell a different conversation.' })
+  if (input.sample === 'incomplete') completenessReasons.push({ code: 'speech_after_the_end', detail: 'Speech goes on after the transcript ends: a sample of the audio after it holds talk.' })
+  // Independent checks accumulate. Invalid wins over incomplete, then doubt.
+  const settle = (reasons: ValidityReason[]): TranscriptValidity => {
+    const all = [...invalidReasons, ...completenessReasons, ...reasons]
+    return result(invalidReasons.length ? 'invalid' : completenessReasons.length ? 'incomplete'
+      : reasons.length && input.sample !== 'confirmed' ? 'doubtful' : 'valid', all)
   }
-  if (completenessReasons.length) return result('incomplete', completenessReasons)
-  // Doubts settle as doubtful, or as valid when a sample of the audio confirmed
-  // the text. A confirmed transcript keeps its reasons: a compressed clock is
-  // still compressed, and the clock repair reads it.
-  const settle = (reasons: ValidityReason[]): TranscriptValidity =>
-    reasons.length === 0 ? result('valid', []) : input.sample === 'confirmed' ? result('valid', reasons) : result('doubtful', reasons)
-  if (input.sample === 'incomplete') {
-    return result('incomplete', [
-      { code: 'speech_after_the_end', detail: 'Speech goes on after the transcript ends: a sample of the audio after it holds talk.' }
-    ])
-  }
-  if (input.sample === 'contradicted') {
-    return result('invalid', [
-      { code: 'sample_contradicts', detail: 'A few minutes of the audio, transcribed again, tell a different conversation.' }
-    ])
-  }
-
   const reasons: ValidityReason[] = []
   const timed = input.segments.filter((s) => typeof s.start === 'number' && Number.isFinite(s.start))
+
+  if (input.attendees > 0 && speakers > input.attendees + 1) {
+    reasons.push({ code: 'more_speakers_than_invited', detail: `${speakers} speakers in the transcript, ${input.attendees} people invited.` })
+  }
 
   if (timed.length === 0) {
     if (totalWords >= MIN_WORDS) {
@@ -300,13 +297,6 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
     reasons.push({
       code: 'timestamps_consistently_wrong',
       detail: `${percent(measures.timingErrorShare)} of the lines start at a repeated or earlier time.`
-    })
-  }
-
-  if (input.attendees > 0 && speakers > input.attendees + 1) {
-    reasons.push({
-      code: 'more_speakers_than_invited',
-      detail: `${speakers} speakers in the transcript, ${input.attendees} people invited.`
     })
   }
 
@@ -361,12 +351,10 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
     measures.silentShare = placeable ? silent / placeable : 0
 
     if (totalWords >= MIN_WORDS && placeable >= MIN_PLACEABLE_WORDS && measures.silentShare >= INVALID_SILENT_SHARE) {
-      return result('invalid', [
-        {
-          code: 'text_without_audio',
-          detail: `${percent(measures.silentShare)} of the text sits where the recording has no audio at all.`
-        }
-      ])
+      invalidReasons.push({
+        code: 'text_without_audio',
+        detail: `${percent(measures.silentShare)} of the text sits where the recording has no audio at all.`
+      })
     }
     if (totalWords >= MIN_WORDS && placeable >= MIN_PLACEABLE_WORDS && measures.silentShare >= DOUBT_SILENT_SHARE) {
       reasons.push({
@@ -407,13 +395,10 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
               'the text looks complete and its clock compressed.'
           })
         } else if (spanRate <= COMPRESSED_SPAN_RATE) {
-          return result('incomplete', [
-            ...reasons,
-            {
-              code: 'speech_after_the_end',
-              detail: `The transcript stops at ${Math.round(end)} s, and ${Math.round(afterSeconds)} s of audio follow it.`
-            }
-          ])
+          completenessReasons.push({
+            code: 'speech_after_the_end',
+            detail: `The transcript stops at ${Math.round(end)} s, and ${Math.round(afterSeconds)} s of audio follow it.`
+          })
         } else {
           reasons.push({
             code: 'audio_after_the_end',

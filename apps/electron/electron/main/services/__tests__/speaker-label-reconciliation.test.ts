@@ -69,6 +69,27 @@ const LINKING: SpeakerLinkingResult = {
 const parse = (json: string | undefined) => JSON.parse(json ?? '[]') as Array<Record<string, unknown>>
 
 describe('reconcileProviderSpeakers', () => {
+  it('keeps unmatched and weakly linked slice identities distinct when acoustic linking is only partial', () => {
+    const turns = JSON.stringify([
+      { start: 100, end: 110, speaker: 'Slice 3 / Speaker 1', crossSliceIdentity: 'unresolved' },
+      { start: 20, end: 200, speaker: 'Slice 4 / Speaker 1', crossSliceIdentity: 'unresolved' }
+    ])
+    const linked = parse(reconcileProviderSpeakers(turns, LINKING))
+    expect(linked.map(t => t.speaker)).toEqual(['Slice 3 / Speaker 1', 'Slice 4 / Speaker 1'])
+    expect(linked.map(t => t.crossSliceIdentity)).toEqual(['unresolved', 'unresolved'])
+    expect(linked.map(t => t.speakerAttribution)).toEqual(['unresolved', 'unresolved'])
+  })
+  it('resolves namespaced slices only from acoustic overlap', () => {
+    const turns = JSON.stringify([
+      { start: 1, end: 25, speaker: 'Slice 1 / Speaker 1', crossSliceIdentity: 'unresolved' },
+      { start: 31, end: 55, speaker: 'Slice 2 / Speaker 1', crossSliceIdentity: 'unresolved' }
+    ])
+    expect(parse(reconcileProviderSpeakers(turns, { ...LINKING, available: false })).map(t => t.speaker))
+      .toEqual(['Slice 1 / Speaker 1', 'Slice 2 / Speaker 1'])
+    const linked = parse(reconcileProviderSpeakers(turns, LINKING))
+    expect(linked.map(t => t.speaker)).toEqual(['Voice C5C45B', 'Voice 72D115'])
+    expect(linked.map(t => t.crossSliceIdentity)).toEqual(['acoustic', 'acoustic'])
+  })
   it('never leaves a raw provider label behind (the 4-speakers-on-a-1:1 failure)', () => {
     const turns = JSON.stringify([
       { start: 1, end: 25, speaker: 'SPEAKER_00', text: 'a' },

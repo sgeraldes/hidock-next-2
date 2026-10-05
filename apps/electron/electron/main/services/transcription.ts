@@ -161,6 +161,7 @@ import { isTranscriptUntrusted, syncTrustVerdicts } from './transcript-trust'
 import { previewTranscriptValidity } from './transcript-validity-store'
 import { assessTranscriptValidity, isUnusableValidity, MIN_COMPLETENESS_SPEECH_SECONDS } from './transcript-validity'
 import { retryInSmallerChunks } from './transcription-completeness-retry'
+import { sliceContext } from './transcription-slice-context'
 import { storeDiarizedSegments } from './diarization-store'
 import { readAudioDuration } from './audio-duration'
 import { minRecordingSeconds, qualityRules } from './quality-rules'
@@ -521,7 +522,7 @@ async function runQueueItem(
       })
     }
 
-    const outcome = await transcribeRecording(item.recording_id, progressCallback, item.provider)
+    const outcome = await transcribeRecording(item.recording_id, progressCallback, item.provider, item.explicit_request === 1)
 
     if (outcome.status === 'cancelled') {
       // INC-2 — the recording was trashed / marked personal / hard-purged
@@ -2328,6 +2329,7 @@ Meeting ${i + 1}: "${m.subject}"
     return { status: 'no_speech', reason: 'no_speech' }
   }
 
+  const recordingMetadataContext = meetingContext
   meetingContext += `\n\nLOCAL AUDIO ACTIVITY EVIDENCE (authoritative safety constraint):
 Non-silent audio: ${audioPreflight.nonSilentSeconds}s (${(audioPreflight.nonSilentRatio * 100).toFixed(2)}%)
 Activity intervals: ${audioPreflight.activityIntervals.map((i) => `${i.start}-${i.end}s`).join(', ')}
@@ -2489,7 +2491,10 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
       updateRecordingTranscriptionStatus(recordingId, statusBeforeRun)
       return { status: 'cancelled' }
     }
-    if (e instanceof NoSpeechDetectedError && audioPreflight.nonSilentSeconds >= MIN_COMPLETENESS_SPEECH_SECONDS) {
+    const independentSpeech = e instanceof NoSpeechDetectedError &&
+      (speakerLinking.available && speakerLinking.segments.some(s => s.end > s.start) ||
+        (await audioProfileForTranscription(recording).catch(() => null))?.category === 'speech')
+    if (e instanceof NoSpeechDetectedError && independentSpeech && audioPreflight.nonSilentSeconds >= MIN_COMPLETENESS_SPEECH_SECONDS) {
       // The provider returned no text over sustained independent speech. Treat
       // this as an incomplete attempt, retry once and preserve the quality failure.
       rawTranscript = { fullText: '', speakers: '[]', provider: transcriptionProvider === 'local-asr' ? 'local-asr' : transcriptionProvider === 'vibevoice' ? 'vibevoice' : 'gemini',
@@ -2541,7 +2546,9 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
       progressCallback?.('retrying_incomplete_transcription', 25)
       const retried = await retryUsage.run(() => retryInSmallerChunks(providerFilePath, audioPreflight.durationSeconds,
         () => stillWanted(recordingId, isExplicitReprocess),
-        (path, seconds) => transcribeWithGemini(path, meetingContext, progressCallback, () => stillWanted(recordingId, isExplicitReprocess), seconds),
+        (path, seconds, start) => transcribeWithGemini(path,
+          sliceContext(recordingMetadataContext, start, seconds, audioPreflight.activityIntervals, speakerLinking),
+          progressCallback, () => stillWanted(recordingId, isExplicitReprocess), seconds),
         audioPreflight.activityIntervals))
       rawTranscript = { ...firstAttempt, ...retried }
       rawTranscript.speakers = reconcileProviderSpeakers(rawTranscript.speakers, speakerLinking)

@@ -18,14 +18,19 @@ describe('bounded completeness retry', () => {
     header.writeUInt16LE(16, 34); header.write('data', 36); header.writeUInt32LE(pcm.length, 40)
     writeFileSync(path, Buffer.concat([header, pcm]))
     const paths: string[] = []
+    const starts: number[] = []
     try {
-      const result = await retryInSmallerChunks(path, 3, () => true, async (chunk) => {
+      const result = await retryInSmallerChunks(path, 3, () => true, async (chunk, _seconds, start) => {
+        starts.push(start)
         paths.push(chunk)
         expect(existsSync(chunk)).toBe(true)
         return { fullText: 'hello', speakers: JSON.stringify([{ start: 0.1, end: 0.8, speaker: 'A', text: 'hello' }]) }
       }, [{ start: 0, end: 1 }, { start: 2, end: 3 }], 1)
       expect(paths).toHaveLength(2)
       expect(JSON.parse(result.speakers!).map((s: { start: number }) => s.start)).toEqual([0.1, 2.1])
+      expect(JSON.parse(result.speakers!).map((s: { speaker: string }) => s.speaker)).toEqual(['Slice 1 / A', 'Slice 3 / A'])
+      expect(starts).toEqual([0, 2])
+      expect(JSON.parse(result.speakers!).every((s: { crossSliceIdentity: string }) => s.crossSliceIdentity === 'unresolved')).toBe(true)
       expect(paths.every(p => !existsSync(p))).toBe(true)
     } finally { rmSync(dir, { recursive: true }) }
   })

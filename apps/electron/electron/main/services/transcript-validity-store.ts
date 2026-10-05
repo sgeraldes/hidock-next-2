@@ -10,7 +10,7 @@ import { getEventBus } from './event-bus'
 import { createHash } from 'crypto'
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
-import { queryAll, queryOne, run, runNoSave, saveDatabase } from './database'
+import { queryAll, queryOne, run, runNoSave, runInTransaction, saveDatabase } from './database'
 import { getCachePath } from './file-storage'
 import {
   assessTranscriptValidity,
@@ -25,6 +25,8 @@ import {
 interface ValidityRow {
   recording_id: string
   filename: string
+  full_text?: string | null
+  word_count?: number | null
   speakers: string | null
   validity_status?: string | null
   integrity_status: string | null
@@ -78,7 +80,7 @@ function attendeeCount(json: string | null): number {
 
 function rowFor(recordingId: string): ValidityRow | undefined {
   return queryOne<ValidityRow>(
-    `SELECT t.recording_id, r.filename, t.speakers, t.validity_status, t.integrity_status, t.integrity_accepted_at,
+    `SELECT t.recording_id, r.filename, t.full_text, t.word_count, t.speakers, t.validity_status, t.integrity_status, t.integrity_accepted_at,
             ap.category, ap.method, m.attendees,
             s.transcript_fingerprint AS sample_fingerprint, s.verdict AS sample_verdict
        FROM transcripts t
@@ -131,6 +133,8 @@ function assess(row: ValidityRow, speakersJson: string | null, evidence?: Speech
   return assessTranscriptValidity({
     fileName: row.filename,
     segments: parseSegments(speakersJson),
+    fullText: row.full_text,
+    storedWordCount: row.word_count,
     envelope: readEnvelope(row.recording_id, row.method),
     envelopeUnit: row.method === 'decoded' ? 'db' : 'gain',
     audioCategory: row.category,
@@ -200,8 +204,11 @@ export function refreshTranscriptValidity(recordingId: string): TranscriptValidi
   ])
   if (isUnusableValidity(validity.status)) {
     retractContentRating(recordingId)
-    if (!isGapOnlyValidity(validity)) retireUnusableDerivedMetadata(recordingId)
+    if (shouldWithhold(validity)) retireUnusableDerivedMetadata(recordingId)
   }
+  if (validity.status === 'valid') restoreWithheldMetadata(recordingId)
+  validity.measures.attendees = attendeeCount(rowFor(recordingId)?.attendees ?? null)
+  run('UPDATE transcripts SET validity_json = ? WHERE recording_id = ?', [JSON.stringify(validity), recordingId])
   return validity
 }
 
@@ -214,20 +221,75 @@ function retractContentRating(recordingId: string): void {
         AND r.deleted_at IS NULL AND COALESCE(r.personal, 0) = 0)`, [recordingId])
 }
 
+const derivedFields = ['summary', 'title_suggestion', 'action_items', 'topics', 'key_points', 'sentiment',
+  'sentiment_segments', 'event_markers', 'question_suggestions', 'mentioned_people'] as const
+
+function shouldWithhold(validity: TranscriptValidity): boolean {
+  return !isGapOnlyValidity(validity) && !validity.reasons.every(r => ['no_times', 'audio_not_checked'].includes(r.code))
+}
+
+function metadataFingerprint(row: { speakers?: unknown; full_text?: unknown }): string {
+  return transcriptFingerprint(JSON.stringify([row.speakers ?? null, row.full_text ?? null]))
+}
+
+function restoreWithheldMetadata(recordingId: string): void {
+  runInTransaction(() => restoreWithheldMetadataInTransaction(recordingId))
+}
+
+function restoreWithheldMetadataInTransaction(recordingId: string): void {
+  const saved = queryOne<{ transcript_fingerprint: string; values_json: string }>(
+    'SELECT * FROM transcript_withheld_metadata WHERE recording_id = ?', [recordingId])
+  const current = queryOne<{ speakers: string | null; full_text: string }>('SELECT speakers, full_text FROM transcripts WHERE recording_id = ?', [recordingId])
+  if (!saved || !current || saved.transcript_fingerprint !== metadataFingerprint(current)) return
+  const values = JSON.parse(saved.values_json) as { transcript: Record<string, unknown>; captures: Array<Record<string, unknown>>; recording?: Record<string, unknown>; candidates?: Array<{ id: string; is_selected: number }> }
+  for (const field of derivedFields) runNoSave(`UPDATE transcripts SET ${field} = COALESCE(${field}, ?) WHERE recording_id = ?`, [values.transcript[field] ?? null, recordingId])
+  for (const capture of values.captures) {
+    if (capture.summary_source === 'ai') runNoSave(`UPDATE knowledge_captures SET summary = COALESCE(summary, ?) WHERE id = ? AND summary_source = 'ai'`, [capture.summary ?? null, capture.id])
+    if (capture.correlation_method === 'ai_transcript_match') runNoSave(`UPDATE knowledge_captures SET meeting_id = ?, correlation_confidence = ?, correlation_method = ?
+      WHERE id = ? AND meeting_id IS NULL AND correlation_method IS NULL`, [capture.meeting_id, capture.correlation_confidence, capture.correlation_method, capture.id])
+  }
+  if (values.recording?.correlation_method === 'ai_transcript_match') runNoSave(`UPDATE recordings SET meeting_id = ?, correlation_confidence = ?, correlation_method = ?
+    WHERE id = ? AND meeting_id IS NULL AND correlation_method IS NULL`, [values.recording.meeting_id, values.recording.correlation_confidence, values.recording.correlation_method, recordingId])
+  for (const candidate of values.candidates ?? []) runNoSave(`UPDATE recording_meeting_candidates SET is_selected = ? WHERE id = ?
+    AND is_user_confirmed = 0 AND is_ai_selected = 1 AND EXISTS (SELECT 1 FROM recordings r
+      WHERE r.id = recording_meeting_candidates.recording_id AND r.correlation_method = 'ai_transcript_match'
+        AND r.meeting_id = recording_meeting_candidates.meeting_id)`, [candidate.is_selected, candidate.id])
+  runNoSave('DELETE FROM transcript_withheld_metadata WHERE recording_id = ?', [recordingId])
+}
+
 /** Retract machine results only. Audio, transcript text and owner decisions survive. */
 function retireUnusableDerivedMetadata(recordingId: string): void {
+  runInTransaction(() => retireUnusableDerivedMetadataInTransaction(recordingId))
+}
+
+function retireUnusableDerivedMetadataInTransaction(recordingId: string): void {
+  const transcript = queryOne<Record<string, unknown>>('SELECT * FROM transcripts WHERE recording_id = ?', [recordingId])
+  if (!transcript) return
+  const captures = queryAll<Record<string, unknown>>(`SELECT id, summary, summary_source, meeting_id, correlation_confidence, correlation_method FROM knowledge_captures
+    WHERE source_recording_id = ? AND (summary_source = 'ai' OR correlation_method = 'ai_transcript_match')`, [recordingId])
+  const recording = queryOne<Record<string, unknown>>('SELECT meeting_id, correlation_confidence, correlation_method FROM recordings WHERE id = ?', [recordingId])
+  const candidates = recording?.correlation_method === 'ai_transcript_match' ? queryAll<{ id: string; is_selected: number }>(
+    'SELECT id, is_selected FROM recording_meeting_candidates WHERE recording_id = ? AND is_ai_selected = 1 AND is_user_confirmed = 0', [recordingId]) : []
+  runNoSave(`INSERT INTO transcript_withheld_metadata (recording_id, transcript_fingerprint, values_json, withheld_at, validity_version)
+    VALUES (?, ?, ?, ?, ?) ON CONFLICT(recording_id) DO UPDATE SET
+      transcript_fingerprint = excluded.transcript_fingerprint, values_json = excluded.values_json,
+      withheld_at = excluded.withheld_at, validity_version = excluded.validity_version
+    WHERE transcript_withheld_metadata.transcript_fingerprint != excluded.transcript_fingerprint`,
+    [recordingId, metadataFingerprint(transcript),
+      JSON.stringify({ transcript: Object.fromEntries(derivedFields.map(field => [field, transcript[field]])), captures, recording, candidates }), new Date().toISOString(), VALIDITY_VERSION])
   runNoSave(`UPDATE transcripts SET summary = NULL, title_suggestion = NULL, action_items = NULL,
     topics = NULL, key_points = NULL, sentiment = NULL, sentiment_segments = NULL, event_markers = NULL,
     question_suggestions = NULL, mentioned_people = NULL WHERE recording_id = ?`, [recordingId])
-  runNoSave(`UPDATE knowledge_captures SET summary = NULL,
-    title = COALESCE(user_title, (SELECT filename FROM recordings WHERE id = ?), title)
-    WHERE source_recording_id = ?`, [recordingId, recordingId])
+  runNoSave(`UPDATE knowledge_captures SET summary = NULL
+    WHERE source_recording_id = ? AND summary_source = 'ai'`, [recordingId])
   // A calendar time match is independent of the transcript; only text-made links go.
+  runNoSave(`UPDATE recording_meeting_candidates SET is_selected = 0 WHERE recording_id = ?
+    AND is_ai_selected = 1 AND is_user_confirmed = 0
+    AND EXISTS (SELECT 1 FROM recordings WHERE id = ? AND correlation_method = 'ai_transcript_match')`, [recordingId, recordingId])
   runNoSave(`UPDATE knowledge_captures SET meeting_id = NULL, correlation_confidence = NULL, correlation_method = NULL
     WHERE source_recording_id = ? AND correlation_method = 'ai_transcript_match'`, [recordingId])
   runNoSave(`UPDATE recordings SET meeting_id = NULL, correlation_confidence = NULL, correlation_method = NULL
     WHERE id = ? AND correlation_method = 'ai_transcript_match'`, [recordingId])
-  runNoSave(`UPDATE recording_meeting_candidates SET is_selected = 0 WHERE recording_id = ?`, [recordingId])
 }
 
 /**
@@ -243,25 +305,25 @@ export async function backfillTranscriptValidity(
   const batchSize = options.batchSize ?? 50
   const counts: Record<string, number> = { checked: 0 }
   const changedIds: string[] = []
-  const seen = new Set<string>()
+  let afterId = ''
   for (;;) {
     const ids = queryAll<{ recording_id: string }>(
       `SELECT t.recording_id FROM transcripts t
          JOIN recordings r ON r.id = t.recording_id
          LEFT JOIN meetings m ON m.id = r.meeting_id
-        WHERE r.deleted_at IS NULL
+        WHERE r.deleted_at IS NULL AND t.recording_id > ?
           AND (t.validity_version IS NULL OR t.validity_version < ?
                OR NOT json_valid(t.validity_json)
                OR COALESCE(json_extract(t.validity_json, '$.measures.attendees'), -1) !=
                   CASE WHEN json_valid(m.attendees) AND json_type(m.attendees) = 'array'
                        THEN json_array_length(m.attendees) ELSE 0 END)
-        LIMIT ?`,
-      [VALIDITY_VERSION, batchSize]
+        ORDER BY t.recording_id LIMIT ?`,
+      [afterId, VALIDITY_VERSION, batchSize]
     )
-    const fresh = ids.filter((row) => !seen.has(row.recording_id))
+    const fresh = ids
     if (fresh.length === 0) break
     for (const { recording_id } of fresh) {
-      seen.add(recording_id)
+      afterId = recording_id
       const row = rowFor(recording_id)
       if (!row) continue
       const validity = assess(row, row.speakers)
@@ -273,7 +335,7 @@ export async function backfillTranscriptValidity(
       ])
       if (isUnusableValidity(validity.status)) {
         retractContentRating(recording_id)
-        if (!isGapOnlyValidity(validity)) retireUnusableDerivedMetadata(recording_id)
+        if (shouldWithhold(validity)) retireUnusableDerivedMetadata(recording_id)
         // Graph and RAG reads already share the validity eligibility gate. A wiki
         // is an external file, so explicitly reconcile it when a verdict changes.
         if (!isGapOnlyValidity(validity) && row.validity_status !== validity.status) {
@@ -285,6 +347,10 @@ export async function backfillTranscriptValidity(
           }
         }
       }
+      if (validity.status === 'valid') restoreWithheldMetadata(recording_id)
+      const linked = queryOne<{ attendees: string | null }>(`SELECT m.attendees FROM recordings r LEFT JOIN meetings m ON m.id = r.meeting_id WHERE r.id = ?`, [recording_id])
+      validity.measures.attendees = attendeeCount(linked?.attendees ?? null)
+      runNoSave('UPDATE transcripts SET validity_json = ? WHERE recording_id = ?', [JSON.stringify(validity), recording_id])
       if (row.validity_status !== validity.status) changedIds.push(recording_id)
       counts.checked++
       counts[validity.status] = (counts[validity.status] ?? 0) + 1

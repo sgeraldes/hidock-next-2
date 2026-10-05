@@ -34,7 +34,7 @@ export function hasDecisionLabelRecoveryFailed(): boolean {
   return decisionLabelRecoveryFailed
 }
 
-const SCHEMA_VERSION = 72
+const SCHEMA_VERSION = 73
 
 const DECISION_LABELS_DDL = `CREATE TABLE IF NOT EXISTS decision_label_sets (
     id TEXT PRIMARY KEY,
@@ -65,6 +65,15 @@ CREATE TABLE IF NOT EXISTS decision_labels (
 CREATE INDEX IF NOT EXISTS idx_decision_labels_question ON decision_labels(question, labeled_at);
 `
 
+const WITHHELD_METADATA_DDL = `CREATE TABLE IF NOT EXISTS transcript_withheld_metadata (
+  recording_id TEXT PRIMARY KEY,
+  transcript_fingerprint TEXT NOT NULL,
+  values_json TEXT NOT NULL,
+  withheld_at TEXT NOT NULL,
+  validity_version INTEGER NOT NULL,
+  FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
+)`
+
 const DIARIZED_SEGMENTS_DDL = `CREATE TABLE IF NOT EXISTS diarized_segments (
   recording_id TEXT NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
   run_id TEXT NOT NULL REFERENCES processing_runs(id),
@@ -77,6 +86,7 @@ const DIARIZED_SEGMENTS_DDL = `CREATE TABLE IF NOT EXISTS diarized_segments (
 
 const SCHEMA = `
 ${DIARIZED_SEGMENTS_DDL};
+${WITHHELD_METADATA_DDL};
 -- Calendar events from ICS
 CREATE TABLE IF NOT EXISTS meetings (
     id TEXT PRIMARY KEY,
@@ -157,6 +167,7 @@ CREATE TABLE IF NOT EXISTS knowledge_captures (
     -- subjects live on meetings. These fields must never overwrite each other.
     user_title TEXT,
     summary TEXT,
+    summary_source TEXT,
     category TEXT CHECK(category IN ('meeting', 'interview', '1:1', 'brainstorm', 'note', 'other')) DEFAULT 'meeting',
     status TEXT CHECK(status IN ('processing', 'ready', 'enriched')) DEFAULT 'ready',
 
@@ -585,6 +596,7 @@ CREATE TABLE IF NOT EXISTS transcription_queue (
     progress INTEGER DEFAULT 0,
     error_message TEXT,
     provider TEXT,
+    explicit_request INTEGER NOT NULL DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     started_at TEXT,
     completed_at TEXT,
@@ -3497,6 +3509,9 @@ const MIGRATIONS: Record<number, () => void> = {
     // Additive migration; the shared engine creates a verified restore point first.
     getDatabase().run(DIARIZED_SEGMENTS_DDL)
   },
+  73: () => {
+    getDatabase().run(WITHHELD_METADATA_DDL)
+  },
 }
 
 /**
@@ -3961,6 +3976,12 @@ function repairPhase(): void {
     console.warn('[Database] knowledge_captures table unavailable during structural repair; skipping capture repair')
   }
 
+  database.run(WITHHELD_METADATA_DDL)
+  const summaryColumns = getTableColumns(database, 'knowledge_captures')
+  if (summaryColumns.length && !summaryColumns.includes('summary_source')) {
+    database.run('ALTER TABLE knowledge_captures ADD COLUMN summary_source TEXT')
+  }
+
   // Repair transcription_queue (spec-014: retry persistence and real-time progress)
   const queueInfo = database.exec("PRAGMA table_info(transcription_queue)")
   if (queueInfo.length > 0 && queueInfo[0].values) {
@@ -3968,7 +3989,8 @@ function repairPhase(): void {
     const queueRepairs = [
       { name: 'retry_count', def: 'INTEGER DEFAULT 0' },
       { name: 'progress', def: 'INTEGER DEFAULT 0' },
-      { name: 'provider', def: 'TEXT' }
+      { name: 'provider', def: 'TEXT' },
+      { name: 'explicit_request', def: 'INTEGER NOT NULL DEFAULT 0' }
     ]
     for (const col of queueRepairs) {
       if (!queueCols.includes(col.name)) {
@@ -5376,7 +5398,7 @@ const UNUSABLE_TRANSCRIPT_EXCLUSION = `AND NOT EXISTS (
 
 export function getEligibleRecordingIds(
   candidateIds: Iterable<string>,
-  options: { forTranscription?: boolean } = {}
+  options: { forTranscription?: boolean; forTextReformat?: boolean } = {}
 ): RecordingEligibility {
   const unique = [...new Set([...candidateIds].filter((id): id is string => !!id))]
   if (unique.length === 0) return { eligible: new Set<string>(), failClosed: false }
@@ -5396,7 +5418,14 @@ export function getEligibleRecordingIds(
                WHERE kc.source_recording_id = r.id
                  AND kc.deleted_at IS NULL
                  AND ${VALUE_EXCLUSION_PREDICATE})
-            ${options.forTranscription ? '' : UNUSABLE_TRANSCRIPT_EXCLUSION}`,
+            ${options.forTranscription ? '' : options.forTextReformat ? UNUSABLE_TRANSCRIPT_EXCLUSION.replace(
+              'AND t.integrity_accepted_at IS NULL', `AND NOT (t.validity_status = 'doubtful'
+                AND COALESCE(t.integrity_status, '') != 'broken' AND TRIM(COALESCE(t.full_text, '')) != ''
+                AND json_valid(t.validity_json)
+                AND COALESCE(json_array_length(CASE WHEN json_valid(t.validity_json) THEN t.validity_json ELSE '{}' END, '$.reasons'), 0) > 0
+                AND NOT EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(t.validity_json) THEN t.validity_json ELSE '{}' END, '$.reasons') reason
+                  WHERE COALESCE(json_extract(reason.value, '$.code'), '') NOT IN ('no_times', 'audio_not_checked')))
+                AND t.integrity_accepted_at IS NULL`) : UNUSABLE_TRANSCRIPT_EXCLUSION}`,
         [...chunk, ...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS]
       )
       for (const row of rows) eligible.add(row.id)
@@ -8272,12 +8301,13 @@ export interface QueueItem {
   progress: number
   error_message?: string
   provider?: string
+  explicit_request?: number
   created_at: string
   started_at?: string
   completed_at?: string
 }
 
-export function addToQueue(recordingId: string, provider?: string): string {
+export function addToQueue(recordingId: string, provider?: string, explicitRequest = false): string {
   // Honor the privacy flags at the single enqueue chokepoint: a personal
   // ("ignored") or soft-deleted recording is never transcribed. Every path
   // (auto-transcribe, manual, bulk backlog) funnels through here.
@@ -8300,13 +8330,16 @@ export function addToQueue(recordingId: string, provider?: string): string {
     ORDER BY created_at ASC
     LIMIT 1
   `, [recordingId])
-  if (existing) return existing.id
+  if (existing) {
+    if (explicitRequest) run('UPDATE transcription_queue SET explicit_request = 1 WHERE id = ?', [existing.id])
+    return existing.id
+  }
 
   const id = crypto.randomUUID()
   runInTransaction(() => {
     run(
-      'INSERT INTO transcription_queue (id, recording_id, provider) VALUES (?, ?, ?)',
-      [id, recordingId, provider ?? null]
+      'INSERT INTO transcription_queue (id, recording_id, provider, explicit_request) VALUES (?, ?, ?, ?)',
+      [id, recordingId, provider ?? null, explicitRequest ? 1 : 0]
     )
     // Keep the durable recording projection aligned at the enqueue chokepoint.
     // This covers auto-download, manual, and bulk enqueue paths immediately.

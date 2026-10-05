@@ -34,6 +34,21 @@ function base(over: Partial<ValidityInput> = {}): ValidityInput {
 }
 
 describe('assessTranscriptValidity', () => {
+  it('preserves independent invalid and doubt evidence alongside completeness gaps', () => {
+    const input = base({ segments: [{ start: 0, end: 600, text: words(5) }, { start: 600, end: 650, text: words(200) }],
+      envelope: envelope([[138, 650], [160, 10]]), sample: 'contradicted' })
+    const verdict = assessTranscriptValidity(input)
+    expect(verdict.status).toBe('invalid')
+    expect(verdict.reasons.map(r => r.code)).toEqual(expect.arrayContaining(['sparse_long_segment', 'sample_contradicts', 'text_without_audio']))
+    const doubtful = assessTranscriptValidity({ ...input, sample: null, envelope: null })
+    expect(doubtful.reasons.map(r => r.code)).toEqual(expect.arrayContaining(['sparse_long_segment', 'audio_not_checked']))
+  })
+  it('counts legacy full text without inventing missing speech from absent timing', () => {
+    const verdict = assessTranscriptValidity(base({ fullText: words(3087), storedWordCount: 3087,
+      vadSpeechSeconds: 1030.28, diarizedSegments: [{ start: 0, end: 1030.28 }] }))
+    expect(verdict.measures.words).toBe(3087)
+    expect(verdict.reasons.map(r => r.code)).toEqual(['no_times'])
+  })
   it('rejects Rec98: 17 words, 413 acoustic turns, 1057 speech seconds, 598 VAD seconds', () => {
     const diarizedSegments = Array.from({ length: 413 }, (_, i) => ({ start: i * 1057 / 413, end: (i + 1) * 1057 / 413 }))
     const v = assessTranscriptValidity(base({

@@ -52,9 +52,9 @@ function createCaptureFromSource(row: CaptureSourceRow): string {
 
   run(
     `INSERT INTO knowledge_captures
-       (id, title, summary, category, status, meeting_id, source_recording_id,
+       (id, title, summary, summary_source, category, status, meeting_id, source_recording_id,
         captured_at, created_at, updated_at)
-     VALUES (?, ?, ?, 'meeting', 'ready', ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, 'ai', 'meeting', 'ready', ?, ?, ?, ?, ?)`,
     [id, title, row.summary ?? null, row.meeting_id ?? null, row.recording_id, capturedAt, now, now]
   )
   // Two-way link so updateKnowledgeCaptureTitle() (which reads migrated_to_capture_id) works.

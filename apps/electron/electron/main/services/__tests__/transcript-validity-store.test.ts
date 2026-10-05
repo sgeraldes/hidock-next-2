@@ -27,7 +27,7 @@ vi.mock('../config', () => ({
 const emitDomainEvent = vi.hoisted(() => vi.fn())
 vi.mock('../event-bus', () => ({ getEventBus: () => ({ emitDomainEvent }) }))
 
-import { initializeDatabase, closeDatabase, run, queryOne, insertTranscript, getEligibleRecordingIds, isRecordingGraphIngestable } from '../database'
+import { initializeDatabase, closeDatabase, run, runNoSave, saveDatabase, queryOne, insertTranscript, getEligibleRecordingIds, isRecordingGraphIngestable, setTranscriptIntegrityAccepted, addToQueue, getQueueItems, updateQueueItem } from '../database'
 import {
   backfillTranscriptValidity,
   refreshTranscriptValidity,
@@ -126,6 +126,52 @@ describe('transcript validity store', () => {
   })
 })
 
+describe('follow-up regressions', () => {
+  it('withholds machine metadata reversibly and preserves owner summaries on acceptance', () => {
+    seed('reversible', [[160, 600]])
+    run(`INSERT INTO meetings (id,subject,start_time,end_time) VALUES ('reversible-meeting','Sync','2026-10-05','2026-10-06')`)
+    run(`UPDATE recordings SET meeting_id = 'reversible-meeting', correlation_method = 'ai_transcript_match' WHERE id = 'reversible'`)
+    run(`INSERT INTO recording_meeting_candidates (id,recording_id,meeting_id,is_selected,is_ai_selected) VALUES ('reversible-candidate','reversible','reversible-meeting',1,1)`)
+    run(`UPDATE transcripts SET speakers = '[{"start":0,"end":600,"text":"hello"}]', summary = 'machine summary', title_suggestion = 'machine title' WHERE recording_id = 'reversible'`)
+    run(`INSERT INTO knowledge_captures (id,title,summary,source_recording_id,captured_at) VALUES ('owner-summary','owner title','owner edited','reversible','2026-10-05')`)
+    run(`INSERT INTO knowledge_captures (id,title,summary,summary_source,source_recording_id,captured_at) VALUES ('machine-summary','title','machine capture summary','ai','reversible','2026-10-05')`)
+    run(`INSERT INTO knowledge_captures (id,title,summary,summary_source,source_recording_id,captured_at) VALUES ('edited-while-held','title','old AI summary','ai','reversible','2026-10-05')`)
+    refreshTranscriptValidity('reversible')
+    expect(queryOne('SELECT summary FROM knowledge_captures WHERE id = ?', ['owner-summary'])).toEqual({ summary: 'owner edited' })
+    expect(queryOne('SELECT summary FROM transcripts WHERE recording_id = ?', ['reversible'])).toEqual({ summary: null })
+    expect(queryOne('SELECT summary FROM knowledge_captures WHERE id = ?', ['machine-summary'])).toEqual({ summary: null })
+    expect(queryOne('SELECT is_selected FROM recording_meeting_candidates WHERE id = ?', ['reversible-candidate'])).toEqual({ is_selected: 0 })
+    refreshTranscriptValidity('reversible') // Rechecking must not overwrite the original snapshot with NULLs.
+    run(`UPDATE knowledge_captures SET summary = 'new owner summary', summary_source = 'user' WHERE id = 'edited-while-held'`)
+    setTranscriptIntegrityAccepted('reversible', true)
+    refreshTranscriptValidity('reversible')
+    expect(queryOne('SELECT summary, title_suggestion FROM transcripts WHERE recording_id = ?', ['reversible'])).toEqual({ summary: 'machine summary', title_suggestion: 'machine title' })
+    expect(queryOne('SELECT summary FROM knowledge_captures WHERE id = ?', ['machine-summary'])).toEqual({ summary: 'machine capture summary' })
+    expect(queryOne('SELECT summary FROM knowledge_captures WHERE id = ?', ['edited-while-held'])).toEqual({ summary: 'new owner summary' })
+    expect(queryOne('SELECT meeting_id FROM recordings WHERE id = ?', ['reversible'])).toEqual({ meeting_id: 'reversible-meeting' })
+    expect(queryOne('SELECT is_selected FROM recording_meeting_candidates WHERE id = ?', ['reversible-candidate'])).toEqual({ is_selected: 1 })
+  })
+  it('uses full_text for legacy rows without speakers and keeps their metadata', () => {
+    seed('legacy-fulltext', [[160, 600]])
+    run(`UPDATE transcripts SET speakers = NULL, full_text = ?, summary = 'preserved' WHERE recording_id = 'legacy-fulltext'`, ['word '.repeat(3087)])
+    expect(refreshTranscriptValidity('legacy-fulltext')?.measures.words).toBe(3087)
+    expect(queryOne('SELECT summary FROM transcripts WHERE recording_id = ?', ['legacy-fulltext'])).toEqual({ summary: 'preserved' })
+    expect(getEligibleRecordingIds(['legacy-fulltext'], { forTextReformat: true }).eligible.has('legacy-fulltext')).toBe(true)
+    run(`UPDATE recordings SET personal = 1 WHERE id = 'legacy-fulltext'`)
+    expect(getEligibleRecordingIds(['legacy-fulltext'], { forTextReformat: true }).eligible.has('legacy-fulltext')).toBe(false)
+    run(`UPDATE recordings SET personal = 0 WHERE id = 'legacy-fulltext'`)
+  })
+  it('persists explicit intent across failure, priority loss and database restart', async () => {
+    seed('durable-request', [[160, 600]])
+    const id = addToQueue('durable-request', undefined, true)
+    updateQueueItem(id, 'failed', 'transient failure')
+    refreshTranscriptValidity('durable-request')
+    closeDatabase()
+    await initializeDatabase()
+    expect(getQueueItems('failed').find(q => q.id === id)?.explicit_request).toBe(1)
+  })
+})
+
 describe('a sample of the audio', () => {
   it('checks historical sparse and empty transcripts without a VAD ledger using the stored speech activity profile', () => {
     seed('historical-sparse', [[160, 600]])
@@ -165,7 +211,7 @@ describe('a sample of the audio', () => {
     writeFileSync(ownedWiki, '---\ngenerator: hidock-meeting-wiki\nwiki_schema: 1\nrecording_id: old-sparse\n---\nBad summary\n')
     writeFileSync(otherWiki, 'An unrelated document')
     await backfillTranscriptValidity()
-    expect(stored('old-sparse')).toMatchObject({ validity_status: 'incomplete', validity_version: 3 })
+    expect(stored('old-sparse')).toMatchObject({ validity_status: 'incomplete', validity_version: 4 })
     expect(queryOne('SELECT full_text, summary, title_suggestion FROM transcripts WHERE recording_id = ?', ['old-sparse']))
       .toEqual({ full_text: 'keep original', summary: null, title_suggestion: null })
     expect(queryOne<{ meeting_id: string | null }>('SELECT meeting_id FROM recordings WHERE id = ?', ['old-sparse'])?.meeting_id).toBeNull()
@@ -178,11 +224,11 @@ describe('a sample of the audio', () => {
     expect(queryOne<{ meeting_id: string | null }>('SELECT meeting_id FROM recordings WHERE id = ?', ['old-sparse'])?.meeting_id).toBe('old-meeting')
   })
   it('keeps Rec54 gap-only metadata and eligibility while retracting text ratings', async () => {
-    seed('rec54', [[160, 600]])
+    seed('rec54', [[160, 1600]])
     run(`UPDATE audio_profiles SET sound_seconds = 3971.015 WHERE recording_id = 'rec54'`)
     run(`UPDATE transcripts SET speakers = ?, summary = 'real summary', title_suggestion = 'real title',
       validity_version = 2, validity_status = 'valid' WHERE recording_id = 'rec54'`,
-      [JSON.stringify([{ start: 0, end: 600, text: 'real '.repeat(5463) }, { start: 614, end: 1402, text: 'three real words' }])])
+      [JSON.stringify([...Array.from({ length: 50 }, (_, i) => ({ start: i * 20, end: i * 20 + 19, text: 'real '.repeat(109) })), { start: 614, end: 1402, text: 'three real words' }])])
     run(`UPDATE recordings SET meeting_id = 'old-meeting', correlation_method = 'ai_transcript_match' WHERE id = 'rec54'`)
     run(`INSERT INTO knowledge_captures (id, title, source_recording_id, quality_rating, quality_source, quality_method, captured_at)
       VALUES ('cap54', 'real title', 'rec54', 'garbage', 'ai', 'content', '2026-10-04')`)
@@ -234,5 +280,20 @@ describe('a sample of the audio', () => {
     // A new transcript is not the one sampled: the doubt comes back.
     run('UPDATE transcripts SET speakers = ? WHERE recording_id = ?', [JSON.stringify(lines.slice(1)), 'doubt'])
     expect(refreshTranscriptValidity('doubt')?.status).toBe('doubtful')
+  })
+})
+
+describe('full library projection', () => {
+  it('drains 2140 stale rows despite clearing AI meeting links and checks zero next pass', async () => {
+    await backfillTranscriptValidity()
+    run(`INSERT INTO meetings (id,subject,start_time,end_time,attendees) VALUES ('projection-meeting','Sync','2026-10-05','2026-10-06','[{}]')`)
+    for (let i = 0; i < 2140; i++) {
+      const id = `projection-${String(i).padStart(4, '0')}`
+      runNoSave(`INSERT INTO recordings (id,filename,date_recorded,meeting_id,correlation_method) VALUES (?,?,'2026-10-05','projection-meeting','ai_transcript_match')`, [id, `${id}.hda`])
+      runNoSave(`INSERT INTO transcripts (id,recording_id,full_text,speakers,integrity_status,validity_version) VALUES (?,?, 'text','[]','broken',1)`, [`t-${id}`, id])
+    }
+    saveDatabase()
+    expect((await backfillTranscriptValidity()).checked).toBe(2140)
+    expect((await backfillTranscriptValidity()).checked).toBe(0)
   })
 })
