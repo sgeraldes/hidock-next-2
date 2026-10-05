@@ -36,6 +36,22 @@ afterEach(async () => {
 })
 
 describe('retrieval trace store (real SQLite)', () => {
+  it('retries a pending erase on the timer even when no events are queued', async () => {
+    vi.useFakeTimers()
+    const s = store()
+    s.record(event())
+    await s.flush()
+    const writer = new Database(s.path)
+    writer.exec('BEGIN IMMEDIATE')
+    try {
+      await s.setSettings({ recordQueries: true, keepQueryText: false })
+      expect((await s.stats()).pending_erase).toBe(true)
+      writer.exec('ROLLBACK')
+      await vi.advanceTimersByTimeAsync(2000)
+      expect((await s.stats()).pending_erase).toBe(false)
+      expect((await s.read())[0].query_text).toBeNull()
+    } finally { writer.close() }
+  })
   it('masks text and retries pending erasure at flush after a busy writer releases', async () => {
     const s = store()
     s.record(event())
@@ -286,6 +302,34 @@ describe('retrieval trace store (real SQLite)', () => {
 })
 
 describe('bounded non-throwing queue', () => {
+  it('drains all batches when close races an already captured flush', async () => {
+    const s = store()
+    for (let i = 0; i < 250; i++) s.record(event(String(i)))
+    const flushing = s.flush()
+    await s.close()
+    await flushing
+    const reopened = store({ path: s.path })
+    expect(await reopened.read()).toHaveLength(250)
+  })
+  it('waits for the next timer after busy even if newer events scheduled an immediate batch', async () => {
+    vi.useFakeTimers()
+    const s = store()
+    await s.schemaVersion()
+    const writer = new Database(s.path)
+    writer.exec('BEGIN IMMEDIATE')
+    try {
+      s.record(event('first'))
+      const flushing = s.flush()
+      for (let i = 0; i < 50; i++) s.record(event(`later-${i}`))
+      await flushing
+      const errors = s.writeErrors
+      await vi.advanceTimersByTimeAsync(0)
+      expect(s.writeErrors).toBe(errors)
+      writer.exec('ROLLBACK')
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(await s.read()).toHaveLength(51)
+    } finally { writer.close() }
+  })
   it('also retries a busy lazy open quickly without dropping queued events', async () => {
     const initial = store()
     await initial.schemaVersion()

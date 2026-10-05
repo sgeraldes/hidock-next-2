@@ -298,7 +298,8 @@ export class RetrievalTraceStore {
       }
     })().finally(() => {
       this.flushing = undefined; this.captured = []
-      if (this.queue.length) this.schedule(busy ? 'retry' : 'next')
+      if (busy && this.batchTimer) { clearTimeout(this.batchTimer); this.batchTimer = undefined }
+      if (this.queue.length || this.pendingErase) this.schedule(busy || this.pendingErase ? 'retry' : 'next')
     })
     return this.flushing
   }
@@ -399,6 +400,7 @@ export class RetrievalTraceStore {
         await this.open()
         this.erasePendingText()
       } catch { this.failed() }
+      if (this.pendingErase) this.schedule('retry')
     }
   }
   private erasePendingText(): void {
@@ -454,6 +456,7 @@ export class RetrievalTraceStore {
   async close(): Promise<void> {
     if (this.closed) return
     this.closed = true
+    await this.flushing
     do {
       const before = this.queue.length
       await this.flush()
