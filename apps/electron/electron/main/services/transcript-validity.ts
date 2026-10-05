@@ -16,9 +16,8 @@
  *  - timestamps that are consistently wrong (repeated or backwards starts);
  *  - more speakers than the calendar invited;
  *  - a transcript that ends long before the audio, judged by what follows: no
- *    audio after it is fine, speech after it with a normal speaking rate means
- *    content is missing, a speaking rate no one reaches means the clock was
- *    compressed while the text is complete.
+ *    audio after it is fine, speech after it with sparse text means content is
+ *    missing, dense text suggests the clock was compressed and needs sampling.
  *
  * Outcomes: 'audio' (silent, noise only or too short: the audio decides, no
  * transcript needed), 'invalid', 'incomplete', 'doubtful' and 'valid'. Only a
@@ -29,7 +28,7 @@
 import { FRAME_SECONDS, LOUD_DB, LOUD_GAIN } from './audio-profile'
 
 /** Bumped when a rule changes, so stored verdicts are recomputed. */
-export const VALIDITY_VERSION = 1
+export const VALIDITY_VERSION = 2
 
 export type ValidityStatus = 'audio' | 'invalid' | 'incomplete' | 'doubtful' | 'valid'
 
@@ -61,6 +60,8 @@ export interface TranscriptValidity {
   /** The numbers behind the verdict, kept for the Library and for sampling. */
   measures: {
     words: number
+    /** Words per minute of sound detected in the envelope. */
+    wordsPerSoundMinute: number | null
     silentShare: number | null
     unplaceableShare: number | null
     timingErrorShare: number | null
@@ -126,6 +127,8 @@ export const EARLY_END_MIN_FILE_SECONDS = 300
 export const AFTER_END_MIN_AUDIO_SECONDS = 120
 /** Above this many words per second of the stated span, the clock was compressed. */
 export const COMPRESSED_SPAN_RATE = 4
+/** Below this density, speech after an early end indicates missing text. */
+export const MIN_WORDS_PER_SOUND_MINUTE = 90
 
 /**
  * Whether a frame of the envelope holds audio: at least the recording's own
@@ -154,6 +157,7 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
   const speakers = new Set(input.segments.map((s) => s.speaker).filter((s): s is string => !!s)).size
   const measures: TranscriptValidity['measures'] = {
     words: totalWords,
+    wordsPerSoundMinute: null,
     silentShare: null,
     unplaceableShare: null,
     timingErrorShare: null,
@@ -297,6 +301,8 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
       })
     }
     const audioSeconds = audioFrames * FRAME_SECONDS
+    const wordsPerSoundMinute = audioSeconds > 0 ? totalWords / audioSeconds * 60 : null
+    measures.wordsPerSoundMinute = wordsPerSoundMinute
     if (totalWords >= MIN_WORDS && totalWords / Math.max(audioSeconds, 1) > MAX_WORDS_PER_SECOND) {
       reasons.push({
         code: 'more_words_than_audio',
@@ -313,16 +319,14 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
     if (fileSeconds >= EARLY_END_MIN_FILE_SECONDS && end < EARLY_END_SHARE * fileSeconds) {
       const afterSeconds = after * FRAME_SECONDS
       if (afterSeconds >= AFTER_END_MIN_AUDIO_SECONDS) {
-        const spanRate = totalWords / Math.max(end, 1)
-        const fileRate = totalWords / fileSeconds
-        if (spanRate > COMPRESSED_SPAN_RATE && fileRate >= 1 && fileRate <= 3.5) {
+        if (wordsPerSoundMinute !== null && wordsPerSoundMinute >= MIN_WORDS_PER_SOUND_MINUTE) {
           reasons.push({
             code: 'clock_compressed',
             detail:
-              `The times end at ${Math.round(end)} s of ${Math.round(fileSeconds)} s, at a speaking rate no one reaches; ` +
-              'the text looks complete and its clock compressed.'
+              `The times end at ${Math.round(end)} s of ${Math.round(fileSeconds)} s, with ${Math.round(wordsPerSoundMinute)} words per sound-minute; ` +
+              'the dense text suggests a compressed clock and needs sampling.'
           })
-        } else if (spanRate <= COMPRESSED_SPAN_RATE) {
+        } else {
           return result('incomplete', [
             ...reasons,
             {
@@ -330,11 +334,6 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
               detail: `The transcript stops at ${Math.round(end)} s, and ${Math.round(afterSeconds)} s of audio follow it.`
             }
           ])
-        } else {
-          reasons.push({
-            code: 'audio_after_the_end',
-            detail: `The transcript stops at ${Math.round(end)} s, and ${Math.round(afterSeconds)} s of audio follow it.`
-          })
         }
       }
     }
