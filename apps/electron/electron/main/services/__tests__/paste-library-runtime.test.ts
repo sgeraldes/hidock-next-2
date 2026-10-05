@@ -7,6 +7,20 @@ import { execFileSync } from 'child_process'
 import ffmpeg from 'ffmpeg-static'
 import { createRequire } from 'module'
 import { dirname } from 'path'
+import fs, { createReadStream, createWriteStream } from 'fs'
+import fsPromises, { readFile } from 'node:fs/promises'
+import { createHash } from 'crypto'
+import { finished } from 'node:stream/promises'
+
+// Observe the real filesystem streams without replacing their I/O or lifecycle.
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('fs')>()
+  return { ...actual, createReadStream: vi.fn(actual.createReadStream), createWriteStream: vi.fn(actual.createWriteStream) }
+})
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return { ...actual, readFile: vi.fn(actual.readFile) }
+})
 
 const mocks = vi.hoisted(() => ({
   list: vi.fn<() => Array<{ descriptor: { id: string }; instanceId: string }>>(() => []),
@@ -208,15 +222,60 @@ it('rejects a sparse oversized video before storage or extraction', async () => 
 
 it('streams video hash and copy without invoking its byte extractor', async () => {
   const path = join(root, 'streaming.mp4')
-  writeFileSync(path, Buffer.alloc(8 * 1024 * 1024, 19))
+  const bytes = Buffer.from('small video fixture spanning several real stream chunks')
+  writeFileSync(path, bytes)
   const spy = vi.spyOn(getArtifactType('video')!, 'extractText')
-  let ticks = 0
-  const timer = setInterval(() => ticks++, 0)
+  const reads: Array<{ stream: fs.ReadStream; chunks: Buffer[] }> = []
+  const writes: fs.WriteStream[] = []
+  const closures: Promise<void>[] = []
+  vi.mocked(createReadStream).mockImplementation((source, options) => {
+    const stream = fs.createReadStream(source, { ...(typeof options === 'object' ? options : {}), highWaterMark: 7 })
+    const chunks: Buffer[] = []
+    stream.on('data', (chunk) => { chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)) })
+    reads.push({ stream, chunks })
+    closures.push(finished(stream, { cleanup: true }))
+    return stream
+  })
+  vi.mocked(createWriteStream).mockImplementation((destination, options) => {
+    const stream = fs.createWriteStream(destination, options)
+    writes.push(stream)
+    closures.push(finished(stream, { cleanup: true }))
+    return stream
+  })
+  vi.mocked(readFile).mockClear()
+  vi.mocked(readFile).mockRejectedValue(new Error('Video must not use whole-file reads'))
+  const syncRead = vi.spyOn(fs, 'readFileSync').mockImplementation(() => { throw new Error('Video must not use whole-file reads') })
+  vi.mocked(createReadStream).mockClear()
+  vi.mocked(createWriteStream).mockClear()
   try {
     const result = await importArtifact(path, { localOnly: true })
-    expect(readFileSync(result.artifact.storage_path!)).toEqual(readFileSync(path))
-    expect(result.artifact.size).toBe(8 * 1024 * 1024)
-    expect(ticks).toBeGreaterThan(0)
+    await Promise.all(closures)
+    expect(createReadStream).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(createReadStream).mock.calls.map(([source]) => source)).toEqual([path, path])
+    for (const { stream, chunks } of reads) {
+      expect(chunks.length).toBeGreaterThan(1)
+      expect(Buffer.concat(chunks).equals(bytes)).toBe(true)
+      expect(stream.closed).toBe(true)
+      expect(stream.destroyed).toBe(true)
+    }
+    expect(createWriteStream).toHaveBeenCalledExactlyOnceWith(result.artifact.storage_path, { flags: 'wx' })
+    expect(writes[0].closed).toBe(true)
+    expect(writes[0].destroyed).toBe(true)
+    expect(readFile).not.toHaveBeenCalled()
+    expect(syncRead).not.toHaveBeenCalled()
+    syncRead.mockRestore()
+    expect(readFileSync(result.artifact.storage_path!).equals(bytes)).toBe(true)
+    expect(result.artifact.content_hash).toBe(createHash('sha256').update(bytes).digest('hex'))
+    expect(result.artifact.size).toBe(bytes.length)
     expect(spy).not.toHaveBeenCalled()
-  } finally { clearInterval(timer); spy.mockRestore() }
+  } finally {
+    for (const { stream } of reads) stream.destroy()
+    for (const stream of writes) stream.destroy()
+    await Promise.allSettled(closures)
+    syncRead.mockRestore()
+    vi.mocked(createReadStream).mockImplementation(fs.createReadStream)
+    vi.mocked(createWriteStream).mockImplementation(fs.createWriteStream)
+    vi.mocked(readFile).mockImplementation(fsPromises.readFile)
+    spy.mockRestore()
+  }
 })
