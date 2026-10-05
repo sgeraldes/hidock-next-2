@@ -10,6 +10,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import Notes from '../Notes'
+import { NewMenu } from '@/components/layout/PcRecording'
 import { MemoryRouter } from 'react-router-dom'
 import type { Note } from '@/types/notes'
 
@@ -210,4 +211,21 @@ describe('the notes page', () => {
 
     await waitFor(() => expect(screen.getByText(/no provider configured/)).toBeTruthy())
   })
+})
+
+it('opens header-created note while Notes is mounted with an active search', async () => {
+  const notesAPI = api.notes as { list: ReturnType<typeof vi.fn>; get: ReturnType<typeof vi.fn> }
+  notesAPI.list.mockImplementation(async ({ search }: { search?: string }) => ({ success: true, notes: notes.filter((note) => !search || note.content.includes(search)) }))
+  api.pasteLibrary = { newNote: vi.fn(async () => {
+    const note = makeNote('header-new'); notes = [note, ...notes]
+    return { id: note.id, title: 'New note' }
+  }) }
+  render(<MemoryRouter initialEntries={['/notes']}><NewMenu /><Notes /></MemoryRouter>)
+  await screen.findByText('Presupuesto de septiembre')
+  fireEvent.change(screen.getByPlaceholderText(/search/i), { target: { value: 'Presupuesto' } })
+  fireEvent.pointerDown(screen.getByRole('button', { name: 'New' }), { button: 0, ctrlKey: false })
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'New note' }))
+  await waitFor(() => expect(screen.getByRole('textbox', { name: 'Note' })).toHaveValue(''))
+  expect(screen.getByPlaceholderText(/search/i)).toHaveValue('')
+  expect(notesAPI.get).toHaveBeenCalledWith({ id: 'header-new' })
 })

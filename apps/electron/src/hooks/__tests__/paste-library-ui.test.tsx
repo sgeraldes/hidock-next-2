@@ -61,3 +61,11 @@ it('states that an unreadable PDF cannot be searched', async () => {
   expect(await screen.findByText('Added, but its text could not be read')).toBeInTheDocument()
   expect(screen.getByText('Search cannot find its contents.')).toBeInTheDocument()
 })
+
+it('shows the plain supported size limit when a video import is rejected', async () => {
+  paste.mockResolvedValue([{ title: 'oversized.mp4', error: 'Video exceeds the 512 MB limit.' }])
+  render(<MemoryRouter><ToastProvider><ClipboardCapture /></ToastProvider></MemoryRouter>)
+  fireEvent.paste(document.body, { clipboardData: { files: [], items: [], getData: () => 'fixture' } })
+  expect(await screen.findByText('Could not add oversized.mp4')).toBeInTheDocument()
+  expect(screen.getByText('Video exceeds the 512 MB limit.')).toBeInTheDocument()
+})

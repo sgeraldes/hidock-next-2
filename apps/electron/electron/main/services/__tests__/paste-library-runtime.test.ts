@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { beforeAll, afterAll, expect, it, vi } from 'vitest'
-import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, unlinkSync, rmdirSync, readdirSync } from 'fs'
+import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, unlinkSync, rmdirSync, readdirSync, openSync, ftruncateSync, closeSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { execFileSync } from 'child_process'
@@ -23,10 +23,12 @@ vi.mock('../vector-store', () => ({ getVectorStore: vi.fn(() => { throw new Erro
 vi.mock('electron', () => ({ clipboard: { read: vi.fn() }, net: { fetch: vi.fn(async () => new Response('<title>Example</title><p>Readable body</p>', { headers: { 'content-type': 'text/html' } })) }, BrowserWindow: { getAllWindows: () => [] } }))
 import { initializeDatabase, closeDatabase, queryOne, getRecordings } from '../database'
 import { pasteLibrary, newLibraryNote } from '../paste-library-runtime'
+import { importArtifact, MAX_VIDEO_BYTES } from '../artifact-service'
 import { getArtifactType } from '../artifact-types'
 import { queueTranscriptionIfEnabled } from '../transcription'
 import { getVectorStore } from '../vector-store'
 import { net } from 'electron'
+vi.mock('../paste-page', () => ({ fetchPastePage: vi.fn(async () => ({ title: 'Example', text: 'Readable body' })) }))
 
 beforeAll(async () => { mkdirSync(join(root, 'recordings')); await initializeDatabase() })
 // All cleanup targets are fixture-owned literal paths under this unique temp root.
@@ -165,4 +167,56 @@ it('uses the real Slack client with mocked HTTP and stores connector provenance 
   }
   mocks.list.mockReturnValue([])
   mocks.secret.mockReturnValue(null)
+})
+
+it('reserves the same screenshot across watcher extraction and explicit local paste', async () => {
+  const png = Buffer.from('concurrent-screenshot-fixture')
+  const path = join(root, 'watcher.png')
+  writeFileSync(path, png)
+  let release!: () => void
+  let started!: () => void
+  const entered = new Promise<void>((resolve) => { started = resolve })
+  const held = new Promise<void>((resolve) => { release = resolve })
+  const spy = vi.spyOn(getArtifactType('image')!, 'extractText').mockImplementation(async () => {
+    started(); await held; return { text: '' }
+  })
+  try {
+    const watcher = importArtifact(path)
+    await entered
+    const pasted = pasteLibrary({ png })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    release()
+    const [auto, [explicit]] = await Promise.all([watcher, pasted])
+    expect(explicit.id).toBe(auto.knowledgeCaptureId)
+    expect(queryOne<{ count: number }>('SELECT COUNT(*) AS count FROM artifacts WHERE content_hash = ?', [auto.artifact.content_hash])!.count).toBe(1)
+    expect(spy).toHaveBeenCalledTimes(1)
+  } finally { release(); spy.mockRestore() }
+})
+
+it('rejects a sparse oversized video before storage or extraction', async () => {
+  const path = join(root, 'oversized.mp4')
+  const fd = openSync(path, 'w')
+  try { ftruncateSync(fd, MAX_VIDEO_BYTES + 1) } finally { closeSync(fd) }
+  const spy = vi.spyOn(getArtifactType('video')!, 'extractText')
+  try {
+    const [result] = await pasteLibrary({ files: [path] })
+    expect(result.error).toBe('Video exceeds the 512 MB limit.')
+    expect(queryOne('SELECT id FROM knowledge_captures WHERE title = ?', ['oversized.mp4'])).toBeUndefined()
+    expect(spy).not.toHaveBeenCalled()
+  } finally { spy.mockRestore() }
+})
+
+it('streams video hash and copy without invoking its byte extractor', async () => {
+  const path = join(root, 'streaming.mp4')
+  writeFileSync(path, Buffer.alloc(8 * 1024 * 1024, 19))
+  const spy = vi.spyOn(getArtifactType('video')!, 'extractText')
+  let ticks = 0
+  const timer = setInterval(() => ticks++, 0)
+  try {
+    const result = await importArtifact(path, { localOnly: true })
+    expect(readFileSync(result.artifact.storage_path!)).toEqual(readFileSync(path))
+    expect(result.artifact.size).toBe(8 * 1024 * 1024)
+    expect(ticks).toBeGreaterThan(0)
+    expect(spy).not.toHaveBeenCalled()
+  } finally { clearInterval(timer); spy.mockRestore() }
 })

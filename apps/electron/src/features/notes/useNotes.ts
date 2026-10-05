@@ -30,6 +30,7 @@ export interface NotesState {
 export function useNotes() {
   const [notes, setNotes] = useState<Note[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [openedNote, setOpenedNote] = useState<Note | null>(null)
   const [draft, setDraft] = useState('')
   const [saving, setSaving] = useState(false)
   const [search, setSearch] = useState('')
@@ -52,7 +53,7 @@ export function useNotes() {
   const draftRef = useRef('')
   const selectedIdRef = useRef<string | null>(null)
 
-  const selected = notes.find((note) => note.id === selectedId) ?? null
+  const selected = notes.find((note) => note.id === selectedId) ?? (openedNote?.id === selectedId ? openedNote : null)
 
   const refresh = useCallback(async (term = search) => {
     const result = await window.electronAPI.notes.list({ search: term || undefined })
@@ -109,6 +110,7 @@ export function useNotes() {
       const leavingDraft = draftRef.current
       if (leaving && leaving !== note?.id) void leave(leaving, leavingDraft)
 
+      setOpenedNote(note)
       setSelectedId(note?.id ?? null)
       selectedIdRef.current = note?.id ?? null
       setDraft(note?.content ?? '')
@@ -119,6 +121,15 @@ export function useNotes() {
     },
     [leave]
   )
+
+  const selectById = useCallback(async (id: string) => {
+    const result = await window.electronAPI.notes.get({ id })
+    if (!result.success || !result.note) return false
+    setSearch('')
+    setNotes((current) => [result.note!, ...current.filter((note) => note.id !== id)])
+    select(result.note)
+    return true
+  }, [select])
 
   const edit = useCallback(
     (content: string) => {
@@ -219,6 +230,7 @@ export function useNotes() {
     setSearch,
     refresh,
     select,
+    selectById,
     edit,
     create,
     remove,

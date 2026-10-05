@@ -135,7 +135,7 @@ const deps: PasteDeps = {
     if (identity) return textArtifact(url, identity.title, 'url', { metadata: { url, pageTitle: identity.title } })
     let page: { title: string; text: string } = { title: new URL(url).hostname, text: '' }
     let warning: string | undefined
-    try { page = await fetchPastePage(url, (input, init) => net.fetch(input, init)) }
+    try { page = await fetchPastePage(url) }
     catch (error) { warning = `Link saved; readable content could not be fetched: ${error instanceof Error ? error.message : String(error)}` }
     return { ...await textArtifact(`${url}\n\n${page.text}`, page.title, 'url', { metadata: { url, pageTitle: page.title } }), warning }
   }

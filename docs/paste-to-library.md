@@ -33,3 +33,11 @@ No additional tables or dependencies are introduced: link and video are new
 artifact type registrations over the existing artifacts/knowledge_captures
 store; external audio stays in recordings. Empty editor notes use the existing
 notes table.
+
+Pasted videos support files up to 512 MiB. Larger files show “Video exceeds the
+512 MB limit.” before storage or audio extraction. Hashing and copying stream
+asynchronously; video bytes are never loaded for text extraction.
+
+Readable web links allow only public HTTP(S) destinations. DNS answers and each
+redirect are checked, connections use the checked address, and all responses
+are torn down within the fetch deadline.

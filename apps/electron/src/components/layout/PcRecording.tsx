@@ -16,7 +16,10 @@ export function NewMenu() {
     { label: 'New note', icon: NotebookPen, onSelect: () => {
       void window.electronAPI.pasteLibrary.newNote().then((result) => {
         if (result.error) toast.error('Could not create note', result.error)
-        else navigate(`/notes?note=${encodeURIComponent(result.id!)}`)
+        else {
+          window.dispatchEvent(new Event('hidock:downloads-completed'))
+          navigate(`/notes?note=${encodeURIComponent(result.id!)}`)
+        }
       }).catch((error: unknown) => toast.error('Could not create note', error instanceof Error ? error.message : String(error)))
     } }
   ]

@@ -29,6 +29,7 @@ export default function Notes(): React.ReactElement {
     setSearch,
     refresh,
     select,
+    selectById,
     edit,
     create,
     remove,
@@ -42,12 +43,13 @@ export default function Notes(): React.ReactElement {
   const [params, setParams] = useSearchParams()
   useEffect(() => {
     const id = params.get('note')
-    const note = id && notes.find((item) => item.id === id)
-    if (note) {
-      select(note)
-      setParams({}, { replace: true })
-    }
-  }, [notes, params, select, setParams])
+    if (!id) return
+    let active = true
+    void selectById(id).then((opened) => {
+      if (active && opened) setParams({}, { replace: true })
+    })
+    return () => { active = false }
+  }, [params, selectById, setParams])
 
   useEffect(() => {
     const timer = setTimeout(() => void refresh(search), 250)
