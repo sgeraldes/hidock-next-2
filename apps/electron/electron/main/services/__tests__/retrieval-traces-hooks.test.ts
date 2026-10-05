@@ -74,6 +74,32 @@ afterEach(async () => {
   rmSync(directory, { recursive: true })
 })
 describe('request hooks to real temporary trace SQLite', () => {
+  it('keeps generation B cancellable when generation A throws for the same session', async () => {
+    let rejectA!: (error: Error) => void
+    let releaseB!: () => void
+    const service = getRAGService()
+    const internals = service as unknown as {
+      generateAnswer(session: string, query: string): Promise<unknown>
+      activeControllers: Map<string, AbortController>
+    }
+    state.search.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectA = reject }))
+    state.search.mockImplementationOnce(() => new Promise(resolve => { releaseB = () => resolve([]) }))
+    const a = internals.generateAnswer('shared', 'question A')
+    const aFailure = expect(a).rejects.toThrow('A failed')
+    await vi.waitFor(() => expect(rejectA).toBeTypeOf('function'))
+    const controllerA = internals.activeControllers.get('shared')!
+    const b = internals.generateAnswer('shared', 'question B')
+    await vi.waitFor(() => expect(releaseB).toBeTypeOf('function'))
+    const controllerB = internals.activeControllers.get('shared')!
+    expect(controllerB).not.toBe(controllerA)
+    rejectA(new Error('A failed'))
+    await aFailure
+    expect(internals.activeControllers.get('shared')).toBe(controllerB)
+    expect(service.cancelRequest('shared')).toBe(true)
+    expect(controllerB.signal.aborted).toBe(true)
+    releaseB()
+    await b
+  })
   it('never exposes the 101st brain identity after it becomes personal', async () => {
     const ids = Array.from({ length: 101 }, (_, index) => `capture-${index + 1}`)
     await store.close()

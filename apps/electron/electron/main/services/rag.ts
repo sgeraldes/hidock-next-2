@@ -816,10 +816,10 @@ class RAGService {
     const trace: TraceEvent = { trace_id: generationId, consumer: 'chat', session_ref: sessionId,
       route: 'generateAnswer', started_at: new Date().toISOString(), duration_ms: 0, status: 'error',
       query: message, candidates: [] }
+    const controller = new AbortController()
     try {
 
       // B-CHAT-005: Create AbortController for this request
-      const controller = new AbortController()
       this.activeControllers.set(sessionId, controller)
 
       // Get or create session context (LRU cache)
@@ -1361,7 +1361,6 @@ class RAGService {
         } catch {
           /* keep the generic message */
         }
-        this.activeControllers.delete(sessionId)
         const errorText = brainLabel
           ? `Failed to generate a response with ${brainLabel}. Check that it is configured and reachable, then try again.`
           : 'Failed to generate response. Please try again.'
@@ -1407,18 +1406,15 @@ class RAGService {
         answerProv
       )
 
-      // B-CHAT-005: Clean up controller after successful completion
-      this.activeControllers.delete(sessionId)
-
       trace.status = controller.signal.aborted ? 'cancelled' : retrievalIssue === 'provider-failure' ? 'error' : hasContent ? 'ok' : 'empty'
       return { answer, sources, generationId }
     } catch (error) {
-      trace.status = this.activeControllers.get(sessionId)?.signal.aborted ? 'cancelled' : 'error'
+      trace.status = controller.signal.aborted ? 'cancelled' : 'error'
       trace.error = trace.status === 'cancelled' ? 'aborted' : 'request-failed'
       throw error
     } finally {
       trace.duration_ms = performance.now() - traceStart
-      this.activeControllers.delete(sessionId)
+      if (this.activeControllers.get(sessionId) === controller) this.activeControllers.delete(sessionId)
       recordRetrievalTrace(trace)
     }
   }
