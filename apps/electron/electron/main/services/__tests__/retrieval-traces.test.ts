@@ -36,6 +36,47 @@ afterEach(async () => {
 })
 
 describe('retrieval trace store (real SQLite)', () => {
+  it('masks text and retries pending erasure at flush after a busy writer releases', async () => {
+    const s = store()
+    s.record(event())
+    await s.flush()
+    const engine = (s as unknown as { engine: DatabaseEngine }).engine
+    engine.getDatabase().run('PRAGMA busy_timeout = 50')
+    const writer = new Database(s.path)
+    writer.exec('BEGIN IMMEDIATE')
+    try {
+      await s.setSettings({ recordQueries: true, keepQueryText: false })
+      expect((await s.stats()).pending_erase).toBe(true)
+      expect((await s.read())[0]).toMatchObject({ query_text: null, text_state: 'disabled' })
+      await s.setSettings({ recordQueries: true, keepQueryText: true })
+      expect((await s.read())[0].query_text).toBeNull()
+      writer.exec('ROLLBACK')
+      await s.flush()
+      expect((await s.stats()).pending_erase).toBe(false)
+      expect(writer.prepare('SELECT query_text, text_state FROM traces').get()).toEqual({ query_text: null, text_state: 'disabled' })
+    } finally { writer.close() }
+  })
+  it('persists an erase obligation on UPDATE error and retries on reopen', async () => {
+    const s = store()
+    s.record(event())
+    await s.flush()
+    const engine = (s as unknown as { engine: DatabaseEngine }).engine
+    const run = engine.run.bind(engine)
+    const spy = vi.spyOn(engine, 'run').mockImplementation((sql, params) => {
+      if (sql.startsWith('UPDATE traces SET query_text')) throw new Error('disk error')
+      return run(sql, params)
+    })
+    await s.setSettings({ recordQueries: true, keepQueryText: false })
+    expect((await s.stats()).pending_erase).toBe(true)
+    const db = new Database(s.path, { readonly: true })
+    try { expect(db.prepare("SELECT value FROM meta WHERE key = 'pending_erase'").get()).toEqual({ value: '1' }) }
+    finally { db.close() }
+    await s.close()
+    spy.mockRestore()
+    const reopened = store({ path: s.path })
+    expect((await reopened.read())[0]).toMatchObject({ query_text: null, text_state: 'disabled' })
+    expect((await reopened.stats()).pending_erase).toBe(false)
+  })
   it('stops eviction for a pinned reader, bounds delete batches, and reclaims after release', async () => {
     const s = store({ maxFileBytes: 128 * 1024 })
     await s.schemaVersion()

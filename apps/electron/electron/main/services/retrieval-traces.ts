@@ -58,6 +58,7 @@ interface EncryptionStorage {
 }
 export interface TraceSettings { recordQueries: boolean; keepQueryText: boolean }
 export interface TraceStats {
+  pending_erase: boolean
   consumers: { chat: number; explore: number; brain: number }
   dropped_events: number
   write_errors: number
@@ -127,6 +128,7 @@ export class RetrievalTraceStore {
   private lastLog = -Infinity
   private retryAfter = 0
   private closed = false
+  private pendingErase = false
   writeErrors = 0
 
   constructor(private readonly options: {
@@ -172,6 +174,8 @@ export class RetrievalTraceStore {
           if (this.key.length !== 32) throw new Error('Invalid trace HMAC key')
         }
         this.keyReady = true
+        this.pendingErase ||= this.engine.queryOne<{ value: string }>("SELECT value FROM meta WHERE key = 'pending_erase'")?.value === '1'
+        this.erasePendingText()
         this.retention()
         this.dailyTimer = setInterval(() => { void this.retain() }, 86400000)
         this.dailyTimer.unref()
@@ -255,6 +259,7 @@ export class RetrievalTraceStore {
     this.flushing = (async () => {
       try {
         await this.open()
+        this.erasePendingText()
         this.engine.runInTransaction(() => {
           for (const event of batch) {
             if (!this.settings.recordQueries || event.epoch !== this.epoch) continue
@@ -285,8 +290,8 @@ export class RetrievalTraceStore {
     const normalized = Buffer.concat([decipher.update(Buffer.from(item.normalized, 'base64')), decipher.final()]).toString('utf8')
     const queryHmac = item.queryHmac ?? createHmac('sha256', this.key).update(normalized).digest('hex')
     let text: string | null = null
-    let textState: StoredTrace['text_state'] = this.settings.keepQueryText && item.textAllowed ? 'unavailable' : 'disabled'
-    if (query && item.textAllowed && this.settings.keepQueryText && this.options.storage.isEncryptionAvailable()) {
+    let textState: StoredTrace['text_state'] = !this.pendingErase && this.settings.keepQueryText && item.textAllowed ? 'unavailable' : 'disabled'
+    if (query && !this.pendingErase && item.textAllowed && this.settings.keepQueryText && this.options.storage.isEncryptionAvailable()) {
       text = this.options.storage.encryptString(query).toString('base64')
       textState = 'encrypted'
     }
@@ -359,6 +364,7 @@ export class RetrievalTraceStore {
     this.checkpoint()
   }
   applySettings(settings: TraceSettings): void {
+    if (!settings.keepQueryText && this.settings.keepQueryText) this.pendingErase = true
     if (!settings.recordQueries && this.settings.recordQueries) this.epoch++
     this.settings = { ...settings }
     if (!settings.recordQueries) { this.queue = []; this.pendingLinks.clear() }
@@ -371,10 +377,21 @@ export class RetrievalTraceStore {
     if (!settings.keepQueryText) {
       try {
         await this.open()
-        this.engine.run("UPDATE traces SET query_text = NULL, text_state = 'disabled'")
-        this.engine.getDatabase().run('PRAGMA wal_checkpoint(TRUNCATE)')
+        this.erasePendingText()
       } catch { this.failed() }
     }
+  }
+  private erasePendingText(): void {
+    if (!this.pendingErase) return
+    // The in-memory obligation survives even when the lock also prevents meta writes.
+    try { this.engine.run("INSERT OR REPLACE INTO meta VALUES ('pending_erase', '1')") } catch { /* retry next flush */ }
+    try {
+      this.engine.runInTransaction(() => {
+        this.engine.run("UPDATE traces SET query_text = NULL, text_state = 'disabled'")
+        this.engine.run("DELETE FROM meta WHERE key = 'pending_erase'")
+      })
+      this.pendingErase = false
+    } catch { this.failed() }
   }
   async read(): Promise<StoredTrace[]> {
     await this.open()
@@ -387,8 +404,8 @@ export class RetrievalTraceStore {
         .map(c => JSON.parse(c.candidate) as TraceCandidate)
       // Aggregate traces are hidden if any identity is no longer eligible.
       if (!await this.candidatesEligible(candidates)) continue
-      result.push({ ...fields, candidates, query_text: row.query_text, query_hmac: row.query_hmac,
-        text_state: row.text_state, answer_message_id: row.answer_message_id })
+      result.push({ ...fields, candidates, query_text: this.pendingErase ? null : row.query_text, query_hmac: row.query_hmac,
+        text_state: this.pendingErase ? 'disabled' : row.text_state, answer_message_id: row.answer_message_id })
     }
     return result
   }
@@ -403,7 +420,7 @@ export class RetrievalTraceStore {
     for (const row of rows) if (row.consumer in consumers) consumers[row.consumer] = row.count
     const counts = this.engine.queryOne<{ dropped: number; errors: number }>('SELECT COALESCE(SUM(dropped), 0) AS dropped, COALESCE(SUM(errors), 0) AS errors FROM counters')!
     for (const c of this.counters.values()) { counts.dropped += c.dropped; counts.errors += c.errors }
-    return { consumers, dropped_events: counts.dropped, write_errors: counts.errors, file_bytes: this.fileBytes() }
+    return { consumers, dropped_events: counts.dropped, write_errors: counts.errors, file_bytes: this.fileBytes(), pending_erase: this.pendingErase }
   }
   private async candidatesEligible(candidates: TraceCandidate[]): Promise<boolean> {
     for (const candidate of candidates) {

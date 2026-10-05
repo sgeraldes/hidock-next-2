@@ -3,7 +3,7 @@ import { Switch } from '@/components/ui/switch'
 import { useConfigStore } from '@/store/domain/useConfigStore'
 import { formatBytes } from '@/lib/utils'
 
-type Stats = { consumers: { chat: number; explore: number; brain: number }; dropped_events: number; file_bytes: number }
+type Stats = { consumers: { chat: number; explore: number; brain: number }; dropped_events: number; file_bytes: number; pending_erase: boolean }
 
 export function RetrievalTraceSettings() {
   const { config, updateConfig } = useConfigStore()
@@ -26,7 +26,8 @@ export function RetrievalTraceSettings() {
       }
     }
     void read()
-    return () => { alive = false }
+    const timer = setInterval(() => { void read() }, 2000)
+    return () => { alive = false; clearInterval(timer) }
   }, [recordQueries, keepQueryText])
 
   const save = async (values: { recordQueries?: boolean; keepQueryText?: boolean }) => {
@@ -48,7 +49,7 @@ export function RetrievalTraceSettings() {
       </div>
       {failure ? <p role="alert" className="text-xs text-muted-foreground">{failure}</p> : (
         <p className="text-xs text-muted-foreground" aria-live="polite">
-          {stats ? `Last 7 days: Chat ${stats.consumers.chat} · Explore ${stats.consumers.explore} · Brain ${stats.consumers.brain} · ${stats.dropped_events} dropped · ${formatBytes(stats.file_bytes)}` : 'Reading query recording statistics…'}
+          {stats?.pending_erase ? 'Erasing stored query text...' : stats ? `Last 7 days: Chat ${stats.consumers.chat} · Explore ${stats.consumers.explore} · Brain ${stats.consumers.brain} · ${stats.dropped_events} dropped · ${formatBytes(stats.file_bytes)}` : 'Reading query recording statistics…'}
         </p>
       )}
     </div>

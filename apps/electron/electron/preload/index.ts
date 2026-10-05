@@ -370,7 +370,7 @@ export interface TruncatedRecoveryCounts {
 }
 
 export interface ElectronAPI {
-  traces: { stats: () => Promise<Result<{ consumers: { chat: number; explore: number; brain: number }; dropped_events: number; write_errors: number; file_bytes: number }>> }
+  traces: { stats: () => Promise<Result<{ consumers: { chat: number; explore: number; brain: number }; dropped_events: number; write_errors: number; file_bytes: number; pending_erase: boolean }>> }
 
   /**
    * Features that are off for this whole run (disabled when the app started).

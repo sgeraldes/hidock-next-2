@@ -11,6 +11,11 @@ beforeEach(() => {
   window.electronAPI = { traces: { stats } } as any
 })
 describe('Assistant query recording settings', () => {
+  it('shows pending query text erasure instead of acknowledging completion', async () => {
+    stats.mockResolvedValue({ success: true, data: { consumers: { chat: 3, explore: 2, brain: 1 }, dropped_events: 0, file_bytes: 1024, pending_erase: true } })
+    render(<RetrievalTraceSettings />)
+    expect(await screen.findByText('Erasing stored query text...')).toBeVisible()
+  })
   it('defaults both switches on and shows the real seven-day counts', async () => {
     render(<RetrievalTraceSettings />)
     expect(screen.getByRole('switch', { name: 'Record queries' })).toBeChecked()
