@@ -29,7 +29,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useReaderFind, ReaderFindBar, FindText } from './ReaderFind'
+import { useReaderFind, ReaderFindBar, FindText, type ReaderFindSession } from './ReaderFind'
 import { fromStoredSegments, parseTranscriptSegments } from '../utils/transcriptSegments'
 import type { FindDocument } from '../utils/transcriptFind'
 import { TranscriptViewer, type StoredSegment, type TranscriptContentUpdate } from './TranscriptViewer'
@@ -301,6 +301,7 @@ interface SourceReaderProps {
   onStop?: () => void
   onSeek?: (startMs: number, endMs?: number) => void
   onFindSeek?: (startMs: number) => void
+  findSession?: React.MutableRefObject<ReaderFindSession>
   // Action button callbacks
   onDownload?: () => void
   onTranscribe?: () => void
@@ -341,6 +342,7 @@ export function SourceReader({
   onStop,
   onSeek,
   onFindSeek,
+  findSession,
   onDownload,
   onTranscribe,
   // onReprocessVibeVoice is intentionally not consumed: the raw "VibeVoice"
@@ -1247,7 +1249,7 @@ export function SourceReader({
       ]))
     ]
   }, [effectiveTranscript, recording?.audioCategory, transcriptSegments, timelineEvents, eventDetails, resolvedFindDocuments, resolveFindSpeaker])
-  const find = useReaderFind({ sourceId: recordingId, documents: findDocuments, onSeek: onFindSeek ?? handleReaderSeek,
+  const find = useReaderFind({ sourceId: recordingId, documents: findDocuments, onSeek: onFindSeek ?? handleReaderSeek, session: findSession,
     onReveal: match => {
       if (maximizedSection && maximizedSection !== match.section) restoreMaximizedSection()
       if (readerSectionModes[match.section] !== 'expanded') setReaderSectionMode(match.section, 'expanded')

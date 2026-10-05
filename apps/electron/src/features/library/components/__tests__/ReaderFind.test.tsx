@@ -1,13 +1,28 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { useReaderFind, ReaderFindBar, FindText } from '../ReaderFind'
+import type { FindMatch } from '../../utils/transcriptFind'
 
 const docs = [{ key: 'summary', section: 'summary' as const, text: 'reunión' }, { key: 'turn:0', section: 'transcript' as const, text: 'reunión reunión', timeMs: 30000 }]
-function Harness({ source = 'a', seek = vi.fn(), reveal = vi.fn() }) {
-  const find = useReaderFind({ sourceId: source, documents: docs, onSeek: seek, onReveal: reveal })
+function Harness({ source = 'a', seek = vi.fn(), reveal = vi.fn(), session }: { source?: string; seek?: (ms: number) => void; reveal?: (match: FindMatch) => void; session?: { current: { sourceId?: string; open: boolean; query: string; position: number } } }) {
+  const find = useReaderFind({ sourceId: source, documents: docs, onSeek: seek, onReveal: reveal, session })
   return <div ref={find.rootRef}><ReaderFindBar find={find} /><input aria-label="Other editor" /><p tabIndex={0} data-testid="reader-text"><FindText find={find} documentKey="summary" text="reunión" /></p><FindText find={find} documentKey="turn:0" text="reunión reunión" /></div>
 }
 describe('Reader find interactions', () => {
+  it('preserves the query and position across layout remounts but clears for another source', async () => {
+    const session = { current: { sourceId: 'a', open: false, query: '', position: 0 } }
+    const first = render(<Harness session={session} />)
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+    fireEvent.change(screen.getByLabelText('Find in transcript'), { target: { value: 'reunion' } })
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('1 of 3'))
+    fireEvent.keyDown(screen.getByLabelText('Find in transcript'), { key: 'Enter' })
+    first.unmount()
+    const second = render(<Harness session={session} />)
+    expect(screen.getByLabelText('Find in transcript')).toHaveValue('reunion')
+    expect(screen.getByRole('status')).toHaveTextContent('2 of 3')
+    second.rerender(<Harness source="b" session={session} />)
+    expect(screen.queryByLabelText('Find in transcript')).not.toBeInTheDocument()
+  })
   it('opens from text, ignores another input, counts, wraps, reveals, seeks, and clears on Escape', async () => {
     const seek = vi.fn(), reveal = vi.fn()
     render(<Harness seek={seek} reveal={reveal} />)

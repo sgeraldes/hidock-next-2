@@ -1,4 +1,4 @@
-import { isFindTypingTarget } from '@/features/library/components/ReaderFind'
+import { isFindTypingTarget, type ReaderFindSession } from '@/features/library/components/ReaderFind'
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, useDeferredValue } from 'react'
 import { isRecordingAudioFile } from '@/shared/audio-extensions'
 import { useNavigate, useLocation } from 'react-router-dom'
@@ -174,6 +174,8 @@ function purgeFilenameBase(filename?: string | null): string | null {
 }
 
 export function Library() {
+  // TriPaneLayout remounts the reader when a section is maximized/restored.
+  const findSession = useRef<ReaderFindSession>({ open: false, query: '', position: 0 })
   const navigate = useNavigate()
   const location = useLocation()
   const {
@@ -3495,6 +3497,7 @@ export function Library() {
               />
             ) : (
             <SourceReader
+              findSession={findSession}
               recording={selectedRecording ?? null}
               transcript={selectedTranscript}
               meeting={selectedMeeting}

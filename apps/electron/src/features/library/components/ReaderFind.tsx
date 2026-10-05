@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import { ChevronDown, ChevronUp, X } from 'lucide-react'
 import { buildFindIndex, searchFindIndex, wrapFindIndex, type FindDocument, type FindMatch } from '../utils/transcriptFind'
 import { formatTimestamp } from '../utils/formatTimestamp'
@@ -7,15 +7,17 @@ import { highlightRanges } from '../utils/highlightText'
 export function isFindTypingTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && !!target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]')
 }
-export function useReaderFind({ sourceId, documents, onSeek, onReveal, enabled = true }: {
+export interface ReaderFindSession { sourceId?: string; open: boolean; query: string; position: number }
+export function useReaderFind({ sourceId, documents, onSeek, onReveal, enabled = true, session }: {
   sourceId?: string; documents: FindDocument[]; onSeek: (ms: number) => void
-  onReveal?: (match: FindMatch) => void; enabled?: boolean
+  onReveal?: (match: FindMatch) => void; enabled?: boolean; session?: MutableRefObject<ReaderFindSession>
 }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
-  const [open, setOpen] = useState(false)
-  const [query, updateQuery] = useState('')
-  const [position, setPosition] = useState(0)
+  const saved = session && session.current.sourceId === sourceId ? session.current : undefined
+  const [open, setOpen] = useState(saved?.open ?? false)
+  const [query, updateQuery] = useState(saved?.query ?? '')
+  const [position, setPosition] = useState(saved?.position ?? 0)
   const index = useMemo(() => buildFindIndex(enabled ? documents : []), [documents, enabled])
   const matches = useMemo(() => open ? searchFindIndex(index, query) : [], [index, query, open])
   const current = matches[Math.min(position, Math.max(0, matches.length - 1))]
@@ -30,7 +32,14 @@ export function useReaderFind({ sourceId, documents, onSeek, onReveal, enabled =
   }, [matches])
   const setQuery = useCallback((value: string) => { updateQuery(value); setPosition(0) }, [])
   const close = useCallback(() => { setOpen(false); updateQuery(''); setPosition(0) }, [])
-  useEffect(close, [sourceId, close])
+  const previousSource = useRef(sourceId)
+  useLayoutEffect(() => {
+    if (previousSource.current !== sourceId) {
+      previousSource.current = sourceId
+      close()
+      if (session) session.current = { sourceId, open: false, query: '', position: 0 }
+    } else if (session) session.current = { sourceId, open, query, position }
+  }, [sourceId, open, query, position, session, close])
   useEffect(() => { if (open) inputRef.current?.focus() }, [open])
   const callbacks = useRef({ onSeek, onReveal })
   callbacks.current = { onSeek, onReveal }
@@ -79,7 +88,7 @@ export type ReaderFindState = ReturnType<typeof useReaderFind>
 const labels = { summary: 'Summary', moments: 'Actions & decisions', transcript: 'Transcript' }
 export function ReaderFindBar({ find }: { find: ReaderFindState }) {
   // Keep draft keystrokes local: the large transcript rerenders only after debounce.
-  const [draft, setDraft] = useState('')
+  const [draft, setDraft] = useState(find.query)
   useEffect(() => { if (!find.open) { setDraft(''); clearTimeout(update.current) } }, [find.open])
   const update = useRef<ReturnType<typeof setTimeout>>()
   useEffect(() => () => clearTimeout(update.current), [])
