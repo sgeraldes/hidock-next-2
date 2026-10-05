@@ -51,9 +51,9 @@ export function connectorLinkIdentity(raw: string): { name: string; title: strin
     const channel = archive?.[1] ?? client?.[2]
     const digits = archive?.[2]
     const thread = url.searchParams.get('thread_ts') ?? (digits ? `${digits.slice(0, -6)}.${digits.slice(-6)}` : null)
-    return { name: 'Slack', title: `${workspace} · ${channel}${thread ? ` · thread ${thread}` : ' · channel'}` }
+    return { name: 'Slack', title: `Slack · ${workspace} · #${channel}${thread ? ' · thread' : ' · channel'}` }
   }
-  return { name: 'Jira', title: `${url.hostname} · ${url.pathname.split('/').filter(Boolean).pop()}` }
+  return { name: 'Jira', title: `Jira · ${url.pathname.split('/').filter(Boolean).pop()}` }
 }
 
 export async function importPaste(snapshot: PasteSnapshot, deps: PasteDeps): Promise<PasteResult[]> {

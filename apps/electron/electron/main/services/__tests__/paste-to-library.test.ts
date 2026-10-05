@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from 'vitest'
-import { classifyPaste, importPaste, type PasteDeps } from '../paste-to-library'
+import { classifyPaste, connectorLinkIdentity, importPaste, type PasteDeps } from '../paste-to-library'
 
 function setup() {
   const deps: PasteDeps = {
@@ -15,6 +15,10 @@ function setup() {
   return deps
 }
 describe('paste classifier', () => {
+  it('names connector links without storage extensions or thread timestamps', () => {
+    expect(connectorLinkIdentity('https://team.slack.com/archives/C123/p1234567890123456')?.title).toBe('Slack · team · #C123 · thread')
+    expect(connectorLinkIdentity('https://team.atlassian.net/browse/ABC-123')?.title).toBe('Jira · ABC-123')
+  })
   it.each([['photo.png', 'image'], ['doc.pdf', 'pdf'], ['song.MP3', 'audio'], ['clip.mp4', 'video'], ['notes.txt', 'note'], ['archive.zip', 'file']])('%s → %s', (file, kind) => {
     expect(classifyPaste({ files: [file], text: 'ignored' })[0]).toEqual({ kind, path: file })
   })

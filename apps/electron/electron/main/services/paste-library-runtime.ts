@@ -61,7 +61,7 @@ async function importVideo(path: string): Promise<PasteResult> {
   try {
     await extractVideoAudio(existing.storage_path, wav)
     const audio = await importAudio(wav)
-    run('UPDATE recordings SET original_filename = ? WHERE id = ?', [`${basename(path)} (audio)`, audio.id!])
+    run('UPDATE recordings SET original_filename = ? WHERE id = ?', [`${basename(path)} · audio`, audio.id!])
     run('UPDATE artifacts SET metadata = ? WHERE id = ?', [JSON.stringify({ ...metadata, audioRecordingId: audio.id }), existing.id])
     const queued = queueTranscriptionIfEnabled(audio.id!)
     return { ...result, warning: queued ? undefined : 'Video saved. Audio transcription is disabled in your current settings; its audio is available in Library.' }

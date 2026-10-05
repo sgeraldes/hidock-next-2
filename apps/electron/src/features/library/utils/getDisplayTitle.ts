@@ -49,6 +49,15 @@ export function getDisplayTitle(
     return { primaryText: `${officialMeetingSubject}${part}`, source: 'meeting-subject' }
   }
 
+  if (getSourceType(recording) === 'link') {
+    const title = (recording.userTitle?.trim() || recording.title?.trim() || recording.filename).replace(/\.url$/i, '')
+      .replace(/^([^·]+) · ([CDG][A-Z0-9]+) · thread [\d.]+$/, 'Slack · $1 · #$2 · thread')
+      .replace(/^[\w.-]+\.atlassian\.net · ([A-Z][A-Z0-9_]*-\d+)$/, 'Jira · $1')
+    return { primaryText: title, source: 'user-title' }
+  }
+  if (recording.parentVideoCaptureId && recording.videoAudioTitle) {
+    return { primaryText: recording.userTitle?.trim() || recording.videoAudioTitle, source: 'user-title' }
+  }
   const userTitle = realTitle(recording.userTitle, recording.filename)
   if (userTitle) return { primaryText: userTitle, source: 'user-title' }
 

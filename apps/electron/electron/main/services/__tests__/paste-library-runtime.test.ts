@@ -21,7 +21,7 @@ vi.mock('../connectors', () => ({ getConnectorHost: () => ({ list: mocks.list })
 vi.mock('../connectors/connector-store', () => ({ getConnectorStore: () => ({ getSecret: mocks.secret }) }))
 vi.mock('../vector-store', () => ({ getVectorStore: vi.fn(() => { throw new Error('Paste must not embed') }), chunkText: (text: string) => [text] }))
 vi.mock('electron', () => ({ clipboard: { read: vi.fn() }, net: { fetch: vi.fn(async () => new Response('<title>Example</title><p>Readable body</p>', { headers: { 'content-type': 'text/html' } })) }, BrowserWindow: { getAllWindows: () => [] } }))
-import { initializeDatabase, closeDatabase, queryOne } from '../database'
+import { initializeDatabase, closeDatabase, queryOne, getRecordings } from '../database'
 import { pasteLibrary, newLibraryNote } from '../paste-library-runtime'
 import { getArtifactType } from '../artifact-types'
 import { queueTranscriptionIfEnabled } from '../transcription'
@@ -80,6 +80,9 @@ it('stores a video and imports its real extracted audio, linked by artifact meta
   const audioId = JSON.parse(row.metadata).audioRecordingId
   const audio = queryOne<{ file_path: string; source: string }>('SELECT file_path, source FROM recordings WHERE id = ?', [audioId])!
   expect(audio.source).toBe('external')
+  expect(getRecordings().find((recording) => recording.id === audioId)).toMatchObject({
+    original_filename: 'fixture.mp4 · audio', parent_video_capture_id: result.id
+  })
   expect(readFileSync(audio.file_path).subarray(0, 4).toString()).toBe('RIFF')
   expect(queueTranscriptionIfEnabled).toHaveBeenCalledWith(audioId)
 })
@@ -117,7 +120,7 @@ it('uses Slack URL identity and explains a missing connector without fetching it
   const [result] = await pasteLibrary({ text: 'https://team.slack.com/archives/C123/p1234567890123456' })
   expect(result.title).toContain('team')
   expect(result.title).toContain('C123')
-  expect(result.title).toContain('1234567890.123456')
+  expect(result.title).toBe('Slack · team · #C123 · thread')
   expect(result.connectorFallback).toBe('the Slack connector is not set up')
   expect(vi.mocked(net.fetch).mock.calls.length).toBe(calls)
   expect(queryOne<{ kind: string }>('SELECT kind FROM artifacts WHERE knowledge_capture_id = ?', [result.id!])!.kind).toBe('link')

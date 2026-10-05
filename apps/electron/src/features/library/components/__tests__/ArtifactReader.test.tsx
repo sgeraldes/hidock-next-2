@@ -66,15 +66,19 @@ async function waitForArtifact() {
 }
 
 describe('ArtifactReader', () => {
-  it('shows link readable text and a video action that opens its linked audio', async () => {
+  it('shows link readable text and a video player with its saved audio transcript', async () => {
     mockGetForCapture.mockResolvedValue({ success: true, data: [{ id: 'link', kind: 'link', metadata: {}, createdAt: '', size: 1 }] })
     mockGetContent.mockResolvedValue({ success: true, data: { kind: 'link', textContent: 'https://example.test\nReadable page' } })
     const view = render(<ArtifactReader recording={makeRecording({ filename: 'Page.url' })} />)
     expect(await screen.findByText(/Readable page/)).toBeInTheDocument()
     view.unmount()
     mockGetForCapture.mockResolvedValue({ success: true, data: [{ id: 'video', kind: 'video', metadata: { audioRecordingId: 'audio' }, createdAt: '', size: 1 }] })
-    render(<MemoryRouter><ArtifactReader recording={makeRecording({ filename: 'Clip.mp4' })} /></MemoryRouter>)
+    mockGetContent.mockResolvedValue({ success: true, data: { kind: 'video', mime: 'video/mp4', blobBase64: 'aGVsbG8=' } })
+    window.electronAPI.transcripts = { getByRecordingIdOwner: vi.fn().mockResolvedValue({ full_text: 'Saved video transcript' }) } as any
+    const video = render(<MemoryRouter><ArtifactReader recording={makeRecording({ filename: 'Clip.mp4' })} /></MemoryRouter>)
     expect(await screen.findByRole('button', { name: 'Open video audio and transcript' })).toBeInTheDocument()
+    expect(await screen.findByText('Saved video transcript')).toBeInTheDocument()
+    expect(video.container.querySelector('video')).toHaveAttribute('src', expect.stringMatching(/^blob:/))
   })
   it('while loading, shows placeholder lines named "Loading artifact", not a sentence', async () => {
     let finish: (v: unknown) => void = () => {}

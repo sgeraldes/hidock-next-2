@@ -35,6 +35,8 @@ export interface TranscriptSummary {
 
 // Base fields common to all recording types
 interface RecordingBase {
+  parentVideoCaptureId?: string
+  videoAudioTitle?: string
   id: string
   filename: string
   size: number

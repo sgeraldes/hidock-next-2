@@ -5034,6 +5034,9 @@ function extractContactsFromMeetingDataInternal(meeting: Omit<Meeting, 'created_
 
 // Recording queries
 export interface Recording {
+  /** Read projection from the linked video artifact; no new parent/child schema. */
+  parent_video_capture_id?: string | null
+  video_audio_title?: string | null
   id: string
   filename: string
   original_filename?: string
@@ -5088,11 +5091,20 @@ export interface Recording {
 export function getRecordings(): Recording[] {
   return queryAll<Recording>(
     `SELECT r.*, m.subject AS meeting_subject,
+            video.knowledge_capture_id AS parent_video_capture_id,
+            CASE WHEN video.id IS NOT NULL THEN vc.title || ' · audio' END AS video_audio_title,
             ap.category AS audio_category, ap.sound_seconds AS audio_sound_seconds,
             ap.duration_seconds AS audio_duration_seconds,
             ev.star_level AS eval_star_level, ev.kind AS eval_kind, ev.context AS eval_context,
             ev.audio_warning AS eval_audio_warning
        FROM recordings r
+       LEFT JOIN artifacts video ON video.id = (
+         SELECT a.id FROM artifacts a JOIN knowledge_captures c ON c.id = a.knowledge_capture_id
+          WHERE a.kind = 'video' AND c.deleted_at IS NULL
+            AND json_extract(CASE WHEN json_valid(a.metadata) THEN a.metadata ELSE '{}' END, '$.audioRecordingId') = r.id
+          ORDER BY a.created_at LIMIT 1
+       )
+       LEFT JOIN knowledge_captures vc ON vc.id = video.knowledge_capture_id
        LEFT JOIN meetings m ON m.id = r.meeting_id
        LEFT JOIN audio_profiles ap ON ap.recording_id = r.id
        -- One evaluation per recording (the table is keyed by capture): the latest.

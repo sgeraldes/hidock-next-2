@@ -180,7 +180,7 @@ export function registerArtifactHandlers(): void {
 
       const TEXT_KINDS = ['pdf', 'md', 'txt', 'json', 'note', 'data', 'link']
       const isTextKind = TEXT_KINDS.includes(artifact.kind)
-      const isBinaryKind = artifact.kind === 'image' || artifact.kind === 'pdf'
+      const isBinaryKind = artifact.kind === 'image' || artifact.kind === 'pdf' || artifact.kind === 'video'
 
       const content: ArtifactContent = {
         kind: artifact.kind,
