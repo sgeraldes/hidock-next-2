@@ -113,7 +113,8 @@ function bearer(req: IncomingMessage): string {
 /** A date-like `since` bound: an ISO date or timestamp, nothing else. */
 function sinceParam(url: URL): string | null {
   const since = url.searchParams.get('since') ?? ''
-  return /^\d{4}-\d{2}-\d{2}([T ][\d:.]+Z?)?$/.test(since) ? since : null
+  return /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?$/.test(since)
+    && Number.isFinite(Date.parse(since)) ? since : null
 }
 
 export function startBrainServer(options: BrainServerOptions): Promise<RunningBrainServer> {
@@ -260,6 +261,12 @@ export function startBrainServer(options: BrainServerOptions): Promise<RunningBr
       return send(res, 500, { error: error instanceof Error ? error.message : 'internal error' })
     } finally {
       if (tracing) {
+        if (trace.args) {
+          const returned = new Set(trace.candidates.map(candidate => candidate.source_id))
+          if (trace.args.id && !returned.has(trace.args.id)) delete trace.args.id
+          if (trace.args.ids) trace.args.ids = trace.args.ids.filter(id => returned.has(id))
+          if (!Number.isFinite(trace.args.limit)) delete trace.args.limit
+        }
         trace.duration_ms = performance.now() - traceStarted
         if (trace.status === 'error') trace.error = 'request-failed'
         try { options.recordTrace?.(trace) } catch { /* telemetry never changes the response */ }

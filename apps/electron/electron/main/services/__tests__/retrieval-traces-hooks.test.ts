@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { request } from 'http'
+import Database from 'better-sqlite3'
 import { RetrievalTraceStore } from '../retrieval-traces'
 import { startBrainServer, type RunningBrainServer } from '../brain-server'
 
@@ -73,6 +74,59 @@ afterEach(async () => {
   rmSync(directory, { recursive: true })
 })
 describe('request hooks to real temporary trace SQLite', () => {
+  it('never exposes the 101st brain identity after it becomes personal', async () => {
+    const ids = Array.from({ length: 101 }, (_, index) => `capture-${index + 1}`)
+    await store.close()
+    store = new RetrievalTraceStore({ path: join(directory, 'traces.db'), eligible: c => !state.excluded.has(c.source_id),
+      storage: { isEncryptionAvailable: () => false, encryptString: () => Buffer.alloc(0), decryptString: () => '' } })
+    server = await startBrainServer({ kind: 'app', token: 'test', instanceId: 'test', recordTrace: e => store.record(e), queries: {
+      meetingsSince: () => [], pendingActionablesSince: () => [], actionableById: () => null,
+      knowledgeByIds: () => ids.map(id => ({ id })), knowledgeById: () => null,
+      meetingRecordings: () => [], transcriptForRecording: () => null, recordingById: () => null, recordingsByFilenamePrefix: () => []
+    } })
+    await new Promise<void>((resolve, reject) => {
+      const req = request({ host: '127.0.0.1', port: server!.port, path: `/knowledge?ids=${ids.join(',')}`,
+        headers: { host: `127.0.0.1:${server!.port}`, authorization: 'Bearer test' } }, res => {
+        res.resume(); res.on('end', resolve)
+      })
+      req.on('error', reject); req.end()
+    })
+    await store.flush()
+    state.excluded.add(ids[100])
+    const rows = await store.read()
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ candidate_count: 101, truncated: true })
+    expect(JSON.stringify(rows)).not.toContain('capture-101')
+    expect(rows[0].args?.ids).toHaveLength(100)
+  })
+  it('persists only returned brain identifiers, never unresolved free text or invalid dates', async () => {
+    server = await startBrainServer({ kind: 'app', token: 'test', instanceId: 'test', recordTrace: e => store.record(e), queries: {
+      meetingsSince: () => [], pendingActionablesSince: () => [], actionableById: () => null,
+      knowledgeByIds: () => [{ id: 'real-id' }], knowledgeById: () => null,
+      meetingRecordings: () => [], transcriptForRecording: () => null, recordingById: () => null, recordingsByFilenamePrefix: () => []
+    } })
+    const read = (path: string) => new Promise<void>((resolve, reject) => {
+      const req = request({ host: '127.0.0.1', port: server!.port, path,
+        headers: { host: `127.0.0.1:${server!.port}`, authorization: 'Bearer test' } }, res => {
+        res.resume(); res.on('end', resolve)
+      })
+      req.on('error', reject); req.end()
+    })
+    await read('/knowledge/private-medical-note')
+    await read('/knowledge?ids=private-search-phrase,real-id')
+    await read('/meetings?since=2026-99-99')
+    await store.flush()
+    const db = new Database(store.path, { readonly: true })
+    try {
+      for (const table of ['traces', 'candidates', 'meta', 'counters']) {
+        const raw = JSON.stringify(db.prepare(`SELECT * FROM ${table}`).all())
+        expect(raw).not.toContain('private-medical-note')
+        expect(raw).not.toContain('private-search-phrase')
+        expect(raw).not.toContain('2026-99-99')
+      }
+    } finally { db.close() }
+    expect((await store.read())[1].args?.ids).toEqual(['real-id'])
+  })
   it('uses real graph-node identities for Explore entities and marks unmapped results truncated', async () => {
     state.entities = true
     const response = await getRAGService().globalSearch('Title person')

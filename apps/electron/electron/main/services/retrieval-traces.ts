@@ -99,6 +99,13 @@ function cappedText(text: string, bytes: number): string {
   return value
 }
 
+function candidateArgs(args: TraceEvent['args'], candidates: TraceCandidate[]): TraceEvent['args'] {
+  if (!args) return undefined
+  const ids = new Set(candidates.map(candidate => candidate.source_id))
+  return { ...args, id: args.id && ids.has(args.id) ? args.id : undefined,
+    ids: args.ids?.filter(id => ids.has(id)) }
+}
+
 /** Independent telemetry database; no business migrations, backups or attachment. */
 export class RetrievalTraceStore {
   readonly path: string
@@ -198,6 +205,7 @@ export class RetrievalTraceStore {
         channels.set(candidate.channel, count + 1)
         bytes += size
       }
+      copy.args = candidateArgs(copy.args, copy.candidates)
       this.queue.push(item)
       this.schedule()
     } catch { this.count('dropped') }
@@ -295,6 +303,7 @@ export class RetrievalTraceStore {
       channels.set(candidate.channel, count + 1)
       bytes += size
     }
+    envelope.args = candidateArgs(envelope.args, stored)
     if (bytes > 65536) { this.count('dropped'); return }
     this.engine.run(`INSERT INTO traces (trace_id, started_at, consumer, event, query_text, query_hmac, text_state, answer_message_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [input.trace_id, input.started_at, input.consumer, JSON.stringify(envelope), text,
