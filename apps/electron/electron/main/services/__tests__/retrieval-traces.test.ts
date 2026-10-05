@@ -280,6 +280,14 @@ describe('retrieval trace store (real SQLite)', () => {
     expect(statements.some(sql => /incremental_vacuum/i.test(sql))).toBe(true)
     expect((await s.stats()).file_bytes).toBeLessThanOrEqual(128 * 1024)
   })
+  it('runs no checkpoint or vacuum on a flush while the file is under the cap', async () => {
+    const s = store()
+    const statements: string[] = []
+    s.onStatement = sql => statements.push(sql)
+    s.record(event('small'))
+    await s.flush()
+    expect(statements).toEqual([])
+  })
   it('counts traces for the stats line without revalidating every candidate', async () => {
     const eligible = vi.fn(() => true)
     const s = store({ eligible })

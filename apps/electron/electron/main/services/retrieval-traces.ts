@@ -368,6 +368,8 @@ export class RetrievalTraceStore {
   }
   private evict(): void {
     const cap = this.options.maxFileBytes ?? 1024 ** 3
+    // Most flushes end here: a stat of three files, no checkpoint and no write.
+    if (this.fileBytes() <= cap) return
     if (!this.checkpoint()) return
     const pragma = (name: string) => Number(this.engine.getDatabase().exec(`PRAGMA ${name}`)[0].values[0][0])
     const logicalBytes = () => (pragma('page_count') - pragma('freelist_count')) * pragma('page_size')
