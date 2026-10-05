@@ -34,6 +34,39 @@ function base(over: Partial<ValidityInput> = {}): ValidityInput {
 }
 
 describe('assessTranscriptValidity', () => {
+  it('rejects Rec98: 17 words, 413 acoustic turns, 1057 speech seconds, 598 VAD seconds', () => {
+    const diarizedSegments = Array.from({ length: 413 }, (_, i) => ({ start: i * 1057 / 413, end: (i + 1) * 1057 / 413 }))
+    const v = assessTranscriptValidity(base({
+      segments: [{ start: 0.9, end: 1010.8, text: words(9) }, { start: 1200, end: 1205, text: words(8) }],
+      diarizedSegments, vadSpeechSeconds: 598, providerSeconds: 8, durationSeconds: 1565
+    }))
+    expect(v.status).toBe('incomplete')
+    expect(v.measures.detectedSpeechSeconds).toBeCloseTo(1057)
+    expect(v.reasons.map(r => r.detail)).toContain('17 words for 17.6 minutes of detected speech.')
+    expect(v.reasons.some(r => r.detail.includes('0:00 to 16:50 with 9 words'))).toBe(true)
+  })
+
+  it('merges overlapping acoustic turns and detects uncovered speech', () => {
+    const v = assessTranscriptValidity(base({ segments: [{ start: 0, end: 50, text: words(500) }],
+      diarizedSegments: [{ start: 0, end: 200 }, { start: 100, end: 300 }], vadSpeechSeconds: 20 }))
+    expect(v.status).toBe('incomplete')
+    expect(v.measures.detectedSpeechSeconds).toBe(300)
+    expect(v.measures.uncoveredDiarizedSpeechShare).toBeCloseTo(250 / 300)
+  })
+
+  it('uses VAD without diarization, including empty transcripts', () => {
+    expect(assessTranscriptValidity(base({ vadSpeechSeconds: 120 })).status).toBe('incomplete')
+    expect(assessTranscriptValidity(base({ vadSpeechSeconds: 119 })).status).toBe('valid')
+    expect(assessTranscriptValidity(base({ vadSpeechSeconds: 120, segments: [{ text: words(60) }] })).status).toBe('valid')
+  })
+
+  it('records fast provider time without rejecting normal speech', () => {
+    const v = assessTranscriptValidity(base({ vadSpeechSeconds: 120, providerSeconds: 1, durationSeconds: 1565,
+      segments: [{ start: 0, end: 120, text: words(240) }] }))
+    expect(v.status).toBe('doubtful') // no envelope, existing audio check
+    expect(v.measures.providerTimeSuspicious).toBe(true)
+    expect(v.reasons.map(r => r.code)).not.toContain('sparse_speech')
+  })
   it('is valid when the text sits where the audio is', () => {
     const env = envelope([[160, 600]])
     const segments = Array.from({ length: 60 }, (_, i) => ({ speaker: i % 2 ? 'A' : 'B', start: i * 10, end: i * 10 + 9, text: words(20, `-${i}`) }))

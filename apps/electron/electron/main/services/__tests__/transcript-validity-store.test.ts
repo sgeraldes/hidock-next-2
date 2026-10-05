@@ -126,6 +126,19 @@ describe('transcript validity store', () => {
 })
 
 describe('a sample of the audio', () => {
+  it('uses independent VAD evidence for a sparse stored transcript and a fresh preview', () => {
+    seed('rec98', [[160, 600]])
+    const lines = JSON.stringify([{ start: 0.9, end: 1010.8, text: 'one two three four five six seven eight nine' },
+      { start: 1200, end: 1205, text: 'one two three four five six seven eight' }])
+    run('UPDATE transcripts SET speakers = ?, word_count = 17 WHERE recording_id = ?', [lines, 'rec98'])
+    run(`INSERT INTO processing_runs (id, recording_id, stage, provider, tool, execution, status, started_at, quality_json)
+      VALUES ('vad-rec98', 'rec98', 'vad', 'hidock-next', 'vad', 'local', 'completed', '2026-10-04', ?)`,
+      [JSON.stringify({ nonSilentSeconds: 598, durationSeconds: 1565 })])
+    expect(refreshTranscriptValidity('rec98')?.status).toBe('incomplete')
+    expect(previewTranscriptValidity('rec98', lines, { vadSpeechSeconds: 598,
+      diarizedSegments: [{ start: 0, end: 1057 }] })?.measures.detectedSpeechSeconds).toBe(1057)
+    expect(stored('rec98')?.validity_status).toBe('incomplete')
+  })
   it('settles a doubtful transcript only while it is the transcript that was sampled', () => {
     seed('doubt', [[160, 600]])
     const lines = Array.from({ length: 20 }, (_, i) => ({ speaker: 'A', start: Math.floor(i / 2) * 60, end: Math.floor(i / 2) * 60 + 50, text: `w ${i} `.repeat(10) }))

@@ -16,6 +16,7 @@ import {
   assessTranscriptValidity,
   VALIDITY_VERSION,
   type TranscriptValidity,
+  type ValidityInput,
   type ValiditySegment
 } from './transcript-validity'
 
@@ -88,7 +89,27 @@ function rowFor(recordingId: string): ValidityRow | undefined {
   )
 }
 
-function assess(row: ValidityRow, speakersJson: string | null): TranscriptValidity {
+type SpeechEvidence = Pick<ValidityInput, 'diarizedSegments' | 'vadSpeechSeconds' | 'providerSeconds' | 'durationSeconds'>
+
+/** Independent evidence is retained in the ledger, including failed transcription attempts. */
+export function readSpeechEvidence(recordingId: string): SpeechEvidence {
+  const vad = queryOne<{ quality_json: string | null }>(
+    "SELECT quality_json FROM processing_runs WHERE recording_id = ? AND stage = 'vad' AND status = 'completed' ORDER BY started_at DESC LIMIT 1", [recordingId])
+  const diarization = queryOne<{ quality_json: string | null }>(
+    "SELECT quality_json FROM processing_runs WHERE recording_id = ? AND stage = 'diarization' AND provider = 'pyannote' AND status = 'completed' ORDER BY started_at DESC LIMIT 1", [recordingId])
+  const parse = (json: string | null | undefined): Record<string, unknown> => {
+    try { return JSON.parse(json ?? '{}') } catch { return {} }
+  }
+  const v = parse(vad?.quality_json)
+  const d = parse(diarization?.quality_json)
+  return {
+    vadSpeechSeconds: typeof v.nonSilentSeconds === 'number' ? v.nonSilentSeconds : null,
+    durationSeconds: typeof v.durationSeconds === 'number' ? v.durationSeconds : null,
+    diarizedSegments: Array.isArray(d.segments) ? d.segments as Array<{ start: number; end: number }> : undefined
+  }
+}
+
+function assess(row: ValidityRow, speakersJson: string | null, evidence?: SpeechEvidence): TranscriptValidity {
   return assessTranscriptValidity({
     fileName: row.filename,
     segments: parseSegments(speakersJson),
@@ -98,7 +119,8 @@ function assess(row: ValidityRow, speakersJson: string | null): TranscriptValidi
     attendees: attendeeCount(row.attendees),
     integrityStatus: row.integrity_status,
     accepted: !!row.integrity_accepted_at,
-    sample: sampleFor(row, speakersJson)
+    sample: sampleFor(row, speakersJson),
+    ...(evidence ?? readSpeechEvidence(row.recording_id))
   })
 }
 
@@ -120,7 +142,7 @@ function sampleFor(
 export function previewTranscriptValidity(
   recordingId: string,
   speakersJson: string | null | undefined,
-  options: { integrityStatus?: string | null } = {}
+  options: { integrityStatus?: string | null } & SpeechEvidence = {}
 ): TranscriptValidity | null {
   const recording = queryOne<{ filename: string; attendees: string | null }>(
     `SELECT r.filename, m.attendees FROM recordings r LEFT JOIN meetings m ON m.id = r.meeting_id WHERE r.id = ?`,
@@ -142,7 +164,8 @@ export function previewTranscriptValidity(
       method: profile?.method ?? null,
       attendees: recording.attendees
     },
-    speakersJson ?? null
+    speakersJson ?? null,
+    options.vadSpeechSeconds !== undefined || options.diarizedSegments !== undefined ? options : undefined
   )
 }
 
