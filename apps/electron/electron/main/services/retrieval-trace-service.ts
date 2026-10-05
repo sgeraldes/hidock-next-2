@@ -6,6 +6,8 @@ import { filterEligibleCaptureIds, filterEligibleRecordingIds, filterEligiblePro
 import { RetrievalTraceStore, type StoredTrace, type TraceCandidate, type TraceEvent, type TraceStats } from './retrieval-traces'
 
 let store: RetrievalTraceStore | undefined
+let closing = false
+let closePromise: Promise<void> | undefined
 async function eligible(candidate: TraceCandidate): Promise<boolean> {
   if (candidate.channel === 'vector' && candidate.capture_id) {
     return filterEligibleProvenanceRows([candidate], c => c.recording_id, c => c.capture_id).length === 1
@@ -47,6 +49,7 @@ function getStore(): RetrievalTraceStore {
   return store
 }
 export function recordRetrievalTrace(event: TraceEvent): void {
+  if (closing) return
   try {
     const config = getConfig()
     if (config.chat.recordQueries === false) return
@@ -56,6 +59,7 @@ export function recordRetrievalTrace(event: TraceEvent): void {
   } catch { /* telemetry never changes a request's outcome */ }
 }
 export function linkTraceAnswer(generationId: string, messageId: string): void {
+  if (closing) return
   try { if (getConfig().chat.recordQueries !== false) getStore().linkAnswer(generationId, messageId) } catch { /* best effort */ }
 }
 export async function syncTraceSettings(): Promise<void> {
@@ -73,15 +77,25 @@ export async function retrievalTraceStats(): Promise<TraceStats> {
   return getStore().stats()
 }
 export function startRetrievalTraces(): void {
+  closing = false
   setImmediate(() => {
     void (async () => {
+      if (closing) return
       await syncTraceSettings()
-      await getStore().retain()
+      if (!closing) await getStore().retain()
     })().catch(() => { /* optional telemetry housekeeping */ })
   })
 }
 export async function closeRetrievalTraces(): Promise<void> {
+  closing = true
+  if (closePromise) return closePromise
   const current = store
-  store = undefined
-  await current?.close()
+  closePromise = (async () => {
+    try { await current?.close() }
+    finally {
+      if (store === current) store = undefined
+      closePromise = undefined
+    }
+  })()
+  await closePromise
 }

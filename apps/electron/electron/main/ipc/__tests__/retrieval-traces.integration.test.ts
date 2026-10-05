@@ -21,7 +21,8 @@ vi.mock('../../services/rag', () => ({ getRAGService: () => ({
   consumeAssistantAnswer: () => ({ kind: 'non-rag', content: 'main owned answer' }), clearSession: () => {}
 }) }))
 import { initializeDatabase, initializeDatabaseReadOnly, closeDatabase, run, queryOne } from '../../services/database'
-import { recordRetrievalTrace, readRetrievalTraces, retrievalTraceStats, closeRetrievalTraces, syncTraceSettings } from '../../services/retrieval-trace-service'
+import { recordRetrievalTrace, readRetrievalTraces, retrievalTraceStats, closeRetrievalTraces, syncTraceSettings, startRetrievalTraces, linkTraceAnswer } from '../../services/retrieval-trace-service'
+import { RetrievalTraceStore } from '../../services/retrieval-traces'
 import { registerAssistantHandlers } from '../assistant-handlers'
 import Database from 'better-sqlite3'
 
@@ -32,6 +33,9 @@ beforeEach(async () => {
   await initializeDatabase()
   run("INSERT INTO conversations (id, title) VALUES ('session', 'Test')")
   registerAssistantHandlers()
+  startRetrievalTraces()
+  await new Promise<void>(resolve => setImmediate(resolve))
+  await syncTraceSettings()
 })
 afterEach(async () => {
   vi.restoreAllMocks()
@@ -40,6 +44,32 @@ afterEach(async () => {
   rmSync(state.directory, { recursive: true })
 })
 describe('answer persistence and privacy at the SQLite/IPC boundary', () => {
+  it('ignores producers during and after close without constructing a second store', async () => {
+    const trace = { trace_id: 'closing', consumer: 'chat' as const, route: 'generateAnswer',
+      started_at: new Date().toISOString(), duration_ms: 1, status: 'ok' as const, candidates: [] }
+    recordRetrievalTrace(trace)
+    const actualClose = RetrievalTraceStore.prototype.close
+    let release!: () => void
+    const pause = new Promise<void>(resolve => { release = resolve })
+    const close = vi.spyOn(RetrievalTraceStore.prototype, 'close').mockImplementation(async function (this: RetrievalTraceStore) {
+      await pause
+      await actualClose.call(this)
+    })
+    const record = vi.spyOn(RetrievalTraceStore.prototype, 'record')
+    const link = vi.spyOn(RetrievalTraceStore.prototype, 'linkAnswer')
+    const apply = vi.spyOn(RetrievalTraceStore.prototype, 'applySettings')
+    const closing = closeRetrievalTraces()
+    try {
+      expect(() => recordRetrievalTrace({ ...trace, trace_id: 'late' })).not.toThrow()
+      linkTraceAnswer('closing', 'late-answer')
+      expect(record).not.toHaveBeenCalled()
+      expect(link).not.toHaveBeenCalled()
+      expect(apply).not.toHaveBeenCalled()
+    } finally { release(); await closing; close.mockRestore() }
+    recordRetrievalTrace({ ...trace, trace_id: 'closed' })
+    expect(record).not.toHaveBeenCalled()
+    expect((await readRetrievalTraces()).map(row => row.trace_id)).toEqual(['closing'])
+  })
   it('shows a meeting with an eligible recording even when its first recording is personal', async () => {
     run("INSERT INTO meetings (id, subject, start_time, end_time) VALUES ('meeting', 'Meeting', '2026-10-01', '2026-10-02')")
     run("INSERT INTO recordings (id, filename, date_recorded, meeting_id, personal) VALUES ('first', 'first.wav', '2026-10-01', 'meeting', 1)")
