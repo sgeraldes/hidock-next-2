@@ -12,6 +12,7 @@ import type { KnowledgeCapture } from '@/types/knowledge'
 import { UNKNOWN_DATE, isUnknownDate } from '@/lib/unknownDate'
 import { isFeatureOffThisRun } from '@/lib/bootFeatures'
 import { isFeatureDisabledRejection } from '@/lib/featureDisabled'
+import { recordingAliases, resolveDeviceRecording } from '@/shared/recording-identity'
 
 /**
  * Recordings still on the device that are not downloaded yet. With Device Sync
@@ -40,6 +41,9 @@ export { UNKNOWN_DATE, isUnknownDate }
 // Exported (spec-005/F17 T5 §D5) so features/library/utils/trashRow.ts can type
 // the recordings:getTrash row shape without duplicating this interface.
 export interface DatabaseRecording {
+  original_filename?: string | null
+  source?: string | null
+  is_imported?: number | null
   parent_video_capture_id?: string | null
   video_audio_title?: string | null
   id: string
@@ -146,55 +150,6 @@ export function getBestDate(filename: string, deviceDate: Date | null | undefine
   return fallback
 }
 
-/**
- * Try to match a device recording with a local recording by date/time proximity
- * Used as fallback when filename matching fails (for wrongly-named downloads)
- */
-function findMatchByDateTime(
-  deviceRec: HiDockRecording,
-  dbRecs: DatabaseRecording[],
-  syncedFiles: SyncedFile[],
-  matchedBaseNames: Set<string>,
-  exactDeviceBaseNames: ReadonlySet<string>,
-  toleranceSeconds: number = 60
-): { dbRec?: DatabaseRecording; synced?: SyncedFile; localBaseName?: string } | null {
-  // Parse device file date from filename
-  const deviceDate = parseDateFromFilename(deviceRec.filename)
-  if (!deviceDate || isNaN(deviceDate.getTime())) return null
-
-  // Search through unmatched database recordings
-  for (const dbRec of dbRecs) {
-    const baseName = getBaseFilename(dbRec.filename)
-    if (matchedBaseNames.has(baseName)) continue // Already matched
-
-    // Never let a nearby device recording steal a database row from the device
-    // file that matches it exactly. HiDock can create consecutive recordings
-    // less than a minute apart; whichever one happens to be iterated first used
-    // to claim the other's DB row through this fallback. The later exact match
-    // then emitted a second UnifiedRecording with the same id, giving React two
-    // identical keys and leaving both rows painted on the same virtual track.
-    if (exactDeviceBaseNames.has(baseName)) continue
-
-    // Try to parse date from local filename or use db date_recorded
-    const localDate = parseDateFromFilename(dbRec.filename) ||
-                     (dbRec.date_recorded ? new Date(dbRec.date_recorded) : null)
-    if (!localDate || isNaN(localDate.getTime())) continue
-
-    // Check if dates are within tolerance
-    const diffSeconds = Math.abs(deviceDate.getTime() - localDate.getTime()) / 1000
-    if (diffSeconds <= toleranceSeconds) {
-      // Found a match! Also find corresponding synced file entry
-      const synced = syncedFiles.find(sf =>
-        sf.local_filename === dbRec.filename ||
-        getBaseFilename(sf.local_filename) === baseName
-      )
-      return { dbRec, synced, localBaseName: baseName }
-    }
-  }
-
-  return null
-}
-
 // Build unified recordings from multiple sources
 /** The Jev evaluation columns of a database row, as UnifiedRecording fields. */
 export function evaluationFields(dbRec: DatabaseRecording | undefined): EvaluationFields {
@@ -216,10 +171,8 @@ export function buildRecordingMap(
   knowledgeCaptures: KnowledgeCapture[] = [],
   tombstonedRecordings: DatabaseRecording[] = []
 ): UnifiedRecording[] {
-  // Reserve every exact device filename before doing proximity fallback. Device
-  // iteration order is not guaranteed, so this must be computed up front.
-  const exactDeviceBaseNames = new Set(deviceRecs.map((recording) => getBaseFilename(recording.filename)))
-
+  const aliases = recordingAliases(dbRecs)
+  const projectedIds = new Set<string>()
   // Create lookup maps using BASE filename (without extension)
   // This allows matching .hda (device) with .wav (downloaded) files
   const syncedMapByBase = new Map<string, SyncedFile>()
@@ -248,13 +201,6 @@ export function buildRecordingMap(
     if (synced) tombstonedBaseNames.add(getBaseFilename(synced.original_filename))
   }
 
-  const dbMapByBase = new Map<string, DatabaseRecording>()
-  const dbMapByFilename = new Map<string, DatabaseRecording>()
-  for (const dbRec of dbRecs) {
-    dbMapByBase.set(getBaseFilename(dbRec.filename), dbRec)
-    dbMapByFilename.set(dbRec.filename, dbRec)
-  }
-
   // Map knowledge captures by source recording ID for quick lookup
   const captureMapBySourceId = new Map<string, KnowledgeCapture>()
   for (const capture of knowledgeCaptures) {
@@ -276,31 +222,14 @@ export function buildRecordingMap(
     }
 
     // Look up by base filename to match .hda with .wav
-    let synced = syncedMapByOriginal.get(deviceRec.filename) || syncedMapByBase.get(baseName)
-    let dbRec = dbMapByFilename.get(deviceRec.filename) || dbMapByBase.get(baseName)
-
-    // NEW: If no exact match, try date/time matching (fallback for wrongly-named files)
-    let localBaseName: string | undefined
-    if (!synced && !dbRec) {
-      const dateMatch = findMatchByDateTime(
-        deviceRec,
-        dbRecs,
-        syncedFiles,
-        processedBaseNames,
-        exactDeviceBaseNames
-      )
-      if (dateMatch) {
-        dbRec = dateMatch.dbRec
-        synced = dateMatch.synced
-        localBaseName = dateMatch.localBaseName
-        console.log(`[buildRecordingMap] Matched by date: ${deviceRec.filename} ←→ ${dbRec?.filename}`)
-      }
-    }
+    const synced = syncedMapByOriginal.get(deviceRec.filename) || syncedMapByBase.get(baseName)
+    const dbRec = resolveDeviceRecording(deviceRec.filename, dbRecs)
 
     const dateRecorded = getBestDate(deviceRec.filename, deviceRec.dateCreated, UNKNOWN_DATE)
 
     if (synced || dbRec) {
       const dbId = dbRec?.id || synced!.id
+      projectedIds.add(dbId)
       const capture = captureMapBySourceId.get(dbId)
       const localPath = synced?.file_path || dbRec?.file_path || ''
       const locallyAvailable = Boolean(synced?.file_path)
@@ -346,10 +275,6 @@ export function buildRecordingMap(
           }
       recordingMap.set(baseName, recording)
       processedBaseNames.add(baseName)
-      // IMPORTANT: If matched by date, also track the local file's baseName to prevent duplicate processing
-      if (localBaseName && localBaseName !== baseName) {
-        processedBaseNames.add(localBaseName)
-      }
     } else {
       const recording: DeviceOnlyRecording = {
         id: deviceRec.id,
@@ -371,9 +296,11 @@ export function buildRecordingMap(
   // Process database recordings not already matched with device recordings
   for (const dbRec of dbRecs) {
     const baseName = getBaseFilename(dbRec.filename)
-    if (!processedBaseNames.has(baseName)) {
+    if (!projectedIds.has(dbRec.id) && (!aliases.has(dbRec.id) || captureMapBySourceId.has(dbRec.id))) {
       // Look up synced file by local filename first, then by base name
-      const synced = syncedMapByLocal.get(dbRec.filename) || syncedMapByBase.get(baseName)
+      const synced = dbRec.source === 'external' || dbRec.is_imported === 1
+        ? undefined
+        : syncedMapByLocal.get(dbRec.filename) || syncedMapByBase.get(baseName)
       const dbDate = dbRec.date_recorded ? new Date(dbRec.date_recorded) : null
       // IMPORTANT: Use original_filename (device filename) for date parsing if available
       // The local filename may have been saved with the wrong date (download date instead of recording date)
@@ -450,7 +377,7 @@ export function buildRecordingMap(
               deviceFilename: synced?.original_filename || dbRec.filename,
               syncStatus: 'not-synced'
             }
-      recordingMap.set(baseName, recording)
+      recordingMap.set(`db:${dbRec.id}`, recording)
       processedBaseNames.add(baseName)
     }
   }

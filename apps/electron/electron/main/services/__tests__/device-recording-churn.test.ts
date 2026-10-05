@@ -6,6 +6,12 @@ import { tmpdir } from 'os'
 let sequence = 0
 let dbPath: string
 vi.mock('../file-storage', () => ({ getDatabasePath: () => dbPath, getRecordingsPath: () => tmpdir() }))
+vi.mock('electron', () => ({
+  app: { getPath: () => tmpdir() },
+  BrowserWindow: { getAllWindows: () => [] },
+  ipcMain: { handle: vi.fn() },
+  Notification: vi.fn()
+}))
 
 import {
   closeDatabase, getRecordingByFilename, initializeDatabase, markRecordingsNotOnDevice,
@@ -13,22 +19,103 @@ import {
 } from '../database'
 import { mergeDuplicateRecordings, mergeDuplicateRecordingsYielding } from '../org-reconciler'
 import { getIntegrityService } from '../integrity-service'
+import { setDeviceConnectionReader } from '../device-snapshot'
+import { getDownloadService } from '../download-service'
 
 const names = ['2026May28-103745-Rec24', '2026Jun01-115550-Rec39', '2026Oct01-100436-Rec02']
 const snapshot = (filename: string) => ({ filename, size: 1234, duration: 60, dateCreated: new Date('2026-05-28T10:37:45Z') })
 const rows = () => queryAll<{ id: string; filename: string; on_device: number; location: string }>('SELECT * FROM recordings ORDER BY id')
 
 beforeEach(async () => {
+  setDeviceConnectionReader(() => false)
   dbPath = join(tmpdir(), `hidock-device-churn-${process.pid}-${++sequence}.sqlite`)
   await initializeDatabase()
 })
-afterEach(() => { closeDatabase() })
+afterEach(() => { getDownloadService().destroy(); closeDatabase() })
 
 describe('device recording identity and offline retention (real SQLite)', () => {
+  it('persists absence only after complete current reconciliation including deletion of the final device file', async () => {
+    const rec = upsertRecordingFromDevice(snapshot(`${names[0]}.hda`))
+    const service = getDownloadService()
+    await service.getFilesToSyncBatched([], 100, { isCurrent: () => true, complete: false })
+    expect(rows()[0].on_device).toBe(1)
+    await expect(service.getFilesToSyncBatched([], 100, { isCurrent: () => false, complete: true })).rejects.toThrow('snapshot')
+    expect(rows()[0].on_device).toBe(1)
+    await service.getFilesToSyncBatched([], 100, { isCurrent: () => true, complete: true })
+    closeDatabase()
+    await initializeDatabase()
+    expect(rows()).toEqual([expect.objectContaining({ id: rec.id, on_device: 0, location: 'deleted' })])
+  })
+  it('never adopts an external full-stem import over the exact device identity', () => {
+    const base = names[1]
+    run(`INSERT INTO recordings (id, filename, original_filename, date_recorded, on_local, on_device, source, is_imported, duration_seconds)
+      VALUES ('external', ?, ?, '2026-10-01', 1, 0, 'external', 1, 300),
+             ('exact', ?, ?, '2026-06-01', 0, 1, 'hidock', 0, 60)`,
+    [`${base}.wav`, `${base}.wav`, `${base}.hda`, `${base}.hda`])
+    expect(upsertRecordingFromDevice(snapshot(`${base}.hda`)).id).toBe('exact')
+    expect(queryOne('SELECT original_filename, duration_seconds, on_device FROM recordings WHERE id = ?', ['external']))
+      .toEqual({ original_filename: `${base}.wav`, duration_seconds: 300, on_device: 0 })
+  })
+
+  it('rejects an external Rec01 import without an exact device row', () => {
+    run(`INSERT INTO recordings (id, filename, original_filename, date_recorded, on_local, source, is_imported)
+      VALUES ('external', 'Rec01.wav', 'Rec01.wav', '2026-10-01', 1, 'external', 1)`)
+    expect(upsertRecordingFromDevice(snapshot('Rec01.hda')).id).not.toBe('external')
+  })
+
+  it('rejects ambiguous trusted variants and variants recorded on another date', () => {
+    const base = names[1]
+    run(`INSERT INTO recordings (id, filename, date_recorded, on_local)
+      VALUES ('wav', ?, '2026-06-01', 1), ('mp3', ?, '2026-06-01', 1)`, [`${base}.wav`, `${base}.mp3`])
+    expect(getRecordingByFilename(`${base}.hda`)).toBeUndefined()
+    run("DELETE FROM recordings WHERE id = 'mp3'")
+    run("UPDATE recordings SET date_recorded = '2026-10-01' WHERE id = 'wav'")
+    expect(getRecordingByFilename(`${base}.hda`)).toBeUndefined()
+  })
+
+  it('does not merge local-only duplicate stems across dates or move their captures at boot', async () => {
+    setDeviceConnectionReader(() => true)
+    run(`INSERT INTO recordings (id, filename, date_recorded, on_device, on_local)
+      VALUES ('wav', 'Rec01.wav', '2026-10-01', 0, 1), ('mp3', 'Rec01.mp3', '2026-10-05', 0, 1)`)
+    run(`INSERT INTO knowledge_captures (id, title, captured_at, source_recording_id)
+      VALUES ('capture', 'My take', '2026-10-05', 'mp3')`)
+    expect(mergeDuplicateRecordings()).toBe(0)
+    expect(await mergeDuplicateRecordingsYielding()).toBe(0)
+    expect(rows()).toHaveLength(2)
+    expect(queryOne('SELECT source_recording_id FROM knowledge_captures WHERE id = ?', ['capture']))
+      .toEqual({ source_recording_id: 'mp3' })
+  })
+
+  it('applies a confirmed empty snapshot without removing durable rows', () => {
+    const rec = upsertRecordingFromDevice(snapshot(`${names[0]}.hda`))
+    markRecordingsNotOnDevice([])
+    expect(rows()).toEqual([expect.objectContaining({ id: rec.id, on_device: 0, location: 'deleted' })])
+  })
+
+  it('resolves the verified local canonical row while retaining the exact HDA shadow', () => {
+    const base = names[1]
+    run(`INSERT INTO recordings (id, filename, date_recorded, on_local, on_device)
+      VALUES ('local', ?, '2026-06-01', 1, 1), ('shadow', ?, '2026-06-01', 0, 1)`, [`${base}.wav`, `${base}.hda`])
+    run(`INSERT INTO knowledge_captures (id, title, user_title, captured_at, source_recording_id, quality_rating)
+      VALUES ('capture', 'Title', 'Annotated take', '2026-06-01', 'local', 'valuable')`)
+    expect(upsertRecordingFromDevice(snapshot(`${base}.hda`)).id).toBe('local')
+    expect(rows()).toHaveLength(2)
+    expect(queryOne('SELECT user_title, quality_rating, source_recording_id FROM knowledge_captures WHERE id = ?', ['capture']))
+      .toEqual({ user_title: 'Annotated take', quality_rating: 'valuable', source_recording_id: 'local' })
+  })
+
+  it('does not merge known local-only rows while disconnected even on the same date', async () => {
+    run(`INSERT INTO recordings (id, filename, date_recorded, on_device, on_local)
+      VALUES ('wav', 'Rec01.wav', '2026-10-01', 0, 1), ('mp3', 'Rec01.mp3', '2026-10-01', 0, 1)`)
+    expect(mergeDuplicateRecordings()).toBe(0)
+    expect(await mergeDuplicateRecordingsYielding()).toBe(0)
+    expect(rows()).toHaveLength(2)
+  })
   it.each(names)('rediscovers %s.hda using the existing wav identity over repeated boots', async (base) => {
+    const day = base.includes('May') ? '2026-05-28' : base.includes('Jun') ? '2026-06-01' : '2026-10-01'
     // Real legacy rows have original_filename = the local .wav, not NULL.
     run(`INSERT INTO recordings (id, filename, original_filename, date_recorded, file_path, on_local, on_device, location)
-      VALUES ('local', ?, ?, '2026-05-28', ?, 1, 1, 'both')`, [`${base}.wav`, `${base}.wav`, join(tmpdir(), `${base}.wav`)])
+      VALUES ('local', ?, ?, ?, ?, 1, 1, 'both')`, [`${base}.wav`, `${base}.wav`, day, join(tmpdir(), `${base}.wav`)])
     for (let pass = 0; pass < 3; pass++) {
       expect(getRecordingByFilename(`${base}.hda`)?.id).toBe('local')
       expect(upsertRecordingFromDevice(snapshot(`${base}.hda`)).id).toBe('local')
@@ -66,7 +153,7 @@ describe('device recording identity and offline retention (real SQLite)', () => 
     for (let pass = 0; pass < 3; pass++) {
       await getIntegrityService().runStartupChecks()
       expect(await mergeDuplicateRecordingsYielding()).toBe(0)
-      markRecordingsNotOnDevice([])
+      // Offline startup has no authoritative device snapshot.
       closeDatabase()
       await initializeDatabase()
       expect(upsertRecordingFromDevice(file).id).toBe(original.id)
@@ -87,7 +174,7 @@ describe('device recording identity and offline retention (real SQLite)', () => 
     for (let pass = 0; pass < 3; pass++) {
       expect(mergeDuplicateRecordings()).toBe(0)
       expect(await mergeDuplicateRecordingsYielding()).toBe(0)
-      markRecordingsNotOnDevice([]) // no snapshot while disconnected
+      // Offline startup has no authoritative device snapshot. // no snapshot while disconnected
       closeDatabase()
       await initializeDatabase()
       expect(rows().map((r) => r.id)).toEqual(['device', 'local'])

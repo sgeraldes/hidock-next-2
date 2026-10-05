@@ -245,6 +245,8 @@ class IntegrityService {
     recordingId: string,
     storedPath?: string | null
   ): 'relinked' | 'unreachable' | 'claimed' | 'gone' {
+    const retained = this.retainDeviceRecording({ recordingId } as IntegrityIssue)
+    if (retained) return 'unreachable'
     if (this.volumeUnreachable(storedPath)) return 'unreachable'
     if (!filename) return 'gone'
 
@@ -363,7 +365,7 @@ class IntegrityService {
     let unresolvedCount = 0
 
     for (const rec of stuckRecordings) {
-      if (!rec.file_path) continue
+      if (!rec.file_path || this.retainDeviceRecording({ recordingId: rec.id } as IntegrityIssue)) continue
 
       if (existsSync(rec.file_path)) {
         existingFileIds.push(rec.id)
@@ -1120,6 +1122,8 @@ class IntegrityService {
       // and history with it, on the strength of one existsSync. That check is
       // also false for a drive that is merely unplugged and for audio that has
       // simply moved, so establish what is true first. Only 'gone' may delete.
+      const retained = this.retainDeviceRecording(issue)
+      if (retained) return retained
       const outcome = this.resolveRelink(issue.filename, issue.recordingId, issue.filePath)
       if (outcome === 'relinked') {
         saveDatabase()
@@ -1142,8 +1146,6 @@ class IntegrityService {
         }
       }
 
-      const retained = this.retainDeviceRecording(issue)
-      if (retained) return retained
       // Only a confirmed local-only orphan may be removed.
       console.log('[IntegrityService] Deleting orphaned recording:', issue.recordingId, issue.filename)
       run(`DELETE FROM recordings WHERE id = ?`, [issue.recordingId])
@@ -1310,6 +1312,8 @@ class IntegrityService {
       // D-022 — same rule as the single-issue path: a row is deleted only once
       // the storage is readable and the audio is genuinely not there. "Repair
       // all" against an unplugged drive used to delete every recording row.
+      const retained = this.retainDeviceRecording(issue)
+      if (retained) return retained
       const outcome = this.resolveRelink(issue.filename, issue.recordingId, issue.filePath)
       if (outcome === 'relinked') {
         return { issueId: issue.id, success: true, action: 'Re-linked the recording to its audio' }
@@ -1325,8 +1329,6 @@ class IntegrityService {
         }
       }
 
-      const retained = this.retainDeviceRecording(issue)
-      if (retained) return retained
       run(`DELETE FROM recordings WHERE id = ?`, [issue.recordingId])
       return { issueId: issue.id, success: true, action: 'Deleted orphaned recording record' }
     } catch (error) {

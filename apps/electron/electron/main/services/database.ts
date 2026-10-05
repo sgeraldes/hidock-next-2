@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3'
+import { resolveDeviceRecording } from '../../../src/shared/recording-identity'
 import { RECORDING_AUDIO_EXTENSIONS } from '../../../src/shared/audio-extensions'
 import { existsSync, readdirSync, readFileSync } from 'fs'
 import { dirname, join, normalize, resolve as resolvePath } from 'path'
@@ -6667,20 +6668,18 @@ export function getRecordingsByIds(ids: string[]): Map<string, Recording> {
 // stores the device name in original_filename. Prefer the local canonical row
 // when both exist so a device snapshot cannot create a second shadow row.
 export function getRecordingByFilename(filename: string): Recording | undefined {
-  // Legacy downloads also stored the local .wav in original_filename. Match
-  // the complete stem (including time and Rec number), never just the date.
   const base = filename.replace(/\.(hda|wav|mp3|m4a|aac|ogg|flac)$/i, '')
   const variants = base === filename ? [filename] : [filename, ...RECORDING_EXTENSIONS.map((ext) => `${base}.${ext}`)]
   const placeholders = variants.map(() => '?').join(', ')
-  return queryOne<Recording>(
-    `SELECT * FROM recordings
-      WHERE filename COLLATE NOCASE IN (${placeholders}) OR original_filename COLLATE NOCASE IN (${placeholders})
-      ORDER BY on_local DESC,
-               CASE WHEN filename = ? COLLATE NOCASE THEN 0 ELSE 1 END,
-               created_at ASC
-      LIMIT 1`,
-    [...variants, ...variants, filename]
+  const candidates = queryAll<Recording>(
+    `SELECT * FROM recordings WHERE filename COLLATE NOCASE IN (${placeholders})
+      OR original_filename COLLATE NOCASE IN (${placeholders})`, [...variants, ...variants]
   )
+  if (!/\.hda$/i.test(filename)) {
+    const exact = candidates.filter((row) => row.filename.toLowerCase() === filename.toLowerCase())
+    if (exact.length === 1) return exact[0]
+  }
+  return resolveDeviceRecording(filename, candidates)
 }
 
 // Update recording lifecycle state
@@ -6764,7 +6763,7 @@ export function upsertRecordingFromDevice(deviceFile: {
 
 // Mark recordings as no longer on device
 export function markRecordingsNotOnDevice(presentFilenames: string[]): void {
-  if (presentFilenames.length === 0) return
+
 
   const presentBases = new Set(
     presentFilenames.map((filename) => filename.replace(/\.(hda|wav|mp3|m4a|aac|ogg|flac)$/i, '').toLowerCase())
@@ -6803,17 +6802,7 @@ const RECORDING_EXTENSIONS = RECORDING_AUDIO_EXTENSIONS.map((ext) => ext.slice(1
  * exist under any variant of the same base name.
  */
 export function getRecordingByFilenameVariants(filename: string): Recording | undefined {
-  const exact = getRecordingByFilename(filename)
-  if (exact) return exact
-
-  const base = filename.replace(/\.(hda|wav|mp3|m4a|aac|ogg|flac)$/i, '')
-  for (const ext of RECORDING_EXTENSIONS) {
-    const variant = `${base}.${ext}`
-    if (variant === filename) continue
-    const match = getRecordingByFilename(variant)
-    if (match) return match
-  }
-  return undefined
+  return getRecordingByFilename(filename)
 }
 
 // Mark recording as downloaded.

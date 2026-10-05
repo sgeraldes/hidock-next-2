@@ -111,6 +111,17 @@ function trackPhases(svc: DevicePipelineService): string[] {
 // ---------------------------------------------------------------------------
 
 describe('DevicePipelineService', () => {
+  it('passes complete authority only for a successful current empty scan', async () => {
+    const dl = makeDownloadService()
+    const jensen = makeJensen({ getFileCount: vi.fn().mockResolvedValue({ count: 0 }), listFiles: vi.fn().mockResolvedValue([]) })
+    const svc = new DevicePipelineService(jensen, dl)
+    const files = await svc.scanFiles()
+    await svc.reconcile(files)
+    expect(dl.getFilesToSyncBatched).toHaveBeenLastCalledWith([], 100, expect.objectContaining({ complete: true }))
+    ;(jensen.listFiles as ReturnType<typeof vi.fn>).mockResolvedValue(null)
+    await svc.reconcile(await svc.scanFiles())
+    expect(dl.getFilesToSyncBatched).toHaveBeenLastCalledWith([], 100, expect.objectContaining({ complete: false }))
+  })
   beforeEach(() => {
     vi.clearAllMocks()
   })

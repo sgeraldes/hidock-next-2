@@ -28,6 +28,10 @@ const mockRetryPendingFileCleanups = vi.hoisted(() => vi.fn().mockResolvedValue(
   cleared: 0,
   stillPending: {}
 }))
+const mockReconcileSnapshot = vi.hoisted(() => vi.fn().mockResolvedValue([]))
+vi.mock('../../services/download-service', () => ({
+  getDownloadService: () => ({ getFilesToSyncBatched: mockReconcileSnapshot, noteTransferStall: vi.fn() })
+}))
 
 vi.mock('../../services/recording-deletion-service', () => ({
   retryPendingFileCleanups: mockRetryPendingFileCleanups
@@ -191,6 +195,7 @@ describe('registerJensenHandlers', () => {
     liveDir.path = mkdtempSync(join(tmpdir(), 'jensen-live-'))
     mockRetryPendingFileCleanups.mockResolvedValue({ attempted: 0, cleared: 0, stillPending: {} })
     mockJensen.getModel.mockReturnValue('unknown')
+    mockJensen.getFileCount.mockResolvedValue(null)
     mockJensen.versionNumber = 327714
     mockJensen.startRealtime.mockResolvedValue(null)
     broadcastSendCalls.length = 0
@@ -590,6 +595,27 @@ describe('registerJensenHandlers', () => {
   // -------------------------------------------------------------------------
   // listFiles — scan progress events
   // -------------------------------------------------------------------------
+
+  it('reconciles a complete successful empty scan in main without renderer authority', async () => {
+    mockJensen.isConnected.mockReturnValue(true)
+    mockJensen.getFileCount.mockResolvedValue({ count: 0 })
+    mockJensen.listFiles.mockResolvedValue([])
+    expect(await mockHandlers['jensen:listFiles'](makeEvent())).toEqual([])
+    expect(mockReconcileSnapshot).toHaveBeenCalledExactlyOnceWith([], 100, expect.objectContaining({ complete: true }))
+  })
+
+  it.each(['partial', 'failed', 'disconnected', 'reconnected', 'count-changed'])('never records absence from a %s scan', async (mode) => {
+    mockJensen.isConnected.mockReturnValue(true)
+    mockJensen.getFileCount.mockResolvedValue({ count: 1 })
+    mockJensen.listFiles.mockImplementation(async () => {
+      if (mode === 'failed') throw new Error('scan failed')
+      if (mode === 'disconnected' || mode === 'reconnected') mockJensen.ondisconnect()
+      if (mode === 'count-changed') mockJensen.getFileCount.mockResolvedValue({ count: 2 })
+      return mode === 'partial' ? [] : [{ name: '2026Jun01-115550-Rec39.hda', time: new Date('2026-06-01'), length: 10, duration: 60 }]
+    })
+    await mockHandlers['jensen:listFiles'](makeEvent())
+    expect(mockReconcileSnapshot).not.toHaveBeenCalled()
+  })
 
   it('jensen:listFiles sends scan-progress events during file listing', async () => {
     const event = makeEvent(false)

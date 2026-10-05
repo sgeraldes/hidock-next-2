@@ -61,6 +61,33 @@ describe('mapTranscriptionStatus', () => {
 })
 
 describe('buildRecordingMap location facts', () => {
+  it('projects the annotated HiDock WAV for its retained HDA alias online and offline', () => {
+    const base = '2026Jun01-115550-Rec39'
+    const db = [
+      { id: 'shadow', filename: `${base}.hda`, original_filename: `${base}.hda`, source: 'hidock', date_recorded: '2026-06-01', file_path: null, file_size: 10, status: 'none', on_local: 0, on_device: 1 },
+      { id: 'local', filename: `${base}.wav`, original_filename: `${base}.wav`, source: 'hidock', date_recorded: '2026-06-01', file_path: '/fixture/take.wav', file_size: 10, status: 'complete', on_local: 1, on_device: 1 }
+    ]
+    const captures = [{ id: 'capture', sourceRecordingId: 'local', userTitle: 'My title', quality: 'valuable', status: 'ready' }] as any
+    for (const connected of [false, true]) {
+      const result = buildRecordingMap(connected ? [{ id: 'device', filename: `${base}.hda`, size: 10, duration: 60, dateCreated: new Date('2026-06-01') } as any] : [], db, [], [], connected, captures)
+      expect(result).toHaveLength(1)
+      expect(result[0]).toMatchObject({ id: 'local', userTitle: 'My title', quality: 'valuable', knowledgeCaptureId: 'capture' })
+    }
+  })
+
+  it('keeps an external same-stem import visible beside the independent device take', () => {
+    const result = buildRecordingMap([{ id: 'device', filename: 'Rec01.hda', size: 10, duration: 60, dateCreated: new Date('2026-10-05') } as any], [
+      { id: 'external', filename: 'Rec01.wav', original_filename: 'Rec01.wav', source: 'external', is_imported: 1, date_recorded: '2026-10-01', file_path: '/fixture/external.wav', file_size: 10, status: 'complete', on_local: 1, on_device: 0 }
+    ], [], [], true)
+    expect(result.map((r) => r.id).sort()).toEqual(['device', 'external'])
+  })
+
+  it('keeps an independent import on its own audio path despite a device synced-file alias', () => {
+    const result = buildRecordingMap([], [
+      { id: 'external', filename: 'Rec01.wav', source: 'external', is_imported: 1, file_path: '/fixture/external.wav', file_size: 10, status: 'complete', on_local: 1 }
+    ], [{ id: 'synced-device', original_filename: 'Rec01.hda', local_filename: 'Rec01.wav', file_path: '/fixture/device.wav', synced_at: '2026-10-05' }], [], false)
+    expect(result[0]).toMatchObject({ id: 'external', localPath: '/fixture/external.wav' })
+  })
   const device = {
     id: 'device-id',
     filename: '2026Aug18-120000-Rec01.hda',

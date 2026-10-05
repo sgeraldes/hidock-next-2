@@ -1,3 +1,5 @@
+// These deduplication fixtures run in a known current connected session.
+vi.mock('../device-snapshot', () => ({ connectedDeviceGuard: () => () => true }))
 // @vitest-environment node
 
 /**

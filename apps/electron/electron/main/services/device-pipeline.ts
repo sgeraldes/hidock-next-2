@@ -34,6 +34,7 @@
 
 import { EventEmitter } from 'events'
 import type { DeviceModel, FileInfo } from '@hidock/jensen-protocol'
+import { beginDeviceSnapshot, deviceListGuard, invalidateDeviceSnapshots, isCompleteDeviceSnapshot, rememberDeviceSnapshot, type DeviceSnapshotGuard } from './device-snapshot'
 
 // ---------------------------------------------------------------------------
 // Phase machine
@@ -104,7 +105,9 @@ export interface PipelineJensen {
 
 export interface PipelineDownloadService {
   getFilesToSyncBatched(
-    deviceFiles: Array<{ filename: string; size: number; duration: number; dateCreated: Date }>
+    deviceFiles: Array<{ filename: string; size: number; duration: number; dateCreated: Date }>,
+    batchSize?: number,
+    snapshot?: DeviceSnapshotGuard
   ): Promise<Array<{ filename: string; size: number; duration: number; dateCreated: Date; skipReason?: string }>>
   processDownload(
     filename: string,
@@ -150,6 +153,7 @@ export class DevicePipelineService extends EventEmitter {
 
   private cachedFiles: FileInfo[] | null = null
   private cachedFileCount = -1
+  private scannedSnapshot: { files: FileInfo[]; guard: DeviceSnapshotGuard } | null = null
 
   private abortController: AbortController | null = null
   private autoConnectListenersBound = false
@@ -365,6 +369,11 @@ export class DevicePipelineService extends EventEmitter {
   }
 
   async scanFiles(): Promise<FileInfo[]> {
+    this.scannedSnapshot = null
+    const snapshot = beginDeviceSnapshot(() => this.jensen.isConnected() && !this.aborted())
+    if (!snapshot.isCurrent()) return []
+    const before = await this.safe(() => this.jensen.getFileCount())
+    if (!snapshot.isCurrent()) return []
     const expected = this.state.device?.recordingCount ?? 0
     const streamedFiles: FileInfo[] = []
     const onProgress = (current: number, total: number): void => {
@@ -384,6 +393,12 @@ export class DevicePipelineService extends EventEmitter {
       }
     }
     const files = await this.safe(() => this.jensen.listFiles(onProgress, expected, onNewFiles))
+    const after = snapshot.isCurrent() ? await this.safe(() => this.jensen.getFileCount()) : null
+    snapshot.complete = isCompleteDeviceSnapshot(files?.map((file) => file.name) ?? null, before?.count, after?.count)
+    if (files && snapshot.isCurrent()) {
+      this.scannedSnapshot = { files, guard: snapshot }
+      rememberDeviceSnapshot(snapshot, files.map((file) => file.name))
+    }
     this.patchState({ scanProgress: null })
     return files ?? []
   }
@@ -400,7 +415,11 @@ export class DevicePipelineService extends EventEmitter {
       dateCreated: f.time ?? new Date()
     }))
 
-    const reconciled = await this.downloadService.getFilesToSyncBatched(deviceFiles)
+    const guard = this.scannedSnapshot?.files === files
+      ? this.scannedSnapshot.guard
+      : deviceListGuard(files.map((file) => file.name), () => this.jensen.isConnected() && !this.aborted())
+    this.scannedSnapshot = null // A cached reuse is never fresh absence evidence.
+    const reconciled = await this.downloadService.getFilesToSyncBatched(deviceFiles, 100, guard)
     return reconciled
       .filter((r) => !r.skipReason)
       .map((r) => ({
@@ -549,6 +568,7 @@ export class DevicePipelineService extends EventEmitter {
   }
 
   async disconnect(): Promise<void> {
+    invalidateDeviceSnapshots()
     this.abortController?.abort()
     this.downloadService.cancelActiveDownloads('Device disconnected')
     await this.safe(() => this.jensen.disconnect())
@@ -654,6 +674,7 @@ export class DevicePipelineService extends EventEmitter {
   }
 
   private async handleDisconnect(): Promise<void> {
+    invalidateDeviceSnapshots()
     this.abortController?.abort()
     this.downloadService.cancelActiveDownloads('Device disconnected')
     this.cachedFiles = null

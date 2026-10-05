@@ -13,6 +13,7 @@
 
 import { unescapeIcsText } from '@hidock/calendar-sync'
 import { yieldToEventLoop } from './event-loop'
+import { connectedDeviceGuard } from './device-snapshot'
 import {
   queryAll,
   queryOne,
@@ -1196,6 +1197,7 @@ interface DuplicateRecordingRow {
   on_device?: number | null
   on_local?: number | null
   meeting_id?: string | null
+  date_recorded?: string | null
   /** Whether a transcript row points at this recording. */
   hasTranscript?: boolean
 }
@@ -1255,8 +1257,10 @@ export function mergeDuplicateRecordings(): number {
 }
 
 function* mergeRecordingBatches(totals: { groups: number; rows: number }): Generator<void> {
+  const isCurrent = connectedDeviceGuard()
+  if (!isCurrent()) return
   const recordings = queryAll<DuplicateRecordingRow>(
-    `SELECT id, filename, file_path, created_at, on_device, on_local, meeting_id FROM recordings`
+    `SELECT id, filename, file_path, created_at, on_device, on_local, meeting_id, date_recorded FROM recordings`
   )
   if (recordings.length === 0) return
 
@@ -1302,11 +1306,14 @@ function* mergeRecordingBatches(totals: { groups: number; rows: number }): Gener
   if (eligFailClosed) return
   yield
   for (const group of dupGroups) {
+    if (!isCurrent()) return
     // Local audio is not proof that an on-device row is disposable. Boot runs
     // without the device and cannot verify that identity or safely move every
     // user reference. Keep possible on-device rows stable; discovery resolves
     // extension variants to the local canonical row instead of recreating them.
     if (group.some((r) => r.on_device !== 0)) continue
+    // A shared basename cannot authorize moving references across recording dates.
+    if (group.some((r) => !r.date_recorded) || new Set(group.map((r) => r.date_recorded)).size !== 1) continue
     // Only the eligible members of the group may be collapsed together.
     const eligibleGroup = group.filter((r) => eligibleRecIds.has(r.id))
     if (eligibleGroup.length < 2) continue

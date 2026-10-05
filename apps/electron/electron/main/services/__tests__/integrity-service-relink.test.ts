@@ -57,17 +57,17 @@ vi.mock('../database', () => ({
       if (/file_path = \? OR file_path = \?/.test(sql)) {
         const [a, b, selfId] = params as string[]
         const wanted = new Set([norm(a), norm(b)])
-        return recordingRows.filter((r) => r.id !== selfId && r.file_path && wanted.has(norm(r.file_path)))
+        return recordingRows.map((row): Record<string, unknown> => ({ on_device: 0, ...row })).filter((r) => r.id !== selfId && r.file_path && wanted.has(norm(r.file_path)))
       }
       // The relink check asks for rows with no usable path; resetOrphanedDownloads
       // asks for rows that have one. Serve whichever this query wants.
       if (/file_path IS NULL OR file_path = ''/i.test(sql)) {
-        return recordingRows.filter((r) => !r.file_path)
+        return recordingRows.map((row): Record<string, unknown> => ({ on_device: 0, ...row })).filter((r) => !r.file_path)
       }
       if (/file_path IS NOT NULL/i.test(sql)) {
-        return recordingRows.filter((r) => !!r.file_path)
+        return recordingRows.map((row): Record<string, unknown> => ({ on_device: 0, ...row })).filter((r) => !!r.file_path)
       }
-      return recordingRows
+      return recordingRows.map((row): Record<string, unknown> => ({ on_device: 0, ...row }))
     }
     return []
   }),
@@ -102,6 +102,12 @@ beforeEach(() => {
 })
 
 describe('relinkLocalRecordings — repairs a recording whose audio is on disk', () => {
+  it('retains possible device identities before any startup relink write', () => {
+    recordingRows = [{ id: 'device', filename: '2026Jun01-115550-Rec39.hda', file_path: null, on_device: 1 }]
+    filesOnDisk.add('/mock/recordings/2026Jun01-115550-Rec39.wav')
+    expect(getIntegrityService().relinkLocalRecordings().fixed).toBe(0)
+    expect(pathsWrittenFor('device')).toEqual([])
+  })
   it('restores file_path from the synced_files row that still resolves', () => {
     recordingRows = [{ id: 'rec-1', filename: '2026Sep22-085950-Rec35.hda', file_path: null }]
     syncedRows.set('2026Sep22-085950-Rec35.hda', {

@@ -45,6 +45,7 @@ vi.mock('../database', () => ({
   isFilePurged: (filename: string) => mockIsFilePurged(filename),
   getPurgedFilenames: () => mockGetPurgedFilenames(),
   getRecordingByFilename: vi.fn(() => null),
+  markRecordingsNotOnDevice: vi.fn(),
   upsertRecordingFromDevice: vi.fn((file: DeviceFile) => ({
     id: `id:${file.filename}`,
     filename: file.filename,
@@ -105,6 +106,28 @@ function makeFiles(n: number): DeviceFile[] {
 }
 
 describe('device file-list reconcile: one transaction, batched yields, hoisted tombstones', () => {
+  it.each(['wav', 'mp3'])('does not skip device audio because an independent external %s exists on disk', async (extension) => {
+    const { getRecordingByFilename } = await import('../database')
+    vi.mocked(getRecordingByFilename).mockImplementation((name) => name === `Rec01.${extension}`
+      ? { id: 'external', source: 'external', is_imported: 1 } as never : undefined)
+    mockExistsSync.mockReturnValue(true)
+    expect(getDownloadService().isFileAlreadySynced('Rec01.hda').synced).toBe(false)
+    vi.mocked(getRecordingByFilename).mockReturnValue(undefined)
+  })
+  it('records absence for a complete current empty scan, never for a cached list', async () => {
+    const { markRecordingsNotOnDevice } = await import('../database')
+    await getDownloadService().getFilesToSyncBatched([], 100, { isCurrent: () => true, complete: false })
+    expect(markRecordingsNotOnDevice).not.toHaveBeenCalled()
+    await getDownloadService().getFilesToSyncBatched([], 100, { isCurrent: () => true, complete: true })
+    expect(markRecordingsNotOnDevice).toHaveBeenCalledExactlyOnceWith([])
+  })
+  it('stops metadata writes after a disconnect or session change between chunks', async () => {
+    let current = true
+    mockRunInTransaction.mockImplementationOnce((fn) => { fn(); current = false })
+    await expect(getDownloadService().getFilesToSyncBatched(makeFiles(250), 100, { isCurrent: () => current, complete: true }))
+      .rejects.toThrow('snapshot')
+    expect(mockRunInTransaction).toHaveBeenCalledTimes(1)
+  })
   let service: ReturnType<typeof getDownloadService>
   let logSpy: ReturnType<typeof vi.spyOn>
 
