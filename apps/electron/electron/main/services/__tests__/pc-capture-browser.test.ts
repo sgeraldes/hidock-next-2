@@ -100,7 +100,8 @@ it('renders the real recording bar with visible light/dark meters and exercises 
         finish: async () => { window.finishCalls++; return { success: true } } } };
       createRoot(document.body).render(<MemoryRouter><RecordingBar/><Location/></MemoryRouter>);
     `, resolveDir: resolve('.'), loader: 'tsx' }, bundle: true, write: false, format: 'iife', jsx: 'automatic',
-    alias: { '@': resolve('src') }, define: { 'process.env.NODE_ENV': '"production"', 'import.meta.env': '{"DEV":false,"PROD":true}' } })
+    alias: { '@': resolve('src') }, define: { 'process.env.NODE_ENV': '"production"', 'import.meta': '{"env":{"DEV":false,"PROD":true}}' } })
+    expect(bundled.warnings).toEqual([])
     const css = await postcss([tailwind()]).process(readFileSync(resolve('src/index.css'), 'utf8'), { from: resolve('src/index.css') })
     const meterReport = `
       const meters = [...document.querySelectorAll('[role="meter"]')].map(meter => ({
@@ -195,7 +196,8 @@ it('recording detail decodes headerless stereo, shows lanes and failure, and mut
       window.renderDetail = () => window.root.render(<Detail/>);
       window.mountDetail = () => { window.root = createRoot(document.body); window.root.render(<Detail/>); };
     `, resolveDir: resolve('.'), loader: 'tsx' }, bundle: true, write: false, format: 'iife', jsx: 'automatic',
-      alias: { '@': resolve('src') }, define: { 'process.env.NODE_ENV': '"production"', 'import.meta.env': '{"DEV":false,"PROD":true}' } })
+      alias: { '@': resolve('src') }, define: { 'process.env.NODE_ENV': '"production"', 'import.meta': '{"env":{"DEV":false,"PROD":true}}' } })
+    expect(bundled.warnings).toEqual([])
     const css = await postcss([tailwind()]).process(readFileSync(resolve('src/index.css'), 'utf8'), { from: resolve('src/index.css') })
     const script = `(async () => {
       document.head.innerHTML = '<style>' + ${JSON.stringify(css.css)} + '</style>'; ${bundled.outputFiles[0].text}
@@ -214,7 +216,7 @@ it('recording detail decodes headerless stereo, shows lanes and failure, and mut
       for(let i=0;i<100 && !document.querySelector('[data-testid="stereo-lanes"]');i++) await new Promise(resolve=>setTimeout(resolve,20));
       const lanes=[...document.querySelectorAll('[data-channel]')].map(lane=>({channel:lane.getAttribute('data-channel'), label:lane.textContent, canvas:!!lane.querySelector('canvas')}));
       const text=document.body.textContent;
-      const before={lanes, stereo:text.includes('Stereo · Mic left · System right'), failure:text.includes('Failed: Provider timed out'),
+      const before={lanes, sentimentPanel:!!document.querySelector('[data-testid="sentiment-panel"]'), muteIcon:!!document.querySelector('[aria-label="Mute Mic"] svg'), stereo:text.includes('Stereo · Mic left · System right'), failure:text.includes('Failed: Provider timed out'),
         retry:[...document.querySelectorAll('button')].some(b=>b.textContent==='Retry'), idleStop:[...document.querySelectorAll('button')].some(b=>b.textContent==='Stop'),
         weakCandidate:text.includes('Colegio'), credibleCandidate:text.includes('Retro Belcorp'), duration:window.uiStore.getState().waveformDuration,
         peaks:window.cacheEntry.channels.map(peaks=>Math.max(...peaks))};
@@ -230,11 +232,21 @@ it('recording detail decodes headerless stereo, shows lanes and failure, and mut
       window.detailTranscript = undefined; window.renderDetail(); await new Promise(resolve=>setTimeout(resolve,50));
       document.querySelector('[aria-label="Mute Mic"]').click(); await new Promise(resolve=>setTimeout(resolve,30));
       const mutedBeforePlay=window.uiStore.getState().playbackMutedChannels;
-      await window.__audioControls.play('detail','/Recording 2026-10-05 01-30 12345678-1234-1234-1234-123456789abc.webm'); await new Promise(resolve=>setTimeout(resolve,200));
-      const during={duration:window.uiStore.getState().playbackDuration, playing:window.uiStore.getState().isPlaying,
+      const assignedTimes=[]; const nativeTime=Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype,'currentTime');
+      Object.defineProperty(HTMLMediaElement.prototype,'currentTime',{...nativeTime,set(value){
+        window.playbackElement=this; assignedTimes.push({value, duration:String(this.duration),readyState:this.readyState}); nativeTime.set.call(this,value);
+      }});
+      await window.__audioControls.play('detail','/Recording 2026-10-05 01-30 12345678-1234-1234-1234-123456789abc.webm',0.25); await new Promise(resolve=>setTimeout(resolve,200));
+      const during={duration:window.uiStore.getState().playbackDuration, nativeDuration:String(window.playbackElement.duration), playing:window.uiStore.getState().isPlaying,
         mutedLabel:!!document.querySelector('[aria-label="Unmute Mic"]')};
       window.__audioControls.pause(); await new Promise(resolve=>setTimeout(resolve,30));
-      const pausedStop=[...document.querySelectorAll('button')].some(b=>b.textContent==='Stop'); window.__audioControls.stop();
+      const pausedStop=[...document.querySelectorAll('button')].some(b=>b.textContent==='Stop');
+      const seekErrors=[]; for(const time of [NaN,Infinity,-Infinity,-5,999,0.5]) {
+        try { window.__audioControls.seek(time); } catch(error) { seekErrors.push(String(error)); }
+      }
+      window.__audioControls.resume(); await new Promise(resolve=>setTimeout(resolve,80));
+      const resumed=window.uiStore.getState().isPlaying;
+      window.__audioControls.stop();
       // Exercise the exact production splitter/gain graph with decoded WebM PCM in an OfflineAudioContext.
       const renders=[];
       for(const mute of [null,0,1]) { const offline=new OfflineAudioContext(2,decoded.length,decoded.sampleRate);
@@ -246,7 +258,8 @@ it('recording detail decodes headerless stereo, shows lanes and failure, and mut
       const player=document.querySelector('[data-testid="waveform-player-full"]');
       const transportVisible=player.getBoundingClientRect().bottom <= player.parentElement.parentElement.getBoundingClientRect().bottom + 1;
       [...document.querySelectorAll('button')].find(button=>button.textContent==='Retry').click();
-      return {before, manualSuggestions, heldSuggestions, during, mutedBeforePlay, pausedStop, renders, decodedDuration:decoded.duration, transportVisible, retries:window.retries};
+      Object.defineProperty(HTMLMediaElement.prototype,'currentTime',nativeTime);
+      return {before, assignedTimes, seekErrors, resumed, manualSuggestions, heldSuggestions, during, mutedBeforePlay, pausedStop, renders, decodedDuration:decoded.duration, transportVisible, retries:window.retries};
     })()`
     const compactScript = `(async () => {
       document.documentElement.className='dark'; document.querySelector('[aria-label="Minimize Player"]').click();
@@ -265,6 +278,14 @@ it('recording detail decodes headerless stereo, shows lanes and failure, and mut
     expect(reports[1]).toMatchObject({height:32, lanes:2, mic:true, system:true})
     expect(reports[2]).toEqual({expanded:true})
     expect(result.before.lanes).toHaveLength(2)
+    expect(result.before).toMatchObject({sentimentPanel:false,muteIcon:true})
+    expect(result.seekErrors).toEqual([])
+    const nativeDuration = Number(result.assignedTimes[2].duration)
+    expect(result.assignedTimes.map((entry: {value:number}) => entry.value)).toEqual([
+      0.25,0,Number.isFinite(nativeDuration) && nativeDuration > 0 ? nativeDuration : result.decodedDuration,0.5
+    ])
+    expect(result.assignedTimes[0]).toMatchObject({duration:'Infinity'})
+    expect(result.resumed).toBe(true)
     expect(result.before.lanes.every((lane: {canvas: boolean}) => lane.canvas)).toBe(true)
     expect(result.manualSuggestions).toBe(true)
     expect(result.heldSuggestions).toEqual([0,0,0])
@@ -274,7 +295,8 @@ it('recording detail decodes headerless stereo, shows lanes and failure, and mut
     expect(result.transportVisible).toBe(true)
     expect(result.retries).toBe(1)
     expect(result.before.peaks[1]).toBeGreaterThan(result.before.peaks[0] * 2)
-    expect(result.during.duration).toBeCloseTo(result.before.duration,1)
+    const duringNativeDuration = Number(result.during.nativeDuration)
+    expect(result.during.duration).toBe(Number.isFinite(duringNativeDuration) && duringNativeDuration > 0 ? duringNativeDuration : result.before.duration)
     expect(result.during).toMatchObject({playing:true,mutedLabel:true})
     expect(result.mutedBeforePlay).toEqual([true,false])
     expect(result.pausedStop).toBe(false)

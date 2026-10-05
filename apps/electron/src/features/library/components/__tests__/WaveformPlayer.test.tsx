@@ -370,6 +370,9 @@ describe('stereo recorder detail regressions', () => {
     expect(screen.getByText('System')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Mute Mic' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Mute System' })).toBeInTheDocument()
+    expect(screen.queryByTestId('sentiment-panel')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Mute Mic' }).querySelector('svg')).not.toBeNull()
+    expect(screen.getByRole('button', { name: 'Mute Mic' })).toHaveClass('border')
   })
   it('uses stored duration when the media element reports Infinity', () => {
     useUIStore.setState({ currentlyPlayingId: 'rec-1', playbackDuration: Infinity, playbackCurrentTime: 5 })
@@ -391,4 +394,6 @@ it('mono keeps a single waveform without channel mute controls', () => {
   render(<WaveformPlayer mode="full" recordingId="rec-1" filePath="/mono.wav" durationSec={118}/>)
   expect(screen.queryByTestId('stereo-lanes')).not.toBeInTheDocument()
   expect(screen.queryByRole('button',{name:/Mute/})).not.toBeInTheDocument()
+  expect(screen.getByTestId('sentiment-panel')).toHaveTextContent('positive')
+  expect(screen.getByTestId('sentiment-panel')).toHaveTextContent('negative')
 })

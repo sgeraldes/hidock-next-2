@@ -38,7 +38,7 @@
 
 import { isPcRecordingFilename } from '@/shared/pc-recording'
 import { useCallback, useEffect, useId, useMemo, useState } from 'react'
-import { Play, Pause, Square, SkipBack, SkipForward, Volume2, Scissors } from 'lucide-react'
+import { Play, Pause, Square, SkipBack, SkipForward, Volume2, VolumeX, Scissors } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Select,
@@ -558,6 +558,7 @@ function FullTimeline({
   // The time axis uses the REAL duration so the rich timeline renders on a silent
   // open; the playhead still tracks live playback position (0 when not playing).
   const duration = axisDuration
+  const stereo = wf.channels?.length === 2
   const splitPct = splitPointSec !== undefined && duration > 0
     ? Math.min(100, Math.max(0, (splitPointSec / duration) * 100))
     : null
@@ -660,7 +661,7 @@ function FullTimeline({
         <div className="relative">
           {/* Sentiment panel — gradient area, +positive / −negative axis labels,
               the sentiment curve, and numbered event markers riding ON the curve. */}
-          <div className="relative" style={{ height: SENTIMENT_H }} data-testid="sentiment-panel">
+          {!stereo && <div className="relative" style={{ height: SENTIMENT_H }} data-testid="sentiment-panel">
             <svg className="absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
               <defs>
                 <linearGradient id={`wf-sent-fill-${stageId}`} x1="0" y1="0" x2="0" y2="1">
@@ -717,7 +718,7 @@ function FullTimeline({
                 </button>
               )
             })}
-          </div>
+          </div>}
 
           {/* Wave band — per-speaker colored bars, or a clean placeholder. */}
           <div className="relative px-2 pb-1.5" style={{ height: wf.channels?.length === 2 ? undefined : WAVE_H }} data-testid="wave-band">
@@ -871,8 +872,10 @@ function StereoLanes({ channels, recordingId, pcRecording, duration, onSeek, cur
       </div>
       <div className="shrink-0">{labels.map((label, channel) => {
         const isMuted = mutedForId === recordingId && !!muted[channel]
-        return <button key={channel} className="block h-3 text-[9px] leading-3 text-muted-foreground" aria-label={`${isMuted ? 'Unmute' : 'Mute'} ${label}`} aria-pressed={isMuted}
-          onClick={() => recordingId && controls.setChannelMuted(recordingId, channel, !isMuted)}>{isMuted ? 'Unmute' : 'Mute'}</button>
+        return <Button key={channel} variant={isMuted ? 'secondary' : 'outline'} size="sm" className="flex h-3 gap-1 rounded-sm px-1 text-[9px] leading-3" aria-label={`${isMuted ? 'Unmute' : 'Mute'} ${label}`} aria-pressed={isMuted}
+          onClick={() => recordingId && controls.setChannelMuted(recordingId, channel, !isMuted)}>
+          {isMuted ? <VolumeX className="h-2.5 w-2.5" aria-hidden="true"/> : <Volume2 className="h-2.5 w-2.5" aria-hidden="true"/>}
+          {isMuted ? 'Unmute' : 'Mute'}</Button>
       })}</div>
     </div>
   }
@@ -883,8 +886,9 @@ function StereoLanes({ channels, recordingId, pcRecording, duration, onSeek, cur
       return <div key={channel} className="relative" data-channel={channel}>
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>{label}</span>
-          <Button variant="ghost" size="sm" className="relative z-30 h-6 px-2 text-xs" aria-label={`${isMuted ? 'Unmute' : 'Mute'} ${label}`} aria-pressed={isMuted}
+          <Button variant={isMuted ? 'secondary' : 'outline'} size="sm" className="relative z-30 h-6 gap-1 px-2 text-xs" aria-label={`${isMuted ? 'Unmute' : 'Mute'} ${label}`} aria-pressed={isMuted}
             onClick={() => recordingId && controls.setChannelMuted(recordingId, channel, !isMuted)}>
+            {isMuted ? <VolumeX className="h-3 w-3" aria-hidden="true"/> : <Volume2 className="h-3 w-3" aria-hidden="true"/>}
             {isMuted ? 'Unmute' : 'Mute'}
           </Button>
         </div>

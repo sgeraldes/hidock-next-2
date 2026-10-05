@@ -65,8 +65,17 @@ export function useAudioPlayback() {
   }, [])
   const mediaDuration = useCallback(() => {
     const duration = audioRef.current?.duration ?? 0
-    return Number.isFinite(duration) && duration > 0 ? duration : measuredDurationRef.current
+    const measured = measuredDurationRef.current
+    return Number.isFinite(duration) && duration > 0 ? duration : Number.isFinite(measured) && measured > 0 ? measured : 0
   }, [])
+  const seekAudio = useCallback((time: number) => {
+    const audio = audioRef.current
+    if (!audio || !Number.isFinite(time)) return
+    const duration = mediaDuration()
+    // MediaRecorder WebM may have no duration header. Only clamp to a known,
+    // finite duration; never pass NaN/Infinity into the native media setter.
+    audio.currentTime = Math.max(0, duration > 0 ? Math.min(duration, time) : time)
+  }, [mediaDuration])
   const rateRef = useRef<number | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const audioBlobUrlRef = useRef<string | null>(null)
@@ -297,7 +306,7 @@ export function useAudioPlayback() {
           }
           if (cancelled()) return
           const duration = mediaDuration()
-          audioRef.current.currentTime = Math.min(Number.isFinite(duration) ? duration : startTimeSec, startTimeSec)
+          seekAudio(startTimeSec)
           setPlaybackProgress(audioRef.current.currentTime, duration)
         }
         if (shouldLogQa()) console.log('[QA-MONITOR][Operation] Calling audio.play()')
@@ -323,7 +332,7 @@ export function useAudioPlayback() {
     })()
 
     return playbackLockRef.current
-  }, [setCurrentlyPlaying, setPlaybackProgress, setIsPlaying, setWaveformData, releaseStereo, mediaDuration])
+  }, [setCurrentlyPlaying, setPlaybackProgress, setIsPlaying, setWaveformData, releaseStereo, mediaDuration, seekAudio])
 
   // ---- Waveform-Only Load ----
 
@@ -455,10 +464,6 @@ export function useAudioPlayback() {
     // still names this recording — made the guarded reload a no-op, leaving the
     // reader on "Press play to load the waveform" until the user pressed Play.
   }, [cancelPendingPlayback, setCurrentlyPlaying, setIsPlaying, setPlaybackProgress, releaseStereo])
-
-  const seekAudio = useCallback((time: number) => {
-    if (audioRef.current) audioRef.current.currentTime = time
-  }, [])
 
   const setPlaybackRate = useCallback((rate: number) => {
     rateRef.current = rate
