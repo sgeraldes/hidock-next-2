@@ -633,7 +633,8 @@ describe('Transcription Service', () => {
       mockIsRecordingEligible.mockReturnValue(false) // rated garbage: value-excluded
 
       await runQueueUntil(() => {
-        expect(mockUpdateQueueItem).toHaveBeenCalledWith('queue-rec-rated', 'cancelled')
+        expect(mockUpdateQueueItem).toHaveBeenCalledWith('queue-rec-rated', 'cancelled',
+          'Transcription stopped because this recording is rated Garbage or Low value. Clear the rating to transcribe again.')
       })
 
       expect(mockAnalyzeAudioPreflight).toHaveBeenCalled() // the local check still ran

@@ -8392,7 +8392,7 @@ export function updateQueueItem(id: string, status: string, errorMessage?: strin
        WHERE id = ?`,
       [status, id]
     )
-  } else if (status === 'completed' || status === 'failed') {
+  } else if (status === 'completed' || status === 'failed' || status === 'cancelled') {
     run('UPDATE transcription_queue SET status = ?, completed_at = CURRENT_TIMESTAMP, error_message = ? WHERE id = ?', [
       status,
       errorMessage ?? null,

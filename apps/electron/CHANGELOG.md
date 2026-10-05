@@ -9,6 +9,15 @@ pairs with it, gives it the Hugging Face token and decides when it steps aside.
 
 ### Changes
 
+- **Incomplete transcripts are held for review.** HiDock checks how much detected speech
+  reached the text before creating summaries, titles, meeting matches or search context.
+  Recording details explain the problem and offer **Transcribe again** with a cost estimate;
+  the Library includes a **Transcription problems** filter and reasons on hover. Gemini gets
+  one automatic retry with smaller chunks. Existing transcripts are checked again while
+  their text and audio are kept. Acoustic voice segments are now retained for future timelines.
+- **Stopped retries explain why.** If a Garbage or Low value rating blocks transcription,
+  HiDock tells you to clear that rating instead of silently cancelling after the audio check.
+
 - **Reference labels for recording kinds.** Settings > Pipeline keeps a sample of up to 40 valid
   recordings for your own labels, with keyboard choices and progress, ready for engine comparisons.
 - **A fresh restore point before database updates.** Schema migrations now verify a current backup,

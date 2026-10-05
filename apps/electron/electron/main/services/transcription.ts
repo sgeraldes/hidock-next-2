@@ -529,7 +529,10 @@ async function runQueueItem(
       // would overwrite the soft-delete's 'cancelled' tombstone with
       // 'completed', jump progress to 100, and emit transcription:completed
       // for content that does not exist. Leave it cancelled.
-      updateQueueItem(item.id, 'cancelled')
+      if (outcome.reason) updateQueueItem(item.id, 'cancelled', outcome.reason)
+      else updateQueueItem(item.id, 'cancelled')
+      notifyRenderer('transcription:cancelled', { recordingId: item.recording_id, reason: outcome.reason })
+      if (outcome.reason) emitActivityLog('warning', 'Transcription stopped', outcome.reason)
       clearQueueHints(item.recording_id)
       console.log(`[Transcription] ${item.recording_id} cancelled mid-run (ineligible) — queue item marked cancelled`)
     } else if (outcome.status === 'no_speech') {
@@ -1979,7 +1982,8 @@ export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
  * transcription:completed for content that does not exist).
  */
 type TranscribeOutcome =
-  | { status: 'completed' | 'cancelled' }
+  | { status: 'completed' }
+  | { status: 'cancelled'; reason?: string }
   // `reason` separates "the audio is silent" from "the audio is too short to
   // be worth a transcriber call"; the queue's activity log words them apart.
   | { status: 'no_speech'; reason: 'no_speech' | typeof TOO_SHORT_REASON_CODE | AudioSkipReason }
@@ -2338,7 +2342,7 @@ Meeting ${i + 1}: "${m.subject}"
       `[Transcription] ${recordingId} has speech but its rating keeps it from any provider; ` +
         'explicit re-run stopped after the local check. Clear the rating to transcribe it.'
     )
-    return { status: 'cancelled' }
+    return { status: 'cancelled', reason: 'Transcription stopped because this recording is rated Garbage or Low value. Clear the rating to transcribe again.' }
   }
 
   meetingContext += `\n\nLOCAL AUDIO ACTIVITY EVIDENCE (authoritative safety constraint):
@@ -3413,7 +3417,7 @@ export async function transcribeManually(recordingId: string): Promise<void> {
     // a recording trashed / marked personal / hard-purged mid-run must NOT emit
     // transcription:completed (INC-2 fixed only the queue path).
     if (outcome.status === 'cancelled') {
-      notifyRenderer('transcription:cancelled', { recordingId })
+      notifyRenderer('transcription:cancelled', { recordingId, reason: outcome.reason })
       return
     }
     notifyRenderer('transcription:completed', { recordingId })
