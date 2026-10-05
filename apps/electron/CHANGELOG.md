@@ -9,6 +9,10 @@ pairs with it, gives it the Hugging Face token and decides when it steps aside.
 
 ### Changes
 
+- **Record meetings on your PC.** New > Record opens a bar that stays across pages, with separate
+  microphone and system levels. Stereo WebM keeps mic on the left and system audio on the right;
+  saved and recovered recordings enter the Library through the file-import path.
+
 - **Reference labels for recording kinds.** Settings > Pipeline keeps a sample of up to 40 valid
   recordings for your own labels, with keyboard choices and progress, ready for engine comparisons.
 - **A fresh restore point before database updates.** Schema migrations now verify a current backup,
