@@ -211,7 +211,7 @@ describe('OperationsPanel', () => {
       render(<OperationsPanel sidebarOpen={true} />)
 
       fireEvent.click(screen.getByRole('button', { name: /View source/i }))
-      expect(mockNavigate).toHaveBeenCalledWith('/library', { state: { selectedId: 'rec-1' } })
+      expect(mockNavigate).toHaveBeenCalledWith('/library', { state: { selectedId: 'rec-1', focusProcessing: true } })
     })
 
     it('go-to falls back to the library when there is no linked meeting', () => {
@@ -219,7 +219,7 @@ describe('OperationsPanel', () => {
       render(<OperationsPanel sidebarOpen={true} />)
 
       fireEvent.click(screen.getByRole('button', { name: /View source/i }))
-      expect(mockNavigate).toHaveBeenCalledWith('/library', { state: { selectedId: 'rec-1' } })
+      expect(mockNavigate).toHaveBeenCalledWith('/library', { state: { selectedId: 'rec-1', focusProcessing: true } })
     })
 
     it('prioritize invokes the store action for the item', () => {
@@ -314,6 +314,13 @@ describe('OperationsPanel', () => {
       expect(pauseBtn).not.toBeDisabled()
       fireEvent.click(pauseBtn)
       expect(mockToggleProcessing).toHaveBeenCalledTimes(1)
+    })
+    it('shows running stage progress and an explicit Stop action', () => {
+      setupActiveOverlay()
+      render(<OperationsPanel sidebarOpen={true} />)
+      expect(screen.getByRole('progressbar')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Stop' })).toBeVisible()
+      expect(screen.getByText(/Checking audio/)).toBeVisible()
     })
 
     it('offers Resume while only downloads are paused and nothing is queued for transcription', () => {

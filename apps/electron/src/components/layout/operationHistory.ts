@@ -43,5 +43,10 @@ export function recordingForDownload(
 
 /** How an operation row names its recording: the display title, never the file name. */
 export function operationLabel(recording: UnifiedRecording | undefined): string {
-  return recording ? getDisplayTitle(recording).primaryText : 'Recording'
+  if (!recording) return 'Recording'
+  const title = getDisplayTitle(recording)
+  const date = recording.dateRecorded
+  return title.source !== 'date' && date instanceof Date && !Number.isNaN(date.getTime())
+    ? `${title.primaryText} · ${date.toLocaleString('en', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}`
+    : title.primaryText
 }

@@ -1,7 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { isEarlierFailure, splitBySession } from '../operationHistory'
+import { isEarlierFailure, splitBySession, operationLabel } from '../operationHistory'
 
 describe('operationHistory', () => {
+  it('adds the recording date to a named source, never the queue date', () => {
+    const title = operationLabel({ id: 'r', title: 'Delivery', filename: 'r.wav', dateRecorded: new Date('2025-10-10T19:45:00') } as any)
+    expect(title).toContain('Delivery')
+    expect(title).toContain('2025')
+  })
   it('puts only failures from an earlier session in the earlier group', () => {
     const items = [
       { id: 'old-fail', status: 'failed', fromPreviousSession: true },

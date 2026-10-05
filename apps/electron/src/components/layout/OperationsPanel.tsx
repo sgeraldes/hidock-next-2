@@ -49,6 +49,7 @@ import type { UnifiedRecording } from '@/types/unified-recording'
 import { toast } from '@/components/ui/toaster'
 import { isFeatureOffThisRun } from '@/lib/bootFeatures'
 import { appLocale } from '@/lib/locale'
+import { TranscriptionActivity } from './TranscriptionActivity'
 
 interface OperationsPanelProps {
   sidebarOpen: boolean
@@ -249,7 +250,7 @@ export function OperationsPanel({ sidebarOpen }: OperationsPanelProps) {
       toast.warning('Source unavailable', 'This source is no longer in the Library.')
       return
     }
-    navigate('/library', { state: { selectedId: rec.id } })
+    navigate('/library', { state: { selectedId: rec.id, focusProcessing: true } })
     closeOverlay()
   }, [recordings, navigate, closeOverlay])
 
@@ -709,7 +710,6 @@ function OperationsOverlay({
                 const startedAt = formatOperationTime(item.startedAt)
                 const failedAt = formatOperationTime(item.completedAt)
                 const queuedAt = formatOperationTime(item.createdAt)
-                const eventTime = isFailed ? failedAt : item.status === 'processing' ? startedAt : queuedAt
                 const isBusy = busyIds.has(item.id)
                 return (
                   <li
@@ -728,8 +728,8 @@ function OperationsOverlay({
                         <div className="truncate text-sm text-slate-100 hover:text-sky-300">{title}</div>
                         <div className="truncate text-[11px] tabular-nums text-slate-400">
                           {transcriptionStatus(item.status)} · {attemptLabel(item)}
-                          {eventTime ? ` · ${eventTime}` : ''}
                         </div>
+                        <TranscriptionActivity item={item} onStop={onCancel} />
                       </div>
 
                       <div className="flex shrink-0 items-center gap-1">
@@ -783,11 +783,11 @@ function OperationsOverlay({
                               Dismiss
                             </Button>
                           </>
-                        ) : (
-                          <IconBtn label="Cancel" danger onClick={() => onCancel(item.recordingId)}>
+                        ) : isPending ? (
+                          <IconBtn label="Remove from queue" danger onClick={() => onCancel(item.recordingId)}>
                             <X className="h-4 w-4" />
                           </IconBtn>
-                        )}
+                        ) : null}
                       </div>
                     </div>
 
@@ -796,7 +796,7 @@ function OperationsOverlay({
                         <summary className="flex cursor-pointer list-none items-center gap-2 rounded-md px-3 py-2 text-xs font-medium text-red-200 outline-hidden hover:bg-slate-800/80 focus-visible:ring-1 focus-visible:ring-red-400 [&::-webkit-details-marker]:hidden">
                           <ChevronDown className="h-3.5 w-3.5 shrink-0 transition-transform group-open:rotate-180" />
                           <span>Failure details</span>
-                          {failedAt && <span className="ms-auto tabular-nums font-normal text-slate-400">{failedAt}</span>}
+                          {failedAt && <span className="ms-auto tabular-nums font-normal text-slate-400">Failed {failedAt}</span>}
                         </summary>
                         <div className="space-y-3 px-3 pb-3">
                           <dl className="grid grid-cols-1 gap-1 text-[11px] text-slate-400 sm:grid-cols-2">
@@ -805,9 +805,6 @@ function OperationsOverlay({
                             <div><dt className="inline text-slate-500">First queued: </dt><dd className="inline tabular-nums text-slate-200">{queuedAt ?? 'Unknown'}</dd></div>
                             <div><dt className="inline text-slate-500">Last started: </dt><dd className="inline tabular-nums text-slate-200">{startedAt ?? 'Unknown'}</dd></div>
                           </dl>
-                          <div className="rounded-md bg-red-950/30 px-3 py-2">
-                            <pre className="select-text whitespace-pre-wrap wrap-break-word font-sans text-xs leading-5 text-red-100">{item.error || 'No error details were recorded.'}</pre>
-                          </div>
                           {item.error && (
                             <Button
                               variant="ghost"

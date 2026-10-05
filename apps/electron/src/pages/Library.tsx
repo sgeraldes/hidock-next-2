@@ -560,13 +560,15 @@ export function Library() {
   const { message: announcement, announce } = useAnnouncement()
 
   // Handle navigation state for incoming selectedId
+  const [processingFocus, setProcessingFocus] = useState<{ id: string; nonce: number } | null>(null)
   useEffect(() => {
-    const state = location.state as { selectedId?: string } | null
+    const state = location.state as { selectedId?: string; focusProcessing?: boolean } | null
     if (state?.selectedId) {
       // Find the recording with this ID
       const recording = recordings.find((r) => r.id === state.selectedId)
       if (recording) {
         setSelectedSourceId(recording.id)
+        if (state.focusProcessing) setProcessingFocus({ id: recording.id, nonce: Date.now() })
         // Clear the navigation state to prevent re-triggering on refresh
         navigate(location.pathname, { replace: true, state: {} })
       }
@@ -3482,6 +3484,7 @@ export function Library() {
               />
             ) : (
             <SourceReader
+              processingFocus={processingFocus?.id === selectedRecording?.id ? processingFocus?.nonce : undefined}
               recording={selectedRecording ?? null}
               transcript={selectedTranscript}
               meeting={selectedMeeting}
