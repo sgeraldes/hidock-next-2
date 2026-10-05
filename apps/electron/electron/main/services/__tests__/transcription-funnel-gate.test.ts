@@ -29,6 +29,12 @@ vi.mock('../config', () => ({
   }),
 }))
 
+const transcribable = vi.hoisted(() => ({ allowed: true }))
+vi.mock('../recording-eligibility', () => ({
+  isRecordingTranscribable: () => transcribable.allowed,
+  isRecordingEligible: () => transcribable.allowed
+}))
+
 // Heavy/irrelevant deps of the transcription module — inert mocks.
 vi.mock('@hidock/transcription', () => ({ GeminiEngine: class {} }))
 vi.mock('@google/generative-ai', () => ({ GoogleGenerativeAI: class {} }))
@@ -106,6 +112,7 @@ beforeEach(() => {
   ])
   featuresConfig = undefined
   autoTranscribe = true
+  transcribable.allowed = true
 })
 
 describe('queueTranscriptionIfEnabled × transcription feature gate', () => {
@@ -133,6 +140,12 @@ describe('queueTranscriptionIfEnabled × transcription feature gate', () => {
     featuresConfig = { preset: 'library-transcription', flags: {} } // transcription ON
     expect(queueTranscriptionIfEnabled('rec-3')).toBe(true)
     expect(dbSpies.spies['addToQueue']).toHaveBeenCalledWith('rec-3')
+  })
+
+  it('refuses a value-excluded recording during automatic enqueue', () => {
+    transcribable.allowed = false
+    expect(queueTranscriptionIfEnabled('garbage-rec')).toBe(false)
+    expect(dbSpies.spies['addToQueue']).not.toHaveBeenCalled()
   })
 
   it('still respects the legacy autoTranscribe=false setting when the feature is on', () => {

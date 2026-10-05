@@ -34,7 +34,7 @@ export function hasDecisionLabelRecoveryFailed(): boolean {
   return decisionLabelRecoveryFailed
 }
 
-const SCHEMA_VERSION = 71
+const SCHEMA_VERSION = 72
 
 const DECISION_LABELS_DDL = `CREATE TABLE IF NOT EXISTS decision_label_sets (
     id TEXT PRIMARY KEY,
@@ -574,6 +574,7 @@ CREATE TABLE IF NOT EXISTS transcription_queue (
     progress INTEGER DEFAULT 0,
     error_message TEXT,
     provider TEXT,
+    owner_requested INTEGER NOT NULL DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     started_at TEXT,
     completed_at TEXT,
@@ -3482,6 +3483,12 @@ const MIGRATIONS: Record<number, () => void> = {
   71: () => {
     getDatabase().run(DECISION_LABELS_DDL)
   },
+  72: () => {
+    const database = getDatabase()
+    if (!getTableColumns(database, 'transcription_queue').includes('owner_requested')) {
+      database.run('ALTER TABLE transcription_queue ADD COLUMN owner_requested INTEGER NOT NULL DEFAULT 0')
+    }
+  },
 }
 
 /**
@@ -5365,7 +5372,7 @@ const UNUSABLE_TRANSCRIPT_EXCLUSION = `AND NOT EXISTS (
 
 export function getEligibleRecordingIds(
   candidateIds: Iterable<string>,
-  options: { forTranscription?: boolean } = {}
+  options: { forTranscription?: boolean; ignoreValueExclusion?: boolean } = {}
 ): RecordingEligibility {
   const unique = [...new Set([...candidateIds].filter((id): id is string => !!id))]
   if (unique.length === 0) return { eligible: new Set<string>(), failClosed: false }
@@ -5380,13 +5387,15 @@ export function getEligibleRecordingIds(
           WHERE r.id IN (${placeholders})
             AND r.deleted_at IS NULL
             AND COALESCE(r.personal, 0) = 0
-            AND NOT EXISTS (
+            ${options.forTranscription && options.ignoreValueExclusion ? '' : `AND NOT EXISTS (
               SELECT 1 FROM knowledge_captures kc
                WHERE kc.source_recording_id = r.id
                  AND kc.deleted_at IS NULL
-                 AND ${VALUE_EXCLUSION_PREDICATE})
+                 AND ${VALUE_EXCLUSION_PREDICATE})`}
             ${options.forTranscription ? '' : UNUSABLE_TRANSCRIPT_EXCLUSION}`,
-        [...chunk, ...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS]
+        options.forTranscription && options.ignoreValueExclusion
+          ? chunk
+          : [...chunk, ...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS]
       )
       for (const row of rows) eligible.add(row.id)
     }
@@ -8261,23 +8270,22 @@ export interface QueueItem {
   progress: number
   error_message?: string
   provider?: string
+  owner_requested?: boolean
   created_at: string
   started_at?: string
   completed_at?: string
 }
 
-export function addToQueue(recordingId: string, provider?: string): string {
-  // Honor the privacy flags at the single enqueue chokepoint: a personal
-  // ("ignored") or soft-deleted recording is never transcribed. Every path
-  // (auto-transcribe, manual, bulk backlog) funnels through here.
-  const rec = queryOne<{ personal?: number; deleted_at?: string | null }>(
-    'SELECT personal, deleted_at FROM recordings WHERE id = ?',
-    [recordingId]
-  )
-  if (rec && (rec.personal === 1 || rec.deleted_at)) {
-    console.log(`[Transcription] Skipping enqueue of personal/deleted recording ${recordingId}`)
-    return ''
-  }
+export function addToQueue(
+  recordingId: string,
+  provider?: string,
+  options: { ownerRequested?: boolean } = {}
+): string {
+  const { eligible, failClosed } = getEligibleRecordingIds([recordingId], {
+    forTranscription: true,
+    ignoreValueExclusion: options.ownerRequested === true
+  })
+  if (failClosed || !eligible.has(recordingId)) return ''
 
   // A recording may be rediscovered by auto-sync while it is already queued
   // (or the user may click Process All before the renderer has refreshed). A
@@ -8289,13 +8297,18 @@ export function addToQueue(recordingId: string, provider?: string): string {
     ORDER BY created_at ASC
     LIMIT 1
   `, [recordingId])
-  if (existing) return existing.id
+  if (existing) {
+    if (options.ownerRequested === true) {
+      run('UPDATE transcription_queue SET owner_requested = 1 WHERE id = ?', [existing.id])
+    }
+    return existing.id
+  }
 
   const id = crypto.randomUUID()
   runInTransaction(() => {
     run(
-      'INSERT INTO transcription_queue (id, recording_id, provider) VALUES (?, ?, ?)',
-      [id, recordingId, provider ?? null]
+      'INSERT INTO transcription_queue (id, recording_id, provider, owner_requested) VALUES (?, ?, ?, ?)',
+      [id, recordingId, provider ?? null, options.ownerRequested === true ? 1 : 0]
     )
     // Keep the durable recording projection aligned at the enqueue chokepoint.
     // This covers auto-download, manual, and bulk enqueue paths immediately.
@@ -8316,10 +8329,8 @@ export function getQueueItems(status?: string): (QueueItem & { filename?: string
     LEFT JOIN recordings r ON tq.recording_id = r.id
     ${status ? 'WHERE tq.status = ?' : ''}
     ORDER BY r.date_recorded DESC, tq.created_at ASC`
-  if (status) {
-    return queryAll<QueueItem & { filename?: string; date_recorded?: string }>(sql, [status])
-  }
-  return queryAll<QueueItem & { filename?: string; date_recorded?: string }>(sql)
+  const rows = queryAll<QueueItem & { filename?: string; date_recorded?: string }>(sql, status ? [status] : [])
+  return rows.map((row) => ({ ...row, owner_requested: Number(row.owner_requested) === 1 }))
 }
 
 /**

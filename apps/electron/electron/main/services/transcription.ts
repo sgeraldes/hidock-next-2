@@ -414,10 +414,10 @@ export function orderPendingForProcessing<T extends OrderableQueueItem>(items: T
  */
 const cancelledRecordings = new Set<string>()
 
-function stillWanted(recordingId: string): boolean {
+function stillWanted(recordingId: string, ownerRequested = false): boolean {
   // The transcription path's boundary: an unusable old transcript must not
   // stop the new one (plan 2026-10-04-validation-order).
-  return !cancelledRecordings.has(recordingId) && isRecordingTranscribable(recordingId)
+  return !cancelledRecordings.has(recordingId) && isRecordingTranscribable(recordingId, { ignoreValueExclusion: ownerRequested })
 }
 
 /** The queued id and the recording id the pipeline will use for it (they differ for legacy synced-file ids). */
@@ -519,7 +519,7 @@ async function runQueueItem(
       })
     }
 
-    const outcome = await transcribeRecording(item.recording_id, progressCallback, item.provider)
+    const outcome = await transcribeRecording(item.recording_id, progressCallback, item.provider, item.owner_requested === true)
 
     if (outcome.status === 'cancelled') {
       // INC-2 — the recording was trashed / marked personal / hard-purged
@@ -528,6 +528,21 @@ async function runQueueItem(
       // 'completed', jump progress to 100, and emit transcription:completed
       // for content that does not exist. Leave it cancelled.
       updateQueueItem(item.id, 'cancelled')
+      // Enqueue already projected pending. A gate rejection must leave an idle
+      // recording, while preserving any transcript or terminal status saved
+      // before a later cancellation gate.
+      const cancelledRecording = getRecordingById(item.recording_id)
+      const transcriptionWasActive = cancelledRecording?.transcription_status === 'pending' || cancelledRecording?.transcription_status === 'processing'
+      const legacyWasActive = cancelledRecording?.status === 'pending' || cancelledRecording?.status === 'processing'
+      if (transcriptionWasActive || legacyWasActive) {
+        const restoredStatus = queryOne<{ id: string }>('SELECT id FROM transcripts WHERE recording_id = ? LIMIT 1', [item.recording_id])
+          ? 'complete'
+          : 'none'
+        if (transcriptionWasActive) updateRecordingTranscriptionStatus(item.recording_id, restoredStatus)
+        if (legacyWasActive) {
+          updateRecordingStatus(item.recording_id, restoredStatus)
+        }
+      }
       clearQueueHints(item.recording_id)
       console.log(`[Transcription] ${item.recording_id} cancelled mid-run (ineligible) — queue item marked cancelled`)
     } else if (outcome.status === 'no_speech') {
@@ -929,7 +944,7 @@ export function queueTranscriptionIfEnabled(recordingId: string): boolean {
   if (getConfig().transcription.autoTranscribe !== true) return false
   if (!isFeatureEnabled('transcription')) return false
   const canonicalId = ensureTranscriptionPrerequisites(recordingId)
-  if (!canonicalId) return false
+  if (!canonicalId || !isRecordingTranscribable(canonicalId)) return false
   const queueItemId = addToQueue(canonicalId)
   if (!queueItemId) return false
   notifyRenderer('transcription:queued', {
@@ -2109,7 +2124,8 @@ async function retireNoSpeechGeneratedContent(recordingId: string): Promise<void
 async function transcribeRecording(
   recordingId: string,
   progressCallback?: (stage: string, progress: number) => void,
-  providerOverride?: string
+  providerOverride?: string,
+  ownerRequested = false
 ): Promise<TranscribeOutcome> {
   // Resolve stale/foreign IDs (e.g. a synced_files id queued by an older
   // renderer build) to the real recordings row before failing.
@@ -2120,39 +2136,10 @@ async function transcribeRecording(
   // Continue with the canonical id so status updates hit the real row.
   recordingId = recording.id
 
-  // ADV40-1 (round-42, HIGH) — FAIL-CLOSED eligibility gate BEFORE any provider
-  // call. transcribeRecording is reachable directly via recordings:transcribe
-  // (transcribeManually) AND via the queue processor; the raw lookups above
-  // resolve a soft-deleted / personal / value-excluded recording perfectly well,
-  // so WITHOUT this gate the AUDIO would be sent to the transcription provider and
-  // the transcript to Gemini analysis before the post-analysis stillProcessable()
-  // check — DISCLOSING excluded content to an EXTERNAL LLM. The later gate only
-  // blocks PERSISTENCE; it cannot un-send the audio/transcript. Route the
-  // canonical id through THE shared fail-closed boundary (isRecordingEligible:
-  // exists AND non-deleted AND non-personal AND not value-excluded; false on ANY
-  // lookup error) and return the existing 'cancelled' outcome WITHOUT touching a
-  // provider when ineligible. The post-await stillProcessable() re-checks below
-  // stay as defense-in-depth for a delete/personal transition that lands mid-run.
-  // This is the core F17 "excluded from all AI processing" promise.
-  // An explicit re-transcription is also the recovery path for a bad prior AI
-  // result. That prior result may itself have rated the capture `garbage` or
-  // `low-value`, which makes isRecordingEligible() false. Do not let stale,
-  // AI-generated value metadata prevent the corrective LOCAL preflight from
-  // running. Privacy/lifecycle exclusions remain absolute: deleted, personal,
-  // or missing recordings still fail closed through isRecordingProcessable().
-  // Background/automatic work continues to honour the full value-exclusion
-  // boundary. A speech-present value-excluded recording is still stopped by the
-  // downstream eligibility checks before any external provider call; the
-  // exception here exists so no-speech proof can retire a false transcript.
+  // Explicit owner requests override value ratings only. All other exclusions
+  // and lookup failures remain closed, including at every continuation gate.
   const isExplicitReprocess = typeof providerOverride === 'string' && providerOverride.length > 0
-  const isProcessable = isRecordingProcessable(recordingId)
-  const isEligibleForAutomaticProcessing = isExplicitReprocess || isRecordingTranscribable(recordingId)
-  if (!isProcessable || !isEligibleForAutomaticProcessing) {
-    console.log(
-      `[Transcription] Recording ${recordingId} is ineligible (soft-deleted / personal / ` +
-        'value-excluded without an explicit reprocess / hard-purged, or the eligibility lookup failed) — skipping the ' +
-        'transcription provider and Gemini entirely; no audio or transcript sent to any external LLM'
-    )
+  if (!isRecordingTranscribable(recordingId, { ignoreValueExclusion: ownerRequested })) {
     return { status: 'cancelled' }
   }
 
@@ -2322,23 +2309,6 @@ Meeting ${i + 1}: "${m.subject}"
     return { status: 'no_speech', reason: 'no_speech' }
   }
 
-  // An explicit re-run of a value-excluded recording gets past the gate above
-  // for one reason: so this local preflight can prove silence and retire a false
-  // transcript. It found speech, so the rating still stands and no provider may
-  // see this audio. Stop here, before pyannote. Leaving it to the downstream
-  // checks ended the run badly: speaker linking was killed mid-run and the row
-  // retried three times into an error, or, with speaker linking off, the status
-  // stayed 'processing' forever with a dead Transcribe button. The owner lifts
-  // the rating with "Clear rating", and the next re-run then goes through.
-  if (isExplicitReprocess && !isRecordingTranscribable(recordingId)) {
-    updateRecordingTranscriptionStatus(recordingId, statusBeforeRun)
-    console.log(
-      `[Transcription] ${recordingId} has speech but its rating keeps it from any provider; ` +
-        'explicit re-run stopped after the local check. Clear the rating to transcribe it.'
-    )
-    return { status: 'cancelled' }
-  }
-
   meetingContext += `\n\nLOCAL AUDIO ACTIVITY EVIDENCE (authoritative safety constraint):
 Non-silent audio: ${audioPreflight.nonSilentSeconds}s (${(audioPreflight.nonSilentRatio * 100).toFixed(2)}%)
 Activity intervals: ${audioPreflight.activityIntervals.map((i) => `${i.start}-${i.end}s`).join(', ')}
@@ -2363,7 +2333,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     speakerLinking = await runSpeakerLinkingPreflight(
       recordingId,
       recording.file_path,
-      () => stillWanted(recordingId),
+      () => stillWanted(recordingId, ownerRequested),
       recording.duration_seconds
     )
     completeProcessingRun(acousticDiarizationRun.id, {
@@ -2479,7 +2449,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
               providerFilePath,
               meetingContext,
               progressCallback,
-              () => stillWanted(recordingId),
+              () => stillWanted(recordingId, ownerRequested),
               recording.duration_seconds ?? undefined
             )
           )
@@ -2557,7 +2527,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   // checks cannot undo. Re-check SYNCHRONOUSLY here, adjacent to the analysis
   // call (no await between), and return the cancelled outcome WITHOUT invoking
   // the analysis provider when ineligible or the lookup fails closed.
-  if (!stillWanted(recordingId)) {
+  if (!stillWanted(recordingId, ownerRequested)) {
     console.log(
       `[Transcription] Recording ${recordingId} became ineligible during audio transcription ` +
         '— skipping Gemini analysis; no transcript sent to any external LLM for analysis'
@@ -2626,7 +2596,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
       )
     } else {
       analysis = await summaryUsage.run(() =>
-        analyzeTranscriptWithGemini(fullText, candidateMeetings, () => stillWanted(recordingId), recordingId)
+        analyzeTranscriptWithGemini(fullText, candidateMeetings, () => stillWanted(recordingId, ownerRequested), recordingId)
       )
       completeProcessingRun(summaryRun.id, {
         outputRefs: { summary: `trans_${recordingId}.summary` },
@@ -3350,7 +3320,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
 export async function transcribeManually(recordingId: string): Promise<void> {
   try {
     notifyRenderer('transcription:started', { recordingId })
-    const outcome = await transcribeRecording(recordingId)
+    const outcome = await transcribeRecording(recordingId, undefined, undefined, true)
     // RE4-4 (round-4) — the manual IPC path must also branch on the outcome:
     // a recording trashed / marked personal / hard-purged mid-run must NOT emit
     // transcription:completed (INC-2 fixed only the queue path).
