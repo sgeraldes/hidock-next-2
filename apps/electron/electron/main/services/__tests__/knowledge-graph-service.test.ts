@@ -85,6 +85,7 @@ const FAKE_JSON = JSON.stringify({
 // ---------------------------------------------------------------------------
 
 import { initializeDatabase, run as dbRun } from '../database'
+import * as database from '../database'
 
 // We expose a way to reset the singleton from the service module
 // The service exports getKnowledgeGraphStore() which lazily creates _store.
@@ -127,6 +128,43 @@ import {
 // ---------------------------------------------------------------------------
 
 describe('knowledge-graph-service', () => {
+  it('filters incremental candidates in SQL and reads text only for extraction', async () => {
+    getKnowledgeGraphStore()
+    dbRun('INSERT INTO recordings (id, filename, date_recorded) VALUES (?, ?, ?)', ['filtered', 'filtered.hda', '2025-10-10'])
+    dbRun('INSERT INTO transcripts (id, recording_id, full_text) VALUES (?, ?, ?)', ['filtered-t', 'filtered', 'x'.repeat(40_000)])
+    dbRun('INSERT INTO graph_ingested_transcripts (transcript_id, ingested_at) VALUES (?, ?)', ['filtered-t', new Date().toISOString()])
+    const reads = vi.spyOn(database, 'queryOne')
+    try {
+      expect(database.getGraphIngestCandidates()).toEqual({ rows: [], skipped: 1 })
+      expect((await ingestFromDbTranscripts()).skipped).toBe(1)
+      const transcriptReads = reads.mock.calls.filter(([sql]) => /FROM transcripts t/i.test(sql))
+      expect(transcriptReads.every(([sql]) => !sql.includes('t.full_text'))).toBe(true)
+      expect(complete).not.toHaveBeenCalled()
+    } finally {
+      reads.mockRestore()
+    }
+  })
+  it('bounds an incremental pass over 2,150 transcripts with 40 KB bodies', async () => {
+    getKnowledgeGraphStore()
+    database.runInTransaction(() => {
+      for (let i = 0; i < 2150; i++) {
+        dbRun('INSERT INTO recordings (id, filename, date_recorded) VALUES (?, ?, ?)', [`load-${i}`, `load-${i}.hda`, '2025-10-10'])
+        dbRun('INSERT INTO transcripts (id, recording_id, full_text) VALUES (?, ?, ?)', [`load-t-${i}`, `load-${i}`, 'x'.repeat(40_000)])
+        dbRun('INSERT INTO graph_ingested_transcripts (transcript_id, ingested_at) VALUES (?, ?)', [`load-t-${i}`, '2026-10-04'])
+      }
+    })
+    const before = performance.now()
+    // The previous hot path: eager bodies and one marker point-read per row.
+    const legacy = database.queryAll<{ id: string; full_text: string }>('SELECT t.id, t.full_text FROM transcripts t JOIN recordings r ON r.id=t.recording_id WHERE COALESCE(r.personal,0)=0 AND r.deleted_at IS NULL')
+    for (const row of legacy) database.queryOne('SELECT transcript_id FROM graph_ingested_transcripts WHERE transcript_id=?', [row.id])
+    const legacyHold = performance.now() - before
+    const after = performance.now()
+    const result = await ingestFromDbTranscripts()
+    const optimizedHold = performance.now() - after
+    process.stdout.write(`GRAPH FIXTURE 2150 x 40000 bytes: legacy hold ${legacyHold.toFixed(1)}ms; filtered pass ${optimizedHold.toFixed(1)}ms\n`)
+    expect(result).toEqual({ ingested: 0, skipped: 2150, errors: [] })
+    expect(optimizedHold).toBeLessThan(100)
+  })
   // =========================================================================
   // ingestFromDbTranscripts()
   // =========================================================================

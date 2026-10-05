@@ -9,6 +9,7 @@ pairs with it, gives it the Hugging Face token and decides when it steps aside.
 
 ### Changes
 
+- Graph updates skip recordings already processed or excluded before loading transcript text, and yield between batches so background work stays responsive.
 - **Listen while labeling.** Reference labels include the original local audio with play/pause,
   seeking, 15-second jumps and a Space shortcut; unavailable audio never blocks labeling.
   A clear Library-category question now includes calendar title and attendees, recording date,

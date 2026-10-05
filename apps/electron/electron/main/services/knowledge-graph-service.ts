@@ -48,12 +48,13 @@ import type {
 } from '@hidock/knowledge-graph'
 import { complete } from '@hidock/ai-providers'
 import { withCallRecord } from './pipeline/track-call'
+import { yieldToEventLoop } from './event-loop'
 import {
   run,
   runInTransaction,
   queryAll,
   queryOne,
-  getValueExcludedRecordingIds,
+  getGraphIngestCandidates,
   getEligibleRecordingIds,
   getRecordingsForMeeting,
   isRecordingGraphIngestable,
@@ -234,68 +235,33 @@ export async function ingestFromDbTranscripts(): Promise<IngestResult> {
 
   const store = getKnowledgeGraphStore()
 
-  // Get all transcripts with recording + meeting meta
-  // Cross-reference (/simplify S-5, database.ts's getExcludedRecordingIds):
-  // personal/deleted exclusion is composed differently here than in the RAG
-  // path — filtered directly in this base query, then layered with
-  // value-exclusion below (pre-filter Set + fresh point-read), rather than
-  // unioned into one Set. Same net effect; deliberate, not drift.
-  const rows = queryAll<TranscriptRow>(`
-    SELECT
-      t.id,
-      t.full_text,
-      t.recording_id,
-      r.date_recorded,
-      r.meeting_id,
-      m.subject
-    FROM transcripts t
-    JOIN recordings r ON r.id = t.recording_id
-    LEFT JOIN meetings m ON m.id = r.meeting_id
-    WHERE COALESCE(r.personal, 0) = 0 AND r.deleted_at IS NULL
-  `)
-
+  // SQL run-start snapshot excludes personal/deleted, already claimed and value-excluded
+  // rows without loading their text. Failure falls back to ids only; the fresh
+  // authoritative gate below still fails closed before any provider sees content.
   const result: IngestResult = { ingested: 0, skipped: 0, errors: [] }
-
-  // F16/spec-002 (AR-1, layer 1 of 2): cheap once-per-run PRE-FILTER. A
-  // transcript whose recording is already value-excluded at run start is
-  // skipped BEFORE the LLM extraction call — no LLM cost, no marker (so a
-  // later rating upgrade re-ingests it on a future pass). This snapshot is
-  // what bounds the cost: skipped rows are never marked, so without this
-  // pre-filter every ingest pass (60s-debounced transcript-ready, boot,
-  // manual) would re-run the full extraction for every excluded transcript,
-  // forever. The snapshot may go stale across the loop's awaits — that is
-  // layer 2's job, not this one's. Defensive try/catch (mirrors the RAG
-  // union in getExcludedRecordingIds): a value-query failure degrades to
-  // "no pre-filter" rather than failing the whole ingest pass — layer 2
-  // still gates each row's persistence.
-  let valueExcluded: Set<string>
+  let rows: Array<{ id: string; recording_id: string }>
   try {
-    valueExcluded = getValueExcludedRecordingIds()
+    const candidates = getGraphIngestCandidates()
+    rows = candidates.rows
+    result.skipped = candidates.skipped
   } catch (e) {
-    console.warn('[KnowledgeGraph] Value pre-filter unavailable (per-row transactional check still gates):', e)
-    valueExcluded = new Set<string>()
+    console.warn('[KnowledgeGraph] Candidate pre-filter unavailable (fresh checks still gate):', e)
+    rows = queryAll<{ id: string; recording_id: string }>(`
+      SELECT t.id, t.recording_id FROM transcripts t JOIN recordings r ON r.id = t.recording_id
+      WHERE COALESCE(r.personal, 0) = 0 AND r.deleted_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM graph_ingested_transcripts g WHERE g.transcript_id = t.id)`)
   }
 
-  for (const row of rows) {
-    // Pre-filter (layer 1): excluded at run start — skip without extracting.
-    if (valueExcluded.has(row.recording_id)) {
-      result.skipped++
-      console.log(
-        `[KnowledgeGraph] Skipped value-excluded recording ${row.recording_id} (transcript ${row.id})`
-      )
-      continue
+  // Same timer yield and 20ms target as OrgReconciler. Never suspend a transaction.
+  let batchStartedAt = performance.now()
+  for (const candidate of rows) {
+    const heldMs = performance.now() - batchStartedAt
+    if (heldMs >= 20) {
+      if (heldMs >= 100) console.warn(`[KnowledgeGraph] batch held the main thread for ${Math.round(heldMs)}ms`)
+      await yieldToEventLoop()
+      batchStartedAt = performance.now()
     }
-
-    // Check if already ingested (incremental)
-    const already = queryOne<{ transcript_id: string }>(
-      'SELECT transcript_id FROM graph_ingested_transcripts WHERE transcript_id = ?',
-      [row.id]
-    )
-    if (already) {
-      result.skipped++
-      continue
-    }
-
+    const row = candidate as TranscriptRow
     try {
       // P1 (round-3, FAIL CLOSED) — the value pre-filter Set above degrades to
       // EMPTY on a lookup error (fail-open), which would send an excluded
@@ -305,11 +271,15 @@ export async function ingestFromDbTranscripts(): Promise<IngestResult> {
       // leaks content to the provider.
       if (!isRecordingGraphIngestable(row.recording_id)) {
         result.skipped++
-        console.log(
-          `[KnowledgeGraph] Skipped ineligible recording ${row.recording_id} before extraction (transcript ${row.id})`
-        )
         continue
       }
+      // Load one body only after the fresh privacy/validity gate succeeds.
+      const transcript = queryOne<TranscriptRow>(`
+        SELECT t.id, t.full_text, t.recording_id, r.date_recorded, r.meeting_id, m.subject
+        FROM transcripts t JOIN recordings r ON r.id = t.recording_id
+        LEFT JOIN meetings m ON m.id = r.meeting_id WHERE t.id = ?`, [row.id])
+      if (!transcript) { result.skipped++; continue }
+      Object.assign(row, transcript)
       const meta = {
         meetingId: row.meeting_id ?? row.recording_id,
         title: row.subject ?? undefined,
@@ -346,9 +316,6 @@ export async function ingestFromDbTranscripts(): Promise<IngestResult> {
       // is impossible, and if one ever happens it must be loud.
       const ingestedNow = runInTransaction(() => {
         if (!isRecordingGraphIngestable(row.recording_id)) {
-          console.log(
-            `[KnowledgeGraph] Skipped non-ingestable recording ${row.recording_id} (transcript ${row.id})`
-          )
           return false
         }
 
@@ -387,6 +354,8 @@ export async function ingestFromDbTranscripts(): Promise<IngestResult> {
       console.error(`[KnowledgeGraph] Failed to ingest transcript ${row.id}:`, e)
     }
   }
+
+  console.log(`[KnowledgeGraph] Ingested ${result.ingested}; skipped ${result.skipped}; errors ${result.errors.length}`)
 
   // Bring any legacy name-keyed person nodes onto the contact-id identity.
   try {

@@ -5212,6 +5212,22 @@ export function getValueExcludedRecordingIds(): Set<string> {
   return new Set(rows.map((r) => r.id))
 }
 
+/** Graph run-start snapshot. Never materializes transcript text or per-row skip logs.
+ * The caller must still point-read eligibility before extraction and in its write transaction.
+ */
+export function getGraphIngestCandidates(): { rows: Array<{ id: string; recording_id: string }>; skipped: number } {
+  const base = `FROM transcripts t JOIN recordings r ON r.id = t.recording_id
+    WHERE COALESCE(r.personal, 0) = 0 AND r.deleted_at IS NULL`
+  const rows = queryAll<{ id: string; recording_id: string }>(`
+    SELECT t.id, t.recording_id ${base}
+    AND NOT EXISTS (SELECT 1 FROM graph_ingested_transcripts g WHERE g.transcript_id = t.id)
+    AND NOT EXISTS (SELECT 1 FROM knowledge_captures kc
+      WHERE kc.source_recording_id = r.id AND kc.deleted_at IS NULL
+        AND ${VALUE_EXCLUSION_PREDICATE})`, [...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS])
+  const total = queryOne<{ n: number }>(`SELECT COUNT(*) AS n ${base}`)?.n ?? 0
+  return { rows, skipped: total - rows.length }
+}
+
 /**
  * Single-recording point-read form of {@link getValueExcludedRecordingIds} —
  * same predicate, scoped to one id. This is the FINAL-eligibility check
