@@ -1,0 +1,171 @@
+// @vitest-environment node
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, rmSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { randomBytes } from 'crypto'
+import { RetrievalTraceStore, contentHash, type TraceEvent } from '../retrieval-traces'
+
+const directories: string[] = []
+const stores: RetrievalTraceStore[] = []
+const secret = randomBytes(32)
+const storage = {
+  isEncryptionAvailable: () => true,
+  encryptString: (s: string) => Buffer.from(s).map((b, i) => b ^ secret[i % secret.length]),
+  decryptString: (b: Buffer) => b.map((v, i) => v ^ secret[i % secret.length]).toString()
+}
+function store(options: Partial<ConstructorParameters<typeof RetrievalTraceStore>[0]> = {}) {
+  const directory = mkdtempSync(join(tmpdir(), 'hidock-traces-test-'))
+  directories.push(directory)
+  const s = new RetrievalTraceStore({ path: join(directory, 'retrieval-traces.db'), storage, eligible: () => true, ...options })
+  stores.push(s)
+  return s
+}
+function event(id = 't1', query = ' Question  ONE '): TraceEvent {
+  return { trace_id: id, consumer: 'chat', route: 'generateAnswer', started_at: new Date().toISOString(), duration_ms: 12,
+    status: 'ok', query, candidates: [{ channel: 'vector', source_kind: 'recording', source_id: 'r1', chunk_index: 0,
+      content_hash: contentHash('chunk'), rank_before: 1, rank_after: 1, raw_score: 0.8, adjusted_score: 1,
+      kept: true, sent_to_model: true }] }
+}
+afterEach(async () => {
+  for (const s of stores.splice(0)) await s.close()
+  for (const dir of directories.splice(0)) rmSync(dir, { recursive: true })
+  vi.useRealTimers()
+})
+
+describe('retrieval trace store (real SQLite)', () => {
+  it('creates an independent WAL schema, commits and reads identities without content', async () => {
+    const s = store()
+    s.record(event())
+    await s.flush()
+    const trace = (await s.read())[0]
+    expect(trace.trace_id).toBe('t1')
+    expect(trace.candidates[0]).toMatchObject({ source_id: 'r1', content_hash: contentHash('chunk'), sent_to_model: true })
+    expect(trace.query_text).not.toBeNull()
+    expect(JSON.stringify(trace)).not.toContain('Question')
+    expect(await s.schemaVersion()).toBe(1)
+    expect(await s.journalMode()).toBe('wal')
+  })
+  it('groups normalized questions using a persisted encrypted random HMAC key', async () => {
+    const s = store()
+    s.record(event('a'))
+    s.record(event('b', 'question one'))
+    s.record(event('c', 'different'))
+    await s.flush()
+    const rows = await s.read()
+    expect(rows[0].query_hmac).toBe(rows[1].query_hmac)
+    expect(rows[0].query_hmac).not.toBe(rows[2].query_hmac)
+    await s.close()
+    const reopened = store({ path: s.path })
+    reopened.record(event('d'))
+    await reopened.flush()
+    expect((await reopened.read())[3].query_hmac).toBe(rows[0].query_hmac)
+  })
+  it('omits text when encryption is unavailable and respects the 8 KiB UTF-8 cap', async () => {
+    const unavailable = store({ storage: { ...storage, isEncryptionAvailable: () => false } })
+    unavailable.record(event())
+    await unavailable.flush()
+    expect((await unavailable.read())[0]).toMatchObject({ query_text: null, text_state: 'unavailable' })
+    const s = store()
+    s.record(event('long', 'é'.repeat(10000)))
+    await s.flush()
+    expect(Buffer.byteLength(storage.decryptString(Buffer.from((await s.read())[0].query_text!, 'base64')))).toBeLessThanOrEqual(8192)
+  })
+  it('caps each channel at 100 and the serialized event at 64 KiB', async () => {
+    const s = store()
+    const e = event()
+    e.candidates = Array.from({ length: 160 }, (_, i) => ({ ...e.candidates[0], source_id: `r${i}` }))
+    s.record(e)
+    await s.flush()
+    expect((await s.read())[0]).toMatchObject({ truncated: true, candidate_count: 160 })
+    expect((await s.read())[0].candidates).toHaveLength(100)
+    e.trace_id = 'large'
+    e.candidates = Array.from({ length: 100 }, () => ({ ...e.candidates[0], source_id: 'r'.repeat(2000) }))
+    s.record(e)
+    await s.flush()
+    const large = (await s.read())[1]
+    expect(large.truncated).toBe(true)
+    expect(Buffer.byteLength(JSON.stringify(large))).toBeLessThanOrEqual(65536)
+  })
+  it('erases 30-day text, deletes 90-day traces and revalidates eligibility on read', async () => {
+    const s = store({ eligible: c => c.source_id !== 'excluded' })
+    for (const [id, days] of [['old', 91], ['text', 31], ['recent', 1]] as const) {
+      const e = event(id)
+      e.started_at = new Date(Date.now() - days * 86400000).toISOString()
+      s.record(e)
+    }
+    const excluded = event('excluded')
+    excluded.candidates[0].source_id = 'excluded'
+    s.record(excluded)
+    await s.flush()
+    await s.retain()
+    const rows = await s.read()
+    expect(rows.map(r => r.trace_id)).toEqual(['text', 'recent'])
+    expect(rows[0].query_text).toBeNull()
+    expect(rows[0].query_hmac).toBeTruthy()
+    expect((await s.stats()).consumers.chat).toBe(1)
+  })
+  it('erases stored and queued text when text retention is disabled; recording off drops everything', async () => {
+    const s = store()
+    s.record(event('stored'))
+    await s.flush()
+    s.record(event('queued'))
+    await s.setSettings({ recordQueries: true, keepQueryText: false })
+    await s.flush()
+    expect((await s.read()).every(r => r.query_text === null)).toBe(true)
+    await s.setSettings({ recordQueries: false, keepQueryText: false })
+    s.record(event('disabled'))
+    await s.flush()
+    expect(await s.read()).toHaveLength(2)
+  })
+  it('evicts oldest traces to reclaim a bounded SQLite file', async () => {
+    const s = store({ maxFileBytes: 128 * 1024 })
+    for (let i = 0; i < 80; i++) {
+      const e = event(String(i), randomBytes(3000).toString('hex'))
+      e.started_at = new Date(Date.now() - (80 - i) * 1000).toISOString()
+      s.record(e)
+    }
+    await s.flush()
+    const rows = await s.read()
+    expect(rows.length).toBeLessThan(80)
+    expect(rows.at(-1)?.trace_id).toBe('79')
+    expect((await s.stats()).file_bytes).toBeLessThanOrEqual(128 * 1024)
+  })
+  it('links an answer before or after its queued trace commits', async () => {
+    const s = store()
+    s.record(event())
+    s.linkAnswer('t1', 'm1')
+    await s.flush()
+    expect((await s.read())[0].answer_message_id).toBe('m1')
+    s.linkAnswer('t1', 'm2')
+    await s.flush()
+    expect((await s.read())[0].answer_message_id).toBe('m2')
+  })
+})
+
+describe('bounded non-throwing queue', () => {
+  it('writes off the caller path in batches of 50 or after 2 seconds', async () => {
+    vi.useFakeTimers()
+    const s = store()
+    s.record(event())
+    expect(s.pendingCount).toBe(1)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(s.pendingCount).toBe(0)
+    expect(await s.read()).toHaveLength(1)
+    for (let i = 0; i < 50; i++) s.record(event(`b${i}`))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(s.pendingCount).toBe(0)
+    expect(await s.read()).toHaveLength(51)
+  })
+  it('counts overflow and never throws when writing fails', async () => {
+    const s = store()
+    for (let i = 0; i < 1005; i++) expect(() => s.record(event(String(i)))).not.toThrow()
+    expect(s.pendingCount).toBe(1000)
+    await s.flush()
+    expect((await s.stats()).dropped_events).toBe(5)
+    const broken = store({ path: directories[0] })
+    expect(() => broken.record(event())).not.toThrow()
+    await expect(broken.flush()).resolves.toBeUndefined()
+    expect(broken.writeErrors).toBeGreaterThan(0)
+  })
+})

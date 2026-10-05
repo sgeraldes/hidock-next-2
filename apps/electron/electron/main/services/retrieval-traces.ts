@@ -1,0 +1,331 @@
+import { createHash, createHmac, randomBytes } from 'crypto'
+import { mkdirSync, statSync } from 'fs'
+import { dirname } from 'path'
+import Database from 'better-sqlite3'
+import { DatabaseEngine } from '@hidock/database'
+
+export const RETRIEVAL_POLICY_VERSION = '1'
+export type TraceChannel = 'vector' | 'pinned' | 'graph' | 'actionables' | 'digests' | 'explore' | 'brain-row'
+export interface TraceCandidate {
+  channel: TraceChannel
+  source_kind: 'recording' | 'capture' | 'actionable' | 'meeting' | 'graph-node' | 'artifact'
+  source_id: string
+  recording_id?: string
+  capture_id?: string
+  chunk_index?: number
+  content_hash?: string
+  rank_before?: number | null
+  rank_after?: number | null
+  raw_score?: number | null
+  adjusted_score?: number | null
+  kept: boolean
+  drop_reason?: 'diversity-cap' | 'eligibility' | 'budget' | 'recheck'
+  sent_to_model: boolean
+}
+export interface TraceEvent {
+  trace_id: string
+  parent_id?: string
+  consumer: 'chat' | 'explore' | 'brain'
+  client?: string
+  session_ref?: string
+  route: string
+  args?: { id?: string; ids?: string[]; since?: string; limit?: number }
+  started_at: string
+  duration_ms: number
+  status: 'ok' | 'empty' | 'error' | 'cancelled'
+  error?: string
+  app_version?: string
+  intent?: string
+  temporal_range?: { start: string; end: string } | null
+  top_k?: number
+  policy_version?: string
+  embedding_provider?: string | null
+  embedding_model?: string | null
+  embedding_dimensions?: number | null
+  retrieval_issue?: 'provider-failure' | 'reindex-pending' | null
+  pipeline_call_id?: string
+  answer_message_id?: string
+  query?: string
+  candidates: TraceCandidate[]
+}
+interface EncryptionStorage {
+  isEncryptionAvailable(): boolean
+  encryptString(text: string): Buffer
+  decryptString(data: Buffer): string
+}
+export interface TraceSettings { recordQueries: boolean; keepQueryText: boolean }
+export interface TraceStats {
+  consumers: { chat: number; explore: number; brain: number }
+  dropped_events: number
+  write_errors: number
+  file_bytes: number
+}
+export interface StoredTrace extends Omit<TraceEvent, 'query'> {
+  query_text: string | null
+  query_hmac: string
+  text_state: 'encrypted' | 'disabled' | 'unavailable' | 'expired'
+  candidate_count: number
+  truncated: boolean
+}
+const SCHEMA = `
+  CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);
+  CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS traces (
+    trace_id TEXT PRIMARY KEY, started_at TEXT NOT NULL, consumer TEXT NOT NULL,
+    event TEXT NOT NULL, query_text TEXT, query_hmac TEXT NOT NULL, text_state TEXT NOT NULL,
+    answer_message_id TEXT
+  );
+  CREATE INDEX IF NOT EXISTS traces_started ON traces(started_at);
+  CREATE TABLE IF NOT EXISTS candidates (
+    trace_id TEXT NOT NULL REFERENCES traces(trace_id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL, candidate TEXT NOT NULL, PRIMARY KEY(trace_id, ordinal)
+  );
+  CREATE TABLE IF NOT EXISTS counters (day TEXT PRIMARY KEY, dropped INTEGER NOT NULL, errors INTEGER NOT NULL);
+`
+export function contentHash(text: string): string {
+  return createHash('sha256').update(text).digest('hex').slice(0, 32)
+}
+function cappedText(text: string, bytes: number): string {
+  let value = Buffer.from(text).subarray(0, bytes).toString('utf8')
+  while (Buffer.byteLength(value) > bytes) value = value.slice(0, -1)
+  return value
+}
+
+/** Independent telemetry database; no business migrations, backups or attachment. */
+export class RetrievalTraceStore {
+  readonly path: string
+  private engine: DatabaseEngine
+  private opening?: Promise<void>
+  private queue: Array<TraceEvent | { link: string; message: string }> = []
+  private settings: TraceSettings = { recordQueries: true, keepQueryText: true }
+  private timer?: NodeJS.Timeout
+  private batchTimer?: NodeJS.Timeout
+  private dailyTimer?: NodeJS.Timeout
+  private flushing?: Promise<void>
+  private key = randomBytes(32)
+  private counters = new Map<string, { dropped: number; errors: number }>()
+  private lastLog = -Infinity
+  private closed = false
+  writeErrors = 0
+
+  constructor(private readonly options: {
+    path: string
+    storage: EncryptionStorage
+    eligible: (candidate: TraceCandidate) => boolean
+    maxFileBytes?: number
+  }) {
+    this.path = options.path
+    this.engine = new DatabaseEngine({ betterSqlite3: Database, dbPathProvider: () => this.path,
+      schemaVersion: 1, schema: SCHEMA, migrations: {}, vacuumAfterMigration: false,
+      repairPhase: () => this.engine.run('INSERT OR IGNORE INTO schema_version VALUES (1)') })
+  }
+  get pendingCount(): number { return this.queue.length }
+
+  private async open(): Promise<void> {
+    if (!this.opening) {
+      this.opening = (async () => {
+        mkdirSync(dirname(this.path), { recursive: true })
+        await this.engine.initialize()
+        this.engine.getDatabase().run('PRAGMA busy_timeout = 5000')
+        this.engine.run("INSERT OR IGNORE INTO meta VALUES ('schema_version', '1')")
+        if (this.options.storage.isEncryptionAvailable()) {
+          const saved = this.engine.queryOne<{ value: string }>("SELECT value FROM meta WHERE key = 'hmac_key'")
+          if (saved) this.key = Buffer.from(this.options.storage.decryptString(Buffer.from(saved.value, 'base64')), 'base64')
+          else {
+            const encrypted = this.options.storage.encryptString(this.key.toString('base64')).toString('base64')
+            this.engine.run("INSERT OR IGNORE INTO meta VALUES ('hmac_key', ?)", [encrypted])
+            const winner = this.engine.queryOne<{ value: string }>("SELECT value FROM meta WHERE key = 'hmac_key'")!
+            this.key = Buffer.from(this.options.storage.decryptString(Buffer.from(winner.value, 'base64')), 'base64')
+          }
+          if (this.key.length !== 32) throw new Error('Invalid trace HMAC key')
+        }
+        this.retention()
+        this.dailyTimer = setInterval(() => { void this.retain() }, 86400000)
+        this.dailyTimer.unref()
+      })().catch(error => { this.opening = undefined; throw error })
+    }
+    await this.opening
+  }
+
+  record(event: TraceEvent): void {
+    try {
+      if (this.closed || !this.settings.recordQueries) return
+      if (this.queue.length >= 1000) { this.count('dropped'); return }
+      const copy = structuredClone(event)
+      if (copy.query) copy.query = cappedText(copy.query, 8192)
+      // Text is discarded immediately when disabled, including while queued.
+      if (!this.settings.keepQueryText) copy.query = event.query ? cappedText(event.query, 8192) : undefined
+      this.queue.push(copy)
+      this.schedule()
+    } catch { this.count('dropped') }
+  }
+
+  linkAnswer(traceId: string, messageId: string): void {
+    try {
+      if (this.closed || !this.settings.recordQueries) return
+      if (this.queue.length >= 1000) { this.count('dropped'); return }
+      this.queue.push({ link: traceId, message: messageId })
+      this.schedule()
+    } catch { this.count('dropped') }
+  }
+
+  private schedule(): void {
+    if (!this.timer) {
+      this.timer = setTimeout(() => { this.timer = undefined; void this.flush() }, 2000)
+      this.timer.unref()
+    }
+    if (this.queue.length >= 50 && !this.batchTimer) {
+      this.batchTimer = setTimeout(() => { this.batchTimer = undefined; void this.flush() }, 0)
+      this.batchTimer.unref()
+    }
+  }
+  private count(kind: 'dropped' | 'errors', amount = 1): void {
+    const day = new Date().toISOString().slice(0, 10)
+    const counter = this.counters.get(day) ?? { dropped: 0, errors: 0 }
+    counter[kind] += amount
+    this.counters.set(day, counter)
+  }
+  private failed(): void {
+    this.writeErrors++
+    this.count('errors')
+    if (Date.now() - this.lastLog >= 60000) {
+      this.lastLog = Date.now()
+      console.warn('[Retrieval traces] write failed; request unaffected')
+    }
+  }
+
+  flush(): Promise<void> {
+    if (this.flushing) return this.flushing.then(() => this.queue.length ? this.flush() : undefined)
+    if (this.timer) clearTimeout(this.timer)
+    if (this.batchTimer) clearTimeout(this.batchTimer)
+    this.timer = this.batchTimer = undefined
+    const batch = this.queue.splice(0)
+    this.flushing = (async () => {
+      try {
+        await this.open()
+        this.engine.runInTransaction(() => {
+          for (const event of batch) {
+            if ('link' in event) {
+              this.engine.run('UPDATE traces SET answer_message_id = ? WHERE trace_id = ?', [event.message, event.link])
+              continue
+            }
+            this.insert(event)
+          }
+          for (const [day, counts] of this.counters) {
+            this.engine.run(`INSERT INTO counters VALUES (?, ?, ?) ON CONFLICT(day) DO UPDATE SET
+              dropped = dropped + excluded.dropped, errors = errors + excluded.errors`, [day, counts.dropped, counts.errors])
+          }
+        })
+        this.counters.clear()
+        this.evict()
+      } catch { this.count('dropped', batch.length); this.failed() }
+    })().finally(() => { this.flushing = undefined })
+    return this.flushing
+  }
+  private insert(input: TraceEvent): void {
+    const { query, candidates, ...fields } = input
+    const normalized = (query ?? '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase()
+    const queryHmac = createHmac('sha256', this.key).update(normalized).digest('hex')
+    let text: string | null = null
+    let textState: StoredTrace['text_state'] = this.settings.keepQueryText ? 'unavailable' : 'disabled'
+    if (query && this.settings.keepQueryText && this.options.storage.isEncryptionAvailable()) {
+      text = this.options.storage.encryptString(query).toString('base64')
+      textState = 'encrypted'
+    }
+    const stored: TraceCandidate[] = []
+    const channels = new Map<TraceChannel, number>()
+    const envelope = { ...fields, policy_version: fields.policy_version ?? RETRIEVAL_POLICY_VERSION,
+      candidate_count: candidates.length, truncated: false }
+    let bytes = Buffer.byteLength(JSON.stringify(envelope)) + Buffer.byteLength(text ?? '') + 512
+    for (const candidate of candidates) {
+      const count = channels.get(candidate.channel) ?? 0
+      const size = Buffer.byteLength(JSON.stringify(candidate)) + 2
+      if (count >= 100 || bytes + size > 65536) { envelope.truncated = true; continue }
+      stored.push(candidate)
+      channels.set(candidate.channel, count + 1)
+      bytes += size
+    }
+    if (bytes > 65536) { this.count('dropped'); return }
+    this.engine.run(`INSERT INTO traces (trace_id, started_at, consumer, event, query_text, query_hmac, text_state, answer_message_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [input.trace_id, input.started_at, input.consumer, JSON.stringify(envelope), text,
+      queryHmac, textState, input.answer_message_id ?? null])
+    stored.forEach((candidate, ordinal) => this.engine.run('INSERT INTO candidates VALUES (?, ?, ?)',
+      [input.trace_id, ordinal, JSON.stringify(candidate)]))
+  }
+  private retention(): void {
+    const now = Date.now()
+    this.engine.runInTransaction(() => {
+      this.engine.run("UPDATE traces SET query_text = NULL, text_state = 'expired' WHERE started_at < ?",
+        [new Date(now - 30 * 86400000).toISOString()])
+      this.engine.run('DELETE FROM traces WHERE started_at < ?', [new Date(now - 90 * 86400000).toISOString()])
+    })
+    this.evict()
+  }
+  async retain(): Promise<void> {
+    try { await this.open(); this.retention() } catch { this.failed() }
+  }
+  private fileBytes(): number {
+    return ['', '-wal', '-shm'].reduce((total, suffix) => {
+      try { return total + statSync(this.path + suffix).size } catch { return total }
+    }, 0)
+  }
+  private evict(): void {
+    const cap = this.options.maxFileBytes ?? 1024 ** 3
+    if (this.fileBytes() <= cap) return
+    const db = this.engine.getDatabase()
+    db.run('PRAGMA wal_checkpoint(TRUNCATE)')
+    while (this.fileBytes() > cap) {
+      const oldest = this.engine.queryAll<{ trace_id: string }>('SELECT trace_id FROM traces ORDER BY started_at LIMIT 1')
+      if (!oldest.length) break
+      this.engine.runInTransaction(() => {
+        for (const row of oldest) this.engine.run('DELETE FROM traces WHERE trace_id = ?', [row.trace_id])
+      })
+      db.run('VACUUM')
+      db.run('PRAGMA wal_checkpoint(TRUNCATE)')
+    }
+  }
+  async setSettings(settings: TraceSettings): Promise<void> {
+    this.settings = { ...settings }
+    if (!settings.recordQueries) this.queue = []
+    if (!settings.keepQueryText) {
+      try {
+        await this.open()
+        this.engine.run("UPDATE traces SET query_text = NULL, text_state = 'disabled'")
+      } catch { this.failed() }
+    }
+  }
+  async read(): Promise<StoredTrace[]> {
+    await this.open()
+    const rows = this.engine.queryAll<{ event: string; query_text: string | null; query_hmac: string; text_state: StoredTrace['text_state']; answer_message_id: string }>(
+      'SELECT * FROM traces ORDER BY rowid')
+    const result: StoredTrace[] = []
+    for (const row of rows) {
+      const fields = JSON.parse(row.event) as Omit<StoredTrace, 'candidates'>
+      const candidates = this.engine.queryAll<{ candidate: string }>('SELECT candidate FROM candidates WHERE trace_id = ? ORDER BY ordinal', [fields.trace_id])
+        .map(c => JSON.parse(c.candidate) as TraceCandidate)
+      // Aggregate traces are hidden if any identity is no longer eligible.
+      if (!candidates.every(candidate => { try { return this.options.eligible(candidate) } catch { return false } })) continue
+      result.push({ ...fields, candidates, query_text: row.query_text, query_hmac: row.query_hmac,
+        text_state: row.text_state, answer_message_id: row.answer_message_id })
+    }
+    return result
+  }
+  async stats(): Promise<TraceStats> {
+    const rows = await this.read()
+    const consumers = { chat: 0, explore: 0, brain: 0 }
+    const since = new Date(Date.now() - 7 * 86400000).toISOString()
+    for (const row of rows) if (row.started_at >= since) consumers[row.consumer]++
+    const counts = this.engine.queryOne<{ dropped: number; errors: number }>('SELECT COALESCE(SUM(dropped), 0) AS dropped, COALESCE(SUM(errors), 0) AS errors FROM counters')!
+    for (const c of this.counters.values()) { counts.dropped += c.dropped; counts.errors += c.errors }
+    return { consumers, dropped_events: counts.dropped, write_errors: counts.errors, file_bytes: this.fileBytes() }
+  }
+  async schemaVersion(): Promise<number> { await this.open(); return Number(this.engine.queryOne<{ value: string }>("SELECT value FROM meta WHERE key = 'schema_version'")!.value) }
+  async journalMode(): Promise<string> { await this.open(); return String(this.engine.getDatabase().exec('PRAGMA journal_mode')[0].values[0][0]) }
+  async close(): Promise<void> {
+    if (this.closed) return
+    this.closed = true
+    await this.flush()
+    if (this.dailyTimer) clearInterval(this.dailyTimer)
+    try { this.engine.closeDatabase() } catch { /* an unsuccessful lazy open has no handle */ }
+  }
+}
