@@ -1194,6 +1194,25 @@ describe('Transcription Service', () => {
       }
     })
 
+    it('Stop while reading the audio profile preserves the previous complete status', async () => {
+      mockConfig.transcription.provider = 'local-asr'
+      mockGetRecordingById.mockReturnValue({ id: 'stop-profile', filename: 'p.wav', file_path: 'G:\\Recordings\\p.wav', transcription_status: 'complete' })
+      mockGetQueueItems.mockImplementation((status?: string) => status === 'pending'
+        ? [{ id: 'stop-profile-q', recording_id: 'stop-profile', filename: 'p.wav', status: 'pending', attempts: 0 }] : [])
+      const mod = await import('../transcription')
+      mockAudioProfileForTranscription.mockImplementationOnce(async () => {
+        mod.cancelTranscription('stop-profile')
+        return null
+      })
+      mod.startTranscriptionProcessor()
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      mod.stopTranscriptionProcessor()
+      expect(mockInsertTranscript).not.toHaveBeenCalled()
+      expect(mockUpdateRecordingStatus).not.toHaveBeenCalledWith('stop-profile', 'none')
+      expect(mockUpdateRecordingStatus).toHaveBeenLastCalledWith('stop-profile', 'complete')
+      expect(mockAnalyzeAudioPreflight).not.toHaveBeenCalled()
+    })
+
     it('Stop during a corrective no-speech preflight never retires the previous transcript', async () => {
       mockConfig.transcription.provider = 'local-asr'
       mockConfig.transcription.geminiApiKey = ''

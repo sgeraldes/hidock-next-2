@@ -2099,6 +2099,9 @@ async function transcribeRecording(
   const filePath = recording.file_path ?? ""
   // Continue with the canonical id so status updates hit the real row.
   recordingId = recording.id
+  const statusBeforeRun = recording.transcription_status ?? 'none'
+  statusBeforeAttempts.set(recordingId, statusBeforeRun)
+  if (providerOverride !== 'saved-transcript') savedTranscripts.delete(recordingId)
 
   // ADV40-1 (round-42, HIGH) — FAIL-CLOSED eligibility gate BEFORE any provider
   // call. transcribeRecording is reachable directly via recordings:transcribe
@@ -2185,6 +2188,7 @@ async function transcribeRecording(
     // when no stretch of sound reaches 1.5 s. Rec02 of 21-apr (3.74 s of
     // crackle in 13 minutes) got a 2,554-word invented transcript that way.
     const audioSkip = await audioProfileSkip(recording)
+    if (cancelledRecordings.has(recordingId)) throw new TranscriptionCancelledError('Stopped by you')
     if (audioSkip) {
       const profileRun = createProcessingRun({
         recordingId,
@@ -2207,9 +2211,6 @@ async function transcribeRecording(
   }
 
   console.log(`Transcribing: ${recording.filename}`)
-  const statusBeforeRun = recording.transcription_status ?? 'none'
-  if (!savedTranscript) savedTranscripts.delete(recordingId)
-  statusBeforeAttempts.set(recordingId, statusBeforeRun)
   // AI-13: Use standard enum values matching Recording.transcription_status
   updateRecordingTranscriptionStatus(recordingId, 'processing')
 
