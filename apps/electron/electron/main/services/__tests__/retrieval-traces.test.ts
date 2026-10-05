@@ -11,7 +11,7 @@ const stores: RetrievalTraceStore[] = []
 const secret = randomBytes(32)
 const storage = {
   isEncryptionAvailable: () => true,
-  encryptString: (s: string) => Buffer.from(s).map((b, i) => b ^ secret[i % secret.length]),
+  encryptString: (s: string) => Buffer.from(Buffer.from(s).map((b, i) => b ^ secret[i % secret.length])),
   decryptString: (b: Buffer) => b.map((v, i) => v ^ secret[i % secret.length]).toString()
 }
 function store(options: Partial<ConstructorParameters<typeof RetrievalTraceStore>[0]> = {}) {
@@ -34,6 +34,44 @@ afterEach(async () => {
 })
 
 describe('retrieval trace store (real SQLite)', () => {
+  it('HMACs the whole query, not just the retained prefix', async () => {
+    const s = store()
+    s.record(event('a', 'a'.repeat(9000) + 'one'))
+    s.record(event('b', 'a'.repeat(9000) + 'two'))
+    await s.flush()
+    const rows = await s.read()
+    expect(rows[0].query_hmac).not.toBe(rows[1].query_hmac)
+  })
+  it('never restores erased queued text after re-enabling retention', async () => {
+    const s = store()
+    s.record(event())
+    await s.setSettings({ recordQueries: true, keepQueryText: false })
+    await s.setSettings({ recordQueries: true, keepQueryText: true })
+    await s.flush()
+    expect((await s.read())[0].query_text).toBeNull()
+  })
+  it('cancels a captured flush batch when recording is disabled during open', async () => {
+    const s = store()
+    s.record(event())
+    const flushing = s.flush()
+    await s.setSettings({ recordQueries: false, keepQueryText: true })
+    await flushing
+    expect(await s.read()).toEqual([])
+  })
+  it('bounds queued candidate data before flushing', () => {
+    const s = store()
+    const e = event()
+    e.candidates = Array.from({ length: 10000 }, () => e.candidates[0])
+    s.record(e)
+    expect(s.pendingBytes).toBeLessThanOrEqual(65536)
+  })
+  it('preserves an answer link that arrived before the event', async () => {
+    const s = store()
+    s.linkAnswer('t1', 'm1')
+    s.record(event())
+    await s.flush()
+    expect((await s.read())[0].answer_message_id).toBe('m1')
+  })
   it('creates an independent WAL schema, commits and reads identities without content', async () => {
     const s = store()
     s.record(event())

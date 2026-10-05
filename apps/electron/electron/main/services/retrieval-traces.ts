@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes } from 'crypto'
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from 'crypto'
 import { mkdirSync, statSync } from 'fs'
 import { dirname } from 'path'
 import Database from 'better-sqlite3'
@@ -67,6 +67,8 @@ export interface StoredTrace extends Omit<TraceEvent, 'query'> {
   candidate_count: number
   truncated: boolean
 }
+interface QueuedTrace { event: TraceEvent; normalized: string; nonce: Buffer; tag: Buffer; candidateCount: number; truncated: boolean; textAllowed: boolean; epoch: number }
+type QueueItem = QueuedTrace | { link: string; message: string; epoch: number }
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);
   CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -96,7 +98,11 @@ export class RetrievalTraceStore {
   readonly path: string
   private engine: DatabaseEngine
   private opening?: Promise<void>
-  private queue: Array<TraceEvent | { link: string; message: string }> = []
+  private queue: QueueItem[] = []
+  private captured: QueueItem[] = []
+  private memoryKey = randomBytes(32)
+  private epoch = 0
+  private pendingLinks = new Map<string, string>()
   private settings: TraceSettings = { recordQueries: true, keepQueryText: true }
   private timer?: NodeJS.Timeout
   private batchTimer?: NodeJS.Timeout
@@ -120,6 +126,7 @@ export class RetrievalTraceStore {
       repairPhase: () => this.engine.run('INSERT OR IGNORE INTO schema_version VALUES (1)') })
   }
   get pendingCount(): number { return this.queue.length }
+  get pendingBytes(): number { return this.queue.reduce((sum, item) => sum + Buffer.byteLength(JSON.stringify(item)), 0) }
 
   private async open(): Promise<void> {
     if (!this.opening) {
@@ -151,11 +158,27 @@ export class RetrievalTraceStore {
     try {
       if (this.closed || !this.settings.recordQueries) return
       if (this.queue.length >= 1000) { this.count('dropped'); return }
-      const copy = structuredClone(event)
-      if (copy.query) copy.query = cappedText(copy.query, 8192)
-      // Text is discarded immediately when disabled, including while queued.
-      if (!this.settings.keepQueryText) copy.query = event.query ? cappedText(event.query, 8192) : undefined
-      this.queue.push(copy)
+      const { candidates, query, ...fields } = event
+      const normalized = (query ?? '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase()
+      const nonce = randomBytes(12)
+      const cipher = createCipheriv('aes-256-gcm', this.memoryKey, nonce)
+      const sealed = Buffer.concat([cipher.update(normalized, 'utf8'), cipher.final()])
+      const copy: TraceEvent = { ...fields, query: this.settings.keepQueryText && query ? cappedText(query, 8192) : undefined, candidates: [] }
+      const item: QueuedTrace = { event: copy, normalized: sealed.toString('base64'), nonce, tag: cipher.getAuthTag(),
+        candidateCount: candidates.length, truncated: false, textAllowed: this.settings.keepQueryText, epoch: this.epoch }
+      let bytes = Buffer.byteLength(JSON.stringify(item)) + 2048
+      if (bytes > 65536) { this.count('dropped'); return }
+      const channels = new Map<TraceChannel, number>()
+      for (const candidate of candidates) {
+        const count = channels.get(candidate.channel) ?? 0
+        if (count >= 100) { item.truncated = true; continue }
+        const size = Buffer.byteLength(JSON.stringify(candidate)) + 2
+        if (bytes + size > 65536) { item.truncated = true; continue }
+        copy.candidates.push({ ...candidate })
+        channels.set(candidate.channel, count + 1)
+        bytes += size
+      }
+      this.queue.push(item)
       this.schedule()
     } catch { this.count('dropped') }
   }
@@ -164,7 +187,7 @@ export class RetrievalTraceStore {
     try {
       if (this.closed || !this.settings.recordQueries) return
       if (this.queue.length >= 1000) { this.count('dropped'); return }
-      this.queue.push({ link: traceId, message: messageId })
+      this.queue.push({ link: traceId, message: messageId, epoch: this.epoch })
       this.schedule()
     } catch { this.count('dropped') }
   }
@@ -200,13 +223,17 @@ export class RetrievalTraceStore {
     if (this.batchTimer) clearTimeout(this.batchTimer)
     this.timer = this.batchTimer = undefined
     const batch = this.queue.splice(0)
+    this.captured = batch
     this.flushing = (async () => {
       try {
         await this.open()
         this.engine.runInTransaction(() => {
           for (const event of batch) {
+            if (!this.settings.recordQueries || event.epoch !== this.epoch) continue
             if ('link' in event) {
               this.engine.run('UPDATE traces SET answer_message_id = ? WHERE trace_id = ?', [event.message, event.link])
+              this.pendingLinks.set(event.link, event.message)
+              if (this.pendingLinks.size > 1000) this.pendingLinks.delete(this.pendingLinks.keys().next().value!)
               continue
             }
             this.insert(event)
@@ -219,23 +246,26 @@ export class RetrievalTraceStore {
         this.counters.clear()
         this.evict()
       } catch { this.count('dropped', batch.length); this.failed() }
-    })().finally(() => { this.flushing = undefined })
+    })().finally(() => { this.flushing = undefined; this.captured = [] })
     return this.flushing
   }
-  private insert(input: TraceEvent): void {
+  private insert(item: QueuedTrace): void {
+    const input = item.event
     const { query, candidates, ...fields } = input
-    const normalized = (query ?? '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase()
+    const decipher = createDecipheriv('aes-256-gcm', this.memoryKey, item.nonce)
+    decipher.setAuthTag(item.tag)
+    const normalized = Buffer.concat([decipher.update(Buffer.from(item.normalized, 'base64')), decipher.final()]).toString('utf8')
     const queryHmac = createHmac('sha256', this.key).update(normalized).digest('hex')
     let text: string | null = null
-    let textState: StoredTrace['text_state'] = this.settings.keepQueryText ? 'unavailable' : 'disabled'
-    if (query && this.settings.keepQueryText && this.options.storage.isEncryptionAvailable()) {
+    let textState: StoredTrace['text_state'] = this.settings.keepQueryText && item.textAllowed ? 'unavailable' : 'disabled'
+    if (query && item.textAllowed && this.settings.keepQueryText && this.options.storage.isEncryptionAvailable()) {
       text = this.options.storage.encryptString(query).toString('base64')
       textState = 'encrypted'
     }
     const stored: TraceCandidate[] = []
     const channels = new Map<TraceChannel, number>()
     const envelope = { ...fields, policy_version: fields.policy_version ?? RETRIEVAL_POLICY_VERSION,
-      candidate_count: candidates.length, truncated: false }
+      candidate_count: item.candidateCount, truncated: item.truncated }
     let bytes = Buffer.byteLength(JSON.stringify(envelope)) + Buffer.byteLength(text ?? '') + 512
     for (const candidate of candidates) {
       const count = channels.get(candidate.channel) ?? 0
@@ -248,7 +278,8 @@ export class RetrievalTraceStore {
     if (bytes > 65536) { this.count('dropped'); return }
     this.engine.run(`INSERT INTO traces (trace_id, started_at, consumer, event, query_text, query_hmac, text_state, answer_message_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [input.trace_id, input.started_at, input.consumer, JSON.stringify(envelope), text,
-      queryHmac, textState, input.answer_message_id ?? null])
+      queryHmac, textState, input.answer_message_id ?? this.pendingLinks.get(input.trace_id) ?? null])
+    this.pendingLinks.delete(input.trace_id)
     stored.forEach((candidate, ordinal) => this.engine.run('INSERT INTO candidates VALUES (?, ?, ?)',
       [input.trace_id, ordinal, JSON.stringify(candidate)]))
   }
@@ -284,9 +315,16 @@ export class RetrievalTraceStore {
       db.run('PRAGMA wal_checkpoint(TRUNCATE)')
     }
   }
-  async setSettings(settings: TraceSettings): Promise<void> {
+  applySettings(settings: TraceSettings): void {
+    if (!settings.recordQueries && this.settings.recordQueries) this.epoch++
     this.settings = { ...settings }
-    if (!settings.recordQueries) this.queue = []
+    if (!settings.recordQueries) { this.queue = []; this.pendingLinks.clear() }
+    if (!settings.keepQueryText) for (const item of [...this.queue, ...this.captured]) {
+      if ('event' in item) { item.event.query = undefined; item.textAllowed = false }
+    }
+  }
+  async setSettings(settings: TraceSettings): Promise<void> {
+    this.applySettings(settings)
     if (!settings.keepQueryText) {
       try {
         await this.open()
