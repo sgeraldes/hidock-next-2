@@ -4,6 +4,8 @@ Each entry is one day of merged work. The Releases page in Settings reads this f
 
 ## 2026-10-04 | The gamestation only helps, and gets out of the way
 
+- Find words and phrases inside a source with Ctrl+F, including accented text, speaker names, summaries, and actions and decisions; move between highlighted matches and seek without starting playback.
+
 - Paste files, screenshots, text and links into Library from anywhere outside an editor, or use the header's New menu to paste, import a file or start a note; videos keep their original file and link to extracted audio for transcription.
 
 The Model Host on the gamestation is now a small tray icon and nothing else to set up there. HiDock

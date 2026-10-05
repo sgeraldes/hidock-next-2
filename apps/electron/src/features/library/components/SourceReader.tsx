@@ -29,6 +29,9 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useReaderFind, ReaderFindBar, FindText } from './ReaderFind'
+import { fromStoredSegments, parseTranscriptSegments } from '../utils/transcriptSegments'
+import type { FindDocument } from '../utils/transcriptFind'
 import { TranscriptViewer, type StoredSegment, type TranscriptContentUpdate } from './TranscriptViewer'
 import { TranscriptIntegrityPanel } from './TranscriptIntegrityPanel'
 import type { LineIssueCode } from '@/shared/transcript-line-issues'
@@ -297,6 +300,7 @@ interface SourceReaderProps {
   onPlay?: () => void
   onStop?: () => void
   onSeek?: (startMs: number, endMs?: number) => void
+  onFindSeek?: (startMs: number) => void
   // Action button callbacks
   onDownload?: () => void
   onTranscribe?: () => void
@@ -336,6 +340,7 @@ export function SourceReader({
   onPlay,
   onStop,
   onSeek,
+  onFindSeek,
   onDownload,
   onTranscribe,
   // onReprocessVibeVoice is intentionally not consumed: the raw "VibeVoice"
@@ -1221,6 +1226,34 @@ export function SourceReader({
     setReaderSectionMode(section, mode)
   }, [closeSplitMode, setReaderSectionMode, splitMode])
 
+  const resolveFindSpeaker = people.resolveRangeKey
+  const [resolvedFindDocuments, setResolvedFindDocuments] = useState<FindDocument[] | null>(null)
+  useEffect(() => setResolvedFindDocuments(null), [recordingId, effectiveTranscript?.full_text, effectiveTranscript?.speakers])
+  const findDocuments = useMemo<FindDocument[]>(() => {
+    const segments = transcriptSegments?.length ? fromStoredSegments(transcriptSegments) : parseTranscriptSegments(effectiveTranscript?.full_text ?? '').segments
+    return [
+      ...(trustedSummary(effectiveTranscript, recording?.audioCategory) ? [{ key: 'summary', section: 'summary' as const, text: trustedSummary(effectiveTranscript, recording?.audioCategory)! }] : []),
+      ...timelineEvents.flatMap(event => {
+        const detail = eventDetails[event.refId ?? event.id]
+        const timeMs = Math.round(event.timeSec * 1000)
+        return [
+          { key: `event:${event.id}`, section: 'moments' as const, text: detail?.fullText ?? event.label, timeMs },
+          ...(['context', 'assignee', 'dueDate', 'status'] as const).flatMap(field => detail?.[field] ? [{ key: `event:${event.id}:${field}`, section: 'moments' as const, text: field === 'status' ? detail[field]!.replace('_', ' ') : detail[field]!, timeMs }] : [])
+        ]
+      }),
+      ...(resolvedFindDocuments ?? segments.flatMap((segment, i) => [
+        ...(segment.speaker ? [{ key: `speaker:${i}`, section: 'transcript' as const, text: resolveFindSpeaker(segment.speaker, i)?.name ?? segment.speaker, timeMs: segment.startMs }] : []),
+        { key: `turn:${i}`, section: 'transcript' as const, text: segment.text, timeMs: segment.startMs }
+      ]))
+    ]
+  }, [effectiveTranscript, recording?.audioCategory, transcriptSegments, timelineEvents, eventDetails, resolvedFindDocuments, resolveFindSpeaker])
+  const find = useReaderFind({ sourceId: recordingId, documents: findDocuments, onSeek: onFindSeek ?? handleReaderSeek,
+    onReveal: match => {
+      if (maximizedSection && maximizedSection !== match.section) restoreMaximizedSection()
+      if (readerSectionModes[match.section] !== 'expanded') setReaderSectionMode(match.section, 'expanded')
+    }
+  })
+
   if (!recording) {
     return (
       <div className="flex items-center justify-center h-full text-muted-foreground">
@@ -1327,7 +1360,8 @@ export function SourceReader({
     }))
 
   return (
-    <div className="@container flex flex-col h-full overflow-hidden">
+    <div data-reader-find ref={find.rootRef} className="@container flex flex-col h-full overflow-hidden">
+      <ReaderFindBar find={find} />
       <HiddenReaderSections
         hidden={hiddenReaderSections}
         onRestore={(section) => changeSectionMode(section, 'expanded')}
@@ -1992,6 +2026,7 @@ export function SourceReader({
             sentinelRef={pins.sentinelRef('moments')}
           >
             <TimelineEventList
+              find={find}
               events={timelineEvents}
               eventDetails={eventDetails}
               onEventUpdate={handleEventUpdate}
@@ -2090,7 +2125,7 @@ export function SourceReader({
                   >
                     <div className="max-w-[75ch] text-sm leading-relaxed text-foreground">
                       {trustedSummary(effectiveTranscript, recording.audioCategory)
-                        ? <p className="whitespace-pre-wrap">{trustedSummary(effectiveTranscript, recording.audioCategory)}</p>
+                        ? <p className="whitespace-pre-wrap"><FindText find={find} documentKey="summary" text={trustedSummary(effectiveTranscript, recording.audioCategory)!} /></p>
                         : effectiveTranscript.summary?.trim()
                           ? <p className="text-muted-foreground">{untrustedSummaryNote(effectiveTranscript)}</p>
                           : <p className="text-muted-foreground">No summary generated.</p>}
@@ -2124,6 +2159,8 @@ export function SourceReader({
                           />
                         )}
                         <TranscriptViewer
+                          find={find}
+                          onFindDocuments={setResolvedFindDocuments}
                           transcript={effectiveTranscript.full_text}
                           segments={transcriptSegments}
                           recordingId={recording.id}

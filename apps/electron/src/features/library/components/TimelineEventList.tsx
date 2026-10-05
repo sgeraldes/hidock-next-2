@@ -19,6 +19,7 @@
  * Spec: docs/superpowers/specs/2026-09-22-reader-sticky-sections-design.md
  */
 
+import { FindText, type ReaderFindState } from './ReaderFind'
 import { useEffect, useState } from 'react'
 import { ChevronDown, Pencil, CircleCheck, CircleDashed } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -31,6 +32,7 @@ import { EVENT_KIND_COLOR, EVENT_KIND_ICON } from '../utils/timelineEventKinds'
 import type { TimelineEvent, TimelineEventDetail, TimelineEventPatch } from './WaveformPlayer'
 
 interface TimelineEventListProps {
+  find?: ReaderFindState
   events: TimelineEvent[]
   eventDetails?: Record<string, TimelineEventDetail>
   onEventUpdate?: (event: TimelineEvent, patch: TimelineEventPatch) => Promise<boolean>
@@ -45,6 +47,7 @@ interface TimelineEventListProps {
 
 export function TimelineEventList({
   events,
+  find,
   eventDetails,
   onEventUpdate,
   activeEventId = null,
@@ -61,6 +64,13 @@ export function TimelineEventList({
     setExpandedEventId(null)
     setEditingEventId(null)
   }, [recordingId])
+
+  const currentFindMatch = find?.current
+  useEffect(() => {
+    if (currentFindMatch?.section !== 'moments') return
+    const event = events.find(event => currentFindMatch.key === `event:${event.id}` || currentFindMatch.key.startsWith(`event:${event.id}:`))
+    if (event) setExpandedEventId(event.id)
+  }, [currentFindMatch, events])
 
   if (events.length === 0) {
     return (
@@ -159,7 +169,7 @@ export function TimelineEventList({
                                 isCompleted && 'line-through text-muted-foreground'
                               )}
                             >
-                              {displayText}
+                              <FindText find={find} documentKey={`event:${m.id}`} text={displayText} />
                             </span>
                           </TooltipTrigger>
                           <TooltipContent side="top" align="start" className="max-w-md">
@@ -181,7 +191,7 @@ export function TimelineEventList({
                     </button>
                     <button
                       type="button"
-                      onClick={() => onActivate(m)}
+                      onClick={() => find?.open ? find.seekTo(Math.round(m.timeSec * 1000)) : onActivate(m)}
                       aria-pressed={isActive}
                       title={`Seek to ${formatTimestamp(m.timeSec)}`}
                       className="shrink-0 rounded px-1 tabular-nums text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/40"
@@ -194,14 +204,14 @@ export function TimelineEventList({
                       {detail?.context && (
                         <p className="whitespace-pre-wrap text-muted-foreground">
                           <span className="font-medium text-foreground">Context: </span>
-                          {detail.context}
+                          <FindText find={find} documentKey={`event:${m.id}:context`} text={detail.context} />
                         </p>
                       )}
                       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground">
                         <span className="font-medium text-foreground capitalize">{kind}</span>
-                        {detail?.status && <span>Status: <span className="capitalize">{detail.status.replace('_', ' ')}</span></span>}
-                        {detail?.assignee && <span>Assignee: {detail.assignee}</span>}
-                        {detail?.dueDate && <span>Due: {detail.dueDate}</span>}
+                        {detail?.status && <span>Status: <span className="capitalize"><FindText find={find} documentKey={`event:${m.id}:status`} text={detail.status.replace('_', ' ')} /></span></span>}
+                        {detail?.assignee && <span>Assignee: <FindText find={find} documentKey={`event:${m.id}:assignee`} text={detail.assignee} /></span>}
+                        {detail?.dueDate && <span>Due: <FindText find={find} documentKey={`event:${m.id}:dueDate`} text={detail.dueDate} /></span>}
                         {detail?.priority && <span>Priority: <span className="capitalize">{detail.priority}</span></span>}
                         {!detail?.editable && <span className="italic">Read-only item</span>}
                       </div>

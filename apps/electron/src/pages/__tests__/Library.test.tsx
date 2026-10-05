@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import { Library } from '../Library'
 import { BUILTIN_ARTIFACT_TYPES } from '@/features/library/utils/sourceType'
+import { useSourceSelection } from '@/features/library/hooks'
 
 /**
  * Rows are located by the text the row shows. Since 2026-09-22 an unassigned
@@ -361,6 +362,33 @@ describe('Library', () => {
       </MemoryRouter>
     )
   }
+
+  it('Ctrl+F focuses Library search with no source and ignores other editors', () => {
+    renderLibrary()
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+    const search = screen.getByLabelText('Search the sources shown in this list')
+    expect(search).toHaveFocus()
+    const editor = document.createElement('textarea')
+    document.body.append(editor)
+    editor.focus()
+    fireEvent.keyDown(editor, { key: 'f', ctrlKey: true })
+    expect(editor).toHaveFocus()
+    editor.remove()
+  })
+
+  it('Ctrl+F focuses Library search when a bulk selection replaces the source reader', async () => {
+    const selection = useSourceSelection()
+    vi.mocked(useSourceSelection).mockReturnValue({ ...selection, selectedIds: new Set([mockRecording.id, 'other-source']), selectedCount: 2 })
+    vi.mocked(useUnifiedRecordings).mockReturnValue({ ...useUnifiedRecordings(), recordings: [mockRecording, { ...mockRecording, id: 'other-source' }] })
+    scrollHarness.selectedSourceId = mockRecording.id
+    try {
+      await act(async () => { renderLibrary() })
+      fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+      expect(screen.getByLabelText('Search the sources shown in this list')).toHaveFocus()
+    } finally {
+      vi.mocked(useSourceSelection).mockReturnValue(selection)
+    }
+  })
 
   it('renders one row of every registered source type', () => {
     const recordings = BUILTIN_ARTIFACT_TYPES.map((type) => ({

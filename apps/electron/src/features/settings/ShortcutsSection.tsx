@@ -22,10 +22,16 @@ export interface Shortcut {
 
 export const SHORTCUTS: Shortcut[] = [
   { keys: [mod, 'K'], action: 'Search knowledge, people and projects', where: 'Anywhere', source: 'components/layout/TitleBar.tsx' },
+  { keys: [mod, 'F'], action: 'Find in transcript, or search Library when no source is open', where: 'A source reader or Library', source: 'features/library/components/ReaderFind.tsx' },
+  { keys: ['Enter'], action: 'Next find match', where: 'The find input', source: 'features/library/components/ReaderFind.tsx' },
+  { keys: ['Shift', 'Enter'], action: 'Previous find match', where: 'The find input', source: 'features/library/components/ReaderFind.tsx' },
+  { keys: ['F3'], action: 'Next find match from the reader', where: 'While find is open', source: 'features/library/components/ReaderFind.tsx' },
+  { keys: ['Shift', 'F3'], action: 'Previous find match from the reader', where: 'While find is open', source: 'features/library/components/ReaderFind.tsx' },
+  { keys: ['Alt', 'Enter'], action: 'Seek to the current match without starting playback', where: 'The find input or reader', source: 'features/library/components/ReaderFind.tsx' },
   { keys: [mod, 'V'], action: 'Add a copied screenshot as an image capture', where: 'Anywhere, when the clipboard holds an image', source: 'hooks/useClipboardCapture.ts' },
   { keys: [mod, 'N'], action: 'New note', where: 'Notes', source: 'pages/Notes.tsx' },
   { keys: [mod, 'Enter'], action: 'Save the transcript line you are editing', where: 'A transcript, while editing a line', source: 'features/library/components/TranscriptViewer.tsx' },
-  { keys: ['Esc'], action: 'Cancel the edit, or close the assistant, a panel or the activity log', where: 'Anywhere', source: 'TranscriptViewer, FloatingAssistant, OperationsPanel, ActivityLogButton' },
+  { keys: ['Esc'], action: 'Close find, cancel the edit, or close the assistant, a panel or the activity log', where: 'Anywhere', source: 'ReaderFind, TranscriptViewer, FloatingAssistant, OperationsPanel, ActivityLogButton' },
   { keys: ['Enter'], action: 'Open the first page that matches', where: 'The Settings search box', source: 'features/settings/SettingsNav.tsx' }
 ]
 
