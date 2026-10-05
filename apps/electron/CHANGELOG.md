@@ -15,8 +15,11 @@ pairs with it, gives it the Hugging Face token and decides when it steps aside.
   the Library includes a **Transcription problems** filter and reasons on hover. Gemini gets
   one automatic retry with smaller chunks. Existing transcripts are checked again while
   their text and audio are kept. Acoustic voice segments are now retained for future timelines.
-- **Stopped retries explain why.** If a Garbage or Low value rating blocks transcription,
-  HiDock tells you to clear that rating instead of silently cancelling after the audio check.
+- **Retranscription can recover bad transcripts.** Transcribe again and Retry run even when
+  a prior rating excluded the recording. Ratings based on incomplete text are withdrawn;
+  audio and owner ratings remain. Sparse transcripts lose generated metadata, while gap-only
+  transcripts keep their real summaries, titles, meeting links and search content, with missing
+  ranges shown for review.
 
 - **Reference labels for recording kinds.** Settings > Pipeline keeps a sample of up to 40 valid
   recordings for your own labels, with keyboard choices and progress, ready for engine comparisons.

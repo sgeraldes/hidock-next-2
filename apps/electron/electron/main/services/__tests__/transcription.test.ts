@@ -621,34 +621,21 @@ describe('Transcription Service', () => {
       expect(mockUpdateRecordingStatus).not.toHaveBeenCalledWith('rec-short-rerun', 'no_speech')
     })
 
-    it('stops an explicit re-run of a rated clip once the local check finds speech, and hands the status back', async () => {
-      // Review of PR #25: a garbage-rated clip re-run explicitly got past the
-      // gate (so the local check could prove silence), found speech, and then
-      // died later — speaker linking killed mid-run into three retries and an
-      // error, or with speaker linking off, 'processing' forever. It must stop
-      // right after the local check, before any provider, status restored.
-      queueOne('rec-rated', writeMpegClip('rated.wav', 5), 'gemini')
-      mockGetRecordingById.mockReturnValue({
-        id: 'rec-rated',
-        filename: 'rec-rated.wav',
-        file_path: joinPath(clipDir, 'rated.wav'),
-        duration_seconds: 5,
-        date_recorded: '2026-09-22T10:00:00.000Z',
-        status: 'no_speech',
-        transcription_status: 'no_speech'
-      })
-      mockIsRecordingEligible.mockReturnValue(false) // rated garbage: value-excluded
-
-      await runQueueUntil(() => {
-        expect(mockUpdateQueueItem).toHaveBeenCalledWith('queue-rec-rated', 'cancelled',
-          'Transcription stopped because this recording is rated Garbage or Low value. Clear the rating to transcribe again.')
-      })
-
-      expect(mockAnalyzeAudioPreflight).toHaveBeenCalled() // the local check still ran
-      expect(mockGeminiTranscribeCall).not.toHaveBeenCalled()
-      expect(mockGenerateContent).not.toHaveBeenCalled()
-      const statuses = mockUpdateRecordingStatus.mock.calls.filter(([id]) => id === 'rec-rated').map(([, s]) => s)
-      expect(statuses).toEqual(['processing', 'no_speech'])
+    it.each(['provider', 'retry', 'manual'])('retranscribes Rec98 despite its garbage content rating via %s', async (entry) => {
+      queueOne('rec-rated', writeMpegClip('rated.wav', 1565), entry === 'provider' ? 'gemini' : undefined)
+      mockIsRecordingEligible.mockReturnValue(false)
+      mockAnalyzeAudioPreflight.mockResolvedValue({ status: 'speech_present', durationSeconds: 1565,
+        nonSilentSeconds: 598, nonSilentRatio: 0.38, activityIntervals: [{ start: 0, end: 1565 }] })
+      mockGeminiResult.mockReturnValue([{ start: 0.9, end: 1010.8, text: 'word '.repeat(17), speaker: 'A' }])
+      mockSmallerRetry.mockResolvedValue({ fullText: 'word '.repeat(17), speakers: JSON.stringify([{ start: 0.9, end: 1010.8, text: 'word '.repeat(17) }]) })
+      const service = await import('../transcription')
+      if (entry === 'retry') service.markUserPriority('rec-rated')
+      try {
+        if (entry === 'manual') await service.transcribeManually('rec-rated')
+        else await runQueueUntil(() => expect(mockUpdateQueueItem).toHaveBeenCalledWith('queue-rec-rated', 'completed'))
+        expect(mockGeminiTranscribeCall).toHaveBeenCalled()
+        expect(mockUpdateQueueItem.mock.calls.some((c) => c[1] === 'cancelled')).toBe(false)
+      } finally { service.clearUserPriority('rec-rated') }
     })
 
     it('records both sparse Gemini attempts and retries only once before holding all derived work', async () => {

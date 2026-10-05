@@ -43,7 +43,7 @@ describe('assessTranscriptValidity', () => {
     expect(v.status).toBe('incomplete')
     expect(v.measures.detectedSpeechSeconds).toBeCloseTo(1057)
     expect(v.reasons.map(r => r.detail)).toContain('17 words for 17.6 minutes of detected speech.')
-    expect(v.reasons.some(r => r.detail.includes('0:00 to 16:50 with 9 words'))).toBe(true)
+    expect(v.reasons.some(r => r.detail.includes('0:00 to 16:50 has 9 words'))).toBe(true)
   })
 
   it('merges overlapping acoustic turns and detects uncovered speech', () => {
@@ -52,6 +52,7 @@ describe('assessTranscriptValidity', () => {
     expect(v.status).toBe('incomplete')
     expect(v.measures.detectedSpeechSeconds).toBe(300)
     expect(v.measures.uncoveredDiarizedSpeechShare).toBeCloseTo(250 / 300)
+    expect(v.reasons.find(r => r.code === 'uncovered_speech')?.detail).toContain('0:50 to 5:00')
   })
 
   it('uses VAD without diarization, including empty transcripts', () => {

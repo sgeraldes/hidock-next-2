@@ -20,7 +20,7 @@
 
 import { getEventBus } from './event-bus'
 import { queryOne, run, getRowsModified } from './database'
-import { HELD_METHOD, recomputeAudioWarnings } from './value-classification'
+import { recomputeAudioWarnings } from './value-classification'
 import { isUnusableValidity } from './transcript-validity'
 import { refreshTranscriptValidity } from './transcript-validity-store'
 
@@ -55,7 +55,13 @@ export interface TrustSyncResult {
  * Owner ratings, and the audio's own verdicts, are never touched.
  */
 export function syncTrustVerdicts(recordingId?: string, options: { announce?: boolean } = {}): TrustSyncResult {
+  const before = recordingId ? queryOne<{ count: number }>(
+    `SELECT COUNT(*) AS count FROM knowledge_captures WHERE source_recording_id = ?
+      AND quality_source = 'ai' AND quality_method = 'content'`, [recordingId])?.count ?? 0 : 0
   if (recordingId) refreshTranscriptValidity(recordingId)
+  const after = recordingId ? queryOne<{ count: number }>(
+    `SELECT COUNT(*) AS count FROM knowledge_captures WHERE source_recording_id = ?
+      AND quality_source = 'ai' AND quality_method = 'content'`, [recordingId])?.count ?? 0 : 0
   const scope = recordingId ? 'AND source_recording_id = ?' : ''
   const params = recordingId ? [recordingId] : []
 
@@ -68,13 +74,13 @@ export function syncTrustVerdicts(recordingId?: string, options: { announce?: bo
   )
   const withdrawn = getRowsModified()
 
-  // Marked 'held' so the rating comes back, from the stored evaluation, when
-  // the transcript turns valid (recomputeEvaluationsFromEvidence). Personal
-  // and deleted recordings are left as they are.
+  // Retracted content ratings cannot return from stale transcript evaluations.
+  // A new content assessment may rate the replacement. Personal and deleted
+  // recordings are left as they are.
   run(
     `UPDATE knowledge_captures
         SET quality_rating = 'unrated', quality_reasons = NULL, quality_source = NULL,
-            quality_method = '${HELD_METHOD}', quality_confidence = NULL, quality_assessed_at = NULL
+            quality_method = NULL, quality_confidence = NULL, quality_assessed_at = NULL
       WHERE quality_source = 'ai' AND quality_method = 'content' AND deleted_at IS NULL
         AND source_recording_id IN (
           SELECT t.recording_id FROM transcripts t JOIN recordings r ON r.id = t.recording_id
@@ -84,7 +90,7 @@ export function syncTrustVerdicts(recordingId?: string, options: { announce?: bo
         ${scope}`,
     params
   )
-  const cleared = getRowsModified()
+  const cleared = getRowsModified() + Math.max(0, before - after)
 
   if (recordingId) {
     // After the caller's own writes: the recompute announces the change, and

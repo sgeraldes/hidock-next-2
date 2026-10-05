@@ -27,7 +27,7 @@ vi.mock('../config', () => ({
 const emitDomainEvent = vi.hoisted(() => vi.fn())
 vi.mock('../event-bus', () => ({ getEventBus: () => ({ emitDomainEvent }) }))
 
-import { initializeDatabase, closeDatabase, run, queryOne, insertTranscript, getEligibleRecordingIds } from '../database'
+import { initializeDatabase, closeDatabase, run, queryOne, insertTranscript, getEligibleRecordingIds, isRecordingGraphIngestable } from '../database'
 import {
   backfillTranscriptValidity,
   refreshTranscriptValidity,
@@ -165,7 +165,7 @@ describe('a sample of the audio', () => {
     writeFileSync(ownedWiki, '---\ngenerator: hidock-meeting-wiki\nwiki_schema: 1\nrecording_id: old-sparse\n---\nBad summary\n')
     writeFileSync(otherWiki, 'An unrelated document')
     await backfillTranscriptValidity()
-    expect(stored('old-sparse')).toMatchObject({ validity_status: 'incomplete', validity_version: 2 })
+    expect(stored('old-sparse')).toMatchObject({ validity_status: 'incomplete', validity_version: 3 })
     expect(queryOne('SELECT full_text, summary, title_suggestion FROM transcripts WHERE recording_id = ?', ['old-sparse']))
       .toEqual({ full_text: 'keep original', summary: null, title_suggestion: null })
     expect(queryOne<{ meeting_id: string | null }>('SELECT meeting_id FROM recordings WHERE id = ?', ['old-sparse'])?.meeting_id).toBeNull()
@@ -176,6 +176,46 @@ describe('a sample of the audio', () => {
     run(`UPDATE recordings SET meeting_id = 'old-meeting', correlation_method = 'manual' WHERE id = 'old-sparse'`)
     refreshTranscriptValidity('old-sparse')
     expect(queryOne<{ meeting_id: string | null }>('SELECT meeting_id FROM recordings WHERE id = ?', ['old-sparse'])?.meeting_id).toBe('old-meeting')
+  })
+  it('keeps Rec54 gap-only metadata and eligibility while retracting text ratings', async () => {
+    seed('rec54', [[160, 600]])
+    run(`UPDATE audio_profiles SET sound_seconds = 3971.015 WHERE recording_id = 'rec54'`)
+    run(`UPDATE transcripts SET speakers = ?, summary = 'real summary', title_suggestion = 'real title',
+      validity_version = 2, validity_status = 'valid' WHERE recording_id = 'rec54'`,
+      [JSON.stringify([{ start: 0, end: 600, text: 'real '.repeat(5463) }, { start: 614, end: 1402, text: 'three real words' }])])
+    run(`UPDATE recordings SET meeting_id = 'old-meeting', correlation_method = 'ai_transcript_match' WHERE id = 'rec54'`)
+    run(`INSERT INTO knowledge_captures (id, title, source_recording_id, quality_rating, quality_source, quality_method, captured_at)
+      VALUES ('cap54', 'real title', 'rec54', 'garbage', 'ai', 'content', '2026-10-04')`)
+    const wikiPath = join(paths.cache, 'transcripts', 'wiki', 'rec54.md')
+    writeFileSync(wikiPath, '---\ngenerator: hidock-meeting-wiki\nwiki_schema: 1\nrecording_id: rec54\n---\nReal content\n')
+    await backfillTranscriptValidity()
+    expect(existsSync(wikiPath)).toBe(true)
+    expect(isRecordingGraphIngestable('rec54')).toBe(true)
+    expect(stored('rec54')?.validity_status).toBe('incomplete')
+    expect(JSON.parse(stored('rec54')!.validity_json!).reasons[0].detail).toBe('10:14 to 23:22 has 3 words.')
+    expect(queryOne('SELECT summary, title_suggestion FROM transcripts WHERE recording_id = ?', ['rec54']))
+      .toEqual({ summary: 'real summary', title_suggestion: 'real title' })
+    expect(queryOne<{ meeting_id: string }>('SELECT meeting_id FROM recordings WHERE id = ?', ['rec54'])?.meeting_id).toBe('old-meeting')
+    expect(getEligibleRecordingIds(['rec54']).eligible.has('rec54')).toBe(true)
+    expect(queryOne<{ quality_rating: string }>('SELECT quality_rating FROM knowledge_captures WHERE id = ?', ['cap54'])?.quality_rating).toBe('unrated')
+  })
+  it('keeps incomplete verdicts without valid gap reasons excluded', () => {
+    seed('unknown-incomplete', [[160, 600]])
+    for (const json of ['{}', '{"reasons":[]}', '{"reasons":[{"code":"sparse_speech"}]}', '{"reasons":[{}]}', 'broken json']) {
+      run(`UPDATE transcripts SET validity_status = 'incomplete', validity_json = ? WHERE recording_id = 'unknown-incomplete'`, [json])
+      expect(getEligibleRecordingIds(['unknown-incomplete']).eligible.has('unknown-incomplete')).toBe(false)
+      expect(isRecordingGraphIngestable('unknown-incomplete')).toBe(false)
+    }
+  })
+  it('retracts Rec98 content rating, preserving audio and owner ratings', () => {
+    for (const [id, source, method] of [['cap98', 'ai', 'content'], ['cap98audio', 'ai', 'audio'], ['cap98owner', 'user', 'content']]) {
+      run(`INSERT INTO knowledge_captures (id, title, source_recording_id, quality_rating, quality_source, quality_method, captured_at)
+        VALUES (?, 'title', 'rec98', 'garbage', ?, ?, '2026-10-04')`, [id, source, method])
+    }
+    refreshTranscriptValidity('rec98')
+    expect(getEligibleRecordingIds(['rec98'], { forTranscription: true }).eligible.has('rec98')).toBe(false)
+    expect(queryOne<{ quality_rating: string }>('SELECT quality_rating FROM knowledge_captures WHERE id = ?', ['cap98'])?.quality_rating).toBe('unrated')
+    for (const id of ['cap98audio', 'cap98owner']) expect(queryOne<{ quality_rating: string }>('SELECT quality_rating FROM knowledge_captures WHERE id = ?', [id])?.quality_rating).toBe('garbage')
   })
   it('settles a doubtful transcript only while it is the transcript that was sampled', () => {
     seed('doubt', [[160, 600]])

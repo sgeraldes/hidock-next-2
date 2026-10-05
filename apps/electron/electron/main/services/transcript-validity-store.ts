@@ -16,6 +16,7 @@ import {
   assessTranscriptValidity,
   VALIDITY_VERSION,
   isUnusableValidity,
+  isGapOnlyValidity,
   type TranscriptValidity,
   type ValidityInput,
   type ValiditySegment
@@ -197,8 +198,20 @@ export function refreshTranscriptValidity(recordingId: string): TranscriptValidi
     VALIDITY_VERSION,
     recordingId
   ])
-  if (isUnusableValidity(validity.status)) retireUnusableDerivedMetadata(recordingId)
+  if (isUnusableValidity(validity.status)) {
+    retractContentRating(recordingId)
+    if (!isGapOnlyValidity(validity)) retireUnusableDerivedMetadata(recordingId)
+  }
   return validity
+}
+
+/** A bad transcript cannot keep its own content rating as a recovery gate. */
+function retractContentRating(recordingId: string): void {
+  runNoSave(`UPDATE knowledge_captures SET quality_rating = 'unrated', quality_reasons = NULL,
+    quality_source = NULL, quality_method = NULL, quality_confidence = NULL, quality_assessed_at = NULL
+    WHERE source_recording_id = ? AND quality_source = 'ai' AND quality_method = 'content'
+      AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM recordings r WHERE r.id = source_recording_id
+        AND r.deleted_at IS NULL AND COALESCE(r.personal, 0) = 0)`, [recordingId])
 }
 
 /** Retract machine results only. Audio, transcript text and owner decisions survive. */
@@ -259,10 +272,11 @@ export async function backfillTranscriptValidity(
         recording_id
       ])
       if (isUnusableValidity(validity.status)) {
-        retireUnusableDerivedMetadata(recording_id)
+        retractContentRating(recording_id)
+        if (!isGapOnlyValidity(validity)) retireUnusableDerivedMetadata(recording_id)
         // Graph and RAG reads already share the validity eligibility gate. A wiki
         // is an external file, so explicitly reconcile it when a verdict changes.
-        if (row.validity_status !== validity.status) {
+        if (!isGapOnlyValidity(validity) && row.validity_status !== validity.status) {
           try {
             const { reconcileWikiEligibility } = await import('./meeting-wiki')
             reconcileWikiEligibility(recording_id)

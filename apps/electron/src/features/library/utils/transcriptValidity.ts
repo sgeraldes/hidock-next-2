@@ -28,7 +28,7 @@ export const VALIDITY_LABELS: Record<HeldValidity, { chip: string; label: string
   incomplete: {
     chip: 'Transcript incomplete',
     label: 'Transcript incomplete: detected speech is missing from the text',
-    detail: 'Stars, kind and summary wait for a complete transcript.'
+    detail: 'Some speech is missing. Transcribe again to recover it.'
   },
   doubtful: {
     chip: 'Transcript in doubt',

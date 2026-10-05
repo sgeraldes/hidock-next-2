@@ -29,7 +29,7 @@
 import { FRAME_SECONDS, LOUD_DB, LOUD_GAIN } from './audio-profile'
 
 /** Bumped when a rule changes, so stored verdicts are recomputed. */
-export const VALIDITY_VERSION = 2
+export const VALIDITY_VERSION = 3
 
 export type ValidityStatus = 'audio' | 'invalid' | 'incomplete' | 'doubtful' | 'valid'
 
@@ -236,7 +236,18 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
     for (const s of speech) for (const t of coverage) covered += Math.max(0, Math.min(s.end, t.end) - Math.max(s.start, t.start))
     measures.uncoveredDiarizedSpeechShare = Math.max(0, 1 - covered / speechSeconds)
     if (measures.uncoveredDiarizedSpeechShare > MAX_UNCOVERED_SPEECH_SHARE) {
-      completenessReasons.push({ code: 'uncovered_speech', detail: `${percent(measures.uncoveredDiarizedSpeechShare)} of detected speech has no transcript segment.` })
+      const missing: Array<{ start: number; end: number }> = []
+      for (const turn of speech) {
+        let cursor = turn.start
+        for (const text of coverage) {
+          if (text.end <= cursor || text.start >= turn.end) continue
+          if (text.start > cursor) missing.push({ start: cursor, end: Math.min(text.start, turn.end) })
+          cursor = Math.max(cursor, Math.min(text.end, turn.end))
+        }
+        if (cursor < turn.end) missing.push({ start: cursor, end: turn.end })
+      }
+      const ranges = missing.map(s => `${clock(s.start)} to ${clock(s.end)}`).join(', ')
+      completenessReasons.push({ code: 'uncovered_speech', detail: `${percent(measures.uncoveredDiarizedSpeechShare)} of detected speech has no transcript segment: ${ranges}.` })
     }
   }
   for (const s of input.segments) {
@@ -244,7 +255,7 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
     const duration = s.end - s.start
     const words = countWords(s.text)
     if (duration > LONG_SEGMENT_SECONDS && words / duration < MIN_LONG_SEGMENT_WORDS_PER_SECOND) {
-      completenessReasons.push({ code: 'sparse_long_segment', detail: `One segment covers ${clock(s.start)} to ${clock(s.end)} with ${words} ${words === 1 ? 'word' : 'words'}.` })
+      completenessReasons.push({ code: 'sparse_long_segment', detail: `${clock(s.start)} to ${clock(s.end)} has ${words} ${words === 1 ? 'word' : 'words'}.` })
     }
   }
   if (input.integrityStatus === 'broken') {
@@ -419,4 +430,10 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
 /** A transcript nothing may be built on (summary, categorization, search, people). */
 export function isUnusableValidity(status: string | null | undefined): boolean {
   return status === 'invalid' || status === 'incomplete' || status === 'doubtful'
+}
+
+/** Gap-only text remains useful; density failures cannot support derived content. */
+export function isGapOnlyValidity(validity: TranscriptValidity): boolean {
+  return validity.status === 'incomplete' && validity.reasons.length > 0 &&
+    validity.reasons.every(r => ['sparse_long_segment', 'uncovered_speech', 'speech_after_the_end'].includes(r.code))
 }
