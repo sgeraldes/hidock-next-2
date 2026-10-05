@@ -9,6 +9,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { ArtifactReader } from '../ArtifactReader'
+import { MemoryRouter } from 'react-router-dom'
 import type { UnifiedRecording } from '@/types/unified-recording'
 
 interface MockArtifactSummary {
@@ -65,6 +66,16 @@ async function waitForArtifact() {
 }
 
 describe('ArtifactReader', () => {
+  it('shows link readable text and a video action that opens its linked audio', async () => {
+    mockGetForCapture.mockResolvedValue({ success: true, data: [{ id: 'link', kind: 'link', metadata: {}, createdAt: '', size: 1 }] })
+    mockGetContent.mockResolvedValue({ success: true, data: { kind: 'link', textContent: 'https://example.test\nReadable page' } })
+    const view = render(<ArtifactReader recording={makeRecording({ filename: 'Page.url' })} />)
+    expect(await screen.findByText(/Readable page/)).toBeInTheDocument()
+    view.unmount()
+    mockGetForCapture.mockResolvedValue({ success: true, data: [{ id: 'video', kind: 'video', metadata: { audioRecordingId: 'audio' }, createdAt: '', size: 1 }] })
+    render(<MemoryRouter><ArtifactReader recording={makeRecording({ filename: 'Clip.mp4' })} /></MemoryRouter>)
+    expect(await screen.findByRole('button', { name: 'Open video audio and transcript' })).toBeInTheDocument()
+  })
   it('while loading, shows placeholder lines named "Loading artifact", not a sentence', async () => {
     let finish: (v: unknown) => void = () => {}
     mockGetForCapture.mockReturnValue(new Promise((res) => { finish = res }))

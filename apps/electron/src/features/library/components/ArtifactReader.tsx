@@ -9,6 +9,7 @@
  */
 
 import { useState, useEffect, useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { FolderOpen, Sparkles, FileText } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -272,6 +273,18 @@ function TextSurface({ content }: { content: ArtifactContent | null }) {
   )
 }
 
+/** Video stays in the artifact store; its linked audio uses the normal recording reader. */
+function VideoSurface({ artifact }: { artifact: ArtifactSummary }) {
+  const navigate = useNavigate()
+  const recordingId = getMetadataValue(artifact.metadata, 'audioRecordingId')
+  return <div className="space-y-3 rounded-md border border-border p-3">
+    <p className="text-sm">Video saved locally. Use Open folder to view the original file.</p>
+    {typeof recordingId === 'string'
+      ? <Button variant="outline" size="sm" onClick={() => navigate('/library', { state: { selectedId: recordingId } })}>Open video audio and transcript</Button>
+      : <p className="text-sm text-muted-foreground">No extracted audio is available.</p>}
+  </div>
+}
+
 /** Graceful fallback when we cannot render a preview for the kind. */
 function FallbackSurface({ kind }: { kind: string }) {
   return (
@@ -366,14 +379,15 @@ export function ArtifactReader({ recording, onAskAboutSource }: ArtifactReaderPr
   }
 
   const kind = normaliseKind(artifact.kind)
-  const isTextKind = ['note', 'txt', 'md', 'json', 'data'].includes(kind)
+  const isTextKind = ['note', 'txt', 'md', 'json', 'data', 'link'].includes(kind)
 
   return (
     <div className="space-y-4">
       {kind === 'image' && <ImageSurface artifact={artifact} content={content} />}
       {kind === 'pdf' && <PdfSurface artifact={artifact} content={content} />}
+      {kind === 'video' && <VideoSurface artifact={artifact} />}
       {isTextKind && <TextSurface content={content} />}
-      {!['image', 'pdf'].includes(kind) && !isTextKind && <FallbackSurface kind={kind} />}
+      {!['image', 'pdf', 'video'].includes(kind) && !isTextKind && <FallbackSurface kind={kind} />}
 
       <RelatedData artifact={artifact} recording={recording} />
       <ArtifactActions artifact={artifact} onAskAboutSource={onAskAboutSource} />
