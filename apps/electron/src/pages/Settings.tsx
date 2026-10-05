@@ -1,3 +1,4 @@
+import { RetrievalTraceSettings } from '@/features/settings/RetrievalTraceSettings'
 import { useEffect, useState, useCallback, useMemo, useRef, type KeyboardEvent } from 'react'
 import {
   Save,
@@ -1745,6 +1746,7 @@ export function Settings({
                 <CardDescription>Configure chat provider for querying meetings</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
+                <RetrievalTraceSettings />
                 <div>
                   <label id="chatProvider-label" className="text-sm font-medium">Chat Provider</label>
                   <div className="flex gap-2 mt-2" role="group" aria-labelledby="chatProvider-label">
