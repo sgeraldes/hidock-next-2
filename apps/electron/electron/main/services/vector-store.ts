@@ -3,7 +3,7 @@
  * Simple in-memory vector store with SQLite persistence for meeting transcript embeddings
  */
 
-import { getDatabase, getDatabasePath, isRecordingProcessable, queryOne, acquireOrganizationCheckpointBudget } from './database'
+import { getDatabase, getDatabasePath, isRecordingProcessable, queryOne, runMany, acquireOrganizationCheckpointBudget } from './database'
 import { dirname, join } from 'path'
 import { existsSync, unlinkSync } from 'fs'
 import {
@@ -1082,53 +1082,61 @@ class VectorStore {
     // boxed number arrays. Fresh backfills must have the same footprint as restore.
     const arena = new Float32Array(embeddings.reduce((sum, vector) => sum + (vector?.length ?? 0), 0))
     let offset = 0
-    const release = acquireOrganizationCheckpointBudget()
     const added: VectorDocument[] = []
+    const pendingRows: unknown[][] = []
     let indexed = 0
+    for (let i = 0; i < chunks.length; i++) {
+      const generated = embeddings[i]
+      if (!generated) continue
+      arena.set(generated, offset)
+      const embedding = arena.subarray(offset, offset + generated.length)
+      offset += generated.length
+
+      // The partition is part of the id: the same recording+chunk indexed
+      // under two providers must NEVER collide (INSERT OR REPLACE would
+      // silently overwrite the other partition's row).
+      const id = `${chunkMeta.recordingId || 'doc'}_${i}_${partition ?? 'unknown'}_${Date.now()}`
+      const doc: VectorDocument = {
+        id,
+        // No `content` — see addDocument. This is the path a full backfill
+        // takes, so holding the text here is exactly what would undo the
+        // change: 125k chunks reindexed would rebuild the ~206 MB.
+        embedding,
+        metadata: { ...chunkMeta, chunkIndex: i, embedProvider: partition, embedDims: embedding.length }
+      }
+      added.push(doc)
+      pendingRows.push([
+        id,
+        chunks[i],
+        Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength),
+        chunkMeta.meetingId || null,
+        chunkMeta.recordingId || null,
+        i,
+        chunkMeta.timestamp || null,
+        chunkMeta.subject || null,
+        chunkMeta.sourceType || null,
+        chunkMeta.captureId || null,
+        partition ?? null,
+        embedding.length
+      ])
+      indexed++
+    }
+
+    // Separate allocation/copying from the durable commit's disk wait. Recheck
+    // eligibility after this yield, immediately beside the atomic write.
+    await yieldToEventLoop()
+    if (signal?.aborted || (shouldPersist && !shouldPersist())) return 0
+    const release = acquireOrganizationCheckpointBudget()
     db.run('SAVEPOINT vector_transcript')
     try {
-      for (let i = 0; i < chunks.length; i++) {
-        const generated = embeddings[i]
-        if (!generated) continue
-        arena.set(generated, offset)
-        const embedding = arena.subarray(offset, offset + generated.length)
-        offset += generated.length
-
-        // The partition is part of the id: the same recording+chunk indexed
-        // under two providers must NEVER collide (INSERT OR REPLACE would
-        // silently overwrite the other partition's row).
-        const id = `${chunkMeta.recordingId || 'doc'}_${i}_${partition ?? 'unknown'}_${Date.now()}`
-        const doc: VectorDocument = {
-          id,
-          // No `content` — see addDocument. This is the path a full backfill
-          // takes, so holding the text here is exactly what would undo the
-          // change: 125k chunks reindexed would rebuild the ~206 MB.
-          embedding,
-          metadata: { ...chunkMeta, chunkIndex: i, embedProvider: partition, embedDims: embedding.length }
-        }
-        added.push(doc)
-        db.run(
-          `INSERT OR REPLACE INTO vector_embeddings
-           (id, content, embedding, meeting_id, recording_id, chunk_index, timestamp, subject, source_type, capture_id, embed_provider, embed_dims)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            id,
-            chunks[i],
-            Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength),
-            chunkMeta.meetingId || null,
-            chunkMeta.recordingId || null,
-            i,
-            chunkMeta.timestamp || null,
-            chunkMeta.subject || null,
-            chunkMeta.sourceType || null,
-            chunkMeta.captureId || null,
-            partition ?? null,
-            embedding.length
-          ]
-        )
-        indexed++
-      }
-
+      // Reuse one native statement for the recording. Preparing one per chunk
+      // creates hundreds of thousands of native objects during corpus backfill.
+      runMany(
+        `INSERT OR REPLACE INTO vector_embeddings
+         (id, content, embedding, meeting_id, recording_id, chunk_index, timestamp, subject, source_type, capture_id, embed_provider, embed_dims)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        pendingRows
+      )
       db.run('RELEASE SAVEPOINT vector_transcript')
     } catch (error) {
       db.run('ROLLBACK TO SAVEPOINT vector_transcript')

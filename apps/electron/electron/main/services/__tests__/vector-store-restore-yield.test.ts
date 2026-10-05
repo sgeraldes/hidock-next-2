@@ -19,6 +19,7 @@ const deps = vi.hoisted(() => ({
 }))
 vi.mock('../event-loop', () => ({ yieldToEventLoop: deps.yield, mainThreadBudget: () => Object.assign(deps.yield, { reset: () => {} }) }))
 vi.mock('../database', () => ({
+  runMany: (sql: string, rows: any[][]) => { for (const row of rows) db.run(sql, row) },
   acquireOrganizationCheckpointBudget: () => () => {},
   queryOne: (sql: string, params: string[]) => { const stmt=db.prepare(sql); try {stmt.bind(params);return stmt.step()?stmt.getAsObject():undefined} finally {stmt.free()} },
   getDatabase: () => db,

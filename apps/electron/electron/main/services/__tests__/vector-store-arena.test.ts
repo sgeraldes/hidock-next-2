@@ -57,6 +57,7 @@ vi.mock('../recording-eligibility', () => ({
 
 let dbInstance: import('sql.js').Database | null = null
 vi.mock('../database', () => ({
+  runMany: (sql: string, rows: any[][]) => { for (const row of rows) dbInstance!.run(sql, row) },
   getDatabase: () => dbInstance,
   getDatabasePath: () => join(CACHE_DIR, 'test.db'),
   isRecordingProcessable: () => true,

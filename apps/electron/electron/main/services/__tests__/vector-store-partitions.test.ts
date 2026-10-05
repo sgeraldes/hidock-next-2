@@ -59,6 +59,7 @@ vi.mock('../recording-eligibility', () => ({
 
 let dbInstance: import('sql.js').Database | null = null
 vi.mock('../database', () => ({
+  runMany: (sql: string, rows: any[][]) => { for (const row of rows) dbInstance!.run(sql, row) },
   acquireOrganizationCheckpointBudget: () => () => {},
   queryOne: (sql: string, params: string[]) => {
     const stmt = dbInstance!.prepare(sql)

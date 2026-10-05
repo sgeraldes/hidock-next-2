@@ -31,6 +31,7 @@ const deps = vi.hoisted(() => ({
 }))
 
 vi.mock('../database', () => ({
+  runMany: (_sql: string, rows: unknown[][]) => { for (const row of rows) deps.indexedRecordingIds.push(row[4] as string) },
   acquireOrganizationCheckpointBudget: () => () => {},
   queryOne: (sql: string, params: string[]) => sql.startsWith('SELECT 1') ? undefined : deps.backfillRows.find((row) => row.recording_id === params[0]),
   getDatabase: () => ({
