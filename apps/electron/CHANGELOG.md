@@ -9,6 +9,12 @@ pairs with it, gives it the Hugging Face token and decides when it steps aside.
 
 ### Changes
 
+- **A local record of queries.** Query recording is on by default for the chat, Explore and agents,
+  in `<data folder>\traces\retrieval-traces.db`. Query text is encrypted and erased after 30 days;
+  traces are deleted after 90 days, with a 1 GiB cap. Settings > Assistant has "Record queries" and
+  "Keep the text of my queries"; turning off the second erases stored query text. Nothing leaves the
+  machine through query recording.
+
 - **Reference labels for recording kinds.** Settings > Pipeline keeps a sample of up to 40 valid
   recordings for your own labels, with keyboard choices and progress, ready for engine comparisons.
 - **A fresh restore point before database updates.** Schema migrations now verify a current backup,
