@@ -528,6 +528,21 @@ async function runQueueItem(
       // 'completed', jump progress to 100, and emit transcription:completed
       // for content that does not exist. Leave it cancelled.
       updateQueueItem(item.id, 'cancelled')
+      // Enqueue already projected pending. A gate rejection must leave an idle
+      // recording, while preserving any transcript or terminal status saved
+      // before a later cancellation gate.
+      const cancelledRecording = getRecordingById(item.recording_id)
+      const transcriptionWasActive = cancelledRecording?.transcription_status === 'pending' || cancelledRecording?.transcription_status === 'processing'
+      const legacyWasActive = cancelledRecording?.status === 'pending' || cancelledRecording?.status === 'processing'
+      if (transcriptionWasActive || legacyWasActive) {
+        const restoredStatus = queryOne<{ id: string }>('SELECT id FROM transcripts WHERE recording_id = ? LIMIT 1', [item.recording_id])
+          ? 'complete'
+          : 'none'
+        if (transcriptionWasActive) updateRecordingTranscriptionStatus(item.recording_id, restoredStatus)
+        if (legacyWasActive) {
+          updateRecordingStatus(item.recording_id, restoredStatus)
+        }
+      }
       clearQueueHints(item.recording_id)
       console.log(`[Transcription] ${item.recording_id} cancelled mid-run (ineligible) — queue item marked cancelled`)
     } else if (outcome.status === 'no_speech') {

@@ -207,7 +207,53 @@ describe('useOperations', () => {
       const { toast } = await import('@/components/ui/toaster')
       expect(success).toBe(false)
       expect(mockAddToQueue).not.toHaveBeenCalled()
+      expect(mockUpdateStatus).not.toHaveBeenCalled()
       expect(toast).toHaveBeenCalledWith(expect.objectContaining({ description: 'Recording is personal', variant: 'error' }))
+    })
+
+    it('preserves status when enqueue throws', async () => {
+      mockAddToQueueIPC.mockRejectedValueOnce(new Error('Eligibility lookup failed'))
+      const { result } = renderHook(() => useOperations())
+      await act(async () => {
+        expect(await result.current.queueTranscription({
+          id: 'error', filename: 'error.wav', location: 'local-only', localPath: 'G:\\Recordings\\error.wav',
+          transcriptionStatus: 'error', syncStatus: 'synced', size: 1024, duration: 60, dateRecorded: new Date()
+        } as any)).toBe(false)
+      })
+      expect(mockUpdateStatus).not.toHaveBeenCalled()
+    })
+
+    it('writes pending only after enqueue succeeds', async () => {
+      mockAddToQueueIPC.mockImplementationOnce(async () => {
+        expect(mockUpdateStatus).not.toHaveBeenCalled()
+        return 'accepted'
+      })
+      const { result } = renderHook(() => useOperations())
+      await act(async () => {
+        expect(await result.current.queueTranscription({
+          id: 'accepted', filename: 'accepted.wav', location: 'local-only', localPath: 'G:\\Recordings\\accepted.wav',
+          transcriptionStatus: 'error', syncStatus: 'synced', size: 1024, duration: 60, dateRecorded: new Date()
+        } as any)).toBe(true)
+      })
+      expect(mockUpdateStatus).toHaveBeenCalledWith('accepted', 'pending')
+    })
+
+    it('preserves rejected bulk statuses and updates only accepted recordings', async () => {
+      mockAddToQueueIPC.mockResolvedValueOnce({ success: false, error: 'Value excluded' })
+        .mockRejectedValueOnce(new Error('Eligibility lookup failed'))
+        .mockImplementationOnce(async () => {
+          expect(mockUpdateStatus).not.toHaveBeenCalled()
+          return 'bulk-accepted'
+        })
+      const { result } = renderHook(() => useOperations())
+      await act(async () => {
+        expect(await result.current.queueBulkTranscriptions(['error', 'no_speech', 'none'].map((status) => ({
+          id: status, filename: `${status}.wav`, location: 'local-only', localPath: `G:\\Recordings\\${status}.wav`,
+          transcriptionStatus: status, syncStatus: 'synced', size: 1024, duration: 60, dateRecorded: new Date()
+        })) as any)).toBe(1)
+      })
+      expect(mockUpdateStatus.mock.calls).toEqual([['none', 'pending']])
+      expect(mockAddToQueue.mock.calls).toEqual([['bulk-accepted', 'none', 'none.wav']])
     })
 
     it('routes the primary Re-transcribe action through an explicit provider reprocess', async () => {

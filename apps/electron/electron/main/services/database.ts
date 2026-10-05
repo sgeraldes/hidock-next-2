@@ -34,7 +34,7 @@ export function hasDecisionLabelRecoveryFailed(): boolean {
   return decisionLabelRecoveryFailed
 }
 
-const SCHEMA_VERSION = 71
+const SCHEMA_VERSION = 72
 
 const DECISION_LABELS_DDL = `CREATE TABLE IF NOT EXISTS decision_label_sets (
     id TEXT PRIMARY KEY,
@@ -574,6 +574,7 @@ CREATE TABLE IF NOT EXISTS transcription_queue (
     progress INTEGER DEFAULT 0,
     error_message TEXT,
     provider TEXT,
+    owner_requested INTEGER NOT NULL DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     started_at TEXT,
     completed_at TEXT,
@@ -3482,6 +3483,12 @@ const MIGRATIONS: Record<number, () => void> = {
   71: () => {
     getDatabase().run(DECISION_LABELS_DDL)
   },
+  72: () => {
+    const database = getDatabase()
+    if (!getTableColumns(database, 'transcription_queue').includes('owner_requested')) {
+      database.run('ALTER TABLE transcription_queue ADD COLUMN owner_requested INTEGER NOT NULL DEFAULT 0')
+    }
+  },
 }
 
 /**
@@ -4502,7 +4509,6 @@ export function getDatabase(): SqlJsDatabase {
 }
 
 export function closeDatabase(): void {
-  ownerRequestedQueueIds.clear()
   engine.closeDatabase()
 }
 
@@ -8258,10 +8264,6 @@ export interface QueueItem {
   completed_at?: string
 }
 
-// Scoped to queue row ids, so later automatic jobs cannot inherit an override.
-// A restart drops these requests and restores the default value exclusion.
-const ownerRequestedQueueIds = new Set<string>()
-
 export function addToQueue(
   recordingId: string,
   provider?: string,
@@ -8284,21 +8286,22 @@ export function addToQueue(
     LIMIT 1
   `, [recordingId])
   if (existing) {
-    if (options.ownerRequested === true) ownerRequestedQueueIds.add(existing.id)
+    if (options.ownerRequested === true) {
+      run('UPDATE transcription_queue SET owner_requested = 1 WHERE id = ?', [existing.id])
+    }
     return existing.id
   }
 
   const id = crypto.randomUUID()
   runInTransaction(() => {
     run(
-      'INSERT INTO transcription_queue (id, recording_id, provider) VALUES (?, ?, ?)',
-      [id, recordingId, provider ?? null]
+      'INSERT INTO transcription_queue (id, recording_id, provider, owner_requested) VALUES (?, ?, ?, ?)',
+      [id, recordingId, provider ?? null, options.ownerRequested === true ? 1 : 0]
     )
     // Keep the durable recording projection aligned at the enqueue chokepoint.
     // This covers auto-download, manual, and bulk enqueue paths immediately.
     updateRecordingTranscriptionStatus(recordingId, 'pending')
   })
-  if (options.ownerRequested === true) ownerRequestedQueueIds.add(id)
   return id
 }
 
@@ -8315,7 +8318,7 @@ export function getQueueItems(status?: string): (QueueItem & { filename?: string
     ${status ? 'WHERE tq.status = ?' : ''}
     ORDER BY r.date_recorded DESC, tq.created_at ASC`
   const rows = queryAll<QueueItem & { filename?: string; date_recorded?: string }>(sql, status ? [status] : [])
-  return rows.map((row) => ({ ...row, owner_requested: ownerRequestedQueueIds.has(row.id) }))
+  return rows.map((row) => ({ ...row, owner_requested: Number(row.owner_requested) === 1 }))
 }
 
 /**
@@ -8377,7 +8380,6 @@ export function getActionableQueueItems(): ActionableQueueItem[] {
 }
 
 export function updateQueueItem(id: string, status: string, errorMessage?: string): void {
-  if (status !== 'pending' && status !== 'processing') ownerRequestedQueueIds.delete(id)
   if (status === 'processing') {
     run(
       `UPDATE transcription_queue
