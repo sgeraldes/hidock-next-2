@@ -59,6 +59,8 @@ export { CUSTOM_RECORDING_FORMAT_GET, CUSTOM_RECORDING_FORMAT_SET, encodeCustomR
 export type { CustomRecordingFormat, CustomRecordingFormatResponse } from './custom-recording-format.js'
 export { CUSTOM_MARKER_RULES_GET, CUSTOM_MARKER_RULES_SET, encodeCustomMarkerRules, parseCustomMarkerRules, parseCustomMarkerRulesResponse } from './custom-marker-rules.js'
 export type { CustomMarkerRules, CustomMarkerRulesResponse } from './custom-marker-rules.js'
+export { REALTIME_CHANNEL_METADATA_BYTES, REALTIME_CHANNEL_FRAME_BYTES, REALTIME_CHANNEL_SAMPLE_RATE_HZ, REALTIME_CHANNEL_IDS, splitRealtimeChannelsTap } from './realtime-channels.js'
+export type { RealtimeChannelId, RealtimeChannelPcm, RealtimeChannelsTap } from './realtime-channels.js'
 export { FIRMWARE_CONSOLE_STATUS, FIRMWARE_CONSOLE_MAX_RESPONSE_BYTES, FIRMWARE_CONSOLE_REQUESTS,
   isFirmwareConsoleRequest, encodeFirmwareConsoleRequest, parseFirmwareConsoleStatus } from './firmware-console.js'
 export type { FirmwareConsoleRequest, FirmwareConsoleStatus } from './firmware-console.js'
