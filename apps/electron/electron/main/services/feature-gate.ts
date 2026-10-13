@@ -16,6 +16,7 @@
 
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import { getConfig } from './config'
+import { isRecoveryMode, isFirmwareQualificationLaunch } from '../recovery-mode'
 import {
   channelFeature,
   isTeardownChannel,
@@ -32,8 +33,9 @@ export class FeatureDisabledError extends Error {
   constructor(featureId: FeatureId, channel: string) {
     const label = FEATURES[featureId]?.label ?? featureId
     super(
-      `Feature "${label}" is disabled (channel ${channel}). ` +
-        `Enable it in Settings → Features to use this.`
+      isRecoveryMode()
+        ? `Feature "${label}" is disabled for this recovery launch (channel ${channel}). Saved settings are unchanged.`
+        : `Feature "${label}" is disabled (channel ${channel}). Enable it in Settings → Features to use this.`
     )
     this.name = 'FeatureDisabledError'
     this.featureId = featureId
@@ -49,8 +51,24 @@ export function getResolvedFeatures(): ResolvedFeatures {
   } catch {
     features = undefined
   }
-  return resolveFeatureState(features)
+  const resolved = resolveFeatureState(features)
+  if (isRecoveryMode()) {
+    for (const feature of Object.values(resolved)) feature.enabled = false
+    if (isFirmwareQualificationLaunch()) resolved['device-sync'].enabled = true
+  }
+  return resolved
 }
+
+/** The only device-sync channels a recovery launch answers: connection, identity and
+ * the firmware install. Scans, downloads, deletes, formats, live audio and the sync
+ * pipeline stay closed, so the renderer cannot start device work while a firmware
+ * attempt is being prepared or observed. */
+const RECOVERY_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
+  'jensen:connect', 'jensen:tryConnect', 'jensen:disconnect', 'jensen:getState',
+  'jensen:isConnected', 'jensen:getModel', 'jensen:isP1Device', 'jensen:getDeviceInfo', 'jensen:getCardInfo',
+  'jensen:getFirmwareUpdatePreflight', 'jensen:prepareFirmwareInstall', 'jensen:getFirmwareInstallAttempts',
+  'jensen:executeFirmwareInstall', 'jensen:observeFirmwareInstall',
+])
 
 /**
  * The effective-runtime feature state captured at boot from the DESIRED config,
@@ -144,6 +162,9 @@ export function gateInvokeHandler(channel: string, handler: InvokeHandler): Invo
   if (owner === null) return handler // shared/core channel — never gated
   const teardown = !FEATURES[owner].runtimeToggleable && isTeardownChannel(channel)
   return (event: IpcMainInvokeEvent, ...args: any[]) => {
+    if (owner === 'device-sync' && isRecoveryMode() && !RECOVERY_DEVICE_CHANNELS.has(channel)) {
+      throw new FeatureDisabledError(owner, channel)
+    }
     const allowed = teardown ? isFeatureBootEnabled(owner) : isFeatureEnabled(owner)
     if (!allowed) {
       throw new FeatureDisabledError(owner, channel)

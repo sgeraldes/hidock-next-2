@@ -1,0 +1,123 @@
+import { createHash, randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { ACCEPTED_H1E_FIRMWARE, parseFirmwareImage, permitsFirmwareVersion, isFirmwareUpdateCardReady } from '@hidock/jensen-protocol'
+import type { JensenDevice } from '@hidock/jensen-protocol'
+import { FirmwareInstallJournal, type InstallAttempt } from './firmware-install-journal'
+
+const IMAGE_VERSION_NAME = '6.3.4_restore001'
+const hash = (value: string | Uint8Array): string => createHash('sha256').update(value).digest('hex')
+export interface FirmwareInstallDependencies {
+  device(): JensenDevice
+  journal: FirmwareInstallJournal
+  artifactPath: string
+  idle(): boolean
+  /** Must be explicitly true for prepare/execute. Absent means false (fail closed). */
+  qualificationEnabled?: boolean
+  /** True while any other writer still owns device storage. A missing or throwing
+   * check fences writes; status and boot observation stay available. */
+  hasUnresolvedStorageOwnership?: () => Promise<boolean>
+  serialize<T>(fn: () => Promise<T>): Promise<T>
+  now?: () => number
+  sleep?: (ms: number) => Promise<void>
+}
+/** Sole-owner installation of the one pinned 6.3.4 image. Preparing and observing
+ * are read-only. Executing a prepared token is the only entry which sends CMD8/9;
+ * it is never retried automatically and never goes to an equal or older version. */
+export class FirmwareInstallService {
+  private now: () => number
+  private sleep: (ms: number) => Promise<void>
+  constructor(private deps: FirmwareInstallDependencies) {
+    this.now = deps.now ?? Date.now
+    this.sleep = deps.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)))
+  }
+  private image(): Uint8Array {
+    const image = new Uint8Array(readFileSync(this.deps.artifactPath)), metadata = parseFirmwareImage(image)
+    if (image.length !== ACCEPTED_H1E_FIRMWARE.bytes || hash(image) !== ACCEPTED_H1E_FIRMWARE.sha256 ||
+      metadata?.versionNumber !== ACCEPTED_H1E_FIRMWARE.versionNumber || metadata.versionName !== IMAGE_VERSION_NAME) throw new Error('Firmware image failed its exact pin or container checks')
+    return image
+  }
+  private requireQualification(): void {
+    if (this.deps.qualificationEnabled !== true) throw new Error('Firmware qualification is not enabled for this launch')
+  }
+  private async requireResolvedStorageOwnership(): Promise<void> {
+    try {
+      if (this.deps.hasUnresolvedStorageOwnership && await this.deps.hasUnresolvedStorageOwnership() === false) return
+    } catch { /* Unreadable ownership cannot authorize a firmware transition. */ }
+    throw new Error('Storage write ownership is unresolved or unavailable')
+  }
+  status(): InstallAttempt[] { return this.deps.journal.all() }
+  prepare(target: unknown = 'hardened'): Promise<InstallAttempt> {
+    return this.deps.serialize(async () => {
+      this.requireQualification()
+      if (target !== 'hardened') throw new Error('Only the pinned 6.3.4 image is part of this build; stock firmware recovery is not available here')
+      await this.requireResolvedStorageOwnership()
+      if (this.deps.journal.pending().length || !this.deps.idle()) throw new Error('Device owner is busy or an update is unresolved')
+      const image = this.image(), device = this.deps.device(), info = await device.getDeviceInfo(5)
+      if (!info || info.model !== 'hidock-h1e' || !permitsFirmwareVersion(ACCEPTED_H1E_FIRMWARE.versionNumber, info.versionNumber)) {
+        throw new Error('Fresh H1E identity/version does not permit this image')
+      }
+      const ready = await device.getFirmwareUpdatePreflight(5)
+      if (!ready || ready.serialNumber !== info.serialNumber || ready.versionNumber !== info.versionNumber || ready.activeRecording || !isFirmwareUpdateCardReady(ready.card) || ready.card.freeMiB < Math.max(6, Math.ceil(image.length / 1048576)) || !this.deps.idle()) throw new Error('Strict native readiness or owner idle check failed')
+      await this.requireResolvedStorageOwnership()
+      const at = this.now()
+      return this.deps.journal.create({ id: randomUUID(), preparedAt: at, expiresAt: at + 300000,
+        serialHash: hash(info.serialNumber), sourceVersion: info.versionNumber,
+        targetVersion: ACCEPTED_H1E_FIRMWARE.versionNumber, imageSha256: hash(image), imageBytes: image.length })
+    })
+  }
+  execute(id: string, expectedSha256: string): Promise<InstallAttempt> {
+    return this.deps.serialize(async () => {
+      this.requireQualification()
+      await this.requireResolvedStorageOwnership()
+      const attempt = this.deps.journal.read(id), plan = attempt.plan, device = this.deps.device()
+      if (plan.targetVersion !== ACCEPTED_H1E_FIRMWARE.versionNumber) throw new Error('Prepared attempt does not target the pinned 6.3.4 image')
+      if (device.firmwareRecoveryReadOnly || device.deviceValidationReadOnly || attempt.state !== 'prepared' || this.deps.journal.pending().length || plan.expiresAt <= this.now() || plan.preparedAt > this.now() || expectedSha256 !== plan.imageSha256 || expectedSha256 !== ACCEPTED_H1E_FIRMWARE.sha256 || !this.deps.idle()) throw new Error('Prepared attempt expired, changed, unresolved, read-only or busy')
+      const image = this.image(), info = await device.getDeviceInfo(5)
+      if (!info || hash(info.serialNumber) !== plan.serialHash || info.versionNumber !== plan.sourceVersion || info.model !== 'hidock-h1e' || plan.imageBytes !== image.length ||
+        !permitsFirmwareVersion(ACCEPTED_H1E_FIRMWARE.versionNumber, info.versionNumber)) throw new Error('Device or image changed after preparation')
+      // The durable record must succeed BEFORE the native update request can run.
+      await this.requireResolvedStorageOwnership()
+      this.deps.journal.append(id, { state: 'requesting', at: this.now(), reason: 'explicit-prepared-execution' })
+      try {
+        const result = await device.uploadFirmware({ ...ACCEPTED_H1E_FIRMWARE, image }, { ...info, allowDowngrade: false })
+        const state = result.status === 'uploaded' ? 'awaiting-boot' : result.status === 'rejected' ? 'rejected' : 'uncertain'
+        const current = this.deps.journal.append(id, { state, at: this.now(), reason: result.reason.slice(0, 240) })
+        device.firmwareRecoveryReadOnly = state !== 'rejected'
+        return current
+      } catch {
+        device.firmwareRecoveryReadOnly = true
+        return this.deps.journal.append(id, { state: 'uncertain', at: this.now(), reason: 'host-exception-after-durable-request-boundary' })
+      }
+    })
+  }
+  /** Explicit observation resumes after a crash. No CMD8/9, CPU reset or power
+   * cycle is issued. Exact version equality avoids false downgrade confirmation. */
+  observe(id: string, deadlineMs = 180000): Promise<InstallAttempt> {
+    if (!Number.isInteger(deadlineMs) || deadlineMs < 0 || deadlineMs > 180000) return Promise.reject(new Error('Invalid boot observation deadline'))
+    return this.deps.serialize(async () => {
+      const attempt = this.deps.journal.read(id), device = this.deps.device()
+      if (!['requesting', 'awaiting-boot', 'uncertain'].includes(attempt.state)) throw new Error('No unresolved attempt to observe')
+      device.firmwareRecoveryReadOnly = true
+      const end = this.now() + deadlineMs
+      do {
+        try {
+          if (!device.isConnected()) await device.tryConnect()
+          const info = await device.getDeviceInfo(3)
+          if (info && hash(info.serialNumber) === attempt.plan.serialHash && info.versionNumber === attempt.plan.targetVersion) {
+            const result = await device.verifyFirmwareUpdateBoot({ serialNumber: info.serialNumber, versionNumber: attempt.plan.targetVersion, sourceVersionNumber: attempt.plan.sourceVersion, customRecording: true }, 3)
+            if (result.status === 'confirmed') {
+              // Clear process and durable fences only after strict native readbacks.
+              const current = this.deps.journal.append(id, { state: 'confirmed', at: this.now(), reason: 'exact-identity-version-capabilities-idle-card;image-not-attested' })
+              device.firmwareRecoveryReadOnly = false
+              return current
+            }
+          }
+        } catch { /* A reconnect/read failure is uncertainty, never a retry. */ }
+        if (this.now() >= end) break
+        await this.sleep(Math.min(3000, end - this.now()))
+      } while (this.now() <= end)
+      const current = this.deps.journal.read(id)
+      return this.deps.journal.append(id, { state: 'uncertain', at: this.now(), reason: current.state === 'requesting' ? 'host-restarted-before-transfer-outcome' : 'automatic-reboot-or-postboot-readbacks-unconfirmed' })
+    })
+  }
+}

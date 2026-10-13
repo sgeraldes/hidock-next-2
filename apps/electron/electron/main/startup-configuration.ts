@@ -3,12 +3,17 @@ import { existsSync } from 'fs'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { getStartupState } from './startup-state'
+import { isRecoveryMode } from './recovery-mode'
 
 /** Apply switches and profile overrides before Electron's ready event. */
 export function configureEarlyStartup(): void {
   const state = getStartupState()
   if (state.earlyConfigurationApplied) return
   state.earlyConfigurationApplied = true
+  if (isRecoveryMode()) {
+    app.disableHardwareAcceleration()
+    console.warn('[Recovery] Hardware rendering and automatic work disabled for this launch')
+  }
 
   const devUserDataOverride = process.env.HIDOCK_DEV_USERDATA
   if (devUserDataOverride) {
@@ -39,7 +44,9 @@ export function configureEarlyStartup(): void {
   // ENABLE_REMOTE_DEBUGGING used to open it in production too and is no longer
   // read. The headless brain never opens it either.
   const brainOnly = process.argv.includes('--brain-only')
-  const enableRemoteDebugging = !brainOnly && is.dev
+  // A recovery launch can carry the firmware write path, so it never opens the
+  // unauthenticated port either; the operator uses the app's own DevTools (F12).
+  const enableRemoteDebugging = !brainOnly && !isRecoveryMode() && is.dev
   if (enableRemoteDebugging) {
     const cdpPort = process.env.HIDOCK_DEV_CDP_PORT || '9222'
     app.commandLine.appendSwitch('remote-debugging-port', cdpPort)

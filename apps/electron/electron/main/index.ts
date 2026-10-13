@@ -1,5 +1,6 @@
 import { app, shell, BrowserWindow, session, ipcMain, dialog } from 'electron'
 import { join } from 'path'
+import { existsSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 
 // HiDock USB Vendor/Product IDs
@@ -18,9 +19,11 @@ const USB_PRODUCT_IDS = [
   0xaf0f,  // P1 Mini
   0x2041   // P1 Mini (alternate)
 ]
+import { getDatabasePath } from './services/file-storage'
 import { initializeDatabase, closeDatabase, isGraphProvenanceCleanupRegistered, run, queryAll } from './services/database'
 import { installPipeline } from './services/pipeline/install'
 import { initializeConfig, getConfig } from './services/config'
+import { isRecoveryMode } from './recovery-mode'
 import { getJensenDevice, setAutoConnectChecker } from './services/jensen'
 import { initializeStartupStorage } from './storage-startup'
 import { registerIpcHandlers } from './ipc/handlers'
@@ -161,7 +164,7 @@ async function initializeServices(): Promise<boolean> {
   console.log('Initializing services...')
 
   await updateSplashStatus('Loading configuration...', 10)
-  await initializeConfig()
+  await initializeConfig({ persist: !isRecoveryMode() })
   console.log('Config initialized')
 
   // Track I (Review-2 [CRITICAL]): snapshot the effective feature state from the
@@ -180,6 +183,9 @@ async function initializeServices(): Promise<boolean> {
   // it. On a multi-gigabyte library on a USB disk that takes minutes, and the
   // splash has to say so instead of a bare "Initializing".
   await initializeDatabase({
+    // A recovery launch never migrates, repairs or backs up an existing library: it opens it
+    // at its exact schema or refuses. A profile with no database yet is created normally.
+    existingSchemaOnly: isRecoveryMode() && existsSync(getDatabasePath()),
     onProgress: (p) => {
       if (p.phase === 'backup') {
         const gb = (n: number) => (n / 1024 ** 3).toFixed(1)
@@ -212,9 +218,12 @@ async function initializeServices(): Promise<boolean> {
   // The second brain's API for agents, served from this process while the app
   // is open. Starting it also asks a headless --brain-only process, if an agent
   // launched one earlier, to step down: while the app runs it is the one door.
-  startAppBrain({ getLiveRecording: getLiveRecordingState }).catch((e) =>
-    console.error('[Brain] could not start the agent API:', e)
-  )
+  // A recovery launch opens no agent API.
+  if (!isRecoveryMode()) {
+    startAppBrain({ getLiveRecording: getLiveRecordingState }).catch((e) =>
+      console.error('[Brain] could not start the agent API:', e)
+    )
+  }
 
   // spec-006/F17 T6 AR3-1 — loud startup tripwire. registerRecordingDeletionHandlers()
   // (called from registerIpcHandlers() above) wires the graph-provenance
@@ -249,7 +258,7 @@ async function initializeServices(): Promise<boolean> {
   // live enable (USB safety — activation only across a reboot). Teardown /
   // observation IPC stays reachable via the boot-only half of the gate.
   setAutoConnectChecker(
-    () => getConfig().device.autoConnect === true && isFeatureEnabled('device-sync')
+    () => !isRecoveryMode() && getConfig().device.autoConnect === true && isFeatureEnabled('device-sync')
   )
 
   // CS-010: Initialize calendar auto-sync after IPC handlers and DB are ready.
@@ -264,7 +273,7 @@ async function initializeServices(): Promise<boolean> {
   // Connectors (Layer 2): build the host + attempt silent (non-interactive)
   // resume for connectors that already have credentials. Never launches an
   // interactive sign-in on startup; failures are best-effort.
-  initConnectors().catch((e) => console.error('[Connectors] startup wiring failed:', e))
+  if (!isRecoveryMode()) initConnectors().catch((e) => console.error('[Connectors] startup wiring failed:', e))
 
   await updateSplashStatus('Starting application...', 100)
   return true
@@ -396,6 +405,14 @@ app.whenReady().then(async () => {
   }
 
   createWindow()
+
+  // A recovery launch owns the database and the window only. It starts no import,
+  // transcription, indexing or backfill job, now or from the boot scheduler.
+  if (isRecoveryMode()) {
+    if (mainWindow) setMainWindowForTranscription(mainWindow)
+    console.warn('[Recovery] Background services not started')
+    return
+  }
 
   if (mainWindow) {
     setWatcherMainWindow(mainWindow)

@@ -19,12 +19,20 @@ export {
   parseRealtimePayload,
   supportsRealtimeFirmware,
   calculateDurationSeconds,
+  parseNativeRecordingStatusPayload,
+  parseNativeRecordingCommandAck,
 } from './jensen-device.js'
 
 export type {
   DeviceModel,
   DeviceInfo,
+  ProtocolFaultCode,
+  ProtocolDiagnosticEvent,
+  ProtocolDiagnostics,
   FileInfo,
+  FileListingResult,
+  FileRangeResult,
+  FileListingPageResult,
   CardInfo,
   DeviceSettings,
   RealtimeSettings,
@@ -32,4 +40,36 @@ export type {
   BatteryStatus,
   BluetoothDevice,
   BluetoothStatus,
+  NativeRecordingStatus,
+  NativeRecordingCommandAck,
+  FirmwareBootExpectation,
+  FirmwareBootVerification,
 } from './jensen-device.js'
+
+export {
+  CUSTOM_RECORDING_PROFILE_GET,
+  CUSTOM_RECORDING_PROFILE_SET,
+  CUSTOM_RECORDING_BITRATES,
+  encodeCustomRecordingProfile,
+  parseCustomRecordingProfile,
+  parseCustomRecordingProfileResponse,
+} from './custom-recording-profile.js'
+export type { CustomRecordingProfile, CustomRecordingProfileResponse } from './custom-recording-profile.js'
+export { CUSTOM_RECORDING_FORMAT_GET, CUSTOM_RECORDING_FORMAT_SET, encodeCustomRecordingFormat, parseCustomRecordingFormat, parseCustomRecordingFormatResponse } from './custom-recording-format.js'
+export type { CustomRecordingFormat, CustomRecordingFormatResponse } from './custom-recording-format.js'
+export { CUSTOM_MARKER_RULES_GET, CUSTOM_MARKER_RULES_SET, encodeCustomMarkerRules, parseCustomMarkerRules, parseCustomMarkerRulesResponse } from './custom-marker-rules.js'
+export type { CustomMarkerRules, CustomMarkerRulesResponse } from './custom-marker-rules.js'
+export { FIRMWARE_CONSOLE_STATUS, FIRMWARE_CONSOLE_MAX_RESPONSE_BYTES, FIRMWARE_CONSOLE_REQUESTS,
+  isFirmwareConsoleRequest, encodeFirmwareConsoleRequest, parseFirmwareConsoleStatus } from './firmware-console.js'
+export type { FirmwareConsoleRequest, FirmwareConsoleStatus } from './firmware-console.js'
+export { OWNED_SCRATCH_UPLOAD_COMMAND, OWNED_SCRATCH_MAX_BYTES, OWNED_SCRATCH_MAX_CHUNK_BYTES, ownedScratchCrc32,
+  ownedScratchFilename, isOwnedScratchUploadDescriptor, encodeOwnedScratchUpload, isOwnedScratchStatusBody, parseOwnedScratchUploadReply } from './owned-scratch-upload.js'
+export type { OwnedScratchUploadDescriptor, OwnedScratchUploadSession, OwnedScratchUploadOperation, OwnedScratchUploadRequest,
+  OwnedScratchUploadState, OwnedScratchUploadReply, OwnedScratchWriteOptions, OwnedScratchWriteOutcome } from './owned-scratch-upload.js'
+export { RECORDING_RESTORE_COMMAND, RECORDING_RESTORE_MAX_BYTES, RECORDING_RESTORE_VERSION, isRecordingRestoreFilename,
+  isRecordingRestoreDescriptor, copyRecordingRestoreDescriptor, encodeRecordingRestore, parseRecordingRestoreCapabilities,
+  isRecordingRestoreReadOnlyBody, parseRecordingRestoreReply } from './recording-restore.js'
+export type { RecordingRestoreDescriptor, RecordingRestoreSession, RecordingRestoreOperation, RecordingRestoreRequest,
+  RecordingRestoreCapabilities, RecordingRestoreReply, RecordingRestoreWriteOptions, RecordingRestoreWriteOutcome } from './recording-restore.js'
+export { ACCEPTED_H1E_FIRMWARE, ACCEPTED_H1E_FORWARD_STOCK_RESTORE, ACCEPTED_H1E_OFFICIAL_RESTORE, isOrdinaryH1eVersion, permitsFirmwareVersion, parseFirmwareImage, copyFirmwareUploadArtifact, matchesAcceptedFirmwareImage, MAX_FIRMWARE_IMAGE_BYTES, parseFirmwareUpdateCard, isFirmwareUpdateCardReady, encodeFirmwareUpgradeRequest, parseFirmwareUpgradeAck, parseFirmwareUploadAck } from './firmware-update.js'
+export type { FirmwareUpdateCard, FirmwareUpdatePreflight, FirmwareUpdatePreflightFailure, FirmwareUploadArtifact, FirmwareUploadSession, FirmwareUploadResult, FirmwareUploadFence, FirmwareImageMetadata } from './firmware-update.js'

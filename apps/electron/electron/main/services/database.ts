@@ -4483,7 +4483,8 @@ export function runWithMassDeleteAllowed<T>(fn: () => T): T {
  * shared @hidock/database engine, configured above with this app's schema,
  * version, migrations, and repairPhase.
  */
-export async function initializeDatabase(options: { onProgress?: (p: BootProgress) => void } = {}): Promise<void> {
+export async function initializeDatabase(options: { onProgress?: (p: BootProgress) => void; existingSchemaOnly?: boolean } = {}): Promise<void> {
+  if (options.existingSchemaOnly) { engine.initializeExistingWritable(); return }
   await engine.initialize(options)
 }
 

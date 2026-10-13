@@ -66,6 +66,7 @@ let deviceInstance: JensenDevice | null = null
 // import the Electron-only config module. Defaults to the original always-connect
 // behavior until wired.
 let autoConnectChecker: (() => boolean) | null = null
+let firmwareRecoveryChecker: (() => boolean) | null = null
 const gate = (): boolean => (autoConnectChecker ? autoConnectChecker() : true)
 
 /**
@@ -80,9 +81,17 @@ export function setAutoConnectChecker(fn: () => boolean): void {
   if (deviceInstance) deviceInstance.autoConnectGate = gate
 }
 
+/** Installed before IPC starts. A corrupt or unresolved firmware journal keeps the
+ * USB owner read-only across reconnects and application restarts. */
+export function setFirmwareRecoveryChecker(fn: () => boolean): void {
+  firmwareRecoveryChecker = fn
+  if (deviceInstance) deviceInstance.firmwareRecoveryReadOnly = fn()
+}
+
 export function getJensenDevice(): JensenDevice {
   if (!deviceInstance) {
     deviceInstance = new JensenDevice()
+    deviceInstance.firmwareRecoveryReadOnly = firmwareRecoveryChecker?.() ?? false
     deviceInstance.autoConnectGate = gate
     deviceInstance.setupUsbConnectListener()
   }

@@ -21,6 +21,8 @@ import { getDownloadService } from '../services/download-service'
 import { geminiLiveTranscription } from '../services/gemini-live-transcription'
 import { RealtimeRecorder, recoverPartialLiveRecordings, type RecorderResult } from '../services/realtime-recorder'
 import { getRecordingsPath } from '../services/file-storage'
+import { registerFirmwareHandlers } from './firmware-handlers'
+import { isRecoveryMode } from '../recovery-mode'
 import { getConfig } from '../services/config'
 import { setLiveRecording, storageMoveInProgress } from '../services/storage-move-state'
 import {
@@ -175,7 +177,7 @@ export function getLiveRecordingState(): { known: boolean; recording: string | n
 // Idempotent — safe to call after every scan. Starts the poll the first time the
 // device has fully initialized (a file-list scan has completed).
 function startRecordingPoll(): void {
-  if (recordingPollTimer) return
+  if (isRecoveryMode() || recordingPollTimer) return
   lastRecordingFilename = undefined
   scheduleRecordingPoll(RECORDING_POLL_INTERVAL_MS)
   // Early first read so the indicator appears without waiting a full interval.
@@ -252,9 +254,11 @@ export function finishLiveRecording(): void {
 }
 
 export function registerJensenHandlers(): void {
+  // Before the shared device is first created, so its durable firmware fence is in place.
+  registerFirmwareHandlers()
   // A stream cut off by a crash is still audio worth keeping.
   try {
-    const recovered = recoverPartialLiveRecordings(getRecordingsPath())
+    const recovered = isRecoveryMode() ? [] : recoverPartialLiveRecordings(getRecordingsPath())
     if (recovered.length > 0) console.log('[Jensen] Recovered live recordings:', recovered)
   } catch (err) {
     console.error('[Jensen] Could not check for unfinished live recordings:', err)
@@ -296,7 +300,7 @@ export function registerJensenHandlers(): void {
       // Keep the connection handshake exclusive until the sweep finishes. A
       // fire-and-forget sweep raced the renderer's first scan/auto-download and
       // could put DELETE_FILE and TRANSFER_FILE onto the same response stream.
-      if (result) await retryPendingFileCleanups()
+      if (result && !isRecoveryMode()) await retryPendingFileCleanups()
       return result
     } catch {
       return null
@@ -324,7 +328,7 @@ export function registerJensenHandlers(): void {
   ipcMain.handle('jensen:tryConnect', async () => {
     try {
       const result = await serializeDeviceOperation(() => getJensenDevice().tryConnect())
-      if (result) await retryPendingFileCleanups()
+      if (result && !isRecoveryMode()) await retryPendingFileCleanups()
       return result
     } catch {
       return null

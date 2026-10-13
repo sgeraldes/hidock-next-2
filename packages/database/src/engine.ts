@@ -905,6 +905,34 @@ export class DatabaseEngine {
     }
   }
 
+  /** Open an existing, exact-version WAL database for normal application work,
+   * with no bootstrap DDL, repairs, migrations, backups or journal conversion.
+   * The application must hold its usual exclusive owner lock before calling.
+   */
+  initializeExistingWritable(): void {
+    this.initializeReadOnly()
+    const onDisk = this.readSchemaVersion()
+    if (onDisk !== this.config.schemaVersion) {
+      this.closeDatabase()
+      throw new Error(`Existing writable mode requires exact schema v${this.config.schemaVersion}; found v${onDisk}`)
+    }
+    this.closeDatabase()
+    const bdb = new this.config.betterSqlite3(this.dbPath, { fileMustExist: true })
+    try {
+      this.bdb = bdb
+      if (this.readSchemaVersion() !== this.config.schemaVersion) throw new Error('Schema changed during existing writable open')
+      if (String(bdb.pragma('journal_mode', { simple: true })).toLowerCase() !== 'wal') throw new Error('Existing writable mode requires WAL; open the owner app to convert the journal')
+      bdb.pragma('busy_timeout = 5000')
+      bdb.pragma('foreign_keys = ON')
+      this.shim = new SqlJsCompatDatabase(bdb, this.recordChanges, () => this.lastChanges)
+    } catch (error) {
+      this.bdb = null
+      this.shim = null
+      bdb.close()
+      throw error
+    }
+  }
+
   async initialize(options: { onProgress?: (p: BootProgress) => void } = {}): Promise<void> {
     // Re-initialization: release any previous connection before opening a new
     // one — better-sqlite3 handles are never GC-closed, so overwriting this.bdb

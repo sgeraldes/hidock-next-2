@@ -43,6 +43,7 @@ import { join, basename, dirname } from 'path'
 import { resetStorageLimitCache } from './storage-usage'
 import { queueTranscriptionIfEnabled } from './transcription'
 import { profileNewRecording } from './audio-profile-store'
+import { isRecoveryMode } from '../recovery-mode'
 
 /**
  * D-022 — why a requested file did not enter the queue.
@@ -183,8 +184,10 @@ export class DownloadService {
 
   private pruneInterval: NodeJS.Timeout | null = null // MEDIUM (re-review): bounded periodic prune
 
-  constructor() {
+  constructor(options: { passive?: boolean } = {}) {
     console.log('[DownloadService] Initialized')
+    // A recovery launch must not restore, reset, prune or resume the download backlog.
+    if (options.passive) return
     this.loadQueueFromDatabase()
     // MEDIUM (re-review): prune terminal rows at STARTUP — the prune used to run only
     // after successful completions, so reloaded >24h user-cancelled rows never aged out.
@@ -1767,7 +1770,7 @@ let downloadServiceInstance: DownloadService | null = null
 
 export function getDownloadService(): DownloadService {
   if (!downloadServiceInstance) {
-    downloadServiceInstance = new DownloadService()
+    downloadServiceInstance = new DownloadService({ passive: isRecoveryMode() })
   }
   return downloadServiceInstance
 }

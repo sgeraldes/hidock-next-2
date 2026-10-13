@@ -1441,6 +1441,12 @@ export interface ElectronAPI {
     startBluetoothScan: (duration?: number) => Promise<any>
     stopBluetoothScan: () => Promise<any>
     getBluetoothStatus: () => Promise<any>
+    // H1E 6.3.4 install (recovery launch with --firmware-qualification only; see docs/devices/h1e-firmware-install.md)
+    getFirmwareUpdatePreflight: () => Promise<{ model: 'hidock-h1e'; versionNumber: number; activeRecording: boolean; card: { capacityMiB: number; freeMiB: number; statusCode: number } } | null>
+    prepareFirmwareInstall: (target?: 'hardened') => Promise<unknown>
+    getFirmwareInstallAttempts: () => Promise<unknown>
+    executeFirmwareInstall: (id: string, sha256: string) => Promise<unknown>
+    observeFirmwareInstall: (id: string) => Promise<unknown>
     // Push event subscriptions
     getState: () => Promise<{ connected: boolean; model: string | null; serialNumber: string | null; versionCode: string | null; versionNumber: number | null; recording: string | null }>
     onStateChanged: (callback: (state: { connected: boolean; model: string | null; serialNumber: string | null; versionCode: string | null; versionNumber: number | null }) => void) => () => void
@@ -2334,6 +2340,11 @@ const electronAPI: ElectronAPI = {
     startBluetoothScan: (duration?: number) => callIPC('jensen:startBluetoothScan', { duration }),
     stopBluetoothScan: () => callIPC('jensen:stopBluetoothScan'),
     getBluetoothStatus: () => callIPC('jensen:getBluetoothStatus'),
+    getFirmwareUpdatePreflight: () => callIPC('jensen:getFirmwareUpdatePreflight'),
+    prepareFirmwareInstall: target => callIPC('jensen:prepareFirmwareInstall', target),
+    getFirmwareInstallAttempts: () => callIPC('jensen:getFirmwareInstallAttempts'),
+    executeFirmwareInstall: (id, sha256) => callIPC('jensen:executeFirmwareInstall', id, sha256),
+    observeFirmwareInstall: id => callIPC('jensen:observeFirmwareInstall', id),
     getState: () => callIPC('jensen:getState'),
     // Push event subscriptions
     onStateChanged: (callback: (state: { connected: boolean; model: string | null; serialNumber: string | null; versionCode: string | null; versionNumber: number | null }) => void) => {

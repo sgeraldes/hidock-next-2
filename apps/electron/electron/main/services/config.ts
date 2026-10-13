@@ -1,4 +1,5 @@
 import { app, safeStorage } from 'electron'
+import { isRecoveryMode } from '../recovery-mode'
 import { join } from 'path'
 import { homedir } from 'os'
 import {
@@ -711,6 +712,11 @@ export function getDefaultConfig(): AppConfig {
 }
 
 export async function saveConfig(newConfig: Partial<AppConfig>): Promise<void> {
+  // A recovery launch never rewrites the saved profile or its credential store.
+  if (isRecoveryMode()) {
+    config = deepMerge(config, newConfig)
+    return
+  }
   // Snapshot the PRIOR in-memory config and the PRIOR plaintext key BEFORE merging
   // so we can (a) roll back a failed store write on a key change (HIGH-4) and
   // (b) compensate a store write that succeeded but whose config.json write then

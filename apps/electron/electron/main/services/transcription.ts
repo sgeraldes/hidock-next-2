@@ -184,6 +184,7 @@ import { withCallRecord } from './pipeline/track-call'
 import { repairJsonString } from './pipeline/json-repair'
 import { runSpeakerInference } from './speaker-inference'
 import { getEmbeddingsService } from './embeddings'
+import { isRecoveryMode } from '../recovery-mode'
 
 let mainWindow: BrowserWindow | null = null
 let isProcessing = false
@@ -198,7 +199,7 @@ let lastSkipLogAt = 0 // Throttle "skipping" spam to once per 60s
 // already in-flight finishes normally (a live Gemini/model request cannot be
 // aborted mid-call). In-memory by design — a restart resumes a stopped backlog,
 // which is the correct fallback. Resume continues from where it left off.
-let queuePaused = false
+let queuePaused = isRecoveryMode()
 
 // recording_id currently being transcribed (null when idle). Surfaced in queue
 // state so the renderer can show which item is live.
@@ -216,6 +217,7 @@ export function setMainWindowForTranscription(win: BrowserWindow): void {
 }
 
 export function startTranscriptionProcessor(): void {
+  if (isRecoveryMode()) return
   if (processingInterval) {
     console.log('Transcription processor already running')
     return
@@ -324,6 +326,9 @@ export function pauseQueue(): TranscriptionQueueState {
 
 /** Resume dequeuing and kick the processor to pick up where it left off. */
 export function resumeQueue(): TranscriptionQueueState {
+  if (isRecoveryMode()) {
+    throw new Error('Transcription is disabled during this recovery launch.')
+  }
   if (queuePaused) {
     queuePaused = false
     console.log('Transcription queue resumed')
