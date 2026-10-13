@@ -10,7 +10,7 @@ The receipt records 22 changed bytes in the baseline region, all inside the appr
 
 The initial review found a source-level no-clobber race at `build_candidate.py:449-450`: `os.rename(partial, final)` could replace a destination created after the preceding absence check on WSL/POSIX. The follow-up below verifies the replacement with an atomic no-clobber helper for both accepted and `.REJECTED` publication paths.
 
-The receipt is schema 1 for an offline candidate; it is not the packer contract `h1e-vad-candidate-manifest-v1`. An explicit adapter is still needed, as already identified by the integration owner. The structural pass does not clear the recorded production gates: actual partition capacity and combined placement, lifetime/ROM/interrupt consumers, allocator alignment and success, target execution/response behavior, outer container metadata, and hardware validation remain unproven or blocked. The candidate remains `NOT_INSTALL`.
+The receipt is schema 1 for an offline candidate; it is not the packer contract `h1e-vad-candidate-manifest-v1`. At this review an explicit adapter was still needed. The integration owner subsequently delivered `../firmware-container/adapt_vad_manifest.py` and a fresh successful container readback through it; see that folder's README and retained receipts. Those close the offline handoff and outer-container integrity boundary. Actual partition capacity and combined placement, lifetime/ROM/interrupt consumers, allocator alignment and success, target execution/response behavior, and hardware validation remain unproven or blocked. The candidate remains `NOT_INSTALL`.
 
 ## Follow-up: no-clobber publication race resolved
 
