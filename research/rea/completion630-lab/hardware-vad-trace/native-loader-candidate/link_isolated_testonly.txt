@@ -1,0 +1,9 @@
+link-exit=0
+01000000 T h1e_vad_load_object
+010003e0 r h1e_vad_snapshot_ops
+01000034 T h1e_vad_snapshot_read
+01000364 T vadt_binding_read
+010003cc T vadt_csky_guard_enter
+010003d8 T vadt_csky_guard_exit
+-- link of the reader alone (no loader object would resolve? loader is in same object)
+-- core/binding/guard flags: -std=c99 -mcpu=ck803 -Os -Wall -Wextra -Werror

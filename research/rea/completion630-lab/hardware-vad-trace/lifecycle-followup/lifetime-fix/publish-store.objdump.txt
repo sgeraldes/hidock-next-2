@@ -1,0 +1,14 @@
+
+/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/lifecycle-followup/lifetime-fix/publish-store.elf:     file format elf32-csky-little
+
+Contents of section .text:
+ 10210a8 e0b5                                 ..              
+Contents of section .csky.attributes:
+ 0000 41210000 0063736b 79000118 00000004  A!...csky.......
+ 0010 636b3831 30000563 6b383130 0006bef0  ck810..ck810....
+ 0020 c641                                 .A              
+
+Disassembly of section .text:
+
+010210a8 <publish_store>:
+ 10210a8:	b5e0      	st.w      	r7, (r5, 0x0)

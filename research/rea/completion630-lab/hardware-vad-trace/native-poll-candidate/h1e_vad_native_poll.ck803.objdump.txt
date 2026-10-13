@@ -1,0 +1,16 @@
+
+/tmp/h1e_npc_poll.o:     file format elf32-csky-little
+
+
+Disassembly of section .text:
+
+00000000 <h1e_vad_native_poll_bridge>:
+   0:	14d0      	push      	r15
+   2:	6c83      	mov      	r2, r0
+   4:	1023      	lrw      	r1, 0x101fb68	// 10 <h1e_vad_native_poll_bridge+0x10>
+   6:	1004      	lrw      	r0, 0x0	// 14 <h1e_vad_native_poll_bridge+0x14>
+   8:	e0000000 	bsr      	0x0	// 0 <vadt_binding_poll>
+   c:	1490      	pop      	r15
+   e:	0000      	.short	0x0000
+  10:	0101fb68 	.long	0x0101fb68
+  14:	00000000 	.long	0x00000000

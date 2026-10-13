@@ -1,0 +1,225 @@
+Archive member included to satisfy reference by file (symbol)
+
+/home/sebastian/.local/share/rea/tools/csky-20210423/bin/../lib/gcc/csky-elfabiv2/6.3.0/ck802/libgcc.a(_udivsi3.o)
+                              /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/console630_f11a.o (__udivsi3)
+/home/sebastian/.local/share/rea/tools/csky-20210423/bin/../lib/gcc/csky-elfabiv2/6.3.0/ck802/libgcc.a(_umodsi3.o)
+                              /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/console630_f11a.o (__umodsi3)
+
+Memory Configuration
+
+Name             Origin             Length             Attributes
+*default*        0x0000000000000000 0xffffffffffffffff
+
+Linker script and memory map
+
+                0x000000000112c2c4                PROVIDE (upload630_parse, 0x112c2c4)
+                0x000000000112ca1c                PROVIDE (upload630_response, 0x112ca1c)
+                0x000000000112d7d8                PROVIDE (restore630_parse, 0x112d7d8)
+                0x000000000112e162                PROVIDE (restore630_response, 0x112e162)
+
+.vad_text       0x000000000112f000      0xa7c
+ *(.text*)
+ .text          0x000000000112f000      0x284 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_core.o
+                0x000000000112f010                vadt_init
+                0x000000000112f024                vadt_record_completed
+                0x000000000112f07a                vadt_poll
+                0x000000000112f0ca                vadt_snapshot
+                0x000000000112f12a                vadt_age
+                0x000000000112f23c                vadt_encode_reply
+                0x000000000112f252                vadt_encode_reply_with_age
+ .text.unlikely
+                0x000000000112f284        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_core.o
+ .text          0x000000000112f284       0xc8 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_binding.o
+                0x000000000112f284                vadt_getter_adapter
+                0x000000000112f28e                vadt_binding_poll
+                0x000000000112f2e4                vadt_binding_read
+ .text.unlikely
+                0x000000000112f34c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_binding.o
+ .text          0x000000000112f34c       0x10 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_csky_guard.o
+                0x000000000112f34c                vadt_csky_guard_enter
+                0x000000000112f356                vadt_csky_guard_exit
+ .text.unlikely
+                0x000000000112f35c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_csky_guard.o
+ .text          0x000000000112f35c      0x1d8 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_frame.o
+                0x000000000112f372                vadt_f11a_parse_frame
+                0x000000000112f41a                vadt_f11a_response_frame
+ .text.unlikely
+                0x000000000112f534        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_frame.o
+ .text          0x000000000112f534       0x58 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_frame_target.o
+                0x000000000112f540                vadt_f11a_parse
+                0x000000000112f55e                vadt_f11a_response
+ .text.unlikely
+                0x000000000112f58c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_frame_target.o
+ .text          0x000000000112f58c       0x18 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/h1e_vad_native_poll.o
+                0x000000000112f58c                h1e_vad_native_poll_bridge
+ .text.unlikely
+                0x000000000112f5a4        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/h1e_vad_native_poll.o
+ .text          0x000000000112f5a4      0x2e8 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/console630_f11a.o
+                0x000000000112f642                console630_parse
+                0x000000000112f71c                console630_response
+ .text.unlikely
+                0x000000000112f88c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/console630_f11a.o
+ .text          0x000000000112f88c       0x44 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/h1e_vad_native_loader.o
+                0x000000000112f88c                h1e_vad_load_object
+                0x000000000112f8c0                h1e_vad_snapshot_read
+ .text.unlikely
+                0x000000000112f8d0        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/h1e_vad_native_loader.o
+ .text          0x000000000112f8d0       0xa8 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/console-hooks.o
+                0x000000000112f8d0                console630_parser_hook
+                0x000000000112f918                console630_response_hook
+ .text          0x000000000112f978        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/constructor.o
+ .text          0x000000000112f978        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/poll-hook.o
+ .text          0x000000000112f978       0x4a /home/sebastian/.local/share/rea/tools/csky-20210423/bin/../lib/gcc/csky-elfabiv2/6.3.0/ck802/libgcc.a(_udivsi3.o)
+                0x000000000112f978                __udivsi3
+                0x000000000112f978                __udiv32
+ *fill*         0x000000000112f9c2        0x2 
+ .text          0x000000000112f9c4       0x30 /home/sebastian/.local/share/rea/tools/csky-20210423/bin/../lib/gcc/csky-elfabiv2/6.3.0/ck802/libgcc.a(_umodsi3.o)
+                0x000000000112f9c4                __umodsi3
+                0x000000000112f9c4                __urem32
+ *(SORT(.csky.code.*))
+ *(.stub)
+ .stub          0x000000000112f9f4       0x1c /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/constructor.o
+                0x000000000112f9f4                late_publication_stub
+ *(.rodata*)
+ .rodata        0x000000000112fa10       0x10 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/h1e_vad_native_poll.o
+ .rodata.str1.1
+                0x000000000112fa20       0x49 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/console630_f11a.o
+ *fill*         0x000000000112fa69        0x3 
+ .rodata        0x000000000112fa6c       0x10 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/h1e_vad_native_loader.o
+
+.data           0x000000000112fa7c        0x0
+ *(.data*)
+ .data          0x000000000112fa7c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_core.o
+ .data          0x000000000112fa7c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_binding.o
+ .data          0x000000000112fa7c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_csky_guard.o
+ .data          0x000000000112fa7c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_frame.o
+ .data          0x000000000112fa7c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_frame_target.o
+ .data          0x000000000112fa7c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/h1e_vad_native_poll.o
+ .data          0x000000000112fa7c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/console630_f11a.o
+ .data          0x000000000112fa7c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/h1e_vad_native_loader.o
+ .data          0x000000000112fa7c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/console-hooks.o
+ .data          0x000000000112fa7c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/constructor.o
+ .data          0x000000000112fa7c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/poll-hook.o
+ .data          0x000000000112fa7c        0x0 /home/sebastian/.local/share/rea/tools/csky-20210423/bin/../lib/gcc/csky-elfabiv2/6.3.0/ck802/libgcc.a(_udivsi3.o)
+ .data          0x000000000112fa7c        0x0 /home/sebastian/.local/share/rea/tools/csky-20210423/bin/../lib/gcc/csky-elfabiv2/6.3.0/ck802/libgcc.a(_umodsi3.o)
+
+.bss            0x000000000112fa7c        0x0
+ *(.bss*)
+ .bss           0x000000000112fa7c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_core.o
+ .bss           0x000000000112fa7c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_binding.o
+ .bss           0x000000000112fa7c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_csky_guard.o
+ .bss           0x000000000112fa7c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_frame.o
+ .bss           0x000000000112fa7c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_frame_target.o
+ .bss           0x000000000112fa7c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/h1e_vad_native_poll.o
+ .bss           0x000000000112fa7c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/console630_f11a.o
+ .bss           0x000000000112fa7c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/h1e_vad_native_loader.o
+ .bss           0x000000000112fa7c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/console-hooks.o
+ .bss           0x000000000112fa7c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/constructor.o
+ .bss           0x000000000112fa7c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/poll-hook.o
+ .bss           0x000000000112fa7c        0x0 /home/sebastian/.local/share/rea/tools/csky-20210423/bin/../lib/gcc/csky-elfabiv2/6.3.0/ck802/libgcc.a(_udivsi3.o)
+ .bss           0x000000000112fa7c        0x0 /home/sebastian/.local/share/rea/tools/csky-20210423/bin/../lib/gcc/csky-elfabiv2/6.3.0/ck802/libgcc.a(_umodsi3.o)
+ *(COMMON)
+
+.constructor_edits
+                0x0000000001021054       0x8c
+ *(.edits)
+ .edits         0x0000000001021054       0x8c /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/constructor.o
+                0x0000000001021054                late_constructor_edits
+
+.poll_hook      0x0000000001020b62        0x4
+ *(.patch_vad_poll)
+ .patch_vad_poll
+                0x0000000001020b62        0x4 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/poll-hook.o
+
+.parser_hook    0x000000000103a996        0x4
+ *(.patch_console_parser)
+ .patch_console_parser
+                0x000000000103a996        0x4 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/console-hooks.o
+
+.response_hook  0x000000000103907a        0x4
+ *(.patch_console_response)
+ .patch_console_response
+                0x000000000103907a        0x4 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/console-hooks.o
+                0x0000000000000001                ASSERT (((SIZEOF (.data) == 0x0) && (SIZEOF (.bss) == 0x0)), Writable XIP globals prohibited)
+                0x0000000000000001                ASSERT ((SIZEOF (.poll_hook) == 0x4), Native poll hook must be four bytes)
+                0x0000000000000001                ASSERT (((SIZEOF (.parser_hook) == 0x4) && (SIZEOF (.response_hook) == 0x4)), Console hooks must be four bytes)
+                0x0000000000000001                ASSERT ((SIZEOF (.vad_text) <= 0x4000), Offline candidate exceeds 16 KiB budget)
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_core.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_binding.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_csky_guard.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_frame.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_frame_target.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/h1e_vad_native_poll.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/console630_f11a.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/h1e_vad_native_loader.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/console-hooks.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/constructor.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/poll-hook.o
+LOAD /home/sebastian/.local/share/rea/tools/csky-20210423/bin/../lib/gcc/csky-elfabiv2/6.3.0/ck802/libgcc.a
+OUTPUT(/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/conditional-source-ck802-NOTINSTALL.elf elf32-csky-little)
+
+.rela.dyn       0x0000000001039080        0x0
+ .rela.text     0x0000000001039080        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/console630_f11a.o
+
+.comment        0x0000000000000000       0x42
+ .comment       0x0000000000000000       0x42 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_core.o
+                                         0x43 (size before relaxing)
+ .comment       0x0000000000000042       0x43 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_binding.o
+ .comment       0x0000000000000042       0x43 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_csky_guard.o
+ .comment       0x0000000000000042       0x43 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_frame.o
+ .comment       0x0000000000000042       0x43 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_frame_target.o
+ .comment       0x0000000000000042       0x43 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/h1e_vad_native_poll.o
+ .comment       0x0000000000000042       0x43 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/console630_f11a.o
+ .comment       0x0000000000000042       0x43 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/h1e_vad_native_loader.o
+
+.csky_stack_size
+                0x0000000000000000       0xf4
+ .csky_stack_size
+                0x0000000000000000       0x3c /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_core.o
+ *fill*         0x000000000000003c        0x4 
+ .csky_stack_size
+                0x0000000000000040       0x1c /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_binding.o
+ *fill*         0x000000000000005c        0x4 
+ .csky_stack_size
+                0x0000000000000060       0x14 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_frame.o
+ *fill*         0x0000000000000074        0xc 
+ .csky_stack_size
+                0x0000000000000080       0x14 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_frame_target.o
+ *fill*         0x0000000000000094        0xc 
+ .csky_stack_size
+                0x00000000000000a0        0xc /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/h1e_vad_native_poll.o
+ *fill*         0x00000000000000ac        0x4 
+ .csky_stack_size
+                0x00000000000000b0       0x2c /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/console630_f11a.o
+ *fill*         0x00000000000000dc        0x4 
+ .csky_stack_size
+                0x00000000000000e0       0x14 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/h1e_vad_native_loader.o
+
+.csky.attributes
+                0x0000000000000000       0x20
+ .csky.attributes
+                0x0000000000000000       0x20 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_core.o
+ .csky.attributes
+                0x0000000000000020       0x20 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_binding.o
+ .csky.attributes
+                0x0000000000000040       0x20 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_csky_guard.o
+ .csky.attributes
+                0x0000000000000060       0x20 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_frame.o
+ .csky.attributes
+                0x0000000000000080       0x20 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/vadt_frame_target.o
+ .csky.attributes
+                0x00000000000000a0       0x20 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/h1e_vad_native_poll.o
+ .csky.attributes
+                0x00000000000000c0       0x20 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/console630_f11a.o
+ .csky.attributes
+                0x00000000000000e0       0x20 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/h1e_vad_native_loader.o
+ .csky.attributes
+                0x0000000000000100       0x20 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/console-hooks.o
+ .csky.attributes
+                0x0000000000000120       0x20 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/constructor.o
+ .csky.attributes
+                0x0000000000000140       0x20 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/output-ck802-libgcc/poll-hook.o
+ .csky.attributes
+                0x0000000000000160       0x20 /home/sebastian/.local/share/rea/tools/csky-20210423/bin/../lib/gcc/csky-elfabiv2/6.3.0/ck802/libgcc.a(_udivsi3.o)
+ .csky.attributes
+                0x0000000000000180       0x20 /home/sebastian/.local/share/rea/tools/csky-20210423/bin/../lib/gcc/csky-elfabiv2/6.3.0/ck802/libgcc.a(_umodsi3.o)

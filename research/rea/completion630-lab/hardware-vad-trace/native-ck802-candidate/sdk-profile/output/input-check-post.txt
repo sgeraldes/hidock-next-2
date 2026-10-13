@@ -1,0 +1,7 @@
+{
+  "match": true,
+  "pinned_count": 36,
+  "changed": {},
+  "not_in_acceptance": [],
+  "in_acceptance_but_not_hashed": []
+}

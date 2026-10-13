@@ -1,0 +1,66 @@
+{
+  "kind": "source-condition-arithmetic-reproduction",
+  "physicalFirmwareExecution": false,
+  "sourceInstruction": {
+    "address": "0x010217f4",
+    "purpose": "unsigned deadline comparison",
+    "bytes": "8064"
+  },
+  "cases": [
+    {
+      "name": "overdue across wrap",
+      "deadline": 4294967280,
+      "now": 16,
+      "expectedDue": true,
+      "deadlineHex": "0xfffffff0",
+      "nowHex": "0x00000010",
+      "nativeUnsignedDue": false,
+      "modularSignedDue": true
+    },
+    {
+      "name": "future across wrap",
+      "deadline": 34,
+      "now": 4294967285,
+      "expectedDue": false,
+      "deadlineHex": "0x00000022",
+      "nowHex": "0xfffffff5",
+      "nativeUnsignedDue": true,
+      "modularSignedDue": false
+    },
+    {
+      "name": "ordinary future",
+      "deadline": 1050,
+      "now": 1000,
+      "expectedDue": false,
+      "deadlineHex": "0x0000041a",
+      "nowHex": "0x000003e8",
+      "nativeUnsignedDue": false,
+      "modularSignedDue": false
+    },
+    {
+      "name": "exact deadline",
+      "deadline": 1050,
+      "now": 1050,
+      "expectedDue": true,
+      "deadlineHex": "0x0000041a",
+      "nowHex": "0x0000041a",
+      "nativeUnsignedDue": true,
+      "modularSignedDue": true
+    },
+    {
+      "name": "ordinary overdue",
+      "deadline": 1050,
+      "now": 1060,
+      "expectedDue": true,
+      "deadlineHex": "0x0000041a",
+      "nowHex": "0x00000424",
+      "nativeUnsignedDue": true,
+      "modularSignedDue": true
+    }
+  ],
+  "limits": [
+    "Native dispatcher bytes were inspected and compared; these cases execute arithmetic, not C-SKY firmware.",
+    "Signed modular comparison requires bounded intervals and observation gaps shorter than half the counter range.",
+    "No scheduler patch is generated or applied."
+  ]
+}

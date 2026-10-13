@@ -1,0 +1,35 @@
+
+/tmp/h1e_nlc_loader.o:     file format elf32-csky-little
+
+
+Disassembly of section .text:
+
+00000000 <h1e_vad_load_object>:
+   0:	3300      	movi      	r3, 0
+   2:	b160      	st.w      	r3, (r1, 0x0)
+   4:	a260      	st.b      	r3, (r2, 0x0)
+   6:	ea035280 	movi      	r3, 21120
+   a:	3bb3      	bseti      	r3, 19
+   c:	3000      	movi      	r0, 0
+   e:	9370      	ld.w      	r3, (r3, 0x40)
+  10:	e5831000 	subi      	r12, r3, 1
+  14:	2860      	subi      	r0, 97
+  16:	6700      	cmphs      	r0, r12
+  18:	0c0c      	bf      	0x30	// 30 <h1e_vad_load_object+0x30>
+  1a:	e4032003 	andi      	r0, r3, 3
+  1e:	e9200009 	bnez      	r0, 0x30	// 30 <h1e_vad_load_object+0x30>
+  22:	d9830000 	ld.b      	r12, (r3, 0x0)
+  26:	233f      	addi      	r3, 64
+  28:	dd820000 	st.b      	r12, (r2, 0x0)
+  2c:	b160      	st.w      	r3, (r1, 0x0)
+  2e:	783c      	jmp      	r15
+  30:	3001      	movi      	r0, 1
+  32:	07fe      	br      	0x2e	// 2e <h1e_vad_load_object+0x2e>
+
+00000034 <h1e_vad_snapshot_read>:
+  34:	14d0      	push      	r15
+  36:	1003      	lrw      	r0, 0x0	// 40 <h1e_vad_snapshot_read+0xc>
+  38:	e0000000 	bsr      	0x0	// 0 <vadt_binding_read>
+  3c:	1490      	pop      	r15
+  3e:	0000      	.short	0x0000
+  40:	00000000 	.long	0x00000000

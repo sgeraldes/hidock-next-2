@@ -1,0 +1,99 @@
+
+/tmp/h1e_npc_binding.o:     file format elf32-csky-little
+
+
+Disassembly of section .text:
+
+00000000 <vadt_getter_adapter>:
+   0:	14d0      	push      	r15
+   2:	9060      	ld.w      	r3, (r0, 0x0)
+   4:	6c07      	mov      	r0, r1
+   6:	7bcd      	jsr      	r3
+   8:	1490      	pop      	r15
+	...
+
+0000000c <vadt_binding_poll>:
+   c:	14d4      	push      	r4-r7, r15
+   e:	1424      	subi      	r14, r14, 16
+  10:	6d03      	mov      	r4, r0
+  12:	6c0b      	mov      	r0, r2
+  14:	6d4b      	mov      	r5, r2
+  16:	7bc5      	jsr      	r1
+  18:	3300      	movi      	r3, 0
+  1a:	6d83      	mov      	r6, r0
+  1c:	b863      	st.w      	r3, (r14, 0xc)
+  1e:	dc6e000b 	st.b      	r3, (r14, 0xb)
+  22:	e920001e 	bnez      	r0, 0x5e	// 5e <vadt_binding_poll+0x52>
+  26:	95a0      	ld.w      	r5, (r5, 0x0)
+  28:	9461      	ld.w      	r3, (r4, 0x4)
+  2a:	9400      	ld.w      	r0, (r4, 0x0)
+  2c:	7bcd      	jsr      	r3
+  2e:	6dc3      	mov      	r7, r0
+  30:	9463      	ld.w      	r3, (r4, 0xc)
+  32:	e44e000a 	addi      	r2, r14, 11
+  36:	1903      	addi      	r1, r14, 12
+  38:	9400      	ld.w      	r0, (r4, 0x0)
+  3a:	7bcd      	jsr      	r3
+  3c:	6cc3      	mov      	r3, r0
+  3e:	e9200009 	bnez      	r0, 0x50	// 50 <vadt_binding_poll+0x44>
+  42:	b801      	st.w      	r0, (r14, 0x4)
+  44:	b800      	st.w      	r0, (r14, 0x0)
+  46:	6c97      	mov      	r2, r5
+  48:	6c5b      	mov      	r1, r6
+  4a:	9803      	ld.w      	r0, (r14, 0xc)
+  4c:	e0000000 	bsr      	0x0	// 0 <vadt_record_completed>
+  50:	9400      	ld.w      	r0, (r4, 0x0)
+  52:	9462      	ld.w      	r3, (r4, 0x8)
+  54:	6c5f      	mov      	r1, r7
+  56:	7bcd      	jsr      	r3
+  58:	6c1b      	mov      	r0, r6
+  5a:	1404      	addi      	r14, r14, 16
+  5c:	1494      	pop      	r4-r7, r15
+  5e:	6d4f      	mov      	r5, r3
+  60:	07e4      	br      	0x28	// 28 <vadt_binding_poll+0x1c>
+	...
+
+00000064 <vadt_binding_read>:
+  64:	14d4      	push      	r4-r7, r15
+  66:	142a      	subi      	r14, r14, 40
+  68:	3300      	movi      	r3, 0
+  6a:	6d43      	mov      	r5, r0
+  6c:	b861      	st.w      	r3, (r14, 0x4)
+  6e:	dc6e0003 	st.b      	r3, (r14, 0x3)
+  72:	9061      	ld.w      	r3, (r0, 0x4)
+  74:	9000      	ld.w      	r0, (r0, 0x0)
+  76:	6d87      	mov      	r6, r1
+  78:	7bcd      	jsr      	r3
+  7a:	6dc3      	mov      	r7, r0
+  7c:	9563      	ld.w      	r3, (r5, 0xc)
+  7e:	e44e0002 	addi      	r2, r14, 3
+  82:	1901      	addi      	r1, r14, 4
+  84:	9500      	ld.w      	r0, (r5, 0x0)
+  86:	7bcd      	jsr      	r3
+  88:	e9200017 	bnez      	r0, 0xb6	// b6 <vadt_binding_read+0x52>
+  8c:	1902      	addi      	r1, r14, 8
+  8e:	9801      	ld.w      	r0, (r14, 0x4)
+  90:	e0000000 	bsr      	0x0	// 0 <vadt_snapshot>
+  94:	6d03      	mov      	r4, r0
+  96:	9562      	ld.w      	r3, (r5, 0x8)
+  98:	6c5f      	mov      	r1, r7
+  9a:	9500      	ld.w      	r0, (r5, 0x0)
+  9c:	7bcd      	jsr      	r3
+  9e:	e924000e 	bnez      	r4, 0xba	// ba <vadt_binding_read+0x56>
+  a2:	d86e0003 	ld.b      	r3, (r14, 0x3)
+  a6:	1a02      	addi      	r2, r14, 8
+  a8:	6c1b      	mov      	r0, r6
+  aa:	6c53      	mov      	r1, r4
+  ac:	e0000000 	bsr      	0x0	// 0 <vadt_encode_reply>
+  b0:	6c13      	mov      	r0, r4
+  b2:	140a      	addi      	r14, r14, 40
+  b4:	1494      	pop      	r4-r7, r15
+  b6:	3402      	movi      	r4, 2
+  b8:	07ef      	br      	0x96	// 96 <vadt_binding_read+0x32>
+  ba:	3c42      	cmpnei      	r4, 2
+  bc:	0c05      	bf      	0xc6	// c6 <vadt_binding_read+0x62>
+  be:	d86e0003 	ld.b      	r3, (r14, 0x3)
+  c2:	3200      	movi      	r2, 0
+  c4:	07f2      	br      	0xa8	// a8 <vadt_binding_read+0x44>
+  c6:	3300      	movi      	r3, 0
+  c8:	07fd      	br      	0xc2	// c2 <vadt_binding_read+0x5e>

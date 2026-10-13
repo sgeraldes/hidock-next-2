@@ -1,0 +1,16 @@
+
+csky-control-register-probe.o:     file format elf32-csky-little
+
+
+Disassembly of section .text:
+
+00000000 <probe>:
+   0:	c0006024 	mfcr      	r4, cr<0, 0>
+   4:	c0026024 	mfcr      	r4, cr<2, 0>
+   8:	c0046024 	mfcr      	r4, cr<4, 0>
+   c:	c0807020 	psrclr      	ie
+  10:	c0046420 	mtcr      	r4, cr<0, 0>
+  14:	c0046422 	mtcr      	r4, cr<2, 0>
+  18:	c0046424 	mtcr      	r4, cr<4, 0>
+  1c:	c0004020 	rte
+  20:	07f0      	br      	0x0	// 0 <probe>

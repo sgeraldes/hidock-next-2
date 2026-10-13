@@ -1,0 +1,105 @@
+
+/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/command-binding/target-scheduler/csky-control-register-probe-all.o:     file format elf32-csky-little
+
+
+Disassembly of section .text:
+
+00000000 <probe>:
+   0:	c0006020 	mfcr      	r0, cr<0, 0>
+   4:	c0026020 	mfcr      	r0, cr<2, 0>
+   8:	c0046020 	mfcr      	r0, cr<4, 0>
+   c:	c0006021 	mfcr      	r1, cr<0, 0>
+  10:	c0026021 	mfcr      	r1, cr<2, 0>
+  14:	c0046021 	mfcr      	r1, cr<4, 0>
+  18:	c0006022 	mfcr      	r2, cr<0, 0>
+  1c:	c0026022 	mfcr      	r2, cr<2, 0>
+  20:	c0046022 	mfcr      	r2, cr<4, 0>
+  24:	c0006023 	mfcr      	r3, cr<0, 0>
+  28:	c0026023 	mfcr      	r3, cr<2, 0>
+  2c:	c0046023 	mfcr      	r3, cr<4, 0>
+  30:	c0006024 	mfcr      	r4, cr<0, 0>
+  34:	c0026024 	mfcr      	r4, cr<2, 0>
+  38:	c0046024 	mfcr      	r4, cr<4, 0>
+  3c:	c0006025 	mfcr      	r5, cr<0, 0>
+  40:	c0026025 	mfcr      	r5, cr<2, 0>
+  44:	c0046025 	mfcr      	r5, cr<4, 0>
+  48:	c0006026 	mfcr      	r6, cr<0, 0>
+  4c:	c0026026 	mfcr      	r6, cr<2, 0>
+  50:	c0046026 	mfcr      	r6, cr<4, 0>
+  54:	c0006027 	mfcr      	r7, cr<0, 0>
+  58:	c0026027 	mfcr      	r7, cr<2, 0>
+  5c:	c0046027 	mfcr      	r7, cr<4, 0>
+  60:	c0006028 	mfcr      	r8, cr<0, 0>
+  64:	c0026028 	mfcr      	r8, cr<2, 0>
+  68:	c0046028 	mfcr      	r8, cr<4, 0>
+  6c:	c0006029 	mfcr      	r9, cr<0, 0>
+  70:	c0026029 	mfcr      	r9, cr<2, 0>
+  74:	c0046029 	mfcr      	r9, cr<4, 0>
+  78:	c000602a 	mfcr      	r10, cr<0, 0>
+  7c:	c002602a 	mfcr      	r10, cr<2, 0>
+  80:	c004602a 	mfcr      	r10, cr<4, 0>
+  84:	c000602b 	mfcr      	r11, cr<0, 0>
+  88:	c002602b 	mfcr      	r11, cr<2, 0>
+  8c:	c004602b 	mfcr      	r11, cr<4, 0>
+  90:	c000602c 	mfcr      	r12, cr<0, 0>
+  94:	c002602c 	mfcr      	r12, cr<2, 0>
+  98:	c004602c 	mfcr      	r12, cr<4, 0>
+  9c:	c000602d 	mfcr      	r13, cr<0, 0>
+  a0:	c002602d 	mfcr      	r13, cr<2, 0>
+  a4:	c004602d 	mfcr      	r13, cr<4, 0>
+  a8:	c000602e 	mfcr      	r14, cr<0, 0>
+  ac:	c002602e 	mfcr      	r14, cr<2, 0>
+  b0:	c004602e 	mfcr      	r14, cr<4, 0>
+  b4:	c000602f 	mfcr      	r15, cr<0, 0>
+  b8:	c002602f 	mfcr      	r15, cr<2, 0>
+  bc:	c004602f 	mfcr      	r15, cr<4, 0>
+  c0:	c0807020 	psrclr      	ie
+  c4:	c0006420 	mtcr      	r0, cr<0, 0>
+  c8:	c0006422 	mtcr      	r0, cr<2, 0>
+  cc:	c0006424 	mtcr      	r0, cr<4, 0>
+  d0:	c0016420 	mtcr      	r1, cr<0, 0>
+  d4:	c0016422 	mtcr      	r1, cr<2, 0>
+  d8:	c0016424 	mtcr      	r1, cr<4, 0>
+  dc:	c0026420 	mtcr      	r2, cr<0, 0>
+  e0:	c0026422 	mtcr      	r2, cr<2, 0>
+  e4:	c0026424 	mtcr      	r2, cr<4, 0>
+  e8:	c0036420 	mtcr      	r3, cr<0, 0>
+  ec:	c0036422 	mtcr      	r3, cr<2, 0>
+  f0:	c0036424 	mtcr      	r3, cr<4, 0>
+  f4:	c0046420 	mtcr      	r4, cr<0, 0>
+  f8:	c0046422 	mtcr      	r4, cr<2, 0>
+  fc:	c0046424 	mtcr      	r4, cr<4, 0>
+ 100:	c0056420 	mtcr      	r5, cr<0, 0>
+ 104:	c0056422 	mtcr      	r5, cr<2, 0>
+ 108:	c0056424 	mtcr      	r5, cr<4, 0>
+ 10c:	c0066420 	mtcr      	r6, cr<0, 0>
+ 110:	c0066422 	mtcr      	r6, cr<2, 0>
+ 114:	c0066424 	mtcr      	r6, cr<4, 0>
+ 118:	c0076420 	mtcr      	r7, cr<0, 0>
+ 11c:	c0076422 	mtcr      	r7, cr<2, 0>
+ 120:	c0076424 	mtcr      	r7, cr<4, 0>
+ 124:	c0086420 	mtcr      	r8, cr<0, 0>
+ 128:	c0086422 	mtcr      	r8, cr<2, 0>
+ 12c:	c0086424 	mtcr      	r8, cr<4, 0>
+ 130:	c0096420 	mtcr      	r9, cr<0, 0>
+ 134:	c0096422 	mtcr      	r9, cr<2, 0>
+ 138:	c0096424 	mtcr      	r9, cr<4, 0>
+ 13c:	c00a6420 	mtcr      	r10, cr<0, 0>
+ 140:	c00a6422 	mtcr      	r10, cr<2, 0>
+ 144:	c00a6424 	mtcr      	r10, cr<4, 0>
+ 148:	c00b6420 	mtcr      	r11, cr<0, 0>
+ 14c:	c00b6422 	mtcr      	r11, cr<2, 0>
+ 150:	c00b6424 	mtcr      	r11, cr<4, 0>
+ 154:	c00c6420 	mtcr      	r12, cr<0, 0>
+ 158:	c00c6422 	mtcr      	r12, cr<2, 0>
+ 15c:	c00c6424 	mtcr      	r12, cr<4, 0>
+ 160:	c00d6420 	mtcr      	r13, cr<0, 0>
+ 164:	c00d6422 	mtcr      	r13, cr<2, 0>
+ 168:	c00d6424 	mtcr      	r13, cr<4, 0>
+ 16c:	c00e6420 	mtcr      	r14, cr<0, 0>
+ 170:	c00e6422 	mtcr      	r14, cr<2, 0>
+ 174:	c00e6424 	mtcr      	r14, cr<4, 0>
+ 178:	c00f6420 	mtcr      	r15, cr<0, 0>
+ 17c:	c00f6422 	mtcr      	r15, cr<2, 0>
+ 180:	c00f6424 	mtcr      	r15, cr<4, 0>
+ 184:	c0004020 	rte

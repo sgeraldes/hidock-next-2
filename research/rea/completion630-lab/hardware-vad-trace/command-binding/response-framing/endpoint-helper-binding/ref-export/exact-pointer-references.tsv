@@ -1,0 +1,10 @@
+target	memory_block	from	ref_type	function	instruction_or_data
+0104f528	ram:01000000-0112203f	0104f520	READ	0104f520	lrw r3,0x104f528
+000867d6	<unmapped>	0104f490	WRITE		st.h r2,(r3,0x0)
+000867d6	<unmapped>	0104f53e	DATA	0104f52c	st.w r3,(sp,0x10)
+000867d6	<unmapped>	0104f53a	PARAM	0104f52c	lrw r3,0x104f624
+000867d6	<unmapped>	0104f5be	READ	0104f52c	ld.h r3,(r3,0x0)
+000867d6	<unmapped>	0104f522	READ	0104f520	ld.h r0,(r3,0x0)
+000867d6	<unmapped>	0104f6fc	WRITE	0104f6a0	st.h r2,(r3,0x0)
+000867d6	<unmapped>	0104f6f4	PARAM	0104f6a0	lrw r3,0x104f724
+0106a840	ram:01000000-0112203f	0106a818	READ	0106a818	lrw r3,0x106a840

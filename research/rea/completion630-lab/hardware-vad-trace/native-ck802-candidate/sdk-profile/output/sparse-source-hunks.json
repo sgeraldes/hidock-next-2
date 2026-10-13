@@ -1,0 +1,102 @@
+{
+  "status": "sparse_source_hunks_only_not_installable",
+  "profile": "ck802-sdk-flags",
+  "byte_order_note": "before_hex and after_hex are raw file bytes, little-endian per halfword; not objdump display words.",
+  "source_sha256": "b338e4d5e7d456dd2b7a0048bb8e2c338e2464ad25029267b5e46cb4ad880c2f",
+  "elf_sha256": "576d7ac2b30755e41c6e23ba1a5cb3e6b7e65afb1c7c115b6f0be3a3b1844366",
+  "firmware_image_generated": false,
+  "applied": false,
+  "constructor_section_bytes": 140,
+  "constructor_instruction_bytes": 16,
+  "excluded_constructor_padding_bytes": 124,
+  "total_instruction_bytes": 28,
+  "hunks": [
+    {
+      "address": "01020b62",
+      "width": 4,
+      "role": "existing_native_getter_bridge",
+      "before_hex": "ffe303f8",
+      "after_hex": "08e01575",
+      "linked_target_symbol": "h1e_vad_native_poll_bridge",
+      "linked_target_address": "0112f58c",
+      "decoded_bsr_target_from_raw_bytes": "0112f58c",
+      "link_register_after_call": "01020b66"
+    },
+    {
+      "address": "01021054",
+      "width": 2,
+      "role": "allocate_96",
+      "before_hex": "4030",
+      "after_hex": "6030"
+    },
+    {
+      "address": "0102105c",
+      "width": 2,
+      "role": "retain_private_pointer",
+      "before_hex": "00b5",
+      "after_hex": "c36d"
+    },
+    {
+      "address": "0102106a",
+      "width": 2,
+      "role": "private_failure_pointer",
+      "before_hex": "0095",
+      "after_hex": "1f6c"
+    },
+    {
+      "address": "01021070",
+      "width": 4,
+      "role": "final_publication_decision",
+      "before_hex": "403ce30f",
+      "after_hex": "08e0c274",
+      "linked_target_symbol": "late_publication_stub",
+      "linked_target_address": "0112f9f4",
+      "decoded_bsr_target_from_raw_bytes": "0112f9f4",
+      "link_register_after_call": "01021074"
+    },
+    {
+      "address": "0102109e",
+      "width": 2,
+      "role": "zero_96",
+      "before_hex": "4032",
+      "after_hex": "6032"
+    },
+    {
+      "address": "010210a8",
+      "width": 2,
+      "role": "retain_private_pointer_after_zero",
+      "before_hex": "e095",
+      "after_hex": "df6d"
+    },
+    {
+      "address": "010210de",
+      "width": 2,
+      "role": "private_gpio_object",
+      "before_hex": "6095",
+      "after_hex": "df6c"
+    },
+    {
+      "address": "0103907a",
+      "width": 4,
+      "role": "native_response_dispatch",
+      "before_hex": "07e08194",
+      "after_hex": "07e04fb4",
+      "linked_target_symbol": "console630_response_hook",
+      "linked_target_address": "0112f918",
+      "decoded_bsr_target_from_raw_bytes": "0112f918",
+      "link_register_after_call": "0103907e"
+    },
+    {
+      "address": "0103a996",
+      "width": 4,
+      "role": "native_parser_dispatch",
+      "before_hex": "07e0cf87",
+      "after_hex": "07e09da7",
+      "linked_target_symbol": "console630_parser_hook",
+      "linked_target_address": "0112f8d0",
+      "decoded_bsr_target_from_raw_bytes": "0112f8d0",
+      "link_register_after_call": "0103a99a"
+    }
+  ],
+  "remaining": "Module placement/capacity, release prerequisites and authorized target qualification; no firmware apply path enabled."
+}

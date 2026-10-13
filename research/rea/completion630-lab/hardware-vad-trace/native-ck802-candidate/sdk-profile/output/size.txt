@@ -1,0 +1,2 @@
+   text	   data	    bss	    dec	    hex	filename
+   2836	      0	      0	   2836	    b14	/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/sdk-profile/output/conditional-source-ck802-sdk-NOTINSTALL.elf

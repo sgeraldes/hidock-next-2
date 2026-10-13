@@ -1,0 +1,2 @@
+# Preserve exact source/evidence bytes used by the recorded SHA-256 checks.
+* -text

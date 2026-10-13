@@ -1,0 +1,17 @@
+
+/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/lifecycle-followup/lifetime-fix/cleanup-reorder.elf:     file format elf32-csky-little
+
+Contents of section .text:
+ 1021074 003360b5 01e0f4c8 0034               .3`......4      
+Contents of section .csky.attributes:
+ 0000 41210000 0063736b 79000118 00000004  A!...csky.......
+ 0010 636b3831 30000563 6b383130 0006bef0  ck810..ck810....
+ 0020 c641                                 .A              
+
+Disassembly of section .text:
+
+01021074 <cleanup_window>:
+ 1021074:	3300      	movi      	r3, 0
+ 1021076:	b560      	st.w      	r3, (r5, 0x0)
+ 1021078:	e001c8f4 	bsr      	0x105a260	// 105a260 <native_free>
+ 102107c:	3400      	movi      	r4, 0

@@ -1,0 +1,58 @@
+{
+  "observedAt": "2026-10-13T11:23:41.121Z",
+  "boundary": "compiled-host-C-encoder-to-actual-TypeScript-SDK-parser",
+  "physicalHardware": false,
+  "firmwareGenerated": false,
+  "sourceHashes": {
+    "G:/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/vadt_core.c": "3b24144ba3c89b6750c98aad6b16d8bb36becac0969fdfb35e06a74da810dde8",
+    "G:/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/vadt_core.h": "7e17f0ecbba7b541569edcb85b2683d5f666f8f8c18b9c98e68e84e605920479",
+    "G:/Code/hidock-next-2/packages/jensen-protocol/src/native-vad-observation.ts": "8ac621842b397fd71f01d5e76b5e5eecd58424fb58e6f65ef92e2f9d1ff2189a"
+  },
+  "vectors": [
+    "0001000500000000000000000000000000000000000000000000000000000000",
+    "000101050000000200000001fffffffb00000000000000000000000000000004",
+    "0101000500000000000000000000000000000000000000000000000000000000"
+  ],
+  "replies": [
+    {
+      "version": 1,
+      "nativeState": 5,
+      "clockBinding": "unclocked",
+      "imageAttested": false,
+      "status": "ok",
+      "hasSample": false,
+      "attemptedReads": 0,
+      "successfulReads": 0,
+      "lastCompletedNativeStatus": 0,
+      "lastSuccessfulCallerWord": null,
+      "sequence": 0,
+      "age": null,
+      "dspFreshness": "unknown",
+      "voice": "unknown"
+    },
+    {
+      "version": 1,
+      "nativeState": 5,
+      "clockBinding": "unclocked",
+      "imageAttested": false,
+      "status": "ok",
+      "hasSample": true,
+      "attemptedReads": 2,
+      "successfulReads": 1,
+      "lastCompletedNativeStatus": -5,
+      "lastSuccessfulCallerWord": 0,
+      "sequence": 4,
+      "age": null,
+      "dspFreshness": "unknown",
+      "voice": "unknown"
+    },
+    {
+      "version": 1,
+      "nativeState": 5,
+      "clockBinding": "unclocked",
+      "imageAttested": false,
+      "status": "busy"
+    }
+  ],
+  "result": "passed"
+}

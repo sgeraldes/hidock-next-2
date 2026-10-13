@@ -1,0 +1,13 @@
+bytes: sizeof(vadt_status_t) sizeof(vadt_age_status_t) char_is_signed sizeof(vadt_telemetry_t)
+-- old profile: -mcpu=ck802 -Os
+
+/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/sdk-profile/output/probe-old-profile.o:     file format elf32-csky-little
+
+Contents of section .rodata:
+ 0000 20000404                              ...            
+-- SDK profile: -mcpu=ck802 -Os -fshort-enums -fsigned-char -fno-common -fno-delete-null-pointer-checks
+
+/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/sdk-profile/output/probe-sdk-profile.o:     file format elf32-csky-little
+
+Contents of section .rodata:
+ 0000 20010101                              ...            

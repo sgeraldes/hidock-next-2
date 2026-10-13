@@ -1,0 +1,33 @@
+{
+  "status": "conditional_offline_source_link_only",
+  "cpu": "ck802",
+  "hardware_tested": false,
+  "firmware_image_generated": false,
+  "installed": false,
+  "release_approved": false,
+  "module_example_base": "0112f000",
+  "libgcc_linked": true,
+  "qualification": "Profile compile only. Normal callee-save ABI, audited startup and delayed-publication prerequisites asserted; not target-qualified.",
+  "files": {
+    "candidate.map": "59ab06ef9e100eb341d0cc230b45b37bffc36058d3e0246ab2b5302fff6472c7",
+    "candidate.objdump.txt": "5bd1cf0fafcb147a3e05271f4682ee6cdd7a7df1f7d5259f96553d254960a82c",
+    "conditional-source-ck802-NOTINSTALL.elf": "00ff881658905c61a39b339506fd61894e28060900cf0420faf56176d5a491ae",
+    "console-hooks.o": "46bf2f587bc957868d95e88a888fb67b20c865be3d410c9d6fd2439f8496098a",
+    "console630_f11a.o": "647b35bdcd7fe20c872b565d1360f6c2e886f5ea9b0be0cfa31a8fb1baa15ce0",
+    "constructor.o": "2d0d49b72e19d397943409ca073b1ad973c48ae93bc088d24efabec7b240d67d",
+    "h1e_vad_native_loader.o": "bd1a6b1b0c67c0c91ea39f59e172924eaf1fa0e78ef60327175134e662a1e8dc",
+    "h1e_vad_native_poll.o": "2f9d80947e2d502ccdf9c8f7b739e0cba7841be999d72c1fbdaa38c91b076644",
+    "input-check-post.txt": "8300e129e1bdb3a26f87a769e88d29f92354154562d9cec874c80c120505d758",
+    "input-check.txt": "8300e129e1bdb3a26f87a769e88d29f92354154562d9cec874c80c120505d758",
+    "input-hashes-post.json": "24c97109ea79776cb7b1045acbf78865b528f78b493208840692693555051c70",
+    "input-hashes-pre.json": "24c97109ea79776cb7b1045acbf78865b528f78b493208840692693555051c70",
+    "poll-hook.o": "5770421e88e3e654e24eb9555530f260fbbfc8c3a83d1349d17083afa706ff83",
+    "sections.txt": "251a1a4312cb0285b9466e6873028d923080876caae37dae5a916215734013d5",
+    "symbols.txt": "9765956593197cbe01db81b88bdf00a7bf1e327027d4d9d53dd7d47ad501c90d",
+    "vadt_binding.o": "eb58a698439d141ba34f3f21acf48ba22f07e2e0cd015526b5bd96525ba116b7",
+    "vadt_core.o": "0660d4f52a1fad89124e263f74bab45c88753c65509d8735ef264c8ec3020e4a",
+    "vadt_csky_guard.o": "1d5cd794a68a84ffcdaf1b7878caf810e2e05427b322848a6ed5097c6d38708e",
+    "vadt_frame.o": "fc5e5658fc6ef160416f759457e932b7198c2e774805b1d033e2b0e6638f4570",
+    "vadt_frame_target.o": "72b4c5a5e933f09cdef36ee720f3de73310e8524d8f3f02aa7fd0cab126ca436"
+  }
+}

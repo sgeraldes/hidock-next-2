@@ -1,0 +1,8 @@
+== original site 01020b62 -> 0101fb68
+01020b62 <hook_site>:
+ 1020b62:	e3fff803 	bsr      	0x101fb68	// 101fb68 <h1e_hook_target>
+ ff e3 03 f8
+== hypothetical site 01020b62 -> 0112c000 (unallocated, defsym only)
+01020b62 <hook_site>:
+ 1020b62:	e0085a4f 	bsr      	0x112c000	// 112c000 <h1e_hook_target>
+ 08 e0 4f 5a

@@ -1,0 +1,78 @@
+{
+  "kind": "exact-source-byte-comparison",
+  "physicalVadTest": false,
+  "officialSha256": "5f8ba521c9cdec6eb25d84825f248543c81e8f0daa96094bdb705a53f7e673ce",
+  "customSha256": "b338e4d5e7d456dd2b7a0048bb8e2c338e2464ad25029267b5e46cb4ad880c2f",
+  "spans": [
+    {
+      "address": "0x01021024",
+      "bytes": 324,
+      "description": "state constructor and literals",
+      "differences": 0,
+      "officialSha256": "1bd6c09f9d15e6095cc11104930b0dd8418594807a845ce516f9ce52955794dd",
+      "customSha256": "1bd6c09f9d15e6095cc11104930b0dd8418594807a845ce516f9ce52955794dd"
+    },
+    {
+      "address": "0x01020f74",
+      "bytes": 152,
+      "description": "state transition helper and literals",
+      "differences": 0,
+      "officialSha256": "e19a8b28da28f3e96c95712b27087293ac1d5f83604b438b5748027e2d502395",
+      "customSha256": "e19a8b28da28f3e96c95712b27087293ac1d5f83604b438b5748027e2d502395"
+    },
+    {
+      "address": "0x010217dc",
+      "bytes": 144,
+      "description": "scheduler dispatch and literals",
+      "differences": 0,
+      "officialSha256": "be55af1ef32e2ccfc5385487803de2a1b16d44912b2a99c4d7f3f7b3ed24e7fc",
+      "customSha256": "be55af1ef32e2ccfc5385487803de2a1b16d44912b2a99c4d7f3f7b3ed24e7fc"
+    },
+    {
+      "address": "0x01090054",
+      "bytes": 12,
+      "description": "clock low/high load and literal",
+      "differences": 0,
+      "officialSha256": "4075474662df0aed64b53ead6f59d294e514880cd7bd67ee8ce43d58686768a3",
+      "customSha256": "4075474662df0aed64b53ead6f59d294e514880cd7bd67ee8ce43d58686768a3"
+    },
+    {
+      "address": "0x0103312e",
+      "bytes": 4,
+      "description": "main-loop scheduler call",
+      "differences": 0,
+      "officialSha256": "516dbf13007a8353b9513c999acbdef2d3983b7b05089d52120811e87c696dc2",
+      "customSha256": "516dbf13007a8353b9513c999acbdef2d3983b7b05089d52120811e87c696dc2"
+    },
+    {
+      "address": "0x0103316a",
+      "bytes": 4,
+      "description": "main-loop state manager call",
+      "differences": 0,
+      "officialSha256": "0c70f1c1cb0b6301f2a3fe2d263a43a6933fa62ac84b0c282cd444245ee64e69",
+      "customSha256": "0c70f1c1cb0b6301f2a3fe2d263a43a6933fa62ac84b0c282cd444245ee64e69"
+    }
+  ],
+  "exactSites": [
+    {
+      "address": "0x01021054",
+      "purpose": "malloc size",
+      "bytes": "4030"
+    },
+    {
+      "address": "0x0102109e",
+      "purpose": "zeroing size",
+      "bytes": "4032"
+    },
+    {
+      "address": "0x01020b62",
+      "purpose": "native getter call",
+      "bytes": "ffe303f8"
+    },
+    {
+      "address": "0x010217f4",
+      "purpose": "unsigned deadline comparison",
+      "bytes": "8064"
+    }
+  ]
+}

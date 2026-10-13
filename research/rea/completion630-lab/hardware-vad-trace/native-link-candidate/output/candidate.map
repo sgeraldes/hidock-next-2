@@ -1,0 +1,190 @@
+
+Memory Configuration
+
+Name             Origin             Length             Attributes
+*default*        0x0000000000000000 0xffffffffffffffff
+
+Linker script and memory map
+
+                0x000000000112c2c4                PROVIDE (upload630_parse, 0x112c2c4)
+                0x000000000112ca1c                PROVIDE (upload630_response, 0x112ca1c)
+                0x000000000112d7d8                PROVIDE (restore630_parse, 0x112d7d8)
+                0x000000000112e162                PROVIDE (restore630_response, 0x112e162)
+
+.vad_text       0x000000000112f000      0xa2c
+ *(.text*)
+ .text          0x000000000112f000      0x2ba /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_core.o
+                0x000000000112f010                vadt_init
+                0x000000000112f024                vadt_record_completed
+                0x000000000112f08c                vadt_poll
+                0x000000000112f0e4                vadt_snapshot
+                0x000000000112f148                vadt_age
+                0x000000000112f26c                vadt_encode_reply
+                0x000000000112f28c                vadt_encode_reply_with_age
+ *fill*         0x000000000112f2ba        0x2 
+ .text          0x000000000112f2bc       0xca /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_binding.o
+                0x000000000112f2bc                vadt_getter_adapter
+                0x000000000112f2c8                vadt_binding_poll
+                0x000000000112f320                vadt_binding_read
+ *fill*         0x000000000112f386        0x2 
+ .text          0x000000000112f388       0x12 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_csky_guard.o
+                0x000000000112f388                vadt_csky_guard_enter
+                0x000000000112f394                vadt_csky_guard_exit
+ *fill*         0x000000000112f39a        0x2 
+ .text          0x000000000112f39c      0x1c8 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_frame.o
+                0x000000000112f3b4                vadt_f11a_parse_frame
+                0x000000000112f458                vadt_f11a_response_frame
+ .text          0x000000000112f564       0x5c /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_frame_target.o
+                0x000000000112f574                vadt_f11a_parse
+                0x000000000112f594                vadt_f11a_response
+ .text          0x000000000112f5c0       0x18 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/h1e_vad_native_poll.o
+                0x000000000112f5c0                h1e_vad_native_poll_bridge
+ .text          0x000000000112f5d8      0x2e0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/console630_f11a.o
+                0x000000000112f668                console630_parse
+                0x000000000112f748                console630_response
+ .text          0x000000000112f8b8       0x44 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/h1e_vad_native_loader.o
+                0x000000000112f8b8                h1e_vad_load_object
+                0x000000000112f8ec                h1e_vad_snapshot_read
+ .text          0x000000000112f8fc       0xa8 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/console-hooks.o
+                0x000000000112f8fc                console630_parser_hook
+                0x000000000112f944                console630_response_hook
+ .text          0x000000000112f9a4        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/constructor.o
+ .text          0x000000000112f9a4        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/poll-hook.o
+ *(SORT(.csky.code.*))
+ *(.stub)
+ .stub          0x000000000112f9a4       0x1c /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/constructor.o
+                0x000000000112f9a4                late_publication_stub
+ *(.rodata*)
+ .rodata        0x000000000112f9c0       0x10 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/h1e_vad_native_poll.o
+ .rodata.str1.1
+                0x000000000112f9d0       0x49 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/console630_f11a.o
+ *fill*         0x000000000112fa19        0x3 
+ .rodata        0x000000000112fa1c       0x10 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/h1e_vad_native_loader.o
+
+.data           0x000000000112fa2c        0x0
+ *(.data*)
+ .data          0x000000000112fa2c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_core.o
+ .data          0x000000000112fa2c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_binding.o
+ .data          0x000000000112fa2c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_csky_guard.o
+ .data          0x000000000112fa2c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_frame.o
+ .data          0x000000000112fa2c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_frame_target.o
+ .data          0x000000000112fa2c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/h1e_vad_native_poll.o
+ .data          0x000000000112fa2c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/console630_f11a.o
+ .data          0x000000000112fa2c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/h1e_vad_native_loader.o
+ .data          0x000000000112fa2c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/console-hooks.o
+ .data          0x000000000112fa2c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/constructor.o
+ .data          0x000000000112fa2c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/poll-hook.o
+
+.bss            0x000000000112fa2c        0x0
+ *(.bss*)
+ .bss           0x000000000112fa2c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_core.o
+ .bss           0x000000000112fa2c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_binding.o
+ .bss           0x000000000112fa2c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_csky_guard.o
+ .bss           0x000000000112fa2c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_frame.o
+ .bss           0x000000000112fa2c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_frame_target.o
+ .bss           0x000000000112fa2c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/h1e_vad_native_poll.o
+ .bss           0x000000000112fa2c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/console630_f11a.o
+ .bss           0x000000000112fa2c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/h1e_vad_native_loader.o
+ .bss           0x000000000112fa2c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/console-hooks.o
+ .bss           0x000000000112fa2c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/constructor.o
+ .bss           0x000000000112fa2c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/poll-hook.o
+ *(COMMON)
+
+.constructor_edits
+                0x0000000001021054       0x8c
+ *(.edits)
+ .edits         0x0000000001021054       0x8c /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/constructor.o
+                0x0000000001021054                late_constructor_edits
+
+.poll_hook      0x0000000001020b62        0x4
+ *(.patch_vad_poll)
+ .patch_vad_poll
+                0x0000000001020b62        0x4 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/poll-hook.o
+
+.parser_hook    0x000000000103a996        0x4
+ *(.patch_console_parser)
+ .patch_console_parser
+                0x000000000103a996        0x4 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/console-hooks.o
+
+.response_hook  0x000000000103907a        0x4
+ *(.patch_console_response)
+ .patch_console_response
+                0x000000000103907a        0x4 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/console-hooks.o
+                0x0000000000000001                ASSERT (((SIZEOF (.data) == 0x0) && (SIZEOF (.bss) == 0x0)), Writable XIP globals prohibited)
+                0x0000000000000001                ASSERT ((SIZEOF (.poll_hook) == 0x4), Native poll hook must be four bytes)
+                0x0000000000000001                ASSERT (((SIZEOF (.parser_hook) == 0x4) && (SIZEOF (.response_hook) == 0x4)), Console hooks must be four bytes)
+                0x0000000000000001                ASSERT ((SIZEOF (.vad_text) <= 0x4000), Offline candidate exceeds 16 KiB budget)
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_core.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_binding.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_csky_guard.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_frame.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_frame_target.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/h1e_vad_native_poll.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/console630_f11a.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/h1e_vad_native_loader.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/console-hooks.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/constructor.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/poll-hook.o
+OUTPUT(/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/conditional-source-NOTINSTALL.elf elf32-csky-little)
+
+.rela.dyn       0x0000000001039080        0x0
+ .rela.text     0x0000000001039080        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/console630_f11a.o
+
+.comment        0x0000000000000000       0x42
+ .comment       0x0000000000000000       0x42 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_core.o
+                                         0x43 (size before relaxing)
+ .comment       0x0000000000000042       0x43 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_binding.o
+ .comment       0x0000000000000042       0x43 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_csky_guard.o
+ .comment       0x0000000000000042       0x43 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_frame.o
+ .comment       0x0000000000000042       0x43 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_frame_target.o
+ .comment       0x0000000000000042       0x43 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/h1e_vad_native_poll.o
+ .comment       0x0000000000000042       0x43 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/console630_f11a.o
+ .comment       0x0000000000000042       0x43 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/h1e_vad_native_loader.o
+
+.csky_stack_size
+                0x0000000000000000       0xec
+ .csky_stack_size
+                0x0000000000000000       0x34 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_core.o
+ *fill*         0x0000000000000034        0xc 
+ .csky_stack_size
+                0x0000000000000040       0x1c /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_binding.o
+ *fill*         0x000000000000005c        0x4 
+ .csky_stack_size
+                0x0000000000000060       0x14 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_frame.o
+ *fill*         0x0000000000000074        0xc 
+ .csky_stack_size
+                0x0000000000000080       0x14 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_frame_target.o
+ *fill*         0x0000000000000094        0xc 
+ .csky_stack_size
+                0x00000000000000a0        0xc /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/h1e_vad_native_poll.o
+ *fill*         0x00000000000000ac        0x4 
+ .csky_stack_size
+                0x00000000000000b0       0x24 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/console630_f11a.o
+ *fill*         0x00000000000000d4        0xc 
+ .csky_stack_size
+                0x00000000000000e0        0xc /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/h1e_vad_native_loader.o
+
+.csky.attributes
+                0x0000000000000000       0x21
+ .csky.attributes
+                0x0000000000000000       0x21 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_core.o
+ .csky.attributes
+                0x0000000000000021       0x21 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_binding.o
+ .csky.attributes
+                0x0000000000000042       0x21 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_csky_guard.o
+ .csky.attributes
+                0x0000000000000063       0x21 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_frame.o
+ .csky.attributes
+                0x0000000000000084       0x21 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/vadt_frame_target.o
+ .csky.attributes
+                0x00000000000000a5       0x21 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/h1e_vad_native_poll.o
+ .csky.attributes
+                0x00000000000000c6       0x21 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/console630_f11a.o
+ .csky.attributes
+                0x00000000000000e7       0x21 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/h1e_vad_native_loader.o
+ .csky.attributes
+                0x0000000000000108       0x21 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/console-hooks.o
+ .csky.attributes
+                0x0000000000000129       0x21 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/constructor.o
+ .csky.attributes
+                0x000000000000014a       0x21 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/output/poll-hook.o

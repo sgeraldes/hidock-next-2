@@ -1,0 +1,133 @@
+{
+  "createdAt": "2026-10-13T12:01:34.622Z",
+  "kind": "source-review-handoff-not-target-qualification",
+  "sourcePins": {
+    "official630": "5f8ba521c9cdec6eb25d84825f248543c81e8f0daa96094bdb705a53f7e673ce",
+    "frozen393988": "b338e4d5e7d456dd2b7a0048bb8e2c338e2464ad25029267b5e46cb4ad880c2f"
+  },
+  "files": [
+    {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/vadt_core.h",
+      "sha256": "f8dae82ce77a3fc2f0599f9feb2be77cf688694e9c6b103f83cd803faeb9bbd4"
+    },
+    {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/vadt_core.c",
+      "sha256": "e2efb05c8e0adb60a2e4a7309a23a83aa15272042f173d3af7d3381712ffc276"
+    },
+    {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/vadt_binding.h",
+      "sha256": "5c89d77206a0f8cf5e3e219312c367d5cef1402365432ed04f34366473012f89"
+    },
+    {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/vadt_binding.c",
+      "sha256": "edbd510b6babf15d20c4b4ae2feb8282f54957d14360e2d4f7c3fb521cd7f2bc"
+    },
+    {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/vadt_csky_guard.c",
+      "sha256": "42a761942e7dacfe86d3f75ed226e1991b859ecdad54347db0f11bbc79c5df59"
+    },
+    {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/vadt_test.c",
+      "sha256": "3604034837f414e966a75190319400faa5a975927c0fadca6f853330863e8010"
+    },
+    {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/CONTRACT.md",
+      "sha256": "d1f2f975b95c6b1c3795bb87b607adf406bd09658bb67effa71e37ec0f8a5412"
+    },
+    {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/REPORT.md",
+      "sha256": "f8a8c85ca0bd073b6f1479792afdd5b154a0dea94611ededa1fba790bf3fb5f2"
+    },
+    {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/RUN.md",
+      "sha256": "56abdb5a3b2c7ea825bc13067e5d65e7d12dab73200425cb5f92ac2cc298ff71"
+    },
+    {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/lifecycle-followup/lifetime-fix/REPORT.md",
+      "sha256": "34243f3944efa3b1f0ce96408a374dcb44150358e663f964d27cf073f2330c1c"
+    },
+    {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/command-binding/REPORT.md",
+      "sha256": "bafc7af723c1c50f1b4aa3f91491c9b26454e9aea310faccfa94caaf47f5b83e"
+    },
+    {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/command-binding/namespace-proof/REPORT.md",
+      "sha256": "d0c6f8fc6c61db146c4b138db8bb0f7d7f58a76aa982ffe7d46b378a8b3db087"
+    },
+    {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/object-tail-audit/REPORT.md",
+      "sha256": "f6db0dc0ff3273f8c71fe430e782645aacc2e0f6f1ad10e5ca30bda4217c7a14"
+    },
+    {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/command-binding/target-scheduler/REPORT.md",
+      "sha256": "5c95a83f51e4dff32c260eb9cbcfc12d56cbbee0665464c13f7bf94699903919"
+    },
+    {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/command-binding/target-scheduler/primary-mask-contract/REPORT.md",
+      "sha256": "8176285ab78dade37d62256f64eecbd3ae90d68026339d1f7578a333cdf8a1a0"
+    },
+    {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/sdk-codec/REPORT.md",
+      "sha256": "206d6b330c530e5aac6b987c8ef65d31f2c497935d898381d6390f372c6b7b11"
+    },
+    {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/cache-bridge-candidate/host-c-sdk-final-interop-1791892625179.json",
+      "sha256": "b3d77b05ba962d5abc1ddd797b6b2d086452ef26fa972d3688fe2047959cfabe"
+    },
+    {
+      "path": "packages/jensen-protocol/src/native-vad-observation.ts",
+      "sha256": "99cc4c74ec9f9abcab2d6a0b4b9a58034e3d410cf7bf5830747976ae2c05fc1c"
+    },
+    {
+      "path": "packages/jensen-protocol/src/native-vad-observation.test.ts",
+      "sha256": "65fe199fbde34322c1c79c8cbe013a8ee16ac225880b3c9002769ec13c42da1a"
+    }
+  ],
+  "observedBoundaries": {
+    "hostCompiledCToActualSdkParser": "passed",
+    "interopVectors": 5,
+    "physicalVad": false,
+    "targetImageGenerated": false
+  },
+  "agentReportedChecks": {
+    "coreHostChecks": 118,
+    "coreHostFailures": 0,
+    "sdkFocusedTests": 66,
+    "sdkTypecheck": "passed",
+    "isolatedCskyCompilerCpuChoice": "ck803",
+    "actualSiliconModel": "unconfirmed"
+  },
+  "proposal": {
+    "command": "0xf11a",
+    "allocated": false,
+    "requestBodyHex": "01",
+    "responseBodyBytes": 32,
+    "statusByteIncluded": true,
+    "age": "unavailable",
+    "physicalVoiceInterpretation": "unknown",
+    "objectTailBytes": 32
+  },
+  "sourceFindings": {
+    "f11aExactFrozenChainCollision": "none-found-unsupported-default",
+    "directObjectTailOverlap": "none-in-13-retained-users",
+    "constructorEdits": "assembled-proposed-not-applied",
+    "nativeBinding": "unconnected-no-loader-hook-or-frame-handler",
+    "publicSdkExports": "absent",
+    "appIntegration": "absent"
+  },
+  "remaining": [
+    "Native binding lifetime/readiness and same-core synchronization require independent review.",
+    "Exact 0xe000ec08 register-to-TSpending mapping and target CPU/VIC applicability remain unproven; vendor mask interpretation is compatibility evidence.",
+    "No generated image, native wrapper ABI/branch installation, live command or voice/source meaning qualification exists.",
+    "Heap alignment/allocation success and indirect provider bounds remain runtime/source qualification limits."
+  ],
+  "hardware": {
+    "operationsThisHandoff": [],
+    "lastKnownFirmware": 393988,
+    "liveIdentityQueriedForHandoff": false
+  },
+  "git": {
+    "indexTouchedByThisWork": false,
+    "commitPushOwner": "original-H1E-root-session"
+  }
+}

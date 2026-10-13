@@ -1,0 +1,317 @@
+
+console630_f11a.ck803.o:     file format elf32-csky-little
+
+
+Disassembly of section .text:
+
+00000000 <decimal>:
+   0:	14c2      	push      	r4-r5
+   2:	1423      	subi      	r14, r14, 12
+   4:	3300      	movi      	r3, 0
+   6:	340a      	movi      	r4, 10
+   8:	c482802d 	divu      	r13, r2, r4
+   c:	c48d8425 	mult      	r5, r13, r4
+  10:	6096      	subu      	r2, r5
+  12:	222f      	addi      	r2, 48
+  14:	e5830000 	addi      	r12, r3, 1
+  18:	d46e0022 	str.b      	r2, (r14, r3 << 0)
+  1c:	6cb7      	mov      	r2, r13
+  1e:	6cf3      	mov      	r3, r12
+  20:	e92dfff4 	bnez      	r13, 0x8	// 8 <decimal+0x8>
+  24:	5844      	addu      	r2, r0, r1
+  26:	2b00      	subi      	r3, 1
+  28:	d06e0020 	ldr.b      	r0, (r14, r3 << 0)
+  2c:	a200      	st.b      	r0, (r2, 0x0)
+  2e:	2200      	addi      	r2, 1
+  30:	e923fffb 	bnez      	r3, 0x26	// 26 <decimal+0x26>
+  34:	c42c0020 	addu      	r0, r12, r1
+  38:	1403      	addi      	r14, r14, 12
+  3a:	1482      	pop      	r4-r5
+
+0000003c <version>:
+  3c:	14d3      	push      	r4-r6, r15
+  3e:	1421      	subi      	r14, r14, 4
+  40:	6d03      	mov      	r4, r0
+  42:	6d8f      	mov      	r6, r3
+  44:	9865      	ld.w      	r3, (r14, 0x14)
+  46:	b860      	st.w      	r3, (r14, 0x0)
+  48:	352e      	movi      	r5, 46
+  4a:	e0000000 	bsr      	0x0	// 0 <decimal>
+			4a: R_CKCORE_PCREL_IMM26BY2	decimal
+  4e:	d4040025 	str.b      	r5, (r4, r0 << 0)
+  52:	6c9b      	mov      	r2, r6
+  54:	5822      	addi      	r1, r0, 1
+  56:	6c13      	mov      	r0, r4
+  58:	e0000000 	bsr      	0x0	// 0 <decimal>
+			58: R_CKCORE_PCREL_IMM26BY2	decimal
+  5c:	d4040025 	str.b      	r5, (r4, r0 << 0)
+  60:	5822      	addi      	r1, r0, 1
+  62:	9840      	ld.w      	r2, (r14, 0x0)
+  64:	6c13      	mov      	r0, r4
+  66:	e0000000 	bsr      	0x0	// 0 <decimal>
+			66: R_CKCORE_PCREL_IMM26BY2	decimal
+  6a:	1401      	addi      	r14, r14, 4
+  6c:	1493      	pop      	r4-r6, r15
+	...
+
+00000070 <equal>:
+  70:	64c6      	cmpne      	r1, r3
+  72:	080d      	bt      	0x8c	// 8c <equal+0x1c>
+  74:	6040      	addu      	r1, r0
+  76:	6442      	cmpne      	r0, r1
+  78:	0803      	bt      	0x7e	// 7e <equal+0xe>
+  7a:	3001      	movi      	r0, 1
+  7c:	783c      	jmp      	r15
+  7e:	d9800000 	ld.b      	r12, (r0, 0x0)
+  82:	8260      	ld.b      	r3, (r2, 0x0)
+  84:	64f2      	cmpne      	r12, r3
+  86:	2000      	addi      	r0, 1
+  88:	2200      	addi      	r2, 1
+  8a:	0ff6      	bf      	0x76	// 76 <equal+0x6>
+  8c:	3000      	movi      	r0, 0
+  8e:	07f7      	br      	0x7c	// 7c <equal+0xc>
+
+00000090 <console630_parse>:
+  90:	14d4      	push      	r4-r7, r15
+  92:	90a5      	ld.w      	r5, (r0, 0x14)
+  94:	6d87      	mov      	r6, r1
+  96:	8562      	ld.b      	r3, (r5, 0x2)
+  98:	4368      	lsli      	r3, r3, 8
+  9a:	d9a50003 	ld.b      	r13, (r5, 0x3)
+  9e:	6cf4      	or      	r3, r13
+  a0:	eb43f119 	cmpnei      	r3, 61721
+  a4:	6dcb      	mov      	r7, r2
+  a6:	0804      	bt      	0xae	// ae <console630_parse+0x1e>
+  a8:	e0000000 	bsr      	0x0	// 0 <restore630_parse>
+			a8: R_CKCORE_PCREL_IMM26BY2	restore630_parse
+  ac:	1494      	pop      	r4-r7, r15
+  ae:	eb43f118 	cmpnei      	r3, 61720
+  b2:	0804      	bt      	0xba	// ba <upload630_parse+0xba>
+  b4:	e0000000 	bsr      	0x0	// 0 <upload630_parse>
+			b4: R_CKCORE_PCREL_IMM26BY2	upload630_parse
+  b8:	07fa      	br      	0xac	// ac <console630_parse+0x1c>
+  ba:	eb43f11a 	cmpnei      	r3, 61722
+  be:	0804      	bt      	0xc6	// c6 <vadt_f11a_parse+0xc6>
+  c0:	e0000000 	bsr      	0x0	// 0 <vadt_f11a_parse>
+			c0: R_CKCORE_PCREL_IMM26BY2	vadt_f11a_parse
+  c4:	07f4      	br      	0xac	// ac <console630_parse+0x1c>
+  c6:	eb43f117 	cmpnei      	r3, 61719
+  ca:	0c04      	bf      	0xd2	// d2 <console630_parse+0x42>
+  cc:	1379      	lrw      	r3, 0x1128698	// 2b0 <console630_response+0x140>
+  ce:	7bcd      	jsr      	r3
+  d0:	07ee      	br      	0xac	// ac <console630_parse+0x1c>
+  d2:	ea0355c0 	movi      	r3, 21952
+  d6:	3bb3      	bseti      	r3, 19
+  d8:	8b6e      	ld.h      	r3, (r3, 0x1c)
+  da:	74cd      	zexth      	r3, r3
+  dc:	eb43f117 	cmpnei      	r3, 61719
+  e0:	0844      	bt      	0x168	// 168 <console630_parse+0xd8>
+  e2:	9027      	ld.w      	r1, (r0, 0x1c)
+  e4:	e906003c 	bez      	r6, 0x15c	// 15c <console630_parse+0xcc>
+  e8:	e9010034 	bez      	r1, 0x150	// 150 <console630_parse+0xc0>
+  ec:	3a07      	cmphsi      	r2, 8
+  ee:	0837      	bt      	0x15c	// 15c <console630_parse+0xcc>
+  f0:	8568      	ld.b      	r3, (r5, 0x8)
+  f2:	8549      	ld.b      	r2, (r5, 0x9)
+  f4:	4250      	lsli      	r2, r2, 16
+  f6:	4378      	lsli      	r3, r3, 24
+  f8:	6cc8      	or      	r3, r2
+  fa:	854b      	ld.b      	r2, (r5, 0xb)
+  fc:	6cc8      	or      	r3, r2
+  fe:	854a      	ld.b      	r2, (r5, 0xa)
+ 100:	4248      	lsli      	r2, r2, 8
+ 102:	6cc8      	or      	r3, r2
+ 104:	64de      	cmpne      	r7, r3
+ 106:	082b      	bt      	0x15c	// 15c <console630_parse+0xcc>
+ 108:	9164      	ld.w      	r3, (r1, 0x10)
+ 10a:	e9230029 	bnez      	r3, 0x15c	// 15c <console630_parse+0xcc>
+ 10e:	ea0355c0 	movi      	r3, 21952
+ 112:	3bb3      	bseti      	r3, 19
+ 114:	836c      	ld.b      	r3, (r3, 0xc)
+ 116:	e9230023 	bnez      	r3, 0x15c	// 15c <console630_parse+0xcc>
+ 11a:	3304      	movi      	r3, 4
+ 11c:	1346      	lrw      	r2, 0x0	// 2b4 <console630_response+0x144>
+ 11e:	6c5f      	mov      	r1, r7
+ 120:	6c1b      	mov      	r0, r6
+ 122:	e0000000 	bsr      	0x0	// 70 <equal>
+			122: R_CKCORE_PCREL_IMM26BY2	equal
+ 126:	e920001d 	bnez      	r0, 0x160	// 160 <console630_parse+0xd0>
+ 12a:	3307      	movi      	r3, 7
+ 12c:	1343      	lrw      	r2, 0x0	// 2b8 <console630_response+0x148>
+ 12e:	6c5f      	mov      	r1, r7
+ 130:	6c1b      	mov      	r0, r6
+ 132:	e0000000 	bsr      	0x0	// 70 <equal>
+			132: R_CKCORE_PCREL_IMM26BY2	equal
+ 136:	6d03      	mov      	r4, r0
+ 138:	e9200016 	bnez      	r0, 0x164	// 164 <console630_parse+0xd4>
+ 13c:	6c5f      	mov      	r1, r7
+ 13e:	3306      	movi      	r3, 6
+ 140:	125f      	lrw      	r2, 0x0	// 2bc <console630_response+0x14c>
+ 142:	6c1b      	mov      	r0, r6
+ 144:	e0000000 	bsr      	0x0	// 70 <equal>
+			144: R_CKCORE_PCREL_IMM26BY2	equal
+ 148:	3840      	cmpnei      	r0, 0
+ 14a:	3103      	movi      	r1, 3
+ 14c:	c4240c20 	incf      	r1, r4, 0
+ 150:	3940      	cmpnei      	r1, 0
+ 152:	6403      	mvcv      	r0
+ 154:	7400      	zextb      	r0, r0
+ 156:	a508      	st.b      	r0, (r5, 0x8)
+ 158:	a529      	st.b      	r1, (r5, 0x9)
+ 15a:	07a9      	br      	0xac	// ac <console630_parse+0x1c>
+ 15c:	3100      	movi      	r1, 0
+ 15e:	07f9      	br      	0x150	// 150 <console630_parse+0xc0>
+ 160:	3101      	movi      	r1, 1
+ 162:	07f7      	br      	0x150	// 150 <console630_parse+0xc0>
+ 164:	3102      	movi      	r1, 2
+ 166:	07f5      	br      	0x150	// 150 <console630_parse+0xc0>
+ 168:	3000      	movi      	r0, 0
+ 16a:	2800      	subi      	r0, 1
+ 16c:	07a0      	br      	0xac	// ac <console630_parse+0x1c>
+	...
+
+00000170 <console630_response>:
+ 170:	14d4      	push      	r4-r7, r15
+ 172:	142d      	subi      	r14, r14, 52
+ 174:	9046      	ld.w      	r2, (r0, 0x18)
+ 176:	eb42f119 	cmpnei      	r2, 61721
+ 17a:	0805      	bt      	0x184	// 184 <restore630_response+0x184>
+ 17c:	e0000000 	bsr      	0x0	// 0 <restore630_response>
+			17c: R_CKCORE_PCREL_IMM26BY2	restore630_response
+ 180:	140d      	addi      	r14, r14, 52
+ 182:	1494      	pop      	r4-r7, r15
+ 184:	eb42f118 	cmpnei      	r2, 61720
+ 188:	0804      	bt      	0x190	// 190 <upload630_response+0x190>
+ 18a:	e0000000 	bsr      	0x0	// 0 <upload630_response>
+			18a: R_CKCORE_PCREL_IMM26BY2	upload630_response
+ 18e:	07f9      	br      	0x180	// 180 <console630_response+0x10>
+ 190:	eb42f11a 	cmpnei      	r2, 61722
+ 194:	0806      	bt      	0x1a0	// 1a0 <console630_response+0x30>
+ 196:	3200      	movi      	r2, 0
+ 198:	122a      	lrw      	r1, 0x0	// 2c0 <console630_response+0x150>
+ 19a:	e0000000 	bsr      	0x0	// 0 <vadt_f11a_response>
+			19a: R_CKCORE_PCREL_IMM26BY2	vadt_f11a_response
+ 19e:	07f1      	br      	0x180	// 180 <console630_response+0x10>
+ 1a0:	eb42f117 	cmpnei      	r2, 61719
+ 1a4:	0c04      	bf      	0x1ac	// 1ac <console630_response+0x3c>
+ 1a6:	1268      	lrw      	r3, 0x1128798	// 2c4 <console630_response+0x154>
+ 1a8:	7bcd      	jsr      	r3
+ 1aa:	07eb      	br      	0x180	// 180 <console630_response+0x10>
+ 1ac:	904a      	ld.w      	r2, (r0, 0x28)
+ 1ae:	90a8      	ld.w      	r5, (r0, 0x20)
+ 1b0:	9087      	ld.w      	r4, (r0, 0x1c)
+ 1b2:	e9220005 	bnez      	r2, 0x1bc	// 1bc <console630_response+0x4c>
+ 1b6:	3000      	movi      	r0, 0
+ 1b8:	2801      	subi      	r0, 2
+ 1ba:	07e3      	br      	0x180	// 180 <console630_response+0x10>
+ 1bc:	e904fffd 	bez      	r4, 0x1b6	// 1b6 <console630_response+0x46>
+ 1c0:	e905fffb 	bez      	r5, 0x1b6	// 1b6 <console630_response+0x46>
+ 1c4:	8268      	ld.b      	r3, (r2, 0x8)
+ 1c6:	e9030006 	bez      	r3, 0x1d2	// 1d2 <console630_response+0x62>
+ 1ca:	3301      	movi      	r3, 1
+ 1cc:	a46c      	st.b      	r3, (r4, 0xc)
+ 1ce:	3001      	movi      	r0, 1
+ 1d0:	07d8      	br      	0x180	// 180 <console630_response+0x10>
+ 1d2:	8249      	ld.b      	r2, (r2, 0x9)
+ 1d4:	3a41      	cmpnei      	r2, 1
+ 1d6:	0821      	bt      	0x218	// 218 <console630_response+0xa8>
+ 1d8:	111c      	lrw      	r0, 0x0	// 2c8 <console630_response+0x158>
+ 1da:	e58e0003 	addi      	r12, r14, 4
+ 1de:	d0600021 	ldr.b      	r1, (r0, r3 << 0)
+ 1e2:	6c8f      	mov      	r2, r3
+ 1e4:	e9210016 	bnez      	r1, 0x210	// 210 <console630_response+0xa0>
+ 1e8:	eb02002f 	cmphsi      	r2, 48
+ 1ec:	0be5      	bt      	0x1b6	// 1b6 <console630_response+0x46>
+ 1ee:	5a02      	addi      	r0, r2, 1
+ 1f0:	6414      	cmphs      	r5, r0
+ 1f2:	0fe2      	bf      	0x1b6	// 1b6 <console630_response+0x46>
+ 1f4:	3300      	movi      	r3, 0
+ 1f6:	1901      	addi      	r1, r14, 4
+ 1f8:	a46c      	st.b      	r3, (r4, 0xc)
+ 1fa:	6090      	addu      	r2, r4
+ 1fc:	6cd3      	mov      	r3, r4
+ 1fe:	6052      	subu      	r1, r4
+ 200:	64ca      	cmpne      	r2, r3
+ 202:	0fbf      	bf      	0x180	// 180 <console630_response+0x10>
+ 204:	d061002c 	ldr.b      	r12, (r1, r3 << 0)
+ 208:	dd83000d 	st.b      	r12, (r3, 0xd)
+ 20c:	2300      	addi      	r3, 1
+ 20e:	07f9      	br      	0x200	// 200 <console630_response+0x90>
+ 210:	d5830021 	str.b      	r1, (r3, r12 << 0)
+ 214:	2300      	addi      	r3, 1
+ 216:	07e4      	br      	0x1de	// 1de <console630_response+0x6e>
+ 218:	3a42      	cmpnei      	r2, 2
+ 21a:	0836      	bt      	0x286	// 286 <console630_response+0x116>
+ 21c:	110c      	lrw      	r0, 0x103c664	// 2cc <console630_response+0x15c>
+ 21e:	7bc1      	jsr      	r0
+ 220:	ea230010 	movih      	r3, 16
+ 224:	e4630f7f 	addi      	r3, r3, 3968
+ 228:	3100      	movi      	r1, 0
+ 22a:	93e1      	ld.w      	r7, (r3, 0x4)
+ 22c:	1e01      	addi      	r6, r14, 4
+ 22e:	1149      	lrw      	r2, 0x0	// 2d0 <console630_response+0x160>
+ 230:	d0220023 	ldr.b      	r3, (r2, r1 << 0)
+ 234:	e9230021 	bnez      	r3, 0x276	// 276 <console630_response+0x106>
+ 238:	c50055e3 	zext      	r3, r0, 15, 8
+ 23c:	b860      	st.w      	r3, (r14, 0x0)
+ 23e:	4858      	lsri      	r2, r0, 24
+ 240:	c60056e3 	zext      	r3, r0, 23, 16
+ 244:	6c1b      	mov      	r0, r6
+ 246:	e0000000 	bsr      	0x0	// 3c <version>
+			246: R_CKCORE_PCREL_IMM26BY2	version
+ 24a:	1163      	lrw      	r3, 0x0	// 2d4 <console630_response+0x164>
+ 24c:	6c43      	mov      	r1, r0
+ 24e:	60c2      	subu      	r3, r0
+ 250:	d0230022 	ldr.b      	r2, (r3, r1 << 0)
+ 254:	e9220015 	bnez      	r2, 0x27e	// 27e <console630_response+0x10e>
+ 258:	e46720ff 	andi      	r3, r7, 255
+ 25c:	b860      	st.w      	r3, (r14, 0x0)
+ 25e:	c60756e2 	zext      	r2, r7, 23, 16
+ 262:	c50755e3 	zext      	r3, r7, 15, 8
+ 266:	6c1b      	mov      	r0, r6
+ 268:	e0000000 	bsr      	0x0	// 3c <version>
+			268: R_CKCORE_PCREL_IMM26BY2	version
+ 26c:	330a      	movi      	r3, 10
+ 26e:	5842      	addi      	r2, r0, 1
+ 270:	d4060023 	str.b      	r3, (r6, r0 << 0)
+ 274:	07ba      	br      	0x1e8	// 1e8 <console630_response+0x78>
+ 276:	d4260023 	str.b      	r3, (r6, r1 << 0)
+ 27a:	2100      	addi      	r1, 1
+ 27c:	07da      	br      	0x230	// 230 <console630_response+0xc0>
+ 27e:	d4260022 	str.b      	r2, (r6, r1 << 0)
+ 282:	2100      	addi      	r1, 1
+ 284:	07e6      	br      	0x250	// 250 <console630_response+0xe0>
+ 286:	3a43      	cmpnei      	r2, 3
+ 288:	0b97      	bt      	0x1b6	// 1b6 <console630_response+0x46>
+ 28a:	1014      	lrw      	r0, 0x1090054	// 2d8 <console630_response+0x168>
+ 28c:	7bc1      	jsr      	r0
+ 28e:	6c83      	mov      	r2, r0
+ 290:	3100      	movi      	r1, 0
+ 292:	1013      	lrw      	r0, 0x0	// 2dc <console630_response+0x16c>
+ 294:	1e01      	addi      	r6, r14, 4
+ 296:	d0200023 	ldr.b      	r3, (r0, r1 << 0)
+ 29a:	e9230006 	bnez      	r3, 0x2a6	// 2a6 <console630_response+0x136>
+ 29e:	6c1b      	mov      	r0, r6
+ 2a0:	e0000000 	bsr      	0x0	// 0 <decimal>
+			2a0: R_CKCORE_PCREL_IMM26BY2	decimal
+ 2a4:	07e4      	br      	0x26c	// 26c <console630_response+0xfc>
+ 2a6:	d4260023 	str.b      	r3, (r6, r1 << 0)
+ 2aa:	2100      	addi      	r1, 1
+ 2ac:	07f5      	br      	0x296	// 296 <console630_response+0x126>
+ 2ae:	0000      	.short	0x0000
+ 2b0:	01128698 	.long	0x01128698
+	...
+			2b4: R_CKCORE_ADDR32	.rodata.str1.1
+			2b8: R_CKCORE_ADDR32	.rodata.str1.1+0x5
+			2bc: R_CKCORE_ADDR32	.rodata.str1.1+0xd
+			2c0: R_CKCORE_ADDR32	h1e_vad_snapshot_read
+ 2c4:	01128798 	.long	0x01128798
+ 2c8:	00000000 	.long	0x00000000
+			2c8: R_CKCORE_ADDR32	.rodata.str1.1+0x14
+ 2cc:	0103c664 	.long	0x0103c664
+	...
+			2d0: R_CKCORE_ADDR32	.rodata.str1.1+0x29
+			2d4: R_CKCORE_ADDR32	.rodata.str1.1+0x31
+ 2d8:	01090054 	.long	0x01090054
+ 2dc:	00000000 	.long	0x00000000
+			2dc: R_CKCORE_ADDR32	.rodata.str1.1+0x3c

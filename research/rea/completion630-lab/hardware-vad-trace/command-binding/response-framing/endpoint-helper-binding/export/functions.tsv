@@ -1,0 +1,6 @@
+target	function_found	name	entry	body	size	signature
+0104f520	true	FUN_0104f520	0104f520	[[0104f520, 0104f525]]	6	undefined FUN_0104f520(void)
+0104f66c	true	FUN_0104f66c	0104f66c	[[0104f66c, 0104f673]]	8	undefined FUN_0104f66c(void)
+0104f674	true	FUN_0104f674	0104f674	[[0104f674, 0104f67b]]	8	undefined FUN_0104f674(void)
+0106a818	true	FUN_0106a818	0106a818	[[0106a818, 0106a83d]]	38	undefined FUN_0106a818(void)
+0106a844	true	FUN_0106a844	0106a844	[[0106a844, 0106a849]]	6	undefined FUN_0106a844(void)

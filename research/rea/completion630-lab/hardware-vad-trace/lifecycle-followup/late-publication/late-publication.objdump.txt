@@ -1,0 +1,38 @@
+
+/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/lifecycle-followup/late-publication/late-publication.elf:     file format elf32-csky-little
+
+
+Disassembly of section .edits:
+
+01021054 <late_constructor_edits>:
+ 1021054:	3060      	movi      	r0, 96
+ 1021056:	0000      	bkpt
+ 1021058:	0000      	bkpt
+ 102105a:	0000      	bkpt
+ 102105c:	6dc3      	mov      	r7, r0
+	...
+ 102106a:	6c1f      	mov      	r0, r7
+ 102106c:	0000      	bkpt
+ 102106e:	0000      	bkpt
+ 1021070:	e0080848 	bsr      	0x1122100	// 1122100 <late_publication_stub>
+	...
+ 102109c:	0000      	bkpt
+ 102109e:	3260      	movi      	r2, 96
+	...
+ 10210a8:	6ddf      	mov      	r7, r7
+	...
+ 10210de:	6cdf      	mov      	r3, r7
+
+Disassembly of section .latepub:
+
+01122100 <late_publication_stub>:
+ 1122100:	3c40      	cmpnei      	r4, 0
+ 1122102:	0805      	bt      	0x112210c	// 112210c <late_publication_stub+0xc>
+ 1122104:	b5e0      	st.w      	r7, (r5, 0x0)
+ 1122106:	ea8f0004 	lrw      	r15, 0x1021038	// 1122114 <late_publication_stub+0x14>
+ 112210a:	783c      	jmp      	r15
+ 112210c:	ea8f0003 	lrw      	r15, 0x1021074	// 1122118 <late_publication_stub+0x18>
+ 1122110:	783c      	jmp      	r15
+ 1122112:	0000      	.short	0x0000
+ 1122114:	01021038 	.long	0x01021038
+ 1122118:	01021074 	.long	0x01021074

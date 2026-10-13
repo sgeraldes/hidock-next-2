@@ -1,0 +1,74 @@
+{
+  "observedAt": "2026-10-13T11:57:05.178Z",
+  "boundary": "compiled-host-C-encoder-to-actual-TypeScript-SDK-parser",
+  "physicalHardware": false,
+  "firmwareGenerated": false,
+  "sourceHashes": {
+    "G:/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/vadt_core.c": "e2efb05c8e0adb60a2e4a7309a23a83aa15272042f173d3af7d3381712ffc276",
+    "G:/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/vadt_core.h": "f8dae82ce77a3fc2f0599f9feb2be77cf688694e9c6b103f83cd803faeb9bbd4",
+    "G:/Code/hidock-next-2/packages/jensen-protocol/src/native-vad-observation.ts": "99cc4c74ec9f9abcab2d6a0b4b9a58034e3d410cf7bf5830747976ae2c05fc1c"
+  },
+  "vectors": [
+    "0001000500000000000000000000000000000000000000000000000000000000",
+    "000101050000000200000001fffffffb00000000000000000000000000000004",
+    "0101000500000000000000000000000000000000000000000000000000000000",
+    "0201000000000000000000000000000000000000000000000000000000000000",
+    "0201000000000000000000000000000000000000000000000000000000000000"
+  ],
+  "replies": [
+    {
+      "version": 1,
+      "nativeState": 5,
+      "clockBinding": "unclocked",
+      "imageAttested": false,
+      "status": "ok",
+      "hasSample": false,
+      "attemptedReads": 0,
+      "successfulReads": 0,
+      "lastCompletedNativeStatus": 0,
+      "lastSuccessfulCallerWord": null,
+      "sequence": 0,
+      "age": null,
+      "dspFreshness": "unknown",
+      "voice": "unknown"
+    },
+    {
+      "version": 1,
+      "nativeState": 5,
+      "clockBinding": "unclocked",
+      "imageAttested": false,
+      "status": "ok",
+      "hasSample": true,
+      "attemptedReads": 2,
+      "successfulReads": 1,
+      "lastCompletedNativeStatus": -5,
+      "lastSuccessfulCallerWord": 0,
+      "sequence": 4,
+      "age": null,
+      "dspFreshness": "unknown",
+      "voice": "unknown"
+    },
+    {
+      "version": 1,
+      "nativeState": 5,
+      "clockBinding": "unclocked",
+      "imageAttested": false,
+      "status": "busy"
+    },
+    {
+      "version": 1,
+      "nativeState": 0,
+      "clockBinding": "unclocked",
+      "imageAttested": false,
+      "status": "unavailable"
+    },
+    {
+      "version": 1,
+      "nativeState": 0,
+      "clockBinding": "unclocked",
+      "imageAttested": false,
+      "status": "unavailable"
+    }
+  ],
+  "result": "passed"
+}

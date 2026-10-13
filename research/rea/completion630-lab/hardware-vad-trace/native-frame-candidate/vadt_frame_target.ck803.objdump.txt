@@ -1,0 +1,53 @@
+
+/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-frame-candidate/vadt_frame_target.ck803.o:     file format elf32-csky-little
+
+
+Disassembly of section .text:
+
+00000000 <target_resolve>:
+   0:	6c07      	mov      	r0, r1
+   2:	783c      	jmp      	r15
+
+00000004 <target_pending>:
+   4:	ea0355c0 	movi      	r3, 21952
+   8:	3bb3      	bseti      	r3, 19
+   a:	8b0e      	ld.h      	r0, (r3, 0x1c)
+   c:	7401      	zexth      	r0, r0
+   e:	783c      	jmp      	r15
+
+00000010 <vadt_f11a_parse>:
+  10:	14d0      	push      	r15
+  12:	1424      	subi      	r14, r14, 16
+  14:	1070      	lrw      	r3, 0x0	// 54 <vadt_f11a_response+0x24>
+  16:	ea8c0011 	lrw      	r12, 0x0	// 58 <vadt_f11a_response+0x28>
+  1a:	b860      	st.w      	r3, (r14, 0x0)
+  1c:	3300      	movi      	r3, 0
+  1e:	b861      	st.w      	r3, (r14, 0x4)
+  20:	b863      	st.w      	r3, (r14, 0xc)
+  22:	6cfb      	mov      	r3, r14
+  24:	dd8e2002 	st.w      	r12, (r14, 0x8)
+  28:	e0000000 	bsr      	0x0	// 0 <vadt_f11a_parse_frame>
+			28: R_CKCORE_PCREL_IMM26BY2	vadt_f11a_parse_frame
+  2c:	1404      	addi      	r14, r14, 16
+  2e:	1490      	pop      	r15
+
+00000030 <vadt_f11a_response>:
+  30:	14d0      	push      	r15
+  32:	1424      	subi      	r14, r14, 16
+  34:	1068      	lrw      	r3, 0x0	// 54 <vadt_f11a_response+0x24>
+  36:	ea8c0009 	lrw      	r12, 0x0	// 58 <vadt_f11a_response+0x28>
+  3a:	b860      	st.w      	r3, (r14, 0x0)
+  3c:	3300      	movi      	r3, 0
+  3e:	b861      	st.w      	r3, (r14, 0x4)
+  40:	b863      	st.w      	r3, (r14, 0xc)
+  42:	6ccb      	mov      	r3, r2
+  44:	6c87      	mov      	r2, r1
+  46:	6c7b      	mov      	r1, r14
+  48:	dd8e2002 	st.w      	r12, (r14, 0x8)
+  4c:	e0000000 	bsr      	0x0	// 0 <vadt_f11a_response_frame>
+			4c: R_CKCORE_PCREL_IMM26BY2	vadt_f11a_response_frame
+  50:	1404      	addi      	r14, r14, 16
+  52:	1490      	pop      	r15
+	...
+			54: R_CKCORE_ADDR32	.text
+			58: R_CKCORE_ADDR32	.text+0x4
