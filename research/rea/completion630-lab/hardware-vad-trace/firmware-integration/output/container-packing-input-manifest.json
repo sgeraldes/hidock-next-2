@@ -1,0 +1,99 @@
+{
+  "schema": "h1e-vad-candidate-manifest-v1",
+  "accepted": true,
+  "acceptance_scope": "decoded_structural_readback_only_NOTINSTALL",
+  "installable": false,
+  "baseline_system_sha256": "b338e4d5e7d456dd2b7a0048bb8e2c338e2464ad25029267b5e46cb4ad880c2f",
+  "candidate_system": {
+    "path": "system-decoded-vad-ck802-NOTINSTALL.bin",
+    "sha256": "ad86193a8a35a64d2ec036a5f32f6741a00ab4f29314b263205dc606db1b2ac0",
+    "bytes": 1243776
+  },
+  "readback": {
+    "verified": true,
+    "candidate_sha256": "ad86193a8a35a64d2ec036a5f32f6741a00ab4f29314b263205dc606db1b2ac0"
+  },
+  "changes": [
+    {
+      "offset": 133986,
+      "length": 4,
+      "new_sha256": "d6b191d79e24315027c24ca609434da8523ebd1cd48caf717b437398f448efc4",
+      "role": "existing_native_getter_bridge"
+    },
+    {
+      "offset": 135252,
+      "length": 2,
+      "new_sha256": "2590032929c9350c7a320d4eefb310b6097dd44bffa4c529db13be931142ce54",
+      "role": "allocate_96"
+    },
+    {
+      "offset": 135260,
+      "length": 2,
+      "new_sha256": "3070862d36913466d7f9812c87da69becb62887a47f37753579b48d042d66eac",
+      "role": "retain_private_pointer"
+    },
+    {
+      "offset": 135274,
+      "length": 2,
+      "new_sha256": "973fd65450988fa869cbe1535ef73e51a83a78c4f6d047a9b639a9452605c610",
+      "role": "private_failure_pointer"
+    },
+    {
+      "offset": 135280,
+      "length": 4,
+      "new_sha256": "dbfc3a6b720c897795f77e0ef57d94f8115ee96948368330eff207d8dc0e254e",
+      "role": "final_publication_decision"
+    },
+    {
+      "offset": 135326,
+      "length": 2,
+      "new_sha256": "350e041ab2907f6964168623434302d2f1949f7930226240062a05253b33aa9c",
+      "role": "zero_96"
+    },
+    {
+      "offset": 135336,
+      "length": 2,
+      "new_sha256": "c36dfb64f863ba2d2c6edb118e92c309c01c3d98e1b99490cf75f0d1fdd33b69",
+      "role": "retain_private_pointer_after_zero"
+    },
+    {
+      "offset": 135390,
+      "length": 2,
+      "new_sha256": "7c251c9fbe52ca62bdfe0d6caaf8bb77440e8f70579b8635a3bb56136b4853ab",
+      "role": "private_gpio_object"
+    },
+    {
+      "offset": 233594,
+      "length": 4,
+      "new_sha256": "0d51b7c0576a2aff0643cbec593be20b3fe34a5653a3c75f6d7870620d1bd2d4",
+      "role": "native_response_dispatch"
+    },
+    {
+      "offset": 240022,
+      "length": 4,
+      "new_sha256": "abfeace73332a2dbb123906ca5508bcd42730a8c70022fc465987154aca10fef",
+      "role": "native_parser_dispatch"
+    },
+    {
+      "offset": 1237504,
+      "length": 3584,
+      "new_sha256": "6cf1b57d59e7111bc218dfb01dda93ac0f776715599a1c69f89035bd20c16a10",
+      "role": "zero_gap"
+    },
+    {
+      "offset": 1241088,
+      "length": 2684,
+      "new_sha256": "396f63c2f02e9e61174efe408b5ad7d34f74bbad96bd4911647f5978072e1c87",
+      "role": "VAD_text"
+    },
+    {
+      "offset": 1243772,
+      "length": 4,
+      "new_sha256": "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119",
+      "role": "alignment_pad"
+    }
+  ],
+  "hardware_qualified": false,
+  "production_lifetime_qualified": false,
+  "combined_pipeline_layout_qualified": false
+}

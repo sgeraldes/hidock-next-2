@@ -1,0 +1,200 @@
+{
+  "run_id": "vad-candidate-20261013T204414Z-ad86193a",
+  "started_utc": "2026-10-13T20:44:14.732825+00:00",
+  "finished_utc": "2026-10-13T20:44:18.345231+00:00",
+  "status": "structural_readback_passed_EXPERIMENTAL_NOTINSTALL",
+  "evidence_kind": "vad-candidate-structural",
+  "artifact": "H1E-6.3.4_restore001-vad-candidate-EXPERIMENTAL-NOTINSTALL.bin",
+  "flags": {
+    "EXPERIMENTAL": true,
+    "NOTINSTALL": true,
+    "installable": false,
+    "approved_for_installation": false,
+    "installed": false,
+    "physical_boot_verified": false,
+    "hardware_qualified": false,
+    "new_version_allocated": false,
+    "same_identity_as_baseline": true,
+    "release_or_publication": false,
+    "full_vendor_source_rebuild": false,
+    "ROM_unbrick_recovery": false
+  },
+  "identity": {
+    "version_name": "6.3.4_restore001",
+    "version_code": 393988,
+    "board": "ats2835p_evb"
+  },
+  "inputs": {
+    "baseline_container_sha256": "4942c98f9a150f09b9a31b606e7e9d985e99b16873c5ef64e6e17667808d82e8",
+    "baseline_system_sha256": "b338e4d5e7d456dd2b7a0048bb8e2c338e2464ad25029267b5e46cb4ad880c2f",
+    "candidate_system_sha256": "ad86193a8a35a64d2ec036a5f32f6741a00ab4f29314b263205dc606db1b2ac0",
+    "candidate_system_bytes": 1243776,
+    "candidate": {
+      "manifest_sha256": "cb4326116421938b7617a81a15b9775066349a9d1f26eadb05f5cfb2d6bacb0f",
+      "changed_bytes_in_baseline_span": 22,
+      "appended_bytes": 6272,
+      "allowlisted_ranges": [
+        {
+          "offset": 133986,
+          "length": 4
+        },
+        {
+          "offset": 135252,
+          "length": 2
+        },
+        {
+          "offset": 135260,
+          "length": 2
+        },
+        {
+          "offset": 135274,
+          "length": 2
+        },
+        {
+          "offset": 135280,
+          "length": 4
+        },
+        {
+          "offset": 135326,
+          "length": 2
+        },
+        {
+          "offset": 135336,
+          "length": 2
+        },
+        {
+          "offset": 135390,
+          "length": 2
+        },
+        {
+          "offset": 233594,
+          "length": 4
+        },
+        {
+          "offset": 240022,
+          "length": 4
+        },
+        {
+          "offset": 1237504,
+          "length": 3584
+        },
+        {
+          "offset": 1241088,
+          "length": 2684
+        },
+        {
+          "offset": 1243772,
+          "length": 4
+        }
+      ]
+    },
+    "pinned_helpers": {
+      "sdk": "30b5d37f67bb57af44d02da829429c59bb734d5c7c0acc1a1ce5f15029401c17",
+      "decoder": "3a9a945dafe6a81327d9f15e0619befc30109fd9e8ce58e2af8e7d5e7e734de5",
+      "parser": "8adf114c2ee531f12778b346482c344717659a130892515258505781efccc592"
+    },
+    "script_sha256": "2477a315db72eee36086089686b280da078655c525d7ecd330a09ef1fa436918",
+    "sdk_stdout_sha256": "f18dac81bc867818bdd1f1be9eda763445f317d8650a37390b5f5a66b3a49eb7"
+  },
+  "layout_delta": {
+    "zephyr_bytes_before": 1237504,
+    "zephyr_bytes_after": 1243776,
+    "container_bytes_before": 3429376,
+    "container_bytes_after": 3435520
+  },
+  "readback": {
+    "artifact_sha256": "5eea2c5af70e523b4518caa94fe0097a2660d02c34b4cdb747748612fd2211bd",
+    "artifact_bytes": 3435520,
+    "byte_identical_to_baseline_container": false,
+    "outer_header_crc32": "0x5b1b4c84",
+    "outer_data_crc32": "0xbfa7d070",
+    "partitions": [
+      {
+        "name": "ota.xml",
+        "offset": 512,
+        "size": 1533,
+        "crc32": "0x4f6a74fa",
+        "sha256": "58a4318bb70f7b2e132ca14a1378e155dc921dd7b11ab2186985aad6215e5ed6",
+        "relation": "xml-zephyr-size-crc-only",
+        "offset_moved": false
+      },
+      {
+        "name": "zephyr.bin",
+        "offset": 2048,
+        "size": 1243776,
+        "crc32": "0x618cffe0",
+        "sha256": "555f17bb83db45e489b5ff7d35dd7c504fb760576757ffd2a21cf64c564f60c7",
+        "relation": "replaced-with-encoded-candidate",
+        "offset_moved": false
+      },
+      {
+        "name": "RomeApp.bin",
+        "offset": 1246208,
+        "size": 430020,
+        "crc32": "0x4da37140",
+        "sha256": "3d458efc546c2bf54460174df29f4c2ac353f2a5e68ad6d2a53f7eb8b48cedec",
+        "relation": "byte-identical-to-baseline",
+        "offset_moved": true
+      },
+      {
+        "name": "UAC.bin",
+        "offset": 1676288,
+        "size": 1024,
+        "crc32": "0xd18d87df",
+        "sha256": "c665ce239c7fd7983340d662765fd9217542b1d809b77b2b00517a2abc85f872",
+        "relation": "byte-identical-to-baseline",
+        "offset_moved": true
+      },
+      {
+        "name": "IG1202dl.bin",
+        "offset": 1677824,
+        "size": 704000,
+        "crc32": "0xc6d2f351",
+        "sha256": "5712e05f93cd8d6d0a5c27c7977aebdf179dc8e841984b8bf82d979a113f0376",
+        "relation": "byte-identical-to-baseline",
+        "offset_moved": true
+      },
+      {
+        "name": "sdfs.bin",
+        "offset": 2382336,
+        "size": 1048192,
+        "crc32": "0x2b4d60f7",
+        "sha256": "23eae8c812187e8fbddf12e0de8375d0514ae5b05213d17d7ebbec0a4414126d",
+        "relation": "byte-identical-to-baseline",
+        "offset_moved": true
+      },
+      {
+        "name": "mbrec.bin",
+        "offset": 3430912,
+        "size": 4096,
+        "crc32": "0xd74b50b5",
+        "sha256": "78db944e852dcb9e435819f74c10d8ee1cc0b6ac224a62b01c412cb708dac685",
+        "relation": "byte-identical-to-baseline",
+        "offset_moved": true
+      }
+    ],
+    "ota_xml_changed_fields": [
+      "/ota_firmware/partitions/partition[zephyr.bin]/checksum",
+      "/ota_firmware/partitions/partition[zephyr.bin]/file_size"
+    ],
+    "decoded_system_sha256": "ad86193a8a35a64d2ec036a5f32f6741a00ab4f29314b263205dc606db1b2ac0",
+    "decoded_system_bytes": 1243776,
+    "boot_decoded_sha256": "78dee3943ad56561cb89d66c56e476f234ee3681b223f8e7e45e3d30badb41f6",
+    "checks_passed": [
+      "independent ACTTEST0 parse: outer header/data CRC, per-partition CRC, offsets, 0xff padding",
+      "helper parser agrees with independent parse; XML size/CRC agree with table",
+      "decoded zephyr.bin from the actual container == candidate system",
+      "mbrec.bin, RomeApp.bin, UAC.bin, IG1202dl.bin, sdfs.bin byte-identical to baseline",
+      "boot FVER identity unchanged (6.3.4_restore001 / 393988)",
+      "ota.xml differs only in zephyr.bin file_size/checksum"
+    ]
+  },
+  "remaining_gates": [
+    "layout: zephyr.bin size/flash-partition fit and relocation of the following partitions are not qualified",
+    "lifetime: VAD runtime ownership, task/stack lifetime, CK802 bridge and unload/teardown behavior are not qualified",
+    "hardware: no physical boot, microphone stream, power or thermal qualification on a device",
+    "recovery: ROM unbrick/recovery path is not verified",
+    "installer: same version identity, so installer acceptance and downgrade/equal-version policy are untested",
+    "source: not a full vendor source rebuild"
+  ]
+}

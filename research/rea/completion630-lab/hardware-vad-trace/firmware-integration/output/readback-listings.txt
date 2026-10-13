@@ -1,0 +1,165 @@
+===== constructor_and_hooks
+
+/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/firmware-integration/output/system-decoded-vad-ck802-NOTINSTALL.bin.partial:     file format binary
+
+
+Disassembly of section .data:
+
+01021024 <.data+0x21024>:
+ 1021024:	d414      	push      	r4-r7, r15
+ 1021026:	2514      	subi      	r14, r14, 20
+ 1021028:	a312      	lrw      	r5, 0x852c0	// 0x1021134
+ 102102a:	c412      	lrw      	r6, 0x81220	// 0x1021138
+ 102102c:	6095      	ld.w      	r3, (r5, 0x0)
+ 102102e:	403b      	cmpnei      	r3, 0
+ 1021030:	120c      	bf      	0x1021054	// 0x1021054
+ 1021032:	6096      	ld.w      	r3, (r6, 0x0)
+ 1021034:	223b      	cmplti      	r3, 3
+ 1021036:	050c      	bf      	0x1021040	// 0x1021040
+ 1021038:	0034      	movi      	r4, 0
+ 102103a:	136c      	mov      	r0, r4
+ 102103c:	0514      	addi      	r14, r14, 20
+ 102103e:	9414      	pop      	r4-r7, r15
+ 1021040:	7f11      	lrw      	r3, 0x10f8ef9	// 0x102113c
+ 1021042:	4012      	lrw      	r2, 0x10dd05d	// 0x1021140
+ 1021044:	2012      	lrw      	r1, 0x10e15e0	// 0x1021144
+ 1021046:	0112      	lrw      	r0, 0x10e6333	// 0x1021148
+ 1021048:	60b8      	st.w      	r3, (r14, 0x0)
+ 102104a:	61b8      	st.w      	r3, (r14, 0x4)
+ 102104c:	6012      	lrw      	r3, 0x10e611c	// 0x102114c
+ 102104e:	db5401e0 	bsr      	0x104ba04	// 0x104ba04
+ 1021052:	f307      	br      	0x1021038	// 0x1021038
+ 1021054:	6030      	movi      	r0, 96
+ 1021056:	fbc801e0 	bsr      	0x105a24c	// 0x105a24c
+ 102105a:	4038      	cmpnei      	r0, 0
+ 102105c:	c36d      	mov      	r7, r0
+ 102105e:	2008      	bt      	0x102109e	// 0x102109e
+ 1021060:	6096      	ld.w      	r3, (r6, 0x0)
+ 1021062:	203b      	cmplti      	r3, 1
+ 1021064:	0f0c      	bf      	0x1021082	// 0x1021082
+ 1021066:	0034      	movi      	r4, 0
+ 1021068:	002c      	subi      	r4, 1
+ 102106a:	1f6c      	mov      	r0, r7
+ 102106c:	4038      	cmpnei      	r0, 0
+ 102106e:	e60f      	bf      	0x102103a	// 0x102103a
+ 1021070:	c27408e0 	bsr      	0x112f9f4	// 0x112f9f4
+ 1021074:	f6c801e0 	bsr      	0x105a260	// 0x105a260
+ 1021078:	0033      	movi      	r3, 0
+ 102107a:	0034      	movi      	r4, 0
+ 102107c:	60b5      	st.w      	r3, (r5, 0x0)
+ 102107e:	002c      	subi      	r4, 1
+ 1021080:	dd07      	br      	0x102103a	// 0x102103a
+ 1021082:	4f11      	lrw      	r2, 0x10f8ef9	// 0x102113c
+ 1021084:	cb0101ea 	movi      	r1, 459
+ 1021088:	7111      	lrw      	r3, 0x10e611c	// 0x102114c
+ 102108a:	1211      	lrw      	r0, 0x10e6356	// 0x1021150
+ 102108c:	61b8      	st.w      	r3, (r14, 0x4)
+ 102108e:	43b8      	st.w      	r2, (r14, 0xc)
+ 1021090:	22b8      	st.w      	r1, (r14, 0x8)
+ 1021092:	40b8      	st.w      	r2, (r14, 0x0)
+ 1021094:	2c11      	lrw      	r1, 0x10e15e0	// 0x1021144
+ 1021096:	5011      	lrw      	r2, 0x10dd129	// 0x1021154
+ 1021098:	b65401e0 	bsr      	0x104ba04	// 0x104ba04
+ 102109c:	e507      	br      	0x1021066	// 0x1021066
+ 102109e:	6032      	movi      	r2, 96
+ 10210a0:	0031      	movi      	r1, 0
+ 10210a2:	8e11      	lrw      	r4, 0x10df44b	// 0x1021158
+ 10210a4:	fdf782e3 	bsr      	0x8009e	// 0x8009e
+ 10210a8:	df6d      	mov      	r7, r7
+ 10210aa:	0133      	movi      	r3, 1
+ 10210ac:	136c      	mov      	r0, r4
+ 10210ae:	62a7      	st.b      	r3, (r7, 0x2)
+ 10210b0:	d06803e0 	bsr      	0x108e250	// 0x108e250
+ 10210b4:	4038      	cmpnei      	r0, 0
+ 10210b6:	02b7      	st.w      	r0, (r7, 0x8)
+ 10210b8:	1308      	bt      	0x10210de	// 0x10210de
+ 10210ba:	6096      	ld.w      	r3, (r6, 0x0)
+ 10210bc:	203b      	cmplti      	r3, 1
+ 10210be:	d40b      	bt      	0x1021066	// 0x1021066
+ 10210c0:	5f10      	lrw      	r2, 0x10f8ef9	// 0x102113c
+ 10210c2:	6311      	lrw      	r3, 0x10e611c	// 0x102114c
+ 10210c4:	eb31      	movi      	r1, 235
+ 10210c6:	2141      	lsli      	r1, r1, 1
+ 10210c8:	44b8      	st.w      	r2, (r14, 0x10)
+ 10210ca:	22b8      	st.w      	r1, (r14, 0x8)
+ 10210cc:	40b8      	st.w      	r2, (r14, 0x0)
+ 10210ce:	83b8      	st.w      	r4, (r14, 0xc)
+ 10210d0:	61b8      	st.w      	r3, (r14, 0x4)
+ 10210d2:	3d10      	lrw      	r1, 0x10e15e0	// 0x1021144
+ 10210d4:	4011      	lrw      	r2, 0x10dd129	// 0x1021154
+ 10210d6:	0211      	lrw      	r0, 0x10e479f	// 0x102115c
+ 10210d8:	965401e0 	bsr      	0x104ba04	// 0x104ba04
+ 10210dc:	c507      	br      	0x1021066	// 0x1021066
+ 10210de:	df6c      	mov      	r3, r7
+ 10210e0:	2a32      	movi      	r2, 42
+ 10210e2:	0293      	ld.w      	r0, (r3, 0x8)
+ 10210e4:	0031      	movi      	r1, 0
+ 10210e6:	6190      	ld.w      	r3, (r0, 0x4)
+ 10210e8:	8093      	ld.w      	r4, (r3, 0x0)
+ 10210ea:	0133      	movi      	r3, 1
+ 10210ec:	d17b      	jsr      	r4
+ 10210ee:	036d      	mov      	r4, r0
+
+===== stub
+
+/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/firmware-integration/output/system-decoded-vad-ck802-NOTINSTALL.bin.partial:     file format binary
+
+
+Disassembly of section .data:
+
+0112f9f4 <.data+0x12f9f4>:
+ 112f9f4:	403c      	cmpnei      	r4, 0
+ 112f9f6:	0508      	bt      	0x112fa00	// 0x112fa00
+ 112f9f8:	e0b5      	st.w      	r7, (r5, 0x0)
+ 112f9fa:	04008fea 	lrw      	r15, 0x1021038	// 0x112fa08
+ 112f9fe:	3c78      	jmp      	r15
+ 112fa00:	03008fea 	lrw      	r15, 0x1021074	// 0x112fa0c
+ 112fa04:	3c78      	jmp      	r15
+ 112fa06:	0000      	bkpt
+ 112fa08:	3810      	lrw      	r1, 0x0	// 0x112fa68
+ 112fa0a:	0201      	lrw      	r0, [pc, 884]	// from address pool at 0x112fd7c
+ 112fa0c:	7410      	lrw      	r3, 0x69747075	// 0x112fa5c
+ 112fa0e:	0201      	lrw      	r0, [pc, 884]	// from address pool at 0x112fd80
+
+===== poll_bridge
+
+/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/firmware-integration/output/system-decoded-vad-ck802-NOTINSTALL.bin.partial:     file format binary
+
+
+Disassembly of section .data:
+
+0112f58c <.data+0x12f58c>:
+ 112f58c:	d014      	push      	r15
+ 112f58e:	836c      	mov      	r2, r0
+ 112f590:	2310      	lrw      	r1, 0x101fb68	// 0x112f59c
+ 112f592:	0410      	lrw      	r0, 0x112fa10	// 0x112f5a0
+ 112f594:	7dfeffe3 	bsr      	0x112f28e	// 0x112f28e
+ 112f598:	9014      	pop      	r15
+ 112f59a:	0000      	bkpt
+ 112f59c:	010168fb 	vsub.u32      	vr1, vr8, vr11
+
+===== hook_sites
+
+/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/firmware-integration/output/system-decoded-vad-ck802-NOTINSTALL.bin.partial:     file format binary
+
+
+Disassembly of section .data:
+
+01020b62 <.data+0x20b62>:
+ 1020b62:	157508e0 	bsr      	0x112f58c	// 0x112f58c
+
+/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/firmware-integration/output/system-decoded-vad-ck802-NOTINSTALL.bin.partial:     file format binary
+
+
+Disassembly of section .data:
+
+0103907a <.data+0x3907a>:
+ 103907a:	4fb407e0 	bsr      	0x112f918	// 0x112f918
+
+/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/firmware-integration/output/system-decoded-vad-ck802-NOTINSTALL.bin.partial:     file format binary
+
+
+Disassembly of section .data:
+
+0103a996 <.data+0x3a996>:
+ 103a996:	9da707e0 	bsr      	0x112f8d0	// 0x112f8d0

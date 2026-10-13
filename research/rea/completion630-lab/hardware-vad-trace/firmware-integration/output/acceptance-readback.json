@@ -1,0 +1,256 @@
+{
+  "status": "offline_experimental_candidate_NOT_INSTALL_blocked",
+  "schema": 1,
+  "statement": "Decoded system image candidate only. No container, OTA, version change, flash, hardware run or flashability claim.",
+  "inputs": {
+    "frozen": {
+      "path": "firmware/restore-build393988/generation-restore4/system-decoded-NOTINSTALL.bin",
+      "sha256": "b338e4d5e7d456dd2b7a0048bb8e2c338e2464ad25029267b5e46cb4ad880c2f",
+      "bytes": 1237504
+    },
+    "frozen_symbols": {
+      "path": "firmware/restore-build393988/generation-restore4/symbols.txt",
+      "sha256": "a850bd25db4bab4c7e16b58c6ac5d5241c156a3fabde18aa187f167e09641e72",
+      "bytes": 4145
+    },
+    "frozen_ld": {
+      "path": "firmware/restore-build393988/generation-restore4/module.ld",
+      "sha256": "90d5bc9c11850b87d123fb5eb51589645feea4a15d5cccc5896a8f9fd245840f",
+      "bytes": 1490
+    },
+    "elf": {
+      "path": "hardware-vad-trace/native-ck802-candidate/sdk-profile/output/conditional-source-ck802-sdk-NOTINSTALL.elf",
+      "sha256": "576d7ac2b30755e41c6e23ba1a5cb3e6b7e65afb1c7c115b6f0be3a3b1844366",
+      "bytes": 24340
+    },
+    "manifest": {
+      "path": "hardware-vad-trace/native-ck802-candidate/sdk-profile/output/sparse-source-hunks.json",
+      "sha256": "73ce3d0889955701b2a7874e91cd653f30439054a5b3f1e273b4327aeed3ed35",
+      "bytes": 3122
+    },
+    "sdk_symbols": {
+      "path": "hardware-vad-trace/native-ck802-candidate/sdk-profile/output/symbols.txt",
+      "sha256": "9765956593197cbe01db81b88bdf00a7bf1e327027d4d9d53dd7d47ad501c90d",
+      "bytes": 1878
+    },
+    "link_receipt": {
+      "path": "hardware-vad-trace/native-ck802-candidate/sdk-profile/output/link-receipt.json",
+      "sha256": "7458d9c8c9e755753e252274f23cf5649a949515f71d98ab40fc0dd8d9e77a86",
+      "bytes": 3653
+    }
+  },
+  "tools": {
+    "python": "3.12.3",
+    "decode_randomizer_sha256": "3a9a945dafe6a81327d9f15e0619befc30109fd9e8ce58e2af8e7d5e7e734de5",
+    "objdump_sha256": "e6aad5acbaf952d53ed470878b95acfcffeca7c4e001fe7bbf1c0dce4fd07cdd",
+    "gcc_libgcc_archive_sha256": "f0f80000e86c05cc3b7120762bad7b899f22ab1b3469eb83f8025520d31f40f3",
+    "compile_flags": "-mcpu=ck802 -Os -fshort-enums -fsigned-char -fno-common -fno-delete-null-pointer-checks"
+  },
+  "output": {
+    "path": "hardware-vad-trace/firmware-integration/output/system-decoded-vad-ck802-NOTINSTALL.bin",
+    "sha256": "ad86193a8a35a64d2ec036a5f32f6741a00ab4f29314b263205dc606db1b2ac0",
+    "bytes": 1243776,
+    "baseline_bytes": 1237504
+  },
+  "module": {
+    "base": "0112f000",
+    "bytes": 2684,
+    "end": "0112fa7c",
+    "capacity_limit_bytes": 16384,
+    "source_section": ".vad_text",
+    "baseline_image_end": "0112e200",
+    "frozen_reservations": {
+      "parser": [
+        "0112b000",
+        "0112c000"
+      ],
+      "upload": [
+        "0112c000",
+        "0112d000"
+      ],
+      "restore": [
+        "0112d000",
+        "0112f000"
+      ]
+    },
+    "symbols": {
+      "h1e_vad_native_poll_bridge": "0112f58c",
+      "late_publication_stub": "0112f9f4",
+      "console630_response_hook": "0112f918",
+      "console630_parser_hook": "0112f8d0"
+    },
+    "note": "0x0112f000 is the frozen-baseline placement only, not a reservation in any other pipeline"
+  },
+  "hunks": {
+    "count": 10,
+    "declared_bytes": 28,
+    "constructor_padding_bytes_excluded": 124
+  },
+  "readback": {
+    "sha256": "ad86193a8a35a64d2ec036a5f32f6741a00ab4f29314b263205dc606db1b2ac0",
+    "bytes": 1243776,
+    "differing_bytes_in_baseline_region": 22,
+    "differing_bytes_inside_approved_hunks": 22,
+    "differing_bytes_outside_hunks": 0,
+    "differing_bytes_per_hunk": {
+      "existing_native_getter_bridge": 4,
+      "allocate_96": 1,
+      "retain_private_pointer": 2,
+      "private_failure_pointer": 2,
+      "final_publication_decision": 4,
+      "zero_96": 1,
+      "retain_private_pointer_after_zero": 2,
+      "private_gpio_object": 2,
+      "native_response_dispatch": 2,
+      "native_parser_dispatch": 2
+    },
+    "appended": {
+      "zero_gap_bytes": 3584,
+      "module_bytes": 2684,
+      "alignment_pad_bytes": 4
+    },
+    "header": {
+      "before": {
+        "load_address": "0x1000000",
+        "name": "sys",
+        "version": 1,
+        "header_size": 48,
+        "body_size": 0,
+        "tail_size": 0,
+        "entry_address": "0x106e26c",
+        "attributes": "0x0",
+        "header_checksum_verified": false,
+        "body_checksum_verified": false,
+        "unchecksummed_header": true
+      },
+      "after": {
+        "load_address": "0x1000000",
+        "name": "sys",
+        "version": 1,
+        "header_size": 48,
+        "body_size": 0,
+        "tail_size": 0,
+        "entry_address": "0x106e26c",
+        "attributes": "0x0",
+        "header_checksum_verified": false,
+        "body_checksum_verified": false,
+        "unchecksummed_header": true
+      },
+      "bytes_0_47_identical": true,
+      "inner_length_or_checksum_update_required": false,
+      "reason": "header_sum, body_sum, body_size and tail_size are all zero in the baseline: the image is unchecksummed"
+    },
+    "length_literal_scan_in_baseline": {
+      "baseline_length": 0,
+      "baseline_end_va": 0,
+      "restore_module_end_offset": 0,
+      "restore_module_end_va": 0
+    },
+    "branches": [
+      {
+        "role": "existing_native_getter_bridge",
+        "site": "01020b62",
+        "raw_file_bytes": "08e01575",
+        "link_register": "01020b66",
+        "symbol": "h1e_vad_native_poll_bridge",
+        "target_python": "0112f58c",
+        "target_objdump": "0112f58c",
+        "target_elf_symbol": "0112f58c",
+        "baseline_target": "0101fb68"
+      },
+      {
+        "role": "final_publication_decision",
+        "site": "01021070",
+        "raw_file_bytes": "08e0c274",
+        "link_register": "01021074",
+        "symbol": "late_publication_stub",
+        "target_python": "0112f9f4",
+        "target_objdump": "0112f9f4",
+        "target_elf_symbol": "0112f9f4",
+        "baseline_target": null
+      },
+      {
+        "role": "native_response_dispatch",
+        "site": "0103907a",
+        "raw_file_bytes": "07e04fb4",
+        "link_register": "0103907e",
+        "symbol": "console630_response_hook",
+        "target_python": "0112f918",
+        "target_objdump": "0112f918",
+        "target_elf_symbol": "0112f918",
+        "baseline_target": "0112b97c"
+      },
+      {
+        "role": "native_parser_dispatch",
+        "site": "0103a996",
+        "raw_file_bytes": "07e09da7",
+        "link_register": "0103a99a",
+        "symbol": "console630_parser_hook",
+        "target_python": "0112f8d0",
+        "target_objdump": "0112f8d0",
+        "target_elf_symbol": "0112f8d0",
+        "baseline_target": "0112b934"
+      }
+    ],
+    "constructor": {
+      "allocation": {
+        "before_movi": {
+          "register": "r0",
+          "imm": 64
+        },
+        "after_movi": {
+          "register": "r0",
+          "imm": 96
+        }
+      },
+      "clear": {
+        "before_movi": {
+          "register": "r2",
+          "imm": 64
+        },
+        "after_movi": {
+          "register": "r2",
+          "imm": 96
+        }
+      },
+      "telemetry_tail": {
+        "object_offset": 64,
+        "bytes": 32,
+        "ends_at": 96,
+        "allocation_bytes": 96,
+        "offset_four_byte_aligned": true,
+        "base_alignment": "allocator behavior, not verified"
+      },
+      "stub_address": "0112f9f4",
+      "stub_flow": {
+        "success": "r4 == 0: falls through, st.w r7,(r5,0) publishes the private pointer, then lrw r15,0x01021038 / jmp r15 to the unchanged success return",
+        "failure": "r4 != 0: bt to the second lrw, then lrw r15,0x01021074 / jmp r15 to the unchanged free sequence; r0 is not written by the stub and holds the private pointer",
+        "allocation_null": "r7 == 0: the unchanged null check at 0x0102106c exits before the stub, no free and no publication"
+      },
+      "unchanged_sites": {
+        "01021038": true,
+        "01021074": true,
+        "0102105a": true,
+        "0102105e": true
+      }
+    }
+  },
+  "rejection_checks": "rejection-checks.json (separate run of reject_checks.py)",
+  "assumptions": [
+    "Normal C-SKY callee-save ABI: r4 to r7 survive the zeroing wrapper at 0x0008009e, the GPIO lookup at 0x0108e250 and the indirect GPIO method; their bodies are not read",
+    "The delayed-publication prerequisites asserted by H1E_VAD_ASSERT_DELAYED_PUBLICATION_PREREQUISITES=1 hold on the target",
+    "The single startup order of early-reader-order/REPORT.md holds, and no free of a published object occurs",
+    "The 0x60-byte allocation succeeds and is 4-byte aligned on the target",
+    "console630_f11a.c behaves like the replaced console630 for 0xf117 to 0xf119; this rests on earlier host checks, not on this builder"
+  ],
+  "production_gates": [
+    "BLOCKED container: zephyr.bin size and CRC32 in ota.xml, container CRCs, FVER and version are not rebuilt here, and build_containers.py pins the old system hash",
+    "BLOCKED flash geometry: system partition capacity for the larger image and the 0x0112f000 placement against the other pipeline's layout are not reconciled",
+    "BLOCKED lifetime: no proof that a published object is never freed or replaced; teardown, ROM and interrupt users are unaudited",
+    "BLOCKED callee-save: r4 to r7 preservation across unread ROM and indirect callees is an assumption",
+    "BLOCKED ordering: compiler barriers only; the PSR guard masks same-core interrupts only; no exclusion of another core or the DSP",
+    "BLOCKED execution: nothing ran on a CK802 or a device; no f11a response was observed; runtime framing inputs (halfword 0x867d6) unbound",
+    "BLOCKED semantics: the recorded word has no established speech or VAD meaning",
+    "NOT DONE: delivery-gate and adversarial review of this builder"
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "status": "all_rejected_as_expected",
+  "cases": [
+    {
+      "case": "baseline byte at a hunk preimage differs",
+      "expected_codes": [
+        "PREIMAGE_MISMATCH"
+      ],
+      "rejected": true,
+      "code": "PREIMAGE_MISMATCH:retain_private_pointer",
+      "reason": "PREIMAGE_MISMATCH:retain_private_pointer: baseline bytes at 0102105c are 01b5, expected 00b5",
+      "as_expected": true
+    },
+    {
+      "case": "module linked inside the baseline image and frozen restore reservation",
+      "expected_codes": [
+        "OVERLAP_IMAGE",
+        "OVERLAP_RESERVATION"
+      ],
+      "rejected": true,
+      "code": "OVERLAP_IMAGE",
+      "reason": "OVERLAP_IMAGE: module 0112e000.. overlaps the baseline image ending 0112e200",
+      "as_expected": true
+    },
+    {
+      "case": "module larger than the capacity limit",
+      "expected_codes": [
+        "CAPACITY"
+      ],
+      "rejected": true,
+      "code": "CAPACITY",
+      "reason": "CAPACITY: module is 2684 bytes, capacity 256",
+      "as_expected": true
+    },
+    {
+      "case": "manifest carries an extra hunk inside the constructor padding",
+      "expected_codes": [
+        "HUNK_SET_NOT_APPROVED"
+      ],
+      "rejected": true,
+      "code": "HUNK_SET_NOT_APPROVED",
+      "reason": "HUNK_SET_NOT_APPROVED: manifest hunks differ from the builder's approved ten",
+      "as_expected": true
+    },
+    {
+      "case": "ELF instruction differs from the approved hunk",
+      "expected_codes": [
+        "ELF_HUNK_MISMATCH"
+      ],
+      "rejected": true,
+      "code": "ELF_HUNK_MISMATCH:allocate_96",
+      "reason": "ELF_HUNK_MISMATCH:allocate_96: ELF bytes 6130 differ from approved 6030",
+      "as_expected": true
+    },
+    {
+      "case": "constructor padding is not zero",
+      "expected_codes": [
+        "CONSTRUCTOR_PADDING_NONZERO"
+      ],
+      "rejected": true,
+      "code": "CONSTRUCTOR_PADDING_NONZERO",
+      "reason": "CONSTRUCTOR_PADDING_NONZERO: constructor padding is not 124 zero bytes",
+      "as_expected": true
+    },
+    {
+      "case": "output file already exists",
+      "rejected": true,
+      "code": "FileExistsError",
+      "reason": "[Errno 17] File exists: '/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/firmware-integration/output/system-decoded-vad-ck802-NOTINSTALL.bin'",
+      "as_expected": true
+    }
+  ]
+}
