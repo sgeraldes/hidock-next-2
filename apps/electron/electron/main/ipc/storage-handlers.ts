@@ -14,6 +14,7 @@ import {
 } from '../services/file-storage'
 import {
   insertRecording,
+  remeasureRecordingDuration,
   enrichRecordingScheduleMetadata,
   addSyncedFile,
   getRecordingIdByFilePath,
@@ -310,6 +311,9 @@ export function registerStorageHandlers(): void {
       }
 
       insertRecording(recording)
+      // Settle the saved file before schedule matching and transcription gating.
+      // This renderer download path does not pass through markRecordingDownloaded.
+      remeasureRecordingDuration(recordingId)
 
       // Use the same current-snapshot, ambiguity-aware matcher as device
       // discovery. The old first-match loop could bind a new file to an obsolete

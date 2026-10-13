@@ -28,6 +28,7 @@ vi.mock('../../services/file-storage', () => ({
 
 vi.mock('../../services/database', () => ({
   insertRecording: vi.fn(),
+  remeasureRecordingDuration: vi.fn(),
   getMeetings: vi.fn(() => []),
   linkRecordingToMeeting: vi.fn(),
   addSyncedFile: vi.fn(),
@@ -62,6 +63,21 @@ function getHandler(channel: string): (...args: unknown[]) => Promise<{ success:
 describe('storage:save-recording — auto-transcribe gating', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+  })
+
+  it('settles saved-file duration before matching and transcription can consume the row', async () => {
+    ;(config.getConfig as ReturnType<typeof vi.fn>).mockReturnValue({ transcription: { autoTranscribe: true } })
+    registerStorageHandlers()
+    const result = await getHandler('storage:save-recording')({}, '2026Oct13-120000-Rec1.hda', [1, 2, 3])
+    expect(result.success).toBe(true)
+    const insert = vi.mocked(db.insertRecording)
+    const measure = vi.mocked(db.remeasureRecordingDuration)
+    const match = vi.mocked(db.enrichRecordingScheduleMetadata)
+    const queue = vi.mocked(transcription.queueTranscriptionIfEnabled)
+    expect(measure).toHaveBeenCalledWith(insert.mock.calls[0][0].id)
+    expect(insert.mock.invocationCallOrder[0]).toBeLessThan(measure.mock.invocationCallOrder[0])
+    expect(measure.mock.invocationCallOrder[0]).toBeLessThan(match.mock.invocationCallOrder[0])
+    expect(measure.mock.invocationCallOrder[0]).toBeLessThan(queue.mock.invocationCallOrder[0])
   })
 
   it('does NOT queue transcription when autoTranscribe is off', async () => {
