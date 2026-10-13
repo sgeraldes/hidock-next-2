@@ -6843,6 +6843,7 @@ export function markRecordingDownloaded(
       on_local: 1,
       location: newLocation as Recording['location']
     })
+    measureDownloadedRecording(recording.id)
     return recording.id
   }
 
@@ -6856,10 +6857,23 @@ export function markRecordingDownloaded(
      VALUES (?, ?, ?, ?, ?, NULL, ?, 'none', 'both', 'none', 1, ?, 1, 'hidock', 0)`,
     [id, localBasename, filename, localPath, opts?.fileSize ?? null, opts?.dateRecorded ?? now, now]
   )
+  measureDownloadedRecording(id)
   return id
 }
 
 // ---------------------------------------------------------------------------
+// The published file is complete, so its length is measured now: the Library
+// backfill runs once per mount and would leave a new download unknown until the
+// next one. An unreadable file leaves the row untouched (no invented duration),
+// and a failure here never turns a saved download into a failed one.
+function measureDownloadedRecording(recordingId: string): void {
+  try {
+    remeasureRecordingDuration(recordingId)
+  } catch (error) {
+    console.warn(`[database] Could not measure the duration of downloaded recording ${recordingId}:`, error)
+  }
+}
+
 // Recording pre-assignments (v31) — in-advance attribution for the live capture.
 // Keyed by the device's in-progress filename. A NULL meeting_id means the user
 // explicitly marked the recording standalone (block time-overlap auto-link).

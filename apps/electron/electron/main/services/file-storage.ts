@@ -118,6 +118,32 @@ export function getDatabasePath(): string {
 }
 
 
+const FORMAT_SNIFF_BYTES = 16
+
+/**
+ * True when `head` opens on an ID3v2 tag or a valid MPEG Layer III frame header.
+ * The device writes raw MPEG for some recordings, so an `.hda` is not always PCM.
+ * A real RIFF/WAVE never matches, and anything unrecognised returns false so the
+ * caller keeps the old `.wav` name.
+ */
+function isRawMpegAudioHead(head: Buffer): boolean {
+  if (head.length >= 10 && head.toString('latin1', 0, 3) === 'ID3') {
+    const sizeBytesValid = [6, 7, 8, 9].every((i) => (head[i] & 0x80) === 0)
+    return head[3] >= 2 && head[3] <= 4 && head[4] !== 0xff && sizeBytesValid
+  }
+  if (head.length < 4 || head[0] !== 0xff || (head[1] & 0xe0) !== 0xe0) return false
+  const version = (head[1] >> 3) & 3
+  const layer = (head[1] >> 1) & 3
+  const bitrateIndex = (head[2] >> 4) & 0xf
+  const rateIndex = (head[2] >> 2) & 3
+  return version !== 1 && layer === 1 && bitrateIndex !== 0 && bitrateIndex !== 15 && rateIndex !== 3
+}
+
+/** Extension for a downloaded `.hda`: `.mp3` for recognisable raw MPEG, `.wav` otherwise. */
+function hdaExtensionFor(data: Buffer): '.mp3' | '.wav' {
+  return isRawMpegAudioHead(data.subarray(0, FORMAT_SNIFF_BYTES)) ? '.mp3' : '.wav'
+}
+
 /** Options for saveRecording. */
 export interface SaveRecordingOptions {
   /**
@@ -158,13 +184,13 @@ export async function saveRecording(
   // Validate input filename to prevent any path traversal in the source
   validateFilename(baseFilename)
 
-  // Preserve the original device filename, just change .hda to .wav
-  // Device format: 2025Dec15-100105-Rec22.hda -> 2025Dec15-100105-Rec22.wav
+  // Preserve the original device filename and choose the HDA extension from its bytes.
+  // Raw MPEG is saved as .mp3; PCM/unknown content keeps the existing .wav fallback.
   let cleanFilename = baseFilename
   const ext = extname(baseFilename).toLowerCase()
   const isHdaFile = ext === '.hda'
   if (isHdaFile) {
-    cleanFilename = baseFilename.slice(0, -4) + '.wav'
+    cleanFilename = baseFilename.slice(0, -4) + hdaExtensionFor(data)
   }
 
   // Validate the final path stays within recordings directory

@@ -30,6 +30,7 @@ import {
   queryAll,
   runWithMassDeleteAllowed,
   backfillRecordingDurations,
+  markRecordingDownloaded,
   classifyLowValueCaptures,
   maxTranscriptSegmentEnd
 } from '../database'
@@ -530,5 +531,103 @@ describe('backfillRecordingDurations — measured from the audio file', () => {
     expect(result.measured).toBe(0)
     expect(durationOf('unreadable')).toBe(42)
     expect(sourceOf('unreadable')).toBeNull()
+  })
+})
+
+describe('markRecordingDownloaded measures at publication', () => {
+  let audioDir = ''
+
+  function writeAudio(name: string, frames: number): string {
+    const frame = Buffer.from([0xff, 0xf3, 0x88, 0xc4])
+    const bytesPerFrame = 288
+    const data = Buffer.alloc(frames * bytesPerFrame)
+    for (let i = 0; i < frames; i++) frame.copy(data, i * bytesPerFrame)
+    const path = join(audioDir, name)
+    writeFileSync(path, data)
+    return path
+  }
+
+  function durationSourceOf(id: string): string | null {
+    return queryOne<{ duration_source: string | null }>(
+      'SELECT duration_source FROM recordings WHERE id = ?', [id]
+    )?.duration_source ?? null
+  }
+
+  beforeAll(async () => {
+    cleanupDbFiles(paths.db)
+    await initializeDatabase()
+    audioDir = mkdtempSync(join(tmpdir(), `hidock-downloadtest-${process.pid}-${Date.now()}`))
+  })
+
+  afterAll(() => {
+    try { closeDatabase() } catch { /* ignore */ }
+    cleanupDbFiles(paths.db)
+    if (audioDir) rmSync(audioDir, { recursive: true, force: true })
+  })
+
+  beforeEach(() => wipeData())
+
+  it('measures a new row from the published MPEG file and retains both names', () => {
+    const path = writeAudio('2026Oct13-100306-Rec07.mp3', 1000)
+
+    const id = markRecordingDownloaded('2026Oct13-100306-Rec07.hda', path, { fileSize: 288000 })
+
+    expect(durationOf(id)).toBe(36)
+    expect(durationSourceOf(id)).toBe('file')
+    expect(queryOne<{ filename: string; original_filename: string }>(
+      'SELECT filename, original_filename FROM recordings WHERE id = ?', [id]
+    )).toEqual({ filename: '2026Oct13-100306-Rec07.mp3', original_filename: '2026Oct13-100306-Rec07.hda' })
+  })
+
+  it('remeasures an existing device row without replacing its identity', () => {
+    run(
+      `INSERT INTO recordings
+         (id, filename, original_filename, date_recorded, status, location, transcription_status,
+          on_device, on_local, source, is_imported, personal)
+       VALUES ('dev-row', '2026Oct13-100307-Rec08.hda', '2026Oct13-100307-Rec08.hda',
+               '2026-10-13T10:03:07.000Z', 'none', 'device-only', 'none', 1, 0, 'hidock', 0, 0)`
+    )
+    const path = writeAudio('2026Oct13-100307-Rec08.mp3', 250)
+
+    const id = markRecordingDownloaded('2026Oct13-100307-Rec08.hda', path)
+
+    expect(id).toBe('dev-row')
+    expect(durationOf(id)).toBe(9)
+    expect(durationSourceOf(id)).toBe('file')
+    expect(queryOne<{ filename: string; file_path: string; location: string }>(
+      'SELECT filename, file_path, location FROM recordings WHERE id = ?', ['dev-row']
+    )).toEqual({ filename: '2026Oct13-100307-Rec08.hda', file_path: path, location: 'both' })
+  })
+
+  it('keeps an unreadable or missing file from failing the download', () => {
+    const unreadable = join(audioDir, 'unrecognised.wav')
+    writeFileSync(unreadable, Buffer.from('not audio this app can measure'))
+    const unreadableId = markRecordingDownloaded('unrecognised.hda', unreadable)
+    const missingId = markRecordingDownloaded('gone.hda', join(audioDir, 'gone.wav'))
+
+    expect(unreadableId).toBeTruthy()
+    expect(durationOf(unreadableId)).toBeNull()
+    expect(durationSourceOf(unreadableId)).toBeNull()
+    expect(missingId).toBeTruthy()
+    expect(durationOf(missingId)).toBeNull()
+    expect(durationSourceOf(missingId)).toBeNull()
+  })
+
+  it('does not settle the measurement when the transcript extends past the file', () => {
+    const path = join(audioDir, 'cut.wav')
+    run(
+      `INSERT INTO recordings
+         (id, filename, file_path, date_recorded, duration_seconds, status, location, transcription_status,
+          on_device, on_local, source, is_imported, personal)
+       VALUES ('cut', 'cut.wav', ?, '2026-01-01T10:00:00.000Z', 600, 'none', 'device-only', 'none', 1, 0, 'hidock', 0, 0)`,
+      [path]
+    )
+    seedTranscript('cut', { speakers: JSON.stringify([{ start: 0, end: 600 }]) })
+    const publishedPath = writeAudio('cut.wav', 250)
+
+    markRecordingDownloaded('cut.wav', publishedPath)
+
+    expect(durationOf('cut')).toBe(600)
+    expect(durationSourceOf('cut')).toBeNull()
   })
 })

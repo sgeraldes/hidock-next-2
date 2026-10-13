@@ -95,4 +95,58 @@ describe('saveRecording — atomic write + cancellation cleanup', () => {
     await expect(saveRecording('rec.hda', Buffer.from('data'))).rejects.toThrow()
     expect(existsSync(recordingsDir)).toBe(false) // nothing (re)created
   })
+
+  describe('HDA container naming follows the bytes', () => {
+    const rawMp3 = () => Buffer.concat([Buffer.from([0xff, 0xf3, 0xc8, 0x04]), Buffer.alloc(2000, 0x55)])
+    const trueWav = () => {
+      const data = Buffer.alloc(3200, 1), header = Buffer.alloc(44)
+      header.write('RIFF', 0, 'latin1'); header.writeUInt32LE(36 + data.length, 4); header.write('WAVE', 8, 'latin1')
+      header.write('fmt ', 12, 'latin1'); header.writeUInt32LE(16, 16); header.writeUInt16LE(1, 20); header.writeUInt16LE(1, 22)
+      header.writeUInt32LE(16000, 24); header.writeUInt32LE(32000, 28); header.writeUInt16LE(2, 32); header.writeUInt16LE(16, 34)
+      header.write('data', 36, 'latin1'); header.writeUInt32LE(data.length, 40)
+      return Buffer.concat([header, data])
+    }
+
+    it('publishes raw MPEG bytes from a Buffer as .mp3 with the device stem', async () => {
+      const bytes = rawMp3()
+      const result = await saveRecording('2026Oct13-100306-Rec07.hda', bytes)
+
+      expect(result).toBe(join(recordingsDir, '2026Oct13-100306-Rec07.mp3'))
+      expect(readFileSync(result!)).toEqual(bytes)
+      expect(partials()).toHaveLength(0)
+    })
+
+    it('publishes an ID3-tagged stream as .mp3', async () => {
+      const id3 = Buffer.concat([Buffer.from('ID3'), Buffer.from([4, 0, 0, 0, 0, 0, 0]), Buffer.alloc(64, 0)])
+      const result = await saveRecording('tagged.hda', id3)
+      expect(result).toBe(join(recordingsDir, 'tagged.mp3'))
+    })
+
+    it('keeps a RIFF/WAVE, unrecognised bytes, and short bytes on the .wav fallback', async () => {
+      expect(await saveRecording('pcm.hda', trueWav())).toBe(join(recordingsDir, 'pcm.wav'))
+      expect(await saveRecording('junk.hda', Buffer.from('hello world, not audio'))).toBe(join(recordingsDir, 'junk.wav'))
+      expect(await saveRecording('tiny.hda', Buffer.from([0xff]))).toBe(join(recordingsDir, 'tiny.wav'))
+      expect(await saveRecording('empty.hda', Buffer.alloc(0))).toBe(join(recordingsDir, 'empty.wav'))
+      expect(await saveRecording('reserved.hda', Buffer.from([0xff, 0xf9, 0xc8, 0x04, 0, 0]))).toBe(join(recordingsDir, 'reserved.wav'))
+    })
+
+    it('does not rename a non-HDA file based on its bytes', async () => {
+      const result = await saveRecording('already.wav', rawMp3())
+      expect(result).toBe(join(recordingsDir, 'already.wav'))
+    })
+
+    it('uses the detected extension for collision suffixes and preserves the earlier file', async () => {
+      writeFileSync(join(recordingsDir, 'dup.mp3'), 'EARLIER')
+      const result = await saveRecording('dup.hda', rawMp3())
+
+      expect(result).toBe(join(recordingsDir, 'dup-1.mp3'))
+      expect(readFileSync(join(recordingsDir, 'dup.mp3'), 'utf8')).toBe('EARLIER')
+    })
+
+    it('leaves no final or partial file on cancellation of a raw MPEG save', async () => {
+      const result = await saveRecording('cancel-mpeg.hda', rawMp3(), undefined, undefined, { isCancelled: () => true })
+      expect(result).toBeNull()
+      expect(readdirSync(recordingsDir)).toHaveLength(0)
+    })
+  })
 })
