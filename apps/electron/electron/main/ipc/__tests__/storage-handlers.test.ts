@@ -80,6 +80,19 @@ describe('storage:save-recording — auto-transcribe gating', () => {
     expect(measure.mock.invocationCallOrder[0]).toBeLessThan(queue.mock.invocationCallOrder[0])
   })
 
+  it('keeps a saved file successful and queues when duration measurement throws', async () => {
+    ;(config.getConfig as ReturnType<typeof vi.fn>).mockReturnValue({ transcription: { autoTranscribe: true } })
+    vi.mocked(db.remeasureRecordingDuration).mockImplementationOnce(() => { throw new Error('Measurement failed') })
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      registerStorageHandlers()
+      const result = await getHandler('storage:save-recording')({}, '2026Oct13-120000-Rec1.hda', [1, 2, 3])
+      expect(result.success).toBe(true)
+      expect(transcription.queueTranscriptionIfEnabled).toHaveBeenCalledWith(vi.mocked(db.insertRecording).mock.calls[0][0].id)
+      expect(warning).toHaveBeenCalledOnce()
+    } finally { warning.mockRestore() }
+  })
+
   it('does NOT queue transcription when autoTranscribe is off', async () => {
     ;(config.getConfig as ReturnType<typeof vi.fn>).mockReturnValue({
       transcription: { autoTranscribe: false }
