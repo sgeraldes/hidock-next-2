@@ -191,7 +191,7 @@ describe('JensenDevice (main process)', () => {
       const device = new JensenDevice()
       device.versionNumber = 327733
       ;(device as any).device = {
-        transferOut: vi.fn().mockResolvedValue({ status: 'ok', bytesWritten: 12 }),
+        transferOut: vi.fn(async (_endpoint: number, data: Uint8Array) => ({ status: 'ok', bytesWritten: data.length })),
         transferIn: vi.fn(() => new Promise(() => {})),
       }
 
@@ -208,7 +208,7 @@ describe('JensenDevice (main process)', () => {
 
       await vi.advanceTimersByTimeAsync(480_000)
 
-      await expect(promise).resolves.toEqual([])
+      await expect(promise).resolves.toBeNull()
       expect(settled).toBe(true)
     } finally {
       vi.useRealTimers()

@@ -118,9 +118,9 @@ describe('JensenDevice (transport-agnostic core)', () => {
     expect(packets[3].length).toBe(12)
   })
 
-  it('keeps the realtime metadata header and decodes queue depth and mute state', () => {
+  it('keeps the realtime metadata header and decodes producer sequence and microphone mute aliases', () => {
     const body = new Uint8Array([0, 0, 0, 3, 0, 0, 0, 1, 0x34, 0x12, 0x78, 0x56])
-    expect(parseRealtimePayload(body)).toEqual({ rest: 3, muted: true, data: body })
+    expect(parseRealtimePayload(body)).toEqual({ sequenceMinusOne: 3, microphoneMuted: true, rest: 3, muted: true, data: body })
     expect(parseRealtimePayload(new Uint8Array(7))).toBeNull()
   })
 
@@ -175,7 +175,7 @@ describe('JensenDevice (transport-agnostic core)', () => {
   it('bounds a stalled download, resolves false, and quarantines the connection', async () => {
     vi.useFakeTimers()
     try {
-      const transferOut = vi.fn(async () => ({ bytesWritten: 0 }))
+      const transferOut = vi.fn(async (_endpoint: number, data: Uint8Array) => ({ status: 'ok', bytesWritten: data.length }))
       const transferIn = vi.fn(() => new Promise<USBInTransferResult>(() => {}))
       const reset = vi.fn(async () => {})
       const close = vi.fn(async () => {})
@@ -949,7 +949,7 @@ describe('JensenDevice (transport-agnostic core)', () => {
       selectConfiguration: vi.fn(async () => {}),
       claimInterface: vi.fn(async () => {}),
       selectAlternateInterface: vi.fn(async () => {}),
-      transferOut: vi.fn(async () => ({ status: 'ok', bytesWritten: 12 })),
+      transferOut: vi.fn(async (_endpoint: number, data: Uint8Array) => ({ status: 'ok', bytesWritten: data.length })),
       transferIn: vi.fn(() => new Promise(() => {})),
       reset,
       close,
@@ -958,7 +958,7 @@ describe('JensenDevice (transport-agnostic core)', () => {
     } as unknown as USBDevice
   }
 
-  it('read loop uses native startPoll(3, 32768) when a native endpoint is available', async () => {
+  it('read loop uses native startPoll(3, 8192) when a native endpoint is available', async () => {
     const ep = makePollEndpoint()
     const device = new JensenDevice(makeFakeUsb())
     await device.tryConnect(makePollDevice(ep, vi.fn(async () => {}), vi.fn(async () => {})))
@@ -969,7 +969,7 @@ describe('JensenDevice (transport-agnostic core)', () => {
 
     expect(ep.startPoll).toHaveBeenCalledTimes(1)
     expect(ep.startPoll.mock.calls[0][0]).toBe(3)
-    expect(ep.startPoll.mock.calls[0][1]).toBe(32768)
+    expect(ep.startPoll.mock.calls[0][1]).toBe(8192)
     // listening for data on the 'data' event (node-usb's real contract)
     expect(ep.listenerCount('data')).toBe(1)
 
@@ -1229,7 +1229,7 @@ describe('JensenDevice (transport-agnostic core)', () => {
       const device = new JensenDevice(makeFakeUsb())
       device.versionNumber = 327733
       ;(device as unknown as { device: unknown }).device = {
-        transferOut: vi.fn().mockResolvedValue({ status: 'ok', bytesWritten: 12 }),
+        transferOut: vi.fn(async (_endpoint: number, data: Uint8Array) => ({ status: 'ok', bytesWritten: data.length })),
         transferIn: vi.fn(() => new Promise(() => {})),
       }
       let settled = false
@@ -1241,7 +1241,7 @@ describe('JensenDevice (transport-agnostic core)', () => {
       await vi.advanceTimersByTimeAsync(120_001)
       expect(settled).toBe(false)
       await vi.advanceTimersByTimeAsync(480_000)
-      await expect(promise).resolves.toEqual([])
+      await expect(promise).resolves.toBeNull()
       expect(settled).toBe(true)
     } finally {
       vi.useRealTimers()

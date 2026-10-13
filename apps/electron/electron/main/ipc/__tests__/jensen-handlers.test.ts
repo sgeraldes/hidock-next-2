@@ -140,6 +140,9 @@ vi.mock('../../services/jensen', () => ({
   getJensenDevice: () => mockJensen,
 }))
 
+// Registered and tested on its own (firmware-handlers.test.ts).
+vi.mock('../firmware-handlers', () => ({ registerFirmwareHandlers: vi.fn() }))
+
 const mockLiveTranscription = vi.hoisted(() => ({
   start: vi.fn().mockResolvedValue(undefined),
   pause: vi.fn(),
