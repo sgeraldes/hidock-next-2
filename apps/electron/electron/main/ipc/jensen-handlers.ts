@@ -11,8 +11,10 @@
  * Security: All user-supplied values are validated with Zod before reaching the device.
  */
 
-import { ipcMain, BrowserWindow } from 'electron'
-import { supportsRealtimeFirmware } from '@hidock/jensen-protocol'
+import { ipcMain, BrowserWindow, app } from 'electron'
+import { join } from 'node:path'
+import { supportsRealtimeFirmware, splitRealtimeChannelsTap } from '@hidock/jensen-protocol'
+import type { CustomRecordingProfile, CustomRecordingFormat, CustomMarkerRules } from '@hidock/jensen-protocol'
 import { getJensenDevice } from '../services/jensen'
 import { retryPendingFileCleanups } from '../services/recording-deletion-service'
 import { serializeDeviceOperation } from '../services/device-operation-serializer'
@@ -20,6 +22,12 @@ import { emitActivityLog } from '../services/activity-log'
 import { getDownloadService } from '../services/download-service'
 import { geminiLiveTranscription } from '../services/gemini-live-transcription'
 import { RealtimeRecorder, recoverPartialLiveRecordings, type RecorderResult } from '../services/realtime-recorder'
+import { DeviceAudioSession } from '../services/device-audio-session'
+import { DeviceAudioDiagnostics } from '../services/device-audio-diagnostics'
+import { DeviceNativeRecordingControl } from '../services/device-native-recording'
+import { isAuditedCustomRecordingFirmware } from '../services/device-audited-firmware'
+import type { NativeRecordingRequest } from '../../../src/shared/device-native-recording'
+import type { DeviceAudioStartOptions } from '../../../src/shared/device-audio'
 import { getRecordingsPath } from '../services/file-storage'
 import { registerFirmwareHandlers } from './firmware-handlers'
 import { isRecoveryMode } from '../recovery-mode'
@@ -36,6 +44,7 @@ import {
   JensenSetAutoRecordSchema,
   JensenDownloadFileSchema,
   JensenRealtimeDataSchema,
+  JensenRealtimeStartSchema,
   JensenBluetoothScanSchema,
 } from './jensen-validation'
 
@@ -229,19 +238,55 @@ function tellWindows(result: RecorderResult | { status: 'error'; message: string
 }
 
 /** Never throws: a recording problem must not stop the stream or its live transcript. */
-function startLiveRecording(): void {
+function startLiveRecording(options: DeviceAudioStartOptions = {}, captureSessionId?: string): string | null {
   let why: string | null
   try {
-    why = liveRecorder.start()
+    why = liveRecorder.start({ save: options.saveRecording, strictStereo: true, preserveMutedPayload: false, captureSessionId, automaticTranscription: false })
   } catch (err) {
     why = `Could not start the live recording: ${err instanceof Error ? err.message : String(err)}`
   }
   setLiveRecording(liveRecorder.recording)
   if (why && why !== 'off') tellWindows({ status: 'error', message: why })
+  return why
 }
 
+// One logical owner of the live stream. It starts and stops the device stream, the optional
+// provider and the optional local file, and it is the only place the CMD 34 dequeue is allowed.
+const liveDiagnostics = new DeviceAudioDiagnostics()
+const liveSenders = new Map<number, Parameters<typeof geminiLiveTranscription.start>[0]>()
+const destructionObservers = new WeakSet<object>()
+let lastCaptureSessionId: string | null = null
+let liveRead: ReturnType<ReturnType<typeof getJensenDevice>['getRealtimeData']> | null = null
+let lastDiagnosticsAt = 0
+const audioSession = new DeviceAudioSession({
+  startDevice: () => nativeRecordingControl.startLive(() => getJensenDevice().startRealtime(2), () => audioSession.snapshot().status === 'starting'),
+  pauseDevice: () => getJensenDevice().pauseRealtime(),
+  stopDevice: () => getJensenDevice().stopRealtime(),
+  startTranscription: owner => {
+    const sender = liveSenders.get(owner)
+    if (!sender) return Promise.reject(new Error('Live window unavailable'))
+    return geminiLiveTranscription.start(sender)
+  },
+  pauseTranscription: () => geminiLiveTranscription.pause(),
+  stopTranscription: () => geminiLiveTranscription.stop(),
+  startRecording: (options, sessionId) => {
+    lastCaptureSessionId = sessionId
+    return startLiveRecording(options, sessionId)
+  },
+  finishRecording: () => finishLiveRecordingFile(),
+  beginDiagnostics: () => { liveDiagnostics.reset(); lastDiagnosticsAt = 0 },
+  noteDiscontinuity: reason => { liveDiagnostics.noteDiscontinuity(reason); liveRecorder.noteDiscontinuity(reason) }
+})
+const nativeRecordingControl = new DeviceNativeRecordingControl({
+  device: () => getJensenDevice(),
+  busy: () => getJensenDevice().isOperationInProgress() || getActiveTransferFilename() !== null,
+  liveIdle: () => audioSession.snapshot().status === 'idle',
+  serialize: serializeDeviceOperation,
+  directory: () => join(app.getPath('userData'), 'device-native-command-journal')
+})
+
 /** Close the live file, if one is open. Every way a stream ends comes through here, quitting included. */
-export function finishLiveRecording(): void {
+function finishLiveRecordingFile(): void {
   let result: RecorderResult | null
   try {
     result = liveRecorder.finish()
@@ -251,6 +296,16 @@ export function finishLiveRecording(): void {
     setLiveRecording(false)
   }
   if (result && result.status !== 'empty') tellWindows(result)
+}
+
+/** Shutdown and disconnect invalidate pending reads/starts at once, save the audio and end the optional provider. */
+export function finishLiveRecording(): void {
+  void endLiveAudioLocally('shutdown')
+}
+
+export function endLiveAudioLocally(reason: string): Promise<void> {
+  liveSenders.clear()
+  return audioSession.endLocally(reason)
 }
 
 export function registerJensenHandlers(): void {
@@ -340,8 +395,7 @@ export function registerJensenHandlers(): void {
 
   ipcMain.handle('jensen:disconnect', async () => {
     try {
-      finishLiveRecording()
-      await geminiLiveTranscription.stop()
+      await endLiveAudioLocally('disconnect')
       // Abort an in-flight download so it stops being saved. The device keeps
       // streaming the rest of the file regardless; gracefulCloseDevice then drains
       // that out of the IN FIFO before closing (see below). The 'disconnect' reason
@@ -371,8 +425,7 @@ export function registerJensenHandlers(): void {
 
   ipcMain.handle('jensen:reset', async () => {
     try {
-      finishLiveRecording()
-      await geminiLiveTranscription.stop()
+      await endLiveAudioLocally('reset')
       getJensenDevice().abortInFlight()
       return await serializeDeviceOperation(() => getJensenDevice().reset())
     } catch {
@@ -412,7 +465,13 @@ export function registerJensenHandlers(): void {
 
   ipcMain.handle('jensen:getDeviceInfo', async () => {
     try {
-      return await getJensenDevice().getDeviceInfo()
+      // The connect broadcast goes out before this reply fills in the firmware version, so
+      // publish once more when a successful reply changed the identity the renderer keys on.
+      const identity = (): string => [device.getModel(), device.serialNumber, device.versionCode, device.versionNumber].join('|')
+      const before = identity()
+      const info = await getJensenDevice().getDeviceInfo()
+      if (info && identity() !== before) sendState()
+      return info
     } catch {
       return null
     }
@@ -618,60 +677,136 @@ export function registerJensenHandlers(): void {
     }
   })
 
-  ipcMain.handle('jensen:startRealtime', async (event) => {
+  ipcMain.handle('jensen:getNativeRecordingStatus', () => nativeRecordingControl.status())
+  ipcMain.handle('jensen:addNativeMarker', (event, request: NativeRecordingRequest) => {
+    if (event.sender.isDestroyed()) throw new Error('The requesting window is closed')
+    return nativeRecordingControl.dispatch('marker', request)
+  })
+  ipcMain.handle('jensen:toggleNativeRecording', (event, request: NativeRecordingRequest) => {
+    if (event.sender.isDestroyed()) throw new Error('The requesting window is closed')
+    return nativeRecordingControl.dispatch('toggle', request)
+  })
+  ipcMain.handle('jensen:getCustomRecordingProfile', event => serializeDeviceOperation(async () => {
+    const device = getJensenDevice()
+    if (event.sender.isDestroyed() || !device.isConnected() || device.getModel() !== 'hidock-h1e' || !isAuditedCustomRecordingFirmware(device.getModel(), device.versionNumber, device.versionCode) || audioSession.snapshot().status !== 'idle' || device.isOperationInProgress() || getActiveTransferFilename() !== null) return null
+    return device.getCustomRecordingProfile()
+  }))
+  ipcMain.handle('jensen:getCustomRecordingFormat', event => serializeDeviceOperation(async () => {
+    const device = getJensenDevice()
+    if (event.sender.isDestroyed() || !device.isConnected() || device.getModel() !== 'hidock-h1e' || !isAuditedCustomRecordingFirmware(device.getModel(), device.versionNumber, device.versionCode) || audioSession.snapshot().status !== 'idle' || device.isOperationInProgress() || getActiveTransferFilename() !== null) return null
+    return device.getCustomRecordingFormat()
+  }))
+  ipcMain.handle('jensen:setCustomRecordingFormat', (event, format: CustomRecordingFormat) => serializeDeviceOperation(async () => {
+    const device = getJensenDevice()
+    if (event.sender.isDestroyed() || !device.isConnected() || device.getModel() !== 'hidock-h1e' || !isAuditedCustomRecordingFirmware(device.getModel(), device.versionNumber, device.versionCode) || audioSession.snapshot().status !== 'idle' || device.isOperationInProgress() || getActiveTransferFilename() !== null) return null
+    return device.setCustomRecordingFormat(format)
+  }))
+  ipcMain.handle('jensen:getCustomMarkerRules', event => serializeDeviceOperation(async () => {
+    const device = getJensenDevice()
+    if (event.sender.isDestroyed() || !device.isConnected() || device.getModel() !== 'hidock-h1e' || !isAuditedCustomRecordingFirmware(device.getModel(), device.versionNumber, device.versionCode) || audioSession.snapshot().status !== 'idle' || device.isOperationInProgress() || getActiveTransferFilename() !== null) return null
+    return device.getCustomMarkerRules()
+  }))
+  ipcMain.handle('jensen:setCustomMarkerRules', (event, rules: CustomMarkerRules) => serializeDeviceOperation(async () => {
+    const device = getJensenDevice()
+    if (event.sender.isDestroyed() || !device.isConnected() || device.getModel() !== 'hidock-h1e' || !isAuditedCustomRecordingFirmware(device.getModel(), device.versionNumber, device.versionCode) || audioSession.snapshot().status !== 'idle' || device.isOperationInProgress() || getActiveTransferFilename() !== null) return null
+    return device.setCustomMarkerRules(rules)
+  }))
+  ipcMain.handle('jensen:setCustomRecordingProfile', (event, profile: CustomRecordingProfile) => serializeDeviceOperation(async () => {
+    const device = getJensenDevice()
+    if (event.sender.isDestroyed() || !device.isConnected() || device.getModel() !== 'hidock-h1e' || !isAuditedCustomRecordingFirmware(device.getModel(), device.versionNumber, device.versionCode) || audioSession.snapshot().status !== 'idle' || device.isOperationInProgress() || getActiveTransferFilename() !== null) return null
+    // The protocol validates every field, rechecks exact custom identity and
+    // queries its strict REA1 capability before sending a mutation. The target
+    // itself rejects active native/live recording and malformed requests.
+    return device.setCustomRecordingProfile(profile)
+  }))
+  ipcMain.handle('jensen:getAudioDiagnostics', event => ({ session: audioSession.snapshot(), diagnostics: liveDiagnostics.snapshot(), lastSessionId: lastCaptureSessionId, owned: audioSession.owns(event.sender.id ?? 0) }))
+  ipcMain.handle('jensen:startRealtime', async (event, args) => {
     try {
       const realtimeDevice = getJensenDevice()
       if (!supportsRealtimeFirmware(realtimeDevice.getModel(), realtimeDevice.versionNumber)) {
         return { result: 'failed', error: 'This HiDock firmware does not support realtime audio. Update it in HiNotes first.' }
       }
-      await geminiLiveTranscription.start(event.sender)
-      const result = await realtimeDevice.startRealtime(2)
-      if (!result || result.result !== 'success') await geminiLiveTranscription.stop()
-      else startLiveRecording()
+      const options = JensenRealtimeStartSchema.parse(args ?? {})
+      const owner = event.sender.id ?? 0
+      if (event.sender.isDestroyed()) return { result: 'failed', error: 'The live window is closed.' }
+      if (!destructionObservers.has(event.sender)) {
+        destructionObservers.add(event.sender)
+        event.sender.once('destroyed', () => {
+          if (liveSenders.get(owner) !== event.sender) return
+          liveSenders.delete(owner)
+          void audioSession.stop(owner).catch(() => undefined)
+        })
+      }
+      liveSenders.set(owner, event.sender)
+      const result = await audioSession.start(owner, options)
+      if (!audioSession.owns(owner)) liveSenders.delete(owner)
       return result
     } catch (error) {
-      await geminiLiveTranscription.stop()
       return { result: 'failed', error: error instanceof Error ? error.message : String(error) }
     }
   })
 
-  ipcMain.handle('jensen:pauseRealtime', async () => {
+  ipcMain.handle('jensen:pauseRealtime', async event => {
     try {
-      const result = await getJensenDevice().pauseRealtime()
-      if (result?.result === 'success') geminiLiveTranscription.pause()
-      return result
+      return await audioSession.pause(event.sender.id ?? 0)
     } catch {
       return null
     }
   })
 
-  ipcMain.handle('jensen:stopRealtime', async () => {
+  ipcMain.handle('jensen:stopRealtime', async event => {
+    const owner = event.sender.id ?? 0
     try {
-      return await getJensenDevice().stopRealtime()
+      return await audioSession.stop(owner)
     } catch {
       return null
     } finally {
-      finishLiveRecording()
-      await geminiLiveTranscription.stop()
+      if (!audioSession.owns(owner)) liveSenders.delete(owner)
     }
   })
 
   ipcMain.handle('jensen:getRealtimeData', async (event, args) => {
     try {
       const { offset } = JensenRealtimeDataSchema.parse(args)
-      const result = await getJensenDevice().getRealtimeData(offset)
+      const owner = event.sender.id ?? 0
+      if (!audioSession.canRead(owner)) return null
+      // Duplicate renderer requests share one dequeue; only its creator fans out.
+      if (liveRead) return null
+      const sessionId = audioSession.snapshot().sessionId
+      const generation = audioSession.readGeneration
+      liveRead = getJensenDevice().getRealtimeData(offset)
+      const result = await liveRead.finally(() => { liveRead = null })
+      if (!audioSession.canRead(owner) || audioSession.snapshot().sessionId !== sessionId || generation !== audioSession.readGeneration) return null
       if (result && !event.sender.isDestroyed()) {
         // Not awaited, and `acceptDevicePacket` does not await the provider
         // either: this handler is the renderer's realtime poll, and the device
         // buffer it drains is finite. Waiting on a WebSocket here is what made
         // `rest` grow and packets disappear on the device.
+        const valid = liveDiagnostics.observe(result, Date.now())
+        const previousRecordingError = audioSession.snapshot().recordingError
         liveRecorder.write(result)
-        geminiLiveTranscription.acceptDevicePacket(result)
+        if (liveRecorder.errorMessage) audioSession.noteRecordingFailure(liveRecorder.errorMessage)
+        const recordingFailureChanged = audioSession.snapshot().recordingError !== previousRecordingError
+        if (valid && audioSession.snapshot().transcribe && !audioSession.snapshot().transcriptionError) geminiLiveTranscription.acceptDevicePacket(result)
+        if (recordingFailureChanged || Date.now() - lastDiagnosticsAt >= 1000) {
+          event.sender.send('jensen:audio-diagnostics', { session: audioSession.snapshot(), diagnostics: liveDiagnostics.snapshot(), lastSessionId: lastCaptureSessionId, owned: true })
+          lastDiagnosticsAt = Date.now()
+        }
         event.sender.send('jensen:realtime-data', {
           rest: result.rest,
           muted: result.muted,
+          sequenceMinusOne: result.sequenceMinusOne,
+          microphoneMuted: result.microphoneMuted,
           data: Buffer.from(result.data),
         })
+        // Two independent mono lanes for the owning renderer, from this same CMD34 packet.
+        // Isolated: a split failure must never replace the poll's result with null.
+        try {
+          const tap = splitRealtimeChannelsTap(result)
+          if (tap) event.sender.send('jensen:realtime-channels', { sessionId, receivedAtMs: Date.now(), ...tap })
+        } catch (error) {
+          console.error('[Jensen] Live channel tap failed:', error)
+        }
       }
       return result
     } catch {
@@ -746,7 +881,7 @@ export function registerJensenHandlers(): void {
     stopRecordingPoll()
     // The stream ended with the cable: save it now, or the next stream would
     // be appended to this file.
-    finishLiveRecording()
+    void endLiveAudioLocally('disconnected')
     broadcast('jensen:disconnect-event')
     broadcast('jensen:state-changed', {
       connected: false,

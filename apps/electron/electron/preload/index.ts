@@ -1,4 +1,7 @@
 import type { RetranscribeResult } from '../../src/shared/retranscribe'
+import type { DeviceAudioStartOptions, DeviceAudioDiagnosticsState } from '../../src/shared/device-audio'
+import type { DeviceNativeRecordingStatus, NativeRecordingRequest, NativeRecordingDispatch } from '../../src/shared/device-native-recording'
+import type { CustomRecordingProfile, CustomRecordingProfileResponse, CustomRecordingFormat, CustomRecordingFormatResponse, CustomMarkerRules, CustomMarkerRulesResponse } from '@hidock/jensen-protocol'
 import type { ReferenceLabelSet, ReferenceLabelItem, LabelItemArgs, SaveLabelArgs } from '../../src/shared/decision-labels'
 import type { TranscriptVerdicts } from '../../src/shared/transcript-verdicts'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
@@ -1415,10 +1418,23 @@ export interface ElectronAPI {
     formatCard: () => Promise<any>
     // Realtime
     getRealtimeSettings: () => Promise<any>
-    startRealtime: () => Promise<any>
+    startRealtime: (options?: DeviceAudioStartOptions) => Promise<any>
+    getAudioDiagnostics: () => Promise<DeviceAudioDiagnosticsState>
+    onAudioDiagnostics: (callback: (state: DeviceAudioDiagnosticsState) => void) => () => void
+    getNativeRecordingStatus: () => Promise<DeviceNativeRecordingStatus>
+    addNativeMarker: (request: NativeRecordingRequest) => Promise<NativeRecordingDispatch>
+    toggleNativeRecording: (request: NativeRecordingRequest) => Promise<NativeRecordingDispatch>
+    getCustomRecordingProfile: () => Promise<CustomRecordingProfileResponse | null>
+    getCustomRecordingFormat: () => Promise<CustomRecordingFormatResponse | null>
+    setCustomRecordingFormat: (format: CustomRecordingFormat) => Promise<{ result: 'success' | 'failed'; persistence: 'unverified' } | null>
+    getCustomMarkerRules: () => Promise<CustomMarkerRulesResponse | null>
+    setCustomMarkerRules: (rules: CustomMarkerRules) => Promise<{ result: 'success' | 'failed'; persistence: 'unverified' } | null>
+    setCustomRecordingProfile: (profile: CustomRecordingProfile) => Promise<{ result: 'success' | 'failed'; persistence: 'unverified' } | null>
     pauseRealtime: () => Promise<any>
     stopRealtime: () => Promise<any>
     getRealtimeData: (offset: number) => Promise<any>
+    /** Two independent mono PCM16LE lanes (neutral ids) from each accepted CMD34 packet, owning renderer only. */
+    onRealtimeChannels: (callback: (data: import('@hidock/jensen-protocol').RealtimeChannelsTap & { sessionId: string | null; receivedAtMs: number }) => void) => () => void
     /** The realtime stream was saved as a recording, or saving it failed. */
     onRealtimeRecording: (callback: (data: { status: 'saved'; filename: string; seconds: number } | { status: 'error'; message: string; filename?: string }) => void) => () => void
     onLiveTranscriptionStatus: (callback: (data: { status: string; channel?: 0 | 1 }) => void) => () => void
@@ -2292,10 +2308,30 @@ const electronAPI: ElectronAPI = {
     formatCard: () => callIPC('jensen:formatCard'),
     // Realtime
     getRealtimeSettings: () => callIPC('jensen:getRealtimeSettings'),
-    startRealtime: () => callIPC('jensen:startRealtime'),
+    startRealtime: (options) => callIPC('jensen:startRealtime', options),
+    getAudioDiagnostics: () => callIPC('jensen:getAudioDiagnostics'),
+    onAudioDiagnostics: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, data: DeviceAudioDiagnosticsState) => callback(data)
+      ipcRenderer.on('jensen:audio-diagnostics', listener)
+      return () => ipcRenderer.removeListener('jensen:audio-diagnostics', listener)
+    },
+    getNativeRecordingStatus: () => callIPC('jensen:getNativeRecordingStatus'),
+    addNativeMarker: (request) => callIPC('jensen:addNativeMarker', request),
+    toggleNativeRecording: (request) => callIPC('jensen:toggleNativeRecording', request),
+    getCustomRecordingProfile: () => callIPC('jensen:getCustomRecordingProfile'),
+    getCustomRecordingFormat: () => callIPC('jensen:getCustomRecordingFormat'),
+    setCustomRecordingFormat: format => callIPC('jensen:setCustomRecordingFormat', format),
+    getCustomMarkerRules: () => callIPC('jensen:getCustomMarkerRules'),
+    setCustomMarkerRules: rules => callIPC('jensen:setCustomMarkerRules', rules),
+    setCustomRecordingProfile: profile => callIPC('jensen:setCustomRecordingProfile', profile),
     pauseRealtime: () => callIPC('jensen:pauseRealtime'),
     stopRealtime: () => callIPC('jensen:stopRealtime'),
     getRealtimeData: (offset: number) => callIPC('jensen:getRealtimeData', { offset }),
+    onRealtimeChannels: (callback: (data: import('@hidock/jensen-protocol').RealtimeChannelsTap & { sessionId: string | null; receivedAtMs: number }) => void) => {
+      const handler = (_event: any, data: import('@hidock/jensen-protocol').RealtimeChannelsTap & { sessionId: string | null; receivedAtMs: number }) => callback(data)
+      ipcRenderer.on('jensen:realtime-channels', handler)
+      return () => ipcRenderer.removeListener('jensen:realtime-channels', handler)
+    },
     onRealtimeRecording: (callback: (data: { status: 'saved'; filename: string; seconds: number } | { status: 'error'; message: string; filename?: string }) => void) => {
       const handler = (_event: any, data: { status: 'saved'; filename: string; seconds: number } | { status: 'error'; message: string; filename?: string }) => callback(data)
       ipcRenderer.on('jensen:realtime-recording', handler)

@@ -19,9 +19,19 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, readdirSync, rmSync } from 'fs'
+import { EventEmitter } from 'events'
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+
+const captureWriteFailure = vi.hoisted(() => ({ enabled: false }))
+vi.mock('fs', async importOriginal => {
+  const original = await importOriginal<typeof import('fs')>()
+  return { ...original, writeSync: (...args: unknown[]) => {
+    if (captureWriteFailure.enabled && args[4] !== undefined && Number(args[4]) >= 44) throw new Error('Injected recording disk failure')
+    return Reflect.apply(original.writeSync, original, args)
+  } }
+})
 
 const mockRetryPendingFileCleanups = vi.hoisted(() => vi.fn().mockResolvedValue({
   attempted: 0,
@@ -107,6 +117,15 @@ const mockJensen: any = {
   isConnected: vi.fn().mockReturnValue(false),
   isOperationInProgress: vi.fn().mockReturnValue(false),
   getRecordingFile: vi.fn().mockResolvedValue({ recording: null }),
+  getRecordingStatus: vi.fn().mockResolvedValue({ recording: null, duration: 0, samples: [], type: null }),
+  addNativeMarker: vi.fn().mockResolvedValue({ result: 'success' }),
+  toggleNativeRecording: vi.fn().mockResolvedValue({ result: 'success' }),
+  getCustomRecordingProfile: vi.fn().mockResolvedValue({ profile: 2, gainLeftQ15: 32768, gainRightQ15: 32768, storage: 'fallback' }),
+  setCustomRecordingProfile: vi.fn().mockResolvedValue({ result: 'success', persistence: 'unverified' }),
+  getCustomRecordingFormat: vi.fn().mockResolvedValue({ format: 'mp3', storage: 'fallback' }),
+  setCustomRecordingFormat: vi.fn().mockResolvedValue({ result: 'success', persistence: 'unverified' }),
+  getCustomMarkerRules: vi.fn().mockResolvedValue({ enabled: false, lane: 2, meanMagnitudeThreshold: 1000, storage: 'fallback' }),
+  setCustomMarkerRules: vi.fn().mockResolvedValue({ result: 'success', persistence: 'unverified' }),
   getModel: vi.fn().mockReturnValue('unknown'),
   isP1Device: vi.fn().mockReturnValue(false),
   getDeviceInfo: vi.fn().mockResolvedValue(null),
@@ -169,19 +188,23 @@ vi.mock('../../services/config', async (importOriginal) => ({
 // Import and register handlers under test
 // ---------------------------------------------------------------------------
 
-import { finishLiveRecording, registerJensenHandlers } from '../jensen-handlers'
+import { endLiveAudioLocally, finishLiveRecording, registerJensenHandlers } from '../jensen-handlers'
 
 // ---------------------------------------------------------------------------
 // Helper to build a fake IPC event with a spy-able sender
 // ---------------------------------------------------------------------------
 
+let nextSenderId = 1
 function makeEvent(destroyed = false) {
-  return {
-    sender: {
-      isDestroyed: vi.fn(() => destroyed),
-      send: vi.fn(),
-    },
-  }
+  const sender = Object.assign(new EventEmitter(), { id: nextSenderId++, isDestroyed: vi.fn(() => destroyed), send: vi.fn() })
+  return { sender }
+}
+
+async function startCapture(event = makeEvent(), options = {}) {
+  mockJensen.getModel.mockReturnValue('hidock-h1e')
+  mockJensen.versionNumber = 393984
+  mockJensen.startRealtime.mockResolvedValue({ result: 'success' })
+  return mockHandlers['jensen:startRealtime'](event, options)
 }
 
 // ---------------------------------------------------------------------------
@@ -191,10 +214,16 @@ function makeEvent(destroyed = false) {
 describe('registerJensenHandlers', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    captureWriteFailure.enabled = false
     liveDir.path = mkdtempSync(join(tmpdir(), 'jensen-live-'))
     mockRetryPendingFileCleanups.mockResolvedValue({ attempted: 0, cleared: 0, stillPending: {} })
     mockJensen.getModel.mockReturnValue('unknown')
     mockJensen.versionNumber = 327714
+    mockJensen.versionCode = '6.3.0'
+    mockJensen.isConnected.mockReturnValue(true)
+    mockJensen.isOperationInProgress.mockReturnValue(false)
+    mockJensen.getRecordingFile.mockResolvedValue({ recording: null })
+    mockJensen.getRecordingStatus.mockResolvedValue({ recording: null, duration: 0, samples: [], type: null })
     mockJensen.startRealtime.mockResolvedValue(null)
     broadcastSendCalls.length = 0
     broadcastWindowState.destroyed = false
@@ -203,10 +232,11 @@ describe('registerJensenHandlers', () => {
     registerJensenHandlers()
   })
 
-  afterEach(() => {
+  afterEach(async () => {
     // Stop the module-level recording poll between tests (ondisconnect clears its
     // interval/kickoff timers) so a leaked timer can't fire in a later test.
     mockJensen.ondisconnect?.()
+    await endLiveAudioLocally('test-cleanup')
     vi.useRealTimers()
     // A test that starts a stream and never stops it leaves the recorder open.
     finishLiveRecording()
@@ -399,6 +429,23 @@ describe('registerJensenHandlers', () => {
     expect(result).toEqual({ result: 'success' })
   })
 
+  it('keeps custom profile controls unavailable on official firmware without a device query or mutation', async () => {
+    mockJensen.getModel.mockReturnValue('hidock-h1e')
+    mockJensen.versionNumber = 393984
+    expect(await mockHandlers['jensen:getCustomRecordingProfile'](makeEvent())).toBeNull()
+    expect(await mockHandlers['jensen:setCustomRecordingProfile'](makeEvent(), { profile: 2, gainLeftQ15: 32768, gainRightQ15: 32768 })).toBeNull()
+    expect(mockJensen.getCustomRecordingProfile).not.toHaveBeenCalled()
+    expect(mockJensen.setCustomRecordingProfile).not.toHaveBeenCalled()
+    expect(await mockHandlers['jensen:getCustomRecordingFormat'](makeEvent())).toBeNull()
+    expect(await mockHandlers['jensen:setCustomRecordingFormat'](makeEvent(), 'wav')).toBeNull()
+    expect(await mockHandlers['jensen:getCustomMarkerRules'](makeEvent())).toBeNull()
+    expect(await mockHandlers['jensen:setCustomMarkerRules'](makeEvent(), { enabled: false, lane: 2, meanMagnitudeThreshold: 1000 })).toBeNull()
+    expect(mockJensen.getCustomRecordingFormat).not.toHaveBeenCalled()
+    expect(mockJensen.setCustomRecordingFormat).not.toHaveBeenCalled()
+    expect(mockJensen.getCustomMarkerRules).not.toHaveBeenCalled()
+    expect(mockJensen.setCustomMarkerRules).not.toHaveBeenCalled()
+  })
+
   it('jensen:getRealtimeData rejects negative offset', async () => {
     const result = await mockHandlers['jensen:getRealtimeData'](makeEvent(), { offset: -5 })
     expect(result).toBeNull()
@@ -406,22 +453,53 @@ describe('registerJensenHandlers', () => {
   })
 
   it('jensen:getRealtimeData accepts zero offset', async () => {
+    const event = makeEvent()
+    await startCapture(event)
     mockJensen.getRealtimeData.mockResolvedValue(null)
-    await mockHandlers['jensen:getRealtimeData'](makeEvent(), { offset: 0 })
+    await mockHandlers['jensen:getRealtimeData'](event, { offset: 0 })
     expect(mockJensen.getRealtimeData).toHaveBeenCalledWith(0)
   })
 
-  it('starts Gemini Live and sends exactly one device start command in room/call mode', async () => {
+  it('starts capture without Gemini and sends exactly one device start command in room/call mode', async () => {
     mockJensen.getModel.mockReturnValue('hidock-h1e')
     mockJensen.versionNumber = 393984
     mockJensen.startRealtime.mockResolvedValue({ result: 'success' })
     const event = makeEvent()
 
-    await expect(mockHandlers['jensen:startRealtime'](event)).resolves.toEqual({ result: 'success' })
+    await expect(mockHandlers['jensen:startRealtime'](event)).resolves.toMatchObject({ result: 'success', transcribe: false })
 
-    expect(mockLiveTranscription.start).toHaveBeenCalledWith(event.sender)
+    expect(mockLiveTranscription.start).not.toHaveBeenCalled()
     expect(mockJensen.startRealtime).toHaveBeenCalledTimes(1)
     expect(mockJensen.startRealtime).toHaveBeenCalledWith(2)
+  })
+
+  it('fresh native status blocks live start even when the recording poll has not observed it', async () => {
+    mockJensen.getModel.mockReturnValue('hidock-h1e')
+    mockJensen.versionNumber = 393984
+    mockJensen.getRecordingStatus.mockResolvedValueOnce({ recording: 'active.mp3', duration: 12, samples: [], type: 'recording' })
+    expect(await mockHandlers['jensen:startRealtime'](makeEvent())).toMatchObject({ result: 'failed', error: expect.stringContaining('native recording is active') })
+    expect(mockJensen.startRealtime).not.toHaveBeenCalled()
+    expect(mockLiveTranscription.start).not.toHaveBeenCalled()
+  })
+
+  it('shutdown during native-status read prevents a delayed live control write', async () => {
+    mockJensen.getModel.mockReturnValue('hidock-h1e')
+    mockJensen.versionNumber = 393984
+    let release!: (value: any) => void
+    mockJensen.getRecordingStatus.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    const pending = mockHandlers['jensen:startRealtime'](makeEvent())
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+    finishLiveRecording()
+    release({ recording: null, duration: 0, samples: [], type: null })
+    expect(await pending).toMatchObject({ result: 'failed' })
+    expect(mockJensen.startRealtime).not.toHaveBeenCalled()
+  })
+
+  it('starts Gemini only when requested and keeps the owned capture available', async () => {
+    const event = makeEvent()
+    await startCapture(event, { transcribe: true })
+    await vi.waitFor(() => expect(mockLiveTranscription.start).toHaveBeenCalledWith(event.sender))
+    expect(mockHandlers['jensen:getAudioDiagnostics'](event).session.transcribe).toBe(true)
   })
 
   it('saves the realtime stream as a recording and says so when it stops', async () => {
@@ -432,15 +510,19 @@ describe('registerJensenHandlers', () => {
     mockJensen.getRealtimeData.mockResolvedValueOnce(packet)
     const event = makeEvent()
 
-    await mockHandlers['jensen:startRealtime'](event)
+    const started = await mockHandlers['jensen:startRealtime'](event)
     expect(readdirSync(liveDir.path)[0]).toMatch(/-Live\.wav\.partial$/)
     await mockHandlers['jensen:getRealtimeData'](event, { offset: 0 })
     await mockHandlers['jensen:stopRealtime'](event)
 
-    const files = readdirSync(liveDir.path)
-    expect(files).toHaveLength(1)
-    expect(files[0]).toMatch(/^\d{4}[A-Z][a-z]{2}\d{2}-\d{6}-Live\.wav$/)
-    expect(broadcastSendCalls).toContainEqual(['jensen:realtime-recording', { status: 'saved', filename: files[0], seconds: 1 }])
+    const files = readdirSync(liveDir.path), wav = files.find((file) => file.endsWith('.wav'))!
+    expect(files).toHaveLength(2)
+    expect(wav).toMatch(/^\d{4}[A-Z][a-z]{2}\d{2}-\d{6}-Capture-Live\.wav$/)
+    expect(broadcastSendCalls).toContainEqual(['jensen:realtime-recording', { status: 'saved', filename: wav, seconds: 1 }])
+    const note = JSON.parse(readFileSync(join(liveDir.path, wav.replace(/\.wav$/, '.live.json')), 'utf8'))
+    expect(note.captureSessionId).toBe(started.sessionId)
+    expect(note.capture.automaticTranscription).toBe(false)
+    expect(note.capture.framesWritten).toBe(16000)
   })
 
   it('an unplugged device saves the stream, and the next stream gets its own file', async () => {
@@ -453,8 +535,8 @@ describe('registerJensenHandlers', () => {
     await mockHandlers['jensen:getRealtimeData'](event, { offset: 0 })
     mockJensen.ondisconnect?.()
     const files = readdirSync(liveDir.path)
-    expect(files).toHaveLength(1)
-    expect(files[0]).toMatch(/-Live\.wav$/)
+    expect(files).toHaveLength(2)
+    expect(files.some((file) => /-Live\.wav$/.test(file))).toBe(true)
     expect(broadcastSendCalls.some(([c, p]) => c === 'jensen:realtime-recording' && p.status === 'saved')).toBe(true)
   })
 
@@ -467,6 +549,152 @@ describe('registerJensenHandlers', () => {
     expect(result).toMatchObject({ result: 'failed', error: expect.stringContaining('firmware') })
     expect(mockLiveTranscription.start).not.toHaveBeenCalled()
     expect(mockJensen.startRealtime).not.toHaveBeenCalled()
+  })
+
+  it('rejects unowned reads and competing starts without stopping the current provider', async () => {
+    const owner = makeEvent(), other = makeEvent()
+    await startCapture(owner, { transcribe: true })
+    await vi.waitFor(() => expect(mockLiveTranscription.start).toHaveBeenCalledOnce())
+    mockLiveTranscription.stop.mockClear()
+    expect(await mockHandlers['jensen:startRealtime'](other, { transcribe: true })).toMatchObject({ result: 'failed' })
+    expect(await mockHandlers['jensen:startRealtime'](other, { transcribe: 'bad-value' })).toMatchObject({ result: 'failed' })
+    expect(await mockHandlers['jensen:getRealtimeData'](other, { offset: 0 })).toBeNull()
+    expect(mockJensen.getRealtimeData).not.toHaveBeenCalled()
+    expect(mockLiveTranscription.stop).not.toHaveBeenCalled()
+    expect(mockHandlers['jensen:getAudioDiagnostics'](owner).session.status).toBe('streaming')
+  })
+
+  it('dequeues and fans out a packet once when the renderer submits duplicate reads', async () => {
+    const event = makeEvent()
+    await startCapture(event)
+    let resolve!: (value: any) => void
+    mockJensen.getRealtimeData.mockImplementationOnce(() => new Promise(r => { resolve = r }))
+    const first = mockHandlers['jensen:getRealtimeData'](event, { offset: 0 })
+    expect(await mockHandlers['jensen:getRealtimeData'](event, { offset: 0 })).toBeNull()
+    expect(mockJensen.getRealtimeData).toHaveBeenCalledOnce()
+    const packet = { rest: 0, muted: false, data: new Uint8Array(12) }
+    resolve(packet)
+    expect(await first).toBe(packet)
+    expect(mockHandlers['jensen:getAudioDiagnostics'](event).diagnostics.frames).toBe(1)
+    expect(event.sender.send.mock.calls.filter(([name]) => name === 'jensen:realtime-data')).toHaveLength(1)
+    expect(event.sender.send.mock.calls.find(([name]) => name === 'jensen:audio-diagnostics')?.[1].lastSessionId).toEqual(expect.any(String))
+  })
+
+  it('taps two mono lanes from the one accepted packet with no ASR, file or extra read', async () => {
+    const event = makeEvent()
+    const started = await startCapture(event, { transcribe: false, saveRecording: false })
+    const raw = new Uint8Array(8 + 8)
+    raw.set([0, 0, 0, 4, 0, 0, 0, 0], 0)
+    new DataView(raw.buffer).setInt16(8, -32768, true)
+    new DataView(raw.buffer).setInt16(10, 32767, true)
+    new DataView(raw.buffer).setInt16(12, 1, true)
+    new DataView(raw.buffer).setInt16(14, -2, true)
+    const packet = { rest: 4, muted: false, sequenceMinusOne: 4, microphoneMuted: false, data: raw }
+    const before = Array.from(raw)
+    mockJensen.getRealtimeData.mockResolvedValueOnce(packet)
+    expect(await mockHandlers['jensen:getRealtimeData'](event, { offset: 0 })).toBe(packet)
+    expect(mockJensen.getRealtimeData).toHaveBeenCalledOnce()
+    const taps = event.sender.send.mock.calls.filter(([name]) => name === 'jensen:realtime-channels')
+    expect(taps).toHaveLength(1)
+    const tap = taps[0][1]
+    expect(tap).toMatchObject({ sessionId: started.sessionId, sequenceMinusOne: 4, microphoneMuted: false, frameCount: 2, sampleRateHz: 16000, sampleRateEvidence: 'host-expectation' })
+    expect(tap.channels.map((channel: any) => channel.id)).toEqual(['channel-0', 'channel-1'])
+    expect(Array.from(tap.channels[0].pcm)).toEqual([0x00, 0x80, 0x01, 0x00])
+    expect(Array.from(tap.channels[1].pcm)).toEqual([0xff, 0x7f, 0xfe, 0xff])
+    expect(Array.from(raw)).toEqual(before)
+    expect(mockLiveTranscription.acceptDevicePacket).not.toHaveBeenCalled()
+    expect(readdirSync(liveDir.path)).toEqual([])
+  })
+
+  it('sends no lane tap for a packet without a whole frame, and none to a non-owner', async () => {
+    const owner = makeEvent(), other = makeEvent()
+    await startCapture(owner, { transcribe: false, saveRecording: false })
+    mockJensen.getRealtimeData.mockResolvedValueOnce({ rest: 0, muted: false, data: new Uint8Array(11) })
+    await mockHandlers['jensen:getRealtimeData'](owner, { offset: 0 })
+    expect(await mockHandlers['jensen:getRealtimeData'](other, { offset: 0 })).toBeNull()
+    expect(owner.sender.send.mock.calls.filter(([name]) => name === 'jensen:realtime-channels')).toHaveLength(0)
+    expect(other.sender.send.mock.calls.filter(([name]) => name === 'jensen:realtime-channels')).toHaveLength(0)
+  })
+
+  it('drops an old read when pause/resume reuses the same session ID', async () => {
+    const event = makeEvent()
+    await startCapture(event)
+    let resolve!: (value: any) => void
+    mockJensen.getRealtimeData.mockImplementationOnce(() => new Promise(r => { resolve = r }))
+    mockJensen.pauseRealtime.mockResolvedValueOnce({ result: 'success' })
+    const pending = mockHandlers['jensen:getRealtimeData'](event, { offset: 0 })
+    await mockHandlers['jensen:pauseRealtime'](event)
+    await mockHandlers['jensen:startRealtime'](event)
+    resolve({ rest: 0, muted: false, data: new Uint8Array(12) })
+    expect(await pending).toBeNull()
+    expect(mockHandlers['jensen:getAudioDiagnostics'](event).diagnostics.frames).toBe(0)
+    expect(event.sender.send.mock.calls.filter(([name]) => name === 'jensen:realtime-data')).toHaveLength(0)
+  })
+
+  it('owner destruction stops the stream and saves its completed sample sequence', async () => {
+    const event = makeEvent()
+    await startCapture(event)
+    mockJensen.getRealtimeData.mockResolvedValueOnce({ rest: 0, muted: false, data: new Uint8Array(12) })
+    await mockHandlers['jensen:getRealtimeData'](event, { offset: 0 })
+    event.sender.isDestroyed.mockReturnValue(true)
+    event.sender.emit('destroyed')
+    await vi.waitFor(() => expect(mockHandlers['jensen:getAudioDiagnostics'](event).session.status).toBe('idle'))
+    expect(mockJensen.stopRealtime).toHaveBeenCalledOnce()
+    expect(readdirSync(liveDir.path).filter(file => file.endsWith('.wav'))).toHaveLength(1)
+  })
+
+  it('reset invalidates pending reads before calling the device reset', async () => {
+    const event = makeEvent()
+    await startCapture(event)
+    let resolve!: (value: any) => void
+    mockJensen.getRealtimeData.mockImplementationOnce(() => new Promise(r => { resolve = r }))
+    const pending = mockHandlers['jensen:getRealtimeData'](event, { offset: 0 })
+    await mockHandlers['jensen:reset'](event)
+    resolve({ rest: 0, muted: false, data: new Uint8Array(12) })
+    expect(await pending).toBeNull()
+    expect(mockHandlers['jensen:getAudioDiagnostics'](event).session.status).toBe('idle')
+    expect(mockJensen.reset).toHaveBeenCalledOnce()
+    expect(readdirSync(liveDir.path)).toEqual([])
+  })
+
+  it('shutdown cancels a start that is waiting on the device', async () => {
+    const event = makeEvent()
+    mockJensen.getModel.mockReturnValue('hidock-h1e')
+    mockJensen.versionNumber = 393984
+    let resolve!: (value: any) => void
+    mockJensen.startRealtime.mockImplementationOnce(() => new Promise(r => { resolve = r }))
+    const pending = mockHandlers['jensen:startRealtime'](event, { transcribe: true })
+    await vi.waitFor(() => expect(resolve).toBeTypeOf('function'))
+    finishLiveRecording()
+    resolve({ result: 'success' })
+    expect(await pending).toMatchObject({ result: 'failed' })
+    expect(mockHandlers['jensen:getAudioDiagnostics'](event).session.status).toBe('idle')
+    expect(mockLiveTranscription.start).not.toHaveBeenCalled()
+    expect(readdirSync(liveDir.path)).toEqual([])
+  })
+
+  it('reports a recording write failure immediately while diagnostics/provider continue and preserves saved audio', async () => {
+    const event = makeEvent()
+    await startCapture(event, { transcribe: true })
+    await vi.waitFor(() => expect(mockLiveTranscription.start).toHaveBeenCalledOnce())
+    const packet = { rest: 0, muted: false, data: new Uint8Array(12) }
+    mockJensen.getRealtimeData.mockResolvedValueOnce(packet)
+    await mockHandlers['jensen:getRealtimeData'](event, { offset: 0 })
+    captureWriteFailure.enabled = true
+    mockJensen.getRealtimeData.mockResolvedValueOnce(packet)
+    expect(await mockHandlers['jensen:getRealtimeData'](event, { offset: 0 })).toBe(packet)
+    const state = mockHandlers['jensen:getAudioDiagnostics'](event)
+    expect(state.session).toMatchObject({ status: 'streaming', saveRecording: false, recordingError: 'Injected recording disk failure' })
+    expect(state.diagnostics.frames).toBe(2)
+    const diagnosticEvents = event.sender.send.mock.calls.filter(([channel]) => channel === 'jensen:audio-diagnostics')
+    expect(diagnosticEvents.at(-1)?.[1].session.recordingError).toBe('Injected recording disk failure')
+    expect(mockLiveTranscription.acceptDevicePacket).toHaveBeenCalledTimes(2)
+    await mockHandlers['jensen:stopRealtime'](event)
+    const wav = readdirSync(liveDir.path).find(file => file.endsWith('.wav'))!
+    const bytes = readFileSync(join(liveDir.path, wav))
+    expect(bytes.readUInt32LE(40)).toBe(4)
+    expect(bytes.length).toBe(48)
+    expect(broadcastSendCalls.some(([channel, result]) => channel === 'jensen:realtime-recording' && result.status === 'error' && result.filename === wav)).toBe(true)
   })
 
   // -------------------------------------------------------------------------
@@ -789,6 +1017,27 @@ describe('registerJensenHandlers', () => {
       await mockHandlers['jensen:connect'](makeEvent())
       const channels = broadcastSendCalls.map(([c]) => c)
       expect(channels).toContain('jensen:state-changed')
+    })
+
+    it('jensen:getDeviceInfo publishes the qualified identity once its reply fills in the version, and not again', async () => {
+      mockJensen.isConnected.mockReturnValue(true)
+      mockJensen.getModel.mockReturnValue('hidock-h1e')
+      mockJensen.versionNumber = null
+      mockJensen.versionCode = null
+      mockJensen.onconnect()
+      const states = () => broadcastSendCalls.filter(([c]) => c === 'jensen:state-changed').map(([, p]) => p)
+      expect(states()).toEqual([expect.objectContaining({ connected: true, versionNumber: null, versionCode: null })])
+      mockJensen.getDeviceInfo.mockImplementation(async () => {
+        mockJensen.versionNumber = 393988
+        mockJensen.versionCode = '6.3.4'
+        return { versionCode: '6.3.4', versionNumber: 393988, sn: 'SN123' }
+      })
+      expect(await mockHandlers['jensen:getDeviceInfo'](makeEvent())).toMatchObject({ versionNumber: 393988 })
+      expect(states().at(-1)).toMatchObject({ connected: true, model: 'hidock-h1e', versionCode: '6.3.4', versionNumber: 393988 })
+      expect(await mockHandlers['jensen:getState'](makeEvent())).toMatchObject({ versionCode: '6.3.4', versionNumber: 393988 })
+      const published = states().length
+      await mockHandlers['jensen:getDeviceInfo'](makeEvent())
+      expect(states()).toHaveLength(published)
     })
 
     it('jensen:disconnect handler broadcasts state even though it returns null', async () => {

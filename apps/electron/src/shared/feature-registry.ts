@@ -705,6 +705,7 @@ export const TEARDOWN_CHANNELS: string[] = [
   'jensen:isConnected',
   'jensen:isP1Device',
   'jensen:getModel',
+  'jensen:getAudioDiagnostics',
   // --- device-sync / pipeline teardown + observation ---
   // get-state returns the projected PipelineState in-memory (pipeline.getState(),
   // device-pipeline-handlers.ts L80-81) — no device I/O. disconnect/cancel are

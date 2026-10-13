@@ -1,5 +1,5 @@
 import { MIN_MEETING_CONFIDENCE } from '../../../src/shared/meeting-confidence'
-import { watch, existsSync, statSync, readdirSync } from 'fs'
+import { watch, existsSync, statSync, readdirSync, openSync, fstatSync, readSync, closeSync } from 'fs'
 import { RECORDING_AUDIO_EXTENSIONS } from '../../../src/shared/audio-extensions'
 import { isPcRecordingFilename } from '../../../src/shared/pc-recording'
 import { join, extname, basename } from 'path'
@@ -27,6 +27,45 @@ let isWatching = false
 
 export function setMainWindow(win: BrowserWindow): void {
   mainWindow = win
+}
+
+/** New captures default to manual offline transcription, independently of the
+ * global auto-transcribe setting. Filename identity survives missing/corrupt
+ * manifests and crash recovery. Legacy device/live files keep their policy. */
+export function shouldAutomaticallyTranscribeRecording(filePath: string): boolean {
+  if (!/\.wav$/i.test(filePath)) return true
+  const newCapture = /-Capture-Live(?:-\d+)?(?:\.channel-\d+)?\.wav$/i.test(basename(filePath))
+  const sidecar = filePath.replace(/\.wav$/i, '.live.json')
+  if (!existsSync(sidecar)) return !newCapture
+  let fd: number | null = null
+  try {
+    fd = openSync(sidecar, 'r')
+    const stat = fstatSync(fd)
+    if (!stat.isFile() || stat.size < 2 || stat.size > 64 * 1024) return !newCapture
+    const bytes = Buffer.alloc(stat.size)
+    let read = 0
+    while (read < bytes.length) {
+      const count = readSync(fd, bytes, read, bytes.length - read, read)
+      if (!count) return !newCapture
+      read += count
+    }
+    const note: unknown = JSON.parse(bytes.toString('utf8'))
+    if (!note || typeof note !== 'object' || Array.isArray(note)) return !newCapture
+    const metadata = note as Record<string, unknown>
+    const capture = metadata.capture && typeof metadata.capture === 'object' && !Array.isArray(metadata.capture)
+      ? metadata.capture as Record<string, unknown> : null
+    const owned = newCapture || typeof metadata.captureSessionId === 'string' || typeof capture?.sessionId === 'string'
+    if (!owned) return true
+    // Only an explicit, internally consistent owner policy can enable automatic
+    // offline work. Live AI opt-in does not imply a second offline provider run.
+    return capture?.schemaVersion === 1 && capture.automaticTranscription === true &&
+      typeof metadata.captureSessionId === 'string' && metadata.captureSessionId.length > 0 &&
+      capture.sessionId === metadata.captureSessionId
+  } catch {
+    return !newCapture
+  } finally {
+    if (fd !== null) closeSync(fd)
+  }
 }
 
 export function startRecordingWatcher(): void {
@@ -222,7 +261,7 @@ async function processNewRecording(filePath: string): Promise<void> {
     notifyRenderer('recording:new', { recording })
 
     try {
-      queueTranscriptionIfEnabled(recordingId)
+      if (shouldAutomaticallyTranscribeRecording(filePath)) queueTranscriptionIfEnabled(recordingId)
     } catch (err) {
       console.error('[RecordingWatcher] Failed to queue transcription:', err)
     }

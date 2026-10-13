@@ -1,0 +1,35 @@
+{
+  "observedAt": "2026-10-13T05:20:44.964Z",
+  "boundary": "clean-public-Next-source/rendered-Sync-Device-panel/trusted-preload/physical393988/one-existing-poller",
+  "version": 393988,
+  "monitorButtonClicked": true,
+  "monitorOptions": {
+    "transcribe": false,
+    "saveRecording": false
+  },
+  "liveText": "Live channels\nLive\n\nMonitoring only. Nothing is saved or transcribed.\n\nMicrophone\nActive\n\nPeak -22 dB · level -39 dB · received 3.1 KB\n\nSystem audio\nActive\n\nPeak -22 dB · level -39 dB · received 3.1 KB\n\nAudio packets received: 1\n\nNames apply to H1E firmware 6.3.4 in normal USB mode. The channels are separated, not fully isolated: some sound from one can appear in the other.",
+  "idleText": "Live channels\nIdle\n\nNo audio yet. Monitor channels shows both channels without saving anything.\n\nNames apply to H1E firmware 6.3.4 in normal USB mode. The channels are separated, not fully isolated: some sound from one can appear in the other.",
+  "sourceLabelsRendered": true,
+  "nonzeroBytesRendered": true,
+  "stopButtonClicked": true,
+  "settingsPreserved": true,
+  "nativeControlsPreserved": true,
+  "catalogueBefore": 587,
+  "catalogueAfter": 587,
+  "cataloguePreserved": true,
+  "nativeIdleAfter": true,
+  "liveIdleAfter": true,
+  "toneRequests": 0,
+  "firmwareWritesRequested": 0,
+  "settingsWritesRequested": 0,
+  "providerRequestsRequested": 0,
+  "savedRecordingRequested": false,
+  "failure": null,
+  "passed": true,
+  "sourceSha256": {
+    "apps/electron/electron/main/ipc/jensen-handlers.ts": "7666ead96e2252e0a61a1a05f88c94fa9fcbbb04663cdbb3ea81fa35daa2f0d9",
+    "apps/electron/electron/preload/index.ts": "1bd07b08f9efdc3357eecc634d4eb059d5ae98b1d9cd3fa641bc97096a47a3a7",
+    "apps/electron/src/pages/Device.tsx": "d1083d4920e63aa32e3f44f04506f77be15412b0a5cf7100dff43dd9f82f29e1",
+    "apps/electron/electron/main/services/device-native-recording.ts": "08feccf14820a8c50c0eaf6e449c28dc5b878df40332a013786abf099a4906f7"
+  }
+}
