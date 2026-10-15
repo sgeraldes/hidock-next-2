@@ -29,6 +29,7 @@ import { startBrainServer, type RunningBrainServer } from './brain-server'
 import * as brainQueries from './brain-queries'
 import { getMeetings } from './database'
 import { parseHiDockFilenameDate } from './hidock-filename'
+import { submitTargetedTranscriptions, targetedTranscriptionStatus, cancelTargetedTranscription } from './transcription'
 
 /** How long to wait for a headless brain to finish and exit after asking. */
 const STEP_DOWN_WAIT_MS = 5000
@@ -137,6 +138,11 @@ export async function startAppBrain(options: {
     instanceId,
     queries: brainQueries,
     recordingNow: recordingNow(options.getLiveRecording),
+    transcription: {
+      submit: submitTargetedTranscriptions,
+      status: targetedTranscriptionStatus,
+      cancel: cancelTargetedTranscription,
+    },
   })
   if (mine !== generation) {
     await started.close()
