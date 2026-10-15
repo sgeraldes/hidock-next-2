@@ -106,10 +106,16 @@ describe('submitTargetedTranscriptions', () => {
   })
 
   it('reports a recording already in the queue instead of adding a second row', () => {
-    db['getQueueItems'].mockReturnValue([{ id: 'q-old', recording_id: 'rec-new', status: 'processing', provider: null }])
+    db['getQueueItems'].mockReturnValue([{ id: 'q-old', recording_id: 'rec-new', status: 'pending', provider: null }])
     db['acquireTranscriptionLock'].mockReturnValue(false)
     expect(() => submitTargetedTranscriptions(['rec-new', 'rec-b'], undefined, 'req-4')).toThrow(/busy/)
     expect(db['addToQueue']).not.toHaveBeenCalled()
+  })
+
+  it('refuses an orphaned processing row instead of answering 202 for nothing', () => {
+    db['getQueueItems'].mockReturnValue([{ id: 'q-old', recording_id: 'rec-new', status: 'processing', provider: null }])
+    expect(() => submitTargetedTranscriptions(['rec-new'], undefined, 'req-8')).toThrow(/orphaned processing row/)
+    expect(db['acquireTranscriptionLock']).not.toHaveBeenCalled()
   })
 
   it('refuses a recording queued with a different provider', () => {
@@ -120,8 +126,13 @@ describe('submitTargetedTranscriptions', () => {
   it('answers a repeated request id from its receipt without queueing again', async () => {
     submitTargetedTranscriptions(['rec-new'], undefined, 'req-6')
     await settle()
+    db['getQueueItems'].mockReturnValue([{ id: 'q-rec-new', recording_id: 'rec-new', status: 'failed', provider: null }])
     const again = submitTargetedTranscriptions(['rec-new'], undefined, 'req-6')
     expect(again.replayed).toBe(true)
+    // The replay reports where the row is now, not the `pending` of the receipt.
+    expect(again.jobs).toEqual([{ recordingId: 'rec-new', queueItemId: 'q-rec-new', status: 'failed' }])
+    db['getQueueItems'].mockReturnValue([])
+    expect(submitTargetedTranscriptions(['rec-new'], undefined, 'req-6').jobs[0].status).toBe('gone')
     expect(db['addToQueue']).toHaveBeenCalledTimes(1)
     expect(() => submitTargetedTranscriptions(['rec-b'], undefined, 'req-6')).toThrow(/different parameters/)
   })

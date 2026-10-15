@@ -701,9 +701,19 @@ export function submitTargetedTranscriptions(recordingIds: string[], provider?: 
   for (const id of ids) {
     if (!isRecordingTranscribable(id)) throw new Error('Recording unavailable or ineligible')
   }
-  const receipt = findTargetedReceipt(requestId, fingerprint)
-  if (receipt) return { jobs: receipt.jobs, replayed: true }
   const existing = getQueueItems()
+  const receipt = findTargetedReceipt(requestId, fingerprint)
+  if (receipt) {
+    // A replay answers with where each admitted row is now, not where it was
+    // when the receipt was written: a row that finished, failed or was purged
+    // since must not come back as `pending`.
+    const jobs = receipt.jobs.map(job => {
+      if (!job.queueItemId) return job
+      const row = existing.find(item => item.id === job.queueItemId)
+      return { ...job, status: row ? row.status : 'gone' }
+    })
+    return { jobs, replayed: true }
+  }
   const jobs = ids.map(recordingId => {
     if (queryOne<{ id: string }>('SELECT id FROM transcripts WHERE recording_id = ? LIMIT 1', [recordingId]) || ['complete', 'no_speech'].includes(getRecordingById(recordingId)?.transcription_status ?? '')) {
       return { recordingId, status: 'already-transcribed' }
@@ -711,6 +721,11 @@ export function submitTargetedTranscriptions(recordingIds: string[], provider?: 
     const active = existing.find(item => item.recording_id === recordingId && ['pending', 'processing'].includes(item.status))
     if (active) {
       if ((active.provider ?? configuredProvider) !== selectedProvider) throw new Error('Recording already queued with a different provider')
+      // A `processing` row with the processor idle is orphaned: the directed
+      // run only picks pending rows, so answering 202 would transcribe nothing.
+      if (active.status === 'processing' && !isProcessing && getActiveTranscriptions().length === 0) {
+        throw new Error('Recording has an orphaned processing row; the queue resets it at the next start')
+      }
       return { recordingId, queueItemId: active.id, status: active.status }
     }
     return { recordingId, status: 'new' }
