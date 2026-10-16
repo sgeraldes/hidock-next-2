@@ -161,7 +161,7 @@ export const FEATURES: Record<FeatureId, FeatureDefinition> = {
     backgroundTasks: ['semantic-index-restore'],
     routes: ['/assistant'],
     navItems: ['/assistant'],
-    ipcNamespaces: ['assistant:', 'rag:'],
+    ipcNamespaces: ['assistant:', 'rag:', 'semantic-index:'],
     dependsOn: ['transcription'],
     softDependsOn: [],
     hardwareCost: { cpu: 'heavy', memory: 'heavy', network: 'heavy' },
@@ -468,6 +468,9 @@ export function isFeatureEnabledIn(
  * channel (never gated). Exact-channel entries win over prefix entries (§A.1).
  */
 export function channelFeature(channel: string): FeatureId | null {
+  // Maintenance observation/teardown never starts work and must remain usable
+  // even if recovery mode or a feature toggle disables the initiating feature.
+  if (['semantic-index:status', 'semantic-index:pause', 'semantic-index:cancel'].includes(channel)) return null
   for (const id of ALL_FEATURE_IDS) {
     for (const ns of FEATURES[id].ipcNamespaces) {
       if (!ns.endsWith(':') && ns === channel) return id
@@ -536,6 +539,9 @@ export const CORE_CHANNEL_PREFIXES: string[] = [
   'notes:',
   'artifacts:',
   'waveform:',
+  // Local sidecars and existing WAV exports do not initiate device or provider work.
+  'device-markers:',
+  'device-audio:',
   'handover:',
   'outputs:',
   // Connector management surface (list/configure/connect/disconnect for ALL
@@ -561,6 +567,9 @@ export const CORE_CHANNEL_PREFIXES: string[] = [
  * Anything new on these namespaces is `unclassified` until explicitly added.
  */
 export const CORE_CHANNELS: string[] = [
+  'semantic-index:status',
+  'semantic-index:pause',
+  'semantic-index:cancel',
   // User-initiated Library creation remains available in every preset.
   'library:paste',
   'library:pickFiles',
@@ -597,6 +606,10 @@ export const CORE_CHANNELS: string[] = [
   'storage:open-file',
   'storage:open-folder',
   'storage:read-recording',
+  // Reads a stored recording's audio metadata (format, channels, duration) off
+  // disk. A passive Library read: no provider, no network, no transcription side
+  // effect, so it stays core like the other storage reads.
+  'storage:recording-audio-metadata',
   'storage:reveal-in-folder',
   'storage:save-recording',
   'storage:select-folder',
@@ -705,6 +718,9 @@ export const TEARDOWN_CHANNELS: string[] = [
   'jensen:isConnected',
   'jensen:isP1Device',
   'jensen:getModel',
+  'jensen:getAudioDiagnostics',
+  'jensen:getRecordingCapabilities',
+  'jensen:getRecordingProfile',
   // --- device-sync / pipeline teardown + observation ---
   // get-state returns the projected PipelineState in-memory (pipeline.getState(),
   // device-pipeline-handlers.ts L80-81) — no device I/O. disconnect/cancel are

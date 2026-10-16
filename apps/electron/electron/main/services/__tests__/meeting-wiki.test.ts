@@ -81,6 +81,16 @@ const resetBackfillCursor = async (): Promise<void> => {
   _resetBackfillCursorForTests()
 }
 
+// Teardown removal of the per-test tmp tree. On Windows a page this suite just
+// wrote or read can still be held for a few ms after the handle is closed (the
+// indexer or AV takes a transient share lock), so a bare recursive rmSync here
+// raced its own just-finished work and threw EBUSY "sharing violation" once
+// under load. maxRetries/retryDelay is Node's built-in backoff for exactly this
+// transient Windows case; force:true still ignores an already-absent tree.
+const removeTree = (target: string): void => {
+  rmSync(target, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+}
+
 vi.mock('../file-storage', () => ({
   getTranscriptsPath: () => tmpRoot,
   // Per-test tmpRoot, so the backfill's resume cursor is isolated.
@@ -141,7 +151,7 @@ describe('exportMeetingWiki — stale page cleanup (ISSUE-8)', () => {
   })
 
   afterEach(() => {
-    rmSync(tmpRoot, { recursive: true, force: true })
+    removeTree(tmpRoot)
   })
 
   // Tolerates an absent dir: a pass that writes nothing never creates it.
@@ -254,7 +264,7 @@ describe('wiki page ownership — safe for deletion (adversarial review #1)', ()
   })
 
   afterEach(() => {
-    rmSync(tmpRoot, { recursive: true, force: true })
+    removeTree(tmpRoot)
     vi.restoreAllMocks()
   })
 

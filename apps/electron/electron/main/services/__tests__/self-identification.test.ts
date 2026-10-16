@@ -455,6 +455,37 @@ describe('parseSpeakerTurns', () => {
 // ---------------------------------------------------------------------------
 
 describe('runSelfIdentificationForRecording — binding', () => {
+  it.each([
+    { speaker: 'Unknown speaker' },
+    { speaker: 'Speaker unresolved' },
+    { speaker: 'Speaker 7', speakerAssignment: 'unresolved-mixed-or-context' },
+    { speaker: 'Speaker 7', speakerAttribution: 'unresolved' }
+  ])('never creates a person or voice anchor from unresolved window %j', attribution => {
+    currentSpeakers = JSON.stringify([{ ...attribution, start: 0, end: 4,
+      text: 'Yo soy Santiago de la Colina.' }])
+    const provider = vi.fn(async () => JSON.stringify([{ speaker: attribution.speaker, name: 'Santiago de la Colina' }]))
+    return runSelfIdentificationForRecording('rec-unresolved', { llm: provider }).then(result => {
+      expect(result.bound).toBe(0)
+      expect(provider).not.toHaveBeenCalled()
+      expect(mockAssignSpeaker).not.toHaveBeenCalled()
+      expect(mockResolveMention).not.toHaveBeenCalled()
+      expect(mockConsolidateVoiceIdentity).not.toHaveBeenCalled()
+    })
+  })
+  it('propagates an uncertain provider failure without marking the recording scanned', async () => {
+    currentSpeakers = JSON.stringify([
+      { speaker: 'Speaker 7', start: 0, end: 4, text: 'Yo también Seba, eh, Santiago de la Colina.' }
+    ])
+    const { run } = await import('../database')
+    const failedProvider = vi.fn().mockRejectedValue(new Error('Provider checkpoint pending: outcome unknown'))
+    await expect(runSelfIdentificationForRecording('rec-provider-failed', { llm: failedProvider }))
+      .rejects.toThrow('outcome unknown')
+    expect(failedProvider).toHaveBeenCalledOnce()
+    expect(vi.mocked(run).mock.calls.some(([sql]) => /INTO config/i.test(sql))).toBe(false)
+    expect(mockAssignSpeaker).not.toHaveBeenCalled()
+    expect(mockResolveMention).not.toHaveBeenCalled()
+  })
+
   const llm = vi.fn(async () =>
     JSON.stringify([{ speaker: 'Speaker 7', name: 'Santiago de la Colina' }])
   )

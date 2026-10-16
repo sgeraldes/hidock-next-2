@@ -31,8 +31,15 @@ import { useOperations } from '@/hooks/useOperations'
 import { isRetryableDownloadItem } from '@/hooks/useDownloadOrchestrator'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 import { isFeatureOffThisRun } from '@/lib/bootFeatures'
-import { isEarlierFailure, operationLabel, recordingForDownload } from './operationHistory'
+import {
+  countActiveDownloads,
+  isEarlierFailure,
+  mergeDownloadQueues,
+  operationLabel,
+  recordingForDownload
+} from './operationHistory'
 
+type MainDownloadQueueRow = Omit<DownloadQueueEntry, 'size'> & { fileSize: number }
 
 /**
  * A running or waiting state drawn as an icon (and the percentage when known);
@@ -106,6 +113,7 @@ export function NotificationsButton() {
   const { cancelDownload, cancelAllDownloads } = useOperations()
   const [open, setOpen] = useState(false)
   const [persistedDownloads, setPersistedDownloads] = useState<DownloadQueueEntry[]>([])
+  const [downloadStateReady, setDownloadStateReady] = useState(false)
 
   // The renderer queue intentionally drops terminal download failures so a
   // failed item cannot disable a fresh Download action forever. Notifications
@@ -114,8 +122,9 @@ export function NotificationsButton() {
   useEffect(() => {
     const api = window.electronAPI?.downloadService
     if (!api || isFeatureOffThisRun('device-sync')) return
-    const project = (state: { queue: Array<{ filename: string; fileSize: number; progress: number; status: DownloadQueueEntry['status']; error?: string; cancelReason?: 'user' | 'interrupted'; fromPreviousSession?: boolean }> }) => {
-      setPersistedDownloads(state.queue.map((item) => ({
+    let receivedStateUpdate = false
+    const projectQueue = (items: MainDownloadQueueRow[]) => {
+      setPersistedDownloads(items.map((item) => ({
         filename: item.filename,
         size: item.fileSize,
         progress: item.progress,
@@ -124,9 +133,16 @@ export function NotificationsButton() {
         cancelReason: item.cancelReason,
         fromPreviousSession: item.fromPreviousSession
       })))
+      setDownloadStateReady(true)
     }
-    api.getState().then((state) => project(state)).catch(() => {})
-    return api.onStateUpdate(project)
+    const unsubscribe = api.onStateUpdate((state) => {
+      receivedStateUpdate = true
+      projectQueue(state.queue)
+    })
+    api.getState().then((state) => {
+      if (!receivedStateUpdate) projectQueue(state.queue)
+    }).catch(() => {})
+    return unsubscribe
   }, [])
 
   // Derive the popover list from the same Maps that feed the badge. Computed in a
@@ -139,14 +155,13 @@ export function NotificationsButton() {
     [txQueue]
   )
   const downloads = useMemo(() => {
-    const merged = new Map(persistedDownloads.map((item) => [item.filename, item]))
-    for (const item of downloadQueue.values()) merged.set(item.filename, item)
-    return Array.from(merged.values()).filter((item) => item.status !== 'completed' && !isEarlierFailure(item))
-  }, [downloadQueue, persistedDownloads])
+    return mergeDownloadQueues(downloadQueue.values(), persistedDownloads, downloadStateReady)
+      .filter((item) => item.status !== 'completed' && !isEarlierFailure(item))
+  }, [downloadQueue, persistedDownloads, downloadStateReady])
   // Only pending/downloading/cancelling count as in progress. Failed downloads
   // remain actionable history and belong in the error count instead.
   const activeDownloadCount = useMemo(
-    () => downloads.filter((d) => ['pending', 'downloading', 'cancelling'].includes(d.status)).length,
+    () => countActiveDownloads(downloads),
     [downloads]
   )
   const failedDownloadCount = useMemo(

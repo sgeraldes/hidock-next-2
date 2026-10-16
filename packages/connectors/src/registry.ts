@@ -76,6 +76,7 @@ export class ConnectorHost {
   private instances = new Map<string, Connector>()
   private statuses = new Map<string, ConnectorStatus>()
   private timers = new Map<string, ReturnType<typeof setInterval>>()
+  private syncPasses = new Map<string, { containerId?: string; promise: Promise<IngestionOutcome> }>()
 
   private listeners = new Set<ConnectorStatusListener>()
 
@@ -443,6 +444,20 @@ export class ConnectorHost {
 
   /** Sync one container (if id given) or all enabled containers. */
   async syncNow(id: string, containerId?: string): Promise<IngestionOutcome> {
+    const previous = this.syncPasses.get(id)
+    if (previous && (previous.containerId === undefined || previous.containerId === containerId)) return previous.promise
+    const promise = (async () => {
+      // Serialize differing requests for the same account. Different accounts
+      // keep their own cursor and may sync independently.
+      if (previous) { try { await previous.promise } catch { /* retry after failure */ } }
+      return this.runSyncNow(id, containerId)
+    })()
+    const pass = { containerId, promise }
+    this.syncPasses.set(id, pass)
+    try { return await promise } finally { if (this.syncPasses.get(id) === pass) this.syncPasses.delete(id) }
+  }
+
+  private async runSyncNow(id: string, containerId?: string): Promise<IngestionOutcome> {
     const inst = this.instance(id)
     const total: IngestionOutcome = { meetings: 0, contacts: 0, artifacts: 0, skipped: 0 }
     if (!inst.capabilities.sources) return total

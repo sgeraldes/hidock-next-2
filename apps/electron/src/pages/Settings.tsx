@@ -66,7 +66,9 @@ import { ServiceList } from '@/features/settings/ServiceList'
 import { TranscriptionPipelineControls } from '@/features/settings/TranscriptionPipelineControls'
 import { RecordingSection } from '@/features/settings/RecordingSection'
 import { CalendarPreferences } from '@/features/settings/CalendarPreferences'
-import { DiarizationCpuShare, OllamaModelFields } from '@/features/settings/ModelFields'
+import { AudioExecutionSettings, DiarizationCpuShare, OllamaModelFields } from '@/features/settings/ModelFields'
+import { RemoteDiarizationSettings } from '@/features/settings/RemoteDiarizationSettings'
+import { CloudAsrSettings } from '@/features/settings/CloudAsrSettings'
 import { VoiceBackfillPanel } from '@/features/settings/VoiceBackfillPanel'
 import { IdentityQuestionCounts } from '@/features/settings/IdentityQuestionCounts'
 import { AdvancedSettings } from '@/features/settings/AdvancedSettings'
@@ -84,7 +86,7 @@ const RAG_DEFAULTS = {
 } as const
 
 type StorageFolder = 'recordings' | 'transcripts' | 'captures' | 'data'
-type TranscriptionPane = 'pipeline' | 'gemini' | 'local' | 'live'
+type TranscriptionPane = 'pipeline' | 'gemini' | 'local' | 'live' | 'cloud'
 
 
 const STORAGE_LABELS: Record<StorageFolder, string> = {
@@ -105,10 +107,13 @@ type SpeakerModelAccess = {
 /** Transcription providers for the "Provider in use" list. */
 const TRANSCRIPTION_PROVIDERS = [
   { value: 'gemini', label: 'Gemini (cloud)', detail: 'Google Gemini transcribes in the cloud with your API key.' },
-  { value: 'local-asr', label: 'Local ASR', detail: 'Runs on this computer through the ASR MCP project.' },
+  { value: 'muse-voice', label: 'Muse Voice Transcribe (cloud)', detail: 'Meta cloud transcription with turn timestamps and per-clip speakers. Requires a Meta API key.' },
+  { value: 'mai-transcribe-2', label: 'MAI Transcribe 2 (cloud preview)', detail: 'Azure Speech transcription with word timestamps. Requires an Azure Speech endpoint and key.' },
+  { value: 'remote-worker', label: 'Remote worker default', detail: 'Uses the tested ASR engine advertised by the paired worker.' },
+  { value: 'local-asr', label: 'Local ASR', detail: 'Cohere ASR on this computer or the selected remote worker.' },
   {
     value: 'vibevoice',
-    label: 'VibeVoice (local)',
+    label: 'VibeVoice',
     detail:
       'microsoft/VibeVoice-ASR runs on this computer: transcription, speakers and timestamps in one pass, language detected. Needs the optional vibevoice install in the ASR MCP project.'
   }
@@ -157,7 +162,7 @@ export function Settings({
   const [icsUrl, setIcsUrl] = useState('')
   const [syncEnabled, setSyncEnabled] = useState(true)
   const [syncInterval, setSyncInterval] = useState(15)
-  const [transcriptionProvider, setTranscriptionProvider] = useState<'gemini' | 'local-asr' | 'vibevoice'>('gemini')
+  const [transcriptionProvider, setTranscriptionProvider] = useState<AppConfig['transcription']['provider']>('gemini')
   const [geminiApiKey, setGeminiApiKey] = useState('')
   const [geminiModel, setGeminiModel] = useState('gemini-3.5-transcribe')
   const [localAsrPath, setLocalAsrPath] = useState('')
@@ -276,12 +281,14 @@ export function Settings({
     if (updates.transcription) {
       if (
         (updates.transcription.provider === 'local-asr' || updates.transcription.provider === 'vibevoice') &&
+        (config?.transcription.transcriptionExecution ?? 'local') === 'local' &&
         !updates.transcription.localAsrPath?.trim()
       ) {
         return 'ASR MCP path is required'
       }
       if (
         updates.transcription.provider === 'local-asr' &&
+        (config?.transcription.transcriptionExecution ?? 'local') === 'local' &&
         updates.transcription.localAsrDiarize !== false &&
         !updates.transcription.localAsrHfToken?.trim()
       ) {
@@ -331,7 +338,7 @@ export function Settings({
     }
 
     return null // Valid
-  }, [])
+  }, [config?.transcription.transcriptionExecution])
 
   // C-SET: Track form dirty state per section
   const isCalendarDirty = useMemo(() => {
@@ -573,13 +580,20 @@ export function Settings({
 
     setSaving(true)
     try {
+      if (transcriptionProvider === 'muse-voice' && !config?.transcription.museVoiceApiKey) throw new Error('Configure the Meta API key in Cloud ASR first')
+      if (transcriptionProvider === 'mai-transcribe-2' && (!config?.transcription.maiTranscribeApiKey || !config?.transcription.maiTranscribeEndpoint)) throw new Error('Configure the Azure Speech key and endpoint in Cloud ASR first')
+      if (transcriptionProvider === 'remote-worker' ||
+          (['local-asr', 'vibevoice'].includes(transcriptionProvider) && ['remote', 'auto'].includes(config?.transcription.transcriptionExecution || ''))) {
+        const checked = await window.electronAPI.modelHost.testAudio({ provider: transcriptionProvider })
+        if (!checked.success) throw new Error(checked.error || 'The selected remote engine is not ready')
+      }
       await updateConfig('transcription', updates)
 
       toast.success(
         'Settings Saved',
         transcriptionProvider === 'local-asr'
           ? 'Transcription provider set to Local ASR'
-          : `Transcription provider set to ${geminiModel}`
+          : `Transcription provider set to ${transcriptionProvider === 'gemini' ? geminiModel : transcriptionProvider}`
       )
     } catch (error) {
       // Rollback on error
@@ -1193,11 +1207,13 @@ export function Settings({
                   items={[
                     { id: 'pipeline', label: 'Pipeline', status: config?.transcription.autoTranscribe === false ? 'Manual' : 'Automatic', tone: 'ok', icon: Workflow },
                     { id: 'gemini', label: 'Gemini', status: transcriptionProvider === 'gemini' ? 'Default' : isSavedSecret(geminiApiKey) || geminiApiKey ? 'Set up' : 'Not set up', tone: transcriptionProvider === 'gemini' ? 'ok' : 'off', icon: Sparkles },
+                    { id: 'cloud', label: 'Cloud ASR', status: ['muse-voice', 'mai-transcribe-2'].includes(transcriptionProvider) ? 'Selected' : 'Optional', tone: 'off', icon: Sparkles },
                     { id: 'local', label: 'Local ASR & VibeVoice', status: transcriptionProvider === 'local-asr' || transcriptionProvider === 'vibevoice' ? 'Default' : localAsrPath ? 'Set up' : 'Not set up', tone: transcriptionProvider === 'local-asr' || transcriptionProvider === 'vibevoice' ? 'ok' : 'off', icon: Cpu },
                     { id: 'live', label: 'Live transcription', status: 'Gemini Live', tone: 'off', icon: Radio }
                   ]}
                 >
                 <div className="space-y-4">
+                {transcriptionPane === 'cloud' && <CloudAsrSettings />}
                 {transcriptionPane === 'pipeline' && (
                 <>
                 <div>
@@ -1222,6 +1238,27 @@ export function Settings({
                   </p>
                 </div>
                 <TranscriptionPipelineControls />
+                <div className="space-y-1">
+                  <label htmlFor="recordedAudioChannelMode" className="text-sm font-medium">Stored audio channels</label>
+                  <select id="recordedAudioChannelMode" value={config?.transcription.recordedAudioChannelMode ?? 'preserve'}
+                    disabled={saving} aria-describedby="recordedAudioChannelMode-description"
+                    className="w-full max-w-sm rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    onChange={async event => {
+                      const recordedAudioChannelMode = event.target.value as 'preserve' | 'mixed'
+                      setSaving(true)
+                      try { await updateConfig('transcription', { recordedAudioChannelMode }) }
+                      catch { toast.error('Could not save audio channel mode', 'The previous setting remains in effect.') }
+                      finally { setSaving(false) }
+                    }}>
+                    <option value="preserve">Preserve separate channels</option>
+                    <option value="mixed">Mix channels together</option>
+                  </select>
+                  <p id="recordedAudioChannelMode-description" className="text-xs text-muted-foreground">
+                    For two-channel files, preserve transcribes each source separately. Channel 1 and Channel 2 remain
+                    unknown sources unless their roles are recorded; a microphone source never identifies a person automatically.
+                    Applies to future processing; original audio is preserved.
+                  </p>
+                </div>
                 </>
                 )}
 
@@ -1452,6 +1489,7 @@ export function Settings({
                 </>
                 )}
 
+                {transcriptionPane !== 'live' && <><AudioExecutionSettings provider={transcriptionProvider} /><RemoteDiarizationSettings /><DiarizationCpuShare /></>}
                 {transcriptionPane !== 'live' && (
                 <Button
                   onClick={handleSaveTranscription}
@@ -1481,7 +1519,6 @@ export function Settings({
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                <DiarizationCpuShare />
                 <VoiceBackfillPanel />
                 <IdentityQuestionCounts />
                 <section

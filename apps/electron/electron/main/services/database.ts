@@ -1,9 +1,11 @@
 import { MIN_MEETING_CONFIDENCE } from '../../../src/shared/meeting-confidence'
 import Database from 'better-sqlite3'
+import { closeDatabaseBackupWorker as closeSqliteBackupWorker, runDatabaseBackup } from './sqlite-backup-host'
 import { RECORDING_AUDIO_EXTENSIONS } from '../../../src/shared/audio-extensions'
 import { existsSync, readdirSync, readFileSync } from 'fs'
 import { dirname, join, normalize, resolve as resolvePath } from 'path'
 import { randomUUID } from 'crypto'
+import { registerProcessingRun, releaseProcessingRun } from './processing-run-scope'
 import { readAudioDuration } from './audio-duration'
 import { assessTranscriptIntegrity, INTEGRITY_VERSION, type IntegrityAudio, type TranscriptIntegrity } from './transcript-integrity'
 import { getDatabasePath } from './file-storage'
@@ -4438,6 +4440,7 @@ const engine = new DatabaseEngine({
   // Intentional bulk purges use runWithMassDeleteAllowed().
   protectedTables: ['knowledge_captures', 'transcripts', 'recordings', 'meetings', 'contacts'],
   backupOnBoot: { keep: 3 },
+  backupExecutor: runDatabaseBackup,
   deferBackupOnBoot: true,
   externalBackups: listHourlyBackups,
 })
@@ -4483,7 +4486,8 @@ export function runWithMassDeleteAllowed<T>(fn: () => T): T {
  * shared @hidock/database engine, configured above with this app's schema,
  * version, migrations, and repairPhase.
  */
-export async function initializeDatabase(options: { onProgress?: (p: BootProgress) => void } = {}): Promise<void> {
+export async function initializeDatabase(options: { onProgress?: (p: BootProgress) => void; existingSchemaOnly?: boolean } = {}): Promise<void> {
+  if (options.existingSchemaOnly) { engine.initializeExistingWritable(); return }
   await engine.initialize(options)
 }
 
@@ -4501,6 +4505,11 @@ export async function runDeferredDatabaseBackup(): Promise<void> {
   await engine.runDeferredBackup()
 }
 
+/** Cancels any in-flight backup worker and waits for owned partial cleanup. */
+export function closeDatabaseBackupWorker(): Promise<void> {
+  return closeSqliteBackupWorker()
+}
+
 export function saveDatabase(): void {
   engine.saveDatabase()
 }
@@ -4510,6 +4519,8 @@ export function getDatabase(): SqlJsDatabase {
 }
 
 export function closeDatabase(): void {
+  ownedProcessingRuns.clear()
+  ownedPipelineRuns.clear()
   engine.closeDatabase()
 }
 
@@ -4706,10 +4717,13 @@ export function upsertMeetingsBatch(
 
   // Reconcile occurrence ids against existing rows so a recurring occurrence
   // updates the row already holding its FKs rather than inserting a twin.
-  const existingSlots = queryAll<{ id: string; start_time: string }>(
-    'SELECT id, start_time FROM meetings'
-  )
-  const reconciled = remapOccurrenceIdsToExisting(meetings, existingSlots)
+  // Graph occurrence ids are already stable and account-scoped. Reading every
+  // calendar row for each Outlook page serves only ICS recurrence remapping.
+  const reconciled = meetings.every((meeting) => meeting.id.startsWith('m365:'))
+    ? meetings
+    : remapOccurrenceIdsToExisting(meetings, queryAll<{ id: string; start_time: string }>(
+      'SELECT id, start_time FROM meetings'
+    ))
 
   runInTransaction(() => {
     for (const meeting of reconciled) {
@@ -6739,6 +6753,9 @@ export function upsertRecordingFromDevice(deviceFile: {
 }): Recording {
   const existing = getRecordingByFilename(deviceFile.filename)
   const now = new Date().toISOString()
+  // Custom recordings have no qualified byte-rate estimate before download.
+  // Preserve an existing measurement when the device reports unknown (0).
+  const incomingDuration = Number.isFinite(deviceFile.duration) && deviceFile.duration > 0 ? deviceFile.duration : null
 
   if (existing) {
     // Update the canonical row rather than creating a device-only .hda shadow
@@ -6752,9 +6769,9 @@ export function upsertRecordingFromDevice(deviceFile: {
               location = ?,
               original_filename = ?,
               file_size = CASE WHEN on_local = 1 THEN file_size ELSE ? END,
-              duration_seconds = ?
+              duration_seconds = COALESCE(?, duration_seconds)
         WHERE id = ?`,
-      [now, newLocation, deviceFile.filename, deviceFile.size, deviceFile.duration, existing.id]
+      [now, newLocation, deviceFile.filename, deviceFile.size, incomingDuration, existing.id]
     )
     return getRecordingById(existing.id)!
   } else {
@@ -6764,7 +6781,7 @@ export function upsertRecordingFromDevice(deviceFile: {
       `INSERT INTO recordings (id, filename, original_filename, file_path, file_size, duration_seconds, date_recorded,
         status, location, transcription_status, on_device, device_last_seen, on_local, source, is_imported)
        VALUES (?, ?, ?, NULL, ?, ?, ?, 'none', 'device-only', 'none', 1, ?, 0, 'hidock', 0)`,
-      [id, deviceFile.filename, deviceFile.filename, deviceFile.size, deviceFile.duration, deviceFile.dateCreated.toISOString(), now]
+      [id, deviceFile.filename, deviceFile.filename, deviceFile.size, incomingDuration, deviceFile.dateCreated.toISOString(), now]
     )
     return getRecordingById(id)!
   }
@@ -6843,6 +6860,7 @@ export function markRecordingDownloaded(
       on_local: 1,
       location: newLocation as Recording['location']
     })
+    measureDownloadedRecording(recording.id)
     return recording.id
   }
 
@@ -6856,7 +6874,20 @@ export function markRecordingDownloaded(
      VALUES (?, ?, ?, ?, ?, NULL, ?, 'none', 'both', 'none', 1, ?, 1, 'hidock', 0)`,
     [id, localBasename, filename, localPath, opts?.fileSize ?? null, opts?.dateRecorded ?? now, now]
   )
+  measureDownloadedRecording(id)
   return id
+}
+
+// The published file is complete, so its length is measured now: the Library
+// backfill runs once per mount and would leave a new download unknown until the
+// next one. An unreadable file leaves the row untouched (no invented duration),
+// and a failure here never turns a saved download into a failed one.
+function measureDownloadedRecording(recordingId: string): void {
+  try {
+    remeasureRecordingDuration(recordingId)
+  } catch (error) {
+    console.warn(`[database] Could not measure the duration of downloaded recording ${recordingId}:`, error)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -7517,29 +7548,101 @@ export function classifyLowValueCaptures(): { scanned: number; markedLowValue: n
   return { scanned: rows.length, markedLowValue: marked }
 }
 
+/**
+ * Correlation methods that record a human decision: an explicit link, or an
+ * explicit "this belongs to no meeting". Only another human method may replace
+ * one. Every other incoming method (ai_transcript_match, jev_content_match,
+ * schedule_candidate, time_overlap, time_proximity, ...) is treated as automatic.
+ */
+const HUMAN_CORRELATION_METHODS = new Set([
+  'manual',
+  'user_override',
+  'user_preassign',
+  'user_standalone',
+  'user_preassign_standalone',
+])
+
+export function isHumanCorrelationMethod(method: string | null | undefined): boolean {
+  return !!method && HUMAN_CORRELATION_METHODS.has(method)
+}
+
+/**
+ * Link a recording to a meeting. Returns true when the link was written and
+ * false when it was refused: either the recording does not exist, or an
+ * automatic method tried to replace a human decision. Callers must not report a
+ * new link when this returns false.
+ *
+ * Recording and captures change in one transaction, so a refused or failed
+ * write leaves both untouched.
+ */
 export function linkRecordingToMeeting(
   recordingId: string,
   meetingId: string,
   confidence: number,
   method: string
-): void {
-  // Update the recording's meeting link
-  run(
-    `UPDATE recordings SET meeting_id = ?, correlation_confidence = ?, correlation_method = ? WHERE id = ?`,
-    [meetingId, confidence, method, recordingId]
-  )
+): boolean {
+  return runInTransaction(() => {
+    const current = queryOne<{ correlation_method: string | null }>(
+      'SELECT correlation_method FROM recordings WHERE id = ?',
+      [recordingId]
+    )
+    if (!current) return false
+    if (!isHumanCorrelationMethod(method) && isHumanCorrelationMethod(current.correlation_method)) return false
 
-  // AUD2-001: Propagate meeting_id to knowledge_captures that reference this recording
-  run(
-    `UPDATE knowledge_captures
-     SET meeting_id = ?,
-         correlation_confidence = ?,
-         correlation_method = ?,
-         updated_at = CURRENT_TIMESTAMP
-     WHERE source_recording_id = ?
-       AND (meeting_id IS NULL OR meeting_id != ?)`,
-    [meetingId, confidence, method, recordingId, meetingId]
-  )
+    runNoSave(
+      `UPDATE recordings SET meeting_id = ?, correlation_confidence = ?, correlation_method = ? WHERE id = ?`,
+      [meetingId, confidence, method, recordingId]
+    )
+
+    // AUD2-001: Propagate meeting_id to knowledge_captures that reference this recording
+    runNoSave(
+      `UPDATE knowledge_captures
+       SET meeting_id = ?,
+           correlation_confidence = ?,
+           correlation_method = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE source_recording_id = ?
+         AND (meeting_id IS NULL OR meeting_id != ?)`,
+      [meetingId, confidence, method, recordingId, meetingId]
+    )
+    return true
+  })
+}
+
+/**
+ * Persist the model's meeting answer: the automatic link (when the gate passed)
+ * and the candidate rows, in one transaction. The link is attempted first and a
+ * candidate is marked selected only when it was written, so a refused link (the
+ * owner chose while the model was answering) never leaves a selected candidate
+ * that contradicts the recording. A candidate the owner confirmed is never
+ * rewritten (addRecordingMeetingCandidate). Returns whether the link was written.
+ */
+export function persistAiMeetingResolution(input: {
+  recordingId: string
+  candidateMeetings: ReadonlyArray<{ id: string }>
+  modelPickId: string | null | undefined
+  modelConfidence: number | null | undefined
+  modelReason: string | null | undefined
+  /** The meeting to link automatically, or null when the gate declined. */
+  linkMeetingId: string | null
+  linkConfidence: number
+}): { linked: boolean } {
+  return runInTransaction(() => {
+    const linked = input.linkMeetingId
+      ? linkRecordingToMeeting(input.recordingId, input.linkMeetingId, input.linkConfidence, 'ai_transcript_match')
+      : false
+    for (const meeting of input.candidateMeetings) {
+      const isModelPick = input.modelPickId === meeting.id
+      addRecordingMeetingCandidate(
+        input.recordingId,
+        meeting.id,
+        isModelPick ? (input.modelConfidence || 0.5) : 0.1,
+        isModelPick ? (input.modelReason || 'Time overlap') : 'Time overlap only',
+        isModelPick && linked
+      )
+    }
+    return { linked }
+  })
 }
 
 /**
@@ -7721,6 +7824,7 @@ export interface Transcript {
 }
 
 export type ProcessingStage =
+  | 'pipeline'
   | 'metadata'
   | 'schedule-match'
   | 'vad'
@@ -7780,6 +7884,28 @@ export interface CreateProcessingRunInput {
   parentRunIds?: string[]
 }
 
+const ownedProcessingRuns = new Map<string, string>()
+const ownedPipelineRuns = new Map<string, string>()
+
+export function getOwnedPipelineRecordings(): string[] {
+  return [...new Set(ownedPipelineRuns.values())]
+}
+
+export function getOwnedProcessingRuns(): Map<string, string> {
+  return new Map(ownedProcessingRuns)
+}
+
+export function getProcessingRevision(): number {
+  run('CREATE TABLE IF NOT EXISTS processing_revision (id INTEGER PRIMARY KEY CHECK (id=1), revision INTEGER NOT NULL)')
+  run('INSERT OR IGNORE INTO processing_revision VALUES (1, 0)')
+  return queryOne<{ revision: number }>('SELECT revision FROM processing_revision WHERE id=1')!.revision
+}
+
+function advanceProcessingRevision(): void {
+  getProcessingRevision()
+  run('UPDATE processing_revision SET revision=revision+1 WHERE id=1')
+}
+
 export function createProcessingRun(input: CreateProcessingRunInput): ProcessingRun {
   const id = randomUUID()
   const startedAt = new Date().toISOString()
@@ -7802,6 +7928,10 @@ export function createProcessingRun(input: CreateProcessingRunInput): Processing
       input.parentRunIds?.length ? JSON.stringify(input.parentRunIds) : null
     ]
   )
+  ownedProcessingRuns.set(id, input.recordingId)
+  if (input.stage === 'pipeline') ownedPipelineRuns.set(id, input.recordingId)
+  registerProcessingRun(id)
+  advanceProcessingRevision()
   return queryOne<ProcessingRun>('SELECT * FROM processing_runs WHERE id = ?', [id])!
 }
 
@@ -7821,7 +7951,8 @@ export interface CompleteProcessingRunInput {
 }
 
 export function completeProcessingRun(id: string, result: CompleteProcessingRunInput = {}): void {
-  run(
+  try {
+    run(
     `UPDATE processing_runs SET status = ?, completed_at = ?, transcript_id = COALESCE(?, transcript_id),
        tool = COALESCE(?, tool), model = COALESCE(?, model), version = COALESCE(?, version),
        output_refs = ?, usage_json = ?, estimated_cost_amount = ?, estimated_cost_currency = ?,
@@ -7844,6 +7975,12 @@ export function completeProcessingRun(id: string, result: CompleteProcessingRunI
       id
     ]
   )
+    advanceProcessingRevision()
+  } finally {
+    ownedProcessingRuns.delete(id)
+    ownedPipelineRuns.delete(id)
+    releaseProcessingRun(id)
+  }
 }
 
 /**
@@ -7857,7 +7994,8 @@ export function failProcessingRun(
   cancelled = false,
   usage: Pick<CompleteProcessingRunInput, 'usage' | 'estimatedCostAmount' | 'estimatedCostCurrency' | 'costMethod'> = {}
 ): void {
-  run(
+  try {
+    run(
     `UPDATE processing_runs SET status = ?, completed_at = ?, error_message = ?,
        usage_json = COALESCE(?, usage_json), estimated_cost_amount = COALESCE(?, estimated_cost_amount),
        estimated_cost_currency = COALESCE(?, estimated_cost_currency), cost_method = COALESCE(?, cost_method)
@@ -7873,6 +8011,12 @@ export function failProcessingRun(
       id
     ]
   )
+    advanceProcessingRevision()
+  } finally {
+    ownedProcessingRuns.delete(id)
+    ownedPipelineRuns.delete(id)
+    releaseProcessingRun(id)
+  }
 }
 
 export function getProcessingRunsForRecording(recordingId: string): ProcessingRun[] {
@@ -13625,8 +13769,10 @@ export function enrichRecordingScheduleMetadata(recordingId: string): ScheduleEn
        WHERE recording_id = ? AND is_user_confirmed = 1 LIMIT 1`,
       [recordingId]
     )
-    const explicitStandalone = recording.correlation_method === 'user_preassign_standalone'
-      || recording.correlation_method === 'user_standalone'
+    // A human link (manual, user_override, user_preassign) is as binding as a
+    // human "no meeting": a later schedule pass may rescore candidates but not
+    // replace it. Before this, only the standalone markers were honoured here.
+    const humanChoice = isHumanCorrelationMethod(recording.correlation_method)
     const top = scored[0]
     // Same rule as the time-overlap pass and the re-check: a meeting that covers
     // less than half of the recording is one of several in it.
@@ -13640,7 +13786,7 @@ export function enrichRecordingScheduleMetadata(recordingId: string): ScheduleEn
     ) >= MIN_TIME_LINK_COVERAGE
     const unambiguous = !!top && top.isBestMatch && top.hasOverlap && top.confidenceScore >= 0.75 && coversHalf
     const selectedMeetingId = confirmed?.meeting_id
-      ?? (!explicitStandalone && unambiguous ? top.meetingId : null)
+      ?? (!humanChoice && unambiguous ? top.meetingId : null)
 
     runInTransaction(() => {
       // Stale auto candidates may disappear after a calendar refresh. Preserve
@@ -14046,15 +14192,21 @@ export function resetStuckTranscriptions(
 ): { recordingsReset: number; queueItemsReset: number } {
   const db = getDatabase()
   // The recordings this process is transcribing right now are not stuck.
-  const keep = activeRecordingIds.length > 0 ? activeRecordingIds : ['']
+  const owned = [...new Set([...activeRecordingIds, ...ownedProcessingRuns.values()])]
+  const keep = owned.length > 0 ? owned : ['']
   const marks = keep.map(() => '?').join(', ')
   db.run(
-    `UPDATE recordings SET transcription_status = 'none' WHERE transcription_status IN ('processing', 'pending') AND id NOT IN (${marks})`,
+    `UPDATE recordings SET transcription_status = 'error' WHERE (transcription_status = 'processing' OR (transcription_status = 'pending' AND NOT EXISTS
+      (SELECT 1 FROM transcription_queue q WHERE q.recording_id=recordings.id AND q.status='pending'))) AND id NOT IN (${marks})`,
     keep
   )
   const recordingsReset = db.getRowsModified()
-  db.run(`UPDATE transcription_queue SET status = 'pending' WHERE status = 'processing' AND recording_id NOT IN (${marks})`, keep)
+  db.run(`UPDATE transcription_queue SET status = 'failed', error_message = 'Interrupted: previous process exited; resume saved stages explicitly', completed_at = CURRENT_TIMESTAMP WHERE status = 'processing' AND recording_id NOT IN (${marks})`, keep)
   const queueItemsReset = db.getRowsModified()
+  db.run(`UPDATE processing_runs SET status = 'failed', completed_at = CURRENT_TIMESTAMP,
+    error_message = 'Interrupted: previous coordinator exited; remote ownership retained for reconciliation'
+    WHERE status = 'running' AND recording_id NOT IN (${marks})`, keep)
+  if (recordingsReset || queueItemsReset || db.getRowsModified()) advanceProcessingRevision()
   console.log(`[Database] Reset stuck transcriptions: ${recordingsReset} recordings, ${queueItemsReset} queue items`)
   return { recordingsReset, queueItemsReset }
 }

@@ -21,6 +21,8 @@ import {
 import { validateDevicePath } from '../utils/path-validation'
 import { withTimeout, isAbortError } from '../utils/timeout'
 import { shouldLogQa } from './qa-monitor'
+import type { JensenIpcClient } from './jensen-ipc-client'
+import type { DeviceAudioStartOptions } from '@/shared/device-audio'
 
 export interface HiDockRecording {
   id: string
@@ -1948,9 +1950,10 @@ class HiDockDeviceService {
     return this.jensen.getRealtimeSettings()
   }
 
-  async startRealtime(): Promise<boolean> {
+  async startRealtime(options?: DeviceAudioStartOptions): Promise<boolean> {
     if (!this.isConnected()) return false
-    const result = await this.jensen.startRealtime()
+    // getJensenDevice() returns the IPC facade; host capture options do not belong to the wire protocol.
+    const result = await (this.jensen as unknown as JensenIpcClient).startRealtime(options)
     if (result?.result === 'failed' && 'error' in result && typeof result.error === 'string') {
       throw new Error(result.error)
     }

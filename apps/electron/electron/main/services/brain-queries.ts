@@ -26,7 +26,7 @@ import {
   queryOne,
   type Meeting,
 } from './database'
-import { filterEligibleRecordingIds } from './recording-eligibility'
+import { filterEligibleRecordingIds, filterTranscribableRecordingIds } from './recording-eligibility'
 import { rankRecordingsByMeetingCoverage } from './recording-match-scoring'
 import { gateActionables, mapToActionable } from './actionable-read-model'
 import {
@@ -162,4 +162,21 @@ export function transcriptForRecording(recordingId: unknown): unknown {
   const { eligible, failClosed } = filterEligibleRecordingIds([recordingId])
   if (failClosed || !eligible.has(recordingId)) return null
   return getTranscriptByRecordingId(recordingId) ?? null
+}
+
+/** Bounded inventory; explicit UTC bounds, no transcript contents or audio paths.
+ * Scan limit is disclosed so an excluded prefix cannot imply a complete result.
+ */
+export function recordingsInRange(since: string, until: string, limit: number): unknown {
+  const scanLimit = 1000
+  const rows = queryAll<{ id: string; filename: string; date_recorded: string; duration_seconds: number | null; transcription_status: string; hasTranscript: number }>(
+    `SELECT r.id, r.filename, r.date_recorded, r.duration_seconds, r.transcription_status,
+      EXISTS(SELECT 1 FROM transcripts t WHERE t.recording_id = r.id) AS hasTranscript
+     FROM recordings r WHERE julianday(r.date_recorded) >= julianday(?) AND julianday(r.date_recorded) < julianday(?)
+     ORDER BY r.date_recorded ASC, r.id ASC LIMIT ?`, [since, until, scanLimit + 1])
+  const scanned = rows.slice(0, scanLimit)
+  const { eligible, failClosed } = filterTranscribableRecordingIds(scanned.map(row => row.id))
+  if (failClosed) throw new Error('Recording eligibility is unavailable')
+  const visible = scanned.filter(row => eligible.has(row.id))
+  return { since, until, recordings: visible.slice(0, limit).map(row => ({ ...row, hasTranscript: Boolean(row.hasTranscript), pending: !row.hasTranscript && row.transcription_status !== 'complete' })), truncated: rows.length > scanLimit || visible.length > limit }
 }

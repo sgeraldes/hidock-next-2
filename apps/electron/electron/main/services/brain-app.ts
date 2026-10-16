@@ -29,7 +29,10 @@ import { startBrainServer, type RunningBrainServer } from './brain-server'
 import * as brainQueries from './brain-queries'
 import { getMeetings } from './database'
 import { parseHiDockFilenameDate } from './hidock-filename'
+import { queryContextGraph, searchGraphNodes, queryProvenance } from './knowledge-graph-service'
+import type { BrainServerOptions } from './brain-server'
 import { submitTargetedTranscriptions, targetedTranscriptionStatus, cancelTargetedTranscription } from './transcription'
+import { backendRagStatus, backendRagChat, createBackendConversation, cancelBackendRag } from './backend-rag'
 
 /** How long to wait for a headless brain to finish and exit after asking. */
 const STEP_DOWN_WAIT_MS = 5000
@@ -121,6 +124,7 @@ let generation = 0
 
 export async function startAppBrain(options: {
   getLiveRecording: () => { known: boolean; recording: string | null }
+  backend?: BrainServerOptions['backend']
 }): Promise<void> {
   if (server) return
   const mine = ++generation
@@ -138,11 +142,18 @@ export async function startAppBrain(options: {
     instanceId,
     queries: brainQueries,
     recordingNow: recordingNow(options.getLiveRecording),
+    contextGraph: {
+      overview: queryContextGraph,
+      search: searchGraphNodes,
+      provenance: queryProvenance,
+    },
+    backend: options.backend,
     transcription: {
       submit: submitTargetedTranscriptions,
       status: targetedTranscriptionStatus,
       cancel: cancelTargetedTranscription,
     },
+    rag: { status: backendRagStatus, chat: backendRagChat, createSession: createBackendConversation, cancel: cancelBackendRag },
   })
   if (mine !== generation) {
     await started.close()

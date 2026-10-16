@@ -5,7 +5,7 @@ import type { HiDockDeviceState, ConnectionStatus, ActivityLogEntry } from '@/se
 import type { UnifiedRecording } from '@/types/unified-recording'
 // CA-10: CalendarViewType shared between store and calendar-utils
 import type { CalendarViewType } from '@/lib/calendar-utils'
-import { normalizeWeekStart, startOfWeekDate } from '@/lib/calendar-utils'
+import { calendarViewRange } from '@/lib/calendar-range'
 import { useConfigStore } from '@/store/domain/useConfigStore'
 import {
   MAX_ACTIVITY_LOG_ENTRIES,
@@ -89,6 +89,7 @@ interface AppState {
   // Calendar
   meetings: Meeting[]
   meetingsLoading: boolean
+  calendarSyncError: string | null
   lastCalendarSync: string | null
   /** Any calendar sync is in flight (spinners, status text). */
   calendarSyncing: boolean
@@ -153,7 +154,8 @@ interface AppState {
 
   // Actions
   setMeetings: (meetings: Meeting[]) => void
-  loadMeetings: (startDate?: string, endDate?: string) => Promise<void>
+  loadMeetings: (startDate?: string, endDate?: string, options?: { refresh?: boolean }) => Promise<void>
+  setCalendarSyncError: (error: string | null) => void
   syncCalendar: (trigger?: 'manual' | 'mount') => Promise<CalendarSyncResult>
   setLastCalendarSync: (lastSync: string | null) => void
   /**
@@ -233,10 +235,14 @@ interface AppState {
   getDownloadProgress: (id: string) => number | null
 }
 
+let meetingRequestSequence = 0
+const pendingMeetingReads = new Map<string, Promise<Meeting[]>>()
+
 export const useAppStore = create<AppState>((set, get) => ({
   // Initial state
   meetings: [],
   meetingsLoading: false,
+  calendarSyncError: null,
   lastCalendarSync: null,
   calendarSyncing: false,
   calendarManualSyncing: false,
@@ -281,7 +287,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   downloadsPaused: false,
 
   // Meeting actions
-  setMeetings: (meetings) => set({ meetings }),
+  setMeetings: (meetings) => {
+    meetingRequestSequence++
+    pendingMeetingReads.clear()
+    set({ meetings })
+  },
+  setCalendarSyncError: (calendarSyncError) => set({ calendarSyncError }),
   setLastCalendarSync: (lastSync) => set({ lastCalendarSync: lastSync }),
   acquireCalendarSync: (manual) =>
     set((st) => ({
@@ -300,14 +311,30 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     }),
 
-  loadMeetings: async (startDate, endDate) => {
+  loadMeetings: async (startDate, endDate, options) => {
+    if (!startDate && !endDate) {
+      const range = calendarViewRange(get().currentDate, get().calendarView, useConfigStore.getState().config?.ui?.startOfWeek)
+      startDate = range.startDate
+      endDate = range.endDate
+    }
+    const key = JSON.stringify([startDate, endDate])
+    const sequence = ++meetingRequestSequence
+    // Keep the previous local snapshot on screen throughout the read. Mounts
+    // for Layout + Calendar share a read; a completed sync must bypass that read.
+    let pending = options?.refresh ? undefined : pendingMeetingReads.get(key)
     set({ meetingsLoading: true })
     try {
-      const meetings = await window.electronAPI.meetings.getAll(startDate, endDate)
-      set({ meetings, meetingsLoading: false })
-    } catch (error) {
-      console.error('Failed to load meetings:', error)
-      set({ meetingsLoading: false })
+      if (!pending) {
+        pending = window.electronAPI.meetings.getAll(startDate, endDate)
+        pendingMeetingReads.set(key, pending)
+      }
+      const meetings = await pending
+      if (sequence === meetingRequestSequence) set({ meetings, meetingsLoading: false })
+    } catch {
+      console.error('Failed to load cached calendar')
+      if (sequence === meetingRequestSequence) set({ meetingsLoading: false })
+    } finally {
+      if (pendingMeetingReads.get(key) === pending) pendingMeetingReads.delete(key)
     }
   },
 
@@ -326,6 +353,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     // Counted, not boolean: a manual sync finishing must not clear the flag
     // while a mount sync is still in flight.
     get().acquireCalendarSync(manual)
+    set({ calendarSyncError: null })
     const release = (): void => get().releaseCalendarSync(manual)
 
     try {
@@ -342,13 +370,16 @@ export const useAppStore = create<AppState>((set, get) => ({
         const { currentDate, calendarView } = get()
         const startDate = getViewStartDate(currentDate, calendarView)
         const endDate = getViewEndDate(currentDate, calendarView)
-        await get().loadMeetings(startDate.toISOString(), endDate.toISOString())
+        await get().loadMeetings(startDate.toISOString(), endDate.toISOString(), { refresh: true })
         set({ lastCalendarSync: result.lastSync || new Date().toISOString() })
+      } else {
+        set({ calendarSyncError: 'Calendar refresh failed. Saved events are still available.' })
       }
       release()
       return result
     } catch (error) {
-      console.error('Failed to sync calendar:', error)
+      console.error('Calendar refresh failed')
+      set({ calendarSyncError: 'Calendar refresh failed. Saved events are still available.' })
       release()
       return { success: false, meetingsCount: 0, error: String(error) }
     }
@@ -592,38 +623,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
 // Helper functions
 function getViewStartDate(date: Date, view: CalendarViewType): Date {
-  const start = new Date(date)
-  if (view === 'day') {
-    // Just the current day
-  } else if (view === 'workweek') {
-    return startOfWeekDate(date, 1)
-  } else if (view === 'week') {
-    return startOfWeekDate(date, normalizeWeekStart(useConfigStore.getState().config?.ui?.startOfWeek))
-  } else {
-    start.setDate(1)
-  }
-  start.setHours(0, 0, 0, 0)
-  return start
+  return new Date(calendarViewRange(date, view, useConfigStore.getState().config?.ui?.startOfWeek).startDate)
 }
 
 function getViewEndDate(date: Date, view: CalendarViewType): Date {
-  const end = new Date(date)
-  if (view === 'day') {
-    // Just the current day
-  } else if (view === 'workweek') {
-    const start = getViewStartDate(date, view)
-    end.setTime(start.getTime())
-    end.setDate(end.getDate() + 4) // Mon-Fri
-  } else if (view === 'week') {
-    const start = getViewStartDate(date, view)
-    end.setTime(start.getTime())
-    end.setDate(end.getDate() + 6)
-  } else {
-    end.setMonth(end.getMonth() + 1)
-    end.setDate(0) // Last day of current month
-  }
-  end.setHours(23, 59, 59, 999)
-  return end
+  return new Date(calendarViewRange(date, view, useConfigStore.getState().config?.ui?.startOfWeek).endDate)
 }
 
 // ========================================

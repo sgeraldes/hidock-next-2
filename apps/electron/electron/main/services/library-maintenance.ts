@@ -361,8 +361,11 @@ export async function matchMeetingsWithJev(
       if (recording.meeting_id && sameMeeting(recording.meeting_id, match.topMeetingId)) return
       if (options.dryRun) {
         result.planned!.push({ recordingId, from: recording.meeting_id ?? null, to: match.topMeetingId, probability: match.topProbability })
-      } else {
-        linkRecordingToMeeting(recordingId, match.topMeetingId, match.topProbability, 'jev_content_match')
+      } else if (!linkRecordingToMeeting(recordingId, match.topMeetingId, match.topProbability, 'jev_content_match')) {
+        // The owner chose while Jev was answering, or the recording is gone:
+        // nothing was written, so nothing is counted as linked.
+        result.skipped++
+        return
       }
       if (recording.meeting_id) result.relinked++
       else result.linked++

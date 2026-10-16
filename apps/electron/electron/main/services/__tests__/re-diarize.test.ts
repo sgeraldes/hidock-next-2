@@ -48,6 +48,7 @@ import {
   getSpeakerSplits
 } from '../database'
 import * as database from '../database'
+import { addActiveTranscription, removeActiveTranscription } from '../transcription-activity'
 import {
   clearAutoSpeakerBindingsForReDiarize,
   reDiarizeRecording,
@@ -267,6 +268,27 @@ describe('reDiarizeRecording — eligibility gate + atomicity (ADV46-1)', () => 
       [recId]
     )?.transcription_status
   }
+
+  it('refuses an active run before clearing any identity state', async () => {
+    seedWithAutoState('rec-active')
+    addActiveTranscription('rec-active')
+    try {
+      await expect(reDiarizeRecording('rec-active')).rejects.toThrow('existing transcription')
+      expect(autoStateIntact('rec-active')).toBe(true)
+      expect(isQueued('rec-active')).toBe(false)
+      expect(processQueueManually).not.toHaveBeenCalled()
+    } finally { removeActiveTranscription('rec-active') }
+  })
+
+  it('does not clear identities when the queue would return an already pending request', async () => {
+    seedWithAutoState('rec-pending')
+    const existingId = database.addToQueue('rec-pending', 'gemini')
+    await expect(reDiarizeRecording('rec-pending')).rejects.toThrow('existing transcription')
+    expect(autoStateIntact('rec-pending')).toBe(true)
+    expect(queryAll('SELECT id FROM transcription_queue WHERE recording_id = ?', ['rec-pending']))
+      .toEqual([expect.objectContaining({ id: existingId })])
+    expect(processQueueManually).not.toHaveBeenCalled()
+  })
 
   it('REFUSES a soft-deleted recording — nothing cleared, not queued, honest failure', async () => {
     seedWithAutoState('rec-del')

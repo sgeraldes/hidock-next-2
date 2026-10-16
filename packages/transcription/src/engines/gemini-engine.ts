@@ -7,6 +7,7 @@ import {
   type Part,
 } from '@google/genai'
 import { extname } from 'node:path'
+import { createHash } from 'node:crypto'
 import type {
   TranscriptionEngine,
   TranscriptSegment,
@@ -45,6 +46,10 @@ export interface GeminiEngineOptions {
    * so falling through with it would call an API it does not serve.
    */
   fallbackModel?: string
+  /** Durable response boundary supplied by the application, before parsing. */
+  checkpoints?: { execute<T>(key: string, request: () => Promise<T>): Promise<T> }
+  /** Resending audio after a response requires explicit opt-in. */
+  allowAudioRetries?: boolean
 }
 
 /**
@@ -1021,6 +1026,9 @@ export class GeminiEngine implements TranscriptionEngine {
   private readonly model: string
   private readonly language: string
   private readonly fallbackModel: string
+  private readonly checkpoints: GeminiEngineOptions['checkpoints']
+  private readonly allowAudioRetries: boolean
+  private audioHash = ''
 
   constructor(options: GeminiEngineOptions) {
     this.apiKey = options.apiKey
@@ -1029,6 +1037,13 @@ export class GeminiEngine implements TranscriptionEngine {
     this.model = options.model ?? 'gemini-3.8-flash'
     this.fallbackModel = options.fallbackModel ?? 'gemini-3.8-flash'
     this.language = options.language ?? 'unknown'
+    this.checkpoints = options.checkpoints
+    this.allowAudioRetries = options.allowAudioRetries === true
+  }
+
+  private response<T>(key: unknown, request: () => Promise<T>): Promise<T> {
+    const identity = JSON.stringify([this.audioHash, this.model, key])
+    return this.checkpoints ? this.checkpoints.execute(identity, request) : request()
   }
 
   async isAvailable(): Promise<boolean> {
@@ -1158,6 +1173,9 @@ export class GeminiEngine implements TranscriptionEngine {
 
       /** Halve and retry, or fail when there is nothing left to try. */
       const subdivide = async (why: string): Promise<TranscriptSegment[]> => {
+        if (!this.allowAudioRetries) {
+          throw new Error(`Provider response retained: ${why}; automatic audio retry disabled`)
+        }
         // Every interval is strictly shorter than its parent and the floor
         // stops the descent, so the depth cap can only be reached if a splitter
         // ever stops shrinking. Cheaper to assert it than to let a future
@@ -1210,9 +1228,16 @@ export class GeminiEngine implements TranscriptionEngine {
       const attempt = async (): Promise<
         { segments: TranscriptSegment[] } | { splitBecause: string }
       > => {
+      let uploaded: { name: string; uri: string; mimeType: string } | undefined
+      try {
+        assertStillEligible(shouldGenerate)
+        const providerStartedAt = Date.now()
+        trace({ phase: 'provider-transcription', status: 'started', ...common })
+        let interaction: NativeTranscriptionInteraction
+        try {
+          interaction = await this.response(['native', chunk.startSec, chunk.durationSec, languageCodes, options.vocabulary?.slice(0, 1000), options.diarize !== false], async () => {
       const uploadStartedAt = Date.now()
       trace({ phase: 'upload', status: 'started', ...common })
-      let uploaded: { name: string; uri: string; mimeType: string }
       try {
         uploaded = await this.uploadAudioChunk(genAI, chunk, shouldGenerate)
         trace({ phase: 'upload', status: 'completed', elapsedMs: Date.now() - uploadStartedAt, ...common })
@@ -1222,13 +1247,7 @@ export class GeminiEngine implements TranscriptionEngine {
         trace({ phase: 'chunk', status: 'failed', elapsedMs: Date.now() - chunkStartedAt, detail, ...common })
         throw error
       }
-      try {
-        assertStillEligible(shouldGenerate)
-        const providerStartedAt = Date.now()
-        trace({ phase: 'provider-transcription', status: 'started', ...common })
-        let interaction: NativeTranscriptionInteraction
-        try {
-          interaction = await genAI.interactions.create({
+          return genAI.interactions.create({
             model: this.model,
             input: [{ type: 'audio', uri: uploaded.uri, mime_type: uploaded.mimeType }],
             generation_config: {
@@ -1245,8 +1264,10 @@ export class GeminiEngine implements TranscriptionEngine {
           }, {
             timeout: GeminiEngine.INTERACTION_REQUEST_TIMEOUT_MS,
             maxRetries: 0,
-          }) as unknown as NativeTranscriptionInteraction
-          reportUsage(options.onUsage, this.model, interaction.usage)
+          }).then((response) => {
+            reportUsage(options.onUsage, this.model, (response as unknown as NativeTranscriptionInteraction).usage)
+            return response
+          })}) as unknown as NativeTranscriptionInteraction
           trace({
             phase: 'provider-transcription',
             status: 'completed',
@@ -1304,7 +1325,7 @@ export class GeminiEngine implements TranscriptionEngine {
         const cleanupStartedAt = Date.now()
         trace({ phase: 'cleanup', status: 'started', ...common })
         try {
-          await genAI.files.delete({ name: uploaded.name })
+          if (uploaded) await genAI.files.delete({ name: uploaded.name })
           trace({ phase: 'cleanup', status: 'completed', elapsedMs: Date.now() - cleanupStartedAt, ...common })
         } catch {
           // Files expire automatically; cleanup failure must not discard a
@@ -1373,15 +1394,15 @@ export class GeminiEngine implements TranscriptionEngine {
     // Single call: inline when small, Files API when large (needs a filePath).
     const part =
       audio.length > GeminiEngine.INLINE_LIMIT_BYTES && filePath
-        ? await this.uploadViaFilesApi(genAI, filePath, mimeType, shouldGenerate, normalizedAudio)
+        ? () => this.uploadViaFilesApi(genAI, filePath, mimeType, shouldGenerate, normalizedAudio)
         : { inlineData: { mimeType, data: audio.toString('base64') } }
     // startSec/durationSec unknown for a single whole-file part.
-    return [{ data: audio, mimeType, startSec: 0, durationSec: 0, part } as AudioChunk & { part: Part }]
+    return [{ data: audio, mimeType, startSec: 0, durationSec: 0, part } as AudioChunk & { part: Part | (() => Promise<Part>) }]
   }
 
   private async transcribeInteractionRange(
     genAI: GoogleGenAI,
-    file: { uri: string; mimeType: string },
+    file: () => Promise<{ uri: string; mimeType: string }>,
     startSec: number,
     endSec: number,
     source: 'mic' | 'system',
@@ -1392,6 +1413,7 @@ export class GeminiEngine implements TranscriptionEngine {
     onUsage?: TranscribeOptions['onUsage']
   ): Promise<{ segments: TranscriptSegment[]; interactionId: string }> {
     const splitRange = async (): Promise<{ segments: TranscriptSegment[]; interactionId: string }> => {
+      if (!this.allowAudioRetries) throw new Error('Provider response retained: incomplete interval; automatic audio retry disabled')
       if (endSec - startSec <= 60) {
         throw new Error(
           `Gemini could not produce a complete, reliable transcript for ${formatTimestamp(startSec)}–${formatTimestamp(endSec)}`
@@ -1439,17 +1461,19 @@ Calendar and meeting context are spelling hints only; never invent speech from t
         : ''
     }`
 
-    const input: Array<Record<string, unknown>> = []
-    if (!previousInteractionId) {
-      input.push({ type: 'audio', uri: file.uri, mime_type: file.mimeType })
-    }
-    input.push({ type: 'text', text: prompt })
-
     // The Interactions wire contract intentionally uses snake_case. @google/genai
     // 2.0.0's TextResponseFormat type incorrectly spells mime_type as mimeType;
     // the live Developer API rejects that spelling, so keep the documented wire
     // name and isolate the SDK typing mismatch at this boundary.
-    const interaction = await genAI.interactions.create({
+    const interaction = await this.response(['range', startSec, endSec, context, repair], async () => {
+    const input: Array<Record<string, unknown>> = []
+    if (!previousInteractionId) {
+      const uploaded = await file()
+      input.push({ type: 'audio', uri: uploaded.uri, mime_type: uploaded.mimeType })
+    }
+    input.push({ type: 'text', text: prompt })
+
+    return genAI.interactions.create({
       model: this.model,
       input,
       previous_interaction_id: previousInteractionId,
@@ -1465,13 +1489,15 @@ Calendar and meeting context are spelling hints only; never invent speech from t
     } as never, {
       timeout: GeminiEngine.INTERACTION_REQUEST_TIMEOUT_MS,
       maxRetries: 0,
-    }) as unknown as {
+    }).then((response) => {
+      reportUsage(onUsage, this.model, (response as unknown as { usage?: unknown }).usage)
+      return response
+    })}) as unknown as {
       id: string
       status: 'in_progress' | 'requires_action' | 'completed' | 'failed' | 'cancelled' | 'incomplete'
       steps?: Array<{ type: string; content?: Array<{ type: string; text?: string }> }>
       usage?: unknown
     }
-    reportUsage(onUsage, this.model, interaction.usage)
 
     if (interaction.status === 'incomplete') return splitRange()
     if (interaction.status !== 'completed') {
@@ -1497,7 +1523,8 @@ Calendar and meeting context are spelling hints only; never invent speech from t
       hasReliableTurnStructure(normalized) &&
       segments.every((segment) => segment.startTime >= startSec && segment.startTime <= endSec)
     if (!reliable) {
-      if (!repair) {
+      if (!this.allowAudioRetries) throw new Error('Provider response retained: unreliable interval; automatic audio retry disabled')
+      if (!repair && this.allowAudioRetries) {
         return this.transcribeInteractionRange(
           genAI,
           file,
@@ -1520,6 +1547,7 @@ Calendar and meeting context are spelling hints only; never invent speech from t
     // the 60-second floor and THROW, turning a usable transcript into a hard
     // failure — strictly worse than the short tail we are trying to fix.
     if (isRangeCoverageShort(segments, startSec, endSec)) {
+      if (!this.allowAudioRetries) throw new Error('Provider response retained: incomplete coverage; automatic audio retry disabled')
       const lastStart = segments.reduce((latest, s) => Math.max(latest, s.startTime), startSec)
       if (!repair) {
         console.warn(
@@ -1555,7 +1583,8 @@ Calendar and meeting context are spelling hints only; never invent speech from t
     normalizedAudio?: Buffer
   ): Promise<TranscriptSegment[]> {
     const shouldGenerate = options.shouldGenerate
-    const uploaded = await this.uploadAudioFile(genAI, filePath, mimeType, shouldGenerate, normalizedAudio)
+    let uploaded: { name: string; uri: string; mimeType: string } | undefined
+    const getUploaded = async () => uploaded ??= await this.uploadAudioFile(genAI, filePath, mimeType, shouldGenerate, normalizedAudio)
     const totalRanges = Math.ceil(durationSeconds / GeminiEngine.ROLLING_CHUNK_SECONDS)
     const allSegments: TranscriptSegment[] = []
     const deduper = new TurnDeduper()
@@ -1566,7 +1595,7 @@ Calendar and meeting context are spelling hints only; never invent speech from t
         const endSec = Math.min(durationSeconds, startSec + GeminiEngine.ROLLING_CHUNK_SECONDS)
         const result = await this.transcribeInteractionRange(
           genAI,
-          uploaded,
+          getUploaded,
           startSec,
           endSec,
           options.source,
@@ -1592,7 +1621,7 @@ Calendar and meeting context are spelling hints only; never invent speech from t
       }
     } finally {
       try {
-        await genAI.files.delete({ name: uploaded.name })
+        if (uploaded) await genAI.files.delete({ name: uploaded.name })
       } catch {
         // Uploaded Gemini files expire automatically; cleanup failure must not
         // turn a successfully validated transcript into an application failure.
@@ -1615,6 +1644,7 @@ Calendar and meeting context are spelling hints only; never invent speech from t
     audio: Buffer,
     options: TranscribeOptions & { filePath?: string }
   ): AsyncIterable<TranscriptSegment> {
+    this.audioHash = createHash('sha256').update(audio).digest('hex')
     const normalized = stripLyingWavHeader(audio)
     audio = normalized.audio
     if (normalized.stripped) {
@@ -1753,11 +1783,11 @@ Calendar and meeting context are spelling hints only; never invent speech from t
     const mainConfig = (): GenerateContentConfig =>
       thinkingRejected ? baseConfigWithoutThinking : baseConfig
 
-    const transcribeChunk = async (chunk: AudioChunk & { part?: Part }, index: number, previousTail: string): Promise<string> => {
+    const transcribeChunk = async (chunk: AudioChunk & { part?: Part | (() => Promise<Part>) }, index: number, previousTail: string): Promise<string> => {
       // Recheck at the START of EACH chunk — an exclusion committed while a
       // previous chunk was in flight must stop this chunk before any provider call.
       assertStillEligible(shouldGenerate)
-      const part: Part =
+      const preparedPart =
         chunk.part ?? { inlineData: { mimeType: chunk.mimeType, data: chunk.data.toString('base64') } }
       const positionNote =
         chunks.length > 1
@@ -1780,7 +1810,9 @@ Return the schema-constrained JSON object requested by the API. Each segments it
 Transcribe ALL speech through to the very end of the audio, including brief closings and goodbyes.${positionNote}${contextSection}
 Return ONLY the schema-constrained JSON, with no markdown or additional commentary.`
 
-      const attempt = async (config: GenerateContentConfig, promptText = prompt) => {
+      const attempt = async (config: GenerateContentConfig, promptText = prompt) => this.response(
+        ['generate', generationModel, index, chunk.startSec, chunk.durationSec, config, promptText], async () => {
+        const part = typeof preparedPart === 'function' ? await preparedPart() : preparedPart
         const stream = await genAI.models.generateContentStream({
           model: generationModel,
           contents: [{ role: 'user', parts: [part, { text: promptText }] }],
@@ -1801,16 +1833,16 @@ Return ONLY the schema-constrained JSON, with no markdown or additional commenta
           reportUsage(options.onUsage, generationModel, usage)
         }
         return {
-          text: normalizeGeminiTranscriptResponse(out),
+          rawText: out,
           finishReason,
         }
-      }
+      })
 
-      let res
+      let response
       // Recheck immediately before the FIRST generation call for this chunk.
       assertStillEligible(shouldGenerate)
       try {
-        res = await attempt(mainConfig())
+        response = await attempt(mainConfig())
       } catch (err) {
         if (err instanceof TranscriptionCancelledError) throw err
         // If the model rejects thinkingConfig or the token cap, retry plain.
@@ -1818,20 +1850,23 @@ Return ONLY the schema-constrained JSON, with no markdown or additional commenta
           thinkingRejected = true
           // Recheck before the plain-config RETRY (a fresh provider call).
           assertStillEligible(shouldGenerate)
-          res = await attempt(baseConfigWithoutThinking)
+          response = await attempt(baseConfigWithoutThinking)
         } else {
           throw err
         }
       }
 
+      let res = { ...response, text: normalizeGeminiTranscriptResponse(response.rawText) }
       // MAX_TOKENS is unexpected at the model's documented 65k output limit.
       // Retry once while keeping minimal thinking so reasoning does not consume
       // the transcription output budget. If the retry is clean and longer, use it.
       if (res.finishReason === 'MAX_TOKENS') {
+        if (!this.allowAudioRetries) throw new Error('Provider response retained: output truncated; automatic audio retry disabled')
         // Recheck before the MAX_TOKENS RETRY (another fresh provider call).
         assertStillEligible(shouldGenerate)
         try {
-          const retry = await attempt(mainConfig())
+          const rawRetry = await attempt(mainConfig())
+          const retry = { ...rawRetry, text: normalizeGeminiTranscriptResponse(rawRetry.rawText) }
           if (retry.text && retry.finishReason !== 'MAX_TOKENS') res = retry
         } catch {
           // Ignore retry failure; the truncation check below surfaces it.
@@ -1847,10 +1882,12 @@ Return ONLY the schema-constrained JSON, with no markdown or additional commenta
         ? hasReliableTurnTiming(res.text) && hasReliableTurnStructure(res.text)
         : false
       if (hasSpeech && !hasReliableShape) {
+        if (!this.allowAudioRetries) throw new Error('Provider response retained: unreliable timing; automatic audio retry disabled')
         assertStillEligible(shouldGenerate)
         const repairPrompt = `${prompt}
 IMPORTANT TRANSCRIPT REPAIR: Your previous response had missing/repeated timing or collapsed minutes of conversation into an oversized speaker item. Re-listen to the audio. Return truthful increasing timestamps, split every voice change into its own segments item, and split a continuing speaker at least every 30 seconds. No content value may exceed 120 words.`
-        const retry = await attempt(mainConfig(), repairPrompt)
+        const rawRetry = await attempt(mainConfig(), repairPrompt)
+        const retry = { ...rawRetry, text: normalizeGeminiTranscriptResponse(rawRetry.rawText) }
         if (
           !retry.text ||
           retry.finishReason === 'MAX_TOKENS' ||

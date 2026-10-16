@@ -11,18 +11,18 @@ import { Brand, showBrandVerticalDivider, showBrandHorizontalDivider } from '../
 describe('Brand', () => {
   it('renders the two-line "HiDock Next" wordmark + the app mark when expanded', () => {
     render(<Brand placement="titlebar" collapsed={false} />)
-    expect(screen.getByText('HiDock')).toBeInTheDocument()
-    expect(screen.getByText('Next')).toBeInTheDocument()
+    expect(screen.getByText('ext')).toBeInTheDocument()
+    expect(screen.queryByText('HiDock')).not.toBeInTheDocument()
     // The mark lives in a 64px slot so its centre lands on the 32px nav-rail axis.
     const brand = screen.getByTestId('app-brand')
-    expect(brand.querySelector('.w-16')).not.toBeNull()
+    expect(brand).toHaveClass('next-brand')
     expect(brand.querySelector('svg')).not.toBeNull()
   })
 
   it('hides the wordmark (mark only) when collapsed', () => {
     render(<Brand placement="titlebar" collapsed />)
     expect(screen.queryByText('HiDock')).not.toBeInTheDocument()
-    expect(screen.queryByText('Next')).not.toBeInTheDocument()
+    expect(screen.queryByText('ext')).not.toBeInTheDocument()
     // Mark (svg) still shown in the rail.
     expect(screen.getByTestId('app-brand').querySelector('svg')).not.toBeNull()
   })

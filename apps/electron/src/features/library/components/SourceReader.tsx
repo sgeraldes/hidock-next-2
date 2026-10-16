@@ -38,14 +38,17 @@ import { StatusIcon } from './StatusIcon'
 import { WaveformPlayer, type TimelineEvent, type TimelineEventDetail, type TimelineEventPatch, type SentimentScorePoint, type WaveformPlayerMode } from './WaveformPlayer'
 import { SpeakerAssignPopover, type AssignScope } from './SpeakerAssignPopover'
 import { useReaderPeople, type ParticipantChip } from '../hooks/useReaderPeople'
+import { useRecordingAudioMetadata } from '../hooks/useRecordingAudioMetadata'
 import { deriveSpeakerRanges, type DerivedSpeakerRange } from '@/features/library/utils/speakerRanges'
 import { getDisplayTitle } from '@/features/library/utils/getDisplayTitle'
 import { isTranscriptTrusted, trustedSummary, untrustedSummaryNote } from '@/features/library/utils/transcriptIntegrity'
 import { getSourceType } from '@/features/library/utils/sourceType'
 import { ArtifactReader } from './ArtifactReader'
 import { RecordingSplitEditor } from './RecordingSplitEditor'
+import { DeviceRecordingMarkers, DeviceRecordingTrackExport } from '@/components/DeviceRecordingMarkers'
 import { HiddenReaderSections, ReaderSectionActions } from './ReaderSectionControls'
 import { ReaderSection } from './ReaderSection'
+import { SpeakerLaneTimeline } from './SpeakerLaneTimeline'
 import { TimelineEventList } from './TimelineEventList'
 import { useStickySectionPins } from '../hooks/useStickySectionPins'
 import { useUIStore } from '@/store/useUIStore'
@@ -53,7 +56,7 @@ import { useLibraryStore, type ReaderSectionId, type ReaderSectionMode, type Rea
 import { UnifiedRecording, hasLocalPath, isDeviceOnly, isRecordingBacked } from '@/types/unified-recording'
 import type { DownloadStatus } from '@/store/useAppStore'
 import { Transcript, Meeting, MeetingAttendee, parseJsonArray } from '@/types'
-import { Calendar, CloudDownload, Download, Trash2, Wand2, RefreshCw, Clock, Play, Square, Pencil, Check, Edit2, Link, X, ExternalLink, FolderOpen, MoreHorizontal, Folder, Plus, EyeOff, Eye, Sparkles, ChevronDown, Cloud, Cpu, Users, Mail, UserCog, Scissors } from 'lucide-react'
+import { Calendar, CloudDownload, Download, Trash2, Wand2, RefreshCw, Clock, Play, Pause, SkipBack, SkipForward, ChevronRight, Pencil, Check, Edit2, Link, X, ExternalLink, FolderOpen, MoreHorizontal, Folder, Plus, EyeOff, Eye, Sparkles, ChevronDown, Cloud, Cpu, Users, Mail, UserCog, Scissors } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { BusyIcon, Working, WorkingBar } from '@/components/ui/working'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
@@ -90,13 +93,14 @@ import {
 import { formatDateTime, formatDuration, formatBytes, cn } from '@/lib/utils'
 import { formatSmartDate, formatRelativeDate } from '@/lib/smartDate'
 import { useTranscriptionStore } from '@/store/features/useTranscriptionStore'
+import { useAudioControls } from '@/components/OperationController'
+import { usePlayerPreferences, speedLabel } from '@/lib/player-preferences'
+import { formatTimestamp } from '@/utils/audioUtils'
 
 /**
  * The reader's sections, in the order they appear in the single scrolling
  * column, which is also the order their strips stack in when they pin.
  */
-const READER_SECTION_ORDER: ReaderSectionId[] = ['player', 'metadata', 'moments', 'summary', 'transcript']
-
 const READER_SECTION_LABELS: Record<ReaderSectionId, string> = {
   player: 'Player',
   metadata: 'Metadata',
@@ -365,6 +369,16 @@ export function SourceReader({
   const [editedTitle, setEditedTitle] = useState('')
   const [isSavingTitle, setIsSavingTitle] = useState(false)
   const [metadataOpen, setMetadataOpen] = useState(false)
+  // The marker and export controls only mount once the user opens Tools.
+  const [toolsOpen, setToolsOpen] = useState(false)
+  // Which value sections have scrolled above the top edge and so dock under the player.
+  const [dockedSections, setDockedSections] = useState({ speakers: false, moments: false, summary: false })
+  // The action or decision under the pointer or focus, shared by its row, chip and timeline line.
+  const [highlightedEventId, setHighlightedEventId] = useState<string | null>(null)
+  // Independent display switches for the expanded player; both default on.
+  const [dockOpen, setDockOpen] = useState({ speakers: false, actions: false })
+  const [showWaveform, setShowWaveform] = useState(true)
+  const [showSentiment, setShowSentiment] = useState(true)
 
   // Default the metadata panel open for a device-only source, and re-decide ONLY
   // when a different source is selected. Expressed as React's documented
@@ -377,7 +391,7 @@ export function SourceReader({
   const [metadataSourceId, setMetadataSourceId] = useState<string | undefined>(recording?.id)
   if (recording?.id !== metadataSourceId) {
     setMetadataSourceId(recording?.id)
-    setMetadataOpen(recording ? isDeviceOnly(recording) : false)
+    setMetadataOpen(recording ? isDeviceOnly(recording) || recording.transcriptionStatus === 'no_speech' : false)
   }
 
   // Split mode keeps a cut point independent from the playback head. Waveform
@@ -488,6 +502,7 @@ export function SourceReader({
   const queueFailure = useTranscriptionStore(s => Array.from(s.queue.values()).find(item => item.recordingId === recording?.id && item.status === 'failed')?.error)
   const livePlaybackDuration = useUIStore((s) => s.waveformDuration || (Number.isFinite(s.playbackDuration) ? s.playbackDuration : 0))
   const waveformLoadedForId = useUIStore((s) => s.waveformLoadedForId)
+  const hasWaveformPeaks = useUIStore((s) => s.waveformLoadedForId === recording?.id && !!s.playbackWaveformData)
 
   // H6: When a transcribed recording is opened via the sidebar Library nav, the
   // parent may not have enriched the `transcript` prop yet — which left the reader
@@ -507,6 +522,10 @@ export function SourceReader({
   const recordingId = recording?.id
   const recordingSourceType = recording ? getSourceType(recording) : null
   const localPath = recording && recordingSourceType === 'audio' && hasLocalPath(recording) ? recording.localPath : undefined
+  const audioMetadata = useRecordingAudioMetadata(
+    recordingId && localPath ? recordingId : null,
+    localPath ? JSON.stringify([localPath, recording?.size, recording?.duration, recording?.transcriptionStatus]) : null
+  )
 
   // Reset all state when recording changes
   useEffect(() => {
@@ -523,6 +542,8 @@ export function SourceReader({
     setProcessingRuns([])
     setMeetingCandidates([])
     setTranscriptHighlight(null)
+    setToolsOpen(false)
+    setHighlightedEventId(null)
   }, [recording?.id])
 
   // A completed re-transcription replaces the transcript row and therefore its
@@ -1166,21 +1187,56 @@ export function SourceReader({
   // its place. Computed here, with the other hooks, because useStickySectionPins
   // is one and this component returns early when there is no recording.
   //
-  // The player takes a slot only while it is a one-line bar (minimized or
-  // docked) and only when there is a player at all. Expanded, it has no strip
-  // and nothing short enough to pin; if it kept slot 0 anyway, every strip
-  // below would pin 32px lower than it should, over an empty band.
-  const hasPlayer = !!localPath
+  // The player is a fixed one-row dock outside the scroller now, and Actions and
+  // Summary dock in their own stack, so only the two sections that still use a
+  // sticky strip take a slot. They are listed in document order.
+  const hasMoments = timelineEvents.length > 0
+  const hasSummaryText = !!effectiveTranscript?.summary?.trim()
+  // The transcript strip exists only for an audio source with a real transcript;
+  // reserving a slot for a strip that is not rendered would pin Metadata one step low.
+  const hasTranscriptStrip =
+    !!recording && !isDeviceOnly(recording) && recordingSourceType === 'audio' &&
+    recording.transcriptionStatus !== 'no_speech' && !!effectiveTranscript
   const pinOrder = useMemo(
-    () => READER_SECTION_ORDER.filter(
+    () => (['transcript', 'metadata'] as ReaderSectionId[]).filter(
       (section) =>
         readerSectionModes[section] !== 'hidden' &&
         (!maximizedSection || maximizedSection === section) &&
-        (section !== 'player' || (hasPlayer && readerSectionModes.player !== 'expanded'))
+        (section !== 'transcript' || hasTranscriptStrip)
     ),
-    [readerSectionModes, maximizedSection, hasPlayer]
+    [readerSectionModes, maximizedSection, hasTranscriptStrip]
   )
   const pins = useStickySectionPins(pinOrder)
+
+  const scrollNodeRef = useRef<HTMLDivElement | null>(null)
+  const pinsScrollRef = pins.scrollRef
+  const setScrollNode = useCallback((node: HTMLDivElement | null) => {
+    scrollNodeRef.current = node
+    pinsScrollRef(node)
+  }, [pinsScrollRef])
+
+  // A section docks once its top edge is above the scroller's top edge. Compared
+  // by rectangles, so it does not depend on offsetParent chains.
+  const updateDockedSections = useCallback(() => {
+    const scroller = scrollNodeRef.current
+    if (!scroller) return
+    const top = scroller.getBoundingClientRect().top
+    const passed = (selector: string) => {
+      const el = scroller.querySelector<HTMLElement>(selector)
+      return !!el && el.getBoundingClientRect().top - top < -1
+    }
+    const next = {
+      speakers: passed('[data-reader-anchor="speakers"]'),
+      moments: passed('[data-testid="reader-sentinel-moments"]'),
+      summary: passed('[data-testid="reader-sentinel-summary"]')
+    }
+    setDockedSections((prev) =>
+      prev.speakers === next.speakers && prev.moments === next.moments && prev.summary === next.summary ? prev : next
+    )
+  }, [])
+  useEffect(() => {
+    updateDockedSections()
+  }, [updateDockedSections, speakerTimeline.ranges.length, hasMoments, hasSummaryText, maximizedSection, recordingId])
 
   const handleReaderSeek = useCallback((startMs: number, endMs?: number) => {
     if (splitMode) setSplitPointSec(startMs / 1000)
@@ -1276,7 +1332,53 @@ export function SourceReader({
 
   // Prefer the stored duration; fall back to the live decoded value for the
   // recording whose waveform is currently loaded (computed as a hook above).
-  const durationSeconds = timelineDurationSec
+  const durationSeconds = audioMetadata?.durationMs.known ? audioMetadata.durationMs.value / 1000 : timelineDurationSec
+
+  const showPlayerDetail = durationSeconds > 0 || hasWaveformPeaks
+  const hasSentimentData = (timeline?.sentiment?.length ?? 0) > 0
+  const summaryShown = trustedSummary(effectiveTranscript, recording.audioCategory)
+  const summaryNote = !summaryShown && effectiveTranscript?.summary?.trim() ? untrustedSummaryNote(effectiveTranscript) : null
+  const summaryText = summaryShown ?? summaryNote
+  // One canonical order for the rows, chips and timeline lines: time, then id.
+  // Display numbers are assigned HERE, once, after the canonical order, and every
+  // surface (list, chips, lines, waveform markers) reuses them. ids and refIds are untouched.
+  const orderedEvents: TimelineEvent[] = [...timelineEvents]
+    .sort((x, y) => x.timeSec - y.timeSec || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0))
+    .map((m, i) => ({ ...m, index: i + 1 }))
+  // Only recorded markers from the timeline analysis are measured. When none
+  // exist, timelineEvents falls back to action items spread evenly over the
+  // duration; those positions are estimates and must never read as timestamps.
+  const eventsAreMeasured = (timeline?.events?.length ?? 0) > 0
+  const estimatedEventIds = eventsAreMeasured ? undefined : new Set(orderedEvents.map((m) => m.id))
+  const eventText = (m: TimelineEvent) => eventDetails[m.refId ?? m.id]?.fullText ?? m.label ?? ''
+  const laneEvents = eventsAreMeasured
+    ? orderedEvents.map((m, i) => ({
+        id: m.id, number: m.index ?? i + 1, timeSec: m.timeSec, kind: m.kind ?? ('note' as const), label: eventText(m)
+      }))
+    : []
+  const toolsAvailable = !!recordingId && isAudioSource && hasLocalPath(recording) && isRecordingBacked(recording) &&
+    (!!window.electronAPI?.deviceRecordingMarkers ||
+      (!!localPath && /\.wav$/i.test(localPath) && !!window.electronAPI?.deviceAudio))
+
+  const audioFormat = audioMetadata?.container.known
+    ? audioMetadata.container.value === 'riff-wave'
+      ? audioMetadata.codec.known
+        ? audioMetadata.codec.value === 'mp3' ? 'WAV container · MP3 audio' : 'WAV · PCM16'
+        : 'WAV · codec unavailable'
+      : 'MP3'
+    : 'Unavailable'
+  const measuredChannels = audioMetadata?.channelCount.known ? audioMetadata.channelCount.value : waveformChannels?.length
+  const audioChannels = measuredChannels === 2
+    ? 'Stereo (2)'
+    : measuredChannels === 1
+      ? 'Mono (1)'
+      : 'Unavailable'
+  const sampleRateLabel = audioMetadata?.sampleRateHz.known ? `${audioMetadata.sampleRateHz.value / 1000} kHz` : 'Unavailable'
+  const measuredBitrate = audioMetadata?.averageBitrateBps.known ? audioMetadata.averageBitrateBps
+    : audioMetadata?.nominalBitrateBps.known ? audioMetadata.nominalBitrateBps : null
+  const bitrateLabel = measuredBitrate?.known ? `${measuredBitrate.value / 1000} kbps` : 'Unavailable'
+  const bitrateTitle = audioMetadata?.codec.known && audioMetadata.codec.value === 'mp3' &&
+    !audioMetadata.averageBitrateBps.known ? 'Bitrate (first frame)' : 'Bitrate'
 
   // Transcription is "busy" while queued or running — the primary Transcribe
   // control and its ▾ trigger are disabled in that window.
@@ -1363,7 +1465,8 @@ export function SourceReader({
           sits above the scrolling body so the close button stays in reach
           while reading a long transcript (owner, 28-sep-2026). */}
       {!maximizedSection && (
-        <div className="flex shrink-0 items-start gap-2 bg-background px-4 pb-1 pt-4">
+        <div className="shrink-0 bg-background" data-testid="reader-header">
+        <div className="flex items-start gap-2 px-4 pb-1 pt-4">
           <div className="min-w-0 flex-1">
             <h2 className="text-lg font-semibold line-clamp-2 leading-tight" title={displayTitle}>
               {displayTitle}
@@ -1383,17 +1486,8 @@ export function SourceReader({
             </button>
           )}
         </div>
-      )}
-      <div
-        ref={pins.scrollRef}
-        className="min-h-0 flex-1 overflow-y-auto bg-background pb-6"
-        data-testid="reader-scroll-body"
-      >
-        {!maximizedSection && (
-        <>
-
         {/* Curated meta strip: date · duration · location · status */}
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 pt-2 text-xs text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 pb-2 pt-1 text-xs text-muted-foreground">
           <span className="inline-flex items-center gap-1">
             <Calendar className="h-3.5 w-3.5" aria-hidden="true" />
             {formatSmartDate(recording.dateRecorded, { fallback: 'Unknown' })}
@@ -1405,7 +1499,7 @@ export function SourceReader({
           {isAudioSource && (
             <>
               <span aria-hidden="true" className="text-muted-foreground/40">•</span>
-              <span>{durationSeconds > 0 ? formatDuration(durationSeconds) : 'Unknown duration'}</span>
+              <span title={durationSeconds > 0 ? undefined : 'Duration unavailable'}>{formatAudioDuration(durationSeconds)}</span>
               {waveformChannels?.length === 2 && <span>{isPcRecordingFilename((localPath ?? '').split(/[\\/]/).pop() ?? '') ? 'Stereo · Mic left · System right' : 'Stereo · Channel 0 left · Channel 1 right'}</span>}
             </>
           )}
@@ -1423,21 +1517,23 @@ export function SourceReader({
             <span className="rounded-full bg-muted px-2 py-0.5 font-medium capitalize text-foreground">{sourceType}</span>
           )}
         </div>
+        </div>
+      )}
+      {(!maximizedSection || maximizedSection === 'player') && (
+        <div className="shrink-0 border-y bg-background" data-testid="reader-dock">
         {/* Primary CTAs */}
-        <div className="flex flex-wrap items-center gap-2 px-4 pb-3 pt-3">
+        <div className="flex flex-nowrap items-center gap-2 overflow-x-auto px-4 py-2 [&>*]:shrink-0" data-testid="reader-dock-controls">
           {/* Primary action: Play/Stop for local files, Download for device-only */}
-          {canPlay && onPlay ? (
-            activePlayback ? (
-              <Button size="sm" onClick={onStop} className="gap-2" title="Stop playback">
-                <Square className="h-4 w-4" />
-                Stop
-              </Button>
-            ) : (
-              <Button size="sm" onClick={onPlay} className="gap-2" title="Play recording">
-                <Play className="h-4 w-4" />
-                Play
-              </Button>
-            )
+          {canPlay ? (
+            !sectionIsVisible('player') ? null : <DockPlayerControls
+              recordingId={recording.id}
+              filePath={localPath}
+              durationSec={durationSeconds}
+              detailOpen={readerSectionModes.player === 'expanded'}
+              onToggleDetail={() => changeSectionMode('player', readerSectionModes.player === 'expanded' ? 'compact' : 'expanded')}
+              onPlay={onPlay}
+              onStop={onStop}
+            />
           ) : isDeviceOnly(recording) && onDownload ? (
             <Button
               size="sm"
@@ -1672,15 +1768,131 @@ export function SourceReader({
               )}
             </DropdownMenuContent>
           </DropdownMenu>
+          {canPlay && sectionIsVisible('player') && (
+            <div className="ml-auto">
+              <ReaderSectionActions
+                section="player"
+                label="Player"
+                mode={readerSectionModes.player}
+                onModeChange={(mode) => changeSectionMode('player', mode)}
+                onMaximize={() => toggleMaximizedSection('player')}
+                maximized={maximizedSection === 'player'}
+                pinned={isSectionPinned('player')}
+                testId="reader-player-controls"
+              />
+            </div>
+          )}
         </div>
-        </>
-        )}
+        </div>
+      )}
+      {!maximizedSection && isAudioSource && (dockedSections.speakers || dockedSections.moments || dockedSections.summary) && (
+        <div
+          className="max-h-[32%] shrink-0 overflow-auto border-b bg-background"
+          data-testid="reader-dock-stack"
+        >
+          {dockedSections.speakers && speakerTimeline.legend.length > 0 && (
+            <div className="border-t px-4 py-1 first:border-t-0" data-testid="dock-speakers">
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 text-xs font-semibold text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/50"
+                aria-expanded={dockOpen.speakers}
+                onClick={() => setDockOpen((prev) => ({ ...prev, speakers: !prev.speakers }))}
+              >
+                <ChevronRight className={cn('h-3 w-3 transition-transform', dockOpen.speakers && 'rotate-90')} aria-hidden="true" />
+                {`Speakers · ${speakerTimeline.legend.length}`}
+              </button>
+              {dockOpen.speakers && (
+                <SpeakerLaneTimeline
+                  className="pb-1 pt-1"
+                  ranges={speakerTimeline.ranges}
+                  legend={speakerTimeline.legend}
+                  durationSec={durationSeconds}
+                  activeTimeSec={activePlayback ? currentTimeMs / 1000 : undefined}
+                  onSeek={handleReaderSeek}
+                  events={laneEvents}
+                  highlightedEventId={highlightedEventId}
+                  onEventHover={setHighlightedEventId}
+                  onEventActivate={(id) => {
+                    const m = orderedEvents.find((e) => e.id === id)
+                    if (m) handleTimelineEventActivate(m)
+                  }}
+                />
+              )}
+            </div>
+          )}
+          {dockedSections.moments && orderedEvents.length > 0 && (
+            <div className="border-t px-4 py-1" data-testid="dock-actions">
+              <div className="flex items-center gap-1.5">
+                <span className="shrink-0 text-xs font-semibold text-foreground">Actions</span>
+                <div className="flex min-w-0 flex-1 flex-nowrap items-center gap-1 overflow-x-auto" data-testid="dock-action-chips">
+                  {orderedEvents.map((m, i) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      data-event-id={m.id}
+                      onClick={() => handleTimelineEventActivate(m)}
+                      onPointerEnter={() => setHighlightedEventId(m.id)}
+                      onPointerLeave={() => setHighlightedEventId(null)}
+                      onFocus={() => setHighlightedEventId(m.id)}
+                      onBlur={() => setHighlightedEventId(null)}
+                      aria-label={`${m.kind === 'decision' ? 'Decision' : 'Action'} ${m.index ?? i + 1}, ${chipWords(eventText(m))}`}
+                      title={eventText(m)}
+                      className={cn(
+                        'shrink-0 whitespace-nowrap rounded border px-1.5 py-0.5 text-[11px] leading-tight text-foreground hover:bg-muted focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/50',
+                        highlightedEventId === m.id && 'bg-muted ring-1 ring-primary/40'
+                      )}
+                    >
+                      {chipWords(eventText(m)) || `${m.kind ?? 'item'} ${m.index ?? i + 1}`}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  className="shrink-0 rounded border px-1.5 py-0.5 text-[11px] text-muted-foreground hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/50"
+                  aria-expanded={dockOpen.actions}
+                  aria-controls="dock-action-detail"
+                  onClick={() => setDockOpen((prev) => ({ ...prev, actions: !prev.actions }))}
+                >
+                  {dockOpen.actions ? 'Hide details' : 'Details'}
+                </button>
+              </div>
+              {dockOpen.actions && (
+                <div id="dock-action-detail" className="pb-1 pt-1" data-testid="dock-action-detail">
+                  <TimelineEventList
+                    events={orderedEvents}
+                    eventDetails={eventDetails}
+                    onEventUpdate={handleEventUpdate}
+                    activeEventId={activeEventId}
+                    onActivate={handleTimelineEventActivate}
+                    highlightedEventId={highlightedEventId}
+                    onHighlightEvent={setHighlightedEventId}
+                    estimatedIds={estimatedEventIds}
+                    recordingId={recording.id}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+          {dockedSections.summary && summaryText && (
+            <div className="border-t px-4 py-1" data-testid="dock-summary">
+              <p className="mb-0.5 text-xs font-semibold text-foreground">Summary</p>
+              <p className="w-full whitespace-pre-wrap pb-1 text-xs leading-snug text-foreground" data-testid="dock-summary-text">{summaryText}</p>
+            </div>
+          )}
+        </div>
+      )}
+      <div
+        ref={setScrollNode}
+        onScroll={updateDockedSections}
+        className="relative min-h-0 flex-1 overflow-y-auto bg-background pb-6"
+        data-testid="reader-scroll-body"
+      >
 
-        {canPlay && sectionIsVisible('player') && (
+        {canPlay && sectionIsVisible('player') && showPlayerDetail && (readerSectionModes.player === 'expanded' || maximizedSection === 'player') && (
           <ReaderSection
             section="player"
             label="Player"
-            mode={readerSectionModes.player}
+            mode="expanded"
             onModeChange={(mode) => changeSectionMode('player', mode)}
             onMaximize={() => toggleMaximizedSection('player')}
             maximized={maximizedSection === 'player'}
@@ -1689,58 +1901,317 @@ export function SourceReader({
             sentinelRef={pins.sentinelRef('player')}
             headerless
           >
+            <div id="reader-player-detail" data-testid="reader-player-detail">
+            <div className="mb-1 flex items-center justify-end gap-1.5 text-[11px]">
+              <button
+                type="button"
+                aria-pressed={showWaveform}
+                onClick={() => setShowWaveform((v) => !v)}
+                className="rounded border px-1.5 py-0.5 text-muted-foreground hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/50"
+              >
+                {showWaveform ? 'Hide waveform' : 'Show waveform'}
+              </button>
+              {hasSentimentData && (
+                <button
+                  type="button"
+                  aria-pressed={showSentiment}
+                  onClick={() => setShowSentiment((v) => !v)}
+                  className="rounded border px-1.5 py-0.5 text-muted-foreground hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/50"
+                >
+                  {showSentiment ? 'Hide sentiment' : 'Show sentiment'}
+                </button>
+              )}
+            </div>
             <ReaderPlayer
-              controls={
-                <ReaderSectionActions
-                  section="player"
-                  label="Player"
-                  mode={readerSectionModes.player}
-                  onModeChange={(mode) => changeSectionMode('player', mode)}
-                  onMaximize={() => toggleMaximizedSection('player')}
-                  maximized={maximizedSection === 'player'}
-                  pinned={isSectionPinned('player')}
-                  // Same id the labeled sections use for their strip content,
-                  // so "is the player pinned" reads the same way everywhere.
-                  testId="reader-player-controls"
-                />
-              }
               recordingId={recording.id}
               filePath={localPath}
               durationSec={durationSeconds}
               speakerRanges={speakerTimeline.ranges}
-              events={timelineEvents}
+              events={eventsAreMeasured ? orderedEvents : undefined}
               sentiment={timeline?.sentiment}
               analyzing={analyzingTimeline}
               analysisFailure={timelineAnalysisFailure}
               onRetryAnalysis={retryTimelineAnalysis}
-              presentation={readerSectionModes.player === 'expanded' ? 'expanded' : 'compact'}
+              presentation="expanded"
               onSeek={(sec) => handleReaderSeek(Math.round(sec * 1000))}
               onEventClick={handleTimelineEventClick}
               activeEventId={activeEventId}
               splitPointSec={splitMode ? splitPointSec : undefined}
+              showWaveform={showWaveform}
+              showSentiment={showSentiment && hasSentimentData}
             />
-            {splitMode && localPath && (
-              <RecordingSplitEditor
-                recordingId={recording.id}
-                filePath={localPath}
-                durationSec={durationSeconds}
-                pointSec={splitPointSec}
-                isPlaying={isPlaying}
-                onPointChange={(timeSec) => {
-                  setSplitPointSec(timeSec)
-                  onSeek?.(Math.round(timeSec * 1000))
-                }}
-                onCancel={closeSplitMode}
-                onSplitCompleted={(firstChildId) => {
-                  closeSplitMode()
-                  if (onSplitCompleted) onSplitCompleted(firstChildId)
-                  else onMetadataEdited?.()
-                }}
-              />
-            )}
+          </div>
           </ReaderSection>
         )}
+        {canPlay && splitMode && localPath && (
+          <div className="px-4 pb-3">
+            <RecordingSplitEditor
+              recordingId={recording.id}
+              filePath={localPath}
+              durationSec={durationSeconds}
+              pointSec={splitPointSec}
+              isPlaying={isPlaying}
+              onPointChange={(timeSec) => {
+                setSplitPointSec(timeSec)
+                onSeek?.(Math.round(timeSec * 1000))
+              }}
+              onCancel={closeSplitMode}
+              onSplitCompleted={(firstChildId) => {
+                closeSplitMode()
+                if (onSplitCompleted) onSplitCompleted(firstChildId)
+                else onMetadataEdited?.()
+              }}
+            />
+          </div>
+        )}
 
+        {!maximizedSection && isAudioSource && speakerTimeline.legend.length > 0 && (
+          <div className="px-4 pb-3 pt-1" data-reader-anchor="speakers" data-testid="reader-speakers-section">
+            <SpeakerLaneTimeline
+              ranges={speakerTimeline.ranges}
+              legend={speakerTimeline.legend}
+              durationSec={durationSeconds}
+              activeTimeSec={activePlayback ? currentTimeMs / 1000 : undefined}
+              onSeek={handleReaderSeek}
+              events={laneEvents}
+              highlightedEventId={highlightedEventId}
+              onEventHover={setHighlightedEventId}
+              onEventActivate={(id) => {
+                const m = orderedEvents.find((e) => e.id === id)
+                if (m) handleTimelineEventActivate(m)
+              }}
+            />
+          </div>
+        )}
+
+        {/* Actions and decisions, promoted out of the player's graph into a
+            section of their own, so they survive any player mode. */}
+        {isAudioSource && sectionIsVisible('moments') && hasMoments && (
+          <ReaderSection
+            section="moments"
+            label="Actions & decisions"
+            mode={readerSectionModes.moments}
+            onModeChange={(mode) => changeSectionMode('moments', mode)}
+            onMaximize={() => toggleMaximizedSection('moments')}
+            maximized={maximizedSection === 'moments'}
+            pinned={isSectionPinned('moments')}
+            stickyTop={pins.stickyTop('moments')}
+            sentinelRef={pins.sentinelRef('moments')}
+          >
+            <TimelineEventList
+              events={orderedEvents}
+              eventDetails={eventDetails}
+              onEventUpdate={handleEventUpdate}
+              activeEventId={activeEventId}
+              onActivate={handleTimelineEventActivate}
+              highlightedEventId={highlightedEventId}
+              onHighlightEvent={setHighlightedEventId}
+              estimatedIds={estimatedEventIds}
+              recordingId={recording.id}
+            />
+          </ReaderSection>
+        )}
+        {showLowerWorkspace && (
+        // Box-less while the reading area is showing sections: a sticky header
+        // cannot escape an ancestor's box, so everything between a section and
+        // reader-scroll-body has to generate none.
+        //
+        // No pb-6 in either branch any more. It moved to the scroller, where it
+        // applies to both, and leaving a copy here charged the non-section
+        // states 72px of bottom padding where they used to pay 48.
+        <div className={cn(readingAreaHasSections && 'contents')}>
+          {/* Transcript / Artifact Content. The section branch supplies its own
+              horizontal padding (ReaderSection), so the reading area only pads
+              itself when it is showing one of the non-section states. */}
+          <div className={cn(readingAreaHasSections ? 'contents' : 'p-6')}>
+            {isDeviceOnly(recording) ? (
+              <div className="flex items-start gap-3 rounded-lg bg-muted/35 px-4 py-3">
+                <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-orange-500/10 text-orange-600 dark:text-orange-300">
+                  <CloudDownload className="h-4 w-4" aria-hidden="true" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-sm font-medium text-foreground">Stored on HiDock</h3>
+                  <p className="mt-0.5 text-sm leading-5 text-muted-foreground">
+                    Download to play, transcribe, and ask about the audio.
+                  </p>
+                  {!deviceConnected && (
+                    <p className="mt-1 text-xs font-medium text-orange-600 dark:text-orange-300">
+                      Connect the HiDock to start.
+                    </p>
+                  )}
+                </div>
+              </div>
+            ) : !isAudioSource ? (
+              <ArtifactReader recording={recording} onAskAboutSource={onAskAboutSource} />
+            ) : recording.transcriptionStatus === 'no_speech' ? (
+              <div className="px-4 py-2" data-testid="reader-empty-reason">
+                {tooShortSkip ? (
+                  <>
+                    <p className="text-sm font-medium text-foreground">Too short to transcribe</p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {tooShortSkip.seconds} {tooShortSkip.seconds === 1 ? 'second' : 'seconds'} of audio.
+                      Recordings under {tooShortSkip.minimumSeconds} seconds are skipped.
+                      To transcribe it anyway, choose Clear rating in its row menu, then pick a method from the arrow next to Transcribe.
+                      {/* A skipped clip is rated garbage, and the main process keeps
+                          garbage-rated audio away from every provider even on an
+                          explicit re-run. Clearing the rating is a user rating,
+                          which no automatic rater overwrites. */}
+                    </p>
+                  </>
+                ) : audioSkip ? (
+                  <>
+                    <p className="text-sm font-medium text-foreground">{audioSkip.title}</p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {audioSkip.detail} Transcription, summary and the other AI steps were skipped.
+                      To transcribe it anyway, choose Clear rating in its row menu, then pick a method from the arrow next to Transcribe.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-sm font-medium text-foreground">No intelligible speech detected</p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Automatic transcription, summary, participant inference, and meeting auto-linking were skipped.
+                      Re-run transcription if you believe this recording contains spoken words.
+                    </p>
+                  </>
+                )}
+              </div>
+            ) : effectiveTranscript ? (
+              // Box-less for the same reason. The rhythm space-y-4 and pt-2
+              // used to supply comes back as spacer siblings: a sibling is not
+              // an ancestor, so it cannot trap a sticky header the way a
+              // wrapper would. 8px before Summary, 16px before the transcript,
+              // which is exactly what the two utilities added.
+              <div className="contents">
+                {sectionIsVisible('summary') && summaryText && (
+                  <div aria-hidden="true" className="h-2" data-testid="reader-gap-summary" />
+                )}
+                {sectionIsVisible('summary') && summaryText && (
+                  <ReaderSection
+                    section="summary"
+                    label="Summary"
+                    mode={readerSectionModes.summary}
+                    onModeChange={(mode) => changeSectionMode('summary', mode)}
+                    onMaximize={() => toggleMaximizedSection('summary')}
+                    maximized={maximizedSection === 'summary'}
+                    pinned={isSectionPinned('summary')}
+                    stickyTop={pins.stickyTop('summary')}
+                    sentinelRef={pins.sentinelRef('summary')}
+                  >
+                    <div className="w-full text-sm leading-relaxed text-foreground" data-testid="reader-summary-text">
+                      {summaryShown
+                        ? <p className="w-full whitespace-pre-wrap">{summaryShown}</p>
+                        : <p className="w-full text-muted-foreground">{summaryNote}</p>}
+                    </div>
+                  </ReaderSection>
+                )}
+
+                {sectionIsVisible('transcript') && (
+                  <div aria-hidden="true" className="h-4" data-testid="reader-gap-transcript" />
+                )}
+                {sectionIsVisible('transcript') && (
+                  <ReaderSection
+                    section="transcript"
+                    label="Full transcript"
+                    mode={readerSectionModes.transcript}
+                    onModeChange={(mode) => changeSectionMode('transcript', mode)}
+                    onMaximize={() => toggleMaximizedSection('transcript')}
+                    maximized={maximizedSection === 'transcript'}
+                    pinned={isSectionPinned('transcript')}
+                    stickyTop={pins.stickyTop('transcript')}
+                    sentinelRef={pins.sentinelRef('transcript')}
+                  >
+                        {transcript && (
+                          <TranscriptIntegrityPanel
+                            recordingId={recording.id}
+                            transcript={transcript}
+                            durationSeconds={recording.duration}
+                            onRetranscribe={onTranscribe}
+                            onChanged={onIntegrityChanged}
+                            onJump={(code) => setIssueJump({ code, nonce: Date.now() })}
+                          />
+                        )}
+                        <TranscriptViewer
+                          transcript={effectiveTranscript.full_text}
+                          segments={transcriptSegments}
+                          recordingId={recording.id}
+                          currentTimeMs={currentTimeMs}
+                          isPlaying={isPlaying}
+                          highlightRequest={transcriptHighlight}
+                          issueJump={issueJump}
+                          onSeek={handleReaderSeek}
+                          showSummary={false}
+                          showTranscriptHeader={false}
+                          /* H3: action items live in ONE home — the Actions & decisions section. */
+                          showActionItems={false}
+                          actionItems={actionItems}
+                          onTranscriptUpdated={handleTranscriptUpdated}
+                        />
+                  </ReaderSection>
+                )}
+              </div>
+            ) : recording.transcriptionStatus === 'complete' && transcriptFetchingFor === recording.id ? (
+              // Lines in the shape of a transcript hold the space while it is read
+              // (owner, 2-oct-2026), instead of a message that says it is missing.
+              <Working label="Loading transcript" shape="lines" rows={8} />
+            ) : recording.transcriptionStatus === 'complete' ? (
+              <div className="text-center text-muted-foreground py-8">
+                <p>Transcript not available</p>
+              </div>
+            ) : recording.transcriptionStatus === 'pending' || recording.transcriptionStatus === 'processing' ? (
+              // Looks like work, not a sentence (owner, 2-oct-2026): the transcript's
+              // shape with a moving shimmer, a clock while it waits its turn, a
+              // spinner and the percentage while it runs.
+              recording.transcriptionStatus === 'processing' ? (
+                <Working label="Transcribing" shape="lines" rows={8} progress={transcriptionProgress} />
+              ) : (
+                <Working label="Waiting to be transcribed" shape="lines" rows={8} waiting />
+              )
+            ) : (
+              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 py-3 text-sm text-muted-foreground">
+                <p className="font-medium text-foreground">No transcript</p>
+                {canPlay && (
+                  <p>
+                    Use Transcribe above to generate one.
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+        )}
+        {!maximizedSection && toolsAvailable && (
+          <details
+            className="group mx-4 mt-4 border-t"
+            data-testid="reader-tools"
+            open={toolsOpen}
+            onToggle={(event) => setToolsOpen(event.currentTarget.open)}
+          >
+            <summary className="flex cursor-pointer list-none items-center gap-1.5 py-2 text-xs font-medium text-muted-foreground hover:text-foreground">
+              <ChevronRight className="h-3.5 w-3.5 transition-transform group-open:rotate-90" aria-hidden="true" />
+              Tools
+            </summary>
+            {toolsOpen && (
+              <div className="space-y-3 pb-3 pt-1" data-testid="reader-tools-body">
+                {window.electronAPI?.deviceRecordingMarkers && (
+                  <DeviceRecordingMarkers
+                    key={`markers-${recording.id}`}
+                    subject={{ kind: 'recording', id: recording.id }}
+                    durationMs={durationSeconds > 0 ? Math.round(durationSeconds * 1000) : undefined}
+                    atMs={Math.round(currentTimeMs)}
+                    onSeek={handleReaderSeek}
+                    nativeImportAvailable={!!localPath && /\.mp3$/i.test(localPath)}
+                  />
+                )}
+                {localPath && /\.wav$/i.test(localPath) && window.electronAPI?.deviceAudio && (
+                  <DeviceRecordingTrackExport key={`tracks-${recording.id}`} recordingId={recording.id} />
+                )}
+              </div>
+            )}
+          </details>
+        )}
+
+        <div className="h-3" aria-hidden="true" />
         {sectionIsVisible('metadata') && (
           <ReaderSection
             section="metadata"
@@ -1753,6 +2224,47 @@ export function SourceReader({
             stickyTop={pins.stickyTop('metadata')}
             sentinelRef={pins.sentinelRef('metadata')}
           >
+            {isAudioSource && (<>
+            <dl className="grid grid-cols-2 gap-x-6 gap-y-2 pt-2 text-xs @md:grid-cols-3" data-testid="recording-audio-facts">
+              <div className="min-w-0">
+                <dt className="font-medium text-muted-foreground">Date</dt>
+                <dd className="mt-0.5 text-foreground">{formatSmartDate(recording.dateRecorded, { fallback: 'Unavailable' })}</dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="font-medium text-muted-foreground">Duration</dt>
+                <dd className="mt-0.5 text-foreground">{formatAudioDuration(durationSeconds)}</dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="font-medium text-muted-foreground">File size</dt>
+                <dd className="mt-0.5 text-foreground">{formatBytesOrUnavailable(audioMetadata?.byteLength ?? recording.size)}</dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="font-medium text-muted-foreground">Format</dt>
+                <dd className="mt-0.5 text-foreground">{audioFormat}</dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="font-medium text-muted-foreground">Channels</dt>
+                <dd className="mt-0.5 text-foreground">{audioChannels}</dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="font-medium text-muted-foreground">Sample rate</dt>
+                <dd className="mt-0.5 text-foreground">{sampleRateLabel}</dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="font-medium text-muted-foreground">{bitrateTitle}</dt>
+                <dd className="mt-0.5 text-foreground">{bitrateLabel}</dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="font-medium text-muted-foreground">Bit depth</dt>
+                <dd className="mt-0.5 text-foreground">{audioMetadata?.bitDepth.known ? `${audioMetadata.bitDepth.value} bit` : 'Unavailable'}</dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="font-medium text-muted-foreground">Meeting link</dt>
+                <dd className="mt-0.5 truncate text-foreground" title={meeting?.subject}>{meeting ? meeting.subject : 'Not linked'}</dd>
+              </div>
+            </dl>
+            </>)}
+
             {/* Independent identity fields: source filename, calendar subject, and
                 AI title suggestion are never aliases for the editable content title. */}
             <dl className="grid grid-cols-1 gap-x-6 gap-y-2 pt-2 text-xs @md:grid-cols-2" data-testid="source-identity-fields">
@@ -1943,7 +2455,7 @@ export function SourceReader({
               <div className="grid grid-cols-2 @md:grid-cols-3 @xl:grid-cols-4 gap-x-4 gap-y-2 text-sm">
                 <div>
                   <p className="text-xs font-medium text-muted-foreground mb-0.5">Size</p>
-                  <p>{recording.size ? formatBytes(recording.size) : 'Unknown'}</p>
+                  <p>{formatBytesOrUnavailable(recording.size)}</p>
                 </div>
                 {recording.quality && recording.quality !== 'unrated' && (
                   <div>
@@ -1988,202 +2500,6 @@ export function SourceReader({
               </div>
             </details>
           </ReaderSection>
-        )}
-
-        {/* Actions and decisions, promoted out of the player's graph into a
-            section of their own, so they survive any player mode. */}
-        {isAudioSource && sectionIsVisible('moments') && (
-          <ReaderSection
-            section="moments"
-            label="Actions & decisions"
-            mode={readerSectionModes.moments}
-            onModeChange={(mode) => changeSectionMode('moments', mode)}
-            onMaximize={() => toggleMaximizedSection('moments')}
-            maximized={maximizedSection === 'moments'}
-            pinned={isSectionPinned('moments')}
-            stickyTop={pins.stickyTop('moments')}
-            sentinelRef={pins.sentinelRef('moments')}
-          >
-            <TimelineEventList
-              events={timelineEvents}
-              eventDetails={eventDetails}
-              onEventUpdate={handleEventUpdate}
-              activeEventId={activeEventId}
-              onActivate={handleTimelineEventActivate}
-              recordingId={recording.id}
-            />
-          </ReaderSection>
-        )}
-        {showLowerWorkspace && (
-        // Box-less while the reading area is showing sections: a sticky header
-        // cannot escape an ancestor's box, so everything between a section and
-        // reader-scroll-body has to generate none.
-        //
-        // No pb-6 in either branch any more. It moved to the scroller, where it
-        // applies to both, and leaving a copy here charged the non-section
-        // states 72px of bottom padding where they used to pay 48.
-        <div className={cn(readingAreaHasSections && 'contents')}>
-          {/* Transcript / Artifact Content. The section branch supplies its own
-              horizontal padding (ReaderSection), so the reading area only pads
-              itself when it is showing one of the non-section states. */}
-          <div className={cn(readingAreaHasSections ? 'contents' : 'p-6')}>
-            {isDeviceOnly(recording) ? (
-              <div className="flex items-start gap-3 rounded-lg bg-muted/35 px-4 py-3">
-                <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-orange-500/10 text-orange-600 dark:text-orange-300">
-                  <CloudDownload className="h-4 w-4" aria-hidden="true" />
-                </div>
-                <div className="min-w-0">
-                  <h3 className="text-sm font-medium text-foreground">Stored on HiDock</h3>
-                  <p className="mt-0.5 text-sm leading-5 text-muted-foreground">
-                    Download to play, transcribe, and ask about the audio.
-                  </p>
-                  {!deviceConnected && (
-                    <p className="mt-1 text-xs font-medium text-orange-600 dark:text-orange-300">
-                      Connect the HiDock to start.
-                    </p>
-                  )}
-                </div>
-              </div>
-            ) : !isAudioSource ? (
-              <ArtifactReader recording={recording} onAskAboutSource={onAskAboutSource} />
-            ) : recording.transcriptionStatus === 'no_speech' ? (
-              <div className="mx-auto max-w-xl rounded-lg border border-border/70 bg-muted/30 px-5 py-6 text-center">
-                {tooShortSkip ? (
-                  <>
-                    <p className="font-medium text-foreground">Too short to transcribe</p>
-                    <p className="mt-2 text-sm text-muted-foreground">
-                      {tooShortSkip.seconds} {tooShortSkip.seconds === 1 ? 'second' : 'seconds'} of audio.
-                      Recordings under {tooShortSkip.minimumSeconds} seconds are skipped.
-                      To transcribe it anyway, choose Clear rating in its row menu, then pick a method from the arrow next to Transcribe.
-                      {/* A skipped clip is rated garbage, and the main process keeps
-                          garbage-rated audio away from every provider even on an
-                          explicit re-run. Clearing the rating is a user rating,
-                          which no automatic rater overwrites. */}
-                    </p>
-                  </>
-                ) : audioSkip ? (
-                  <>
-                    <p className="font-medium text-foreground">{audioSkip.title}</p>
-                    <p className="mt-2 text-sm text-muted-foreground">
-                      {audioSkip.detail} Transcription, summary and the other AI steps were skipped.
-                      To transcribe it anyway, choose Clear rating in its row menu, then pick a method from the arrow next to Transcribe.
-                    </p>
-                  </>
-                ) : (
-                  <>
-                    <p className="font-medium text-foreground">No intelligible speech detected</p>
-                    <p className="mt-2 text-sm text-muted-foreground">
-                      Automatic transcription, summary, participant inference, and meeting auto-linking were skipped.
-                      Re-run transcription if you believe this recording contains spoken words.
-                    </p>
-                  </>
-                )}
-              </div>
-            ) : effectiveTranscript ? (
-              // Box-less for the same reason. The rhythm space-y-4 and pt-2
-              // used to supply comes back as spacer siblings: a sibling is not
-              // an ancestor, so it cannot trap a sticky header the way a
-              // wrapper would. 8px before Summary, 16px before the transcript,
-              // which is exactly what the two utilities added.
-              <div className="contents">
-                {sectionIsVisible('summary') && (
-                  <div aria-hidden="true" className="h-2" data-testid="reader-gap-summary" />
-                )}
-                {sectionIsVisible('summary') && (
-                  <ReaderSection
-                    section="summary"
-                    label="Summary"
-                    mode={readerSectionModes.summary}
-                    onModeChange={(mode) => changeSectionMode('summary', mode)}
-                    onMaximize={() => toggleMaximizedSection('summary')}
-                    maximized={maximizedSection === 'summary'}
-                    pinned={isSectionPinned('summary')}
-                    stickyTop={pins.stickyTop('summary')}
-                    sentinelRef={pins.sentinelRef('summary')}
-                  >
-                    <div className="max-w-[75ch] text-sm leading-relaxed text-foreground">
-                      {trustedSummary(effectiveTranscript, recording.audioCategory)
-                        ? <p className="whitespace-pre-wrap">{trustedSummary(effectiveTranscript, recording.audioCategory)}</p>
-                        : effectiveTranscript.summary?.trim()
-                          ? <p className="text-muted-foreground">{untrustedSummaryNote(effectiveTranscript)}</p>
-                          : <p className="text-muted-foreground">No summary generated.</p>}
-                    </div>
-                  </ReaderSection>
-                )}
-
-                {sectionIsVisible('transcript') && (
-                  <div aria-hidden="true" className="h-4" data-testid="reader-gap-transcript" />
-                )}
-                {sectionIsVisible('transcript') && (
-                  <ReaderSection
-                    section="transcript"
-                    label="Full transcript"
-                    mode={readerSectionModes.transcript}
-                    onModeChange={(mode) => changeSectionMode('transcript', mode)}
-                    onMaximize={() => toggleMaximizedSection('transcript')}
-                    maximized={maximizedSection === 'transcript'}
-                    pinned={isSectionPinned('transcript')}
-                    stickyTop={pins.stickyTop('transcript')}
-                    sentinelRef={pins.sentinelRef('transcript')}
-                  >
-                        {transcript && (
-                          <TranscriptIntegrityPanel
-                            recordingId={recording.id}
-                            transcript={transcript}
-                            durationSeconds={recording.duration}
-                            onRetranscribe={onTranscribe}
-                            onChanged={onIntegrityChanged}
-                            onJump={(code) => setIssueJump({ code, nonce: Date.now() })}
-                          />
-                        )}
-                        <TranscriptViewer
-                          transcript={effectiveTranscript.full_text}
-                          segments={transcriptSegments}
-                          recordingId={recording.id}
-                          currentTimeMs={currentTimeMs}
-                          isPlaying={isPlaying}
-                          highlightRequest={transcriptHighlight}
-                          issueJump={issueJump}
-                          onSeek={handleReaderSeek}
-                          showSummary={false}
-                          showTranscriptHeader={false}
-                          /* H3: action items live in ONE home — the Actions & decisions section. */
-                          showActionItems={false}
-                          actionItems={actionItems}
-                          onTranscriptUpdated={handleTranscriptUpdated}
-                        />
-                  </ReaderSection>
-                )}
-              </div>
-            ) : recording.transcriptionStatus === 'complete' && transcriptFetchingFor === recording.id ? (
-              // Lines in the shape of a transcript hold the space while it is read
-              // (owner, 2-oct-2026), instead of a message that says it is missing.
-              <Working label="Loading transcript" shape="lines" rows={8} />
-            ) : recording.transcriptionStatus === 'complete' ? (
-              <div className="text-center text-muted-foreground py-8">
-                <p>Transcript not available</p>
-              </div>
-            ) : recording.transcriptionStatus === 'pending' || recording.transcriptionStatus === 'processing' ? (
-              // Looks like work, not a sentence (owner, 2-oct-2026): the transcript's
-              // shape with a moving shimmer, a clock while it waits its turn, a
-              // spinner and the percentage while it runs.
-              recording.transcriptionStatus === 'processing' ? (
-                <Working label="Transcribing" shape="lines" rows={8} progress={transcriptionProgress} />
-              ) : (
-                <Working label="Waiting to be transcribed" shape="lines" rows={8} waiting />
-              )
-            ) : (
-              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 py-3 text-sm text-muted-foreground">
-                <p className="font-medium text-foreground">No transcript</p>
-                {canPlay && (
-                  <p>
-                    Use Transcribe above to generate one.
-                  </p>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
         )}
       </div>
 
@@ -2313,6 +2629,33 @@ function findAudioSkip(runs: ReaderProcessingRun[]): { title: string; detail: st
   }
 }
 
+/** At most three words of an action or decision, for a compact chip. The full text stays in the row. */
+function chipWords(text: string): string {
+  const words = text.trim().split(/\s+/).filter(Boolean)
+  return words.slice(0, 3).join(' ')
+}
+
+/** A measured length: an em dash when unknown, milliseconds under one second, never a made-up 0. */
+function formatAudioDuration(seconds: number): string {
+  if (!(Number.isFinite(seconds) && seconds > 0)) return '—'
+  if (seconds < 0.001) return '<1 ms'
+  if (seconds < 1) return `${Math.max(1, Math.round(seconds * 1000))} ms`
+  return formatDuration(seconds)
+}
+
+function formatCompactAudioClock(seconds: number): string {
+  if (seconds > 0 && seconds < 0.001) return '<1 ms'
+  if (seconds > 0 && seconds < 1) {
+    const milliseconds = Math.round(seconds * 1000)
+    return milliseconds === 1000 ? '0:01' : `0:00.${String(milliseconds).padStart(3, '0')}`
+  }
+  return formatTimestamp(seconds)
+}
+
+function formatBytesOrUnavailable(size: number | null | undefined): string {
+  return typeof size === 'number' && Number.isFinite(size) && size >= 0 ? formatBytes(size) : 'Unavailable'
+}
+
 function processingStageLabel(stage: ReaderProcessingRun['stage']): string {
   switch (stage) {
     case 'meeting-resolution': return 'Meeting match'
@@ -2398,6 +2741,17 @@ function ProcessingRunChips({ runs }: { runs: ReaderProcessingRun[] }) {
       <span className="mr-0.5 text-[11px] font-medium text-muted-foreground">Processing timeline</span>
       {visible.map((run) => {
         const provider = processingProviderLabel(run)
+        let executionLabel = run.execution || 'not reported'
+        let remoteHost: string | null = null
+        try {
+          const quality = JSON.parse(run.quality_json || '{}')
+          if (quality.executionLocation === 'remote') {
+            remoteHost = typeof quality.host === 'string' ? quality.host : 'Remote host'
+            executionLabel = `${remoteHost}${quality.device ? ` (${quality.device})` : ''}`
+          } else if (run.stage === 'diarization' && !quality.executionLocation && run.provider !== 'gemini') {
+            executionLabel = 'location not recorded'
+          }
+        } catch { /* historical malformed evidence is unknown */ }
         const duration = formatProcessingDuration(run.duration_ms)
         const providerTimeline = run.stage === 'transcription' ? formatProviderTimeline(run.usage_json) : []
         const blocked = run.quality_status === 'blocked'
@@ -2409,7 +2763,7 @@ function ProcessingRunChips({ runs }: { runs: ReaderProcessingRun[] }) {
           blocked ? `Attempted tool: ${provider}` : null,
           run.model ? `Model: ${run.model}` : 'Model: not reported',
           run.version ? `Version: ${run.version}` : 'Version: not reported',
-          `Execution: ${run.execution || 'not reported'}`,
+          `Execution: ${executionLabel}`,
           run.quality_status ? `Quality: ${run.quality_status}` : null,
           duration ? `Duration: ${duration}` : 'Duration: not reported',
           run.started_at ? `Started: ${run.started_at}` : null,
@@ -2430,11 +2784,138 @@ function ProcessingRunChips({ runs }: { runs: ReaderProcessingRun[] }) {
             data-stage={run.stage}
             data-provider={run.provider}
           >
-            {run.execution === 'local' ? <Cpu className="h-3 w-3" /> : <Cloud className="h-3 w-3" />}
-            {processingStageLabel(run.stage)} · {blocked ? 'blocked' : provider}{duration ? ` · ${duration}` : ''}{statusSuffix}
+            {run.execution === 'local' && !remoteHost ? <Cpu className="h-3 w-3" /> : <Cloud className="h-3 w-3" />}
+            {processingStageLabel(run.stage)} · {blocked ? 'blocked' : provider}{remoteHost ? ` · ${remoteHost}` : ''}{duration ? ` · ${duration}` : ''}{statusSuffix}
           </span>
         )
       })}
+    </div>
+  )
+}
+
+
+/**
+ * DockPlayerControls: the compact player, ONE row: play, back, forward, time, speed.
+ * Re-transcribe and Ask about this source follow it in the same row (rendered by the
+ * reader). Clicking the time/detail chevron toggles the expanded detail. It uses the
+ * same audio controls and playback state the full player uses; nothing is faked, and
+ * an unknown duration reads as an em dash, never 0:00.
+ */
+function DockPlayerControls({
+  recordingId,
+  filePath,
+  durationSec,
+  detailOpen,
+  onToggleDetail,
+  onPlay,
+  onStop
+}: {
+  recordingId: string
+  filePath?: string
+  durationSec: number
+  detailOpen: boolean
+  onToggleDetail: () => void
+  onPlay?: () => void
+  onStop?: () => void
+}) {
+  const audio = useAudioControls()
+  const prefs = usePlayerPreferences()
+  const isPlayingThis = useUIStore((st) => st.isPlaying && st.currentlyPlayingId === recordingId)
+  const loadedThis = useUIStore((st) => st.currentlyPlayingId === recordingId)
+  const currentTime = useUIStore((st) => st.playbackCurrentTime)
+  const liveDuration = useUIStore((st) => (st.currentlyPlayingId === recordingId && Number.isFinite(st.playbackDuration) ? st.playbackDuration : 0))
+  const [rate, setRate] = useState('1')
+  const total = liveDuration > 0 ? liveDuration : durationSec
+  const position = loadedThis ? currentTime : 0
+  const timeLabel = total > 0 ? `${formatCompactAudioClock(position)} / ${formatCompactAudioClock(total)}` : '— / —'
+
+  const togglePlay = () => {
+    if (loadedThis) {
+      if (isPlayingThis) {
+        audio.pause()
+        onStop?.()
+      } else {
+        audio.resume()
+        onPlay?.()
+      }
+    } else if (filePath) {
+      void audio.play(recordingId, filePath)
+      onPlay?.()
+    }
+  }
+
+  return (
+    <div className="flex shrink-0 items-center gap-1.5" data-testid="reader-dock-player">
+      <Button
+        size="icon"
+        className="h-7 w-7 shrink-0"
+        onClick={togglePlay}
+        disabled={!filePath}
+        aria-label={isPlayingThis ? 'Pause' : 'Play'}
+        title={isPlayingThis ? 'Pause' : 'Play'}
+      >
+        {isPlayingThis ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+      </Button>
+      <Button
+        variant="outline"
+        size="icon"
+        className="h-7 w-7 shrink-0"
+        onClick={() => audio.seek(Math.max(0, position - prefs.skipSeconds))}
+        disabled={!loadedThis}
+        aria-label="Skip back"
+        title="Skip back"
+      >
+        <SkipBack className="h-3.5 w-3.5" />
+      </Button>
+      <Button
+        variant="outline"
+        size="icon"
+        className="h-7 w-7 shrink-0"
+        onClick={() => audio.seek(Math.min(total, position + prefs.skipSeconds))}
+        disabled={!loadedThis || total <= 0}
+        aria-label="Skip forward"
+        title="Skip forward"
+      >
+        <SkipForward className="h-3.5 w-3.5" />
+      </Button>
+      <button
+        type="button"
+        onClick={onToggleDetail}
+        aria-expanded={detailOpen}
+        aria-controls="reader-player-detail"
+        aria-label={detailOpen ? 'Hide player detail' : 'Show player detail'}
+        className="inline-flex items-center gap-1 rounded px-1 text-xs tabular-nums text-muted-foreground hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/50"
+        data-testid="reader-dock-time"
+      >
+        <ChevronRight className={cn('h-3 w-3 transition-transform', detailOpen && 'rotate-90')} aria-hidden="true" />
+        {timeLabel}
+      </button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 w-[58px] shrink-0 rounded-full px-2.5 text-xs"
+            aria-label="Playback speed"
+            title="Playback speed"
+          >
+            {speedLabel(parseFloat(rate))}
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start">
+          {prefs.playbackSpeeds.map((speed) => (
+            <DropdownMenuItem
+              key={speed}
+              onClick={() => {
+                setRate(String(speed))
+                audio.setPlaybackRate(speed)
+              }}
+            >
+              {speedLabel(speed)}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   )
 }
@@ -2473,6 +2954,9 @@ interface ReaderPlayerProps {
   onEventClick?: (event: TimelineEvent) => void
   /** Highlighted event id, owned by the reader and shared with the list. */
   activeEventId?: string | null
+  /** Expanded display switches; both default on. */
+  showWaveform?: boolean
+  showSentiment?: boolean
   /**
    * The player section's own controls (layout and section mode). Rendered
    * immediately after the player's box, on the row that holds the 1x speed
@@ -2496,6 +2980,8 @@ function ReaderPlayer({
   splitPointSec,
   onEventClick,
   activeEventId = null,
+  showWaveform = true,
+  showSentiment = true,
   controls,
 }: ReaderPlayerProps) {
   const regionRef = useRef<HTMLDivElement>(null)
@@ -2569,6 +3055,9 @@ function ReaderPlayer({
             splitPointSec={splitPointSec}
             onEventClick={onEventClick}
             activeEventId={activeEventId}
+            showWaveform={showWaveform}
+            showSentiment={showSentiment}
+            hideTransport={big}
           />
         </div>
 

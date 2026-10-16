@@ -257,7 +257,13 @@ export interface AppConfig {
     autoClipboard?: boolean
   }
   transcription: {
-    provider: 'gemini' | 'local-asr' | 'vibevoice'
+    provider: 'gemini' | 'local-asr' | 'vibevoice' | 'remote-worker' | 'muse-voice' | 'mai-transcribe-2'
+    museVoiceApiKey?: string
+    maiTranscribeApiKey?: string
+    maiTranscribeEndpoint?: string
+    transcriptionExecution?: 'local' | 'remote' | 'auto'
+    recordedAudioChannelMode?: 'preserve' | 'mixed'
+    remoteAsrModel?: string
     geminiApiKey: string
     geminiModel: string
     localAsrPath: string
@@ -274,8 +280,18 @@ export interface AppConfig {
     speakerLinkingTimeoutSeconds: number
     /** Share of logical CPUs the diarization worker may use, 1-100. */
     speakerLinkingCpuPercent?: number
+    maxConcurrentRecordings?: 1 | 2
+    localComputePriority?: 'low' | 'below-normal' | 'normal'
+    localModelIdleSeconds?: number
+    localComputeAccelerator?: 'auto' | 'cpu'
+    resourcePolicyVersion?: number
+    pauseLocalOnBattery?: boolean
+    pauseLocalWhenBusy?: boolean
     /** Address of the machine that runs the speaker models. Empty = this one. */
     modelHostUrl?: string
+    remoteDiarizationModel?: string
+    modelHostCertificatePem?: string
+    modelHostLocalFallback?: boolean
     /** Token this computer got when it paired with that host. */
     modelHostToken?: string
     /** When the gamestation steps aside: any use, only games, or never. */

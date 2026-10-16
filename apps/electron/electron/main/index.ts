@@ -1,3 +1,4 @@
+import { stopLocalComputeAdmission } from './services/local-compute-slot'
 import { app, shell, BrowserWindow, session, ipcMain, dialog } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -18,9 +19,16 @@ const USB_PRODUCT_IDS = [
   0xaf0f,  // P1 Mini
   0x2041   // P1 Mini (alternate)
 ]
-import { initializeDatabase, closeDatabase, isGraphProvenanceCleanupRegistered, run, queryAll } from './services/database'
+import {
+  initializeDatabase, closeDatabase, closeDatabaseBackupWorker, isGraphProvenanceCleanupRegistered, run, queryAll,
+} from './services/database'
 import { installPipeline } from './services/pipeline/install'
+import { getActiveTranscriptions } from './services/transcription-activity'
+import { BackendTray } from './services/backend-tray'
+import { getRAGService } from './services/rag'
+import { getBackendRagActiveCount } from './services/backend-rag'
 import { initializeConfig, getConfig } from './services/config'
+import { isRecoveryMode } from './recovery-mode'
 import { getJensenDevice, setAutoConnectChecker } from './services/jensen'
 import { initializeStartupStorage } from './storage-startup'
 import { registerIpcHandlers } from './ipc/handlers'
@@ -35,6 +43,10 @@ import {
 } from './services/recording-watcher'
 import {
   stopTranscriptionProcessor,
+  getTranscriptionStatus,
+  pauseQueue,
+  isQueuePaused,
+  resumeQueue,
   setMainWindowForTranscription
 } from './services/transcription'
 import { setMainWindowForEventBus } from './services/event-bus'
@@ -53,8 +65,9 @@ import { configureEarlyStartup } from './startup-configuration'
 import { getStartupState } from './startup-state'
 import { revealMainWindow, type WindowRevealReason } from './window-reveal'
 import { startAppBrain, stopAppBrain } from './services/brain-app'
-import { finishLiveRecording, getLiveRecordingState } from './ipc/jensen-handlers'
+import { shutdownJensenResources, getLiveRecordingState } from './ipc/jensen-handlers'
 import { initConnectors } from './services/connectors'
+import { runDeviceValidationSmoke } from './device-validation-smoke'
 
 const startup = getStartupState()
 configureEarlyStartup() // idempotent fallback when this module is launched directly in tests/tools
@@ -62,6 +75,21 @@ const runtimeDir = startup.runtimeDir ?? __dirname
 let mainWindow: BrowserWindow | null = startup.mainWindow
 let splashWindow: BrowserWindow | null = startup.splashWindow
 let mainWindowReveal: Promise<WindowRevealReason | null> | null = null
+const backendOnly = process.argv.includes('--backend-only')
+let servicesReady = false
+let backendTray: BackendTray | null = null
+
+function activeBackendJobs(): number {
+  return Math.max(getActiveTranscriptions().length, getTranscriptionStatus().isProcessing ? 1 : 0) + Math.max(getRAGService().getActiveRequestCount(), getBackendRagActiveCount())
+}
+
+function attachUi(): void {
+  if (!servicesReady) { startup.uiRequested = true; return }
+  if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.show(); mainWindow.focus(); return }
+  createWindow()
+}
+startup.requestUi = attachUi
+app.on('activate', attachUi)
 
 async function updateSplashStatus(status: string, progress?: number): Promise<void> {
   if (splashWindow && !splashWindow.isDestroyed()) {
@@ -148,6 +176,21 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
+  setWatcherMainWindow(mainWindow)
+  setMainWindowForTranscription(mainWindow)
+  setMainWindowForEventBus(mainWindow)
+  setMainWindowForMigration(mainWindow)
+  setMainWindowForValueBackfill(mainWindow)
+  mainWindow.on('closed', () => {
+    mainWindow = null
+    startup.mainWindow = null
+    setWatcherMainWindow(null)
+    setMainWindowForTranscription(null)
+    setMainWindowForEventBus(null)
+    setMainWindowForMigration(null)
+    setMainWindowForValueBackfill(null)
+  })
+
   // Load the app
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
@@ -161,7 +204,7 @@ async function initializeServices(): Promise<boolean> {
   console.log('Initializing services...')
 
   await updateSplashStatus('Loading configuration...', 10)
-  await initializeConfig()
+  await initializeConfig({ persist: !isRecoveryMode() })
   console.log('Config initialized')
 
   // Track I (Review-2 [CRITICAL]): snapshot the effective feature state from the
@@ -180,6 +223,7 @@ async function initializeServices(): Promise<boolean> {
   // it. On a multi-gigabyte library on a USB disk that takes minutes, and the
   // splash has to say so instead of a bare "Initializing".
   await initializeDatabase({
+    existingSchemaOnly: process.argv.includes('--no-schema-work') || isRecoveryMode(),
     onProgress: (p) => {
       if (p.phase === 'backup') {
         const gb = (n: number) => (n / 1024 ** 3).toFixed(1)
@@ -212,9 +256,18 @@ async function initializeServices(): Promise<boolean> {
   // The second brain's API for agents, served from this process while the app
   // is open. Starting it also asks a headless --brain-only process, if an agent
   // launched one earlier, to step down: while the app runs it is the one door.
-  startAppBrain({ getLiveRecording: getLiveRecordingState }).catch((e) =>
-    console.error('[Brain] could not start the agent API:', e)
-  )
+  const brainStart = startAppBrain({
+    getLiveRecording: getLiveRecordingState,
+    backend: {
+      status: () => ({ mode: backendOnly ? 'backend' : 'desktop', recoveryMode: isRecoveryMode(), schemaWorkDisabled: process.argv.includes('--no-schema-work') || isRecoveryMode(), servicesReady, uiAttached: Boolean(mainWindow && !mainWindow.isDestroyed()), queue: getTranscriptionStatus(), tray: backendTray?.status() ?? null }),
+      attachUi,
+      canStop: () => activeBackendJobs() === 0,
+      stop: () => app.quit(),
+    },
+  })
+  // A windowless backend must fail startup if its only operational door fails.
+  if (backendOnly) await brainStart
+  else brainStart.catch((e) => console.error('[Brain] could not start the agent API:', e))
 
   // spec-006/F17 T6 AR3-1 — loud startup tripwire. registerRecordingDeletionHandlers()
   // (called from registerIpcHandlers() above) wires the graph-provenance
@@ -249,12 +302,13 @@ async function initializeServices(): Promise<boolean> {
   // live enable (USB safety — activation only across a reboot). Teardown /
   // observation IPC stays reachable via the boot-only half of the gate.
   setAutoConnectChecker(
-    () => getConfig().device.autoConnect === true && isFeatureEnabled('device-sync')
+    () => !backendOnly && !isRecoveryMode()
+      && getConfig().device.autoConnect === true && isFeatureEnabled('device-sync')
   )
 
   // CS-010: Initialize calendar auto-sync after IPC handlers and DB are ready.
   // Track I: gated on the Calendar feature (skipped under library-only).
-  if (isFeatureEnabled('calendar')) {
+  if (!backendOnly && isFeatureEnabled('calendar')) {
     // Before the first sync: every sync ends by checking the time-only meeting
     // links against the new times (a stale calendar linked a call to lunch, 2-oct-2026).
     startMeetingLinkRecheck()
@@ -264,7 +318,8 @@ async function initializeServices(): Promise<boolean> {
   // Connectors (Layer 2): build the host + attempt silent (non-interactive)
   // resume for connectors that already have credentials. Never launches an
   // interactive sign-in on startup; failures are best-effort.
-  initConnectors().catch((e) => console.error('[Connectors] startup wiring failed:', e))
+  if (!backendOnly && !isRecoveryMode())
+    initConnectors().catch((e) => console.error('[Connectors] startup wiring failed:', e))
 
   await updateSplashStatus('Starting application...', 100)
   return true
@@ -325,7 +380,7 @@ app.whenReady().then(async () => {
   // Do not start service initialization until the splash preload and first DOM
   // frame exist; otherwise the first progress IPC messages are lost and the
   // user sees a grey/zero-progress gap.
-  if (!splashWindow || splashWindow.isDestroyed()) {
+  if (!backendOnly && (!splashWindow || splashWindow.isDestroyed())) {
     splashWindow = await createSplashWindow(join(runtimeDir, '../preload/splash.js'))
     startup.splashWindow = splashWindow
   }
@@ -395,7 +450,32 @@ app.whenReady().then(async () => {
     return
   }
 
-  createWindow()
+  servicesReady = true
+  if (backendOnly && process.platform === 'win32') {
+    backendTray = new BackendTray({
+      isPaused: isQueuePaused,
+      activeJobs: activeBackendJobs,
+      pause: () => { pauseQueue() },
+      resume: () => { resumeQueue({ directedOnly: true }) },
+      openUi: attachUi,
+      quit: () => app.quit(),
+      restart: () => {
+        const args = process.argv.slice(1)
+        if (!args.includes('--no-schema-work')) args.push('--no-schema-work')
+        app.relaunch({ args })
+        app.quit()
+      },
+    })
+    startup.backendTray = backendTray
+  }
+  if (!backendOnly || startup.uiRequested) createWindow()
+  if (mainWindow && process.argv.includes('--device-validation-smoke')) {
+    void runDeviceValidationSmoke(mainWindow).catch(() => console.warn('[Validation] Explicit packaged smoke unavailable'))
+  }
+
+  // Explicit backend mode owns the DB/API but starts no unattended import,
+  // transcription or backfill jobs. Requests will admit work individually.
+  if (backendOnly || isRecoveryMode()) return
 
   if (mainWindow) {
     setWatcherMainWindow(mainWindow)
@@ -455,9 +535,6 @@ app.whenReady().then(async () => {
 
   console.log('Background services scheduled')
 
-  app.on('activate', function () {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
-  })
 }).catch((error: unknown) => {
   console.error('[Startup] Application initialization failed:', error)
   // The bootstrap import cannot catch rejections from this independent ready callback.
@@ -468,7 +545,7 @@ app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
+  if (!backendOnly && process.platform !== 'darwin') {
     app.quit()
   }
 })
@@ -476,6 +553,9 @@ app.on('window-all-closed', () => {
 /** How long quitting waits for the USB device to let go before leaving anyway. */
 const USB_RELEASE_TIMEOUT_MS = 2000
 app.on('before-quit', createQuitCleanup(async () => {
+  stopLocalComputeAdmission()
+  await closeDatabaseBackupWorker()
+  backendTray?.dispose()
   // The first quit is held back once so the USB device can be released. The
   // app used to exit with the device still open, and the process then crashed
   // inside libusb's teardown (exit code 139) after this cleanup had run.
@@ -483,7 +563,11 @@ app.on('before-quit', createQuitCleanup(async () => {
   // headless brain instead of knocking on a door that is closing.
   void stopAppBrain().catch(() => {})
   stopAutoSync() // B-CAL-002: Clean up calendar auto-sync interval
-  finishLiveRecording() // a stream still playing is saved; the next start imports it
+  try {
+    await shutdownJensenResources() // transfer drain, live file finalization, then drive unmount
+  } catch {
+    console.warn('[Quit] Device storage or audio cleanup failed')
+  }
   stopRecordingWatcher()
   stopTranscriptionProcessor()
   stopVoiceBackfill()

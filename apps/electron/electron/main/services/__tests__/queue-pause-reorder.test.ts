@@ -19,6 +19,7 @@ const mockGetRecordingById = vi.fn((_id?: string): any => undefined)
 
 vi.mock('../database', () => ({
   addToQueue: vi.fn(),
+  getOwnedPipelineRecordings: vi.fn(() => []),
   getRecordingById: (id?: string) => mockGetRecordingById(id),
   resolveRecordingId: vi.fn(),
   updateRecordingTranscriptionStatus: vi.fn(),

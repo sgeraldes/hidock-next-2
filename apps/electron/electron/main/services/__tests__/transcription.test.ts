@@ -118,6 +118,8 @@ let mockConfig = {
 
 // Mock database
 vi.mock('../database', () => ({
+  getOwnedPipelineRecordings: vi.fn(() => []),
+  getOwnedProcessingRuns: vi.fn(() => new Map()),
   addToQueue: (...args: any[]) => mockAddToQueue(...args),
   getRecordingById: (...args: any[]) => mockGetRecordingById(...args),
   updateRecordingStatus: (...args: any[]) => mockUpdateRecordingStatus(...args),
@@ -175,6 +177,25 @@ vi.mock('../recording-eligibility', () => ({
   isRecordingEligible: (...args: any[]) => mockIsRecordingEligible(...args),
   isRecordingTranscribable: (id: string, options?: { ignoreValueExclusion?: boolean }) =>
     options?.ignoreValueExclusion ? mockIsRecordingProcessable(id) : mockIsRecordingEligible(id)
+}))
+
+// File inspection/state persistence are separate real-boundary suites. These
+// legacy orchestration fixtures intentionally use nonexistent mono file paths.
+vi.mock('../stored-audio-channels', () => ({
+  inspectStoredAudio: vi.fn(async () => ({
+    container: 'wav', codec: 'pcm_s16le', channels: 1, sampleRate: 16000,
+    durationSeconds: 60, durationSource: 'decoded-frames', originalSha256: 'a'.repeat(64)
+  })),
+  prepareStoredAudioChannels: vi.fn(async () => { throw new Error('Unexpected channel preparation in mono fixture') })
+}))
+vi.mock('../recorded-audio-state', () => ({
+  RecordedAudioState: class {
+    saveLayout = vi.fn()
+    getLayout = vi.fn(() => null)
+    getMapping = vi.fn(() => null)
+    saveTracks = vi.fn()
+    getTracks = vi.fn(() => [])
+  }
 }))
 
 vi.mock('../audio-preflight', () => ({
@@ -292,6 +313,7 @@ describe('Transcription Service', () => {
     vi.clearAllMocks()
     // clearAllMocks keeps mockReturnValue impls, so re-assert the defaults so an
     // INC-2/INC3 test that flips them cannot leak into others.
+    mockInsertTranscript.mockReset()
     mockIsRecordingProcessable.mockReturnValue(true)
     mockIsRecordingEligible.mockReturnValue(true)
     mockGenerateContent.mockRejectedValue(new Error('API rate limit exceeded'))
@@ -377,7 +399,7 @@ describe('Transcription Service', () => {
       expect(mockUpdateRecordingStatus).toHaveBeenCalledWith('rec-no-speech', 'no_speech')
       expect(vi.mocked(database.retireGeneratedContentForNoSpeech)).toHaveBeenCalledWith('rec-no-speech')
       expect(mockRemoveRecordingFromGraph).toHaveBeenCalledWith('rec-no-speech')
-      expect(vi.mocked(database.createProcessingRun)).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(database.createProcessingRun)).toHaveBeenCalledTimes(2)
       expect(vi.mocked(database.createProcessingRun)).toHaveBeenCalledWith(
         expect.objectContaining({ stage: 'vad', tool: 'ffmpeg-silencedetect', execution: 'local' })
       )
@@ -974,7 +996,7 @@ describe('Transcription Service', () => {
         (vi.mocked(database.completeProcessingRun).mock.calls.find(([id]) => id === runId)?.[1] as any)?.outputRefs?.skipped
       expect(skippedBy('run-actionable-detection')).toBe('transcript-untrusted')
       expect(skippedBy('run-timeline-analysis')).toBe('transcript-untrusted')
-      expect(skippedBy('run-graph-sync')).toBe('transcript-untrusted')
+      expect(vi.mocked(database.createProcessingRun)).not.toHaveBeenCalledWith(expect.objectContaining({ stage: 'graph-sync' }))
     })
 
     it('leaves a transcript the check trusts to the content rating, and stores its validity', { timeout: 20000 }, async () => {
@@ -1165,7 +1187,7 @@ describe('Transcription Service', () => {
       mockConfig.transcription.provider = 'local-asr'
       mockConfig.transcription.geminiApiKey = 'test-api-key' // so analyze WOULD call the provider absent the gate
       mockIsRecordingProcessable.mockReturnValue(true)
-      mockIsRecordingEligible.mockReturnValueOnce(true).mockReturnValue(false)
+      mockIsRecordingEligible.mockReturnValue(true)
       mockGetQueueItems.mockImplementation((status?: string) =>
         status === 'pending'
           ? [{ id: 'queue-adv42', recording_id: 'rec-adv42', filename: 'a.wav', status: 'pending', attempts: 0 }]
@@ -1177,11 +1199,12 @@ describe('Transcription Service', () => {
         file_path: 'G:\\Recordings\\a.wav',
         status: 'complete'
       })
-      mockExecFile.mockImplementation(() =>
-        makeFakeChildProcess(
+      mockExecFile.mockImplementation(() => {
+        mockIsRecordingEligible.mockReturnValue(false)
+        return makeFakeChildProcess(
           JSON.stringify({ text: 'Speaker 1: hola.', language: 'es', duration_seconds: 5, processing_time_seconds: 1 })
         )
-      )
+      })
 
       const { startTranscriptionProcessor, stopTranscriptionProcessor } = await import('../transcription')
       startTranscriptionProcessor()
@@ -1680,3 +1703,16 @@ describe('repairJsonString — bracket balancing (ISSUE-9)', () => {
 // Recency-first queue ordering (orderPendingForProcessing) is covered in the
 // lightweight queue-ordering.test.ts — kept separate so those tests don't share
 // this file's worker, which OOMs at collection under Node 26 / vitest 4.
+
+// Pipeline fixtures do not contain audio bytes; durable replay is exercised against SQLite separately.
+vi.mock('../stage-checkpoints', () => ({
+  readStageCheckpoint: () => undefined,
+  saveStageCheckpoint: () => {},
+  audioFingerprint: async () => 'fixture-audio-hash',
+  stageFingerprint: (...inputs: unknown[]) => JSON.stringify(inputs),
+  checkpointStage: async (_id: string, _stage: string, _hash: string, action: () => Promise<unknown>) => action()
+}))
+
+vi.mock('../provider-checkpoints', () => ({
+  providerCheckpoints: () => ({ execute: async (_key: string, request: () => Promise<unknown>) => request() })
+}))

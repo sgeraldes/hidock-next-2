@@ -1,0 +1,3 @@
+# These private observation candidates are pinned in the firmware source audit.
+native-vad-observation.ts -text
+native-vad-observation.test.ts -text

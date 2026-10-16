@@ -32,6 +32,7 @@ import type {
   BluetoothStatus,
 } from '@hidock/jensen-protocol'
 import { isFeatureOffThisRun } from '@/lib/bootFeatures'
+import type { DeviceAudioStartOptions } from '@/shared/device-audio'
 
 // Drain trailing `jensen:download-chunk` events after the downloadFile invoke
 // resolves. Poll every IDLE_MS until the received count stops growing or
@@ -345,8 +346,8 @@ export class JensenIpcClient {
     return window.electronAPI.jensen.getRealtimeSettings()
   }
 
-  async startRealtime(): Promise<{ result: string } | null> {
-    return window.electronAPI.jensen.startRealtime()
+  async startRealtime(options?: DeviceAudioStartOptions): Promise<{ result: string; error?: string } | null> {
+    return window.electronAPI.jensen.startRealtime(options)
   }
 
   async pauseRealtime(): Promise<{ result: string } | null> {

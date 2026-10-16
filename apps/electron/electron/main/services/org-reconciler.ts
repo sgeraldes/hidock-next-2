@@ -35,6 +35,7 @@ import {
   recordProjectDiscoveryObservation,
   clearProjectDiscoveryObservations,
   getProjectDiscoveryCorroborations,
+  isHumanCorrelationMethod,
   type RecordingPreassignment,
   type BucketRecording,
   type BucketResolution,
@@ -89,6 +90,18 @@ interface RecordingRow {
   duration_seconds?: number
   file_size?: number
   meeting_id?: string
+  correlation_method?: string | null
+}
+
+/**
+ * A stored link that records a human decision (manual, user_override, user_preassign,
+ * user_standalone, user_preassign_standalone: the shared predicate in database.ts).
+ * Every automatic writer in this file leaves such a row alone; only a human method
+ * may replace it. The leading truthiness check keeps rows without the column (older
+ * fixtures, a null method) from touching the predicate at all.
+ */
+function holdsHumanChoice(row: { correlation_method?: string | null }): boolean {
+  return !!row.correlation_method && isHumanCorrelationMethod(row.correlation_method)
 }
 
 /**
@@ -223,7 +236,7 @@ export function autoLinkRecordingsToMeetings(): number {
   // Exclude rows the user forced standalone — their choice must survive every
   // reconcile pass, even after the preassignment row is consumed.
   const recordings = queryAll<RecordingRow>(
-    `SELECT id, filename, date_recorded, duration_seconds, file_size, meeting_id
+    `SELECT id, filename, date_recorded, duration_seconds, file_size, meeting_id, correlation_method
      FROM recordings
      WHERE meeting_id IS NULL AND date_recorded IS NOT NULL
        AND deleted_at IS NULL AND COALESCE(personal, 0) = 0
@@ -295,6 +308,12 @@ export function autoLinkRecordingsToMeetings(): number {
       // meeting_id points at a meeting that no longer exists — fall through to
       // time-overlap (still consume the stale preassignment).
     }
+
+    // The SQL above excludes only user_preassign_standalone. A row with no meeting
+    // that carries any other human method (user_standalone, or a manual link whose
+    // meeting was deleted) is a human decision too: time overlap must not fill it.
+    // The preassignment branch above stays free to replace it, being human itself.
+    if (holdsHumanChoice(rec)) continue
 
     const recStart = new Date(rec.date_recorded).getTime()
     if (!Number.isFinite(recStart)) continue
@@ -1196,8 +1215,31 @@ interface DuplicateRecordingRow {
   on_device?: number | null
   on_local?: number | null
   meeting_id?: string | null
+  correlation_confidence?: number | null
+  correlation_method?: string | null
   /** Whether a transcript row points at this recording. */
   hasTranscript?: boolean
+}
+
+/**
+ * Which row of a duplicate-recording group decides the surviving meeting link.
+ * Policy (the group is one audio file under several names, so it has one link):
+ *   1. the keeper's own human choice, if it has one;
+ *   2. otherwise a human choice on any other row (an owner decision outranks any
+ *      automatic link, including the keeper's), the keeper's order first;
+ *   3. otherwise the pre-existing behaviour: the keeper's meeting, or else the first
+ *      row that has one. Nothing human is involved, so only meeting_id moves, as before.
+ * Pure so the policy is testable without a database.
+ */
+export function pickLinkSourceForMergedRecordings<T extends DuplicateRecordingRow>(
+  keeper: T,
+  rows: T[]
+): { row: T | null; human: boolean } {
+  if (holdsHumanChoice(keeper)) return { row: keeper, human: true }
+  const human = rows.find((r) => holdsHumanChoice(r))
+  if (human) return { row: human, human: true }
+  const automatic = keeper.meeting_id ? keeper : rows.find((r) => r.meeting_id)
+  return { row: automatic ?? null, human: false }
 }
 
 /** Strip a recording audio extension so .hda/.wav/.mp3/.m4a variants group together. */
@@ -1256,7 +1298,8 @@ export function mergeDuplicateRecordings(): number {
 
 function* mergeRecordingBatches(totals: { groups: number; rows: number }): Generator<void> {
   const recordings = queryAll<DuplicateRecordingRow>(
-    `SELECT id, filename, file_path, created_at, on_device, on_local, meeting_id FROM recordings`
+    `SELECT id, filename, file_path, created_at, on_device, on_local, meeting_id,
+            correlation_confidence, correlation_method FROM recordings`
   )
   if (recordings.length === 0) return
 
@@ -1352,7 +1395,8 @@ function* mergeRecordingBatches(totals: { groups: number; rows: number }): Gener
       // if ANY variant was, and keeps a meeting link / local file if one exists.
       const onDevice = rows.some((r) => (r.on_device ?? 0) === 1) ? 1 : 0
       const onLocal = rows.some((r) => (r.on_local ?? 0) === 1) ? 1 : 0
-      const meetingId = keeper.meeting_id ?? rows.find((r) => r.meeting_id)?.meeting_id ?? null
+      const linkSource = pickLinkSourceForMergedRecordings(keeper, rows)
+      const meetingId = linkSource.row ? linkSource.row.meeting_id ?? null : null
       const wavPath = rows.find((r) => /\.wav$/i.test(r.filename || '') && r.file_path)?.file_path
       const filePath = keeper.file_path ?? wavPath ?? rows.find((r) => r.file_path)?.file_path ?? null
       // Keep the location badge consistent with the merged on_device/on_local flags.
@@ -1367,6 +1411,26 @@ function* mergeRecordingBatches(totals: { groups: number; rows: number }): Gener
         location,
         keeper.id
       ])
+      // The method and confidence travel with a human choice, so the surviving row still
+      // says who decided. A human "no meeting" (meeting_id NULL) is carried the same way.
+      // For an automatic link nothing but meeting_id moves, exactly as before.
+      if (linkSource.human && linkSource.row && linkSource.row !== keeper) {
+        run(`UPDATE recordings SET correlation_confidence = ?, correlation_method = ? WHERE id = ?`, [
+          linkSource.row.correlation_confidence ?? null,
+          linkSource.row.correlation_method ?? null,
+          keeper.id
+        ])
+      }
+      // Captures follow the recording, as in linkRecordingToMeeting, so a carried human
+      // choice does not leave them on the keeper's old automatic meeting.
+      if (linkSource.human && linkSource.row && linkSource.row !== keeper) {
+        run(
+          `UPDATE knowledge_captures
+           SET meeting_id = ?, correlation_confidence = ?, correlation_method = ?, updated_at = CURRENT_TIMESTAMP
+           WHERE source_recording_id = ?`,
+          [meetingId, linkSource.row.correlation_confidence ?? null, linkSource.row.correlation_method ?? null, keeper.id]
+        )
+      }
 
       for (const loser of losers) {
         run(`DELETE FROM recordings WHERE id = ?`, [loser.id])
@@ -1789,7 +1853,7 @@ function windowGapMs(recStart: number, recEnd: number, mStart: number, mEnd: num
  */
 export function findMisbundledRecordings(gapThresholdMs = MISBUNDLE_GAP_MS): MisbundledRecording[] {
   const recordings = queryAll<RecordingRow>(
-    `SELECT id, filename, date_recorded, duration_seconds, meeting_id
+    `SELECT id, filename, date_recorded, duration_seconds, meeting_id, correlation_method
        FROM recordings
       WHERE meeting_id IS NOT NULL AND date_recorded IS NOT NULL AND deleted_at IS NULL`
   )
@@ -1813,6 +1877,11 @@ export function findMisbundledRecordings(gapThresholdMs = MISBUNDLE_GAP_MS): Mis
 
   const out: MisbundledRecording[] = []
   for (const rec of recordings) {
+    // A link the owner chose (manual, user_override, user_preassign) is not stale data,
+    // however far outside the meeting window the recording sits. It is neither reported
+    // nor rewritten; only automatic links (time_overlap, ai_transcript_match, a previous
+    // repair_*) are candidates.
+    if (holdsHumanChoice(rec)) continue
     const m = rec.meeting_id ? byId.get(rec.meeting_id) : undefined
     if (!m) continue // dangling FK — handled by pre-migration cleanup, not here
     const recStart = new Date(rec.date_recorded).getTime()

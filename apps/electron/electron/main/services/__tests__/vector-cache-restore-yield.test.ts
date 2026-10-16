@@ -3,14 +3,13 @@ import { expect, it, vi } from 'vitest'
 import { mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-const deps = vi.hoisted(() => ({ yield: vi.fn(async () => {}) }))
-vi.mock('../event-loop', () => ({ yieldToEventLoop: deps.yield }))
 import {
+  createVectorWorkBudget,
   readVectorCache,
   readVectorCacheAsync,
   writeVectorCache
 } from '../vector-cache'
-it('yields for every 1024 IDs and vectors, including tails, without changing decoded rows', async () => {
+it('preserves decoded rows with budgeted ID and vector pages', async () => {
   const file = join(
     mkdtempSync(join(tmpdir(), 'restore-codec-')),
     'vectors.bin'
@@ -24,7 +23,6 @@ it('yields for every 1024 IDs and vectors, including tails, without changing dec
   writeVectorCache(file, docs)
   const expected = readVectorCache(file)!
   const actual = await readVectorCacheAsync(file)
-  expect(deps.yield).toHaveBeenCalledTimes(6)
   expect(actual!.rows).toEqual(expected.rows)
   expect(actual!.groups).toEqual(expected.groups)
   expect(actual!.fingerprint).toBe(expected.fingerprint)
@@ -37,7 +35,17 @@ it('rejects a count-mismatched cache before decoding its ID or matrix sections',
   writeVectorCache(file, [
     { id: 'one', provider: 'ollama', dims: 2, embedding: [1, 0] }
   ])
-  deps.yield.mockClear()
   expect(await readVectorCacheAsync(file, 'ollama', 2)).toBeNull()
-  expect(deps.yield).not.toHaveBeenCalled()
+})
+
+it('yields through the poll loop no later than eight cheap pages', async () => {
+  vi.spyOn(performance, 'now').mockReturnValue(0)
+  try {
+    const pause = createVectorWorkBudget()
+    for(let i=0;i<7;i++) expect(pause()).toBeUndefined()
+    let advanced = false
+    setImmediate(()=>{advanced=true})
+    await pause()
+    expect(advanced).toBe(true)
+  } finally { vi.restoreAllMocks() }
 })

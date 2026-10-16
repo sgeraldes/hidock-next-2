@@ -1,6 +1,6 @@
 {
   "name": "@hidock/model-host",
-  "version": "0.4.0",
+  "version": "0.5.3",
   "description": "HiDock Model Host: runs the model tools on the machine that has the GPU and lends them over the LAN",
   "private": true,
   "type": "module",
@@ -18,5 +18,8 @@
   "devDependencies": {
     "vitest": "^4.1.2"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "ws": "8.22.0"
+  }
 }

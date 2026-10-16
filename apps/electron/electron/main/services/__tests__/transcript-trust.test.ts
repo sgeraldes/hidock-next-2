@@ -32,6 +32,7 @@ import {
   initializeDatabase,
   closeDatabase,
   run,
+  runInTransaction,
   queryOne,
   insertTranscript,
   setTranscriptIntegrityAccepted,
@@ -39,7 +40,7 @@ import {
   saveRecordingEvaluation,
 } from '../database'
 import { isTranscriptUntrusted, syncTrustVerdicts } from '../transcript-trust'
-import { applyCaptureValueClassification, recomputeEvaluationsFromEvidence } from '../value-classification'
+import { applyCaptureValueClassification, recomputeEvaluationsFromEvidence, WARNING_REFRESH_CHUNK } from '../value-classification'
 
 function seedRecording(id: string, personal = false): void {
   run(
@@ -202,6 +203,66 @@ describe('a transcript that is not valid, over speech', () => {
     syncTrustVerdicts('inv2')
     await recomputeEvaluationsFromEvidence(['inv2'])
     expect(rating('c-inv2')).toMatchObject({ quality_rating: 'garbage', quality_method: 'content', quality_source: 'ai' })
+  })
+
+  it('restores held ratings in stable pages as restored rows leave the held filter', async () => {
+    const count = WARNING_REFRESH_CHUNK * 2 + 1
+    const recordingIds = Array.from({ length: count }, (_, i) => `held-batch-${String(i).padStart(4, '0')}`)
+    const answers = {
+      stars: { type: 'score', score: 0, confidence: 0.9, legend: {}, probabilities: { '0': 1 } },
+    }
+
+    runInTransaction(() => {
+      for (let i = 0; i < recordingIds.length; i++) {
+        const recordingId = recordingIds[i]
+        const captureId = `c-${recordingId}`
+        seedRecording(recordingId)
+        run(
+          `INSERT INTO transcripts (id, recording_id, full_text, language, word_count, validity_status)
+           VALUES (?, ?, 'texto aceptado', 'es', 2, 'valid')`,
+          [`t-${recordingId}`, recordingId]
+        )
+        seedCapture(captureId, recordingId, 'unrated', null)
+        run('UPDATE knowledge_captures SET quality_method = \'held\' WHERE id = ?', [captureId])
+        if (i === 0) {
+          saveRecordingEvaluation({
+            capture_id: captureId, recording_id: recordingId, version: 1, model: 'jev-1.13.0',
+            stars: 1, star_level: 1, stars_confidence: 0.9, kind: null, kind_confidence: null,
+            context: null, context_confidence: null, transcript_invented: null, transcript_overfull: null,
+            has_action_items: null, sensitive: null, reasons_json: '["no_substance"]', answers_json: JSON.stringify(answers),
+            input_tokens: 100, audio_warning: null,
+          })
+        }
+      }
+
+      const ownerRecordingId = 'held-batch-owner'
+      seedRecording(ownerRecordingId)
+      seedCapture('c-held-batch-owner', ownerRecordingId, 'valuable', 'user')
+      run("UPDATE knowledge_captures SET quality_method = 'held' WHERE id = 'c-held-batch-owner'")
+      recordingIds.push(ownerRecordingId)
+    })
+
+    // There is only one evaluation row, so this event-loop turn can run only
+    // when restoreHeldRatings yields between its changing held-rating pages.
+    let yieldedBetweenPages = false
+    setImmediate(() => { yieldedBetweenPages = true })
+    expect(await recomputeEvaluationsFromEvidence(recordingIds)).toBe(0)
+    expect(yieldedBetweenPages).toBe(true)
+
+    expect(rating(`c-${recordingIds[0]}`)).toMatchObject({
+      quality_rating: 'garbage', quality_method: 'content', quality_source: 'ai',
+    })
+    expect(JSON.parse(rating(`c-${recordingIds[0]}`)?.quality_reasons ?? '[]')).toEqual(['no_substance'])
+    expect(
+      queryOne<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM knowledge_captures
+          WHERE id LIKE 'c-held-batch-%' AND quality_rating = 'unrated'
+            AND quality_method IS NULL AND quality_source IS NULL`
+      )?.count
+    ).toBe(count - 1)
+    expect(rating('c-held-batch-owner')).toMatchObject({
+      quality_rating: 'valuable', quality_method: 'held', quality_source: 'user',
+    })
   })
 
   it('leaves a personal recording rating as it is', () => {

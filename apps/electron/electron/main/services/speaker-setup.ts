@@ -30,6 +30,7 @@ export interface SpeakerSetup {
   effectiveEngine: Exclude<SpeakerEngineId, 'auto'>
   /** True when the GPUs differ from the last confirmed setup, or none was ever confirmed. */
   needsConfirmation: boolean
+  acceleratorNotice?: string | null
   lastConfirmedAt: string | null
   voiceSpace: LibraryVoiceSpace | null
   /** The GPU query failed; the setup does not open on a guess. */
@@ -83,6 +84,23 @@ export async function getSpeakerSetup(options: { refresh?: boolean } = {}): Prom
   const fingerprint = gpuFingerprint(detected)
   const modelHostPaired = !!config.modelHostUrl?.trim() && !!config.modelHostToken
   const device = detected.gpus.some((g) => g.cuda) ? 'cuda' : 'cpu'
+  // Old profiles recorded GPU identities only. Seed the currently observed state for matching
+  // hardware, without inventing a previous CUDA capability or prompting just for this migration.
+  let confirmedAccelerator = config.speakerSetupAccelerator
+  let dismissedAccelerator = config.speakerSetupDismissedAccelerator
+  if (!detected.detectionFailed) {
+    const migration: {
+      speakerSetupAccelerator?: 'cuda' | 'cpu'
+      speakerSetupDismissedAccelerator?: 'cuda' | 'cpu'
+    } = {}
+    if (!confirmedAccelerator && config.speakerSetupFingerprint === fingerprint) {
+      migration.speakerSetupAccelerator = confirmedAccelerator = device
+    }
+    if (!dismissedAccelerator && config.speakerSetupDismissedFingerprint === fingerprint) {
+      migration.speakerSetupDismissedAccelerator = dismissedAccelerator = device
+    }
+    if (Object.keys(migration).length) await updateConfig('transcription', migration)
+  }
   const { profile, options: engineOptions } = buildSetupOptions({
     hardware: detected,
     modelHostPaired,
@@ -101,8 +119,13 @@ export async function getSpeakerSetup(options: { refresh?: boolean } = {}): Prom
     // owner answered "Decide later" on.
     needsConfirmation:
       !detected.detectionFailed &&
-      config.speakerSetupFingerprint !== fingerprint &&
-      config.speakerSetupDismissedFingerprint !== fingerprint,
+      !(config.speakerSetupFingerprint === fingerprint && confirmedAccelerator === device) &&
+      !(config.speakerSetupDismissedFingerprint === fingerprint && dismissedAccelerator === device),
+    acceleratorNotice: !detected.detectionFailed &&
+      /(^|\|)nvidia:/.test(config.speakerSetupFingerprint || '') &&
+      !detected.gpus.some(g => g.cuda)
+      ? `${detected.gpus.some(g => g.vendor === 'nvidia') ? 'The NVIDIA GPU is still detected, but CUDA acceleration could not be confirmed.' : 'The previous NVIDIA GPU is no longer detected.'} Models that support CPU can run with a CPU budget limited to ${config.speakerLinkingCpuPercent ?? 50}% of total CPU capacity. CUDA-only models require a compatible GPU or a prepared remote worker. The remote worker can use its own GPU.`
+      : null,
     lastConfirmedAt: config.speakerSetupAt || null,
     voiceSpace: libraryVoiceSpace(),
     detectionFailed: !!detected.detectionFailed,
@@ -118,7 +141,10 @@ export class SpeakerSetupError extends Error {}
 export async function dismissSpeakerSetup(): Promise<void> {
   const detected = await hardware()
   if (detected.detectionFailed) return
-  await updateConfig('transcription', { speakerSetupDismissedFingerprint: gpuFingerprint(detected) })
+  await updateConfig('transcription', {
+    speakerSetupDismissedFingerprint: gpuFingerprint(detected),
+    speakerSetupDismissedAccelerator: detected.gpus.some(g => g.cuda) ? 'cuda' : 'cpu',
+  })
 }
 
 /** Tests only: forget the detection cached for this session. */
@@ -165,6 +191,9 @@ export async function applySpeakerSetup(choice: {
     // Kept in step for anything that still reads the old switch.
     speakerLinkingEnabled: choice.engine !== 'off',
     speakerSetupFingerprint: fingerprint,
+    speakerSetupAccelerator: detected.gpus.some(g => g.cuda) ? 'cuda' : 'cpu',
+    speakerSetupDismissedFingerprint: '',
+    speakerSetupDismissedAccelerator: undefined,
     speakerSetupAt: new Date().toISOString(),
   })
   return getSpeakerSetup()

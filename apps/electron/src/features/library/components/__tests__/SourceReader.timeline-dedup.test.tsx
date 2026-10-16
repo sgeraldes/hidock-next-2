@@ -227,11 +227,12 @@ describe('SourceReader — H3: action items have ONE home (the timeline event-li
     expect(screen.queryByTestId('viewer-action-items')).not.toBeInTheDocument()
 
     // The event-list section IS the home — synthesized from the action items
-    // when no analysis markers exist. The player still receives the same events
-    // because they are also the waveform markers.
+    // when no analysis markers exist. Those positions are ESTIMATES spread over the
+    // duration, not recorded timestamps, so the player must NOT draw them as
+    // measured waveform markers (the list shows them as estimated instead).
     const full = playerRenders.filter((p) => p.mode === 'full').at(-1)
     const list = eventListRenders.at(-1)
-    expect(full?.events?.map((e) => e.label)).toEqual(['Send the deck', 'Decision: ship QA first'])
+    expect(full?.events).toBeUndefined()
     expect(list?.events?.length).toBe(2)
     expect(list?.events?.map((e) => e.label)).toEqual(['Send the deck', 'Decision: ship QA first'])
     // Transcript-derived markers retain their array index, making the detail row

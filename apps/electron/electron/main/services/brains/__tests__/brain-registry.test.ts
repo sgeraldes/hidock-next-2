@@ -28,6 +28,8 @@ describe('BrainRegistry', () => {
       'gemini-cli',
       'kiro',
       'local-onnx-embed',
+      'model-host-embed',
+      'model-host-generate',
       'ollama',
       'openai-compatible'
     ])

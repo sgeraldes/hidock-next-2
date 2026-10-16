@@ -128,23 +128,29 @@ describe('SourceReader — single explicitly controlled waveform', () => {
     expect(screen.getByTestId('waveform-player-full')).toBeInTheDocument()
   })
 
-  it('minimizes to the full-width player pill and still renders ONE element', () => {
-    const restore = mockRegionWidth(800) // wide pane → pill, not scrubber
+  it('minimizes to the one-row dock: controls stay, no graph is drawn', () => {
+    const restore = mockRegionWidth(800)
     render(<SourceReader recording={makeRecording()} />)
     fireEvent.click(screen.getByRole('button', { name: 'Minimize Player' }))
-    const players = screen.getAllByTestId(/^waveform-player-/)
-    expect(players).toHaveLength(1)
-    expect(screen.getByTestId('waveform-player-pill')).toBeInTheDocument()
-    expect(screen.queryByTestId('waveform-player-full')).not.toBeInTheDocument()
+    expect(useLibraryStore.getState().readerSectionModes.player).toBe('compact')
+    // The approved compact player has no graphic of any kind.
+    expect(screen.queryByTestId(/^waveform-player-/)).not.toBeInTheDocument()
+    const dock = screen.getByTestId('reader-dock-player')
+    expect(within(dock).getByRole('button', { name: 'Play' })).toBeInTheDocument()
+    expect(within(dock).getByRole('button', { name: 'Skip back' })).toBeInTheDocument()
+    expect(within(dock).getByRole('button', { name: 'Skip forward' })).toBeInTheDocument()
+    expect(within(dock).getByRole('button', { name: 'Playback speed' })).toBeInTheDocument()
     restore()
   })
 
-  it('uses the scrubber for a minimized player when the reader pane is narrow', () => {
-    const restore = mockRegionWidth(320) // below breakpoint → scrubber
+  it('keeps the same one-row dock when the reader pane is narrow', () => {
+    const restore = mockRegionWidth(320)
     render(<SourceReader recording={makeRecording()} />)
     fireEvent.click(screen.getByRole('button', { name: 'Minimize Player' }))
-    expect(screen.getAllByTestId(/^waveform-player-/)).toHaveLength(1)
-    expect(screen.getByTestId('waveform-player-scrubber')).toBeInTheDocument()
+    expect(screen.queryByTestId(/^waveform-player-/)).not.toBeInTheDocument()
+    const row = screen.getByTestId('reader-dock-controls')
+    expect(row.className).toContain('flex-nowrap')
+    expect(within(row).getByTestId('reader-dock-player')).toBeInTheDocument()
     restore()
   })
 
@@ -170,12 +176,15 @@ describe('SourceReader — docked small player', () => {
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Layout options for Player' }), { button: 0, ctrlKey: false })
     fireEvent.click(await screen.findByText('Dock small player'))
     expect(useLibraryStore.getState().readerSectionModes.player).toBe('docked')
-    expect(screen.getByTestId('waveform-player-pill')).toBeInTheDocument()
+    // Docked is the compact one-row player: controls, no graph.
+    expect(screen.getByTestId('reader-dock-player')).toBeInTheDocument()
+    expect(screen.queryByTestId(/^waveform-player-/)).not.toBeInTheDocument()
     const body = screen.getByTestId('reader-scroll-body')
     Object.defineProperty(body, 'scrollTop', { value: 200, configurable: true })
     fireEvent.scroll(body)
-    expect(screen.getByTestId('waveform-player-pill')).toBeInTheDocument()
-    expect(screen.getAllByTestId(/^waveform-player-/)).toHaveLength(1)
+    expect(screen.getByTestId('reader-dock-player')).toBeInTheDocument()
+    expect(screen.queryByTestId(/^waveform-player-/)).not.toBeInTheDocument()
+    expect(useLibraryStore.getState().readerSectionModes.player).toBe('docked')
     restore()
   })
 

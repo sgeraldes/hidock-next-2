@@ -166,6 +166,56 @@ describe('download-transfer-controller', () => {
     expect(() => abortActiveTransfer('user-cancel')).not.toThrow()
   })
 
+  it('queued B never replaces active A and cancelling B leaves A running', async () => {
+    const a = new AbortController(), b = new AbortController()
+    const first = makeControllableTransfer(a.signal)
+    const runA = trackActiveTransfer('a', a, () => first.promise)
+    await Promise.resolve()
+    const runB = trackActiveTransfer('b', b, async () => true).catch(error => error)
+    expect(getActiveTransferFilename()).toBe('a')
+    const cancelB = cancelActiveTransferByName('b')
+    expect(b.signal.aborted).toBe(true)
+    expect(a.signal.aborted).toBe(false)
+    first.release(true)
+    await runA
+    expect(await cancelB).toBe(true)
+    expect((await runB).name).toBe('AbortError')
+    expect(hasActiveTransfer()).toBe(false)
+  })
+
+  it('deferred intents activate only in the actual SDK dispatch slot', async () => {
+    const a = new AbortController(), b = new AbortController()
+    let startA!: () => void, startB!: () => void, finishA!: () => void, finishB!: () => void
+    const runA = trackActiveTransfer('a', a, activate => { startA = activate; return new Promise<void>(resolve => { finishA = resolve }) }, { deferActivation: true })
+    const runB = trackActiveTransfer('b', b, activate => { startB = activate; return new Promise<void>(resolve => { finishB = resolve }) }, { deferActivation: true })
+    expect(hasActiveTransfer()).toBe(false)
+    startA()
+    expect(getActiveTransferFilename()).toBe('a')
+    expect(() => startB()).toThrow('Another transfer')
+    const cancel = cancelActiveTransferByName('b')
+    expect(a.signal.aborted).toBe(false)
+    expect(b.signal.aborted).toBe(true)
+    expect(() => startB()).toThrow('cancelled before')
+    finishB(); await runB; await cancel
+    expect(getActiveTransferFilename()).toBe('a')
+    finishA(); await runA
+  })
+
+  it('owner settlement clears A before the app chain advances, without A finally clearing B', async () => {
+    let endA!: () => void, startA!: () => void, startB!: () => void, releaseA!: () => void, releaseB!: () => void
+    const a = trackActiveTransfer('a', new AbortController(), (activate, deactivate) => {
+      startA = activate; endA = deactivate; return new Promise<void>(resolve => { releaseA = resolve })
+    }, { deferActivation: true })
+    const b = trackActiveTransfer('b', new AbortController(), activate => {
+      startB = activate; return new Promise<void>(resolve => { releaseB = resolve })
+    }, { deferActivation: true })
+    startA(); endA(); startB()
+    expect(getActiveTransferFilename()).toBe('b')
+    releaseA(); await a
+    expect(getActiveTransferFilename()).toBe('b')
+    releaseB(); await b
+  })
+
   it('is idempotent: a second abort does not re-abort or hang', async () => {
     const abort = new AbortController()
     const abortSpy = vi.spyOn(abort, 'abort')

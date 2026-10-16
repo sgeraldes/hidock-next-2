@@ -115,6 +115,13 @@ beforeEach(() => {
   harness.deviceService.onStatusChange.mockImplementation(() => () => {})
 
   ;(window as unknown as { electronAPI: unknown }).electronAPI = {
+    jensen: {
+      downloadToLibrary: async (name: string, size: number) => {
+        const success = await harness.deviceService.downloadRecording(name, size, () => {}, new AbortController().signal)
+        return success ? downloadService.processDownload(name) : { success: false }
+      },
+      cancelDownload: vi.fn().mockResolvedValue(null)
+    },
     downloadService,
     config: {
       get: vi.fn(async () => ({ success: true, data: { device: { autoDownload: true } } })),

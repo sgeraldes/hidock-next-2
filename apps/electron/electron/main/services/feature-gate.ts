@@ -16,6 +16,7 @@
 
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import { getConfig } from './config'
+import { isRecoveryMode, isFirmwareReadOnlyLaunch, isDeviceValidationLaunch, isFirmwareQualificationLaunch } from '../recovery-mode'
 import {
   channelFeature,
   isTeardownChannel,
@@ -32,8 +33,9 @@ export class FeatureDisabledError extends Error {
   constructor(featureId: FeatureId, channel: string) {
     const label = FEATURES[featureId]?.label ?? featureId
     super(
-      `Feature "${label}" is disabled (channel ${channel}). ` +
-        `Enable it in Settings → Features to use this.`
+      isRecoveryMode()
+        ? `Feature "${label}" is disabled for this recovery launch (channel ${channel}). Saved settings are unchanged.`
+        : `Feature "${label}" is disabled (channel ${channel}). Enable it in Settings → Features to use this.`
     )
     this.name = 'FeatureDisabledError'
     this.featureId = featureId
@@ -49,7 +51,12 @@ export function getResolvedFeatures(): ResolvedFeatures {
   } catch {
     features = undefined
   }
-  return resolveFeatureState(features)
+  const resolved = resolveFeatureState(features)
+  if (isRecoveryMode()) {
+    for (const feature of Object.values(resolved)) feature.enabled = false
+    if (isFirmwareReadOnlyLaunch() || isDeviceValidationLaunch() || isFirmwareQualificationLaunch()) resolved['device-sync'].enabled = true
+  }
+  return resolved
 }
 
 /**

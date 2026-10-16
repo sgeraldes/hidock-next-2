@@ -4,9 +4,11 @@
  *
  * A live recording (<date>-Live.wav, realtime-recorder.ts) keeps the HiDock's
  * two channels: the microphone and the far side. After diarization, the one
- * speaker label whose speech sits mostly on the microphone channel is the
- * person at the HiDock, the owner chosen in Settings > Speakers & voices
- * ("This is you"). Nothing is named when that is not clear: two labels on the
+ * speaker label whose speech sits mostly on a channel identifies an audio source,
+ * not a person. Owner naming additionally requires independent, recording-scoped
+ * manual confirmation of that channel's owner. A guessed microphone side or the
+ * owner chosen in Settings alone never supplies that evidence. Nothing is named
+ * when that is not clear: two labels on the
  * microphone, too little speech, no owner chosen, no known microphone channel,
  * or a label someone already named.
  */
@@ -122,6 +124,12 @@ export interface LiveOwnerDeps {
   ownerContactId: () => string | null
   /** The microphone channel noted with this file when it was recorded (not today's setting). */
   micChannel: (wavPath: string) => 0 | 1 | null
+  /** Independent person confirmation for this recording, never inferred from energy or a recorder heuristic. */
+  ownerChannelEvidence?: (recordingId: string) => {
+    source: 'manual-recording-owner-confirmation'
+    channel: 0 | 1
+    contactId: string
+  } | null
   /**
    * `from` is what transcript_speakers keeps as source and confidence; voiceAnchor ties the
    * speaker's voice cluster to the owner (spec 2026-10-03, 2a), so the owner's voice is known.
@@ -150,6 +158,11 @@ export async function nameOwnerOnLiveRecording(recordingId: string, deps: LiveOw
   if (!owner) return { named: false, reason: 'no owner chosen in Settings' }
   const mic = deps.micChannel(rec.file_path)
   if (mic === null) return { named: false, reason: 'the microphone channel was not noted for this recording' }
+  const evidence = deps.ownerChannelEvidence?.(recordingId)
+  if (evidence?.source !== 'manual-recording-owner-confirmation' || evidence.channel !== mic
+      || evidence.contactId !== owner) {
+    return { named: false, reason: 'channel source has no independently confirmed owner for this recording' }
+  }
   const map = deps.speakerMap(recordingId)
   if (map.some((m) => m.contact_id === owner)) return { named: false, reason: 'the owner is already named here' }
   const energy = await channelEnergyBySpeaker(rec.file_path, deps.segments(recordingId), mic)

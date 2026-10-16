@@ -2,6 +2,8 @@
 
 Each entry is one day of merged work. The Releases page in Settings reads this file.
 
+Device reference: [model/version gates, recordings and native markers](../../docs/devices/README.md). The 11 October firmware documentation describes offline research and local tooling, not an additional merged device-firmware feature. Older release entries retain their dated scope.
+
 ## 2026-10-04 | The gamestation only helps, and gets out of the way
 
 - Paste files, screenshots, text and links into Library from anywhere outside an editor, or use the header's New menu to paste, import a file or start a note; videos keep their original file and link to extracted audio for transcription.

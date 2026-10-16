@@ -164,10 +164,21 @@ describe('IPC channel registrar inventory', () => {
   })
 
   it('the ONLY jensen reads left as observation are the sync in-memory ones (round-5 [HIGH])', () => {
-    // isConnected / getModel / isP1Device return synchronously from cached state
-    // and never call sendCommand — the sole safe jensen observation reads.
+    // Every jensen read left as observation must return from cached / in-memory
+    // state and never call sendCommand. isConnected / getModel / isP1Device read
+    // device fields synchronously; getAudioDiagnostics returns in-memory session
+    // and diagnostics snapshots; getRecordingCapabilities derives from the cached
+    // model + firmware (pure host-side gates); getRecordingProfile returns a
+    // static "unsupported" literal. None of them touch the USB bus.
     const jensenTeardown = TEARDOWN_CHANNELS.filter((c) => c.startsWith('jensen:'))
     const jensenReads = jensenTeardown.filter((c) => /^jensen:(is|get)/.test(c))
-    expect(jensenReads.sort()).toEqual(['jensen:getModel', 'jensen:isConnected', 'jensen:isP1Device'])
+    expect(jensenReads.sort()).toEqual([
+      'jensen:getAudioDiagnostics',
+      'jensen:getModel',
+      'jensen:getRecordingCapabilities',
+      'jensen:getRecordingProfile',
+      'jensen:isConnected',
+      'jensen:isP1Device',
+    ])
   })
 })

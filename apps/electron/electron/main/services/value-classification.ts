@@ -964,70 +964,98 @@ export async function recomputeAudioWarnings(recordingIds?: string[]): Promise<n
   if (recordingIds && recordingIds.length === 0) return 0
   // Stars, kind and context first, so the announcement below covers both.
   const evidenceChanged = await recomputeEvaluationsFromEvidence(recordingIds)
-  const filter = recordingIds ? `WHERE kc.source_recording_id IN (${recordingIds.map(() => '?').join(', ')})` : ''
-  const rows = queryAll<{
-    capture_id: string
-    star_level: number | null
-    audio_warning: string | null
-    duration_seconds: number | null
-    sound_seconds: number | null
-    sound_share: number | null
-    audio_category: string | null
-    word_count: number | null
-    full_text: string | null
-    integrity_status: string | null
-  }>(
-    `SELECT re.capture_id, re.star_level, re.audio_warning,
+  let afterCaptureId: string | null = null
+  let changed = 0
+  while (true) {
+    const conditions: string[] = []
+    const params: Array<string | number> = []
+    if (afterCaptureId !== null) {
+      conditions.push('re.capture_id > ?')
+      params.push(afterCaptureId)
+    }
+    if (recordingIds) {
+      conditions.push(`kc.source_recording_id IN (${recordingIds.map(() => '?').join(', ')})`)
+      params.push(...recordingIds)
+    }
+    params.push(WARNING_REFRESH_CHUNK)
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
+    // better-sqlite3 still runs this query synchronously; LIMIT bounds each
+    // main-thread read to one page before yielding for the next one.
+    const rows = queryAll<{
+      capture_id: string
+      star_level: number | null
+      audio_warning: string | null
+      duration_seconds: number | null
+      sound_seconds: number | null
+      sound_share: number | null
+      audio_category: string | null
+      word_count: number | null
+      full_text: string | null
+      integrity_status: string | null
+    }>(
+      `SELECT re.capture_id, re.star_level, re.audio_warning,
             r.duration_seconds, ap.sound_seconds, ap.sound_share, ap.category AS audio_category,
-            t.word_count, t.full_text, t.integrity_status
+            t.word_count,
+            CASE WHEN t.word_count IS NULL THEN t.full_text ELSE NULL END AS full_text,
+            t.integrity_status
        FROM recording_evaluations re
        JOIN knowledge_captures kc ON kc.id = re.capture_id
        LEFT JOIN recordings r ON r.id = kc.source_recording_id
        LEFT JOIN audio_profiles ap ON ap.recording_id = kc.source_recording_id
        LEFT JOIN transcripts t ON t.recording_id = kc.source_recording_id
-       ${filter}`,
-    recordingIds ?? []
-  )
-  const updates: Array<{ captureId: string; warning: ReturnType<typeof audioTranscriptWarning> }> = []
-  for (const row of rows) {
-    const audio = evaluationAudio({
-      recording_id: null,
-      quality_rating: null,
-      quality_source: null,
-      summary: null,
-      transcript_full_text: row.full_text,
-      meeting_subject: null,
-      duration_seconds: row.duration_seconds,
-      file_size: null,
-      sound_seconds: row.sound_seconds,
-      sound_share: row.sound_share,
-      audio_category: row.audio_category,
-      word_count: row.word_count,
-      integrity_status: row.integrity_status,
-      evaluation_version: null
-    })
-    const next = audioTranscriptWarning(audio)
-    if ((next ?? null) !== (row.audio_warning ?? null)) updates.push({ captureId: row.capture_id, warning: next })
+       ${where}
+      ORDER BY re.capture_id
+      LIMIT ?`,
+      params
+    )
+    if (rows.length === 0) break
+
+    const updates: Array<{ captureId: string; warning: ReturnType<typeof audioTranscriptWarning> }> = []
+    for (const row of rows) {
+      const audio = evaluationAudio({
+        recording_id: null,
+        quality_rating: null,
+        quality_source: null,
+        summary: null,
+        transcript_full_text: row.full_text,
+        meeting_subject: null,
+        duration_seconds: row.duration_seconds,
+        file_size: null,
+        sound_seconds: row.sound_seconds,
+        sound_share: row.sound_share,
+        audio_category: row.audio_category,
+        word_count: row.word_count,
+        integrity_status: row.integrity_status,
+        evaluation_version: null
+      })
+      const next = audioTranscriptWarning(audio)
+      if ((next ?? null) !== (row.audio_warning ?? null)) updates.push({ captureId: row.capture_id, warning: next })
+    }
+    if (updates.length > 0) {
+      runInTransaction(() => {
+        for (const u of updates) run('UPDATE recording_evaluations SET audio_warning = ? WHERE capture_id = ?', [u.warning, u.captureId])
+      })
+      changed += updates.length
+    }
+
+    afterCaptureId = rows[rows.length - 1].capture_id
+    if (rows.length < WARNING_REFRESH_CHUNK) break
+    // `capture_id` is the table's primary key and warning writes do not change
+    // it, so the next page remains stable even as rows are updated.
+    await new Promise<void>((resolve) => setImmediate(resolve))
   }
-  for (let i = 0; i < updates.length; i += WARNING_REFRESH_CHUNK) {
-    const chunk = updates.slice(i, i + WARNING_REFRESH_CHUNK)
-    runInTransaction(() => {
-      for (const u of chunk) run('UPDATE recording_evaluations SET audio_warning = ? WHERE capture_id = ?', [u.warning, u.captureId])
-    })
-    if (i + WARNING_REFRESH_CHUNK < updates.length) await new Promise<void>((resolve) => setImmediate(resolve))
-  }
-  if (updates.length > 0 || evidenceChanged > 0) {
+  if (changed > 0 || evidenceChanged > 0) {
     try {
       getEventBus().emitDomainEvent({
         type: 'evaluation:warnings-updated',
         timestamp: new Date().toISOString(),
-        payload: { changed: updates.length + evidenceChanged }
+        payload: { changed: changed + evidenceChanged }
       })
     } catch (error) {
       console.warn('[Evaluation] could not announce the warning refresh:', error)
     }
   }
-  return updates.length
+  return changed
 }
 
 /**
@@ -1044,86 +1072,112 @@ export async function recomputeAudioWarnings(recordingIds?: string[]): Promise<n
  */
 export async function recomputeEvaluationsFromEvidence(recordingIds?: string[]): Promise<number> {
   if (recordingIds && recordingIds.length === 0) return 0
-  const filter = recordingIds ? `WHERE kc.source_recording_id IN (${recordingIds.map(() => '?').join(', ')})` : ''
-  const rows = queryAll<{
-    capture_id: string
-    model: string | null
-    version: number
-    answers_json: string
-    stars: number | null
-    star_level: number | null
-    stars_confidence: number | null
-    kind: string | null
-    kind_confidence: number | null
-    context: string | null
-    context_confidence: number | null
-    audio_category: string | null
-    validity_status: string | null
-  }>(
-    `SELECT re.capture_id, re.model, re.version, re.answers_json, re.stars, re.star_level, re.stars_confidence,
+  let afterCaptureId: string | null = null
+  let changed = 0
+  while (true) {
+    const conditions: string[] = []
+    const params: Array<string | number> = []
+    if (afterCaptureId !== null) {
+      conditions.push('re.capture_id > ?')
+      params.push(afterCaptureId)
+    }
+    if (recordingIds) {
+      conditions.push(`kc.source_recording_id IN (${recordingIds.map(() => '?').join(', ')})`)
+      params.push(...recordingIds)
+    }
+    params.push(WARNING_REFRESH_CHUNK)
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
+    // The answers_json parse remains synchronous per page; LIMIT prevents the
+    // full evaluation corpus from being materialized in one main-thread turn.
+    const rows = queryAll<{
+      capture_id: string
+      model: string | null
+      version: number
+      answers_json: string
+      stars: number | null
+      star_level: number | null
+      stars_confidence: number | null
+      kind: string | null
+      kind_confidence: number | null
+      context: string | null
+      context_confidence: number | null
+      audio_category: string | null
+      validity_status: string | null
+    }>(
+      `SELECT re.capture_id, re.model, re.version, re.answers_json, re.stars, re.star_level, re.stars_confidence,
             re.kind, re.kind_confidence, re.context, re.context_confidence,
             ap.category AS audio_category, t.validity_status
        FROM recording_evaluations re
        JOIN knowledge_captures kc ON kc.id = re.capture_id
        LEFT JOIN audio_profiles ap ON ap.recording_id = kc.source_recording_id
        LEFT JOIN transcripts t ON t.recording_id = kc.source_recording_id
-       ${filter}`,
-    recordingIds ?? []
-  )
-  type Next = Pick<RecordingEvaluation, 'stars' | 'starLevel' | 'starsConfidence' | 'kind' | 'kindConfidence' | 'context' | 'contextConfidence'>
-  const updates: Array<{ captureId: string; next: Next | null }> = []
-  for (const row of rows) {
-    const evidence = { audioCategory: row.audio_category, transcriptValidity: row.validity_status }
-    if (row.model === RULES_MODEL) {
-      const stale = row.version > 0 || row.star_level !== null || row.kind !== null || row.context !== null
-      if (!evidenceCap(evidence) && stale) updates.push({ captureId: row.capture_id, next: null })
-      continue
-    }
-    let answers: JevResponse['answers']
-    try {
-      answers = JSON.parse(row.answers_json) as JevResponse['answers']
-    } catch {
-      continue // an unreadable answer set is left as it was stored
-    }
-    const parsed = parseEvaluation({ model: row.model ?? '', answers } as JevResponse)
-    // Tier 2: the small model's kind, where Jev was undecided (kind-fallback.ts).
-    const kind = kindWithFallback(parsed, answers as unknown as Record<string, unknown>)
-    const derived = withEvidence({ ...parsed, ...kind }, evidence)
-    const same =
-      derived.starLevel === row.star_level &&
-      derived.kind === row.kind &&
-      derived.context === row.context &&
-      sameNumber(derived.stars, row.stars) &&
-      sameNumber(derived.starsConfidence, row.stars_confidence) &&
-      sameNumber(derived.kindConfidence, row.kind_confidence) &&
-      sameNumber(derived.contextConfidence, row.context_confidence)
-    if (!same) updates.push({ captureId: row.capture_id, next: derived })
-  }
-  for (let i = 0; i < updates.length; i += WARNING_REFRESH_CHUNK) {
-    const chunk = updates.slice(i, i + WARNING_REFRESH_CHUNK)
-    runInTransaction(() => {
-      for (const u of chunk) {
-        if (!u.next) {
-          run(
-            `UPDATE recording_evaluations SET version = 0, stars = NULL, star_level = NULL, stars_confidence = NULL,
-               kind = NULL, kind_confidence = NULL, context = NULL, context_confidence = NULL WHERE capture_id = ?`,
-            [u.captureId]
-          )
-          continue
-        }
-        run(
-          `UPDATE recording_evaluations SET stars = ?, star_level = ?, stars_confidence = ?, kind = ?, kind_confidence = ?,
-             context = ?, context_confidence = ? WHERE capture_id = ?`,
-          [u.next.stars, u.next.starLevel, u.next.starsConfidence, u.next.kind, u.next.kindConfidence,
-            u.next.context, u.next.contextConfidence, u.captureId]
-        )
+       ${where}
+      ORDER BY re.capture_id
+      LIMIT ?`,
+      params
+    )
+    if (rows.length === 0) break
+
+    type Next = Pick<RecordingEvaluation, 'stars' | 'starLevel' | 'starsConfidence' | 'kind' | 'kindConfidence' | 'context' | 'contextConfidence'>
+    const updates: Array<{ captureId: string; next: Next | null }> = []
+    for (const row of rows) {
+      const evidence = { audioCategory: row.audio_category, transcriptValidity: row.validity_status }
+      if (row.model === RULES_MODEL) {
+        const stale = row.version > 0 || row.star_level !== null || row.kind !== null || row.context !== null
+        if (!evidenceCap(evidence) && stale) updates.push({ captureId: row.capture_id, next: null })
+        continue
       }
-    })
-    if (i + WARNING_REFRESH_CHUNK < updates.length) await new Promise<void>((resolve) => setImmediate(resolve))
+      let answers: JevResponse['answers']
+      try {
+        answers = JSON.parse(row.answers_json) as JevResponse['answers']
+      } catch {
+        continue // an unreadable answer set is left as it was stored
+      }
+      const parsed = parseEvaluation({ model: row.model ?? '', answers } as JevResponse)
+      // Tier 2: the small model's kind, where Jev was undecided (kind-fallback.ts).
+      const kind = kindWithFallback(parsed, answers as unknown as Record<string, unknown>)
+      const derived = withEvidence({ ...parsed, ...kind }, evidence)
+      const same =
+        derived.starLevel === row.star_level &&
+        derived.kind === row.kind &&
+        derived.context === row.context &&
+        sameNumber(derived.stars, row.stars) &&
+        sameNumber(derived.starsConfidence, row.stars_confidence) &&
+        sameNumber(derived.kindConfidence, row.kind_confidence) &&
+        sameNumber(derived.contextConfidence, row.context_confidence)
+      if (!same) updates.push({ captureId: row.capture_id, next: derived })
+    }
+    if (updates.length > 0) {
+      runInTransaction(() => {
+        for (const u of updates) {
+          if (!u.next) {
+            run(
+              `UPDATE recording_evaluations SET version = 0, stars = NULL, star_level = NULL, stars_confidence = NULL,
+               kind = NULL, kind_confidence = NULL, context = NULL, context_confidence = NULL WHERE capture_id = ?`,
+              [u.captureId]
+            )
+            continue
+          }
+          run(
+            `UPDATE recording_evaluations SET stars = ?, star_level = ?, stars_confidence = ?, kind = ?, kind_confidence = ?,
+             context = ?, context_confidence = ? WHERE capture_id = ?`,
+            [u.next.stars, u.next.starLevel, u.next.starsConfidence, u.next.kind, u.next.kindConfidence,
+              u.next.context, u.next.contextConfidence, u.captureId]
+          )
+        }
+      })
+      changed += updates.length
+    }
+
+    afterCaptureId = rows[rows.length - 1].capture_id
+    if (rows.length < WARNING_REFRESH_CHUNK) break
+    // The primary-key cursor cannot be moved by the evaluation updates, unlike
+    // OFFSET pagination where changed rows can disappear from the next page.
+    await new Promise<void>((resolve) => setImmediate(resolve))
   }
-  if (updates.length > 0) console.log(`[Evaluation] ${updates.length} stored evaluation(s) brought in line with the evidence`)
-  restoreHeldRatings(recordingIds)
-  return updates.length
+  if (changed > 0) console.log(`[Evaluation] ${changed} stored evaluation(s) brought in line with the evidence`)
+  await restoreHeldRatings(recordingIds)
+  return changed
 }
 
 /**
@@ -1132,37 +1186,69 @@ export async function recomputeEvaluationsFromEvidence(recordingIds?: string[]):
  * mark is cleared so the next value scan rates it. Owner ratings were never
  * taken, and a rating written since is no longer marked.
  */
-function restoreHeldRatings(recordingIds?: string[]): void {
-  const filter = recordingIds ? `AND kc.source_recording_id IN (${recordingIds.map(() => '?').join(', ')})` : ''
-  const rows = queryAll<{ capture_id: string; star_level: number | null; stars_confidence: number | null; reasons_json: string | null }>(
-    `SELECT kc.id AS capture_id, re.star_level, re.stars_confidence, re.reasons_json
-       FROM knowledge_captures kc
-       LEFT JOIN transcripts t ON t.recording_id = kc.source_recording_id
-       LEFT JOIN recording_evaluations re ON re.capture_id = kc.id
-      WHERE kc.quality_method = ? AND kc.quality_source IS NULL
-        AND COALESCE(t.validity_status, '') NOT IN ('invalid', 'incomplete', 'doubtful')
-        ${filter}`,
-    [HELD_METHOD, ...(recordingIds ?? [])]
-  )
-  for (const row of rows) {
-    if (row.star_level === null) {
-      run('UPDATE knowledge_captures SET quality_method = NULL WHERE id = ? AND quality_method = ?', [row.capture_id, HELD_METHOD])
-      continue
+async function restoreHeldRatings(recordingIds?: string[]): Promise<void> {
+  let afterCaptureId: string | null = null
+  let restoredOrReleased = 0
+  while (true) {
+    const conditions = [
+      'kc.quality_method = ?',
+      'kc.quality_source IS NULL',
+      "COALESCE(t.validity_status, '') NOT IN ('invalid', 'incomplete', 'doubtful')"
+    ]
+    const params: Array<string | number> = [HELD_METHOD]
+    if (afterCaptureId !== null) {
+      conditions.push('kc.id > ?')
+      params.push(afterCaptureId)
     }
-    let reasons: string[]
-    try {
-      reasons = row.reasons_json ? (JSON.parse(row.reasons_json) as string[]) : []
-    } catch {
-      reasons = []
+    if (recordingIds) {
+      conditions.push(`kc.source_recording_id IN (${recordingIds.map(() => '?').join(', ')})`)
+      params.push(...recordingIds)
     }
-    const value = evaluationToValue({ starLevel: row.star_level, starsConfidence: row.stars_confidence, reasons } as RecordingEvaluation)
-    const applied = applyCaptureValueClassification(row.capture_id, parseValueClassification(value ?? undefined), 'content')
-    // Below the confidence floor nothing is written; the mark goes anyway.
-    if (!applied.applied) {
-      run('UPDATE knowledge_captures SET quality_method = NULL WHERE id = ? AND quality_method = ?', [row.capture_id, HELD_METHOD])
+    params.push(WARNING_REFRESH_CHUNK)
+    // Each query and page's rating writes are synchronous; the page bound keeps
+    // reasons_json parsing and the writes from spanning the whole held set.
+    const rows = queryAll<{ capture_id: string; star_level: number | null; stars_confidence: number | null; reasons_json: string | null }>(
+      `SELECT kc.id AS capture_id, re.star_level, re.stars_confidence, re.reasons_json
+         FROM knowledge_captures kc
+         LEFT JOIN transcripts t ON t.recording_id = kc.source_recording_id
+         LEFT JOIN recording_evaluations re ON re.capture_id = kc.id
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY kc.id
+        LIMIT ?`,
+      params
+    )
+    if (rows.length === 0) break
+
+    for (const row of rows) {
+      if (row.star_level === null) {
+        run('UPDATE knowledge_captures SET quality_method = NULL WHERE id = ? AND quality_method = ?', [row.capture_id, HELD_METHOD])
+        restoredOrReleased++
+        continue
+      }
+      let reasons: string[]
+      try {
+        reasons = row.reasons_json ? (JSON.parse(row.reasons_json) as string[]) : []
+      } catch {
+        reasons = []
+      }
+      const value = evaluationToValue({ starLevel: row.star_level, starsConfidence: row.stars_confidence, reasons } as RecordingEvaluation)
+      const applied = applyCaptureValueClassification(row.capture_id, parseValueClassification(value ?? undefined), 'content')
+      // Below the confidence floor nothing is written; the mark goes anyway.
+      if (!applied.applied) {
+        run('UPDATE knowledge_captures SET quality_method = NULL WHERE id = ? AND quality_method = ?', [row.capture_id, HELD_METHOD])
+      }
+      restoredOrReleased++
     }
+
+    afterCaptureId = rows[rows.length - 1].capture_id
+    if (rows.length < WARNING_REFRESH_CHUNK) break
+    // A successful restore removes `quality_method = held`; the immutable id
+    // cursor keeps the following page from skipping rows as that filter changes.
+    await new Promise<void>((resolve) => setImmediate(resolve))
   }
-  if (rows.length > 0) console.log(`[Evaluation] ${rows.length} rating(s) held for a transcript not valid brought back`)
+  if (restoredOrReleased > 0) {
+    console.log(`[Evaluation] ${restoredOrReleased} rating(s) held for a transcript not valid brought back`)
+  }
 }
 
 function sameNumber(a: number | null | undefined, b: number | null | undefined): boolean {

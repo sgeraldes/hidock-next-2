@@ -31,6 +31,9 @@ import { formatTimestamp, parseTypedTime } from '../utils/formatTimestamp'
 
 /** Stored transcript segment (from the `speakers` JSON column). Times in seconds. */
 export interface StoredSegment {
+  sourceChannel?: number
+  channelRole?: string
+  channelProvenance?: string
   speaker?: string
   start: number
   end?: number
@@ -96,6 +99,9 @@ export interface TranscriptContentUpdate {
 }
 
 interface TranscriptSegment {
+  sourceChannel?: number
+  channelRole?: string
+  channelProvenance?: string
   startMs: number
   endMs?: number
   text: string
@@ -165,6 +171,9 @@ function fromStoredSegments(stored: StoredSegment[]): TranscriptSegment[] {
       startMs: Math.round((s.start || 0) * 1000),
       endMs: s.end != null ? Math.round(s.end * 1000) : undefined,
       speaker: s.speaker,
+      sourceChannel: s.sourceChannel,
+      channelRole: s.channelRole,
+      channelProvenance: s.channelProvenance,
       text: s.text.trim(),
       ...(s.speakerAttribution ? { speakerAttribution: s.speakerAttribution } : {}),
       ...(typeof s.speakerConfidence === 'number' ? { speakerConfidence: s.speakerConfidence } : {})
@@ -1063,8 +1072,17 @@ export function TranscriptViewer({
                         'bg-primary/20 ring-2 ring-primary/60 motion-safe:transition-[background-color,box-shadow] motion-safe:duration-700'
                     )}
                   >
-                    {(hasTimestamps || segment.speaker) && (
+                    {(hasTimestamps || segment.speaker || segment.sourceChannel !== undefined) && (
                       <div className="flex items-center gap-2 mb-1">
+                        {(segment.sourceChannel === 0 || segment.sourceChannel === 1) && (
+                          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                            title={`Audio source only; not a person identity. ${segment.channelProvenance ?? 'Role provenance unavailable'}`}>
+                            {['firmware-manifest', 'user-confirmed'].includes(segment.channelProvenance ?? '')
+                              && ['microphone', 'system'].includes(segment.channelRole ?? '')
+                              ? segment.channelRole === 'microphone' ? 'Microphone' : 'System'
+                              : `Channel ${segment.sourceChannel! + 1}`}
+                          </span>
+                        )}
                         {hasTimestamps && (
                           <TimeAnchor
                             startMs={segment.startMs}

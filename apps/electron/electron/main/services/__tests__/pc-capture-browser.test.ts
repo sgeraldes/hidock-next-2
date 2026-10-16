@@ -82,7 +82,7 @@ it('real capture graph and Opus encoder keep mic 400 Hz left and system 1000 Hz 
     expect(result.tones[1][1]).toBeGreaterThan(0.5)
     expect(20 * Math.log10(result.tones[0][1] / result.tones[0][0])).toBeLessThan(-30)
     expect(20 * Math.log10(result.tones[1][0] / result.tones[1][1])).toBeLessThan(-30)
-  } finally { rmSync(folder, { recursive: true }) }
+  } finally { rmSync(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
 }, 30000)
 
 it('renders the real recording bar with visible light/dark meters and exercises saved, Open, timeout and dismiss in Chromium', async () => {
@@ -178,7 +178,7 @@ it('renders the real recording bar with visible light/dark meters and exercises 
       mkdirSync(process.env.PC_RECORDER_UI_ARTIFACTS, { recursive: true })
       for (const index of [0, 1]) copyFileSync(join(folder, `stage-${index}.png`), join(process.env.PC_RECORDER_UI_ARTIFACTS, `stage-${index}.png`))
     }
-  } finally { rmSync(folder, { recursive: true }) }
+  } finally { rmSync(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
 }, 30000)
 
 
@@ -194,8 +194,11 @@ it('recording detail decodes headerless stereo, shows lanes and failure, and mut
       import { SourceReader } from './src/features/library/components/SourceReader';
       import { useAudioPlayback } from './src/hooks/useAudioPlayback';
       import { useUIStore } from './src/store/useUIStore';
+      import { useLibraryStore } from './src/store/useLibraryStore';
       import { connectStereoPlayback } from './src/lib/stereo-playback';
-      window.uiStore = useUIStore; window.connectStereoPlayback = connectStereoPlayback;
+      window.uiStore = useUIStore; window.libraryStore = useLibraryStore; window.connectStereoPlayback = connectStereoPlayback;
+      // The reader's player follows the saved section mode; this test exercises the expanded timeline.
+      useLibraryStore.getState().setReaderSectionMode('player', 'expanded');
       window.cacheEntry = null; window.retries = 0;
       window.electronAPI = { storage: { readRecording: async () => ({success: true, data: window.mediaBase64}) },
         waveform: { getCache: async () => window.cacheEntry, setCache: async (_id, peaks, duration, _size, channels) => { window.cacheEntry = {peaks, duration, channels}; return true } },
@@ -225,6 +228,12 @@ it('recording detail decodes headerless stereo, shows lanes and failure, and mut
       const encoded=await new Blob(chunks).arrayBuffer();
       window.mediaBase64=btoa(String.fromCharCode(...new Uint8Array(encoded)));
       const decoded=await context.decodeAudioData(encoded.slice(0));
+      // The main process generates and caches the peaks now; the renderer only reads that cache.
+      // Stand in for it with 1000 per-channel peaks of the real decoded audio.
+      const peaksOf=samples=>Array.from({length:1000},(_,i)=>{const from=Math.floor(i*samples.length/1000), to=Math.max(from+1,Math.floor((i+1)*samples.length/1000));
+        let max=0; for(let s=from;s<to;s++) max=Math.max(max,Math.abs(samples[s])); return Math.min(1,max)});
+      const channelPeaks=[0,1].map(ch=>peaksOf(decoded.getChannelData(ch)));
+      window.cacheEntry={peaks:channelPeaks[0].map((v,i)=>Math.max(v,channelPeaks[1][i])), channels:channelPeaks, duration:decoded.duration, coarse:false};
       window.mountDetail(); await new Promise(resolve=>setTimeout(resolve,50));
       await window.__audioControls.loadWaveformOnly('detail','/Recording 2026-10-05 01-30 12345678-1234-1234-1234-123456789abc.webm');
       for(let i=0;i<100 && !document.querySelector('[data-testid="stereo-lanes"]');i++) await new Promise(resolve=>setTimeout(resolve,20));
@@ -270,26 +279,32 @@ it('recording detail decodes headerless stereo, shows lanes and failure, and mut
       sources.forEach(source=>source.stop()); destination.stream.getTracks().forEach(track=>track.stop()); await context.close();
       await new Promise(resolve=>setTimeout(resolve,450));
       const player=document.querySelector('[data-testid="waveform-player-full"]');
+      if(!player) throw new Error('No expanded player; test ids present: '+[...document.querySelectorAll('[data-testid]')].map(e=>e.getAttribute('data-testid')).join(','));
       const transportVisible=player.getBoundingClientRect().bottom <= player.parentElement.parentElement.getBoundingClientRect().bottom + 1;
       [...document.querySelectorAll('button')].find(button=>button.textContent==='Retry').click();
       Object.defineProperty(HTMLMediaElement.prototype,'currentTime',nativeTime);
       return {before, assignedTimes, seekErrors, resumed, manualSuggestions, heldSuggestions, during, mutedBeforePlay, pausedStop, renders, decodedDuration:decoded.duration, transportVisible, retries:window.retries};
     })()`
     const compactScript = `(async () => {
-      document.documentElement.className='dark'; document.querySelector('[aria-label="Minimize Player"]').click();
+      document.documentElement.className='dark'; window.libraryStore.getState().setReaderSectionMode('player','compact');
       await new Promise(resolve=>setTimeout(resolve,450));
-      const player=document.querySelector('[data-testid="waveform-player-pill"]');
-      return {height:player.getBoundingClientRect().height, lanes:player.querySelectorAll('canvas').length,
-        mic:player.textContent.includes('Mic'), system:player.textContent.includes('System')};
+      // Compact is the one-row dock (play, back, forward, time); the timeline closes.
+      const player=document.querySelector('[data-testid="reader-dock-player"]');
+      if(!player) throw new Error('No compact player; test ids present: '+[...document.querySelectorAll('[data-testid]')].map(e=>e.getAttribute('data-testid')).join(','));
+      return {height:player.getBoundingClientRect().height,
+        controls:['Play','Skip back','Skip forward'].every(label=>!!player.querySelector('[aria-label="'+label+'"]')),
+        time:/[0-9]+:[0-9][0-9] [/] [0-9]+:[0-9][0-9]/.test(player.textContent),
+        timelineClosed:!document.querySelector('[data-testid="waveform-player-full"]')};
     })()`
     const payload = join(folder, 'detail.json'); writeFileSync(payload, JSON.stringify([script,compactScript,`(async () => {
-      document.documentElement.className=''; document.querySelector('[aria-label="Expand Player"]').click();
+      document.documentElement.className=''; window.libraryStore.getState().setReaderSectionMode('player','expanded');
       await new Promise(resolve=>setTimeout(resolve,450)); return {expanded:!!document.querySelector('[data-testid="waveform-player-full"]')};
     })()`]))
     const stdout = await runElectron(folder, payload, 'ui-stages')
     const reports = JSON.parse(stdout.split('PC_CAPTURE_RESULT=')[1].split('\n')[0]); const result = reports[0]
     console.log('Chromium recording detail:', JSON.stringify(reports))
-    expect(reports[1]).toMatchObject({height:32, lanes:2, mic:true, system:true})
+    expect(reports[1]).toMatchObject({controls:true, time:true, timelineClosed:true})
+    expect(reports[1].height).toBeLessThanOrEqual(40)
     expect(reports[2]).toEqual({expanded:true})
     expect(result.before.lanes).toHaveLength(2)
     expect(result.before).toMatchObject({sentimentPanel:false,muteIcon:true})
@@ -323,7 +338,7 @@ it('recording detail decodes headerless stereo, shows lanes and failure, and mut
       copyFileSync(join(folder,'stage-2.png'),join(process.env.PC_RECORDER_UI_ARTIFACTS,'detail.png'))
       copyFileSync(join(folder,'stage-1.png'),join(process.env.PC_RECORDER_UI_ARTIFACTS,'detail-dark-compact.png'))
     }
-  } finally { rmSync(folder, { recursive: true }) }
+  } finally { rmSync(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
 }, 30000)
 
 for (const failureAfter of [700, 1700]) {
@@ -362,7 +377,7 @@ for (const failureAfter of [700, 1700]) {
       const events = result.events.map((event: unknown[]) => event[0])
       expect(events.indexOf('finish')).toBeGreaterThan(events.indexOf('stop'))
       expect(result.events.filter((event: unknown[]) => event[0] === 'append').every((event: unknown[]) => event[3] === false)).toBe(true)
-    } finally { rmSync(folder, { recursive: true }) }
+    } finally { rmSync(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
   }, 30000)
 }
 for (const operation of ['reload', 'restart', 'close']) {

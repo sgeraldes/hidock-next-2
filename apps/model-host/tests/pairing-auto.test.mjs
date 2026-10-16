@@ -13,6 +13,27 @@ function store(options = {}) {
 }
 
 describe('automatic pairing', () => {
+  it('persists only a digest and rejects that digest as a bearer token', () => {
+    const { s, saved } = store()
+    s.startAutomatic()
+    const issued = s.redeem('')
+    expect(issued.ok).toBe(true)
+    const persisted = saved.at(-1).tokens[0]
+    expect(persisted).toMatch(/^sha256:[a-f0-9]{64}$/)
+    expect(persisted).not.toContain(issued.token)
+    const restarted = new PairingStore({ persisted: { tokens: [persisted] } })
+    expect(restarted.accepts(`Bearer ${issued.token}`)).toBe(true)
+    expect(restarted.accepts(`Bearer ${persisted}`)).toBe(false)
+  })
+
+  it('migrates a legacy token without disconnecting the paired client', () => {
+    const { s, saved } = store({ persisted: { tokens: ['legacy-test-token'] } })
+    expect(saved).toHaveLength(1)
+    expect(saved[0].tokens[0]).toMatch(/^sha256:/)
+    expect(s.accepts('Bearer legacy-test-token')).toBe(true)
+    s.revokeAll()
+    expect(s.accepts('Bearer legacy-test-token')).toBe(false)
+  })
   it('opens for five minutes when nobody is paired, and the first HiDock in gets a token with no code', () => {
     const { s } = store()
     s.startAutomatic()

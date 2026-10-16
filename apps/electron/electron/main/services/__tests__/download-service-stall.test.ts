@@ -46,9 +46,9 @@ vi.mock('../activity-log', () => ({ emitActivityLog: vi.fn() }))
 const bus: { active: string | null } = { active: null }
 
 vi.mock('../download-transfer-controller', () => ({
-  getActiveTransferFilename: () => bus.active,
+  hasTransferIntent: () => false, getActiveTransferFilename: () => bus.active,
   cancelActiveTransferByName: vi.fn(() => Promise.resolve(true)),
-  cancelActiveTransfer: vi.fn(() => Promise.resolve(true)),
+  cancelAllTransfers: vi.fn(() => Promise.resolve(true)),
 }))
 
 vi.mock('fs', async (importOriginal) => {

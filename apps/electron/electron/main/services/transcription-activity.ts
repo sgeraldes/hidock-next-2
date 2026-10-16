@@ -14,16 +14,23 @@
  * A separate module so the database and the integrity service can ask without
  * importing the transcription service (which imports both of them).
  */
-const active = new Set<string>()
+const active = new Map<string, number>()
 
 export function addActiveTranscription(recordingId: string): void {
-  active.add(recordingId)
+  active.set(recordingId, (active.get(recordingId) ?? 0) + 1)
 }
 
 export function removeActiveTranscription(recordingId: string): void {
-  active.delete(recordingId)
+  const count = active.get(recordingId) ?? 0
+  if (count <= 1) active.delete(recordingId)
+  else active.set(recordingId, count - 1)
 }
 
 export function getActiveTranscriptions(): string[] {
-  return [...active]
+  return [...active.keys()]
+}
+
+/** Return the number of active owners for one recording in this process. */
+export function getActiveTranscriptionCount(recordingId: string): number {
+  return active.get(recordingId) ?? 0
 }

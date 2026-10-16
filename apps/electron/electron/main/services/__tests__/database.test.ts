@@ -534,6 +534,14 @@ describe('Database Service', () => {
   })
 
   describe('device snapshot recording identity', () => {
+    it('preserves a known duration and stores unknown custom file duration as null', () => {
+      seedRecording('rec-measured', { filename: 'measured.wav' })
+      run('UPDATE recordings SET duration_seconds = ? WHERE id = ?', [42, 'rec-measured'])
+      const snapshot = { size: 640044, duration: 0, dateCreated: new Date('2026-10-11T12:00:00Z') }
+      expect(upsertRecordingFromDevice({ ...snapshot, filename: 'measured.wav' }).duration_seconds).toBe(42)
+      const unknown = upsertRecordingFromDevice({ ...snapshot, filename: 'new-custom.wav' })
+      expect(queryOne<{ duration_seconds: number | null }>('SELECT duration_seconds FROM recordings WHERE id = ?', [unknown.id])?.duration_seconds).toBeNull()
+    })
     it('updates the existing local row instead of inserting an .hda shadow row', () => {
       seedRecording('rec-local', {
         filename: '2026Aug18-142505-Rec91.wav',
@@ -764,10 +772,10 @@ describe('Database Service', () => {
       const result = resetStuckTranscriptions()
       expect(result).toEqual({ recordingsReset: 2, queueItemsReset: 1 })
 
-      expect(getRecordingById('rec-1')?.transcription_status).toBe('none')
-      expect(getRecordingById('rec-2')?.transcription_status).toBe('none')
+      expect(getRecordingById('rec-1')?.transcription_status).toBe('error')
+      expect(getRecordingById('rec-2')?.transcription_status).toBe('error')
       const q1row = queryOne<{ status: string }>('SELECT status FROM transcription_queue WHERE id = ?', [q1])
-      expect(q1row?.status).toBe('pending')
+      expect(q1row?.status).toBe('failed')
     })
 
     it('returns zeros when nothing is stuck', () => {
@@ -787,9 +795,9 @@ describe('Database Service', () => {
       expect(resetStuckTranscriptions(['rec-live'])).toEqual({ recordingsReset: 1, queueItemsReset: 1 })
       // Untouched: queueing set it to pending, and the reset would have made it 'none'.
       expect(getRecordingById('rec-live')?.transcription_status).toBe('pending')
-      expect(getRecordingById('rec-dead')?.transcription_status).toBe('none')
+      expect(getRecordingById('rec-dead')?.transcription_status).toBe('error')
       expect(queryOne<{ status: string }>('SELECT status FROM transcription_queue WHERE id = ?', [live])?.status).toBe('processing')
-      expect(queryOne<{ status: string }>('SELECT status FROM transcription_queue WHERE id = ?', [dead])?.status).toBe('pending')
+      expect(queryOne<{ status: string }>('SELECT status FROM transcription_queue WHERE id = ?', [dead])?.status).toBe('failed')
     })
   })
 

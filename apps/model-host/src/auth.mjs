@@ -6,9 +6,10 @@
  * single-use. The token is long because nobody types it.
  */
 
-import { randomBytes, timingSafeEqual } from 'crypto'
+import { randomBytes, timingSafeEqual, createHash } from 'crypto'
 
 /** Long enough that guessing is not a strategy. */
+const tokenDigest = token => `sha256:${createHash('sha256').update(token).digest('hex')}`
 const TOKEN_BYTES = 32
 /** A person reads this off a screen and types it on another machine. */
 const CODE_DIGITS = 8
@@ -54,13 +55,15 @@ export class PairingStore {
    */
   constructor(options = {}) {
     this.now = options.now || (() => Date.now())
-    this.tokens = new Set(options.persisted?.tokens ?? [])
+    const persistedTokens = options.persisted?.tokens ?? []
+    this.tokens = new Set(persistedTokens.map(token => /^sha256:[a-f0-9]{64}$/.test(token) ? token : tokenDigest(token)))
     this.save = options.save || (() => {})
     /** @type {{code: string, expiresAt: number} | null} */
     this.pending = null
     /** When the automatic window closes, or null when it is not open. */
     this.autoUntil = null
     this.autoCancelled = options.persisted?.autoPairingCancelled === true
+    if (persistedTokens.some(token => !token.startsWith("sha256:"))) this.#persist()
   }
 
   #persist() {
@@ -108,7 +111,7 @@ export class PairingStore {
 
   #issue() {
     const token = randomBytes(TOKEN_BYTES).toString('hex')
-    this.tokens.add(token)
+    this.tokens.add(tokenDigest(token))
     this.pending = null
     // The first HiDock in closes the automatic window for everyone else.
     this.autoUntil = null
@@ -168,7 +171,7 @@ export class PairingStore {
     if (!match) return false
     const presented = match[1].trim()
     for (const known of this.tokens) {
-      if (secretsMatch(presented, known)) return true
+      if (secretsMatch(tokenDigest(presented), known)) return true
     }
     return false
   }

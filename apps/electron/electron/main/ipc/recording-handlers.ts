@@ -4,6 +4,7 @@ import { RECORDING_AUDIO_EXTENSIONS } from '../../../src/shared/audio-extensions
 import { rankRecordingsByMeetingCoverage } from '../services/recording-match-scoring'
 import {
   getRecordings,
+  getOwnedProcessingRuns,
   getRecordingById,
   getTrashedRecordings,
   getRecordingsForMeeting,
@@ -72,6 +73,9 @@ import {
   backfillTranscriptIntegrity,
 } from '../services/database'
 import { getConfig } from '../services/config'
+import { clearProviderCheckpoints } from '../services/provider-checkpoints'
+import { requestRemoteJobRestart } from '../services/remote-job-checkpoints'
+import { getActiveTranscriptions } from '../services/transcription-activity'
 import {
   GetRecordingByIdSchema,
   LinkRecordingToMeetingSchema,
@@ -640,11 +644,17 @@ export function registerRecordingHandlers(): void {
         if (!recordingId || typeof recordingId !== 'string') {
           return { success: false, error: 'recordingId is required' }
         }
-        if (provider !== 'gemini' && provider !== 'local-asr' && provider !== 'vibevoice') {
+        if (provider !== 'gemini' && provider !== 'local-asr' && provider !== 'vibevoice'
+          && provider !== 'muse-voice' && provider !== 'mai-transcribe-2') {
           return { success: false, error: `Unsupported provider: ${provider}` }
         }
 
         const config = getConfig()
+        if ((provider === 'muse-voice' && !config.transcription.museVoiceApiKey)
+          || (provider === 'mai-transcribe-2' && (!config.transcription.maiTranscribeApiKey
+            || !config.transcription.maiTranscribeEndpoint))) {
+          return { success: false, error: 'Configure the selected cloud ASR credentials in Settings.' }
+        }
         if (provider === 'gemini' && !config.transcription.geminiApiKey) {
           return {
             success: false,
@@ -666,8 +676,14 @@ export function registerRecordingHandlers(): void {
           return { success: false, error: `Recording not found: ${recordingId}. Try refreshing the library.` }
         }
 
+        if (getActiveTranscriptions().includes(recording.id)) {
+          return { success: false, error: 'Cancel the active transcription before requesting a new one.' }
+        }
         const queueItemId = addToQueue(recording.id, provider, { ownerRequested: true })
         if (!queueItemId) return { success: false, error: 'Recording is not eligible for transcription' }
+        // This is the explicit Re-transcribe command. Ordinary Retry preserves
+        // responses and never clears uncertain provider requests.
+        clearProviderCheckpoints(recording.id)
         markUserPriority(recording.id) // explicit single-recording reprocess
         processQueueManually()
         return { success: true, queueItemId }
@@ -703,9 +719,14 @@ export function registerRecordingHandlers(): void {
         return { success: false, error: `Recording not found: ${result.data.recordingId}` }
       }
 
+      if ([...getOwnedProcessingRuns().values()].includes(recording.id)) {
+        return { success: false, error: 'This recording still has an active operation. Wait for it to finish or cancel it.' }
+      }
+
       const queueItemId = addToQueue(recording.id, undefined, { ownerRequested: true })
       if (!queueItemId) return { success: false, error: 'Recording is personal, deleted, missing, or eligibility could not be checked.' }
       markUserPriority(recording.id) // explicit user retry jumps the backlog
+      requestRemoteJobRestart(recording.id)
       updateRecordingTranscriptionStatus(recording.id, 'pending')
       processQueueManually()
       return { success: true, queueItemId }

@@ -8,6 +8,7 @@ import { toast } from '@/components/ui/toaster'
 import { Working } from '@/components/ui/working'
 import { useConfigStore } from '@/store/domain/useConfigStore'
 import { OpenAiCompatibleCard } from './OpenAiCompatibleCard'
+import { SemanticMaintenancePanel } from './SemanticMaintenancePanel'
 import type {
   BrainListItem,
   BrainId,
@@ -91,7 +92,7 @@ function BrainRow({
         </label>
         <label className="flex flex-col items-center gap-1 text-xs text-muted-foreground">
           <span>Default</span>
-          <RadioGroupItem value={brain.id} aria-label={`Set ${brain.label} as default brain`} />
+          <RadioGroupItem disabled={brain.id === 'model-host-embed'} value={brain.id} aria-label={`Set ${brain.label} as default brain`} />
         </label>
       </div>
     </div>
@@ -105,7 +106,7 @@ function BrainRow({
  * each brain, pick the global default, and see its live auth status.
  */
 export function AIBrainsSettings() {
-  const cpuPercent = useConfigStore(s => s.config?.embeddings.localCpuPercent ?? 50)
+  const cpuPercent = useConfigStore(s => s.config?.transcription.speakerLinkingCpuPercent ?? 50)
   const updateConfig = useConfigStore(s => s.updateConfig)
   const [savingBudget, setSavingBudget] = useState(false)
   const [brains, setBrains] = useState<BrainListItem[]>([])
@@ -142,7 +143,7 @@ export function AIBrainsSettings() {
         } else {
           // A routed brain must also be enabled; enabling an embed brain and
           // routing to it both kick the provider-partition reindex in main.
-          await window.electronAPI.brains.setEnabled({ id: value as BrainId, enabled: true })
+          if (value !== 'model-host-embed') await window.electronAPI.brains.setEnabled({ id: value as BrainId, enabled: true })
           await window.electronAPI.brains.setTaskRouting({ task: 'embed', id: value as BrainId })
         }
         toast.success(
@@ -223,8 +224,8 @@ export function AIBrainsSettings() {
             <div className="min-w-0">
               <p className="text-sm font-medium">Embedding provider</p>
               <p className="text-xs text-muted-foreground">
-                Which model powers semantic search. Switching re-indexes in the background — the
-                previous provider&apos;s chunks stay as an instant backup.
+                Which model powers semantic search. Remote Model Host indexing starts only through explicit maintenance below; the
+                previous provider&apos;s chunks stay as an instant backup. Model Host semantic search sends text to your paired host, binds its exact embedding space on selection, and never falls back to local or paid models.
               </p>
             </div>
             <Select value={embedRoute} onValueChange={handleEmbedRoute}>
@@ -234,7 +235,7 @@ export function AIBrainsSettings() {
               <SelectContent>
                 <SelectItem value="auto">Auto (Gemini when configured)</SelectItem>
                 {embedBrains.map((b) => (
-                  <SelectItem key={b.id} value={b.id} disabled={!b.auth.configured}>
+                  <SelectItem key={b.id} value={b.id} disabled={!b.auth.configured && b.id !== 'model-host-embed'}>
                     {b.label}
                     {!b.auth.configured ? ' — not ready' : ''}
                   </SelectItem>
@@ -243,28 +244,31 @@ export function AIBrainsSettings() {
             </Select>
           </div>
         )}
+        {embedRoute === 'model-host-embed' && <SemanticMaintenancePanel selected />}
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
           <div className="min-w-0">
-            <p className="text-sm font-medium">Local embedding CPU budget</p>
+            <p className="text-sm font-medium">Shared local processing CPU budget</p>
             <p className="text-xs text-muted-foreground">
-              Share of available logical CPUs. Applies to local semantic search and indexing after restart.
-              Transcription has separate resource limits.
+              Share of available logical CPUs for local transcription, speaker identification and indexing.
+              Applies to the next stage; remote processing uses the host&apos;s own budget.
             </p>
           </div>
           <Select value={String(cpuPercent)} disabled={savingBudget} onValueChange={async value => {
             setSavingBudget(true)
             try {
-              await updateConfig('embeddings', { localCpuPercent: Number(value) })
-              toast.success('CPU budget saved. Restart HiDock to apply it.')
+              await updateConfig('transcription', { speakerLinkingCpuPercent: Number(value) })
+              toast.success('CPU budget saved. Applies to the next local stage.')
             } catch (error) {
               toast.error(`Could not save CPU budget: ${String(error)}`)
             } finally { setSavingBudget(false) }
           }}>
-            <SelectTrigger className="w-64" aria-label="Local embedding CPU budget"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="w-64" aria-label="Shared local processing CPU budget"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="25">25% — more room for other apps</SelectItem>
-              <SelectItem value="50">50% — balanced</SelectItem>
-              <SelectItem value="75">75% — faster processing</SelectItem>
+              {[...new Set([25, 50, 75, cpuPercent])].sort((a, b) => a - b).map(percent => (
+                <SelectItem key={percent} value={String(percent)}>
+                  {percent}%{percent === 25 ? ' — more room for other apps' : percent === 50 ? ' — balanced' : percent === 75 ? ' — faster processing' : ''}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </div>
@@ -272,3 +276,4 @@ export function AIBrainsSettings() {
     </Card>
   )
 }
+

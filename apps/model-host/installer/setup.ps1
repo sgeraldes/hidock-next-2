@@ -40,6 +40,57 @@ Start-Transcript -LiteralPath (Join-Path $LogsDir 'setup.log') -Append | Out-Nul
 function Say($text) { Write-Host "  $text" }
 function Step($text) { Write-Host ''; Write-Host "== $text" -ForegroundColor Cyan }
 
+# What a second run of setup (an upgrade) keeps from the old config.json. Everything
+# else is rebuilt here (paths, runtime detection, TLS, the pyannote check) or does
+# not belong in that file: the Hugging Face token lives in secrets.json.
+#
+# The model proofs are copied untouched, fingerprint included. The service
+# recomputes each fingerprint when it starts and drops a proof whose runtime or
+# model files changed, so keeping a proof here never makes a stale one trusted.
+# 'validated' is not kept on purpose: pyannote is tested again with this install.
+# Returns the names it kept, for the log. Throws, leaving $Config as it was, when
+# the old file cannot be read.
+function Merge-PreservedConfig {
+  param(
+    [Parameter(Mandatory = $true)] [System.Collections.IDictionary] $Config,
+    [Parameter(Mandatory = $true)] [string] $ConfigFile
+  )
+  # The service writes this file as UTF-8 without a BOM. Windows PowerShell 5.1 reads
+  # that as the ANSI code page unless told otherwise, which garbles non-ASCII text.
+  $previous = Get-Content -LiteralPath $ConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
+  if ($previous -isnot [System.Management.Automation.PSCustomObject]) { throw 'config.json does not hold an object.' }
+
+  $kept = New-Object System.Collections.Generic.List[string]
+  # tlsPort is port + 1, so the port has to be a whole number that leaves room for it.
+  $port = 0
+  $numbers = [System.Globalization.NumberStyles]::Integer
+  $invariant = [System.Globalization.CultureInfo]::InvariantCulture
+  if ($null -ne $previous.port -and [int]::TryParse([string]$previous.port, $numbers, $invariant, [ref]$port) -and $port -ge 1 -and $port -le 65534) {
+    $Config['port'] = $port
+    $kept.Add('port')
+  }
+  $policy = @('cpuPercent', 'model', 'fallbackModel', 'minSpeechSeconds', 'timeoutMs', 'stepAside', 'bindAddress')
+  $proofs = @('asrModels', 'asrValidation', 'diarizationValidation', 'semanticEmbeddingValidation', 'realtimeAsrValidation')
+  foreach ($name in ($policy + $proofs)) {
+    $property = $previous.PSObject.Properties[$name]
+    if ($null -ne $property -and $null -ne $property.Value) {
+      $Config[$name] = $property.Value
+      $kept.Add($name)
+    }
+  }
+  return $kept.ToArray()
+}
+
+# The default JSON depth is 2 and writes anything deeper as the text "@{...}". A
+# realtime proof keeps its events three levels down, so the depth is explicit.
+function Save-HostConfig {
+  param(
+    [Parameter(Mandatory = $true)] [System.Collections.IDictionary] $Config,
+    [Parameter(Mandatory = $true)] [string] $ConfigFile
+  )
+  ConvertTo-Json -InputObject $Config -Depth 32 | Set-Content -LiteralPath $ConfigFile -Encoding utf8
+}
+
 Step 'This machine'
 $cpu = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
 $ramGiB = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 1)
@@ -189,8 +240,8 @@ if (-not $gpuName) {
 
 Step 'Settings for the service'
 # validated stays false: the service runs the model once, by itself, after
-# HiDock sends its Hugging Face token. The port and what HiDock chose for
-# stepping aside survive a second run of setup.
+# HiDock sends its Hugging Face token. The port, what HiDock chose for stepping
+# aside and the model proofs survive a second run of setup (Merge-PreservedConfig).
 $config = [ordered]@{
   port = 8765
   cpuPercent = 50
@@ -207,16 +258,32 @@ $config = [ordered]@{
 }
 if (Test-Path -LiteralPath $ConfigFile) {
   try {
-    $previous = Get-Content -LiteralPath $ConfigFile -Raw | ConvertFrom-Json
-    if ($previous.port) { $config.port = [int]$previous.port }
-    if ($previous.stepAside) { $config.stepAside = [string]$previous.stepAside }
+    $kept = @(Merge-PreservedConfig -Config $config -ConfigFile $ConfigFile)
+    if ($kept.Count -gt 0) { Say "Kept from the previous config.json: $($kept -join ', ')" }
   } catch {
     Say 'The previous config.json could not be read; starting from the defaults.'
   }
 }
 New-Item -ItemType Directory -Force -Path $ModelsDir | Out-Null
-$config | ConvertTo-Json | Set-Content -LiteralPath $ConfigFile -Encoding utf8
+Step 'Private TLS identity for remote connections'
+& $PythonExe -m pip install --no-warn-script-location 'cryptography>=42,<51'
+if ($LASTEXITCODE -ne 0) { throw 'TLS dependency installation failed; existing configuration was preserved.' }
+$TlsRoot = Join-Path $HostRoot 'tls'
+New-Item -ItemType Directory -Force -Path $TlsRoot | Out-Null
+$TlsOwnerSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+& icacls.exe $TlsRoot /inheritance:r /grant:r "*${TlsOwnerSid}:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Could not restrict the private TLS directory.' }
+$TlsJson = & $PythonExe (Join-Path $InstallDir 'src\provision_tls.py') $TlsRoot
+if ($LASTEXITCODE -ne 0) { throw 'TLS identity creation failed; existing configuration was preserved.' }
+$TlsIdentity = $TlsJson | ConvertFrom-Json
+$config.tlsCertPath = $TlsIdentity.certificate
+$config.tlsKeyPath = $TlsIdentity.key
+$config.tlsPort = $config.port + 1
+Save-HostConfig -Config $config -ConfigFile $ConfigFile
 Say "Wrote $ConfigFile"
+Say "Remote address: https://$($TlsIdentity.hostname):$($config.tlsPort)"
+Say "Import only this PUBLIC file in HiDock: $($TlsIdentity.certificate)"
+Say "Certificate SHA-256: $($TlsIdentity.sha256)"
 
 Step 'Done'
 Say 'The tray icon starts now. HiDock pairs with it, sends its Hugging Face token,'

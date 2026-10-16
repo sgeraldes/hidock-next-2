@@ -18,12 +18,14 @@ const mockPauseQueue = vi.fn()
 const mockResumeQueue = vi.fn()
 const mockReorderQueueItem = vi.fn()
 const mockGetQueueState = vi.fn()
+const mockRestartLocalStage = vi.fn()
 
 vi.mock('../../services/transcription', () => ({
   pauseQueue: (...a: any[]) => mockPauseQueue(...a),
   resumeQueue: (...a: any[]) => mockResumeQueue(...a),
   reorderQueueItem: (...a: any[]) => mockReorderQueueItem(...a),
-  getQueueState: (...a: any[]) => mockGetQueueState(...a)
+  getQueueState: (...a: any[]) => mockGetQueueState(...a),
+  restartLocalStage: (...a: any[]) => mockRestartLocalStage(...a)
 }))
 
 const STATE = { paused: false, isProcessing: false, processingId: null, pendingCount: 0, processingCount: 0 }
@@ -44,13 +46,23 @@ describe('transcription-handlers', () => {
     registerTranscriptionHandlers()
   })
 
-  it('registers all four queue-control channels', () => {
+  it('registers queue-control and local-stage restart channels', () => {
     expect(Object.keys(handlers).sort()).toEqual([
+      'transcription:importCompletedRemoteJobReceipt',
       'transcription:pause',
       'transcription:queueState',
       'transcription:reorder',
+      'transcription:restartLocalStage',
       'transcription:resume'
     ])
+  })
+
+  it('validates the local restart and reports a supervisor refusal', async () => {
+    expect((await handlers['transcription:restartLocalStage'](null, '')).success).toBe(false)
+    expect(mockRestartLocalStage).not.toHaveBeenCalled()
+    mockRestartLocalStage.mockRejectedValueOnce(new Error('Previous worker has not exited'))
+    expect(await handlers['transcription:restartLocalStage'](null, 'recording')).toEqual({
+      success: false, error: 'Previous worker has not exited' })
   })
 
   it('transcription:pause delegates to pauseQueue and returns its state', async () => {

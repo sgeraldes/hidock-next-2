@@ -337,3 +337,39 @@ describe('fallback', () => {
     expect(rows).toHaveLength(2)
   })
 })
+
+describe('managed generation is terminal even when an older plan has onFail', () => {
+  it.each(['direct', 'router'] as const)('does not run paid fallback after unavailable/error/empty %s attempts', async kind => {
+    for (const failure of ['unavailable', 'error', 'empty'] as const) {
+      rows.length = 0
+      const paid = fakeBrain('gemini-api', async () => 'must not run')
+      const managed = fakeBrain('model-host-generate', async () => {
+        if (failure === 'error') throw new Error('host failed')
+        return null
+      })
+      const profile = kind === 'direct'
+        ? { kind: 'direct' as const, id: 'managed', harness: 'model-host-generate' as const }
+        : { kind: 'router' as const, task: 'chat' as const, mode: 'chat' as const }
+      const deps = makeDeps({ plan: { calls: [{ profile, onFail: { kind: 'direct', id: 'paid', harness: 'gemini-api' } }] },
+        brains: { 'model-host-generate': managed, 'gemini-api': paid },
+        canServe: id => id !== 'model-host-generate' || failure !== 'unavailable',
+        chat: async () => { if (failure === 'error') throw new Error('host failed'); return null } })
+      deps.router.hasExplicitManagedGeneration = () => true
+      const outcome = await createTextRunner(deps)({ step: 'chat', messages: MESSAGES })
+      expect(outcome.ok).toBe(false)
+      expect(paid.chat).not.toHaveBeenCalled()
+      expect(paid.generate).not.toHaveBeenCalled()
+      expect(rows.some(row => row.record.route === 'direct:paid')).toBe(false)
+    }
+  })
+  it('captures managed binding before an in-flight Settings change', async () => {
+    let selected = true
+    const paid = fakeBrain('gemini-api', async () => 'must not run')
+    const deps = makeDeps({ plan: { calls: [{ profile: { kind: 'router', task: 'chat', mode: 'chat' },
+      onFail: { kind: 'direct', id: 'paid', harness: 'gemini-api' } }] }, brains: { 'gemini-api': paid },
+      chat: async () => { selected = false; return null } })
+    deps.router.hasExplicitManagedGeneration = () => selected
+    expect((await createTextRunner(deps)({ step: 'chat', messages: MESSAGES })).ok).toBe(false)
+    expect(paid.chat).not.toHaveBeenCalled()
+  })
+})

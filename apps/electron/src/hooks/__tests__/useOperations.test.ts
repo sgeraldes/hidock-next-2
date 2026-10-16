@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import { useOperations } from '../useOperations'
+import { toast } from '@/components/ui/toaster'
 
 // Mock toast
 vi.mock('@/components/ui/toaster', () => ({
@@ -98,6 +99,21 @@ global.window.electronAPI = {
 } as any
 
 describe('useOperations', () => {
+  it('reports a bulk admission rejection instead of promising processing will start', async () => {
+    mockAddToQueueIPC.mockResolvedValueOnce({ success: false, error: 'Recording is personal' })
+    const { result } = renderHook(() => useOperations())
+    await act(async () => {
+      expect(await result.current.queueBulkTranscriptions([{
+        id: 'rejected-recording', filename: 'rejected.wav', location: 'local-only',
+        localPath: 'F:\\Recordings\\rejected.wav', transcriptionStatus: 'none',
+        syncStatus: 'synced', size: 1024, duration: 60, dateRecorded: new Date()
+      }] as any)).toBe(0)
+    })
+    expect(toast).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'No transcriptions queued', description: '1 could not be queued. Recording is personal', variant: 'error'
+    }))
+    expect(mockUpdateStatus).not.toHaveBeenCalled()
+  })
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(window.electronAPI.config.get).mockResolvedValue({

@@ -1,4 +1,5 @@
 import { app, safeStorage } from 'electron'
+import { isDeviceValidationLaunch } from '../recovery-mode'
 import { join } from 'path'
 import { homedir } from 'os'
 import {
@@ -147,7 +148,12 @@ export interface AppConfig {
     lastSyncAt: string | null
   }
   transcription: {
-    provider: 'gemini' | 'local-asr' | 'vibevoice'
+    provider: 'gemini' | 'local-asr' | 'vibevoice' | 'remote-worker' | 'muse-voice' | 'mai-transcribe-2'
+    museVoiceApiKey?: string
+    maiTranscribeApiKey?: string
+    maiTranscribeEndpoint?: string
+    transcriptionExecution?: 'local' | 'remote' | 'auto'
+    remoteAsrModel?: string
     geminiApiKey: string
     geminiModel: string
     localAsrPath: string
@@ -175,6 +181,15 @@ export interface AppConfig {
      * all, and this cap costs nothing.
      */
     speakerLinkingCpuPercent?: number
+    maxConcurrentRecordings?: 1 | 2
+    localComputePriority?: 'low' | 'below-normal' | 'normal'
+    localModelIdleSeconds?: number
+    localComputeAccelerator?: 'auto' | 'cpu'
+    /** Preserve stored stereo source tracks. Mixed is an explicit legacy/user-selected downmix. */
+    recordedAudioChannelMode?: 'preserve' | 'mixed'
+    resourcePolicyVersion?: number
+    pauseLocalOnBattery?: boolean
+    pauseLocalWhenBusy?: boolean
     /**
      * Address of the HiDock Model Host, the machine that has the GPU.
      *
@@ -183,7 +198,13 @@ export interface AppConfig {
      * also changes nothing, because every one of those sends the recording back
      * to the local worker.
      */
+    liveTranscriptionProvider?: 'gemini-live' | 'remote-nemotron'
+    liveTranscriptionLanguage?: 'en' | 'es'
     modelHostUrl?: string
+    remoteDiarizationModel?: string
+    modelHostCertificatePem?: string
+    /** Explicit opt-in only: a remote failure may start bounded local inference. */
+    modelHostLocalFallback?: boolean
     /** Token this machine got when it paired with that host. */
     modelHostToken?: string
     /**
@@ -211,6 +232,9 @@ export interface AppConfig {
     speakerSetupAt?: string
     /** GPU fingerprint the owner answered "Decide later" on; the dialog stays closed on it. */
     speakerSetupDismissedFingerprint?: string
+    /** Observed acceleration at confirmation/dismissal; absent on legacy profiles. */
+    speakerSetupAccelerator?: 'cuda' | 'cpu'
+    speakerSetupDismissedAccelerator?: 'cuda' | 'cpu'
     /**
      * Whether the onnx-local engine may use DirectML on this GPU. Set by a probe
      * of single-chunk calls (each must finish under 50 ms after warm-up) or by a
@@ -287,6 +311,8 @@ export interface AppConfig {
     defaultBrain: BrainId
     taskRouting: Partial<Record<BrainTask, BrainId>>
     /** The OpenAI-compatible server (LM Studio, llama.cpp, vLLM). The optional key is in the credential store. */
+    modelHostEmbedding?: { spaceId: string }
+    modelHostGeneration?: { modelVersion: string }
     openaiCompatible?: { baseUrl: string; model: string; embeddingModel: string }
   }
   // Modular features (Track I). `preset` selects a named feature-set; `flags` are
@@ -400,10 +426,20 @@ const DEFAULT_CONFIG: AppConfig = {
     speakerLinkingMatchMargin: 0.08,
     speakerLinkingMinSpeechSeconds: 4,
     speakerLinkingTimeoutSeconds: 600,
-    // 40% leaves the machine responsive while a backlog drains. Raise it when
+    // 50% reserves half the logical processors for foreground work. Raise it when
     // nobody is using the machine; lower it if the desktop still stutters.
-    speakerLinkingCpuPercent: 40,
+    speakerLinkingCpuPercent: 50,
+    resourcePolicyVersion: 1,
+    localComputePriority: 'below-normal',
+    localComputeAccelerator: 'auto',
+    recordedAudioChannelMode: 'preserve',
+    maxConcurrentRecordings: 1,
+    pauseLocalOnBattery: true,
+    pauseLocalWhenBusy: true,
+    liveTranscriptionProvider: 'gemini-live',
+    liveTranscriptionLanguage: 'es',
     modelHostUrl: '',
+    remoteDiarizationModel: 'pyannote/speaker-diarization-3.1',
     modelHostToken: '',
     modelHostStepAside: 'games',
     jevApiKey: '',
@@ -448,6 +484,8 @@ const DEFAULT_CONFIG: AppConfig = {
       'gemini-api': true,
       ollama: true,
       'local-onnx-embed': false,
+      'model-host-embed': false,
+      'model-host-generate': false,
       'claude-code': false,
       codex: false,
       'gemini-cli': false,
@@ -666,7 +704,7 @@ export async function initializeConfig(options: { persist?: boolean } = {}): Pro
       if (savedConfig.calendar?.icsUrl) {
         savedConfig.calendar.icsUrl = decryptSensitive(savedConfig.calendar.icsUrl, 'calendar.icsUrl')
       }
-      for (const key of ['jevApiKey', 'geminiApiKey', 'localAsrHfToken', 'modelHostToken'] as const) {
+      for (const key of ['jevApiKey', 'geminiApiKey', 'localAsrHfToken', 'modelHostToken', 'museVoiceApiKey', 'maiTranscribeApiKey'] as const) {
         const value = savedConfig.transcription?.[key]
         if (typeof value === 'string' && value) {
           savedConfig.transcription[key] = decryptSensitive(value, `transcription.${key}`)
@@ -681,10 +719,18 @@ export async function initializeConfig(options: { persist?: boolean } = {}): Pro
       // Auto-upgrade retired Gemini model names in persisted configs so old
       // saved values (e.g. gemini-2.0-flash, now 404) don't break transcription
       // and GraphRAG extraction. Persist if anything changed.
+      const resourcePolicyChanged = savedConfig.transcription?.resourcePolicyVersion !== 1
+      if (resourcePolicyChanged) {
+        Object.assign(config.transcription, {
+          resourcePolicyVersion: 1, speakerLinkingCpuPercent: 50,
+          localComputePriority: 'below-normal', localComputeAccelerator: 'auto',
+          maxConcurrentRecordings: 1, pauseLocalOnBattery: true, pauseLocalWhenBusy: true
+        })
+      }
       const modelsChanged = migrateRetiredGeminiModels(config)
       const autoTransChanged = migrateAutoTranscribeRestore(config)
       const keyMigrated = migrateGeminiKeyToCredentialStore(config)
-      if (modelsChanged || autoTransChanged || keyMigrated) {
+      if (resourcePolicyChanged || modelsChanged || autoTransChanged || keyMigrated) {
         await saveConfig(config)
       }
     } else {
@@ -702,6 +748,11 @@ export async function initializeConfig(options: { persist?: boolean } = {}): Pro
 }
 
 export function getConfig(): AppConfig {
+  if (isDeviceValidationLaunch()) {
+    // Ephemeral containment for both renderer and backend observers. Never mutate
+    // the saved object or persist an automatic-work preference during validation.
+    return { ...config, device: { ...config.device, autoConnect: false, autoDownload: false } }
+  }
   return { ...config }
 }
 
@@ -777,6 +828,8 @@ export async function saveConfig(newConfig: Partial<AppConfig>): Promise<void> {
     transcription: {
       ...config.transcription,
       modelHostToken: secretForDisk(config.transcription.modelHostToken, 'transcription.modelHostToken'),
+      museVoiceApiKey: secretForDisk(config.transcription.museVoiceApiKey, 'transcription.museVoiceApiKey'),
+      maiTranscribeApiKey: secretForDisk(config.transcription.maiTranscribeApiKey, 'transcription.maiTranscribeApiKey'),
       jevApiKey: secretForDisk(config.transcription.jevApiKey, 'transcription.jevApiKey'),
       // Plain text until 28-sep-2026 (settings inventory); a plain value on disk
       // is read as-is and written back encrypted on the next save.
