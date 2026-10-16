@@ -32,6 +32,9 @@ apps/electron/resources/firmware/*.bin
 docs/devices/firmware.md
 docs/devices/tts-demo-control.md
 docs/devices/command-map630.md
+# Iteration notes that name addresses inside the official firmware (16-oct-2026).
+docs/devices/active-iteration-plan.md
+docs/devices/live-audio.md
 # Built renderer/main bundles staged for side-by-side runs, not sources.
 apps/electron/spec013-*-staged/
 apps/electron/src/spec013-*-staged/
