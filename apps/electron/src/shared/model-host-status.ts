@@ -17,9 +17,15 @@ export interface ModelHostSetupReport {
 }
 
 export interface ModelHostHealthReport {
+  semanticEmbedding?: { ready: boolean; model?: string; dimensions?: number; spaceId?: string }
+  textGeneration?: { ready: boolean; model?: string; modelVersion?: string; maxContextTokens?: number; maxOutputTokens?: number }
+  realtimeAsrModels?: string[]
+  protocolVersion?: number
+  telemetry?: import('./pipeline-telemetry').HostResourceSnapshot
   version: string
   state: 'stopped' | 'ready' | 'paused' | 'busy'
   capabilities: string[]
+  diarizationModels?: string[]
   acceleration?: 'cuda' | 'cpu'
   gpu?: { name: string; vramMiB: number | null; driver: string } | null
   reason?: string
@@ -46,6 +52,8 @@ export interface ModelHostStatus {
   paired: boolean
   /** The chosen speaker engine sends work to a host ('auto' or 'model-host'). */
   usedForSpeakers: boolean
+  /** Permission only; pending remote work must be reconciled before local fallback. */
+  localFallback?: boolean
   /** This computer has a Hugging Face token to send. */
   hasHfToken: boolean
   address: string
@@ -66,18 +74,23 @@ export function cpuDespiteGpu(health: ModelHostHealthReport | null | undefined):
 }
 
 export function describeModelHost(status: ModelHostStatus): ModelHostSentence {
-  if (!status.configured) return { tone: 'none', text: `No model host. ${HERE}.` }
+  const unavailable = status.localFallback === true
+    ? 'Local speaker fallback is enabled; pending remote work must be reconciled before it can start.'
+    : 'Voice recognition is unavailable; no local worker will start.'
+  if (!status.configured) return {
+    tone: 'none', text: `No model host. ${status.usedForSpeakers ? unavailable : `${HERE}.`}`
+  }
   const name = status.address
-  if (!status.paired) return { tone: 'off', text: `${name} is not paired with this computer yet. ${HERE}.` }
+  if (!status.paired) return { tone: 'off', text: `${name} is not paired yet. ${status.usedForSpeakers ? unavailable : `${HERE}.`}` }
   if (!status.usedForSpeakers) {
     return {
       tone: 'none',
-      text: `${name} is paired, but the speaker engine chosen in Speakers & voices runs on this computer, so nothing goes there.`
+      text: `${name} is paired. The selected speaker engine runs on this computer; speaker work is not sent to this host.`
     }
   }
 
   const health = status.health
-  if (!health) return { tone: 'off', text: `${name} is not answering: paused, in use or off. ${HERE}.` }
+  if (!health) return { tone: 'off', text: `${name} is not answering: paused, in use or off. ${unavailable}` }
 
   const setup = health.setup
   if (setup && setup.status !== 'ready') {
@@ -87,18 +100,18 @@ export function describeModelHost(status: ModelHostStatus): ModelHostSentence {
           ? { tone: 'paused', text: `${name} is waiting for the Hugging Face token from this computer. Press Check to send it.` }
           : { tone: 'off', text: `${name} needs a Hugging Face token and this computer has none. Add it in Settings > Secrets.` }
       case 'failed':
-        return { tone: 'off', text: `${name} could not run the voice model: ${setup.reason || 'no reason given'}. ${HERE}.` }
+        return { tone: 'off', text: `${name} could not run the voice model: ${setup.reason || 'no reason given'}. ${unavailable}` }
       case 'repairing':
-        return { tone: 'paused', text: `${name} is reinstalling its GPU runtime (a few minutes). Speaker work runs here meanwhile.` }
+        return { tone: 'paused', text: `${name} is reinstalling its GPU runtime. ${unavailable}` }
       default:
         return {
           tone: 'paused',
-          text: `${name} is testing the voice model with the token from this computer. Speaker work runs here meanwhile.`
+          text: `${name} is testing the voice model. ${unavailable}`
         }
     }
   }
   if (!health.capabilities.includes('diarize')) {
-    return { tone: 'off', text: `${name} answers, but its setup has not finished. ${HERE}.` }
+    return { tone: 'off', text: `${name} answers, but its setup has not finished. ${unavailable}` }
   }
 
   if (cpuDespiteGpu(health)) {
@@ -115,12 +128,12 @@ export function describeModelHost(status: ModelHostStatus): ModelHostSentence {
       return { tone: 'working', text: `${name} is working on a recording.` }
     case 'stopped':
     case 'paused':
-      return { tone: 'off', text: `${name} is ${health.state}. ${HERE} meanwhile.` }
+      return { tone: 'off', text: `${name} is ${health.state}. ${unavailable}` }
     default:
       // A newer or older host may report a state this build has no words for.
       return {
         tone: 'off',
-        text: `${name} answers, but in a state this version does not know (${String(health.state)}). ${HERE}.`
+        text: `${name} answers in an unknown state (${String(health.state)}). ${unavailable}`
       }
   }
 }

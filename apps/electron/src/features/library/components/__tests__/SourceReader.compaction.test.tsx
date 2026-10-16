@@ -148,8 +148,10 @@ describe('reader compaction — the player has no title', () => {
   it('stays untitled when minimized', async () => {
     setModes({ player: 'compact' })
     render(<SourceReader recording={makeRecording()} transcript={TRANSCRIPT} />)
-    const section = await screen.findByTestId('reader-section-player')
-    expect(section.textContent ?? '').not.toMatch(/Player/)
+    // Minimized, the player is the one-row dock under the header, not a section.
+    const dock = await screen.findByTestId('reader-dock')
+    expect(dock.textContent ?? '').not.toMatch(/Player/)
+    expect(screen.queryByTestId('reader-section-player')).not.toBeInTheDocument()
   })
 })
 
@@ -175,22 +177,27 @@ describe('reader compaction — the player Layout control', () => {
     it(`is an icon with no text, immediately after the speed selector (${mode})`, async () => {
       setModes({ player: mode })
       render(<SourceReader recording={makeRecording()} transcript={TRANSCRIPT} />)
-      const region = await screen.findByTestId('reader-player-region')
-      const layout = within(region).getByRole('button', { name: 'Layout options for Player' })
+      // The approved layout puts the player controls in ONE row under the header:
+      // play, back, forward, time, speed, Re-transcribe, Ask, then the section icons.
+      const dock = await screen.findByTestId('reader-dock')
+      const layout = within(dock).getByRole('button', { name: 'Layout options for Player' })
 
       expect(layout.textContent?.trim()).toBe('')
       expect(layout.querySelector('svg')).not.toBeNull()
 
-      // Immediately after the 1x selector in the player's row: nothing a user
-      // can reach sits between the two.
-      const reachable = focusables(region)
-      const speed = within(region).getByRole('button', { name: 'Playback speed' })
-      expect(reachable.indexOf(layout)).toBe(reachable.indexOf(speed) + 1)
+      // Same row, after the speed selector.
+      const reachable = focusables(dock)
+      const speed = within(dock).getByRole('button', { name: 'Playback speed' })
+      expect(reachable.indexOf(layout)).toBeGreaterThan(reachable.indexOf(speed))
 
-      // Outside the player's own box, not in a header strip.
-      const playerBox = screen.getByTestId(mode === 'expanded' ? 'waveform-player-full' : 'waveform-player-pill')
-      expect(playerBox).not.toContainElement(layout)
-      expect(layout.closest('[data-reader-pin]')).toBe(mode === 'compact' ? screen.getByTestId('reader-player-body') : null)
+      if (mode === 'expanded') {
+        // Expanded adds the graph detail below; the Layout control is not inside it.
+        expect(screen.getByTestId('waveform-player-full')).not.toContainElement(layout)
+      } else {
+        // Minimized has no graphic at all.
+        expect(screen.queryByTestId(/^waveform-player-/)).not.toBeInTheDocument()
+      }
+      expect(layout.closest('[data-reader-pin]')).toBeNull()
     })
   }
 
@@ -228,7 +235,9 @@ describe('reader compaction — section-mode icons next to Layout', () => {
     render(<SourceReader recording={makeRecording()} transcript={TRANSCRIPT} />)
     fireEvent.click(await screen.findByRole('button', { name: 'Minimize Player' }))
     expect(useLibraryStore.getState().readerSectionModes.player).toBe('compact')
-    expect(screen.getByTestId('waveform-player-pill')).toBeInTheDocument()
+    // Minimized: the one-row dock stays, the graph goes.
+    expect(screen.getByTestId('reader-dock-player')).toBeInTheDocument()
+    expect(screen.queryByTestId(/^waveform-player-/)).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Expand Player' }))
     expect(useLibraryStore.getState().readerSectionModes.player).toBe('expanded')

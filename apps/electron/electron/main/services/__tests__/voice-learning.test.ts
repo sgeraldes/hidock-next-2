@@ -18,6 +18,11 @@ const dbPath = join(tmpdir(), `hidock-voice-learning-${process.pid}.sqlite`)
 const identityConfig = vi.hoisted(() => ({ ownerContactId: 'owner' as string | undefined }))
 
 vi.mock('../file-storage', () => ({ getDatabasePath: () => dbPath }))
+// A boot at an older schema runs the mandatory pre-migration backup, which the
+// real host cannot do under vitest (no startup runtimeDir); back it in process.
+vi.mock('../sqlite-backup-host', () =>
+  import('./helpers/in-process-sqlite-backup-host').then((m) => m.inProcessSqliteBackupHost())
+)
 vi.mock('../config', () => ({
   getConfig: () => ({
     identity: { ownerContactId: identityConfig.ownerContactId },

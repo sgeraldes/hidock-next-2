@@ -760,7 +760,7 @@ export function Library() {
   // Enrichment: Load transcripts and meetings for recordings
   const [meetings, setMeetings] = useState<Map<string, Meeting>>(new Map())
 
-  const refreshCompletedTranscription = useCallback(async (recordingId: string) => {
+  const refreshCompletedTranscription = useCallback(async (recordingId: string, textOnly = false) => {
     const startedAt = performance.now()
     try {
       // ADV13: owner Library management — owner accessor shows the owner their OWN
@@ -788,6 +788,7 @@ export function Library() {
         return next
       })
 
+      if (textOnly) return
       const appState = useAppStore.getState()
       // The transcript match can move the recording to another meeting, so the part numbers are recomputed.
       appState.setUnifiedRecordings(withMeetingParts(appState.unifiedRecordings.map((recording) => {
@@ -825,6 +826,12 @@ export function Library() {
 
   useEffect(() => {
     const unsubscribers: Array<() => void> = []
+
+    if (window.electronAPI.onTranscriptionTextAvailable) {
+      unsubscribers.push(window.electronAPI.onTranscriptionTextAvailable((data) => {
+        void refreshCompletedTranscription(data.recordingId, true)
+      }))
+    }
 
     if (window.electronAPI.onTranscriptionCompleted) {
       unsubscribers.push(window.electronAPI.onTranscriptionCompleted((data) => {

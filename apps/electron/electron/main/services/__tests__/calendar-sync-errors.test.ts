@@ -39,13 +39,14 @@ const { emitDomainEvent } = vi.hoisted(() => ({ emitDomainEvent: vi.fn() }))
 vi.mock('../event-bus', () => ({
   getEventBus: () => ({ emitDomainEvent }),
 }))
+vi.mock('../calendar-cache', () => ({ retireMissingIcsMeetings: vi.fn() }))
 
 // Mock the side-effect modules syncCalendar dynamically imports.
 vi.mock('../activity-log', () => ({ emitActivityLog: vi.fn() }))
 vi.mock('../org-reconciler', () => ({ reconcileOrganizationYielding: vi.fn(async () => undefined) }))
 vi.mock('fs/promises', () => ({ writeFile: vi.fn().mockResolvedValue(undefined) }))
 
-describe('syncCalendar — calendar:synced broadcast', () => {
+describe('syncCalendar - calendar:synced broadcast', () => {
   let syncCalendar: typeof import('../calendar-sync').syncCalendar
 
   // F15: syncCalendar defers itself until the boot tasks drain. No scheduler runs
@@ -58,6 +59,18 @@ describe('syncCalendar — calendar:synced broadcast', () => {
     const mod = await import('../calendar-sync')
     syncCalendar = mod.syncCalendar
   })
+
+  it('fetches immediately in backend mode with no scheduler to settle', async () => {
+    const originalArgv = process.argv
+    process.argv = [...originalArgv, '--backend-only']
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, text: async () => 'BEGIN:VCALENDAR\r\nVERSION:2.0\r\nEND:VCALENDAR' })
+    global.fetch = fetchMock as never
+    try {
+      const result = await syncCalendar('https://calendar.example.com/backend.ics')
+      expect(result.success).toBe(true)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    } finally { process.argv = originalArgv }
+  }, 1000)
 
   it('emits calendar:synced with the meeting count on a successful sync', async () => {
     const ics = [

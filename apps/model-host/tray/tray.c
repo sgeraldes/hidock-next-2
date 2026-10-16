@@ -507,6 +507,31 @@ static void update_path(wchar_t *out) { swprintf(out, MAX_PATH, L"%ls\\update\\H
 
 static void quit(void);
 
+/* Explicit authenticated preparation requests use fixed models and scripts. */
+static int run_asr_preparation(DWORD code) {
+  wchar_t powershell[MAX_PATH], cmd[2048];
+  GetSystemDirectoryW(powershell, MAX_PATH);
+  const wchar_t *model = code == 85 ? L"Edge0/Audio8-ASR-Infinite" : code == 84 ? L"nvidia/Nemotron-3-Diarization" : code == 83 ? L"OpenMOSS-Team/MOSS-Transcribe-Diarize" : code == 82 ? L"nvidia/nemotron-3.5-asr-streaming-0.6b" : code == 81 ? L"Qwen/Qwen3-ASR-1.7B" : code == 80 ? L"moondream/parakeet-ultra" : code == 79 ? L"Qwen/Qwen3-ASR-0.6B" : code == 78 ? L"nvidia/parakeet-tdt-0.6b-v3" : code == 77 ? L"microsoft/VibeVoice-ASR" : L"CohereLabs/cohere-transcribe-03-2026";
+  if (code == 86) {
+    swprintf(cmd, 2048, L"\"%ls\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -ExecutionPolicy Bypass -File \"%ls\\Prepare-SemanticEmbeddings.ps1\" -ImportedModelDir \"%ls\\models\\nemotron-3-embed-1b\" -HostRoot \"%ls\" -RestartTray", powershell, g_dir, g_root, g_root);
+  } else if (code == 87) {
+    swprintf(cmd, 2048, L"\"%ls\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -ExecutionPolicy Bypass -File \"%ls\\Prepare-Realtime.ps1\" -HostRoot \"%ls\" -RestartTray", powershell, g_dir, g_root);
+  } else if (code == 88) {
+    swprintf(cmd, 2048, L"\"%ls\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -ExecutionPolicy Bypass -File \"%ls\\Prepare-Generation.ps1\" -HostRoot \"%ls\" -RestartTray", powershell, g_dir, g_root);
+  } else {
+    swprintf(cmd, 2048, L"\"%ls\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -ExecutionPolicy Bypass -File \"%ls\\Prepare-ASR.ps1\" -Model \"%ls\" -HostRoot \"%ls\" -RestartTray", powershell, g_dir, model, g_root);
+  }
+  STARTUPINFOW si;
+  ZeroMemory(&si, sizeof si);
+  si.cb = sizeof si;
+  PROCESS_INFORMATION pi;
+  if (!CreateProcessW(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS, NULL, g_dir, &si, &pi)) return 0;
+  CloseHandle(pi.hThread);
+  CloseHandle(pi.hProcess);
+  quit();
+  return 1;
+}
+
 /* The service exits with 75 after staging an installer HiDock sent. */
 static int run_staged_update(void) {
   wchar_t exe[MAX_PATH], cmd[MAX_PATH + 16];
@@ -549,6 +574,7 @@ static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       {
         DWORD code = 0;
         if (g_service && GetExitCodeProcess(g_service, &code) && code == 75 && run_staged_update()) return 0;
+        if ((code >= 76 && code <= 88) && run_asr_preparation(code)) return 0;
       }
       if (g_service_wait) {
         UnregisterWaitEx(g_service_wait, NULL);

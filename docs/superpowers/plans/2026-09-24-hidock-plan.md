@@ -1,5 +1,7 @@
 # HiDock plan: every open ask, with status and next step
 
+Device-research update, 11 October 2026: [the device guide](../../devices/README.md) and [firmware reference](../../devices/firmware.md) now document H1E 6.2.5 recording, quality, channel and marker findings. Two PCM feeds were traced to the mono MP3 encoder; a separate local-copy marker utility was tested. DSP source identity, stereo/quality firmware and live device marker control remain unresolved or unimplemented. The dates, ownership and merged-work statuses below are the historical 24 September plan, not new commitments or evidence of those firmware features shipping.
+
 Written 24-sep-2026 at the end of a long session (Claude session `5459dc3e`). It gathers every request
 Sebastián made in that session and the open items of the 23-sep inventory
 (`G:\Code\_briefing\projects\hidock-inventario-pedidos-2026-09-23.md`). Each row says what is done

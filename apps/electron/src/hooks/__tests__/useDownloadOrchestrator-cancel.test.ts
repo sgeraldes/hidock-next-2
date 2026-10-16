@@ -45,6 +45,12 @@ beforeEach(() => {
   useAppStore.setState((s) => ({ connectionStatus: { ...s.connectionStatus, step: 'ready' } }))
 
   global.window.electronAPI = {
+    jensen: {
+      downloadToLibrary: async (name: string, size: number) => ({
+        success: await mockDownloadRecording(name, size, () => {})
+      }),
+      cancelDownload: vi.fn().mockResolvedValue(null)
+    },
     downloadService: {
       onStateUpdate: vi.fn((cb: (state: unknown) => void) => {
         stateUpdateCb = cb
@@ -70,7 +76,7 @@ describe('useDownloadOrchestrator cancel path', () => {
     mockDownloadRecording.mockImplementation(async (_name: string, _size: number, onChunk: (c: Uint8Array) => void) => {
       cancelDownloads() // aborts the orchestrator's AbortController (the signal onChunk observes)
       onChunk(new Uint8Array([1, 2, 3])) // onChunk sees signal.aborted → throws 'Download cancelled'
-      return true
+      return false
     })
 
     renderHook(() => useDownloadOrchestrator())

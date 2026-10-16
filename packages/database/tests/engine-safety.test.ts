@@ -237,6 +237,43 @@ describe('rotating on-boot backup', () => {
     second.closeDatabase()
   })
 
+  it('copies the routine backup in small native steps and flushes the partial file as it grows', async () => {
+    const path = tempDbPath('backup-routine-steps')
+    paths.push(path)
+    const first = makeEngine(path, 3)
+    await first.initialize()
+    first.closeDatabase()
+
+    const real = Database.prototype.backup
+    const stepSizes: Array<number | undefined> = []
+    const backup = vi.spyOn(Database.prototype, 'backup').mockImplementationOnce(async function (
+      this: Database.Database,
+      destination: string,
+      options?: Database.BackupOptions
+    ) {
+      const result = await real.call(this, destination, options)
+      // The test database is a few pages, so SQLite never calls back. Drive the
+      // callback with the sizes a multi-gigabyte copy reports, while the partial exists.
+      stepSizes.push(options?.progress?.({ totalPages: 100000, remainingPages: 99000 }))
+      stepSizes.push(options?.progress?.({ totalPages: 100000, remainingPages: 80000 }))
+      return result
+    })
+    vi.mocked(fs.fsyncSync).mockClear()
+    const second = makeEngine(path, 3, true)
+    try {
+      await second.initialize()
+      await second.runDeferredBackup()
+    } finally {
+      second.closeDatabase()
+      backup.mockRestore()
+    }
+    expect(stepSizes).toEqual([256, 256])
+    // 1,000 pages copied is below the flush threshold; 20,000 crosses it once.
+    expect(vi.mocked(fs.fsyncSync)).toHaveBeenCalledTimes(1)
+    expect(siblingFiles(path).filter((file) => /\.bak-\d{4}-\d{2}-\d{2}$/.test(file))).toHaveLength(1)
+    expect(siblingFiles(path).some((file) => file.endsWith('.partial'))).toBe(false)
+  })
+
   describe('before a migration', () => {
     const extra: string[] = []
     afterEach(() => {
@@ -467,6 +504,27 @@ describe('rotating on-boot backup', () => {
       expect(seen.at(-1)).toBe('migrating')
       expect(last.totalBytes).toBeGreaterThan(0)
       expect(last.copiedBytes).toBe(last.totalBytes)
+      expect(todays(path)).toHaveLength(1)
+    })
+
+    it('keeps the required pre-migration copy in large steps with no periodic flush', async () => {
+      const path = await v1File('backup-migration-steps')
+      const real = Database.prototype.backup
+      const stepSizes: Array<number | undefined> = []
+      const backup = vi.spyOn(Database.prototype, 'backup').mockImplementationOnce(async function (
+        this: Database.Database,
+        destination: string,
+        options?: Database.BackupOptions
+      ) {
+        const result = await real.call(this, destination, options)
+        stepSizes.push(options?.progress?.({ totalPages: 100000, remainingPages: 80000 }))
+        return result
+      })
+      vi.mocked(fs.fsyncSync).mockClear()
+      const e = v2Engine(path)
+      try { await e.initialize() } finally { e.closeDatabase(); backup.mockRestore() }
+      expect(stepSizes).toEqual([2048])
+      expect(vi.mocked(fs.fsyncSync)).not.toHaveBeenCalled()
       expect(todays(path)).toHaveLength(1)
     })
 

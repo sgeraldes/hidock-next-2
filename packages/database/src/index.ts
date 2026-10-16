@@ -29,4 +29,8 @@ export type {
   BetterSqlite3Statement,
   BootProgress,
   ExternalBackup,
+  DatabaseBackupRequest,
+  DatabaseBackupProgress,
+  DatabaseBackupExecutorOptions,
+  DatabaseBackupExecutor,
 } from './engine.js'

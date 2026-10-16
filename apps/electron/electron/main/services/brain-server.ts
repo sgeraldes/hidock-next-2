@@ -1,5 +1,5 @@
 /**
- * The brain's HTTP API: authenticated reads and, in the app, directed transcription.
+ * The brain's HTTP API: authenticated reads and optional fixed lifecycle actions.
  *
  * It replaces the Chrome DevTools port the old bridge used, which had no
  * authentication, executed arbitrary JavaScript in the renderer, accepted any
@@ -16,8 +16,8 @@
  *   check guards apps/model-host.
  *
  * The same server runs inside the app and inside the headless `--brain-only`
- * process. The app also supplies `recordingNow` and `transcription`; the
- * read-only headless host never advertises routes for callbacks it lacks.
+ * process. The app can additionally supply semantic reads and backend lifecycle
+ * callbacks; the read-only host never advertises these when they are absent.
  *
  * Spec: docs/superpowers/specs/2026-09-22-brain-service-design.md
  */
@@ -26,6 +26,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'net'
 import { timingSafeEqual } from 'crypto'
 import type { BrainKind } from './brain-lock'
+import type { BrainScope } from './brain-agent-access'
 
 export interface BrainQueries {
   meetingsSince(since: string): unknown[]
@@ -37,6 +38,7 @@ export interface BrainQueries {
   transcriptForRecording(recordingId: string): unknown
   recordingById(recordingId: string): unknown
   recordingsByFilenamePrefix(prefix: string): unknown[]
+  recordingsInRange?(since: string, until: string, limit: number): unknown
 }
 
 export interface BrainServerOptions {
@@ -44,17 +46,36 @@ export interface BrainServerOptions {
   token: string
   instanceId: string
   queries: BrainQueries
+  /** Optional explicit grants. Absent by default; never creates credentials. */
+  authenticateAgent?: (token: string) => readonly BrainScope[] | null
   /** Called on every accepted request; the headless process uses it to stay alive. */
   onRequest?: () => void
   /** Headless only: asked to finish and exit because the app has taken over. */
   onStepDown?: () => void
   /** App only: what the device is recording right now. Absent in the headless process. */
   recordingNow?: () => unknown
-  /** App only: admit named recordings to transcription, read and cancel their jobs. */
+  /** Existing semantic services, available without an attached window. */
+  contextGraph?: {
+    overview(limit: number): unknown
+    search(query: string, limit: number): unknown
+    provenance(entityId: string): unknown
+  }
+  backend?: {
+    status(): unknown
+    attachUi(): void
+    canStop?(): boolean
+    stop(): void
+  }
   transcription?: {
     submit(ids: string[], provider?: string, requestId?: string): unknown
     status(ids: string[]): unknown
     cancel(id: string): void
+  }
+  rag?: {
+    createSession(title: string): unknown
+    status(): Promise<unknown>
+    chat(sessionId: string, message: string, meetingId?: string): Promise<unknown>
+    cancel(sessionId: string): unknown
   }
   /** Fixed port for tests; 0 (the default) lets the OS choose. */
   port?: number
@@ -80,15 +101,30 @@ const ROUTES = [
   'GET /recordings?filenamePrefix=<prefix>',
   'GET /recording-now',
   'POST /step-down',
+  'GET /context-graph?limit=<1..100>',
+  'GET /context-graph/search?q=<query>&limit=<1..100>',
+  'GET /context-graph/provenance/<entityId>',
+  'GET /backend/status',
+  'POST /backend/ui',
+  'POST /backend/stop',
+  'GET /recordings?since=<iso>&until=<iso>&limit=<1..100>',
   'POST /transcriptions',
   'GET /transcriptions?ids=<id,id>',
   'POST /transcriptions/<recordingId>/cancel',
+  'GET /rag/status',
+  'POST /rag/sessions',
+  'POST /rag/chat',
+  'POST /rag/<sessionId>/cancel',
 ]
 
 function availableRoutes(options: BrainServerOptions): string[] {
   return ROUTES.filter((route) =>
     (options.kind === 'service' || route !== 'POST /step-down') &&
-    (Boolean(options.transcription) || !route.includes('/transcriptions')))
+    (Boolean(options.contextGraph) || !route.includes('/context-graph')) &&
+    (Boolean(options.backend) || !route.includes('/backend/')) &&
+    (Boolean(options.transcription) || !route.includes('/transcriptions')) &&
+    (Boolean(options.rag) || !route.includes('/rag/')) &&
+    (Boolean(options.queries.recordingsInRange) || !route.includes('until=<iso>')))
 }
 
 class RequestError extends Error {
@@ -167,10 +203,14 @@ function sinceParam(url: URL): string | null {
 export function startBrainServer(options: BrainServerOptions): Promise<RunningBrainServer> {
   const startedAt = Date.now()
   let port = 0
+  let ragActive = 0
 
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     if (!isLoopbackHost(req.headers.host, port)) return send(res, 403, { error: 'wrong host' })
-    if (!tokensMatch(bearer(req), options.token)) return send(res, 401, { error: 'missing or wrong token' })
+    const given = bearer(req)
+    const owner = tokensMatch(given, options.token)
+    const scopes = owner ? null : options.authenticateAgent?.(given)
+    if (!owner && !scopes) return send(res, 401, { error: 'missing or wrong token' })
     options.onRequest?.()
 
     // Parsing throws on a bad escape (`%E0`) or an absolute-form request line
@@ -186,6 +226,14 @@ export function startBrainServer(options: BrainServerOptions): Promise<RunningBr
     }
     const method = req.method ?? 'GET'
     const q = options.queries
+    if (!owner) {
+      const scope: BrainScope = parts[0] === 'backend' || parts[0] === 'step-down' ? 'backend:control'
+        : parts[0] === 'transcriptions' ? (method === 'GET' ? 'transcription:read' : 'transcription:write')
+        : parts[0] === 'rag' ? (method === 'GET' ? 'rag:read' : 'rag:write')
+        : parts[0] === 'context-graph' ? 'graph:read'
+        : ['health', 'capabilities'].includes(parts[0]) ? 'health:read' : 'knowledge:read'
+      if (!scopes?.includes(scope)) return send(res, 403, { error: 'scope not granted' })
+    }
 
     try {
       if (options.transcription && parts[0] === 'transcriptions') {
@@ -202,6 +250,38 @@ export function startBrainServer(options: BrainServerOptions): Promise<RunningBr
           options.transcription.cancel(id)
           return send(res, 202, { recordingId: id, cancellationRequested: true })
         }
+      }
+      if (options.rag && parts[0] === 'rag') {
+        if (url.pathname === '/rag/sessions' && method === 'POST') {
+          const body = await jsonBody(req)
+          if (typeof body.title !== 'string' || !body.title.trim() || body.title.length > 200) throw new RequestError(400, 'title (1..200 characters) required')
+          return send(res, 201, options.rag.createSession(body.title.trim()))
+        }
+        if (url.pathname === '/rag/status' && method === 'GET') return send(res, 200, await options.rag.status())
+        if (url.pathname === '/rag/chat' && method === 'POST') {
+          const body = await jsonBody(req)
+          if (typeof body.sessionId !== 'string' || !body.sessionId || body.sessionId.length > 200 || typeof body.message !== 'string' || !body.message.trim() || body.message.length > 8000) throw new RequestError(400, 'sessionId and message (1..8000 characters) required')
+          if (body.meetingId !== undefined && (typeof body.meetingId !== 'string' || !body.meetingId || body.meetingId.length > 200)) throw new RequestError(400, 'invalid meetingId')
+          if (ragActive >= 2) throw new RequestError(409, 'two RAG requests are already active')
+          ragActive++
+          try { return send(res, 200, await options.rag.chat(body.sessionId, body.message, body.meetingId as string | undefined)) }
+          finally { ragActive-- }
+        }
+        if (parts.length === 3 && parts[2] === 'cancel' && method === 'POST') {
+          if (!parts[1] || parts[1].length > 200) throw new RequestError(400, 'invalid sessionId')
+          return send(res, 202, { cancelled: options.rag.cancel(parts[1]) })
+        }
+      }
+      if (method === 'POST' && options.backend && url.pathname === '/backend/ui') {
+        options.backend.attachUi()
+        return send(res, 202, { ui: 'requested' })
+      }
+      if (method === 'POST' && options.backend && url.pathname === '/backend/stop') {
+        if (ragActive > 0 || options.backend.canStop?.() === false) throw new RequestError(409, 'active work must finish or be cancelled before stopping')
+        send(res, 202, { backend: 'stopping' })
+        // Let the response leave before the lifecycle shuts down the socket.
+        setImmediate(() => options.backend?.stop())
+        return
       }
       if (method === 'POST' && url.pathname === '/step-down') {
         if (options.kind !== 'service' || !options.onStepDown) return send(res, 409, { error: 'the app does not step down' })
@@ -225,6 +305,25 @@ export function startBrainServer(options: BrainServerOptions): Promise<RunningBr
           routes: availableRoutes(options),
           recordingNow: Boolean(options.recordingNow),
         })
+      }
+      if (url.pathname === '/backend/status' && options.backend) {
+        return send(res, 200, options.backend.status())
+      }
+      if (parts[0] === 'context-graph' && options.contextGraph) {
+        const rawLimit = url.searchParams.get('limit') ?? '12'
+        if (!/^\d{1,3}$/.test(rawLimit) || Number(rawLimit) < 1 || Number(rawLimit) > 100) {
+          return send(res, 400, { error: 'limit must be an integer between 1 and 100' })
+        }
+        const limit = Number(rawLimit)
+        if (parts.length === 1) return send(res, 200, options.contextGraph.overview(limit))
+        if (parts.length === 2 && parts[1] === 'search') {
+          const query = (url.searchParams.get('q') ?? '').trim()
+          if (!query || query.length > 500) return send(res, 400, { error: 'q must contain 1 to 500 characters' })
+          return send(res, 200, options.contextGraph.search(query, limit))
+        }
+        if (parts.length === 3 && parts[1] === 'provenance') {
+          return send(res, 200, options.contextGraph.provenance(parts[2]))
+        }
       }
       if (parts[0] === 'meetings' && parts.length === 1) {
         const since = sinceParam(url)
@@ -257,6 +356,13 @@ export function startBrainServer(options: BrainServerOptions): Promise<RunningBr
         return found ? send(res, 200, found) : send(res, 404, { error: 'not found' })
       }
       if (parts[0] === 'recordings' && parts.length === 1) {
+        if (options.queries.recordingsInRange && url.searchParams.has('since')) {
+          const since = url.searchParams.get('since') ?? ''
+          const until = url.searchParams.get('until') ?? ''
+          const limit = Number(url.searchParams.get('limit') ?? '50')
+          if (!Number.isFinite(Date.parse(since)) || !Number.isFinite(Date.parse(until)) || !/Z$|[+-]\d\d:\d\d$/.test(since) || !/Z$|[+-]\d\d:\d\d$/.test(until) || Date.parse(until) <= Date.parse(since) || Date.parse(until) - Date.parse(since) > 31 * 86400000 || !Number.isInteger(limit) || limit < 1 || limit > 100) throw new RequestError(400, 'ISO timezone bounds (maximum 31 days) and limit 1..100 required')
+          return send(res, 200, q.recordingsInRange!(new Date(since).toISOString(), new Date(until).toISOString(), limit))
+        }
         const prefix = url.searchParams.get('filenamePrefix') ?? ''
         if (prefix.length < 3) return send(res, 400, { error: 'filenamePrefix of at least 3 characters is required' })
         return send(res, 200, q.recordingsByFilenamePrefix(prefix))
@@ -289,8 +395,6 @@ export function startBrainServer(options: BrainServerOptions): Promise<RunningBr
   // No keep-alive: a lingering idle socket would hold close() open, and every
   // client here makes one request and leaves.
   server.keepAliveTimeout = 1
-  // POST bodies arrive now: a client that opens a request and trickles it must
-  // not hold a socket in the main process forever.
   server.requestTimeout = 15000
   server.headersTimeout = 10000
 

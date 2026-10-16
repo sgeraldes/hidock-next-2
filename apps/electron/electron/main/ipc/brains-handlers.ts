@@ -17,20 +17,7 @@ import { getConfig, replaceConfigSection, updateConfig } from '../services/confi
 import { getBrainRegistry } from '../services/brains/brain-registry'
 import { getBrainCredentialStore } from '../services/brains/brain-credential-store'
 import { DEFAULT_OPENAI_COMPATIBLE_SETTINGS } from '../services/brains/openai-compatible-brain'
-import { getVectorStore } from '../services/vector-store'
 
-/**
- * Kick the provider-scoped backfill after the EMBED routing changes so the
- * newly active provider's partition starts filling immediately (fire-and-
- * forget; the backfill is idempotent and skips chunks already in the
- * partition — switching BACK to a previous provider is a cheap no-op scan).
- */
-function kickEmbedReindex(reason: string): void {
-  void getVectorStore()
-    .backfillMissingTranscripts()
-    .then((r) => console.log(`[brains] embed reindex after ${reason}:`, r))
-    .catch((e) => console.error(`[brains] embed reindex after ${reason} failed:`, e))
-}
 import type { AIBrain, BrainAuthStatus, BrainCapability, BrainId, BrainTask } from '../services/brains/types'
 
 /**
@@ -60,14 +47,27 @@ const MAX_MODEL_NAME = 200
 
 const UNKNOWN_AUTH: BrainAuthStatus = { configured: false, method: 'none', detail: 'Status unavailable' }
 
-/** Resolve one brain's auth status defensively — a throwing/hanging adapter must
- * never break the whole list. */
-async function safeAuth(brain: AIBrain): Promise<BrainAuthStatus> {
-  try {
-    return await brain.authStatus()
-  } catch {
-    return UNKNOWN_AUTH
-  }
+// Retain a timed-out check until the adapter actually settles: UI reloads must not
+// multiply metadata subprocesses/requests. This is in-flight deduplication, not a status cache.
+const authChecks = new WeakMap<AIBrain, Promise<BrainAuthStatus>>()
+const AUTH_METADATA_DEADLINE_MS = 5000
+
+/** Bound Settings metadata latency without killing adapter-owned processes. */
+function safeAuth(brain: AIBrain): Promise<BrainAuthStatus> {
+  const existing = authChecks.get(brain)
+  if (existing) return existing
+  let finish!: (status: BrainAuthStatus) => void
+  const bounded = new Promise<BrainAuthStatus>(resolve => { finish = resolve })
+  authChecks.set(brain, bounded)
+  const timer = setTimeout(() => finish(UNKNOWN_AUTH), AUTH_METADATA_DEADLINE_MS)
+  void Promise.resolve().then(() => brain.authStatus()).then(
+    status => finish(status),
+    () => finish(UNKNOWN_AUTH)
+  ).finally(() => {
+    clearTimeout(timer)
+    if (authChecks.get(brain) === bounded) authChecks.delete(brain)
+  })
+  return bounded
 }
 
 export function registerBrainsHandlers(): void {
@@ -90,13 +90,20 @@ export function registerBrainsHandlers(): void {
   // Toggle a brain's add-on enable flag → config.brains.enabled[id].
   ipcMain.handle('brains:setEnabled', async (_e, args: { id: BrainId; enabled: boolean }) => {
     const { id, enabled } = args ?? ({} as { id: BrainId; enabled: boolean })
+    if (id === 'model-host-generate' && enabled) {
+      const { readRemoteGenerationCapability } = await import('../services/brains/model-host-generate-brain')
+      const { modelVersion } = await readRemoteGenerationCapability()
+      const latest = getConfig().brains
+      await replaceConfigSection('brains', { ...latest, enabled: { ...latest.enabled, [id]: true }, modelHostGeneration: { modelVersion } })
+      return { success: true }
+    }
     const current = getConfig().brains
     await updateConfig('brains', {
       enabled: { ...current.enabled, [id]: enabled },
     })
     // Enabling an embed-capable brain can change the active embed partition.
-    if (enabled && getBrainRegistry().get(id)?.capabilities().has('embed')) {
-      kickEmbedReindex(`enable ${id}`)
+    if (enabled && id !== 'model-host-embed' && getBrainRegistry().get(id)?.capabilities().has('embed')) {
+      // Indexing requires an explicit, owned semantic maintenance run.
     }
     return { success: true }
   })
@@ -104,6 +111,15 @@ export function registerBrainsHandlers(): void {
   // Set the global default brain → config.brains.defaultBrain.
   ipcMain.handle('brains:setDefault', async (_e, args: { id: BrainId }) => {
     const { id } = args ?? ({} as { id: BrainId })
+    if (id === 'model-host-embed') throw new Error('Select Model Host in the semantic search role, not as a text default')
+    if (id === 'model-host-generate') {
+      const { readRemoteGenerationCapability } = await import('../services/brains/model-host-generate-brain')
+      const { modelVersion } = await readRemoteGenerationCapability()
+      const latest = getConfig().brains
+      await replaceConfigSection('brains', { ...latest, defaultBrain: id,
+        enabled: { ...latest.enabled, [id]: true }, modelHostGeneration: { modelVersion } })
+      return { success: true }
+    }
     await updateConfig('brains', { defaultBrain: id })
     return { success: true }
   })
@@ -118,17 +134,29 @@ export function registerBrainsHandlers(): void {
   ipcMain.handle('brains:setTaskRouting', async (_e, args: { task: BrainTask; id: BrainId | null }) => {
     const { task, id } = args ?? ({} as { task: BrainTask; id: BrainId | null })
     const current = getConfig().brains
-    const routing: Partial<Record<BrainTask, BrainId>> = { ...current.taskRouting }
+    let generationBinding: { modelVersion: string } | undefined
+    if (id === 'model-host-generate') {
+      if (!['chat', 'outputs', 'suggestions'].includes(task)) throw new Error('Managed generation only supports text roles')
+      const { readRemoteGenerationCapability } = await import('../services/brains/model-host-generate-brain')
+      generationBinding = { modelVersion: (await readRemoteGenerationCapability()).modelVersion }
+    }
+    let binding = current.modelHostEmbedding
+    if (id === 'model-host-embed') {
+      if (task !== 'embed') throw new Error('Model Host semantic role only supports embeddings')
+      const { readRemoteEmbeddingSpace } = await import('../services/brains/model-host-embed-brain')
+      binding = { spaceId: (await readRemoteEmbeddingSpace()).spaceId }
+    }
+    const routing: Partial<Record<BrainTask, BrainId>> = { ...getConfig().brains.taskRouting }
     if (id === null || id === undefined) {
       delete routing[task]
     } else {
       routing[task] = id
     }
     // Replace the section: updateConfig merges deeply, so a cleared override would stay in the config.
-    await replaceConfigSection('brains', { ...current, taskRouting: routing })
-    // Provider partitions: a new EMBED route means a new active partition —
-    // start filling it in the background right away.
-    if (task === 'embed') kickEmbedReindex(`routing embed→${id ?? 'auto'}`)
+    await replaceConfigSection('brains', { ...getConfig().brains, taskRouting: routing, modelHostEmbedding: binding,
+      ...(generationBinding ? { modelHostGeneration: generationBinding, enabled: { ...getConfig().brains.enabled, 'model-host-generate': true } } : {}),
+      ...(id === 'model-host-embed' ? { enabled: { ...getConfig().brains.enabled, 'model-host-embed': true } } : {}) })
+    // Selection never starts inference. Explicit maintenance owns indexing.
     return { success: true }
   })
 

@@ -25,6 +25,7 @@ import type {
   BrainMessage,
   BrainTask,
   GenerateOptions,
+  EmbedOptions,
 } from './types'
 
 /**
@@ -96,6 +97,12 @@ export class BrainRouter {
     }
   }
 
+  /** Capture before awaiting a request: later config changes cannot authorize paid/local fallback. */
+  hasExplicitManagedGeneration(task: BrainTask): boolean {
+    const cfg = this.brainsConfig()
+    return (cfg?.taskRouting?.[task] ?? cfg?.defaultBrain) === 'model-host-generate'
+  }
+
   /** Resolve the brain for a task, or null if none can serve `need`. */
   async resolve(task: BrainTask, need: BrainCapability): Promise<AIBrain | null> {
     const cfg = this.brainsConfig()
@@ -105,12 +112,14 @@ export class BrainRouter {
     if (routed) {
       const brain = this.registry.get(routed)
       if (await this.isUsable(brain, need)) return brain
+      if (routed === 'model-host-generate' && ['generate', 'chat'].includes(need)) throw new Error('Selected managed generation role unavailable; no fallback')
     }
 
     // 2. Global default.
     const def = cfg?.defaultBrain ?? DEFAULT_BRAIN
     const defBrain = this.registry.get(def)
     if (await this.isUsable(defBrain, need)) return defBrain
+    if (def === 'model-host-generate' && ['generate', 'chat'].includes(need)) throw new Error('Selected managed generation default unavailable; no fallback')
 
     // 3. Capability fallback chain.
     for (const id of FALLBACK_CHAINS[need]) {
@@ -188,8 +197,11 @@ export class BrainRouter {
    */
   private async selectChatBrain(task: BrainTask, exclude: ReadonlySet<BrainId>): Promise<AIBrain | null> {
     for (const id of this.chatCandidateOrder(task)) {
-      if (exclude.has(id)) continue
+      if (exclude.has(id)) { if (id === 'model-host-generate') return null; continue }
       const brain = this.registry.get(id)
+      if (id === 'model-host-generate') {
+        return await this.isUsable(brain, 'chat') ? brain : null
+      }
       if (!brain) continue
       if (!this.isEnabled(id)) continue
       if (isBrainCoolingDown(id)) continue // out of quota until its stated reset
@@ -283,6 +295,7 @@ export class BrainRouter {
         const answer = await brain.chat(messages, opts)
         if (answer != null) return answer
         lastFailure = { brainId: brain.id, kind: 'null' }
+        if (brain.id === 'model-host-generate') { this.lastChatFailure = lastFailure; return null }
         console.warn(`[BrainRouter] ${brain.id} chat returned null, trying next candidate`)
       } catch (e) {
         if (e instanceof DOMException && e.name === 'AbortError') {
@@ -290,6 +303,7 @@ export class BrainRouter {
           return null
         }
         lastFailure = { brainId: brain.id, kind: 'threw' }
+        if (brain.id === 'model-host-generate') { this.lastChatFailure = lastFailure; throw e }
         console.error(`[BrainRouter] ${brain.id} chat failed, trying next candidate:`, e)
       }
     }
@@ -306,7 +320,7 @@ export class BrainRouter {
    */
   async embed(
     texts: string[],
-    opts: { shouldGenerate?: () => boolean; purpose?: 'query' | 'passage' } = {}
+    opts: EmbedOptions = {}
   ): Promise<(number[] | null)[]> {
     if (texts.length === 0) return []
 
@@ -326,6 +340,16 @@ export class BrainRouter {
     // self-reports (a throw means "try the next candidate"; null vectors mean
     // abort/unavailable and are returned as-is).
     const routed = this.brainsConfig()?.taskRouting?.['embed']
+    const remotePartition = `model-host-embed:${this.brainsConfig()?.modelHostEmbedding?.spaceId}`
+    if (opts.expectedProviderId !== undefined && (routed === 'model-host-embed' || opts.expectedProviderId?.startsWith('model-host-embed:'))
+        && (routed !== 'model-host-embed' || opts.expectedProviderId !== remotePartition)) {
+      throw new Error('Embedding selection changed; captured partition must not receive different vectors')
+    }
+    if (routed === 'model-host-embed') {
+      const remote = this.registry.get(routed)
+      if (!remote?.embed || !this.isEnabled(routed)) return ineligible()
+      return remote.embed(texts, opts) // Explicit remote role never falls through to paid/local providers.
+    }
     if (routed && routed !== 'gemini-api') {
       const brain = this.registry.get(routed)
       if (brain && this.isEnabled(routed) && !isBrainCoolingDown(routed) && brain.capabilities().has('embed') && brain.embed) {
@@ -398,6 +422,7 @@ export class BrainRouter {
   async activeEmbedBrainId(): Promise<BrainId | null> {
     const cfg = this.brainsConfig()
     const routed = cfg?.taskRouting?.['embed']
+    if (routed === 'model-host-embed') return this.isEnabled(routed) && cfg?.modelHostEmbedding?.spaceId ? routed : null
     if (routed && routed !== 'gemini-api') {
       const brain = this.registry.get(routed)
       if (brain && this.isEnabled(routed) && !isBrainCoolingDown(routed) && brain.capabilities().has('embed')) {

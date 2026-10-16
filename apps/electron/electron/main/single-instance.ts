@@ -27,6 +27,8 @@ export interface SingleInstanceOptions {
   getMainWindow: () => BrowserWindow | null
   /** Returns the splash window, or `null` if absent/destroyed. Optional. */
   getSplashWindow?: () => BrowserWindow | null
+  /** Create/attach UI in an already-running backend without another DB owner. */
+  onShowUi?: () => void
 }
 
 /**
@@ -131,6 +133,8 @@ export function acquireSingleInstanceLock(options: SingleInstanceOptions): boole
     // A headless brain asking whether it is alone is not the owner opening
     // HiDock: the window stays where it is.
     if (isBrainLockProbe(additionalData)) return
+    if (_argv?.includes('--backend-only')) return
+    options.onShowUi?.()
     showRunningInstance(options)
   })
 

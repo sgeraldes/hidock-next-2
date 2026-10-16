@@ -28,7 +28,7 @@
 import { FRAME_SECONDS, LOUD_DB, LOUD_GAIN } from './audio-profile'
 
 /** Bumped when a rule changes, so stored verdicts are recomputed. */
-export const VALIDITY_VERSION = 2
+export const VALIDITY_VERSION = 3
 
 export type ValidityStatus = 'audio' | 'invalid' | 'incomplete' | 'doubtful' | 'valid'
 
@@ -185,8 +185,14 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
   // Doubts settle as doubtful, or as valid when a sample of the audio confirmed
   // the text. A confirmed transcript keeps its reasons: a compressed clock is
   // still compressed, and the clock repair reads it.
-  const settle = (reasons: ValidityReason[]): TranscriptValidity =>
-    reasons.length === 0 ? result('valid', []) : input.sample === 'confirmed' ? result('valid', reasons) : result('doubtful', reasons)
+  const settle = (reasons: ValidityReason[]): TranscriptValidity => {
+    if (reasons.length === 0) return result('valid', [])
+    // Sampling compares words/meaning. It cannot establish speaker identity or
+    // attendance, so a successful text comparison must not clear a voice issue.
+    const unresolvedSpeakers = reasons.some(reason => reason.code === 'more_speakers_than_invited')
+    return input.sample === 'confirmed' && !unresolvedSpeakers
+      ? result('valid', reasons) : result('doubtful', reasons)
+  }
   if (input.sample === 'incomplete') {
     return result('incomplete', [
       { code: 'speech_after_the_end', detail: 'Speech goes on after the transcript ends: a sample of the audio after it holds talk.' }

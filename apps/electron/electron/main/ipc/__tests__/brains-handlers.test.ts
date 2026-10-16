@@ -1,10 +1,20 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ipcMain } from 'electron'
 import { registerBrainsHandlers } from '../brains-handlers'
 import { getConfig, replaceConfigSection, updateConfig } from '../../services/config'
 import { getBrainRegistry } from '../../services/brains/brain-registry'
 import { getBrainCredentialStore } from '../../services/brains/brain-credential-store'
 import type { AIBrain, BrainAuthStatus, BrainCapability } from '../../services/brains/types'
+import { getVectorStore } from '../../services/vector-store'
+
+const recoveryMode = vi.hoisted(() => vi.fn(() => false))
+const backfill = vi.hoisted(() => vi.fn(async () => ({ indexed: 0, skipped: 0 })))
+vi.mock('../../recovery-mode', () => ({ isRecoveryMode: recoveryMode }))
+
+const generationProfile = vi.hoisted(() => vi.fn())
+vi.mock('../../services/brains/model-host-generate-brain', () => ({ readRemoteGenerationCapability: generationProfile }))
+const remoteSpace = vi.hoisted(() => vi.fn())
+vi.mock('../../services/brains/model-host-embed-brain', () => ({ readRemoteEmbeddingSpace: remoteSpace }))
 
 vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn() },
@@ -26,7 +36,7 @@ vi.mock('../../services/brains/brain-credential-store', () => ({
 
 vi.mock('../../services/vector-store', () => ({
   getVectorStore: vi.fn(() => ({
-    backfillMissingTranscripts: vi.fn(async () => ({ indexed: 0, skipped: 0 })),
+    backfillMissingTranscripts: backfill,
   })),
 }))
 
@@ -76,6 +86,7 @@ describe('Brains IPC Handlers', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    recoveryMode.mockReturnValue(false)
     handlers = {}
     vi.mocked(ipcMain.handle).mockImplementation(((channel: string, handler: IpcHandler) => {
       handlers[channel] = handler
@@ -88,6 +99,102 @@ describe('Brains IPC Handlers', () => {
     vi.mocked(getBrainRegistry).mockReturnValue({ list: () => BRAINS, get: () => null } as any)
     vi.mocked(getBrainCredentialStore).mockReturnValue({ setSecret, hasSecret } as any)
     registerBrainsHandlers()
+  })
+
+  afterEach(() => vi.useRealTimers())
+
+  it('bounds a hanging adapter, deduplicates overlapping/repeated loads and never publishes its late status', async () => {
+    vi.useFakeTimers()
+    let settle!: (auth: BrainAuthStatus) => void
+    const authStatus = vi.fn(() => new Promise<BrainAuthStatus>(resolve => { settle = resolve }))
+    const brain = fakeBrain('model-host-generate', 'Managed', ['chat'], authStatus)
+    vi.mocked(getBrainRegistry).mockReturnValue({ list: () => [brain], get: () => brain } as any)
+    const first = handlers['brains:list']()
+    const second = handlers['brains:list']()
+    await vi.advanceTimersByTimeAsync(4999)
+    expect(authStatus).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(1)
+    await vi.advanceTimersByTimeAsync(1)
+    const firstRows = await first, secondRows = await second
+    expect(firstRows[0].auth).toMatchObject({ configured: false, detail: 'Status unavailable' })
+    expect(secondRows[0].auth).toEqual(firstRows[0].auth)
+    expect((await handlers['brains:list']())[0].auth.configured).toBe(false)
+    expect(authStatus).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
+    settle({ configured: true, method: 'api-key', detail: 'late result' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(firstRows[0].auth.configured).toBe(false)
+    expect(secondRows[0].auth.configured).toBe(false)
+    authStatus.mockResolvedValue({ configured: false, method: 'none', detail: 'fresh check' })
+    expect((await handlers['brains:list']())[0].auth.detail).toBe('fresh check')
+    expect(authStatus).toHaveBeenCalledTimes(2)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+  it('cleans metadata timers on both success and rejection', async () => {
+    vi.useFakeTimers()
+    const good = fakeBrain('gemini-api', 'Good', ['chat'], async () => ({ configured: true, method: 'api-key' }))
+    const bad = fakeBrain('ollama', 'Bad', ['chat'], async () => { throw new Error('metadata failed') })
+    vi.mocked(getBrainRegistry).mockReturnValue({ list: () => [good, bad] } as any)
+    const rows = await handlers['brains:list']()
+    expect(rows.map((row: any) => row.auth.configured)).toEqual([true, false])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('binds the authenticated remote space and enables only after explicit semantic selection', async () => {
+    remoteSpace.mockResolvedValue({ spaceId: 'nemotron-import-sha256:' + 'a'.repeat(64) })
+    await handlers['brains:setTaskRouting']({}, { task: 'embed', id: 'model-host-embed' })
+    expect(replaceConfigSection).toHaveBeenCalledWith('brains', expect.objectContaining({
+      modelHostEmbedding: { spaceId: 'nemotron-import-sha256:' + 'a'.repeat(64) },
+      taskRouting: { embed: 'model-host-embed' }, enabled: expect.objectContaining({ 'model-host-embed': true })
+    }))
+  })
+  it('leaves routing unchanged when authenticated remote readiness fails', async () => {
+    remoteSpace.mockRejectedValue(new Error('unavailable'))
+    await expect(handlers['brains:setTaskRouting']({}, { task: 'embed', id: 'model-host-embed' })).rejects.toThrow('unavailable')
+    expect(replaceConfigSection).not.toHaveBeenCalled()
+  })
+
+  it('persists an explicit remote embedding binding in recovery without initializing or backfilling vectors', async () => {
+    recoveryMode.mockReturnValue(true)
+    remoteSpace.mockResolvedValue({ spaceId: 'nemotron-import-sha256:' + 'b'.repeat(64) })
+    await handlers['brains:setTaskRouting']({}, { task: 'embed', id: 'model-host-embed' })
+    expect(replaceConfigSection).toHaveBeenCalledWith('brains', expect.objectContaining({
+      modelHostEmbedding: { spaceId: 'nemotron-import-sha256:' + 'b'.repeat(64) },
+      taskRouting: { embed: 'model-host-embed' },
+      enabled: expect.objectContaining({ 'model-host-embed': true })
+    }))
+    expect(getVectorStore).not.toHaveBeenCalled()
+    expect(backfill).not.toHaveBeenCalled()
+  })
+
+  it.each(['enable', 'route', 'default'])('atomically binds managed generation for explicit %s only', async action => {
+    generationProfile.mockResolvedValue({ modelVersion: 'measured-version' })
+    if (action === 'enable') await handlers['brains:setEnabled']({}, { id: 'model-host-generate', enabled: true })
+    if (action === 'route') await handlers['brains:setTaskRouting']({}, { task: 'chat', id: 'model-host-generate' })
+    if (action === 'default') await handlers['brains:setDefault']({}, { id: 'model-host-generate' })
+    expect(replaceConfigSection).toHaveBeenCalledTimes(1)
+    const saved = vi.mocked(replaceConfigSection).mock.calls[0][1] as any
+    expect(saved.modelHostGeneration).toEqual({ modelVersion: 'measured-version' })
+    expect(saved.enabled['model-host-generate']).toBe(true)
+    expect(saved.defaultBrain).toBe(action === 'default' ? 'model-host-generate' : 'gemini-api')
+    expect(saved.taskRouting).toEqual(action === 'route' ? { chat: 'model-host-generate' } : {})
+    expect(updateConfig).not.toHaveBeenCalled()
+  })
+  it.each(['enable', 'route', 'default'])('does not alter configuration when managed readiness fails during %s', async action => {
+    generationProfile.mockRejectedValue(new Error('not ready'))
+    const call = action === 'enable' ? handlers['brains:setEnabled']({}, { id: 'model-host-generate', enabled: true })
+      : action === 'route' ? handlers['brains:setTaskRouting']({}, { task: 'chat', id: 'model-host-generate' })
+      : handlers['brains:setDefault']({}, { id: 'model-host-generate' })
+    await expect(call).rejects.toThrow('not ready')
+    expect(replaceConfigSection).not.toHaveBeenCalled()
+    expect(updateConfig).not.toHaveBeenCalled()
+  })
+  it('does not accept a text-only engine for audio, embedding, or agentic roles', async () => {
+    for (const task of ['embed', 'transcribeAnalyze', 'handover'])
+      await expect(handlers['brains:setTaskRouting']({}, { task, id: 'model-host-generate' })).rejects.toThrow('text roles')
+    expect(generationProfile).not.toHaveBeenCalled()
+    expect(replaceConfigSection).not.toHaveBeenCalled()
   })
 
   it('registers all eight brains:* channels', () => {

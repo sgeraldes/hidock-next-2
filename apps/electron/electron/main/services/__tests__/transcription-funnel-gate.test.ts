@@ -88,14 +88,37 @@ const dbSpies = vi.hoisted(() => {
     'createProcessingRun',
     'completeProcessingRun',
     'failProcessingRun',
+    // Imported by transcription.ts today; getQueueState() and the manual path read the two "owned"
+    // lists on every queue emit, so they need real-shaped defaults (below), not bare spies.
+    'getOwnedPipelineRecordings',
+    'getOwnedProcessingRuns',
+    'persistAiMeetingResolution',
+    'clearAutomaticMeetingLink',
+    'isValueExcludedRecording',
+    'isRecordingProcessable',
+    'isRecordingGraphIngestable',
+    'getFailedTranscriptsForReanalysis',
+    'getSpeakerMap',
+    'assignSpeaker',
+    'retireGeneratedContentForNoSpeech',
+    'checkTranscriptIntegrity',
   ]
+  // Shapes the production code relies on. A bare vi.fn() returns undefined, which is not a valid
+  // "nothing is owned" answer: callers do owned.includes(id) and new Set(runs.keys()).
+  const defaults: Record<string, () => unknown> = {
+    getOwnedPipelineRecordings: () => [],
+    getOwnedProcessingRuns: () => new Map<string, string>(),
+    getFailedTranscriptsForReanalysis: () => [],
+  }
   const spies: Record<string, ReturnType<typeof import('vitest').vi.fn>> = {}
-  return { names, spies }
+  return { names, defaults, spies }
 })
 vi.mock('../database', () => {
   const mod: Record<string, unknown> = {}
   for (const name of dbSpies.names) {
-    mod[name] = dbSpies.spies[name] = vi.fn()
+    const spy = dbSpies.spies[name] = vi.fn()
+    if (dbSpies.defaults[name]) spy.mockImplementation(dbSpies.defaults[name])
+    mod[name] = spy
   }
   return mod
 })

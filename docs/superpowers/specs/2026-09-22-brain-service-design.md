@@ -125,10 +125,11 @@ is for.
 
 - **`raw`** — evaluating arbitrary JavaScript in the renderer is the security hole this replaces.
   Anything it was used for becomes a route or does not happen.
-- **`recording-now`** — it calls `jensen.listFiles()`, which needs the USB device. A database reader
-  cannot answer it. That question already has a home: the `mcp-hidock-storage` MCP server talks to
-  the device directly. The split is clean: device questions to the device server, knowledge
-  questions to the brain.
+- **`recording-now`** — a database reader cannot establish current hardware recording state.
+  Device questions must use the app's existing connection owner or explicitly marked cached
+  state. A direct device MCP/USB client must not open a competing connection while the app owns
+  the device. See [the device guide](../../devices/README.md#safe-development-and-hardware-validation)
+  for ownership and the distinction between native recording state/markers and host knowledge.
 
 ## Testing
 

@@ -1,8 +1,8 @@
 /**
  * Tests for the integrated titlebar chrome (Wave: unified bar):
  *  - the brand lockup lives IN the bar (moved out of the sidebar);
- *  - the right cluster exposes notifications / activity / settings / device /
- *    user-menu;
+ *  - the right cluster exposes notifications / activity / device / user-menu;
+ *  - Settings lives at the bottom of the sidebar, not in the titlebar;
  *  - the native window-controls gutter is reserved on the right.
  *
  * The sidebar-collapse handle no longer lives in the titlebar (it moved to the
@@ -55,17 +55,17 @@ describe('Integrated titlebar — brand cell', () => {
   it('renders the two-line brand lockup inside the bar', () => {
     renderBar()
     expect(screen.getByTestId('app-brand')).toBeInTheDocument()
-    expect(screen.getByText('HiDock')).toBeInTheDocument()
-    expect(screen.getByText('Next')).toBeInTheDocument()
+    expect(screen.getByText('ext')).toBeInTheDocument()
+    expect(screen.queryByText('HiDock')).not.toBeInTheDocument()
   })
 })
 
 describe('Integrated titlebar — right cluster', () => {
-  it('exposes notifications, activity, settings, device and user-menu controls', () => {
+  it('exposes notifications, activity, device and user-menu controls, with Settings in the sidebar', () => {
     renderBar()
     expect(screen.getByRole('button', { name: /notifications/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /activity log/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /^settings$/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^settings$/i })).not.toBeInTheDocument()
     // Device status pill (disconnected → "Connect device") + its options caret.
     expect(screen.getByRole('button', { name: /connect device/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /device options/i })).toBeInTheDocument()
@@ -112,6 +112,13 @@ describe('Integrated titlebar — ⌘K search shortcut', () => {
     renderBar()
     // ⌘K on mac, "Ctrl K" elsewhere — either way a <kbd> hint is present.
     expect(screen.getByText(/⌘K|Ctrl K/)).toBeInTheDocument()
+  })
+
+  it('keeps the search form from collapsing below its measured minimum width', () => {
+    renderBar()
+    const form = screen.getByRole('searchbox').closest('form')
+    expect(form).toHaveClass('flex-1', 'min-w-[160px]')
+    expect(form).not.toHaveClass('min-w-0')
   })
 })
 

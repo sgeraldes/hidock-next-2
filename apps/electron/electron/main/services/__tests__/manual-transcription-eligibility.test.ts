@@ -6,6 +6,11 @@ import { tmpdir } from 'os'
 
 const dbPath = join(tmpdir(), `hidock-manual-transcription-${randomUUID()}.sqlite`)
 vi.mock('../file-storage', () => ({ getDatabasePath: () => dbPath }))
+// A boot at an older schema runs the mandatory pre-migration backup, which the
+// real host cannot do under vitest (no startup runtimeDir); back it in process.
+vi.mock('../sqlite-backup-host', () =>
+  import('./helpers/in-process-sqlite-backup-host').then((m) => m.inProcessSqliteBackupHost())
+)
 
 import { initializeDatabase, closeDatabase, run, addToQueue, getQueueItems, updateQueueItem, queryOne } from '../database'
 import { filterTranscribableRecordingIds } from '../recording-eligibility'

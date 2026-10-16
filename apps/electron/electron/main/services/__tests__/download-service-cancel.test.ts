@@ -52,22 +52,26 @@ vi.mock('../activity-log', () => ({ emitActivityLog: vi.fn() }))
 // Controllable transfer-controller mock so we can drive the "active transfer" state.
 const controllerState: {
   activeFilename: string | null
+  queuedFilename: string | null
   cancelByNameResolvers: Array<() => void>
-} = { activeFilename: null, cancelByNameResolvers: [] }
+} = { activeFilename: null, queuedFilename: null, cancelByNameResolvers: [] }
 
 vi.mock('../download-transfer-controller', () => ({
   getActiveTransferFilename: () => controllerState.activeFilename,
+  hasTransferIntent: (filename: string) => controllerState.queuedFilename === filename,
   cancelActiveTransferByName: vi.fn((_filename: string) => {
     // Simulate USB settlement completing after a microtask; clears the active pointer.
     return new Promise<boolean>((resolve) => {
       controllerState.cancelByNameResolvers.push(() => {
-        controllerState.activeFilename = null
+        if (controllerState.activeFilename === _filename) controllerState.activeFilename = null
+        if (controllerState.queuedFilename === _filename) controllerState.queuedFilename = null
         resolve(true)
       })
     })
   }),
-  cancelActiveTransfer: vi.fn(() => {
+  cancelAllTransfers: vi.fn(() => {
     controllerState.activeFilename = null
+    controllerState.queuedFilename = null
     return Promise.resolve(true)
   }),
 }))
@@ -83,13 +87,13 @@ vi.mock('fs', async (importOriginal) => {
 import { DownloadService } from '../download-service'
 import { saveRecording } from '../file-storage'
 import { addSyncedFile, markRecordingDownloaded } from '../database'
-import { cancelActiveTransferByName, cancelActiveTransfer } from '../download-transfer-controller'
+import { cancelActiveTransferByName, cancelAllTransfers } from '../download-transfer-controller'
 
 const mockSaveRecording = vi.mocked(saveRecording)
 const mockAddSyncedFile = vi.mocked(addSyncedFile)
 const mockMarkRecordingDownloaded = vi.mocked(markRecordingDownloaded)
 const mockCancelByName = vi.mocked(cancelActiveTransferByName)
-const mockCancelActive = vi.mocked(cancelActiveTransfer)
+const mockCancelAll = vi.mocked(cancelAllTransfers)
 
 function statusOf(service: DownloadService, filename: string): string | undefined {
   return service.getState().queue.find((i) => i.filename === filename)?.status
@@ -111,6 +115,19 @@ describe('DownloadService — Phase-1 cancellation', () => {
   })
 
   describe('cancelDownload', () => {
+    it('cancels a queued SDK intent without disturbing an unrelated active transfer', async () => {
+      service.queueDownloads([{ filename: 'a.hda', size: 1024 }, { filename: 'b.hda', size: 1024 }])
+      controllerState.activeFilename = 'a.hda'; controllerState.queuedFilename = 'b.hda'
+      const cancel = service.cancelDownload('b.hda')
+      expect(statusOf(service, 'b.hda')).toBe('cancelling')
+      service.updateProgress('b.hda', 512)
+      expect(service.getState().queue.find(item => item.filename === 'b.hda')?.progress).toBe(0)
+      expect(mockCancelByName).toHaveBeenCalledWith('b.hda', 'user-cancel')
+      controllerState.cancelByNameResolvers.forEach(resolve => resolve())
+      await cancel
+      expect(controllerState.activeFilename).toBe('a.hda')
+      expect(statusOf(service, 'b.hda')).toBe('cancelled')
+    })
     it('cancels a PENDING item straight to cancelled (no active transfer involved)', async () => {
       service.queueDownloads([{ filename: 'a.hda', size: 1024 }])
 
@@ -171,19 +188,19 @@ describe('DownloadService — Phase-1 cancellation', () => {
 
       expect(statusOf(service, 'a.hda')).toBe('cancelled')
       expect(statusOf(service, 'b.hda')).toBe('cancelled')
-      expect(mockCancelActive).toHaveBeenCalledWith('user-cancel')
+      expect(mockCancelAll).toHaveBeenCalledWith('user-cancel')
       const items = service.getState().queue
       expect(items.every((i) => i.cancelReason === 'user')).toBe(true)
     })
 
-    it('does not abort the bus when nothing is actively transferring', async () => {
+    it('stands down all intents without requiring an active transfer', async () => {
       service.queueDownloads([{ filename: 'a.hda', size: 1024 }]) // pending only
       controllerState.activeFilename = null
 
       await service.cancelAll()
 
       expect(statusOf(service, 'a.hda')).toBe('cancelled')
-      expect(mockCancelActive).not.toHaveBeenCalled()
+      expect(mockCancelAll).toHaveBeenCalledWith('user-cancel')
     })
   })
 

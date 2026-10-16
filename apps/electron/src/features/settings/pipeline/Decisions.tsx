@@ -6,11 +6,11 @@ import { DECISION_ENGINE_IDS, DECISION_PRESETS, DECISION_STEPS, type DecisionCon
 import { SELECT_CLASS } from './ChoiceFields'
 
 const PRESET_LABELS: Record<DecisionPreset, string> = {
-  'zero-cost': 'Zero cost', cheapest: 'Cheapest', 'most-accurate': 'Most accurate', fastest: 'Fastest'
+  'zero-cost': 'Prefer free', cheapest: 'Cheapest', 'most-accurate': 'Most accurate', fastest: 'Fastest'
 }
 const STEP_LABELS: Record<DecisionStep, string> = {
   'identity-tiebreak': 'Identity tiebreak', 'meeting-match': 'Meeting match', evaluate: 'Evaluation',
-  'sample-compare': 'Sample comparison', 'kind-pick': 'Recording kind'
+  'sample-compare': 'Sample comparison', 'kind-pick': 'Recording kind', 'quality-repair': 'Quality repair advice'
 }
 const ENGINE_LABELS = { 'clef-flash': 'Clef Flash', clef: 'Clef', jev: 'Jev', haiku: 'Claude Haiku', 'gemini-flash': 'Gemini Flash' }
 
@@ -32,6 +32,9 @@ export function Decisions({ state, onSaved }: { state: PipelineSettingsState; on
     <section aria-labelledby="pipeline-decisions" className="space-y-3">
       <h3 id="pipeline-decisions" className="text-sm font-semibold">Decisions</h3>
       <p className="text-sm text-muted-foreground">Choose how decisions are made. If an engine cannot answer, the preset tries the next one.</p>
+      {(draft.preset === 'zero-cost' || Object.values(draft.overrides).includes('zero-cost')) && (
+        <p className="text-sm text-muted-foreground">Prefer free tries Clef Flash and Clef first. If they are unavailable or fail, it can send the decision to paid cloud providers and incur charges.</p>
+      )}
       <div className="space-y-4 rounded-lg border border-border bg-card p-4">
         <div className="space-y-1">
           <Label htmlFor="decision-preset">Global preset</Label>

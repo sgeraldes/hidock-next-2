@@ -79,6 +79,8 @@ beforeEach(() => {
     modelHostUrl: '',
     modelHostToken: '',
   })
+  delete config.transcription.speakerSetupAccelerator
+  delete config.transcription.speakerSetupDismissedAccelerator
   detectionFailed = false
   updateConfig.mockClear()
   runs = []
@@ -182,4 +184,53 @@ describe('measured speed', () => {
     const setup = await getSpeakerSetup()
     expect(setup.options.find((o) => o.engine === 'pyannote-local')?.measuredSpeedRatio).toBeCloseTo(1 / 3)
   })
+})
+
+
+it('explains loss of the previous NVIDIA GPU once per confirmed hardware change, never on detection failure', async () => {
+  config.transcription.speakerSetupFingerprint = 'nvidia:NVIDIA GeForce RTX 4090'
+  const changed = await getSpeakerSetup()
+  expect(changed.acceleratorNotice).toContain('limited to 50%')
+  expect(changed.acceleratorNotice).toContain('CUDA-only models require')
+  expect(changed.acceleratorNotice).not.toContain('models will use CPU')
+  expect(changed.needsConfirmation).toBe(true)
+  await dismissSpeakerSetup()
+  expect((await getSpeakerSetup()).needsConfirmation).toBe(false)
+  detectionFailed = true
+  expect((await getSpeakerSetup({ refresh: true })).acceleratorNotice).toBeNull()
+})
+
+it('does not promise CPU fallback when NVIDIA remains detected but CUDA cannot be confirmed', async () => {
+  config.transcription.speakerSetupFingerprint = 'nvidia:NVIDIA GeForce RTX 4090'
+  gpus = [{ ...RTX, cuda: false }]
+  const setup = await getSpeakerSetup({ refresh: true })
+  expect(setup.acceleratorNotice).toContain('CUDA acceleration could not be confirmed')
+  expect(setup.acceleratorNotice).toContain('Models that support CPU')
+  expect(setup.acceleratorNotice).toContain('CUDA-only models require')
+})
+
+it('persists CUDA confirmation, prompts on same-GPU loss, remembers dismissal and detects regain after CPU confirmation',async()=>{
+ gpus=[RTX];resetSpeakerSetupCache()
+ const initial=await getSpeakerSetup();await applySpeakerSetup({engine:'pyannote-local',fingerprint:initial.fingerprint})
+ expect(config.transcription.speakerSetupAccelerator).toBe('cuda')
+ gpus=[{...RTX,cuda:false}];resetSpeakerSetupCache()
+ expect((await getSpeakerSetup()).needsConfirmation).toBe(true)
+ await dismissSpeakerSetup();resetSpeakerSetupCache()
+ expect((await getSpeakerSetup()).needsConfirmation).toBe(false)
+ expect(config.transcription.speakerSetupDismissedAccelerator).toBe('cpu')
+ await applySpeakerSetup({engine:'pyannote-local',fingerprint:initial.fingerprint})
+ expect(config.transcription.speakerSetupAccelerator).toBe('cpu')
+ gpus=[RTX];resetSpeakerSetupCache()
+ expect((await getSpeakerSetup()).needsConfirmation).toBe(true)
+})
+it('seeds legacy same-hardware state without inventing previous acceleration or opening a migration-only prompt',async()=>{
+ gpus=[{...RTX,cuda:false}];config.transcription.speakerSetupFingerprint='nvidia:NVIDIA GeForce RTX 4090'
+ resetSpeakerSetupCache();expect((await getSpeakerSetup()).needsConfirmation).toBe(false)
+ expect(config.transcription.speakerSetupAccelerator).toBe('cpu')
+ gpus=[RTX];resetSpeakerSetupCache();expect((await getSpeakerSetup()).needsConfirmation).toBe(true)
+})
+it('does not seed accelerator history from a failed detection',async()=>{
+ detectionFailed=true;config.transcription.speakerSetupFingerprint='no-gpu';resetSpeakerSetupCache()
+ expect((await getSpeakerSetup()).needsConfirmation).toBe(false)
+ expect(config.transcription.speakerSetupAccelerator).toBeUndefined()
 })

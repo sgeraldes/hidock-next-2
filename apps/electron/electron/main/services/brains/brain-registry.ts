@@ -10,6 +10,8 @@ import { CodexBrain } from './codex-brain'
 import { GeminiApiBrain } from './gemini-api-brain'
 import { GeminiCliBrain } from './gemini-cli-brain'
 import { KiroCliBrain } from './kiro-cli-brain'
+import { ModelHostEmbedBrain } from './model-host-embed-brain'
+import { ModelHostGenerateBrain } from './model-host-generate-brain'
 import { LocalOnnxEmbedBrain } from './local-onnx-embed-brain'
 import { OllamaBrain } from './ollama-brain'
 import { OpenAiCompatibleBrain } from './openai-compatible-brain'
@@ -23,6 +25,8 @@ const REGISTRATIONS: Array<() => AIBrain> = [
   () => new GeminiApiBrain(),
   () => new OllamaBrain(),
   () => new LocalOnnxEmbedBrain(),
+  () => new ModelHostEmbedBrain(),
+  () => new ModelHostGenerateBrain(),
   () => new ClaudeCodeBrain(),
   () => new CodexBrain({ companionPath: findCodexCompanion() }),
   () => new GeminiCliBrain(),

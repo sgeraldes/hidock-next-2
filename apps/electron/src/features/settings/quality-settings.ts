@@ -62,9 +62,9 @@ const ENTRIES: AdvancedSetting[] = [
     detail: `Recordings shorter than this are rated low value by their length alone, and are not sent to Jev. ${FROM_NOW_ON}`
   },
   {
-    section: 'quality', key: 'maxRetries', group: 'Ratings and re-transcription', kind: 'number', step: 1, unit: 'attempts',
+    section: 'quality', key: 'maxRetries', group: 'Ratings and re-transcription', kind: 'number', step: 1, unit: 'retries',
     label: 'Transcription retries',
-    detail: `How many times a failed transcription is tried again before the recording is marked failed. ${FROM_NOW_ON}`
+    detail: 'Automatic retries after the first failed attempt. 0 disables automatic retries; 3 allows up to 4 attempts in total. Applies to existing failed queue items even when automatic transcription of new recordings is off.'
   },
   {
     section: 'quality', key: 'retranscribeScore', group: 'Ratings and re-transcription', kind: 'number', step: 5,

@@ -7,7 +7,6 @@ import {
   isCalendarSyncActive,
   CalendarSyncResult
 } from '../services/calendar-sync'
-import { clearAllMeetings } from '../services/database'
 import { whenBootTasksSettled, areBootTasksSettled } from '../services/boot-scheduler'
 import {
   SetIcsUrlSchema,
@@ -52,7 +51,8 @@ export function registerCalendarHandlers(): void {
     const trigger: CalendarSyncTrigger = rawTrigger === 'manual' ? 'manual' : 'mount'
 
     try {
-      if (trigger === 'manual' && !areBootTasksSettled()) {
+      // Backend mode starts no boot drain; an attached UI must not wait for it.
+      if (trigger === 'manual' && !process.argv.includes('--backend-only') && !areBootTasksSettled()) {
         // Give boot work a brief chance to finish, so the common case still
         // syncs inline and the user sees a normal result.
         await whenBootTasksSettled(MANUAL_BOOT_WAIT_MS)
@@ -96,7 +96,7 @@ export function registerCalendarHandlers(): void {
     }
   })
 
-  // Clear all meetings and perform a fresh sync
+  // Compatibility channel: a fresh fetch never destroys the saved snapshot.
   // AUD2-010: Same verification pattern as calendar:sync
   ipcMain.handle('calendar:clear-and-sync', async (): Promise<CalendarSyncResult> => {
     const config = getConfig()
@@ -110,8 +110,7 @@ export function registerCalendarHandlers(): void {
     }
 
     try {
-      clearAllMeetings()
-      // `fresh`: must not join a sync that started before the clear.
+      // `fresh` queues a new pass without removing cached events on slow/error feeds.
       const result = await syncCalendar(config.calendar.icsUrl, { fresh: true })
       if (!result || typeof result.success !== 'boolean') {
         console.error('[calendar:clear-and-sync] syncCalendar returned malformed result:', result)

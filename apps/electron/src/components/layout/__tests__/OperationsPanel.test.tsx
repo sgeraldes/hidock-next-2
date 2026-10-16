@@ -169,6 +169,35 @@ describe('OperationsPanel', () => {
     expect(screen.getByLabelText('Open operations detail')).toBeInTheDocument()
   })
 
+  it('clears stale renderer activity when the main snapshot has no active queue rows', async () => {
+    const getDownloadState = vi.fn().mockResolvedValue({
+      sessionStatus: 'active',
+      isProcessing: false,
+      isPaused: false,
+      queue: [{
+        filename: 'REC0001.WAV', fileSize: 1000, progress: 50, status: 'cancelled', cancelReason: 'user'
+      }, {
+        filename: 'REC0002.WAV', fileSize: 1000, progress: 100, status: 'failed', error: 'failed'
+      }]
+    })
+    ;(window as any).electronAPI = {
+      downloadService: {
+        getState: getDownloadState,
+        onStateUpdate: vi.fn().mockReturnValue(() => {})
+      }
+    }
+    vi.mocked(useDownloadQueue).mockReturnValue(new Map([
+      ['STALE.WAV', { filename: 'STALE.WAV', progress: 50, size: 1000, status: 'downloading' }]
+    ]) as any)
+
+    render(<OperationsPanel sidebarOpen={true} />)
+
+    await waitFor(() => expect(getDownloadState).toHaveBeenCalledTimes(1))
+    expect(await screen.findByText('1 failed')).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByText('1 downloading')).not.toBeInTheDocument())
+    expect(screen.queryByText('1 downloading')).not.toBeInTheDocument()
+  })
+
   it('shows a compact "N transcribing" badge when transcriptions are active', () => {
     vi.mocked(useTranscriptionStats).mockReturnValue({
       total: 2, completed: 0, failed: 0, processing: 1, pending: 1, aggregateProgress: 25

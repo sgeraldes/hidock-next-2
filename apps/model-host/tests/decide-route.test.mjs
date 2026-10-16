@@ -86,6 +86,31 @@ describe('decisions from a paired HiDock', () => {
     expect(calls).toEqual([])
   })
 
+  it('rechecks pause after receiving a decision body', async () => {
+    const res = response()
+    const pending = createHandler(deps)(post(BODY, auth()), res)
+    await deps.state.apply('pause')
+    await pending
+    expect(res.statusCode).toBe(503)
+    expect(calls).toEqual([])
+  })
+
+  it('runs legacy diarization inside the shared model lane', async () => {
+    const events = []
+    deps.decide.withAudio = async (action, options) => {
+      expect(options.signal).toBeInstanceOf(AbortSignal)
+      events.push('admitted')
+      const result = await action()
+      events.push('released')
+      return result
+    }
+    deps.diarize = async () => { events.push('audio'); return { device: 'cpu', segments: [], speakers: [] } }
+    const res = response()
+    await createHandler(deps)(request({ method: 'POST', url: '/jobs/diarize', headers: auth(), body: 'audio', local: false }), res)
+    expect(res.statusCode).toBe(200)
+    expect(events).toEqual(['admitted', 'audio', 'released'])
+  })
+
   it('tells a paired HiDock where each model is, and a stranger nothing about them', async () => {
     const paired = response()
     await createHandler(deps)(request({ url: '/health', headers: auth(), local: false }), paired)

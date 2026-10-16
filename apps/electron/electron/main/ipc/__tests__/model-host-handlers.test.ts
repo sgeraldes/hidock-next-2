@@ -10,6 +10,7 @@ import {
   getModelHostDiagnostics,
   repairModelHostRuntime,
   sendModelHostUpdate,
+  prepareModelHostRole,
   decideOnModelHost,
   ModelHostDecisionError,
 } from '../../services/model-host-client'
@@ -28,6 +29,8 @@ vi.mock('../../services/model-host-client', () => ({
   getModelHostDiagnostics: vi.fn(),
   repairModelHostRuntime: vi.fn(),
   sendModelHostUpdate: vi.fn(),
+  prepareModelHostAsr: vi.fn(),
+  prepareModelHostRole: vi.fn(),
   decideOnModelHost: vi.fn(),
   ModelHostDecisionError: class extends Error {
     constructor(
@@ -81,6 +84,26 @@ describe('Model Host IPC handlers', () => {
     vi.mocked(sendHfTokenToModelHost).mockResolvedValue({ status: 'validating' })
     vi.mocked(setModelHostStepAside).mockResolvedValue(undefined)
     registerModelHostHandlers()
+  })
+
+  it('prepares only allowlisted roles with saved pairing and no config mutation', async () => {
+    configWith(PAIRED)
+    vi.mocked(prepareModelHostRole).mockResolvedValue(undefined)
+    for (const role of ['semantic', 'realtime', 'generation']) {
+      expect(await handlerFor(handlers, 'model-host:prepare-role')({}, { role })).toEqual({ success: true })
+      expect(prepareModelHostRole).toHaveBeenLastCalledWith({ url: PAIRED.modelHostUrl, token: PAIRED.modelHostToken }, role)
+    }
+    expect(await handlerFor(handlers, 'model-host:prepare-role')({}, { role: '../arbitrary' })).toMatchObject({ success: false })
+    expect(prepareModelHostRole).toHaveBeenCalledTimes(3)
+    expect(saveConfig).not.toHaveBeenCalled()
+  })
+  it('reports role preparation errors and refuses an unpaired host', async () => {
+    configWith(PAIRED)
+    vi.mocked(prepareModelHostRole).mockRejectedValue(new Error('Missing imported semantic model folder'))
+    expect(await handlerFor(handlers, 'model-host:prepare-role')({}, { role: 'semantic' })).toMatchObject({ success: false, error: 'Missing imported semantic model folder' })
+    configWith({})
+    expect(await handlerFor(handlers, 'model-host:prepare-role')({}, { role: 'generation' })).toMatchObject({ success: false })
+    expect(prepareModelHostRole).toHaveBeenCalledTimes(1)
   })
 
   it('forces a live health request when Settings checks a host', async () => {
@@ -185,6 +208,7 @@ describe('Model Host IPC handlers', () => {
         configured: true,
         paired: true,
         usedForSpeakers: true,
+        localFallback: false,
         hasHfToken: true,
         address: 'gamestation:8765',
         health,
@@ -203,9 +227,17 @@ describe('Model Host IPC handlers', () => {
   it('does not call anything when no host is saved', async () => {
     await expect(handlerFor(handlers, 'model-host:status')({})).resolves.toEqual({
       success: true,
-      status: { configured: false, paired: true, usedForSpeakers: false, hasHfToken: false, address: '', health: null },
+      status: { configured: false, paired: true, usedForSpeakers: false, localFallback: false, hasHfToken: false, address: '', health: null },
     })
     expect(checkModelHost).not.toHaveBeenCalled()
+  })
+
+  it.each([undefined, false, true])('reports fallback permission without inferring host availability: %s', modelHostLocalFallback => {
+    configWith({ ...PAIRED, modelHostLocalFallback })
+    vi.mocked(checkModelHost).mockResolvedValue(null)
+    return expect(handlerFor(handlers, 'model-host:status')({})).resolves.toMatchObject({
+      success: true, status: { health: null, localFallback: modelHostLocalFallback === true }
+    })
   })
 
   it('reads diagnostics, repairs and updates the paired host with the saved token', async () => {

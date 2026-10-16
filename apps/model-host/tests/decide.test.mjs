@@ -138,6 +138,84 @@ describe('decision models on the host', () => {
     expect(second.pid).not.toBe(first.pid)
   })
 
+  it('releases the resident process before audio and holds new decisions until audio finishes', async () => {
+    models = make()
+    await onDisk(models, 'clef-flash')
+    const first = await models.decide(ask('clef-flash'))
+    let finishAudio
+    let audioStarted = false
+    const audio = models.withAudio(async () => {
+      expect(() => process.kill(first.pid, 0)).toThrow()
+      expect(models.report()['clef-flash'].state).toBe('on-disk')
+      audioStarted = true
+      await new Promise(resolve => { finishAudio = resolve })
+      return 'audio finished'
+    })
+    await until(() => audioStarted)
+    let answered = false
+    const next = models.decide(ask('clef-flash')).then(result => { answered = true; return result })
+    await sleep(40)
+    expect(answered).toBe(false)
+    expect(models.worker).toBeNull()
+    finishAudio()
+    expect(await audio).toBe('audio finished')
+    expect((await next).pid).not.toBe(first.pid)
+  })
+
+  it('invalidates decisions and audio already queued at stop without respawning', async () => {
+    models = make()
+    await onDisk(models, 'clef-flash')
+    await models.decide(ask('clef-flash'))
+    const active = models.decide(ask('clef-flash', 'hang')).catch(error => error)
+    await until(() => models.worker?.pending.size > 0)
+    const queued = models.decide(ask('clef-flash')).catch(error => error)
+    let audioStarted = false
+    const audio = models.withAudio(() => { audioStarted = true }).catch(error => error)
+    models.stop()
+    expect((await active).status).toBe(500)
+    expect((await queued).status).toBe(503)
+    expect((await audio).status).toBe(503)
+    expect(audioStarted).toBe(false)
+    expect(models.worker).toBeNull()
+    // A later explicit request can use the next generation.
+    expect((await models.decide(ask('clef-flash'))).model).toBe('clef-flash')
+  })
+
+  it('does not start cancelled audio after waiting for the lane', async () => {
+    models = make()
+    let release
+    const first = models.withAudio(() => new Promise(resolve => { release = resolve }))
+    await until(() => !!release)
+    const controller = new AbortController()
+    let called = false
+    const next = models.withAudio(() => { called = true }, { signal: controller.signal }).catch(error => error)
+    controller.abort()
+    release()
+    await first
+    expect((await next).status).toBe(503)
+    expect(called).toBe(false)
+  })
+
+  it('fails admission closed if the resident worker has not exited', async () => {
+    models = make({ stopTimeoutMs: 30 })
+    await onDisk(models, 'clef-flash')
+    await models.decide(ask('clef-flash'))
+    const child = models.worker.child
+    const kill = child.kill.bind(child)
+    child.kill = () => false
+    let audioStarted = false
+    try {
+      await expect(models.withAudio(() => { audioStarted = true })).rejects.toThrow(/admission blocked/)
+      await expect(models.decide(ask('clef-flash'))).rejects.toThrow(/admission blocked/)
+      expect(audioStarted).toBe(false)
+      expect(models.worker).toBeNull()
+    } finally {
+      const exited = new Promise(resolve => child.once('close', resolve))
+      kill()
+      await exited
+    }
+  })
+
   it('hands back a request the model could not encode as the caller’s mistake', async () => {
     models = make()
     await onDisk(models, 'clef-flash')
@@ -172,7 +250,7 @@ describe('decision models on the host', () => {
     models = make()
     await models.decide(ask('clef')).catch(() => {})
     expect(models.report().clef.state).toBe('downloading')
-    models.stop()
+    await models.stop()
     expect(models.report().clef.state).toBe('absent')
   })
 })

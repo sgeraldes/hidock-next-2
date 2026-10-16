@@ -1,0 +1,16 @@
+# Device drive
+
+Status at **12 October 2026, 18:09 UTC**: the everyday dock remains on installed custom **393986 /6.3.2_audit001**. Future **393988 /6.3.4_restore001** adds original-name f119/RSTR2; boot and small/9 MiB/full-SHA device restoration are pending. Keep custom installed; no routine stock transitions. The latest pre-393988 catalog baseline is 574 entries including owned fixtures, with 558 original names/sizes preserved; earlier 562-entry observations are historical. Full original bytes were not all hashed. See [original recording restore](restore-original-recordings.md), [latest 601 SDK checks](../../research/rea/completion630-lab/protocol/sdk-combined-settings-final-tests.json) and [completion checklist](completion-checklist.md). Software/native-model checks do not complete the 25-item physical acceptance ledger.
+
+
+On Windows, connect the dock in HiDock Next and open the Device page. In **Device drive**, choose **Mount drive**. The panel displays the drive letter returned by Windows. Copy that path and paste it into File Explorer’s address bar to browse recordings or copy them to a local folder.
+
+The drive is read-only. Choose **Unmount drive** when finished. Leaving the Device page does not unmount a drive that another window may be using.
+
+The panel displays the actual Windows per-file copy limit when available. On the verified machine it is **50,000,000 bytes**. Use **Download** in the app’s device file list for larger recordings. HiDock does not change Windows registry or service settings to raise this limit. If the limit cannot be read, the panel reports it as unavailable.
+
+Mounting uses a temporary private loopback WebDAV mapping through the app’s existing device connection. The private URL is not displayed in this panel or saved as a persistent Windows mapping. If the device session changes, unmount and mount again. If Windows reports a mapping error, check that the dock is connected and idle, then retry; do not reset the dock or change system policy merely to mount a drive.
+
+The built app’s panel was exercised through actual Mount and Unmount clicks. Its screenshot shows the returned `R:\` path and 50,000,000-byte limit. A separate physical Windows-drive check enumerated 558 entries, copied a 120,972-byte file matching the device baseline and denied a native write. The mapping was removed after each check. Runtime evidence is retained in `research/rea/completion630-lab/runtime/device-drive-panel-ui.json`, `device-drive-panel.png` and `stock-device-drive.json`; the ten component tests provide supporting coverage for errors and lifecycle changes.
+
+The original-name RSTR2 restore service is a separate explicitly owned Jensen write path for future 393988. It does not enable drive/Explorer writes or enter native f00f/MSC mode. Original-name small/9 MiB restoration and full downloaded SHA remain pending; native MSC ownership/exit and arbitrary OS writes remain unqualified. [Restore scope and physical gates](restore-original-recordings.md), [native-mode/command delta](../../research/rea/completion630-lab/map/restore393988-command-delta-report.md).

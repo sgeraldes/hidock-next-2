@@ -73,6 +73,9 @@ vi.mock('../vector-cache', () => ({
   waitForVectorCacheWrites: async () => {},
   writeVectorCacheAsync: () => {},
   readVectorCacheAsync: async () => null,
+  // The real budget yields the event loop between bounded CPU slices; paging
+  // does no device/IO work worth throttling here, so the pauser is a no-op.
+  createVectorWorkBudget: () => () => undefined,
 }))
 
 let dbInstance: import('sql.js').Database | null = null

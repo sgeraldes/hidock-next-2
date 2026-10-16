@@ -84,6 +84,13 @@ beforeEach(() => {
 })
 
 describe('splitRealtimeChannels', () => {
+  it('preserves qualified firmware lane B while system microphone mute is reported', () => {
+    const native = { ...packet([[0, 3000], [0, -1000]], true), microphoneMuted: true, sequenceMinusOne: 5 }
+    const channels = splitRealtimeChannels(native)!
+    expect(read(channels[0].pcm, 0)).toBe(0)
+    expect(read(channels[1].pcm, 0)).toBe(3000)
+    expect(read(channels[1].pcm, 1)).toBe(-1000)
+  })
   it('strips the header and de-interleaves both channels', () => {
     const channels = splitRealtimeChannels(packet([[1000, 3000], [-2000, 1000]]))!
     expect(channels).toHaveLength(2)
@@ -327,7 +334,9 @@ describe('GeminiLiveTranscriptionService with two channels', () => {
     await h.service.stop()
   })
 
-  it('labels you/them once the measurement settles, and persists the channel', async () => {
+  it('keeps the labels neutral when the noise-floor measurement settles, and writes nothing to the configuration', async () => {
+    // A noise-floor guess is not an identity: this service has no attested source
+    // context, so only a lane the user pinned in Settings may be called `you`.
     const h = harness()
     await h.service.start(h.sender)
     for (let i = 0; i < 210; i++) await deliver(h.service, tone(9000, 300))
@@ -338,10 +347,14 @@ describe('GeminiLiveTranscriptionService with two channels', () => {
       serverContent: { inputTranscription: { text: 'suyo' } },
     } as never)
     const finals = events(h.sender, 'transcription-live:final')
-    expect(finals.at(-2)).toMatchObject({ text: 'mio', speaker: 'you' })
-    expect(finals.at(-1)).toMatchObject({ text: 'suyo', speaker: 'them' })
-    expect(events(h.sender, 'transcription-live:channels')[0]).toMatchObject({ micChannel: 0 })
-    expect(deps.saved).toEqual([{ liveMicChannelMeasured: 0 }])
+    expect(finals.at(-2)).toMatchObject({ text: 'mio', speaker: 'speaker-1' })
+    expect(finals.at(-1)).toMatchObject({ text: 'suyo', speaker: 'speaker-2' })
+    expect(events(h.sender, 'transcription-live:channels')[0]).toMatchObject({
+      micChannel: null,
+      source: 'unattested',
+      measuredHint: 0,
+    })
+    expect(deps.saved).toEqual([])
     await h.service.stop()
   })
 

@@ -12,10 +12,29 @@ import { spawn } from 'child_process'
 import { mkdtemp, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { availableParallelism } from 'os'
+import { availableParallelism, freemem, totalmem } from 'os'
 
 /** Output above this is a runaway worker, not a transcript. */
 const OUTPUT_CAP_BYTES = 25 * 1024 * 1024
+// Symbol capability cannot be supplied by an HTTP/JSON caller.
+export const AUDIO8_MEMORY_PROFILE = Symbol('audio8-host-memory-profile')
+
+export function workerMemoryMb(profile, totalBytes = totalmem(), freeBytes = freemem()) {
+  if (!Number.isFinite(totalBytes) || !Number.isFinite(freeBytes) || totalBytes <= 0 || freeBytes < 0) {
+    throw new Error('Worker resource admission failed: memory counters unavailable')
+  }
+  const audio8 = profile === AUDIO8_MEMORY_PROFILE
+  const bytes = Math.min((audio8 ? 24 : 16) * 1024 ** 3,
+    totalBytes * (audio8 ? 0.375 : 0.25), freeBytes * 0.5)
+  const mb = Math.floor(bytes / 1024 ** 2)
+  if (audio8 && mb < 20 * 1024) {
+    throw new Error(`Audio8 resource admission failed: requires at least 20 GiB worker memory; safely available ${(mb / 1024).toFixed(2)} GiB. Free host memory before retrying; no fallback was started.`)
+  }
+  if (!audio8 && mb < 1024) {
+    throw new Error(`Worker resource admission failed: requires at least 1 GiB worker memory; safely available ${(mb / 1024).toFixed(2)} GiB. Free host memory before retrying; no fallback was started.`)
+  }
+  return mb
+}
 
 /**
  * Thread limits for the worker, same six variables the client sets.
@@ -28,7 +47,7 @@ const OUTPUT_CAP_BYTES = 25 * 1024 * 1024
 export function threadEnv(cpuPercent, parallelism = availableParallelism()) {
   const total = Math.max(1, parallelism)
   const pct = Number.isFinite(cpuPercent) && cpuPercent > 0 ? Math.min(100, cpuPercent) : 50
-  const threads = String(Math.max(1, Math.min(total, Math.round((total * pct) / 100))))
+  const threads = String(Math.max(1, Math.min(total, Math.floor((total * pct) / 100))))
   return {
     OMP_NUM_THREADS: threads,
     MKL_NUM_THREADS: threads,
@@ -71,6 +90,7 @@ export function parseWorkerOutput(stdout) {
  */
 export async function runDiarization(audio, options) {
   const spawnFn = options.spawnFn || spawn
+  const memoryMb = workerMemoryMb(options.memoryProfile)
   const dir = await mkdtemp(join(tmpdir(), 'hidock-host-'))
   // Second line of defence for the same thing server.mjs checks. This function
   // writes attacker-supplied bytes to this path, so the name is rebuilt from
@@ -78,13 +98,14 @@ export async function runDiarization(audio, options) {
   const extension = /^\.[a-z0-9]{1,8}$/i.test(String(options.extension ?? ''))
     ? String(options.extension).toLowerCase()
     : '.wav'
-  const audioPath = join(dir, `job${extension}`)
+  const audioPath = typeof audio === 'string' ? audio : join(dir, `job${extension}`)
   try {
-    await writeFile(audioPath, audio)
+    if (typeof audio !== 'string') await writeFile(audioPath, audio)
+    if (options.signal?.aborted) throw new Error('diarization cancelled')
     return await new Promise((resolve, reject) => {
       const child = spawnFn(
         options.pythonPath,
-        [
+        options.workerArgs ? options.workerArgs(audioPath) : [
           options.workerPath,
           '--audio', audioPath,
           '--model', options.model,
@@ -96,11 +117,17 @@ export async function runDiarization(audio, options) {
           stdio: ['ignore', 'pipe', 'pipe'],
           env: {
             ...process.env,
+            // The pipe is decoded as UTF-8 below; Windows Python otherwise may
+            // emit cp1252 and silently corrupt accented transcript characters.
+            PYTHONIOENCODING: 'utf-8',
+            PYTHONUTF8: '1',
             ...(options.ffmpegPath ? { FFMPEG_PATH: options.ffmpegPath } : {}),
             ...(options.hfToken
               ? { HF_TOKEN: options.hfToken, HUGGINGFACE_HUB_TOKEN: options.hfToken }
               : {}),
             ...threadEnv(options.cpuPercent),
+            HIDOCK_WORKER_PRIORITY: 'below-normal',
+            HIDOCK_WORKER_MEMORY_MB: String(memoryMb),
           },
         }
       )
@@ -108,6 +135,7 @@ export async function runDiarization(audio, options) {
       let stdout = ''
       let stderr = ''
       let settled = false
+      let stopReason = null
       const finish = (fn, value) => {
         if (settled) return
         settled = true
@@ -116,34 +144,36 @@ export async function runDiarization(audio, options) {
         fn(value)
       }
       const timer = setTimeout(() => {
+        stopReason = new Error(`diarization timed out after ${Math.round(options.timeoutMs / 1000)} seconds`)
         child.kill()
-        finish(reject, new Error(`diarization timed out after ${Math.round(options.timeoutMs / 1000)} seconds`))
       }, options.timeoutMs)
       const onAbort = () => {
+        stopReason = new Error('diarization cancelled')
         child.kill()
-        finish(reject, new Error('diarization cancelled'))
       }
       options.signal?.addEventListener('abort', onAbort, { once: true })
 
       child.stdout.setEncoding('utf8')
       child.stderr.setEncoding('utf8')
       child.stdout.on('data', (chunk) => {
-        if (stdout.length < OUTPUT_CAP_BYTES) stdout += chunk
+        if (stdout.length + chunk.length <= OUTPUT_CAP_BYTES) stdout += chunk
+        else { stopReason = new Error('Worker output exceeded memory limit'); child.kill() }
       })
       child.stderr.on('data', (chunk) => {
-        if (stderr.length < OUTPUT_CAP_BYTES) stderr += chunk
+        stderr = (stderr + chunk).slice(-8192)
       })
       child.on('error', (error) => {
         finish(reject, new Error(`failed to start the diarization worker: ${error.message}`))
       })
       child.on('close', (code) => {
+        if (stopReason) { finish(reject, stopReason); return }
         if (code !== 0) {
           const detail = stderr.trim().split('\n').slice(-12).join('\n')
           finish(reject, new Error(detail || `the diarization worker exited with code ${code}`))
           return
         }
         try {
-          finish(resolve, parseWorkerOutput(stdout))
+          finish(resolve, (options.parseOutput || parseWorkerOutput)(stdout))
         } catch (error) {
           finish(reject, new Error(`invalid diarization worker output: ${error.message}`))
         }

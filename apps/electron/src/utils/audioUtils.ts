@@ -33,6 +33,7 @@ export async function generateWaveformData(
   // Sample the requested channel; keep one shared block/time grid.
   const rawData = audioBuffer.getChannelData(channel)
   const waveformData = new Float32Array(sampleCount)
+  let lastYield = performance.now()
 
   // Calculate peak amplitude for each block
   for (let i = 0; i < sampleCount; i++) {
@@ -47,6 +48,10 @@ export async function generateWaveformData(
     }
 
     waveformData[i] = max
+    if (performance.now() - lastYield >= 8) {
+      await new Promise<void>(resolve => setTimeout(resolve, 0))
+      lastYield = performance.now()
+    }
   }
 
   return waveformData
@@ -69,7 +74,17 @@ export async function decodeAudioData(
   // Ensure AudioContext is active (it may start in 'suspended' state
   // if created without a user gesture, causing decodeAudioData to hang)
   if (audioContext.state === 'suspended') {
-    await audioContext.resume()
+    let resumeDeadline: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        audioContext.resume(),
+        new Promise<never>((_, reject) => {
+          resumeDeadline = setTimeout(() => reject(new Error('Audio context resume timed out')), 5000)
+        })
+      ])
+    } finally {
+      clearTimeout(resumeDeadline)
+    }
   }
 
   // Decode base64 to binary
@@ -85,13 +100,61 @@ export async function decodeAudioData(
   return await audioContext.decodeAudioData(arrayBuffer)
 }
 
+const AUDIO_MIME_SNIFF_BASE64_CHARS = 24 // At most 18 decoded header bytes.
+
+function sniffAudioMimeType(header: Uint8Array): string | null {
+  const startsWith = (...bytes: number[]) => bytes.every((byte, index) => header[index] === byte)
+  const asciiAt = (offset: number, value: string) =>
+    Array.from(value, (character, index) => header[offset + index] === character.charCodeAt(0)).every(Boolean)
+
+  if (header.length >= 12 && asciiAt(0, 'RIFF') && asciiAt(8, 'WAVE')) return 'audio/wav'
+  if (header.length >= 10 && asciiAt(0, 'ID3')) return 'audio/mpeg'
+  if (header.length >= 4 && asciiAt(0, 'OggS')) return 'audio/ogg'
+  if (header.length >= 4 && asciiAt(0, 'fLaC')) return 'audio/flac'
+  if (header.length >= 4 && startsWith(0x1a, 0x45, 0xdf, 0xa3)) return 'audio/webm'
+  if (header.length >= 12 && asciiAt(4, 'ftyp')) return 'audio/mp4'
+
+  if (header.length >= 4 && header[0] === 0xff && (header[1] & 0xe0) === 0xe0) {
+    const version = (header[1] >> 3) & 0x03
+    const layer = (header[1] >> 1) & 0x03
+    const bitrateIndex = (header[2] >> 4) & 0x0f
+    const sampleRateIndex = (header[2] >> 2) & 0x03
+    if (version !== 0x01 && layer !== 0 && bitrateIndex !== 0 && bitrateIndex !== 0x0f && sampleRateIndex !== 0x03) {
+      return 'audio/mpeg'
+    }
+  }
+
+  return null
+}
+
+function sniffAudioMimeTypeFromBase64(base64Prefix: string): string | null {
+  const encodedPrefix = base64Prefix.slice(0, AUDIO_MIME_SNIFF_BASE64_CHARS)
+  const completeChunkLength = encodedPrefix.length - (encodedPrefix.length % 4)
+  if (completeChunkLength < 4) return null
+
+  try {
+    const binaryPrefix = atob(encodedPrefix.slice(0, completeChunkLength))
+    const header = Uint8Array.from(binaryPrefix, character => character.charCodeAt(0))
+    return sniffAudioMimeType(header)
+  } catch {
+    // Older or non-base64 callers retain the extension-based fallback below.
+    return null
+  }
+}
+
 /**
- * Get the MIME type for an audio file based on its extension.
+ * Get the MIME type from a bounded file header when available, falling back to the extension.
  *
  * @param filePath - Full file path or just the filename/extension
+ * @param base64Prefix - Optional base64 file content; only the first 18 bytes are inspected
  * @returns MIME type string (defaults to 'audio/wav' for unknown extensions)
  */
-export function getAudioMimeType(filePath: string): string {
+export function getAudioMimeType(filePath: string, base64Prefix?: string): string {
+  if (base64Prefix) {
+    const detected = sniffAudioMimeTypeFromBase64(base64Prefix)
+    if (detected) return detected
+  }
+
   const ext = filePath.split('.').pop()?.toLowerCase()
   switch (ext) {
     case 'mp3':

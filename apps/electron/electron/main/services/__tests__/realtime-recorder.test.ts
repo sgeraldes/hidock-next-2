@@ -131,6 +131,71 @@ describe('realtime recorder', () => {
     rec.start()
     rec.write(packet([1, 2]))
     rec.finish()
-    expect(JSON.parse(readFileSync(join(folder, '2026Sep28-104512-Live.live.json'), 'utf8'))).toEqual({ micChannel: 1 })
+    expect(JSON.parse(readFileSync(join(folder, '2026Sep28-104512-Live.live.json'), 'utf8'))).toMatchObject({ micChannel: 1,
+      capture: { physicalSourceMapping: 'unverified', micChannelProvenance: 'host-selection-or-heuristic-unverified' } })
+  })
+
+  it('strict capture refuses truncated packets instead of inventing mono sources', () => {
+    const rec = new RealtimeRecorder({ ...deps, enabled: () => false })
+    expect(rec.start({ save: true, strictStereo: true })).toBeNull()
+    expect(rec.outputPath).toBe(join(folder, '2026Sep28-104512-Live.wav'))
+    for (let index = 0; index < 5; index++) rec.write(packet([7, 8, 9]))
+    rec.write(packet([1, 2, 3, 4]))
+    rec.noteDiscontinuity('paused')
+    expect(rec.elapsedMs).toBe(2 / 16)
+    rec.finish()
+    expect(samplesOf(join(folder, '2026Sep28-104512-Live.wav'))).toEqual([1, 2, 3, 4])
+    const note = JSON.parse(readFileSync(join(folder, '2026Sep28-104512-Live.live.json'), 'utf8'))
+    expect(note.capture).toMatchObject({ strictStereo: true, inferredMonoPackets: 0, framesWritten: 2,
+      diagnostics: { rejectedPackets: 5, discontinuityCount: 6, frames: 2 } })
+    expect(rec.outputPath).toBeNull()
+  })
+
+  it('preserves firmware PCM and remote lane B during qualified microphone mute', () => {
+    const rec = new RealtimeRecorder(deps)
+    rec.start({ strictStereo: true })
+    rec.write({ ...packet([0, 327, 0, -128], true), microphoneMuted: true, sequenceMinusOne: 4 })
+    rec.finish()
+    expect(samplesOf(join(folder, '2026Sep28-104512-Live.wav'))).toEqual([0, 327, 0, -128])
+  })
+
+  it('raw diagnostics may preserve legacy muted samples only through the explicit override', () => {
+    const rec = new RealtimeRecorder(deps)
+    rec.start({ strictStereo: true, preserveMutedPayload: true })
+    rec.write(packet([20, 30], true))
+    rec.finish()
+    expect(samplesOf(join(folder, '2026Sep28-104512-Live.wav'))).toEqual([20, 30])
+  })
+
+  it('keeps unrelated existing metadata and labels legacy duplication as inferred', () => {
+    const notePath = join(folder, '2026Sep28-104512-Live.live.json')
+    writeFileSync(notePath, JSON.stringify({ custom: 'preserved', markerNotes: [123] }))
+    const rec = new RealtimeRecorder(deps)
+    rec.start()
+    for (let index = 0; index < 5; index++) rec.write(packet([1, 2, 3]))
+    rec.finish()
+    const note = JSON.parse(readFileSync(notePath, 'utf8'))
+    expect(note).toMatchObject({ custom: 'preserved', markerNotes: [123], capture: { inferredMonoPackets: 5,
+      channelInterpretation: 'includes-inferred-duplicated-mono' } })
+  })
+
+  it('does not overwrite a recording created while the stream is active', () => {
+    const rec = new RealtimeRecorder(deps)
+    rec.start(); rec.write(packet([1, 2]))
+    const path = join(folder, '2026Sep28-104512-Live.wav')
+    writeFileSync(path, 'do not replace')
+    expect(rec.finish()).toMatchObject({ status: 'error' })
+    expect(readFileSync(path, 'utf8')).toBe('do not replace')
+    expect(existsSync(`${path}.partial`)).toBe(true)
+  })
+
+  it('preserves malformed unrelated metadata and reports audio saved without a manifest', () => {
+    const path = join(folder, '2026Sep28-104512-Live.live.json')
+    writeFileSync(path, 'existing invalid JSON')
+    const rec = new RealtimeRecorder(deps)
+    rec.start({ strictStereo: true }); rec.write(packet([1, 2]))
+    expect(rec.finish()).toMatchObject({ status: 'error', message: expect.stringContaining('Saved audio, but capture metadata') })
+    expect(readFileSync(path, 'utf8')).toBe('existing invalid JSON')
+    expect(samplesOf(join(folder, '2026Sep28-104512-Live.wav'))).toEqual([1, 2])
   })
 })

@@ -26,15 +26,49 @@ import {
   resumeQueue,
   reorderQueueItem,
   getQueueState,
+  restartLocalStage,
   type TranscriptionQueueState
 } from '../services/transcription'
+import { importCompletedRemoteJobReceipt, type CompletedRemoteJobReceipt } from '../services/remote-job-recovery'
+import { STORED_AUDIO_TRANSFORM_VERSION } from '../services/stored-audio-channels'
 
 const ReorderSchema = z.object({
   recordingId: z.string().min(1).max(200),
   direction: z.enum(['up', 'down'])
 })
 
+const CompletedRemoteJobReceiptSchema = z.object({
+  localRecordingId: z.string().min(1).max(200),
+  expectedRemoteRecordingId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/),
+  base: z.string().min(1).max(2048),
+  jobId: z.string().uuid(),
+  idempotencyKey: z.string().regex(/^[a-zA-Z0-9_-]{16,128}$/),
+  sourceAudioHash: z.string().regex(/^[a-f0-9]{64}$/),
+  sourceTrackId: z.string().regex(/^[a-f0-9]{64}$/),
+  sourceChannelIndex: z.literal(1),
+  transformVersion: z.literal(STORED_AUDIO_TRANSFORM_VERSION)
+}).strict()
+
 export function registerTranscriptionHandlers(): void {
+  ipcMain.handle('transcription:importCompletedRemoteJobReceipt', async (_, request: unknown) => {
+    const parsed = CompletedRemoteJobReceiptSchema.safeParse(request)
+    if (!parsed.success) return { success: false, error: 'Invalid completed remote job receipt' }
+    try {
+      const imported = await importCompletedRemoteJobReceipt(parsed.data as CompletedRemoteJobReceipt)
+      return { success: true, ...imported }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+  ipcMain.handle('transcription:restartLocalStage', async (_, recordingId: unknown) => {
+    try {
+      const id = z.string().min(1).max(200).parse(recordingId)
+      await restartLocalStage(id)
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
   ipcMain.handle('transcription:pause', async (): Promise<TranscriptionQueueState> => {
     try {
       return pauseQueue()

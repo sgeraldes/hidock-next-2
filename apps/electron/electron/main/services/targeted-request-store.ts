@@ -33,3 +33,11 @@ export function saveTargetedReceipt(requestId: string, receipt: TargetedReceipt)
   writeFileSync(temporary, JSON.stringify({ version: 1, requests }), 'utf8')
   renameSync(temporary, path)
 }
+
+export function admittedTargetedQueueIds(): Set<string> {
+  const ids = new Set<string>()
+  for (const receipt of Object.values(read())) {
+    for (const job of receipt.jobs ?? []) if (typeof job.queueItemId === 'string') ids.add(job.queueItemId)
+  }
+  return ids
+}

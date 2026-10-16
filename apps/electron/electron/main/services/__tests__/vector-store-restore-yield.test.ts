@@ -42,6 +42,7 @@ vi.mock('../recording-eligibility', () => ({
   isRecordingEligible: () => true
 }))
 vi.mock('../vector-cache', () => ({
+  createVectorWorkBudget: () => deps.yield,
   VECTOR_CACHE_FILENAME: 'unused.bin',
   readVectorCacheAsync: async () => deps.cache,
   waitForVectorCacheWrites: async () => {},

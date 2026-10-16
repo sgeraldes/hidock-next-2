@@ -69,6 +69,20 @@ const LINKING: SpeakerLinkingResult = {
 const parse = (json: string | undefined) => JSON.parse(json ?? '[]') as Array<Record<string, unknown>>
 
 describe('reconcileProviderSpeakers', () => {
+  it('preserves overlapping channel-qualified turns without whole-recording identity replacement', () => {
+    const turns = [0, 1].map(sourceChannel => ({
+      start: 1, end: 25, speaker: `channel-${sourceChannel}:SPEAKER_00`, text: `channel ${sourceChannel}`,
+      sourceChannel, channelRole: 'unknown', channelProvenance: 'host-selection-or-heuristic-unverified',
+      speakerAttribution: 'unresolved', speakerConfidence: 0, extraProviderField: 'preserved'
+    }))
+    const rewritten = parse(reconcileProviderSpeakers(JSON.stringify(turns), LINKING))
+    expect(rewritten).toEqual(turns)
+    expect(countDistinctSpeakers(rewritten.map(turn => String(turn.speaker))).speakerCount).toBe(2)
+    const before = JSON.stringify(rewritten)
+    assessDiarizationQuality(rewritten, 25)
+    expect(JSON.stringify(rewritten)).toBe(before)
+  })
+
   it('never leaves a raw provider label behind (the 4-speakers-on-a-1:1 failure)', () => {
     const turns = JSON.stringify([
       { start: 1, end: 25, speaker: 'SPEAKER_00', text: 'a' },

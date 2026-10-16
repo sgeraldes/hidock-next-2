@@ -142,7 +142,7 @@ export function _resetValueBackfillForTests(): void {
 
 let mainWindow: BrowserWindow | null = null
 
-export function setMainWindowForValueBackfill(win: BrowserWindow): void {
+export function setMainWindowForValueBackfill(win: BrowserWindow | null): void {
   mainWindow = win
 }
 

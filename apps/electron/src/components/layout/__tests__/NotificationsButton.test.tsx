@@ -7,6 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { NotificationsButton } from '../NotificationsButton'
+import { UserMenu } from '../UserMenu'
 import { useDownloadQueue, useUnifiedRecordings } from '@/store/useAppStore'
 import { useTranscriptionStats, useTranscriptionStore } from '@/store/features/useTranscriptionStore'
 import { useUIStore } from '@/store/ui/useUIStore'
@@ -32,6 +33,9 @@ vi.mock('@/store/features/useTranscriptionStore', () => ({
   useTranscriptionStore: vi.fn()
 }))
 vi.mock('@/store/ui/useUIStore', () => ({ useUIStore: vi.fn() }))
+vi.mock('@/hooks/useTheme', () => ({
+  useTheme: () => ({ theme: 'dark', resolvedTheme: 'dark', setTheme: vi.fn(), toggleTheme: vi.fn() })
+}))
 
 const mockCancelDownload = vi.fn()
 const mockCancelAllDownloads = vi.fn()
@@ -94,6 +98,27 @@ describe('NotificationsButton', () => {
     expect(screen.getByText('No recent activity')).toBeInTheDocument()
   })
 
+  it('lets Notifications open on the first click while the app menu is open', async () => {
+    setup()
+    render(
+      <>
+        <NotificationsButton />
+        <UserMenu />
+      </>
+    )
+
+    fireEvent.keyDown(screen.getByRole('button', { name: /app menu/i }), { key: 'Enter' })
+    expect(await screen.findByRole('menu')).toBeInTheDocument()
+    // A modal Radix menu sets this on the body and blocks the neighboring
+    // titlebar buttons from receiving the pointer event that should replace it.
+    expect(document.body.style.pointerEvents).not.toBe('none')
+
+    fireEvent.click(screen.getByRole('button', { name: /^notifications$/i }))
+
+    expect(await screen.findByText('No recent activity')).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument())
+  })
+
   it('lists in-flight transcriptions and active downloads', () => {
     setup({
       queue: new Map([['t1', txItem()]]),
@@ -115,6 +140,33 @@ describe('NotificationsButton', () => {
     expect(screen.getByRole('img', { name: 'Downloading, 42%' })).toBeInTheDocument()
     expect(screen.getByText('42%')).toBeInTheDocument()
     expect(screen.queryByText(/Downloading…/)).not.toBeInTheDocument()
+  })
+
+  it('does not count a stale renderer row after an active main session reports only terminal rows', async () => {
+    const getState = vi.fn().mockResolvedValue({
+      sessionStatus: 'active',
+      isProcessing: false,
+      isPaused: false,
+      queue: [
+        { filename: 'REC0001.WAV', fileSize: 1000, progress: 50, status: 'cancelled', cancelReason: 'user' },
+        { filename: 'REC0002.WAV', fileSize: 1000, progress: 100, status: 'failed', error: 'failed' }
+      ]
+    })
+    ;(window as any).electronAPI.downloadService.getState = getState
+    setup({
+      downloads: new Map([
+        ['stale', { filename: 'STALE.WAV', progress: 50, size: 1000, status: 'downloading' }]
+      ])
+    })
+
+    render(<NotificationsButton />)
+
+    const trigger = await screen.findByRole('button', {
+      name: /Notifications: 0 operations in progress, 1 failed/
+    })
+    expect(getState).toHaveBeenCalledTimes(1)
+    fireEvent.click(trigger)
+    expect(screen.queryByRole('img', { name: 'Downloading, 50%' })).not.toBeInTheDocument()
   })
 
   it('routes "View all" to the shared Operations overlay', () => {

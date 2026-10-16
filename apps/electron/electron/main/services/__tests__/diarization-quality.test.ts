@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { assessDiarizationQuality, parseAndAssessDiarization } from '../diarization-quality'
+import { assessDiarizationQuality, parseAndAssessDiarization, namingEvidence } from '../diarization-quality'
 
 describe('diarization quality gate', () => {
+  it('excludes mixed/context windows even without normalized attribution or with a misleading speaker label', () => {
+    const valid = { speaker: 'Speaker 1', text: 'Reliable speaker' }
+    const mixed = { speaker: 'Speaker 2', text: 'I am Alice', speakerAssignment: 'unresolved-mixed-or-context' }
+    expect(namingEvidence([valid, mixed, { speaker: 'Unknown speaker', text: 'I am Bob' }], null)).toEqual([valid])
+  })
   it('accepts valid, well-covered timestamped turns', () => {
     const report = assessDiarizationQuality([
       { speaker: 'Speaker 1', start: 0, end: 29, text: 'Hello' },

@@ -64,7 +64,9 @@ import {
   initializeDatabase,
   closeDatabase,
   run,
+  runInTransaction,
   queryOne,
+  saveRecordingEvaluation,
   runWithMassDeleteAllowed
 } from '../database'
 
@@ -79,7 +81,8 @@ import {
   VALUE_REASON_TAGS,
   getValueClassifierKind,
   recomputeAudioWarnings,
-  recomputeEvaluationReasons
+  recomputeEvaluationReasons,
+  WARNING_REFRESH_CHUNK
 } from '../value-classification'
 import { applyQualityRules } from '../quality-rules'
 import { getEventBus } from '../event-bus'
@@ -1519,6 +1522,46 @@ describe('Jev (TypeSafe AI) as the value classifier', () => {
     expect(warning('cap-w2')).toBe('possible_invented_transcript')
     expect(await recomputeAudioWarnings()).toBe(0) // nothing left to change
     expect(await recomputeAudioWarnings([])).toBe(0)
+  })
+
+  it('refreshes warnings across multiple pages and trusts stored word counts over full text', async () => {
+    const count = WARNING_REFRESH_CHUNK * 2 + 3
+    const recordingIds = Array.from({ length: count }, (_, i) => `warning-bulk-${String(i).padStart(4, '0')}`)
+    runInTransaction(() => {
+      for (let i = 0; i < recordingIds.length; i++) {
+        const recordingId = recordingIds[i]
+        const captureId = `cap-${recordingId}`
+        seedRecording(recordingId, { durationSeconds: 789 })
+        seedTranscript(recordingId, { fullText: 'Una palabra visible.' })
+        run('UPDATE transcripts SET word_count = 400 WHERE recording_id = ?', [recordingId])
+        seedCapture(captureId, recordingId, i === 0 ? { qualityRating: 'valuable', qualitySource: 'user' } : {})
+        run(
+          `INSERT INTO audio_profiles (recording_id, version, method, duration_seconds, sound_seconds, sound_share, category, computed_at)
+           VALUES (?, 1, 'test', 789, 0, 0, 'noise', '2026-10-12T00:00:00.000Z')`,
+          [recordingId]
+        )
+        saveRecordingEvaluation({
+          capture_id: captureId, recording_id: recordingId, version: 0, model: 'rules-v1',
+          stars: null, star_level: null, stars_confidence: null, kind: null, kind_confidence: null,
+          context: null, context_confidence: null, transcript_invented: null, transcript_overfull: null,
+          has_action_items: null, sensitive: null, reasons_json: '[]', answers_json: '{}', input_tokens: 0,
+          audio_warning: null,
+        })
+      }
+    })
+
+    expect(await recomputeAudioWarnings(recordingIds)).toBe(count)
+    expect(
+      queryOne<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM recording_evaluations re
+          JOIN knowledge_captures kc ON kc.id = re.capture_id
+         WHERE kc.id LIKE 'cap-warning-bulk-%' AND re.audio_warning = 'possible_invented_transcript'`
+      )?.count
+    ).toBe(count)
+    expect(getCaptureRow('cap-warning-bulk-0000')).toMatchObject({
+      quality_rating: 'valuable', quality_source: 'user',
+    })
+    expect(await recomputeAudioWarnings(recordingIds)).toBe(0)
   })
 
   it('recomputes stored reasons from the stored Jev answers at the reason threshold in force', async () => {

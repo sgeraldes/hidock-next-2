@@ -6,7 +6,7 @@ import {
 } from '@google/genai'
 import type { RealtimeData } from '@hidock/jensen-protocol'
 import { resolveGeminiApiKey } from './brains'
-import { getConfig, updateConfig } from './config'
+import { getConfig } from './config'
 import { DEFAULT_QUALITY_RULES, qualityRules } from './quality-rules'
 
 export const GEMINI_LIVE_TRANSCRIBE_MODEL = 'gemini-3.5-transcribe-live'
@@ -70,10 +70,11 @@ export interface RealtimeChannel {
  *
  * The device sends an 8-byte metadata header followed by **stereo** PCM16LE
  * (`RealtimeData`, jensen-device.ts). The previous implementation averaged the
- * two into mono, which threw away the only thing that can attribute a turn: the
- * Live API does no diarization ("Speaker diarization: Not available in live
- * streaming"), so one channel being the microphone and the other the far side
- * IS the speaker attribution. Averaging destroyed it before it left the machine.
+ * two into mono, discarding channel differences. Preserving them supports
+ * source attribution only when microphone/far-side routing has been confirmed
+ * for the model and mode. The noise-floor heuristic or user pin selects labels;
+ * neither proves physical routing, independent speakers, or absent DSP mixing.
+ * See docs/devices/README.md for realtime versus stored-MP3 evidence boundaries.
  *
  * Returns null when there is nothing usable (muted, header only, or a payload
  * that is not a whole number of stereo frames' worth of samples to read).
@@ -112,7 +113,7 @@ export const MONO_PACKETS_BEFORE_DEGRADING = 5
  * its neighbour.
  */
 export function monoPayload(packet: RealtimeData): Uint8Array {
-  if (packet.muted || packet.data.length <= 8) return new Uint8Array(0)
+  if ((packet.microphoneMuted === undefined && packet.muted) || packet.data.length <= 8) return new Uint8Array(0)
   const payload = packet.data.subarray(8)
   // A dangling byte shifts every sample after it by one, and PCM16 read half a
   // sample out is noise. `splitRealtimeChannels` already trims to whole frames;
@@ -121,7 +122,7 @@ export function monoPayload(packet: RealtimeData): Uint8Array {
 }
 
 export function splitRealtimeChannels(packet: RealtimeData): [RealtimeChannel, RealtimeChannel] | null {
-  if (packet.muted || packet.data.length <= 8) return null
+  if ((packet.microphoneMuted === undefined && packet.muted) || packet.data.length <= 8) return null
   const input = packet.data.subarray(8)
   const frameCount = Math.floor(input.length / 4)
   if (frameCount === 0) return null
@@ -249,9 +250,20 @@ export class MicChannelIdentifier {
     return { left: Math.round(this.leftFloor), right: Math.round(this.rightFloor) }
   }
 
-  /** Feed one packet's channels. `durationMs` is that packet's audio length. */
-  observe(channels: [RealtimeChannel, RealtimeChannel], durationMs: number): void {
-    if (this.closed) return
+  /**
+   * Feed one packet's channels. `durationMs` is that packet's audio length.
+   *
+   * A packet that reports the system microphone as muted is not evidence. The
+   * muted lane is silent because the firmware silenced it, and reading that
+   * silence as "a far side that is digital silence between turns" points the
+   * measurement at the wrong lane.
+   */
+  observe(
+    channels: [RealtimeChannel, RealtimeChannel],
+    durationMs: number,
+    packetState: { microphoneMuted?: boolean } = {}
+  ): void {
+    if (this.closed || packetState.microphoneMuted === true) return
     const [left, right] = channels
     // Both channels quiet tells us nothing: there is no talking to sit under.
     const gate = silenceRms()
@@ -458,7 +470,14 @@ export class GeminiLiveTranscriptionService {
   /** Consecutive packets whose payload is not whole stereo frames. */
   private monoRun = 0
   private identifier = new MicChannelIdentifier()
-  private persistedChannel = false
+  /**
+   * The lane the user pinned in Settings for this session, or null.
+   *
+   * The only source of you/them labels. The noise-floor measurement is kept as
+   * a log line; this service has no attested source context, so a measured
+   * lane is not an identity.
+   */
+  private pinnedChannel: 0 | 1 | null = null
   private sender: LiveTranscriptionSender | null = null
   private active = false
   /** Bumped by every start and stop, so a superseded start cleans up after itself. */
@@ -492,13 +511,18 @@ export class GeminiLiveTranscriptionService {
   async start(sender: LiveTranscriptionSender): Promise<void> {
     const key = resolveGeminiApiKey()
     if (!key) throw new Error('Gemini API key is required for live transcription')
+    // Internal stop increments once. A newer stop/pause/start while it awaits
+    // drain completion cancels this request before any new provider connects.
+    const expectedGeneration = this.generation + 1
     await this.stop()
+    if (this.generation !== expectedGeneration) return
     const generation = ++this.generation
     this.active = true
     this.sender = sender
-    this.persistedChannel = false
     this.lastVoiceAt = [-Infinity, -Infinity]
-    this.identifier = new MicChannelIdentifier(configuredMicChannel())
+    const pinned = configuredMicChannel()
+    this.pinnedChannel = pinned === 'auto' ? null : pinned
+    this.identifier = new MicChannelIdentifier(pinned)
 
     const a = this.buildSession(0)
     const b = this.buildSession(1)
@@ -716,7 +740,9 @@ export class GeminiLiveTranscriptionService {
     if (!channels) return
 
     const wasSettled = this.identifier.settled
-    this.identifier.observe(channels, bytesToMs(channels[0].pcm.length))
+    this.identifier.observe(channels, bytesToMs(channels[0].pcm.length), {
+      microphoneMuted: packet.microphoneMuted
+    })
     if (!wasSettled && this.identifier.settled) this.announceChannel()
 
     if (this.monoSession) {
@@ -744,6 +770,7 @@ export class GeminiLiveTranscriptionService {
     // `audioStreamEnd` is not something the API promises anything about.
     // Resuming goes through `start()` again, so nothing is lost by refusing.
     this.active = false
+    this.generation += 1
     // Queued packets belong to the stream this call is about to end. Sending
     // them after `audioStreamEnd` is the same thing pause exists to prevent,
     // only delayed by however deep the queue was.
@@ -810,31 +837,30 @@ export class GeminiLiveTranscriptionService {
 
   private labelFor(channel: 0 | 1): SpeakerLabel {
     if (this.monoSession) return 'speaker'
-    const mic = this.identifier.micChannel
-    if (mic === null) return channel === 0 ? 'speaker-1' : 'speaker-2'
-    return channel === mic ? 'you' : 'them'
+    // Only a lane the user pinned is an identity. A noise-floor measurement is
+    // a guess about the cabling and stays out of the labels.
+    const pinned = this.pinnedChannel
+    if (pinned === null) return channel === 0 ? 'speaker-1' : 'speaker-2'
+    return channel === pinned ? 'you' : 'them'
   }
 
-  /** Publish and remember the measured channel, with the evidence for it. */
+  /**
+   * Publish the end of the measurement window, with the evidence for it.
+   *
+   * Only runs when no lane is pinned: a pinned identifier is settled from the
+   * start, so a pin is never announced. `micChannel` is always null here. The
+   * floors are evidence and never an answer: the measurement is not written to
+   * the configuration, not reused by a later session, and not turned into a
+   * label. What the noise floors suggest travels as `measuredHint`, for
+   * diagnostics only.
+   */
   private announceChannel(): void {
-    const mic = this.identifier.micChannel
     const evidence = this.identifier.evidence
+    const hint = this.identifier.micChannel
     console.info(
-      '[LiveTranscription] channel identification ' +
-        JSON.stringify({ micChannel: mic, ...evidence })
+      '[LiveTranscription] channel measurement ' + JSON.stringify({ measuredHint: hint, ...evidence })
     )
-    this.emit('transcription-live:channels', { micChannel: mic, ...evidence })
-    if (mic === null || this.persistedChannel) return
-    this.persistedChannel = true
-    // Next session starts already knowing, instead of spending its first ten
-    // seconds on speaker-1/speaker-2 again.
-    // Remembered under its own key. Writing the measurement into
-    // `liveMicChannel` turned the user's explicit "Measure automatically" into
-    // a pin behind their back, and the Settings control could never undo it,
-    // so one wrong measurement became permanent.
-    void updateConfig('transcription', { liveMicChannelMeasured: mic }).catch((error) => {
-      console.warn('[LiveTranscription] could not persist liveMicChannelMeasured:', error)
-    })
+    this.emit('transcription-live:channels', { micChannel: null, source: 'unattested', measuredHint: hint, ...evidence })
   }
 
   private emit(channel: string, payload: unknown): void {
@@ -843,17 +869,17 @@ export class GeminiLiveTranscriptionService {
 }
 
 /**
- * `auto` (measure), or a channel index already known.
+ * `auto`, or the channel the user pinned in Settings.
  *
- * The pin the user set in Settings always wins; a value this app measured in an
- * earlier session is only a warm start, so that picking "Measure automatically"
- * really does go back to measuring.
+ * `liveMicChannelMeasured` is deliberately not read. It is a global value that an
+ * older build wrote from a noise-floor guess, with no device or firmware behind
+ * it, so reusing it would carry one session's guess into another device as if it
+ * were known. It is left in the configuration untouched; this service neither
+ * reads nor writes it.
  */
 function configuredMicChannel(): 0 | 1 | 'auto' {
-  const { liveMicChannel, liveMicChannelMeasured } = getConfig().transcription
-  if (liveMicChannel === 0 || liveMicChannel === 1) return liveMicChannel
-  if (liveMicChannelMeasured === 0 || liveMicChannelMeasured === 1) return liveMicChannelMeasured
-  return 'auto'
+  const { liveMicChannel } = getConfig().transcription
+  return liveMicChannel === 0 || liveMicChannel === 1 ? liveMicChannel : 'auto'
 }
 
 export const geminiLiveTranscription = new GeminiLiveTranscriptionService()

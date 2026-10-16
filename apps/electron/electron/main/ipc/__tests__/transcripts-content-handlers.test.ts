@@ -64,6 +64,61 @@ describe('transcript content editing IPC', () => {
     expect(ipcMain.handle).toHaveBeenCalledWith('transcripts:reindex', expect.any(Function))
   })
 
+  it('restores immutable stored channel evidence after a one-line edit, ignoring forged renderer evidence', async () => {
+    const stored = [0, 1].map(sourceChannel => ({
+      speaker: `ch${sourceChannel}:speaker0`, start: 1, end: 5, text: `words ${sourceChannel}`,
+      sourceChannel, channelRole: 'unknown', channelProvenance: 'unverified', privateExtra: 'not forwarded'
+    }))
+    db.queryOne.mockReturnValue({ full_text: request.expectedFullText, speakers: JSON.stringify(stored) })
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:updateContent')?.({} as never, {
+      ...request, expectedSegments: stored,
+      segments: stored.map((row, index) => ({ ...row, ...(index === 0 ? { text: 'corrected', start: 2, speaker: 'renamed' } : {}),
+        sourceChannel: 99, channelRole: 'owner', channelProvenance: 'manual-confirmed' }))
+    }) as any
+    expect(result.success).toBe(true)
+    const saved = JSON.parse(db.runNoSave.mock.calls[0][1][1])
+    expect(saved).toEqual(stored.map(({privateExtra: _ignored, ...row}, index) => ({ ...row,
+      ...(index === 0 ? { text: 'corrected', start: 2, speaker: 'renamed' } : {}) })))
+    expect(result.data.segments).toEqual(saved)
+  })
+
+  it.each(['missing-snapshot', 'removed-line', 'reordered-lines'])('rejects ambiguous channel mapping: %s', async mode => {
+    const stored = [0, 1].map(sourceChannel => ({speaker: `ch${sourceChannel}:speaker0`, start: 1, end: 5,
+      text: `words ${sourceChannel}`, sourceChannel, channelRole: 'unknown', channelProvenance: 'unverified'}))
+    db.queryOne.mockReturnValue({ full_text: request.expectedFullText, speakers: JSON.stringify(stored) })
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:updateContent')?.({} as never, {
+      ...request, ...(mode === 'missing-snapshot' ? {} : { expectedSegments: stored }),
+      segments: mode === 'removed-line' ? stored.slice(0, 1) : mode === 'reordered-lines' ? [...stored].reverse() : stored
+    }) as any
+    expect(result).toMatchObject({success:false,error:{code:'VALIDATION_ERROR'}})
+    expect(db.runNoSave).not.toHaveBeenCalled()
+    expect(vectorStore.indexTranscript).not.toHaveBeenCalled()
+  })
+
+  it('does not introduce renderer-supplied channel evidence into a legacy transcript', async () => {
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:updateContent')?.({} as never, {
+      ...request, segments: request.segments.map(row => ({...row, sourceChannel: 0, channelRole: 'owner', channelProvenance: 'forged'}))
+    }) as any
+    expect(result.success).toBe(true)
+    expect(result.data.segments).toEqual(request.segments)
+  })
+
+  it('Retry RAG preserves every existing partition on failure and accepts already-current chunks', async () => {
+    registerTranscriptsHandlers()
+    vectorStore.indexTranscript.mockRejectedValueOnce(new Error('host unavailable'))
+    const failed = await handlerFor('transcripts:reindex')?.({} as never, {recordingId:'rec-1'}) as any
+    expect(failed.success).toBe(false)
+    expect(vectorStore.deleteByRecording).not.toHaveBeenCalled()
+    expect(db.runNoSave).not.toHaveBeenCalled()
+    vectorStore.indexTranscript.mockResolvedValueOnce(0)
+    const unchanged = await handlerFor('transcripts:reindex')?.({} as never, {recordingId:'rec-1'}) as any
+    expect(unchanged).toMatchObject({success:true,data:{indexedChunks:0}})
+    expect(vectorStore.deleteByRecording).not.toHaveBeenCalled()
+  })
+
   it('atomically saves both transcript forms, invalidates stale vectors, and reindexes', async () => {
     registerTranscriptsHandlers()
     const result = await handlerFor('transcripts:updateContent')?.({} as never, request) as any

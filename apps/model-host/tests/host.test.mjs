@@ -213,7 +213,8 @@ describe('routes', () => {
       res
     )
     expect(res.statusCode).toBe(200)
-    expect(JSON.parse(res.body)).toEqual(WORKER_RESULT)
+    expect(JSON.parse(res.body)).toMatchObject(WORKER_RESULT)
+    expect(JSON.parse(res.body).hostJobId).toEqual(expect.any(String))
     // The lane is free again for the next one.
     expect(deps.state.canAdmit()).toBe(true)
   })
@@ -437,10 +438,11 @@ describe('routes', () => {
     expect(body.paired).toBe(1)
   })
 
-  it('has no page: the gamestation has no settings', async () => {
+  it('has a read-only monitor on localhost, without host settings', async () => {
     const res = response()
     await createHandler(deps)(request({ url: '/' }), res)
-    expect(res.statusCode).toBe(404)
+    expect(res.statusCode).toBe(200)
+    expect(res.body).toContain('HiDock Model Host monitor')
   })
 
   it('gives the tray icon a pairing code in JSON', async () => {
@@ -563,7 +565,7 @@ describe('diarization worker', () => {
       child.stdout.setEncoding = () => {}
       child.stderr = new EventEmitter()
       child.stderr.setEncoding = () => {}
-      child.kill = () => killed.push(true)
+      child.kill = () => { killed.push(true); queueMicrotask(() => child.emit('close', 1)) }
       return child
     }
     const controller = new AbortController()

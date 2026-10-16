@@ -8,7 +8,7 @@ HiDock Next turns HiDock recordings into a private, searchable knowledge workspa
 
 ## What you can do
 
-- Manage H1, H1E, P1, and known hardware variants from one desktop app.
+- Manage H1, H1E, P1, P1 Mini, H1 Lite, and known hardware variants; individual features depend on firmware support.
 - Keep recordings, transcripts, metadata, and the knowledge graph local by default.
 - Use Gemini, OpenAI-compatible providers, Ollama, or other configured AI providers.
 - Choose the harness, model and effort that run each AI step in Settings > Pipeline, with a fallback, where the text goes, and the measured time and cost of each step.
@@ -53,6 +53,12 @@ On Windows, `build-electron.bat` installs dependencies and builds the app. `run-
 ## Privacy and device safety
 
 HiDock Next is local-first. API keys and account tokens must never be committed. Device operations are serialized, and the app uses a continuous polled read path to avoid locking the HiDock USB interface. Do not run exploratory USB scripts against a connected device.
+
+## Device documentation
+
+The [device guide](docs/devices/README.md) covers model/version gates, stored recordings, realtime channels, software markers and safe development. Exact official H1E6.3.0 is acquired and decoded. The deployed app captures paired PCM without a provider, exports individual lanes and adds native software markers with observed MP3 persistence. The [full experimental firmware build](research/rea/REPORT-H1E-6.3.0-RECORDING-BUILD.md) includes stereo MP3 profiles, gain, native WAV and default-off automatic rules;10 exact-image recording cases and11 independent decodes pass. It is uninstalled. Physical source identities, persistence and recovery remain unverified.
+
+For downloaded recordings, the [offline marker utility](research/rea/native_markers.py) adds timestamp markers to a new MP3 copy without changing its audio bytes. It does not update the device file or the app timeline; compatibility details are in the device guide.
 
 ## Community work carried into 2.0
 

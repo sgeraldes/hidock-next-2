@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { SourceReader } from '../SourceReader'
 import { useUIStore } from '@/store/useUIStore'
 import type { UnifiedRecording } from '@/types/unified-recording'
@@ -133,7 +133,8 @@ describe('SourceReader — waveform preload', () => {
 describe('SourceReader — duration', () => {
   it('shows the stored duration in the header', () => {
     render(<SourceReader recording={makeRecording({ duration: 125 })} />)
-    expect(screen.getByText('2m 5s')).toBeInTheDocument()
+    // The same duration is valid in the recording details too, so scope to the header.
+    expect(within(screen.getByTestId('reader-header')).getByText('2m 5s')).toBeInTheDocument()
     expect(screen.queryByText('Unknown')).not.toBeInTheDocument()
   })
 
@@ -142,7 +143,7 @@ describe('SourceReader — duration', () => {
     // backfilled the live value for this recording.
     useUIStore.setState({ waveformLoadedForId: 'rec-1', playbackDuration: 125 })
     render(<SourceReader recording={makeRecording({ duration: undefined } as any)} />)
-    expect(screen.getByText('2m 5s')).toBeInTheDocument()
+    expect(within(screen.getByTestId('reader-header')).getByText('2m 5s')).toBeInTheDocument()
   })
 })
 

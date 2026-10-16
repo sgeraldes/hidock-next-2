@@ -36,6 +36,8 @@ describe('the installer payload', () => {
     expect(existsSync(join(out, 'Start Model Host.cmd'))).toBe(false)
     expect(existsSync(join(out, 'Set up Model Host.cmd'))).toBe(false)
     expect(existsSync(join(out, 'src', 'pause-resume.ps1'))).toBe(false)
+    expect(readFileSync(join(out, 'Prepare-SemanticEmbeddings.ps1'), 'utf8')).toContain('$RestartTray')
+    expect(existsSync(join(out, 'Prepare-Realtime.ps1'))).toBe(true)
   })
 
   it('refuses to build without the tray icon', () => {
@@ -65,6 +67,13 @@ describe('the installer payload', () => {
   it('ships the worker the client runs', () => {
     const out = build()
     expect(existsSync(join(out, 'resources', 'speaker-linking', 'worker.py'))).toBe(true)
+  })
+
+  it('ships pinned websocket production code without the development tree', () => {
+    const out = build()
+    expect(JSON.parse(readFileSync(join(out, 'node_modules', 'ws', 'package.json'), 'utf8')).version).toBe('8.22.0')
+    expect(existsSync(join(out, 'node_modules', 'vitest'))).toBe(false)
+    expect(existsSync(join(out, 'src', 'realtime_native_supervisor.py'))).toBe(true)
   })
 
   it('ships the decision worker and its requirements, every one of them pinned', () => {

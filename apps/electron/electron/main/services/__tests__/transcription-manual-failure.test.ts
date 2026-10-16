@@ -39,14 +39,29 @@ const dbSpies = vi.hoisted(() => {
     'removeFromQueueByRecordingId', 'cancelPendingTranscriptions', 'run', 'runInTransaction',
     'saveDatabase', 'queryOne', 'queryAll', 'acquireTranscriptionLock', 'releaseTranscriptionLock',
     'clearStaleTranscriptionLock', 'resetStuckTranscriptions', 'getActiveProcessingRunsForRecording',
-    'enrichRecordingScheduleMetadata', 'createProcessingRun', 'completeProcessingRun', 'failProcessingRun'
+    'enrichRecordingScheduleMetadata', 'createProcessingRun', 'completeProcessingRun', 'failProcessingRun',
+    // Imported by transcription.ts today. transcribeManually asks getOwnedPipelineRecordings() whether
+    // the recording is already processing before it resolves the file, so it needs a real-shaped default.
+    'getOwnedPipelineRecordings', 'getOwnedProcessingRuns', 'persistAiMeetingResolution',
+    'clearAutomaticMeetingLink', 'isValueExcludedRecording', 'isRecordingProcessable',
+    'isRecordingGraphIngestable', 'getFailedTranscriptsForReanalysis', 'getSpeakerMap', 'assignSpeaker',
+    'retireGeneratedContentForNoSpeech', 'checkTranscriptIntegrity'
   ]
+  const defaults: Record<string, () => unknown> = {
+    getOwnedPipelineRecordings: () => [],
+    getOwnedProcessingRuns: () => new Map<string, string>(),
+    getFailedTranscriptsForReanalysis: () => []
+  }
   const spies: Record<string, ReturnType<typeof import('vitest').vi.fn>> = {}
-  return { names, spies }
+  return { names, defaults, spies }
 })
 vi.mock('../database', () => {
   const mod: Record<string, unknown> = {}
-  for (const name of dbSpies.names) mod[name] = dbSpies.spies[name] = vi.fn()
+  for (const name of dbSpies.names) {
+    const spy = dbSpies.spies[name] = vi.fn()
+    if (dbSpies.defaults[name]) spy.mockImplementation(dbSpies.defaults[name])
+    mod[name] = spy
+  }
   return mod
 })
 

@@ -6,6 +6,10 @@ Método: lectura del bundle JavaScript público de la web oficial, llamadas de s
 lectura a su API pública, y búsqueda de documentación, notas de release y repos de
 terceros.
 
+Actualización documental del 11 de octubre de 2026: las referencias a la web, su bundle, API y versiones "de hoy" en el análisis original corresponden al snapshot del 22 de septiembre; no se volvió a consultar al proveedor en esta actualización. La [guía actual del dispositivo](../devices/README.md) y el [protocolo](../devices/protocol.md) distinguen estos datos históricos del código local y del firmware H1E 6.2.5 analizado offline.
+
+El host actual sí incluye H1 Lite (`hidock-h1-lite`, PID `0x0104`, mínimo realtime 3.1.0) y su servicio Live separa canales; el promedio queda como helper/fallback mono. El H1E 6.2.5 almacenado usa otro camino: dos productores PCM que suman o seleccionan una lane antes de codificar MP3 mono a 16 kHz/64 kbps, y no tiene los comandos realtime recuperados. La separación de muestras realtime no establece la identidad física de las lanes del recorder ni deshace mezcla en el DSP. Los modos alternativos y el mapa físico por modelo siguen pendientes. Véase [investigación de grabación](../../research/rea/REPORT-RECORDING-PATHS.md).
+
 ## Resumen, una línea por pregunta
 
 1. **Implementación oficial.** La app corre en el navegador, promedia los dos
@@ -14,9 +18,9 @@ terceros.
    con etiqueta de hablante porque hace **diarización server-side**
    (`enable_speaker_diarization: true`). Verificado en el bundle.
 2. **Firmware.** El umbral de "live" por modelo que tenemos en el repo es
-   **exactamente el que usa la web hoy**, y los números decodifican a versiones
-   legibles: H1 5.3.0, H1E 6.3.0, H1E-C1 6.17.0, P1 1.3.8, P1 mini 2.3.0. Falta
-   un modelo: **H1 Lite, 3.1.0**. El changelog público llega hasta **5.3.0
+   **el observado en la web el 22 de septiembre**, y los números decodifican a versiones
+   legibles: H1 5.3.0, H1E 6.3.0, H1E-C1 6.17.0, P1 1.3.8, P1 mini 2.3.0. En ese snapshot faltaba
+   **H1 Lite, 3.1.0** en nuestro host; el código actual ya lo incluye. El changelog consultado llegaba hasta **5.3.0
    (2026-07-09)**, que es justo la versión que anuncia LiveTranslation.
 3. **El modo del protocolo.** No hay documentación pública de los 4 valores, y la
    app oficial **también usa sólo el 2** — el mismo literal, `startRealtime(2, 1)`.
@@ -76,7 +80,7 @@ Tres cosas se leen ahí:
 - El header de 8 bytes y el PCM16LE estéreo que documenta
   `packages/jensen-protocol/src/jensen-device.ts:187` quedan confirmados desde el
   lado del vendor: 4 bytes por frame, dos canales de 16 bit, little-endian.
-- La app oficial **hace el mismo promedio que hacemos nosotros**, con un noise
+- La app oficial del snapshot **hace el promedio que hacía nuestro camino mono**, con un noise
   gate extra: si los dos canales están por debajo de ±4 LSB, el frame sale 0.
 - Los dos RMS que calcula se exponen como `rmsLeft` / `rmsRight` y suben hasta el
   return de `useLiveTranslation`, pero la página que consume el hook no los
@@ -154,9 +158,9 @@ servidor y no es observable desde el cliente.
 
 ## 2. Firmware
 
-### Los umbrales que tenemos son los vigentes
+### Umbrales observados en el snapshot del 22 de septiembre
 
-El bundle de hoy trae la tabla completa:
+El bundle archivado del 22 de septiembre trae la tabla completa:
 
 ```js
 LIVE_SUPPORTED_DEVICES = {
@@ -170,10 +174,11 @@ H1E_C1_MODEL_MIN_VERSION = 397319
 H1E_C1_LIVE_MIN_VERSION  = 397568
 ```
 
-Coincide byte por byte con `supportsRealtimeFirmware` en
-`packages/jensen-protocol/src/jensen-device.ts:133`, **salvo `hidock-h1:lite`**,
-que nosotros no tenemos ni como modelo en `DeviceModel`. Un H1 Lite con firmware
-3.1.0 o más nuevo tiene live en la web oficial y en nuestra app no.
+Los valores de los umbrales coinciden con `supportsRealtimeFirmware` en
+[jensen-device.ts](../../packages/jensen-protocol/src/jensen-device.ts).
+Al 22 de septiembre faltaba Lite en nuestro modelo; al revisar el código el 11 de octubre,
+`DeviceModel` y el gate ya incluyen `hidock-h1-lite` con mínimo 3.1.0. Esto verifica el
+soporte declarado por el host, no una sesión física con cada modelo.
 
 ### Cómo se leen esos números
 
@@ -405,26 +410,26 @@ cada paquete.
 **4. Agregar H1 Lite y arreglar `getRealtimeSettings`.** Dos defectos concretos
 que salieron de comparar con el vendor:
 
-- `supportsRealtimeFirmware` no conoce `hidock-h1:lite` (mínimo 196864 = 3.1.0), y
-  `DeviceModel` no tiene el modelo. Un H1 Lite queda sin live en nuestra app y con
-  live en la web oficial. Hay que agregarlo con el mismo umbral del vendor.
-- `getRealtimeSettings` devuelve `sampleRate: 16000, channels: 1, bitDepth: 16`
-  inventados, y `channels: 1` es directamente falso según nuestro propio
-  comentario en la línea 187. O se borran esos campos y se devuelve sólo
-  `enabled`, o se llenan con la frecuencia medida de verdad. Dejarlos como están
-  es una trampa para el próximo que los lea y ajuste un resampler con eso.
+- En el snapshot, `supportsRealtimeFirmware` y `DeviceModel` no conocían Lite.
+  Al revisar el código el 11 de octubre, ambos ya incluyen `hidock-h1-lite`, PID
+  `0x0104` y mínimo 196864 = 3.1.0. La prueba física de ese modelo es otro límite.
+- En el snapshot, `getRealtimeSettings` inventaba frecuencia/canales/bit depth.
+  El código actual devuelve sólo `enabled`, leído del primer byte. No comunica
+  capacidades de formato no documentadas; `RealtimeSettings` conserva campos
+  opcionales, pero su presencia en el tipo no equivale a valores medidos.
 
 **5. Adoptar el noise gate de ±4 LSB en el camino mono.** El promedio oficial pone
 el frame en cero cuando los dos canales están por debajo de ±4. Nuestro
 `hidockRealtimeToMonoPcm` promedia siempre. En el camino de un solo canal eso
 manda dither de silencio al proveedor, que gasta turno de VAD. Es una línea. Para
-el camino por canal ya tenemos una puerta a -45 dBFS en el diseño, que es más
-agresiva y cumple la misma función.
+el camino por canal el diseño inicial usaba -45 dBFS; el diseño/código posterior
+usa -55 dBFS y 1 s de hangover, como registra la especificación de canales.
 
 **6. No perseguir los modos 0, 1 y 3 como fuente de canales separados.** No hay
-nada que lo sustente y el vendor no los usa. Vale probarlos una vez, en una sesión
-de banco con el dispositivo libre, con el criterio de decisión fijado de antemano
-(tamaño del paquete y contenido de cada canal), y cerrar el tema con evidencia.
+nada que lo sustente y el bundle observado no los usa. Cualquier prueba física
+requiere un alcance específico y el [procedimiento de una conexión propietaria](../devices/README.md#safe-development-and-hardware-validation),
+sin probes USB independientes. Su criterio debe fijarse antes (tamaño del paquete
+y contenido de cada canal), y el resultado debe registrarse como evidencia por modelo/modo.
 Diseñar algo que dependa de que el modo 1 sea "mic solo" sería apostar.
 
 **7. Considerar la forma de la API del vendor como referencia de protocolo, no de
@@ -440,7 +445,7 @@ el vendor lo usa.
 
 ## Addendum: H1 Lite USB identification
 
-The current vendor bundle identifies the H1 Lite with WebUSB product ID `260` (`0x0104`). The
+The archived vendor bundle identifies the H1 Lite with WebUSB product ID `260` (`0x0104`). The
 constructs below were located by searching the bundle text for their contents. Vendor redeploys
 change byte offsets, so an offset is not recorded as a stable locator.
 

@@ -9,8 +9,7 @@ import {
   LogOut,
   ArrowRight,
   AlertTriangle,
-  RotateCcw,
-  Settings as SettingsIcon
+  RotateCcw
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useDeviceConnection } from '@/hooks/useDeviceConnection'
@@ -19,6 +18,7 @@ import { useAppStore } from '@/store'
 import { Brand, BRAND_DIVIDER_MODE, showBrandVerticalDivider, type BrandDividerMode } from '@/components/layout/Brand'
 import { NotificationsButton } from '@/components/layout/NotificationsButton'
 import { ActivityLogButton } from '@/components/layout/ActivityLogButton'
+import { PipelineMonitor } from '@/components/layout/PipelineMonitor'
 import { UserMenu } from '@/components/layout/UserMenu'
 import {
   DropdownMenu,
@@ -167,8 +167,8 @@ export function TitleBar({ sidebarOpen, dividerMode = BRAND_DIVIDER_MODE }: Titl
       {/* CONTENT COLUMN — centred search + right cluster. */}
       <div className="flex h-full min-w-0 flex-1 items-center gap-2 pl-4 pr-3">
         <NewMenu />
-        {/* Global search — routes to Explore. Shrinks first at narrow widths. */}
-        <form onSubmit={submitSearch} className="titlebar-no-drag mx-auto w-full max-w-md min-w-0">
+        {/* Global search — routes to Explore and keeps a measured 160px floor. */}
+        <form onSubmit={submitSearch} className="titlebar-no-drag mx-auto flex-1 max-w-md min-w-[160px]">
           <div className="relative">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
             <input
@@ -193,24 +193,17 @@ export function TitleBar({ sidebarOpen, dividerMode = BRAND_DIVIDER_MODE }: Titl
         </form>
 
         {/* RIGHT CLUSTER — a grouped rhythm rather than one uniform tiny gap: the
-            three icon buttons (🔔 notifications · ⚡ activity · ⚙ settings) sit
+            notifications, activity and resource-monitor controls sit
             together as a tight trio, then a wider gap sets off the device status
             pill, then the user menu. All share the h-7 baseline so they line up on
             one axis in both themes. */}
         <div className="flex shrink-0 items-center gap-3">
           {/* Icon-button trio — one visual group with comfortable inner rhythm. */}
           <div className="flex items-center gap-1">
+            <PipelineMonitor />
             <NotificationsButton />
             <ActivityLogButton />
-            <button
-              type="button"
-              onClick={() => navigate('/settings')}
-              aria-label="Settings"
-              title="Settings"
-              className="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded-md text-slate-300 transition-colors hover:bg-slate-700 hover:text-white focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-sky-400"
-            >
-              <SettingsIcon className="h-4 w-4" />
-            </button>
+
           </div>
 
           {/* Device connection control — same status + connect/disconnect action as

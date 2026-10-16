@@ -27,6 +27,10 @@ export function transcriptionReady(t: NonNullable<OverviewConfig>['transcription
   if (!t) return false
   const provider = t.provider || 'gemini'
   if (provider === 'gemini') return !!t.geminiApiKey?.trim()
+  if (provider === 'muse-voice') return !!t.museVoiceApiKey?.trim()
+  if (provider === 'mai-transcribe-2') return !!t.maiTranscribeApiKey?.trim() && !!t.maiTranscribeEndpoint?.trim()
+  // Saved pairing is not a live capability check. Keep remote readiness unconfirmed here.
+  if (provider === 'remote-worker' || t.transcriptionExecution === 'remote' || t.transcriptionExecution === 'auto') return false
   if (!t.localAsrPath?.trim()) return false
   if (provider === 'local-asr' && t.localAsrDiarize !== false && !t.localAsrHfToken?.trim()) return false
   return true
@@ -78,7 +82,7 @@ export function OverviewSection({
   }, [])
 
   const provider = config?.transcription.provider || 'gemini'
-  const providerLabel = provider === 'gemini' ? 'Gemini' : provider === 'vibevoice' ? 'VibeVoice' : 'Local ASR'
+  const providerLabel = provider === 'gemini' ? 'Gemini' : provider === 'vibevoice' ? 'VibeVoice' : provider === 'remote-worker' ? 'Remote worker' : 'Cohere ASR'
   const providerReady = transcriptionReady(config?.transcription)
   const jev = jevStatus(config)
   const connected = connectors?.filter((c) => c.state === 'connected') ?? []

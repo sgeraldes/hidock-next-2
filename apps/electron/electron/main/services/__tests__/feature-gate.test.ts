@@ -31,6 +31,52 @@ beforeEach(() => {
 })
 
 describe('isFeatureEnabled / getResolvedFeatures', () => {
+  it('explicit firmware qualification admits manual device operations while retaining recovery containment', () => {
+    featuresConfig = { preset: 'full', flags: {} }
+    vi.stubEnv('HIDOCK_RECOVERY_MODE', '1')
+    process.argv.push('--firmware-qualification')
+    try {
+      captureBootEffectiveFeatures()
+      const invoke = vi.fn().mockReturnValue('prepared')
+      expect(gateInvokeHandler('jensen:prepareFirmwareInstall', invoke)({} as any)).toBe('prepared')
+      expect(gateInvokeHandler('jensen:isConnected', () => false)({} as any)).toBe(false)
+      expect(Object.entries(getResolvedFeatures()).filter(([id]) => id !== 'device-sync').every(([, feature]) => !feature.enabled)).toBe(true)
+      expect(featuresConfig).toEqual({ preset: 'full', flags: {} })
+    } finally { process.argv.splice(process.argv.lastIndexOf('--firmware-qualification'), 1); vi.unstubAllEnvs(); __resetBootEffectiveFeaturesForTests() }
+  })
+  it('contained device validation exposes only device IPC and preserves the desired feature config', () => {
+    featuresConfig = { preset: 'full', flags: {} }
+    vi.stubEnv('HIDOCK_RECOVERY_MODE', '1')
+    process.argv.push('--device-validation')
+    try {
+      captureBootEffectiveFeatures()
+      expect(isFeatureEnabled('device-sync')).toBe(true)
+      expect(Object.entries(getResolvedFeatures()).filter(([id]) => id !== 'device-sync').every(([, feature]) => !feature.enabled)).toBe(true)
+      expect(featuresConfig).toEqual({ preset: 'full', flags: {} })
+    } finally { process.argv.splice(process.argv.lastIndexOf('--device-validation'), 1); vi.unstubAllEnvs(); __resetBootEffectiveFeaturesForTests() }
+  })
+  it('explicit firmware maintenance exposes only device IPC and keeps other work disabled', () => {
+    vi.stubEnv('HIDOCK_RECOVERY_MODE', '1')
+    process.argv.push('--firmware-read-only')
+    try {
+      captureBootEffectiveFeatures()
+      expect(isFeatureEnabled('device-sync')).toBe(true)
+      expect(Object.entries(getResolvedFeatures()).filter(([id]) => id !== 'device-sync').every(([, feature]) => !feature.enabled)).toBe(true)
+      expect(featuresConfig).toBeUndefined()
+    } finally { process.argv.splice(process.argv.lastIndexOf('--firmware-read-only'), 1); vi.unstubAllEnvs() }
+  })
+  it('recovery blocks initiation without changing the saved preset or flags', () => {
+    featuresConfig = { preset: 'full', flags: {} }
+    vi.stubEnv('HIDOCK_RECOVERY_MODE', '1')
+    try {
+      captureBootEffectiveFeatures()
+      expect(Object.values(getResolvedFeatures()).every(feature => !feature.enabled)).toBe(true)
+      expect(isFeatureEnabled('device-sync')).toBe(false)
+      expect(isFeatureEnabled('transcription')).toBe(false)
+      expect(featuresConfig).toEqual({ preset: 'full', flags: {} })
+    } finally { vi.unstubAllEnvs(); __resetBootEffectiveFeaturesForTests() }
+    expect(isFeatureEnabled('transcription')).toBe(true)
+  })
   it('defaults to enabled (full) when config.features is unset', () => {
     expect(isFeatureEnabled('transcription')).toBe(true)
     expect(isFeatureEnabled('assistant')).toBe(true)

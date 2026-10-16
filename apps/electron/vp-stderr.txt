@@ -1,0 +1,2 @@
+npm notice run hidock-next@2.0.0 npx
+npm notice run vitest run electron/main/services/brains/__tests__/harness-catalog.test.ts electron/main/ipc/__tests__/transcription-handlers.test.ts electron/main/ipc/__tests__/ipc-channel-inventory.test.ts electron/main/services/__tests__/vector-store-page.test.ts

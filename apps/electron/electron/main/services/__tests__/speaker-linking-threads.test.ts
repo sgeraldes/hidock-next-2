@@ -32,11 +32,11 @@ const VARS = ['OMP_NUM_THREADS', 'MKL_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'NUM
 describe('diarizationThreadEnv', () => {
   it('turns the configured share of 24 CPUs into a thread count on every variable', () => {
     const env = diarizationThreadEnv(40)
-    for (const v of VARS) expect(env[v]).toBe('10') // round(24 * 0.40) = 10
+    for (const v of VARS) expect(env[v]).toBe('9') // floor(24 * 0.40) = 9
   })
 
-  it('defaults to 40% when the config says nothing', () => {
-    expect(diarizationThreadEnv(undefined).OMP_NUM_THREADS).toBe('10')
+  it('defaults to 50% when the config says nothing', () => {
+    expect(diarizationThreadEnv(undefined).OMP_NUM_THREADS).toBe('12')
   })
 
   it('never emits fewer than one thread', () => {
@@ -49,8 +49,8 @@ describe('diarizationThreadEnv', () => {
   })
 
   it('treats garbage as the default rather than as "all cores"', () => {
-    expect(diarizationThreadEnv(0).OMP_NUM_THREADS).toBe('10')
-    expect(diarizationThreadEnv(-5).OMP_NUM_THREADS).toBe('10')
-    expect(diarizationThreadEnv(Number.NaN).OMP_NUM_THREADS).toBe('10')
+    expect(diarizationThreadEnv(0).OMP_NUM_THREADS).toBe('12')
+    expect(diarizationThreadEnv(-5).OMP_NUM_THREADS).toBe('12')
+    expect(diarizationThreadEnv(Number.NaN).OMP_NUM_THREADS).toBe('12')
   })
 })

@@ -32,6 +32,7 @@ import { askDecision, hasDecisionEngine } from './pipeline/decision-engines'
 import { qualityRules } from './quality-rules'
 import { filterTranscribableRecordingIds, isRecordingTranscribable } from './recording-eligibility'
 import { languageFor } from './transcription-language'
+import { routeValidityRepair } from './quality-repair-routing'
 import { audioFrameTest, type TranscriptValidity, type ValiditySegment } from './transcript-validity'
 import { readEnvelope, transcriptFingerprint } from './transcript-validity-store'
 import { getEventBus } from './event-bus'
@@ -100,7 +101,10 @@ function candidates(limit: number): Candidate[] {
         AND r.file_path IS NOT NULL AND r.file_path != ''
       ORDER BY r.date_recorded DESC`
   )
-  const fresh = rows.filter((row) => row.sampled_fingerprint !== transcriptFingerprint(row.speakers))
+  // Speaker-only doubts are dropped before the daily limit is applied, so they neither buy ASR nor use up a slot.
+  const fresh = rows.filter(
+    (row) => row.sampled_fingerprint !== transcriptFingerprint(row.speakers) && routeValidityRepair(row.validity_json).allowsAsrSampling
+  )
   const { eligible } = filterTranscribableRecordingIds(fresh.map((row) => row.recording_id))
   return fresh.filter((row) => eligible.has(row.recording_id) && existsSync(row.file_path)).slice(0, limit)
 }
@@ -186,6 +190,9 @@ async function transcribeOne(row: Candidate, window: SampleWindow, deps: Sampler
  * tries again.
  */
 export async function sampleRecording(row: Candidate, deps: SamplerDeps): Promise<SampleOutcome | null> {
+  const routing = routeValidityRepair(row.validity_json)
+  // Transcribing audio again cannot say who spoke; a speaker-only doubt never reaches the transcriber.
+  if (!routing.allowsAsrSampling) return null
   const plan = windowsFor(row)
   if (plan.windows.length === 0) return null
   const fresh: Array<{ window: SampleWindow; transcript: WindowTranscript | null }> = []
@@ -242,6 +249,8 @@ export async function sampleRecording(row: Candidate, deps: SamplerDeps): Promis
       verdict,
       JSON.stringify({
         mode: plan.mode,
+        // The comparison judges words and meaning only; it says nothing about who spoke.
+        ...(routing.needsSpeakerReview ? { speakersChecked: false } : {}),
         windows: fresh.map((f, i) => ({ start: f.window.start, end: f.window.end, match: matches[i], words: wordCount(f.transcript?.text) })),
         ...(error ? { error } : {})
       }),

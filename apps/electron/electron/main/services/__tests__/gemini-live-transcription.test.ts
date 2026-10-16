@@ -31,6 +31,10 @@ describe('Gemini live transcription', () => {
     expect(monoView.getInt16(0, true)).toBe(2000)
     expect(monoView.getInt16(2, true)).toBe(-500)
     expect(hidockRealtimeToMonoPcm({ rest: 0, muted: true, data: body })).toHaveLength(0)
+    // Native microphone mute is already reflected in lane A; retain lane B.
+    view.setInt16(8, 0, true); view.setInt16(12, 0, true)
+    const mutedMic = hidockRealtimeToMonoPcm({ rest: 0, muted: true, microphoneMuted: true, sequenceMinusOne: 1, data: body })
+    expect(new DataView(mutedMic.buffer).getInt16(0, true)).toBe(1500)
   })
 
   it('connects the dedicated model, sends PCM, and forwards interim/final text', async () => {

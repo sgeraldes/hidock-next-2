@@ -44,6 +44,7 @@ vi.mock('../audio-preflight', () => ({
 const mockUpdateRecordingStatus = vi.fn()
 const mockGetRecordingById = vi.fn()
 const mockInsertTranscript = vi.fn()
+const mockReadStageCheckpoint = vi.fn()
 const mockQueryAll = vi.fn()
 const mockQueryOne = vi.fn()
 const mockUpdateKnowledgeCaptureTitle = vi.fn()
@@ -123,6 +124,9 @@ function makeFakeChildProcess(stdout: string, code: number = 0) {
 
 vi.mock('../database', () => ({
   addToQueue: vi.fn(),
+  getOwnedPipelineRecordings: vi.fn(() => []),
+  // transcription.ts also reads the owned-run map (restart gating); an empty Map is "nothing owned".
+  getOwnedProcessingRuns: vi.fn(() => new Map<string, string>()),
   getRecordingById: (...args: any[]) => mockGetRecordingById(...args),
   updateRecordingStatus: (...args: any[]) => mockUpdateRecordingStatus(...args),
   updateRecordingTranscriptionStatus: (...args: any[]) => mockUpdateRecordingStatus(...args),
@@ -229,6 +233,30 @@ vi.mock('fs', async (importOriginal) => {
 })
 
 vi.mock('../vector-store', () => ({ getVectorStore: vi.fn(() => null) }))
+
+// Every fixture recording points at a path that does not exist (G:\Recordings\*.wav) and carries no
+// audio bytes. Before it reaches any provider, transcription.ts inspects the stored file (ffmpeg probe +
+// SHA-256 over the real bytes), which would throw ENOENT here. These doubles stand in for that probe
+// only: a mono 5 s WAV, the same duration the fixtures declare. Eligibility, cancellation and the
+// provider/persistence gates under test still run for real. Same approach as transcription.test.ts.
+vi.mock('../stored-audio-channels', () => ({
+  inspectStoredAudio: vi.fn(async () => ({
+    container: 'wav', codec: 'pcm_s16le', channels: 1, sampleRate: 16000,
+    durationSeconds: 5, durationSource: 'decoded-frames', originalSha256: 'b'.repeat(64)
+  })),
+  prepareStoredAudioChannels: vi.fn(async () => { throw new Error('Unexpected channel preparation in mono fixture') })
+}))
+// The real class persists the layout through database.getDatabase(), which this suite's database mock
+// does not provide. Nothing here asserts on the layout tables.
+vi.mock('../recorded-audio-state', () => ({
+  RecordedAudioState: class {
+    saveLayout = vi.fn()
+    getLayout = vi.fn(() => null)
+    getMapping = vi.fn(() => null)
+    saveTracks = vi.fn()
+    getTracks = vi.fn(() => [])
+  }
+}))
 
 // ADV40-1 (round-42) — a NAMED spy so a test can assert the transcription
 // provider (local-asr via spawn) is NEVER invoked for an ineligible recording.
@@ -495,6 +523,7 @@ Respond in JSON format:
 describe('transcribeRecording — captureId flow + event emit gating', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockReadStageCheckpoint.mockReturnValue(undefined)
     resetConfig()
     mockGetRecordingById.mockReturnValue({
       id: 'rec-fresh',
@@ -505,6 +534,76 @@ describe('transcribeRecording — captureId flow + event emit gating', () => {
     mockQueryAll.mockImplementation(() => []) // existingProjects
     mockQueryOne.mockReturnValue(undefined) // actionable-block re-query (harmless fallback)
     mockEnsureCapture.mockReturnValue('cap-fresh')
+  })
+
+  it('resumes cached text without replacing the persisted transcript and its dependents', async () => {
+    const raw = { fullText: mockAsrText, speakers: '[]', provider: 'local-asr', model: 'fixture', language: 'es' }
+    mockReadStageCheckpoint.mockReturnValue(raw)
+    mockQueryOne.mockImplementation((sql: string) => sql === 'SELECT full_text FROM transcripts WHERE recording_id = ?'
+      ? { full_text: raw.fullText } : undefined)
+    mockGenerateContent.mockResolvedValueOnce(geminiJsonResponse(BASE_ANALYSIS))
+    try {
+      const { transcribeManually } = await import('../transcription')
+      await transcribeManually('rec-fresh')
+      expect(mockInsertTranscript).not.toHaveBeenCalled()
+      expect(mockSpawn).not.toHaveBeenCalled()
+      expect(mockQueryOne).toHaveBeenCalledWith('SELECT full_text FROM transcripts WHERE recording_id = ?', ['rec-fresh'])
+    } finally { mockReadStageCheckpoint.mockReturnValue(undefined) }
+  })
+
+  it('still stores a fresh transcript when no completed checkpoint exists', async () => {
+    mockGenerateContent.mockResolvedValueOnce(geminiJsonResponse(BASE_ANALYSIS))
+    const { transcribeManually } = await import('../transcription')
+    await transcribeManually('rec-fresh')
+    expect(mockInsertTranscript).toHaveBeenCalledOnce()
+  })
+
+  it('cancels RAG generation and persistence gates without claiming pipeline completion', async () => {
+    const { getVectorStore } = await import('../vector-store')
+    const { transcribeManually, cancelTranscription } = await import('../transcription')
+    const gates: boolean[] = []
+    const index = vi.fn(async (_text: string, metadata: any) => {
+      gates.push(metadata.shouldGenerate())
+      cancelTranscription('rec-fresh')
+      gates.push(metadata.shouldGenerate(), metadata.shouldPersist())
+      return 0
+    })
+    vi.mocked(getVectorStore).mockReturnValueOnce({ indexTranscript: index } as any)
+    mockGenerateContent.mockResolvedValueOnce(geminiJsonResponse(BASE_ANALYSIS))
+    await transcribeManually('rec-fresh')
+    expect(index).toHaveBeenCalledOnce()
+    expect(gates).toEqual([true, false, false])
+    const { completeProcessingRun } = await import('../database')
+    expect(vi.mocked(completeProcessingRun).mock.calls.some(([id, details]) =>
+      id === 'run-pipeline' && details?.status === 'completed')).toBe(false)
+  })
+
+  it.each(['vibevoice', 'local-asr'])('cancels a CPU-only %s worker even when termination reports exit code zero', async (provider) => {
+    resetConfig({ provider, localComputeAccelerator: 'cpu', pauseLocalWhenBusy: false,
+      pauseLocalOnBattery: false })
+    const { EventEmitter } = await import('events')
+    const child = new EventEmitter() as any
+    child.stdout = new EventEmitter()
+    child.stderr = new EventEmitter()
+    child.stderr.setEncoding = vi.fn()
+    child.kill = vi.fn(() => { queueMicrotask(() => child.emit('close', 0)); return true })
+    let entered!: () => void
+    const started = new Promise<void>(resolve => { entered = resolve })
+    mockSpawn.mockImplementationOnce(() => { entered(); return child })
+    const { transcribeManually, cancelTranscription } = await import('../transcription')
+    const pending = transcribeManually('rec-fresh')
+    try {
+      await started
+      expect((mockSpawn.mock.calls[0] as any[])[2].env.ASR_DEVICE).toBe('cpu')
+      cancelTranscription('rec-fresh')
+      await expect(pending).resolves.toBeUndefined()
+      expect(child.kill).toHaveBeenCalledOnce()
+      expect(mockGenerateContent).not.toHaveBeenCalled()
+      expect(mockInsertTranscript).not.toHaveBeenCalled()
+    } finally {
+      child.emit('close', 0)
+      await pending.catch(() => undefined)
+    }
   })
 
   it('emits capture:value-classified when the fresh classification resolves to garbage', async () => {
@@ -595,7 +694,7 @@ describe('transcribeRecording — actionable-detection value gate (T2 wire level
     { type: 'action_items', confidence: 0.9, suggestedTitle: 'Enviar notas', reason: 'dice enviar notas', suggestedTemplate: 'action_items' }
   ])
   const actionableInserts = () =>
-    mockRun.mock.calls.filter((c) => String(c[0]).includes('INSERT INTO actionables'))
+    mockRun.mock.calls.filter((c) => String(c[0]).includes('INSERT OR IGNORE INTO actionables'))
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -670,7 +769,7 @@ describe('transcribeRecording — actionable-detection value gate (T2 wire level
 describe('transcribeRecording — ARF-3 in-flight trash stops post-analysis derivatives', () => {
   const LONG_ASR_TEXT = Array.from({ length: 120 }, (_, i) => `palabra${i}`).join(' ')
   const actionableInserts = () =>
-    mockRun.mock.calls.filter((c) => String(c[0]).includes('INSERT INTO actionables'))
+    mockRun.mock.calls.filter((c) => String(c[0]).includes('INSERT OR IGNORE INTO actionables'))
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -754,7 +853,8 @@ describe('transcribeRecording — ARF-3 in-flight trash stops post-analysis deri
     await transcribeManually('rec-trash')
 
     expect(mockGenerateContent).toHaveBeenCalledTimes(1) // analysis DID run
-    expect(mockInsertTranscript).not.toHaveBeenCalled() // but nothing persisted
+    expect(mockInsertTranscript).toHaveBeenCalledTimes(1) // checkpoint BEFORE analysis/purge
+    expect(mockInsertTranscript.mock.invocationCallOrder[0]).toBeLessThan(mockGenerateContent.mock.invocationCallOrder[0])
     expect(mockEnsureCapture).not.toHaveBeenCalled()
     expect(vi.mocked(exportMeetingWiki)).not.toHaveBeenCalled()
   })
@@ -989,6 +1089,8 @@ describe('transcript analysis leaves a ledger row per provider attempt (phase 2b
 
   beforeEach(() => {
     vi.clearAllMocks()
+    mockGenerateContent.mockReset()
+    mockGenerateContent.mockResolvedValue(geminiJsonResponse(BASE_ANALYSIS))
     resetConfig()
     mockQueryAll.mockImplementation((sql: string) => {
       if (sql.includes('FROM transcripts')) {
@@ -1028,24 +1130,24 @@ describe('transcript analysis leaves a ledger row per provider attempt (phase 2b
     expect(analysisRows()[0].usage).toMatchObject({ calls: 1, tokens: { input: 2000, output: 300 } })
   })
 
-  it('writes a row for each attempt, each with its own tokens, when the first answer cannot be parsed', async () => {
+  it('records the received response without another paid attempt when parsing fails', async () => {
     mockGenerateContent
       .mockResolvedValueOnce({ response: { text: () => 'not json at all', usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 10 } } })
-      .mockResolvedValueOnce({ response: { text: () => JSON.stringify(BASE_ANALYSIS), usageMetadata: { promptTokenCount: 200, candidatesTokenCount: 20 } } })
+
     const { reanalyzeFailedTranscripts } = await import('../transcription')
     await reanalyzeFailedTranscripts(1)
-    expect(analysisRows().map((r) => r.route)).toEqual(['direct:gemini-sdk:plain-text', 'direct:gemini-sdk:json-mime-fallback'])
-    expect(analysisRows().map((r) => (r.usage as { tokens: { input: number } }).tokens.input)).toEqual([100, 200])
+    expect(analysisRows().map((r) => r.route)).toEqual(['direct:gemini-sdk:plain-text'])
+    expect(analysisRows().map((r) => (r.usage as { tokens: { input: number } }).tokens.input)).toEqual([100])
   })
 
-  it('writes a failed row for an attempt that throws, and the analysis still goes on to the second attempt as before', async () => {
+  it('records an uncertain provider failure without another paid attempt', async () => {
     mockGenerateContent
       .mockRejectedValueOnce(new Error('503 overloaded'))
-      .mockResolvedValueOnce({ response: { text: () => JSON.stringify(BASE_ANALYSIS), usageMetadata: { promptTokenCount: 50, candidatesTokenCount: 5 } } })
+
     const { reanalyzeFailedTranscripts } = await import('../transcription')
     await reanalyzeFailedTranscripts(1)
-    expect(mockGenerateContent).toHaveBeenCalledTimes(2)
-    expect(analysisRows().map((r) => r.status)).toEqual(['failed', 'completed'])
+    expect(mockGenerateContent).toHaveBeenCalledTimes(1)
+    expect(analysisRows().map((r) => r.status)).toEqual(['failed'])
     expect(analysisRows()[0].errorMessage).toMatch(/503 overloaded/)
   })
 
@@ -1067,7 +1169,7 @@ describe('actionable detection leaves a ledger row (phase 2b)', () => {
   const DETECTION_JSON = JSON.stringify([
     { type: 'action_items', confidence: 0.9, suggestedTitle: 'Enviar notas', reason: 'dice enviar notas', suggestedTemplate: 'action_items' }
   ])
-  const actionableInserts = () => mockRun.mock.calls.filter((c) => String(c[0]).includes('INSERT INTO actionables'))
+  const actionableInserts = () => mockRun.mock.calls.filter((c) => String(c[0]).includes('INSERT OR IGNORE INTO actionables'))
   let rows: CallRecord[]
   const detectionRows = () => rows.filter((r) => r.step === 'actionable-detection')
 
@@ -1130,5 +1232,99 @@ describe('actionable detection leaves a ledger row (phase 2b)', () => {
     await transcribeManually('rec-led')
     expect(mockBrainGenerate).not.toHaveBeenCalled()
     expect(detectionRows()).toEqual([])
+  })
+})
+
+// Pipeline fixtures do not contain audio bytes; durable replay is exercised against SQLite separately.
+vi.mock('../stage-checkpoints', () => ({
+  readStageCheckpoint: (...args: unknown[]) => mockReadStageCheckpoint(...args),
+  audioFingerprint: async () => 'fixture-audio-hash',
+  stageFingerprint: (...inputs: unknown[]) => JSON.stringify(inputs),
+  checkpointStage: async (_id: string, _stage: string, _hash: string, action: () => Promise<unknown>) =>
+    _stage === 'transcription' && mockReadStageCheckpoint() ? mockReadStageCheckpoint() : action()
+}))
+
+vi.mock('../provider-checkpoints', () => ({
+  providerCheckpoints: () => ({ execute: async (_key: string, request: () => Promise<unknown>) => request() })
+}))
+
+describe('manual pipeline cancellation ownership and status', () => {
+  it('owns a direct provider call, exposes it in status, and cancels without downstream analysis', async () => {
+    vi.clearAllMocks()
+    resetConfig({ provider: 'gemini' })
+    mockIsRecordingEligible.mockReturnValue(true)
+    mockIsRecordingProcessable.mockReturnValue(true)
+    mockGetRecordingById.mockReturnValue({ id: 'rec-manual-owner', filename: 'manual.wav',
+      file_path: 'G:\\Recordings\\manual.wav', duration_seconds: 5, status: 'complete' })
+    mockQueryAll.mockReturnValue([])
+    mockQueryOne.mockReturnValue(undefined)
+    const db = await import('../database')
+    const activity = await import('../transcription-activity')
+    const api = await import('../transcription')
+    const { TranscriptionCancelledError } = await import('@hidock/transcription')
+    const owned = new Set<string>()
+    const previousCreate = vi.mocked(db.createProcessingRun).getMockImplementation()
+    const previousComplete = vi.mocked(db.completeProcessingRun).getMockImplementation()
+    const previousFail = vi.mocked(db.failProcessingRun).getMockImplementation()
+    const previousOwned = vi.mocked(db.getOwnedPipelineRecordings).getMockImplementation()
+    vi.mocked(db.getOwnedPipelineRecordings).mockImplementation(() => [...owned])
+    vi.mocked(db.createProcessingRun).mockImplementation((input: any) => {
+      if (input.stage === 'pipeline') owned.add(input.recordingId)
+      return { id: `run-${input.stage}` } as any
+    })
+    const settle = (id: string) => { if (id === 'run-pipeline') owned.clear() }
+    vi.mocked(db.completeProcessingRun).mockImplementation(settle)
+    vi.mocked(db.failProcessingRun).mockImplementation(settle)
+    let release!: () => void
+    let entered!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const started = new Promise<void>(resolve => { entered = resolve })
+    let eligibleAfterCancellation: boolean | undefined
+    mockGeminiEngineImpl = async function* (_audio: unknown, options: any) {
+      entered()
+      await gate
+      eligibleAfterCancellation = options.shouldGenerate()
+      if (!eligibleAfterCancellation) throw new TranscriptionCancelledError('cancelled')
+      yield { text: 'unexpected output', startTime: 0, endTime: 5 }
+    }
+    const pending = api.transcribeManually('rec-manual-owner')
+    try {
+      await started
+      expect(activity.getActiveTranscriptions()).toContain('rec-manual-owner')
+      expect(api.getTranscriptionStatus()).toEqual({ isProcessing: true, processingCount: 1, pendingCount: 0 })
+      const statusWrites = mockUpdateRecordingStatus.mock.calls.length
+      await expect(api.transcribeManually('rec-manual-owner')).rejects.toThrow('already processing')
+      expect(mockUpdateRecordingStatus.mock.calls).toHaveLength(statusWrites)
+      expect(activity.getActiveTranscriptions()).toContain('rec-manual-owner')
+      expect(api.getTranscriptionStatus().processingCount).toBe(1)
+      api.cancelTranscription('rec-manual-owner')
+      expect(activity.getActiveTranscriptions()).toContain('rec-manual-owner')
+      release()
+      await pending
+      expect(eligibleAfterCancellation).toBe(false)
+      expect(activity.getActiveTranscriptions()).not.toContain('rec-manual-owner')
+      expect(api.getTranscriptionStatus()).toEqual({ isProcessing: false, processingCount: 0, pendingCount: 0 })
+      expect(mockGenerateContent).not.toHaveBeenCalled()
+      expect(mockInsertTranscript).not.toHaveBeenCalled()
+    } finally {
+      release()
+      await pending.catch(() => undefined)
+      mockGeminiEngineImpl = engineNotUsed
+      vi.mocked(db.createProcessingRun).mockImplementation(previousCreate!)
+      vi.mocked(db.completeProcessingRun).mockImplementation(previousComplete!)
+      vi.mocked(db.failProcessingRun).mockImplementation(previousFail!)
+      vi.mocked(db.getOwnedPipelineRecordings).mockImplementation(previousOwned!)
+    }
+  })
+
+  it('keeps an outer activity owner until both overlapping scopes release it', async () => {
+    const activity = await import('../transcription-activity')
+    activity.addActiveTranscription('rec-reference-count')
+    activity.addActiveTranscription('rec-reference-count')
+    try {
+      activity.removeActiveTranscription('rec-reference-count')
+      expect(activity.getActiveTranscriptions()).toContain('rec-reference-count')
+    } finally { activity.removeActiveTranscription('rec-reference-count') }
+    expect(activity.getActiveTranscriptions()).not.toContain('rec-reference-count')
   })
 })

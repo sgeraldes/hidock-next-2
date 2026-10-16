@@ -48,9 +48,14 @@ import type {
 } from '@hidock/knowledge-graph'
 import { complete } from '@hidock/ai-providers'
 import { withCallRecord } from './pipeline/track-call'
+import { providerCheckpoints } from './provider-checkpoints'
+import { inProcessingRunScope } from './processing-run-scope'
 import {
   run,
   runInTransaction,
+  createProcessingRun,
+  completeProcessingRun,
+  failProcessingRun,
   queryAll,
   queryOne,
   getValueExcludedRecordingIds,
@@ -222,11 +227,25 @@ export interface IngestResult {
  * keeps the error for that transcript.
  */
 function trackedExtractor(providerConfig: Parameters<typeof complete>[1], recordingId: string | null): LlmExtractor {
-  return (prompt: string) =>
-    withCallRecord({ step: 'graph-extract', recordingId, route: 'direct:ai-sdk' }, () => complete(prompt, providerConfig))
+  return (prompt: string) => {
+    const request = () => withCallRecord({ step: 'graph-extract', recordingId, route: 'direct:ai-sdk' },
+      () => complete(prompt, providerConfig))
+    return recordingId
+      ? providerCheckpoints(recordingId, undefined, () => isRecordingGraphIngestable(recordingId)).execute(
+          JSON.stringify(['graph-extract-v1', providerConfig.provider, providerConfig.model, prompt]), request)
+      : request()
+  }
 }
 
+const activeTranscriptIngests = new Set<string>()
+
 export async function ingestFromDbTranscripts(): Promise<IngestResult> {
+  // A debounce timer may inherit the caller's async context. Graph work owns
+  // its own lifetime even when the transcription coordinator finishes first.
+  return inProcessingRunScope(ingestDbTranscripts, id => failProcessingRun(id, 'Graph ingestion interrupted'))
+}
+
+async function ingestDbTranscripts(): Promise<IngestResult> {
   const providerConfig = getGraphProviderConfig()
   if (!providerConfig) {
     throw new Error('No AI provider configured. Please set a provider API key in Settings.')
@@ -296,6 +315,9 @@ export async function ingestFromDbTranscripts(): Promise<IngestResult> {
       continue
     }
 
+    if (activeTranscriptIngests.has(row.id)) { result.skipped++; continue }
+    activeTranscriptIngests.add(row.id)
+    let graphRunId: string | undefined
     try {
       // P1 (round-3, FAIL CLOSED) — the value pre-filter Set above degrades to
       // EMPTY on a lookup error (fail-open), which would send an excluded
@@ -310,6 +332,9 @@ export async function ingestFromDbTranscripts(): Promise<IngestResult> {
         )
         continue
       }
+      graphRunId = createProcessingRun({ recordingId: row.recording_id, transcriptId: row.id,
+        stage: 'graph-sync', provider: providerConfig.provider, model: providerConfig.model,
+        tool: 'graph-ingest', execution: 'cloud' }).id
       const meta = {
         meetingId: row.meeting_id ?? row.recording_id,
         title: row.subject ?? undefined,
@@ -379,12 +404,34 @@ export async function ingestFromDbTranscripts(): Promise<IngestResult> {
         )
         return true
       })
+      completeProcessingRun(graphRunId, { status: ingestedNow ? 'completed' : 'cancelled',
+        outputRefs: { ingested: ingestedNow, transcriptId: row.id } })
+      graphRunId = undefined
       if (ingestedNow) result.ingested++
       else result.skipped++
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
+      // Classify the failure: a row that became ineligible mid-run (rating,
+      // soft-delete, purge) counts as skipped, not an error. The eligibility
+      // re-check reads the exclusion tables, so it can itself throw when the
+      // original failure was those tables being unavailable — never let that
+      // escape the pass. If eligibility cannot be determined, fail closed:
+      // treat the row as a real error (no marker was written, nothing ingested).
+      let excluded = false
+      try {
+        excluded = !isRecordingGraphIngestable(row.recording_id)
+      } catch (classifyError) {
+        console.warn(
+          `[KnowledgeGraph] Eligibility re-check failed for ${row.recording_id} (transcript ${row.id}); failing closed:`,
+          classifyError
+        )
+      }
+      if (graphRunId) failProcessingRun(graphRunId, msg, excluded)
+      if (excluded) { result.skipped++; continue }
       result.errors.push({ transcriptId: row.id, error: msg })
       console.error(`[KnowledgeGraph] Failed to ingest transcript ${row.id}:`, e)
+    } finally {
+      activeTranscriptIngests.delete(row.id)
     }
   }
 

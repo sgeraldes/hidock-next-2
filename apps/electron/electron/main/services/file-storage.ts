@@ -1,4 +1,8 @@
-import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, unlinkSync, utimesSync, renameSync } from 'fs'
+import { cleanupInterruptedDownloads, validateStagedRecording, type StagedRecording } from './download-staging'
+import { isOwnedResumedDownload } from './download-resume'
+import { isRecoveryMode } from '../recovery-mode'
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, unlinkSync, utimesSync, renameSync, linkSync, openSync, readSync, closeSync } from 'fs'
+import { randomUUID } from 'crypto'
 import { RECORDING_AUDIO_EXTENSIONS } from '../../../src/shared/audio-extensions'
 import { join, basename, extname, resolve, normalize } from 'path'
 import { getConfig, getDataPath } from './config'
@@ -91,6 +95,7 @@ export async function initializeFileStorage(storage: AppConfig['storage'] = getC
       throw new StorageInitializationError(setting, dir, error)
     }
   }
+  if (!isRecoveryMode()) await cleanupInterruptedDownloads(storage.recordingsPath || join(dataPath, 'recordings'))
 }
 
 export function getRecordingsPath(): string {
@@ -122,30 +127,121 @@ export function getDatabasePath(): string {
 export interface SaveRecordingOptions {
   /**
    * Cancellation predicate. Checked AFTER the data is written to a temp `.partial`
-   * file but BEFORE the atomic rename to the final path. When it returns true the
-   * temp file is deleted and saveRecording resolves `null` — no final file is ever
-   * created, and no pre-existing recording is touched (collisions get a numeric
-   * suffix, so the final path is always a fresh name we own).
+   * file but BEFORE the exclusive publication to the final path. When it returns
+   * true the temp file is deleted and saveRecording resolves `null` — no final file
+   * is ever created, and no pre-existing recording is touched (collisions get a
+   * numeric suffix, so the final path is always a fresh name we own).
    */
   isCancelled?: () => boolean
 }
 
+/**
+ * The staged bytes could not be published without overwriting or without an
+ * atomic operation (hard links unsupported, volume mismatch, name space
+ * exhausted). The complete stage is intentionally left where it is.
+ */
+export class RecordingPublicationError extends Error {
+  constructor(message: string, readonly code: string | undefined, cause?: unknown) {
+    super(message, { cause })
+    this.name = 'RecordingPublicationError'
+  }
+}
+
+const MAX_PUBLISH_ATTEMPTS = 10_000
+
+/** Bytes of the front of a download read to decide its container; nothing else is read. */
+const FORMAT_SNIFF_BYTES = 16
+
+/**
+ * True when `head` opens on an ID3v2 tag or a valid MPEG Layer III frame header.
+ * The device writes raw MPEG for some recordings, so an `.hda` is not always PCM.
+ * A real RIFF/WAVE never matches, and anything unrecognised returns false so the
+ * caller keeps the old `.wav` name.
+ */
+export function isRawMpegAudioHead(head: Buffer): boolean {
+  if (head.length >= 10 && head.toString('latin1', 0, 3) === 'ID3') {
+    const sizeBytesValid = [6, 7, 8, 9].every((i) => (head[i] & 0x80) === 0)
+    return head[3] >= 2 && head[3] <= 4 && head[4] !== 0xff && sizeBytesValid
+  }
+  if (head.length < 4 || head[0] !== 0xff || (head[1] & 0xe0) !== 0xe0) return false
+  const version = (head[1] >> 3) & 3
+  const layer = (head[1] >> 1) & 3
+  const bitrateIndex = (head[2] >> 4) & 0xf
+  const rateIndex = (head[2] >> 2) & 3
+  return version !== 1 && layer === 1 && bitrateIndex !== 0 && bitrateIndex !== 15 && rateIndex !== 3
+}
+
+/** Extension for a downloaded `.hda`: `.mp3` for recognisable raw MPEG, `.wav` for everything else. */
+function hdaExtensionFor(data: Buffer | StagedRecording): '.mp3' | '.wav' {
+  try {
+    let head: Buffer
+    if (Buffer.isBuffer(data)) {
+      head = data.subarray(0, FORMAT_SNIFF_BYTES)
+    } else {
+      const fd = openSync(data.path, 'r')
+      try {
+        head = Buffer.alloc(FORMAT_SNIFF_BYTES)
+        head = head.subarray(0, readSync(fd, head, 0, FORMAT_SNIFF_BYTES, 0))
+      } finally {
+        closeSync(fd)
+      }
+    }
+    return isRawMpegAudioHead(head) ? '.mp3' : '.wav'
+  } catch {
+    return '.wav'
+  }
+}
+
+/**
+ * Publish a complete staged file under the first free name, never replacing
+ * anything. A hard link is created by the filesystem only if the name is
+ * absent (EEXIST otherwise), so a file that appears between any check and this
+ * call is never overwritten; only EEXIST moves on to the next numeric suffix.
+ * Any other failure (hard links unsupported, other volume, ...) throws: there
+ * is no fallback to an overwriting rename or to a non-atomic copy.
+ * The caller removes the staging name once this returns.
+ */
+function publishExclusive(stagedPath: string, recordingsPath: string, cleanFilename: string): string {
+  const extension = extname(cleanFilename)
+  const stem = cleanFilename.slice(0, cleanFilename.length - extension.length)
+  for (let attempt = 0; attempt < MAX_PUBLISH_ATTEMPTS; attempt++) {
+    const candidate = validatePath(recordingsPath, attempt === 0 ? cleanFilename : `${stem}-${attempt}${extension}`)
+    try {
+      linkSync(stagedPath, candidate)
+      return candidate
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === 'EEXIST') continue
+      const reason = error instanceof Error ? error.message : String(error)
+      throw new RecordingPublicationError(
+        `Cannot publish "${cleanFilename}" atomically without overwriting (hard link failed: ${reason}); the complete staged file was kept`,
+        code,
+        error
+      )
+    }
+  }
+  throw new RecordingPublicationError(
+    `Cannot publish "${cleanFilename}": ${MAX_PUBLISH_ATTEMPTS} numbered names are all taken`,
+    'EEXIST'
+  )
+}
+
 export async function saveRecording(
   filename: string,
-  data: Buffer,
+  data: Buffer | StagedRecording,
   meetingSubject?: string,
   originalDate?: Date
 ): Promise<string>
 export async function saveRecording(
   filename: string,
-  data: Buffer,
+  data: Buffer | StagedRecording,
   meetingSubject: string | undefined,
   originalDate: Date | undefined,
   options: SaveRecordingOptions
 ): Promise<string | null>
 export async function saveRecording(
   filename: string,
-  data: Buffer,
+  data: Buffer | StagedRecording,
   _meetingSubject?: string,
   originalDate?: Date,
   options?: SaveRecordingOptions
@@ -158,62 +254,60 @@ export async function saveRecording(
   // Validate input filename to prevent any path traversal in the source
   validateFilename(baseFilename)
 
-  // Preserve the original device filename, just change .hda to .wav
+  // Staged paths are validated before anything reads them.
+  if (!Buffer.isBuffer(data)) validateStagedRecording(data, recordingsPath)
+
+  // Preserve the original device filename, just change .hda to .wav, or to .mp3
+  // when the bytes are raw MPEG (the 16 front bytes decide; unknown stays .wav).
   // Device format: 2025Dec15-100105-Rec22.hda -> 2025Dec15-100105-Rec22.wav
   let cleanFilename = baseFilename
   const ext = extname(baseFilename).toLowerCase()
   const isHdaFile = ext === '.hda'
   if (isHdaFile) {
-    cleanFilename = baseFilename.slice(0, -4) + '.wav'
+    cleanFilename = baseFilename.slice(0, -4) + hdaExtensionFor(data)
   }
 
   // Validate the final path stays within recordings directory
-  let filePath = validatePath(recordingsPath, cleanFilename)
+  validatePath(recordingsPath, cleanFilename)
 
-  // Handle filename collision - add suffix if file already exists. This guarantees
-  // the final path is ALWAYS a name we are about to create, so cleaning up on cancel
-  // can never delete a pre-existing valid recording.
-  if (existsSync(filePath)) {
-    const nameWithoutExt = cleanFilename.slice(0, cleanFilename.lastIndexOf('.'))
-    const extension = cleanFilename.slice(cleanFilename.lastIndexOf('.'))
-    let counter = 1
-    while (existsSync(filePath)) {
-      cleanFilename = `${nameWithoutExt}-${counter}${extension}`
-      filePath = validatePath(recordingsPath, cleanFilename)
-      counter++
-    }
-  }
-
-  // Atomic write: stage the bytes in a unique temp `.partial` file, then rename onto
-  // the final path (rename is atomic on the same volume). A crash or cancel mid-write
-  // leaves only the temp file — never a truncated recording at the real path. The
-  // temp is cleaned up on any failure/cancel.
-  const tempPath = `${filePath}.${process.pid}.${Date.now()}.partial`
+  // Exclusive publication: stage the complete bytes in a unique temp `.partial`
+  // file, then hard-link it under the first free name (a name that exists, or
+  // appears at any moment before the link, gets a numeric suffix — the link
+  // itself is the existence check, so nothing is ever overwritten) and drop the
+  // staging name. A crash or cancel mid-write leaves only the temp file — never
+  // a truncated recording at the real path. The final path is ALWAYS a name we
+  // just created, so cleaning up on cancel can never delete a pre-existing
+  // recording. The temp is cleaned up on any failure/cancel, except that a
+  // caller-supplied stage is kept when publication itself is impossible.
+  const tempPath = Buffer.isBuffer(data) ? join(recordingsPath, `.hidock-${randomUUID()}.partial`) : data.path
+  const preserveResume = !Buffer.isBuffer(data) && isOwnedResumedDownload(data)
+  let filePath: string
 
   try {
-    writeFileSync(tempPath, data)
+    if (Buffer.isBuffer(data)) writeFileSync(tempPath, data)
 
     // Cancellation checkpoint — after the bytes are staged, before we publish them.
     if (options?.isCancelled?.()) {
-      try { if (existsSync(tempPath)) unlinkSync(tempPath) } catch { /* best-effort */ }
+      try { if (!preserveResume && existsSync(tempPath)) unlinkSync(tempPath) } catch { /* best-effort */ }
       return null
     }
 
-    renameSync(tempPath, filePath)
+    if (originalDate) utimesSync(tempPath, originalDate, originalDate)
+    filePath = publishExclusive(tempPath, recordingsPath, cleanFilename)
   } catch (error) {
-    // Never leave a stray temp file behind on failure.
-    try { if (existsSync(tempPath)) unlinkSync(tempPath) } catch { /* best-effort */ }
+    // Never leave a stray temp file behind on failure. A staged download that
+    // could not be published is complete and the caller owns it: keep it.
+    const keepStage = preserveResume || (!Buffer.isBuffer(data) && error instanceof RecordingPublicationError)
+    try { if (!keepStage && existsSync(tempPath)) unlinkSync(tempPath) } catch { /* best-effort */ }
     throw error
   }
 
-  // Set the file's modification time to the original recording date
-  // This ensures file explorer shows the correct date
-  if (originalDate) {
-    try {
-      utimesSync(filePath, originalDate, originalDate)
-    } catch (error) {
-      console.warn('Failed to set file modification time:', error)
-    }
+  // The recording is published. A staging name that cannot be removed is a
+  // second link to the same bytes: report it, never undo the publication.
+  try {
+    unlinkSync(tempPath)
+  } catch (error) {
+    console.warn(`[file-storage] Published ${filePath} but could not remove staging file ${tempPath}:`, error)
   }
 
   return filePath
@@ -249,7 +343,7 @@ export interface ReplacedRecordingFile {
  */
 export async function replaceRecordingFile(
   targetPath: string,
-  data: Buffer,
+  data: Buffer | StagedRecording,
   options?: SaveRecordingOptions & { originalDate?: Date }
 ): Promise<ReplacedRecordingFile | null> {
   let previousBytes: number
@@ -266,14 +360,16 @@ export async function replaceRecordingFile(
     )
   }
 
-  const tempPath = `${targetPath}.${process.pid}.${Date.now()}.partial`
+  if (!Buffer.isBuffer(data)) validateStagedRecording(data, getRecordingsPath())
+  const tempPath = Buffer.isBuffer(data) ? join(getRecordingsPath(), `.hidock-${randomUUID()}.partial`) : data.path
+  const preserveResume = !Buffer.isBuffer(data) && isOwnedResumedDownload(data)
   const discardTemp = (): void => {
-    try { if (existsSync(tempPath)) unlinkSync(tempPath) } catch { /* best-effort */ }
+    try { if (!preserveResume && existsSync(tempPath)) unlinkSync(tempPath) } catch { /* best-effort */ }
   }
 
   let seconds: number
   try {
-    writeFileSync(tempPath, data)
+    if (Buffer.isBuffer(data)) writeFileSync(tempPath, data)
 
     const staged = readAudioDuration(tempPath)
     const current = readAudioDuration(targetPath)
@@ -293,18 +389,11 @@ export async function replaceRecordingFile(
       return null
     }
 
+    if (options?.originalDate) utimesSync(tempPath, options.originalDate, options.originalDate)
     renameSync(tempPath, targetPath)
   } catch (error) {
     discardTemp()
     throw error
-  }
-
-  if (options?.originalDate) {
-    try {
-      utimesSync(targetPath, options.originalDate, options.originalDate)
-    } catch (error) {
-      console.warn('Failed to set file modification time:', error)
-    }
   }
 
   return { filePath: targetPath, previousBytes, bytes: data.length, seconds }
@@ -491,6 +580,8 @@ export function deleteWronglyNamedRecordings(): { deleted: string[]; kept: strin
   return { deleted, kept }
 }
 
+class PlaybackMemoryLimitError extends Error {}
+
 export function readRecordingFile(filePath: string): Buffer | null {
   try {
     // Validate that the path is within allowed directories
@@ -513,11 +604,16 @@ export function readRecordingFile(filePath: string): Buffer | null {
     }
 
     if (existsSync(filePath)) {
+      // Check after path authorization and before allocating Buffer/base64 IPC copies.
+      if (statSync(filePath).size > 64 * 1024 * 1024) {
+        throw new PlaybackMemoryLimitError('Audio exceeds the 64MB in-memory playback limit')
+      }
       const data = readFileSync(filePath)
       return data
     }
     return null
   } catch (error) {
+    if (error instanceof PlaybackMemoryLimitError) throw error
     console.error('Error reading recording file:', error)
     return null
   }

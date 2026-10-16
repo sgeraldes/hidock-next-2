@@ -808,3 +808,36 @@ describe('BrainRouter.canServe', () => {
     expect(await build().canServe('codex', 'chat')).toBe(false)
   })
 })
+
+it('never falls back from an explicitly selected remote semantic role', async () => {
+  const remote = makeBrain('model-host-embed', ['embed'], true)
+  const cloud = makeBrain('gemini-api', ['embed'], true)
+  remote.embed = vi.fn(async () => { throw new Error('space changed') })
+  mockBrainsConfig = { enabled: { 'model-host-embed': true, 'gemini-api': true },
+    taskRouting: { embed: 'model-host-embed' }, modelHostEmbedding: { spaceId: 'bound' } }
+  const router = new BrainRouter(makeRegistry({ 'model-host-embed': remote, 'gemini-api': cloud }))
+  await expect(router.embed(['private'])).rejects.toThrow('space changed')
+  expect(cloud.embed).not.toHaveBeenCalled()
+  await expect(router.embed(['private'], { expectedProviderId: 'model-host-embed:old' })).rejects.toThrow('captured partition')
+  expect(remote.embed).toHaveBeenCalledTimes(1)
+})
+
+it.each(['route', 'default'] as const)('managed generation %s stays closed for unavailable, null and failed responses', async choice => {
+  const remote = makeBrain('model-host-generate', ['generate', 'chat'], true)
+  const paid = makeBrain('gemini-api', ['generate', 'chat'], true)
+  const local = makeBrain('ollama', ['generate', 'chat'], true)
+  mockBrainsConfig = { enabled: { 'model-host-generate': true, 'gemini-api': true, ollama: true },
+    defaultBrain: choice === 'default' ? 'model-host-generate' : 'gemini-api',
+    taskRouting: choice === 'route' ? { chat: 'model-host-generate' } : {} }
+  const router = new BrainRouter(makeRegistry({ 'model-host-generate': remote, 'gemini-api': paid, ollama: local }))
+  remote.authStatus = async () => ({ configured: false, method: 'api-key' })
+  expect(await router.chat('chat', [{ role: 'user', content: 'fixture' }])).toBeNull()
+  await expect(router.resolve('chat', 'generate')).rejects.toThrow('no fallback')
+  remote.authStatus = async () => ({ configured: true, method: 'api-key' })
+  remote.chat = vi.fn(async () => null)
+  expect(await router.chat('chat', [{ role: 'user', content: 'fixture' }])).toBeNull()
+  remote.chat = vi.fn(async () => { throw new Error('managed timeout') })
+  await expect(router.chat('chat', [{ role: 'user', content: 'fixture' }])).rejects.toThrow('managed timeout')
+  expect(paid.chat).not.toHaveBeenCalled(); expect(local.chat).not.toHaveBeenCalled()
+  expect(paid.generate).not.toHaveBeenCalled(); expect(local.generate).not.toHaveBeenCalled()
+})

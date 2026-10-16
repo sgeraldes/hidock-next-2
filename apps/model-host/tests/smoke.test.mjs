@@ -90,8 +90,13 @@ describe('the service over a real socket', () => {
     expect(fresh.server.address().address).toBe('127.0.0.1')
   })
 
-  it('has no page', async () => {
-    expect((await fetch(`${base}/`)).status).toBe(404)
+  it('serves the lightweight local monitor', async () => {
+    const page = await fetch(`${base}/`)
+    expect(page.status).toBe(200)
+    expect(await page.text()).toContain('/dashboard.js')
+    const response = await fetch(`${base}/telemetry`)
+    expect(response.status).toBe(200)
+    expect(await response.json()).toHaveProperty('sampledAt')
   })
 
   it('pairs the first HiDock with no code while automatic pairing is open, then refuses work without a token', async () => {

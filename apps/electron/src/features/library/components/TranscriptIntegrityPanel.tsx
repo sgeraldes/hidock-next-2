@@ -27,11 +27,33 @@ interface TranscriptIntegrityPanelProps {
   onJump?: (code: LineIssueCode) => void
 }
 
+const SPEAKER_REASON_CODE = 'more_speakers_than_invited'
+
+const SPEAKER_REVIEW = {
+  heading: 'Speaker assignments need review',
+  detail:
+    'The generated voice labels may include duplicates of the same person, and a calendar invitation alone does not show who attended. ' +
+    'No other problem was recorded for this transcript. Stars, kind and summary stay on hold until the speaker labels are accepted.'
+}
+
+/** True when the only thing in doubt is the speaker count: every stored reason carries that one code. */
+function speakersOnly(transcript: TranscriptIntegrityPanelProps['transcript']): boolean {
+  if (transcript.validity_status !== 'doubtful' || !transcript.validity_json) return false
+  try {
+    const parsed = JSON.parse(transcript.validity_json) as { reasons?: Array<{ code?: unknown } | null> }
+    const reasons = parsed.reasons
+    return Array.isArray(reasons) && reasons.length > 0 && reasons.every((reason) => reason?.code === SPEAKER_REASON_CODE)
+  } catch {
+    return false
+  }
+}
+
 export function TranscriptIntegrityPanel({ recordingId, transcript, durationSeconds, onRetranscribe, onChanged, onJump }: TranscriptIntegrityPanelProps) {
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
   const label = integrityLabel(transcript)
   const held = label === 'broken' ? null : heldValidity(transcript)
+  const speakers = speakersOnly(transcript)
   const retranscribeLabel = durationSeconds ? `Transcribe again (${formatTranscriptionCost(durationSeconds)})` : 'Transcribe again'
   if ((label === 'ok' || label === 'unchecked') && !held) return null
   const issues = integrityIssues(transcript)
@@ -62,7 +84,10 @@ export function TranscriptIntegrityPanel({ recordingId, transcript, durationSeco
 
   // The validity verdict, when the integrity check itself found nothing to say.
   if ((label === 'ok' || label === 'unchecked') && held) {
-    const { label: heading, detail } = VALIDITY_LABELS[held]
+    const speakerReview = speakers && held === 'doubtful'
+    const { label: heading, detail } = speakerReview
+      ? { label: SPEAKER_REVIEW.heading, detail: SPEAKER_REVIEW.detail }
+      : VALIDITY_LABELS[held]
     const reasons = validityReasons(transcript)
     const red = held === 'invalid'
     const ValidityIcon = red ? XOctagon : AlertTriangle
@@ -71,6 +96,7 @@ export function TranscriptIntegrityPanel({ recordingId, transcript, durationSeco
         className={`mb-3 space-y-2 rounded-md border px-3 py-2 text-xs ${red ? 'border-red-500/40 bg-red-500/5' : 'border-amber-500/40 bg-amber-500/5'}`}
         data-testid="transcript-validity"
         data-validity={held}
+        data-reason={speakerReview ? 'speakers' : undefined}
         role="status"
       >
         <div className="flex items-start gap-2">
@@ -88,13 +114,13 @@ export function TranscriptIntegrityPanel({ recordingId, transcript, durationSeco
           </ul>
         )}
         <div className="flex flex-wrap items-center gap-2">
-          {onRetranscribe && (
+          {onRetranscribe && !speakerReview && (
             <Button size="sm" variant="outline" className="h-7 text-xs" disabled={busy} onClick={onRetranscribe}>
               <RotateCcw className="mr-1 h-3 w-3" aria-hidden="true" /> {retranscribeLabel}
             </Button>
           )}
           <Button size="sm" variant="ghost" className="h-7 text-xs" disabled={busy} onClick={() => void setAccepted(true)}>
-            Accept as is
+            {speakerReview ? 'Accept labels as is' : 'Accept as is'}
           </Button>
           {failure && <span className="text-destructive">{failure}</span>}
         </div>
@@ -110,7 +136,9 @@ export function TranscriptIntegrityPanel({ recordingId, transcript, durationSeco
         <span>
           Accepted as is{when ? ` on ${when}` : ''}, {issues.length > 0
             ? `with ${issues.length === 1 ? 'one problem' : `${issues.length} problems`} found in its timing.`
-            : 'though the audio check did not match the text.'}
+            : speakers
+              ? 'with the speaker labels unverified.'
+              : 'though the audio check did not match the text.'}
         </span>
         <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" disabled={busy} onClick={() => void setAccepted(false)}>
           Undo
@@ -131,7 +159,8 @@ export function TranscriptIntegrityPanel({ recordingId, transcript, durationSeco
     >
       {label === 'suspect' && held && (
         <div data-testid="transcript-validity" data-validity={held} className="space-y-1">
-          <p className="text-foreground">{VALIDITY_LABELS[held].label}.</p>
+          <p className="text-foreground">{speakers && held === 'doubtful' ? SPEAKER_REVIEW.heading : VALIDITY_LABELS[held].label}.</p>
+          {speakers && held === 'doubtful' && <p className="text-muted-foreground">{SPEAKER_REVIEW.detail}</p>}
           {extraReasons.length > 0 && (
             <ul className="list-disc space-y-0.5 pl-5 text-muted-foreground" aria-label="Why">
               {extraReasons.map((reason) => <li key={reason}>{reason}</li>)}

@@ -1382,7 +1382,7 @@ describe('useAppStore', () => {
 
       // Should set loading to false on error
       expect(useAppStore.getState().meetingsLoading).toBe(false)
-      expect(errorSpy).toHaveBeenCalledWith('Failed to load meetings:', testError)
+      expect(errorSpy).toHaveBeenCalledWith('Failed to load cached calendar')
 
       errorSpy.mockRestore()
     })
@@ -1444,7 +1444,7 @@ describe('useAppStore', () => {
         error: 'Error: Sync failed'
       })
       expect(useAppStore.getState().calendarSyncing).toBe(false)
-      expect(errorSpy).toHaveBeenCalledWith('Failed to sync calendar:', testError)
+      expect(errorSpy).toHaveBeenCalledWith('Calendar refresh failed')
 
       errorSpy.mockRestore()
     })

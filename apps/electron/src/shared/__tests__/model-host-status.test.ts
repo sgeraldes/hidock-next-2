@@ -24,7 +24,7 @@ describe('the model host in words', () => {
   it('says nothing is there when no host is set', () => {
     expect(at({ configured: false, health: null })).toEqual({
       tone: 'none',
-      text: 'No model host. Speaker work runs on this computer.'
+      text: 'No model host. Voice recognition is unavailable; no local worker will start.'
     })
   })
 
@@ -49,27 +49,27 @@ describe('the model host in words', () => {
 
   it('repairing its runtime', () => {
     expect(withSetup({ status: 'repairing' }).text).toBe(
-      'gamestation:8765 is reinstalling its GPU runtime (a few minutes). Speaker work runs here meanwhile.'
+      'gamestation:8765 is reinstalling its GPU runtime. Voice recognition is unavailable; no local worker will start.'
     )
   })
 
   it('not answering: paused from its tray, in use, or off', () => {
     expect(at({ health: null })).toEqual({
       tone: 'off',
-      text: 'gamestation:8765 is not answering: paused, in use or off. Speaker work runs on this computer.'
+      text: 'gamestation:8765 is not answering: paused, in use or off. Voice recognition is unavailable; no local worker will start.'
     })
   })
 
   it('testing the voice model it just received', () => {
     expect(withSetup({ status: 'validating' })).toEqual({
       tone: 'paused',
-      text: 'gamestation:8765 is testing the voice model with the token from this computer. Speaker work runs here meanwhile.'
+      text: 'gamestation:8765 is testing the voice model. Voice recognition is unavailable; no local worker will start.'
     })
   })
 
   it('could not run the voice model, and why', () => {
     expect(withSetup({ status: 'failed', reason: '401 gated repo pyannote/segmentation-3.0' }).text).toBe(
-      'gamestation:8765 could not run the voice model: 401 gated repo pyannote/segmentation-3.0. Speaker work runs on this computer.'
+      'gamestation:8765 could not run the voice model: 401 gated repo pyannote/segmentation-3.0. Voice recognition is unavailable; no local worker will start.'
     )
   })
 
@@ -88,27 +88,36 @@ describe('the model host in words', () => {
   it('a host from before 0.3 with its setup unfinished', () => {
     expect(at({ health: { ...base.health!, capabilities: [], setup: undefined } })).toMatchObject({
       tone: 'off',
-      text: 'gamestation:8765 answers, but its setup has not finished. Speaker work runs on this computer.'
+      text: 'gamestation:8765 answers, but its setup has not finished. Voice recognition is unavailable; no local worker will start.'
     })
   })
 
   it('a state this version does not know still gets a sentence', () => {
     expect(at({ health: { ...base.health!, state: 'warming-up' as never } })).toEqual({
       tone: 'off',
-      text: 'gamestation:8765 answers, but in a state this version does not know (warming-up). Speaker work runs on this computer.'
+      text: 'gamestation:8765 answers in an unknown state (warming-up). Voice recognition is unavailable; no local worker will start.'
     })
   })
 
   it('not paired yet', () => {
     expect(at({ paired: false }).text).toBe(
-      'gamestation:8765 is not paired with this computer yet. Speaker work runs on this computer.'
+      'gamestation:8765 is not paired yet. Voice recognition is unavailable; no local worker will start.'
     )
   })
 
   it('paired, but the chosen speaker engine never asks it', () => {
     expect(at({ usedForSpeakers: false })).toMatchObject({
       tone: 'none',
-      text: 'gamestation:8765 is paired, but the speaker engine chosen in Speakers & voices runs on this computer, so nothing goes there.'
+      text: 'gamestation:8765 is paired. The selected speaker engine runs on this computer; speaker work is not sent to this host.'
     })
+  })
+
+  it.each([undefined, false, true])('describes configured fallback honestly when offline: %s', localFallback => {
+    const text = at({ health: null, localFallback }).text
+    if (localFallback) {
+      expect(text).toContain('Local speaker fallback is enabled')
+      expect(text).toContain('pending remote work must be reconciled')
+      expect(text).not.toContain('no local worker will start')
+    } else expect(text).toContain('no local worker will start')
   })
 })
