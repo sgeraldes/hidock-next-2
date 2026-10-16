@@ -14,6 +14,9 @@
  *   - transcription:queueState                    Pull the current queue snapshot
  *       (paused? which id is processing? pending/processing counts). Main also
  *       PUSHES this same shape on 'transcription:queueState' whenever it changes.
+ *   - transcription:engineAvailability            The engine chain from Settings and
+ *       whether each engine could run now (key present, host answering, runner found).
+ *   - transcription:attempts                      Every engine attempt of one recording.
  *
  * (The pre-existing transcription:cancel / cancelAll / getQueue / updateQueueItem
  * channels live in recording-handlers.ts and are unchanged.)
@@ -27,8 +30,11 @@ import {
   reorderQueueItem,
   getQueueState,
   restartLocalStage,
+  getEngineChainAvailability,
+  getTranscriptionAttempts,
   type TranscriptionQueueState
 } from '../services/transcription'
+import type { EngineAvailability, TranscriptionAttemptView } from '../../../src/shared/transcription-engines'
 import { importCompletedRemoteJobReceipt, type CompletedRemoteJobReceipt } from '../services/remote-job-recovery'
 import { STORED_AUDIO_TRANSFORM_VERSION } from '../services/stored-audio-channels'
 
@@ -109,5 +115,14 @@ export function registerTranscriptionHandlers(): void {
       console.error('transcription:queueState error:', error)
       return { paused: false, isProcessing: false, processingId: null, shortLaneId: null, pendingCount: 0, processingCount: 0 }
     }
+  })
+
+  ipcMain.handle('transcription:engineAvailability', async (): Promise<EngineAvailability[]> => {
+    return getEngineChainAvailability()
+  })
+
+  ipcMain.handle('transcription:attempts', async (_, recordingId: unknown): Promise<TranscriptionAttemptView[]> => {
+    const id = z.string().min(1).max(200).parse(recordingId)
+    return getTranscriptionAttempts(id).map(({ queueItemId: _queueItemId, ...attempt }) => attempt)
   })
 }

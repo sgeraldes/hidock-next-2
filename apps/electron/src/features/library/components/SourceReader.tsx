@@ -34,6 +34,7 @@ import { TranscriptViewer, type StoredSegment, type TranscriptContentUpdate } fr
 import { TranscriptIntegrityPanel } from './TranscriptIntegrityPanel'
 import type { LineIssueCode } from '@/shared/transcript-line-issues'
 import { TranscriptionStatusBadge } from './TranscriptionStatusBadge'
+import { TranscriptionAttempts } from './TranscriptionAttempts'
 import { StatusIcon } from './StatusIcon'
 import { WaveformPlayer, type TimelineEvent, type TimelineEventDetail, type TimelineEventPatch, type SentimentScorePoint, type WaveformPlayerMode } from './WaveformPlayer'
 import { SpeakerAssignPopover, type AssignScope } from './SpeakerAssignPopover'
@@ -1509,9 +1510,12 @@ export function SourceReader({
           </span>
           {isAudioSource ? (
             recording.transcriptionStatus === 'error' ? (
-              <span className="rounded-full bg-destructive/10 px-2 py-0.5 text-destructive">
-                Failed: {recording.transcriptionError || queueFailure || processingRuns.find(run => run.status === 'failed')?.error_message || 'Reason unavailable'}
-              </span>
+              <>
+                <span className="rounded-full bg-destructive/10 px-2 py-0.5 text-destructive">
+                  Failed: {recording.transcriptionError || queueFailure || processingRuns.find(run => run.status === 'failed')?.error_message || 'Reason unavailable'}
+                </span>
+                <TranscriptionAttempts recordingId={recording.id} refreshKey={queueFailure} />
+              </>
             ) : <TranscriptionStatusBadge status={recording.transcriptionStatus} />
           ) : (
             <span className="rounded-full bg-muted px-2 py-0.5 font-medium capitalize text-foreground">{sourceType}</span>

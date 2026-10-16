@@ -9,6 +9,7 @@ import type { CustomRecordingProfile, CustomRecordingProfileResponse, CustomReco
 import type { FirmwareUpdatePreflight } from '@hidock/jensen-protocol'
 import type { ReferenceLabelSet, ReferenceLabelItem, LabelItemArgs, SaveLabelArgs } from '../../src/shared/decision-labels'
 import type { TranscriptVerdicts } from '../../src/shared/transcript-verdicts'
+import type { EngineAvailability, TranscriptionAttemptView } from '../../src/shared/transcription-engines'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
   ConnectorSummary,
@@ -697,6 +698,10 @@ export interface ElectronAPI {
     resumeTranscriptionQueue: () => Promise<TranscriptionQueueState>
     reorderTranscription: (recordingId: string, direction: 'up' | 'down') => Promise<TranscriptionQueueState>
     getTranscriptionQueueState: () => Promise<TranscriptionQueueState>
+    /** The engine chain from Settings and whether each engine could run now. */
+    getTranscriptionEngineAvailability: () => Promise<EngineAvailability[]>
+    /** Every engine attempt of one recording, oldest first. */
+    getTranscriptionAttempts: (recordingId: string) => Promise<TranscriptionAttemptView[]>
     /** Import a receipt for one authenticated, already-completed remote ASR job. This call never creates a job. */
     importCompletedRemoteJobReceipt: (receipt: {
       localRecordingId: string
@@ -1964,6 +1969,8 @@ const electronAPI: ElectronAPI = {
     resumeTranscriptionQueue: () => callIPC('transcription:resume'),
     reorderTranscription: (recordingId: string, direction: 'up' | 'down') => callIPC('transcription:reorder', { recordingId, direction }),
     getTranscriptionQueueState: () => callIPC('transcription:queueState'),
+    getTranscriptionEngineAvailability: () => callIPC('transcription:engineAvailability'),
+    getTranscriptionAttempts: (recordingId: string) => callIPC('transcription:attempts', recordingId),
     importCompletedRemoteJobReceipt: (receipt) => callIPC('transcription:importCompletedRemoteJobReceipt', receipt),
   },
 

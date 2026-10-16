@@ -69,6 +69,7 @@ import { CalendarPreferences } from '@/features/settings/CalendarPreferences'
 import { AudioExecutionSettings, DiarizationCpuShare, OllamaModelFields } from '@/features/settings/ModelFields'
 import { RemoteDiarizationSettings } from '@/features/settings/RemoteDiarizationSettings'
 import { CloudAsrSettings } from '@/features/settings/CloudAsrSettings'
+import { EngineFallbackSettings } from '@/features/settings/EngineFallbackSettings'
 import { VoiceBackfillPanel } from '@/features/settings/VoiceBackfillPanel'
 import { IdentityQuestionCounts } from '@/features/settings/IdentityQuestionCounts'
 import { AdvancedSettings } from '@/features/settings/AdvancedSettings'
@@ -1238,6 +1239,7 @@ export function Settings({
                   </p>
                 </div>
                 <TranscriptionPipelineControls />
+                <EngineFallbackSettings />
                 <div className="space-y-1">
                   <label htmlFor="recordedAudioChannelMode" className="text-sm font-medium">Stored audio channels</label>
                   <select id="recordedAudioChannelMode" value={config?.transcription.recordedAudioChannelMode ?? 'preserve'}

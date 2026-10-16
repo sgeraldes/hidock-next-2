@@ -154,6 +154,18 @@ export interface AppConfig {
     maiTranscribeEndpoint?: string
     transcriptionExecution?: 'local' | 'remote' | 'auto'
     remoteAsrModel?: string
+    /**
+     * Engines to try in order when a transcription fails (16-oct-2026):
+     * 'gemini', 'remote:<model>' on the Model Host, 'local:<model>' on this computer.
+     * Absent means the measured default (transcription-engine-chain.ts).
+     */
+    engineChain?: string[]
+    /** Extra tries on the same engine per error class; absent classes use the defaults. */
+    engineRetries?: Partial<Record<'transient' | 'quota' | 'incomplete' | 'unavailable' | 'credentials' | 'input' | 'unknown', number>>
+    /** false: only the first engine runs. Absent means true. */
+    engineFallbackEnabled?: boolean
+    /** Gemini may re-send a shorter piece when an answer comes back incomplete. Absent means true. */
+    splitIncompleteAudio?: boolean
     geminiApiKey: string
     geminiModel: string
     localAsrPath: string
