@@ -13,11 +13,11 @@ separado, en trozos de 426 s.
 | Grabación | Resultado de Gemini | Voz en el primer trozo, por canal (VAD guardado) |
 |---|---|---|
 | Rec07 Delivery previa, 13-oct | error: "covers 29% of the 426s recording" | canal 0: 87 s, última voz en el s 399. canal 1: 156 s hasta el final |
-| Rec09 Seba–Yaraví, 13-oct | error: "covers 46%" | canal 0: 1 s. canal 1: 0 s. La grabación entera tiene 56 s de sonido |
+| Rec09 llamada corta, 13-oct | error: "covers 46%" | canal 0: 1 s. canal 1: 0 s. La grabación entera tiene 56 s de sonido |
 | Rec12 Practice Leaders, 13-oct | error: "covers 2%" | canal 0: 0 s. canal 1: 384 s |
 | Rec16 AM3 practice, 14-oct | error: "covers 11%" | canal 0: 15 s, última voz en el s 117. canal 1: 237 s |
 | Rec08 Delivery, 13-oct | completa, validez `doubtful` (30% del texto sin ubicar) | canal 0: 43 s. canal 1: 232 s |
-| Rec14 entrevista Diego Ojeda, 14-oct | completa, validez `doubtful` (55% sin ubicar) | canal 0: 256 s. canal 1: 23 s |
+| Rec14 entrevista, 14-oct | completa, validez `doubtful` (55% sin ubicar) | canal 0: 256 s. canal 1: 23 s |
 | Rec15, 14-oct (control) | completa, `valid` | canal 0: 70 s hasta el s 405. canal 1: 275 s |
 
 ### Causa 1: el chequeo de cobertura confunde un canal callado con una respuesta cortada
