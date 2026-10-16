@@ -1446,7 +1446,9 @@ async function transcribeWithGemini(
   // lands between the engine's own chunk/upload/retry calls).
   shouldGenerate?: () => boolean,
   durationSeconds?: number,
-  recordingId?: string
+  recordingId?: string,
+  /** Where the local VAD heard sound in this file; only those stretches are sent. */
+  speechIntervals?: ReadonlyArray<{ start: number; end: number }>
 ): Promise<RawTranscriptionResult> {
   const config = getConfig()
   if (!resolveGeminiApiKey()) {
@@ -1487,6 +1489,7 @@ async function transcribeWithGemini(
     language: config.transcription.language,
     context: meetingContext || undefined,
     durationSeconds,
+    speechIntervals,
     // GeminiEngine reads filePath from options for MIME type detection
     filePath,
     // ADV43-1 (round-45) — re-checked inside the engine before each provider call.
@@ -2873,7 +2876,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   let rawTranscript: RawTranscriptionResult
   const transcriptionUsage = createGeminiUsageCollector()
   const providerFilePath = normalizedMonoPath
-  const transcribeMono = async (path: string): Promise<RawTranscriptionResult> => execution === 'remote'
+  const transcribeMono = async (path: string, speech?: ReadonlyArray<{ start: number; end: number }>): Promise<RawTranscriptionResult> => execution === 'remote'
       ? await transcribeWithRemoteWorker(recordingId, path, transcriptionProvider, transcriptionModel,
           shouldContinueAudio)
       : transcriptionProvider === 'muse-voice' || transcriptionProvider === 'mai-transcribe-2'
@@ -2883,17 +2886,21 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
       : transcriptionProvider === 'local-asr'
         ? await transcribeWithLocalAsr(path, meetingContext, progressCallback, shouldContinueAudio)
         : await transcriptionUsage.run(() => transcribeWithGemini(path, meetingContext, progressCallback,
-            shouldContinueAudio, audioLayout.durationSeconds, recordingId))
+            shouldContinueAudio, audioLayout.durationSeconds, recordingId, speech))
+  // The VAD of one source channel, from this run or its checkpoint: the engine
+  // sends only the stretches with voice and judges coverage against them.
+  const channelSpeech = (channelIndex: number) => (channelPreflight[channelIndex] ??
+    readStageCheckpoint<AudioPreflightReport>(recordingId, `vad-channel-${channelIndex}`, fingerprint))?.activityIntervals
   try {
     rawTranscript = await checkpointStage(recordingId, 'transcription', fingerprint, async () => {
-      if (!separateChannels) return transcribeMono(providerFilePath)
+      if (!separateChannels) return transcribeMono(providerFilePath, audioPreflight.activityIntervals)
       if (execution === 'remote') return transcribeWithRemoteWorker(recordingId, recording.file_path!,
         transcriptionProvider, transcriptionModel, shouldContinueAudio, remoteChannelMap, activeChannels)
       const result = await transcribePreparedChannels<RawTranscriptionResult>({
         filePath: recording.file_path!, parentDir: tmpdir(), layout: audioLayout,
         mapping: channelMapping ?? undefined, shouldContinue: shouldContinueAudio,
         transcribe: async track => {
-          try { return await transcribeMono(track.path) }
+          try { return await transcribeMono(track.path, channelSpeech(track.channelIndex)) }
           catch (error) {
             if (!(error instanceof NoSpeechDetectedError)) throw error
             return { fullText: '', provider: transcriptionProvider, model: transcriptionModel,

@@ -35,6 +35,14 @@ export interface TranscribeOptions {
   diarize?: boolean
   /** Known recording duration, used to keep provider output below model limits. */
   durationSeconds?: number
+  /**
+   * Where the local voice-activity check heard sound in this audio, in seconds
+   * from its start. When given to an engine that can cut its input, only the
+   * stretches with voice are sent, and a short answer is judged against where
+   * the voice ends instead of where the interval ends. An empty array means
+   * no voice at all: nothing is sent.
+   */
+  speechIntervals?: ReadonlyArray<{ start: number; end: number }>
   /** Reports completion of bounded provider ranges/chunks. */
   onProgress?: (done: number, total: number) => void
   /** Structured provider-boundary timing for diagnostics. */
