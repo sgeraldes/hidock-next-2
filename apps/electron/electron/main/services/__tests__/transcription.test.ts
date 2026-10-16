@@ -117,6 +117,12 @@ let mockConfig = {
 }
 
 // Mock database
+const mockRecordTranscriptionAttempt = vi.hoisted(() => vi.fn())
+vi.mock('../transcription-attempts-store', () => ({
+  recordTranscriptionAttempt: mockRecordTranscriptionAttempt,
+  getTranscriptionAttempts: vi.fn(() => []),
+}))
+
 vi.mock('../database', () => ({
   getOwnedPipelineRecordings: vi.fn(() => []),
   getOwnedProcessingRuns: vi.fn(() => new Map()),
@@ -230,9 +236,16 @@ vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn() }
 }))
 
-// Mock config
+// Mock config. These tests follow one engine attempt; the engine chain (retries and
+// fallbacks) has its own tests, so each config here runs a single attempt unless it says otherwise.
 vi.mock('../config', () => ({
-  getConfig: vi.fn(() => mockConfig),
+  getConfig: vi.fn(() => {
+    const transcription = mockConfig.transcription as Record<string, unknown>
+    if (!('engineFallbackEnabled' in transcription)) {
+      Object.assign(transcription, { engineFallbackEnabled: false, engineRetries: { transient: 0, quota: 0, unknown: 0 } })
+    }
+    return mockConfig
+  }),
   // transcribeWithGemini builds the engine with this as its fallback model.
   // Without it the Gemini path threw at construction, before the engine's
   // transcribe() ran, so no test here could observe the provider being reached.
@@ -506,6 +519,52 @@ describe('Transcription Service', () => {
           expect(hasFailureCall).toBe(true)
         }, { timeout: 15000, interval: 25 })
       } finally {
+        stopTranscriptionProcessor()
+      }
+    })
+
+    it('with fallback on, a failed engine moves to the next and the error lists every attempt', { timeout: 20000 }, async () => {
+      // The Gemini mock fails with a rate limit. Without a paired Model Host both
+      // measured fallbacks are skipped, and each step is recorded (16-oct-2026).
+      Object.assign(mockConfig.transcription, { engineFallbackEnabled: true, engineRetries: { transient: 0, quota: 0, unknown: 0 }, modelHostUrl: '' })
+      mockGetQueueItems.mockReturnValue([{ id: 'queue-2', recording_id: 'rec-123', filename: 'test.wav', status: 'pending', attempts: 0 }])
+      mockGetRecordingById.mockReturnValue({ id: 'rec-123', filename: 'test.wav', file_path: '/recordings/test.wav', status: 'complete' })
+      const { startTranscriptionProcessor, stopTranscriptionProcessor } = await import('../transcription')
+      startTranscriptionProcessor()
+      try {
+        await vi.waitFor(() => {
+          const failed = mockUpdateQueueItem.mock.calls.find((call: any[]) => call[0] === 'queue-2' && call[1] === 'failed')
+          expect(failed?.[2]).toContain('configured:gemini #1 failed (quota); remote:moondream/parakeet-ultra #0 skipped-unavailable (unavailable); remote:Qwen/Qwen3-ASR-1.7B #0 skipped-unavailable')
+        }, { timeout: 15000, interval: 25 })
+        expect(mockRecordTranscriptionAttempt.mock.calls.map((call: any[]) => [call[0], call[1], call[2].engine, call[2].outcome])).toEqual([
+          ['rec-123', 'queue-2', 'configured:gemini', 'failed'],
+          ['rec-123', 'queue-2', 'remote:moondream/parakeet-ultra', 'skipped-unavailable'],
+          ['rec-123', 'queue-2', 'remote:Qwen/Qwen3-ASR-1.7B', 'skipped-unavailable'],
+        ])
+        expect(mockRecordTranscriptionAttempt.mock.calls[1][2].message).toBe('No Model Host is paired')
+      } finally {
+        stopTranscriptionProcessor()
+      }
+    })
+
+    it('a recording excluded between engine attempts ends cancelled, not failed', { timeout: 20000 }, async () => {
+      // Gemini fails; while it does, the recording is marked personal. The chain
+      // must stop before the next engine and report a cancellation (review of #182).
+      Object.assign(mockConfig.transcription, { engineFallbackEnabled: true, engineRetries: { transient: 0, quota: 0, unknown: 0 }, modelHostUrl: '' })
+      mockGeminiTranscribeCall.mockImplementation(() => { mockIsRecordingEligible.mockReturnValue(false) })
+      mockGetQueueItems.mockReturnValue([{ id: 'queue-3', recording_id: 'rec-123', filename: 'test.wav', status: 'pending', attempts: 0 }])
+      mockGetRecordingById.mockReturnValue({ id: 'rec-123', filename: 'test.wav', file_path: '/recordings/test.wav', status: 'complete' })
+      const { startTranscriptionProcessor, stopTranscriptionProcessor } = await import('../transcription')
+      startTranscriptionProcessor()
+      try {
+        await vi.waitFor(() => {
+          expect(mockUpdateQueueItem.mock.calls.some((call: any[]) => call[0] === 'queue-3' && call[1] === 'cancelled')).toBe(true)
+        }, { timeout: 15000, interval: 25 })
+        expect(mockUpdateQueueItem.mock.calls.some((call: any[]) => call[0] === 'queue-3' && call[1] === 'failed')).toBe(false)
+        expect(mockRecordTranscriptionAttempt.mock.calls.map((call: any[]) => [call[2].engine, call[2].outcome]))
+          .toEqual([['configured:gemini', 'failed']])
+      } finally {
+        mockGeminiTranscribeCall.mockReset()
         stopTranscriptionProcessor()
       }
     })

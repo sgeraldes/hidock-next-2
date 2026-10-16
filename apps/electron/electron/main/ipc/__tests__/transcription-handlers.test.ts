@@ -19,13 +19,17 @@ const mockResumeQueue = vi.fn()
 const mockReorderQueueItem = vi.fn()
 const mockGetQueueState = vi.fn()
 const mockRestartLocalStage = vi.fn()
+const mockGetEngineChainAvailability = vi.fn()
+const mockGetTranscriptionAttempts = vi.fn()
 
 vi.mock('../../services/transcription', () => ({
   pauseQueue: (...a: any[]) => mockPauseQueue(...a),
   resumeQueue: (...a: any[]) => mockResumeQueue(...a),
   reorderQueueItem: (...a: any[]) => mockReorderQueueItem(...a),
   getQueueState: (...a: any[]) => mockGetQueueState(...a),
-  restartLocalStage: (...a: any[]) => mockRestartLocalStage(...a)
+  restartLocalStage: (...a: any[]) => mockRestartLocalStage(...a),
+  getEngineChainAvailability: (...a: any[]) => mockGetEngineChainAvailability(...a),
+  getTranscriptionAttempts: (...a: any[]) => mockGetTranscriptionAttempts(...a)
 }))
 
 const STATE = { paused: false, isProcessing: false, processingId: null, pendingCount: 0, processingCount: 0 }
@@ -48,6 +52,8 @@ describe('transcription-handlers', () => {
 
   it('registers queue-control and local-stage restart channels', () => {
     expect(Object.keys(handlers).sort()).toEqual([
+      'transcription:attempts',
+      'transcription:engineAvailability',
       'transcription:importCompletedRemoteJobReceipt',
       'transcription:pause',
       'transcription:queueState',
@@ -93,5 +99,17 @@ describe('transcription-handlers', () => {
     const result = await handlers['transcription:queueState'](null)
     expect(mockGetQueueState).toHaveBeenCalled()
     expect(result.pendingCount).toBe(3)
+  })
+
+  it('answers the engine chain availability as main computes it', async () => {
+    mockGetEngineChainAvailability.mockResolvedValue([{ entry: 'gemini', label: 'Gemini · cloud', unavailableReason: null }])
+    expect(await handlers['transcription:engineAvailability'](null)).toEqual([{ entry: 'gemini', label: 'Gemini · cloud', unavailableReason: null }])
+  })
+
+  it('validates the recording id and keeps queue row ids out of the attempts answer', async () => {
+    mockGetTranscriptionAttempts.mockReturnValue([{ queueItemId: 'q1', engine: 'gemini', attempt: 1, outcome: 'failed', startedAt: 't', durationMs: 1, waitedSeconds: 0 }])
+    expect(await handlers['transcription:attempts'](null, 'rec-1')).toEqual([{ engine: 'gemini', attempt: 1, outcome: 'failed', startedAt: 't', durationMs: 1, waitedSeconds: 0 }])
+    expect(mockGetTranscriptionAttempts).toHaveBeenCalledWith('rec-1')
+    await expect(handlers['transcription:attempts'](null, '')).rejects.toThrow()
   })
 })

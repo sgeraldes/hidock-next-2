@@ -37,7 +37,7 @@ export function hasDecisionLabelRecoveryFailed(): boolean {
   return decisionLabelRecoveryFailed
 }
 
-const SCHEMA_VERSION = 72
+const SCHEMA_VERSION = 73
 
 const DECISION_LABELS_DDL = `CREATE TABLE IF NOT EXISTS decision_label_sets (
     id TEXT PRIMARY KEY,
@@ -3492,7 +3492,36 @@ const MIGRATIONS: Record<number, () => void> = {
       database.run('ALTER TABLE transcription_queue ADD COLUMN owner_requested INTEGER NOT NULL DEFAULT 0')
     }
   },
+  73: () => {
+    console.log('Running migration to schema v73: transcription attempts')
+    getDatabase().run(TRANSCRIPTION_ATTEMPTS_DDL)
+    console.log('Migration v73 complete')
+  },
 }
+
+/**
+ * Every engine attempt of a transcription (16-oct-2026): which engine, which try,
+ * how it ended and why. Written as each attempt ends by the engine chain
+ * (transcription-engine-chain.ts), read by the recording panel, Settings and the
+ * brain API. Migration 73 and repairPhase share it.
+ */
+const TRANSCRIPTION_ATTEMPTS_DDL = `
+  CREATE TABLE IF NOT EXISTS transcription_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recording_id TEXT NOT NULL,
+    queue_item_id TEXT,
+    engine TEXT NOT NULL,
+    attempt INTEGER NOT NULL,
+    outcome TEXT NOT NULL CHECK(outcome IN ('succeeded', 'failed', 'skipped-unavailable')),
+    error_class TEXT,
+    message TEXT,
+    started_at TEXT NOT NULL,
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    waited_seconds INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_transcription_attempts_recording ON transcription_attempts(recording_id, started_at);
+`
 
 /**
  * Notes, hand-written. Single source of truth for the DDL: migration 55 and the
@@ -4067,6 +4096,13 @@ function repairPhase(): void {
     database.run(NOTES_TABLE_DDL)
   } catch (e) {
     console.warn('[Database] notes create skipped:', (e as Error).message)
+  }
+
+  // Transcription attempts (v73), like Notes.
+  try {
+    database.run(TRANSCRIPTION_ATTEMPTS_DDL)
+  } catch (e) {
+    console.warn('[Database] transcription_attempts create skipped:', (e as Error).message)
   }
 
   // Reference labels (v71), like Notes: fresh installs and upgrades share the

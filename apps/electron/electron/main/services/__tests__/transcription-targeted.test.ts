@@ -63,6 +63,12 @@ vi.mock('../database', () => {
   return mod
 })
 
+const attempts = vi.hoisted(() => ({ byRecording: new Map<string, unknown[]>() }))
+vi.mock('../transcription-attempts-store', () => ({
+  recordTranscriptionAttempt: vi.fn(),
+  getTranscriptionAttempts: (id: string) => attempts.byRecording.get(id) ?? [],
+}))
+
 import { submitTargetedTranscriptions, targetedTranscriptionStatus } from '../transcription'
 
 const db = dbSpies.spies
@@ -145,7 +151,9 @@ describe('submitTargetedTranscriptions', () => {
 })
 
 describe('targetedTranscriptionStatus', () => {
-  it('answers only for eligible recordings, with their queue jobs', () => {
+  it('answers only for eligible recordings, with their queue jobs and engine attempts', () => {
+    const geminiQuota = { engine: 'configured:gemini', attempt: 1, outcome: 'failed', errorClass: 'quota', message: '429', startedAt: '2026-10-16T10:00:00.000Z', durationMs: 900, waitedSeconds: 0, queueItemId: 'q1' }
+    attempts.byRecording.set('rec-new', [geminiQuota])
     db['getQueueItems'].mockReturnValue([
       { id: 'q1', recording_id: 'rec-new', status: 'failed', progress: 20, provider: null, error_message: 'Provider response retained' },
       { id: 'q2', recording_id: 'rec-personal', status: 'pending', progress: 0, provider: null, error_message: null }
@@ -154,7 +162,8 @@ describe('targetedTranscriptionStatus', () => {
       {
         recordingId: 'rec-new',
         transcriptionStatus: 'none',
-        jobs: [{ id: 'q1', status: 'failed', progress: 20, provider: null, error: 'Provider response retained' }]
+        jobs: [{ id: 'q1', status: 'failed', progress: 20, provider: null, error: 'Provider response retained' }],
+        attempts: [geminiQuota]
       }
     ])
   })

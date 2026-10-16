@@ -1,6 +1,11 @@
 import { recoverRemoteJobs, cancelRecoveredRemote, stopRemoteRecovery } from './remote-job-recovery'
 import { createRemoteRecoverySupervisor } from './remote-recovery-supervisor'
 import { resolveAudioRoute } from './audio-execution-route'
+import { chainForRequest, chainSettingsFromConfig, formatEngineStep, runEngineChain, type EngineAttempt, type EngineStep } from './transcription-engine-chain'
+import { engineRouteInput, engineUnavailableReason } from './transcription-engine-routing'
+import { getTranscriptionAttempts, recordTranscriptionAttempt } from './transcription-attempts-store'
+import { engineOptionLabel, type EngineAvailability } from '../../../src/shared/transcription-engines'
+import { checkModelHost } from './model-host-client'
 import { transcribeCloudFile, type CloudAsrProvider } from './cloud-asr/file-pipeline'
 import { runRemoteWorkerJob, type RemoteAudioChannelMap } from './remote-worker-jobs'
 import { createHash } from 'crypto'
@@ -643,7 +648,7 @@ async function runQueueItem(
       })
     }
 
-    const outcome = await transcribeRecording(item.recording_id, progressCallback, item.provider, item.owner_requested === true)
+    const outcome = await transcribeThroughEngineChain(item.recording_id, progressCallback, item.provider, item.owner_requested === true, item.id)
 
     if (outcome.status === 'cancelled') {
       // INC-2 — the recording was trashed / marked personal / hard-purged
@@ -920,6 +925,8 @@ export function targetedTranscriptionStatus(recordingIds: string[]): unknown[] {
     jobs: items.filter(item => item.recording_id === recordingId).map(item => ({
       id: item.id, status: item.status, progress: item.progress, provider: item.provider, error: item.error_message,
     })),
+    // The last engine attempts with their reasons, so an agent sees why a run fell back or failed.
+    attempts: getTranscriptionAttempts(recordingId, 20),
   }))
 }
 
@@ -1461,7 +1468,8 @@ async function transcribeWithGemini(
   const modelName = config.transcription.geminiModel || CURRENT_GEMINI_TRANSCRIPTION_MODEL
   const engine = new GeminiEngine({
     checkpoints: recordingId ? providerCheckpoints(recordingId, undefined, shouldGenerate) : undefined,
-    allowAudioRetries: false,
+    // Gemini may re-send a shorter piece of an incomplete answer (Settings > Transcription).
+    allowAudioRetries: config.transcription.splitIncompleteAudio !== false,
     // Key resolves via the brain credential store (falls back to the plaintext
     // config key), so the one-time migration is honoured here too. Audio still
     // uses GeminiEngine directly because it returns per-turn speaker segments —
@@ -2435,14 +2443,106 @@ async function retireNoSpeechGeneratedContent(recordingId: string): Promise<void
   }
 }
 
+/**
+ * Transcribe through the engine chain (Settings > Transcription): repeat an
+ * engine when its error class allows it, then try the next one that is
+ * available now. Every attempt goes to transcription_attempts and the activity
+ * log. A row that named its provider runs only that engine.
+ */
+async function transcribeThroughEngineChain(
+  recordingId: string,
+  progressCallback: ((stage: string, progress: number) => void) | undefined,
+  explicitProvider: string | null | undefined,
+  ownerRequested: boolean,
+  queueItemId: string | null
+): Promise<TranscribeOutcome> {
+  const config = getConfig().transcription
+  const settings = chainForRequest(chainSettingsFromConfig(config), explicitProvider)
+  const canonicalId = getRecordingById(recordingId)?.id ?? resolveRecordingId(recordingId)?.id ?? recordingId
+  const filename = getRecordingById(canonicalId)?.filename ?? canonicalId
+  const ids = idsFor(canonicalId)
+  // A recording that stops being eligible between attempts (marked personal,
+  // excluded by value, deleted) ends cancelled, as the single attempt did
+  // before the chain. An owner's cancel keeps its own path in runQueueItem.
+  let becameIneligible = false
+  const shouldContinue = () => {
+    if (ids.some((id) => cancelledRecordings.has(id))) return false
+    if (stillWanted(canonicalId, ownerRequested)) return true
+    becameIneligible = true
+    return false
+  }
+  try {
+    const { result } = await runEngineChain<TranscribeOutcome>(settings, {
+      run: (step) => step.provider === 'requested'
+        ? transcribeRecording(recordingId, progressCallback, step.model, ownerRequested)
+        : step.provider === 'configured'
+          ? transcribeRecording(recordingId, progressCallback, undefined, ownerRequested)
+          : transcribeRecording(recordingId, progressCallback, undefined, ownerRequested, step),
+      unavailableReason: (step) => engineUnavailableReason(step, engineAvailabilityDeps),
+      sleep: async (seconds) => {
+        const until = Date.now() + seconds * 1000
+        while (Date.now() < until && shouldContinue()) await new Promise((resolve) => setTimeout(resolve, 1000))
+      },
+      record: (attempt) => recordEngineAttempt(canonicalId, queueItemId, filename, attempt),
+      shouldContinue,
+    })
+    return result
+  } catch (error) {
+    if (becameIneligible) {
+      console.log(`[Transcription] ${filename} became ineligible between engine attempts; reporting cancelled`)
+      return { status: 'cancelled' }
+    }
+    throw error
+  }
+}
+
+const engineAvailabilityDeps = {
+  hasGeminiKey: () => !!resolveGeminiApiKey(),
+  modelHost: () => ({ url: getConfig().transcription.modelHostUrl, token: getConfig().transcription.modelHostToken }),
+  checkHost: (host: { url: string; token: string }) => checkModelHost(host),
+  localAsrPath: () => getConfig().transcription.localAsrPath || process.env.ASR_MCP_PATH,
+}
+
+/** The saved chain with whether each engine could run now (Settings > Transcription). */
+export async function getEngineChainAvailability(): Promise<EngineAvailability[]> {
+  const { chain } = chainSettingsFromConfig(getConfig().transcription)
+  return Promise.all(chain.map(async (step) => {
+    const entry = formatEngineStep(step)
+    let unavailableReason: string | null
+    try { unavailableReason = await engineUnavailableReason(step, engineAvailabilityDeps) }
+    catch (error) { unavailableReason = error instanceof Error ? error.message : String(error) }
+    return { entry, label: engineOptionLabel(entry), unavailableReason }
+  }))
+}
+
+export { getTranscriptionAttempts }
+
+function recordEngineAttempt(recordingId: string, queueItemId: string | null, filename: string, attempt: EngineAttempt): void {
+  try {
+    recordTranscriptionAttempt(recordingId, queueItemId, attempt)
+  } catch (error) {
+    console.error('[Transcription] Could not record the engine attempt', error)
+  }
+  const what = `${filename}: ${attempt.engine} #${attempt.attempt}`
+  if (attempt.outcome === 'succeeded') {
+    if (attempt.attempt > 1 || attempt.waitedSeconds > 0) emitActivityLog('info', 'Transcription engine succeeded after retrying', what)
+    return
+  }
+  const why = `${attempt.errorClass ?? 'unknown'}: ${attempt.message ?? ''}`.slice(0, 400)
+  console.warn(`[Transcription] ${what} ${attempt.outcome} (${why})`)
+  emitActivityLog('warning', attempt.outcome === 'skipped-unavailable' ? 'Transcription engine skipped' : 'Transcription engine failed',
+    `${what}: ${why}`)
+}
+
 async function transcribeRecording(
   recordingId: string,
   progressCallback?: (stage: string, progress: number) => void,
   providerOverride?: string,
-  ownerRequested = false
+  ownerRequested = false,
+  routeOverride?: EngineStep
 ): Promise<TranscribeOutcome> {
   return inProcessingRunScope(
-    () => transcribeOwnedRecording(recordingId, progressCallback, providerOverride, ownerRequested),
+    () => transcribeOwnedRecording(recordingId, progressCallback, providerOverride, ownerRequested, routeOverride),
     id => failProcessingRun(id, 'Interrupted: coordinator ended before stage completion; automatic retry disabled')
   )
 }
@@ -2451,7 +2551,8 @@ async function transcribeOwnedRecording(
   recordingId: string,
   progressCallback?: (stage: string, progress: number) => void,
   providerOverride?: string,
-  ownerRequested = false
+  ownerRequested = false,
+  routeOverride?: EngineStep
 ): Promise<TranscribeOutcome> {
   const recording = getRecordingById(recordingId) ?? resolveRecordingId(recordingId)
   if (!recording || !recording.file_path) throw new Error(`Recording not found or no local file: ${recordingId}`)
@@ -2460,10 +2561,11 @@ async function transcribeOwnedRecording(
   const operation = createProcessingRun({ recordingId: recording.id, stage: 'pipeline',
     provider: 'hidock-next', tool: 'pipeline-coordinator', execution: 'local' })
   addActiveTranscription(recording.id)
-  ownedTranscriptionProviders.set(recording.id, providerOverride || getConfig().transcription.provider || 'gemini')
+  const stepRoute = routeOverride ? engineRouteInput(routeOverride) : null
+  ownedTranscriptionProviders.set(recording.id, stepRoute?.provider || providerOverride || getConfig().transcription.provider || 'gemini')
   const audioCleanups: Array<() => Promise<void>> = []
   try {
-    const outcome = await transcribeRecordingStages(recording.id, progressCallback, providerOverride, ownerRequested, audioCleanups)
+    const outcome = await transcribeRecordingStages(recording.id, progressCallback, providerOverride, ownerRequested, audioCleanups, routeOverride)
     completeProcessingRun(operation.id, { status: outcome.status === 'cancelled' ? 'cancelled' : 'completed' })
     return outcome
   } catch (error) {
@@ -2488,7 +2590,9 @@ async function transcribeRecordingStages(
   progressCallback?: (stage: string, progress: number) => void,
   providerOverride?: string,
   ownerRequested = false,
-  audioCleanups: Array<() => Promise<void>> = []
+  audioCleanups: Array<() => Promise<void>> = [],
+  /** One engine of the chain; replaces the configured provider, location and remote model. */
+  routeOverride?: EngineStep
 ): Promise<TranscribeOutcome> {
   // Resolve stale/foreign IDs (e.g. a synced_files id queued by an older
   // renderer build) to the real recordings row before failing.
@@ -2650,6 +2754,7 @@ Meeting ${i + 1}: "${m.subject}"
     audioState.saveTracks(recordingId, audioLayout.originalSha256, preparedLegacy.transformVersion, preparedLegacy.tracks)
   }
   const normalizedMonoPath = preparedLegacy?.tracks.length === 1 ? preparedLegacy.tracks[0].path : recording.file_path
+  const stepRoute = routeOverride ? engineRouteInput(routeOverride) : null
   const cachedTranscript = readStageCheckpoint<RawTranscriptionResult>(recordingId, 'transcription', fingerprint)
   const completedJobReceipt = cachedTranscript?.remoteQuality?.completionReceipt as
     { kind?: string; hostJobId?: string; localRecordingId?: string } | undefined
@@ -2664,13 +2769,14 @@ Meeting ${i + 1}: "${m.subject}"
     provider: cachedTranscript.provider, model: cachedTranscript.model,
     execution: cachedTranscript.remoteQuality ? 'remote' as const : ['gemini', 'muse-voice', 'mai-transcribe-2'].includes(cachedTranscript.provider) ? 'cloud' as const : 'local' as const
   } : await resolveAudioRoute({
-    provider: providerOverride || config.transcription.provider || 'gemini',
-    location: config.transcription.transcriptionExecution, language: config.transcription.language,
+    provider: stepRoute?.provider ?? (providerOverride || config.transcription.provider || 'gemini'),
+    location: stepRoute ? stepRoute.location : config.transcription.transcriptionExecution, language: config.transcription.language,
     geminiModel: config.transcription.geminiModel || CURRENT_GEMINI_TRANSCRIPTION_MODEL,
     vibevoiceModel: config.transcription.vibevoiceModelId,
-    remoteAsrModel: config.transcription.remoteAsrModel,
+    remoteAsrModel: stepRoute?.remoteAsrModel ?? config.transcription.remoteAsrModel,
     base: config.transcription.modelHostUrl, token: config.transcription.modelHostToken,
-    localFallback: config.transcription.modelHostLocalFallback,
+    // The chain does its own fallback, engine by engine, and records it.
+    localFallback: stepRoute ? false : config.transcription.modelHostLocalFallback,
     hasRemoteIdentity: config.transcription.transcriptionExecution === 'auto' ? hasRemoteJobIdentity(recordingId) : false
   })
   const transcriptionProvider = route.provider
@@ -3815,7 +3921,7 @@ export async function transcribeManually(recordingId: string): Promise<void> {
   }
   try {
     notifyRenderer('transcription:started', { recordingId })
-    const outcome = await transcribeRecording(recordingId, undefined, undefined, true)
+    const outcome = await transcribeThroughEngineChain(recordingId, undefined, undefined, true, null)
     // RE4-4 (round-4) — the manual IPC path must also branch on the outcome:
     // a recording trashed / marked personal / hard-purged mid-run must NOT emit
     // transcription:completed (INC-2 fixed only the queue path).

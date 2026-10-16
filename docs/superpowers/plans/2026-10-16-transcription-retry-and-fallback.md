@@ -133,6 +133,31 @@ Diseño:
 - Settings > Transcription: orden de motores con su disponibilidad, reintentos por clase, partir tramos sí/no,
   usar respaldo sí/no.
 
+### Fase B construida (16-oct)
+
+- `transcription-errors.ts` clasifica el error (transitorio, cuota, incompleto, no disponible, credenciales,
+  entrada, grabación, cancelado, desconocido) y lee el "retry in Ns" del proveedor.
+- `transcription-engine-chain.ts` corre la cadena. El primer paso es `configured`: el servicio, la ubicación y
+  el modelo de Settings, igual que antes de la cadena. Después vienen los respaldos medidos (Parakeet Ultra y
+  Qwen 1.7B en el Model Host). Un respaldo que repite el motor configurado se saca. Una fila de cola que nombra
+  su proveedor (Retry con motor elegido, POST /transcriptions con provider) corre solo ese motor, con sus
+  reintentos.
+- Reintentos por defecto en el mismo motor: transitorio 2, cuota 3 (espera lo que pide el proveedor más 2 s,
+  tope 180 s), desconocido 0. Credenciales, entrada, no disponible e incompleto pasan directo al siguiente.
+  Grabación y cancelado cortan la cadena.
+- La elegibilidad se revisa entre intentos y nunca antes del primero: la corrida aplica sus propios chequeos y
+  devuelve "cancelada" sola. Si el dueño cancela después de un fallo, sale ese fallo.
+- Disponibilidad (`transcription-engine-routing.ts`): Gemini sin clave, Model Host sin emparejar, apagado,
+  en pausa o detenido, y runner local ausente se saltean y quedan anotados. Un host ocupado se prueba igual.
+  Un modelo que el host no preparó lo detecta el chequeo de capacidades de la ruta y la cadena sigue.
+- `splitIncompleteAudio` (por defecto sí) vuelve a habilitar que Gemini reenvíe en mitades un trozo
+  incompleto. Con tramos de voz de hasta 360 s y piso de 60 s son dos niveles como mucho.
+- Cada intento queda en `transcription_attempts` (migración v73) y en el log de actividad. Se ve en el panel
+  de la grabación fallida ("N attempts"), en GET /transcriptions (`attempts`) y por el bridge
+  (`transcription-status`).
+- Settings > Transcription > Pipeline > "When transcription fails": orden con disponibilidad, subir, bajar,
+  sacar, agregar, volver al orden medido, reintentos por clase, respaldo sí/no, partir sí/no.
+
 ## Fase C: datos que ya había (11-oct, FLEURS es-419, 30 clips, 853 palabras, lectura)
 
 | Motor | WER normalizado | Inserciones |
