@@ -1,0 +1,13 @@
+{
+  "status": "linked_router_tail_section_export_only",
+  "elf_sha256": "e8fd8989230b3f451dda347daa456357715f43a23b84173b43f2d632f3d4b322",
+  "section": ".router_tail",
+  "section_address": "01128a40",
+  "module_path": "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/router-only-393990-candidate/output/module-vad-router-tail.bin",
+  "module_bytes": 1088,
+  "module_sha256": "dee15f03852cd8481c9982bcb4fe5d42dbf5312b3b812ebdb2da1cba0af21491",
+  "console_tail_used": false,
+  "firmware_image_generated": false,
+  "composed": false,
+  "installed": false
+}

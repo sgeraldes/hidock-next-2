@@ -1,0 +1,484 @@
+{
+  "schema": "h1e-vad-router-only-393990-layout-readback-v1",
+  "status": "OFFLINE_CANDIDATE_NOTINSTALL",
+  "baseline": {
+    "path": "research/rea/completion630-lab/firmware/capture-vector-selected-diagnostic/out-NOTINSTALL/container-compose3/system-decoded.bin",
+    "sha256": "abff684071be35f29286010c13e27f8af51de364efbaedffdd12bb6e85ebd360",
+    "bytes": 1237504,
+    "load_base": "0x01000000",
+    "end_exclusive": "0x0112e200"
+  },
+  "elf_path": "research/rea/completion630-lab/hardware-vad-trace/router-only-393990-candidate/output/vad-router-only-393990-NOTINSTALL.elf",
+  "elf_sha256": "e8fd8989230b3f451dda347daa456357715f43a23b84173b43f2d632f3d4b322",
+  "symbols_path": "research/rea/completion630-lab/hardware-vad-trace/router-only-393990-candidate/output/symbols.txt",
+  "symbols_sha256": "538acc6e8c5a8d93dd4e4ee3ffc529a3e1604f7368199fb2981e60a3054c80f2",
+  "map_path": "research/rea/completion630-lab/hardware-vad-trace/router-only-393990-candidate/output/router-only.map",
+  "map_sha256": "30584387c6844dd753efe56c92c990c9afbb848f1e0d1a3ab842fcd49abfd6c4",
+  "linker_script_path": "research/rea/completion630-lab/hardware-vad-trace/router-only-393990-candidate/router-only.ld",
+  "linker_script_sha256": "1c322c78281e79bdd8821d9b0f8d6a215d12c0359a3c76516a24e17d69915408",
+  "source_pins_path": "research/rea/completion630-lab/hardware-vad-trace/router-only-393990-candidate/output/input-pins-before.json",
+  "source_pins_sha256": "2278b2177e9efb59f650757c99bda285431519093c1a5f578ca2375802695f81",
+  "source_pins_after_path": "research/rea/completion630-lab/hardware-vad-trace/router-only-393990-candidate/output/input-pins-after.json",
+  "source_pins_after_sha256": "2278b2177e9efb59f650757c99bda285431519093c1a5f578ca2375802695f81",
+  "pins": {
+    "current_system_sha256": "abff684071be35f29286010c13e27f8af51de364efbaedffdd12bb6e85ebd360",
+    "current_console_elf_sha256": "105ddea56a8879e40cd0a0fa570203edae3eb4b22dbccd4da870acda8a1fa8ee",
+    "current_console_bin_sha256": "9c9886db930ed54a51574d8b278d01b9359a07a99ab5e63407ed649d2acc09a2",
+    "fixed_router_elf_sha256": "f102c7703ce3f75e1f327bafb756367d5148fc0fa676f7f0391d26d56cc7bd3a",
+    "fixed_router_bin_sha256": "d518f0e40749eb73cf2dc9cdf3c0bb3efb3cf2b111115971a03f01cc0e547487",
+    "input_pins_before_after_identical": true,
+    "accepted_source_pin_count": 36,
+    "accepted_source_pins_match": true,
+    "input_pin_record_sha256": "2278b2177e9efb59f650757c99bda285431519093c1a5f578ca2375802695f81"
+  },
+  "source_byte_equivalence": {
+    "accepted_source_pin_count": 36,
+    "accepted_source_pins_match": true,
+    "before_after_capture_identical": true,
+    "current_system_exact_sha256": "abff684071be35f29286010c13e27f8af51de364efbaedffdd12bb6e85ebd360",
+    "new_dispatcher_and_assembly_inputs_in_additional_pins": true,
+    "compiler_sources_changed": false
+  },
+  "build_profile": {
+    "toolchain": "T-HEAD C-SKY Tools V3.10.29 Minilibc abiv2 B20210423; GCC 6.3.0",
+    "target": "csky-elfabiv2",
+    "c_flags_sdk": [
+      "-std=c99",
+      "-mcpu=ck802",
+      "-Os",
+      "-fshort-enums",
+      "-fsigned-char",
+      "-fno-common",
+      "-fno-delete-null-pointer-checks",
+      "-Wall",
+      "-Wextra",
+      "-Werror"
+    ],
+    "added_c_flags": [
+      "-ffunction-sections",
+      "-fdata-sections",
+      "-flto"
+    ],
+    "link_flags": [
+      "-fuse-linker-plugin",
+      "-nostdlib",
+      "--gc-sections"
+    ],
+    "assembly_flags": [
+      "-mcpu=ck802"
+    ],
+    "profile_deviation": true,
+    "elf_cpu": "ck802",
+    "elf_isa_flags": "0x2806"
+  },
+  "proposed_reservations": {
+    "router": {
+      "start": "0x01128000",
+      "bytes": 4096,
+      "live_end_exclusive": "0x01128a35",
+      "candidate_start": "0x01128a40",
+      "candidate_max_bytes": 1472,
+      "candidate_end_exclusive": "0x01129000",
+      "declared_by": "research/rea/hardening630-lab/fixed-router/module.ld",
+      "ownership_accepted": false,
+      "reservation_accepted": false
+    },
+    "console_preservation_only": {
+      "start": "0x0112b000",
+      "bytes": 4096,
+      "end_exclusive": "0x0112c000",
+      "candidate_allocation_bytes": 0,
+      "declared_by": "research/rea/completion630-lab/firmware/restore-build393988/generation-restore4/module.ld"
+    },
+    "ownership_note": "The router tail remains a proposed suballocation; exact fill does not establish ownership or acceptance."
+  },
+  "segments": [
+    {
+      "name": ".router_tail",
+      "address": "0x01128a40",
+      "length": 1088,
+      "end_exclusive": "0x01128e80",
+      "system_file_offset": 1215040,
+      "elf_section": ".router_tail",
+      "elf_section_offset": 0,
+      "elf_section_size": 1088,
+      "elf_file_offset": 14912,
+      "bytes_hex": "076c3c7862100e8b01743c78c05508006180408068438c6c628070430380c86c18400c6c3c780000c1140033003060b160a26a1060287093835b00650b0c03e403204038070800833f2300a260b1003081140130fe0700008052080001c020643c7800c0206080c020703c78784923a060a0704961a0684962a03c78d314036d4b6d836c1f200036c0a200228264fc0b40390508403d023222c4200c0132423941a4003262c4200c403920a463a426087c8563e4012062a40e5c2195ffe3d8ff22951e5cffe3d4ff239504e40b00ffe3cfff249504e40f00ffe3caff003104e41300ffe3c5ff003104e41700ffe3c0ff209504e41b00ffe3bbff9314d4142f14036d0033003066b86edc1700ffe3abff436d00304ee416000619ffe387ff40383f0866980332009320e4012040393308219320b8229321b8239322b8249323b8259324b82693c793e093c2652408609807b868b86198003269b8629804986ab86398ceb86bb8c76c0031806cc46c4cb86db80036576c0030ffe372ff403e12086ed817000031071a136cffe379ff1b6c0f149414002a403ac70b0136ec070236ea07423e060c6ed8170000325b6ced070033fc07d3142814036d4038830ca0e41700176cffe326ff40eb1af17708176cffe320ff40eb1af1750804e41f00ffe319ff836d04e42700ffe314ff436d04e41b00ffe30fff436c0030ffe303ff403d036d050800300128081493144038fb0f403ef90f6885403b050c01336ca00130f4076985413bef0b1f3eed0f00338f6c0031002343eb2000b86020a2f90b3b6cffe35eff0238df0b4ed800000a64db0b6ed80100413bd70b403a6ed802001b0863e4fe20403bcf0b14338f6cb8604082403ac90b00235c3bf90b00330b248f6c0023b86043eb2000408240a40024f80b2030bb07403bb70b423a05086ed80300403bb10b04338f6cb8604082403aab0b002343eb2000f80be107136c00e08215a40700300028a107d414c36d4038476d8b6d150c80e41300136cffe39bfe40380e0c628068434380c86c43eb1af14008136cffe38ffe036d40380408003000283404628068434380c86c43eb1af1f70b0030ffe379fe40eb1af1f10b07e41b00ffe378fe436c0030ffe36cfe403d1e0c40381c0c413e1a086884498450427843c86c4b84c86c4a844842c86c413b0e080f20ffe35ffe403809086085413bc36403e4014069a408a494140033fa079b6c576c1f6c00e0ac14f8070000d414241400b821b842b863b8403c0408ae980b25a5b80918576c936cffe398ff0033002bc264070c04b8013363b87b1068b804047a10608b63b80098219842986398041494140000d414241400b821b842b863b80918ffe3f1fe0033002bc264140c0033012bc264050c09b96d1068b806040033002b72b86b1068b80098219842986398041494140098219842986f98193b0414941400000ab50301dc550800e29403012a910301403c0508e0b58fea04003c788fea03003c7800003810020174100201",
+      "sha256": "dee15f03852cd8481c9982bcb4fe5d42dbf5312b3b812ebdb2da1cba0af21491",
+      "baseline_preimage_sha256": "769b7cd9026948adacd8471bc117a9a1ebb2cd7ed9c4fbfdfcd71a61c604ff48",
+      "baseline_preimage_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "baseline_preimage_bytes_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "preimage_fill": "ff",
+      "baseline_preimage_all_zero": false,
+      "exported_artifact": "module-vad-router-tail.bin",
+      "exported_artifact_path": "research/rea/completion630-lab/hardware-vad-trace/router-only-393990-candidate/output/module-vad-router-tail.bin",
+      "exported_artifact_sha256": "dee15f03852cd8481c9982bcb4fe5d42dbf5312b3b812ebdb2da1cba0af21491",
+      "within_original_system": true,
+      "proposed_reservation": "router_4k",
+      "reservation_start": "0x01128000",
+      "reservation_end": "0x01129000",
+      "candidate_window_start": "0x01128a40",
+      "candidate_window_end": "0x01129000",
+      "candidate_window_length": 1472,
+      "candidate_window_preimage_sha256": "d681b2309c3b48684ac24e27fafa6f215a294dc75bcbbf5fbfb4bbaacaed0e07",
+      "candidate_window_preimage_fill": "ff",
+      "candidate_window_preimage_all_zero": false
+    }
+  ],
+  "preserved_ranges": [
+    {
+      "name": "fixed_router_live_text",
+      "address": "0x01128000",
+      "length": 2613,
+      "sha256": "d518f0e40749eb73cf2dc9cdf3c0bb3efb3cf2b111115971a03f01cc0e547487",
+      "expected_module_sha256": "d518f0e40749eb73cf2dc9cdf3c0bb3efb3cf2b111115971a03f01cc0e547487",
+      "expected_elf_sha256": "f102c7703ce3f75e1f327bafb756367d5148fc0fa676f7f0391d26d56cc7bd3a",
+      "baseline_matches_live_module": true
+    },
+    {
+      "name": "current_console_live_module",
+      "address": "0x0112b000",
+      "length": 3189,
+      "sha256": "9c9886db930ed54a51574d8b278d01b9359a07a99ab5e63407ed649d2acc09a2",
+      "expected_module_sha256": "9c9886db930ed54a51574d8b278d01b9359a07a99ab5e63407ed649d2acc09a2",
+      "expected_elf_sha256": "105ddea56a8879e40cd0a0fa570203edae3eb4b22dbccd4da870acda8a1fa8ee",
+      "baseline_matches_live_module": true,
+      "baseline_matches_current_sys": true
+    },
+    {
+      "name": "current_console_reserved_4k",
+      "address": "0x0112b000",
+      "length": 4096,
+      "sha256": "93f732145acccd98d83a9c72639d749949f1a4a976d147982a2917d8f2d3720c",
+      "baseline_sha256": "93f732145acccd98d83a9c72639d749949f1a4a976d147982a2917d8f2d3720c",
+      "baseline_matches_current_sys": true,
+      "candidate_write_set_disjoint": true,
+      "preimage_hex": "6080418050427843c86c43800280c86c08400c6c3c780000d214436d4039076d160c18910033403878b179b1030c6910cd7b0033003264b4403d671058b3070c6194d664040c6310176ccd7b9214000060a20501805508008164110830380f0c40390d0c00330d64030801303c7803214f594092403a030c0023f6070030f707d31420c42328076d453b080c4d38420c5538420c40eb0af0490800359464ab08745c403ba80c355a1b39a50841393608208341eb2e009f0c9060208301e41f10007400eb5e00970841eb2f00940c41eb5c00910c41eb3a008e0c0023ca64ee0b403d300c483d036402401060ffe38aff483d836d8208136cffe384ff403e7b0cdf387908c0c72350c2608c6500c4000593140435c4070835c2074239ce0b208341eb2e00ca0b2183c5075a38490c1a38130851380f0c1138070848382b0c4c38330c0130e6075638360c5838340c5338f90b443a2e0440eb07f0430c00eb07f008085c383c0c40eb2100ec0b483a210440eb18f1380c40eb19f1390c40eb10f0e10b443a3808076cffe33cff7d1000280904483a30080e59ffe334ffa0c6235000280c64b40742c42328483bcb0f503a0364af07543a1f0804e40f00ee07483a1a08076cb010ffe31dff836d1464130c0e5cffe317ff5a6114649907423ae9074d3ae707082a02eb0804e307002a02eb1c04df0700308d07403e0030840b89077fee36008fe03e02d214036d40380b0c18900033403878b4a41079b4020cd57b136cd57b9214000060a20501d41425147f0241b8b693cb6c403d0032152a036d20b840b3090c4038070c4359c0c723500c2b8c640608576c136cffe3dffe5904e4957895403b63b8620c799562b863981e5bffe3c7fe6f03836d4e8b897444b800e00e084038e80f73034498c860013be30b62980b3be00f42eb19f10131093361c4200c0c318461c460d864d50f42eb19f103ea1d0402ea110462c4400cc4608c65ca0f62988c65c70b6d5ece65c40b6098dc64c10f639842988c60d36c2083002320a2315b009800220464f90f6195d264040c7213136ccd7b42986098c8608c6579b54d5e44b506086198003240b300340a040033003278b579b56513839858b36198c0b3136c05149414403f150c61136e8b8d74193a8f0b6213c970ce6c63e40120403b880b80336f43cc65840f6098dc64e90b800760980b3b7d0f6080523b0508618043eb3400060c61980032012a40b37107c2806380c8468c6d0720ffe340fe6d12d860013bc36d410846eb19f186084038400c03ea1d04cc65380c60980b2bcc65380800e07a074038540f651207e40c00cd7b4038050800326198002ad80720985060d36c22b8836c2083002320a2229800224e64fa0b00327c584ca3609818b579b56d5f0b2364b572119975ceabcf110e5cf8b6ffe303fe19b66195d264830f6e11136ccd7b7f0780336f43cc65210f609843e40b109c641c0f193e08086711d970ce6c63e40120403b7b0f9e64110b9f6c1b6c24e40b00ffe321fe4038090f153e30086011d970ce6c63e40120403b040c46eb07f0650b609803eb2f00f90a6098025b7710cd7b836d4038a50f836cd36c2083009820a20023315b04640022f90f0032785840a36195d264040c6a10136ccd7b1b6d45070838bb0f03ea11047b0746eb0af0d507000080550800c0550800e80effff60a20501000290024ca20501a0202000c2140032c8640b0888598084a85800224c3a80a5f80b00336ca082140034f70749107992384b67a024a0304b25a0284b26a07892584b6ba048a0504b49a0484b4aa03c7880550800d1146910036dcd7b40380b0c44eb39000808c36c0061003240a300230e65fc0b911400004ca20501d2140332036d476dffe38afd4038060c6410576c136ccd7b921400301528fd078c360001d2140232036d476dffe378fd4038060c6410576c136ccd7b921400301528fd07b0b90601d2140232036d476dffe366fd4038060c6410576c136ccd7b921400301528fd0748be0601d2140232036d476dffe354fd4038060c6410576c136ccd7b921400301528fd0744c00601d2140232036d476dffe342fd4038060c6410576c136ccd7b921400301528fd073cb70601d1142114076dbb6cffe31afe4038100c536c6098203b02084f6c8198eed902200314d4143114b310076d73100c78009801149114d014d36cffe352ff90140000d414241400b821b842b863b80e98ffe357ff6a1068b800982198429863980414941400001c64020cc36d9f6c25983c78d855080034a803013aa90301d4142514036d476d00333036e25b02190b6cc4600a3161b840b800e0d10161984098186000a30a310b6c00e0a301836c4038df6cec0b1461002b0219403b445b408240a40024f90b145f05149414d3144f6d6498036d8f6dffe3d4ff2e332258106060a0976c136cffe3ccff2e32605c40a322589b6c136cffe3c4ff9314c114c6640c0840604264030801308114808060820020d2640022f70f0030f8070000d3144b6d8590876d628468434384c86c43eb19f10508976c00e05a10931443eb18f10508976c00e0c905f90743eb17f1050c6b11976ccd7bf2074a112e8a4574c6644a08403e27903f0c40393d0c073d3b086884098410407843c06c0b84c06c0a840840c06cd6642f086491403b2c086c82403b290804335b10576c1b6cffe3b0ff4038230807335810576c1b6cffe3a8ff40381d0806335510576c1b6cffe3a0ff4038170807335210576c1b6cffe398ff403800c403056243403b0364007408a469a4ac070033f9070133f7070233f5070333f30700300028a10798861201c05508001cbc120121bc120129bc120130bc1201d3142d14669043eb19f1050800e0ab140d14931443eb18f1040800e00109f90743eb17f1040c6a12cd7bf3076a90a890403b8790040800300128eb07403cfc0f403dfa0f4883403a050c013301306ca4e0076983413b200800323e1148602081cb6c4039140803eb2f00e60b025b1464e30f0032d0604ca4936c8e64ca0f315a011d546020812da20022f807011bc86020a30022e307423b34080f11c17b6f110031c1936e11c4606083403b200800c44370584800c4807000b80118ffe3fffe436c61594711c8606083403b150806c4837006c442709875c0b80118ffe3effe011a625808600a3240a0be07011a846060a20021d807011a846060a20021e207433b12081810c17b836c00317710c46060830118403b0408ffe3aafee207046060a00021f407443b870b05eb2800840f00334f10235d04e40c0000e0e30040eb28007a0b003329306ca463079887120138bc120164c60301800f100055bc12015dbc12015400090168bc1201e8bb12010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004039030800c0202c403802083c78c1140132c36c03c4447c90701070c76c03c4447c0024c36cd170126d202490701070403a090c00c4204ccd604c64020cc6608960f90f0b6c4f6c811400004039030800c0202c403802083c78836c02c4437c01328c700c70003300c4204ccd604c64020cc6608960f90f0f6c3c78d414241400b821b842b863b8403c0408ae980b25a5b80918576c936cffe34cfe0033002bc264070c04b8013363b87b1068b804047a10608b63b80098219842986398041494140000d414241400b821b842b863b80918ffe3a9fe0033002bc264140c0033012bc264050c09b96d1068b806040033002b72b86b1068b80098219842986398041494140098219842986f98193b0414941400000ab50301dc550800e29403012a910301d4142d14036d40384b6d61b8680c403a660c01eb2700660c0036003700330198021a5b6c62b8d57b4038050c003002280d149414403e031bdc60090c413e110c633240a36c3241a36b320604643240a36d3241a3613242a33d3243a304320c04723240a3693241a36e3242a3673243a33d3244a305326298003160b89c6000980033c66062431b2360c4434063e40f20093b22082f23045a00214839031f1c6060a0ee0b00260a31433e203361c4200c433ee2e408000319846068a2b00b00334c5c03194c60002343eb2800208120a2f80b2830ae075623ce74de0700300028a80700300128a507403a070c41390e0c4039060c42390e0c00300028060480336343769360b200303c78803363437e93fa0762106593f707001000c068656c700076657273696f6e00757074696d6500766563746f72730068656c700a76657273696f6e0a757074696d650a766563746f72730a006b65726e656c3d00206669726d776172653d00757074696d655f6d7333323d0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "preimage_fill_note": "Preserves the exact pinned 4096-byte current-system range, including live console code and reserved tail.",
+      "post_composition_sha256": null,
+      "post_composition_verified": false,
+      "includes_live_bytes": 3189,
+      "remaining_reserved_bytes": 907,
+      "remaining_reserved_start": "0x0112bc75",
+      "remaining_reserved_sha256": "c3cf22710f8ea8a68cb24b73c7b66b5e01d88be0e0379836032dfbc78f4c214b",
+      "source_baseline_path": "research/rea/completion630-lab/firmware/capture-vector-selected-diagnostic/out-NOTINSTALL/container-compose3/system-decoded.bin"
+    }
+  ],
+  "preserved_symbols": [
+    {
+      "name": "console630_parse",
+      "address": "0x0112b70c",
+      "size": 244,
+      "code_sha256": "da8bc7254d9274c66c0c9320585cc6aae5cca38c51905cab8a156e31c5f7b332",
+      "sha256": "da8bc7254d9274c66c0c9320585cc6aae5cca38c51905cab8a156e31c5f7b332",
+      "baseline_sha256": "da8bc7254d9274c66c0c9320585cc6aae5cca38c51905cab8a156e31c5f7b332",
+      "matches_current_console_elf": true,
+      "containing_preserved_range": "current_console_reserved_4k"
+    },
+    {
+      "name": "console630_response",
+      "address": "0x0112b800",
+      "size": 368,
+      "code_sha256": "33e25fcb2aed072c6be68690f57cea78d6fa054de0148ee7ce560b02b6a7f0d7",
+      "sha256": "33e25fcb2aed072c6be68690f57cea78d6fa054de0148ee7ce560b02b6a7f0d7",
+      "baseline_sha256": "33e25fcb2aed072c6be68690f57cea78d6fa054de0148ee7ce560b02b6a7f0d7",
+      "matches_current_console_elf": true,
+      "containing_preserved_range": "current_console_reserved_4k"
+    }
+  ],
+  "aliases": {
+    "console630_parse_current": {
+      "address": "0x0112b70c",
+      "resolved_function": "console630_parse",
+      "function_size": 244,
+      "console_elf_sha256": "105ddea56a8879e40cd0a0fa570203edae3eb4b22dbccd4da870acda8a1fa8ee",
+      "function_sha256": "da8bc7254d9274c66c0c9320585cc6aae5cca38c51905cab8a156e31c5f7b332"
+    },
+    "console630_response_current": {
+      "address": "0x0112b800",
+      "resolved_function": "console630_response",
+      "function_size": 368,
+      "console_elf_sha256": "105ddea56a8879e40cd0a0fa570203edae3eb4b22dbccd4da870acda8a1fa8ee",
+      "function_sha256": "33e25fcb2aed072c6be68690f57cea78d6fa054de0148ee7ce560b02b6a7f0d7"
+    }
+  },
+  "roots": {
+    "entry": "console630_parser_hook",
+    "native_patch_roots": {
+      "parser": {
+        "section": ".patch_console_parser",
+        "symbol": "console630_parser_hook",
+        "address": "01128dbc"
+      },
+      "response": {
+        "section": ".patch_console_response",
+        "symbol": "console630_response_hook",
+        "address": "01128e04"
+      },
+      "poll": {
+        "section": ".patch_vad_poll",
+        "symbol": "h1e_vad_native_poll_bridge",
+        "address": "01128dba"
+      },
+      "constructor": {
+        "section": ".edits",
+        "symbol": "late_publication_stub",
+        "address": "01128e64"
+      }
+    },
+    "linker_kept_sections": [
+      ".edits",
+      ".patch_vad_poll",
+      ".patch_console_parser",
+      ".patch_console_response",
+      ".stub"
+    ]
+  },
+  "elf_sections": {
+    ".router_tail": {
+      "address": "0x01128a40",
+      "size": 1088,
+      "sha256": "dee15f03852cd8481c9982bcb4fe5d42dbf5312b3b812ebdb2da1cba0af21491"
+    },
+    ".constructor_edits": {
+      "address": "0x01021054",
+      "size": 140,
+      "sha256": "e3e52ae80796c252c6ccaee2032aef62f1de9b56da2e831103e55e77fae662e3"
+    },
+    ".poll_hook": {
+      "address": "0x01020b62",
+      "size": 4,
+      "sha256": "be01b512ad2ca5588be4bb1f7294d480db7f5277c7be5dd5fb89204844ece6e1"
+    },
+    ".parser_hook": {
+      "address": "0x0103a996",
+      "size": 4,
+      "sha256": "0fdaf0739f59366efab128aec6630eba7f69c3cbd08359f3d9259001fe5967be"
+    },
+    ".response_hook": {
+      "address": "0x0103907a",
+      "size": 4,
+      "sha256": "56f6fbd6d638193efd6c74189874543c36b29e1ded2d44fbf6f2862e8bfcaa83"
+    },
+    ".data": {
+      "address": null,
+      "size": 0,
+      "sha256": null
+    },
+    ".bss": {
+      "address": null,
+      "size": 0,
+      "sha256": null
+    },
+    ".console_tail": {
+      "present": false,
+      "size": 0
+    }
+  },
+  "patches": [
+    {
+      "address": "0x01020b62",
+      "width": 4,
+      "role": "native_poll_bridge",
+      "before_hex": "ffe303f8",
+      "replacement_hex": "08e02c41",
+      "source_elf_section": ".poll_hook",
+      "elf_section_offset": 0,
+      "elf_file_offset": 2914,
+      "replacement_sha256": "be01b512ad2ca5588be4bb1f7294d480db7f5277c7be5dd5fb89204844ece6e1",
+      "matches_393988_preimage": true,
+      "target_symbol": "h1e_vad_native_poll_bridge",
+      "target_address": "0x01128dba",
+      "decoded_bsr_target_from_raw_bytes": "0x01128dba",
+      "branch_readback_passed": true
+    },
+    {
+      "address": "0x01021054",
+      "width": 2,
+      "role": "allocate_96",
+      "before_hex": "4030",
+      "replacement_hex": "6030",
+      "source_elf_section": ".constructor_edits",
+      "elf_section_offset": 0,
+      "elf_file_offset": 4180,
+      "replacement_sha256": "2590032929c9350c7a320d4eefb310b6097dd44bffa4c529db13be931142ce54",
+      "matches_393988_preimage": true
+    },
+    {
+      "address": "0x0102105c",
+      "width": 2,
+      "role": "retain_private_pointer",
+      "before_hex": "00b5",
+      "replacement_hex": "c36d",
+      "source_elf_section": ".constructor_edits",
+      "elf_section_offset": 8,
+      "elf_file_offset": 4188,
+      "replacement_sha256": "3070862d36913466d7f9812c87da69becb62887a47f37753579b48d042d66eac",
+      "matches_393988_preimage": true
+    },
+    {
+      "address": "0x0102106a",
+      "width": 2,
+      "role": "private_failure_pointer",
+      "before_hex": "0095",
+      "replacement_hex": "1f6c",
+      "source_elf_section": ".constructor_edits",
+      "elf_section_offset": 22,
+      "elf_file_offset": 4202,
+      "replacement_sha256": "973fd65450988fa869cbe1535ef73e51a83a78c4f6d047a9b639a9452605c610",
+      "matches_393988_preimage": true
+    },
+    {
+      "address": "0x01021070",
+      "width": 4,
+      "role": "final_publication_decision",
+      "before_hex": "403ce30f",
+      "replacement_hex": "08e0fa3e",
+      "source_elf_section": ".constructor_edits",
+      "elf_section_offset": 28,
+      "elf_file_offset": 4208,
+      "replacement_sha256": "bcf314825c7e159722ceb4e7da1164affa7a6916e841308ed8d2cd215ca8370e",
+      "matches_393988_preimage": true,
+      "target_symbol": "late_publication_stub",
+      "target_address": "0x01128e64",
+      "decoded_bsr_target_from_raw_bytes": "0x01128e64",
+      "branch_readback_passed": true
+    },
+    {
+      "address": "0x0102109e",
+      "width": 2,
+      "role": "zero_96",
+      "before_hex": "4032",
+      "replacement_hex": "6032",
+      "source_elf_section": ".constructor_edits",
+      "elf_section_offset": 74,
+      "elf_file_offset": 4254,
+      "replacement_sha256": "350e041ab2907f6964168623434302d2f1949f7930226240062a05253b33aa9c",
+      "matches_393988_preimage": true
+    },
+    {
+      "address": "0x010210a8",
+      "width": 2,
+      "role": "retain_private_pointer_after_zero",
+      "before_hex": "e095",
+      "replacement_hex": "df6d",
+      "source_elf_section": ".constructor_edits",
+      "elf_section_offset": 84,
+      "elf_file_offset": 4264,
+      "replacement_sha256": "c36dfb64f863ba2d2c6edb118e92c309c01c3d98e1b99490cf75f0d1fdd33b69",
+      "matches_393988_preimage": true
+    },
+    {
+      "address": "0x010210de",
+      "width": 2,
+      "role": "private_gpio_object",
+      "before_hex": "6095",
+      "replacement_hex": "df6c",
+      "source_elf_section": ".constructor_edits",
+      "elf_section_offset": 138,
+      "elf_file_offset": 4318,
+      "replacement_sha256": "7c251c9fbe52ca62bdfe0d6caaf8bb77440e8f70579b8635a3bb56136b4853ab",
+      "matches_393988_preimage": true
+    },
+    {
+      "address": "0x0103907a",
+      "width": 4,
+      "role": "f11a_response_dispatch",
+      "before_hex": "07e01395",
+      "replacement_hex": "07e0c57e",
+      "source_elf_section": ".response_hook",
+      "elf_section_offset": 0,
+      "elf_file_offset": 8314,
+      "replacement_sha256": "56f6fbd6d638193efd6c74189874543c36b29e1ded2d44fbf6f2862e8bfcaa83",
+      "matches_393988_preimage": false,
+      "target_symbol": "console630_response_hook",
+      "target_address": "0x01128e04",
+      "decoded_bsr_target_from_raw_bytes": "0x01128e04",
+      "branch_readback_passed": true
+    },
+    {
+      "address": "0x0103a996",
+      "width": 4,
+      "role": "f11a_parser_dispatch",
+      "before_hex": "07e06188",
+      "replacement_hex": "07e01372",
+      "source_elf_section": ".parser_hook",
+      "elf_section_offset": 0,
+      "elf_file_offset": 14742,
+      "replacement_sha256": "0fdaf0739f59366efab128aec6630eba7f69c3cbd08359f3d9259001fe5967be",
+      "matches_393988_preimage": false,
+      "target_symbol": "console630_parser_hook",
+      "target_address": "0x01128dbc",
+      "decoded_bsr_target_from_raw_bytes": "0x01128dbc",
+      "branch_readback_passed": true
+    }
+  ],
+  "layout_checks": {
+    "segments_within_original_system": true,
+    "segments_within_declared_reservation_bounds": true,
+    "candidate_segments_do_not_overlap_live_router_text": true,
+    "candidate_segments_do_not_overlap_console_reserved_4k": true,
+    "baseline_router_candidate_preimage_is_exact_ff": true,
+    "full_router_candidate_window_is_exact_ff": true,
+    "current_router_live_text_preserved": true,
+    "entire_console_4096_baseline_pinned": true,
+    "entire_console_4096_candidate_write_set_disjoint": true,
+    "entire_console_4096_post_composition_verified": false,
+    "parser_response_aliases_match_current_console": true,
+    "all_native_patch_roots_retained": true,
+    "all_branch_patch_targets_decoded": true,
+    "patch_instruction_bytes": 28,
+    "undefined_symbols": 0,
+    "data_bytes": 0,
+    "bss_bytes": 0,
+    "firmware_image_generated": false,
+    "composed": false,
+    "installed": false,
+    "hardware_tested": false
+  },
+  "layout": {
+    "status": "proposed_offline_router_tail_suballocation",
+    "ownership_accepted": false,
+    "reservation_accepted": false,
+    "target_qualified": false,
+    "install_authorized": false,
+    "qualification_note": "The exact router preimage is uniformly 0xff. This does not prove ownership. The full 4096-byte console baseline is pinned and disjoint from the candidate write set; no post-composition image exists in this task."
+  },
+  "patches_summary": {
+    "count": 10,
+    "instruction_bytes": 28
+  },
+  "console_write_ranges": [
+    {
+      "name": ".router_tail",
+      "start": 17992256,
+      "end_exclusive": 17993344
+    },
+    {
+      "name": ".constructor_edits",
+      "start": 16912468,
+      "end_exclusive": 16912608
+    },
+    {
+      "name": ".poll_hook",
+      "start": 16911202,
+      "end_exclusive": 16911206
+    },
+    {
+      "name": ".parser_hook",
+      "start": 17017238,
+      "end_exclusive": 17017242
+    },
+    {
+      "name": ".response_hook",
+      "start": 17010810,
+      "end_exclusive": 17010814
+    }
+  ],
+  "console_tail_used": false,
+  "undefined_symbols_list": [],
+  "firmware_image_generated": false,
+  "composed": false,
+  "installed": false,
+  "hardware_tested": false
+}

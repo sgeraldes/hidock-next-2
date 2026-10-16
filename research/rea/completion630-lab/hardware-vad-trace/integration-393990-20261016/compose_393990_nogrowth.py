@@ -3,10 +3,14 @@
 
 The accepted layout manifest is the sole placement contract. Every inserted
 segment and changed instruction must be backed by exact ELF bytes, an approved
-manifest range, and a pinned zero/current preimage in the selected 393990 SYS.
+manifest range, and a pinned exact preimage in the selected 393990 SYS.
 The candidate must retain the exact SYS length and must invert byte-for-byte to
 the pinned baseline. The packer then replaces only encoded zephyr plus its XML
 size/CRC fields and ACTTEST0 checksums. All outputs are offline NOTINSTALL.
+
+Profiles: ``two-tail`` preserves the earlier router+console-tail layout;
+``router-only`` inserts one pinned module in the fixed router tail and keeps
+the complete current console reservation byte-identical.
 
 No install, device, app, network, or hardware operation is performed.
 """
@@ -99,6 +103,14 @@ PREIMAGES = {
 }
 CURRENT_HOOK_TARGETS = {0x0103907A: 0x0112BAA0, 0x0103A996: 0x0112BA58}
 CURRENT_CONSOLE_SYMBOLS = {"console630_parse_current": 0x0112B70C, "console630_response_current": 0x0112B800}
+ROUTER_ONLY_ROOTS = {
+    "h1e_vad_native_poll_bridge": 0x01128DBA,
+    "console630_parser_hook": 0x01128DBC,
+    "console630_response_hook": 0x01128E04,
+    "late_publication_stub": 0x01128E64,
+}
+ROUTER_ONLY_WINDOW = (0x01128A40, 0x01129000)
+ROUTER_ONLY_CONSOLE_RESERVATION = (0x0112B000, 0x0112C000)
 INSTRUCTION_CHECKS = {
     0x01021054: ("movi", "r0, 96"),
     0x0102105C: ("mov", "r7, r0"),
@@ -131,6 +143,18 @@ def parse_int(value, code="INTEGER"):
         return int(value, 0) if isinstance(value, str) else int(value)
     except (TypeError, ValueError) as exc:
         raise Refused(f"{code}: invalid integer {value!r}") from exc
+
+
+def parse_hex_address(value, code="ADDRESS"):
+    try:
+        if isinstance(value, bool):
+            raise ValueError("boolean is not an address")
+        if isinstance(value, int):
+            return value
+        raw = str(value).strip()
+        return int(raw, 16) if re.fullmatch(r"(?:0x)?[0-9a-fA-F]+", raw) else parse_int(value, code)
+    except (TypeError, ValueError) as exc:
+        raise Refused(f"{code}: invalid hexadecimal address {value!r}") from exc
 
 
 def load_pins():
@@ -273,6 +297,23 @@ def elf_symbols(elf, sections):
     return found
 
 
+def elf_symbol_records(elf, sections):
+    """Return the pinned ELF symbol value/size/type rows needed for range checks."""
+    tables = [s for s in sections if s["type"] == 2]
+    need(len(tables) == 1, "ELF_SYMBOLS", f"found {len(tables)} symbol tables")
+    table = tables[0]
+    strings_hdr = sections[table["link"]]
+    strings = elf[strings_hdr["off"]:strings_hdr["off"] + strings_hdr["size"]]
+    need(table["size"] % 16 == 0, "ELF_SYMBOLS", "bad symbol entry size")
+    found = {}
+    for i in range(table["size"] // 16):
+        name, value, size, info, _other, shndx = struct.unpack_from("<IIIBBH", elf, table["off"] + i * 16)
+        label = strings[name:].split(b"\0", 1)[0].decode("ascii") if name < len(strings) else ""
+        if label:
+            found.setdefault(label, []).append({"value": value, "size": size, "type": info & 0x0F, "section_index": shndx})
+    return found
+
+
 def parse_symbols_text(data):
     result = {}
     for line in data.decode("ascii").splitlines():
@@ -306,6 +347,7 @@ def contained(path, root):
 
 
 def read_layout(args, baseline, pins):
+    router_only = getattr(args, "profile", "two-tail") == "router-only"
     artifact_root = Path(args.artifact_root).resolve()
     manifest_path = contained(Path(args.manifest), artifact_root)
     elf_path = contained(Path(args.elf), artifact_root)
@@ -341,15 +383,97 @@ def read_layout(args, baseline, pins):
     manifest_file_matches("symbols_path", symbols_path)
     contract = manifest.get("layout", {})
     checks = manifest.get("layout_checks", {})
-    need(manifest.get("status") == "OFFLINE_CANDIDATE_NOTINSTALL" and
-         contract.get("status") == "proposed_offline_suballocation" and
-         contract.get("ownership_accepted") is False and contract.get("reservation_accepted") is False and
-         contract.get("target_qualified") is False and contract.get("install_authorized") is False and
-         manifest.get("installed", checks.get("installed")) is False and
-         manifest.get("firmware_image_generated", checks.get("firmware_image_generated")) is False and
-         checks.get("full_candidate_windows_match_declared_fill") is True and checks.get("composed") is False and
-         checks.get("installed") is False and checks.get("hardware_tested") is False,
-         "LAYOUT_STATUS", "manifest must remain a proposed offline NOTINSTALL layout")
+    if router_only:
+        status = str(manifest.get("status", "")).lower()
+        ownership = manifest.get("ownership_accepted", contract.get("ownership_accepted"))
+        reservation = manifest.get("reservation_accepted", contract.get("reservation_accepted"))
+        need(manifest.get("schema", "").startswith("h1e-vad-router-only-393990") and
+             "offline" in status and ("notinstall" in status or "not_installed" in status) and
+             ownership is False and reservation is False and
+             contract.get("target_qualified", manifest.get("target_qualified")) is False and
+             contract.get("install_authorized", manifest.get("install_authorized")) is False and
+             manifest.get("installed", checks.get("installed")) is False and
+             manifest.get("firmware_image_generated", checks.get("firmware_image_generated")) is False and
+             manifest.get("composed", checks.get("composed")) is False and
+             manifest.get("hardware_tested", checks.get("hardware_tested")) is False,
+             "LAYOUT_STATUS", "router-only manifest must remain offline, uncomposed, unqualified, and NOTINSTALL")
+        need(manifest.get("console_tail_used") is False and
+             manifest.get("data_bytes", checks.get("data_bytes")) == 0 and
+             manifest.get("bss_bytes", checks.get("bss_bytes")) == 0,
+             "ROUTER_ONLY_PROFILE", "router-only manifest must exclude console tail and writable data/BSS")
+        build_profile = json.dumps(manifest.get("build_profile", manifest.get("compiler_profile", ""))).lower()
+        need(all(flag in build_profile for flag in
+                 ("ck802", "sdk", "-mcpu=ck802", "-ffunction-sections", "-fdata-sections", "-flto",
+                  "--gc-sections", "-nostdlib", "-fuse-linker-plugin")),
+             "ROUTER_ONLY_BUILD_PROFILE", "CK802 function/data sections, LTO, and linker GC must be pinned in the manifest")
+        need(contract.get("status") == "proposed_offline_router_tail_suballocation" and
+             checks.get("entire_console_4096_baseline_pinned") is True and
+             checks.get("entire_console_4096_candidate_write_set_disjoint") is True and
+             checks.get("entire_console_4096_post_composition_verified") is False and
+             checks.get("all_native_patch_roots_retained") is True and
+             checks.get("all_branch_patch_targets_decoded") is True and
+             checks.get("patch_instruction_bytes") == 28 and
+             checks.get("undefined_symbols") == 0 and checks.get("data_bytes") == 0 and checks.get("bss_bytes") == 0,
+             "ROUTER_ONLY_MANIFEST_CHECKS", "router-only readback must assert exact offline console/root/patch constraints")
+        manifest_pins = manifest.get("pins", {})
+        need(manifest_pins.get("current_system_sha256") == sha(baseline["decoded"]) and
+             manifest_pins.get("current_console_elf_sha256") == sha(pins["base_console_elf"]) and
+             manifest_pins.get("current_console_bin_sha256") == sha(pins["base_console_bin"]) and
+             manifest_pins.get("fixed_router_elf_sha256") == sha(pins["base_router_elf"]) and
+             manifest_pins.get("fixed_router_bin_sha256") == sha(pins["base_router_bin"]) and
+             manifest_pins.get("accepted_source_pins_match") is True and
+             manifest_pins.get("input_pins_before_after_identical") is True and
+             manifest_pins.get("accepted_source_pin_count") == 36,
+             "ROUTER_ONLY_INPUT_PINS", "source manifest pins do not match the composer baseline/router/console inputs")
+        for path_key, hash_key in (("map_path", "map_sha256"),
+                                   ("linker_script_path", "linker_script_sha256"),
+                                   ("source_pins_path", "source_pins_sha256"),
+                                   ("source_pins_after_path", "source_pins_after_sha256")):
+            pinned_path_value, expected_hash = manifest.get(path_key), manifest.get(hash_key)
+            need(isinstance(pinned_path_value, str) and re.fullmatch(r"[0-9a-f]{64}", str(expected_hash or "")) is not None,
+                 "ROUTER_ONLY_FILE_PIN", f"missing {path_key}/{hash_key}")
+            pinned_path = Path(pinned_path_value)
+            if not pinned_path.is_absolute():
+                pinned_path = REPO / pinned_path
+            pinned_path = contained(pinned_path, artifact_root)
+            need(pinned_path.is_file() and sha(pinned_path.read_bytes()) == expected_hash,
+                 "ROUTER_ONLY_FILE_PIN", f"{path_key} content differs from its manifest SHA-256")
+        source_before = Path(manifest["source_pins_path"])
+        source_after = Path(manifest["source_pins_after_path"])
+        if not source_before.is_absolute():
+            source_before = REPO / source_before
+        if not source_after.is_absolute():
+            source_after = REPO / source_after
+        before_pins_raw, after_pins_raw = source_before.read_bytes(), source_after.read_bytes()
+        need(before_pins_raw == after_pins_raw, "ROUTER_ONLY_SOURCE_PINS_STABILITY", "source pin snapshots differ")
+        source_pin_doc = json.loads(before_pins_raw)
+        accepted_pins = source_pin_doc.get("accepted_source_pins")
+        need(isinstance(accepted_pins, dict) and len(accepted_pins) == 36 and
+             source_pin_doc.get("accepted_source_pin_count") == 36,
+             "ROUTER_ONLY_SOURCE_PIN_COUNT", "expected exactly 36 accepted source pins")
+        for source_name, source_digest in accepted_pins.items():
+            source_path_text = source_name
+            prefix = "/mnt/g/Code/hidock-next-2/"
+            if source_path_text.startswith(prefix):
+                source_path = REPO / source_path_text[len(prefix):]
+            else:
+                source_path = Path(source_path_text)
+            expected_source_sha = source_digest.get("sha256") if isinstance(source_digest, dict) else source_digest
+            expected_source_bytes = source_digest.get("bytes") if isinstance(source_digest, dict) else None
+            need(source_path.is_file() and re.fullmatch(r"[0-9a-f]{64}", str(expected_source_sha)) is not None and
+                 sha(source_path.read_bytes()) == expected_source_sha and
+                 (expected_source_bytes is None or source_path.stat().st_size == expected_source_bytes),
+                 "ROUTER_ONLY_SOURCE_PIN", f"accepted source input changed: {source_name}")
+    else:
+        need(manifest.get("status") == "OFFLINE_CANDIDATE_NOTINSTALL" and
+             contract.get("status") == "proposed_offline_suballocation" and
+             contract.get("ownership_accepted") is False and contract.get("reservation_accepted") is False and
+             contract.get("target_qualified") is False and contract.get("install_authorized") is False and
+             manifest.get("installed", checks.get("installed")) is False and
+             manifest.get("firmware_image_generated", checks.get("firmware_image_generated")) is False and
+             checks.get("full_candidate_windows_match_declared_fill") is True and checks.get("composed") is False and
+             checks.get("installed") is False and checks.get("hardware_tested") is False,
+             "LAYOUT_STATUS", "manifest must remain a proposed offline NOTINSTALL layout")
 
     sections, by_section = parse_elf(elf)
     attrs = by_section.get(".csky.attributes")
@@ -357,28 +481,39 @@ def read_layout(args, baseline, pins):
     symbols = elf_symbols(elf, sections)
     symbols_text = parse_symbols_text(symbols_raw)
     segment_rows = manifest.get("segments")
-    need(isinstance(segment_rows, list) and len(segment_rows) == 2, "LAYOUT_SEGMENTS", "exactly two explicit tail segments expected")
-    expected_segment_names = {".router_tail", ".console_tail"}
+    segment_count = 1 if router_only else 2
+    need(isinstance(segment_rows, list) and len(segment_rows) == segment_count,
+         "LAYOUT_SEGMENTS", f"exactly {segment_count} explicit tail segment(s) expected")
+    expected_segment_names = {".router_tail"} if router_only else {".router_tail", ".console_tail"}
     need({s.get("name") for s in segment_rows} == expected_segment_names, "LAYOUT_SEGMENT_NAMES", str([s.get("name") for s in segment_rows]))
-    expected_fills = {".router_tail": 0xFF, ".console_tail": 0x00}
+    expected_fills = {".router_tail": 0xFF} if router_only else {".router_tail": 0xFF, ".console_tail": 0x00}
     approved_segments = []
     for seg in segment_rows:
         name = seg["name"]
         address = parse_int(seg.get("address"), "SEGMENT_ADDRESS")
-        length = parse_int(seg.get("length"), "SEGMENT_LENGTH")
+        length = parse_int(seg.get("length", seg.get("bytes")), "SEGMENT_LENGTH")
         section_name = seg.get("elf_section")
         source_offset = parse_int(seg.get("elf_section_offset"), "SEGMENT_SOURCE_OFFSET")
-        section_file_offset = parse_int(seg.get("elf_file_offset"), "SEGMENT_FILE_OFFSET")
+        section_file_offset_raw = seg.get("elf_file_offset")
         need(section_name in by_section, "SEGMENT_SECTION", f"{name}: {section_name}")
         sec = by_section[section_name]
+        section_file_offset = parse_int(section_file_offset_raw, "SEGMENT_FILE_OFFSET") if section_file_offset_raw is not None else sec["off"] + source_offset
         need(sec["type"] == 1 and sec["flags"] & 2 and sec["flags"] & 4 and not sec["flags"] & 1,
              "SEGMENT_FLAGS", f"{name}: source is not read-only allocatable executable PROGBITS")
         need(address == sec["addr"] + source_offset and section_file_offset == sec["off"] + source_offset,
              "SEGMENT_ELF_MAPPING", f"{name}: VA/file offset does not map to ELF section")
         need(length > 0 and source_offset + length <= sec["size"], "SEGMENT_LENGTH", f"{name}: out of source section")
         start, end = address, address + length
-        reservation_start = parse_int(seg.get("reservation_start"), "SEGMENT_RESERVATION_START")
-        reservation_end = parse_int(seg.get("reservation_end"), "SEGMENT_RESERVATION_END")
+        proposed_reservation = seg.get("proposed_reservation", {})
+        if isinstance(proposed_reservation, dict):
+            reservation_start_raw = seg.get("reservation_start", proposed_reservation.get("start", proposed_reservation.get("start_address")))
+            reservation_end_raw = seg.get("reservation_end", proposed_reservation.get("end_exclusive", proposed_reservation.get("end")))
+        elif isinstance(proposed_reservation, (list, tuple)) and len(proposed_reservation) == 2:
+            reservation_start_raw, reservation_end_raw = proposed_reservation
+        else:
+            reservation_start_raw, reservation_end_raw = seg.get("reservation_start"), seg.get("reservation_end")
+        reservation_start = parse_int(reservation_start_raw, "SEGMENT_RESERVATION_START")
+        reservation_end = parse_int(reservation_end_raw, "SEGMENT_RESERVATION_END")
         window_start = parse_int(seg.get("candidate_window_start"), "SEGMENT_WINDOW_START")
         window_end = parse_int(seg.get("candidate_window_end"), "SEGMENT_WINDOW_END")
         need(BASE_VA <= reservation_start < reservation_end <= BASE_VA + len(baseline["decoded"]) and
@@ -387,29 +522,52 @@ def read_layout(args, baseline, pins):
              "SEGMENT_WINDOW", f"{name}: {start:08x}..{end:08x} outside explicit manifest window")
         actual = elf[section_file_offset:section_file_offset + length]
         need(len(actual) == length and sha(actual) == seg.get("sha256"), "SEGMENT_ELF_HASH", name)
-        export_ref = seg.get("exported_artifact")
-        need(isinstance(export_ref, str), "SEGMENT_EXPORT", f"{name}: no exported raw segment path")
-        exported_path = contained(manifest_path.parent / export_ref, artifact_root)
-        need(exported_path.is_file(), "SEGMENT_EXPORT", str(exported_path))
-        exported = exported_path.read_bytes()
-        need(exported == actual and sha(exported) == seg.get("exported_artifact_sha256"),
-             "SEGMENT_EXPORT_HASH", name)
-        manifest_artifact_path = Path(seg.get("exported_artifact_path", ""))
-        if not manifest_artifact_path.is_absolute():
-            manifest_artifact_path = REPO / manifest_artifact_path
-        need(manifest_artifact_path.resolve() == exported_path.resolve(), "SEGMENT_EXPORT_PATH", name)
+        if router_only:
+            declared_bytes = seg.get("bytes_hex")
+            if declared_bytes is not None:
+                need(isinstance(declared_bytes, str) and bytes.fromhex(declared_bytes) == actual,
+                     "SEGMENT_ELF_BYTES", f"{name}: manifest bytes differ from linked ELF section")
+            system_file_offset = seg.get("system_file_offset")
+            need(system_file_offset is not None and parse_int(system_file_offset, "SEGMENT_SYSTEM_FILE_OFFSET") == start - BASE_VA,
+                 "SEGMENT_SYSTEM_OFFSET", name)
+        if seg.get("exported_artifact") is not None:
+            export_ref = seg.get("exported_artifact")
+            need(isinstance(export_ref, str), "SEGMENT_EXPORT", f"{name}: no exported raw segment path")
+            exported_path = contained(manifest_path.parent / export_ref, artifact_root)
+            need(exported_path.is_file(), "SEGMENT_EXPORT", str(exported_path))
+            exported = exported_path.read_bytes()
+            need(exported == actual and sha(exported) == seg.get("exported_artifact_sha256"),
+                 "SEGMENT_EXPORT_HASH", name)
+            manifest_artifact_path = Path(seg.get("exported_artifact_path", ""))
+            if not manifest_artifact_path.is_absolute():
+                manifest_artifact_path = REPO / manifest_artifact_path
+            need(manifest_artifact_path.resolve() == exported_path.resolve(), "SEGMENT_EXPORT_PATH", name)
+        else:
+            need(router_only, "SEGMENT_EXPORT", f"{name}: no exported raw segment path")
+            exported_path, exported = elf_path, actual
+            need(sha(exported) == seg.get("sha256"), "SEGMENT_EXPORT_HASH", name)
         before = baseline["decoded"][start - BASE_VA:end - BASE_VA]
         fill_hex = str(seg.get("preimage_fill", "")).lower().removeprefix("0x")
         need(fill_hex == f"{expected_fills[name]:02x}" and len(before) == length and
              before == bytes([expected_fills[name]]) * length and
              sha(before) == seg.get("baseline_preimage_sha256"),
              "SEGMENT_BASELINE_PREIMAGE", f"{name}: pinned baseline does not match exact expected uniform fill/hash")
-        window_fill_hex = str(seg.get("candidate_window_preimage_fill", "")).lower().removeprefix("0x")
+        router_window = manifest.get("router_candidate_window", {}) if router_only else {}
+        window_fill_hex = str(seg.get("candidate_window_preimage_fill", router_window.get("preimage_fill", ""))).lower().removeprefix("0x")
         window_preimage = baseline["decoded"][window_start - BASE_VA:window_end - BASE_VA]
+        declared_window_sha = seg.get("candidate_window_preimage_sha256", router_window.get("preimage_sha256"))
         need(window_fill_hex == fill_hex and len(window_preimage) == window_end - window_start and
              window_preimage == bytes([expected_fills[name]]) * len(window_preimage) and
-             sha(window_preimage) == seg.get("candidate_window_preimage_sha256"),
+             sha(window_preimage) == declared_window_sha,
              "SEGMENT_WINDOW_PREIMAGE", f"{name}: exact candidate window fill/hash differs from the manifest")
+        if router_only:
+            need((start, end) == (ROUTER_ONLY_WINDOW[0], ROUTER_ONLY_WINDOW[0] + length) and
+                 length == 1088 and reservation_start == 0x01128000 and reservation_end == 0x01129000 and
+                 window_start == ROUTER_ONLY_WINDOW[0] and window_end == ROUTER_ONLY_WINDOW[1] and
+                 window_end - window_start == 1472 and
+                 parse_int(seg.get("candidate_window_length"), "SEGMENT_WINDOW_LENGTH") == 1472 and
+                 seg.get("end_exclusive") is not None and parse_int(seg.get("end_exclusive"), "SEGMENT_END") == end,
+                 "ROUTER_ONLY_GEOMETRY", "router-only placement must be one 1088-byte section in the exact 1472-byte tail window")
         declared_preimage = seg.get("baseline_preimage_hex", seg.get("baseline_preimage_bytes_hex"))
         if declared_preimage is not None:
             try:
@@ -423,7 +581,8 @@ def read_layout(args, baseline, pins):
                                   "elf_file_offset": section_file_offset, "bytes": actual,
                                   "sha256": sha(actual), "preimage_sha256": sha(before),
                                   "preimage_fill": fill_hex,
-                                  "path": str(exported_path), "exported_sha256": sha(exported),
+                                  "path": str(exported_path) if not router_only else str(elf_path),
+                                  "exported_sha256": sha(exported) if not router_only else sha(actual),
                                   "reservation_start": reservation_start, "reservation_end": reservation_end,
                                   "window_start": window_start, "window_end": window_end,
                                   "window_preimage_sha256": sha(window_preimage), "window_preimage_fill": window_fill_hex})
@@ -432,11 +591,21 @@ def read_layout(args, baseline, pins):
         need(left["address"] + left["length"] <= right["address"], "SEGMENT_OVERLAP", f"{left['name']} and {right['name']}")
 
     preserved_rows = manifest.get("preserved_ranges")
-    need(isinstance(preserved_rows, list) and len(preserved_rows) == 2, "PRESERVED_RANGES", "exact router and console live ranges required")
-    preserved_expected = {
-        "fixed_router_live_text": (0x01128000, len(pins["base_router_bin"]), "base_router_bin", "base_router_elf"),
-        "current_console_live_module": (0x0112B000, len(pins["base_console_bin"]), "base_console_bin", "base_console_elf"),
-    }
+    if router_only:
+        need(isinstance(preserved_rows, list) and len(preserved_rows) == 3,
+             "PRESERVED_RANGES", "router-only requires router live, current console live, and full 4 KiB console reservation pins")
+        preserved_expected = {
+            "fixed_router_live_text": (0x01128000, len(pins["base_router_bin"]), "base_router_bin", "base_router_elf"),
+            "current_console_live_module": (0x0112B000, len(pins["base_console_bin"]), "base_console_bin", "base_console_elf"),
+            "current_console_reserved_4k": (0x0112B000, 4096, None, None),
+        }
+    else:
+        need(isinstance(preserved_rows, list) and len(preserved_rows) == 2,
+             "PRESERVED_RANGES", "exact router and console live ranges required")
+        preserved_expected = {
+            "fixed_router_live_text": (0x01128000, len(pins["base_router_bin"]), "base_router_bin", "base_router_elf"),
+            "current_console_live_module": (0x0112B000, len(pins["base_console_bin"]), "base_console_bin", "base_console_elf"),
+        }
     preserved = []
     for row in preserved_rows:
         name = row.get("name")
@@ -445,15 +614,33 @@ def read_layout(args, baseline, pins):
         start = parse_int(row.get("address"), "PRESERVED_RANGE_ADDRESS")
         got_length = parse_int(row.get("length"), "PRESERVED_RANGE_LENGTH")
         raw = baseline["decoded"][start - BASE_VA:start - BASE_VA + got_length]
-        need(start == address and got_length == length and len(raw) == length and
-             sha(raw) == row.get("sha256") == row.get("expected_module_sha256") == sha(pins[bin_key]) and
-             row.get("expected_elf_sha256") == sha(pins[elf_key]) and row.get("baseline_matches_live_module") is True,
-             "PRESERVED_RANGE_READBACK", name)
+        if name == "current_console_reserved_4k":
+            digest = sha(raw)
+            expected_digest = row.get("sha256", row.get("baseline_sha256"))
+            need(router_only and start == address and got_length == length and len(raw) == length and
+                 digest == expected_digest and row.get("baseline_matches_current_sys") is True and
+                 row.get("candidate_write_set_disjoint") is True and
+                 row.get("post_composition_verified") is False,
+                 "CONSOLE_RESERVATION_READBACK", "full current console reservation must match its pinned 4096-byte baseline range")
+        else:
+            need(start == address and got_length == length and len(raw) == length and
+                 sha(raw) == row.get("sha256") == row.get("expected_module_sha256") == sha(pins[bin_key]) and
+                 row.get("expected_elf_sha256") == sha(pins[elf_key]) and row.get("baseline_matches_live_module") is True,
+                 "PRESERVED_RANGE_READBACK", name)
         for seg in approved_segments:
             need(seg["address"] + seg["length"] <= start or seg["address"] >= start + length,
                  "SEGMENT_LIVE_OVERLAP", f"{seg['name']} overlaps {name}")
         preserved.append({"name": name, "address": start, "length": length, "sha256": sha(raw)})
     need({item["name"] for item in preserved} == set(preserved_expected), "PRESERVED_RANGE_SET", "router/console range set incomplete")
+
+    if router_only:
+        # The 3189-byte live console is intentionally contained by the stronger
+        # 4096-byte reservation pin. Every actual write must be outside it.
+        console_reservation = next(row for row in preserved if row["name"] == "current_console_reserved_4k")
+        console_start, console_end = console_reservation["address"], console_reservation["address"] + console_reservation["length"]
+        need(all(seg["address"] + seg["length"] <= console_start or seg["address"] >= console_end
+                 for seg in approved_segments),
+             "CONSOLE_RESERVATION_OVERLAP", "router-only module overlaps the full console reservation")
 
     patch_rows = manifest.get("patches")
     need(isinstance(patch_rows, list) and len(patch_rows) == len(PATCHES), "LAYOUT_PATCHES", "exactly ten instruction patches expected")
@@ -466,7 +653,7 @@ def read_layout(args, baseline, pins):
         role = patch.get("role")
         need(patch.get("width", patch.get("length")) == width and role == expected_role, "PATCH_ROLE", f"{address:08x}: {role}")
         before_hex = patch.get("before_hex")
-        replacement_hex = patch.get("replacement_hex")
+        replacement_hex = patch.get("replacement_hex", patch.get("after_hex"))
         need(before_hex == PREIMAGES[address] and replacement_hex and len(bytes.fromhex(replacement_hex)) == width,
              "PATCH_HEX", f"{role}: preimage/replacement width")
         before = baseline["decoded"][address - BASE_VA:address - BASE_VA + width]
@@ -490,10 +677,11 @@ def read_layout(args, baseline, pins):
             need(len(symbols.get(expected_target, [])) == 1 and symbols_text.get(expected_target) == symbols[expected_target],
                  "PATCH_TARGET_SYMBOLS", expected_target)
             target = decode_bsr(actual, address)
+            target_address_raw = patch.get("target_address", patch.get("linked_target_address"))
             need(target == symbols[expected_target][0] and
-                 parse_int(patch.get("target_address"), "PATCH_TARGET_ADDRESS") == target and
+                 parse_int(target_address_raw, "PATCH_TARGET_ADDRESS") == target and
                  parse_int(patch.get("decoded_bsr_target_from_raw_bytes"), "PATCH_DECODED_TARGET") == target and
-                 patch.get("branch_readback_passed") is True,
+                 patch.get("branch_readback_passed", True) is True,
                  "PATCH_BRANCH_TARGET", role)
             need(approved_segments and any(seg["address"] <= target < seg["address"] + seg["length"] for seg in approved_segments),
                  "PATCH_TARGET_PLACEMENT", f"{role} target {target:08x} not inside an inserted segment")
@@ -519,6 +707,75 @@ def read_layout(args, baseline, pins):
         need(len(symbols.get(name, [])) == 1 and symbols_text.get(name) == symbols[name], "ELF_SYMBOL", name)
     for name, expected in CURRENT_CONSOLE_SYMBOLS.items():
         need(symbols[name][0] == expected, "CURRENT_CONSOLE_SYMBOL", name)
+    if router_only:
+        need({name: symbols[name][0] for name in ROUTER_ONLY_ROOTS} == ROUTER_ONLY_ROOTS,
+             "ROUTER_ONLY_ROOTS", "the four retained hook/bridge roots moved or are missing")
+        aliases = manifest.get("aliases")
+        roots = manifest.get("roots")
+        need(isinstance(aliases, dict) and isinstance(roots, dict),
+             "ROUTER_ONLY_SYMBOL_MAPS", "manifest must pin current-console aliases and native roots")
+        for name, expected in CURRENT_CONSOLE_SYMBOLS.items():
+            alias = aliases.get(name)
+            need(isinstance(alias, dict) and parse_hex_address(alias.get("address"), "ROUTER_ONLY_ALIAS") == expected and
+                 symbols[name][0] == expected,
+                 "ROUTER_ONLY_ALIAS", name)
+            need(alias.get("console_elf_sha256") == sha(pins["base_console_elf"]),
+                 "ROUTER_ONLY_ALIAS_ELF_PIN", name)
+        root_rows = roots.get("native_patch_roots")
+        need(isinstance(root_rows, dict), "ROUTER_ONLY_ROOTS", "manifest lacks native_patch_roots")
+        manifest_roots = {row.get("symbol"): parse_hex_address(row.get("address"), "ROUTER_ONLY_ROOT")
+                          for row in root_rows.values() if isinstance(row, dict)}
+        need({name: manifest_roots.get(name) for name in ROUTER_ONLY_ROOTS} == ROUTER_ONLY_ROOTS,
+             "ROUTER_ONLY_ROOTS", "manifest root addresses differ from the approved four symbols")
+        preserved_symbols = manifest.get("preserved_symbols")
+        if isinstance(preserved_symbols, list):
+            preserved_symbol_rows = {row.get("name"): row for row in preserved_symbols if isinstance(row, dict)}
+        elif isinstance(preserved_symbols, dict):
+            preserved_symbol_rows = preserved_symbols
+        else:
+            preserved_symbol_rows = {}
+        preserved_symbol_names = {"console630_parse", "console630_response"}
+        need(set(preserved_symbol_rows) == preserved_symbol_names,
+             "ROUTER_ONLY_PRESERVED_SYMBOLS", "manifest must pin both current console function bodies")
+        _console_sections, console_section_map = parse_elf(pins["base_console_elf"])
+        console_symbol_rows = elf_symbol_records(pins["base_console_elf"], _console_sections)
+        function_aliases = {"console630_parse": "console630_parse_current",
+                            "console630_response": "console630_response_current"}
+        for name, alias_name in function_aliases.items():
+            row = preserved_symbol_rows[name]
+            expected = CURRENT_CONSOLE_SYMBOLS[alias_name]
+            address = parse_hex_address(row.get("address", row.get("value")), "PRESERVED_SYMBOL_ADDRESS")
+            matching = console_symbol_rows.get(name, [])
+            need(address == expected and len(matching) == 1 and matching[0]["value"] == expected and
+                 matching[0]["type"] == 2,
+                 "ROUTER_ONLY_PRESERVED_SYMBOL", name)
+            size = parse_int(row.get("size"), "PRESERVED_SYMBOL_SIZE")
+            need(size > 0 and size == matching[0]["size"] and address + size <= 0x0112B000 + len(pins["base_console_bin"]),
+                 "ROUTER_ONLY_PRESERVED_SYMBOL_SIZE", name)
+            body = baseline["decoded"][address - BASE_VA:address - BASE_VA + size]
+            body_hash = sha(body)
+            declared_hash = row.get("code_sha256", row.get("sha256"))
+            need(len(body) == size and body_hash == declared_hash,
+                 "ROUTER_ONLY_PRESERVED_SYMBOL_HASH", name)
+            alias = aliases[alias_name]
+            need(alias.get("resolved_function") == name and alias.get("function_size") == size and
+                 alias.get("function_sha256") == body_hash and
+                 alias.get("console_elf_sha256") == sha(pins["base_console_elf"]),
+                 "ROUTER_ONLY_ALIAS_TARGET", alias_name)
+        section_names = {name for name, section in by_section.items() if section["size"] and section["flags"] & 2}
+        expected_exec_sections = {".router_tail"} | {p.get("source_elf_section") for p in patch_rows}
+        unexpected_alloc = section_names - expected_exec_sections
+        need(not unexpected_alloc,
+             "ROUTER_ONLY_UNEXPECTED_ALLOC", f"unexpected nonempty allocatable sections: {sorted(unexpected_alloc)}")
+        need(not any(section["size"] and section["flags"] & 1 for section in sections),
+             "ROUTER_ONLY_WRITABLE_SECTION", "router-only ELF has nonempty writable data/BSS")
+        console_reservation = next(row for row in preserved if row["name"] == "current_console_reserved_4k")
+        console_start = console_reservation["address"] - BASE_VA
+        console_end = console_start + console_reservation["length"]
+        write_ranges = [(seg["start_offset"], seg["end_offset"], seg["name"]) for seg in approved_segments]
+        write_ranges += [(p["offset"], p["offset"] + p["width"], p["role"]) for p in approved_patches]
+        need(all(end <= console_start or start >= console_end for start, end, _name in write_ranges),
+             "ROUTER_ONLY_CONSOLE_DISJOINT", "an approved segment or instruction patch intersects the 4096-byte console reservation")
     for address, expected in CURRENT_HOOK_TARGETS.items():
         need(decode_bsr(baseline["decoded"][address - BASE_VA:address - BASE_VA + 4], address) == expected,
              "CURRENT_HOOK_PREIMAGE", f"{address:08x}")
@@ -533,7 +790,8 @@ def read_layout(args, baseline, pins):
         need(any(seg["address"] <= value < seg["address"] + seg["length"] for seg in approved_segments),
              "ELF_SYMBOL_PLACEMENT", f"{name} at {value:08x} is not in a manifest segment")
 
-    return {"manifest": manifest, "manifest_path": manifest_path, "manifest_sha256": sha(manifest_raw),
+    return {"manifest": manifest, "profile": "router-only" if router_only else "two-tail",
+            "manifest_path": manifest_path, "manifest_sha256": sha(manifest_raw),
             "elf_path": elf_path, "elf_sha256": sha(elf), "symbols_path": symbols_path,
             "symbols_sha256": sha(symbols_raw), "elf": elf, "sections": by_section,
             "symbols": {name: values[0] for name, values in symbols.items() if len(values) == 1},
@@ -576,6 +834,17 @@ def readback_system(path, candidate, baseline, layout, allowed_ranges):
     diffs = [i for i, (a, b) in enumerate(zip(baseline["decoded"], data)) if a != b]
     outside = [i for i in diffs if not any(start <= i < end for start, end, _name in allowed_ranges)]
     need(not outside, "SYSTEM_UNAPPROVED_DIFF", str([hex(i) for i in outside[:8]]))
+    preserved_readback = []
+    for row in layout["preserved_ranges"]:
+        start = row["address"] - BASE_VA
+        end = start + row["length"]
+        current_bytes = data[start:end]
+        baseline_bytes = baseline["decoded"][start:end]
+        need(current_bytes == baseline_bytes,
+             "SYSTEM_PRESERVED_RANGE", f"{row['name']} changed after composition")
+        preserved_readback.append({"name": row["name"], "address": f"{row['address']:08x}",
+                                   "bytes": row["length"], "sha256": sha(current_bytes),
+                                   "byte_identical_to_baseline": True})
     inverse = bytearray(data)
     for seg in layout["segments"]:
         inverse[seg["start_offset"]:seg["end_offset"]] = baseline["decoded"][seg["start_offset"]:seg["end_offset"]]
@@ -628,8 +897,10 @@ def readback_system(path, candidate, baseline, layout, allowed_ranges):
             "baseline_bytes": len(baseline["decoded"]), "growth_bytes": 0,
             "differing_bytes": len(diffs), "unapproved_differing_bytes": 0,
             "inverse_reconstructs_baseline": True, "header_0_47_identical": True,
+            "profile": layout["profile"],
             "segments": [{"name": s["name"], "address": f"{s['address']:08x}", "bytes": s["length"], "sha256": s["sha256"],
                           "baseline_preimage_sha256": s["preimage_sha256"]} for s in layout["segments"]],
+            "preserved_ranges": preserved_readback,
             "branches": branch_records,
             "constructor": {"old_allocation": old_alloc[1], "new_allocation": alloc[1],
                             "old_zero": old_zero[1], "new_zero": zero[1], "tail_offset": 0x40, "tail_bytes": 32},
@@ -710,7 +981,7 @@ def run(args):
     out_root = HERE / "out-NOTINSTALL"
     out_root.mkdir(exist_ok=True)
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    run_dir = out_root / f"vad-393990-nogrowth-{stamp}-{layout['elf_sha256'][:8]}"
+    run_dir = out_root / f"vad-393990-{layout['profile']}-{stamp}-{layout['elf_sha256'][:8]}"
     run_dir.mkdir(exist_ok=False)
 
     sys_name = "system-decoded-vad-393990-EXPERIMENTAL-NOTINSTALL.bin"
@@ -727,7 +998,7 @@ def run(args):
     encoded = decoder.transform(disk_candidate, SEED, decrypt=False)
     need(len(encoded) == len(baseline["payloads"]["zephyr.bin"]) and decoder.transform(encoded, SEED) == disk_candidate,
          "ENCODED_ZEPHYR", "encoded system length/roundtrip differs")
-    container_name = f"H1E-{VERSION_NAME}-vad-nogrowth-EXPERIMENTAL-NOTINSTALL.bin"
+    container_name = f"H1E-{VERSION_NAME}-vad-{layout['profile']}-EXPERIMENTAL-NOTINSTALL.bin"
     container_partial, container_final = run_dir / (container_name + ".partial"), run_dir / container_name
     try:
         sdk_stdout_sha = packager.pack(baseline["payloads"], PARTITION_ORDER, disk_candidate, decoder,
@@ -757,7 +1028,8 @@ def run(args):
     need(all(unchanged_inputs.values()), "INPUT_MUTATION", "a pinned source input changed")
     receipt = {
         "status": "structural_readback_passed_EXPERIMENTAL_NOTINSTALL",
-        "schema": "h1e-393990-vad-nogrowth-receipt-v1",
+        "schema": "h1e-393990-vad-router-only-nogrowth-receipt-v1" if layout["profile"] == "router-only" else "h1e-393990-vad-nogrowth-receipt-v1",
+        "composer_profile": layout["profile"],
         "generated_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
         "identity": {"version_name": VERSION_NAME, "version_code": VERSION_CODE, "board": BOARD,
                      "same_as_baseline": True, "new_version_allocated": False},
@@ -771,6 +1043,7 @@ def run(args):
                      "parser_sha256": BASE_PINS["parser"][1], "objdump_sha256": OBJDUMP_SHA256,
                      "sdk_stdout_sha256": sdk_stdout_sha},
         "accepted_layout": {"manifest_path": str(layout["manifest_path"].relative_to(REPO)),
+                            "profile": layout["profile"],
                             "manifest_sha256": layout["manifest_sha256"], "elf_path": str(layout["elf_path"].relative_to(REPO)),
                             "elf_sha256": layout["elf_sha256"], "symbols_path": str(layout["symbols_path"].relative_to(REPO)),
                             "symbols_sha256": layout["symbols_sha256"],
@@ -823,6 +1096,7 @@ def validate_only(args):
     layout = read_layout(args, baseline, pins)
     candidate, _ranges = compose_system(baseline, layout)
     return {"status": "pinned_no_growth_layout_preflight_passed",
+            "profile": layout["profile"],
             "manifest_sha256": layout["manifest_sha256"], "elf_sha256": layout["elf_sha256"],
             "symbols_sha256": layout["symbols_sha256"], "candidate_system_sha256": sha(candidate),
             "candidate_system_bytes": len(candidate), "growth_bytes": 0,
@@ -838,16 +1112,23 @@ def validate_only(args):
 
 def main():
     cli = argparse.ArgumentParser(description=__doc__)
+    cli.add_argument("--profile", choices=("two-tail", "router-only"), default="two-tail",
+                     help="select the original two-tail or strict router-only layout contract")
     cli.add_argument("--baseline-only", action="store_true", help="verify pinned input only, with no build/repack")
     cli.add_argument("--validate-only", action="store_true", help="validate pinned layout and in-memory composition without writing or packing")
-    cli.add_argument("--artifact-root", type=Path, default=VAD / "no-growth-393990-candidate")
-    cli.add_argument("--manifest", type=Path, default=VAD / "no-growth-393990-candidate/output/layout-readback.json")
-    cli.add_argument("--elf", type=Path, default=VAD / "no-growth-393990-candidate/output/vad-no-growth-393990-NOTINSTALL.elf")
-    cli.add_argument("--symbols", type=Path, default=VAD / "no-growth-393990-candidate/output/symbols.txt")
+    cli.add_argument("--artifact-root", type=Path)
+    cli.add_argument("--manifest", type=Path)
+    cli.add_argument("--elf", type=Path)
+    cli.add_argument("--symbols", type=Path)
     cli.add_argument("--manifest-sha256")
     cli.add_argument("--elf-sha256")
     cli.add_argument("--symbols-sha256")
     args = cli.parse_args()
+    default_root = VAD / ("router-only-393990-candidate" if args.profile == "router-only" else "no-growth-393990-candidate")
+    args.artifact_root = args.artifact_root or default_root
+    args.manifest = args.manifest or default_root / "output/layout-readback.json"
+    args.elf = args.elf or default_root / "output" / ("vad-router-only-393990-NOTINSTALL.elf" if args.profile == "router-only" else "vad-no-growth-393990-NOTINSTALL.elf")
+    args.symbols = args.symbols or default_root / "output/symbols.txt"
     try:
         if args.baseline_only and args.validate_only:
             raise Refused("CHOOSE_ONE_MODE: --baseline-only and --validate-only are mutually exclusive")

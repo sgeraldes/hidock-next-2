@@ -1,0 +1,229 @@
+{
+  "schema": "h1e-vad-router-only-393990-source-link-v1",
+  "status": "offline_candidate_not_composed_not_installed",
+  "compiler_profile": "ck802-sdk-flags-plus-function-sections-data-sections-lto-gc-sections",
+  "profile_deviation": [
+    "-ffunction-sections",
+    "-fdata-sections",
+    "-flto",
+    "linker --gc-sections via GCC plugin"
+  ],
+  "current_system_sha256": "abff684071be35f29286010c13e27f8af51de364efbaedffdd12bb6e85ebd360",
+  "current_system_bytes": 1237504,
+  "current_system_load_base": "0x01000000",
+  "current_console_elf_sha256": "105ddea56a8879e40cd0a0fa570203edae3eb4b22dbccd4da870acda8a1fa8ee",
+  "current_console_symbols": {
+    "console630_parse_current": "0112b70c",
+    "console630_response_current": "0112b800"
+  },
+  "fixed_router_elf_sha256": "f102c7703ce3f75e1f327bafb756367d5148fc0fa676f7f0391d26d56cc7bd3a",
+  "fixed_router_bin_sha256": "d518f0e40749eb73cf2dc9cdf3c0bb3efb3cf2b111115971a03f01cc0e547487",
+  "elf_path": "research/rea/completion630-lab/hardware-vad-trace/router-only-393990-candidate/output/vad-router-only-393990-NOTINSTALL.elf",
+  "elf_sha256": "e8fd8989230b3f451dda347daa456357715f43a23b84173b43f2d632f3d4b322",
+  "module_section": {
+    "name": ".router_tail",
+    "address": "0x01128a40",
+    "bytes": 1088,
+    "end_exclusive": "0x01128e80",
+    "capacity_bytes": 1472,
+    "tail_bytes": 384,
+    "sha256": "dee15f03852cd8481c9982bcb4fe5d42dbf5312b3b812ebdb2da1cba0af21491",
+    "preimage_sha256": "769b7cd9026948adacd8471bc117a9a1ebb2cd7ed9c4fbfdfcd71a61c604ff48",
+    "preimage_fill": "ff",
+    "within_system": true
+  },
+  "router_candidate_window": {
+    "start": "0x01128a40",
+    "end_exclusive": "0x01129000",
+    "bytes": 1472,
+    "preimage_sha256": "d681b2309c3b48684ac24e27fafa6f215a294dc75bcbbf5fbfb4bbaacaed0e07",
+    "preimage_fill": "ff",
+    "ownership_accepted": false,
+    "reservation_accepted": false
+  },
+  "console_tail_used": false,
+  "data_bytes": 0,
+  "bss_bytes": 0,
+  "reachable_native_roots": {
+    "console630_parser_hook": "01128dbc",
+    "console630_response_hook": "01128e04",
+    "h1e_vad_native_poll_bridge": "01128dba",
+    "late_publication_stub": "01128e64"
+  },
+  "constructor_section_bytes": 140,
+  "constructor_instruction_bytes": 16,
+  "excluded_constructor_padding_bytes": 124,
+  "total_instruction_bytes": 28,
+  "old_393988_preimage_comparison": {
+    "matches": 8,
+    "mismatches": 2,
+    "per_hunk": [
+      {
+        "address": "01020b62",
+        "old_preimage": "ffe303f8",
+        "current_preimage": "ffe303f8",
+        "matches_old": true
+      },
+      {
+        "address": "01021054",
+        "old_preimage": "4030",
+        "current_preimage": "4030",
+        "matches_old": true
+      },
+      {
+        "address": "0102105c",
+        "old_preimage": "00b5",
+        "current_preimage": "00b5",
+        "matches_old": true
+      },
+      {
+        "address": "0102106a",
+        "old_preimage": "0095",
+        "current_preimage": "0095",
+        "matches_old": true
+      },
+      {
+        "address": "01021070",
+        "old_preimage": "403ce30f",
+        "current_preimage": "403ce30f",
+        "matches_old": true
+      },
+      {
+        "address": "0102109e",
+        "old_preimage": "4032",
+        "current_preimage": "4032",
+        "matches_old": true
+      },
+      {
+        "address": "010210a8",
+        "old_preimage": "e095",
+        "current_preimage": "e095",
+        "matches_old": true
+      },
+      {
+        "address": "010210de",
+        "old_preimage": "6095",
+        "current_preimage": "6095",
+        "matches_old": true
+      },
+      {
+        "address": "0103907a",
+        "old_preimage": "07e08194",
+        "current_preimage": "07e01395",
+        "matches_old": false
+      },
+      {
+        "address": "0103a996",
+        "old_preimage": "07e0cf87",
+        "current_preimage": "07e06188",
+        "matches_old": false
+      }
+    ],
+    "mismatch_reason": "Current 393990 already routes parser and response sites through its vector-console hooks."
+  },
+  "hunks": [
+    {
+      "address": "01020b62",
+      "width": 4,
+      "role": "native_poll_bridge",
+      "before_hex": "ffe303f8",
+      "after_hex": "08e02c41",
+      "matches_393988_preimage": true,
+      "linked_target_symbol": "h1e_vad_native_poll_bridge",
+      "linked_target_address": "01128dba",
+      "decoded_bsr_target_from_raw_bytes": "01128dba",
+      "link_register_after_call": "01020b66"
+    },
+    {
+      "address": "01021054",
+      "width": 2,
+      "role": "allocate_96",
+      "before_hex": "4030",
+      "after_hex": "6030",
+      "matches_393988_preimage": true
+    },
+    {
+      "address": "0102105c",
+      "width": 2,
+      "role": "retain_private_pointer",
+      "before_hex": "00b5",
+      "after_hex": "c36d",
+      "matches_393988_preimage": true
+    },
+    {
+      "address": "0102106a",
+      "width": 2,
+      "role": "private_failure_pointer",
+      "before_hex": "0095",
+      "after_hex": "1f6c",
+      "matches_393988_preimage": true
+    },
+    {
+      "address": "01021070",
+      "width": 4,
+      "role": "final_publication_decision",
+      "before_hex": "403ce30f",
+      "after_hex": "08e0fa3e",
+      "matches_393988_preimage": true,
+      "linked_target_symbol": "late_publication_stub",
+      "linked_target_address": "01128e64",
+      "decoded_bsr_target_from_raw_bytes": "01128e64",
+      "link_register_after_call": "01021074"
+    },
+    {
+      "address": "0102109e",
+      "width": 2,
+      "role": "zero_96",
+      "before_hex": "4032",
+      "after_hex": "6032",
+      "matches_393988_preimage": true
+    },
+    {
+      "address": "010210a8",
+      "width": 2,
+      "role": "retain_private_pointer_after_zero",
+      "before_hex": "e095",
+      "after_hex": "df6d",
+      "matches_393988_preimage": true
+    },
+    {
+      "address": "010210de",
+      "width": 2,
+      "role": "private_gpio_object",
+      "before_hex": "6095",
+      "after_hex": "df6c",
+      "matches_393988_preimage": true
+    },
+    {
+      "address": "0103907a",
+      "width": 4,
+      "role": "f11a_response_dispatch",
+      "before_hex": "07e01395",
+      "after_hex": "07e0c57e",
+      "matches_393988_preimage": false,
+      "linked_target_symbol": "console630_response_hook",
+      "linked_target_address": "01128e04",
+      "decoded_bsr_target_from_raw_bytes": "01128e04",
+      "link_register_after_call": "0103907e"
+    },
+    {
+      "address": "0103a996",
+      "width": 4,
+      "role": "f11a_parser_dispatch",
+      "before_hex": "07e06188",
+      "after_hex": "07e01372",
+      "matches_393988_preimage": false,
+      "linked_target_symbol": "console630_parser_hook",
+      "linked_target_address": "01128dbc",
+      "decoded_bsr_target_from_raw_bytes": "01128dbc",
+      "link_register_after_call": "0103a99a"
+    }
+  ],
+  "firmware_image_generated": false,
+  "composed": false,
+  "applied": false,
+  "installed": false,
+  "hardware_tested": false,
+  "target_qualified": false,
+  "qualification": "Offline source-link and exact preimage readback only; not a runtime or hardware VAD result."
+}

@@ -1,0 +1,5 @@
+compiler: csky-abiv2-elf-gcc (T-HEAD C-SKY Tools V3.10.29 Minilibc abiv2 B20210423) 6.3.0
+target: csky-elfabiv2
+version: 6.3.0
+lto-wrapper: /home/sebastian/.local/share/rea/tools/csky-20210423/bin/../libexec/gcc/csky-elfabiv2/6.3.0/lto-wrapper
+lto-plugin: liblto_plugin.so

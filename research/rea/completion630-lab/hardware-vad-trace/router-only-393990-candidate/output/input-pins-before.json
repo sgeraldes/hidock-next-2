@@ -1,0 +1,348 @@
+{
+  "schema": "h1e-vad-router-only-393990-input-pins-v1",
+  "status": "offline_router_only_candidate_inputs_pinned",
+  "current_system_sha256": "abff684071be35f29286010c13e27f8af51de364efbaedffdd12bb6e85ebd360",
+  "accepted_source_pin_count": 36,
+  "accepted_source_pins": {
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/restore-build393988/generation-restore4/console-hooks.S": {
+      "path": "research/rea/completion630-lab/firmware/restore-build393988/generation-restore4/console-hooks.S",
+      "bytes": 1568,
+      "sha256": "9858f32bcd5770f5672ab5631dbfb828ee7beca5420b6fc5d4defce001b874d1"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/restore-build393988/generation-restore4/module.ld": {
+      "path": "research/rea/completion630-lab/firmware/restore-build393988/generation-restore4/module.ld",
+      "bytes": 1490,
+      "sha256": "90d5bc9c11850b87d123fb5eb51589645feea4a15d5cccc5896a8f9fd245840f"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/restore-build393988/generation-restore4/symbols.txt": {
+      "path": "research/rea/completion630-lab/firmware/restore-build393988/generation-restore4/symbols.txt",
+      "bytes": 4145,
+      "sha256": "a850bd25db4bab4c7e16b58c6ac5d5241c156a3fabde18aa187f167e09641e72"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/restore-build393988/generation-restore4/system-decoded-NOTINSTALL.bin": {
+      "path": "research/rea/completion630-lab/firmware/restore-build393988/generation-restore4/system-decoded-NOTINSTALL.bin",
+      "bytes": 1237504,
+      "sha256": "b338e4d5e7d456dd2b7a0048bb8e2c338e2464ad25029267b5e46cb4ad880c2f"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-source-review/native-glue-review.md": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/combined-source-review/native-glue-review.md",
+      "bytes": 8522,
+      "sha256": "9f8200656ab2bbe5da310779c091441c9d7a64255377e11e882e41487294fda4"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/vadt_binding.c": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/vadt_binding.c",
+      "bytes": 1420,
+      "sha256": "edbd510b6babf15d20c4b4ae2feb8282f54957d14360e2d4f7c3fb521cd7f2bc"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/vadt_binding.h": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/vadt_binding.h",
+      "bytes": 3469,
+      "sha256": "5c89d77206a0f8cf5e3e219312c367d5cef1402365432ed04f34366473012f89"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/vadt_core.c": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/vadt_core.c",
+      "bytes": 6287,
+      "sha256": "e2efb05c8e0adb60a2e4a7309a23a83aa15272042f173d3af7d3381712ffc276"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/vadt_core.h": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/vadt_core.h",
+      "bytes": 5354,
+      "sha256": "f8dae82ce77a3fc2f0599f9feb2be77cf688694e9c6b103f83cd803faeb9bbd4"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/vadt_csky_guard.c": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/vadt_csky_guard.c",
+      "bytes": 948,
+      "sha256": "42a761942e7dacfe86d3f75ed226e1991b859ecdad54347db0f11bbc79c5df59"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/vadt_test.c": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/vadt_test.c",
+      "bytes": 24891,
+      "sha256": "3604034837f414e966a75190319400faa5a975927c0fadca6f853330863e8010"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/lifecycle-followup/late-publication/late-publication.s": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/lifecycle-followup/late-publication/late-publication.s",
+      "bytes": 1166,
+      "sha256": "a5ff54487d85f08ec00ee88afab3ff205aa8e7aeb633bd74488cca2a3aa6d163"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-dispatch-candidate/REPORT.md": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-dispatch-candidate/REPORT.md",
+      "bytes": 12290,
+      "sha256": "86144445de865fc3e65f5e7eb5192ca33a97e57110812e7b94fdb7ee2958f917"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-dispatch-candidate/console630_f11a.c": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-dispatch-candidate/console630_f11a.c",
+      "bytes": 4061,
+      "sha256": "1ba30cdbb7f298c95b5cb972e482beb6005bb1944accb9a82b69c5da85661a8f"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-dispatch-candidate/console630_f11a_test.c": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-dispatch-candidate/console630_f11a_test.c",
+      "bytes": 17215,
+      "sha256": "29aa6b387801ece4a511a9d7a62865498589265ab60835ad1899ebbd2ca2dbab"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-dispatch-candidate/h1e_dispatch_host_seams_testonly.h": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-dispatch-candidate/h1e_dispatch_host_seams_testonly.h",
+      "bytes": 1461,
+      "sha256": "a2f1489db0fc75323a0a9d90566fedecb7c47cadda56f41c2574cc08d2681b08"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-dispatch-candidate/h1e_vad_snapshot.h": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-dispatch-candidate/h1e_vad_snapshot.h",
+      "bytes": 959,
+      "sha256": "c6b8754c630cd05f983300e7f1c580080c519245017005bcd71265dbb5a003a2"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-frame-candidate/vadt_frame.c": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-frame-candidate/vadt_frame.c",
+      "bytes": 3655,
+      "sha256": "4221342a366f6ec3b044c1a28c9b70b60319256916d5e56c0c50adeec9a65037"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-frame-candidate/vadt_frame.h": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-frame-candidate/vadt_frame.h",
+      "bytes": 4622,
+      "sha256": "335c847f7656eb296bbaf21ff197690faa71f440737dd1034dd9390ede74ed5e"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-frame-candidate/vadt_frame_binding.c": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-frame-candidate/vadt_frame_binding.c",
+      "bytes": 207,
+      "sha256": "9204f9f5b96ab85f81fae635e69525ea7d149c874ae2fd67dadef66fd9952143"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-frame-candidate/vadt_frame_target.c": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-frame-candidate/vadt_frame_target.c",
+      "bytes": 1566,
+      "sha256": "ae64e2dee71e700096e9bb0b7afb1685ff937979e5809f330c645732953cad65"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-frame-candidate/vadt_frame_test.c": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-frame-candidate/vadt_frame_test.c",
+      "bytes": 19731,
+      "sha256": "c9373473c50aae935fff73cc9870c172ebcae430bd65aa461c09f6be868b16df"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/build-offline.sh": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/build-offline.sh",
+      "bytes": 4841,
+      "sha256": "0c80274ebbf8a23035c1086cf31fbb1ef419d9c8fcfe71574ea769d37f271e23"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/module.ld": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/module.ld",
+      "bytes": 971,
+      "sha256": "b3e26eb9ff6e2f64c216dfb6915f601e70abb29a2ec4118ed7dd93a0afce8ab3"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/poll-hook.S": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/poll-hook.S",
+      "bytes": 71,
+      "sha256": "0e9f1ee1bab1fb70debb43d74c9024ccebfc7e1217772121ba79322aa8941414"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-loader-candidate/REPORT.md": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-loader-candidate/REPORT.md",
+      "bytes": 14902,
+      "sha256": "a0505273aaf05dd4c8e8bb498ea68986c30e61c01346d4c51e7f7bfddec16ef3"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-loader-candidate/h1e_vad_native_loader.c": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-loader-candidate/h1e_vad_native_loader.c",
+      "bytes": 2300,
+      "sha256": "a7ffe66574ef8b65a1ea9595765b2ba9524568022b02a1124ea34c7445866c99"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-loader-candidate/h1e_vad_native_loader.h": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-loader-candidate/h1e_vad_native_loader.h",
+      "bytes": 4605,
+      "sha256": "23d2ee31956b004268227687ff0a4a9033da60cd68b8c25ec22a8d945045e657"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-loader-candidate/h1e_vad_native_loader_host_config.h": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-loader-candidate/h1e_vad_native_loader_host_config.h",
+      "bytes": 654,
+      "sha256": "12dc537a8b130452668988f82cb1a814dd2e05e339ddb94a6e170c39c5e2f336"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-loader-candidate/h1e_vad_native_loader_test.c": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-loader-candidate/h1e_vad_native_loader_test.c",
+      "bytes": 9292,
+      "sha256": "9322054c23dffdd2df655e6c78a946ad40894b4f1ffb7afe1d0e241217fdf13f"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-poll-candidate/h1e_vad_host_test_config.h": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-poll-candidate/h1e_vad_host_test_config.h",
+      "bytes": 780,
+      "sha256": "0e8f607e11b022489ba3c77b0f2ce43a66dbe809b3b7447b9ff59741451392fc"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-poll-candidate/h1e_vad_loader_stub_testonly.c": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-poll-candidate/h1e_vad_loader_stub_testonly.c",
+      "bytes": 566,
+      "sha256": "f4671c47ad368de856d179c9a75da47c83da120ffc34cabdc53d16a51b47f6d4"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-poll-candidate/h1e_vad_native_poll.c": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-poll-candidate/h1e_vad_native_poll.c",
+      "bytes": 1499,
+      "sha256": "454d10055a2b1f24a78a639188e76ce74f1b2c5f842223fa545d831c807851f0"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-poll-candidate/h1e_vad_native_poll.h": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-poll-candidate/h1e_vad_native_poll.h",
+      "bytes": 1059,
+      "sha256": "faf68945119b8de42dad80dd721410d8be74e367b3643d274a1f836e4455823e"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-poll-candidate/h1e_vad_native_poll_test.c": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-poll-candidate/h1e_vad_native_poll_test.c",
+      "bytes": 7812,
+      "sha256": "bfc329ac614d6b7cf6191a73aeb420a00dc7607f178d2ead5e826226a013e6f7"
+    },
+    "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-poll-candidate/vadt_layout_check.h": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-poll-candidate/vadt_layout_check.h",
+      "bytes": 2465,
+      "sha256": "bfca97abcd6b3470bee9a0fe8079e1d8a85a256b821f0cbe3407e13d1728c832"
+    }
+  },
+  "expected_artifacts": {
+    "research/rea/completion630-lab/firmware/capture-vector-selected-diagnostic/out-NOTINSTALL/container-compose3/system-decoded.bin": {
+      "path": "research/rea/completion630-lab/firmware/capture-vector-selected-diagnostic/out-NOTINSTALL/container-compose3/system-decoded.bin",
+      "bytes": 1237504,
+      "sha256": "abff684071be35f29286010c13e27f8af51de364efbaedffdd12bb6e85ebd360"
+    },
+    "research/rea/completion630-lab/firmware/capture-vector-selected-diagnostic/out-NOTINSTALL/run2/native/native630.elf": {
+      "path": "research/rea/completion630-lab/firmware/capture-vector-selected-diagnostic/out-NOTINSTALL/run2/native/native630.elf",
+      "bytes": 40676,
+      "sha256": "105ddea56a8879e40cd0a0fa570203edae3eb4b22dbccd4da870acda8a1fa8ee"
+    },
+    "research/rea/completion630-lab/firmware/capture-vector-selected-diagnostic/out-NOTINSTALL/run2/native/native630.bin": {
+      "path": "research/rea/completion630-lab/firmware/capture-vector-selected-diagnostic/out-NOTINSTALL/run2/native/native630.bin",
+      "bytes": 3189,
+      "sha256": "9c9886db930ed54a51574d8b278d01b9359a07a99ab5e63407ed649d2acc09a2"
+    },
+    "research/rea/hardening630-lab/fixed-router/router630.elf": {
+      "path": "research/rea/hardening630-lab/fixed-router/router630.elf",
+      "bytes": 31640,
+      "sha256": "f102c7703ce3f75e1f327bafb756367d5148fc0fa676f7f0391d26d56cc7bd3a"
+    },
+    "research/rea/hardening630-lab/fixed-router/router630.bin": {
+      "path": "research/rea/hardening630-lab/fixed-router/router630.bin",
+      "bytes": 2613,
+      "sha256": "d518f0e40749eb73cf2dc9cdf3c0bb3efb3cf2b111115971a03f01cc0e547487"
+    },
+    "research/rea/completion630-lab/hardware-vad-trace/native-f11a-393990-candidate/output/f11a-393990-ck802-sdk-NOTINSTALL.elf": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-f11a-393990-candidate/output/f11a-393990-ck802-sdk-NOTINSTALL.elf",
+      "bytes": 22840,
+      "sha256": "8cdf67a3d019a206296207817ab55f18477e88ea96fcf611d10fa7a563b744e8"
+    },
+    "research/rea/completion630-lab/hardware-vad-trace/native-f11a-393990-candidate/output/sparse-source-hunks-393990.json": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-f11a-393990-candidate/output/sparse-source-hunks-393990.json",
+      "bytes": 5927,
+      "sha256": "a0568b6555111d272786ace658a41835291cb4d4bae10db37dcab4bc1539d01c"
+    },
+    "research/rea/completion630-lab/hardware-vad-trace/no-growth-393990-candidate/output/layout-readback.json": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/no-growth-393990-candidate/output/layout-readback.json",
+      "bytes": 24608,
+      "sha256": "a3c3209d0dfba4bef2084c1b07b18027cefb38bdcbbb4860a41cd2a6af4d7ea9"
+    }
+  },
+  "additional_inputs": {
+    "research/rea/completion630-lab/firmware/capture-vector-selected-diagnostic/out-NOTINSTALL/run2/native/symbols.txt": {
+      "path": "research/rea/completion630-lab/firmware/capture-vector-selected-diagnostic/out-NOTINSTALL/run2/native/symbols.txt",
+      "bytes": 4403,
+      "sha256": "3ef158fba08e7b7fb4877b83ee5730ac4af66b93ee0622afff62bfc68548876b"
+    },
+    "research/rea/hardening630-lab/fixed-router/module.ld": {
+      "path": "research/rea/hardening630-lab/fixed-router/module.ld",
+      "bytes": 914,
+      "sha256": "197ec8922be2bd12ea027aa9d7e6c7fd237e6c1d0d0b914d899c4a65e1e682fe"
+    },
+    "research/rea/hardening630-lab/fixed-router/dependencies.ld": {
+      "path": "research/rea/hardening630-lab/fixed-router/dependencies.ld",
+      "bytes": 559,
+      "sha256": "29fcb5896d9ba3da468a913e7e46bb7780559c4c294574cced424da146abdaa5"
+    },
+    "research/rea/completion630-lab/firmware/restore-build393988/generation-restore4/system-decoded-NOTINSTALL.bin": {
+      "path": "research/rea/completion630-lab/firmware/restore-build393988/generation-restore4/system-decoded-NOTINSTALL.bin",
+      "bytes": 1237504,
+      "sha256": "b338e4d5e7d456dd2b7a0048bb8e2c338e2464ad25029267b5e46cb4ad880c2f"
+    },
+    "research/rea/completion630-lab/firmware/restore-build393988/generation-restore4/console-hooks.S": {
+      "path": "research/rea/completion630-lab/firmware/restore-build393988/generation-restore4/console-hooks.S",
+      "bytes": 1568,
+      "sha256": "9858f32bcd5770f5672ab5631dbfb828ee7beca5420b6fc5d4defce001b874d1"
+    },
+    "research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/poll-hook.S": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/poll-hook.S",
+      "bytes": 71,
+      "sha256": "0e9f1ee1bab1fb70debb43d74c9024ccebfc7e1217772121ba79322aa8941414"
+    },
+    "research/rea/completion630-lab/hardware-vad-trace/lifecycle-followup/late-publication/late-publication.s": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/lifecycle-followup/late-publication/late-publication.s",
+      "bytes": 1166,
+      "sha256": "a5ff54487d85f08ec00ee88afab3ff205aa8e7aeb633bd74488cca2a3aa6d163"
+    },
+    "research/rea/completion630-lab/hardware-vad-trace/native-f11a-393990-candidate/f11a_console_dispatch.c": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-f11a-393990-candidate/f11a_console_dispatch.c",
+      "bytes": 2422,
+      "sha256": "d7e5611d484b5261aac11468bc6c183d30b95b95bd900488d46361549698c258"
+    },
+    "research/rea/completion630-lab/hardware-vad-trace/native-f11a-393990-candidate/module.ld": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-f11a-393990-candidate/module.ld",
+      "bytes": 921,
+      "sha256": "7dfd43535d4bfeb65e3da800749de21e0adbab9c262fcf0c82e1f8c974659cd3"
+    },
+    "research/rea/completion630-lab/hardware-vad-trace/native-f11a-393990-candidate/export_strict_manifest.py": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-f11a-393990-candidate/export_strict_manifest.py",
+      "bytes": 8299,
+      "sha256": "41c7bc5143eab87b405accf4ac217b62540ad435f69b212028b8c28aaa24ff9e"
+    },
+    "research/rea/completion630-lab/hardware-vad-trace/native-f11a-393990-candidate/capture_inputs.py": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-f11a-393990-candidate/capture_inputs.py",
+      "bytes": 4046,
+      "sha256": "3396630c8691b5171241a5e7429c64b2cbf2601702f0d179d2524cbe9f0e06c2"
+    },
+    "research/rea/completion630-lab/hardware-vad-trace/native-f11a-393990-candidate/build_candidate.sh": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-f11a-393990-candidate/build_candidate.sh",
+      "bytes": 6688,
+      "sha256": "ff09c9d8f87e587006f02c877077de1c250d9184b307cc1896b6531bf9fc0c19"
+    },
+    "research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/check-inputs.py": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/check-inputs.py",
+      "bytes": 2613,
+      "sha256": "7086bb132565d642c1b9fd4d5003ab713836e5a5d66b67af6fe35c7f852d52f9"
+    },
+    "research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/sdk-profile/output/sparse-source-hunks.json": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/sdk-profile/output/sparse-source-hunks.json",
+      "bytes": 3122,
+      "sha256": "73ce3d0889955701b2a7874e91cd653f30439054a5b3f1e273b4327aeed3ed35"
+    },
+    "research/rea/completion630-lab/hardware-vad-trace/router-only-393990-candidate/output/accepted-vad-inputs.json": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/router-only-393990-candidate/output/accepted-vad-inputs.json",
+      "bytes": 7152,
+      "sha256": "24c97109ea79776cb7b1045acbf78865b528f78b493208840692693555051c70"
+    },
+    "research/rea/completion630-lab/hardware-vad-trace/no-growth-393990-candidate/no-growth.ld": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/no-growth-393990-candidate/no-growth.ld",
+      "bytes": 2049,
+      "sha256": "d31110513c12eccf744e71f0516c783f3e1e8938e19cc092f063fe5120ab6e50"
+    },
+    "research/rea/completion630-lab/hardware-vad-trace/no-growth-393990-candidate/REPORT.md": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/no-growth-393990-candidate/REPORT.md",
+      "bytes": 5262,
+      "sha256": "59abe31a6c2667f3c18e0a94f8683961ca1bbc139d26032e7b7e7205899cbf95"
+    },
+    "research/rea/completion630-lab/hardware-vad-trace/router-only-393990-candidate/router-only.ld": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/router-only-393990-candidate/router-only.ld",
+      "bytes": 1350,
+      "sha256": "1c322c78281e79bdd8821d9b0f8d6a215d12c0359a3c76516a24e17d69915408"
+    },
+    "research/rea/completion630-lab/hardware-vad-trace/router-only-393990-candidate/capture_inputs.py": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/router-only-393990-candidate/capture_inputs.py",
+      "bytes": 4914,
+      "sha256": "f7d097bc3377426b1125c2f0f9f4ff97d8f4c61119a932c90bbcde7a28e1045d"
+    },
+    "research/rea/completion630-lab/hardware-vad-trace/router-only-393990-candidate/export_strict_manifest.py": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/router-only-393990-candidate/export_strict_manifest.py",
+      "bytes": 31143,
+      "sha256": "14c9120f81a2eb6b2f229da9c0cd0de43237b2d4331aff11fdd5592a285f7c8b"
+    },
+    "research/rea/completion630-lab/hardware-vad-trace/router-only-393990-candidate/build_router_only.sh": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/router-only-393990-candidate/build_router_only.sh",
+      "bytes": 5119,
+      "sha256": "c3e211dcf889bddf827042fcf6a258867e58b9d40c2c5c1e79f1b4cefe7ca90b"
+    }
+  },
+  "router_tail": {
+    "candidate_start": "0x01128a40",
+    "candidate_end_exclusive": "0x01129000",
+    "candidate_bytes": 1472,
+    "preimage_sha256": "d681b2309c3b48684ac24e27fafa6f215a294dc75bcbbf5fbfb4bbaacaed0e07",
+    "ownership_accepted": false
+  },
+  "console_tail_used": false,
+  "firmware_image_generated": false,
+  "composed": false,
+  "installed": false
+}

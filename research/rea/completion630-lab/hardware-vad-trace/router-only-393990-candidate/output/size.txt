@@ -1,0 +1,2 @@
+   text	   data	    bss	    dec	    hex	filename
+   1240	      0	      0	   1240	    4d8	/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/router-only-393990-candidate/output/vad-router-only-393990-NOTINSTALL.elf
