@@ -1,5 +1,5 @@
 /**
- * The brain's HTTP API: a small, read-only door agents knock on.
+ * The brain's HTTP API: authenticated reads and, in the app, directed transcription.
  *
  * It replaces the Chrome DevTools port the old bridge used, which had no
  * authentication, executed arbitrary JavaScript in the renderer, accepted any
@@ -16,7 +16,8 @@
  *   check guards apps/model-host.
  *
  * The same server runs inside the app and inside the headless `--brain-only`
- * process; only `kind` and the optional `recordingNow` differ.
+ * process. The app also supplies `recordingNow` and `transcription`; the
+ * read-only headless host never advertises routes for callbacks it lacks.
  *
  * Spec: docs/superpowers/specs/2026-09-22-brain-service-design.md
  */
@@ -49,6 +50,12 @@ export interface BrainServerOptions {
   onStepDown?: () => void
   /** App only: what the device is recording right now. Absent in the headless process. */
   recordingNow?: () => unknown
+  /** App only: admit named recordings to transcription, read and cancel their jobs. */
+  transcription?: {
+    submit(ids: string[], provider?: string, requestId?: string): unknown
+    status(ids: string[]): unknown
+    cancel(id: string): void
+  }
   /** Fixed port for tests; 0 (the default) lets the OS choose. */
   port?: number
 }
@@ -73,7 +80,50 @@ const ROUTES = [
   'GET /recordings?filenamePrefix=<prefix>',
   'GET /recording-now',
   'POST /step-down',
+  'POST /transcriptions',
+  'GET /transcriptions?ids=<id,id>',
+  'POST /transcriptions/<recordingId>/cancel',
 ]
+
+function availableRoutes(options: BrainServerOptions): string[] {
+  return ROUTES.filter((route) =>
+    (options.kind === 'service' || route !== 'POST /step-down') &&
+    (Boolean(options.transcription) || !route.includes('/transcriptions')))
+}
+
+class RequestError extends Error {
+  constructor(readonly status: number, message: string) { super(message) }
+}
+
+async function jsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+  if (!(req.headers['content-type'] ?? '').startsWith('application/json')) throw new RequestError(415, 'application/json is required')
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = []
+    let bytes = 0
+    let failed = false
+    req.on('data', (chunk: Buffer) => {
+      if (failed) return
+      bytes += chunk.length
+      if (bytes > 16384) { failed = true; reject(new RequestError(413, 'request body exceeds 16 KiB')); return }
+      chunks.push(chunk)
+    })
+    req.on('error', reject)
+    req.on('end', () => {
+      if (failed) return
+      let body: unknown
+      try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { reject(new RequestError(400, 'invalid JSON')); return }
+      if (!body || typeof body !== 'object' || Array.isArray(body)) { reject(new RequestError(400, 'JSON object required')); return }
+      resolve(body as Record<string, unknown>)
+    })
+  })
+}
+
+function idsParam(ids: unknown): string[] {
+  if (!Array.isArray(ids) || !ids.length || ids.length > 10 || ids.some(id => typeof id !== 'string' || !id || id.length > 200)) {
+    throw new RequestError(400, 'between 1 and 10 recording IDs are required')
+  }
+  return [...new Set(ids)] as string[]
+}
 
 /** Constant-time compare that does not leak length through an early return. */
 export function tokensMatch(given: string, expected: string): boolean {
@@ -118,7 +168,7 @@ export function startBrainServer(options: BrainServerOptions): Promise<RunningBr
   const startedAt = Date.now()
   let port = 0
 
-  const handle = (req: IncomingMessage, res: ServerResponse): void => {
+  const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     if (!isLoopbackHost(req.headers.host, port)) return send(res, 403, { error: 'wrong host' })
     if (!tokensMatch(bearer(req), options.token)) return send(res, 401, { error: 'missing or wrong token' })
     options.onRequest?.()
@@ -138,6 +188,21 @@ export function startBrainServer(options: BrainServerOptions): Promise<RunningBr
     const q = options.queries
 
     try {
+      if (options.transcription && parts[0] === 'transcriptions') {
+        if (parts.length === 1 && method === 'POST') {
+          const body = await jsonBody(req)
+          const ids = idsParam(body.recordingIds)
+          if (typeof body.requestId !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(body.requestId)) throw new RequestError(400, 'requestId (1..100 letters, digits, underscore or hyphen) required')
+          if (body.provider !== undefined && !['gemini', 'local-asr', 'vibevoice'].includes(String(body.provider))) throw new RequestError(400, 'unsupported provider')
+          return send(res, 202, options.transcription.submit(ids, body.provider as string | undefined, body.requestId))
+        }
+        if (parts.length === 1 && method === 'GET') return send(res, 200, options.transcription.status(idsParam((url.searchParams.get('ids') ?? '').split(','))))
+        if (parts.length === 3 && parts[2] === 'cancel' && method === 'POST') {
+          const [id] = idsParam([parts[1]])
+          options.transcription.cancel(id)
+          return send(res, 202, { recordingId: id, cancellationRequested: true })
+        }
+      }
       if (method === 'POST' && url.pathname === '/step-down') {
         if (options.kind !== 'service' || !options.onStepDown) return send(res, 409, { error: 'the app does not step down' })
         send(res, 202, { stepping: 'down' })
@@ -157,7 +222,7 @@ export function startBrainServer(options: BrainServerOptions): Promise<RunningBr
       if (url.pathname === '/capabilities') {
         return send(res, 200, {
           kind: options.kind,
-          routes: ROUTES.filter((r) => options.kind === 'service' || r !== 'POST /step-down'),
+          routes: availableRoutes(options),
           recordingNow: Boolean(options.recordingNow),
         })
       }
@@ -212,8 +277,9 @@ export function startBrainServer(options: BrainServerOptions): Promise<RunningBr
         }
         return send(res, 200, options.recordingNow())
       }
-      return send(res, 404, { error: 'unknown route', routes: ROUTES })
+      return send(res, 404, { error: 'unknown route', routes: availableRoutes(options) })
     } catch (error) {
+      if (error instanceof RequestError) return send(res, error.status, { error: error.message })
       console.error('[Brain] request failed:', error)
       return send(res, 500, { error: error instanceof Error ? error.message : 'internal error' })
     }
@@ -223,6 +289,10 @@ export function startBrainServer(options: BrainServerOptions): Promise<RunningBr
   // No keep-alive: a lingering idle socket would hold close() open, and every
   // client here makes one request and leaves.
   server.keepAliveTimeout = 1
+  // POST bodies arrive now: a client that opens a request and trickles it must
+  // not hold a socket in the main process forever.
+  server.requestTimeout = 15000
+  server.headersTimeout = 10000
 
   return new Promise((resolve, reject) => {
     server.once('error', reject)

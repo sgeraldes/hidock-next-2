@@ -326,3 +326,29 @@ backup of the 2.9 GB library can take minutes.
 **`recording-now` with the app closed** still answers `{"recording": null, "error": ...}`,
 because the device state lives in the app. What changed is that the bridge gets that answer
 instead of a brain that never started.
+
+## Asking the app to transcribe (2026-10-15)
+
+**What broke.** On 13-oct Rec08 (the weekly Delivery) and Rec09 were downloaded and never queued:
+no queue row, `transcription_status = 'none'`. Rec12 and Rec16 failed on Gemini and stayed in
+`error`. The bridge could see all of it and do nothing, because `raw` was the only way to call
+`recordings.transcribe` and it went away on 22-sep.
+
+**What the app serves now.** Three routes, only in the app (the headless brain reads the database
+read-only and neither advertises nor serves them; a POST there answers 405):
+
+| Route | Does |
+|---|---|
+| `POST /transcriptions` | body `{ recordingIds: [1..10], requestId, provider? }`, JSON, at most 16 KiB. Admits recordings that have no transcript; one with a transcript answers `already-transcribed`, one already queued answers its row. Every id must pass the transcription eligibility boundary or nothing is admitted. `provider` is `gemini`, `local-asr` or `vibevoice`; absent means the app's setting. Answers 202 with one job per id |
+| `GET /transcriptions?ids=<id,id>` | `transcription_status` and every queue row of each eligible id, with progress and error |
+| `POST /transcriptions/<id>/cancel` | cancels a pending or running job of that recording |
+
+Same door as every other route: loopback `Host`, owner token in constant time. `requestId` makes a
+retried POST safe: the receipt is kept in `targeted-transcription-requests.json` beside the config,
+and the same id with different parameters is refused. The run takes the queue lock, so a directed
+request never runs beside a queue pass; when the processor is busy it answers 500 with
+"Transcription processor is busy; retry later". It does not bypass value exclusion the way the
+owner's Retry button does.
+
+Bridge: `transcribe <id[,id...]> [provider]` and `transcription-status <id[,id...]>`. Both need the
+app open and say so instead of starting the headless brain.

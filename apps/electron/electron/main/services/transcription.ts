@@ -142,6 +142,7 @@ import { resolveSpeakerEngine } from './speaker-engines'
 import { BrowserWindow } from 'electron'
 import { emitActivityLog } from './activity-log'
 import { isRecordingEligible, isRecordingTranscribable } from './recording-eligibility'
+import { requestFingerprint, findTargetedReceipt, saveTargetedReceipt } from './targeted-request-store'
 import { getVectorStore } from './vector-store'
 import {
   ensureKnowledgeCaptureForRecording,
@@ -679,7 +680,125 @@ async function maybeStartShortLane(): Promise<void> {
   }
 }
 
+let targetedRunActive = false
+let targetedRecordingIds = new Set<string>()
+
+/** Admit only named, eligible recordings without an existing transcript.
+ * This lane never performs retry/stale bookkeeping or dequeues unrelated work.
+ */
+export function submitTargetedTranscriptions(recordingIds: string[], provider?: string, requestId?: string): { jobs: Array<{ recordingId: string; queueItemId?: string; status: string }>; replayed?: boolean } {
+  if (!isFeatureEnabled('transcription')) throw new Error('Transcription feature is disabled')
+  const ids = [...new Set(recordingIds)]
+  if (!ids.length || ids.length > 10) throw new Error('Supply between 1 and 10 recording IDs')
+  const configuredProvider = getConfig().transcription.provider || 'gemini'
+  const selectedProvider = provider ?? configuredProvider
+  if (!requestId || !/^[a-zA-Z0-9_-]{1,100}$/.test(requestId)) throw new Error('requestId (1..100 letters, digits, underscore or hyphen) required')
+  const fingerprint = requestFingerprint(ids, selectedProvider)
+  if (!['gemini', 'local-asr', 'vibevoice'].includes(selectedProvider)) throw new Error('Unsupported transcription provider')
+  if (selectedProvider === 'gemini' && !resolveGeminiApiKey()) throw new Error('Gemini API key not configured')
+  // Validate the complete request before admitting any new row. API admission
+  // cannot use the ownerRequested value-classification bypass from manual UI.
+  for (const id of ids) {
+    if (!isRecordingTranscribable(id)) throw new Error('Recording unavailable or ineligible')
+  }
+  const existing = getQueueItems()
+  const receipt = findTargetedReceipt(requestId, fingerprint)
+  if (receipt) {
+    // A replay answers with where each admitted row is now, not where it was
+    // when the receipt was written: a row that finished, failed or was purged
+    // since must not come back as `pending`.
+    const jobs = receipt.jobs.map(job => {
+      if (!job.queueItemId) return job
+      const row = existing.find(item => item.id === job.queueItemId)
+      return { ...job, status: row ? row.status : 'gone' }
+    })
+    return { jobs, replayed: true }
+  }
+  const jobs = ids.map(recordingId => {
+    if (queryOne<{ id: string }>('SELECT id FROM transcripts WHERE recording_id = ? LIMIT 1', [recordingId]) || ['complete', 'no_speech'].includes(getRecordingById(recordingId)?.transcription_status ?? '')) {
+      return { recordingId, status: 'already-transcribed' }
+    }
+    const active = existing.find(item => item.recording_id === recordingId && ['pending', 'processing'].includes(item.status))
+    if (active) {
+      if ((active.provider ?? configuredProvider) !== selectedProvider) throw new Error('Recording already queued with a different provider')
+      // A `processing` row with the processor idle is orphaned: the directed
+      // run only picks pending rows, so answering 202 would transcribe nothing.
+      if (active.status === 'processing' && !isProcessing && getActiveTranscriptions().length === 0) {
+        throw new Error('Recording has an orphaned processing row; the queue resets it at the next start')
+      }
+      return { recordingId, queueItemId: active.id, status: active.status }
+    }
+    return { recordingId, status: 'new' }
+  })
+  if (jobs.every(job => job.status === 'already-transcribed') || targetedRunActive && jobs.every(job => job.status === 'already-transcribed' || targetedRecordingIds.has(job.recordingId))) {
+    saveTargetedReceipt(requestId, { fingerprint, jobs })
+    return { jobs }
+  }
+  if (queuePaused) throw new Error('Transcription queue is paused')
+  if (isProcessing || getActiveTranscriptions().length > 0) throw new Error('Transcription processor is busy; retry later')
+  const processId = `targeted_${Date.now()}_${Math.random().toString(36).slice(2)}`
+  if (!acquireTranscriptionLock(processId)) throw new Error('Transcription processor is busy; retry later')
+  try {
+    runInTransaction(() => {
+      for (const job of jobs) {
+        if (job.status !== 'new') continue
+        job.queueItemId = addToQueue(job.recordingId, selectedProvider)
+        if (!job.queueItemId) throw new Error('Recording admission was refused')
+        job.status = 'pending'
+      }
+    })
+    saveTargetedReceipt(requestId, { fingerprint, jobs })
+  } catch (error) { releaseTranscriptionLock(processId); throw error }
+  startDirectedRun(jobs, processId)
+  return { jobs }
+}
+
+function startDirectedRun(jobs: Array<{ recordingId: string; queueItemId?: string }>, processId: string): void {
+  targetedRunActive = true
+  targetedRecordingIds = new Set(jobs.filter(job => job.queueItemId).map(job => job.recordingId))
+  isProcessing = true
+  void (async () => {
+    try {
+      for (const job of jobs) {
+        if (!isFeatureEnabled('transcription') || cancelRequested || queuePaused) break
+        const item = getQueueItems('pending').find(item => item.id === job.queueItemId)
+        if (!item) continue
+        currentProcessingId = item.recording_id
+        await runQueueItem(item)
+      }
+    } finally {
+      currentProcessingId = null
+      isProcessing = false
+      targetedRunActive = false
+      targetedRecordingIds.clear()
+      cancelRequested = false
+      releaseTranscriptionLock(processId)
+      emitQueueState()
+    }
+  })().catch(error => console.error('[Transcription] targeted run failed:', error))
+}
+
+export function targetedTranscriptionStatus(recordingIds: string[]): unknown[] {
+  const items = getQueueItems()
+  return recordingIds.filter(id => isRecordingTranscribable(id)).map(recordingId => ({
+    recordingId,
+    transcriptionStatus: getRecordingById(recordingId)?.transcription_status,
+    jobs: items.filter(item => item.recording_id === recordingId).map(item => ({
+      id: item.id, status: item.status, progress: item.progress, provider: item.provider, error: item.error_message,
+    })),
+  }))
+}
+
+export function cancelTargetedTranscription(recordingId: string): void {
+  if (!isRecordingTranscribable(recordingId)) throw new Error('Recording unavailable or ineligible')
+  if (!getQueueItems().some(item => item.recording_id === recordingId && ['pending', 'processing'].includes(item.status))) return
+  cancelTranscription(recordingId)
+}
+
 async function processQueue(): Promise<void> {
+  // A directed API run owns the queue mutex; even the short lane must not
+  // pick an unrelated row while its main lane is active.
+  if (targetedRunActive) return
   if (isProcessing) {
     // The main lane is busy: this tick may start the short lane beside it.
     void maybeStartShortLane().catch((e) => console.error('[Transcription] short lane error:', e))
