@@ -93,8 +93,8 @@ describe('groupWordsIntoLines: lines keep the time of their words', () => {
     pairs.map(([startTime, endTime, text]) => ({ startTime, endTime, text, speaker }))
 
   it('one speaker no longer means one line per chunk: a pause starts a new line (Rec14: 29 lines for 82 minutes)', () => {
-    const lines = groupWordsIntoLines(words([[0, 0.4, 'Hola,'], [0.5, 0.9, 'Diego.'], [3, 3.3, '¿Cómo'], [3.4, 3.8, 'estás?']]), join)
-    expect(lines.map((l) => [l.text, l.startTime, l.endTime])).toEqual([['Hola, Diego.', 0, 0.9], ['¿Cómo estás?', 3, 3.8]])
+    const lines = groupWordsIntoLines(words([[0, 0.4, 'Hola,'], [0.5, 0.9, 'Ana.'], [3, 3.3, '¿Cómo'], [3.4, 3.8, 'estás?']]), join)
+    expect(lines.map((l) => [l.text, l.startTime, l.endTime])).toEqual([['Hola, Ana.', 0, 0.9], ['¿Cómo estás?', 3, 3.8]])
   })
 
   it('a line never passes the cap even without pauses', () => {
