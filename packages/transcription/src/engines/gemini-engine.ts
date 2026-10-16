@@ -15,6 +15,7 @@ import type {
   TranscriptionTraceEvent,
 } from './engine-interface.js'
 import { TurnDeduper } from './dedupe-turns.js'
+import { groupWordsIntoLines, planSpeechSpans, sliceWavSpan, speechCoverageShortfall } from './native-speech.js'
 import { NoSpeechDetectedError, TranscriptionCancelledError } from './engine-interface.js'
 
 /**
@@ -188,8 +189,11 @@ export function parseNativeTranscription(
     .flatMap((content) => content.annotations ?? [])
     .filter((annotation) => annotation.type === 'word_info' && Boolean(annotation.text?.trim()))
 
-  const segments: TranscriptSegment[] = []
-  for (const word of words) {
+  // Until 16-oct-2026 words were joined while the speaker stayed the same, so a
+  // channel with one speaker came back as one line per chunk (Rec14: 29 lines
+  // for 82 minutes) and the validity check could not place the text in time.
+  // A pause or a long line now starts a new line; each keeps its words' times.
+  const timed = words.map((word) => {
     const providerSpeaker = word.speaker || defaultSpeaker
     if (!speakerNames.has(providerSpeaker)) {
       speakerNames.set(
@@ -197,24 +201,18 @@ export function parseNativeTranscription(
         providerSpeaker === defaultSpeaker ? defaultSpeaker : `Speaker ${speakerNames.size + 1}`
       )
     }
-    const speaker = speakerNames.get(providerSpeaker) ?? defaultSpeaker
-    const startTime = chunkStartSec + offsetSeconds(word.start_offset)
-    const endTime = chunkStartSec + offsetSeconds(word.end_offset)
-    const current = segments.at(-1)
-    if (current && current.speaker === speaker) {
-      current.text = joinNativeWord(current.text, word.text ?? '')
-      current.endTime = Math.max(current.endTime, endTime)
-    } else {
-      segments.push({
-        speaker,
-        text: (word.text ?? '').trim(),
-        startTime,
-        endTime: Math.max(startTime, endTime),
-        confidence: 1,
-        source,
-      })
+    return {
+      speaker: speakerNames.get(providerSpeaker) ?? defaultSpeaker,
+      text: word.text ?? '',
+      startTime: chunkStartSec + offsetSeconds(word.start_offset),
+      endTime: chunkStartSec + offsetSeconds(word.end_offset),
     }
-  }
+  })
+  const segments: TranscriptSegment[] = groupWordsIntoLines(timed, joinNativeWord).map((line) => ({
+    ...line,
+    confidence: 1,
+    source,
+  }))
 
   if (segments.length > 0) return segments
   const fallbackText = (interaction.output_text ?? '').trim()
@@ -1006,6 +1004,12 @@ export class GeminiEngine implements TranscriptionEngine {
    * wide margin below Gemini's output ceiling, while recent timestamped turns
    * are carried forward to preserve speaker-label and conversational context. */
   static readonly ROLLING_CHUNK_SECONDS = 20 * 60
+  /**
+   * Longest speech span per request: about 9,000 audio tokens at 25 per second,
+   * under the free tier's 10,000 input tokens per minute that answered 429 on
+   * 15-oct-2026 (a 426 s chunk was already 10,650).
+   */
+  static readonly NATIVE_SPEECH_SPAN_SECONDS = 360
 
   /**
    * Floor for splitting a native-transcription chunk. Below this, a chunk the
@@ -1117,9 +1121,25 @@ export class GeminiEngine implements TranscriptionEngine {
   ): Promise<TranscriptSegment[]> {
     const shouldGenerate = options.shouldGenerate
     const durationSeconds = options.durationSeconds ?? 0
-    const split =
+    const speech = options.speechIntervals
+    // Only the stretches with voice are sent when the local check knows where
+    // it is (asked by the owner on 16-oct-2026: do not analyse silence). Spans
+    // start and end on voice, so times add to span.start and coverage is judged
+    // against the voice. No voice at all: no request.
+    const speechChunks = speech && durationSeconds > 0
+      ? planSpeechSpans(speech, durationSeconds, { maxSpanSeconds: GeminiEngine.NATIVE_SPEECH_SPAN_SECONDS })
+          .map((span) => {
+            const data = sliceWavSpan(audio, span.start, span.end)
+            return data ? { data, mimeType: 'audio/wav', startSec: span.start, durationSec: span.end - span.start } : null
+          })
+      : null
+    if (speechChunks && speechChunks.length === 0) return []
+    const usableSpeechChunks = speechChunks && speechChunks.every((chunk) => chunk !== null)
+      ? (speechChunks as AudioChunk[])
+      : null
+    const split = usableSpeechChunks ?? (
       splitWavIntoChunks(audio, GeminiEngine.ROLLING_CHUNK_SECONDS) ??
-      splitMp3IntoChunks(audio, GeminiEngine.ROLLING_CHUNK_SECONDS)
+      splitMp3IntoChunks(audio, GeminiEngine.ROLLING_CHUNK_SECONDS))
     const chunks = split && split.length > 0
       ? split
       : [{ data: audio, mimeType, startSec: 0, durationSec: durationSeconds }]
@@ -1305,9 +1325,12 @@ export class GeminiEngine implements TranscriptionEngine {
         // `completed` with timings that stop early is the other shape of the
         // same problem, and the one the app's grounding check rejected.
         // Silence is not a shortfall: an interval with no speech returns none.
-        const shortfall = segments.length
-          ? nativeCoverageShortfall(segments, chunk.durationSec, chunk.startSec)
-          : null
+        const lastTextEnd = segments.reduce<number | null>((end, s) => (end === null || s.endTime > end ? s.endTime : end), null)
+        const shortfall = speech
+          ? speechCoverageShortfall(lastTextEnd, speech, chunk.startSec, chunk.startSec + chunk.durationSec)
+          : segments.length
+            ? nativeCoverageShortfall(segments, chunk.durationSec, chunk.startSec)
+            : null
         if (shortfall) return { splitBecause: shortfall }
 
         trace({ phase: 'chunk', status: 'completed', elapsedMs: Date.now() - chunkStartedAt, ...common })
