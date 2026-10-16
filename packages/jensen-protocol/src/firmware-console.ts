@@ -9,7 +9,7 @@ export type FirmwareConsoleHelpCommand = typeof FIRMWARE_CONSOLE_REQUESTS[number
 /** Every literal the host may send in F117. `slots` is not advertised by any help list. */
 export const FIRMWARE_CONSOLE_ALLOWED_REQUESTS = ['help', 'version', 'uptime', 'vectors', 'slots'] as const
 export type FirmwareConsoleRequest = typeof FIRMWARE_CONSOLE_ALLOWED_REQUESTS[number]
-/** Exact expected FVER strings. 6.3.6, 6.3.7 and 6.3.8 are proposed diagnostic images, not installed or attested ones. */
+/** Exact expected FVER strings. Operational qualification is recorded separately; parsing never attests an image. */
 export type FirmwareConsoleFirmware = '6.3.2' | '6.3.4' | '6.3.6' | '6.3.7' | '6.3.8'
 /** Help list of the original module, before the vectors diagnostic existed. */
 const LEGACY_HELP_COMMANDS: readonly FirmwareConsoleHelpCommand[] = ['help', 'version', 'uptime']

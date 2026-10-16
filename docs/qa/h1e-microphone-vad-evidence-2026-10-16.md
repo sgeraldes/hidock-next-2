@@ -1,0 +1,11 @@
+# H1E microphone-only VAD evidence boundary — 2026-10-16
+
+The retained native exports have no `EnergyChannelVAD` symbol. They do have a `VoiceEnergy` getter: wrapper `0x0101fa9c` calls the function pointer in RAM slot `0x00080e70` with `r0=0x4009ffd0` and an output pointer in `r1`. Caller `0x01020d9c` initializes a 32-bit local and, on success, caches its low byte at state `+1`. This is a real static wrapper/caller in the audited 6.3.0 image, but `VoiceEnergy` is only a candidate energy measurement; its name does not prove voice detection or a microphone route.
+
+The retained lifecycle audit found no executed-code registration/call to `0x01020d9c`. The apparent address at `0x01021618` is switch-table data; the periodic callback registered by `0x01021168` is `0x01020f18`. Therefore the evidence does **not** show `VoiceEnergy` being executed or a passive cache sample being available. Calling its wrapper would add a DSP query. Provider serialization, output contract, route, freshness, and side effects are not qualified, so that query must not be assumed safe.
+
+The scheduled reader already observed is `RefChannelVAD`, wrapper `0x0101fb68` with `r0=0x40000090`, called by poller `0x01020b58` and cached at state `+4`. Existing 393992 playback receipts recorded raw `1` in 15/65 active speaker-playback samples, 0/20 in a quiet-before window, and 0/55 after playback ended. This is a temporal association with those playback trials only; microphone-only response, route, and general voice meaning remain unproven.
+
+**Minimum next step:** use the existing F11A snapshot path for a quiet interval and a controlled microphone-only speech interval with no speaker playback, recording raw status/value/time. Do not add a second getter. Before considering `VoiceEnergy`, first obtain an authoritative provider contract for serialization/ownership, output width/status, route and meaning, freshness, and side effects; then separately review any proposed query.
+
+**Source pin:** official 6.3.0 decoded source SHA-256 `5f8ba521c9cdec6eb25d84825f248543c81e8f0daa96094bdb705a53f7e673ce`. Wrapper-window parity does not attest the caller lifecycle or current 393992 execution. Physical sample counts and receipt hashes are retained in `research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/VAD-PHYSICAL-OBSERVATION.md`.

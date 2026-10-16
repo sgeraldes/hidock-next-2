@@ -34,4 +34,6 @@ Two rejected offline predecessors are retained: compose-1 had inconsistent XML p
 
 **Accepted:** installed engineering image operational readback, native cached-observation transport, successful native polling, preservation checks above, and raw-value association with controlled H1E output playback. **Still open:** microphone-only voice classification, DSP freshness/age, a general voice-presence contract, and product UI/automatic actions. This is not a general firmware release or closure of the separate full-device audit.
 
+The [microphone evidence review](h1e-microphone-vad-evidence-2026-10-16.md) identifies the separate static `VoiceEnergy` wrapper and why there is no demonstrated passive sample for it. A microphone-only acoustic trial can use the existing F11A command without adding a DSP query; a separate energy getter needs its provider contract first.
+
 The complete per-query receipts, original audio and private identity remain local under `.diagnostics/vad-physical-20261016/`. The source-side summary is [VAD-PHYSICAL-OBSERVATION.md](../../research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/VAD-PHYSICAL-OBSERVATION.md). Duration acceptance from actual mono/stereo downloads is recorded separately in [the duration report](firmware-download-duration-2026-10-13.md).
