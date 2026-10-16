@@ -1,0 +1,32 @@
+PASS F117 parser result forwards unchanged
+PASS non-F11A parser selects current console only
+PASS current parser receives identical arguments
+PASS current parser output mutation is visible
+PASS F114 parser result forwards unchanged
+PASS non-F11A parser selects current console only
+PASS current parser receives identical arguments
+PASS current parser output mutation is visible
+PASS F11A parser result is returned unchanged
+PASS F11A parser selects VAD handler only
+PASS F11A parser receives identical arguments
+PASS F11A parser output mutation is visible
+PASS NULL parser frame is rejected
+PASS NULL parser frame calls no handler
+PASS unresolved parser head is rejected
+PASS unresolved parser head calls no handler
+PASS F117 response result forwards unchanged
+PASS non-F11A response selects current console only
+PASS current response receives identical frame
+PASS current response output mutation is visible
+PASS F114 response result forwards unchanged
+PASS non-F11A response selects current console only
+PASS current response receives identical frame
+PASS current response output mutation is visible
+PASS F11A response result is returned unchanged
+PASS F11A response selects VAD handler only
+PASS F11A response receives identical frame
+PASS F11A response receives the native snapshot reader and NULL context
+PASS F11A response output mutation is visible
+PASS NULL response frame is rejected
+PASS NULL response frame calls no handler
+31 checks, 0 failures

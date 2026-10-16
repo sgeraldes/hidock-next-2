@@ -1,0 +1,2 @@
+   text	   data	    bss	    dec	    hex	filename
+   2012	      0	      0	   2012	    7dc	/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/no-growth-393990-candidate/output/vad-no-growth-393990-NOTINSTALL.elf

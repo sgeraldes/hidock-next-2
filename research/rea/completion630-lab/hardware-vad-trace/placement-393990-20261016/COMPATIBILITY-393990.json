@@ -1,0 +1,111 @@
+{
+  "schema": "h1e-vad-393990-compatibility-v1",
+  "status": "conditional_source_integration_contract",
+  "qualification": "Offline evidence only. This does not authorize image composition, installation, or hardware use.",
+  "inputs": {
+    "current_system": {
+      "path": "research/rea/completion630-lab/firmware/capture-vector-selected-diagnostic/out-NOTINSTALL/container-compose3/system-decoded.bin",
+      "sha256": "abff684071be35f29286010c13e27f8af51de364efbaedffdd12bb6e85ebd360",
+      "bytes": 1237504,
+      "version_name": "6.3.6_vectors001",
+      "packed_version": 393990
+    },
+    "current_container": {
+      "path": "research/rea/completion630-lab/firmware/capture-vector-selected-diagnostic/out-NOTINSTALL/container-compose3/H1E-6.3.6_vectors001-EXPERIMENTAL-NOT-INSTALL.bin",
+      "sha256": "d0cd083ff19d56325dca12ea7785c4deb270cf2ef68fa6b7af1c64b0baa651a0",
+      "bytes": 3429376,
+      "board_label": "ats2835p_evb"
+    },
+    "baseline_for_old_vad_hunks": {
+      "path": "research/rea/completion630-lab/firmware/restore-build393988/generation-restore4/system-decoded-NOTINSTALL.bin",
+      "sha256": "b338e4d5e7d456dd2b7a0048bb8e2c338e2464ad25029267b5e46cb4ad880c2f",
+      "bytes": 1237504,
+      "version_name": "6.3.4_restore001",
+      "packed_version": 393988
+    },
+    "prior_vad_sdk_artifacts": {
+      "elf_path": "research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/sdk-profile/output/conditional-source-ck802-sdk-NOTINSTALL.elf",
+      "elf_sha256": "576d7ac2b30755e41c6e23ba1a5cb3e6b7e65afb1c7c115b6f0be3a3b1844366",
+      "sparse_hunks_path": "research/rea/completion630-lab/hardware-vad-trace/native-ck802-candidate/sdk-profile/output/sparse-source-hunks.json",
+      "status": "built against 393988; its full console hooks are incompatible with current 393990 hook preimages"
+    }
+  },
+  "current_console": {
+    "module_path": "research/rea/completion630-lab/firmware/capture-vector-selected-diagnostic/out-NOTINSTALL/run2/native/native630.bin",
+    "module_sha256": "9c9886db930ed54a51574d8b278d01b9359a07a99ab5e63407ed649d2acc09a2",
+    "elf_path": "research/rea/completion630-lab/firmware/capture-vector-selected-diagnostic/out-NOTINSTALL/run2/native/native630.elf",
+    "elf_sha256": "105ddea56a8879e40cd0a0fa570203edae3eb4b22dbccd4da870acda8a1fa8ee",
+    "reservation": { "start": "0x0112b000", "bytes": 4096, "live_bytes": 3189, "remaining_bytes": 907 },
+    "exported_entry_points": {
+      "console630_parse": { "address": "0x0112b70c", "signature": "int(uint8_t *, const uint8_t *, uint32_t)" },
+      "console630_response": { "address": "0x0112b800", "signature": "int(uint8_t *)" }
+    },
+    "current_hook_targets": {
+      "console630_parser_hook": "0x0112ba58",
+      "console630_response_hook": "0x0112baa0"
+    },
+    "source_path": "research/rea/completion630-lab/firmware/capture-vector-selected-diagnostic/out-NOTINSTALL/run2/native/console630.c"
+  },
+  "prior_vad_sparse_hunks_vs_current_system": [
+    { "address": "0x01020b62", "width": 4, "baseline_preimage": "ffe303f8", "current_bytes": "ffe303f8", "result": "match", "action": "retain poll bridge hunk" },
+    { "address": "0x01021054", "width": 2, "baseline_preimage": "4030", "current_bytes": "4030", "result": "match", "action": "retain allocation-size hunk" },
+    { "address": "0x0102105c", "width": 2, "baseline_preimage": "00b5", "current_bytes": "00b5", "result": "match", "action": "retain private-pointer hunk" },
+    { "address": "0x0102106a", "width": 2, "baseline_preimage": "0095", "current_bytes": "0095", "result": "match", "action": "retain failure-pointer hunk" },
+    { "address": "0x01021070", "width": 4, "baseline_preimage": "403ce30f", "current_bytes": "403ce30f", "result": "match", "action": "retain delayed-publication branch hunk" },
+    { "address": "0x0102109e", "width": 2, "baseline_preimage": "4032", "current_bytes": "4032", "result": "match", "action": "retain zero-size hunk" },
+    { "address": "0x010210a8", "width": 2, "baseline_preimage": "e095", "current_bytes": "e095", "result": "match", "action": "retain post-zero pointer hunk" },
+    { "address": "0x010210de", "width": 2, "baseline_preimage": "6095", "current_bytes": "6095", "result": "match", "action": "retain GPIO-object hunk" },
+    { "address": "0x0103907a", "width": 4, "baseline_preimage": "07e08194", "current_bytes": "07e01395", "result": "mismatch_current_console_hook", "current_bsr_target": "0x0112baa0", "action": "do not apply old response hunk; retain 393990 response hook preimage" },
+    { "address": "0x0103a996", "width": 4, "baseline_preimage": "07e0cf87", "current_bytes": "07e06188", "result": "mismatch_current_console_hook", "current_bsr_target": "0x0112ba58", "action": "do not apply old parser hunk; retain 393990 parser hook preimage" }
+  ],
+  "dispatcher_contract": {
+    "new_c_functions": [
+      { "name": "console630_parse", "signature": "int(uint8_t *, const uint8_t *, uint32_t)" },
+      { "name": "console630_response", "signature": "int(uint8_t *)" }
+    ],
+    "dispatch_rule": "For command 0xf11a, call the existing VAD parse/response handlers. For every other command, tail-call the exact current 393990 console entry point with all original arguments and return its result unchanged.",
+    "import_aliases": {
+      "current parser": { "link_name": "console630_parse_current", "address": "0x0112b70c" },
+      "current response": { "link_name": "console630_response_current", "address": "0x0112b800" }
+    },
+    "wrappers": "Reuse the pinned generation-restore4 console-hooks.S ABI wrappers. They call console630_parse/response and preserve the existing parser/response interception convention.",
+    "preserve": ["F117 vector/help/version/uptime handling", "F118 upload path", "F119 restore path", "all other current router commands, including F114"],
+    "exclude": ["Do not copy the old console630_f11a.c implementation", "Do not route non-F11A commands directly to the raw vendor router", "Do not replace current 393990 console bytes or hook wrappers"]
+  },
+  "layout_and_capacity": {
+    "current_reserved_ranges_from_pinned_module_ld": [
+      { "name": "parser-console", "start": "0x0112b000", "end_exclusive": "0x0112c000", "bytes": 4096 },
+      { "name": "upload", "start": "0x0112c000", "end_exclusive": "0x0112d000", "bytes": 4096 },
+      { "name": "restore", "start": "0x0112d000", "end_exclusive": "0x0112f000", "bytes": 8192 }
+    ],
+    "old_vad_example_only": { "start": "0x0112f000", "live_end": "0x0112fa7c", "text_bytes": 2684, "aligned_pad_bytes": 4 },
+    "baseline_end_address": "0x0112e200",
+    "old_vad_append_arithmetic": { "gap_bytes": 3584, "text_bytes": 2684, "padding_bytes": 4, "total_bytes": 6272, "resulting_system_bytes": 1243776, "resulting_system_size_hex": "0x12fa80" },
+    "capacity_evidence": {
+      "partition_name": "fw0_sys",
+      "ota_xml_file_size": "0x12e200",
+      "meaning": "current payload file size only; no maximum capacity",
+      "container_partition_table": "current directory/partition offsets and payload sizes; load/run fields are zero",
+      "sys_header": { "load_address": "0x01000000", "body_size": 0, "tail_size": 0, "checksums": "zero/unverified" },
+      "boot_header": { "load_address": "0x00050000", "entry_address": "0x00050980", "system_maximum": "not present in inspected fields" },
+      "conclusion": "No target-specific SYS maximum extent/capacity is established by the retained 393990 container, XML, or boot header. Container acceptance and existing image length do not provide this bound.",
+      "missing_authoritative_evidence": "H1E/ATS2853P2 board-bound fw0_sys flash base and maximum length (partition map or bootloader-accepted extent), tied to this target/version. Generic ats2835p_evb metadata is insufficient."
+    },
+    "no_growth_feasibility": {
+      "current_console_tail_slack_bytes": 907,
+      "old_vad_measured_text_bytes": 2684,
+      "estimated_removed_old_console_and_format_helpers_bytes": 834,
+      "rough_remaining_text_bytes_before_new_dispatcher": 1850,
+      "status": "symbol-size arithmetic only; not a new link result and not evidence that any current reservation slack is available for VAD",
+      "ownership": "Do not assign any free-looking bytes or reservations without root approval and an explicit live-extent proof."
+    }
+  },
+  "next_build_acceptance": [
+    "Build one fresh CK802 SDK-profile module using the new F11A-only dispatcher, the other seven accepted VAD C units, and the existing constructor/poll/console assembly inputs.",
+    "Pin the current 393990 SYS, current console ELF and the exact unchanged VAD inputs; do not patch the current SYS in this step.",
+    "Import current parse/response at the recorded addresses and preserve the current hook preimage bytes at 0x0103907a and 0x0103a996; only emit hook hunks if they are specifically linked and verified against the new module.",
+    "Report linked code size, sections, symbols, imported aliases and a strict sparse manifest. Do not claim zero-growth or production placement from the old hypothetical 0x0112f000 link address.",
+    "Run focused host tests proving F11A dispatch and exact argument/result forwarding for non-F11A (including F117) calls.",
+    "No image composition until the contract and module are accepted; no install/flash or hardware qualification is part of this contract."
+  ]
+}

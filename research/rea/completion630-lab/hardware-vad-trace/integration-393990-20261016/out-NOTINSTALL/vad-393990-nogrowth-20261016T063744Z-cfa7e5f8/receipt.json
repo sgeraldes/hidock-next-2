@@ -1,0 +1,420 @@
+{
+  "status": "structural_readback_passed_EXPERIMENTAL_NOTINSTALL",
+  "schema": "h1e-393990-vad-nogrowth-receipt-v1",
+  "generated_utc": "2026-10-16T06:37:53.599800+00:00",
+  "identity": {
+    "version_name": "6.3.6_vectors001",
+    "version_code": 393990,
+    "board": "ats2835p_evb",
+    "same_as_baseline": true,
+    "new_version_allocated": false
+  },
+  "flags": {
+    "EXPERIMENTAL": true,
+    "NOTINSTALL": true,
+    "installable": false,
+    "approved_for_installation": false,
+    "installed": false,
+    "physical_boot_verified": false,
+    "hardware_qualified": false,
+    "release_or_publication": false,
+    "full_vendor_source_rebuild": false
+  },
+  "inputs": {
+    "base_container": {
+      "path": "research/rea/completion630-lab/firmware/capture-vector-selected-diagnostic/out-NOTINSTALL/container-compose3/H1E-6.3.6_vectors001-EXPERIMENTAL-NOT-INSTALL.bin",
+      "sha256": "d0cd083ff19d56325dca12ea7785c4deb270cf2ef68fa6b7af1c64b0baa651a0",
+      "bytes": 3429376
+    },
+    "base_system": {
+      "path": "research/rea/completion630-lab/firmware/capture-vector-selected-diagnostic/out-NOTINSTALL/container-compose3/system-decoded.bin",
+      "sha256": "abff684071be35f29286010c13e27f8af51de364efbaedffdd12bb6e85ebd360",
+      "bytes": 1237504
+    },
+    "base_console_elf": {
+      "path": "research/rea/completion630-lab/firmware/capture-vector-selected-diagnostic/out-NOTINSTALL/run2/native/native630.elf",
+      "sha256": "105ddea56a8879e40cd0a0fa570203edae3eb4b22dbccd4da870acda8a1fa8ee",
+      "bytes": 40676
+    },
+    "base_console_bin": {
+      "path": "research/rea/completion630-lab/firmware/capture-vector-selected-diagnostic/out-NOTINSTALL/run2/native/native630.bin",
+      "sha256": "9c9886db930ed54a51574d8b278d01b9359a07a99ab5e63407ed649d2acc09a2",
+      "bytes": 3189
+    },
+    "base_router_elf": {
+      "path": "research/rea/hardening630-lab/fixed-router/router630.elf",
+      "sha256": "f102c7703ce3f75e1f327bafb756367d5148fc0fa676f7f0391d26d56cc7bd3a",
+      "bytes": 31640
+    },
+    "base_router_bin": {
+      "path": "research/rea/hardening630-lab/fixed-router/router630.bin",
+      "sha256": "d518f0e40749eb73cf2dc9cdf3c0bb3efb3cf2b111115971a03f01cc0e547487",
+      "bytes": 2613
+    },
+    "integration_builder_reference": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/firmware-integration/build_candidate.py",
+      "sha256": "de45afc0567ee03a638fcf0d5ea9a2c9767f9d7ce6f27786bcbe77608c8c2851",
+      "bytes": 32214
+    },
+    "container_packer_reference": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/firmware-container/package_vad_container.py",
+      "sha256": "2477a315db72eee36086089686b280da078655c525d7ecd330a09ef1fa436918",
+      "bytes": 19085
+    },
+    "base_composer": {
+      "path": "research/rea/completion630-lab/firmware/capture-vector-selected-diagnostic/compose_container.py",
+      "sha256": "b715a3d68cadb49d64758205c79db696296d81e88d9d01c9a20357a6d4c9abcc",
+      "bytes": 16852
+    },
+    "base_verifier": {
+      "path": "research/rea/completion630-lab/firmware/capture-vector-selected-diagnostic/verify_container.py",
+      "sha256": "e95a5f24e8e17e04541af9a83da41cd548f63c5cf1aa045c6a3724aa5198898b",
+      "bytes": 11161
+    },
+    "sdk": {
+      "path": "research/rea/references/build_atf_image.py",
+      "sha256": "30b5d37f67bb57af44d02da829429c59bb734d5c7c0acc1a1ce5f15029401c17",
+      "bytes": 8645
+    },
+    "decoder": {
+      "path": "research/rea/decode_randomizer.py",
+      "sha256": "3a9a945dafe6a81327d9f15e0619befc30109fd9e8ce58e2af8e7d5e7e734de5",
+      "bytes": 5953
+    },
+    "parser": {
+      "path": "research/rea/extract_acttest.py",
+      "sha256": "8adf114c2ee531f12778b346482c344717659a130892515258505781efccc592",
+      "bytes": 4063
+    }
+  },
+  "composer": {
+    "path": "research/rea/completion630-lab/hardware-vad-trace/integration-393990-20261016/compose_393990_nogrowth.py",
+    "sha256": "b61a1dcc467e716cdf2fd6cd3b0a541c495cc5e749cab921239abe38dfc57ec1",
+    "sdk_builder_sha256": "30b5d37f67bb57af44d02da829429c59bb734d5c7c0acc1a1ce5f15029401c17",
+    "decoder_sha256": "3a9a945dafe6a81327d9f15e0619befc30109fd9e8ce58e2af8e7d5e7e734de5",
+    "parser_sha256": "8adf114c2ee531f12778b346482c344717659a130892515258505781efccc592",
+    "objdump_sha256": "e6aad5acbaf952d53ed470878b95acfcffeca7c4e001fe7bbf1c0dce4fd07cdd",
+    "sdk_stdout_sha256": "1099e933fe2bcb2da0c17f1b088da41e1f196edc84c1babffab62daa1b68cbff"
+  },
+  "accepted_layout": {
+    "manifest_path": "research/rea/completion630-lab/hardware-vad-trace/no-growth-393990-candidate/output/layout-readback.json",
+    "manifest_sha256": "a3c3209d0dfba4bef2084c1b07b18027cefb38bdcbbb4860a41cd2a6af4d7ea9",
+    "elf_path": "research/rea/completion630-lab/hardware-vad-trace/no-growth-393990-candidate/output/vad-no-growth-393990-NOTINSTALL.elf",
+    "elf_sha256": "cfa7e5f8b2ebf838b54484169921f388f24bf868b316b7fb366b1574d798cfbf",
+    "symbols_path": "research/rea/completion630-lab/hardware-vad-trace/no-growth-393990-candidate/output/symbols.txt",
+    "symbols_sha256": "bbcf837ea099a6cd20298b8f979fe715aa8d77a734bf16263b9c1a73a49661c6",
+    "segments": [
+      {
+        "name": ".router_tail",
+        "address": "01128a40",
+        "bytes": 1420,
+        "sha256": "584f5deb36c27f1377ea044a6a1e8df4958860b1c12eda925fc0999cab06f7ed",
+        "baseline_preimage_sha256": "caab377590a323fc70bffd43e1adaae6385ecb2c0fb240b366a51a01b5d21431",
+        "elf_section": ".router_tail",
+        "elf_file_offset": 14912
+      },
+      {
+        "name": ".console_tail",
+        "address": "0112be00",
+        "bytes": 440,
+        "sha256": "bb0d02160b6a40a81f0afc5a003202c25fb73e0dc7e0be93ad6a12ae8c586335",
+        "baseline_preimage_sha256": "360d579dbd14759b41afdf7fb5e80c0101e15150ae401d59f92a1e32d129f7cb",
+        "elf_section": ".console_tail",
+        "elf_file_offset": 19968
+      }
+    ],
+    "patches": [
+      {
+        "address": "01020b62",
+        "width": 4,
+        "role": "native_poll_bridge",
+        "before_hex": "ffe303f8",
+        "after_hex": "08e04f59",
+        "source_section": ".poll_hook",
+        "source_file_offset": 2914,
+        "target_symbol": "h1e_vad_native_poll_bridge",
+        "target": "0112be00"
+      },
+      {
+        "address": "01021054",
+        "width": 2,
+        "role": "allocate_96",
+        "before_hex": "4030",
+        "after_hex": "6030",
+        "source_section": ".constructor_edits",
+        "source_file_offset": 4180,
+        "target_symbol": null,
+        "target": null
+      },
+      {
+        "address": "0102105c",
+        "width": 2,
+        "role": "retain_private_pointer",
+        "before_hex": "00b5",
+        "after_hex": "c36d",
+        "source_section": ".constructor_edits",
+        "source_file_offset": 4188,
+        "target_symbol": null,
+        "target": null
+      },
+      {
+        "address": "0102106a",
+        "width": 2,
+        "role": "private_failure_pointer",
+        "before_hex": "0095",
+        "after_hex": "1f6c",
+        "source_section": ".constructor_edits",
+        "source_file_offset": 4202,
+        "target_symbol": null,
+        "target": null
+      },
+      {
+        "address": "01021070",
+        "width": 4,
+        "role": "final_publication_decision",
+        "before_hex": "403ce30f",
+        "after_hex": "08e09657",
+        "source_section": ".constructor_edits",
+        "source_file_offset": 4208,
+        "target_symbol": "late_publication_stub",
+        "target": "0112bf9c"
+      },
+      {
+        "address": "0102109e",
+        "width": 2,
+        "role": "zero_96",
+        "before_hex": "4032",
+        "after_hex": "6032",
+        "source_section": ".constructor_edits",
+        "source_file_offset": 4254,
+        "target_symbol": null,
+        "target": null
+      },
+      {
+        "address": "010210a8",
+        "width": 2,
+        "role": "retain_private_pointer_after_zero",
+        "before_hex": "e095",
+        "after_hex": "df6d",
+        "source_section": ".constructor_edits",
+        "source_file_offset": 4264,
+        "target_symbol": null,
+        "target": null
+      },
+      {
+        "address": "010210de",
+        "width": 2,
+        "role": "private_gpio_object",
+        "before_hex": "6095",
+        "after_hex": "df6c",
+        "source_section": ".constructor_edits",
+        "source_file_offset": 4318,
+        "target_symbol": null,
+        "target": null
+      },
+      {
+        "address": "0103907a",
+        "width": 4,
+        "role": "f11a_response_dispatch",
+        "before_hex": "07e01395",
+        "after_hex": "07e06197",
+        "source_section": ".response_hook",
+        "source_file_offset": 8314,
+        "target_symbol": "console630_response_hook",
+        "target": "0112bf3c"
+      },
+      {
+        "address": "0103a996",
+        "width": 4,
+        "role": "f11a_parser_dispatch",
+        "before_hex": "07e06188",
+        "after_hex": "07e0af8a",
+        "source_section": ".parser_hook",
+        "source_file_offset": 14742,
+        "target_symbol": "console630_parser_hook",
+        "target": "0112bef4"
+      }
+    ]
+  },
+  "decoded_candidate": {
+    "path": "system-decoded-vad-393990-EXPERIMENTAL-NOTINSTALL.bin",
+    "sha256": "c5c91e98f76a6ee14ab3e6dd7a99c24b7b3bdd3dd7bd50ca07147e3f5f923ea7",
+    "bytes": 1237504,
+    "readback": {
+      "sha256": "c5c91e98f76a6ee14ab3e6dd7a99c24b7b3bdd3dd7bd50ca07147e3f5f923ea7",
+      "bytes": 1237504,
+      "baseline_sha256": "abff684071be35f29286010c13e27f8af51de364efbaedffdd12bb6e85ebd360",
+      "baseline_bytes": 1237504,
+      "growth_bytes": 0,
+      "differing_bytes": 1795,
+      "unapproved_differing_bytes": 0,
+      "inverse_reconstructs_baseline": true,
+      "header_0_47_identical": true,
+      "segments": [
+        {
+          "name": ".router_tail",
+          "address": "01128a40",
+          "bytes": 1420,
+          "sha256": "584f5deb36c27f1377ea044a6a1e8df4958860b1c12eda925fc0999cab06f7ed",
+          "baseline_preimage_sha256": "caab377590a323fc70bffd43e1adaae6385ecb2c0fb240b366a51a01b5d21431"
+        },
+        {
+          "name": ".console_tail",
+          "address": "0112be00",
+          "bytes": 440,
+          "sha256": "bb0d02160b6a40a81f0afc5a003202c25fb73e0dc7e0be93ad6a12ae8c586335",
+          "baseline_preimage_sha256": "360d579dbd14759b41afdf7fb5e80c0101e15150ae401d59f92a1e32d129f7cb"
+        }
+      ],
+      "branches": [
+        {
+          "role": "native_poll_bridge",
+          "site": "01020b62",
+          "raw_bytes": "08e04f59",
+          "symbol": "h1e_vad_native_poll_bridge",
+          "target_python": "0112be00",
+          "target_objdump": "0112be00"
+        },
+        {
+          "role": "final_publication_decision",
+          "site": "01021070",
+          "raw_bytes": "08e09657",
+          "symbol": "late_publication_stub",
+          "target_python": "0112bf9c",
+          "target_objdump": "0112bf9c"
+        },
+        {
+          "role": "f11a_response_dispatch",
+          "site": "0103907a",
+          "raw_bytes": "07e06197",
+          "symbol": "console630_response_hook",
+          "target_python": "0112bf3c",
+          "target_objdump": "0112bf3c"
+        },
+        {
+          "role": "f11a_parser_dispatch",
+          "site": "0103a996",
+          "raw_bytes": "07e0af8a",
+          "symbol": "console630_parser_hook",
+          "target_python": "0112bef4",
+          "target_objdump": "0112bef4"
+        }
+      ],
+      "constructor": {
+        "old_allocation": 64,
+        "new_allocation": 96,
+        "old_zero": 64,
+        "new_zero": 96,
+        "tail_offset": 64,
+        "tail_bytes": 32
+      },
+      "instruction_listing": "readback-instructions.txt"
+    }
+  },
+  "container_candidate": {
+    "path": "H1E-6.3.6_vectors001-vad-nogrowth-EXPERIMENTAL-NOTINSTALL.bin",
+    "sha256": "d8dd3ad71a68a7ee104b2bb074fef3c8ede86b89026094b74a20f3121e24f5dc",
+    "bytes": 3429376,
+    "readback": {
+      "sha256": "d8dd3ad71a68a7ee104b2bb074fef3c8ede86b89026094b74a20f3121e24f5dc",
+      "bytes": 3429376,
+      "decoded_system_sha256": "c5c91e98f76a6ee14ab3e6dd7a99c24b7b3bdd3dd7bd50ca07147e3f5f923ea7",
+      "decoded_system_bytes": 1237504,
+      "boot_decoded_sha256": "7bd8bce552f7a07d3ce5bd5f25a71eb162e46ae71118d4e495e285b6034fc168",
+      "outer_header_crc32": "0x48acb03c",
+      "outer_data_crc32": "0x4ee4f38a",
+      "partitions": [
+        {
+          "name": "ota.xml",
+          "offset": 512,
+          "size": 1533,
+          "crc32": "0x376ef5eb",
+          "sha256": "cb0b05e1f92d35d82c6d2bccb1196e21f0fb83cbd7bbb644f7604c044370d5cc",
+          "payload_byte_identical_to_baseline": false
+        },
+        {
+          "name": "zephyr.bin",
+          "offset": 2048,
+          "size": 1237504,
+          "crc32": "0x16eb7abe",
+          "sha256": "626703f6c11b58583da7f51026e76ef4db151feaaf7d082c1d6445f1ad40688f",
+          "payload_byte_identical_to_baseline": false
+        },
+        {
+          "name": "RomeApp.bin",
+          "offset": 1240064,
+          "size": 430020,
+          "crc32": "0x4da37140",
+          "sha256": "3d458efc546c2bf54460174df29f4c2ac353f2a5e68ad6d2a53f7eb8b48cedec",
+          "payload_byte_identical_to_baseline": true
+        },
+        {
+          "name": "UAC.bin",
+          "offset": 1670144,
+          "size": 1024,
+          "crc32": "0xd18d87df",
+          "sha256": "c665ce239c7fd7983340d662765fd9217542b1d809b77b2b00517a2abc85f872",
+          "payload_byte_identical_to_baseline": true
+        },
+        {
+          "name": "IG1202dl.bin",
+          "offset": 1671680,
+          "size": 704000,
+          "crc32": "0xc6d2f351",
+          "sha256": "5712e05f93cd8d6d0a5c27c7977aebdf179dc8e841984b8bf82d979a113f0376",
+          "payload_byte_identical_to_baseline": true
+        },
+        {
+          "name": "sdfs.bin",
+          "offset": 2376192,
+          "size": 1048192,
+          "crc32": "0x2b4d60f7",
+          "sha256": "23eae8c812187e8fbddf12e0de8375d0514ae5b05213d17d7ebbec0a4414126d",
+          "payload_byte_identical_to_baseline": true
+        },
+        {
+          "name": "mbrec.bin",
+          "offset": 3424768,
+          "size": 4096,
+          "crc32": "0xffd9bfbc",
+          "sha256": "133358b389b9995dcb0430a52360dde0f4c17bbf6ecb05b51af387d5b75f2ec5",
+          "payload_byte_identical_to_baseline": true
+        }
+      ],
+      "ota_xml_changed_fields": [
+        "/ota_firmware/partitions/partition[zephyr.bin]/checksum"
+      ],
+      "checks": [
+        "independent ACTTEST0 directory and CRC readback",
+        "pinned parser agreement",
+        "exact same partition offsets and container length",
+        "only zephyr size/CRC XML fields changed",
+        "boot/version and other partition payloads byte-identical",
+        "decoded zephyr equals candidate SYS"
+      ]
+    }
+  },
+  "read_only_base_inputs_unchanged_after_build": {
+    "base_container": true,
+    "base_system": true,
+    "base_console_elf": true,
+    "base_console_bin": true,
+    "base_router_elf": true,
+    "base_router_bin": true,
+    "integration_builder_reference": true,
+    "container_packer_reference": true,
+    "base_composer": true,
+    "base_verifier": true,
+    "sdk": true,
+    "decoder": true,
+    "parser": true
+  },
+  "remaining_gates": [
+    "shared no-growth linker/reservation acceptance is required before treating placement as qualified",
+    "same-version installer acceptance is not tested",
+    "no target CK802 execution or physical H1E VAD behavior was tested",
+    "no hardware boot, power, thermal, or recovery qualification was performed",
+    "native provider freshness and VAD/speech meaning remain unverified"
+  ],
+  "interpretation": "Offline exact-image and ACTTEST0 structure/readback evidence only; no install or release qualification."
+}

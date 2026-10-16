@@ -1,0 +1,192 @@
+{
+  "schema": "h1e-vad-sparse-source-hunks-v2",
+  "status": "conditional_source_hunks_only_not_composed_or_installable",
+  "profile": "ck802-sdk-flags",
+  "byte_order_note": "before_hex and after_hex are raw file bytes, little-endian per halfword; they are not objdump display words.",
+  "current_system_sha256": "abff684071be35f29286010c13e27f8af51de364efbaedffdd12bb6e85ebd360",
+  "current_system_bytes": 1237504,
+  "current_container_version": 393990,
+  "current_console_elf_sha256": "105ddea56a8879e40cd0a0fa570203edae3eb4b22dbccd4da870acda8a1fa8ee",
+  "current_console_symbols": {
+    "console630_parse_current": "0112b70c",
+    "console630_response_current": "0112b800"
+  },
+  "baseline_393988_sha256": "b338e4d5e7d456dd2b7a0048bb8e2c338e2464ad25029267b5e46cb4ad880c2f",
+  "new_elf_sha256": "8cdf67a3d019a206296207817ab55f18477e88ea96fcf611d10fa7a563b744e8",
+  "new_module_base": "0112f000",
+  "firmware_image_generated": false,
+  "composed": false,
+  "applied": false,
+  "installed": false,
+  "target_qualified": false,
+  "constructor_section_bytes": 140,
+  "constructor_instruction_bytes": 16,
+  "excluded_constructor_padding_bytes": 124,
+  "total_instruction_bytes": 28,
+  "old_393988_preimage_comparison": {
+    "matches": 8,
+    "mismatches": 2,
+    "per_hunk": [
+      {
+        "address": "01020b62",
+        "old_preimage": "ffe303f8",
+        "current_preimage": "ffe303f8",
+        "matches_old": true
+      },
+      {
+        "address": "01021054",
+        "old_preimage": "4030",
+        "current_preimage": "4030",
+        "matches_old": true
+      },
+      {
+        "address": "0102105c",
+        "old_preimage": "00b5",
+        "current_preimage": "00b5",
+        "matches_old": true
+      },
+      {
+        "address": "0102106a",
+        "old_preimage": "0095",
+        "current_preimage": "0095",
+        "matches_old": true
+      },
+      {
+        "address": "01021070",
+        "old_preimage": "403ce30f",
+        "current_preimage": "403ce30f",
+        "matches_old": true
+      },
+      {
+        "address": "0102109e",
+        "old_preimage": "4032",
+        "current_preimage": "4032",
+        "matches_old": true
+      },
+      {
+        "address": "010210a8",
+        "old_preimage": "e095",
+        "current_preimage": "e095",
+        "matches_old": true
+      },
+      {
+        "address": "010210de",
+        "old_preimage": "6095",
+        "current_preimage": "6095",
+        "matches_old": true
+      },
+      {
+        "address": "0103907a",
+        "old_preimage": "07e08194",
+        "current_preimage": "07e01395",
+        "matches_old": false
+      },
+      {
+        "address": "0103a996",
+        "old_preimage": "07e0cf87",
+        "current_preimage": "07e06188",
+        "matches_old": false
+      }
+    ],
+    "mismatch_reason": "Current 393990 already routes parser/response sites through its vector-console hooks; this module's hook branches target new wrappers that forward non-F11A traffic to those current console functions."
+  },
+  "hunks": [
+    {
+      "address": "01020b62",
+      "width": 4,
+      "role": "native_poll_bridge",
+      "before_hex": "ffe303f8",
+      "after_hex": "08e01575",
+      "matches_393988_preimage": true,
+      "linked_target_symbol": "h1e_vad_native_poll_bridge",
+      "linked_target_address": "0112f58c",
+      "decoded_bsr_target_from_raw_bytes": "0112f58c",
+      "link_register_after_call": "01020b66"
+    },
+    {
+      "address": "01021054",
+      "width": 2,
+      "role": "allocate_96",
+      "before_hex": "4030",
+      "after_hex": "6030",
+      "matches_393988_preimage": true
+    },
+    {
+      "address": "0102105c",
+      "width": 2,
+      "role": "retain_private_pointer",
+      "before_hex": "00b5",
+      "after_hex": "c36d",
+      "matches_393988_preimage": true
+    },
+    {
+      "address": "0102106a",
+      "width": 2,
+      "role": "private_failure_pointer",
+      "before_hex": "0095",
+      "after_hex": "1f6c",
+      "matches_393988_preimage": true
+    },
+    {
+      "address": "01021070",
+      "width": 4,
+      "role": "final_publication_decision",
+      "before_hex": "403ce30f",
+      "after_hex": "08e04c73",
+      "matches_393988_preimage": true,
+      "linked_target_symbol": "late_publication_stub",
+      "linked_target_address": "0112f708",
+      "decoded_bsr_target_from_raw_bytes": "0112f708",
+      "link_register_after_call": "01021074"
+    },
+    {
+      "address": "0102109e",
+      "width": 2,
+      "role": "zero_96",
+      "before_hex": "4032",
+      "after_hex": "6032",
+      "matches_393988_preimage": true
+    },
+    {
+      "address": "010210a8",
+      "width": 2,
+      "role": "retain_private_pointer_after_zero",
+      "before_hex": "e095",
+      "after_hex": "df6d",
+      "matches_393988_preimage": true
+    },
+    {
+      "address": "010210de",
+      "width": 2,
+      "role": "private_gpio_object",
+      "before_hex": "6095",
+      "after_hex": "df6c",
+      "matches_393988_preimage": true
+    },
+    {
+      "address": "0103907a",
+      "width": 4,
+      "role": "f11a_response_dispatch",
+      "before_hex": "07e01395",
+      "after_hex": "07e017b3",
+      "matches_393988_preimage": false,
+      "linked_target_symbol": "console630_response_hook",
+      "linked_target_address": "0112f6a8",
+      "decoded_bsr_target_from_raw_bytes": "0112f6a8",
+      "link_register_after_call": "0103907e"
+    },
+    {
+      "address": "0103a996",
+      "width": 4,
+      "role": "f11a_parser_dispatch",
+      "before_hex": "07e06188",
+      "after_hex": "07e065a6",
+      "matches_393988_preimage": false,
+      "linked_target_symbol": "console630_parser_hook",
+      "linked_target_address": "0112f660",
+      "decoded_bsr_target_from_raw_bytes": "0112f660",
+      "link_register_after_call": "0103a99a"
+    }
+  ],
+  "capacity_note": "The hypothetical link address is not a declared reservation and this manifest does not establish SYS partition capacity or authorize image composition."
+}

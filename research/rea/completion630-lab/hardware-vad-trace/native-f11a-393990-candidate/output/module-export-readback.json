@@ -1,0 +1,12 @@
+{
+  "status": "linked_text_section_export_only",
+  "elf_sha256": "8cdf67a3d019a206296207817ab55f18477e88ea96fcf611d10fa7a563b744e8",
+  "section": ".vad_text",
+  "section_address": "0112f000",
+  "module_path": "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-f11a-393990-candidate/output/module-vad-text.bin",
+  "module_bytes": 1860,
+  "module_sha256": "c9f402200c48a278c997b8ac9e568b811d256994129798418cfc16a6adc8e472",
+  "firmware_image_generated": false,
+  "composed": false,
+  "installed": false
+}
