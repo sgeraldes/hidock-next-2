@@ -37,3 +37,10 @@ apps/electron/spec013-*-staged/
 apps/electron/src/spec013-*-staged/
 # Leftovers of a QA run that wrote fixtures under __tests__.
 **/__tests__/.luna-*/
+# Internal notes and run logs that name accounts, people or local paths.
+apps/electron/*-stderr*.txt
+apps/electron/app-err.txt
+apps/electron/F1-*-report.md
+/completion-*/
+docs/*private-panels*.md
+apps/electron/scripts/resume-claude2kiro-review.ps1
