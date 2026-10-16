@@ -1,0 +1,32 @@
+{
+  "status": "blocked_or_failed_exact_instruction_execution",
+  "image_sha256": "043afb17fbc868474a33c999ac30473839ab188ba22f46adc95914be6649a918",
+  "elf_sha256": "50d0a27d79ccc7813a0a5150a5e6ed00d77171a4c3c3f8f7aa4566bc4d734a80",
+  "error": "java.lang.IllegalStateException: native getter output pointer bound",
+  "cases": [
+    {
+      "id": "f11a-absent-snapshot-response",
+      "status": "passed",
+      "expected": "UNAVAILABLE with zero payload and no getter",
+      "actual": {
+        "return": 32,
+        "reply_hex": "0201000000000000000000000000000000000000000000000000000000000000",
+        "getter_calls": 0
+      },
+      "executed_instructions": 1060,
+      "modeled_native_getter_calls": 0
+    },
+    {
+      "id": "f11a-present-snapshot-response",
+      "status": "passed",
+      "expected": "OK/HAS_SAMPLE with fixture telemetry",
+      "actual": {
+        "return": 32,
+        "reply_hex": "0001010100000005000000040000000087654321000000000000000000000008",
+        "getter_calls": 0
+      },
+      "executed_instructions": 1018,
+      "modeled_native_getter_calls": 0
+    }
+  ]
+}

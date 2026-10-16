@@ -1,0 +1,43 @@
+{
+  "schema": "h1e-vad-combined-slots-393992-container-readback-v1",
+  "status": "offline_container_composed_readback_verified_EXPERIMENTAL_NOTINSTALL",
+  "identity": {
+    "numeric": 393992,
+    "version_name": "6.3.8_vad001",
+    "ota_version_code": "0x60308",
+    "board": "ats2835p_evb"
+  },
+  "system_input": {
+    "path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/out-NOTINSTALL/compose-3/system-decoded-NOTINSTALL.bin",
+    "sha256": "043afb17fbc868474a33c999ac30473839ab188ba22f46adc95914be6649a918",
+    "bytes": 1237504,
+    "same_composed_sys_readback": true
+  },
+  "container": {
+    "path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/out-NOTINSTALL/compose-3/H1E-6.3.8_vad001-EXPERIMENTAL-NOT-INSTALL.bin",
+    "sha256": "b6bf41d0359748c26242a902cf2949de6a18b216a2853a35f3a5d189b8b3f9ba",
+    "bytes": 3429376
+  },
+  "baseline_container_sha256": "d0cd083ff19d56325dca12ea7785c4deb270cf2ef68fa6b7af1c64b0baa651a0",
+  "partition_offsets_and_sizes_unchanged": true,
+  "unchanged_other_payloads_preserved": true,
+  "system_decodes_to_exact_compose3_sys": true,
+  "boot_identity_and_crc_updated_instruction_bytes_unchanged": true,
+  "all_xml_partition_sizes_and_checksums_match_actual_directory": true,
+  "sdk_parse_firmware_image": {
+    "accepted": true,
+    "receipt_path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/receipts/compose-3/sdk-parser.json",
+    "receipt_sha256": "aa8a7a81d3a7ed9d62060e89efb94f770ec3d6b3ba24e5690993e37e61a420f9",
+    "parsed": {
+      "model": "hidock-h1e",
+      "board": "ats2835p_evb",
+      "versionNumber": 393992,
+      "versionName": "6.3.8_vad001",
+      "bytes": 3429376,
+      "fileCount": 7
+    }
+  },
+  "sdk_packer_sha256": "30b5d37f67bb57af44d02da829429c59bb734d5c7c0acc1a1ce5f15029401c17",
+  "sdk_log_tail": "Reused the exact pinned container emitted by the single WSL SDK pack; no repack performed.",
+  "hardware_or_install_tested": false
+}

@@ -1,0 +1,13 @@
+# Final status: compose-3 VAD candidate
+
+**Status, updated after the authorized test:** installed H1E 393992/6.3.8; operational postboot readbacks and physical cached-observation transport passed, original catalog/settings preserved. Controlled H1E output speech playback correlated with raw 0/1 changes. General speech semantics and microphone-only detection remain unqualified; no general release is claimed. The offline receipts below retain their original pre-install scope. Current physical evidence: [qualification report](../../../../../../../docs/qa/h1e-vad-6.3.8-2026-10-16.md).
+
+Compose-3 uses a wrapper-only CK802 `-fno-lto` compile for `h1e_vad_native_poll_bridge`; the other pinned LTO objects and linked sources remain unchanged. The prior LTO image contained an empty bridge body at `0x01128dba`, so the hook branched into `00 00` BKPT fill. The underlying reason LTO omitted the externally defined function body is **not proven**. The no-LTO wrapper is an observed link-level mitigation: its real 24-byte bridge is at `0x01128e34`, and the reachable binding/guard/loader path remains in the map and disassembly.
+
+The failed compose-1 container (`619e4fe3…6fac4`) and its readback are preserved. The SDK parser rejected it because the `mbrec.bin` XML checksum (4292460476) differed from the actual directory CRC32 (3659169339). The compose-2 SYS (`28be9ebe…ba4e768`) and its receipts are also preserved; exact instruction review found the zero-sized bridge/BKPT defect. Neither is the selected candidate.
+
+The selected artifacts are SYS `043afb17fbc868474a33c999ac30473839ab188ba22f46adc95914be6649a918` (1,237,504 B) and container `b6bf41d0359748c26242a902cf2949de6a18b216a2853a35f3a5d189b8b3f9ba` (3,429,376 B). The Windows SDK parser accepted version 393992 / `6.3.8_vad001`; directory/XML sizes and CRCs match, the decoded SYS matches the pinned SYS, and the full 4 KiB console reservation is preserved.
+
+Exact-instruction QA passed 6/6 fixtures on the selected SYS: F11A absent/present response, poll success/failure, and non-VAD parser/response forwarding. Constructor cases were intentionally skipped because they were already accepted on the prior byte-pinned candidate. This fixture evidence does not establish DSP, timing, boot, or hardware behavior. QA receipt: [`receipt.json`](../../../router-only-exact-image-qa-20261016/out-NOTINSTALL/run-combined-revision3-20261016T2024Z-hook-through/receipt.json).
+
+Receipts: [`final-receipt.json`](receipts/compose-3/final-receipt.json), [`container-readback.json`](receipts/compose-3/container-readback.json), [`composition-readback.json`](receipts/compose-3/composition-readback.json). The binary filenames and historical failure outputs are unchanged.

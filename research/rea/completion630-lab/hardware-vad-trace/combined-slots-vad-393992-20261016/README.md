@@ -1,0 +1,5 @@
+# Combined slots + VAD candidate
+
+The current revision is [`revisions/poll-bridge-retained-20261016/FINAL-STATUS.md`](revisions/poll-bridge-retained-20261016/FINAL-STATUS.md). Its compose-3 image was installed in the explicitly authorized H1E test on 16 October 2026. Operational postboot readbacks, preserved original data/settings and real F11A native-poll observations passed; raw values correlated with controlled H1E output playback. Microphone-only speech semantics remain unqualified. See [physical qualification](../../../../../docs/qa/h1e-vad-6.3.8-2026-10-16.md). This is an engineering image, not a general release; frozen binary filenames still contain NOT-INSTALL.
+
+Do not select the root-level `compose_combined.py` for current work: it is the frozen historical compose-2 composer, whose SYS has a zero-sized poll bridge and BKPT at the hook target. Its output and receipts are retained as failure evidence. Use the compose-3 revision receipts and exact output paths in the final status record.

@@ -1,0 +1,2 @@
+   text	   data	    bss	    dec	    hex	filename
+   1400	      0	      0	   1400	    578	/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/link/output-nonlto-bridge/vad-router-only-slots-393992-nonlto-poll-bridge-NOTINSTALL.elf

@@ -243,6 +243,15 @@ describe('registerJensenHandlers', () => {
     await expect(mockHandlers['jensen:beginOwnedRecordingRestore'](makeEvent(), 'owned', { ownedRecordingRestoreConsent: true, audioQuiescent: true })).rejects.toThrow('trusted application window')
     expect(mockJensen.getDeviceInfo).not.toHaveBeenCalled()
   })
+  it('admits only the trusted diagnostic/VAD install targets and rejects arbitrary target paths before device I/O', async () => {
+    const event = makeTrustedRestoreEvent()
+    for (const target of ['diagnostic', 'vad'] as const) {
+      await expect(mockHandlers['jensen:prepareFirmwareInstall'](event, target)).rejects.toThrow('qualification is not enabled')
+    }
+    expect(() => mockHandlers['jensen:prepareFirmwareInstall'](event, 'C:/renderer-selected.bin')).toThrow('Unknown firmware target')
+    expect(mockJensen.getDeviceInfo).not.toHaveBeenCalled()
+    expect(mockJensen.getFirmwareUpdatePreflight).not.toHaveBeenCalled()
+  })
   it('rejects extra renderer path authority in restore assurance', async () => {
     await expect(mockHandlers['jensen:beginOwnedRecordingRestore'](makeTrustedRestoreEvent(), 'owned', { ownedRecordingRestoreConsent: true, audioQuiescent: true, filePath: 'C:/outside.wav' })).rejects.toThrow('Explicit recording restore')
     expect(mockJensen.getDeviceInfo).not.toHaveBeenCalled()
@@ -257,6 +266,66 @@ describe('registerJensenHandlers', () => {
     expect(reply.commandAttempted).toBe(false)
     expect(mockJensen.getDeviceInfo).not.toHaveBeenCalled()
   })
+  describe('jensen:getFirmwareConsoleStatus request validation', () => {
+    const slotsStatus = { request: 'slots', slotAddress: 0xef5c, targetWord: 1, pllWord: 2, imageAttested: false }
+    const refusedBeforeDevice = [
+      ['unknown string', 'reboot'],
+      ['upper case', 'SLOTS'],
+      ['mixed case', 'Slots'],
+      ['trailing newline', 'slots\n'],
+      ['leading space', ' slots'],
+      ['address argument', 'slots 0000ef5c'],
+      ['address equals form', 'slots=0000ef5c'],
+      ['length argument', 'slots 40'],
+      ['empty string', ''],
+      ['object value', { request: 'slots' }],
+      ['object with address', { request: 'slots', address: 0xef5c, length: 40 }],
+      ['array value', ['slots']],
+      ['null', null],
+      ['number', 0xef5c],
+    ] as const
+
+    it('delegates the literal slots request from a trusted sender to the serialized device call', async () => {
+      mockJensen.getFirmwareConsoleStatus = vi.fn().mockResolvedValue(slotsStatus)
+      const result = await mockHandlers['jensen:getFirmwareConsoleStatus'](makeTrustedRestoreEvent(), 'slots')
+      expect(result).toEqual(slotsStatus)
+      expect(mockJensen.getFirmwareConsoleStatus).toHaveBeenCalledTimes(1)
+      expect(mockJensen.getFirmwareConsoleStatus).toHaveBeenCalledWith('slots')
+    })
+
+    it('runs the slots device call inside the device operation serializer', async () => {
+      const { serializeDeviceOperation } = await import('../../services/device-operation-serializer')
+      let releaseOwner!: () => void
+      const owner = serializeDeviceOperation(() => new Promise<void>(resolve => { releaseOwner = resolve }))
+      mockJensen.getFirmwareConsoleStatus = vi.fn().mockResolvedValue(slotsStatus)
+      const pending = mockHandlers['jensen:getFirmwareConsoleStatus'](makeTrustedRestoreEvent(), 'slots')
+      await new Promise(resolve => setTimeout(resolve, 20))
+      expect(mockJensen.getFirmwareConsoleStatus).not.toHaveBeenCalled()
+      releaseOwner()
+      await owner
+      expect(await pending).toEqual(slotsStatus)
+      expect(mockJensen.getFirmwareConsoleStatus).toHaveBeenCalledTimes(1)
+    })
+
+    it.each(refusedBeforeDevice)('refuses %s from a trusted sender before any device call', async (_name, request) => {
+      mockJensen.getFirmwareConsoleStatus = vi.fn().mockResolvedValue(slotsStatus)
+      await expect(
+        Promise.resolve().then(() => mockHandlers['jensen:getFirmwareConsoleStatus'](makeTrustedRestoreEvent(), request)),
+      ).rejects.toThrow('supported literal requests')
+      expect(mockJensen.getFirmwareConsoleStatus).not.toHaveBeenCalled()
+    })
+
+    it('refuses an untrusted sender before validating or scheduling the device call', async () => {
+      mockJensen.getFirmwareConsoleStatus = vi.fn().mockResolvedValue(slotsStatus)
+      for (const request of ['slots', 'reboot', { request: 'slots' }]) {
+        await expect(
+          Promise.resolve().then(() => mockHandlers['jensen:getFirmwareConsoleStatus'](makeEvent(), request)),
+        ).rejects.toThrow('trusted application window')
+      }
+      expect(mockJensen.getFirmwareConsoleStatus).not.toHaveBeenCalled()
+    })
+  })
+
   it('returns read-only update prerequisites without exposing the device serial', async () => {
     mockJensen.getModel.mockReturnValue('hidock-h1e')
     const result = await mockHandlers['jensen:getFirmwareUpdatePreflight'](makeEvent())

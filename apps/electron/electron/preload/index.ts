@@ -1490,6 +1490,7 @@ export interface ElectronAPI {
     getProtocolDiagnostics: () => Promise<import('@hidock/jensen-protocol').ProtocolDiagnostics>
     getValidationMemory: () => Promise<{ main: { rss: number; heapTotal: number; heapUsed: number; external: number; arrayBuffers?: number }; processes: Array<{ pid: number; type: string; workingSetKB: number; privateKB: number }> } | null>
     getFirmwareConsoleStatus: (request: import('@hidock/jensen-protocol').FirmwareConsoleRequest) => Promise<import('@hidock/jensen-protocol').FirmwareConsoleStatus | null>
+    getNativeVadObservation: () => Promise<import('@hidock/jensen-protocol').NativeVadObservationCandidate | null>
     beginOwnedScratchUpload: (descriptor: DeviceScratchUploadDescriptor, assurance: DeviceScratchWriteAssurance) => Promise<DeviceScratchUploadResult>
     appendOwnedScratchUpload: (id: string, request: DeviceScratchAppend, assurance: DeviceScratchWriteAssurance) => Promise<DeviceScratchUploadResult>
     commitOwnedScratchUpload: (id: string, assurance: DeviceScratchWriteAssurance) => Promise<DeviceScratchUploadResult>
@@ -1515,7 +1516,7 @@ export interface ElectronAPI {
     onAudioDiagnostics: (callback: (state: DeviceAudioDiagnosticsState) => void) => () => void
     getRecordingCapabilities: () => Promise<DeviceRecordingCapabilities>
     getFirmwareUpdatePreflight: () => Promise<Omit<FirmwareUpdatePreflight, 'serialNumber'> | null>
-    prepareFirmwareInstall: (target?: 'hardened' | 'stock-forward') => Promise<unknown>
+    prepareFirmwareInstall: (target?: 'hardened' | 'stock-forward' | 'diagnostic' | 'vad') => Promise<unknown>
     getFirmwareInstallAttempts: () => Promise<unknown>
     executeFirmwareInstall: (id: string, sha256: string) => Promise<unknown>
     observeFirmwareInstall: (id: string) => Promise<unknown>
@@ -2443,6 +2444,7 @@ const electronAPI: ElectronAPI = {
     getProtocolDiagnostics: () => callIPC('jensen:getProtocolDiagnostics'),
     getValidationMemory: () => callIPC('jensen:getValidationMemory'),
     getFirmwareConsoleStatus: request => callIPC('jensen:getFirmwareConsoleStatus', request),
+    getNativeVadObservation: () => callIPC('jensen:getNativeVadObservation'),
     beginOwnedScratchUpload: (descriptor, assurance) => callIPC('jensen:beginOwnedScratchUpload', descriptor, assurance),
     appendOwnedScratchUpload: (id, request, assurance) => callIPC('jensen:appendOwnedScratchUpload', id, request, assurance),
     commitOwnedScratchUpload: (id, assurance) => callIPC('jensen:commitOwnedScratchUpload', id, assurance),

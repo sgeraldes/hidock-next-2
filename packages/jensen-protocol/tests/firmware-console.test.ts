@@ -412,3 +412,125 @@ describe('proposed diagnostic firmware 6.3.6 / 393990 console admission', () => 
       expect(h.sent).toEqual([])
     })
 })
+
+describe('F117 slots contract for exact 393991 / 6.3.7', () => {
+  const slotsText = (tgt: string, pll: string) => `slot=0000ef5c tgt=${tgt} pll=${pll}\n`
+  const good = slotsText('00000001', 'c0001014'), refused = 'refused p=0000002a\n'
+  const as637 = (h: Awaited<ReturnType<typeof owner>>) => { h.device.versionNumber = 393991; h.device.versionCode = '6.3.7' }
+
+  it('encodes only the literal five-byte slots request and keeps the four-command help list honest', () => {
+    expect(Array.from(encodeFirmwareConsoleRequest('slots'))).toEqual([115, 108, 111, 116, 115])
+    expect(FIRMWARE_CONSOLE_REQUESTS).toEqual(['help', 'version', 'uptime', 'vectors'])
+    expect(parseFirmwareConsoleStatus('help', text('help\nversion\nuptime\nvectors\n'), '6.3.6')).toEqual({ request: 'help', commands: ['help', 'version', 'uptime', 'vectors'], imageAttested: false })
+    expect(parseFirmwareConsoleStatus('help', text('help\nversion\nuptime\nvectors\nslots\n'), '6.3.7')).toBeNull()
+  })
+  it.each(['slots\n', 'slots\0', 'Slots', 'SLOTS', 'slot', 'slotss', 'slots 0000ef5c', 'slots 0 4', ' slots', 'slots '])('rejects argument or variant encoding %j', input => {
+    expect(() => encodeFirmwareConsoleRequest(input as FirmwareConsoleRequest)).toThrow()
+  })
+  it('parses the exact 40-byte success reply into raw unsigned words without rate or attestation', () => {
+    const reply = text(good)
+    expect(reply).toHaveLength(41)
+    const status = parseFirmwareConsoleStatus('slots', reply, '6.3.7')
+    expect(status).toEqual({ request: 'slots', slotAddress: 0x0000ef5c, targetWord: 1, pllWord: 0xc0001014, imageAttested: false })
+    expect(Object.keys(status ?? {}).sort()).toEqual(['imageAttested', 'pllWord', 'request', 'slotAddress', 'targetWord'])
+    expect(parseFirmwareConsoleStatus('slots', text(slotsText('ffffffff', '80000000')), '6.3.7')).toMatchObject({ targetWord: 0xffffffff, pllWord: 0x80000000 })
+  })
+  it('parses the exact 19-byte refusal into an uninterpreted raw pWord', () => {
+    const reply = text(refused)
+    expect(reply).toHaveLength(20)
+    expect(parseFirmwareConsoleStatus('slots', reply, '6.3.7')).toEqual({ request: 'slots', refused: true, pWord: 0x2a, imageAttested: false })
+    expect(parseFirmwareConsoleStatus('slots', text('refused p=ffffffff\n'), '6.3.7')).toMatchObject({ pWord: 0xffffffff })
+  })
+  it('rejects both slots replies under the default and every older firmware expectation', () => {
+    for (const body of [text(good), text(refused)]) {
+      expect(parseFirmwareConsoleStatus('slots', body)).toBeNull()
+      for (const expected of ['6.3.2', '6.3.4', '6.3.6'] as const) expect(parseFirmwareConsoleStatus('slots', body, expected)).toBeNull()
+    }
+  })
+  it.each([
+    ['uppercase hex', slotsText('0000000A', 'c0001014')], ['mixed-case hex', slotsText('00000001', 'C0001014')],
+    ['short tgt', slotsText('0000001', 'c0001014')], ['long pll', slotsText('00000001', 'c00010140')], ['0x prefix', slotsText('0x000001', 'c0001014')],
+    ['non-hex', slotsText('0000000g', 'c0001014')], ['wrong slot', 'slot=0000ef5d tgt=00000001 pll=c0001014\n'], ['uppercase slot', 'slot=0000EF5C tgt=00000001 pll=c0001014\n'],
+    ['short slot', 'slot=000ef5c tgt=00000001 pll=c0001014\n'], ['reordered', 'slot=0000ef5c pll=c0001014 tgt=00000001\n'], ['wrong tag', 'slot=0000ef5c tgt=00000001 clk=c0001014\n'],
+    ['double space', 'slot=0000ef5c  tgt=00000001 pll=c0001014\n'], ['missing LF', 'slot=0000ef5c tgt=00000001 pll=c0001014'], ['CRLF', 'slot=0000ef5c tgt=00000001 pll=c0001014\r\n'],
+    ['trailing LF', `${good}\n`], ['trailing text', `${good}x`], ['second line', `${good}${good}`], ['leading LF', `\n${good}`], ['trailing space', 'slot=0000ef5c tgt=00000001 pll=c0001014 \n'],
+    ['vectors text', 'dma=00000458 ring=00000478 clk=c0001014\n'],
+    ['refusal uppercase', 'refused p=0000002A\n'], ['refusal short', 'refused p=000002a\n'], ['refusal long', 'refused p=00000002a\n'], ['refusal 0x', 'refused p=0x2a\n'],
+    ['refusal CRLF', 'refused p=0000002a\r\n'], ['refusal missing LF', 'refused p=0000002a'], ['refusal trailing LF', `${refused}\n`], ['refusal trailing text', `${refused}x`],
+    ['refusal extra field', 'refused p=0000002a q=00000001\n'], ['refusal wrong word', 'denied p=0000002a\n'], ['refusal wrong tag', 'refused q=0000002a\n']
+  ])('rejects malformed slots reply: %s', (_name, reply) => {
+    expect(parseFirmwareConsoleStatus('slots', text(reply), '6.3.7')).toBeNull()
+  })
+  it('rejects non-zero ACK, empty, ACK-only, truncated and overlong slots bodies', () => {
+    for (const ack of [1, 2, 0x17, 0xff]) { expect(parseFirmwareConsoleStatus('slots', text(good, ack), '6.3.7')).toBeNull(); expect(parseFirmwareConsoleStatus('slots', text(refused, ack), '6.3.7')).toBeNull() }
+    for (const body of [new Uint8Array(), Uint8Array.of(0), text(good.slice(0, -1)), text(good.slice(0, 20)), text(refused.slice(0, -1)), Uint8Array.of(...text(good), 0), new Uint8Array(257)]) {
+      expect(parseFirmwareConsoleStatus('slots', body, '6.3.7')).toBeNull()
+    }
+  })
+  it('does not accept a slots reply under another request, nor another reply under slots', () => {
+    for (const request of ['help', 'version', 'uptime', 'vectors'] as const) {
+      expect(parseFirmwareConsoleStatus(request, text(good), '6.3.6')).toBeNull(); expect(parseFirmwareConsoleStatus(request, text(refused), '6.3.6')).toBeNull()
+    }
+    for (const other of ['help\nversion\nuptime\nvectors\n', 'kernel=1.9.0 firmware=6.3.7\n', 'uptime_ms32=0\n']) expect(parseFirmwareConsoleStatus('slots', text(other), '6.3.7')).toBeNull()
+  })
+
+  const answering = (reply: string) => (bytes: Uint8Array, emit: (bytes: Uint8Array) => void) => {
+    emit(frame(command(bytes), sequence(bytes), command(bytes) === 0xf111 ? profile : text(reply)))
+  }
+  it.each([[good, { request: 'slots', slotAddress: 0xef5c, targetWord: 1, pllWord: 0xc0001014, imageAttested: false }],
+    [refused, { request: 'slots', refused: true, pWord: 0x2a, imageAttested: false }]])('runs F111 then one exact slots F117 on 393991/6.3.7', async (reply, expected) => {
+    const h = await owner(answering(reply)); as637(h)
+    const reading = h.device.getFirmwareConsoleStatus('slots'); await vi.advanceTimersByTimeAsync(30)
+    expect(await reading).toEqual(expected)
+    expect(h.sent.map(command)).toEqual([0xf111, 0xf117])
+    expect(Array.from(h.sent[1].subarray(12))).toEqual([115, 108, 111, 116, 115])
+  })
+  it.each([[393991, '6.3.6'], [393991, '6.3.5'], [393991, '6.3.70'], [393991, '6.3.7 '], [393991, ''], [393990, '6.3.7'], [393988, '6.3.7'], [393986, '6.3.7'], [393992, '6.3.7'], [0, '6.3.7'],
+    [393990, '6.3.6'], [393988, '6.3.4'], [393986, '6.3.2']])('sends zero OUT for slots on mismatched or older pair %s/%j', async (version, code) => {
+    const h = await owner(); h.device.versionNumber = Number(version); h.device.versionCode = String(code)
+    expect(await h.device.getFirmwareConsoleStatus('slots')).toBeNull(); expect(h.sent).toEqual([])
+  })
+  it('sends zero OUT for slots on other models, a blank serial or a missing version', async () => {
+    const h = await owner(); as637(h)
+    for (const model of ['hidock-p1', 'hidock-h1', 'hidock-h1e-x', '', 'HIDOCK-H1E']) { h.device.model = model as typeof h.device.model; expect(await h.device.getFirmwareConsoleStatus('slots')).toBeNull() }
+    h.device.model = 'hidock-h1e'; h.device.serialNumber = ' '; expect(await h.device.getFirmwareConsoleStatus('slots')).toBeNull()
+    h.device.serialNumber = 'SYNTHETIC0001'; h.device.versionCode = null as unknown as string; expect(await h.device.getFirmwareConsoleStatus('slots')).toBeNull()
+    h.device.versionCode = '6.3.7'; h.device.versionNumber = null as unknown as number; expect(await h.device.getFirmwareConsoleStatus('slots')).toBeNull()
+    expect(h.sent).toEqual([])
+  })
+  it('keeps the old requests off the 393991/6.3.7 pair', async () => {
+    const h = await owner(); as637(h)
+    for (const request of ['help', 'version', 'uptime', 'vectors'] as const) expect(await h.device.getFirmwareConsoleStatus(request)).toBeNull()
+    expect(h.sent).toEqual([])
+  })
+  it('keeps the F111 capability check and the deadline: no slots F117 when the capability is malformed or missing', async () => {
+    const malformed = await owner((bytes, emit) => emit(frame(command(bytes), sequence(bytes), Uint8Array.of(0, ...new Uint8Array(16))))); as637(malformed)
+    const first = malformed.device.getFirmwareConsoleStatus('slots'); await vi.advanceTimersByTimeAsync(20)
+    expect(await first).toBeNull(); expect(malformed.sent.map(command)).toEqual([0xf111])
+    const closing = malformed.device.disconnect(); await vi.advanceTimersByTimeAsync(1000); await closing
+    const silent = await owner(); as637(silent)
+    const second = silent.device.getFirmwareConsoleStatus('slots', 1); await vi.advanceTimersByTimeAsync(1100)
+    expect(await second).toBeNull(); expect(silent.sent.map(command)).toEqual([0xf111])
+  })
+  it('does not dispatch slots if the pair changes before the capability reply', async () => {
+    const h = await owner(); as637(h)
+    const reading = h.device.getFirmwareConsoleStatus('slots'); await vi.advanceTimersByTimeAsync(1)
+    h.device.versionNumber = 393990; h.device.versionCode = '6.3.6'
+    h.emit(frame(0xf111, 0, profile)); await vi.advanceTimersByTimeAsync(20)
+    expect(await reading).toBeNull(); expect(h.sent.map(command)).toEqual([0xf111])
+  })
+  it('holds the serialized slot after cancellation until the exact slots reply', async () => {
+    const h = await owner((bytes, emit) => { if (command(bytes) === 0xf111) emit(frame(0xf111, sequence(bytes), profile)) }), cancel = new AbortController(); as637(h)
+    const reading = h.device.getFirmwareConsoleStatus('slots', 5, cancel.signal); await vi.advanceTimersByTimeAsync(15)
+    expect(h.sent.map(command)).toEqual([0xf111, 0xf117]); cancel.abort(); const queued = h.device.getFileCount()
+    await vi.advanceTimersByTimeAsync(10); expect(h.sent.map(command)).toEqual([0xf111, 0xf117])
+    h.emit(frame(0xf117, 1, text(good))); await vi.advanceTimersByTimeAsync(20)
+    expect(await reading).toBeNull(); expect(h.sent.map(command)).toEqual([0xf111, 0xf117, 6])
+    h.emit(frame(6, 2, Uint8Array.of(0, 0, 0, 2))); await vi.advanceTimersByTimeAsync(20); expect(await queued).toEqual({ count: 2 })
+  })
+  it('rejects a malformed slots reply from the device after consuming its frame', async () => {
+    const h = await owner(answering(`${good}\n`)); as637(h)
+    const reading = h.device.getFirmwareConsoleStatus('slots'); await vi.advanceTimersByTimeAsync(30)
+    expect(await reading).toBeNull(); expect(h.sent.map(command)).toEqual([0xf111, 0xf117])
+  })
+})

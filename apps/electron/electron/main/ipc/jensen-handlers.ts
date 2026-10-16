@@ -35,7 +35,7 @@ import { supportsRealtimeFirmware, isFirmwareConsoleRequest, splitRealtimeChanne
 import type { CustomRecordingProfile, CustomRecordingFormat, CustomMarkerRules } from '@hidock/jensen-protocol'
 import { getJensenDevice, setFirmwareRecoveryChecker, setDeviceValidationChecker } from '../services/jensen'
 import { FirmwareInstallJournal } from '../services/firmware-install-journal'
-import { FirmwareInstallService } from '../services/firmware-install'
+import { FirmwareInstallService, type FirmwareInstallTarget } from '../services/firmware-install'
 import { retryPendingFileCleanups } from '../services/recording-deletion-service'
 import { serializeDeviceOperation } from '../services/device-operation-serializer'
 import { emitActivityLog } from '../services/activity-log'
@@ -379,6 +379,8 @@ export function registerJensenHandlers(): void {
       await scratch.hasUnresolvedOwnership() || await restore.hasUnresolvedOwnership(),
     artifactPath: app.isPackaged ? join(process.resourcesPath, 'firmware', 'h1e-rea-hardened.bin') : join(app.getAppPath(), 'resources', 'firmware', 'h1e-rea-hardened.bin'),
     forwardStockArtifactPath: app.isPackaged ? join(process.resourcesPath, 'firmware', 'h1e-stock-forward.bin') : join(app.getAppPath(), 'resources', 'firmware', 'h1e-stock-forward.bin'),
+    diagnosticArtifactPath: app.isPackaged ? undefined : join(app.getAppPath(), '..', '..', 'research', 'rea', 'completion630-lab', 'firmware', 'capture-vector-selected-diagnostic', 'out-NOTINSTALL', 'container-compose3', 'H1E-6.3.6_vectors001-EXPERIMENTAL-NOT-INSTALL.bin'),
+    vadArtifactPath: app.isPackaged ? undefined : join(app.getAppPath(), '..', '..', 'research', 'rea', 'completion630-lab', 'hardware-vad-trace', 'combined-slots-vad-393992-20261016', 'revisions', 'poll-bridge-retained-20261016', 'out-NOTINSTALL', 'compose-3', 'H1E-6.3.8_vad001-EXPERIMENTAL-NOT-INSTALL.bin'),
     serialize: serializeDeviceOperation,
     idle: () => audioSession.snapshot().status === 'idle' && !getJensenDevice().isOperationInProgress() && !hasPendingTransfer(),
   })
@@ -545,8 +547,12 @@ export function registerJensenHandlers(): void {
   })
   ipcMain.handle('jensen:getFirmwareConsoleStatus', (event, request: unknown) => {
     firmwareSender(event)
-    if (!isFirmwareConsoleRequest(request)) throw Error('Only help, version or uptime is supported')
+    if (!isFirmwareConsoleRequest(request)) throw Error('Firmware console request must be one of the supported literal requests')
     return serializeDeviceOperation(() => getJensenDevice().getFirmwareConsoleStatus(request))
+  })
+  ipcMain.handle('jensen:getNativeVadObservation', event => {
+    firmwareSender(event)
+    return serializeDeviceOperation(() => getJensenDevice().getNativeVadObservation())
   })
   ipcMain.handle('jensen:listFilesDetailed', event => { firmwareSender(event); return storage.list() })
   ipcMain.handle('jensen:getRecordingBackupPreflight', async event => {
@@ -623,8 +629,8 @@ export function registerJensenHandlers(): void {
   })
   ipcMain.handle('jensen:prepareFirmwareInstall', (event, target: unknown = 'hardened') => {
     firmwareSender(event)
-    if (target !== 'hardened' && target !== 'stock-forward') throw Error('Unknown firmware target')
-    return firmwareInstall.prepare(target)
+    if (target !== 'hardened' && target !== 'stock-forward' && target !== 'diagnostic' && target !== 'vad') throw Error('Unknown firmware target')
+    return firmwareInstall.prepare(target as FirmwareInstallTarget)
   })
   ipcMain.handle('jensen:getFirmwareInstallAttempts', event => { firmwareSender(event); return firmwareInstall.status() })
   ipcMain.handle('jensen:executeFirmwareInstall', (event, id: unknown, sha256: unknown) => {

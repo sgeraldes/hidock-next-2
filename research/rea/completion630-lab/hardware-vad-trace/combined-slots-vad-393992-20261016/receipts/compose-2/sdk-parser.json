@@ -1,0 +1,19 @@
+{
+  "scope": "offline parseFirmwareImage call only; no device, installer or hardware; proves host parser acceptance of the metadata, not boot or hardware acceptance",
+  "sdkIndexSha256": "6ae02946a693f9647d1c96b95593503d560e17529e562b5ba972cc810ad7fa0e",
+  "sdkIndexPath": "apps/electron/node_modules/.cache/completion630-runtime/capture-diagnostic-audio-admission-build/index.js",
+  "container": {
+    "path": "G:/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/out-NOTINSTALL/compose-2/H1E-6.3.8_vad001-EXPERIMENTAL-NOT-INSTALL.bin",
+    "sha256": "1c4b0125b70199bdfac1df38e31a0b42190f5114239f86a3d2fddf7aa67a2222",
+    "bytes": 3429376
+  },
+  "parsed": {
+    "model": "hidock-h1e",
+    "board": "ats2835p_evb",
+    "versionNumber": 393992,
+    "versionName": "6.3.8_vad001",
+    "bytes": 3429376,
+    "fileCount": 7
+  },
+  "accepted": true
+}

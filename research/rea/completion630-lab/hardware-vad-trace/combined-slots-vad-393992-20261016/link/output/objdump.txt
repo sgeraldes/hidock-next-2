@@ -1,0 +1,548 @@
+
+/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/link/output/vad-router-only-slots-393992-NOTINSTALL.elf:     file format elf32-csky-little
+
+
+Disassembly of section .router_tail:
+
+01128a40 <vadt_csky_guard_exit>:
+ 1128a40:	c0016420 	mtcr      	r1, cr<0, 0>
+ 1128a44:	783c      	jmp      	r15
+
+01128a46 <vadt_csky_guard_enter>:
+ 1128a46:	c0006020 	mfcr      	r0, cr<0, 0>
+ 1128a4a:	c0807020 	psrclr      	ie
+ 1128a4e:	783c      	jmp      	r15
+
+01128a50 <h1e_vad_load_object>:
+ 1128a50:	14c1      	push      	r4
+ 1128a52:	3300      	movi      	r3, 0
+ 1128a54:	3000      	movi      	r0, 0
+ 1128a56:	b160      	st.w      	r3, (r1, 0x0)
+ 1128a58:	a260      	st.b      	r3, (r2, 0x0)
+ 1128a5a:	106a      	lrw      	r3, 0x85280	// 1128a80 <h1e_vad_load_object+0x30>
+ 1128a5c:	2860      	subi      	r0, 97
+ 1128a5e:	9370      	ld.w      	r3, (r3, 0x40)
+ 1128a60:	5b83      	subi      	r4, r3, 1
+ 1128a62:	6500      	cmphs      	r0, r4
+ 1128a64:	0c0b      	bf      	0x1128a7a	// 1128a7a <h1e_vad_load_object+0x2a>
+ 1128a66:	e4032003 	andi      	r0, r3, 3
+ 1128a6a:	3840      	cmpnei      	r0, 0
+ 1128a6c:	0807      	bt      	0x1128a7a	// 1128a7a <h1e_vad_load_object+0x2a>
+ 1128a6e:	8300      	ld.b      	r0, (r3, 0x0)
+ 1128a70:	233f      	addi      	r3, 64
+ 1128a72:	a200      	st.b      	r0, (r2, 0x0)
+ 1128a74:	b160      	st.w      	r3, (r1, 0x0)
+ 1128a76:	3000      	movi      	r0, 0
+ 1128a78:	1481      	pop      	r4
+ 1128a7a:	3001      	movi      	r0, 1
+ 1128a7c:	07fe      	br      	0x1128a78	// 1128a78 <h1e_vad_load_object+0x28>
+ 1128a7e:	0000      	bkpt
+ 1128a80:	00085280 	.long	0x00085280
+
+01128a84 <put_be32>:
+ 1128a84:	4978      	lsri      	r3, r1, 24
+ 1128a86:	a023      	st.b      	r1, (r0, 0x3)
+ 1128a88:	a060      	st.b      	r3, (r0, 0x0)
+ 1128a8a:	4970      	lsri      	r3, r1, 16
+ 1128a8c:	a061      	st.b      	r3, (r0, 0x1)
+ 1128a8e:	4968      	lsri      	r3, r1, 8
+ 1128a90:	a062      	st.b      	r3, (r0, 0x2)
+ 1128a92:	783c      	jmp      	r15
+
+01128a94 <target_resolve>:
+ 1128a94:	6c07      	mov      	r0, r1
+ 1128a96:	783c      	jmp      	r15
+
+01128a98 <target_pending>:
+ 1128a98:	1062      	lrw      	r3, 0x855c0	// 1128aa0 <target_pending+0x8>
+ 1128a9a:	8b0e      	ld.h      	r0, (r3, 0x1c)
+ 1128a9c:	7401      	zexth      	r0, r0
+ 1128a9e:	783c      	jmp      	r15
+ 1128aa0:	000855c0 	.long	0x000855c0
+
+01128aa4 <load_le32>:
+ 1128aa4:	8061      	ld.b      	r3, (r0, 0x1)
+ 1128aa6:	8040      	ld.b      	r2, (r0, 0x0)
+ 1128aa8:	4368      	lsli      	r3, r3, 8
+ 1128aaa:	6c8c      	or      	r2, r3
+ 1128aac:	8062      	ld.b      	r3, (r0, 0x2)
+ 1128aae:	4370      	lsli      	r3, r3, 16
+ 1128ab0:	8003      	ld.b      	r0, (r0, 0x3)
+ 1128ab2:	6cc8      	or      	r3, r2
+ 1128ab4:	4018      	lsli      	r0, r0, 24
+ 1128ab6:	6c0c      	or      	r0, r3
+ 1128ab8:	783c      	jmp      	r15
+
+01128aba <encode_reply.constprop.1>:
+ 1128aba:	14d3      	push      	r4-r6, r15
+ 1128abc:	6d03      	mov      	r4, r0
+ 1128abe:	6d4b      	mov      	r5, r2
+ 1128ac0:	6c83      	mov      	r2, r0
+ 1128ac2:	201f      	addi      	r0, 32
+ 1128ac4:	3600      	movi      	r6, 0
+ 1128ac6:	a2c0      	st.b      	r6, (r2, 0x0)
+ 1128ac8:	2200      	addi      	r2, 1
+ 1128aca:	6482      	cmpne      	r0, r2
+ 1128acc:	0bfc      	bt      	0x1128ac4	// 1128ac4 <encode_reply.constprop.1+0xa>
+ 1128ace:	3940      	cmpnei      	r1, 0
+ 1128ad0:	0805      	bt      	0x1128ada	// 1128ada <encode_reply.constprop.1+0x20>
+ 1128ad2:	3d40      	cmpnei      	r5, 0
+ 1128ad4:	3202      	movi      	r2, 2
+ 1128ad6:	c4220c20 	incf      	r1, r2, 0
+ 1128ada:	3201      	movi      	r2, 1
+ 1128adc:	3942      	cmpnei      	r1, 2
+ 1128ade:	a441      	st.b      	r2, (r4, 0x1)
+ 1128ae0:	3200      	movi      	r2, 0
+ 1128ae2:	c4620c20 	incf      	r3, r2, 0
+ 1128ae6:	3940      	cmpnei      	r1, 0
+ 1128ae8:	a420      	st.b      	r1, (r4, 0x0)
+ 1128aea:	a463      	st.b      	r3, (r4, 0x3)
+ 1128aec:	0826      	bt      	0x1128b38	// 1128b38 <encode_reply.constprop.1+0x7e>
+ 1128aee:	857c      	ld.b      	r3, (r5, 0x1c)
+ 1128af0:	e4632001 	andi      	r3, r3, 1
+ 1128af4:	a462      	st.b      	r3, (r4, 0x2)
+ 1128af6:	5c0e      	addi      	r0, r4, 4
+ 1128af8:	9521      	ld.w      	r1, (r5, 0x4)
+ 1128afa:	e3ffffc5 	bsr      	0x1128a84	// 1128a84 <put_be32>
+ 1128afe:	9522      	ld.w      	r1, (r5, 0x8)
+ 1128b00:	5c1e      	addi      	r0, r4, 8
+ 1128b02:	e3ffffc1 	bsr      	0x1128a84	// 1128a84 <put_be32>
+ 1128b06:	9523      	ld.w      	r1, (r5, 0xc)
+ 1128b08:	e404000b 	addi      	r0, r4, 12
+ 1128b0c:	e3ffffbc 	bsr      	0x1128a84	// 1128a84 <put_be32>
+ 1128b10:	9524      	ld.w      	r1, (r5, 0x10)
+ 1128b12:	e404000f 	addi      	r0, r4, 16
+ 1128b16:	e3ffffb7 	bsr      	0x1128a84	// 1128a84 <put_be32>
+ 1128b1a:	3100      	movi      	r1, 0
+ 1128b1c:	e4040013 	addi      	r0, r4, 20
+ 1128b20:	e3ffffb2 	bsr      	0x1128a84	// 1128a84 <put_be32>
+ 1128b24:	3100      	movi      	r1, 0
+ 1128b26:	e4040017 	addi      	r0, r4, 24
+ 1128b2a:	e3ffffad 	bsr      	0x1128a84	// 1128a84 <put_be32>
+ 1128b2e:	9520      	ld.w      	r1, (r5, 0x0)
+ 1128b30:	e404001b 	addi      	r0, r4, 28
+ 1128b34:	e3ffffa8 	bsr      	0x1128a84	// 1128a84 <put_be32>
+ 1128b38:	1493      	pop      	r4-r6, r15
+
+01128b3a <vadt_binding_read.constprop.0>:
+ 1128b3a:	14d4      	push      	r4-r7, r15
+ 1128b3c:	142f      	subi      	r14, r14, 60
+ 1128b3e:	6d03      	mov      	r4, r0
+ 1128b40:	3300      	movi      	r3, 0
+ 1128b42:	3000      	movi      	r0, 0
+ 1128b44:	b866      	st.w      	r3, (r14, 0x18)
+ 1128b46:	dc6e0017 	st.b      	r3, (r14, 0x17)
+ 1128b4a:	e3ffff7e 	bsr      	0x1128a46	// 1128a46 <vadt_csky_guard_enter>
+ 1128b4e:	6d43      	mov      	r5, r0
+ 1128b50:	3000      	movi      	r0, 0
+ 1128b52:	e44e0016 	addi      	r2, r14, 23
+ 1128b56:	1906      	addi      	r1, r14, 24
+ 1128b58:	e3ffff7c 	bsr      	0x1128a50	// 1128a50 <h1e_vad_load_object>
+ 1128b5c:	3840      	cmpnei      	r0, 0
+ 1128b5e:	083f      	bt      	0x1128bdc	// 1128bdc <vadt_binding_read.constprop.0+0xa2>
+ 1128b60:	9866      	ld.w      	r3, (r14, 0x18)
+ 1128b62:	3203      	movi      	r2, 3
+ 1128b64:	9300      	ld.w      	r0, (r3, 0x0)
+ 1128b66:	e4202001 	andi      	r1, r0, 1
+ 1128b6a:	3940      	cmpnei      	r1, 0
+ 1128b6c:	0833      	bt      	0x1128bd2	// 1128bd2 <vadt_binding_read.constprop.0+0x98>
+ 1128b6e:	9321      	ld.w      	r1, (r3, 0x4)
+ 1128b70:	b820      	st.w      	r1, (r14, 0x0)
+ 1128b72:	9322      	ld.w      	r1, (r3, 0x8)
+ 1128b74:	b821      	st.w      	r1, (r14, 0x4)
+ 1128b76:	9323      	ld.w      	r1, (r3, 0xc)
+ 1128b78:	b822      	st.w      	r1, (r14, 0x8)
+ 1128b7a:	9324      	ld.w      	r1, (r3, 0x10)
+ 1128b7c:	b823      	st.w      	r1, (r14, 0xc)
+ 1128b7e:	9325      	ld.w      	r1, (r3, 0x14)
+ 1128b80:	b824      	st.w      	r1, (r14, 0x10)
+ 1128b82:	9326      	ld.w      	r1, (r3, 0x18)
+ 1128b84:	93c7      	ld.w      	r6, (r3, 0x1c)
+ 1128b86:	93e0      	ld.w      	r7, (r3, 0x0)
+ 1128b88:	65c2      	cmpne      	r0, r7
+ 1128b8a:	0824      	bt      	0x1128bd2	// 1128bd2 <vadt_binding_read.constprop.0+0x98>
+ 1128b8c:	9860      	ld.w      	r3, (r14, 0x0)
+ 1128b8e:	b807      	st.w      	r0, (r14, 0x1c)
+ 1128b90:	b868      	st.w      	r3, (r14, 0x20)
+ 1128b92:	9861      	ld.w      	r3, (r14, 0x4)
+ 1128b94:	3200      	movi      	r2, 0
+ 1128b96:	b869      	st.w      	r3, (r14, 0x24)
+ 1128b98:	9862      	ld.w      	r3, (r14, 0x8)
+ 1128b9a:	9804      	ld.w      	r0, (r14, 0x10)
+ 1128b9c:	b86a      	st.w      	r3, (r14, 0x28)
+ 1128b9e:	9863      	ld.w      	r3, (r14, 0xc)
+ 1128ba0:	b8ce      	st.w      	r6, (r14, 0x38)
+ 1128ba2:	b86b      	st.w      	r3, (r14, 0x2c)
+ 1128ba4:	6cc7      	mov      	r3, r1
+ 1128ba6:	3100      	movi      	r1, 0
+ 1128ba8:	6c80      	or      	r2, r0
+ 1128baa:	6cc4      	or      	r3, r1
+ 1128bac:	b84c      	st.w      	r2, (r14, 0x30)
+ 1128bae:	b86d      	st.w      	r3, (r14, 0x34)
+ 1128bb0:	3600      	movi      	r6, 0
+ 1128bb2:	6c57      	mov      	r1, r5
+ 1128bb4:	3000      	movi      	r0, 0
+ 1128bb6:	e3ffff45 	bsr      	0x1128a40	// 1128a40 <vadt_csky_guard_exit>
+ 1128bba:	3e40      	cmpnei      	r6, 0
+ 1128bbc:	0812      	bt      	0x1128be0	// 1128be0 <vadt_binding_read.constprop.0+0xa6>
+ 1128bbe:	d86e0017 	ld.b      	r3, (r14, 0x17)
+ 1128bc2:	3100      	movi      	r1, 0
+ 1128bc4:	1a07      	addi      	r2, r14, 28
+ 1128bc6:	6c13      	mov      	r0, r4
+ 1128bc8:	e3ffff79 	bsr      	0x1128aba	// 1128aba <encode_reply.constprop.1>
+ 1128bcc:	6c1b      	mov      	r0, r6
+ 1128bce:	140f      	addi      	r14, r14, 60
+ 1128bd0:	1494      	pop      	r4-r7, r15
+ 1128bd2:	2a00      	subi      	r2, 1
+ 1128bd4:	3a40      	cmpnei      	r2, 0
+ 1128bd6:	0bc7      	bt      	0x1128b64	// 1128b64 <vadt_binding_read.constprop.0+0x2a>
+ 1128bd8:	3601      	movi      	r6, 1
+ 1128bda:	07ec      	br      	0x1128bb2	// 1128bb2 <vadt_binding_read.constprop.0+0x78>
+ 1128bdc:	3602      	movi      	r6, 2
+ 1128bde:	07ea      	br      	0x1128bb2	// 1128bb2 <vadt_binding_read.constprop.0+0x78>
+ 1128be0:	3e42      	cmpnei      	r6, 2
+ 1128be2:	0c06      	bf      	0x1128bee	// 1128bee <vadt_binding_read.constprop.0+0xb4>
+ 1128be4:	d86e0017 	ld.b      	r3, (r14, 0x17)
+ 1128be8:	3200      	movi      	r2, 0
+ 1128bea:	6c5b      	mov      	r1, r6
+ 1128bec:	07ed      	br      	0x1128bc6	// 1128bc6 <vadt_binding_read.constprop.0+0x8c>
+ 1128bee:	3300      	movi      	r3, 0
+ 1128bf0:	07fc      	br      	0x1128be8	// 1128be8 <vadt_binding_read.constprop.0+0xae>
+
+01128bf2 <console630_response>:
+ 1128bf2:	14d3      	push      	r4-r6, r15
+ 1128bf4:	1428      	subi      	r14, r14, 32
+ 1128bf6:	6d03      	mov      	r4, r0
+ 1128bf8:	3840      	cmpnei      	r0, 0
+ 1128bfa:	0c83      	bf      	0x1128d00	// 1128d00 <console630_response+0x10e>
+ 1128bfc:	e4a00017 	addi      	r5, r0, 24
+ 1128c00:	6c17      	mov      	r0, r5
+ 1128c02:	e3ffff51 	bsr      	0x1128aa4	// 1128aa4 <load_le32>
+ 1128c06:	eb40f11a 	cmpnei      	r0, 61722
+ 1128c0a:	0877      	bt      	0x1128cf8	// 1128cf8 <console630_response+0x106>
+ 1128c0c:	6c17      	mov      	r0, r5
+ 1128c0e:	e3ffff4b 	bsr      	0x1128aa4	// 1128aa4 <load_le32>
+ 1128c12:	eb40f11a 	cmpnei      	r0, 61722
+ 1128c16:	0875      	bt      	0x1128d00	// 1128d00 <console630_response+0x10e>
+ 1128c18:	e404001f 	addi      	r0, r4, 32
+ 1128c1c:	e3ffff44 	bsr      	0x1128aa4	// 1128aa4 <load_le32>
+ 1128c20:	6d83      	mov      	r6, r0
+ 1128c22:	e4040027 	addi      	r0, r4, 40
+ 1128c26:	e3ffff3f 	bsr      	0x1128aa4	// 1128aa4 <load_le32>
+ 1128c2a:	6d43      	mov      	r5, r0
+ 1128c2c:	e404001b 	addi      	r0, r4, 28
+ 1128c30:	e3ffff3a 	bsr      	0x1128aa4	// 1128aa4 <load_le32>
+ 1128c34:	6c43      	mov      	r1, r0
+ 1128c36:	3000      	movi      	r0, 0
+ 1128c38:	e3ffff2e 	bsr      	0x1128a94	// 1128a94 <target_resolve>
+ 1128c3c:	3d40      	cmpnei      	r5, 0
+ 1128c3e:	6d03      	mov      	r4, r0
+ 1128c40:	0805      	bt      	0x1128c4a	// 1128c4a <console630_response+0x58>
+ 1128c42:	3000      	movi      	r0, 0
+ 1128c44:	2801      	subi      	r0, 2
+ 1128c46:	1408      	addi      	r14, r14, 32
+ 1128c48:	1493      	pop      	r4-r6, r15
+ 1128c4a:	3840      	cmpnei      	r0, 0
+ 1128c4c:	0ffb      	bf      	0x1128c42	// 1128c42 <console630_response+0x50>
+ 1128c4e:	3e40      	cmpnei      	r6, 0
+ 1128c50:	0ff9      	bf      	0x1128c42	// 1128c42 <console630_response+0x50>
+ 1128c52:	8568      	ld.b      	r3, (r5, 0x8)
+ 1128c54:	3b40      	cmpnei      	r3, 0
+ 1128c56:	0c05      	bf      	0x1128c60	// 1128c60 <console630_response+0x6e>
+ 1128c58:	3301      	movi      	r3, 1
+ 1128c5a:	a06c      	st.b      	r3, (r0, 0xc)
+ 1128c5c:	3001      	movi      	r0, 1
+ 1128c5e:	07f4      	br      	0x1128c46	// 1128c46 <console630_response+0x54>
+ 1128c60:	8569      	ld.b      	r3, (r5, 0x9)
+ 1128c62:	3b41      	cmpnei      	r3, 1
+ 1128c64:	0bef      	bt      	0x1128c42	// 1128c42 <console630_response+0x50>
+ 1128c66:	3e1f      	cmphsi      	r6, 32
+ 1128c68:	0fed      	bf      	0x1128c42	// 1128c42 <console630_response+0x50>
+ 1128c6a:	3300      	movi      	r3, 0
+ 1128c6c:	6c8f      	mov      	r2, r3
+ 1128c6e:	3100      	movi      	r1, 0
+ 1128c70:	2300      	addi      	r3, 1
+ 1128c72:	eb430020 	cmpnei      	r3, 32
+ 1128c76:	60b8      	addu      	r2, r14
+ 1128c78:	a220      	st.b      	r1, (r2, 0x0)
+ 1128c7a:	0bf9      	bt      	0x1128c6c	// 1128c6c <console630_response+0x7a>
+ 1128c7c:	6c3b      	mov      	r0, r14
+ 1128c7e:	e3ffff5e 	bsr      	0x1128b3a	// 1128b3a <vadt_binding_read.constprop.0>
+ 1128c82:	3802      	cmphsi      	r0, 3
+ 1128c84:	0bdf      	bt      	0x1128c42	// 1128c42 <console630_response+0x50>
+ 1128c86:	d84e0000 	ld.b      	r2, (r14, 0x0)
+ 1128c8a:	640a      	cmpne      	r2, r0
+ 1128c8c:	0bdb      	bt      	0x1128c42	// 1128c42 <console630_response+0x50>
+ 1128c8e:	d86e0001 	ld.b      	r3, (r14, 0x1)
+ 1128c92:	3b41      	cmpnei      	r3, 1
+ 1128c94:	0bd7      	bt      	0x1128c42	// 1128c42 <console630_response+0x50>
+ 1128c96:	3a40      	cmpnei      	r2, 0
+ 1128c98:	d86e0002 	ld.b      	r3, (r14, 0x2)
+ 1128c9c:	081b      	bt      	0x1128cd2	// 1128cd2 <console630_response+0xe0>
+ 1128c9e:	e46320fe 	andi      	r3, r3, 254
+ 1128ca2:	3b40      	cmpnei      	r3, 0
+ 1128ca4:	0bcf      	bt      	0x1128c42	// 1128c42 <console630_response+0x50>
+ 1128ca6:	3314      	movi      	r3, 20
+ 1128ca8:	6c8f      	mov      	r2, r3
+ 1128caa:	60b8      	addu      	r2, r14
+ 1128cac:	8240      	ld.b      	r2, (r2, 0x0)
+ 1128cae:	3a40      	cmpnei      	r2, 0
+ 1128cb0:	0bc9      	bt      	0x1128c42	// 1128c42 <console630_response+0x50>
+ 1128cb2:	2300      	addi      	r3, 1
+ 1128cb4:	3b5c      	cmpnei      	r3, 28
+ 1128cb6:	0bf9      	bt      	0x1128ca8	// 1128ca8 <console630_response+0xb6>
+ 1128cb8:	3300      	movi      	r3, 0
+ 1128cba:	240b      	addi      	r4, 12
+ 1128cbc:	6c8f      	mov      	r2, r3
+ 1128cbe:	2300      	addi      	r3, 1
+ 1128cc0:	60b8      	addu      	r2, r14
+ 1128cc2:	eb430020 	cmpnei      	r3, 32
+ 1128cc6:	8240      	ld.b      	r2, (r2, 0x0)
+ 1128cc8:	a440      	st.b      	r2, (r4, 0x0)
+ 1128cca:	2400      	addi      	r4, 1
+ 1128ccc:	0bf8      	bt      	0x1128cbc	// 1128cbc <console630_response+0xca>
+ 1128cce:	3020      	movi      	r0, 32
+ 1128cd0:	07bb      	br      	0x1128c46	// 1128c46 <console630_response+0x54>
+ 1128cd2:	3b40      	cmpnei      	r3, 0
+ 1128cd4:	0bb7      	bt      	0x1128c42	// 1128c42 <console630_response+0x50>
+ 1128cd6:	3a42      	cmpnei      	r2, 2
+ 1128cd8:	0805      	bt      	0x1128ce2	// 1128ce2 <console630_response+0xf0>
+ 1128cda:	d86e0003 	ld.b      	r3, (r14, 0x3)
+ 1128cde:	3b40      	cmpnei      	r3, 0
+ 1128ce0:	0bb1      	bt      	0x1128c42	// 1128c42 <console630_response+0x50>
+ 1128ce2:	3304      	movi      	r3, 4
+ 1128ce4:	6c8f      	mov      	r2, r3
+ 1128ce6:	60b8      	addu      	r2, r14
+ 1128ce8:	8240      	ld.b      	r2, (r2, 0x0)
+ 1128cea:	3a40      	cmpnei      	r2, 0
+ 1128cec:	0bab      	bt      	0x1128c42	// 1128c42 <console630_response+0x50>
+ 1128cee:	2300      	addi      	r3, 1
+ 1128cf0:	eb430020 	cmpnei      	r3, 32
+ 1128cf4:	0bf8      	bt      	0x1128ce4	// 1128ce4 <console630_response+0xf2>
+ 1128cf6:	07e1      	br      	0x1128cb8	// 1128cb8 <console630_response+0xc6>
+ 1128cf8:	6c13      	mov      	r0, r4
+ 1128cfa:	e0001591 	bsr      	0x112b81c	// 112b81c <console630_response_current>
+ 1128cfe:	07a4      	br      	0x1128c46	// 1128c46 <console630_response+0x54>
+ 1128d00:	3000      	movi      	r0, 0
+ 1128d02:	2800      	subi      	r0, 1
+ 1128d04:	07a1      	br      	0x1128c46	// 1128c46 <console630_response+0x54>
+
+01128d06 <console630_parse>:
+ 1128d06:	14d4      	push      	r4-r7, r15
+ 1128d08:	6dc3      	mov      	r7, r0
+ 1128d0a:	3840      	cmpnei      	r0, 0
+ 1128d0c:	6d47      	mov      	r5, r1
+ 1128d0e:	6d8b      	mov      	r6, r2
+ 1128d10:	0c15      	bf      	0x1128d3a	// 1128d3a <console630_parse+0x34>
+ 1128d12:	e4800013 	addi      	r4, r0, 20
+ 1128d16:	6c13      	mov      	r0, r4
+ 1128d18:	e3fffec6 	bsr      	0x1128aa4	// 1128aa4 <load_le32>
+ 1128d1c:	3840      	cmpnei      	r0, 0
+ 1128d1e:	0c0e      	bf      	0x1128d3a	// 1128d3a <console630_parse+0x34>
+ 1128d20:	8062      	ld.b      	r3, (r0, 0x2)
+ 1128d22:	4368      	lsli      	r3, r3, 8
+ 1128d24:	8043      	ld.b      	r2, (r0, 0x3)
+ 1128d26:	6cc8      	or      	r3, r2
+ 1128d28:	eb43f11a 	cmpnei      	r3, 61722
+ 1128d2c:	0840      	bt      	0x1128dac	// 1128dac <console630_parse+0xa6>
+ 1128d2e:	6c13      	mov      	r0, r4
+ 1128d30:	e3fffeba 	bsr      	0x1128aa4	// 1128aa4 <load_le32>
+ 1128d34:	6d03      	mov      	r4, r0
+ 1128d36:	3840      	cmpnei      	r0, 0
+ 1128d38:	0804      	bt      	0x1128d40	// 1128d40 <console630_parse+0x3a>
+ 1128d3a:	3000      	movi      	r0, 0
+ 1128d3c:	2800      	subi      	r0, 1
+ 1128d3e:	0434      	br      	0x1128da6	// 1128da6 <console630_parse+0xa0>
+ 1128d40:	8062      	ld.b      	r3, (r0, 0x2)
+ 1128d42:	4368      	lsli      	r3, r3, 8
+ 1128d44:	8043      	ld.b      	r2, (r0, 0x3)
+ 1128d46:	6cc8      	or      	r3, r2
+ 1128d48:	eb43f11a 	cmpnei      	r3, 61722
+ 1128d4c:	0bf7      	bt      	0x1128d3a	// 1128d3a <console630_parse+0x34>
+ 1128d4e:	3000      	movi      	r0, 0
+ 1128d50:	e3fffea4 	bsr      	0x1128a98	// 1128a98 <target_pending>
+ 1128d54:	eb40f11a 	cmpnei      	r0, 61722
+ 1128d58:	0bf1      	bt      	0x1128d3a	// 1128d3a <console630_parse+0x34>
+ 1128d5a:	e407001b 	addi      	r0, r7, 28
+ 1128d5e:	e3fffea3 	bsr      	0x1128aa4	// 1128aa4 <load_le32>
+ 1128d62:	6c43      	mov      	r1, r0
+ 1128d64:	3000      	movi      	r0, 0
+ 1128d66:	e3fffe97 	bsr      	0x1128a94	// 1128a94 <target_resolve>
+ 1128d6a:	3d40      	cmpnei      	r5, 0
+ 1128d6c:	0c1e      	bf      	0x1128da8	// 1128da8 <console630_parse+0xa2>
+ 1128d6e:	3840      	cmpnei      	r0, 0
+ 1128d70:	0c1c      	bf      	0x1128da8	// 1128da8 <console630_parse+0xa2>
+ 1128d72:	3e41      	cmpnei      	r6, 1
+ 1128d74:	081a      	bt      	0x1128da8	// 1128da8 <console630_parse+0xa2>
+ 1128d76:	8468      	ld.b      	r3, (r4, 0x8)
+ 1128d78:	8449      	ld.b      	r2, (r4, 0x9)
+ 1128d7a:	4250      	lsli      	r2, r2, 16
+ 1128d7c:	4378      	lsli      	r3, r3, 24
+ 1128d7e:	6cc8      	or      	r3, r2
+ 1128d80:	844b      	ld.b      	r2, (r4, 0xb)
+ 1128d82:	6cc8      	or      	r3, r2
+ 1128d84:	844a      	ld.b      	r2, (r4, 0xa)
+ 1128d86:	4248      	lsli      	r2, r2, 8
+ 1128d88:	6cc8      	or      	r3, r2
+ 1128d8a:	3b41      	cmpnei      	r3, 1
+ 1128d8c:	080e      	bt      	0x1128da8	// 1128da8 <console630_parse+0xa2>
+ 1128d8e:	200f      	addi      	r0, 16
+ 1128d90:	e3fffe8a 	bsr      	0x1128aa4	// 1128aa4 <load_le32>
+ 1128d94:	3840      	cmpnei      	r0, 0
+ 1128d96:	0809      	bt      	0x1128da8	// 1128da8 <console630_parse+0xa2>
+ 1128d98:	8560      	ld.b      	r3, (r5, 0x0)
+ 1128d9a:	3b41      	cmpnei      	r3, 1
+ 1128d9c:	64c3      	mvcv      	r3
+ 1128d9e:	e4034001 	xori      	r0, r3, 1
+ 1128da2:	a469      	st.b      	r3, (r4, 0x9)
+ 1128da4:	a408      	st.b      	r0, (r4, 0x8)
+ 1128da6:	1494      	pop      	r4-r7, r15
+ 1128da8:	3300      	movi      	r3, 0
+ 1128daa:	07fa      	br      	0x1128d9e	// 1128d9e <console630_parse+0x98>
+ 1128dac:	6c9b      	mov      	r2, r6
+ 1128dae:	6c57      	mov      	r1, r5
+ 1128db0:	6c1f      	mov      	r0, r7
+ 1128db2:	e00014ad 	bsr      	0x112b70c	// 112b70c <console630_parse_current>
+ 1128db6:	07f8      	br      	0x1128da6	// 1128da6 <console630_parse+0xa0>
+
+01128db8 <h1e_vad_native_poll_bridge>:
+ 1128db8:	14d4      	push      	r4-r7, r15
+ 1128dba:	1424      	subi      	r14, r14, 16
+ 1128dbc:	b800      	st.w      	r0, (r14, 0x0)
+ 1128dbe:	b821      	st.w      	r1, (r14, 0x4)
+ 1128dc0:	b842      	st.w      	r2, (r14, 0x8)
+ 1128dc2:	b863      	st.w      	r3, (r14, 0xc)
+ 1128dc4:	3c40      	cmpnei      	r4, 0
+ 1128dc6:	0804      	bt      	0x1128dce	// 1128dce <console_nonempty>
+ 1128dc8:	98ae      	ld.w      	r5, (r14, 0x38)
+ 1128dca:	250b      	addi      	r5, 12
+ 1128dcc:	b8a5      	st.w      	r5, (r14, 0x14)
+
+01128dce <console_nonempty>:
+ 1128dce:	1809      	addi      	r0, r14, 36
+ 1128dd0:	6c57      	mov      	r1, r5
+ 1128dd2:	6c93      	mov      	r2, r4
+ 1128dd4:	e3ffff99 	bsr      	0x1128d06	// 1128d06 <console630_parse>
+ 1128dd8:	3300      	movi      	r3, 0
+ 1128dda:	2b00      	subi      	r3, 1
+ 1128ddc:	64c2      	cmpne      	r0, r3
+ 1128dde:	0c07      	bf      	0x1128dec	// 1128dec <console_vendor>
+ 1128de0:	b804      	st.w      	r0, (r14, 0x10)
+ 1128de2:	3301      	movi      	r3, 1
+ 1128de4:	b863      	st.w      	r3, (r14, 0xc)
+ 1128de6:	107b      	lrw      	r3, 0x103b50a	// 1128e50 <console_response_vendor+0x10>
+ 1128de8:	b868      	st.w      	r3, (r14, 0x20)
+ 1128dea:	0404      	br      	0x1128df2	// 1128df2 <console_restore>
+
+01128dec <console_vendor>:
+ 1128dec:	107a      	lrw      	r3, 0x855dc	// 1128e54 <console_response_vendor+0x14>
+ 1128dee:	8b60      	ld.h      	r3, (r3, 0x0)
+ 1128df0:	b863      	st.w      	r3, (r14, 0xc)
+
+01128df2 <console_restore>:
+ 1128df2:	9800      	ld.w      	r0, (r14, 0x0)
+ 1128df4:	9821      	ld.w      	r1, (r14, 0x4)
+ 1128df6:	9842      	ld.w      	r2, (r14, 0x8)
+ 1128df8:	9863      	ld.w      	r3, (r14, 0xc)
+ 1128dfa:	1404      	addi      	r14, r14, 16
+ 1128dfc:	1494      	pop      	r4-r7, r15
+	...
+
+01128e00 <console630_response_hook>:
+ 1128e00:	14d4      	push      	r4-r7, r15
+ 1128e02:	1424      	subi      	r14, r14, 16
+ 1128e04:	b800      	st.w      	r0, (r14, 0x0)
+ 1128e06:	b821      	st.w      	r1, (r14, 0x4)
+ 1128e08:	b842      	st.w      	r2, (r14, 0x8)
+ 1128e0a:	b863      	st.w      	r3, (r14, 0xc)
+ 1128e0c:	1809      	addi      	r0, r14, 36
+ 1128e0e:	e3fffef2 	bsr      	0x1128bf2	// 1128bf2 <console630_response>
+ 1128e12:	3300      	movi      	r3, 0
+ 1128e14:	2b00      	subi      	r3, 1
+ 1128e16:	64c2      	cmpne      	r0, r3
+ 1128e18:	0c14      	bf      	0x1128e40	// 1128e40 <console_response_vendor>
+ 1128e1a:	3300      	movi      	r3, 0
+ 1128e1c:	2b01      	subi      	r3, 2
+ 1128e1e:	64c2      	cmpne      	r0, r3
+ 1128e20:	0c05      	bf      	0x1128e2a	// 1128e2a <console_response_error>
+ 1128e22:	b909      	st.w      	r0, (r14, 0xa4)
+ 1128e24:	106d      	lrw      	r3, 0x10394e2	// 1128e58 <console_response_vendor+0x18>
+ 1128e26:	b868      	st.w      	r3, (r14, 0x20)
+ 1128e28:	0406      	br      	0x1128e34	// 1128e34 <console_response_restore>
+
+01128e2a <console_response_error>:
+ 1128e2a:	3300      	movi      	r3, 0
+ 1128e2c:	2b00      	subi      	r3, 1
+ 1128e2e:	b872      	st.w      	r3, (r14, 0x48)
+ 1128e30:	106b      	lrw      	r3, 0x103912a	// 1128e5c <console_response_vendor+0x1c>
+ 1128e32:	b868      	st.w      	r3, (r14, 0x20)
+
+01128e34 <console_response_restore>:
+ 1128e34:	9800      	ld.w      	r0, (r14, 0x0)
+ 1128e36:	9821      	ld.w      	r1, (r14, 0x4)
+ 1128e38:	9842      	ld.w      	r2, (r14, 0x8)
+ 1128e3a:	9863      	ld.w      	r3, (r14, 0xc)
+ 1128e3c:	1404      	addi      	r14, r14, 16
+ 1128e3e:	1494      	pop      	r4-r7, r15
+
+01128e40 <console_response_vendor>:
+ 1128e40:	9800      	ld.w      	r0, (r14, 0x0)
+ 1128e42:	9821      	ld.w      	r1, (r14, 0x4)
+ 1128e44:	9842      	ld.w      	r2, (r14, 0x8)
+ 1128e46:	986f      	ld.w      	r3, (r14, 0x3c)
+ 1128e48:	3b19      	cmphsi      	r3, 26
+ 1128e4a:	1404      	addi      	r14, r14, 16
+ 1128e4c:	1494      	pop      	r4-r7, r15
+ 1128e4e:	0000      	.short	0x0000
+ 1128e50:	0103b50a 	.long	0x0103b50a
+ 1128e54:	000855dc 	.long	0x000855dc
+ 1128e58:	010394e2 	.long	0x010394e2
+ 1128e5c:	0103912a 	.long	0x0103912a
+
+01128e60 <late_publication_stub>:
+ 1128e60:	3c40      	cmpnei      	r4, 0
+ 1128e62:	0805      	bt      	0x1128e6c	// 1128e6c <late_publication_stub+0xc>
+ 1128e64:	b5e0      	st.w      	r7, (r5, 0x0)
+ 1128e66:	ea8f0004 	lrw      	r15, 0x1021038	// 1128e74 <late_publication_stub+0x14>
+ 1128e6a:	783c      	jmp      	r15
+ 1128e6c:	ea8f0003 	lrw      	r15, 0x1021074	// 1128e78 <late_publication_stub+0x18>
+ 1128e70:	783c      	jmp      	r15
+ 1128e72:	0000      	.short	0x0000
+ 1128e74:	01021038 	.long	0x01021038
+ 1128e78:	01021074 	.long	0x01021074
+
+Disassembly of section .constructor_edits:
+
+01021054 <late_constructor_edits>:
+ 1021054:	3060      	movi      	r0, 96
+ 1021056:	0000      	bkpt
+ 1021058:	0000      	bkpt
+ 102105a:	0000      	bkpt
+ 102105c:	6dc3      	mov      	r7, r0
+	...
+ 102106a:	6c1f      	mov      	r0, r7
+ 102106c:	0000      	bkpt
+ 102106e:	0000      	bkpt
+ 1021070:	e0083ef8 	bsr      	0x1128e60	// 1128e60 <late_publication_stub>
+	...
+ 102109c:	0000      	bkpt
+ 102109e:	3260      	movi      	r2, 96
+	...
+ 10210a8:	6ddf      	mov      	r7, r7
+	...
+ 10210de:	6cdf      	mov      	r3, r7
+
+Disassembly of section .poll_hook:
+
+01020b62 <.poll_hook>:
+ 1020b62:	e008412b 	bsr      	0x1128db8	// 1128db8 <h1e_vad_native_poll_bridge>
+
+Disassembly of section .parser_hook:
+
+0103a996 <.parser_hook>:
+ 103a996:	e0077211 	bsr      	0x1128db8	// 1128db8 <h1e_vad_native_poll_bridge>
+
+Disassembly of section .response_hook:
+
+0103907a <.response_hook>:
+ 103907a:	e0077ec3 	bsr      	0x1128e00	// 1128e00 <console630_response_hook>

@@ -64,6 +64,9 @@ export type { RealtimeChannelId, RealtimeChannelPcm, RealtimeChannelsTap } from 
 export { FIRMWARE_CONSOLE_STATUS, FIRMWARE_CONSOLE_MAX_RESPONSE_BYTES, FIRMWARE_CONSOLE_REQUESTS,
   isFirmwareConsoleRequest, encodeFirmwareConsoleRequest, parseFirmwareConsoleStatus } from './firmware-console.js'
 export type { FirmwareConsoleRequest, FirmwareConsoleStatus } from './firmware-console.js'
+export { NATIVE_VAD_OBSERVATION_CANDIDATE_COMMAND, NATIVE_VAD_OBSERVATION_CANDIDATE_REPLY_BYTES,
+  encodeNativeVadObservationCandidateRequest, parseNativeVadObservationCandidateReply } from './native-vad-observation.js'
+export type { NativeVadObservationCandidate } from './native-vad-observation.js'
 export { OWNED_SCRATCH_UPLOAD_COMMAND, OWNED_SCRATCH_MAX_BYTES, OWNED_SCRATCH_MAX_CHUNK_BYTES, ownedScratchCrc32,
   ownedScratchFilename, isOwnedScratchUploadDescriptor, encodeOwnedScratchUpload, isOwnedScratchStatusBody, parseOwnedScratchUploadReply } from './owned-scratch-upload.js'
 export type { OwnedScratchUploadDescriptor, OwnedScratchUploadSession, OwnedScratchUploadOperation, OwnedScratchUploadRequest,

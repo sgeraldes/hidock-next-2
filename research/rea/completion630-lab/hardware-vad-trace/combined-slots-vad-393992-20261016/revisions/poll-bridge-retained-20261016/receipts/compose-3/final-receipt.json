@@ -1,0 +1,42 @@
+{
+  "schema": "h1e-vad-combined-slots-393992-final-receipt-v1",
+  "status": "accepted_offline_for_authorized_vad_validation_PENDING_HARDWARE_EXPERIMENTAL_NOTINSTALL",
+  "identity": {
+    "numeric": 393992,
+    "version_name": "6.3.8_vad001",
+    "ota_version_code": "0x60308",
+    "board": "ats2835p_evb"
+  },
+  "linked_elf": {
+    "path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/link/output-nonlto-bridge/vad-router-only-slots-393992-nonlto-poll-bridge-NOTINSTALL.elf",
+    "sha256": "50d0a27d79ccc7813a0a5150a5e6ed00d77171a4c3c3f8f7aa4566bc4d734a80",
+    "module_sha256": "72c1fd09dfae86bbb4691b9b713c92e32685b1a5ccbb8f2e6b2406ec53115647",
+    "bridge_address": "0x01128e34",
+    "bridge_bytes": 24
+  },
+  "combined_system": {
+    "path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/out-NOTINSTALL/compose-3/system-decoded-NOTINSTALL.bin",
+    "sha256": "043afb17fbc868474a33c999ac30473839ab188ba22f46adc95914be6649a918",
+    "bytes": 1237504
+  },
+  "combined_container": {
+    "path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/out-NOTINSTALL/compose-3/H1E-6.3.8_vad001-EXPERIMENTAL-NOT-INSTALL.bin",
+    "sha256": "b6bf41d0359748c26242a902cf2949de6a18b216a2853a35f3a5d189b8b3f9ba",
+    "bytes": 3429376
+  },
+  "readback_receipts": {
+    "layout": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/receipts/compose-3/layout-readback.json",
+    "composition": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/receipts/compose-3/composition-readback.json",
+    "container": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/receipts/compose-3/container-readback.json",
+    "sdk_parser": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/receipts/compose-3/sdk-parser.json"
+  },
+  "offline_exact_instruction_gate": {
+    "status": "passed",
+    "cases_passed": 6,
+    "cases_total": 6,
+    "receipt": "research/rea/completion630-lab/hardware-vad-trace/router-only-exact-image-qa-20261016/out-NOTINSTALL/run-combined-revision3-20261016T2024Z-hook-through/receipt.json",
+    "scope_note": "Constructors were intentionally skipped because they were accepted on the prior byte-pinned candidate; no DSP, timing, boot, installation, or hardware behavior is established."
+  },
+  "hardware_validation": {"status": "pending", "performed": false},
+  "limits": "Accepted offline for the explicitly authorized VAD hardware-validation step. Hardware validation remains pending; no installation, physical qualification, or release claim is made."
+}

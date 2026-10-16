@@ -33,6 +33,8 @@ import { CUSTOM_MARKER_RULES_GET, CUSTOM_MARKER_RULES_SET, encodeCustomMarkerRul
 import type { CustomMarkerRules, CustomMarkerRulesResponse } from './custom-marker-rules.js'
 import { FIRMWARE_CONSOLE_STATUS, encodeFirmwareConsoleRequest, isFirmwareConsoleRequest, parseFirmwareConsoleStatus } from './firmware-console.js'
 import type { FirmwareConsoleFirmware, FirmwareConsoleRequest, FirmwareConsoleStatus } from './firmware-console.js'
+import { NATIVE_VAD_OBSERVATION_CANDIDATE_COMMAND, encodeNativeVadObservationCandidateRequest, parseNativeVadObservationCandidateReply } from './native-vad-observation.js'
+import type { NativeVadObservationCandidate } from './native-vad-observation.js'
 import { OWNED_SCRATCH_UPLOAD_COMMAND, isOwnedScratchUploadDescriptor, encodeOwnedScratchUpload, isOwnedScratchStatusBody, parseOwnedScratchUploadReply } from './owned-scratch-upload.js'
 import type { OwnedScratchUploadDescriptor, OwnedScratchUploadSession, OwnedScratchUploadOperation, OwnedScratchUploadReply, OwnedScratchWriteOptions, OwnedScratchWriteOutcome } from './owned-scratch-upload.js'
 import { RECORDING_RESTORE_COMMAND, copyRecordingRestoreDescriptor, encodeRecordingRestore, parseRecordingRestoreCapabilities,
@@ -160,7 +162,7 @@ const USB_READ_BUFFER_BYTES = 8192
 // with a forward identity; it must never enter the custom-control path. Custom pairs also pass qualifiedFileFirmware, so the existing bounded file-list/page/range reads apply to them.
 const customRecordingFirmware = (version: number | null, code: string | null) =>
   version === 393985 && code === '6.3.1' || version === 393986 && code === '6.3.2' ||
-  version === 393988 && code === '6.3.4' || version === 393990 && code === '6.3.6'
+  version === 393988 && code === '6.3.4' || version === 393990 && code === '6.3.6' || version === 393992 && code === '6.3.8'
 const originalRecordingFirmware = (version: number | null, code: string | null) =>
   version === 393984 && code === '6.3.0' || version === 393987 && code === '6.3.3' ||
   version === 393989 && code === '6.3.5'
@@ -1556,7 +1558,7 @@ export class JensenDevice {
       readbacks: Omit<FirmwareBootVerification, 'status' | 'reason' | 'imageAttested'> = {}): FirmwareBootVerification => ({ status, reason, imageAttested: false, ...readbacks })
     if (!target || typeof target.serialNumber !== 'string' || !target.serialNumber.trim() || target.serialNumber.length > 13 ||
       /[^\x20-\x7e]/.test(target.serialNumber) || !isOrdinaryH1eVersion(target.versionNumber) || typeof target.customRecording !== 'boolean' ||
-      (target.customRecording && target.versionNumber !== 393985 && target.versionNumber !== 393986 && target.versionNumber !== 393988 && target.versionNumber !== 393990) ||
+      (target.customRecording && target.versionNumber !== 393985 && target.versionNumber !== 393986 && target.versionNumber !== 393988 && target.versionNumber !== 393990 && target.versionNumber !== 393992) ||
       (target.sourceVersionNumber !== undefined && !isOrdinaryH1eVersion(target.sourceVersionNumber)) ||
       !Number.isFinite(timeout) || timeout <= 0 || timeout > 30) return result('unavailable', 'invalid-expectation')
     return this.runExclusive(async () => {
@@ -1697,6 +1699,10 @@ export class JensenDevice {
    * Matches jensen.js send(): assign seq, push to queue, call sendNext, return promise.
    */
   private isValidationRead(message: JensenMessage): boolean {
+    if (message.command === NATIVE_VAD_OBSERVATION_CANDIDATE_COMMAND) {
+      const exact = encodeNativeVadObservationCandidateRequest()
+      return message.msgBody.length === exact.length && exact.every((byte, index) => message.msgBody[index] === byte)
+    }
     if (message.command === RECORDING_RESTORE_COMMAND) return isRecordingRestoreReadOnlyBody(message.msgBody)
     if (message.command === OWNED_SCRATCH_UPLOAD_COMMAND) return isOwnedScratchStatusBody(message.msgBody)
     return [1, 2, 4, 5, 6, 11, 13, 16, 18, 21, 26, 29, 32, 34, 0xf001, 0xf006, 0xf00e, 0xf011,
@@ -2812,8 +2818,9 @@ export class JensenDevice {
     if (!isFirmwareConsoleRequest(request) || !Number.isFinite(timeout) || timeout <= 0 || timeout > 10 || signal?.aborted) return null
     return this.runExclusive(async () => {
       const qualified = () => this.model === 'hidock-h1e' &&
-        (this.versionNumber === 393986 && this.versionCode === '6.3.2' || this.versionNumber === 393988 && this.versionCode === '6.3.4' ||
-          this.versionNumber === 393990 && this.versionCode === '6.3.6') &&
+        (request === 'slots' ? this.versionNumber === 393991 && this.versionCode === '6.3.7' || this.versionNumber === 393992 && this.versionCode === '6.3.8'
+          : this.versionNumber === 393986 && this.versionCode === '6.3.2' || this.versionNumber === 393988 && this.versionCode === '6.3.4' ||
+            this.versionNumber === 393990 && this.versionCode === '6.3.6' || this.versionNumber === 393992 && this.versionCode === '6.3.8') &&
         !!this.serialNumber?.trim() && this.isConnected() && !this.poisoned && !this.isTearingDown()
       if (!qualified() || signal?.aborted) return null
       const identity = this.serialNumber, handle = this.device, epoch = this.getConnectionSessionId(), version = this.versionNumber,
@@ -2829,6 +2836,30 @@ export class JensenDevice {
       message.onstart = () => !signal?.aborted && sameSession()
       const reply = await this.dispatchFirmwareReply(message, remaining(), 'getFirmwareConsoleStatus')
       return !reply || reply instanceof Error || !sameSession() || signal?.aborted ? null : parseFirmwareConsoleStatus(request, reply.body, code)
+    }).catch(() => null)
+  }
+
+  /** Read-only native VAD observation, exact H1E 393992 / 6.3.8 pair only. One serialized slot and one deadline:
+   * fresh REA1 (F111) first, then the fixed VERSION=1 request (F11A) and a strict 32-byte reply. The raw word and
+   * voice:'unknown' are kept as decoded; nothing here infers voice, freshness or image attestation.
+   */
+  async getNativeVadObservation(timeout = 5, signal?: AbortSignal): Promise<NativeVadObservationCandidate | null> {
+    if (!Number.isFinite(timeout) || timeout <= 0 || timeout > 10 || signal?.aborted) return null
+    return this.runExclusive(async () => {
+      const qualified = () => this.model === 'hidock-h1e' && this.versionNumber === 393992 && this.versionCode === '6.3.8' &&
+        !!this.serialNumber?.trim() && this.isConnected() && !this.poisoned && !this.isTearingDown()
+      if (!qualified() || signal?.aborted) return null
+      const identity = this.serialNumber, handle = this.device, epoch = this.getConnectionSessionId(), deadline = Date.now() + timeout * 1000
+      const sameSession = () => qualified() && this.device === handle && this.serialNumber === identity && this.getConnectionSessionId() === epoch
+      const remaining = () => Math.max(0, (deadline - Date.now()) / 1000)
+      const capabilitiesRequest = new JensenMessage(CUSTOM_RECORDING_PROFILE_GET)
+      capabilitiesRequest.onstart = () => !signal?.aborted && sameSession()
+      const capabilities = await this.dispatchFirmwareReply(capabilitiesRequest, remaining(), 'qualifyNativeVadObservation')
+      if (!capabilities || capabilities instanceof Error || !parseCustomRecordingProfileResponse(capabilities.body) || !sameSession() || signal?.aborted || remaining() <= 0) return null
+      const message = new JensenMessage(NATIVE_VAD_OBSERVATION_CANDIDATE_COMMAND).body(encodeNativeVadObservationCandidateRequest())
+      message.onstart = () => !signal?.aborted && sameSession()
+      const reply = await this.dispatchFirmwareReply(message, remaining(), 'getNativeVadObservation')
+      return !reply || reply instanceof Error || !sameSession() || signal?.aborted ? null : parseNativeVadObservationCandidateReply(reply.body)
     }).catch(() => null)
   }
 

@@ -1,0 +1,60 @@
+{
+  "status": "blocked_or_failed_exact_instruction_execution",
+  "image_sha256": "28be9ebe96f81f3a6a629ab8448be30bd8531c697ebf32c8238fc2d71ba4e768",
+  "elf_sha256": "96c6e8c9b9db6de295f7d4a766a71beb6f066ac9b7a1f331cb52d320d92d1c13",
+  "error": "java.lang.IllegalStateException: Unimplemented CALLOTHER pcodeop (stub), PC\u003d01128dba pc 1128dba bkpt",
+  "cases": [
+    {
+      "id": "constructor-publication-success-branch",
+      "status": "passed",
+      "expected": {
+        "publication_slot": 3342336,
+        "continuation": "0x01021038"
+      },
+      "actual": {
+        "publication_slot": 3342336,
+        "continuation": "0x01021038"
+      },
+      "executed_instructions": 5,
+      "modeled_native_getter_calls": 0
+    },
+    {
+      "id": "constructor-publication-failure-branch",
+      "status": "passed",
+      "expected": {
+        "publication_slot": 0,
+        "continuation": "0x01021074"
+      },
+      "actual": {
+        "publication_slot": 0,
+        "continuation": "0x01021074"
+      },
+      "executed_instructions": 4,
+      "modeled_native_getter_calls": 0
+    },
+    {
+      "id": "f11a-absent-snapshot-response",
+      "status": "failed",
+      "expected": "UNAVAILABLE with zero payload and no getter",
+      "actual": {
+        "return": -1,
+        "reply_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+        "getter_calls": 0
+      },
+      "executed_instructions": 10,
+      "modeled_native_getter_calls": 0
+    },
+    {
+      "id": "f11a-present-snapshot-response",
+      "status": "failed",
+      "expected": "OK/HAS_SAMPLE with fixture telemetry",
+      "actual": {
+        "return": -1,
+        "reply_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+        "getter_calls": 0
+      },
+      "executed_instructions": 10,
+      "modeled_native_getter_calls": 0
+    }
+  ]
+}

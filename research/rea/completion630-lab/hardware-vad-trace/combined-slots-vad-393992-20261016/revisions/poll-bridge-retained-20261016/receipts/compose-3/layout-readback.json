@@ -1,0 +1,603 @@
+{
+  "schema": "h1e-vad-combined-slots-393992-layout-v1",
+  "status": "offline_candidate_layout_verified_NOTINSTALL",
+  "baseline": {
+    "path": "research/rea/completion630-lab/firmware/capture-stream-slot-exact-image-qa/out-NOTINSTALL/compose-20261016T071238Z-19674/system-decoded-NOTINSTALL.bin",
+    "sha256": "ebee46c51239a4ad971c54cf4b4c12e2a29d516aebd15065ec258de099168771",
+    "bytes": 1237504,
+    "load_base": "0x01000000"
+  },
+  "router_allocation": {
+    "reservation_start": "0x01128000",
+    "reservation_end": "0x01129000",
+    "candidate_start": "0x01128a40",
+    "candidate_end": "0x01129000",
+    "candidate_window_bytes": 1472,
+    "ownership_granted_for_offline_candidate": true,
+    "grant_evidence_refs": [
+      "research/rea/completion630-lab/application/SHARED-MODULE-RESERVATIONS.md",
+      "research/rea/completion630-lab/application/shared-module-reservations.json"
+    ],
+    "baseline_full_window_sha256": "d681b2309c3b48684ac24e27fafa6f215a294dc75bcbbf5fbfb4bbaacaed0e07",
+    "baseline_fill": "ff"
+  },
+  "link": {
+    "elf_path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/link/output-nonlto-bridge/vad-router-only-slots-393992-nonlto-poll-bridge-NOTINSTALL.elf",
+    "elf_sha256": "50d0a27d79ccc7813a0a5150a5e6ed00d77171a4c3c3f8f7aa4566bc4d734a80",
+    "elf_bytes": 19416,
+    "module_path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/link/output-nonlto-bridge/module-vad-router-tail.bin",
+    "module_sha256": "72c1fd09dfae86bbb4691b9b713c92e32685b1a5ccbb8f2e6b2406ec53115647",
+    "module_bytes": 1248,
+    "linker_script_path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/link/router-only-combined.ld",
+    "linker_script_sha256": "7002f0854474b465d85b1c0d8253dd8b27c2748f278a8a86a4df0703b309278e",
+    "map_path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/link/output-nonlto-bridge/router-only-nonlto-poll-bridge.map",
+    "map_sha256": "b71ebdf7e8d981ea661f57580918f9eb3951c396b2151bd6540cb2619cf352a2",
+    "symbols_path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/link/output-nonlto-bridge/symbols.txt",
+    "symbols_sha256": "7222b982ab20c07f5aa270fa530128eed77e587cbab42be6820f30869a5a59a8",
+    "profile": {
+      "compiler_family": "T-HEAD C-SKY V3.10.29 / GCC 6.3.0",
+      "target": "csky-elfabiv2",
+      "cpu": "CK802",
+      "sdk_c_flags": [
+        "-mcpu=ck802",
+        "-Os",
+        "-fshort-enums",
+        "-fsigned-char",
+        "-fno-common",
+        "-fno-delete-null-pointer-checks"
+      ],
+      "lto_flags": [
+        "-ffunction-sections",
+        "-fdata-sections",
+        "-flto"
+      ],
+      "link_flags": [
+        "-fuse-linker-plugin",
+        "-nostdlib",
+        "-Wl,--gc-sections"
+      ],
+      "input_objects": {
+        "vadt_core.o": {
+          "path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/vadt_core.o",
+          "bytes": 17580,
+          "sha256": "e1700b6d6045ab30109a33cc6bfbe9a72823fe764be2e73187523c64352cbb45"
+        },
+        "vadt_binding.o": {
+          "path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/vadt_binding.o",
+          "bytes": 9204,
+          "sha256": "36b3edfde28409b7625a08e153f3e7018af3e917e8573d03fcb183f4eafd9878"
+        },
+        "vadt_csky_guard.o": {
+          "path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/vadt_csky_guard.o",
+          "bytes": 4400,
+          "sha256": "aed552adcb70c83ac05e30bdbf6a78b7c4c305a11f08ddb2648915a650efe2aa"
+        },
+        "vadt_frame.o": {
+          "path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/vadt_frame.o",
+          "bytes": 12100,
+          "sha256": "a6d66c3e62daec2b5ae42b47488a8cc816f98e3723dd934d082445752e47eba5"
+        },
+        "vadt_frame_target.o": {
+          "path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/vadt_frame_target.o",
+          "bytes": 7260,
+          "sha256": "1f08d9a2d510f3f689cc41bf329488050b325ba31c00755e977fdd4d2e76210f"
+        },
+        "h1e_vad_native_poll.o": {
+          "path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/link/output-nonlto-bridge/h1e_vad_native_poll_nonlto.o",
+          "bytes": 1572,
+          "sha256": "fcb93274a8b347dc02725598e26aeccede7006377423f7a66d0e00862592cab0"
+        },
+        "h1e_vad_native_loader.o": {
+          "path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/h1e_vad_native_loader.o",
+          "bytes": 6820,
+          "sha256": "c7a7b6f8bb4fb7f0b58931d0b4bc991e59be60971d91addc641705e104249a16"
+        },
+        "f11a_console_dispatch.o": {
+          "path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/f11a_console_dispatch.o",
+          "bytes": 7500,
+          "sha256": "bb0b9ca5378d16ca4585931f6a1d90e54634fc86b49e792d780d3b1861f85146"
+        },
+        "console-hooks.o": {
+          "path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/console-hooks.o",
+          "bytes": 1516,
+          "sha256": "46bf2f587bc957868d95e88a888fb67b20c865be3d410c9d6fd2439f8496098a"
+        },
+        "constructor.o": {
+          "path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/constructor.o",
+          "bytes": 1028,
+          "sha256": "2d0d49b72e19d397943409ca073b1ad973c48ae93bc088d24efabec7b240d67d"
+        },
+        "poll-hook.o": {
+          "path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/poll-hook.o",
+          "bytes": 744,
+          "sha256": "5770421e88e3e654e24eb9555530f260fbbfc8c3a83d1349d17083afa706ff83"
+        }
+      },
+      "source_recompile_in_this_task": true,
+      "poll_bridge_translation_unit": {
+        "object_path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/link/output-nonlto-bridge/h1e_vad_native_poll_nonlto.o",
+        "object_sha256": "fcb93274a8b347dc02725598e26aeccede7006377423f7a66d0e00862592cab0",
+        "compile_override": [
+          "-ffunction-sections",
+          "-fdata-sections",
+          "-fno-lto"
+        ],
+        "reason": "The retained LTO object produced an empty bridge function; the exact non-LTO wrapper has a 24-byte body and its undefined binding reference retains the LTO call graph."
+      }
+    }
+  },
+  "current_console": {
+    "elf_path": "research/rea/completion630-lab/firmware/capture-stream-slot-diagnostic/out-NOTINSTALL/slot-run2/native/native630.elf",
+    "elf_sha256": "82f0343772b192a2276461f13824607f00378702221500b61960920822e8b8c0",
+    "module_path": "research/rea/completion630-lab/firmware/capture-stream-slot-diagnostic/out-NOTINSTALL/slot-run2/native/native630.bin",
+    "module_sha256": "75631f4f1c65a5b5a8f1b4a2ca4e9288421b05d40d7c1f2fa83a0dc9dc5bc7b1",
+    "reservation_start": "0x0112b000",
+    "reservation_length": 4096,
+    "reservation_sha256": "cbf1c0f5e66f1e9ada0a526bbffcf08631b755b8cd32902a8584deee7f20d6e4",
+    "reservation_bytes_hex": "6080418050427843c86c43800280c86c08400c6c3c780000d214436d4039076d160c18910033403878b179b1030c6910cd7b0033003264b4403d671058b3070c6194d664040c6310176ccd7b9214000060a20501805508008164110830380f0c40390d0c00330d64030801303c7803214f594092403a030c0023f6070030f707d31420c42328076d453b080c4d38420c5538420c40eb0af0490800359464ab08745c403ba80c355a1b39a50841393608208341eb2e009f0c9060208301e41f10007400eb5e00970841eb2f00940c41eb5c00910c41eb3a008e0c0023ca64ee0b403d300c483d036402401060ffe38aff483d836d8208136cffe384ff403e7b0cdf387908c0c72350c2608c6500c4000593140435c4070835c2074239ce0b208341eb2e00ca0b2183c5075a38490c1a38130851380f0c1138070848382b0c4c38330c0130e6075638360c5838340c5338f90b443a2e0440eb07f0430c00eb07f008085c383c0c40eb2100ec0b483a210440eb18f1380c40eb19f1390c40eb10f0e10b443a3808076cffe33cff7d1000280904483a30080e59ffe334ffa0c6235000280c64b40742c42328483bcb0f503a0364af07543a1f0804e40f00ee07483a1a08076cb010ffe31dff836d1464130c0e5cffe317ff5a6114649907423ae9074d3ae707082a02eb0804e307002a02eb1c04df0700308d07403e0030840b89077fee36008fe03e02d214036d40380b0c18900033403878b4a41079b4020cd57b136cd57b9214000060a20501d41425147f0241b8b693cb6c403d0032152a036d20b840b3090c4038070c4359c0c723500c2b8c640608576c136cffe3dffe5904e4957895403b63b8620c799562b863981e5bffe3c7fe6f03836d4e8b897444b800e00e084038e80f73034498c860013be30b62980b3be00f42eb19f10131093361c4200c0c318461c460d864d50f42eb19f103ea1d0402ea110462c4400cc4608c65ca0f62988c65c70b6d5ece65c40b6098dc64c10f639842988c60d36c2083002320a2315b009800220464f90f6195d264040c7213136ccd7b42986098c8608c6579b54d5e44b506086198003240b300340a040033003278b579b56513839858b36198c0b3136c05149414403f150c61136e8b8d74193a8f0b6213c970ce6c63e40120403b880b80336f43cc65840f6098dc64e90b800760980b3b7d0f6080523b0508618043eb3400060c61980032012a40b37107c2806380c8468c6d0720ffe340fe6d12d860013bc36d410846eb19f186084038400c03ea1d04cc65380c60980b2bcc65380800e07a074038540f651207e40c00cd7b4038050800326198002ad80720985060d36c22b8836c2083002320a2229800224e64fa0b00327c584ca3609818b579b56d5f0b2364b572119975ceabcf110e5cf8b6ffe303fe19b66195d264830f6e11136ccd7b7f0780336f43cc65210f609843e40b109c641c0f193e08086711d970ce6c63e40120403b7b0f9e64110b9f6c1b6c24e40b00ffe321fe4038090f153e30086011d970ce6c63e40120403b040c46eb07f0650b609803eb2f00f90a6098025b7710cd7b836d4038a50f836cd36c2083009820a20023315b04640022f90f0032785840a36195d264040c6a10136ccd7b1b6d45070838bb0f03ea11047b0746eb0af0d507000080550800c0550800e80effff60a20501000290024ca20501a0202000c2140032c8640b0888598084a85800224c3a80a5f80b00336ca082140034f70749107992384b67a024a0304b25a0284b26a07892584b6ba048a0504b49a0484b4aa03c7880550800d1146910036dcd7b40380b0c44eb39000808c36c0061003240a300230e65fc0b911400004ca20501d2140332036d476dffe38afd4038060c6410576c136ccd7b921400301528fd078c360001d2140232036d476dffe378fd4038060c6410576c136ccd7b921400301528fd07b0b90601d2140232036d476dffe366fd4038060c6410576c136ccd7b921400301528fd0748be0601d2140232036d476dffe354fd4038060c6410576c136ccd7b921400301528fd0744c00601d2140232036d476dffe342fd4038060c6410576c136ccd7b921400301528fd073cb70601d1142114076dbb6cffe31afe4038100c536c6098203b02084f6c8198eed902200314d4143114b310076d73100c78009801149114d014d36cffe352ff90140000d414241400b821b842b863b80e98ffe357ff6a1068b800982198429863980414941400001c64020cc36d9f6c25983c78d855080034a803013aa90301d4142514036d476d00333036e25b02190b6cc4600a3161b840b800e0d10161984098186000a30a310b6c00e0a301836c4038df6cec0b1461002b0219403b445b408240a40024f90b145f05149414d3144f6d6498036d8f6dffe3d4ff2e332258106060a0976c136cffe3ccff2e32605c40a322589b6c136cffe3c4ff9314c114c6640c0840604264030801308114808060820020d2640022f70f0030f8070000d4148b6da590c76d628568434385c86c43eb19f105089b6c00e05a10941443eb18f105089b6c00e0c905f90743eb17f1050c71119b6ccd7bf20750112e8a4574c6645508403f2790480c4039460c073e44086885098510407843c06c0b85c06c0a850840c06cda6438086491403b35086c82403b3208043341115b6c1f6cffe3b0ff40382c0807335e105b6c1f6cffe3a8ff4038260806335b105b6c1f6cffe3a0ff40382008073358105b6c1f6cffe398ff036d40381908053355105b6c1f6cffe38fff0533403864c4200c403b0364007408a569a5a3070033f9070133f7070233f5070333f3070433f107003000289607000098861201c0550800a8bd1201adbd1201b5bd1201bcbd1201c4bd1201d3142d14669043eb19f1050800e09d140d14931443eb18f1040800e0f308f90743eb17f1040c6e12cd7bf3076a90a890403b8790040800300128eb07403cfc0f403dfa0f4883403a050c013301306ca4e0076983413b20080032221248602081cb6c4039140803eb2f00e60b025b1464e30f0032d0604ca4936c8e64ca0f315a011d546020812da20022f807011bc86020a30022e307423b34081311c17b73110031c1937211c4606083403b200800c44370584800c4807000b80118ffe3f1fe436c61594b11c8606083403b150806c4837006c442709875c0b80118ffe3e1fe011a625808600a3240a0be07011a846060a20021d807011a846060a20021e207433b12081c10c17b836c00317b10c46060830118403b0408ffe39cfee207046060a00021f407443b120805eb2800840f00335310235d04e40c0000e0d50040eb28007a0b003329306ca46307453b740b576c136c00e0ec015c07000098871201cabd120164c60301800f1000e7bd1201efbd120154000901fabd1201e8bb1201000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004039030800c0202c403802083c78c1140132c36c03c4447c90701070c76c03c4447c0024c36cd170126d202490701070403a090c00c4204ccd604c64020cc6608960f90f0b6c4f6c811400004039030800c0202c403802083c78836c02c4437c01328c700c70003300c4204ccd604c64020cc6608960f90f0f6c3c78d414241400b821b842b863b8403c0408ae980b25a5b80918576c936cffe34cfe0033002bc264070c04b8013363b87b1068b804047a10608b63b80098219842986398041494140000d414241400b821b842b863b80918ffe3b7fe0033002bc264140c0033012bc264050c09b96d1068b806040033002b72b86b1068b80098219842986398041494140098219842986f98193b0414941400000ab50301dc550800e29403012a910301d4142d14036d40384b6d61b8680c403a660c01eb2700660c0036003700330198021a5b6c62b8d57b4038050c003002280d149414403e031bdc60090c413e110c633240a36c3241a36b320604643240a36d3241a3613242a33d3243a304320c04723240a3693241a36e3242a3673243a33d3244a305326298003160b89c6000980033c66062431b2360c4434063e40f20093b22082f23045a00214839031f1c6060a0ee0b00260a31433e203361c4200c433ee2e408000319846068a2b00b00334c5c03194c60002343eb2800208120a2f80b2830ae075623ce74de0700300028a80700300128a507403a070c41390e0c4039060c42390e0c00300028060480336343769360b200303c78803363437e93fa0762106593f707001000c0c114c36c876c055a0022835a8084403c0208811480a30023f707c3141c320f3557360034032c41c44340d468093b08082f23032a0a6560a00020f60b8314d860ce74f807d3142d148f6d40380033436d0b6d60b85b0c403a590c01eb2700590cbb6c00311b6cd17b40385608609843eb58ef160c2a110318ffe3c4ff036d209803181060ffe3cbff7e5c031a025bc8600a3240a300330c64320c0d1493140033011a61b862b801311b6cd17b40383408021a02311b6cd17b40382e0839100318ffe3a0ff01ea5cef036d03181060ffe3a6ff3510072403181060ffe393ff2198006103181060ffe39aff3010072403181060ffe387ff22980061c30703194c604c5d208120a20023c70700300028c60700300128c30700300228c00707be120112be120118be12011ebe1201d114036d01eb280004080030012891140033461000290c20ffe380ff2038f60b003300206ca4f40774bd1201403a070c41390e0c4039060c42390e0c003000280604803363437e9360b200303c78ef3368437793fa0762106393f707000100c068656c700076657273696f6e00757074696d6500766563746f727300736c6f74730068656c700a76657273696f6e0a757074696d650a766563746f72730a006b65726e656c3d00206669726d776172653d00757074696d655f6d7333323d007265667573656420703d00736c6f743d00207467743d0020706c6c3d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    "preserved_after_composition": true,
+    "symbols": {
+      "console630_parse": {
+        "address": "0x0112b70c",
+        "size": 272,
+        "sha256": "e72ad09d57bc4ddda5940bc30a7dab33a9eca0b7628ae90bd87a2de4ae7c3cea",
+        "alias": "console630_parse_current"
+      },
+      "console630_response": {
+        "address": "0x0112b81c",
+        "size": 384,
+        "sha256": "3b42d830b0b6092327e1b747399da4fd46f5983f7c5839221ae5cc0fd5780c94",
+        "alias": "console630_response_current"
+      },
+      "console630_parser_hook": {
+        "address": "0x0112ba58",
+        "symbol_size": 0,
+        "readback_anchor_bytes": 4,
+        "sha256": "9b54d2fcfb2b2598564d6570b9f5efdaa37c35b57c23a0dd21f8c70e261a3a25",
+        "unchanged": true
+      },
+      "console630_response_hook": {
+        "address": "0x0112baa0",
+        "symbol_size": 0,
+        "readback_anchor_bytes": 4,
+        "sha256": "9b54d2fcfb2b2598564d6570b9f5efdaa37c35b57c23a0dd21f8c70e261a3a25",
+        "unchanged": true
+      }
+    },
+    "aliases": {
+      "console630_parse_current": "0x0112b70c",
+      "console630_response_current": "0x0112b81c"
+    }
+  },
+  "fixed_router_live": {
+    "address": "0x01128000",
+    "bytes": 2613,
+    "sha256": "d518f0e40749eb73cf2dc9cdf3c0bb3efb3cf2b111115971a03f01cc0e547487",
+    "preserved_after_composition": true
+  },
+  "module_segment": {
+    "name": ".router_tail",
+    "address": "0x01128a40",
+    "length": 1248,
+    "elf_file_offset": 14912,
+    "sha256": "72c1fd09dfae86bbb4691b9b713c92e32685b1a5ccbb8f2e6b2406ec53115647",
+    "baseline_preimage_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "baseline_preimage_sha256": "7c940e3e44e2e2ae61833f731ec1cca095af755c11e500d093d900645a109350",
+    "preimage_fill": "ff"
+  },
+  "roots": {
+    "h1e_vad_native_poll_bridge": "0x01128e34",
+    "console630_parser_hook": "0x01128e4c",
+    "console630_response_hook": "0x01128e94",
+    "late_publication_stub": "0x01128f04"
+  },
+  "patches": [
+    {
+      "address": "0x01020b62",
+      "width": 4,
+      "role": "native_poll_bridge",
+      "before_hex": "ffe303f8",
+      "before_sha256": "14c5271bae49f4184aa2c3b809b765d588ead63fbb2c6ac859ea7ef93d801a63",
+      "replacement_hex": "08e06941",
+      "replacement_sha256": "d262c2bc08878f778d5537993281d29d8245494aefafff3dac558ad6507647c4",
+      "source_elf_section": ".poll_hook",
+      "elf_section_offset": 0,
+      "elf_file_offset": 2914,
+      "matches_393990_patch_preimage": true,
+      "target_symbol": "h1e_vad_native_poll_bridge",
+      "target_address": "0x01128e34",
+      "decoded_bsr_target_from_raw_bytes": "0x01128e34",
+      "branch_readback_passed": true
+    },
+    {
+      "address": "0x01021054",
+      "width": 2,
+      "role": "allocate_96",
+      "before_hex": "4030",
+      "before_sha256": "1c92f033fb8eabff5381b8eb26e5106d3b15acb67b35df470434501863d5c4b0",
+      "replacement_hex": "6030",
+      "replacement_sha256": "2590032929c9350c7a320d4eefb310b6097dd44bffa4c529db13be931142ce54",
+      "source_elf_section": ".constructor_edits",
+      "elf_section_offset": 0,
+      "elf_file_offset": 4180,
+      "matches_393990_patch_preimage": true
+    },
+    {
+      "address": "0x0102105c",
+      "width": 2,
+      "role": "retain_private_pointer",
+      "before_hex": "00b5",
+      "before_sha256": "3f17bd4e2dadf8c68fa29afddb05faad4e66f536c028c272db9a93f315d2dbd2",
+      "replacement_hex": "c36d",
+      "replacement_sha256": "3070862d36913466d7f9812c87da69becb62887a47f37753579b48d042d66eac",
+      "source_elf_section": ".constructor_edits",
+      "elf_section_offset": 8,
+      "elf_file_offset": 4188,
+      "matches_393990_patch_preimage": true
+    },
+    {
+      "address": "0x0102106a",
+      "width": 2,
+      "role": "private_failure_pointer",
+      "before_hex": "0095",
+      "before_sha256": "43f7be3cdc831ed5a0e41257f57341ca64c8f99bd06296bb6089d452d80c7719",
+      "replacement_hex": "1f6c",
+      "replacement_sha256": "973fd65450988fa869cbe1535ef73e51a83a78c4f6d047a9b639a9452605c610",
+      "source_elf_section": ".constructor_edits",
+      "elf_section_offset": 22,
+      "elf_file_offset": 4202,
+      "matches_393990_patch_preimage": true
+    },
+    {
+      "address": "0x01021070",
+      "width": 4,
+      "role": "final_publication_decision",
+      "before_hex": "403ce30f",
+      "before_sha256": "f744a6c0caa85759d17394972ad4ac570b8dd0385692895660dc1b93b460d04f",
+      "replacement_hex": "08e04a3f",
+      "replacement_sha256": "9bf5dd6b690534fcbc80ede3d11b1f0bb0331799add520cec414d1c6a6de7197",
+      "source_elf_section": ".constructor_edits",
+      "elf_section_offset": 28,
+      "elf_file_offset": 4208,
+      "matches_393990_patch_preimage": true,
+      "target_symbol": "late_publication_stub",
+      "target_address": "0x01128f04",
+      "decoded_bsr_target_from_raw_bytes": "0x01128f04",
+      "branch_readback_passed": true
+    },
+    {
+      "address": "0x0102109e",
+      "width": 2,
+      "role": "zero_96",
+      "before_hex": "4032",
+      "before_sha256": "fceacfdf3d54588d36ea873bdfa6fa1c507063d2e7da3efde559f2b2f58370ea",
+      "replacement_hex": "6032",
+      "replacement_sha256": "350e041ab2907f6964168623434302d2f1949f7930226240062a05253b33aa9c",
+      "source_elf_section": ".constructor_edits",
+      "elf_section_offset": 74,
+      "elf_file_offset": 4254,
+      "matches_393990_patch_preimage": true
+    },
+    {
+      "address": "0x010210a8",
+      "width": 2,
+      "role": "retain_private_pointer_after_zero",
+      "before_hex": "e095",
+      "before_sha256": "38872a9a999b6ca108eb0a5c659e9fb41982611383388c354e9f1bce0097a892",
+      "replacement_hex": "df6d",
+      "replacement_sha256": "c36dfb64f863ba2d2c6edb118e92c309c01c3d98e1b99490cf75f0d1fdd33b69",
+      "source_elf_section": ".constructor_edits",
+      "elf_section_offset": 84,
+      "elf_file_offset": 4264,
+      "matches_393990_patch_preimage": true
+    },
+    {
+      "address": "0x010210de",
+      "width": 2,
+      "role": "private_gpio_object",
+      "before_hex": "6095",
+      "before_sha256": "0d20ad1eecb6c3b5cfd7ae740b683e97c904162c8f1345e487341c10be42f30d",
+      "replacement_hex": "df6c",
+      "replacement_sha256": "7c251c9fbe52ca62bdfe0d6caaf8bb77440e8f70579b8635a3bb56136b4853ab",
+      "source_elf_section": ".constructor_edits",
+      "elf_section_offset": 138,
+      "elf_file_offset": 4318,
+      "matches_393990_patch_preimage": true
+    },
+    {
+      "address": "0x0103907a",
+      "width": 4,
+      "role": "f11a_response_dispatch",
+      "before_hex": "07e01395",
+      "before_sha256": "3a08d5bb395c377b12acc5be9b80b4a99488848790fd4a353248283c2c07199f",
+      "replacement_hex": "07e00d7f",
+      "replacement_sha256": "efedf7fe1984ab7e852cbb2d68a4168ee522b490b6245f9206228eda38e8de14",
+      "source_elf_section": ".response_hook",
+      "elf_section_offset": 0,
+      "elf_file_offset": 8314,
+      "matches_393990_patch_preimage": true,
+      "target_symbol": "console630_response_hook",
+      "target_address": "0x01128e94",
+      "decoded_bsr_target_from_raw_bytes": "0x01128e94",
+      "branch_readback_passed": true
+    },
+    {
+      "address": "0x0103a996",
+      "width": 4,
+      "role": "f11a_parser_dispatch",
+      "before_hex": "07e06188",
+      "before_sha256": "3979eb69dca7cc23e33afa9cd6e21bfcbb5ebbc06c3cda07af3a65287266b9f3",
+      "replacement_hex": "07e05b72",
+      "replacement_sha256": "fa1670022470b4dd3f90b70270c74a566654e6ccee77f56996ec88a0d6d35f80",
+      "source_elf_section": ".parser_hook",
+      "elf_section_offset": 0,
+      "elf_file_offset": 14742,
+      "matches_393990_patch_preimage": true,
+      "target_symbol": "console630_parser_hook",
+      "target_address": "0x01128e4c",
+      "decoded_bsr_target_from_raw_bytes": "0x01128e4c",
+      "branch_readback_passed": true
+    }
+  ],
+  "checks": {
+    "all_targets_decoded_from_actual_elf_bytes": true,
+    "patch_count": 10,
+    "patch_bytes": 28,
+    "no_console_tail": true,
+    "undefined_symbols": 0,
+    "data_bytes": 0,
+    "bss_bytes": 0,
+    "full_console_write_set_disjoint": true,
+    "composition_readback_pending": false,
+    "ownership_is_install_authorization": false,
+    "install_authorized": false,
+    "installed": false,
+    "hardware_tested": false,
+    "full_console_post_composition_verified": true
+  },
+  "source_receipts": {
+    "accepted_receipt": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/accepted-vad-inputs.json",
+      "sha256": "24c97109ea79776cb7b1045acbf78865b528f78b493208840692693555051c70",
+      "pinned_count": 36
+    },
+    "before_receipt": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/input-pins-before.json",
+      "sha256": "2278b2177e9efb59f650757c99bda285431519093c1a5f578ca2375802695f81"
+    },
+    "after_receipt": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/input-pins-after.json",
+      "sha256": "2278b2177e9efb59f650757c99bda285431519093c1a5f578ca2375802695f81"
+    },
+    "current_source_hashes_rechecked": 36,
+    "current_source_hashes": [
+      {
+        "path": "research/rea/completion630-lab/firmware/restore-build393988/generation-restore4/system-decoded-NOTINSTALL.bin",
+        "sha256": "b338e4d5e7d456dd2b7a0048bb8e2c338e2464ad25029267b5e46cb4ad880c2f"
+      },
+      {
+        "path": "research/rea/completion630-lab/firmware/restore-build393988/generation-restore4/symbols.txt",
+        "sha256": "a850bd25db4bab4c7e16b58c6ac5d5241c156a3fabde18aa187f167e09641e72"
+      },
+      {
+        "path": "research/rea/completion630-lab/firmware/restore-build393988/generation-restore4/module.ld",
+        "sha256": "90d5bc9c11850b87d123fb5eb51589645feea4a15d5cccc5896a8f9fd245840f"
+      },
+      {
+        "path": "research/rea/completion630-lab/firmware/restore-build393988/generation-restore4/console-hooks.S",
+        "sha256": "9858f32bcd5770f5672ab5631dbfb828ee7beca5420b6fc5d4defce001b874d1"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/vadt_binding.c",
+        "sha256": "edbd510b6babf15d20c4b4ae2feb8282f54957d14360e2d4f7c3fb521cd7f2bc"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/vadt_core.c",
+        "sha256": "e2efb05c8e0adb60a2e4a7309a23a83aa15272042f173d3af7d3381712ffc276"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/vadt_csky_guard.c",
+        "sha256": "42a761942e7dacfe86d3f75ed226e1991b859ecdad54347db0f11bbc79c5df59"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/vadt_test.c",
+        "sha256": "3604034837f414e966a75190319400faa5a975927c0fadca6f853330863e8010"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/vadt_binding.h",
+        "sha256": "5c89d77206a0f8cf5e3e219312c367d5cef1402365432ed04f34366473012f89"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/fresh-sample-candidate/vadt_core.h",
+        "sha256": "f8dae82ce77a3fc2f0599f9feb2be77cf688694e9c6b103f83cd803faeb9bbd4"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/native-frame-candidate/vadt_frame.c",
+        "sha256": "4221342a366f6ec3b044c1a28c9b70b60319256916d5e56c0c50adeec9a65037"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/native-frame-candidate/vadt_frame_binding.c",
+        "sha256": "9204f9f5b96ab85f81fae635e69525ea7d149c874ae2fd67dadef66fd9952143"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/native-frame-candidate/vadt_frame_target.c",
+        "sha256": "ae64e2dee71e700096e9bb0b7afb1685ff937979e5809f330c645732953cad65"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/native-frame-candidate/vadt_frame_test.c",
+        "sha256": "c9373473c50aae935fff73cc9870c172ebcae430bd65aa461c09f6be868b16df"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/native-frame-candidate/vadt_frame.h",
+        "sha256": "335c847f7656eb296bbaf21ff197690faa71f440737dd1034dd9390ede74ed5e"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/native-poll-candidate/h1e_vad_loader_stub_testonly.c",
+        "sha256": "f4671c47ad368de856d179c9a75da47c83da120ffc34cabdc53d16a51b47f6d4"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/native-poll-candidate/h1e_vad_native_poll.c",
+        "sha256": "454d10055a2b1f24a78a639188e76ce74f1b2c5f842223fa545d831c807851f0"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/native-poll-candidate/h1e_vad_native_poll_test.c",
+        "sha256": "bfc329ac614d6b7cf6191a73aeb420a00dc7607f178d2ead5e826226a013e6f7"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/native-poll-candidate/h1e_vad_host_test_config.h",
+        "sha256": "0e8f607e11b022489ba3c77b0f2ce43a66dbe809b3b7447b9ff59741451392fc"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/native-poll-candidate/h1e_vad_native_poll.h",
+        "sha256": "faf68945119b8de42dad80dd721410d8be74e367b3643d274a1f836e4455823e"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/native-poll-candidate/vadt_layout_check.h",
+        "sha256": "bfca97abcd6b3470bee9a0fe8079e1d8a85a256b821f0cbe3407e13d1728c832"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/native-dispatch-candidate/console630_f11a.c",
+        "sha256": "1ba30cdbb7f298c95b5cb972e482beb6005bb1944accb9a82b69c5da85661a8f"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/native-dispatch-candidate/console630_f11a_test.c",
+        "sha256": "29aa6b387801ece4a511a9d7a62865498589265ab60835ad1899ebbd2ca2dbab"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/native-dispatch-candidate/h1e_dispatch_host_seams_testonly.h",
+        "sha256": "a2f1489db0fc75323a0a9d90566fedecb7c47cadda56f41c2574cc08d2681b08"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/native-dispatch-candidate/h1e_vad_snapshot.h",
+        "sha256": "c6b8754c630cd05f983300e7f1c580080c519245017005bcd71265dbb5a003a2"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/native-loader-candidate/h1e_vad_native_loader.c",
+        "sha256": "a7ffe66574ef8b65a1ea9595765b2ba9524568022b02a1124ea34c7445866c99"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/native-loader-candidate/h1e_vad_native_loader_test.c",
+        "sha256": "9322054c23dffdd2df655e6c78a946ad40894b4f1ffb7afe1d0e241217fdf13f"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/native-loader-candidate/h1e_vad_native_loader.h",
+        "sha256": "23d2ee31956b004268227687ff0a4a9033da60cd68b8c25ec22a8d945045e657"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/native-loader-candidate/h1e_vad_native_loader_host_config.h",
+        "sha256": "12dc537a8b130452668988f82cb1a814dd2e05e339ddb94a6e170c39c5e2f336"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/lifecycle-followup/late-publication/late-publication.s",
+        "sha256": "a5ff54487d85f08ec00ee88afab3ff205aa8e7aeb633bd74488cca2a3aa6d163"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/module.ld",
+        "sha256": "b3e26eb9ff6e2f64c216dfb6915f601e70abb29a2ec4118ed7dd93a0afce8ab3"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/poll-hook.S",
+        "sha256": "0e9f1ee1bab1fb70debb43d74c9024ccebfc7e1217772121ba79322aa8941414"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/native-link-candidate/build-offline.sh",
+        "sha256": "0c80274ebbf8a23035c1086cf31fbb1ef419d9c8fcfe71574ea769d37f271e23"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/native-dispatch-candidate/REPORT.md",
+        "sha256": "86144445de865fc3e65f5e7eb5192ca33a97e57110812e7b94fdb7ee2958f917"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/native-loader-candidate/REPORT.md",
+        "sha256": "a0505273aaf05dd4c8e8bb498ea68986c30e61c01346d4c51e7f7bfddec16ef3"
+      },
+      {
+        "path": "research/rea/completion630-lab/hardware-vad-trace/combined-source-review/native-glue-review.md",
+        "sha256": "9f8200656ab2bbe5da310779c091441c9d7a64255377e11e882e41487294fda4"
+      }
+    ]
+  },
+  "pinned_inputs": {
+    "baseline_container": {
+      "path": "research/rea/completion630-lab/firmware/capture-vector-selected-diagnostic/out-NOTINSTALL/container-compose3/H1E-6.3.6_vectors001-EXPERIMENTAL-NOT-INSTALL.bin",
+      "sha256": "d0cd083ff19d56325dca12ea7785c4deb270cf2ef68fa6b7af1c64b0baa651a0",
+      "bytes": 3429376
+    },
+    "baseline_boot_decoded": {
+      "path": "research/rea/completion630-lab/firmware/capture-vector-selected-diagnostic/out-NOTINSTALL/container-compose3/boot-decoded.bin",
+      "sha256": "7bd8bce552f7a07d3ce5bd5f25a71eb162e46ae71118d4e495e285b6034fc168",
+      "bytes": 4096
+    },
+    "baseline_system_decoded": {
+      "path": "research/rea/completion630-lab/firmware/capture-vector-selected-diagnostic/out-NOTINSTALL/container-compose3/system-decoded.bin",
+      "sha256": "abff684071be35f29286010c13e27f8af51de364efbaedffdd12bb6e85ebd360",
+      "bytes": 1237504
+    },
+    "current_slots_system": {
+      "path": "research/rea/completion630-lab/firmware/capture-stream-slot-exact-image-qa/out-NOTINSTALL/compose-20261016T071238Z-19674/system-decoded-NOTINSTALL.bin",
+      "sha256": "ebee46c51239a4ad971c54cf4b4c12e2a29d516aebd15065ec258de099168771",
+      "bytes": 1237504
+    },
+    "current_slots_console_elf": {
+      "path": "research/rea/completion630-lab/firmware/capture-stream-slot-diagnostic/out-NOTINSTALL/slot-run2/native/native630.elf",
+      "sha256": "82f0343772b192a2276461f13824607f00378702221500b61960920822e8b8c0",
+      "bytes": 41132
+    },
+    "current_slots_console_bin": {
+      "path": "research/rea/completion630-lab/firmware/capture-stream-slot-diagnostic/out-NOTINSTALL/slot-run2/native/native630.bin",
+      "sha256": "75631f4f1c65a5b5a8f1b4a2ca4e9288421b05d40d7c1f2fa83a0dc9dc5bc7b1",
+      "bytes": 3620
+    },
+    "fixed_router_elf": {
+      "path": "research/rea/hardening630-lab/fixed-router/router630.elf",
+      "sha256": "f102c7703ce3f75e1f327bafb756367d5148fc0fa676f7f0391d26d56cc7bd3a",
+      "bytes": 31640
+    },
+    "fixed_router_bin": {
+      "path": "research/rea/hardening630-lab/fixed-router/router630.bin",
+      "sha256": "d518f0e40749eb73cf2dc9cdf3c0bb3efb3cf2b111115971a03f01cc0e547487",
+      "bytes": 2613
+    },
+    "prior_router_layout": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/router-only-393990-candidate/output/layout-readback.json",
+      "sha256": "46b380301df7490743f521f49f5ebd069f5d49c924737b3cbceeb422617fdfd5",
+      "bytes": 33134
+    },
+    "prior_link_script": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/router-only-393990-candidate/router-only.ld",
+      "sha256": "1c322c78281e79bdd8821d9b0f8d6a215d12c0359a3c76516a24e17d69915408",
+      "bytes": 1350
+    },
+    "identity_reference": {
+      "path": "research/rea/completion630-lab/firmware/capture-stream-slot-install-candidate/compose_container.py",
+      "sha256": "069fe4d7aa2cbd50bf56fe5da88c502da21ad51c4a5edad5e6a4bec8820e282b",
+      "bytes": 18612
+    },
+    "reservation_source": {
+      "path": "research/rea/completion630-lab/application/SHARED-MODULE-RESERVATIONS.md",
+      "sha256": "f620e81803262ffa71c5c782a6267a258d2855f6417a20781a7d5ec854027196",
+      "bytes": 1443
+    },
+    "reservation_json": {
+      "path": "research/rea/completion630-lab/application/shared-module-reservations.json",
+      "sha256": "9f9b33715a20428db62f31365acd1f25e61a0e7a3eb9fb505db358f3e72cba00",
+      "bytes": 2007
+    },
+    "sdk_packer": {
+      "path": "research/rea/references/build_atf_image.py",
+      "sha256": "30b5d37f67bb57af44d02da829429c59bb734d5c7c0acc1a1ce5f15029401c17",
+      "bytes": 8645
+    },
+    "randomizer_decoder": {
+      "path": "research/rea/decode_randomizer.py",
+      "sha256": "3a9a945dafe6a81327d9f15e0619befc30109fd9e8ce58e2af8e7d5e7e734de5",
+      "bytes": 5953
+    },
+    "acttest_parser": {
+      "path": "research/rea/extract_acttest.py",
+      "sha256": "8adf114c2ee531f12778b346482c344717659a130892515258505781efccc592",
+      "bytes": 4063
+    }
+  },
+  "limits": "Parent-granted router reservation is used for this offline candidate. It does not imply target qualification, physical VAD semantics, install authorization, release or hardware acceptance."
+}

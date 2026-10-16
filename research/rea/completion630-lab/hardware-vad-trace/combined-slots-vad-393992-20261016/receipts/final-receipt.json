@@ -1,0 +1,47 @@
+{
+  "schema": "h1e-vad-combined-slots-393992-final-receipt-v1",
+  "status": "offline_combined_candidate_complete_EXPERIMENTAL_NOTINSTALL",
+  "identity": {
+    "numeric": 393992,
+    "version_name": "6.3.8_vad001",
+    "ota_version_code": "0x60308",
+    "board": "ats2835p_evb"
+  },
+  "linked_elf": {
+    "path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/link/output/relink-ordered/vad-router-only-slots-393992-NOTINSTALL.elf",
+    "sha256": "96c6e8c9b9db6de295f7d4a766a71beb6f066ac9b7a1f331cb52d320d92d1c13",
+    "bytes": 18856,
+    "module_sha256": "de927782daa820151fc56c43edb7e936db340e524687b5c08b5b754f75b7e429",
+    "module_bytes": 1088,
+    "response_alias": "0x0112b81c"
+  },
+  "combined_system": {
+    "path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/out-NOTINSTALL/compose-1/system-decoded-NOTINSTALL.bin",
+    "sha256": "28be9ebe96f81f3a6a629ab8448be30bd8531c697ebf32c8238fc2d71ba4e768",
+    "bytes": 1237504
+  },
+  "combined_container": {
+    "path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/out-NOTINSTALL/compose-1/H1E-6.3.8_vad001-EXPERIMENTAL-NOT-INSTALL.bin",
+    "sha256": "619e4fe3cea881e0d3b26dc2b353b8d078e399b843865b475d4a734e6fd6fac4",
+    "bytes": 3429376
+  },
+  "readback_receipts": {
+    "layout": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/receipts/layout-readback.json",
+      "sha256": "1fe31b275d83e06b8869b9f330b1a1ac145f40f1e31f847e62b867c0662b09d9"
+    },
+    "composition": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/receipts/composition-readback.json",
+      "sha256": "02fe6dbf9868b82fe95f94ffce1f5b9380c3b57396210ea1cd0f4cd10d6e5cec"
+    },
+    "container": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/receipts/container-readback.json",
+      "sha256": "0890f3fb7155b32e4c53870507552469506c2d7e2cf76fa0e1bb2521f4b695e9"
+    }
+  },
+  "composer": {
+    "path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/compose_combined.py",
+    "sha256": "bf84ca620930d017e494846d13255b02ad61e909ca6175a1ec1d9031c748ff81"
+  },
+  "limits": "Offline structural/readback candidate only. No flash, device action, public release, host installer qualification, physical boot, DSP VAD signal qualification, or device behavior claim."
+}

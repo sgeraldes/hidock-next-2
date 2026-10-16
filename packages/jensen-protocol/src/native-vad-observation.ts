@@ -1,5 +1,5 @@
-/** Source-candidate codec for the proposed read-only native VAD observation command.
- * The command id is tentative and unallocated, and no firmware, device class or app uses it.
+/** Codec for the engineering firmware's read-only native VAD observation command.
+ * Only JensenDevice.getNativeVadObservation uses it, on the exact H1E 393992 / 6.3.8 pair.
  * Byte parsing only: nothing here attests a physical VAD signal, an image or an installed firmware.
  * First binding is UNCLOCKED, so age is never reported and a reply claiming one is rejected.
  */

@@ -1,0 +1,26 @@
+{
+  "image": "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/out-NOTINSTALL/compose-3/system-decoded-NOTINSTALL.bin",
+  "image_sha256": "043afb17fbc868474a33c999ac30473839ab188ba22f46adc95914be6649a918",
+  "image_bytes": 1237504,
+  "elf_sha256": "50d0a27d79ccc7813a0a5150a5e6ed00d77171a4c3c3f8f7aa4566bc4d734a80",
+  "symbols_path": "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/link/output-nonlto-bridge/symbols.txt",
+  "symbols_sha256": "7222b982ab20c07f5aa270fa530128eed77e587cbab42be6820f30869a5a59a8",
+  "layout_path": "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/receipts/compose-3/layout-readback.json",
+  "layout_sha256": "5fd4795ac690fff59b09e5000bdaa601a974e34b27016baa9081b6f9c99424b1",
+  "addresses": {
+    "console_parse": "0x01128d08",
+    "console_response": "0x01128bf4",
+    "poll_bridge": "0x01128e34",
+    "publication_stub": "0x01128f04",
+    "current_parse": "0x0112b70c",
+    "current_response": "0x0112b81c"
+  },
+  "fixed_contract": {
+    "image_base": "0x01000000",
+    "slot": "0x000852c0",
+    "pending_command": "0x000855dc",
+    "native_getter_model": "0x0101fb68",
+    "constructor_success_continuation": "0x01021038",
+    "constructor_failure_continuation": "0x01021074"
+  }
+}

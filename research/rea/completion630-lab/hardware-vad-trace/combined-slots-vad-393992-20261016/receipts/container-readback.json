@@ -1,0 +1,486 @@
+{
+  "schema": "h1e-vad-combined-slots-393992-container-readback-v1",
+  "status": "offline_container_composed_readback_verified_EXPERIMENTAL_NOTINSTALL",
+  "identity": {
+    "numeric": 393992,
+    "version_name": "6.3.8_vad001",
+    "ota_version_code": "0x60308",
+    "board": "ats2835p_evb"
+  },
+  "baseline_container": {
+    "path": "research/rea/completion630-lab/firmware/capture-vector-selected-diagnostic/out-NOTINSTALL/container-compose3/H1E-6.3.6_vectors001-EXPERIMENTAL-NOT-INSTALL.bin",
+    "sha256": "d0cd083ff19d56325dca12ea7785c4deb270cf2ef68fa6b7af1c64b0baa651a0",
+    "bytes": 3429376,
+    "identity": {
+      "numeric": 393990,
+      "version_name": "6.3.6_vectors001"
+    }
+  },
+  "output_container": {
+    "path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/out-NOTINSTALL/compose-1/H1E-6.3.8_vad001-EXPERIMENTAL-NOT-INSTALL.bin",
+    "sha256": "619e4fe3cea881e0d3b26dc2b353b8d078e399b843865b475d4a734e6fd6fac4",
+    "bytes": 3429376
+  },
+  "decoded_system": {
+    "path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/out-NOTINSTALL/compose-1/system-decoded-NOTINSTALL.bin",
+    "sha256": "28be9ebe96f81f3a6a629ab8448be30bd8531c697ebf32c8238fc2d71ba4e768",
+    "bytes": 1237504,
+    "baseline_slots_sha256": "ebee46c51239a4ad971c54cf4b4c12e2a29d516aebd15065ec258de099168771",
+    "inverse_reconstructs_slots_baseline": true
+  },
+  "decoded_boot": {
+    "sha256": "08a08215f3550229d963ab53315faa213bd7c9f4b681a3fd0d6fdc247a50ef98",
+    "baseline_sha256": "7bd8bce552f7a07d3ce5bd5f25a71eb162e46ae71118d4e495e285b6034fc168",
+    "instruction_bytes_unchanged": true,
+    "identity_and_crc_windows_only": true,
+    "allowed_ranges": [
+      "0x14..0x17",
+      "0xf84..0xf87",
+      "0xf8c..0xfcb",
+      "0xffc..0xfff"
+    ]
+  },
+  "partitions": [
+    {
+      "name": "ota.xml",
+      "old_offset": 512,
+      "offset": 512,
+      "old_size": 1533,
+      "size": 1533,
+      "crc32": "0xee0a18e8",
+      "sha256": "01b3ea9090dc4d73cb71e8c29ccefb9ab69aa65e2195225310bae260feecbf91",
+      "unchanged_payload": false
+    },
+    {
+      "name": "zephyr.bin",
+      "old_offset": 2048,
+      "offset": 2048,
+      "old_size": 1237504,
+      "size": 1237504,
+      "crc32": "0x58a536ac",
+      "sha256": "9bad37839b396503341f7bd12a04dab436982e1c639a39dad331b3c1a5d7a715",
+      "unchanged_payload": false
+    },
+    {
+      "name": "RomeApp.bin",
+      "old_offset": 1240064,
+      "offset": 1240064,
+      "old_size": 430020,
+      "size": 430020,
+      "crc32": "0x4da37140",
+      "sha256": "3d458efc546c2bf54460174df29f4c2ac353f2a5e68ad6d2a53f7eb8b48cedec",
+      "unchanged_payload": true
+    },
+    {
+      "name": "UAC.bin",
+      "old_offset": 1670144,
+      "offset": 1670144,
+      "old_size": 1024,
+      "size": 1024,
+      "crc32": "0xd18d87df",
+      "sha256": "c665ce239c7fd7983340d662765fd9217542b1d809b77b2b00517a2abc85f872",
+      "unchanged_payload": true
+    },
+    {
+      "name": "IG1202dl.bin",
+      "old_offset": 1671680,
+      "offset": 1671680,
+      "old_size": 704000,
+      "size": 704000,
+      "crc32": "0xc6d2f351",
+      "sha256": "5712e05f93cd8d6d0a5c27c7977aebdf179dc8e841984b8bf82d979a113f0376",
+      "unchanged_payload": true
+    },
+    {
+      "name": "sdfs.bin",
+      "old_offset": 2376192,
+      "offset": 2376192,
+      "old_size": 1048192,
+      "size": 1048192,
+      "crc32": "0x2b4d60f7",
+      "sha256": "23eae8c812187e8fbddf12e0de8375d0514ae5b05213d17d7ebbec0a4414126d",
+      "unchanged_payload": true
+    },
+    {
+      "name": "mbrec.bin",
+      "old_offset": 3424768,
+      "offset": 3424768,
+      "old_size": 4096,
+      "size": 4096,
+      "crc32": "0xda1a7e3b",
+      "sha256": "a69db99f0d083d652204fe3bb3fe72605eae023803e20335a615f0fdbe6f4f19",
+      "unchanged_payload": false
+    }
+  ],
+  "directory_offsets_and_all_partition_sizes_unchanged": true,
+  "unchanged_other_payloads_preserved": true,
+  "zephyr_decodes_to_exact_combined_system": true,
+  "console_4096_preserved_in_decoded_container": true,
+  "xml": {
+    "old_sha256": "40c5be508afe4003a0ce023f1c243be0954ca61dc3507435efc5aeb83e4fd50e",
+    "new_sha256": "01b3ea9090dc4d73cb71e8c29ccefb9ab69aa65e2195225310bae260feecbf91",
+    "old_bytes": 1533,
+    "new_bytes": 1533,
+    "size_preserved": true,
+    "semantic_changes": [
+      "firmware_version/version_code",
+      "firmware_version/version_name",
+      "zephyr.bin/checksum",
+      "mbrec.bin/checksum"
+    ],
+    "padded_with_xml_trailing_whitespace_to_keep_directory_size": true
+  },
+  "container_changed_bytes": 3784,
+  "container_changed_runs": [
+    {
+      "start": "0x8",
+      "end_exclusive": "0xc",
+      "length": 4
+    },
+    {
+      "start": "0x18",
+      "end_exclusive": "0x1c",
+      "length": 4
+    },
+    {
+      "start": "0x3c",
+      "end_exclusive": "0x40",
+      "length": 4
+    },
+    {
+      "start": "0x5c",
+      "end_exclusive": "0x60",
+      "length": 4
+    },
+    {
+      "start": "0xfc",
+      "end_exclusive": "0x100",
+      "length": 4
+    },
+    {
+      "start": "0x260",
+      "end_exclusive": "0x261",
+      "length": 1
+    },
+    {
+      "start": "0x285",
+      "end_exclusive": "0x286",
+      "length": 1
+    },
+    {
+      "start": "0x288",
+      "end_exclusive": "0x2da",
+      "length": 82
+    },
+    {
+      "start": "0x2db",
+      "end_exclusive": "0x2fe",
+      "length": 35
+    },
+    {
+      "start": "0x2ff",
+      "end_exclusive": "0x37a",
+      "length": 123
+    },
+    {
+      "start": "0x37b",
+      "end_exclusive": "0x385",
+      "length": 10
+    },
+    {
+      "start": "0x386",
+      "end_exclusive": "0x3bd",
+      "length": 55
+    },
+    {
+      "start": "0x3be",
+      "end_exclusive": "0x3df",
+      "length": 33
+    },
+    {
+      "start": "0x3e0",
+      "end_exclusive": "0x43e",
+      "length": 94
+    },
+    {
+      "start": "0x43f",
+      "end_exclusive": "0x449",
+      "length": 10
+    },
+    {
+      "start": "0x44a",
+      "end_exclusive": "0x4a8",
+      "length": 94
+    },
+    {
+      "start": "0x4a9",
+      "end_exclusive": "0x4f2",
+      "length": 73
+    },
+    {
+      "start": "0x4f3",
+      "end_exclusive": "0x505",
+      "length": 18
+    },
+    {
+      "start": "0x506",
+      "end_exclusive": "0x512",
+      "length": 12
+    },
+    {
+      "start": "0x513",
+      "end_exclusive": "0x5cc",
+      "length": 185
+    },
+    {
+      "start": "0x5cd",
+      "end_exclusive": "0x5d7",
+      "length": 10
+    },
+    {
+      "start": "0x5d8",
+      "end_exclusive": "0x60d",
+      "length": 53
+    },
+    {
+      "start": "0x60e",
+      "end_exclusive": "0x68b",
+      "length": 125
+    },
+    {
+      "start": "0x68c",
+      "end_exclusive": "0x697",
+      "length": 11
+    },
+    {
+      "start": "0x698",
+      "end_exclusive": "0x755",
+      "length": 189
+    },
+    {
+      "start": "0x756",
+      "end_exclusive": "0x762",
+      "length": 12
+    },
+    {
+      "start": "0x763",
+      "end_exclusive": "0x7f5",
+      "length": 146
+    },
+    {
+      "start": "0x7f6",
+      "end_exclusive": "0x7fd",
+      "length": 7
+    },
+    {
+      "start": "0x21362",
+      "end_exclusive": "0x21374",
+      "length": 18
+    },
+    {
+      "start": "0x21375",
+      "end_exclusive": "0x21380",
+      "length": 11
+    },
+    {
+      "start": "0x21854",
+      "end_exclusive": "0x21860",
+      "length": 12
+    },
+    {
+      "start": "0x2186a",
+      "end_exclusive": "0x21880",
+      "length": 22
+    },
+    {
+      "start": "0x2189e",
+      "end_exclusive": "0x218a0",
+      "length": 2
+    },
+    {
+      "start": "0x218a8",
+      "end_exclusive": "0x218c0",
+      "length": 24
+    },
+    {
+      "start": "0x218de",
+      "end_exclusive": "0x218e0",
+      "length": 2
+    },
+    {
+      "start": "0x3987c",
+      "end_exclusive": "0x3987e",
+      "length": 2
+    },
+    {
+      "start": "0x3b198",
+      "end_exclusive": "0x3b1a0",
+      "length": 8
+    },
+    {
+      "start": "0x129240",
+      "end_exclusive": "0x129265",
+      "length": 37
+    },
+    {
+      "start": "0x129266",
+      "end_exclusive": "0x1292c6",
+      "length": 96
+    },
+    {
+      "start": "0x1292c7",
+      "end_exclusive": "0x129421",
+      "length": 346
+    },
+    {
+      "start": "0x129422",
+      "end_exclusive": "0x129432",
+      "length": 16
+    },
+    {
+      "start": "0x129433",
+      "end_exclusive": "0x129476",
+      "length": 67
+    },
+    {
+      "start": "0x129477",
+      "end_exclusive": "0x129480",
+      "length": 9
+    },
+    {
+      "start": "0x129481",
+      "end_exclusive": "0x129560",
+      "length": 223
+    },
+    {
+      "start": "0x129561",
+      "end_exclusive": "0x129680",
+      "length": 287
+    },
+    {
+      "start": "0x12bf0c",
+      "end_exclusive": "0x12bf20",
+      "length": 20
+    },
+    {
+      "start": "0x12bf22",
+      "end_exclusive": "0x12bf23",
+      "length": 1
+    },
+    {
+      "start": "0x12bf28",
+      "end_exclusive": "0x12bf41",
+      "length": 25
+    },
+    {
+      "start": "0x12bf46",
+      "end_exclusive": "0x12bf47",
+      "length": 1
+    },
+    {
+      "start": "0x12bf4e",
+      "end_exclusive": "0x12bf60",
+      "length": 18
+    },
+    {
+      "start": "0x12bf61",
+      "end_exclusive": "0x12bf62",
+      "length": 1
+    },
+    {
+      "start": "0x12bf69",
+      "end_exclusive": "0x12bf6a",
+      "length": 1
+    },
+    {
+      "start": "0x12bf6d",
+      "end_exclusive": "0x12bf6e",
+      "length": 1
+    },
+    {
+      "start": "0x12bf72",
+      "end_exclusive": "0x12bf73",
+      "length": 1
+    },
+    {
+      "start": "0x12bf74",
+      "end_exclusive": "0x12bf75",
+      "length": 1
+    },
+    {
+      "start": "0x12bf7a",
+      "end_exclusive": "0x12bf7b",
+      "length": 1
+    },
+    {
+      "start": "0x12bf80",
+      "end_exclusive": "0x12bf81",
+      "length": 1
+    },
+    {
+      "start": "0x12bf84",
+      "end_exclusive": "0x12bf87",
+      "length": 3
+    },
+    {
+      "start": "0x12bf88",
+      "end_exclusive": "0x12c0f9",
+      "length": 369
+    },
+    {
+      "start": "0x12c0fa",
+      "end_exclusive": "0x12c1a0",
+      "length": 166
+    },
+    {
+      "start": "0x12c2b0",
+      "end_exclusive": "0x12c2c0",
+      "length": 16
+    },
+    {
+      "start": "0x12c41c",
+      "end_exclusive": "0x12c546",
+      "length": 298
+    },
+    {
+      "start": "0x12c547",
+      "end_exclusive": "0x12c5c5",
+      "length": 126
+    },
+    {
+      "start": "0x12c5c6",
+      "end_exclusive": "0x12c640",
+      "length": 122
+    },
+    {
+      "start": "0x344214",
+      "end_exclusive": "0x344220",
+      "length": 12
+    },
+    {
+      "start": "0x345184",
+      "end_exclusive": "0x345185",
+      "length": 1
+    },
+    {
+      "start": "0x345190",
+      "end_exclusive": "0x345191",
+      "length": 1
+    },
+    {
+      "start": "0x345193",
+      "end_exclusive": "0x3451a0",
+      "length": 13
+    },
+    {
+      "start": "0x3451fc",
+      "end_exclusive": "0x345200",
+      "length": 4
+    }
+  ],
+  "container_changes_confined_to_header_and_three_changed_payloads": true,
+  "sdk_packer_sha256": "30b5d37f67bb57af44d02da829429c59bb734d5c7c0acc1a1ce5f15029401c17",
+  "sdk_output_log": "ATF: Build ATT firmware image: G:\\Code\\hidock-next-2\\research\\rea\\completion630-lab\\hardware-vad-trace\\combined-slots-vad-393992-20261016\\out-NOTINSTALL\\compose-1\\sdk-pack-f0o1riin\\H1E-6.3.8_vad001-EXPERIMENTAL-NOT-INSTALL.bin\nG:\\Code\\hidock-next-2\\research\\rea\\completion630-lab\\hardware-vad-trace\\combined-slots-vad-393992-20261016\\out-NOTINSTALL\\compose-1\\sdk-pack-f0o1riin\\empty.cfg\nATF: Add file: G:\\Code\\hidock-next-2\\research\\rea\\completion630-lab\\hardware-vad-trace\\combined-slots-vad-393992-20261016\\out-NOTINSTALL\\compose-1\\sdk-pack-f0o1riin\\parts\\ota.xml\nATF: Add file: G:\\Code\\hidock-next-2\\research\\rea\\completion630-lab\\hardware-vad-trace\\combined-slots-vad-393992-20261016\\out-NOTINSTALL\\compose-1\\sdk-pack-f0o1riin\\parts\\zephyr.bin\nATF: Add file: G:\\Code\\hidock-next-2\\research\\rea\\completion630-lab\\hardware-vad-trace\\combined-slots-vad-393992-20261016\\out-NOTINSTALL\\compose-1\\sdk-pack-f0o1riin\\parts\\RomeApp.bin\nATF: Add file: G:\\Code\\hidock-next-2\\research\\rea\\completion630-lab\\hardware-vad-trace\\combined-slots-vad-393992-20261016\\out-NOTINSTALL\\compose-1\\sdk-pack-f0o1riin\\parts\\UAC.bin\nATF: Add file: G:\\Code\\hidock-next-2\\research\\rea\\completion630-lab\\hardware-vad-trace\\combined-slots-vad-393992-20261016\\out-NOTINSTALL\\compose-1\\sdk-pack-f0o1riin\\parts\\IG1202dl.bin\nATF: Add file: G:\\Code\\hidock-next-2\\research\\rea\\completion630-lab\\hardware-vad-trace\\combined-slots-vad-393992-20261016\\out-NOTINSTALL\\compose-1\\sdk-pack-f0o1riin\\parts\\sdfs.bin\nATF: Add file: G:\\Code\\hidock-next-2\\research\\rea\\completion630-lab\\hardware-vad-trace\\combined-slots-vad-393992-20261016\\out-NOTINSTALL\\compose-1\\sdk-pack-f0o1riin\\parts\\mbrec.bin\n",
+  "control_repack_performed": false,
+  "hardware_or_install_tested": false
+}

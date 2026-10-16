@@ -1,11 +1,12 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { ACCEPTED_H1E_FIRMWARE, ACCEPTED_H1E_FORWARD_STOCK_RESTORE } from '@hidock/jensen-protocol'
+import { ACCEPTED_H1E_FIRMWARE, ACCEPTED_H1E_FORWARD_STOCK_RESTORE, parseFirmwareImage } from '@hidock/jensen-protocol'
 import { FirmwareInstallJournal } from '../firmware-install-journal'
-import { FirmwareInstallService } from '../firmware-install'
+import { FirmwareInstallService, VAD_H1E_FIRMWARE } from '../firmware-install'
 
 // The signed firmware images are pinned by sha256 and cannot be synthesized, and they are kept
 // out of this public repo on purpose (.gitignore; decided 16-oct-2026): they live only on the
@@ -14,6 +15,7 @@ import { FirmwareInstallService } from '../firmware-install'
 // read, or that build their own synthetic image, still run.
 const HARDENED_IMAGE = resolve('resources/firmware/h1e-rea-hardened.bin')
 const FORWARD_STOCK_IMAGE = resolve('resources/firmware/h1e-stock-forward.bin')
+const VAD_IMAGE = resolve('../../research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/out-NOTINSTALL/compose-3/H1E-6.3.8_vad001-EXPERIMENTAL-NOT-INSTALL.bin')
 const noHardened = !existsSync(HARDENED_IMAGE)
 const noForwardStock = !existsSync(FORWARD_STOCK_IMAGE)
 // prepare()/execute() read the pinned image only after the qualification, stock-recovery, fence
@@ -41,6 +43,13 @@ function fixture() {
     hasUnresolvedStorageOwnership: fence,
     serialize: async <T>(fn: () => Promise<T>) => fn(), now: () => time, sleep: async (ms: number) => { time += ms } }
   return { folder, journal, device, deps, fence, service: new FirmwareInstallService(deps), advance: (ms: number) => { time += ms }, busy: () => { busy = true } }
+}
+function vadFixture() {
+  const f = fixture(), serialNumber = 'PRIVATE-TEST-DOCK'
+  f.device.getDeviceInfo.mockResolvedValue({ model: 'hidock-h1e', serialNumber, versionNumber: 393990, versionCode: '6.3.6' })
+  f.device.getFirmwareUpdatePreflight.mockResolvedValue({ model: 'hidock-h1e', serialNumber, versionNumber: 393990, activeRecording: false, card: { freeMiB: 2000, capacityMiB: 32000, statusCode: 0x900 } })
+  const service = new FirmwareInstallService({ ...f.deps, vadArtifactPath: VAD_IMAGE })
+  return { ...f, service }
 }
 describe(`firmware owner preparation and durable real-file attempt boundary${noHardened ? ' (image-reading tests skipped: local-only firmware image not in the public repo)' : ''}`, () => {
   itForwardStock('prepares exact forward resource only from the new custom source, then confirms native stock boot', async () => {
@@ -351,5 +360,75 @@ describe(`firmware owner preparation and durable real-file attempt boundary${noH
     expect(f.journal.append(prepared.plan.id, { state: 'uncertain', at: 1000000, reason: 'overflow' }).events).toHaveLength(63)
     expect(f.journal.append(prepared.plan.id, { state: 'confirmed', at: 1000000, reason: 'readbacks' }).events).toHaveLength(64)
     expect(new FirmwareInstallJournal(f.journal.folder).pending()).toEqual([])
+  })
+})
+
+describe('VAD install 393992 / 6.3.8_vad001 admission (real pinned image, injected device)', () => {
+  it('parses the actual compose-3 container and matches its exact descriptor pin', () => {
+    const image = readFileSync(VAD_IMAGE)
+    expect(createHash('sha256').update(image).digest('hex')).toBe(VAD_H1E_FIRMWARE.sha256)
+    expect(image.length).toBe(VAD_H1E_FIRMWARE.bytes)
+    expect(parseFirmwareImage(new Uint8Array(image))).toMatchObject({
+      model: VAD_H1E_FIRMWARE.model,
+      board: 'ats2835p_evb',
+      versionNumber: VAD_H1E_FIRMWARE.versionNumber,
+      versionName: VAD_H1E_FIRMWARE.versionName,
+      bytes: VAD_H1E_FIRMWARE.bytes,
+    })
+  })
+
+  it('prepares and executes only from exact 393990 / 6.3.6, then requests custom postboot readbacks', async () => {
+    const f = vadFixture(), prepared = await f.service.prepare('vad')
+    expect(prepared).toMatchObject({ state: 'prepared', plan: {
+      sourceVersion: 393990,
+      targetVersion: VAD_H1E_FIRMWARE.versionNumber,
+      imageSha256: VAD_H1E_FIRMWARE.sha256,
+      imageBytes: VAD_H1E_FIRMWARE.bytes,
+    } })
+    expect(f.device.uploadFirmware).not.toHaveBeenCalled()
+
+    f.device.uploadFirmware.mockImplementationOnce(async () => {
+      expect(new FirmwareInstallJournal(f.journal.folder).read(prepared.plan.id).events.map(event => event.state)).toEqual(['prepared', 'requesting'])
+      return { status: 'uploaded', reason: 'transfer-acknowledged', installation: 'unverified' }
+    })
+    expect((await f.service.execute(prepared.plan.id, prepared.plan.imageSha256)).state).toBe('awaiting-boot')
+    expect(f.device.uploadFirmware).toHaveBeenCalledOnce()
+    expect(f.device.uploadFirmware).toHaveBeenCalledWith(
+      expect.objectContaining({ ...VAD_H1E_FIRMWARE, image: expect.any(Uint8Array) }),
+      expect.objectContaining({ model: 'hidock-h1e', versionNumber: 393990, versionCode: '6.3.6', allowDowngrade: false }),
+    )
+
+    f.device.getDeviceInfo.mockResolvedValue({ model: 'hidock-h1e', serialNumber: 'PRIVATE-TEST-DOCK', versionNumber: 393992, versionCode: '6.3.8_vad001' })
+    expect((await f.service.observe(prepared.plan.id, 0)).state).toBe('confirmed')
+    expect(f.device.verifyFirmwareUpdateBoot).toHaveBeenCalledWith(expect.objectContaining({
+      serialNumber: 'PRIVATE-TEST-DOCK',
+      sourceVersionNumber: 393990,
+      versionNumber: VAD_H1E_FIRMWARE.versionNumber,
+      customRecording: true,
+    }), 3)
+  })
+
+  it.each([
+    ['the prior vector source', 393988, '6.3.4'],
+    ['a mismatched code for 393990', 393990, '6.3.5'],
+    ['a different numeric source', 393991, '6.3.7'],
+  ])('refuses preparation from %s before preflight or journal creation', async (_label, versionNumber, versionCode) => {
+    const f = vadFixture()
+    f.device.getDeviceInfo.mockResolvedValue({ model: 'hidock-h1e', serialNumber: 'PRIVATE-TEST-DOCK', versionNumber, versionCode })
+    await expect(f.service.prepare('vad')).rejects.toThrow('does not permit')
+    expect(f.device.getDeviceInfo).toHaveBeenCalledOnce()
+    expect(f.device.getFirmwareUpdatePreflight).not.toHaveBeenCalled()
+    expect(f.device.uploadFirmware).not.toHaveBeenCalled()
+    expect(f.journal.all()).toEqual([])
+  })
+
+  it('refuses execute when the exact source code changes after preparation, before requesting or upload', async () => {
+    const f = vadFixture(), prepared = await f.service.prepare('vad')
+    const before = f.journal.read(prepared.plan.id)
+    f.device.getDeviceInfo.mockResolvedValue({ model: 'hidock-h1e', serialNumber: 'PRIVATE-TEST-DOCK', versionNumber: 393990, versionCode: '6.3.5' })
+    await expect(f.service.execute(prepared.plan.id, prepared.plan.imageSha256)).rejects.toThrow('changed after preparation')
+    expect(f.device.uploadFirmware).not.toHaveBeenCalled()
+    expect(f.journal.read(prepared.plan.id)).toEqual(before)
+    expect(f.journal.read(prepared.plan.id).events.map(event => event.state)).toEqual(['prepared'])
   })
 })

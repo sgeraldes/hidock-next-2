@@ -1,0 +1,45 @@
+ELF Header:
+  Magic:   7f 45 4c 46 01 01 01 00 00 00 00 00 00 00 00 00 
+  Class:                             ELF32
+  Data:                              2's complement, little endian
+  Version:                           1 (current)
+  OS/ABI:                            UNIX - System V
+  ABI Version:                       0
+  Type:                              EXEC (Executable file)
+  Machine:                           CSKY
+  Version:                           0x1
+  Entry point address:               0x1128db8
+  Start of program headers:          52 (bytes into file)
+  Start of section headers:          18360 (bytes into file)
+  Flags:                             0x21000000
+  Size of this header:               52 (bytes)
+  Size of program headers:           32 (bytes)
+  Number of program headers:         3
+  Size of section headers:           40 (bytes)
+  Number of section headers:         12
+  Section header string table index: 9
+
+Section Headers:
+  [Nr] Name              Type            Addr     Off    Size   ES Flg Lk Inf Al
+  [ 0]                   NULL            00000000 000000 000000 00      0   0  0
+  [ 1] .router_tail      PROGBITS        01128a40 003a40 00043c 00  AX  0   0  4
+  [ 2] .constructor_edit PROGBITS        01021054 001054 00008c 00  AX  0   0  1
+  [ 3] .poll_hook        PROGBITS        01020b62 000b62 000004 00  AX  0   0  1
+  [ 4] .parser_hook      PROGBITS        0103a996 003996 000004 00  AX  0   0  1
+  [ 5] .response_hook    PROGBITS        0103907a 00207a 000004 00  AX  0   0  1
+  [ 6] .comment          PROGBITS        00000000 003e7c 000042 01  MS  0   0  1
+  [ 7] .csky_stack_size  PROGBITS        00000000 003ec0 000034 00      0   0 16
+  [ 8] .csky.attributes  CSKY_ATTRIBUTES 00000000 003ef4 000020 00      0   0  1
+  [ 9] .shstrtab         STRTAB          00000000 00472a 00008d 00      0   0  1
+  [10] .symtab           SYMTAB          00000000 003f14 000470 10     11  62  4
+  [11] .strtab           STRTAB          00000000 004384 0003a6 00      0   0  1
+Key to Flags:
+  W (write), A (alloc), X (execute), M (merge), S (strings), I (info),
+  L (link order), O (extra OS processing required), G (group), T (TLS),
+  C (compressed), x (unknown), o (OS specific), E (exclude),
+  p (processor specific)
+Attribute Section: csky
+File Attributes
+  Tag_CSKY_ARCH_NAME:		"ck802"
+  Tag_CSKY_CPU_NAME:		"ck802"
+  Tag_CSKY_ISA_FLAGS:		10246 (0x2806)

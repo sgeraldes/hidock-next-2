@@ -1,0 +1,56 @@
+{
+  "schema": "h1e-vad-393992-nonlto-poll-bridge-readback-v1",
+  "status": "offline_linked_poll_bridge_body_verified_NOTINSTALL",
+  "source": {
+    "path": "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/native-poll-candidate/h1e_vad_native_poll.c",
+    "sha256": "454d10055a2b1f24a78a639188e76ce74f1b2c5f842223fa545d831c807851f0"
+  },
+  "elf": {
+    "path": "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/link/output-nonlto-bridge/vad-router-only-slots-393992-nonlto-poll-bridge-NOTINSTALL.elf",
+    "sha256": "50d0a27d79ccc7813a0a5150a5e6ed00d77171a4c3c3f8f7aa4566bc4d734a80",
+    "bytes": 19416
+  },
+  "router_tail": {
+    "address": "0x01128a40",
+    "bytes": 1248,
+    "sha256": "72c1fd09dfae86bbb4691b9b713c92e32685b1a5ccbb8f2e6b2406ec53115647",
+    "capacity": 1472,
+    "remaining": 224
+  },
+  "poll_bridge": {
+    "address": "0x01128e34",
+    "size": 24,
+    "linked_map_size_matches_symbol": true,
+    "first_path": "push r15; mov r2,r0; load getter/table; bsr vadt_binding_poll; pop r15",
+    "binding_poll": "0x01128dba",
+    "binding_poll_size": 120,
+    "reachable_bkpt": false,
+    "post_return_alignment_bkpt": "0x01128e42"
+  },
+  "poll_hook": {
+    "address": "0x01020b62",
+    "decoded_linked_bsr_target": "0x01128e34",
+    "target_matches_bridge": true
+  },
+  "ops_table": {
+    "address": "0x01128ef4",
+    "words": [
+      "0x00000000",
+      "0x01128aa2",
+      "0x01128a9c",
+      "0x01128a68"
+    ],
+    "callbacks": {
+      "guard_enter": "0x01128aa2",
+      "guard_exit": "0x01128a9c",
+      "loader": "0x01128a68"
+    }
+  },
+  "elf_size": {
+    "text": 1400,
+    "data": 0,
+    "bss": 0,
+    "undefined_symbols": 0
+  },
+  "verification_scope": "Static ELF/map/disassembly/readback only; no composed SYS, container, hardware, install, or release qualification."
+}

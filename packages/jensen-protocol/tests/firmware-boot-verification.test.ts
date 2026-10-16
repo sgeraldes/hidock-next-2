@@ -42,7 +42,7 @@ const expected = { serialNumber: 'LAB630SER0001', versionNumber: 393985, customR
 afterEach(() => { vi.useRealTimers() })
 
 describe('post-boot operational verification on the actual serialized host command path', () => {
-  it.each([393986, 393988])('qualifies custom%s with every extension and keeps durable read-only policy', async version => {
+  it.each([393986, 393988, 393990, 393992])('qualifies custom%s with every extension and keeps durable read-only policy', async version => {
     const state = setup((command, _sequence, body) => { if (command === 1) body[3] = version - 393984; return body })
     expect(await state.device.verifyFirmwareUpdateBoot({ ...expected, versionNumber: version })).toMatchObject({ status: 'confirmed', imageAttested: false,
       deviceInfo: { versionNumber: version, versionCode: `6.3.${version - 393984}` } })
@@ -56,6 +56,14 @@ describe('post-boot operational verification on the actual serialized host comma
     const state = setup((command, _sequence, body) => { if (command === 1) body[3] = version - 393984; return body })
     expect(await state.device.verifyFirmwareUpdateBoot({ ...expected, versionNumber: version, sourceVersionNumber: version - 1, customRecording: false })).toMatchObject({ status: 'confirmed', imageAttested: false })
     expect(state.commands).toEqual([1, 29, 18, 16])
+  })
+  it('rejects the adjacent unqualified 393991 as a custom target before any OUT', async () => {
+    const state = setup()
+    expect(await state.device.verifyFirmwareUpdateBoot({ ...expected, versionNumber: 393991 })).toMatchObject({
+      status: 'unavailable', reason: 'invalid-expectation', imageAttested: false,
+    })
+    expect(state.commands).toEqual([])
+    expect(state.device.getFirmwareUploadFence()).toBe('uploaded')
   })
   it('runs only exclusive read commands and retains durable read-only guard after confirmation', async () => {
     const state = setup()

@@ -1,0 +1,104 @@
+{
+  "status": "passed_exact_image_instruction_fixtures",
+  "image_sha256": "043afb17fbc868474a33c999ac30473839ab188ba22f46adc95914be6649a918",
+  "elf_sha256": "50d0a27d79ccc7813a0a5150a5e6ed00d77171a4c3c3f8f7aa4566bc4d734a80",
+  "image_bytes": 1237504,
+  "layout_sha256": "5fd4795ac690fff59b09e5000bdaa601a974e34b27016baa9081b6f9c99424b1",
+  "symbols_sha256": "7222b982ab20c07f5aa270fa530128eed77e587cbab42be6820f30869a5a59a8",
+  "scope": "F11A absent/present snapshot, poll bridge success/failure and non-F11A parser/response forwarding; constructor cases were intentionally skipped because they were already accepted on the prior byte-pinned candidate.",
+  "boundary": "Exact imported candidate instructions for the cases listed in scope. Fixture RAM only. Native getter at 0x0101fb68 is explicitly modeled once with configured return/status; no DSP, USB, live RAM, timing, boot, installation, lifetime or hardware semantics are established.",
+  "cases": [
+    {
+      "id": "f11a-absent-snapshot-response",
+      "status": "passed",
+      "expected": "UNAVAILABLE with zero payload and no getter",
+      "actual": {
+        "return": 32,
+        "reply_hex": "0201000000000000000000000000000000000000000000000000000000000000",
+        "getter_calls": 0
+      },
+      "executed_instructions": 1060,
+      "modeled_native_getter_calls": 0
+    },
+    {
+      "id": "f11a-present-snapshot-response",
+      "status": "passed",
+      "expected": "OK/HAS_SAMPLE with fixture telemetry",
+      "actual": {
+        "return": 32,
+        "reply_hex": "0001010100000005000000040000000087654321000000000000000000000008",
+        "getter_calls": 0
+      },
+      "executed_instructions": 1018,
+      "modeled_native_getter_calls": 0
+    },
+    {
+      "id": "poll-bridge-success",
+      "status": "passed",
+      "expected": "one modeled getter call; actual bridge/binding/guard instructions update telemetry tail",
+      "actual": {
+        "return": 0,
+        "getter_calls": 1,
+        "tail_words_le32": [
+          2,
+          1,
+          1,
+          0,
+          2271560481,
+          0,
+          0,
+          1
+        ]
+      },
+      "executed_instructions": 88,
+      "modeled_native_getter_calls": 1
+    },
+    {
+      "id": "poll-bridge-failure",
+      "status": "passed",
+      "expected": "one modeled getter call; actual bridge/binding/guard instructions update telemetry tail",
+      "actual": {
+        "return": -5,
+        "getter_calls": 1,
+        "tail_words_le32": [
+          2,
+          1,
+          0,
+          4294967291,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "executed_instructions": 78,
+      "modeled_native_getter_calls": 1
+    },
+    {
+      "id": "non-vad-parser-forward-to-exact-current-alias",
+      "status": "passed",
+      "expected": "F117 help parser result/state equals direct current-alias execution",
+      "actual": {
+        "wrapped_return": 0,
+        "head_hex": "0000f1170000000000010004",
+        "direct_return": 0,
+        "alias_hits": 1
+      },
+      "executed_instructions": 234,
+      "modeled_native_getter_calls": 0
+    },
+    {
+      "id": "non-vad-response-forward-to-exact-current-alias",
+      "status": "passed",
+      "expected": "F117 help response and output equal direct current-alias execution",
+      "actual": {
+        "wrapped_return": 29,
+        "output_hex": "0000000000000000000000000068656c700a76657273696f6e0a757074696d650a766563746f72730a00000000000000",
+        "direct_return": 29,
+        "alias_hits": 1
+      },
+      "executed_instructions": 1234,
+      "modeled_native_getter_calls": 0
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+/home/sebastian/.local/share/rea/tools/csky-20210423/bin/../lib/gcc/csky-elfabiv2/6.3.0/../../../../csky-elfabiv2/bin/ld: Removing unused section '.text.h1e_vad_snapshot_read' in file '/tmp/cctnYnDa.ltrans0.ltrans.o'

@@ -1,0 +1,190 @@
+
+Discarded input sections
+
+ .text          0x0000000000000000        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/vadt_core.o (symbol from plugin)
+ .text          0x0000000000000000        0x0 /tmp/cceZniA7.ltrans0.ltrans.o
+ .data          0x0000000000000000        0x0 /tmp/cceZniA7.ltrans0.ltrans.o
+ .bss           0x0000000000000000        0x0 /tmp/cceZniA7.ltrans0.ltrans.o
+ .text.unlikely.target_resolve
+                0x0000000000000000        0x0 /tmp/cceZniA7.ltrans0.ltrans.o
+ .text.unlikely.target_pending
+                0x0000000000000000        0x0 /tmp/cceZniA7.ltrans0.ltrans.o
+ .text.unlikely.load_word
+                0x0000000000000000        0x0 /tmp/cceZniA7.ltrans0.ltrans.o
+ .text.unlikely.h1e_vad_load_object
+                0x0000000000000000        0x0 /tmp/cceZniA7.ltrans0.ltrans.o
+ .text.unlikely.vadt_csky_guard_exit
+                0x0000000000000000        0x0 /tmp/cceZniA7.ltrans0.ltrans.o
+ .text.unlikely.vadt_csky_guard_enter
+                0x0000000000000000        0x0 /tmp/cceZniA7.ltrans0.ltrans.o
+ .text.unlikely.put_be32
+                0x0000000000000000        0x0 /tmp/cceZniA7.ltrans0.ltrans.o
+ .text.unlikely.encode_reply.constprop.4
+                0x0000000000000000        0x0 /tmp/cceZniA7.ltrans0.ltrans.o
+ .text.unlikely.vadt_binding_read.constprop.3
+                0x0000000000000000        0x0 /tmp/cceZniA7.ltrans0.ltrans.o
+ .text.unlikely.h1e_vad_snapshot_read
+                0x0000000000000000        0x0 /tmp/cceZniA7.ltrans0.ltrans.o
+ .text.h1e_vad_snapshot_read
+                0x0000000000000000        0xa /tmp/cceZniA7.ltrans0.ltrans.o
+ .text.unlikely.console630_response
+                0x0000000000000000        0x0 /tmp/cceZniA7.ltrans0.ltrans.o
+ .text.unlikely.console630_parse
+                0x0000000000000000        0x0 /tmp/cceZniA7.ltrans0.ltrans.o
+ .text.unlikely.vadt_binding_poll
+                0x0000000000000000        0x0 /tmp/cceZniA7.ltrans0.ltrans.o
+ .text          0x0000000000000000        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/vadt_binding.o (symbol from plugin)
+ .text          0x0000000000000000        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/vadt_csky_guard.o (symbol from plugin)
+ .text          0x0000000000000000        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/vadt_frame.o (symbol from plugin)
+ .text          0x0000000000000000        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/vadt_frame_target.o (symbol from plugin)
+ .text          0x0000000000000000        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/link/output-nonlto-bridge/h1e_vad_native_poll_nonlto.o
+ .data          0x0000000000000000        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/link/output-nonlto-bridge/h1e_vad_native_poll_nonlto.o
+ .bss           0x0000000000000000        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/link/output-nonlto-bridge/h1e_vad_native_poll_nonlto.o
+ .text.unlikely.h1e_vad_native_poll_bridge
+                0x0000000000000000        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/link/output-nonlto-bridge/h1e_vad_native_poll_nonlto.o
+ .text          0x0000000000000000        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/h1e_vad_native_loader.o (symbol from plugin)
+ .text          0x0000000000000000        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/f11a_console_dispatch.o (symbol from plugin)
+ .data          0x0000000000000000        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/console-hooks.o
+ .bss           0x0000000000000000        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/console-hooks.o
+ .text          0x0000000000000000        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/constructor.o
+ .data          0x0000000000000000        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/constructor.o
+ .bss           0x0000000000000000        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/constructor.o
+ .text          0x0000000000000000        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/poll-hook.o
+ .data          0x0000000000000000        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/poll-hook.o
+ .bss           0x0000000000000000        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/poll-hook.o
+
+Memory Configuration
+
+Name             Origin             Length             Attributes
+*default*        0x0000000000000000 0xffffffffffffffff
+
+Linker script and memory map
+
+                0x000000000112b70c                PROVIDE (console630_parse_current, 0x112b70c)
+                0x000000000112b81c                PROVIDE (console630_response_current, 0x112b81c)
+
+.router_tail    0x0000000001128a40      0x4e0
+ *(.text .text.* .gnu.linkonce.t.*)
+ .text.target_resolve
+                0x0000000001128a40        0x4 /tmp/cceZniA7.ltrans0.ltrans.o
+ .text.target_pending
+                0x0000000001128a44        0xc /tmp/cceZniA7.ltrans0.ltrans.o
+ .text.load_word
+                0x0000000001128a50       0x16 /tmp/cceZniA7.ltrans0.ltrans.o
+ *fill*         0x0000000001128a66        0x2 
+ .text.h1e_vad_load_object
+                0x0000000001128a68       0x34 /tmp/cceZniA7.ltrans0.ltrans.o
+                0x0000000001128a68                h1e_vad_load_object
+ .text.vadt_csky_guard_exit
+                0x0000000001128a9c        0x6 /tmp/cceZniA7.ltrans0.ltrans.o
+                0x0000000001128a9c                vadt_csky_guard_exit
+ .text.vadt_csky_guard_enter
+                0x0000000001128aa2        0xa /tmp/cceZniA7.ltrans0.ltrans.o
+                0x0000000001128aa2                vadt_csky_guard_enter
+ .text.put_be32
+                0x0000000001128aac       0x10 /tmp/cceZniA7.ltrans0.ltrans.o
+ .text.encode_reply.constprop.4
+                0x0000000001128abc       0x80 /tmp/cceZniA7.ltrans0.ltrans.o
+ .text.vadt_binding_read.constprop.3
+                0x0000000001128b3c       0xb8 /tmp/cceZniA7.ltrans0.ltrans.o
+ .text.console630_response
+                0x0000000001128bf4      0x114 /tmp/cceZniA7.ltrans0.ltrans.o
+                0x0000000001128bf4                console630_response
+ .text.console630_parse
+                0x0000000001128d08       0xb2 /tmp/cceZniA7.ltrans0.ltrans.o
+                0x0000000001128d08                console630_parse
+ .text.vadt_binding_poll
+                0x0000000001128dba       0x78 /tmp/cceZniA7.ltrans0.ltrans.o
+                0x0000000001128dba                vadt_binding_poll
+ *fill*         0x0000000001128e32        0x2 
+ .text.h1e_vad_native_poll_bridge
+                0x0000000001128e34       0x18 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/link/output-nonlto-bridge/h1e_vad_native_poll_nonlto.o
+                0x0000000001128e34                h1e_vad_native_poll_bridge
+ .text          0x0000000001128e4c       0xa8 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/console-hooks.o
+                0x0000000001128e4c                console630_parser_hook
+                0x0000000001128e94                console630_response_hook
+ *(SORT(.csky.code.*))
+ *(.rodata .rodata.* .srodata .srodata.* .gnu.linkonce.r.*)
+ .rodata.h1e_vad_native_poll_ops
+                0x0000000001128ef4       0x10 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/link/output-nonlto-bridge/h1e_vad_native_poll_nonlto.o
+ *(.stub .stub.*)
+ .stub          0x0000000001128f04       0x1c /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/constructor.o
+                0x0000000001128f04                late_publication_stub
+
+.data           0x0000000001128f20        0x0
+ *(.data .data.* .sdata .sdata.* .got .got.*)
+
+.bss            0x0000000001128f20        0x0
+ *(.bss .bss.* .sbss .sbss.* COMMON)
+
+.constructor_edits
+                0x0000000001021054       0x8c
+ *(.edits)
+ .edits         0x0000000001021054       0x8c /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/constructor.o
+                0x0000000001021054                late_constructor_edits
+
+.poll_hook      0x0000000001020b62        0x4
+ *(.patch_vad_poll)
+ .patch_vad_poll
+                0x0000000001020b62        0x4 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/poll-hook.o
+
+.parser_hook    0x000000000103a996        0x4
+ *(.patch_console_parser)
+ .patch_console_parser
+                0x000000000103a996        0x4 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/console-hooks.o
+
+.response_hook  0x000000000103907a        0x4
+ *(.patch_console_response)
+ .patch_console_response
+                0x000000000103907a        0x4 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/console-hooks.o
+                0x0000000000000001                ASSERT ((ADDR (.router_tail) == 0x1128a40), router-tail base changed)
+                0x0000000000000001                ASSERT ((SIZEOF (.router_tail) <= 0x5c0), router-only module exceeds the proposed 1472-byte router tail)
+                0x0000000000000001                ASSERT (((SIZEOF (.data) == 0x0) && (SIZEOF (.bss) == 0x0)), Writable XIP globals prohibited)
+                0x0000000000000001                ASSERT ((SIZEOF (.poll_hook) == 0x4), Native poll hook must be four bytes)
+                0x0000000000000001                ASSERT (((SIZEOF (.parser_hook) == 0x4) && (SIZEOF (.response_hook) == 0x4)), Console hooks must be four bytes)
+                0x0000000000000001                ASSERT ((SIZEOF (.constructor_edits) == 0x8c), Constructor edit section changed)
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/vadt_core.o
+LOAD /tmp/cceZniA7.ltrans0.ltrans.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/vadt_binding.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/vadt_csky_guard.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/vadt_frame.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/vadt_frame_target.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/link/output-nonlto-bridge/h1e_vad_native_poll_nonlto.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/h1e_vad_native_loader.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/f11a_console_dispatch.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/console-hooks.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/constructor.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/poll-hook.o
+OUTPUT(/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/link/output-nonlto-bridge/vad-router-only-slots-393992-nonlto-poll-bridge-NOTINSTALL.elf elf32-csky-little)
+
+.rela.dyn       0x0000000001039080        0x0
+ .rela.text.console630_response
+                0x0000000001039080        0x0 /tmp/cceZniA7.ltrans0.ltrans.o
+ .rela.text.console630_parse
+                0x0000000001039080        0x0 /tmp/cceZniA7.ltrans0.ltrans.o
+
+.comment        0x0000000000000000       0x42
+ .comment       0x0000000000000000       0x43 /tmp/cceZniA7.ltrans0.ltrans.o
+ .comment       0x0000000000000000       0x42 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/link/output-nonlto-bridge/h1e_vad_native_poll_nonlto.o
+                                         0x43 (size before relaxing)
+
+.csky_stack_size
+                0x0000000000000000       0x4c
+ .csky_stack_size
+                0x0000000000000000       0x3c /tmp/cceZniA7.ltrans0.ltrans.o
+ *fill*         0x000000000000003c        0x4 
+ .csky_stack_size
+                0x0000000000000040        0xc /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/link/output-nonlto-bridge/h1e_vad_native_poll_nonlto.o
+
+.csky.attributes
+                0x0000000000000000       0x20
+ .csky.attributes
+                0x0000000000000000       0x20 /tmp/cceZniA7.ltrans0.ltrans.o
+ .csky.attributes
+                0x0000000000000020       0x20 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/link/output-nonlto-bridge/h1e_vad_native_poll_nonlto.o
+ .csky.attributes
+                0x0000000000000040       0x20 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/console-hooks.o
+ .csky.attributes
+                0x0000000000000060       0x20 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/constructor.o
+ .csky.attributes
+                0x0000000000000080       0x20 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/inputs/objects/poll-hook.o
