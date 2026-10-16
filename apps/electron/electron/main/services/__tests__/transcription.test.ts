@@ -546,6 +546,28 @@ describe('Transcription Service', () => {
         stopTranscriptionProcessor()
       }
     })
+
+    it('a recording excluded between engine attempts ends cancelled, not failed', { timeout: 20000 }, async () => {
+      // Gemini fails; while it does, the recording is marked personal. The chain
+      // must stop before the next engine and report a cancellation (review of #182).
+      Object.assign(mockConfig.transcription, { engineFallbackEnabled: true, engineRetries: { transient: 0, quota: 0, unknown: 0 }, modelHostUrl: '' })
+      mockGeminiTranscribeCall.mockImplementation(() => { mockIsRecordingEligible.mockReturnValue(false) })
+      mockGetQueueItems.mockReturnValue([{ id: 'queue-3', recording_id: 'rec-123', filename: 'test.wav', status: 'pending', attempts: 0 }])
+      mockGetRecordingById.mockReturnValue({ id: 'rec-123', filename: 'test.wav', file_path: '/recordings/test.wav', status: 'complete' })
+      const { startTranscriptionProcessor, stopTranscriptionProcessor } = await import('../transcription')
+      startTranscriptionProcessor()
+      try {
+        await vi.waitFor(() => {
+          expect(mockUpdateQueueItem.mock.calls.some((call: any[]) => call[0] === 'queue-3' && call[1] === 'cancelled')).toBe(true)
+        }, { timeout: 15000, interval: 25 })
+        expect(mockUpdateQueueItem.mock.calls.some((call: any[]) => call[0] === 'queue-3' && call[1] === 'failed')).toBe(false)
+        expect(mockRecordTranscriptionAttempt.mock.calls.map((call: any[]) => [call[2].engine, call[2].outcome]))
+          .toEqual([['configured:gemini', 'failed']])
+      } finally {
+        mockGeminiTranscribeCall.mockReset()
+        stopTranscriptionProcessor()
+      }
+    })
   })
 
   // Recordings under DURATION_GARBAGE_MAX_SECONDS are rated garbage by the value

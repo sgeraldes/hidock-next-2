@@ -2461,22 +2461,39 @@ async function transcribeThroughEngineChain(
   const canonicalId = getRecordingById(recordingId)?.id ?? resolveRecordingId(recordingId)?.id ?? recordingId
   const filename = getRecordingById(canonicalId)?.filename ?? canonicalId
   const ids = idsFor(canonicalId)
-  const shouldContinue = () => !ids.some((id) => cancelledRecordings.has(id)) && stillWanted(canonicalId, ownerRequested)
-  const { result } = await runEngineChain<TranscribeOutcome>(settings, {
-    run: (step) => step.provider === 'requested'
-      ? transcribeRecording(recordingId, progressCallback, step.model, ownerRequested)
-      : step.provider === 'configured'
-        ? transcribeRecording(recordingId, progressCallback, undefined, ownerRequested)
-        : transcribeRecording(recordingId, progressCallback, undefined, ownerRequested, step),
-    unavailableReason: (step) => engineUnavailableReason(step, engineAvailabilityDeps),
-    sleep: async (seconds) => {
-      const until = Date.now() + seconds * 1000
-      while (Date.now() < until && shouldContinue()) await new Promise((resolve) => setTimeout(resolve, 1000))
-    },
-    record: (attempt) => recordEngineAttempt(canonicalId, queueItemId, filename, attempt),
-    shouldContinue,
-  })
-  return result
+  // A recording that stops being eligible between attempts (marked personal,
+  // excluded by value, deleted) ends cancelled, as the single attempt did
+  // before the chain. An owner's cancel keeps its own path in runQueueItem.
+  let becameIneligible = false
+  const shouldContinue = () => {
+    if (ids.some((id) => cancelledRecordings.has(id))) return false
+    if (stillWanted(canonicalId, ownerRequested)) return true
+    becameIneligible = true
+    return false
+  }
+  try {
+    const { result } = await runEngineChain<TranscribeOutcome>(settings, {
+      run: (step) => step.provider === 'requested'
+        ? transcribeRecording(recordingId, progressCallback, step.model, ownerRequested)
+        : step.provider === 'configured'
+          ? transcribeRecording(recordingId, progressCallback, undefined, ownerRequested)
+          : transcribeRecording(recordingId, progressCallback, undefined, ownerRequested, step),
+      unavailableReason: (step) => engineUnavailableReason(step, engineAvailabilityDeps),
+      sleep: async (seconds) => {
+        const until = Date.now() + seconds * 1000
+        while (Date.now() < until && shouldContinue()) await new Promise((resolve) => setTimeout(resolve, 1000))
+      },
+      record: (attempt) => recordEngineAttempt(canonicalId, queueItemId, filename, attempt),
+      shouldContinue,
+    })
+    return result
+  } catch (error) {
+    if (becameIneligible) {
+      console.log(`[Transcription] ${filename} became ineligible between engine attempts; reporting cancelled`)
+      return { status: 'cancelled' }
+    }
+    throw error
+  }
 }
 
 const engineAvailabilityDeps = {
