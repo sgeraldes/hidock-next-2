@@ -82,7 +82,7 @@ it('real capture graph and Opus encoder keep mic 400 Hz left and system 1000 Hz 
     expect(result.tones[1][1]).toBeGreaterThan(0.5)
     expect(20 * Math.log10(result.tones[0][1] / result.tones[0][0])).toBeLessThan(-30)
     expect(20 * Math.log10(result.tones[1][0] / result.tones[1][1])).toBeLessThan(-30)
-  } finally { rmSync(folder, { recursive: true }) }
+  } finally { rmSync(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
 }, 30000)
 
 it('renders the real recording bar with visible light/dark meters and exercises saved, Open, timeout and dismiss in Chromium', async () => {
@@ -178,7 +178,7 @@ it('renders the real recording bar with visible light/dark meters and exercises 
       mkdirSync(process.env.PC_RECORDER_UI_ARTIFACTS, { recursive: true })
       for (const index of [0, 1]) copyFileSync(join(folder, `stage-${index}.png`), join(process.env.PC_RECORDER_UI_ARTIFACTS, `stage-${index}.png`))
     }
-  } finally { rmSync(folder, { recursive: true }) }
+  } finally { rmSync(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
 }, 30000)
 
 
@@ -338,7 +338,7 @@ it('recording detail decodes headerless stereo, shows lanes and failure, and mut
       copyFileSync(join(folder,'stage-2.png'),join(process.env.PC_RECORDER_UI_ARTIFACTS,'detail.png'))
       copyFileSync(join(folder,'stage-1.png'),join(process.env.PC_RECORDER_UI_ARTIFACTS,'detail-dark-compact.png'))
     }
-  } finally { rmSync(folder, { recursive: true }) }
+  } finally { rmSync(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
 }, 30000)
 
 for (const failureAfter of [700, 1700]) {
@@ -377,7 +377,7 @@ for (const failureAfter of [700, 1700]) {
       const events = result.events.map((event: unknown[]) => event[0])
       expect(events.indexOf('finish')).toBeGreaterThan(events.indexOf('stop'))
       expect(result.events.filter((event: unknown[]) => event[0] === 'append').every((event: unknown[]) => event[3] === false)).toBe(true)
-    } finally { rmSync(folder, { recursive: true }) }
+    } finally { rmSync(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
   }, 30000)
 }
 for (const operation of ['reload', 'restart', 'close']) {

@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { beforeAll, afterAll, describe, expect, it, vi } from 'vitest'
 import { randomUUID } from 'crypto'
+import { readFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
@@ -14,6 +15,9 @@ vi.mock('../sqlite-backup-host', () =>
 
 import { initializeDatabase, closeDatabase, run, addToQueue, getQueueItems, updateQueueItem, queryOne } from '../database'
 import { filterTranscribableRecordingIds } from '../recording-eligibility'
+
+// The migration under test must reach the newest schema, whichever number that is.
+const LATEST_SCHEMA_VERSION = Number(readFileSync(join(__dirname, '..', 'database.ts'), 'utf-8').match(/const SCHEMA_VERSION = (\d+)\b/)![1])
 
 beforeAll(async () => {
   await initializeDatabase()
@@ -82,7 +86,7 @@ describe('manual transcription value override', () => {
     run('INSERT INTO schema_version (version) VALUES (71)')
     closeDatabase()
     await initializeDatabase()
-    expect(queryOne<{ version: number }>('SELECT MAX(version) AS version FROM schema_version')?.version).toBe(72)
+    expect(queryOne<{ version: number }>('SELECT MAX(version) AS version FROM schema_version')?.version).toBe(LATEST_SCHEMA_VERSION)
     expect(getQueueItems().map((row) => row.id)).toEqual(queueIds)
     expect(getQueueItems().every((row) => row.owner_requested === false)).toBe(true)
     const column = queryOne<{ notnull: number; dflt_value: string }>(
