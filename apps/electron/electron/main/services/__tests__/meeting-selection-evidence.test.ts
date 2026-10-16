@@ -4,7 +4,7 @@ import { hasVerifiedMeetingSelectionEvidence as verifies } from '../meeting-sele
 
 describe('calendar event selection evidence', () => {
   const practice = { subject: 'DFX5 AM3 practice meeting', description: null }
-  const adHoc = 'Gastón: revisemos arquitectura, fondos y proyectos de Antamina y Rappi. Yaraví: sí.'
+  const adHoc = 'Ana: revisemos arquitectura, fondos y proyectos de Minera Norte y Envíos Sur. Luis: sí.'
 
   it('rejects the reported ad-hoc call even if the model explains a 95% topic match', () => {
     expect(verifies(adHoc, practice, undefined)).toBe(false)
@@ -18,7 +18,7 @@ describe('calendar event selection evidence', () => {
       kind: 'explicit-event-reference', transcript_quote: practice.subject, calendar_quote: practice.subject
     })).toBe(false)
     expect(verifies(adHoc, practice, {
-      kind: 'specific-agenda', transcript_quote: adHoc, calendar_quote: 'arquitectura fondos y proyectos de Antamina'
+      kind: 'specific-agenda', transcript_quote: adHoc, calendar_quote: 'arquitectura fondos y proyectos de Minera Norte'
     })).toBe(false)
   })
 
@@ -37,8 +37,8 @@ describe('calendar event selection evidence', () => {
   })
 
   it('rejects a shared client name as a concrete agenda', () => {
-    expect(verifies(adHoc, { subject: 'Practice', description: 'Antamina' }, {
-      kind: 'specific-agenda', transcript_quote: adHoc, calendar_quote: 'Antamina'
+    expect(verifies(adHoc, { subject: 'Practice', description: 'Minera Norte' }, {
+      kind: 'specific-agenda', transcript_quote: adHoc, calendar_quote: 'Minera Norte'
     })).toBe(false)
   })
 

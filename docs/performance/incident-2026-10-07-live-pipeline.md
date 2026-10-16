@@ -31,7 +31,7 @@ resolution stages have zero measured time because they reuse the summary call.
 
 `scripts/diagnostics/sample-live-backend.ps1` collected twelve samples approximately three
 seconds apart without WMI enumeration, app restarts, USB operations, or model invocations.
-Raw output: `C:\Users\Sebastian\.codex\diagnostics\hidock-oct07\live-backend.json`.
+Raw output: kept in the local diagnostics folder, outside the repository.
 
 Most main-process backend responses took 1–46 ms. At 16:21:57 local time the request exceeded
 the two-second timeout. At that point the host health was `ready`, and the current recording's
@@ -49,11 +49,11 @@ not proof of a whole-machine freeze or its root cause.
 The 15:08 and 15:56 recordings both have the same persisted practice-event ID, correlation
 method `ai_transcript_match`, confidence 0.95. The event window is 15:00–16:00 and its attendee
 field is null. The stored explanation for the ad-hoc call is shared DFX5 technical work,
-architecture, funds, Antamina and Rappi, contrasted with another school-event candidate.
+architecture, funds and two client projects, contrasted with another school-event candidate.
 That is generic topic overlap, not evidence of event identity.
 
-The owner clarified the later call was a separate Slack conversation with Gastón Poma,
-Yaraví and himself. `withMeetingParts()` groups every shared meeting ID and numbers recordings
+The owner clarified the later call was a separate Slack conversation with two colleagues,
+and himself. `withMeetingParts()` groups every shared meeting ID and numbers recordings
 by start time; the LLM did not request or generate the part numbers. `getDisplayTitle()` gives
 the linked calendar subject precedence over the transcript's content title, amplifying the error.
 
