@@ -1,0 +1,240 @@
+
+Discarded input sections
+
+ .csky.attributes
+                0x0000000000000000       0x20 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/integration-calls.o
+ .comment       0x0000000000000000       0x43 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_cache.o
+ .csky_stack_size
+                0x0000000000000000        0xc /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_cache.o
+ .csky.attributes
+                0x0000000000000000       0x20 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_cache.o
+ .comment       0x0000000000000000       0x43 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_loader128.o
+ .csky_stack_size
+                0x0000000000000000        0xc /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_loader128.o
+ .csky.attributes
+                0x0000000000000000       0x20 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_loader128.o
+ .comment       0x0000000000000000       0x43 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_poll_adapter.o
+ .csky_stack_size
+                0x0000000000000000       0x24 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_poll_adapter.o
+ .csky.attributes
+                0x0000000000000000       0x20 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_poll_adapter.o
+ .comment       0x0000000000000000       0x43 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_reply_v2.o
+ .csky_stack_size
+                0x0000000000000000        0xc /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_reply_v2.o
+ .csky.attributes
+                0x0000000000000000       0x20 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_reply_v2.o
+ .comment       0x0000000000000000       0x43 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_f11a_reader.o
+ .csky_stack_size
+                0x0000000000000000       0x14 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_f11a_reader.o
+ .csky.attributes
+                0x0000000000000000       0x20 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_f11a_reader.o
+ .comment       0x0000000000000000       0x43 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_f11a_dispatch.o
+ .csky_stack_size
+                0x0000000000000000       0x14 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_f11a_dispatch.o
+ .csky.attributes
+                0x0000000000000000       0x20 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_f11a_dispatch.o
+ .comment       0x0000000000000000       0x43 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/vad-provider-fixed-snapshot-20261017/build/vad_provider_raw_get.enabled.o
+ .csky_stack_size
+                0x0000000000000000        0xc /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/vad-provider-fixed-snapshot-20261017/build/vad_provider_raw_get.enabled.o
+ .csky.attributes
+                0x0000000000000000       0x20 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/vad-provider-fixed-snapshot-20261017/build/vad_provider_raw_get.enabled.o
+
+Memory Configuration
+
+Name             Origin             Length             Attributes
+*default*        0x0000000000000000 0xffffffffffffffff
+
+Linker script and memory map
+
+
+.poll_dispatch_call
+                0x0000000001020b62        0x4
+ *(.integration_poll_call)
+ .integration_poll_call
+                0x0000000001020b62        0x4 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/integration-calls.o
+                0x0000000001020b62                h1e_voice_energy_poll_call_site
+
+.constructor_allocate128
+                0x0000000001021054        0x2
+ *(.plan_allocate_128)
+ .plan_allocate_128
+                0x0000000001021054        0x2 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/integration-calls.o
+                0x0000000001021054                h1e_voice_energy_allocate_128_instruction
+
+.constructor_zero128
+                0x000000000102109e        0x2
+ *(.plan_zero_128)
+ .plan_zero_128
+                0x000000000102109e        0x2 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/integration-calls.o
+                0x000000000102109e                h1e_voice_energy_zero_128_instruction
+
+.parser_dispatch_call
+                0x0000000001128e68        0x4
+ *(.integration_parse_call)
+ .integration_parse_call
+                0x0000000001128e68        0x4 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/integration-calls.o
+                0x0000000001128e68                h1e_voice_energy_parse_call_site
+
+.response_dispatch_call
+                0x0000000001128ea2        0x4
+ *(.integration_response_call)
+ .integration_response_call
+                0x0000000001128ea2        0x4 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/integration-calls.o
+                0x0000000001128ea2                h1e_voice_energy_response_call_site
+                0x0000000001137000                . = 0x1137000
+
+.voice_energy_text
+                0x0000000001137000      0x4d0
+ *(.text .text.*)
+ .text          0x0000000001137000        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/integration-calls.o
+ .text          0x0000000001137000        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_cache.o
+ .text.unlikely.h1e_voice_energy_cache_init
+                0x0000000001137000        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_cache.o
+ .text.h1e_voice_energy_cache_init
+                0x0000000001137000       0x14 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_cache.o
+                0x0000000001137000                h1e_voice_energy_cache_init
+ .text.unlikely.h1e_voice_energy_cache_record_completed
+                0x0000000001137014        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_cache.o
+ .text.h1e_voice_energy_cache_record_completed
+                0x0000000001137014       0x2a /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_cache.o
+                0x0000000001137014                h1e_voice_energy_cache_record_completed
+ .text.unlikely.h1e_voice_energy_cache_snapshot
+                0x000000000113703e        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_cache.o
+ .text.h1e_voice_energy_cache_snapshot
+                0x000000000113703e       0x44 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_cache.o
+                0x000000000113703e                h1e_voice_energy_cache_snapshot
+ .text          0x0000000001137082        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_loader128.o
+ .text.unlikely.h1e_voice_energy_load_object_128
+                0x0000000001137082        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_loader128.o
+ *fill*         0x0000000001137082        0x2 
+ .text.h1e_voice_energy_load_object_128
+                0x0000000001137084       0x3c /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_loader128.o
+                0x0000000001137084                h1e_voice_energy_load_object_128
+ .text          0x00000000011370c0        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_poll_adapter.o
+ .text.unlikely.read_provider_raw_word
+                0x00000000011370c0        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_poll_adapter.o
+ .text.read_provider_raw_word
+                0x00000000011370c0        0xa /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_poll_adapter.o
+ .text.unlikely.load_current_object_128
+                0x00000000011370ca        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_poll_adapter.o
+ .text.load_current_object_128
+                0x00000000011370ca       0x10 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_poll_adapter.o
+ .text.unlikely.h1e_voice_energy_poll_bridge_with_ops
+                0x00000000011370da        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_poll_adapter.o
+ .text.h1e_voice_energy_poll_bridge_with_ops
+                0x00000000011370da       0xb2 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_poll_adapter.o
+                0x00000000011370da                h1e_voice_energy_poll_bridge_with_ops
+ .text.unlikely.h1e_voice_energy_poll_bridge
+                0x000000000113718c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_poll_adapter.o
+ .text.h1e_voice_energy_poll_bridge
+                0x000000000113718c       0x10 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_poll_adapter.o
+                0x000000000113718c                h1e_voice_energy_poll_bridge
+ .text          0x000000000113719c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_reply_v2.o
+ .text.unlikely.h1e_voice_energy_reply_v2_encode
+                0x000000000113719c        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_reply_v2.o
+ .text.h1e_voice_energy_reply_v2_encode
+                0x000000000113719c       0x94 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_reply_v2.o
+                0x000000000113719c                h1e_voice_energy_reply_v2_encode
+ .text          0x0000000001137230        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_f11a_reader.o
+ .text.unlikely.h1e_voice_energy_f11a_reply_v2_read
+                0x0000000001137230        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_f11a_reader.o
+ .text.h1e_voice_energy_f11a_reply_v2_read
+                0x0000000001137230       0x88 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_f11a_reader.o
+                0x0000000001137230                h1e_voice_energy_f11a_reply_v2_read
+ .text.unlikely.h1e_voice_energy_f11a_reply_select
+                0x00000000011372b8        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_f11a_reader.o
+ .text.h1e_voice_energy_f11a_reply_select
+                0x00000000011372b8       0x2a /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_f11a_reader.o
+                0x00000000011372b8                h1e_voice_energy_f11a_reply_select
+ .text          0x00000000011372e2        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_f11a_dispatch.o
+ .text.unlikely.load_le32
+                0x00000000011372e2        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_f11a_dispatch.o
+ .text.load_le32
+                0x00000000011372e2       0x16 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_f11a_dispatch.o
+ .text.unlikely.h1e_voice_energy_f11a_parse_shim
+                0x00000000011372f8        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_f11a_dispatch.o
+ .text.h1e_voice_energy_f11a_parse_shim
+                0x00000000011372f8       0x58 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_f11a_dispatch.o
+                0x00000000011372f8                h1e_voice_energy_f11a_parse_shim
+ .text.unlikely.h1e_voice_energy_f11a_response_shim
+                0x0000000001137350        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_f11a_dispatch.o
+ .text.h1e_voice_energy_f11a_response_shim
+                0x0000000001137350       0xec /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_f11a_dispatch.o
+                0x0000000001137350                h1e_voice_energy_f11a_response_shim
+ .text          0x000000000113743c       0x94 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/vad-provider-fixed-snapshot-20261017/build/vad_provider_raw_get.enabled.o
+                0x000000000113743c                vad_provider_raw_get
+ .text.unlikely
+                0x00000000011374d0        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/vad-provider-fixed-snapshot-20261017/build/vad_provider_raw_get.enabled.o
+ *(SORT(.csky.code.*))
+
+.voice_energy_rodata
+                0x00000000011374d0       0x15
+ *(.rodata .rodata.*)
+ .rodata.target_poll_ops
+                0x00000000011374d0       0x14 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_poll_adapter.o
+ .rodata.synthetic_v1_request.1435
+                0x00000000011374e4        0x1 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_f11a_dispatch.o
+
+.rela.dyn       0x00000000011374e8        0x0
+ .rela.text.h1e_voice_energy_poll_bridge_with_ops
+                0x00000000011374e8        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_poll_adapter.o
+ .rela.rodata.target_poll_ops
+                0x00000000011374e8        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_poll_adapter.o
+ .rela.text.h1e_voice_energy_f11a_reply_v2_read
+                0x00000000011374e8        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_poll_adapter.o
+ .rela.text.h1e_voice_energy_f11a_parse_shim
+                0x00000000011374e8        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_poll_adapter.o
+ .rela.text.h1e_voice_energy_f11a_response_shim
+                0x00000000011374e8        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_poll_adapter.o
+
+.voice_energy_data
+                0x00000000011374e5        0x0
+ *(.data .data.*)
+ .data          0x00000000011374e5        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/integration-calls.o
+ .data          0x00000000011374e5        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_cache.o
+ .data          0x00000000011374e5        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_loader128.o
+ .data          0x00000000011374e5        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_poll_adapter.o
+ .data          0x00000000011374e5        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_reply_v2.o
+ .data          0x00000000011374e5        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_f11a_reader.o
+ .data          0x00000000011374e5        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_f11a_dispatch.o
+ .data          0x00000000011374e5        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/vad-provider-fixed-snapshot-20261017/build/vad_provider_raw_get.enabled.o
+
+.voice_energy_bss
+                0x00000000011374e5        0x0
+ *(.bss .bss.* COMMON)
+ .bss           0x00000000011374e5        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/integration-calls.o
+ .bss           0x00000000011374e5        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_cache.o
+ .bss           0x00000000011374e5        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_loader128.o
+ .bss           0x00000000011374e5        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_poll_adapter.o
+ .bss           0x00000000011374e5        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_reply_v2.o
+ .bss           0x00000000011374e5        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_f11a_reader.o
+ .bss           0x00000000011374e5        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_f11a_dispatch.o
+ .bss           0x00000000011374e5        0x0 /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/vad-provider-fixed-snapshot-20261017/build/vad_provider_raw_get.enabled.o
+                0x00000000011374e8                . = ALIGN (0x4)
+                0x00000000011374e8                __voice_energy_provisional_end = .
+                0x0000000000000001                ASSERT ((SIZEOF (.poll_dispatch_call) == 0x4), poll integration call must be one CK802 BSR)
+                0x0000000000000001                ASSERT ((SIZEOF (.constructor_allocate128) == 0x2), constructor allocate-128 plan must be one CK802 instruction)
+                0x0000000000000001                ASSERT ((SIZEOF (.constructor_zero128) == 0x2), constructor zero-128 plan must be one CK802 instruction)
+                0x0000000000000001                ASSERT ((SIZEOF (.parser_dispatch_call) == 0x4), parser integration call must be one CK802 BSR)
+                0x0000000000000001                ASSERT ((SIZEOF (.response_dispatch_call) == 0x4), response integration call must be one CK802 BSR)
+                0x0000000000000001                ASSERT ((__voice_energy_provisional_end <= 0x1137800), VoiceEnergy provisional link exceeds its 2 KiB evaluation window)
+
+/DISCARD/
+ *(.comment)
+ *(.note .note.*)
+ *(.csky.attributes)
+ *(.csky_stack_size)
+                0x0000000001128e34                h1e_vad_native_poll_bridge = 0x1128e34
+                0x0000000001128aa2                vadt_csky_guard_enter = 0x1128aa2
+                0x0000000001128a9c                vadt_csky_guard_exit = 0x1128a9c
+                0x0000000001128d08                console630_vad_parse_current = 0x1128d08
+                0x0000000001128bf4                console630_vad_response_current = 0x1128bf4
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/integration-calls.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_cache.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_loader128.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_poll_adapter.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_reply_v2.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_f11a_reader.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/h1e_voice_energy_f11a_dispatch.o
+LOAD /mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/vad-provider-fixed-snapshot-20261017/build/vad_provider_raw_get.enabled.o
+OUTPUT(/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/voice-energy-provisional.elf elf32-csky-little)

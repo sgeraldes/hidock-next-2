@@ -1,0 +1,11 @@
+PASS exact V2 selector accepts through VAD validation
+PASS V2 common validation uses synthetic V1 token only
+PASS V2 preserves request bytes and records selector 2
+PASS V1 remains delegated unchanged
+PASS F117 reaches the prior VAD-aware dispatcher unchanged
+PASS non-exact V2-like frame is rejected by prior parser unchanged
+PASS state 2 emits the cache-only 32-byte V2 payload
+PASS V1 response remains delegated to prior VAD response
+PASS F117 response remains delegated to prior VAD response
+PASS short V2 capacity fails without query or partial output
+8 focused F11A dispatch cases passed

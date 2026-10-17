@@ -1,0 +1,42 @@
+{
+  "schema": "h1e-voice-energy-f11a-dispatch-provisional-receipt-v1",
+  "status": "offline_source_and_link_proposal_NOT_COMPOSED_NOT_INSTALLABLE",
+  "manifest_sha256": "6e7e8282a5b8cab91999665802be6797ce883e9311e9b28d79b3324b674b6687",
+  "source_sha256": {
+    "h1e_voice_energy_cache.h": "1e51f8559125dcab430acfe2ef9d7ec8a3c7908ddb5f55f41be897b260e29eb2",
+    "h1e_voice_energy_cache.c": "0993b5be928fc4e47421fa0c50c9cc114ee2ee4a198b6edf11a817ddb2ceb43d",
+    "h1e_voice_energy_loader128.h": "571abc8a5878e4119887b46e5bc9eed6be7a5988d545d942a4c2c50fc7e06945",
+    "h1e_voice_energy_loader128.c": "b7ecf508c5690c8406bfc12c9a86362e4568de0e4ad87ed5c6914bcdea435c7f",
+    "h1e_voice_energy_poll_adapter.h": "0781b57d4198d524c37ed9c7cf2729df37298e0065455485a5b176de8d12270b",
+    "h1e_voice_energy_poll_adapter.c": "64983070eaaadbe7ea9314fca2b3b6ca7e64d8b8d94ea98c7ce049181d2b133b",
+    "h1e_voice_energy_reply_v2.h": "07b5af027defe672d7dced4169e7e3d92ffd1c78d8627d58c7a5f2246dc40d62",
+    "h1e_voice_energy_reply_v2.c": "1444256003bcf373964362999a85114a751e076d55b2848fb711b358759e4767",
+    "h1e_voice_energy_f11a_reader.h": "ef3f375128cecd603ed014a09dffefc51c5e19b30d910196d3737f7d6adfd0ec",
+    "h1e_voice_energy_f11a_reader.c": "9bbe96d8b14b42560f9559697a9c8ab18230b7239532d370a1fc3a421fef122f",
+    "h1e_voice_energy_f11a_dispatch.h": "29d05085451f28b9f3d4df90b9519e29c0994ffdcac8a879a134fdbd9c41dd20",
+    "h1e_voice_energy_f11a_dispatch.c": "facc9fbe6f5edfb499a06c69abe104865be340c99d7e3616465da427abeb7966",
+    "integration-calls.S": "03a47ccf250aa43e786a3426bea62f3923a58620c250fc465bd8935e65593c17",
+    "provisional-link-voice-energy-r5.ld": "0313c0dc4b7f98ed78fcdb2ad39c48526fbc1bead1b0da856ffa457480078dfc",
+    "build_f11a_dispatch_proposal.sh": "29bdc0eb7e009d56b6bf32943f3ef72aa0320cac64e4aeed297c500f5874fcb9",
+    "test_voice_energy_f11a_dispatch.c": "70a7299b1dece6a08c6956336ed339b90d58ca84a2a76d058fddf095d236111e"
+  },
+  "external_aliases": {
+    "console630_parse_vad_aware_wrapper": "2eb346bf01bb4a28c92854124c90d547fbe59f7986510d0eaba254c4f666e1fb",
+    "console630_response_vad_aware_wrapper": "ccf948a6de857e8037e3be27e8394168739ec6b7e3bfa2e59377ad4085a337b8",
+    "h1e_vad_native_poll_bridge": "007c0a49aebaec3b57d1e218ecf1a1ba7c1f1a4fe210c34ebd3488fadbf5fd60",
+    "vadt_csky_guard_enter": "9c1f817c9205b13c6e97621f3d835dfd96fc53350e495c1f6ebf710555a72fd4",
+    "vadt_csky_guard_exit": "b6ded295d1af4ff4fd1ccabde02810eea508213b5129eb0e2bcaaa0abc1142b4",
+    "console_parser_wrapper_dispatch_call": "a654ee0e0ab6dbb17637083923326b40a0b4e562d0dae29dc50948af324fa979",
+    "console_response_wrapper_dispatch_call": "7a21362545cf1b05fb0a8e75d33562da326f65f7d46f564981bad6a6ad78395e"
+  },
+  "proposed_call_bytes": {
+    "poll": "08e015b3",
+    "parse": "00e04872",
+    "response": "00e05772"
+  },
+  "constructor_128_instruction_bytes": {
+    "allocate_128": "8030",
+    "zero_128": "8032"
+  },
+  "host_dispatch_checks": "PASS exact V2 selector accepts through VAD validation\nPASS V2 common validation uses synthetic V1 token only\nPASS V2 preserves request bytes and records selector 2\nPASS V1 remains delegated unchanged\nPASS F117 reaches the prior VAD-aware dispatcher unchanged\nPASS non-exact V2-like frame is rejected by prior parser unchanged\nPASS state 2 emits the cache-only 32-byte V2 payload\nPASS V1 response remains delegated to prior VAD response\nPASS F117 response remains delegated to prior VAD response\nPASS short V2 capacity fails without query or partial output\n8 focused F11A dispatch cases passed"
+}

@@ -1,0 +1,67 @@
+01020b62 t $t
+01020b62 T h1e_voice_energy_poll_call_site
+01021054 t $t
+01021054 T h1e_voice_energy_allocate_128_instruction
+0102109e t $t
+0102109e T h1e_voice_energy_zero_128_instruction
+01128a9c A vadt_csky_guard_exit
+01128aa2 A vadt_csky_guard_enter
+01128bf4 A console630_vad_response_current
+01128d08 A console630_vad_parse_current
+01128e34 A h1e_vad_native_poll_bridge
+01128e68 t $t
+01128e68 T h1e_voice_energy_parse_call_site
+01128ea2 t $t
+01128ea2 T h1e_voice_energy_response_call_site
+01137000 t $d
+01137000 t $t
+01137000 00000014 T h1e_voice_energy_cache_init
+01137014 t $d
+01137014 t $t
+01137014 0000002a T h1e_voice_energy_cache_record_completed
+0113703e t $d
+0113703e t $t
+0113703e 00000044 T h1e_voice_energy_cache_snapshot
+01137084 t $d
+01137084 t $t
+01137084 0000003c T h1e_voice_energy_load_object_128
+011370bc t $d
+011370c0 t $d
+011370c0 t $t
+011370c0 0000000a t read_provider_raw_word
+011370ca t $d
+011370ca t $t
+011370ca 00000010 t load_current_object_128
+011370da t $d
+011370da t $t
+011370da 000000b2 T h1e_voice_energy_poll_bridge_with_ops
+0113718c t $d
+0113718c t $t
+0113718c 00000010 T h1e_voice_energy_poll_bridge
+01137198 t $d
+0113719c t $d
+0113719c t $t
+0113719c 00000094 T h1e_voice_energy_reply_v2_encode
+01137230 t $d
+01137230 t $t
+01137230 00000088 T h1e_voice_energy_f11a_reply_v2_read
+011372b8 t $d
+011372b8 t $t
+011372b8 0000002a T h1e_voice_energy_f11a_reply_select
+011372e2 t $d
+011372e2 t $t
+011372e2 00000016 t load_le32
+011372f8 t $d
+011372f8 t $t
+011372f8 00000058 T h1e_voice_energy_f11a_parse_shim
+0113734c t $d
+01137350 t $d
+01137350 t $t
+01137350 000000ec T h1e_voice_energy_f11a_response_shim
+0113743c t $d
+0113743c t $t
+0113743c 00000094 T vad_provider_raw_get
+011374b4 t $d
+011374d0 00000014 r target_poll_ops
+011374e4 00000001 r synthetic_v1_request.1435
+011374e8 R __voice_energy_provisional_end

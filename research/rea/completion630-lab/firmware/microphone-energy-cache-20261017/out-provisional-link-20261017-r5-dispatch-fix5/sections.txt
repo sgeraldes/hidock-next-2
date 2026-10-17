@@ -1,0 +1,12 @@
+/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/voice-energy-provisional.elf  :
+section                    size       addr
+.poll_dispatch_call           4   16911202
+.constructor_allocate128      2   16912468
+.constructor_zero128          2   16912542
+.parser_dispatch_call         4   17993320
+.response_dispatch_call       4   17993378
+.voice_energy_text         1232   18051072
+.voice_energy_rodata         21   18052304
+Total                      1269
+
+

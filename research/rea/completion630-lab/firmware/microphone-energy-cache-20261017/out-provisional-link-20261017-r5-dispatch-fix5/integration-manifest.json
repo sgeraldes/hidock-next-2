@@ -1,0 +1,230 @@
+{
+  "schema": "h1e-voice-energy-f11a-dispatch-provisional-v1",
+  "status": "offline_source_and_link_proposal_NOT_COMPOSED_NOT_INSTALLABLE",
+  "identity": {
+    "installed_current_system": {
+      "path": "research/rea/completion630-lab/firmware/producer-lifecycle-system-393998/out-NOTINSTALL/system-decoded-393998-lifecycle-NOTINSTALL.bin",
+      "sha256": "f2e391ca2c895c1d34e1a49639d00571a18418886a25d4200247875cf86a4c3e"
+    },
+    "prior_393997_system": {
+      "path": "research/rea/completion630-lab/firmware/producer-continuation-system-393997/out-NOTINSTALL/system-decoded-393997-continuation-NOTINSTALL.bin",
+      "sha256": "a86acfa502575c0151d31782996b91cebe5143e38f472aa5763915633e825c7e"
+    },
+    "accepted_dispatch_elf": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/link/output-nonlto-bridge/vad-router-only-slots-393992-nonlto-poll-bridge-NOTINSTALL.elf",
+      "sha256": "50d0a27d79ccc7813a0a5150a5e6ed00d77171a4c3c3f8f7aa4566bc4d734a80"
+    },
+    "accepted_dispatch_symbols_sha256": "a5aa5bb9fa21f4dcc672cd0d0ba0741674d1abf48a68b478e74a0129fd8072c9",
+    "accepted_dispatch_system": {
+      "path": "research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/out-NOTINSTALL/compose-3/system-decoded-NOTINSTALL.bin",
+      "sha256": "043afb17fbc868474a33c999ac30473839ab188ba22f46adc95914be6649a918"
+    },
+    "load_base": "0x01000000"
+  },
+  "accepted_abi": {
+    "parse_signature": "int parse(uint8_t *frame, const uint8_t *body, uint32_t length)",
+    "response_signature": "int response(uint8_t *frame)",
+    "parse_head_pointer": "LE32(frame+0x14), command BE16 at head+2, declared length BE32 at head+8",
+    "response_fields": {
+      "command_le32": "frame+0x18",
+      "output_ptr_le32": "frame+0x1c",
+      "payload_capacity_le32": "frame+0x20",
+      "head_ptr_le32": "frame+0x28",
+      "payload_offset": 12
+    },
+    "dispatch_wrapper_call_targets_in_accepted_elf": {
+      "parse": {
+        "symbol": "console630_parse",
+        "address": "0x01128d08",
+        "size": 178
+      },
+      "response": {
+        "symbol": "console630_response",
+        "address": "0x01128bf4",
+        "size": 276
+      },
+      "parser_hook_wrapper": {
+        "symbol": "console630_parser_hook",
+        "address": "0x01128e4c"
+      },
+      "response_hook_wrapper": {
+        "symbol": "console630_response_hook",
+        "address": "0x01128e94"
+      }
+    },
+    "current_system_wrapper_spans": [
+      {
+        "name": "console630_parse_vad_aware_wrapper",
+        "address": "0x01128d08",
+        "length": 178,
+        "sha256_393997_and_393998": "2eb346bf01bb4a28c92854124c90d547fbe59f7986510d0eaba254c4f666e1fb",
+        "bytes_hex": "d414c36d4038476d8b6d150c80e41300136cffe39bfe40380e0c628068434380c86c43eb1af14008136cffe38ffe036d40380408003000283404628068434380c86c43eb1af1f70b0030ffe379fe40eb1af1f10b07e41b00ffe378fe436c0030ffe36cfe403d1e0c40381c0c413e1a086884498450427843c86c4b84c86c4a844842c86c413b0e080f20ffe35ffe403809086085413bc36403e4014069a408a494140033fa079b6c576c1f6c00e04218f807",
+        "matches_393997": true,
+        "matches_installed_393998": true
+      },
+      {
+        "name": "console630_response_vad_aware_wrapper",
+        "address": "0x01128bf4",
+        "length": 276,
+        "sha256_393997_and_393998": "ccf948a6de857e8037e3be27e8394168739ec6b7e3bfa2e59377ad4085a337b8",
+        "bytes_hex": "d3142814036d4038830ca0e41700176cffe326ff40eb1af17708176cffe320ff40eb1af1750804e41f00ffe319ff836d04e42700ffe314ff436d04e41b00ffe30fff436c0030ffe303ff403d036d050800300128081493144038fb0f403ef90f6885403b050c01336ca00130f4076985413bef0b1f3eed0f00338f6c0031002343eb2000b86020a2f90b3b6cffe35eff0238df0b4ed800000a64db0b6ed80100413bd70b403a6ed802001b0863e4fe20403bcf0b14338f6cb8604082403ac90b00235c3bf90b00330b248f6c0023b86043eb2000408240a40024f80b2030bb07403bb70b423a05086ed80300403bb10b04338f6cb8604082403aab0b002343eb2000f80be107136c00e0fe18a40700300028a107",
+        "matches_393997": true,
+        "matches_installed_393998": true
+      },
+      {
+        "name": "h1e_vad_native_poll_bridge",
+        "address": "0x01128e34",
+        "length": 24,
+        "sha256_393997_and_393998": "007c0a49aebaec3b57d1e218ecf1a1ba7c1f1a4fe210c34ebd3488fadbf5fd60",
+        "bytes_hex": "d014836c23100410ffe3bfff9014000068fb0101f48e1201",
+        "matches_393997": true,
+        "matches_installed_393998": true
+      },
+      {
+        "name": "vadt_csky_guard_enter",
+        "address": "0x01128aa2",
+        "length": 10,
+        "sha256_393997_and_393998": "9c1f817c9205b13c6e97621f3d835dfd96fc53350e495c1f6ebf710555a72fd4",
+        "bytes_hex": "00c0206080c020703c78",
+        "matches_393997": true,
+        "matches_installed_393998": true
+      },
+      {
+        "name": "vadt_csky_guard_exit",
+        "address": "0x01128a9c",
+        "length": 6,
+        "sha256_393997_and_393998": "b6ded295d1af4ff4fd1ccabde02810eea508213b5129eb0e2bcaaa0abc1142b4",
+        "bytes_hex": "01c020643c78",
+        "matches_393997": true,
+        "matches_installed_393998": true
+      },
+      {
+        "name": "console_parser_wrapper_dispatch_call",
+        "address": "0x01128e68",
+        "length": 4,
+        "sha256_393997_and_393998": "a654ee0e0ab6dbb17637083923326b40a0b4e562d0dae29dc50948af324fa979",
+        "bytes_hex": "ffe350ff",
+        "matches_393997": true,
+        "matches_installed_393998": true
+      },
+      {
+        "name": "console_response_wrapper_dispatch_call",
+        "address": "0x01128ea2",
+        "length": 4,
+        "sha256_393997_and_393998": "7a21362545cf1b05fb0a8e75d33562da326f65f7d46f564981bad6a6ad78395e",
+        "bytes_hex": "ffe3a9fe",
+        "matches_393997": true,
+        "matches_installed_393998": true
+      }
+    ],
+    "wrapper_spans_match_393997_and_393998": true,
+    "dispatch_note": "The C shim calls the existing VAD-aware parser/response functions; those wrappers retain F11A v1 and route all non-F11A commands to the current console. It does not call raw console functions directly.",
+    "new_shim_delegate_calls": [
+      {
+        "kind": "parse",
+        "symbol": "console630_vad_parse_current",
+        "address": "0x01128d08",
+        "linked_disassembly": "1137334:\te3ff8cea \tbsr      \t0x1128d08\t// 1128d08 <console630_vad_parse_current>",
+        "this_is_the_vad_aware_dispatcher": true
+      },
+      {
+        "kind": "response",
+        "symbol": "console630_vad_response_current",
+        "address": "0x01128bf4",
+        "linked_disassembly": "1137368:\te3ff8c46 \tbsr      \t0x1128bf4\t// 1128bf4 <console630_vad_response_current>",
+        "this_is_the_vad_aware_dispatcher": true
+      }
+    ],
+    "raw_console_aliases_bypassing_vad_not_linked": [
+      "0x0112b70c",
+      "0x0112b81c"
+    ]
+  },
+  "f11a_v2": {
+    "request": "exactly one body byte with value 2, declared length 1, F11A pending command, resolved head/context, and no fragment; common admission checks are reused via the existing VAD parser with a private synthetic V1 token, then only head[9] changes to 2",
+    "saved_parse_state": "head[9]=2 only after the existing VAD parser accepts all common checks; V1 state 1 remains untouched",
+    "response": "state 2 reads the 128-byte sidecar cache only and returns its fixed 32-byte V2 payload; it does not call the provider",
+    "all_other_traffic": "delegates unchanged to the existing VAD-aware parser/response, including F11A v1, F117, and other console commands",
+    "voice_source_freshness_semantics": "unknown; raw/status/counters only"
+  },
+  "required_lifecycle_recipe_not_applied": {
+    "constructor_96_to_128": [
+      {
+        "kind": "allocate_128",
+        "address": "0x01021054",
+        "current_96_instruction_bytes_hex": "6030",
+        "proposed_128_instruction_bytes_hex": "8030",
+        "register": "r0",
+        "meaning": "movi r0, 0x80",
+        "applied_to_sys": false
+      },
+      {
+        "kind": "zero_128",
+        "address": "0x0102109e",
+        "current_96_instruction_bytes_hex": "6032",
+        "proposed_128_instruction_bytes_hex": "8032",
+        "register": "r2",
+        "meaning": "movi r2, 0x80",
+        "applied_to_sys": false
+      }
+    ],
+    "existing_delayed_publication_and_detach_before_free": "retain the accepted lifecycle behavior; only the two 96-byte immediate values above are proposed to change"
+  },
+  "external_call_proposal_not_applied": [
+    {
+      "kind": "poll",
+      "address": "0x01020b62",
+      "current_393998_bytes_hex": "08e06941",
+      "proposed_bytes_hex": "08e015b3",
+      "target_symbol": "h1e_voice_energy_poll_bridge",
+      "target_address": "0x0113718c",
+      "linked_disassembly": "1020b62:\te008b315 \tbsr      \t0x113718c\t// 113718c <h1e_voice_energy_poll_bridge>",
+      "applied_to_sys": false
+    },
+    {
+      "kind": "parse",
+      "address": "0x01128e68",
+      "current_393998_bytes_hex": "ffe350ff",
+      "proposed_bytes_hex": "00e04872",
+      "target_symbol": "h1e_voice_energy_f11a_parse_shim",
+      "target_address": "0x011372f8",
+      "linked_disassembly": "1128e68:\te0007248 \tbsr      \t0x11372f8\t// 11372f8 <h1e_voice_energy_f11a_parse_shim>",
+      "applied_to_sys": false
+    },
+    {
+      "kind": "response",
+      "address": "0x01128ea2",
+      "current_393998_bytes_hex": "ffe3a9fe",
+      "proposed_bytes_hex": "00e05772",
+      "target_symbol": "h1e_voice_energy_f11a_response_shim",
+      "target_address": "0x01137350",
+      "linked_disassembly": "1128ea2:\te0007257 \tbsr      \t0x1137350\t// 1137350 <h1e_voice_energy_f11a_response_shim>",
+      "applied_to_sys": false
+    }
+  ],
+  "provisional_link": {
+    "elf_path": "research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/voice-energy-provisional.elf",
+    "elf_bytes": 13600,
+    "elf_sha256": "fabcf97d7dc010f3ff8b1d007628ed2529e7aad6fc1988d72399fc4515586cd3",
+    "start": "0x01137000",
+    "end_exclusive": "0x011374e8",
+    "window_end_exclusive": "0x01137800",
+    "fits_2k_evaluation_window": true,
+    "undefined_symbol_count": 0,
+    "fully_resolved_ck802_relocations": true,
+    "vma_reservation_accepted": false,
+    "sys_or_container_composed": false
+  },
+  "provider_object": {
+    "path": "research/rea/completion630-lab/firmware/vad-provider-fixed-snapshot-20261017/build/vad_provider_raw_get.enabled.o",
+    "sha256": "fafc03ba7db1c65e2686c829a1111855feee47bd1897db9569f886fda25fbecb",
+    "enabled_for_offline_static_link_only": true
+  },
+  "host_dispatch_checks": "PASS exact V2 selector accepts through VAD validation\nPASS V2 common validation uses synthetic V1 token only\nPASS V2 preserves request bytes and records selector 2\nPASS V1 remains delegated unchanged\nPASS F117 reaches the prior VAD-aware dispatcher unchanged\nPASS non-exact V2-like frame is rejected by prior parser unchanged\nPASS state 2 emits the cache-only 32-byte V2 payload\nPASS V1 response remains delegated to prior VAD response\nPASS F117 response remains delegated to prior VAD response\nPASS short V2 capacity fails without query or partial output\n8 focused F11A dispatch cases passed",
+  "limitations": [
+    "This is a source/ELF proposal only. No SYS, container, target instruction execution, hardware, or install was performed.",
+    "The 0x01137000 address is an evaluation coordinate, not a reserved firmware VMA.",
+    "Compile-time admission assertions do not prove constructor, object lifetime, provider scheduling, or target memory ordering.",
+    "The V2 selector is raw cache reporting only and makes no microphone, voice, or freshness claim."
+  ]
+}
