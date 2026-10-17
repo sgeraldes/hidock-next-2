@@ -1,0 +1,92 @@
+schema: hidock-vad-exact-image-gate/v1
+status: executed-once-after-parent-review
+candidate:
+  firmware: 393993
+  system_image: research/rea/completion630-lab/firmware/producer-rom-fixed-probe-candidate/out-NOTINSTALL/composed-run8-wrapper-fallbacks/system-decoded-NOTINSTALL.bin
+  sha256: 05d7d9e2d725b4624b4746b09cea58eed9aded63b1fc377255ac2c5fc41dec8b
+  bytes: 1237504
+  load_base: 0x01000000
+  qualification_boundary: exact decoded SYS bytes imported read-only into Ghidra; not a physical firmware or ROM-semantics qualification
+artifacts:
+  candidate_elf: absent from composed-run8-wrapper-fallbacks; do not claim the 393992 ELF is the ELF for this patched SYS
+  symbol_reference_only:
+    firmware: 393992
+    elf: research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/link/output-nonlto-bridge/vad-router-only-slots-393992-nonlto-poll-bridge-NOTINSTALL.elf
+    elf_sha256: 50d0a27d79ccc7813a0a5150a5e6ed00d77171a4c3c3f8f7aa4566bc4d734a80
+    symbols: research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/link/output-nonlto-bridge/symbols.txt
+    symbols_sha256: 7222b982ab20c07f5aa270fa530128eed77e587cbab42be6820f30869a5a59a8
+    layout: research/rea/completion630-lab/hardware-vad-trace/combined-slots-vad-393992-20261016/revisions/poll-bridge-retained-20261016/receipts/compose-3/layout-readback.json
+    layout_sha256: 5fd4795ac690fff59b09e5000bdaa601a974e34b27016baa9081b6f9c99424b1
+    layout_baseline_system_sha256: ebee46c51239a4ad971c54cf4b4c12e2a29d516aebd15065ec258de099168771
+    role: resolve unchanged entry addresses only; not evidence of 393993 ELF identity or candidate link provenance
+  compatibility_report:
+    path: research/rea/completion630-lab/hardware-vad-trace/compatibility-393993-20261017/REPORT.md
+    sha256: dabb5ed8201889e9afe8a14e164d67e0390c6466f7b898269173609f0a07fd00
+  comparison_json: absent; REPORT.md is the available compatibility record
+  composition_manifest:
+    path: research/rea/completion630-lab/firmware/producer-rom-fixed-probe-candidate/out-NOTINSTALL/composed-run8-wrapper-fallbacks/manifest.json
+    sha256: 5db5046b754fd53f629e0d52478cb193c9547f3b3655dba09dbf999fc1af2159
+    predecessor_system_sha256: 9a5fd3df0e71e5302c3fbf7aa9301294e9e27a16e896919389590eb4a3871b8f
+    note: manifest predecessor is not the pinned 393992 SYS; candidate SYS is imported directly, with no overlay or equivalence claim
+exact_candidate_sites:
+  - address: 0x01020b62
+    bytes: 08e06941
+    role: poll hook BSR; expected destination 0x01128e34
+  - address: 0x0103907a
+    bytes: 07e00d7f
+    role: F11A response dispatch
+  - address: 0x0103a996
+    bytes: 07e05b72
+    role: F11A parser dispatch
+  - address: 0x01128cfc
+    bytes: 00e0fe18
+    role: changed response fallback BSR; expected destination 0x0112bef8
+  - address: 0x01128db4
+    bytes: 00e04218
+    role: changed parser fallback BSR; expected destination 0x0112be38
+reference_addresses:
+  console_response: 0x01128bf4
+  poll_bridge: 0x01128e34
+  poll_hook: 0x01020b62
+  poll_continuation: 0x01020b66
+run:
+  harness: reuse existing BoundedNativeContract630.java plus the prior exact-image Ghidra import path; local four-case adapter only
+  import: CSKY_V2:LE:32:default, BinaryLoader at 0x01000000, no analysis, read-only project
+  byte_guard: SHA-256, byte count, and full imported-memory byte-for-byte comparison against candidate SYS
+  fixture_memory: synthetic RAM only
+  getter_boundary:
+    address: 0x0101fb68
+    modeled_calls: exactly one per poll case; no other ROM calls modeled
+    poll_entry_r0: 0x0038e100
+    allowed_output_interval: [0x0038e000, 0x00390000)
+    success: status 0; output word 0x87654321
+    failure: status -5; output word 0xdeadbeef (must not publish as a valid sample)
+  cases:
+    - id: f11a-absent-snapshot-response
+      entry: symbol console630_response at 0x01128bf4
+      boundary: response wrapper entry only; not the original F11A ingress or parser dispatch
+      fixture: publication slot null; F11A response frame; 32-byte synthetic reply buffer
+      expect: return 32; status/version/state bytes 2,1,0,0; every payload byte 4..31 zero; getter calls 0
+    - id: f11a-present-snapshot-response
+      entry: symbol console630_response at 0x01128bf4
+      boundary: response wrapper entry only; not the original F11A ingress or parser dispatch
+      fixture: slot 0x000852c0 points to 0x00330000; state 1; telemetry words 8,5,4,0,0x87654321,0,0,1
+      expect: return 32; verify status/version/state, all telemetry including native status at offset 12, both padding words, and flags at offset 28; getter calls 0
+    - id: poll-bridge-success
+      entry: 0x01020b62; stop: 0x01020b66
+      fixture: r0=0x0038e100; one getter response status 0, word 0x87654321
+      expect: branch reaches bridge 0x01128e34 once; one bounded getter call; success telemetry tail published
+    - id: poll-bridge-failure
+      entry: 0x01020b62; stop: 0x01020b66
+      fixture: r0=0x0038e100; one getter response status -5, word 0xdeadbeef
+      expect: branch reaches bridge 0x01128e34 once; one bounded getter call; failure status retained; word not published as valid sample
+  excluded: constructors; parser/response forwarding cases; code0-code7 cases; broad/old suites; firmware build or package; hardware, USB, app, or flash operation
+  attribution_limit: candidate SYS is byte-pinned and imported exactly, but this run does not claim execution of wrapper fallback BSRs at 0x01128cfc/0x01128db4; their mux paths have separate exact-image evidence
+outputs:
+  directory: research/rea/completion630-lab/hardware-vad-trace/vad-exact-393993-20261017/out-NOTINSTALL/run-final-05d7-four-cases
+  files: [config.json, receipt.json, run-meta.json, executed-VadExactQa393993.java, Ghidra import/run logs]
+execution:
+  ghidra_process_exit_code: 0
+  receipt_status: passed_exact_image_instruction_fixtures
+  cases_passed: 4
+  receipt_sha256: b6223628a49ef22a90e96e9777eb8474d523579b93b9cec8e761723619caced3
