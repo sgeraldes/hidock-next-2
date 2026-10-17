@@ -1,0 +1,13 @@
+diff --git a/packages/jensen-protocol/src/index.ts b/packages/jensen-protocol/src/index.ts
+--- a/packages/jensen-protocol/src/index.ts
++++ b/packages/jensen-protocol/src/index.ts
+@@ -73,1 +73,9 @@
+   FirmwareProducerStateWords, FirmwareProducerStateReply, FirmwareProducerRomReply, FirmwareProducerReply } from './firmware-producer-state.js'
++export {
++  NATIVE_VOICE_ENERGY_OBSERVATION_COMMAND, NATIVE_VOICE_ENERGY_OBSERVATION_REPLY_BYTES,
++  NATIVE_VOICE_ENERGY_OBSERVATION_VERSION, NATIVE_VOICE_ENERGY_OBSERVATION_REQUEST_BYTES,
++  NATIVE_VOICE_ENERGY_HAS_SAMPLE, NATIVE_VOICE_ENERGY_STATUS_OK, NATIVE_VOICE_ENERGY_STATUS_BUSY,
++  NATIVE_VOICE_ENERGY_STATUS_UNAVAILABLE, encodeNativeVoiceEnergyObservationRequest,
++  decodeNativeVoiceEnergyObservationReply, parseNativeVoiceEnergyObservationReply, NativeVoiceEnergyDecodeError
++} from './native-voice-energy-observation.js'
++export type { NativeVoiceEnergyStatus, NativeVoiceEnergyObservation, NativeVoiceEnergyDecodeErrorCode } from './native-voice-energy-observation.js'
