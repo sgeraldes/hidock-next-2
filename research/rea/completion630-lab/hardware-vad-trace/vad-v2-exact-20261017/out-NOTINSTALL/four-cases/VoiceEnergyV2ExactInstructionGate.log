@@ -1,0 +1,51 @@
+openjdk version "21.0.12.1" 2026-08-18
+OpenJDK Runtime Environment (build 21.0.12.1+1-1-24.04.4-Ubuntu)
+OpenJDK 64-Bit Server VM (build 21.0.12.1+1-1-24.04.4-Ubuntu, mixed mode)
+INFO  Using log config file: jar:file:/home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Framework/Generic/lib/Generic.jar!/generic.log4j.xml (LoggingInitialization)  
+INFO  Using log file: /home/sebastian/.config/ghidra/ghidra_12.1.4_PUBLIC/application.log (LoggingInitialization)  
+INFO  Loading user preferences: /home/sebastian/.config/ghidra/ghidra_12.1.4_PUBLIC/preferences (Preferences)  
+INFO  Searching for classes... (ClassSearcher)  
+INFO  Class search complete (617 ms) (ClassSearcher)  
+INFO  Initializing SSL Context (DefaultSSLContextInitializer)  
+INFO  Initializing Random Number Generator... (SecureRandomFactory)  
+INFO  Random Number Generator initialization complete: NativePRNGNonBlocking (SecureRandomFactory)  
+INFO  Trust manager disabled, cacerts have not been set (DefaultTrustManagerFactory)  
+INFO  Headless startup complete (1405 ms) (AnalyzeHeadless)  
+INFO  Class searcher loaded 59 extension points (20 false positives) (ClassSearcher)  
+INFO  HEADLESS Script Paths:
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Features/Base/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Debug/Debugger-rmi-trace/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Processors/DATA/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Debug/Debugger/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Features/VersionTracking/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Processors/PIC/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Features/DecompilerDependent/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Features/FileFormats/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Features/MicrosoftCodeAnalyzer/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Processors/Atmel/ghidra_scripts
+    /tmp/vad-v2-exact-HJkGxN/scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Features/PDB/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Features/SystemEmulation/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Features/FunctionID/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Features/PyGhidra/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Features/BSim/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Features/Decompiler/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Features/SwiftDemangler/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Processors/JVM/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Features/BytePatterns/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Features/GnuDemangler/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Features/WildcardAssembler/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Processors/8051/ghidra_scripts (HeadlessAnalyzer)  
+INFO  HEADLESS: execution starts (HeadlessAnalyzer)  
+INFO  Opening existing project: /tmp/vad-v2-exact-HJkGxN/project/vad (HeadlessAnalyzer)  
+INFO  Opening project: /tmp/vad-v2-exact-HJkGxN/project/vad (HeadlessProject)  
+INFO  REPORT: Processing read-only project file: /system.bin (HeadlessAnalyzer)  
+INFO  REPORT: Execute script: VoiceEnergyV2ExactInstructionGate.java '/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-instruction-fixture-20261017/out-INSTRUCTION-FIXTURE-NOTINSTALL/instruction-fixture-393998-voice-energy-NOTINSTALL.bin' '/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-instruction-fixture-20261017/out-INSTRUCTION-FIXTURE-NOTINSTALL/fixture-receipt.json' '/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/vad-v2-exact-20261017/out-NOTINSTALL/four-cases/receipt.json'  (HeadlessAnalyzer)  
+INFO  SCRIPT: /tmp/vad-v2-exact-HJkGxN/scripts/VoiceEnergyV2ExactInstructionGate.java (HeadlessAnalyzer)  
+INFO  VoiceEnergyV2ExactInstructionGate.java> Verified exact emulator-only fixture SHA, size, image import, retained sections, and three BSR destinations. (GhidraScript)  
+INFO  VoiceEnergyV2ExactInstructionGate.java> poll_both_getters_success_then_v2_reply PASS actual={pass=true, expected={cache_words=[J@2bf0c70d, reply_hex=0002010000000001000000010000000087654321000000020000000000000000, one call at each modeled getter=r0 output pointers aligned in [0x0038e000,0x00390000)}, actual={parser_pass=true, poll_status=0, poll_bridge_hits=1, native_getter_calls={RefChannelVAD=1, VoiceEnergy=1}, native_output_pointers={RefChannelVAD=[0x0038e100], VoiceEnergy=[0x0038efcc]}, vadt_words_le32=[J@5d8e4fa8, energy_cache_words_le32=[J@649009d6, reply_hex=0002010000000001000000010000000087654321000000020000000000000000, outer_response_saved_length=32, response_shim_hits=1, response_output_tail_intact=true, object_canaries_intact=true, executed_instructions={parser=189, poll=309, response=973}, proven_entrypoints=[assembly parser wrapper 0x01128e4c -> handled continuation 0x0103b50a, poll hook 0x01020b62 -> 0x01020b66, assembly response wrapper 0x01128e94 -> handled continuation 0x010394e2]}} (GhidraScript)  
+INFO  VoiceEnergyV2ExactInstructionGate.java> energy_getter_status1_failure_preserves_previous_raw PASS actual={pass=true, expected={cache_words=[J@6796a873, reply_hex=0002010000000006000000030000000111223344000000080000000000000000, one call at each modeled getter=r0 output pointers aligned in [0x0038e000,0x00390000)}, actual={parser_pass=true, poll_status=0, poll_bridge_hits=1, native_getter_calls={RefChannelVAD=1, VoiceEnergy=1}, native_output_pointers={RefChannelVAD=[0x0038e100], VoiceEnergy=[0x0038efcc]}, vadt_words_le32=[J@3acc3ee, energy_cache_words_le32=[J@1f293cb7, reply_hex=0002010000000006000000030000000111223344000000080000000000000000, outer_response_saved_length=32, response_shim_hits=1, response_output_tail_intact=true, object_canaries_intact=true, executed_instructions={parser=0, poll=300, response=973}, proven_entrypoints=[poll hook 0x01020b62 -> 0x01020b66, assembly response wrapper 0x01128e94 -> handled continuation 0x010394e2]}} (GhidraScript)  
+INFO  VoiceEnergyV2ExactInstructionGate.java> v2_response_without_object PASS actual={pass=true, expected=return size 32, v2 unavailable snapshot, no modeled native getter call, actual={reply_hex=0202000000000000000000000000000000000000000000000000000000000000, stored_length=32, response_shim_hits=1, modeled_getter_calls=0, executed_instructions=1038, entrypoint=assembly response wrapper 0x01128e94; patched BSR at 0x01128ea2; stop at handled continuation 0x010394e2}} (GhidraScript)  
+INFO  VoiceEnergyV2ExactInstructionGate.java> f11a_v1_passthrough PASS actual={pass=true, expected=V1 payload byte-exact; sidecar/canaries unchanged; no getter calls or shim re-entry, actual={reply_hex=0001010100000001000000010000000013579bdf000000000000000000000002, stored_length=32, sidecar_before_le32=[J@58068b40, sidecar_after_le32=[J@999cd18, response_shim_hits=1, modeled_getter_calls=0, executed_instructions=1089, entrypoint=assembly response wrapper 0x01128e94; patched BSR at 0x01128ea2; stop at handled continuation 0x010394e2; v1 forwards to retained VAD response}} (GhidraScript)  
+INFO  VoiceEnergyV2ExactInstructionGate.java> Four-case exact-image instruction gate complete; failed=0 (GhidraScript)  
+INFO  REPORT: Discarding changes to the following read-only file: /system.bin (HeadlessAnalyzer)  

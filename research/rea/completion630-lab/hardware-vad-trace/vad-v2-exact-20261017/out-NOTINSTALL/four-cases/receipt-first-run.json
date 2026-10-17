@@ -1,0 +1,68 @@
+{
+  "schema": "hidock-vad-v2-exact-instruction-receipt/v1",
+  "status": "blocked_or_failed_exact_instruction_gate",
+  "fixture_path": "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-instruction-fixture-20261017/out-INSTRUCTION-FIXTURE-NOTINSTALL/instruction-fixture-393998-voice-energy-NOTINSTALL.bin",
+  "fixture_sha256": "cef21b2dfcb4c8efc6666a08034414a385851404e56fff8329bb7ff587669482",
+  "fixture_bytes": 1275904,
+  "fixture_receipt_path": "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-instruction-fixture-20261017/out-INSTRUCTION-FIXTURE-NOTINSTALL/fixture-receipt.json",
+  "fixture_receipt_sha256": "e6d16935bcbc1d5a323a6b8de3b9ecfc994a197478afa5028f689e6104c0ea4d",
+  "case_receipt_path": "/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/vad-v2-exact-20261017/out-NOTINSTALL/four-cases/receipt.json",
+  "fixture_status": "EMULATOR_IMPORT_ONLY_NOTINSTALL",
+  "whole_import_byte_equal": true,
+  "pinned_image_and_branch_gate_passed": true,
+  "branch_targets": {
+    "0x01020b62": "0x0113718c",
+    "0x01128e68": "0x011372f8",
+    "0x01128ea2": "0x01137350"
+  },
+  "cases": [
+    {
+      "id": "poll_both_getters_success_then_v2_reply",
+      "status": "failed_exact_fixture_case",
+      "error": "java.lang.IllegalStateException: unmodeled instruction fetch outside exact fixture: pc\u003d0x0008009e",
+      "instruction_trace": [
+        "entry\u003d0x01128e4c stop\u003d0x003ff000",
+        "parser_callsite\u003d0x01128e68",
+        "parser_shim\u003d0x011372f8"
+      ]
+    },
+    {
+      "id": "energy_getter_status1_failure_preserves_previous_raw",
+      "status": "failed_exact_fixture_case",
+      "error": "java.lang.IllegalStateException: unmodeled instruction fetch outside exact fixture: pc\u003d0x000800aa",
+      "instruction_trace": [
+        "entry\u003d0x01020b62 stop\u003d0x01020b66",
+        "poll_bridge\u003d0x0113718c",
+        "native_boundary\u003d0x0101fb68 r0\u003d0x0038e100 status\u003d0 word\u003d0x01020304",
+        "native_boundary\u003d0x0101fa9c r0\u003d0x0038efcc status\u003d1 word\u003d0xdeadbeef",
+        "entry\u003d0x01128e94 stop\u003d0x003ff000",
+        "response_callsite\u003d0x01128ea2",
+        "response_shim\u003d0x01137350"
+      ]
+    },
+    {
+      "id": "v2_response_without_object",
+      "status": "failed_exact_fixture_case",
+      "error": "java.lang.IllegalStateException: unmodeled instruction fetch outside exact fixture: pc\u003d0x000800aa",
+      "instruction_trace": [
+        "entry\u003d0x01128e94 stop\u003d0x003ff000",
+        "response_callsite\u003d0x01128ea2",
+        "response_shim\u003d0x01137350"
+      ]
+    },
+    {
+      "id": "f11a_v1_passthrough",
+      "status": "failed_exact_fixture_case",
+      "error": "java.lang.IllegalStateException: unmodeled instruction fetch outside exact fixture: pc\u003d0x000800aa",
+      "instruction_trace": [
+        "entry\u003d0x01128e94 stop\u003d0x003ff000",
+        "response_callsite\u003d0x01128ea2",
+        "response_shim\u003d0x01137350"
+      ]
+    }
+  ],
+  "hardware_usb_app_access": false,
+  "firmware_build_or_composition": false,
+  "failure": "java.lang.IllegalStateException: one or more exact-image fixture cases failed; see receipt",
+  "scope": "Exactly four CK802 instruction fixtures on a read-only emulator import of the pinned NOTINSTALL image: one parser-selector-2 + poll + v2 success, one Energy status-1 failure preserving raw + v2 reply, one v2 response with no object, and one V1 passthrough. Synthetic RAM only; only native getter entrypoints 0x0101fb68 and 0x0101fa9c are modeled. Constructors are not executed. No claim about DSP, live target RAM, voice, freshness, or hardware."
+}

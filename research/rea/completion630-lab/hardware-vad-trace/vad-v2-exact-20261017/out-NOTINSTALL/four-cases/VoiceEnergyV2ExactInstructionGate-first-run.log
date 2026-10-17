@@ -1,0 +1,68 @@
+openjdk version "21.0.12.1" 2026-08-18
+OpenJDK Runtime Environment (build 21.0.12.1+1-1-24.04.4-Ubuntu)
+OpenJDK 64-Bit Server VM (build 21.0.12.1+1-1-24.04.4-Ubuntu, mixed mode)
+INFO  Using log config file: jar:file:/home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Framework/Generic/lib/Generic.jar!/generic.log4j.xml (LoggingInitialization)  
+INFO  Using log file: /home/sebastian/.config/ghidra/ghidra_12.1.4_PUBLIC/application.log (LoggingInitialization)  
+INFO  Loading user preferences: /home/sebastian/.config/ghidra/ghidra_12.1.4_PUBLIC/preferences (Preferences)  
+INFO  Searching for classes... (ClassSearcher)  
+INFO  Class search complete (606 ms) (ClassSearcher)  
+INFO  Initializing SSL Context (DefaultSSLContextInitializer)  
+INFO  Initializing Random Number Generator... (SecureRandomFactory)  
+INFO  Random Number Generator initialization complete: NativePRNGNonBlocking (SecureRandomFactory)  
+INFO  Trust manager disabled, cacerts have not been set (DefaultTrustManagerFactory)  
+INFO  Headless startup complete (1405 ms) (AnalyzeHeadless)  
+INFO  Class searcher loaded 59 extension points (20 false positives) (ClassSearcher)  
+INFO  HEADLESS Script Paths:
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Features/Base/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Debug/Debugger-rmi-trace/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Processors/DATA/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Debug/Debugger/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Features/VersionTracking/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Processors/PIC/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Features/DecompilerDependent/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Features/FileFormats/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Features/MicrosoftCodeAnalyzer/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Processors/Atmel/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Features/PDB/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Features/SystemEmulation/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Features/FunctionID/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Features/PyGhidra/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Features/BSim/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Features/Decompiler/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Features/SwiftDemangler/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Processors/JVM/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Features/BytePatterns/ghidra_scripts
+    /tmp/vad-v2-exact-7uqfv2/scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Features/GnuDemangler/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Features/WildcardAssembler/ghidra_scripts
+    /home/sebastian/.local/share/rea/ghidra_12.1.4_PUBLIC/Ghidra/Processors/8051/ghidra_scripts (HeadlessAnalyzer)  
+INFO  HEADLESS: execution starts (HeadlessAnalyzer)  
+INFO  Opening existing project: /tmp/vad-v2-exact-7uqfv2/project/vad (HeadlessAnalyzer)  
+INFO  Opening project: /tmp/vad-v2-exact-7uqfv2/project/vad (HeadlessProject)  
+INFO  REPORT: Processing read-only project file: /system.bin (HeadlessAnalyzer)  
+INFO  REPORT: Execute script: VoiceEnergyV2ExactInstructionGate.java '/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-instruction-fixture-20261017/out-INSTRUCTION-FIXTURE-NOTINSTALL/instruction-fixture-393998-voice-energy-NOTINSTALL.bin' '/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/firmware/microphone-energy-instruction-fixture-20261017/out-INSTRUCTION-FIXTURE-NOTINSTALL/fixture-receipt.json' '/mnt/g/Code/hidock-next-2/research/rea/completion630-lab/hardware-vad-trace/vad-v2-exact-20261017/out-NOTINSTALL/four-cases/receipt.json'  (HeadlessAnalyzer)  
+INFO  SCRIPT: /tmp/vad-v2-exact-7uqfv2/scripts/VoiceEnergyV2ExactInstructionGate.java (HeadlessAnalyzer)  
+INFO  VoiceEnergyV2ExactInstructionGate.java> Verified exact emulator-only fixture SHA, size, image import, retained sections, and three BSR destinations. (GhidraScript)  
+WARN  Uninitialized memory read at 0103b50c: ram:000855e0:4 (EmulatorHelper)  
+INFO  VoiceEnergyV2ExactInstructionGate.java> poll_both_getters_success_then_v2_reply FAIL java.lang.IllegalStateException: unmodeled instruction fetch outside exact fixture: pc=0x0008009e (GhidraScript)  
+INFO  VoiceEnergyV2ExactInstructionGate.java> energy_getter_status1_failure_preserves_previous_raw FAIL java.lang.IllegalStateException: unmodeled instruction fetch outside exact fixture: pc=0x000800aa (GhidraScript)  
+INFO  VoiceEnergyV2ExactInstructionGate.java> v2_response_without_object FAIL java.lang.IllegalStateException: unmodeled instruction fetch outside exact fixture: pc=0x000800aa (GhidraScript)  
+INFO  VoiceEnergyV2ExactInstructionGate.java> f11a_v1_passthrough FAIL java.lang.IllegalStateException: unmodeled instruction fetch outside exact fixture: pc=0x000800aa (GhidraScript)  
+INFO  VoiceEnergyV2ExactInstructionGate.java> Four-case exact-image instruction gate complete; failed=4 (GhidraScript)  
+ERROR REPORT SCRIPT ERROR:  (HeadlessAnalyzer) java.lang.IllegalStateException: one or more exact-image fixture cases failed; see receipt
+	at VoiceEnergyV2ExactInstructionGate.run(VoiceEnergyV2ExactInstructionGate.java:420)
+	at ghidra.app.script.GhidraScript.executeNormal(GhidraScript.java:460)
+	at ghidra.app.script.GhidraScript.doExecute(GhidraScript.java:314)
+	at ghidra.app.script.GhidraScript.execute(GhidraScript.java:290)
+	at ghidra.app.util.headless.HeadlessAnalyzer.runScript(HeadlessAnalyzer.java:585)
+	at ghidra.app.util.headless.HeadlessAnalyzer.runScriptsList(HeadlessAnalyzer.java:937)
+	at ghidra.app.util.headless.HeadlessAnalyzer.analyzeProgram(HeadlessAnalyzer.java:1093)
+	at ghidra.app.util.headless.HeadlessAnalyzer.processFileNoImport(HeadlessAnalyzer.java:1191)
+	at ghidra.app.util.headless.HeadlessAnalyzer.processFolderNoImport(HeadlessAnalyzer.java:1363)
+	at ghidra.app.util.headless.HeadlessAnalyzer.processNoImport(HeadlessAnalyzer.java:1392)
+	at ghidra.app.util.headless.HeadlessAnalyzer.processLocal(HeadlessAnalyzer.java:449)
+	at ghidra.app.util.headless.AnalyzeHeadless.launch(AnalyzeHeadless.java:199)
+	at ghidra.GhidraLauncher.launch(GhidraLauncher.java:81)
+	at ghidra.Ghidra.main(Ghidra.java:54)
+ 
+INFO  REPORT: Discarding changes to the following read-only file: /system.bin (HeadlessAnalyzer)  

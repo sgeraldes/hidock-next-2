@@ -1,0 +1,84 @@
+{
+  "kind": "static source compatibility only; no target execution or hardware",
+  "target": {
+    "path": "research/rea/completion630-lab/firmware/producer-mapper-system-393999/out-NOTINSTALL/system-decoded-393999-mapper-NOTINSTALL.bin",
+    "sha256": "4e9090570b7293ec2a3bb73cb318e67551eba92f2691f14dcc785512420334d1",
+    "bytes": 1237504
+  },
+  "spans": [
+    {
+      "name": "console630_parse_vad_aware_wrapper",
+      "address": "0x01128d08",
+      "length": 178,
+      "sha256": "2eb346bf01bb4a28c92854124c90d547fbe59f7986510d0eaba254c4f666e1fb",
+      "matches": true
+    },
+    {
+      "name": "console630_response_vad_aware_wrapper",
+      "address": "0x01128bf4",
+      "length": 276,
+      "sha256": "ccf948a6de857e8037e3be27e8394168739ec6b7e3bfa2e59377ad4085a337b8",
+      "matches": true
+    },
+    {
+      "name": "h1e_vad_native_poll_bridge",
+      "address": "0x01128e34",
+      "length": 24,
+      "sha256": "007c0a49aebaec3b57d1e218ecf1a1ba7c1f1a4fe210c34ebd3488fadbf5fd60",
+      "matches": true
+    },
+    {
+      "name": "vadt_csky_guard_enter",
+      "address": "0x01128aa2",
+      "length": 10,
+      "sha256": "9c1f817c9205b13c6e97621f3d835dfd96fc53350e495c1f6ebf710555a72fd4",
+      "matches": true
+    },
+    {
+      "name": "vadt_csky_guard_exit",
+      "address": "0x01128a9c",
+      "length": 6,
+      "sha256": "b6ded295d1af4ff4fd1ccabde02810eea508213b5129eb0e2bcaaa0abc1142b4",
+      "matches": true
+    },
+    {
+      "name": "console_parser_wrapper_dispatch_call",
+      "address": "0x01128e68",
+      "length": 4,
+      "sha256": "a654ee0e0ab6dbb17637083923326b40a0b4e562d0dae29dc50948af324fa979",
+      "matches": true
+    },
+    {
+      "name": "console_response_wrapper_dispatch_call",
+      "address": "0x01128ea2",
+      "length": 4,
+      "sha256": "7a21362545cf1b05fb0a8e75d33562da326f65f7d46f564981bad6a6ad78395e",
+      "matches": true
+    }
+  ],
+  "constructor": [
+    {
+      "address": "0x01021054",
+      "matches": true
+    },
+    {
+      "address": "0x0102109e",
+      "matches": true
+    }
+  ],
+  "calls": [
+    {
+      "address": "0x01020b62",
+      "matches": true
+    },
+    {
+      "address": "0x01128e68",
+      "matches": true
+    },
+    {
+      "address": "0x01128ea2",
+      "matches": true
+    }
+  ],
+  "allMatch": true
+}

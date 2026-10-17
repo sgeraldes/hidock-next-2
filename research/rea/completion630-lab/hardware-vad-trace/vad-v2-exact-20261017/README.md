@@ -1,0 +1,7 @@
+# VoiceEnergy v2 exact-instruction gate
+
+The gate imports the pinned 1,275,904-byte `EMULATOR_IMPORT_ONLY_NOTINSTALL` fixture read-only in Ghidra and checks its full-image bytes, retained VoiceEnergy module sections, and three patched BSR destinations before stepping. It is not the final installable SYS and does not establish boot, constructor, DSP, microphone, voice, freshness, or hardware behavior.
+
+The four bounded fixtures exercise: parser selector 2 followed by the VAD and Energy getters and a v2 reply; an Energy getter status 1 with prior raw retained; a v2 reply with a null object; and the v1 response passthrough. Only the native getter entrypoints at `0x0101fb68` and `0x0101fa9c` are modeled. Object and output RAM are synthetic and guarded by canaries.
+
+Run the existing Ghidra headless runner with `bash run.sh` from this directory. The parser and response fixtures enter their assembly wrappers at `0x01128e4c` and `0x01128e94`, stopping at handled continuations `0x0103b50a` and `0x010394e2`. The corrected run passed all four cases. Its receipt is `out-NOTINSTALL/four-cases/receipt.json` (SHA-256 `10bf13022031da764fe33996a7d2ae2f90777b8264649c53c7b8d620d34c5a38`). The first fail-closed run is retained separately at `out-NOTINSTALL/four-cases/receipt-first-run.json`. No firmware build, SYS composition, packaging, device access, USB, app, installation, or flash is included.

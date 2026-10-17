@@ -1,0 +1,143 @@
+schema: hidock-vad-v2-exact-image-gate/v1
+status: passed_four_exact_fixture_cases
+scope:
+  purpose: "A bounded CK802 instruction gate for the new VoiceEnergy v2 poll/cache/response wiring."
+  case_count: 4
+  execute_only_after: [parent_review_approval, exact_fixture_sha_verified]
+  forbidden: [hardware, USB, app, install, flash, firmware_build, SYS_composition, container_pack, Git, broad_suite, old_393993_rerun]
+  claim_limit: "Synthetic RAM and two modeled native getter boundaries only. This is not DSP, live RAM, timing, source-selection, microphone, voice, freshness, or hardware evidence."
+
+pinned_inputs_observed:
+  base_system:
+    path: research/rea/completion630-lab/firmware/producer-lifecycle-system-393998/out-NOTINSTALL/system-decoded-393998-lifecycle-NOTINSTALL.bin
+    sha256: f2e391ca2c895c1d34e1a49639d00571a18418886a25d4200247875cf86a4c3e
+    bytes: 1237504
+    role: exact source SYS only; it is not the candidate and will not be modified
+  compiled_module_elf:
+    path: research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/voice-energy-provisional.elf
+    sha256: fabcf97d7dc010f3ff8b1d007628ed2529e7aad6fc1988d72399fc4515586cd3
+    bytes: 13600
+    role: linked section/symbol reference; candidate ELF identity must be pinned again from the composer receipt before execution
+  module_link_manifest:
+    path: research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/integration-manifest.json
+    sha256: 6e7e8282a5b8cab91999665802be6797ce883e9311e9b28d79b3324b674b6687
+    status: offline_source_and_link_proposal_NOT_COMPOSED_NOT_INSTALLABLE
+  source_image_pin_list:
+    path: research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/source-image-pins.sha256
+    sha256: b21d07786a2c5046854a6314e3745d835f795ea32b258fe645cbfbfbd508bde0
+  provisional_link_map:
+    path: research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/voice-energy-provisional.map
+    sha256: cd0a28965966f5c0d025b2ba44b46fdb5be724453cebd537dcd85eb87da43756
+  provisional_symbol_list:
+    path: research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/symbols.txt
+    sha256: 2284ea9cfa0d209fab62131797c3ca0d9e2182030f6d2cab6392f3a80ed6b939
+  reusable_harness:
+    bounded_contract:
+      path: research/rea/completion630-lab/firmware/native-notify-image-runtime/harness/BoundedNativeContract630.java
+      sha256: 7aff6aa17c2f5d1d0875a18ab59339f2850c67e06a6dd6a0fef4f6e5c575e341
+    previous_exact_fixture_reference_only:
+      path: research/rea/completion630-lab/hardware-vad-trace/vad-exact-393993-20261017/harness/VadExactQa393993.java
+      sha256: 13c79e196c473fb1567cc1b8042265f0702f2f45d7582ecdb2f96cfd45c7f466
+      role: reuse import, PSR, framing, guard, and bounded-step patterns only; no rerun and no attribution to 393993
+  source_files:
+    - {path: research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/h1e_voice_energy_cache.c, sha256: 0993b5be928fc4e47421fa0c50c9cc114ee2ee4a198b6edf11a817ddb2ceb43d}
+    - {path: research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/h1e_voice_energy_cache.h, sha256: 1e51f8559125dcab430acfe2ef9d7ec8a3c7908ddb5f55f41be897b260e29eb2}
+    - {path: research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/h1e_voice_energy_poll_adapter.c, sha256: 64983070eaaadbe7ea9314fca2b3b6ca7e64d8b8d94ea98c7ce049181d2b133b}
+    - {path: research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/h1e_voice_energy_loader128.c, sha256: b7ecf508c5690c8406bfc12c9a86362e4568de0e4ad87ed5c6914bcdea435c7f}
+    - {path: research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/h1e_voice_energy_reply_v2.c, sha256: 1444256003bcf373964362999a85114a751e076d55b2848fb711b358759e4767}
+    - {path: research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/h1e_voice_energy_f11a_reader.c, sha256: 9bbe96d8b14b42560f9559697a9c8ab18230b7239532d370a1fc3a421fef122f}
+    - {path: research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/h1e_voice_energy_f11a_dispatch.c, sha256: facc9fbe6f5edfb499a06c69abe104865be340c99d7e3616465da427abeb7966}
+    - {path: research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/integration-calls.S, sha256: 03a47ccf250aa43e786a3426bea62f3923a58620c250fc465bd8935e65593c17}
+    - {path: research/rea/completion630-lab/firmware/vad-provider-fixed-snapshot-20261017/src/vad_provider_raw_get.c, sha256: bb45f07a24151106c6594ad927b05aff33334c1ce4c45e585f91f8773c93d177}
+    - {path: research/rea/completion630-lab/firmware/vad-provider-fixed-snapshot-20261017/src/vad_provider_raw_get.h, sha256: 8aeaa471f922106568edbb5ea7971720f2dae55bccdf0394d9f4e87cd6b9805e}
+
+instruction_fixture_under_test:
+  path: research/rea/completion630-lab/firmware/microphone-energy-instruction-fixture-20261017/out-INSTRUCTION-FIXTURE-NOTINSTALL/instruction-fixture-393998-voice-energy-NOTINSTALL.bin
+  sha256: cef21b2dfcb4c8efc6666a08034414a385851404e56fff8329bb7ff587669482
+  bytes: 1275904
+  receipt: research/rea/completion630-lab/firmware/microphone-energy-instruction-fixture-20261017/out-INSTRUCTION-FIXTURE-NOTINSTALL/fixture-receipt.json
+  receipt_sha256: e6d16935bcbc1d5a323a6b8de3b9ecfc994a197478afa5028f689e6104c0ea4d
+  status: EMULATOR_IMPORT_ONLY_NOTINSTALL
+  installable: false
+  readback: "Builder reports PASS and inverse reconstruction byte-identical to base SYS SHA f2e391ca2c895c1d34e1a49639d00571a18418886a25d4200247875cf86a4c3e."
+  section_sha256:
+    .poll_dispatch_call: ec65ed9c96c7d7e3bf37640cbfad46a84ef9bd91ff04f0e7ef74264c5ce10404
+    .constructor_allocate128: 831742280454b612e9660eca05619a6eb5affd8823047dea0688fb842101571d
+    .constructor_zero128: fb7e70bb19c2fca7e9b3648aa7874f4df261e932bf472c2d15e6aa5e54830668
+    .parser_dispatch_call: 2332d25e7aa26d422cb6a1733ba127399cc8d509b558384c48682e3a6d268786
+    .response_dispatch_call: b8d59af51ce2b84cde00c532ebaeb561448cbf5773d1a112886dbe91f1f013c9
+    .voice_energy_text: 9e0a12cccba8ab6fedd5287d03beb9e7af32167ea055f3353a577fe576735889
+    .voice_energy_rodata: fcce046ce09d84c841da0201ff666c7db76a048790a4c5855998668b2780e03d
+  run_boundary: "This is only an exact byte image for CK802 emulation. It is not a composed/installable SYS; no constructor is executed and no hardware claim follows."
+  site_semantics_to_recheck_from_fixture:
+    - {address: 0x01020b62, target: 0x0113718c, mnemonic: BSR}
+    - {address: 0x01021054, mnemonic: MOVI, value: 128, executed: false}
+    - {address: 0x0102109e, mnemonic: MOVI, value: 128, executed: false}
+    - {address: 0x01128e68, target: 0x011372f8, mnemonic: BSR}
+    - {address: 0x01128ea2, target: 0x01137350, mnemonic: BSR}
+execution:
+  engine: Ghidra EmulatorHelper CK-SKY V2, reuse the existing read-only exact-image import and bounded step/PSR/guard helpers
+  import: {language: CSKY_V2:LE:32:default, image_base: 0x01000000, analyze: false, mode: read_only}
+  image_guard: "Check candidate SYS SHA and length, then byte-for-byte compare the complete imported image. Any mismatch aborts before fixtures."
+  synthetic_ram:
+    object_slot: 0x000852c0
+    object_base: 0x00330000
+    object_extent_bytes: 128
+    vad_telemetry: [0x00330040, 0x00330060]
+    energy_cache: [0x00330060, 0x00330080]
+    canaries: {before: [0x0032fff0, 0x00330000], after: [0x00330080, 0x00330090], byte: 0xa5}
+    poll_r0: 0x0038e100
+    allowed_native_output_interval: [0x0038e000, 0x00390000]
+    setup_note: "Seed a synthetic 128-byte live object directly; no constructor instruction executes. The 96-to-128 change is assessed only by the composition receipt."
+  modeled_native_boundaries_only:
+    - {address: 0x0101fb68, name: RefChannelVAD raw getter, argument: r0_output_pointer, behavior: fixture-controlled status and one 32-bit output word}
+    - {address: 0x0101fa9c, name: native VoiceEnergy getter wrapper, argument: r0_output_pointer, behavior: fixture-controlled status and one 32-bit output word}
+    guard_values_for_provider_success: {0x00080e70: 0x0101f0ec, 0x000852a4: 0x0101f93a, 0x00085290: 0x0101fa78, 0x00080e88: 4}
+    psr_ie_bit: 0x40
+    rule: "Execute the exact linked bridge, loader, guard, provider-check code, cache, dispatcher, and response instructions. Intercept only the two getter addresses above; every other external instruction fetch aborts. Record and range-check each native r0 output pointer, call count, status, and word."
+  common_assertions:
+    - instruction fixture SHA/size and patch sites are exact before stepping
+    - only fixture RAM is writable; canaries remain unchanged
+    - every native output pointer is aligned and inside [0x0038e000,0x00390000)
+    - no target/provider result is labeled microphone voice or freshness
+    - exactly four named fixtures; retain pass and failure output without automatic rerun
+
+cases:
+  - id: poll_both_getters_success_then_v2_reply
+    entry_sequence: [{entry: 0x01128e4c, abi: "r4=1 length; r5=BODY; SP=FRAME", stop: 0x0103b50a}, {entry: 0x01020b62, stop: 0x01020b66}, {entry: 0x01128e94, abi: "SP=FRAME", stop: 0x010394e2}]
+    fixture: "Parser phase enters the outer assembly wrapper with SP=FRAME, r4=1 (length), r5=BODY, and body[0]=2; the wrapper constructs the real C ABI frame pointer from its incoming stack. frame+0x14=HEAD, frame+0x1c=CTX, CTX[0x10..0x13]=0, head command=F11A and declared BE32 length=1, pending=F11A at 0x855dc, fragment/idle byte 0x855cc=0. Require the shim to accept the existing parser request (head[8]=0, head[9]=2) and the original body unchanged before the wrapper reaches its handled continuation. Poll/response phase: object slot points to seeded 128-byte object; native state 1; VADT/cache tails zero; F11A response head state 2; PSR.IE set; provider guard words set to expected constants. Output backing is 64 bytes with payload capacity 32."
+    modeled_calls: [{address: 0x0101fb68, status: 0, output_word: 0x01020304}, {address: 0x0101fa9c, status: 0, output_word: 0x87654321}]
+    expected: "Poll returns the RefChannelVAD status 0 and updates the existing VADT tail; exactly one call to each getter; V2 response returns 32 and bytes at output+12 are 0002010000000001000000010000000087654321000000020000000000000000; canaries unchanged."
+  - id: energy_getter_failure_preserves_previous_raw
+    entry_sequence: [{entry: 0x01020b62, stop: 0x01020b66}, {entry: 0x01128e94, abi: "SP=FRAME", stop: 0x010394e2}]
+    fixture: "Direct poll and response outer-hook phases; head is already state 2. Seed cache sequence=6, attempts=5, successes=3, status=0, last_good_raw=0x11223344, flags=HAS_SAMPLE. Output backing is 64 bytes with payload capacity 32."
+    modeled_calls: [{address: 0x0101fb68, status: 0, output_word: 0x01020304}, {address: 0x0101fa9c, status: 1, output_word: 0xdeadbeef}]
+    expected: "Poll still returns RefChannelVAD status 0; cache reports sequence=8, attempts=6, successes=3, last status=1, last_good_raw=0x11223344, HAS_SAMPLE retained; V2 response envelope status OK and payload exactly 0002010000000006000000030000000111223344000000080000000000000000; failed output word is not published; canaries unchanged."
+  - id: v2_response_without_object
+    entry_sequence: [{entry: 0x01128e94, abi: "SP=FRAME", stop: 0x010394e2}]
+    fixture: "Object slot NULL; F11A frame, head state 2, head[8]=0, capacity=32; 64-byte output backing prefilled with 0xcc."
+    modeled_calls: []
+    expected: "Return 32; payload exactly 0202000000000000000000000000000000000000000000000000000000000000; no getter calls and no output beyond the 32-byte reply."
+  - id: f11a_v1_passthrough
+    entry_sequence: [{entry: 0x01128e94, abi: "SP=FRAME", stop: 0x010394e2}]
+    fixture: "Object slot points to the seeded object; native state 1; VADT tail sequence=2, attempts=1, successes=1, status=0, raw=0x13579bdf, time_low=0, time_high=0, flags=HAS_SAMPLE; sidecar bytes prefilled with 0xa5; F11A frame head state 1, head[8]=0, capacity=32, 64-byte output backing."
+    modeled_calls: []
+    expected: "Return 32 through the pre-existing VAD response path exactly once; payload byte-for-byte 0001010100000001000000010000000013579bdf000000000000000000000002; sidecar and canaries unchanged; no getter calls or recursive re-entry into the new response shim."
+
+outputs_after_exact_fixture_run:
+  directory: research/rea/completion630-lab/hardware-vad-trace/vad-v2-exact-20261017/out-NOTINSTALL/four-cases
+  required: [receipt.json, run-meta.json, executed-VoiceEnergyV2ExactInstructionGate.java, Ghidra-import-log, case-step-traces, SHA256SUMS]
+  preserved_first_run:
+    receipt: research/rea/completion630-lab/hardware-vad-trace/vad-v2-exact-20261017/out-NOTINSTALL/four-cases/receipt-first-run.json
+    sha256: 52e97856e653e38233e038feab15c9613adae53ab2d3029ac4cbf5b35de26f8b
+    observed_failure: "Fail-closed wrapper path ran beyond the deliberate handled continuation: 0x0008009e after parser; 0x000800aa after response. Exact image and patched BSR destinations passed."
+  corrected_run:
+    status: passed_four_exact_fixture_cases
+    fixture_sha256: cef21b2dfcb4c8efc6666a08034414a385851404e56fff8329bb7ff587669482
+    receipt: research/rea/completion630-lab/hardware-vad-trace/vad-v2-exact-20261017/out-NOTINSTALL/four-cases/receipt.json
+    receipt_sha256: 10bf13022031da764fe33996a7d2ae2f90777b8264649c53c7b8d620d34c5a38
+    cases_passed: 4
+    native_getters_modeled_only: [0x0101fb68, 0x0101fa9c]
+    no_constructor_execution: true
+    no_hardware_or_installation: true
+
