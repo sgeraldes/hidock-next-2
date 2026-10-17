@@ -1,0 +1,51 @@
+{
+  "schema": "h1e-microphone-energy-instruction-fixture-input-pins-v1",
+  "state": "built_once_readback_verified",
+  "base_address": "0x01000000",
+  "inputs": {
+    "base_sys": {
+      "path": "research/rea/completion630-lab/firmware/producer-lifecycle-system-393998/out-NOTINSTALL/system-decoded-393998-lifecycle-NOTINSTALL.bin",
+      "sha256": "f2e391ca2c895c1d34e1a49639d00571a18418886a25d4200247875cf86a4c3e",
+      "size_bytes": 1237504,
+      "purpose": "intact source image; preserve its first 48 header/version bytes"
+    },
+    "r5_dispatch_fix5_elf": {
+      "path": "research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/voice-energy-provisional.elf",
+      "sha256": "fabcf97d7dc010f3ff8b1d007628ed2529e7aad6fc1988d72399fc4515586cd3",
+      "size_bytes": 13600,
+      "purpose": "parse allocated ELF sections only; no whole-file objcopy"
+    },
+    "r5_dispatch_fix5_manifest": {
+      "path": "research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/integration-manifest.json",
+      "sha256": "6e7e8282a5b8cab91999665802be6797ce883e9311e9b28d79b3324b674b6687",
+      "size_bytes": 11710,
+      "purpose": "source of the five expected patch preimages and postimages"
+    }
+  },
+  "preserved_header": {
+    "size_bytes": 48,
+    "hex": "41435448485443410000000173797300010030000000000000000000000000006ce20601000000000000000000000000",
+    "sha256": "3ecd58a99a64a20f6ce169bd28753d5ae8954fc78313cff895267a1fae534fdd"
+  },
+  "permitted_elf_alloc_sections": {
+    ".poll_dispatch_call": {"address": "0x01020b62", "size_bytes": 4, "flags": "AX", "role": "manifest-pinned poll BSR"},
+    ".constructor_allocate128": {"address": "0x01021054", "size_bytes": 2, "flags": "AX", "role": "manifest-pinned constructor immediate"},
+    ".constructor_zero128": {"address": "0x0102109e", "size_bytes": 2, "flags": "AX", "role": "manifest-pinned constructor immediate"},
+    ".parser_dispatch_call": {"address": "0x01128e68", "size_bytes": 4, "flags": "AX", "role": "manifest-pinned parser BSR"},
+    ".response_dispatch_call": {"address": "0x01128ea2", "size_bytes": 4, "flags": "AX", "role": "manifest-pinned response BSR"},
+    ".voice_energy_text": {"address": "0x01137000", "size_bytes": 1232, "flags": "AX", "role": "module code"},
+    ".voice_energy_rodata": {"address": "0x011374d0", "size_bytes": 21, "flags": "A", "role": "module read-only data"}
+  },
+  "module_window": {
+    "start": "0x01137000",
+    "end_exclusive": "0x01137800",
+    "fill_byte_for_unmapped_appended_bytes": "ff"
+  },
+  "output": {
+    "relative_directory": "research/rea/completion630-lab/firmware/microphone-energy-instruction-fixture-20261017/out-INSTRUCTION-FIXTURE-NOTINSTALL",
+    "kind": "emulator-import-only instruction fixture",
+    "installable": false,
+    "ota_container_or_crc_work": false,
+    "builder_executed": true
+  }
+}

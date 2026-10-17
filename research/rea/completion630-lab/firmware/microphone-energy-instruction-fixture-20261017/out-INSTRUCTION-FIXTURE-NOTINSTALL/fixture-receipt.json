@@ -1,0 +1,205 @@
+{
+  "allocated_sections_applied": [
+    {
+      "address": "0x01020b62",
+      "end_exclusive": "0x01020b66",
+      "flags": "0x6",
+      "name": ".poll_dispatch_call",
+      "role": "manifest-pinned instruction patch",
+      "sha256": "ec65ed9c96c7d7e3bf37640cbfad46a84ef9bd91ff04f0e7ef74264c5ce10404",
+      "size_bytes": 4
+    },
+    {
+      "address": "0x01021054",
+      "end_exclusive": "0x01021056",
+      "flags": "0x6",
+      "name": ".constructor_allocate128",
+      "role": "manifest-pinned instruction patch",
+      "sha256": "831742280454b612e9660eca05619a6eb5affd8823047dea0688fb842101571d",
+      "size_bytes": 2
+    },
+    {
+      "address": "0x0102109e",
+      "end_exclusive": "0x010210a0",
+      "flags": "0x6",
+      "name": ".constructor_zero128",
+      "role": "manifest-pinned instruction patch",
+      "sha256": "fb7e70bb19c2fca7e9b3648aa7874f4df261e932bf472c2d15e6aa5e54830668",
+      "size_bytes": 2
+    },
+    {
+      "address": "0x01128e68",
+      "end_exclusive": "0x01128e6c",
+      "flags": "0x6",
+      "name": ".parser_dispatch_call",
+      "role": "manifest-pinned instruction patch",
+      "sha256": "2332d25e7aa26d422cb6a1733ba127399cc8d509b558384c48682e3a6d268786",
+      "size_bytes": 4
+    },
+    {
+      "address": "0x01128ea2",
+      "end_exclusive": "0x01128ea6",
+      "flags": "0x6",
+      "name": ".response_dispatch_call",
+      "role": "manifest-pinned instruction patch",
+      "sha256": "b8d59af51ce2b84cde00c532ebaeb561448cbf5773d1a112886dbe91f1f013c9",
+      "size_bytes": 4
+    },
+    {
+      "address": "0x01137000",
+      "end_exclusive": "0x011374d0",
+      "flags": "0x6",
+      "name": ".voice_energy_text",
+      "role": "module section in evaluation window",
+      "sha256": "9e0a12cccba8ab6fedd5287d03beb9e7af32167ea055f3353a577fe576735889",
+      "size_bytes": 1232
+    },
+    {
+      "address": "0x011374d0",
+      "end_exclusive": "0x011374e5",
+      "flags": "0x2",
+      "name": ".voice_energy_rodata",
+      "role": "module section in evaluation window",
+      "sha256": "fcce046ce09d84c841da0201ff666c7db76a048790a4c5855998668b2780e03d",
+      "size_bytes": 21
+    }
+  ],
+  "appended_padding_ranges": [
+    {
+      "end_exclusive": "0x01137000",
+      "fill_hex": "ff",
+      "size_bytes": 36352,
+      "start": "0x0112e200"
+    },
+    {
+      "end_exclusive": "0x01137800",
+      "fill_hex": "ff",
+      "size_bytes": 795,
+      "start": "0x011374e5"
+    }
+  ],
+  "base_address": "0x01000000",
+  "crc_recomputed": false,
+  "header_or_version_rewritten": false,
+  "inputs": {
+    "base_sys": {
+      "path": "research/rea/completion630-lab/firmware/producer-lifecycle-system-393998/out-NOTINSTALL/system-decoded-393998-lifecycle-NOTINSTALL.bin",
+      "sha256": "f2e391ca2c895c1d34e1a49639d00571a18418886a25d4200247875cf86a4c3e",
+      "size_bytes": 1237504
+    },
+    "elf": {
+      "manifest_path": "research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/integration-manifest.json",
+      "manifest_sha256": "6e7e8282a5b8cab91999665802be6797ce883e9311e9b28d79b3324b674b6687",
+      "manifest_size_bytes": 11710,
+      "path": "research/rea/completion630-lab/firmware/microphone-energy-cache-20261017/out-provisional-link-20261017-r5-dispatch-fix5/voice-energy-provisional.elf",
+      "sha256": "fabcf97d7dc010f3ff8b1d007628ed2529e7aad6fc1988d72399fc4515586cd3",
+      "size_bytes": 13600
+    }
+  },
+  "installable": false,
+  "inverse_reconstruction": {
+    "recipe": "truncate output to original base SYS size, then restore each listed preimage_hex at its address",
+    "reconstructed_sha256": "f2e391ca2c895c1d34e1a49639d00571a18418886a25d4200247875cf86a4c3e",
+    "restore_ranges": [
+      {
+        "address": 16912468,
+        "preimage_hex": "6030"
+      },
+      {
+        "address": 16912542,
+        "preimage_hex": "6032"
+      },
+      {
+        "address": 16911202,
+        "preimage_hex": "08e06941"
+      },
+      {
+        "address": 17993320,
+        "preimage_hex": "ffe350ff"
+      },
+      {
+        "address": 17993378,
+        "preimage_hex": "ffe3a9fe"
+      }
+    ],
+    "truncate_to_size_bytes": 1237504,
+    "verified_byte_identical_to_input": true
+  },
+  "limits": [
+    "The module VMA is an emulator fixture coordinate, not a reserved firmware VMA.",
+    "Mapper/boot integration, installability, OTA/container format, header sizing, and CRC remain unresolved.",
+    "No target execution or hardware behavior is established by this byte fixture."
+  ],
+  "manifest_pinned_instruction_byte_changes": [
+    {
+      "address": "0x01021054",
+      "changed_byte_count": 1,
+      "kind": "allocate_128",
+      "manifest_source": "required_lifecycle_recipe_not_applied.constructor_96_to_128",
+      "postimage_hex": "8030",
+      "preimage_hex": "6030",
+      "section": ".constructor_allocate128",
+      "size_bytes": 2
+    },
+    {
+      "address": "0x0102109e",
+      "changed_byte_count": 1,
+      "kind": "zero_128",
+      "manifest_source": "required_lifecycle_recipe_not_applied.constructor_96_to_128",
+      "postimage_hex": "8032",
+      "preimage_hex": "6032",
+      "section": ".constructor_zero128",
+      "size_bytes": 2
+    },
+    {
+      "address": "0x01020b62",
+      "changed_byte_count": 2,
+      "kind": "poll",
+      "manifest_source": "external_call_proposal_not_applied",
+      "postimage_hex": "08e015b3",
+      "preimage_hex": "08e06941",
+      "section": ".poll_dispatch_call",
+      "size_bytes": 4
+    },
+    {
+      "address": "0x01128e68",
+      "changed_byte_count": 4,
+      "kind": "parse",
+      "manifest_source": "external_call_proposal_not_applied",
+      "postimage_hex": "00e04872",
+      "preimage_hex": "ffe350ff",
+      "section": ".parser_dispatch_call",
+      "size_bytes": 4
+    },
+    {
+      "address": "0x01128ea2",
+      "changed_byte_count": 4,
+      "kind": "response",
+      "manifest_source": "external_call_proposal_not_applied",
+      "postimage_hex": "00e05772",
+      "preimage_hex": "ffe3a9fe",
+      "section": ".response_dispatch_call",
+      "size_bytes": 4
+    }
+  ],
+  "ota_or_container_built": false,
+  "output": {
+    "module_window": {
+      "end_exclusive": "0x01137800",
+      "linked_end_exclusive": "0x011374e8",
+      "start": "0x01137000",
+      "used_end_exclusive": "0x011374e5"
+    },
+    "path": "research/rea/completion630-lab/firmware/microphone-energy-instruction-fixture-20261017/out-INSTRUCTION-FIXTURE-NOTINSTALL/instruction-fixture-393998-voice-energy-NOTINSTALL.bin",
+    "sha256": "cef21b2dfcb4c8efc6666a08034414a385851404e56fff8329bb7ff587669482",
+    "size_bytes": 1275904
+  },
+  "preserved_header_version_prefix": {
+    "byte_identical": true,
+    "hex": "41435448485443410000000173797300010030000000000000000000000000006ce20601000000000000000000000000",
+    "sha256": "3ecd58a99a64a20f6ce169bd28753d5ae8954fc78313cff895267a1fae534fdd",
+    "size_bytes": 48
+  },
+  "schema": "h1e-microphone-energy-instruction-fixture-v1",
+  "status": "EMULATOR_IMPORT_ONLY_NOTINSTALL"
+}
