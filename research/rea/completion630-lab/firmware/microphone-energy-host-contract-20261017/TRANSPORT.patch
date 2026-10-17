@@ -1,0 +1,53 @@
+diff --git a/packages/jensen-protocol/src/jensen-device.ts b/packages/jensen-protocol/src/jensen-device.ts
+--- a/packages/jensen-protocol/src/jensen-device.ts
++++ b/packages/jensen-protocol/src/jensen-device.ts
+@@ -37,6 +37,9 @@ import { isFirmwareRomCodeRequest } from './firmware-rom-code.js'
+ import { isFirmwareProducerRequest, isFirmwareProducerRequestForFirmware } from './firmware-producer-state.js'
+ import { NATIVE_VAD_OBSERVATION_CANDIDATE_COMMAND, encodeNativeVadObservationCandidateRequest, parseNativeVadObservationCandidateReply } from './native-vad-observation.js'
+ import type { NativeVadObservationCandidate } from './native-vad-observation.js'
++import { NATIVE_VOICE_ENERGY_OBSERVATION_COMMAND, encodeNativeVoiceEnergyObservationRequest,
++  parseNativeVoiceEnergyObservationReply } from './native-voice-energy-observation.js'
++import type { NativeVoiceEnergyObservation } from './native-voice-energy-observation.js'
+ import { OWNED_SCRATCH_UPLOAD_COMMAND, isOwnedScratchUploadDescriptor, encodeOwnedScratchUpload, isOwnedScratchStatusBody, parseOwnedScratchUploadReply } from './owned-scratch-upload.js'
+ import type { OwnedScratchUploadDescriptor, OwnedScratchUploadSession, OwnedScratchUploadOperation, OwnedScratchUploadReply, OwnedScratchWriteOptions, OwnedScratchWriteOutcome } from './owned-scratch-upload.js'
+ import { RECORDING_RESTORE_COMMAND, copyRecordingRestoreDescriptor, encodeRecordingRestore, parseRecordingRestoreCapabilities,
+@@ -2959,6 +2962,39 @@ export class JensenDevice {
+     }).catch(() => null)
+   }
+ 
++  /** Read-only F11A v2 query. One exclusive slot and one deadline cover the
++   * existing custom-recording capability qualification (F111) and the exact
++   * selector-02 request. The version pair remains deliberately disabled until
++   * it is assigned from an exact combined-image receipt and QA record.
++   */
++  async getNativeVoiceEnergyObservation(timeout = 5, signal?: AbortSignal): Promise<NativeVoiceEnergyObservation | null> {
++    if (!Number.isFinite(timeout) || timeout <= 0 || timeout > 10 || signal?.aborted) return null
++    return this.runExclusive(async () => {
++      // INTEGRATION BLOCKER: replace null only with the exact firmware version
++      // number/code pair for the accepted combined image. Never infer it from
++      // the command number, a neighboring diagnostic, or a version range.
++      const exactV2FirmwarePair: { versionNumber: number; versionCode: string } | null = null
++      const qualified = () => exactV2FirmwarePair !== null && this.model === 'hidock-h1e' &&
++        this.versionNumber === exactV2FirmwarePair.versionNumber && this.versionCode === exactV2FirmwarePair.versionCode &&
++        !!this.serialNumber?.trim() && this.isConnected() && !this.poisoned && !this.isTearingDown()
++      if (!qualified() || signal?.aborted) return null
++      const identity = this.serialNumber, handle = this.device, epoch = this.getConnectionSessionId(), deadline = Date.now() + timeout * 1000
++      const sameSession = () => qualified() && this.device === handle && this.serialNumber === identity && this.getConnectionSessionId() === epoch
++      const remaining = () => Math.max(0, (deadline - Date.now()) / 1000)
++      const capabilitiesRequest = new JensenMessage(CUSTOM_RECORDING_PROFILE_GET)
++      capabilitiesRequest.onstart = () => !signal?.aborted && sameSession()
++      const capabilities = await this.dispatchFirmwareReply(capabilitiesRequest, remaining(), 'qualifyNativeVoiceEnergyObservation')
++      if (!capabilities || capabilities instanceof Error || !parseCustomRecordingProfileResponse(capabilities.body) ||
++          !sameSession() || signal?.aborted || remaining() <= 0) return null
++      const message = new JensenMessage(NATIVE_VOICE_ENERGY_OBSERVATION_COMMAND)
++        .body(encodeNativeVoiceEnergyObservationRequest())
++      message.onstart = () => !signal?.aborted && sameSession()
++      const reply = await this.dispatchFirmwareReply(message, remaining(), 'getNativeVoiceEnergyObservation')
++      return !reply || reply instanceof Error || !sameSession() || signal?.aborted
++        ? null : parseNativeVoiceEnergyObservationReply(reply.body)
++    }).catch(() => null)
++  }
++
+   /** Captures owner metadata only. It performs no capability probe or disk/USB write. */
+   createOwnedScratchUploadSession(uploadId: number, ownerToken: number, totalBytes: number, wholeCrc32: number): OwnedScratchUploadSession | null {
+     const descriptor = { uploadId, ownerToken, totalBytes, wholeCrc32 }
