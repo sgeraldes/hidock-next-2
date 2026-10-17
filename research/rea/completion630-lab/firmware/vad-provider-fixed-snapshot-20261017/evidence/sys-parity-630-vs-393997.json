@@ -1,0 +1,75 @@
+{
+  "base": "0x01000000",
+  "sys630": {
+    "path": "research/rea/h1e-6.3.0-verified/zephyr-decoded.bin",
+    "sha256": "5f8ba521c9cdec6eb25d84825f248543c81e8f0daa96094bdb705a53f7e673ce",
+    "lengthBytes": 1187904
+  },
+  "sys393997": {
+    "path": "research/rea/completion630-lab/firmware/producer-continuation-system-393997/out-NOTINSTALL/system-decoded-393997-continuation-NOTINSTALL.bin",
+    "sha256": "a86acfa502575c0151d31782996b91cebe5143e38f472aa5763915633e825c7e",
+    "lengthBytes": 1237504
+  },
+  "ranges": [
+    {
+      "name": "case-path-0101efa4",
+      "start": "0x0101efa4",
+      "endExclusive": "0x0101f06e",
+      "lengthBytes": 202,
+      "identical": true,
+      "firstDiffAddress": null,
+      "sha256_630": "06b9c13b87889c56de0b0c149573f510616b42e5627758817aeb2c9e20f6a733",
+      "sha256_393997": "06b9c13b87889c56de0b0c149573f510616b42e5627758817aeb2c9e20f6a733"
+    },
+    {
+      "name": "common-slot-0101f0ec",
+      "start": "0x0101f0ec",
+      "endExclusive": "0x0101f0f6",
+      "lengthBytes": 10,
+      "identical": true,
+      "firstDiffAddress": null,
+      "sha256_630": "7957e0d3176cf64d270d8030ada5e18013a7c8d005a8edb24c8cfcf824fdeb8f",
+      "sha256_393997": "7957e0d3176cf64d270d8030ada5e18013a7c8d005a8edb24c8cfcf824fdeb8f"
+    },
+    {
+      "name": "callback-wrappers-through-0101fb94-function",
+      "start": "0x0101fa78",
+      "endExclusive": "0x0101fd60",
+      "lengthBytes": 744,
+      "identical": true,
+      "firstDiffAddress": null,
+      "sha256_630": "1feaee9ccb8610f8da7c989cb258fffb69fcb86f3f1c8ba64dbe802996baf1c3",
+      "sha256_393997": "1feaee9ccb8610f8da7c989cb258fffb69fcb86f3f1c8ba64dbe802996baf1c3"
+    },
+    {
+      "name": "setter-init-registration-window",
+      "start": "0x01020100",
+      "endExclusive": "0x01020240",
+      "lengthBytes": 320,
+      "identical": true,
+      "firstDiffAddress": null,
+      "sha256_630": "aa866e1142a558bf52bc041d750bbde42529ff30a357cd283b01df55bce9558a",
+      "sha256_393997": "aa866e1142a558bf52bc041d750bbde42529ff30a357cd283b01df55bce9558a"
+    },
+    {
+      "name": "setter-init-literal-010201d4",
+      "start": "0x010201d4",
+      "endExclusive": "0x010201d8",
+      "lengthBytes": 4,
+      "identical": true,
+      "firstDiffAddress": null,
+      "sha256_630": "0fd1d131bf9dd0e163b5ed64efe5c9888d72c476aeb57484ea0149994868e8d9",
+      "sha256_393997": "0fd1d131bf9dd0e163b5ed64efe5c9888d72c476aeb57484ea0149994868e8d9"
+    },
+    {
+      "name": "setter-init-literal-0102020c",
+      "start": "0x0102020c",
+      "endExclusive": "0x01020210",
+      "lengthBytes": 4,
+      "identical": true,
+      "firstDiffAddress": null,
+      "sha256_630": "0fd1d131bf9dd0e163b5ed64efe5c9888d72c476aeb57484ea0149994868e8d9",
+      "sha256_393997": "0fd1d131bf9dd0e163b5ed64efe5c9888d72c476aeb57484ea0149994868e8d9"
+    }
+  ]
+}

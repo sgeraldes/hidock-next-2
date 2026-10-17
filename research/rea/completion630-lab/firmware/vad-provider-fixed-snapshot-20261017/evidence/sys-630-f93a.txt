@@ -1,0 +1,159 @@
+
+/mnt/g/Code/hidock-next-2/research/rea/h1e-6.3.0-verified/zephyr-decoded.bin:     file format binary
+
+
+Disassembly of section .data:
+
+0101f900 <.data+0x1f900>:
+ 101f900:	60c8      	addu      	r3, r2
+ 101f902:	9041      	ld.w      	r2, (r0, 0x4)
+ 101f904:	604c      	addu      	r1, r3
+ 101f906:	60c8      	addu      	r3, r2
+ 101f908:	7485      	zexth      	r2, r1
+ 101f90a:	60c4      	addu      	r3, r1
+ 101f90c:	4930      	lsri      	r1, r1, 16
+ 101f90e:	6048      	addu      	r1, r2
+ 101f910:	748d      	zexth      	r2, r3
+ 101f912:	4b70      	lsri      	r3, r3, 16
+ 101f914:	60c8      	addu      	r3, r2
+ 101f916:	b020      	st.w      	r1, (r0, 0x0)
+ 101f918:	b061      	st.w      	r3, (r0, 0x4)
+ 101f91a:	783c      	jmp      	r15
+ 101f91c:	3940      	cmpnei      	r1, 0
+ 101f91e:	0c08      	bf      	0x101f92e	// 0x101f92e
+ 101f920:	9061      	ld.w      	r3, (r0, 0x4)
+ 101f922:	9040      	ld.w      	r2, (r0, 0x0)
+ 101f924:	4370      	lsli      	r3, r3, 16
+ 101f926:	6cc8      	or      	r3, r2
+ 101f928:	644e      	cmpne      	r3, r1
+ 101f92a:	6403      	mvcv      	r0
+ 101f92c:	783c      	jmp      	r15
+ 101f92e:	3001      	movi      	r0, 1
+ 101f930:	07fe      	br      	0x101f92c	// 0x101f92c
+ 101f932:	3001      	movi      	r0, 1
+ 101f934:	783c      	jmp      	r15
+ 101f936:	3001      	movi      	r0, 1
+ 101f938:	783c      	jmp      	r15
+ 101f93a:	3302      	movi      	r3, 2
+ 101f93c:	b060      	st.w      	r3, (r0, 0x0)
+ 101f93e:	3000      	movi      	r0, 0
+ 101f940:	783c      	jmp      	r15
+ 101f942:	0000      	bkpt
+ 101f944:	14d0      	push      	r15
+ 101f946:	6cc7      	mov      	r3, r1
+ 101f948:	1026      	lrw      	r1, 0x80e80	// 0x101f960
+ 101f94a:	9122      	ld.w      	r1, (r1, 0x8)
+ 101f94c:	6404      	cmphs      	r1, r0
+ 101f94e:	0c06      	bf      	0x101f95a	// 0x101f95a
+ 101f950:	6c4b      	mov      	r1, r2
+ 101f952:	6c0f      	mov      	r0, r3
+ 101f954:	e000e654 	bsr      	0x103c5fc	// 0x103c5fc
+ 101f958:	1490      	pop      	r15
+ 101f95a:	3000      	movi      	r0, 0
+ 101f95c:	07fe      	br      	0x101f958	// 0x101f958
+ 101f95e:	0000      	bkpt
+ 101f960:	0e80      	bf      	0x101f660	// 0x101f660
+ 101f962:	0008      	lrw      	r0, 0x11001162	// 0x101fd3c
+ 101f964:	3001      	movi      	r0, 1
+ 101f966:	783c      	jmp      	r15
+ 101f968:	3001      	movi      	r0, 1
+ 101f96a:	783c      	jmp      	r15
+ 101f96c:	14d4      	push      	r4-r7, r15
+ 101f96e:	1421      	subi      	r14, r14, 4
+ 101f970:	6d83      	mov      	r6, r0
+ 101f972:	1011      	lrw      	r0, 0x10e54ce	// 0x101f9b4
+ 101f974:	6d47      	mov      	r5, r1
+ 101f976:	e003746d 	bsr      	0x108e250	// 0x108e250
+ 101f97a:	6dc3      	mov      	r7, r0
+ 101f97c:	6d1b      	mov      	r4, r6
+ 101f97e:	6158      	addu      	r5, r6
+ 101f980:	6552      	cmpne      	r4, r5
+ 101f982:	5c79      	subu      	r3, r4, r6
+ 101f984:	b860      	st.w      	r3, (r14, 0x0)
+ 101f986:	0c12      	bf      	0x101f9aa	// 0x101f9aa
+ 101f988:	9741      	ld.w      	r2, (r7, 0x4)
+ 101f98a:	8420      	ld.b      	r1, (r4, 0x0)
+ 101f98c:	9241      	ld.w      	r2, (r2, 0x4)
+ 101f98e:	6c1f      	mov      	r0, r7
+ 101f990:	7bc9      	jsr      	r2
+ 101f992:	9741      	ld.w      	r2, (r7, 0x4)
+ 101f994:	9242      	ld.w      	r2, (r2, 0x8)
+ 101f996:	3a40      	cmpnei      	r2, 0
+ 101f998:	0c0c      	bf      	0x101f9b0	// 0x101f9b0
+ 101f99a:	6c1f      	mov      	r0, r7
+ 101f99c:	7bc9      	jsr      	r2
+ 101f99e:	6c43      	mov      	r1, r0
+ 101f9a0:	3840      	cmpnei      	r0, 0
+ 101f9a2:	0c07      	bf      	0x101f9b0	// 0x101f9b0
+ 101f9a4:	1005      	lrw      	r0, 0x10e54d5	// 0x101f9b8
+ 101f9a6:	e000e62b 	bsr      	0x103c5fc	// 0x103c5fc
+ 101f9aa:	9800      	ld.w      	r0, (r14, 0x0)
+ 101f9ac:	1401      	addi      	r14, r14, 4
+ 101f9ae:	1494      	pop      	r4-r7, r15
+ 101f9b0:	2400      	addi      	r4, 1
+ 101f9b2:	07e7      	br      	0x101f980	// 0x101f980
+ 101f9b4:	54ce      	asri      	r6, r4, 14
+ 101f9b6:	010e      	lrw      	r0, 0xd86e0c09	// 0x101fcf8
+ 101f9b8:	54d5      	asri      	r6, r4, 21
+ 101f9ba:	010e      	lrw      	r0, 0x3b400011	// 0x101fcfc
+ 101f9bc:	14d1      	push      	r4, r15
+ 101f9be:	6d07      	mov      	r4, r1
+ 101f9c0:	e3ffffd6 	bsr      	0x101f96c	// 0x101f96c
+ 101f9c4:	6412      	cmpne      	r4, r0
+ 101f9c6:	c4000500 	mvc      	r0
+ 101f9ca:	1491      	pop      	r4, r15
+ 101f9cc:	14d4      	push      	r4-r7, r15
+ 101f9ce:	1423      	subi      	r14, r14, 12
+ 101f9d0:	6d83      	mov      	r6, r0
+ 101f9d2:	1106      	lrw      	r0, 0x10e54ce	// 0x101fa68
+ 101f9d4:	3514      	movi      	r5, 20
+ 101f9d6:	b820      	st.w      	r1, (r14, 0x0)
+ 101f9d8:	e003743c 	bsr      	0x108e250	// 0x108e250
+ 101f9dc:	6dc3      	mov      	r7, r0
+ 101f9de:	3400      	movi      	r4, 0
+ 101f9e0:	9860      	ld.w      	r3, (r14, 0x0)
+ 101f9e2:	64d0      	cmphs      	r4, r3
+ 101f9e4:	083f      	bt      	0x101fa62	// 0x101fa62
+ 101f9e6:	2d00      	subi      	r5, 1
+ 101f9e8:	7555      	zexth      	r5, r5
+ 101f9ea:	3d40      	cmpnei      	r5, 0
+ 101f9ec:	0809      	bt      	0x101f9fe	// 0x101f9fe
+ 101f9ee:	6c8f      	mov      	r2, r3
+ 101f9f0:	103f      	lrw      	r1, 0x10e54af	// 0x101fa6c
+ 101f9f2:	3004      	movi      	r0, 4
+ 101f9f4:	3400      	movi      	r4, 0
+ 101f9f6:	e00003f1 	bsr      	0x10201d8	// 0x10201d8
+ 101f9fa:	2c00      	subi      	r4, 1
+ 101f9fc:	0433      	br      	0x101fa62	// 0x101fa62
+ 101f9fe:	310a      	movi      	r1, 10
+ 101fa00:	9741      	ld.w      	r2, (r7, 0x4)
+ 101fa02:	924b      	ld.w      	r2, (r2, 0x2c)
+ 101fa04:	3a40      	cmpnei      	r2, 0
+ 101fa06:	0c1e      	bf      	0x101fa42	// 0x101fa42
+ 101fa08:	6c1f      	mov      	r0, r7
+ 101fa0a:	b821      	st.w      	r1, (r14, 0x4)
+ 101fa0c:	7bc9      	jsr      	r2
+ 101fa0e:	6c83      	mov      	r2, r0
+ 101fa10:	3841      	cmpnei      	r0, 1
+ 101fa12:	9821      	ld.w      	r1, (r14, 0x4)
+ 101fa14:	0818      	bt      	0x101fa44	// 0x101fa44
+ 101fa16:	9741      	ld.w      	r2, (r7, 0x4)
+ 101fa18:	6c5b      	mov      	r1, r6
+ 101fa1a:	9240      	ld.w      	r2, (r2, 0x0)
+ 101fa1c:	6c1f      	mov      	r0, r7
+ 101fa1e:	7bc9      	jsr      	r2
+ 101fa20:	3840      	cmpnei      	r0, 0
+ 101fa22:	0803      	bt      	0x101fa28	// 0x101fa28
+ 101fa24:	2400      	addi      	r4, 1
+ 101fa26:	2600      	addi      	r6, 1
+ 101fa28:	9741      	ld.w      	r2, (r7, 0x4)
+ 101fa2a:	9242      	ld.w      	r2, (r2, 0x8)
+ 101fa2c:	3a40      	cmpnei      	r2, 0
+ 101fa2e:	0fd9      	bf      	0x101f9e0	// 0x101f9e0
+ 101fa30:	6c1f      	mov      	r0, r7
+ 101fa32:	7bc9      	jsr      	r2
+ 101fa34:	6c43      	mov      	r1, r0
+ 101fa36:	3840      	cmpnei      	r0, 0
+ 101fa38:	0fd4      	bf      	0x101f9e0	// 0x101f9e0
+ 101fa3a:	100e      	lrw      	r0, 0x10e548b	// 0x101fa70
+ 101fa3c:	e000e5e0 	bsr      	0x103c5fc	// 0x103c5fc

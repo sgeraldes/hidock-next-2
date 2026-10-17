@@ -1,5 +1,7 @@
 # Contrato del callback de micrófono: límite de la evidencia 6.3.0
 
+> **Continuación del 17 de octubre:** este documento conserva el checkpoint anterior. El recibo físico de 393997 ya resolvió `*(u32*)0x852a4 = 0x0101f93a`, dentro de SYS. Además, `0x00000b38` se identifica en los contratos del compilador retenidos como `___gnu_csky_case_uqi`: despacha una tabla de switch local y no debe tratarse como un servicio DSP opaco. Se sigue ahora el cuerpo del target y las ramas del switch en el SYS fijado. Los helper objects provienen de un SDK/toolchain relacionado y no atestan bytes físicos ROM H1E. No hace falta repetir una lectura RAM para resolver el slot.
+
 ## Resultado
 
 En la imagen Zephyr 6.3.0 fijada, el slot RAM `0x00080e70` se inicializa con el puntero de código `0x0101f0ec` mediante el copiado de datos de arranque. Ese entry conduce a un wrapper de lectura que acaba en `0x0101efa4`. Este helper consulta otro puntero, `0x000852a4`, pero el target instalado en ese slot y su contrato de proveedor no aparecen en la inicialización ni en los artefactos retenidos. El cuerpo de `0x0101efa4` sí confirma una llamada indirecta y su ABI inmediato; no confirma el transporte DSP, el tamaño real del dato, la semántica del valor, la frescura ni la sincronización.

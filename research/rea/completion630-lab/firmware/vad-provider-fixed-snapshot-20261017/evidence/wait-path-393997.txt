@@ -1,0 +1,131 @@
+Targeted C-SKY disassembly excerpt
+Input: research/rea/completion630-lab/firmware/producer-continuation-system-393997/out-NOTINSTALL/system-decoded-393997-continuation-NOTINSTALL.bin
+Input SHA-256: a86acfa502575c0151d31782996b91cebe5143e38f472aa5763915633e825c7e
+Base: 0x01000000; command uses csky-abiv2-elf-objdump -D -z -b binary -m csky:any -EL --adjust-vma=0x01000000.
+
+0101fa9c is the native VoiceEnergy wrapper. Its retained disassembly is in
+research/rea/protocol-depth630-lab/audio-host/native/0101fa9c.tsv; key instructions:
+  101fa9e: lrw r3, 0x80e70
+  101faa0: mov r1, r0              ; preserve caller's output pointer
+  101faa2: ld.w r3, (r3, 0x0)      ; load shared wrapper slot
+  101faa4: lrw r0, 0x4009ffd0      ; VoiceEnergy selector
+  101faa6: jsr r3
+  101faa8: mov r4, r0              ; propagate native status
+  101fab6: mov r0, r4
+  101fab8: pop r4, r15
+
+The common installed slot entry 0x0101f0ec is in
+research/rea/completion630-lab/firmware/vad-provider-fixed-snapshot-20261017/evidence/sys-393997-provider-path.txt
+and sets r2=1 before calling 0x0101f0bc. The 0x0101f824 path therefore requests
+one 32-bit word (4 bytes). Slot +0x10 is 0x0101fa78; its retained source is
+research/rea/protocol-depth630-lab/audio-host/native/0101fa78.c. It requires the
+8-byte request descriptor to be accepted, then returns failure unless the byte
+count equals the requested length (4 on this path).
+
+The retained 0101f9cc source and instruction table are:
+research/rea/protocol-depth630-lab/audio-host/native-extra/0101f9cc.c
+research/rea/protocol-depth630-lab/audio-host/native-extra/0101f9cc.tsv
+It has a 10-iteration readiness loop, calling 0108fad8(1) after a not-ready
+result. If readiness remains false, it returns the partial byte count. Its
+outer byte/status loop has a 20 counter and returns -1 when exhausted. These
+software iteration bounds do not establish a wall-clock timeout because the
+following wait helper and manager vtable methods are separate calls.
+
+0108fad8: scheduler/timer event helper reached from the not-ready branch.
+  108fad8: 14d2       push r4-r5,r15
+  108fada: 1421       subi r14,r14,4
+  108fadc: 6d03       mov r4,r0
+  108fade: e37f84d4  bsr 0x80486
+  108fae2: c7e02880  btsti r0,31
+  108fae6: 0807       bt 0x108faf4
+  108fae8: 31ab       movi r1,171
+  108faea: 1057       lrw r2,0x10f8ef9
+  108faec: 4121       lsli r1,r1,1
+  108faee: 1017       lrw r0,0x1100612
+  108faf0: e3fe7248 bsr 0x105df80
+  108faf4: 3300       movi r3,0
+  108faf6: 2b00       subi r3,1
+  108faf8: 64d2       cmpne r4,r3
+  108fafa: 081f       bt 0x108fb38
+  108fafc: 1052       lrw r2,0x10f8ef9
+  108fafe: ea010157 movi r1,343
+  108fb02: 1013       lrw r0,0x1100727
+  108fb04: e3fe723e bsr 0x105df80
+  108fb08: 2400       addi r4,1
+  108fb0a: b880       st.w r4,(r14,0)
+  108fb0c: c0006025 mfcr r5,cr<0,0>
+  108fb10: c0807020 psrclr ie
+  108fb14: 108f       lrw r4,0x89600
+  108fb16: 9402       ld.w r0,(r4,8)
+  108fb18: e3fffe98 bsr 0x108f848
+  108fb1c: 9402       ld.w r0,(r4,8)
+  108fb1e: 9860       ld.w r3,(r14,0)
+  108fb20: 3200       movi r2,0
+  108fb22: e420000f addi r1,r0,16
+  108fb26: e3fffdf1 bsr 0x108f708
+  108fb2a: 106b       lrw r3,0x89738
+  108fb2c: 3200       movi r2,0
+  108fb2e: 6c17       mov r0,r5
+  108fb30: b340       st.w r2,(r3,0)
+  108fb32: e3fef619 bsr 0x106e764
+  108fb36: 0405       br 0x108fb40
+  108fb38: 3c40       cmpnei r4,0
+  108fb3a: 0be7       bt 0x108fb08
+  108fb3c: e3ffffa4 bsr 0x108fa84
+  108fb40: 1401       addi r14,r14,4
+  108fb42: 1492       pop r4-r5,r15
+
+The 0108fad8 helper saves CR state and briefly masks interrupts while updating
+its timer list, then passes the saved value to 0106e764. That routine stores the
+value in its context and sets IE while waiting; this path does not prove an exact
+PSR restoration to the prior state. The relevant 0106e764 instructions show a
+wait on a context word, with no local counter or deadline in this routine:
+  106e764: 14d2       push r4-r5,r15
+  106e766: 1422       subi r14,r14,8
+  106e768: 1099       lrw r4,0x89600
+  106e76a: 107a       lrw r3,0xffffe21a
+  106e76c: 9442       ld.w r2,(r4,8)
+  106e76e: 3101       movi r1,1
+  106e770: dc622029 st.w r3,(r2,0xa4)
+  106e774: dc022028 st.w r0,(r2,0xa0)
+  106e778: 1057       lrw r2,0xe000ec00
+  106e77a: b222       st.w r1,(r2,8)
+  106e77c: c1807420 psrset ee,ie
+  106e780: 6c03       mov r0,r0
+  106e782: 9442       ld.w r2,(r4,8)
+  106e784: d8222029 ld.w r1,(r2,0xa4)
+  106e788: 64c6       cmpne r1,r3
+  106e78a: 0ffd       bf 0x106e784
+  106e78c: 927b       ld.w r3,(r2,0x6c)
+  106e78e: 3540       movi r5,64
+  106e790: c4a32021 and r1,r3,r5
+  106e794: 3940       cmpnei r1,0
+  106e796: 0c05       bf 0x106e7a0
+  106e798: d8022029 ld.w r0,(r2,0xa4)
+  106e79c: 1402       addi r14,r14,8
+  106e79e: 1492       pop r4-r5,r15
+  106e7a0: b861       st.w r3,(r14,4)
+  106e7a2: 3301       movi r3,1
+  106e7a4: 3262       movi r2,98
+  106e7a6: b860       st.w r3,(r14,0)
+  106e7a8: 3102       movi r1,2
+  106e7aa: 106c       lrw r3,0x101000c
+  106e7ac: 3003       movi r0,3
+  106e7ae: e3ffee9d bsr 0x106c4e8
+  106e7b2: 9462       ld.w r3,(r4,8)
+  106e7b4: 935b       ld.w r2,(r3,0x6c)
+  106e7b6: 6948       and r5,r2
+  106e7b8: 3d40       cmpnei r5,0
+  106e7ba: 0c04       bf 0x106e7c2
+  106e7bc: d8032029 ld.w r0,(r3,0xa4)
+  106e7c0: 07ee       br 0x106e79c
+  106e7c2: 1007       lrw r0,0x10fca46
+  106e7c4: e3ffff8c bsr 0x106e6dc
+  106e7c8: 3000       movi r0,0
+  106e7ca: 07e9       br 0x106e79c
+
+Interpretation boundary: the 0108fad8 path enqueues a timer/event operation with
+the incremented delay value (2 for input 1), then 0106e764 waits for event state
+to change. The time unit and dynamic manager callback latency are not established
+by these bytes. Thus the 10/20 loop counts bound local attempts, not wall time;
+if the timer/event wake never arrives, this call path has no local timeout.

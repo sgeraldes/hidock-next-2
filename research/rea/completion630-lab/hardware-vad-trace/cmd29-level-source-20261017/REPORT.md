@@ -1,5 +1,7 @@
 # H1E 6.3.0 CMD29 level-source trace
 
+> **Correction, 17 October continuation:** the interpretation below of `0x00000b4c` as the recording-manager implementation is superseded. Retained `rom-contract-evidence.json` identifies that address as `___gnu_csky_case_uhi`, a compiler halfword-switch dispatcher; `0x00000b38` is `___gnu_csky_case_uqi`, its byte-switch counterpart. The helper objects corroborate that ABI from a related SDK/toolchain, without attesting physical H1E ROM bytes. Their callers' branch tables and case bodies reside in SYS and are now being followed. This removes the claimed requirement to recover a recording-manager service body at `0xb4c`. The observed CMD29 active-state gate and wire layout remain separate findings.
+
 ## Scope and identity
 
 Static-only trace of the exact decoded system at `research/rea/h1e-6.3.0-verified/zephyr-decoded.bin`, SHA-256 `5f8ba521c9cdec6eb25d84825f248543c81e8f0daa96094bdb705a53f7e673ce` (1,187,904 bytes). The retained instruction exports and command inventory identify the same hash. No device I/O, runtime measurements, or 6.2.5 exports were used.
