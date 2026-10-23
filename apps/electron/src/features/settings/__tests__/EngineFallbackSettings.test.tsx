@@ -59,6 +59,14 @@ describe('Settings: when transcription fails', () => {
     expect(screen.getAllByRole('listitem')).toHaveLength(3)
   })
 
+  it('names the add-engine picker without a visually hidden label (23-oct overscroll bug)', () => {
+    // An sr-only label is position:absolute; with no positioned ancestor in the
+    // settings scroller it escaped the scroller and made the whole window scroll.
+    const { container } = render(<EngineFallbackSettings />)
+    expect(screen.getByRole('combobox', { name: 'Engine to add' })).toBeInTheDocument()
+    expect(container.querySelector('.sr-only')).toBeNull()
+  })
+
   it('never offers an engine already in the order, and keeps the last one', () => {
     setTranscription({ engineChain: ['gemini'] })
     render(<EngineFallbackSettings />)
