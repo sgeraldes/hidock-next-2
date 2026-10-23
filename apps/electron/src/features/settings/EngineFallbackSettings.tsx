@@ -102,8 +102,7 @@ export function EngineFallbackSettings() {
       </ol>
 
       <div className="flex flex-wrap items-center gap-2">
-        <label htmlFor="engineChainAdd" className="sr-only">Engine to add</label>
-        <select id="engineChainAdd" className={selectClass} value={adding} disabled={saving || !options.length}
+        <select id="engineChainAdd" aria-label="Engine to add" className={selectClass} value={adding} disabled={saving || !options.length}
           onChange={(event) => setAdding(event.target.value)}>
           <option value="">Add an engine…</option>
           {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
