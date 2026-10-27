@@ -21,7 +21,7 @@ vi.mock('@google/genai', () => {
   }
 })
 
-import { GeminiEngine, quotaRetrySeconds } from '../src/engines/gemini-engine.js'
+import { GeminiEngine, quotaRetrySeconds, retryAfterSeconds } from '../src/engines/gemini-engine.js'
 import { TranscriptionCancelledError } from '../src/engines/engine-interface.js'
 
 const RATE = 8000
@@ -69,6 +69,21 @@ describe('GeminiEngine and the rate limit', () => {
     expect(quotaRetrySeconds(new Error('RESOURCE_EXHAUSTED: quota'))).toBe(30)
     expect(quotaRetrySeconds(new Error('fetch failed'))).toBeNull()
     expect(quotaRetrySeconds(Object.assign(new Error('400 Bad Request'), { status: 400 }))).toBeNull()
+  })
+
+  it('reads waits given in hours and minutes', () => {
+    expect(retryAfterSeconds('Please retry in 18h17m50s or upgrade')).toBe(18 * 3600 + 17 * 60 + 50)
+    expect(retryAfterSeconds('Please retry in 1m30s')).toBe(90)
+    expect(retryAfterSeconds('Please retry in 52s')).toBe(52)
+    expect(retryAfterSeconds('Please retry in 250ms')).toBeCloseTo(0.25)
+    expect(retryAfterSeconds('no hint here')).toBeNull()
+  })
+
+  it('does not wait for a daily quota: the request fails at once (27-oct-2026, 25 requests per day)', async () => {
+    const daily = Object.assign(new Error('429 Rate limit exceeded for model gemini-3.5-transcribe (limit: 25 requests per day on Free Tier). Please retry in 18h17m50s or upgrade'), { status: 429 })
+    mockInteractionsCreate.mockResolvedValueOnce(word(1)).mockRejectedValue(daily)
+    await expect(collect(engine().transcribe(wav(600), twoSpans))).rejects.toThrow(/25 requests per day/)
+    expect(mockInteractionsCreate).toHaveBeenCalledTimes(2)
   })
 
   it('waits out a 429 on the second span and sends that span again', async () => {

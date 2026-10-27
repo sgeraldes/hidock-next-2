@@ -64,7 +64,20 @@ describe('nextRetry with the default policy', () => {
     }
   })
 
-  it('caps a long requested wait', () => {
-    expect(nextRetry(classifyTranscriptionError('429 Please retry in 900s'), 1, DEFAULT_RETRY_POLICY).waitSeconds).toBe(180)
+  it('moves on instead of waiting longer than the policy allows', () => {
+    // The provider asks for more than maxWaitSeconds: the same engine cannot
+    // help now, so the next engine runs (27-oct-2026, was a capped wait).
+    expect(nextRetry(classifyTranscriptionError('429 Please retry in 900s'), 1, DEFAULT_RETRY_POLICY)).toEqual({ retry: false, waitSeconds: 0 })
+    expect(nextRetry(classifyTranscriptionError('429 Please retry in 170s'), 1, DEFAULT_RETRY_POLICY)).toEqual({ retry: true, waitSeconds: 172 })
+  })
+})
+
+describe('a wait longer than the policy allows', () => {
+  it('reads hours and minutes and does not retry the same engine for a daily quota (27-oct-2026)', () => {
+    const daily = classifyTranscriptionError(new Error('429 Rate limit exceeded for model gemini-3.5-transcribe (limit: 25 requests per day on Free Tier). Please retry in 18h17m50s or upgrade'))
+    expect(daily).toMatchObject({ class: 'quota', retryAfterSeconds: 65870 })
+    expect(nextRetry(daily, 1)).toEqual({ retry: false, waitSeconds: 0 })
+    const perMinute = classifyTranscriptionError(new Error('429 Rate limit exceeded (limit: 10000 input tokens per minute). Please retry in 52s'))
+    expect(nextRetry(perMinute, 1)).toEqual({ retry: true, waitSeconds: 54 })
   })
 })

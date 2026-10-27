@@ -48,8 +48,23 @@ export function quotaRetrySeconds(error: unknown): number | null {
   const message = error instanceof Error ? error.message : String(error)
   const isQuota = status === 429 || /^\s*429\b|RESOURCE_EXHAUSTED|rate limit exceeded/i.test(message)
   if (!isQuota) return null
-  const asked = /retry in ([\d.]+)\s*s\b/i.exec(message) ?? /"retryDelay"\s*:\s*"([\d.]+)s"/.exec(message)
-  return asked ? Number(asked[1]) + 1 : 30
+  const asked = retryAfterSeconds(message)
+  return asked !== null ? asked + 1 : 30
+}
+
+/**
+ * The wait a provider asks for, in seconds: "retry in 52s", "1m30s",
+ * "18h17m50s" (a daily quota, 27-oct-2026), "250ms", or a JSON retryDelay.
+ * Null when the message gives none.
+ */
+export function retryAfterSeconds(message: string): number | null {
+  const phrase = /retry in\s+((?:\d+(?:\.\d+)?\s*(?:h|ms|m|s)\s*)+)/i.exec(message)?.[1]
+    ?? /"retryDelay"\s*:\s*"([\d.]+s)"/.exec(message)?.[1]
+  if (!phrase) return null
+  const unit: Record<string, number> = { h: 3600, m: 60, s: 1, ms: 0.001 }
+  let total = 0
+  for (const [, value, name] of phrase.matchAll(/(\d+(?:\.\d+)?)\s*(h|ms|m|s)/gi)) total += Number(value) * unit[name.toLowerCase()]
+  return total
 }
 
 /** Sleep for a rate limit, checking every second that the recording is still wanted. */
@@ -1088,9 +1103,12 @@ export class GeminiEngine implements TranscriptionEngine {
         return await (this.checkpoints ? this.checkpoints.execute(identity, request) : request())
       } catch (error) {
         const seconds = quotaRetrySeconds(error)
-        if (seconds === null || waits >= GeminiEngine.QUOTA_WAITS_PER_REQUEST) throw error
+        // A wait longer than the cap is a daily or hourly quota: waiting here
+        // would only hold the queue, so the error goes up and the next engine runs.
+        if (seconds === null || seconds > GeminiEngine.QUOTA_WAIT_CAP_SECONDS ||
+            waits >= GeminiEngine.QUOTA_WAITS_PER_REQUEST) throw error
         console.warn(`[GeminiEngine] rate limit; waiting ${Math.round(seconds)} s before sending the same request again`)
-        await waitForQuota(Math.min(seconds, GeminiEngine.QUOTA_WAIT_CAP_SECONDS), shouldGenerate)
+        await waitForQuota(seconds, shouldGenerate)
       }
     }
   }
