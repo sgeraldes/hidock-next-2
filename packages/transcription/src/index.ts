@@ -18,7 +18,7 @@ export { VibeVoiceEngine } from './engines/vibevoice-engine.js'
 export type { VibeVoiceEngineOptions } from './engines/vibevoice-engine.js'
 export { GeminiEngine, stripLyingWavHeader, splitWavIntoChunks, splitMp3IntoChunks, parseTurns } from './engines/gemini-engine.js'
 export { TurnDeduper, dedupeTurns, normalizeTurnText } from './engines/dedupe-turns.js'
-export { isRangeCoverageShort, quotaRetrySeconds, retryAfterSeconds } from './engines/gemini-engine.js'
+export { isRangeCoverageShort } from './engines/gemini-engine.js'
 export type { GeminiEngineOptions, AudioChunk } from './engines/gemini-engine.js'
 
 // Pipeline

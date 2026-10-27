@@ -11,8 +11,22 @@
  * Plan: docs/superpowers/plans/2026-10-16-transcription-retry-and-fallback.md
  */
 
-import { retryAfterSeconds } from '@hidock/transcription'
 import { DEFAULT_ENGINE_RETRIES } from '../../../src/shared/transcription-engines'
+
+/**
+ * The wait a provider asks for, in seconds: "retry in 52s", "1m30s", or a
+ * daily quota's "18h17m50s" (27-oct-2026). The Gemini engine reads the same
+ * forms (packages/transcription gemini-engine.ts retryAfterSeconds); this
+ * module stays free of the engine so the classifier needs no mocks.
+ */
+function retryAfterSeconds(message: string): number | null {
+  const phrase = /retry in\s+((?:\d+(?:\.\d+)?\s*(?:h|ms|m|s)\s*)+)/i.exec(message)?.[1]
+  if (!phrase) return null
+  const unit: Record<string, number> = { h: 3600, m: 60, s: 1, ms: 0.001 }
+  let total = 0
+  for (const [, value, name] of phrase.matchAll(/(\d+(?:\.\d+)?)\s*(h|ms|m|s)/gi)) total += Number(value) * unit[name.toLowerCase()]
+  return total
+}
 
 export type TranscriptionErrorClass =
   /** Network, 5xx, timeouts, a remote job in a temporary state: the same engine may succeed shortly. */
