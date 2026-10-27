@@ -188,6 +188,20 @@ describe('summary reanalysis (27-oct-2026)', () => {
     expect(heal).toHaveBeenCalledWith(3)
   })
 
+  it('never runs two passes at once (review of #187)', async () => {
+    let release!: () => void
+    const heal = vi.fn(() => new Promise<number>((resolve) => { release = () => resolve(1) }))
+    const first = healMissingSummaries({ queueBusy: () => false, heal })
+    expect(await healMissingSummaries({ queueBusy: () => false, heal })).toBe(0)
+    release()
+    expect(await first).toBe(1)
+    expect(heal).toHaveBeenCalledTimes(1)
+    // Free again once the first pass is over.
+    const again = healMissingSummaries({ queueBusy: () => false, heal })
+    release()
+    expect(await again).toBe(1)
+  })
+
   it('waits while the queue is transcribing, so it never competes with it', async () => {
     const heal = vi.fn(async () => 1)
     expect(await healMissingSummaries({ queueBusy: () => true, heal })).toBe(0)

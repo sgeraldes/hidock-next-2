@@ -57,7 +57,7 @@ import { acquireSingleInstanceLock } from './single-instance'
 import { logWindow } from './services/error-log'
 import { startBootScheduler } from './services/boot-scheduler'
 import { startVoiceBackfill, stopVoiceBackfill } from './services/voice-backfill'
-import { registerGatedBootTasks } from './services/boot-tasks'
+import { registerGatedBootTasks, stopSummaryReanalysis } from './services/boot-tasks'
 import { isFeatureEnabled, captureBootEffectiveFeatures, getBootEffectiveFeatures } from './services/feature-gate'
 import { FEATURES, type FeatureId } from '../../src/shared/feature-registry'
 import { createSplashWindow } from './splash-screen'
@@ -585,6 +585,7 @@ app.on('before-quit', createQuitCleanup(async () => {
   } finally {
     clearTimeout(releaseTimer)
   }
+  stopSummaryReanalysis()
   closeDatabase()
   console.log('Cleanup complete')
 }, () => app.quit()))

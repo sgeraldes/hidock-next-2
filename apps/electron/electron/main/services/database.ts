@@ -5641,20 +5641,36 @@ export function getExcludedRecordingIds(): RecordingExclusion {
 export function getFailedTranscriptsForReanalysis(
   limit: number
 ): Array<{ recording_id: string; full_text: string }> {
+  // A summary that keeps failing is not paid for forever (review of #187,
+  // 27-oct-2026): two hours between tries, at most four failures a week, and
+  // the never-tried and longest-waiting first so a few stuck rows cannot hold
+  // the whole allowance.
+  const now = Date.now()
+  const backoffSince = new Date(now - 2 * 3_600_000).toISOString()
+  const capSince = new Date(now - 7 * 24 * 3_600_000).toISOString()
   return queryAll<{ recording_id: string; full_text: string }>(
     `SELECT t.recording_id AS recording_id, t.full_text AS full_text
        FROM transcripts t JOIN recordings r ON r.id = t.recording_id
+       LEFT JOIN (
+         SELECT recording_id, MAX(started_at) AS last_failed_at,
+                SUM(CASE WHEN started_at >= ? THEN 1 ELSE 0 END) AS failures_this_week
+           FROM processing_runs
+          WHERE stage = 'summary' AND status = 'failed'
+          GROUP BY recording_id
+       ) f ON f.recording_id = t.recording_id
       WHERE (t.summary IS NULL OR t.summary = 'Analysis failed' OR t.title_suggestion IS NULL)
         AND t.full_text IS NOT NULL AND TRIM(t.full_text) != ''
         AND r.deleted_at IS NULL AND COALESCE(r.personal, 0) = 0
+        AND (f.last_failed_at IS NULL OR f.last_failed_at < ?)
+        AND COALESCE(f.failures_this_week, 0) < 4
         AND NOT EXISTS (
           SELECT 1 FROM knowledge_captures kc
            WHERE kc.source_recording_id = t.recording_id
              AND kc.deleted_at IS NULL
              AND ${VALUE_EXCLUSION_PREDICATE})
-      ORDER BY t.created_at DESC
+      ORDER BY f.last_failed_at IS NOT NULL, f.last_failed_at ASC, t.created_at DESC
       LIMIT ?`,
-    [...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS, limit]
+    [capSince, backoffSince, ...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS, limit]
   )
 }
 

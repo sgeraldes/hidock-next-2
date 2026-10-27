@@ -269,3 +269,56 @@ describe('RE-2 — reanalyzeFailedTranscripts excludes trashed/personal/value-ex
     expect(mockGenerateContent).not.toHaveBeenCalled() // fail CLOSED — no upload
   })
 })
+
+describe('a summary that keeps failing is not paid for forever (review of #187, 27-oct-2026)', () => {
+  function failedSummaryRun(recordingId: string, hoursAgo: number, n: number): void {
+    const startedAt = new Date(Date.now() - hoursAgo * 3_600_000).toISOString()
+    dbRun(
+      `INSERT INTO processing_runs (id, recording_id, stage, provider, status, started_at, error_message)
+       VALUES (?, ?, 'summary', 'gemini', 'failed', ?, '503 high demand')`,
+      [`run-${recordingId}-${n}`, recordingId, startedAt]
+    )
+  }
+
+  it('waits two hours after a failed summary before trying that transcript again', async () => {
+    seedRecording('recent')
+    seedFailedTranscript('t-recent', 'recent')
+    failedSummaryRun('recent', 0.5, 1)
+    seedRecording('waited')
+    seedFailedTranscript('t-waited', 'waited')
+    failedSummaryRun('waited', 3, 1)
+
+    await reanalyzeFailedTranscripts(10)
+
+    expect(summaryOf('recent')).toBeNull()
+    expect(summaryOf('waited')).toBe('Healed summary.')
+  })
+
+  it('stops after four failed summaries in a week', async () => {
+    seedRecording('stuck')
+    seedFailedTranscript('t-stuck', 'stuck')
+    for (let n = 1; n <= 4; n++) failedSummaryRun('stuck', 3 + n * 10, n)
+
+    const healed = await reanalyzeFailedTranscripts(10)
+
+    expect(healed).toBe(0)
+    expect(mockGenerateContent).not.toHaveBeenCalled()
+  })
+
+  it('tries the never-attempted and the longest-waiting first, so old ones are not starved', async () => {
+    seedRecording('older-failure')
+    seedFailedTranscript('t-older', 'older-failure')
+    failedSummaryRun('older-failure', 30, 1)
+    seedRecording('newer-failure')
+    seedFailedTranscript('t-newer', 'newer-failure')
+    failedSummaryRun('newer-failure', 5, 1)
+    seedRecording('never-tried')
+    seedFailedTranscript('t-never', 'never-tried')
+
+    await reanalyzeFailedTranscripts(2)
+
+    expect(summaryOf('never-tried')).toBe('Healed summary.')
+    expect(summaryOf('older-failure')).toBe('Healed summary.')
+    expect(summaryOf('newer-failure')).toBeNull()
+  })
+})

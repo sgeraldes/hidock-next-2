@@ -29,13 +29,32 @@ import { runSamplingPass } from './transcript-sampler'
 import { backfillMeetingWiki } from './meeting-wiki'
 import { getVectorStore } from './vector-store'
 
-/** Fill missing summaries, three at a time, unless the queue is transcribing. */
+let summaryHealRunning = false
+const summaryHealTimers: Array<ReturnType<typeof setTimeout>> = []
+
+/**
+ * Fill missing summaries, three at a time, unless the queue is transcribing or
+ * another pass is still running (two passes would pick the same rows).
+ */
 export async function healMissingSummaries(deps: {
   queueBusy: () => boolean
   heal: (limit: number) => Promise<number>
 } = { queueBusy: () => getQueueState().isProcessing, heal: reanalyzeFailedTranscripts }): Promise<number> {
-  if (deps.queueBusy()) return 0
-  return deps.heal(3)
+  if (summaryHealRunning || deps.queueBusy()) return 0
+  summaryHealRunning = true
+  try {
+    return await deps.heal(3)
+  } finally {
+    summaryHealRunning = false
+  }
+}
+
+/** Cancel the summary passes before the database closes on quit. */
+export function stopSummaryReanalysis(): void {
+  for (const timer of summaryHealTimers.splice(0)) {
+    clearTimeout(timer)
+    clearInterval(timer)
+  }
 }
 
 export interface GatedBootTask {
@@ -211,8 +230,11 @@ export const BOOT_TASK_DEFS: GatedBootTask[] = [
     run: () => {
       const pass = () =>
         void healMissingSummaries().catch((e) => console.error('[Reanalyze] pass error:', e))
-      setTimeout(pass, 600_000).unref?.()
-      setInterval(pass, 2 * 3_600_000).unref?.()
+      const first = setTimeout(pass, 600_000)
+      const every = setInterval(pass, 2 * 3_600_000)
+      first.unref?.()
+      every.unref?.()
+      summaryHealTimers.push(first, every)
     },
   },
   {
