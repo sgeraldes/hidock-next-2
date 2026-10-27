@@ -305,6 +305,25 @@ describe('a summary that keeps failing is not paid for forever (review of #187, 
     expect(mockGenerateContent).not.toHaveBeenCalled()
   })
 
+  it('does not spend the weekly cap on quota refusals, which cost nothing (27-oct-2026)', async () => {
+    // The summary model ran out of its free daily quota: four 429s two hours
+    // apart would otherwise lock the transcript out for a week.
+    seedRecording('quota-only')
+    seedFailedTranscript('t-quota', 'quota-only')
+    for (let n = 1; n <= 4; n++) {
+      dbRun(
+        `INSERT INTO processing_runs (id, recording_id, stage, provider, status, started_at, error_message)
+         VALUES (?, 'quota-only', 'summary', 'gemini', 'failed', ?, ?)`,
+        [`run-q-${n}`, new Date(Date.now() - (3 + n * 3) * 3_600_000).toISOString(),
+          '[GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent: [429 Too Many Requests] You exceeded your current quota']
+      )
+    }
+
+    await reanalyzeFailedTranscripts(10)
+
+    expect(summaryOf('quota-only')).toBe('Healed summary.')
+  })
+
   it('tries the never-attempted and the longest-waiting first, so old ones are not starved', async () => {
     seedRecording('older-failure')
     seedFailedTranscript('t-older', 'older-failure')

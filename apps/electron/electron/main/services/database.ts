@@ -5653,7 +5653,14 @@ export function getFailedTranscriptsForReanalysis(
        FROM transcripts t JOIN recordings r ON r.id = t.recording_id
        LEFT JOIN (
          SELECT recording_id, MAX(started_at) AS last_failed_at,
-                SUM(CASE WHEN started_at >= ? THEN 1 ELSE 0 END) AS failures_this_week
+                -- A quota or overload refusal cost nothing and does not spend the cap
+                -- (27-oct-2026: four 429s two hours apart locked summaries out for a week).
+                SUM(CASE WHEN started_at >= ?
+                          AND COALESCE(error_message, '') NOT LIKE '%429 Too Many Requests%'
+                          AND COALESCE(error_message, '') NOT LIKE '%Rate limit exceeded%'
+                          AND COALESCE(error_message, '') NOT LIKE '%RESOURCE_EXHAUSTED%'
+                          AND COALESCE(error_message, '') NOT LIKE '%experiencing high demand%'
+                         THEN 1 ELSE 0 END) AS failures_this_week
            FROM processing_runs
           WHERE stage = 'summary' AND status = 'failed'
           GROUP BY recording_id
