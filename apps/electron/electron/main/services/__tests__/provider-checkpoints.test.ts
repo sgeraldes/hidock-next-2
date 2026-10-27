@@ -81,7 +81,15 @@ describe('durable provider boundary', () => {
     try {
       db.exec("CREATE TABLE recordings (id TEXT PRIMARY KEY); INSERT INTO recordings VALUES ('r')")
       const store = providerCheckpoints('r', adapter(db))
-      for (const failure of [new Error('fetch failed'), Object.assign(new Error('503 Service Unavailable'), { status: 503 })]) {
+      // 408 and 499 can arrive after the server ran (and billed) the request, and a
+      // message that merely starts with a 4xx code proves nothing (review of #186).
+      for (const failure of [
+        new Error('fetch failed'),
+        Object.assign(new Error('503 Service Unavailable'), { status: 503 }),
+        Object.assign(new Error('408 Request Timeout'), { status: 408 }),
+        Object.assign(new Error('499 Client Closed Request'), { status: 499 }),
+        new Error('400 entries could not be parsed from the response'),
+      ]) {
         const key = failure.message
         const request = vi.fn().mockRejectedValue(failure)
         await expect(store.execute(key, request)).rejects.toThrow(failure.message)

@@ -68,12 +68,22 @@ export function providerCheckpoints(recordingId: string, db: CheckpointDatabase 
   }
 }
 
-/** The provider answered with a 4xx: it refused the request and processed nothing. */
+/**
+ * Status codes a provider returns before it runs a request: a rate limit (429)
+ * and a refused request (bad request, key, permission, unknown model). 408 and
+ * 499 are left out: they can come after the server ran and billed the request.
+ */
+const REJECTED_BEFORE_RUNNING = new Set([400, 401, 403, 404, 429])
+
+/** The provider refused the request and processed nothing, so it may be sent again. */
 export function providerRejected(error: unknown): boolean {
-  const status = (error as { status?: unknown; code?: unknown } | null)?.status ?? (error as { code?: unknown } | null)?.code
-  if (typeof status === 'number') return status >= 400 && status < 500
+  const status = (error as { status?: unknown } | null)?.status
+  if (typeof status === 'number') return REJECTED_BEFORE_RUNNING.has(status)
+  // Without a status, only an unmistakable rate limit counts; any other text
+  // that starts with a number proves nothing (review of #186, 27-oct-2026).
   const message = error instanceof Error ? error.message : String(error)
-  return /^\s*(?:\[[^\]]*\]:?\s*)?4\d\d\b/.test(message) || /\bRESOURCE_EXHAUSTED\b/.test(message)
+  return /^\s*(?:\[[^\]]*\]:?\s*)?429\s+(?:Too Many Requests|Rate limit exceeded)/i.test(message) ||
+    /\bRESOURCE_EXHAUSTED\b/.test(message)
 }
 
 /** Only call from an explicit fresh-transcription action, never an automatic retry. */
