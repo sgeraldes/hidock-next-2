@@ -2244,8 +2244,12 @@ export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
         outputRefs: { titleSuggestion: `trans_${row.recording_id}.title_suggestion` }
       })
 
+      // Re-read after the await: a link or a "no meeting" decision written while
+      // the model answered is kept, not re-decided by the gate below.
+      const current = getRecordingById(row.recording_id)
+      const stillUnlinked = !!current && !current.meeting_id && !isHumanCorrelationMethod(current.correlation_method)
       let meetingResolutionRunId: string | null = null
-      if (recording && candidateMeetings.length > 0) {
+      if (current && stillUnlinked && candidateMeetings.length > 0) {
         const meetingResolutionRun = createProcessingRun({
           recordingId: row.recording_id,
           stage: 'meeting-resolution',
@@ -2255,21 +2259,28 @@ export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
           execution: reanalysisHasGemini ? 'cloud' : 'local',
           parentRunIds: [summaryRun.id]
         })
-        resolveMeetingFromAnalysis({
-          recordingId: row.recording_id,
-          recording,
-          fullText: row.full_text,
-          candidateMeetings,
-          analysis
-        })
-        completeProcessingRun(meetingResolutionRun.id, {
-          outputRefs: {
-            selectedMeetingId: getRecordingById(row.recording_id)?.meeting_id ?? null,
-            modelCandidateId: analysis.selected_meeting_id ?? null,
-            modelConfidence: analysis.meeting_confidence ?? null,
-            selectionEvidence: analysis.selection_evidence ?? null
-          }
-        })
+        // A failed meeting choice must not cost the healed summary: the run is
+        // marked failed and the summary is still written below.
+        try {
+          resolveMeetingFromAnalysis({
+            recordingId: row.recording_id,
+            recording: current,
+            fullText: row.full_text,
+            candidateMeetings,
+            analysis
+          })
+          completeProcessingRun(meetingResolutionRun.id, {
+            outputRefs: {
+              selectedMeetingId: getRecordingById(row.recording_id)?.meeting_id ?? null,
+              modelCandidateId: analysis.selected_meeting_id ?? null,
+              modelConfidence: analysis.meeting_confidence ?? null,
+              selectionEvidence: analysis.selection_evidence ?? null
+            }
+          })
+        } catch (error) {
+          failProcessingRun(meetingResolutionRun.id, error instanceof Error ? error.message : String(error), false)
+          console.error(`[Reanalyze] Meeting resolution failed for ${row.recording_id}; summary kept:`, error)
+        }
         meetingResolutionRunId = meetingResolutionRun.id
       }
 

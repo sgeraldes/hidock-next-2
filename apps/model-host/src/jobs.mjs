@@ -148,6 +148,8 @@ export class WorkerJobs {
       void this.run(job, audioPath, controller).catch(error => console.error('[Jobs] Could not persist terminal state:', error.message))
       return this.view(job)
     } catch (error) {
+      // Same order as run(): the partial input goes before the terminal state is visible.
+      await rm(audioPath, { force: true }).catch(() => {})
       await this.update(job, { status: controller.signal.aborted ? 'cancelled' : 'failed', error: error.message })
       throw error
     } finally {

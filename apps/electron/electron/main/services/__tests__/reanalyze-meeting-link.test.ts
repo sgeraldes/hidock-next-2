@@ -204,4 +204,38 @@ describe('reanalyzeFailedTranscripts chooses the meeting again', () => {
 
     expect(link()).toEqual({ meeting_id: 'm-other', correlation_method: 'manual' })
   })
+
+  it('keeps an automatic link written while the model answers', async () => {
+    seed()
+    mockGenerateContent.mockImplementationOnce(async () => {
+      dbRun(`UPDATE recordings SET meeting_id = 'm-other', correlation_method = 'time_overlap' WHERE id = 'rec19'`)
+      return healedAnswer({ meeting_confidence: 0.5 })
+    })
+
+    expect(await reanalyzeFailedTranscripts(10)).toBe(1)
+
+    expect(link()).toEqual({ meeting_id: 'm-other', correlation_method: 'time_overlap' })
+  })
+
+  it('a meeting resolution that throws still heals the summary and fails its run', async () => {
+    seed()
+    mockGenerateContent.mockImplementationOnce(async () => {
+      dbRun('DROP TABLE recording_meeting_candidates')
+      return healedAnswer()
+    })
+
+    expect(await reanalyzeFailedTranscripts(10)).toBe(1)
+
+    const transcript = dbQueryOne<{ summary: string | null }>(
+      'SELECT summary FROM transcripts WHERE recording_id = ?',
+      ['rec19']
+    )
+    expect(transcript?.summary).toBe('Healed summary.')
+    const runs = dbQueryOne<{ running: number; failed: number }>(
+      `SELECT SUM(status = 'running') AS running, SUM(status = 'failed') AS failed
+         FROM processing_runs WHERE recording_id = ? AND stage = 'meeting-resolution'`,
+      ['rec19']
+    )
+    expect(runs).toEqual({ running: 0, failed: 1 })
+  })
 })
