@@ -79,6 +79,9 @@ const REJECTED_BEFORE_RUNNING = new Set([400, 401, 403, 404, 429])
 export function providerRejected(error: unknown): boolean {
   const status = (error as { status?: unknown } | null)?.status
   const message = error instanceof Error ? error.message : String(error)
+  // Output already came back before the error, so the call ran and was billed,
+  // whatever text follows (review of #188).
+  if (/interrupted after output began/i.test(message)) return false
   // Google turns a request away when the model is overloaded. The SDK's error
   // carries status 503 as well, so this is read before the numeric check (it
   // was not, and those requests stayed pending, 27-oct-2026). A bare 503 still

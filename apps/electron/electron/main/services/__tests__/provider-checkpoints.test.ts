@@ -106,6 +106,8 @@ describe('durable provider boundary', () => {
         Object.assign(new Error('408 Request Timeout'), { status: 408 }),
         Object.assign(new Error('499 Client Closed Request'), { status: 499 }),
         new Error('400 entries could not be parsed from the response'),
+        // Output already came back, so the call was billed (review of #188).
+        new Error('Gemini stream interrupted after output began: [503 Service Unavailable] This model is currently experiencing high demand.'),
       ]) {
         const key = failure.message
         const request = vi.fn().mockRejectedValue(failure)
