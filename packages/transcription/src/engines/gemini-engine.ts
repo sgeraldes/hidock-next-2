@@ -37,6 +37,31 @@ function assertStillEligible(shouldGenerate?: () => boolean): void {
   if (!ok) throw new TranscriptionCancelledError()
 }
 
+/**
+ * Seconds to wait before sending a request the provider refused for its rate
+ * limit, or null when the error is not a rate limit. The free tier allows
+ * 10,000 audio tokens per minute and one 360 s span is ~9,000 (27-oct-2026).
+ * The provider's own "retry in Ns" plus one second; 30 s when it gives none.
+ */
+export function quotaRetrySeconds(error: unknown): number | null {
+  const status = (error as { status?: unknown } | null)?.status
+  const message = error instanceof Error ? error.message : String(error)
+  const isQuota = status === 429 || /^\s*429\b|RESOURCE_EXHAUSTED|rate limit exceeded/i.test(message)
+  if (!isQuota) return null
+  const asked = /retry in ([\d.]+)\s*s\b/i.exec(message) ?? /"retryDelay"\s*:\s*"([\d.]+)s"/.exec(message)
+  return asked ? Number(asked[1]) + 1 : 30
+}
+
+/** Sleep for a rate limit, checking every second that the recording is still wanted. */
+async function waitForQuota(seconds: number, shouldGenerate?: () => boolean): Promise<void> {
+  const until = Date.now() + seconds * 1000
+  while (Date.now() < until) {
+    assertStillEligible(shouldGenerate)
+    await new Promise((resolve) => setTimeout(resolve, Math.min(1000, Math.max(0, until - Date.now()))))
+  }
+  assertStillEligible(shouldGenerate)
+}
+
 export interface GeminiEngineOptions {
   apiKey: string
   model?: string
@@ -1045,9 +1070,29 @@ export class GeminiEngine implements TranscriptionEngine {
     this.allowAudioRetries = options.allowAudioRetries === true
   }
 
-  private response<T>(key: unknown, request: () => Promise<T>): Promise<T> {
+  /** Waits for one request's rate limit before it is sent again; then the error stands. */
+  static readonly QUOTA_WAITS_PER_REQUEST = 3
+  /** Longest single wait honoured for a rate limit. */
+  static readonly QUOTA_WAIT_CAP_SECONDS = 90
+
+  /**
+   * Send one provider request through its checkpoint. A rate limit is waited
+   * out and the same request sent again, so one 429 on a span does not fail
+   * the recording (Rec14 and Rec16, 27-oct-2026). The checkpoint forgets a
+   * refused request, so sending it again is not a second charge.
+   */
+  private async response<T>(key: unknown, request: () => Promise<T>, shouldGenerate?: () => boolean): Promise<T> {
     const identity = JSON.stringify([this.audioHash, this.model, key])
-    return this.checkpoints ? this.checkpoints.execute(identity, request) : request()
+    for (let waits = 0; ; waits++) {
+      try {
+        return await (this.checkpoints ? this.checkpoints.execute(identity, request) : request())
+      } catch (error) {
+        const seconds = quotaRetrySeconds(error)
+        if (seconds === null || waits >= GeminiEngine.QUOTA_WAITS_PER_REQUEST) throw error
+        console.warn(`[GeminiEngine] rate limit; waiting ${Math.round(seconds)} s before sending the same request again`)
+        await waitForQuota(Math.min(seconds, GeminiEngine.QUOTA_WAIT_CAP_SECONDS), shouldGenerate)
+      }
+    }
   }
 
   async isAvailable(): Promise<boolean> {
@@ -1287,7 +1332,7 @@ export class GeminiEngine implements TranscriptionEngine {
           }).then((response) => {
             reportUsage(options.onUsage, this.model, (response as unknown as NativeTranscriptionInteraction).usage)
             return response
-          })}) as unknown as NativeTranscriptionInteraction
+          })}, shouldGenerate) as unknown as NativeTranscriptionInteraction
           trace({
             phase: 'provider-transcription',
             status: 'completed',

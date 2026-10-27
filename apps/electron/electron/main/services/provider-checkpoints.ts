@@ -42,7 +42,20 @@ export function providerCheckpoints(recordingId: string, db: CheckpointDatabase 
         "INSERT INTO provider_checkpoints VALUES (?, ?, 'pending', NULL, ?)",
         [recordingId, requestKey, new Date().toISOString()]
       )
-      const response = await request()
+      let response: T
+      try {
+        response = await request()
+      } catch (error) {
+        // A 4xx is the provider's answer that it processed nothing (a 429 rate
+        // limit, a bad request): nothing was charged, so a retry may send it
+        // again. Anything else (a cut connection, a 5xx) stays pending, because
+        // the request may have run and been billed (27-oct-2026).
+        if (providerRejected(error)) {
+          db.run('DELETE FROM provider_checkpoints WHERE recording_id = ? AND request_key = ? AND state = \'pending\'',
+            [recordingId, requestKey])
+        }
+        throw error
+      }
       if (!shouldPersist()) throw new Error('Local processing cancelled: provider response discarded after exclusion')
       const payload = JSON.stringify(response)
       if (payload === undefined) throw new Error('Provider checkpoint: empty response cannot be persisted')
@@ -53,6 +66,14 @@ export function providerCheckpoints(recordingId: string, db: CheckpointDatabase 
       return response
     }
   }
+}
+
+/** The provider answered with a 4xx: it refused the request and processed nothing. */
+export function providerRejected(error: unknown): boolean {
+  const status = (error as { status?: unknown; code?: unknown } | null)?.status ?? (error as { code?: unknown } | null)?.code
+  if (typeof status === 'number') return status >= 400 && status < 500
+  const message = error instanceof Error ? error.message : String(error)
+  return /^\s*(?:\[[^\]]*\]:?\s*)?4\d\d\b/.test(message) || /\bRESOURCE_EXHAUSTED\b/.test(message)
 }
 
 /** Only call from an explicit fresh-transcription action, never an automatic retry. */
