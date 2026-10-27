@@ -3926,8 +3926,11 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   }
   progressCallback?.('complete', 100) // spec-014: progress reporting (completed only)
   console.log(`Transcription complete: ${recording.filename} (${wordCount} words)`)
-  const producedBy = `transcript by ${rawTranscript.provider} ${rawTranscript.model}` +
-    (cachedTranscript ? ', reused from a stored transcription' : '')
+  // "Reused" only when the stored text was kept as it was, not rewritten in this run
+  // (review of #187); an old checkpoint may lack the model, which is then left out.
+  const reused = !!cachedTranscript && persistedTranscript?.full_text === fullText
+  const producedBy = `transcript by ${[rawTranscript.provider || 'unknown provider', rawTranscript.model].filter(Boolean).join(' ')}` +
+    (reused ? ', reused from a stored transcription' : '')
   return { status: 'completed', producedBy }
 }
 
