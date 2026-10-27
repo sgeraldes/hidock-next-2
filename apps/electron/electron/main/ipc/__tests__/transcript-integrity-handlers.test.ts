@@ -15,6 +15,8 @@ const db = vi.hoisted(() => ({
 vi.mock('../../services/database', () => db)
 
 const transcription = vi.hoisted(() => ({ processQueueManually: vi.fn() }))
+const checkpoints = vi.hoisted(() => ({ clearProviderCheckpoints: vi.fn() }))
+vi.mock('../../services/provider-checkpoints', () => checkpoints)
 vi.mock('../../services/transcription', () => transcription)
 
 const eligibility = vi.hoisted(() => ({ excluded: new Set<string>(), failClosed: false }))
@@ -50,6 +52,17 @@ describe('transcripts:retranscribeMany', () => {
     expect(result).toEqual({ success: true, data: { queued: 2, skipped: 2, skippedReasons: { ineligible: 1, missing: 1 } } })
     expect(db.addToQueue).toHaveBeenCalledTimes(3)
     expect(transcription.processQueueManually).toHaveBeenCalledTimes(1)
+  })
+
+  it('forgets the stored transcript of each queued recording so it is transcribed again (27-oct)', async () => {
+    // Without this the run reused the stage checkpoint: Rec16 came back from
+    // Cohere's stored result although the owner asked for a new transcription.
+    db.addToQueue.mockImplementation((id: string) => (id === 'personal' ? '' : `q-${id}`))
+    db.getQueueItems.mockReturnValue([{ recording_id: 'busy' }])
+
+    await call('transcripts:retranscribeMany', { recordingIds: ['a', 'b', 'personal', 'busy', 'missing-1'] })
+
+    expect(checkpoints.clearProviderCheckpoints.mock.calls.map(([id]) => id)).toEqual(['a', 'b'])
   })
 
   it('queues a garbage-rated recording with an explicit owner override', async () => {
