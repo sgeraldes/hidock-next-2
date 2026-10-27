@@ -21,13 +21,22 @@ import { runVoiceLearning } from './voice-learning'
 import { runIdentityRules } from './identity-rules'
 import { backfillKnowledgeCaptures } from './knowledge-capture-backfill'
 import { backfillAudioProfiles } from './audio-profile-store'
-import { getQueueState, startTranscriptionProcessor } from './transcription'
+import { getQueueState, reanalyzeFailedTranscripts, startTranscriptionProcessor } from './transcription'
 import { recomputeAudioWarnings } from './value-classification'
 import { scheduleEvaluationCatchup } from './evaluation-catchup'
 import { runKindFallbackPass } from './kind-fallback'
 import { runSamplingPass } from './transcript-sampler'
 import { backfillMeetingWiki } from './meeting-wiki'
 import { getVectorStore } from './vector-store'
+
+/** Fill missing summaries, three at a time, unless the queue is transcribing. */
+export async function healMissingSummaries(deps: {
+  queueBusy: () => boolean
+  heal: (limit: number) => Promise<number>
+} = { queueBusy: () => getQueueState().isProcessing, heal: reanalyzeFailedTranscripts }): Promise<number> {
+  if (deps.queueBusy()) return 0
+  return deps.heal(3)
+}
 
 export interface GatedBootTask {
   name: string
@@ -190,6 +199,20 @@ export const BOOT_TASK_DEFS: GatedBootTask[] = [
         void runSamplingPass().catch((e) => console.error('[Sampling] pass error:', e))
       setTimeout(pass, 300_000).unref?.()
       setInterval(pass, 6 * 3_600_000).unref?.()
+    },
+  },
+  {
+    // A transcript whose summary failed (the provider down or out of quota)
+    // is kept without one; this pass fills it. Ten minutes after launch, then
+    // every two hours, three at a time and only while the queue is idle.
+    // Nothing called reanalyzeFailedTranscripts before 27-oct-2026.
+    name: 'summary-reanalysis',
+    feature: 'transcription',
+    run: () => {
+      const pass = () =>
+        void healMissingSummaries().catch((e) => console.error('[Reanalyze] pass error:', e))
+      setTimeout(pass, 600_000).unref?.()
+      setInterval(pass, 2 * 3_600_000).unref?.()
     },
   },
   {
