@@ -83,7 +83,10 @@ export function providerRejected(error: unknown): boolean {
   // that starts with a number proves nothing (review of #186, 27-oct-2026).
   const message = error instanceof Error ? error.message : String(error)
   return /^\s*(?:\[[^\]]*\]:?\s*)?429\s+(?:Too Many Requests|Rate limit exceeded)/i.test(message) ||
-    /\bRESOURCE_EXHAUSTED\b/.test(message)
+    /\bRESOURCE_EXHAUSTED\b/.test(message) ||
+    // Google turns a request away when the model is overloaded; a bare 503
+    // still counts as unknown (27-oct-2026).
+    /\[503 Service Unavailable\]\s+This model is (?:currently )?(?:experiencing high demand|overloaded)/i.test(message)
 }
 
 /** Only call from an explicit fresh-transcription action, never an automatic retry. */

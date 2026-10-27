@@ -3,6 +3,7 @@ import { createRemoteRecoverySupervisor } from './remote-recovery-supervisor'
 import { resolveAudioRoute } from './audio-execution-route'
 import { chainForRequest, chainSettingsFromConfig, formatEngineStep, runEngineChain, type EngineAttempt, type EngineStep } from './transcription-engine-chain'
 import { engineRouteInput, engineUnavailableReason } from './transcription-engine-routing'
+import { classifyTranscriptionError } from './transcription-errors'
 import { getTranscriptionAttempts, recordTranscriptionAttempt } from './transcription-attempts-store'
 import { engineOptionLabel, type EngineAvailability } from '../../../src/shared/transcription-engines'
 import { checkModelHost } from './model-host-client'
@@ -3201,7 +3202,18 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     }
   } catch (error) {
     failProcessingRun(summaryRun.id, error instanceof Error ? error.message : String(error), false, runUsageFields(summaryUsage.total()))
-    throw error
+    // A cancellation or an ineligible recording still stops the run.
+    const errorClass = classifyTranscriptionError(error).class
+    if (error instanceof TranscriptionCancelledError || errorClass === 'cancelled' || errorClass === 'recording' ||
+        !stillWanted(recordingId, ownerRequested)) throw error
+    // The transcript is already stored and is good: a summary provider that is
+    // down or out of quota must not turn it into a failed transcription and
+    // send the chain to another ASR engine (Rec16 and Rec12, 27-oct-2026,
+    // Google's 503 "high demand"). The summary stays empty and
+    // reanalyzeFailedTranscripts fills it later.
+    analysis = {}
+    console.warn(`[Transcription] ${recordingId}: summary failed (${errorClass}); transcript kept, summary left for reanalysis`)
+    emitActivityLog('warning', 'Summary failed, transcript kept', `${recording.filename}: the summary will be retried later`)
   }
   const titleRun = createProcessingRun({
     recordingId,

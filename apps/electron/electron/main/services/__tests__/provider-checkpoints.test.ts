@@ -76,6 +76,21 @@ describe('durable provider boundary', () => {
     } finally { db.close() }
   })
 
+  it('forgets a request Google refused because the model was overloaded (27-oct-2026)', async () => {
+    // "[503 Service Unavailable] This model is currently experiencing high demand"
+    // is a refusal at the door; keeping it pending blocked every later summary.
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec("CREATE TABLE recordings (id TEXT PRIMARY KEY); INSERT INTO recordings VALUES ('r')")
+      const store = providerCheckpoints('r', adapter(db))
+      const overloaded = new Error('[GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent: [503 Service Unavailable] This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.')
+      const request = vi.fn().mockRejectedValueOnce(overloaded).mockResolvedValueOnce({ summary: 'ok' })
+      await expect(store.execute('analysis', request)).rejects.toThrow('high demand')
+      expect(await store.execute('analysis', request)).toEqual({ summary: 'ok' })
+      expect(request).toHaveBeenCalledTimes(2)
+    } finally { db.close() }
+  })
+
   it('keeps a request pending when the outcome is unknown (network cut, server error)', async () => {
     const db = new DatabaseSync(':memory:')
     try {
