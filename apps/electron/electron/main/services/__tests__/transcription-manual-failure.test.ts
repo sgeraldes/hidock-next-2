@@ -43,7 +43,7 @@ const dbSpies = vi.hoisted(() => {
     // Imported by transcription.ts today. transcribeManually asks getOwnedPipelineRecordings() whether
     // the recording is already processing before it resolves the file, so it needs a real-shaped default.
     'getOwnedPipelineRecordings', 'getOwnedProcessingRuns', 'persistAiMeetingResolution',
-    'clearAutomaticMeetingLink', 'isValueExcludedRecording', 'isRecordingProcessable',
+    'clearAutomaticMeetingLink', 'isHumanCorrelationMethod', 'isValueExcludedRecording', 'isRecordingProcessable',
     'isRecordingGraphIngestable', 'getFailedTranscriptsForReanalysis', 'getSpeakerMap', 'assignSpeaker',
     'retireGeneratedContentForNoSpeech', 'checkTranscriptIntegrity'
   ]

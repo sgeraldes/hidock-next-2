@@ -174,6 +174,7 @@ import {
   findCandidateMeetingsForRecording,
   persistAiMeetingResolution,
   clearAutomaticMeetingLink,
+  isHumanCorrelationMethod,
   removeFromQueueByRecordingId,
   cancelPendingTranscriptions,
   run,
@@ -2170,8 +2171,17 @@ export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
         console.log(`[Reanalyze] Recording ${row.recording_id} excluded before provider call — skipped`)
         continue
       }
-      // Re-run with no candidate meetings — backfill only heals the analysis
-      // fields; meeting matching already ran (or will re-run) elsewhere.
+      // A summary that failed at transcription time also left the meeting
+      // unchosen: the empty analysis named no meeting, so only time-overlap
+      // candidates were written (Rec19, 27-oct-2026). When nobody has linked
+      // the recording since and the owner has not chosen or rejected a meeting,
+      // the heal offers the same candidates and applies the same gate. A
+      // recording that already has a link keeps it; this backfill does not
+      // re-decide it.
+      const recording = getRecordingById(row.recording_id)
+      const candidateMeetings = recording && !recording.meeting_id && !isHumanCorrelationMethod(recording.correlation_method)
+        ? selectCandidateMeetings(row.recording_id, recording)
+        : []
       // ADV42-1 sweep (round-44) — gate the two-attempt retry inside analyze so a
       // mid-analysis exclusion stops the second Gemini send for this row.
       const reanalysisConfig = getConfig()
@@ -2188,7 +2198,7 @@ export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
       const reanalysisUsage = createGeminiUsageCollector()
       try {
         analysis = await reanalysisUsage.run(() =>
-          analyzeTranscriptWithGemini(row.full_text, [], () => isRecordingEligible(row.recording_id), row.recording_id)
+          analyzeTranscriptWithGemini(row.full_text, candidateMeetings, () => isRecordingEligible(row.recording_id), row.recording_id)
         )
       } catch (error) {
         failProcessingRun(summaryRun.id, error instanceof Error ? error.message : String(error), false, runUsageFields(reanalysisUsage.total()))
@@ -2234,6 +2244,35 @@ export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
         outputRefs: { titleSuggestion: `trans_${row.recording_id}.title_suggestion` }
       })
 
+      let meetingResolutionRunId: string | null = null
+      if (recording && candidateMeetings.length > 0) {
+        const meetingResolutionRun = createProcessingRun({
+          recordingId: row.recording_id,
+          stage: 'meeting-resolution',
+          provider: reanalysisHasGemini ? 'gemini' : 'hidock-next',
+          tool: reanalysisHasGemini ? 'gemini-analysis' : 'calendar-overlap-scorer',
+          model: reanalysisHasGemini ? (reanalysisConfig.chat?.geminiModel || CURRENT_GEMINI_CHAT_MODEL) : null,
+          execution: reanalysisHasGemini ? 'cloud' : 'local',
+          parentRunIds: [summaryRun.id]
+        })
+        resolveMeetingFromAnalysis({
+          recordingId: row.recording_id,
+          recording,
+          fullText: row.full_text,
+          candidateMeetings,
+          analysis
+        })
+        completeProcessingRun(meetingResolutionRun.id, {
+          outputRefs: {
+            selectedMeetingId: getRecordingById(row.recording_id)?.meeting_id ?? null,
+            modelCandidateId: analysis.selected_meeting_id ?? null,
+            modelConfidence: analysis.meeting_confidence ?? null,
+            selectionEvidence: analysis.selection_evidence ?? null
+          }
+        })
+        meetingResolutionRunId = meetingResolutionRun.id
+      }
+
       // Batch this transcript's field updates into a single transaction
       // (sql.js discipline — never loop bare run() for multiple writes).
       runInTransaction(() => {
@@ -2241,7 +2280,8 @@ export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
           `UPDATE transcripts SET
              summary = ?, action_items = ?, topics = ?, key_points = ?,
              title_suggestion = ?, question_suggestions = ?, language = ?,
-             summary_run_id = ?, title_run_id = ?
+             summary_run_id = ?, title_run_id = ?,
+             meeting_resolution_run_id = COALESCE(?, meeting_resolution_run_id)
            WHERE recording_id = ?`,
           [
             analysis.summary ?? null,
@@ -2253,6 +2293,7 @@ export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
             analysis.language ?? 'unknown',
             summaryRun.id,
             titleRun.id,
+            meetingResolutionRunId,
             row.recording_id
           ]
         )
@@ -2417,6 +2458,130 @@ async function audioProfileSkip(recording: { id: string; file_path: string | nul
 
 function isCancelledMeetingSubject(subject: string | null | undefined): boolean {
   return /^\s*(cancelled|canceled|cancelado|cancelada)\s*[:\-–—]/i.test(subject ?? '')
+}
+
+type CandidateMeeting = ReturnType<typeof findCandidateMeetingsForRecording>[number]
+type RecordingTimeWindow = { date_recorded: string; duration_seconds?: number | null }
+
+function overlapsRecording(recording: RecordingTimeWindow, meeting: CandidateMeeting): boolean {
+  return isAutomaticMeetingLinkTemporallyEligible(
+    {
+      dateRecorded: recording.date_recorded,
+      durationSeconds: recording.duration_seconds,
+      contentText: null
+    },
+    {
+      meetingId: meeting.id,
+      subject: meeting.subject,
+      startTime: meeting.start_time,
+      endTime: meeting.end_time,
+      isAllDay: !!meeting.is_all_day
+    }
+  )
+}
+
+/**
+ * The meetings the analysis may choose from, shared by transcription and the
+ * reanalysis backfill. The +/-30 minute search buffer is for user-visible
+ * candidate discovery, not automatic attribution. Only true temporal overlaps
+ * may prime transcription, enter Gemini meeting selection, or become an
+ * automatic link. This prevents a nearby but already-ended calendar event from
+ * biasing both the transcript and the subsequent LLM decision.
+ */
+function selectCandidateMeetings(recordingId: string, recording: RecordingTimeWindow): CandidateMeeting[] {
+  const allCandidateMeetings = findCandidateMeetingsForRecording(recordingId)
+  const nearbyCandidateMeetings = allCandidateMeetings.filter(
+    (meeting) => !isCancelledMeetingSubject(meeting.subject)
+  )
+  const candidateMeetings = nearbyCandidateMeetings.filter((meeting) => overlapsRecording(recording, meeting))
+  console.log(
+    `Found ${candidateMeetings.length} temporally eligible meeting candidate(s) for recording ${recordingId}` +
+      (nearbyCandidateMeetings.length > candidateMeetings.length
+        ? ` (${nearbyCandidateMeetings.length - candidateMeetings.length} nearby non-overlap(s) retained for verification only)`
+        : '') +
+      (allCandidateMeetings.length > nearbyCandidateMeetings.length
+        ? ` (${allCandidateMeetings.length - nearbyCandidateMeetings.length} cancelled event(s) excluded)`
+        : '')
+  )
+  return candidateMeetings
+}
+
+/**
+ * Apply the analysis' meeting answer: the automatic link when the gate passes,
+ * the candidate rows always. Shared by transcription and the reanalysis
+ * backfill so a summary healed later goes through the same gate.
+ */
+function resolveMeetingFromAnalysis(input: {
+  recordingId: string
+  recording: RecordingTimeWindow
+  fullText: string
+  candidateMeetings: CandidateMeeting[]
+  analysis: TranscriptAnalysis
+}): void {
+  const { recordingId, recording, fullText, candidateMeetings, analysis } = input
+  if (candidateMeetings.length === 0) return
+  // Automatic linking is intentionally conservative. Time overlap alone is
+  // never sufficient; a cancelled event is never eligible; ambiguous winners
+  // remain candidates for the user/LLM rather than becoming a false link.
+  const MIN_LINK_CONFIDENCE = 0.85
+  const MIN_WINNER_MARGIN = 0.15
+  const selectedMeeting = analysis.selected_meeting_id && analysis.selected_meeting_id !== 'none'
+    ? candidateMeetings.find((meeting) => meeting.id === analysis.selected_meeting_id)
+    : undefined
+  const confidence = analysis.meeting_confidence || 0
+  const runnerUpConfidence = candidateMeetings
+    .filter((meeting) => meeting.id !== analysis.selected_meeting_id)
+    .reduce((highest) => Math.max(highest, 0.1), 0)
+  const winnerMargin = confidence - runnerUpConfidence
+  const hasContentEvidence = !!selectedMeeting && hasVerifiedMeetingSelectionEvidence(
+    fullText, selectedMeeting, analysis.selection_evidence
+  )
+  const hasTemporalOverlap = !!selectedMeeting && overlapsRecording(recording, selectedMeeting)
+  const shouldAutoLink = !!selectedMeeting
+    && !isCancelledMeetingSubject(selectedMeeting.subject)
+    && hasTemporalOverlap
+    && confidence >= MIN_LINK_CONFIDENCE
+    && winnerMargin >= MIN_WINNER_MARGIN
+    && hasContentEvidence
+
+  // Link and candidate rows are written together, link first, and a candidate is
+  // marked selected only if the link was really written. The owner may have
+  // corrected the recording while the model was answering; linkRecordingToMeeting
+  // reads the stored method inside the transaction and refuses to replace it.
+  const { linked } = persistAiMeetingResolution({
+    recordingId,
+    candidateMeetings,
+    modelPickId: analysis.selected_meeting_id,
+    modelConfidence: analysis.meeting_confidence,
+    modelReason: analysis.selection_reason,
+    linkMeetingId: shouldAutoLink && selectedMeeting ? selectedMeeting.id : null,
+    linkConfidence: confidence
+  })
+
+  if (linked && selectedMeeting) {
+    console.log(`AI matched recording to meeting: "${selectedMeeting.subject}" (confidence: ${confidence})`)
+  } else if (shouldAutoLink && selectedMeeting) {
+    console.log(
+      `AI match not applied to ${recordingId}: it has an owner-chosen meeting or no longer exists ` +
+        `(model pick "${selectedMeeting.subject}", confidence: ${confidence})`
+    )
+  } else if (selectedMeeting) {
+    console.log(
+      `AI match retained as candidate (confidence=${confidence}, margin=${winnerMargin.toFixed(2)}, ` +
+        `contentEvidence=${hasContentEvidence}, temporalOverlap=${hasTemporalOverlap}): "${selectedMeeting.subject}"`
+    )
+  }
+
+  // The gate declined, so no candidate row is marked selected. A link left
+  // over from an older, looser gate would now contradict that evidence and
+  // survive forever, because auto-linking only ever added links. Retract it
+  // (machine-made links only — a user's decision is never touched).
+  if (!shouldAutoLink && clearAutomaticMeetingLink(recordingId)) {
+    console.log(
+      `Retracted an unsupported automatic meeting link on ${recordingId}; ` +
+        'it no longer meets the auto-link gate'
+    )
+  }
 }
 
 async function retireNoSpeechGeneratedContent(recordingId: string): Promise<void> {
@@ -2682,40 +2847,7 @@ async function transcribeRecordingStages(
   updateRecordingTranscriptionStatus(recordingId, 'processing')
 
   // Find candidate meetings for this recording's time window
-  const allCandidateMeetings = findCandidateMeetingsForRecording(recordingId)
-  const nearbyCandidateMeetings = allCandidateMeetings.filter(
-    (meeting) => !isCancelledMeetingSubject(meeting.subject)
-  )
-  // The +/-30 minute search buffer is for user-visible candidate discovery, not
-  // automatic attribution. Only true temporal overlaps may prime transcription,
-  // enter Gemini meeting selection, or become an automatic link. This prevents
-  // a nearby but already-ended calendar event from biasing both the transcript
-  // and the subsequent LLM decision.
-  const candidateMeetings = nearbyCandidateMeetings.filter((meeting) =>
-    isAutomaticMeetingLinkTemporallyEligible(
-      {
-        dateRecorded: recording.date_recorded,
-        durationSeconds: recording.duration_seconds,
-        contentText: null
-      },
-      {
-        meetingId: meeting.id,
-        subject: meeting.subject,
-        startTime: meeting.start_time,
-        endTime: meeting.end_time,
-        isAllDay: !!meeting.is_all_day
-      }
-    )
-  )
-  console.log(
-    `Found ${candidateMeetings.length} temporally eligible meeting candidate(s) for recording ${recordingId}` +
-      (nearbyCandidateMeetings.length > candidateMeetings.length
-        ? ` (${nearbyCandidateMeetings.length - candidateMeetings.length} nearby non-overlap(s) retained for verification only)`
-        : '') +
-      (allCandidateMeetings.length > nearbyCandidateMeetings.length
-        ? ` (${allCandidateMeetings.length - nearbyCandidateMeetings.length} cancelled event(s) excluded)`
-        : '')
-  )
+  const candidateMeetings = selectCandidateMeetings(recordingId, recording)
 
   // Build meeting context for better transcription
   let meetingContext = `RECORDING METADATA:
@@ -3272,83 +3404,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   }
 
   // Process AI meeting selection
-  if (candidateMeetings.length > 0) {
-    // Automatic linking is intentionally conservative. Time overlap alone is
-    // never sufficient; a cancelled event is never eligible; ambiguous winners
-    // remain candidates for the user/LLM rather than becoming a false link.
-    const MIN_LINK_CONFIDENCE = 0.85
-    const MIN_WINNER_MARGIN = 0.15
-    const selectedMeeting = analysis.selected_meeting_id && analysis.selected_meeting_id !== 'none'
-      ? candidateMeetings.find((meeting) => meeting.id === analysis.selected_meeting_id)
-      : undefined
-    const confidence = analysis.meeting_confidence || 0
-    const runnerUpConfidence = candidateMeetings
-      .filter((meeting) => meeting.id !== analysis.selected_meeting_id)
-      .reduce((highest) => Math.max(highest, 0.1), 0)
-    const winnerMargin = confidence - runnerUpConfidence
-    const hasContentEvidence = !!selectedMeeting && hasVerifiedMeetingSelectionEvidence(
-      fullText, selectedMeeting, analysis.selection_evidence
-    )
-    const hasTemporalOverlap = !!selectedMeeting && isAutomaticMeetingLinkTemporallyEligible(
-      {
-        dateRecorded: recording.date_recorded,
-        durationSeconds: recording.duration_seconds,
-        contentText: null
-      },
-      {
-        meetingId: selectedMeeting.id,
-        subject: selectedMeeting.subject,
-        startTime: selectedMeeting.start_time,
-        endTime: selectedMeeting.end_time,
-        isAllDay: !!selectedMeeting.is_all_day
-      }
-    )
-    const shouldAutoLink = !!selectedMeeting
-      && !isCancelledMeetingSubject(selectedMeeting.subject)
-      && hasTemporalOverlap
-      && confidence >= MIN_LINK_CONFIDENCE
-      && winnerMargin >= MIN_WINNER_MARGIN
-      && hasContentEvidence
-
-    // Link and candidate rows are written together, link first, and a candidate is
-    // marked selected only if the link was really written. The owner may have
-    // corrected the recording while the model was answering; linkRecordingToMeeting
-    // reads the stored method inside the transaction and refuses to replace it.
-    const { linked } = persistAiMeetingResolution({
-      recordingId,
-      candidateMeetings,
-      modelPickId: analysis.selected_meeting_id,
-      modelConfidence: analysis.meeting_confidence,
-      modelReason: analysis.selection_reason,
-      linkMeetingId: shouldAutoLink && selectedMeeting ? selectedMeeting.id : null,
-      linkConfidence: confidence
-    })
-
-    if (linked && selectedMeeting) {
-      console.log(`AI matched recording to meeting: "${selectedMeeting.subject}" (confidence: ${confidence})`)
-    } else if (shouldAutoLink && selectedMeeting) {
-      console.log(
-        `AI match not applied to ${recordingId}: it has an owner-chosen meeting or no longer exists ` +
-          `(model pick "${selectedMeeting.subject}", confidence: ${confidence})`
-      )
-    } else if (selectedMeeting) {
-      console.log(
-        `AI match retained as candidate (confidence=${confidence}, margin=${winnerMargin.toFixed(2)}, ` +
-          `contentEvidence=${hasContentEvidence}, temporalOverlap=${hasTemporalOverlap}): "${selectedMeeting.subject}"`
-      )
-    }
-
-    // The gate declined, so no candidate row is marked selected. A link left
-    // over from an older, looser gate would now contradict that evidence and
-    // survive forever, because auto-linking only ever added links. Retract it
-    // (machine-made links only — a user's decision is never touched).
-    if (!shouldAutoLink && clearAutomaticMeetingLink(recordingId)) {
-      console.log(
-        `Retracted an unsupported automatic meeting link on ${recordingId}; ` +
-          'it no longer meets the auto-link gate'
-      )
-    }
-  }
+  resolveMeetingFromAnalysis({ recordingId, recording, fullText, candidateMeetings, analysis })
 
   completeProcessingRun(meetingResolutionRun.id, {
     outputRefs: {
