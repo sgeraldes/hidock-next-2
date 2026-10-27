@@ -2315,7 +2315,9 @@ export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
  * transcription:completed for content that does not exist).
  */
 type TranscribeOutcome =
-  | { status: 'completed' | 'cancelled' }
+  /** `producedBy`: the provider and model whose text was stored, for the attempt log. */
+  | { status: 'completed'; producedBy?: string }
+  | { status: 'cancelled' }
   // `reason` separates "the audio is silent" from "the audio is too short to
   // be worth a transcriber call"; the queue's activity log words them apart.
   | { status: 'no_speech'; reason: 'no_speech' | typeof TOO_SHORT_REASON_CODE | AudioSkipReason }
@@ -2485,6 +2487,7 @@ async function transcribeThroughEngineChain(
         while (Date.now() < until && shouldContinue()) await new Promise((resolve) => setTimeout(resolve, 1000))
       },
       record: (attempt) => recordEngineAttempt(canonicalId, queueItemId, filename, attempt),
+      describeSuccess: (outcome) => (outcome.status === 'completed' ? outcome.producedBy : undefined),
       shouldContinue,
     })
     return result
@@ -3923,7 +3926,9 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   }
   progressCallback?.('complete', 100) // spec-014: progress reporting (completed only)
   console.log(`Transcription complete: ${recording.filename} (${wordCount} words)`)
-  return { status: 'completed' }
+  const producedBy = `transcript by ${rawTranscript.provider} ${rawTranscript.model}` +
+    (cachedTranscript ? ', reused from a stored transcription' : '')
+  return { status: 'completed', producedBy }
 }
 
 export async function transcribeManually(recordingId: string): Promise<void> {

@@ -38,7 +38,7 @@ export function TranscriptionAttempts({ recordingId, refreshKey }: { recordingId
             <span className="text-muted-foreground">{new Date(attempt.startedAt).toLocaleTimeString()}</span>{' '}
             {engineName(attempt.engine)}{attempt.attempt > 1 ? ` (try ${attempt.attempt})` : ''}: {OUTCOME_TEXT[attempt.outcome]}
             {attempt.waitedSeconds > 0 ? ` after waiting ${attempt.waitedSeconds} s` : ''}
-            {attempt.message && attempt.outcome !== 'succeeded' ? <span className="text-muted-foreground"> · {attempt.message}</span> : null}
+            {attempt.message ? <span className="text-muted-foreground"> · {attempt.message}</span> : null}
           </li>
         ))}
       </ol>
