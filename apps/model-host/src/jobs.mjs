@@ -171,6 +171,10 @@ export class WorkerJobs {
       if (controller.signal.aborted) throw new Error('Job cancelled')
       await this.update(job, { status: 'completed', result, resultHash: digest(JSON.stringify(result)) })
     } catch (error) {
+      // The input goes before the terminal state is visible, as on success: a client that reads
+      // `cancelled` must not find the audio still on disk. A failed delete is retried and reported
+      // as cleanup-failed by cleanup() below.
+      await rm(audioPath, { force: true }).catch(() => {})
       await this.update(job, { status: controller.signal.aborted ? 'cancelled' : 'failed', error: error.message })
     } finally {
       await this.cleanup(job, audioPath, controller)
