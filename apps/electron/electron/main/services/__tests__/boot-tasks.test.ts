@@ -45,7 +45,7 @@ vi.mock('../identity-rules', () => ({
   }),
 }))
 
-import { BOOT_TASK_DEFS, registerGatedBootTasks } from '../boot-tasks'
+import { BOOT_TASK_DEFS, healMissingSummaries, registerGatedBootTasks } from '../boot-tasks'
 
 const ALL_TASK_NAMES = [
   'database-backup',
@@ -55,6 +55,7 @@ const ALL_TASK_NAMES = [
   'knowledge-capture-backfill',
   'audio-profile-backfill', 'evaluation-warning-refresh', 'evaluation-catchup', 'kind-fallback',
   'transcript-sampling',
+  'summary-reanalysis',
   'meeting-wiki-backfill',
   'start-transcription-processor',
   'semantic-index-restore',
@@ -136,6 +137,7 @@ describe('registerGatedBootTasks', () => {
       'knowledge-capture-backfill',
       'audio-profile-backfill', 'evaluation-warning-refresh', 'evaluation-catchup', 'kind-fallback',
       'transcript-sampling',
+      'summary-reanalysis',
       'start-transcription-processor',
     ])
   })
@@ -174,5 +176,35 @@ describe('registerGatedBootTasks', () => {
     const registered: string[] = []
     registerGatedBootTasks({ register: (t) => registered.push(t.name) })
     expect(registered).toEqual(['database-backup', 'integrity-check', 'knowledge-capture-backfill', 'audio-profile-backfill', 'evaluation-warning-refresh'])
+  })
+})
+
+describe('summary reanalysis (27-oct-2026)', () => {
+  // A summary that failed leaves the transcript with no summary; this pass is
+  // what fills it. Until now nothing in the app ever called it.
+  it('heals up to three transcripts when the transcription queue is idle', async () => {
+    const heal = vi.fn(async () => 2)
+    expect(await healMissingSummaries({ queueBusy: () => false, heal })).toBe(2)
+    expect(heal).toHaveBeenCalledWith(3)
+  })
+
+  it('never runs two passes at once (review of #187)', async () => {
+    let release!: () => void
+    const heal = vi.fn(() => new Promise<number>((resolve) => { release = () => resolve(1) }))
+    const first = healMissingSummaries({ queueBusy: () => false, heal })
+    expect(await healMissingSummaries({ queueBusy: () => false, heal })).toBe(0)
+    release()
+    expect(await first).toBe(1)
+    expect(heal).toHaveBeenCalledTimes(1)
+    // Free again once the first pass is over.
+    const again = healMissingSummaries({ queueBusy: () => false, heal })
+    release()
+    expect(await again).toBe(1)
+  })
+
+  it('waits while the queue is transcribing, so it never competes with it', async () => {
+    const heal = vi.fn(async () => 1)
+    expect(await healMissingSummaries({ queueBusy: () => true, heal })).toBe(0)
+    expect(heal).not.toHaveBeenCalled()
   })
 })

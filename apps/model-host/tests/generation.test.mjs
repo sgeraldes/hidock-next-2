@@ -32,4 +32,6 @@ test('readiness requires CUDA clean teardown and includes runtime DLL changes',a
  }finally{await rm(root,{recursive:true,force:true})}
 })
 
-test('pinned downloader resumes and preserves transient partials',()=>{execFileSync('python',['tests/test_prepare_generation.py'],{cwd:new URL('..',import.meta.url),stdio:'pipe'})})
+// A Python subprocess: its start-up alone took 5.6 s on the CI Windows runner
+// on 27-oct-2026, past vitest's 5 s default.
+test('pinned downloader resumes and preserves transient partials',{timeout:60_000},()=>{execFileSync('python',['tests/test_prepare_generation.py'],{cwd:new URL('..',import.meta.url),stdio:'pipe',windowsHide:true})})

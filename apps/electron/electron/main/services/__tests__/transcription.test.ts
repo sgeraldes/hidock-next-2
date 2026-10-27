@@ -1058,6 +1058,23 @@ describe('Transcription Service', () => {
       expect(vi.mocked(database.createProcessingRun)).not.toHaveBeenCalledWith(expect.objectContaining({ stage: 'graph-sync' }))
     })
 
+    it('keeps a good transcript when the summary provider fails, and leaves the summary to be healed (27-oct-2026)', { timeout: 20000 }, async () => {
+      // Rec16: Parakeet Ultra transcribed it, then the summary call got Google's
+      // 503 "high demand" and the whole run ended failed with the new text stored.
+      // A Gemini key is set, so the summary goes to the analysis model, whose
+      // mock cannot be built in this suite: the summary call fails every time.
+      queueLocal('rec-summary-down')
+
+      await runUntilStored()
+
+      const stored = mockInsertTranscript.mock.calls[0][0]
+      expect(stored.full_text).toContain('Me engañó')
+      expect(stored.summary).toBeUndefined()
+      const database = await import('../database')
+      expect(vi.mocked(database.failProcessingRun)).toHaveBeenCalledWith('run-summary', expect.any(String), false, expect.anything())
+      expect(mockUpdateQueueItem.mock.calls.some((call: any[]) => call[1] === 'failed')).toBe(false)
+    })
+
     it('leaves a transcript the check trusts to the content rating, and stores its validity', { timeout: 20000 }, async () => {
       queueLocal('rec-trusted')
       mockConfig.transcription.geminiApiKey = '' // local analysis, so the run completes in this suite

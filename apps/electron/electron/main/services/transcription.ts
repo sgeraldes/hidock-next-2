@@ -3,6 +3,7 @@ import { createRemoteRecoverySupervisor } from './remote-recovery-supervisor'
 import { resolveAudioRoute } from './audio-execution-route'
 import { chainForRequest, chainSettingsFromConfig, formatEngineStep, runEngineChain, type EngineAttempt, type EngineStep } from './transcription-engine-chain'
 import { engineRouteInput, engineUnavailableReason } from './transcription-engine-routing'
+import { classifyTranscriptionError } from './transcription-errors'
 import { getTranscriptionAttempts, recordTranscriptionAttempt } from './transcription-attempts-store'
 import { engineOptionLabel, type EngineAvailability } from '../../../src/shared/transcription-engines'
 import { checkModelHost } from './model-host-client'
@@ -2314,7 +2315,9 @@ export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
  * transcription:completed for content that does not exist).
  */
 type TranscribeOutcome =
-  | { status: 'completed' | 'cancelled' }
+  /** `producedBy`: the provider and model whose text was stored, for the attempt log. */
+  | { status: 'completed'; producedBy?: string }
+  | { status: 'cancelled' }
   // `reason` separates "the audio is silent" from "the audio is too short to
   // be worth a transcriber call"; the queue's activity log words them apart.
   | { status: 'no_speech'; reason: 'no_speech' | typeof TOO_SHORT_REASON_CODE | AudioSkipReason }
@@ -2484,6 +2487,7 @@ async function transcribeThroughEngineChain(
         while (Date.now() < until && shouldContinue()) await new Promise((resolve) => setTimeout(resolve, 1000))
       },
       record: (attempt) => recordEngineAttempt(canonicalId, queueItemId, filename, attempt),
+      describeSuccess: (outcome) => (outcome.status === 'completed' ? outcome.producedBy : undefined),
       shouldContinue,
     })
     return result
@@ -3201,7 +3205,18 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     }
   } catch (error) {
     failProcessingRun(summaryRun.id, error instanceof Error ? error.message : String(error), false, runUsageFields(summaryUsage.total()))
-    throw error
+    // A cancellation or an ineligible recording still stops the run.
+    const errorClass = classifyTranscriptionError(error).class
+    if (error instanceof TranscriptionCancelledError || errorClass === 'cancelled' || errorClass === 'recording' ||
+        !stillWanted(recordingId, ownerRequested)) throw error
+    // The transcript is already stored and is good: a summary provider that is
+    // down or out of quota must not turn it into a failed transcription and
+    // send the chain to another ASR engine (Rec16 and Rec12, 27-oct-2026,
+    // Google's 503 "high demand"). The summary stays empty and
+    // reanalyzeFailedTranscripts fills it later.
+    analysis = {}
+    console.warn(`[Transcription] ${recordingId}: summary failed (${errorClass}); transcript kept, summary left for reanalysis`)
+    emitActivityLog('warning', 'Summary failed, transcript kept', `${recording.filename}: the summary will be retried later`)
   }
   const titleRun = createProcessingRun({
     recordingId,
@@ -3911,7 +3926,12 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   }
   progressCallback?.('complete', 100) // spec-014: progress reporting (completed only)
   console.log(`Transcription complete: ${recording.filename} (${wordCount} words)`)
-  return { status: 'completed' }
+  // "Reused" only when the stored text was kept as it was, not rewritten in this run
+  // (review of #187); an old checkpoint may lack the model, which is then left out.
+  const reused = !!cachedTranscript && persistedTranscript?.full_text === fullText
+  const producedBy = `transcript by ${[rawTranscript.provider || 'unknown provider', rawTranscript.model].filter(Boolean).join(' ')}` +
+    (reused ? ', reused from a stored transcription' : '')
+  return { status: 'completed', producedBy }
 }
 
 export async function transcribeManually(recordingId: string): Promise<void> {

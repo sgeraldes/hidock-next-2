@@ -108,4 +108,13 @@ describe('runEngineChain', () => {
     await expect(runEngineChain(settings(), t.d)).resolves.toMatchObject({ engine: { provider: 'gemini' } })
     expect(t.calls).toEqual(['gemini#1'])
   })
+
+  it('records which engine really produced the text on a success (27-oct-2026)', async () => {
+    // Rec16 retried on the configured engine reused Parakeet's stored transcript;
+    // the log said "gemini succeeded".
+    const t = deps({ gemini: ['ok'] })
+    const describe = vi.fn((result: string) => result + ' (reused)')
+    await runEngineChain(settings(), { ...t.d, describeSuccess: describe })
+    expect(t.record.mock.calls.at(-1)?.[0]).toMatchObject({ engine: 'gemini', outcome: 'succeeded', message: 'text from gemini (reused)' })
+  })
 })

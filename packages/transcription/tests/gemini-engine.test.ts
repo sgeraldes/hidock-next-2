@@ -614,6 +614,19 @@ describe('GeminiEngine', () => {
     expect(mockInteractionsCreate.mock.calls[3][0].previous_interaction_id).toBe('range-b')
   })
 
+  it('a stream cut after it started giving text is reported as interrupted, never as a refusal (review of #187)', async () => {
+    // Output already streamed means the call ran and was billed; the error must
+    // not look like the provider turning the request away at the door.
+    mockGenerateContentStream.mockResolvedValue((async function* () {
+      yield { text: '{"segments":[' }
+      throw Object.assign(new Error('[503 Service Unavailable] This model is currently experiencing high demand.'), { status: 503 })
+    })())
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x' })
+    const error = await collect(engine.transcribe(oneSecond, { source: 'mic' })).catch((e: unknown) => e) as Error & { status?: number }
+    expect(error.message).toMatch(/^Gemini stream interrupted after output began: /)
+    expect(error.status).toBeUndefined()
+  })
+
   it('propagates errors thrown by generateContentStream', async () => {
     // A rate limit is waited out first (gemini-quota-wait.test.ts); any other
     // provider error goes straight to the caller.

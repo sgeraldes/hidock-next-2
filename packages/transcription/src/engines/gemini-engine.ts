@@ -1907,13 +1907,22 @@ Return ONLY the schema-constrained JSON, with no markdown or additional commenta
         let out = ''
         let finishReason: string | undefined
         let usage: unknown
+        let received = 0
         try {
           for await (const streamChunk of stream) {
+            received++
             out += streamChunk.text ?? ''
             finishReason = streamChunk.candidates?.[0]?.finishReason ?? finishReason
             // The usage totals ride the last chunks; keep the latest.
             usage = streamChunk.usageMetadata ?? usage
           }
+        } catch (error) {
+          // Output already came back, so the call ran and was billed: the error
+          // must not read as the provider refusing at the door, or the request
+          // checkpoint would forget it and send it again (review of #187).
+          if (received === 0) throw error
+          const detail = error instanceof Error ? error.message : String(error)
+          throw new Error(`Gemini stream interrupted after output began: ${detail}`, { cause: error })
         } finally {
           // Billed whether or not the stream ended cleanly.
           reportUsage(options.onUsage, generationModel, usage)

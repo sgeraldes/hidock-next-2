@@ -80,6 +80,11 @@ export interface ChainDeps<T> {
   /** Null when usable now, otherwise why not (host paused, model not prepared, runner missing). */
   unavailableReason(step: EngineStep): Promise<string | null>
   sleep(seconds: number): Promise<void>
+  /**
+   * What actually produced a successful result, for the attempt log. A run on
+   * one engine can reuse a transcript another engine stored (27-oct-2026).
+   */
+  describeSuccess?(result: T): string | undefined
   /** Called for every attempt as it ends, so the log survives a crash in the middle of a chain. */
   record(attempt: EngineAttempt): void
   /** Stops the chain between attempts (owner cancelled, recording excluded). */
@@ -140,8 +145,9 @@ export async function runEngineChain<T>(
       const startedAt = now()
       try {
         const result = await deps.run(step, attempt)
+        const produced = deps.describeSuccess?.(result)
         const ok: EngineAttempt = { engine: label, attempt, outcome: 'succeeded', startedAt: startedAt.toISOString(),
-          durationMs: now().getTime() - startedAt.getTime(), waitedSeconds }
+          durationMs: now().getTime() - startedAt.getTime(), waitedSeconds, ...(produced ? { message: produced } : {}) }
         attempts.push(ok)
         deps.record(ok)
         return { result, engine: step, attempts }
