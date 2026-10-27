@@ -17,6 +17,7 @@ import { ipcMain } from 'electron'
 import { z } from 'zod'
 import { addToQueue, getQueueItems, resolveRecordingId, setTranscriptIntegrityAccepted } from '../services/database'
 import { processQueueManually } from '../services/transcription'
+import { clearProviderCheckpoints } from '../services/provider-checkpoints'
 import { filterTranscribableRecordingIds } from '../services/recording-eligibility'
 import { syncTrustVerdicts } from '../services/transcript-trust'
 import { success, error, type Result } from '../types/api'
@@ -78,6 +79,11 @@ export function registerTranscriptIntegrityHandlers(): void {
         else if (!eligible.has(recording.id)) skip('ineligible')
         else if (active.has(recording.id)) skip('already_queued')
         else if (addToQueue(recording.id, undefined, { ownerRequested: true })) {
+          // "Transcribe again" means a new transcript: forget the stored stage
+          // results, as the single-recording Re-transcribe does. Without this
+          // the run reused the transcription checkpoint and saved the old text
+          // (Rec16 came back from Cohere on 27-oct-2026).
+          clearProviderCheckpoints(recording.id)
           queued++
           active.add(recording.id)
         } else skip('ineligible')
