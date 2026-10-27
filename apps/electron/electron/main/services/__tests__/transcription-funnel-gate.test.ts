@@ -94,6 +94,7 @@ const dbSpies = vi.hoisted(() => {
     'getOwnedProcessingRuns',
     'persistAiMeetingResolution',
     'clearAutomaticMeetingLink',
+    'isHumanCorrelationMethod',
     'isValueExcludedRecording',
     'isRecordingProcessable',
     'isRecordingGraphIngestable',

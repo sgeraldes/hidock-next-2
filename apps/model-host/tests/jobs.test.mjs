@@ -94,6 +94,48 @@ describe('durable worker protocol', () => {
     expect(() => f.jobs.get(first.id, 'Bearer stranger')).toThrow('No such job')
   })
 
+  it('removes the input before a cancelled job reports cancelled', async () => {
+    let started
+    const running = new Promise(resolve => { started = resolve })
+    const f = await fixture((_path, options) => new Promise((_resolve, reject) => {
+      started()
+      options.signal.addEventListener('abort', () => reject(new Error('aborted')))
+    }))
+    // What a client polling the job would find on disk the moment `cancelled` becomes visible.
+    const update = f.jobs.update.bind(f.jobs)
+    let audioWhenCancelled
+    f.jobs.update = async (job, fields) => {
+      if (fields.status === 'cancelled') audioWhenCancelled = (await readdir(f.directory)).filter(file => file.endsWith('.audio'))
+      return update(job, fields)
+    }
+    const job = await f.jobs.create(f.request, 'owner')
+    await f.jobs.upload(job.id, 'owner', Readable.from([f.audio]))
+    await running
+    await f.jobs.cancel(job.id, 'owner')
+    await expect.poll(() => f.jobs.get(job.id, 'owner').status).toBe('cancelled')
+    expect(audioWhenCancelled).toEqual([])
+  })
+
+  it('removes a partial upload before a cancelled upload reports cancelled', async () => {
+    const f = await fixture(async () => { throw new Error('no execution expected') })
+    const update = f.jobs.update.bind(f.jobs)
+    let audioWhenCancelled
+    f.jobs.update = async (job, fields) => {
+      if (fields.status === 'cancelled') audioWhenCancelled = (await readdir(f.directory)).filter(file => file.endsWith('.audio'))
+      return update(job, fields)
+    }
+    const job = await f.jobs.create(f.request, 'owner')
+    // The first chunk reaches disk, then the upload stalls until it is cancelled.
+    const input = new Readable({ read() {} })
+    input.push(f.audio.subarray(0, 4))
+    const uploading = f.jobs.upload(job.id, 'owner', input)
+    await expect.poll(async () => (await readdir(f.directory)).filter(file => file.endsWith('.audio')).length).toBe(1)
+    await f.jobs.cancel(job.id, 'owner')
+    await expect(uploading).rejects.toThrow()
+    expect(f.jobs.get(job.id, 'owner').status).toBe('cancelled')
+    expect(audioWhenCancelled).toEqual([])
+  })
+
   it('rejects changed bytes and records a failed job without executing a model', async () => {
     let calls = 0
     const f = await fixture(async () => { calls++ })

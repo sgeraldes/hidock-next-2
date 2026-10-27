@@ -136,6 +136,7 @@ vi.mock('../database', () => ({
   updateQueueProgress: vi.fn(),
   getMeetingById: vi.fn(),
   findCandidateMeetingsForRecording: vi.fn(() => []),
+  isHumanCorrelationMethod: vi.fn(() => false),
   addRecordingMeetingCandidate: vi.fn(),
   linkRecordingToMeeting: vi.fn(),
   updateKnowledgeCaptureTitle: (...args: any[]) => mockUpdateKnowledgeCaptureTitle(...args),
