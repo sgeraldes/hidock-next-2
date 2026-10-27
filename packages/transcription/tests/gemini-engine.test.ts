@@ -615,10 +615,12 @@ describe('GeminiEngine', () => {
   })
 
   it('propagates errors thrown by generateContentStream', async () => {
-    mockGenerateContentStream.mockRejectedValue(new Error('Rate limit exceeded'))
+    // A rate limit is waited out first (gemini-quota-wait.test.ts); any other
+    // provider error goes straight to the caller.
+    mockGenerateContentStream.mockRejectedValue(new Error('500 Internal error'))
     const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x' })
     await expect(collect(engine.transcribe(oneSecond, { source: 'mic' }))).rejects.toThrow(
-      'Rate limit exceeded',
+      '500 Internal error',
     )
   })
 })

@@ -13,6 +13,21 @@
 
 import { DEFAULT_ENGINE_RETRIES } from '../../../src/shared/transcription-engines'
 
+/**
+ * The wait a provider asks for, in seconds: "retry in 52s", "1m30s", or a
+ * daily quota's "18h17m50s" (27-oct-2026). The Gemini engine reads the same
+ * forms (packages/transcription gemini-engine.ts retryAfterSeconds); this
+ * module stays free of the engine so the classifier needs no mocks.
+ */
+function retryAfterSeconds(message: string): number | null {
+  const phrase = /retry in\s+((?:\d+(?:\.\d+)?\s*(?:h|ms|m|s)\s*)+)/i.exec(message)?.[1]
+  if (!phrase) return null
+  const unit: Record<string, number> = { h: 3600, m: 60, s: 1, ms: 0.001 }
+  let total = 0
+  for (const [, value, name] of phrase.matchAll(/(\d+(?:\.\d+)?)\s*(h|ms|m|s)/gi)) total += Number(value) * unit[name.toLowerCase()]
+  return total
+}
+
 export type TranscriptionErrorClass =
   /** Network, 5xx, timeouts, a remote job in a temporary state: the same engine may succeed shortly. */
   | 'transient'
@@ -61,10 +76,12 @@ export function classifyTranscriptionError(error: unknown): ClassifiedError {
   const message = error instanceof Error ? error.message : String(error ?? '')
   const rule = RULES.find((r) => r.test.test(message))
   const errorClass = rule?.class ?? 'unknown'
-  const wait = /retry in (\d+(?:\.\d+)?)\s*s/i.exec(message) ?? /retry[- ]after[: ]+(\d+)/i.exec(message)
+  // "retry in 52s", "1m30s" or a daily quota's "18h17m50s"; a bare Retry-After is seconds.
+  const header = /retry[- ]after[: ]+(\d+)/i.exec(message)
+  const wait = retryAfterSeconds(message) ?? (header ? Number(header[1]) : null)
   return {
     class: errorClass,
-    ...(wait ? { retryAfterSeconds: Math.ceil(Number(wait[1])) } : {}),
+    ...(wait !== null ? { retryAfterSeconds: Math.ceil(wait) } : {}),
     nextEngineMayHelp: NEXT_ENGINE_MAY_HELP[errorClass],
   }
 }
@@ -98,6 +115,11 @@ export function nextRetry(
   const allowed = policy.retries[classified.class] ?? 0
   if (attempt > allowed) return { retry: false, waitSeconds: 0 }
   const fallback = policy.backoffSeconds[Math.min(attempt - 1, policy.backoffSeconds.length - 1)] ?? 30
+  // Asked to wait longer than the policy allows (an hourly or daily quota): the
+  // same engine cannot help now, so the next one runs instead (27-oct-2026).
+  if (classified.retryAfterSeconds != null && classified.retryAfterSeconds > policy.maxWaitSeconds) {
+    return { retry: false, waitSeconds: 0 }
+  }
   const waitSeconds = Math.min(policy.maxWaitSeconds, classified.retryAfterSeconds != null ? classified.retryAfterSeconds + 2 : fallback)
   return { retry: true, waitSeconds }
 }

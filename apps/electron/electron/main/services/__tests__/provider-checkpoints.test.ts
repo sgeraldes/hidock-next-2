@@ -59,4 +59,43 @@ describe('durable provider boundary', () => {
       expect(request).toHaveBeenCalledTimes(1)
     } finally { db.close() }
   })
+
+  it('forgets a request the provider rejected, so a retry may send it again (27-oct-2026)', async () => {
+    // A 429 is an answer: the provider refused and processed nothing. Keeping it
+    // pending made every retry fail with "outcome unknown" (Rec14, Rec16).
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec("CREATE TABLE recordings (id TEXT PRIMARY KEY); INSERT INTO recordings VALUES ('r')")
+      const store = providerCheckpoints('r', adapter(db))
+      const quota = Object.assign(new Error('429 Rate limit exceeded for model gemini-3.5-transcribe. Please retry in 52s'), { status: 429 })
+      const request = vi.fn().mockRejectedValueOnce(quota).mockResolvedValueOnce({ text: 'hola' })
+      await expect(store.execute('span-2', request)).rejects.toThrow('429')
+      expect(db.prepare('SELECT COUNT(*) AS n FROM provider_checkpoints').get()).toMatchObject({ n: 0 })
+      expect(await store.execute('span-2', request)).toEqual({ text: 'hola' })
+      expect(request).toHaveBeenCalledTimes(2)
+    } finally { db.close() }
+  })
+
+  it('keeps a request pending when the outcome is unknown (network cut, server error)', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec("CREATE TABLE recordings (id TEXT PRIMARY KEY); INSERT INTO recordings VALUES ('r')")
+      const store = providerCheckpoints('r', adapter(db))
+      // 408 and 499 can arrive after the server ran (and billed) the request, and a
+      // message that merely starts with a 4xx code proves nothing (review of #186).
+      for (const failure of [
+        new Error('fetch failed'),
+        Object.assign(new Error('503 Service Unavailable'), { status: 503 }),
+        Object.assign(new Error('408 Request Timeout'), { status: 408 }),
+        Object.assign(new Error('499 Client Closed Request'), { status: 499 }),
+        new Error('400 entries could not be parsed from the response'),
+      ]) {
+        const key = failure.message
+        const request = vi.fn().mockRejectedValue(failure)
+        await expect(store.execute(key, request)).rejects.toThrow(failure.message)
+        await expect(store.execute(key, request)).rejects.toThrow('outcome unknown')
+        expect(request).toHaveBeenCalledTimes(1)
+      }
+    } finally { db.close() }
+  })
 })
