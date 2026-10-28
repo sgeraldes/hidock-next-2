@@ -43,7 +43,9 @@ it('runs the installed ffmpeg through authenticated durable HTTP jobs and delete
     expect(response.status).toBe(200)
     const job = await response.json()
     expect((await fetch(`${base}/v1/jobs/${job.id}/audio`, { method: 'PUT', headers, body: wav })).status).toBe(202)
-    await expect.poll(() => jobs.get(job.id, headers.authorization).status).toBe('completed')
+    // ffmpeg's first start on a cold CI runner took over a second, the poll's
+    // default (28-oct-2026). Wait up to the job's own 10 s limit and a margin.
+    await expect.poll(() => jobs.get(job.id, headers.authorization).status, { timeout: 15000, interval: 100 }).toBe('completed')
     const completed = await (await fetch(`${base}/v1/jobs/${job.id}`, { headers })).json()
     expect(completed.result.status).toBe('no_speech')
     expect(completed.result.durationSeconds).toBe(seconds)
