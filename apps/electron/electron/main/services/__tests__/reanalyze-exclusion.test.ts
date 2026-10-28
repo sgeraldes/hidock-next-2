@@ -346,6 +346,24 @@ describe('a summary that keeps failing is not paid for forever (review of #187, 
     expect(summaryOf('unbilled')).toBe('Healed summary.')
   })
 
+  it('still counts a billed failure that only quotes a 402 in its text (review of #190)', async () => {
+    seedRecording('quotes-402')
+    seedFailedTranscript('t-quotes-402', 'quotes-402')
+    for (let n = 1; n <= 4; n++) {
+      dbRun(
+        `INSERT INTO processing_runs (id, recording_id, stage, provider, status, started_at, error_message)
+         VALUES (?, 'quotes-402', 'summary', 'gemini', 'failed', ?, ?)`,
+        [`run-b-${n}`, new Date(Date.now() - (3 + n * 3) * 3_600_000).toISOString(),
+          '500 Internal error after retry; earlier attempt said 402 Payment Required']
+      )
+    }
+
+    await reanalyzeFailedTranscripts(10)
+
+    expect(summaryOf('quotes-402')).toBeNull()
+    expect(mockGenerateContent).not.toHaveBeenCalled()
+  })
+
   it('tries the never-attempted and the longest-waiting first, so old ones are not starved', async () => {
     seedRecording('older-failure')
     seedFailedTranscript('t-older', 'older-failure')
