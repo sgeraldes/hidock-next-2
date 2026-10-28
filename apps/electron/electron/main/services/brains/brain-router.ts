@@ -269,8 +269,23 @@ export class BrainRouter {
    * is exposed via getLastChatFailure().
    */
   async chat(task: BrainTask, messages: BrainMessage[], opts: GenerateOptions = {}): Promise<string | null> {
+    return (await this.chatUntil(task, messages, opts))?.answer ?? null
+  }
+
+  /**
+   * chat(), plus the brain that answered. `exclude` leaves brains out of the
+   * chain (the summary fallback skips Gemini, which already failed), and an
+   * answer `accept` rejects counts as that brain's failure, so the next one is
+   * tried (28-oct-2026: an unparseable summary moves on).
+   */
+  async chatUntil(
+    task: BrainTask,
+    messages: BrainMessage[],
+    opts: GenerateOptions = {},
+    { exclude = [], accept = () => true }: { exclude?: Iterable<BrainId>; accept?: (answer: string) => boolean } = {}
+  ): Promise<{ brainId: BrainId; answer: string } | null> {
     this.lastChatFailure = null
-    const tried = new Set<BrainId>()
+    const tried = new Set<BrainId>(exclude)
     let lastFailure: ChatFailure | null = null
 
     for (;;) {
@@ -293,10 +308,10 @@ export class BrainRouter {
 
       try {
         const answer = await brain.chat(messages, opts)
-        if (answer != null) return answer
+        if (answer != null && accept(answer)) return { brainId: brain.id, answer }
         lastFailure = { brainId: brain.id, kind: 'null' }
         if (brain.id === 'model-host-generate') { this.lastChatFailure = lastFailure; return null }
-        console.warn(`[BrainRouter] ${brain.id} chat returned null, trying next candidate`)
+        console.warn(`[BrainRouter] ${brain.id} chat ${answer == null ? 'returned null' : 'answer rejected'}, trying next candidate`)
       } catch (e) {
         if (e instanceof DOMException && e.name === 'AbortError') {
           console.log('[BrainRouter] chat request was cancelled')

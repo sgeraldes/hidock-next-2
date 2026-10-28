@@ -40,7 +40,7 @@ export type BrainId =
   | 'kiro'
   | 'openai-compatible'
 export type BrainCapability = 'generate' | 'chat' | 'analyzeAudio' | 'embed' | 'agentic'
-export type BrainTask = 'transcribeAnalyze' | 'chat' | 'outputs' | 'handover' | 'embed' | 'suggestions'
+export type BrainTask = 'transcribeAnalyze' | 'chat' | 'outputs' | 'handover' | 'embed' | 'suggestions' | 'summary'
 export interface BrainAuthStatus {
   configured: boolean
   method: 'api-key' | 'cli-login' | 'oauth' | 'none'

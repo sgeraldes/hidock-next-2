@@ -8000,6 +8000,8 @@ export function createProcessingRun(input: CreateProcessingRunInput): Processing
 export interface CompleteProcessingRunInput {
   status?: Extract<ProcessingRunStatus, 'completed' | 'degraded' | 'cancelled'>
   transcriptId?: string | null
+  /** Who actually did the work, when it was not the provider the run started with. */
+  provider?: string | null
   tool?: string | null
   model?: string | null
   version?: string | null
@@ -8016,7 +8018,7 @@ export function completeProcessingRun(id: string, result: CompleteProcessingRunI
   try {
     run(
     `UPDATE processing_runs SET status = ?, completed_at = ?, transcript_id = COALESCE(?, transcript_id),
-       tool = COALESCE(?, tool), model = COALESCE(?, model), version = COALESCE(?, version),
+       provider = COALESCE(?, provider), tool = COALESCE(?, tool), model = COALESCE(?, model), version = COALESCE(?, version),
        output_refs = ?, usage_json = ?, estimated_cost_amount = ?, estimated_cost_currency = ?,
        cost_method = ?, quality_status = ?, quality_json = ?, error_message = NULL
      WHERE id = ?`,
@@ -8024,6 +8026,7 @@ export function completeProcessingRun(id: string, result: CompleteProcessingRunI
       result.status ?? 'completed',
       new Date().toISOString(),
       result.transcriptId ?? null,
+      result.provider ?? null,
       result.tool ?? null,
       result.model ?? null,
       result.version ?? null,
