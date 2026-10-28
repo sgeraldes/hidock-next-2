@@ -93,6 +93,21 @@ describe('durable provider boundary', () => {
     } finally { db.close() }
   })
 
+  it('forgets a request refused because the prepaid credit ran out (28-oct-2026)', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec("CREATE TABLE recordings (id TEXT PRIMARY KEY); INSERT INTO recordings VALUES ('r')")
+      const store = providerCheckpoints('r', adapter(db))
+      const message = '[GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent: [402 Payment Required] Your prepayment credits are depleted. Please go to AI Studio at https://ai.studio/projects to manage your billing.'
+      for (const depleted of [Object.assign(new Error(message), { status: 402 }), new Error(message)]) {
+        const request = vi.fn().mockRejectedValueOnce(depleted).mockResolvedValueOnce({ summary: 'ok' })
+        await expect(store.execute(`analysis-${String((depleted as { status?: number }).status)}`, request)).rejects.toThrow('402')
+        expect(await store.execute(`analysis-${String((depleted as { status?: number }).status)}`, request)).toEqual({ summary: 'ok' })
+        expect(request).toHaveBeenCalledTimes(2)
+      }
+    } finally { db.close() }
+  })
+
   it('keeps a request pending when the outcome is unknown (network cut, server error)', async () => {
     const db = new DatabaseSync(':memory:')
     try {

@@ -5655,11 +5655,14 @@ export function getFailedTranscriptsForReanalysis(
          SELECT recording_id, MAX(started_at) AS last_failed_at,
                 -- A quota or overload refusal cost nothing and does not spend the cap
                 -- (27-oct-2026: four 429s two hours apart locked summaries out for a week).
+                -- Neither does depleted credit, nor a checkpoint that sent nothing (28-oct-2026).
                 SUM(CASE WHEN started_at >= ?
                           AND COALESCE(error_message, '') NOT LIKE '%429 Too Many Requests%'
                           AND COALESCE(error_message, '') NOT LIKE '%Rate limit exceeded%'
                           AND COALESCE(error_message, '') NOT LIKE '%RESOURCE_EXHAUSTED%'
                           AND COALESCE(error_message, '') NOT LIKE '%experiencing high demand%'
+                          AND COALESCE(error_message, '') NOT LIKE '%402 Payment Required%'
+                          AND COALESCE(error_message, '') NOT LIKE 'Provider checkpoint pending:%'
                          THEN 1 ELSE 0 END) AS failures_this_week
            FROM processing_runs
           WHERE stage = 'summary' AND status = 'failed'
