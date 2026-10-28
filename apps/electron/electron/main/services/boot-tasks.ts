@@ -21,7 +21,9 @@ import { runVoiceLearning } from './voice-learning'
 import { runIdentityRules } from './identity-rules'
 import { backfillKnowledgeCaptures } from './knowledge-capture-backfill'
 import { backfillAudioProfiles } from './audio-profile-store'
-import { getQueueState, reanalyzeFailedTranscripts, startTranscriptionProcessor } from './transcription'
+import { getQueueState, onQueueDrained, reanalyzeFailedTranscripts, startTranscriptionProcessor } from './transcription'
+import { getConfig } from './config'
+import { summaryRetrySettings } from '../../../src/shared/summary-retry'
 import { recomputeAudioWarnings } from './value-classification'
 import { scheduleEvaluationCatchup } from './evaluation-catchup'
 import { runKindFallbackPass } from './kind-fallback'
@@ -31,22 +33,36 @@ import { getVectorStore } from './vector-store'
 
 let summaryHealRunning = false
 const summaryHealTimers: Array<ReturnType<typeof setTimeout>> = []
+let stopDrainListener: (() => void) | null = null
+let lastAutomaticPass = 0
+
+type SummaryQuery = Parameters<typeof reanalyzeFailedTranscripts>[1]
 
 /**
- * Fill missing summaries, three at a time, unless the queue is transcribing or
- * another pass is still running (two passes would pick the same rows).
+ * Fill missing summaries, as many per pass as Settings > Transcription says,
+ * unless the queue is transcribing or another pass is still running (two
+ * passes would pick the same rows).
  */
 export async function healMissingSummaries(deps: {
   queueBusy: () => boolean
-  heal: (limit: number) => Promise<number>
-} = { queueBusy: () => getQueueState().isProcessing, heal: reanalyzeFailedTranscripts }): Promise<number> {
+  heal: (limit: number, query?: SummaryQuery) => Promise<number>
+} = { queueBusy: () => getQueueState().isProcessing, heal: reanalyzeFailedTranscripts }, query?: SummaryQuery): Promise<number> {
   if (summaryHealRunning || deps.queueBusy()) return 0
   summaryHealRunning = true
   try {
-    return await deps.heal(3)
+    return await deps.heal(summaryRetrySettings(getConfig()?.transcription?.summaryRetry).perPass, query)
   } finally {
     summaryHealRunning = false
   }
+}
+
+/**
+ * Whether the automatic retry is due: switched on in Settings, and the minutes
+ * Settings gives have passed since the last automatic pass.
+ */
+export function automaticSummaryRetryDue(now = Date.now(), last = lastAutomaticPass): boolean {
+  const settings = summaryRetrySettings(getConfig()?.transcription?.summaryRetry)
+  return settings.auto && now - last >= settings.everyMinutes * 60_000
 }
 
 /** Cancel the summary passes before the database closes on quit. */
@@ -55,6 +71,8 @@ export function stopSummaryReanalysis(): void {
     clearTimeout(timer)
     clearInterval(timer)
   }
+  stopDrainListener?.()
+  stopDrainListener = null
 }
 
 export interface GatedBootTask {
@@ -221,20 +239,26 @@ export const BOOT_TASK_DEFS: GatedBootTask[] = [
     },
   },
   {
-    // A transcript whose summary failed (the provider down or out of quota)
-    // is kept without one; this pass fills it. Ten minutes after launch, then
-    // every two hours, three at a time and only while the queue is idle.
-    // Nothing called reanalyzeFailedTranscripts before 27-oct-2026.
+    // A transcript whose summary failed is kept without one (#187). Two ways
+    // fill it (28-oct-2026, Sebastián):
+    // - in the queue's flow: when the queue empties, summaries no provider has
+    //   failed on yet run right away;
+    // - the automatic retry Settings > Transcription configures (on or off,
+    //   how often, how many) retries the ones every provider failed on.
+    // The owner's "Generate summary" button retries one at any time.
     name: 'summary-reanalysis',
     feature: 'transcription',
     run: () => {
-      const pass = () =>
+      stopDrainListener = onQueueDrained(() =>
+        void healMissingSummaries(undefined, { neverTried: true }).catch((e) => console.error('[Reanalyze] pass error:', e)))
+      const tick = () => {
+        if (!automaticSummaryRetryDue()) return
+        lastAutomaticPass = Date.now()
         void healMissingSummaries().catch((e) => console.error('[Reanalyze] pass error:', e))
-      const first = setTimeout(pass, 600_000)
-      const every = setInterval(pass, 2 * 3_600_000)
-      first.unref?.()
+      }
+      const every = setInterval(tick, 60_000)
       every.unref?.()
-      summaryHealTimers.push(first, every)
+      summaryHealTimers.push(every)
     },
   },
   {

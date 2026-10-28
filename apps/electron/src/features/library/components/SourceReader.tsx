@@ -97,6 +97,7 @@ import { useTranscriptionStore } from '@/store/features/useTranscriptionStore'
 import { useAudioControls } from '@/components/OperationController'
 import { usePlayerPreferences, speedLabel } from '@/lib/player-preferences'
 import { formatTimestamp } from '@/utils/audioUtils'
+import { GenerateSummaryPanel } from './GenerateSummaryPanel'
 
 /**
  * The reader's sections, in the order they appear in the single scrolling
@@ -1340,6 +1341,11 @@ export function SourceReader({
   const summaryShown = trustedSummary(effectiveTranscript, recording.audioCategory)
   const summaryNote = !summaryShown && effectiveTranscript?.summary?.trim() ? untrustedSummaryNote(effectiveTranscript) : null
   const summaryText = summaryShown ?? summaryNote
+  // A trusted transcript that never got its summary: offer to write it now.
+  // An invalid, incomplete or doubtful transcript is never summarized.
+  const summaryMissing = hasTranscriptStrip && !!effectiveTranscript?.full_text?.trim() &&
+    (!effectiveTranscript.summary?.trim() || effectiveTranscript.summary === 'Analysis failed' || !effectiveTranscript.title_suggestion) &&
+    !(['invalid', 'incomplete', 'doubtful'].includes(effectiveTranscript.validity_status ?? '') && !effectiveTranscript.integrity_accepted_at)
   // One canonical order for the rows, chips and timeline lines: time, then id.
   // Display numbers are assigned HERE, once, after the canonical order, and every
   // surface (list, chips, lines, waveform markers) reuses them. ids and refIds are untouched.
@@ -2108,6 +2114,15 @@ export function SourceReader({
                         : <p className="w-full text-muted-foreground">{summaryNote}</p>}
                     </div>
                   </ReaderSection>
+                )}
+
+                {summaryMissing && (
+                  <div className="mt-2">
+                    <GenerateSummaryPanel recordingId={recording.id} onWritten={() => {
+                      onIntegrityChanged?.()
+                      onMetadataEdited?.()
+                    }} />
+                  </div>
                 )}
 
                 {sectionIsVisible('transcript') && (

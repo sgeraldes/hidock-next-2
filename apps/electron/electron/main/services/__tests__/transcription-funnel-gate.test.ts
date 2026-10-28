@@ -124,7 +124,7 @@ vi.mock('../database', () => {
   return mod
 })
 
-import { queueTranscriptionIfEnabled, processQueueManually } from '../transcription'
+import { queueTranscriptionIfEnabled, processQueueManually, onQueueDrained } from '../transcription'
 
 beforeEach(() => {
   for (const spy of Object.values(dbSpies.spies)) spy.mockClear()
@@ -250,6 +250,22 @@ describe('processQueue drain × mid-run disable (round-3 [HIGH])', () => {
 
     expect(processingCalls()).toEqual(['q1']) // item 2 NEVER started
     expect(statuses['q2']).toBe('pending') // still queued, untouched
+  })
+
+  it('tells the listeners when a run empties the queue, so a missing summary follows at once (28-oct-2026)', async () => {
+    featuresConfig = { preset: 'full', flags: {} }
+    armQueue()
+    const drained = vi.fn()
+    const stop = onQueueDrained(drained)
+    try {
+      await processQueueManually()
+      expect(drained).toHaveBeenCalledTimes(1)
+      // An empty tick after that tells nobody: the processor ticks every 10 s.
+      await processQueueManually()
+      expect(drained).toHaveBeenCalledTimes(1)
+    } finally {
+      stop()
+    }
   })
 
   it('with the feature already disabled, a queue pass is a total no-op (no lock, no bookkeeping)', async () => {

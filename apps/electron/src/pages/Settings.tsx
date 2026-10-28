@@ -70,6 +70,7 @@ import { AudioExecutionSettings, DiarizationCpuShare, OllamaModelFields } from '
 import { RemoteDiarizationSettings } from '@/features/settings/RemoteDiarizationSettings'
 import { CloudAsrSettings } from '@/features/settings/CloudAsrSettings'
 import { EngineFallbackSettings } from '@/features/settings/EngineFallbackSettings'
+import { SummaryRetrySettings } from '@/features/settings/SummaryRetrySettings'
 import { VoiceBackfillPanel } from '@/features/settings/VoiceBackfillPanel'
 import { IdentityQuestionCounts } from '@/features/settings/IdentityQuestionCounts'
 import { AdvancedSettings } from '@/features/settings/AdvancedSettings'
@@ -1240,6 +1241,7 @@ export function Settings({
                 </div>
                 <TranscriptionPipelineControls />
                 <EngineFallbackSettings />
+                <SummaryRetrySettings />
                 <div className="space-y-1">
                   <label htmlFor="recordedAudioChannelMode" className="text-sm font-medium">Stored audio channels</label>
                   <select id="recordedAudioChannelMode" value={config?.transcription.recordedAudioChannelMode ?? 'preserve'}

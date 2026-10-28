@@ -16,6 +16,7 @@ import { ipcMain } from 'electron'
 import { getConfig, replaceConfigSection, updateConfig } from '../services/config'
 import { getBrainRegistry } from '../services/brains/brain-registry'
 import { getBrainCredentialStore } from '../services/brains/brain-credential-store'
+import { brainCooldown } from '../services/brains/brain-cooldown'
 import { DEFAULT_OPENAI_COMPATIBLE_SETTINGS } from '../services/brains/openai-compatible-brain'
 
 import type { AIBrain, BrainAuthStatus, BrainCapability, BrainId, BrainTask } from '../services/brains/types'
@@ -33,6 +34,8 @@ export interface BrainListItem {
   enabled: boolean
   isDefault: boolean
   auth: BrainAuthStatus
+  /** Resting after out-of-credit or out-of-quota until this time; absent when available. */
+  unavailable?: { until: string; reason: string }
 }
 
 /** What the AI providers page shows for the local server; the key itself never leaves the main process. */
@@ -70,6 +73,12 @@ function safeAuth(brain: AIBrain): Promise<BrainAuthStatus> {
   return bounded
 }
 
+/** A brain resting after out-of-credit or out-of-quota, for Settings to show (28-oct-2026). */
+function unavailableFields(id: BrainId): { unavailable?: { until: string; reason: string } } {
+  const resting = brainCooldown(id)
+  return resting ? { unavailable: { until: new Date(resting.until).toISOString(), reason: resting.reason } } : {}
+}
+
 export function registerBrainsHandlers(): void {
   // List all registered brains with their config flags + live auth status.
   ipcMain.handle('brains:list', async (): Promise<BrainListItem[]> => {
@@ -84,6 +93,7 @@ export function registerBrainsHandlers(): void {
       enabled: cfg?.enabled?.[brain.id] ?? false,
       isDefault: cfg?.defaultBrain === brain.id,
       auth: auths[i],
+      ...unavailableFields(brain.id),
     }))
   })
 

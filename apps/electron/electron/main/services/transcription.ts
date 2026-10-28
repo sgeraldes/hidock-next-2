@@ -4,6 +4,8 @@ import { resolveAudioRoute } from './audio-execution-route'
 import { chainForRequest, chainSettingsFromConfig, formatEngineStep, runEngineChain, type EngineAttempt, type EngineStep } from './transcription-engine-chain'
 import { engineRouteInput, engineUnavailableReason } from './transcription-engine-routing'
 import { classifyTranscriptionError } from './transcription-errors'
+import { brainCooldown, noteBrainFailure } from './brains/brain-cooldown'
+import { summaryRetrySettings } from '../../../src/shared/summary-retry'
 import { getTranscriptionAttempts, recordTranscriptionAttempt } from './transcription-attempts-store'
 import { engineOptionLabel, type EngineAvailability } from '../../../src/shared/transcription-engines'
 import { checkModelHost } from './model-host-client'
@@ -939,6 +941,7 @@ export function cancelTargetedTranscription(recordingId: string): void {
 }
 
 async function processQueue(): Promise<void> {
+  let drained = false
   // A directed API run owns the queue mutex; even the short lane must not
   // pick an unrelated row while its main lane is active.
   if (targetedRunActive) return
@@ -1123,7 +1126,13 @@ async function processQueue(): Promise<void> {
       const item = orderPendingForProcessing(getQueueItems('pending')).find(
         (i) => !processedThisRun.has(i.id)
       )
-      if (!item) break
+      if (!item) {
+        // Tell the listeners when this run did something, and once after
+        // launch; the processor ticks every 10 s on an empty queue.
+        drained = !cancelRequested && (processedThisRun.size > 0 || !queueDrainedSinceLaunch)
+        if (drained) queueDrainedSinceLaunch = true
+        break
+      }
       processedThisRun.add(item.id)
       currentProcessingId = item.recording_id
       const duration = getRecordingById(item.recording_id)?.duration_seconds ?? null
@@ -1155,6 +1164,28 @@ async function processQueue(): Promise<void> {
     // spec-005: Always release mutex lock, even if an error occurred
     releaseTranscriptionLock(processId)
   }
+  if (drained) {
+    for (const listener of queueDrainedListeners) {
+      try {
+        listener()
+      } catch (e) {
+        console.error('[Transcription] queue-drained listener failed:', e)
+      }
+    }
+  }
+}
+
+const queueDrainedListeners = new Set<() => void>()
+let queueDrainedSinceLaunch = false
+
+/**
+ * Called each time the queue finishes with nothing pending left, so the steps
+ * that come after a transcription (a missing summary) run in the same flow
+ * instead of waiting for a timer (28-oct-2026). Returns the unsubscribe.
+ */
+export function onQueueDrained(listener: () => void): () => void {
+  queueDrainedListeners.add(listener)
+  return () => queueDrainedListeners.delete(listener)
 }
 
 /**
@@ -1819,6 +1850,16 @@ async function analyzeTranscript(
     const byBrain = await analyzeWithBrains(analysisPrompt, fullText, shouldGenerate)
     if (byBrain) return byBrain
   }
+  // Gemini out of credit or quota rests like any other brain, and Settings >
+  // AI Brains shows it as not available until then (28-oct-2026, Sebastián:
+  // "marcar el servicio como no disponible"). The next summaries go straight
+  // to the next brain instead of asking Gemini again.
+  const geminiResting = brainCooldown('gemini-api')
+  if (resolveGeminiApiKey() && geminiResting) {
+    const byBrain = brainsFirst ? null : await analyzeWithBrains(analysisPrompt, fullText, shouldGenerate)
+    if (byBrain) return byBrain
+    throw new Error(`Gemini is not available until ${new Date(geminiResting.until).toISOString()} (${geminiResting.reason}); no other brain wrote the summary`)
+  }
   if (resolveGeminiApiKey()) {
     try {
       const analysis = await analyzeWithGeminiSdk(analysisPrompt, shouldGenerate, recordingId)
@@ -1828,7 +1869,9 @@ async function analyzeTranscript(
       return analysis
     } catch (error) {
       if (error instanceof TranscriptionCancelledError || classifyTranscriptionError(error).class === 'cancelled' ||
-          (shouldGenerate && !shouldGenerate()) || brainsFirst) throw error
+          (shouldGenerate && !shouldGenerate())) throw error
+      noteBrainFailure('gemini-api', error instanceof Error ? error.message : String(error))
+      if (brainsFirst) throw error
       const byBrain = await analyzeWithBrains(analysisPrompt, fullText, shouldGenerate)
       if (byBrain) {
         console.warn(`[Analysis] Gemini failed, summary written by ${byBrain.produced_by?.provider}:`,
@@ -2288,6 +2331,21 @@ function logAnalysisFailure(label: string, response: unknown, text: string): voi
   )
 }
 
+/** The wait and weekly cap Settings > Transcription sets for automatic summary retries. */
+function summaryRetryQuery(): { everyMinutes: number; maxPerWeek: number } {
+  const { everyMinutes, maxPerWeek } = summaryRetrySettings(getConfig().transcription.summaryRetry)
+  return { everyMinutes, maxPerWeek }
+}
+
+/**
+ * The owner asked for this recording's missing summary, title and meeting
+ * choice now: no wait and no weekly cap, the same brains in the same order.
+ * Returns whether a summary was written.
+ */
+export async function retrySummary(recordingId: string): Promise<boolean> {
+  return (await reanalyzeFailedTranscripts(1, { recordingId })) === 1
+}
+
 /**
  * Self-healing backfill: find transcripts whose analysis never completed — the
  * 'Analysis failed' sentinel, or a NULL summary/title from an older build — and
@@ -2297,7 +2355,10 @@ function logAnalysisFailure(label: string, response: unknown, text: string): voi
  * actionables) forever. Bounded to `limit` rows per run to keep API cost
  * predictable. Returns the number of transcripts actually healed.
  */
-export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
+export async function reanalyzeFailedTranscripts(
+  limit = 3,
+  query: Parameters<typeof getFailedTranscriptsForReanalysis>[1] = summaryRetryQuery()
+): Promise<number> {
   if (!resolveGeminiApiKey() && !(await summaryBrainAvailable())) {
     // Neither Gemini nor another brain → re-analysis can't produce anything
     // better; skip rather than churn the same rows every run.
@@ -2314,7 +2375,7 @@ export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
   // lands mid-analysis.
   let rows: Array<{ recording_id: string; full_text: string }>
   try {
-    rows = getFailedTranscriptsForReanalysis(limit)
+    rows = getFailedTranscriptsForReanalysis(limit, query)
   } catch (e) {
     console.error('[Reanalyze] eligibility query failed — aborting run (fail closed, zero provider calls):', e)
     return 0

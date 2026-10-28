@@ -10,6 +10,8 @@ import tailwind from '@tailwindcss/postcss'
 import { expect, it } from 'vitest'
 import { scoreMeetingCandidates } from '../recording-match-scoring'
 
+// A real Chromium under a full local suite took over 25 s to start (28-oct-2026);
+// alone it takes a few. The limits leave room for a loaded machine.
 async function runElectron(folder: string, payload: string, mode?: string): Promise<string> {
   const electron = readFileSync(resolve('node_modules/electron/path.txt'), 'utf8').trim()
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE
@@ -18,7 +20,7 @@ async function runElectron(folder: string, payload: string, mode?: string): Prom
       resolve('scripts/test-pc-capture.cjs'), folder, payload, ...(mode ? [mode] : [])
     ], { env, windowsHide: true, stdio: ['ignore', 'pipe', 'inherit'] })
     let output = ''
-    const timeout = setTimeout(() => { child.kill(); reject(new Error('Chromium test timed out')) }, 25000)
+    const timeout = setTimeout(() => { child.kill(); reject(new Error('Chromium test timed out')) }, 60000)
     child.stdout.on('data', data => { output += data.toString() })
     child.on('error', error => { clearTimeout(timeout); reject(error) })
     child.on('close', code => { clearTimeout(timeout); if (code === 0) resolveOutput(output); else reject(new Error(`Electron exited ${code}: ${output}`)) })
@@ -83,7 +85,7 @@ it('real capture graph and Opus encoder keep mic 400 Hz left and system 1000 Hz 
     expect(20 * Math.log10(result.tones[0][1] / result.tones[0][0])).toBeLessThan(-30)
     expect(20 * Math.log10(result.tones[1][0] / result.tones[1][1])).toBeLessThan(-30)
   } finally { rmSync(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
-}, 30000)
+}, 70000)
 
 it('renders the real recording bar with visible light/dark meters and exercises saved, Open, timeout and dismiss in Chromium', async () => {
   const folder = mkdtempSync(join(tmpdir(), 'pc-recorder-ui-'))
@@ -179,7 +181,7 @@ it('renders the real recording bar with visible light/dark meters and exercises 
       for (const index of [0, 1]) copyFileSync(join(folder, `stage-${index}.png`), join(process.env.PC_RECORDER_UI_ARTIFACTS, `stage-${index}.png`))
     }
   } finally { rmSync(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
-}, 30000)
+}, 70000)
 
 
 it('recording detail decodes headerless stereo, shows lanes and failure, and mutes the real playback graph in Chromium', async () => {
@@ -339,7 +341,7 @@ it('recording detail decodes headerless stereo, shows lanes and failure, and mut
       copyFileSync(join(folder,'stage-1.png'),join(process.env.PC_RECORDER_UI_ARTIFACTS,'detail-dark-compact.png'))
     }
   } finally { rmSync(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
-}, 30000)
+}, 70000)
 
 for (const failureAfter of [700, 1700]) {
   it(`real Chromium encoder error at ${failureAfter} ms imports the terminal chunk after stop`, async () => {
@@ -378,7 +380,7 @@ for (const failureAfter of [700, 1700]) {
       expect(events.indexOf('finish')).toBeGreaterThan(events.indexOf('stop'))
       expect(result.events.filter((event: unknown[]) => event[0] === 'append').every((event: unknown[]) => event[3] === false)).toBe(true)
     } finally { rmSync(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
-  }, 30000)
+  }, 70000)
 }
 for (const operation of ['reload', 'restart', 'close']) {
   it(`real Electron ${operation} flushes and resumes the requested operation`, async () => {
@@ -396,5 +398,5 @@ for (const operation of ['reload', 'restart', 'close']) {
     expect(result.files).toEqual([])
     expect(result.destroyed).toBe(operation === 'close')
     if (operation !== 'close') expect(result.events.filter((event: string) => event === 'NAVIGATION')).toHaveLength(2)
-  }, 30000)
+  }, 70000)
 }

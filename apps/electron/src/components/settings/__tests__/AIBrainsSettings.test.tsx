@@ -151,3 +151,15 @@ describe('AIBrainsSettings summary brain (28-oct-2026)', () => {
     await waitFor(() => expect(screen.getByLabelText('Summary brain')).toHaveTextContent('Claude Code SDK'))
   })
 })
+
+describe('AIBrainsSettings: a brain that is not available (28-oct-2026)', () => {
+  it('says until when and why, and that work goes to the next brain', async () => {
+    mockList.mockResolvedValue(BRAINS.map((b) => b.id === 'gemini-api'
+      ? { ...b, unavailable: { until: '2026-10-28T17:27:00.000Z', reason: '[402 Payment Required] Your prepayment credits are depleted.' } }
+      : b))
+    render(<AIBrainsSettings />)
+    const note = await screen.findByText(/Not available until/)
+    expect(note).toHaveTextContent('credits are depleted')
+    expect(note).toHaveTextContent('Work goes to the next brain meanwhile.')
+  })
+})
