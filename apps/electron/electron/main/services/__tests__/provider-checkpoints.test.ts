@@ -83,7 +83,9 @@ describe('durable provider boundary', () => {
     try {
       db.exec("CREATE TABLE recordings (id TEXT PRIMARY KEY); INSERT INTO recordings VALUES ('r')")
       const store = providerCheckpoints('r', adapter(db))
-      const overloaded = new Error('[GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent: [503 Service Unavailable] This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.')
+      // The Gemini SDK's fetch error carries the numeric status too (27-oct-2026:
+      // with status 503 the overload text was never read, so it stayed pending).
+      const overloaded = Object.assign(new Error('[GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent: [503 Service Unavailable] This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.'), { status: 503 })
       const request = vi.fn().mockRejectedValueOnce(overloaded).mockResolvedValueOnce({ summary: 'ok' })
       await expect(store.execute('analysis', request)).rejects.toThrow('high demand')
       expect(await store.execute('analysis', request)).toEqual({ summary: 'ok' })
@@ -104,6 +106,8 @@ describe('durable provider boundary', () => {
         Object.assign(new Error('408 Request Timeout'), { status: 408 }),
         Object.assign(new Error('499 Client Closed Request'), { status: 499 }),
         new Error('400 entries could not be parsed from the response'),
+        // Output already came back, so the call was billed (review of #188).
+        new Error('Gemini stream interrupted after output began: [503 Service Unavailable] This model is currently experiencing high demand.'),
       ]) {
         const key = failure.message
         const request = vi.fn().mockRejectedValue(failure)

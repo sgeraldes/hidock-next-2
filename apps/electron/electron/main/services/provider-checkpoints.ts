@@ -78,15 +78,21 @@ const REJECTED_BEFORE_RUNNING = new Set([400, 401, 403, 404, 429])
 /** The provider refused the request and processed nothing, so it may be sent again. */
 export function providerRejected(error: unknown): boolean {
   const status = (error as { status?: unknown } | null)?.status
+  const message = error instanceof Error ? error.message : String(error)
+  // Output already came back before the error, so the call ran and was billed,
+  // whatever text follows (review of #188).
+  if (/interrupted after output began/i.test(message)) return false
+  // Google turns a request away when the model is overloaded. The SDK's error
+  // carries status 503 as well, so this is read before the numeric check (it
+  // was not, and those requests stayed pending, 27-oct-2026). A bare 503 still
+  // counts as unknown.
+  if (/\[503 Service Unavailable\]\s+This model is (?:currently )?(?:experiencing high demand|overloaded)/i.test(message) &&
+      (status === undefined || status === 503)) return true
   if (typeof status === 'number') return REJECTED_BEFORE_RUNNING.has(status)
   // Without a status, only an unmistakable rate limit counts; any other text
   // that starts with a number proves nothing (review of #186, 27-oct-2026).
-  const message = error instanceof Error ? error.message : String(error)
   return /^\s*(?:\[[^\]]*\]:?\s*)?429\s+(?:Too Many Requests|Rate limit exceeded)/i.test(message) ||
-    /\bRESOURCE_EXHAUSTED\b/.test(message) ||
-    // Google turns a request away when the model is overloaded; a bare 503
-    // still counts as unknown (27-oct-2026).
-    /\[503 Service Unavailable\]\s+This model is (?:currently )?(?:experiencing high demand|overloaded)/i.test(message)
+    /\bRESOURCE_EXHAUSTED\b/.test(message)
 }
 
 /** Only call from an explicit fresh-transcription action, never an automatic retry. */
