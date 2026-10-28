@@ -65,7 +65,7 @@ vi.mock('../file-storage', () => ({
 }))
 
 import { initializeDatabase, run as dbRun, queryOne as dbQueryOne } from '../database'
-import { reanalyzeFailedTranscripts } from '../transcription'
+import { reanalyzeFailedTranscripts, textLanguage } from '../transcription'
 
 const BY_BRAIN = JSON.stringify({
   summary: 'Resumen escrito por Claude.',
@@ -84,10 +84,13 @@ function brainAnswers(answer: string, brainId = 'claude-code') {
     accept(answer) ? { brainId, answer } : null)
 }
 
-function seed(recordingId: string): void {
+const SPANISH_MEETING = 'Bueno, buenas tardes, ¿cómo están? Hoy vamos a revisar los artefactos de la práctica y el estado de las certificaciones. ' +
+  'Entonces lo que hay que hacer es centralizar el seguimiento en Jira, porque así también vemos qué está maduro y qué no.'
+
+function seed(recordingId: string, fullText = SPANISH_MEETING): void {
   dbRun('INSERT INTO recordings (id, filename, date_recorded) VALUES (?, ?, ?)', [recordingId, `${recordingId}.hda`, '2026-10-27'])
   dbRun(`INSERT INTO transcripts (id, recording_id, full_text, summary, title_suggestion) VALUES (?, ?, ?, NULL, NULL)`,
-    [`t-${recordingId}`, recordingId, 'una transcripción real que vale la pena resumir'])
+    [`t-${recordingId}`, recordingId, fullText])
 }
 const summaryOf = (id: string) => dbQueryOne<{ summary: string | null }>('SELECT summary FROM transcripts WHERE recording_id = ?', [id])?.summary ?? null
 const summaryRunOf = (id: string) => dbQueryOne<{ provider: string; tool: string; status: string }>(
@@ -170,5 +173,29 @@ describe('summary falls back to another brain when Gemini fails', () => {
     expect(await reanalyzeFailedTranscripts(5)).toBe(0)
 
     expect(mockChatUntil).not.toHaveBeenCalled()
+  })
+
+  it('turns away a summary written in another language than the meeting (Rec16, 28-oct-2026)', async () => {
+    seed('wrong-language')
+    mockGenerateContent.mockRejectedValue(DEPLETED)
+    brainAnswers(JSON.stringify({
+      summary: 'The meeting shifted from discussing proposed reusable artifacts to tracking the existing ones, and the team agreed to centralize this in Jira.',
+      title_suggestion: 'Artifact Tracking and Certification Commitments',
+      language: 'en'
+    }), 'codex')
+
+    await reanalyzeFailedTranscripts(5)
+
+    expect(summaryOf('wrong-language')).toBeNull()
+    // The brain is told the language up front.
+    expect(mockChatUntil.mock.calls[0][2].systemPrompt).toMatch(/in Spanish/)
+  })
+})
+
+describe('textLanguage', () => {
+  it('reads Spanish and English from their commonest words, and abstains on too little text', () => {
+    expect(textLanguage(SPANISH_MEETING)).toBe('es')
+    expect(textLanguage('The meeting shifted from discussing the artifacts to tracking the ones that we have, and the team agreed on it.')).toBe('en')
+    expect(textLanguage('Jira, AWS, OK')).toBeNull()
   })
 })

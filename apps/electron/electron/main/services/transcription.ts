@@ -1816,7 +1816,7 @@ async function analyzeTranscript(
   const brainsFirst = !!route && route !== 'gemini-api'
   const analysisPrompt = buildAnalysisPrompt(fullText, candidateMeetings)
   if (brainsFirst) {
-    const byBrain = await analyzeWithBrains(analysisPrompt, shouldGenerate)
+    const byBrain = await analyzeWithBrains(analysisPrompt, fullText, shouldGenerate)
     if (byBrain) return byBrain
   }
   if (resolveGeminiApiKey()) {
@@ -1829,7 +1829,7 @@ async function analyzeTranscript(
     } catch (error) {
       if (error instanceof TranscriptionCancelledError || classifyTranscriptionError(error).class === 'cancelled' ||
           (shouldGenerate && !shouldGenerate()) || brainsFirst) throw error
-      const byBrain = await analyzeWithBrains(analysisPrompt, shouldGenerate)
+      const byBrain = await analyzeWithBrains(analysisPrompt, fullText, shouldGenerate)
       if (byBrain) {
         console.warn(`[Analysis] Gemini failed, summary written by ${byBrain.produced_by?.provider}:`,
           error instanceof Error ? error.message : error)
@@ -1839,7 +1839,7 @@ async function analyzeTranscript(
     }
   }
   if (!brainsFirst) {
-    const byBrain = await analyzeWithBrains(analysisPrompt, shouldGenerate)
+    const byBrain = await analyzeWithBrains(analysisPrompt, fullText, shouldGenerate)
     if (byBrain) return byBrain
   }
   return {
@@ -1865,18 +1865,32 @@ const LOCAL_SUMMARY_BRAINS: BrainId[] = ['ollama', 'openai-compatible', 'model-h
  * moves on to the next brain. These brains are subscriptions or local models,
  * so a repeat costs no per-request charge and no checkpoint is kept.
  */
-async function analyzeWithBrains(analysisPrompt: string, shouldGenerate?: () => boolean): Promise<TranscriptAnalysis | null> {
+async function analyzeWithBrains(
+  analysisPrompt: string,
+  fullText: string,
+  shouldGenerate?: () => boolean
+): Promise<TranscriptAnalysis | null> {
   if (shouldGenerate && !shouldGenerate()) return null
   const route = getConfig().brains?.taskRouting?.summary
   const exclude: BrainId[] = ['gemini-api', ...LOCAL_SUMMARY_BRAINS.filter((id) => id !== route)]
+  // The prompt's "same language" line was not enough: Codex summarized a
+  // Spanish meeting in English (Rec16, 28-oct-2026). Name the language and
+  // turn away an answer written in the other one.
+  const language = textLanguage(fullText)
+  const languageName = language === 'es' ? 'Spanish' : language === 'en' ? 'English' : null
   const parsed: { value: TranscriptAnalysis | null } = { value: null }
   let served: { brainId: string } | null
   try {
     served = await getBrainRouter().chatUntil('summary', [{ role: 'user', content: analysisPrompt }],
-      { json: true, disableThinking: true, effort: 'low', shouldGenerate },
+      {
+        json: true, disableThinking: true, effort: 'low', shouldGenerate,
+        ...(languageName ? { systemPrompt: `The transcript is in ${languageName}. Write every text field of the JSON (summary, action items, topics, key points, title, questions) in ${languageName}. Never translate it.` } : {})
+      },
       { exclude, accept: (answer) => {
         parsed.value = extractAnalysisJson(answer)
-        return !!parsed.value?.summary
+        if (!parsed.value?.summary) return false
+        const written = textLanguage(`${parsed.value.title_suggestion ?? ''} ${parsed.value.summary}`)
+        return !language || !written || written === language
       } })
   } catch (error) {
     console.warn('[Analysis] brain fallback failed:', error instanceof Error ? error.message : error)
@@ -1884,6 +1898,28 @@ async function analyzeWithBrains(analysisPrompt: string, shouldGenerate?: () => 
   }
   if (!served || !parsed.value) return null
   return { ...parsed.value, produced_by: { provider: served.brainId, model: null } }
+}
+
+const SPANISH_MARKERS = new Set(['que', 'de', 'la', 'el', 'en', 'los', 'las', 'del', 'por', 'para', 'con', 'una', 'es', 'se', 'lo', 'pero', 'como', 'más', 'está', 'esto', 'eso', 'también', 'porque', 'muy', 'sí', 'bueno', 'entonces', 'hay', 'tiene', 'vamos'])
+const ENGLISH_MARKERS = new Set(['the', 'and', 'of', 'to', 'is', 'that', 'it', 'in', 'for', 'with', 'this', 'are', 'was', 'have', 'be', 'on', 'we', 'you', 'they', 'what', 'but', 'not', 'so', 'just', 'about', 'there', 'would', 'which', 'their', 'been'])
+
+/**
+ * Spanish or English, from how often each language's commonest words appear;
+ * null when the text is too short or neither clearly wins. Stored transcript
+ * languages are not reliable: the remote engine labels Spanish 'en' (Rec16).
+ */
+export function textLanguage(text: string): 'es' | 'en' | null {
+  const words = text.toLowerCase().match(/[a-záéíóúñü]+/g)?.slice(0, 5000) ?? []
+  let es = 0
+  let en = 0
+  for (const word of words) {
+    if (SPANISH_MARKERS.has(word)) es++
+    if (ENGLISH_MARKERS.has(word)) en++
+  }
+  if (es + en < 5) return null
+  if (es >= en * 2) return 'es'
+  if (en >= es * 2) return 'en'
+  return null
 }
 
 /** Whether any brain other than Gemini could write a summary now. */
