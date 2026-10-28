@@ -5639,15 +5639,26 @@ export function getExcludedRecordingIds(): RecordingExclusion {
  * which aborts the run (zero provider calls) rather than defaulting open.
  */
 export function getFailedTranscriptsForReanalysis(
-  limit: number
+  limit: number,
+  { everyMinutes = 120, maxPerWeek = 4, recordingId, neverTried = false }: {
+    /** Wait after a failed summary before it is tried again (Settings > Transcription). */
+    everyMinutes?: number
+    /** Billed failures a week before automatic tries stop. */
+    maxPerWeek?: number
+    /** The owner asked for this recording: no wait and no weekly cap. */
+    recordingId?: string
+    /** Only summaries no provider has failed on yet (the pass after the queue empties). */
+    neverTried?: boolean
+  } = {}
 ): Array<{ recording_id: string; full_text: string }> {
   // A summary that keeps failing is not paid for forever (review of #187,
-  // 27-oct-2026): two hours between tries, at most four failures a week, and
-  // the never-tried and longest-waiting first so a few stuck rows cannot hold
-  // the whole allowance.
+  // 27-oct-2026): a wait between tries, a weekly cap, and the never-tried and
+  // longest-waiting first so a few stuck rows cannot hold the whole allowance.
+  // Both numbers come from Settings since 28-oct-2026.
   const now = Date.now()
-  const backoffSince = new Date(now - 2 * 3_600_000).toISOString()
+  const backoffSince = recordingId ? new Date(now + 60_000).toISOString() : new Date(now - everyMinutes * 60_000).toISOString()
   const capSince = new Date(now - 7 * 24 * 3_600_000).toISOString()
+  const cap = recordingId ? Number.MAX_SAFE_INTEGER : maxPerWeek
   return queryAll<{ recording_id: string; full_text: string }>(
     `SELECT t.recording_id AS recording_id, t.full_text AS full_text
        FROM transcripts t JOIN recordings r ON r.id = t.recording_id
@@ -5665,14 +5676,20 @@ export function getFailedTranscriptsForReanalysis(
                           AND COALESCE(error_message, '') NOT LIKE 'Provider checkpoint pending:%'
                          THEN 1 ELSE 0 END) AS failures_this_week
            FROM processing_runs
-          WHERE stage = 'summary' AND status = 'failed'
+          WHERE stage = 'summary' AND status IN ('failed', 'degraded')
           GROUP BY recording_id
        ) f ON f.recording_id = t.recording_id
       WHERE (t.summary IS NULL OR t.summary = 'Analysis failed' OR t.title_suggestion IS NULL)
         AND t.full_text IS NOT NULL AND TRIM(t.full_text) != ''
         AND r.deleted_at IS NULL AND COALESCE(r.personal, 0) = 0
+        -- An invalid, incomplete or doubtful transcript is never summarized. It
+        -- used to reach the brain and be dropped after, and its 'cancelled' run
+        -- never counted, so it came back every pass (28-oct-2026).
+        AND NOT (COALESCE(t.validity_status, '') IN ('invalid', 'incomplete', 'doubtful') AND t.integrity_accepted_at IS NULL)
         AND (f.last_failed_at IS NULL OR f.last_failed_at < ?)
-        AND COALESCE(f.failures_this_week, 0) < 4
+        AND COALESCE(f.failures_this_week, 0) < ?
+        AND (? IS NULL OR t.recording_id = ?)
+        AND (? = 0 OR f.last_failed_at IS NULL)
         AND NOT EXISTS (
           SELECT 1 FROM knowledge_captures kc
            WHERE kc.source_recording_id = t.recording_id
@@ -5680,7 +5697,7 @@ export function getFailedTranscriptsForReanalysis(
              AND ${VALUE_EXCLUSION_PREDICATE})
       ORDER BY f.last_failed_at IS NOT NULL, f.last_failed_at ASC, t.created_at DESC
       LIMIT ?`,
-    [capSince, backoffSince, ...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS, limit]
+    [capSince, backoffSince, cap, recordingId ?? null, recordingId ?? null, neverTried ? 1 : 0, ...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS, limit]
   )
 }
 

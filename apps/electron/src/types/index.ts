@@ -276,6 +276,8 @@ export interface AppConfig {
     engineFallbackEnabled?: boolean
     /** Gemini may re-send a shorter piece when an answer comes back incomplete. Absent means true. */
     splitIncompleteAudio?: boolean
+    /** Automatic retry of summaries every provider failed on. Absent fields use src/shared/summary-retry.ts. */
+    summaryRetry?: Partial<import('../shared/summary-retry').SummaryRetrySettings>
     geminiApiKey: string
     geminiModel: string
     localAsrPath: string

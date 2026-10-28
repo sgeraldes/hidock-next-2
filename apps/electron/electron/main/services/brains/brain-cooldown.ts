@@ -20,7 +20,7 @@ export const MAX_COOLDOWN_MS = 10 * 24 * 60 * 60 * 1000
 /** Never rest for less than this, so a reset in the past or the next second does not loop. */
 export const MIN_COOLDOWN_MS = 60 * 1000
 
-const coolingUntil = new Map<BrainId, number>()
+const coolingUntil = new Map<BrainId, { until: number; reason: string }>()
 
 // An organization that turned subscription access off, and depleted prepaid
 // credit, also rest the brain: every call fails the same way until the owner
@@ -62,23 +62,35 @@ export function noteBrainFailure(id: BrainId, message: string, now = Date.now())
   const stated = parseUsageLimitReset(message)
   const wait = stated === null ? DEFAULT_COOLDOWN_MS : stated - now
   const until = now + Math.min(MAX_COOLDOWN_MS, Math.max(MIN_COOLDOWN_MS, wait))
-  const alreadyResting = (coolingUntil.get(id) ?? 0) > now
-  coolingUntil.set(id, until)
+  const alreadyResting = (coolingUntil.get(id)?.until ?? 0) > now
+  coolingUntil.set(id, { until, reason: firstLine(message) })
   if (!alreadyResting) {
     console.warn(`[Brains] ${id} is out of quota; skipping it until ${new Date(until).toISOString()}`)
   }
   return true
 }
 
+/** The line of the failure that says why, short enough for Settings. */
+function firstLine(message: string): string {
+  const lines = message.split(/\r?\n/)
+  const line = lines.find((l) => USAGE_LIMIT.test(l)) ?? lines[0] ?? ''
+  return line.trim().slice(0, 300)
+}
+
+/** Until when and why the brain rests, or null when it is available. */
+export function brainCooldown(id: BrainId, now = Date.now()): { until: number; reason: string } | null {
+  const entry = coolingUntil.get(id)
+  if (!entry) return null
+  if (entry.until <= now) {
+    coolingUntil.delete(id)
+    return null
+  }
+  return entry
+}
+
 /** True while the brain is resting after an out-of-quota failure. */
 export function isBrainCoolingDown(id: BrainId, now = Date.now()): boolean {
-  const until = coolingUntil.get(id)
-  if (until === undefined) return false
-  if (until <= now) {
-    coolingUntil.delete(id)
-    return false
-  }
-  return true
+  return brainCooldown(id, now) !== null
 }
 
 export function _resetBrainCooldownsForTests(): void {

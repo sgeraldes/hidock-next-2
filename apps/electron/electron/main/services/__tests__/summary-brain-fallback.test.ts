@@ -65,7 +65,8 @@ vi.mock('../file-storage', () => ({
 }))
 
 import { initializeDatabase, run as dbRun, queryOne as dbQueryOne } from '../database'
-import { reanalyzeFailedTranscripts, textLanguage } from '../transcription'
+import { reanalyzeFailedTranscripts, retrySummary, textLanguage } from '../transcription'
+import { _resetBrainCooldownsForTests, brainCooldown } from '../brains/brain-cooldown'
 
 const BY_BRAIN = JSON.stringify({
   summary: 'Resumen escrito por Claude.',
@@ -98,6 +99,7 @@ const summaryRunOf = (id: string) => dbQueryOne<{ provider: string; tool: string
 
 beforeEach(async () => {
   vi.clearAllMocks()
+  _resetBrainCooldownsForTests()
   geminiKey.value = 'test-api-key' // pragma: allowlist secret
   mockConfig.brains = { taskRouting: {} }
   mockCanServe.mockImplementation(async (id: string) => id === 'claude-code')
@@ -218,5 +220,73 @@ describe('textLanguage', () => {
     expect(textLanguage(SPANISH_MEETING)).toBe('es')
     expect(textLanguage('The meeting shifted from discussing the artifacts to tracking the ones that we have, and the team agreed on it.')).toBe('en')
     expect(textLanguage('Jira, AWS, OK')).toBeNull()
+  })
+})
+
+function failedRun(recordingId: string, hoursAgo: number, n: number, status = 'failed', message = '500 Internal error') {
+  dbRun(
+    `INSERT INTO processing_runs (id, recording_id, stage, provider, status, started_at, error_message)
+     VALUES (?, ?, 'summary', 'gemini', ?, ?, ?)`,
+    [`run-${recordingId}-${n}`, recordingId, status, new Date(Date.now() - hoursAgo * 3_600_000).toISOString(), message]
+  )
+}
+
+describe('summaries in the queue flow, the button and the automatic retry (28-oct-2026)', () => {
+  it('marks Gemini not available after it runs out of credit, so the next summary goes straight to the next brain', async () => {
+    seed('first')
+    seed('second')
+    mockGenerateContent.mockRejectedValue(DEPLETED)
+    brainAnswers(BY_BRAIN, 'codex')
+
+    expect(await reanalyzeFailedTranscripts(5)).toBe(2)
+
+    expect(mockGenerateContent).toHaveBeenCalledTimes(1)
+    expect(brainCooldown('gemini-api')?.reason).toMatch(/credits are depleted/)
+  })
+
+  it('the button writes a summary the automatic retry is waiting on or has given up on', async () => {
+    seed('given-up')
+    for (let n = 1; n <= 4; n++) failedRun('given-up', n, n)
+    mockGenerateContent.mockRejectedValue(DEPLETED)
+    brainAnswers(BY_BRAIN, 'codex')
+
+    expect(await reanalyzeFailedTranscripts(5)).toBe(0)
+    expect(await retrySummary('given-up')).toBe(true)
+
+    expect(summaryOf('given-up')).toBe('Resumen escrito por Claude.')
+  })
+
+  it('after the queue empties, takes only summaries no provider has failed on yet', async () => {
+    seed('tried-before')
+    failedRun('tried-before', 30, 1)
+    seed('never-tried')
+    brainAnswers(BY_BRAIN, 'codex')
+    mockGenerateContent.mockRejectedValue(DEPLETED)
+
+    expect(await reanalyzeFailedTranscripts(5, { neverTried: true })).toBe(1)
+
+    expect(summaryOf('never-tried')).toBe('Resumen escrito por Claude.')
+    expect(summaryOf('tried-before')).toBeNull()
+  })
+
+  it('uses the wait Settings gives, and counts an unusable answer as a try', async () => {
+    seed('degraded-recently')
+    failedRun('degraded-recently', 1, 1, 'degraded', '')
+    brainAnswers(BY_BRAIN, 'codex')
+    mockGenerateContent.mockRejectedValue(DEPLETED)
+
+    expect(await reanalyzeFailedTranscripts(5, { everyMinutes: 120, maxPerWeek: 4 })).toBe(0)
+    expect(await reanalyzeFailedTranscripts(5, { everyMinutes: 30, maxPerWeek: 4 })).toBe(1)
+  })
+
+  it('never sends an invalid transcript to any brain', async () => {
+    seed('invalid')
+    dbRun("UPDATE transcripts SET validity_status = 'invalid' WHERE recording_id = 'invalid'")
+    brainAnswers(BY_BRAIN, 'codex')
+
+    expect(await reanalyzeFailedTranscripts(5)).toBe(0)
+
+    expect(mockGenerateContent).not.toHaveBeenCalled()
+    expect(mockChatUntil).not.toHaveBeenCalled()
   })
 })

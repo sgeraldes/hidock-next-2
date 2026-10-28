@@ -79,6 +79,12 @@ function BrainRow({
             </Badge>
           ))}
         </div>
+        {brain.unavailable && (
+          <p className="text-xs text-amber-700 dark:text-amber-300" role="status">
+            Not available until {new Date(brain.unavailable.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            {' '}({brain.unavailable.reason}). Work goes to the next brain meanwhile.
+          </p>
+        )}
       </div>
 
       <div className="flex items-center gap-6 shrink-0">

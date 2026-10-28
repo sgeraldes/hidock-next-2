@@ -19,6 +19,7 @@ import type { FeaturesConfig } from '../../../src/shared/feature-registry'
 import { DEFAULT_FEATURES_CONFIG } from '../../../src/shared/feature-registry'
 import { emptyPipelineConfig, type PipelineConfig } from '../../../src/shared/pipeline-config'
 import { DEFAULT_VOICE_BACKFILL, type VoiceBackfillConfig } from '../../../src/shared/voice-backfill-schedule'
+import type { SummaryRetrySettings } from '../../../src/shared/summary-retry'
 import { applyRagSettings } from './rag-settings'
 import { applyQualityRules } from './quality-rules'
 import { DEFAULT_QUALITY_RULES, type QualityConfig } from './quality-rules'
@@ -166,6 +167,8 @@ export interface AppConfig {
     engineFallbackEnabled?: boolean
     /** Gemini may re-send a shorter piece when an answer comes back incomplete. Absent means true. */
     splitIncompleteAudio?: boolean
+    /** Automatic retry of summaries every provider failed on. Absent fields use src/shared/summary-retry.ts. */
+    summaryRetry?: Partial<SummaryRetrySettings>
     geminiApiKey: string
     geminiModel: string
     localAsrPath: string

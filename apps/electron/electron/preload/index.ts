@@ -53,6 +53,8 @@ export interface BrainListItem {
   enabled: boolean
   isDefault: boolean
   auth: BrainAuthStatus
+  /** Resting after out-of-credit or out-of-quota until this time; absent when available. */
+  unavailable?: { until: string; reason: string }
 }
 
 /**
@@ -755,6 +757,8 @@ export interface ElectronAPI {
     }>>
     reindex: (request: { recordingId: string }) => Promise<Result<{ indexedChunks: number }>>
     updateExtractedItem: (request: { recordingId: string; kind: 'action' | 'decision'; index: number; content: string }) => Promise<Result<{ kind: 'action' | 'decision'; index: number; content: string }>>
+    /** Write the missing summary, title and meeting choice now (the owner's button). */
+    retrySummary: (request: { recordingId: string }) => Promise<Result<{ written: boolean }>>
     getProcessingRuns: (request: { recordingId: string }) => Promise<Result<Array<{
       id: string
       recording_id: string
@@ -1990,7 +1994,8 @@ const electronAPI: ElectronAPI = {
     updateContent: (request) => callIPC('transcripts:updateContent', request),
     reindex: (request) => callIPC('transcripts:reindex', request),
     updateExtractedItem: (request) => callIPC('transcripts:updateExtractedItem', request),
-    getProcessingRuns: (request) => callIPC('transcripts:getProcessingRuns', request)
+    getProcessingRuns: (request) => callIPC('transcripts:getProcessingRuns', request),
+    retrySummary: (request) => callIPC('transcripts:retrySummary', request)
   },
 
   transcriptUpgrade: {

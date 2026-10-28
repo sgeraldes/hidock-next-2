@@ -27,6 +27,7 @@ import { consolidateVoiceIdentityForSpeaker } from '../services/voice-identity-c
 import { getVectorStore } from '../services/vector-store'
 import { exportMeetingWiki } from '../services/meeting-wiki'
 import { syncTrustVerdicts } from '../services/transcript-trust'
+import { retrySummary } from '../services/transcription'
 import { success, error, Result } from '../types/api'
 import { UUIDSchema } from '../validation/common'
 
@@ -181,6 +182,20 @@ async function indexCorrectedTranscript(recordingId: string, fullText: string): 
 }
 
 export function registerTranscriptsHandlers(): void {
+  // The owner's "Generate summary": the missing summary, title and meeting
+  // choice now, through the same brains and order, without the automatic
+  // retry's wait or weekly cap (28-oct-2026).
+  ipcMain.handle('transcripts:retrySummary', async (_, request: unknown): Promise<Result<{ written: boolean }>> => {
+    const parsed = GetSpeakerMapRequestSchema.safeParse(request)
+    if (!parsed.success) return error('VALIDATION_ERROR', 'Invalid summary retry request', parsed.error.format())
+    try {
+      if (!isRecordingEligible(parsed.data.recordingId)) return error('NOT_FOUND', 'Recording is not available for a summary')
+      return success({ written: await retrySummary(parsed.data.recordingId) })
+    } catch (err) {
+      return error('INTERNAL_ERROR', err instanceof Error ? err.message : 'Summary retry failed', err)
+    }
+  })
+
   ipcMain.handle('transcripts:getProcessingRuns', async (_, request: unknown) => {
     const parsed = GetSpeakerMapRequestSchema.safeParse(request)
     if (!parsed.success) return error('VALIDATION_ERROR', 'Invalid processing-runs request', parsed.error.format())
