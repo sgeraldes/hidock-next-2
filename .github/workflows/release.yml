@@ -47,6 +47,12 @@ jobs:
       - name: Install app
         working-directory: apps/electron
         run: npm ci
+      - name: Install the Electron binary
+        # Electron downloads its binary on the first require when the
+        # postinstall did not. Two test workers did that at once and one
+        # failed on a half-written dist folder (28-oct-2026, os error 183).
+        working-directory: apps/electron
+        run: node node_modules/electron/install.js && node -e "console.log(require('electron'))"
       - name: Validate
         working-directory: apps/electron
         run: npm run typecheck && npm run lint && npm run test:run
