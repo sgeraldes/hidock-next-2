@@ -268,6 +268,24 @@ describe('processQueue drain × mid-run disable (round-3 [HIGH])', () => {
     }
   })
 
+  it('tells the listeners once at launch even when nothing is queued (review of #192)', async () => {
+    vi.resetModules()
+    const fresh = await import('../transcription')
+    featuresConfig = { preset: 'full', flags: {} }
+    dbSpies.spies['getQueueItems'].mockReturnValue([])
+    dbSpies.spies['acquireTranscriptionLock'].mockReturnValue(true)
+    const drained = vi.fn()
+    const stop = fresh.onQueueDrained(drained)
+    try {
+      await fresh.processQueueManually()
+      expect(drained).toHaveBeenCalledTimes(1)
+      await fresh.processQueueManually()
+      expect(drained).toHaveBeenCalledTimes(1)
+    } finally {
+      stop()
+    }
+  })
+
   it('with the feature already disabled, a queue pass is a total no-op (no lock, no bookkeeping)', async () => {
     featuresConfig = { preset: 'full', flags: { transcription: false } }
     armQueue()

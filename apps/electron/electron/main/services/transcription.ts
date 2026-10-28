@@ -1101,6 +1101,10 @@ async function processQueue(): Promise<void> {
     }
 
     if (getQueueItems('pending').length === 0) {
+      // A launch with nothing queued still gets its one notice, so summaries
+      // left from an earlier session run now (review of #192).
+      drained = !queueDrainedSinceLaunch
+      queueDrainedSinceLaunch = true
       return
     }
 
@@ -1163,13 +1167,15 @@ async function processQueue(): Promise<void> {
     mainJob = null
     // spec-005: Always release mutex lock, even if an error occurred
     releaseTranscriptionLock(processId)
-  }
-  if (drained) {
-    for (const listener of queueDrainedListeners) {
-      try {
-        listener()
-      } catch (e) {
-        console.error('[Transcription] queue-drained listener failed:', e)
+    // In the finally, after the lock is released: the empty-queue return above
+    // leaves through here too.
+    if (drained) {
+      for (const listener of queueDrainedListeners) {
+        try {
+          listener()
+        } catch (e) {
+          console.error('[Transcription] queue-drained listener failed:', e)
+        }
       }
     }
   }
