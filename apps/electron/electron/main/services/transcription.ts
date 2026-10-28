@@ -1881,9 +1881,9 @@ async function analyzeWithBrains(
 ): Promise<TranscriptAnalysis | null> {
   if (shouldGenerate && !shouldGenerate()) return null
   const exclude = summaryFallbackExcludes()
-  // The prompt's "same language" line was not enough: Codex summarized a
-  // Spanish meeting in English (Rec16, 28-oct-2026). Name the language and
-  // turn away an answer written in the other one.
+  // The prompt asks for the transcript's language in one English line at its
+  // end. Name the language the text is in, and turn away an answer written in
+  // the other one so the next brain is tried (28-oct-2026).
   const language = textLanguage(fullText)
   const languageName = language === 'es' ? 'Spanish' : language === 'en' ? 'English' : null
   const parsed: { value: TranscriptAnalysis | null } = { value: null }
@@ -1913,8 +1913,8 @@ const ENGLISH_MARKERS = new Set(['the', 'and', 'of', 'to', 'is', 'that', 'it', '
 
 /**
  * Spanish or English, from how often each language's commonest words appear;
- * null when the text is too short or neither clearly wins. Stored transcript
- * languages are not reliable: the remote engine labels Spanish 'en' (Rec16).
+ * null when the text is too short or neither clearly wins. Read from the whole
+ * text: a meeting can open with Spanish greetings and go on in English (Rec16).
  */
 export function textLanguage(text: string): 'es' | 'en' | null {
   const words = text.toLowerCase().match(/[a-záéíóúñü]+/g)?.slice(0, 5000) ?? []

@@ -196,7 +196,7 @@ describe('summary falls back to another brain when Gemini fails', () => {
     expect(summaryOf('placeholder')).toBeNull()
   })
 
-  it('turns away a summary written in another language than the meeting (Rec16, 28-oct-2026)', async () => {
+  it('turns away a summary written in another language than the meeting (28-oct-2026)', async () => {
     seed('wrong-language')
     mockGenerateContent.mockRejectedValue(DEPLETED)
     brainAnswers(JSON.stringify({
