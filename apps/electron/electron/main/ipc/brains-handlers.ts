@@ -136,7 +136,7 @@ export function registerBrainsHandlers(): void {
     const current = getConfig().brains
     let generationBinding: { modelVersion: string } | undefined
     if (id === 'model-host-generate') {
-      if (!['chat', 'outputs', 'suggestions'].includes(task)) throw new Error('Managed generation only supports text roles')
+      if (!['chat', 'outputs', 'suggestions', 'summary'].includes(task)) throw new Error('Managed generation only supports text roles')
       const { readRemoteGenerationCapability } = await import('../services/brains/model-host-generate-brain')
       generationBinding = { modelVersion: (await readRemoteGenerationCapability()).modelVersion }
     }

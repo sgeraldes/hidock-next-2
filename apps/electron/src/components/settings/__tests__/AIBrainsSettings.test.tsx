@@ -136,3 +136,18 @@ describe('AIBrainsSettings', () => {
     expect(await screen.findByText('No AI brains available.')).toBeInTheDocument()
   })
 })
+
+describe('AIBrainsSettings summary brain (28-oct-2026)', () => {
+  it('offers the summary picker with Gemini first by default', async () => {
+    render(<AIBrainsSettings />)
+    const picker = await screen.findByLabelText('Summary brain')
+    expect(picker).toHaveTextContent('Gemini first, then other brains')
+  })
+
+  it('shows the brain summaries are routed to', async () => {
+    window.electronAPI.brains.getRouting = vi.fn().mockResolvedValue({ summary: 'claude-code' })
+    mockList.mockResolvedValue(BRAINS.map((b) => b.id === 'claude-code' ? { ...b, enabled: true, auth: { ...b.auth, configured: true } } : b))
+    render(<AIBrainsSettings />)
+    await waitFor(() => expect(screen.getByLabelText('Summary brain')).toHaveTextContent('Claude Code SDK'))
+  })
+})

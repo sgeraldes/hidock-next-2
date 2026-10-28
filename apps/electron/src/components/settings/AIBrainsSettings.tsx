@@ -112,13 +112,17 @@ export function AIBrainsSettings() {
   const [brains, setBrains] = useState<BrainListItem[]>([])
   const [loading, setLoading] = useState(true)
   const [embedRoute, setEmbedRoute] = useState<string>('auto')
+  const [summaryRoute, setSummaryRoute] = useState<string>('auto')
 
   const load = useCallback(async () => {
     try {
       const list = await window.electronAPI?.brains?.list()
       if (list) setBrains(list)
       const routing = await window.electronAPI?.brains?.getRouting?.()
-      if (routing) setEmbedRoute(routing.embed ?? 'auto')
+      if (routing) {
+        setEmbedRoute(routing.embed ?? 'auto')
+        setSummaryRoute(routing.summary ?? 'auto')
+      }
     } catch {
       /* leave empty — the empty state renders */
     } finally {
@@ -159,6 +163,28 @@ export function AIBrainsSettings() {
       }
     },
     [embedRoute, load]
+  )
+
+  // Brains that can write a summary: any chat brain. Gemini through its own
+  // API is the automatic choice, so it is not listed twice.
+  const summaryBrains = brains.filter((b) => b.capabilities.includes('chat') && b.id !== 'gemini-api')
+
+  const handleSummaryRoute = useCallback(
+    async (value: string) => {
+      const previous = summaryRoute
+      setSummaryRoute(value)
+      try {
+        if (value !== 'auto') await window.electronAPI.brains.setEnabled({ id: value as BrainId, enabled: true })
+        await window.electronAPI.brains.setTaskRouting({ task: 'summary', id: value === 'auto' ? null : (value as BrainId) })
+        toast.success(value === 'auto' ? 'Summaries: Gemini first, other brains when it fails.' : 'Summaries: this brain first, Gemini when it fails.')
+        void load()
+      } catch (e) {
+        setSummaryRoute(previous)
+        toast.error(`Couldn't switch the summary brain: ${e instanceof Error ? e.message : String(e)}`)
+        void load()
+      }
+    },
+    [summaryRoute, load]
   )
 
   const defaultId = brains.find((b) => b.isDefault)?.id ?? ''
@@ -245,6 +271,32 @@ export function AIBrainsSettings() {
           </div>
         )}
         {embedRoute === 'model-host-embed' && <SemanticMaintenancePanel selected />}
+        {!loading && summaryBrains.length > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+            <div className="min-w-0">
+              <p className="text-sm font-medium">Summaries</p>
+              <p className="text-xs text-muted-foreground">
+                Who writes a recording&apos;s summary, title and meeting choice. When the first choice fails (no credit,
+                quota, an answer that does not parse), the other enabled brains are tried in order. Local models
+                write summaries only when chosen here.
+              </p>
+            </div>
+            <Select value={summaryRoute} onValueChange={handleSummaryRoute}>
+              <SelectTrigger className="w-64" aria-label="Summary brain">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="auto">Gemini first, then other brains</SelectItem>
+                {summaryBrains.map((b) => (
+                  <SelectItem key={b.id} value={b.id} disabled={!b.auth.configured}>
+                    {b.label}
+                    {!b.auth.configured ? ' — not ready' : ''}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
           <div className="min-w-0">
             <p className="text-sm font-medium">Shared local processing CPU budget</p>

@@ -24,7 +24,7 @@ import {
   MEETING_SELECTION_RULES,
   type MeetingSelectionEvidence
 } from './meeting-selection-evidence'
-import { getBrainRegistry, resolveGeminiApiKey } from './brains'
+import { getBrainRegistry, getBrainRouter, resolveGeminiApiKey, type BrainId } from './brains'
 import { readFile, readFileSync, existsSync } from 'fs'
 import { promisify } from 'util'
 import { spawn } from 'child_process'
@@ -1398,6 +1398,8 @@ interface TranscriptAnalysis {
   value?: 'high' | 'normal' | 'low' | 'none'
   value_reasons?: string[]
   value_confidence?: number
+  /** Who wrote it: Gemini, or the brain that stood in when Gemini failed. */
+  produced_by?: { provider: string; model: string | null }
 }
 
 /**
@@ -1794,31 +1796,179 @@ async function transcribeWithVibeVoice(
   }
 }
 
-async function analyzeTranscriptWithGemini(
+/**
+ * The summary, title and meeting choice for a transcript. Gemini goes first
+ * unless Settings routes summaries to another brain. When Gemini fails (no
+ * credit, quota, overload, an unparseable answer) the other enabled brains
+ * are tried in the router's order: Claude Code, Codex, a local model
+ * (28-oct-2026, Sebastián: "debería haber más de una manera de tener esos
+ * resúmenes"). A cancellation never falls back. When nothing answers, the
+ * Gemini error is thrown as before, so the summary is retried later.
+ */
+async function analyzeTranscript(
   fullText: string,
   candidateMeetings: ReturnType<typeof findCandidateMeetingsForRecording>,
   shouldGenerate?: () => boolean,
   recordingId?: string
 ): Promise<TranscriptAnalysis> {
   const config = getConfig()
-  if (!resolveGeminiApiKey()) {
-    return {
-      summary: 'Local ASR transcript created. Configure Gemini to generate AI summary, action items, and meeting matching.',
-      action_items: [],
-      topics: [],
-      key_points: [],
-      language: languageFor('gemini', config.transcription.language)
+  const route = config.brains?.taskRouting?.summary
+  const brainsFirst = !!route && route !== 'gemini-api'
+  const analysisPrompt = buildAnalysisPrompt(fullText, candidateMeetings)
+  if (brainsFirst) {
+    const byBrain = await analyzeWithBrains(analysisPrompt, fullText, shouldGenerate)
+    if (byBrain) return byBrain
+  }
+  if (resolveGeminiApiKey()) {
+    try {
+      const analysis = await analyzeWithGeminiSdk(analysisPrompt, shouldGenerate, recordingId)
+      if (analysis.summary && analysis.summary !== 'Analysis failed') {
+        return { ...analysis, produced_by: { provider: 'gemini', model: config.chat?.geminiModel || CURRENT_GEMINI_CHAT_MODEL } }
+      }
+      return analysis
+    } catch (error) {
+      if (error instanceof TranscriptionCancelledError || classifyTranscriptionError(error).class === 'cancelled' ||
+          (shouldGenerate && !shouldGenerate()) || brainsFirst) throw error
+      const byBrain = await analyzeWithBrains(analysisPrompt, fullText, shouldGenerate)
+      if (byBrain) {
+        console.warn(`[Analysis] Gemini failed, summary written by ${byBrain.produced_by?.provider}:`,
+          error instanceof Error ? error.message : error)
+        return byBrain
+      }
+      throw error
     }
   }
+  if (!brainsFirst) {
+    const byBrain = await analyzeWithBrains(analysisPrompt, fullText, shouldGenerate)
+    if (byBrain) return byBrain
+  }
+  return {
+    summary: NO_SUMMARY_BRAIN,
+    action_items: [],
+    topics: [],
+    key_points: [],
+    language: languageFor('gemini', config.transcription.language)
+  }
+}
 
-  // Key resolves via the brain credential store (falls back to the plaintext
-  // config key). The two-attempt strategy + response-object diagnostics below
-  // don't fit the string-returning AIBrain.generate contract, so this analysis
-  // path keeps its direct SDK usage — full delegation is deferred to a later phase.
-  const genAI = new GoogleGenerativeAI(resolveGeminiApiKey())
-  const analysisModelId = config.chat?.geminiModel || CURRENT_GEMINI_CHAT_MODEL
-  const model = genAI.getGenerativeModel({ model: analysisModelId })
+/** What a transcript says when no brain could write its summary. Never a healed summary. */
+const NO_SUMMARY_BRAIN = 'Local ASR transcript created. Configure Gemini or another AI brain to generate AI summary, action items, and meeting matching.'
 
+/** The brains the summary fallback leaves out: Gemini, and local models Settings did not choose. */
+function summaryFallbackExcludes(): BrainId[] {
+  const route = getConfig().brains?.taskRouting?.summary
+  return ['gemini-api', ...LOCAL_SUMMARY_BRAINS.filter((id) => id !== route)]
+}
+
+/**
+ * Local models write a summary only when Settings routes summaries to them. A
+ * small default model cuts an hour-long transcript to its context window and
+ * summarizes the tail, and it loads the GPU that drives the screen
+ * (28-oct-2026: Ollama's llama3.2 sat in the chain ahead of Codex).
+ */
+const LOCAL_SUMMARY_BRAINS: BrainId[] = ['ollama', 'openai-compatible', 'model-host-generate']
+
+/**
+ * The same prompt through the brain router, Gemini left out (its own SDK path
+ * above keeps the paid-request checkpoints). An answer that does not parse
+ * moves on to the next brain. These brains are subscriptions or local models,
+ * so a repeat costs no per-request charge and no checkpoint is kept.
+ */
+async function analyzeWithBrains(
+  analysisPrompt: string,
+  fullText: string,
+  shouldGenerate?: () => boolean
+): Promise<TranscriptAnalysis | null> {
+  if (shouldGenerate && !shouldGenerate()) return null
+  const exclude = summaryFallbackExcludes()
+  // The prompt asks for the transcript's language in one English line at its
+  // end. Name the language the text is in, and turn away an answer written in
+  // the other one so the next brain is tried (28-oct-2026).
+  const language = textLanguage(fullText)
+  const languageName = language === 'es' ? 'Spanish' : language === 'en' ? 'English' : null
+  const parsed: { value: TranscriptAnalysis | null } = { value: null }
+  let served: { brainId: string } | null
+  try {
+    served = await getBrainRouter().chatUntil('summary', [{ role: 'user', content: analysisPrompt }],
+      {
+        json: true, disableThinking: true, effort: 'low', shouldGenerate,
+        ...(languageName ? { systemPrompt: `The transcript is in ${languageName}. Write every text field of the JSON (summary, action items, topics, key points, title, questions) in ${languageName}. Never translate it.` } : {})
+      },
+      { exclude, accept: (answer) => {
+        parsed.value = extractAnalysisJson(answer)
+        if (!parsed.value?.summary) return false
+        const written = textLanguage(`${parsed.value.title_suggestion ?? ''} ${parsed.value.summary}`)
+        return !language || !written || written === language
+      } })
+  } catch (error) {
+    console.warn('[Analysis] brain fallback failed:', error instanceof Error ? error.message : error)
+    return null
+  }
+  if (!served || !parsed.value) return null
+  return { ...parsed.value, produced_by: { provider: served.brainId, model: null } }
+}
+
+const SPANISH_MARKERS = new Set(['que', 'de', 'la', 'el', 'en', 'los', 'las', 'del', 'por', 'para', 'con', 'una', 'es', 'se', 'lo', 'pero', 'como', 'más', 'está', 'esto', 'eso', 'también', 'porque', 'muy', 'sí', 'bueno', 'entonces', 'hay', 'tiene', 'vamos'])
+const ENGLISH_MARKERS = new Set(['the', 'and', 'of', 'to', 'is', 'that', 'it', 'in', 'for', 'with', 'this', 'are', 'was', 'have', 'be', 'on', 'we', 'you', 'they', 'what', 'but', 'not', 'so', 'just', 'about', 'there', 'would', 'which', 'their', 'been'])
+
+/**
+ * Spanish or English, from how often each language's commonest words appear;
+ * null when the text is too short or neither clearly wins. Read from the whole
+ * text: a meeting can open with Spanish greetings and go on in English (Rec16).
+ */
+export function textLanguage(text: string): 'es' | 'en' | null {
+  const words = text.toLowerCase().match(/[a-záéíóúñü]+/g)?.slice(0, 5000) ?? []
+  let es = 0
+  let en = 0
+  for (const word of words) {
+    if (SPANISH_MARKERS.has(word)) es++
+    if (ENGLISH_MARKERS.has(word)) en++
+  }
+  if (es + en < 5) return null
+  if (es >= en * 2) return 'es'
+  if (en >= es * 2) return 'en'
+  return null
+}
+
+/**
+ * Whether the fallback has a brain it would actually ask: the same exclusions
+ * as analyzeWithBrains. An unrouted Ollama counted here and was then left out,
+ * so the heal ran every boot and saved the placeholder (review of #191).
+ */
+async function summaryBrainAvailable(): Promise<boolean> {
+  const router = getBrainRouter()
+  const exclude = new Set(summaryFallbackExcludes())
+  const route = getConfig().brains?.taskRouting?.summary
+  const candidates = [...new Set([route, getConfig().brains?.defaultBrain, 'claude-code', 'codex', 'gemini-cli'])]
+    .filter((id): id is BrainId => !!id && !exclude.has(id as BrainId))
+  for (const id of candidates) {
+    try {
+      if (await router.canServe(id, 'chat')) return true
+    } catch {
+      // An unusable brain is not a candidate.
+    }
+  }
+  return false
+}
+
+/** Run fields naming the brain that wrote the summary, when it was not Gemini. */
+function producerRunFields(analysis: TranscriptAnalysis): { provider?: string; tool?: string; model?: string } {
+  const by = analysis.produced_by
+  if (!by || by.provider === 'gemini') return {}
+  return { provider: by.provider, tool: 'brain-summary', model: by.model ?? '(brain default)' }
+}
+
+/** Where the summary ran: Gemini and the CLI brains are cloud, a chosen local model is local. */
+function summaryExecution(hasGemini: boolean, producer: { provider?: string }): 'cloud' | 'local' {
+  if (producer.provider) return LOCAL_SUMMARY_BRAINS.includes(producer.provider as BrainId) ? 'local' : 'cloud'
+  return hasGemini ? 'cloud' : 'local'
+}
+
+function buildAnalysisPrompt(
+  fullText: string,
+  candidateMeetings: ReturnType<typeof findCandidateMeetingsForRecording>
+): string {
+  const config = getConfig()
   let meetingSelectionSection = ''
   if (candidateMeetings.length > 1) {
     meetingSelectionSection = `
@@ -1937,6 +2087,22 @@ Respond in JSON format:
   "selection_reason": "...",
   "selection_evidence": null` : ''}${valueJsonTemplate}
 }`
+  return analysisPrompt
+}
+
+async function analyzeWithGeminiSdk(
+  analysisPrompt: string,
+  shouldGenerate?: () => boolean,
+  recordingId?: string
+): Promise<TranscriptAnalysis> {
+  const config = getConfig()
+  // Key resolves via the brain credential store (falls back to the plaintext
+  // config key). The two-attempt strategy + response-object diagnostics below
+  // don't fit the string-returning AIBrain.generate contract, so this analysis
+  // path keeps its direct SDK usage — full delegation is deferred to a later phase.
+  const genAI = new GoogleGenerativeAI(resolveGeminiApiKey())
+  const analysisModelId = config.chat?.geminiModel || CURRENT_GEMINI_CHAT_MODEL
+  const model = genAI.getGenerativeModel({ model: analysisModelId })
 
   // Two-attempt strategy (both disable thinking: the thinking model intermittently
   // burns its output budget on reasoning and returns junk — observed: analysis titled
@@ -2132,9 +2298,9 @@ function logAnalysisFailure(label: string, response: unknown, text: string): voi
  * predictable. Returns the number of transcripts actually healed.
  */
 export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
-  if (!resolveGeminiApiKey()) {
-    // No Gemini key → re-analysis can't produce anything better; skip rather
-    // than churn the same rows every run.
+  if (!resolveGeminiApiKey() && !(await summaryBrainAvailable())) {
+    // Neither Gemini nor another brain → re-analysis can't produce anything
+    // better; skip rather than churn the same rows every run.
     return 0
   }
 
@@ -2198,7 +2364,7 @@ export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
       const reanalysisUsage = createGeminiUsageCollector()
       try {
         analysis = await reanalysisUsage.run(() =>
-          analyzeTranscriptWithGemini(row.full_text, candidateMeetings, () => isRecordingEligible(row.recording_id), row.recording_id)
+          analyzeTranscript(row.full_text, candidateMeetings, () => isRecordingEligible(row.recording_id), row.recording_id)
         )
       } catch (error) {
         failProcessingRun(summaryRun.id, error instanceof Error ? error.message : String(error), false, runUsageFields(reanalysisUsage.total()))
@@ -2216,7 +2382,7 @@ export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
       }
 
       // Still failing — don't overwrite with the sentinel again.
-      if (!analysis.summary || analysis.summary === 'Analysis failed') {
+      if (!analysis.summary || analysis.summary === 'Analysis failed' || analysis.summary === NO_SUMMARY_BRAIN) {
         completeProcessingRun(summaryRun.id, {
           status: 'degraded',
           qualityStatus: 'failed',
@@ -2227,17 +2393,19 @@ export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
         continue
       }
 
+      const reanalysisProducer = producerRunFields(analysis)
       completeProcessingRun(summaryRun.id, {
         outputRefs: { summary: `trans_${row.recording_id}.summary` },
+        ...reanalysisProducer,
         ...runUsageFields(reanalysisUsage.total())
       })
       const titleRun = createProcessingRun({
         recordingId: row.recording_id,
         stage: 'title',
-        provider: reanalysisHasGemini ? 'gemini' : 'hidock-next',
-        tool: reanalysisHasGemini ? 'gemini-analysis' : 'local-fallback',
-        model: reanalysisHasGemini ? (reanalysisConfig.chat?.geminiModel || CURRENT_GEMINI_CHAT_MODEL) : null,
-        execution: reanalysisHasGemini ? 'cloud' : 'local',
+        provider: reanalysisProducer.provider ?? (reanalysisHasGemini ? 'gemini' : 'hidock-next'),
+        tool: reanalysisProducer.tool ?? (reanalysisHasGemini ? 'gemini-analysis' : 'local-fallback'),
+        model: reanalysisProducer.model ?? (reanalysisHasGemini ? (reanalysisConfig.chat?.geminiModel || CURRENT_GEMINI_CHAT_MODEL) : null),
+        execution: summaryExecution(reanalysisHasGemini, reanalysisProducer),
         parentRunIds: [summaryRun.id]
       })
       completeProcessingRun(titleRun.id, {
@@ -3242,7 +3410,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   // ADV42-1 (round-44, HIGH) — SECOND-STAGE eligibility recheck. The up-front
   // gate ran before audio transcription; that transcription is an await, so the
   // owner could have trashed / marked personal / value-excluded this recording
-  // WHILE it was in flight. analyzeTranscriptWithGemini is a FRESH provider call
+  // WHILE it was in flight. analyzeTranscript is a FRESH provider call
   // (Gemini analysis) — sending the transcript to it after exclusion is a NEW
   // disclosure to an external LLM that the later persist-time stillProcessable()
   // checks cannot undo. Re-check SYNCHRONOUSLY here, adjacent to the analysis
@@ -3339,10 +3507,11 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
       analysis = await checkpointStage(recordingId, 'analysis', stageFingerprint(
         'analysis-v2', fullText, candidateMeetings, analysisModel, hasGeminiAnalysis, config.transcription.language
       ), () => summaryUsage.run(() =>
-        analyzeTranscriptWithGemini(fullText, candidateMeetings, () => stillWanted(recordingId, ownerRequested), recordingId)
+        analyzeTranscript(fullText, candidateMeetings, () => stillWanted(recordingId, ownerRequested), recordingId)
       ), () => stillWanted(recordingId, ownerRequested))
       completeProcessingRun(summaryRun.id, {
         outputRefs: { summary: `trans_${recordingId}.summary` },
+        ...producerRunFields(analysis),
         ...runUsageFields(summaryUsage.total())
       })
     }
@@ -3361,23 +3530,24 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     console.warn(`[Transcription] ${recordingId}: summary failed (${errorClass}); transcript kept, summary left for reanalysis`)
     emitActivityLog('warning', 'Summary failed, transcript kept', `${recording.filename}: the summary will be retried later`)
   }
+  const producer = producerRunFields(analysis)
   const titleRun = createProcessingRun({
     recordingId,
     stage: 'title',
-    provider: analysisProvider,
-    tool: hasGeminiAnalysis ? 'gemini-analysis' : 'local-fallback',
-    model: analysisModel,
-    execution: hasGeminiAnalysis ? 'cloud' : 'local',
+    provider: producer.provider ?? analysisProvider,
+    tool: producer.tool ?? (hasGeminiAnalysis ? 'gemini-analysis' : 'local-fallback'),
+    model: producer.model ?? analysisModel,
+    execution: summaryExecution(hasGeminiAnalysis, producer),
     parentRunIds: [summaryRun.id]
   })
   completeProcessingRun(titleRun.id, { outputRefs: { titleSuggestion: `trans_${recordingId}.title_suggestion` } })
   const meetingResolutionRun = createProcessingRun({
     recordingId,
     stage: 'meeting-resolution',
-    provider: analysisProvider,
-    tool: hasGeminiAnalysis ? 'gemini-analysis' : 'calendar-overlap-scorer',
-    model: analysisModel,
-    execution: hasGeminiAnalysis ? 'cloud' : 'local',
+    provider: producer.provider ?? analysisProvider,
+    tool: producer.tool ?? (hasGeminiAnalysis ? 'gemini-analysis' : 'calendar-overlap-scorer'),
+    model: producer.model ?? analysisModel,
+    execution: summaryExecution(hasGeminiAnalysis, producer),
     parentRunIds: [summaryRun.id]
   })
 

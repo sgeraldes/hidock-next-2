@@ -43,6 +43,7 @@ export type BrainTask =
   | 'handover' // the coding-agent handoff (H9)
   | 'embed' // vector embeddings
   | 'suggestions' // titles / smart questions / actionable detection
+  | 'summary' // a transcript's summary, title and meeting choice (transcription.ts)
 
 export interface BrainMessage {
   role: 'system' | 'user' | 'assistant'

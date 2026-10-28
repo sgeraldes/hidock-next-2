@@ -841,3 +841,35 @@ it.each(['route', 'default'] as const)('managed generation %s stays closed for u
   expect(paid.chat).not.toHaveBeenCalled(); expect(local.chat).not.toHaveBeenCalled()
   expect(paid.generate).not.toHaveBeenCalled(); expect(local.generate).not.toHaveBeenCalled()
 })
+
+describe('BrainRouter.chatUntil (summary fallback, 28-oct-2026)', () => {
+  beforeEach(() => {
+    mockBrainsConfig = undefined
+  })
+
+  it('skips excluded brains, moves past a rejected answer, and names the brain that answered', async () => {
+    mockBrainsConfig = { defaultBrain: 'gemini-api', enabled: { 'gemini-api': true, ollama: true, 'claude-code': true } }
+    const gemini = makeBrain('gemini-api', ['generate', 'chat', 'embed'], true)
+    const ollama = makeBrain('ollama', ['generate', 'chat', 'embed'], true)
+    ;(ollama.chat as ReturnType<typeof vi.fn>).mockResolvedValue('not json')
+    const claude = makeBrain('claude-code', ['generate', 'chat', 'agentic'], true)
+    ;(claude.chat as ReturnType<typeof vi.fn>).mockResolvedValue('{"summary":"ok"}')
+    const router = new BrainRouter(makeRegistry({ 'gemini-api': gemini, ollama, 'claude-code': claude }))
+
+    const served = await router.chatUntil('summary', [{ role: 'user', content: 'resume' }], {},
+      { exclude: ['gemini-api'], accept: (answer) => answer.startsWith('{') })
+
+    expect(served).toEqual({ brainId: 'claude-code', answer: '{"summary":"ok"}' })
+    expect(gemini.chat).not.toHaveBeenCalled()
+    expect(ollama.chat).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns null when every answer is rejected', async () => {
+    mockBrainsConfig = { defaultBrain: 'claude-code', enabled: { 'claude-code': true } }
+    const claude = makeBrain('claude-code', ['generate', 'chat', 'agentic'], true)
+    const router = new BrainRouter(makeRegistry({ 'claude-code': claude }))
+
+    expect(await router.chatUntil('summary', [{ role: 'user', content: 'x' }], {}, { accept: () => false })).toBeNull()
+    expect(router.getLastChatFailure()).toEqual({ brainId: 'claude-code', kind: 'null' })
+  })
+})

@@ -22,7 +22,10 @@ export const MIN_COOLDOWN_MS = 60 * 1000
 
 const coolingUntil = new Map<BrainId, number>()
 
-const USAGE_LIMIT = /usage limit|out of credits|quota (?:exceeded|exhausted)|RESOURCE_EXHAUSTED/i
+// An organization that turned subscription access off, and depleted prepaid
+// credit, also rest the brain: every call fails the same way until the owner
+// acts (28-oct-2026, Claude Code tried and failed on every summary).
+const USAGE_LIMIT = /usage limit|out of credits|credits are depleted|disabled .{0,40}subscription access|quota (?:exceeded|exhausted)|RESOURCE_EXHAUSTED/i
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
 
 /** True when the text says the account is out of quota or credits. */
