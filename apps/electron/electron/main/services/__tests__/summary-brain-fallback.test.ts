@@ -45,14 +45,14 @@ vi.mock('@hidock/transcription', () => {
   return { GeminiEngine, TranscriptionCancelledError }
 })
 
-const { mockChatUntil, mockResolve, geminiKey } = vi.hoisted(() => ({
+const { mockChatUntil, mockCanServe, geminiKey } = vi.hoisted(() => ({
   mockChatUntil: vi.fn(),
-  mockResolve: vi.fn(),
+  mockCanServe: vi.fn(),
   geminiKey: { value: 'test-api-key' } // pragma: allowlist secret
 }))
 vi.mock('../brains', () => ({
   getBrainRegistry: () => ({ get: () => ({ generate: vi.fn() }) }),
-  getBrainRouter: () => ({ chatUntil: mockChatUntil, resolve: mockResolve }),
+  getBrainRouter: () => ({ chatUntil: mockChatUntil, canServe: mockCanServe }),
   resolveGeminiApiKey: () => geminiKey.value
 }))
 
@@ -100,7 +100,7 @@ beforeEach(async () => {
   vi.clearAllMocks()
   geminiKey.value = 'test-api-key' // pragma: allowlist secret
   mockConfig.brains = { taskRouting: {} }
-  mockResolve.mockResolvedValue({ id: 'claude-code' })
+  mockCanServe.mockImplementation(async (id: string) => id === 'claude-code')
   mockChatUntil.mockResolvedValue(null)
   await initializeDatabase()
 })
@@ -168,11 +168,32 @@ describe('summary falls back to another brain when Gemini fails', () => {
   it('does nothing without a Gemini key when no other brain is ready', async () => {
     seed('none-ready')
     geminiKey.value = ''
-    mockResolve.mockResolvedValue(null)
+    mockCanServe.mockResolvedValue(false)
 
     expect(await reanalyzeFailedTranscripts(5)).toBe(0)
 
     expect(mockChatUntil).not.toHaveBeenCalled()
+  })
+
+  it('does not count an unrouted local model as ready, so the heal does not loop (review of #191)', async () => {
+    seed('only-ollama')
+    geminiKey.value = ''
+    mockCanServe.mockImplementation(async (id: string) => id === 'ollama')
+
+    expect(await reanalyzeFailedTranscripts(5)).toBe(0)
+
+    expect(mockCanServe).not.toHaveBeenCalledWith('ollama', 'chat')
+    expect(summaryOf('only-ollama')).toBeNull()
+  })
+
+  it('never saves the no-brain placeholder as a healed summary (review of #191)', async () => {
+    seed('placeholder')
+    geminiKey.value = ''
+    mockChatUntil.mockResolvedValue(null)
+
+    expect(await reanalyzeFailedTranscripts(5)).toBe(0)
+
+    expect(summaryOf('placeholder')).toBeNull()
   })
 
   it('turns away a summary written in another language than the meeting (Rec16, 28-oct-2026)', async () => {

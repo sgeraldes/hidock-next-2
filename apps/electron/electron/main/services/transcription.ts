@@ -1843,12 +1843,21 @@ async function analyzeTranscript(
     if (byBrain) return byBrain
   }
   return {
-    summary: 'Local ASR transcript created. Configure Gemini or another AI brain to generate AI summary, action items, and meeting matching.',
+    summary: NO_SUMMARY_BRAIN,
     action_items: [],
     topics: [],
     key_points: [],
     language: languageFor('gemini', config.transcription.language)
   }
+}
+
+/** What a transcript says when no brain could write its summary. Never a healed summary. */
+const NO_SUMMARY_BRAIN = 'Local ASR transcript created. Configure Gemini or another AI brain to generate AI summary, action items, and meeting matching.'
+
+/** The brains the summary fallback leaves out: Gemini, and local models Settings did not choose. */
+function summaryFallbackExcludes(): BrainId[] {
+  const route = getConfig().brains?.taskRouting?.summary
+  return ['gemini-api', ...LOCAL_SUMMARY_BRAINS.filter((id) => id !== route)]
 }
 
 /**
@@ -1871,8 +1880,7 @@ async function analyzeWithBrains(
   shouldGenerate?: () => boolean
 ): Promise<TranscriptAnalysis | null> {
   if (shouldGenerate && !shouldGenerate()) return null
-  const route = getConfig().brains?.taskRouting?.summary
-  const exclude: BrainId[] = ['gemini-api', ...LOCAL_SUMMARY_BRAINS.filter((id) => id !== route)]
+  const exclude = summaryFallbackExcludes()
   // The prompt's "same language" line was not enough: Codex summarized a
   // Spanish meeting in English (Rec16, 28-oct-2026). Name the language and
   // turn away an answer written in the other one.
@@ -1922,14 +1930,25 @@ export function textLanguage(text: string): 'es' | 'en' | null {
   return null
 }
 
-/** Whether any brain other than Gemini could write a summary now. */
+/**
+ * Whether the fallback has a brain it would actually ask: the same exclusions
+ * as analyzeWithBrains. An unrouted Ollama counted here and was then left out,
+ * so the heal ran every boot and saved the placeholder (review of #191).
+ */
 async function summaryBrainAvailable(): Promise<boolean> {
-  try {
-    const brain = await getBrainRouter().resolve('summary', 'chat')
-    return !!brain && brain.id !== 'gemini-api'
-  } catch {
-    return false
+  const router = getBrainRouter()
+  const exclude = new Set(summaryFallbackExcludes())
+  const route = getConfig().brains?.taskRouting?.summary
+  const candidates = [...new Set([route, getConfig().brains?.defaultBrain, 'claude-code', 'codex', 'gemini-cli'])]
+    .filter((id): id is BrainId => !!id && !exclude.has(id as BrainId))
+  for (const id of candidates) {
+    try {
+      if (await router.canServe(id, 'chat')) return true
+    } catch {
+      // An unusable brain is not a candidate.
+    }
   }
+  return false
 }
 
 /** Run fields naming the brain that wrote the summary, when it was not Gemini. */
@@ -1937,6 +1956,12 @@ function producerRunFields(analysis: TranscriptAnalysis): { provider?: string; t
   const by = analysis.produced_by
   if (!by || by.provider === 'gemini') return {}
   return { provider: by.provider, tool: 'brain-summary', model: by.model ?? '(brain default)' }
+}
+
+/** Where the summary ran: Gemini and the CLI brains are cloud, a chosen local model is local. */
+function summaryExecution(hasGemini: boolean, producer: { provider?: string }): 'cloud' | 'local' {
+  if (producer.provider) return LOCAL_SUMMARY_BRAINS.includes(producer.provider as BrainId) ? 'local' : 'cloud'
+  return hasGemini ? 'cloud' : 'local'
 }
 
 function buildAnalysisPrompt(
@@ -2357,7 +2382,7 @@ export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
       }
 
       // Still failing — don't overwrite with the sentinel again.
-      if (!analysis.summary || analysis.summary === 'Analysis failed') {
+      if (!analysis.summary || analysis.summary === 'Analysis failed' || analysis.summary === NO_SUMMARY_BRAIN) {
         completeProcessingRun(summaryRun.id, {
           status: 'degraded',
           qualityStatus: 'failed',
@@ -2380,7 +2405,7 @@ export async function reanalyzeFailedTranscripts(limit = 3): Promise<number> {
         provider: reanalysisProducer.provider ?? (reanalysisHasGemini ? 'gemini' : 'hidock-next'),
         tool: reanalysisProducer.tool ?? (reanalysisHasGemini ? 'gemini-analysis' : 'local-fallback'),
         model: reanalysisProducer.model ?? (reanalysisHasGemini ? (reanalysisConfig.chat?.geminiModel || CURRENT_GEMINI_CHAT_MODEL) : null),
-        execution: reanalysisHasGemini || reanalysisProducer.provider ? 'cloud' : 'local',
+        execution: summaryExecution(reanalysisHasGemini, reanalysisProducer),
         parentRunIds: [summaryRun.id]
       })
       completeProcessingRun(titleRun.id, {
@@ -3512,7 +3537,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     provider: producer.provider ?? analysisProvider,
     tool: producer.tool ?? (hasGeminiAnalysis ? 'gemini-analysis' : 'local-fallback'),
     model: producer.model ?? analysisModel,
-    execution: hasGeminiAnalysis ? 'cloud' : 'local',
+    execution: summaryExecution(hasGeminiAnalysis, producer),
     parentRunIds: [summaryRun.id]
   })
   completeProcessingRun(titleRun.id, { outputRefs: { titleSuggestion: `trans_${recordingId}.title_suggestion` } })
@@ -3522,7 +3547,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     provider: producer.provider ?? analysisProvider,
     tool: producer.tool ?? (hasGeminiAnalysis ? 'gemini-analysis' : 'calendar-overlap-scorer'),
     model: producer.model ?? analysisModel,
-    execution: hasGeminiAnalysis ? 'cloud' : 'local',
+    execution: summaryExecution(hasGeminiAnalysis, producer),
     parentRunIds: [summaryRun.id]
   })
 
