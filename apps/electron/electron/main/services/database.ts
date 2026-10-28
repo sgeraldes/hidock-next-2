@@ -5661,7 +5661,7 @@ export function getFailedTranscriptsForReanalysis(
                           AND COALESCE(error_message, '') NOT LIKE '%Rate limit exceeded%'
                           AND COALESCE(error_message, '') NOT LIKE '%RESOURCE_EXHAUSTED%'
                           AND COALESCE(error_message, '') NOT LIKE '%experiencing high demand%'
-                          AND COALESCE(error_message, '') NOT LIKE '%402 Payment Required%'
+                          AND COALESCE(error_message, '') NOT LIKE '%[402 Payment Required]%'
                           AND COALESCE(error_message, '') NOT LIKE 'Provider checkpoint pending:%'
                          THEN 1 ELSE 0 END) AS failures_this_week
            FROM processing_runs
