@@ -324,6 +324,46 @@ describe('a summary that keeps failing is not paid for forever (review of #187, 
     expect(summaryOf('quota-only')).toBe('Healed summary.')
   })
 
+  it('does not spend the cap on depleted credits or on a request that was never sent (28-oct-2026)', async () => {
+    // A 402 is refused before running; "checkpoint pending" sends nothing at all.
+    // Both spent the cap overnight on ten recordings.
+    seedRecording('unbilled')
+    seedFailedTranscript('t-unbilled', 'unbilled')
+    const refusals = [
+      '[GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent: [402 Payment Required] Your prepayment credits are depleted.',
+      'Provider checkpoint pending: previous request outcome unknown; explicit new transcription required',
+    ]
+    for (let n = 1; n <= 4; n++) {
+      dbRun(
+        `INSERT INTO processing_runs (id, recording_id, stage, provider, status, started_at, error_message)
+         VALUES (?, 'unbilled', 'summary', 'gemini', 'failed', ?, ?)`,
+        [`run-u-${n}`, new Date(Date.now() - (3 + n * 3) * 3_600_000).toISOString(), refusals[n % 2]]
+      )
+    }
+
+    await reanalyzeFailedTranscripts(10)
+
+    expect(summaryOf('unbilled')).toBe('Healed summary.')
+  })
+
+  it('still counts a billed failure that only quotes a 402 in its text (review of #190)', async () => {
+    seedRecording('quotes-402')
+    seedFailedTranscript('t-quotes-402', 'quotes-402')
+    for (let n = 1; n <= 4; n++) {
+      dbRun(
+        `INSERT INTO processing_runs (id, recording_id, stage, provider, status, started_at, error_message)
+         VALUES (?, 'quotes-402', 'summary', 'gemini', 'failed', ?, ?)`,
+        [`run-b-${n}`, new Date(Date.now() - (3 + n * 3) * 3_600_000).toISOString(),
+          '500 Internal error after retry; earlier attempt said 402 Payment Required']
+      )
+    }
+
+    await reanalyzeFailedTranscripts(10)
+
+    expect(summaryOf('quotes-402')).toBeNull()
+    expect(mockGenerateContent).not.toHaveBeenCalled()
+  })
+
   it('tries the never-attempted and the longest-waiting first, so old ones are not starved', async () => {
     seedRecording('older-failure')
     seedFailedTranscript('t-older', 'older-failure')

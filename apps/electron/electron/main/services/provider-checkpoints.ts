@@ -69,11 +69,12 @@ export function providerCheckpoints(recordingId: string, db: CheckpointDatabase 
 }
 
 /**
- * Status codes a provider returns before it runs a request: a rate limit (429)
- * and a refused request (bad request, key, permission, unknown model). 408 and
- * 499 are left out: they can come after the server ran and billed the request.
+ * Status codes a provider returns before it runs a request: a rate limit (429),
+ * no credit left (402) and a refused request (bad request, key, permission,
+ * unknown model). 408 and 499 are left out: they can come after the server ran
+ * and billed the request.
  */
-const REJECTED_BEFORE_RUNNING = new Set([400, 401, 403, 404, 429])
+const REJECTED_BEFORE_RUNNING = new Set([400, 401, 402, 403, 404, 429])
 
 /** The provider refused the request and processed nothing, so it may be sent again. */
 export function providerRejected(error: unknown): boolean {
@@ -88,6 +89,8 @@ export function providerRejected(error: unknown): boolean {
   // counts as unknown.
   if (/\[503 Service Unavailable\]\s+This model is (?:currently )?(?:experiencing high demand|overloaded)/i.test(message) &&
       (status === undefined || status === 503)) return true
+  // The prepaid credit ran out (28-oct-2026): Google refuses before running.
+  if (/\[402 Payment Required\]/i.test(message) && status === undefined) return true
   if (typeof status === 'number') return REJECTED_BEFORE_RUNNING.has(status)
   // Without a status, only an unmistakable rate limit counts; any other text
   // that starts with a number proves nothing (review of #186, 27-oct-2026).
