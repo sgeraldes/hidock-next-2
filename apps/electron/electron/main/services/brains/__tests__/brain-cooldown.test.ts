@@ -134,7 +134,9 @@ describe('noteBrainFailure', () => {
   })
 
   it('recognises the usual quota messages', () => {
-    for (const text of ['You’ve hit your usage limit', 'Claude AI usage limit reached|1791000000', 'out of credits', 'RESOURCE_EXHAUSTED', 'Quota exceeded']) {
+    for (const text of ['You’ve hit your usage limit', 'Claude AI usage limit reached|1791000000', 'out of credits', 'RESOURCE_EXHAUSTED', 'Quota exceeded',
+      // 28-oct-2026: an org that turned Claude Code off, and Google's depleted prepaid credit.
+      'Your organization has disabled Claude subscription access for Claude Code', '[402 Payment Required] Your prepayment credits are depleted.']) {
       expect(isUsageLimitMessage(text), text).toBe(true)
     }
     expect(isUsageLimitMessage('connection reset')).toBe(false)
