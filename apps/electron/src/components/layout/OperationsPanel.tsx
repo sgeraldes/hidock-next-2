@@ -43,12 +43,20 @@ import {
 } from '@/store/ui/useUIStore'
 import { useOperations } from '@/hooks/useOperations'
 import { useProcessingPause } from '@/hooks/useProcessingPause'
-import { splitBySession, recordingForDownload, operationLabel } from './operationHistory'
+import {
+  countActiveDownloads,
+  mergeDownloadQueues,
+  splitBySession,
+  recordingForDownload,
+  operationLabel
+} from './operationHistory'
 import { isRetryableDownloadItem } from '@/hooks/useDownloadOrchestrator'
 import type { UnifiedRecording } from '@/types/unified-recording'
 import { toast } from '@/components/ui/toaster'
 import { isFeatureOffThisRun } from '@/lib/bootFeatures'
 import { appLocale } from '@/lib/locale'
+
+type MainDownloadQueueRow = Omit<DownloadQueueEntry, 'size'> & { fileSize: number }
 
 interface OperationsPanelProps {
   sidebarOpen: boolean
@@ -189,43 +197,40 @@ export function OperationsPanel({ sidebarOpen }: OperationsPanelProps) {
   // omitted there so unrelated Download buttons are not disabled; retain a second,
   // read-only projection from the durable main queue for Operations history.
   const [persistedDownloads, setPersistedDownloads] = useState<DownloadQueueEntry[]>([])
+  const [downloadStateReady, setDownloadStateReady] = useState(false)
 
   useEffect(() => {
     if (!window.electronAPI?.downloadService || isFeatureOffThisRun('device-sync')) return
+    let receivedStateUpdate = false
+    const projectQueue = (items: MainDownloadQueueRow[]) => {
+      setPersistedDownloads(items.map((item) => ({
+        filename: item.filename,
+        size: item.fileSize,
+        progress: item.progress,
+        status: item.status,
+        error: item.error,
+        cancelReason: item.cancelReason,
+        fromPreviousSession: item.fromPreviousSession
+      })))
+      setDownloadStateReady(true)
+    }
+    const unsub = window.electronAPI.downloadService.onStateUpdate((state) => {
+      receivedStateUpdate = true
+      projectQueue(state.queue)
+    })
     window.electronAPI.downloadService.getState().then((state) => {
       // Hydrate the download pause after a renderer reload (main keeps it in memory).
       useAppStore.getState().setDownloadsPaused(state?.isPaused === true)
-      setPersistedDownloads((state?.queue ?? []).map((item) => ({
-        filename: item.filename,
-        size: item.fileSize,
-        progress: item.progress,
-        status: item.status,
-        error: item.error,
-        cancelReason: item.cancelReason,
-        fromPreviousSession: item.fromPreviousSession
-      })))
+      if (!receivedStateUpdate) projectQueue(state?.queue ?? [])
     }).catch(() => {})
-    const unsub = window.electronAPI.downloadService.onStateUpdate((state: { queue: Array<{ filename: string; fileSize: number; progress: number; status: DownloadQueueEntry['status']; error?: string; cancelReason?: 'user' | 'interrupted'; fromPreviousSession?: boolean }> }) => {
-      setPersistedDownloads(state.queue.map((item) => ({
-        filename: item.filename,
-        size: item.fileSize,
-        progress: item.progress,
-        status: item.status,
-        error: item.error,
-        cancelReason: item.cancelReason,
-        fromPreviousSession: item.fromPreviousSession
-      })))
-    })
     return unsub
   }, [])
 
   const downloads = useMemo(() => {
-    const merged = new Map(persistedDownloads.map((item) => [item.filename, item]))
-    for (const item of downloadQueue.values()) merged.set(item.filename, item)
-    return Array.from(merged.values())
+    return mergeDownloadQueues(downloadQueue.values(), persistedDownloads, downloadStateReady)
       .filter((item) => item.status !== 'completed')
       .sort((a, b) => downloadStatusRank(a) - downloadStatusRank(b))
-  }, [downloadQueue, persistedDownloads])
+  }, [downloadQueue, persistedDownloads, downloadStateReady])
   // Failures from an earlier app session go to one collapsed group, not the badge.
   const downloadHistory = useMemo(() => splitBySession(downloads), [downloads])
 
@@ -280,7 +285,7 @@ export function OperationsPanel({ sidebarOpen }: OperationsPanelProps) {
   }, [dismissDownload, dismissManyItems])
 
   const currentDownloads = downloadHistory.current
-  const activeDownloadCount = currentDownloads.filter((item) => ['pending', 'downloading', 'cancelling'].includes(item.status)).length
+  const activeDownloadCount = countActiveDownloads(currentDownloads)
   const failedDownloadCount = currentDownloads.filter((item) => isRetryableDownloadItem(item)).length
   const hasDownloads = activeDownloadCount > 0
   const hasFailedDownloads = failedDownloadCount > 0

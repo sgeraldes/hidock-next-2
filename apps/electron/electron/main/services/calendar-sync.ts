@@ -12,6 +12,7 @@ import { emitActivityLog } from './activity-log'
 import { getEventBus } from './event-bus'
 import { reconcileOrganizationYielding } from './org-reconciler'
 import { yieldToEventLoop } from './event-loop'
+import { retireMissingIcsMeetings } from './calendar-cache'
 
 // Re-export package types and correlate for consumers (e.g. recording-watcher)
 export { correlate } from '@hidock/calendar-sync'
@@ -59,9 +60,8 @@ export interface CalendarSyncOptions {
   /** First backoff delay; doubles per attempt, with jitter. */
   fetchBaseDelayMs?: number
   /**
-   * Force a fresh pass instead of joining an in-flight one. Used by
-   * clear-and-sync, whose caller has just emptied the table and must not be
-   * handed the result of a sync that started before the clear.
+   * Force a fresh pass instead of joining an in-flight one. The compatibility
+   * clear-and-sync command requests this without clearing saved meetings.
    */
   fresh?: boolean
   /**
@@ -753,6 +753,7 @@ export function expandMeetingOccurrences(
  * sync is not cancelled just because the scheduled sync it joined was.
  */
 interface SyncPass {
+  url: string
   promise: Promise<CalendarSyncResult>
   waiters: Array<() => boolean>
 }
@@ -794,13 +795,13 @@ export async function syncCalendar(
   const previous = currentPass
 
   // Join the pass already under way, contributing this caller's token to it.
-  if (previous && !options.fresh) {
+  if (previous && previous.url === icsUrl && !options.fresh) {
     previous.waiters.push(wanted)
     return previous.promise
   }
 
   const waiters: Array<() => boolean> = [wanted]
-  const pass = { waiters } as SyncPass
+  const pass = { waiters, url: icsUrl } as SyncPass
   pass.promise = (async () => {
     // A `fresh` pass still must not overlap the sync it displaces.
     if (previous) {
@@ -837,7 +838,8 @@ async function runSyncCalendar(
   stillWanted: () => boolean
 ): Promise<CalendarSyncResult> {
   // F15: never compete with the boot tasks for the main-process event loop.
-  const waitForBootMs = options.waitForBootMs ?? BOOT_WAIT_MS
+  // Backend mode deliberately starts no boot jobs, so there is no drain to await.
+  const waitForBootMs = options.waitForBootMs ?? (process.argv.includes('--backend-only') ? 0 : BOOT_WAIT_MS)
   if (waitForBootMs > 0 && !areBootTasksSettled()) {
     // Tell the user why nothing is happening yet. This covers the whole wait,
     // including the window before the scheduler has started draining — which is
@@ -920,6 +922,7 @@ async function runSyncCalendar(
       // Publish only after every chunk succeeded. A failed/partial pass leaves
       // the previous snapshot authoritative for automatic matching.
       activateCalendarSyncToken(calendarSyncToken)
+      retireMissingIcsMeetings(calendarSyncToken)
     } catch (dbError) {
       console.error('Failed to save meetings to database:', dbError)
       throw new Error(`Database error: ${dbError instanceof Error ? dbError.message : 'Unknown database error'}`, {

@@ -23,9 +23,30 @@ Two capabilities:
   the GPU between requests until 10 minutes pass without one. Design:
   `docs/superpowers/specs/2026-10-04-model-host-clef.md`.
 
-A host that is off, paused, in use or unreachable changes nothing: the recording
-diarizes on the client, exactly as it does on a machine that never had a host.
-Nothing fails because of the host.
+A host that is off, paused, in use or unreachable does not trigger local model execution by default.
+The client reports the unavailable stage. Local fallback requires the user's explicit setting and retains the
+local CPU and memory limits. Optional speaker enrichment can degrade while preserving a cloud transcript.
+
+## SPEC-013 upgrade and pairing
+
+The new durable job API uses HTTPS on port 8766 by default. Port 8765 remains a loopback-only
+control channel for the tray. An existing client using `http://gamestation:8765` must be migrated:
+
+1. Run `HiDock-Model-Host-0.4.1-Setup.exe` on GAMESTATION. Setup preserves existing models, configuration,
+   pairing and an existing TLS identity. Wait for setup to finish successfully.
+2. Copy only `%LOCALAPPDATA%\HiDock Model Host\tls\host-certificate.pem` from GAMESTATION to the client.
+   Leave `host-private-key.pem` on GAMESTATION. Setup prints the public certificate fingerprint in its log.
+3. In the updated client's Model Host settings, use `https://gamestation:8766` and import that public certificate.
+   Use the host name printed by setup; its certificate does not cover arbitrary IP addresses.
+4. Test the connection. An existing paired token is retained; pair again only if the host reports it is unpaired.
+   Verify the host reports the required model capability before submitting work.
+5. Verify a real job in the processing monitor: remote host, observed device, completion and retained result hash.
+
+This installer is unsigned. The upgrade is not considered deployed or GPU-validated merely because the installer builds.
+Durable audio jobs support diarization and VAD. ASR engines are advertised only after a spoken test succeeds on
+this host and its runtime fingerprint still matches. A paired client can request optional ASR preparation with
+`POST /runtime/prepare-asr` over HTTPS and an allowlisted model. The idle host exits through its tray, prepares
+the private runtime, records `logs/prepare-asr.log`, and restarts. Active work rejects preparation with HTTP 409.
 
 ## Install it on the GPU machine
 
@@ -71,7 +92,7 @@ game keeps the service down.
 
 It starts the service (`node.exe src\main.mjs --ready`) inside a Job Object with
 kill-on-close, and ends the job to stop it: Node, the Python worker and ffmpeg
-die together, and the client gets no answer and diarizes locally.
+die together. The client reports the interrupted remote work; local fallback is opt-in.
 
 Nothing polls. The thread sleeps in `GetMessage`; Windows wakes it for a menu
 click, a foreground window change (`SetWinEventHook`), a game process exiting
@@ -201,10 +222,11 @@ leaves that directory in place and says so.
 The full design is `docs/performance/native-windows-model-host-spec.md`. Not in
 this build:
 
-- ASR and embeddings over the same protocol.
+- Embeddings over the worker protocol (Ollama remains a separate service).
+- Real GAMESTATION acceptance of the new ASR engines; they are not advertised until their preparation test succeeds.
 - A resource governor that admits jobs by free VRAM.
 - Signed pack manifests, resumable model downloads, atomic activation.
-- A durable job queue.
+- More than one concurrently admitted heavy job (durable single-job admission is implemented).
 - Code signing.
 - A pairing window that is hard rather than merely expensive to brute-force.
   Eight digits, five wrong guesses and five minutes, and a 5-minute automatic
@@ -228,3 +250,24 @@ checks the installer payload; `tests/decide-worker.test.mjs` runs the real
 `decide_worker.py` against a stand-in for the model's code, and
 `tests/decide.test.mjs` drives downloads, loading, idling and timeouts with a
 fake worker. CI runs all of them on every pull request.
+
+## SPEC-013 upgrade and optional ASR
+
+This build exposes authenticated durable `/v1/jobs` for VAD, diarization and prepared ASR engines.
+The control page stays on loopback HTTP port 8765. Remote clients use HTTPS port 8766.
+After installing on GAMESTATION, copy only `%LOCALAPPDATA%\HiDock Model Host\tls\host-certificate.pem`
+to the desktop and import it in HiDock's remote-host settings. Never copy `host-key.pem`.
+Use `https://gamestation:8766` and test the selected engine, not just health.
+
+ASR is optional. Quit the host tray, then open **Prepare Cohere ASR** or **Prepare VibeVoice ASR**
+from its Start menu folder. Preparation installs into the host's private Python, downloads model
+weights and transcribes a synthetic spoken sample with the normal bounded worker supervisor.
+It may download several GB. The validation job has a 15-minute deadline, a 50% default CPU budget
+and a memory limit. Failed preparation does not advertise the engine. A runtime/worker change
+invalidates the successful-test fingerprint and requires preparing again. Then start the host tray.
+Cohere requires an explicit language (for example `es`); VibeVoice permits automatic language.
+These steps have not yet been exercised on GAMESTATION with this release.
+
+If the preparation process was forcibly terminated, its `asr-preparing.lock` may remain in the host
+root. Confirm preparation and its worker have exited before removing that specific lock. Ordinary
+exit removes the lock automatically. The host refuses model work while it exists.

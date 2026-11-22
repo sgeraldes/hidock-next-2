@@ -1,3 +1,5 @@
+import { resolveAudioRoute } from '../services/audio-execution-route'
+import { REMOTE_ASR_MODELS } from '../../../src/shared/asr-models'
 /**
  * IPC for the HiDock Model Host, the machine with the GPU.
  *
@@ -20,6 +22,8 @@ import {
   getModelHostDiagnostics,
   repairModelHostRuntime,
   sendModelHostUpdate,
+  prepareModelHostAsr,
+  prepareModelHostRole,
   decideOnModelHost,
   ModelHostDecisionError,
   type ModelHostDecisionRequest,
@@ -112,6 +116,11 @@ async function topUp(settings: ModelHostSettings, health: ModelHostHealthReport)
 }
 
 export function registerModelHostHandlers(): void {
+  ipcMain.handle('model-host:telemetry', async () => {
+    const telemetry = await import('../services/pipeline-telemetry')
+    telemetry.startPipelineMonitor()
+    return telemetry.getPipelineTelemetry()
+  })
   ipcMain.handle('model-host:check', async (_event, raw: unknown) => {
     const parsed = AddressSchema.safeParse(raw)
     if (!parsed.success) return { success: false, error: 'Enter the host address.' }
@@ -140,12 +149,27 @@ export function registerModelHostHandlers(): void {
     const status: ModelHostStatus = {
       configured,
       paired: Boolean(config.modelHostToken),
-      usedForSpeakers: configured && resolveSpeakerEngine(config) === 'model-host',
+      usedForSpeakers: resolveSpeakerEngine(config) === 'model-host',
+      localFallback: config.modelHostLocalFallback === true,
       hasHfToken: Boolean(config.localAsrHfToken),
       address,
       health,
     }
     return { success: true, status }
+  })
+
+  ipcMain.handle('model-host:test-audio', async (_event, raw: unknown) => {
+    const config = getConfig().transcription
+    try {
+      const draft = z.object({ provider: z.enum(['gemini', 'local-asr', 'vibevoice', 'remote-worker']).optional() }).parse(raw || {})
+      const provider = draft.provider || config.provider
+      const route = await resolveAudioRoute({ provider, language: config.language,
+        location: provider === 'remote-worker' ? 'remote' : config.transcriptionExecution,
+        geminiModel: config.geminiModel, vibevoiceModel: config.vibevoiceModelId,
+        remoteAsrModel: config.remoteAsrModel,
+        base: config.modelHostUrl, token: config.modelHostToken })
+      return { success: true, route }
+    } catch (error) { return { success: false, error: error instanceof Error ? error.message : String(error) } }
   })
 
   ipcMain.handle('model-host:pair', async (_event, raw: unknown) => {
@@ -226,6 +250,28 @@ export function registerModelHostHandlers(): void {
     } catch (error) {
       return { success: false, error: (error as Error).message }
     }
+  })
+
+  ipcMain.handle('model-host:prepare-role', async (_event, raw: unknown) => {
+    const parsed = z.object({ role: z.enum(['semantic', 'realtime', 'generation']) }).strict().safeParse(raw)
+    if (!parsed.success) return { success: false, error: 'Choose semantic, realtime, or generation preparation.' }
+    const settings = pairedSettings()
+    if (!settings) return notPaired
+    try {
+      await prepareModelHostRole(settings, parsed.data.role)
+      return { success: true }
+    } catch (error) { return { success: false, error: (error as Error).message } }
+  })
+
+  ipcMain.handle('model-host:prepare-asr', async (_event, raw: unknown) => {
+    const parsed = z.object({ model: z.enum(REMOTE_ASR_MODELS) }).safeParse(raw)
+    if (!parsed.success) return { success: false, error: 'Choose a supported transcription engine.' }
+    const settings = pairedSettings()
+    if (!settings) return notPaired
+    try {
+      await prepareModelHostAsr(settings, parsed.data.model)
+      return { success: true }
+    } catch (error) { return { success: false, error: (error as Error).message } }
   })
 
   // Clef or Clef-Flash on the host, with Jev's body. Which feature uses which is decided later.

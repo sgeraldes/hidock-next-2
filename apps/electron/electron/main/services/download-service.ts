@@ -1,3 +1,5 @@
+import type { StagedRecording } from './download-staging'
+import { isRecoveryMode } from '../recovery-mode'
 /**
  * DownloadService - Centralized background download manager
  *
@@ -33,16 +35,19 @@ import {
   createProcessingRun,
   completeProcessingRun,
   remeasureRecordingDuration,
+  getDatabase,
   type Recording
 } from './database'
+import { claimHostDownloadTransfer, OriginalRecordingBackupStore, type HostDownloadTransfer } from './original-recording-backups'
 import { saveRecording, getRecordingsPath, replaceRecordingFile } from './file-storage'
 import { emitActivityLog } from './activity-log'
-import { cancelActiveTransfer, cancelActiveTransferByName, getActiveTransferFilename } from './download-transfer-controller'
+import { cancelAllTransfers, cancelActiveTransferByName, getActiveTransferFilename, hasTransferIntent } from './download-transfer-controller'
 import { existsSync } from 'fs'
 import { join, basename, dirname } from 'path'
 import { resetStorageLimitCache } from './storage-usage'
 import { queueTranscriptionIfEnabled } from './transcription'
 import { profileNewRecording } from './audio-profile-store'
+import { isNativeFileManualOnly } from './device-native-file-policy'
 
 /**
  * D-022 — why a requested file did not enter the queue.
@@ -51,7 +56,7 @@ import { profileNewRecording } from './audio-profile-store'
  * 'already-queued'  a pending/downloading entry for it already exists
  * 'user-cancelled'  you cancelled it before; an explicit request re-queues it
  */
-export type DownloadSkipKind = 'already-synced' | 'already-queued' | 'user-cancelled'
+export type DownloadSkipKind = 'already-synced' | 'already-queued' | 'user-cancelled' | 'manual-only'
 
 export interface DownloadSkip {
   filename: string
@@ -61,7 +66,22 @@ export interface DownloadSkip {
 }
 
 /** One device file as the file-list scan reports it. */
-export type DeviceFileSnapshot = { filename: string; size: number; duration: number; dateCreated: Date }
+export type DeviceFileSnapshot = { filename: string; size: number; duration: number; dateCreated: Date | null }
+export interface DeviceFileListingSnapshot {
+  status: 'complete' | 'partial' | 'error'
+  files: DeviceFileSnapshot[]
+  expectedCount: number | null
+  parsedCount: number
+  reason: string | null
+}
+function completeFileSnapshot(input: DeviceFileSnapshot[] | DeviceFileListingSnapshot): DeviceFileSnapshot[] {
+  if (Array.isArray(input)) return input // Legacy caller must already own a complete snapshot.
+  if (input.status !== 'complete' || input.parsedCount !== input.files.length ||
+      (input.expectedCount !== null && input.expectedCount !== input.files.length)) {
+    throw new Error(`Cannot reconcile an incomplete device listing: ${input.reason || input.status}`)
+  }
+  return input.files
+}
 /** The same file after reconciliation, with the reason it needs no download. */
 export type ReconciledDeviceFile = DeviceFileSnapshot & { skipReason?: string }
 
@@ -93,6 +113,9 @@ export interface QueueDownloadsResult {
 // (the durable terminal state is 'cancelled'); a crash mid-cancel leaves the DB row at
 // its prior 'downloading'/'pending' value, which reconciliation handles.
 export interface DownloadQueueItem {
+  /** Current-session explicit request. Protected pending work never auto-resumes
+   * after restart; the owner can explicitly retry it again. */
+  explicitDownload?: boolean
   id: string
   filename: string
   fileSize: number
@@ -183,8 +206,36 @@ export class DownloadService {
 
   private pruneInterval: NodeJS.Timeout | null = null // MEDIUM (re-review): bounded periodic prune
 
-  constructor() {
+  // Main-only override for the receipt store; production opens it on the live database per write.
+  private originalBackupStore: OriginalRecordingBackupStore | null = null
+  useOriginalBackupStore(store: OriginalRecordingBackupStore | null): void { this.originalBackupStore = store }
+
+  /**
+   * Persist host download evidence for a recording this service just published.
+   *
+   * Only a transfer claimed from a main-owned resumable download reaches here (see
+   * claimHostDownloadTransfer). The legacy Buffer route (renderer-supplied bytes,
+   * device-pipeline) is deliberately UNRECEIPTED: the bytes did not pass a main-owned
+   * transfer, so there is nothing to attest, and restore refuses such a recording.
+   * A failed write never fails the download, because the file is already published
+   * and the row resolved; it leaves the recording without restore proof, and says so.
+   */
+  private persistOriginalBackup(recordingId: string, publishedPath: string, transfer: HostDownloadTransfer, label: string): void {
+    try {
+      const store = this.originalBackupStore ?? new OriginalRecordingBackupStore({ db: getDatabase(), transaction: runInTransaction })
+      store.recordHostDownload({ recordingId, publishedPath, transfer })
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      console.error(`[DownloadService] Original backup receipt not stored for ${label}: ${reason}`)
+      emitActivityLog('warning', `${label} downloaded without restore proof`, `The original-bytes receipt could not be stored: ${reason}`)
+    }
+  }
+
+  constructor(options: { passive?: boolean } = {}) {
     console.log('[DownloadService] Initialized')
+    // Explicit API backend startup must not restore/reset/prune or resume
+    // an unrelated download backlog while admitting directed transcription.
+    if (options.passive) return
     this.loadQueueFromDatabase()
     // MEDIUM (re-review): prune terminal rows at STARTUP — the prune used to run only
     // after successful completions, so reloaded >24h user-cancelled rows never aged out.
@@ -344,6 +395,13 @@ export class DownloadService {
           queueItem.completedAt = undefined
           this.persistQueueItem(queueItem)
           interruptedCount++
+        }
+        if (queueItem.status === 'pending' && isNativeFileManualOnly(queueItem.filename)) {
+          queueItem.status = 'cancelled'
+          queueItem.cancelReason = 'user'
+          queueItem.error = 'Native verification recording: manual download only'
+          queueItem.completedAt = new Date()
+          this.persistQueueItem(queueItem)
         }
         this.state.queue.set(item.filename, queueItem)
       }
@@ -533,7 +591,8 @@ export class DownloadService {
    * Behaviour is unchanged — per-file failures were already contained inside
    * the loop body.
    */
-  getFilesToSync(deviceFiles: DeviceFileSnapshot[]): ReconciledDeviceFile[] {
+  getFilesToSync(snapshot: DeviceFileSnapshot[] | DeviceFileListingSnapshot): ReconciledDeviceFile[] {
+    const deviceFiles = completeFileSnapshot(snapshot)
     const ctx = this.beginReconcile()
     runInTransaction(() => {
       for (const file of deviceFiles) {
@@ -552,9 +611,12 @@ export class DownloadService {
    * 100 with setImmediate) after an unbatched loop froze startup for 2.2 s.
    */
   getFilesToSyncBatched(
-    deviceFiles: DeviceFileSnapshot[],
+    snapshot: DeviceFileSnapshot[] | DeviceFileListingSnapshot,
     batchSize = 100
   ): Promise<ReconciledDeviceFile[]> {
+    if (!Number.isSafeInteger(batchSize) || batchSize <= 0 || batchSize > 1000) return Promise.reject(new Error('Invalid reconcile batch size'))
+    let deviceFiles: DeviceFileSnapshot[]
+    try { deviceFiles = completeFileSnapshot(snapshot) } catch (error) { return Promise.reject(error) }
     const run = this.reconcileChain.then(() => this.reconcileInChunks(deviceFiles, batchSize))
     this.reconcileChain = run.catch(() => undefined)
     return run
@@ -598,6 +660,11 @@ export class DownloadService {
   }
 
   private reconcileDeviceFile(file: DeviceFileSnapshot, ctx: ReconcileContext): void {
+    if (isNativeFileManualOnly(file.filename)) {
+      ctx.skippedCount++
+      ctx.results.push({ ...file, skipReason: 'Native verification recording: manual download only' })
+      return
+    }
     // v51 — AUTOMATIC reconciliation must never resurrect a hard-purged
     // recording: tombstoned files are skipped silently (anti-resurrection).
     // An explicit per-file download (queueDownloads) is still allowed —
@@ -618,6 +685,11 @@ export class DownloadService {
     // snapshot is merely rediscovering a historical local file, it must not
     // be announced as a new recording or launch hundreds of enrichments.
     const { synced, reason } = this.isFileAlreadySynced(file.filename)
+    if (!file.dateCreated || !Number.isFinite(file.dateCreated.getTime())) {
+      ctx.skippedCount++
+      ctx.results.push({ ...file, skipReason: synced ? reason : 'Recording time unavailable: manual download only' })
+      return
+    }
 
     // SPEC-009: discovery itself is a durable ingestion event. Persist all
     // metadata the device already knows and correlate it with the calendar
@@ -626,7 +698,7 @@ export class DownloadService {
     // the audio is still device-only.
     try {
       const previous = getRecordingByFilename(file.filename)
-      const recording = upsertRecordingFromDevice(file)
+      const recording = upsertRecordingFromDevice({ ...file, dateCreated: file.dateCreated })
       const isNewUnsyncedRecording = !previous && !synced
       if (isNewUnsyncedRecording) {
         const metadataRun = createProcessingRun({
@@ -717,7 +789,7 @@ export class DownloadService {
    * the suppression and re-queues — equivalent to a manual Retry for that file.
    */
   queueDownloads(
-    files: Array<{ filename: string; size: number; dateCreated?: Date; replaces?: ReplacementDownload['replaces'] }>,
+    files: Array<{ filename: string; size: number; dateCreated?: Date | null; replaces?: ReplacementDownload['replaces'] }>,
     explicit: boolean = false
   ): QueueDownloadsResult {
     const queuedIds: string[] = []
@@ -732,6 +804,10 @@ export class DownloadService {
     let skippedUserCancelled = 0
 
     for (const file of files) {
+      if (!explicit && isNativeFileManualOnly(file.filename)) {
+        skipped.push({ filename: file.filename, skip: 'manual-only', reason: 'Native verification recording: manual download only' })
+        continue
+      }
       // B-DWN-003: Normalize .hda filenames to .mp3
       const normalizedFilename = DownloadService.normalizeFilename(file.filename)
 
@@ -761,6 +837,7 @@ export class DownloadService {
         suppressed.fileSize = file.size || suppressed.fileSize
         suppressed.recordingDate = file.dateCreated ?? suppressed.recordingDate
         suppressed.replaces = file.replaces
+        suppressed.explicitDownload = true
         this.persistQueueItem(suppressed)
         queuedIds.push(suppressed.filename)
         console.log(`[DownloadService] Re-queued after explicit user request: ${suppressed.filename}`)
@@ -768,12 +845,50 @@ export class DownloadService {
       }
 
       // spec-007: Check database for existing queue entry (check both original and normalized)
-      const existingInDb = queryOne<{ id: string; status: string }>(
-        'SELECT id, status FROM download_queue WHERE (filename = ? OR filename = ?) AND status IN (?, ?)',
+      const requested = this.state.queue.get(file.filename) ?? this.state.queue.get(normalizedFilename)
+      if (explicit && requested?.status === 'pending' && isNativeFileManualOnly(file.filename)) {
+        requested.explicitDownload = true
+        queuedIds.push(requested.filename)
+        continue
+      }
+      const existingInDb = queryOne<{
+        id: string; status: string; file_size: number; recording_date: string | null; created_at: string | null
+      }>(
+        'SELECT id, status, file_size, recording_date, created_at FROM download_queue WHERE (filename = ? OR filename = ?) AND status IN (?, ?)',
         [file.filename, normalizedFilename, 'pending', 'downloading']
       )
 
       if (existingInDb) {
+        if (explicit && !requested && !hasTransferIntent(file.filename) && !hasTransferIntent(normalizedFilename)) {
+          // Passive startup deliberately leaves the backlog in SQLite. An explicit
+          // request may recover only its own row; no live transfer exists for a row
+          // absent from this service's memory. Resume bytes remain governed by the
+          // checkpoint/source validation, independently of this reset progress.
+          const syncedState = file.replaces ? { synced: false, reason: '' } : this.isFileAlreadySynced(file.filename)
+          const normalizedState = !syncedState.synced && !file.replaces && normalizedFilename !== file.filename
+            ? this.isFileAlreadySynced(normalizedFilename) : syncedState
+          if (syncedState.synced || normalizedState.synced) {
+            skippedAlreadySynced++
+            skipped.push({ filename: file.filename, skip: 'already-synced', reason: syncedState.synced ? syncedState.reason : normalizedState.reason })
+            continue
+          }
+          const recovered: DownloadQueueItem = {
+            id: existingInDb.id,
+            filename: file.filename,
+            fileSize: file.size || existingInDb.file_size,
+            progress: 0,
+            status: 'pending',
+            explicitDownload: true,
+            recordingDate: file.dateCreated ?? (existingInDb.recording_date ? new Date(existingInDb.recording_date) : undefined),
+            createdAt: existingInDb.created_at ? new Date(existingInDb.created_at) : undefined,
+            fromPreviousSession: true,
+            replaces: file.replaces
+          }
+          this.state.queue.set(file.filename, recovered)
+          this.persistQueueItem(recovered)
+          queuedIds.push(file.filename)
+          continue
+        }
         skippedInQueue++
         skipped.push({
           filename: file.filename,
@@ -823,7 +938,8 @@ export class DownloadService {
         fileSize: file.size,
         progress: 0,
         status: 'pending',
-        recordingDate: file.dateCreated, // Store the original recording date
+        explicitDownload: explicit,
+        recordingDate: file.dateCreated ?? undefined, // Unknown time stays absent.
         createdAt: new Date(), // prune age fallback (DB created_at is set on persist)
         replaces: file.replaces
       }
@@ -863,7 +979,7 @@ export class DownloadService {
    * Start a sync session
    * C-004: Uses queuedIds.length (newly queued) instead of queue.size (includes prior items)
    */
-  startSyncSession(files: Array<{ filename: string; size: number; dateCreated?: Date }>): SyncSession {
+  startSyncSession(files: Array<{ filename: string; size: number; dateCreated?: Date | null }>): SyncSession {
     // Queue the files (including recording dates for proper date preservation)
     const { queued: queuedIds } = this.queueDownloads(files)
 
@@ -896,13 +1012,28 @@ export class DownloadService {
    * Process download queue - called with data from renderer
    * The actual USB communication happens in the renderer, but state is managed here
    */
+  beginDownload(filename: string): boolean {
+    const item = this.state.queue.get(filename)
+    if (!item || this.isCancelledStatus(item)) return false
+    if (isNativeFileManualOnly(filename) && item.explicitDownload !== true) return false
+    item.status = 'downloading'
+    item.startedAt = new Date()
+    this.persistQueueItem(item)
+    this.markDirty()
+    this.emitStateUpdate(true)
+    return true
+  }
+
   async processDownload(
     filename: string,
-    data: Buffer
+    data: Buffer | StagedRecording
   ): Promise<{ success: boolean; filePath?: string; error?: string }> {
     const item = this.state.queue.get(filename)
     if (!item) {
       return { success: false, error: 'File not in queue' }
+    }
+    if (isNativeFileManualOnly(filename) && item.explicitDownload !== true) {
+      return { success: false, error: 'Native verification recording requires an explicit manual download' }
     }
 
     // Phase-1 cancellation race: a user cancel can land AFTER the renderer already
@@ -963,6 +1094,11 @@ export class DownloadService {
         return await this.completeReplacement(item, data)
       }
 
+      // Host download evidence is claimed BEFORE publication, while the transfer's lease
+      // is held, so the digest is the one computed over the received stream and not a
+      // later re-read of the published file. Null for every Buffer (legacy) transfer.
+      const transfer = claimHostDownloadTransfer(data, filename)
+
       // Save the file with the original recording date if available. saveRecording
       // writes to a temp `.partial` and atomically renames only after a final
       // cancellation check, so a cancel that lands mid-write never yields a visible
@@ -1008,6 +1144,8 @@ export class DownloadService {
         fileSize: data.length,
         dateRecorded: item.recordingDate?.toISOString()
       })
+      // Published and resolved: only now may the receipt exist.
+      if (transfer) this.persistOriginalBackup(recordingId, filePath, transfer, filename)
 
       // Update queue item
       this.stallRetried.delete(item.filename) // a later stall gets its one retry again
@@ -1027,7 +1165,7 @@ export class DownloadService {
       // Fire-and-forget queue trigger, the same as storage-handlers.ts and
       // recording-watcher.ts.
       try {
-        queueTranscriptionIfEnabled(recordingId)
+        if (!isNativeFileManualOnly(filename) && !isNativeFileManualOnly(filePath)) queueTranscriptionIfEnabled(recordingId)
       } catch (err) {
         console.error('[DownloadService] Failed to queue transcription:', err)
       }
@@ -1086,9 +1224,12 @@ export class DownloadService {
    */
   private async completeReplacement(
     item: DownloadQueueItem,
-    data: Buffer
+    data: Buffer | StagedRecording
   ): Promise<{ success: boolean; filePath?: string; error?: string }> {
     const replaces = item.replaces as NonNullable<DownloadQueueItem['replaces']>
+    // A replacement publishes a NEW receipt version, and only with transfer proof;
+    // the receipt of the bytes it replaced stays exactly as it was.
+    const transfer = claimHostDownloadTransfer(data, item.filename)
     const replaced = await replaceRecordingFile(replaces.path, data, {
       isCancelled: () => this.isCancelledStatus(item),
       originalDate: item.recordingDate,
@@ -1100,6 +1241,7 @@ export class DownloadService {
 
     addSyncedFile(item.filename, basename(replaced.filePath), replaced.filePath, replaced.bytes)
     run('UPDATE recordings SET file_size = ? WHERE id = ?', [replaced.bytes, replaces.recordingId])
+    if (transfer) this.persistOriginalBackup(replaces.recordingId, replaced.filePath, transfer, item.filename)
     const settled = remeasureRecordingDuration(replaces.recordingId)
 
     item.status = 'completed'
@@ -1153,7 +1295,7 @@ export class DownloadService {
 
     // If THIS file is the transfer currently streaming on the USB bus, abort it and
     // wait for the device to settle before marking the item terminal.
-    if (getActiveTransferFilename() === filename) {
+    if (getActiveTransferFilename() === filename || hasTransferIntent(filename)) {
       item.status = 'cancelling' // transient — emitted so the UI can show a spinner
       this.markDirty()
       this.emitStateUpdate(true)
@@ -1186,6 +1328,7 @@ export class DownloadService {
   updateProgress(filename: string, bytesReceived: number): void {
     const item = this.state.queue.get(filename)
     if (item) {
+      if (this.isCancelledStatus(item)) return
       const statusTransition = item.status === 'pending'
       if (statusTransition) {
         item.status = 'downloading'
@@ -1417,6 +1560,7 @@ export class DownloadService {
           console.log(`[DownloadService] Skipping auto-retry for ${item.filename}: permanently deleted (purge tombstone)`)
           continue
         }
+        if (interruptedOnly && isNativeFileManualOnly(item.filename)) continue
 
         // B-DWN-007: Check if file was synced in the meantime. A recovery's
         // file is on disk by definition (short), so the check would always
@@ -1431,6 +1575,7 @@ export class DownloadService {
         }
 
         item.status = 'pending'
+        item.explicitDownload = !interruptedOnly
         item.progress = 0
         item.error = undefined
         item.cancelReason = undefined // cleared on re-queue; a re-fail is re-tagged fresh
@@ -1601,9 +1746,7 @@ export class DownloadService {
       // Abort the file actively streaming on the bus and wait for USB settlement.
       // markFailed() is guarded against clobbering the 'cancelled' state the renderer's
       // abort-triggered error path would otherwise set to 'failed'.
-      if (activeFilename) {
-        await cancelActiveTransfer('user-cancel')
-      }
+      await cancelAllTransfers('user-cancel')
 
       // Now settle the active row to its terminal 'cancelled' state (after the drain),
       // mirroring single-cancel. Guarded so a raced completion isn't clobbered.
@@ -1767,7 +1910,7 @@ let downloadServiceInstance: DownloadService | null = null
 
 export function getDownloadService(): DownloadService {
   if (!downloadServiceInstance) {
-    downloadServiceInstance = new DownloadService()
+    downloadServiceInstance = new DownloadService({ passive: process.argv.includes('--backend-only') || isRecoveryMode() })
   }
   return downloadServiceInstance
 }

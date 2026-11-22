@@ -184,7 +184,7 @@ describe('JensenDevice (main process)', () => {
     expect(device.getLockHolder()).toBeNull()
   })
 
-  it('listFiles does not stop at the old 120 second cutoff', async () => {
+  it('listFiles does not stop at the old 120 second cutoff and quarantines a stall as unknown', async () => {
     vi.useFakeTimers()
 
     try {
@@ -208,7 +208,11 @@ describe('JensenDevice (main process)', () => {
 
       await vi.advanceTimersByTimeAsync(480_000)
 
-      await expect(promise).resolves.toEqual([])
+      // The stall timer fires at 600 s: the listing is quarantined, never parsed
+      // a single entry, and listFiles() returns null — unknown, NOT an empty
+      // directory. A missing/interrupted listing is never a confirmed [] (that
+      // would tell the app the device has zero files when the truth is unknown).
+      await expect(promise).resolves.toBeNull()
       expect(settled).toBe(true)
     } finally {
       vi.useRealTimers()

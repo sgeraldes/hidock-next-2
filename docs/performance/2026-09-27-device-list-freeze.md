@@ -1,5 +1,7 @@
 # Device file-list freeze (27-sep-2026)
 
+This is a dated host-performance incident. See [the current device guide](../devices/README.md) for protocol ownership, firmware gates, recording formats and native markers. The 11 October recording investigation does not change this incident's runtime evidence or authorize an additional USB connection for reproducing it.
+
 Symptom: the whole window froze while the app read the HiDock's recordings list,
 before any audio download. Library at the time: 2,139 sources.
 

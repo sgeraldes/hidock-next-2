@@ -1,6 +1,9 @@
 import type { StoredSegment } from '../components/TranscriptViewer'
 import { expandInlineStoredSegments } from './splitInlineTurns'
 export interface TranscriptSegment {
+  sourceChannel?: number
+  channelRole?: string
+  channelProvenance?: string
   startMs: number
   endMs?: number
   text: string
@@ -48,6 +51,9 @@ export function fromStoredSegments(stored: StoredSegment[]): TranscriptSegment[]
       startMs: Math.round((s.start || 0) * 1000),
       endMs: s.end != null ? Math.round(s.end * 1000) : undefined,
       speaker: s.speaker,
+      sourceChannel: s.sourceChannel,
+      channelRole: s.channelRole,
+      channelProvenance: s.channelProvenance,
       text: s.text.trim(),
       ...(s.speakerAttribution ? { speakerAttribution: s.speakerAttribution } : {}),
       ...(typeof s.speakerConfidence === 'number' ? { speakerConfidence: s.speakerConfidence } : {})

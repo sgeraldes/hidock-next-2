@@ -1,4 +1,5 @@
 import { isFindTypingTarget, type ReaderFindSession } from '@/features/library/components/ReaderFind'
+import { describeRetranscribeSkips } from '../shared/retranscribe'
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, useDeferredValue } from 'react'
 import { isRecordingAudioFile } from '@/shared/audio-extensions'
 import { useNavigate, useLocation } from 'react-router-dom'
@@ -330,6 +331,7 @@ export function Library() {
 
   // Centralized audio controls (persists across navigation)
   const audioControls = useAudioControls()
+  const playbackActive = useUIStore(state => state.isPlaying)
   const currentlyPlayingId = useUIStore((state) => state.currentlyPlayingId)
   const playbackCurrentTime = useUIStore((state) => state.playbackCurrentTime)
   const qaEnabled = useUIStore((state) => state.qaLogsEnabled)
@@ -761,7 +763,7 @@ export function Library() {
   // Enrichment: Load transcripts and meetings for recordings
   const [meetings, setMeetings] = useState<Map<string, Meeting>>(new Map())
 
-  const refreshCompletedTranscription = useCallback(async (recordingId: string) => {
+  const refreshCompletedTranscription = useCallback(async (recordingId: string, textOnly = false) => {
     const startedAt = performance.now()
     try {
       // ADV13: owner Library management — owner accessor shows the owner their OWN
@@ -789,6 +791,7 @@ export function Library() {
         return next
       })
 
+      if (textOnly) return
       const appState = useAppStore.getState()
       // The transcript match can move the recording to another meeting, so the part numbers are recomputed.
       appState.setUnifiedRecordings(withMeetingParts(appState.unifiedRecordings.map((recording) => {
@@ -826,6 +829,12 @@ export function Library() {
 
   useEffect(() => {
     const unsubscribers: Array<() => void> = []
+
+    if (window.electronAPI.onTranscriptionTextAvailable) {
+      unsubscribers.push(window.electronAPI.onTranscriptionTextAvailable((data) => {
+        void refreshCompletedTranscription(data.recordingId, true)
+      }))
+    }
 
     if (window.electronAPI.onTranscriptionCompleted) {
       unsubscribers.push(window.electronAPI.onTranscriptionCompleted((data) => {
@@ -2939,11 +2948,11 @@ export function Library() {
                           toast.error('Could not queue the transcriptions', result.error.message)
                           return
                         }
-                        const { queued, skipped } = result.data
+                        const { queued, skipped, skippedReasons } = result.data
                         toast.success(
                           `Queued ${queued} transcription${queued === 1 ? '' : 's'}`,
                           skipped > 0
-                            ? `${skipped} could not be queued: personal, deleted, rated too low to send, or already waiting.`
+                            ? `${skipped} skipped: ${describeRetranscribeSkips(skippedReasons)}.`
                             : 'Each new transcript is checked when it is stored.'
                         )
                         void refresh(false)
@@ -3427,7 +3436,7 @@ export function Library() {
                             recording={recording}
                             transcript={transcript}
                             meeting={meeting}
-                            isPlaying={currentlyPlayingId === recording.id}
+                            isPlaying={playbackActive && currentlyPlayingId === recording.id}
                             isActiveSource={selectedSourceId === recording.id}
                             isDownloading={isDeviceOnly(recording) && ['downloading', 'cancelling'].includes(
                               downloadQueue.get(recording.deviceFilename)?.status ?? ''
@@ -3501,7 +3510,7 @@ export function Library() {
               recording={selectedRecording ?? null}
               transcript={selectedTranscript}
               meeting={selectedMeeting}
-              isPlaying={selectedRecording ? currentlyPlayingId === selectedRecording.id : false}
+              isPlaying={selectedRecording ? playbackActive && currentlyPlayingId === selectedRecording.id : false}
               currentTimeMs={playbackCurrentTime * 1000}
               onPlay={() => {
                 if (selectedRecording && hasLocalPath(selectedRecording)) {

@@ -353,6 +353,14 @@
   * {
     @apply border-border;
   }
+  /* The app is one fixed-height window (Layout is h-screen); each pane scrolls
+     itself. The page never does, so an element that escapes its pane (an
+     absolutely positioned sr-only label did on 23-oct-2026) cannot let the
+     mouse wheel scroll the whole window past the end. */
+  html,
+  body {
+    overflow: hidden;
+  }
   body {
     @apply bg-background text-foreground;
     font-feature-settings: "rlig" 1, "calt" 1;

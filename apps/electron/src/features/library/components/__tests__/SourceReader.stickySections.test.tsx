@@ -272,7 +272,15 @@ describe('SourceReader — one scrolling column', () => {
       await screen.findByTestId('reader-section-transcript')
       const column = screen.getByTestId('reader-scroll-body')
 
+      // Minimized, the player is the one-row dock above the column, so it has no
+      // section in the column at all. Expanded, its graph detail is a section with
+      // nothing that sticks.
+      if (playerMode === 'compact') {
+        expect(screen.queryByTestId('reader-section-player')).toBeNull()
+        expect(column).not.toContainElement(screen.getByTestId('reader-dock-player'))
+      }
       for (const section of ['player', 'metadata', 'moments', 'summary', 'transcript']) {
+        if (section === 'player' && playerMode === 'compact') continue
         const el = screen.queryByTestId(`reader-section-${section}`)
         expect(el, `${section} (player ${playerMode}) is not rendered`).not.toBeNull()
         const header = pinEl(section)
@@ -316,50 +324,51 @@ describe('SourceReader — scrolling never writes the chosen mode', () => {
     expect(useLibraryStore.getState().readerSectionModes.metadata).toBe('expanded')
   })
 
-  it('pins the minimized player bar without touching readerSectionModes', () => {
-    // The player has no labeled strip since the second step. Minimized, the
-    // player itself is a one-line bar, and that bar is what pins.
+  it('keeps the minimized player in the fixed dock, outside the scrolling column, without touching readerSectionModes', () => {
+    // The player is a one-row dock under the header now. It never scrolls away,
+    // so there is nothing to pin: it sits above the column, not inside it.
     setModes({ player: 'compact' })
     render(<SourceReader recording={makeRecording()} transcript={TRANSCRIPT} />)
-    const bar = pinEl('player')!
-    expect(bar.className).toContain('sticky')
-    expect(bar.className).toContain('h-8')
-    expect(bar).toHaveStyle({ top: '0px' })
-    expect(bar).toContainElement(screen.getByTestId('waveform-player-pill'))
-    expect(strip('player')).toHaveAttribute('data-pinned', 'false')
+    const dock = screen.getByTestId('reader-dock')
+    const column = screen.getByTestId('reader-scroll-body')
+    expect(dock).toContainElement(screen.getByTestId('reader-dock-player'))
+    expect(column).not.toContainElement(dock)
+    expect(dock.compareDocumentPosition(column) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.queryByTestId(/^waveform-player-/)).not.toBeInTheDocument()
 
-    cross(sentinel('player'), 0)
+    cross(sentinel('metadata'), 0)
 
-    expect(strip('player')).toHaveAttribute('data-pinned', 'true')
-    expect(bar.className).toContain('shadow-sm')
+    expect(screen.getByTestId('reader-dock-player')).toBeInTheDocument()
     expect(useLibraryStore.getState().readerSectionModes.player).toBe('compact')
   })
 
-  it('never pins an expanded player, and gives its slot to the next section', () => {
+  it('never pins an expanded player detail, and the first strip takes slot 0', () => {
     render(<SourceReader recording={makeRecording()} transcript={TRANSCRIPT} />)
     expect(pinEl('player')).toBeNull()
-    expect(pinEl('metadata')).toHaveStyle({ top: '0px' })
+    expect(pinEl('transcript')).toHaveStyle({ top: '0px' })
+    expect(pinEl('metadata')).toHaveStyle({ top: '32px' })
 
     cross(sentinel('player'), 0)
 
-    expect(strip('player')).toHaveAttribute('data-pinned', 'false')
     expect(useLibraryStore.getState().readerSectionModes.player).toBe('expanded')
   })
 
   it('leaves a minimized section minimized after scrolling down and back up', () => {
     useLibraryStore.setState({
       readerSectionModes: {
-        player: 'compact', metadata: 'expanded', moments: 'expanded',
+        player: 'compact', metadata: 'compact', moments: 'expanded',
         summary: 'expanded', transcript: 'expanded'
       }
     })
     render(<SourceReader recording={makeRecording()} transcript={TRANSCRIPT} />)
 
-    cross(sentinel('player'), 0)
+    cross(sentinel('metadata'), 0)
+    expect(useLibraryStore.getState().readerSectionModes.metadata).toBe('compact')
     expect(useLibraryStore.getState().readerSectionModes.player).toBe('compact')
 
-    cross(sentinel('player'), 1)
-    expect(strip('player')).toHaveAttribute('data-pinned', 'false')
+    cross(sentinel('metadata'), 1)
+    expect(strip('metadata')).toHaveAttribute('data-pinned', 'false')
+    expect(useLibraryStore.getState().readerSectionModes.metadata).toBe('compact')
     expect(useLibraryStore.getState().readerSectionModes.player).toBe('compact')
   })
 
@@ -373,8 +382,8 @@ describe('SourceReader — scrolling never writes the chosen mode', () => {
     render(<SourceReader recording={makeRecording()} transcript={TRANSCRIPT} />)
     expect(screen.queryByTestId('reader-section-metadata')).not.toBeInTheDocument()
 
-    cross(sentinel('player'), 0)
-    cross(sentinel('player'), 1)
+    cross(sentinel('transcript'), 0)
+    cross(sentinel('transcript'), 1)
 
     expect(screen.queryByTestId('reader-section-metadata')).not.toBeInTheDocument()
     expect(useLibraryStore.getState().readerSectionModes.metadata).toBe('hidden')
@@ -383,14 +392,14 @@ describe('SourceReader — scrolling never writes the chosen mode', () => {
   it('reads a docked section as pinned whatever the scroll position is', () => {
     useLibraryStore.setState({
       readerSectionModes: {
-        player: 'docked', metadata: 'expanded', moments: 'expanded',
+        player: 'expanded', metadata: 'docked', moments: 'expanded',
         summary: 'expanded', transcript: 'expanded'
       }
     })
     render(<SourceReader recording={makeRecording()} transcript={TRANSCRIPT} />)
-    expect(strip('player')).toHaveAttribute('data-pinned', 'true')
-    cross(sentinel('player'), 1)
-    expect(strip('player')).toHaveAttribute('data-pinned', 'true')
+    expect(strip('metadata')).toHaveAttribute('data-pinned', 'true')
+    cross(sentinel('metadata'), 1)
+    expect(strip('metadata')).toHaveAttribute('data-pinned', 'true')
   })
 
   it('observes a section that only mounts once the transcript arrives', async () => {
@@ -454,27 +463,26 @@ describe('SourceReader — stacking within the budget', () => {
     render(<SourceReader recording={makeRecording()} transcript={TRANSCRIPT} />)
     await screen.findByTestId('reader-section-transcript')
 
-    // The expanded player has nothing that pins, so metadata / moments / summary
-    // participate and the transcript does not.
+    // The player is the fixed dock and Actions and Summary dock in their own
+    // stack, so only the transcript and metadata strips stack, in column order.
     expect(pinEl('player')).toBeNull()
-    expect(pinEl('metadata')).toHaveStyle({ top: '0px' })
-    expect(pinEl('moments')).toHaveStyle({ top: '32px' })
-    expect(pinEl('summary')).toHaveStyle({ top: '64px' })
-    expect(pinEl('transcript')?.className).toContain('relative')
-    expect(pinEl('transcript')?.className).not.toContain('sticky')
+    expect(pinEl('transcript')).toHaveStyle({ top: '0px' })
+    expect(pinEl('metadata')).toHaveStyle({ top: '32px' })
+    for (const docked of ['moments', 'summary']) {
+      expect(pinEl(docked)?.className).toContain('relative')
+      expect(pinEl(docked)?.className).not.toContain('sticky')
+    }
   })
 
-  it('stacks a minimized player bar in slot 0, on the same 32px grid', async () => {
+  it('takes no stack slot for a minimized player, which is the dock', async () => {
     mockReaderHeight(400) // budget of 3
     setModes({ player: 'compact' })
     render(<SourceReader recording={makeRecording()} transcript={TRANSCRIPT} />)
     await screen.findByTestId('reader-section-transcript')
 
-    expect(pinEl('player')).toHaveStyle({ top: '0px' })
+    expect(screen.queryByTestId('reader-section-player')).not.toBeInTheDocument()
+    expect(pinEl('transcript')).toHaveStyle({ top: '0px' })
     expect(pinEl('metadata')).toHaveStyle({ top: '32px' })
-    expect(pinEl('moments')).toHaveStyle({ top: '64px' })
-    expect(pinEl('summary')?.className).toContain('relative')
-    expect(pinEl('summary')?.className).not.toContain('sticky')
   })
 
   it('gives slot 0 to metadata when the recording has no player at all', () => {
@@ -492,15 +500,15 @@ describe('SourceReader — stacking within the budget', () => {
     mockReaderHeight(900)
     useLibraryStore.setState({
       readerSectionModes: {
-        player: 'hidden', metadata: 'expanded', moments: 'expanded',
-        summary: 'expanded', transcript: 'expanded'
+        player: 'expanded', metadata: 'expanded', moments: 'expanded',
+        summary: 'expanded', transcript: 'hidden'
       }
     })
     render(<SourceReader recording={makeRecording()} transcript={TRANSCRIPT} />)
-    await screen.findByTestId('reader-section-transcript')
+    await screen.findByTestId('reader-section-metadata')
 
+    // With the transcript strip hidden, metadata inherits slot 0.
     expect(strip('metadata').parentElement).toHaveStyle({ top: '0px' })
-    expect(strip('moments').parentElement).toHaveStyle({ top: '32px' })
   })
 })
 

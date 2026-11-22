@@ -1,7 +1,46 @@
-import { describe, expect, it } from 'vitest'
-import { AudioPreflightError, parseAudioPreflightOutput } from '../audio-preflight'
+// @vitest-environment node
+import { describe, expect, it, vi } from 'vitest'
+import { execFile } from 'child_process'
+import { TranscriptionCancelledError } from '@hidock/transcription'
+import { analyzeAudioPreflight, AudioPreflightError, parseAudioPreflightOutput } from '../audio-preflight'
+
+vi.mock('child_process', async (importOriginal) => ({
+  ...await importOriginal<typeof import('child_process')>(), execFile: vi.fn()
+}))
+vi.mock('ffmpeg-static', () => ({ default: 'fixture-ffmpeg' }))
 
 describe('audio transcription preflight', () => {
+  it('does not spawn ffmpeg when already cancelled', async () => {
+    vi.mocked(execFile).mockClear()
+    await expect(analyzeAudioPreflight('fixture.wav', 60, () => false))
+      .rejects.toBeInstanceOf(TranscriptionCancelledError)
+    expect(execFile).not.toHaveBeenCalled()
+  })
+
+  it('kills cancelled ffmpeg but retains ownership until its callback settles', async () => {
+    vi.useFakeTimers()
+    let callback!: (error: Error | null, stdout: string, stderr: string) => void
+    const kill = vi.fn()
+    vi.mocked(execFile).mockImplementation((...args: any[]) => {
+      callback = args.at(-1)
+      return { kill } as any
+    })
+    let wanted = true
+    let settled = false
+    const pending = analyzeAudioPreflight('fixture.wav', 60, () => wanted)
+    void pending.then(() => { settled = true }, () => { settled = true })
+    const rejected = expect(pending).rejects.toBeInstanceOf(TranscriptionCancelledError)
+    try {
+      wanted = false
+      await vi.advanceTimersByTimeAsync(250)
+      expect(kill).toHaveBeenCalledOnce()
+      expect(settled).toBe(false)
+      callback(new Error('terminated'), '', '')
+      await rejected
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { vi.useRealTimers(); vi.mocked(execFile).mockReset() }
+  })
+
   it('classifies a long lobby recording containing only brief cough/noise as no_speech', () => {
     const output = `
 Duration: 00:02:54.85, start: 0.000000, bitrate: 64 kb/s

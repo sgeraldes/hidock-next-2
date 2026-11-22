@@ -17,7 +17,13 @@ describe('reader find index', () => {
     expect(wrapFindIndex(0, 1, 0)).toBe(0)
   })
   it('searches a precomputed 3,000-segment index in under 50ms per keystroke', () => {
-    const index = buildFindIndex(Array.from({ length: 3000 }, (_, i) => ({ key: `turn:${i}`, section: 'transcript', timeMs: i * 2400, text: `Sebastián: Esta reunión revisa las decisiones y próximos pasos. ${'Texto de la conversación. '.repeat(12)}` })))
+    const makeDocuments = (count: number) => Array.from({ length: count }, (_, i) => ({ key: `turn:${i}`, section: 'transcript' as const, timeMs: i * 2400, text: `Sebastián: Esta reunión revisa las decisiones y próximos pasos. ${'Texto de la conversación. '.repeat(12)}` }))
+    // The budget is per keystroke in a running app. Compile the search path on a
+    // separate small index first so a cold JIT is not billed to the first letter
+    // (it measured 53 ms once under machine load while the rest stayed under 3 ms).
+    const warmup = buildFindIndex(makeDocuments(50))
+    for (let i = 0; i < 20; i++) searchFindIndex(warmup, i % 2 ? 'reunion' : 'r')
+    const index = buildFindIndex(makeDocuments(3000))
     const times = ['r', 're', 'reu', 'reun', 'reuni', 'reunion'].map(query => {
       const start = performance.now()
       expect(searchFindIndex(index, query).length).toBeGreaterThan(0)

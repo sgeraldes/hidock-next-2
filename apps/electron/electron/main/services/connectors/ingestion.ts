@@ -32,6 +32,8 @@ import {
   type Meeting,
 } from '../database'
 import { connectorCaptureId, findConnectorArtifact, importArtifact, removeArtifact } from '../artifact-service'
+import { CONNECTOR_ACTIVE_TOKEN, markConnectorMeetingDeleted } from '../calendar-cache'
+import { yieldToEventLoop } from '../event-loop'
 
 type MeetingRow = Omit<Meeting, 'created_at' | 'updated_at'>
 
@@ -76,6 +78,7 @@ export function extensionForItem(item: SourceItem): string {
 
 export interface IngestionDeps {
   upsertMeetings: (rows: MeetingRow[]) => void
+  markMeetingDeleted?: (connectorId: string, externalId: string) => void
   /** Apply a standalone external contact; returns whether it was created/updated. */
   applyContact: (p: ExternalPerson) => 'created' | 'updated'
   importArtifactFile: (
@@ -107,7 +110,8 @@ function defaultApplyContact(p: ExternalPerson): 'created' | 'updated' {
 }
 
 const DEFAULT_DEPS: IngestionDeps = {
-  upsertMeetings: (rows) => upsertMeetingsBatch(rows),
+  upsertMeetings: (rows) => upsertMeetingsBatch(rows, CONNECTOR_ACTIVE_TOKEN),
+  markMeetingDeleted: markConnectorMeetingDeleted,
   applyContact: defaultApplyContact,
   importArtifactFile: (filePath, opts) => importArtifact(filePath, opts),
   captureFor: (connectorId, container) => connectorCaptureId(connectorId, container, connectorLabel(connectorId)),
@@ -127,8 +131,26 @@ export class ConnectorIngestionSink implements IngestionSink {
   async ingest(connectorId: string, container: SourceContainer, items: SourceItem[]): Promise<IngestionOutcome> {
     const outcome: IngestionOutcome = { meetings: 0, contacts: 0, artifacts: 0, skipped: 0 }
     const meetingRows: MeetingRow[] = []
+    const flushMeetings = async (): Promise<void> => {
+      while (meetingRows.length) {
+        const batch = meetingRows.splice(0, 20)
+        this.deps.upsertMeetings(batch)
+        outcome.meetings += batch.length
+        await yieldToEventLoop()
+      }
+    }
 
     for (const item of items) {
+      // Do not advance the delta cursor if a calendar mutation could not be
+      // persisted. Replay is idempotent; skipping it would lose that update.
+      if (item.kind === 'meeting' && item.metadata?.deleted === true) {
+        if (!this.deps.markMeetingDeleted) throw new Error('Calendar deletion sink unavailable')
+        // Apply the preceding writes before the tombstone to preserve page order.
+        await flushMeetings()
+        this.deps.markMeetingDeleted(connectorId, item.externalId)
+        outcome.meetings++
+        continue
+      }
       try {
         if (item.kind === 'meeting' && item.entity) {
           meetingRows.push(externalMeetingToRow(connectorId, item.entity as ExternalMeeting))
@@ -178,10 +200,7 @@ export class ConnectorIngestionSink implements IngestionSink {
       }
     }
 
-    if (meetingRows.length > 0) {
-      this.deps.upsertMeetings(meetingRows)
-      outcome.meetings += meetingRows.length
-    }
+    await flushMeetings()
     return outcome
   }
 

@@ -34,6 +34,17 @@ function base(over: Partial<ValidityInput> = {}): ValidityInput {
 }
 
 describe('assessTranscriptValidity', () => {
+  it('does not treat matching transcript words as verification of extra speaker labels', () => {
+    const segments = Array.from({ length: 60 }, (_, i) => ({
+      speaker: `Voice ${i % 5}`, start: i * 10, end: i * 10 + 9, text: words(20, `-${i}`)
+    }))
+    const input = base({ envelope: envelope([[160, 600]]), segments, attendees: 2, sample: 'confirmed' })
+    const verdict = assessTranscriptValidity(input)
+    expect(verdict.status).toBe('doubtful')
+    expect(verdict.reasons.map(reason => reason.code)).toEqual(['more_speakers_than_invited'])
+    // An explicit owner acceptance remains a separate decision from automated verification.
+    expect(assessTranscriptValidity({ ...input, accepted: true }).status).toBe('valid')
+  })
   it('is valid when the text sits where the audio is', () => {
     const env = envelope([[160, 600]])
     const segments = Array.from({ length: 60 }, (_, i) => ({ speaker: i % 2 ? 'A' : 'B', start: i * 10, end: i * 10 + 9, text: words(20, `-${i}`) }))

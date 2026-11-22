@@ -591,6 +591,7 @@ function makeProvenanceGate(
 }
 
 class RAGService {
+  getActiveRequestCount(): number { return this.inFlight.size }
   private contexts: LRUSessionCache = new LRUSessionCache()
   // B-CHAT-005: Active AbortControllers for cancellable requests
   private activeControllers: Map<string, AbortController> = new Map()

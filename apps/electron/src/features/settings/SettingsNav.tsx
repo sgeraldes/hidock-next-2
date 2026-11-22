@@ -31,11 +31,9 @@ export function SettingsNav({
     <>
       {/* Narrow windows: one picker instead of the side menu. */}
       <div className="border-b border-border p-3 md:hidden">
-        <label htmlFor="settings-section-picker" className="sr-only">
-          Settings section
-        </label>
         <select
           id="settings-section-picker"
+          aria-label="Settings section"
           value={active}
           onChange={(e) => onSelect(e.target.value as SettingsSectionId)}
           className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"

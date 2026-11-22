@@ -56,8 +56,9 @@ async function defaultCreateSession(onnxPath: string, provider: 'webgpu' | 'cpu'
   const executionProviders = provider === 'webgpu' ? ['webgpu', 'cpu'] : ['cpu']
   const session = await ort.InferenceSession.create(onnxPath, {
     executionProviders,
-    intraOpNumThreads: Math.max(1, Math.floor(availableParallelism() *
-      Math.max(10, Math.min(75, Number(process.env.HIDOCK_EMBED_CPU_PERCENT) || 50)) / 100)),
+    intraOpNumThreads: Math.max(1, Math.min(availableParallelism(), Number(process.env.HIDOCK_EMBED_THREADS) ||
+      Math.floor(availableParallelism() *
+      Math.max(10, Math.min(100, Number(process.env.HIDOCK_EMBED_CPU_PERCENT) || 50)) / 100))),
     interOpNumThreads: 1,
     executionMode: 'sequential',
     extra: { session: { 'intra_op.allow_spinning': '0', 'inter_op.allow_spinning': '0' } },
@@ -154,6 +155,7 @@ class LocalEmbedderService {
             this.deps.createSession(join(dir, 'onnx', 'model.onnx'), provider))
           this.backend = provider
         } catch (gpuErr) {
+          if (!this.preferGpu) throw gpuErr
           console.warn('[LocalEmbedder] WebGPU session failed, falling back to CPU:', gpuErr)
           this.session = await this.deps.createSession(join(dir, 'onnx', 'model.onnx'), 'cpu')
           this.backend = 'cpu'

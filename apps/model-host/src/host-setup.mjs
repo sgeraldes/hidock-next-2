@@ -58,7 +58,7 @@ export class HostSetup {
     this.hfToken = deps.hfToken || ''
     this.status = deps.validated ? 'ready' : this.hfToken ? 'not-validated' : 'needs-token'
     this.reason = ''
-    this.device = ''
+    this.device = deps.validated ? String(deps.validatedDevice || '') : ''
     this.running = null
     /** A different token arrived while a test was running. */
     this.rerun = false

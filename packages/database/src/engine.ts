@@ -43,7 +43,8 @@
  *   4. Full Schema       — re-run all statements to apply indexes/constraints
  */
 
-import { existsSync, linkSync, readdirSync, renameSync, rmSync, statSync, statfsSync } from 'fs'
+import { closeSync, existsSync, fsyncSync, linkSync, openSync, renameSync, rmSync, statSync, statfsSync } from 'fs'
+import { promises as fsPromises } from 'fs'
 import { dirname, basename, join } from 'path'
 import { randomUUID } from 'crypto'
 
@@ -92,6 +93,32 @@ export interface ExternalBackup {
   sourceMtimeNs: bigint
   sourceSize: number
 }
+/** One isolated SQLite backup job; the host supplies the process boundary. */
+export interface DatabaseBackupRequest {
+  sourcePath: string
+  partialPath: string
+  targetPath: string
+  pagesPerStep: number
+  checkFreeSpace: boolean
+  expectedSchemaVersion?: number
+}
+
+export interface DatabaseBackupProgress {
+  copiedBytes: number
+  totalBytes: number
+}
+
+export interface DatabaseBackupExecutorOptions {
+  onProgress?: (progress: DatabaseBackupProgress) => void
+  signal?: AbortSignal
+}
+
+/** Injected so @hidock/database does not depend on Electron. */
+export type DatabaseBackupExecutor = (
+  request: DatabaseBackupRequest,
+  options?: DatabaseBackupExecutorOptions
+) => Promise<void>
+
 
 /** What the engine reports while it opens the database, for a splash screen. */
 export type BootProgress =
@@ -537,6 +564,12 @@ export interface DatabaseEngineConfig {
    */
   backupOnBoot?: { keep: number }
   /**
+   * Host-owned process executor for SQLite backup, verification, and publish.
+   * Electron injects a utility-process implementation; other consumers may
+   * omit it and retain the package's in-process compatibility path.
+   */
+  backupExecutor?: DatabaseBackupExecutor
+  /**
    * Complete backups made by something else (the hourly backup task), newest
    * first. Before a migration the engine reuses the newest one when the
    * database has not changed since that backup started, instead of copying
@@ -575,6 +608,17 @@ export interface DatabaseEngineConfig {
 }
 
 const BYTES_PER_MB = 1024 * 1024
+
+/** Pre-migration copy: the splash is already waiting, so favour throughput (8 MiB at 4 KiB pages). */
+const MIGRATION_BACKUP_PAGES_PER_STEP = 2048
+/** Routine copy runs while the window is open: 1 MiB per native step at 4 KiB pages. */
+const ROUTINE_BACKUP_PAGES_PER_STEP = 256
+/**
+ * The routine copy flushes the partial file to disk every 64 MiB (4 KiB pages).
+ * Without it SQLite syncs the whole destination inside the last backup step:
+ * ~0.4-0.6 s of main-thread block on a 3.2 GB library, against ~45 ms with it.
+ */
+const ROUTINE_BACKUP_FLUSH_PAGES = 16384
 
 /** The database file as it was before this boot opened it. */
 type BeforeOpen = { mtimeNs: bigint; size: number; walBytes: number }
@@ -677,9 +721,9 @@ export class DatabaseEngine {
       if (failClosed) {
         // Only this exact engine-owned naming convention is eligible. Remove
         // interrupted copies before the free-space check so retries can recover.
-        for (const file of readdirSync(dir)) {
+        for (const file of await fsPromises.readdir(dir)) {
           if (file.startsWith(prefix) && /^pre-v\d+\.partial$/.test(file.slice(prefix.length))) {
-            rmSync(join(dir, file), { force: true })
+            await fsPromises.rm(join(dir, file), { force: true })
           }
         }
       }
@@ -689,6 +733,7 @@ export class DatabaseEngine {
         ? `${prefix}pre-v${this.config.schemaVersion}-${new Date().toISOString().replace(/[-:.]/g, '')}-${randomUUID()}`
         : `${prefix}${day}`)
       let reused = false
+      let backupVerified = false
       const reusable = failClosed ? this.reusableExternalBackup(before, version) : null
       if (reusable) {
         // A hard link gives a unique migration name without copying a byte and keeps
@@ -698,6 +743,7 @@ export class DatabaseEngine {
         try {
           linkSync(reusable, bak)
           reused = true
+          backupVerified = true
           onProgress?.({ phase: 'backup-reused', path: reusable })
           console.log(`[Database] Pre-migration backup: linked ${reusable} as ${bak}`)
         } catch (e) {
@@ -705,71 +751,101 @@ export class DatabaseEngine {
         }
       }
       if (!reused && !existsSync(bak)) {
-        // SQLite's online backup API runs incrementally without blocking the
-        // Node event loop and includes committed WAL pages. A raw copyFileSync
-        // of the 2.79 GB main file blocked Electron startup for ~153 seconds and
-        // could omit WAL state.
-        const partial = failClosed ? join(dir, `${prefix}pre-v${this.config.schemaVersion}.partial`) : `${bak}.partial`
-        if (!failClosed) rmSync(partial, { force: true })
-        const source = new this.config.betterSqlite3(this.dbPath, { readonly: true, fileMustExist: true })
-        try {
-          const pageSize = Number(source.pragma('page_size', { simple: true })) || 4096
-          if (failClosed) {
-            const needed = Math.max(statSync(this.dbPath).size, Number(source.pragma('page_count', { simple: true })) * pageSize)
-            const space = statfsSync(dir, { bigint: true })
-            const available = space.bavail * space.bsize
-            if (available < BigInt(needed)) {
-              throw new Error(`Insufficient free space for pre-migration backup: need ${needed} bytes, available ${available} bytes`)
-            }
-          }
+        const partial = failClosed
+          ? join(dir, prefix + 'pre-v' + this.config.schemaVersion + '.partial')
+          : bak + '.partial'
+        if (this.config.backupExecutor) {
           let lastReport = 0
-          await source.backup(partial, {
-            progress: ({ totalPages, remainingPages }) => {
+          await this.config.backupExecutor({
+            sourcePath: this.dbPath,
+            partialPath: partial,
+            targetPath: bak,
+            pagesPerStep: failClosed ? MIGRATION_BACKUP_PAGES_PER_STEP : ROUTINE_BACKUP_PAGES_PER_STEP,
+            checkFreeSpace: failClosed,
+            expectedSchemaVersion: failClosed ? version : undefined,
+          }, {
+            onProgress: ({ copiedBytes, totalBytes }) => {
               const now = Date.now()
-              if (onProgress && (now - lastReport > 250 || remainingPages === 0)) {
+              if (onProgress && (now - lastReport > 250 || copiedBytes >= totalBytes)) {
                 lastReport = now
-                onProgress({
-                  phase: 'backup',
-                  copiedBytes: (totalPages - remainingPages) * pageSize,
-                  totalBytes: totalPages * pageSize,
-                })
+                onProgress({ phase: 'backup', copiedBytes, totalBytes })
               }
-              // Pages per step: 8 MB at 4 KB pages. The default (100) spends
-              // most of a multi-gigabyte copy on per-step overhead.
-              return 2048
             },
           })
-          // SQLite does not call back after the last step: report the finish.
-          if (onProgress) {
-            const total = statSync(partial).size
-            onProgress({ phase: 'backup', copiedBytes: total, totalBytes: total })
+          backupVerified = true
+        } else {
+          // Compatibility path for non-Electron consumers without a host executor.
+          if (!failClosed) rmSync(partial, { force: true })
+          const source = new this.config.betterSqlite3(this.dbPath, { readonly: true, fileMustExist: true })
+          try {
+            const pageSize = Number(source.pragma('page_size', { simple: true })) || 4096
+            if (failClosed) {
+              const pageCount = Number(source.pragma('page_count', { simple: true }))
+              const needed = Math.max(statSync(this.dbPath).size, pageCount * pageSize)
+              const space = statfsSync(dir, { bigint: true })
+              const available = space.bavail * space.bsize
+              if (available < BigInt(needed)) {
+                throw new Error(
+                  'Insufficient free space for pre-migration backup: need ' + needed + ' bytes, available ' + available + ' bytes'
+                )
+              }
+            }
+            let lastReport = 0
+            let flushedPages = 0
+            let partialFd: number | null = null
+            try {
+              await source.backup(partial, {
+                progress: ({ totalPages, remainingPages }) => {
+                  const now = Date.now()
+                  if (onProgress && (now - lastReport > 250 || remainingPages === 0)) {
+                    lastReport = now
+                    onProgress({
+                      phase: 'backup',
+                      copiedBytes: (totalPages - remainingPages) * pageSize,
+                      totalBytes: totalPages * pageSize,
+                    })
+                  }
+                  if (failClosed) return MIGRATION_BACKUP_PAGES_PER_STEP
+                  const copiedPages = totalPages - remainingPages
+                  if (copiedPages - flushedPages >= ROUTINE_BACKUP_FLUSH_PAGES) {
+                    if (partialFd === null) partialFd = openSync(partial, 'r+')
+                    fsyncSync(partialFd)
+                    flushedPages = copiedPages
+                  }
+                  return ROUTINE_BACKUP_PAGES_PER_STEP
+                },
+              })
+            } finally {
+              if (partialFd !== null) closeSync(partialFd)
+            }
+            if (onProgress) {
+              const total = statSync(partial).size
+              onProgress({ phase: 'backup', copiedBytes: total, totalBytes: total })
+            }
+          } finally {
+            source.close()
           }
-        } finally {
-          source.close()
+          if (failClosed) {
+            const snapshot = new this.config.betterSqlite3(partial, { fileMustExist: true })
+            try { snapshot.pragma('journal_mode = DELETE') } finally { snapshot.close() }
+            this.verifyMigrationBackup(partial, version)
+            backupVerified = true
+          }
+          renameSync(partial, bak)
         }
-        if (failClosed) {
-          // Make the restore point a standalone file, including any WAL pages.
-          const snapshot = new this.config.betterSqlite3(partial, { fileMustExist: true })
-          try { snapshot.pragma('journal_mode = DELETE') } finally { snapshot.close() }
-          this.verifyMigrationBackup(partial, version)
-        }
-        // Only the final name denotes a complete backup. A crash leaves a
-        // .partial file that the next boot removes and retries instead of
-        // accepting a permanently truncated snapshot.
-        renameSync(partial, bak)
-        console.log(`[Database] Boot backup written: ${bak}`)
+        console.log('[Database] Boot backup written: ' + bak)
       }
       if (failClosed) {
-        this.verifyMigrationBackup(bak, version)
-        console.log(`[Database] Migration v${version} -> v${this.config.schemaVersion} restore point: ${bak}`)
+        if (!backupVerified) this.verifyMigrationBackup(bak, version)
+        console.log('[Database] Migration v' + version + ' -> v' + this.config.schemaVersion + ' restore point: ' + bak)
       }
-      const directoryEntries = readdirSync(dir)
+      const directoryEntries = await fsPromises.readdir(dir)
       const existing = directoryEntries
         .filter((file) => file.startsWith(prefix) && /^\d{4}-\d{2}-\d{2}$/.test(file.slice(prefix.length)))
         .sort()
       for (const stale of cfg && cfg.keep > 0 ? existing.slice(0, Math.max(0, existing.length - cfg.keep)) : []) {
         try {
-          rmSync(join(dir, stale), { force: true })
+          await fsPromises.rm(join(dir, stale), { force: true })
         } catch {
           /* best-effort prune */
         }
@@ -782,7 +858,7 @@ export class DatabaseEngine {
         .sort((a, b) => a.replace(/^.*\.bak-pre-v\d+-/, '').localeCompare(b.replace(/^.*\.bak-pre-v\d+-/, '')))
       const keepOthers = failClosed ? 2 : 3
       for (const stale of migrationBackups.slice(0, Math.max(0, migrationBackups.length - keepOthers))) {
-        try { rmSync(join(dir, stale), { force: true }) } catch { /* best-effort prune */ }
+        try { await fsPromises.rm(join(dir, stale), { force: true }) } catch { /* best-effort prune */ }
       }
     } catch (e) {
       console.warn(
@@ -897,6 +973,34 @@ export class DatabaseEngine {
       const onDisk = this.readSchemaVersion()
       if (onDisk < this.config.schemaVersion) throw new SchemaBehindError(onDisk, this.config.schemaVersion)
       this.shim = new SqlJsCompatDatabase(this.bdb, this.recordChanges, () => this.lastChanges)
+    } catch (error) {
+      this.bdb = null
+      this.shim = null
+      bdb.close()
+      throw error
+    }
+  }
+
+  /** Open an existing, exact-version WAL database for normal application work,
+   * with no bootstrap DDL, repairs, migrations, backups or journal conversion.
+   * The application must hold its usual exclusive owner lock before calling.
+   */
+  initializeExistingWritable(): void {
+    this.initializeReadOnly()
+    const onDisk = this.readSchemaVersion()
+    if (onDisk !== this.config.schemaVersion) {
+      this.closeDatabase()
+      throw new Error(`Existing writable mode requires exact schema v${this.config.schemaVersion}; found v${onDisk}`)
+    }
+    this.closeDatabase()
+    const bdb = new this.config.betterSqlite3(this.dbPath, { fileMustExist: true })
+    try {
+      this.bdb = bdb
+      if (this.readSchemaVersion() !== this.config.schemaVersion) throw new Error('Schema changed during existing writable open')
+      if (String(bdb.pragma('journal_mode', { simple: true })).toLowerCase() !== 'wal') throw new Error('Existing writable mode requires WAL; open the owner app to convert the journal')
+      bdb.pragma('busy_timeout = 5000')
+      bdb.pragma('foreign_keys = ON')
+      this.shim = new SqlJsCompatDatabase(bdb, this.recordChanges, () => this.lastChanges)
     } catch (error) {
       this.bdb = null
       this.shim = null
