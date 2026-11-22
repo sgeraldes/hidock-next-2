@@ -10,7 +10,9 @@
  *   clipboard:captured                → emitted when the auto-watch adds a capture
  */
 
-import { ipcMain, BrowserWindow } from 'electron'
+import { ipcMain, BrowserWindow, dialog } from 'electron'
+import { z } from 'zod'
+import { pasteLibrary, newLibraryNote } from '../services/paste-library-runtime'
 import {
   captureClipboardImage,
   startClipboardWatch,
@@ -28,6 +30,20 @@ function broadcastCapture(result: ClipboardCaptureResult): void {
 }
 
 export function registerClipboardCaptureHandlers(): void {
+  const snapshotSchema = z.object({
+    files: z.array(z.string().min(1).max(32768)).max(100).optional(),
+    text: z.string().max(1024 * 1024).optional(),
+    png: z.instanceof(Uint8Array).refine((bytes) => bytes.length <= 25 * 1024 * 1024).optional()
+  }).strict()
+  ipcMain.handle('library:paste', async (_event, snapshot: unknown) => {
+    try { return await pasteLibrary(snapshot === undefined ? undefined : snapshotSchema.parse(snapshot)) }
+    catch (error) { return [{ title: 'Clipboard', error: error instanceof Error ? error.message : String(error) }] }
+  })
+  ipcMain.handle('library:pickFiles', async () => {
+    const result = await dialog.showOpenDialog({ title: 'Import to Library', properties: ['openFile', 'multiSelections'], filters: [{ name: 'All files', extensions: ['*'] }] })
+    return result.canceled ? [] : pasteLibrary({ files: result.filePaths })
+  })
+  ipcMain.handle('library:newNote', () => newLibraryNote())
   ipcMain.handle('clipboard:captureImage', async (): Promise<ClipboardCaptureResult> => {
     return captureClipboardImage()
   })

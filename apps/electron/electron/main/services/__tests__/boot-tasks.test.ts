@@ -14,10 +14,11 @@ import {
 
 // feature-gate transitively imports config → electron; keep it hermetic.
 let featuresConfig: FeaturesConfig | undefined
+let summaryRetry: Record<string, unknown> | undefined
 const initializeVectorStore = vi.fn(async () => undefined)
 const backfillMissingTranscripts = vi.fn(async () => ({ indexed: 0, skipped: 0 }))
 vi.mock('../config', () => ({
-  getConfig: () => ({ features: featuresConfig }),
+  getConfig: () => ({ features: featuresConfig, transcription: { summaryRetry } }),
 }))
 vi.mock('../vector-store', () => ({
   getVectorStore: () => ({
@@ -45,7 +46,7 @@ vi.mock('../identity-rules', () => ({
   }),
 }))
 
-import { BOOT_TASK_DEFS, registerGatedBootTasks } from '../boot-tasks'
+import { BOOT_TASK_DEFS, automaticSummaryRetryDue, healMissingSummaries, registerGatedBootTasks } from '../boot-tasks'
 
 const ALL_TASK_NAMES = [
   'database-backup',
@@ -55,6 +56,7 @@ const ALL_TASK_NAMES = [
   'knowledge-capture-backfill',
   'audio-profile-backfill', 'evaluation-warning-refresh', 'evaluation-catchup', 'kind-fallback',
   'transcript-sampling',
+  'summary-reanalysis',
   'meeting-wiki-backfill',
   'start-transcription-processor',
   'semantic-index-restore',
@@ -136,6 +138,7 @@ describe('registerGatedBootTasks', () => {
       'knowledge-capture-backfill',
       'audio-profile-backfill', 'evaluation-warning-refresh', 'evaluation-catchup', 'kind-fallback',
       'transcript-sampling',
+      'summary-reanalysis',
       'start-transcription-processor',
     ])
   })
@@ -174,5 +177,63 @@ describe('registerGatedBootTasks', () => {
     const registered: string[] = []
     registerGatedBootTasks({ register: (t) => registered.push(t.name) })
     expect(registered).toEqual(['database-backup', 'integrity-check', 'knowledge-capture-backfill', 'audio-profile-backfill', 'evaluation-warning-refresh'])
+  })
+})
+
+describe('summary reanalysis (27-oct-2026)', () => {
+  // A summary that failed leaves the transcript with no summary; this pass is
+  // what fills it. Until now nothing in the app ever called it.
+  it('heals up to three transcripts when the transcription queue is idle', async () => {
+    const heal = vi.fn(async () => 2)
+    expect(await healMissingSummaries({ queueBusy: () => false, heal })).toBe(2)
+    expect(heal).toHaveBeenCalledWith(3, undefined)
+  })
+
+  it('takes as many per pass as Settings says, and passes the query through (28-oct-2026)', async () => {
+    summaryRetry = { perPass: 7 }
+    try {
+      const heal = vi.fn(async () => 0)
+      await healMissingSummaries({ queueBusy: () => false, heal }, { neverTried: true })
+      expect(heal).toHaveBeenCalledWith(7, { neverTried: true })
+    } finally {
+      summaryRetry = undefined
+    }
+  })
+
+  it('retries automatically only when switched on and the minutes have passed', () => {
+    const now = Date.UTC(2026, 9, 28, 12)
+    try {
+      summaryRetry = { auto: true, everyMinutes: 30 }
+      expect(automaticSummaryRetryDue(now, now - 29 * 60_000)).toBe(false)
+      expect(automaticSummaryRetryDue(now, now - 30 * 60_000)).toBe(true)
+      summaryRetry = { auto: false, everyMinutes: 30 }
+      expect(automaticSummaryRetryDue(now, 0)).toBe(false)
+      // Absent settings keep the earlier behaviour: on, every two hours.
+      summaryRetry = undefined
+      expect(automaticSummaryRetryDue(now, now - 119 * 60_000)).toBe(false)
+      expect(automaticSummaryRetryDue(now, now - 120 * 60_000)).toBe(true)
+    } finally {
+      summaryRetry = undefined
+    }
+  })
+
+  it('never runs two passes at once (review of #187)', async () => {
+    let release!: () => void
+    const heal = vi.fn(() => new Promise<number>((resolve) => { release = () => resolve(1) }))
+    const first = healMissingSummaries({ queueBusy: () => false, heal })
+    expect(await healMissingSummaries({ queueBusy: () => false, heal })).toBe(0)
+    release()
+    expect(await first).toBe(1)
+    expect(heal).toHaveBeenCalledTimes(1)
+    // Free again once the first pass is over.
+    const again = healMissingSummaries({ queueBusy: () => false, heal })
+    release()
+    expect(await again).toBe(1)
+  })
+
+  it('waits while the queue is transcribing, so it never competes with it', async () => {
+    const heal = vi.fn(async () => 1)
+    expect(await healMissingSummaries({ queueBusy: () => true, heal })).toBe(0)
+    expect(heal).not.toHaveBeenCalled()
   })
 })

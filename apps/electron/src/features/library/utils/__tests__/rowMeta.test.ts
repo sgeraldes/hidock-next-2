@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { getRowMeta } from '../rowMeta'
+import { BUILTIN_ARTIFACT_TYPES } from '../sourceType'
+import { File } from 'lucide-react'
 import { formatDuration } from '@/lib/utils'
 import type { UnifiedRecording } from '@/types/unified-recording'
 
@@ -12,6 +14,13 @@ function make(filename: string, duration: number, dateRecorded: Date = DATE, loc
 }
 
 describe('getRowMeta', () => {
+  it.each(['future-kind', 'constructor', '__proto__'])('uses a generic icon for an unmapped registered type %s', (id) => {
+    const descriptor = { id, label: id, pluralLabel: id, extensions: ['future'], capabilities: [] }
+    BUILTIN_ARTIFACT_TYPES.push(descriptor)
+    try {
+      expect(getRowMeta(make('item.future', 0)).Icon).toBe(File)
+    } finally { BUILTIN_ARTIFACT_TYPES.pop() }
+  })
   beforeEach(() => {
     vi.useFakeTimers()
     vi.setSystemTime(NOW)

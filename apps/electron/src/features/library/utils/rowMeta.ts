@@ -11,7 +11,7 @@
  * Each type also carries a small glyph so the list scans by kind at a glance.
  */
 
-import { AudioLines, Image, FileText, StickyNote, Braces, File, type LucideIcon } from 'lucide-react'
+import { AudioLines, Image, FileText, StickyNote, Braces, File, Link, Video, type LucideIcon } from 'lucide-react'
 import { formatDuration } from '@/lib/utils'
 import { formatSmartDate, formatRelativeDate } from '@/lib/smartDate'
 import type { UnifiedRecording } from '@/types/unified-recording'
@@ -30,12 +30,14 @@ const TYPE_ICON: Record<LibrarySourceType, LucideIcon> = {
   pdf: FileText,
   note: StickyNote,
   data: Braces,
+  link: Link,
+  video: Video,
   unknown: File
 }
 
 export function getRowMeta(recording: UnifiedRecording): RowMeta {
   const type = getSourceType(recording)
-  const Icon = TYPE_ICON[type]
+  const Icon = Object.hasOwn(TYPE_ICON, type) ? TYPE_ICON[type] : File
   // Relative hint ("2 days ago", "3 mo ago", "2 yr ago") complements the absolute
   // date so recency reads at a glance. Null for missing/invalid dates.
   const relative = formatRelativeDate(recording.dateRecorded)

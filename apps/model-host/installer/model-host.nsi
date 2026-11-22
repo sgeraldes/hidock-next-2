@@ -86,6 +86,9 @@ Section "Model Host" SEC_MAIN
   CreateDirectory "$SMPROGRAMS\${PRODUCT}"
   CreateShortCut "$SMPROGRAMS\${PRODUCT}\${PRODUCT}.lnk" "$INSTDIR\${TRAY_EXE}"
   CreateShortCut "$SMPROGRAMS\${PRODUCT}\Uninstall.lnk" "$INSTDIR\uninstall.exe"
+  CreateShortCut "$SMPROGRAMS\${PRODUCT}\Prepare Cohere ASR.lnk" "$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" '-NoProfile -NoExit -ExecutionPolicy Bypass -File "$INSTDIR\Prepare-ASR.ps1" -Model "CohereLabs/cohere-transcribe-03-2026"'
+  CreateShortCut "$SMPROGRAMS\${PRODUCT}\Prepare VibeVoice ASR.lnk" "$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" '-NoProfile -NoExit -ExecutionPolicy Bypass -File "$INSTDIR\Prepare-ASR.ps1" -Model "microsoft/VibeVoice-ASR"'
+
 
   WriteUninstaller "$INSTDIR\uninstall.exe"
 SectionEnd
@@ -112,6 +115,8 @@ Section "Uninstall"
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCT_KEY}"
   Delete "$SMPROGRAMS\${PRODUCT}\${PRODUCT}.lnk"
   Delete "$SMPROGRAMS\${PRODUCT}\Uninstall.lnk"
+  Delete "$SMPROGRAMS\${PRODUCT}\Prepare Cohere ASR.lnk"
+  Delete "$SMPROGRAMS\${PRODUCT}\Prepare VibeVoice ASR.lnk"
   ; Shortcuts of 0.1 and 0.2, when this uninstall follows an upgrade.
   Delete "$SMPROGRAMS\${PRODUCT}\Set up ${PRODUCT}.lnk"
   Delete "$SMPROGRAMS\${PRODUCT}\${PRODUCT} - pause or resume.lnk"

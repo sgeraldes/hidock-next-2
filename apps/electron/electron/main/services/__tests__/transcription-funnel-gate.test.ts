@@ -29,6 +29,12 @@ vi.mock('../config', () => ({
   }),
 }))
 
+const transcribable = vi.hoisted(() => ({ allowed: true }))
+vi.mock('../recording-eligibility', () => ({
+  isRecordingTranscribable: () => transcribable.allowed,
+  isRecordingEligible: () => transcribable.allowed
+}))
+
 // Heavy/irrelevant deps of the transcription module — inert mocks.
 vi.mock('@hidock/transcription', () => ({ GeminiEngine: class {} }))
 vi.mock('@google/generative-ai', () => ({ GoogleGenerativeAI: class {} }))
@@ -82,19 +88,43 @@ const dbSpies = vi.hoisted(() => {
     'createProcessingRun',
     'completeProcessingRun',
     'failProcessingRun',
+    // Imported by transcription.ts today; getQueueState() and the manual path read the two "owned"
+    // lists on every queue emit, so they need real-shaped defaults (below), not bare spies.
+    'getOwnedPipelineRecordings',
+    'getOwnedProcessingRuns',
+    'persistAiMeetingResolution',
+    'clearAutomaticMeetingLink',
+    'isHumanCorrelationMethod',
+    'isValueExcludedRecording',
+    'isRecordingProcessable',
+    'isRecordingGraphIngestable',
+    'getFailedTranscriptsForReanalysis',
+    'getSpeakerMap',
+    'assignSpeaker',
+    'retireGeneratedContentForNoSpeech',
+    'checkTranscriptIntegrity',
   ]
+  // Shapes the production code relies on. A bare vi.fn() returns undefined, which is not a valid
+  // "nothing is owned" answer: callers do owned.includes(id) and new Set(runs.keys()).
+  const defaults: Record<string, () => unknown> = {
+    getOwnedPipelineRecordings: () => [],
+    getOwnedProcessingRuns: () => new Map<string, string>(),
+    getFailedTranscriptsForReanalysis: () => [],
+  }
   const spies: Record<string, ReturnType<typeof import('vitest').vi.fn>> = {}
-  return { names, spies }
+  return { names, defaults, spies }
 })
 vi.mock('../database', () => {
   const mod: Record<string, unknown> = {}
   for (const name of dbSpies.names) {
-    mod[name] = dbSpies.spies[name] = vi.fn()
+    const spy = dbSpies.spies[name] = vi.fn()
+    if (dbSpies.defaults[name]) spy.mockImplementation(dbSpies.defaults[name])
+    mod[name] = spy
   }
   return mod
 })
 
-import { queueTranscriptionIfEnabled, processQueueManually } from '../transcription'
+import { queueTranscriptionIfEnabled, processQueueManually, onQueueDrained } from '../transcription'
 
 beforeEach(() => {
   for (const spy of Object.values(dbSpies.spies)) spy.mockClear()
@@ -106,9 +136,15 @@ beforeEach(() => {
   ])
   featuresConfig = undefined
   autoTranscribe = true
+  transcribable.allowed = true
 })
 
 describe('queueTranscriptionIfEnabled × transcription feature gate', () => {
+  it('can enqueue durably during quit without starting the processor', () => {
+    expect(queueTranscriptionIfEnabled('quit-recording', { deferProcessing: true })).toBe(true)
+    expect(dbSpies.spies['addToQueue']).toHaveBeenCalledWith('quit-recording')
+    expect(dbSpies.spies['acquireTranscriptionLock']).not.toHaveBeenCalled()
+  })
   it('with ALL optional features disabled + autoTranscribe true: queue stays empty, no processor starts', () => {
     featuresConfig = { preset: 'library-only', flags: {} } // transcription feature OFF
     autoTranscribe = true // legacy setting still on — must NOT win
@@ -133,6 +169,12 @@ describe('queueTranscriptionIfEnabled × transcription feature gate', () => {
     featuresConfig = { preset: 'library-transcription', flags: {} } // transcription ON
     expect(queueTranscriptionIfEnabled('rec-3')).toBe(true)
     expect(dbSpies.spies['addToQueue']).toHaveBeenCalledWith('rec-3')
+  })
+
+  it('refuses a value-excluded recording during automatic enqueue', () => {
+    transcribable.allowed = false
+    expect(queueTranscriptionIfEnabled('garbage-rec')).toBe(false)
+    expect(dbSpies.spies['addToQueue']).not.toHaveBeenCalled()
   })
 
   it('still respects the legacy autoTranscribe=false setting when the feature is on', () => {
@@ -208,6 +250,40 @@ describe('processQueue drain × mid-run disable (round-3 [HIGH])', () => {
 
     expect(processingCalls()).toEqual(['q1']) // item 2 NEVER started
     expect(statuses['q2']).toBe('pending') // still queued, untouched
+  })
+
+  it('tells the listeners when a run empties the queue, so a missing summary follows at once (28-oct-2026)', async () => {
+    featuresConfig = { preset: 'full', flags: {} }
+    armQueue()
+    const drained = vi.fn()
+    const stop = onQueueDrained(drained)
+    try {
+      await processQueueManually()
+      expect(drained).toHaveBeenCalledTimes(1)
+      // An empty tick after that tells nobody: the processor ticks every 10 s.
+      await processQueueManually()
+      expect(drained).toHaveBeenCalledTimes(1)
+    } finally {
+      stop()
+    }
+  })
+
+  it('tells the listeners once at launch even when nothing is queued (review of #192)', async () => {
+    vi.resetModules()
+    const fresh = await import('../transcription')
+    featuresConfig = { preset: 'full', flags: {} }
+    dbSpies.spies['getQueueItems'].mockReturnValue([])
+    dbSpies.spies['acquireTranscriptionLock'].mockReturnValue(true)
+    const drained = vi.fn()
+    const stop = fresh.onQueueDrained(drained)
+    try {
+      await fresh.processQueueManually()
+      expect(drained).toHaveBeenCalledTimes(1)
+      await fresh.processQueueManually()
+      expect(drained).toHaveBeenCalledTimes(1)
+    } finally {
+      stop()
+    }
   })
 
   it('with the feature already disabled, a queue pass is a total no-op (no lock, no bookkeeping)', async () => {

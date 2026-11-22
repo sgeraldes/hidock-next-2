@@ -1,3 +1,4 @@
+// Legacy repair scenarios explicitly opt into paid audio retries. Default-policy tests are below.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Mock @google/genai BEFORE importing GeminiEngine. The current SDK returns
@@ -150,7 +151,7 @@ describe('lying-wav', () => {
   it('preserves full caller duration after a damaged sync and resynchronizes past it', async () => {
     const input = lyingWav(1800)
     input[44 + 40000 * 288] = 0
-    const engine = new GeminiEngine({ apiKey: 'x' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x' })
     const rolling = vi.spyOn(engine as any, 'transcribeLongRecordingWithInteractions').mockResolvedValue([])
     await collect(engine.transcribe(input, { source: 'mic', filePath: 'recording.wav', durationSeconds: 1800 }))
     expect(rolling).toHaveBeenCalled()
@@ -215,7 +216,7 @@ describe('lying-wav', () => {
       hasSpeech: true, segments: [{ timestamp: mockGenerateContentStream.mock.calls.length === 3 ? '04:59' : '09:59',
         speaker: 'Speaker 1', content: `chunk ${mockGenerateContentStream.mock.calls.length}` }],
     })))
-    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-2.5-flash' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x', model: 'gemini-2.5-flash' })
     const segments = await collect(engine.transcribe(lyingWav(1500), { source: 'mic', durationSeconds: 375 }))
     for (const [request] of mockGenerateContentStream.mock.calls) {
       const part = request.contents[0].parts.find((p: any) => p.inlineData).inlineData
@@ -236,7 +237,7 @@ describe('lying-wav', () => {
       expect(Buffer.from(await file.arrayBuffer()).equals(input.subarray(44))).toBe(true)
       throw new Error('upload failed')
     })
-    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-flash' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x', model: 'gemini-3.5-flash' })
     await expect(collect(engine.transcribe(input, {
       source: 'mic', filePath: 'old.wav', durationSeconds: 375,
     }))).rejects.toThrow('upload failed')
@@ -256,7 +257,7 @@ describe('lying-wav', () => {
     mockInteractionsCreate.mockImplementation(async () => ({
       status: 'completed', output_text: `native chunk ${mockInteractionsCreate.mock.calls.length}`,
     }))
-    const segments = await collect(new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+    const segments = await collect(new GeminiEngine({ allowAudioRetries: true, apiKey: 'x', model: 'gemini-3.5-transcribe' })
       .transcribe(input, { source: 'mic', filePath: 'old.wav', durationSeconds: 375 }))
     expect(mockFilesUpload).toHaveBeenCalledTimes(2)
     expect(segments[1].startTime).toBeCloseTo(1200, 1)
@@ -273,23 +274,23 @@ describe('GeminiEngine', () => {
   })
 
   it('isStreaming is false', () => {
-    expect(new GeminiEngine({ apiKey: 'k' }).isStreaming).toBe(false)
+    expect(new GeminiEngine({ allowAudioRetries: true, apiKey: 'k' }).isStreaming).toBe(false)
   })
 
   it('isLocal is false', () => {
-    expect(new GeminiEngine({ apiKey: 'k' }).isLocal).toBe(false)
+    expect(new GeminiEngine({ allowAudioRetries: true, apiKey: 'k' }).isLocal).toBe(false)
   })
 
   it('isAvailable returns true when apiKey is non-empty', async () => {
-    expect(await new GeminiEngine({ apiKey: 'x' }).isAvailable()).toBe(true)
+    expect(await new GeminiEngine({ allowAudioRetries: true, apiKey: 'x' }).isAvailable()).toBe(true)
   })
 
   it('isAvailable returns false when apiKey is empty', async () => {
-    expect(await new GeminiEngine({ apiKey: '' }).isAvailable()).toBe(false)
+    expect(await new GeminiEngine({ allowAudioRetries: true, apiKey: '' }).isAvailable()).toBe(false)
   })
 
   it('throws when apiKey is empty and transcribe is called', async () => {
-    const engine = new GeminiEngine({ apiKey: '' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: '' })
     await expect(collect(engine.transcribe(oneSecond, { source: 'mic' }))).rejects.toThrow(
       'Gemini API key not configured',
     )
@@ -297,7 +298,7 @@ describe('GeminiEngine', () => {
 
   it('yields a single segment with the transcript text', async () => {
     mockGenerateContentStream.mockResolvedValue(streamResponse('Hello world'))
-    const engine = new GeminiEngine({ apiKey: 'x' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x' })
     const segments = await collect(engine.transcribe(oneSecond, { source: 'mic' }))
 
     expect(segments).toHaveLength(1)
@@ -309,7 +310,7 @@ describe('GeminiEngine', () => {
 
   it('maps system source to "them" default speaker', async () => {
     mockGenerateContentStream.mockResolvedValue(streamResponse('System audio text'))
-    const engine = new GeminiEngine({ apiKey: 'x' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x' })
     const segments = await collect(engine.transcribe(oneSecond, { source: 'system' }))
     expect(segments[0].speaker).toBe('them')
     expect(segments[0].source).toBe('system')
@@ -319,7 +320,7 @@ describe('GeminiEngine', () => {
     mockGenerateContentStream.mockResolvedValue(
       streamResponse('[00:03] Speaker 1: Hola\n[00:07] Speaker 2: Qué tal'),
     )
-    const engine = new GeminiEngine({ apiKey: 'x' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x' })
     const segments = await collect(engine.transcribe(oneSecond, { source: 'mic' }))
     expect(segments).toHaveLength(2)
     expect(segments[0]).toMatchObject({ speaker: 'Speaker 1', text: 'Hola', startTime: 3 })
@@ -328,13 +329,13 @@ describe('GeminiEngine', () => {
 
   it('throws (does not silently drop) when Gemini returns empty text', async () => {
     mockGenerateContentStream.mockResolvedValue(streamResponse('   '))
-    const engine = new GeminiEngine({ apiKey: 'x' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x' })
     await expect(collect(engine.transcribe(oneSecond, { source: 'mic' }))).rejects.toThrow(/empty/i)
   })
 
   it('maps the provider no-speech sentinel to a terminal content outcome', async () => {
     mockGenerateContentStream.mockResolvedValue(streamResponse('[NO_SPEECH]'))
-    const engine = new GeminiEngine({ apiKey: 'x' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x' })
     await expect(collect(engine.transcribe(oneSecond, { source: 'mic' }))).rejects.toBeInstanceOf(
       NoSpeechDetectedError,
     )
@@ -342,7 +343,7 @@ describe('GeminiEngine', () => {
 
   it('tells Gemini that meeting context is never evidence of speech', async () => {
     mockGenerateContentStream.mockResolvedValue(streamResponse('[00:00] Speaker 1: Hola'))
-    const engine = new GeminiEngine({ apiKey: 'x' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x' })
     await collect(engine.transcribe(oneSecond, { source: 'mic', context: 'Meeting: Secret project' }))
 
     const request = mockGenerateContentStream.mock.calls[0][0]
@@ -353,7 +354,7 @@ describe('GeminiEngine', () => {
 
   it('throws when a chunk stays truncated at MAX_TOKENS after retry', async () => {
     mockGenerateContentStream.mockResolvedValue(streamResponse('partial cut off here', 'MAX_TOKENS'))
-    const engine = new GeminiEngine({ apiKey: 'x' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x' })
     await expect(collect(engine.transcribe(oneSecond, { source: 'mic' }))).rejects.toThrow(/MAX_TOKENS/)
   })
 
@@ -361,13 +362,13 @@ describe('GeminiEngine', () => {
     mockGenerateContentStream
       .mockResolvedValueOnce(streamResponse('short', 'MAX_TOKENS'))
       .mockResolvedValueOnce(streamResponse('a much longer complete transcription', 'STOP'))
-    const engine = new GeminiEngine({ apiKey: 'x' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x' })
     const segments = await collect(engine.transcribe(oneSecond, { source: 'mic' }))
     expect(segments[0].text).toBe('a much longer complete transcription')
   })
 
   it('uses the configured model name', async () => {
-    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-flash' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x', model: 'gemini-3.5-flash' })
     await collect(engine.transcribe(oneSecond, { source: 'mic' }))
     expect(mockGenerateContentStream.mock.calls[0][0].model).toBe('gemini-3.5-flash')
   })
@@ -384,7 +385,7 @@ describe('GeminiEngine', () => {
         { type: 'word_info', text: 'Sebastian', speaker: 'spk_1', start_offset: '0.50s', end_offset: '0.90s' },
       ] }] }],
     })
-    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe', language: 'es' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x', model: 'gemini-3.5-transcribe', language: 'es' })
     const segments = await collect(engine.transcribe(oneSecond, {
       source: 'mic', durationSeconds: 1, vocabulary: ['HiDock'],
     }))
@@ -418,7 +419,7 @@ describe('GeminiEngine', () => {
     }))
     const progress = vi.fn()
     const trace = vi.fn()
-    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x', model: 'gemini-3.5-transcribe' })
     const segments = await collect(engine.transcribe(buildWav(3960, 1), {
       source: 'system', durationSeconds: 3960, onProgress: progress, onTrace: trace,
     }))
@@ -441,7 +442,7 @@ describe('GeminiEngine', () => {
   })
 
   it('requests a schema-constrained transcript with the full Gemini 3.5 output budget', async () => {
-    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-flash' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x', model: 'gemini-3.5-flash' })
     await collect(engine.transcribe(oneSecond, { source: 'mic' }))
 
     const config = mockGenerateContentStream.mock.calls[0][0].config
@@ -462,7 +463,7 @@ describe('GeminiEngine', () => {
       capturedPrompt = req.contents[0].parts.find((p: any) => p.text)?.text ?? ''
       return streamResponse('Transcript with context')
     })
-    const engine = new GeminiEngine({ apiKey: 'x' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x' })
     await collect(engine.transcribe(oneSecond, { source: 'mic', context: 'MEETING CONTEXT: Weekly standup' }))
     expect(capturedPrompt).toContain('MEETING CONTEXT: Weekly standup')
   })
@@ -473,7 +474,7 @@ describe('GeminiEngine', () => {
       capturedParts = req.contents[0].parts
       return streamResponse('result')
     })
-    const engine = new GeminiEngine({ apiKey: 'x' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x' })
     const audioBuffer = Buffer.from('fake audio data')
     await collect(engine.transcribe(audioBuffer, { source: 'mic' }))
     const inlineDataPart = capturedParts.find((p: any) => p.inlineData)
@@ -489,7 +490,7 @@ describe('GeminiEngine', () => {
       uri: 'https://generativelanguage.googleapis.com/v1beta/files/recording-1',
     })
     mockGenerateContentStream.mockResolvedValue(streamResponse('[00:00] Speaker 1: Hola'))
-    const engine = new GeminiEngine({ apiKey: 'x' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x' })
     const audioBuffer = Buffer.alloc(GeminiEngine.INLINE_LIMIT_BYTES + 1)
 
     await collect(engine.transcribe(audioBuffer, { source: 'mic', filePath: 'recording.hda' }))
@@ -528,7 +529,7 @@ describe('GeminiEngine', () => {
         hasSpeech: true,
         segments: [{ timestamp: '20:00', speaker: 'Speaker 1', content: 'segunda parte' }],
       }, 'interaction-2'))
-    const engine = new GeminiEngine({ apiKey: 'x' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x' })
 
     const segments = await collect(engine.transcribe(audioBuffer, {
       source: 'mic',
@@ -592,7 +593,7 @@ describe('GeminiEngine', () => {
         hasSpeech: true,
         segments: [{ timestamp: '20:00', speaker: 'Speaker 1', content: 'final' }],
       }, 'range-c'))
-    const engine = new GeminiEngine({ apiKey: 'x' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x' })
 
     const segments = await collect(engine.transcribe(buildWav(1201, 1), {
       source: 'mic',
@@ -613,11 +614,26 @@ describe('GeminiEngine', () => {
     expect(mockInteractionsCreate.mock.calls[3][0].previous_interaction_id).toBe('range-b')
   })
 
+  it('a stream cut after it started giving text is reported as interrupted, never as a refusal (review of #187)', async () => {
+    // Output already streamed means the call ran and was billed; the error must
+    // not look like the provider turning the request away at the door.
+    mockGenerateContentStream.mockResolvedValue((async function* () {
+      yield { text: '{"segments":[' }
+      throw Object.assign(new Error('[503 Service Unavailable] This model is currently experiencing high demand.'), { status: 503 })
+    })())
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x' })
+    const error = await collect(engine.transcribe(oneSecond, { source: 'mic' })).catch((e: unknown) => e) as Error & { status?: number }
+    expect(error.message).toMatch(/^Gemini stream interrupted after output began: /)
+    expect(error.status).toBeUndefined()
+  })
+
   it('propagates errors thrown by generateContentStream', async () => {
-    mockGenerateContentStream.mockRejectedValue(new Error('Rate limit exceeded'))
-    const engine = new GeminiEngine({ apiKey: 'x' })
+    // A rate limit is waited out first (gemini-quota-wait.test.ts); any other
+    // provider error goes straight to the caller.
+    mockGenerateContentStream.mockRejectedValue(new Error('500 Internal error'))
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x' })
     await expect(collect(engine.transcribe(oneSecond, { source: 'mic' }))).rejects.toThrow(
-      'Rate limit exceeded',
+      '500 Internal error',
     )
   })
 })
@@ -643,7 +659,7 @@ describe('GeminiEngine shouldGenerate gate (round-45 ADV43-1)', () => {
   })
 
   it('false up front ⇒ aborts before ANY provider call', async () => {
-    const engine = new GeminiEngine({ apiKey: 'x' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x' })
     await expect(
       collect(engine.transcribe(oneSecond, { source: 'mic', shouldGenerate: () => false }))
     ).rejects.toThrow(TranscriptionCancelledError)
@@ -651,7 +667,7 @@ describe('GeminiEngine shouldGenerate gate (round-45 ADV43-1)', () => {
   })
 
   it('a shouldGenerate that THROWS is fail-closed ⇒ no provider call', async () => {
-    const engine = new GeminiEngine({ apiKey: 'x' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x' })
     await expect(
       collect(
         engine.transcribe(oneSecond, {
@@ -673,7 +689,7 @@ describe('GeminiEngine shouldGenerate gate (round-45 ADV43-1)', () => {
       excluded = true
       return streamResponse('partial cut off', 'MAX_TOKENS')
     })
-    const engine = new GeminiEngine({ apiKey: 'x' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x' })
     await expect(
       collect(engine.transcribe(oneSecond, { source: 'mic', shouldGenerate: () => !excluded }))
     ).rejects.toThrow(TranscriptionCancelledError)
@@ -696,7 +712,7 @@ describe('GeminiEngine shouldGenerate gate (round-45 ADV43-1)', () => {
     })
     // Legacy configured models retain the old chunked request path. Gemini 3.5
     // keeps ordinary recordings whole for cross-recording speaker context.
-    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-2.5-flash' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x', model: 'gemini-2.5-flash' })
     await expect(
       collect(engine.transcribe(mp3, { source: 'mic', shouldGenerate: () => !excluded }))
     ).rejects.toThrow(TranscriptionCancelledError)
@@ -706,7 +722,7 @@ describe('GeminiEngine shouldGenerate gate (round-45 ADV43-1)', () => {
 
   it('control: a gate that stays true transcribes normally', async () => {
     mockGenerateContentStream.mockResolvedValue(streamResponse('[00:03] Speaker 1: hola'))
-    const engine = new GeminiEngine({ apiKey: 'x' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x' })
     const segments = await collect(
       engine.transcribe(oneSecond, { source: 'mic', shouldGenerate: () => true })
     )
@@ -716,7 +732,7 @@ describe('GeminiEngine shouldGenerate gate (round-45 ADV43-1)', () => {
 
   it('no gate configured (undefined) ⇒ unchanged legacy behaviour', async () => {
     mockGenerateContentStream.mockResolvedValue(streamResponse('[00:03] Speaker 1: hola'))
-    const engine = new GeminiEngine({ apiKey: 'x' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x' })
     const segments = await collect(engine.transcribe(oneSecond, { source: 'mic' }))
     expect(segments).toHaveLength(1)
     expect(mockGenerateContentStream).toHaveBeenCalledTimes(1)
@@ -1033,7 +1049,7 @@ describe('GeminiEngine diarization prompt + end-to-end recovery', () => {
       capturedPrompt = req.contents[0].parts.find((p: any) => p.text)?.text ?? ''
       return streamResponse('[00:00] Speaker 1: hola')
     })
-    const engine = new GeminiEngine({ apiKey: 'x' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x' })
     await collect(engine.transcribe(oneSecond, { source: 'mic' }))
     expect(capturedPrompt.toLowerCase()).toContain('distinct')
     expect(capturedPrompt).toContain('formatted MM:SS')
@@ -1048,7 +1064,7 @@ describe('GeminiEngine diarization prompt + end-to-end recovery', () => {
       .mockResolvedValueOnce(
         streamResponse('[00:00] Speaker 1: buenos días a todos [00:02] Speaker 2: gracias, empecemos [00:04] Speaker 1: perfecto')
       )
-    const engine = new GeminiEngine({ apiKey: 'x' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x' })
     const segments = await collect(engine.transcribe(oneSecond, { source: 'mic' }))
     expect(segments).toHaveLength(3)
     expect(segments.map((s) => s.speaker)).toEqual(['Speaker 1', 'Speaker 2', 'Speaker 1'])
@@ -1060,7 +1076,7 @@ describe('GeminiEngine diarization prompt + end-to-end recovery', () => {
     mockGenerateContentStream.mockResolvedValue(
       streamResponse('Speaker 1: uno Speaker 2: dos Speaker 1: tres')
     )
-    const engine = new GeminiEngine({ apiKey: 'x' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x' })
     await expect(collect(engine.transcribe(oneSecond, { source: 'mic' })))
       .rejects.toThrow(/without reliable speaker-turn timing and structure/)
   })
@@ -1073,7 +1089,7 @@ describe('GeminiEngine diarization prompt + end-to-end recovery', () => {
         '[00:22] Speaker 1: primera intervención [00:28] Speaker 2: respuesta [00:32] Speaker 1: seguimiento'
       ))
 
-    const engine = new GeminiEngine({ apiKey: 'x' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x' })
     const segments = await collect(engine.transcribe(oneSecond, { source: 'mic' }))
 
     expect(mockGenerateContentStream).toHaveBeenCalledTimes(2)
@@ -1123,7 +1139,7 @@ describe('GeminiEngine native Transcribe subdivision', () => {
       .mockResolvedValueOnce(incomplete)
       .mockResolvedValueOnce(words(0, 300))
       .mockResolvedValueOnce(words(0, 300))
-    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x', model: 'gemini-3.5-transcribe' })
 
     const segments = await collect(engine.transcribe(wav(600), { source: 'mic', durationSeconds: 600 }))
 
@@ -1144,7 +1160,7 @@ describe('GeminiEngine native Transcribe subdivision', () => {
       .mockResolvedValueOnce(words(0, 1))
       .mockResolvedValueOnce(words(0, 300))
       .mockResolvedValueOnce(words(0, 300))
-    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x', model: 'gemini-3.5-transcribe' })
 
     const segments = await collect(engine.transcribe(wav(600), { source: 'mic', durationSeconds: 600 }))
 
@@ -1161,7 +1177,7 @@ describe('GeminiEngine native Transcribe subdivision', () => {
       .mockResolvedValueOnce(words(10, 290))  // 0-300
       .mockResolvedValueOnce(words(10, 290))  // 300-600
       .mockResolvedValueOnce(words(10, 590))  // 600-1200
-    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x', model: 'gemini-3.5-transcribe' })
 
     const segments = await collect(engine.transcribe(wav(1200), { source: 'mic', durationSeconds: 1200 }))
 
@@ -1174,7 +1190,7 @@ describe('GeminiEngine native Transcribe subdivision', () => {
 
   it('keeps a transcript that reaches the end of its interval', async () => {
     mockInteractionsCreate.mockResolvedValue(words(0, 599))
-    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x', model: 'gemini-3.5-transcribe' })
 
     const segments = await collect(engine.transcribe(wav(600), { source: 'mic', durationSeconds: 600 }))
 
@@ -1185,7 +1201,7 @@ describe('GeminiEngine native Transcribe subdivision', () => {
   it('fails honestly once the interval is too small to halve again', async () => {
     // 30 s is under NATIVE_MIN_SPLIT_SECONDS: there is nothing left to try.
     mockInteractionsCreate.mockResolvedValue(incomplete)
-    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x', model: 'gemini-3.5-transcribe' })
 
     await expect(collect(engine.transcribe(wav(30), { source: 'mic', durationSeconds: 30 })))
       .rejects.toThrow(/could not produce a complete, reliable transcript/)
@@ -1206,7 +1222,7 @@ describe('GeminiEngine native Transcribe subdivision', () => {
       .mockResolvedValueOnce(words(0, 20))  // 0-60:  tail 40 s, accepted
       .mockResolvedValueOnce(silence)       // 60-120
       .mockResolvedValueOnce(silence)       // 120-240
-    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x', model: 'gemini-3.5-transcribe' })
 
     const segments = await collect(engine.transcribe(wav(240), { source: 'mic', durationSeconds: 240 }))
 
@@ -1226,7 +1242,7 @@ describe('GeminiEngine native Transcribe subdivision', () => {
       .mockResolvedValueOnce(incomplete)
       .mockResolvedValueOnce(words(0, 300))
       .mockResolvedValueOnce(words(0, 300))
-    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x', model: 'gemini-3.5-transcribe' })
 
     await collect(engine.transcribe(wav(600), { source: 'mic', durationSeconds: 600 }))
 
@@ -1248,7 +1264,7 @@ describe('GeminiEngine native Transcribe subdivision', () => {
     mockGenerateContentStream.mockResolvedValue(
       streamResponse('[00:00] Speaker 1: hola [00:04] Speaker 2: buenas')
     )
-    const engine = new GeminiEngine({
+    const engine = new GeminiEngine({ allowAudioRetries: true,
       apiKey: 'x',
       model: 'gemini-3.5-transcribe',
       fallbackModel: 'gemini-3.8-flash',
@@ -1272,7 +1288,7 @@ describe('GeminiEngine native Transcribe subdivision', () => {
     // cannot cut to fit are the same wall, so they take the same exit instead
     // of failing the recording outright.
     mockGenerateContentStream.mockResolvedValue(streamResponse('[00:00] Speaker 1: hola'))
-    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x', model: 'gemini-3.5-transcribe' })
 
     const segments = await collect(
       engine.transcribe(m4a, { source: 'mic', durationSeconds: 40 * 60 })
@@ -1288,7 +1304,7 @@ describe('GeminiEngine native Transcribe subdivision', () => {
     // the identical provider answer. Asserting the error TYPE is what makes
     // this fail against the pre-fix code, where there was only one wall.
     mockInteractionsCreate.mockResolvedValue(incomplete)
-    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x', model: 'gemini-3.5-transcribe' })
 
     // Cuttable: the model has answered at the floor, nothing left to ask.
     const cuttable = await collect(engine.transcribe(wav(120), { source: 'mic', durationSeconds: 120 }))
@@ -1307,7 +1323,7 @@ describe('GeminiEngine native Transcribe subdivision', () => {
 
   it('does NOT fall back on silence', async () => {
     mockInteractionsCreate.mockResolvedValue(silence)
-    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x', model: 'gemini-3.5-transcribe' })
 
     await expect(collect(engine.transcribe(m4a, { source: 'mic', durationSeconds: 900 })))
       .rejects.toBeInstanceOf(NoSpeechDetectedError)
@@ -1318,7 +1334,7 @@ describe('GeminiEngine native Transcribe subdivision', () => {
     // An exclusion committed mid-flight must stop the recording, and a
     // fallback that outran it would send the audio to a provider anyway.
     mockInteractionsCreate.mockResolvedValue(incomplete)
-    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x', model: 'gemini-3.5-transcribe' })
 
     await expect(collect(engine.transcribe(m4a, {
       source: 'mic',
@@ -1330,7 +1346,7 @@ describe('GeminiEngine native Transcribe subdivision', () => {
 
   it('does not subdivide silence: no speech is an answer', async () => {
     mockInteractionsCreate.mockResolvedValue(silence)
-    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x', model: 'gemini-3.5-transcribe' })
 
     await expect(collect(engine.transcribe(wav(600), { source: 'mic', durationSeconds: 600 })))
       .rejects.toBeInstanceOf(NoSpeechDetectedError)
@@ -1343,7 +1359,7 @@ describe('GeminiEngine native Transcribe subdivision', () => {
       .mockResolvedValueOnce(words(0, 300))
       .mockResolvedValueOnce(words(0, 300))
     const progress = vi.fn()
-    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x', model: 'gemini-3.5-transcribe' })
 
     await collect(engine.transcribe(wav(600), { source: 'mic', durationSeconds: 600, onProgress: progress }))
 
@@ -1356,7 +1372,7 @@ describe('GeminiEngine native Transcribe subdivision', () => {
       .mockResolvedValueOnce(incomplete)
       .mockResolvedValueOnce(words(0, 300))
       .mockResolvedValueOnce(words(0, 300))
-    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x', model: 'gemini-3.5-transcribe' })
 
     await collect(engine.transcribe(wav(600), { source: 'mic', durationSeconds: 600 }))
 
@@ -1392,7 +1408,7 @@ describe('GeminiEngine thinking-level refusal', () => {
       return streamResponse('[00:00] Speaker 1: uno [00:04] Speaker 2: dos [00:08] Speaker 1: tres')
     })
 
-    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.8-flash' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x', model: 'gemini-3.8-flash' })
     const segments = await collect(engine.transcribe(oneSecond, { source: 'mic' }))
 
     expect(segments).toHaveLength(3)
@@ -1537,7 +1553,7 @@ describe('GeminiEngine reports the usage of every provider response', () => {
       .mockResolvedValueOnce(nativeWords(0, 300, 2))
       .mockResolvedValueOnce(nativeWords(0, 300, 3))
     const events: Array<{ model: string; usage: unknown }> = []
-    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x', model: 'gemini-3.5-transcribe' })
 
     await collect(engine.transcribe(wav(600), { source: 'mic', durationSeconds: 600, onUsage: (e) => events.push(e) }))
 
@@ -1551,7 +1567,7 @@ describe('GeminiEngine reports the usage of every provider response', () => {
       yield { text: '[00:05] Speaker 2: adios', candidates: [{ finishReason: 'STOP' }], usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 4, totalTokenCount: 9 } }
     })())
     const events: Array<{ model: string; usage: unknown }> = []
-    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.8-flash' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x', model: 'gemini-3.8-flash' })
 
     await collect(engine.transcribe(oneSecond, { source: 'mic', onUsage: (e) => events.push(e) }))
 
@@ -1581,7 +1597,7 @@ describe('GeminiEngine reports the usage of every provider response', () => {
     // A range that reaches the end of its interval is kept as it is; a short one is asked again.
     mockInteractionsCreate.mockResolvedValueOnce(range('a', ['00:00', '19:50'])).mockResolvedValueOnce(range('b', ['20:00']))
     const events: Array<{ model: string; usage: unknown }> = []
-    const engine = new GeminiEngine({ apiKey: 'x' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x' })
 
     await collect(engine.transcribe(buildWav(1201, 1), { source: 'mic', filePath: 'long-recording.wav', durationSeconds: 1201, onUsage: (e) => events.push(e) }))
 
@@ -1591,7 +1607,7 @@ describe('GeminiEngine reports the usage of every provider response', () => {
   })
 
   it('a sink that throws, and a response without usage, change nothing', async () => {
-    const engine = new GeminiEngine({ apiKey: 'x', model: 'gemini-3.5-transcribe' })
+    const engine = new GeminiEngine({ allowAudioRetries: true, apiKey: 'x', model: 'gemini-3.5-transcribe' })
     const plain = (from: number, to: number) => ({ ...nativeWords(from, to, 1), usage: undefined })
 
     mockInteractionsCreate.mockResolvedValueOnce(nativeWords(0, 300, 1)).mockResolvedValueOnce(nativeWords(300, 600, 1))
@@ -1606,5 +1622,53 @@ describe('GeminiEngine reports the usage of every provider response', () => {
     const withoutUsage = await collect(engine.transcribe(wav(600), { source: 'mic', durationSeconds: 600, onUsage: (e) => events.push(e) }))
     expect(withoutUsage.length).toBeGreaterThan(0)
     expect(events).toHaveLength(0)
+  })
+})
+
+
+describe('SPEC-013 default paid response policy', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('does not repeat audio after MAX_TOKENS', async () => {
+    mockGenerateContentStream.mockResolvedValue(streamResponse('partial', 'MAX_TOKENS'))
+    const engine = new GeminiEngine({ apiKey: 'x' })
+    await expect(collect(engine.transcribe(Buffer.from('OggS-test'), { source: 'mic' })))
+      .rejects.toThrow('automatic audio retry disabled')
+    expect(mockGenerateContentStream).toHaveBeenCalledTimes(1)
+  })
+  it('reuses the saved raw response on validation retry, without a second generation or usage report', async () => {
+    const saved = new Map<string, unknown>()
+    const checkpoints = { async execute<T>(key: string, request: () => Promise<T>): Promise<T> {
+      if (saved.has(key)) return saved.get(key) as T
+      const response = await request()
+      saved.set(key, response)
+      return response
+    } }
+    mockGenerateContentStream.mockResolvedValue(streamResponse('partial', 'MAX_TOKENS'))
+    const engine = new GeminiEngine({ apiKey: 'x', checkpoints })
+    for (let i = 0; i < 2; i++) {
+      await expect(collect(engine.transcribe(Buffer.from('OggS-test'), { source: 'mic' })))
+        .rejects.toThrow('automatic audio retry disabled')
+    }
+    expect(mockGenerateContentStream).toHaveBeenCalledTimes(1)
+    expect([...saved.values()][0]).toMatchObject({ rawText: 'partial', finishReason: 'MAX_TOKENS' })
+  })
+})
+
+
+describe('SPEC-013 checkpoint before upload', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it.each([
+    ['native', 'gemini-3.5-transcribe', oneSecond, { durationSeconds: 1 }],
+    ['rolling', 'gemini-3.8-flash', buildWav(1201, 1), { durationSeconds: 1201, filePath: 'long.wav' }],
+    ['files', 'gemini-2.5-flash', Buffer.alloc(21 * 1024 * 1024), { filePath: 'large.ogg' }],
+  ] as const)('%s never uploads when a pending checkpoint refuses replay', async (_name, model, bytes, opts) => {
+    const checkpoints = { async execute<T>(_key: string, _request: () => Promise<T>): Promise<T> {
+      throw new Error('Provider checkpoint outcome unknown')
+    } }
+    const engine = new GeminiEngine({ apiKey: 'x', model, checkpoints })
+    await expect(collect(engine.transcribe(bytes, { source: 'mic', ...opts }))).rejects.toThrow('outcome unknown')
+    expect(mockFilesUpload).not.toHaveBeenCalled()
+    expect(mockInteractionsCreate).not.toHaveBeenCalled()
+    expect(mockGenerateContentStream).not.toHaveBeenCalled()
   })
 })

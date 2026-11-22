@@ -37,6 +37,11 @@ export function useOperations() {
       const result = await window.electronAPI.config.get()
       const config = result?.success ? (result.data as AppConfig) : null
       const provider = config?.transcription?.provider || 'gemini'
+      if ((provider === 'muse-voice' && !config?.transcription.museVoiceApiKey?.trim()) ||
+          (provider === 'mai-transcribe-2' && (!config?.transcription.maiTranscribeApiKey?.trim() || !config?.transcription.maiTranscribeEndpoint?.trim()))) {
+        toast({ title: 'Cloud transcription not configured', description: 'Add the selected provider credentials in Settings → Transcription → Cloud ASR.', variant: 'error' })
+        return false
+      }
 
       if (provider === 'gemini') {
         const apiKey = config?.transcription?.geminiApiKey
@@ -129,13 +134,14 @@ export function useOperations() {
         return true
       }
 
-      await window.electronAPI.recordings.updateStatus(recording.id, 'pending')
       // Single explicit request → priority: jumps ahead of the recency-ordered backlog.
       const queueItemId = await window.electronAPI.recordings.addToQueue(recording.id, true)
-      if (!queueItemId) {
-        toast({ title: 'Failed to queue transcription', description: 'Could not add to queue', variant: 'error' })
+      if (typeof queueItemId !== 'string' || !queueItemId) {
+        const reason = queueItemId && typeof queueItemId === 'object' ? queueItemId.error : 'Could not add to queue'
+        toast({ title: 'Failed to queue transcription', description: reason, variant: 'error' })
         return false
       }
+      await window.electronAPI.recordings.updateStatus(recording.id, 'pending')
       addToQueue(queueItemId, recording.id, recording.filename)
       toast({ title: 'Transcription queued', description: getDisplayTitle(recording).primaryText })
       return true
@@ -188,22 +194,34 @@ export function useOperations() {
     }
 
     let queued = 0
+    const failures: string[] = []
     for (const recording of eligible) {
       try {
-        await window.electronAPI.recordings.updateStatus(recording.id, 'pending')
         // Bulk: no priority flag — these sort by recording date (newest first),
         // so a single explicit request can still jump ahead of the whole batch.
         const queueItemId = await window.electronAPI.recordings.addToQueue(recording.id)
-        if (queueItemId) {
+        if (typeof queueItemId === 'string' && queueItemId) {
+          await window.electronAPI.recordings.updateStatus(recording.id, 'pending')
           addToQueue(queueItemId, recording.id, recording.filename)
           queued++
+        } else {
+          failures.push(queueItemId && typeof queueItemId === 'object'
+            ? queueItemId.error || 'Recording could not be queued'
+            : 'Recording could not be queued')
         }
       } catch (e) {
         console.error('Failed to queue:', recording.filename, e)
+        failures.push(e instanceof Error ? e.message : 'Recording could not be queued')
       }
     }
 
-    toast({ title: `${queued} transcription${queued > 1 ? 's' : ''} queued`, description: 'Processing will begin shortly.' })
+    toast({
+      title: queued > 0 ? `${queued} transcription${queued > 1 ? 's' : ''} queued` : 'No transcriptions queued',
+      description: failures.length > 0
+        ? `${failures.length} could not be queued. ${failures[0]}`
+        : 'Processing will begin shortly.',
+      ...(queued === 0 ? { variant: 'error' as const } : {})
+    })
     return queued
   }, [addToQueue, validateTranscriptionConfig])
 

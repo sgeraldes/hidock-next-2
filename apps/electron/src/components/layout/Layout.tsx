@@ -18,6 +18,8 @@ import {
   PanelLeftOpen
 } from 'lucide-react'
 import { TitleBar } from '@/components/layout/TitleBar'
+import { RecordingBar } from '@/components/layout/PcRecording'
+import { installPcRecorderCloseGuard } from '@/store/usePcRecorderStore'
 import { showBrandHorizontalDivider } from '@/components/layout/Brand'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
@@ -174,6 +176,7 @@ export function RailTooltip({ collapsed, label, children }: { collapsed: boolean
 }
 
 export function Layout({ children }: LayoutProps) {
+  useEffect(() => installPcRecorderCloseGuard(), [])
   const location = useLocation()
   // Track I: resolved feature state drives nav filtering/graying below.
   const resolvedFeatures = useFeatureStore((s) => s.resolved)
@@ -317,6 +320,7 @@ export function Layout({ children }: LayoutProps) {
       {/* Office-365-style unified titlebar (window chrome merged with the app). The
           sidebar-collapse handle lives on the sidebar's right edge (below), not here. */}
       <TitleBar sidebarOpen={sidebarOpen} />
+      <RecordingBar />
 
       {/* Divider row under the titlebar. Rendered as its own row BELOW the 40px
           titlebar band so the Windows native-controls overlay can't paint over its
@@ -368,11 +372,11 @@ export function Layout({ children }: LayoutProps) {
         {/* Navigation — nav px-2.5 (10px) + item px-3 (12px) + half-icon (10px)
             lands every icon centre on the shared 32px rail axis (see TitleBar). */}
         <TooltipProvider delayDuration={200}>
-        <nav className="flex-1 px-2.5 pt-3 pb-2 space-y-4 overflow-y-auto">
+        <nav aria-label="Primary navigation" className="flex min-h-0 flex-1 flex-col gap-4 px-2.5 pt-3 pb-2 overflow-y-auto">
           {/* The sidebar-collapse control now lives as an edge-handle on the
               brand/content divider in the titlebar (see TitleBar), so the nav rail
               starts directly with the KNOWLEDGE section in both states. */}
-          {visibleSections.map((section, sectionIdx) => (
+          {visibleSections.map((section) => (
             <div key={section.title}>
               {/* Section Header. */}
               {sidebarOpen && (
@@ -440,15 +444,11 @@ export function Layout({ children }: LayoutProps) {
                   )
                 })}
               </div>
-              {/* Section Divider (except for last section) */}
-              {sectionIdx < visibleSections.length - 1 && (
-                <div className="mt-3 border-t border-slate-800" />
-              )}
             </div>
           ))}
 
           {/* Settings at bottom - separate from sections */}
-          <div className="pt-2 border-t border-slate-800">
+          <div className="mt-auto pt-2 border-t border-slate-800">
             <RailTooltip collapsed={!sidebarOpen} label="Settings">
             <Link
               to="/settings"

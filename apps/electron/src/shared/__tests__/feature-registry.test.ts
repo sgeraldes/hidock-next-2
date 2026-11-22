@@ -20,6 +20,7 @@ import {
   resolveFeatureState,
   isFeatureEnabledIn,
   channelFeature,
+  classifyChannel,
   routeFeature,
   isPresetId,
   type FeatureId,
@@ -338,4 +339,22 @@ describe('applyFeatureToggle (Features page switches)', () => {
     expect(next).toEqual({ preset: 'custom', flags: { 'connector:slack': true, today: false } })
     expect(resolveFeatureState(next).today.enabled).toBe(false)
   })
+})
+
+it('exact-lists user-initiated Library creation without opening future channels', () => {
+  for (const channel of ['library:paste', 'library:pickFiles', 'library:newNote']) {
+    expect(classifyChannel(channel)).toEqual({ kind: 'core' })
+  }
+  expect(classifyChannel('library:future-upload')).toEqual({ kind: 'unclassified' })
+})
+
+
+it('gates semantic maintenance initiation while always allowing observation and teardown', () => {
+  expect(channelFeature('semantic-index:start')).toBe('assistant')
+  expect(channelFeature('semantic-index:resume')).toBe('assistant')
+  expect(channelFeature('semantic-index:unknown-future-action')).toBe('assistant')
+  for (const channel of ['semantic-index:status','semantic-index:pause','semantic-index:cancel']) {
+    expect(channelFeature(channel)).toBeNull()
+    expect(classifyChannel(channel)).toEqual({kind:'core'})
+  }
 })

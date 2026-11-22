@@ -59,6 +59,10 @@ function stage(base, port) {
   copyFileSync(trayExe, join(app, 'HiDockModelHost.exe'))
   copyFileSync(process.execPath, join(app, 'node.exe'))
   cpSync(join(packageRoot, 'src'), join(app, 'src'), { recursive: true })
+  // Match the installed production payload: VERSION reads package.json and
+  // server.mjs imports the pinned WebSocket gateway dependency at startup.
+  copyFileSync(join(packageRoot, 'package.json'), join(app, 'package.json'))
+  cpSync(join(packageRoot, 'node_modules', 'ws'), join(app, 'node_modules', 'ws'), { recursive: true })
   writeFileSync(join(root, 'config.json'), JSON.stringify({ port, bindAddress: '127.0.0.1', stepAside: 'games' }))
   return { app, root }
 }

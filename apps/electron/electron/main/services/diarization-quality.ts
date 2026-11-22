@@ -3,6 +3,10 @@ export interface DiarizationSegment {
   start?: number
   end?: number
   text?: string
+  /** Audio source provenance, independent of any person's identity. */
+  sourceChannel?: number
+  channelRole?: string
+  channelProvenance?: string
   /** How this turn's speaker was decided (see reconcileProviderSpeakers). */
   speakerAttribution?: string
   /** 0..1 acoustic overlap backing the speaker label. */
@@ -308,6 +312,13 @@ export interface NamingTurn {
   speaker?: unknown
   text?: unknown
   speakerAttribution?: unknown
+  speakerAssignment?: unknown
+}
+
+/** A mixed/context window is evidence of words, never of one person's identity. */
+export function isUnresolvedNamingTurn(turn: NamingTurn): boolean {
+  return turn.speakerAssignment === 'unresolved-mixed-or-context' || turn.speakerAttribution === 'unresolved' ||
+    (typeof turn.speaker === 'string' && /^(unknown speaker|speaker unresolved)$/i.test(turn.speaker.trim()))
 }
 
 /**
@@ -318,14 +329,14 @@ export interface NamingTurn {
 export function isSolidTurn(turn: NamingTurn): boolean {
   if (typeof turn.speaker !== 'string' || !turn.speaker.trim()) return false
   if (typeof turn.text !== 'string' || !turn.text.trim()) return false
-  return turn.speakerAttribution !== 'acoustic-weak' && turn.speakerAttribution !== 'unresolved'
+  return turn.speakerAttribution !== 'acoustic-weak' && !isUnresolvedNamingTurn(turn)
 }
 
 /** Speakers with enough solid turns, and few enough shaky ones, to be named. */
 export function nameableSpeakers(turns: NamingTurn[]): Set<string> {
   const per = new Map<string, { solid: number; weak: number }>()
   for (const t of turns) {
-    if (typeof t.speaker !== 'string' || !t.speaker.trim() || t.speakerAttribution === 'unresolved') continue
+    if (typeof t.speaker !== 'string' || !t.speaker.trim() || isUnresolvedNamingTurn(t)) continue
     const e = per.get(t.speaker) ?? { solid: 0, weak: 0 }
     if (t.speakerAttribution === 'acoustic-weak') e.weak++
     else if (typeof t.text === 'string' && t.text.trim()) e.solid++

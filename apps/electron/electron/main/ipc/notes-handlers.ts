@@ -97,9 +97,9 @@ export function registerNotesHandlers(): void {
   })
 
   ipcMain.handle('notes:delete', async (_event, raw: unknown) => {
-    const parsed = IdSchema.safeParse(raw)
+    const parsed = IdSchema.extend({ onlyIfEmpty: z.boolean().optional() }).safeParse(raw)
     if (!parsed.success) return { success: false, error: 'invalid id' }
-    return { success: deleteNote(parsed.data.id) }
+    return { success: deleteNote(parsed.data.id, parsed.data.onlyIfEmpty) }
   })
 
   ipcMain.handle('notes:analyze', async (_event, raw: unknown) => {

@@ -1,8 +1,10 @@
+import { importExternalRecording } from '../services/external-recording-import'
 import { ipcMain, dialog, BrowserWindow } from 'electron'
 import { RECORDING_AUDIO_EXTENSIONS } from '../../../src/shared/audio-extensions'
 import { rankRecordingsByMeetingCoverage } from '../services/recording-match-scoring'
 import {
   getRecordings,
+  getOwnedProcessingRuns,
   getRecordingById,
   getTrashedRecordings,
   getRecordingsForMeeting,
@@ -71,6 +73,9 @@ import {
   backfillTranscriptIntegrity,
 } from '../services/database'
 import { getConfig } from '../services/config'
+import { clearProviderCheckpoints } from '../services/provider-checkpoints'
+import { requestRemoteJobRestart } from '../services/remote-job-checkpoints'
+import { getActiveTranscriptions } from '../services/transcription-activity'
 import {
   GetRecordingByIdSchema,
   LinkRecordingToMeetingSchema,
@@ -568,74 +573,8 @@ export function registerRecordingHandlers(): void {
     }
   })
 
-  // Add external recording by file path (used by drag-and-drop import)
-  ipcMain.handle('recordings:addExternalByPath', async (_, filePath: string): Promise<{ success: boolean; recording?: Recording; error?: string }> => {
-    try {
-      // Validate file extension
-      const allowedExtensions: readonly string[] = RECORDING_AUDIO_EXTENSIONS
-      const fileExtension = extname(filePath).toLowerCase()
-      if (!allowedExtensions.includes(fileExtension)) {
-        return { success: false, error: `Unsupported file type: ${fileExtension}. Supported: ${allowedExtensions.join(', ')}` }
-      }
-
-      // Check if file exists
-      if (!existsSync(filePath)) {
-        return { success: false, error: 'File does not exist' }
-      }
-
-      // Get file stats
-      const stats = statSync(filePath)
-      const originalFilename = basename(filePath)
-
-      // Generate a unique filename for the recordings folder
-      const recordingsPath = getRecordingsPath()
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').split('T')
-      const newFilename = `external-${timestamp[0]}-${timestamp[1].substring(0, 8)}${fileExtension}`
-      const destinationPath = join(recordingsPath, newFilename)
-
-      // Copy the file to the recordings folder
-      copyFileSync(filePath, destinationPath)
-
-      // Create database entry
-      const recordingId = randomUUID()
-
-      const recording: Omit<Recording, 'created_at'> = {
-        id: recordingId,
-        filename: newFilename,
-        original_filename: originalFilename,
-        file_path: destinationPath,
-        file_size: stats.size,
-        duration_seconds: undefined,
-        date_recorded: parseHiDockFilenameDateIso(originalFilename) ?? stats.mtime.toISOString(),
-        meeting_id: undefined,
-        correlation_confidence: undefined,
-        correlation_method: undefined,
-        status: 'ready',
-        location: 'local-only',
-        transcription_status: 'none',
-        on_device: 0,
-        device_last_seen: undefined,
-        on_local: 1,
-        source: 'external',
-        is_imported: 1
-      }
-
-      insertRecording(recording)
-
-      const insertedRecording = getRecordingById(recordingId)
-      if (!insertedRecording) {
-        return { success: false, error: 'Failed to retrieve recording after insert' }
-      }
-
-      return { success: true, recording: insertedRecording }
-    } catch (error) {
-      console.error('recordings:addExternalByPath error:', error)
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error occurred'
-      }
-    }
-  })
+  // Shared by drag-and-drop, paste imports and the PC recorder.
+  ipcMain.handle('recordings:addExternalByPath', async (_, filePath: string) => importExternalRecording(filePath))
 
   // Select a meeting for a recording (manual linking from dialog)
   ipcMain.handle('recordings:selectMeeting', async (_, recordingId: string, meetingId: string | null) => {
@@ -682,8 +621,8 @@ export function registerRecordingHandlers(): void {
         }
       }
 
-      const queueItemId = addToQueue(recording.id)
-      if (!queueItemId) return false
+      const queueItemId = addToQueue(recording.id, undefined, { ownerRequested: priority === true })
+      if (!queueItemId) return { success: false, error: 'Recording is personal, deleted, missing, value-excluded, or eligibility could not be checked.' }
       if (priority) markUserPriority(recording.id)
       // spec-005: Trigger immediate queue processing after adding
       processQueueManually()
@@ -705,11 +644,17 @@ export function registerRecordingHandlers(): void {
         if (!recordingId || typeof recordingId !== 'string') {
           return { success: false, error: 'recordingId is required' }
         }
-        if (provider !== 'gemini' && provider !== 'local-asr' && provider !== 'vibevoice') {
+        if (provider !== 'gemini' && provider !== 'local-asr' && provider !== 'vibevoice'
+          && provider !== 'muse-voice' && provider !== 'mai-transcribe-2') {
           return { success: false, error: `Unsupported provider: ${provider}` }
         }
 
         const config = getConfig()
+        if ((provider === 'muse-voice' && !config.transcription.museVoiceApiKey)
+          || (provider === 'mai-transcribe-2' && (!config.transcription.maiTranscribeApiKey
+            || !config.transcription.maiTranscribeEndpoint))) {
+          return { success: false, error: 'Configure the selected cloud ASR credentials in Settings.' }
+        }
         if (provider === 'gemini' && !config.transcription.geminiApiKey) {
           return {
             success: false,
@@ -731,8 +676,14 @@ export function registerRecordingHandlers(): void {
           return { success: false, error: `Recording not found: ${recordingId}. Try refreshing the library.` }
         }
 
-        const queueItemId = addToQueue(recording.id, provider)
+        if (getActiveTranscriptions().includes(recording.id)) {
+          return { success: false, error: 'Cancel the active transcription before requesting a new one.' }
+        }
+        const queueItemId = addToQueue(recording.id, provider, { ownerRequested: true })
         if (!queueItemId) return { success: false, error: 'Recording is not eligible for transcription' }
+        // This is the explicit Re-transcribe command. Ordinary Retry preserves
+        // responses and never clears uncertain provider requests.
+        clearProviderCheckpoints(recording.id)
         markUserPriority(recording.id) // explicit single-recording reprocess
         processQueueManually()
         return { success: true, queueItemId }
@@ -768,8 +719,14 @@ export function registerRecordingHandlers(): void {
         return { success: false, error: `Recording not found: ${result.data.recordingId}` }
       }
 
-      const queueItemId = addToQueue(recording.id)
+      if ([...getOwnedProcessingRuns().values()].includes(recording.id)) {
+        return { success: false, error: 'This recording still has an active operation. Wait for it to finish or cancel it.' }
+      }
+
+      const queueItemId = addToQueue(recording.id, undefined, { ownerRequested: true })
+      if (!queueItemId) return { success: false, error: 'Recording is personal, deleted, missing, or eligibility could not be checked.' }
       markUserPriority(recording.id) // explicit user retry jumps the backlog
+      requestRemoteJobRestart(recording.id)
       updateRecordingTranscriptionStatus(recording.id, 'pending')
       processQueueManually()
       return { success: true, queueItemId }

@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import { Library } from '../Library'
+import { BUILTIN_ARTIFACT_TYPES } from '@/features/library/utils/sourceType'
 
 /**
  * Rows are located by the text the row shows. Since 2026-09-22 an unassigned
@@ -268,7 +269,7 @@ global.window.electronAPI = {
     getByRecordingIdsOwner: vi.fn().mockResolvedValue({}),
     getVerdicts: vi.fn().mockResolvedValue({}),
     setIntegrityAccepted: vi.fn().mockResolvedValue({ success: true, data: { accepted: true } }),
-    retranscribeMany: vi.fn().mockResolvedValue({ success: true, data: { queued: 1, skipped: 0 } })
+    retranscribeMany: vi.fn().mockResolvedValue({ success: true, data: { queued: 1, skipped: 0, skippedReasons: {} } })
   },
   meetings: { getByIds: vi.fn().mockResolvedValue({}) },
   knowledge: { getById: vi.fn().mockResolvedValue(null) },
@@ -360,6 +361,20 @@ describe('Library', () => {
       </MemoryRouter>
     )
   }
+
+  it('renders one row of every registered source type', () => {
+    const recordings = BUILTIN_ARTIFACT_TYPES.map((type) => ({
+      ...mockRecording, id: type.id, title: `Registered ${type.id}`,
+      filename: `fixture.${type.extensions[0]}`, sourceKind: 'capture' as const
+    }))
+    vi.mocked(useUnifiedRecordings).mockReturnValue({
+      ...vi.mocked(useUnifiedRecordings).mock.results[0]?.value,
+      recordings, loading: false, error: null, refresh: mockRefresh,
+      deviceConnected: false, stats: { total: recordings.length }
+    } as ReturnType<typeof useUnifiedRecordings>)
+    renderLibrary()
+    for (const type of BUILTIN_ARTIFACT_TYPES) expect(screen.getByText(`Registered ${type.id}`)).toBeInTheDocument()
+  })
 
   describe('Manual refresh', () => {
     it('forces device reconciliation before rebuilding the Library view', async () => {
@@ -1072,12 +1087,15 @@ describe('Library — transcript integrity labels', () => {
 
     fireEvent.click(within(bar).getByRole('button', { name: 'Transcribe it again' }))
     expect(window.electronAPI.transcripts.retranscribeMany).not.toHaveBeenCalled()
+    vi.mocked(window.electronAPI.transcripts.retranscribeMany).mockResolvedValueOnce({
+      success: true, data: { queued: 0, skipped: 1, skippedReasons: { personal: 1 } }
+    })
     fireEvent.click(within(bar).getByRole('button', { name: 'Queue 1' }))
 
     await waitFor(() =>
       expect(window.electronAPI.transcripts.retranscribeMany).toHaveBeenCalledWith({ recordingIds: ['shaky-1'] })
     )
-    await waitFor(() => expect(toastMock.success).toHaveBeenCalledWith('Queued 1 transcription', expect.any(String)))
+    await waitFor(() => expect(toastMock.success).toHaveBeenCalledWith('Queued 0 transcriptions', '1 skipped: 1 personal.'))
   })
 
   it('counts and queues only what the search leaves on screen', async () => {

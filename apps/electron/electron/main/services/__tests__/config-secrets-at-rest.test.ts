@@ -59,6 +59,19 @@ beforeEach(() => {
 })
 
 describe('secrets at rest', () => {
+  it('encrypts cloud ASR credentials and redacts them at the renderer boundary', async () => {
+    await saveConfig({ transcription: { museVoiceApiKey: 'test-muse-key', maiTranscribeApiKey: 'test-mai-key' } } as never)
+    const body = written[written.length - 1]
+    expect(body).not.toContain('test-muse-key')
+    expect(body).not.toContain('test-mai-key')
+    onDisk = body
+    await initializeConfig()
+    expect(getConfig().transcription.museVoiceApiKey).toBe('test-muse-key')
+    expect(getConfig().transcription.maiTranscribeApiKey).toBe('test-mai-key')
+    const publicConfig = redactSecrets(getConfig())
+    expect(publicConfig.transcription.museVoiceApiKey).toBe(SAVED_SECRET)
+    expect(publicConfig.transcription.maiTranscribeApiKey).toBe(SAVED_SECRET)
+  })
   it('writes the Gemini key and the Hugging Face token encrypted, and reads them back', async () => {
     await saveConfig({ transcription: { geminiApiKey: 'AIzaReal', localAsrHfToken: 'hf_real' } } as never) // pragma: allowlist secret
     const body = written[written.length - 1]

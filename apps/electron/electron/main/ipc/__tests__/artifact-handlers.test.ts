@@ -197,13 +197,13 @@ describe('Artifact IPC Handlers', () => {
     expect(result.data).not.toHaveProperty('blobBase64')
   })
 
-  it('returns base64 blob for image kinds', async () => {
+  it.each(['image', 'video'])('returns base64 blob for %s kinds', async (kind) => {
     const { getArtifactById } = await import('../../services/artifact-service')
     const { readFileSync, statSync } = await import('fs')
     vi.mocked(getArtifactById).mockReturnValue({
       id: 'art-img',
       knowledge_capture_id: 'cap-1',
-      kind: 'image',
+      kind,
       mime: 'image/png',
       storage_path: '/data/artifacts/img/ab/art-img.png',
       size: 12,
@@ -221,7 +221,7 @@ describe('Artifact IPC Handlers', () => {
 
     expect(result.success).toBe(true)
     expect(result.data).toMatchObject({
-      kind: 'image',
+      kind,
       mime: 'image/png',
       storagePath: '/data/artifacts/img/ab/art-img.png',
       textContent: null,

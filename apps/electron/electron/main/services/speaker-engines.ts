@@ -59,7 +59,7 @@ export const SPEAKER_ENGINES: Record<Exclude<SpeakerEngineId, 'auto'>, SpeakerEn
     id: 'model-host',
     label: 'HiDock Model Host on your network',
     description:
-      'Sends the audio to your own GPU machine on the local network and falls back to this computer if it is off or busy.',
+      'Sends voice work to your GPU machine on the local network. If it is off or busy, no local voice worker starts.',
     where: 'your network',
     built: true,
   },

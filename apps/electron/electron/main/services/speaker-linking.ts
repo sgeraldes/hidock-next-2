@@ -2,7 +2,7 @@ import { spawn } from 'child_process'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'fs'
 import { dirname, join, isAbsolute } from 'path'
 import { randomUUID } from 'crypto'
-import { availableParallelism, constants as osConstants, setPriority } from 'os'
+import { availableParallelism, constants as osConstants, setPriority, freemem, totalmem } from 'os'
 import ffmpegPath from 'ffmpeg-static'
 import { getConfig, getDataPath, updateConfig } from './config'
 import { queryAll, queryOne, runInTransaction, runNoSave, VOICE_CONFLICT_PREFIX } from './database'
@@ -11,9 +11,12 @@ import { canUpgrade, methodConfidence } from './signal-tiers'
 import { diarizeOnModelHost, ModelHostUnavailableError } from './model-host-client'
 import { CANONICAL_VOICE_MODEL, resolveSpeakerEngine } from './speaker-engines'
 import { detectHardware, gpuFingerprint } from './hardware-profile'
+import { audioFingerprint, checkpointStage, stageFingerprint } from './stage-checkpoints'
+import { inLocalComputeSlot, localMemoryReserveBytes } from './local-compute-slot'
+import { hasRemoteJobIdentity } from './remote-job-checkpoints'
 
 /** Default share of logical CPUs when the config does not say. */
-const DEFAULT_DIARIZATION_CPU_PERCENT = 40
+const DEFAULT_DIARIZATION_CPU_PERCENT = 50
 
 /**
  * Thread-count environment for the diarization worker.
@@ -37,8 +40,11 @@ export function diarizationThreadEnv(cpuPercent?: number): Record<string, string
   const pct = Number.isFinite(cpuPercent) && (cpuPercent as number) > 0
     ? Math.min(100, cpuPercent as number)
     : DEFAULT_DIARIZATION_CPU_PERCENT
-  const threads = String(Math.max(1, Math.min(total, Math.round((total * pct) / 100))))
+  const threads = String(Math.max(1, Math.min(total, Math.floor((total * pct) / 100))))
+  const policy = getConfig().transcription
   return {
+    HIDOCK_WORKER_PRIORITY: policy.localComputePriority || 'below-normal',
+    ...(policy.localComputeAccelerator === 'cpu' ? { CUDA_VISIBLE_DEVICES: '-1' } : {}),
     OMP_NUM_THREADS: threads,
     MKL_NUM_THREADS: threads,
     OPENBLAS_NUM_THREADS: threads,
@@ -65,8 +71,12 @@ export interface AcousticWorkerResult {
   model: string
   modelVersion: string
   device: string
+  resourcePolicy?: { cpuPercent?: number; threads?: number; runtimeThreads?: number; priority?: string; memoryMb?: number }
   segments: AcousticSegment[]
   speakers: AcousticSpeaker[]
+  executionLocation?: 'local' | 'remote'
+  host?: string
+  hostJobId?: string
 }
 
 interface VoiceClusterRow {
@@ -98,9 +108,13 @@ export interface SpeakerLinkingResult {
   model: string
   modelVersion: string | null
   device: string | null
+  resourcePolicy?: AcousticWorkerResult['resourcePolicy']
   segments: AcousticSegment[]
   matches: VoiceMatch[]
   reason?: string
+  executionLocation?: 'local' | 'remote'
+  host?: string
+  hostJobId?: string
 }
 
 export interface MatchDecision {
@@ -132,24 +146,12 @@ export class SpeakerLinkingUnavailableError extends Error {
   }
 }
 
-/**
- * Wall-clock budget for the acoustic worker. pyannote runs roughly 3-4x realtime on this
- * class of machine, so a flat cap silently fails every recording longer than about
- * cap/3.5: on 2026-09-15 a device backlog of 30 recordings was imported at once and the
- * 19 longer than ~34 minutes all died with "timed out after 600 seconds" (the 600 s
- * default) while every shorter one completed. The budget is therefore the configured
- * floor or 1.5x the audio length, whichever is larger; a recording with unknown length
- * keeps the floor.
- */
+/** Configured safety ceiling, never expanded to hours from audio duration. */
 export function speakerLinkingTimeoutMs(
   configuredSeconds: number,
-  audioDurationSeconds?: number | null
+  _audioDurationSeconds?: number | null
 ): number {
-  const floor = Math.max(30, configuredSeconds || 0)
-  const scaled = audioDurationSeconds && audioDurationSeconds > 0
-    ? Math.ceil(audioDurationSeconds * 1.5)
-    : 0
-  return Math.max(floor, scaled) * 1000
+  return Math.max(30, Math.min(3600, Number.isFinite(configuredSeconds) ? configuredSeconds : 600)) * 1000
 }
 
 /**
@@ -162,7 +164,8 @@ export function isSpeakerLinkingUnavailableDetail(detail: string): boolean {
     /ModuleNotFoundError|No module named/i,
     /ImportError:|is required for a normal functioning/i,
     /FFmpeg is required .* not found/i,
-    /GatedRepo|401|403|not authorized|cannot access gated/i
+    /GatedRepo|401|403|not authorized|cannot access gated/i,
+    /out of memory|MemoryError|resource policy|memory budget|timed out/i
   ]
   return unavailablePatterns.some((pattern) => pattern.test(detail))
 }
@@ -270,6 +273,16 @@ function resolveWorkerPath(configured: string): string {
     if (existsSync(packaged)) return packaged
   }
   return join(process.cwd(), 'resources', 'speaker-linking', 'worker.py')
+}
+
+export function supervisedRunnerPath(): string {
+  return join(dirname(resolveWorkerPath('')), 'supervised_runner.py')
+}
+
+export function localModelEnvironment(cpuPercent?: number): Record<string, string> {
+  const memoryMb = Math.floor(Math.min(8 * 1024 ** 3, totalmem() * 0.25, freemem() * 0.5) / 1024 ** 2)
+  if (memoryMb < 1024) throw new SpeakerLinkingUnavailableError('Insufficient memory for local model; no worker started')
+  return { ...diarizationThreadEnv(cpuPercent), HIDOCK_WORKER_MEMORY_MB: String(memoryMb) }
 }
 
 /**
@@ -388,13 +401,41 @@ export async function diarize(
     remote?: typeof diarizeOnModelHost
     /** Never ask the Model Host, even if one is paired (engine pyannote-local). */
     localOnly?: boolean
+    recordingId?: string
   } = {}
 ): Promise<AcousticWorkerResult> {
   const local = deps.local || runWorker
   const remote = deps.remote || diarizeOnModelHost
   const config = getConfig().transcription
   const url = config.modelHostUrl?.trim()
-  if (!url || deps.localOnly) return local(audioPath, shouldContinue, audioDurationSeconds)
+  const nativeDiarization = !deps.localOnly && config.remoteDiarizationModel === 'nvidia/Nemotron-3-Diarization'
+  const requestedModel = nativeDiarization ? 'nvidia/Nemotron-3-Diarization' : pinnedVoiceModel()
+  // Recheck at the fallback boundary, after the remote await: that attempt may
+  // have persisted an intent before losing its response. Unknown outcomes still
+  // own the remote work, including an intent whose server ID was never received.
+  const assertFallbackUnowned = () => {
+    if (!deps.recordingId) {
+      throw new SpeakerLinkingUnavailableError('A recording identity is required before local fallback. Local diarization was not started.')
+    }
+    try {
+      if (!hasRemoteJobIdentity(deps.recordingId)) return
+      const identities = queryAll<{ identity_json: string }>(
+        'SELECT identity_json FROM remote_job_checkpoints WHERE recording_id = ?', [deps.recordingId])
+      if (identities.length && identities.every(row =>
+        ['completed', 'failed', 'cancelled', 'interrupted'].includes(JSON.parse(row.identity_json).observedStatus))) return
+    } catch { /* An unreadable checkpoint cannot authorize duplicate local work. */ }
+    throw new SpeakerLinkingUnavailableError('Remote work may still be running; reconcile its retained identity before local fallback. Local diarization was not started.')
+  }
+  const hostRequired = !deps.localOnly && (
+    nativeDiarization || (url ? config.modelHostLocalFallback !== true : resolveSpeakerEngine(config) === 'model-host')
+  )
+  if (!url && hostRequired) {
+    throw new SpeakerLinkingUnavailableError('No model host is configured. Local diarization was not started.')
+  }
+  if (!url || deps.localOnly) {
+    if (!deps.localOnly && deps.recordingId) assertFallbackUnowned()
+    return { ...await local(audioPath, shouldContinue, audioDurationSeconds), executionLocation: 'local' }
+  }
 
   remoteAttemptsInFlight += 1
   try {
@@ -404,29 +445,38 @@ export async function diarize(
       {
         timeoutMs: speakerLinkingTimeoutMs(config.speakerLinkingTimeoutSeconds, audioDurationSeconds),
         shouldContinue,
-        model: pinnedVoiceModel()
+        model: requestedModel,
+        recordingId: deps.recordingId
       }
     )
     // Only the last one out clears it. Clearing while another recording is
     // still failing would make the next failure repeat a line already said.
     if (remoteAttemptsInFlight === 1) lastModelHostComplaint = ''
-    const pinned = pinnedVoiceModel()
+    const pinned = requestedModel
     if (result.model !== pinned) {
+      if (hostRequired) {
+        throw new SpeakerLinkingUnavailableError(`The host returned ${result.model}, not ${pinned}. Local diarization was not started.`)
+      }
       // A host from before model pinning ignores the request and runs its own model.
       console.warn(
         `[SpeakerLinking] the Model Host used ${result.model}, not ${pinned} like the library's voices. Diarizing here instead.`
       )
-      return local(audioPath, shouldContinue, audioDurationSeconds)
+      assertFallbackUnowned()
+      return { ...await local(audioPath, shouldContinue, audioDurationSeconds), executionLocation: 'local' }
     }
     console.log(`[SpeakerLinking] diarized on the model host (${result.device})`)
-    return result
+    return { ...result, executionLocation: 'remote', host: url }
   } catch (error) {
     if (!(error instanceof ModelHostUnavailableError)) throw error
+    if (hostRequired) {
+      throw new SpeakerLinkingUnavailableError(`${error.message} Local diarization was not started.`)
+    }
+    assertFallbackUnowned()
     if (lastModelHostComplaint !== error.message) {
       lastModelHostComplaint = error.message
       console.warn(`[SpeakerLinking] ${error.message} Diarizing here instead.`)
     }
-    return local(audioPath, shouldContinue, audioDurationSeconds)
+    return { ...await local(audioPath, shouldContinue, audioDurationSeconds), executionLocation: 'local' }
   } finally {
     remoteAttemptsInFlight -= 1
   }
@@ -456,11 +506,9 @@ const VOICE_ONNX_MANIFEST = 'manifest.json'
  * queue lanes, the ONNX export and the DirectML probe. Two pyannote workers side
  * by side took 80% of the CPU; one at a time keeps the machine usable.
  */
-let voiceSlot: Promise<unknown> = Promise.resolve()
-export function inVoiceSlot<T>(job: () => Promise<T>): Promise<T> {
-  const run = voiceSlot.then(job, job)
-  voiceSlot = run.catch(() => undefined)
-  return run
+export function inVoiceSlot<T>(job: () => Promise<T>, shouldContinue?: () => boolean): Promise<T> {
+  return inLocalComputeSlot(job, shouldContinue,
+    speakerLinkingTimeoutMs(getConfig().transcription.speakerLinkingTimeoutSeconds))
 }
 
 /** Voice jobs never compete with the desktop for the CPU. */
@@ -710,7 +758,7 @@ function runWorker(
       // give up on the job after its 15 s ceiling (the recording then goes on
       // without voices), but the next voice job still waits for this process.
       if (hold.exited) await hold.exited
-    }).catch((error: unknown) => {
+    }, shouldContinue).catch((error: unknown) => {
       onWorkerStuck.delete(bail)
       reject(error)
     })
@@ -749,6 +797,10 @@ function spawnWorker(
   // The library's model, alone: a fallback to another model would not match its voices.
   const model = pinnedVoiceModel()
   const fallbackModel = model
+  const memoryMb = Math.floor(Math.min(8 * 1024 ** 3, totalmem() * 0.25, freemem() * 0.5) / 1024 ** 2)
+  if (memoryMb < 1024) {
+    return Promise.reject(new SpeakerLinkingUnavailableError('Insufficient memory for local diarization; no worker started'))
+  }
   const args = [
     ...(process.platform === 'win32' && /(^|[\\/])py(?:\.exe)?$/i.test(python) ? ['-3.11'] : []),
     workerPath,
@@ -766,6 +818,7 @@ function spawnWorker(
         ...process.env,
         FFMPEG_PATH: resolveSpeakerLinkingFfmpegPath(ffmpegPath) || process.env.FFMPEG_PATH,
         HF_TOKEN: config.localAsrHfToken || process.env.HF_TOKEN,
+        HIDOCK_WORKER_MEMORY_MB: String(memoryMb),
         HUGGINGFACE_HUB_TOKEN: config.localAsrHfToken || process.env.HUGGINGFACE_HUB_TOKEN,
         ...diarizationThreadEnv(config.speakerLinkingCpuPercent)
       }
@@ -820,6 +873,9 @@ function spawnWorker(
     }, timeoutMs)
     const cancellation = setInterval(() => {
       if (!shouldContinue()) stop(new Error('speaker-linking cancelled because recording became ineligible'))
+        else if (freemem() < localMemoryReserveBytes()) {
+          stop(new SpeakerLinkingUnavailableError('Local memory budget exhausted; optional speaker linking paused'))
+        }
     }, 1000)
     child.stdout.setEncoding('utf8')
     child.stderr.setEncoding('utf8')
@@ -1033,20 +1089,28 @@ export async function runSpeakerLinkingPreflight(
     }
   }
   // pyannote-local and onnx-local skip the host; model-host (and auto with a host) tries it first.
-  const result =
-    engine === 'onnx-local'
+  const fingerprint = await audioFingerprint(audioPath, shouldContinue)
+  const result = await checkpointStage(recordingId, 'acoustic-diarization', stageFingerprint(
+    fingerprint, engine, pinnedVoiceModel(), config.remoteDiarizationModel || '', config.modelHostUrl || '', config.localComputeAccelerator
+  ), async () => engine === 'onnx-local'
       ? await runOnnxWorker(audioPath, shouldContinue, audioDurationSeconds)
       : engine === 'pyannote-local'
         ? await diarize(audioPath, shouldContinue, audioDurationSeconds, { remote: undefined, localOnly: true })
-        : await diarize(audioPath, shouldContinue, audioDurationSeconds)
+        : await diarize(audioPath, shouldContinue, audioDurationSeconds, { recordingId }), shouldContinue)
   if (!shouldContinue()) throw new Error('speaker-linking cancelled because recording became ineligible')
-  assertInLibraryVoiceSpace(result, libraryVoiceSpace())
-  const matches = persistMatches(recordingId, result)
+  const segmentationOnly = result.model === 'nvidia/Nemotron-3-Diarization'
+  if (!segmentationOnly) assertInLibraryVoiceSpace(result, libraryVoiceSpace())
+  // A diarizer without embeddings cannot replace or delete persistent voice evidence.
+  const matches = segmentationOnly ? [] : persistMatches(recordingId, result)
   return {
     available: true,
     model: result.model,
     modelVersion: result.modelVersion,
     device: result.device,
+    resourcePolicy: result.resourcePolicy,
+    executionLocation: result.executionLocation ?? 'local',
+    host: result.host,
+    hostJobId: result.hostJobId,
     segments: result.segments,
     matches
   }
@@ -1086,13 +1150,25 @@ export function reconcileProviderSpeakers(
   speakersJson: string | undefined,
   linking: SpeakerLinkingResult
 ): string | undefined {
-  if (!speakersJson || !linking.available || !linking.matches.length) return speakersJson
+  if (!speakersJson) return speakersJson
   try {
     const turns = JSON.parse(speakersJson) as Array<Record<string, unknown>>
     if (!Array.isArray(turns)) return speakersJson
     const stableByLocal = new Map(linking.matches.map((match) => [match.localSpeakerLabel, match.stableLabel]))
     const knownStable = new Set(stableByLocal.values())
     const rewritten = turns.map((turn) => {
+      // These labels belong to independent source channels. Whole-recording
+      // diarization has no channel-qualified evidence, so temporal overlap alone
+      // cannot replace them (simultaneous speakers may occupy both channels).
+      // Preserve all source metadata and the original overlapping turns.
+      if (turn.sourceChannel !== undefined && turn.sourceChannel !== null) return turn
+      // Contextual ASR windows may contain several acoustic speakers. Dominant
+      // overlap cannot attribute every word in that window to a single voice.
+      if (turn.speakerAssignment === 'unresolved-mixed-or-context') {
+        return { ...turn, speaker: UNRESOLVED_SPEAKER_LABEL,
+          speakerAttribution: 'unresolved', speakerConfidence: 0 }
+      }
+      if (!linking.available || !linking.matches.length) return turn
       const start = Number(turn.start)
       const end = Number(turn.end)
       const unresolved = (): Record<string, unknown> => ({

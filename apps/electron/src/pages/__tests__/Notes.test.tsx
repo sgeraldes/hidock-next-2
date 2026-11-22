@@ -10,6 +10,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import Notes from '../Notes'
+import { NewMenu } from '@/components/layout/PcRecording'
+import { MemoryRouter } from 'react-router-dom'
 import type { Note } from '@/types/notes'
 
 function makeNote(id: string, overrides: Partial<Note> = {}): Note {
@@ -95,22 +97,26 @@ beforeEach(() => {
 })
 
 describe('the notes page', () => {
+  it('opens the note selected from the New header menu', async () => {
+    render(<MemoryRouter initialEntries={['/notes?note=n2']}><Notes /></MemoryRouter>)
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Note' })).toHaveValue('Otra cosa'))
+  })
   it('renders the list, naming each note by its first line', async () => {
-    render(<Notes />)
+    render(<MemoryRouter><Notes /></MemoryRouter>)
     await waitFor(() => expect(screen.getByText('Presupuesto de septiembre')).toBeTruthy())
     expect(screen.getByText('Otra cosa')).toBeTruthy()
   })
 
   it('tells a person with no notes what the button does', async () => {
     notes = []
-    render(<Notes />)
+    render(<MemoryRouter><Notes /></MemoryRouter>)
     await waitFor(() =>
       expect(screen.getByText(/cursor already in it/i)).toBeTruthy()
     )
   })
 
   it('opens a new note with one click and nothing to fill in', async () => {
-    render(<Notes />)
+    render(<MemoryRouter><Notes /></MemoryRouter>)
     await waitFor(() => expect(screen.getByText('Otra cosa')).toBeTruthy())
 
     await act(async () => {
@@ -123,7 +129,7 @@ describe('the notes page', () => {
   })
 
   it('shows the note when one is picked', async () => {
-    render(<Notes />)
+    render(<MemoryRouter><Notes /></MemoryRouter>)
     await waitFor(() => expect(screen.getByText('Presupuesto de septiembre')).toBeTruthy())
 
     await act(async () => {
@@ -144,7 +150,7 @@ describe('the notes page', () => {
           finish = () => resolve({ success: true, note: { ...notes.find((n) => n.id === request.id)!, ...request } })
         })
     )
-    render(<Notes />)
+    render(<MemoryRouter><Notes /></MemoryRouter>)
     await waitFor(() => expect(screen.getByText('Presupuesto de septiembre')).toBeTruthy())
     await act(async () => {
       fireEvent.click(screen.getByText('Presupuesto de septiembre'))
@@ -165,7 +171,7 @@ describe('the notes page', () => {
   })
 
   it('shows a meeting suggestion with its reason, and does not link it by itself', async () => {
-    render(<Notes />)
+    render(<MemoryRouter><Notes /></MemoryRouter>)
     await waitFor(() => expect(screen.getByText('Presupuesto de septiembre')).toBeTruthy())
     await act(async () => {
       fireEvent.click(screen.getByText('Presupuesto de septiembre'))
@@ -184,7 +190,7 @@ describe('the notes page', () => {
 
   it('says who set the category when the person did', async () => {
     notes[0] = { ...notes[0], category: 'decision', categorySource: 'user' }
-    render(<Notes />)
+    render(<MemoryRouter><Notes /></MemoryRouter>)
     await waitFor(() => expect(screen.getByText('Presupuesto de septiembre')).toBeTruthy())
     await act(async () => {
       fireEvent.click(screen.getByText('Presupuesto de septiembre'))
@@ -197,7 +203,7 @@ describe('the notes page', () => {
 
   it('shows why the last analysis failed instead of an empty category', async () => {
     notes[0] = { ...notes[0], aiStatus: 'failed', aiError: 'no provider configured' }
-    render(<Notes />)
+    render(<MemoryRouter><Notes /></MemoryRouter>)
     await waitFor(() => expect(screen.getByText('Presupuesto de septiembre')).toBeTruthy())
     await act(async () => {
       fireEvent.click(screen.getByText('Presupuesto de septiembre'))
@@ -205,4 +211,21 @@ describe('the notes page', () => {
 
     await waitFor(() => expect(screen.getByText(/no provider configured/)).toBeTruthy())
   })
+})
+
+it('opens header-created note while Notes is mounted with an active search', async () => {
+  const notesAPI = api.notes as { list: ReturnType<typeof vi.fn>; get: ReturnType<typeof vi.fn> }
+  notesAPI.list.mockImplementation(async ({ search }: { search?: string }) => ({ success: true, notes: notes.filter((note) => !search || note.content.includes(search)) }))
+  api.pasteLibrary = { newNote: vi.fn(async () => {
+    const note = makeNote('header-new'); notes = [note, ...notes]
+    return { id: note.id, title: 'New note' }
+  }) }
+  render(<MemoryRouter initialEntries={['/notes']}><NewMenu /><Notes /></MemoryRouter>)
+  await screen.findByText('Presupuesto de septiembre')
+  fireEvent.change(screen.getByPlaceholderText(/search/i), { target: { value: 'Presupuesto' } })
+  fireEvent.pointerDown(screen.getByRole('button', { name: 'New' }), { button: 0, ctrlKey: false })
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'New note' }))
+  await waitFor(() => expect(screen.getByRole('textbox', { name: 'Note' })).toHaveValue(''))
+  expect(screen.getByPlaceholderText(/search/i)).toHaveValue('')
+  expect(notesAPI.get).toHaveBeenCalledWith({ id: 'header-new' })
 })

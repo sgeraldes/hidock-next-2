@@ -69,7 +69,10 @@ export function UserMenu() {
 
   return (
     <>
-      <DropdownMenu>
+      {/* This menu shares the titlebar with non-modal popovers. Keeping it
+          non-modal lets the first outside click both dismiss it and activate
+          the selected header control (for example Notifications). */}
+      <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>
           <button
             type="button"

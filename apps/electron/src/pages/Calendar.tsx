@@ -13,7 +13,6 @@ import {
   useCalendarSyncing,
   useDownloadQueue,
   useSetLastCalendarSync,
-  useAcquireCalendarSync, useReleaseCalendarSync,
 } from '@/store/useAppStore'
 import { useConfigStore } from '@/store/domain/useConfigStore'
 import type { Meeting, Recording } from '@/types'
@@ -76,6 +75,7 @@ import {
   OVERLAP_MAX_INDENT_LANES,
 } from '@/lib/calendar-utils'
 import { appLocale } from '@/lib/locale'
+import { calendarViewRange } from '@/lib/calendar-range'
 
 // Helper functions for date/time formatting in list views. An undated recording
 // (UNKNOWN_DATE epoch sentinel) has no real date, so it renders honestly instead
@@ -126,7 +126,8 @@ export function Calendar() {
   const meetingsLoading = useMeetingsLoading()
   const calendarView = useCalendarView()
   const lastSync = useLastCalendarSync()
-  const calendarSyncing = useCalendarSyncing()
+  const [outlookRefreshing, setOutlookRefreshing] = useState<Set<string>>(() => new Set())
+  const calendarSyncing = useCalendarSyncing() || outlookRefreshing.size > 0
   const downloadQueue = useDownloadQueue()
   // Action selectors - still need direct access
   const navigateWeek = useAppStore((s) => s.navigateWeek)
@@ -135,6 +136,9 @@ export function Calendar() {
   const setCurrentDate = useAppStore((s) => s.setCurrentDate)
   const setCalendarView = useAppStore((s) => s.setCalendarView)
   const loadMeetings = useAppStore((s) => s.loadMeetings)
+  const syncCalendar = useAppStore((s) => s.syncCalendar)
+  const syncError = useAppStore((s) => s.calendarSyncError)
+  const setSyncError = useAppStore((s) => s.setCalendarSyncError)
   // B-CAL-005: Granular config selectors to prevent excess re-renders
   const calendarConfig = useConfigStore((s) => s.config?.calendar)
   const uiConfig = useConfigStore((s) => s.config?.ui)
@@ -143,11 +147,6 @@ export function Calendar() {
   const updateConfig = useConfigStore((s) => s.updateConfig)
   // B-CAL-001: Named action selectors replace raw useAppStore.setState()
   const setLastCalendarSync = useSetLastCalendarSync()
-  // Counted acquire/release, not a boolean: clear-and-sync can overlap a
-  // startup or manual sync, and a raw setter would drive the shared flag to
-  // false while that other sync was still running.
-  const acquireCalendarSync = useAcquireCalendarSync()
-  const releaseCalendarSync = useReleaseCalendarSync()
 
   // Navigate the calendar to a requested date (e.g. "Go to Calendar" from a
   // meeting detail page) instead of always showing the current week.
@@ -230,37 +229,7 @@ export function Calendar() {
 
   // Compute the [start, end] ISO range covering the current view.
   const computeViewRange = useCallback((): { startDate: string; endDate: string } => {
-    let startDate: string
-    let endDate: string
-
-    if (calendarView === 'month') {
-      const dates = getMonthDates(currentDate, weekStartsOn)
-      startDate = dates[0].toISOString()
-      const lastDate = new Date(dates[dates.length - 1])
-      lastDate.setHours(23, 59, 59, 999)
-      endDate = lastDate.toISOString()
-    } else if (calendarView === 'day') {
-      const dayStart = new Date(currentDate)
-      dayStart.setHours(0, 0, 0, 0)
-      const dayEnd = new Date(currentDate)
-      dayEnd.setHours(23, 59, 59, 999)
-      startDate = dayStart.toISOString()
-      endDate = dayEnd.toISOString()
-    } else if (calendarView === 'workweek') {
-      const dates = getWorkweekDates(currentDate)
-      startDate = dates[0].toISOString()
-      const lastDate = new Date(dates[dates.length - 1])
-      lastDate.setHours(23, 59, 59, 999)
-      endDate = lastDate.toISOString()
-    } else {
-      const dates = getWeekDates(currentDate, weekStartsOn)
-      startDate = dates[0].toISOString()
-      const lastDate = new Date(dates[6])
-      lastDate.setHours(23, 59, 59, 999)
-      endDate = lastDate.toISOString()
-    }
-
-    return { startDate, endDate }
+    return calendarViewRange(currentDate, calendarView, weekStartsOn)
   }, [currentDate, calendarView, weekStartsOn])
 
   // Load meetings when date or view changes
@@ -276,20 +245,37 @@ export function Calendar() {
     const onDomainEvent = window.electronAPI?.onDomainEvent
     if (!onDomainEvent) return
     let timer: ReturnType<typeof setTimeout> | null = null
-    const unsubscribe = onDomainEvent((event: { type?: string }) => {
+    const unsubscribe = onDomainEvent((event: { type?: string; timestamp?: string }) => {
       if (event?.type !== 'calendar:synced') return
+      if (event.timestamp) setLastCalendarSync(event.timestamp)
+      setSyncError(null)
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => {
         timer = null
         const { startDate, endDate } = computeViewRange()
-        loadMeetings(startDate, endDate)
+        loadMeetings(startDate, endDate, { refresh: true })
       }, 300)
     })
     return () => {
       if (timer) clearTimeout(timer)
       unsubscribe?.()
     }
-  }, [computeViewRange, loadMeetings])
+  }, [computeViewRange, loadMeetings, setLastCalendarSync, setSyncError])
+
+  // Outlook reports failures separately from its saved meetings. Auth/network
+  // failures must leave those events and their last successful sync visible.
+  useEffect(() => window.electronAPI?.connectors?.onStatusChanged?.(({ id, status }) => {
+    if (!id.startsWith('m365')) return
+    setOutlookRefreshing((previous) => {
+      const next = new Set(previous)
+      if (status.state === 'syncing') next.add(id)
+      else next.delete(id)
+      return next
+    })
+    if (status.state === 'error' || status.state === 'auth-needed') {
+      setSyncError('Outlook refresh failed. Saved events are still available.')
+    }
+  }), [setSyncError])
 
   // Get dates for current view
   const viewDates = useMemo((): Date[] => {
@@ -538,37 +524,18 @@ export function Calendar() {
   // B-CAL-001: Uses named store actions instead of raw useAppStore.setState()
 
   const handleSync = useCallback(async () => {
-    console.log('[Calendar] Clearing cache and resyncing...')
-    // This is a user-initiated sync, so it gates the manual control too.
-    acquireCalendarSync(true)
     try {
-      const result = await window.electronAPI.calendar.clearAndSync()
-      console.log('[Calendar] Clear and sync result:', result)
-      if (result && !result.success) {
-        toast.error('Calendar sync failed', result.error || 'Unknown error occurred')
-      } else if (result && result.success) {
-        // CA-03 FIX: Update lastSync state after successful sync
-        // CS-002: Always update — don't guard on result.lastSync which may be absent
-        setLastCalendarSync(result.lastSync ?? new Date().toISOString())
+      const result = await syncCalendar('manual')
+      if (result.queued) return
+      if (!result.success) {
+        toast.error('Calendar sync failed', 'Saved events are still available. Try again when connected.')
+      } else {
         toast.success(`Calendar synced successfully: ${result.meetingsCount || 0} meetings`)
       }
-      // Reload meetings for current view
-      // CA-08 FIX: Guard against empty viewDates array
-      if (!viewDates || viewDates.length === 0) {
-        console.warn('[Calendar] No view dates available, skipping meeting reload')
-        return
-      }
-      const endDate = new Date(viewDates[viewDates.length - 1])
-      endDate.setHours(23, 59, 59, 999)
-      await loadMeetings(viewDates[0].toISOString(), endDate.toISOString())
-    } catch (err) {
-      console.error('[Calendar] Clear and sync failed:', err)
-      // CA-07 FIX: Already showing error to user via toast
-      toast.error('Calendar sync failed', err instanceof Error ? err.message : 'An unexpected error occurred')
-    } finally {
-      releaseCalendarSync(true)
+    } catch {
+      toast.error('Calendar sync failed', 'Saved events are still available.')
     }
-  }, [viewDates, loadMeetings, acquireCalendarSync, releaseCalendarSync, setLastCalendarSync])
+  }, [syncCalendar])
 
   // Handle navigation (memoized)
   const handleNavigatePrev = useCallback(() => {
@@ -800,6 +767,7 @@ export function Calendar() {
         calendarView={calendarView}
         calendarSyncing={calendarSyncing}
         lastSync={lastSync}
+        syncError={syncError}
         autoSyncEnabled={autoSyncEnabled}
         hideEmptyMeetings={hideEmptyMeetings}
         syncIntervalMinutes={calendarConfig?.syncIntervalMinutes}

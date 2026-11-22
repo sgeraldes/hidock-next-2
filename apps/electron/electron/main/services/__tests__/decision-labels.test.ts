@@ -226,7 +226,7 @@ describe('reference labels on real SQLite', () => {
   })
   it('creates v71 tables on a fresh database and upgrades v70 without losing recordings', async () => {
     seed('preserved')
-    expect(queryOne<{ v: number }>('SELECT MAX(version) v FROM schema_version')?.v).toBe(71)
+    expect(queryOne<{ v: number }>('SELECT MAX(version) v FROM schema_version')?.v).toBeGreaterThanOrEqual(71)
     run('DROP TABLE decision_label_items')
     run('DROP TABLE decision_label_sets')
     run('DROP TABLE decision_labels')

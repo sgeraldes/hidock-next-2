@@ -29,8 +29,8 @@ const jevAsk = vi.hoisted(() => vi.fn())
 vi.mock('../jev-settings', () => ({ jevKeyFor: () => 'test-jev-key' }))
 vi.mock('../pipeline/jev-harness', () => ({ createJevHarness: () => ({ ask: jevAsk }) }))
 
-import { initializeDatabase, closeDatabase, run, queryOne, saveRecordingEvaluation } from '../database'
-import { classifyCaptureValueRaw, recomputeEvaluationsFromEvidence } from '../value-classification'
+import { initializeDatabase, closeDatabase, run, queryOne, runInTransaction, saveRecordingEvaluation } from '../database'
+import { classifyCaptureValueRaw, recomputeEvaluationsFromEvidence, WARNING_REFRESH_CHUNK } from '../value-classification'
 
 const REC02_ANSWERS = {
   stars: { type: 'score', score: 2.51, confidence: 0, legend: {}, probabilities: { '0': 0.2, '1': 0.16, '2': 0.05, '3': 0.09, '4': 0.5 } },
@@ -148,5 +148,34 @@ describe('stored evaluations follow the evidence', () => {
     run("UPDATE audio_profiles SET category = 'speech' WHERE recording_id = 'rec04'")
     await recomputeEvaluationsFromEvidence(['rec04'])
     expect(evaluation('rec04')?.version).toBe(0)
+  })
+
+  it('recomputes more than one page and yields while scanning unchanged evaluations', async () => {
+    const count = WARNING_REFRESH_CHUNK * 2 + 3
+    const ids = Array.from({ length: count }, (_, i) => `bulk-evidence-${String(i).padStart(4, '0')}`)
+    runInTransaction(() => {
+      for (const id of ids) {
+        seed(id, 'noise')
+        storeJev(id, REC02_ANSWERS, 5, 'media_playback')
+      }
+    })
+
+    expect(await recomputeEvaluationsFromEvidence(ids)).toBe(count)
+    expect(
+      queryOne<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM recording_evaluations re
+          JOIN knowledge_captures kc ON kc.id = re.capture_id
+         WHERE kc.source_recording_id LIKE 'bulk-evidence-%'
+           AND re.star_level = 1 AND re.kind = 'noise_accidental' AND re.context = 'unclear'`
+      )?.count
+    ).toBe(count)
+
+    // The second pass has no writes. A scheduled immediate can run only if the
+    // scan yields after its full page instead of loading all answers_json first.
+    let yieldedBetweenPages = false
+    setImmediate(() => { yieldedBetweenPages = true })
+    expect(await recomputeEvaluationsFromEvidence(ids)).toBe(0)
+    expect(yieldedBetweenPages).toBe(true)
+    expect(jevAsk).not.toHaveBeenCalled()
   })
 })

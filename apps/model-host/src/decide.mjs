@@ -109,6 +109,8 @@ export class DecideModels {
     this.loading = null
     this.idleTimer = null
     this.queue = Promise.resolve()
+    this.generation = 0
+    this.retiring = Promise.resolve()
   }
 
   modelDir(name) {
@@ -152,7 +154,12 @@ export class DecideModels {
         : `${name} is downloading to this host; ask again when it is on disk`
       throw new DecisionError(message, 503, { decide: this.report() })
     }
-    const run = this.queue.then(() => this.#run(name, request))
+    const generation = this.generation
+    const run = this.queue.then(async () => {
+      await this.retiring
+      this.#checkGeneration(generation)
+      return this.#run(name, request)
+    })
     // The next request waits for this one, whatever happens to it.
     this.queue = run.catch(() => {})
     return run
@@ -160,12 +167,41 @@ export class DecideModels {
 
   /** End the worker and any download: the host stepped aside or stopped. */
   stop() {
-    this.#stopWorker()
+    this.generation++
+    const retired = this.#stopWorker()
+    let downloadExited = Promise.resolve()
     if (this.download) {
       const { child } = this.download
       this.download = null
+      downloadExited = new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new DecisionError('Decision download did not exit; maintenance blocked.', 503)),
+          this.options.stopTimeoutMs ?? 15_000)
+        child.once('close', () => { clearTimeout(timer); resolve() })
+      })
       child.kill()
     }
+    const stopped = Promise.all([retired, downloadExited]).then(() => undefined)
+    stopped.catch(() => {})
+    return stopped
+  }
+
+  #checkGeneration(generation, signal) {
+    if (generation !== this.generation || signal?.aborted) {
+      throw new DecisionError('The host stopped this queued work.', 503)
+    }
+  }
+
+  /** Audio and decisions share one model lane; resident decision memory is released first. */
+  withAudio(action, { signal } = {}) {
+    const generation = this.generation
+    const run = this.queue.then(async () => {
+      this.#checkGeneration(generation, signal)
+      await this.#stopWorker()
+      this.#checkGeneration(generation, signal)
+      return action()
+    })
+    this.queue = run.catch(() => {})
+    return run
   }
 
   async #run(name, request) {
@@ -269,10 +305,19 @@ export class DecideModels {
   #stopWorker() {
     clearTimeout(this.idleTimer)
     const worker = this.worker
-    if (!worker) return
+    if (!worker) return this.retiring
     this.worker = null
     this.loaded = null
+    // Never admit a replacement model merely because kill() was requested.
+    this.retiring = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new DecisionError('Decision worker did not exit; model admission blocked.', 503)),
+        this.options.stopTimeoutMs ?? 15_000)
+      worker.child.once('close', () => { clearTimeout(timer); resolve() })
+    })
+    // Idle/stop callers do not await; a failed retirement stays latched for future admission.
+    this.retiring.catch(() => {})
     worker.child.kill()
+    return this.retiring
   }
 
   #startDownload(name) {

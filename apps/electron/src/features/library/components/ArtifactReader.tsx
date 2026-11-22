@@ -9,6 +9,7 @@
  */
 
 import { useState, useEffect, useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { FolderOpen, Sparkles, FileText } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -272,6 +273,40 @@ function TextSurface({ content }: { content: ArtifactContent | null }) {
   )
 }
 
+/** Video stays in the artifact store; its linked audio uses the normal recording reader. */
+function VideoSurface({ artifact, content }: { artifact: ArtifactSummary; content: ArtifactContent | null }) {
+  const navigate = useNavigate()
+  const recordingId = getMetadataValue(artifact.metadata, 'audioRecordingId')
+  const [transcript, setTranscript] = useState<string | null>(null)
+  const [transcriptError, setTranscriptError] = useState(false)
+  const src = useMemo(() => {
+    if (!content?.blobBase64) return undefined
+    const bytes = Uint8Array.from(atob(content.blobBase64), (c) => c.charCodeAt(0))
+    return URL.createObjectURL(new Blob([bytes], { type: content.mime || 'video/mp4' }))
+  }, [content?.blobBase64, content?.mime])
+  useEffect(() => () => { if (src) URL.revokeObjectURL(src) }, [src])
+  useEffect(() => {
+    let cancelled = false
+    setTranscript(null)
+    setTranscriptError(false)
+    if (typeof recordingId === 'string') {
+      Promise.resolve(window.electronAPI?.transcripts?.getByRecordingIdOwner?.(recordingId))
+        .then((saved) => { if (!cancelled) setTranscript(saved?.full_text || null) })
+        .catch(() => { if (!cancelled) setTranscriptError(true) })
+    }
+    return () => { cancelled = true }
+  }, [recordingId])
+  return <div className="space-y-3 rounded-md border border-border p-3">
+    {src ? <video controls preload="metadata" src={src} aria-label="Video player" className="w-full max-h-[420px] rounded-md" />
+      : <p className="text-sm">Video preview unavailable. Open its folder to view the original file.</p>}
+    {transcript && <section aria-label="Video transcript"><h3 className="text-sm font-medium">Transcript</h3><p className="whitespace-pre-wrap text-sm">{transcript}</p></section>}
+    {transcriptError && <p className="text-sm text-muted-foreground">Could not load the saved transcript.</p>}
+    {typeof recordingId === 'string'
+      ? <Button variant="outline" size="sm" onClick={() => navigate('/library', { state: { selectedId: recordingId } })}>Open video audio and transcript</Button>
+      : <p className="text-sm text-muted-foreground">No extracted audio is available.</p>}
+  </div>
+}
+
 /** Graceful fallback when we cannot render a preview for the kind. */
 function FallbackSurface({ kind }: { kind: string }) {
   return (
@@ -366,14 +401,15 @@ export function ArtifactReader({ recording, onAskAboutSource }: ArtifactReaderPr
   }
 
   const kind = normaliseKind(artifact.kind)
-  const isTextKind = ['note', 'txt', 'md', 'json', 'data'].includes(kind)
+  const isTextKind = ['note', 'txt', 'md', 'json', 'data', 'link'].includes(kind)
 
   return (
     <div className="space-y-4">
       {kind === 'image' && <ImageSurface artifact={artifact} content={content} />}
       {kind === 'pdf' && <PdfSurface artifact={artifact} content={content} />}
+      {kind === 'video' && <VideoSurface artifact={artifact} content={content} />}
       {isTextKind && <TextSurface content={content} />}
-      {!['image', 'pdf'].includes(kind) && !isTextKind && <FallbackSurface kind={kind} />}
+      {!['image', 'pdf', 'video'].includes(kind) && !isTextKind && <FallbackSurface kind={kind} />}
 
       <RelatedData artifact={artifact} recording={recording} />
       <ArtifactActions artifact={artifact} onAskAboutSource={onAskAboutSource} />

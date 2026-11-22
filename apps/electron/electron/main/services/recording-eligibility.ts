@@ -105,11 +105,15 @@ export function isRecordingEligible(recordingId: string): boolean {
  * The transcription path's own boundary: the same allowlist without the
  * transcript-validity exclusion. A recording whose current transcript is
  * invalid, incomplete or doubtful must still be transcribable, since a new
- * transcript is the way out (plan 2026-10-04-validation-order). Fail-closed.
+ * transcript is the way out (plan 2026-10-04-validation-order). Explicit owner
+ * requests may also ignore value ratings; privacy and lifecycle stay fail-closed.
  */
-export function filterTranscribableRecordingIds(candidateIds: Iterable<string>): EligibilityResult {
+export function filterTranscribableRecordingIds(
+  candidateIds: Iterable<string>,
+  options: { ignoreValueExclusion?: boolean } = {}
+): EligibilityResult {
   try {
-    const { eligible, failClosed } = getEligibleRecordingIds(candidateIds, { forTranscription: true })
+    const { eligible, failClosed } = getEligibleRecordingIds(candidateIds, { forTranscription: true, ...options })
     if (failClosed) return { eligible: new Set<string>(), failClosed: true }
     return { eligible, failClosed: false }
   } catch (e) {
@@ -118,8 +122,8 @@ export function filterTranscribableRecordingIds(candidateIds: Iterable<string>):
   }
 }
 
-export function isRecordingTranscribable(recordingId: string): boolean {
-  const { eligible, failClosed } = filterTranscribableRecordingIds([recordingId])
+export function isRecordingTranscribable(recordingId: string, options: { ignoreValueExclusion?: boolean } = {}): boolean {
+  const { eligible, failClosed } = filterTranscribableRecordingIds([recordingId], options)
   return !failClosed && eligible.has(recordingId)
 }
 

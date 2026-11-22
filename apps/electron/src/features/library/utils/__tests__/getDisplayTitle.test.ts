@@ -18,6 +18,20 @@ const baseRecording: UnifiedRecording = {
 const meeting = { id: 'm-1', subject: 'Weekly delivery review' } as Meeting
 
 describe('getDisplayTitle', () => {
+  it('never displays a link filename extension, including a title equal to its file stem', () => {
+    for (const userTitle of [undefined, 'Example', 'Example.url']) {
+      expect(getDisplayTitle({ ...baseRecording, filename: 'Example.url', userTitle }).primaryText).toBe('Example')
+    }
+  })
+  it('formats legacy Slack and Jira link identities without rewriting stored filenames', () => {
+    expect(getDisplayTitle({ ...baseRecording, filename: 'team · C123 · thread 1234567890.123456.url' }).primaryText).toBe('Slack · team · #C123 · thread')
+    expect(getDisplayTitle({ ...baseRecording, filename: 'team.atlassian.net · ABC-123.url' }).primaryText).toBe('Jira · ABC-123')
+  })
+  it('uses the linked video audio title while keeping an explicit rename', () => {
+    const audio = { ...baseRecording, parentVideoCaptureId: 'video', videoAudioTitle: 'r2-video.mp4 · audio' }
+    expect(getDisplayTitle(audio).primaryText).toBe('r2-video.mp4 · audio')
+    expect(getDisplayTitle({ ...audio, userTitle: 'My audio' }).primaryText).toBe('My audio')
+  })
   it('uses the calendar subject when the source is assigned', () => {
     expect(getDisplayTitle({ ...baseRecording, userTitle: 'Mine', title: 'AI' }, meeting)).toEqual({
       primaryText: 'Weekly delivery review',

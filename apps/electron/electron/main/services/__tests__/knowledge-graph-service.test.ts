@@ -190,6 +190,24 @@ describe('knowledge-graph-service', () => {
       expect(result.errors[0].error).toContain('API rate limit')
     })
 
+    it('retains a provider response after graph persistence fails without calling it twice', async () => {
+      dbRun("INSERT INTO recordings (id, filename, date_recorded) VALUES ('rec-invalid', 'invalid.hda', '2026-06-01')")
+      dbRun("INSERT INTO transcripts (id, recording_id, full_text, language) VALUES ('tx-invalid', 'rec-invalid', 'Alice discussed TypeScript.', 'en')")
+      getKnowledgeGraphStore()
+      dbRun("CREATE TRIGGER fail_graph_marker BEFORE INSERT ON graph_ingested_transcripts BEGIN SELECT RAISE(ABORT, 'injected persistence failure'); END")
+      const first = await ingestFromDbTranscripts()
+      dbRun('DROP TRIGGER fail_graph_marker')
+      const second = await ingestFromDbTranscripts()
+      expect(first.errors).toHaveLength(1)
+      expect(second.errors).toHaveLength(0)
+      expect(second.ingested).toBe(1)
+      expect(complete).toHaveBeenCalledTimes(1)
+      const { queryAll } = await import('../database')
+      expect(queryAll("SELECT state FROM provider_checkpoints WHERE recording_id='rec-invalid'")).toEqual([{ state: 'received' }])
+      expect(queryAll("SELECT status FROM processing_runs WHERE recording_id='rec-invalid' AND stage='graph-sync'"))
+        .toEqual([{ status: 'failed' }, { status: 'completed' }])
+    })
+
     it('concurrent ingest runs do not double-ingest or inflate edge weights', async () => {
       dbRun(`INSERT OR IGNORE INTO recordings (id, filename, date_recorded, meeting_id) VALUES (?, ?, ?, ?)`,
         ['rec-race', 'race.hda', '2026-06-01', null])

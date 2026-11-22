@@ -1,3 +1,4 @@
+import { freemem, totalmem } from 'os'
 /**
  * Start the host.
  *
@@ -5,16 +6,27 @@
  * or to hold a GPU, so the person opens the control page and presses Start.
  */
 
-import { existsSync, mkdirSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
+import { createServer } from 'http'
 import { createHostServer, STEP_ASIDE } from './server.mjs'
+import { WorkerJobs } from './jobs.mjs'
 import { HostState } from './state.mjs'
 import { PairingStore } from './auth.mjs'
 import { DEFAULTS, detectGpu, loadConfig, loadSecrets, loadTokens, paths, saveSecrets, saveTokens, updateConfigFile } from './config.mjs'
 import { HostSetup } from './host-setup.mjs'
 import { runDiarization, threadEnv } from './diarize.mjs'
+import { runVad } from './vad.mjs'
+import { runAsr } from './asr.mjs'
+import { NATIVE_DIARIZATION_MODEL, readyNativeDiarization, runNativeDiarization } from './native-diarization.mjs'
+import { readyAsrModels, asrRuntimeFingerprint } from './asr-readiness.mjs'
 import { DecideModels } from './decide.mjs'
+import { nativeRealtimeRuntime } from './realtime-native-runtime.mjs'
+import { readyRealtime } from './realtime-readiness.mjs'
+import { REALTIME_MODEL } from './realtime-gateway.mjs'
+import { SEMANTIC_MODEL, readySemanticEmbeddings, runSemanticEmbeddings } from './semantic-embeddings.mjs'
+import { generationReadiness, runGeneration } from './generation.mjs'
 import { collectDiagnostics, repairRuntime, stageUpdate, UPDATE_EXIT_CODE } from './maintenance.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -61,6 +73,12 @@ export function resolveFfmpeg(
 
 export async function start(options = {}) {
   const dirs = paths(options.root)
+  const assertNoPreparation = () => {
+    if (['asr-preparing.lock', 'semantic-preparing.lock', 'generation-preparing.lock'].some(file => existsSync(join(dirs.root, file)))) {
+      throw new Error('ASR preparation is in progress. Start the host after preparation finishes.')
+    }
+  }
+  assertNoPreparation()
   for (const dir of [dirs.root, dirs.models, dirs.runtime, dirs.logs]) {
     mkdirSync(dir, { recursive: true })
   }
@@ -76,6 +94,23 @@ export async function start(options = {}) {
   const workerPath = resolveWorker(config.workerPath)
   const ffmpegPath = resolveFfmpeg(config.ffmpegPath)
   const gpu = await detectGpu()
+  const asrModels = readyAsrModels(config, pythonPath, (python, model) => asrRuntimeFingerprint(python, model, dirs.root))
+  const nativeDiarizationModels = readyNativeDiarization(config, pythonPath, dirs.root) ? [NATIVE_DIARIZATION_MODEL] : []
+  const semanticOptions = { pythonPath, workerPath,
+    modelDir: join(dirs.models, 'nemotron-3-embed-1b'),
+    siteDir: join(dirs.runtime, 'semantic-embeddings', 'site') }
+  const semanticProfile = () => readySemanticEmbeddings(config.semanticEmbeddingValidation, semanticOptions)
+    ? { ready: true, model: SEMANTIC_MODEL, dimensions: 2048, spaceId: config.semanticEmbeddingValidation.spaceId }
+    : { ready: false }
+  const realtimeAvailable = () => Boolean(gpu &&
+    !existsSync(join(dirs.root, 'asr-preparing.lock')) && !existsSync(join(dirs.root, 'semantic-preparing.lock')) &&
+    readyRealtime(config.realtimeAsrValidation, pythonPath, dirs.root))
+  const startRealtime = nativeRealtimeRuntime({ pythonPath, workerPath, root: dirs.root })
+  let generationCapability = await generationReadiness(dirs.root)
+  const generationProfile = async () => {
+    generationCapability = await generationReadiness(dirs.root)
+    return generationCapability
+  }
 
   // Clef and Clef-Flash, when setup installed their runtime (transformers, bitsandbytes).
   const decide = config.decideRuntime === true
@@ -99,7 +134,7 @@ export async function start(options = {}) {
     onLeaveReady: async () => {
       // Stop has to mean something to a job already running.
       state.activeJob?.abort()
-      decide?.stop()
+      await decide?.stop()
     },
   })
   const pairing = new PairingStore({
@@ -107,8 +142,11 @@ export async function start(options = {}) {
     save: (tokens, meta) => saveTokens(tokens, dirs.tokens, meta),
   })
 
-  const jobOptions = () => ({
+  const jobOptions = () => {
+    assertNoPreparation()
+    return ({
     pythonPath,
+    hostRoot: dirs.root,
     workerPath,
     model: config.model,
     fallbackModel: config.fallbackModel,
@@ -117,12 +155,15 @@ export async function start(options = {}) {
     timeoutMs: config.timeoutMs,
     hfToken: setup.token() || process.env.HF_TOKEN,
     ffmpegPath,
-  })
+  }) }
   // The last step of setup happens here, with the token HiDock sends.
   const setup = new HostSetup({
     validated: config.validated === true && existsSync(workerPath),
+    validatedDevice: config.validatedDevice === 'cuda' && !gpu ? '' : config.validatedDevice,
     hfToken: config.hfToken,
-    diarize: options.diarize || runDiarization,
+    diarize: (audio, opts) => decide
+      ? decide.withAudio(() => (options.diarize || runDiarization)(audio, opts), opts)
+      : (options.diarize || runDiarization)(audio, opts),
     jobOptions,
     saveToken: (token) => saveSecrets(token, secretsFile),
     saveValidated: (patch) => updateConfigFile(patch, dirs.config),
@@ -136,6 +177,16 @@ export async function start(options = {}) {
     log: console.log,
   })
   const maintenance = {
+    prepareSemantic: () => process.exit(86),
+    prepareRealtime: () => process.exit(87),
+    prepareGeneration: () => process.exit(88),
+    prepareAsr: (model) => {
+      // Fixed tray operations, never a caller-provided executable or command.
+      const codes = { 'microsoft/VibeVoice-ASR': 77, 'nvidia/parakeet-tdt-0.6b-v3': 78, 'Qwen/Qwen3-ASR-0.6B': 79,
+        'moondream/parakeet-ultra': 80, 'Qwen/Qwen3-ASR-1.7B': 81, 'nvidia/nemotron-3.5-asr-streaming-0.6b': 82,
+        'OpenMOSS-Team/MOSS-Transcribe-Diarize': 83, [NATIVE_DIARIZATION_MODEL]: 84, 'Edge0/Audio8-ASR-Infinite': 85 }
+      process.exit(codes[model] || 76)
+    },
     diagnostics: () => collectDiagnostics({ dirs, pythonPath }),
     stageUpdate: (body) => stageUpdate({ root: dirs.root }, body),
     // The tray icon sees this exit code, runs the staged installer, and the
@@ -158,7 +209,34 @@ export async function start(options = {}) {
     },
   }
 
-  const server = createHostServer({
+  const jobs = new WorkerJobs({ directory: join(dirs.root, 'jobs'), state,
+    execute: (audio, options) => {
+      const action = () => options.stage === 'vad' ? runVad(audio, options)
+        : options.stage === 'transcription' ? runAsr(audio, options)
+        : options.model === NATIVE_DIARIZATION_MODEL ? runNativeDiarization(audio, options) : runDiarization(audio, options)
+      return decide ? decide.withAudio(action, options) : action()
+    },
+    options: jobOptions })
+  let server
+  let controlServer
+  try {
+  await jobs.initialize()
+  const tls = config.tlsCertPath && config.tlsKeyPath
+    ? { cert: readFileSync(config.tlsCertPath), key: readFileSync(config.tlsKeyPath), minVersion: 'TLSv1.2' }
+    : undefined
+  server = createHostServer({
+    jobs, tls,
+    generation: { profile: generationProfile, run: (request, options) => {
+      const action = () => runGeneration(request, { ...jobOptions(), root: dirs.root, pythonPath, workerPath, ...options })
+      return decide ? decide.withAudio(action, options) : action()
+    } },
+    realtime: { available: realtimeAvailable,
+      startRuntime: options => decide ? decide.withAudio(() => startRealtime(options), options) : startRealtime(options) },
+    semantic: { profile: semanticProfile,
+      run: (request, options) => {
+        const action = () => runSemanticEmbeddings(request, { ...jobOptions(), ...semanticOptions, ...options })
+        return decide ? decide.withAudio(action, options) : action()
+      } },
     state,
     pairing,
     setup,
@@ -170,11 +248,22 @@ export async function start(options = {}) {
       // that never ran the model is how a host refuses every job while
       // claiming it can do them. `decide` means the runtime is installed; /health
       // says which model is on disk.
-      capabilities: [...(setup.canDiarize() ? ['diarize'] : []), ...(decide ? ['decide'] : [])],
+      capabilities: [...(setup.canDiarize() ? ['diarize'] : []),
+        ...(ffmpegPath && existsSync(ffmpegPath) ? ['vad'] : []), ...(decide ? ['decide'] : []),
+        ...(semanticProfile().ready ? ['embed'] : []), ...(generationCapability.ready ? ['generate', 'chat'] : [])],
+      semanticEmbedding: semanticProfile(),
+      textGeneration: generationCapability,
+      realtimeAsrModels: realtimeAvailable() ? [REALTIME_MODEL] : [],
+      asrModels,
+      audioChannels: { version: 1, separate: true, maxChannels: 2, activeChannelSelection: true, sourceRolesRequireEvidence: true },
+      diarizationModels: [...(setup.canDiarize() ? ['pyannote/speaker-diarization-3.1', 'pyannote/speaker-diarization-community-1'] : []), ...nativeDiarizationModels],
+      engines: asrModels.map(model => ({ model, version: config.asrValidation[model].modelVersion,
+        lastValidatedDevice: config.asrValidation[model].device, testedAt: config.asrValidation[model].testedAt })),
+      memory: { availableBytes: freemem(), totalBytes: totalmem() },
       gpu,
       // Say it plainly rather than letting a green light imply acceleration
       // that is not there.
-      acceleration: gpu ? 'cuda' : 'cpu',
+      acceleration: setup.report().device || 'unverified',
       paired: pairing.tokens.size,
     }),
     jobOptions,
@@ -182,7 +271,19 @@ export async function start(options = {}) {
 
   // Every interface by default, because HiDock is on another machine. Tests bind
   // to loopback: Windows Firewall asks nothing for a loopback-only listener.
-  await new Promise((resolve) => server.listen(config.port, config.bindAddress || undefined, resolve))
+  controlServer = tls ? createServer((req, res) => server.emit('request', req, res)) : null
+  // The tray's HTTP control channel never leaves loopback. Remote clients use TLS.
+  if (controlServer) {
+    await new Promise((resolve, reject) => {
+      controlServer.once('error', reject)
+      controlServer.listen(config.port, '127.0.0.1', resolve)
+    })
+    server.once('close', () => controlServer.close())
+  }
+  await new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(tls ? (config.tlsPort || config.port + 1) : config.port, config.bindAddress || undefined, resolve)
+  })
   const address = server.address()
   console.log(`[host] listening on ${address.port}, state ${state.publicState()}`)
   if (!gpu) {
@@ -193,6 +294,15 @@ export async function start(options = {}) {
   setup.start()
   if (options.startReady) await state.apply('start')
   return { server, state, pairing, setup, decide, config, port: address.port }
+  } catch (error) {
+    jobs.close()
+    decide?.stop()
+    await Promise.all([server, controlServer].filter(Boolean).map(listener => new Promise(resolve => {
+      listener.close(() => resolve())
+      listener.closeAllConnections?.()
+    })))
+    throw error
+  }
 }
 
 const invokedDirectly =

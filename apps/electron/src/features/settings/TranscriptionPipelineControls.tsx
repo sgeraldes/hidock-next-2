@@ -50,7 +50,10 @@ export function TranscriptionPipelineControls() {
           <label htmlFor="autoTranscribeToggle" className="text-sm font-medium">
             Transcribe new recordings automatically
           </label>
-          <p className="mt-1 text-xs text-muted-foreground">Also on the Device page. Off: recordings wait until you press Transcribe.</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Off: new recordings wait until you press Transcribe. Existing queued work and automatic retries continue.
+            Set Transcription retries to 0 in Quality checks to disable automatic retries. Also on the Device page.
+          </p>
         </div>
         <Switch
           id="autoTranscribeToggle"

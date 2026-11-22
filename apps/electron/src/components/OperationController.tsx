@@ -86,6 +86,9 @@ export const useAudioControls = () => {
     seek: (time: number) => {
       window.__audioControls?.seek(time)
     },
+    setChannelMuted: (recordingId: string, channel: number, muted: boolean) => {
+      window.__audioControls?.setChannelMuted?.(recordingId, channel, muted)
+    },
     setPlaybackRate: (rate: number) => {
       window.__audioControls?.setPlaybackRate(rate)
     },

@@ -24,6 +24,18 @@ vi.mock('react-router-dom', async (importOriginal) => {
 const noop = () => {}
 
 describe('TranscriptViewer speaker parsing', () => {
+  it('shows source badges separately from channel-qualified speakers and preserves overlapping turns', () => {
+    render(<TranscriptViewer transcript="fixture" onSeek={noop} segments={[
+      {start: 1, end: 4, text: 'first source', speaker: 'ch0:voice', sourceChannel: 0, channelRole: 'microphone', channelProvenance: 'unverified'},
+      {start: 1, end: 4, text: 'second source', speaker: 'ch1:voice', sourceChannel: 1, channelRole: 'unknown'},
+      {start: 5, end: 6, text: 'microphone source', sourceChannel: 0, channelRole: 'microphone', channelProvenance: 'user-confirmed'},
+      {start: 6, end: 7, text: 'system source', sourceChannel: 1, channelRole: 'system', channelProvenance: 'firmware-manifest'}
+    ]} />)
+    for (const label of ['Channel 1', 'Channel 2', 'Microphone', 'System', 'ch0:voice', 'ch1:voice']) {
+      expect(screen.getByText(label)).toBeInTheDocument()
+    }
+    expect(screen.getAllByTitle(/Audio source only; not a person identity/)).toHaveLength(4)
+  })
   it('renders markdown-bold **Name:** labels as speaker names without asterisks', () => {
     const transcript = [
       '**Vanessa:** Hola a todos, ¿cómo están?',

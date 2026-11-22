@@ -34,6 +34,17 @@ function base(over: Partial<ValidityInput> = {}): ValidityInput {
 }
 
 describe('assessTranscriptValidity', () => {
+  it('does not treat matching transcript words as verification of extra speaker labels', () => {
+    const segments = Array.from({ length: 60 }, (_, i) => ({
+      speaker: `Voice ${i % 5}`, start: i * 10, end: i * 10 + 9, text: words(20, `-${i}`)
+    }))
+    const input = base({ envelope: envelope([[160, 600]]), segments, attendees: 2, sample: 'confirmed' })
+    const verdict = assessTranscriptValidity(input)
+    expect(verdict.status).toBe('doubtful')
+    expect(verdict.reasons.map(reason => reason.code)).toEqual(['more_speakers_than_invited'])
+    // An explicit owner acceptance remains a separate decision from automated verification.
+    expect(assessTranscriptValidity({ ...input, accepted: true }).status).toBe('valid')
+  })
   it('is valid when the text sits where the audio is', () => {
     const env = envelope([[160, 600]])
     const segments = Array.from({ length: 60 }, (_, i) => ({ speaker: i % 2 ? 'A' : 'B', start: i * 10, end: i * 10 + 9, text: words(20, `-${i}`) }))
@@ -103,6 +114,32 @@ describe('assessTranscriptValidity', () => {
     const v = assessTranscriptValidity(base({ envelope: env, segments }))
     expect(v.status).toBe('incomplete')
     expect(v.reasons.map((r) => r.code)).toContain('speech_after_the_end')
+  })
+
+  it.each([
+    [130, 'doubtful', 'clock_compressed'],
+    [40, 'incomplete', 'speech_after_the_end'],
+    [89, 'incomplete', 'speech_after_the_end'],
+    [90, 'doubtful', 'clock_compressed']
+  ] as const)('judges an early end at %i words per sound-minute as %s', (rate, status, reason) => {
+    // Nine minutes of sound in a thirty-six-minute file; the text ends at 25%.
+    const env = envelope([[160, 270], [138, 270], [160, 270], [138, 1350]])
+    const segments = [{ speaker: 'A', start: 0, end: 540, text: words(rate * 9) }]
+    const v = assessTranscriptValidity(base({ envelope: env, segments }))
+    expect(v.status).toBe(status)
+    expect(v.measures.wordsPerSoundMinute).toBeCloseTo(rate)
+    expect(v.reasons.map((r) => r.code)).toContain(reason)
+    if (status === 'doubtful') expect(v.reasons.map((r) => r.code)).not.toContain('speech_after_the_end')
+  })
+
+  it('keeps a sampled incomplete verdict even for dense text', () => {
+    const v = assessTranscriptValidity(base({
+      envelope: envelope([[160, 600], [138, 600]]),
+      segments: [{ speaker: 'A', start: 0, end: 300, text: words(1300) }],
+      sample: 'incomplete'
+    }))
+    expect(v.status).toBe('incomplete')
+    expect(v.reasons.map((r) => r.code)).toEqual(['speech_after_the_end'])
   })
 
   it('accepts a transcript that ends early when nothing real follows', () => {

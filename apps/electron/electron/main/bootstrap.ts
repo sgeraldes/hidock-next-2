@@ -17,6 +17,7 @@ configureEarlyStartup()
 // It holds that lock only while it upgrades an older database file, and opens
 // the app afterwards if the owner tried to during the upgrade (brain-upgrade.ts).
 const brainOnly = process.argv.includes('--brain-only')
+const backendOnly = process.argv.includes('--backend-only')
 
 if (brainOnly) {
   // Nothing is drawn, so nothing needs a GPU. disableHardwareAcceleration alone
@@ -45,7 +46,11 @@ startup.hasSingleInstanceLock = brainOnly
   ? false
   : acquireSingleInstanceLock({
       getMainWindow: () => startup.mainWindow,
-      getSplashWindow: () => startup.splashWindow
+      getSplashWindow: () => startup.splashWindow,
+      onShowUi: () => {
+        startup.uiRequested = true
+        startup.requestUi?.()
+      }
     })
 
 if (startup.hasSingleInstanceLock) {
@@ -64,7 +69,7 @@ if (startup.hasSingleInstanceLock) {
     // or renderer application modules. Show a useful frame first; the splash's
     // renderer process stays responsive while the main process evaluates the
     // heavier application chunk.
-    startup.splashWindow = await createSplashWindow(join(__dirname, '../preload/splash.js'))
+    if (!backendOnly) startup.splashWindow = await createSplashWindow(join(__dirname, '../preload/splash.js'))
     if (startup.errorLog && startup.splashWindow) logWindow(startup.errorLog, startup.splashWindow.webContents)
     await import('./index')
   }).catch((error) => {

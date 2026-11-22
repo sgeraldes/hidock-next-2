@@ -92,6 +92,7 @@ vi.mock('fs', async (importOriginal) => {
 })
 
 import { getDownloadService } from '../download-service'
+import { upsertRecordingFromDevice } from '../database'
 
 type DeviceFile = { filename: string; size: number; duration: number; dateCreated: Date }
 
@@ -119,6 +120,32 @@ describe('device file-list reconcile: one transaction, batched yields, hoisted t
 
   afterEach(() => {
     logSpy.mockRestore()
+  })
+
+  it('rejects partial/error detailed listings before any reconciliation transaction', async () => {
+    for (const status of ['partial', 'error'] as const) {
+      const snapshot = { status, files: makeFiles(1), expectedCount: 2, parsedCount: 1, reason: 'stream incomplete' }
+      expect(() => service.getFilesToSync(snapshot)).toThrow('incomplete device listing')
+      await expect(service.getFilesToSyncBatched(snapshot)).rejects.toThrow('incomplete device listing')
+    }
+    expect(mockRunInTransaction).not.toHaveBeenCalled()
+    expect(mockGetPurgedFilenames).not.toHaveBeenCalled()
+  })
+
+  it('retains files with unknown dates without fabricated ingestion or automatic download', async () => {
+    const files = [{ filename: 'unknown.hda', size: 1024, duration: 10, dateCreated: null }]
+    const result = await service.getFilesToSyncBatched({ status: 'complete', files, expectedCount: 1, parsedCount: 1, reason: null })
+    expect(result[0].dateCreated).toBeNull()
+    expect(result[0].skipReason).toContain('manual download only')
+    expect(upsertRecordingFromDevice).not.toHaveBeenCalled()
+  })
+
+  it('rejects inconsistent counts and invalid batch sizes, accepts complete detailed snapshots', async () => {
+    const files = makeFiles(2)
+    await expect(service.getFilesToSyncBatched({ status: 'complete', files, expectedCount: 3, parsedCount: 2, reason: null })).rejects.toThrow('incomplete')
+    await expect(service.getFilesToSyncBatched(files, 0)).rejects.toThrow('batch size')
+    expect(mockRunInTransaction).not.toHaveBeenCalled()
+    expect(await service.getFilesToSyncBatched({ status: 'complete', files, expectedCount: 2, parsedCount: 2, reason: null })).toHaveLength(2)
   })
 
   it('getFilesToSync wraps the whole snapshot in exactly ONE transaction', () => {
