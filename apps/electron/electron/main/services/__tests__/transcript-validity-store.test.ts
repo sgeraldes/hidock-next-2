@@ -328,8 +328,11 @@ describe('full library projection', () => {
     writeFileSync(join(tmpdir(), 'f3-projection-hold.json'), JSON.stringify({ worstHoldMs: first.worstHoldMs, heartbeatMs: worstHoldMs }))
     expect(first.checked).toBe(2140)
     expect(concurrent.checked).toBe(0)
-    expect(first.worstHoldMs).toBeLessThan(100)
-    expect(worstHoldMs).toBeLessThan(100)
+    // No main-thread hold over 50 ms on the dev PC (#175's budget); the shared
+    // CI runner runs these passes up to five times slower.
+    const limit = process.env.CI ? 250 : 50
+    expect(first.worstHoldMs).toBeLessThan(limit)
+    expect(worstHoldMs).toBeLessThan(limit)
     expect(autoLinkRecordingsToMeetings()).toBe(0)
     expect((await backfillTranscriptValidity()).checked).toBe(0)
     expect(autoLinkRecordingsToMeetings()).toBe(0)

@@ -928,12 +928,12 @@ describe('transcribeRecording — ADV40-1 eligibility BEFORE the provider', () =
   })
 
   it.each([
-    ['soft-deleted / personal / hard-purged (lifecycle boundary returns ineligible)'],
-    ['lifecycle lookup fails closed (boundary returns ineligible)']
+    ['soft-deleted / personal / value-excluded / hard-purged (boundary returns ineligible)'],
+    ['eligibility lookup fails closed (boundary returns ineligible)']
   ])('ineligible up front (%s): ZERO provider calls, nothing persisted', async () => {
     // isRecordingEligible is the shared FAIL-CLOSED boundary — both an excluded
     // recording and a lookup error resolve to `false`, so one flip covers both.
-    mockIsRecordingProcessable.mockReturnValue(false)
+    mockIsRecordingEligible.mockReturnValue(false)
 
     const { transcribeManually } = await import('../transcription')
     await transcribeManually('rec-elig')

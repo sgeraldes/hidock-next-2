@@ -37,11 +37,12 @@ pairs with it, gives it the Hugging Face token and decides when it steps aside.
   the Library includes a **Transcription problems** filter and reasons on hover. Gemini gets
   one automatic retry with smaller chunks. Existing transcripts are checked again while
   their text and audio are kept. Acoustic voice segments are now retained for future timelines.
-- **Retranscription can recover bad transcripts.** Transcribe again and Retry run even when
-  a prior rating excluded the recording. Ratings based on incomplete text are withdrawn;
-  audio and owner ratings remain. Sparse transcripts lose generated metadata, while gap-only
-  transcripts keep their real summaries, titles, meeting links and search content, with missing
-  ranges shown for review.
+- **Only text too sparse for its speech, or invalid text, loses what was built on it.**
+  Ratings based on such text are withdrawn; audio and owner ratings remain. Gap-only and
+  doubtful transcripts keep their summaries, titles, meeting links and search content, with
+  a note above the summary and the missing ranges shown for review.
+- **A missing Gemini key pauses transcription instead of failing the queue.** Operations
+  says why it waits, and queued requests run once a key is added.
 - **Record meetings on your PC.** New > Record opens a bar that stays across pages, with separate
   microphone and system levels. Stereo WebM keeps mic on the left and system audio on the right;
   saved and recovered recordings enter the Library through the file-import path.

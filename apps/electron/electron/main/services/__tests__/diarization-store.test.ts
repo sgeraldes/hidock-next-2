@@ -7,6 +7,11 @@ const paths = vi.hoisted(() => ({ db: '' }))
 const dir = mkdtempSync(join(tmpdir(), 'hidock-diarization-store-'))
 paths.db = join(dir, 'test.db')
 vi.mock('../file-storage', () => ({ getDatabasePath: () => paths.db }))
+// The pending migration takes the mandatory snapshot, which the real worker
+// host cannot do under vitest (no startup runtimeDir); back it in process.
+vi.mock('../sqlite-backup-host', () =>
+  import('./helpers/in-process-sqlite-backup-host').then((m) => m.inProcessSqliteBackupHost())
+)
 import { initializeDatabase, closeDatabase, run, queryOne } from '../database'
 import { storeDiarizedSegments, getDiarizedSegments } from '../diarization-store'
 beforeAll(async () => { await initializeDatabase() })
@@ -26,15 +31,15 @@ it('stores independent acoustic turns, replaces atomically, rejects bad timestam
   expect(getDiarizedSegments('rec')).toHaveLength(1)
 })
 
-it('migrates a v71 database through the restore-point boundary without losing audio/text', async () => {
+it('migrates a v74 database through the restore-point boundary without losing audio/text', async () => {
   run(`INSERT INTO transcripts (id, recording_id, full_text) VALUES ('trans-rec', 'rec', 'preserved')`)
   run('DROP TABLE diarized_segments')
   run('DELETE FROM schema_version')
-  run('INSERT INTO schema_version (version) VALUES (71)')
+  run('INSERT INTO schema_version (version) VALUES (74)')
   closeDatabase()
   await initializeDatabase()
-  expect(queryOne<{ version: number }>('SELECT MAX(version) AS version FROM schema_version')?.version).toBe(74)
+  expect(queryOne<{ version: number }>('SELECT MAX(version) AS version FROM schema_version')?.version).toBe(75)
   expect(getDiarizedSegments('rec')).toEqual([])
   expect(queryOne<{ full_text: string }>('SELECT full_text FROM transcripts WHERE recording_id = ?', ['rec'])?.full_text).toBe('preserved')
-  expect(readdirSync(dir).some(file => file.includes('pre-v74'))).toBe(true)
+  expect(readdirSync(dir).some(file => file.includes('pre-v75'))).toBe(true)
 })

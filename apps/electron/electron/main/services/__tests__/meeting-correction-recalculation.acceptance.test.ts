@@ -217,6 +217,10 @@ describe('CL-08: corrected ad-hoc call stays independent (real SQLite, synthetic
     // Without it the very same pass links the call back to the event, so the
     // assertions above are not satisfied by fixture geometry or an empty pass.
     db.run('UPDATE recordings SET correlation_method = NULL WHERE id = ?', [ADHOC_REC])
+    // Candidate rows that reject this meeting also hold an automatic link back
+    // (the startup repair retracts such links; auto-link must not redo them), so
+    // the control removes that evidence too.
+    db.run('DELETE FROM recording_meeting_candidates WHERE recording_id = ?', [ADHOC_REC])
     reconciler.autoLinkRecordingsToMeetings()
     expect(link(db, ADHOC_REC).meeting_id).toBe(MEETING)
     close(db)

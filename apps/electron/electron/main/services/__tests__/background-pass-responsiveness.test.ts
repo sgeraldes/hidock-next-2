@@ -2,7 +2,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { initializeDatabase, run, runInTransaction, closeDatabase, queryAll, queryOne } from '../database'
 
 const paths = vi.hoisted(() => ({ root: '', db: '' }))
 paths.root = join(tmpdir(), `hidock-background-fixture-${process.pid}-${Date.now()}`)
@@ -40,6 +39,10 @@ let attempt = 0
 describe('2,150 transcript background passes', () => {
   it('keeps each main-thread hold below 100 ms', { retry: 1, timeout: 300_000 }, async () => {
     paths.db = `${paths.root}-${++attempt}.sqlite`
+    // A retry gets fresh modules: the vector store and other singletons keep
+    // the first attempt's database and tables otherwise.
+    vi.resetModules()
+    const { initializeDatabase, run, runInTransaction, closeDatabase, queryAll, queryOne } = await import('../database')
     await initializeDatabase()
     const text = 'Spoken words about the project. '.repeat(1300).slice(0, 40_000)
     const speakers = JSON.stringify(Array.from({ length: 500 }, (_, i) => ({ speaker: 'Speaker 1', start: i * 7, end: i * 7 + 6, text: text.slice(0, 80) })))
