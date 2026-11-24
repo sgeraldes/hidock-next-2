@@ -32,16 +32,20 @@ describe('reader find index', () => {
     // the CI runner, while the same "r" (45,000 matches) then takes 2.5 ms.
     // Warm up on this index with letters outside the measured queries. The
     // first (cold) search keeps a loose bound so a regression there still fails.
+    // Both bounds count this worker's CPU time, not wall time: under the full
+    // suite on a loaded machine the cold search waited for a core and measured
+    // 273 ms of wall time (24-nov-2026) while doing the same work.
+    const cpuMs = (run: () => void): number => {
+      const start = process.cpuUsage()
+      run()
+      const used = process.cpuUsage(start)
+      return (used.user + used.system) / 1000
+    }
     const index = buildFindIndex(makeDocuments(3000))
-    const coldStart = performance.now()
-    searchFindIndex(index, 'e')
-    const coldMs = performance.now() - coldStart
+    const coldMs = cpuMs(() => searchFindIndex(index, 'e'))
     for (const letter of ['a', 'o']) searchFindIndex(index, letter)
-    const times = ['r', 're', 'reu', 'reun', 'reuni', 'reunion'].map(query => {
-      const start = performance.now()
-      expect(searchFindIndex(index, query).length).toBeGreaterThan(0)
-      return performance.now() - start
-    })
+    const times = ['r', 're', 'reu', 'reun', 'reuni', 'reunion'].map(query =>
+      cpuMs(() => expect(searchFindIndex(index, query).length).toBeGreaterThan(0)))
     console.log('Find 3000 segments cold ms:', coldMs, 'keystroke ms:', times)
     expect(coldMs).toBeLessThan(250)
     expect(Math.max(...times)).toBeLessThan(50)
