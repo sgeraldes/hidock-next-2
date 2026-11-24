@@ -25,6 +25,7 @@ import {
   clearPurgeTombstones,
   getPurgedFilenames,
   getRecordingByFilename,
+  markRecordingsNotOnDevice,
   getSyncedFilenames,
   queryOne,
   queryAll,
@@ -47,7 +48,12 @@ import { join, basename, dirname } from 'path'
 import { resetStorageLimitCache } from './storage-usage'
 import { queueTranscriptionIfEnabled } from './transcription'
 import { profileNewRecording } from './audio-profile-store'
+import type { DeviceSnapshotGuard } from './device-snapshot'
+import { deviceListGuard } from './device-snapshot'
 import { isNativeFileManualOnly } from './device-native-file-policy'
+
+/** isFileAlreadySynced: a same-stem external import does not stand for device audio. */
+const INDEPENDENT_IMPORT_REASON = 'Independent local import is not device audio'
 
 /**
  * D-022 — why a requested file did not enter the queue.
@@ -538,12 +544,25 @@ export class DownloadService {
 
     // Check 2: Convert .hda to .wav and check both (legacy format)
     const wavFilename = filename.replace(/\.hda$/i, '.wav')
+    const mp3Filename = DownloadService.normalizeFilename(filename)
+    const isImport = (row: ReturnType<typeof getRecordingByFilename>): boolean =>
+      !!row && (row.is_imported === 1 || row.source !== 'hidock')
+    const wavIsImport = isImport(getRecordingByFilename(wavFilename))
+    const mp3IsImport = isImport(getRecordingByFilename(mp3Filename))
+    if (/\.hda$/i.test(filename) && (wavIsImport || mp3IsImport)) {
+      // The import's own name proves nothing about the device audio, but a
+      // variant that belongs to the device take still proves it was downloaded.
+      if (!wavIsImport && this.syncedRowIsBackedByDisk(wavFilename)) return { synced: true, reason: 'WAV version in synced_files' }
+      if (!mp3IsImport && mp3Filename !== wavFilename && this.syncedRowIsBackedByDisk(mp3Filename)) {
+        return { synced: true, reason: 'MP3 version in synced_files' }
+      }
+      return { synced: false, reason: INDEPENDENT_IMPORT_REASON }
+    }
     if (wavFilename !== filename && this.syncedRowIsBackedByDisk(wavFilename)) {
       return { synced: true, reason: 'WAV version in synced_files' }
     }
 
     // C-004: Check 2b: Also check .mp3 normalized name (B-DWN-003 normalizes .hda->.mp3)
-    const mp3Filename = DownloadService.normalizeFilename(filename)
     if (mp3Filename !== filename && mp3Filename !== wavFilename && this.syncedRowIsBackedByDisk(mp3Filename)) {
       return { synced: true, reason: 'MP3 version in synced_files' }
     }
@@ -570,7 +589,7 @@ export class DownloadService {
     }
 
     // Check 4: Check recordings table
-    const recording = getRecordingByFilename(filename) || getRecordingByFilename(wavFilename)
+    const recording = getRecordingByFilename(filename)
     if (recording && recording.file_path && existsSync(recording.file_path)) {
       // Recording exists with valid file path
       // BUG-R4: no per-file log — folded into getFilesToSync() summary.
@@ -612,22 +631,29 @@ export class DownloadService {
    */
   getFilesToSyncBatched(
     snapshot: DeviceFileSnapshot[] | DeviceFileListingSnapshot,
-    batchSize = 100
+    batchSize = 100,
+    guard?: DeviceSnapshotGuard
   ): Promise<ReconciledDeviceFile[]> {
     if (!Number.isSafeInteger(batchSize) || batchSize <= 0 || batchSize > 1000) return Promise.reject(new Error('Invalid reconcile batch size'))
     let deviceFiles: DeviceFileSnapshot[]
     try { deviceFiles = completeFileSnapshot(snapshot) } catch (error) { return Promise.reject(error) }
-    const run = this.reconcileChain.then(() => this.reconcileInChunks(deviceFiles, batchSize))
+    const run = this.reconcileChain.then(() => this.reconcileInChunks(deviceFiles, batchSize, guard))
     this.reconcileChain = run.catch(() => undefined)
     return run
   }
 
   private async reconcileInChunks(
     deviceFiles: DeviceFileSnapshot[],
-    batchSize: number
+    batchSize: number,
+    snapshot?: DeviceSnapshotGuard
   ): Promise<ReconciledDeviceFile[]> {
+    const assertCurrent = (): void => {
+      if (snapshot && !snapshot.isCurrent()) throw new Error('Device snapshot is no longer current')
+    }
+    assertCurrent()
     const ctx = this.beginReconcile()
     for (let i = 0; i < deviceFiles.length; i += batchSize) {
+      assertCurrent()
       const chunk = deviceFiles.slice(i, i + batchSize)
       // A purge can land while we yield: re-read the tombstones per chunk
       // (one query per 100 files) so a just-purged file is never re-queued.
@@ -640,6 +666,10 @@ export class DownloadService {
       if (i + batchSize < deviceFiles.length) {
         await new Promise<void>((resolve) => setImmediate(resolve))
       }
+    }
+    assertCurrent()
+    if (snapshot?.complete && ctx.enrichmentFailureCount === 0) {
+      runInTransaction(() => markRecordingsNotOnDevice(deviceFiles.map((file) => file.filename), snapshot.startedAt))
     }
     return this.finishReconcile(ctx)
   }
@@ -866,6 +896,7 @@ export class DownloadService {
           // checkpoint/source validation, independently of this reset progress.
           const syncedState = file.replaces ? { synced: false, reason: '' } : this.isFileAlreadySynced(file.filename)
           const normalizedState = !syncedState.synced && !file.replaces && normalizedFilename !== file.filename
+            && syncedState.reason !== INDEPENDENT_IMPORT_REASON
             ? this.isFileAlreadySynced(normalizedFilename) : syncedState
           if (syncedState.synced || normalizedState.synced) {
             skippedAlreadySynced++
@@ -922,7 +953,9 @@ export class DownloadService {
         skipped.push({ filename: file.filename, skip: 'already-synced', reason })
         continue
       }
-      if (!file.replaces && normalizedFilename !== file.filename) {
+      // The normalized name of a device take beside an independent import is
+      // that import's file: it proves nothing about the device audio.
+      if (!file.replaces && normalizedFilename !== file.filename && reason !== INDEPENDENT_IMPORT_REASON) {
         const { synced: normalizedSynced, reason: normalizedReason } =
           this.isFileAlreadySynced(normalizedFilename)
         if (normalizedSynced) {
@@ -1934,8 +1967,9 @@ export function registerDownloadServiceHandlers(): void {
   // Get files to sync from a list. A full device reconcile is thousands of
   // files; the batched variant chunks the work and yields between chunks so
   // the main thread stays responsive (see getFilesToSyncBatched).
-  ipcMain.handle('download-service:get-files-to-sync', (_, files: Array<{ filename: string; size: number; duration: number; dateCreated: Date }>) => {
-    return service.getFilesToSyncBatched(files)
+  ipcMain.handle('download-service:get-files-to-sync', async (_, files: Array<{ filename: string; size: number; duration: number; dateCreated: Date }>) => {
+    const { getJensenDevice } = await import('./jensen')
+    return service.getFilesToSyncBatched(files, 100, deviceListGuard(files.map((file) => file.filename), () => getJensenDevice().isConnected()))
   })
 
   // v51 — purge-tombstoned filenames (all variants), so the device file list

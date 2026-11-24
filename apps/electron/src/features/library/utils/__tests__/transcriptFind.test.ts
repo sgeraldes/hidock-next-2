@@ -32,16 +32,25 @@ describe('reader find index', () => {
     // the CI runner, while the same "r" (45,000 matches) then takes 2.5 ms.
     // Warm up on this index with letters outside the measured queries. The
     // first (cold) search keeps a loose bound so a regression there still fails.
+    // Each measure overstates the work in its own way (24-nov-2026): wall time
+    // when the worker waits for a core (the cold search took 273 ms of wall time
+    // under the full suite on a loaded machine), process CPU time when garbage
+    // collection runs on parallel threads (a 2.5 ms keystroke counted 63 ms on
+    // the CI runner). The work costs no more than either, so bound the smaller;
+    // a real regression raises both.
+    const workMs = (run: () => void): number => {
+      const cpuStart = process.cpuUsage()
+      const wallStart = performance.now()
+      run()
+      const wall = performance.now() - wallStart
+      const used = process.cpuUsage(cpuStart)
+      return Math.min(wall, (used.user + used.system) / 1000)
+    }
     const index = buildFindIndex(makeDocuments(3000))
-    const coldStart = performance.now()
-    searchFindIndex(index, 'e')
-    const coldMs = performance.now() - coldStart
+    const coldMs = workMs(() => searchFindIndex(index, 'e'))
     for (const letter of ['a', 'o']) searchFindIndex(index, letter)
-    const times = ['r', 're', 'reu', 'reun', 'reuni', 'reunion'].map(query => {
-      const start = performance.now()
-      expect(searchFindIndex(index, query).length).toBeGreaterThan(0)
-      return performance.now() - start
-    })
+    const times = ['r', 're', 'reu', 'reun', 'reuni', 'reunion'].map(query =>
+      workMs(() => expect(searchFindIndex(index, query).length).toBeGreaterThan(0)))
     console.log('Find 3000 segments cold ms:', coldMs, 'keystroke ms:', times)
     expect(coldMs).toBeLessThan(250)
     expect(Math.max(...times)).toBeLessThan(50)

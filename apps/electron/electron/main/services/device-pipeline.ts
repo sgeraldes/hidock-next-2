@@ -34,6 +34,7 @@
 
 import { EventEmitter } from 'events'
 import type { DeviceModel, FileInfo } from '@hidock/jensen-protocol'
+import { beginDeviceSnapshot, deviceListGuard, invalidateDeviceSnapshots, isCompleteDeviceSnapshot, rememberDeviceSnapshot, type DeviceSnapshotGuard } from './device-snapshot'
 
 // ---------------------------------------------------------------------------
 // Phase machine
@@ -104,7 +105,9 @@ export interface PipelineJensen {
 
 export interface PipelineDownloadService {
   getFilesToSyncBatched(
-    deviceFiles: Array<{ filename: string; size: number; duration: number; dateCreated: Date }>
+    deviceFiles: Array<{ filename: string; size: number; duration: number; dateCreated: Date }>,
+    batchSize?: number,
+    snapshot?: DeviceSnapshotGuard
   ): Promise<Array<{ filename: string; size: number; duration: number; dateCreated: Date; skipReason?: string }>>
   processDownload(
     filename: string,
@@ -150,6 +153,9 @@ export class DevicePipelineService extends EventEmitter {
 
   private cachedFiles: FileInfo[] | null = null
   private cachedFileCount = -1
+  private scannedSnapshot: { files: FileInfo[]; guard: DeviceSnapshotGuard } | null = null
+  /** The last scanFiles() produced no listing (failed, aborted or superseded). */
+  private scanFailed = false
 
   private abortController: AbortController | null = null
   private autoConnectListenersBound = false
@@ -222,6 +228,10 @@ export class DevicePipelineService extends EventEmitter {
   // ==========================================================================
 
   async runPipeline(): Promise<void> {
+    // Each run keeps the controller it started with: a re-sync replaces
+    // this.abortController, and the superseded run must see its own abort.
+    const signal = this.abortController?.signal
+    const stopped = (): boolean => signal?.aborted ?? false
     // INIT
     this.setPhase('initializing')
     const initOk = await this.initialize()
@@ -230,32 +240,37 @@ export class DevicePipelineService extends EventEmitter {
       return
     }
 
-    if (this.aborted()) return
+    if (stopped()) return
 
     // SCAN (skipped if recording count unchanged)
     if (this.shouldScan()) {
       this.setPhase('scanning')
-      const files = await this.scanFiles()
+      const files = await this.scanFiles(signal)
+      if (stopped()) return
+      if (this.scanFailed) {
+        this.failScan()
+        return
+      }
       this.cachedFiles = files
       this.cachedFileCount = this.state.device?.recordingCount ?? 0
       this.emit('files', this.getFiles())
     }
 
-    if (this.aborted()) return
+    if (stopped()) return
 
     // RECONCILE (CPU only — no USB)
     this.setPhase('reconciling')
-    const toDownload = await this.reconcile(this.cachedFiles ?? [])
+    const toDownload = await this.reconcile(this.cachedFiles ?? [], signal)
 
-    if (this.aborted()) return
+    if (stopped()) return
 
     // DOWNLOAD (sequential, scoped to the reconciled set)
     if (toDownload.length > 0) {
       this.setPhase('downloading')
-      await this.downloadAll(toDownload)
+      await this.downloadAll(toDownload, signal)
     }
 
-    if (this.aborted()) return
+    if (stopped()) return
 
     this.patchState({ downloadProgress: null })
     this.setPhase('idle')
@@ -330,7 +345,12 @@ export class DevicePipelineService extends EventEmitter {
         // Continue the rest of the pipeline after a successful retry.
         if (this.shouldScan()) {
           this.setPhase('scanning')
-          this.cachedFiles = await this.scanFiles()
+          const files = await this.scanFiles()
+          if (this.scanFailed) {
+            this.failScan()
+            return
+          }
+          this.cachedFiles = files
           this.cachedFileCount = this.state.device?.recordingCount ?? 0
           this.emit('files', this.getFiles())
         }
@@ -364,7 +384,24 @@ export class DevicePipelineService extends EventEmitter {
     return this.cachedFiles === null || this.cachedFileCount !== deviceCount || deviceCount === 0
   }
 
-  async scanFiles(): Promise<FileInfo[]> {
+  /**
+   * A failed listing is not an empty device: it caches nothing, reconciles
+   * nothing, and leaves the next run free to scan again.
+   */
+  private failScan(): void {
+    this.cachedFiles = null
+    this.cachedFileCount = -1
+    this.patchState({ scanProgress: null })
+    this.setError('Could not read the file list from the device. Sync again to retry.')
+  }
+
+  async scanFiles(signal: AbortSignal | undefined = this.abortController?.signal): Promise<FileInfo[]> {
+    this.scannedSnapshot = null
+    this.scanFailed = true // until a listing arrives
+    const snapshot = beginDeviceSnapshot(() => this.jensen.isConnected() && !signal?.aborted)
+    if (!snapshot.isCurrent()) return []
+    const before = await this.safe(() => this.jensen.getFileCount())
+    if (!snapshot.isCurrent()) return []
     const expected = this.state.device?.recordingCount ?? 0
     const streamedFiles: FileInfo[] = []
     const onProgress = (current: number, total: number): void => {
@@ -384,6 +421,13 @@ export class DevicePipelineService extends EventEmitter {
       }
     }
     const files = await this.safe(() => this.jensen.listFiles(onProgress, expected, onNewFiles))
+    this.scanFailed = files === null
+    const after = snapshot.isCurrent() ? await this.safe(() => this.jensen.getFileCount()) : null
+    snapshot.complete = isCompleteDeviceSnapshot(files?.map((file) => file.name) ?? null, before?.count, after?.count)
+    if (files && snapshot.isCurrent()) {
+      this.scannedSnapshot = { files, guard: snapshot }
+      rememberDeviceSnapshot(snapshot, files.map((file) => file.name))
+    }
     this.patchState({ scanProgress: null })
     return files ?? []
   }
@@ -392,7 +436,7 @@ export class DevicePipelineService extends EventEmitter {
   // RECONCILE (CPU only — delegates to DownloadService)
   // ==========================================================================
 
-  async reconcile(files: FileInfo[]): Promise<DownloadItem[]> {
+  async reconcile(files: FileInfo[], signal: AbortSignal | undefined = this.abortController?.signal): Promise<DownloadItem[]> {
     const deviceFiles = files.map((f) => ({
       filename: f.name,
       size: f.length,
@@ -400,7 +444,21 @@ export class DevicePipelineService extends EventEmitter {
       dateCreated: f.time ?? new Date()
     }))
 
-    const reconciled = await this.downloadService.getFilesToSyncBatched(deviceFiles)
+    const guard = this.scannedSnapshot?.files === files
+      ? this.scannedSnapshot.guard
+      : deviceListGuard(files.map((file) => file.name), () => this.jensen.isConnected() && !signal?.aborted)
+    this.scannedSnapshot = null // A cached reuse is never fresh absence evidence.
+    let reconciled: Awaited<ReturnType<PipelineDownloadService['getFilesToSyncBatched']>>
+    try {
+      reconciled = await this.downloadService.getFilesToSyncBatched(deviceFiles, 100, guard)
+    } catch (error) {
+      // A newer scan or session superseded this list: it has nothing to queue.
+      if (error instanceof Error && /no longer current/.test(error.message)) {
+        console.warn('[DevicePipeline] Reconcile skipped: the device list was superseded')
+        return []
+      }
+      throw error
+    }
     return reconciled
       .filter((r) => !r.skipReason)
       .map((r) => ({
@@ -415,15 +473,16 @@ export class DevicePipelineService extends EventEmitter {
   // DOWNLOAD — scoped & sequential
   // ==========================================================================
 
-  async downloadAll(files: DownloadItem[]): Promise<void> {
+  async downloadAll(files: DownloadItem[], signal?: AbortSignal): Promise<void> {
     if (!this.abortController) this.abortController = new AbortController()
+    const runSignal = signal ?? this.abortController.signal
 
     let index = 0
     for (const file of files) {
       index++
-      if (this.abortController?.signal.aborted) break
+      if (runSignal.aborted) break
       if (!this.jensen.isConnected()) break
-      await this.downloadOne(file, index, files.length)
+      await this.downloadOne(file, index, files.length, runSignal)
     }
   }
 
@@ -437,7 +496,8 @@ export class DevicePipelineService extends EventEmitter {
   async downloadOne(
     file: DownloadItem,
     current = 1,
-    total = 1
+    total = 1,
+    signal: AbortSignal | undefined = this.abortController?.signal
   ): Promise<{ success: boolean; filePath?: string; error?: string }> {
     const chunks: Uint8Array[] = []
     let bytesDownloaded = 0
@@ -476,7 +536,7 @@ export class DevicePipelineService extends EventEmitter {
         file.size,
         onChunk,
         onProgress,
-        this.abortController?.signal
+        signal
       )
     )
 
@@ -549,6 +609,7 @@ export class DevicePipelineService extends EventEmitter {
   }
 
   async disconnect(): Promise<void> {
+    invalidateDeviceSnapshots()
     this.abortController?.abort()
     this.downloadService.cancelActiveDownloads('Device disconnected')
     await this.safe(() => this.jensen.disconnect())
@@ -654,6 +715,7 @@ export class DevicePipelineService extends EventEmitter {
   }
 
   private async handleDisconnect(): Promise<void> {
+    invalidateDeviceSnapshots()
     this.abortController?.abort()
     this.downloadService.cancelActiveDownloads('Device disconnected')
     this.cachedFiles = null
@@ -665,10 +727,6 @@ export class DevicePipelineService extends EventEmitter {
   // ==========================================================================
   // Internals
   // ==========================================================================
-
-  private aborted(): boolean {
-    return this.abortController?.signal.aborted ?? false
-  }
 
   /** Run a device call, swallowing throws to null so one bad command can't crash the phase machine. */
   private async safe<T>(fn: () => Promise<T> | T): Promise<T | null> {

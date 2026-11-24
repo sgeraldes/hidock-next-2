@@ -1,6 +1,7 @@
 import { MIN_MEETING_CONFIDENCE } from '../../../src/shared/meeting-confidence'
 import Database from 'better-sqlite3'
 import { closeDatabaseBackupWorker as closeSqliteBackupWorker, runDatabaseBackup } from './sqlite-backup-host'
+import { resolveDeviceRecording } from '../../../src/shared/recording-identity'
 import { RECORDING_AUDIO_EXTENSIONS } from '../../../src/shared/audio-extensions'
 import { existsSync, readdirSync, readFileSync } from 'fs'
 import { dirname, join, normalize, resolve as resolvePath } from 'path'
@@ -6773,15 +6774,18 @@ export function getRecordingsByIds(ids: string[]): Map<string, Recording> {
 // stores the device name in original_filename. Prefer the local canonical row
 // when both exist so a device snapshot cannot create a second shadow row.
 export function getRecordingByFilename(filename: string): Recording | undefined {
-  return queryOne<Recording>(
-    `SELECT * FROM recordings
-      WHERE filename = ? OR original_filename = ?
-      ORDER BY on_local DESC,
-               CASE WHEN filename = ? THEN 0 ELSE 1 END,
-               created_at ASC
-      LIMIT 1`,
-    [filename, filename, filename]
+  const base = filename.replace(/\.(hda|wav|mp3|m4a|aac|ogg|flac)$/i, '')
+  const variants = base === filename ? [filename] : [filename, ...RECORDING_EXTENSIONS.map((ext) => `${base}.${ext}`)]
+  const placeholders = variants.map(() => '?').join(', ')
+  const candidates = queryAll<Recording>(
+    `SELECT * FROM recordings WHERE filename COLLATE NOCASE IN (${placeholders})
+      OR original_filename COLLATE NOCASE IN (${placeholders})`, [...variants, ...variants]
   )
+  if (!/\.hda$/i.test(filename)) {
+    const exact = candidates.filter((row) => row.filename.toLowerCase() === filename.toLowerCase())
+    if (exact.length === 1) return exact[0]
+  }
+  return resolveDeviceRecording(filename, candidates)
 }
 
 // Update recording lifecycle state
@@ -6830,7 +6834,14 @@ export function upsertRecordingFromDevice(deviceFile: {
   duration: number
   dateCreated: Date
 }): Recording {
-  const existing = getRecordingByFilename(deviceFile.filename)
+  // An ambiguous identity (two exact device rows) is not a new recording:
+  // inserting would add another row on every scan. Keep using the oldest.
+  const existing = getRecordingByFilename(deviceFile.filename) ?? queryAll<Recording>(
+    `SELECT * FROM recordings
+      WHERE (filename = ? COLLATE NOCASE OR original_filename = ? COLLATE NOCASE)
+        AND (source IS NULL OR source = 'hidock') AND COALESCE(is_imported, 0) != 1
+      ORDER BY created_at, id LIMIT 1`, [deviceFile.filename, deviceFile.filename]
+  )[0]
   const now = new Date().toISOString()
   // Custom recordings have no qualified byte-rate estimate before download.
   // Preserve an existing measurement when the device reports unknown (0).
@@ -6867,9 +6878,25 @@ export function upsertRecordingFromDevice(deviceFile: {
 }
 
 // Mark recordings as no longer on device
-export function markRecordingsNotOnDevice(presentFilenames: string[]): void {
-  if (presentFilenames.length === 0) return
+/** SQLite CURRENT_TIMESTAMP ('YYYY-MM-DD HH:MM:SS', UTC) or ISO text, as epoch ms. */
+function storedTimeMs(value: string | null | undefined): number {
+  if (!value) return Number.NaN
+  return Date.parse(value.includes('T') ? value : `${value.replace(' ', 'T')}Z`)
+}
 
+/**
+ * A complete scan proves absence only for rows that existed before it began.
+ * Rows created or seen on the device since (`scanStartedAt`) are left alone.
+ */
+export function markRecordingsNotOnDevice(presentFilenames: string[], scanStartedAt?: string): void {
+  const cutoff = storedTimeMs(scanStartedAt)
+  // CURRENT_TIMESTAMP has whole seconds: a row stamped in the scan's starting
+  // second may be newer than the scan, so it counts as seen since.
+  const seenSinceScan = (time: string | null | undefined): boolean => {
+    const ms = storedTimeMs(time)
+    if (!Number.isFinite(ms)) return false
+    return ms >= (/\.\d/.test(time!) ? cutoff : Math.floor(cutoff / 1000) * 1000)
+  }
   const presentBases = new Set(
     presentFilenames.map((filename) => filename.replace(/\.(hda|wav|mp3|m4a|aac|ogg|flac)$/i, '').toLowerCase())
   )
@@ -6878,6 +6905,7 @@ export function markRecordingsNotOnDevice(presentFilenames: string[]): void {
   const onDevice = queryAll<Recording>('SELECT * FROM recordings WHERE on_device = 1')
 
   for (const rec of onDevice) {
+    if (Number.isFinite(cutoff) && [rec.device_last_seen, rec.created_at].some(seenSinceScan)) continue
     const deviceIdentity = rec.original_filename || rec.filename
     const base = deviceIdentity.replace(/\.(hda|wav|mp3|m4a|aac|ogg|flac)$/i, '').toLowerCase()
     if (!presentBases.has(base)) {
@@ -6907,17 +6935,7 @@ const RECORDING_EXTENSIONS = RECORDING_AUDIO_EXTENSIONS.map((ext) => ext.slice(1
  * exist under any variant of the same base name.
  */
 export function getRecordingByFilenameVariants(filename: string): Recording | undefined {
-  const exact = getRecordingByFilename(filename)
-  if (exact) return exact
-
-  const base = filename.replace(/\.(hda|wav|mp3|m4a|aac|ogg|flac)$/i, '')
-  for (const ext of RECORDING_EXTENSIONS) {
-    const variant = `${base}.${ext}`
-    if (variant === filename) continue
-    const match = getRecordingByFilename(variant)
-    if (match) return match
-  }
-  return undefined
+  return getRecordingByFilename(filename)
 }
 
 // Mark recording as downloaded.

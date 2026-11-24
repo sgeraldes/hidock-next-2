@@ -36,6 +36,9 @@ vi.mock('electron', () => ({
   ipcMain: { handle: () => {} },
   safeStorage: { isEncryptionAvailable: () => false }
 }))
+// Duplicate merging runs only in a known current connected session, and only on
+// rows proven off the device (on_device = 0 below).
+vi.mock('../device-snapshot', () => ({ connectedDeviceGuard: () => () => true }))
 
 type Db = typeof import('../database')
 type Reconciler = typeof import('../org-reconciler')
@@ -121,8 +124,8 @@ function rec(
 ): void {
   db.run(
     `INSERT INTO recordings (id, filename, date_recorded, duration_seconds, meeting_id, correlation_confidence,
-                             correlation_method, created_at, file_path)
-     VALUES (?, ?, ?, 1800, ?, ?, ?, ?, ?)`,
+                             correlation_method, created_at, file_path, on_device)
+     VALUES (?, ?, ?, 1800, ?, ?, ?, ?, ?, 0)`,
     [
       id,
       opts.filename ?? `${id}.hda`,
