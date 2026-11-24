@@ -33,6 +33,44 @@ function doc(id: string, provider: string, dims: number, fill: number) {
 }
 
 describe('vector-cache round-trip', () => {
+  it('yielding preparation preserves exact ordered and unordered group payload bytes', async () => {
+    const docs = Array.from({ length: 12000 }, (_, i) => doc(`row-${12000-i}`, i % 2 ? 'ollama' : 'gemini-api', i % 3 + 2, i / 17))
+    for (const input of [docs, [...docs].reverse()]) {
+      const sync = join(DIR, 'sync.bin'), asyncPath = join(DIR, 'async.bin')
+      writeVectorCache(sync, input)
+      let ticks = 0
+      const timer = setInterval(() => ticks++, 0)
+      try { await writeVectorCacheAsync(asyncPath, input) } finally { clearInterval(timer) }
+      expect(ticks).toBeGreaterThan(0)
+      const a = readFileSync(sync), b = readFileSync(asyncPath)
+      const payload = (bytes: Buffer) => bytes.subarray(4 + bytes.readUInt32LE(0))
+      expect(payload(b).equals(payload(a))).toBe(true)
+      expect(readVectorCache(asyncPath)?.fingerprint).toBe(readVectorCache(sync)?.fingerprint)
+    }
+  })
+
+  it('refuses a corpus revision changed while grouping yields and removes no previous valid cache', async () => {
+    const path = join(DIR, VECTOR_CACHE_FILENAME)
+    writeVectorCache(path, [doc('previous', 'ollama', 2, 1)])
+    let current = true
+    const pending = writeVectorCacheAsync(path, Array.from({length: 30000}, (_, i) => doc(String(i), 'ollama', 2, 1)), () => current)
+    setTimeout(() => { current = false }, 0)
+    await expect(pending).rejects.toThrow('snapshot change')
+    expect(readVectorCache(path)?.rows.map(r => r.id)).toEqual(['previous'])
+    expect(readdirSync(DIR).some(name => name.includes('.tmp-'))).toBe(false)
+  })
+
+  it('cancels queued writes on purge while allowing a subsequent fresh snapshot', async () => {
+    const path = join(DIR, VECTOR_CACHE_FILENAME)
+    const first = writeVectorCacheAsync(path, [doc('first', 'ollama', 2, 1)])
+    const queued = writeVectorCacheAsync(path, [doc('queued', 'ollama', 2, 2)])
+    cancelVectorCacheWrites(path)
+    const settled = await Promise.allSettled([first, queued])
+    expect(settled.every(r => r.status === 'rejected')).toBe(true)
+    expect(existsSync(path)).toBe(false)
+    await writeVectorCacheAsync(path, [doc('fresh', 'ollama', 2, 3)])
+    expect(readVectorCache(path)?.rows.map(r => r.id)).toEqual(['fresh'])
+  })
   it('writes and reads back all rows with exact vectors', () => {
     const path = join(DIR, VECTOR_CACHE_FILENAME)
     const docs = [

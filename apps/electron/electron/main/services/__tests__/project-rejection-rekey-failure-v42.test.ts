@@ -28,6 +28,11 @@ const EXPECTED_SCHEMA_VERSION = Number(
 
 const dbPath = join(tmpdir(), `hidock-rekey-failure-test-${Date.now()}.db`)
 vi.mock('../file-storage', () => ({ getDatabasePath: () => dbPath }))
+// A boot at an older schema runs the mandatory pre-migration backup, which the
+// real host cannot do under vitest (no startup runtimeDir); back it in process.
+vi.mock('../sqlite-backup-host', () =>
+  import('./helpers/in-process-sqlite-backup-host').then((m) => m.inProcessSqliteBackupHost())
+)
 
 import { initializeDatabase, closeDatabase, run, queryOne, isProjectDiscoveryRejected } from '../database'
 

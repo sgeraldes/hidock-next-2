@@ -1,0 +1,782 @@
+{
+  "title": "Matriz de decisión de las ocho adopciones",
+  "date": "2026-10-04",
+  "intro": "Cada decisión abierta de los ocho specs, evaluada con los mismos cinco criterios. La puntuación va de 1 (malo) a 5 (muy bueno) y el total es la suma ponderada, calculada por el generador. La opción elegida es la de mayor total salvo que se explique otra cosa. Si la confianza es baja la decisión pasa al dueño con la herramienta de preguntas.",
+  "criteria": [
+    {
+      "id": "lean",
+      "label": "Liviana y rápida",
+      "weight": 3,
+      "hint": "Memoria, disco, arranque, latencia, carga sobre el hilo principal. Es el pedido explícito del dueño."
+    },
+    {
+      "id": "safe",
+      "label": "Seguridad y privacidad",
+      "weight": 3,
+      "hint": "No manda datos de más, no pisa decisiones del dueño, falla cerrado."
+    },
+    {
+      "id": "quality",
+      "label": "Calidad del resultado",
+      "weight": 2,
+      "hint": "Recall, utilidad de la respuesta, lo que el dueño ve."
+    },
+    {
+      "id": "effort",
+      "label": "Esfuerzo y riesgo",
+      "weight": 1,
+      "hint": "Cuánto cuesta construirlo bien y cuánto puede salir mal."
+    },
+    {
+      "id": "reversible",
+      "label": "Reversibilidad",
+      "weight": 2,
+      "hint": "Cuánto cuesta volver atrás si la medición dice que se eligió mal."
+    }
+  ],
+  "decisions": [
+    {
+      "id": "1.1",
+      "spec": "1 Búsqueda híbrida",
+      "question": "Peso de la fusión entre léxico y vectores",
+      "options": [
+        {
+          "name": "Igual (RRF estándar)",
+          "scores": [
+            4,
+            4,
+            4,
+            5,
+            5
+          ]
+        },
+        {
+          "name": "Más peso al léxico",
+          "scores": [
+            4,
+            4,
+            4,
+            3,
+            4
+          ]
+        }
+      ],
+      "choice": 0,
+      "confidence": "alta",
+      "why": "RRF con peso igual es la técnica estándar y no necesita afinar por idioma. Un peso distinto exige armar y mantener una matriz de evaluación con consultas en castellano e inglés antes de saber si hace falta. Se revisa solo si el recall@10 sobre consultas etiquetadas dice lo contrario."
+    },
+    {
+      "id": "1.2",
+      "spec": "1 Búsqueda híbrida",
+      "question": "Índices de prefijo de FTS5",
+      "options": [
+        {
+          "name": "Prefijos de 2, 3 y 4 caracteres",
+          "scores": [
+            2,
+            4,
+            5,
+            3,
+            4
+          ]
+        },
+        {
+          "name": "Sin índices de prefijo (recorrido)",
+          "scores": [
+            3,
+            4,
+            3,
+            4,
+            5
+          ]
+        },
+        {
+          "name": "Prefijos de 3 y 4 con mínimo de 3 caracteres",
+          "scores": [
+            4,
+            4,
+            4,
+            4,
+            4
+          ]
+        }
+      ],
+      "choice": 2,
+      "confidence": "media",
+      "why": "Los prefijos de 2 caracteres son los más caros de indexar y los peores de recorrer, y casi no aportan precisión: con 2 letras se matchea ruido. El prefijo solo cambia la velocidad, no los resultados, así que el criterio es disco contra latencia. Se mide en el primer PR con el tamaño real de la biblioteca (tope 300 MiB, consulta de 80 ms o menos) y se ajusta."
+    },
+    {
+      "id": "1.3",
+      "spec": "1 Búsqueda híbrida",
+      "question": "Agrupación de resultados de la búsqueda global",
+      "options": [
+        {
+          "name": "Por fuente (como hoy)",
+          "scores": [
+            4,
+            4,
+            4,
+            5,
+            5
+          ]
+        },
+        {
+          "name": "Por fragmento",
+          "scores": [
+            3,
+            4,
+            3,
+            2,
+            3
+          ]
+        }
+      ],
+      "choice": 0,
+      "confidence": "alta",
+      "why": "Mantiene las tarjetas actuales y el contrato de respuesta. Por fragmento obliga a cambiar la respuesta y el renderer sin que nadie lo haya pedido."
+    },
+    {
+      "id": "2.1",
+      "spec": "2 Plantillas editables",
+      "question": "Qué hacer con un archivo de override inválido",
+      "options": [
+        {
+          "name": "Volver al texto por defecto",
+          "scores": [
+            5,
+            5,
+            4,
+            5,
+            5
+          ]
+        },
+        {
+          "name": "Conservar la última versión buena",
+          "scores": [
+            4,
+            4,
+            3,
+            3,
+            4
+          ]
+        }
+      ],
+      "choice": 0,
+      "confidence": "alta",
+      "why": "Es predecible: el dueño sabe siempre qué texto corre. Conservar la última buena exige guardar revisiones y una interfaz que explique por qué corre un texto que ya no está en disco."
+    },
+    {
+      "id": "2.2",
+      "spec": "2 Plantillas editables",
+      "question": "Carpetas de los overrides",
+      "options": [
+        {
+          "name": "Fijas dentro del perfil",
+          "scores": [
+            5,
+            5,
+            4,
+            5,
+            5
+          ]
+        },
+        {
+          "name": "Elegibles por el dueño",
+          "scores": [
+            4,
+            2,
+            4,
+            3,
+            3
+          ]
+        }
+      ],
+      "choice": 0,
+      "confidence": "alta",
+      "why": "Una carpeta fija reduce la validación de rutas y el riesgo de leer archivos fuera del perfil. Elegir carpeta suma casos de enlaces simbólicos y de observación de archivos sin una necesidad real."
+    },
+    {
+      "id": "2.3",
+      "spec": "2 Plantillas editables",
+      "question": "Qué prompts del pipeline se pueden editar",
+      "options": [
+        {
+          "name": "Por etapas, un llamador a la vez",
+          "scores": [
+            5,
+            5,
+            4,
+            3,
+            5
+          ]
+        },
+        {
+          "name": "Todos de entrada",
+          "scores": [
+            4,
+            3,
+            4,
+            2,
+            3
+          ]
+        }
+      ],
+      "choice": 0,
+      "confidence": "alta",
+      "why": "Cada llamador tiene su propio contrato de sustitución y su validación de salida. Abrirlos todos antes de inventariarlos arriesga romper una salida estructurada con un texto editado."
+    },
+    {
+      "id": "3.1",
+      "spec": "3 Contexto por fragmento",
+      "question": "Dónde vive el contexto",
+      "options": [
+        {
+          "name": "Solo en el índice léxico",
+          "scores": [
+            5,
+            5,
+            4,
+            4,
+            5
+          ]
+        },
+        {
+          "name": "También dentro del texto que se vectoriza",
+          "scores": [
+            2,
+            4,
+            5,
+            2,
+            2
+          ]
+        }
+      ],
+      "choice": 0,
+      "confidence": "alta",
+      "why": "Vectorizar el contexto obliga a recalcular 240.000 vectores, con costo en dinero y en tiempo, y a partir el espacio vectorial. En el índice léxico se actualiza gratis y se deshace sin tocar vectores."
+    },
+    {
+      "id": "3.2",
+      "spec": "3 Contexto por fragmento",
+      "question": "Qué título se guarda cuando cambia la reunión",
+      "options": [
+        {
+          "name": "El título actual (se refresca)",
+          "scores": [
+            4,
+            5,
+            5,
+            4,
+            4
+          ]
+        },
+        {
+          "name": "El título del momento de indexar",
+          "scores": [
+            5,
+            3,
+            2,
+            5,
+            3
+          ]
+        }
+      ],
+      "choice": 0,
+      "confidence": "alta",
+      "why": "Si la grabación se vincula a otra reunión, el título viejo seguiría encontrando el fragmento con palabras de una reunión equivocada, y eso es un error de datos. Refrescar cuesta una escritura léxica por fuente."
+    },
+    {
+      "id": "3.3",
+      "spec": "3 Contexto por fragmento",
+      "question": "Peso del contexto en el ranking",
+      "options": [
+        {
+          "name": "Un cuarto del peso del cuerpo",
+          "scores": [
+            4,
+            4,
+            4,
+            4,
+            5
+          ]
+        },
+        {
+          "name": "El mismo peso que el cuerpo",
+          "scores": [
+            4,
+            4,
+            3,
+            4,
+            5
+          ]
+        }
+      ],
+      "choice": 0,
+      "confidence": "media",
+      "why": "Los títulos de reuniones recurrentes se repiten en muchos fragmentos y con peso igual inundarían los resultados. Es una constante interna, se afina con consultas etiquetadas sin migrar nada."
+    },
+    {
+      "id": "4.1",
+      "spec": "4 Reglas aprendidas",
+      "question": "Cuándo se activa una regla aprendida",
+      "options": [
+        {
+          "name": "Solo después de que el dueño la acepta",
+          "scores": [
+            4,
+            5,
+            4,
+            3,
+            5
+          ]
+        },
+        {
+          "name": "Automáticamente",
+          "scores": [
+            4,
+            2,
+            3,
+            4,
+            2
+          ]
+        }
+      ],
+      "choice": 0,
+      "confidence": "alta",
+      "why": "Una regla aprendida de pocas correcciones puede sobreajustar y cambiar clasificaciones sin que nadie lo vea. Con prueba en seco y aceptación el costo es un clic por regla, y el límite de reglas activas mantiene ese costo acotado."
+    },
+    {
+      "id": "4.2",
+      "spec": "4 Reglas aprendidas",
+      "question": "Efecto sobre identidad de personas",
+      "options": [
+        {
+          "name": "Sugerir una unión, que el dueño acepta por el camino normal",
+          "scores": [
+            5,
+            5,
+            4,
+            4,
+            5
+          ]
+        },
+        {
+          "name": "Unir automáticamente",
+          "scores": [
+            4,
+            1,
+            3,
+            3,
+            1
+          ]
+        }
+      ],
+      "choice": 0,
+      "confidence": "alta",
+      "why": "Una unión falsa mezcla dos personas y es difícil de deshacer limpio. La sugerencia reutiliza el diario de uniones, el deshacer y las divisiones que el dueño ya hizo."
+    },
+    {
+      "id": "4.3",
+      "spec": "4 Reglas aprendidas",
+      "question": "Correcciones nuevas antes de proponer reglas",
+      "options": [
+        {
+          "name": "Quince",
+          "scores": [
+            4,
+            4,
+            4,
+            4,
+            5
+          ]
+        },
+        {
+          "name": "Treinta",
+          "scores": [
+            4,
+            4,
+            3,
+            4,
+            5
+          ]
+        }
+      ],
+      "choice": 0,
+      "confidence": "media",
+      "why": "Quince es el umbral que usa Laya y aprende antes. El gasto está acotado igual por el tope de cuatro llamadas diarias y 0,05 USD. Es un valor de configuración, se sube si las propuestas llegan flojas. Cuántas correcciones tiene hoy el dueño no está medido: el primer PR lo mide."
+    },
+    {
+      "id": "5.1",
+      "spec": "5 Backlinks",
+      "question": "Menciones de personas en notas",
+      "options": [
+        {
+          "name": "Tipadas, con selección de la persona",
+          "scores": [
+            5,
+            5,
+            4,
+            3,
+            5
+          ]
+        },
+        {
+          "name": "Nombre suelto",
+          "scores": [
+            3,
+            3,
+            2,
+            2,
+            3
+          ]
+        }
+      ],
+      "choice": 0,
+      "confidence": "alta",
+      "why": "Un nombre suelto choca con alias y homónimos y produciría enlaces falsos a una persona equivocada. Con una mención tipada el enlace apunta a un identificador."
+    },
+    {
+      "id": "5.2",
+      "spec": "5 Backlinks",
+      "question": "Backlinks y grafo de conocimiento",
+      "options": [
+        {
+          "name": "Superposición al consultar, desde la tabla de relaciones",
+          "scores": [
+            4,
+            5,
+            4,
+            4,
+            5
+          ]
+        },
+        {
+          "name": "Copiar las relaciones al grafo",
+          "scores": [
+            3,
+            3,
+            4,
+            2,
+            3
+          ]
+        }
+      ],
+      "choice": 0,
+      "confidence": "alta",
+      "why": "Una segunda copia persistente del grafo duplica estado y exige reconciliarlo. La superposición lee de una sola fuente y respeta la visibilidad de cada nota."
+    },
+    {
+      "id": "5.3",
+      "spec": "5 Backlinks",
+      "question": "Resolución de títulos de notas",
+      "options": [
+        {
+          "name": "Coincidencia exacta y única",
+          "scores": [
+            5,
+            5,
+            3,
+            5,
+            5
+          ]
+        },
+        {
+          "name": "Aproximada",
+          "scores": [
+            3,
+            3,
+            4,
+            2,
+            3
+          ]
+        }
+      ],
+      "choice": 0,
+      "confidence": "alta",
+      "why": "Los enlaces ambiguos quedan sin resolver y visibles para el autor, y nunca apuntan a una nota equivocada. La coincidencia aproximada necesita ranking y confirmación del dueño."
+    },
+    {
+      "id": "6.1",
+      "spec": "6 Reindexado incremental",
+      "question": "Cuándo se publica un cambio",
+      "options": [
+        {
+          "name": "El texto al instante, los vectores cuando estén",
+          "scores": [
+            5,
+            4,
+            4,
+            4,
+            5
+          ]
+        },
+        {
+          "name": "Todo junto",
+          "scores": [
+            3,
+            4,
+            3,
+            3,
+            4
+          ]
+        }
+      ],
+      "choice": 0,
+      "confidence": "alta",
+      "why": "La búsqueda léxica ve el texto nuevo de inmediato aunque el proveedor de vectores esté caído. Esperar a ambos bloquea la búsqueda por una falla externa."
+    },
+    {
+      "id": "6.2",
+      "spec": "6 Reindexado incremental",
+      "question": "Vectores de fragmentos que no cambiaron",
+      "options": [
+        {
+          "name": "Reusar por hash",
+          "scores": [
+            5,
+            4,
+            4,
+            3,
+            4
+          ]
+        },
+        {
+          "name": "Recalcular siempre",
+          "scores": [
+            2,
+            4,
+            4,
+            5,
+            5
+          ]
+        }
+      ],
+      "choice": 0,
+      "confidence": "alta",
+      "why": "Recalcular cuesta tiempo de proveedor y dinero por cada edición. Reusar por hash necesita pruebas, y están en el plan."
+    },
+    {
+      "id": "6.3",
+      "spec": "6 Reindexado incremental",
+      "question": "Cómo se reemplaza una fuente muy grande",
+      "options": [
+        {
+          "name": "Una transacción, con puntero de generación solo si mide más de 50 ms",
+          "scores": [
+            4,
+            4,
+            4,
+            5,
+            5
+          ]
+        },
+        {
+          "name": "Puntero de generación desde el principio",
+          "scores": [
+            4,
+            4,
+            5,
+            2,
+            3
+          ]
+        }
+      ],
+      "choice": 0,
+      "confidence": "media",
+      "why": "Sigue la regla de ingeniería de lo simple primero: una transacción de unos cientos de filas en better-sqlite3 casi seguro entra en el límite. El primer PR mide la fuente más grande y cambia al puntero solo si hace falta. Esto cambia la recomendación del spec, que proponía el puntero; se puede agregar después sin migrar datos."
+    },
+    {
+      "id": "7.1",
+      "spec": "7 Resumen continuo",
+      "question": "Tope diario de gasto del resumen",
+      "options": [
+        {
+          "name": "0,02 USD",
+          "scores": [
+            5,
+            5,
+            3,
+            5,
+            5
+          ]
+        },
+        {
+          "name": "0,05 USD",
+          "scores": [
+            4,
+            4,
+            4,
+            4,
+            5
+          ]
+        }
+      ],
+      "choice": 0,
+      "confidence": "alta",
+      "why": "Una llamada completa cuesta unos 0,007 USD con las tarifas del escenario, así que 0,02 cubre una llamada y un reintento. Es un ajuste de configuración que el dueño sube si hace falta."
+    },
+    {
+      "id": "7.2",
+      "spec": "7 Resumen continuo",
+      "question": "Ventana de la capa Reciente",
+      "options": [
+        {
+          "name": "Siete días",
+          "scores": [
+            5,
+            4,
+            4,
+            5,
+            5
+          ]
+        },
+        {
+          "name": "Catorce días",
+          "scores": [
+            3,
+            4,
+            4,
+            3,
+            5
+          ]
+        }
+      ],
+      "choice": 0,
+      "confidence": "alta",
+      "why": "Mantiene el pedido al modelo corto dentro del límite de 12.000 tokens. Catorce días obligaría a seleccionar mejor para no pasarse."
+    },
+    {
+      "id": "7.3",
+      "spec": "7 Resumen continuo",
+      "question": "Qué pasa si la llamada diaria no entra en el tope",
+      "options": [
+        {
+          "name": "Saltear y marcar el resumen como viejo",
+          "scores": [
+            5,
+            5,
+            2,
+            5,
+            5
+          ]
+        },
+        {
+          "name": "Usar un modelo local",
+          "scores": [
+            1,
+            3,
+            4,
+            2,
+            4
+          ]
+        }
+      ],
+      "choice": 0,
+      "confidence": "media",
+      "why": "Un modelo local en esta máquina compite por CPU con la diarización y la transcripción, y el 24 de septiembre una carga así congeló la PC. Saltear mantiene la última síntesis a la vista con su fecha. Se puede habilitar el modelo local más adelante a través del Model Host de la gamestation cuando esté validado."
+    },
+    {
+      "id": "8.1",
+      "spec": "8 Niveles de privacidad",
+      "question": "Nivel de las fuentes que ya existen",
+      "options": [
+        {
+          "name": "Controlado: nube solo con un permiso del dueño, la enforcement apagada hasta revisar",
+          "scores": [
+            4,
+            4,
+            4,
+            3,
+            4
+          ]
+        },
+        {
+          "name": "Privado: nada a la nube hasta bajar el nivel fuente por fuente",
+          "scores": [
+            4,
+            5,
+            1,
+            4,
+            3
+          ]
+        }
+      ],
+      "choice": 0,
+      "confidence": "alta",
+      "why": "Hoy todo sale a Gemini y la transcripción depende de eso, así que Privado rompería el producto el día que se active. Controlado es más seguro que hoy porque exige un permiso explícito por propósito, y el control queda apagado hasta que el dueño revise una vez los conteos y conceda lo que quiera."
+    },
+    {
+      "id": "8.2",
+      "spec": "8 Niveles de privacidad",
+      "question": "Qué cuenta como procesamiento local",
+      "options": [
+        {
+          "name": "Solo esta computadora (loopback)",
+          "scores": [
+            5,
+            5,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "name": "Cualquier equipo de la red local",
+          "scores": [
+            4,
+            2,
+            5,
+            3,
+            3
+          ]
+        },
+        {
+          "name": "Esta computadora más los hosts que el dueño parea",
+          "scores": [
+            4,
+            4,
+            5,
+            3,
+            4
+          ]
+        }
+      ],
+      "choice": 2,
+      "confidence": "media",
+      "why": "Pregunté al dueño porque depende de cuánto confía en su red y la matriz solo la inclinaba hacia el loopback. Eligió que cualquier equipo de la red local cuente como local, que es más permisivo que mi recomendación (solo esta computadora). Se implementa con esta salvaguarda: cuentan como locales solo las direcciones privadas de la red (loopback y los rangos privados), verificadas por dirección IP y no por nombre; un nombre que resuelva a una dirección pública, una redirección hacia un host remoto o un endpoint de dirección desconocida no cuentan y un contenido privado no puede ir ahí. El tramo HTTP con token sigue sin TLS: queda anotado como riesgo aceptado por el dueño, y se revisa si la red deja de ser de confianza.",
+      "override": true,
+      "answered": "Decidió el dueño el 4 de octubre: toda la red local."
+    },
+    {
+      "id": "8.3",
+      "spec": "8 Niveles de privacidad",
+      "question": "Contexto mezclado con una fuente privada",
+      "options": [
+        {
+          "name": "Omitir la fuente privada y avisarlo",
+          "scores": [
+            4,
+            5,
+            4,
+            3,
+            4
+          ]
+        },
+        {
+          "name": "Bloquear toda la respuesta",
+          "scores": [
+            4,
+            5,
+            2,
+            5,
+            5
+          ]
+        }
+      ],
+      "choice": 0,
+      "confidence": "media",
+      "tie": true,
+      "why": "Empatan en total. Los dos son igual de seguros porque ninguno manda lo privado. Omitir con aviso visible mantiene la respuesta disponible, que es lo que el dueño ve y usa; bloquear la deja sin respuesta por una sola fuente. Desempate por calidad."
+    }
+  ]
+}

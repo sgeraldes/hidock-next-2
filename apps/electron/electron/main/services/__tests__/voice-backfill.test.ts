@@ -20,6 +20,11 @@ const transcriptionConfig = vi.hoisted(() => ({
 }))
 
 vi.mock('../file-storage', () => ({ getDatabasePath: () => dbPath }))
+// A boot at an older schema runs the mandatory pre-migration backup, which the
+// real host cannot do under vitest (no startup runtimeDir); back it in process.
+vi.mock('../sqlite-backup-host', () =>
+  import('./helpers/in-process-sqlite-backup-host').then((m) => m.inProcessSqliteBackupHost())
+)
 vi.mock('../config', () => ({
   getConfig: () => ({ transcription: transcriptionConfig.current }),
   getDataPath: () => tmpdir(),

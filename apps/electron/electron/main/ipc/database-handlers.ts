@@ -3,7 +3,6 @@ import { z } from 'zod'
 import type { TranscriptVerdicts } from '../../../src/shared/transcript-verdicts'
 import {
   queryAll,
-  getMeetings,
   getMeetingsByIds,
   getMeetingById,
   getRecordings,
@@ -30,11 +29,12 @@ import { getRecurringTopics } from '../services/recurring-topics'
 import { filterEligibleRecordingIds, existingRecordings } from '../services/recording-eligibility'
 import { revalidateStoredSources, REDACTED_ANSWER } from '../services/chat-source-provenance'
 import { autoLinkRecordingsToMeetings } from '../services/org-reconciler'
+import { getCachedCalendarMeetings } from '../services/calendar-cache'
 
 export function registerDatabaseHandlers(): void {
   // Meetings
   ipcMain.handle('db:get-meetings', async (_, startDate?: string, endDate?: string) => {
-    return getMeetings(startDate, endDate)
+    return getCachedCalendarMeetings(startDate, endDate)
   })
 
   ipcMain.handle('db:get-meeting', async (_, id: string) => {
@@ -103,7 +103,11 @@ export function registerDatabaseHandlers(): void {
   ipcMain.handle(
     'db:link-recording-to-meeting',
     async (_, recordingId: string, meetingId: string, confidence: number, method: string) => {
-      linkRecordingToMeeting(recordingId, meetingId, confidence, method)
+      // false = refused (an automatic method over the owner's choice) or no such
+      // recording. Say so instead of returning the unchanged row as a success.
+      if (!linkRecordingToMeeting(recordingId, meetingId, confidence, method)) {
+        throw new Error('The recording was not linked: it does not exist or already has an owner-chosen meeting')
+      }
       return getRecordingById(recordingId)
     }
   )

@@ -9,6 +9,8 @@ Thank you for helping improve HiDock Next 2.0.
 - Never commit API keys, tokens, recordings, transcripts, databases, logs, or other personal data.
 - Do not probe a physical HiDock device while developing. USB changes must be covered by mocks first and tested on hardware only through the project's documented single-connection procedure.
 
+Device changes should start with [the device guide](../../docs/devices/README.md), [protocol reference](../../docs/devices/protocol.md) and [firmware evidence](../../docs/devices/firmware.md). Keep stored-recording, live-PCM and PC-recorder capabilities separate; identify the model/version supporting a claim. Channel labels require source evidence, and native marker timestamps must keep their device/manual provenance rather than becoming transcript-derived actions or decisions. Use the [safe validation workflow](../../docs/devices/README.md#safe-development-and-hardware-validation); an offline checksum, mock, build or emulated fragment does not prove hardware behavior.
+
 ## Local setup
 
 From the repository root:

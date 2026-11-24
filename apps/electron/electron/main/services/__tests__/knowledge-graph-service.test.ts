@@ -148,12 +148,17 @@ describe('knowledge-graph-service', () => {
     expect(first.ingested + fast.ingested).toBe(2)
     expect(complete).toHaveBeenCalledTimes(2)
   })
-  it('releases a failed in-flight claim so a later pass can retry', async () => {
+  it('releases a failed in-flight claim so a later pass reaches the row again', async () => {
     dbRun('INSERT INTO recordings (id, filename, date_recorded) VALUES (?, ?, ?)', ['retry-claim', 'retry.hda', '2026-01-01'])
     dbRun('INSERT INTO transcripts (id, recording_id, full_text) VALUES (?, ?, ?)', ['retry-claim-t', 'retry-claim', 'Alice discussed TypeScript.'])
     vi.mocked(complete).mockRejectedValueOnce(new Error('provider unavailable'))
     expect((await ingestFromDbTranscripts()).errors).toHaveLength(1)
-    expect((await ingestFromDbTranscripts()).ingested).toBe(1)
+    // Not skipped as still claimed: the row is tried again. The provider
+    // checkpoint then refuses an automatic resend of a request whose outcome is
+    // unknown (main's checkpoint rule), so it is an error, never a silent skip.
+    const second = await ingestFromDbTranscripts()
+    expect(second.skipped).toBe(0)
+    expect(second.errors).toEqual([expect.objectContaining({ transcriptId: 'retry-claim-t', error: expect.stringContaining('Provider checkpoint pending') })])
   })
 
   it('filters incremental candidates in SQL and reads text only for extraction', async () => {
@@ -254,6 +259,24 @@ describe('knowledge-graph-service', () => {
       expect(result.ingested).toBe(0)
       expect(result.errors).toHaveLength(1)
       expect(result.errors[0].error).toContain('API rate limit')
+    })
+
+    it('retains a provider response after graph persistence fails without calling it twice', async () => {
+      dbRun("INSERT INTO recordings (id, filename, date_recorded) VALUES ('rec-invalid', 'invalid.hda', '2026-06-01')")
+      dbRun("INSERT INTO transcripts (id, recording_id, full_text, language) VALUES ('tx-invalid', 'rec-invalid', 'Alice discussed TypeScript.', 'en')")
+      getKnowledgeGraphStore()
+      dbRun("CREATE TRIGGER fail_graph_marker BEFORE INSERT ON graph_ingested_transcripts BEGIN SELECT RAISE(ABORT, 'injected persistence failure'); END")
+      const first = await ingestFromDbTranscripts()
+      dbRun('DROP TRIGGER fail_graph_marker')
+      const second = await ingestFromDbTranscripts()
+      expect(first.errors).toHaveLength(1)
+      expect(second.errors).toHaveLength(0)
+      expect(second.ingested).toBe(1)
+      expect(complete).toHaveBeenCalledTimes(1)
+      const { queryAll } = await import('../database')
+      expect(queryAll("SELECT state FROM provider_checkpoints WHERE recording_id='rec-invalid'")).toEqual([{ state: 'received' }])
+      expect(queryAll("SELECT status FROM processing_runs WHERE recording_id='rec-invalid' AND stage='graph-sync'"))
+        .toEqual([{ status: 'failed' }, { status: 'completed' }])
     })
 
     it('concurrent ingest runs do not double-ingest or inflate edge weights', async () => {

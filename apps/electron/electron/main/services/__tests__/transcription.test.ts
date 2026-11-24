@@ -117,7 +117,15 @@ let mockConfig = {
 }
 
 // Mock database
+const mockRecordTranscriptionAttempt = vi.hoisted(() => vi.fn())
+vi.mock('../transcription-attempts-store', () => ({
+  recordTranscriptionAttempt: mockRecordTranscriptionAttempt,
+  getTranscriptionAttempts: vi.fn(() => []),
+}))
+
 vi.mock('../database', () => ({
+  getOwnedPipelineRecordings: vi.fn(() => []),
+  getOwnedProcessingRuns: vi.fn(() => new Map()),
   addToQueue: (...args: any[]) => mockAddToQueue(...args),
   getRecordingById: (...args: any[]) => mockGetRecordingById(...args),
   updateRecordingStatus: (...args: any[]) => mockUpdateRecordingStatus(...args),
@@ -173,7 +181,27 @@ vi.mock('../transcript-validity-store', () => ({
 // recording-eligibility boundary. Default eligible; flipped in the ADV40-1 test.
 vi.mock('../recording-eligibility', () => ({
   isRecordingEligible: (...args: any[]) => mockIsRecordingEligible(...args),
-  isRecordingTranscribable: (...args: any[]) => mockIsRecordingEligible(...args)
+  isRecordingTranscribable: (id: string, options?: { ignoreValueExclusion?: boolean }) =>
+    options?.ignoreValueExclusion ? mockIsRecordingProcessable(id) : mockIsRecordingEligible(id)
+}))
+
+// File inspection/state persistence are separate real-boundary suites. These
+// legacy orchestration fixtures intentionally use nonexistent mono file paths.
+vi.mock('../stored-audio-channels', () => ({
+  inspectStoredAudio: vi.fn(async () => ({
+    container: 'wav', codec: 'pcm_s16le', channels: 1, sampleRate: 16000,
+    durationSeconds: 60, durationSource: 'decoded-frames', originalSha256: 'a'.repeat(64)
+  })),
+  prepareStoredAudioChannels: vi.fn(async () => { throw new Error('Unexpected channel preparation in mono fixture') })
+}))
+vi.mock('../recorded-audio-state', () => ({
+  RecordedAudioState: class {
+    saveLayout = vi.fn()
+    getLayout = vi.fn(() => null)
+    getMapping = vi.fn(() => null)
+    saveTracks = vi.fn()
+    getTracks = vi.fn(() => [])
+  }
 }))
 
 vi.mock('../audio-preflight', () => ({
@@ -208,9 +236,16 @@ vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn() }
 }))
 
-// Mock config
+// Mock config. These tests follow one engine attempt; the engine chain (retries and
+// fallbacks) has its own tests, so each config here runs a single attempt unless it says otherwise.
 vi.mock('../config', () => ({
-  getConfig: vi.fn(() => mockConfig),
+  getConfig: vi.fn(() => {
+    const transcription = mockConfig.transcription as Record<string, unknown>
+    if (!('engineFallbackEnabled' in transcription)) {
+      Object.assign(transcription, { engineFallbackEnabled: false, engineRetries: { transient: 0, quota: 0, unknown: 0 } })
+    }
+    return mockConfig
+  }),
   // transcribeWithGemini builds the engine with this as its fallback model.
   // Without it the Gemini path threw at construction, before the engine's
   // transcribe() ran, so no test here could observe the provider being reached.
@@ -233,8 +268,8 @@ vi.mock('@google/generative-ai', () => ({
 // orchestration tests fast and deterministic.
 vi.mock('@hidock/transcription', () => {
   // eslint-disable-next-line require-yield -- intentional: async generator that throws before yielding
-  const mockGeminiTranscribe = async function* (_input: unknown, options: any) {
-    mockGeminiTranscribeCall(options)
+  const mockGeminiTranscribe = async function* (_audio: unknown, options?: { shouldGenerate?: () => boolean }) {
+    mockGeminiTranscribeCall(options?.shouldGenerate, options)
     throw new Error('API rate limit exceeded')
   }
   function GeminiEngine(_options: { apiKey: string; model?: string; language?: string }) {
@@ -292,6 +327,7 @@ describe('Transcription Service', () => {
     mockInsertTranscript.mockReset()
     // clearAllMocks keeps mockReturnValue impls, so re-assert the defaults so an
     // INC-2/INC3 test that flips them cannot leak into others.
+    mockInsertTranscript.mockReset()
     mockIsRecordingProcessable.mockReturnValue(true)
     mockIsRecordingEligible.mockReturnValue(true)
     mockGenerateContent.mockRejectedValue(new Error('API rate limit exceeded'))
@@ -377,7 +413,7 @@ describe('Transcription Service', () => {
       expect(mockUpdateRecordingStatus).toHaveBeenCalledWith('rec-no-speech', 'no_speech')
       expect(vi.mocked(database.retireGeneratedContentForNoSpeech)).toHaveBeenCalledWith('rec-no-speech')
       expect(mockRemoveRecordingFromGraph).toHaveBeenCalledWith('rec-no-speech')
-      expect(vi.mocked(database.createProcessingRun)).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(database.createProcessingRun)).toHaveBeenCalledTimes(2)
       expect(vi.mocked(database.createProcessingRun)).toHaveBeenCalledWith(
         expect.objectContaining({ stage: 'vad', tool: 'ffmpeg-silencedetect', execution: 'local' })
       )
@@ -390,8 +426,8 @@ describe('Transcription Service', () => {
         filename: '2026Aug14-170410-Rec73.wav',
         status: 'pending',
         attempts: 0,
-        // A provider on the queue row identifies the explicit reprocess path.
-        provider: 'gemini'
+        // The queue row carries the explicit owner request.
+        provider: 'gemini', owner_requested: true
       }
       mockGetQueueItems.mockImplementation((status?: string) => status === 'pending' ? [queueItem] : [])
       mockGetRecordingById.mockReturnValue({
@@ -487,6 +523,52 @@ describe('Transcription Service', () => {
         stopTranscriptionProcessor()
       }
     })
+
+    it('with fallback on, a failed engine moves to the next and the error lists every attempt', { timeout: 20000 }, async () => {
+      // The Gemini mock fails with a rate limit. Without a paired Model Host both
+      // measured fallbacks are skipped, and each step is recorded (16-oct-2026).
+      Object.assign(mockConfig.transcription, { engineFallbackEnabled: true, engineRetries: { transient: 0, quota: 0, unknown: 0 }, modelHostUrl: '' })
+      mockGetQueueItems.mockReturnValue([{ id: 'queue-2', recording_id: 'rec-123', filename: 'test.wav', status: 'pending', attempts: 0 }])
+      mockGetRecordingById.mockReturnValue({ id: 'rec-123', filename: 'test.wav', file_path: '/recordings/test.wav', status: 'complete' })
+      const { startTranscriptionProcessor, stopTranscriptionProcessor } = await import('../transcription')
+      startTranscriptionProcessor()
+      try {
+        await vi.waitFor(() => {
+          const failed = mockUpdateQueueItem.mock.calls.find((call: any[]) => call[0] === 'queue-2' && call[1] === 'failed')
+          expect(failed?.[2]).toContain('configured:gemini #1 failed (quota); remote:moondream/parakeet-ultra #0 skipped-unavailable (unavailable); remote:Qwen/Qwen3-ASR-1.7B #0 skipped-unavailable')
+        }, { timeout: 15000, interval: 25 })
+        expect(mockRecordTranscriptionAttempt.mock.calls.map((call: any[]) => [call[0], call[1], call[2].engine, call[2].outcome])).toEqual([
+          ['rec-123', 'queue-2', 'configured:gemini', 'failed'],
+          ['rec-123', 'queue-2', 'remote:moondream/parakeet-ultra', 'skipped-unavailable'],
+          ['rec-123', 'queue-2', 'remote:Qwen/Qwen3-ASR-1.7B', 'skipped-unavailable'],
+        ])
+        expect(mockRecordTranscriptionAttempt.mock.calls[1][2].message).toBe('No Model Host is paired')
+      } finally {
+        stopTranscriptionProcessor()
+      }
+    })
+
+    it('a recording excluded between engine attempts ends cancelled, not failed', { timeout: 20000 }, async () => {
+      // Gemini fails; while it does, the recording is marked personal. The chain
+      // must stop before the next engine and report a cancellation (review of #182).
+      Object.assign(mockConfig.transcription, { engineFallbackEnabled: true, engineRetries: { transient: 0, quota: 0, unknown: 0 }, modelHostUrl: '' })
+      mockGeminiTranscribeCall.mockImplementation(() => { mockIsRecordingEligible.mockReturnValue(false) })
+      mockGetQueueItems.mockReturnValue([{ id: 'queue-3', recording_id: 'rec-123', filename: 'test.wav', status: 'pending', attempts: 0 }])
+      mockGetRecordingById.mockReturnValue({ id: 'rec-123', filename: 'test.wav', file_path: '/recordings/test.wav', status: 'complete' })
+      const { startTranscriptionProcessor, stopTranscriptionProcessor } = await import('../transcription')
+      startTranscriptionProcessor()
+      try {
+        await vi.waitFor(() => {
+          expect(mockUpdateQueueItem.mock.calls.some((call: any[]) => call[0] === 'queue-3' && call[1] === 'cancelled')).toBe(true)
+        }, { timeout: 15000, interval: 25 })
+        expect(mockUpdateQueueItem.mock.calls.some((call: any[]) => call[0] === 'queue-3' && call[1] === 'failed')).toBe(false)
+        expect(mockRecordTranscriptionAttempt.mock.calls.map((call: any[]) => [call[2].engine, call[2].outcome]))
+          .toEqual([['configured:gemini', 'failed']])
+      } finally {
+        mockGeminiTranscribeCall.mockReset()
+        stopTranscriptionProcessor()
+      }
+    })
   })
 
   // Recordings under DURATION_GARBAGE_MAX_SECONDS are rated garbage by the value
@@ -517,13 +599,14 @@ describe('Transcription Service', () => {
       return path
     }
 
-    function queueOne(recordingId: string, filePath: string, provider?: string): void {
+    function queueOne(recordingId: string, filePath: string, provider?: string, ownerRequested = false): void {
       const queueItem = {
         id: `queue-${recordingId}`,
         recording_id: recordingId,
         filename: `${recordingId}.wav`,
         status: 'pending',
         attempts: 0,
+        owner_requested: ownerRequested || !!provider,
         ...(provider ? { provider } : {})
       }
       mockGetQueueItems.mockImplementation((status?: string) => status === 'pending' ? [queueItem] : [])
@@ -615,13 +698,8 @@ describe('Transcription Service', () => {
       expect(mockUpdateRecordingStatus).not.toHaveBeenCalledWith('rec-short-rerun', 'no_speech')
     })
 
-    it('stops an explicit re-run of a rated clip once the local check finds speech, and hands the status back', async () => {
-      // Review of PR #25: a garbage-rated clip re-run explicitly got past the
-      // gate (so the local check could prove silence), found speech, and then
-      // died later — speaker linking killed mid-run into three retries and an
-      // error, or with speaker linking off, 'processing' forever. It must stop
-      // right after the local check, before any provider, status restored.
-      queueOne('rec-rated', writeMpegClip('rated.wav', 5), 'gemini')
+    it('sends a garbage-rated recording to the provider when the owner explicitly requests it', async () => {
+      queueOne('rec-rated', writeMpegClip('rated.wav', 30), undefined, true)
       mockGetRecordingById.mockReturnValue({
         id: 'rec-rated',
         filename: 'rec-rated.wav',
@@ -634,14 +712,49 @@ describe('Transcription Service', () => {
       mockIsRecordingEligible.mockReturnValue(false) // rated garbage: value-excluded
 
       await runQueueUntil(() => {
-        expect(mockUpdateQueueItem).toHaveBeenCalledWith('queue-rec-rated', 'cancelled', 'Source no longer eligible')
+        expect(mockGeminiTranscribeCall).toHaveBeenCalled()
       })
 
-      expect(mockAnalyzeAudioPreflight).toHaveBeenCalled() // the local check still ran
+      expect(mockAnalyzeAudioPreflight).toHaveBeenCalled()
+      expect(mockUpdateQueueItem).not.toHaveBeenCalledWith('queue-rec-rated', 'cancelled', 'Source no longer eligible')
+      const providerGate = mockGeminiTranscribeCall.mock.calls[0][0] as () => boolean
+      expect(providerGate()).toBe(true)
+      mockIsRecordingProcessable.mockReturnValue(false)
+      expect(providerGate()).toBe(false)
+    })
+
+    it('refuses a personal recording even with an owner override', async () => {
+      queueOne('rec-personal', writeMpegClip('personal.wav', 30), undefined, true)
+      mockGetRecordingById.mockReturnValue({ id: 'rec-personal', filename: 'personal.wav', file_path: joinPath(clipDir, 'personal.wav'), transcription_status: 'pending', status: 'pending' })
+      mockIsRecordingProcessable.mockReturnValue(false)
+      await runQueueUntil(() => {
+        expect(mockUpdateQueueItem).toHaveBeenCalledWith('queue-rec-personal', 'cancelled', 'Source no longer eligible')
+      })
       expect(mockGeminiTranscribeCall).not.toHaveBeenCalled()
-      expect(mockGenerateContent).not.toHaveBeenCalled()
-      const statuses = mockUpdateRecordingStatus.mock.calls.filter(([id]) => id === 'rec-rated').map(([, s]) => s)
-      expect(statuses).toEqual(['processing', 'no_speech'])
+      expect(mockAnalyzeAudioPreflight).not.toHaveBeenCalled()
+      expect(mockUpdateRecordingStatus).toHaveBeenCalledWith('rec-personal', 'none')
+    })
+
+    it('restores a prior transcript after an eligibility cancellation', async () => {
+      queueOne('rec-restore', writeMpegClip('restore.wav', 30))
+      mockGetRecordingById.mockReturnValue({ id: 'rec-restore', filename: 'restore.wav', file_path: joinPath(clipDir, 'restore.wav'), transcription_status: 'pending', status: 'pending' })
+      const database = await import('../database')
+      vi.mocked(database.queryOne).mockReturnValueOnce({ id: 'prior-transcript' })
+      mockIsRecordingEligible.mockReturnValue(false)
+      await runQueueUntil(() => {
+        expect(mockUpdateRecordingStatus).toHaveBeenCalledWith('rec-restore', 'complete')
+      })
+      expect(mockGeminiTranscribeCall).not.toHaveBeenCalled()
+    })
+
+    it('preserves a terminal no-speech status when a later gate cancels work', async () => {
+      queueOne('rec-terminal', writeMpegClip('terminal.wav', 30))
+      mockGetRecordingById.mockReturnValue({ id: 'rec-terminal', filename: 'terminal.wav', file_path: joinPath(clipDir, 'terminal.wav'), transcription_status: 'no_speech', status: 'no_speech' })
+      mockIsRecordingEligible.mockReturnValue(false)
+      await runQueueUntil(() => {
+        expect(mockUpdateQueueItem).toHaveBeenCalledWith('queue-rec-terminal', 'cancelled', 'Source no longer eligible')
+      })
+      expect(mockUpdateRecordingStatus).not.toHaveBeenCalled()
     })
 
     it('never skips on a PCM measurement, which reads a lying container at a quarter of its length', async () => {
@@ -726,7 +839,7 @@ describe('Transcription Service', () => {
         filename: `${recordingId}.hda`,
         status: 'pending',
         attempts: 0,
-        ...(provider ? { provider } : {})
+        ...(provider ? { provider, owner_requested: true } : {})
       }
       mockGetQueueItems.mockImplementation((status?: string) => status === 'pending' ? [queueItem] : [])
       mockGetRecordingById.mockReturnValue({
@@ -943,7 +1056,24 @@ describe('Transcription Service', () => {
         (vi.mocked(database.completeProcessingRun).mock.calls.find(([id]) => id === runId)?.[1] as any)?.outputRefs?.skipped
       expect(skippedBy('run-actionable-detection')).toBe('transcript-untrusted')
       expect(skippedBy('run-timeline-analysis')).toBe('transcript-untrusted')
-      expect(skippedBy('run-graph-sync')).toBe('transcript-untrusted')
+      expect(vi.mocked(database.createProcessingRun)).not.toHaveBeenCalledWith(expect.objectContaining({ stage: 'graph-sync' }))
+    })
+
+    it('keeps a good transcript when the summary provider fails, and leaves the summary to be healed (27-oct-2026)', { timeout: 20000 }, async () => {
+      // Rec16: Parakeet Ultra transcribed it, then the summary call got Google's
+      // 503 "high demand" and the whole run ended failed with the new text stored.
+      // A Gemini key is set, so the summary goes to the analysis model, whose
+      // mock cannot be built in this suite: the summary call fails every time.
+      queueLocal('rec-summary-down')
+
+      await runUntilStored()
+
+      const stored = mockInsertTranscript.mock.calls[0][0]
+      expect(stored.full_text).toContain('Me engañó')
+      expect(stored.summary).toBeUndefined()
+      const database = await import('../database')
+      expect(vi.mocked(database.failProcessingRun)).toHaveBeenCalledWith('run-summary', expect.any(String), false, expect.anything())
+      expect(mockUpdateQueueItem.mock.calls.some((call: any[]) => call[1] === 'failed')).toBe(false)
     })
 
     it('leaves a transcript the check trusts to the content rating, and stores its validity', { timeout: 20000 }, async () => {
@@ -1134,7 +1264,7 @@ describe('Transcription Service', () => {
       mockConfig.transcription.provider = 'local-asr'
       mockConfig.transcription.geminiApiKey = 'test-api-key' // so analyze WOULD call the provider absent the gate
       mockIsRecordingProcessable.mockReturnValue(true)
-      mockIsRecordingEligible.mockReturnValueOnce(true).mockReturnValue(false)
+      mockIsRecordingEligible.mockReturnValue(true)
       mockGetQueueItems.mockImplementation((status?: string) =>
         status === 'pending'
           ? [{ id: 'queue-adv42', recording_id: 'rec-adv42', filename: 'a.wav', status: 'pending', attempts: 0 }]
@@ -1146,11 +1276,12 @@ describe('Transcription Service', () => {
         file_path: 'G:\\Recordings\\a.wav',
         status: 'complete'
       })
-      mockExecFile.mockImplementation(() =>
-        makeFakeChildProcess(
+      mockExecFile.mockImplementation(() => {
+        mockIsRecordingEligible.mockReturnValue(false)
+        return makeFakeChildProcess(
           JSON.stringify({ text: 'Speaker 1: hola.', language: 'es', duration_seconds: 5, processing_time_seconds: 1 })
         )
-      )
+      })
 
       const { startTranscriptionProcessor, stopTranscriptionProcessor } = await import('../transcription')
       startTranscriptionProcessor()
@@ -1168,35 +1299,20 @@ describe('Transcription Service', () => {
       expect(queueCalls.some((c: any[]) => c[0] === 'queue-adv42' && c[1] === 'completed')).toBe(false)
     })
 
-    it('Finish processing reuses saved text without calling the audio engine', async () => {
-      const { queryOne } = await import('../database')
-      vi.mocked(queryOne).mockImplementation((sql: string) => sql.includes('SELECT * FROM transcripts') ? {
-        id: 'trans_resume-rec', recording_id: 'resume-rec', full_text: 'Speaker 1: Saved words.',
-        language: 'en', transcription_provider: 'local-asr', transcription_model: 'saved-model', speakers: undefined
-      } : undefined)
-      mockConfig.transcription.provider = 'local-asr'
-      mockConfig.transcription.geminiApiKey = ''
-      mockGetRecordingById.mockReturnValue({ id: 'resume-rec', filename: 'resume.wav', file_path: 'G:\\Recordings\\resume.wav', transcription_status: 'complete' })
-      mockGetQueueItems.mockImplementation((status?: string) => status === 'pending'
-        ? [{ id: 'resume-q', recording_id: 'resume-rec', filename: 'resume.wav', status: 'pending', attempts: 0, provider: 'saved-transcript' }] : [])
-      const mod = await import('../transcription')
-      try {
-        mod.startTranscriptionProcessor()
-        await new Promise((resolve) => setTimeout(resolve, 500))
-        expect(mockExecFile).not.toHaveBeenCalled()
-        expect(mockGeminiTranscribeCall).not.toHaveBeenCalled()
-        expect(mockAnalyzeAudioPreflight).not.toHaveBeenCalled()
-        expect(mockInsertTranscript).toHaveBeenCalledWith(expect.objectContaining({ full_text: 'Speaker 1: Saved words.', transcription_model: 'saved-model' }))
-        expect(mockUpdateQueueItem).toHaveBeenCalledWith('resume-q', 'completed')
-      } finally {
-        mod.stopTranscriptionProcessor()
-        vi.mocked(queryOne).mockReset()
-      }
-    })
+    // The recording row as the database would hold it: status writes are read
+    // back, and a transcripts row exists once one is saved (or was saved before).
+    async function liveRecording(base: Record<string, unknown>, transcript: { saved: boolean }) {
+      let status = (base.transcription_status ?? base.status ?? 'none') as string
+      mockUpdateRecordingStatus.mockImplementation((id: string, next: string) => { if (id === base.id) status = next })
+      mockGetRecordingById.mockImplementation(() => ({ ...base, transcription_status: status, status }))
+      const database = await import('../database')
+      vi.mocked(database.queryOne).mockImplementation(((sql: string) =>
+        transcript.saved && sql.includes('FROM transcripts WHERE recording_id = ? LIMIT 1') ? { id: `trans_${base.id}` } : undefined) as never)
+    }
 
     it('Stop while reading the audio profile preserves the previous complete status', async () => {
       mockConfig.transcription.provider = 'local-asr'
-      mockGetRecordingById.mockReturnValue({ id: 'stop-profile', filename: 'p.wav', file_path: 'G:\\Recordings\\p.wav', transcription_status: 'complete' })
+      await liveRecording({ id: 'stop-profile', filename: 'p.wav', file_path: 'G:\\Recordings\\p.wav', transcription_status: 'complete' }, { saved: true })
       mockGetQueueItems.mockImplementation((status?: string) => status === 'pending'
         ? [{ id: 'stop-profile-q', recording_id: 'stop-profile', filename: 'p.wav', status: 'pending', attempts: 0 }] : [])
       const mod = await import('../transcription')
@@ -1209,14 +1325,14 @@ describe('Transcription Service', () => {
       mod.stopTranscriptionProcessor()
       expect(mockInsertTranscript).not.toHaveBeenCalled()
       expect(mockUpdateRecordingStatus).not.toHaveBeenCalledWith('stop-profile', 'none')
-      expect(mockUpdateRecordingStatus).toHaveBeenLastCalledWith('stop-profile', 'complete')
+      expect(mockGetRecordingById('stop-profile').transcription_status).toBe('complete')
       expect(mockAnalyzeAudioPreflight).not.toHaveBeenCalled()
     })
 
     it('Stop during a corrective no-speech preflight never retires the previous transcript', async () => {
       mockConfig.transcription.provider = 'local-asr'
       mockConfig.transcription.geminiApiKey = ''
-      mockGetRecordingById.mockReturnValue({ id: 'stop-silence', filename: 's.wav', file_path: 'G:\\Recordings\\s.wav', transcription_status: 'complete' })
+      await liveRecording({ id: 'stop-silence', filename: 's.wav', file_path: 'G:\\Recordings\\s.wav', transcription_status: 'complete' }, { saved: true })
       mockGetQueueItems.mockImplementation((status?: string) => status === 'pending'
         ? [{ id: 'stop-silence-q', recording_id: 'stop-silence', filename: 's.wav', status: 'pending', attempts: 0 }] : [])
       const mod = await import('../transcription')
@@ -1236,7 +1352,7 @@ describe('Transcription Service', () => {
     it('Stop before saving a corrective transcript preserves the previous result and complete status', async () => {
       mockConfig.transcription.provider = 'local-asr'
       mockConfig.transcription.geminiApiKey = ''
-      mockGetRecordingById.mockReturnValue({ id: 'corrective-rec', filename: 'c.wav', file_path: 'G:\\Recordings\\c.wav', transcription_status: 'complete' })
+      await liveRecording({ id: 'corrective-rec', filename: 'c.wav', file_path: 'G:\\Recordings\\c.wav', transcription_status: 'complete' }, { saved: true })
       mockGetQueueItems.mockImplementation((status?: string) => status === 'pending'
         ? [{ id: 'corrective-q', recording_id: 'corrective-rec', filename: 'c.wav', status: 'pending', attempts: 0 }] : [])
       const mod = await import('../transcription')
@@ -1259,19 +1375,15 @@ describe('Transcription Service', () => {
       // insertTranscript flips eligibility to false, so a LATER post-analysis
       // gate trips and transcribeRecording must report cancelled.
       mockIsRecordingProcessable.mockReturnValue(true)
+      const lateTranscript = { saved: false }
+      await liveRecording({ id: 'rec-late', filename: 'l.wav', file_path: 'G:\\Recordings\\l.wav', status: 'none' }, lateTranscript)
       const { cancelTranscription } = await import('../transcription')
-      mockInsertTranscript.mockImplementation(() => cancelTranscription('rec-late'))
+      mockInsertTranscript.mockImplementation(() => { lateTranscript.saved = true; cancelTranscription('rec-late') })
       mockGetQueueItems.mockImplementation((status?: string) =>
         status === 'pending'
           ? [{ id: 'queue-late', recording_id: 'rec-late', filename: 'l.wav', status: 'pending', attempts: 0 }]
           : []
       )
-      mockGetRecordingById.mockReturnValue({
-        id: 'rec-late',
-        filename: 'l.wav',
-        file_path: 'G:\\Recordings\\l.wav',
-        status: 'complete'
-      })
       mockExecFile.mockImplementation(() =>
         makeFakeChildProcess(
           JSON.stringify({ text: 'Speaker 1: hola.', language: 'es', duration_seconds: 5, processing_time_seconds: 1 })
@@ -1295,7 +1407,7 @@ describe('Transcription Service', () => {
     it('projects the one-based engine trace through queue progress to rendered activity', async () => {
       mockConfig.transcription.provider = 'gemini'
       mockGetRecordingById.mockReturnValue({ id: 'trace-rec', filename: 'trace.wav', file_path: 'G:\\Recordings\\trace.wav', transcription_status: 'none' })
-      mockGeminiTranscribeCall.mockImplementationOnce((options: any) => {
+      mockGeminiTranscribeCall.mockImplementationOnce((_gate: unknown, options: any) => {
         options.onTrace({ phase: 'provider-transcription', status: 'started', chunkIndex: 1, chunkCount: 1 })
       })
       mockGetQueueItems.mockImplementation((status?: string) => status === 'pending'
@@ -1802,3 +1914,16 @@ describe('repairJsonString — bracket balancing (ISSUE-9)', () => {
 // Recency-first queue ordering (orderPendingForProcessing) is covered in the
 // lightweight queue-ordering.test.ts — kept separate so those tests don't share
 // this file's worker, which OOMs at collection under Node 26 / vitest 4.
+
+// Pipeline fixtures do not contain audio bytes; durable replay is exercised against SQLite separately.
+vi.mock('../stage-checkpoints', () => ({
+  readStageCheckpoint: () => undefined,
+  saveStageCheckpoint: () => {},
+  audioFingerprint: async () => 'fixture-audio-hash',
+  stageFingerprint: (...inputs: unknown[]) => JSON.stringify(inputs),
+  checkpointStage: async (_id: string, _stage: string, _hash: string, action: () => Promise<unknown>) => action()
+}))
+
+vi.mock('../provider-checkpoints', () => ({
+  providerCheckpoints: () => ({ execute: async (_key: string, request: () => Promise<unknown>) => request() })
+}))

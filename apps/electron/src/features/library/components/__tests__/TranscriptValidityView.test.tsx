@@ -114,6 +114,94 @@ describe('the transcript panel', () => {
 })
 
 
+describe('the transcript panel when only the speaker count is in doubt', () => {
+  const speakerReason = { code: 'more_speakers_than_invited', detail: '5 speakers in the transcript, 2 people invited.' }
+  const speakerOnly = () =>
+    transcript({ validity_status: 'doubtful', validity_json: JSON.stringify({ reasons: [speakerReason] }) })
+
+  it('asks for a speaker review, gives the real reason and offers no retranscription', () => {
+    const onRetranscribe = vi.fn()
+    render(<TranscriptIntegrityPanel recordingId="r1" durationSeconds={3600} onRetranscribe={onRetranscribe} transcript={speakerOnly()} />)
+    const panel = screen.getByTestId('transcript-validity')
+    expect(panel).toHaveAttribute('data-reason', 'speakers')
+    expect(panel).toHaveTextContent('Speaker assignments need review.')
+    expect(panel).toHaveTextContent('duplicates of the same person')
+    expect(panel).toHaveTextContent('calendar invitation alone does not show who attended')
+    expect(panel).toHaveTextContent('5 speakers in the transcript, 2 people invited.')
+    expect(panel).not.toHaveTextContent('being checked against the audio')
+    expect(panel).not.toHaveTextContent(/transcribed again and compared/)
+    expect(screen.queryByRole('button', { name: /Transcribe again/ })).toBeNull()
+  })
+
+  it('accepting says the labels are unverified, not that anything was verified', async () => {
+    render(<TranscriptIntegrityPanel recordingId="r1" transcript={speakerOnly()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Accept labels as is' }))
+    expect(setIntegrityAccepted).toHaveBeenCalledWith({ recordingId: 'r1', accepted: true })
+  })
+
+  it('after acceptance the panel says the labels stay unverified', () => {
+    render(<TranscriptIntegrityPanel recordingId="r1" transcript={{ ...speakerOnly(), integrity_accepted_at: '2026-10-13T10:00:00Z' }} />)
+    expect(screen.getByTestId('transcript-integrity')).toHaveTextContent(/Accepted as is on .+, with the speaker labels unverified\./)
+    expect(screen.getByTestId('transcript-integrity')).not.toHaveTextContent(/verified against|confirmed/)
+  })
+
+  it('keeps the text check and the full retranscribe button when other reasons come with the speakers', () => {
+    const onRetranscribe = vi.fn()
+    render(
+      <TranscriptIntegrityPanel
+        recordingId="r1"
+        durationSeconds={3600}
+        onRetranscribe={onRetranscribe}
+        transcript={transcript({
+          validity_status: 'doubtful',
+          validity_json: JSON.stringify({ reasons: [speakerReason, { code: 'no_times', detail: 'The transcript has no times.' }] })
+        })}
+      />
+    )
+    const panel = screen.getByTestId('transcript-validity')
+    expect(panel).not.toHaveAttribute('data-reason')
+    expect(panel).toHaveTextContent('Transcript in doubt: being checked against the audio')
+    expect(panel).toHaveTextContent('The transcript has no times.')
+    expect(panel).not.toHaveTextContent('Speaker assignments need review')
+    fireEvent.click(screen.getByRole('button', { name: 'Transcribe again (about 0.20 USD)' }))
+    expect(onRetranscribe).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not treat other doubts, invalid or incomplete verdicts as a speaker review', () => {
+    const { rerender } = render(<TranscriptIntegrityPanel recordingId="r1" onRetranscribe={vi.fn()} transcript={transcript({ validity_status: 'doubtful', validity_json: reasons })} />)
+    expect(screen.getByTestId('transcript-validity')).not.toHaveAttribute('data-reason')
+    expect(screen.getByRole('button', { name: /Transcribe again/ })).toBeInTheDocument()
+    rerender(<TranscriptIntegrityPanel recordingId="r1" onRetranscribe={vi.fn()} transcript={transcript({ validity_status: 'invalid', validity_json: JSON.stringify({ reasons: [speakerReason] }) })} />)
+    expect(screen.getByTestId('transcript-validity')).not.toHaveAttribute('data-reason')
+    expect(screen.getByRole('button', { name: /Transcribe again/ })).toBeInTheDocument()
+  })
+
+  it('keeps an actual timing defect and its retranscribe button next to the speaker review', () => {
+    render(
+      <TranscriptIntegrityPanel
+        recordingId="r1"
+        onRetranscribe={vi.fn()}
+        transcript={transcript({
+          integrity_status: 'suspect',
+          integrity_json: JSON.stringify({ issues: [{ code: 'repeated_start', count: 2, detail: 'Repeated times.' }] }),
+          validity_status: 'doubtful',
+          validity_json: JSON.stringify({ reasons: [speakerReason] })
+        })}
+      />
+    )
+    expect(screen.getByTestId('transcript-validity')).toHaveTextContent('Speaker assignments need review.')
+    expect(screen.getByTestId('transcript-validity')).not.toHaveTextContent('being checked against the audio')
+    expect(screen.getByTestId('transcript-integrity')).toHaveTextContent('The times in this transcript are wrong.')
+    expect(screen.getByRole('button', { name: /Transcribe again/ })).toBeInTheDocument()
+  })
+
+  it('tolerates malformed reasons by falling back to the generic doubt', () => {
+    render(<TranscriptIntegrityPanel recordingId="r1" transcript={transcript({ validity_status: 'doubtful', validity_json: '{"reasons":[null]}' })} />)
+    expect(screen.getByTestId('transcript-validity')).not.toHaveAttribute('data-reason')
+  })
+})
+
+
 describe('held evaluation chips', () => {
   it.each(['invalid', 'incomplete', 'doubtful'] as const)('hides stale evaluation for %s and restores it when valid or accepted', (status) => {
     const recording = { id: 'r1', evalStarLevel: 5, evalKind: 'team_meeting' } as UnifiedRecording

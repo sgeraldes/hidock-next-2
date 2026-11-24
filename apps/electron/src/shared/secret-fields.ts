@@ -12,6 +12,8 @@ export const SAVED_SECRET = '__hidock_saved_secret__' // pragma: allowlist secre
 /** [section, key] of every secret in AppConfig. */
 export const SECRET_CONFIG_FIELDS = [
   ['transcription', 'geminiApiKey'],
+  ['transcription', 'museVoiceApiKey'],
+  ['transcription', 'maiTranscribeApiKey'],
   ['transcription', 'localAsrHfToken'],
   ['transcription', 'jevApiKey'],
   ['transcription', 'modelHostToken'],

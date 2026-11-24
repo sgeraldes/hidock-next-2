@@ -21,7 +21,8 @@ const meetings = new Map<string, { subject: string; start_time: string }>([
   ['daily', { subject: 'Daily Cloud', start_time: '2026-09-24T15:00:00Z' }],
   ['ics-daily', { subject: 'Daily Cloud', start_time: '2026-09-24T15:00:00Z' }]
 ])
-const linkRecordingToMeeting = vi.fn()
+// true = the link was written; false = refused (the owner chose meanwhile) or no such recording.
+const linkRecordingToMeeting = vi.fn((..._args: unknown[]) => true)
 
 vi.mock('../database', () => ({
   queryAll: vi.fn(() => [...recordings.keys()].map((id) => ({ id }))),
@@ -70,6 +71,7 @@ function reply(m1: number, m2: number, none: number) {
 beforeEach(() => {
   recordings.clear()
   vi.clearAllMocks()
+  linkRecordingToMeeting.mockImplementation(() => true)
   matchDeps.mockResolvedValue({ apiKey: 'k', load: () => null, save: () => undefined })
 })
 
@@ -108,6 +110,18 @@ describe('matchMeetingsWithJev', () => {
       ])
     )
     expect(linked.find((c) => c[0] === 'manual')).toBeUndefined()
+  })
+
+  it('does not count a link the database refused (the owner chose while Jev was answering)', async () => {
+    recordings.set('unlinked', { id: 'unlinked', meeting_id: null, correlation_method: null, date_recorded: 'a', duration_seconds: 60 })
+    recordings.set('wrong', { id: 'wrong', meeting_id: 'lunch', correlation_method: 'time_overlap', date_recorded: 'a', duration_seconds: 60 })
+    linkRecordingToMeeting.mockImplementation((...args: unknown[]) => args[0] !== 'wrong')
+    askJev.mockResolvedValue(reply(0.03, 0.9, 0.07))
+
+    const result = await matchMeetingsWithJev()
+
+    expect(linkRecordingToMeeting).toHaveBeenCalledTimes(2)
+    expect(result).toMatchObject({ checked: 2, asked: 2, linked: 1, relinked: 0, skipped: 1 })
   })
 
   it('does not link a close call or a "none" answer', async () => {

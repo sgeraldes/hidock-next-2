@@ -36,6 +36,8 @@
  * transcript_speakers / mention_resolutions paths and markers live in `config`.
  */
 
+import { providerCheckpoints } from './provider-checkpoints'
+import { stageFingerprint } from './stage-checkpoints'
 import { getChatLLMService } from './chat-llm'
 import {
   queryAll,
@@ -52,7 +54,7 @@ import { resolveContact } from './entity-resolver'
 import { isGenericSpeakerLabel, normalizeName, accentFoldedKey } from './entity-normalize'
 import { isRecordingEligible, filterEligibleRecordingIds } from './recording-eligibility'
 import { consolidateVoiceIdentityForSpeaker } from './voice-identity-consolidation'
-import { namingAllowed, namingEvidence, type NamingTurn } from './diarization-quality'
+import { namingAllowed, namingEvidence, isUnresolvedNamingTurn, type NamingTurn } from './diarization-quality'
 import { isInferenceAsked, runSpeakerInference } from './speaker-inference'
 
 // ---------------------------------------------------------------------------
@@ -566,7 +568,7 @@ async function defaultLLM(
  */
 export async function extractSelfIdentifications(
   turns: SpeakerTurn[],
-  deps: { llm?: SelfIdLLM; shouldGenerate?: () => boolean; signal?: AbortSignal } = {}
+  deps: { llm?: SelfIdLLM; shouldGenerate?: () => boolean; propagateFailure?: boolean; signal?: AbortSignal } = {}
 ): Promise<SelfIdResult> {
   const cues = findSelfIdCues(turns)
   if (cues.length === 0) {
@@ -582,6 +584,7 @@ export async function extractSelfIdentifications(
     raw = await llm(buildSelfIdPrompt(cues), SELF_ID_SYSTEM_PROMPT)
   } catch (e) {
     console.warn('[SelfID] LLM extraction failed:', e instanceof Error ? e.message : e)
+    if (deps.propagateFailure) throw e
     return { identifications: [], mergeSuspected: [], usedLLM: true }
   }
   const entries = parseSelfIdResponse(raw)
@@ -630,6 +633,7 @@ export function parseSpeakerTurns(speakersJson: string | null | undefined): Spea
   const out: SpeakerTurn[] = []
   for (const seg of parsed) {
     if (!seg || typeof seg !== 'object') continue
+    if (isUnresolvedNamingTurn(seg as NamingTurn)) continue
     const speaker = String((seg as Record<string, unknown>).speaker ?? '').trim()
     const text = String((seg as Record<string, unknown>).text ?? '').trim()
     if (text) out.push({ speaker, text })
@@ -766,8 +770,13 @@ export async function runSelfIdentificationForRecording(
   }
 
   const result = await extractSelfIdentifications(evidence, {
-    llm: opts.llm,
+    // A failed/uncertain provider request is not a completed identity scan.
+    propagateFailure: true,
     signal: opts.signal,
+    llm: opts.llm ?? ((prompt, systemPrompt) => providerCheckpoints(recordingId, undefined,
+      () => isRecordingEligible(recordingId) && (opts.shouldPersist?.() ?? true)).execute(
+        stageFingerprint('self-id-v1', prompt, systemPrompt),
+        () => defaultLLM(prompt, systemPrompt, () => !opts.signal?.aborted && isRecordingEligible(recordingId), opts.signal))),
     // ADV42-2 (round-44) — re-verify eligibility before the PRIMARY and FALLBACK
     // provider attempts inside BrainRouter (the isRecordingEligible gate above is
     // pre-await only). Fail-closed via isRecordingEligible.

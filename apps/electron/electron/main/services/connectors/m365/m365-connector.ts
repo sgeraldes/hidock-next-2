@@ -400,8 +400,8 @@ export class M365Connector implements Connector {
       headers: { Authorization: `Bearer ${token}`, Prefer: 'outlook.timezone="UTC"' },
     })
     if (!res.ok) {
-      const body = await res.text().catch(() => '')
-      throw new Error(`Graph GET ${res.status} ${res.statusText}: ${body.slice(0, 300)}`)
+      // Error bodies can contain account/event details; keep them out of logs.
+      throw new Error(`Graph GET ${res.status} ${res.statusText}`)
     }
     return res.json()
   }
@@ -430,7 +430,12 @@ export class M365Connector implements Connector {
     const page = await this.graphGet(url)
     const items: SourceItem[] = []
     for (const ev of page.value ?? []) {
-      if (ev['@removed']) continue // deletions: skip (no artifact churn)
+      if (ev['@removed'] || ev.isCancelled) {
+        if (!ev.id) throw new Error('Graph returned a deleted event without an id')
+        items.push({ externalId: String(ev.id), kind: 'meeting', mime: 'application/vnd.hidock.meeting+json',
+          createdAt: new Date().toISOString(), metadata: { container: 'calendar', deleted: true } })
+        continue
+      }
       const meeting = mapGraphEvent(ev)
       items.push({
         externalId: meeting.externalId || String(ev.id ?? ''),

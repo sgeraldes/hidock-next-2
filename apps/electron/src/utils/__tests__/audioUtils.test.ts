@@ -33,6 +33,20 @@ describe('audioUtils', () => {
   })
 
   describe('decodeAudioData', () => {
+    it('releases the queue before allocating PCM if context resume never resolves', async () => {
+      vi.useFakeTimers()
+      mockResume.mockImplementationOnce(() => new Promise(() => {}))
+      try {
+        const result = decodeAudioData(btoa('audio'), 'audio/mpeg')
+        const rejected = expect(result).rejects.toThrow('Audio context resume timed out')
+        await vi.advanceTimersByTimeAsync(5000)
+        await rejected
+        expect(mockDecodeAudioData).not.toHaveBeenCalled()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
     it('should call AudioContext.resume() before decoding', async () => {
       // BUG-AU-001: If AudioContext is suspended, decodeAudioData will hang
       // The fix should call resume() before decodeAudioData()

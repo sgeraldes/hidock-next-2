@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { LibraryHeader } from '../LibraryHeader'
+import { useConfigStore } from '@/store/domain/useConfigStore'
 
 function renderHeader(overrides: Partial<React.ComponentProps<typeof LibraryHeader>> = {}) {
   const handlers = {
@@ -41,6 +42,18 @@ function renderHeader(overrides: Partial<React.ComponentProps<typeof LibraryHead
 }
 
 describe('LibraryHeader — responsive action hierarchy', () => {
+  it('explains why downloads do not automatically become transcriptions without disabling manual processing', () => {
+    const previous = useConfigStore.getState().config
+    useConfigStore.setState({ config: { transcription: { autoTranscribe: false } } as never })
+    try {
+      const handlers = renderHeader({ bulkCounts: { deviceOnly: 0, needsTranscription: 2 } })
+      expect(screen.getByText('Automatic transcription off · transcribe manually')).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Process 2 audio sources' }))
+      expect(handlers.onBulkProcess).toHaveBeenCalledOnce()
+    } finally {
+      useConfigStore.setState({ config: previous })
+    }
+  })
   it('presents device-only state as a compact status filter rather than a text link', () => {
     const handlers = renderHeader({ deviceOnlyActive: true })
     const filter = screen.getByRole('button', { name: /Show 1 source that need download/i })

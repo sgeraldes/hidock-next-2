@@ -38,6 +38,11 @@ export const JensenRealtimeDataSchema = z.object({
   offset: z.number().int().min(0),
 })
 
+export const JensenRealtimeStartSchema = z.object({
+  transcribe: z.boolean().optional(),
+  saveRecording: z.boolean().optional()
+}).strict()
+
 export const JensenBluetoothScanSchema = z.object({
   duration: z.number().int().positive().optional(),
 })

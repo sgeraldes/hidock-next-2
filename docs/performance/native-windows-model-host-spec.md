@@ -1,6 +1,8 @@
 # Native Windows Model Host and Remote Audio Pipeline
 
-Status: **implementation specification — not implemented or deployment-verified**  
+Status: **partially implemented; host and client packages applied; acceptance remains open**
+See the [current implementation appendix](#appendix-implementation-status-as-of-12-october-2026) for observed
+deployment and verification scope. Unverified normative requirements remain proposed release gates.  
 Version: 1.0 · 2026-09-17  
 Companion evidence: [measured critical path](2026-09-17-critical-path.md)
 
@@ -622,3 +624,69 @@ Primary references used for platform feasibility:
 Before implementation release, select and validate the exact model pack versions, signing identity,
 update feed, measured memory profiles and hardware support matrix. These are engineering/release gates,
 not reasons to impose Docker or manual Python installation on the ordinary user.
+
+## Appendix: implementation status as of 12 October 2026
+
+This appendix records observed implementation, not acceptance of every gate in sections 14–15.
+The [current SPEC-013 verification checkpoint](spec-013-verification-2026-10-11.md) is the canonical
+rollout status; its older dated sections remain historical.
+
+GAMESTATION host **0.5.2 is installed**. The actual update preserved semantic and realtime qualification
+proofs. Eight remote ASR engines have earlier real inference evidence; native diarization has separate
+validation. Clef/Clef-Flash serve typed decisions. Managed Qwen general generation is a distinct role,
+with its own readiness proof, explicit client enablement/version binding and no default-provider switch.
+The shared heavy-work lane includes decision requests and connection-disconnect cleanup; a full concurrent
+fault matrix remains broader than the completed tests.
+The 0.5.2 update was accepted, installed policy hash matched, and 244 tests/30 files passed. Synthetic
+counters against the installed policy confirmed rejection below 1,024 MiB and acceptance at exactly
+1,024 MiB; this is not physical memory-exhaustion testing. Actual post-update Parakeet on the older
+21 August source completed in 10.117 s with unchanged text and host idle; all qualified role capabilities
+remained ready. [Verification and installer hash](../../.diagnostics/host-052-verification.json).
+
+| Role / control | Observed boundary | Scope still open |
+| --- | --- | --- |
+| Remote ASR and diarization | Real RTX 4090 runs, public pilot comparisons and scoped library review; see the [accuracy report](asr-observed-accuracy-2026-10-11.md) | Complete meeting-quality matrix; MAI/Muse require credentials; VibeVoice availability must not be inferred from the other engines |
+| Native realtime | Paired protocol produced deltas before commit and exercised cancellation | Full live-meeting and Library workflow acceptance |
+| Semantic embeddings | Actual client brain/pinned HTTPS query and passage yielded distinct normalized 2,048-dimensional vectors; wrong fingerprint rejected before upload | Actual isolated native SQLite maintenance preserved/resumed chunks; whole production namespace migration remains pending (0 remote rows) |
+| Managed generation | Actual client JSON/chat calls, measured usage, version mismatch rejection; observed active request cancelled and idle within 525 ms | Broader text quality, sustained workloads, production workflow acceptance |
+| Preparation and readiness UI | Actual isolated normal-mode renderer/IPC Check showed three roles ready; semantic Prepare performed real host revalidation and reconnect; explicit generation Enable preserved default | Latest maintenance package installed; new UI verification blocked by identified competing device-validation PID 87476; production migration pending |
+| CPU share changes | Actual Windows Job worker chain 25% → 50%, with observed kernel limits and clean cancellation | Kernel-change fixture excluded inference; separate installed short/five-minute CPU Cohere runs passed, without independent WER/full pipeline acceptance |
+
+Measured evidence: [realtime](../../.diagnostics/host-realtime-paired-result.json),
+[semantic client](../../.diagnostics/semantic-client-boundary/report.json),
+[generation client](../../.diagnostics/generation-client-boundary/report.json), and
+[CPU worker chain](../../.diagnostics/spec013-cpu-restart/owned-worker-chain.json).
+Reports cited here do not require distributing private audio or transcript content.
+
+The latest maintenance package is built and installed; ASAR SHA256 is
+`FCFC9F23A24B7EE6901682FCD08DEBB1B9969EA4253B00E50C4950ECF01003C9`.
+The corrected role-health record belongs to unpackaged PID 101076, not installed execution. New maintenance
+UI verification awaits release of the shared user lock held by device-validation PID 87476
+(`completion630-runtime`). Read-only thread inspection identified **Instala REA para ingeniería del HiDO**
+(`01a12894-3a3c-7ff3-8851-d304fd0b5fb3`) and its `launch-device-validation.ps1` command as the owner.
+The user will close that session when finished. Leave it untouched; neither messaging nor closing it is authorized.
+
+Maintenance is explicit, bounded to one recording/four batches from UI, and never starts/resumes on boot.
+The [actual isolated maintenance boundary](../../.diagnostics/semantic-maintenance-boundary/report.json)
+completed four chunks in 7.867 s, paused/reopened, resumed four more in 7.687 s, preserved earlier chunks
+and the old partition, then cancelled with host idle. Peak client RSS was about 131 MiB; no production
+writes occurred. This proves service/native SQLite/VectorStore/TLS behavior, not the installed new UI.
+
+A subsequent storage-path audit corrected the earlier installed “complete-library snapshot” UI claim:
+`HiDock-Library-Benchmark-20261012` was configured with `dataPath=profile/data`, while file storage appends
+`/data/hidock.db`. Runtime therefore opened an empty nested database (0 recordings/0 vectors), despite a
+separate intact 3.24 GB copy containing 2,220 recordings/243,110 vectors. Its approximately 522–526 MiB
+resource samples and 0-document/30 ms semantic startup are **empty-database evidence only**. They do not
+prove complete-library startup or exclusion of old provider vectors. Independent explicit-path native
+130,404-vector restore/search benchmarks and isolated semantic maintenance tests remain valid. The corrected
+maintenance profile must have its actual runtime database path/counts verified before UI acceptance.
+Remaining release gates include installed maintenance UI verification, signing, a genuinely
+unsynced ≥48 MB recording through the normal device path alongside bounded processing, full CPU-only pipeline quality,
+complete-library integration, sustained resource/latency and recovery tests, and complete accessibility QA.
+The user's request to avoid further audio/transcript review deliveries remains in effect. No acceptance
+criterion is waived because a source test, isolated UI, installer build or short synthetic model call passed.
+
+
+
+
+

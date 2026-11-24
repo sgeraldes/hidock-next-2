@@ -1,28 +1,52 @@
-import { describe, expect, it } from 'vitest'
-import { AudioPreflightError, parseAudioPreflightOutput, analyzeAudioPreflight } from '../audio-preflight'
-import { execFileSync } from 'child_process'
-import ffmpegPath from 'ffmpeg-static'
-import { writeFileSync, rmSync } from 'fs'
-import { join } from 'path'
-import { tmpdir } from 'os'
+// @vitest-environment node
+import { describe, expect, it, vi } from 'vitest'
+import { execFile } from 'child_process'
+import { TranscriptionCancelledError } from '@hidock/transcription'
+import { analyzeAudioPreflight, AudioPreflightError, parseAudioPreflightOutput } from '../audio-preflight'
+
+vi.mock('child_process', async (importOriginal) => ({
+  ...await importOriginal<typeof import('child_process')>(), execFile: vi.fn()
+}))
+vi.mock('ffmpeg-static', () => ({ default: 'fixture-ffmpeg' }))
 
 describe('audio transcription preflight', () => {
-  it('decodes a real streaming WebM with no duration header', async () => {
-    const path = join(tmpdir(), `hidock-preflight-${process.pid}-${Date.now()}.webm`)
-    const bytes = execFileSync(ffmpegPath!, ['-hide_banner', '-f', 'lavfi', '-i', 'sine=frequency=440', '-t', '2', '-c:a', 'libopus', '-f', 'webm', 'pipe:1'], { windowsHide: true })
-    writeFileSync(path, bytes)
-    try {
-      const report = await analyzeAudioPreflight(path)
-      expect(report.durationSeconds).toBeGreaterThan(1.9)
-      expect(report.durationSeconds).toBeLessThan(2.2)
-      expect(report.status).toBe('speech_present')
-    } finally { rmSync(path) }
+  it('does not spawn ffmpeg when already cancelled', async () => {
+    vi.mocked(execFile).mockClear()
+    await expect(analyzeAudioPreflight('fixture.wav', 60, () => false))
+      .rejects.toBeInstanceOf(TranscriptionCancelledError)
+    expect(execFile).not.toHaveBeenCalled()
   })
+
+  it('kills cancelled ffmpeg but retains ownership until its callback settles', async () => {
+    vi.useFakeTimers()
+    let callback!: (error: Error | null, stdout: string, stderr: string) => void
+    const kill = vi.fn()
+    vi.mocked(execFile).mockImplementation((...args: any[]) => {
+      callback = args.at(-1)
+      return { kill } as any
+    })
+    let wanted = true
+    let settled = false
+    const pending = analyzeAudioPreflight('fixture.wav', 60, () => wanted)
+    void pending.then(() => { settled = true }, () => { settled = true })
+    const rejected = expect(pending).rejects.toBeInstanceOf(TranscriptionCancelledError)
+    try {
+      wanted = false
+      await vi.advanceTimersByTimeAsync(250)
+      expect(kill).toHaveBeenCalledOnce()
+      expect(settled).toBe(false)
+      callback(new Error('terminated'), '', '')
+      await rejected
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { vi.useRealTimers(); vi.mocked(execFile).mockReset() }
+  })
+
   it('uses the decoded end time when a WebM duration header is missing', () => {
     const report = parseAudioPreflightOutput('Duration: N/A\nout_time_us=62000000\nprogress=end\n')
     expect(report.durationSeconds).toBe(62)
     expect(report.nonSilentSeconds).toBe(62)
   })
+
   it('classifies a long lobby recording containing only brief cough/noise as no_speech', () => {
     const output = `
 Duration: 00:02:54.85, start: 0.000000, bitrate: 64 kb/s

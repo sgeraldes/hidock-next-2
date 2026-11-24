@@ -27,6 +27,7 @@ import { consolidateVoiceIdentityForSpeaker } from '../services/voice-identity-c
 import { getVectorStore } from '../services/vector-store'
 import { exportMeetingWiki } from '../services/meeting-wiki'
 import { syncTrustVerdicts } from '../services/transcript-trust'
+import { retrySummary } from '../services/transcription'
 import { success, error, Result } from '../types/api'
 import { UUIDSchema } from '../validation/common'
 
@@ -105,6 +106,31 @@ const UpdateTranscriptRequestSchema = z
 
 type EditableTranscriptSegment = z.infer<typeof EditableTranscriptSegmentSchema>
 
+const CHANNEL_PROVENANCE_KEYS = ['sourceChannel', 'channelRole', 'channelProvenance'] as const
+
+/** The reader edits one line in place. Never accept source evidence from the renderer. */
+function preserveStoredChannelProvenance(
+  submitted: EditableTranscriptSegment[], stored: unknown[] | null, expected: unknown[] | null | undefined
+): EditableTranscriptSegment[] {
+  const rows = (stored ?? []).map(row => row && typeof row === 'object' ? row as Record<string, unknown> : {})
+  if (!rows.some(row => CHANNEL_PROVENANCE_KEYS.some(key => Object.hasOwn(row, key)))) return submitted
+  if (!expected || rows.length !== submitted.length) throw new Error('CHANNEL_EDIT_AMBIGUOUS')
+  let changed = 0
+  for (let index = 0; index < rows.length; index++) {
+    const prior = EditableTranscriptSegmentSchema.safeParse(rows[index])
+    if (!prior.success) throw new Error('CHANNEL_EDIT_AMBIGUOUS')
+    if (JSON.stringify(prior.data) !== JSON.stringify(submitted[index])) changed++
+  }
+  // Without persistent segment IDs, multi-line replacement/reordering has no
+  // trustworthy source-to-row mapping. The existing editor changes one index.
+  if (changed > 1) throw new Error('CHANNEL_EDIT_AMBIGUOUS')
+  return submitted.map((segment, index) => ({
+    ...segment,
+    ...Object.fromEntries(CHANNEL_PROVENANCE_KEYS.filter(key => Object.hasOwn(rows[index], key))
+      .map(key => [key, rows[index][key]]))
+  }))
+}
+
 /** The stored segments as the reader parses them: a non-empty array, or null. */
 function storedSegmentsOf(speakers: string | null): unknown[] | null {
   if (!speakers) return null
@@ -152,11 +178,24 @@ async function indexCorrectedTranscript(recordingId: string, fullText: string): 
     shouldGenerate: () => isRecordingEligible(recordingId),
     shouldPersist: () => isRecordingEligible(recordingId)
   })
-  if (indexedChunks < 1) throw new Error('No search chunks were generated')
   return indexedChunks
 }
 
 export function registerTranscriptsHandlers(): void {
+  // The owner's "Generate summary": the missing summary, title and meeting
+  // choice now, through the same brains and order, without the automatic
+  // retry's wait or weekly cap (28-oct-2026).
+  ipcMain.handle('transcripts:retrySummary', async (_, request: unknown): Promise<Result<{ written: boolean }>> => {
+    const parsed = GetSpeakerMapRequestSchema.safeParse(request)
+    if (!parsed.success) return error('VALIDATION_ERROR', 'Invalid summary retry request', parsed.error.format())
+    try {
+      if (!isRecordingEligible(parsed.data.recordingId)) return error('NOT_FOUND', 'Recording is not available for a summary')
+      return success({ written: await retrySummary(parsed.data.recordingId) })
+    } catch (err) {
+      return error('INTERNAL_ERROR', err instanceof Error ? err.message : 'Summary retry failed', err)
+    }
+  })
+
   ipcMain.handle('transcripts:getProcessingRuns', async (_, request: unknown) => {
     const parsed = GetSpeakerMapRequestSchema.safeParse(request)
     if (!parsed.success) return error('VALIDATION_ERROR', 'Invalid processing-runs request', parsed.error.format())
@@ -261,6 +300,7 @@ export function registerTranscriptsHandlers(): void {
 
         const fullText = canonicalTranscriptText(parsed.data.segments)
         const wordCount = fullText.split(/\s+/u).filter(Boolean).length
+        let savedSegments = parsed.data.segments
         const vectorStore = getVectorStore()
         vectorStore.ensureSchema()
 
@@ -279,9 +319,12 @@ export function registerTranscriptsHandlers(): void {
             throw new Error('TRANSCRIPT_CHANGED')
           }
 
+          savedSegments = preserveStoredChannelProvenance(
+            parsed.data.segments, storedSegmentsOf(current.speakers), parsed.data.expectedSegments
+          )
           runNoSave(
             'UPDATE transcripts SET full_text = ?, speakers = ?, word_count = ? WHERE recording_id = ?',
-            [fullText, JSON.stringify(parsed.data.segments), wordCount, recordingId]
+            [fullText, JSON.stringify(savedSegments), wordCount, recordingId]
           )
           runNoSave('DELETE FROM vector_embeddings WHERE recording_id = ?', [recordingId])
         })
@@ -319,7 +362,7 @@ export function registerTranscriptsHandlers(): void {
 
         return success({
           fullText,
-          segments: parsed.data.segments,
+          segments: savedSegments,
           wordCount,
           indexedChunks,
           ragStatus,
@@ -328,6 +371,9 @@ export function registerTranscriptsHandlers(): void {
         })
       } catch (err) {
         const message = safeErrorMessage(err)
+        if (message === 'CHANNEL_EDIT_AMBIGUOUS') {
+          return error('VALIDATION_ERROR', 'Channel transcript edits must change one existing line without adding, removing or reordering lines. Reload and edit one line at a time.')
+        }
         if (message === 'TRANSCRIPT_CHANGED') {
           return error('RETRYABLE_ERROR', 'The transcript changed while you were editing. Reload it and try again.')
         }
@@ -357,7 +403,7 @@ export function registerTranscriptsHandlers(): void {
         )
         if (!transcript?.full_text.trim()) return error('NOT_FOUND', 'Transcript not found')
 
-        await getVectorStore().deleteByRecording(recordingId)
+        // Replace changed chunks only after their new vectors exist; preserve other providers.
         const indexedChunks = await indexCorrectedTranscript(recordingId, transcript.full_text)
         return success({ indexedChunks })
       } catch (err) {

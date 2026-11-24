@@ -84,7 +84,7 @@ async function openDatabaseForReading(): Promise<void> {
       },
       upgrade: async (onProgress) => {
         try {
-          await initializeDatabase({ onProgress })
+          await initializeDatabase({ onProgress, appVersion: app.getVersion() })
         } finally {
           closeDatabase()
         }

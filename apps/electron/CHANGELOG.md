@@ -2,6 +2,28 @@
 
 Each entry is one day of merged work. The Releases page in Settings reads this file.
 
+Device reference: [model/version gates, recordings and native markers](../../docs/devices/README.md). The 11 October firmware documentation describes offline research and local tooling, not an additional merged device-firmware feature. Older release entries retain their dated scope.
+
+## 2026-11-24 | Operations say what they are doing, and Stop works
+
+- Operations and Notifications show the current transcription step, progress and elapsed time, with Stop, Retry and queue ordering actions. Recording dates and operation times are clearly separated, and View source opens the transcript or processing status.
+- Stopping transcription aborts provider requests and local workers, keeps a cancellation reason, and discards unfinished transcript output. Stop after the transcript is saved reads Finish processing and keeps the transcript.
+- Audio checks decode WebM recordings that have no duration header before deciding whether they can be transcribed.
+- Library backfills read transcript text only when needed and yield between committed batches. Fresh search vectors use compact memory storage. Operations errors stay contained, including during development reloads.
+- Graph updates skip recordings already processed or excluded before loading transcript text, and yield between batches so the app stays responsive while transcriptions run.
+
+## 2026-11-24 | Device recordings stay put
+
+- Recordings the device may still hold are no longer removed at startup or when the device disconnects, so they stop disappearing and coming back with new ids. Their titles, ratings and meeting links stay with them.
+- A device recording that is already in the Library as a downloaded .wav shows once, as that .wav with its transcript, title and validity, also when the computer's time zone differs from the device clock's.
+- Cancelling a recovered remote transcription sends one cancel request to the Model Host and waits for it to confirm.
+- Every deletion now records who asked for it: the owner, the app itself or a sync, the feature that asked (for example Move to Trash in the Library or a split), and the app version. Deletions from before this update show nothing there.
+- Every update of the library's structure leaves a dated record of the versions it moved between, the app version, and the backup made before it. An app built with an outdated database engine refuses to update the library and says how to fix it, and the app no longer starts or builds when one of its own packages is older than its source.
+
+## 2026-11-22 | Find inside a transcript
+
+- Press Ctrl+F in an open source to find words and phrases in its transcript, speaker names, summary, and actions and decisions. Accents and case are ignored, every match is highlighted, and Enter or F3 moves between them. Click a match's time, or press Alt+Enter, to move the audio there without starting playback. Esc closes the bar. With no source open, Ctrl+F goes to the Library search.
+
 ## 2026-10-04 | The gamestation only helps, and gets out of the way
 
 - Paste files, screenshots, text and links into Library from anywhere outside an editor, or use the header's New menu to paste, import a file or start a note; videos keep their original file and link to extracted audio for transcription.
@@ -11,11 +33,10 @@ pairs with it, gives it the Hugging Face token and decides when it steps aside.
 
 ### Changes
 
-- Operations and Notifications show the current transcription step, progress and elapsed time, with Stop, Retry and queue ordering actions. Recording dates and operation times are clearly separated, and View source opens the transcript or processing status.
-- Stopping transcription aborts provider requests and local workers, keeps a cancellation reason, and discards unfinished transcript output.
-- Audio checks decode WebM recordings that have no duration header before deciding whether they can be transcribed.
-- Library backfills read transcript text only when needed and yield between committed batches. Fresh search vectors use compact memory storage. Operations errors stay contained, including during development reloads.
-- Graph updates skip recordings already processed or excluded before loading transcript text, and yield between batches so background work stays responsive.
+- **Record meetings on your PC.** New > Record opens a bar that stays across pages, with separate
+  microphone and system levels. Stereo WebM keeps mic on the left and system audio on the right;
+  saved and recovered recordings enter the Library through the file-import path.
+
 - **Listen while labeling.** Reference labels include the original local audio with play/pause,
   seeking, 15-second jumps and a Space shortcut; unavailable audio never blocks labeling.
   A clear Library-category question now includes calendar title and attendees, recording date,

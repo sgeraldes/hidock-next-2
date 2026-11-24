@@ -93,7 +93,7 @@ export function RecordingSection() {
         <Row
           id="recordingAutoTranscribe"
           label="Transcribe new recordings automatically"
-          detail="Also on Transcription > Pipeline and the Device page."
+          detail="Off applies to new recordings. Existing queued work and retries continue; set Transcription retries to 0 in Quality checks to disable automatic retries. Also on Transcription > Pipeline and the Device page."
           checked={config?.transcription?.autoTranscribe !== false}
           onChange={(on) => save('transcription', { autoTranscribe: on }, 'automatic transcription')}
         />

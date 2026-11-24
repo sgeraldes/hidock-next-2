@@ -1,11 +1,12 @@
 /// <reference types="vite/client" />
 
 interface AudioControls {
-  play: (recordingId: string, filePath: string, startTimeSec?: number) => Promise<void>
+  play: (recordingId: string, filePath: string, startTimeSec?: number, autoPlay?: boolean) => Promise<void>
   pause: () => void
   resume: () => void
   stop: () => void
   seek: (time: number) => void
+  setChannelMuted?: (recordingId: string, channel: number, muted: boolean) => void
   setPlaybackRate: (rate: number) => void
   loadWaveformOnly: (recordingId: string, filePath: string) => void
 }

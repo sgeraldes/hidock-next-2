@@ -193,7 +193,7 @@ class DomainEventBus extends EventEmitter {
   /**
    * Set the main window for broadcasting events to renderer
    */
-  setMainWindow(window: BrowserWindow): void {
+  setMainWindow(window: BrowserWindow | null): void {
     this.mainWindow = window
   }
 
@@ -282,6 +282,6 @@ export function getEventBus(): DomainEventBus {
   return eventBusInstance
 }
 
-export function setMainWindowForEventBus(window: BrowserWindow): void {
+export function setMainWindowForEventBus(window: BrowserWindow | null): void {
   getEventBus().setMainWindow(window)
 }

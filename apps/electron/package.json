@@ -9,7 +9,9 @@
     "node": ">=22.12"
   },
   "scripts": {
+    "predev": "node scripts/dev/check-workspace-packages.mjs",
     "dev": "electron-vite dev",
+    "prebuild": "node scripts/dev/check-workspace-packages.mjs",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "postinstall": "electron-builder install-app-deps",
@@ -78,6 +80,7 @@
     "tailwind-merge": "^2.5.4",
     "usb": "^2.17.0",
     "uuid": "^11.0.3",
+    "ws": "8.22.0",
     "zod": "^4.1.13",
     "zustand": "^5.0.1"
   },

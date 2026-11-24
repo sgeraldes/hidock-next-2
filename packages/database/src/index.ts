@@ -16,6 +16,7 @@ export {
   parseDestructiveStatement,
   MassDeleteError,
   SchemaBehindError,
+  ENGINE_SAFETY_VERSION,
 } from './engine.js'
 export type {
   DatabaseEngineConfig,
@@ -29,4 +30,8 @@ export type {
   BetterSqlite3Statement,
   BootProgress,
   ExternalBackup,
+  DatabaseBackupRequest,
+  DatabaseBackupProgress,
+  DatabaseBackupExecutorOptions,
+  DatabaseBackupExecutor,
 } from './engine.js'
