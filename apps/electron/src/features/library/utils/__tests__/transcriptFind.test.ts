@@ -25,15 +25,20 @@ describe('reader find index', () => {
     // The budget is per keystroke in a running app. The first large search in a
     // process compiles the match loop and grows the heap: 18 ms here, 74 ms on
     // the CI runner, while the same "r" (45,000 matches) then takes 2.5 ms.
-    // Warm up on this index with letters outside the measured queries.
+    // Warm up on this index with letters outside the measured queries. The
+    // first (cold) search keeps a loose bound so a regression there still fails.
     const index = buildFindIndex(makeDocuments(3000))
-    for (const letter of ['e', 'a', 'o']) searchFindIndex(index, letter)
+    const coldStart = performance.now()
+    searchFindIndex(index, 'e')
+    const coldMs = performance.now() - coldStart
+    for (const letter of ['a', 'o']) searchFindIndex(index, letter)
     const times = ['r', 're', 'reu', 'reun', 'reuni', 'reunion'].map(query => {
       const start = performance.now()
       expect(searchFindIndex(index, query).length).toBeGreaterThan(0)
       return performance.now() - start
     })
-    console.log('Find 3000 segments keystroke ms:', times)
+    console.log('Find 3000 segments cold ms:', coldMs, 'keystroke ms:', times)
+    expect(coldMs).toBeLessThan(250)
     expect(Math.max(...times)).toBeLessThan(50)
   })
 })

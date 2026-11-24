@@ -75,7 +75,7 @@ describe('Standalone recording transcript find', () => {
     expect(screen.getByText('Sebastián', { selector: 'mark' })).toHaveAttribute('data-find-current', 'true')
     await waitFor(() => expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalled())
   })
-  it('keeps immediate input handling below 50ms on 3,000 segments', async () => {
+  it('handles input under 50ms and counts every match on 3,000 segments', async () => {
     // The app virtualizes long transcripts; jsdom has no ResizeObserver, which
     // left all 3,000 turns rendered and took the test past its timeout on CI.
     vi.stubGlobal('ResizeObserver', class { observe = vi.fn(); unobserve = vi.fn(); disconnect = vi.fn() })
