@@ -30,6 +30,9 @@
 import { isPcRecordingFilename } from '@/shared/pc-recording'
 import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useReaderFind, ReaderFindBar, FindText, type ReaderFindSession } from './ReaderFind'
+import { fromStoredSegments, parseTranscriptSegments } from '../utils/transcriptSegments'
+import type { FindDocument } from '../utils/transcriptFind'
 import { TranscriptViewer, type StoredSegment, type TranscriptContentUpdate } from './TranscriptViewer'
 import { TranscriptIntegrityPanel } from './TranscriptIntegrityPanel'
 import type { LineIssueCode } from '@/shared/transcript-line-issues'
@@ -50,7 +53,7 @@ import { DeviceRecordingMarkers, DeviceRecordingTrackExport } from '@/components
 import { HiddenReaderSections, ReaderSectionActions } from './ReaderSectionControls'
 import { ReaderSection } from './ReaderSection'
 import { SpeakerLaneTimeline } from './SpeakerLaneTimeline'
-import { TimelineEventList } from './TimelineEventList'
+import { TimelineEventList, timelineEventText } from './TimelineEventList'
 import { useStickySectionPins } from '../hooks/useStickySectionPins'
 import { useUIStore } from '@/store/useUIStore'
 import { useLibraryStore, type ReaderSectionId, type ReaderSectionMode, type ReaderSectionModes } from '@/store/useLibraryStore'
@@ -305,6 +308,8 @@ interface SourceReaderProps {
   onPlay?: () => void
   onStop?: () => void
   onSeek?: (startMs: number, endMs?: number) => void
+  onFindSeek?: (startMs: number) => void
+  findSession?: React.MutableRefObject<ReaderFindSession>
   // Action button callbacks
   onDownload?: () => void
   onTranscribe?: () => void
@@ -344,6 +349,8 @@ export function SourceReader({
   onPlay,
   onStop,
   onSeek,
+  onFindSeek,
+  findSession,
   onDownload,
   onTranscribe,
   // onReprocessVibeVoice is intentionally not consumed: the raw "VibeVoice"
@@ -1287,6 +1294,59 @@ export function SourceReader({
     setReaderSectionMode(section, mode)
   }, [closeSplitMode, setReaderSectionMode, splitMode])
 
+  const resolveFindSpeaker = people.resolveRangeKey
+  // The transcript viewer publishes its documents with speaker names resolved
+  // (assignments, splits). They are kept with the source they came from: an
+  // effect that cleared them on a source change ran after the child's publish
+  // (child effects run first) and threw the fresh documents away.
+  const findSourceFullText = effectiveTranscript?.full_text
+  const findSourceSpeakers = effectiveTranscript?.speakers
+  const [publishedFind, setPublishedFind] = useState<{ recordingId?: string; fullText?: string | null; speakers?: unknown; documents: FindDocument[] } | null>(null)
+  const publishFindDocuments = useCallback((documents: FindDocument[]) => {
+    setPublishedFind({ recordingId, fullText: findSourceFullText, speakers: findSourceSpeakers, documents })
+  }, [recordingId, findSourceFullText, findSourceSpeakers])
+  const resolvedFindDocuments = publishedFind && publishedFind.recordingId === recordingId && publishedFind.fullText === findSourceFullText && publishedFind.speakers === findSourceSpeakers
+    ? publishedFind.documents
+    : null
+  // A builder, called only while the find bar is open.
+  const buildFindDocuments = useCallback((): FindDocument[] => {
+    const parsed = transcriptSegments?.length ? null : parseTranscriptSegments(effectiveTranscript?.full_text ?? '')
+    const segments = parsed ? parsed.segments : fromStoredSegments(transcriptSegments ?? [])
+    // A transcript without timestamps parses every turn at 0: no time to show or seek.
+    const timed = parsed ? parsed.hasTimestamps : segments.some(segment => segment.startMs > 0)
+    const summary = trustedSummary(effectiveTranscript, recording?.audioCategory)
+    return [
+      ...(summary ? [{ key: 'summary', section: 'summary' as const, text: summary }] : []),
+      // Same order as the Actions & decisions list. Events spread over the
+      // duration as a fallback have estimated positions: no time to show or seek.
+      ...[...timelineEvents].sort((x, y) => x.timeSec - y.timeSec || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0)).flatMap(event => {
+        const detail = eventDetails[event.refId ?? event.id]
+        const timeMs = (timeline?.events?.length ?? 0) > 0 ? Math.round(event.timeSec * 1000) : undefined
+        return [
+          { key: `event:${event.id}`, section: 'moments' as const, text: timelineEventText(event, detail), timeMs },
+          ...(['context', 'assignee', 'dueDate', 'status'] as const).flatMap(field => detail?.[field] ? [{ key: `event:${event.id}:${field}`, section: 'moments' as const, text: field === 'status' ? detail[field]!.replace('_', ' ') : detail[field]!, timeMs }] : [])
+        ]
+      }),
+      ...(resolvedFindDocuments ?? segments.flatMap((segment, i) => [
+        ...(segment.speaker ? [{ key: `speaker:${i}`, section: 'transcript' as const, text: resolveFindSpeaker(segment.speaker, i)?.name ?? segment.speaker, timeMs: timed ? segment.startMs : undefined }] : []),
+        { key: `turn:${i}`, section: 'transcript' as const, text: segment.text, timeMs: timed ? segment.startMs : undefined }
+      ]))
+    ]
+  }, [effectiveTranscript, recording?.audioCategory, transcriptSegments, timelineEvents, timeline?.events, eventDetails, resolvedFindDocuments, resolveFindSpeaker])
+  // With the split editor open, a find seek also moves the split point, as any
+  // other reader seek does through handleReaderSeek.
+  const findSeek = useCallback((startMs: number) => {
+    if (!onFindSeek) return handleReaderSeek(startMs)
+    if (splitMode) setSplitPointSec(startMs / 1000)
+    onFindSeek(startMs)
+  }, [onFindSeek, handleReaderSeek, splitMode])
+  const find = useReaderFind({ sourceId: recordingId, documents: buildFindDocuments, onSeek: findSeek, session: findSession,
+    onReveal: match => {
+      if (maximizedSection && maximizedSection !== match.section) restoreMaximizedSection()
+      if (readerSectionModes[match.section] !== 'expanded') setReaderSectionMode(match.section, 'expanded')
+    }
+  })
+
   if (!recording) {
     return (
       <div className="flex items-center justify-center h-full text-muted-foreground">
@@ -1444,7 +1504,8 @@ export function SourceReader({
     }))
 
   return (
-    <div className="@container flex flex-col h-full overflow-hidden">
+    <div data-reader-find ref={find.rootRef} className="@container flex flex-col h-full overflow-hidden">
+      <ReaderFindBar find={find} />
       <HiddenReaderSections
         hidden={hiddenReaderSections}
         onRestore={(section) => changeSectionMode(section, 'expanded')}
@@ -1886,7 +1947,7 @@ export function SourceReader({
           {dockedSections.summary && summaryText && (
             <div className="border-t px-4 py-1" data-testid="dock-summary">
               <p className="mb-0.5 text-xs font-semibold text-foreground">Summary</p>
-              <p className="w-full whitespace-pre-wrap pb-1 text-xs leading-snug text-foreground" data-testid="dock-summary-text">{summaryText}</p>
+              <p className="w-full whitespace-pre-wrap pb-1 text-xs leading-snug text-foreground" data-testid="dock-summary-text">{summaryShown ? <FindText find={find} documentKey="summary" text={summaryShown} marksCurrent={false} /> : summaryText}</p>
             </div>
           )}
         </div>
@@ -2009,6 +2070,7 @@ export function SourceReader({
             sentinelRef={pins.sentinelRef('moments')}
           >
             <TimelineEventList
+              find={find}
               events={orderedEvents}
               eventDetails={eventDetails}
               onEventUpdate={handleEventUpdate}
@@ -2110,7 +2172,7 @@ export function SourceReader({
                   >
                     <div className="w-full text-sm leading-relaxed text-foreground" data-testid="reader-summary-text">
                       {summaryShown
-                        ? <p className="w-full whitespace-pre-wrap">{summaryShown}</p>
+                        ? <p className="w-full whitespace-pre-wrap"><FindText find={find} documentKey="summary" text={summaryShown} /></p>
                         : <p className="w-full text-muted-foreground">{summaryNote}</p>}
                     </div>
                   </ReaderSection>
@@ -2151,6 +2213,8 @@ export function SourceReader({
                           />
                         )}
                         <TranscriptViewer
+                          find={find}
+                          onFindDocuments={publishFindDocuments}
                           transcript={effectiveTranscript.full_text}
                           segments={transcriptSegments}
                           recordingId={recording.id}
@@ -2854,8 +2918,9 @@ function DockPlayerControls({
         audio.pause()
         onStop?.()
       } else {
+        // Loaded and paused (a find seek leaves it so): resume where it stands.
+        // onPlay starts playback from the top, which reloaded the file at 0.
         audio.resume()
-        onPlay?.()
       }
     } else if (filePath) {
       void audio.play(recordingId, filePath)

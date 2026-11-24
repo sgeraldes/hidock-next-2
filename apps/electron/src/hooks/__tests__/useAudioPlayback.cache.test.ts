@@ -128,6 +128,43 @@ describe('useAudioPlayback — main-process waveform cache', () => {
     unmount()
   })
 
+  it('loads and seeks a find result without starting playback', async () => {
+    const play = vi.fn().mockResolvedValue(undefined)
+    const audio = { play, pause: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(), load: vi.fn(), readyState: 4, currentTime: 0, duration: 125, src: '', playbackRate: 1 }
+    vi.stubGlobal('Audio', class { constructor() { return audio } })
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:find')
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined)
+    readRecording.mockResolvedValue({ success: true, data: btoa('audio-bytes') })
+    getCache.mockResolvedValue(waveformEntry({ duration: 125 }))
+    const { unmount } = renderHook(() => useAudioPlayback())
+    await act(async () => { await window.__audioControls!.play('find-rec', '/x/find.wav', 30, false) })
+    expect(audio.currentTime).toBe(30)
+    expect(play).not.toHaveBeenCalled()
+    expect(useUIStore.getState().isPlaying).toBe(false)
+    unmount()
+  })
+  it('applies the latest seek made while the recording is still loading', async () => {
+    const audio = { play: vi.fn().mockResolvedValue(undefined), pause: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(), load: vi.fn(), readyState: 4, currentTime: 0, duration: 125, src: '', playbackRate: 1 }
+    vi.stubGlobal('Audio', class { constructor() { return audio } })
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:pending-seek')
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined)
+    getCache.mockResolvedValue(waveformEntry({ duration: 125 }))
+    let finishRead!: (value: { success: boolean; data: string }) => void
+    readRecording.mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve }))
+    const { unmount } = renderHook(() => useAudioPlayback())
+    await act(async () => {
+      const pending = window.__audioControls!.play('find-rec', '/x/find.wav', 30, false)
+      await vi.waitFor(() => expect(finishRead).toBeTypeOf('function'))
+      window.__audioControls!.seek(50)
+      window.__audioControls!.seek(78)
+      finishRead({ success: true, data: btoa('audio-bytes') })
+      await pending
+    })
+    expect(audio.currentTime).toBe(78)
+    expect(audio.play).not.toHaveBeenCalled()
+    unmount()
+  })
+
   it('does not start playback after Stop while its audio read is pending', async () => {
     let finishRead!: (value: { success: boolean; data: string }) => void
     readRecording.mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve }))

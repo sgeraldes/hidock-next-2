@@ -15,19 +15,20 @@ vi.mock('@/store/useUIStore', () => ({
   }),
 }))
 
-// Mock audio controls
+// Mock audio controls (one shared object so a test can read the calls)
+const audioControlsMock = vi.hoisted(() => ({
+  play: vi.fn(),
+  pause: vi.fn(),
+  resume: vi.fn(),
+  stop: vi.fn(),
+  seek: vi.fn(),
+  setPlaybackRate: vi.fn(),
+  isPlaying: false,
+  currentTime: 0,
+  duration: 0,
+}))
 vi.mock('@/components/OperationController', () => ({
-  useAudioControls: vi.fn(() => ({
-    play: vi.fn(),
-    pause: vi.fn(),
-    resume: vi.fn(),
-    stop: vi.fn(),
-    seek: vi.fn(),
-    setPlaybackRate: vi.fn(),
-    isPlaying: false,
-    currentTime: 0,
-    duration: 0,
-  })),
+  useAudioControls: vi.fn(() => audioControlsMock),
 }))
 
 // Mock toast
@@ -525,5 +526,26 @@ describe('MeetingDetail', () => {
       // The structured turns are used, not the plain full_text blob.
       expect(screen.queryByText('ignored plain text')).not.toBeInTheDocument()
     })
-  })
+
+    it('keeps a turn time click as a seek and loads paused only for the find bar seek', async () => {
+      mockGetDetails.mockResolvedValue({
+        ...validMeetingDetails,
+        recordings: [recordingWithTranscript],
+      })
+      mockGetByMeeting.mockResolvedValue([])
+
+      renderMeetingDetail('m1')
+      await screen.findByRole('button', { name: /Assign speaker Speaker 1/i })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Jump to 0:03' }))
+      expect(audioControlsMock.seek).toHaveBeenCalledWith(3)
+      expect(audioControlsMock.play).not.toHaveBeenCalled()
+
+      fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+      const input = screen.getByLabelText('Find in transcript')
+      fireEvent.change(input, { target: { value: 'buenos dias' } })
+      await waitFor(() => expect(screen.getByRole('status', { name: '' })).toHaveTextContent('1 of 2'))
+      fireEvent.keyDown(input, { key: 'Enter', altKey: true })
+      expect(audioControlsMock.play).toHaveBeenCalledWith('r1', '/path/to/file.wav', 3, false)
+    })  })
 })

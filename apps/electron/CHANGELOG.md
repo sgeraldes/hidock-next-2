@@ -4,6 +4,10 @@ Each entry is one day of merged work. The Releases page in Settings reads this f
 
 Device reference: [model/version gates, recordings and native markers](../../docs/devices/README.md). The 11 October firmware documentation describes offline research and local tooling, not an additional merged device-firmware feature. Older release entries retain their dated scope.
 
+## 2026-11-22 | Find inside a transcript
+
+- Press Ctrl+F in an open source to find words and phrases in its transcript, speaker names, summary, and actions and decisions. Accents and case are ignored, every match is highlighted, and Enter or F3 moves between them. Click a match's time, or press Alt+Enter, to move the audio there without starting playback. Esc closes the bar. With no source open, Ctrl+F goes to the Library search.
+
 ## 2026-10-04 | The gamestation only helps, and gets out of the way
 
 - Paste files, screenshots, text and links into Library from anywhere outside an editor, or use the header's New menu to paste, import a file or start a note; videos keep their original file and link to extracted audio for transcription.

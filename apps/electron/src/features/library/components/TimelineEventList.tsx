@@ -19,7 +19,8 @@
  * Spec: docs/superpowers/specs/2026-09-22-reader-sticky-sections-design.md
  */
 
-import { useEffect, useState, useMemo } from 'react'
+import { FindText, type ReaderFindState } from './ReaderFind'
+import { useEffect, useRef, useState, useMemo } from 'react'
 import { ChevronDown, Pencil, CircleCheck, CircleDashed } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { BusyIcon } from '@/components/ui/working'
@@ -30,7 +31,13 @@ import { cn } from '@/lib/utils'
 import { EVENT_KIND_COLOR, EVENT_KIND_ICON } from '../utils/timelineEventKinds'
 import type { TimelineEvent, TimelineEventDetail, TimelineEventPatch } from './WaveformPlayer'
 
+/** The text a row shows, which is also the text find searches. */
+export function timelineEventText(event: TimelineEvent, detail?: TimelineEventDetail): string {
+  return detail?.fullText ?? (event.label || `${event.kind ?? 'note'} at ${formatTimestamp(event.timeSec)}`)
+}
+
 interface TimelineEventListProps {
+  find?: ReaderFindState
   events: TimelineEvent[]
   eventDetails?: Record<string, TimelineEventDetail>
   onEventUpdate?: (event: TimelineEvent, patch: TimelineEventPatch) => Promise<boolean>
@@ -51,6 +58,7 @@ interface TimelineEventListProps {
 
 export function TimelineEventList({
   events,
+  find,
   eventDetails,
   onEventUpdate,
   activeEventId = null,
@@ -77,6 +85,21 @@ export function TimelineEventList({
     setEditingEventId(null)
   }, [recordingId])
 
+  // A new match expands its row once. The effect keys on the match's id and
+  // reads events through a ref: the parent passes a new events array on every
+  // render and the index can rebuild, and neither may reopen a row the user
+  // has since closed.
+  const currentMomentKey = find?.current?.section === 'moments' ? find.current.key : undefined
+  const currentMatchId = find?.current?.section === 'moments' ? find.current.id : undefined
+  const eventsRef = useRef(events)
+  eventsRef.current = events
+  useEffect(() => {
+    if (!currentMomentKey) return
+    const event = eventsRef.current.find(event => currentMomentKey === `event:${event.id}` || currentMomentKey.startsWith(`event:${event.id}:`))
+    if (event) setExpandedEventId(event.id)
+    // currentMatchId distinguishes two matches in the same document.
+  }, [currentMomentKey, currentMatchId])
+
   if (events.length === 0) {
     return (
       <p className="py-2 text-sm text-muted-foreground" data-testid="timeline-events-empty">
@@ -94,7 +117,7 @@ export function TimelineEventList({
             const Icon = EVENT_KIND_ICON[kind]
             const isActive = activeEventId === m.id
             const detail = eventDetails?.[m.refId ?? m.id]
-            const displayText = detail?.fullText ?? (m.label || `${kind} at ${formatTimestamp(m.timeSec)}`)
+            const displayText = timelineEventText(m, detail)
             const isExpanded = expandedEventId === m.id
             const isEditing = editingEventId === m.id
             const isCompleted = detail?.status === 'completed'
@@ -182,7 +205,7 @@ export function TimelineEventList({
                                 isCompleted && 'line-through text-muted-foreground'
                               )}
                             >
-                              {displayText}
+                              <FindText find={find} documentKey={`event:${m.id}`} text={displayText} />
                             </span>
                           </TooltipTrigger>
                           <TooltipContent side="top" align="start" className="max-w-md">
@@ -217,14 +240,14 @@ export function TimelineEventList({
                       {detail?.context && (
                         <p className="whitespace-pre-wrap text-muted-foreground">
                           <span className="font-medium text-foreground">Context: </span>
-                          {detail.context}
+                          <FindText find={find} documentKey={`event:${m.id}:context`} text={detail.context} />
                         </p>
                       )}
                       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground">
                         <span className="font-medium text-foreground capitalize">{kind}</span>
-                        {detail?.status && <span>Status: <span className="capitalize">{detail.status.replace('_', ' ')}</span></span>}
-                        {detail?.assignee && <span>Assignee: {detail.assignee}</span>}
-                        {detail?.dueDate && <span>Due: {detail.dueDate}</span>}
+                        {detail?.status && <span>Status: <span className="capitalize"><FindText find={find} documentKey={`event:${m.id}:status`} text={detail.status.replace('_', ' ')} /></span></span>}
+                        {detail?.assignee && <span>Assignee: <FindText find={find} documentKey={`event:${m.id}:assignee`} text={detail.assignee} /></span>}
+                        {detail?.dueDate && <span>Due: <FindText find={find} documentKey={`event:${m.id}:dueDate`} text={detail.dueDate} /></span>}
                         {detail?.priority && <span>Priority: <span className="capitalize">{detail.priority}</span></span>}
                         {!detail?.editable && <span className="italic">Read-only item</span>}
                       </div>
