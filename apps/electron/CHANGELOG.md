@@ -4,6 +4,12 @@ Each entry is one day of merged work. The Releases page in Settings reads this f
 
 Device reference: [model/version gates, recordings and native markers](../../docs/devices/README.md). The 11 October firmware documentation describes offline research and local tooling, not an additional merged device-firmware feature. Older release entries retain their dated scope.
 
+## 2026-11-24 | Device recordings stay put
+
+- Recordings the device may still hold are no longer removed at startup or when the device disconnects, so they stop disappearing and coming back with new ids. Their titles, ratings and meeting links stay with them.
+- A device recording that is already in the Library as a downloaded .wav shows once, as that .wav with its transcript, title and validity, also when the computer's time zone differs from the device clock's.
+- Cancelling a recovered remote transcription sends one cancel request to the Model Host and waits for it to confirm.
+
 ## 2026-11-22 | Find inside a transcript
 
 - Press Ctrl+F in an open source to find words and phrases in its transcript, speaker names, summary, and actions and decisions. Accents and case are ignored, every match is highlighted, and Enter or F3 moves between them. Click a match's time, or press Alt+Enter, to move the audio there without starting playback. Esc closes the bar. With no source open, Ctrl+F goes to the Library search.

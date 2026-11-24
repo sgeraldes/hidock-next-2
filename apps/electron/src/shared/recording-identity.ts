@@ -24,13 +24,33 @@ function stemTimestamp(name: string): string | undefined {
   return `${match[1]}-${String(month).padStart(2, '0')}-${match[3]}T${match[4]}:${match[5]}:${match[6]}`
 }
 
+const SECOND_MS = 1000
+const UTC_OFFSET_STEP_MS = 15 * 60 * SECOND_MS
+const MAX_UTC_OFFSET_MS = 14 * 60 * 60 * SECOND_MS
+
+/**
+ * The stem is the device's wall clock; date_recorded is usually the UTC instant.
+ * The device clock's zone is unknown and need not be the host's (the owner can
+ * travel, CI runs in UTC), so accept any real UTC offset: within 14 hours and a
+ * whole multiple of 15 minutes, to the second.
+ */
+function sameWallClock(recorded: string, timestamp: string): boolean {
+  const recordedMs = new Date(recorded).getTime()
+  const wallClockMs = Date.parse(`${timestamp}Z`)
+  if (!Number.isFinite(recordedMs) || !Number.isFinite(wallClockMs)) return false
+  const offset = wallClockMs - recordedMs
+  if (Math.abs(offset) > MAX_UTC_OFFSET_MS + SECOND_MS) return false
+  const remainder = ((offset % UTC_OFFSET_STEP_MS) + UTC_OFFSET_STEP_MS) % UTC_OFFSET_STEP_MS
+  return remainder <= SECOND_MS || UTC_OFFSET_STEP_MS - remainder <= SECOND_MS
+}
+
 function inferredVariant(row: RecordingIdentity, name: string): boolean {
   const timestamp = stemTimestamp(name)
   const recorded = row.date_recorded
   const dateMatches = !!timestamp && !!recorded && (
     recorded === timestamp.slice(0, 10)
     || recorded.slice(0, 19) === timestamp
-    || Math.abs(new Date(recorded).getTime() - new Date(timestamp).getTime()) <= 1000
+    || sameWallClock(recorded, timestamp)
   )
   return isHiDockIdentity(row) && dateMatches
     && [row.filename, row.original_filename ?? ''].some((alias) => recordingStem(alias) === recordingStem(name))

@@ -244,6 +244,29 @@ describe('remote startup observation', () => {
     expect(mocks.remove).toHaveBeenCalledOnce()
   })
 
+  it('sends one cancellation while the host still reports running, then settles on cancelled', async () => {
+    mocks.fetch.mockResolvedValueOnce(response({ id: 'job', audioHash: 'audio', status: 'running' }))
+      .mockResolvedValueOnce(response({}))
+      .mockResolvedValueOnce(response({ id: 'job', audioHash: 'audio', status: 'running' }))
+      .mockResolvedValueOnce(response({ id: 'job', audioHash: 'audio', status: 'running' }))
+      .mockResolvedValueOnce(response({ id: 'job', audioHash: 'audio', status: 'cancelled' }))
+    await recoverRemoteJobs(config, vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+    cancelRecoveredRemote('recording')
+    await vi.advanceTimersByTimeAsync(1500 * 3)
+
+    const methods = mocks.fetch.mock.calls.map(([url, init]) => `${init?.method ?? 'GET'} ${url}`)
+    expect(methods).toEqual([
+      'GET https://worker.example/v1/jobs/job',
+      'POST https://worker.example/v1/jobs/job/cancel',
+      'GET https://worker.example/v1/jobs/job',
+      'GET https://worker.example/v1/jobs/job',
+      'GET https://worker.example/v1/jobs/job'
+    ])
+    expect(mocks.fail).toHaveBeenCalledWith('run', expect.stringContaining('cancelled'), true)
+    expect(mocks.remove).toHaveBeenCalledOnce()
+  })
+
   it.each([409, 503, 'network failure'] as const)(
     'does not mark the remote job cancelled when the cancel request fails (%s)', async failure => {
       mocks.fetch.mockResolvedValueOnce(response({ id: 'job', audioHash: 'audio', status: 'running' }))

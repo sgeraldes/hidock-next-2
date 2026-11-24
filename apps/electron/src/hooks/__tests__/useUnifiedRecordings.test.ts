@@ -75,6 +75,54 @@ describe('buildRecordingMap location facts', () => {
     }
   })
 
+  // The live database (24-nov-2026) holds 16 of these pairs: an annotated local
+  // .wav and a phantom device-only .hda with the same stem, created later by the
+  // churn. date_recorded is the UTC instant; the stem is the device's wall clock.
+  it('projects and counts the annotated .wav for the 16 live .hda/.wav pairs in any host timezone', () => {
+    const pairs: Array<[stem: string, recordedUtc: string, doubtful: boolean]> = [
+      ['2026Jun01-115550-Rec39', '2026-06-01T14:55:50.000Z', false],
+      ['2026Jun01-135001-Rec41', '2026-06-01T16:50:01.000Z', true],
+      ['2026Jun02-010030-Rec44', '2026-06-02T04:00:30.000Z', false],
+      ['2026Jun02-140742-Rec47', '2026-06-02T17:07:42.000Z', false],
+      ['2026Jun05-105916-Rec76', '2026-06-05T13:59:16.000Z', true],
+      ['2026Jun05-112946-Rec77', '2026-06-05T14:29:46.000Z', false],
+      ['2026Jun05-223227-Rec89', '2026-06-06T01:32:27.000Z', false],
+      ['2026Jun08-105144-Rec93', '2026-06-08T13:51:44.000Z', false],
+      ['2026Jun09-110047-Rec00', '2026-06-09T14:00:47.000Z', true],
+      ['2026Jun11-120001-Rec13', '2026-06-11T15:00:01.000Z', false],
+      ['2026Jun16-170119-Rec38', '2026-06-16T20:01:19.000Z', false],
+      ['2026Jun18-094058-Rec46', '2026-06-18T12:40:58.000Z', false],
+      ['2026Jun24-143040-Rec76', '2026-06-24T17:30:40.000Z', false],
+      ['2026May28-110049-Rec25', '2026-05-28T14:00:49.000Z', true],
+      ['2026May28-120314-Rec26', '2026-05-28T15:03:14.000Z', true],
+      ['2026May28-170009-Rec30', '2026-05-28T20:00:09.000Z', false]
+    ]
+    const db = pairs.flatMap(([stem, recorded], i) => [
+      { id: `wav-${i}`, filename: `${stem}.wav`, original_filename: `${stem}.wav`, source: 'hidock', is_imported: 0, date_recorded: recorded, file_path: `/fixture/${stem}.wav`, file_size: 10, status: 'complete', transcription_status: 'complete', on_local: 1, on_device: 1, location: 'both', created_at: '2026-06-11 22:22:11', deleted_at: null },
+      { id: `hda-${i}`, filename: `${stem}.hda`, original_filename: `${stem}.hda`, source: 'hidock', is_imported: 0, date_recorded: recorded, file_path: null, file_size: 10, status: 'none', transcription_status: 'error', on_local: 0, on_device: 1, location: 'device-only', created_at: '2026-10-14 14:39:12', deleted_at: null }
+    ])
+    const captures = pairs.map((_, i) => ({ id: `capture-${i}`, sourceRecordingId: `wav-${i}`, userTitle: `Title ${i}`, status: 'ready' })) as any
+    const validity = new Map(pairs.map(([, , doubtful], i) => [`wav-${i}`, doubtful ? 'doubtful' : 'valid']))
+    const device = pairs.map(([stem, recorded]) => ({ id: `device-${stem}`, filename: `${stem}.hda`, size: 10, duration: 60, dateCreated: new Date(recorded) })) as any
+    const savedTz = process.env.TZ
+    try {
+      for (const tz of ['America/Argentina/Buenos_Aires', 'UTC', 'Asia/Tokyo', 'Asia/Kolkata']) {
+        process.env.TZ = tz
+        for (const connected of [true, false]) {
+          const result = buildRecordingMap(connected ? device : [], db as any, [], [], connected, captures)
+          expect(result.map((r) => r.id).sort(), `${tz} connected=${connected}`).toEqual(pairs.map((_, i) => `wav-${i}`).sort())
+          expect(result.every((r) => r.knowledgeCaptureId === `capture-${r.id.slice(4)}`)).toBe(true)
+          expect(result.filter((r) => validity.get(r.id) === 'doubtful')).toHaveLength(5)
+        }
+      }
+    } finally {
+      if (savedTz === undefined) delete process.env.TZ
+      else process.env.TZ = savedTz
+    }
+    // The phantom rows stay in the data; only the projection prefers the .wav.
+    expect(db.filter((r) => r.id.startsWith('hda-'))).toHaveLength(16)
+  })
+
   it('keeps an external same-stem import visible beside the independent device take', () => {
     const result = buildRecordingMap([{ id: 'device', filename: 'Rec01.hda', size: 10, duration: 60, dateCreated: new Date('2026-10-05') } as any], [
       { id: 'external', filename: 'Rec01.wav', original_filename: 'Rec01.wav', source: 'external', is_imported: 1, date_recorded: '2026-10-01', file_path: '/fixture/external.wav', file_size: 10, status: 'complete', on_local: 1, on_device: 0 }
