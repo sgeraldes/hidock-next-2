@@ -183,7 +183,10 @@ describe('remote recovery against the real Model Host over loopback', () => {
     // The observer has seen `running`, registered its activity reference and opened its processing run.
     await vi.waitFor(() => expect(getActiveTranscriptionCount(LOCAL_RECORDING)).toBe(1), { timeout: 5000, interval: 25 })
     expect(mocks.create).toHaveBeenCalledOnce()
-    expect(seen.map(item => item.method)).toEqual(['GET'])
+    // Only GETs before the cancel. The observer polls every 1.5 s, so under the
+    // full suite's load a second GET can land before this line (failed once, 24-nov-2026).
+    expect(seen.length).toBeGreaterThan(0)
+    expect(seen.every(item => item.method === 'GET')).toBe(true)
 
     cancelRecoveredRemote(LOCAL_RECORDING)
     // The observer polls the host every 1.5 s and settles after the GET that reports `cancelled`.

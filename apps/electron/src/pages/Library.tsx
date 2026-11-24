@@ -1,3 +1,4 @@
+import { isFindTypingTarget, type ReaderFindSession } from '@/features/library/components/ReaderFind'
 import { describeRetranscribeSkips } from '../shared/retranscribe'
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, useDeferredValue } from 'react'
 import { isRecordingAudioFile } from '@/shared/audio-extensions'
@@ -174,6 +175,8 @@ function purgeFilenameBase(filename?: string | null): string | null {
 }
 
 export function Library() {
+  // TriPaneLayout remounts the reader when a section is maximized/restored.
+  const findSession = useRef<ReaderFindSession>({ open: false, query: '', position: 0 })
   const navigate = useNavigate()
   const location = useLocation()
   const {
@@ -2505,6 +2508,18 @@ export function Library() {
         ? displayedRecordings.find((r) => r.id === selectedSourceId)
         : recordings.find((r) => r.id === selectedSourceId)) ?? null
     : null
+  const readerHasSource = !!selectedRecording && selectedRecordings.length <= 1
+  useEffect(() => {
+    if (readerHasSource) return
+    const handleFind = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || !(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== 'f') return
+      if (isFindTypingTarget(event.target)) return
+      const input = document.querySelector<HTMLInputElement>('input[aria-label="Search the sources shown in this list"]')
+      if (input) { event.preventDefault(); input.focus(); input.select() }
+    }
+    window.addEventListener('keydown', handleFind)
+    return () => window.removeEventListener('keydown', handleFind)
+  }, [readerHasSource])
   const selectionOutsideCurrentView = Boolean(
     selectedRecording && !displayedRecordings.some((recording) => recording.id === selectedRecording.id)
   )
@@ -3491,6 +3506,7 @@ export function Library() {
               />
             ) : (
             <SourceReader
+              findSession={findSession}
               recording={selectedRecording ?? null}
               transcript={selectedTranscript}
               meeting={selectedMeeting}
@@ -3503,6 +3519,12 @@ export function Library() {
               }}
               onStop={handleStopCallback}
               onClose={() => setSelectedSourceId(null)}
+              onFindSeek={(startMs) => {
+                if (!selectedRecording || !hasLocalPath(selectedRecording)) return
+                const ui = useUIStore.getState()
+                if (ui.currentlyPlayingId === selectedRecording.id) audioControls.seek(startMs / 1000)
+                else void audioControls.play(selectedRecording.id, selectedRecording.localPath, startMs / 1000, false)
+              }}
               onSeek={(startMs) => {
                 if (!selectedRecording || !hasLocalPath(selectedRecording)) return
                 // A time click plays from that point: it starts this recording if
