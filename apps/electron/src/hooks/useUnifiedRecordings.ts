@@ -211,8 +211,13 @@ export function buildRecordingMap(
     }
   }
 
-  // Track which base filenames have been processed
-  const processedBaseNames = new Set<string>()
+  // Track which base filenames have been processed. Device and local names of
+  // one take can differ in case (Take.hda, take.wav), so compare them folded.
+  const processedFolded = new Set<string>()
+  const processedBaseNames = {
+    add: (name: string): void => { processedFolded.add(name.toLowerCase()) },
+    has: (name: string): boolean => processedFolded.has(name.toLowerCase())
+  }
   const recordingMap = new Map<string, UnifiedRecording>()
 
   // Process device recordings first
@@ -386,7 +391,11 @@ export function buildRecordingMap(
       recordingMap.set(`db:${dbRec.id}`, recording)
       // An independent import never stands for the device take of the same
       // stem, so it must not hide that take's cached entry.
-      if (dbRec.source !== 'external' && dbRec.is_imported !== 1) processedBaseNames.add(baseName)
+      if (dbRec.source !== 'external' && dbRec.is_imported !== 1) {
+        processedBaseNames.add(baseName)
+        // A legacy local name (2026-05-28_1037.wav) differs from the device's.
+        processedBaseNames.add(getBaseFilename(deviceFilename))
+      }
     }
   }
 

@@ -40,7 +40,7 @@ vi.mock('../database', () => ({
   markRecordingDownloaded: vi.fn(),
   addSyncedFile: vi.fn(),
   isFileSynced: () => false,
-  getSyncedFile: () => undefined,
+  getSyncedFile: vi.fn(() => undefined),
   removeSyncedFile: vi.fn(),
   isFilePurged: (filename: string) => mockIsFilePurged(filename),
   getPurgedFilenames: () => mockGetPurgedFilenames(),
@@ -124,6 +124,21 @@ describe('device file-list reconcile: one transaction, batched yields, hoisted t
     const result = getDownloadService().queueDownloads([{ filename: `${stem}.hda`, size: 10 }])
     expect(result.skipped).toEqual([])
     vi.mocked(getRecordingByFilename).mockReturnValue(undefined)
+  })
+  it('still finds the downloaded device mp3 when the wav of the same stem is an import', async () => {
+    const { getRecordingByFilename, getSyncedFile } = await import('../database')
+    const stem = 'Mixed-Rec01'
+    vi.mocked(getRecordingByFilename).mockImplementation((name) => name === `${stem}.wav`
+      ? { id: 'external', source: 'external', is_imported: 1 } as never
+      : name === `${stem}.mp3` ? { id: 'device', source: 'hidock', is_imported: 0 } as never : undefined)
+    vi.mocked(getSyncedFile).mockImplementation(((name: string) => name === `${stem}.mp3`
+      ? { original_filename: `${stem}.mp3`, local_filename: `${stem}.mp3`, file_path: `/rec/${stem}.mp3` } : undefined) as never)
+    mockExistsSync.mockReturnValue(true)
+    expect(getDownloadService().isFileAlreadySynced(`${stem}.hda`)).toMatchObject({ synced: true })
+    expect(getDownloadService().queueDownloads([{ filename: `${stem}.hda`, size: 10 }]).skipped)
+      .toEqual([expect.objectContaining({ skip: 'already-synced' })])
+    vi.mocked(getRecordingByFilename).mockReturnValue(undefined)
+    vi.mocked(getSyncedFile).mockImplementation(() => undefined)
   })
   it('records absence for a complete current empty scan, never for a cached list', async () => {
     const { markRecordingsNotOnDevice } = await import('../database')

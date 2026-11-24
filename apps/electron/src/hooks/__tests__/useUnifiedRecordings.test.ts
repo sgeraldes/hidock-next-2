@@ -137,6 +137,16 @@ describe('buildRecordingMap location facts', () => {
     expect(result.map((r) => r.id).sort()).toEqual(['Rec01', 'external'])
   })
 
+  it.each([
+    ['a different case', 'take.wav', 'Take.hda', 'Take.hda'],
+    ['a legacy local name', '2026-05-28_1037.wav', '2026May28-103745-Rec24.hda', '2026May28-103745-Rec24.hda']
+  ])('hides the cached device entry of a downloaded take with %s offline', (_case, filename, original, cached) => {
+    const result = buildRecordingMap([], [
+      { id: 'local', filename, original_filename: original, source: 'hidock', date_recorded: '2026-05-28', file_path: `/fixture/${filename}`, file_size: 10, status: 'complete', on_local: 1, on_device: 1 }
+    ] as any, [], [{ filename: cached, date_recorded: '2026-05-28T10:37:45Z', file_size: 10, duration_seconds: 60 }] as any, false)
+    expect(result.map((r) => r.id)).toEqual(['local'])
+  })
+
   it('names the device file by its native name for a downloaded row with no synced match', () => {
     const result = buildRecordingMap([], [
       { id: 'local', filename: '2026Jun01-115550-Rec39.wav', original_filename: '2026Jun01-115550-Rec39.hda', source: 'hidock', date_recorded: '2026-06-01', file_path: '/fixture/take.wav', file_size: 10, status: 'complete', on_local: 1, on_device: 1 },

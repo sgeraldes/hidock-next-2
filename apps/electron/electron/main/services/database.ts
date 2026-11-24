@@ -6890,6 +6890,13 @@ function storedTimeMs(value: string | null | undefined): number {
  */
 export function markRecordingsNotOnDevice(presentFilenames: string[], scanStartedAt?: string): void {
   const cutoff = storedTimeMs(scanStartedAt)
+  // CURRENT_TIMESTAMP has whole seconds: a row stamped in the scan's starting
+  // second may be newer than the scan, so it counts as seen since.
+  const seenSinceScan = (time: string | null | undefined): boolean => {
+    const ms = storedTimeMs(time)
+    if (!Number.isFinite(ms)) return false
+    return ms >= (/\.\d/.test(time!) ? cutoff : Math.floor(cutoff / 1000) * 1000)
+  }
   const presentBases = new Set(
     presentFilenames.map((filename) => filename.replace(/\.(hda|wav|mp3|m4a|aac|ogg|flac)$/i, '').toLowerCase())
   )
@@ -6898,7 +6905,7 @@ export function markRecordingsNotOnDevice(presentFilenames: string[], scanStarte
   const onDevice = queryAll<Recording>('SELECT * FROM recordings WHERE on_device = 1')
 
   for (const rec of onDevice) {
-    if (Number.isFinite(cutoff) && [rec.device_last_seen, rec.created_at].some((time) => storedTimeMs(time) >= cutoff)) continue
+    if (Number.isFinite(cutoff) && [rec.device_last_seen, rec.created_at].some(seenSinceScan)) continue
     const deviceIdentity = rec.original_filename || rec.filename
     const base = deviceIdentity.replace(/\.(hda|wav|mp3|m4a|aac|ogg|flac)$/i, '').toLowerCase()
     if (!presentBases.has(base)) {

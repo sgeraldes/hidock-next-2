@@ -545,9 +545,17 @@ export class DownloadService {
     // Check 2: Convert .hda to .wav and check both (legacy format)
     const wavFilename = filename.replace(/\.hda$/i, '.wav')
     const mp3Filename = DownloadService.normalizeFilename(filename)
-    const localCandidates = [getRecordingByFilename(wavFilename), getRecordingByFilename(mp3Filename)]
-    if (/\.hda$/i.test(filename) && localCandidates.some((row) => row
-      && (row.is_imported === 1 || row.source !== 'hidock'))) {
+    const isImport = (row: ReturnType<typeof getRecordingByFilename>): boolean =>
+      !!row && (row.is_imported === 1 || row.source !== 'hidock')
+    const wavIsImport = isImport(getRecordingByFilename(wavFilename))
+    const mp3IsImport = isImport(getRecordingByFilename(mp3Filename))
+    if (/\.hda$/i.test(filename) && (wavIsImport || mp3IsImport)) {
+      // The import's own name proves nothing about the device audio, but a
+      // variant that belongs to the device take still proves it was downloaded.
+      if (!wavIsImport && this.syncedRowIsBackedByDisk(wavFilename)) return { synced: true, reason: 'WAV version in synced_files' }
+      if (!mp3IsImport && mp3Filename !== wavFilename && this.syncedRowIsBackedByDisk(mp3Filename)) {
+        return { synced: true, reason: 'MP3 version in synced_files' }
+      }
       return { synced: false, reason: INDEPENDENT_IMPORT_REASON }
     }
     if (wavFilename !== filename && this.syncedRowIsBackedByDisk(wavFilename)) {

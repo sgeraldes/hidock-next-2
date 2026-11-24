@@ -123,6 +123,13 @@ describe('device recording identity and offline retention (real SQLite)', () => 
     expect(state).toEqual({ [old.id]: 0, [seenLater.id]: 1, [createdLater.id]: 1 })
   })
 
+  it('keeps a row created in the same second the scan started, though created_at has no milliseconds', () => {
+    const sameSecond = upsertRecordingFromDevice(snapshot(`${names[0]}.hda`))
+    run("UPDATE recordings SET device_last_seen = NULL, created_at = '2026-11-24 12:00:00' WHERE id = ?", [sameSecond.id])
+    markRecordingsNotOnDevice([], '2026-11-24T12:00:00.500Z')
+    expect(rows()[0]).toMatchObject({ id: sameSecond.id, on_device: 1 })
+  })
+
   it('resolves the verified local canonical row while retaining the exact HDA shadow', () => {
     const base = names[1]
     run(`INSERT INTO recordings (id, filename, date_recorded, on_local, on_device)
