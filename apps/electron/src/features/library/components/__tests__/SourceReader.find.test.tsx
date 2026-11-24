@@ -10,7 +10,22 @@ import type { UnifiedRecording } from '@/types/unified-recording'
 import type { Transcript } from '@/types'
 
 vi.mock('../WaveformPlayer', () => ({ WaveformPlayer: () => <div data-testid="waveform-player" /> }))
-vi.mock('../TranscriptViewer', () => ({ TranscriptViewer: () => <div data-testid="transcript-viewer" /> }))
+// Like the real viewer, publish the documents with speaker names resolved
+// (assignments, splits) from an effect, which runs before the parent's effects.
+vi.mock('../TranscriptViewer', async () => {
+  const { useEffect } = await import('react')
+  return {
+    TranscriptViewer: ({ onFindDocuments }: { onFindDocuments?: (documents: unknown[]) => void }) => {
+      useEffect(() => {
+        onFindDocuments?.([
+          { key: 'speaker:0', section: 'transcript', text: 'María Resolved', timeMs: 30000 },
+          { key: 'turn:0', section: 'transcript', text: 'Ship it.', timeMs: 30000 }
+        ])
+      }, [onFindDocuments])
+      return <div data-testid="transcript-viewer" />
+    }
+  }
+})
 
 vi.mock('@radix-ui/react-portal', () => ({
   Portal: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -101,6 +116,13 @@ describe('SourceReader find section navigation', () => {
     expect(useLibraryStore.getState().readerSectionModes.transcript).toBe('expanded')
     fireEvent.keyDown(screen.getByLabelText('Find in transcript'), { key: 'Enter', altKey: true })
     expect(seek).toHaveBeenCalledWith(30000)
+  })
+  it('searches the speaker names the transcript resolved, not the raw labels', async () => {
+    render(<MemoryRouter><SourceReader recording={makeRecording()} transcript={makeTranscript()} onFindSeek={vi.fn()} /></MemoryRouter>)
+    await screen.findByTestId('transcript-viewer')
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+    fireEvent.change(screen.getByLabelText('Find in transcript'), { target: { value: 'maria' } })
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('1 of 1'))
   })
   it('keeps hook order stable when opening and closing a source', () => {
     const { rerender } = render(<MemoryRouter><SourceReader recording={null} /></MemoryRouter>)

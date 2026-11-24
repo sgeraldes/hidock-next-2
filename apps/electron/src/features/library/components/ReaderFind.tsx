@@ -9,7 +9,8 @@ export function isFindTypingTarget(target: EventTarget | null): boolean {
 }
 export interface ReaderFindSession { sourceId?: string; open: boolean; query: string; position: number }
 export function useReaderFind({ sourceId, documents, onSeek, onReveal, enabled = true, session }: {
-  sourceId?: string; documents: FindDocument[]; onSeek: (ms: number) => void
+  /** The documents, or a builder that runs only while the bar is open (keep its identity stable). */
+  sourceId?: string; documents: FindDocument[] | (() => FindDocument[]); onSeek: (ms: number) => void
   onReveal?: (match: FindMatch) => void; enabled?: boolean; session?: MutableRefObject<ReaderFindSession>
 }) {
   const rootRef = useRef<HTMLDivElement>(null)
@@ -18,7 +19,9 @@ export function useReaderFind({ sourceId, documents, onSeek, onReveal, enabled =
   const [open, setOpen] = useState(saved?.open ?? false)
   const [query, updateQuery] = useState(saved?.query ?? '')
   const [position, setPosition] = useState(saved?.position ?? 0)
-  const index = useMemo(() => buildFindIndex(enabled ? documents : []), [documents, enabled])
+  // Normalizing every character costs real time on a long transcript: only
+  // while the bar is open.
+  const index = useMemo(() => buildFindIndex(enabled && open ? (typeof documents === 'function' ? documents() : documents) : []), [documents, enabled, open])
   const matches = useMemo(() => open ? searchFindIndex(index, query) : [], [index, query, open])
   const current = matches[Math.min(position, Math.max(0, matches.length - 1))]
   const byKey = useMemo(() => {
@@ -31,6 +34,8 @@ export function useReaderFind({ sourceId, documents, onSeek, onReveal, enabled =
     return map
   }, [matches])
   const setQuery = useCallback((value: string) => { updateQuery(value); setPosition(0) }, [])
+  // The bar debounces typing; Enter first applies a query still waiting there.
+  const flushPendingQuery = useRef<(() => boolean) | null>(null)
   const close = useCallback(() => { setOpen(false); updateQuery(''); setPosition(0) }, [])
   const previousSource = useRef(sourceId)
   useLayoutEffect(() => {
@@ -63,18 +68,25 @@ export function useReaderFind({ sourceId, documents, onSeek, onReveal, enabled =
       if (owner && owner !== rootRef.current) return
       const inFind = event.target === inputRef.current
       if (isFindTypingTarget(event.target) && !inFind) return
+      // Keys go to find from its input, from inside this reader, or when nothing
+      // has focus. A dialog or menu elsewhere keeps its own Escape.
+      const target = event.target
+      const inReader = target instanceof Node && !!rootRef.current?.contains(target)
+      const unfocused = !(target instanceof Element) || target === document.body || target === document.documentElement
       if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'f') {
         event.preventDefault(); event.stopPropagation()
         window.dispatchEvent(new CustomEvent('hidock:reader-find-open', { detail: rootRef.current }))
         setOpen(true); inputRef.current?.focus(); inputRef.current?.select()
-      } else if (open && (event.key === 'Escape' || event.key === 'F3' || (event.key === 'Enter' && (inFind || (event.target instanceof Node && rootRef.current?.contains(event.target)))))) {
+      } else if (open && (((event.key === 'Escape' || event.key === 'F3') && (inFind || inReader || unfocused)) || (event.key === 'Enter' && inFind))) {
+        // Enter belongs to the find input only: on a reader button it activates the button.
         event.preventDefault(); event.stopPropagation()
+        if (event.key === 'Enter' && flushPendingQuery.current?.()) return
         if (event.key === 'Escape') close()
         else if (event.altKey && event.key === 'Enter') seek()
         else move(event.shiftKey ? -1 : 1)
       }
     }
-    const openedElsewhere = (event: Event) => { if ((event as CustomEvent).detail !== rootRef.current) close() }
+    const openedElsewhere = (event: Event) => { if (!(event instanceof CustomEvent) || event.detail !== rootRef.current) close() }
     window.addEventListener('hidock:reader-find-open', openedElsewhere)
     window.addEventListener('keydown', handle, true)
     return () => {
@@ -82,20 +94,32 @@ export function useReaderFind({ sourceId, documents, onSeek, onReveal, enabled =
       window.removeEventListener('hidock:reader-find-open', openedElsewhere)
     }
   }, [enabled, sourceId, open, close, move, seek])
-  return { rootRef, inputRef, open, query, setQuery, matches, current, position: Math.min(position, Math.max(0, matches.length - 1)), byKey, close, move, seek, seekTo }
+  return { rootRef, inputRef, flushPendingQuery, open, query, setQuery, matches, current, position: Math.min(position, Math.max(0, matches.length - 1)), byKey, close, move, seek, seekTo }
 }
 export type ReaderFindState = ReturnType<typeof useReaderFind>
 const labels = { summary: 'Summary', moments: 'Actions & decisions', transcript: 'Transcript' }
 export function ReaderFindBar({ find }: { find: ReaderFindState }) {
   // Keep draft keystrokes local: the large transcript rerenders only after debounce.
   const [draft, setDraft] = useState(find.query)
-  useEffect(() => { if (!find.open) { setDraft(''); clearTimeout(update.current) } }, [find.open])
   const update = useRef<ReturnType<typeof setTimeout>>()
+  const pending = useRef<string | null>(null)
+  useEffect(() => { if (!find.open) { setDraft(''); clearTimeout(update.current); pending.current = null } }, [find.open])
   useEffect(() => () => clearTimeout(update.current), [])
+  const { flushPendingQuery, setQuery } = find
+  useEffect(() => {
+    flushPendingQuery.current = () => {
+      if (pending.current === null) return false
+      clearTimeout(update.current)
+      setQuery(pending.current)
+      pending.current = null
+      return true
+    }
+    return () => { flushPendingQuery.current = null }
+  }, [flushPendingQuery, setQuery])
   if (!find.open) return null
   return <div role="search" aria-label="Find in this source" className="sticky top-0 z-40 flex shrink-0 flex-wrap items-center gap-1 border-b bg-background px-3 py-2">
     <input ref={find.inputRef} aria-label="Find in transcript" placeholder="Find in transcript" value={draft}
-      onChange={event => { const value = event.target.value; setDraft(value); clearTimeout(update.current); update.current = setTimeout(() => find.setQuery(value), 120) }}
+      onChange={event => { const value = event.target.value; setDraft(value); pending.current = value; clearTimeout(update.current); update.current = setTimeout(() => { pending.current = null; find.setQuery(value) }, 120) }}
       className="min-w-24 flex-1 rounded border bg-background px-2 py-1 text-sm" />
     <span role="status" aria-live="polite" className="text-xs tabular-nums">{find.current ? find.position + 1 : 0} of {find.matches.length}{find.current && ` · ${labels[find.current.section]}`}</span>
     {find.current?.timeMs != null && <button type="button" aria-label={`Seek to ${formatTimestamp(find.current.timeMs / 1000)}`} onClick={find.seek} className="px-1 text-xs text-primary underline">{formatTimestamp(find.current.timeMs / 1000)}</button>}

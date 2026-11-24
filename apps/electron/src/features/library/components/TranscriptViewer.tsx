@@ -49,6 +49,8 @@ export interface StoredSegment {
 interface TranscriptViewerProps {
   find?: ReaderFindState
   onFindDocuments?: (documents: FindDocument[]) => void
+  /** The standalone find bar's seek (its time button and Alt+Enter): moves without starting playback. Defaults to onSeek. */
+  onFindSeek?: (startMs: number) => void
   transcript: string
   currentTimeMs?: number
   onSeek: (startMs: number, endMs?: number) => void
@@ -148,7 +150,8 @@ export function TranscriptViewer({
   issueJump,
   onTranscriptUpdated,
   find: externalFind,
-  onFindDocuments
+  onFindDocuments,
+  onFindSeek
 }: TranscriptViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const activeSegmentRef = useRef<HTMLDivElement | null>(null)
@@ -719,21 +722,28 @@ export function TranscriptViewer({
     return first
   }, [segments])
 
+  // The speaker text indexed is the text each turn renders, so offsets land on
+  // the shown characters. Without timestamps every turn parses at 0: no time.
   const findDocuments = useMemo<FindDocument[]>(() => segments.flatMap((segment, i) => {
     const effective = segment.speaker ? effectiveLabelFor(segment.speaker, i, splits) : undefined
-    const name = turnOverrides.get(i)?.name ?? (effective ? speakerMap.get(effective)?.name : undefined) ?? effective
+    const name = !segment.speaker || !effective
+      ? undefined
+      : assignEnabled
+        ? turnOverrides.get(i)?.name ?? speakerMap.get(effective)?.name ?? effective
+        : segment.speaker
+    const timeMs = hasTimestamps ? segment.startMs : undefined
     return [
-      ...(name ? [{ key: `speaker:${i}`, section: 'transcript' as const, text: name, timeMs: segment.startMs }] : []),
-      { key: `turn:${i}`, section: 'transcript' as const, text: segment.text, timeMs: segment.startMs }
+      ...(name ? [{ key: `speaker:${i}`, section: 'transcript' as const, text: name, timeMs }] : []),
+      { key: `turn:${i}`, section: 'transcript' as const, text: segment.text, timeMs }
     ]
-  }), [segments, splits, speakerMap, turnOverrides])
+  }), [segments, splits, speakerMap, turnOverrides, assignEnabled, hasTimestamps])
   useEffect(() => { onFindDocuments?.(findDocuments) }, [findDocuments, onFindDocuments])
   const standaloneDocuments = useMemo<FindDocument[]>(() => [
     ...(showSummary && summary ? [{ key: 'summary', section: 'summary' as const, text: summary }] : []),
     ...(showActionItems ? (actionItems ?? []).map((text, i) => ({ key: `action:${i}`, section: 'moments' as const, text })) : []),
     ...findDocuments
   ], [findDocuments, showSummary, summary, showActionItems, actionItems])
-  const localFind = useReaderFind({ sourceId: recordingId ?? (transcript || 'standalone-transcript'), documents: standaloneDocuments, onSeek, enabled: !externalFind,
+  const localFind = useReaderFind({ sourceId: recordingId ?? (transcript || 'standalone-transcript'), documents: standaloneDocuments, onSeek: onFindSeek ?? onSeek, enabled: !externalFind,
     onReveal: match => {
       setAutoFollow(false)
       if (match.section === 'summary') setSummaryExpanded(true)
@@ -754,13 +764,14 @@ export function TranscriptViewer({
     let parent = turnsRef.current.parentElement
     while (parent && !/(auto|scroll)/.test(getComputedStyle(parent).overflowY)) parent = parent.parentElement
     if (!parent) return
-    setTurnScrollElement(parent)
+    const scroller = parent
+    setTurnScrollElement(scroller)
     const update = () => {
-      if (turnsRef.current) setTurnScrollMargin(turnsRef.current.getBoundingClientRect().top - parent!.getBoundingClientRect().top + parent!.scrollTop)
+      if (turnsRef.current) setTurnScrollMargin(turnsRef.current.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop)
     }
     update()
     const observer = new ResizeObserver(update)
-    observer.observe(parent)
+    observer.observe(scroller)
     observer.observe(turnsRef.current)
     return () => observer.disconnect()
   }, [virtualTurns, transcriptExpanded, find.open, summaryExpanded, actionItemsExpanded, externalFind])
@@ -984,7 +995,7 @@ export function TranscriptViewer({
                             startMs={segment.startMs}
                             endMs={segment.endMs}
                             isActive={i === currentSegmentIndex}
-                            onSeek={(startMs, endMs) => find.open ? find.seekTo(startMs) : onSeek(startMs, endMs)}
+                            onSeek={onSeek}
                           >
                             {null}
                           </TimeAnchor>

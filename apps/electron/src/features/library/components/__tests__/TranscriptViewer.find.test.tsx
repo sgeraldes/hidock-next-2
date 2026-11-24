@@ -10,15 +10,40 @@ function ExternalReader({ normalSeek, findSeek }: { normalSeek: (ms: number) => 
 }
 
 describe('Standalone recording transcript find', () => {
-  it('uses the paused find seek path when clicking a matching turn timestamp', async () => {
+  it('keeps the turn timestamp click as it was and seeks paused only from the find bar', async () => {
     const normalSeek = vi.fn(), findSeek = vi.fn()
     render(<ExternalReader normalSeek={normalSeek} findSeek={findSeek} />)
     fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
     fireEvent.change(screen.getByLabelText('Find in transcript'), { target: { value: 'reunion' } })
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('1 of 1'))
     fireEvent.click(screen.getByRole('button', { name: 'Jump to 0:30' }))
+    expect(normalSeek).toHaveBeenCalledWith(30000, undefined)
+    expect(findSeek).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Seek to 0:30' }))
     expect(findSeek).toHaveBeenCalledWith(30000)
-    expect(normalSeek).not.toHaveBeenCalled()
+  })
+  it('gives a transcript without timestamps no time to seek', async () => {
+    const onSeek = vi.fn(), onFindSeek = vi.fn()
+    render(<TranscriptViewer transcript={'Sebastián: la reunión de hoy.\nAna: otra reunión.'} onSeek={onSeek} onFindSeek={onFindSeek} />)
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+    const input = screen.getByLabelText('Find in transcript')
+    fireEvent.change(input, { target: { value: 'reunion' } })
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('1 of 2'))
+    expect(screen.queryByRole('button', { name: /^Seek to/ })).not.toBeInTheDocument()
+    fireEvent.keyDown(input, { key: 'Enter', altKey: true })
+    expect(onSeek).not.toHaveBeenCalled()
+    expect(onFindSeek).not.toHaveBeenCalled()
+  })
+  it('sends the find bar seek of a standalone transcript to onFindSeek', async () => {
+    const onSeek = vi.fn(), onFindSeek = vi.fn()
+    render(<TranscriptViewer transcript="[00:30] Reunión" onSeek={onSeek} onFindSeek={onFindSeek} />)
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+    const input = screen.getByLabelText('Find in transcript')
+    fireEvent.change(input, { target: { value: 'reunion' } })
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('1 of 1'))
+    fireEvent.keyDown(input, { key: 'Enter', altKey: true })
+    expect(onFindSeek).toHaveBeenCalledWith(30000)
+    expect(onSeek).not.toHaveBeenCalled()
   })
   it('routes Ctrl+F to the focused recording and clears the previous reader', async () => {
     const { container } = render(<><TranscriptViewer transcript="[00:10] First: reunión" onSeek={vi.fn()} /><TranscriptViewer transcript="[00:20] Second: reunión" onSeek={vi.fn()} /></>)

@@ -31,6 +31,11 @@ import { cn } from '@/lib/utils'
 import { EVENT_KIND_COLOR, EVENT_KIND_ICON } from '../utils/timelineEventKinds'
 import type { TimelineEvent, TimelineEventDetail, TimelineEventPatch } from './WaveformPlayer'
 
+/** The text a row shows, which is also the text find searches. */
+export function timelineEventText(event: TimelineEvent, detail?: TimelineEventDetail): string {
+  return detail?.fullText ?? (event.label || `${event.kind ?? 'note'} at ${formatTimestamp(event.timeSec)}`)
+}
+
 interface TimelineEventListProps {
   find?: ReaderFindState
   events: TimelineEvent[]
@@ -104,7 +109,7 @@ export function TimelineEventList({
             const Icon = EVENT_KIND_ICON[kind]
             const isActive = activeEventId === m.id
             const detail = eventDetails?.[m.refId ?? m.id]
-            const displayText = detail?.fullText ?? (m.label || `${kind} at ${formatTimestamp(m.timeSec)}`)
+            const displayText = timelineEventText(m, detail)
             const isExpanded = expandedEventId === m.id
             const isEditing = editingEventId === m.id
             const isCompleted = detail?.status === 'completed'
@@ -214,7 +219,7 @@ export function TimelineEventList({
                     </button>
                     <button
                       type="button"
-                      onClick={() => find?.open && !estimatedIds?.has(m.id) ? find.seekTo(Math.round(m.timeSec * 1000)) : onActivate(m)}
+                      onClick={() => onActivate(m)}
                       aria-pressed={isActive}
                       title={estimatedIds?.has(m.id) ? `Seek to ${formatTimestamp(m.timeSec)} (estimated position, not a recorded time)` : `Seek to ${formatTimestamp(m.timeSec)}`}
                       className="shrink-0 rounded px-1 tabular-nums text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/40"

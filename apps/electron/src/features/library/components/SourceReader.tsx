@@ -53,7 +53,7 @@ import { DeviceRecordingMarkers, DeviceRecordingTrackExport } from '@/components
 import { HiddenReaderSections, ReaderSectionActions } from './ReaderSectionControls'
 import { ReaderSection } from './ReaderSection'
 import { SpeakerLaneTimeline } from './SpeakerLaneTimeline'
-import { TimelineEventList } from './TimelineEventList'
+import { TimelineEventList, timelineEventText } from './TimelineEventList'
 import { useStickySectionPins } from '../hooks/useStickySectionPins'
 import { useUIStore } from '@/store/useUIStore'
 import { useLibraryStore, type ReaderSectionId, type ReaderSectionMode, type ReaderSectionModes } from '@/store/useLibraryStore'
@@ -1295,29 +1295,45 @@ export function SourceReader({
   }, [closeSplitMode, setReaderSectionMode, splitMode])
 
   const resolveFindSpeaker = people.resolveRangeKey
-  const [resolvedFindDocuments, setResolvedFindDocuments] = useState<FindDocument[] | null>(null)
-  useEffect(() => setResolvedFindDocuments(null), [recordingId, effectiveTranscript?.full_text, effectiveTranscript?.speakers])
-  const findDocuments = useMemo<FindDocument[]>(() => {
-    const segments = transcriptSegments?.length ? fromStoredSegments(transcriptSegments) : parseTranscriptSegments(effectiveTranscript?.full_text ?? '').segments
+  // The transcript viewer publishes its documents with speaker names resolved
+  // (assignments, splits). They are kept with the source they came from: an
+  // effect that cleared them on a source change ran after the child's publish
+  // (child effects run first) and threw the fresh documents away.
+  const findSourceFullText = effectiveTranscript?.full_text
+  const findSourceSpeakers = effectiveTranscript?.speakers
+  const [publishedFind, setPublishedFind] = useState<{ recordingId?: string; fullText?: string | null; speakers?: unknown; documents: FindDocument[] } | null>(null)
+  const publishFindDocuments = useCallback((documents: FindDocument[]) => {
+    setPublishedFind({ recordingId, fullText: findSourceFullText, speakers: findSourceSpeakers, documents })
+  }, [recordingId, findSourceFullText, findSourceSpeakers])
+  const resolvedFindDocuments = publishedFind && publishedFind.recordingId === recordingId && publishedFind.fullText === findSourceFullText && publishedFind.speakers === findSourceSpeakers
+    ? publishedFind.documents
+    : null
+  // A builder, called only while the find bar is open.
+  const buildFindDocuments = useCallback((): FindDocument[] => {
+    const parsed = transcriptSegments?.length ? null : parseTranscriptSegments(effectiveTranscript?.full_text ?? '')
+    const segments = parsed ? parsed.segments : fromStoredSegments(transcriptSegments ?? [])
+    // A transcript without timestamps parses every turn at 0: no time to show or seek.
+    const timed = parsed ? parsed.hasTimestamps : segments.some(segment => segment.startMs > 0)
+    const summary = trustedSummary(effectiveTranscript, recording?.audioCategory)
     return [
-      ...(trustedSummary(effectiveTranscript, recording?.audioCategory) ? [{ key: 'summary', section: 'summary' as const, text: trustedSummary(effectiveTranscript, recording?.audioCategory)! }] : []),
+      ...(summary ? [{ key: 'summary', section: 'summary' as const, text: summary }] : []),
       // Same order as the Actions & decisions list. Events spread over the
       // duration as a fallback have estimated positions: no time to show or seek.
       ...[...timelineEvents].sort((x, y) => x.timeSec - y.timeSec || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0)).flatMap(event => {
         const detail = eventDetails[event.refId ?? event.id]
         const timeMs = (timeline?.events?.length ?? 0) > 0 ? Math.round(event.timeSec * 1000) : undefined
         return [
-          { key: `event:${event.id}`, section: 'moments' as const, text: detail?.fullText ?? event.label, timeMs },
+          { key: `event:${event.id}`, section: 'moments' as const, text: timelineEventText(event, detail), timeMs },
           ...(['context', 'assignee', 'dueDate', 'status'] as const).flatMap(field => detail?.[field] ? [{ key: `event:${event.id}:${field}`, section: 'moments' as const, text: field === 'status' ? detail[field]!.replace('_', ' ') : detail[field]!, timeMs }] : [])
         ]
       }),
       ...(resolvedFindDocuments ?? segments.flatMap((segment, i) => [
-        ...(segment.speaker ? [{ key: `speaker:${i}`, section: 'transcript' as const, text: resolveFindSpeaker(segment.speaker, i)?.name ?? segment.speaker, timeMs: segment.startMs }] : []),
-        { key: `turn:${i}`, section: 'transcript' as const, text: segment.text, timeMs: segment.startMs }
+        ...(segment.speaker ? [{ key: `speaker:${i}`, section: 'transcript' as const, text: resolveFindSpeaker(segment.speaker, i)?.name ?? segment.speaker, timeMs: timed ? segment.startMs : undefined }] : []),
+        { key: `turn:${i}`, section: 'transcript' as const, text: segment.text, timeMs: timed ? segment.startMs : undefined }
       ]))
     ]
   }, [effectiveTranscript, recording?.audioCategory, transcriptSegments, timelineEvents, timeline?.events, eventDetails, resolvedFindDocuments, resolveFindSpeaker])
-  const find = useReaderFind({ sourceId: recordingId, documents: findDocuments, onSeek: onFindSeek ?? handleReaderSeek, session: findSession,
+  const find = useReaderFind({ sourceId: recordingId, documents: buildFindDocuments, onSeek: onFindSeek ?? handleReaderSeek, session: findSession,
     onReveal: match => {
       if (maximizedSection && maximizedSection !== match.section) restoreMaximizedSection()
       if (readerSectionModes[match.section] !== 'expanded') setReaderSectionMode(match.section, 'expanded')
@@ -2191,7 +2207,7 @@ export function SourceReader({
                         )}
                         <TranscriptViewer
                           find={find}
-                          onFindDocuments={setResolvedFindDocuments}
+                          onFindDocuments={publishFindDocuments}
                           transcript={effectiveTranscript.full_text}
                           segments={transcriptSegments}
                           recordingId={recording.id}

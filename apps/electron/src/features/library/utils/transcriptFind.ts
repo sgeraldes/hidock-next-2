@@ -8,8 +8,12 @@ export interface FindMatch extends FindDocument { start: number; end: number; id
 export function normalizeFindText(text: string): string {
   return text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
 }
-export function buildFindIndex(documents: FindDocument[]) {
+// Plain ASCII folds to itself one character for one, so its offsets need no map.
+const NOT_PLAIN_ASCII = /[^\t\n\r\x20-\x7e]/
+export interface FindIndexEntry { document: FindDocument; normalized: string; starts: number[] | null; ends: number[] | null }
+export function buildFindIndex(documents: FindDocument[]): FindIndexEntry[] {
   return documents.map(document => {
+    if (!NOT_PLAIN_ASCII.test(document.text)) return { document, normalized: document.text.toLowerCase(), starts: null, ends: null }
     let normalized = ''
     const starts: number[] = [], ends: number[] = []
     let offset = 0
@@ -26,14 +30,14 @@ export function buildFindIndex(documents: FindDocument[]) {
     return { document, normalized, starts, ends }
   })
 }
-export function searchFindIndex(index: ReturnType<typeof buildFindIndex>, query: string): FindMatch[] {
+export function searchFindIndex(index: FindIndexEntry[], query: string): FindMatch[] {
   const needle = normalizeFindText(query)
   if (!needle.trim()) return []
   const matches: FindMatch[] = []
   for (const { document, normalized, starts, ends } of index) {
     let at = normalized.indexOf(needle)
     while (at !== -1) {
-      const start = starts[at], end = ends[at + needle.length - 1]
+      const start = starts ? starts[at] : at, end = ends ? ends[at + needle.length - 1] : at + needle.length
       matches.push({ ...document, start, end, id: `${document.key}:${start}` })
       at = normalized.indexOf(needle, at + needle.length)
     }

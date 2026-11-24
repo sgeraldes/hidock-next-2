@@ -4,9 +4,9 @@ import { useReaderFind, ReaderFindBar, FindText } from '../ReaderFind'
 import type { FindMatch } from '../../utils/transcriptFind'
 
 const docs = [{ key: 'summary', section: 'summary' as const, text: 'reunión' }, { key: 'turn:0', section: 'transcript' as const, text: 'reunión reunión', timeMs: 30000 }]
-function Harness({ source = 'a', seek = vi.fn(), reveal = vi.fn(), session }: { source?: string; seek?: (ms: number) => void; reveal?: (match: FindMatch) => void; session?: { current: { sourceId?: string; open: boolean; query: string; position: number } } }) {
+function Harness({ source = 'a', seek = vi.fn(), reveal = vi.fn(), session, onReaderButton }: { onReaderButton?: () => void; source?: string; seek?: (ms: number) => void; reveal?: (match: FindMatch) => void; session?: { current: { sourceId?: string; open: boolean; query: string; position: number } } }) {
   const find = useReaderFind({ sourceId: source, documents: docs, onSeek: seek, onReveal: reveal, session })
-  return <div ref={find.rootRef}><ReaderFindBar find={find} /><input aria-label="Other editor" /><p tabIndex={0} data-testid="reader-text"><FindText find={find} documentKey="summary" text="reunión" /></p><FindText find={find} documentKey="turn:0" text="reunión reunión" /></div>
+  return <><div ref={find.rootRef}><ReaderFindBar find={find} /><input aria-label="Other editor" /><button type="button" onClick={onReaderButton}>Reader button</button><p tabIndex={0} data-testid="reader-text"><FindText find={find} documentKey="summary" text="reunión" /></p><FindText find={find} documentKey="turn:0" text="reunión reunión" /></div><div role="dialog"><button type="button">Dialog button</button></div></>
 }
 describe('Reader find interactions', () => {
   it('preserves the query and position across layout remounts but clears for another source', async () => {
@@ -48,6 +48,33 @@ describe('Reader find interactions', () => {
     fireEvent.keyDown(input, { key: 'Escape' })
     expect(screen.queryByLabelText('Find in transcript')).not.toBeInTheDocument()
     expect(document.querySelectorAll('mark')).toHaveLength(0)
+  })
+  it('leaves Enter to other reader controls and Escape to dialogs outside the reader', async () => {
+    const onReaderButton = vi.fn()
+    render(<Harness onReaderButton={onReaderButton} />)
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+    fireEvent.change(screen.getByLabelText('Find in transcript'), { target: { value: 'reunion' } })
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('1 of 3'))
+    const readerButton = screen.getByRole('button', { name: 'Reader button' })
+    expect(fireEvent.keyDown(readerButton, { key: 'Enter' })).toBe(true)
+    expect(fireEvent.keyDown(readerButton, { key: 'Enter', shiftKey: true })).toBe(true)
+    expect(screen.getByRole('status')).toHaveTextContent('1 of 3')
+    fireEvent.keyDown(readerButton, { key: 'F3' })
+    expect(screen.getByRole('status')).toHaveTextContent('2 of 3')
+    expect(fireEvent.keyDown(screen.getByRole('button', { name: 'Dialog button' }), { key: 'Escape' })).toBe(true)
+    expect(screen.getByLabelText('Find in transcript')).toBeInTheDocument()
+    fireEvent.keyDown(readerButton, { key: 'Escape' })
+    expect(screen.queryByLabelText('Find in transcript')).not.toBeInTheDocument()
+  })
+  it('applies a query still being typed before Enter moves', () => {
+    render(<Harness />)
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+    const input = screen.getByLabelText('Find in transcript')
+    fireEvent.change(input, { target: { value: 'reunion' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(screen.getByRole('status')).toHaveTextContent('1 of 3')
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(screen.getByRole('status')).toHaveTextContent('2 of 3')
   })
   it('clears the query when the source changes and leaves Ctrl+K alone', async () => {
     const { rerender } = render(<Harness />)

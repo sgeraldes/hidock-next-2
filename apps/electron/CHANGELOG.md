@@ -6,7 +6,7 @@ Device reference: [model/version gates, recordings and native markers](../../doc
 
 ## 2026-11-22 | Find inside a transcript
 
-- Press Ctrl+F in an open source to find words and phrases in its transcript, speaker names, summary, and actions and decisions. Accents and case are ignored, every match is highlighted, and Enter or F3 moves between them. Click a match's time, or press Alt+Enter, to move the audio there without starting playback.
+- Press Ctrl+F in an open source to find words and phrases in its transcript, speaker names, summary, and actions and decisions. Accents and case are ignored, every match is highlighted, and Enter or F3 moves between them. Click a match's time, or press Alt+Enter, to move the audio there without starting playback. Esc closes the bar. With no source open, Ctrl+F goes to the Library search.
 
 ## 2026-10-04 | The gamestation only helps, and gets out of the way
 
