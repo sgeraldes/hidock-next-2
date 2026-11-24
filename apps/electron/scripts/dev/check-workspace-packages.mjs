@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Refuse to start or build the app on a workspace package whose dist is older
  * than its source.
