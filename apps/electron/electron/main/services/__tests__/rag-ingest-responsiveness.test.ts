@@ -32,13 +32,17 @@ async function hold(name: string, work: () => unknown | Promise<unknown>): Promi
   return gaps
 }
 
-// Shared CI runners run this 2 to 3 times slower than the dev PC and stall the
-// VM now and then. A pass that never yields still misses these limits by far
-// (origin/main: 284 to 464 ms on the dev PC); a single stall gets one retry.
-const SCALE = process.env.CI ? 2.5 : 1
+// The shared CI runner runs these passes up to 5 times slower than the dev PC
+// (integrity 46 ms here, 217 ms there; validity 53 ms here, 257 to 710 ms there)
+// and stalls the VM now and then. A pass that never yields still misses these
+// limits (origin/main: 284 to 464 ms on the dev PC, five times that on CI); a
+// single stall (here or there) gets one retry, on a fresh database.
+const SCALE = process.env.CI ? 5 : 1
+let attempt = 0
 
 describe('RAG corpus responsiveness', () => {
-  it('indexes 2,150 eligible 40KB transcripts without a long main-thread hold', { retry: process.env.CI ? 1 : 0, timeout: 300_000 }, async () => {
+  it('indexes 2,150 eligible 40KB transcripts without a long main-thread hold', { retry: 1, timeout: 300_000 }, async () => {
+    paths.db = `${paths.root}-${++attempt}.sqlite`
     await initializeDatabase()
     const text='Spoken words about the project. '.repeat(1300).slice(0,40000)
     runInTransaction(() => {for(let i=0;i<2150;i++) {
