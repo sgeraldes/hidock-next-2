@@ -63,7 +63,7 @@ jobs:
           ZIG_SHA256: 68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e  # pragma: allowlist secret
         run: |
           # Windows PowerShell's progress bar slows Invoke-WebRequest to a crawl:
-          # the 90 MB archive took 20 and 22 minutes on 24-nov-2026 and the job hit
+          # the archive took 20 and 22 minutes on 24-nov-2026 and the job hit
           # its 45-minute limit.
           $ProgressPreference = 'SilentlyContinue'
           $url = 'https://ziglang.org/download/0.16.0/zig-x86_64-windows-0.16.0.zip'
