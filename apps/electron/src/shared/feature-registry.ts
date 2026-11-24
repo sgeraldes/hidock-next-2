@@ -574,6 +574,8 @@ export const CORE_CHANNELS: string[] = [
   'library:paste',
   'library:pickFiles',
   'library:newNote',
+  // Local query-recording statistics remain available when retrieval features are disabled.
+  'traces:stats',
   // Audio checks (silent, noise only, too short; where the sound is). Reading a
   // file's frame gains needs no provider, no network and no feature. Listed one
   // by one, not as an 'audio:' prefix: a later paid check on that namespace

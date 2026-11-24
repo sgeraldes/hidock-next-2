@@ -54,6 +54,12 @@ On Windows, `build-electron.bat` installs dependencies and builds the app. `run-
 
 HiDock Next is local-first. API keys and account tokens must never be committed. Device operations are serialized, and the app uses a continuous polled read path to avoid locking the HiDock USB interface. Do not run exploratory USB scripts against a connected device.
 
+Query recording is on by default: queries from the chat, Explore and agents are recorded locally in
+`<data folder>\traces\retrieval-traces.db`. Query text is encrypted and erased after 30 days; traces
+are deleted after 90 days, with a 1 GiB cap. Settings > Assistant has two switches: "Record queries"
+and "Keep the text of my queries". Turning off the second erases stored query text. Nothing leaves
+the machine through query recording.
+
 ## Device documentation
 
 The [device guide](docs/devices/README.md) covers model/version gates, stored recordings, realtime channels, software markers and safe development. Exact official H1E6.3.0 is acquired and decoded. The deployed app captures paired PCM without a provider, exports individual lanes and adds native software markers with observed MP3 persistence. The [full experimental firmware build](research/rea/REPORT-H1E-6.3.0-RECORDING-BUILD.md) includes stereo MP3 profiles, gain, native WAV and default-off automatic rules;10 exact-image recording cases and11 independent decodes pass. It is uninstalled. Physical source identities, persistence and recovery remain unverified.

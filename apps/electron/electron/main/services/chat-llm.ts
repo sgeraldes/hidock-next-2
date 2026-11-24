@@ -26,6 +26,8 @@ export interface ChatBackendStatus {
 }
 
 export interface ChatGenerateOptions {
+  onDispatch?: () => void
+  onCall?: (id: string | null) => void
   systemPrompt?: string
   temperature?: number
   maxTokens?: number
@@ -92,9 +94,11 @@ class ChatLLMService {
         temperature: options.temperature,
         maxTokens: options.maxTokens,
         signal: options.signal,
-        shouldGenerate: options.shouldGenerate
+        shouldGenerate: options.shouldGenerate,
+        ...(options.onDispatch ? { onDispatch: options.onDispatch } : {})
       }
     })
+    try { options.onCall?.(outcome.callId) } catch { /* telemetry only */ }
     if (outcome.ok) return outcome.text
     // The routing itself failed (not "nobody answered"): the error reaches the caller as it did when the router threw.
     if (outcome.reason === 'error') throw outcome.error

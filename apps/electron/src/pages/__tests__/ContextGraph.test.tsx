@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { ContextGraph } from '../ContextGraph'
@@ -47,6 +47,15 @@ vi.mock('@/components/context-graph/ContextGraphCanvas', () => ({
     </div>
   ),
 }))
+
+// ContextGraph lazy-loads the real NodeInspector. Its first import is a module
+// transform, which took longer than waitFor's one second while the full suite
+// loaded the machine (4-oct-2026: nodeDetail never called). Load it up front so
+// the lazy() resolves at once and the click test measures the page, not the
+// transform.
+beforeAll(async () => {
+  await import('@/components/context-graph/NodeInspector')
+})
 
 const DATE = Date.parse('2026-06-01')
 const marioNode = { id: 'person:contact_c-mario', type: 'person', label: 'Mario', degree: 3, contactId: 'c-mario' }
