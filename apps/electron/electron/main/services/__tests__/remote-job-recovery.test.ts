@@ -244,24 +244,27 @@ describe('remote startup observation', () => {
     expect(mocks.remove).toHaveBeenCalledOnce()
   })
 
-  it('sends one POST /cancel while the host takes several polls to report cancelled', async () => {
-    // Under load the host was still `running` at the next poll, and every loop
-    // iteration sent another POST (full suite, 22-nov-2026: two cancels).
-    const running = { id: 'job', audioHash: 'audio', status: 'running' }
-    mocks.fetch.mockResolvedValueOnce(response(running))
+  it('sends one cancellation while the host still reports running, then settles on cancelled', async () => {
+    mocks.fetch.mockResolvedValueOnce(response({ id: 'job', audioHash: 'audio', status: 'running' }))
       .mockResolvedValueOnce(response({}))
-      .mockResolvedValueOnce(response(running))
-      .mockResolvedValueOnce(response(running))
+      .mockResolvedValueOnce(response({ id: 'job', audioHash: 'audio', status: 'running' }))
+      .mockResolvedValueOnce(response({ id: 'job', audioHash: 'audio', status: 'running' }))
       .mockResolvedValueOnce(response({ id: 'job', audioHash: 'audio', status: 'cancelled' }))
     await recoverRemoteJobs(config, vi.fn())
     await vi.advanceTimersByTimeAsync(0)
     cancelRecoveredRemote('recording')
-    await vi.advanceTimersByTimeAsync(6000)
-    const posts = mocks.fetch.mock.calls.filter(([, options]) => options.method === 'POST')
-    expect(posts).toHaveLength(1)
-    expect(posts[0][0]).toBe('https://worker.example/v1/jobs/job/cancel')
+    await vi.advanceTimersByTimeAsync(1500 * 3)
+
+    const methods = mocks.fetch.mock.calls.map(([url, init]) => `${init?.method ?? 'GET'} ${url}`)
+    expect(methods).toEqual([
+      'GET https://worker.example/v1/jobs/job',
+      'POST https://worker.example/v1/jobs/job/cancel',
+      'GET https://worker.example/v1/jobs/job',
+      'GET https://worker.example/v1/jobs/job',
+      'GET https://worker.example/v1/jobs/job'
+    ])
     expect(mocks.fail).toHaveBeenCalledWith('run', expect.stringContaining('cancelled'), true)
-    expect(recoveredRemoteRecordings()).toEqual([])
+    expect(mocks.remove).toHaveBeenCalledOnce()
   })
 
   it.each([409, 503, 'network failure'] as const)(

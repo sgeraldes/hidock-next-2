@@ -9,7 +9,9 @@
     "node": ">=22.12"
   },
   "scripts": {
+    "predev": "node scripts/dev/check-workspace-packages.mjs",
     "dev": "electron-vite dev",
+    "prebuild": "node scripts/dev/check-workspace-packages.mjs",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "postinstall": "electron-builder install-app-deps",

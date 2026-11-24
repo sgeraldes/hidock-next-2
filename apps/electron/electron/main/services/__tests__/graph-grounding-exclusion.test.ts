@@ -192,7 +192,7 @@ describe('ARF-2 — provenance-aware assistant grounding', () => {
   })
 
   it('soft-delete recA suppresses ONLY the fact solely sourced by recA', () => {
-    deleteRecordingCascade('recA', { hard: false })
+    deleteRecordingCascade('recA', { hard: false, origin: 'user', requestedBy: 'test' })
     expect(getExcludedRecordingIds().ids.has('recA')).toBe(true)
 
     const facts = neighborhoodFacts('Alice')
@@ -205,7 +205,7 @@ describe('ARF-2 — provenance-aware assistant grounding', () => {
   })
 
   it('restore recA brings the suppressed fact back', () => {
-    deleteRecordingCascade('recA', { hard: false })
+    deleteRecordingCascade('recA', { hard: false, origin: 'user', requestedBy: 'test' })
     expect(neighborhoodFacts('Alice')).not.toContain('Alice mentioned Roadmap')
 
     restoreRecording('recA')
@@ -234,8 +234,8 @@ describe('ARF-2 — provenance-aware assistant grounding', () => {
   })
 
   it('excluding BOTH sources of a shared fact suppresses it; legacy fact still survives', () => {
-    deleteRecordingCascade('recA', { hard: false })
-    deleteRecordingCascade('recB', { hard: false })
+    deleteRecordingCascade('recA', { hard: false, origin: 'user', requestedBy: 'test' })
+    deleteRecordingCascade('recB', { hard: false, origin: 'user', requestedBy: 'test' })
     const facts = neighborhoodFacts('Alice')
     expect(facts).not.toContain('Alice mentioned Roadmap') // eA
     expect(facts).not.toContain('Alice mentioned Backlog') // eShared — both sources excluded now
@@ -245,15 +245,15 @@ describe('ARF-2 — provenance-aware assistant grounding', () => {
   it('when every incident fact is suppressed and only the legacy one remains, grounding still returns it', () => {
     // Sanity that suppression never over-reaches into empty output when a
     // legacy fact remains.
-    deleteRecordingCascade('recA', { hard: false })
-    deleteRecordingCascade('recB', { hard: false })
+    deleteRecordingCascade('recA', { hard: false, origin: 'user', requestedBy: 'test' })
+    deleteRecordingCascade('recB', { hard: false, origin: 'user', requestedBy: 'test' })
     const facts = neighborhoodFacts('Alice')
     expect(facts).not.toBe('')
     expect(facts).toContain('Alice relates to Bob')
   })
 
   it('getGroundingExclusionSet mirrors getExcludedRecordingIds (healthy = not fail-closed)', () => {
-    deleteRecordingCascade('recA', { hard: false })
+    deleteRecordingCascade('recA', { hard: false, origin: 'user', requestedBy: 'test' })
     setRecordingPersonal('recB', true)
     const exclusion = getGroundingExclusionSet()
     expect(exclusion.failClosed).toBe(false)
@@ -322,8 +322,8 @@ describe('ADV18-2 — neighborhoodFacts fact-edge provenance capture', () => {
   it('ADV19-3 — a suppressed attributed fact contributes no id, but an emitted legacy fact marks the union unresolved', () => {
     // Exclude recA AND recB → eA + eShared both suppressed; only the zero-provenance
     // eLegacy emits — which is itself unverifiable for chat.
-    deleteRecordingCascade('recA', { hard: false })
-    deleteRecordingCascade('recB', { hard: false })
+    deleteRecordingCascade('recA', { hard: false, origin: 'user', requestedBy: 'test' })
+    deleteRecordingCascade('recB', { hard: false, origin: 'user', requestedBy: 'test' })
     const provOut = { recordingIds: new Set<string>(), unresolved: false }
     const facts = neighborhoodFacts('Alice', 1, 20, getGroundingExclusionSet(), provOut)
     expect(facts).toContain('Alice relates to Bob') // legacy only
@@ -391,7 +391,7 @@ describe('RE-4 — Context Graph views suppress excluded provenance', () => {
   })
 
   it('soft-delete recA drops the sole-sourced edge AND prunes its orphaned node', () => {
-    deleteRecordingCascade('recA', { hard: false })
+    deleteRecordingCascade('recA', { hard: false, origin: 'user', requestedBy: 'test' })
     const data = queryNeighborhood('Alice')
     // Roadmap was reachable ONLY via eA (recA) → edge suppressed, node pruned.
     expect(labelsOf(data)).not.toContain('Roadmap')
@@ -403,7 +403,7 @@ describe('RE-4 — Context Graph views suppress excluded provenance', () => {
   })
 
   it('restore recA returns the pruned node + edge to the view', () => {
-    deleteRecordingCascade('recA', { hard: false })
+    deleteRecordingCascade('recA', { hard: false, origin: 'user', requestedBy: 'test' })
     expect(labelsOf(queryNeighborhood('Alice'))).not.toContain('Roadmap')
     restoreRecording('recA')
     expect(labelsOf(queryNeighborhood('Alice'))).toContain('Roadmap')
@@ -423,10 +423,10 @@ describe('RE-4 — Context Graph views suppress excluded provenance', () => {
   })
 
   it('a shared-source edge is KEPT while any source stays eligible, suppressed only when all excluded', () => {
-    deleteRecordingCascade('recA', { hard: false })
+    deleteRecordingCascade('recA', { hard: false, origin: 'user', requestedBy: 'test' })
     // eShared (recA + recB) — recB eligible → Backlog stays.
     expect(labelsOf(queryNeighborhood('Alice'))).toContain('Backlog')
-    deleteRecordingCascade('recB', { hard: false })
+    deleteRecordingCascade('recB', { hard: false, origin: 'user', requestedBy: 'test' })
     // Now both sources excluded → Backlog's only edge suppressed → pruned.
     expect(labelsOf(queryNeighborhood('Alice'))).not.toContain('Backlog')
     // ADV23-2 — legacy Bob is now suppressed on the view surface too.
@@ -434,7 +434,7 @@ describe('RE-4 — Context Graph views suppress excluded provenance', () => {
   })
 
   it('queryContextGraph (full view) suppresses excluded attributed AND legacy zero-provenance edges', () => {
-    deleteRecordingCascade('recA', { hard: false })
+    deleteRecordingCascade('recA', { hard: false, origin: 'user', requestedBy: 'test' })
     const data = queryContextGraph(100)
     // The Alice→Roadmap edge is gone from the whole-graph view.
     const byId = new Map(data.nodes.map((n) => [n.id, n.label]))
@@ -447,7 +447,7 @@ describe('RE-4 — Context Graph views suppress excluded provenance', () => {
   })
 
   it('queryLens suppresses excluded attributed edges (lens fields still present)', () => {
-    deleteRecordingCascade('recA', { hard: false })
+    deleteRecordingCascade('recA', { hard: false, origin: 'user', requestedBy: 'test' })
     const lens = queryLens('Alice', { hops: 1 })
     expect(lens).toHaveProperty('strata')
     const byId = new Map(lens.nodes.map((n) => [n.id, n.label]))
@@ -502,7 +502,7 @@ describe('P3 — search / provenance / inspector hide excluded-only nodes', () =
   it('searchGraphNodes hides a node whose ONLY provenance is excluded', () => {
     // Roadmap is reachable only via eA (recA). Exclude recA → excluded-only.
     expect(searchGraphNodes('Roadmap').map((n) => n.label)).toContain('Roadmap')
-    deleteRecordingCascade('recA', { hard: false })
+    deleteRecordingCascade('recA', { hard: false, origin: 'user', requestedBy: 'test' })
     expect(searchGraphNodes('Roadmap').map((n) => n.label)).not.toContain('Roadmap')
     // ADV23-2 — Bob is reachable only via a legacy zero-provenance edge → now an
     // excluded-only node on the search surface → NOT findable.
@@ -518,7 +518,7 @@ describe('P3 — search / provenance / inspector hide excluded-only nodes', () =
   // derived kinds. (Replaces the round-24 test that codified the fail-OPEN branch.)
   it('an isolated MANUAL node (folder/user origin) stays findable under exclusion', () => {
     seedNodeWithOrigin('nManual', 'topic', 'ManualTopic', 'manual', null)
-    deleteRecordingCascade('recA', { hard: false })
+    deleteRecordingCascade('recA', { hard: false, origin: 'user', requestedBy: 'test' })
     expect(searchGraphNodes('ManualTopic').map((n) => n.label)).toContain('ManualTopic')
   })
 
@@ -526,7 +526,7 @@ describe('P3 — search / provenance / inspector hide excluded-only nodes', () =
     seedNodeWithOrigin('nRiskA', 'risk', 'RiskFromA', 'derived', 'recA')
     // Visible while recA is eligible.
     expect(searchGraphNodes('RiskFromA').map((n) => n.label)).toContain('RiskFromA')
-    deleteRecordingCascade('recA', { hard: false })
+    deleteRecordingCascade('recA', { hard: false, origin: 'user', requestedBy: 'test' })
     expect(searchGraphNodes('RiskFromA').map((n) => n.label)).not.toContain('RiskFromA')
   })
 
@@ -537,7 +537,7 @@ describe('P3 — search / provenance / inspector hide excluded-only nodes', () =
     // via the positive allowlist → node suppressed. Wire the real graph cleanup.
     setGraphProvenanceCleanup((id, opts) => removeRecordingProvenanceCore(id, opts))
     try {
-      deleteRecordingCascade('recB', { hard: true })
+      deleteRecordingCascade('recB', { hard: true, origin: 'user', requestedBy: 'test' })
     } finally {
       setGraphProvenanceCleanup(null)
     }
@@ -546,7 +546,7 @@ describe('P3 — search / provenance / inspector hide excluded-only nodes', () =
 
   it('an isolated DERIVED node with an unassociable (null) source is suppressed fail-closed', () => {
     seedNodeWithOrigin('nRiskOrphan', 'risk', 'RiskOrphan', 'derived', null)
-    deleteRecordingCascade('recA', { hard: false })
+    deleteRecordingCascade('recA', { hard: false, origin: 'user', requestedBy: 'test' })
     expect(searchGraphNodes('RiskOrphan').map((n) => n.label)).not.toContain('RiskOrphan')
   })
 
@@ -586,7 +586,7 @@ describe('P3 — search / provenance / inspector hide excluded-only nodes', () =
     // Contact minted from a transcript whose recording is soft-deleted ⇒ suppressed.
     seedContact('ctSup', 'HiddenPerson', 'transcript', 'recA')
     seedNodeFull('nLegacyPersonSup', 'person', 'HiddenPerson', null, null, 'contact:ctSup', null)
-    deleteRecordingCascade('recA', { hard: false })
+    deleteRecordingCascade('recA', { hard: false, origin: 'user', requestedBy: 'test' })
     expect(searchGraphNodes('HiddenPerson').map((n) => n.label)).not.toContain('HiddenPerson')
   })
 
@@ -598,13 +598,13 @@ describe('P3 — search / provenance / inspector hide excluded-only nodes', () =
 
   it('a legacy (origin-null) isolated MEETING node whose backing recording is excluded is suppressed', () => {
     seedNodeFull('nLegacyMtgSup', 'meeting', 'ExcludedMeeting', null, null, 'meeting:recA', '{"meetingId":"recA"}')
-    deleteRecordingCascade('recA', { hard: false })
+    deleteRecordingCascade('recA', { hard: false, origin: 'user', requestedBy: 'test' })
     expect(searchGraphNodes('ExcludedMeeting').map((n) => n.label)).not.toContain('ExcludedMeeting')
   })
 
   it('an isolated DERIVED node returns to search when its source recording is restored', () => {
     seedNodeWithOrigin('nRiskRestore', 'risk', 'RiskRestore', 'derived', 'recA')
-    deleteRecordingCascade('recA', { hard: false })
+    deleteRecordingCascade('recA', { hard: false, origin: 'user', requestedBy: 'test' })
     expect(searchGraphNodes('RiskRestore').map((n) => n.label)).not.toContain('RiskRestore')
     restoreRecording('recA')
     expect(searchGraphNodes('RiskRestore').map((n) => n.label)).toContain('RiskRestore')
@@ -612,7 +612,7 @@ describe('P3 — search / provenance / inspector hide excluded-only nodes', () =
 
   it('the mutation guard refuses an isolated excluded-derived node (isNodeMutable)', () => {
     seedNodeWithOrigin('nRiskMut', 'risk', 'RiskMutable', 'derived', 'recA')
-    deleteRecordingCascade('recA', { hard: false })
+    deleteRecordingCascade('recA', { hard: false, origin: 'user', requestedBy: 'test' })
     // getNodeDetail routes through isNodeVisibleUnderExclusion → null for a hidden node.
     expect(getNodeDetail('RiskMutable').node).toBeNull()
   })
@@ -621,20 +621,20 @@ describe('P3 — search / provenance / inspector hide excluded-only nodes', () =
     // Alice is a shared-source center (eShared kept via recB). Roadmap reaches
     // Alice only via eA (recA). Excluding recA removes Roadmap from Alice's
     // provenance while Backlog (shared) stays.
-    deleteRecordingCascade('recA', { hard: false })
+    deleteRecordingCascade('recA', { hard: false, origin: 'user', requestedBy: 'test' })
     const prov = queryProvenance('Alice')
     const allLabels = [...prov.meetings, ...prov.people, ...prov.projects, ...prov.actions].map((e) => e.label)
     expect(allLabels).not.toContain('Roadmap')
   })
 
   it('getNodeDetail returns empty for an excluded-only node', () => {
-    deleteRecordingCascade('recA', { hard: false })
+    deleteRecordingCascade('recA', { hard: false, origin: 'user', requestedBy: 'test' })
     const detail = getNodeDetail('Roadmap')
     expect(detail.node).toBeNull()
   })
 
   it('restore returns the node to search + inspector', () => {
-    deleteRecordingCascade('recA', { hard: false })
+    deleteRecordingCascade('recA', { hard: false, origin: 'user', requestedBy: 'test' })
     expect(searchGraphNodes('Roadmap').map((n) => n.label)).not.toContain('Roadmap')
     restoreRecording('recA')
     expect(searchGraphNodes('Roadmap').map((n) => n.label)).toContain('Roadmap')
@@ -671,7 +671,7 @@ describe('INC-4 — overview built from eligible edges/nodes', () => {
     seedEdgeSource('eE2', 'recLiveA', 'txLiveA') // eligible attributed edge
 
     // Exclude recX → Hub's every edge is suppressed → eligible degree 0.
-    deleteRecordingCascade('recX', { hard: false })
+    deleteRecordingCascade('recX', { hard: false, origin: 'user', requestedBy: 'test' })
 
     // A tight overview cap must fill with visible content (Anchor/E1/E2 + the
     // original Alice cluster), NOT be eaten by the now-invisible Hub.
@@ -719,7 +719,7 @@ describe('ADV10-MED — graph-node search pages past excluded-only matches', () 
 
     // Exclude recDead → all 50 zzq## nodes become excluded-only, ranked ahead of
     // the eligible match. Paging must still surface the eligible node.
-    deleteRecordingCascade('recDead', { hard: false })
+    deleteRecordingCascade('recDead', { hard: false, origin: 'user', requestedBy: 'test' })
     const results = searchGraphNodes('zzq')
     const labels = results.map((n) => n.label)
 
@@ -750,7 +750,7 @@ describe('ADV10-MED — graph-node search pages past excluded-only matches', () 
       seedEdge(`eEx${pad}`, `nEx${pad}`, 'nAlice', 'RELATES_TO')
       seedEdgeSource(`eEx${pad}`, 'recLive2', 'txL2') // eligible attributed → survives
     }
-    deleteRecordingCascade('recDead2', { hard: false })
+    deleteRecordingCascade('recDead2', { hard: false, origin: 'user', requestedBy: 'test' })
 
     const results = searchGraphNodes('wqz', 5)
     // Exactly the requested visible limit, all eligible, none excluded.
@@ -784,7 +784,7 @@ describe('ADV11-MED — graph-node search does bounded work (no per-node N+1)', 
     seedEdge('eBigElig', 'nBigElig', 'nAlice', 'RELATES_TO')
     seedEdgeSource('eBigElig', 'recLiveBig', 'txLiveBig') // eligible attributed → survives
 
-    deleteRecordingCascade('recBig', { hard: false })
+    deleteRecordingCascade('recBig', { hard: false, origin: 'user', requestedBy: 'test' })
 
     // Count DB reads issued on the graph store during the search. The old per-node
     // path fired ≥1 store query PER excluded match examined (250+). The SQL-level
@@ -863,7 +863,7 @@ describe('ADV12-MED — graph-node search bounds SQLite variables via a temp-tab
 
   it('1000 excluded-only nodes (>999): does not throw and surfaces the eligible match', () => {
     seedExcludedOnlyBlock('pxa', 'recParam1k', 1000)
-    deleteRecordingCascade('recParam1k', { hard: false })
+    deleteRecordingCascade('recParam1k', { hard: false, origin: 'user', requestedBy: 'test' })
     let labels: string[] = []
     expect(() => {
       labels = searchGraphNodes('pxa').map((n) => n.label)
@@ -875,7 +875,7 @@ describe('ADV12-MED — graph-node search bounds SQLite variables via a temp-tab
 
   it('32764 excluded-only nodes (just under MAX_VARIABLE_NUMBER): does not throw', () => {
     seedExcludedOnlyBlock('pxb', 'recParam32764', 32764)
-    deleteRecordingCascade('recParam32764', { hard: false })
+    deleteRecordingCascade('recParam32764', { hard: false, origin: 'user', requestedBy: 'test' })
     let labels: string[] = []
     expect(() => {
       labels = searchGraphNodes('pxb').map((n) => n.label)
@@ -889,7 +889,7 @@ describe('ADV12-MED — graph-node search bounds SQLite variables via a temp-tab
     // ceiling and threw "too many SQL variables". The temp-table anti-join binds
     // only the LIKE pattern + LIMIT, so it succeeds.
     seedExcludedOnlyBlock('pxc', 'recParam32770', 32770)
-    deleteRecordingCascade('recParam32770', { hard: false })
+    deleteRecordingCascade('recParam32770', { hard: false, origin: 'user', requestedBy: 'test' })
     let labels: string[] = []
     expect(() => {
       labels = searchGraphNodes('pxc').map((n) => n.label)
@@ -901,7 +901,7 @@ describe('ADV12-MED — graph-node search bounds SQLite variables via a temp-tab
 
   it('leaves no _sgn_excluded_nodes temp table behind after a search', () => {
     seedExcludedOnlyBlock('pxd', 'recParamLeak', 1000)
-    deleteRecordingCascade('recParamLeak', { hard: false })
+    deleteRecordingCascade('recParamLeak', { hard: false, origin: 'user', requestedBy: 'test' })
     searchGraphNodes('pxd')
     const store = getKnowledgeGraphStore()
     const leaked = store.db.queryOne<{ name: string }>(
@@ -927,7 +927,7 @@ describe('RE-3 — legacy zero-provenance edges persist through permanent delete
 
       // Permanent delete of recA: removes eA (sole-source recA), decrements
       // eShared (shared w/ recB). eLegacy has NO provenance → untouchable.
-      deleteRecordingCascade('recA', { hard: true })
+      deleteRecordingCascade('recA', { hard: true, origin: 'user', requestedBy: 'test' })
 
       const eLegacy = store.db.queryOne('SELECT id FROM graph_edges WHERE id = ?', ['eLegacy'])
       const eA = store.db.queryOne('SELECT id FROM graph_edges WHERE id = ?', ['eA'])
@@ -977,7 +977,7 @@ describe('RE4-3 — ranking / profile / meeting / list / stats hide excluded-onl
 
   it('excluding recP removes Zoe + her attributed nodes from every read', () => {
     seedAttendanceChain()
-    deleteRecordingCascade('recP', { hard: false })
+    deleteRecordingCascade('recP', { hard: false, origin: 'user', requestedBy: 'test' })
 
     expect(queryTopAttendees('Planning').map((a) => a.person)).not.toContain('Zoe')
     expect(queryTopSkill('Kubernetes').map((s) => s.person)).not.toContain('Zoe')
@@ -995,7 +995,7 @@ describe('RE4-3 — ranking / profile / meeting / list / stats hide excluded-onl
   it('queryStats counts only visible (eligible) nodes under exclusion', () => {
     seedAttendanceChain()
     const before = queryStats().nodes
-    deleteRecordingCascade('recP', { hard: false })
+    deleteRecordingCascade('recP', { hard: false, origin: 'user', requestedBy: 'test' })
     const after = queryStats()
     // Zoe/Standup/Planning/Kubernetes (4 excluded-only nodes) drop out.
     expect(after.nodes).toBeLessThan(before)
@@ -1013,7 +1013,7 @@ describe('RE4-3 — ranking / profile / meeting / list / stats hide excluded-onl
     seedEdge('eS2', 'nShared', 'nM2', 'ATTENDED')
     seedEdgeSource('eS2', 'recQ', 'txQ') // stays eligible
 
-    deleteRecordingCascade('recP', { hard: false })
+    deleteRecordingCascade('recP', { hard: false, origin: 'user', requestedBy: 'test' })
     expect(queryListNodes('person').map((n) => n.label)).toContain('Sam')
     expect(queryPersonProfile('Sam')).toBeTruthy()
   })
@@ -1046,7 +1046,7 @@ describe('RE4-1 — queryProvenance suppresses the subgraph first', () => {
 
   it('excluding recA drops SecretMeeting from arrays, pathIds, and narrative (no excluded label/id anywhere)', () => {
     seedProvenanceGraph()
-    deleteRecordingCascade('recA', { hard: false })
+    deleteRecordingCascade('recA', { hard: false, origin: 'user', requestedBy: 'test' })
 
     const prov = queryProvenance('Alice')
     const dtoStr = JSON.stringify(prov).toLowerCase()
@@ -1060,7 +1060,7 @@ describe('RE4-1 — queryProvenance suppresses the subgraph first', () => {
   })
 
   it('an excluded-only center yields empty provenance', () => {
-    deleteRecordingCascade('recA', { hard: false }) // Roadmap reachable only via eA
+    deleteRecordingCascade('recA', { hard: false, origin: 'user', requestedBy: 'test' }) // Roadmap reachable only via eA
     const prov = queryProvenance('Roadmap')
     expect(prov.node).toBeNull()
     expect(prov.pathIds).toEqual([])
@@ -1075,12 +1075,12 @@ describe('RE4-1 — queryProvenance suppresses the subgraph first', () => {
 
 describe('RE4-2 — centered views empty an excluded-only / fail-closed center', () => {
   it('queryNeighborhood on an excluded-only center returns an EMPTY DTO', () => {
-    deleteRecordingCascade('recA', { hard: false }) // Roadmap becomes excluded-only
+    deleteRecordingCascade('recA', { hard: false, origin: 'user', requestedBy: 'test' }) // Roadmap becomes excluded-only
     expect(queryNeighborhood('Roadmap')).toEqual({ center: null, nodes: [], edges: [] })
   })
 
   it('queryLens on an excluded-only center returns an EMPTY DTO', () => {
-    deleteRecordingCascade('recA', { hard: false })
+    deleteRecordingCascade('recA', { hard: false, origin: 'user', requestedBy: 'test' })
     expect(queryLens('Roadmap', { hops: 1 })).toEqual({
       center: null,
       nodes: [],
@@ -1091,7 +1091,7 @@ describe('RE4-2 — centered views empty an excluded-only / fail-closed center',
   })
 
   it('a still-eligible center is NOT emptied', () => {
-    deleteRecordingCascade('recA', { hard: false })
+    deleteRecordingCascade('recA', { hard: false, origin: 'user', requestedBy: 'test' })
     const data = queryNeighborhood('Alice')
     expect(data.center).not.toBeNull()
     expect(data.nodes.map((n) => n.label)).toContain('Alice')
@@ -1144,7 +1144,7 @@ describe('INC1/INC2 — edge-provenance for rankings + profile relationships', (
     expect(queryTopAttendees('TopicT').map((a) => a.person)).toContain('Pat')
     expect(queryTopAttendees('TopicU').map((a) => a.person)).toContain('Pat')
 
-    deleteRecordingCascade('recX', { hard: false })
+    deleteRecordingCascade('recX', { hard: false, origin: 'user', requestedBy: 'test' })
     // Pat's TopicT path (ePT + eTA) is entirely excluded → gone from TopicT…
     expect(queryTopAttendees('TopicT')).toEqual([])
     // …but still ranked for TopicU (recQ eligible) even though Pat is the SAME
@@ -1165,7 +1165,7 @@ describe('INC1/INC2 — edge-provenance for rankings + profile relationships', (
     seedEdge('eDR', 'nDev', 'nRust', 'DEMONSTRATED')
     seedEdgeSource('eDR', 'recQ', 'txQ')
 
-    deleteRecordingCascade('recX', { hard: false })
+    deleteRecordingCascade('recX', { hard: false, origin: 'user', requestedBy: 'test' })
     // The Golang demonstration (recX) is suppressed → Dev absent for 'Golang'…
     expect(queryTopSkill('Golang')).toEqual([])
     // …but still ranked for the eligible Rust demonstration.
@@ -1182,7 +1182,7 @@ describe('INC1/INC2 — edge-provenance for rankings + profile relationships', (
     seedNode('nBystander', 'person', 'Bystander')
     seedEdge('eBystand', 'nBystander', 'nSharedMtg', 'ATTENDED') // legacy, no provenance
 
-    deleteRecordingCascade('recX', { hard: false })
+    deleteRecordingCascade('recX', { hard: false, origin: 'user', requestedBy: 'test' })
     const profile = queryPersonProfile('Pat')
     expect(profile).toBeTruthy()
     const meetingLabels = profile!.meetings.map((m) => m.label)
@@ -1222,7 +1222,7 @@ describe('INC5 — lens center decided from the post-filter survivor graph', () 
     seedEdge('eCrecent', 'nCara', 'nMrecent', 'ATTENDED')
     seedEdgeSource('eCrecent', 'recX', 'txX')
 
-    deleteRecordingCascade('recX', { hard: false })
+    deleteRecordingCascade('recX', { hard: false, origin: 'user', requestedBy: 'test' })
     const lens = queryLens('Cara', { hops: 1, windowDays: 30 })
     // Center pruned by suppression after windowing → EMPTY, not a blank lens
     // pointing at the missing center id.
@@ -1275,7 +1275,7 @@ describe('ADV23-2 — zero-provenance legacy edges suppressed from non-owner sur
   it('an edge with provenance to an ELIGIBLE recording is PRESENT; to an EXCLUDED recording is ABSENT', () => {
     // eA is attributed to recA (eligible) → Roadmap present on the view.
     expect(queryNeighborhood('Alice').nodes.map((n) => n.label)).toContain('Roadmap')
-    deleteRecordingCascade('recA', { hard: false })
+    deleteRecordingCascade('recA', { hard: false, origin: 'user', requestedBy: 'test' })
     // recA now excluded → its sole-sourced Roadmap edge suppressed → absent.
     expect(queryNeighborhood('Alice').nodes.map((n) => n.label)).not.toContain('Roadmap')
   })

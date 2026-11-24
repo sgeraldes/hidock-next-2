@@ -5,7 +5,8 @@
     "electron/**/*",
     "src/types/**/*",
     "src/shared/**/*",
-    "src/test/temp-db-tracker.ts"
+    "src/test/temp-db-tracker.ts",
+    "../../packages/database/src/**/*"
   ],
   "exclude": [
     "electron/main/services/__tests__/benchmark.test.ts"
@@ -14,10 +15,12 @@
     "composite": true,
     "types": ["node"],
     "outDir": "./out",
+    "rootDir": "../..",
     "baseUrl": ".",
     "paths": {
       "@shared/*": ["./shared/*"],
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@hidock/database": ["../../packages/database/src/index.ts"]
     }
   }
 }

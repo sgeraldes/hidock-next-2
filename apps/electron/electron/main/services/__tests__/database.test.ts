@@ -1334,7 +1334,7 @@ describe('Database Service', () => {
         is_imported: 0,
       })
 
-      commitRecordingSplit('split-parent', [child('split-a', 1, 1200), child('split-b', 2, 3600)])
+      commitRecordingSplit('split-parent', [child('split-a', 1, 1200), child('split-b', 2, 3600)], { origin: 'user', requestedBy: 'test' })
 
       expect(queryOne<{ deleted_at: string | null }>('SELECT deleted_at FROM recordings WHERE id = ?', ['split-parent'])?.deleted_at).toBeTruthy()
       expect(queryAll<{ id: string; meeting_id: string | null }>(

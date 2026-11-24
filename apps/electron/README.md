@@ -11,7 +11,7 @@ npm run test:run
 npm run build
 ```
 
-The required shared packages live in `../../packages`. See the [repository README](../../README.md) for downloads, screenshots, and privacy notes.
+The required shared packages live in `../../packages`. `@hidock/database` is bundled from its source (`electron.vite.config.ts`, with the same alias in `vitest.config.ts` and `tsconfig.node.json`). The other packages load from their `dist`, and `npm run dev` and `npm run build` first run `scripts/dev/check-workspace-packages.mjs`, which stops with the rebuild command when a package's `dist` is older than its source. See the [repository README](../../README.md) for downloads, screenshots, and privacy notes.
 
 ## Device integration
 

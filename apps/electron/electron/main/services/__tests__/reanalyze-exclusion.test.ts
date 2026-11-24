@@ -132,7 +132,7 @@ describe('RE-2 — reanalyzeFailedTranscripts excludes trashed/personal/value-ex
   it('does NOT select or re-upload a soft-deleted recording', async () => {
     seedRecording('trashed')
     seedFailedTranscript('t-trashed', 'trashed')
-    deleteRecordingCascade('trashed', { hard: false }) // soft delete
+    deleteRecordingCascade('trashed', { hard: false, origin: 'user', requestedBy: 'test' }) // soft delete
 
     const healed = await reanalyzeFailedTranscripts(10)
 
@@ -176,7 +176,7 @@ describe('RE-2 — reanalyzeFailedTranscripts excludes trashed/personal/value-ex
     // The provider call resolves AFTER the recording is soft-deleted, exactly
     // simulating a trash committed while full_text was in flight.
     mockGenerateContent.mockImplementationOnce(async () => {
-      deleteRecordingCascade('race', { hard: false })
+      deleteRecordingCascade('race', { hard: false, origin: 'user', requestedBy: 'test' })
       return geminiJsonResponse(HEALED)
     })
 
@@ -202,7 +202,7 @@ describe('RE-2 — reanalyzeFailedTranscripts excludes trashed/personal/value-ex
     dbRun("UPDATE transcripts SET created_at = '2026-06-01T00:00:00Z' WHERE recording_id = ?", ['later'])
 
     mockGenerateContent.mockImplementationOnce(async () => {
-      deleteRecordingCascade('later', { hard: false }) // exclude the LATER row mid-run
+      deleteRecordingCascade('later', { hard: false, origin: 'user', requestedBy: 'test' }) // exclude the LATER row mid-run
       return geminiJsonResponse(HEALED)
     })
 

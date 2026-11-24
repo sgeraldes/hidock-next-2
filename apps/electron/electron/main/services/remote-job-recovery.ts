@@ -314,8 +314,9 @@ export async function recoverRemoteJobs(config: { modelHostUrl?: string; modelHo
     void (async () => {
       let runId: string | undefined
       let cancellationConfirmed = false
-      // The host accepted the cancel; later iterations only observe until it reports cancelled.
-      let cancelSent = false
+      // One accepted POST /cancel is the request; later polls only wait for the
+      // host to report `cancelled`, which can take longer than one poll.
+      let cancellationSent = false
       let networkFailures = 0
       const store = remoteJobCheckpoints(saved.recordingId)
       const path = base + '/v1/jobs/' + encodeURIComponent(saved.identity.id!)
@@ -325,7 +326,7 @@ export async function recoverRemoteJobs(config: { modelHostUrl?: string; modelHo
         while (!observer.stop && Date.now() < deadline) {
           // An explicit cancel is allowed to reach its POST before the next GET.
           assertRecoveryOwnership(observer, true)
-          if (observer.cancel && !cancelSent) {
+          if (observer.cancel && !cancellationSent) {
             assertRecoveryOwnership(observer, true)
             let response: Response
             try {
@@ -338,7 +339,7 @@ export async function recoverRemoteJobs(config: { modelHostUrl?: string; modelHo
             }
             assertRecoveryOwnership(observer, true)
             if (!response.ok) throw new Error('Remote cancellation not confirmed; ownership retained')
-            cancelSent = true
+            cancellationSent = true
           }
           let response: Response
           try {

@@ -2,9 +2,24 @@ import { resolve } from 'path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 
+// @hidock/database is bundled from its source, never loaded from its dist.
+// In November 2026 packages/database/dist was older than its src, the app ran
+// that old engine, and the v72 migration reached the owner's library without
+// the pre-migration snapshot the source already required. The engine has no
+// runtime dependencies besides Node built-ins, and better-sqlite3 is passed in
+// by the app, so bundling it changes nothing but which code runs. The same
+// alias is in vitest.config.ts and tsconfig.node.json, so tests and typecheck
+// see the code the build ships. Other workspace packages still load from dist;
+// scripts/dev/check-workspace-packages.mjs refuses to start or build when one
+// of those dists is older than its source.
+const databaseSource = resolve(__dirname, '../../packages/database/src/index.ts')
+
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
+    plugins: [externalizeDepsPlugin({ exclude: ['@hidock/database'] })],
+    resolve: {
+      alias: { '@hidock/database': databaseSource }
+    },
     build: {
       rollupOptions: {
         input: {

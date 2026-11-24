@@ -40,6 +40,7 @@ import { retryPendingFileCleanups } from '../services/recording-deletion-service
 import { serializeDeviceOperation } from '../services/device-operation-serializer'
 import { emitActivityLog } from '../services/activity-log'
 import { getDownloadService } from '../services/download-service'
+import { beginDeviceSnapshot, invalidateDeviceSnapshots, isCompleteDeviceSnapshot, rememberDeviceSnapshot, setDeviceConnectionReader } from '../services/device-snapshot'
 import { liveTranscription } from '../services/live-transcription-coordinator'
 import { RealtimeRecorder, recoverPartialLiveRecordings, type RecorderResult } from '../services/realtime-recorder'
 import { DeviceAudioSession } from '../services/device-audio-session'
@@ -365,6 +366,7 @@ export function endLiveAudioLocally(reason: string): Promise<void> {
 }
 
 export function registerJensenHandlers(): void {
+  setDeviceConnectionReader(() => getJensenDevice().isConnected())
   setDeviceValidationChecker(() => isDeviceValidationLaunch())
   const firmwareJournal = new FirmwareInstallJournal(join(app.getPath('userData'), 'firmware-install-attempts'))
   setFirmwareRecoveryChecker(() => {
@@ -751,6 +753,7 @@ export function registerJensenHandlers(): void {
   })
 
   ipcMain.handle('jensen:reset', async () => {
+    invalidateDeviceSnapshots()
     try {
       await endLiveAudioLocally('reset')
       abortAllTransfers('disconnect')
@@ -887,7 +890,28 @@ export function registerJensenHandlers(): void {
       const result = await serializeDeviceOperation(async () => {
         if (!device.isConnected()) return null
         if (device.isOperationInProgress() || getActiveTransferFilename() !== null) return null
-        return device.listFiles(onProgress)
+        const snapshot = beginDeviceSnapshot(() => device.isConnected())
+        const before = await device.getFileCount()
+        if (!snapshot.isCurrent()) return null
+        const files = await device.listFiles(onProgress, before?.count)
+        if (!snapshot.isCurrent()) return null
+        const after = await device.getFileCount()
+        // A connect or disconnect during the final count makes this list another session's.
+        if (!snapshot.isCurrent()) return null
+        snapshot.complete = isCompleteDeviceSnapshot(files?.map((file) => file.name) ?? null, before?.count, after?.count)
+        if (files) rememberDeviceSnapshot(snapshot, files.map((file) => file.name))
+        if (snapshot.complete && snapshot.isCurrent()) {
+          // The listing stands on its own. A reconcile superseded by a newer scan,
+          // or one that fails, records no absence and must not discard it.
+          try {
+            await getDownloadService().getFilesToSyncBatched(files!.map((file) => ({
+              filename: file.name, size: file.length, duration: file.duration, dateCreated: file.time!
+            })), 100, snapshot)
+          } catch (error) {
+            console.warn('[Jensen] Device listing kept; its reconcile did not finish:', error instanceof Error ? error.message : error)
+          }
+        }
+        return files
       })
       // Device has now fully initialized (device-info handshake + a completed
       // file-list scan). Only NOW is it safe to start the live-recording poll —
@@ -1272,6 +1296,7 @@ export function registerJensenHandlers(): void {
   const jensen = getJensenDevice()
 
   jensen.onconnect = () => {
+    invalidateDeviceSnapshots()
     broadcast('jensen:connect-event')
     broadcast('jensen:state-changed', {
       connected: true,
@@ -1292,6 +1317,7 @@ export function registerJensenHandlers(): void {
   }
 
   jensen.ondisconnect = () => {
+    invalidateDeviceSnapshots()
     void drive.unmount().catch(() => undefined)
     stopRecordingPoll()
     // The stream ended with the cable: save it now, or the next stream would

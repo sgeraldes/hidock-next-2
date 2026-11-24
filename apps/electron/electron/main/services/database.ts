@@ -1,6 +1,7 @@
 import { MIN_MEETING_CONFIDENCE } from '../../../src/shared/meeting-confidence'
 import Database from 'better-sqlite3'
 import { closeDatabaseBackupWorker as closeSqliteBackupWorker, runDatabaseBackup } from './sqlite-backup-host'
+import { resolveDeviceRecording } from '../../../src/shared/recording-identity'
 import { RECORDING_AUDIO_EXTENSIONS } from '../../../src/shared/audio-extensions'
 import { existsSync, readdirSync, readFileSync } from 'fs'
 import { dirname, join, normalize, resolve as resolvePath } from 'path'
@@ -14,6 +15,11 @@ import { getDatabasePath } from './file-storage'
 // DB file without pulling the file-storage module graph into their tests.
 export { getDatabasePath }
 import { DatabaseEngine, getTableColumns, type BootProgress, type ExternalBackup, type SqlJsDatabase } from '@hidock/database'
+// The namespace, not a named import: a stale dist that predates the constant
+// has no such export, and the guard must read that as 0 instead of failing to link.
+import * as databaseEngineModule from '@hidock/database'
+import { checkEngineSafety } from './engine-safety-guard'
+import { isDeletionOrigin, MAX_REQUESTED_BY_LENGTH, type DeletionRequest } from '../../../src/shared/deletion-origin'
 import {
   normalizeName,
   isGenericSpeakerLabel,
@@ -37,7 +43,7 @@ export function hasDecisionLabelRecoveryFailed(): boolean {
   return decisionLabelRecoveryFailed
 }
 
-const SCHEMA_VERSION = 73
+const SCHEMA_VERSION = 74
 
 const DECISION_LABELS_DDL = `CREATE TABLE IF NOT EXISTS decision_label_sets (
     id TEXT PRIMARY KEY,
@@ -663,9 +669,13 @@ CREATE TABLE IF NOT EXISTS synced_files (
 -- the cascade deletes synced_files + recordings, so reconciliation would see
 -- the still-on-device file as "new" and re-download it (with transcript,
 -- actionables, embeddings regenerating behind it). Filename-only, no content.
+-- v74: who asked for the purge (requested_*, app_version), as in deletion_journal.
 CREATE TABLE IF NOT EXISTS purged_files (
     filename TEXT PRIMARY KEY,
-    purged_at TEXT DEFAULT CURRENT_TIMESTAMP
+    purged_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    requested_origin TEXT CHECK(requested_origin IN ('user', 'system', 'sync')),
+    requested_by TEXT,
+    app_version TEXT
 );
 
 -- Contacts extracted from meeting attendees (renamed to People in UI)
@@ -1232,6 +1242,8 @@ CREATE INDEX IF NOT EXISTS idx_speaker_splits_recording ON speaker_splits(record
 -- removed_counts holds a JSON summary of derived rows removed (hard purge). A
 -- hard purge is intentionally NOT restorable (privacy) — its journal row is an
 -- audit trail only. restored_at is set when a soft-delete is undone.
+-- v74: requested_origin ('user' | 'system' | 'sync'), requested_by (the caller or
+-- feature) and app_version say who asked. Rows from before v74 hold NULL.
 CREATE TABLE IF NOT EXISTS deletion_journal (
     id TEXT PRIMARY KEY,
     recording_id TEXT NOT NULL,
@@ -1239,7 +1251,10 @@ CREATE TABLE IF NOT EXISTS deletion_journal (
     recording_snapshot TEXT,
     removed_counts TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    restored_at TEXT
+    restored_at TEXT,
+    requested_origin TEXT CHECK(requested_origin IN ('user', 'system', 'sync')),
+    requested_by TEXT,
+    app_version TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_recordings_personal ON recordings(personal);
@@ -3497,6 +3512,31 @@ const MIGRATIONS: Record<number, () => void> = {
     getDatabase().run(TRANSCRIPTION_ATTEMPTS_DDL)
     console.log('Migration v73 complete')
   },
+  74: () => {
+    // Who asked for each deletion (approved by the owner, 24-nov-2026). Rows
+    // written before this migration keep NULL: nobody recorded it then.
+    console.log('Running migration to schema v74: deletion origin')
+    addDeletionOriginColumns(getDatabase())
+    console.log('Migration v74 complete')
+  },
+}
+
+/**
+ * The v74 columns on deletion_journal and purged_files. Only adds what is
+ * missing, so a table created from the v74 SCHEMA is left alone.
+ */
+function addDeletionOriginColumns(database: SqlJsDatabase): void {
+  const columns = [
+    "requested_origin TEXT CHECK(requested_origin IN ('user', 'system', 'sync'))",
+    'requested_by TEXT',
+    'app_version TEXT',
+  ]
+  for (const table of ['deletion_journal', 'purged_files']) {
+    const existing = getTableColumns(database, table)
+    for (const column of columns) {
+      if (!existing.includes(column.split(' ')[0])) database.run(`ALTER TABLE ${table} ADD COLUMN ${column}`)
+    }
+  }
 }
 
 /**
@@ -4463,9 +4503,13 @@ function repairPhase(): void {
  * Shared SQLite engine, configured with this app's schema, version, migrations,
  * and structural-repair callback. Owns the sql.js lifecycle and the 4-phase boot.
  */
+/** Set by initializeDatabase from the running app; NULL in rows when unknown. */
+let databaseAppVersion: string | null = null
+
 const engine = new DatabaseEngine({
   betterSqlite3: Database,
   dbPathProvider: getDatabasePath,
+  appVersion: () => databaseAppVersion,
   schemaVersion: SCHEMA_VERSION,
   schema: SCHEMA,
   migrations: MIGRATIONS,
@@ -4522,9 +4566,22 @@ export function runWithMassDeleteAllowed<T>(fn: () => T): T {
  * shared @hidock/database engine, configured above with this app's schema,
  * version, migrations, and repairPhase.
  */
-export async function initializeDatabase(options: { onProgress?: (p: BootProgress) => void; existingSchemaOnly?: boolean } = {}): Promise<void> {
-  if (options.existingSchemaOnly) { engine.initializeExistingWritable(); return }
-  await engine.initialize(options)
+export async function initializeDatabase(
+  options: { onProgress?: (p: BootProgress) => void; existingSchemaOnly?: boolean; appVersion?: string } = {}
+): Promise<void> {
+  if (options.appVersion !== undefined) databaseAppVersion = options.appVersion
+  const safety = checkEngineSafety(databaseEngineModule.ENGINE_SAFETY_VERSION)
+  if (options.existingSchemaOnly) {
+    // No schema work on this open, so an old engine cannot migrate anything.
+    if (!safety.ok) console.error(safety.message)
+    engine.initializeExistingWritable()
+    return
+  }
+  if (!safety.ok) {
+    console.error(safety.message)
+    throw new Error(safety.message)
+  }
+  await engine.initialize({ onProgress: options.onProgress })
 }
 
 /**
@@ -4533,7 +4590,24 @@ export async function initializeDatabase(options: { onProgress?: (p: BootProgres
  * with a `SchemaBehindError` from `@hidock/database`.
  */
 export function initializeDatabaseReadOnly(): void {
+  // Read-only never migrates: an old engine is worth a loud line, not a refusal.
+  const safety = checkEngineSafety(databaseEngineModule.ENGINE_SAFETY_VERSION)
+  if (!safety.ok) console.error(safety.message)
   engine.initializeReadOnly()
+}
+
+/**
+ * Check a deletion request before anything is written. Every deletion that
+ * writes deletion_journal or purged_files says who asked (v74).
+ */
+function assertDeletionRequest(request: DeletionRequest | undefined): DeletionRequest {
+  if (!request || !isDeletionOrigin(request.origin)) {
+    throw new Error(`Deletion refused: origin must be 'user', 'system' or 'sync' (got ${JSON.stringify(request?.origin)})`)
+  }
+  if (typeof request.requestedBy !== 'string' || request.requestedBy.trim() === '' || request.requestedBy.length > MAX_REQUESTED_BY_LENGTH) {
+    throw new Error(`Deletion refused: requestedBy must name the caller (1 to ${MAX_REQUESTED_BY_LENGTH} characters)`)
+  }
+  return { origin: request.origin, requestedBy: request.requestedBy.trim() }
 }
 
 /** Invoked by the post-paint boot scheduler; never delays the main window. */
@@ -6097,8 +6171,9 @@ export interface RecordingDeletionResult {
  */
 export function deleteRecordingCascade(
   recordingId: string,
-  opts: { hard?: boolean; skipGraphCleanup?: boolean } = {}
+  opts: { hard?: boolean; skipGraphCleanup?: boolean } & DeletionRequest
 ): RecordingDeletionResult | undefined {
+  const request = assertDeletionRequest(opts)
   const rec = getRecordingById(recordingId)
   if (!rec) return undefined
 
@@ -6131,9 +6206,9 @@ export function deleteRecordingCascade(
       // persist any further derivatives for this now-trashed recording.
       runNoSave("UPDATE transcription_queue SET status = 'cancelled' WHERE recording_id = ? AND status = 'processing'", [recordingId])
       runNoSave(
-        `INSERT INTO deletion_journal (id, recording_id, mode, recording_snapshot, created_at)
-         VALUES (?, ?, 'soft', ?, ?)`,
-        [randomUUID(), recordingId, JSON.stringify(rec), now]
+        `INSERT INTO deletion_journal (id, recording_id, mode, recording_snapshot, created_at, requested_origin, requested_by, app_version)
+         VALUES (?, ?, 'soft', ?, ?, ?, ?, ?)`,
+        [randomUUID(), recordingId, JSON.stringify(rec), now, request.origin, request.requestedBy, databaseAppVersion]
       )
     })
     return {
@@ -6305,7 +6380,11 @@ export function deleteRecordingCascade(
         purgeTombstones.add(name.replace(/\.(hda|wav)$/i, '.mp3'))
       }
       for (const name of purgeTombstones) {
-        runNoSave('INSERT OR IGNORE INTO purged_files (filename) VALUES (?)', [name])
+        // OR IGNORE: an existing tombstone keeps the request that first wrote it.
+        runNoSave(
+          'INSERT OR IGNORE INTO purged_files (filename, requested_origin, requested_by, app_version) VALUES (?, ?, ?, ?)',
+          [name, request.origin, request.requestedBy, databaseAppVersion]
+        )
       }
       runNoSave('DELETE FROM recording_preassignments WHERE filename = ?', [rec.filename])
       if (rec.original_filename) {
@@ -6375,9 +6454,9 @@ export function deleteRecordingCascade(
           })
         : null
       runNoSave(
-        `INSERT INTO deletion_journal (id, recording_id, mode, recording_snapshot, removed_counts, created_at)
-         VALUES (?, ?, 'hard', ?, NULL, ?)`,
-        [journalId, recordingId, hardSnapshot, new Date().toISOString()]
+        `INSERT INTO deletion_journal (id, recording_id, mode, recording_snapshot, removed_counts, created_at, requested_origin, requested_by, app_version)
+         VALUES (?, ?, 'hard', ?, NULL, ?, ?, ?, ?)`,
+        [journalId, recordingId, hardSnapshot, new Date().toISOString(), request.origin, request.requestedBy, databaseAppVersion]
       )
 
       return {
@@ -6773,15 +6852,18 @@ export function getRecordingsByIds(ids: string[]): Map<string, Recording> {
 // stores the device name in original_filename. Prefer the local canonical row
 // when both exist so a device snapshot cannot create a second shadow row.
 export function getRecordingByFilename(filename: string): Recording | undefined {
-  return queryOne<Recording>(
-    `SELECT * FROM recordings
-      WHERE filename = ? OR original_filename = ?
-      ORDER BY on_local DESC,
-               CASE WHEN filename = ? THEN 0 ELSE 1 END,
-               created_at ASC
-      LIMIT 1`,
-    [filename, filename, filename]
+  const base = filename.replace(/\.(hda|wav|mp3|m4a|aac|ogg|flac)$/i, '')
+  const variants = base === filename ? [filename] : [filename, ...RECORDING_EXTENSIONS.map((ext) => `${base}.${ext}`)]
+  const placeholders = variants.map(() => '?').join(', ')
+  const candidates = queryAll<Recording>(
+    `SELECT * FROM recordings WHERE filename COLLATE NOCASE IN (${placeholders})
+      OR original_filename COLLATE NOCASE IN (${placeholders})`, [...variants, ...variants]
   )
+  if (!/\.hda$/i.test(filename)) {
+    const exact = candidates.filter((row) => row.filename.toLowerCase() === filename.toLowerCase())
+    if (exact.length === 1) return exact[0]
+  }
+  return resolveDeviceRecording(filename, candidates)
 }
 
 // Update recording lifecycle state
@@ -6830,7 +6912,14 @@ export function upsertRecordingFromDevice(deviceFile: {
   duration: number
   dateCreated: Date
 }): Recording {
-  const existing = getRecordingByFilename(deviceFile.filename)
+  // An ambiguous identity (two exact device rows) is not a new recording:
+  // inserting would add another row on every scan. Keep using the oldest.
+  const existing = getRecordingByFilename(deviceFile.filename) ?? queryAll<Recording>(
+    `SELECT * FROM recordings
+      WHERE (filename = ? COLLATE NOCASE OR original_filename = ? COLLATE NOCASE)
+        AND (source IS NULL OR source = 'hidock') AND COALESCE(is_imported, 0) != 1
+      ORDER BY created_at, id LIMIT 1`, [deviceFile.filename, deviceFile.filename]
+  )[0]
   const now = new Date().toISOString()
   // Custom recordings have no qualified byte-rate estimate before download.
   // Preserve an existing measurement when the device reports unknown (0).
@@ -6867,9 +6956,25 @@ export function upsertRecordingFromDevice(deviceFile: {
 }
 
 // Mark recordings as no longer on device
-export function markRecordingsNotOnDevice(presentFilenames: string[]): void {
-  if (presentFilenames.length === 0) return
+/** SQLite CURRENT_TIMESTAMP ('YYYY-MM-DD HH:MM:SS', UTC) or ISO text, as epoch ms. */
+function storedTimeMs(value: string | null | undefined): number {
+  if (!value) return Number.NaN
+  return Date.parse(value.includes('T') ? value : `${value.replace(' ', 'T')}Z`)
+}
 
+/**
+ * A complete scan proves absence only for rows that existed before it began.
+ * Rows created or seen on the device since (`scanStartedAt`) are left alone.
+ */
+export function markRecordingsNotOnDevice(presentFilenames: string[], scanStartedAt?: string): void {
+  const cutoff = storedTimeMs(scanStartedAt)
+  // CURRENT_TIMESTAMP has whole seconds: a row stamped in the scan's starting
+  // second may be newer than the scan, so it counts as seen since.
+  const seenSinceScan = (time: string | null | undefined): boolean => {
+    const ms = storedTimeMs(time)
+    if (!Number.isFinite(ms)) return false
+    return ms >= (/\.\d/.test(time!) ? cutoff : Math.floor(cutoff / 1000) * 1000)
+  }
   const presentBases = new Set(
     presentFilenames.map((filename) => filename.replace(/\.(hda|wav|mp3|m4a|aac|ogg|flac)$/i, '').toLowerCase())
   )
@@ -6878,6 +6983,7 @@ export function markRecordingsNotOnDevice(presentFilenames: string[]): void {
   const onDevice = queryAll<Recording>('SELECT * FROM recordings WHERE on_device = 1')
 
   for (const rec of onDevice) {
+    if (Number.isFinite(cutoff) && [rec.device_last_seen, rec.created_at].some(seenSinceScan)) continue
     const deviceIdentity = rec.original_filename || rec.filename
     const base = deviceIdentity.replace(/\.(hda|wav|mp3|m4a|aac|ogg|flac)$/i, '').toLowerCase()
     if (!presentBases.has(base)) {
@@ -6907,17 +7013,7 @@ const RECORDING_EXTENSIONS = RECORDING_AUDIO_EXTENSIONS.map((ext) => ext.slice(1
  * exist under any variant of the same base name.
  */
 export function getRecordingByFilenameVariants(filename: string): Recording | undefined {
-  const exact = getRecordingByFilename(filename)
-  if (exact) return exact
-
-  const base = filename.replace(/\.(hda|wav|mp3|m4a|aac|ogg|flac)$/i, '')
-  for (const ext of RECORDING_EXTENSIONS) {
-    const variant = `${base}.${ext}`
-    if (variant === filename) continue
-    const match = getRecordingByFilename(variant)
-    if (match) return match
-  }
-  return undefined
+  return getRecordingByFilename(filename)
 }
 
 // Mark recording as downloaded.
@@ -7035,7 +7131,8 @@ export type RecordingSplitChild = Omit<Recording, 'created_at' | 'meeting_id' | 
  * The source row, transcript, and original audio stay intact in Trash, so the
  * user can recover from a cut without relying on filesystem undo.
  */
-export function commitRecordingSplit(recordingId: string, children: RecordingSplitChild[]): void {
+export function commitRecordingSplit(recordingId: string, children: RecordingSplitChild[], requestInput: DeletionRequest): void {
+  const request = assertDeletionRequest(requestInput)
   if (children.length !== 2) throw new Error('A recording split must create exactly two children')
   if (new Set(children.map((child) => child.id)).size !== 2) throw new Error('Split child ids must be unique')
 
@@ -7074,9 +7171,9 @@ export function commitRecordingSplit(recordingId: string, children: RecordingSpl
     runNoSave("DELETE FROM transcription_queue WHERE recording_id = ? AND status IN ('pending', 'failed')", [recordingId])
     runNoSave("UPDATE transcription_queue SET status = 'cancelled' WHERE recording_id = ? AND status = 'processing'", [recordingId])
     runNoSave(
-      `INSERT INTO deletion_journal (id, recording_id, mode, recording_snapshot, created_at)
-       VALUES (?, ?, 'soft', ?, ?)`,
-      [randomUUID(), recordingId, JSON.stringify(parent), now]
+      `INSERT INTO deletion_journal (id, recording_id, mode, recording_snapshot, created_at, requested_origin, requested_by, app_version)
+       VALUES (?, ?, 'soft', ?, ?, ?, ?, ?)`,
+      [randomUUID(), recordingId, JSON.stringify(parent), now, request.origin, request.requestedBy, databaseAppVersion]
     )
   })
 }
