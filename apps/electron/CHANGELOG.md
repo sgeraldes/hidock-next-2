@@ -4,15 +4,7 @@ Each entry is one day of merged work. The Releases page in Settings reads this f
 
 Device reference: [model/version gates, recordings and native markers](../../docs/devices/README.md). The 11 October firmware documentation describes offline research and local tooling, not an additional merged device-firmware feature. Older release entries retain their dated scope.
 
-## 2026-11-24 | Operations say what they are doing, and Stop works
-
-- Operations and Notifications show the current transcription step, progress and elapsed time, with Stop, Retry and queue ordering actions. Recording dates and operation times are clearly separated, and View source opens the transcript or processing status.
-- Stopping transcription aborts provider requests at once, stops local workers at their next check (within half a second), keeps a cancellation reason, and discards unfinished transcript output. Stop after the transcript is saved reads Finish processing and keeps the transcript.
-- Audio checks decode WebM recordings that have no duration header before deciding whether they can be transcribed.
-- Library backfills read transcript text only when needed and yield between committed batches. Fresh search vectors use compact memory storage. Operations errors stay contained, including during development reloads.
-- Graph updates skip recordings already processed or excluded before loading transcript text, and yield between batches so the app stays responsive while transcriptions run.
-
-## 2026-11-24 | Device recordings stay put
+## 2026-11-24 | Device recordings stay put, and Operations say what they are doing
 
 - Recordings the device may still hold are no longer removed at startup or when the device disconnects, so they stop disappearing and coming back with new ids. Their titles, ratings and meeting links stay with them.
 - A device recording that is already in the Library as a downloaded .wav shows once, as that .wav with its transcript, title and validity, also when the computer's time zone differs from the device clock's.
@@ -20,6 +12,11 @@ Device reference: [model/version gates, recordings and native markers](../../doc
 - Every deletion now records who asked for it: the owner, the app itself or a sync, the feature that asked (for example Move to Trash in the Library or a split), and the app version. Deletions from before this update show nothing there.
 - Every update of the library's structure leaves a dated record of the versions it moved between, the app version, and the backup made before it. An app built with an outdated database engine refuses to update the library and says how to fix it, and the app no longer starts or builds when one of its own packages is older than its source.
 - HiDock keeps a local record of each question asked in the chat, Explore and agents, and of what retrieval found for it, so later changes to search can be measured against real use. It is on by default, in `<data folder>\traces\retrieval-traces.db`. Query text is encrypted and erased after 30 days, traces are deleted after 90 days, with a 1 GiB cap. Settings > Assistant has "Record queries" and "Keep the text of my queries"; turning off the second erases stored query text. Nothing leaves the machine through query recording.
+- Operations and Notifications show the current transcription step, progress and elapsed time, with Stop, Retry and queue ordering actions. Recording dates and operation times are clearly separated, and View source opens the transcript or processing status.
+- Stopping transcription aborts provider requests at once, stops local workers at their next check (within half a second), keeps a cancellation reason, and discards unfinished transcript output. Stop after the transcript is saved reads Finish processing and keeps the transcript.
+- Audio checks decode WebM recordings that have no duration header before deciding whether they can be transcribed.
+- Library backfills read transcript text only when needed and yield between committed batches. Fresh search vectors use compact memory storage. Operations errors stay contained, including during development reloads.
+- Graph updates skip recordings already processed or excluded before loading transcript text, and yield between batches so the app stays responsive while transcriptions run.
 
 ## 2026-11-22 | Find inside a transcript
 
