@@ -10,6 +10,20 @@
 
 import React from 'react'
 
+/** Offset-based highlights for literal, accent-insensitive reader matches. */
+export function highlightRanges(text: string, ranges: Array<{ start: number; end: number; id: string }>, currentId?: string): React.ReactNode {
+  const nodes: React.ReactNode[] = []
+  let offset = 0
+  for (const range of ranges) {
+    nodes.push(text.slice(offset, range.start))
+    nodes.push(<mark key={range.id} data-find-current={range.id === currentId ? 'true' : undefined}
+      className={range.id === currentId ? 'bg-orange-400 text-black rounded-sm ring-2 ring-orange-600 scroll-mt-32' : 'bg-yellow-200 text-black dark:bg-yellow-800 dark:text-white rounded-sm'}>{text.slice(range.start, range.end)}</mark>)
+    offset = range.end
+  }
+  nodes.push(text.slice(offset))
+  return nodes
+}
+
 /**
  * Highlights portions of text that match the given query.
  * The query is split on whitespace into tokens; each token is highlighted

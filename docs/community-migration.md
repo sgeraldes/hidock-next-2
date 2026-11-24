@@ -2,6 +2,8 @@
 
 HiDock Next 2.0 was extracted from the original multi-application repository. Before the split, open issues and pull requests were reviewed so useful community work would not be lost.
 
+Current device documentation is in [the device guide](devices/README.md). The new H1E 6.2.5 recording findings apply to that image only; they do not replace model-specific community evidence, including P1 duration/96 kbps observations. Stored MP3, newer Jensen realtime PCM and PC recordings have separate format and channel boundaries.
+
 ## Included in 2.0
 
 - Calendar grouping uses local calendar dates instead of UTC day keys. Thanks to [@toruhashimoto](https://github.com/toruhashimoto), original PR [#79](https://github.com/sgeraldes/hidock-next/pull/79).

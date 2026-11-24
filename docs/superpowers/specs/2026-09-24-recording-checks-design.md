@@ -2,6 +2,8 @@
 
 Date: 24-sep-2026. Status: design, not built.
 
+Device-format update, 11 October 2026: [the device guide](../../devices/README.md) distinguishes H1E 6.2.5 mono MP3, newer realtime PCM and PC stereo WebM. Profiling a mono recording cannot recover source lanes mixed before encoding. Native `HiDockVM` markers are elapsed-millisecond device/manual metadata, separate from content-derived action/decision markers; checks/import should preserve that origin. This note does not change the historical implementation status below.
+
 ## The request
 
 Sebastián, 24-sep, while the speaker engines work was in progress:

@@ -7,9 +7,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { NotificationsButton } from '../NotificationsButton'
+import { UserMenu } from '../UserMenu'
 import { useDownloadQueue, useUnifiedRecordings } from '@/store/useAppStore'
 import { useTranscriptionStats, useTranscriptionStore } from '@/store/features/useTranscriptionStore'
 import { useUIStore } from '@/store/ui/useUIStore'
+const navigate = vi.hoisted(() => vi.fn())
+vi.mock('react-router-dom', () => ({ useNavigate: () => navigate }))
 
 // Radix Popover positioning uses ResizeObserver, which jsdom lacks.
 class RO {
@@ -32,11 +35,18 @@ vi.mock('@/store/features/useTranscriptionStore', () => ({
   useTranscriptionStore: vi.fn()
 }))
 vi.mock('@/store/ui/useUIStore', () => ({ useUIStore: vi.fn() }))
+vi.mock('@/hooks/useTheme', () => ({
+  useTheme: () => ({ theme: 'dark', resolvedTheme: 'dark', setTheme: vi.fn(), toggleTheme: vi.fn() })
+}))
 
+const mockStop = vi.fn()
+const mockRetry = vi.fn()
+const mockUp = vi.fn()
+const mockDown = vi.fn()
 const mockCancelDownload = vi.fn()
 const mockCancelAllDownloads = vi.fn()
 vi.mock('@/hooks/useOperations', () => ({
-  useOperations: () => ({ cancelDownload: mockCancelDownload, cancelAllDownloads: mockCancelAllDownloads })
+  useOperations: () => ({ cancelDownload: mockCancelDownload, cancelAllDownloads: mockCancelAllDownloads, cancelTranscription: mockStop })
 }))
 
 const mockOpenOverlay = vi.fn()
@@ -57,7 +67,7 @@ function setup({
     { id: 'r2', filename: '2026-07-10-notes.wav', title: 'Notes' }
   ] as any)
   vi.mocked(useTranscriptionStats).mockReturnValue(stats as any)
-  vi.mocked(useTranscriptionStore).mockImplementation((selector: any) => selector({ queue }))
+  vi.mocked(useTranscriptionStore).mockImplementation((selector: any) => selector({ queue, retry: mockRetry, prioritize: mockUp, deprioritize: mockDown }))
   vi.mocked(useUIStore).mockImplementation((selector: any) => selector({ openOperationsOverlay: mockOpenOverlay }))
 }
 
@@ -76,6 +86,23 @@ function txItem(over: Record<string, any> = {}) {
 }
 
 describe('NotificationsButton', () => {
+  it('offers live progress, Stop, source navigation and queued ordering', () => {
+    setup({ queue: new Map([['t1', txItem({stage:'voices'})], ['t2', txItem({id:'t2',recordingId:'r2',status:'pending'})]]), stats: {total:2,completed:0,failed:0,processing:1,pending:1,aggregateProgress:20} })
+    render(<NotificationsButton />)
+    fireEvent.click(screen.getByRole('button', {name:/Notifications:/}))
+    expect(screen.getByText(/Separating speakers/)).toBeVisible()
+    fireEvent.click(screen.getByRole('button', {name:'Stop'}))
+    expect(mockStop).toHaveBeenCalledWith('r1')
+    fireEvent.click(screen.getByRole('button', {name:'Move up'}))
+    expect(mockUp).toHaveBeenCalledWith('t2')
+    fireEvent.click(screen.getByRole('button', {name:'Move down'}))
+    expect(mockDown).toHaveBeenCalledWith('t2')
+    fireEvent.click(screen.getByRole('button', {name:'Remove from queue'}))
+    expect(mockStop).toHaveBeenCalledWith('r2')
+    fireEvent.click(screen.getAllByRole('button', {name:'View source'})[0])
+    expect(navigate).toHaveBeenCalledWith('/library', {state:{selectedId:'r1',focusProcessing:true}})
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     ;(window as any).electronAPI = {
@@ -92,6 +119,27 @@ describe('NotificationsButton', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Notifications' }))
     expect(screen.getByText('No recent activity')).toBeInTheDocument()
+  })
+
+  it('lets Notifications open on the first click while the app menu is open', async () => {
+    setup()
+    render(
+      <>
+        <NotificationsButton />
+        <UserMenu />
+      </>
+    )
+
+    fireEvent.keyDown(screen.getByRole('button', { name: /app menu/i }), { key: 'Enter' })
+    expect(await screen.findByRole('menu')).toBeInTheDocument()
+    // A modal Radix menu sets this on the body and blocks the neighboring
+    // titlebar buttons from receiving the pointer event that should replace it.
+    expect(document.body.style.pointerEvents).not.toBe('none')
+
+    fireEvent.click(screen.getByRole('button', { name: /^notifications$/i }))
+
+    expect(await screen.findByText('No recent activity')).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument())
   })
 
   it('lists in-flight transcriptions and active downloads', () => {
@@ -115,6 +163,33 @@ describe('NotificationsButton', () => {
     expect(screen.getByRole('img', { name: 'Downloading, 42%' })).toBeInTheDocument()
     expect(screen.getByText('42%')).toBeInTheDocument()
     expect(screen.queryByText(/Downloading…/)).not.toBeInTheDocument()
+  })
+
+  it('does not count a stale renderer row after an active main session reports only terminal rows', async () => {
+    const getState = vi.fn().mockResolvedValue({
+      sessionStatus: 'active',
+      isProcessing: false,
+      isPaused: false,
+      queue: [
+        { filename: 'REC0001.WAV', fileSize: 1000, progress: 50, status: 'cancelled', cancelReason: 'user' },
+        { filename: 'REC0002.WAV', fileSize: 1000, progress: 100, status: 'failed', error: 'failed' }
+      ]
+    })
+    ;(window as any).electronAPI.downloadService.getState = getState
+    setup({
+      downloads: new Map([
+        ['stale', { filename: 'STALE.WAV', progress: 50, size: 1000, status: 'downloading' }]
+      ])
+    })
+
+    render(<NotificationsButton />)
+
+    const trigger = await screen.findByRole('button', {
+      name: /Notifications: 0 operations in progress, 1 failed/
+    })
+    expect(getState).toHaveBeenCalledTimes(1)
+    fireEvent.click(trigger)
+    expect(screen.queryByRole('img', { name: 'Downloading, 50%' })).not.toBeInTheDocument()
   })
 
   it('routes "View all" to the shared Operations overlay', () => {
@@ -208,3 +283,14 @@ describe('NotificationsButton', () => {
     expect(screen.getByText('No recent activity')).toBeInTheDocument()
   })
 })
+
+ it('shows a stopped-only notification with its saved-result reason and Finish processing', async () => {
+   setup({ queue: new Map([['t1', txItem({ status: 'cancelled', error: 'Stopped by you after the transcript was saved; summary/actions/search not updated' })]]) })
+   render(<NotificationsButton />)
+   fireEvent.click(screen.getByRole('button', { name: /Notifications/ }))
+   expect(await screen.findByText('Stopped by you after the transcript was saved; summary/actions/search not updated')).toBeVisible()
+   expect(screen.getByText('Stopped', {exact:true})).toBeVisible()
+   fireEvent.click(screen.getByRole('button', { name: 'Finish processing' }))
+   expect(mockRetry).toHaveBeenCalled()
+   expect(screen.getByRole('button', { name: 'Dismiss' })).toBeVisible()
+ })

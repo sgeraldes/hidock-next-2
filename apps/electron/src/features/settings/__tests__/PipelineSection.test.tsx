@@ -66,11 +66,11 @@ describe('PipelineSection', () => {
     getState.mockResolvedValue({ ...stateWith(), decisionEngines: [{ id: 'clef', label: 'Clef', costPerCallUsd: 0, available: true, dataLeavesMachine: 'lan' }] })
     render(<PipelineSection />)
     const preset = await screen.findByRole('combobox', { name: 'Global preset' })
-    expect(within(preset).getByRole('option', { name: 'Zero cost' })).toBeInTheDocument()
+    expect(within(preset).getByRole('option', { name: 'Prefer free' })).toBeInTheDocument()
     expect(screen.getByText('Clef · Available · US$ 0 · Local network')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Decisions' })).toBeInTheDocument()
     expect(screen.getByText('Choose how decisions are made. If an engine cannot answer, the preset tries the next one.')).toBeInTheDocument()
-    expect(within(preset).getAllByRole('option').map(option => option.textContent)).toEqual(['Zero cost', 'Cheapest', 'Most accurate', 'Fastest'])
+    expect(within(preset).getAllByRole('option').map(option => option.textContent)).toEqual(['Prefer free', 'Cheapest', 'Most accurate', 'Fastest'])
     for (const name of ['Identity tiebreak', 'Meeting match', 'Evaluation', 'Sample comparison', 'Recording kind']) {
       expect(within(screen.getByRole('combobox', { name })).getByRole('option', { name: 'Same as preset' })).toBeInTheDocument()
     }
@@ -78,6 +78,19 @@ describe('PipelineSection', () => {
     fireEvent.change(screen.getByRole('combobox', { name: 'Evaluation' }), { target: { value: 'jev' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save decisions' }))
     await waitFor(() => expect(saveDecisions).toHaveBeenCalledWith({ preset: 'zero-cost', overrides: { evaluate: 'jev' } }))
+  })
+  it('discloses paid fallback only while Prefer free is selected globally or for a step', async () => {
+    render(<PipelineSection />)
+    const preset = await screen.findByRole('combobox', { name: 'Global preset' })
+    const disclosure = /If they are unavailable or fail, it can send the decision to paid cloud providers and incur charges/
+    expect(screen.getByText(disclosure)).toBeInTheDocument()
+    fireEvent.change(preset, { target: { value: 'cheapest' } })
+    expect(screen.queryByText(disclosure)).not.toBeInTheDocument()
+    const evaluation = screen.getByRole('combobox', { name: 'Evaluation' })
+    fireEvent.change(evaluation, { target: { value: 'zero-cost' } })
+    expect(screen.getByText(disclosure)).toBeInTheDocument()
+    fireEvent.change(evaluation, { target: { value: 'clef' } })
+    expect(screen.queryByText(disclosure)).not.toBeInTheDocument()
   })
   it('removes a step override when Same as preset is selected', async () => {
     getState.mockResolvedValue(stateWith({ ...emptyPipelineConfig(), decisions: { preset: 'cheapest', overrides: { evaluate: 'jev' } } }))

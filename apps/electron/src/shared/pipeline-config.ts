@@ -79,7 +79,7 @@ export const DECISION_ENGINE_IDS = ['clef-flash', 'clef', 'jev', 'haiku', 'gemin
 export type DecisionEngineId = (typeof DECISION_ENGINE_IDS)[number]
 export const DECISION_PRESETS = ['zero-cost', 'cheapest', 'most-accurate', 'fastest'] as const
 export type DecisionPreset = (typeof DECISION_PRESETS)[number]
-export const DECISION_STEPS = ['identity-tiebreak', 'meeting-match', 'evaluate', 'sample-compare', 'kind-pick'] as const
+export const DECISION_STEPS = ['identity-tiebreak', 'meeting-match', 'evaluate', 'sample-compare', 'kind-pick', 'quality-repair'] as const
 export type DecisionStep = (typeof DECISION_STEPS)[number]
 export interface DecisionConfig {
   preset: DecisionPreset

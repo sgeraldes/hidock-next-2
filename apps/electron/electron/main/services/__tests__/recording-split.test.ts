@@ -109,7 +109,7 @@ describe('recording split file transaction', () => {
       on_local: 1,
       source: 'hidock',
       is_imported: 0,
-    }, 1200, executor)
+    }, 1200, { origin: 'user', requestedBy: 'recordings:split' }, executor)
 
     expect(executor).toHaveBeenCalledTimes(5)
     expect(result.children.map((child) => child.durationSeconds)).toEqual([1200, 3600])
@@ -119,7 +119,7 @@ describe('recording split file transaction', () => {
     expect(commitRecordingSplit).toHaveBeenCalledWith('parent', expect.arrayContaining([
       expect.objectContaining({ filename: 'session - Part 1.flac', transcription_status: 'none' }),
       expect.objectContaining({ filename: 'session - Part 2.flac', transcription_status: 'none' }),
-    ]))
+    ]), { origin: 'user', requestedBy: 'recordings:split' })
   })
 
   it('rejects a cut too close to either edge before invoking FFmpeg', async () => {
@@ -138,7 +138,7 @@ describe('recording split file transaction', () => {
       on_local: 1,
       source: 'external',
       is_imported: 1,
-    }, 0.5, executor)).rejects.toThrow('at least 1 second')
+    }, 0.5, { origin: 'user', requestedBy: 'recordings:split' }, executor)).rejects.toThrow('at least 1 second')
     expect(executor).not.toHaveBeenCalled()
   })
 })

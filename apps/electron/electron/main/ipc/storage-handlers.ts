@@ -14,6 +14,7 @@ import {
 } from '../services/file-storage'
 import {
   insertRecording,
+  remeasureRecordingDuration,
   enrichRecordingScheduleMetadata,
   addSyncedFile,
   getRecordingIdByFilePath,
@@ -34,8 +35,15 @@ import { isFeatureEnabled } from '../services/feature-gate'
 // authoritative over mtimes.
 import { parseHiDockFilenameDate } from '../services/hidock-filename'
 import { queueTranscriptionIfEnabled } from '../services/transcription'
+import { getRecordingAudioMetadata } from '../services/recording-audio-metadata'
 
 export function registerStorageHandlers(): void {
+  ipcMain.handle('storage:recording-audio-metadata', async (event, recordingId: unknown) => {
+    if (event.sender.isDestroyed() || event.senderFrame !== event.sender.mainFrame) {
+      return { success: false, error: 'Invalid audio metadata caller' }
+    }
+    return getRecordingAudioMetadata(recordingId)
+  })
   // Get storage info
   ipcMain.handle('storage:get-info', async () => {
     try {
@@ -310,6 +318,14 @@ export function registerStorageHandlers(): void {
       }
 
       insertRecording(recording)
+      // Settle the saved file before schedule matching and transcription gating.
+      // This renderer download path does not pass through markRecordingDownloaded.
+      try {
+        remeasureRecordingDuration(recordingId)
+      } catch (error) {
+        // The bytes and row are already saved; do not invite a duplicate retry.
+        console.warn('[Storage] Saved recording; duration measurement unavailable', error)
+      }
 
       // Use the same current-snapshot, ambiguity-aware matcher as device
       // discovery. The old first-match loop could bind a new file to an obsolete

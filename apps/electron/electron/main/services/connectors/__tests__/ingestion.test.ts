@@ -79,6 +79,23 @@ describe('extensionForItem', () => {
 })
 
 describe('ConnectorIngestionSink routing', () => {
+  it('retains event order and account scope for deletions and restored events', async () => {
+    const deps = fakeDeps()
+    const calls: string[] = []
+    const sink = new ConnectorIngestionSink({ ...deps,
+      upsertMeetings: rows => { calls.push(`upsert:${rows[0].id}`); deps.upsertMeetings(rows) },
+      markMeetingDeleted: (account, id) => { calls.push(`delete:${account}:${id}`) }
+    })
+    const item = { externalId: 'evt1', kind: 'meeting', mime: 'application/json', createdAt: meeting.start, entity: meeting }
+    const result = await sink.ingest('m365:account-a', container, [item,
+      { ...item, entity: undefined, metadata: { deleted: true } }, item])
+    expect(calls).toEqual(['upsert:m365:account-a:evt1', 'delete:m365:account-a:evt1', 'upsert:m365:account-a:evt1'])
+    expect(result.meetings).toBe(3)
+  })
+  it('fails a calendar deletion instead of silently advancing the delta cursor', async () => {
+    const sink = new ConnectorIngestionSink({ ...fakeDeps(), markMeetingDeleted: () => { throw new Error('fixture DB failure') } })
+    await expect(sink.ingest('m365:a', container, [{ externalId: 'gone', kind: 'meeting', mime: 'application/json', createdAt: meeting.start, metadata: { deleted: true } }])).rejects.toThrow('fixture DB failure')
+  })
   it('routes meeting → upsertMeetings, contact → applyContact, other → importArtifact', async () => {
     const deps = fakeDeps()
     const sink = new ConnectorIngestionSink(deps)

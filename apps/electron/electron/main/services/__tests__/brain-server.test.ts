@@ -8,6 +8,7 @@
  */
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { request } from 'http'
+import { BrainAgentAccess } from '../brain-agent-access'
 import { startBrainServer, tokensMatch, isLoopbackHost, type BrainQueries, type RunningBrainServer } from '../brain-server'
 
 const TOKEN = 'a'.repeat(64)
@@ -37,12 +38,13 @@ afterEach(async () => {
 function call(
   port: number,
   path: string,
-  opts: { method?: string; token?: string | null; host?: string } = {}
+  opts: { method?: string; token?: string | null; host?: string; body?: unknown; rawBody?: string } = {}
 ): Promise<{ status: number; body: any }> {
   return new Promise((resolve, reject) => {
     const headers: Record<string, string> = { host: opts.host ?? `127.0.0.1:${port}` }
     const token = opts.token === undefined ? TOKEN : opts.token
     if (token !== null) headers.authorization = `Bearer ${token}`
+    if (opts.body !== undefined || opts.rawBody !== undefined) headers['content-type'] = 'application/json'
     const req = request({ host: '127.0.0.1', port, path, method: opts.method ?? 'GET', headers }, (res) => {
       let text = ''
       res.setEncoding('utf-8')
@@ -50,7 +52,7 @@ function call(
       res.on('end', () => resolve({ status: res.statusCode ?? 0, body: text ? JSON.parse(text) : null }))
     })
     req.on('error', reject)
-    req.end()
+    req.end(opts.rawBody ?? (opts.body === undefined ? undefined : JSON.stringify(opts.body)))
   })
 }
 
@@ -60,7 +62,137 @@ async function start(kind: 'app' | 'service', extra: Partial<Parameters<typeof s
   return { port: running.port, queries }
 }
 
+describe('directed transcription', () => {
+  it('bounds JSON, IDs and providers before admitting a directed job', async () => {
+    const submit = vi.fn(() => ({ jobs: [] }))
+    const cancel = vi.fn()
+    const { port } = await start('app', { transcription: { submit, status: ids => ids, cancel } })
+    expect((await call(port, '/transcriptions', { method: 'POST', body: { recordingIds: ['r1'], provider: 'gemini', requestId: 'req1' } })).status).toBe(202)
+    expect(submit).toHaveBeenCalledWith(['r1'], 'gemini', 'req1')
+    expect((await call(port, '/transcriptions', { method: 'POST', body: { recordingIds: Array(11).fill('r1'), requestId: 'req2' } })).status).toBe(400)
+    expect((await call(port, '/transcriptions', { method: 'POST', body: { recordingIds: ['r1'], provider: 'other', requestId: 'req2' } })).status).toBe(400)
+    expect((await call(port, '/transcriptions', { method: 'POST', body: { recordingIds: ['r1'] } })).status).toBe(400)
+    expect((await call(port, '/transcriptions', { method: 'POST', rawBody: '{broken' })).status).toBe(400)
+    expect((await call(port, '/transcriptions', { method: 'POST', body: { oversized: 'x'.repeat(17000) } })).status).toBe(413)
+    expect(submit).toHaveBeenCalledOnce()
+    expect((await call(port, '/transcriptions/r1/cancel', { method: 'POST' })).status).toBe(202)
+    expect(cancel).toHaveBeenCalledWith('r1')
+  })
+
+  it('needs the owner token and a JSON body', async () => {
+    const submit = vi.fn(() => ({ jobs: [] }))
+    const { port } = await start('app', { transcription: { submit, status: ids => ids, cancel: vi.fn() } })
+    const body = { recordingIds: ['r1'], requestId: 'req1' }
+    expect((await call(port, '/transcriptions', { method: 'POST', body, token: null })).status).toBe(401)
+    expect((await call(port, '/transcriptions', { method: 'POST', body, token: 'b'.repeat(64) })).status).toBe(401)
+    expect((await call(port, '/transcriptions', { method: 'POST', body, host: 'evil.example' })).status).toBe(403)
+    expect((await call(port, '/transcriptions', { method: 'POST' })).status).toBe(415)
+    expect(submit).not.toHaveBeenCalled()
+  })
+
+  it('answers status for the named ids and passes a refusal from the app through', async () => {
+    const status = vi.fn((ids: string[]) => ids.map((recordingId) => ({ recordingId, transcriptionStatus: 'pending' })))
+    const submit = vi.fn(() => { throw new Error('Transcription processor is busy; retry later') })
+    const { port } = await start('app', { transcription: { submit, status, cancel: vi.fn() } })
+    expect((await call(port, '/transcriptions?ids=r1,r2')).body).toEqual([
+      { recordingId: 'r1', transcriptionStatus: 'pending' },
+      { recordingId: 'r2', transcriptionStatus: 'pending' },
+    ])
+    expect((await call(port, '/transcriptions?ids=')).status).toBe(400)
+    const refused = await call(port, '/transcriptions', { method: 'POST', body: { recordingIds: ['r1'], requestId: 'req1' } })
+    expect(refused.status).toBe(500)
+    expect(refused.body.error).toMatch(/busy/)
+  })
+
+  it('the headless brain neither advertises nor serves transcription', async () => {
+    const { port } = await start('service')
+    const { body } = await call(port, '/capabilities')
+    expect(body.routes.some((r: string) => r.includes('/transcriptions'))).toBe(false)
+    expect((await call(port, '/transcriptions', { method: 'POST', body: { recordingIds: ['r1'], requestId: 'req1' } })).status).toBe(405)
+  })
+
+  it('the app advertises the transcription routes it serves', async () => {
+    const { port } = await start('app', { transcription: { submit: vi.fn(), status: vi.fn(), cancel: vi.fn() } })
+    const { body } = await call(port, '/capabilities')
+    expect(body.routes).toEqual(expect.arrayContaining(['POST /transcriptions', 'GET /transcriptions?ids=<id,id>', 'POST /transcriptions/<recordingId>/cancel']))
+  })
+})
+
 describe('who gets in', () => {
+  it('enforces and revokes dummy agent scopes over real HTTP', async () => {
+    const access = new BrainAgentAccess()
+    const token = 'synthetic-token-for-scope-test-'.repeat(2)
+    access.grant('fixture', token, ['knowledge:read'], Date.now() + 60000)
+    const attachUi = vi.fn()
+    const { port } = await start('app', { authenticateAgent: value => access.authenticate(value), backend: { status: () => ({}), attachUi, stop: vi.fn() } })
+    expect((await call(port, '/recordings/r1', { token })).status).toBe(200)
+    expect((await call(port, '/backend/ui', { token, method: 'POST' })).status).toBe(403)
+    expect(attachUi).not.toHaveBeenCalled()
+    access.revoke('fixture')
+    expect((await call(port, '/recordings/r1', { token })).status).toBe(401)
+  })
+
+  it('bounds JSON, IDs and providers before admitting a directed job', async () => {
+    const submit = vi.fn(() => ({ jobs: [] }))
+    const cancel = vi.fn()
+    const { port } = await start('app', { transcription: { submit, status: ids => ids, cancel } })
+    expect((await call(port, '/transcriptions', { method: 'POST', body: { recordingIds: ['r1'], provider: 'gemini', requestId: 'req1' } })).status).toBe(202)
+    expect(submit).toHaveBeenCalledWith(['r1'], 'gemini', 'req1')
+    expect((await call(port, '/transcriptions', { method: 'POST', body: { recordingIds: Array(11).fill('r1'), requestId: 'req2' } })).status).toBe(400)
+    expect((await call(port, '/transcriptions', { method: 'POST', body: { recordingIds: ['r1'], provider: 'other', requestId: 'req2' } })).status).toBe(400)
+    expect((await call(port, '/transcriptions', { method: 'POST', rawBody: '{broken' })).status).toBe(400)
+    expect((await call(port, '/transcriptions', { method: 'POST', body: { oversized: 'x'.repeat(17000) } })).status).toBe(413)
+    expect(submit).toHaveBeenCalledOnce()
+    expect((await call(port, '/transcriptions/r1/cancel', { method: 'POST' })).status).toBe(202)
+    expect(cancel).toHaveBeenCalledWith('r1')
+  })
+
+  it('limits RAG inputs and forwards only the fixed session and chat operations', async () => {
+    const chat = vi.fn(async () => ({ answer: 'sanitized', provenance: { recordingIds: ['r1'] } }))
+    const { port } = await start('app', { rag: { createSession: () => ({ id: 's1' }), status: async () => ({}), chat, cancel: () => true } })
+    expect((await call(port, '/rag/sessions', { method: 'POST', body: { title: 'Fixture' } })).status).toBe(201)
+    expect((await call(port, '/rag/chat', { method: 'POST', body: { sessionId: 's1', message: 'Question', meetingId: 'm1' } })).body.answer).toBe('sanitized')
+    expect(chat).toHaveBeenCalledWith('s1', 'Question', 'm1')
+    expect((await call(port, '/rag/chat', { method: 'POST', body: { sessionId: 's1', message: 'x'.repeat(8001) } })).status).toBe(400)
+    expect(chat).toHaveBeenCalledOnce()
+  })
+  it('protects backend lifecycle actions with the existing authentication boundary', async () => {
+    const attachUi = vi.fn()
+    const stop = vi.fn()
+    const { port } = await start('app', { backend: { status: () => ({ uiAttached: false }), attachUi, stop } })
+    expect((await call(port, '/backend/ui', { method: 'POST', token: null })).status).toBe(401)
+    expect((await call(port, '/backend/stop', { method: 'POST', host: 'evil.example' })).status).toBe(403)
+    expect(attachUi).not.toHaveBeenCalled()
+    expect(stop).not.toHaveBeenCalled()
+    expect((await call(port, '/backend/status')).body).toEqual({ uiAttached: false })
+    expect((await call(port, '/backend/ui', { method: 'POST' })).status).toBe(202)
+    expect(attachUi).toHaveBeenCalledOnce()
+    expect((await call(port, '/backend/stop', { method: 'POST' })).status).toBe(202)
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(stop).toHaveBeenCalledOnce()
+  })
+
+  it('serves bounded Context Graph queries through the existing service callbacks', async () => {
+    const overview = vi.fn((limit) => ({ limit }))
+    const search = vi.fn((query, limit) => ({ query, limit }))
+    const provenance = vi.fn((id) => ({ id }))
+    const { port } = await start('app', { contextGraph: { overview, search, provenance } })
+    expect((await call(port, '/context-graph?limit=25')).body).toEqual({ limit: 25 })
+    expect((await call(port, '/context-graph/search?q=Pedro&limit=5')).body).toEqual({ query: 'Pedro', limit: 5 })
+    expect((await call(port, '/context-graph/provenance/node-1')).body).toEqual({ id: 'node-1' })
+    expect((await call(port, '/context-graph?limit=101')).status).toBe(400)
+    expect((await call(port, '/context-graph?limit=1.5')).status).toBe(400)
+    expect((await call(port, '/context-graph/search?q=')).status).toBe(400)
+    expect(overview).toHaveBeenCalledOnce()
+    expect(search).toHaveBeenCalledOnce()
+  })
+
+  it('does not advertise unavailable semantic or lifecycle operations', async () => {
+    const { port } = await start('service')
+    const { body } = await call(port, '/capabilities')
+    expect(body.routes.some((r: string) => r.includes('/context-graph') || r.includes('/backend/'))).toBe(false)
+    expect((await call(port, '/context-graph')).status).toBe(404)
+  })
   it('refuses a request with no token', async () => {
     const { port, queries } = await start('service')
     expect((await call(port, '/health', { token: null })).status).toBe(401)

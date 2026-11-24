@@ -1,3 +1,4 @@
+import { getEventBus } from '../event-bus'
 // @vitest-environment node
 
 /**
@@ -356,6 +357,43 @@ describe('Database Service', () => {
     it('returns an empty array when no queue items exist', () => {
       expect(getQueueItems()).toEqual([])
     })
+    it('restores the actual running stage from processing_runs after a renderer reload', () => {
+      seedRecording('rec-stage')
+      const id = addToQueue('rec-stage')
+      updateQueueItem(id, 'processing')
+      const event = vi.fn()
+      const off = getEventBus().onDomainEvent('processing:stage-started', event)
+      createProcessingRun({ recordingId: 'rec-stage', stage: 'diarization', provider: 'pyannote' })
+      off()
+      expect(event).toHaveBeenCalledWith(expect.objectContaining({payload: expect.objectContaining({recordingId:'rec-stage',stage:'diarization'})}))
+      expect(getActionableQueueItems().find((row) => row.id === id)?.stage).toBe('diarization')
+    })
+
+    it('retries Finish processing with the queued engine; completed stage checkpoints carry the saved transcript', () => {
+      seedRecording('finish-processing')
+      const id = addToQueue('finish-processing')
+      const provider = getQueueItems('pending').find((item) => item.id === id)?.provider
+      updateQueueItem(id, 'cancelled', 'Stopped by you after the transcript was saved; summary/actions/search not updated')
+      updateQueueItem(id, 'pending')
+      const retried = getQueueItems('pending').find((item) => item.id === id)
+      expect(retried?.provider).toBe(provider)
+      expect(retried?.retry_count).toBe(1)
+    })
+
+    it('retains recent user stops until dismissed and excludes expired or superseded stops', () => {
+      for (const id of ['recent-stop', 'old-stop', 'dismissed-stop', 'superseded-stop']) seedRecording(id)
+      const recent = addToQueue('recent-stop')
+      const old = addToQueue('old-stop')
+      const dismissed = addToQueue('dismissed-stop')
+      const superseded = addToQueue('superseded-stop')
+      for (const id of [recent, old, dismissed, superseded]) updateQueueItem(id, 'cancelled', 'Stopped by you')
+      run("UPDATE transcription_queue SET completed_at = datetime('now', '-25 hours') WHERE id = ?", [old])
+      updateQueueItem(dismissed, 'cancelled')
+      addToQueue('superseded-stop')
+      const stopped = getActionableQueueItems().filter((item) => item.status === 'cancelled')
+      expect(stopped.map((item) => item.id)).toEqual([recent])
+      expect(stopped[0].error_message).toBe('Stopped by you')
+    })
 
     it('returns only actionable rows for the renderer projection', () => {
       seedRecording('rec-pending')
@@ -511,15 +549,15 @@ describe('Database Service', () => {
       expect(row?.error_message).toBe('API rate limit exceeded')
     })
 
-    it('records completion and the reason when cancelled', () => {
+    it('retains the cancellation reason and terminal time', () => {
       seedRecording('rec-1')
       const id = addToQueue('rec-1')
-      updateQueueItem(id, 'cancelled', 'Clear the rating to transcribe again.')
+      updateQueueItem(id, 'cancelled', 'Stopped by you')
       const row = queueRow(id)
       expect(row?.status).toBe('cancelled')
       expect(row?.started_at).toBeNull()
       expect(row?.completed_at).not.toBeNull()
-      expect(row?.error_message).toBe('Clear the rating to transcribe again.')
+      expect(row?.error_message).toBe('Stopped by you')
     })
   })
 
@@ -535,6 +573,14 @@ describe('Database Service', () => {
   })
 
   describe('device snapshot recording identity', () => {
+    it('preserves a known duration and stores unknown custom file duration as null', () => {
+      seedRecording('rec-measured', { filename: 'measured.wav' })
+      run('UPDATE recordings SET duration_seconds = ? WHERE id = ?', [42, 'rec-measured'])
+      const snapshot = { size: 640044, duration: 0, dateCreated: new Date('2026-10-11T12:00:00Z') }
+      expect(upsertRecordingFromDevice({ ...snapshot, filename: 'measured.wav' }).duration_seconds).toBe(42)
+      const unknown = upsertRecordingFromDevice({ ...snapshot, filename: 'new-custom.wav' })
+      expect(queryOne<{ duration_seconds: number | null }>('SELECT duration_seconds FROM recordings WHERE id = ?', [unknown.id])?.duration_seconds).toBeNull()
+    })
     it('updates the existing local row instead of inserting an .hda shadow row', () => {
       seedRecording('rec-local', {
         filename: '2026Aug18-142505-Rec91.wav',
@@ -765,10 +811,10 @@ describe('Database Service', () => {
       const result = resetStuckTranscriptions()
       expect(result).toEqual({ recordingsReset: 2, queueItemsReset: 1 })
 
-      expect(getRecordingById('rec-1')?.transcription_status).toBe('none')
-      expect(getRecordingById('rec-2')?.transcription_status).toBe('none')
+      expect(getRecordingById('rec-1')?.transcription_status).toBe('error')
+      expect(getRecordingById('rec-2')?.transcription_status).toBe('error')
       const q1row = queryOne<{ status: string }>('SELECT status FROM transcription_queue WHERE id = ?', [q1])
-      expect(q1row?.status).toBe('pending')
+      expect(q1row?.status).toBe('failed')
     })
 
     it('returns zeros when nothing is stuck', () => {
@@ -788,9 +834,9 @@ describe('Database Service', () => {
       expect(resetStuckTranscriptions(['rec-live'])).toEqual({ recordingsReset: 1, queueItemsReset: 1 })
       // Untouched: queueing set it to pending, and the reset would have made it 'none'.
       expect(getRecordingById('rec-live')?.transcription_status).toBe('pending')
-      expect(getRecordingById('rec-dead')?.transcription_status).toBe('none')
+      expect(getRecordingById('rec-dead')?.transcription_status).toBe('error')
       expect(queryOne<{ status: string }>('SELECT status FROM transcription_queue WHERE id = ?', [live])?.status).toBe('processing')
-      expect(queryOne<{ status: string }>('SELECT status FROM transcription_queue WHERE id = ?', [dead])?.status).toBe('pending')
+      expect(queryOne<{ status: string }>('SELECT status FROM transcription_queue WHERE id = ?', [dead])?.status).toBe('failed')
     })
   })
 
@@ -1327,7 +1373,7 @@ describe('Database Service', () => {
         is_imported: 0,
       })
 
-      commitRecordingSplit('split-parent', [child('split-a', 1, 1200), child('split-b', 2, 3600)])
+      commitRecordingSplit('split-parent', [child('split-a', 1, 1200), child('split-b', 2, 3600)], { origin: 'user', requestedBy: 'test' })
 
       expect(queryOne<{ deleted_at: string | null }>('SELECT deleted_at FROM recordings WHERE id = ?', ['split-parent'])?.deleted_at).toBeTruthy()
       expect(queryAll<{ id: string; meeting_id: string | null }>(

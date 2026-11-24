@@ -31,7 +31,7 @@ const fake = vi.hoisted(() => ({
 }))
 
 const fakeDb = vi.hoisted(() => ({
-  run: (sql: string) => {
+  run: (sql: string, _params?: unknown[]) => {
     const m = sql.match(/ALTER TABLE vector_embeddings ADD COLUMN (\w+)/)
     if (m) {
       if (fake.alterFails.has(m[1])) throw new Error(`disk I/O error (simulated) adding ${m[1]}`)
@@ -49,6 +49,7 @@ const fakeDb = vi.hoisted(() => ({
 }))
 
 vi.mock('../database', () => ({
+  runMany: (sql: string, rows: unknown[][]) => { for (const row of rows) fakeDb.run(sql, row) },
   getDatabase: () => fakeDb,
   // Round-6 — { ids, failClosed } shape.
   getExcludedRecordingIds: () => ({ ids: new Set<string>(), failClosed: false }),

@@ -5,6 +5,18 @@ import { join } from 'path'
 import ffmpegPath from 'ffmpeg-static'
 import { NoSpeechDetectedError, TranscriptionCancelledError, type TranscriptionTraceEvent } from '@hidock/transcription'
 
+/**
+ * A provider error message without the API key. Google's client puts the
+ * request URL, key included, in some error messages; a log line or a stored
+ * run failure must never carry it.
+ */
+export function withoutSecrets(message: string, apiKey?: string | null): string {
+  let clean = message
+  if (apiKey && apiKey.length >= 8) clean = clean.split(apiKey).join('[redacted]')
+  return clean.replace(/([?&](?:key|api_key|apiKey)=)[^&\s"']+/gi, '$1[redacted]')
+    .replace(/(x-goog-api-key["']?\s*[:=]\s*["']?)[^\s"',}]+/gi, '$1[redacted]')
+}
+
 /** Five minutes limits output truncation while retaining conversational context. One retry only. */
 export const COMPLETENESS_RETRY_CHUNK_SECONDS = 300
 

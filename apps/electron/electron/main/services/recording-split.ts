@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto'
 import { existsSync, renameSync, statSync, unlinkSync } from 'fs'
 import { basename, dirname, extname, join } from 'path'
 import ffmpegPath from 'ffmpeg-static'
+import type { DeletionRequest } from '../../../src/shared/deletion-origin'
 import {
   commitRecordingSplit,
   type Recording,
@@ -367,6 +368,8 @@ function safeUnlink(filePath: string): void {
 export async function splitRecording(
   recording: Recording,
   splitTimeSec: number,
+  // Who asked (v74): the parent's Trash entry records it.
+  request: DeletionRequest,
   executor?: ExecFileLike
 ): Promise<RecordingSplitResult> {
   if (!recording.file_path || !existsSync(recording.file_path)) throw new Error('The local audio file is unavailable')
@@ -455,7 +458,7 @@ export async function splitRecording(
       },
     ]
 
-    commitRecordingSplit(recording.id, children)
+    commitRecordingSplit(recording.id, children, request)
     return {
       originalRecordingId: recording.id,
       children: children.map((child) => ({

@@ -1,4 +1,5 @@
 
+import { linkTraceAnswer } from '../services/retrieval-trace-service'
 import { ipcMain } from 'electron'
 import { queryAll, queryOne, run, runInTransaction } from '../services/database'
 import { filterEligibleCaptureIds } from '../services/recording-eligibility'
@@ -188,6 +189,7 @@ export function registerAssistantHandlers(): void {
         run('UPDATE conversations SET updated_at = ? WHERE id = ?', [now, conversationId])
       })
 
+      if (generationId && answer.kind !== 'unverifiable') linkTraceAnswer(generationId, id)
       const newMessage = queryOne<any>(`SELECT ${MESSAGE_COLUMNS} FROM chat_messages WHERE id = ?`, [id])
       // ADV20-2 — sanitize the fresh insert through the SAME read boundary so a live
       // exclusion between persist and return still redacts what the UI shows.

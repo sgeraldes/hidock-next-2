@@ -6,7 +6,10 @@
  * and auto-scrolls during playback.
  */
 
-import { useCallback, useEffect, useRef, useMemo, useState } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
+import { useCallback, useEffect, useRef, useMemo, useState, useLayoutEffect } from 'react'
+import { useReaderFind, ReaderFindBar, FindText, type ReaderFindState } from './ReaderFind'
+import type { FindDocument } from '../utils/transcriptFind'
 import { TimeAnchor } from './TimeAnchor'
 import { SpeakerAssignPopover, type AssignScope } from './SpeakerAssignPopover'
 import {
@@ -19,7 +22,8 @@ import {
   TriangleAlert,
   X
 } from 'lucide-react'
-import { expandInlineStoredSegments } from '../utils/splitInlineTurns'
+import { fromStoredSegments, parseTranscriptSegments, toParagraphs, type TranscriptSegment } from '../utils/transcriptSegments'
+export { parseTranscriptSegments } from '../utils/transcriptSegments'
 import { useMediaQuery } from '@/hooks/useMediaQuery'
 import { toast } from '@/components/ui/toaster'
 import { cn } from '@/lib/utils'
@@ -31,6 +35,9 @@ import { formatTimestamp, parseTypedTime } from '../utils/formatTimestamp'
 
 /** Stored transcript segment (from the `speakers` JSON column). Times in seconds. */
 export interface StoredSegment {
+  sourceChannel?: number
+  channelRole?: string
+  channelProvenance?: string
   speaker?: string
   start: number
   end?: number
@@ -40,6 +47,10 @@ export interface StoredSegment {
 }
 
 interface TranscriptViewerProps {
+  find?: ReaderFindState
+  onFindDocuments?: (documents: FindDocument[]) => void
+  /** The standalone find bar's seek (its time button and Alt+Enter): moves without starting playback. Defaults to onSeek. */
+  onFindSeek?: (startMs: number) => void
   transcript: string
   currentTimeMs?: number
   onSeek: (startMs: number, endMs?: number) => void
@@ -95,16 +106,6 @@ export interface TranscriptContentUpdate {
   integrity?: { status: 'ok' | 'suspect' | 'broken'; json: string }
 }
 
-interface TranscriptSegment {
-  startMs: number
-  endMs?: number
-  text: string
-  speaker?: string
-  /** Carried from storage so saving a correction keeps them. */
-  speakerAttribution?: string
-  speakerConfidence?: number
-}
-
 /** A speaker split loaded from the backend (base label forked from a turn on). */
 interface SpeakerSplit {
   baseLabel: string
@@ -127,184 +128,6 @@ function effectiveLabelFor(baseLabel: string, turnIndex: number, splits: Speaker
   return best ? best.derivedLabel : baseLabel
 }
 
-/**
- * Break a plain, unstructured transcript into readable paragraphs so an
- * old-style single-blob transcript (no newlines, no speaker labels) doesn't
- * render as one unbroken wall of text. Splits on existing newlines first, then
- * subdivides any long run into ~sentence groups.
- */
-function toParagraphs(text: string): string[] {
-  const paragraphs: string[] = []
-  for (const block of text.split(/\n+/).map((b) => b.trim()).filter(Boolean)) {
-    if (block.length <= 600) {
-      paragraphs.push(block)
-      continue
-    }
-    const sentences = block.match(/[^.!?]+(?:[.!?]+|$)/g) ?? [block]
-    let current = ''
-    for (const sentence of sentences) {
-      current += sentence
-      if (current.length >= 350) {
-        paragraphs.push(current.trim())
-        current = ''
-      }
-    }
-    if (current.trim()) paragraphs.push(current.trim())
-  }
-  return paragraphs.length > 0 ? paragraphs : [text.trim()]
-}
-
-/** Map stored (seconds-based) segments to the viewer's internal ms-based shape.
- * Legacy segments that packed a whole chunk into one text blob with inline
- * `[MM:SS] Speaker N:` markers are first re-split into individual turns so they
- * render correctly without re-transcription. */
-function fromStoredSegments(stored: StoredSegment[]): TranscriptSegment[] {
-  return expandInlineStoredSegments(stored)
-    .filter((s) => s.text?.trim())
-    .map((s) => ({
-      startMs: Math.round((s.start || 0) * 1000),
-      endMs: s.end != null ? Math.round(s.end * 1000) : undefined,
-      speaker: s.speaker,
-      text: s.text.trim(),
-      ...(s.speakerAttribution ? { speakerAttribution: s.speakerAttribution } : {}),
-      ...(typeof s.speakerConfidence === 'number' ? { speakerConfidence: s.speakerConfidence } : {})
-    }))
-}
-
-/**
- * Parse speaker name from text. Supports, at the start of the text:
- *   **Speaker Name:**   / **Speaker Name**:   / **Speaker Name**   (markdown-bold)
- *   [Speaker Name]
- *   Speaker Name:
- */
-function parseSpeaker(text: string): { speaker: string | undefined; remainingText: string } {
-  const trimmed = text.trimStart()
-
-  // Markdown-bold label: **Name:** rest / **Name**: rest / **Name** rest
-  // [^*\n]+? captures the name (and any inner colon); trailing colon is stripped below.
-  const boldMatch = trimmed.match(/^\*\*\s*([^*\n]+?)\s*\*\*\s*:?\s*([\s\S]*)$/)
-  if (boldMatch) {
-    return { speaker: boldMatch[1].replace(/:\s*$/, '').trim(), remainingText: boldMatch[2].trim() }
-  }
-
-  // "[Speaker Name]" format
-  const bracketMatch = trimmed.match(/^\[([^\]]+)\]\s*([\s\S]*)$/)
-  if (bracketMatch) {
-    return { speaker: bracketMatch[1].trim(), remainingText: bracketMatch[2].trim() }
-  }
-
-  // "Speaker Name:" format (capitalised, no colon inside the name)
-  const colonMatch = trimmed.match(/^([A-Z][^:\n]*?):\s+([\s\S]*)$/)
-  if (colonMatch) {
-    return { speaker: colonMatch[1].trim(), remainingText: colonMatch[2].trim() }
-  }
-
-  return { speaker: undefined, remainingText: text }
-}
-
-// A line that begins a new speaker turn (markdown-bold, bracket, or "Name:").
-const SPEAKER_LINE_REGEX = /^[ \t]*(?:\*\*[^*\n]+\*\*\s*:?|\[[^\]\n]+\]|[A-Z][^:\n]{0,40}?:)\s/
-
-/**
- * Parse a transcript with no timestamps into speaker turns. Each turn starts at
- * a line with a speaker label; continuation lines are appended to the turn.
- * Returns a single plain segment when no speaker labels are present.
- */
-function parseSpeakerSegments(transcript: string): TranscriptSegment[] {
-  const segments: TranscriptSegment[] = []
-  let current: TranscriptSegment | null = null
-
-  for (const line of transcript.split('\n')) {
-    if (SPEAKER_LINE_REGEX.test(line)) {
-      if (current) segments.push(current)
-      const { speaker, remainingText } = parseSpeaker(line)
-      current = { startMs: 0, speaker, text: remainingText }
-    } else if (current) {
-      current.text += line.trim() ? `\n${line.trim()}` : ''
-    } else if (line.trim()) {
-      current = { startMs: 0, text: line.trim() }
-    }
-  }
-  if (current) segments.push(current)
-
-  return segments.length > 0 ? segments : [{ startMs: 0, text: transcript.trim() }]
-}
-
-/**
- * Parse timestamps from transcript text.
- * Supports formats: [MM:SS], [HH:MM:SS], MM:SS, HH:MM:SS
- */
-function parseTimestamp(timestampStr: string): number | null {
-  // Remove brackets if present
-  const cleaned = timestampStr.replace(/[[\]]/g, '').trim()
-
-  // Split by colons
-  const parts = cleaned.split(':').map(part => parseInt(part, 10))
-
-  if (parts.some(isNaN)) {
-    return null
-  }
-
-  let totalSeconds: number
-
-  if (parts.length === 2) {
-    // MM:SS format
-    const [minutes, seconds] = parts
-    totalSeconds = minutes * 60 + seconds
-  } else if (parts.length === 3) {
-    // HH:MM:SS format
-    const [hours, minutes, seconds] = parts
-    totalSeconds = hours * 3600 + minutes * 60 + seconds
-  } else {
-    return null
-  }
-
-  return totalSeconds * 1000 // Convert to milliseconds
-}
-
-/**
- * Parse transcript into segments with timestamps.
- * Detects timestamps in formats: [MM:SS], [HH:MM:SS], bare MM:SS, HH:MM:SS at line start
- */
-function parseTranscriptSegments(transcript: string): { segments: TranscriptSegment[]; hasTimestamps: boolean } {
-  const segments: TranscriptSegment[] = []
-
-  // Timestamps at the start of a line (with optional brackets):
-  // [00:15], [00:15:30], 00:15, 00:15:30. A line without one continues the turn
-  // above; text before the first timestamp is its own turn at 0. Saving a
-  // correction rebuilds the whole transcript from these turns, so no line may
-  // be dropped here (review 28-sep-2026: continuation lines were deleted).
-  const timestampLine = /^(\[?\d{1,2}:\d{2}(?::\d{2})?\]?)\s+(.*)$/
-  const preamble: string[] = []
-  let sawTimestamp = false
-
-  for (const line of transcript.split(/\r?\n/)) {
-    const match = timestampLine.exec(line)
-    const startMs = match ? parseTimestamp(match[1]) : null
-    if (match && startMs !== null) {
-      sawTimestamp = true
-      if (segments.length > 0) segments[segments.length - 1].endMs = startMs
-      const { speaker, remainingText } = parseSpeaker(match[2].trim())
-      segments.push({ startMs, text: remainingText, speaker })
-      continue
-    }
-    const text = line.trim()
-    if (!text) continue
-    if (!sawTimestamp) preamble.push(text)
-    else segments[segments.length - 1].text = `${segments[segments.length - 1].text}\n${text}`.trim()
-  }
-  if (sawTimestamp && preamble.length > 0) {
-    segments.unshift({ startMs: 0, endMs: segments[0]?.startMs, text: preamble.join('\n') })
-  }
-
-  if (segments.length > 0) {
-    return { segments, hasTimestamps: true }
-  }
-
-  // No timestamps — fall back to speaker-turn parsing (handles **Name:** etc.)
-  return { segments: parseSpeakerSegments(transcript), hasTimestamps: false }
-}
-
 /** The start time as the edit field shows it: 1:05, or 1:05.4 when it has tenths. */
 function formatEditableTime(ms: number): string {
   const tenths = Math.round(ms / 100) % 10
@@ -325,7 +148,10 @@ export function TranscriptViewer({
   isPlaying,
   highlightRequest,
   issueJump,
-  onTranscriptUpdated
+  onTranscriptUpdated,
+  find: externalFind,
+  onFindDocuments,
+  onFindSeek
 }: TranscriptViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const activeSegmentRef = useRef<HTMLDivElement | null>(null)
@@ -888,11 +714,98 @@ export function TranscriptViewer({
     if (hasTimestamps) setAutoFollow(false)
   }, [hasTimestamps])
 
+  const firstTurnBySpeaker = useMemo(() => {
+    const first = new Map<string, number>()
+    segments.forEach((segment, i) => {
+      if (segment.speaker && !first.has(segment.speaker)) first.set(segment.speaker, i)
+    })
+    return first
+  }, [segments])
+
+  // The speaker text indexed is the text each turn renders, so offsets land on
+  // the shown characters. Without timestamps every turn parses at 0: no time.
+  const findDocuments = useMemo<FindDocument[]>(() => segments.flatMap((segment, i) => {
+    const effective = segment.speaker ? effectiveLabelFor(segment.speaker, i, splits) : undefined
+    const name = !segment.speaker || !effective
+      ? undefined
+      : assignEnabled
+        ? turnOverrides.get(i)?.name ?? speakerMap.get(effective)?.name ?? effective
+        : segment.speaker
+    const timeMs = hasTimestamps ? segment.startMs : undefined
+    return [
+      ...(name ? [{ key: `speaker:${i}`, section: 'transcript' as const, text: name, timeMs }] : []),
+      { key: `turn:${i}`, section: 'transcript' as const, text: segment.text, timeMs }
+    ]
+  }), [segments, splits, speakerMap, turnOverrides, assignEnabled, hasTimestamps])
+  useEffect(() => { onFindDocuments?.(findDocuments) }, [findDocuments, onFindDocuments])
+  const standaloneDocuments = useMemo<FindDocument[]>(() => [
+    ...(showSummary && summary ? [{ key: 'summary', section: 'summary' as const, text: summary }] : []),
+    ...(showActionItems ? (actionItems ?? []).map((text, i) => ({ key: `action:${i}`, section: 'moments' as const, text })) : []),
+    ...findDocuments
+  ], [findDocuments, showSummary, summary, showActionItems, actionItems])
+  const localFind = useReaderFind({ sourceId: recordingId ?? (transcript || 'standalone-transcript'), documents: standaloneDocuments, onSeek: onFindSeek ?? onSeek, enabled: !externalFind,
+    onReveal: match => {
+      setAutoFollow(false)
+      if (match.section === 'summary') setSummaryExpanded(true)
+      else if (match.section === 'moments') setActionItemsExpanded(true)
+      else setTranscriptExpanded(true)
+    }
+  })
+  const find = externalFind ?? localFind
+  const activeFindMatch = find.current
+  useEffect(() => { if (activeFindMatch) setAutoFollow(false) }, [activeFindMatch])
+
+  const turnsRef = useRef<HTMLDivElement>(null)
+  const [turnScrollElement, setTurnScrollElement] = useState<HTMLElement | null>(null)
+  const [turnScrollMargin, setTurnScrollMargin] = useState(0)
+  const virtualTurns = segments.length > 300 && typeof ResizeObserver !== 'undefined'
+  useLayoutEffect(() => {
+    if (!virtualTurns || !turnsRef.current) return
+    let parent = turnsRef.current.parentElement
+    while (parent && !/(auto|scroll)/.test(getComputedStyle(parent).overflowY)) parent = parent.parentElement
+    if (!parent) return
+    const scroller = parent
+    setTurnScrollElement(scroller)
+    const update = () => {
+      if (turnsRef.current) setTurnScrollMargin(turnsRef.current.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop)
+    }
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(scroller)
+    observer.observe(turnsRef.current)
+    return () => observer.disconnect()
+  }, [virtualTurns, transcriptExpanded, find.open, summaryExpanded, actionItemsExpanded, externalFind])
+  const turnVirtualizer = useVirtualizer({
+    count: segments.length,
+    getScrollElement: () => turnScrollElement,
+    estimateSize: () => 100,
+    overscan: 8,
+    scrollMargin: turnScrollMargin,
+    initialRect: { width: 600, height: 600 },
+    enabled: virtualTurns
+  })
+  const currentFindTurn = activeFindMatch?.section === 'transcript' ? Number(activeFindMatch.key.split(':')[1]) : -1
+  useEffect(() => {
+    if (!virtualTurns || !turnScrollElement || currentFindTurn < 0) return
+    turnVirtualizer.scrollToIndex(currentFindTurn, { align: 'center' })
+    // After the virtual turn mounts, put the specific occurrence below the pinned strips.
+    const frame = requestAnimationFrame(() => turnsRef.current?.querySelector<HTMLElement>('[data-find-current="true"]')?.scrollIntoView({ block: 'center' }))
+    return () => cancelAnimationFrame(frame)
+  }, [currentFindTurn, activeFindMatch, virtualTurns, turnScrollElement, turnVirtualizer])
+  useEffect(() => {
+    if (virtualTurns && pulse) turnVirtualizer.scrollToIndex(pulse.index, { align: 'center' })
+  }, [pulse, virtualTurns, turnVirtualizer])
+  useEffect(() => {
+    if (virtualTurns && autoFollow && isPlaying !== false && currentSegmentIndex >= 0) turnVirtualizer.scrollToIndex(currentSegmentIndex, { align: 'center' })
+  }, [virtualTurns, autoFollow, isPlaying, currentSegmentIndex, turnVirtualizer])
+  const visibleTurns = virtualTurns ? turnVirtualizer.getVirtualItems().map(item => ({ segment: segments[item.index], i: item.index, item })) : segments.map((segment, i) => ({ segment, i, item: undefined }))
+
   // Render structured turns when we have timestamps or detected speakers; else plain text
   const hasStructure = hasTimestamps || segments.some((seg) => seg.speaker)
 
   return (
-    <div className="divide-y divide-border">
+    <div data-reader-find={!externalFind ? true : undefined} ref={!externalFind ? find.rootRef : undefined} className="divide-y divide-border">
+      {!externalFind && <ReaderFindBar find={find} />}
       {/* Summary Section */}
       {showSummary && summary && (
         <section className="py-3 first:pt-0">
@@ -909,7 +822,7 @@ export function TranscriptViewer({
             )}
           </button>
           {summaryExpanded && (
-            <p className="text-sm whitespace-pre-wrap leading-relaxed mt-2">{summary}</p>
+            <p className="text-sm whitespace-pre-wrap leading-relaxed mt-2"><FindText find={find} documentKey="summary" text={summary} /></p>
           )}
         </section>
       )}
@@ -932,7 +845,7 @@ export function TranscriptViewer({
           {actionItemsExpanded && (
             <ul className="list-disc list-inside text-sm space-y-1 mt-2">
               {actionItems.map((item, i) => (
-                <li key={i}>{item}</li>
+                <li key={i}><FindText find={find} documentKey={`action:${i}`} text={item} /></li>
               ))}
             </ul>
           )}
@@ -1019,9 +932,9 @@ export function TranscriptViewer({
                 </button>
               </div>
             )}
-            {hasStructure || editEnabled ? (
-              <div className="space-y-1">
-                {segments.map((segment, i) => {
+            {hasStructure || editEnabled || find.open ? (
+              <div ref={turnsRef} className={virtualTurns ? "relative" : "space-y-1"} style={virtualTurns ? { height: turnVirtualizer.getTotalSize() } : undefined}>
+                {visibleTurns.map(({ segment, i, item }) => {
                   // Per-turn identity resolution (v37). base = raw diarization
                   // label; effective = base or its split-derived label; a per-turn
                   // override supersedes the label map for display + reset.
@@ -1038,14 +951,17 @@ export function TranscriptViewer({
                       : undefined
                   const hasSplitHere = base ? splits.some((s) => s.baseLabel === base && s.fromIndex === i) : false
                   const canSplitHere = base
-                    ? segments.slice(0, i).some((s) => s.speaker === base)
+                    ? (firstTurnBySpeaker.get(base) ?? i) < i
                     : false
                   const mergeSuspected = base ? mergeHints.has(base) : false
                   const lineProblems = issuesByLine[i] ?? []
                   return (
                   <div
                     key={i}
+                    data-index={i}
+                    style={item ? { position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${item.start - turnScrollMargin}px)` } : undefined}
                     ref={(el) => {
+                      if (virtualTurns) turnVirtualizer.measureElement(el)
                       if (hasTimestamps && i === currentSegmentIndex) activeSegmentRef.current = el
                       if (i === pulse?.index) pulseSegmentRef.current = el
                     }}
@@ -1063,8 +979,17 @@ export function TranscriptViewer({
                         'bg-primary/20 ring-2 ring-primary/60 motion-safe:transition-[background-color,box-shadow] motion-safe:duration-700'
                     )}
                   >
-                    {(hasTimestamps || segment.speaker) && (
+                    {(hasTimestamps || segment.speaker || segment.sourceChannel !== undefined) && (
                       <div className="flex items-center gap-2 mb-1">
+                        {(segment.sourceChannel === 0 || segment.sourceChannel === 1) && (
+                          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                            title={`Audio source only; not a person identity. ${segment.channelProvenance ?? 'Role provenance unavailable'}`}>
+                            {['firmware-manifest', 'user-confirmed'].includes(segment.channelProvenance ?? '')
+                              && ['microphone', 'system'].includes(segment.channelRole ?? '')
+                              ? segment.channelRole === 'microphone' ? 'Microphone' : 'System'
+                              : `Channel ${segment.sourceChannel! + 1}`}
+                          </span>
+                        )}
                         {hasTimestamps && (
                           <TimeAnchor
                             startMs={segment.startMs}
@@ -1078,6 +1003,7 @@ export function TranscriptViewer({
                         {segment.speaker && effective && (
                           assignEnabled ? (
                             <SpeakerAssignPopover
+                              findHighlight={<FindText find={find} documentKey={`speaker:${i}`} text={assignedName ?? effective} />}
                               label={effective}
                               turnIndex={i}
                               assignedContactId={assignedContactId}
@@ -1099,7 +1025,7 @@ export function TranscriptViewer({
                             />
                           ) : (
                             <span className="font-semibold text-foreground">
-                              {segment.speaker}
+                              <FindText find={find} documentKey={`speaker:${i}`} text={segment.speaker} />
                             </span>
                           )
                         )}
@@ -1199,7 +1125,7 @@ export function TranscriptViewer({
                       </div>
                     ) : (
                       <div className="relative min-w-0">
-                        <p className="whitespace-pre-wrap pr-9 leading-relaxed wrap-anywhere">{segment.text}</p>
+                        <p className="whitespace-pre-wrap pr-9 leading-relaxed wrap-anywhere"><FindText find={find} documentKey={`turn:${i}`} text={segment.text} /></p>
                         {editEnabled && (
                           <button
                             type="button"

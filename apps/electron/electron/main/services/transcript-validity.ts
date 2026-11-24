@@ -27,7 +27,13 @@
 
 import { FRAME_SECONDS, LOUD_DB, LOUD_GAIN } from './audio-profile'
 
-/** Bumped when a rule changes, so stored verdicts are recomputed. */
+/**
+ * Bumped when a rule changes, so stored verdicts are recomputed. A stored
+ * verdict is recomputed only when its version is lower, so this must exceed
+ * every version already written to a library: origin/main wrote 3, and the
+ * main checkout's uncommitted build that the owner runs wrote 4 to all 2,229
+ * checked transcripts (copy of 24-nov-2026). The completeness rules are 5.
+ */
 export const VALIDITY_VERSION = 5
 
 export type ValidityStatus = 'audio' | 'invalid' | 'incomplete' | 'doubtful' | 'valid'
@@ -279,10 +285,13 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
   if (input.sample === 'contradicted') invalidReasons.push({ code: 'sample_contradicts', detail: 'A few minutes of the audio, transcribed again, tell a different conversation.' })
   if (input.sample === 'incomplete') completenessReasons.push({ code: 'speech_after_the_end', detail: 'Speech goes on after the transcript ends: a sample of the audio after it holds talk.' })
   // Independent checks accumulate. Invalid wins over incomplete, then doubt.
+  // A confirmed sample clears doubts about the words; it compares words and
+  // meaning only, so it cannot clear a doubt about who spoke.
   const settle = (reasons: ValidityReason[]): TranscriptValidity => {
     const all = [...invalidReasons, ...completenessReasons, ...reasons]
+    const unresolvedSpeakers = reasons.some(reason => reason.code === 'more_speakers_than_invited')
     return result(invalidReasons.length ? 'invalid' : completenessReasons.length ? 'incomplete'
-      : reasons.length && input.sample !== 'confirmed' ? 'doubtful' : 'valid', all)
+      : reasons.length && (input.sample !== 'confirmed' || unresolvedSpeakers) ? 'doubtful' : 'valid', all)
   }
   const reasons: ValidityReason[] = []
   const timed = input.segments.filter((s) => typeof s.start === 'number' && Number.isFinite(s.start))

@@ -22,6 +22,8 @@
  * contradictions) skips the label — the pass is fail-quiet by design.
  */
 
+import { providerCheckpoints } from './provider-checkpoints'
+import { stageFingerprint } from './stage-checkpoints'
 import { z } from 'zod'
 import { getChatLLMService } from './chat-llm'
 import { isRecordingEligible } from './recording-eligibility'
@@ -260,6 +262,7 @@ function ownerOrgNames(limit = 15): string[] {
 export async function runSpeakerInference(
   recordingId: string,
   opts: {
+    signal?: AbortSignal
     shouldPersist?: () => boolean
     /** Tests: which Jev key a job gets, and the Jev call. */
     jevKey?: (job: 'speakerNames') => string | null
@@ -378,9 +381,11 @@ export async function runSpeakerInference(
     )
     if (!request) return { proposed: 0, bound: 0, skipped: true }
     const harness = createJevHarness({ getKey: () => jevKey, askImpl: opts.askJev ?? askJev })
-    const res = await withCallRecord({ step: 'speaker-names', route: 'jev', recordingId }, () =>
-      harness.ask(request.state, request.questions)
-    )
+    const res = await providerCheckpoints(recordingId, undefined,
+      () => isRecordingEligible(recordingId) && (opts.shouldPersist?.() ?? true)).execute(
+      stageFingerprint('speaker-names-v1', request), () =>
+        withCallRecord({ step: 'speaker-names', route: 'jev', recordingId }, () =>
+          opts.signal ? harness.ask(request.state, request.questions, { signal: opts.signal }) : harness.ask(request.state, request.questions)))
     if (!isRecordingEligible(recordingId) || (opts.shouldPersist && !opts.shouldPersist())) {
       return { proposed: 0, bound: 0, skipped: true }
     }
@@ -404,11 +409,14 @@ export async function runSpeakerInference(
       transcriptSummary: trow?.summary ?? null
     })
 
-    const raw = await getChatLLMService().generateText(prompt, 'You answer with a JSON array only. No prose.', {
+    const raw = await providerCheckpoints(recordingId, undefined,
+      () => isRecordingEligible(recordingId) && (opts.shouldPersist?.() ?? true)).execute(
+      stageFingerprint('speaker-roster-v1', prompt), () => getChatLLMService().generateText(prompt, 'You answer with a JSON array only. No prose.', {
       step: 'speaker-roster',
+      ...(opts.signal ? { signal: opts.signal } : {}),
       recordingId,
-      shouldGenerate: () => isRecordingEligible(recordingId)
-    })
+      shouldGenerate: () => !opts.signal?.aborted && isRecordingEligible(recordingId)
+    }))
     if (!raw) return { proposed: 0, bound: 0, skipped: true }
 
     // Post-await gate, adjacent to the writes (same rule as self-ID).

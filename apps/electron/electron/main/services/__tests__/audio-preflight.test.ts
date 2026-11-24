@@ -1,27 +1,52 @@
-import { describe, expect, it } from 'vitest'
-import { AudioPreflightError, parseAudioPreflightOutput, analyzeAudioPreflight } from '../audio-preflight'
-import { mkdtempSync, writeFileSync, rmSync } from 'fs'
-import { tmpdir } from 'os'
-import { join } from 'path'
+// @vitest-environment node
+import { describe, expect, it, vi } from 'vitest'
+import { execFile } from 'child_process'
+import { TranscriptionCancelledError } from '@hidock/transcription'
+import { analyzeAudioPreflight, AudioPreflightError, parseAudioPreflightOutput } from '../audio-preflight'
+
+vi.mock('child_process', async (importOriginal) => ({
+  ...await importOriginal<typeof import('child_process')>(), execFile: vi.fn()
+}))
+vi.mock('ffmpeg-static', () => ({ default: 'fixture-ffmpeg' }))
 
 describe('audio transcription preflight', () => {
-  it('observes that a real 121-second sine tone has energy, which cannot prove speech', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'hidock-tone-preflight-'))
-    const path = join(dir, 'tone.wav')
-    const pcm = Buffer.alloc(16000 * 2 * 121)
-    for (let i = 0; i < pcm.length / 2; i++) pcm.writeInt16LE(Math.round(Math.sin(i * 2 * Math.PI * 440 / 16000) * 8000), i * 2)
-    const header = Buffer.alloc(44)
-    header.write('RIFF'); header.writeUInt32LE(pcm.length + 36, 4); header.write('WAVEfmt ', 8)
-    header.writeUInt32LE(16, 16); header.writeUInt16LE(1, 20); header.writeUInt16LE(1, 22)
-    header.writeUInt32LE(16000, 24); header.writeUInt32LE(32000, 28); header.writeUInt16LE(2, 32)
-    header.writeUInt16LE(16, 34); header.write('data', 36); header.writeUInt32LE(pcm.length, 40)
-    writeFileSync(path, Buffer.concat([header, pcm]))
-    try {
-      const report = await analyzeAudioPreflight(path, 121)
-      expect(report.status).toBe('speech_present')
-      expect(report.nonSilentSeconds).toBeCloseTo(121)
-    } finally { rmSync(dir, { recursive: true }) }
+  it('does not spawn ffmpeg when already cancelled', async () => {
+    vi.mocked(execFile).mockClear()
+    await expect(analyzeAudioPreflight('fixture.wav', 60, () => false))
+      .rejects.toBeInstanceOf(TranscriptionCancelledError)
+    expect(execFile).not.toHaveBeenCalled()
   })
+
+  it('kills cancelled ffmpeg but retains ownership until its callback settles', async () => {
+    vi.useFakeTimers()
+    let callback!: (error: Error | null, stdout: string, stderr: string) => void
+    const kill = vi.fn()
+    vi.mocked(execFile).mockImplementation((...args: any[]) => {
+      callback = args.at(-1)
+      return { kill } as any
+    })
+    let wanted = true
+    let settled = false
+    const pending = analyzeAudioPreflight('fixture.wav', 60, () => wanted)
+    void pending.then(() => { settled = true }, () => { settled = true })
+    const rejected = expect(pending).rejects.toBeInstanceOf(TranscriptionCancelledError)
+    try {
+      wanted = false
+      await vi.advanceTimersByTimeAsync(250)
+      expect(kill).toHaveBeenCalledOnce()
+      expect(settled).toBe(false)
+      callback(new Error('terminated'), '', '')
+      await rejected
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { vi.useRealTimers(); vi.mocked(execFile).mockReset() }
+  })
+
+  it('uses the decoded end time when a WebM duration header is missing', () => {
+    const report = parseAudioPreflightOutput('Duration: N/A\nout_time_us=62000000\nprogress=end\n')
+    expect(report.durationSeconds).toBe(62)
+    expect(report.nonSilentSeconds).toBe(62)
+  })
+
   it('classifies a long lobby recording containing only brief cough/noise as no_speech', () => {
     const output = `
 Duration: 00:02:54.85, start: 0.000000, bitrate: 64 kb/s

@@ -132,7 +132,7 @@ describe('RE-2 — reanalyzeFailedTranscripts excludes trashed/personal/value-ex
   it('does NOT select or re-upload a soft-deleted recording', async () => {
     seedRecording('trashed')
     seedFailedTranscript('t-trashed', 'trashed')
-    deleteRecordingCascade('trashed', { hard: false }) // soft delete
+    deleteRecordingCascade('trashed', { hard: false, origin: 'user', requestedBy: 'test' }) // soft delete
 
     const healed = await reanalyzeFailedTranscripts(10)
 
@@ -176,7 +176,7 @@ describe('RE-2 — reanalyzeFailedTranscripts excludes trashed/personal/value-ex
     // The provider call resolves AFTER the recording is soft-deleted, exactly
     // simulating a trash committed while full_text was in flight.
     mockGenerateContent.mockImplementationOnce(async () => {
-      deleteRecordingCascade('race', { hard: false })
+      deleteRecordingCascade('race', { hard: false, origin: 'user', requestedBy: 'test' })
       return geminiJsonResponse(HEALED)
     })
 
@@ -202,7 +202,7 @@ describe('RE-2 — reanalyzeFailedTranscripts excludes trashed/personal/value-ex
     dbRun("UPDATE transcripts SET created_at = '2026-06-01T00:00:00Z' WHERE recording_id = ?", ['later'])
 
     mockGenerateContent.mockImplementationOnce(async () => {
-      deleteRecordingCascade('later', { hard: false }) // exclude the LATER row mid-run
+      deleteRecordingCascade('later', { hard: false, origin: 'user', requestedBy: 'test' }) // exclude the LATER row mid-run
       return geminiJsonResponse(HEALED)
     })
 
@@ -267,5 +267,117 @@ describe('RE-2 — reanalyzeFailedTranscripts excludes trashed/personal/value-ex
 
     expect(healed).toBe(0)
     expect(mockGenerateContent).not.toHaveBeenCalled() // fail CLOSED — no upload
+  })
+})
+
+describe('a summary that keeps failing is not paid for forever (review of #187, 27-oct-2026)', () => {
+  function failedSummaryRun(recordingId: string, hoursAgo: number, n: number): void {
+    const startedAt = new Date(Date.now() - hoursAgo * 3_600_000).toISOString()
+    dbRun(
+      `INSERT INTO processing_runs (id, recording_id, stage, provider, status, started_at, error_message)
+       VALUES (?, ?, 'summary', 'gemini', 'failed', ?, '503 high demand')`,
+      [`run-${recordingId}-${n}`, recordingId, startedAt]
+    )
+  }
+
+  it('waits two hours after a failed summary before trying that transcript again', async () => {
+    seedRecording('recent')
+    seedFailedTranscript('t-recent', 'recent')
+    failedSummaryRun('recent', 0.5, 1)
+    seedRecording('waited')
+    seedFailedTranscript('t-waited', 'waited')
+    failedSummaryRun('waited', 3, 1)
+
+    await reanalyzeFailedTranscripts(10)
+
+    expect(summaryOf('recent')).toBeNull()
+    expect(summaryOf('waited')).toBe('Healed summary.')
+  })
+
+  it('stops after four failed summaries in a week', async () => {
+    seedRecording('stuck')
+    seedFailedTranscript('t-stuck', 'stuck')
+    for (let n = 1; n <= 4; n++) failedSummaryRun('stuck', 3 + n * 10, n)
+
+    const healed = await reanalyzeFailedTranscripts(10)
+
+    expect(healed).toBe(0)
+    expect(mockGenerateContent).not.toHaveBeenCalled()
+  })
+
+  it('does not spend the weekly cap on quota refusals, which cost nothing (27-oct-2026)', async () => {
+    // The summary model ran out of its free daily quota: four 429s two hours
+    // apart would otherwise lock the transcript out for a week.
+    seedRecording('quota-only')
+    seedFailedTranscript('t-quota', 'quota-only')
+    for (let n = 1; n <= 4; n++) {
+      dbRun(
+        `INSERT INTO processing_runs (id, recording_id, stage, provider, status, started_at, error_message)
+         VALUES (?, 'quota-only', 'summary', 'gemini', 'failed', ?, ?)`,
+        [`run-q-${n}`, new Date(Date.now() - (3 + n * 3) * 3_600_000).toISOString(),
+          '[GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent: [429 Too Many Requests] You exceeded your current quota']
+      )
+    }
+
+    await reanalyzeFailedTranscripts(10)
+
+    expect(summaryOf('quota-only')).toBe('Healed summary.')
+  })
+
+  it('does not spend the cap on depleted credits or on a request that was never sent (28-oct-2026)', async () => {
+    // A 402 is refused before running; "checkpoint pending" sends nothing at all.
+    // Both spent the cap overnight on ten recordings.
+    seedRecording('unbilled')
+    seedFailedTranscript('t-unbilled', 'unbilled')
+    const refusals = [
+      '[GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent: [402 Payment Required] Your prepayment credits are depleted.',
+      'Provider checkpoint pending: previous request outcome unknown; explicit new transcription required',
+    ]
+    for (let n = 1; n <= 4; n++) {
+      dbRun(
+        `INSERT INTO processing_runs (id, recording_id, stage, provider, status, started_at, error_message)
+         VALUES (?, 'unbilled', 'summary', 'gemini', 'failed', ?, ?)`,
+        [`run-u-${n}`, new Date(Date.now() - (3 + n * 3) * 3_600_000).toISOString(), refusals[n % 2]]
+      )
+    }
+
+    await reanalyzeFailedTranscripts(10)
+
+    expect(summaryOf('unbilled')).toBe('Healed summary.')
+  })
+
+  it('still counts a billed failure that only quotes a 402 in its text (review of #190)', async () => {
+    seedRecording('quotes-402')
+    seedFailedTranscript('t-quotes-402', 'quotes-402')
+    for (let n = 1; n <= 4; n++) {
+      dbRun(
+        `INSERT INTO processing_runs (id, recording_id, stage, provider, status, started_at, error_message)
+         VALUES (?, 'quotes-402', 'summary', 'gemini', 'failed', ?, ?)`,
+        [`run-b-${n}`, new Date(Date.now() - (3 + n * 3) * 3_600_000).toISOString(),
+          '500 Internal error after retry; earlier attempt said 402 Payment Required']
+      )
+    }
+
+    await reanalyzeFailedTranscripts(10)
+
+    expect(summaryOf('quotes-402')).toBeNull()
+    expect(mockGenerateContent).not.toHaveBeenCalled()
+  })
+
+  it('tries the never-attempted and the longest-waiting first, so old ones are not starved', async () => {
+    seedRecording('older-failure')
+    seedFailedTranscript('t-older', 'older-failure')
+    failedSummaryRun('older-failure', 30, 1)
+    seedRecording('newer-failure')
+    seedFailedTranscript('t-newer', 'newer-failure')
+    failedSummaryRun('newer-failure', 5, 1)
+    seedRecording('never-tried')
+    seedFailedTranscript('t-never', 'never-tried')
+
+    await reanalyzeFailedTranscripts(2)
+
+    expect(summaryOf('never-tried')).toBe('Healed summary.')
+    expect(summaryOf('older-failure')).toBe('Healed summary.')
+    expect(summaryOf('newer-failure')).toBeNull()
   })
 })

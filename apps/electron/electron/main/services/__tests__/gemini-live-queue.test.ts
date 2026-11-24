@@ -142,6 +142,47 @@ beforeEach(() => {
 })
 
 describe('the realtime send queue', () => {
+  it('a stop during start internal drain cannot resurrect provider sessions', async () => {
+    const h = await stalled()
+    h.service.acceptDevicePacket(tone(1000))
+    const connectionsBefore = h.connect.mock.calls.length
+    const starting = h.service.start(h.sender)
+    const stopping = h.service.stop()
+    await h.open()
+    await Promise.all([starting, stopping])
+    expect(h.connect).toHaveBeenCalledTimes(connectionsBefore)
+    for (const session of h.sessions) expect(session.close).toHaveBeenCalled()
+    expect(allSamples(h)).toHaveLength(0)
+  })
+
+  it('a pause during start internal drain cancels the queued new provider connection', async () => {
+    const h = await stalled()
+    h.service.acceptDevicePacket(tone(1000))
+    const connectionsBefore = h.connect.mock.calls.length
+    const starting = h.service.start(h.sender)
+    h.service.pause()
+    await h.open()
+    await starting
+    expect(h.connect).toHaveBeenCalledTimes(connectionsBefore)
+    expect(allSamples(h)).toHaveLength(0)
+    await h.service.stop()
+  })
+
+  it('pause during the first provider handshake never opens the second channel', async () => {
+    const h = harness()
+    h.gate()
+    const starting = h.service.start(h.sender)
+    await vi.waitFor(() => expect(h.connect).toHaveBeenCalledOnce())
+    h.service.pause()
+    await h.open()
+    await starting
+    expect(h.connect).toHaveBeenCalledOnce()
+    expect(h.sessions).toHaveLength(1)
+    expect(h.sessions[0].close).toHaveBeenCalled()
+    expect(allSamples(h)).toHaveLength(0)
+    await h.service.stop()
+  })
+
   it('returns from the poll without waiting for the provider', async () => {
     const h = await stalled()
 

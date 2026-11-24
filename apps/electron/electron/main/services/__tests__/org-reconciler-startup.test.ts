@@ -475,7 +475,7 @@ describe('reconcileOrganizationYielding', () => {
     // The batched steps measure their own stretches; this tests the synchronous fallback.
     const readings: number[] = []
     RECONCILE_STEPS.forEach((step) => {
-      if (!step.runYielding) readings.push(0, step.name === 'recording-auto-link' ? 700 : SLOW_RECONCILE_STEP_MS - 1)
+      if (!step.runYielding) readings.push(0, step.name === 'meeting-occurrence-merge' ? 700 : SLOW_RECONCILE_STEP_MS - 1)
     })
     let call = 0
     vi.spyOn(performance, 'now').mockImplementation(() => readings[call++] ?? 0)
@@ -483,7 +483,7 @@ describe('reconcileOrganizationYielding', () => {
     await reconcileOrganizationYielding()
 
     expect(warn).toHaveBeenCalledTimes(1)
-    expect(warn).toHaveBeenCalledWith('[OrgReconciler] step "recording-auto-link" held the main thread for 700ms')
+    expect(warn).toHaveBeenCalledWith('[OrgReconciler] step "meeting-occurrence-merge" held the main thread for 700ms')
   })
 
   it('runs against a real, empty database without error', async () => {

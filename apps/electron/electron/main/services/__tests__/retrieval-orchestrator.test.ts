@@ -167,6 +167,23 @@ describe('inRange / dateGroundingPart', () => {
 // ── Structured context builders (real sql.js) ───────────────────────────────
 
 describe('structured context builders', () => {
+  it('retains rejected actionable and digest identities even when no content survives', () => {
+    deps.excludedSources = new Set(['kc-1', 'kc-2', 'kc-x'])
+    deps.excludedCaptures = new Set(['kc-1', 'kc-2', 'kc-x'])
+    const actions = buildActionablesContext(null)
+    const digests = buildDigestsContext({ start: '2026-07-01', end: '2026-07-31', label: 'July' })
+    expect(actions.parts).toEqual([])
+    expect(actions.candidates).toHaveLength(4)
+    expect(actions.candidates?.every(c => !c.kept && c.drop_reason === 'eligibility')).toBe(true)
+    expect(digests.parts).toEqual([])
+    expect(digests.candidates).toHaveLength(3)
+  })
+  it('distinguishes structured budget drops from eligibility drops', () => {
+    const actions = buildActionablesContext(null, 1)
+    expect(actions.candidates?.filter(c => !c.kept).every(c => c.drop_reason === 'budget')).toBe(true)
+    const digests = buildDigestsContext({ start: '2026-07-01', end: '2026-07-31', label: 'July' }, 1)
+    expect(digests.candidates?.filter(c => !c.kept).every(c => c.drop_reason === 'budget')).toBe(true)
+  })
   beforeEach(async () => {
     deps.excludedSources = new Set()
     deps.excludedCaptures = new Set()

@@ -32,8 +32,9 @@
  * NO new tables and NO schema migration: it reads/deletes existing rows only.
  */
 
-import { queryAll, run, addToQueue, updateRecordingTranscriptionStatus, runInTransaction } from './database'
+import { queryAll, queryOne, run, addToQueue, updateRecordingTranscriptionStatus, runInTransaction } from './database'
 import { isRecordingTranscribable } from './recording-eligibility'
+import { getActiveTranscriptionCount } from './transcription-activity'
 import { markUserPriority, processQueueManually } from './transcription'
 
 // Config-KV marker prefixes written by the self-identification pass
@@ -193,6 +194,14 @@ export class ReDiarizeError extends Error {
  */
 export async function reDiarizeRecording(recordingId: string, provider?: string): Promise<ReDiarizeResult> {
   const { cleared, queueItemId } = runInTransaction((): ReDiarizeResult => {
+    // addToQueue returns an existing live row. That is not a new repair request,
+    // and clearing bindings here would race the currently executing pipeline.
+    if (getActiveTranscriptionCount(recordingId) > 0 || queryOne(
+      "SELECT id FROM transcription_queue WHERE recording_id = ? AND status IN ('pending', 'processing') LIMIT 1",
+      [recordingId]
+    )) {
+      throw new Error('Wait for or cancel the existing transcription before requesting speaker repair. Speaker assignments were not changed.')
+    }
     // (1) Assert eligibility BEFORE reading/deleting ANY identity state.
     if (!isRecordingTranscribable(recordingId)) {
       throw new ReDiarizeError(

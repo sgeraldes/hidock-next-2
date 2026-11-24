@@ -30,6 +30,7 @@ import {
   queryAll,
   runWithMassDeleteAllowed,
   backfillRecordingDurations,
+  markRecordingDownloaded,
   classifyLowValueCaptures,
   maxTranscriptSegmentEnd
 } from '../database'
@@ -530,5 +531,79 @@ describe('backfillRecordingDurations — measured from the audio file', () => {
     expect(result.measured).toBe(0)
     expect(durationOf('unreadable')).toBe(42)
     expect(sourceOf('unreadable')).toBeNull()
+  })
+
+  describe('markRecordingDownloaded measures at publication', () => {
+    it('a new row gets the file duration and duration_source=file, keeping the device name', () => {
+      const path = writeAudio('2026Oct13-100306-Rec07.mp3', 1000)
+
+      const id = markRecordingDownloaded('2026Oct13-100306-Rec07.hda', path, { fileSize: 288000 })
+
+      expect(durationOf(id)).toBe(36)
+      expect(sourceOf(id)).toBe('file')
+      const row = queryOne<{ filename: string; original_filename: string }>(
+        'SELECT filename, original_filename FROM recordings WHERE id = ?',
+        [id]
+      )
+      expect(row).toEqual({ filename: '2026Oct13-100306-Rec07.mp3', original_filename: '2026Oct13-100306-Rec07.hda' })
+    })
+
+    it('an existing device row found under another extension is measured and keeps its identity', () => {
+      run(
+        `INSERT INTO recordings
+           (id, filename, original_filename, date_recorded, status, location, transcription_status,
+            on_device, on_local, source, is_imported, personal)
+         VALUES ('dev-row', '2026Oct13-100307-Rec08.hda', '2026Oct13-100307-Rec08.hda',
+                 '2026-10-13T10:03:07.000Z', 'none', 'device-only', 'none', 1, 0, 'hidock', 0, 0)`
+      )
+      const path = writeAudio('2026Oct13-100307-Rec08.mp3', 250)
+
+      const id = markRecordingDownloaded('2026Oct13-100307-Rec08.hda', path)
+
+      expect(id).toBe('dev-row')
+      expect(durationOf('dev-row')).toBe(9)
+      expect(sourceOf('dev-row')).toBe('file')
+      const row = queryOne<{ filename: string; file_path: string; location: string }>(
+        'SELECT filename, file_path, location FROM recordings WHERE id = ?',
+        ['dev-row']
+      )
+      expect(row).toEqual({ filename: '2026Oct13-100307-Rec08.hda', file_path: path, location: 'both' })
+    })
+
+    it('an unreadable file leaves the duration unknown and the download still succeeds', () => {
+      const path = join(audioDir, 'unrecognised.wav')
+      writeFileSync(path, Buffer.from('not audio this app can measure'))
+
+      const id = markRecordingDownloaded('unrecognised.hda', path)
+
+      expect(id).toBeTruthy()
+      expect(durationOf(id)).toBeNull()
+      expect(sourceOf(id)).toBeNull()
+    })
+
+    it('a missing file does not fail the download either', () => {
+      const id = markRecordingDownloaded('gone.hda', join(audioDir, 'gone.wav'))
+
+      expect(id).toBeTruthy()
+      expect(durationOf(id)).toBeNull()
+      expect(sourceOf(id)).toBeNull()
+    })
+
+    it('a transcript that outruns the saved file keeps the old estimate and is not settled', () => {
+      run(
+        `INSERT INTO recordings
+           (id, filename, file_path, date_recorded, duration_seconds, status, location, transcription_status,
+            on_device, on_local, source, is_imported, personal)
+         VALUES ('cut', 'cut.wav', ?, '2026-01-01T10:00:00.000Z', 600, 'none', 'device-only', 'none', 1, 0, 'hidock', 0, 0)`,
+        [join(audioDir, 'cut.wav')]
+      )
+      seedTranscript('cut', { speakers: JSON.stringify([{ start: 0, end: 600 }]) })
+      const path = writeAudio('cut.wav', 250)
+
+      markRecordingDownloaded('cut.wav', path)
+
+      expect(durationOf('cut')).toBe(600)
+      expect(sourceOf('cut')).toBeNull()
+    })
   })
 })

@@ -185,6 +185,8 @@ interface Payload {
   offset: number
   /** Byte length of the audio data. */
   size: number
+  /** Declared empty PCM in a complete RIFF; legacy MPEG sniff still takes priority. */
+  pcmBytes?: number
   /** Declared PCM shape, when a RIFF `fmt ` chunk was present. */
   pcm?: { rate: number; channels: number; bits: number }
 }
@@ -209,7 +211,9 @@ function findPayload(header: Buffer, fileSize: number): Payload {
         // A streaming writer can leave the size field at 0 or -1; everything
         // after the header is the payload in that case.
         const declared = size === 0 || size === 0xffffffff ? fileSize - offset : size
-        return { offset, size: Math.max(0, Math.min(declared, fileSize - offset)), pcm }
+        const riffEnd = header.readUInt32LE(4) + 8
+        const pcmBytes = size === 0 && riffEnd >= offset && riffEnd <= fileSize ? 0 : undefined
+        return { offset, size: Math.max(0, Math.min(declared, fileSize - offset)), pcm, pcmBytes }
       }
       cursor += 8 + size + (size % 2)
     }
@@ -331,7 +335,7 @@ export function readAudioDuration(path: string): AudioDuration | null {
   if (pcm && pcm.rate > 0 && pcm.channels > 0 && pcm.bits >= 8) {
     const bytesPerSecond = pcm.rate * pcm.channels * Math.floor(pcm.bits / 8)
     if (bytesPerSecond > 0) {
-      return { seconds: payload.size / bytesPerSecond, how: `pcm ${pcm.rate}Hz/${pcm.channels}ch` }
+      return { seconds: (payload.pcmBytes ?? payload.size) / bytesPerSecond, how: `pcm ${pcm.rate}Hz/${pcm.channels}ch` }
     }
   }
 

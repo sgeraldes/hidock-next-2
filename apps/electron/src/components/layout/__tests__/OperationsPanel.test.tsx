@@ -160,6 +160,22 @@ describe('OperationsPanel', () => {
     expect(container.firstChild).toBeNull()
   })
 
+  it('keeps stopped-only Operations visible with Finish processing and Dismiss', async () => {
+    const queue = new Map([['stopped-q', { id: 'stopped-q', recordingId: 'stopped-r', filename: 'stop.wav', status: 'cancelled',
+      error: 'Stopped by you after the transcript was saved; summary/actions/search not updated',
+      progress: 60, priority: 0, retryCount: 0, attempts: 1, completedAt: new Date() }]])
+    vi.mocked(useTranscriptionStore).mockImplementation((selector: any) => selector(makeTranscriptionState(queue)))
+    useUIStore.setState({ operationsOverlayOpen: true })
+    render(<OperationsPanel sidebarOpen={false} />)
+    expect(screen.getByText('Stopped by you after the transcript was saved; summary/actions/search not updated')).toBeVisible()
+    expect(screen.getByText(/^Stopped .*attempt/)).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Finish processing' }))
+    await waitFor(() => expect(mockRetry).toHaveBeenCalledWith('stopped-q'))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Dismiss' })).not.toBeDisabled())
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+    await waitFor(() => expect(mockDismiss).toHaveBeenCalledWith('stopped-q'))
+  })
+
   it('shows a compact download badge (not a list) when downloads are active', () => {
     const downloadQueue = new Map([['dl-1', { filename: 'REC0001.WAV', progress: 50, size: 1000, status: 'downloading' }]])
     vi.mocked(useDownloadQueue).mockReturnValue(downloadQueue as any)
@@ -167,6 +183,35 @@ describe('OperationsPanel', () => {
     // Compact badge: a single "N downloading" summary that opens the overlay.
     expect(screen.getByText(/downloading/i)).toBeInTheDocument()
     expect(screen.getByLabelText('Open operations detail')).toBeInTheDocument()
+  })
+
+  it('clears stale renderer activity when the main snapshot has no active queue rows', async () => {
+    const getDownloadState = vi.fn().mockResolvedValue({
+      sessionStatus: 'active',
+      isProcessing: false,
+      isPaused: false,
+      queue: [{
+        filename: 'REC0001.WAV', fileSize: 1000, progress: 50, status: 'cancelled', cancelReason: 'user'
+      }, {
+        filename: 'REC0002.WAV', fileSize: 1000, progress: 100, status: 'failed', error: 'failed'
+      }]
+    })
+    ;(window as any).electronAPI = {
+      downloadService: {
+        getState: getDownloadState,
+        onStateUpdate: vi.fn().mockReturnValue(() => {})
+      }
+    }
+    vi.mocked(useDownloadQueue).mockReturnValue(new Map([
+      ['STALE.WAV', { filename: 'STALE.WAV', progress: 50, size: 1000, status: 'downloading' }]
+    ]) as any)
+
+    render(<OperationsPanel sidebarOpen={true} />)
+
+    await waitFor(() => expect(getDownloadState).toHaveBeenCalledTimes(1))
+    expect(await screen.findByText('1 failed')).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByText('1 downloading')).not.toBeInTheDocument())
+    expect(screen.queryByText('1 downloading')).not.toBeInTheDocument()
   })
 
   it('shows a compact "N transcribing" badge when transcriptions are active', () => {
@@ -211,7 +256,7 @@ describe('OperationsPanel', () => {
       render(<OperationsPanel sidebarOpen={true} />)
 
       fireEvent.click(screen.getByRole('button', { name: /View source/i }))
-      expect(mockNavigate).toHaveBeenCalledWith('/library', { state: { selectedId: 'rec-1' } })
+      expect(mockNavigate).toHaveBeenCalledWith('/library', { state: { selectedId: 'rec-1', focusProcessing: true } })
     })
 
     it('go-to falls back to the library when there is no linked meeting', () => {
@@ -219,7 +264,7 @@ describe('OperationsPanel', () => {
       render(<OperationsPanel sidebarOpen={true} />)
 
       fireEvent.click(screen.getByRole('button', { name: /View source/i }))
-      expect(mockNavigate).toHaveBeenCalledWith('/library', { state: { selectedId: 'rec-1' } })
+      expect(mockNavigate).toHaveBeenCalledWith('/library', { state: { selectedId: 'rec-1', focusProcessing: true } })
     })
 
     it('prioritize invokes the store action for the item', () => {
@@ -314,6 +359,13 @@ describe('OperationsPanel', () => {
       expect(pauseBtn).not.toBeDisabled()
       fireEvent.click(pauseBtn)
       expect(mockToggleProcessing).toHaveBeenCalledTimes(1)
+    })
+    it('shows running stage progress and an explicit Stop action', () => {
+      setupActiveOverlay()
+      render(<OperationsPanel sidebarOpen={true} />)
+      expect(screen.getByRole('progressbar')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Stop' })).toBeVisible()
+      expect(screen.getByText(/Checking audio/)).toBeVisible()
     })
 
     it('offers Resume while only downloads are paused and nothing is queued for transcription', () => {

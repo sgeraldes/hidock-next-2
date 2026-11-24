@@ -1,15 +1,10 @@
 // CHARACTERIZATION (C5 Phase 0) — pins current behavior, not desired behavior; see device-pipeline-spec §1, §2, §3
 
 /**
- * Pins JensenDevice command-queueing/intent behaviors that the sibling suite
- * (jensen-device.test.ts) does not already cover: tryConnect's already-connected
- * and non-HiDock-device early returns, listFiles' `data.filelist` concurrent-list
- * guard (including a race window the guard does NOT close), and downloadFile's
- * pre-flight rejection of an already-aborted signal / disconnected device. These
- * are exactly the "current gate inventory" behaviors device-pipeline-spec §1
- * attributes to JensenDevice, and the coalescing-key design in §3 point 2 is the
- * future fix for the gap pinned here as KNOWN-ODD. Zero behavior change — every
- * assertion below describes what the code does today, not what it should do.
+ * Exercises queue ownership and preflight boundaries: connection early returns,
+ * listing reservation before a legacy count await, overlapping-list unavailability,
+ * and download rejection before dispatch. Listing regressions now require null for
+ * unavailable data so consumers cannot reconcile an unobserved empty directory.
  */
 
 import { describe, it, expect, vi } from 'vitest'
@@ -75,7 +70,7 @@ function makePollDevice(ep: unknown, reset: ReturnType<typeof vi.fn>, close: Ret
     selectConfiguration: vi.fn(async () => {}),
     claimInterface: vi.fn(async () => {}),
     selectAlternateInterface: vi.fn(async () => {}),
-    transferOut: vi.fn(async () => ({ status: 'ok', bytesWritten: 12 })),
+    transferOut: vi.fn(async (_endpoint: number, data: Uint8Array) => ({ status: 'ok', bytesWritten: data.length })),
     transferIn: vi.fn(() => new Promise(() => {})),
     reset,
     close,
@@ -133,12 +128,9 @@ describe('JensenDevice command-queueing gaps (C5 characterization)', () => {
 
   // --- listFiles() concurrent-list guard (device-pipeline-spec §1 row 3) ---
 
-  it('listFiles() returns [] immediately (not a queued/awaited result) when data.filelist is already set', async () => {
-    // KNOWN-ODD: device-pipeline-spec §3 point 2 — the future coordinator returns
-    // the EXISTING promise (or a DUPLICATE outcome) for an overlapping intent so
-    // the caller still gets the real result. The current guard instead resolves
-    // the second caller with an empty array, discarding it from the in-flight
-    // scan; it never touches the wire or the live accumulator.
+  it('listFiles() returns unavailable without clearing an active listing', async () => {
+    // An overlapping scan is unavailable; it must not fabricate an empty result
+    // or touch the current owner accumulator.
     const ep = makePollEndpoint()
     const device = new JensenDevice(makeFakeUsb())
     const dev = makePollDevice(ep, vi.fn(async () => {}), vi.fn(async () => {}))
@@ -152,7 +144,7 @@ describe('JensenDevice command-queueing gaps (C5 characterization)', () => {
 
     const result = await device.listFiles()
 
-    expect(result).toEqual([])
+    expect(result).toBeNull()
     expect(transferOut).not.toHaveBeenCalled() // no second CMD_GET_FILE_LIST/GET_FILE_COUNT sent
     // The live accumulator is untouched — the guard did not clear or replace it.
     expect((device as unknown as { data: Record<string, unknown> }).data['filelist']).toBe(liveAccumulator)
@@ -160,18 +152,9 @@ describe('JensenDevice command-queueing gaps (C5 characterization)', () => {
     await device.disconnect()
   })
 
-  it('KNOWN-ODD: two listFiles() calls issued back-to-back before firmware version is known BOTH reach the wire', async () => {
-    // KNOWN-ODD: device-pipeline-spec §1 row 3 claims data.filelist "prevents two
-    // list accumulators consuming the same stream" and §3 point 2 promises
-    // coalesced/deduplicated sync intent. In reality the guard (jensen-device.ts:
-    // 2088 `if (this.data[key] != null) return []`) is checked BEFORE the
-    // `await this.getFileCount(5)` call that legacy/unversioned firmware requires
-    // (jensen-device.ts:2093-2096) — `this.data[key]` is only assigned AFTER that
-    // await resolves. Two listFiles() calls fired synchronously (no await between
-    // them) both pass the still-null guard and BOTH issue their own
-    // CMD_GET_FILE_COUNT command onto the wire — the two-accumulator race the
-    // guard is documented to prevent. This is exactly the gap the coordinator's
-    // coalescing key (`sync:<generation>`) is designed to close.
+  it('reserves listing ownership before the unknown-version count await', async () => {
+    // The reservation must precede the legacy count await, closing the former
+    // two-accumulator race without creating a second command.
     const ep = makePollEndpoint()
     const device = new JensenDevice(makeFakeUsb())
     const dev = makePollDevice(ep, vi.fn(async () => {}), vi.fn(async () => {}))
@@ -179,35 +162,25 @@ describe('JensenDevice command-queueing gaps (C5 characterization)', () => {
     await device.tryConnect(dev)
     ;(device as unknown as { startReadLoop: () => void }).startReadLoop()
     // Fresh post-connect state: setup() leaves versionNumber null, forcing the
-    // getFileCount() pre-check path (jensen-device.ts:2093).
+    // getFileCount() pre-check path.
     expect(device.versionNumber).toBeNull()
 
     // Fire both calls synchronously — neither is awaited before the second starts.
     const p1 = device.listFiles()
     const p2 = device.listFiles()
 
-    // Let both synchronous prefixes (guard check -> await getFileCount) run and
+    // Let the owner synchronous prefix (reservation -> await getFileCount) run and
     // the first queued GET_FILE_COUNT reach the wire.
     await new Promise((r) => setTimeout(r, 0))
     await new Promise((r) => setTimeout(r, 0))
     expect(transferOut.mock.calls.length).toBeGreaterThanOrEqual(1)
     expect(cmdIdOf(transferOut.mock.calls[0])).toBe(CMD.GET_FILE_COUNT)
 
-    // Answer the first GET_FILE_COUNT so the command lock advances to the second.
+    await expect(p2).resolves.toBeNull()
+    // Only the owner reads the count; an overlapping caller cannot race it.
     ep.emit('data', makeResponsePacket(CMD.GET_FILE_COUNT, 0, new Uint8Array([0, 0, 0, 0])))
-    // A SECOND CMD_GET_FILE_COUNT reaches the wire after the command queue
-    // advances. Wait for that observable boundary instead of relying on a fixed
-    // number of event-loop turns, which varies between Vitest versions.
-    await vi.waitFor(() => {
-      const fileCountSends = transferOut.mock.calls.filter((c) => cmdIdOf(c) === CMD.GET_FILE_COUNT)
-      expect(fileCountSends.length).toBe(2)
-    })
-
-    // Answer the second GET_FILE_COUNT as empty (0 files) so both calls settle
-    // cleanly without needing to drive a full GET_FILE_LIST exchange.
-    ep.emit('data', makeResponsePacket(CMD.GET_FILE_COUNT, 1, new Uint8Array([0, 0, 0, 0])))
     await expect(p1).resolves.toEqual([])
-    await expect(p2).resolves.toEqual([])
+    expect(transferOut.mock.calls.filter((c) => cmdIdOf(c) === CMD.GET_FILE_COUNT)).toHaveLength(1)
 
     await device.disconnect()
   })

@@ -257,7 +257,27 @@ export interface AppConfig {
     autoClipboard?: boolean
   }
   transcription: {
-    provider: 'gemini' | 'local-asr' | 'vibevoice'
+    provider: 'gemini' | 'local-asr' | 'vibevoice' | 'remote-worker' | 'muse-voice' | 'mai-transcribe-2'
+    museVoiceApiKey?: string
+    maiTranscribeApiKey?: string
+    maiTranscribeEndpoint?: string
+    transcriptionExecution?: 'local' | 'remote' | 'auto'
+    recordedAudioChannelMode?: 'preserve' | 'mixed'
+    remoteAsrModel?: string
+    /**
+     * Engines to try in order when a transcription fails (16-oct-2026):
+     * 'gemini', 'remote:<model>' on the Model Host, 'local:<model>' on this computer.
+     * Absent means the measured default (transcription-engine-chain.ts).
+     */
+    engineChain?: string[]
+    /** Extra tries on the same engine per error class; absent classes use the defaults. */
+    engineRetries?: Partial<Record<'transient' | 'quota' | 'incomplete' | 'unavailable' | 'credentials' | 'input' | 'unknown', number>>
+    /** false: only the first engine runs. Absent means true. */
+    engineFallbackEnabled?: boolean
+    /** Gemini may re-send a shorter piece when an answer comes back incomplete. Absent means true. */
+    splitIncompleteAudio?: boolean
+    /** Automatic retry of summaries every provider failed on. Absent fields use src/shared/summary-retry.ts. */
+    summaryRetry?: Partial<import('../shared/summary-retry').SummaryRetrySettings>
     geminiApiKey: string
     geminiModel: string
     localAsrPath: string
@@ -274,8 +294,18 @@ export interface AppConfig {
     speakerLinkingTimeoutSeconds: number
     /** Share of logical CPUs the diarization worker may use, 1-100. */
     speakerLinkingCpuPercent?: number
+    maxConcurrentRecordings?: 1 | 2
+    localComputePriority?: 'low' | 'below-normal' | 'normal'
+    localModelIdleSeconds?: number
+    localComputeAccelerator?: 'auto' | 'cpu'
+    resourcePolicyVersion?: number
+    pauseLocalOnBattery?: boolean
+    pauseLocalWhenBusy?: boolean
     /** Address of the machine that runs the speaker models. Empty = this one. */
     modelHostUrl?: string
+    remoteDiarizationModel?: string
+    modelHostCertificatePem?: string
+    modelHostLocalFallback?: boolean
     /** Token this computer got when it paired with that host. */
     modelHostToken?: string
     /** When the gamestation steps aside: any use, only games, or never. */
@@ -317,6 +347,8 @@ export interface AppConfig {
     provider: 'gemini' | 'ollama'
     geminiModel: string
     ollamaModel: string
+    recordQueries?: boolean
+    keepQueryText?: boolean
     maxContextChunks: number
   }
   device: {

@@ -115,7 +115,7 @@ vi.mock('../database', () => ({
   getSpeakerMap: vi.fn(() => db.speakerMap),
   getRecordingById: vi.fn(() => db.recording),
   getMeetingById: vi.fn(() => db.meeting),
-  queryOne: vi.fn(() => db.transcript),
+  queryOne: vi.fn((sql: string) => sql.includes('provider_checkpoints') ? undefined : db.transcript),
   run: vi.fn(),
   queryAll: vi.fn((sql: string) =>
     typeof sql === 'string' && sql.includes('meeting_contacts') ? (db.meetingContacts ?? []) : (db.mentionResolutions ?? [])

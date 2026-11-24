@@ -54,6 +54,7 @@ function deps(
     speakerMap: () => [],
     ownerContactId: () => 'contact-me',
     micChannel: () => 0,
+    ownerChannelEvidence: () => ({ source: 'manual-recording-owner-confirmation', channel: 0, contactId: 'contact-me' }),
     assign: (_id, label, contact, from) => {
       assigned.push(`${label}=${contact}`)
       provenance.push(from)
@@ -76,7 +77,7 @@ describe('live stream owner', () => {
     expect(microphoneSpeaker(await channelEnergyBySpeaker(wav, segments, 1))).toBe('SPEAKER_01')
   })
 
-  it('names the owner on that speaker', async () => {
+  it('names the owner only with independent recording-scoped manual evidence and matching energy', async () => {
     const d = deps()
     expect(await nameOwnerOnLiveRecording('r1', d)).toEqual({ named: true, label: 'SPEAKER_00' })
     expect(d.assigned).toEqual(['SPEAKER_00=contact-me'])
@@ -87,6 +88,21 @@ describe('live stream owner', () => {
     expect(d.provenance[0].confidence).toBeLessThanOrEqual(1)
     // The owner's voice is anchored too (spec 2026-10-03, 2a), with the same confidence.
     expect(d.provenance[0].voiceAnchor).toEqual({ method: 'live-channel', confidence: d.provenance[0].confidence })
+  })
+
+  it('does not read audio, name or anchor a person from an unverified channel mapping', async () => {
+    for (const evidence of [undefined, null,
+      { source: 'host-selection-or-heuristic-unverified', channel: 0, contactId: 'contact-me' },
+      { source: 'manual-recording-owner-confirmation', channel: 1, contactId: 'contact-me' },
+      { source: 'manual-recording-owner-confirmation', channel: 0, contactId: 'different-person' }]) {
+      const d = deps({
+        recording: () => ({ filename: 'fixture-Live.wav', file_path: 'nonexistent-Live.wav' }),
+        ownerChannelEvidence: evidence === undefined ? undefined : () => evidence as any,
+      })
+      expect(await nameOwnerOnLiveRecording('r1', d)).toMatchObject({ named: false, reason: expect.stringContaining('independently confirmed') })
+      expect(d.assigned).toEqual([])
+      expect(d.provenance).toEqual([])
+    }
   })
 
   it('names nobody when it is not clear or not allowed', async () => {

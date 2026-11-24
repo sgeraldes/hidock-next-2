@@ -139,6 +139,12 @@ interface WaveformPlayerProps {
   onEventClick?: (event: TimelineEvent) => void
   /** Externally-controlled highlighted event id (bidirectional list linking). */
   activeEventId?: string | null
+  /** Full mode only. Hide the waveform band (never hidden for stereo, whose channel mute controls live there). */
+  showWaveform?: boolean
+  /** Full mode only. Hide the sentiment panel. The caller passes false when there is no real sentiment data. */
+  showSentiment?: boolean
+  /** Reader supplies its persistent transport row; keep this detail graph-only. */
+  hideTransport?: boolean
   className?: string
 }
 
@@ -267,6 +273,9 @@ export function WaveformPlayer({
   splitPointSec,
   onEventClick,
   activeEventId,
+  showWaveform = true,
+  showSentiment = true,
+  hideTransport = false,
   className
 }: WaveformPlayerProps) {
   const wf = useScopedWaveform(recordingId)
@@ -501,6 +510,9 @@ export function WaveformPlayer({
       onEventClick={onEventClick}
       activeEvent={activeEvent}
       setInternalActiveEvent={setInternalActiveEvent}
+      showWaveform={showWaveform}
+      showSentiment={showSentiment}
+      hideTransport={hideTransport}
     />
   )
 }
@@ -528,6 +540,9 @@ interface FullTimelineProps {
   onEventClick?: (event: TimelineEvent) => void
   activeEvent: string | null
   setInternalActiveEvent: (id: string | null) => void
+  showWaveform: boolean
+  showSentiment: boolean
+  hideTransport: boolean
 }
 
 /** The full-mode meeting timeline: colored bars, playhead, markers, sentiment. */
@@ -551,7 +566,10 @@ function FullTimeline({
   storeSentiment,
   onEventClick,
   activeEvent,
-  setInternalActiveEvent
+  setInternalActiveEvent,
+  showWaveform,
+  showSentiment,
+  hideTransport
 }: FullTimelineProps) {
   // Event-list detail interaction: expanded row + inline edit state.
 
@@ -652,16 +670,21 @@ function FullTimeline({
     return last.y
   }
 
+  // The sentiment panel needs real data for stereo (no flat placeholder panel); the
+  // stage frame, ruler and playhead exist only while at least one graph is visible.
+  const sentimentVisible = showSentiment && (!stereo || !!sentimentPath)
+  const stageVisible = showWaveform || sentimentVisible
+
   return (
     <div className={cn('space-y-2 rounded-lg border bg-muted/40 p-3', className)} data-testid="waveform-player-full">
       {/* Stage: a subtle gradient panel holding the sentiment curve + numbered
           markers on top, the per-speaker colored waveform below, and the time axis.
           This composition mirrors the approved timeline mockup. */}
-      <div className="overflow-hidden rounded-lg border border-border/60" style={{ background: STAGE_GRADIENT }} data-testid="timeline-stage">
+      <div className="overflow-hidden rounded-lg border border-border/60" style={{ background: STAGE_GRADIENT }} data-testid="timeline-stage" hidden={!stageVisible}>
         <div className="relative">
           {/* Sentiment panel — gradient area, +positive / −negative axis labels,
               the sentiment curve, and numbered event markers riding ON the curve. */}
-          {!stereo && <div className="relative" style={{ height: SENTIMENT_H }} data-testid="sentiment-panel">
+          {sentimentVisible && <div className="relative" style={{ height: SENTIMENT_H }} data-testid="sentiment-panel">
             <svg className="absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
               <defs>
                 <linearGradient id={`wf-sent-fill-${stageId}`} x1="0" y1="0" x2="0" y2="1">
@@ -721,9 +744,9 @@ function FullTimeline({
           </div>}
 
           {/* Wave band — per-speaker colored bars, or a clean placeholder. */}
-          <div className="relative px-2 pb-1.5" style={{ height: wf.channels?.length === 2 ? undefined : WAVE_H }} data-testid="wave-band">
-            {wf.channels?.length === 2 ? (
-              <StereoLanes channels={wf.channels} recordingId={recordingId} pcRecording={pcRecording} duration={duration} onSeek={seekTo} />
+          <div className="relative px-2 pb-1.5" style={{ height: wf.channels?.length === 2 ? undefined : WAVE_H }} data-testid="wave-band" hidden={!showWaveform}>
+            {!showWaveform ? null : wf.channels?.length === 2 ? (
+              <StereoLanes channels={wf.channels} recordingId={recordingId} pcRecording={pcRecording} duration={duration} onSeek={seekTo} showGraph />
             ) : wf.waveformData ? (
               <WaveformCanvas
                 audioData={wf.waveformData}
@@ -803,10 +826,16 @@ function FullTimeline({
         </div>
       </div>
 
+      {/* Waveform display off for a two-channel recording: no chart, no ruler, but the
+          physical channel mute controls stay, as one compact row. */}
+      {stereo && !showWaveform && wf.channels && (
+        <StereoLanes channels={wf.channels} recordingId={recordingId} pcRecording={pcRecording} duration={duration} onSeek={seekTo} showGraph={false} />
+      )}
+
       {/* Times + transport. NOTE: no speaker-name legend here — the names (and
           their matching color swatches) live in the reader's Participants chips,
           so the waveform is never split from its controls by a legend. */}
-      <div className="flex items-center justify-between gap-2">
+      {!hideTransport && <div className="flex items-center justify-between gap-2" data-testid="waveform-detail-transport">
         <div className="flex items-center gap-1">
           {PlayButtonFull(pb)}
           <Button variant="ghost" size="icon" className="h-8 w-8" onClick={skipBackward} disabled={!pb.showLiveTime || pb.rawCurrentTime <= 0} title="Back 10s" aria-label="Skip back 10 seconds">
@@ -825,7 +854,7 @@ function FullTimeline({
           </span>
           <SpeedPill value={playbackRate} onChange={handleRate} />
         </div>
-      </div>
+      </div>}
 
       {/* The event list used to live here. It moved out to
           TimelineEventList.tsx on 2026-09-22 and is now its own reader
@@ -856,8 +885,8 @@ function PlayButtonFull(pb: ReturnType<typeof usePlayback>) {
 
 
 /** Both lanes share the full player's axis and spanning playhead. */
-function StereoLanes({ channels, recordingId, pcRecording, duration, onSeek, currentTime = 0, compact = false }: {
-  channels: Float32Array[]; recordingId?: string; pcRecording: boolean; duration: number; onSeek: (sec: number) => void; currentTime?: number; compact?: boolean
+function StereoLanes({ channels, recordingId, pcRecording, duration, onSeek, currentTime = 0, compact = false, showGraph = true }: {
+  channels: Float32Array[]; recordingId?: string; pcRecording: boolean; duration: number; onSeek: (sec: number) => void; currentTime?: number; compact?: boolean; showGraph?: boolean
 }) {
   const mutedForId = useUIStore(s => s.mutedChannelsForId)
   const muted = useUIStore(s => s.playbackMutedChannels)
@@ -879,6 +908,19 @@ function StereoLanes({ channels, recordingId, pcRecording, duration, onSeek, cur
       })}</div>
     </div>
   }
+  if (!showGraph) {
+    return <div className="flex flex-wrap items-center gap-2" data-testid="stereo-mute-row">
+      {channels.map((_peaks, channel) => {
+        const label = pcRecording ? (channel === 0 ? 'Mic' : 'System') : `Channel ${channel}`
+        const isMuted = mutedForId === recordingId && !!muted[channel]
+        return <Button key={channel} variant={isMuted ? 'secondary' : 'outline'} size="sm" className="h-6 gap-1 px-2 text-xs" aria-label={`${isMuted ? 'Unmute' : 'Mute'} ${label}`} aria-pressed={isMuted}
+          onClick={() => recordingId && controls.setChannelMuted(recordingId, channel, !isMuted)}>
+          {isMuted ? <VolumeX className="h-3 w-3" aria-hidden="true"/> : <Volume2 className="h-3 w-3" aria-hidden="true"/>}
+          {label}: {isMuted ? 'Unmute' : 'Mute'}
+        </Button>
+      })}
+    </div>
+  }
   return <div className="space-y-1 py-1" data-testid="stereo-lanes">
     {channels.map((peaks, channel) => {
       const label = pcRecording ? (channel === 0 ? 'Mic' : 'System') : `Channel ${channel}`
@@ -892,9 +934,11 @@ function StereoLanes({ channels, recordingId, pcRecording, duration, onSeek, cur
             {isMuted ? 'Unmute' : 'Mute'}
           </Button>
         </div>
-        <div className={isMuted ? 'opacity-40' : undefined}>
-          <WaveformCanvas audioData={peaks} duration={duration} onSeek={onSeek} height={44} />
-        </div>
+        {showGraph && (
+          <div className={isMuted ? 'opacity-40' : undefined}>
+            <WaveformCanvas audioData={peaks} duration={duration} onSeek={onSeek} height={44} />
+          </div>
+        )}
       </div>
     })}
   </div>

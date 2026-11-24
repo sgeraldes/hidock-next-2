@@ -15,6 +15,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { existsSync, rmSync, statSync } from 'fs'
 import Database from 'better-sqlite3'
+import { randomUUID } from 'crypto'
 import { DatabaseEngine, SchemaBehindError } from '../src/index.js'
 
 const SCHEMA = `
@@ -34,7 +35,7 @@ afterEach(() => {
 })
 
 function pathFor(name: string): string {
-  const path = join(tmpdir(), `hidock-db-readonly-test-${name}.sqlite`)
+  const path = join(tmpdir(), `hidock-db-readonly-test-${name}-${randomUUID()}.sqlite`)
   paths.push(path)
   return path
 }
@@ -58,6 +59,40 @@ async function writerWith(path: string, rows: Array<[string, string]>): Promise<
 }
 
 describe('DatabaseEngine.initializeReadOnly', () => {
+  it('opens the exact existing schema for writes without invoking schema work', async () => {
+    const path = pathFor('existing-writable')
+    const writer = await writerWith(path, [['a', 'Alpha']])
+    writer.closeDatabase()
+    const before = statSync(path).mtimeMs
+    let repaired = false
+    const existing = new DatabaseEngine({ betterSqlite3: Database, dbPathProvider: () => path, schemaVersion: 1, schema: SCHEMA + ' CREATE TABLE forbidden (id TEXT);', migrations: {}, repairPhase: () => { repaired = true } })
+    existing.initializeExistingWritable()
+    expect(repaired).toBe(false)
+    expect(existing.queryOne("SELECT name FROM sqlite_master WHERE name = 'forbidden'")).toBeUndefined()
+    expect(statSync(path).mtimeMs).toBe(before)
+    existing.run('INSERT INTO items (id, name) VALUES (?, ?)', ['b', 'Beta'])
+    expect(existing.queryOne<{ name: string }>('SELECT name FROM items WHERE id = ?', ['b'])?.name).toBe('Beta')
+    existing.closeDatabase()
+  })
+
+  it('refuses missing, older, newer or non-WAL files in existing writable mode', async () => {
+    const missing = pathFor('existing-missing')
+    expect(() => engineFor(missing).initializeExistingWritable()).toThrow()
+    expect(existsSync(missing)).toBe(false)
+    const path = pathFor('existing-mismatch')
+    const writer = await writerWith(path, [])
+    writer.closeDatabase()
+    expect(() => engineFor(path, 2).initializeExistingWritable()).toThrow(/schema/)
+    const db = new Database(path)
+    db.prepare('UPDATE schema_version SET version = 3').run()
+    db.close()
+    expect(() => engineFor(path, 1).initializeExistingWritable()).toThrow(/exact schema/)
+    const journal = new Database(path)
+    journal.prepare('UPDATE schema_version SET version = 1').run()
+    journal.pragma('journal_mode = DELETE')
+    journal.close()
+    expect(() => engineFor(path).initializeExistingWritable()).toThrow(/requires WAL/)
+  })
   it('reads what the owning process wrote, while it is still open', async () => {
     const path = pathFor('concurrent')
     const writer = await writerWith(path, [['a', 'Alpha']])

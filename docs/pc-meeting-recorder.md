@@ -1,5 +1,7 @@
 # PC meeting recorder — phase 1a
 
+Device/format boundary, updated 11 October 2026: this is host-side Windows capture, with explicit mic-left/system-right routing. It is distinct from [H1E stored mono MP3 and Jensen realtime PCM](devices/README.md#three-distinct-audio-paths). Native `HiDockVM` markers and the local MP3 marker-copy utility do not apply to this WebM file; source routing here does not establish a HiDock hardware channel map.
+
 On Windows, choose **New > Record** in the top bar, then press **Record** in the compact bar.
 Opening the bar never opens a microphone. **Stop** flushes the recording into the Library.
 The bar shows elapsed time and independent Mic/System levels and survives page navigation.

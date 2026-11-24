@@ -1,3 +1,4 @@
+import { createElement, StrictMode } from 'react'
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -6,19 +7,8 @@ import {
   useTranscriptionSync
 } from '../useTranscriptionSync'
 import { useTranscriptionStore } from '@/store/features/useTranscriptionStore'
-const warning = vi.hoisted(() => vi.fn())
-vi.mock('@/components/ui/toaster', () => ({ toast: { warning } }))
 
 describe('useTranscriptionSync', () => {
-  it('shows the reason an explicitly requested transcription was stopped', async () => {
-    let cancelled: ((data: { recordingId: string; reason?: string }) => void) | undefined
-    ;(window as any).electronAPI.onTranscriptionCancelled = (callback: typeof cancelled) => { cancelled = callback; return vi.fn() }
-    const { unmount } = renderHook(() => useTranscriptionSync())
-    await act(async () => { await Promise.resolve() })
-    act(() => cancelled?.({ recordingId: 'rec-1', reason: 'Clear the rating to transcribe again.' }))
-    expect(warning).toHaveBeenCalledWith('Transcription stopped', 'Clear the rating to transcribe again.')
-    unmount()
-  })
   const getTranscriptionQueue = vi.fn()
   let queuedCallback: ((data: { queueItemId: string; recordingId: string; filename?: string }) => void) | undefined
 
@@ -40,6 +30,19 @@ describe('useTranscriptionSync', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it('resubscribes after a StrictMode effect replay and streams the current stage', async () => {
+    let progress: ((data:any)=>void) | undefined
+    const unsubscribe = vi.fn()
+    ;(window as any).electronAPI.onTranscriptionProgress = vi.fn((callback) => {progress=callback;return unsubscribe})
+    const {unmount} = renderHook(() => useTranscriptionSync(), {wrapper: ({children}) => createElement(StrictMode,null,children)})
+    await act(async () => {await Promise.resolve()})
+    expect(window.electronAPI.onTranscriptionProgress).toHaveBeenCalledTimes(2)
+    act(() => progress?.({queueItemId:'q-1',recordingId:'rec-1',stage:'diarization',progress:3}))
+    expect(useTranscriptionStore.getState().queue.get('q-1')).toMatchObject({stage:'diarization',status:'processing'})
+    unmount()
+    expect(unsubscribe).toHaveBeenCalledTimes(2)
   })
 
   it('hydrates and reconciles only actionable rows at the reduced cadence', async () => {
@@ -117,4 +120,26 @@ describe('useTranscriptionSync', () => {
       'rec-1': { created_at: '2026-08-22 01:30:33' }
     })).toEqual(items)
   })
+
+ it('keeps stopped outcomes when the all-cancelled event follows individual stops', async () => {
+   let allCancelled: (() => void) | undefined
+   ;(window as any).electronAPI.onTranscriptionAllCancelled = vi.fn((callback) => { allCancelled = callback; return vi.fn() })
+   const { unmount } = renderHook(() => useTranscriptionSync())
+   await act(async () => { await Promise.resolve() })
+   useTranscriptionStore.getState().markStopped('q-1', 'Stopped by you after the transcript was saved; summary/actions/search not updated')
+   act(() => allCancelled?.())
+   expect(useTranscriptionStore.getState().queue.get('q-1')).toMatchObject({ status: 'cancelled', error: 'Stopped by you after the transcript was saved; summary/actions/search not updated' })
+   unmount()
+ })
+
+ it('keeps a user stop event in the queue with its reason until reconciliation', async () => {
+   let cancelled: ((data: any) => void) | undefined
+   ;(window as any).electronAPI.onTranscriptionCancelled = vi.fn((callback) => { cancelled = callback; return vi.fn() })
+   const { unmount } = renderHook(() => useTranscriptionSync())
+   await act(async () => { await Promise.resolve() })
+   act(() => cancelled?.({ recordingId: 'rec-1', reason: 'Stopped by you' }))
+   expect(useTranscriptionStore.getState().queue.get('q-1')).toMatchObject({ status: 'cancelled', error: 'Stopped by you' })
+   unmount()
+ })
+
 })

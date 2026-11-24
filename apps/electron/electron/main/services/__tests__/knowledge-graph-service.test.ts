@@ -85,6 +85,7 @@ const FAKE_JSON = JSON.stringify({
 // ---------------------------------------------------------------------------
 
 import { initializeDatabase, run as dbRun } from '../database'
+import * as database from '../database'
 
 // We expose a way to reset the singleton from the service module
 // The service exports getKnowledgeGraphStore() which lazily creates _store.
@@ -127,6 +128,76 @@ import {
 // ---------------------------------------------------------------------------
 
 describe('knowledge-graph-service', () => {
+  it('shares in-flight claims and rechecks fresh markers across overlapping snapshots', async () => {
+    for (const id of ['overlap-a', 'overlap-b']) {
+      dbRun('INSERT INTO recordings (id, filename, date_recorded) VALUES (?, ?, ?)', [id, `${id}.hda`, '2026-01-01'])
+      dbRun('INSERT INTO transcripts (id, recording_id, full_text) VALUES (?, ?, ?)', [`tx-${id}`, id, `Alice discussed ${id}.`])
+    }
+    let release!: (text: string) => void
+    let entered!: () => void
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    vi.mocked(complete).mockImplementationOnce(() => {
+      entered()
+      return new Promise<string>((resolve) => { release = resolve })
+    })
+    const slow = ingestFromDbTranscripts()
+    await started
+    const fast = await ingestFromDbTranscripts()
+    release(FAKE_JSON)
+    const first = await slow
+    expect(first.ingested + fast.ingested).toBe(2)
+    expect(complete).toHaveBeenCalledTimes(2)
+  })
+  it('releases a failed in-flight claim so a later pass reaches the row again', async () => {
+    dbRun('INSERT INTO recordings (id, filename, date_recorded) VALUES (?, ?, ?)', ['retry-claim', 'retry.hda', '2026-01-01'])
+    dbRun('INSERT INTO transcripts (id, recording_id, full_text) VALUES (?, ?, ?)', ['retry-claim-t', 'retry-claim', 'Alice discussed TypeScript.'])
+    vi.mocked(complete).mockRejectedValueOnce(new Error('provider unavailable'))
+    expect((await ingestFromDbTranscripts()).errors).toHaveLength(1)
+    // Not skipped as still claimed: the row is tried again. The provider
+    // checkpoint then refuses an automatic resend of a request whose outcome is
+    // unknown (main's checkpoint rule), so it is an error, never a silent skip.
+    const second = await ingestFromDbTranscripts()
+    expect(second.skipped).toBe(0)
+    expect(second.errors).toEqual([expect.objectContaining({ transcriptId: 'retry-claim-t', error: expect.stringContaining('Provider checkpoint pending') })])
+  })
+
+  it('filters incremental candidates in SQL and reads text only for extraction', async () => {
+    getKnowledgeGraphStore()
+    dbRun('INSERT INTO recordings (id, filename, date_recorded) VALUES (?, ?, ?)', ['filtered', 'filtered.hda', '2025-10-10'])
+    dbRun('INSERT INTO transcripts (id, recording_id, full_text) VALUES (?, ?, ?)', ['filtered-t', 'filtered', 'x'.repeat(40_000)])
+    dbRun('INSERT INTO graph_ingested_transcripts (transcript_id, ingested_at) VALUES (?, ?)', ['filtered-t', new Date().toISOString()])
+    const reads = vi.spyOn(database, 'queryOne')
+    try {
+      expect(database.getGraphIngestCandidates()).toEqual({ rows: [], skipped: 1 })
+      expect((await ingestFromDbTranscripts()).skipped).toBe(1)
+      const transcriptReads = reads.mock.calls.filter(([sql]) => /FROM transcripts t/i.test(sql))
+      expect(transcriptReads.every(([sql]) => !sql.includes('t.full_text'))).toBe(true)
+      expect(complete).not.toHaveBeenCalled()
+    } finally {
+      reads.mockRestore()
+    }
+  })
+  it('bounds an incremental pass over 2,150 transcripts with 40 KB bodies', async () => {
+    getKnowledgeGraphStore()
+    database.runInTransaction(() => {
+      for (let i = 0; i < 2150; i++) {
+        dbRun('INSERT INTO recordings (id, filename, date_recorded) VALUES (?, ?, ?)', [`load-${i}`, `load-${i}.hda`, '2025-10-10'])
+        dbRun('INSERT INTO transcripts (id, recording_id, full_text) VALUES (?, ?, ?)', [`load-t-${i}`, `load-${i}`, 'x'.repeat(40_000)])
+        dbRun('INSERT INTO graph_ingested_transcripts (transcript_id, ingested_at) VALUES (?, ?)', [`load-t-${i}`, '2026-10-04'])
+      }
+    })
+    const before = performance.now()
+    // The previous hot path: eager bodies and one marker point-read per row.
+    const legacy = database.queryAll<{ id: string; full_text: string }>('SELECT t.id, t.full_text FROM transcripts t JOIN recordings r ON r.id=t.recording_id WHERE COALESCE(r.personal,0)=0 AND r.deleted_at IS NULL')
+    for (const row of legacy) database.queryOne('SELECT transcript_id FROM graph_ingested_transcripts WHERE transcript_id=?', [row.id])
+    const legacyHold = performance.now() - before
+    const after = performance.now()
+    const result = await ingestFromDbTranscripts()
+    const optimizedHold = performance.now() - after
+    process.stdout.write(`GRAPH FIXTURE 2150 x 40000 bytes: legacy hold ${legacyHold.toFixed(1)}ms; filtered pass ${optimizedHold.toFixed(1)}ms\n`)
+    expect(result).toEqual({ ingested: 0, skipped: 2150, errors: [] })
+    expect(optimizedHold).toBeLessThan(100)
+  })
   // =========================================================================
   // ingestFromDbTranscripts()
   // =========================================================================
@@ -188,6 +259,24 @@ describe('knowledge-graph-service', () => {
       expect(result.ingested).toBe(0)
       expect(result.errors).toHaveLength(1)
       expect(result.errors[0].error).toContain('API rate limit')
+    })
+
+    it('retains a provider response after graph persistence fails without calling it twice', async () => {
+      dbRun("INSERT INTO recordings (id, filename, date_recorded) VALUES ('rec-invalid', 'invalid.hda', '2026-06-01')")
+      dbRun("INSERT INTO transcripts (id, recording_id, full_text, language) VALUES ('tx-invalid', 'rec-invalid', 'Alice discussed TypeScript.', 'en')")
+      getKnowledgeGraphStore()
+      dbRun("CREATE TRIGGER fail_graph_marker BEFORE INSERT ON graph_ingested_transcripts BEGIN SELECT RAISE(ABORT, 'injected persistence failure'); END")
+      const first = await ingestFromDbTranscripts()
+      dbRun('DROP TRIGGER fail_graph_marker')
+      const second = await ingestFromDbTranscripts()
+      expect(first.errors).toHaveLength(1)
+      expect(second.errors).toHaveLength(0)
+      expect(second.ingested).toBe(1)
+      expect(complete).toHaveBeenCalledTimes(1)
+      const { queryAll } = await import('../database')
+      expect(queryAll("SELECT state FROM provider_checkpoints WHERE recording_id='rec-invalid'")).toEqual([{ state: 'received' }])
+      expect(queryAll("SELECT status FROM processing_runs WHERE recording_id='rec-invalid' AND stage='graph-sync'"))
+        .toEqual([{ status: 'failed' }, { status: 'completed' }])
     })
 
     it('concurrent ingest runs do not double-ingest or inflate edge weights', async () => {

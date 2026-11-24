@@ -243,7 +243,7 @@ describe('Privacy source-deletion (v38)', () => {
       seedRecording('r1')
       seedTranscript('t1', 'r1')
 
-      const res = deleteRecordingCascade('r1', { hard: false })
+      const res = deleteRecordingCascade('r1', { hard: false, origin: 'user', requestedBy: 'test' })
       expect(res?.mode).toBe('soft')
       expect(getRecordings().find((r) => r.id === 'r1')).toBeUndefined()
       // Derived data is untouched by a soft delete.
@@ -267,7 +267,7 @@ describe('Privacy source-deletion (v38)', () => {
 
     it('soft-deleted recordings are in the excluded set', () => {
       seedRecording('r1')
-      deleteRecordingCascade('r1', { hard: false })
+      deleteRecordingCascade('r1', { hard: false, origin: 'user', requestedBy: 'test' })
       expect(getExcludedRecordingIds().ids.has('r1')).toBe(true)
     })
   })
@@ -279,7 +279,7 @@ describe('Privacy source-deletion (v38)', () => {
     it('returns only tombstoned (deleted_at IS NOT NULL) rows, live rows excluded', () => {
       seedRecording('r1')
       seedRecording('r2')
-      deleteRecordingCascade('r1', { hard: false })
+      deleteRecordingCascade('r1', { hard: false, origin: 'user', requestedBy: 'test' })
 
       const trashed = getTrashedRecordings()
       expect(trashed.map((r) => r.id)).toEqual(['r1'])
@@ -290,9 +290,9 @@ describe('Privacy source-deletion (v38)', () => {
       seedRecording('r1')
       seedRecording('r2')
       seedRecording('r3')
-      deleteRecordingCascade('r1', { hard: false })
-      deleteRecordingCascade('r2', { hard: false })
-      deleteRecordingCascade('r3', { hard: false })
+      deleteRecordingCascade('r1', { hard: false, origin: 'user', requestedBy: 'test' })
+      deleteRecordingCascade('r2', { hard: false, origin: 'user', requestedBy: 'test' })
+      deleteRecordingCascade('r3', { hard: false, origin: 'user', requestedBy: 'test' })
       // Stamp explicit, unambiguous deleted_at values — three sequential
       // real-clock calls can land in the same millisecond and make the ORDER BY
       // non-deterministic; this isolates the test from that timing race.
@@ -307,7 +307,7 @@ describe('Privacy source-deletion (v38)', () => {
     it('excludes personal (but not deleted) recordings — personal and trashed are independent', () => {
       seedRecording('r1', { personal: 1 })
       seedRecording('r2')
-      deleteRecordingCascade('r2', { hard: false })
+      deleteRecordingCascade('r2', { hard: false, origin: 'user', requestedBy: 'test' })
 
       const trashed = getTrashedRecordings()
       expect(trashed.map((r) => r.id)).toEqual(['r2'])
@@ -315,7 +315,7 @@ describe('Privacy source-deletion (v38)', () => {
 
     it('a hard-purged recording never appears in Trash (it no longer exists)', () => {
       seedRecording('r1')
-      deleteRecordingCascade('r1', { hard: true })
+      deleteRecordingCascade('r1', { hard: true, origin: 'user', requestedBy: 'test' })
       expect(getTrashedRecordings()).toEqual([])
     })
 
@@ -356,7 +356,7 @@ describe('Privacy source-deletion (v38)', () => {
       seedMeeting('m1')
       seedFullRecording('r1', 'm1')
 
-      const res = deleteRecordingCascade('r1', { hard: true })
+      const res = deleteRecordingCascade('r1', { hard: true, origin: 'user', requestedBy: 'test' })
       expect(res?.mode).toBe('hard')
       expect(res?.removed.transcripts).toBe(1)
       expect(res?.removed.captures).toBe(1)
@@ -385,7 +385,7 @@ describe('Privacy source-deletion (v38)', () => {
       seedMeeting('m1')
       seedFullRecording('r1', 'm1')
 
-      deleteRecordingCascade('r1', { hard: true })
+      deleteRecordingCascade('r1', { hard: true, origin: 'user', requestedBy: 'test' })
 
       // rec.filename = r1.wav, original = r1.hda ⇒ variants: wav, hda, mp3
       for (const name of ['r1.wav', 'r1.hda', 'r1.mp3']) {
@@ -404,7 +404,7 @@ describe('Privacy source-deletion (v38)', () => {
       run('INSERT INTO artifacts (id, knowledge_capture_id, kind, storage_path) VALUES (?, ?, ?, ?)', [
         'r1-a', 'r1-c', 'pdf', '/data/artifacts/r1.pdf'
       ])
-      const res = deleteRecordingCascade('r1', { hard: true })
+      const res = deleteRecordingCascade('r1', { hard: true, origin: 'user', requestedBy: 'test' })
       expect(res?.filePath).toBe('/data/r1.wav')
       expect(res?.artifactPaths).toContain('/data/artifacts/r1.pdf')
     })
@@ -432,7 +432,7 @@ describe('Privacy source-deletion (v38)', () => {
          VALUES ('r2-c', 'classified', 'unrated', 1)`
       )
 
-      const res = deleteRecordingCascade('r1', { hard: true })
+      const res = deleteRecordingCascade('r1', { hard: true, origin: 'user', requestedBy: 'test' })
 
       expect(res?.mode).toBe('hard')
       expect(queryAll('SELECT capture_id FROM value_backfill_state WHERE capture_id = ?', ['r1-c']).length).toBe(0)
@@ -440,7 +440,7 @@ describe('Privacy source-deletion (v38)', () => {
     })
 
     it('returns undefined for an unknown recording', () => {
-      expect(deleteRecordingCascade('ghost', { hard: true })).toBeUndefined()
+      expect(deleteRecordingCascade('ghost', { hard: true, origin: 'user', requestedBy: 'test' })).toBeUndefined()
     })
 
     // AC#9 (spec-005/F17 T5) — permanent-delete FROM Trash: hard-purging a
@@ -449,10 +449,10 @@ describe('Privacy source-deletion (v38)', () => {
     it('hard-purges a recording that is already soft-deleted (permanent-delete from Trash)', () => {
       seedRecording('r1')
       seedTranscript('t1', 'r1')
-      deleteRecordingCascade('r1', { hard: false })
+      deleteRecordingCascade('r1', { hard: false, origin: 'user', requestedBy: 'test' })
       expect(getTrashedRecordings().map((r) => r.id)).toEqual(['r1'])
 
-      const res = deleteRecordingCascade('r1', { hard: true })
+      const res = deleteRecordingCascade('r1', { hard: true, origin: 'user', requestedBy: 'test' })
 
       expect(res?.mode).toBe('hard')
       expect(getRecordingById('r1')).toBeUndefined()
@@ -483,7 +483,7 @@ describe('Privacy source-deletion (v38)', () => {
       run("INSERT INTO meeting_contacts (meeting_id, contact_id, role) VALUES ('m1', 'c-shared', 'attendee')")
       run("INSERT INTO meeting_contacts (meeting_id, contact_id, role) VALUES ('m1', 'c-only', 'attendee')")
 
-      const res = deleteRecordingCascade('r1', { hard: true })
+      const res = deleteRecordingCascade('r1', { hard: true, origin: 'user', requestedBy: 'test' })
       expect(res?.removed.meetingLinksRemoved).toBe(1)
 
       // Shared contact stays linked (justified by r2); solo contact is unlinked.
@@ -504,7 +504,7 @@ describe('Privacy source-deletion (v38)', () => {
       run('INSERT INTO transcript_speakers (id, recording_id, speaker_label, contact_id) VALUES (?, ?, ?, ?)', ['s1', 'r1', 'S1', 'c-cal'])
       run("INSERT INTO meeting_contacts (meeting_id, contact_id, role) VALUES ('m1', 'c-cal', 'attendee')")
 
-      deleteRecordingCascade('r1', { hard: true })
+      deleteRecordingCascade('r1', { hard: true, origin: 'user', requestedBy: 'test' })
       const links = queryAll<{ contact_id: string }>('SELECT contact_id FROM meeting_contacts WHERE meeting_id = ?', ['m1'])
       expect(links.map((l) => l.contact_id)).toContain('c-cal')
     })
@@ -553,7 +553,7 @@ describe('Privacy source-deletion (v38)', () => {
     it('reports impact for a soft-deleted (tombstoned) recording', () => {
       seedRecording('r1', { file_path: '/data/r1.wav' })
       seedTranscript('t1', 'r1')
-      deleteRecordingCascade('r1', { hard: false })
+      deleteRecordingCascade('r1', { hard: false, origin: 'user', requestedBy: 'test' })
       expect(getRecordings().find((r) => r.id === 'r1')).toBeUndefined() // confirms it's really hidden
 
       const impact = getRecordingDeletionImpact('r1')
@@ -591,7 +591,7 @@ describe('Privacy source-deletion (v38)', () => {
       seedTranscript('t1', 'r1')
       setGraphProvenanceCleanup(null)
       try {
-        expect(() => deleteRecordingCascade('r1', { hard: true })).toThrow(/graph cleanup unavailable/i)
+        expect(() => deleteRecordingCascade('r1', { hard: true, origin: 'user', requestedBy: 'test' })).toThrow(/graph cleanup unavailable/i)
       } finally {
         setGraphProvenanceCleanup(noopGraphCleanup)
       }
@@ -604,7 +604,7 @@ describe('Privacy source-deletion (v38)', () => {
       seedRecording('r1')
       setGraphProvenanceCleanup(null)
       try {
-        expect(() => deleteRecordingCascade('r1', { hard: false })).not.toThrow()
+        expect(() => deleteRecordingCascade('r1', { hard: false, origin: 'user', requestedBy: 'test' })).not.toThrow()
       } finally {
         setGraphProvenanceCleanup(noopGraphCleanup)
       }
@@ -616,7 +616,7 @@ describe('Privacy source-deletion (v38)', () => {
       setGraphProvenanceCleanup(null)
       let res
       try {
-        res = deleteRecordingCascade('r1', { hard: true, skipGraphCleanup: true })
+        res = deleteRecordingCascade('r1', { hard: true, skipGraphCleanup: true, origin: 'user', requestedBy: 'test' })
       } finally {
         setGraphProvenanceCleanup(noopGraphCleanup)
       }
@@ -644,7 +644,7 @@ describe('Privacy source-deletion (v38)', () => {
         throw new Error('graph store exploded')
       })
       try {
-        expect(() => deleteRecordingCascade('r1', { hard: true })).toThrow(/graph store exploded/)
+        expect(() => deleteRecordingCascade('r1', { hard: true, origin: 'user', requestedBy: 'test' })).toThrow(/graph store exploded/)
       } finally {
         setGraphProvenanceCleanup(noopGraphCleanup)
       }
@@ -666,7 +666,7 @@ describe('Privacy source-deletion (v38)', () => {
         orphanNodesRemoved: 0
       }))
       try {
-        expect(() => deleteRecordingCascade('r1', { hard: true })).toThrow(/graph write failed/)
+        expect(() => deleteRecordingCascade('r1', { hard: true, origin: 'user', requestedBy: 'test' })).toThrow(/graph write failed/)
       } finally {
         setGraphProvenanceCleanup(noopGraphCleanup)
       }
@@ -681,7 +681,7 @@ describe('Privacy source-deletion (v38)', () => {
   describe('hard journal privacy (AR3-7)', () => {
     it('a normal hard purge journals recording_snapshot=NULL and removed_counts=NULL, keeping only the opaque recording_id/mode/created_at', () => {
       seedRecording('r1', { filename: 'secret.wav', original_filename: 'secret.hda' })
-      deleteRecordingCascade('r1', { hard: true })
+      deleteRecordingCascade('r1', { hard: true, origin: 'user', requestedBy: 'test' })
 
       const row = queryOne<{
         id: string
@@ -701,7 +701,12 @@ describe('Privacy source-deletion (v38)', () => {
         recording_snapshot: null,
         removed_counts: null,
         created_at: row!.created_at,
-        restored_at: null
+        restored_at: null,
+        // v74: who asked. An origin, a feature name and the app version: none
+        // of them identifies the recording, so AR3-7 still holds.
+        requested_origin: 'user',
+        requested_by: 'test',
+        app_version: null
       })
       expect(row!.created_at).toBeTruthy()
       // No filename/path leaked anywhere in the row.
@@ -710,7 +715,7 @@ describe('Privacy source-deletion (v38)', () => {
 
     it('the escape-hatch purge journals {mode, graph_cleanup_skipped, pending_graph ledger} and still nulls removed_counts (ARF-4)', () => {
       seedRecording('r1')
-      const res = deleteRecordingCascade('r1', { hard: true, skipGraphCleanup: true })
+      const res = deleteRecordingCascade('r1', { hard: true, skipGraphCleanup: true, origin: 'user', requestedBy: 'test' })
       const row = queryOne<{ recording_snapshot: string | null; removed_counts: string | null }>(
         'SELECT recording_snapshot, removed_counts FROM deletion_journal WHERE id = ?',
         [res!.journalId!]
@@ -727,7 +732,7 @@ describe('Privacy source-deletion (v38)', () => {
 
     it('the soft-delete journal is UNCHANGED — full recording snapshot for restore fidelity', () => {
       seedRecording('r1', { filename: 'keepme.wav' })
-      deleteRecordingCascade('r1', { hard: false })
+      deleteRecordingCascade('r1', { hard: false, origin: 'user', requestedBy: 'test' })
       const row = queryOne<{ recording_snapshot: string }>(
         "SELECT recording_snapshot FROM deletion_journal WHERE recording_id = ? AND mode = 'soft'",
         ['r1']
@@ -754,7 +759,7 @@ describe('Privacy source-deletion (v38)', () => {
       }))
       let res
       try {
-        res = deleteRecordingCascade('r1', { hard: true })
+        res = deleteRecordingCascade('r1', { hard: true, origin: 'user', requestedBy: 'test' })
       } finally {
         setGraphProvenanceCleanup(noopGraphCleanup)
       }
@@ -775,7 +780,7 @@ describe('Privacy source-deletion (v38)', () => {
         return noopGraphCleanup()
       })
       try {
-        deleteRecordingCascade('r1', { hard: true })
+        deleteRecordingCascade('r1', { hard: true, origin: 'user', requestedBy: 'test' })
       } finally {
         setGraphProvenanceCleanup(noopGraphCleanup)
       }
@@ -790,7 +795,7 @@ describe('Privacy source-deletion (v38)', () => {
         return noopGraphCleanup()
       })
       try {
-        deleteRecordingCascade('r1', { hard: true })
+        deleteRecordingCascade('r1', { hard: true, origin: 'user', requestedBy: 'test' })
       } finally {
         setGraphProvenanceCleanup(noopGraphCleanup)
       }
@@ -799,14 +804,14 @@ describe('Privacy source-deletion (v38)', () => {
 
     it('journalId is returned for a hard purge and points at a real journal row', () => {
       seedRecording('r1')
-      const res = deleteRecordingCascade('r1', { hard: true })
+      const res = deleteRecordingCascade('r1', { hard: true, origin: 'user', requestedBy: 'test' })
       expect(res?.journalId).toBeTruthy()
       expect(queryOne('SELECT id FROM deletion_journal WHERE id = ?', [res?.journalId])).toBeTruthy()
     })
 
     it('journalId is absent for a soft delete', () => {
       seedRecording('r1')
-      const res = deleteRecordingCascade('r1', { hard: false })
+      const res = deleteRecordingCascade('r1', { hard: false, origin: 'user', requestedBy: 'test' })
       expect(res?.journalId).toBeUndefined()
     })
   })
@@ -817,7 +822,7 @@ describe('Privacy source-deletion (v38)', () => {
   describe('AR3-2 pending-file-cleanup ledger (DB layer)', () => {
     it('recordPendingFileCleanups writes pending_files, merging with an existing graph_cleanup_skipped flag rather than clobbering it', () => {
       seedRecording('r1')
-      const res = deleteRecordingCascade('r1', { hard: true, skipGraphCleanup: true })
+      const res = deleteRecordingCascade('r1', { hard: true, skipGraphCleanup: true, origin: 'user', requestedBy: 'test' })
       recordPendingFileCleanups(res!.journalId!, [{ kind: 'audio', path: '/data/r1.wav' }])
 
       const row = queryOne<{ recording_snapshot: string }>(
@@ -835,7 +840,7 @@ describe('Privacy source-deletion (v38)', () => {
 
     it('recordPendingFileCleanups([]) is a no-op — the row stays NULL', () => {
       seedRecording('r1')
-      const res = deleteRecordingCascade('r1', { hard: true })
+      const res = deleteRecordingCascade('r1', { hard: true, origin: 'user', requestedBy: 'test' })
       recordPendingFileCleanups(res!.journalId!, [])
       const row = queryOne<{ recording_snapshot: string | null }>(
         'SELECT recording_snapshot FROM deletion_journal WHERE id = ?',
@@ -848,9 +853,9 @@ describe('Privacy source-deletion (v38)', () => {
       seedRecording('r1')
       seedRecording('r2')
       seedRecording('r3')
-      const res1 = deleteRecordingCascade('r1', { hard: true })!
-      const res2 = deleteRecordingCascade('r2', { hard: true })!
-      const res3 = deleteRecordingCascade('r3', { hard: true })!
+      const res1 = deleteRecordingCascade('r1', { hard: true, origin: 'user', requestedBy: 'test' })!
+      const res2 = deleteRecordingCascade('r2', { hard: true, origin: 'user', requestedBy: 'test' })!
+      const res3 = deleteRecordingCascade('r3', { hard: true, origin: 'user', requestedBy: 'test' })!
       // Explicit, unambiguous created_at ordering (avoids a same-millisecond race).
       run("UPDATE deletion_journal SET created_at = '2026-01-01T10:00:00.000Z' WHERE id = ?", [res1.journalId])
       run("UPDATE deletion_journal SET created_at = '2026-01-01T11:00:00.000Z' WHERE id = ?", [res2.journalId])
@@ -868,7 +873,7 @@ describe('Privacy source-deletion (v38)', () => {
 
     it('updatePendingFileCleanups clears pending_files (nulls the column) when nothing else remains on the snapshot', () => {
       seedRecording('r1')
-      const res = deleteRecordingCascade('r1', { hard: true })!
+      const res = deleteRecordingCascade('r1', { hard: true, origin: 'user', requestedBy: 'test' })!
       recordPendingFileCleanups(res.journalId!, [{ kind: 'audio', path: '/data/r1.wav' }])
       updatePendingFileCleanups(res.journalId!, [])
       const row = queryOne<{ recording_snapshot: string | null }>(
@@ -880,7 +885,7 @@ describe('Privacy source-deletion (v38)', () => {
 
     it('updatePendingFileCleanups preserves graph_cleanup_skipped + pending_graph when clearing pending_files', () => {
       seedRecording('r1')
-      const res = deleteRecordingCascade('r1', { hard: true, skipGraphCleanup: true })!
+      const res = deleteRecordingCascade('r1', { hard: true, skipGraphCleanup: true, origin: 'user', requestedBy: 'test' })!
       recordPendingFileCleanups(res.journalId!, [{ kind: 'audio', path: '/data/r1.wav' }])
       updatePendingFileCleanups(res.journalId!, [])
       const row = queryOne<{ recording_snapshot: string }>(
@@ -897,7 +902,7 @@ describe('Privacy source-deletion (v38)', () => {
 
     it('updatePendingFileCleanups writes back a still-remaining subset', () => {
       seedRecording('r1')
-      const res = deleteRecordingCascade('r1', { hard: true })!
+      const res = deleteRecordingCascade('r1', { hard: true, origin: 'user', requestedBy: 'test' })!
       recordPendingFileCleanups(res.journalId!, [{ kind: 'audio', path: '/data/r1.wav' }, { kind: 'wiki' }])
       updatePendingFileCleanups(res.journalId!, [{ kind: 'wiki' }])
       const row = queryOne<{ recording_snapshot: string }>(
@@ -913,7 +918,7 @@ describe('Privacy source-deletion (v38)', () => {
     // way; this is consistency, not correctness).
     it('updatePendingFileCleanups preserves the in-JSON mode field when rewriting a malformed snapshot', () => {
       seedRecording('r1')
-      const res = deleteRecordingCascade('r1', { hard: true })!
+      const res = deleteRecordingCascade('r1', { hard: true, origin: 'user', requestedBy: 'test' })!
       run("UPDATE deletion_journal SET recording_snapshot = 'not-json' WHERE id = ?", [res.journalId!])
 
       updatePendingFileCleanups(res.journalId!, [{ kind: 'wiki' }])
@@ -927,7 +932,7 @@ describe('Privacy source-deletion (v38)', () => {
 
     it('updatePendingFileCleanups keeps the in-JSON mode when writing pending_files onto a NULL snapshot', () => {
       seedRecording('r1')
-      const res = deleteRecordingCascade('r1', { hard: true })! // snapshot NULL per AR3-7
+      const res = deleteRecordingCascade('r1', { hard: true, origin: 'user', requestedBy: 'test' })! // snapshot NULL per AR3-7
 
       updatePendingFileCleanups(res.journalId!, [{ kind: 'audio', path: '/data/r1.wav' }])
 
@@ -1041,7 +1046,7 @@ describe('Privacy source-deletion (v38)', () => {
       seedTranscript('t1', 'r1')
 
       // Soft delete writes a FULL-snapshot journal row (filename/paths/etc.).
-      deleteRecordingCascade('r1', { hard: false })
+      deleteRecordingCascade('r1', { hard: false, origin: 'user', requestedBy: 'test' })
       const softRow = queryOne<{ recording_snapshot: string }>(
         "SELECT recording_snapshot FROM deletion_journal WHERE recording_id = ? AND mode = 'soft'",
         ['r1']
@@ -1049,7 +1054,7 @@ describe('Privacy source-deletion (v38)', () => {
       expect(JSON.parse(softRow!.recording_snapshot).filename).toBe('secret.wav')
 
       // Hard purge must delete that soft row and keep ONLY the minimal hard row.
-      deleteRecordingCascade('r1', { hard: true })
+      deleteRecordingCascade('r1', { hard: true, origin: 'user', requestedBy: 'test' })
       const rows = queryAll<{ mode: string; recording_snapshot: string | null }>(
         'SELECT mode, recording_snapshot FROM deletion_journal WHERE recording_id = ?',
         ['r1']
@@ -1067,15 +1072,15 @@ describe('Privacy source-deletion (v38)', () => {
 
     it('purges MULTIPLE prior soft rows (repeated trash/restore cycles) on hard delete', () => {
       seedRecording('r1', { filename: 'keepme.wav' })
-      deleteRecordingCascade('r1', { hard: false })
+      deleteRecordingCascade('r1', { hard: false, origin: 'user', requestedBy: 'test' })
       restoreRecording('r1')
       // Second trash writes a SECOND soft journal row for the same recording.
-      deleteRecordingCascade('r1', { hard: false })
+      deleteRecordingCascade('r1', { hard: false, origin: 'user', requestedBy: 'test' })
       expect(
         queryAll("SELECT id FROM deletion_journal WHERE recording_id = ? AND mode = 'soft'", ['r1']).length
       ).toBeGreaterThanOrEqual(2)
 
-      deleteRecordingCascade('r1', { hard: true })
+      deleteRecordingCascade('r1', { hard: true, origin: 'user', requestedBy: 'test' })
       const rows = queryAll<{ mode: string }>('SELECT mode FROM deletion_journal WHERE recording_id = ?', ['r1'])
       expect(rows.map((r) => r.mode)).toEqual(['hard'])
     })
@@ -1092,7 +1097,7 @@ describe('Privacy source-deletion (v38)', () => {
       updateQueueItem(qid, 'processing')
       expect(getQueueItems('processing').map((q) => q.recording_id)).toEqual(['r1'])
 
-      deleteRecordingCascade('r1', { hard: false })
+      deleteRecordingCascade('r1', { hard: false, origin: 'user', requestedBy: 'test' })
 
       expect(getQueueItems('processing').length).toBe(0)
       const row = queryOne<{ status: string }>('SELECT status FROM transcription_queue WHERE id = ?', [qid])
@@ -1112,7 +1117,7 @@ describe('Privacy source-deletion (v38)', () => {
       seedRecording('live')
       seedRecording('personal', { personal: 1 })
       seedRecording('trashed')
-      deleteRecordingCascade('trashed', { hard: false })
+      deleteRecordingCascade('trashed', { hard: false, origin: 'user', requestedBy: 'test' })
 
       expect(isRecordingProcessable('live')).toBe(true)
       expect(isRecordingProcessable('personal')).toBe(false)
@@ -1142,7 +1147,7 @@ describe('Privacy source-deletion (v38)', () => {
       seedMeeting('m1')
       seedRecording('r1', { meeting_id: 'm1' })
       seedTranscript('t1', 'r1')
-      const res = deleteRecordingCascade('r1', { hard: true, skipGraphCleanup: true })!
+      const res = deleteRecordingCascade('r1', { hard: true, skipGraphCleanup: true, origin: 'user', requestedBy: 'test' })!
 
       const pending = getPendingGraphCleanups()
       expect(pending.length).toBe(1)
@@ -1156,7 +1161,7 @@ describe('Privacy source-deletion (v38)', () => {
 
     it('retryPendingGraphCleanups calls the seam by ids and clears the entry on success', () => {
       seedRecording('r1')
-      const res = deleteRecordingCascade('r1', { hard: true, skipGraphCleanup: true })!
+      const res = deleteRecordingCascade('r1', { hard: true, skipGraphCleanup: true, origin: 'user', requestedBy: 'test' })!
       // The escape hatch bypassed the seam, so the ledger entry exists.
       expect(getPendingGraphCleanups().map((p) => p.journalId)).toEqual([res.journalId])
 
@@ -1187,7 +1192,7 @@ describe('Privacy source-deletion (v38)', () => {
 
     it('a failing seam leaves the ledger entry for a later sweep (crash/restart resilience)', () => {
       seedRecording('r1')
-      const res = deleteRecordingCascade('r1', { hard: true, skipGraphCleanup: true })!
+      const res = deleteRecordingCascade('r1', { hard: true, skipGraphCleanup: true, origin: 'user', requestedBy: 'test' })!
 
       // Simulate the crash-between-purge-and-sweep window: the entry is durably
       // on disk. A first sweep with a still-unhealthy graph fails to clear it.
@@ -1219,7 +1224,7 @@ describe('Privacy source-deletion (v38)', () => {
 
     it('retryPendingGraphCleanups is a no-op when the seam is unwired (entries survive)', () => {
       seedRecording('r1')
-      const res = deleteRecordingCascade('r1', { hard: true, skipGraphCleanup: true })!
+      const res = deleteRecordingCascade('r1', { hard: true, skipGraphCleanup: true, origin: 'user', requestedBy: 'test' })!
       setGraphProvenanceCleanup(null)
       try {
         const sweep = retryPendingGraphCleanups()
@@ -1232,13 +1237,13 @@ describe('Privacy source-deletion (v38)', () => {
 
     it('a normal (non-escape-hatch) hard purge leaves NO pending_graph entry', () => {
       seedRecording('r1')
-      deleteRecordingCascade('r1', { hard: true })
+      deleteRecordingCascade('r1', { hard: true, origin: 'user', requestedBy: 'test' })
       expect(getPendingGraphCleanups()).toEqual([])
     })
 
     it('clearPendingGraphCleanup preserves other snapshot fields (e.g. pending_files)', () => {
       seedRecording('r1')
-      const res = deleteRecordingCascade('r1', { hard: true, skipGraphCleanup: true })!
+      const res = deleteRecordingCascade('r1', { hard: true, skipGraphCleanup: true, origin: 'user', requestedBy: 'test' })!
       recordPendingFileCleanups(res.journalId!, [{ kind: 'audio', path: '/data/r1.wav' }])
       clearPendingGraphCleanup(res.journalId!)
       const row = queryOne<{ recording_snapshot: string }>(

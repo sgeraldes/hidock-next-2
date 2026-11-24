@@ -17,8 +17,11 @@ const deps = vi.hoisted(() => ({
     buffers: Buffer[]
   }
 }))
-vi.mock('../event-loop', () => ({ yieldToEventLoop: deps.yield }))
+vi.mock('../event-loop', () => ({ yieldToEventLoop: deps.yield, mainThreadBudget: () => Object.assign(deps.yield, { reset: () => {} }) }))
 vi.mock('../database', () => ({
+  runMany: (sql: string, rows: any[][]) => { for (const row of rows) db.run(sql, row) },
+  acquireOrganizationCheckpointBudget: () => () => {},
+  queryOne: (sql: string, params: string[]) => { const stmt=db.prepare(sql); try {stmt.bind(params);return stmt.step()?stmt.getAsObject():undefined} finally {stmt.free()} },
   getDatabase: () => db,
   getDatabasePath: () => 'unused/test.db',
   isRecordingProcessable: () => true
@@ -42,6 +45,7 @@ vi.mock('../recording-eligibility', () => ({
   isRecordingEligible: () => true
 }))
 vi.mock('../vector-cache', () => ({
+  createVectorWorkBudget: () => deps.yield,
   VECTOR_CACHE_FILENAME: 'unused.bin',
   readVectorCacheAsync: async () => deps.cache,
   waitForVectorCacheWrites: async () => {},

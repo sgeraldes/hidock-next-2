@@ -75,7 +75,7 @@ vi.mock('../connectors', () => ({
 vi.mock('../connectors/connector-store', () => ({ getConnectorStore: () => ({ setConfig, setSourceState }) }))
 
 const autoLink = vi.fn(() => 225)
-vi.mock('../org-reconciler', () => ({ autoLinkRecordingsToMeetings: () => autoLink() }))
+vi.mock('../org-reconciler', () => ({ autoLinkRecordingsToMeetingsYielding: () => autoLink() }))
 // Imported statically by library-maintenance for the Jev match job, which
 // this file does not run; the real ones load config.ts.
 vi.mock('../meeting-candidate-list', () => ({}))

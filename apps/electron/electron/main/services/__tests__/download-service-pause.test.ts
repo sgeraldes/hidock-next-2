@@ -58,9 +58,9 @@ vi.mock('../file-storage', () => ({
 vi.mock('../activity-log', () => ({ emitActivityLog: (...args: unknown[]) => mockEmitActivityLog(...args) }))
 
 vi.mock('../download-transfer-controller', () => ({
-  getActiveTransferFilename: () => null,
+  hasTransferIntent: () => false, getActiveTransferFilename: () => null,
   cancelActiveTransferByName: vi.fn(() => Promise.resolve(true)),
-  cancelActiveTransfer: vi.fn(() => Promise.resolve(true)),
+  cancelAllTransfers: vi.fn(() => Promise.resolve(true)),
 }))
 
 // existsSync → false so isFileAlreadySynced never treats a queued file as synced.

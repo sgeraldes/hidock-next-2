@@ -425,7 +425,7 @@ describe('executeDeletePermanent — device checkbox (D3/AR3-6)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /^delete permanently$/i }))
 
-    await waitFor(() => expect(window.electronAPI.recordings.deleteCascade).toHaveBeenCalledWith('synced-1', true))
+    await waitFor(() => expect(window.electronAPI.recordings.deleteCascade).toHaveBeenCalledWith('synced-1', true, { requestedBy: 'library:delete-permanently' }))
     expect(deleteRecordingMock).not.toHaveBeenCalled()
     await waitFor(() => {
       expect(toastMock.success).toHaveBeenCalledWith('Deleted permanently', expect.stringContaining('graph link'))
@@ -439,7 +439,7 @@ describe('executeDeletePermanent — device checkbox (D3/AR3-6)', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: /also delete from device/i }))
     fireEvent.click(screen.getByRole('button', { name: /^delete permanently$/i }))
 
-    await waitFor(() => expect(window.electronAPI.recordings.deleteCascade).toHaveBeenCalledWith('synced-1', true))
+    await waitFor(() => expect(window.electronAPI.recordings.deleteCascade).toHaveBeenCalledWith('synced-1', true, { requestedBy: 'library:delete-permanently' }))
     await waitFor(() => expect(window.electronAPI.recordings.queueDeviceDelete).toHaveBeenCalledWith({
       deviceFilename: 'synced.hda',
       journalId: 'journal-1'
@@ -674,14 +674,14 @@ describe('executeDeletePermanent — AR3-3(c) skipGraphCleanup escape hatch', ()
       )
     })
     expect(deleteCascadeMock).toHaveBeenCalledTimes(1)
-    expect(deleteCascadeMock).toHaveBeenNthCalledWith(1, 'synced-1', true)
+    expect(deleteCascadeMock).toHaveBeenNthCalledWith(1, 'synced-1', true, { requestedBy: 'library:delete-permanently' })
 
     // Fire the escape-hatch action (an explicit second user action).
     const [, , opts] = toastMock.error.mock.calls[0]
     opts.action.onClick()
 
     await waitFor(() => expect(deleteCascadeMock).toHaveBeenCalledTimes(2))
-    expect(deleteCascadeMock).toHaveBeenNthCalledWith(2, 'synced-1', true, { skipGraphCleanup: true })
+    expect(deleteCascadeMock).toHaveBeenNthCalledWith(2, 'synced-1', true, { requestedBy: 'library:delete-permanently', skipGraphCleanup: true })
     // ARF-4 — the escape-hatch purge defers graph cleanup, so its completion is
     // an HONEST WARNING ("Deleted — graph cleanup deferred"), never plain success.
     await waitFor(() =>

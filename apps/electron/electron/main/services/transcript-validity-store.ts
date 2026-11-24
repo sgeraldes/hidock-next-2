@@ -6,8 +6,8 @@
  * Plan: docs/superpowers/plans/2026-10-04-validation-order.md
  */
 
-import { yieldToEventLoop } from './event-loop'
 import { getEventBus } from './event-bus'
+import { yieldToEventLoop } from './event-loop'
 import { createHash } from 'crypto'
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
@@ -315,7 +315,10 @@ export function backfillTranscriptValidity(options: BackfillOptions = {}): Promi
 async function runValidityBackfill(
   options: { batchSize?: number; onHold?: (ms: number) => void } = {}
 ): Promise<{ checked: number; changedIds: string[]; [status: string]: number | string[] }> {
-  const batchSize = Math.max(1, Math.min(options.batchSize ?? 1, 1))
+  // The shared corpus-pass budget (event-loop.ts mainThreadBudget): yield at
+  // 20 ms or every few rows, warn at 100 ms. The hold is also measured here so
+  // the boot log and the tests can see the worst one.
+  const batchSize = Math.max(1, options.batchSize ?? 8)
   let rowsInSlice = 0
   let sliceStart = performance.now()
   let worstHoldMs = 0

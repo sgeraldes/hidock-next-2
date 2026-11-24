@@ -59,16 +59,21 @@ function stage(base, port) {
   copyFileSync(trayExe, join(app, 'HiDockModelHost.exe'))
   copyFileSync(process.execPath, join(app, 'node.exe'))
   cpSync(join(packageRoot, 'src'), join(app, 'src'), { recursive: true })
+  // Match the installed production payload: VERSION reads package.json and
+  // server.mjs imports the pinned WebSocket gateway dependency at startup.
+  copyFileSync(join(packageRoot, 'package.json'), join(app, 'package.json'))
+  cpSync(join(packageRoot, 'node_modules', 'ws'), join(app, 'node_modules', 'ws'), { recursive: true })
   writeFileSync(join(root, 'config.json'), JSON.stringify({ port, bindAddress: '127.0.0.1', stepAside: 'games' }))
   return { app, root }
 }
 
 /** The service's node.exe: the copy inside this test's app folder. */
-function serviceNodeIn(app) {
-  const exe = join(app, 'node.exe').replace(/'/g, "''")
+function serviceNodeOf(trayPid) {
+  // Query the tray's child directly. Comparing ExecutablePath strings depends
+  // on WMI's short/long path spelling and scans every Node process on the host.
   const out = execFileSync('powershell.exe', [
     '-NoProfile', '-Command',
-    `(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.ExecutablePath -eq '${exe}' } | Select-Object -First 1).ProcessId`,
+    `(Get-CimInstance Win32_Process -Filter "Name='node.exe' AND ParentProcessId=${trayPid}" | Select-Object -First 1).ProcessId`,
   ]).toString().trim()
   return Number(out) || 0
 }
@@ -80,20 +85,27 @@ describe.runIf(process.platform === 'win32' && existsSync(trayExe))('the tray ic
     const { app, root } = stage(base, port)
     const tray = spawn(
       join(app, 'HiDockModelHost.exe'),
-      ['--no-icon', '--no-foreground', '--root', root, '--restart-seconds', '2', '--exit-after', '25'],
+      // WMI startup on CI can consume most of a fixed 25-second tray lifetime.
+      // Keep this supervisor alive until the test has observed its replacement.
+      ['--no-icon', '--no-foreground', '--root', root, '--restart-seconds', '2'],
       { stdio: 'ignore' }
     )
     try {
       expect(await waitFor(() => healthy(port), 10_000)).toBe(true)
       // WMI can list a process a moment after it already answers on its port (CI, 4-oct).
       let node = 0
-      await waitFor(() => (node = serviceNodeIn(app)) > 0, 5000)
+      await waitFor(() => (node = serviceNodeOf(tray.pid)) > 0, 5000)
       expect(node).toBeGreaterThan(0)
       process.kill(node)
       expect(await waitFor(async () => !(await healthy(port)), 5000)).toBe(true)
       expect(await waitFor(() => healthy(port), 12_000)).toBe(true)
-      await new Promise((r) => tray.once('exit', r))
-      expect(processesUnder(app)).toBe(0)
+      const replacement = serviceNodeOf(tray.pid)
+      expect(replacement).toBeGreaterThan(0)
+      expect(replacement).not.toBe(node)
+      const exited = new Promise((r) => tray.once('exit', r))
+      tray.kill()
+      await exited
+      expect(await waitFor(() => processesUnder(app) === 0, 5000)).toBe(true)
     } finally {
       if (tray.exitCode === null) tray.kill()
       await sleep(500)

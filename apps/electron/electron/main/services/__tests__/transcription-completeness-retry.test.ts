@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { retryInSmallerChunks } from '../transcription-completeness-retry'
+import { retryInSmallerChunks, withoutSecrets } from '../transcription-completeness-retry'
 
 describe('bounded completeness retry', () => {
   it('extracts real WAV chunks, offsets turns, skips silent chunks and removes temporary files', async () => {
@@ -38,5 +38,17 @@ describe('bounded completeness retry', () => {
     const provider = vi.fn()
     await expect(retryInSmallerChunks('unused', 600, () => false, provider)).rejects.toThrow('cancelled')
     expect(provider).not.toHaveBeenCalled()
+  })
+})
+
+describe('withoutSecrets', () => {
+  it('removes the key itself and key parameters from a provider error message', () => {
+    const key = ['fixture', 'value', '0123456789'].join('-')
+    const message = `got status 400 POST https://generativelanguage.googleapis.com/v1beta/files?key=${key}&alt=json x-goog-api-key: ${key} and ${key}`
+    const clean = withoutSecrets(message, key)
+    expect(clean).not.toContain(key)
+    expect(clean).toContain('files?key=[redacted]&alt=json')
+    expect(withoutSecrets('upload failed: ?api_key=other-secret', null)).toBe('upload failed: ?api_key=[redacted]')
+    expect(withoutSecrets('plain failure', key)).toBe('plain failure')
   })
 })

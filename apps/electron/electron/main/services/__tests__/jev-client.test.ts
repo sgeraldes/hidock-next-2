@@ -78,3 +78,16 @@ describe('askJev', () => {
     expect(fetchImpl).not.toHaveBeenCalled()
   })
 })
+
+it('aborts a pending speaker-name request when stopped', async () => {
+  const controller = new AbortController()
+  let requestSignal: AbortSignal | undefined
+  const fetchImpl: typeof fetch = async (_url, init) => {
+    requestSignal = init?.signal as AbortSignal
+    return new Promise<Response>((_resolve, reject) => requestSignal!.addEventListener('abort', () => reject(requestSignal!.reason), { once:true }))
+  }
+  const result = askJev(KEY, 'speaker context', {}, { fetchImpl, signal: controller.signal, timeoutMs: 50 }).catch(error => error)
+  controller.abort(new Error('Stopped by you'))
+  expect(requestSignal?.aborted).toBe(true)
+  expect((await result).message).toContain('Stopped by you')
+})
