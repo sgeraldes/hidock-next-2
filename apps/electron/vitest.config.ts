@@ -18,7 +18,10 @@ export default defineConfig({
       '@hooks': resolve(__dirname, 'src/hooks'),
       '@lib': resolve(__dirname, 'src/lib'),
       '@store': resolve(__dirname, 'src/store'),
-      '@types': resolve(__dirname, 'src/types')
+      '@types': resolve(__dirname, 'src/types'),
+      // Tests run the engine source the build bundles (electron.vite.config.ts),
+      // never a dist that may be older than it.
+      '@hidock/database': resolve(__dirname, '../../packages/database/src/index.ts')
     },
     // D3 follow-up (review): the better-sqlite3 dual-ABI shim is SCOPED, not
     // global. Only the `main-db` project (main-process, DB-backed tests) loads
@@ -73,6 +76,15 @@ export default defineConfig({
           name: 'eslint-rules',
           environment: 'node',
           include: ['eslint-local-rules.test.mjs']
+        }
+      },
+      {
+        extends: true,
+        test: {
+          // Build and dev gates under scripts/dev. Plain Node, real temp files.
+          name: 'scripts',
+          environment: 'node',
+          include: ['scripts/dev/**/*.test.mjs']
         }
       },
       {

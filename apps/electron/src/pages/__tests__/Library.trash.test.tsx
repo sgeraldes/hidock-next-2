@@ -547,7 +547,7 @@ describe('Permanent delete from Trash (AC#9)', () => {
     fireEvent.click(screen.getByRole('button', { name: /^delete permanently$/i }))
 
     await waitFor(() => {
-      expect(window.electronAPI.recordings.deleteCascade).toHaveBeenCalledWith('trash-1', true)
+      expect(window.electronAPI.recordings.deleteCascade).toHaveBeenCalledWith('trash-1', true, { requestedBy: 'library:delete-permanently' })
     })
     await waitFor(() => expect(getTrashMock).toHaveBeenCalledTimes(2))
     await waitFor(() => expect(screen.queryByTestId('source-row-trash-1')).not.toBeInTheDocument())
@@ -610,7 +610,7 @@ describe('Permanent delete from Trash (AC#9)', () => {
     fireEvent.click(checkbox)
     fireEvent.click(screen.getByRole('button', { name: /^delete permanently$/i }))
 
-    await waitFor(() => expect(window.electronAPI.recordings.deleteCascade).toHaveBeenCalledWith('trash-1', true))
+    await waitFor(() => expect(window.electronAPI.recordings.deleteCascade).toHaveBeenCalledWith('trash-1', true, { requestedBy: 'library:delete-permanently' }))
     // Routed via impact.deviceFilename — trashRowToUnified never sets one — and
     // queued in the MAIN process against the purge's journal entry, so a
     // mid-command disconnect is retried instead of stranding the device copy.
@@ -706,7 +706,7 @@ describe('AR3-5 — Trash state boundaries', () => {
     // Soft-delete confirm dialog (§D2 copy) — click its action button.
     fireEvent.click(await screen.findByRole('button', { name: /^move to trash$/i }))
 
-    await waitFor(() => expect(window.electronAPI.recordings.deleteCascade).toHaveBeenCalledWith('live-0', false))
+    await waitFor(() => expect(window.electronAPI.recordings.deleteCascade).toHaveBeenCalledWith('live-0', false, { requestedBy: 'library:move-to-trash' }))
     await waitFor(() => expect(audioControlsMock.stop).toHaveBeenCalled())
     await waitFor(() => expect(setSelectedSourceId).toHaveBeenCalledWith(null))
     // The Trash count also refreshes so it doesn't go stale (§D1 step 7).
@@ -873,7 +873,7 @@ describe('CX-T5-2 + OP-F-LOW-4 — bulk soft-delete refreshes Trash and clears p
     expect(within(dialog).getByRole('heading', { name: /move to trash/i })).toBeInTheDocument()
     fireEvent.click(within(dialog).getByRole('button', { name: /^move to trash$/i }))
 
-    await waitFor(() => expect(window.electronAPI.recordings.deleteCascade).toHaveBeenCalledWith('live-0', false))
+    await waitFor(() => expect(window.electronAPI.recordings.deleteCascade).toHaveBeenCalledWith('live-0', false, { requestedBy: 'library:bulk-move-to-trash' }))
     // CX-T5-2: the Trash badge/list reloads (mount + post-bulk-delete).
     await waitFor(() => expect(getTrashMock).toHaveBeenCalledTimes(2))
     // OP-F-LOW-4: AR3-5 parity with the single-row path.
@@ -892,7 +892,7 @@ describe('CX-T5-2 + OP-F-LOW-4 — bulk soft-delete refreshes Trash and clears p
     const dialog = await screen.findByRole('alertdialog')
     fireEvent.click(within(dialog).getByRole('button', { name: /^move to trash$/i }))
 
-    await waitFor(() => expect(window.electronAPI.recordings.deleteCascade).toHaveBeenCalledWith('live-1', false))
+    await waitFor(() => expect(window.electronAPI.recordings.deleteCascade).toHaveBeenCalledWith('live-1', false, { requestedBy: 'library:bulk-move-to-trash' }))
     await waitFor(() => expect(getTrashMock).toHaveBeenCalledTimes(2))
     expect(audioControlsMock.stop).not.toHaveBeenCalled()
   })

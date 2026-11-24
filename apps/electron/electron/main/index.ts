@@ -223,6 +223,7 @@ async function initializeServices(): Promise<boolean> {
   // it. On a multi-gigabyte library on a USB disk that takes minutes, and the
   // splash has to say so instead of a bare "Initializing".
   await initializeDatabase({
+    appVersion: app.getVersion(),
     existingSchemaOnly: process.argv.includes('--no-schema-work') || isRecoveryMode(),
     onProgress: (p) => {
       if (p.phase === 'backup') {

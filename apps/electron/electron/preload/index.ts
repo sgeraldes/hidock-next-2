@@ -1,4 +1,5 @@
 import type { RetranscribeResult } from '../../src/shared/retranscribe'
+import type { RendererDeletionFeature } from '../../src/shared/deletion-origin'
 import type { RecordingAudioMetadata } from '../../src/shared/audio-header-metadata'
 import type { DeviceAudioStartOptions, DeviceAudioDiagnosticsState, DeviceAudioTrackExport, DeviceRecordingCapabilities } from '../../src/shared/device-audio'
 import type { DeviceRecordingMarkersAPI } from '../../src/shared/device-recording-markers'
@@ -562,7 +563,8 @@ export interface ElectronAPI {
     // path; only pass it after an honest graphUnavailable failure and an
     // explicit second user action.
     queueDeviceDelete: (args: { deviceFilename: string; journalId: string }) => Promise<{ success: boolean; deletedNow?: boolean; queued?: boolean; error?: string }>
-    deleteCascade: (id: string, hard: boolean, opts?: { skipGraphCleanup?: boolean }) => Promise<{
+    // requestedBy (v74): the feature that asked, recorded with the deletion.
+    deleteCascade: (id: string, hard: boolean, opts: { requestedBy: RendererDeletionFeature; skipGraphCleanup?: boolean }) => Promise<{
       success: boolean
       mode?: 'soft' | 'hard'
       removed?: {
