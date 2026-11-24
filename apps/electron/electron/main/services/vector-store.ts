@@ -1133,6 +1133,8 @@ class VectorStore {
         const embeddings = await getEmbeddingsService().generateEmbeddings(batch.map(index => chunks[index]), {
           shouldGenerate, purpose: 'passage', expectedProviderId: partitionProvider, ...(signal ? { signal } : {})
         })
+        // The provider wait is not a main-thread hold.
+        checkpoint.reset()
 
         // RE-1 — re-check eligibility ADJACENT to the write, with no await between
         // here and the synchronous INSERT below. A hard purge that committed
@@ -1143,6 +1145,7 @@ class VectorStore {
         }
 
         if (await getEmbeddingsService().activeProviderId() !== partitionProvider) throw new Error('Embedding route changed')
+        checkpoint.reset()
         const partition = partitionProvider ?? (await this.activePartitionLabel(embeddings.find(Boolean)?.length ?? 0))
         if (signal?.aborted || (shouldPersist && !shouldPersist())) return 0
         // Retain float32 views over one recording-sized arena, not the provider's
@@ -1151,7 +1154,10 @@ class VectorStore {
         // GC hold the main thread for over 100 ms (rag-ingest-responsiveness).
         const dims = embeddings.find(Boolean)?.length ?? 0
         if (!recordingArena || recordingArena.dims !== dims) {
-          recordingArena = { dims, values: new Float32Array(dims * (missing.length - offset)), used: 0 }
+          // Only the chunks this call will index: maxBatches can stop it early.
+          const remaining = missing.length - offset
+          const planned = maxBatches === undefined ? remaining : Math.min(remaining, (maxBatches - offset / 4) * 4)
+          recordingArena = { dims, values: new Float32Array(dims * planned), used: 0 }
         }
         const arena = recordingArena.values
         let arenaOffset = recordingArena.used

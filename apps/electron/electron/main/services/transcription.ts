@@ -7,6 +7,7 @@ import { engineRouteInput, engineUnavailableReason } from './transcription-engin
 import { classifyTranscriptionError } from './transcription-errors'
 import { brainCooldown, noteBrainFailure } from './brains/brain-cooldown'
 import { summaryRetrySettings } from '../../../src/shared/summary-retry'
+import { SAVED_STOP_REASON } from '../../../src/shared/transcription-stop'
 import { getTranscriptionAttempts, recordTranscriptionAttempt } from './transcription-attempts-store'
 import { engineOptionLabel, type EngineAvailability } from '../../../src/shared/transcription-engines'
 import { checkModelHost } from './model-host-client'
@@ -518,7 +519,6 @@ const cancelledRecordings = new Set<string>()
 const activeAbortControllers = new Map<string, AbortController>()
 // Attempt-local cutoff, never inferred from a previous corrective transcript.
 const savedTranscripts = new Set<string>()
-const SAVED_STOP_REASON = 'Stopped by you after the transcript was saved; summary/actions/search not updated'
 function stopReason(recordingId: string): string {
   return idsFor(recordingId).some((id) => savedTranscripts.has(id)) ? SAVED_STOP_REASON : 'Stopped by you'
 }
@@ -697,7 +697,9 @@ async function runQueueItem(
       progressCallback(stage, progress)
     }, item.provider, item.owner_requested === true, item.id)
 
-    if (controller.signal.aborted || outcome.status === 'cancelled') {
+    // The outcome decides, not the signal: a Stop that lands after the last
+    // step finished (the 100% event) leaves a completed item completed.
+    if (outcome.status === 'cancelled') {
       // INC-2 — the recording was trashed / marked personal / hard-purged
       // mid-run and NOTHING was persisted. Do NOT claim completion: that
       // would overwrite the soft-delete's 'cancelled' tombstone with

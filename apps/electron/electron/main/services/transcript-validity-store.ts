@@ -207,7 +207,7 @@ export async function backfillTranscriptValidity(
       if (row.validity_status !== validity.status) changedIds.push(recording_id)
       counts.checked++
       counts[validity.status] = (counts[validity.status] ?? 0) + 1
-      if (++processed % batchSize === 0) await yieldToEventLoop()
+      if (++processed % batchSize === 0) { await yieldToEventLoop(); checkpoint.reset() }
     }
     if (counts.checked > 0) {
       saveDatabase()

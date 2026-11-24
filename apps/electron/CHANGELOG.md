@@ -7,7 +7,7 @@ Device reference: [model/version gates, recordings and native markers](../../doc
 ## 2026-11-24 | Operations say what they are doing, and Stop works
 
 - Operations and Notifications show the current transcription step, progress and elapsed time, with Stop, Retry and queue ordering actions. Recording dates and operation times are clearly separated, and View source opens the transcript or processing status.
-- Stopping transcription aborts provider requests and local workers, keeps a cancellation reason, and discards unfinished transcript output. Stop after the transcript is saved reads Finish processing and keeps the transcript.
+- Stopping transcription aborts provider requests at once, stops local workers at their next check (within half a second), keeps a cancellation reason, and discards unfinished transcript output. Stop after the transcript is saved reads Finish processing and keeps the transcript.
 - Audio checks decode WebM recordings that have no duration header before deciding whether they can be transcribed.
 - Library backfills read transcript text only when needed and yield between committed batches. Fresh search vectors use compact memory storage. Operations errors stay contained, including during development reloads.
 - Graph updates skip recordings already processed or excluded before loading transcript text, and yield between batches so the app stays responsive while transcriptions run.

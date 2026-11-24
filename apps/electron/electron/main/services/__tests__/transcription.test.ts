@@ -1404,6 +1404,30 @@ describe('Transcription Service', () => {
       expect(mockUpdateRecordingStatus).toHaveBeenLastCalledWith('rec-late', 'complete')
     })
 
+    it('a Stop that lands after the pipeline finished leaves the item completed', async () => {
+      mockConfig.transcription.provider = 'local-asr'
+      mockConfig.transcription.geminiApiKey = ''
+      await liveRecording({ id: 'rec-done', filename: 'd.wav', file_path: 'G:\\Recordings\\d.wav', status: 'none' }, { saved: false })
+      mockGetQueueItems.mockImplementation((status?: string) => status === 'pending'
+        ? [{ id: 'queue-done', recording_id: 'rec-done', filename: 'd.wav', status: 'pending', attempts: 0 }] : [])
+      mockExecFile.mockImplementation(() =>
+        makeFakeChildProcess(JSON.stringify({ text: 'Speaker 1: hola.', language: 'es', duration_seconds: 5, processing_time_seconds: 1 })))
+      const mod = await import('../transcription')
+      // The owner presses Stop as the last progress event (100%) reaches the window.
+      mod.setMainWindowForTranscription({ isDestroyed: () => false, webContents: { send: (channel: string, event: { stage?: string }) => {
+        if (channel === 'transcription:progress' && event?.stage === 'complete') mod.cancelTranscription('rec-done')
+      } } } as never)
+      try {
+        mod.startTranscriptionProcessor()
+        await new Promise((resolve) => setTimeout(resolve, 500))
+      } finally {
+        mod.stopTranscriptionProcessor()
+        mod.setMainWindowForTranscription({ isDestroyed: () => true } as never)
+      }
+      expect(mockInsertTranscript).toHaveBeenCalled()
+      expect(mockUpdateQueueItem).toHaveBeenLastCalledWith('queue-done', 'completed')
+    })
+
     it('projects the one-based engine trace through queue progress to rendered activity', async () => {
       mockConfig.transcription.provider = 'gemini'
       mockGetRecordingById.mockReturnValue({ id: 'trace-rec', filename: 'trace.wav', file_path: 'G:\\Recordings\\trace.wav', transcription_status: 'none' })

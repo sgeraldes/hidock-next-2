@@ -101,6 +101,18 @@ describe('transcript validity store', () => {
     expect(stored('talk')?.validity_status).toBe('valid')
   })
 
+  it('does not report other work that ran during its own yield as a hold', async () => {
+    seed('yield-a', [[160, 600]])
+    seed('yield-b', [[160, 600]])
+    const warn = vi.spyOn(console, 'warn')
+    // Another task takes the main thread for 150 ms while the pass yields.
+    const busy = setTimeout(() => { const end = performance.now() + 150; while (performance.now() < end) { /* busy */ } }, 0)
+    try {
+      await backfillTranscriptValidity({ batchSize: 1 })
+      expect(warn.mock.calls.filter(([message]) => String(message).includes('held the main thread'))).toEqual([])
+    } finally { clearTimeout(busy); warn.mockRestore() }
+  })
+
   it('checks each transcript once', async () => {
     expect(await backfillTranscriptValidity()).toEqual({ checked: 0, changedIds: [] })
   })

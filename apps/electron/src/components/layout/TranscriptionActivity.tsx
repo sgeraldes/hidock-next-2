@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { TranscriptionItem } from '@/store/features/useTranscriptionStore'
+import { isSavedTranscriptStop } from '@/shared/transcription-stop'
 
 const steps = [
   ['reading_file', 'Checking audio'], ['vad', 'Detecting speech'],
@@ -63,7 +64,7 @@ export function TranscriptionActivity({ item, onStop, onRetry, onDismiss }: {
     {item.status === 'failed' && <div className="select-text whitespace-normal text-red-400">{transcriptionFailure(item.error)}</div>}
     {stamp && <div className="text-muted-foreground">{timeLabel} {stamp.toLocaleTimeString('en', { hour: 'numeric', minute: '2-digit' })}</div>}
     {item.status === 'processing' && onStop && <button type="button" onClick={() => onStop(item.recordingId)} className="rounded px-2 py-1 text-red-400 hover:bg-red-500/10 focus-visible:ring-2">Stop</button>}
-    {item.status === 'cancelled' && onRetry && <button type="button" onClick={() => onRetry(item.id)} className="rounded px-2 py-1 hover:bg-accent focus-visible:ring-2">{item.error?.includes('after the transcript was saved') ? 'Finish processing' : 'Retry'}</button>}
+    {item.status === 'cancelled' && onRetry && <button type="button" onClick={() => onRetry(item.id)} className="rounded px-2 py-1 hover:bg-accent focus-visible:ring-2">{isSavedTranscriptStop(item.error) ? 'Finish processing' : 'Retry'}</button>}
     {item.status === 'cancelled' && onDismiss && <button type="button" onClick={() => onDismiss(item.id)} className="rounded px-2 py-1 hover:bg-accent focus-visible:ring-2">Dismiss</button>}
     {item.status === 'failed' && onRetry && <button type="button" onClick={() => onRetry(item.id)} className="rounded px-2 py-1 hover:bg-accent focus-visible:ring-2">Retry</button>}
   </div>
