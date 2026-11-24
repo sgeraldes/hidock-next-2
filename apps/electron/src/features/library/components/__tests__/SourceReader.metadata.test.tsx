@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { SourceReader } from '../SourceReader'
 import type { UnifiedRecording } from '@/types/unified-recording'
 import type { Meeting } from '@/types'
@@ -202,6 +202,48 @@ beforeEach(() => {
 // Test suite
 // ---------------------------------------------------------------------------
 describe('SourceReader — metadata editing', () => {
+  const unknownFact = { known: false, reason: 'Not established by the header' }
+  const knownFact = (value: unknown) => ({ known: true, value, provenance: 'synthetic-header' })
+  const physicalFacts = {
+    status: 'verified', statusReason: null, byteLength: 2092,
+    container: knownFact('riff-wave'), codec: knownFact('pcm_s16le'),
+    channelCount: knownFact(2), sampleRateHz: knownFact(16000), bitDepth: knownFact(16),
+    nominalBitrateBps: knownFact(512000), averageBitrateBps: knownFact(512000),
+    bitrateMode: knownFact('constant'), durationMs: knownFact(32)
+  }
+  it('retains player and physical file facts for short audio without a transcript', async () => {
+    ;(window.electronAPI as any).storage = { getAudioMetadata: vi.fn().mockResolvedValue({ success: true, data: physicalFacts }) }
+    render(<SourceReader recording={makeRecording({ filename: 'REA.hda', duration: 0, transcriptionStatus: 'no_speech' } as any)} />)
+    await waitFor(() => expect(screen.getByText('WAV · PCM16')).toBeInTheDocument())
+    const facts = within(screen.getByTestId('recording-audio-facts'))
+    expect(facts.getByText('32 ms')).toBeInTheDocument()
+    expect(facts.getByText('Stereo (2)')).toBeInTheDocument()
+    expect(facts.getByText('16 kHz')).toBeInTheDocument()
+    expect(facts.getByText('512 kbps')).toBeInTheDocument()
+    expect(screen.getByTestId('reader-dock-player')).toBeInTheDocument()
+    expect(screen.getByTestId('reader-dock-time')).toHaveTextContent('0:00 / 0:00.032')
+  })
+  it('shows MP3 facts independently from a .wav filename and labels nominal frame bitrate', async () => {
+    ;(window.electronAPI as any).storage = { getAudioMetadata: vi.fn().mockResolvedValue({ success: true, data: {
+      ...physicalFacts, container: knownFact('mpeg-audio'), codec: knownFact('mp3'), channelCount: knownFact(1),
+      nominalBitrateBps: knownFact(64000), averageBitrateBps: unknownFact,
+      bitrateMode: unknownFact, durationMs: unknownFact, bitDepth: unknownFact
+    } }) }
+    render(<SourceReader recording={makeRecording()} />)
+    await waitFor(() => expect(screen.getByText('MP3')).toBeInTheDocument())
+    const facts = within(screen.getByTestId('recording-audio-facts'))
+    expect(facts.getByText('Mono (1)')).toBeInTheDocument()
+    expect(facts.getByText('Bitrate (first frame)')).toBeInTheDocument()
+    expect(facts.getByText('64 kbps')).toBeInTheDocument()
+  })
+  it('does not call an unsupported WAV codec PCM16', async () => {
+    ;(window.electronAPI as any).storage = { getAudioMetadata: vi.fn().mockResolvedValue({ success: true, data: {
+      ...physicalFacts, status: 'unsupported', codec: unknownFact, bitDepth: unknownFact
+    } }) }
+    render(<SourceReader recording={makeRecording()} />)
+    await waitFor(() => expect(screen.getByText('WAV · codec unavailable')).toBeInTheDocument())
+    expect(screen.queryByText('WAV · PCM16')).not.toBeInTheDocument()
+  })
   it('links extracted audio back to its source video', () => {
     render(<SourceReader recording={makeRecording({ parentVideoCaptureId: 'video-capture', videoAudioTitle: 'Clip.mp4 · audio' })} />)
     fireEvent.click(screen.getByRole('button', { name: 'Back to video' }))

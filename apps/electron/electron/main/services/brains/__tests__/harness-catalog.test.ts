@@ -44,7 +44,7 @@ describe('harness catalog', () => {
     const transcribers = harnessesWith(['audio', 'timestamps', 'diarization']).map((d) => d.id).sort()
     expect(transcribers).toEqual(['gemini-transcribe', 'local-asr', 'vibevoice'])
     const embedders = harnessesWith(['embedding']).map((d) => d.id).sort()
-    expect(embedders).toEqual(['gemini-api', 'local-onnx-embed', 'ollama', 'openai-compatible'])
+    expect(embedders).toEqual(['gemini-api', 'local-onnx-embed', 'model-host-embed', 'ollama', 'openai-compatible'])
     expect(harnessesWith(['classification']).map((d) => d.id)).toEqual(['jev'])
   })
 

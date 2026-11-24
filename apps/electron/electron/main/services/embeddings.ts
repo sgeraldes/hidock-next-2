@@ -51,19 +51,20 @@ class EmbeddingsService {
    * partition label for indexing (write path) and searching (read path).
    * Null when no embed provider is usable.
    */
-  async activeProviderId(): Promise<BrainId | null> {
-    return getBrainRouter().activeEmbedBrainId()
+  async activeProviderId(): Promise<string | null> {
+    const id = await getBrainRouter().activeEmbedBrainId()
+    return id === 'model-host-embed' ? `model-host-embed:${getConfig().brains.modelHostEmbedding?.spaceId}` : id
   }
 
   /** Relevance gate for the ACTIVE provider (see RELEVANCE_THRESHOLDS). */
   async relevanceThreshold(): Promise<number> {
     const id = await this.activeProviderId()
-    return (id && RELEVANCE_THRESHOLDS[id]) ?? DEFAULT_RELEVANCE_THRESHOLD
+    return (id?.startsWith('model-host-embed:nemotron-import-sha256:') ? 0.12 : id ? RELEVANCE_THRESHOLDS[id as BrainId] : undefined) ?? DEFAULT_RELEVANCE_THRESHOLD
   }
 
   async generateEmbedding(
     text: string,
-    opts: { shouldGenerate?: () => boolean; purpose?: 'query' | 'passage' } = {}
+    opts: { shouldGenerate?: () => boolean; purpose?: 'query' | 'passage'; expectedProviderId?: string | null } = {}
   ): Promise<number[] | null> {
     const results = await this.generateEmbeddings([text], opts)
     return results[0] ?? null
@@ -71,7 +72,7 @@ class EmbeddingsService {
 
   async generateEmbeddings(
     texts: string[],
-    opts: { shouldGenerate?: () => boolean; purpose?: 'query' | 'passage' } = {}
+    opts: { shouldGenerate?: () => boolean; purpose?: 'query' | 'passage'; expectedProviderId?: string | null } = {}
   ): Promise<(number[] | null)[]> {
     // Delegate to the BrainRouter: Gemini `gemini-embedding-001` first (when a
     // key is configured), else Ollama — the same routing as before, now shared

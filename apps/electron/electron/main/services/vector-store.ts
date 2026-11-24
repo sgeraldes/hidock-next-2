@@ -14,6 +14,7 @@ import {
 } from './vector-startup-state'
 import {
   cancelVectorCacheWrites,
+  createVectorWorkBudget,
   readVectorCacheAsync,
   waitForVectorCacheWrites,
   writeVectorCacheAsync,
@@ -183,7 +184,17 @@ function chunkText(text: string, chunkSize = 500, overlap = 50): string[] {
     chunks.push(currentChunk.trim())
   }
 
-  return chunks
+  // A punctuation-free source can exceed the remote model input bound even
+  // when the configured target chunk size is small. Preserve every character.
+  return chunks.flatMap(chunk => {
+    const pieces: string[] = []
+    for (let start = 0; start < chunk.length;) {
+      let end = Math.min(start + 16000, chunk.length)
+      if (end < chunk.length && /[\uD800-\uDBFF]/.test(chunk[end - 1])) end--
+      pieces.push(chunk.slice(start, end)); start = end
+    }
+    return pieces
+  })
 }
 
 /** Diversity reranking knobs (F5 PixelRAG — see {@link diversifyResults}). */
@@ -250,6 +261,8 @@ function diversifyResults(sorted: SearchResult[], topK: number): SearchResult[] 
 class VectorStore {
   private documents: Map<string, VectorDocument> = new Map()
   private initialized = false
+  private restoredProvider: string | null | undefined
+  private partitionReload: Promise<void> | null = null
   private schemaReady = false
   private initialization: Promise<void> | null = null
   private labelRepair: Promise<void> | null = null
@@ -257,12 +270,13 @@ class VectorStore {
 
   /** Drain initialization and its deferred cache write before closing owned resources. */
   async waitForIdle(): Promise<void> {
+    await this.partitionReload
     await this.initialization
     await this.cacheWrite
   }
 
   async initialize(onProgress?: (loaded: number, total: number) => void): Promise<void> {
-    if (this.initialized) return
+    if (this.initialized) { await this.ensureActivePartition(); return }
     if (!this.initialization) {
       markVectorStartupLoading()
       const reportProgress = (loaded: number, total: number): void => {
@@ -282,6 +296,32 @@ class VectorStore {
     await this.initialization
   }
 
+  /** Reload only resident state when a previously initialized store changes provider. */
+  async ensureActivePartition(): Promise<void> {
+    if (this.partitionReload) await this.partitionReload
+    if (this.initialization) await this.initialization
+    if (!this.initialized) return
+    const selected = await getEmbeddingsService().activeProviderId()
+    if (selected === this.restoredProvider) return
+    if (!this.partitionReload) {
+      this.partitionReload = (async () => {
+        cancelVectorCacheWrites(this.vectorCachePath())
+        await this.cacheWrite
+        this.documents = new Map()
+        this.cacheBuffers = null
+        this.partitionArena = null
+        this.stableOrderCache = null
+        this.corpusRevision++
+        this.initialized = false
+        await this.initialize()
+        if (await getEmbeddingsService().activeProviderId() !== this.restoredProvider) {
+          throw new Error('Embedding route changed during partition restore')
+        }
+      })().finally(() => { this.partitionReload = null })
+    }
+    await this.partitionReload
+  }
+
   private async initializeInternal(onProgress?: (loaded: number, total: number) => void): Promise<void> {
     if (this.initialized) return
 
@@ -296,6 +336,7 @@ class VectorStore {
     }
 
     const activeProvider = await getEmbeddingsService().activeProviderId()
+    this.restoredProvider = activeProvider
     if (!activeProvider) {
       this.initialized = true
       console.warn('[VectorStore] No active embedding provider — semantic index remains empty')
@@ -328,6 +369,10 @@ class VectorStore {
     if (this.schemaReady) return
 
     const db = getDatabase()
+
+    db.run(`CREATE TABLE IF NOT EXISTS vector_index_pending (
+      recording_id TEXT NOT NULL, embed_provider TEXT NOT NULL,
+      PRIMARY KEY(recording_id, embed_provider))`)
 
     // Create vector_embeddings table (separate from database.ts embeddings table)
     db.run(`
@@ -488,6 +533,7 @@ class VectorStore {
     activeProvider: string,
     onProgress?: (loaded: number, total: number) => void
   ): Promise<boolean> {
+    const pause = createVectorWorkBudget()
     const db = getDatabase()
     // Count through the provider index, without reading the multi-GB vector
     // table for a dimensions GROUP BY. Verify dimensions per row below.
@@ -508,7 +554,7 @@ class VectorStore {
     const byId = new Map<string, (typeof cache.rows)[number]>()
     for (let start = 0; start < cache.rows.length; start += RESTORE_SCAN_BATCH) {
       for (const row of cache.rows.slice(start, start + RESTORE_SCAN_BATCH)) byId.set(row.id, row)
-      await yieldToEventLoop()
+      await pause()
     }
     let loaded = 0
     let afterId = ''
@@ -556,7 +602,7 @@ class VectorStore {
       loaded += rows[0].values.length
       afterId = rows[0].values[rows[0].values.length - 1][0] as string
       onProgress?.(Math.min(loaded, cache.rows.length), cache.rows.length)
-      await yieldToEventLoop()
+      await pause()
       if (rows[0].values.length < BATCH) break
     }
     if (matched !== cache.rows.length) {
@@ -577,6 +623,7 @@ class VectorStore {
       await new Promise((resolve) => setImmediate(resolve))
       try {
         const documents = this.documents
+        const revision = this.corpusRevision
         function* cacheDocuments() {
           for (const document of documents.values()) {
             if (!document.metadata.embedProvider || !document.metadata.embedDims) continue
@@ -588,7 +635,7 @@ class VectorStore {
             }
           }
         }
-        const { totalCount } = await writeVectorCacheAsync(this.vectorCachePath(), cacheDocuments())
+        const { totalCount } = await writeVectorCacheAsync(this.vectorCachePath(), cacheDocuments(), () => this.corpusRevision === revision && this.documents === documents)
         console.log(`[VectorStore] Binary vector cache written (${totalCount} rows)`)
       } catch (e) {
         console.warn('[VectorStore] Binary vector cache write failed (next boot uses the SQL load):', e)
@@ -645,6 +692,7 @@ class VectorStore {
   }
 
   private async backfillProviderLabelsYielding(): Promise<void> {
+    const pause = createVectorWorkBudget()
     const db = getDatabase()
     const providers: Record<number, string> = { 3072: 'gemini-api', 2048: 'local-onnx-embed', 768: 'ollama' }
     let afterRowid: number | null = null
@@ -677,11 +725,11 @@ class VectorStore {
           db.run('UPDATE vector_embeddings SET embed_dims = ?, embed_provider = ? WHERE id = ? AND embed_dims IS ? AND embed_provider IS ?', [dims, label, id, storedDims, provider])
           // Legacy repairs include synchronous commits, unlike metadata reads.
           // Give IPC a turn after at most 128 writes within the scanned page.
-          if (++repairs % 128 === 0) await yieldToEventLoop()
+          if (++repairs % 128 === 0) await pause()
         }
       }
       afterRowid = rows[rows.length - 1][4] as number
-      await yieldToEventLoop()
+      await pause()
       if (rows.length < RESTORE_SCAN_BATCH) break
     }
   }
@@ -749,6 +797,7 @@ class VectorStore {
     activeProvider: string,
     onProgress?: (loaded: number, total: number) => void
   ): Promise<void> {
+    const pause = createVectorWorkBudget()
     const db = getDatabase()
     // The row count sizes the arena and the
     // dimension makes every row's offset arithmetic, not a per-row allocation.
@@ -781,7 +830,7 @@ class VectorStore {
         maxDims = maxDims === null ? dims : Math.max(maxDims, dims)
       }
       statsAfterId = nextStatsId
-      await yieldToEventLoop()
+      await pause()
       if (rows.length < RESTORE_SCAN_BATCH) break
     }
 
@@ -877,7 +926,7 @@ class VectorStore {
       loaded += rows[0].values.length
       afterId = rows[0].values[rows[0].values.length - 1][I.id] as string
       onProgress?.(Math.min(loaded, total), total)
-      await yieldToEventLoop()
+      await pause()
       if (rows[0].values.length < BATCH) break
     }
   }
@@ -936,13 +985,14 @@ class VectorStore {
     content: string,
     metadata: VectorDocument['metadata']
   ): Promise<string | null> {
-    const embedding = await getEmbeddingsService().generateEmbedding(content)
+    const capturedProvider = await getEmbeddingsService().activeProviderId()
+    const embedding = await getEmbeddingsService().generateEmbedding(content, { expectedProviderId: capturedProvider })
     if (!embedding) {
       console.error('Failed to generate embedding for document')
       return null
     }
 
-    const partition = await this.activePartitionLabel(embedding.length)
+    const partition = capturedProvider ?? await this.activePartitionLabel(embedding.length)
     const id = `${metadata.recordingId || 'doc'}_${metadata.chunkIndex}_${partition ?? 'unknown'}_${Date.now()}`
 
     const doc: VectorDocument = {
@@ -1016,102 +1066,132 @@ class VectorStore {
        * backfill does). Not stored on any chunk's metadata.
        */
       shouldGenerate?: () => boolean
+      expectedProviderId?: string
+      maxBatches?: number
+      onBatchCommitted?: (chunks: number) => void
     }
   ): Promise<number> {
+    await this.ensureActivePartition()
     this.ensureSchema()
     // Destructure the gates out so they never land on a stored chunk's metadata.
-    const { shouldPersist, shouldGenerate, ...chunkMeta } = metadata
+    const { shouldPersist, shouldGenerate, expectedProviderId, maxBatches, onBatchCommitted, ...chunkMeta } = metadata
     // Check if already indexed FOR THE ACTIVE PROVIDER'S PARTITION. Chunks
     // embedded by another provider do NOT count — that is exactly the
     // provider-switch reindex path (the same recording gets a second set of
     // chunks under the new partition; the old set stays as the backup).
     const partitionProvider = await getEmbeddingsService().activeProviderId()
-    if (chunkMeta.recordingId && partitionProvider) {
-      const existing = Array.from(this.documents.values()).filter(
-        (d) => d.metadata.recordingId === chunkMeta.recordingId && d.metadata.embedProvider === partitionProvider
-      )
-      if (existing.length > 0) {
-        console.log(`Transcript ${chunkMeta.recordingId} already indexed (provider ${partitionProvider})`)
-        return 0
-      }
-    }
-
-    // Chunk the transcript and embed all chunks in one batched call
+    if (expectedProviderId && partitionProvider !== expectedProviderId) throw new Error('Embedding route changed')
     const { chunkSize, chunkOverlap } = ragSettings()
     const chunks = chunkText(transcript, chunkSize, chunkOverlap)
-
-    // ADV41-2 (round-43) — PRE-PROVIDER gate, adjacent to the provider call with
-    // NO await between here and generateEmbeddings. A top-of-function or batch
-    // snapshot is defeated when an owner exclusion commits while an EARLIER
-    // caller/row was awaiting; re-validate immediately before sending this
-    // content to the external embeddings provider. Fail-closed callers return
-    // false ⇒ nothing is sent, nothing is persisted (returns 0).
-    if (shouldGenerate && !shouldGenerate()) {
-      console.log(
-        `[VectorStore] ${chunkMeta.recordingId ?? 'doc'} not eligible — skipping index (pre-provider)`
-      )
-      return 0
-    }
-
-    // ADV42-2 (round-44) — also forward shouldGenerate INTO the embeddings call so
-    // the BrainRouter re-checks eligibility before the Gemini PRIMARY and the
-    // Ollama FALLBACK embed attempts. The pre-provider guard above only covers
-    // the moment before entering the router; if Gemini then fails and the router
-    // falls back to Ollama, an exclusion committed during that window must not
-    // reach the fallback provider either.
-    const embeddings = await getEmbeddingsService().generateEmbeddings(chunks, { shouldGenerate, purpose: 'passage' })
-
-    // RE-1 — re-check eligibility ADJACENT to the write, with no await between
-    // here and the synchronous INSERT loop below. A hard purge that committed
-    // while embeddings were generated must not leave orphaned vector rows.
-    if (shouldPersist && !shouldPersist()) {
-      console.log(`[VectorStore] ${chunkMeta.recordingId ?? 'doc'} no longer eligible — skipping index persist`)
-      return 0
-    }
-
     const db = getDatabase()
-    const partition = partitionProvider ?? (await this.activePartitionLabel(embeddings.find(Boolean)?.length ?? 0))
+    // Check actual chunk text as well as index: an interrupted or edited transcript
+    // must not become complete merely because one old chunk exists.
+    const rows = chunkMeta.recordingId && partitionProvider ? db.exec(
+      'SELECT id, chunk_index, content FROM vector_embeddings WHERE recording_id=? AND embed_provider=?',
+      [chunkMeta.recordingId, partitionProvider])[0]?.values || [] : []
+    const saved = new Set<number>()
+    for (const row of rows) if (chunks[Number(row[1])] === row[2]) saved.add(Number(row[1]))
+    const missing = chunks.map((_, index) => index).filter(index => !saved.has(index))
+    if (missing.length && chunkMeta.recordingId && partitionProvider) {
+      db.run('INSERT OR IGNORE INTO vector_index_pending VALUES (?, ?)', [chunkMeta.recordingId, partitionProvider])
+    }
     let indexed = 0
-    for (let i = 0; i < chunks.length; i++) {
-      const embedding = embeddings[i]
-      if (!embedding) continue
-
-      // The partition is part of the id: the same recording+chunk indexed
-      // under two providers must NEVER collide (INSERT OR REPLACE would
-      // silently overwrite the other partition's row).
-      const id = `${chunkMeta.recordingId || 'doc'}_${i}_${partition ?? 'unknown'}_${Date.now()}`
-      const doc: VectorDocument = {
-        id,
-        // No `content` — see addDocument. This is the path a full backfill
-        // takes, so holding the text here is exactly what would undo the
-        // change: 125k chunks reindexed would rebuild the ~206 MB.
-        embedding,
-        metadata: { ...chunkMeta, chunkIndex: i, embedProvider: partition, embedDims: embedding.length }
+    // Persist bounded batches. A failed later batch resumes at the first missing
+    // chunk instead of regenerating vectors that already reached SQLite.
+    for (let offset = 0; offset < missing.length; offset += 4) {
+      if (maxBatches !== undefined && offset / 4 >= maxBatches) return indexed
+      const batch = missing.slice(offset, offset + 4)
+      // ADV41-2 (round-43) — PRE-PROVIDER gate, adjacent to the provider call with
+      // NO await between here and generateEmbeddings. A top-of-function or batch
+      // snapshot is defeated when an owner exclusion commits while an EARLIER
+      // caller/row was awaiting; re-validate immediately before sending this
+      // content to the external embeddings provider. Fail-closed callers return
+      // false ⇒ nothing is sent, nothing is persisted (returns 0).
+      if (shouldGenerate && !shouldGenerate()) {
+        console.log(
+          `[VectorStore] ${chunkMeta.recordingId ?? 'doc'} not eligible — skipping index (pre-provider)`
+        )
+        return 0
       }
-      this.corpusRevision++
-      this.documents.set(id, doc)
-      db.run(
-        `INSERT OR REPLACE INTO vector_embeddings
-         (id, content, embedding, meeting_id, recording_id, chunk_index, timestamp, subject, source_type, capture_id, embed_provider, embed_dims)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
+
+      // ADV42-2 (round-44) — also forward shouldGenerate INTO the embeddings call so
+      // the BrainRouter re-checks eligibility before the Gemini PRIMARY and the
+      // Ollama FALLBACK embed attempts. The pre-provider guard above only covers
+      // the moment before entering the router; if Gemini then fails and the router
+      // falls back to Ollama, an exclusion committed during that window must not
+      // reach the fallback provider either.
+      const embeddings = await getEmbeddingsService().generateEmbeddings(batch.map(index => chunks[index]), { shouldGenerate, purpose: 'passage', expectedProviderId: partitionProvider })
+
+      // RE-1 — re-check eligibility ADJACENT to the write, with no await between
+      // here and the synchronous INSERT loop below. A hard purge that committed
+      // while embeddings were generated must not leave orphaned vector rows.
+      if (shouldPersist && !shouldPersist()) {
+        console.log(`[VectorStore] ${chunkMeta.recordingId ?? 'doc'} no longer eligible — skipping index persist`)
+        return 0
+      }
+
+      if (await getEmbeddingsService().activeProviderId() !== partitionProvider) throw new Error('Embedding route changed')
+      const partition = partitionProvider ?? (await this.activePartitionLabel(embeddings.find(Boolean)?.length ?? 0))
+      if (shouldPersist && !shouldPersist()) return 0
+      for (let batchIndex = 0; batchIndex < batch.length; batchIndex++) {
+        const i = batch[batchIndex]
+        const embedding = embeddings[batchIndex]
+        if (!embedding) throw new Error('Embedding provider omitted a requested chunk')
+
+        // The partition is part of the id: the same recording+chunk indexed
+        // under two providers must NEVER collide (INSERT OR REPLACE would
+        // silently overwrite the other partition's row).
+        const id = `${chunkMeta.recordingId || 'doc'}_${i}_${partition ?? 'unknown'}_${Date.now()}`
+        const doc: VectorDocument = {
           id,
-          chunks[i],
-          embeddingToBlob(embedding),
-          chunkMeta.meetingId || null,
-          chunkMeta.recordingId || null,
-          i,
-          chunkMeta.timestamp || null,
-          chunkMeta.subject || null,
-          chunkMeta.sourceType || null,
-          chunkMeta.captureId || null,
-          partition ?? null,
-          embedding.length
-        ]
-      )
-      indexed++
+          // No `content` — see addDocument. This is the path a full backfill
+          // takes, so holding the text here is exactly what would undo the
+          // change: 125k chunks reindexed would rebuild the ~206 MB.
+          embedding,
+          metadata: { ...chunkMeta, chunkIndex: i, embedProvider: partition, embedDims: embedding.length }
+        }
+        // Replace a changed chunk only once its new embedding exists.
+        for (const row of rows) if (Number(row[1]) === i) {
+          db.run('DELETE FROM vector_embeddings WHERE id=?', [row[0]])
+          this.documents.delete(String(row[0]))
+        }
+        this.corpusRevision++
+        db.run(
+          `INSERT OR REPLACE INTO vector_embeddings
+           (id, content, embedding, meeting_id, recording_id, chunk_index, timestamp, subject, source_type, capture_id, embed_provider, embed_dims)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            id,
+            chunks[i],
+            embeddingToBlob(embedding),
+            chunkMeta.meetingId || null,
+            chunkMeta.recordingId || null,
+            i,
+            chunkMeta.timestamp || null,
+            chunkMeta.subject || null,
+            chunkMeta.sourceType || null,
+            chunkMeta.captureId || null,
+            partition ?? null,
+            embedding.length
+          ]
+        )
+        this.documents.set(id, doc)
+        indexed++
+      }
+      onBatchCommitted?.(batch.length)
+      await yieldToEventLoop()
+    }
+    if (shouldPersist && !shouldPersist()) return 0
+    // Remove obsolete tail chunks after the replacement transcript is complete.
+    for (const row of rows) if (Number(row[1]) >= chunks.length) {
+      db.run('DELETE FROM vector_embeddings WHERE id=?', [row[0]])
+      this.documents.delete(String(row[0]))
+      this.corpusRevision++
     }
 
+    if (chunkMeta.recordingId && partitionProvider) {
+      db.run('DELETE FROM vector_index_pending WHERE recording_id=? AND embed_provider=?', [chunkMeta.recordingId, partitionProvider])
+    }
     console.log(`Indexed ${indexed} chunks for transcript`)
     return indexed
   }
@@ -1178,7 +1258,9 @@ class VectorStore {
   }
 
   async search(query: string, topK = 5): Promise<SearchResult[]> {
-    const queryEmbedding = await getEmbeddingsService().generateEmbedding(query, { purpose: 'query' })
+    await this.ensureActivePartition()
+    const activeProvider = await getEmbeddingsService().activeProviderId()
+    const queryEmbedding = await getEmbeddingsService().generateEmbedding(query, { purpose: 'query', expectedProviderId: activeProvider })
     if (!queryEmbedding) {
       console.error('Failed to generate query embedding')
       return []
@@ -1190,21 +1272,55 @@ class VectorStore {
     // was the silent-dead-RAG failure mode (2026-07: Ollama-embedded queries
     // vs a Gemini-embedded store). Other partitions stay intact as the
     // instant backup when the user switches providers back.
-    const activeProvider = await getEmbeddingsService().activeProviderId()
-
     // Calculate similarity scores over ELIGIBLE docs only (RE6-1 boundary).
+    const revision = this.corpusRevision
     const results: SearchResult[] = []
-    for (const doc of this.filterEligibleDocs([...this.documents.values()])) {
-      if (doc.metadata.embedProvider !== activeProvider) continue
-      if (doc.embedding.length !== queryEmbedding.length) continue
-      const score = cosineSimilarity(queryEmbedding, doc.embedding)
-      results.push({ document: doc, score })
+    const candidateLimit = Math.max(topK * DIVERSITY_CANDIDATE_FACTOR, DIVERSITY_CANDIDATE_MIN)
+    let page: VectorDocument[] = []
+    const scorePage = (): void => {
+      for (const doc of this.filterEligibleDocs(page)) {
+        const score = cosineSimilarity(queryEmbedding, doc.embedding)
+        // Stable insertion preserves the old descending stable-sort order on
+        // ties. Diversity only reads this bounded candidate prefix anyway.
+        let low = 0, high = results.length
+        while (low < high) {
+          const middle = (low + high) >>> 1
+          if (results[middle].score >= score) low = middle + 1
+          else high = middle
+        }
+        if (low < candidateLimit) {
+          results.splice(low, 0, { document: doc, score })
+          if (results.length > candidateLimit) results.pop()
+        }
+      }
+      page = []
     }
+    let scanned = 0
+    let sliceStarted = performance.now()
+    for (const doc of this.documents.values()) {
+      if (doc.metadata.embedProvider === activeProvider && doc.embedding.length === queryEmbedding.length) page.push(doc)
+      if (++scanned % 128 === 0) {
+        scorePage()
+        // Windows timers can round a zero delay up substantially. Yield on a
+        // small time budget, with a scan bound even when scoring is cheap.
+        if (performance.now() - sliceStarted >= 4 || scanned % 2048 === 0) {
+          await yieldToEventLoop()
+          // Do not combine two changing corpus snapshots or iterate newly
+          // appended entries indefinitely while indexing runs concurrently.
+          if (this.corpusRevision !== revision) return []
+          sliceStarted = performance.now()
+        }
+      }
+    }
+    scorePage()
+    if (await getEmbeddingsService().activeProviderId() !== activeProvider || this.corpusRevision !== revision) return []
 
     // Sort by score descending, then apply light diversity reranking so a few
     // near-duplicate screenshot descriptions cannot evict all meeting evidence.
-    results.sort((a, b) => b.score - a.score)
-    const top = diversifyResults(results, topK)
+    // A privacy change may have committed during any yield. No await separates
+    // this final eligibility check from reading the surviving chunk text.
+    const eligible = new Set(this.filterEligibleDocs(results.map(r => r.document)))
+    const top = diversifyResults(results.filter(r => eligible.has(r.document)), topK)
     // Hydrate only the survivors: topK is single digits in every caller, so
     // this is a handful of rows read against the ~100 MB the index no longer
     // keeps resident for all 237k chunks. hydrateContent returns copies; the
@@ -1239,11 +1355,13 @@ class VectorStore {
       WHERE TRIM(COALESCE(t.full_text, '')) != ''
         AND COALESCE(r.personal, 0) = 0
         AND r.deleted_at IS NULL
-        AND NOT EXISTS (
+        AND (NOT EXISTS (
           SELECT 1 FROM vector_embeddings v WHERE v.recording_id = t.recording_id AND v.embed_provider = ?
-        )
+        ) OR EXISTS (
+          SELECT 1 FROM vector_index_pending p WHERE p.recording_id = t.recording_id AND p.embed_provider = ?
+        ))
     `)
-    stmt.bind([activeProvider])
+    stmt.bind([activeProvider, activeProvider])
     const rows: Array<{ recording_id: string; full_text: string; date_recorded?: string; filename?: string }> = []
     while (stmt.step()) {
       rows.push(stmt.getAsObject() as never)
@@ -1332,6 +1450,7 @@ class VectorStore {
   }
 
   async searchByMeeting(meetingId: string): Promise<VectorDocument[]> {
+    await this.ensureActivePartition()
     // RE6-1 — meeting-scoped reads (meeting chat, summarizeMeeting, meeting-
     // scoped findActionItems) route through the SAME eligibility boundary.
     // PROVIDER PARTITION (see search()) — the re-ranker's query embedding is
@@ -1367,7 +1486,7 @@ class VectorStore {
   ): Promise<SearchResult[]> {
     const docs = await this.searchByMeeting(meetingId)
     const queryEmbedding = await getEmbeddingsService().generateEmbedding(query, {
-      purpose: 'query'
+      purpose: 'query', expectedProviderId: docs[0]?.metadata.embedProvider ?? await getEmbeddingsService().activeProviderId()
     })
 
     if (!queryEmbedding) {

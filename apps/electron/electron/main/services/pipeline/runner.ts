@@ -45,7 +45,7 @@ export type TextOutcome =
   | { ok: false; reason: TextFailure; error?: unknown; callId: string | null }
 
 export interface RunnerDeps {
-  router: Pick<BrainRouter, 'chat' | 'resolve' | 'canServe'>
+  router: Pick<BrainRouter, 'chat' | 'resolve' | 'canServe'> & Partial<Pick<BrainRouter, 'hasExplicitManagedGeneration'>>
   registry: Pick<BrainRegistry, 'get'>
   planFor: (step: TextStepId) => Plan
   track: typeof trackCall
@@ -127,8 +127,13 @@ async function runOne(deps: RunnerDeps, profile: Profile, request: TextRequest, 
 export function createTextRunner(deps: RunnerDeps): (request: TextRequest) => Promise<TextOutcome> {
   return async function runText(request) {
     const call = deps.planFor(request.step).calls[0]
+    // Managed host selection is fail-closed even when an older plan has onFail configured.
+    // Capture before the provider await so changing Settings cannot grant fallback mid-request.
+    const managedOnly = call.profile.kind === 'direct'
+      ? call.profile.harness === 'model-host-generate'
+      : deps.router.hasExplicitManagedGeneration?.(call.profile.task) === true
     const first = await runOne(deps, call.profile, request, null)
-    if (first.ok || !call.onFail) return first
+    if (first.ok || !call.onFail || managedOnly) return first
     if (first.reason === 'ineligible' || request.options?.signal?.aborted) return first
     return runOne(deps, call.onFail, request, first.callId)
   }

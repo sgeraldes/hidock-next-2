@@ -1,0 +1,1 @@
+import {build,mergeConfig,loadConfigFromFile} from 'vite'; const loaded=await loadConfigFromFile({command:'build',mode:'production'},'electron.vite.config.ts');await build(mergeConfig(loaded.config.renderer,{configFile:false,base:'./',build:{outDir:'../out/approved-brand-renderer',emptyOutDir:true}}));

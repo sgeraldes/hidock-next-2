@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { ConnectorHost } from '../src/registry'
 import type {
   Connector,
@@ -249,5 +249,34 @@ describe('ConnectorHost', () => {
     host.scheduleSync('fake', 15)
     await host.disconnect('fake')
     expect(host.getStatus('fake').state).toBe('disconnected')
+  })
+})
+
+describe('connector sync serialization', () => {
+  it('joins repeated requests without replaying the same cursor concurrently', async () => {
+    const store = new MemoryStore()
+    const host = new ConnectorHost({ store })
+    let release!: (value: PullResult) => void
+    const pending = new Promise<PullResult>((resolve) => { release = resolve })
+    const pull = vi.fn(() => pending)
+    host.register({ ...descriptor, configFields: [] }, (ctx) => ({ ...makeFakeConnector(ctx),
+      capabilities: { sources: { listContainers: async () => [{ externalId: 'calendar', name: 'Calendar', kind: 'calendar' }], pull } }
+    }))
+    const first = host.syncNow('fake'), duplicate = host.syncNow('fake')
+    await Promise.resolve(); await Promise.resolve()
+    expect(pull).toHaveBeenCalledTimes(1)
+    release({ items: [], cursor: 'next', hasMore: false })
+    await Promise.all([first, duplicate])
+    expect(store.getSourceState('fake', 'calendar').cursor).toBe('next')
+  })
+  it('does not persist the cursor after the local calendar write fails', async () => {
+    const store = new MemoryStore()
+    const host = new ConnectorHost({ store, sink: { ingest: async () => { throw new Error('fixture write failed') } } })
+    host.register({ ...descriptor, configFields: [] }, (ctx) => ({ ...makeFakeConnector(ctx),
+      capabilities: { sources: { listContainers: async () => [{ externalId: 'calendar', name: 'Calendar', kind: 'calendar' }],
+        pull: async () => ({ items: [{ externalId: 'gone', kind: 'meeting', mime: 'application/json', createdAt: '', metadata: { deleted: true } }], cursor: 'new', hasMore: false }) } }
+    }))
+    await expect(host.syncNow('fake')).rejects.toThrow('fixture write failed')
+    expect(store.getSourceState('fake', 'calendar').cursor).toBeNull()
   })
 })

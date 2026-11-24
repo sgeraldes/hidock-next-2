@@ -3,7 +3,7 @@
  */
 
 import { memo } from 'react'
-import { ChevronLeft, ChevronRight, RefreshCw, Calendar as CalendarIcon, List } from 'lucide-react'
+import { ChevronLeft, ChevronRight, RefreshCw, Calendar as CalendarIcon, List, AlertCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
@@ -16,6 +16,7 @@ interface CalendarHeaderProps {
   calendarView: CalendarViewType
   calendarSyncing: boolean
   lastSync: string | null
+  syncError?: string | null
   autoSyncEnabled: boolean
   hideEmptyMeetings: boolean
   // C-CAL-007: Sync interval display (configurable via Settings)
@@ -37,6 +38,7 @@ export const CalendarHeader = memo(function CalendarHeader({
   calendarView,
   calendarSyncing,
   lastSync,
+  syncError,
   autoSyncEnabled,
   hideEmptyMeetings,
   formatLastSync,
@@ -73,6 +75,8 @@ export const CalendarHeader = memo(function CalendarHeader({
       <div className="flex items-center gap-4">
         {/* Sync status */}
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          {lastSync && <span title={new Date(lastSync).toLocaleString()}>Saved {formatLastSync()}</span>}
+          {syncError && <span role="status" aria-label={syncError} title={syncError}><AlertCircle className="h-3 w-3 text-amber-500" /></span>}
           {calendarSyncing ? (
             // A spinner with the words in its title, never on screen (owner, 2-oct-2026)
             <span className="flex items-center gap-1" role="status" aria-label="Syncing calendar" title="Syncing calendar">
@@ -80,12 +84,11 @@ export const CalendarHeader = memo(function CalendarHeader({
             </span>
           ) : (
             <>
-              {lastSync && <span>Synced {formatLastSync()}</span>}
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={onSync}
-                title="Clear cache and resync calendar"
+                title="Refresh calendar"
                 className="h-6 px-2"
               >
                 <RefreshCw className="h-3 w-3" />

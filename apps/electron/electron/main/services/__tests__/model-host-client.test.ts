@@ -72,26 +72,26 @@ describe('checkModelHost', () => {
   it('adds a scheme to a bare host:port so a typed address works', async () => {
     const fetchFn = vi.fn(async () => jsonResponse(HEALTHY))
     await checkModelHost({ url: 'gamestation:8765/', token: 't' }, fetchFn as never)
-    expect(calls(fetchFn)[0][0]).toBe('http://gamestation:8765/health')
+    expect(calls(fetchFn)[0][0]).toBe('https://gamestation:8765/health')
   })
 
   it('is null when the host does not answer, rather than throwing', async () => {
     const fetchFn = vi.fn(async () => {
       throw new Error('ECONNREFUSED')
     })
-    expect(await checkModelHost({ url: 'http://x:1', token: 't' }, fetchFn as never)).toBe(null)
+    expect(await checkModelHost({ url: 'https://x:1', token: 't' }, fetchFn as never)).toBe(null)
   })
 
   it('is null for an answer that is not a host', async () => {
     const fetchFn = vi.fn(async () => jsonResponse({ hello: 'from some other server' }))
-    expect(await checkModelHost({ url: 'http://x:1', token: 't' }, fetchFn as never)).toBe(null)
+    expect(await checkModelHost({ url: 'https://x:1', token: 't' }, fetchFn as never)).toBe(null)
   })
 
   it('refreshes a cached unavailable host when a person checks again', async () => {
     const fetchFn = vi.fn()
       .mockResolvedValueOnce(jsonResponse({}, 503))
       .mockResolvedValueOnce(jsonResponse(HEALTHY))
-    const settings = { url: 'http://x:1', token: 't' }
+    const settings = { url: 'https://x:1', token: 't' }
 
     expect(await checkModelHost(settings, fetchFn as never)).toBe(null)
     await expect(checkModelHost(settings, fetchFn as never, { forceRefresh: true })).resolves.toEqual(HEALTHY)
@@ -104,7 +104,7 @@ describe('checkModelHost', () => {
       resolveHealth = resolve
     })
     const fetchFn = vi.fn(() => healthResponse)
-    const settings = { url: 'http://x:1', token: 't' }
+    const settings = { url: 'https://x:1', token: 't' }
 
     const checks = Promise.all([
       checkModelHost(settings, fetchFn as never),
@@ -144,7 +144,7 @@ describe('what HiDock sends the host it is in charge of', () => {
     const setup = await sendHfTokenToModelHost({ url: 'gamestation:8765', token: 'tok' }, 'hf_abc', fetchFn as never)
     expect(setup).toEqual({ status: 'validating' })
     const [url, init] = calls(fetchFn)[0]
-    expect(url).toBe('http://gamestation:8765/secrets/hf-token')
+    expect(url).toBe('https://gamestation:8765/secrets/hf-token')
     expect((init as unknown as { method: string }).method).toBe('PUT')
     expect(init.headers.authorization).toBe('Bearer tok')
     expect(JSON.parse(init.body)).toEqual({ token: 'hf_abc' })
@@ -162,7 +162,7 @@ describe('what HiDock sends the host it is in charge of', () => {
     const fetchFn = vi.fn().mockResolvedValue(jsonResponse({ stepAside: 'any-use' }))
     await setModelHostStepAside({ url: 'x:1', token: 'tok' }, 'any-use', fetchFn as never)
     const [url, init] = calls(fetchFn)[0]
-    expect(url).toBe('http://x:1/settings/step-aside')
+    expect(url).toBe('https://x:1/settings/step-aside')
     expect(JSON.parse(init.body)).toEqual({ value: 'any-use' })
   })
 })
@@ -173,7 +173,7 @@ describe('looking after the host from HiDock', () => {
     const report = await getModelHostDiagnostics({ url: 'x:1', token: 'tok' }, fetchFn as never)
     expect(report.torch).toEqual({ cudaAvailable: false })
     const [url, init] = calls(fetchFn)[0]
-    expect(url).toBe('http://x:1/diagnostics')
+    expect(url).toBe('https://x:1/diagnostics')
     expect(init.headers.authorization).toBe('Bearer tok')
   })
 
@@ -196,7 +196,7 @@ describe('looking after the host from HiDock', () => {
       const fetchFn = vi.fn().mockResolvedValue(jsonResponse({ staged: true }, 202))
       await sendModelHostUpdate({ url: 'x:1', token: 'tok' }, exe, fetchFn as never)
       const [url, init] = calls(fetchFn)[0]
-      expect(url).toBe('http://x:1/update')
+      expect(url).toBe('https://x:1/update')
       expect((init as unknown as { method: string; body: Buffer }).body.length).toBe(2050)
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -223,7 +223,7 @@ describe('decisions on the host (Clef and Clef-Flash)', () => {
     const answer = await decideOnModelHost({ url: 'x:1', token: 'tok' }, request, fetchFn as never)
     expect(answer.answers.outage).toEqual({ type: 'noul', noul: 0.97 })
     const [url, init] = calls(fetchFn)[0]
-    expect(url).toBe('http://x:1/v1/systemone')
+    expect(url).toBe('https://x:1/v1/systemone')
     expect(init.headers.authorization).toBe('Bearer tok')
     expect(init.headers['content-type']).toBe('application/json')
     expect(JSON.parse(init.body)).toEqual(request)
@@ -252,7 +252,7 @@ describe('diarizeOnModelHost', () => {
     )
     const result = await diarizeOnModelHost(
       audioPath,
-      { url: 'http://gamestation:8765', token: 'tok' },
+      { url: 'https://gamestation:8765', token: 'tok' },
       { timeoutMs: 5000 },
       fetchFn as never
     )
@@ -268,7 +268,7 @@ describe('diarizeOnModelHost', () => {
     )
     await diarizeOnModelHost(
       audioPath,
-      { url: 'http://gamestation:8765', token: 'tok' },
+      { url: 'https://gamestation:8765', token: 'tok' },
       { timeoutMs: 5000, model: 'pyannote/speaker-diarization-3.1' },
       fetchFn as never
     )
@@ -338,7 +338,7 @@ describe('diarizeOnModelHost', () => {
     )
     const result = await diarizeOnModelHost(
       audioPath,
-      { url: 'http://gamestation:8765', token: 'tok' },
+      { url: 'https://gamestation:8765', token: 'tok' },
       { timeoutMs: 5000 },
       fetchFn as never
     )
@@ -351,7 +351,7 @@ describe('diarizeOnModelHost', () => {
       await expect(
         diarizeOnModelHost(
           audioPath,
-          { url: 'http://gamestation:8765', token },
+          { url: 'https://gamestation:8765', token },
           { timeoutMs: 5000 },
           makeFetch()
         )
@@ -370,7 +370,7 @@ describe('diarizeOnModelHost', () => {
 
     for (let index = 0; index < recordings; index += 1) {
       await expect(
-        diarizeOnModelHost(audioPath, { url: 'http://gamestation:8765', token: 'tok' }, { timeoutMs: 5000 }, fetchFn as never)
+        diarizeOnModelHost(audioPath, { url: 'https://gamestation:8765', token: 'tok' }, { timeoutMs: 5000 }, fetchFn as never)
       ).rejects.toThrow('The model host did not answer.')
     }
 
@@ -387,7 +387,7 @@ describe('diarizeOnModelHost', () => {
 
     for (let index = 0; index < recordings; index += 1) {
       await expect(
-        diarizeOnModelHost(audioPath, { url: 'http://gamestation:8765', token: 'tok' }, { timeoutMs: 5000 }, fetchFn as never)
+        diarizeOnModelHost(audioPath, { url: 'https://gamestation:8765', token: 'tok' }, { timeoutMs: 5000 }, fetchFn as never)
       ).resolves.toEqual(RESULT)
     }
 
@@ -406,14 +406,14 @@ describe('diarizeOnModelHost', () => {
     )
 
     await expect(
-      diarizeOnModelHost(audioPath, { url: 'http://gamestation:8765', token: 'tok' }, { timeoutMs: 5000 }, fetchFn as never)
+      diarizeOnModelHost(audioPath, { url: 'https://gamestation:8765', token: 'tok' }, { timeoutMs: 5000 }, fetchFn as never)
     ).resolves.toEqual(RESULT)
 
     state = 'paused'
     await vi.advanceTimersByTimeAsync(MODEL_HOST_HEALTH_CACHE_MS + 1)
 
     await expect(
-      diarizeOnModelHost(audioPath, { url: 'http://gamestation:8765', token: 'tok' }, { timeoutMs: 5000 }, fetchFn as never)
+      diarizeOnModelHost(audioPath, { url: 'https://gamestation:8765', token: 'tok' }, { timeoutMs: 5000 }, fetchFn as never)
     ).rejects.toThrow('The host is paused. Nobody but you can resume it.')
     expect(calls(fetchFn).filter(([url]) => url.endsWith('/health'))).toHaveLength(2)
     vi.useRealTimers()
@@ -426,10 +426,10 @@ describe('diarizeOnModelHost', () => {
       String(url).endsWith('/health') ? jsonResponse(HEALTHY) : jsonResponse({ model: 'm' })
     )
     await expect(
-      diarizeOnModelHost(audioPath, { url: 'http://x:1', token: 't' }, { timeoutMs: 5000 }, fetchFn as never)
+      diarizeOnModelHost(audioPath, { url: 'https://x:1', token: 't' }, { timeoutMs: 5000 }, fetchFn as never)
     ).rejects.toThrow(/incomplete diarization result/)
     await expect(
-      diarizeOnModelHost(audioPath, { url: 'http://x:1', token: 't' }, { timeoutMs: 5000 }, fetchFn as never)
+      diarizeOnModelHost(audioPath, { url: 'https://x:1', token: 't' }, { timeoutMs: 5000 }, fetchFn as never)
     ).rejects.not.toBeInstanceOf(ModelHostUnavailableError)
   })
 
@@ -446,7 +446,7 @@ describe('diarizeOnModelHost', () => {
     })
     const promise = diarizeOnModelHost(
       audioPath,
-      { url: 'http://x:1', token: 't' },
+      { url: 'https://x:1', token: 't' },
       { timeoutMs: 60_000, shouldContinue: () => false },
       fetchFn as never
     )
@@ -464,7 +464,13 @@ describe('diarizeOnModelHost', () => {
       })
     })
     await expect(
-      diarizeOnModelHost(audioPath, { url: 'http://x:1', token: 't' }, { timeoutMs: 20 }, fetchFn as never)
+      diarizeOnModelHost(audioPath, { url: 'https://x:1', token: 't' }, { timeoutMs: 20 }, fetchFn as never)
     ).rejects.toThrow(/took too long/)
   })
+})
+
+it('refuses remote HTTP before health can send credentials', async () => {
+  const fetchFn = vi.fn()
+  expect(await checkModelHost({ url: 'http://gamestation:8765', token: 'never-send' }, fetchFn as never)).toBeNull()
+  expect(fetchFn).not.toHaveBeenCalled()
 })

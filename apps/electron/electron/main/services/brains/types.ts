@@ -19,6 +19,8 @@ import type { HarnessDescriptor, ModelInfo } from './descriptor'
 export type BrainId =
   | 'gemini-api' // @google/generative-ai (current cloud path)
   | 'ollama' // local (current fallback)
+  | 'model-host-embed' // explicitly paired remote semantic search
+  | 'model-host-generate' // explicitly paired managed text generation
   | 'local-onnx-embed' // in-process ONNX embeddings (Nemotron-3-Embed, no server)
   | 'claude-code' // @anthropic-ai/claude-agent-sdk   (Phase 2)
   | 'codex' // @openai/codex-sdk                (Phase 3)
@@ -41,6 +43,7 @@ export type BrainTask =
   | 'handover' // the coding-agent handoff (H9)
   | 'embed' // vector embeddings
   | 'suggestions' // titles / smart questions / actionable detection
+  | 'summary' // a transcript's summary, title and meeting choice (transcription.ts)
 
 export interface BrainMessage {
   role: 'system' | 'user' | 'assistant'
@@ -118,6 +121,7 @@ export interface GenerateOptions {
  * gate (legacy behaviour).
  */
 export interface EmbedOptions {
+  expectedProviderId?: string | null
   shouldGenerate?: () => boolean
   /**
    * Asymmetric-retrieval purpose. Embedding models trained for retrieval

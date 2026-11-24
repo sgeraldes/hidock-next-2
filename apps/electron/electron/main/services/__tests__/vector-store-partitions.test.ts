@@ -1,3 +1,4 @@
+vi.mock('../feature-gate',()=>({isFeatureEnabled:()=>true}))
 /**
  * Vector-store PROVIDER PARTITIONS (2026-07).
  *
@@ -23,24 +24,31 @@ import { tmpdir } from 'os'
 import { existsSync, mkdtempSync, rmSync } from 'fs'
 import { VECTOR_CACHE_FILENAME } from '../vector-cache'
 import * as vectorCache from '../vector-cache'
+import * as vectorModule from '../vector-store'
+import { SemanticIndexMaintenance } from '../semantic-index-maintenance'
+vi.mock('../config',()=>({getConfig:()=>({brains:{taskRouting:{embed:'model-host-embed'},enabled:{'model-host-embed':true},modelHostEmbedding:{spaceId:'test-space'}},transcription:{modelHostUrl:'https://fixture:8766'}})}))
+vi.mock('../../recovery-mode',()=>({isRecoveryMode:()=>false}))
+vi.mock('../brains/model-host-embed-brain',()=>({readRemoteEmbeddingSpace:async()=>({spaceId:'test-space'})}))
 
 let CACHE_DIR: string
 let CACHE_FILE: string
 
 const deps = vi.hoisted(() => ({
   activeProvider: 'gemini-api' as string | null,
-  embedCalls: [] as Array<{ texts: string[]; opts: { purpose?: string } }>,
+  embedCalls: [] as Array<{ texts: string[]; opts: { purpose?: string; expectedProviderId?: string | null } }>,
   queryEmbedding: [1, 0, 0] as number[],
+  onBatch: undefined as undefined | (() => void),
 }))
 
 vi.mock('../embeddings', () => ({
   getEmbeddingsService: () => ({
-    generateEmbedding: async (text: string, opts?: { purpose?: string }) => {
+    generateEmbedding: async (text: string, opts?: { purpose?: string; expectedProviderId?: string | null }) => {
       deps.embedCalls.push({ texts: [text], opts: opts ?? {} })
       return deps.queryEmbedding
     },
-    generateEmbeddings: async (texts: string[], opts?: { purpose?: string }) => {
+    generateEmbeddings: async (texts: string[], opts?: { purpose?: string; expectedProviderId?: string | null }) => {
       deps.embedCalls.push({ texts, opts: opts ?? {} })
+      deps.onBatch?.()
       return texts.map(() => [1, 0, 0])
     },
     activeProviderId: async () => deps.activeProvider,
@@ -60,6 +68,8 @@ vi.mock('../recording-eligibility', () => ({
 let dbInstance: import('sql.js').Database | null = null
 vi.mock('../database', () => ({
   getDatabase: () => dbInstance,
+  queryAll: (sql:string, params:unknown[]=[]) => { const stmt=dbInstance!.prepare(sql);try{stmt.bind(params as any);const rows: Record<string, unknown>[]=[];while(stmt.step())rows.push(stmt.getAsObject());return rows}finally{stmt.free()} },
+  queryOne: (sql:string, params:unknown[]=[]) => { const stmt=dbInstance!.prepare(sql);try{stmt.bind(params as any);return stmt.step()?stmt.getAsObject():undefined}finally{stmt.free()} },
   getDatabasePath: () => join(CACHE_DIR, 'test.db'),
   isRecordingProcessable: () => true,
 }))
@@ -81,6 +91,7 @@ beforeEach(async () => {
   deps.activeProvider = 'gemini-api'
   deps.embedCalls = []
   deps.queryEmbedding = [1, 0, 0]
+  deps.onBatch = undefined
   SQL = await initSqlJs()
   dbInstance = new SQL.Database()
 })
@@ -100,6 +111,130 @@ async function freshStore(): Promise<VectorStore> {
 }
 
 describe('VectorStore provider partitions', () => {
+  const longTranscript = Array.from({ length: 10 }, (_, i) => `Section ${i} ${'relevant meeting detail '.repeat(20)}`).join('. ')
+
+  it('executes bounded maintenance through real VectorStore and reopens its SQLite ledger without repeating saved chunks', async () => {
+    deps.activeProvider='model-host-embed:test-space'
+    dbInstance!.run("CREATE TABLE recordings(id TEXT);CREATE TABLE transcripts(recording_id TEXT,full_text TEXT);INSERT INTO recordings VALUES ('fixture')")
+    dbInstance!.run('INSERT INTO transcripts VALUES (?,?)',['fixture',longTranscript])
+    const store=await freshStore()
+    vi.spyOn(vectorModule,'getVectorStore').mockReturnValue(store)
+    const maintenance=new SemanticIndexMaintenance()
+    const run=maintenance.start({maxBatches:1})
+    await maintenance.waitForIdle();await store.waitForIdle()
+    expect(maintenance.status()).toMatchObject({state:'paused',batches:1,indexedChunks:4})
+    const saved=deps.embedCalls.flatMap(call=>call.texts)
+    const bytes=dbInstance!.export();dbInstance!.close();dbInstance=new SQL.Database(bytes)
+    const resumed=new SemanticIndexMaintenance()
+    expect(resumed.status().state).toBe('paused')
+    deps.embedCalls=[]
+    resumed.control('resume',run.runId!);await resumed.waitForIdle()
+    expect(resumed.status()).toMatchObject({state:'paused',batches:2,indexedChunks:8})
+    expect(deps.embedCalls).toHaveLength(1)
+    expect(deps.embedCalls[0].texts.some(text=>saved.includes(text))).toBe(false)
+  })
+
+  it('bounds oversized paragraphs and persists only the requested batch budget', async () => {
+    const store = await freshStore()
+    const text = 'x'.repeat(100000)
+    expect(await store.indexTranscript(text, { recordingId: 'large', maxBatches: 1 })).toBe(4)
+    expect(deps.embedCalls).toHaveLength(1)
+    expect(deps.embedCalls[0].texts.every(text => text.length <= 16000)).toBe(true)
+    expect(dbInstance!.exec('SELECT COUNT(*) FROM vector_index_pending')[0].values[0][0]).toBe(1)
+    await store.indexTranscript(text, { recordingId: 'large', maxBatches: 1 })
+    const stored = dbInstance!.exec("SELECT content FROM vector_embeddings WHERE recording_id='large' ORDER BY chunk_index")[0].values.flat().join('')
+    expect(stored).toBe(text)
+  })
+
+  it('evicts resident old vectors and restores the old SQL partition when switching back', async () => {
+    const store = await freshStore()
+    await store.indexTranscript('Stored original text', {recordingId:'scope'})
+    expect((store as any).documents.size).toBe(1)
+    deps.activeProvider='local-onnx-embed'
+    await store.ensureActivePartition()
+    expect((store as any).documents.size).toBe(0)
+    expect((store as any).partitionArena).toBeNull()
+    expect((store as any).cacheBuffers).toBeNull()
+    deps.activeProvider='gemini-api'
+    await store.ensureActivePartition()
+    expect((store as any).documents.size).toBe(1)
+    expect(deps.embedCalls).toHaveLength(1)
+    expect((await store.search('query'))[0].document.metadata.recordingId).toBe('scope')
+  })
+
+  it('startup backfill resumes a persisted partial batch and clears its pending marker', async () => {
+    dbInstance!.run(`CREATE TABLE transcripts (recording_id TEXT, full_text TEXT);
+      CREATE TABLE recordings (id TEXT, date_recorded TEXT, filename TEXT, personal INTEGER, deleted_at TEXT);
+      INSERT INTO recordings (id, personal) VALUES ('resume-boot', 0);`)
+    dbInstance!.run('INSERT INTO transcripts VALUES (?, ?)', ['resume-boot', longTranscript])
+    const store = await freshStore()
+    deps.onBatch = () => { if (deps.embedCalls.length === 2) throw new Error('interrupted') }
+    await expect(store.indexTranscript(longTranscript, { recordingId: 'resume-boot' })).rejects.toThrow('interrupted')
+    const first = dbInstance!.exec("SELECT content FROM vector_embeddings WHERE recording_id='resume-boot'")[0].values.flat()
+    expect(first).toHaveLength(4)
+    expect(dbInstance!.exec('SELECT recording_id, embed_provider FROM vector_index_pending')[0].values)
+      .toEqual([['resume-boot', 'gemini-api']])
+    deps.onBatch = undefined
+    deps.embedCalls = []
+    const restarted = await freshStore()
+    expect(await restarted.backfillMissingTranscripts()).toEqual({ indexed: 1, skipped: 0 })
+    const sent = deps.embedCalls.flatMap(call => call.texts)
+    for (const content of first) expect(sent).not.toContain(content)
+    expect(dbInstance!.exec('SELECT COUNT(*) FROM vector_index_pending')[0].values[0][0]).toBe(0)
+    deps.embedCalls = []
+    expect(await restarted.backfillMissingTranscripts()).toEqual({ indexed: 0, skipped: 0 })
+    expect(deps.embedCalls).toHaveLength(0)
+  })
+
+  it('resumes missing chunks after interruption without reembedding the first persisted batch', async () => {
+    const store = await freshStore()
+    deps.onBatch = () => { if (deps.embedCalls.length === 2) throw new Error('worker interrupted') }
+    await expect(store.indexTranscript(longTranscript, { recordingId: 'resume' })).rejects.toThrow('interrupted')
+    const first = dbInstance!.exec("SELECT chunk_index, content FROM vector_embeddings WHERE recording_id='resume' ORDER BY chunk_index")[0].values
+    expect(first).toHaveLength(4)
+    deps.onBatch = undefined
+    deps.embedCalls = []
+    const count = await store.indexTranscript(longTranscript, { recordingId: 'resume' })
+    expect(count).toBeGreaterThan(0)
+    const sent = deps.embedCalls.flatMap(call => call.texts)
+    for (const [, content] of first) expect(sent).not.toContain(content)
+    expect(dbInstance!.exec("SELECT COUNT(*), COUNT(DISTINCT chunk_index) FROM vector_embeddings WHERE recording_id='resume'")[0].values[0])
+      .toEqual([count + 4, count + 4])
+  })
+
+  it('replaces changed text at the same index instead of keeping the old vector', async () => {
+    const store = await freshStore()
+    await store.indexTranscript('Original meeting decision', { recordingId: 'edited' })
+    deps.embedCalls = []
+    expect(await store.indexTranscript('Corrected meeting decision', { recordingId: 'edited' })).toBe(1)
+    expect(deps.embedCalls[0].texts).toEqual(['Corrected meeting decision'])
+    expect(dbInstance!.exec("SELECT chunk_index, content FROM vector_embeddings WHERE recording_id='edited'")[0].values)
+      .toEqual([[0, 'Corrected meeting decision']])
+  })
+
+  it('removes old tail chunks only in the replaced provider partition', async () => {
+    const store = await freshStore()
+    await store.indexTranscript(longTranscript, { recordingId: 'shortened' })
+    deps.activeProvider = 'local-onnx-embed'
+    await store.indexTranscript(longTranscript, { recordingId: 'shortened' })
+    const oldCount = dbInstance!.exec("SELECT COUNT(*) FROM vector_embeddings WHERE embed_provider='gemini-api'")[0].values[0][0]
+    expect(await store.indexTranscript('Short replacement', { recordingId: 'shortened' })).toBe(1)
+    expect(dbInstance!.exec('SELECT embed_provider, COUNT(*) FROM vector_embeddings GROUP BY embed_provider ORDER BY embed_provider')[0].values)
+      .toEqual([['gemini-api', oldCount], ['local-onnx-embed', 1]])
+  })
+
+  it('stops before the next provider batch when privacy eligibility changes after persisted progress', async () => {
+    const store = await freshStore()
+    const eligible = () => {
+      const count = dbInstance!.exec("SELECT COUNT(*) FROM vector_embeddings WHERE recording_id='excluded'")[0].values[0][0]
+      return Number(count) < 4
+    }
+    expect(await store.indexTranscript(longTranscript, { recordingId: 'excluded', shouldGenerate: eligible, shouldPersist: eligible })).toBe(0)
+    expect(deps.embedCalls).toHaveLength(1)
+    expect(deps.embedCalls[0].texts).toHaveLength(4)
+    expect(dbInstance!.exec("SELECT COUNT(*) FROM vector_embeddings WHERE recording_id='excluded'")[0].values[0][0]).toBe(4)
+  })
+
   it('finishes a delayed cache publication before closing the database', async () => {
     let published = false
     const realWrite = vectorCache.writeVectorCacheAsync
@@ -185,8 +320,8 @@ describe('VectorStore provider partitions', () => {
     await store.indexTranscript('transcript A', { recordingId: 'rec-1' })
 
     const total = store.getEligibleDocumentCount()
-    expect(store.getEligibleDocumentCount('gemini-api')).toBe(total / 2)
-    expect(store.getEligibleDocumentCount('local-onnx-embed')).toBe(total / 2)
+    expect(store.getEligibleDocumentCount('gemini-api')).toBe(0)
+    expect(store.getEligibleDocumentCount('local-onnx-embed')).toBe(total)
     expect(store.getEligibleDocumentCount('ollama')).toBe(0)
   })
 
@@ -302,17 +437,17 @@ describe('VectorStore provider partitions', () => {
     const insert = dbInstance!.prepare(
       'INSERT INTO vector_embeddings (id, content, embedding, embed_provider, embed_dims) VALUES (?, ?, ?, ?, ?)'
     )
-    for (let i = 0; i < 385; i++) {
+    for (let i = 0; i < 2049; i++) {
       insert.run([String(i).padStart(5, '0'), 'test', '[1,0,0]', 'gemini-api', 3])
     }
     insert.free()
     const restored = createStore()
     const observed: number[] = []
     await restored.initialize((loaded) => {
-      if (loaded < 385) setImmediate(() => observed.push(restored.getDocumentCount()))
+      if (loaded < 2049) setImmediate(() => observed.push(restored.getDocumentCount()))
     })
-    expect(restored.getDocumentCount()).toBe(385)
-    expect(observed.some((count) => count > 0 && count < 385)).toBe(true)
+    expect(restored.getDocumentCount()).toBe(2049)
+    expect(observed.some((count) => count > 0 && count < 2049)).toBe(true)
   })
 
   it('rejects cached dimensions that changed without changing row count or ids', async () => {
@@ -342,4 +477,14 @@ describe('VectorStore provider partitions', () => {
     expect(result).toEqual({ indexed: 0, skipped: 0 })
     expect(deps.embedCalls.length).toBe(0)
   })
+})
+
+it('carries a captured fingerprint through indexing instead of stamping a newly selected remote space', async () => {
+  deps.activeProvider = 'model-host-embed:space-a'
+  const store = await freshStore()
+  deps.onBatch = () => { deps.activeProvider = 'model-host-embed:space-b' }
+  await expect(store.indexTranscript('safe fixture', { recordingId: 'remote-race' })).rejects.toThrow('Embedding route changed')
+  expect(deps.embedCalls[0].opts.expectedProviderId).toBe('model-host-embed:space-a')
+  const rows = dbInstance!.exec("SELECT embed_provider FROM vector_embeddings WHERE recording_id='remote-race'")
+  expect(rows).toEqual([])
 })

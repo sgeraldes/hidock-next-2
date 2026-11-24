@@ -2,6 +2,8 @@
 
 Each entry is one day of merged work. The Releases page in Settings reads this file.
 
+Device reference: [model/version gates, recordings and native markers](../../docs/devices/README.md). The 11 October firmware documentation describes offline research and local tooling, not an additional merged device-firmware feature. Older release entries retain their dated scope.
+
 ## 2026-10-04 | The gamestation only helps, and gets out of the way
 
 - Paste files, screenshots, text and links into Library from anywhere outside an editor, or use the header's New menu to paste, import a file or start a note; videos keep their original file and link to extracted audio for transcription.
@@ -10,6 +12,10 @@ The Model Host on the gamestation is now a small tray icon and nothing else to s
 pairs with it, gives it the Hugging Face token and decides when it steps aside.
 
 ### Changes
+
+- **Record meetings on your PC.** New > Record opens a bar that stays across pages, with separate
+  microphone and system levels. Stereo WebM keeps mic on the left and system audio on the right;
+  saved and recovered recordings enter the Library through the file-import path.
 
 - **Listen while labeling.** Reference labels include the original local audio with play/pause,
   seeking, 15-second jumps and a Space shortcut; unavailable audio never blocks labeling.

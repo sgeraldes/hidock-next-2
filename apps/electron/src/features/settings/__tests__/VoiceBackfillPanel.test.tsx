@@ -62,14 +62,14 @@ describe('VoiceBackfillPanel', () => {
           paired: true,
           usedForSpeakers: true,
           hasHfToken: true,
-          address: 'gamestation:8765',
+          address: 'gamestation:8766',
           health: null
         }
       })
     }
     render(<VoiceBackfillPanel />)
     expect(
-      await screen.findByText('gamestation:8765 is not answering: paused, in use or off. Speaker work runs on this computer.')
+      await screen.findByText('gamestation:8766 is not answering: paused, in use or off. Voice recognition is unavailable; no local worker will start.')
     ).toBeInTheDocument()
   })
 

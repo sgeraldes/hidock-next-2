@@ -118,6 +118,16 @@ function openTranscriptionPane(name: RegExp) {
 }
 
 describe('Settings Page', () => {
+  it('saves stored channel mode independently without altering automatic device settings', async () => {
+    render(<Settings />)
+    openTranscriptionPane(/^Pipeline/)
+    const selector = screen.getByLabelText('Stored audio channels')
+    expect(selector).toHaveValue('preserve')
+    fireEvent.change(selector, { target: { value: 'mixed' } })
+    await waitFor(() => expect(mockUpdateConfig).toHaveBeenCalledWith('transcription', { recordedAudioChannelMode: 'mixed' }))
+    expect(mockUpdateConfig).toHaveBeenCalledTimes(1)
+    expect(screen.getByText(/a microphone source never identifies a person automatically/)).toBeInTheDocument()
+  })
   it('should render settings sections', async () => {
     render(<Settings />)
 
@@ -487,7 +497,7 @@ describe('Settings Page', () => {
     render(<Settings />)
     const provider = screen.getByLabelText('Default service') as HTMLSelectElement
     expect(provider.tagName).toBe('SELECT')
-    expect(Array.from(provider.options).map((o) => o.value)).toEqual(['gemini', 'local-asr', 'vibevoice'])
+    expect(Array.from(provider.options).map((o) => o.value)).toEqual(['gemini', 'muse-voice', 'mai-transcribe-2', 'remote-worker', 'local-asr', 'vibevoice'])
     expect(screen.getByLabelText('Skip clips shorter than')).toBeInTheDocument()
     expect(screen.getByLabelText('Transcribe new recordings automatically')).toBeInTheDocument()
 

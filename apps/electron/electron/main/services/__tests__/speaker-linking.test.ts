@@ -70,15 +70,15 @@ describe('persistent acoustic speaker linking', () => {
     expect(isSpeakerLinkingUnavailableDetail(
       'RuntimeError: FFmpeg is required for local speaker linking but was not found'
     )).toBe(true)
-    expect(isSpeakerLinkingUnavailableDetail('speaker-linking failed: CUDA out of memory')).toBe(false)
+    expect(isSpeakerLinkingUnavailableDetail('speaker-linking failed: CUDA out of memory')).toBe(true)
   })
 
-  it('budgets the acoustic worker by audio length, never below the configured floor', () => {
-    // 2026-09-15: a flat 600 s cap failed the 19 imported recordings longer than ~34 min.
+  it('honors the stage safety ceiling independently of audio length', () => {
+    // Optional enrichment cannot silently expand its safety budget to hours.
     expect(speakerLinkingTimeoutMs(600, 300)).toBe(600_000)
-    expect(speakerLinkingTimeoutMs(600, 2055)).toBe(3_083_000)
-    expect(speakerLinkingTimeoutMs(600, 3444)).toBe(5_166_000)
-    expect(speakerLinkingTimeoutMs(600, 8485)).toBe(12_728_000)
+    expect(speakerLinkingTimeoutMs(600, 2055)).toBe(600_000)
+    expect(speakerLinkingTimeoutMs(600, 3444)).toBe(600_000)
+    expect(speakerLinkingTimeoutMs(600, 8485)).toBe(600_000)
     expect(speakerLinkingTimeoutMs(600, null)).toBe(600_000)
     expect(speakerLinkingTimeoutMs(600, undefined)).toBe(600_000)
     expect(speakerLinkingTimeoutMs(0, 0)).toBe(30_000)
@@ -155,17 +155,26 @@ describe('persistent acoustic speaker linking', () => {
     const rewritten = JSON.parse(reconcileProviderSpeakers(JSON.stringify([
       { start: 0, end: 4, speaker: 'Speaker 1', text: 'hello' },
       { start: 6, end: 9, speaker: 'Speaker 1', text: 'reply' },
-      { start: 20, end: 21, speaker: 'Speaker 3', text: 'unmatched' }
+      { start: 20, end: 21, speaker: 'Speaker 3', text: 'unmatched' },
+      { start: 0, end: 4, speaker: 'Speaker unresolved', text: 'mixed window',
+        speakerAssignment: 'unresolved-mixed-or-context', acousticSpeakers: ['SPEAKER_00', 'SPEAKER_01'],
+        acousticTurns: [{ start: 0, end: 3.9, speaker: 'SPEAKER_00' }, { start: 3.9, end: 4, speaker: 'SPEAKER_01' }] }
     ]), linking)!)
     // A turn with no acoustic overlap is now labelled explicitly unknown rather
     // than keeping the provider's own scheme — leaving "Speaker 3" in place is
     // what made a 1:1 call read as four speakers downstream.
     expect(rewritten.map((turn: { speaker: string }) => turn.speaker)).toEqual([
-      'Voice AAAAAA', 'Voice BBBBBB', 'Unknown speaker'
+      'Voice AAAAAA', 'Voice BBBBBB', 'Unknown speaker', 'Unknown speaker'
     ])
     expect(rewritten.map((turn: { speakerAttribution: string }) => turn.speakerAttribution)).toEqual([
-      'acoustic', 'acoustic', 'unresolved'
+      'acoustic', 'acoustic', 'unresolved', 'unresolved'
     ])
+    expect(rewritten[3]).toMatchObject({ speakerConfidence: 0,
+      speakerAssignment: 'unresolved-mixed-or-context', acousticSpeakers: ['SPEAKER_00', 'SPEAKER_01'] })
+    expect(rewritten[3].acousticTurns).toHaveLength(2)
+    const unavailable = { ...linking, available: false, matches: [] }
+    expect(JSON.parse(reconcileProviderSpeakers(JSON.stringify([rewritten[3]]), unavailable)!)[0])
+      .toMatchObject({ speaker: 'Unknown speaker', speakerAttribution: 'unresolved', speakerConfidence: 0 })
   })
 
   it('creates v53 tables and anchors a voice only on explicit evidence', () => {

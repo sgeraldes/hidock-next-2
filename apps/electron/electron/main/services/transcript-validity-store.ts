@@ -8,6 +8,7 @@
 
 import { getEventBus } from './event-bus'
 import { createHash } from 'crypto'
+import { performance } from 'perf_hooks'
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { queryAll, queryOne, run, runNoSave, saveDatabase } from './database'
@@ -190,6 +191,7 @@ export async function backfillTranscriptValidity(
     )
     const fresh = ids.filter((row) => !seen.has(row.recording_id))
     if (fresh.length === 0) break
+    let sliceStarted = performance.now()
     for (const { recording_id } of fresh) {
       seen.add(recording_id)
       const row = rowFor(recording_id)
@@ -204,6 +206,12 @@ export async function backfillTranscriptValidity(
       if (row.validity_status !== validity.status) changedIds.push(recording_id)
       counts.checked++
       counts[validity.status] = (counts[validity.status] ?? 0) + 1
+      // A rule-version change visits the whole library. Batch size limits SQL
+      // reads, but is not a responsiveness budget for parsing/envelope checks.
+      if (performance.now() - sliceStarted >= 8) {
+        await new Promise<void>(resolve => setImmediate(resolve))
+        sliceStarted = performance.now()
+      }
     }
     await new Promise<void>((resolve) => setImmediate(resolve))
   }

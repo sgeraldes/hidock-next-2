@@ -57,6 +57,19 @@ function findFfmpeg() {
 }
 
 /**
+ * Compile native/process-sampler.c to build/process-sampler.exe with the same zig and flags as the tray icon:
+ * no MSVC, no SDK install, no runtime to ship. Warnings are errors.
+ */
+export function buildSampler() {
+  const zig = process.env.ZIG_PATH || 'zig'
+  const out = join(packageRoot, 'build', 'process-sampler.exe')
+  mkdirSync(join(packageRoot, 'build'), { recursive: true })
+  execFileSync(zig, ['cc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-target', 'x86_64-windows-gnu', '-O2', '-s',
+    join(packageRoot, 'native', 'process-sampler.c'), '-o', out, '-lpsapi'], { stdio: 'inherit' })
+  return out
+}
+
+/**
  * @param {string} stageDir
  * @param {object} [sources] injected for tests; the real build copies the
  *   running Node and the client's ffmpeg-static
@@ -80,16 +93,29 @@ export function stage(stageDir, sources = {}) {
 
   cpSync(join(packageRoot, 'src'), join(stageDir, 'src'), { recursive: true })
   cpSync(join(packageRoot, 'package.json'), join(stageDir, 'package.json'))
+  // The gateway needs ws at runtime. Copy only this pinned pure-JS dependency,
+  // never the development dependency tree or optional native accelerators.
+  cpSync(join(packageRoot, 'node_modules', 'ws'), join(stageDir, 'node_modules', 'ws'), { recursive: true })
   cpSync(join(packageRoot, 'installer', 'setup.ps1'), join(stageDir, 'setup.ps1'))
+  cpSync(join(packageRoot, 'installer', 'Prepare-ASR.ps1'), join(stageDir, 'Prepare-ASR.ps1'))
+  cpSync(join(packageRoot, 'installer', 'Prepare-SemanticEmbeddings.ps1'), join(stageDir, 'Prepare-SemanticEmbeddings.ps1'))
+  cpSync(join(packageRoot, 'installer', 'Prepare-Realtime.ps1'), join(stageDir, 'Prepare-Realtime.ps1'))
+  cpSync(join(packageRoot, 'installer', 'Prepare-Generation.ps1'), join(stageDir, 'Prepare-Generation.ps1'))
   cpSync(join(packageRoot, 'installer', 'constraints.txt'), join(stageDir, 'constraints.txt'))
   cpSync(join(packageRoot, 'installer', 'decide-requirements.txt'), join(stageDir, 'decide-requirements.txt'))
   cpSync(ffmpegPath, join(stageDir, 'ffmpeg.exe'))
+  // The native process-family sampler sits next to node.exe, where src/windows-process-sampler.mjs looks for it.
+  // Left out when it was not built (the unit tests stage without it): the host then reports its
+  // process-family figures as unavailable with the reason, rather than failing to start. A real build
+  // compiles it first (see main), so an installer built here always carries it.
+  const samplerPath = sources.samplerPath ?? join(packageRoot, 'build', 'process-sampler.exe')
+  if (existsSync(samplerPath)) cpSync(samplerPath, join(stageDir, 'process-sampler.exe'))
 
   // One worker.py in this repository. The client owns it; the host ships a
   // copy of that exact file so a remote result and a local result match.
   const worker = join(repoRoot, 'apps', 'electron', 'resources', 'speaker-linking')
   mkdirSync(join(stageDir, 'resources', 'speaker-linking'), { recursive: true })
-  for (const file of ['worker.py', 'requirements.txt']) {
+  for (const file of ['worker.py', 'resource_policy.py', 'requirements.txt']) {
     cpSync(join(worker, file), join(stageDir, 'resources', 'speaker-linking', file))
   }
 
@@ -115,6 +141,7 @@ function main() {
   const outDir = join(packageRoot, 'build')
   const outFile = join(outDir, `HiDock-Model-Host-${version}-Setup.exe`)
   buildTray()
+  buildSampler()
   stage(stageDir)
   mkdirSync(outDir, { recursive: true })
 

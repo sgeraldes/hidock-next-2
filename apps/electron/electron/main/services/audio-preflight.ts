@@ -1,5 +1,7 @@
 import { execFile } from 'child_process'
 import ffmpegPath from 'ffmpeg-static'
+import { constants, setPriority } from 'os'
+import { TranscriptionCancelledError } from '@hidock/transcription'
 
 const SILENCE_THRESHOLD_DB = -45
 const MINIMUM_SILENCE_SECONDS = 0.25
@@ -138,8 +140,12 @@ export function parseAudioPreflightOutput(
 
 export async function analyzeAudioPreflight(
   filePath: string,
-  knownDurationSeconds?: number | null
+  knownDurationSeconds?: number | null,
+  shouldContinue: () => boolean = () => true,
+  options: { sourceChannel?: 0 | 1 } = {}
 ): Promise<AudioPreflightReport> {
+  if (options.sourceChannel !== undefined && ![0, 1].includes(options.sourceChannel)) throw new AudioPreflightError('Invalid source channel')
+  if (!shouldContinue()) throw new TranscriptionCancelledError()
   if (!ffmpegPath) {
     throw new AudioPreflightError('Bundled ffmpeg is unavailable; automatic transcription was blocked')
   }
@@ -148,15 +154,31 @@ export async function analyzeAudioPreflight(
   const executable = ffmpegPath.replace(/app\.asar([\\/])/, 'app.asar.unpacked$1')
 
   const output = await new Promise<string>((resolve, reject) => {
-    execFile(
+    let cancelled = false
+    // Assigned once, below the callbacks that clear it; a const there would be in
+    // its temporal dead zone if ffmpeg exited before the interval was created.
+    // eslint-disable-next-line prefer-const
+    let watch: NodeJS.Timeout | undefined
+    let settled = false
+    let eligibilityError: unknown
+    const eligible = () => {
+      try { return shouldContinue() }
+      catch (error) { eligibilityError = error; return false }
+    }
+    const child = execFile(
       executable,
       [
-        '-hide_banner', '-nostats', '-i', filePath,
-        '-af', `silencedetect=noise=${SILENCE_THRESHOLD_DB}dB:d=${MINIMUM_SILENCE_SECONDS},volumedetect`,
+        '-hide_banner', '-nostats', '-threads', '1', '-filter_threads', '1', '-i', filePath,
+        '-af', `${options.sourceChannel === undefined ? '' : `pan=mono|c0=c${options.sourceChannel},`}silencedetect=noise=${SILENCE_THRESHOLD_DB}dB:d=${MINIMUM_SILENCE_SECONDS},volumedetect`,
         '-f', 'null', '-'
       ],
-      { windowsHide: true, maxBuffer: 10 * 1024 * 1024 },
+      { windowsHide: true, maxBuffer: 10 * 1024 * 1024, timeout: 300_000 },
       (error, _stdout, stderr) => {
+        settled = true
+        clearInterval(watch)
+        const wanted = eligible()
+        if (eligibilityError) { reject(eligibilityError); return }
+        if (cancelled || !wanted) { reject(new TranscriptionCancelledError()); return }
         if (error) {
           reject(new AudioPreflightError(`Audio preflight failed: ${error.message}`))
           return
@@ -164,6 +186,16 @@ export async function analyzeAudioPreflight(
         resolve(stderr)
       }
     )
+    // ffmpeg has no child model runtime. Keep decoding on one thread at background priority.
+    if (child?.pid) {
+      try { setPriority(child.pid, constants.priority.PRIORITY_BELOW_NORMAL) }
+      catch { child.kill(); reject(new AudioPreflightError('Could not apply audio preflight priority')); return }
+    }
+    if (settled) return
+    watch = setInterval(() => {
+      if (!eligible()) { cancelled = true; child?.kill() }
+    }, 250)
+    watch.unref()
   })
 
   return parseAudioPreflightOutput(output, knownDurationSeconds)

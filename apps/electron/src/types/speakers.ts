@@ -41,6 +41,7 @@ export interface SpeakerSetup {
   configuredEngine: SpeakerEngineId
   effectiveEngine: Exclude<SpeakerEngineId, 'auto'>
   needsConfirmation: boolean
+  acceleratorNotice?: string | null
   lastConfirmedAt: string | null
   voiceSpace: {
     model: string

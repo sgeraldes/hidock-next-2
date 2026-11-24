@@ -72,7 +72,15 @@ describe('M365Connector — descriptor', () => {
   })
 })
 
-describe('M365Connector — calendar sync', () => {
+describe('M365Connector - calendar sync', () => {
+  it('emits source-scoped tombstones for removed and cancelled events', async () => {
+    const connector = new M365Connector(fakeCtx(), { acquireToken: async () => 'fixture', graphFetch: async () => ({
+      value: [{ id: 'gone', '@removed': { reason: 'deleted' } }, { id: 'cancelled', isCancelled: true }], '@odata.deltaLink': 'delta'
+    }) })
+    const result = await connector.capabilities.sources!.pull({ externalId: 'calendar', name: 'Calendar', kind: 'calendar' })
+    expect(result.items.map(item => [item.externalId, item.metadata?.deleted])).toEqual([['gone', true], ['cancelled', true]])
+    expect(result.cursor).toBe('delta')
+  })
   it('maps events with attendee emails into meeting SourceItems and paginates via delta links', async () => {
     const ctx = fakeCtx({ clientId: 'abc' })
     const graphFetch = vi.fn(async (url: string) => (url.includes('PAGE2') ? CAL_PAGE_2 : CAL_PAGE_1))

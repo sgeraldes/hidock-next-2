@@ -19,7 +19,7 @@
  * Spec: docs/superpowers/specs/2026-09-22-reader-sticky-sections-design.md
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { ChevronDown, Pencil, CircleCheck, CircleDashed } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { BusyIcon } from '@/components/ui/working'
@@ -38,6 +38,12 @@ interface TimelineEventListProps {
   activeEventId?: string | null
   /** Seek to this event and highlight it in both places. */
   onActivate: (event: TimelineEvent) => void
+  /** The row (and its timeline line and chip) to emphasise; keyed by event id. */
+  highlightedEventId?: string | null
+  /** Pointer or keyboard focus entered (id) or left (null) a row. */
+  onHighlightEvent?: (id: string | null) => void
+  /** Event ids whose time is an estimate, not a recorded timestamp. */
+  estimatedIds?: ReadonlySet<string>
   /** Resets the transient expand/edit state when the reader changes recording. */
   recordingId?: string
   className?: string
@@ -49,6 +55,9 @@ export function TimelineEventList({
   onEventUpdate,
   activeEventId = null,
   onActivate,
+  highlightedEventId = null,
+  onHighlightEvent,
+  estimatedIds,
   recordingId,
   className
 }: TimelineEventListProps) {
@@ -56,6 +65,12 @@ export function TimelineEventList({
   const [editingEventId, setEditingEventId] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState('')
   const [editSaving, setEditSaving] = useState(false)
+
+  // One canonical order for the rows, the chips and the timeline lines: time, then id.
+  const ordered = useMemo(
+    () => events.slice().sort((a, b) => a.timeSec - b.timeSec || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
+    [events]
+  )
 
   useEffect(() => {
     setExpandedEventId(null)
@@ -74,7 +89,7 @@ export function TimelineEventList({
     <div className={cn('min-w-0', className)}>
       <TooltipProvider delayDuration={300}>
         <ul className="space-y-0.5" data-testid="timeline-events">
-          {events.map((m) => {
+          {ordered.map((m) => {
             const kind = m.kind ?? 'note'
             const Icon = EVENT_KIND_ICON[kind]
             const isActive = activeEventId === m.id
@@ -90,12 +105,20 @@ export function TimelineEventList({
               detail?.status ? `Status: ${detail.status}` : null
             ].filter(Boolean) as string[]
             return (
-              <li key={m.id}>
+              <li key={m.id} data-event-id={m.id}>
                 <div
                   className={cn(
                     'rounded transition-colors',
-                    isActive ? 'bg-primary/10' : 'hover:bg-muted/60'
+                    isActive ? 'bg-primary/10' : 'hover:bg-muted/60',
+                    highlightedEventId === m.id && 'bg-muted/70 ring-1 ring-primary/40'
                   )}
+                  data-highlighted={highlightedEventId === m.id ? 'true' : undefined}
+                  onPointerEnter={() => onHighlightEvent?.(m.id)}
+                  onPointerLeave={() => onHighlightEvent?.(null)}
+                  onFocus={() => onHighlightEvent?.(m.id)}
+                  onBlur={(e) => {
+                    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) onHighlightEvent?.(null)
+                  }}
                 >
                   <div className="flex items-start gap-2 px-1.5 py-1">
                     <button
@@ -183,10 +206,10 @@ export function TimelineEventList({
                       type="button"
                       onClick={() => onActivate(m)}
                       aria-pressed={isActive}
-                      title={`Seek to ${formatTimestamp(m.timeSec)}`}
+                      title={estimatedIds?.has(m.id) ? `Seek to ${formatTimestamp(m.timeSec)} (estimated position, not a recorded time)` : `Seek to ${formatTimestamp(m.timeSec)}`}
                       className="shrink-0 rounded px-1 tabular-nums text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/40"
                     >
-                      {formatTimestamp(m.timeSec)}
+                      {estimatedIds?.has(m.id) ? `~${formatTimestamp(m.timeSec)}` : formatTimestamp(m.timeSec)}
                     </button>
                   </div>
                   {isExpanded && !isEditing && (

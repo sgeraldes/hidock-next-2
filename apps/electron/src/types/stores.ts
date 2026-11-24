@@ -177,6 +177,10 @@ export interface UIStore {
   playbackCurrentTime: number
   playbackDuration: number
   isPlaying: boolean
+  playbackWaveformChannels: Float32Array[] | null
+  waveformDuration: number
+  mutedChannelsForId: string | null
+  playbackMutedChannels: boolean[]
   playbackWaveformData: Float32Array | null
   playbackSentimentData: SentimentSegment[] | null
 
@@ -219,7 +223,7 @@ export interface UIStore {
   setCurrentlyPlaying: (recordingId: string | null, filePath: string | null) => void
   setPlaybackProgress: (currentTime: number, duration: number) => void
   setIsPlaying: (playing: boolean) => void
-  setWaveformData: (waveformData: Float32Array | null) => void
+  setWaveformData: (waveformData: Float32Array | null, channels?: Float32Array[], duration?: number) => void
   setSentimentData: (sentimentData: SentimentSegment[] | null) => void
 
   // Waveform loading actions
