@@ -350,3 +350,23 @@ it('announces one recording after syncing its verdict and never an empty scope',
   expect(emitDomainEvent.mock.calls.filter(([event]) => event.type === 'transcript:verdicts-updated')).toHaveLength(0)
   await new Promise<void>((resolve) => setImmediate(resolve))
 })
+
+describe('isTranscriptUntrusted agrees with the renderer (review of #173)', () => {
+  it('distrusts broken text under any verdict and an incomplete verdict without reasons', () => {
+    seedRecording('trust-rule')
+    story('trust-rule')
+    const set = (sql: string) => run(`UPDATE transcripts SET ${sql} WHERE recording_id = 'trust-rule'`)
+    set("integrity_status = 'broken', integrity_accepted_at = NULL, validity_status = 'audio'")
+    expect(isTranscriptUntrusted('trust-rule')).toBe(true)
+    set("integrity_accepted_at = '2026-11-24T10:00:00Z'")
+    expect(isTranscriptUntrusted('trust-rule')).toBe(false)
+    set("integrity_status = 'ok', integrity_accepted_at = NULL, validity_status = 'incomplete', validity_json = NULL")
+    expect(isTranscriptUntrusted('trust-rule')).toBe(true)
+    set(`validity_json = '${JSON.stringify({ reasons: [{ code: 'sparse_long_segment', detail: '' }] })}'`)
+    expect(isTranscriptUntrusted('trust-rule')).toBe(false)
+    set(`validity_json = '${JSON.stringify({ reasons: [{ code: 'sparse_speech', detail: '' }] })}'`)
+    expect(isTranscriptUntrusted('trust-rule')).toBe(true)
+    set("validity_status = 'doubtful'")
+    expect(isTranscriptUntrusted('trust-rule')).toBe(false)
+  })
+})

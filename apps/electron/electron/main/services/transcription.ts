@@ -3583,6 +3583,9 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     audioLayout.durationSeconds,
     audioPreflight.activityIntervals
   )
+  // An incomplete transcript is kept even when its timestamps fail grounding,
+  // so its reasons can be shown; nothing is derived from it (review of #173).
+  const keptUngrounded = diarizationQuality.status === 'failed'
   if (diarizationQuality.status === 'failed' && completeness.status !== 'incomplete') {
     const message = `Provider timestamps failed local audio grounding: ${diarizationQuality.reasons.join('; ')}`
     failProcessingRun(transcriptionRun.id, message, false, runUsageFields(transcriptionUsage.total()))
@@ -3660,8 +3663,10 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   // Gap-only and timing doubts keep their summary and links; only a density
   // failure or an invalid verdict withholds what would be derived from it.
   if (completeness.status === 'incomplete' && validityNow?.status !== 'invalid') validityNow = completeness
-  let transcriptUntrusted = integrityNow?.status === 'broken' || (validityNow ? shouldWithholdDerivedContent(validityNow) : false)
+  let transcriptUntrusted = keptUngrounded || integrityNow?.status === 'broken' ||
+    (validityNow ? shouldWithholdDerivedContent(validityNow) : false)
   const trustFindings = [
+    ...(keptUngrounded ? ['timestamps_failed_grounding'] : []),
     ...(integrityNow?.issues ?? []).map((issue) => issue.code),
     ...(validityNow?.reasons ?? []).map((reason) => reason.code)
   ]

@@ -68,15 +68,16 @@ export function integrityLabel(transcript: IntegrityFields | null | undefined): 
 /** Only invalid text and density failures withhold derived content. */
 export function isTranscriptTrusted(transcript: Partial<IntegrityFields> | null | undefined): boolean {
   if (transcript?.integrity_accepted_at) return true
+  // Same rule as the main process (transcript-trust.ts isTranscriptUntrusted).
+  if (transcript?.integrity_status === 'broken') return false
   if (transcript?.validity_status === 'invalid') return false
-  if (transcript?.validity_status === 'doubtful') return true
   if (transcript?.validity_status === 'incomplete') {
     try {
       const verdict = JSON.parse(transcript.validity_json ?? '{}')
       return Array.isArray(verdict.reasons) && !verdict.reasons.some((r: { code?: string }) => r.code === 'sparse_speech')
     } catch { return false }
   }
-  return integrityLabel(transcript as IntegrityFields) !== 'broken'
+  return true
 }
 
 type TrustFields = Partial<IntegrityFields>

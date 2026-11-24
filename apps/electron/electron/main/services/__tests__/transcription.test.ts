@@ -45,6 +45,12 @@ const mockGeminiTranscribeCall = vi.fn()
 // failure, an Error is thrown, an array is yielded as segments.
 const mockGeminiResult = vi.fn((): any[] | Error | null => null)
 const mockSmallerRetry = vi.fn()
+const mockDiarizationQuality = vi.hoisted(() => ({ override: null as null | ((...args: any[]) => any) }))
+vi.mock('../diarization-quality', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../diarization-quality')>()
+  return { ...actual, parseAndAssessDiarization: (...args: any[]) =>
+    mockDiarizationQuality.override ? mockDiarizationQuality.override(...args) : (actual.parseAndAssessDiarization as any)(...args) }
+})
 vi.mock('../transcription-completeness-retry', async (importOriginal) => ({
   ...await importOriginal<typeof import('../transcription-completeness-retry')>(),
   retryInSmallerChunks: (...args: any[]) => mockSmallerRetry(...args)
@@ -339,6 +345,7 @@ describe('Transcription Service', () => {
     mockInsertTranscript.mockReset()
     mockGeminiResult.mockReset().mockReturnValue(null)
     mockSmallerRetry.mockReset()
+    mockDiarizationQuality.override = null
     // clearAllMocks keeps mockReturnValue impls, so re-assert the defaults so an
     // INC-2/INC3 test that flips them cannot leak into others.
     mockInsertTranscript.mockReset()
@@ -728,6 +735,25 @@ describe('Transcription Service', () => {
       expect(runs).toHaveLength(2)
       expect(runs.every(([, r]) => r?.qualityStatus === 'incomplete')).toBe(true)
       expect((runs[0][1]?.outputRefs as any).fullText).toContain(text)
+    })
+
+    it('keeps an incomplete transcript whose timestamps fail grounding, and derives nothing from it', async () => {
+      queueOne('rec-ungrounded', writeMpegClip('ungrounded.wav', 1565), 'gemini')
+      mockAnalyzeAudioPreflight.mockResolvedValue({ status: 'speech_present', durationSeconds: 1565,
+        nonSilentSeconds: 598, nonSilentRatio: 0.38, activityIntervals: [{ start: 0, end: 1565 }] })
+      // Dense enough per line, sparse for the speech: incomplete without a density reason would
+      // keep its summary, so this run proves grounding alone withholds it.
+      const text = 'word '.repeat(400).trim()
+      const turns = [{ speaker: 'A', text, start: 0, end: 120 }, { speaker: 'B', text: 'two words', start: 200, end: 500 }]
+      mockGeminiResult.mockReturnValue(turns.map(t => ({ speaker: t.speaker, text: t.text, startTime: t.start, endTime: t.end })))
+      mockSmallerRetry.mockResolvedValue({ fullText: turns.map(t => t.text).join(' '), speakers: JSON.stringify(turns) })
+      mockDiarizationQuality.override = () => ({ status: 'failed', reasons: ['turns outside audio'] })
+      await runQueueUntil(() => expect(mockUpdateQueueItem).toHaveBeenCalledWith('queue-rec-ungrounded', 'completed'))
+      expect(mockInsertTranscript).toHaveBeenCalled()
+      const db = await import('../database')
+      const summary = vi.mocked(db.completeProcessingRun).mock.calls.find(([id]) => id === 'run-summary')?.[1] as any
+      expect(summary).toMatchObject({ status: 'cancelled' })
+      expect(summary.outputRefs.findings).toContain('timestamps_failed_grounding')
     })
 
     it('treats an empty Gemini response over sustained speech as incomplete and retries it once', async () => {

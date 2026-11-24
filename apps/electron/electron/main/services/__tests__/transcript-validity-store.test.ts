@@ -260,7 +260,8 @@ describe('a sample of the audio', () => {
   })
   it('keeps incomplete verdicts without valid gap reasons excluded', () => {
     seed('unknown-incomplete', [[160, 600]])
-    for (const json of ['{"reasons":[{"code":"sparse_speech"}]}', 'broken json']) {
+    // NULL too (review of #173): json_valid(NULL) is NULL, which NOT alone would let through.
+    for (const json of ['{"reasons":[{"code":"sparse_speech"}]}', 'broken json', null]) {
       run(`UPDATE transcripts SET validity_status = 'incomplete', validity_json = ? WHERE recording_id = 'unknown-incomplete'`, [json])
       expect(getEligibleRecordingIds(['unknown-incomplete']).eligible.has('unknown-incomplete')).toBe(false)
       expect(isRecordingGraphIngestable('unknown-incomplete')).toBe(false)
@@ -275,6 +276,18 @@ describe('a sample of the audio', () => {
     expect(getEligibleRecordingIds(['rec98'], { forTranscription: true }).eligible.has('rec98')).toBe(false)
     expect(queryOne<{ quality_rating: string }>('SELECT quality_rating FROM knowledge_captures WHERE id = ?', ['cap98'])?.quality_rating).toBe('unrated')
     for (const id of ['cap98audio', 'cap98owner']) expect(queryOne<{ quality_rating: string }>('SELECT quality_rating FROM knowledge_captures WHERE id = ?', [id])?.quality_rating).toBe('garbage')
+  })
+  it('keeps the withheld originals when a speaker is renamed on a still-withheld transcript', () => {
+    seed('rename-sparse', [[160, 600]])
+    const sparse = (label: string) => JSON.stringify([{ speaker: label, start: 0, end: 590, text: 'only three words' }])
+    run(`UPDATE transcripts SET speakers = ?, full_text = 'only three words', word_count = 3, summary = 'original summary' WHERE recording_id = 'rename-sparse'`, [sparse('A')])
+    expect(refreshTranscriptValidity('rename-sparse')?.reasons.map((r) => r.code)).toContain('sparse_speech')
+    expect(queryOne('SELECT summary FROM transcripts WHERE recording_id = ?', ['rename-sparse'])).toEqual({ summary: null })
+    run('UPDATE transcripts SET speakers = ? WHERE recording_id = ?', [sparse('Laura'), 'rename-sparse'])
+    refreshTranscriptValidity('rename-sparse')
+    const saved = queryOne<{ values_json: string; transcript_fingerprint: string }>('SELECT values_json, transcript_fingerprint FROM transcript_withheld_metadata WHERE recording_id = ?', ['rename-sparse'])!
+    expect(JSON.parse(saved.values_json).transcript.summary).toBe('original summary')
+    expect(saved.transcript_fingerprint).toBe(transcriptFingerprint(JSON.stringify([sparse('Laura'), 'only three words'])))
   })
   it('restores formerly withheld doubtful metadata on the next backfill', async () => {
     seed('restore-doubt', [[160, 600]])

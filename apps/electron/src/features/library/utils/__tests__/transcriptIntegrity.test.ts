@@ -125,3 +125,20 @@ it('separates doubtful transcripts and timing warnings from transcription proble
   expect(matchesIntegrityFilter({ ...suspect, validity_status: 'doubtful' }, 'flagged')).toBe(false)
   expect(matchesIntegrityFilter({ ...suspect, validity_status: 'doubtful' }, 'validity:doubtful')).toBe(true)
 })
+
+describe('isTranscriptTrusted agrees with the main process (review of #173)', () => {
+  it('never trusts broken text, whatever the validity verdict, until it is accepted', () => {
+    expect(isTranscriptTrusted({ ...broken, validity_status: 'audio' })).toBe(false)
+    expect(isTranscriptTrusted({ ...broken, validity_status: 'doubtful' })).toBe(false)
+    expect(isTranscriptTrusted({ ...broken, validity_status: 'valid' })).toBe(false)
+    expect(isTranscriptTrusted({ ...broken, validity_status: 'audio', integrity_accepted_at: '2026-11-24T10:00:00Z' })).toBe(true)
+  })
+
+  it('fails closed for an incomplete verdict without readable reasons, and trusts gap-only and doubtful', () => {
+    expect(isTranscriptTrusted({ ...ok, validity_status: 'incomplete', validity_json: null })).toBe(false)
+    expect(isTranscriptTrusted({ ...ok, validity_status: 'incomplete', validity_json: '{' })).toBe(false)
+    expect(isTranscriptTrusted({ ...ok, validity_status: 'incomplete', validity_json: JSON.stringify({ reasons: [{ code: 'sparse_long_segment' }] }) })).toBe(true)
+    expect(isTranscriptTrusted({ ...ok, validity_status: 'incomplete', validity_json: JSON.stringify({ reasons: [{ code: 'sparse_speech' }] }) })).toBe(false)
+    expect(isTranscriptTrusted({ ...ok, validity_status: 'doubtful' })).toBe(true)
+  })
+})

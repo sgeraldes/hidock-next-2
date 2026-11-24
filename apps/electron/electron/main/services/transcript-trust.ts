@@ -21,10 +21,18 @@ export function isTranscriptUntrusted(recordingId: string): boolean {
   )
   if (!row) return false
   if (row.integrity_accepted_at) return false
-  if (row.validity_status === 'doubtful') return false
+  // Text the integrity check calls broken is never trusted, whatever the
+  // validity says (over silence or noise the verdict is 'audio').
+  if (row.integrity_status === 'broken') return true
+  if (row.validity_status === 'invalid') return true
+  if (row.validity_status !== 'incomplete') return false
+  // Incomplete withholds only for a density failure; without readable reasons
+  // it fails closed, as the renderer and the eligibility SQL do.
   try {
-    return shouldWithholdDerivedContent({ status: row.validity_status as 'invalid', reasons: JSON.parse(row.validity_json ?? '{}').reasons ?? [] }) || (!row.validity_status && row.integrity_status === 'broken')
-  } catch { return row.validity_status === 'incomplete' || row.integrity_status === 'broken' }
+    const reasons = (JSON.parse(row.validity_json ?? 'null') as { reasons?: unknown } | null)?.reasons
+    if (!Array.isArray(reasons)) return true
+    return shouldWithholdDerivedContent({ status: 'incomplete', reasons: reasons as Array<{ code: 'sparse_speech'; detail: string }> })
+  } catch { return true }
 }
 
 export interface TrustSyncResult {

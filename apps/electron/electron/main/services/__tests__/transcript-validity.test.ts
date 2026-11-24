@@ -241,6 +241,25 @@ describe('assessTranscriptValidity', () => {
     expect(v.reasons.map((r) => r.code)).toContain('clock_compressed')
   })
 
+  it('counts unresolved retry slices as one slice of speakers, not one set per slice', () => {
+    const segments = Array.from({ length: 24 }, (_, i) => ({ speaker: `Slice ${Math.floor(i / 2) + 1} / Speaker ${(i % 2) + 1}`,
+      crossSliceIdentity: 'unresolved', start: i * 150, end: i * 150 + 140, text: words(300, `-${i}`) }))
+    const v = assessTranscriptValidity(base({ segments, attendees: 2 }))
+    expect(v.measures.speakers).toBe(2)
+    expect(v.reasons.map((r) => r.code)).not.toContain('more_speakers_than_invited')
+  })
+
+  it('reads acoustic turns after a compressed clock as the clock, which a sample can confirm', () => {
+    const env = envelope([[160, 2290]])
+    const segments = Array.from({ length: 100 }, (_, i) => ({ speaker: 'A', start: i * 9.34, end: i * 9.34 + 9, text: words(56, `-${i}`) }))
+    const diarizedSegments = Array.from({ length: 229 }, (_, i) => ({ start: i * 10, end: i * 10 + 9 }))
+    const doubt = assessTranscriptValidity(base({ envelope: env, segments, diarizedSegments }))
+    expect(doubt.reasons.map((r) => r.code)).toContain('clock_compressed')
+    expect(doubt.reasons.map((r) => r.code)).not.toContain('uncovered_speech')
+    expect(doubt.status).toBe('doubtful')
+    expect(assessTranscriptValidity(base({ envelope: env, segments, diarizedSegments, sample: 'confirmed' })).status).toBe('valid')
+  })
+
   it('never lets a sample override the audio, the integrity check, or a transcript that stops early', () => {
     expect(assessTranscriptValidity(base({ audioCategory: 'noise', sample: 'confirmed' })).status).toBe('audio')
     expect(assessTranscriptValidity(base({ integrityStatus: 'broken', segments: [{ speaker: 'A', start: 0, text: 'hola' }], sample: 'confirmed' })).status).toBe('invalid')

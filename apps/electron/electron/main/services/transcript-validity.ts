@@ -202,6 +202,28 @@ export function audioFrameTest(env: Uint8Array, unit: 'gain' | 'db' = 'gain'): (
   return (f) => env[f] >= floor + margin || env[f] > loud
 }
 
+/**
+ * Distinct speakers. The smaller-slice retry names voices per slice
+ * ("Slice 3 / Speaker 1", crossSliceIdentity 'unresolved') when no acoustic
+ * match ties them across slices; the same person then has one label per
+ * slice. Those labels count as the most any one slice holds, a lower bound,
+ * so the retry itself never reads as more speakers than invited (review of #173).
+ */
+function countSpeakers(segments: ValiditySegment[]): number {
+  const named = new Set<string>()
+  const perSlice = new Map<string, Set<string>>()
+  for (const segment of segments) {
+    if (!segment.speaker) continue
+    const slice = /^Slice (\d+) \/ (.+)$/.exec(segment.speaker)
+    if (slice && (segment as { crossSliceIdentity?: unknown }).crossSliceIdentity === 'unresolved') {
+      const labels = perSlice.get(slice[1]) ?? new Set<string>()
+      labels.add(slice[2])
+      perSlice.set(slice[1], labels)
+    } else named.add(segment.speaker)
+  }
+  return Math.max(named.size, ...[...perSlice.values()].map(labels => labels.size))
+}
+
 function countWords(text: string | null | undefined): number {
   return (text ?? '').trim().split(/\s+/).filter(Boolean).length
 }
@@ -213,7 +235,7 @@ function percent(n: number): string {
 export function assessTranscriptValidity(input: ValidityInput): TranscriptValidity {
   const totalWords = input.segments.length ? input.segments.reduce((sum, s) => sum + countWords(s.text), 0)
     : countWords(input.fullText) || Math.max(0, input.storedWordCount ?? 0)
-  const speakers = new Set(input.segments.map((s) => s.speaker).filter((s): s is string => !!s)).size
+  const speakers = countSpeakers(input.segments)
   const measures: TranscriptValidity['measures'] = {
     words: totalWords,
     wordsPerSoundMinute: null,
@@ -288,9 +310,14 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
   // A confirmed sample clears doubts about the words; it compares words and
   // meaning only, so it cannot clear a doubt about who spoke.
   const settle = (reasons: ValidityReason[]): TranscriptValidity => {
-    const all = [...invalidReasons, ...completenessReasons, ...reasons]
+    // A compressed clock ends the text early on the timeline, so the acoustic
+    // turns after it look uncovered. That gap is the clock's, already a doubt a
+    // sample can settle; it is not missing speech (review of #173).
+    const completeness = reasons.some(reason => reason.code === 'clock_compressed')
+      ? completenessReasons.filter(reason => reason.code !== 'uncovered_speech') : completenessReasons
+    const all = [...invalidReasons, ...completeness, ...reasons]
     const unresolvedSpeakers = reasons.some(reason => reason.code === 'more_speakers_than_invited')
-    return result(invalidReasons.length ? 'invalid' : completenessReasons.length ? 'incomplete'
+    return result(invalidReasons.length ? 'invalid' : completeness.length ? 'incomplete'
       : reasons.length && (input.sample !== 'confirmed' || unresolvedSpeakers) ? 'doubtful' : 'valid', all)
   }
   const reasons: ValidityReason[] = []

@@ -5458,7 +5458,7 @@ export function isRecordingGraphIngestable(recordingId: string): boolean {
   const unusable = queryOne<{ x: number }>(
     `SELECT 1 AS x FROM transcripts t WHERE t.recording_id = ?
         AND (t.validity_status = 'invalid' OR
-          (t.validity_status = 'incomplete' AND (NOT json_valid(t.validity_json) OR
+          (t.validity_status = 'incomplete' AND (COALESCE(json_valid(t.validity_json), 0) = 0 OR
             EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(t.validity_json) THEN t.validity_json ELSE '{}' END, '$.reasons') reason
               WHERE json_extract(reason.value, '$.code') = 'sparse_speech')))) AND t.integrity_accepted_at IS NULL`,
     [recordingId]
@@ -5555,7 +5555,7 @@ const UNUSABLE_TRANSCRIPT_EXCLUSION = `AND NOT EXISTS (
               SELECT 1 FROM transcripts t
                WHERE t.recording_id = r.id
                  AND (t.validity_status = 'invalid' OR
-          (t.validity_status = 'incomplete' AND (NOT json_valid(t.validity_json) OR
+          (t.validity_status = 'incomplete' AND (COALESCE(json_valid(t.validity_json), 0) = 0 OR
             EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(t.validity_json) THEN t.validity_json ELSE '{}' END, '$.reasons') reason
               WHERE json_extract(reason.value, '$.code') = 'sparse_speech'))))
                  AND t.integrity_accepted_at IS NULL)`

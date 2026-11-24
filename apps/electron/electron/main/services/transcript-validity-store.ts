@@ -272,13 +272,29 @@ function retireUnusableDerivedMetadataInTransaction(recordingId: string): void {
   const recording = queryOne<Record<string, unknown>>('SELECT meeting_id, correlation_confidence, correlation_method FROM recordings WHERE id = ?', [recordingId])
   const candidates = recording?.correlation_method === 'ai_transcript_match' ? queryAll<{ id: string; is_selected: number }>(
     'SELECT id, is_selected FROM recording_meeting_candidates WHERE recording_id = ? AND is_ai_selected = 1 AND is_user_confirmed = 0', [recordingId]) : []
-  runNoSave(`INSERT INTO transcript_withheld_metadata (recording_id, transcript_fingerprint, values_json, withheld_at, validity_version)
-    VALUES (?, ?, ?, ?, ?) ON CONFLICT(recording_id) DO UPDATE SET
-      transcript_fingerprint = excluded.transcript_fingerprint, values_json = excluded.values_json,
-      withheld_at = excluded.withheld_at, validity_version = excluded.validity_version
-    WHERE transcript_withheld_metadata.transcript_fingerprint != excluded.transcript_fingerprint`,
-    [recordingId, metadataFingerprint(transcript),
-      JSON.stringify({ transcript: Object.fromEntries(derivedFields.map(field => [field, transcript[field]])), captures, recording, candidates }), new Date().toISOString(), VALIDITY_VERSION])
+  const fingerprint = metadataFingerprint(transcript)
+  const textFingerprint = transcriptFingerprint(String(transcript.full_text ?? ''))
+  const saved = queryOne<{ values_json: string }>('SELECT values_json FROM transcript_withheld_metadata WHERE recording_id = ?', [recordingId])
+  const savedText = saved ? (() => { try { return (JSON.parse(saved.values_json) as { text?: string }).text } catch { return undefined } })() : undefined
+  const nothingNew = derivedFields.every(field => transcript[field] == null) &&
+    captures.every(capture => capture.summary == null && capture.correlation_method !== 'ai_transcript_match') &&
+    recording?.correlation_method !== 'ai_transcript_match'
+  if (saved && savedText === textFingerprint && nothingNew) {
+    // Same text, already retired: a speaker rename changed the fingerprint, and
+    // snapshotting the emptied fields now would overwrite the originals with
+    // nulls (review of #173). Keep the originals and follow the fingerprint.
+    runNoSave('UPDATE transcript_withheld_metadata SET transcript_fingerprint = ?, validity_version = ? WHERE recording_id = ?',
+      [fingerprint, VALIDITY_VERSION, recordingId])
+  } else {
+    runNoSave(`INSERT INTO transcript_withheld_metadata (recording_id, transcript_fingerprint, values_json, withheld_at, validity_version)
+      VALUES (?, ?, ?, ?, ?) ON CONFLICT(recording_id) DO UPDATE SET
+        transcript_fingerprint = excluded.transcript_fingerprint, values_json = excluded.values_json,
+        withheld_at = excluded.withheld_at, validity_version = excluded.validity_version
+      WHERE transcript_withheld_metadata.transcript_fingerprint != excluded.transcript_fingerprint`,
+      [recordingId, fingerprint,
+        JSON.stringify({ text: textFingerprint, transcript: Object.fromEntries(derivedFields.map(field => [field, transcript[field]])), captures, recording, candidates }),
+        new Date().toISOString(), VALIDITY_VERSION])
+  }
   runNoSave(`UPDATE transcripts SET summary = NULL, title_suggestion = NULL, action_items = NULL,
     topics = NULL, key_points = NULL, sentiment = NULL, sentiment_segments = NULL, event_markers = NULL,
     question_suggestions = NULL, mentioned_people = NULL WHERE recording_id = ?`, [recordingId])
