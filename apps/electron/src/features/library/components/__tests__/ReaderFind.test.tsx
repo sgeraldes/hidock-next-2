@@ -100,6 +100,21 @@ describe('Reader find interactions', () => {
     fireEvent.keyDown(input, { key: 'Enter', altKey: true })
     await waitFor(() => expect(seek).toHaveBeenCalledWith(30000))
   })
+  it('highlights a second copy of a document without making it the current match', async () => {
+    function TwoCopies() {
+      const find = useReaderFind({ sourceId: 'a', documents: docs, onSeek: vi.fn() })
+      return <div ref={find.rootRef}><ReaderFindBar find={find} />
+        <p data-testid="copy"><FindText find={find} documentKey="summary" text="reunión" marksCurrent={false} /></p>
+        <p data-testid="section"><FindText find={find} documentKey="summary" text="reunión" /></p>
+      </div>
+    }
+    render(<TwoCopies />)
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+    fireEvent.change(screen.getByLabelText('Find in transcript'), { target: { value: 'reunion' } })
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('1 of 3'))
+    expect(screen.getByTestId('copy').querySelector('mark')).not.toHaveAttribute('data-find-current')
+    expect(screen.getByTestId('section').querySelector('mark')).toHaveAttribute('data-find-current', 'true')
+  })
   it('clears the query when the source changes and leaves Ctrl+K alone', async () => {
     const { rerender } = render(<Harness />)
     fireEvent.keyDown(window, { key: 'k', ctrlKey: true })

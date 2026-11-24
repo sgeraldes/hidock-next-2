@@ -143,8 +143,9 @@ export function ReaderFindBar({ find }: { find: ReaderFindState }) {
     <button type="button" aria-label="Close find" title="Close (Esc)" onClick={find.close} className="rounded p-1 hover:bg-accent"><X size={16} /></button>
   </div>
 }
-export function FindText({ find, documentKey, text }: { find?: ReaderFindState; documentKey: string; text: string }) {
+/** marksCurrent false: a second copy of a document (the docked strip) highlights its matches, but the scroll target stays the section. */
+export function FindText({ find, documentKey, text, marksCurrent = true }: { find?: ReaderFindState; documentKey: string; text: string; marksCurrent?: boolean }) {
   const ranges = find?.byKey.get(documentKey)
   if (!ranges?.length) return <>{text}</>
-  return <Fragment>{highlightRanges(text, ranges, find?.current?.id)}</Fragment>
+  return <Fragment>{highlightRanges(text, ranges, marksCurrent ? find?.current?.id : undefined)}</Fragment>
 }

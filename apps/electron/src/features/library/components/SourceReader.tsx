@@ -1940,7 +1940,7 @@ export function SourceReader({
           {dockedSections.summary && summaryText && (
             <div className="border-t px-4 py-1" data-testid="dock-summary">
               <p className="mb-0.5 text-xs font-semibold text-foreground">Summary</p>
-              <p className="w-full whitespace-pre-wrap pb-1 text-xs leading-snug text-foreground" data-testid="dock-summary-text">{summaryText}</p>
+              <p className="w-full whitespace-pre-wrap pb-1 text-xs leading-snug text-foreground" data-testid="dock-summary-text">{summaryShown ? <FindText find={find} documentKey="summary" text={summaryShown} marksCurrent={false} /> : summaryText}</p>
             </div>
           )}
         </div>
