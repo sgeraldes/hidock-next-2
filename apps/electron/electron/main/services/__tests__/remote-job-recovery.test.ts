@@ -244,6 +244,26 @@ describe('remote startup observation', () => {
     expect(mocks.remove).toHaveBeenCalledOnce()
   })
 
+  it('sends one POST /cancel while the host takes several polls to report cancelled', async () => {
+    // Under load the host was still `running` at the next poll, and every loop
+    // iteration sent another POST (full suite, 22-nov-2026: two cancels).
+    const running = { id: 'job', audioHash: 'audio', status: 'running' }
+    mocks.fetch.mockResolvedValueOnce(response(running))
+      .mockResolvedValueOnce(response({}))
+      .mockResolvedValueOnce(response(running))
+      .mockResolvedValueOnce(response(running))
+      .mockResolvedValueOnce(response({ id: 'job', audioHash: 'audio', status: 'cancelled' }))
+    await recoverRemoteJobs(config, vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+    cancelRecoveredRemote('recording')
+    await vi.advanceTimersByTimeAsync(6000)
+    const posts = mocks.fetch.mock.calls.filter(([, options]) => options.method === 'POST')
+    expect(posts).toHaveLength(1)
+    expect(posts[0][0]).toBe('https://worker.example/v1/jobs/job/cancel')
+    expect(mocks.fail).toHaveBeenCalledWith('run', expect.stringContaining('cancelled'), true)
+    expect(recoveredRemoteRecordings()).toEqual([])
+  })
+
   it.each([409, 503, 'network failure'] as const)(
     'does not mark the remote job cancelled when the cancel request fails (%s)', async failure => {
       mocks.fetch.mockResolvedValueOnce(response({ id: 'job', audioHash: 'audio', status: 'running' }))
