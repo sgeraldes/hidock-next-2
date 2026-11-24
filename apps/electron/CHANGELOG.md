@@ -19,6 +19,7 @@ Device reference: [model/version gates, recordings and native markers](../../doc
 - Cancelling a recovered remote transcription sends one cancel request to the Model Host and waits for it to confirm.
 - Every deletion now records who asked for it: the owner, the app itself or a sync, the feature that asked (for example Move to Trash in the Library or a split), and the app version. Deletions from before this update show nothing there.
 - Every update of the library's structure leaves a dated record of the versions it moved between, the app version, and the backup made before it. An app built with an outdated database engine refuses to update the library and says how to fix it, and the app no longer starts or builds when one of its own packages is older than its source.
+- HiDock keeps a local record of each question asked in the chat, Explore and agents, and of what retrieval found for it, so later changes to search can be measured against real use. It is on by default, in `<data folder>\traces\retrieval-traces.db`. Query text is encrypted and erased after 30 days, traces are deleted after 90 days, with a 1 GiB cap. Settings > Assistant has "Record queries" and "Keep the text of my queries"; turning off the second erases stored query text. Nothing leaves the machine through query recording.
 
 ## 2026-11-22 | Find inside a transcript
 
