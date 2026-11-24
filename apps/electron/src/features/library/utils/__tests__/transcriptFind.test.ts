@@ -22,12 +22,12 @@ describe('reader find index', () => {
   })
   it('searches a precomputed 3,000-segment index in under 50ms per keystroke', () => {
     const makeDocuments = (count: number) => Array.from({ length: count }, (_, i) => ({ key: `turn:${i}`, section: 'transcript' as const, timeMs: i * 2400, text: `Sebastián: Esta reunión revisa las decisiones y próximos pasos. ${'Texto de la conversación. '.repeat(12)}` }))
-    // The budget is per keystroke in a running app. Compile the search path on a
-    // separate small index first so a cold JIT is not billed to the first letter
-    // (it measured 53 ms once under machine load while the rest stayed under 3 ms).
-    const warmup = buildFindIndex(makeDocuments(50))
-    for (let i = 0; i < 20; i++) searchFindIndex(warmup, i % 2 ? 'reunion' : 'r')
+    // The budget is per keystroke in a running app. The first large search in a
+    // process compiles the match loop and grows the heap: 18 ms here, 74 ms on
+    // the CI runner, while the same "r" (45,000 matches) then takes 2.5 ms.
+    // Warm up on this index with letters outside the measured queries.
     const index = buildFindIndex(makeDocuments(3000))
+    for (const letter of ['e', 'a', 'o']) searchFindIndex(index, letter)
     const times = ['r', 're', 'reu', 'reun', 'reuni', 'reunion'].map(query => {
       const start = performance.now()
       expect(searchFindIndex(index, query).length).toBeGreaterThan(0)
