@@ -20,7 +20,7 @@
  */
 
 import { FindText, type ReaderFindState } from './ReaderFind'
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useRef, useState, useMemo } from 'react'
 import { ChevronDown, Pencil, CircleCheck, CircleDashed } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { BusyIcon } from '@/components/ui/working'
@@ -85,12 +85,20 @@ export function TimelineEventList({
     setEditingEventId(null)
   }, [recordingId])
 
-  const currentFindMatch = find?.current
+  // A new match expands its row once. The effect keys on the match's id and
+  // reads events through a ref: the parent passes a new events array on every
+  // render and the index can rebuild, and neither may reopen a row the user
+  // has since closed.
+  const currentMomentKey = find?.current?.section === 'moments' ? find.current.key : undefined
+  const currentMatchId = find?.current?.section === 'moments' ? find.current.id : undefined
+  const eventsRef = useRef(events)
+  eventsRef.current = events
   useEffect(() => {
-    if (currentFindMatch?.section !== 'moments') return
-    const event = events.find(event => currentFindMatch.key === `event:${event.id}` || currentFindMatch.key.startsWith(`event:${event.id}:`))
+    if (!currentMomentKey) return
+    const event = eventsRef.current.find(event => currentMomentKey === `event:${event.id}` || currentMomentKey.startsWith(`event:${event.id}:`))
     if (event) setExpandedEventId(event.id)
-  }, [currentFindMatch, events])
+    // currentMatchId distinguishes two matches in the same document.
+  }, [currentMomentKey, currentMatchId])
 
   if (events.length === 0) {
     return (

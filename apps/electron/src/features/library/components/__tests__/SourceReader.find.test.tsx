@@ -27,6 +27,7 @@ vi.mock('../TranscriptViewer', async () => {
   }
 })
 
+vi.mock('../RecordingSplitEditor', () => ({ RecordingSplitEditor: ({ pointSec }: { pointSec: number }) => <div data-testid="split-editor" data-point={pointSec} /> }))
 vi.mock('@radix-ui/react-portal', () => ({
   Portal: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }))
@@ -123,6 +124,32 @@ describe('SourceReader find section navigation', () => {
     fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
     fireEvent.change(screen.getByLabelText('Find in transcript'), { target: { value: 'maria' } })
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('1 of 1'))
+  })
+  it('resumes a recording a find seek left loaded and paused, without reloading it from 0', () => {
+    const resume = vi.fn(), play = vi.fn()
+    ;(window as any).__audioControls = { loadWaveformOnly: vi.fn(), resume, play, pause: vi.fn(), stop: vi.fn(), seek: vi.fn() }
+    useUIStore.setState({ currentlyPlayingId: 'rec-1', isPlaying: false, playbackCurrentTime: 78, playbackDuration: 125 })
+    const onPlay = vi.fn()
+    render(<MemoryRouter><SourceReader recording={makeRecording()} transcript={makeTranscript()} onPlay={onPlay} onFindSeek={vi.fn()} /></MemoryRouter>)
+    fireEvent.click(screen.getAllByRole('button', { name: 'Play' })[0])
+    expect(resume).toHaveBeenCalled()
+    expect(play).not.toHaveBeenCalled()
+    expect(onPlay).not.toHaveBeenCalled()
+    useUIStore.setState({ currentlyPlayingId: null, isPlaying: false, playbackCurrentTime: 0 })
+  })
+  it('moves the split point with a find seek while the split editor is open', async () => {
+    ;(window as any).__audioControls = { loadWaveformOnly: vi.fn(), pause: vi.fn() }
+    const seek = vi.fn()
+    render(<MemoryRouter><SourceReader recording={makeRecording()} transcript={makeTranscript()} onFindSeek={seek} /></MemoryRouter>)
+    fireEvent.click(screen.getByRole('button', { name: /^Split$/ }))
+    expect(screen.getByTestId('split-editor')).toBeInTheDocument()
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+    const input = screen.getByLabelText('Find in transcript')
+    fireEvent.change(input, { target: { value: 'Ship' } })
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/^1 of /))
+    fireEvent.keyDown(input, { key: 'Enter', altKey: true })
+    expect(seek).toHaveBeenCalledWith(30000)
+    expect(screen.getByTestId('split-editor')).toHaveAttribute('data-point', '30')
   })
   it('keeps hook order stable when opening and closing a source', () => {
     const { rerender } = render(<MemoryRouter><SourceReader recording={null} /></MemoryRouter>)

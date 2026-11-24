@@ -13,6 +13,11 @@ describe('reader find index', () => {
     const index = buildFindIndex([{ key: 'a', section: 'transcript', text: 'The Budget and the BUDGET' }, { key: 'b', section: 'transcript', text: 'Él y el budget' }])
     expect(searchFindIndex(index, 'budget').map(m => [m.key, m.start, m.end])).toEqual([['a', 4, 10], ['a', 19, 25], ['b', 8, 14]])
   })
+  it('folds Greek final sigma the same in the text and the query', () => {
+    const index = buildFindIndex([{ key: 'a', section: 'transcript', text: 'ΟΔΥΣΣΕΥΣ και Οδυσσεύς' }])
+    expect(searchFindIndex(index, 'ΕΥΣ').map(m => [m.start, m.end])).toEqual([[5, 8], [18, 21]])
+    expect(searchFindIndex(index, 'ευς')).toHaveLength(2)
+  })
   it('labels sections and wraps in both directions', () => {
     const index = buildFindIndex(['summary', 'moments', 'transcript'].map(section => ({ key: section, section: section as 'summary', text: 'reunión' })))
     expect(searchFindIndex(index, 'reunion').map(m => m.section)).toEqual(['summary', 'moments', 'transcript'])

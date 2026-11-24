@@ -194,4 +194,20 @@ describe('TimelineEventList with find open', () => {
     fireEvent.click(within(screen.getByTestId('timeline-events')).getByTitle('Seek to 0:25'))
     expect(activate).toHaveBeenCalledWith(expect.objectContaining({ id: 'e9' }))
   })
+  it('expands the matched row once and leaves it to the user when the parent rerenders', async () => {
+    const event: TimelineEvent = { id: 'e5', timeSec: 40, index: 1, label: 'Ship the budget', kind: 'action' }
+    function Rerendering({ tick }: { tick: number }) {
+      const find = useReaderFind({ sourceId: 'rec-1', documents: [{ key: 'event:e5', section: 'moments', text: 'Ship the budget', timeMs: 40000 }], onSeek: vi.fn() })
+      // A new array on every render, like SourceReader's orderedEvents.
+      return <div ref={find.rootRef} data-tick={tick}><ReaderFindBar find={find} /><TimelineEventList find={find} recordingId="rec-1" onActivate={vi.fn()} events={[{ ...event }]} /></div>
+    }
+    const { rerender } = render(<Rerendering tick={0} />)
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+    fireEvent.change(screen.getByLabelText('Find in transcript'), { target: { value: 'budget' } })
+    await waitFor(() => expect(screen.getByTestId('event-detail-e5')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('budget', { selector: 'mark' }))
+    expect(screen.queryByTestId('event-detail-e5')).not.toBeInTheDocument()
+    rerender(<Rerendering tick={1} />)
+    expect(screen.queryByTestId('event-detail-e5')).not.toBeInTheDocument()
+  })
 })

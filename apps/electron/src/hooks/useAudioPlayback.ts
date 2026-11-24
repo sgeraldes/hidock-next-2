@@ -61,9 +61,15 @@ export function useAudioPlayback() {
     const measured = measuredDurationRef.current
     return Number.isFinite(duration) && duration > 0 ? duration : Number.isFinite(measured) && measured > 0 ? measured : 0
   }, [])
+  // A seek made while a recording is still loading (no element yet, or no
+  // metadata) would be lost; the load applies the latest one before it plays.
+  const loadingRef = useRef(false)
+  const pendingSeekRef = useRef<number | null>(null)
   const seekAudio = useCallback((time: number) => {
+    if (!Number.isFinite(time)) return
+    if (loadingRef.current) pendingSeekRef.current = time
     const audio = audioRef.current
-    if (!audio || !Number.isFinite(time)) return
+    if (!audio) return
     const duration = mediaDuration()
     // MediaRecorder WebM may have no duration header. Only clamp to a known,
     // finite duration; never pass NaN/Infinity into the native media setter.
@@ -106,6 +112,8 @@ export function useAudioPlayback() {
 
     // Create new lock for this operation
     playbackLockRef.current = queueAudioWork(async () => {
+      loadingRef.current = true
+      pendingSeekRef.current = null
       try {
         releaseStereo()
         measuredDurationRef.current = 0
@@ -281,7 +289,7 @@ export function useAudioPlayback() {
 
         if (shouldLogQa()) console.log(`[QA-MONITOR][Operation] Setting audio src (Blob URL), mime: ${mimeType}, size: ${blob.size} bytes`)
         audioRef.current.src = audioBlobUrlRef.current
-        if (Number.isFinite(startTimeSec) && startTimeSec > 0) {
+        if ((Number.isFinite(startTimeSec) && startTimeSec > 0) || pendingSeekRef.current !== null) {
           if (audioRef.current.readyState < HTMLMediaElement.HAVE_METADATA) {
             await new Promise<void>((resolve, reject) => {
               const audio = audioRef.current
@@ -308,7 +316,10 @@ export function useAudioPlayback() {
           }
           if (cancelled()) return
           const duration = mediaDuration()
-          seekAudio(startTimeSec)
+          const target = pendingSeekRef.current ?? startTimeSec
+          loadingRef.current = false
+          pendingSeekRef.current = null
+          seekAudio(target)
           setPlaybackProgress(audioRef.current.currentTime, duration)
         }
         if (!autoPlay) return
@@ -341,6 +352,8 @@ export function useAudioPlayback() {
         setWaveformData(null)
       } finally {
         // Always release the lock when done
+        loadingRef.current = false
+        pendingSeekRef.current = null
         playbackLockRef.current = null
       }
     }, cancelled)

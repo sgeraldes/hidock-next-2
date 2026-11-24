@@ -6,7 +6,9 @@ export interface FindMatch extends FindDocument { start: number; end: number; id
 // discard offsets. Keep offsets here so composed and decomposed text highlight
 // the original characters rather than a normalized copy.
 export function normalizeFindText(text: string): string {
-  return text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
+  // Final sigma lowercases by context (a whole string ends in ς, one letter is σ):
+  // fold both to σ so the text, indexed letter by letter, meets a whole query.
+  return text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().replace(/ς/g, 'σ')
 }
 // Plain ASCII folds to itself one character for one, so its offsets need no map.
 const NOT_PLAIN_ASCII = /[^\t\n\r\x20-\x7e]/

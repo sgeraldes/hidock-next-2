@@ -1333,7 +1333,14 @@ export function SourceReader({
       ]))
     ]
   }, [effectiveTranscript, recording?.audioCategory, transcriptSegments, timelineEvents, timeline?.events, eventDetails, resolvedFindDocuments, resolveFindSpeaker])
-  const find = useReaderFind({ sourceId: recordingId, documents: buildFindDocuments, onSeek: onFindSeek ?? handleReaderSeek, session: findSession,
+  // With the split editor open, a find seek also moves the split point, as any
+  // other reader seek does through handleReaderSeek.
+  const findSeek = useCallback((startMs: number) => {
+    if (!onFindSeek) return handleReaderSeek(startMs)
+    if (splitMode) setSplitPointSec(startMs / 1000)
+    onFindSeek(startMs)
+  }, [onFindSeek, handleReaderSeek, splitMode])
+  const find = useReaderFind({ sourceId: recordingId, documents: buildFindDocuments, onSeek: findSeek, session: findSession,
     onReveal: match => {
       if (maximizedSection && maximizedSection !== match.section) restoreMaximizedSection()
       if (readerSectionModes[match.section] !== 'expanded') setReaderSectionMode(match.section, 'expanded')
@@ -2911,8 +2918,9 @@ function DockPlayerControls({
         audio.pause()
         onStop?.()
       } else {
+        // Loaded and paused (a find seek leaves it so): resume where it stands.
+        // onPlay starts playback from the top, which reloaded the file at 0.
         audio.resume()
-        onPlay?.()
       }
     } else if (filePath) {
       void audio.play(recordingId, filePath)
