@@ -599,6 +599,11 @@ export interface DatabaseEngineConfig {
    * the file. Set 0 to vacuum after every migration.
    */
   vacuumMinReclaimBytes?: number
+  /**
+   * The host application's version, written into each schema_migration_audit
+   * row. Called when a migration run ends. Omit it and the column stays NULL.
+   */
+  appVersion?: () => string | null | undefined
   /** @deprecated no-op — better-sqlite3 writes incrementally (WAL). */
   saveDebounceMs?: number
   /** @deprecated no-op — better-sqlite3 writes incrementally (WAL). */
@@ -608,6 +613,38 @@ export interface DatabaseEngineConfig {
 }
 
 const BYTES_PER_MB = 1024 * 1024
+
+/**
+ * Which safety behaviours this build of the engine has. The app states the
+ * version it was written against and refuses to migrate with an older engine:
+ * in November 2026 a dist built before the pre-migration snapshot existed ran
+ * the v72 migration on the owner's library with no snapshot, and nothing said
+ * so. Raise it whenever the engine gains a safety behaviour the app relies on,
+ * and raise the app's requirement with it.
+ *
+ *  1. Pending migrations require a verified, uniquely named pre-migration
+ *     snapshot (`<db>.bak-pre-vN-...`).
+ *  2. Every migration run writes a schema_migration_audit row.
+ */
+export const ENGINE_SAFETY_VERSION = 2
+
+/**
+ * Engine-owned record of every migration run. One row per boot that migrated,
+ * written when the run ends, failed runs included. Created on first use, so it
+ * does not depend on the host's schema.
+ */
+const MIGRATION_AUDIT_DDL = `CREATE TABLE IF NOT EXISTS schema_migration_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_version INTEGER NOT NULL,
+    to_version INTEGER NOT NULL,
+    migrated_at TEXT NOT NULL,
+    app_version TEXT,
+    engine_safety_version INTEGER NOT NULL,
+    backup_made INTEGER NOT NULL CHECK (backup_made IN (0, 1)),
+    backup_path TEXT,
+    outcome TEXT NOT NULL CHECK (outcome IN ('completed', 'failed')),
+    error TEXT
+)`
 
 /** Pre-migration copy: the splash is already waiting, so favour throughput (8 MiB at 4 KiB pages). */
 const MIGRATION_BACKUP_PAGES_PER_STEP = 2048
@@ -643,6 +680,8 @@ export class DatabaseEngine {
   }
   private checkpointCount = 0
   private deferredBackupPending = false
+  /** This boot's verified pre-migration snapshot, for the audit row. */
+  private migrationBackupPath: string | null = null
 
   private readonly protectedTables: Set<string>
   private massDeleteAllowed = false
@@ -837,6 +876,7 @@ export class DatabaseEngine {
       }
       if (failClosed) {
         if (!backupVerified) this.verifyMigrationBackup(bak, version)
+        this.migrationBackupPath = bak
         console.log('[Database] Migration v' + version + ' -> v' + this.config.schemaVersion + ' restore point: ' + bak)
       }
       const directoryEntries = await fsPromises.readdir(dir)
@@ -1020,6 +1060,7 @@ export class DatabaseEngine {
     this.appliedMigration = false
     this.lastPostMigrationVacuum = { considered: false, ran: false, reclaimableBytes: 0, thresholdBytes: 0 }
     this.deferredBackupPending = false
+    this.migrationBackupPath = null
 
     this.dbPath = this.config.dbPathProvider()
 
@@ -1110,7 +1151,15 @@ export class DatabaseEngine {
       const currentVersion = this.readSchemaVersion()
       if (currentVersion < this.config.schemaVersion) {
         console.log(`[Database] Phase 3: Migrating v${currentVersion} -> v${this.config.schemaVersion}`)
-        this.runMigrations(currentVersion)
+        // A file created by this boot runs the migrations from v0 on empty
+        // tables. That is creation, not a migration of anyone's data: no row.
+        try {
+          this.runMigrations(currentVersion)
+        } catch (error) {
+          if (hadExistingFile) this.recordMigrationAudit(currentVersion, 'failed', error)
+          throw error
+        }
+        if (hadExistingFile) this.recordMigrationAudit(currentVersion, 'completed')
       } else if (currentVersion === 0) {
         this.bdb.prepare('INSERT INTO schema_version (version) VALUES (?)').run(this.config.schemaVersion)
       }
@@ -1195,6 +1244,49 @@ export class DatabaseEngine {
       return row?.version ?? 0
     } catch {
       return 0
+    }
+  }
+
+  /**
+   * Write this boot's schema_migration_audit row. A failed run records the
+   * version it reached and the error. An audit write that fails is logged.
+   */
+  private recordMigrationAudit(fromVersion: number, outcome: 'completed' | 'failed', error?: unknown): void {
+    try {
+      const bdb = this.getBdb()
+      bdb.exec(MIGRATION_AUDIT_DDL)
+      let appVersion: string | null = null
+      try {
+        appVersion = this.config.appVersion?.() ?? null
+      } catch (e) {
+        console.warn('[Database] Could not read the app version for the migration audit:', (e as Error).message)
+      }
+      const toVersion = this.readSchemaVersion()
+      bdb
+        .prepare(
+          `INSERT INTO schema_migration_audit
+             (from_version, to_version, migrated_at, app_version, engine_safety_version, backup_made, backup_path, outcome, error)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          fromVersion,
+          toVersion,
+          new Date().toISOString(),
+          appVersion,
+          ENGINE_SAFETY_VERSION,
+          this.migrationBackupPath ? 1 : 0,
+          this.migrationBackupPath,
+          outcome,
+          error === undefined ? null : error instanceof Error ? error.message : String(error)
+        )
+      console.log(
+        `[Database] Migration audit: v${fromVersion} -> v${toVersion} ${outcome}, ` +
+          (this.migrationBackupPath ? `restore point ${this.migrationBackupPath}` : 'NO pre-migration backup')
+      )
+    } catch (e) {
+      // Not thrown: the migrations are committed by now (or their own failure
+      // is being rethrown), and failing this boot would not bring the row back.
+      console.error(`[Database] Could not record the ${outcome} migration in schema_migration_audit:`, (e as Error).message)
     }
   }
 

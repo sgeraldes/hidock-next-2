@@ -653,7 +653,7 @@ export function Calendar() {
 
     setDeleting(recording.id)
     try {
-      const res = await window.electronAPI.recordings.deleteCascade(recording.id, false)
+      const res = await window.electronAPI.recordings.deleteCascade(recording.id, false, { requestedBy: 'calendar:move-to-trash' })
       if (!res?.success) throw new Error(res?.error || 'Delete failed')
       await refreshRecordings(false)
       toast.success('Moved to Trash', `"${displayTitle}" is hidden and excluded from processing.`, {

@@ -13,8 +13,8 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -22,7 +22,7 @@ jobs:
             apps/electron/package-lock.json
             packages/*/package-lock.json
             apps/model-host/package-lock.json
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Reject unreviewed secrets
@@ -53,9 +53,25 @@ jobs:
         # failed on a half-written dist folder (28-oct-2026, os error 183).
         working-directory: apps/electron
         run: node node_modules/electron/install.js && node -e "console.log(require('electron'))"
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.16.0
+      - name: Install Zig 0.16.0
+        # mlugg/setup-zig still runs on Node.js 20 in every release (v2.2.1 and
+        # main, checked 24-nov-2026), and GitHub is retiring Node 20 actions.
+        # The official archive, checked against the SHA-256 that
+        # ziglang.org/download/index.json publishes for it.
+        shell: pwsh
+        env:
+          ZIG_SHA256: 68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e  # pragma: allowlist secret
+        run: |
+          $url = 'https://ziglang.org/download/0.16.0/zig-x86_64-windows-0.16.0.zip'
+          $sha = $env:ZIG_SHA256
+          $zip = Join-Path $env:RUNNER_TEMP 'zig.zip'
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          $got = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+          if ($got -ne $sha) { throw "zig archive checksum mismatch: $got" }
+          Expand-Archive -Path $zip -DestinationPath $env:RUNNER_TEMP
+          $dir = Join-Path $env:RUNNER_TEMP 'zig-x86_64-windows-0.16.0'
+          Add-Content -Path $env:GITHUB_PATH -Value $dir
+          & (Join-Path $dir 'zig.exe') version
       - name: Model Host tests
         # The host ships to another machine on its own installer; nothing else
         # in this workflow runs its tests. build:tray compiles the tray icon

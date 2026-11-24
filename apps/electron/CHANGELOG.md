@@ -9,6 +9,8 @@ Device reference: [model/version gates, recordings and native markers](../../doc
 - Recordings the device may still hold are no longer removed at startup or when the device disconnects, so they stop disappearing and coming back with new ids. Their titles, ratings and meeting links stay with them.
 - A device recording that is already in the Library as a downloaded .wav shows once, as that .wav with its transcript, title and validity, also when the computer's time zone differs from the device clock's.
 - Cancelling a recovered remote transcription sends one cancel request to the Model Host and waits for it to confirm.
+- Every deletion now records who asked for it: the owner, the app itself or a sync, the feature that asked (for example Move to Trash in the Library or a split), and the app version. Deletions from before this update show nothing there.
+- Every update of the library's structure leaves a dated record of the versions it moved between, the app version, and the backup made before it. An app built with an outdated database engine refuses to update the library and says how to fix it, and the app no longer starts or builds when one of its own packages is older than its source.
 
 ## 2026-11-22 | Find inside a transcript
 

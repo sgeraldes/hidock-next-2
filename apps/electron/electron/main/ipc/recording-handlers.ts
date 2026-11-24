@@ -950,7 +950,7 @@ export function registerRecordingHandlers(): void {
         if (typeof splitTimeSec !== 'number' || !Number.isFinite(splitTimeSec)) return { success: false, error: 'Invalid split time' }
         const recording = resolveRecordingId(recordingId)
         if (!recording || recording.deleted_at) return { success: false, error: 'Recording not found' }
-        const result = await splitRecording(recording, splitTimeSec)
+        const result = await splitRecording(recording, splitTimeSec, { origin: 'user', requestedBy: 'recordings:split' })
         for (const child of result.children) queueTranscriptionIfEnabled(child.id)
         return { success: true, result }
       } catch (error) {

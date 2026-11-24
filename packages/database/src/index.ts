@@ -16,6 +16,7 @@ export {
   parseDestructiveStatement,
   MassDeleteError,
   SchemaBehindError,
+  ENGINE_SAFETY_VERSION,
 } from './engine.js'
 export type {
   DatabaseEngineConfig,

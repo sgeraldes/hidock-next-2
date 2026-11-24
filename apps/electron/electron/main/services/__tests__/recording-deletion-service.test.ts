@@ -143,7 +143,7 @@ describe('deleteRecording (soft)', () => {
       artifactPaths: [],
       removed: {}
     })
-    const res = await deleteRecording('r1', { hard: false })
+    const res = await deleteRecording('r1', { hard: false, origin: 'user', requestedBy: 'test' })
     expect(res.success).toBe(true)
     expect(files.deleteRecording).not.toHaveBeenCalled()
     expect(files.removeMeetingWiki).not.toHaveBeenCalled()
@@ -165,7 +165,7 @@ describe('deleteRecording (hard)', () => {
     files.removeMeetingWiki.mockReturnValue({ removed: 2, failed: 0, ok: true })
     files.existsSync.mockReturnValue(true)
 
-    const res = await deleteRecording('r1', { hard: true })
+    const res = await deleteRecording('r1', { hard: true, origin: 'user', requestedBy: 'test' })
     expect(res.success).toBe(true)
     if (!res.success) return
 
@@ -195,14 +195,14 @@ describe('deleteRecording (hard)', () => {
       removed: {}
     })
     files.existsSync.mockReturnValue(false)
-    const res = await deleteRecording('r1', { hard: true })
+    const res = await deleteRecording('r1', { hard: true, origin: 'user', requestedBy: 'test' })
     expect(res.success).toBe(true)
     expect(files.unlinkSync).not.toHaveBeenCalled()
   })
 
   it('errors when the recording is unknown', async () => {
     db.deleteRecordingCascade.mockReturnValue(undefined)
-    const res = await deleteRecording('ghost', { hard: true })
+    const res = await deleteRecording('ghost', { hard: true, origin: 'user', requestedBy: 'test' })
     expect(res.success).toBe(false)
   })
 
@@ -222,7 +222,7 @@ describe('deleteRecording (hard)', () => {
     files.existsSync.mockReturnValue(true)
     files.removeMeetingWiki.mockReturnValue({ removed: 0, failed: 0, ok: true })
 
-    const res = await deleteRecording('r1', { hard: true })
+    const res = await deleteRecording('r1', { hard: true, origin: 'user', requestedBy: 'test' })
     expect(res.success).toBe(true)
     if (!res.success) return
     expect(res.allFilesRemoved).toBe(true)
@@ -240,7 +240,7 @@ describe('deleteRecording — graphUnavailable propagation', () => {
     db.deleteRecordingCascade.mockImplementation(() => {
       throw new Error('graph cleanup unavailable — purge refused (fail-closed)')
     })
-    const res = await deleteRecording('r1', { hard: true })
+    const res = await deleteRecording('r1', { hard: true, origin: 'user', requestedBy: 'test' })
     expect(res.success).toBe(false)
     if (res.success) return
     expect(res.graphUnavailable).toBe(true)
@@ -251,7 +251,7 @@ describe('deleteRecording — graphUnavailable propagation', () => {
     db.deleteRecordingCascade.mockImplementation(() => {
       throw new Error('disk I/O error')
     })
-    const res = await deleteRecording('r1', { hard: true })
+    const res = await deleteRecording('r1', { hard: true, origin: 'user', requestedBy: 'test' })
     expect(res.success).toBe(false)
     if (res.success) return
     expect(res.graphUnavailable).toBeUndefined()
@@ -276,7 +276,7 @@ describe('AR3-2 — partial file-cleanup + retry ledger round-trip', () => {
     files.existsSync.mockReturnValue(true) // ...but the file DID exist
     files.removeMeetingWiki.mockReturnValue({ removed: 0, failed: 0, ok: true })
 
-    const res = await deleteRecording('r1', { hard: true })
+    const res = await deleteRecording('r1', { hard: true, origin: 'user', requestedBy: 'test' })
     expect(res.success).toBe(true)
     if (!res.success) return
 
@@ -301,7 +301,7 @@ describe('AR3-2 — partial file-cleanup + retry ledger round-trip', () => {
     files.existsSync.mockReturnValue(false) // ...because it was already gone
     files.removeMeetingWiki.mockReturnValue({ removed: 0, failed: 0, ok: true })
 
-    const res = await deleteRecording('r1', { hard: true })
+    const res = await deleteRecording('r1', { hard: true, origin: 'user', requestedBy: 'test' })
     expect(res.success).toBe(true)
     if (!res.success) return
     expect(res.allFilesRemoved).toBe(true)
@@ -323,7 +323,7 @@ describe('AR3-2 — partial file-cleanup + retry ledger round-trip', () => {
     })
     files.vectorDeleteByRecording.mockRejectedValue(new Error('vector store busy'))
 
-    const res = await deleteRecording('r1', { hard: true })
+    const res = await deleteRecording('r1', { hard: true, origin: 'user', requestedBy: 'test' })
     expect(res.success).toBe(true)
     if (!res.success) return
     expect(res.allFilesRemoved).toBe(false)
@@ -347,7 +347,7 @@ describe('AR3-2 — partial file-cleanup + retry ledger round-trip', () => {
     files.deleteRecording.mockReturnValue(false)
     files.existsSync.mockReturnValue(true)
 
-    const res = await deleteRecording('r1', { hard: true })
+    const res = await deleteRecording('r1', { hard: true, origin: 'user', requestedBy: 'test' })
     expect(res.success).toBe(true)
     if (!res.success) return
     expect(res.allFilesRemoved).toBe(false)
@@ -378,7 +378,7 @@ describe('AR3-2 — partial file-cleanup + retry ledger round-trip', () => {
       { journalId: 'journal-locked', recordingId: 'r1', targets: [{ kind: 'audio', path: '/data/r1.wav' }] }
     ])
 
-    const res = await deleteRecording('r1', { hard: true })
+    const res = await deleteRecording('r1', { hard: true, origin: 'user', requestedBy: 'test' })
     expect(res.success).toBe(true)
     if (!res.success) return
 
@@ -417,7 +417,7 @@ describe('AR3-2 — partial file-cleanup + retry ledger round-trip', () => {
       throw new Error('journal write failed')
     })
 
-    const res = await deleteRecording('r1', { hard: true })
+    const res = await deleteRecording('r1', { hard: true, origin: 'user', requestedBy: 'test' })
     expect(res.success).toBe(true)
     if (!res.success) return
 

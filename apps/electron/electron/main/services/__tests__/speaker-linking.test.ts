@@ -291,7 +291,7 @@ describe('persistent acoustic speaker linking', () => {
     expect(queryOne('SELECT id FROM voice_clusters WHERE id = ?', ['personal-voice'])).toBeUndefined()
 
     seed('trashed-rec', 'trashed-voice')
-    expect(deleteRecordingCascade('trashed-rec', { hard: false })?.mode).toBe('soft')
+    expect(deleteRecordingCascade('trashed-rec', { hard: false, origin: 'user', requestedBy: 'test' })?.mode).toBe('soft')
     expect(queryOne('SELECT id FROM voice_clusters WHERE id = ?', ['trashed-voice'])).toBeUndefined()
   })
 

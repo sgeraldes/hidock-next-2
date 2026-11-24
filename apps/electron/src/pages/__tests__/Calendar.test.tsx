@@ -275,7 +275,7 @@ describe('Calendar — honest deletion (spec-005/F17 T5 §D3b + AR3-4)', () => {
 
     fireEvent.click(screen.getByTitle('Move to Trash'))
 
-    await waitFor(() => expect(electronAPI.recordings.deleteCascade).toHaveBeenCalledWith('r-local', false))
+    await waitFor(() => expect(electronAPI.recordings.deleteCascade).toHaveBeenCalledWith('r-local', false, { requestedBy: 'calendar:move-to-trash' }))
     expect(electronAPI.recordings.delete).not.toHaveBeenCalled()
     expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('to Trash?'))
   })
