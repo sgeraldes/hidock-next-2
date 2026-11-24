@@ -29,8 +29,13 @@ async function hold(name: string, work: () => unknown | Promise<unknown>): Promi
   return longest
 }
 
+// Shared CI runners run this 2 to 3 times slower than the dev PC and stall the
+// VM now and then. A pass that never yields still misses these limits by far
+// (origin/main: 284 to 464 ms on the dev PC); a single stall gets one retry.
+const SCALE = process.env.CI ? 2.5 : 1
+
 describe('2,150 transcript background passes', () => {
-  it('keeps each main-thread hold below 100 ms', async () => {
+  it('keeps each main-thread hold below 100 ms', { retry: process.env.CI ? 1 : 0, timeout: 300_000 }, async () => {
     await initializeDatabase()
     const text = 'Spoken words about the project. '.repeat(1300).slice(0, 40_000)
     const speakers = JSON.stringify(Array.from({ length: 500 }, (_, i) => ({ speaker: 'Speaker 1', start: i * 7, end: i * 7 + 6, text: text.slice(0, 80) })))
@@ -89,7 +94,7 @@ describe('2,150 transcript background passes', () => {
       const { getVectorStore } = await import('../vector-store')
       holds.rag = await hold('RAG excluded backfill', () => getVectorStore().backfillMissingTranscripts())
       expect(holds).toEqual(expect.objectContaining({ captures: expect.any(Number), rag: expect.any(Number) }))
-      for (const [name, duration] of Object.entries(holds)) expect(duration, name).toBeLessThan(100)
+      for (const [name, duration] of Object.entries(holds)) expect(duration, name).toBeLessThan(100 * SCALE)
     } finally { closeDatabase() }
-  }, 300_000) // CI Windows runners take about 2.5 times the dev PC
+  })
 })

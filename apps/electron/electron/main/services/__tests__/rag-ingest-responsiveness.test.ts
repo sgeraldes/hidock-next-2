@@ -32,8 +32,13 @@ async function hold(name: string, work: () => unknown | Promise<unknown>): Promi
   return gaps
 }
 
+// Shared CI runners run this 2 to 3 times slower than the dev PC and stall the
+// VM now and then. A pass that never yields still misses these limits by far
+// (origin/main: 284 to 464 ms on the dev PC); a single stall gets one retry.
+const SCALE = process.env.CI ? 2.5 : 1
+
 describe('RAG corpus responsiveness', () => {
-  it('indexes 2,150 eligible 40KB transcripts without a long main-thread hold', async () => {
+  it('indexes 2,150 eligible 40KB transcripts without a long main-thread hold', { retry: process.env.CI ? 1 : 0, timeout: 300_000 }, async () => {
     await initializeDatabase()
     const text='Spoken words about the project. '.repeat(1300).slice(0,40000)
     runInTransaction(() => {for(let i=0;i<2150;i++) {
@@ -54,9 +59,9 @@ describe('RAG corpus responsiveness', () => {
       // is a major GC of a 193,000-vector heap, which can pass 100 ms now and then;
       // a few such stalls in about 50,000 batches are allowed.
       const sorted=[...gaps].sort((a,b)=>a-b)
-      expect(sorted[Math.floor(sorted.length*0.99)]).toBeLessThan(50)
-      expect(gaps.filter((g)=>g>=100).length).toBeLessThanOrEqual(3)
-      expect(sorted.at(-1)).toBeLessThan(250)
+      expect(sorted[Math.floor(sorted.length*0.99)]).toBeLessThan(50 * SCALE)
+      expect(gaps.filter((g)=>g>=100 * SCALE).length).toBeLessThanOrEqual(3)
+      expect(sorted.at(-1)).toBeLessThan(250 * SCALE)
     } finally {closeDatabase()}
-  },300000) // CI Windows runners take about 2.5 times the dev PC
+  })
 })
