@@ -658,7 +658,7 @@ export class DownloadService {
     }
     assertCurrent()
     if (snapshot?.complete && ctx.enrichmentFailureCount === 0) {
-      runInTransaction(() => markRecordingsNotOnDevice(deviceFiles.map((file) => file.filename)))
+      runInTransaction(() => markRecordingsNotOnDevice(deviceFiles.map((file) => file.filename), snapshot.startedAt))
     }
     return this.finishReconcile(ctx)
   }

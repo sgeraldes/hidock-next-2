@@ -899,9 +899,15 @@ export function registerJensenHandlers(): void {
         snapshot.complete = isCompleteDeviceSnapshot(files?.map((file) => file.name) ?? null, before?.count, after?.count)
         if (files) rememberDeviceSnapshot(snapshot, files.map((file) => file.name))
         if (snapshot.complete && snapshot.isCurrent()) {
-          await getDownloadService().getFilesToSyncBatched(files!.map((file) => ({
-            filename: file.name, size: file.length, duration: file.duration, dateCreated: file.time!
-          })), 100, snapshot)
+          // The listing stands on its own. A reconcile superseded by a newer scan,
+          // or one that fails, records no absence and must not discard it.
+          try {
+            await getDownloadService().getFilesToSyncBatched(files!.map((file) => ({
+              filename: file.name, size: file.length, duration: file.duration, dateCreated: file.time!
+            })), 100, snapshot)
+          } catch (error) {
+            console.warn('[Jensen] Device listing kept; its reconcile did not finish:', error instanceof Error ? error.message : error)
+          }
         }
         return files
       })

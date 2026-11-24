@@ -939,6 +939,16 @@ describe('main-process library transfer', () => {
     expect(mockReconcileSnapshot).toHaveBeenCalledExactlyOnceWith([], 100, expect.objectContaining({ complete: true }))
   })
 
+  it('returns a complete listing when its reconcile is superseded by another scan', async () => {
+    const files = [{ name: '2026Jun01-115550-Rec39.hda', time: new Date('2026-06-01'), length: 10, duration: 60 }]
+    mockJensen.isConnected.mockReturnValue(true)
+    mockJensen.getFileCount.mockResolvedValue({ count: 1 })
+    mockJensen.listFiles.mockResolvedValue(files)
+    mockReconcileSnapshot.mockRejectedValueOnce(new Error('Device snapshot is no longer current'))
+    expect(await mockHandlers['jensen:listFiles'](makeEvent())).toEqual(files)
+    expect(mockReconcileSnapshot).toHaveBeenCalledOnce()
+  })
+
   it.each(['partial', 'failed', 'disconnected', 'reconnected', 'count-changed'])('never records absence from a %s scan', async (mode) => {
     mockJensen.isConnected.mockReturnValue(true)
     mockJensen.getFileCount.mockResolvedValue({ count: 1 })

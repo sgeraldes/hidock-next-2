@@ -268,6 +268,46 @@ describe('resetOrphanedDownloads — relinks before it erases', () => {
     expect(blanked).toBe(false)
   })
 
+  it('marks a possible device recording local when its stored audio exists', () => {
+    recordingRows = [
+      { id: 'both', filename: '2026Jun01-115550-Rec39.wav', file_path: '/mock/recordings/2026Jun01-115550-Rec39.wav', on_local: 0, on_device: 1 }
+    ]
+    filesOnDisk.add('/mock/recordings')
+    filesOnDisk.add('/mock/recordings/2026Jun01-115550-Rec39.wav')
+
+    expect(getIntegrityService().resetOrphanedDownloads().fixed).toBe(1)
+    expect(executed.some((e) => /SET on_local = 1/.test(e.sql) && JSON.stringify(e.params).includes('both'))).toBe(true)
+  })
+
+  it('re-points a possible device recording whose stored audio moved', () => {
+    recordingRows = [
+      { id: 'both', filename: '2026Jun01-115550-Rec39.wav', file_path: 'F:/Old-Location/2026Jun01-115550-Rec39.wav', on_local: 0, on_device: 1 }
+    ]
+    filesOnDisk.add('F:/Old-Location')
+    filesOnDisk.add('/mock/recordings')
+    filesOnDisk.add('/mock/recordings/2026Jun01-115550-Rec39.wav')
+
+    getIntegrityService().resetOrphanedDownloads()
+
+    expect(pathsWrittenFor('both').map(norm)).toEqual(['/mock/recordings/2026Jun01-115550-Rec39.wav'])
+  })
+
+  it('keeps the pointer and the row of a possible device recording whose audio is gone', async () => {
+    recordingRows = [
+      { id: 'both', filename: '2026Jun01-115550-Rec39.wav', file_path: 'F:/Old-Location/2026Jun01-115550-Rec39.wav', on_local: 0, on_device: 1 }
+    ]
+    filesOnDisk.add('F:/Old-Location')
+    filesOnDisk.add('/mock/recordings')
+
+    getIntegrityService().resetOrphanedDownloads()
+    const service = getIntegrityService()
+    const report = await service.runFullScan()
+    for (const issue of report.issues.filter((i) => i.recordingId === 'both')) await service.repairIssue(issue.id)
+
+    expect(executed.some((e) => /SET file_path = NULL/.test(e.sql) && e.params.includes('both'))).toBe(false)
+    expect(executed.some((e) => /DELETE FROM recordings/.test(e.sql) && e.params.includes('both'))).toBe(false)
+  })
+
   it('still clears the pointer when the audio really is gone', () => {
     recordingRows = [
       { id: 'rec-5', filename: '2026Aug27-090000-Rec40.hda', file_path: 'F:/Old-Location/2026Aug27-090000-Rec40.wav', on_local: 0 }

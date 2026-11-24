@@ -35,4 +35,10 @@ describe('connected device snapshot authority', () => {
     expect(second.isCurrent()).toBe(false)
     expect(currentDeviceSession(() => connected).complete).toBe(false)
   })
+  it('records when a scan began, before it lists anything', () => {
+    const before = Date.now()
+    const scan = beginDeviceSnapshot(() => true)
+    expect(Date.parse(scan.startedAt!)).toBeGreaterThanOrEqual(before)
+    expect(Date.parse(scan.startedAt!)).toBeLessThanOrEqual(Date.now())
+  })
 })

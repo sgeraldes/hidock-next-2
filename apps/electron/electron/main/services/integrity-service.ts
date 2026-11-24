@@ -244,17 +244,21 @@ class IntegrityService {
     filename: string | undefined,
     recordingId: string,
     storedPath?: string | null
-  ): 'relinked' | 'unreachable' | 'claimed' | 'gone' {
-    const retained = this.retainDeviceRecording({ recordingId } as IntegrityIssue)
-    if (retained) return 'unreachable'
+  ): 'relinked' | 'unreachable' | 'claimed' | 'retained' | 'gone' {
+    // A row the device may still hold is never erased, and a device row that
+    // never had local audio does not adopt a file by name. A row that had a
+    // path may still be pointed at its moved audio: that writes, never erases.
+    const mayBeOnDevice = this.mayBeOnDevice(recordingId)
+    if (mayBeOnDevice && !storedPath) return 'retained'
     if (this.volumeUnreachable(storedPath)) return 'unreachable'
-    if (!filename) return 'gone'
+    if (!filename) return mayBeOnDevice ? 'retained' : 'gone'
 
     const located = this.locateLocalAudio(filename)
     if (!located) {
       // No audio found — but if the recordings directory itself cannot be read,
       // that is an unmounted drive, not a deletion.
-      return existsSync(getRecordingsPath()) ? 'gone' : 'unreachable'
+      if (!existsSync(getRecordingsPath())) return 'unreachable'
+      return mayBeOnDevice ? 'retained' : 'gone'
     }
     if (this.audioClaimedByAnother(located, recordingId)) return 'claimed'
 
@@ -365,7 +369,7 @@ class IntegrityService {
     let unresolvedCount = 0
 
     for (const rec of stuckRecordings) {
-      if (!rec.file_path || this.retainDeviceRecording({ recordingId: rec.id } as IntegrityIssue)) continue
+      if (!rec.file_path) continue
 
       if (existsSync(rec.file_path)) {
         existingFileIds.push(rec.id)
@@ -388,7 +392,7 @@ class IntegrityService {
         relinkedCount++
         continue
       }
-      if (outcome === 'unreachable' || outcome === 'claimed') {
+      if (outcome === 'unreachable' || outcome === 'claimed' || outcome === 'retained') {
         unresolvedCount++
         continue // keep the pointer; this is not evidence of deletion
       }
@@ -1098,11 +1102,16 @@ class IntegrityService {
   // Repair Methods
   // ==========================================================================
 
-  private retainDeviceRecording(issue: IntegrityIssue): RepairResult | undefined {
-    const recording = queryAll<Recording>('SELECT * FROM recordings WHERE id = ?', [issue.recordingId])[0]
-    if (!recording || recording.on_device === 0) return undefined
-    // Local absence says nothing about a disconnected device. Unknown legacy
-    // flags are also insufficient evidence to delete a durable identity.
+  /**
+   * Local absence says nothing about a disconnected device. Unknown legacy
+   * flags are also insufficient evidence to delete a durable identity.
+   */
+  private mayBeOnDevice(recordingId: string | undefined): boolean {
+    const recording = queryAll<Recording>('SELECT * FROM recordings WHERE id = ?', [recordingId])[0]
+    return !!recording && recording.on_device !== 0
+  }
+
+  private retainedResult(issue: IntegrityIssue): RepairResult {
     return {
       issueId: issue.id,
       success: false,
@@ -1122,13 +1131,12 @@ class IntegrityService {
       // and history with it, on the strength of one existsSync. That check is
       // also false for a drive that is merely unplugged and for audio that has
       // simply moved, so establish what is true first. Only 'gone' may delete.
-      const retained = this.retainDeviceRecording(issue)
-      if (retained) return retained
       const outcome = this.resolveRelink(issue.filename, issue.recordingId, issue.filePath)
       if (outcome === 'relinked') {
         saveDatabase()
         return { issueId: issue.id, success: true, action: 'Re-linked the recording to its audio' }
       }
+      if (outcome === 'retained') return this.retainedResult(issue)
       if (outcome === 'unreachable') {
         return {
           issueId: issue.id,
@@ -1171,6 +1179,7 @@ class IntegrityService {
       saveDatabase()
       return { issueId: issue.id, success: true, action: 'Re-linked to the audio on disk' }
     }
+    if (outcome === 'retained') return this.retainedResult(issue)
     // D-022 — an offline volume and a duplicate shadow row are both reasons to
     // leave everything alone. Falling through here would delete the synced_files
     // row that knows where the audio is, which is the erasure this fix exists
@@ -1312,12 +1321,11 @@ class IntegrityService {
       // D-022 — same rule as the single-issue path: a row is deleted only once
       // the storage is readable and the audio is genuinely not there. "Repair
       // all" against an unplugged drive used to delete every recording row.
-      const retained = this.retainDeviceRecording(issue)
-      if (retained) return retained
       const outcome = this.resolveRelink(issue.filename, issue.recordingId, issue.filePath)
       if (outcome === 'relinked') {
         return { issueId: issue.id, success: true, action: 'Re-linked the recording to its audio' }
       }
+      if (outcome === 'retained') return this.retainedResult(issue)
       if (outcome === 'unreachable' || outcome === 'claimed') {
         return {
           issueId: issue.id,
@@ -1348,6 +1356,7 @@ class IntegrityService {
     if (outcome === 'relinked') {
       return { issueId: issue.id, success: true, action: 'Re-linked to the audio on disk' }
     }
+    if (outcome === 'retained') return this.retainedResult(issue)
     if (outcome === 'unreachable' || outcome === 'claimed') {
       return {
         issueId: issue.id,

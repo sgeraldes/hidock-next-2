@@ -2,6 +2,8 @@
 export interface DeviceSnapshotGuard {
   isCurrent: () => boolean
   complete: boolean
+  /** ISO time the scan began; rows seen or created since are not absent from it. */
+  startedAt?: string
 }
 
 let session = 0
@@ -18,7 +20,7 @@ export function currentDeviceSession(isConnected: () => boolean): DeviceSnapshot
 export function beginDeviceSnapshot(isConnected: () => boolean): DeviceSnapshotGuard {
   const captured = ++scan
   const guard = currentDeviceSession(isConnected)
-  return { isCurrent: () => captured === scan && guard.isCurrent(), complete: false }
+  return { isCurrent: () => captured === scan && guard.isCurrent(), complete: false, startedAt: new Date().toISOString() }
 }
 
 export function rememberDeviceSnapshot(guard: DeviceSnapshotGuard, names: string[]): void {

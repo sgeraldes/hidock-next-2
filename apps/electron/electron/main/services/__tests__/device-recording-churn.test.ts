@@ -92,6 +92,19 @@ describe('device recording identity and offline retention (real SQLite)', () => 
     expect(rows()).toEqual([expect.objectContaining({ id: rec.id, on_device: 0, location: 'deleted' })])
   })
 
+  it('keeps rows first seen or created after the scan started on the device', async () => {
+    const started = new Date('2026-11-24T12:00:00.000Z')
+    const old = upsertRecordingFromDevice(snapshot(`${names[0]}.hda`))
+    const seenLater = upsertRecordingFromDevice(snapshot(`${names[1]}.hda`))
+    const createdLater = upsertRecordingFromDevice(snapshot(`${names[2]}.hda`))
+    run("UPDATE recordings SET device_last_seen = '2026-11-24T11:00:00.000Z', created_at = '2026-11-01 10:00:00' WHERE id = ?", [old.id])
+    run("UPDATE recordings SET device_last_seen = '2026-11-24T12:00:01.000Z', created_at = '2026-11-01 10:00:00' WHERE id = ?", [seenLater.id])
+    run("UPDATE recordings SET device_last_seen = NULL, created_at = '2026-11-24 12:00:05' WHERE id = ?", [createdLater.id])
+    await getDownloadService().getFilesToSyncBatched([], 100, { isCurrent: () => true, complete: true, startedAt: started.toISOString() })
+    const state = Object.fromEntries(rows().map((r) => [r.id, r.on_device]))
+    expect(state).toEqual({ [old.id]: 0, [seenLater.id]: 1, [createdLater.id]: 1 })
+  })
+
   it('resolves the verified local canonical row while retaining the exact HDA shadow', () => {
     const base = names[1]
     run(`INSERT INTO recordings (id, filename, date_recorded, on_local, on_device)

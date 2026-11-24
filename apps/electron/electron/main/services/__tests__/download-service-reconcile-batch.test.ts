@@ -119,8 +119,9 @@ describe('device file-list reconcile: one transaction, batched yields, hoisted t
     const { markRecordingsNotOnDevice } = await import('../database')
     await getDownloadService().getFilesToSyncBatched([], 100, { isCurrent: () => true, complete: false })
     expect(markRecordingsNotOnDevice).not.toHaveBeenCalled()
-    await getDownloadService().getFilesToSyncBatched([], 100, { isCurrent: () => true, complete: true })
-    expect(markRecordingsNotOnDevice).toHaveBeenCalledExactlyOnceWith([])
+    await getDownloadService().getFilesToSyncBatched([], 100, { isCurrent: () => true, complete: true, startedAt: '2026-11-24T12:00:00.000Z' })
+    // The scan's start bounds which rows its absence can speak for.
+    expect(markRecordingsNotOnDevice).toHaveBeenCalledExactlyOnceWith([], '2026-11-24T12:00:00.000Z')
   })
   it('stops metadata writes after a disconnect or session change between chunks', async () => {
     let current = true

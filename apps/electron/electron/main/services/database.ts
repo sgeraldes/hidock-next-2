@@ -6871,9 +6871,18 @@ export function upsertRecordingFromDevice(deviceFile: {
 }
 
 // Mark recordings as no longer on device
-export function markRecordingsNotOnDevice(presentFilenames: string[]): void {
+/** SQLite CURRENT_TIMESTAMP ('YYYY-MM-DD HH:MM:SS', UTC) or ISO text, as epoch ms. */
+function storedTimeMs(value: string | null | undefined): number {
+  if (!value) return Number.NaN
+  return Date.parse(value.includes('T') ? value : `${value.replace(' ', 'T')}Z`)
+}
 
-
+/**
+ * A complete scan proves absence only for rows that existed before it began.
+ * Rows created or seen on the device since (`scanStartedAt`) are left alone.
+ */
+export function markRecordingsNotOnDevice(presentFilenames: string[], scanStartedAt?: string): void {
+  const cutoff = storedTimeMs(scanStartedAt)
   const presentBases = new Set(
     presentFilenames.map((filename) => filename.replace(/\.(hda|wav|mp3|m4a|aac|ogg|flac)$/i, '').toLowerCase())
   )
@@ -6882,6 +6891,7 @@ export function markRecordingsNotOnDevice(presentFilenames: string[]): void {
   const onDevice = queryAll<Recording>('SELECT * FROM recordings WHERE on_device = 1')
 
   for (const rec of onDevice) {
+    if (Number.isFinite(cutoff) && [rec.device_last_seen, rec.created_at].some((time) => storedTimeMs(time) >= cutoff)) continue
     const deviceIdentity = rec.original_filename || rec.filename
     const base = deviceIdentity.replace(/\.(hda|wav|mp3|m4a|aac|ogg|flac)$/i, '').toLowerCase()
     if (!presentBases.has(base)) {
