@@ -115,6 +115,16 @@ describe('device file-list reconcile: one transaction, batched yields, hoisted t
     expect(getDownloadService().isFileAlreadySynced('Rec01.hda').synced).toBe(false)
     vi.mocked(getRecordingByFilename).mockReturnValue(undefined)
   })
+  it.each(['wav', 'mp3'])('queues the device take beside an independent external %s import', async (extension) => {
+    const { getRecordingByFilename } = await import('../database')
+    const stem = `Import-${extension}-Rec01` // the service is shared across cases
+    vi.mocked(getRecordingByFilename).mockImplementation((name) => name === `${stem}.${extension}`
+      ? { id: 'external', source: 'external', is_imported: 1 } as never : undefined)
+    mockExistsSync.mockReturnValue(true)
+    const result = getDownloadService().queueDownloads([{ filename: `${stem}.hda`, size: 10 }])
+    expect(result.skipped).toEqual([])
+    vi.mocked(getRecordingByFilename).mockReturnValue(undefined)
+  })
   it('records absence for a complete current empty scan, never for a cached list', async () => {
     const { markRecordingsNotOnDevice } = await import('../database')
     await getDownloadService().getFilesToSyncBatched([], 100, { isCurrent: () => true, complete: false })

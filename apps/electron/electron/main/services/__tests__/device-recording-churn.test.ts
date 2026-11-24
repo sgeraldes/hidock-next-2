@@ -2,12 +2,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { join } from 'path'
 import { tmpdir } from 'os'
+import { mkdtempSync, rmSync } from 'fs'
 
-let sequence = 0
+// Each test owns a private folder for its database and recordings: the full
+// scan and repair-all below must never read or touch the shared temp folder.
+let workDir: string
 let dbPath: string
-vi.mock('../file-storage', () => ({ getDatabasePath: () => dbPath, getRecordingsPath: () => tmpdir() }))
+vi.mock('../file-storage', () => ({ getDatabasePath: () => dbPath, getRecordingsPath: () => workDir }))
 vi.mock('electron', () => ({
-  app: { getPath: () => tmpdir() },
+  app: { getPath: () => workDir },
   BrowserWindow: { getAllWindows: () => [] },
   ipcMain: { handle: vi.fn() },
   Notification: vi.fn()
@@ -28,10 +31,15 @@ const rows = () => queryAll<{ id: string; filename: string; on_device: number; l
 
 beforeEach(async () => {
   setDeviceConnectionReader(() => false)
-  dbPath = join(tmpdir(), `hidock-device-churn-${process.pid}-${++sequence}.sqlite`)
+  workDir = mkdtempSync(join(tmpdir(), 'hidock-device-churn-'))
+  dbPath = join(workDir, 'hidock.sqlite')
   await initializeDatabase()
 })
-afterEach(() => { getDownloadService().destroy(); closeDatabase() })
+afterEach(() => {
+  getDownloadService().destroy()
+  closeDatabase()
+  rmSync(workDir, { recursive: true, force: true })
+})
 
 describe('device recording identity and offline retention (real SQLite)', () => {
   it('persists absence only after complete current reconciliation including deletion of the final device file', async () => {
@@ -92,6 +100,16 @@ describe('device recording identity and offline retention (real SQLite)', () => 
     expect(rows()).toEqual([expect.objectContaining({ id: rec.id, on_device: 0, location: 'deleted' })])
   })
 
+  it('updates the oldest of two exact device rows instead of adding one per scan', () => {
+    const base = names[1]
+    run(`INSERT INTO recordings (id, filename, original_filename, date_recorded, on_local, on_device, source, created_at)
+      VALUES ('first', ?, ?, '2026-06-01', 0, 1, 'hidock', '2026-09-01 10:00:00'),
+             ('second', ?, ?, '2026-06-01', 0, 1, 'hidock', '2026-10-14 14:39:12')`,
+    [`${base}.hda`, `${base}.hda`, `${base}.hda`, `${base}.hda`])
+    for (let pass = 0; pass < 3; pass++) expect(upsertRecordingFromDevice(snapshot(`${base}.hda`)).id).toBe('first')
+    expect(rows().map((r) => r.id)).toEqual(['first', 'second'])
+  })
+
   it('keeps rows first seen or created after the scan started on the device', async () => {
     const started = new Date('2026-11-24T12:00:00.000Z')
     const old = upsertRecordingFromDevice(snapshot(`${names[0]}.hda`))
@@ -128,7 +146,7 @@ describe('device recording identity and offline retention (real SQLite)', () => 
     const day = base.includes('May') ? '2026-05-28' : base.includes('Jun') ? '2026-06-01' : '2026-10-01'
     // Real legacy rows have original_filename = the local .wav, not NULL.
     run(`INSERT INTO recordings (id, filename, original_filename, date_recorded, file_path, on_local, on_device, location)
-      VALUES ('local', ?, ?, ?, ?, 1, 1, 'both')`, [`${base}.wav`, `${base}.wav`, day, join(tmpdir(), `${base}.wav`)])
+      VALUES ('local', ?, ?, ?, ?, 1, 1, 'both')`, [`${base}.wav`, `${base}.wav`, day, join(workDir, `${base}.wav`)])
     for (let pass = 0; pass < 3; pass++) {
       expect(getRecordingByFilename(`${base}.hda`)?.id).toBe('local')
       expect(upsertRecordingFromDevice(snapshot(`${base}.hda`)).id).toBe('local')
@@ -179,7 +197,7 @@ describe('device recording identity and offline retention (real SQLite)', () => 
     const base = names[0]
     run(`INSERT INTO meetings (id, subject, start_time, end_time) VALUES ('meeting', 'User link', '2026-05-28', '2026-05-29')`)
     run(`INSERT INTO recordings (id, filename, date_recorded, on_local, file_path)
-      VALUES ('local', ?, '2026-05-28', 1, ?)`, [`${base}.wav`, join(tmpdir(), `${base}.wav`)])
+      VALUES ('local', ?, '2026-05-28', 1, ?)`, [`${base}.wav`, join(workDir, `${base}.wav`)])
     run(`INSERT INTO recordings (id, filename, date_recorded, on_local, on_device, location, meeting_id)
       VALUES ('device', ?, '2026-05-28', 0, 1, 'device-only', 'meeting')`, [`${base}.hda`])
     run(`INSERT INTO knowledge_captures (id, title, user_title, captured_at, source_recording_id, quality_rating)
@@ -202,7 +220,7 @@ describe('device recording identity and offline retention (real SQLite)', () => 
     const base = names[0]
     run(`INSERT INTO recordings (id, filename, date_recorded, on_local, on_device, file_path, location)
       VALUES ('hda', ?, '2026-05-28', 1, 1, ?, 'both'), ('wav', ?, '2026-05-28', 1, 1, ?, 'both')`,
-    [`${base}.hda`, join(tmpdir(), `${base}.hda`), `${base}.wav`, join(tmpdir(), `${base}.wav`)])
+    [`${base}.hda`, join(workDir, `${base}.hda`), `${base}.wav`, join(workDir, `${base}.wav`)])
     expect(mergeDuplicateRecordings()).toBe(0)
     expect(await mergeDuplicateRecordingsYielding()).toBe(0)
     expect(rows().map((r) => r.id)).toEqual(['hda', 'wav'])
@@ -213,7 +231,7 @@ describe('device recording identity and offline retention (real SQLite)', () => 
     const recording = upsertRecordingFromDevice(snapshot(`${base}.hda`))
     run(`INSERT INTO knowledge_captures (id, title, user_title, captured_at, source_recording_id, quality_rating)
       VALUES ('capture', 'Source title', 'Keep this title', '2026-05-28', ?, 'valuable')`, [recording.id])
-    run('UPDATE recordings SET file_path = ? WHERE id = ?', [join(tmpdir(), `${base}.wav`), recording.id])
+    run('UPDATE recordings SET file_path = ? WHERE id = ?', [join(workDir, `${base}.wav`), recording.id])
     const service = getIntegrityService()
     const report = await service.runFullScan()
     const orphan = report.issues.find((i) => i.type === 'orphaned_download' && i.recordingId === recording.id)

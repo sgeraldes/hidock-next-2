@@ -896,6 +896,8 @@ export function registerJensenHandlers(): void {
         const files = await device.listFiles(onProgress, before?.count)
         if (!snapshot.isCurrent()) return null
         const after = await device.getFileCount()
+        // A connect or disconnect during the final count makes this list another session's.
+        if (!snapshot.isCurrent()) return null
         snapshot.complete = isCompleteDeviceSnapshot(files?.map((file) => file.name) ?? null, before?.count, after?.count)
         if (files) rememberDeviceSnapshot(snapshot, files.map((file) => file.name))
         if (snapshot.complete && snapshot.isCurrent()) {

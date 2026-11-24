@@ -359,11 +359,13 @@ export function buildRecordingMap(
         summary: capture?.summary ?? undefined,
         personal: !!dbRec?.personal
       } as const
+      // The device knows a take by its native name, not by the local file's.
+      const deviceFilename = synced?.original_filename || dbRec.original_filename || dbRec.filename
       const recording: UnifiedRecording = locallyAvailable && knownOnDevice
         ? {
             ...shared,
             location: 'both',
-            deviceFilename: synced?.original_filename || dbRec.filename,
+            deviceFilename,
             localPath,
             syncStatus: 'synced'
           }
@@ -378,11 +380,13 @@ export function buildRecordingMap(
           : {
               ...shared,
               location: 'device-only',
-              deviceFilename: synced?.original_filename || dbRec.filename,
+              deviceFilename,
               syncStatus: 'not-synced'
             }
       recordingMap.set(`db:${dbRec.id}`, recording)
-      processedBaseNames.add(baseName)
+      // An independent import never stands for the device take of the same
+      // stem, so it must not hide that take's cached entry.
+      if (dbRec.source !== 'external' && dbRec.is_imported !== 1) processedBaseNames.add(baseName)
     }
   }
 

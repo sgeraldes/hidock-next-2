@@ -6834,7 +6834,14 @@ export function upsertRecordingFromDevice(deviceFile: {
   duration: number
   dateCreated: Date
 }): Recording {
-  const existing = getRecordingByFilename(deviceFile.filename)
+  // An ambiguous identity (two exact device rows) is not a new recording:
+  // inserting would add another row on every scan. Keep using the oldest.
+  const existing = getRecordingByFilename(deviceFile.filename) ?? queryAll<Recording>(
+    `SELECT * FROM recordings
+      WHERE (filename = ? COLLATE NOCASE OR original_filename = ? COLLATE NOCASE)
+        AND (source IS NULL OR source = 'hidock') AND COALESCE(is_imported, 0) != 1
+      ORDER BY created_at, id LIMIT 1`, [deviceFile.filename, deviceFile.filename]
+  )[0]
   const now = new Date().toISOString()
   // Custom recordings have no qualified byte-rate estimate before download.
   // Preserve an existing measurement when the device reports unknown (0).

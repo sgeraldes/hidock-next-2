@@ -939,6 +939,18 @@ describe('main-process library transfer', () => {
     expect(mockReconcileSnapshot).toHaveBeenCalledExactlyOnceWith([], 100, expect.objectContaining({ complete: true }))
   })
 
+  it('returns no listing when the session changes during the final count', async () => {
+    mockJensen.isConnected.mockReturnValue(true)
+    mockJensen.getFileCount.mockResolvedValueOnce({ count: 1 }).mockImplementationOnce(async () => {
+      mockJensen.ondisconnect()
+      mockJensen.onconnect()
+      return { count: 1 }
+    })
+    mockJensen.listFiles.mockResolvedValue([{ name: '2026Jun01-115550-Rec39.hda', time: new Date('2026-06-01'), length: 10, duration: 60 }])
+    expect(await mockHandlers['jensen:listFiles'](makeEvent())).toBeNull()
+    expect(mockReconcileSnapshot).not.toHaveBeenCalled()
+  })
+
   it('returns a complete listing when its reconcile is superseded by another scan', async () => {
     const files = [{ name: '2026Jun01-115550-Rec39.hda', time: new Date('2026-06-01'), length: 10, duration: 60 }]
     mockJensen.isConnected.mockReturnValue(true)

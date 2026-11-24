@@ -52,6 +52,9 @@ import type { DeviceSnapshotGuard } from './device-snapshot'
 import { deviceListGuard } from './device-snapshot'
 import { isNativeFileManualOnly } from './device-native-file-policy'
 
+/** isFileAlreadySynced: a same-stem external import does not stand for device audio. */
+const INDEPENDENT_IMPORT_REASON = 'Independent local import is not device audio'
+
 /**
  * D-022 — why a requested file did not enter the queue.
  *
@@ -545,7 +548,7 @@ export class DownloadService {
     const localCandidates = [getRecordingByFilename(wavFilename), getRecordingByFilename(mp3Filename)]
     if (/\.hda$/i.test(filename) && localCandidates.some((row) => row
       && (row.is_imported === 1 || row.source !== 'hidock'))) {
-      return { synced: false, reason: 'Independent local import is not device audio' }
+      return { synced: false, reason: INDEPENDENT_IMPORT_REASON }
     }
     if (wavFilename !== filename && this.syncedRowIsBackedByDisk(wavFilename)) {
       return { synced: true, reason: 'WAV version in synced_files' }
@@ -885,6 +888,7 @@ export class DownloadService {
           // checkpoint/source validation, independently of this reset progress.
           const syncedState = file.replaces ? { synced: false, reason: '' } : this.isFileAlreadySynced(file.filename)
           const normalizedState = !syncedState.synced && !file.replaces && normalizedFilename !== file.filename
+            && syncedState.reason !== INDEPENDENT_IMPORT_REASON
             ? this.isFileAlreadySynced(normalizedFilename) : syncedState
           if (syncedState.synced || normalizedState.synced) {
             skippedAlreadySynced++
@@ -941,7 +945,9 @@ export class DownloadService {
         skipped.push({ filename: file.filename, skip: 'already-synced', reason })
         continue
       }
-      if (!file.replaces && normalizedFilename !== file.filename) {
+      // The normalized name of a device take beside an independent import is
+      // that import's file: it proves nothing about the device audio.
+      if (!file.replaces && normalizedFilename !== file.filename && reason !== INDEPENDENT_IMPORT_REASON) {
         const { synced: normalizedSynced, reason: normalizedReason } =
           this.isFileAlreadySynced(normalizedFilename)
         if (normalizedSynced) {

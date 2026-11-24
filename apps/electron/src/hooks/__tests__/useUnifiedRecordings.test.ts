@@ -130,6 +130,22 @@ describe('buildRecordingMap location facts', () => {
     expect(result.map((r) => r.id).sort()).toEqual(['device', 'external'])
   })
 
+  it('keeps an external same-stem import beside the cached device take while offline', () => {
+    const result = buildRecordingMap([], [
+      { id: 'external', filename: 'Rec01.wav', original_filename: 'Rec01.wav', source: 'external', is_imported: 1, date_recorded: '2026-10-01', file_path: '/fixture/external.wav', file_size: 10, status: 'complete', on_local: 1, on_device: 0 }
+    ] as any, [], [{ filename: 'Rec01.hda', date_recorded: '2026-10-05T10:00:00Z', file_size: 10, duration_seconds: 60 }] as any, false)
+    expect(result.map((r) => r.id).sort()).toEqual(['Rec01', 'external'])
+  })
+
+  it('names the device file by its native name for a downloaded row with no synced match', () => {
+    const result = buildRecordingMap([], [
+      { id: 'local', filename: '2026Jun01-115550-Rec39.wav', original_filename: '2026Jun01-115550-Rec39.hda', source: 'hidock', date_recorded: '2026-06-01', file_path: '/fixture/take.wav', file_size: 10, status: 'complete', on_local: 1, on_device: 1 },
+      { id: 'device', filename: '2026Jun02-140742-Rec47.mp3', original_filename: '2026Jun02-140742-Rec47.hda', source: 'hidock', date_recorded: '2026-06-02', file_path: null, file_size: 10, status: 'none', on_local: 0, on_device: 1 }
+    ] as any, [], [], false)
+    expect(Object.fromEntries(result.map((r) => [r.id, (r as { deviceFilename?: string }).deviceFilename])))
+      .toEqual({ local: '2026Jun01-115550-Rec39.hda', device: '2026Jun02-140742-Rec47.hda' })
+  })
+
   it('keeps an independent import on its own audio path despite a device synced-file alias', () => {
     const result = buildRecordingMap([], [
       { id: 'external', filename: 'Rec01.wav', source: 'external', is_imported: 1, file_path: '/fixture/external.wav', file_size: 10, status: 'complete', on_local: 1 }

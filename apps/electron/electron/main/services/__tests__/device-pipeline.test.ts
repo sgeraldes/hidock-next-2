@@ -122,6 +122,58 @@ describe('DevicePipelineService', () => {
     await svc.reconcile(await svc.scanFiles())
     expect(dl.getFilesToSyncBatched).toHaveBeenLastCalledWith([], 100, expect.objectContaining({ complete: false }))
   })
+  it('ends a failed scan in a retryable error without reconciling or caching it', async () => {
+    const dl = makeDownloadService({
+      getFilesToSyncBatched: vi.fn(async (deviceFiles, _batch, guard) => {
+        if (guard && !guard.isCurrent()) throw new Error('Device snapshot is no longer current')
+        return deviceFiles.map((f) => ({ ...f }))
+      })
+    })
+    const jensen = makeJensen({ listFiles: vi.fn().mockResolvedValueOnce(null).mockResolvedValue([makeFileInfo('a.hda')]) })
+    const svc = new DevicePipelineService(jensen, dl)
+    await svc.connect()
+    expect(svc.getState().phase).toBe('error')
+    expect(dl.getFilesToSyncBatched).not.toHaveBeenCalled()
+    await svc.manualSync()
+    expect(jensen.listFiles).toHaveBeenCalledTimes(2)
+    expect(svc.getState().phase).toBe('idle')
+  })
+
+  it('gives a run superseded by a re-sync no absence authority', async () => {
+    let finishOldScan!: (files: FileInfo[]) => void
+    let finishNewInit!: () => void
+    const deviceInfo = { serialNumber: 'SN123', versionCode: '6.2.5', versionNumber: 327733 }
+    const jensen = makeJensen({
+      getFileCount: vi.fn().mockResolvedValue({ count: 0 }),
+      getDeviceInfo: vi.fn()
+        .mockResolvedValueOnce(deviceInfo)
+        .mockImplementationOnce(() => new Promise((resolve) => { finishNewInit = () => resolve(deviceInfo) }))
+        .mockResolvedValue(deviceInfo),
+      listFiles: vi.fn()
+        .mockImplementationOnce(() => new Promise<FileInfo[]>((resolve) => { finishOldScan = resolve }))
+        .mockResolvedValue([])
+    })
+    const guards: Array<{ complete: boolean; current: boolean }> = []
+    const dl = makeDownloadService({
+      getFilesToSyncBatched: vi.fn(async (deviceFiles, _batch, guard) => {
+        guards.push({ complete: !!guard?.complete, current: !!guard?.isCurrent() })
+        return deviceFiles.map((f) => ({ ...f }))
+      })
+    })
+    const svc = new DevicePipelineService(jensen, dl)
+    const first = svc.connect()
+    await vi.waitFor(() => expect(finishOldScan).toBeDefined())
+    const resync = svc.manualSync()
+    await vi.waitFor(() => expect(finishNewInit).toBeDefined())
+    finishOldScan([])
+    await first
+    // The superseded run stops; only the re-sync reconciles, with its own scan.
+    expect(guards).toEqual([])
+    finishNewInit()
+    await resync
+    expect(guards).toEqual([{ complete: true, current: true }])
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
   })
