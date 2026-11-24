@@ -121,10 +121,14 @@ describe('the real repository wiring', () => {
   it('bundles from source exactly the packages the vite config excludes from externalizing', () => {
     const viteConfig = readFileSync(join(here, '..', '..', 'electron.vite.config.ts'), 'utf8')
     const vitestConfig = readFileSync(join(here, '..', '..', 'vitest.config.ts'), 'utf8')
+    const tsconfig = readFileSync(join(here, '..', '..', 'tsconfig.node.json'), 'utf8')
+    const excluded = [...(viteConfig.match(/exclude: \[([^\]]*)\]/)?.[1] ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1])
+    expect([...excluded].sort()).toEqual([...SOURCE_BUNDLED_PACKAGES].sort())
+    expect(SOURCE_BUNDLED_PACKAGES).toContain('@hidock/transcription')
     for (const name of SOURCE_BUNDLED_PACKAGES) {
-      expect(viteConfig).toContain(`exclude: ['${name}']`)
-      expect(viteConfig).toContain(`'${name}': databaseSource`)
+      expect(viteConfig).toMatch(new RegExp(`'${name}': [a-z]+Source`))
       expect(vitestConfig).toContain(`'${name}':`)
+      expect(tsconfig).toContain(`"${name}":`)
     }
   })
 

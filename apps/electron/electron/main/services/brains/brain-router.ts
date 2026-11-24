@@ -301,7 +301,7 @@ export class BrainRouter {
       // candidate) rather than send the now-excluded content to this brain.
       // Returns null — the same signal the AbortError path uses — so no fallback
       // provider ever receives content after the source became ineligible.
-      if (!eligibleToGenerate(opts.shouldGenerate)) {
+      if (opts.signal?.aborted || !eligibleToGenerate(opts.shouldGenerate)) {
         console.warn(`[BrainRouter] chat aborted before ${brain.id}: source no longer eligible (fail closed)`)
         return null
       }
@@ -309,12 +309,13 @@ export class BrainRouter {
       try {
         if (!opts.signal?.aborted) { try { opts.onDispatch?.() } catch { /* telemetry only */ } }
         const answer = await brain.chat(messages, opts)
+        if (opts.signal?.aborted) return null
         if (answer != null && accept(answer)) return { brainId: brain.id, answer }
         lastFailure = { brainId: brain.id, kind: 'null' }
         if (brain.id === 'model-host-generate') { this.lastChatFailure = lastFailure; return null }
         console.warn(`[BrainRouter] ${brain.id} chat ${answer == null ? 'returned null' : 'answer rejected'}, trying next candidate`)
       } catch (e) {
-        if (e instanceof DOMException && e.name === 'AbortError') {
+        if (opts.signal?.aborted || (e instanceof DOMException && e.name === 'AbortError')) {
           console.log('[BrainRouter] chat request was cancelled')
           return null
         }
@@ -347,7 +348,7 @@ export class BrainRouter {
     const ineligible = (): (number[] | null)[] => texts.map(() => null)
 
     // Recheck before the PRIMARY provider attempt.
-    if (!eligibleToGenerate(opts.shouldGenerate)) return ineligible()
+    if (opts.signal?.aborted || !eligibleToGenerate(opts.shouldGenerate)) return ineligible()
 
     // Explicit per-task route to a NON-Gemini brain: honour it DIRECTLY — the
     // fallback chain's ordering must not silently override an explicit choice
@@ -369,7 +370,7 @@ export class BrainRouter {
     if (routed && routed !== 'gemini-api') {
       const brain = this.registry.get(routed)
       if (brain && this.isEnabled(routed) && !isBrainCoolingDown(routed) && brain.capabilities().has('embed') && brain.embed) {
-        if (!eligibleToGenerate(opts.shouldGenerate)) return ineligible()
+        if (opts.signal?.aborted || !eligibleToGenerate(opts.shouldGenerate)) return ineligible()
         try {
           return await brain.embed(texts, opts)
         } catch (e) {
@@ -381,7 +382,7 @@ export class BrainRouter {
     const primary = await this.geminiPrimary('embed', 'embed')
     if (primary?.embed) {
       // Recheck AGAIN after the geminiPrimary await, immediately before the call.
-      if (!eligibleToGenerate(opts.shouldGenerate)) return ineligible()
+      if (opts.signal?.aborted || !eligibleToGenerate(opts.shouldGenerate)) return ineligible()
       try {
         // ADV43-2 (round-45) — thread shouldGenerate INTO the adapter so it
         // re-checks before EACH internal batch (GeminiApiBrain.embed loops over
@@ -396,7 +397,7 @@ export class BrainRouter {
     // ADV42-2 (round-44) — recheck before the FALLBACK provider attempt: an
     // exclusion committed while the primary embed was pending or failing must
     // NOT reach the fallback.
-    if (!eligibleToGenerate(opts.shouldGenerate)) return ineligible()
+    if (opts.signal?.aborted || !eligibleToGenerate(opts.shouldGenerate)) return ineligible()
 
     // Iterate the capability chain (was: first-match only via
     // capabilityFallback). A candidate that THROWS (e.g. local-onnx-embed with
@@ -415,7 +416,7 @@ export class BrainRouter {
       if (id === 'gemini-api' || tried.has(id)) continue
       const brain = this.registry.get(id)
       if (!brain || !this.isEnabled(id) || isBrainCoolingDown(id) || !brain.capabilities().has('embed') || !brain.embed) continue
-      if (!eligibleToGenerate(opts.shouldGenerate)) return ineligible()
+      if (opts.signal?.aborted || !eligibleToGenerate(opts.shouldGenerate)) return ineligible()
       try {
         return await brain.embed(texts, opts)
       } catch (e) {

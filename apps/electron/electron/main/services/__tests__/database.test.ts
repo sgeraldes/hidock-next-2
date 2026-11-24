@@ -1,3 +1,4 @@
+import { getEventBus } from '../event-bus'
 // @vitest-environment node
 
 /**
@@ -356,6 +357,43 @@ describe('Database Service', () => {
     it('returns an empty array when no queue items exist', () => {
       expect(getQueueItems()).toEqual([])
     })
+    it('restores the actual running stage from processing_runs after a renderer reload', () => {
+      seedRecording('rec-stage')
+      const id = addToQueue('rec-stage')
+      updateQueueItem(id, 'processing')
+      const event = vi.fn()
+      const off = getEventBus().onDomainEvent('processing:stage-started', event)
+      createProcessingRun({ recordingId: 'rec-stage', stage: 'diarization', provider: 'pyannote' })
+      off()
+      expect(event).toHaveBeenCalledWith(expect.objectContaining({payload: expect.objectContaining({recordingId:'rec-stage',stage:'diarization'})}))
+      expect(getActionableQueueItems().find((row) => row.id === id)?.stage).toBe('diarization')
+    })
+
+    it('retries Finish processing with the queued engine; completed stage checkpoints carry the saved transcript', () => {
+      seedRecording('finish-processing')
+      const id = addToQueue('finish-processing')
+      const provider = getQueueItems('pending').find((item) => item.id === id)?.provider
+      updateQueueItem(id, 'cancelled', 'Stopped by you after the transcript was saved; summary/actions/search not updated')
+      updateQueueItem(id, 'pending')
+      const retried = getQueueItems('pending').find((item) => item.id === id)
+      expect(retried?.provider).toBe(provider)
+      expect(retried?.retry_count).toBe(1)
+    })
+
+    it('retains recent user stops until dismissed and excludes expired or superseded stops', () => {
+      for (const id of ['recent-stop', 'old-stop', 'dismissed-stop', 'superseded-stop']) seedRecording(id)
+      const recent = addToQueue('recent-stop')
+      const old = addToQueue('old-stop')
+      const dismissed = addToQueue('dismissed-stop')
+      const superseded = addToQueue('superseded-stop')
+      for (const id of [recent, old, dismissed, superseded]) updateQueueItem(id, 'cancelled', 'Stopped by you')
+      run("UPDATE transcription_queue SET completed_at = datetime('now', '-25 hours') WHERE id = ?", [old])
+      updateQueueItem(dismissed, 'cancelled')
+      addToQueue('superseded-stop')
+      const stopped = getActionableQueueItems().filter((item) => item.status === 'cancelled')
+      expect(stopped.map((item) => item.id)).toEqual([recent])
+      expect(stopped[0].error_message).toBe('Stopped by you')
+    })
 
     it('returns only actionable rows for the renderer projection', () => {
       seedRecording('rec-pending')
@@ -511,14 +549,15 @@ describe('Database Service', () => {
       expect(row?.error_message).toBe('API rate limit exceeded')
     })
 
-    it('only sets status for other values (e.g. "cancelled")', () => {
+    it('retains the cancellation reason and terminal time', () => {
       seedRecording('rec-1')
       const id = addToQueue('rec-1')
-      updateQueueItem(id, 'cancelled')
+      updateQueueItem(id, 'cancelled', 'Stopped by you')
       const row = queueRow(id)
       expect(row?.status).toBe('cancelled')
       expect(row?.started_at).toBeNull()
-      expect(row?.completed_at).toBeNull()
+      expect(row?.completed_at).not.toBeNull()
+      expect(row?.error_message).toBe('Stopped by you')
     })
   })
 

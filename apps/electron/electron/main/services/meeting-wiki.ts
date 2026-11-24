@@ -1308,15 +1308,23 @@ async function backfillMeetingWikiPass(
   let deadline = Date.now() + budgetMs
 
   const rows = queryAll<{ recording_id: string }>(
-    `SELECT recording_id FROM transcripts WHERE TRIM(COALESCE(full_text, '')) != ''`
+    `SELECT recording_id FROM transcripts`
   )
   // RE7-1 — filter candidates through the shared boundary FAIL-CLOSED: if
   // eligibility can't be established, write nothing rather than export excluded
   // transcripts to disk on boot.
   const indexedOwners = [...new Set(index.owner.values())]
-  const { eligible, failClosed } = filterEligibleRecordingIds([
-    ...rows.map((r) => r.recording_id), ...indexedOwners
-  ])
+  const candidateIds = [...rows.map((r) => r.recording_id), ...indexedOwners]
+  const eligible = new Set<string>()
+  let failClosed = false
+  // Eligibility reads late transcript columns; a whole-corpus query can read
+  // overflow pages even though it returns ids. Bound that SQL work too.
+  for (let offset = 0; offset < candidateIds.length; offset += 64) {
+    const page = filterEligibleRecordingIds(candidateIds.slice(offset, offset + 64))
+    if (page.failClosed) { failClosed = true; break }
+    for (const id of page.eligible) eligible.add(id)
+    await yieldToEventLoop()
+  }
   if (failClosed) {
     console.error('[MeetingWiki] Backfill skipped — recording eligibility unavailable (fail closed)')
     return { written: 0, unchanged: 0, failed: 0, remaining: 0, remainingMissing: 0 }

@@ -67,6 +67,8 @@ vi.mock('../recording-eligibility', () => ({
 
 let dbInstance: import('sql.js').Database | null = null
 vi.mock('../database', () => ({
+  runMany: (sql: string, rows: any[][]) => { for (const row of rows) dbInstance!.run(sql, row) },
+  acquireOrganizationCheckpointBudget: () => () => {},
   getDatabase: () => dbInstance,
   queryAll: (sql:string, params:unknown[]=[]) => { const stmt=dbInstance!.prepare(sql);try{stmt.bind(params as any);const rows: Record<string, unknown>[]=[];while(stmt.step())rows.push(stmt.getAsObject());return rows}finally{stmt.free()} },
   queryOne: (sql:string, params:unknown[]=[]) => { const stmt=dbInstance!.prepare(sql);try{stmt.bind(params as any);return stmt.step()?stmt.getAsObject():undefined}finally{stmt.free()} },
@@ -294,6 +296,15 @@ describe('VectorStore provider partitions', () => {
     ])
   })
 
+  it('keeps freshly indexed vectors compact like restored vectors', async () => {
+    const store = await freshStore()
+    await store.indexTranscript('transcript about action items and deadlines', { recordingId: 'rec-compact' })
+    const hits = await store.search('action items', 5)
+    expect(hits.length).toBeGreaterThan(0)
+    expect(hits[0].document.embedding).toBeInstanceOf(Float32Array)
+    expect(Array.from(hits[0].document.embedding)).toEqual([1, 0, 0])
+  })
+
   it('search() scores only the ACTIVE partition — switch hides, switch back restores', async () => {
     const store = await freshStore()
     await store.indexTranscript('transcript about action items and deadlines', { recordingId: 'rec-1' })
@@ -399,10 +410,12 @@ describe('VectorStore provider partitions', () => {
     const store = await freshStore()
     await store.indexTranscript('cache me please', { recordingId: 'rec-cache' })
 
-    // let scheduleCacheWrite flush (setImmediate + file write)
-    for (let i = 0; i < 100 && !existsSync(CACHE_FILE); i++) {
-      await new Promise((r) => setTimeout(r, 10))
-    }
+    // Indexing now yields: do not rely on racing initialize's empty cache write.
+    // Publish a boot cache from the persisted corpus, and await its real completion.
+    await store.waitForIdle()
+    const publisher = createStore()
+    await publisher.initialize()
+    await publisher.waitForIdle()
     expect(existsSync(CACHE_FILE)).toBe(true)
 
     const store2 = createStore()
@@ -453,9 +466,12 @@ describe('VectorStore provider partitions', () => {
   it('rejects cached dimensions that changed without changing row count or ids', async () => {
     const store = await freshStore()
     await store.indexTranscript('dimension change', { recordingId: 'rec-dims' })
-    for (let i = 0; i < 100 && !existsSync(CACHE_FILE); i++) {
-      await new Promise((r) => setTimeout(r, 10))
-    }
+    // Indexing yields, so initialize's empty cache write can race it. Publish a
+    // boot cache from the persisted corpus and wait for it to finish.
+    await store.waitForIdle()
+    const publisher = createStore()
+    await publisher.initialize()
+    await publisher.waitForIdle()
     expect(existsSync(CACHE_FILE)).toBe(true)
     dbInstance!.run('UPDATE vector_embeddings SET embed_dims = 2')
     const restored = createStore()

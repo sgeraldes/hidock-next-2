@@ -1122,15 +1122,16 @@ export class GeminiEngine implements TranscriptionEngine {
     filePath: string,
     mimeType: string,
     shouldGenerate?: () => boolean,
-    normalizedAudio?: Buffer
+    normalizedAudio?: Buffer,
+    signal?: AbortSignal
   ): Promise<{ name: string; uri: string; mimeType: string }> {
     // The disk file still has the false WAV header. Upload the payload through
     // the existing bytes path, avoiding a temporary file and its cleanup.
     if (normalizedAudio) return this.uploadAudioChunk(genAI, {
       data: normalizedAudio, mimeType, startSec: 0, durationSec: 0,
-    }, shouldGenerate)
+    }, shouldGenerate, signal)
     assertStillEligible(shouldGenerate)
-    let file = await genAI.files.upload({ file: filePath, config: { mimeType } })
+    let file = await genAI.files.upload({ file: filePath, config: { mimeType, abortSignal: signal } })
     const deadline = Date.now() + 5 * 60 * 1000
     while (file.state === FileState.PROCESSING) {
       if (Date.now() > deadline) {
@@ -1139,7 +1140,7 @@ export class GeminiEngine implements TranscriptionEngine {
       await new Promise((resolve) => setTimeout(resolve, 2000))
       assertStillEligible(shouldGenerate)
       if (!file.name) throw new Error('Gemini Files API: uploaded file has no resource name')
-      file = await genAI.files.get({ name: file.name })
+      file = await genAI.files.get({ name: file.name, config: { abortSignal: signal } })
     }
     if (file.state === FileState.FAILED) {
       throw new Error('Gemini Files API: file processing failed')
@@ -1153,13 +1154,14 @@ export class GeminiEngine implements TranscriptionEngine {
   private async uploadAudioChunk(
     genAI: GoogleGenAI,
     chunk: AudioChunk,
-    shouldGenerate?: () => boolean
+    shouldGenerate?: () => boolean,
+    signal?: AbortSignal
   ): Promise<{ name: string; uri: string; mimeType: string }> {
     assertStillEligible(shouldGenerate)
     const bytes = Uint8Array.from(chunk.data)
     let file = await genAI.files.upload({
       file: new Blob([bytes.buffer], { type: chunk.mimeType }),
-      config: { mimeType: chunk.mimeType },
+      config: { mimeType: chunk.mimeType, abortSignal: signal },
     })
     const deadline = Date.now() + 5 * 60 * 1000
     while (file.state === FileState.PROCESSING) {
@@ -1167,7 +1169,7 @@ export class GeminiEngine implements TranscriptionEngine {
       await new Promise((resolve) => setTimeout(resolve, 2000))
       assertStillEligible(shouldGenerate)
       if (!file.name) throw new Error('Gemini Files API: uploaded file has no resource name')
-      file = await genAI.files.get({ name: file.name })
+      file = await genAI.files.get({ name: file.name, config: { abortSignal: signal } })
     }
     if (file.state === FileState.FAILED) throw new Error('Gemini Files API: file processing failed')
     if (!file.name || !file.uri) {
@@ -1322,7 +1324,7 @@ export class GeminiEngine implements TranscriptionEngine {
       const uploadStartedAt = Date.now()
       trace({ phase: 'upload', status: 'started', ...common })
       try {
-        uploaded = await this.uploadAudioChunk(genAI, chunk, shouldGenerate)
+        uploaded = await this.uploadAudioChunk(genAI, chunk, shouldGenerate, options.signal)
         trace({ phase: 'upload', status: 'completed', elapsedMs: Date.now() - uploadStartedAt, ...common })
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error)
@@ -1347,6 +1349,7 @@ export class GeminiEngine implements TranscriptionEngine {
           }, {
             timeout: GeminiEngine.INTERACTION_REQUEST_TIMEOUT_MS,
             maxRetries: 0,
+            signal: options.signal,
           }).then((response) => {
             reportUsage(options.onUsage, this.model, (response as unknown as NativeTranscriptionInteraction).usage)
             return response
@@ -1445,9 +1448,10 @@ export class GeminiEngine implements TranscriptionEngine {
     filePath: string,
     mimeType: string,
     shouldGenerate?: () => boolean,
-    normalizedAudio?: Buffer
+    normalizedAudio?: Buffer,
+    signal?: AbortSignal
   ): Promise<Part> {
-    const file = await this.uploadAudioFile(genAI, filePath, mimeType, shouldGenerate, normalizedAudio)
+    const file = await this.uploadAudioFile(genAI, filePath, mimeType, shouldGenerate, normalizedAudio, signal)
     return { fileData: { mimeType: file.mimeType, fileUri: file.uri } }
   }
 
@@ -1464,7 +1468,8 @@ export class GeminiEngine implements TranscriptionEngine {
     mimeType: string,
     _durationSeconds?: number,
     shouldGenerate?: () => boolean,
-    normalizedAudio?: Buffer
+    normalizedAudio?: Buffer,
+    signal?: AbortSignal
   ): Promise<AudioChunk[]> {
     const supportsWholeRecording = /^gemini-(?:3(?:\.|$)|[4-9])/i.test(this.model)
     if (supportsWholeRecording) {
@@ -1480,7 +1485,7 @@ export class GeminiEngine implements TranscriptionEngine {
     // Single call: inline when small, Files API when large (needs a filePath).
     const part =
       audio.length > GeminiEngine.INLINE_LIMIT_BYTES && filePath
-        ? () => this.uploadViaFilesApi(genAI, filePath, mimeType, shouldGenerate, normalizedAudio)
+        ? () => this.uploadViaFilesApi(genAI, filePath, mimeType, shouldGenerate, normalizedAudio, signal)
         : { inlineData: { mimeType, data: audio.toString('base64') } }
     // startSec/durationSec unknown for a single whole-file part.
     return [{ data: audio, mimeType, startSec: 0, durationSec: 0, part } as AudioChunk & { part: Part | (() => Promise<Part>) }]
@@ -1496,7 +1501,8 @@ export class GeminiEngine implements TranscriptionEngine {
     context: string,
     shouldGenerate?: () => boolean,
     repair = false,
-    onUsage?: TranscribeOptions['onUsage']
+    onUsage?: TranscribeOptions['onUsage'],
+    signal?: AbortSignal
   ): Promise<{ segments: TranscriptSegment[]; interactionId: string }> {
     const splitRange = async (): Promise<{ segments: TranscriptSegment[]; interactionId: string }> => {
       if (!this.allowAudioRetries) throw new Error('Provider response retained: incomplete interval; automatic audio retry disabled')
@@ -1516,7 +1522,8 @@ export class GeminiEngine implements TranscriptionEngine {
         context,
         shouldGenerate,
         false,
-        onUsage
+        onUsage,
+        signal
       )
       const right = await this.transcribeInteractionRange(
         genAI,
@@ -1528,7 +1535,8 @@ export class GeminiEngine implements TranscriptionEngine {
         context,
         shouldGenerate,
         false,
-        onUsage
+        onUsage,
+        signal
       )
       return { segments: [...left.segments, ...right.segments], interactionId: right.interactionId }
     }
@@ -1575,6 +1583,7 @@ Calendar and meeting context are spelling hints only; never invent speech from t
     } as never, {
       timeout: GeminiEngine.INTERACTION_REQUEST_TIMEOUT_MS,
       maxRetries: 0,
+      signal,
     }).then((response) => {
       reportUsage(onUsage, this.model, (response as unknown as { usage?: unknown }).usage)
       return response
@@ -1621,7 +1630,8 @@ Calendar and meeting context are spelling hints only; never invent speech from t
           context,
           shouldGenerate,
           true,
-          onUsage
+          onUsage,
+          signal
         )
       }
       return splitRange()
@@ -1649,7 +1659,8 @@ Calendar and meeting context are spelling hints only; never invent speech from t
           context,
           shouldGenerate,
           true,
-          onUsage
+          onUsage,
+          signal
         )
       }
       console.warn(
@@ -1670,7 +1681,7 @@ Calendar and meeting context are spelling hints only; never invent speech from t
   ): Promise<TranscriptSegment[]> {
     const shouldGenerate = options.shouldGenerate
     let uploaded: { name: string; uri: string; mimeType: string } | undefined
-    const getUploaded = async () => uploaded ??= await this.uploadAudioFile(genAI, filePath, mimeType, shouldGenerate, normalizedAudio)
+    const getUploaded = async () => uploaded ??= await this.uploadAudioFile(genAI, filePath, mimeType, shouldGenerate, normalizedAudio, options.signal)
     const totalRanges = Math.ceil(durationSeconds / GeminiEngine.ROLLING_CHUNK_SECONDS)
     const allSegments: TranscriptSegment[] = []
     const deduper = new TurnDeduper()
@@ -1689,7 +1700,8 @@ Calendar and meeting context are spelling hints only; never invent speech from t
           options.context ?? '',
           shouldGenerate,
           false,
-          options.onUsage
+          options.onUsage,
+          options.signal
         )
         previousInteractionId = result.interactionId
         // Ranges share one conversation (previousInteractionId), so the model
@@ -1830,7 +1842,8 @@ Calendar and meeting context are spelling hints only; never invent speech from t
       mimeType,
       options.durationSeconds,
       shouldGenerate,
-      normalized.stripped ? audio : undefined
+      normalized.stripped ? audio : undefined,
+      options.signal
     )
     const defaultSpeaker = options.source === 'mic' ? 'you' : 'them'
     const contextSection = options.context ? `\n${options.context}` : ''
@@ -1902,7 +1915,7 @@ Return ONLY the schema-constrained JSON, with no markdown or additional commenta
         const stream = await genAI.models.generateContentStream({
           model: generationModel,
           contents: [{ role: 'user', parts: [part, { text: promptText }] }],
-          config,
+          config: { ...config, abortSignal: options.signal },
         })
         let out = ''
         let finishReason: string | undefined

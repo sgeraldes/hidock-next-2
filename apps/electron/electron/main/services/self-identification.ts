@@ -543,14 +543,16 @@ export function corroborateSelfIds(
 async function defaultLLM(
   prompt: string,
   systemPrompt: string,
-  shouldGenerate?: () => boolean
+  shouldGenerate?: () => boolean,
+  signal?: AbortSignal
 ): Promise<string | null> {
   return getChatLLMService().generate([{ role: 'user', content: prompt }], {
     step: 'self-id',
     systemPrompt,
     temperature: 0,
     maxTokens: 1024,
-    shouldGenerate
+    shouldGenerate,
+    ...(signal ? { signal } : {})
   })
 }
 
@@ -566,7 +568,7 @@ async function defaultLLM(
  */
 export async function extractSelfIdentifications(
   turns: SpeakerTurn[],
-  deps: { llm?: SelfIdLLM; shouldGenerate?: () => boolean; propagateFailure?: boolean } = {}
+  deps: { llm?: SelfIdLLM; shouldGenerate?: () => boolean; propagateFailure?: boolean; signal?: AbortSignal } = {}
 ): Promise<SelfIdResult> {
   const cues = findSelfIdCues(turns)
   if (cues.length === 0) {
@@ -576,7 +578,7 @@ export async function extractSelfIdentifications(
   // chat-llm path with the caller's fail-closed eligibility gate wired into the
   // BrainRouter (primary + fallback rechecks). An injected mock is used as-is.
   const llm =
-    deps.llm ?? ((prompt: string, systemPrompt: string) => defaultLLM(prompt, systemPrompt, deps.shouldGenerate))
+    deps.llm ?? ((prompt: string, systemPrompt: string) => defaultLLM(prompt, systemPrompt, deps.shouldGenerate, deps.signal))
   let raw: string | null
   try {
     raw = await llm(buildSelfIdPrompt(cues), SELF_ID_SYSTEM_PROMPT)
@@ -726,7 +728,7 @@ export interface SelfIdRunResult {
  */
 export async function runSelfIdentificationForRecording(
   recordingId: string,
-  opts: { force?: boolean; llm?: SelfIdLLM; shouldPersist?: () => boolean } = {}
+  opts: { force?: boolean; llm?: SelfIdLLM; shouldPersist?: () => boolean; signal?: AbortSignal } = {}
 ): Promise<SelfIdRunResult> {
   if (!opts.force && isScanned(recordingId)) {
     return { bound: 0, mergeSuspected: 0, skipped: true }
@@ -770,14 +772,15 @@ export async function runSelfIdentificationForRecording(
   const result = await extractSelfIdentifications(evidence, {
     // A failed/uncertain provider request is not a completed identity scan.
     propagateFailure: true,
+    signal: opts.signal,
     llm: opts.llm ?? ((prompt, systemPrompt) => providerCheckpoints(recordingId, undefined,
       () => isRecordingEligible(recordingId) && (opts.shouldPersist?.() ?? true)).execute(
         stageFingerprint('self-id-v1', prompt, systemPrompt),
-        () => defaultLLM(prompt, systemPrompt, () => isRecordingEligible(recordingId)))),
+        () => defaultLLM(prompt, systemPrompt, () => !opts.signal?.aborted && isRecordingEligible(recordingId), opts.signal))),
     // ADV42-2 (round-44) — re-verify eligibility before the PRIMARY and FALLBACK
     // provider attempts inside BrainRouter (the isRecordingEligible gate above is
     // pre-await only). Fail-closed via isRecordingEligible.
-    shouldGenerate: () => isRecordingEligible(recordingId)
+    shouldGenerate: () => !opts.signal?.aborted && isRecordingEligible(recordingId)
   })
 
   // RE8-3 (round-8) / P2 — post-await gate ADJACENT to the writes (assignSpeaker

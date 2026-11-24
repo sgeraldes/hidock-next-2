@@ -116,8 +116,8 @@ export class OllamaBrain implements AIBrain {
     if (texts.length === 0) return []
     try {
       const ollama = getOllamaService()
-      if (await ollama.isAvailable()) {
-        return await ollama.generateEmbeddings(texts, { shouldGenerate: opts.shouldGenerate })
+      if (await (opts.signal ? ollama.isAvailable(opts.signal) : ollama.isAvailable())) {
+        return await ollama.generateEmbeddings(texts, { shouldGenerate: opts.shouldGenerate, ...(opts.signal ? { signal: opts.signal } : {}) })
       }
     } catch (e) {
       console.error('[OllamaBrain] embed failed:', e)

@@ -49,8 +49,10 @@ import {
   isValueExcludedRecording,
   removeRecordingVoiceEvidence,
   runInTransaction,
-  saveRecordingEvaluation
+  saveRecordingEvaluation,
+  acquireOrganizationCheckpointBudget
 } from './database'
+import { yieldToEventLoop } from './event-loop'
 import { complete } from '@hidock/ai-providers'
 import { getEventBus } from './event-bus'
 import { getProviderConfigFromSettings } from './ai-provider-config'
@@ -947,6 +949,12 @@ export function applyDurationValueGate(): { candidates: number; marked: number }
 
 /** Rows written per transaction by recomputeAudioWarnings, with a yield between chunks. */
 export const WARNING_REFRESH_CHUNK = 200
+/**
+ * Rows read per page by the evaluation passes. Each row can pull a wide
+ * transcript's columns stored after full_text, so 200 per statement held the
+ * main thread past 100 ms on a 2,150 x 40 KB library (PR #175).
+ */
+export const EVALUATION_READ_PAGE = 25
 
 /**
  * Recompute stored audio-versus-transcript warnings from the numbers the
@@ -962,6 +970,8 @@ export const WARNING_REFRESH_CHUNK = 200
  */
 export async function recomputeAudioWarnings(recordingIds?: string[]): Promise<number> {
   if (recordingIds && recordingIds.length === 0) return 0
+  const release = acquireOrganizationCheckpointBudget()
+  try {
   // Stars, kind and context first, so the announcement below covers both.
   const evidenceChanged = await recomputeEvaluationsFromEvidence(recordingIds)
   let afterCaptureId: string | null = null
@@ -977,7 +987,7 @@ export async function recomputeAudioWarnings(recordingIds?: string[]): Promise<n
       conditions.push(`kc.source_recording_id IN (${recordingIds.map(() => '?').join(', ')})`)
       params.push(...recordingIds)
     }
-    params.push(WARNING_REFRESH_CHUNK)
+    params.push(EVALUATION_READ_PAGE)
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
     // better-sqlite3 still runs this query synchronously; LIMIT bounds each
     // main-thread read to one page before yielding for the next one.
@@ -1039,10 +1049,11 @@ export async function recomputeAudioWarnings(recordingIds?: string[]): Promise<n
     }
 
     afterCaptureId = rows[rows.length - 1].capture_id
-    if (rows.length < WARNING_REFRESH_CHUNK) break
+    if (rows.length < EVALUATION_READ_PAGE) break
     // `capture_id` is the table's primary key and warning writes do not change
     // it, so the next page remains stable even as rows are updated.
-    await new Promise<void>((resolve) => setImmediate(resolve))
+    // A page boundary always gives IPC a turn; the small page bounds the hold.
+    await yieldToEventLoop()
   }
   if (changed > 0 || evidenceChanged > 0) {
     try {
@@ -1056,6 +1067,7 @@ export async function recomputeAudioWarnings(recordingIds?: string[]): Promise<n
     }
   }
   return changed
+  } finally { release() }
 }
 
 /**
@@ -1085,7 +1097,7 @@ export async function recomputeEvaluationsFromEvidence(recordingIds?: string[]):
       conditions.push(`kc.source_recording_id IN (${recordingIds.map(() => '?').join(', ')})`)
       params.push(...recordingIds)
     }
-    params.push(WARNING_REFRESH_CHUNK)
+    params.push(EVALUATION_READ_PAGE)
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
     // The answers_json parse remains synchronous per page; LIMIT prevents the
     // full evaluation corpus from being materialized in one main-thread turn.
@@ -1170,10 +1182,11 @@ export async function recomputeEvaluationsFromEvidence(recordingIds?: string[]):
     }
 
     afterCaptureId = rows[rows.length - 1].capture_id
-    if (rows.length < WARNING_REFRESH_CHUNK) break
+    if (rows.length < EVALUATION_READ_PAGE) break
     // The primary-key cursor cannot be moved by the evaluation updates, unlike
     // OFFSET pagination where changed rows can disappear from the next page.
-    await new Promise<void>((resolve) => setImmediate(resolve))
+    // A page boundary always gives IPC a turn; the small page bounds the hold.
+    await yieldToEventLoop()
   }
   if (changed > 0) console.log(`[Evaluation] ${changed} stored evaluation(s) brought in line with the evidence`)
   await restoreHeldRatings(recordingIds)

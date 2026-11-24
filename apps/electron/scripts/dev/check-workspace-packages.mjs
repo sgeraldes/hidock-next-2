@@ -35,7 +35,7 @@ import { dirname, join, relative, resolve } from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
 
 /** Bundled from source by electron-vite; their dist is never loaded. */
-export const SOURCE_BUNDLED_PACKAGES = ['@hidock/database']
+export const SOURCE_BUNDLED_PACKAGES = ['@hidock/database', '@hidock/transcription']
 
 const CONFIG_FILES = ['package.json', 'tsconfig.json', 'tsup.config.ts']
 

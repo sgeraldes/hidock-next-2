@@ -41,6 +41,12 @@ describe('audio transcription preflight', () => {
     } finally { vi.useRealTimers(); vi.mocked(execFile).mockReset() }
   })
 
+  it('uses the decoded end time when a WebM duration header is missing', () => {
+    const report = parseAudioPreflightOutput('Duration: N/A\nout_time_us=62000000\nprogress=end\n')
+    expect(report.durationSeconds).toBe(62)
+    expect(report.nonSilentSeconds).toBe(62)
+  })
+
   it('classifies a long lobby recording containing only brief cough/noise as no_speech', () => {
     const output = `
 Duration: 00:02:54.85, start: 0.000000, bitrate: 64 kb/s

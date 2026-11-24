@@ -300,6 +300,8 @@ function analysisFailurePolicy(f: AnalysisFailure): { canAutoRetry: boolean; dis
 }
 
 interface SourceReaderProps {
+  /** A new Operations navigation request focuses this source's processing/transcript. */
+  processingFocus?: number
   recording: UnifiedRecording | null
   transcript?: Transcript
   meeting?: Meeting
@@ -341,6 +343,7 @@ interface SourceReaderProps {
 }
 
 export function SourceReader({
+  processingFocus,
   recording,
   transcript,
   meeting,
@@ -421,6 +424,18 @@ export function SourceReader({
   // right now) is derived below and lives only as long as this component does.
   const persistedSectionModes = useLibraryStore((s) => s.readerSectionModes)
   const setReaderSectionMode = useLibraryStore((s) => s.setReaderSectionMode)
+  useEffect(() => {
+    if (!processingFocus) return
+    useLibraryStore.getState().restoreReaderSection()
+    setReaderSectionMode('transcript', 'expanded')
+    const timer = setTimeout(() => {
+      // The reader root is the find bar's root ([data-reader-find]); only one reader is mounted.
+      const root = document.querySelector('[data-reader-find]')
+      const target = root?.querySelector('[data-testid="reader-section-transcript"]') ?? root?.querySelector('[data-processing-status]')
+      target?.scrollIntoView?.({ block: 'start' })
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [processingFocus, recording?.id, transcript, setReaderSectionMode])
   // A store rehydrated by an older build, or a test that calls setState with a
   // partial map, can be missing a section. `migrate` covers the first case; this
   // covers the second, and costs nothing.
@@ -1555,7 +1570,7 @@ export function SourceReader({
           )}
         </div>
         {/* Curated meta strip: date · duration · location · status */}
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 pb-2 pt-1 text-xs text-muted-foreground">
+        <div data-processing-status className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 pb-2 pt-1 text-xs text-muted-foreground">
           <span className="inline-flex items-center gap-1">
             <Calendar className="h-3.5 w-3.5" aria-hidden="true" />
             {formatSmartDate(recording.dateRecorded, { fallback: 'Unknown' })}

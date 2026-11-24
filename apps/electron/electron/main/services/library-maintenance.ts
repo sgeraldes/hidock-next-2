@@ -22,7 +22,7 @@ import { scanDeviceMp3 } from './audio-profile'
 import { recomputeAudioWarnings } from './value-classification'
 import { getConnectorHost } from './connectors'
 import { getConnectorStore } from './connectors/connector-store'
-import { autoLinkRecordingsToMeetings } from './org-reconciler'
+import { autoLinkRecordingsToMeetingsYielding } from './org-reconciler'
 import { jevMeetingMatchDeps, listMeetingCandidates, toMatchCandidates, toMatchContext } from './meeting-candidate-list'
 import { matchMeetingWithJev, isClearMatch, pickMatchCandidates, matchRequestKey, meetingCopyKey, MEETING_MATCH_VERSION } from './jev-meeting-match'
 import { isClassifierAuthError } from './value-backfill'
@@ -246,7 +246,7 @@ export async function relinkRecordingsToMeetings(): Promise<RelinkResult> {
     }
   }
 
-  result.linked = autoLinkRecordingsToMeetings()
+  result.linked = await autoLinkRecordingsToMeetingsYielding()
   result.unlinkedAfter = unlinkedCount()
   return result
 }

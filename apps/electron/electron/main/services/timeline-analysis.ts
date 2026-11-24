@@ -498,11 +498,13 @@ export function buildSentimentWindows(
 export type WindowScorer = (
   windows: SentimentWindow[],
   shouldGenerate?: () => boolean,
-  recordingId?: string
+  recordingId?: string,
+  signal?: AbortSignal
 ) => Promise<Map<number, number>>
 
 export interface SentimentOptions {
   recordingId?: string
+  signal?: AbortSignal
   targetWindowSec?: number
   /** Inject a scorer (tests). Defaults to the Gemini scorer. */
   scoreWindows?: WindowScorer
@@ -539,7 +541,7 @@ export async function deriveSentimentSegments(
   try {
     // ADV43-3 (round-45) — forward the fail-closed gate so the production scorer
     // re-checks eligibility after its setup await, immediately before the Gemini call.
-    scores = await scorer(windows, opts.shouldGenerate, opts.recordingId)
+    scores = await (opts.signal ? scorer(windows, opts.shouldGenerate, opts.recordingId, opts.signal) : scorer(windows, opts.shouldGenerate, opts.recordingId))
   } catch (e) {
     console.warn('[Timeline] sentiment scoring failed:', e instanceof Error ? e.message : e)
     opts.onError?.(e)
@@ -560,7 +562,7 @@ export async function deriveSentimentSegments(
  * empty map when Gemini is not configured, so sentiment is simply omitted rather
  * than failing the whole analysis.
  */
-export const geminiWindowScorer: WindowScorer = async (windows, shouldGenerate, recordingId) => {
+export const geminiWindowScorer: WindowScorer = async (windows, shouldGenerate, recordingId, signal) => {
   // Lazy import so this leaf module doesn't pull in config.ts (which touches the
   // Electron `app` at load) — keeps the pure pieces testable under plain node.
   const { getConfig } = await import('./config')
@@ -599,10 +601,11 @@ ${windowBlock}`
   // One ledger row for the call; what it throws still reaches the caller, which omits the sentiment series.
   const startedAt = Date.now()
   const request = () => withCallRecord({ step: 'timeline', recordingId, route: 'direct:gemini-sdk' }, async () => {
-    const response = await model.generateContent({
+    const body = {
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
       generationConfig: { maxOutputTokens: 4096, thinkingConfig: { thinkingBudget: 0 } } as never
-    })
+    }
+    const response = signal ? await model.generateContent(body, { signal }) : await model.generateContent(body)
     reportGeminiCall(modelId, response.response.usageMetadata, startedAt)
     recordGeminiUsage(modelId, response.response.usageMetadata)
     let text = ''
@@ -977,7 +980,7 @@ export async function analyzeTimeline(
     // the Gemini call, so an exclusion committed during the scorer's setup aborts
     // the provider call (no transcript windows sent). Set AFTER the spread so it
     // is not overridden by a caller-supplied value.
-    shouldGenerate: () => isRecordingEligible(id),
+    shouldGenerate: () => !sentimentOpts?.signal?.aborted && isRecordingEligible(id),
     recordingId: id,
     onError: (err) => {
       analysisError = classifyAnalysisError(err)

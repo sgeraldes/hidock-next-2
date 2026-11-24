@@ -29,6 +29,8 @@ export interface TranscriptionUsageEvent {
 
 export interface TranscribeOptions {
   source: 'mic' | 'system'
+  /** Aborts the active SDK request when the owner stops this queue item. */
+  signal?: AbortSignal
   language?: string
   timeOffset?: number
   vocabulary?: string[]

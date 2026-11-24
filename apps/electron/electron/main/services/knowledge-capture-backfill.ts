@@ -19,7 +19,8 @@
  */
 
 import { randomUUID } from 'crypto'
-import { queryAll, queryOne, run, runInTransaction } from './database'
+import { queryAll, queryOne, run, runInTransaction, acquireOrganizationCheckpointBudget } from './database'
+import { mainThreadBudget } from './event-loop'
 
 interface CaptureSourceRow {
   recording_id: string
@@ -198,6 +199,35 @@ export function backfillKnowledgeCaptures(): BackfillResult {
     console.log(`[KnowledgeCaptureBackfill] Created ${created} capture(s) (${existing} already present)`)
   }
   return { created, existing }
+}
+
+/** Boot variant: fresh per-recording reads and committed writes between timer yields. */
+export async function backfillKnowledgeCapturesYielding(): Promise<BackfillResult> {
+  const release = acquireOrganizationCheckpointBudget()
+  try {
+    const ids = queryAll<{ recording_id: string }>('SELECT recording_id FROM transcripts')
+    const checkpoint = mainThreadBudget('KnowledgeCaptureBackfill')
+    let created = 0
+    let existing = 0
+    for (const { recording_id } of ids) {
+      await checkpoint()
+      runInTransaction(() => {
+        if (queryOne('SELECT id FROM knowledge_captures WHERE source_recording_id = ?', [recording_id])) {
+          existing++
+        } else {
+          const row = queryOne<CaptureSourceRow>(`${CAPTURE_SOURCE_SELECT} AND t.recording_id = ?`, [recording_id])
+          if (row) { createCaptureFromSource(row); created++ }
+        }
+      })
+    }
+    for (const { id } of queryAll<{ id: string }>(`SELECT id FROM recordings WHERE deleted_at IS NULL AND (status = 'no_speech' OR transcription_status = 'no_speech')`)) {
+      await checkpoint()
+      const existed = !!queryOne('SELECT id FROM knowledge_captures WHERE source_recording_id = ?', [id])
+      if (ensureNoSpeechKnowledgeCapture(id)) { if (existed) existing++; else created++ }
+    }
+    console.log(`[KnowledgeCaptureBackfill] Created ${created} capture(s) (${existing} already present)`)
+    return { created, existing }
+  } finally { release() }
 }
 
 /** All transcript source rows eligible for a capture. */

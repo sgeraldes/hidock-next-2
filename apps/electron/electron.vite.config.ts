@@ -13,12 +13,18 @@ import react from '@vitejs/plugin-react'
 // scripts/dev/check-workspace-packages.mjs refuses to start or build when one
 // of those dists is older than its source.
 const databaseSource = resolve(__dirname, '../../packages/database/src/index.ts')
+// @hidock/transcription is bundled from source too: the Gemini engine's
+// cancellation (AbortSignal through uploads and requests) lives there.
+const transcriptionSource = resolve(__dirname, '../../packages/transcription/src/index.ts')
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin({ exclude: ['@hidock/database'] })],
+    plugins: [externalizeDepsPlugin({ exclude: ['@hidock/database', '@hidock/transcription'] })],
     resolve: {
-      alias: { '@hidock/database': databaseSource }
+      alias: {
+        '@hidock/database': databaseSource,
+        '@hidock/transcription': transcriptionSource
+      }
     },
     build: {
       rollupOptions: {

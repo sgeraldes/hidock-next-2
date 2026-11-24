@@ -11,6 +11,8 @@ import { UserMenu } from '../UserMenu'
 import { useDownloadQueue, useUnifiedRecordings } from '@/store/useAppStore'
 import { useTranscriptionStats, useTranscriptionStore } from '@/store/features/useTranscriptionStore'
 import { useUIStore } from '@/store/ui/useUIStore'
+const navigate = vi.hoisted(() => vi.fn())
+vi.mock('react-router-dom', () => ({ useNavigate: () => navigate }))
 
 // Radix Popover positioning uses ResizeObserver, which jsdom lacks.
 class RO {
@@ -37,10 +39,14 @@ vi.mock('@/hooks/useTheme', () => ({
   useTheme: () => ({ theme: 'dark', resolvedTheme: 'dark', setTheme: vi.fn(), toggleTheme: vi.fn() })
 }))
 
+const mockStop = vi.fn()
+const mockRetry = vi.fn()
+const mockUp = vi.fn()
+const mockDown = vi.fn()
 const mockCancelDownload = vi.fn()
 const mockCancelAllDownloads = vi.fn()
 vi.mock('@/hooks/useOperations', () => ({
-  useOperations: () => ({ cancelDownload: mockCancelDownload, cancelAllDownloads: mockCancelAllDownloads })
+  useOperations: () => ({ cancelDownload: mockCancelDownload, cancelAllDownloads: mockCancelAllDownloads, cancelTranscription: mockStop })
 }))
 
 const mockOpenOverlay = vi.fn()
@@ -61,7 +67,7 @@ function setup({
     { id: 'r2', filename: '2026-07-10-notes.wav', title: 'Notes' }
   ] as any)
   vi.mocked(useTranscriptionStats).mockReturnValue(stats as any)
-  vi.mocked(useTranscriptionStore).mockImplementation((selector: any) => selector({ queue }))
+  vi.mocked(useTranscriptionStore).mockImplementation((selector: any) => selector({ queue, retry: mockRetry, prioritize: mockUp, deprioritize: mockDown }))
   vi.mocked(useUIStore).mockImplementation((selector: any) => selector({ openOperationsOverlay: mockOpenOverlay }))
 }
 
@@ -80,6 +86,23 @@ function txItem(over: Record<string, any> = {}) {
 }
 
 describe('NotificationsButton', () => {
+  it('offers live progress, Stop, source navigation and queued ordering', () => {
+    setup({ queue: new Map([['t1', txItem({stage:'voices'})], ['t2', txItem({id:'t2',recordingId:'r2',status:'pending'})]]), stats: {total:2,completed:0,failed:0,processing:1,pending:1,aggregateProgress:20} })
+    render(<NotificationsButton />)
+    fireEvent.click(screen.getByRole('button', {name:/Notifications:/}))
+    expect(screen.getByText(/Separating speakers/)).toBeVisible()
+    fireEvent.click(screen.getByRole('button', {name:'Stop'}))
+    expect(mockStop).toHaveBeenCalledWith('r1')
+    fireEvent.click(screen.getByRole('button', {name:'Move up'}))
+    expect(mockUp).toHaveBeenCalledWith('t2')
+    fireEvent.click(screen.getByRole('button', {name:'Move down'}))
+    expect(mockDown).toHaveBeenCalledWith('t2')
+    fireEvent.click(screen.getByRole('button', {name:'Remove from queue'}))
+    expect(mockStop).toHaveBeenCalledWith('r2')
+    fireEvent.click(screen.getAllByRole('button', {name:'View source'})[0])
+    expect(navigate).toHaveBeenCalledWith('/library', {state:{selectedId:'r1',focusProcessing:true}})
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     ;(window as any).electronAPI = {
@@ -260,3 +283,14 @@ describe('NotificationsButton', () => {
     expect(screen.getByText('No recent activity')).toBeInTheDocument()
   })
 })
+
+ it('shows a stopped-only notification with its saved-result reason and Finish processing', async () => {
+   setup({ queue: new Map([['t1', txItem({ status: 'cancelled', error: 'Stopped by you after the transcript was saved; summary/actions/search not updated' })]]) })
+   render(<NotificationsButton />)
+   fireEvent.click(screen.getByRole('button', { name: /Notifications/ }))
+   expect(await screen.findByText('Stopped by you after the transcript was saved; summary/actions/search not updated')).toBeVisible()
+   expect(screen.getByText('Stopped', {exact:true})).toBeVisible()
+   fireEvent.click(screen.getByRole('button', { name: 'Finish processing' }))
+   expect(mockRetry).toHaveBeenCalled()
+   expect(screen.getByRole('button', { name: 'Dismiss' })).toBeVisible()
+ })

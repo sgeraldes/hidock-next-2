@@ -123,6 +123,7 @@ export interface GenerateOptions {
  * gate (legacy behaviour).
  */
 export interface EmbedOptions {
+  signal?: AbortSignal
   expectedProviderId?: string | null
   shouldGenerate?: () => boolean
   /**

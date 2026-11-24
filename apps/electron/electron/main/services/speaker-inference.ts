@@ -262,6 +262,7 @@ function ownerOrgNames(limit = 15): string[] {
 export async function runSpeakerInference(
   recordingId: string,
   opts: {
+    signal?: AbortSignal
     shouldPersist?: () => boolean
     /** Tests: which Jev key a job gets, and the Jev call. */
     jevKey?: (job: 'speakerNames') => string | null
@@ -383,7 +384,8 @@ export async function runSpeakerInference(
     const res = await providerCheckpoints(recordingId, undefined,
       () => isRecordingEligible(recordingId) && (opts.shouldPersist?.() ?? true)).execute(
       stageFingerprint('speaker-names-v1', request), () =>
-        withCallRecord({ step: 'speaker-names', route: 'jev', recordingId }, () => harness.ask(request.state, request.questions)))
+        withCallRecord({ step: 'speaker-names', route: 'jev', recordingId }, () =>
+          opts.signal ? harness.ask(request.state, request.questions, { signal: opts.signal }) : harness.ask(request.state, request.questions)))
     if (!isRecordingEligible(recordingId) || (opts.shouldPersist && !opts.shouldPersist())) {
       return { proposed: 0, bound: 0, skipped: true }
     }
@@ -411,8 +413,9 @@ export async function runSpeakerInference(
       () => isRecordingEligible(recordingId) && (opts.shouldPersist?.() ?? true)).execute(
       stageFingerprint('speaker-roster-v1', prompt), () => getChatLLMService().generateText(prompt, 'You answer with a JSON array only. No prose.', {
       step: 'speaker-roster',
+      ...(opts.signal ? { signal: opts.signal } : {}),
       recordingId,
-      shouldGenerate: () => isRecordingEligible(recordingId)
+      shouldGenerate: () => !opts.signal?.aborted && isRecordingEligible(recordingId)
     }))
     if (!raw) return { proposed: 0, bound: 0, skipped: true }
 

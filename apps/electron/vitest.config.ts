@@ -1,5 +1,8 @@
 import { defineConfig, configDefaults } from 'vitest/config'
 import { resolve } from 'path'
+import { fileURLToPath } from 'url'
+
+const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
 export default defineConfig({
   // Worktrees may share node_modules via junctions; keep runner caches local.
@@ -19,6 +22,8 @@ export default defineConfig({
       '@lib': resolve(__dirname, 'src/lib'),
       '@store': resolve(__dirname, 'src/store'),
       '@types': resolve(__dirname, 'src/types'),
+      '@hidock/transcription': resolve(__dirname, '../../packages/transcription/src/index.ts'),
+      '@google/genai': resolve(__dirname, 'node_modules/@google/genai/dist/node/index.mjs'),
       // Tests run the engine source the build bundles (electron.vite.config.ts),
       // never a dist that may be older than it.
       '@hidock/database': resolve(__dirname, '../../packages/database/src/index.ts')

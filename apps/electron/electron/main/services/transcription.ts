@@ -1,3 +1,4 @@
+import { getEventBus } from './event-bus'
 import { recoverRemoteJobs, cancelRecoveredRemote, stopRemoteRecovery } from './remote-job-recovery'
 import { createRemoteRecoverySupervisor } from './remote-recovery-supervisor'
 import { resolveAudioRoute } from './audio-execution-route'
@@ -6,6 +7,7 @@ import { engineRouteInput, engineUnavailableReason } from './transcription-engin
 import { classifyTranscriptionError } from './transcription-errors'
 import { brainCooldown, noteBrainFailure } from './brains/brain-cooldown'
 import { summaryRetrySettings } from '../../../src/shared/summary-retry'
+import { SAVED_STOP_REASON } from '../../../src/shared/transcription-stop'
 import { getTranscriptionAttempts, recordTranscriptionAttempt } from './transcription-attempts-store'
 import { engineOptionLabel, type EngineAvailability } from '../../../src/shared/transcription-engines'
 import { checkModelHost } from './model-host-client'
@@ -509,10 +511,33 @@ export function orderPendingForProcessing<T extends OrderableQueueItem>(items: T
  * Recordings cancelled while a lane was transcribing them. Every continuation
  * gate of the pipeline (voice step, provider calls, the check before analysis,
  * analysis) asks `stillWanted`, so a cancelled job stops at the next gate and
- * persists nothing. Only live jobs are added, and a job's entries are cleared
+ * saves nothing before the transcript cutoff and skips remaining derived steps
+ * after it. Only live jobs are added, and a job's entries are cleared
  * when it ends, so cancelling never blocks a later request for the same recording.
  */
 const cancelledRecordings = new Set<string>()
+const activeAbortControllers = new Map<string, AbortController>()
+// Attempt-local cutoff, never inferred from a previous corrective transcript.
+const savedTranscripts = new Set<string>()
+function stopReason(recordingId: string): string {
+  return idsFor(recordingId).some((id) => savedTranscripts.has(id)) ? SAVED_STOP_REASON : 'Stopped by you'
+}
+/**
+ * A stopped or rejected run leaves an idle recording. A transcript saved before
+ * the stop (this run's or an earlier one) keeps the recording 'complete'.
+ */
+function restoreStoppedStatus(recordingId: string): void {
+  recordingId = getRecordingById(recordingId)?.id ?? resolveRecordingId(recordingId)?.id ?? recordingId
+  const recording = getRecordingById(recordingId)
+  const transcriptionWasActive = recording?.transcription_status === 'pending' || recording?.transcription_status === 'processing'
+  const legacyWasActive = recording?.status === 'pending' || recording?.status === 'processing'
+  if (!transcriptionWasActive && !legacyWasActive) return
+  const restoredStatus = queryOne<{ id: string }>('SELECT id FROM transcripts WHERE recording_id = ? LIMIT 1', [recordingId])
+    ? 'complete'
+    : 'none'
+  if (transcriptionWasActive) updateRecordingTranscriptionStatus(recordingId, restoredStatus)
+  if (legacyWasActive) updateRecordingStatus(recordingId, restoredStatus)
+}
 // Pin the engine for a user-requested CPU restart, even if Settings changes mid-stage.
 const ownedTranscriptionProviders = new Map<string, string>()
 
@@ -541,10 +566,15 @@ export function cancelTranscription(recordingId: string): void {
 
 function cancelCurrentTranscription(recordingId: string): void {
   cancelIfRunning(recordingId)
-  removeFromQueueByRecordingId(recordingId)
+  const ids = new Set(idsFor(recordingId))
+  const running = getQueueItems('processing').filter((item) => ids.has(item.recording_id))
+  for (const item of running) updateQueueItem(item.id, 'cancelled', stopReason(item.recording_id))
+  for (const id of ids) activeAbortControllers.get(id)?.abort(new Error('Stopped by you'))
+  // Queued Remove keeps its existing semantics; running Stop keeps a durable outcome.
+  if (running.length === 0) removeFromQueueByRecordingId(recordingId)
   clearQueueHints(recordingId)
-  updateRecordingTranscriptionStatus(recordingId, 'none')
-  notifyRenderer('transcription:cancelled', { recordingId })
+  restoreStoppedStatus(recordingId)
+  notifyRenderer('transcription:cancelled', { recordingId, reason: running.length ? stopReason(recordingId) : undefined })
   emitQueueState()
 }
 
@@ -576,7 +606,9 @@ export function cancelAllTranscriptions(): number {
   cancelLocalStageRestart()
   cancelRequested = true
   for (const id of getActiveTranscriptions()) cancelledRecordings.add(id)
-  const count = cancelPendingTranscriptions()
+  const running = getQueueItems('processing')
+  for (const item of running) cancelTranscription(item.recording_id)
+  const count = cancelPendingTranscriptions() + running.length
   userPriorityIds.clear()
   queuePriorityRank.clear()
   notifyRenderer('transcription:all-cancelled', { count })
@@ -629,7 +661,10 @@ async function runQueueItem(
   onStage?: (stage: string) => void
 ): Promise<void> {
   const ids = idsFor(item.recording_id)
+  const controller = new AbortController()
+  for (const id of ids) activeAbortControllers.set(id, controller)
   for (const id of ids) addActiveTranscription(id)
+  let unsubscribeStage: (() => void) | undefined
   try {
     updateQueueItem(item.id, 'processing')
     updateQueueProgress(item.id, 0) // spec-014: reset progress
@@ -642,6 +677,7 @@ async function runQueueItem(
     // 90% solely because wall-clock time passed, even while Gemini was stuck
     // retrying the first interval; that made a failed job look nearly done.
     const progressCallback = (stage: string, progress: number) => {
+      if (controller.signal.aborted) return
       onStage?.(stage)
       updateQueueProgress(item.id, progress)
       notifyRenderer('transcription:progress', {
@@ -652,29 +688,31 @@ async function runQueueItem(
       })
     }
 
-    const outcome = await transcribeThroughEngineChain(item.recording_id, progressCallback, item.provider, item.owner_requested === true, item.id)
+    let lastProgress = 0
+    unsubscribeStage = getEventBus().onDomainEvent('processing:stage-started', (event) => {
+      if (ids.includes(event.payload.recordingId)) progressCallback(event.payload.stage, lastProgress)
+    })
+    const outcome = await transcribeThroughEngineChain(item.recording_id, (stage, progress) => {
+      lastProgress = progress
+      progressCallback(stage, progress)
+    }, item.provider, item.owner_requested === true, item.id)
 
+    // The outcome decides, not the signal: a Stop that lands after the last
+    // step finished (the 100% event) leaves a completed item completed.
     if (outcome.status === 'cancelled') {
       // INC-2 — the recording was trashed / marked personal / hard-purged
       // mid-run and NOTHING was persisted. Do NOT claim completion: that
       // would overwrite the soft-delete's 'cancelled' tombstone with
       // 'completed', jump progress to 100, and emit transcription:completed
       // for content that does not exist. Leave it cancelled.
-      updateQueueItem(item.id, 'cancelled')
+      const stopped = controller.signal.aborted
+      updateQueueItem(item.id, 'cancelled', stopped ? stopReason(item.recording_id) : 'Source no longer eligible')
       // Enqueue already projected pending. A gate rejection must leave an idle
       // recording, while preserving any transcript or terminal status saved
       // before a later cancellation gate.
-      const cancelledRecording = getRecordingById(item.recording_id)
-      const transcriptionWasActive = cancelledRecording?.transcription_status === 'pending' || cancelledRecording?.transcription_status === 'processing'
-      const legacyWasActive = cancelledRecording?.status === 'pending' || cancelledRecording?.status === 'processing'
-      if (transcriptionWasActive || legacyWasActive) {
-        const restoredStatus = queryOne<{ id: string }>('SELECT id FROM transcripts WHERE recording_id = ? LIMIT 1', [item.recording_id])
-          ? 'complete'
-          : 'none'
-        if (transcriptionWasActive) updateRecordingTranscriptionStatus(item.recording_id, restoredStatus)
-        if (legacyWasActive) {
-          updateRecordingStatus(item.recording_id, restoredStatus)
-        }
+      restoreStoppedStatus(item.recording_id)
+      if (stopped) {
+        notifyRenderer('transcription:cancelled', { recordingId: item.recording_id, reason: stopReason(item.recording_id) })
       }
       clearQueueHints(item.recording_id)
       console.log(`[Transcription] ${item.recording_id} cancelled mid-run (ineligible) — queue item marked cancelled`)
@@ -711,10 +749,11 @@ async function runQueueItem(
     if (ids.some((id) => cancelledRecordings.has(id))) {
       // Cancelled by the user while running: the step it was in threw because
       // its gate said stop. That is a cancellation, not a failure.
-      updateQueueItem(item.id, 'cancelled')
-      updateRecordingTranscriptionStatus(item.recording_id, 'none')
+      updateQueueItem(item.id, 'cancelled', stopReason(item.recording_id))
+      restoreStoppedStatus(item.recording_id)
+      notifyRenderer('transcription:cancelled', { recordingId: item.recording_id, reason: stopReason(item.recording_id) })
       clearQueueHints(item.recording_id)
-      console.log(`[Transcription] ${item.recording_id} stopped after cancel; nothing saved`)
+      console.log(`[Transcription] ${item.recording_id} stopped after cancel`)
       return
     }
     const errorMessage = error instanceof Error ? error.message : 'Unknown error'
@@ -742,9 +781,12 @@ async function runQueueItem(
       console.log(`Recording ${item.recording_id} failed after ${retryCount} retries (max: ${maxRetries})`)
     }
   } finally {
+    unsubscribeStage?.()
     for (const id of ids) {
       removeActiveTranscription(id)
       cancelledRecordings.delete(id)
+      activeAbortControllers.delete(id)
+      savedTranscripts.delete(id)
     }
   }
 }
@@ -1356,7 +1398,8 @@ Only include detections with confidence >= 0.6.`
           brain.generate([{ role: 'user', content: prompt }], {
             maxTokens: 8192,
             json: true,
-            disableThinking: true
+            disableThinking: true,
+            signal: metadata.recordingId ? activeAbortControllers.get(metadata.recordingId)?.signal : undefined
           })
       )
     const responseText = (metadata.recordingId
@@ -1496,7 +1539,9 @@ async function transcribeWithGemini(
   durationSeconds?: number,
   recordingId?: string,
   /** Where the local VAD heard sound in this file; only those stretches are sent. */
-  speechIntervals?: ReadonlyArray<{ start: number; end: number }>
+  speechIntervals?: ReadonlyArray<{ start: number; end: number }>,
+  /** Stop aborts the in-flight upload or request instead of waiting for it. */
+  signal?: AbortSignal
 ): Promise<RawTranscriptionResult> {
   const config = getConfig()
   if (!resolveGeminiApiKey()) {
@@ -1543,16 +1588,22 @@ async function transcribeWithGemini(
     filePath,
     // ADV43-1 (round-45) — re-checked inside the engine before each provider call.
     shouldGenerate,
+    signal,
     // Real per-chunk progress. Recordings above the safe whole-output duration
     // are transcribed in inline-safe slices; ordinary meetings remain one call.
     onProgress: (done: number, total: number) => {
       progressCallback?.('transcribing', Math.min(45, 20 + Math.round((done / total) * 25)))
     },
-    onTrace: (event: TranscriptionTraceEvent) => providerTimeline.push(event),
+    onTrace: (event: TranscriptionTraceEvent) => {
+      providerTimeline.push(event)
+      if (event.phase === 'provider-transcription' && event.status === 'started') {
+        progressCallback?.(`transcribing_part_${event.chunkIndex}_of_${event.chunkCount}`, 20)
+      }
+    },
     // Every response is billed, the discarded ones too; the collector opened by
     // the transcription stage takes them (a call outside a stage drops them).
     onUsage: (event) => recordGeminiUsage(event.model, event.usage)
-  } as Parameters<typeof engine.transcribe>[1] & { filePath: string })) {
+  } as Parameters<typeof engine.transcribe>[1] & { filePath: string; signal?: AbortSignal })) {
     const text = segment.text?.trim()
     if (text) {
       segments.push({
@@ -2204,7 +2255,7 @@ async function analyzeWithGeminiSdk(
           const result = await model.generateContent({
             contents: [{ role: 'user', parts: [{ text: analysisPrompt }] }],
             generationConfig: attempt.generationConfig as never
-          })
+          }, { signal: recordingId ? activeAbortControllers.get(recordingId)?.signal : undefined })
           reportGeminiCall(analysisModelId, result.response.usageMetadata, startedAt)
           // Persist plain response data before parsing. SDK response methods
           // cannot be serialized and must not be the checkpoint contract.
@@ -2381,7 +2432,7 @@ export async function reanalyzeFailedTranscripts(
   // lands mid-analysis.
   let rows: Array<{ recording_id: string; full_text: string }>
   try {
-    rows = getFailedTranscriptsForReanalysis(limit, query)
+    rows = await getFailedTranscriptsForReanalysis(limit, query)
   } catch (e) {
     console.error('[Reanalyze] eligibility query failed — aborting run (fail closed, zero provider calls):', e)
     return 0
@@ -2831,6 +2882,7 @@ function resolveMeetingFromAnalysis(input: {
 }
 
 async function retireNoSpeechGeneratedContent(recordingId: string): Promise<void> {
+  if (cancelledRecordings.has(recordingId)) throw new TranscriptionCancelledError('Stopped by you')
   // Remove graph provenance while the old transcript row still exists, so the
   // graph cleanup can resolve every transcript/source edge. A cleanup failure
   // is visible in logs but cannot resurrect a disproven transcript in the UI.
@@ -3066,6 +3118,7 @@ async function transcribeRecordingStages(
     // when no stretch of sound reaches 1.5 s. Rec02 of 21-apr (3.74 s of
     // crackle in 13 minutes) got a 2,554-word invented transcript that way.
     const audioSkip = await audioProfileSkip(recording)
+    if (cancelledRecordings.has(recordingId)) throw new TranscriptionCancelledError('Stopped by you')
     if (audioSkip) {
       const profileRun = createProcessingRun({
         recordingId,
@@ -3178,6 +3231,7 @@ Meeting ${i + 1}: "${m.subject}"
   let audioPreflight: AudioPreflightReport
   let channelPreflight: AudioPreflightReport[] = []
   try {
+    progressCallback?.('vad', 1)
     audioPreflight = await checkpointStage(recordingId, 'vad', fingerprint,
       async () => {
         if (!separateChannels) return analyzeAudioPreflight(normalizedMonoPath, audioLayout.durationSeconds, shouldContinueAudio)
@@ -3374,7 +3428,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
       : transcriptionProvider === 'local-asr'
         ? await transcribeWithLocalAsr(path, meetingContext, progressCallback, shouldContinueAudio)
         : await transcriptionUsage.run(() => transcribeWithGemini(path, meetingContext, progressCallback,
-            shouldContinueAudio, audioLayout.durationSeconds, recordingId, speech))
+            shouldContinueAudio, audioLayout.durationSeconds, recordingId, speech, activeAbortControllers.get(recordingId)?.signal))
   // The VAD of one source channel, from this run or its checkpoint: the engine
   // sends only the stretches with voice and judges coverage against them.
   const channelSpeech = (channelIndex: number) => (channelPreflight[channelIndex] ??
@@ -3538,6 +3592,8 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     diarization_quality: JSON.stringify(diarizationQuality)
   })
   notifyRenderer('transcription:textAvailable', { recordingId })
+  // From here on Stop keeps this transcript and offers Finish processing.
+  savedTranscripts.add(recordingId)
   // Persisting may make the recording ineligible through its integrity verdict.
   if (!stillWanted(recordingId, ownerRequested)) return { status: 'cancelled' }
   const hasGeminiAnalysis = !!resolveGeminiApiKey() && !transcriptUntrusted
@@ -3936,7 +3992,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
       // P2 (round-3) — also thread the gate INTO analyzeTimeline so its own
       // internal sentiment-LLM await is covered (re-checked before its UPDATE).
       const timeline = await timelineUsage.run(() =>
-        analyzeTimeline(recordingId, undefined, undefined, () => isRecordingProcessable(recordingId))
+        analyzeTimeline(recordingId, undefined, { signal: activeAbortControllers.get(recordingId)?.signal }, () => isRecordingProcessable(recordingId))
       )
       console.log(
         `[Timeline] Recording ${recordingId}: ${timeline.sentimentSegments.length} sentiment segment(s), ` +
@@ -4032,6 +4088,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
       // (its contacts/speaker-bindings/mention-resolutions/scan-marker writes
       // are all re-checked after the await).
       const selfId = await runSelfIdentificationForRecording(recordingId, {
+        signal: activeAbortControllers.get(recordingId)?.signal,
         shouldPersist: () => isRecordingProcessable(recordingId)
       })
       identityBound += selfId.bound
@@ -4055,6 +4112,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   try {
     if (stillProcessable() && identityAllowed && !transcriptUntrusted) {
       const inferred = await runSpeakerInference(recordingId, {
+        signal: activeAbortControllers.get(recordingId)?.signal,
         shouldPersist: () => isRecordingProcessable(recordingId)
       })
       identityBound += inferred.bound
@@ -4189,6 +4247,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
       }
 
       const indexedCount = await vectorStore.indexTranscript(fullText, {
+        signal: activeAbortControllers.get(recordingId)?.signal,
         meetingId: meetingId || undefined,
         recordingId,
         timestamp: recording.created_at,

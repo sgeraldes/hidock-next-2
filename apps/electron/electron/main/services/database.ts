@@ -1,5 +1,6 @@
 import { MIN_MEETING_CONFIDENCE } from '../../../src/shared/meeting-confidence'
 import Database from 'better-sqlite3'
+import { mainThreadBudget, yieldToEventLoop } from './event-loop'
 import { closeDatabaseBackupWorker as closeSqliteBackupWorker, runDatabaseBackup } from './sqlite-backup-host'
 import { resolveDeviceRecording } from '../../../src/shared/recording-identity'
 import { RECORDING_AUDIO_EXTENSIONS } from '../../../src/shared/audio-extensions'
@@ -5359,6 +5360,22 @@ export function getValueExcludedRecordingIds(): Set<string> {
   return new Set(rows.map((r) => r.id))
 }
 
+/** Graph run-start snapshot. Never materializes transcript text or per-row skip logs.
+ * The caller must still point-read eligibility before extraction and in its write transaction.
+ */
+export function getGraphIngestCandidates(): { rows: Array<{ id: string; recording_id: string }>; skipped: number } {
+  const base = `FROM transcripts t JOIN recordings r ON r.id = t.recording_id
+    WHERE COALESCE(r.personal, 0) = 0 AND r.deleted_at IS NULL`
+  const rows = queryAll<{ id: string; recording_id: string }>(`
+    SELECT t.id, t.recording_id ${base}
+    AND NOT EXISTS (SELECT 1 FROM graph_ingested_transcripts g WHERE g.transcript_id = t.id)
+    AND NOT EXISTS (SELECT 1 FROM knowledge_captures kc
+      WHERE kc.source_recording_id = r.id AND kc.deleted_at IS NULL
+        AND ${VALUE_EXCLUSION_PREDICATE})`, [...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS])
+  const total = queryOne<{ n: number }>(`SELECT COUNT(*) AS n ${base}`)?.n ?? 0
+  return { rows, skipped: total - rows.length }
+}
+
 /**
  * Single-recording point-read form of {@link getValueExcludedRecordingIds} —
  * same predicate, scoped to one id. This is the FINAL-eligibility check
@@ -5443,7 +5460,7 @@ export function isRecordingProcessable(recordingId: string): boolean {
  * Cross-reference (/simplify S-5): the graph ingest (knowledge-graph-service.ts
  * ingestFromDbTranscripts) composes the SAME two exclusions differently — its
  * base query filters `COALESCE(r.personal,0)=0 AND r.deleted_at IS NULL`
- * directly, then layers value-exclusion on top via the pre-filter Set /
+ * directly, then layers value-exclusion on top via the SQL candidate snapshot /
  * point-read pair above, rather than unioning everything into one Set like
  * this function does for RAG. Same net effect (both exclusions always apply
  * either way); this is a deliberate difference in composition, not drift.
@@ -5712,7 +5729,7 @@ export function getExcludedRecordingIds(): RecordingExclusion {
  * keep capture). Fails CLOSED by construction: a DB error throws to the caller,
  * which aborts the run (zero provider calls) rather than defaulting open.
  */
-export function getFailedTranscriptsForReanalysis(
+export async function getFailedTranscriptsForReanalysis(
   limit: number,
   { everyMinutes = 120, maxPerWeek = 4, recordingId, neverTried = false }: {
     /** Wait after a failed summary before it is tried again (Settings > Transcription). */
@@ -5724,7 +5741,7 @@ export function getFailedTranscriptsForReanalysis(
     /** Only summaries no provider has failed on yet (the pass after the queue empties). */
     neverTried?: boolean
   } = {}
-): Array<{ recording_id: string; full_text: string }> {
+): Promise<Array<{ recording_id: string; full_text: string }>> {
   // A summary that keeps failing is not paid for forever (review of #187,
   // 27-oct-2026): a wait between tries, a weekly cap, and the never-tried and
   // longest-waiting first so a few stuck rows cannot hold the whole allowance.
@@ -5733,46 +5750,80 @@ export function getFailedTranscriptsForReanalysis(
   const backoffSince = recordingId ? new Date(now + 60_000).toISOString() : new Date(now - everyMinutes * 60_000).toISOString()
   const capSince = new Date(now - 7 * 24 * 3_600_000).toISOString()
   const cap = recordingId ? Number.MAX_SAFE_INTEGER : maxPerWeek
-  return queryAll<{ recording_id: string; full_text: string }>(
-    `SELECT t.recording_id AS recording_id, t.full_text AS full_text
-       FROM transcripts t JOIN recordings r ON r.id = t.recording_id
-       LEFT JOIN (
-         SELECT recording_id, MAX(started_at) AS last_failed_at,
-                -- A quota or overload refusal cost nothing and does not spend the cap
-                -- (27-oct-2026: four 429s two hours apart locked summaries out for a week).
-                -- Neither does depleted credit, nor a checkpoint that sent nothing (28-oct-2026).
-                SUM(CASE WHEN started_at >= ?
-                          AND COALESCE(error_message, '') NOT LIKE '%429 Too Many Requests%'
-                          AND COALESCE(error_message, '') NOT LIKE '%Rate limit exceeded%'
-                          AND COALESCE(error_message, '') NOT LIKE '%RESOURCE_EXHAUSTED%'
-                          AND COALESCE(error_message, '') NOT LIKE '%experiencing high demand%'
-                          AND COALESCE(error_message, '') NOT LIKE '%[402 Payment Required]%'
-                          AND COALESCE(error_message, '') NOT LIKE 'Provider checkpoint pending:%'
-                         THEN 1 ELSE 0 END) AS failures_this_week
-           FROM processing_runs
-          WHERE stage = 'summary' AND status IN ('failed', 'degraded')
-          GROUP BY recording_id
-       ) f ON f.recording_id = t.recording_id
+  // processing_runs is narrow: one grouped read for every recording's failures.
+  const failures = new Map(queryAll<{ recording_id: string; last_failed_at: string | null; failures_this_week: number | null }>(
+    `SELECT recording_id, MAX(started_at) AS last_failed_at,
+            -- A quota or overload refusal cost nothing and does not spend the cap
+            -- (27-oct-2026: four 429s two hours apart locked summaries out for a week).
+            -- Neither does depleted credit, nor a checkpoint that sent nothing (28-oct-2026).
+            SUM(CASE WHEN started_at >= ?
+                      AND COALESCE(error_message, '') NOT LIKE '%429 Too Many Requests%'
+                      AND COALESCE(error_message, '') NOT LIKE '%Rate limit exceeded%'
+                      AND COALESCE(error_message, '') NOT LIKE '%RESOURCE_EXHAUSTED%'
+                      AND COALESCE(error_message, '') NOT LIKE '%experiencing high demand%'
+                      AND COALESCE(error_message, '') NOT LIKE '%[402 Payment Required]%'
+                      AND COALESCE(error_message, '') NOT LIKE 'Provider checkpoint pending:%'
+                     THEN 1 ELSE 0 END) AS failures_this_week
+       FROM processing_runs
+      WHERE stage = 'summary' AND status IN ('failed', 'degraded')
+      GROUP BY recording_id`,
+    [capSince]
+  ).map((row) => [row.recording_id, row] as const))
+  const due = (id: string): boolean => {
+    const f = failures.get(id)
+    if (!f) return true
+    if (neverTried && f.last_failed_at != null) return false
+    if (f.last_failed_at != null && !(f.last_failed_at < backoffSince)) return false
+    return (f.failures_this_week ?? 0) < cap
+  }
+  const eligibility = `FROM transcripts t JOIN recordings r ON r.id = t.recording_id
       WHERE (t.summary IS NULL OR t.summary = 'Analysis failed' OR t.title_suggestion IS NULL)
-        AND t.full_text IS NOT NULL AND TRIM(t.full_text) != ''
         AND r.deleted_at IS NULL AND COALESCE(r.personal, 0) = 0
         -- An invalid, incomplete or doubtful transcript is never summarized. It
         -- used to reach the brain and be dropped after, and its 'cancelled' run
         -- never counted, so it came back every pass (28-oct-2026).
         AND NOT (COALESCE(t.validity_status, '') IN ('invalid', 'incomplete', 'doubtful') AND t.integrity_accepted_at IS NULL)
-        AND (f.last_failed_at IS NULL OR f.last_failed_at < ?)
-        AND COALESCE(f.failures_this_week, 0) < ?
-        AND (? IS NULL OR t.recording_id = ?)
-        AND (? = 0 OR f.last_failed_at IS NULL)
         AND NOT EXISTS (
           SELECT 1 FROM knowledge_captures kc
            WHERE kc.source_recording_id = t.recording_id
              AND kc.deleted_at IS NULL
-             AND ${VALUE_EXCLUSION_PREDICATE})
-      ORDER BY f.last_failed_at IS NOT NULL, f.last_failed_at ASC, t.created_at DESC
-      LIMIT ?`,
-    [capSince, backoffSince, cap, recordingId ?? null, recordingId ?? null, neverTried ? 1 : 0, ...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS, limit]
-  )
+             AND ${VALUE_EXCLUSION_PREDICATE})`
+  // Snapshot through the primary-key index, then inspect one row per time slice.
+  // A single filtered/sorted SELECT reads the columns stored after full_text, so
+  // it walks every wide transcript's overflow pages in one hold (PR #175).
+  const ids = recordingId
+    ? queryAll<{ id: string }>('SELECT id FROM transcripts WHERE recording_id = ?', [recordingId])
+    : queryAll<{ id: string }>('SELECT id FROM transcripts')
+  const candidates: Array<{ id: string; created_at: string | null; last_failed_at: string | null }> = []
+  const checkpoint = mainThreadBudget('FailedAnalysisCandidates')
+  for (const candidate of ids) {
+    await checkpoint()
+    const row = queryOne<{ id: string; recording_id: string; created_at: string | null }>(
+      `SELECT t.id, t.recording_id, t.created_at ${eligibility} AND t.id = ?`,
+      [...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS, candidate.id]
+    )
+    if (row && due(row.recording_id)) {
+      candidates.push({ id: row.id, created_at: row.created_at, last_failed_at: failures.get(row.recording_id)?.last_failed_at ?? null })
+    }
+  }
+  // Never tried first, then the longest waiting, then the newest transcript.
+  candidates.sort((a, b) =>
+    Number(a.last_failed_at != null) - Number(b.last_failed_at != null) ||
+    (a.last_failed_at ?? '').localeCompare(b.last_failed_at ?? '') ||
+    (b.created_at ?? '').localeCompare(a.created_at ?? ''))
+  const rows: Array<{ recording_id: string; full_text: string }> = []
+  for (const candidate of candidates) {
+    if (limit >= 0 && rows.length >= limit) break
+    await checkpoint()
+    // Fresh gates after every yield; blank text must not consume the eligible limit.
+    const row = queryOne<{ recording_id: string; full_text: string }>(
+      `SELECT t.recording_id AS recording_id, t.full_text AS full_text ${eligibility}
+        AND t.id = ? AND t.full_text IS NOT NULL AND TRIM(t.full_text) != ''`,
+      [...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS, candidate.id]
+    )
+    if (row) rows.push(row)
+  }
+  return rows
 }
 
 /** All knowledge_capture ids owned by a recording (via source link or migration). */
@@ -7311,10 +7362,12 @@ export function retireGeneratedContentForNoSpeech(recordingId: string): void {
  * never re-touches rows already 'complete', and a second run heals nothing.
  * Returns the number of rows healed.
  */
-export function healRecordingStatusFromTranscripts(): number {
+export function healRecordingStatusFromTranscripts(recordingIds?: readonly string[]): number {
+  if (recordingIds?.length === 0) return 0
+  const scope = recordingIds ? ` AND r.id IN (${recordingIds.map(() => "?").join(",")})` : ""
   const before = queryOne<{ n: number }>(
     `SELECT COUNT(*) AS n FROM recordings r
-       WHERE r.status IS NOT 'complete'
+       WHERE r.status IS NOT 'complete' ${scope}
          AND r.status IS NOT 'deleted'
          AND r.deleted_at IS NULL
          AND EXISTS (
@@ -7322,14 +7375,14 @@ export function healRecordingStatusFromTranscripts(): number {
             WHERE t.recording_id = r.id
               AND t.full_text IS NOT NULL
               AND TRIM(t.full_text) != ''
-         )`
+         )`, recordingIds ? [...recordingIds] : []
   )
   const count = before?.n ?? 0
   if (count === 0) return 0
 
   run(
     `UPDATE recordings SET status = 'complete'
-       WHERE status IS NOT 'complete'
+       WHERE status IS NOT 'complete' ${scope.replaceAll('r.id', 'id')}
          AND status IS NOT 'deleted'
          AND deleted_at IS NULL
          AND EXISTS (
@@ -7337,9 +7390,9 @@ export function healRecordingStatusFromTranscripts(): number {
             WHERE t.recording_id = recordings.id
               AND t.full_text IS NOT NULL
               AND TRIM(t.full_text) != ''
-         )`
+         )`, recordingIds ? [...recordingIds] : []
   )
-  console.log(`[DB] healRecordingStatusFromTranscripts: advanced ${count} recording(s) to status='complete'`)
+  if (!recordingIds) console.log(`[DB] healRecordingStatusFromTranscripts: advanced ${count} recording(s) to status='complete'`)
   return count
 }
 
@@ -8104,6 +8157,12 @@ export function createProcessingRun(input: CreateProcessingRunInput): Processing
       input.parentRunIds?.length ? JSON.stringify(input.parentRunIds) : null
     ]
   )
+  // Publish the durable ledger stage only to a running queue subscriber.
+  const bus = getEventBus()
+  if (bus.listenerCount('processing:stage-started') > 0) bus.emitDomainEvent({
+    type: 'processing:stage-started', timestamp: startedAt,
+    payload: {recordingId: input.recordingId, stage: input.stage, runId: id}
+  })
   ownedProcessingRuns.set(id, input.recordingId)
   if (input.stage === 'pipeline') ownedPipelineRuns.set(id, input.recordingId)
   registerProcessingRun(id)
@@ -8390,24 +8449,23 @@ export async function backfillTranscriptIntegrity(
   // In batches, yielding between them: the first launch after v58 labels every
   // transcript in the library, and doing all ~2,000 in one loop froze the main
   // thread for 2.2 s (measured 24-sep, startup benchmark).
-  const batchSize = options.batchSize ?? 100
-  const counts = { checked: 0, ok: 0, suspect: 0, broken: 0 }
-  const seen = new Set<string>()
-  for (;;) {
-    const rows = queryAll<{ id: string; recording_id: string; speakers: string | null; integrity_json: string | null }>(
-      `SELECT t.id, t.recording_id, t.speakers, t.integrity_json FROM transcripts t
-         JOIN recordings r ON r.id = t.recording_id
-        WHERE r.deleted_at IS NULL
-          AND (t.integrity_version IS NULL OR t.integrity_version < ?)
-        LIMIT ?`,
-      [INTEGRITY_VERSION, batchSize]
-    )
-    // A row the update could not move out of this query would come back
-    // forever; stop when a batch holds nothing new.
-    const fresh = rows.filter((row) => !seen.has(row.id))
-    if (fresh.length === 0) break
-    for (const row of fresh) {
-      seen.add(row.id)
+  const release = acquireOrganizationCheckpointBudget()
+  try {
+    // A metadata UPDATE still rewrites a wide transcript row. Give IPC a turn
+    // after each committed row even when the assessment itself was inexpensive.
+    const batchSize = options.batchSize ?? 1
+    const counts = { checked: 0, ok: 0, suspect: 0, broken: 0 }
+    const checkpoint = mainThreadBudget('TranscriptIntegrity')
+    const candidates = queryAll<{ id: string }>('SELECT id FROM transcripts')
+    let processed = 0
+    for (const candidate of candidates) {
+      await checkpoint()
+      const row = queryOne<{ id: string; recording_id: string; speakers: string | null; integrity_json: string | null }>(
+        `SELECT t.id, t.recording_id, t.speakers, t.integrity_json FROM transcripts t
+           JOIN recordings r ON r.id = t.recording_id
+          WHERE t.id = ? AND r.deleted_at IS NULL
+            AND (t.integrity_version IS NULL OR t.integrity_version < ?)`, [candidate.id, INTEGRITY_VERSION])
+      if (!row) continue
       const integrity = assessTranscriptIntegrity(
         row.speakers,
         integrityAudioSeconds(row.recording_id),
@@ -8430,17 +8488,20 @@ export async function backfillTranscriptIntegrity(
       )
       counts.checked++
       counts[integrity.status]++
+      if (++processed % batchSize === 0) {
+        await yieldToEventLoop()
+        checkpoint.reset()
+      }
     }
-    await new Promise<void>((resolve) => setImmediate(resolve))
-  }
-  if (counts.checked > 0) {
-    saveDatabase()
-    console.log(
-      `[transcript-integrity] checked ${counts.checked} transcript(s): ` +
-        `${counts.ok} ok, ${counts.suspect} suspect, ${counts.broken} broken`
-    )
-  }
-  return counts
+    if (counts.checked > 0) {
+      saveDatabase()
+      console.log(
+        `[transcript-integrity] checked ${counts.checked} transcript(s): ` +
+          `${counts.ok} ok, ${counts.suspect} suspect, ${counts.broken} broken`
+      )
+    }
+    return counts
+  } finally { release() }
 }
 
 /**
@@ -8672,6 +8733,7 @@ export function getQueueItems(status?: string): (QueueItem & { filename?: string
 const APP_SESSION_STARTED_AT_ISO = new Date().toISOString()
 
 export type ActionableQueueItem = QueueItem & {
+  stage?: string
   filename?: string
   date_recorded?: string
   /** 1 when a failed row was stamped before this app session started. */
@@ -8684,6 +8746,10 @@ export function getActionableQueueItems(): ActionableQueueItem[] {
   // Pending/processing rows always show; the processor reads getQueueItems.
   return queryAll<ActionableQueueItem>(`
     SELECT tq.*, r.filename, r.date_recorded,
+      (SELECT pr.stage FROM processing_runs pr
+        WHERE pr.recording_id = tq.recording_id AND pr.status = 'running'
+          AND datetime(pr.started_at) >= datetime(tq.started_at)
+        ORDER BY pr.started_at DESC, pr.rowid DESC LIMIT 1) AS stage,
       CASE
         WHEN tq.status = 'failed'
           AND datetime(COALESCE(tq.completed_at, tq.started_at, tq.created_at)) < datetime(?)
@@ -8691,9 +8757,12 @@ export function getActionableQueueItems(): ActionableQueueItem[] {
       END AS from_previous_session
     FROM transcription_queue tq
     LEFT JOIN recordings r ON tq.recording_id = r.id
-    WHERE tq.status IN ('pending', 'processing', 'failed')
+    WHERE (tq.status IN ('pending', 'processing', 'failed') OR (
+        tq.status = 'cancelled' AND tq.error_message LIKE 'Stopped by you%'
+        AND datetime(tq.completed_at) >= datetime('now', '-24 hours')
+      ))
       AND NOT (
-        tq.status = 'failed'
+        tq.status IN ('failed', 'cancelled')
         AND EXISTS (
           SELECT 1
           FROM transcription_queue newer
@@ -8727,7 +8796,7 @@ export function updateQueueItem(id: string, status: string, errorMessage?: strin
        WHERE id = ?`,
       [status, id]
     )
-  } else if (status === 'completed' || status === 'failed') {
+  } else if (status === 'completed' || status === 'failed' || status === 'cancelled') {
     run('UPDATE transcription_queue SET status = ?, completed_at = CURRENT_TIMESTAMP, error_message = ? WHERE id = ?', [
       status,
       errorMessage ?? null,
@@ -8735,6 +8804,8 @@ export function updateQueueItem(id: string, status: string, errorMessage?: strin
     ])
   } else if (status === 'pending') {
     // When retrying, increment retry_count and reset progress
+    // A retry reuses completed stage checkpoints, so Finish processing after a
+    // Stop that came after the transcript was saved sends no audio again.
     run('UPDATE transcription_queue SET status = ?, retry_count = retry_count + 1, progress = 0 WHERE id = ?', [status, id])
   } else {
     run('UPDATE transcription_queue SET status = ? WHERE id = ?', [status, id])

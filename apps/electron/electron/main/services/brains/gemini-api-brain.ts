@@ -246,7 +246,7 @@ export class GeminiApiBrain implements AIBrain {
     const out: (number[] | null)[] = []
     for (let i = 0; i < texts.length; i += GEMINI_BATCH_LIMIT) {
       // Recheck before EACH batch (the concrete provider call).
-      if (!eligibleToGenerate(opts.shouldGenerate)) {
+      if (opts.signal?.aborted || !eligibleToGenerate(opts.shouldGenerate)) {
         while (out.length < texts.length) out.push(null)
         return out
       }
@@ -255,12 +255,13 @@ export class GeminiApiBrain implements AIBrain {
       // purpose ⇒ DOCUMENT (the historical untyped behaviour, which the
       // gemini-embedding family treats as document-side).
       const taskType = opts.purpose === 'query' ? TaskType.RETRIEVAL_QUERY : TaskType.RETRIEVAL_DOCUMENT
-      const res = await model.batchEmbedContents({
+      const request = {
         requests: slice.map((t) => ({
           content: { role: 'user', parts: [{ text: t }] },
           taskType,
         })),
-      })
+      }
+      const res = opts.signal ? await model.batchEmbedContents(request, { signal: opts.signal }) : await model.batchEmbedContents(request)
       for (const emb of res.embeddings) {
         out.push(emb?.values ?? null)
       }
