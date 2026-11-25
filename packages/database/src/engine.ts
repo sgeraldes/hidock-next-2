@@ -632,6 +632,13 @@ const BYTES_PER_MB = 1024 * 1024
  */
 export const ENGINE_SAFETY_VERSION = 3
 
+/** A namespaced Windows path (\\?\C:\... or \\?\UNC\host\...) in its ordinary form. */
+export function plainPath(path: string): string {
+  if (path.startsWith('\\\\?\\UNC\\')) return '\\\\' + path.slice(8)
+  if (path.startsWith('\\\\?\\')) return path.slice(4)
+  return path
+}
+
 /**
  * Engine-owned record of every migration run. One row per boot that migrated,
  * written when the run ends, failed runs included. Created on first use, so it
@@ -883,7 +890,9 @@ export class DatabaseEngine {
       }
       if (failClosed) {
         if (!backupVerified) this.verifyMigrationBackup(bak, version)
-        this.migrationBackupPath = bak
+        // The audit and the log carry the path a person can open, not the
+        // namespaced form used to write it.
+        this.migrationBackupPath = plainPath(bak)
         console.log('[Database] Migration v' + version + ' -> v' + this.config.schemaVersion + ' restore point: ' + bak)
       }
       const directoryEntries = await fsPromises.readdir(dir)
