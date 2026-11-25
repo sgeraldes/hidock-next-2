@@ -2,7 +2,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { initializeDatabase, run, runInTransaction, closeDatabase, queryOne } from '../database'
 
 const paths = vi.hoisted(() => ({ root: '', db: '' }))
 paths.root = join(tmpdir(), `hidock-background-fixture-${process.pid}-${Date.now()}`)
@@ -43,6 +42,11 @@ let attempt = 0
 describe('RAG corpus responsiveness', () => {
   it('indexes 2,150 eligible 40KB transcripts without a long main-thread hold', { retry: 1, timeout: 300_000 }, async () => {
     paths.db = `${paths.root}-${++attempt}.sqlite`
+    // A retry gets fresh modules: the vector store keeps the first attempt's
+    // database otherwise, and the retry failed on "no such table:
+    // vector_embeddings" (25-nov) instead of measuring anything.
+    vi.resetModules()
+    const { initializeDatabase, run, runInTransaction, closeDatabase, queryOne } = await import('../database')
     await initializeDatabase()
     const text='Spoken words about the project. '.repeat(1300).slice(0,40000)
     runInTransaction(() => {for(let i=0;i<2150;i++) {

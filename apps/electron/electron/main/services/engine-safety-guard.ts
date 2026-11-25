@@ -11,7 +11,7 @@
  * Raise this together with the engine's constant when the app starts relying
  * on a new engine safety behaviour.
  */
-export const REQUIRED_ENGINE_SAFETY_VERSION = 3
+export const REQUIRED_ENGINE_SAFETY_VERSION = 4
 
 export type EngineSafetyCheck =
   | { ok: true; loaded: number; required: number }
