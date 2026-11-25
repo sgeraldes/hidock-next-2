@@ -3523,6 +3523,7 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   // evidence later, when the deferred voice worker has stored them.
   const completenessEvidence = {
     vadSpeechSeconds: audioPreflight.nonSilentSeconds,
+    activityIntervals: audioPreflight.activityIntervals,
     durationSeconds: audioLayout.durationSeconds
   }
   const providerSecondsOf = (raw: RawTranscriptionResult): number | null => {
@@ -3536,8 +3537,10 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
     fullText: rawTranscript.fullText, ...completenessEvidence, providerSeconds: providerSecondsOf(rawTranscript)
   })
   let completeness = checkCompleteness()
+  // The same switch that lets the Gemini engine send audio again
+  // (allowAudioRetries) governs this retry: it resends audio too.
   if (completeness.status === 'incomplete' && transcriptionProvider === 'gemini' && execution !== 'remote' &&
-      !separateChannels && audioLayout.durationSeconds > 0) {
+      !separateChannels && audioLayout.durationSeconds > 0 && config.transcription.splitIncompleteAudio !== false) {
     completeProcessingRun(transcriptionRun.id, {
       status: 'degraded', qualityStatus: 'incomplete', quality: completeness as unknown as Record<string, unknown>,
       outputRefs: { attempt: 1, fullText: rawTranscript.fullText, speakers: rawTranscript.speakers },
@@ -3559,6 +3562,11 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
           progressCallback, shouldContinueAudio, seconds, recordingId, local(start, seconds),
           activeAbortControllers.get(recordingId)?.signal),
         audioPreflight.activityIntervals))
+      // Every slice answering "no speech" returns empty text. That never
+      // replaces a first attempt that has words (review of #173).
+      if (!retried.fullText.trim() && firstAttempt.fullText.trim()) {
+        throw new Error('Smaller-slice retry returned no text; keeping the first attempt')
+      }
       rawTranscript = { ...firstAttempt, ...retried }
       rawTranscript.speakers = reconcileProviderSpeakers(rawTranscript.speakers, speakerLinking)
       completeness = checkCompleteness()
@@ -3644,7 +3652,10 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   // The validity verdict (owner, 4-oct-2026) adds the audio-against-text
   // checks: text where there is no audio, times that cannot be placed, more
   // speakers than invited, a transcript that stops while the speech goes on.
-  // Invalid, in doubt or incomplete gets no summary or analysis either.
+  // An invalid transcript, or one too sparse for its speech (sparse_speech),
+  // gets no summary or analysis either. A gap-only or doubtful one keeps them,
+  // fresh or old, with its reasons shown (owner rule from the copy tests,
+  // Nov 2026: withhold only for density or invalid verdicts).
   // If the check itself cannot run, the transcript goes on as before; the same
   // check runs again when it is stored and the trust sync follows from there.
   let integrityNow: ReturnType<typeof checkTranscriptIntegrity> | null = null
@@ -3652,7 +3663,8 @@ Do not create speaker turns outside these intervals except for up to 1.5 seconds
   try {
     integrityNow = checkTranscriptIntegrity(recordingId, rawTranscript.speakers)
     validityNow = previewTranscriptValidity(recordingId, rawTranscript.speakers, {
-      integrityStatus: integrityNow.status, ...completenessEvidence, providerSeconds: completeness.measures.providerSeconds
+      integrityStatus: integrityNow.status, fullText: rawTranscript.fullText,
+      ...completenessEvidence, providerSeconds: completeness.measures.providerSeconds
     })
   } catch (error) {
     console.warn(

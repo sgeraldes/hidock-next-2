@@ -201,23 +201,28 @@ export function Library() {
     const targets = [...new Set(ids)]
     for (let offset = 0; offset < targets.length; offset += 5000) {
       const verdicts = await window.electronAPI.transcripts.getVerdicts({ recordingIds: targets.slice(offset, offset + 5000) })
-      const merged = new Map(transcriptsRef.current)
-      for (const [id, verdict] of Object.entries(verdicts)) {
-        const transcript = merged.get(id)
-        if (!transcript) continue
-        merged.set(id, {
-          ...transcript,
-          integrity_status: verdict.integrity_status,
-          integrity_json: verdict.integrity_json,
-          integrity_version: verdict.integrity_version,
-          integrity_accepted_at: verdict.integrity_accepted_at,
-          validity_status: verdict.validity_status,
-          validity_json: verdict.validity_json,
-          validity_version: verdict.validity_version,
-        })
+      // Applied onto the latest map, so metadata another reload queued meanwhile
+      // (a restored summary) survives the verdict refresh (review of #173).
+      const apply = (base: Map<string, Transcript>): Map<string, Transcript> => {
+        const merged = new Map(base)
+        for (const [id, verdict] of Object.entries(verdicts)) {
+          const transcript = merged.get(id)
+          if (!transcript) continue
+          merged.set(id, {
+            ...transcript,
+            integrity_status: verdict.integrity_status,
+            integrity_json: verdict.integrity_json,
+            integrity_version: verdict.integrity_version,
+            integrity_accepted_at: verdict.integrity_accepted_at,
+            validity_status: verdict.validity_status,
+            validity_json: verdict.validity_json,
+            validity_version: verdict.validity_version,
+          })
+        }
+        return merged
       }
-      transcriptsRef.current = merged
-      setTranscripts(merged)
+      transcriptsRef.current = apply(transcriptsRef.current)
+      setTranscripts((prev) => apply(prev))
     }
     return transcriptsRef.current
   }, [])
@@ -233,11 +238,15 @@ export function Library() {
     const fresh = new Map<string, Transcript>(
       Object.entries(await window.electronAPI.transcripts.getByRecordingIdsOwner(targets)) as [string, Transcript][]
     )
-    setTranscripts((prev) => {
-      const merged = new Map(prev)
+    const mergeFresh = (base: Map<string, Transcript>): Map<string, Transcript> => {
+      const merged = new Map(base)
       for (const [id, t] of fresh) merged.set(id, t)
       return merged
-    })
+    }
+    // The ref too: a verdict refresh that reads it before the next render
+    // must see this text and metadata.
+    transcriptsRef.current = mergeFresh(transcriptsRef.current)
+    setTranscripts((prev) => mergeFresh(prev))
     return fresh
   }, [])
 
@@ -647,7 +656,7 @@ export function Library() {
           }).length
           if ((result.integrityChecked ?? 0) > 0 && flagged > 0) {
             toast.warning(
-              `${flagged} transcript${flagged === 1 ? ' has' : 's have'} invalid or incomplete transcripts`,
+              `${flagged} transcript${flagged === 1 ? ' is' : 's are'} invalid or incomplete`,
               'Each one is labelled in the list. Filter by Transcript to review them: transcribe again, or accept as is.',
               { duration: 30_000, action: { label: 'Review', onClick: () => setIntegrityFilter('flagged') } }
             )

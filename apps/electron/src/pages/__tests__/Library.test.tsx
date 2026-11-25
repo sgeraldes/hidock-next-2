@@ -1047,6 +1047,28 @@ describe('Library — transcript integrity labels', () => {
     }
   })
 
+  it('keeps metadata the transcript reload queued when the verdict refresh lands (review of #173)', async () => {
+    vi.mocked(window.electronAPI.recordings.backfillDurations).mockResolvedValue({ success: true })
+    render(<MemoryRouter><Library /></MemoryRouter>)
+    await waitFor(() => expect(screen.getByText('Clean one')).toBeInTheDocument())
+    await waitFor(() => expect(window.electronAPI.transcripts.getByRecordingIdsOwner).toHaveBeenCalled())
+    vi.mocked(window.electronAPI.transcripts.getByRecordingIdsOwner).mockResolvedValue({
+      'clean-1': { ...transcriptsById['clean-1'], validity_status: 'doubtful', validity_json: null },
+    } as any)
+    vi.mocked(window.electronAPI.transcripts.getVerdicts).mockClear().mockResolvedValue({} as any)
+    vi.useFakeTimers()
+    try {
+      act(() => {
+        for (const callback of domainListeners) callback({ type: 'transcript:verdicts-updated', payload: { recordingIds: ['clean-1'], metadataChangedIds: ['clean-1'] } })
+      })
+      await act(async () => { await vi.advanceTimersByTimeAsync(1500) })
+      expect(window.electronAPI.transcripts.getVerdicts).toHaveBeenCalled()
+      expect(screen.getAllByTestId('validity-label').map((label) => label.textContent)).toContain('Transcript in doubt')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('announces flagged transcripts once, on the mount that checked them, and Review opens the filter', async () => {
     vi.mocked(window.electronAPI.recordings.backfillDurations).mockResolvedValueOnce({
       success: true,
@@ -1057,7 +1079,7 @@ describe('Library — transcript integrity labels', () => {
 
     await waitFor(() => expect(toastMock.warning).toHaveBeenCalledTimes(1))
     const [title, , opts] = toastMock.warning.mock.calls[0]
-    expect(title).toBe('1 transcript has invalid or incomplete transcripts')
+    expect(title).toBe('1 transcript is invalid or incomplete')
     expect(opts?.action?.label).toBe('Review')
     opts.action.onClick()
     expect(integrityHarness.set).toHaveBeenCalledWith('flagged')

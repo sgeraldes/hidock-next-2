@@ -120,6 +120,8 @@ export interface ValidityInput {
   sample?: 'confirmed' | 'contradicted' | 'inconclusive' | 'incomplete' | null
   /** Independent acoustic turns, never the provider's transcript timestamps. */
   diarizedSegments?: Array<{ start: number; end: number }>
+  /** Stretches with sound from the VAD (audio preflight), on the file's clock. */
+  activityIntervals?: Array<{ start: number; end: number }>
   vadSpeechSeconds?: number | null
   providerSeconds?: number | null
   durationSeconds?: number | null
@@ -133,8 +135,43 @@ export const MAX_UNCOVERED_SPEECH_SHARE = 0.5
 /** A three-minute line with less than one word per ten seconds cannot represent a speech turn. */
 export const LONG_SEGMENT_SECONDS = 180
 export const MIN_LONG_SEGMENT_WORDS_PER_SECOND = 0.1
+/**
+ * A long line is judged against the sound inside it when that is known: a
+ * minute of it is sustained speech the line should hold. Silence inside a
+ * long line is not missing speech (review of #173).
+ */
+export const MIN_LONG_SEGMENT_SOUND_SECONDS = 60
 /** Diagnostic only: fast cloud inference is possible; timing alone never rejects text. */
 export const SUSPICIOUS_PROVIDER_AUDIO_RATIO = 0.01
+
+/** Seconds two sorted, merged interval lists share, in one pass. */
+function overlapSeconds(a: Array<{ start: number; end: number }>, b: Array<{ start: number; end: number }>): number {
+  let total = 0
+  let i = 0
+  let j = 0
+  while (i < a.length && j < b.length) {
+    total += Math.max(0, Math.min(a[i].end, b[j].end) - Math.max(a[i].start, b[j].start))
+    if (a[i].end < b[j].end) i++
+    else j++
+  }
+  return total
+}
+
+/** Parts of the sorted, merged `speech` turns that no `text` interval covers, in one pass. */
+function uncoveredRanges(speech: Array<{ start: number; end: number }>, text: Array<{ start: number; end: number }>): Array<{ start: number; end: number }> {
+  const missing: Array<{ start: number; end: number }> = []
+  let j = 0
+  for (const turn of speech) {
+    while (j < text.length && text[j].end <= turn.start) j++
+    let cursor = turn.start
+    for (let k = j; k < text.length && text[k].start < turn.end; k++) {
+      if (text[k].start > cursor) missing.push({ start: cursor, end: Math.min(text[k].start, turn.end) })
+      cursor = Math.max(cursor, Math.min(text[k].end, turn.end))
+    }
+    if (cursor < turn.end) missing.push({ start: cursor, end: turn.end })
+  }
+  return missing
+}
 
 export function mergeSpeechIntervals(intervals: Array<{ start: number; end: number }>): Array<{ start: number; end: number }> {
   const sorted = intervals.filter(s => Number.isFinite(s.start) && Number.isFinite(s.end) && s.start >= 0 && s.end > s.start)
@@ -273,33 +310,49 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
       totalWords * 60 / speechSeconds < MIN_WORDS_PER_SPEECH_MINUTE) {
     completenessReasons.push({ code: 'sparse_speech', detail: `${totalWords} words for ${(speechSeconds / 60).toFixed(1)} minutes of detected speech.` })
   }
-  if (speech.length && speechSeconds && input.segments.some(s => typeof s.start === 'number' && typeof s.end === 'number')) {
-    const coverage = mergeSpeechIntervals(input.segments.filter(s => countWords(s.text) > 0)
-      .map(s => ({ start: s.start ?? NaN, end: s.end ?? NaN })))
-    let covered = 0
-    for (const s of speech) for (const t of coverage) covered += Math.max(0, Math.min(s.end, t.end) - Math.max(s.start, t.start))
-    measures.uncoveredDiarizedSpeechShare = Math.max(0, 1 - covered / speechSeconds)
+  const timedText = input.segments.filter(s => typeof s.start === 'number' && typeof s.end === 'number' &&
+    Number.isFinite(s.start) && Number.isFinite(s.end))
+  // Text packed faster than anyone speaks over its own stated span is a
+  // compressed clock (the same line as clock_compressed below): its times
+  // cannot be laid over the acoustic turns, which run on the file's clock.
+  const textStart = timedText.length ? Math.min(...timedText.map(s => s.start as number)) : 0
+  const textEnd = timedText.length ? Math.max(...timedText.map(s => s.end as number)) : 0
+  const clockSuspected = textEnd > textStart && totalWords / (textEnd - textStart) > COMPRESSED_SPAN_RATE
+  if (speech.length && speechSeconds && timedText.length && !clockSuspected) {
+    const coverage = mergeSpeechIntervals(timedText.filter(s => countWords(s.text) > 0)
+      .map(s => ({ start: s.start as number, end: s.end as number })))
+    measures.uncoveredDiarizedSpeechShare = Math.max(0, 1 - overlapSeconds(speech, coverage) / speechSeconds)
     if (measures.uncoveredDiarizedSpeechShare > MAX_UNCOVERED_SPEECH_SHARE) {
-      const missing: Array<{ start: number; end: number }> = []
-      for (const turn of speech) {
-        let cursor = turn.start
-        for (const text of coverage) {
-          if (text.end <= cursor || text.start >= turn.end) continue
-          if (text.start > cursor) missing.push({ start: cursor, end: Math.min(text.start, turn.end) })
-          cursor = Math.max(cursor, Math.min(text.end, turn.end))
-        }
-        if (cursor < turn.end) missing.push({ start: cursor, end: turn.end })
-      }
-      const ranges = missing.map(s => `${clock(s.start)} to ${clock(s.end)}`).join(', ')
+      const ranges = uncoveredRanges(speech, coverage).map(s => `${clock(s.start)} to ${clock(s.end)}`).join(', ')
       completenessReasons.push({ code: 'uncovered_speech', detail: `${percent(measures.uncoveredDiarizedSpeechShare)} of detected speech has no transcript segment: ${ranges}.` })
     }
   }
-  for (const s of input.segments) {
-    if (typeof s.start !== 'number' || typeof s.end !== 'number') continue
-    const duration = s.end - s.start
+  // Sound inside a long line, from the best independent evidence there is:
+  // acoustic turns, then the VAD's activity, then the audio envelope. Without
+  // any, the line's own length stands in, as before.
+  const activity = mergeSpeechIntervals(input.activityIntervals ?? [])
+  let frameHasAudio: ((frame: number) => boolean) | null = null
+  const soundWithin = (start: number, end: number): number => {
+    const span = [{ start, end }]
+    if (speech.length) return overlapSeconds(speech, span)
+    if (activity.length) return overlapSeconds(activity, span)
+    if (input.envelope?.length) {
+      frameHasAudio ??= audioFrameTest(input.envelope, input.envelopeUnit ?? 'gain')
+      const first = Math.max(0, Math.floor(start / FRAME_SECONDS))
+      const last = Math.min(input.envelope.length, Math.ceil(end / FRAME_SECONDS))
+      let frames = 0
+      for (let f = first; f < last; f++) if (frameHasAudio(f)) frames++
+      return frames * FRAME_SECONDS
+    }
+    return end - start
+  }
+  for (const s of timedText) {
+    const duration = (s.end as number) - (s.start as number)
+    if (duration <= LONG_SEGMENT_SECONDS || clockSuspected) continue
     const words = countWords(s.text)
-    if (duration > LONG_SEGMENT_SECONDS && words / duration < MIN_LONG_SEGMENT_WORDS_PER_SECOND) {
-      completenessReasons.push({ code: 'sparse_long_segment', detail: `${clock(s.start)} to ${clock(s.end)} has ${words} ${words === 1 ? 'word' : 'words'}.` })
+    const sound = soundWithin(s.start as number, s.end as number)
+    if (sound >= MIN_LONG_SEGMENT_SOUND_SECONDS && words / sound < MIN_LONG_SEGMENT_WORDS_PER_SECOND) {
+      completenessReasons.push({ code: 'sparse_long_segment', detail: `${clock(s.start as number)} to ${clock(s.end as number)} has ${words} ${words === 1 ? 'word' : 'words'}.` })
     }
   }
   const invalidReasons: ValidityReason[] = []

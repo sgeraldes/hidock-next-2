@@ -36,7 +36,7 @@ function base(over: Partial<ValidityInput> = {}): ValidityInput {
 describe('assessTranscriptValidity', () => {
   it('preserves independent invalid and doubt evidence alongside completeness gaps', () => {
     const input = base({ segments: [{ start: 0, end: 600, text: words(5) }, { start: 600, end: 650, text: words(200) }],
-      envelope: envelope([[138, 650], [160, 10]]), sample: 'contradicted' })
+      envelope: envelope([[160, 600], [138, 60]]), sample: 'contradicted' })
     const verdict = assessTranscriptValidity(input)
     expect(verdict.status).toBe('invalid')
     expect(verdict.reasons.map(r => r.code)).toEqual(expect.arrayContaining(['sparse_long_segment', 'sample_contradicts', 'text_without_audio']))
@@ -62,7 +62,7 @@ describe('assessTranscriptValidity', () => {
   })
 
   it('merges overlapping acoustic turns and detects uncovered speech', () => {
-    const v = assessTranscriptValidity(base({ segments: [{ start: 0, end: 50, text: words(500) }],
+    const v = assessTranscriptValidity(base({ segments: [{ start: 0, end: 50, text: words(100) }],
       diarizedSegments: [{ start: 0, end: 200 }, { start: 100, end: 300 }], vadSpeechSeconds: 20 }))
     expect(v.status).toBe('incomplete')
     expect(v.measures.detectedSpeechSeconds).toBe(300)
@@ -239,6 +239,26 @@ describe('assessTranscriptValidity', () => {
     const v = assessTranscriptValidity(base({ envelope: env, segments, sample: 'confirmed' }))
     expect(v.status).toBe('valid')
     expect(v.reasons.map((r) => r.code)).toContain('clock_compressed')
+  })
+
+  it('does not count silence inside a long line as missing speech (review of #173)', () => {
+    const segments = [{ start: 0, end: 300, text: words(12) }, { start: 300, end: 360, text: words(150) }]
+    // Twelve words said in five seconds of a 300-second line: the VAD heard 5 s there.
+    const quiet = assessTranscriptValidity(base({ segments, activityIntervals: [{ start: 0, end: 5 }, { start: 300, end: 360 }] }))
+    expect(quiet.reasons.map((r) => r.code)).not.toContain('sparse_long_segment')
+    // The same line over sustained sound is a gap.
+    const loud = assessTranscriptValidity(base({ segments, activityIntervals: [{ start: 0, end: 360 }] }))
+    expect(loud.reasons.map((r) => r.code)).toContain('sparse_long_segment')
+    // The envelope stands in when nothing else measured the sound.
+    expect(assessTranscriptValidity(base({ segments, envelope: envelope([[138, 300], [160, 60]]) })).reasons.map((r) => r.code))
+      .not.toContain('sparse_long_segment')
+  })
+
+  it('does not lay a compressed clock over the acoustic turns when there is no envelope', () => {
+    // 2,000 words stated over 400 s: five words a second, faster than speech.
+    const segments = Array.from({ length: 40 }, (_, i) => ({ start: i * 10, end: i * 10 + 10, text: words(50, `-${i}`) }))
+    const v = assessTranscriptValidity(base({ segments, diarizedSegments: [{ start: 0, end: 1600 }] }))
+    expect(v.reasons.map((r) => r.code)).not.toContain('uncovered_speech')
   })
 
   it('counts unresolved retry slices as one slice of speakers, not one set per slice', () => {

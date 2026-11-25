@@ -50,7 +50,7 @@ export async function retryInSmallerChunks(
       const path = join(dir, `chunk-${start}.wav`)
       await new Promise<void>((resolve, reject) => {
         const child = spawn(ffmpegPath!.replace(/app\.asar([\\/])/, 'app.asar.unpacked$1'),
-          ['-nostdin', '-i', audioPath, '-ss', String(start), '-t', String(seconds), '-ar', '16000', '-c:a', 'pcm_s16le', path],
+          ['-nostdin', '-hide_banner', '-loglevel', 'error', '-i', audioPath, '-ss', String(start), '-t', String(seconds), '-ar', '16000', '-c:a', 'pcm_s16le', path],
           { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] })
         child.stderr.on('data', chunk => process.stderr.write(chunk))
         child.on('error', reject)
@@ -59,13 +59,18 @@ export async function retryInSmallerChunks(
       if (!shouldGenerate()) throw new TranscriptionCancelledError()
       try {
         const result = await transcribe(path, seconds, start)
-        text.push(result.fullText)
         const segments = JSON.parse(result.speakers ?? '[]') as typeof turns
         // Provider labels identify voices only within one request. Acoustic
         // reconciliation after stitching may resolve these distinct labels.
-        turns.push(...segments.map(s => ({ ...s, start: s.start + start, end: s.end + start,
+        const sliceTurns = segments.map(s => ({ ...s, start: s.start + start, end: s.end + start,
           speaker: s.speaker ? `Slice ${Math.floor(start / chunkSeconds) + 1} / ${s.speaker}` : undefined,
-          crossSliceIdentity: 'unresolved' })))
+          crossSliceIdentity: 'unresolved' }))
+        turns.push(...sliceTurns)
+        // The text carries the same slice-qualified labels as the turns, so
+        // analysis and search never read two slices' "A" as one person.
+        text.push(sliceTurns.length
+          ? sliceTurns.map(t => (t.speaker ? `${t.speaker}: ${t.text}` : t.text)).join('\n')
+          : result.fullText)
         timeline.push(...(result.providerTimeline ?? []).map(event => ({ ...event,
           chunkIndex: Math.floor(start / chunkSeconds), chunkCount: Math.ceil(durationSeconds / chunkSeconds),
           audioStartSec: event.audioStartSec + start, audioEndSec: event.audioEndSec + start })))

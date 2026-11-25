@@ -712,3 +712,11 @@ it.each([
   expect(await screen.findByText('Colegio · 5%')).toBeInTheDocument()
   expect(getCandidates).toHaveBeenCalledWith('rec-1')
 })
+
+it('keeps a doubtful summary under its caveat (review of #173)', async () => {
+  installElectronAPI()
+  render(<SourceReader recording={makeRecording({ transcriptionStatus: 'complete' })} transcript={{ id: 't', recording_id: 'rec-1', full_text: 'words',
+    summary: 'A summary worth keeping.', validity_status: 'doubtful', validity_json: JSON.stringify({ reasons: [{ code: 'no_times' }] }) } as any} />)
+  expect(await screen.findByText('A summary worth keeping.')).toBeInTheDocument()
+  expect(screen.getByTestId('reader-summary-caveat').textContent).toBe('The transcript is in doubt; parts of the recording may be missing.')
+})

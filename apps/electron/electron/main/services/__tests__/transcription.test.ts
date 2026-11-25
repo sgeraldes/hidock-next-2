@@ -756,6 +756,32 @@ describe('Transcription Service', () => {
       expect(summary.outputRefs.findings).toContain('timestamps_failed_grounding')
     })
 
+    it('does not resend audio in slices when splitIncompleteAudio is off', async () => {
+      queueOne('rec-nosplit', writeMpegClip('nosplit.wav', 1565), 'gemini')
+      mockAnalyzeAudioPreflight.mockResolvedValue({ status: 'speech_present', durationSeconds: 1565,
+        nonSilentSeconds: 598, nonSilentRatio: 0.38, activityIntervals: [{ start: 0, end: 1565 }] })
+      mockGeminiResult.mockReturnValue([{ speaker: 'A', text: 'word '.repeat(17).trim(), startTime: 0.9, endTime: 1010.8 }])
+      ;(mockConfig.transcription as any).splitIncompleteAudio = false
+      try {
+        await runQueueUntil(() => expect(mockUpdateQueueItem).toHaveBeenCalledWith('queue-rec-nosplit', 'completed'))
+      } finally { delete (mockConfig.transcription as any).splitIncompleteAudio }
+      expect(mockSmallerRetry).not.toHaveBeenCalled()
+      expect(mockInsertTranscript).toHaveBeenCalled()
+    })
+
+    it('keeps the first attempt when every retry slice says no speech', async () => {
+      queueOne('rec-emptyretry', writeMpegClip('emptyretry.wav', 1565), 'gemini')
+      mockAnalyzeAudioPreflight.mockResolvedValue({ status: 'speech_present', durationSeconds: 1565,
+        nonSilentSeconds: 598, nonSilentRatio: 0.38, activityIntervals: [{ start: 0, end: 1565 }] })
+      const text = 'word '.repeat(17).trim()
+      mockGeminiResult.mockReturnValue([{ speaker: 'A', text, startTime: 0.9, endTime: 1010.8 }])
+      mockSmallerRetry.mockResolvedValue({ fullText: '', speakers: '[]' })
+      await runQueueUntil(() => expect(mockUpdateQueueItem).toHaveBeenCalledWith('queue-rec-emptyretry', 'completed'))
+      expect(mockInsertTranscript.mock.calls[0][0].full_text).toContain('word')
+      const db = await import('../database')
+      expect(vi.mocked(db.failProcessingRun).mock.calls.some(([, message]) => String(message).includes('returned no text'))).toBe(true)
+    })
+
     it('treats an empty Gemini response over sustained speech as incomplete and retries it once', async () => {
       mockAudioProfileForTranscription.mockResolvedValue({ category: 'speech' })
       queueOne('rec-empty', writeMpegClip('empty.wav', 600), 'gemini')

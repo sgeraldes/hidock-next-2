@@ -28,6 +28,7 @@ describe('bounded completeness retry', () => {
       }, [{ start: 0, end: 1 }, { start: 2, end: 3 }], 1)
       expect(paths).toHaveLength(2)
       expect(JSON.parse(result.speakers!).map((s: { start: number }) => s.start)).toEqual([0.1, 2.1])
+      expect(result.fullText).toBe('Slice 1 / A: hello\nSlice 3 / A: hello')
       expect(JSON.parse(result.speakers!).map((s: { speaker: string }) => s.speaker)).toEqual(['Slice 1 / A', 'Slice 3 / A'])
       expect(starts).toEqual([0, 2])
       expect(JSON.parse(result.speakers!).every((s: { crossSliceIdentity: string }) => s.crossSliceIdentity === 'unresolved')).toBe(true)

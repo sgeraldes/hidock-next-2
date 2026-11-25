@@ -633,6 +633,25 @@ const BYTES_PER_MB = 1024 * 1024
 export const ENGINE_SAFETY_VERSION = 3
 
 /** A namespaced Windows path (\\?\C:\... or \\?\UNC\host\...) in its ordinary form. */
+/**
+ * When a migration snapshot was taken, from its name: the ISO stamp of older
+ * names (`pre-v74-20261124T101500000Z-<uuid>`) or the base-36 milliseconds of
+ * the short ones (`pre-v75-mhzk3p0q-1a2b`). Unknown names sort first.
+ */
+export function migrationBackupTime(file: string): number {
+  const iso = /\.bak-pre-v\d+-(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(\d{3})Z-/.exec(file)
+  if (iso) {
+    const [, y, mo, d, h, mi, s, ms] = iso
+    return Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s), Number(ms))
+  }
+  const short = /\.bak-pre-v\d+-([a-z0-9]+)-[a-f0-9]{4}$/.exec(file)
+  if (short) {
+    const ms = parseInt(short[1], 36)
+    if (Number.isFinite(ms)) return ms
+  }
+  return Number.NEGATIVE_INFINITY
+}
+
 export function plainPath(path: string): string {
   if (path.startsWith('\\\\?\\UNC\\')) return '\\\\' + path.slice(8)
   if (path.startsWith('\\\\?\\')) return path.slice(4)
@@ -911,7 +930,9 @@ export class DatabaseEngine {
       const migrationBackups = directoryEntries
         .filter(file => file.startsWith(prefix) && /^pre-v\d+-(?:\d{8}T\d{9}Z-[\w-]+|[a-z0-9]+-[a-f0-9]{4})$/.test(file.slice(prefix.length)))
         .filter(file => toNamespacedPath(join(dir, file)) !== bak)
-        .sort((a, b) => a.replace(/^.*\.bak-pre-v\d+-/, '').localeCompare(b.replace(/^.*\.bak-pre-v\d+-/, '')))
+        // The old ISO names and the short base-36 ones in one order: by the time
+        // each name encodes (review of #173).
+        .sort((a, b) => migrationBackupTime(a) - migrationBackupTime(b))
       const keepOthers = failClosed ? 2 : 3
       for (const stale of migrationBackups.slice(0, Math.max(0, migrationBackups.length - keepOthers))) {
         try { await fsPromises.rm(join(dir, stale), { force: true }) } catch { /* best-effort prune */ }

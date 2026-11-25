@@ -5453,14 +5453,10 @@ export function isRecordingGraphIngestable(recordingId: string): boolean {
   )
   if (!rec) return false
   if (isValueExcludedRecording(recordingId)) return false
-  // Gap-only transcripts keep their real content. Density-failed, invalid and
-  // timing doubts retain their graph; the reader boundary uses the same rule.
+  // Gap-only and doubtful transcripts keep their real content; invalid, broken
+  // and density-failed ones feed no graph. The reader boundary uses the same rule.
   const unusable = queryOne<{ x: number }>(
-    `SELECT 1 AS x FROM transcripts t WHERE t.recording_id = ?
-        AND (t.validity_status = 'invalid' OR
-          (t.validity_status = 'incomplete' AND (COALESCE(json_valid(t.validity_json), 0) = 0 OR
-            EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(t.validity_json) THEN t.validity_json ELSE '{}' END, '$.reasons') reason
-              WHERE json_extract(reason.value, '$.code') = 'sparse_speech')))) AND t.integrity_accepted_at IS NULL`,
+    `SELECT 1 AS x FROM transcripts t WHERE t.recording_id = ? AND ${UNUSABLE_TRANSCRIPT_PREDICATE}`,
     [recordingId]
   )
   return !unusable
@@ -5551,18 +5547,29 @@ export interface RecordingEligibility {
  * people, summaries and categorization (plan 2026-10-04-validation-order).
  * Transcription itself is exempt: a new transcript is the way out.
  */
+/**
+ * A transcript nothing may be built on, for alias `t`: invalid, text the
+ * integrity check calls broken, or incomplete for a density failure. An
+ * incomplete verdict whose reasons are not a readable array fails closed.
+ * The same rule as transcript-trust.ts isTranscriptUntrusted and the
+ * renderer's isTranscriptTrusted. An owner's acceptance lifts it.
+ * Every comparison is NULL-safe, so it can also be negated (NOT (...)).
+ */
+const UNUSABLE_TRANSCRIPT_PREDICATE = `(COALESCE(t.validity_status, '') = 'invalid'
+          OR COALESCE(t.integrity_status, '') = 'broken'
+          OR (COALESCE(t.validity_status, '') = 'incomplete' AND (
+            COALESCE(CASE WHEN json_valid(t.validity_json) THEN json_type(t.validity_json, '$.reasons') END, '') != 'array'
+            OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(t.validity_json) THEN t.validity_json ELSE '{}' END, '$.reasons') reason
+              WHERE json_extract(reason.value, '$.code') = 'sparse_speech'))))
+        AND t.integrity_accepted_at IS NULL`
+
 const UNUSABLE_TRANSCRIPT_EXCLUSION = `AND NOT EXISTS (
               SELECT 1 FROM transcripts t
-               WHERE t.recording_id = r.id
-                 AND (t.validity_status = 'invalid' OR
-          (t.validity_status = 'incomplete' AND (COALESCE(json_valid(t.validity_json), 0) = 0 OR
-            EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(t.validity_json) THEN t.validity_json ELSE '{}' END, '$.reasons') reason
-              WHERE json_extract(reason.value, '$.code') = 'sparse_speech'))))
-                 AND t.integrity_accepted_at IS NULL)`
+               WHERE t.recording_id = r.id AND ${UNUSABLE_TRANSCRIPT_PREDICATE})`
 
 export function getEligibleRecordingIds(
   candidateIds: Iterable<string>,
-  options: { forTranscription?: boolean; forTextReformat?: boolean; ignoreValueExclusion?: boolean } = {}
+  options: { forTranscription?: boolean; ignoreValueExclusion?: boolean } = {}
 ): RecordingEligibility {
   const unique = [...new Set([...candidateIds].filter((id): id is string => !!id))]
   if (unique.length === 0) return { eligible: new Set<string>(), failClosed: false }
@@ -5582,14 +5589,7 @@ export function getEligibleRecordingIds(
                WHERE kc.source_recording_id = r.id
                  AND kc.deleted_at IS NULL
                  AND ${VALUE_EXCLUSION_PREDICATE})`}
-            ${options.forTranscription ? '' : options.forTextReformat ? UNUSABLE_TRANSCRIPT_EXCLUSION.replace(
-              'AND t.integrity_accepted_at IS NULL', `AND NOT (t.validity_status = 'doubtful'
-                AND COALESCE(t.integrity_status, '') != 'broken' AND TRIM(COALESCE(t.full_text, '')) != ''
-                AND json_valid(t.validity_json)
-                AND COALESCE(json_array_length(CASE WHEN json_valid(t.validity_json) THEN t.validity_json ELSE '{}' END, '$.reasons'), 0) > 0
-                AND NOT EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(t.validity_json) THEN t.validity_json ELSE '{}' END, '$.reasons') reason
-                  WHERE COALESCE(json_extract(reason.value, '$.code'), '') NOT IN ('no_times', 'audio_not_checked')))
-                AND t.integrity_accepted_at IS NULL`) : UNUSABLE_TRANSCRIPT_EXCLUSION}`,
+            ${options.forTranscription ? '' : UNUSABLE_TRANSCRIPT_EXCLUSION}`,
         options.forTranscription && options.ignoreValueExclusion ? chunk : [...chunk, ...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS]
       )
       for (const row of rows) eligible.add(row.id)
@@ -5829,10 +5829,11 @@ export async function getFailedTranscriptsForReanalysis(
   const eligibility = `FROM transcripts t JOIN recordings r ON r.id = t.recording_id
       WHERE (t.summary IS NULL OR t.summary = 'Analysis failed' OR t.title_suggestion IS NULL)
         AND r.deleted_at IS NULL AND COALESCE(r.personal, 0) = 0
-        -- An invalid, incomplete or doubtful transcript is never summarized. It
-        -- used to reach the brain and be dropped after, and its 'cancelled' run
-        -- never counted, so it came back every pass (28-oct-2026).
-        AND NOT (COALESCE(t.validity_status, '') IN ('invalid', 'incomplete', 'doubtful') AND t.integrity_accepted_at IS NULL)
+        -- A transcript nothing may be built on is never summarized. It used to
+        -- reach the brain and be dropped after, and its 'cancelled' run never
+        -- counted, so it came back every pass (28-oct-2026). Gap-only and
+        -- doubtful transcripts are summarized, as at transcription time.
+        AND NOT (${UNUSABLE_TRANSCRIPT_PREDICATE})
         AND NOT EXISTS (
           SELECT 1 FROM knowledge_captures kc
            WHERE kc.source_recording_id = t.recording_id

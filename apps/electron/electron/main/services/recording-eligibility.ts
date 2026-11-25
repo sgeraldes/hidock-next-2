@@ -127,10 +127,14 @@ export function isRecordingTranscribable(recordingId: string, options: { ignoreV
   return !failClosed && eligible.has(recordingId)
 }
 
-/** Text-only repair may add turns to preserved legacy text with timing-only doubts. */
+/**
+ * Text-only repair may add turns to preserved legacy text. Doubtful and
+ * gap-only text is eligible like everywhere else; invalid, broken or
+ * density-failed text is not (UNUSABLE_TRANSCRIPT_PREDICATE in database.ts).
+ */
 export function filterTextReformatEligibleRecordingIds(candidateIds: Iterable<string>): EligibilityResult {
   try {
-    return getEligibleRecordingIds(candidateIds, { forTextReformat: true })
+    return getEligibleRecordingIds(candidateIds)
   } catch {
     return { eligible: new Set<string>(), failClosed: true }
   }

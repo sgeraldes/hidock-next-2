@@ -488,6 +488,20 @@ describe('rotating on-boot backup', () => {
       expect(existsSync(`${path}.bak-pre-v99-20990101T000000000Z-old`)).toBe(false)
     })
 
+    it('orders old ISO and short base-36 snapshot names by their time when pruning (review of #173)', async () => {
+      const path = await v1File('backup-mixed-names')
+      const short = (iso: string) => Date.parse(iso).toString(36)
+      // 21 and 22 November in the short form, 23 November in the old form.
+      copyFileSync(path, `${path}.bak-pre-v99-${short('2026-11-21T10:00:00Z')}-aaaa`)
+      copyFileSync(path, `${path}.bak-pre-v99-${short('2026-11-22T10:00:00Z')}-bbbb`)
+      copyFileSync(path, `${path}.bak-pre-v99-20261123T100000000Z-old`)
+      const e = v2Engine(path)
+      try { await e.initialize() } finally { e.closeDatabase() }
+      expect(existsSync(`${path}.bak-pre-v99-${short('2026-11-21T10:00:00Z')}-aaaa`)).toBe(false)
+      expect(existsSync(`${path}.bak-pre-v99-${short('2026-11-22T10:00:00Z')}-bbbb`)).toBe(true)
+      expect(existsSync(`${path}.bak-pre-v99-20261123T100000000Z-old`)).toBe(true)
+    })
+
     it('reports the copy as it goes, then the migration', async () => {
       const path = await v1File('backup-progress')
       const seen: string[] = []

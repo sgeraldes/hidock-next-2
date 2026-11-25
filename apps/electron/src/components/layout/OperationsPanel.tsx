@@ -349,6 +349,11 @@ export function OperationsPanel({ sidebarOpen }: OperationsPanelProps) {
             aria-label={`Operations: ${pauseReason === 'no_gemini_key' ? 'Transcription paused: no Gemini key, ' : ''}${activeTranscriptions} transcribing${errorCount ? `, ${errorCount} error(s)` : ''}`}
             className="relative flex w-full flex-col items-center gap-1 rounded-md py-1 text-slate-300 hover:bg-slate-800"
           >
+            {pauseReason === 'no_gemini_key' && (
+              <span className="flex items-center text-amber-400" data-testid="operations-paused-no-key" title="Transcription paused: no Gemini key">
+                <Pause className="h-3 w-3" aria-hidden="true" />
+              </span>
+            )}
             {hasTranscriptions && (
               <span className="flex items-center gap-1 text-[10px] text-purple-400">
                 <Sparkles className={cn('h-3 w-3', activeTranscriptions > 0 && 'animate-pulse')} />

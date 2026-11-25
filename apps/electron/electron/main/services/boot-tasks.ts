@@ -166,6 +166,22 @@ export const BOOT_TASK_DEFS: GatedBootTask[] = [
     },
   },
   {
+    // Transcript validity — library floor, always runs, so stale verdicts and
+    // what was derived from them settle with Calendar off too (review of #173).
+    // With Calendar on, org-reconcile above already ran this pass after the
+    // invite counts settled; the serialized second call finds nothing stale.
+    name: 'transcript-validity',
+    feature: null,
+    run: async () => {
+      try {
+        const { backfillTranscriptValidity } = await import('./transcript-validity-store')
+        await backfillTranscriptValidity()
+      } catch (e) {
+        console.warn('[TranscriptValidity] startup check failed:', e)
+      }
+    },
+  },
+  {
     // Self-heal the Knowledge Library — library floor, always runs.
     name: 'knowledge-capture-backfill',
     feature: null,
