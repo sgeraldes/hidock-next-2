@@ -8,7 +8,8 @@ on:
 jobs:
   validate:
     runs-on: windows-latest
-    timeout-minutes: 45
+    # 60: a cache miss on the Zig archive cost 17 to 24 minutes on 24/25-nov-2026.
+    timeout-minutes: 60
     defaults:
       run:
         shell: bash
@@ -53,6 +54,14 @@ jobs:
         # failed on a half-written dist folder (28-oct-2026, os error 183).
         working-directory: apps/electron
         run: node node_modules/electron/install.js && node -e "console.log(require('electron'))"
+      - name: Cache the Zig archive
+        # ziglang.org served the archive in 17 to 24 minutes on 24/25-nov-2026
+        # even with the progress bar off, and the job hit its 45-minute limit.
+        # The cached zip is still checked against the published SHA-256 below.
+        uses: actions/cache@v6
+        with:
+          path: ~/zig-archive
+          key: zig-0.16.0-x86_64-windows-68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e  # pragma: allowlist secret
       - name: Install Zig 0.16.0
         # mlugg/setup-zig still runs on Node.js 20 in every release (v2.2.1 and
         # main, checked 24-nov-2026), and GitHub is retiring Node 20 actions.
@@ -68,8 +77,10 @@ jobs:
           $ProgressPreference = 'SilentlyContinue'
           $url = 'https://ziglang.org/download/0.16.0/zig-x86_64-windows-0.16.0.zip'
           $sha = $env:ZIG_SHA256
-          $zip = Join-Path $env:RUNNER_TEMP 'zig.zip'
-          Invoke-WebRequest -Uri $url -OutFile $zip
+          $cache = Join-Path $HOME 'zig-archive'
+          New-Item -ItemType Directory -Force -Path $cache | Out-Host
+          $zip = Join-Path $cache 'zig.zip'
+          if (-not (Test-Path $zip)) { Invoke-WebRequest -Uri $url -OutFile $zip }
           $got = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
           if ($got -ne $sha) { throw "zig archive checksum mismatch: $got" }
           Expand-Archive -Path $zip -DestinationPath $env:RUNNER_TEMP
