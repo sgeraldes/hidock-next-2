@@ -28,6 +28,9 @@ const DOMAIN_BY_CODE: Record<ValidityReasonCode, IssueDomain> = {
   speech_after_the_end: 'coverage',
   clock_compressed: 'coverage',
   audio_after_the_end: 'coverage',
+  sparse_speech: 'coverage',
+  uncovered_speech: 'coverage',
+  sparse_long_segment: 'coverage',
   audio_not_checked: 'unverified'
 }
 

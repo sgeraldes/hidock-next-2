@@ -52,7 +52,7 @@ export function TranscriptIntegrityPanel({ recordingId, transcript, durationSeco
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
   const label = integrityLabel(transcript)
-  const held = label === 'broken' ? null : heldValidity(transcript)
+  const held = heldValidity(transcript)
   const speakers = speakersOnly(transcript)
   const retranscribeLabel = durationSeconds ? `Transcribe again (${formatTranscriptionCost(durationSeconds)})` : 'Transcribe again'
   if ((label === 'ok' || label === 'unchecked') && !held) return null
@@ -157,7 +157,7 @@ export function TranscriptIntegrityPanel({ recordingId, transcript, durationSeco
       data-integrity={label}
       role="status"
     >
-      {label === 'suspect' && held && (
+      {(label === 'suspect' || label === 'broken') && held && (
         <div data-testid="transcript-validity" data-validity={held} className="space-y-1">
           <p className="text-foreground">{speakers && held === 'doubtful' ? SPEAKER_REVIEW.heading : VALIDITY_LABELS[held].label}.</p>
           {speakers && held === 'doubtful' && <p className="text-muted-foreground">{SPEAKER_REVIEW.detail}</p>}

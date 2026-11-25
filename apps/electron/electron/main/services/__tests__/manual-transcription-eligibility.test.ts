@@ -13,7 +13,7 @@ vi.mock('../sqlite-backup-host', () =>
   import('./helpers/in-process-sqlite-backup-host').then((m) => m.inProcessSqliteBackupHost())
 )
 
-import { initializeDatabase, closeDatabase, run, addToQueue, getQueueItems, updateQueueItem, queryOne } from '../database'
+import { initializeDatabase, closeDatabase, run, addToQueue, getQueueItems, updateQueueItem, queryOne, queryAll } from '../database'
 import { filterTranscribableRecordingIds } from '../recording-eligibility'
 
 // The migration under test must reach the newest schema, whichever number that is.
@@ -93,5 +93,26 @@ describe('manual transcription value override', () => {
       "SELECT [notnull], dflt_value FROM pragma_table_info('transcription_queue') WHERE name = 'owner_requested'"
     )
     expect(column).toEqual({ notnull: 1, dflt_value: '0' })
+  })
+
+  it('v75 adds the completeness tables to a v74 library and keeps owner requests', async () => {
+    run("INSERT INTO recordings (id, filename, date_recorded) VALUES ('v74-owner', 'v74-owner.wav', CURRENT_TIMESTAMP)")
+    const queueId = addToQueue('v74-owner', undefined, { ownerRequested: true })
+    expect(queueId).not.toBe('')
+    run('DROP TABLE diarized_segments')
+    run('DROP TABLE transcript_withheld_metadata')
+    run('ALTER TABLE schema_version RENAME TO schema_version_before_v75')
+    run('CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT DEFAULT CURRENT_TIMESTAMP)')
+    run('INSERT INTO schema_version (version) VALUES (74)')
+    closeDatabase()
+    await initializeDatabase()
+    expect(LATEST_SCHEMA_VERSION).toBe(75)
+    expect(queryOne<{ version: number }>('SELECT MAX(version) AS version FROM schema_version')?.version).toBe(75)
+    for (const table of ['diarized_segments', 'transcript_withheld_metadata']) {
+      expect(queryOne('SELECT name FROM sqlite_master WHERE type = ? AND name = ?', ['table', table])).toEqual({ name: table })
+    }
+    expect(getQueueItems('pending').find((row) => row.id === queueId)?.owner_requested).toBe(true)
+    const columns = queryAll<{ name: string }>("SELECT name FROM pragma_table_info('transcription_queue')").map((row) => row.name)
+    expect(columns).not.toContain('explicit_request')
   })
 })

@@ -133,7 +133,9 @@ describe('schema migration audit', () => {
       error: null,
     })
     expect(row.migrated_at >= before && row.migrated_at <= after).toBe(true)
-    expect(row.backup_path).toMatch(/\.bak-pre-v3-\d{8}T\d{9}Z-[\w-]+$/)
+    expect(row.backup_path).toMatch(/\.bak-pre-v3-[a-z0-9]+-[a-f0-9]{4}$/)
+    // The audit records the ordinary path, never the namespaced \\?\ form.
+    expect(row.backup_path!.startsWith('\\\\?\\')).toBe(false)
     expect(existsSync(row.backup_path!)).toBe(true)
   })
 

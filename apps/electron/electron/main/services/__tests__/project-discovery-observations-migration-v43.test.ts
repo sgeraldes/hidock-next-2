@@ -21,7 +21,11 @@ const source = readFileSync(join(__dirname, '..', 'database.ts'), 'utf-8')
 function schemaStatements(): string[] {
   const schema = source.match(/const SCHEMA = `([\s\S]*?)`\s*\n/)
   expect(schema).not.toBeNull()
-  return schema![1]
+  const diarizationDDL = source.match(/const DIARIZED_SEGMENTS_DDL = `([\s\S]*?)`/)
+  expect(diarizationDDL).not.toBeNull()
+  const withheldDDL = source.match(/const WITHHELD_METADATA_DDL = `([\s\S]*?)`/)
+  expect(withheldDDL).not.toBeNull()
+  return schema![1].replace('${DIARIZED_SEGMENTS_DDL}', diarizationDDL![1]).replace('${WITHHELD_METADATA_DDL}', withheldDDL![1])
     .split(';')
     .map((s) => s.trim())
     .filter((s) => s.length > 0)

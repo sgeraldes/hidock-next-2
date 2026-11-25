@@ -317,6 +317,8 @@ export function autoLinkRecordingsToMeetings(recordingIds?: string[]): number {
     // meeting was deleted) is a human decision too: time overlap must not fill it.
     // The preassignment branch above stays free to replace it, being human itself.
     if (holdsHumanChoice(rec)) continue
+    // A validity-withheld AI link must not return through the calendar fallback.
+    if (queryOne(`SELECT 1 AS blocked FROM transcript_withheld_metadata WHERE recording_id = ?`, [rec.id])) continue
 
     const recStart = new Date(rec.date_recorded).getTime()
     if (!Number.isFinite(recStart)) continue
@@ -332,7 +334,13 @@ export function autoLinkRecordingsToMeetings(recordingIds?: string[]): number {
     if (decision.id === null) {
       if (decision.declinedBridge) declinedBridgeCount++
     } else {
-      overlapUpdates.push({ recordingId: rec.id, meetingId: decision.id })
+      // Startup repair retracts links rejected by these candidates. Respect that
+      // evidence here too, otherwise repair and auto-link repeat on every boot.
+      const rejected = queryOne(`SELECT 1 AS blocked WHERE
+        EXISTS (SELECT 1 FROM recording_meeting_candidates WHERE recording_id = ?)
+        AND NOT EXISTS (SELECT 1 FROM recording_meeting_candidates
+          WHERE recording_id = ? AND meeting_id = ? AND is_selected = 1)`, [rec.id, rec.id, decision.id])
+      if (!rejected) overlapUpdates.push({ recordingId: rec.id, meetingId: decision.id })
     }
   }
 

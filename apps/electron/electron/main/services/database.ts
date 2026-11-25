@@ -44,7 +44,7 @@ export function hasDecisionLabelRecoveryFailed(): boolean {
   return decisionLabelRecoveryFailed
 }
 
-const SCHEMA_VERSION = 74
+const SCHEMA_VERSION = 75
 
 const DECISION_LABELS_DDL = `CREATE TABLE IF NOT EXISTS decision_label_sets (
     id TEXT PRIMARY KEY,
@@ -75,7 +75,28 @@ CREATE TABLE IF NOT EXISTS decision_labels (
 CREATE INDEX IF NOT EXISTS idx_decision_labels_question ON decision_labels(question, labeled_at);
 `
 
+const WITHHELD_METADATA_DDL = `CREATE TABLE IF NOT EXISTS transcript_withheld_metadata (
+  recording_id TEXT PRIMARY KEY,
+  transcript_fingerprint TEXT NOT NULL,
+  values_json TEXT NOT NULL,
+  withheld_at TEXT NOT NULL,
+  validity_version INTEGER NOT NULL,
+  FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
+)`
+
+const DIARIZED_SEGMENTS_DDL = `CREATE TABLE IF NOT EXISTS diarized_segments (
+  recording_id TEXT NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+  run_id TEXT NOT NULL REFERENCES processing_runs(id),
+  segment_index INTEGER NOT NULL CHECK(segment_index >= 0),
+  start REAL NOT NULL CHECK(start >= 0),
+  end REAL NOT NULL CHECK(end > start),
+  voice_label TEXT NOT NULL,
+  PRIMARY KEY(recording_id, segment_index)
+)`
+
 const SCHEMA = `
+${DIARIZED_SEGMENTS_DDL};
+${WITHHELD_METADATA_DDL};
 -- Calendar events from ICS
 CREATE TABLE IF NOT EXISTS meetings (
     id TEXT PRIMARY KEY,
@@ -156,6 +177,7 @@ CREATE TABLE IF NOT EXISTS knowledge_captures (
     -- subjects live on meetings. These fields must never overwrite each other.
     user_title TEXT,
     summary TEXT,
+    summary_source TEXT,
     category TEXT CHECK(category IN ('meeting', 'interview', '1:1', 'brainstorm', 'note', 'other')) DEFAULT 'meeting',
     status TEXT CHECK(status IN ('processing', 'ready', 'enriched')) DEFAULT 'ready',
 
@@ -3520,6 +3542,16 @@ const MIGRATIONS: Record<number, () => void> = {
     addDeletionOriginColumns(getDatabase())
     console.log('Migration v74 complete')
   },
+  75: () => {
+    // Transcript completeness: acoustic diarization segments (the evidence the
+    // completeness check reads) and the metadata withheld from an incomplete
+    // transcript. Additive; the shared engine takes the restore point first.
+    console.log('Running migration to schema v75: diarized segments and withheld metadata')
+    const database = getDatabase()
+    database.run(DIARIZED_SEGMENTS_DDL)
+    database.run(WITHHELD_METADATA_DDL)
+    console.log('Migration v75 complete')
+  },
 }
 
 /**
@@ -4026,6 +4058,12 @@ function repairPhase(): void {
     console.warn('[Database] knowledge_captures table unavailable during structural repair; skipping capture repair')
   }
 
+  database.run(WITHHELD_METADATA_DDL)
+  const summaryColumns = getTableColumns(database, 'knowledge_captures')
+  if (summaryColumns.length && !summaryColumns.includes('summary_source')) {
+    database.run('ALTER TABLE knowledge_captures ADD COLUMN summary_source TEXT')
+  }
+
   // Repair transcription_queue (spec-014: retry persistence and real-time progress)
   const queueInfo = database.exec("PRAGMA table_info(transcription_queue)")
   if (queueInfo.length > 0 && queueInfo[0].values) {
@@ -4033,7 +4071,8 @@ function repairPhase(): void {
     const queueRepairs = [
       { name: 'retry_count', def: 'INTEGER DEFAULT 0' },
       { name: 'progress', def: 'INTEGER DEFAULT 0' },
-      { name: 'provider', def: 'TEXT' }
+      { name: 'provider', def: 'TEXT' },
+      { name: 'owner_requested', def: 'INTEGER NOT NULL DEFAULT 0' }
     ]
     for (const col of queueRepairs) {
       if (!queueCols.includes(col.name)) {
@@ -5414,11 +5453,10 @@ export function isRecordingGraphIngestable(recordingId: string): boolean {
   )
   if (!rec) return false
   if (isValueExcludedRecording(recordingId)) return false
-  // A transcript that is invalid, in doubt or incomplete feeds no graph
-  // (validation order, 4-oct-2026); the eligibility boundary says the same.
+  // Gap-only and doubtful transcripts keep their real content; invalid, broken
+  // and density-failed ones feed no graph. The reader boundary uses the same rule.
   const unusable = queryOne<{ x: number }>(
-    `SELECT 1 AS x FROM transcripts t WHERE t.recording_id = ?
-        AND t.validity_status IN ('invalid', 'incomplete', 'doubtful') AND t.integrity_accepted_at IS NULL`,
+    `SELECT 1 AS x FROM transcripts t WHERE t.recording_id = ? AND ${UNUSABLE_TRANSCRIPT_PREDICATE}`,
     [recordingId]
   )
   return !unusable
@@ -5509,11 +5547,25 @@ export interface RecordingEligibility {
  * people, summaries and categorization (plan 2026-10-04-validation-order).
  * Transcription itself is exempt: a new transcript is the way out.
  */
+/**
+ * A transcript nothing may be built on, for alias `t`: invalid, text the
+ * integrity check calls broken, or incomplete for a density failure. An
+ * incomplete verdict whose reasons are not a readable array fails closed.
+ * The same rule as transcript-trust.ts isTranscriptUntrusted and the
+ * renderer's isTranscriptTrusted. An owner's acceptance lifts it.
+ * Every comparison is NULL-safe, so it can also be negated (NOT (...)).
+ */
+const UNUSABLE_TRANSCRIPT_PREDICATE = `(COALESCE(t.validity_status, '') = 'invalid'
+          OR COALESCE(t.integrity_status, '') = 'broken'
+          OR (COALESCE(t.validity_status, '') = 'incomplete' AND (
+            COALESCE(CASE WHEN json_valid(t.validity_json) THEN json_type(t.validity_json, '$.reasons') END, '') != 'array'
+            OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(t.validity_json) THEN t.validity_json ELSE '{}' END, '$.reasons') reason
+              WHERE json_extract(reason.value, '$.code') = 'sparse_speech'))))
+        AND t.integrity_accepted_at IS NULL`
+
 const UNUSABLE_TRANSCRIPT_EXCLUSION = `AND NOT EXISTS (
               SELECT 1 FROM transcripts t
-               WHERE t.recording_id = r.id
-                 AND t.validity_status IN ('invalid', 'incomplete', 'doubtful')
-                 AND t.integrity_accepted_at IS NULL)`
+               WHERE t.recording_id = r.id AND ${UNUSABLE_TRANSCRIPT_PREDICATE})`
 
 export function getEligibleRecordingIds(
   candidateIds: Iterable<string>,
@@ -5538,9 +5590,7 @@ export function getEligibleRecordingIds(
                  AND kc.deleted_at IS NULL
                  AND ${VALUE_EXCLUSION_PREDICATE})`}
             ${options.forTranscription ? '' : UNUSABLE_TRANSCRIPT_EXCLUSION}`,
-        options.forTranscription && options.ignoreValueExclusion
-          ? chunk
-          : [...chunk, ...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS]
+        options.forTranscription && options.ignoreValueExclusion ? chunk : [...chunk, ...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS]
       )
       for (const row of rows) eligible.add(row.id)
     }
@@ -5779,10 +5829,11 @@ export async function getFailedTranscriptsForReanalysis(
   const eligibility = `FROM transcripts t JOIN recordings r ON r.id = t.recording_id
       WHERE (t.summary IS NULL OR t.summary = 'Analysis failed' OR t.title_suggestion IS NULL)
         AND r.deleted_at IS NULL AND COALESCE(r.personal, 0) = 0
-        -- An invalid, incomplete or doubtful transcript is never summarized. It
-        -- used to reach the brain and be dropped after, and its 'cancelled' run
-        -- never counted, so it came back every pass (28-oct-2026).
-        AND NOT (COALESCE(t.validity_status, '') IN ('invalid', 'incomplete', 'doubtful') AND t.integrity_accepted_at IS NULL)
+        -- A transcript nothing may be built on is never summarized. It used to
+        -- reach the brain and be dropped after, and its 'cancelled' run never
+        -- counted, so it came back every pass (28-oct-2026). Gap-only and
+        -- doubtful transcripts are summarized, as at transcription time.
+        AND NOT (${UNUSABLE_TRANSCRIPT_PREDICATE})
         AND NOT EXISTS (
           SELECT 1 FROM knowledge_captures kc
            WHERE kc.source_recording_id = t.recording_id

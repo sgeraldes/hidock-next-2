@@ -27,6 +27,7 @@ import { consolidateVoiceIdentityForSpeaker } from '../services/voice-identity-c
 import { getVectorStore } from '../services/vector-store'
 import { exportMeetingWiki } from '../services/meeting-wiki'
 import { syncTrustVerdicts } from '../services/transcript-trust'
+import { getDiarizedSegments } from '../services/diarization-store'
 import { retrySummary } from '../services/transcription'
 import { success, error, Result } from '../types/api'
 import { UUIDSchema } from '../validation/common'
@@ -182,6 +183,15 @@ async function indexCorrectedTranscript(recordingId: string, fullText: string): 
 }
 
 export function registerTranscriptsHandlers(): void {
+  ipcMain.handle('transcripts:getDiarizedSegments', async (_, request: unknown) => {
+    const parsed = GetSpeakerMapRequestSchema.safeParse(request)
+    if (!parsed.success) return error('VALIDATION_ERROR', 'Invalid recording request')
+    const recording = getRecordingById(parsed.data.recordingId) ?? resolveRecordingId(parsed.data.recordingId)
+    if (!recording) return error('NOT_FOUND', 'Recording not found')
+    try { return success(getDiarizedSegments(recording.id)) }
+    catch (err) { return error('DATABASE_ERROR', 'Could not read diarized segments', err) }
+  })
+
   // The owner's "Generate summary": the missing summary, title and meeting
   // choice now, through the same brains and order, without the automatic
   // retry's wait or weekly cap (28-oct-2026).

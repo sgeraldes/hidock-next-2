@@ -691,7 +691,7 @@ it('keeps low-confidence manual suggestions including the 48 percent best match 
   await screen.findByText(/Retro Belcorp/)
   expect(screen.getByText('Colegio · 5%')).toBeInTheDocument()
 })
-it.each([undefined, 'invalid', 'incomplete', 'doubtful', 'empty'])('does not request meeting suggestions without usable transcript (%s)', async validity => {
+it.each([undefined, 'invalid', 'incomplete', 'empty'])('does not request meeting suggestions without usable transcript (%s)', async validity => {
   installElectronAPI()
   const getCandidates = vi.fn().mockResolvedValue({ success: true, data: [{ meetingId: 'weak', subject: 'Colegio', confidenceScore: 0.05 }] })
   ;(window.electronAPI.recordings as any).getCandidates = getCandidates
@@ -699,4 +699,24 @@ it.each([undefined, 'invalid', 'incomplete', 'doubtful', 'empty'])('does not req
   await act(async () => { await Promise.resolve() })
   expect(getCandidates).not.toHaveBeenCalled()
   expect(screen.queryByText(/Colegio/)).not.toBeInTheDocument()
+})
+
+it.each([
+  { validity_status: 'doubtful', validity_json: JSON.stringify({ reasons: [{ code: 'no_times' }] }) },
+  { validity_status: 'incomplete', validity_json: JSON.stringify({ reasons: [{ code: 'uncovered_speech' }] }) }
+])('keeps meeting suggestions for retained transcript metadata ($validity_status)', async verdict => {
+  installElectronAPI()
+  const getCandidates = vi.fn().mockResolvedValue({ success: true, data: [{ meetingId: 'weak', subject: 'Colegio', confidenceScore: 0.05 }] })
+  ;(window.electronAPI.recordings as any).getCandidates = getCandidates
+  render(<SourceReader recording={makeRecording()} transcript={{ id: 't', recording_id: 'rec-1', full_text: 'words', ...verdict } as any} />)
+  expect(await screen.findByText('Colegio · 5%')).toBeInTheDocument()
+  expect(getCandidates).toHaveBeenCalledWith('rec-1')
+})
+
+it('keeps a doubtful summary under its caveat (review of #173)', async () => {
+  installElectronAPI()
+  render(<SourceReader recording={makeRecording({ transcriptionStatus: 'complete' })} transcript={{ id: 't', recording_id: 'rec-1', full_text: 'words',
+    summary: 'A summary worth keeping.', validity_status: 'doubtful', validity_json: JSON.stringify({ reasons: [{ code: 'no_times' }] }) } as any} />)
+  expect(await screen.findByText('A summary worth keeping.')).toBeInTheDocument()
+  expect(screen.getByTestId('reader-summary-caveat').textContent).toBe('The transcript is in doubt; parts of the recording may be missing.')
 })

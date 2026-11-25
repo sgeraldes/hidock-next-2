@@ -145,6 +145,12 @@ export const BOOT_TASK_DEFS: GatedBootTask[] = [
       } catch (e) {
         console.error('[OrgReconciler] error:', e)
       }
+      // Settle invite-count changes in the same boot, before downstream readers.
+      // The Library has already painted; this pass yields between bounded slices.
+      try {
+        const { backfillTranscriptValidity } = await import('./transcript-validity-store')
+        await backfillTranscriptValidity()
+      } catch (e) { console.warn('[TranscriptValidity] post-reconcile check failed:', e) }
       // Learn voices once the attendees are in place (spec 2026-10-03, Phase 2).
       try {
         await runVoiceLearning()
@@ -156,6 +162,22 @@ export const BOOT_TASK_DEFS: GatedBootTask[] = [
         await runIdentityRules()
       } catch (e) {
         console.error('[IdentityRules] error:', e)
+      }
+    },
+  },
+  {
+    // Transcript validity — library floor, always runs, so stale verdicts and
+    // what was derived from them settle with Calendar off too (review of #173).
+    // With Calendar on, org-reconcile above already ran this pass after the
+    // invite counts settled; the serialized second call finds nothing stale.
+    name: 'transcript-validity',
+    feature: null,
+    run: async () => {
+      try {
+        const { backfillTranscriptValidity } = await import('./transcript-validity-store')
+        await backfillTranscriptValidity()
+      } catch (e) {
+        console.warn('[TranscriptValidity] startup check failed:', e)
       }
     },
   },

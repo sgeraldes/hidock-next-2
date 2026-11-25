@@ -157,7 +157,7 @@ describe('a transcript that is not valid, over speech', () => {
     expect(syncTrustVerdicts('inv')).toEqual({ cleared: 0, withdrawn: 1 })
     expect(syncTrustVerdicts('inv2')).toEqual({ cleared: 1, withdrawn: 0 })
     expect(rating('c-inv')).toMatchObject({ quality_rating: 'unrated', quality_method: null, quality_source: null })
-    expect(rating('c-inv2')).toMatchObject({ quality_rating: 'unrated', quality_method: 'held', quality_source: null })
+    expect(rating('c-inv2')).toMatchObject({ quality_rating: 'unrated', quality_method: null, quality_source: null })
     expect(syncTrustVerdicts()).toEqual({ cleared: 0, withdrawn: 0 })
   })
 
@@ -187,7 +187,7 @@ describe('a transcript that is not valid, over speech', () => {
 
   // Kiro review of #149: a rating taken back must come back when the
   // transcript turns valid, not stay unrated until some later scan.
-  it('gives the held content rating back from the stored evaluation once the transcript is valid', async () => {
+  it('does not revive a retracted content rating from the old evaluation once the transcript is valid', async () => {
     saveRecordingEvaluation({
       capture_id: 'c-inv2', recording_id: 'inv2', version: 1, model: 'jev-1.13.0', stars: 1.1, star_level: 1,
       stars_confidence: 0.9, kind: 'device_test', kind_confidence: 0.9, context: 'unclear', context_confidence: 0.9,
@@ -197,12 +197,12 @@ describe('a transcript that is not valid, over speech', () => {
       input_tokens: 1200, audio_warning: null,
     })
     await recomputeEvaluationsFromEvidence(['inv2'])
-    expect(rating('c-inv2')).toMatchObject({ quality_rating: 'unrated', quality_method: 'held' })
+    expect(rating('c-inv2')).toMatchObject({ quality_rating: 'unrated', quality_method: null })
 
     setTranscriptIntegrityAccepted('inv2', true)
     syncTrustVerdicts('inv2')
     await recomputeEvaluationsFromEvidence(['inv2'])
-    expect(rating('c-inv2')).toMatchObject({ quality_rating: 'garbage', quality_method: 'content', quality_source: 'ai' })
+    expect(rating('c-inv2')).toMatchObject({ quality_rating: 'unrated', quality_method: null, quality_source: null })
   })
 
   it('restores held ratings in stable pages as restored rows leave the held filter', async () => {
@@ -349,4 +349,24 @@ it('announces one recording after syncing its verdict and never an empty scope',
   syncTrustVerdicts()
   expect(emitDomainEvent.mock.calls.filter(([event]) => event.type === 'transcript:verdicts-updated')).toHaveLength(0)
   await new Promise<void>((resolve) => setImmediate(resolve))
+})
+
+describe('isTranscriptUntrusted agrees with the renderer (review of #173)', () => {
+  it('distrusts broken text under any verdict and an incomplete verdict without reasons', () => {
+    seedRecording('trust-rule')
+    story('trust-rule')
+    const set = (sql: string) => run(`UPDATE transcripts SET ${sql} WHERE recording_id = 'trust-rule'`)
+    set("integrity_status = 'broken', integrity_accepted_at = NULL, validity_status = 'audio'")
+    expect(isTranscriptUntrusted('trust-rule')).toBe(true)
+    set("integrity_accepted_at = '2026-11-24T10:00:00Z'")
+    expect(isTranscriptUntrusted('trust-rule')).toBe(false)
+    set("integrity_status = 'ok', integrity_accepted_at = NULL, validity_status = 'incomplete', validity_json = NULL")
+    expect(isTranscriptUntrusted('trust-rule')).toBe(true)
+    set(`validity_json = '${JSON.stringify({ reasons: [{ code: 'sparse_long_segment', detail: '' }] })}'`)
+    expect(isTranscriptUntrusted('trust-rule')).toBe(false)
+    set(`validity_json = '${JSON.stringify({ reasons: [{ code: 'sparse_speech', detail: '' }] })}'`)
+    expect(isTranscriptUntrusted('trust-rule')).toBe(true)
+    set("validity_status = 'doubtful'")
+    expect(isTranscriptUntrusted('trust-rule')).toBe(false)
+  })
 })

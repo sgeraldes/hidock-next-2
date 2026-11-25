@@ -45,7 +45,7 @@
 
 import { closeSync, existsSync, fsyncSync, linkSync, openSync, renameSync, rmSync, statSync, statfsSync } from 'fs'
 import { promises as fsPromises } from 'fs'
-import { dirname, basename, join } from 'path'
+import { dirname, basename, join, toNamespacedPath } from 'path'
 import { randomUUID } from 'crypto'
 
 /* -------------------------------------------------------------------------- */
@@ -627,8 +627,38 @@ const BYTES_PER_MB = 1024 * 1024
  *  1. Pending migrations require a verified, uniquely named pre-migration
  *     snapshot (`<db>.bak-pre-vN-...`).
  *  2. Every migration run writes a schema_migration_audit row.
+ *  3. The snapshot and its partial copy use short, namespaced paths, so a data
+ *     folder close to MAX_PATH still gets a verified snapshot.
  */
-export const ENGINE_SAFETY_VERSION = 2
+export const ENGINE_SAFETY_VERSION = 3
+
+/** A namespaced Windows path (\\?\C:\... or \\?\UNC\host\...) in its ordinary form. */
+/**
+ * When a migration snapshot was taken, from the suffix after `<db>.bak-`: the
+ * ISO stamp of older names (`pre-v74-20261124T101500000Z-<uuid>`) or the
+ * base-36 milliseconds of the short ones (`pre-v75-mhzk3p0q-1a2b`). Only the
+ * suffix is read, so a database name that itself looks like a backup cannot
+ * lend its stamp. Unknown names sort first.
+ */
+export function migrationBackupTime(suffix: string): number {
+  const iso = /^pre-v\d+-(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(\d{3})Z-[\w-]+$/.exec(suffix)
+  if (iso) {
+    const [, y, mo, d, h, mi, s, ms] = iso
+    return Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s), Number(ms))
+  }
+  const short = /^pre-v\d+-([a-z0-9]+)-[a-f0-9]{4}$/.exec(suffix)
+  if (short) {
+    const ms = parseInt(short[1], 36)
+    if (Number.isFinite(ms)) return ms
+  }
+  return Number.NEGATIVE_INFINITY
+}
+
+export function plainPath(path: string): string {
+  if (path.startsWith('\\\\?\\UNC\\')) return '\\\\' + path.slice(8)
+  if (path.startsWith('\\\\?\\')) return path.slice(4)
+  return path
+}
 
 /**
  * Engine-owned record of every migration run. One row per boot that migrated,
@@ -763,16 +793,16 @@ export class DatabaseEngine {
         // Only this exact engine-owned naming convention is eligible. Remove
         // interrupted copies before the free-space check so retries can recover.
         for (const file of await fsPromises.readdir(dir)) {
-          if (file.startsWith(prefix) && /^pre-v\d+\.partial$/.test(file.slice(prefix.length))) {
-            await fsPromises.rm(join(dir, file), { force: true })
+          if (file === `${base}.p` || (file.startsWith(prefix) && /^pre-v\d+\.partial$/.test(file.slice(prefix.length)))) {
+            await fsPromises.rm(toNamespacedPath(join(dir, file)), { force: true })
           }
         }
       }
       const day = new Date().toISOString().slice(0, 10)
       const version = failClosed ? this.readSchemaVersion() : 0
-      const bak = join(dir, failClosed
-        ? `${prefix}pre-v${this.config.schemaVersion}-${new Date().toISOString().replace(/[-:.]/g, '')}-${randomUUID()}`
-        : `${prefix}${day}`)
+      const bak = toNamespacedPath(join(dir, failClosed
+        ? `${prefix}pre-v${this.config.schemaVersion}-${Date.now().toString(36)}-${randomUUID().slice(0, 4)}`
+        : `${prefix}${day}`))
       let reused = false
       let backupVerified = false
       const reusable = failClosed ? this.reusableExternalBackup(before, version) : null
@@ -792,8 +822,11 @@ export class DatabaseEngine {
         }
       }
       if (!reused && !existsSync(bak)) {
+        // The migration partial keeps a short name in the data folder and a
+        // namespaced path, so a deep data folder never crosses MAX_PATH while
+        // the copy is written (the final name is namespaced the same way).
         const partial = failClosed
-          ? join(dir, prefix + 'pre-v' + this.config.schemaVersion + '.partial')
+          ? toNamespacedPath(join(dir, `${base}.p`))
           : bak + '.partial'
         if (this.config.backupExecutor) {
           let lastReport = 0
@@ -878,7 +911,9 @@ export class DatabaseEngine {
       }
       if (failClosed) {
         if (!backupVerified) this.verifyMigrationBackup(bak, version)
-        this.migrationBackupPath = bak
+        // The audit and the log carry the path a person can open, not the
+        // namespaced form used to write it.
+        this.migrationBackupPath = plainPath(bak)
         console.log('[Database] Migration v' + version + ' -> v' + this.config.schemaVersion + ' restore point: ' + bak)
       }
       const directoryEntries = await fsPromises.readdir(dir)
@@ -895,9 +930,11 @@ export class DatabaseEngine {
       // Independent retention: target version is not chronological, so sort by
       // the timestamp, and protect this boot's restore point even after clock drift.
       const migrationBackups = directoryEntries
-        .filter(file => file.startsWith(prefix) && /^pre-v\d+-\d{8}T\d{9}Z-[\w-]+$/.test(file.slice(prefix.length)))
-        .filter(file => join(dir, file) !== bak)
-        .sort((a, b) => a.replace(/^.*\.bak-pre-v\d+-/, '').localeCompare(b.replace(/^.*\.bak-pre-v\d+-/, '')))
+        .filter(file => file.startsWith(prefix) && /^pre-v\d+-(?:\d{8}T\d{9}Z-[\w-]+|[a-z0-9]+-[a-f0-9]{4})$/.test(file.slice(prefix.length)))
+        .filter(file => toNamespacedPath(join(dir, file)) !== bak)
+        // The old ISO names and the short base-36 ones in one order: by the time
+        // each name encodes (review of #173).
+        .sort((a, b) => migrationBackupTime(a.slice(prefix.length)) - migrationBackupTime(b.slice(prefix.length)))
       const keepOthers = failClosed ? 2 : 3
       for (const stale of migrationBackups.slice(0, Math.max(0, migrationBackups.length - keepOthers))) {
         try { await fsPromises.rm(join(dir, stale), { force: true }) } catch { /* best-effort prune */ }

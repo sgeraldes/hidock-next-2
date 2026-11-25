@@ -31,6 +31,18 @@ pairs with it, gives it the Hugging Face token and decides when it steps aside.
 
 ### Changes
 
+- **Incomplete transcripts are held for review.** HiDock checks how much detected speech
+  reached the text before creating summaries, titles, meeting matches or search context.
+  Recording details explain the problem and offer **Transcribe again** with a cost estimate;
+  the Library includes a **Transcription problems** filter and reasons on hover. Gemini gets
+  one automatic retry with smaller chunks. Existing transcripts are checked again while
+  their text and audio are kept. Acoustic voice segments are now retained for future timelines.
+- **Only text too sparse for its speech, or invalid text, loses what was built on it.**
+  Ratings based on such text are withdrawn; audio and owner ratings remain. Gap-only and
+  doubtful transcripts keep their summaries, titles, meeting links and search content, with
+  a note above the summary and the missing ranges shown for review.
+- **A missing Gemini key pauses transcription instead of failing the queue.** Operations
+  says why it waits, and queued requests run once a key is added.
 - **Record meetings on your PC.** New > Record opens a bar that stays across pages, with separate
   microphone and system levels. Stereo WebM keeps mic on the left and system audio on the right;
   saved and recovered recordings enter the Library through the file-import path.

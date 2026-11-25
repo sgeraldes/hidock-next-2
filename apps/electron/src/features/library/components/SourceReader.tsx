@@ -1414,13 +1414,22 @@ export function SourceReader({
   const showPlayerDetail = durationSeconds > 0 || hasWaveformPeaks
   const hasSentimentData = (timeline?.sentiment?.length ?? 0) > 0
   const summaryShown = trustedSummary(effectiveTranscript, recording.audioCategory)
-  const summaryNote = !summaryShown && effectiveTranscript?.summary?.trim() ? untrustedSummaryNote(effectiveTranscript) : null
+  // An untrusted transcript says why it has no summary even when none was
+  // written; a gap-only or doubtful one keeps its summary under a caveat.
+  const summaryNote = !summaryShown && (effectiveTranscript?.summary?.trim() || (effectiveTranscript && !isTranscriptTrusted(effectiveTranscript)))
+    ? untrustedSummaryNote(effectiveTranscript)
+    : null
+  const summaryCaveat = summaryShown && !effectiveTranscript?.integrity_accepted_at &&
+    (effectiveTranscript?.validity_status === 'doubtful' || effectiveTranscript?.validity_status === 'incomplete')
+    ? untrustedSummaryNote(effectiveTranscript)
+    : null
   const summaryText = summaryShown ?? summaryNote
   // A trusted transcript that never got its summary: offer to write it now.
-  // An invalid, incomplete or doubtful transcript is never summarized.
+  // A transcript that is invalid or too sparse for its speech is never
+  // summarized; gap-only and doubtful ones are (isTranscriptTrusted).
   const summaryMissing = hasTranscriptStrip && !!effectiveTranscript?.full_text?.trim() &&
     (!effectiveTranscript.summary?.trim() || effectiveTranscript.summary === 'Analysis failed' || !effectiveTranscript.title_suggestion) &&
-    !(['invalid', 'incomplete', 'doubtful'].includes(effectiveTranscript.validity_status ?? '') && !effectiveTranscript.integrity_accepted_at)
+    isTranscriptTrusted(effectiveTranscript)
   // One canonical order for the rows, chips and timeline lines: time, then id.
   // Display numbers are assigned HERE, once, after the canonical order, and every
   // surface (list, chips, lines, waveform markers) reuses them. ids and refIds are untouched.
@@ -1962,6 +1971,7 @@ export function SourceReader({
           {dockedSections.summary && summaryText && (
             <div className="border-t px-4 py-1" data-testid="dock-summary">
               <p className="mb-0.5 text-xs font-semibold text-foreground">Summary</p>
+              {summaryCaveat && <p className="mb-0.5 text-xs text-muted-foreground" data-testid="dock-summary-caveat">{summaryCaveat}</p>}
               <p className="w-full whitespace-pre-wrap pb-1 text-xs leading-snug text-foreground" data-testid="dock-summary-text">{summaryShown ? <FindText find={find} documentKey="summary" text={summaryShown} marksCurrent={false} /> : summaryText}</p>
             </div>
           )}
@@ -2187,7 +2197,10 @@ export function SourceReader({
                   >
                     <div className="w-full text-sm leading-relaxed text-foreground" data-testid="reader-summary-text">
                       {summaryShown
-                        ? <p className="w-full whitespace-pre-wrap"><FindText find={find} documentKey="summary" text={summaryShown} /></p>
+                        ? <>
+                            {summaryCaveat && <p className="mb-2 text-xs text-muted-foreground" data-testid="reader-summary-caveat">{summaryCaveat}</p>}
+                            <p className="w-full whitespace-pre-wrap"><FindText find={find} documentKey="summary" text={summaryShown} /></p>
+                          </>
                         : <p className="w-full text-muted-foreground">{summaryNote}</p>}
                     </div>
                   </ReaderSection>

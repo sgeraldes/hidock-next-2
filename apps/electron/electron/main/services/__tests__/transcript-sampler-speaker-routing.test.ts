@@ -54,11 +54,13 @@ function seed(id: string, date: string, pairedStarts: boolean): void {
   )
   mkdirSync(join(paths.cache, 'audio-envelope'), { recursive: true })
   writeFileSync(join(paths.cache, 'audio-envelope', `${id}.u8`), new Uint8Array(Math.round(600 / FRAME_SECONDS)).fill(160))
+  // 80 words a minute over the 10 minutes of speech: dense enough that the
+  // completeness check (30 a minute) leaves only the speaker doubt.
   const segments = Array.from({ length: 20 }, (_, i) => {
     const start = pairedStarts ? Math.floor(i / 2) * 60 : i * 30
-    return { speaker: `Voice ${i % 4}`, start, end: start + 25, text: Array.from({ length: 10 }, (_, w) => `w${w}-${i}`).join(' ') }
+    return { speaker: `Voice ${i % 4}`, start, end: start + 25, text: Array.from({ length: 40 }, (_, w) => `w${w}-${i}`).join(' ') }
   })
-  insertTranscript({ id: `trans_${id}`, recording_id: id, full_text: 'x', language: 'es', speakers: JSON.stringify(segments), word_count: 200 })
+  insertTranscript({ id: `trans_${id}`, recording_id: id, full_text: 'x', language: 'es', speakers: JSON.stringify(segments), word_count: 800 })
   refreshTranscriptValidity(id)
 }
 

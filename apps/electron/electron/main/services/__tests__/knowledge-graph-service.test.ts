@@ -275,7 +275,9 @@ describe('knowledge-graph-service', () => {
       expect(complete).toHaveBeenCalledTimes(1)
       const { queryAll } = await import('../database')
       expect(queryAll("SELECT state FROM provider_checkpoints WHERE recording_id='rec-invalid'")).toEqual([{ state: 'received' }])
-      expect(queryAll("SELECT status FROM processing_runs WHERE recording_id='rec-invalid' AND stage='graph-sync'"))
+      // Insertion order: processing_runs ids are random UUIDs, so without an
+      // ORDER BY the two rows came back in either order (flaky, 25-nov-2026).
+      expect(queryAll("SELECT status FROM processing_runs WHERE recording_id='rec-invalid' AND stage='graph-sync' ORDER BY rowid"))
         .toEqual([{ status: 'failed' }, { status: 'completed' }])
     })
 
