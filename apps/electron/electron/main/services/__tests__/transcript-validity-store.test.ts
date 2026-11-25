@@ -296,6 +296,18 @@ describe('a sample of the audio', () => {
     expect(previewTranscriptValidity('preview-text', '[]', { fullText: '', vadSpeechSeconds: 600 })?.reasons.map((r) => r.code)).toContain('sparse_speech')
   })
 
+  it('gives the stored assessment the VAD activity the fresh one had (review of #173)', () => {
+    seed('stored-activity', [[160, 600]])
+    run('UPDATE transcripts SET speakers = ? WHERE recording_id = ?', [JSON.stringify([
+      { start: 0, end: 300, text: 'one two three four five six seven eight nine ten eleven twelve' },
+      { start: 300, end: 360, text: 'word '.repeat(150) }]), 'stored-activity'])
+    run(`INSERT INTO processing_runs (id, recording_id, stage, provider, tool, execution, status, started_at, quality_json)
+      VALUES ('vad-stored-activity', 'stored-activity', 'vad', 'hidock-next', 'vad', 'local', 'completed', '2026-11-24', ?)`,
+      [JSON.stringify({ nonSilentSeconds: 65, durationSeconds: 600, activityIntervals: [{ start: 0, end: 5 }, { start: 300, end: 360 }] })])
+    expect(readSpeechEvidence('stored-activity').activityIntervals).toEqual([{ start: 0, end: 5 }, { start: 300, end: 360 }])
+    expect(refreshTranscriptValidity('stored-activity')?.reasons.map((r) => r.code)).not.toContain('sparse_long_segment')
+  })
+
   it('reads the acoustic turns stored under the acoustic run, which the transcript does not reference', () => {
     seed('acoustic-run', [[160, 600]])
     run(`INSERT INTO processing_runs (id, recording_id, stage, provider, tool, execution, status, started_at)
@@ -316,6 +328,7 @@ describe('a sample of the audio', () => {
     expect(queryOne('SELECT summary FROM transcripts WHERE recording_id = ?', ['gap-to-sparse'])).toEqual({ summary: null })
     const event = emitDomainEvent.mock.calls.map(([e]) => e).find((e) => e.type === 'transcript:verdicts-updated')
     expect(event?.payload.metadataChangedIds).toContain('gap-to-sparse')
+    expect(event?.payload.recordingIds).toContain('gap-to-sparse')
   })
 
   it('judges the verdict again when restoring the AI meeting link changes the invite count', () => {

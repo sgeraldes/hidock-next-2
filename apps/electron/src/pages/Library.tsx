@@ -1061,7 +1061,10 @@ export function Library() {
         const metadataIds = [...pendingMetadata]
         pendingMetadata.clear()
         void (async () => {
-          if (metadataIds.length > 0) await reloadTranscripts(metadataIds)
+          // A failed metadata read must not skip the verdict refresh.
+          if (metadataIds.length > 0) {
+            await reloadTranscripts(metadataIds).catch((error) => console.warn('[Library] Metadata refresh failed:', error))
+          }
           await reloadVerdicts(ids)
         })().catch((error) => console.warn('[Library] Verdict refresh failed:', error))
       }, 1500)

@@ -128,6 +128,11 @@ export function readSpeechEvidence(recordingId: string): SpeechEvidence {
     // never transcript timestamps or file duration as a speech estimate.
     vadSpeechSeconds: typeof v.nonSilentSeconds === 'number' ? v.nonSilentSeconds : profile?.sound_seconds ?? null,
     durationSeconds: typeof v.durationSeconds === 'number' ? v.durationSeconds : profile?.duration_seconds ?? null,
+    // The same sound evidence the fresh check had: the VAD's activity stretches.
+    activityIntervals: Array.isArray(v.activityIntervals)
+      ? (v.activityIntervals as Array<{ start?: unknown; end?: unknown }>)
+          .filter((s): s is { start: number; end: number } => typeof s?.start === 'number' && typeof s?.end === 'number')
+      : undefined,
     providerSeconds: completed.length ? completed.reduce((sum, e) => sum + e.elapsedMs, 0) / 1000 : null,
     diarizedSegments: persisted.length ? persisted : Array.isArray(d.segments) ? d.segments as Array<{ start: number; end: number }> : undefined
   }
@@ -426,7 +431,7 @@ async function runValidityBackfill(
         }
         if (!settled) continue
         const { validity, previousStatus, newlyWithheld, restored } = settled
-        if (restored || previousStatus !== validity.status) changedIds.push(recording_id)
+        if (restored || newlyWithheld || previousStatus !== validity.status) changedIds.push(recording_id)
         // Withholding that starts now (a gap-only transcript turning sparse stays
         // 'incomplete') drives the notification and the wiki cleanup.
         if (restored || newlyWithheld) metadataChangedIds.push(recording_id)

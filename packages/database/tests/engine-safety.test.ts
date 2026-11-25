@@ -17,6 +17,7 @@ import { copyFileSync, existsSync, rmSync, readdirSync, statSync, writeFileSync 
 import * as fs from 'fs'
 import Database from 'better-sqlite3'
 import { DatabaseEngine, MassDeleteError, parseDestructiveStatement } from '../src/index.js'
+import { migrationBackupTime } from '../src/engine.js'
 
 vi.mock('fs', { spy: true })
 
@@ -500,6 +501,13 @@ describe('rotating on-boot backup', () => {
       expect(existsSync(`${path}.bak-pre-v99-${short('2026-11-21T10:00:00Z')}-aaaa`)).toBe(false)
       expect(existsSync(`${path}.bak-pre-v99-${short('2026-11-22T10:00:00Z')}-bbbb`)).toBe(true)
       expect(existsSync(`${path}.bak-pre-v99-20261123T100000000Z-old`)).toBe(true)
+    })
+
+    it('reads a snapshot time from its own suffix, not from a database name that looks like a backup', () => {
+      expect(migrationBackupTime('pre-v75-' + Date.parse('2026-11-22T10:00:00Z').toString(36) + '-bbbb')).toBe(Date.parse('2026-11-22T10:00:00Z'))
+      expect(migrationBackupTime('pre-v74-20261123T100000000Z-old')).toBe(Date.parse('2026-11-23T10:00:00Z'))
+      // The part before the suffix is the database's own name; it is never parsed.
+      expect(migrationBackupTime('pre-v75-mhzk3p0q')).toBe(Number.NEGATIVE_INFINITY)
     })
 
     it('reports the copy as it goes, then the migration', async () => {
