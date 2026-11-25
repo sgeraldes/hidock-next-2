@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   OVERLAP_SECONDS, TIMING_CLASSIFICATION_LABELS, TIMING_KIND_LABELS,
@@ -63,6 +63,8 @@ export function TranscriptTimingReview({ recordingId, segments = [], review, onJ
   // Chosen by id: a shifted section and a duplicate can start on the same line.
   const [chosenId, setChosenId] = useState<string | null>(null)
   useEffect(() => { setConfirming(null); setLowConfidence(null) }, [assessment?.fingerprint])
+  const currentRecording = useRef(recordingId)
+  useEffect(() => { currentRecording.current = recordingId }, [recordingId])
   const findings = assessment?.findings ?? []
   const hidden = assessment?.hiddenIndices ?? []
   const fixed = assessment?.fixedRanges ?? []
@@ -81,10 +83,14 @@ export function TranscriptTimingReview({ recordingId, segments = [], review, onJ
 
   const save = async (call: () => Promise<{ success: true; data: TranscriptContentUpdate } | { success: false; error: { message: string; details?: unknown } }>, onLowConfidence?: string) => {
     if (busy) return
+    const startedFor = recordingId
     review.setBusy(true)
     review.setFailure(null)
     try {
       const result = await call()
+      // The owner moved to another recording while this saved: its lines must
+      // not replace the transcript now on screen (CodeRabbit review of #195).
+      if (currentRecording.current !== startedFor) return
       if (result.success) {
         onUpdated(result.data)
         review.reload()

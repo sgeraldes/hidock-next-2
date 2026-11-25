@@ -16,6 +16,7 @@ const db = vi.hoisted(() => ({
   resolveRecordingId: vi.fn(),
   queryOne: vi.fn(),
   queryAll: vi.fn(() => []),
+  saveDatabase: vi.fn(),
   runInTransaction: vi.fn((fn: () => unknown) => fn()),
   runNoSave: vi.fn(),
   run: vi.fn(),
@@ -328,6 +329,49 @@ describe('timing review persistence', () => {
     const result = await handlerFor('transcripts:retranscribeSection')?.({} as never, { recordingId: 'rec-1', fingerprint: fp, findingId: 'odd_line:1-1' }) as any
     expect(result.success).toBe(false)
     expect(transcribeRecordingSection).not.toHaveBeenCalled()
+  })
+
+  it('keeps per-turn speaker overrides and splits on their turns when a section transcription adds lines (CodeRabbit review of #195)', async () => {
+    transcribeRecordingSection.mockResolvedValue({ runId: 'run-9', segments: [{ start: 4.9, end: 5.4, text: 'hola' }, { start: 5.4, end: 5.6, text: 'manuel' }] })
+    db.getRecordingById.mockReturnValue({ id: 'rec-1', meeting_id: null, date_recorded: null, created_at: null })
+    registerTranscriptsHandlers()
+    await handlerFor('transcripts:retranscribeSection')?.({} as never, { recordingId: 'rec-1', fingerprint, findingId: 'odd_line:0-0' })
+    const sql = db.runNoSave.mock.calls.map(([q, params]) => [q.replace(/\s+/g, ' '), params])
+    // The replaced line keeps turn 0; turns from 1 on move by the 2 new lines.
+    expect(sql).toContainEqual([expect.stringMatching(/^UPDATE turn_speaker_overrides SET turn_index = -\(turn_index \+ \?\) - 1 WHERE recording_id = \? AND turn_index >= \?/), [2, 'rec-1', 1]])
+    expect(sql).toContainEqual([expect.stringMatching(/^UPDATE speaker_splits SET from_turn_index = -\(from_turn_index \+ \?\) - 1 WHERE recording_id = \? AND from_turn_index >= \?/), [2, 'rec-1', 1]])
+  })
+
+  it('drops the overrides of a section run\'s own turns and moves later ones back when it is undone', async () => {
+    const spliced = [
+      { start: 494.8, end: 505.7, text: 'opening greeting here', timingHidden: true, sectionReplacedBy: 'run-9' },
+      { start: 4.9, end: 5.4, text: 'hola', sectionRunId: 'run-9' }, { start: 5.4, end: 5.6, text: 'manuel', sectionRunId: 'run-9' },
+      { start: 13, end: 14, text: 'good morning' }, { start: 15, end: 16, text: 'how are you' }
+    ]
+    const { transcriptFingerprint } = await import('../../services/transcript-validity-store')
+    const fp = transcriptFingerprint(JSON.stringify(spliced))
+    loadTimingState.mockResolvedValue({ transcriptId: 't-1', speakers: JSON.stringify(spliced), segments: spliced, durationSeconds: 600, evidence,
+      assessment: { fingerprint: fp, findings: [], hiddenIndices: [], fixedRanges: [], sectionRuns: [{ runId: 'run-9', from: 1, to: 2 }], reviewed: true, evidence: 'vad' } })
+    db.queryOne.mockReturnValue({ id: 't-1', speakers: JSON.stringify(spliced) })
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint: fp, action: 'undo_section', runId: 'run-9' }) as any
+    expect(result.success).toBe(true)
+    const sql = db.runNoSave.mock.calls.map(([q, params]) => [q.replace(/\s+/g, ' '), params])
+    expect(sql).toContainEqual([expect.stringMatching(/^DELETE FROM turn_speaker_overrides WHERE recording_id = \? AND turn_index >= \? AND turn_index < \?/), ['rec-1', 1, 3]])
+    expect(sql).toContainEqual([expect.stringMatching(/^UPDATE turn_speaker_overrides SET turn_index = -\(turn_index \+ \?\) - 1/), [-2, 'rec-1', 3]])
+  })
+
+  it('does not persist search chunks of a save that a newer save replaced (CodeRabbit review of #195)', async () => {
+    db.getRecordingById.mockReturnValue({ id: 'rec-1', meeting_id: null, date_recorded: null, created_at: null })
+    let options: { shouldPersist: () => boolean } | undefined
+    vectorStore.indexTranscript.mockImplementation(async (_text: string, opts: typeof options) => { options = opts; return 1 })
+    registerTranscriptsHandlers()
+    await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint, action: 'hide', findingId: 'odd_line:0-0' })
+    expect(options).toBeDefined()
+    db.queryOne.mockReturnValue({ full_text: 'good morning\nhow are you' })
+    expect(options!.shouldPersist()).toBe(true)
+    db.queryOne.mockReturnValue({ full_text: 'a newer save' })
+    expect(options!.shouldPersist()).toBe(false)
   })
 
   it('writes nothing when the section transcription fails', async () => {

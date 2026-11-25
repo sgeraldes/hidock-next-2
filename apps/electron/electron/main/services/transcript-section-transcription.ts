@@ -56,14 +56,26 @@ export function sectionBounds(windowStart: number, windowEnd: number, durationSe
   return { start, seconds }
 }
 
-/** The provider's lines moved to the recording's clock and kept inside the section. */
-export function sectionSegments(result: SectionTranscript, start: number, seconds: number): TimingSegment[] {
+export interface SectionOptions {
+  /** The flagged window; the padding around it may hold the trusted neighbour lines. */
+  window: { start: number; end: number }
+  /** Names this run's voices apart from every other run's, for example "Section 1a2b3c4d". */
+  label: string
+}
+
+/**
+ * The provider's lines moved to the recording's clock and kept inside the
+ * flagged window. A line wholly in the padding is a neighbour line heard
+ * again and is dropped; a line across the window's edge is clipped to it.
+ */
+export function sectionSegments(result: SectionTranscript, bounds: { start: number; seconds: number }, options: SectionOptions): TimingSegment[] {
   let parsed: unknown
   try {
     parsed = JSON.parse(result.speakers ?? '[]')
   } catch {
     throw new Error('The section transcription returned unreadable lines')
   }
+  const { window, label } = options
   const rows = Array.isArray(parsed) ? parsed as Array<Record<string, unknown>> : []
   const lines: TimingSegment[] = []
   for (const row of rows) {
@@ -71,30 +83,33 @@ export function sectionSegments(result: SectionTranscript, start: number, second
     if (!text) continue
     const at = typeof row.start === 'number' && Number.isFinite(row.start) ? row.start : 0
     const until = typeof row.end === 'number' && Number.isFinite(row.end) ? row.end : at
-    const lineStart = start + Math.min(Math.max(0, at), seconds)
+    const lineStart = bounds.start + Math.min(Math.max(0, at), bounds.seconds)
+    const lineEnd = Math.max(lineStart, bounds.start + Math.min(Math.max(0, until), bounds.seconds))
+    if (lineEnd <= window.start || lineStart >= window.end) continue
+    const clippedStart = Math.max(window.start, lineStart)
     lines.push({
-      start: lineStart,
-      end: Math.max(lineStart, start + Math.min(Math.max(0, until), seconds)),
+      start: clippedStart,
+      end: Math.max(clippedStart, Math.min(window.end, lineEnd)),
       text,
-      // Provider labels name voices within this one request only, as the
-      // smaller-chunk retry labels its slices (transcription-completeness-retry.ts).
-      ...(typeof row.speaker === 'string' && row.speaker ? { speaker: `Section / ${row.speaker}` } : {})
+      // Provider labels name voices within this one request only, so each run
+      // gets its own namespace, as the smaller-chunk retry labels its slices.
+      ...(typeof row.speaker === 'string' && row.speaker ? { speaker: `${label} / ${row.speaker}` } : {})
     })
   }
-  if (!lines.length && result.fullText.trim()) lines.push({ start, end: start + seconds, text: result.fullText.trim() })
-  if (!lines.length) throw new Error('The section transcription found no speech')
+  if (!lines.length && !rows.length && result.fullText.trim()) lines.push({ start: window.start, end: window.end, text: result.fullText.trim() })
+  if (!lines.length) throw new Error('The section transcription found no speech in this section')
   return lines.sort((a, b) => a.start - b.start)
 }
 
 export async function transcribeSection(
-  audioPath: string, bounds: { start: number; seconds: number }, deps: SectionDeps
+  audioPath: string, bounds: { start: number; seconds: number }, deps: SectionDeps, options: SectionOptions
 ): Promise<TimingSegment[]> {
   const dir = await mkdtemp(join(tmpdir(), 'hidock-section-'))
   try {
     const slice = join(dir, 'section.wav')
     await deps.extract(audioPath, bounds.start, bounds.seconds, slice)
     const result = await deps.transcribe(slice, bounds.seconds)
-    return sectionSegments(result, bounds.start, bounds.seconds)
+    return sectionSegments(result, bounds, options)
   } finally {
     // Only this invocation's own temporary directory.
     await rm(dir, { recursive: true, force: true })

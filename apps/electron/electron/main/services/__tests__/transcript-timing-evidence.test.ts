@@ -98,3 +98,38 @@ describe('applyTimingReview', () => {
     expect(undone.some((s) => s.sectionReplacedBy || s.sectionRunId)).toBe(false)
   })
 })
+
+describe('CodeRabbit review of #195', () => {
+  it('keeps an absent original end absent across repeated fixes, so Undo restores no end', () => {
+    const rows: TimingSegment[] = [{ start: 0, end: 1, text: 'uno' }, { start: 500, text: 'sin fin' }, { start: 6, end: 7, text: 'tres' }]
+    const once = applyTimingReview(rows, { action: 'fix_times', indices: [1], alignment: { starts: [2], ends: [3] } })
+    const twice = applyTimingReview(once, { action: 'fix_times', indices: [1], alignment: { starts: [2.5], ends: [3.5] } })
+    expect(twice[1]).not.toHaveProperty('timingOriginalEnd')
+    const undone = applyTimingReview(twice, { action: 'undo_fix', range: { from: 1, to: 1 } })
+    expect(undone[1]).toEqual({ start: 500, text: 'sin fin', timingReviewed: true })
+  })
+
+  it('refuses to undo a section run that a later run replaced, so one version stays active', () => {
+    const rows: TimingSegment[] = [{ start: 0, end: 1, text: 'a b' }, { start: 500, end: 501, text: 'c d' }, { start: 6, end: 7, text: 'e f' }]
+    const first = spliceSection(rows, 1, 1, [{ start: 2, end: 3, text: 'primera' }], 'run-1')
+    const second = spliceSection(first, 2, 2, [{ start: 2, end: 3, text: 'segunda' }], 'run-2')
+    expect(sectionRuns(second).map((r) => r.runId)).toEqual(['run-2'])
+    expect(() => applyTimingReview(second, { action: 'undo_section', runId: 'run-1' })).toThrow(/later/)
+    const back = applyTimingReview(second, { action: 'undo_section', runId: 'run-2' })
+    expect(back.filter((s) => !s.timingHidden).map((s) => s.text)).toEqual(['a b', 'primera', 'e f'])
+    expect(sectionRuns(back).map((r) => r.runId)).toEqual(['run-1'])
+  })
+
+  it('does not offer Fix times on a legacy line that holds its own timed turns', () => {
+    const rows: TimingSegment[] = [
+      { start: 0, end: 1, text: 'uno dos' },
+      { start: 900, end: 960, text: '[15:00] Speaker 1: hola [15:30] Speaker 2: buen dia' },
+      { start: 12, end: 13, text: 'tres cuatro' }
+    ]
+    const speech: SpeechEvidence = { hasAudio: () => true, spansIn: (a, b) => [{ start: a, end: b }] }
+    const [finding] = assessTimingEvidence(rows, speech, 1000)
+    expect(finding.from).toBe(1)
+    expect(finding.fix?.ok).toBe(false)
+    expect(finding.fix?.reason).toMatch(/own times/)
+  })
+})

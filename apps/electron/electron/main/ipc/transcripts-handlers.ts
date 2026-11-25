@@ -33,6 +33,7 @@ import { success, error, Result } from '../types/api'
 import { getTranscriptTiming, loadTimingState } from '../services/transcript-timing-store'
 import { applyTimingReview, spliceSection, type TimingReviewRequest } from '../services/transcript-timing-evidence'
 import { alignToSpeech } from '../services/transcript-time-aligner'
+import { renderedTurnCounts } from '../../../src/shared/inline-turns'
 import { transcriptFingerprint } from '../services/transcript-validity-store'
 import { OVERLAP_SECONDS, type TimingSegment } from '../../../src/shared/transcript-timing'
 import { UUIDSchema } from '../validation/common'
@@ -177,20 +178,27 @@ function safeErrorMessage(err: unknown): string {
   return err instanceof Error && err.message.trim() ? err.message : 'Embedding provider unavailable'
 }
 
-async function indexCorrectedTranscript(recordingId: string, fullText: string): Promise<number> {
+/**
+ * Index the saved text. With onlyIfCurrent, nothing is generated or written
+ * once a newer save changed the transcript, so search never keeps chunks of
+ * replaced text (CodeRabbit review of #195).
+ */
+async function indexCorrectedTranscript(recordingId: string, fullText: string, onlyIfCurrent = false): Promise<number> {
   const recording = getRecordingById(recordingId)
   if (!recording || !isRecordingEligible(recordingId)) throw new Error('Recording is no longer available')
 
   const meeting = recording.meeting_id
     ? queryOne<{ subject: string | null }>('SELECT subject FROM meetings WHERE id = ?', [recording.meeting_id])
     : undefined
+  const isCurrent = () =>
+    queryOne<{ full_text: string }>('SELECT full_text FROM transcripts WHERE recording_id = ?', [recordingId])?.full_text === fullText
   const indexedChunks = await getVectorStore().indexTranscript(fullText, {
     meetingId: recording.meeting_id ?? undefined,
     recordingId,
     timestamp: recording.date_recorded ?? recording.created_at,
     subject: meeting?.subject ?? undefined,
-    shouldGenerate: () => isRecordingEligible(recordingId),
-    shouldPersist: () => isRecordingEligible(recordingId)
+    shouldGenerate: () => isRecordingEligible(recordingId) && (!onlyIfCurrent || isCurrent()),
+    shouldPersist: () => isRecordingEligible(recordingId) && (!onlyIfCurrent || isCurrent())
   })
   return indexedChunks
 }
@@ -205,6 +213,33 @@ const ReviewTimingRequestSchema = z.object({
     .refine((r) => r.to >= r.from, { message: 'Range end must not precede its start' }).optional(),
   runId: z.string().min(1).max(100).optional()
 })
+
+/**
+ * Speaker overrides and splits are keyed by rendered turn position. When a
+ * section transcription adds or removes turns, every turn from `at` on moves
+ * by `by`; with a negative `by`, the turns [at + by, at) were removed and
+ * their overrides go with them (CodeRabbit review of #195).
+ */
+interface TurnShift {
+  at: number
+  by: number
+}
+
+const TURN_KEYED_TABLES = [['turn_speaker_overrides', 'turn_index'], ['speaker_splits', 'from_turn_index']] as const
+
+function shiftTurnKeys(recordingId: string, shift: TurnShift): void {
+  if (shift.by === 0) return
+  for (const [table, column] of TURN_KEYED_TABLES) {
+    if (shift.by < 0) {
+      runNoSave(`DELETE FROM ${table} WHERE recording_id = ? AND ${column} >= ? AND ${column} < ?`, [recordingId, shift.at + shift.by, shift.at])
+    }
+    // Through negative values, so a unique position is never held twice mid-update.
+    runNoSave(`UPDATE ${table} SET ${column} = -(${column} + ?) - 1 WHERE recording_id = ? AND ${column} >= ?`, [shift.by, recordingId, shift.at])
+    runNoSave(`UPDATE ${table} SET ${column} = -${column} - 1 WHERE recording_id = ? AND ${column} < 0`, [recordingId])
+  }
+}
+
+const sum = (values: number[]) => values.reduce((total, n) => total + n, 0)
 
 interface TimingSaveResult {
   fullText: string
@@ -225,7 +260,9 @@ function timingError(err: unknown): Result<never> {
  * Save reviewed lines, then judge and index them again, as a text edit does.
  * Hidden lines stay in the stored segments and leave the text and the index.
  */
-async function saveTimingSegments(recordingId: string, fingerprint: string, segments: TimingSegment[]): Promise<TimingSaveResult> {
+async function saveTimingSegments(
+  recordingId: string, fingerprint: string, segments: TimingSegment[], turnShift?: TurnShift
+): Promise<TimingSaveResult> {
   const fullText = segments.filter((s) => !s.timingHidden).map((s) => (s.speaker ? `${s.speaker}: ${s.text}` : s.text)).join('\n')
   const wordCount = fullText.split(/\s+/u).filter(Boolean).length
   const vectorStore = getVectorStore()
@@ -238,6 +275,7 @@ async function saveTimingSegments(recordingId: string, fingerprint: string, segm
     transcriptId = row.id
     runNoSave('UPDATE transcripts SET speakers = ?, full_text = ?, word_count = ?, validity_version = NULL WHERE id = ?',
       [JSON.stringify(segments), fullText, wordCount, row.id])
+    if (turnShift) shiftTurnKeys(recordingId, turnShift)
     runNoSave('DELETE FROM vector_embeddings WHERE recording_id = ?', [recordingId])
   })
   vectorStore.dropByRecordingFromMemory(recordingId)
@@ -250,7 +288,7 @@ async function saveTimingSegments(recordingId: string, fingerprint: string, segm
     console.warn('[TranscriptTiming] Saved; the timing check could not run again:', safeErrorMessage(err))
   }
   try {
-    await indexCorrectedTranscript(recordingId, fullText)
+    await indexCorrectedTranscript(recordingId, fullText, true)
   } catch (err) {
     console.warn(`[TranscriptTiming] Saved ${recordingId}; RAG reindex pending:`, safeErrorMessage(err))
   }
@@ -284,6 +322,7 @@ export function registerTranscriptsHandlers(): void {
       const finding = findingId ? state.assessment.findings.find((f) => f.id === findingId) : undefined
       if (findingId && !finding) return error('RETRYABLE_ERROR', 'This problem is no longer in the transcript')
       let review: TimingReviewRequest
+      let turnShift: TurnShift | undefined
       if (action === 'fix_times') {
         if (!finding || finding.kind === 'duplicate') return error('VALIDATION_ERROR', 'Choose a line or section out of order')
         if (finding.windowStart === null || finding.windowEnd === null) return error('VALIDATION_ERROR', finding.fix?.reason ?? 'Where these lines belong is unknown')
@@ -302,8 +341,15 @@ export function registerTranscriptsHandlers(): void {
       } else {
         if (!runId) return error('VALIDATION_ERROR', 'Choose the section transcription')
         review = { action, runId }
+        // The run's own turns go away; the turns after them move back.
+        const counts = renderedTurnCounts(state.segments)
+        const rows = state.segments.flatMap((s, i) => s.sectionRunId === runId ? [i] : [])
+        if (rows.length) {
+          const removed = sum(rows.map((i) => counts[i]))
+          turnShift = { at: sum(counts.slice(0, rows[0])) + removed, by: -removed }
+        }
       }
-      return success(await saveTimingSegments(recordingId, fingerprint, applyTimingReview(state.segments, review)))
+      return success(await saveTimingSegments(recordingId, fingerprint, applyTimingReview(state.segments, review), turnShift))
     } catch (err) {
       return timingError(err)
     }
@@ -326,8 +372,11 @@ export function registerTranscriptsHandlers(): void {
       if ((finding.fix?.displacement ?? 0) < OVERLAP_SECONDS) return error('VALIDATION_ERROR', 'These lines are where they belong, give or take two people talking at once')
       const { transcribeRecordingSection } = await import('../services/transcription')
       const section = await transcribeRecordingSection(recordingId, finding.windowStart, finding.windowEnd, state.durationSeconds)
+      // The new lines go in after the hidden old ones: every later turn moves by their count.
+      const counts = renderedTurnCounts(state.segments)
+      const turnShift = { at: sum(counts.slice(0, finding.to + 1)), by: sum(renderedTurnCounts(section.segments)) }
       return success(await saveTimingSegments(recordingId, fingerprint,
-        spliceSection(state.segments, finding.from, finding.to, section.segments, section.runId)))
+        spliceSection(state.segments, finding.from, finding.to, section.segments, section.runId), turnShift))
     } catch (err) {
       return timingError(err)
     }

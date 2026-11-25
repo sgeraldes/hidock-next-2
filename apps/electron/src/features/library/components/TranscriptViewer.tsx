@@ -760,6 +760,8 @@ export function TranscriptViewer({
   // The speaker text indexed is the text each turn renders, so offsets land on
   // the shown characters. Without timestamps every turn parses at 0: no time.
   const findDocuments = useMemo<FindDocument[]>(() => segments.flatMap((segment, i) => {
+    // A hidden line shows no text, so find never counts or selects it; keys keep the turn index.
+    if (segment.timingHidden) return []
     const effective = segment.speaker ? effectiveLabelFor(segment.speaker, i, splits) : undefined
     const name = !segment.speaker || !effective
       ? undefined

@@ -48,6 +48,12 @@ export const ALIGN_FULL_RATE_HIGH = 6
 export const ALIGN_ZERO_RATE_LOW = 0.4
 /** The pace no one speaks at (CRAMPED_WORDS_PER_SECOND is 8 for one line; a range may hold a fast burst). */
 export const ALIGN_ZERO_RATE_HIGH = 9
+/**
+ * Two lines never start closer than this: equal starts are the repeated_start
+ * the fix is meant to remove (Kiro review of #195). SAME_START_RESOLUTION is
+ * a hundredth of a second, so a tenth keeps the lines clearly apart.
+ */
+export const ALIGN_MIN_STEP_SECONDS = 0.1
 /** Below this, the result is not applied and the section is offered for a new transcription. */
 export const ALIGN_MIN_CONFIDENCE = 0.6
 
@@ -135,19 +141,21 @@ export function alignToSpeech(lines: Array<{ text: string }>, window: SpeechSpan
   for (let i = 0; i < lines.length; i++) {
     const offset = (speechSeconds * before) / total
     before += counts[i]
-    const floor = i > 0 ? starts[i - 1] : window.start
+    // The first line may start at the window's edge; each later one after the previous start.
+    const floor = i > 0 ? starts[i - 1] + ALIGN_MIN_STEP_SECONDS : window.start
     let best: { clock: number; offset: number } | null = null
     for (const onset of onsets) {
       if (onset.clock < floor || Math.abs(onset.offset - offset) > ALIGN_SNAP_SECONDS) continue
       if (best === null || Math.abs(onset.offset - offset) < Math.abs(best.offset - offset)) best = onset
     }
+    // Only a line that takes an onset of its own counts as anchored.
     if (best !== null) snapped++
-    starts.push(Math.max(floor, best?.clock ?? clockAt(offset)))
+    starts.push(Math.min(window.end, Math.max(floor, best?.clock ?? clockAt(offset))))
   }
   const ends = starts.map((start, i) => {
     const own = clockAt((speechSeconds * counts.slice(0, i + 1).reduce((sum, n) => sum + n, 0)) / total)
     const next = i + 1 < starts.length ? starts[i + 1] : window.end
-    return Math.max(start, Math.min(own, next))
+    return Math.max(Math.min(own, next), start + ALIGN_MIN_STEP_SECONDS)
   })
   const confidence = rateScore(rate) * (0.6 + 0.4 * (snapped / lines.length))
   const ok = confidence >= ALIGN_MIN_CONFIDENCE

@@ -392,7 +392,9 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
 
   // Shared sequence rule: count the outlier rather than its ordered neighbour.
   const timingIssues = lineIssues(timed.map(s => ({ start: s.start ?? null, end: s.end ?? null, text: s.text ?? '' })))
-  const timingErrors = timingIssues.filter(codes => codes.includes('repeated_start') || codes.includes('backwards_start')).length
+  // Out of order is one line (backwards_start) or a whole shifted section (mistimed_run).
+  const outOfOrder = (i: number) => !!timingIssues[i]?.some(code => code === 'backwards_start' || code === 'mistimed_run')
+  const timingErrors = timingIssues.filter((codes, i) => codes.includes('repeated_start') || outOfOrder(i)).length
   measures.timingErrorShare = timed.length > 1 ? timingErrors / (timed.length - 1) : 0
   if (timed.length >= MIN_LINES_FOR_TIMING && measures.timingErrorShare >= DOUBT_TIMING_SHARE) {
     reasons.push({
@@ -429,12 +431,12 @@ export function assessTranscriptValidity(input: ValidityInput): TranscriptValidi
     let nextIndex: number | null = null
     for (let i = timed.length - 1; i >= 0; i--) {
       nextOrdered[i] = nextIndex
-      if (!timingIssues[i]?.includes('backwards_start')) nextIndex = i
+      if (!outOfOrder(i)) nextIndex = i
     }
     for (let i = 0; i < timed.length; i++) {
       const w = countWords(timed[i].text)
       if (!w) continue
-      if (timingIssues[i]?.includes('backwards_start')) { unplaceable += w; continue }
+      if (outOfOrder(i)) { unplaceable += w; continue }
       const a = (timed[i].start as number) * factor
       const ownEnd = typeof timed[i].end === 'number' ? (timed[i].end as number) * factor : a
       const nextLine = nextOrdered[i] !== null ? timed[nextOrdered[i] as number] : undefined

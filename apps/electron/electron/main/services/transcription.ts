@@ -4552,7 +4552,7 @@ export async function transcribeRecordingSection(
       extract: extractWithFfmpeg,
       transcribe: (slicePath, seconds) => transcribeWithGemini(slicePath, context, undefined, shouldContinue, seconds,
         recordingId, activity.length ? activity : undefined)
-    }))
+    }, { window: { start: windowStart, end: windowEnd }, label: `Section ${processingRun.id.slice(0, 8)}` }))
     if (!isRecordingEligible(recordingId)) throw new Error('Recording became unavailable')
     completeProcessingRun(processingRun.id, {
       outputRefs: { section: { start: bounds.start, seconds: bounds.seconds }, lines: segments.length },

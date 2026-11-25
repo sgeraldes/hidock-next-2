@@ -706,8 +706,15 @@ export function SourceReader({
   const pastAudioEndIndex = timingIssueLines.findIndex(codes => codes.includes('past_audio_end'))
   const jumpToTimingLine = (request: { index?: number; code?: ReaderTimingIssue }) => {
     let index = request.index
-    if (request.code) {
-      const code = request.code
+    const code = request.code
+    if (code && code !== 'past_audio_end' && !transcriptSegments) {
+      // No stored lines: the viewer finds the problem in the parsed text by its code.
+      useTranscriptSegmentNavigation.getState().jump({ code, recordingId: recording?.id ?? '' })
+      setReaderSectionMode('transcript', 'expanded')
+      restoreMaximizedSection()
+      return
+    }
+    if (code) {
       const matching = timingIssueLines.flatMap((codes, i) => codes.includes(code) ? [i] : [])
       index = matching.find(i => i > (timingReview.selected ?? -1)) ?? matching[0]
     }
@@ -1371,7 +1378,8 @@ export function SourceReader({
           ...(['context', 'assignee', 'dueDate', 'status'] as const).flatMap(field => detail?.[field] ? [{ key: `event:${event.id}:${field}`, section: 'moments' as const, text: field === 'status' ? detail[field]!.replace('_', ' ') : detail[field]!, timeMs }] : [])
         ]
       }),
-      ...(resolvedFindDocuments ?? segments.flatMap((segment, i) => [
+      // A hidden line shows no text, so find skips it; keys keep the turn index.
+      ...(resolvedFindDocuments ?? segments.flatMap((segment, i) => segment.timingHidden ? [] : [
         ...(segment.speaker ? [{ key: `speaker:${i}`, section: 'transcript' as const, text: resolveFindSpeaker(segment.speaker, i)?.name ?? segment.speaker, timeMs: timed ? segment.startMs : undefined }] : []),
         { key: `turn:${i}`, section: 'transcript' as const, text: segment.text, timeMs: timed ? segment.startMs : undefined }
       ]))

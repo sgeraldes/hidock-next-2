@@ -4,6 +4,7 @@ import type {
   TimingFinding, TimingFixedRange, TimingReviewAction, TimingSectionRun, TimingSegment
 } from '../../../src/shared/transcript-timing'
 import { alignToSpeech, type AlignmentResult, type SpeechSpan } from './transcript-time-aligner'
+import { hasInlineTurns } from '../../../src/shared/inline-turns'
 
 /**
  * What the audio of one recording can say. Sound is evidence of possible
@@ -89,6 +90,14 @@ export function assessTimingEvidence(
           offerSection: !alignment.ok && !overlap, displacement }
       : { ok: false, confidence: 0, firstStart: null, offerSection: false, displacement,
           reason: window ? 'This recording has no speech evidence to place the lines on.' : 'No ordered line follows this range, so where it belongs is unknown.' }
+    // A legacy line holding "[MM:SS] Speaker N:" turns shows them at their own
+    // times, which moving the line does not change (CodeRabbit review of #195).
+    if (fix.ok && flagged.some((s) => hasInlineTurns(s.text))) {
+      Object.assign(fix, {
+        ok: false, firstStart: null, offerSection: !overlap,
+        reason: 'This line holds turns with their own times, so moving the line would not move them.'
+      })
+    }
     const classification = impliedAudio === true && fix.ok
       ? 'out_of_place' : claimedAudio === false && impliedAudio === false ? 'probable_hallucination' : 'unsure'
     const what = range.kind === 'odd_line' ? 'This line' : `These ${range.lines.length} lines`
@@ -143,9 +152,12 @@ export function fixedRanges(segments: TimingSegment[]): TimingFixedRange[] {
   return groupConsecutive(segments.flatMap((s, i) => s.timingOriginalStart !== undefined ? [i] : []))
 }
 
+/** Section transcriptions that can be undone now: not replaced by a later one. */
 export function sectionRuns(segments: TimingSegment[]): TimingSectionRun[] {
   const runs = new Map<string, TimingSectionRun>()
+  const superseded = new Set(segments.flatMap((s) => s.sectionRunId && s.sectionReplacedBy ? [s.sectionRunId] : []))
   segments.forEach((s, i) => {
+    if (s.sectionRunId && superseded.has(s.sectionRunId)) return
     if (!s.sectionRunId) return
     const run = runs.get(s.sectionRunId)
     if (run) run.to = i
@@ -181,12 +193,15 @@ export function applyTimingReview(segments: TimingSegment[], request: TimingRevi
       if (!alignment || alignment.starts.length !== indices.length || !indices.length) throw new Error('No alignment for these lines')
       indices.forEach((i, k) => {
         const line = copy[i]
+        // The transcriber's times are captured once, on the first fix; a line
+        // that had no end keeps having none to go back to.
+        const first = line.timingOriginalStart === undefined
         copy[i] = {
           ...line,
           start: alignment.starts[k],
           end: alignment.ends[k],
-          timingOriginalStart: line.timingOriginalStart ?? line.start,
-          ...(line.timingOriginalEnd !== undefined || line.end !== undefined ? { timingOriginalEnd: line.timingOriginalEnd ?? line.end } : {}),
+          timingOriginalStart: first ? line.start : line.timingOriginalStart,
+          ...(first && line.end !== undefined ? { timingOriginalEnd: line.end } : {}),
           timingReviewed: true
         }
       })
@@ -210,6 +225,11 @@ export function applyTimingReview(segments: TimingSegment[], request: TimingRevi
     case 'undo_section': {
       const runId = request.runId
       if (!runId || !copy.some((s) => s.sectionRunId === runId)) throw new Error('No section transcription to undo')
+      // Its lines were replaced again by a later run: undoing this one first
+      // would show the original lines next to the later run's.
+      if (copy.some((s) => s.sectionRunId === runId && s.sectionReplacedBy)) {
+        throw new Error('A later section transcription replaced this one; undo the later one first')
+      }
       return copy.filter((s) => s.sectionRunId !== runId).map((s) => {
         if (s.sectionReplacedBy !== runId) return s
         const { sectionReplacedBy: _replaced, ...rest } = s

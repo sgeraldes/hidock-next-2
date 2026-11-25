@@ -31,9 +31,9 @@ const reviewTiming = vi.fn()
 const retranscribeSection = vi.fn()
 const getTiming = vi.fn()
 
-function Harness({ onJump = vi.fn(), onUpdated = vi.fn() }: { onJump?: (i: number) => void; onUpdated?: () => void }) {
-  const review = useTranscriptTimingReview('rec-28', 'rev-1')
-  return <TranscriptTimingReview recordingId="rec-28" segments={segments} review={review} onJump={onJump} onUpdated={onUpdated} />
+function Harness({ onJump = vi.fn(), onUpdated = vi.fn(), recordingId = 'rec-28' }: { onJump?: (i: number) => void; onUpdated?: () => void; recordingId?: string }) {
+  const review = useTranscriptTimingReview(recordingId, 'rev-1')
+  return <TranscriptTimingReview recordingId={recordingId} segments={segments} review={review} onJump={onJump} onUpdated={onUpdated} />
 }
 
 beforeEach(() => {
@@ -117,5 +117,18 @@ describe('TranscriptTimingReview: the warning at the top of the transcript', () 
     await waitFor(() => expect(reviewTiming).toHaveBeenCalledWith(expect.objectContaining({ action: 'undo_fix', range: { from: 0, to: 0 } })))
     fireEvent.click(undo[1])
     await waitFor(() => expect(reviewTiming).toHaveBeenCalledWith(expect.objectContaining({ action: 'undo_section', runId: 'run-9' })))
+  })
+
+  it('drops a save that finishes after the owner opened another recording (CodeRabbit review of #195)', async () => {
+    const onUpdated = vi.fn()
+    let finish: (value: unknown) => void = () => {}
+    reviewTiming.mockReturnValue(new Promise((resolve) => { finish = resolve }))
+    const { rerender } = render(<Harness onUpdated={onUpdated} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Fix times (from 0:04.9)' }))
+    rerender(<Harness onUpdated={onUpdated} recordingId="rec-other" />)
+    finish({ success: true, data: { fullText: 'x', segments: [], wordCount: 1 } })
+    await waitFor(() => expect(getTiming).toHaveBeenCalledWith({ recordingId: 'rec-other' }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(onUpdated).not.toHaveBeenCalled()
   })
 })

@@ -167,7 +167,10 @@ export function duplicateGroups(lines: TimedLine[]): DuplicateGroup[] {
   // A sound tag such as "[Environmental Sounds]" is not speech written twice.
   const keys = lines.map((line) => line.timingHidden || /^\s*\[[^\]]*\]\s*$/u.test(line.text) ? null : normalizedWords(line.text))
   const outOfOrder = new Set(timingOutlierIndices(lines))
-  const key = (i: number) => keys[i]?.join(' ') ?? null
+  // Joined once: the scans below compare keys many times (the background
+  // integrity pass runs this over the whole library).
+  const joined = keys.map((words) => words?.join(' ') ?? null)
+  const key = (i: number) => joined[i]
   const visible = lines.flatMap((line, i) => line.timingHidden || !keys[i]?.length ? [] : [i])
   const near = (a: number, b: number) => {
     const sa = lines[a].start
@@ -175,24 +178,34 @@ export function duplicateGroups(lines: TimedLine[]): DuplicateGroup[] {
     return sa === null || sb === null || Math.abs(sa - sb) <= DUPLICATE_WINDOW_SECONDS
   }
   const groups: DuplicateGroup[] = []
-  const used = new Set<number>()
+  // A line is a copy at most once; the first copy stays an original for every
+  // later one, so a line said three times marks the second and the third.
+  const copied = new Set<number>()
+  // Another voice repeating the words is an echo, never a duplicate.
+  const sameVoice = (a: number, b: number) => {
+    const voiceA = lines[a].speaker
+    const voiceB = lines[b].speaker
+    return !voiceA || !voiceB || voiceA === voiceB
+  }
 
-  // Sections first: a block of visible lines repeated in the same order.
+  // Sections first: a block of visible lines repeated in the same order, by the same voices.
   for (let p = 0; p < visible.length; p++) {
+    if (copied.has(visible[p])) continue
     for (let q = p + 1; q < visible.length && q - p <= DUPLICATE_SECTION_WINDOW_LINES; q++) {
-      if (used.has(visible[p]) || used.has(visible[q])) continue
+      // Cheap checks first: most pairs differ in their first line or are too far apart.
+      if (copied.has(visible[q]) || key(visible[p]) !== key(visible[q]) || !near(visible[p], visible[q])) continue
       let length = 0
       while (q + length < visible.length && p + length < q &&
         key(visible[p + length]) === key(visible[q + length]) &&
-        !used.has(visible[q + length])) length++
+        sameVoice(visible[p + length], visible[q + length]) &&
+        !copied.has(visible[q + length])) length++
       if (length < DUPLICATE_SECTION_MIN_LINES) continue
       const originals = visible.slice(p, p + length)
       const copies = visible.slice(q, q + length)
       const words = originals.reduce((sum, i) => sum + (keys[i]?.length ?? 0), 0)
       if (words < DUPLICATE_SECTION_MIN_WORDS || !near(originals[0], copies[0])) continue
       groups.push({ kind: 'section', originals, copies })
-      for (const i of [...originals, ...copies]) used.add(i)
-      break
+      for (const i of copies) copied.add(i)
     }
   }
 
@@ -200,18 +213,14 @@ export function duplicateGroups(lines: TimedLine[]): DuplicateGroup[] {
   for (let q = 0; q < visible.length; q++) {
     const copy = visible[q]
     const distinct = new Set(keys[copy]).size
-    if (used.has(copy) || distinct < DUPLICATE_MIN_DISTINCT_WORDS) continue
+    if (copied.has(copy) || distinct < DUPLICATE_MIN_DISTINCT_WORDS) continue
     for (let p = q - 1; p >= 0 && q - p <= DUPLICATE_WINDOW_LINES; p--) {
       const original = visible[p]
-      if (used.has(original) || key(original) !== key(copy)) continue
-      const voiceA = lines[original].speaker
-      const voiceB = lines[copy].speaker
-      if (voiceA && voiceB && voiceA !== voiceB) continue
+      if (copied.has(original) || key(original) !== key(copy) || !sameVoice(original, copy)) continue
       if (!near(original, copy)) continue
       if (distinct < DUPLICATE_UNORDERED_BELOW_WORDS && !outOfOrder.has(copy) && !outOfOrder.has(original)) continue
       groups.push({ kind: 'line', originals: [original], copies: [copy] })
-      used.add(original)
-      used.add(copy)
+      copied.add(copy)
       break
     }
   }

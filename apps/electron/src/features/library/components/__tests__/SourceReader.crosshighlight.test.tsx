@@ -185,3 +185,11 @@ it('provides a top warning and jump for a past-audio-end finding with otherwise 
   fireEvent.click(top.querySelector('[data-testid="integrity-jump-past_audio_end"]')!)
   await waitFor(() => expect(issueRequests.at(-1)?.index).toBe(0))
 })
+
+it('jumps by problem code when the transcript has no stored lines (CodeRabbit review of #195)', async () => {
+  const transcript = { ...makeTranscript(), speakers: null, full_text: '[00:10] A: uno\n[00:20] B: dos\n[00:15] A: tres', integrity_status: 'suspect',
+    integrity_json: JSON.stringify({ version: 4, status: 'suspect', issues: [{ code: 'backwards_start', count: 1, detail: 'One outlier' }] }) } as unknown as Transcript
+  render(<MemoryRouter><SourceReader recording={makeRecording()} transcript={transcript} /></MemoryRouter>)
+  fireEvent.click(screen.getByTestId('integrity-jump-backwards_start'))
+  await waitFor(() => expect((issueRequests.at(-1) as { code?: string } | undefined)?.code).toBe('backwards_start'))
+})

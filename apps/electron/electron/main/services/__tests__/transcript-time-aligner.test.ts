@@ -24,6 +24,13 @@ describe('alignToSpeech: the existing text placed on the sound between two trust
     expect(Math.max(...result.ends)).toBeLessThanOrEqual(40)
   })
 
+  it('never gives two lines the same start, which would be a repeated start (Kiro review of #195)', () => {
+    const result = alignToSpeech([{ text: words(2) }, { text: words(6) }, { text: words(4) }], { start: 0, end: 10 }, [{ start: 0, end: 4 }])
+    expect(new Set(result.starts.map((s) => Math.round(s * 100))).size).toBe(3)
+    for (let i = 1; i < result.starts.length; i++) expect(result.starts[i]).toBeGreaterThan(result.starts[i - 1])
+    for (let i = 0; i < result.ends.length; i++) expect(result.ends[i]).toBeGreaterThan(result.starts[i])
+  })
+
   it('refuses when the window holds no sound', () => {
     const result = alignToSpeech([{ text: words(4) }], { start: 0, end: 10 }, [])
     expect(result.ok).toBe(false)

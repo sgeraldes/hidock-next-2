@@ -87,3 +87,19 @@ describe('duplicate lines and sections', () => {
     expect(counts.mistimed_run).toBeGreaterThanOrEqual(2)
   })
 })
+
+describe('duplicate groups, CodeRabbit review of #195', () => {
+  it('marks every later copy of a line, not only the second', () => {
+    const line = 'quien autoriza las ciento veinte horas'
+    const groups = duplicateGroups(said([[0, line, 'A'], [2, 'otra', 'B'], [5, line, 'A'], [7, 'mas', 'B'], [10, line, 'A']]))
+    expect(groups.flatMap((g) => g.copies).sort()).toEqual([2, 4])
+    expect(groups.every((g) => g.originals[0] === 0)).toBe(true)
+  })
+
+  it('does not call another voice repeating two lines a duplicate section', () => {
+    expect(duplicateGroups(said([
+      [0, 'please open the door', 'A'], [2, 'then close it gently', 'A'],
+      [4, 'please open the door', 'B'], [6, 'then close it gently', 'B']
+    ]))).toEqual([])
+  })
+})
