@@ -151,6 +151,16 @@ describe('assessTranscriptValidity', () => {
     expect(v.status).toBe('doubtful')
   })
 
+  it('counts a whole section with shifted times as timing errors (Kiro review of #195)', () => {
+    const env = envelope([[160, 600]])
+    // 20 ordered lines with 6 consecutive lines stamped minutes earlier in the middle: one mistimed_run.
+    const ordered = Array.from({ length: 20 }, (_, i) => ({ speaker: 'A', start: 200 + i * 20, end: 200 + i * 20 + 18, text: words(10, `-o${i}`) }))
+    const shifted = Array.from({ length: 6 }, (_, i) => ({ speaker: 'B', start: 5 + i * 20, end: 5 + i * 20 + 18, text: words(10, `-s${i}`) }))
+    const v = assessTranscriptValidity(base({ envelope: env, segments: [...ordered.slice(0, 10), ...shifted, ...ordered.slice(10)] }))
+    expect(v.measures.timingErrorShare).toBeGreaterThanOrEqual(6 / 25)
+    expect(v.reasons.map((r) => r.code)).toContain('timestamps_consistently_wrong')
+  })
+
   it('flags more speakers than the calendar invited', () => {
     const env = envelope([[160, 600]])
     const segments = Array.from({ length: 60 }, (_, i) => ({ speaker: `S${i % 6}`, start: i * 10, end: i * 10 + 9, text: words(20, `-${i}`) }))

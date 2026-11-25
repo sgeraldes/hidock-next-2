@@ -35,7 +35,8 @@ import { fromStoredSegments, parseTranscriptSegments } from '../utils/transcript
 import type { FindDocument } from '../utils/transcriptFind'
 import { TranscriptViewer, type StoredSegment, type TranscriptContentUpdate } from './TranscriptViewer'
 import { TranscriptIntegrityPanel } from './TranscriptIntegrityPanel'
-import type { LineIssueCode } from '@/shared/transcript-line-issues'
+import { TranscriptTimingReview, useTranscriptTimingReview } from './TranscriptTimingReview'
+import { useTranscriptSegmentNavigation, readerTimingIssueLines, type ReaderTimingIssue } from '../utils/transcriptSegmentNavigation'
 import { TranscriptionStatusBadge } from './TranscriptionStatusBadge'
 import { TranscriptionAttempts } from './TranscriptionAttempts'
 import { StatusIcon } from './StatusIcon'
@@ -45,7 +46,7 @@ import { useReaderPeople, type ParticipantChip } from '../hooks/useReaderPeople'
 import { useRecordingAudioMetadata } from '../hooks/useRecordingAudioMetadata'
 import { deriveSpeakerRanges, type DerivedSpeakerRange } from '@/features/library/utils/speakerRanges'
 import { getDisplayTitle } from '@/features/library/utils/getDisplayTitle'
-import { isTranscriptTrusted, trustedSummary, untrustedSummaryNote } from '@/features/library/utils/transcriptIntegrity'
+import { isTranscriptTrusted, trustedSummary, untrustedSummaryNote, integrityIssues } from '@/features/library/utils/transcriptIntegrity'
 import { getSourceType } from '@/features/library/utils/sourceType'
 import { ArtifactReader } from './ArtifactReader'
 import { RecordingSplitEditor } from './RecordingSplitEditor'
@@ -479,7 +480,9 @@ export function SourceReader({
   // re-fires the pulse when the same marker is clicked twice. Reset per recording.
   const [transcriptHighlight, setTranscriptHighlight] = useState<{ atMs: number; nonce: number } | null>(null)
   // "Go to the next line with this problem", from the integrity panel's labels.
-  const [issueJump, setIssueJump] = useState<{ code: LineIssueCode; nonce: number } | null>(null)
+  // Kept outside the component: a reader layout change can remount it.
+  const segmentJump = useTranscriptSegmentNavigation(s => s.request)
+  const issueJump = segmentJump?.recordingId === recording?.id ? segmentJump : null
   const highlightNonceRef = useRef(0)
 
   // B3 backfill guard, keyed by CONTENT-derived transcript revision (see
@@ -586,7 +589,8 @@ export function SourceReader({
         ...base,
         full_text: update.fullText,
         speakers: JSON.stringify(update.segments),
-        word_count: update.wordCount
+        word_count: update.wordCount,
+        ...(update.integrity ? { integrity_status: update.integrity.status, integrity_json: update.integrity.json } : {})
       }
     })
     // The saved lines were checked again in the main process; reload the
@@ -688,6 +692,38 @@ export function SourceReader({
       return undefined
     }
   }, [effectiveTranscript?.speakers])
+
+  const timingReview = useTranscriptTimingReview(recording?.id, effectiveTranscript?.speakers)
+  const setTimingSelection = timingReview.setSelected
+  useEffect(() => {
+    if (issueJump?.index !== undefined) setTimingSelection(issueJump.index)
+  }, [issueJump?.nonce, issueJump?.index, setTimingSelection])
+  const pastAudioEnd = integrityIssues(effectiveTranscript).some(issue => issue.code === 'past_audio_end')
+  const timingIssueLines = useMemo(() => transcriptSegments
+    ? readerTimingIssueLines(transcriptSegments.map(s => ({ start: typeof s.start === 'number' ? s.start : null, end: s.end ?? null, text: s.text, speaker: s.speaker, timingHidden: s.timingHidden })), pastAudioEnd)
+    : [], [transcriptSegments, pastAudioEnd])
+  const hasTimingFlags = timingIssueLines.some(codes => codes.length > 0)
+  const pastAudioEndIndex = timingIssueLines.findIndex(codes => codes.includes('past_audio_end'))
+  const jumpToTimingLine = (request: { index?: number; code?: ReaderTimingIssue }) => {
+    let index = request.index
+    const code = request.code
+    if (code && code !== 'past_audio_end' && !transcriptSegments) {
+      // No stored lines: the viewer finds the problem in the parsed text by its code.
+      useTranscriptSegmentNavigation.getState().jump({ code, recordingId: recording?.id ?? '' })
+      setReaderSectionMode('transcript', 'expanded')
+      restoreMaximizedSection()
+      return
+    }
+    if (code) {
+      const matching = timingIssueLines.flatMap((codes, i) => codes.includes(code) ? [i] : [])
+      index = matching.find(i => i > (timingReview.selected ?? -1)) ?? matching[0]
+    }
+    if (index === undefined) return
+    timingReview.setSelected(index)
+    useTranscriptSegmentNavigation.getState().jump({ index, recordingId: recording?.id ?? '' })
+    setReaderSectionMode('transcript', 'expanded')
+    restoreMaximizedSection()
+  }
 
   const mentionedPeople = useMemo<Array<{ name: string; role?: string }>>(() => {
     if (!effectiveTranscript?.mentioned_people) return []
@@ -1342,7 +1378,8 @@ export function SourceReader({
           ...(['context', 'assignee', 'dueDate', 'status'] as const).flatMap(field => detail?.[field] ? [{ key: `event:${event.id}:${field}`, section: 'moments' as const, text: field === 'status' ? detail[field]!.replace('_', ' ') : detail[field]!, timeMs }] : [])
         ]
       }),
-      ...(resolvedFindDocuments ?? segments.flatMap((segment, i) => [
+      // A hidden line shows no text, so find skips it; keys keep the turn index.
+      ...(resolvedFindDocuments ?? segments.flatMap((segment, i) => segment.timingHidden ? [] : [
         ...(segment.speaker ? [{ key: `speaker:${i}`, section: 'transcript' as const, text: resolveFindSpeaker(segment.speaker, i)?.name ?? segment.speaker, timeMs: timed ? segment.startMs : undefined }] : []),
         { key: `turn:${i}`, section: 'transcript' as const, text: segment.text, timeMs: timed ? segment.startMs : undefined }
       ]))
@@ -1977,6 +2014,24 @@ export function SourceReader({
           )}
         </div>
       )}
+      {effectiveTranscript && recording && (hasTimingFlags || timingReview.assessment?.reviewed) && (
+        // The warning sits above the reading area, so it is seen before the
+        // text it is about, with a way to every flagged line (owner, 5-oct-2026).
+        <div className="max-h-[35vh] shrink-0 overflow-y-auto px-4 pt-2" data-testid="reader-timing-warning">
+          {hasTimingFlags && (
+            <TranscriptIntegrityPanel
+              recordingId={recording.id}
+              transcript={effectiveTranscript}
+              durationSeconds={recording.duration}
+              onRetranscribe={onTranscribe}
+              onChanged={onIntegrityChanged}
+              onJump={(code) => jumpToTimingLine({ code })}
+            />
+          )}
+          <TranscriptTimingReview recordingId={recording.id} segments={transcriptSegments} pastAudioEnd={pastAudioEnd}
+            review={timingReview} onJump={(index) => jumpToTimingLine({ index })} onUpdated={handleTranscriptUpdated} />
+        </div>
+      )}
       <div
         ref={setScrollNode}
         onScroll={updateDockedSections}
@@ -2230,14 +2285,14 @@ export function SourceReader({
                     stickyTop={pins.stickyTop('transcript')}
                     sentinelRef={pins.sentinelRef('transcript')}
                   >
-                        {transcript && (
+                        {transcript && !hasTimingFlags && (
                           <TranscriptIntegrityPanel
                             recordingId={recording.id}
-                            transcript={transcript}
+                            transcript={effectiveTranscript}
                             durationSeconds={recording.duration}
                             onRetranscribe={onTranscribe}
                             onChanged={onIntegrityChanged}
-                            onJump={(code) => setIssueJump({ code, nonce: Date.now() })}
+                            onJump={(code) => jumpToTimingLine({ code })}
                           />
                         )}
                         <TranscriptViewer
@@ -2250,6 +2305,8 @@ export function SourceReader({
                           isPlaying={isPlaying}
                           highlightRequest={transcriptHighlight}
                           issueJump={issueJump}
+                          timingFindings={timingReview.assessment?.findings}
+                          pastAudioEndIndex={pastAudioEndIndex}
                           onSeek={handleReaderSeek}
                           showSummary={false}
                           showTranscriptHeader={false}

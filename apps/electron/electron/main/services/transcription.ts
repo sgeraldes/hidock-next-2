@@ -225,10 +225,12 @@ import { scheduleEvaluationCatchup } from './evaluation-catchup'
 import { analyzeAudioPreflight, type AudioPreflightReport } from './audio-preflight'
 import { audioProfileForTranscription } from './audio-profile-store'
 import { isTranscriptUntrusted, syncTrustVerdicts } from './transcript-trust'
-import { previewTranscriptValidity } from './transcript-validity-store'
+import { previewTranscriptValidity, readSpeechEvidence } from './transcript-validity-store'
 import { assessTranscriptValidity, shouldWithholdDerivedContent, MIN_COMPLETENESS_SPEECH_SECONDS, type TranscriptValidity } from './transcript-validity'
 import { retryInSmallerChunks, withoutSecrets } from './transcription-completeness-retry'
 import { sliceContext } from './transcription-slice-context'
+import { extractWithFfmpeg, sectionBounds, transcribeSection } from './transcript-section-transcription'
+import type { TimingSegment } from '../../../src/shared/transcript-timing'
 import { storeDiarizedSegments } from './diarization-store'
 import { readAudioDuration } from './audio-duration'
 import { minRecordingSeconds, qualityRules } from './quality-rules'
@@ -4516,4 +4518,50 @@ async function transcribeWithRemoteWorker(recordingId: string, path: string,
       resourcePolicy: result.resourcePolicy, outputTokens: result.outputTokens, wallSeconds: result.wallSeconds,
       ...remoteDiarizationQuality(result), requestedLanguage: language.requestedLanguage,
       reportedLanguage: language.reportedLanguage, languageSource: language.languageSource } }
+}
+
+/**
+ * "Transcribe this section again" from the timing review: only the audio
+ * between the trusted lines around a range, through Gemini, the engine the
+ * smaller-chunk retry uses for slices (#173). The owner starts it with a
+ * click and a confirmation; nothing schedules it. Returns the new lines on
+ * the recording's clock; the caller puts them in place, undoably.
+ */
+export async function transcribeRecordingSection(
+  recordingId: string, windowStart: number, windowEnd: number, durationSeconds: number | null
+): Promise<{ runId: string; segments: TimingSegment[] }> {
+  const recording = getRecordingById(recordingId)
+  if (!recording || !isRecordingEligible(recordingId)) throw new Error('Recording not available')
+  if (!recording.file_path || !existsSync(recording.file_path)) throw new Error('The audio file is not on this computer')
+  if (!resolveGeminiApiKey()) throw new Error('Transcribing a section uses Gemini; add its key in Settings first')
+  const bounds = sectionBounds(windowStart, windowEnd, durationSeconds)
+  const config = getConfig()
+  const processingRun = createProcessingRun({ recordingId, stage: 'transcription', provider: 'gemini',
+    tool: 'gemini-section-retranscribe', model: config.transcription.geminiModel || CURRENT_GEMINI_TRANSCRIPTION_MODEL,
+    execution: 'cloud' })
+  const usage = createGeminiUsageCollector()
+  const shouldContinue = () => isRecordingEligible(recordingId)
+  const activity = (readSpeechEvidence(recordingId).activityIntervals ?? [])
+    .filter((span) => span.end > bounds.start && span.start < bounds.start + bounds.seconds)
+    .map((span) => ({ start: Math.max(0, span.start - bounds.start), end: Math.min(bounds.seconds, span.end - bounds.start) }))
+  const context = `Duration: ${bounds.seconds} seconds
+` +
+    `This is a section of a longer recording, from ${bounds.start.toFixed(1)} s. Transcribe only what is said in it.`
+  try {
+    const segments = await usage.run(() => transcribeSection(recording.file_path!, bounds, {
+      extract: extractWithFfmpeg,
+      transcribe: (slicePath, seconds) => transcribeWithGemini(slicePath, context, undefined, shouldContinue, seconds,
+        recordingId, activity.length ? activity : undefined)
+    }, { window: { start: windowStart, end: windowEnd }, label: `Section ${processingRun.id.slice(0, 8)}` }))
+    if (!isRecordingEligible(recordingId)) throw new Error('Recording became unavailable')
+    completeProcessingRun(processingRun.id, {
+      outputRefs: { section: { start: bounds.start, seconds: bounds.seconds }, lines: segments.length },
+      ...runUsageFields(usage.total())
+    })
+    return { runId: processingRun.id, segments }
+  } catch (err) {
+    const message = withoutSecrets(err instanceof Error ? err.message : String(err), resolveGeminiApiKey())
+    failProcessingRun(processingRun.id, message, err instanceof TranscriptionCancelledError, runUsageFields(usage.total()))
+    throw new Error(message, { cause: err })
+  }
 }

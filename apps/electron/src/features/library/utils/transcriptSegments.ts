@@ -11,6 +11,17 @@ export interface TranscriptSegment {
   /** Carried from storage so saving a correction keeps them. */
   speakerAttribution?: string
   speakerConfidence?: number
+  /** Index of the stored segment this turn came from (a legacy blob can split into several). */
+  sourceIndex?: number
+  /** The stored segment had no usable start. */
+  untimed?: boolean
+  /** Timing review state, carried so saving a correction keeps it. */
+  timingHidden?: boolean
+  timingOriginalStart?: number
+  timingOriginalEnd?: number
+  timingReviewed?: boolean
+  sectionRunId?: string
+  sectionReplacedBy?: string
 }
 
 /**
@@ -45,9 +56,17 @@ export function toParagraphs(text: string): string[] {
  * `[MM:SS] Speaker N:` markers are first re-split into individual turns so they
  * render correctly without re-transcription. */
 export function fromStoredSegments(stored: StoredSegment[]): TranscriptSegment[] {
-  return expandInlineStoredSegments(stored)
+  return stored.flatMap((segment, sourceIndex) => expandInlineStoredSegments([segment]).map((s) => ({ ...s, sourceIndex })))
     .filter((s) => s.text?.trim())
     .map((s) => ({
+      sourceIndex: s.sourceIndex,
+      untimed: typeof s.start !== 'number' || !Number.isFinite(s.start),
+      ...(s.timingHidden ? { timingHidden: true } : {}),
+      ...(s.timingOriginalStart !== undefined ? { timingOriginalStart: s.timingOriginalStart } : {}),
+      ...(s.timingOriginalEnd !== undefined ? { timingOriginalEnd: s.timingOriginalEnd } : {}),
+      ...(s.timingReviewed !== undefined ? { timingReviewed: s.timingReviewed } : {}),
+      ...(s.sectionRunId ? { sectionRunId: s.sectionRunId } : {}),
+      ...(s.sectionReplacedBy ? { sectionReplacedBy: s.sectionReplacedBy } : {}),
       startMs: Math.round((s.start || 0) * 1000),
       endMs: s.end != null ? Math.round(s.end * 1000) : undefined,
       speaker: s.speaker,

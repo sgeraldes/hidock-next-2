@@ -45,7 +45,7 @@ describe('TranscriptIntegrityPanel', () => {
     expect(screen.getByTestId('transcript-integrity')).toHaveAttribute('data-integrity', 'suspect')
     expect(screen.getByText(/The times in this transcript are wrong/)).toBeInTheDocument()
     expect(screen.getByText('Repeated times · 3')).toHaveAttribute('title', 'repeated_start in detail')
-    expect(screen.getByText('Times go backwards · 3')).toBeInTheDocument()
+    expect(screen.getByText('Line out of order · 3')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /Transcribe again/ }))
     expect(onRetranscribe).toHaveBeenCalledTimes(1)

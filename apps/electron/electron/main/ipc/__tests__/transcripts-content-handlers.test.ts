@@ -2,12 +2,21 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ipcMain } from 'electron'
 import { registerTranscriptsHandlers } from '../transcripts-handlers'
 
+const getTranscriptTiming = vi.hoisted(() => vi.fn())
+const loadTimingState = vi.hoisted(() => vi.fn())
+vi.mock('../../services/transcript-timing-store', () => ({ getTranscriptTiming, loadTimingState }))
+// The section transcriber is a mock: no test ever reaches a paid provider.
+const transcribeRecordingSection = vi.hoisted(() => vi.fn())
+vi.mock('../../services/transcription', () => ({ transcribeRecordingSection, retrySummary: vi.fn() }))
+
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }))
 
 const db = vi.hoisted(() => ({
   getRecordingById: vi.fn(),
   resolveRecordingId: vi.fn(),
   queryOne: vi.fn(),
+  queryAll: vi.fn(() => []),
+  saveDatabase: vi.fn(),
   runInTransaction: vi.fn((fn: () => unknown) => fn()),
   runNoSave: vi.fn(),
   run: vi.fn(),
@@ -223,5 +232,154 @@ describe('transcript content editing IPC', () => {
     expect(result).toMatchObject({ success: false, error: { code: 'RETRYABLE_ERROR' } })
     expect(db.runNoSave).not.toHaveBeenCalled()
     expect(vectorStore.indexTranscript).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('timing review persistence', () => {
+  // Rec28's shape: the 8:14 greeting is listed first, the opening speech is at 4.9 s.
+  const segments = [
+    { start: 494.8, end: 505.7, text: 'opening greeting here' },
+    { start: 13, end: 14, text: 'good morning' },
+    { start: 15, end: 16, text: 'how are you' }
+  ]
+  const speakers = JSON.stringify(segments)
+  let fingerprint = ''
+  const speech = [{ start: 4.86, end: 5.61 }, { start: 13, end: 14 }, { start: 15, end: 16 }]
+  const evidence = {
+    hasAudio: (a: number, b: number) => speech.some((s) => s.end > a && s.start < b),
+    spansIn: (a: number, b: number) => speech.map((s) => ({ start: Math.max(a, s.start), end: Math.min(b, s.end) })).filter((s) => s.end > s.start)
+  }
+  async function state(withEvidence = evidence) {
+    const { assessTimingEvidence } = await import('../../services/transcript-timing-evidence')
+    return {
+      transcriptId: 't-1', speakers, segments, durationSeconds: 600, evidence: withEvidence,
+      assessment: { fingerprint, findings: assessTimingEvidence(segments, withEvidence, 600), hiddenIndices: [], fixedRanges: [], sectionRuns: [], reviewed: false, evidence: 'vad' }
+    }
+  }
+  const stored = () => {
+    const update = db.runNoSave.mock.calls.find(([sql]) => sql.startsWith('UPDATE transcripts SET speakers'))
+    return update ? { segments: JSON.parse(update[1][0]), fullText: update[1][1] as string } : null
+  }
+  beforeEach(async () => {
+    vi.clearAllMocks()
+    const { transcriptFingerprint } = await import('../../services/transcript-validity-store')
+    fingerprint = transcriptFingerprint(speakers)
+    loadTimingState.mockResolvedValue(await state())
+    db.queryOne.mockReturnValue({ id: 't-1', speakers })
+    transcribeRecordingSection.mockReset()
+  })
+
+  it('refuses a stale review without writing', async () => {
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint: 'a'.repeat(40), action: 'hide', indices: [0] }) as any
+    expect(result.success).toBe(false)
+    expect(db.runNoSave).not.toHaveBeenCalled()
+  })
+
+  it('hides a line with a flag, keeps its text stored, and leaves the summary untouched', async () => {
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint, action: 'hide', findingId: 'odd_line:0-0' }) as any
+    expect(result.success).toBe(true)
+    const saved = stored()!
+    expect(saved.segments[0]).toMatchObject({ text: 'opening greeting here', timingHidden: true })
+    expect(saved.fullText).toBe('good morning\nhow are you')
+    expect(db.runNoSave.mock.calls.some(([sql]) => /SET summary/.test(sql))).toBe(false)
+  })
+
+  it('fixes times from the speech evidence and keeps the transcriber\'s times for undo', async () => {
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint, action: 'fix_times', findingId: 'odd_line:0-0' }) as any
+    expect(result.success).toBe(true)
+    const line = stored()!.segments[0]
+    expect(line.start).toBeCloseTo(4.86, 2)
+    expect(line).toMatchObject({ timingOriginalStart: 494.8, timingOriginalEnd: 505.7 })
+  })
+
+  it('does not apply a fix the sound cannot support, and says so', async () => {
+    const noSpeech = { hasAudio: () => false, spansIn: () => [] }
+    loadTimingState.mockResolvedValue(await state(noSpeech))
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint, action: 'fix_times', findingId: 'odd_line:0-0' }) as any
+    expect(result.success).toBe(false)
+    expect(result.error.details).toMatchObject({ lowConfidence: true })
+    expect(db.runNoSave).not.toHaveBeenCalled()
+  })
+
+  it('transcribes only the section between the trusted lines (mocked provider) and keeps the old line hidden', async () => {
+    transcribeRecordingSection.mockResolvedValue({ runId: 'run-9', segments: [{ start: 4.9, end: 5.6, text: 'hola manuel' }] })
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:retranscribeSection')?.({} as never, { recordingId: 'rec-1', fingerprint, findingId: 'odd_line:0-0' }) as any
+    expect(result.success).toBe(true)
+    expect(transcribeRecordingSection).toHaveBeenCalledWith('rec-1', 0, 13, 600)
+    const saved = stored()!
+    expect(saved.segments[0]).toMatchObject({ text: 'opening greeting here', timingHidden: true, sectionReplacedBy: 'run-9' })
+    expect(saved.segments[1]).toMatchObject({ text: 'hola manuel', sectionRunId: 'run-9' })
+    expect(saved.fullText.startsWith('hola manuel')).toBe(true)
+  })
+
+  it('refuses a section transcription for lines that only overlap, before any provider call', async () => {
+    const close = [{ start: 10, end: 12, text: 'uno dos tres' }, { start: 9, end: 11, text: 'cuatro cinco' }, { start: 13, end: 14, text: 'seis' }]
+    const { transcriptFingerprint } = await import('../../services/transcript-validity-store')
+    const { assessTimingEvidence } = await import('../../services/transcript-timing-evidence')
+    const fp = transcriptFingerprint(JSON.stringify(close))
+    loadTimingState.mockResolvedValue({ transcriptId: 't-1', speakers: JSON.stringify(close), segments: close, durationSeconds: 60, evidence,
+      assessment: { fingerprint: fp, findings: assessTimingEvidence(close, evidence, 60), hiddenIndices: [], fixedRanges: [], sectionRuns: [], reviewed: false, evidence: 'vad' } })
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:retranscribeSection')?.({} as never, { recordingId: 'rec-1', fingerprint: fp, findingId: 'odd_line:1-1' }) as any
+    expect(result.success).toBe(false)
+    expect(transcribeRecordingSection).not.toHaveBeenCalled()
+  })
+
+  it('keeps per-turn speaker overrides and splits on their turns when a section transcription adds lines (CodeRabbit review of #195)', async () => {
+    transcribeRecordingSection.mockResolvedValue({ runId: 'run-9', segments: [{ start: 4.9, end: 5.4, text: 'hola' }, { start: 5.4, end: 5.6, text: 'manuel' }] })
+    db.getRecordingById.mockReturnValue({ id: 'rec-1', meeting_id: null, date_recorded: null, created_at: null })
+    registerTranscriptsHandlers()
+    await handlerFor('transcripts:retranscribeSection')?.({} as never, { recordingId: 'rec-1', fingerprint, findingId: 'odd_line:0-0' })
+    const sql = db.runNoSave.mock.calls.map(([q, params]) => [q.replace(/\s+/g, ' '), params])
+    // The replaced line keeps turn 0; turns from 1 on move by the 2 new lines.
+    expect(sql).toContainEqual([expect.stringMatching(/^UPDATE turn_speaker_overrides SET turn_index = -\(turn_index \+ \?\) - 1 WHERE recording_id = \? AND turn_index >= \?/), [2, 'rec-1', 1]])
+    expect(sql).toContainEqual([expect.stringMatching(/^UPDATE speaker_splits SET from_turn_index = -\(from_turn_index \+ \?\) - 1 WHERE recording_id = \? AND from_turn_index >= \?/), [2, 'rec-1', 1]])
+  })
+
+  it('drops the overrides of a section run\'s own turns and moves later ones back when it is undone', async () => {
+    const spliced = [
+      { start: 494.8, end: 505.7, text: 'opening greeting here', timingHidden: true, sectionReplacedBy: 'run-9' },
+      { start: 4.9, end: 5.4, text: 'hola', sectionRunId: 'run-9' }, { start: 5.4, end: 5.6, text: 'manuel', sectionRunId: 'run-9' },
+      { start: 13, end: 14, text: 'good morning' }, { start: 15, end: 16, text: 'how are you' }
+    ]
+    const { transcriptFingerprint } = await import('../../services/transcript-validity-store')
+    const fp = transcriptFingerprint(JSON.stringify(spliced))
+    loadTimingState.mockResolvedValue({ transcriptId: 't-1', speakers: JSON.stringify(spliced), segments: spliced, durationSeconds: 600, evidence,
+      assessment: { fingerprint: fp, findings: [], hiddenIndices: [], fixedRanges: [], sectionRuns: [{ runId: 'run-9', from: 1, to: 2 }], reviewed: true, evidence: 'vad' } })
+    db.queryOne.mockReturnValue({ id: 't-1', speakers: JSON.stringify(spliced) })
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint: fp, action: 'undo_section', runId: 'run-9' }) as any
+    expect(result.success).toBe(true)
+    const sql = db.runNoSave.mock.calls.map(([q, params]) => [q.replace(/\s+/g, ' '), params])
+    expect(sql).toContainEqual([expect.stringMatching(/^DELETE FROM turn_speaker_overrides WHERE recording_id = \? AND turn_index >= \? AND turn_index < \?/), ['rec-1', 1, 3]])
+    expect(sql).toContainEqual([expect.stringMatching(/^UPDATE turn_speaker_overrides SET turn_index = -\(turn_index \+ \?\) - 1/), [-2, 'rec-1', 3]])
+  })
+
+  it('does not persist search chunks of a save that a newer save replaced (CodeRabbit review of #195)', async () => {
+    db.getRecordingById.mockReturnValue({ id: 'rec-1', meeting_id: null, date_recorded: null, created_at: null })
+    let options: { shouldPersist: () => boolean } | undefined
+    vectorStore.indexTranscript.mockImplementation(async (_text: string, opts: typeof options) => { options = opts; return 1 })
+    registerTranscriptsHandlers()
+    await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint, action: 'hide', findingId: 'odd_line:0-0' })
+    expect(options).toBeDefined()
+    db.queryOne.mockReturnValue({ full_text: 'good morning\nhow are you' })
+    expect(options!.shouldPersist()).toBe(true)
+    db.queryOne.mockReturnValue({ full_text: 'a newer save' })
+    expect(options!.shouldPersist()).toBe(false)
+  })
+
+  it('writes nothing when the section transcription fails', async () => {
+    transcribeRecordingSection.mockRejectedValue(new Error('Transcribing a section uses Gemini; add its key in Settings first'))
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:retranscribeSection')?.({} as never, { recordingId: 'rec-1', fingerprint, findingId: 'odd_line:0-0' }) as any
+    expect(result.success).toBe(false)
+    expect(result.error.message).toMatch(/Gemini/)
+    expect(db.runNoSave).not.toHaveBeenCalled()
   })
 })

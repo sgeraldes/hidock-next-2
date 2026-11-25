@@ -13,6 +13,8 @@ import { heldValidity, VALIDITY_LABELS, type HeldValidity } from './transcriptVa
 export type IntegrityIssueCode =
   | 'repeated_start'
   | 'backwards_start'
+  | 'mistimed_run'
+  | 'duplicate_line'
   | 'cramped_lines'
   | 'past_audio_end'
   | 'too_many_words'
@@ -38,7 +40,9 @@ export const ISSUE_TAGS: Record<IntegrityIssueCode, string> = {
   too_many_words: 'Text does not fit the audio',
   past_audio_end: 'Runs past the audio',
   repeated_start: 'Repeated times',
-  backwards_start: 'Times go backwards',
+  backwards_start: 'Line out of order',
+  mistimed_run: 'Section out of order',
+  duplicate_line: 'Written twice',
   cramped_lines: 'Impossible pace',
   untimed_lines: 'Lines without time',
 }
@@ -50,7 +54,9 @@ export const ISSUE_ORDER: IntegrityIssueCode[] = [
   'too_many_words',
   'past_audio_end',
   'repeated_start',
+  'mistimed_run',
   'backwards_start',
+  'duplicate_line',
   'cramped_lines',
   'untimed_lines',
 ]

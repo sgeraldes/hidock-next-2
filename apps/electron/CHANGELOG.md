@@ -4,6 +4,15 @@ Each entry is one day of merged work. The Releases page in Settings reads this f
 
 Device reference: [model/version gates, recordings and native markers](../../docs/devices/README.md). The 11 October firmware documentation describes offline research and local tooling, not an additional merged device-firmware feature. Older release entries retain their dated scope.
 
+## 2026-11-25 | Transcript times that are wrong, shown and fixed
+
+- The timing warning now sits above the transcript, with one button per problem that goes to it. A line out of order is the line itself, not the correct line next to it: in Rec28, "Hola, Manuel" listed at 8:14 is flagged, and the 0:13 line after it is not.
+- Consecutive lines out of order are one section with shifted times, shown once with how many lines it holds, instead of a flag on each line.
+- A line or block of lines the transcriber wrote twice, as where two pieces of audio overlap, is flagged as Written twice; Hide the copy keeps it in the stored transcript and can be undone. A short repeat counts only when one copy is also out of order, so "Uh-huh." or "Buenos días." said again is never flagged.
+- Each problem is judged against the recording's sound (the VAD speech stretches, or the frame envelope): out of place, probable hallucination, or unsure.
+- Fix times lays the existing words back on the speech between the two correct lines around them, on this computer's processor, without a model. The transcriber's times are kept and Undo puts them back. It does not recognise words, so on the owner's library it lands a line within 1 second about half the time, within 2 seconds two thirds of the time; it refuses when the words and the sound do not fit.
+- When it refuses, Transcribe this section again sends only that stretch of audio to Gemini, after a confirmation that says how long it is and that the provider may charge. The old lines stay hidden and Undo brings them back. It is not offered for lines a second or two off, which is two people talking at once.
+
 ## 2026-11-24 | Device recordings stay put, and Operations say what they are doing
 
 - Recordings the device may still hold are no longer removed at startup or when the device disconnects, so they stop disappearing and coming back with new ids. Their titles, ratings and meeting links stay with them.

@@ -30,6 +30,12 @@ import { syncTrustVerdicts } from '../services/transcript-trust'
 import { getDiarizedSegments } from '../services/diarization-store'
 import { retrySummary } from '../services/transcription'
 import { success, error, Result } from '../types/api'
+import { getTranscriptTiming, loadTimingState } from '../services/transcript-timing-store'
+import { applyTimingReview, spliceSection, type TimingReviewRequest } from '../services/transcript-timing-evidence'
+import { alignToSpeech } from '../services/transcript-time-aligner'
+import { renderedTurnCounts } from '../../../src/shared/inline-turns'
+import { transcriptFingerprint } from '../services/transcript-validity-store'
+import { OVERLAP_SECONDS, type TimingSegment } from '../../../src/shared/transcript-timing'
 import { UUIDSchema } from '../validation/common'
 
 // Recording ids are UUIDs post-migration, but keep this permissive so a legacy
@@ -73,7 +79,14 @@ const EditableTranscriptSegmentSchema = z
     // How the speaker was attributed (speaker-linking.ts). Kept through an edit so
     // correcting a word does not erase the diarization quality marks.
     speakerAttribution: z.string().trim().min(1).max(40).optional(),
-    speakerConfidence: z.number().finite().min(0).max(1).optional()
+    speakerConfidence: z.number().finite().min(0).max(1).optional(),
+    timingHidden: z.boolean().optional(),
+    timingOriginalStart: z.number().finite().min(0).optional(),
+    timingOriginalEnd: z.number().finite().min(0).optional(),
+    timingReviewed: z.boolean().optional(),
+    // A section transcription's own lines and the lines it replaced, kept so it can be undone.
+    sectionRunId: z.string().min(1).max(100).optional(),
+    sectionReplacedBy: z.string().min(1).max(100).optional()
   })
   .refine((segment) => segment.end === undefined || segment.end >= segment.start, {
     message: 'Segment end must not precede its start'
@@ -156,6 +169,7 @@ interface TranscriptEditResult {
 
 function canonicalTranscriptText(segments: EditableTranscriptSegment[]): string {
   return segments
+    .filter(segment => !segment.timingHidden)
     .map((segment) => (segment.speaker ? `${segment.speaker}: ${segment.text}` : segment.text))
     .join('\n')
 }
@@ -164,25 +178,210 @@ function safeErrorMessage(err: unknown): string {
   return err instanceof Error && err.message.trim() ? err.message : 'Embedding provider unavailable'
 }
 
-async function indexCorrectedTranscript(recordingId: string, fullText: string): Promise<number> {
+/**
+ * Index the saved text. With onlyIfCurrent, nothing is generated or written
+ * once a newer save changed the transcript, so search never keeps chunks of
+ * replaced text (CodeRabbit review of #195).
+ */
+async function indexCorrectedTranscript(recordingId: string, fullText: string, onlyIfCurrent = false): Promise<number> {
   const recording = getRecordingById(recordingId)
   if (!recording || !isRecordingEligible(recordingId)) throw new Error('Recording is no longer available')
 
   const meeting = recording.meeting_id
     ? queryOne<{ subject: string | null }>('SELECT subject FROM meetings WHERE id = ?', [recording.meeting_id])
     : undefined
+  const isCurrent = () =>
+    queryOne<{ full_text: string }>('SELECT full_text FROM transcripts WHERE recording_id = ?', [recordingId])?.full_text === fullText
   const indexedChunks = await getVectorStore().indexTranscript(fullText, {
     meetingId: recording.meeting_id ?? undefined,
     recordingId,
     timestamp: recording.date_recorded ?? recording.created_at,
     subject: meeting?.subject ?? undefined,
-    shouldGenerate: () => isRecordingEligible(recordingId),
-    shouldPersist: () => isRecordingEligible(recordingId)
+    shouldGenerate: () => isRecordingEligible(recordingId) && (!onlyIfCurrent || isCurrent()),
+    shouldPersist: () => isRecordingEligible(recordingId) && (!onlyIfCurrent || isCurrent())
   })
   return indexedChunks
 }
 
+const ReviewTimingRequestSchema = z.object({
+  recordingId: RecordingIdSchema,
+  fingerprint: z.string().length(40),
+  action: z.enum(['fix_times', 'undo_fix', 'hide', 'show', 'undo_section']),
+  findingId: z.string().min(1).max(100).optional(),
+  indices: z.array(z.number().int().min(0).max(50_000)).min(1).max(50_000).optional(),
+  range: z.object({ from: z.number().int().min(0).max(50_000), to: z.number().int().min(0).max(50_000) })
+    .refine((r) => r.to >= r.from, { message: 'Range end must not precede its start' }).optional(),
+  runId: z.string().min(1).max(100).optional()
+})
+
+/**
+ * Speaker overrides and splits are keyed by rendered turn position. When a
+ * section transcription adds or removes turns, every turn from `at` on moves
+ * by `by`; with a negative `by`, the turns [at + by, at) were removed and
+ * their overrides go with them (CodeRabbit review of #195).
+ */
+interface TurnShift {
+  at: number
+  by: number
+}
+
+const TURN_KEYED_TABLES = [['turn_speaker_overrides', 'turn_index'], ['speaker_splits', 'from_turn_index']] as const
+
+function shiftTurnKeys(recordingId: string, shift: TurnShift): void {
+  if (shift.by === 0) return
+  for (const [table, column] of TURN_KEYED_TABLES) {
+    if (shift.by < 0) {
+      runNoSave(`DELETE FROM ${table} WHERE recording_id = ? AND ${column} >= ? AND ${column} < ?`, [recordingId, shift.at + shift.by, shift.at])
+    }
+    // Through negative values, so a unique position is never held twice mid-update.
+    runNoSave(`UPDATE ${table} SET ${column} = -(${column} + ?) - 1 WHERE recording_id = ? AND ${column} >= ?`, [shift.by, recordingId, shift.at])
+    runNoSave(`UPDATE ${table} SET ${column} = -${column} - 1 WHERE recording_id = ? AND ${column} < 0`, [recordingId])
+  }
+}
+
+const sum = (values: number[]) => values.reduce((total, n) => total + n, 0)
+
+interface TimingSaveResult {
+  fullText: string
+  segments: TimingSegment[]
+  wordCount: number
+  integrity?: { status: 'ok' | 'suspect' | 'broken'; json: string }
+}
+
+function timingError(err: unknown): Result<never> {
+  const message = safeErrorMessage(err)
+  if (message === 'TRANSCRIPT_CHANGED') return error('RETRYABLE_ERROR', 'The transcript changed; the review was reloaded')
+  if (message === 'RECORDING_INELIGIBLE') return error('RECORDING_INELIGIBLE', 'Recording not available')
+  console.warn('[TranscriptTiming] Review failed:', message)
+  return error('INTERNAL_ERROR', message)
+}
+
+/**
+ * Save reviewed lines, then judge and index them again, as a text edit does.
+ * Hidden lines stay in the stored segments and leave the text and the index.
+ */
+async function saveTimingSegments(
+  recordingId: string, fingerprint: string, segments: TimingSegment[], turnShift?: TurnShift
+): Promise<TimingSaveResult> {
+  const fullText = segments.filter((s) => !s.timingHidden).map((s) => (s.speaker ? `${s.speaker}: ${s.text}` : s.text)).join('\n')
+  const wordCount = fullText.split(/\s+/u).filter(Boolean).length
+  const vectorStore = getVectorStore()
+  vectorStore.ensureSchema()
+  let transcriptId = ''
+  runInTransaction(() => {
+    if (!isRecordingEligible(recordingId)) throw new Error('RECORDING_INELIGIBLE')
+    const row = queryOne<{ id: string; speakers: string | null }>('SELECT id, speakers FROM transcripts WHERE recording_id = ?', [recordingId])
+    if (!row || transcriptFingerprint(row.speakers) !== fingerprint) throw new Error('TRANSCRIPT_CHANGED')
+    transcriptId = row.id
+    runNoSave('UPDATE transcripts SET speakers = ?, full_text = ?, word_count = ?, validity_version = NULL WHERE id = ?',
+      [JSON.stringify(segments), fullText, wordCount, row.id])
+    if (turnShift) shiftTurnKeys(recordingId, turnShift)
+    runNoSave('DELETE FROM vector_embeddings WHERE recording_id = ?', [recordingId])
+  })
+  vectorStore.dropByRecordingFromMemory(recordingId)
+  let integrity: TimingSaveResult['integrity']
+  try {
+    const checked = refreshTranscriptIntegrity(transcriptId)
+    if (checked) integrity = { status: checked.status, json: JSON.stringify(checked) }
+    syncTrustVerdicts(recordingId)
+  } catch (err) {
+    console.warn('[TranscriptTiming] Saved; the timing check could not run again:', safeErrorMessage(err))
+  }
+  try {
+    await indexCorrectedTranscript(recordingId, fullText, true)
+  } catch (err) {
+    console.warn(`[TranscriptTiming] Saved ${recordingId}; RAG reindex pending:`, safeErrorMessage(err))
+  }
+  try {
+    exportMeetingWiki(recordingId)
+  } catch (err) {
+    console.warn('[TranscriptTiming] Meeting wiki refresh failed (non-fatal):', safeErrorMessage(err))
+  }
+  // Summary, actions and title stay as they are until the owner asks for a new summary.
+  return { fullText, segments, wordCount, ...(integrity ? { integrity } : {}) }
+}
+
 export function registerTranscriptsHandlers(): void {
+  ipcMain.handle('transcripts:getTiming', async (_, request: unknown) => {
+    const parsed = z.object({ recordingId: RecordingIdSchema }).safeParse(request)
+    if (!parsed.success) return error('VALIDATION_ERROR', 'Invalid timing request')
+    try { return success(await getTranscriptTiming(parsed.data.recordingId)) }
+    catch (err) { return error('DATABASE_ERROR', safeErrorMessage(err)) }
+  })
+
+  // The owner's timing review: fix times, hide or show lines, undo a fix or a
+  // section transcription. Each change keeps what it replaced.
+  ipcMain.handle('transcripts:reviewTiming', async (_, request: unknown): Promise<Result<TimingSaveResult>> => {
+    const parsed = ReviewTimingRequestSchema.safeParse(request)
+    if (!parsed.success) return error('VALIDATION_ERROR', 'Invalid timing review', parsed.error.format())
+    const { recordingId, fingerprint, action, findingId, indices, range, runId } = parsed.data
+    try {
+      if (!isRecordingEligible(recordingId)) return error('RECORDING_INELIGIBLE', 'Recording not available')
+      const state = await loadTimingState(recordingId)
+      if (state.assessment.fingerprint !== fingerprint) return error('RETRYABLE_ERROR', 'The transcript changed; the review was reloaded')
+      const finding = findingId ? state.assessment.findings.find((f) => f.id === findingId) : undefined
+      if (findingId && !finding) return error('RETRYABLE_ERROR', 'This problem is no longer in the transcript')
+      let review: TimingReviewRequest
+      let turnShift: TurnShift | undefined
+      if (action === 'fix_times') {
+        if (!finding || finding.kind === 'duplicate') return error('VALIDATION_ERROR', 'Choose a line or section out of order')
+        if (finding.windowStart === null || finding.windowEnd === null) return error('VALIDATION_ERROR', finding.fix?.reason ?? 'Where these lines belong is unknown')
+        const spans = state.evidence.spansIn(finding.windowStart, finding.windowEnd)
+        if (!spans) return error('VALIDATION_ERROR', 'This recording has no speech evidence to place the lines on')
+        const alignment = alignToSpeech(finding.lines.map((i) => state.segments[i]), { start: finding.windowStart, end: finding.windowEnd }, spans)
+        if (!alignment.ok) return error('VALIDATION_ERROR', alignment.reason, { lowConfidence: true, confidence: alignment.confidence })
+        review = { action, indices: finding.lines, alignment }
+      } else if (action === 'hide' || action === 'show') {
+        const chosen = indices ?? finding?.lines
+        if (!chosen?.length) return error('VALIDATION_ERROR', 'Choose the lines')
+        review = { action, indices: chosen }
+      } else if (action === 'undo_fix') {
+        if (!range) return error('VALIDATION_ERROR', 'Choose the fixed lines')
+        review = { action, range }
+      } else {
+        if (!runId) return error('VALIDATION_ERROR', 'Choose the section transcription')
+        review = { action, runId }
+        // The run's own turns go away; the turns after them move back.
+        const counts = renderedTurnCounts(state.segments)
+        const rows = state.segments.flatMap((s, i) => s.sectionRunId === runId ? [i] : [])
+        if (rows.length) {
+          const removed = sum(rows.map((i) => counts[i]))
+          turnShift = { at: sum(counts.slice(0, rows[0])) + removed, by: -removed }
+        }
+      }
+      return success(await saveTimingSegments(recordingId, fingerprint, applyTimingReview(state.segments, review), turnShift))
+    } catch (err) {
+      return timingError(err)
+    }
+  })
+
+  // "Transcribe this section again": only after the owner confirmed it in the
+  // reader. Sends only the audio between the trusted lines around the range.
+  ipcMain.handle('transcripts:retranscribeSection', async (_, request: unknown): Promise<Result<TimingSaveResult>> => {
+    const parsed = z.object({ recordingId: RecordingIdSchema, fingerprint: z.string().length(40), findingId: z.string().min(1).max(100) }).safeParse(request)
+    if (!parsed.success) return error('VALIDATION_ERROR', 'Invalid section request', parsed.error.format())
+    const { recordingId, fingerprint, findingId } = parsed.data
+    try {
+      if (!isRecordingEligible(recordingId)) return error('RECORDING_INELIGIBLE', 'Recording not available')
+      const state = await loadTimingState(recordingId)
+      if (state.assessment.fingerprint !== fingerprint) return error('RETRYABLE_ERROR', 'The transcript changed; the review was reloaded')
+      const finding = state.assessment.findings.find((f) => f.id === findingId)
+      if (!finding || finding.kind === 'duplicate') return error('RETRYABLE_ERROR', 'This section is no longer out of order')
+      if (finding.windowStart === null || finding.windowEnd === null) return error('VALIDATION_ERROR', 'Where this section belongs is unknown')
+      // Lines a second or two off are speech overlapping; a paid transcription cannot improve them.
+      if ((finding.fix?.displacement ?? 0) < OVERLAP_SECONDS) return error('VALIDATION_ERROR', 'These lines are where they belong, give or take two people talking at once')
+      const { transcribeRecordingSection } = await import('../services/transcription')
+      const section = await transcribeRecordingSection(recordingId, finding.windowStart, finding.windowEnd, state.durationSeconds)
+      // The new lines go in after the hidden old ones: every later turn moves by their count.
+      const counts = renderedTurnCounts(state.segments)
+      const turnShift = { at: sum(counts.slice(0, finding.to + 1)), by: sum(renderedTurnCounts(section.segments)) }
+      return success(await saveTimingSegments(recordingId, fingerprint,
+        spliceSection(state.segments, finding.from, finding.to, section.segments, section.runId), turnShift))
+    } catch (err) {
+      return timingError(err)
+    }
+  })
+
   ipcMain.handle('transcripts:getDiarizedSegments', async (_, request: unknown) => {
     const parsed = GetSpeakerMapRequestSchema.safeParse(request)
     if (!parsed.success) return error('VALIDATION_ERROR', 'Invalid recording request')

@@ -110,3 +110,26 @@ describe('expandInlineStoredSegments', () => {
     expect(expandInlineStoredSegments(segs)).toEqual(segs)
   })
 })
+
+describe('timing review marks on a legacy inline segment (Kiro review of #195)', () => {
+  const blob: StoredSegment = {
+    speaker: 'Speaker 1', start: 600, end: 610,
+    text: '[10:00] Speaker 1: Hola. [10:20] Speaker 2: Buen día.',
+    timingHidden: true, sectionReplacedBy: 'run-1', timingOriginalStart: 900, timingOriginalEnd: 910, timingReviewed: true
+  }
+
+  it('gives every turn the segment\'s visibility, but never its per-line original times', () => {
+    const turns = splitStoredSegmentOnInlineTurns(blob)
+    expect(turns).toHaveLength(2)
+    for (const turn of turns) {
+      expect(turn).toMatchObject({ timingHidden: true, sectionReplacedBy: 'run-1' })
+      expect(turn).not.toHaveProperty('timingOriginalStart')
+      expect(turn).not.toHaveProperty('timingOriginalEnd')
+    }
+  })
+
+  it('never ends the last turn before it starts, so saving an edit stays valid', () => {
+    const turns = splitStoredSegmentOnInlineTurns(blob)
+    for (const turn of turns) expect(turn.end ?? turn.start).toBeGreaterThanOrEqual(turn.start)
+  })
+})

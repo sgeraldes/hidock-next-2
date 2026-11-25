@@ -30,6 +30,7 @@ import { cn } from '@/lib/utils'
 import { BusyIcon } from '@/components/ui/working'
 import type { Person } from '@/types/knowledge'
 import { lineIssues, isJumpableLineIssue, type LineIssueCode } from '@/shared/transcript-line-issues'
+import { TIMING_CLASSIFICATION_LABELS, TIMING_KIND_LABELS, type TimingFinding } from '@/shared/transcript-timing'
 import { ISSUE_TAGS } from '../utils/transcriptIntegrity'
 import { formatTimestamp, parseTypedTime } from '../utils/formatTimestamp'
 
@@ -44,6 +45,13 @@ export interface StoredSegment {
   text: string
   speakerAttribution?: string
   speakerConfidence?: number
+  /** Timing review state (TimingSegment in shared/transcript-timing). */
+  timingHidden?: boolean
+  timingOriginalStart?: number
+  timingOriginalEnd?: number
+  timingReviewed?: boolean
+  sectionRunId?: string
+  sectionReplacedBy?: string
 }
 
 interface TranscriptViewerProps {
@@ -52,6 +60,10 @@ interface TranscriptViewerProps {
   /** The standalone find bar's seek (its time button and Alt+Enter): moves without starting playback. Defaults to onSeek. */
   onFindSeek?: (startMs: number) => void
   transcript: string
+  /** The timing review's findings, keyed by stored segment index. */
+  timingFindings?: TimingFinding[]
+  /** Stored segment index of the line that defines the transcript's end, when it runs past the audio. */
+  pastAudioEndIndex?: number
   currentTimeMs?: number
   onSeek: (startMs: number, endMs?: number) => void
   showSummary?: boolean
@@ -93,7 +105,7 @@ interface TranscriptViewerProps {
    * Go to the next line with this problem (after the last one jumped to, wrapping
    * around), scroll it into view and flash it. From the integrity panel labels.
    */
-  issueJump?: { code: LineIssueCode; nonce: number } | null
+  issueJump?: { code?: LineIssueCode; index?: number; nonce: number } | null
   /** Mirrors a successful persisted correction into the owning reader state. */
   onTranscriptUpdated?: (update: TranscriptContentUpdate) => void
 }
@@ -148,6 +160,8 @@ export function TranscriptViewer({
   isPlaying,
   highlightRequest,
   issueJump,
+  timingFindings,
+  pastAudioEndIndex,
   onTranscriptUpdated,
   find: externalFind,
   onFindDocuments,
@@ -173,7 +187,7 @@ export function TranscriptViewer({
   // Carries the request's nonce so a rapid repeat click on the SAME turn is a
   // state CHANGE — the scroll/timer effect below re-runs and the pulse restarts
   // (a bare index would be a same-value setState → no re-run, stale timer).
-  const [pulse, setPulse] = useState<{ index: number; nonce: number } | null>(null)
+  const [pulse, setPulse] = useState<{ index: number; nonce: number; instant?: boolean } | null>(null)
 
   // Auto-follow: while audio plays, keep the current turn in view. We must not
   // fight the user — a manual scroll pauses following until the next play or an
@@ -438,9 +452,11 @@ export function TranscriptViewer({
       hasTimestamps
         ? lineIssues(
             segments.map((s) => ({
-              start: s.startMs / 1000,
+              start: s.untimed ? null : s.startMs / 1000,
               end: s.endMs !== undefined ? s.endMs / 1000 : null,
-              text: s.text
+              text: s.text,
+              speaker: s.speaker ?? null,
+              timingHidden: s.timingHidden
             }))
           ).map((codes) => codes.filter(isJumpableLineIssue))
         : [],
@@ -499,6 +515,13 @@ export function TranscriptViewer({
         ? { end: index === editingIndex && timeChanged ? Math.max(startSec, segment.endMs / 1000 + shiftSec) : segment.endMs / 1000 }
         : {}),
       text: index === editingIndex ? corrected : segment.text,
+      // The timing review's state survives an edit of the text.
+      ...(segment.timingHidden ? { timingHidden: true } : {}),
+      ...(segment.timingOriginalStart !== undefined ? { timingOriginalStart: segment.timingOriginalStart } : {}),
+      ...(segment.timingOriginalEnd !== undefined ? { timingOriginalEnd: segment.timingOriginalEnd } : {}),
+      ...(segment.timingReviewed !== undefined ? { timingReviewed: segment.timingReviewed } : {}),
+      ...(segment.sectionRunId ? { sectionRunId: segment.sectionRunId } : {}),
+      ...(segment.sectionReplacedBy ? { sectionReplacedBy: segment.sectionReplacedBy } : {}),
       ...(segment.speakerAttribution ? { speakerAttribution: segment.speakerAttribution } : {}),
       ...(segment.speakerConfidence !== undefined ? { speakerConfidence: segment.speakerConfidence } : {})
     }))
@@ -633,19 +656,31 @@ export function TranscriptViewer({
   const lastIssueJumpRef = useRef<Partial<Record<LineIssueCode, number>>>({})
   useEffect(() => {
     if (!issueJump) return
+    // A jump to one stored line, from the timing review's chips.
+    if (issueJump.index !== undefined) {
+      const index = segments.findIndex((s, i) => (s.sourceIndex ?? i) === issueJump.index)
+      if (index >= 0) {
+        setTranscriptExpanded(true)
+        setAutoFollow(false)
+        setPulse({ index, nonce: issueJump.nonce, instant: true })
+      }
+      return
+    }
+    const code = issueJump.code
+    if (!code) return
     const flagged = issuesByLine
-      .map((codes, index) => (codes.includes(issueJump.code) ? index : -1))
+      .map((codes, index) => (codes.includes(code) ? index : -1))
       .filter((index) => index >= 0)
     if (flagged.length === 0) {
       toast.info('No line has this problem now', 'The warning was measured before a later change. HiDock measures it again the next time it starts.')
       return
     }
-    const last = lastIssueJumpRef.current[issueJump.code] ?? -1
+    const last = lastIssueJumpRef.current[code] ?? -1
     const next = flagged.find((index) => index > last) ?? flagged[0]
-    lastIssueJumpRef.current[issueJump.code] = next
+    lastIssueJumpRef.current[code] = next
     setTranscriptExpanded(true)
     setAutoFollow(false)
-    setPulse({ index: next, nonce: issueJump.nonce })
+    setPulse({ index: next, nonce: issueJump.nonce, instant: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [issueJump?.nonce])
 
@@ -658,7 +693,7 @@ export function TranscriptViewer({
   useEffect(() => {
     if (pulse === null) return
     pulseSegmentRef.current?.scrollIntoView({
-      behavior: prefersReducedMotion ? 'auto' : 'smooth',
+      behavior: pulse.instant || prefersReducedMotion ? 'auto' : 'smooth',
       block: 'center'
     })
     if (pulseTimerRef.current) clearTimeout(pulseTimerRef.current)
@@ -725,6 +760,8 @@ export function TranscriptViewer({
   // The speaker text indexed is the text each turn renders, so offsets land on
   // the shown characters. Without timestamps every turn parses at 0: no time.
   const findDocuments = useMemo<FindDocument[]>(() => segments.flatMap((segment, i) => {
+    // A hidden line shows no text, so find never counts or selects it; keys keep the turn index.
+    if (segment.timingHidden) return []
     const effective = segment.speaker ? effectiveLabelFor(segment.speaker, i, splits) : undefined
     const name = !segment.speaker || !effective
       ? undefined
@@ -954,7 +991,27 @@ export function TranscriptViewer({
                     ? (firstTurnBySpeaker.get(base) ?? i) < i
                     : false
                   const mergeSuspected = base ? mergeHints.has(base) : false
-                  const lineProblems = issuesByLine[i] ?? []
+                  const lineProblems = [...(issuesByLine[i] ?? []),
+                    ...((segment.sourceIndex ?? i) === pastAudioEndIndex ? ['past_audio_end' as const] : [])]
+                  const timingFinding = timingFindings?.find((f) => f.lines.includes(segment.sourceIndex ?? i))
+                  // A hidden line keeps its place as one quiet row: the list is
+                  // virtualized, and the owner can see where something was taken out.
+                  if (segment.timingHidden) return (
+                    <div
+                      key={i}
+                      data-index={i}
+                      style={item ? { position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${item.start - turnScrollMargin}px)` } : undefined}
+                      ref={(el) => {
+                        if (virtualTurns) turnVirtualizer.measureElement(el)
+                        if (i === pulse?.index) pulseSegmentRef.current = el
+                      }}
+                      data-testid="transcript-turn-hidden"
+                      className={cn('px-2 py-0.5 text-[11px] italic text-muted-foreground', i === pulse?.index && 'bg-primary/20 ring-2 ring-primary/60')}
+                    >
+                      Hidden line{hasTimestamps ? ` at ${formatTimestamp(segment.startMs / 1000)}` : ''}
+                      {segment.sectionReplacedBy ? ', replaced by a new transcription of this section' : ''}
+                    </div>
+                  )
                   return (
                   <div
                     key={i}
@@ -1038,6 +1095,12 @@ export function TranscriptViewer({
                           </span>
                         ))}
                       </div>
+                    )}
+                    {timingFinding && (
+                      <p className="mb-1 text-xs text-amber-700 dark:text-amber-400" title={timingFinding.detail} data-timing-classification={timingFinding.classification}>
+                        {TIMING_KIND_LABELS[timingFinding.kind]}
+                        {timingFinding.kind !== 'duplicate' && <> · {TIMING_CLASSIFICATION_LABELS[timingFinding.classification]}</>}
+                      </p>
                     )}
                     {editingIndex === i ? (
                       <div className="space-y-2">

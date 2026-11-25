@@ -1,3 +1,4 @@
+import type { TimingAssessment, TimingReviewAction, TimingSegment } from '../../src/shared/transcript-timing'
 import type { RetranscribeResult } from '../../src/shared/retranscribe'
 import type { RendererDeletionFeature } from '../../src/shared/deletion-origin'
 import type { RecordingAudioMetadata } from '../../src/shared/audio-header-metadata'
@@ -403,6 +404,14 @@ export interface SemanticIndexStatus {
   otherPartitionRows: number
 }
 
+/** Lines saved by the timing review, checked again. */
+export interface TimingReviewSaved {
+  fullText: string
+  segments: TimingSegment[]
+  wordCount: number
+  integrity?: { status: 'ok' | 'suspect' | 'broken'; json: string }
+}
+
 export interface ElectronAPI {
   semanticIndex: {
     status: () => Promise<SemanticIndexStatus>
@@ -750,6 +759,13 @@ export interface ElectronAPI {
     assignSpeaker: (request: { recordingId: string; speakerLabel: string; contactId?: string; newName?: string }) => Promise<Result<Contact>>
     getSpeakerMap: (request: { recordingId: string }) => Promise<Result<Array<{ speaker_label: string; contact_id: string; name: string }>>>
     unassignSpeaker: (request: { recordingId: string; speakerLabel: string }) => Promise<Result<void>>
+    getTiming: (request: { recordingId: string }) => Promise<Result<TimingAssessment>>
+    reviewTiming: (request: {
+      recordingId: string; fingerprint: string; action: TimingReviewAction
+      findingId?: string; indices?: number[]; range?: { from: number; to: number }; runId?: string
+    }) => Promise<Result<TimingReviewSaved>>
+    /** Sends only that section's audio to the transcription provider; the reader asks first. */
+    retranscribeSection: (request: { recordingId: string; fingerprint: string; findingId: string }) => Promise<Result<TimingReviewSaved>>
     updateContent: (request: {
       recordingId: string
       expectedFullText: string
@@ -2002,6 +2018,9 @@ const electronAPI: ElectronAPI = {
     assignSpeaker: (request) => callIPC('transcripts:assignSpeaker', request),
     getSpeakerMap: (request) => callIPC('transcripts:getSpeakerMap', request),
     unassignSpeaker: (request) => callIPC('transcripts:unassignSpeaker', request),
+    getTiming: (request) => callIPC('transcripts:getTiming', request),
+    reviewTiming: (request) => callIPC('transcripts:reviewTiming', request),
+    retranscribeSection: (request) => callIPC('transcripts:retranscribeSection', request),
     updateContent: (request) => callIPC('transcripts:updateContent', request),
     reindex: (request) => callIPC('transcripts:reindex', request),
     updateExtractedItem: (request) => callIPC('transcripts:updateExtractedItem', request),

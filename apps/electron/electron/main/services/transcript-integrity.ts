@@ -26,7 +26,9 @@ import {
   CRAMPED_WORDS_PER_SECOND,
   countLineIssues,
   countWords,
-  lineIssues
+  duplicateGroups,
+  lineIssues,
+  timingRanges
 } from '../../../src/shared/transcript-line-issues'
 
 // The per-line rules live in src/shared so the transcript viewer marks exactly
@@ -36,6 +38,8 @@ export { CRAMPED_MIN_WORDS, CRAMPED_WORDS_PER_SECOND }
 export type IntegrityIssueCode =
   | 'repeated_start'
   | 'backwards_start'
+  | 'mistimed_run'
+  | 'duplicate_line'
   | 'cramped_lines'
   | 'past_audio_end'
   | 'too_many_words'
@@ -67,9 +71,12 @@ export interface TranscriptIntegrity {
 /**
  * Bumped when the rules change, so stored results are recomputed. 2: edits saved
  * before 28-sep-2026 were never checked again. 3: the transcript is judged
- * against the audio profile too (3-oct-2026).
+ * against the audio profile too (3-oct-2026). 4: the line out of order is
+ * flagged instead of its ordered neighbour, consecutive out-of-order lines are
+ * one shifted section (mistimed_run), and lines written twice are flagged
+ * (duplicate_line) (25-nov-2026).
  */
-export const INTEGRITY_VERSION = 3
+export const INTEGRITY_VERSION = 4
 
 /** Above this over a whole recording, the text does not fit in the audio. */
 export const MAX_WORDS_PER_AUDIO_SECOND = IMPOSSIBLE_WORDS_PER_SECOND
@@ -141,6 +148,8 @@ interface Line {
   start: number | null
   end: number | null
   text: string
+  speaker?: string | null
+  timingHidden?: boolean
 }
 
 function toLines(speakersJson: string | null | undefined): Line[] {
@@ -158,7 +167,8 @@ function toLines(speakersJson: string | null | undefined): Line[] {
     const seg = raw as Record<string, unknown>
     const start = typeof seg.start === 'number' && Number.isFinite(seg.start) ? seg.start : null
     const end = typeof seg.end === 'number' && Number.isFinite(seg.end) ? seg.end : null
-    lines.push({ start, end, text: typeof seg.text === 'string' ? seg.text : '' })
+    lines.push({ start, end, text: typeof seg.text === 'string' ? seg.text : '',
+      speaker: typeof seg.speaker === 'string' ? seg.speaker : null, timingHidden: seg.timingHidden === true })
   }
   return lines
 }
@@ -191,6 +201,7 @@ export function assessTranscriptIntegrity(
   let words = 0
   let lastTime = 0
   for (const line of lines) {
+    if (line.timingHidden) continue
     words += countWords(line.text)
     if (line.start !== null) lastTime = Math.max(lastTime, line.start, line.end ?? line.start)
   }
@@ -206,7 +217,25 @@ export function assessTranscriptIntegrity(
     issues.push({
       code: 'backwards_start',
       count: backwards,
-      detail: `${plural(backwards, 'line starts', 'lines start')} before the line above it.`,
+      detail: `${plural(backwards, 'line is', 'lines are')} out of time order with the lines around ${backwards === 1 ? 'it' : 'them'}.`,
+    })
+  }
+  const runs = timingRanges(lines).filter((range) => range.kind === 'mistimed_run')
+  if (runs.length > 0) {
+    const runLines = runs.reduce((sum, range) => sum + range.lines.length, 0)
+    issues.push({
+      code: 'mistimed_run',
+      count: runs.length,
+      detail: `${plural(runs.length, 'section', 'sections')} of ${plural(runLines, 'line', 'lines')} ${runs.length === 1 ? 'has' : 'have'} times out of order with the rest of the transcript.`,
+    })
+  }
+  const duplicates = duplicateGroups(lines)
+  if (duplicates.length > 0) {
+    const copies = duplicates.reduce((sum, group) => sum + group.copies.length, 0)
+    issues.push({
+      code: 'duplicate_line',
+      count: copies,
+      detail: `${plural(copies, 'line was', 'lines were')} written twice, as where two pieces of audio overlap.`,
     })
   }
   if (cramped > 0) {
@@ -265,7 +294,7 @@ export function assessTranscriptIntegrity(
         'most of the text was not heard in this recording.',
     })
   }
-  const loop = repeatedShare(lines, words)
+  const loop = repeatedShare(lines.filter(line => !line.timingHidden), words)
   if (loop >= REPEATED_TEXT_MAX_SHARE) {
     issues.push({
       code: 'repeated_text',
