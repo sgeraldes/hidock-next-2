@@ -34,6 +34,68 @@ function base(over: Partial<ValidityInput> = {}): ValidityInput {
 }
 
 describe('assessTranscriptValidity', () => {
+  it('preserves independent invalid and doubt evidence alongside completeness gaps', () => {
+    const input = base({ segments: [{ start: 0, end: 600, text: words(5) }, { start: 600, end: 650, text: words(200) }],
+      envelope: envelope([[160, 600], [138, 60]]), sample: 'contradicted' })
+    const verdict = assessTranscriptValidity(input)
+    expect(verdict.status).toBe('invalid')
+    expect(verdict.reasons.map(r => r.code)).toEqual(expect.arrayContaining(['sparse_long_segment', 'sample_contradicts', 'text_without_audio']))
+    const doubtful = assessTranscriptValidity({ ...input, sample: null, envelope: null })
+    expect(doubtful.reasons.map(r => r.code)).toEqual(expect.arrayContaining(['sparse_long_segment', 'audio_not_checked']))
+  })
+  it('counts legacy full text without inventing missing speech from absent timing', () => {
+    const verdict = assessTranscriptValidity(base({ fullText: words(3087), storedWordCount: 3087,
+      vadSpeechSeconds: 1030.28, diarizedSegments: [{ start: 0, end: 1030.28 }] }))
+    expect(verdict.measures.words).toBe(3087)
+    expect(verdict.reasons.map(r => r.code)).toEqual(['no_times'])
+  })
+  it('rejects Rec98: 17 words, 413 acoustic turns, 1057 speech seconds, 598 VAD seconds', () => {
+    const diarizedSegments = Array.from({ length: 413 }, (_, i) => ({ start: i * 1057 / 413, end: (i + 1) * 1057 / 413 }))
+    const v = assessTranscriptValidity(base({
+      segments: [{ start: 0.9, end: 1010.8, text: words(9) }, { start: 1200, end: 1205, text: words(8) }],
+      diarizedSegments, vadSpeechSeconds: 598, providerSeconds: 8, durationSeconds: 1565
+    }))
+    expect(v.status).toBe('incomplete')
+    expect(v.measures.detectedSpeechSeconds).toBeCloseTo(1057)
+    expect(v.reasons.map(r => r.detail)).toContain('17 words for 17.6 minutes of detected speech.')
+    expect(v.reasons.some(r => r.detail.includes('0:00 to 16:50 has 9 words'))).toBe(true)
+  })
+
+  it('merges overlapping acoustic turns and detects uncovered speech', () => {
+    const v = assessTranscriptValidity(base({ segments: [{ start: 0, end: 50, text: words(100) }],
+      diarizedSegments: [{ start: 0, end: 200 }, { start: 100, end: 300 }], vadSpeechSeconds: 20 }))
+    expect(v.status).toBe('incomplete')
+    expect(v.measures.detectedSpeechSeconds).toBe(300)
+    expect(v.measures.uncoveredDiarizedSpeechShare).toBeCloseTo(250 / 300)
+    expect(v.reasons.find(r => r.code === 'uncovered_speech')?.detail).toContain('0:50 to 5:00')
+  })
+
+  it('uses VAD without diarization, including empty transcripts', () => {
+    expect(assessTranscriptValidity(base({ vadSpeechSeconds: 120 })).status).toBe('incomplete')
+    expect(assessTranscriptValidity(base({ vadSpeechSeconds: 119 })).status).toBe('valid')
+    expect(assessTranscriptValidity(base({ vadSpeechSeconds: 120, segments: [{ text: words(60) }] })).status).toBe('valid')
+  })
+
+  it('records fast provider time without rejecting normal speech', () => {
+    const v = assessTranscriptValidity(base({ vadSpeechSeconds: 120, providerSeconds: 1, durationSeconds: 1565,
+      segments: [{ start: 0, end: 120, text: words(240) }] }))
+    expect(v.status).toBe('doubtful') // no envelope, existing audio check
+    expect(v.measures.providerTimeSuspicious).toBe(true)
+    expect(v.reasons.map(r => r.code)).not.toContain('sparse_speech')
+  })
+
+  it('does not treat matching transcript words as verification of extra speaker labels', () => {
+    const segments = Array.from({ length: 60 }, (_, i) => ({
+      speaker: `Voice ${i % 5}`, start: i * 10, end: i * 10 + 9, text: words(20, `-${i}`)
+    }))
+    const input = base({ envelope: envelope([[160, 600]]), segments, attendees: 2, sample: 'confirmed' })
+    const verdict = assessTranscriptValidity(input)
+    expect(verdict.status).toBe('doubtful')
+    expect(verdict.reasons.map(reason => reason.code)).toEqual(['more_speakers_than_invited'])
+    // An explicit owner acceptance remains a separate decision from automated verification.
+    expect(assessTranscriptValidity({ ...input, accepted: true }).status).toBe('valid')
+  })
+
   it('is valid when the text sits where the audio is', () => {
     const env = envelope([[160, 600]])
     const segments = Array.from({ length: 60 }, (_, i) => ({ speaker: i % 2 ? 'A' : 'B', start: i * 10, end: i * 10 + 9, text: words(20, `-${i}`) }))
@@ -128,7 +190,7 @@ describe('assessTranscriptValidity', () => {
       sample: 'incomplete'
     }))
     expect(v.status).toBe('incomplete')
-    expect(v.reasons.map((r) => r.code)).toEqual(['speech_after_the_end'])
+    expect(v.reasons.map((r) => r.code)).toEqual(['speech_after_the_end', 'clock_compressed'])
   })
 
   it('accepts a transcript that ends early when nothing real follows', () => {
@@ -179,6 +241,45 @@ describe('assessTranscriptValidity', () => {
     expect(v.reasons.map((r) => r.code)).toContain('clock_compressed')
   })
 
+  it('does not count silence inside a long line as missing speech (review of #173)', () => {
+    const segments = [{ start: 0, end: 300, text: words(12) }, { start: 300, end: 360, text: words(150) }]
+    // Twelve words said in five seconds of a 300-second line: the VAD heard 5 s there.
+    const quiet = assessTranscriptValidity(base({ segments, activityIntervals: [{ start: 0, end: 5 }, { start: 300, end: 360 }] }))
+    expect(quiet.reasons.map((r) => r.code)).not.toContain('sparse_long_segment')
+    // The same line over sustained sound is a gap.
+    const loud = assessTranscriptValidity(base({ segments, activityIntervals: [{ start: 0, end: 360 }] }))
+    expect(loud.reasons.map((r) => r.code)).toContain('sparse_long_segment')
+    // The envelope stands in when nothing else measured the sound.
+    expect(assessTranscriptValidity(base({ segments, envelope: envelope([[138, 300], [160, 60]]) })).reasons.map((r) => r.code))
+      .not.toContain('sparse_long_segment')
+  })
+
+  it('does not lay a compressed clock over the acoustic turns when there is no envelope', () => {
+    // 2,000 words stated over 400 s: five words a second, faster than speech.
+    const segments = Array.from({ length: 40 }, (_, i) => ({ start: i * 10, end: i * 10 + 10, text: words(50, `-${i}`) }))
+    const v = assessTranscriptValidity(base({ segments, diarizedSegments: [{ start: 0, end: 1600 }] }))
+    expect(v.reasons.map((r) => r.code)).not.toContain('uncovered_speech')
+  })
+
+  it('counts unresolved retry slices as one slice of speakers, not one set per slice', () => {
+    const segments = Array.from({ length: 24 }, (_, i) => ({ speaker: `Slice ${Math.floor(i / 2) + 1} / Speaker ${(i % 2) + 1}`,
+      crossSliceIdentity: 'unresolved', start: i * 150, end: i * 150 + 140, text: words(300, `-${i}`) }))
+    const v = assessTranscriptValidity(base({ segments, attendees: 2 }))
+    expect(v.measures.speakers).toBe(2)
+    expect(v.reasons.map((r) => r.code)).not.toContain('more_speakers_than_invited')
+  })
+
+  it('reads acoustic turns after a compressed clock as the clock, which a sample can confirm', () => {
+    const env = envelope([[160, 2290]])
+    const segments = Array.from({ length: 100 }, (_, i) => ({ speaker: 'A', start: i * 9.34, end: i * 9.34 + 9, text: words(56, `-${i}`) }))
+    const diarizedSegments = Array.from({ length: 229 }, (_, i) => ({ start: i * 10, end: i * 10 + 9 }))
+    const doubt = assessTranscriptValidity(base({ envelope: env, segments, diarizedSegments }))
+    expect(doubt.reasons.map((r) => r.code)).toContain('clock_compressed')
+    expect(doubt.reasons.map((r) => r.code)).not.toContain('uncovered_speech')
+    expect(doubt.status).toBe('doubtful')
+    expect(assessTranscriptValidity(base({ envelope: env, segments, diarizedSegments, sample: 'confirmed' })).status).toBe('valid')
+  })
+
   it('never lets a sample override the audio, the integrity check, or a transcript that stops early', () => {
     expect(assessTranscriptValidity(base({ audioCategory: 'noise', sample: 'confirmed' })).status).toBe('audio')
     expect(assessTranscriptValidity(base({ integrityStatus: 'broken', segments: [{ speaker: 'A', start: 0, text: 'hola' }], sample: 'confirmed' })).status).toBe('invalid')
@@ -226,4 +327,20 @@ describe('assessTranscriptValidity', () => {
     expect(v.status).toBe('doubtful')
     expect(v.reasons.map((r) => r.code)).toContain('no_times')
   })
+})
+
+it('frame floor agrees with the exact sorted fifth percentile for long envelopes', async () => {
+  const { audioFrameTest } = await import('../transcript-validity')
+  const env = Uint8Array.from({ length: 300000 }, (_, i) => (i * 31) % 256)
+  const sorted = Uint8Array.from(env).sort()
+  const floor = sorted[Math.floor(sorted.length * 0.05)]
+  const test = audioFrameTest(env)
+  for (let i = 0; i < env.length; i += 97) expect(test(i)).toBe(env[i] >= floor + 2 || env[i] > 142)
+})
+
+it.each([[440, 1150.669], [847, 2012.507]])('historical Rec44/Rec91 remain density failures (%s words)', (words, speech) => {
+  const verdict = assessTranscriptValidity({ fileName: 'historical.wav', segments: [], fullText: 'word '.repeat(words), envelope: null, audioCategory: 'speech', attendees: 0, integrityStatus: 'ok', accepted: false, vadSpeechSeconds: speech })
+  expect(verdict.status).toBe('incomplete')
+  expect(verdict.reasons).toContainEqual(expect.objectContaining({ code: 'sparse_speech' }))
+  expect(verdict.measures.wordsPerSpeechMinute).toBeLessThan(30)
 })

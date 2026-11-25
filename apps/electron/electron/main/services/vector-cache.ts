@@ -30,7 +30,15 @@ import { createHash } from 'crypto'
 import { closeSync, existsSync, mkdirSync, openSync, readSync, renameSync, writeSync } from 'fs'
 import { mkdir, open, rename, rm, type FileHandle } from 'fs/promises'
 import { dirname, join } from 'path'
-import { yieldToEventLoop } from './event-loop'
+/** Vector IO only: poll between bounded CPU slices without Windows timer-floor delays. */
+export function createVectorWorkBudget(): () => Promise<void> | undefined {
+  let started = performance.now(), pages = 0
+  return () => {
+    if (++pages < 8 && performance.now() - started < 4) return undefined
+    pages = 0
+    return new Promise<void>(resolve => setImmediate(() => { started = performance.now(); resolve() }))
+  }
+}
 
 /**
  * Electron's Node caps a single Buffer at 2^31-1 bytes — a >2.1 GB float
@@ -280,7 +288,26 @@ type PreparedGroup = {
   matrixLen: number
 }
 
-function prepareGroups(docs: Iterable<CacheDocument>): { groups: PreparedGroup[]; totalCount: number } {
+async function stableSortYielding<T>(items: T[], compare: (a: T, b: T) => number,
+  pause: () => Promise<void> | undefined, check: () => void): Promise<T[]> {
+  if (items.length < 2) return items
+  let source = items, target = new Array<T>(items.length), operations = 0
+  for (let width = 1; width < items.length; width *= 2) {
+    for (let start = 0; start < items.length; start += width * 2) {
+      const middle = Math.min(start + width, items.length), end = Math.min(start + width * 2, items.length)
+      let a = start, b = middle
+      for (let out = start; out < end; out++) {
+        target[out] = a < middle && (b >= end || compare(source[a], source[b]) <= 0) ? source[a++] : source[b++]
+        if (++operations % 1024 === 0) { await pause(); check() }
+      }
+    }
+    ;[source, target] = [target, source]
+  }
+  return source
+}
+
+async function prepareGroups(docs: Iterable<CacheDocument>, check: () => void): Promise<{ groups: PreparedGroup[]; totalCount: number }> {
+  const pause = createVectorWorkBudget()
   const byGroup = new Map<
     string,
     { provider: string; dims: number; rows: Array<{ id: string; vec: number[] | Float32Array }> }
@@ -295,20 +322,23 @@ function prepareGroups(docs: Iterable<CacheDocument>): { groups: PreparedGroup[]
     }
     group.rows.push({ id: doc.id, vec: doc.embedding })
     totalCount++
+    if (totalCount % 1024 === 0) { await pause(); check() }
   }
+  check()
 
-  const groups = [...byGroup.values()]
-    .sort((a, b) => a.provider.localeCompare(b.provider) || a.dims - b.dims)
-    .map((group): PreparedGroup => {
-      group.rows.sort((a, b) => a.id.localeCompare(b.id))
-      const rawIdsLen = group.rows.reduce((total, row) => total + 4 + Buffer.byteLength(row.id, 'utf-8'), 0)
-      const idsLen = rawIdsLen + ((4 - (rawIdsLen % 4)) % 4)
-      return {
-        ...group,
-        idsLen,
-        matrixLen: group.rows.length * group.dims * 4,
-      }
-    })
+  const groups: PreparedGroup[] = []
+  const ordered = await stableSortYielding([...byGroup.values()], (a, b) => a.provider.localeCompare(b.provider) || a.dims - b.dims, pause, check)
+  for (const group of ordered) {
+    group.rows = await stableSortYielding(group.rows, (a, b) => a.id.localeCompare(b.id), pause, check)
+    let rawIdsLen = 0, count = 0
+    for (const row of group.rows) {
+      rawIdsLen += 4 + Buffer.byteLength(row.id, 'utf-8')
+      if (++count % 1024 === 0) { await pause(); check() }
+    }
+    const idsLen = rawIdsLen + ((4 - rawIdsLen % 4) % 4)
+    groups.push({ ...group, idsLen, matrixLen: group.rows.length * group.dims * 4 })
+  }
+  check()
   return { groups, totalCount }
 }
 
@@ -353,17 +383,22 @@ async function readExactly(handle: FileHandle, buffer: Buffer, position: number)
  */
 export function writeVectorCacheAsync(
   filePath: string,
-  docs: Iterable<CacheDocument>
+  docs: Iterable<CacheDocument>,
+  isCurrentSnapshot: () => boolean = () => true
 ): Promise<{ totalCount: number; fingerprint: string }> {
-  // Freeze the requested snapshot now, then serialize replacements per path.
-  // Once writes became genuinely asynchronous, overlapping initializations
-  // could otherwise race on the same temp file or let an older snapshot win.
-  const prepared = prepareGroups(docs)
+  // A caller with a mutable corpus supplies its revision guard. Never publish
+  // a snapshot that changed while preparation yielded or waited in the queue.
   const generation = cacheWriteGenerations.get(filePath) ?? 0
+  const check = (): void => {
+    if ((cacheWriteGenerations.get(filePath) ?? 0) !== generation) throw new Error('Vector cache write cancelled by invalidation')
+    if (!isCurrentSnapshot()) throw new Error('Vector cache write cancelled by snapshot change')
+  }
   const previous = cacheWriteQueues.get(filePath)
-  const current = (previous ? previous.catch(() => undefined) : Promise.resolve()).then(() =>
-    writePreparedVectorCache(filePath, prepared, generation)
-  )
+  const current = (previous ? previous.catch(() => undefined) : Promise.resolve()).then(async () => {
+    check()
+    const prepared = await prepareGroups(docs, check)
+    return writePreparedVectorCache(filePath, prepared, generation, check)
+  })
   cacheWriteQueues.set(filePath, current)
   void current.then(
     () => { if (cacheWriteQueues.get(filePath) === current) cacheWriteQueues.delete(filePath) },
@@ -374,12 +409,15 @@ export function writeVectorCacheAsync(
 
 async function writePreparedVectorCache(
   filePath: string,
-  prepared: ReturnType<typeof prepareGroups>,
-  generation: number
+  prepared: Awaited<ReturnType<typeof prepareGroups>>,
+  generation: number,
+  check: () => void
 ): Promise<{ totalCount: number; fingerprint: string }> {
   if ((cacheWriteGenerations.get(filePath) ?? 0) !== generation) {
     throw new Error('Vector cache write cancelled by invalidation')
   }
+  check()
+  const pause = createVectorWorkBudget()
   const { groups, totalCount } = prepared
   const groupInfos: CacheGroupPayload[] = groups.map((group) => ({
     provider: group.provider,
@@ -410,19 +448,21 @@ async function writePreparedVectorCache(
     await writeAll(handle, headerBuf)
     for (const group of groups) {
       const idsBuf = Buffer.alloc(group.idsLen)
-      let idOffset = 0
+      let idOffset = 0, encoded = 0
       for (const row of group.rows) {
         const idBuf = Buffer.from(row.id, 'utf-8')
         idsBuf.writeUInt32LE(idBuf.length, idOffset)
         idOffset += 4
         idBuf.copy(idsBuf, idOffset)
         idOffset += idBuf.length
+        if (++encoded % 1024 === 0) { await pause(); check() }
       }
       await writeAll(handle, idsBuf)
 
       const rowBytes = group.dims * 4
       const rowsPerSlice = Math.max(1, Math.floor(ASYNC_WRITE_SLICE_BYTES / rowBytes))
       for (let start = 0; start < group.rows.length; start += rowsPerSlice) {
+        check()
         if ((cacheWriteGenerations.get(filePath) ?? 0) !== generation) {
           throw new Error('Vector cache write cancelled by invalidation')
         }
@@ -442,6 +482,7 @@ async function writePreparedVectorCache(
   } finally {
     await handle.close()
   }
+  if (!writeFailure) { try { check() } catch (error) { writeFailure = error } }
   if (writeFailure) {
     await rm(tmpPath, { force: true })
     throw writeFailure
@@ -477,6 +518,7 @@ export async function readVectorCacheAsync(
   providerFilter?: string,
   expectedCount?: number
 ): Promise<VectorCacheData | null> {
+  const pause = createVectorWorkBudget()
   let handle: FileHandle
   try {
     handle = await open(filePath, 'r')
@@ -524,9 +566,9 @@ export async function readVectorCacheAsync(
         if (p + len > group.idsLen) return null
         ids.push(idsBuf.subarray(p, p + len).toString('utf-8'))
         p += len
-        if ((i + 1) % ASYNC_READ_ROW_BATCH === 0) await yieldToEventLoop()
+        if ((i + 1) % ASYNC_READ_ROW_BATCH === 0) await pause()
       }
-      if (group.count % ASYNC_READ_ROW_BATCH !== 0) await yieldToEventLoop()
+      if (group.count % ASYNC_READ_ROW_BATCH !== 0) await pause()
 
       const rowBytes = group.dims * 4
       // Bound view construction as well as bytes: small dimensions must not
@@ -550,7 +592,7 @@ export async function readVectorCacheAsync(
         }
         rowsDone += count
         position += chunk.length
-        await yieldToEventLoop()
+        await pause()
       }
       offset = position
     }

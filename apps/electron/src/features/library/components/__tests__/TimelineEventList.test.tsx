@@ -9,8 +9,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, within } from '@testing-library/react'
-import { TimelineEventList } from '../TimelineEventList'
+import { render, screen, fireEvent, within, waitFor } from '@testing-library/react'
+import { TimelineEventList, timelineEventText } from '../TimelineEventList'
+import { useReaderFind, ReaderFindBar } from '../ReaderFind'
 import type { TimelineEvent } from '../WaveformPlayer'
 
 vi.mock('@radix-ui/react-portal', () => ({
@@ -169,5 +170,44 @@ describe('TimelineEventList', () => {
   it('says so plainly when there is nothing to show', () => {
     render(<TimelineEventList recordingId="rec-1" onActivate={onActivate} events={[]} />)
     expect(screen.getByTestId('timeline-events-empty')).toBeInTheDocument()
+  })
+})
+
+const unlabelled: TimelineEvent = { id: 'e9', timeSec: 25, index: 1, label: '', kind: 'decision' }
+function FindHarness({ activate }: { activate: (event: TimelineEvent) => void }) {
+  const find = useReaderFind({
+    sourceId: 'rec-1',
+    documents: [{ key: 'event:e9', section: 'moments', text: timelineEventText(unlabelled), timeMs: 25000 }],
+    onSeek: vi.fn()
+  })
+  return <div ref={find.rootRef}><ReaderFindBar find={find} /><TimelineEventList find={find} recordingId="rec-1" onActivate={activate} events={[unlabelled]} /></div>
+}
+
+describe('TimelineEventList with find open', () => {
+  it('finds the text shown for an event without a label, and its time click still activates the event', async () => {
+    const activate = vi.fn()
+    render(<FindHarness activate={activate} />)
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+    fireEvent.change(screen.getByLabelText('Find in transcript'), { target: { value: 'decision at' } })
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('1 of 1'))
+    expect(screen.getByText('decision at', { selector: 'mark' })).toBeInTheDocument()
+    fireEvent.click(within(screen.getByTestId('timeline-events')).getByTitle('Seek to 0:25'))
+    expect(activate).toHaveBeenCalledWith(expect.objectContaining({ id: 'e9' }))
+  })
+  it('expands the matched row once and leaves it to the user when the parent rerenders', async () => {
+    const event: TimelineEvent = { id: 'e5', timeSec: 40, index: 1, label: 'Ship the budget', kind: 'action' }
+    function Rerendering({ tick }: { tick: number }) {
+      const find = useReaderFind({ sourceId: 'rec-1', documents: [{ key: 'event:e5', section: 'moments', text: 'Ship the budget', timeMs: 40000 }], onSeek: vi.fn() })
+      // A new array on every render, like SourceReader's orderedEvents.
+      return <div ref={find.rootRef} data-tick={tick}><ReaderFindBar find={find} /><TimelineEventList find={find} recordingId="rec-1" onActivate={vi.fn()} events={[{ ...event }]} /></div>
+    }
+    const { rerender } = render(<Rerendering tick={0} />)
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+    fireEvent.change(screen.getByLabelText('Find in transcript'), { target: { value: 'budget' } })
+    await waitFor(() => expect(screen.getByTestId('event-detail-e5')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('budget', { selector: 'mark' }))
+    expect(screen.queryByTestId('event-detail-e5')).not.toBeInTheDocument()
+    rerender(<Rerendering tick={1} />)
+    expect(screen.queryByTestId('event-detail-e5')).not.toBeInTheDocument()
   })
 })

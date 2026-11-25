@@ -19,6 +19,10 @@ import time
 from pathlib import Path
 from typing import Any
 
+# Windows embeddable Python isolates sys.path through python311._pth and does
+# not add the executed script's directory. Load only our installed sibling.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 
 def log(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
@@ -255,7 +259,9 @@ def main() -> int:
     parser.add_argument("--onnx-dir", help="folder with the exported ONNX voice models")
     parser.add_argument("--onnx-provider", choices=["dml", "cpu"], default="cpu")
     args = parser.parse_args()
-    lower_own_priority()
+    from resource_policy import apply_resource_policy
+    resource_policy = apply_resource_policy()
+    log(f"resource policy: {json.dumps(resource_policy)}")
     if args.probe_dml:
         if not args.onnx_dir:
             raise RuntimeError("--probe-dml needs --onnx-dir")
@@ -283,6 +289,7 @@ def main() -> int:
     threads_env = os.environ.get("HIDOCK_DIARIZATION_THREADS")
     if threads_env and threads_env.isdigit() and int(threads_env) > 0:
         torch.set_num_threads(int(threads_env))
+        torch.set_num_interop_threads(1)
         log(f"torch intra-op threads capped at {threads_env}")
 
     token = get_hf_token()
@@ -351,6 +358,7 @@ def main() -> int:
         "model": actual_model,
         "modelVersion": importlib.metadata.version("pyannote.audio"),
         "device": device,
+        "resourcePolicy": {**resource_policy, "runtimeThreads": torch.get_num_threads()},
         "segments": segments,
         "speakers": voiced_speakers(labels, embedding_rows, speech_seconds, args.min_speech_seconds),
     }

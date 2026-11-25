@@ -1,0 +1,6 @@
+@font-face{font-family:NextManrope;src:url('../../assets/fonts/manrope-medium.ttf') format('truetype');font-style:normal;font-weight:500;font-display:swap}
+@font-face{font-family:NextManrope;src:url('../../assets/fonts/manrope-semibold.ttf') format('truetype');font-style:normal;font-weight:600;font-display:swap}
+.next-brand{display:flex;align-items:center;gap:1px;height:100%;padding-left:20px;border-radius:6px;flex-shrink:0}
+.next-symbol{width:24px;height:24px;flex-shrink:0}
+.next-wordmark{font-family:NextManrope,sans-serif;font-size:30.5px;font-weight:600;line-height:1;letter-spacing:-.65px;color:#086587;transform:translateY(-1.5px)}
+.dark .next-wordmark{font-weight:500;color:#f8fafc}

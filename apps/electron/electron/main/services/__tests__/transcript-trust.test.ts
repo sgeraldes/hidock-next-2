@@ -32,6 +32,7 @@ import {
   initializeDatabase,
   closeDatabase,
   run,
+  runInTransaction,
   queryOne,
   insertTranscript,
   setTranscriptIntegrityAccepted,
@@ -39,7 +40,7 @@ import {
   saveRecordingEvaluation,
 } from '../database'
 import { isTranscriptUntrusted, syncTrustVerdicts } from '../transcript-trust'
-import { applyCaptureValueClassification, recomputeEvaluationsFromEvidence } from '../value-classification'
+import { applyCaptureValueClassification, recomputeEvaluationsFromEvidence, WARNING_REFRESH_CHUNK } from '../value-classification'
 
 function seedRecording(id: string, personal = false): void {
   run(
@@ -156,7 +157,7 @@ describe('a transcript that is not valid, over speech', () => {
     expect(syncTrustVerdicts('inv')).toEqual({ cleared: 0, withdrawn: 1 })
     expect(syncTrustVerdicts('inv2')).toEqual({ cleared: 1, withdrawn: 0 })
     expect(rating('c-inv')).toMatchObject({ quality_rating: 'unrated', quality_method: null, quality_source: null })
-    expect(rating('c-inv2')).toMatchObject({ quality_rating: 'unrated', quality_method: 'held', quality_source: null })
+    expect(rating('c-inv2')).toMatchObject({ quality_rating: 'unrated', quality_method: null, quality_source: null })
     expect(syncTrustVerdicts()).toEqual({ cleared: 0, withdrawn: 0 })
   })
 
@@ -186,7 +187,7 @@ describe('a transcript that is not valid, over speech', () => {
 
   // Kiro review of #149: a rating taken back must come back when the
   // transcript turns valid, not stay unrated until some later scan.
-  it('gives the held content rating back from the stored evaluation once the transcript is valid', async () => {
+  it('does not revive a retracted content rating from the old evaluation once the transcript is valid', async () => {
     saveRecordingEvaluation({
       capture_id: 'c-inv2', recording_id: 'inv2', version: 1, model: 'jev-1.13.0', stars: 1.1, star_level: 1,
       stars_confidence: 0.9, kind: 'device_test', kind_confidence: 0.9, context: 'unclear', context_confidence: 0.9,
@@ -196,12 +197,72 @@ describe('a transcript that is not valid, over speech', () => {
       input_tokens: 1200, audio_warning: null,
     })
     await recomputeEvaluationsFromEvidence(['inv2'])
-    expect(rating('c-inv2')).toMatchObject({ quality_rating: 'unrated', quality_method: 'held' })
+    expect(rating('c-inv2')).toMatchObject({ quality_rating: 'unrated', quality_method: null })
 
     setTranscriptIntegrityAccepted('inv2', true)
     syncTrustVerdicts('inv2')
     await recomputeEvaluationsFromEvidence(['inv2'])
-    expect(rating('c-inv2')).toMatchObject({ quality_rating: 'garbage', quality_method: 'content', quality_source: 'ai' })
+    expect(rating('c-inv2')).toMatchObject({ quality_rating: 'unrated', quality_method: null, quality_source: null })
+  })
+
+  it('restores held ratings in stable pages as restored rows leave the held filter', async () => {
+    const count = WARNING_REFRESH_CHUNK * 2 + 1
+    const recordingIds = Array.from({ length: count }, (_, i) => `held-batch-${String(i).padStart(4, '0')}`)
+    const answers = {
+      stars: { type: 'score', score: 0, confidence: 0.9, legend: {}, probabilities: { '0': 1 } },
+    }
+
+    runInTransaction(() => {
+      for (let i = 0; i < recordingIds.length; i++) {
+        const recordingId = recordingIds[i]
+        const captureId = `c-${recordingId}`
+        seedRecording(recordingId)
+        run(
+          `INSERT INTO transcripts (id, recording_id, full_text, language, word_count, validity_status)
+           VALUES (?, ?, 'texto aceptado', 'es', 2, 'valid')`,
+          [`t-${recordingId}`, recordingId]
+        )
+        seedCapture(captureId, recordingId, 'unrated', null)
+        run('UPDATE knowledge_captures SET quality_method = \'held\' WHERE id = ?', [captureId])
+        if (i === 0) {
+          saveRecordingEvaluation({
+            capture_id: captureId, recording_id: recordingId, version: 1, model: 'jev-1.13.0',
+            stars: 1, star_level: 1, stars_confidence: 0.9, kind: null, kind_confidence: null,
+            context: null, context_confidence: null, transcript_invented: null, transcript_overfull: null,
+            has_action_items: null, sensitive: null, reasons_json: '["no_substance"]', answers_json: JSON.stringify(answers),
+            input_tokens: 100, audio_warning: null,
+          })
+        }
+      }
+
+      const ownerRecordingId = 'held-batch-owner'
+      seedRecording(ownerRecordingId)
+      seedCapture('c-held-batch-owner', ownerRecordingId, 'valuable', 'user')
+      run("UPDATE knowledge_captures SET quality_method = 'held' WHERE id = 'c-held-batch-owner'")
+      recordingIds.push(ownerRecordingId)
+    })
+
+    // There is only one evaluation row, so this event-loop turn can run only
+    // when restoreHeldRatings yields between its changing held-rating pages.
+    let yieldedBetweenPages = false
+    setImmediate(() => { yieldedBetweenPages = true })
+    expect(await recomputeEvaluationsFromEvidence(recordingIds)).toBe(0)
+    expect(yieldedBetweenPages).toBe(true)
+
+    expect(rating(`c-${recordingIds[0]}`)).toMatchObject({
+      quality_rating: 'garbage', quality_method: 'content', quality_source: 'ai',
+    })
+    expect(JSON.parse(rating(`c-${recordingIds[0]}`)?.quality_reasons ?? '[]')).toEqual(['no_substance'])
+    expect(
+      queryOne<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM knowledge_captures
+          WHERE id LIKE 'c-held-batch-%' AND quality_rating = 'unrated'
+            AND quality_method IS NULL AND quality_source IS NULL`
+      )?.count
+    ).toBe(count - 1)
+    expect(rating('c-held-batch-owner')).toMatchObject({
+      quality_rating: 'valuable', quality_method: 'held', quality_source: 'user',
+    })
   })
 
   it('leaves a personal recording rating as it is', () => {
@@ -288,4 +349,24 @@ it('announces one recording after syncing its verdict and never an empty scope',
   syncTrustVerdicts()
   expect(emitDomainEvent.mock.calls.filter(([event]) => event.type === 'transcript:verdicts-updated')).toHaveLength(0)
   await new Promise<void>((resolve) => setImmediate(resolve))
+})
+
+describe('isTranscriptUntrusted agrees with the renderer (review of #173)', () => {
+  it('distrusts broken text under any verdict and an incomplete verdict without reasons', () => {
+    seedRecording('trust-rule')
+    story('trust-rule')
+    const set = (sql: string) => run(`UPDATE transcripts SET ${sql} WHERE recording_id = 'trust-rule'`)
+    set("integrity_status = 'broken', integrity_accepted_at = NULL, validity_status = 'audio'")
+    expect(isTranscriptUntrusted('trust-rule')).toBe(true)
+    set("integrity_accepted_at = '2026-11-24T10:00:00Z'")
+    expect(isTranscriptUntrusted('trust-rule')).toBe(false)
+    set("integrity_status = 'ok', integrity_accepted_at = NULL, validity_status = 'incomplete', validity_json = NULL")
+    expect(isTranscriptUntrusted('trust-rule')).toBe(true)
+    set(`validity_json = '${JSON.stringify({ reasons: [{ code: 'sparse_long_segment', detail: '' }] })}'`)
+    expect(isTranscriptUntrusted('trust-rule')).toBe(false)
+    set(`validity_json = '${JSON.stringify({ reasons: [{ code: 'sparse_speech', detail: '' }] })}'`)
+    expect(isTranscriptUntrusted('trust-rule')).toBe(true)
+    set("validity_status = 'doubtful'")
+    expect(isTranscriptUntrusted('trust-rule')).toBe(false)
+  })
 })

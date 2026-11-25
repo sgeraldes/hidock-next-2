@@ -1150,7 +1150,7 @@ describe('Context Graph merge → hard-purge → unmerge (ADV57-1 / round-59)', 
   // (which deletes the recordings row AND runs the graph + journal scrub in ONE tx).
   function hardPurge(recordingId: string) {
     database.setGraphProvenanceCleanup((rid, opts) => removeRecordingProvenanceCore(rid, opts))
-    return database.deleteRecordingCascade(recordingId, { hard: true })
+    return database.deleteRecordingCascade(recordingId, { hard: true, origin: 'user', requestedBy: 'test' })
   }
 
   it('contacts: scrubs the purged recording from the journal snapshot; unmerge never resurrects it (selective, byte-consistent)', async () => {
@@ -1379,7 +1379,7 @@ describe('Context Graph merge → hard-purge → unmerge (ADV57-1 / round-59)', 
 describe('merge_journal relational scrub on hard purge (ADV58-1 / round-60)', () => {
   function hardPurge(recordingId: string) {
     database.setGraphProvenanceCleanup((rid, opts) => removeRecordingProvenanceCore(rid, opts))
-    return database.deleteRecordingCascade(recordingId, { hard: true })
+    return database.deleteRecordingCascade(recordingId, { hard: true, origin: 'user', requestedBy: 'test' })
   }
   function rawJournal(journalId: string) {
     return queryOne<{ loser_snapshot: string; repointed_manifest: string; undone_at: string | null }>(

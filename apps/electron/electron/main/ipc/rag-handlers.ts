@@ -8,6 +8,7 @@ import { getVectorStore } from '../services/vector-store'
 import { getChatLLMService } from '../services/chat-llm'
 import { getEmbeddingsService } from '../services/embeddings'
 import { getVectorStartupState } from '../services/vector-startup-state'
+import { getSemanticIndexMaintenance } from '../services/semantic-index-maintenance'
 
 /** Badge-friendly short labels for embedding providers (long brain labels don't fit the chip). */
 const EMBED_PROVIDER_LABELS: Record<string, string> = {
@@ -45,6 +46,17 @@ function extractMeetingIdsFromFilter(filter: RAGFilter): string[] | undefined {
 }
 
 export function registerRAGHandlers(): void {
+  ipcMain.handle('semantic-index:status', () => getSemanticIndexMaintenance().status())
+  ipcMain.handle('semantic-index:start', (_event, options: unknown) => {
+    if (options !== undefined && (options === null || typeof options !== 'object' || Array.isArray(options))) throw new Error('Invalid maintenance options')
+    const parsed = (options ?? {}) as Record<string, unknown>
+    if (Object.keys(parsed).some(key => !['maxRecordings','maxBatches'].includes(key))) throw new Error('Invalid maintenance options')
+    return getSemanticIndexMaintenance().start(parsed as {maxRecordings?: number; maxBatches?: number})
+  })
+  for (const action of ['pause','resume','cancel'] as const) ipcMain.handle(`semantic-index:${action}`, (_event, request: unknown) => {
+    if (!request || typeof request !== 'object' || !('runId' in request) || typeof request.runId !== 'string') throw new Error('Invalid maintenance run')
+    return getSemanticIndexMaintenance().control(action, request.runId)
+  })
   const rag = getRAGService()
   const vectorStore = getVectorStore()
 

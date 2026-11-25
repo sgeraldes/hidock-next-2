@@ -23,6 +23,10 @@
 import { getConfig } from './config'
 import { getBrainRouter } from './brains'
 import type { BrainId } from './brains'
+import { GEMINI_EMBEDDING_MODEL } from './brains/gemini-api-brain'
+
+/** The model the local-onnx-embed worker loads (local-embedder.ts, models/nemotron-3-embed-1b). */
+const LOCAL_EMBEDDING_MODEL = 'Nemotron-3-Embed-1B'
 
 /**
  * Per-provider RAG relevance gate (used by rag.ts). Cosine SCORE SCALES are
@@ -40,6 +44,13 @@ const RELEVANCE_THRESHOLDS: Partial<Record<BrainId, number>> = {
 const DEFAULT_RELEVANCE_THRESHOLD = 0.3
 
 class EmbeddingsService {
+  modelForProvider(provider: string | null | undefined): string | null {
+    if (provider === 'gemini-api') return GEMINI_EMBEDDING_MODEL
+    if (provider === 'local-onnx-embed') return LOCAL_EMBEDDING_MODEL
+    if (provider === 'ollama') return getConfig().embeddings.ollamaModel
+    if (provider === 'openai-compatible') return getConfig().brains.openaiCompatible?.embeddingModel || null
+    return null
+  }
   /** Which provider is currently active ('gemini' | 'ollama' | 'none'). */
   provider(): 'gemini' | 'ollama' | 'none' {
     if (getConfig().transcription.geminiApiKey) return 'gemini'
@@ -51,19 +62,20 @@ class EmbeddingsService {
    * partition label for indexing (write path) and searching (read path).
    * Null when no embed provider is usable.
    */
-  async activeProviderId(): Promise<BrainId | null> {
-    return getBrainRouter().activeEmbedBrainId()
+  async activeProviderId(): Promise<string | null> {
+    const id = await getBrainRouter().activeEmbedBrainId()
+    return id === 'model-host-embed' ? `model-host-embed:${getConfig().brains.modelHostEmbedding?.spaceId}` : id
   }
 
   /** Relevance gate for the ACTIVE provider (see RELEVANCE_THRESHOLDS). */
   async relevanceThreshold(): Promise<number> {
     const id = await this.activeProviderId()
-    return (id && RELEVANCE_THRESHOLDS[id]) ?? DEFAULT_RELEVANCE_THRESHOLD
+    return (id?.startsWith('model-host-embed:nemotron-import-sha256:') ? 0.12 : id ? RELEVANCE_THRESHOLDS[id as BrainId] : undefined) ?? DEFAULT_RELEVANCE_THRESHOLD
   }
 
   async generateEmbedding(
     text: string,
-    opts: { shouldGenerate?: () => boolean; purpose?: 'query' | 'passage' } = {}
+    opts: { shouldGenerate?: () => boolean; purpose?: 'query' | 'passage'; expectedProviderId?: string | null; signal?: AbortSignal } = {}
   ): Promise<number[] | null> {
     const results = await this.generateEmbeddings([text], opts)
     return results[0] ?? null
@@ -71,7 +83,7 @@ class EmbeddingsService {
 
   async generateEmbeddings(
     texts: string[],
-    opts: { shouldGenerate?: () => boolean; purpose?: 'query' | 'passage' } = {}
+    opts: { shouldGenerate?: () => boolean; purpose?: 'query' | 'passage'; expectedProviderId?: string | null; signal?: AbortSignal } = {}
   ): Promise<(number[] | null)[]> {
     // Delegate to the BrainRouter: Gemini `gemini-embedding-001` first (when a
     // key is configured), else Ollama — the same routing as before, now shared

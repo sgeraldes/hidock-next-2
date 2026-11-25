@@ -1,3 +1,4 @@
+import { syncTraceSettings, retrievalTraceStats } from '../services/retrieval-trace-service'
 import { ipcMain, shell } from 'electron'
 import { startConnectorSchedule } from '../services/connectors'
 import { isSavedSecret, redactSecrets, withoutSavedSecrets } from '../../../src/shared/secret-fields'
@@ -16,6 +17,10 @@ import { qualityRules } from '../services/quality-rules'
 import { recomputeForQualityChange } from '../services/quality-recompute'
 
 export function registerConfigHandlers(): void {
+  ipcMain.handle('traces:stats', async () => {
+    try { return success(await retrievalTraceStats()) }
+    catch { return errorResult('DATABASE_ERROR', 'Query recording statistics could not be read') }
+  })
   // Get full config
   ipcMain.handle('config:get', async () => {
     try {
@@ -44,6 +49,7 @@ export function registerConfigHandlers(): void {
         ])
       ) as Partial<AppConfig>
       await saveConfig(cleaned)
+      await syncTraceSettings()
       emitActivityLog('info', 'Settings saved')
       return success(redactSecrets(getConfig()))
     } catch (err) {
@@ -67,6 +73,7 @@ export function registerConfigHandlers(): void {
         const prevFeatures = section === 'features' ? getResolvedFeatures() : null
         const prevQuality = section === 'quality' ? qualityRules() : null
         await updateConfig(section, withoutSavedSecrets(values as Record<string, unknown>) as Partial<AppConfig[K]>)
+        if (section === 'chat') await syncTraceSettings()
         if (section === 'storage') {
           await initializeFileStorage()
         }

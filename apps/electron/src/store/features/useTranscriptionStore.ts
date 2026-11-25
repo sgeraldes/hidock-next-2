@@ -10,7 +10,7 @@ import { create } from 'zustand'
 import { subscribeWithSelector } from 'zustand/middleware'
 import { useShallow } from 'zustand/react/shallow'
 
-export type TranscriptionStatus = 'pending' | 'processing' | 'completed' | 'failed'
+export type TranscriptionStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled'
 
 export interface TranscriptionItem {
   id: string // Queue item ID
@@ -18,6 +18,7 @@ export interface TranscriptionItem {
   filename: string
   status: TranscriptionStatus
   progress: number // 0-100 (estimated)
+  stage?: string
   error?: string
   retryCount: number
   attempts: number
@@ -40,6 +41,7 @@ export interface TranscriptionItem {
 
 /** Queue-processor state mirrored from the main process (source of truth). */
 export interface QueueProcessorState {
+  pauseReason?: 'no_gemini_key' | null
   paused: boolean
   isProcessing: boolean
   processingId: string | null
@@ -55,6 +57,7 @@ export interface TranscriptionQueueSnapshotItem {
   filename?: string
   status: TranscriptionStatus
   progress?: number
+  stage?: string
   error_message?: string
   retry_count?: number
   attempts?: number
@@ -87,6 +90,7 @@ export interface TranscriptionQueueStore {
    * main owns the truth; this is a reflection so the dock can flip Pause↔Resume.
    */
   paused: boolean
+  pauseReason: 'no_gemini_key' | null
   /** recording_id currently being transcribed in main (null when idle). */
   processingId: string | null
 
@@ -94,9 +98,11 @@ export interface TranscriptionQueueStore {
   addToQueue: (id: string, recordingId: string, filename: string) => void
   /** Replace the renderer projection from one bounded main-process snapshot. */
   reconcileQueue: (items: TranscriptionQueueSnapshotItem[]) => void
-  updateProgress: (id: string, progress: number) => void
+  updateProgress: (id: string, progress: number, stage?: string) => void
   markCompleted: (id: string, provider: string) => void
   markFailed: (id: string, error: string) => void
+  markStopped: (id: string, reason: string) => void
+  markAllStopped: () => void
   retry: (id: string) => Promise<boolean>
   /** Dismiss one terminal failure from the actionable Operations history. */
   dismiss: (id: string) => Promise<boolean>
@@ -132,6 +138,7 @@ export const useTranscriptionStore = create<TranscriptionQueueStore>()(
     processing: new Set(),
     maxConcurrent: 2,
     paused: false,
+    pauseReason: null,
     processingId: null,
 
     // Actions
@@ -159,7 +166,7 @@ export const useTranscriptionStore = create<TranscriptionQueueStore>()(
         const processing = new Set<string>()
 
         for (const snapshot of items) {
-          if (snapshot.status !== 'pending' && snapshot.status !== 'processing' && snapshot.status !== 'failed') {
+          if (snapshot.status !== 'pending' && snapshot.status !== 'processing' && snapshot.status !== 'failed' && snapshot.status !== 'cancelled') {
             continue
           }
           const previous = state.queue.get(snapshot.id)
@@ -169,13 +176,14 @@ export const useTranscriptionStore = create<TranscriptionQueueStore>()(
             filename: snapshot.filename || previous?.filename || 'Unknown',
             status: snapshot.status,
             progress: snapshot.progress ?? previous?.progress ?? 0,
+            stage: snapshot.stage ?? previous?.stage,
             error: snapshot.error_message,
             retryCount: snapshot.retry_count ?? previous?.retryCount ?? 0,
             attempts: snapshot.attempts ?? previous?.attempts ?? 0,
             createdAt: parseQueueTimestamp(snapshot.created_at) ?? previous?.createdAt,
             startedAt: parseQueueTimestamp(snapshot.started_at) ?? previous?.startedAt,
             completedAt:
-              snapshot.status === 'failed' ? parseQueueTimestamp(snapshot.completed_at) : undefined,
+              (snapshot.status === 'failed' || snapshot.status === 'cancelled') ? parseQueueTimestamp(snapshot.completed_at) : undefined,
             provider: snapshot.provider ?? previous?.provider,
             priority: previous?.priority ?? 0,
             fromPreviousSession: snapshot.from_previous_session === 1
@@ -188,15 +196,16 @@ export const useTranscriptionStore = create<TranscriptionQueueStore>()(
       })
     },
 
-    updateProgress: (id, progress) => {
+    updateProgress: (id, progress, stage) => {
       set((state) => {
         const item = state.queue.get(id)
-        if (!item) return state
+        if (!item || item.status === 'cancelled') return state
 
         const queue = new Map(state.queue)
         queue.set(id, {
           ...item,
           progress,
+          stage: stage ?? item.stage,
           status: 'processing',
           startedAt: item.startedAt || new Date(),
           attempts: item.attempts + (item.startedAt ? 0 : 1)
@@ -250,9 +259,28 @@ export const useTranscriptionStore = create<TranscriptionQueueStore>()(
       })
     },
 
+    markStopped: (id, reason) => {
+      set((state) => {
+        const item = state.queue.get(id)
+        if (!item) return state
+        const queue = new Map(state.queue)
+        queue.set(id, { ...item, status: 'cancelled', error: reason, completedAt: new Date() })
+        const processing = new Set(state.processing)
+        processing.delete(item.recordingId)
+        return { queue, processing }
+      })
+    },
+
+    markAllStopped: () => {
+      for (const item of get().queue.values()) {
+        if (item.status === 'pending') get().remove(item.id)
+        else if (item.status === 'processing') get().markStopped(item.id, 'Stopped by you')
+      }
+    },
+
     retry: async (id) => {
       const item = get().queue.get(id)
-      if (!item || item.status !== 'failed') return false
+      if (!item || (item.status !== 'failed' && item.status !== 'cancelled')) return false
 
       // B-TXN-004: Make store retry contingent on IPC success
       // Only update local store state AFTER the IPC call succeeds
@@ -294,7 +322,7 @@ export const useTranscriptionStore = create<TranscriptionQueueStore>()(
 
     dismiss: async (id) => {
       const item = get().queue.get(id)
-      if (!item || item.status !== 'failed') return false
+      if (!item || (item.status !== 'failed' && item.status !== 'cancelled')) return false
       try {
         // `cancelled` is a terminal, non-actionable queue state already supported
         // by the durable schema. Dismissal removes only the operation notice; it
@@ -402,7 +430,7 @@ export const useTranscriptionStore = create<TranscriptionQueueStore>()(
     },
 
     applyQueueState: (state) => {
-      set({ paused: state.paused, processingId: state.processingId })
+      set({ paused: state.paused, pauseReason: state.pauseReason ?? null, processingId: state.processingId })
     },
 
     // Queries

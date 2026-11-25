@@ -1,9 +1,13 @@
 import { MIN_MEETING_CONFIDENCE } from '../../../src/shared/meeting-confidence'
 import Database from 'better-sqlite3'
+import { mainThreadBudget, yieldToEventLoop } from './event-loop'
+import { closeDatabaseBackupWorker as closeSqliteBackupWorker, runDatabaseBackup } from './sqlite-backup-host'
+import { resolveDeviceRecording } from '../../../src/shared/recording-identity'
 import { RECORDING_AUDIO_EXTENSIONS } from '../../../src/shared/audio-extensions'
 import { existsSync, readdirSync, readFileSync } from 'fs'
 import { dirname, join, normalize, resolve as resolvePath } from 'path'
 import { randomUUID } from 'crypto'
+import { registerProcessingRun, releaseProcessingRun } from './processing-run-scope'
 import { readAudioDuration } from './audio-duration'
 import { assessTranscriptIntegrity, INTEGRITY_VERSION, type IntegrityAudio, type TranscriptIntegrity } from './transcript-integrity'
 import { getDatabasePath } from './file-storage'
@@ -12,6 +16,11 @@ import { getDatabasePath } from './file-storage'
 // DB file without pulling the file-storage module graph into their tests.
 export { getDatabasePath }
 import { DatabaseEngine, getTableColumns, type BootProgress, type ExternalBackup, type SqlJsDatabase } from '@hidock/database'
+// The namespace, not a named import: a stale dist that predates the constant
+// has no such export, and the guard must read that as 0 instead of failing to link.
+import * as databaseEngineModule from '@hidock/database'
+import { checkEngineSafety } from './engine-safety-guard'
+import { isDeletionOrigin, MAX_REQUESTED_BY_LENGTH, type DeletionRequest } from '../../../src/shared/deletion-origin'
 import {
   normalizeName,
   isGenericSpeakerLabel,
@@ -35,7 +44,7 @@ export function hasDecisionLabelRecoveryFailed(): boolean {
   return decisionLabelRecoveryFailed
 }
 
-const SCHEMA_VERSION = 72
+const SCHEMA_VERSION = 75
 
 const DECISION_LABELS_DDL = `CREATE TABLE IF NOT EXISTS decision_label_sets (
     id TEXT PRIMARY KEY,
@@ -66,7 +75,28 @@ CREATE TABLE IF NOT EXISTS decision_labels (
 CREATE INDEX IF NOT EXISTS idx_decision_labels_question ON decision_labels(question, labeled_at);
 `
 
+const WITHHELD_METADATA_DDL = `CREATE TABLE IF NOT EXISTS transcript_withheld_metadata (
+  recording_id TEXT PRIMARY KEY,
+  transcript_fingerprint TEXT NOT NULL,
+  values_json TEXT NOT NULL,
+  withheld_at TEXT NOT NULL,
+  validity_version INTEGER NOT NULL,
+  FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
+)`
+
+const DIARIZED_SEGMENTS_DDL = `CREATE TABLE IF NOT EXISTS diarized_segments (
+  recording_id TEXT NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+  run_id TEXT NOT NULL REFERENCES processing_runs(id),
+  segment_index INTEGER NOT NULL CHECK(segment_index >= 0),
+  start REAL NOT NULL CHECK(start >= 0),
+  end REAL NOT NULL CHECK(end > start),
+  voice_label TEXT NOT NULL,
+  PRIMARY KEY(recording_id, segment_index)
+)`
+
 const SCHEMA = `
+${DIARIZED_SEGMENTS_DDL};
+${WITHHELD_METADATA_DDL};
 -- Calendar events from ICS
 CREATE TABLE IF NOT EXISTS meetings (
     id TEXT PRIMARY KEY,
@@ -147,6 +177,7 @@ CREATE TABLE IF NOT EXISTS knowledge_captures (
     -- subjects live on meetings. These fields must never overwrite each other.
     user_title TEXT,
     summary TEXT,
+    summary_source TEXT,
     category TEXT CHECK(category IN ('meeting', 'interview', '1:1', 'brainstorm', 'note', 'other')) DEFAULT 'meeting',
     status TEXT CHECK(status IN ('processing', 'ready', 'enriched')) DEFAULT 'ready',
 
@@ -661,9 +692,13 @@ CREATE TABLE IF NOT EXISTS synced_files (
 -- the cascade deletes synced_files + recordings, so reconciliation would see
 -- the still-on-device file as "new" and re-download it (with transcript,
 -- actionables, embeddings regenerating behind it). Filename-only, no content.
+-- v74: who asked for the purge (requested_*, app_version), as in deletion_journal.
 CREATE TABLE IF NOT EXISTS purged_files (
     filename TEXT PRIMARY KEY,
-    purged_at TEXT DEFAULT CURRENT_TIMESTAMP
+    purged_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    requested_origin TEXT CHECK(requested_origin IN ('user', 'system', 'sync')),
+    requested_by TEXT,
+    app_version TEXT
 );
 
 -- Contacts extracted from meeting attendees (renamed to People in UI)
@@ -1230,6 +1265,8 @@ CREATE INDEX IF NOT EXISTS idx_speaker_splits_recording ON speaker_splits(record
 -- removed_counts holds a JSON summary of derived rows removed (hard purge). A
 -- hard purge is intentionally NOT restorable (privacy) — its journal row is an
 -- audit trail only. restored_at is set when a soft-delete is undone.
+-- v74: requested_origin ('user' | 'system' | 'sync'), requested_by (the caller or
+-- feature) and app_version say who asked. Rows from before v74 hold NULL.
 CREATE TABLE IF NOT EXISTS deletion_journal (
     id TEXT PRIMARY KEY,
     recording_id TEXT NOT NULL,
@@ -1237,7 +1274,10 @@ CREATE TABLE IF NOT EXISTS deletion_journal (
     recording_snapshot TEXT,
     removed_counts TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    restored_at TEXT
+    restored_at TEXT,
+    requested_origin TEXT CHECK(requested_origin IN ('user', 'system', 'sync')),
+    requested_by TEXT,
+    app_version TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_recordings_personal ON recordings(personal);
@@ -3490,7 +3530,71 @@ const MIGRATIONS: Record<number, () => void> = {
       database.run('ALTER TABLE transcription_queue ADD COLUMN owner_requested INTEGER NOT NULL DEFAULT 0')
     }
   },
+  73: () => {
+    console.log('Running migration to schema v73: transcription attempts')
+    getDatabase().run(TRANSCRIPTION_ATTEMPTS_DDL)
+    console.log('Migration v73 complete')
+  },
+  74: () => {
+    // Who asked for each deletion (approved by the owner, 24-nov-2026). Rows
+    // written before this migration keep NULL: nobody recorded it then.
+    console.log('Running migration to schema v74: deletion origin')
+    addDeletionOriginColumns(getDatabase())
+    console.log('Migration v74 complete')
+  },
+  75: () => {
+    // Transcript completeness: acoustic diarization segments (the evidence the
+    // completeness check reads) and the metadata withheld from an incomplete
+    // transcript. Additive; the shared engine takes the restore point first.
+    console.log('Running migration to schema v75: diarized segments and withheld metadata')
+    const database = getDatabase()
+    database.run(DIARIZED_SEGMENTS_DDL)
+    database.run(WITHHELD_METADATA_DDL)
+    console.log('Migration v75 complete')
+  },
 }
+
+/**
+ * The v74 columns on deletion_journal and purged_files. Only adds what is
+ * missing, so a table created from the v74 SCHEMA is left alone.
+ */
+function addDeletionOriginColumns(database: SqlJsDatabase): void {
+  const columns = [
+    "requested_origin TEXT CHECK(requested_origin IN ('user', 'system', 'sync'))",
+    'requested_by TEXT',
+    'app_version TEXT',
+  ]
+  for (const table of ['deletion_journal', 'purged_files']) {
+    const existing = getTableColumns(database, table)
+    for (const column of columns) {
+      if (!existing.includes(column.split(' ')[0])) database.run(`ALTER TABLE ${table} ADD COLUMN ${column}`)
+    }
+  }
+}
+
+/**
+ * Every engine attempt of a transcription (16-oct-2026): which engine, which try,
+ * how it ended and why. Written as each attempt ends by the engine chain
+ * (transcription-engine-chain.ts), read by the recording panel, Settings and the
+ * brain API. Migration 73 and repairPhase share it.
+ */
+const TRANSCRIPTION_ATTEMPTS_DDL = `
+  CREATE TABLE IF NOT EXISTS transcription_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recording_id TEXT NOT NULL,
+    queue_item_id TEXT,
+    engine TEXT NOT NULL,
+    attempt INTEGER NOT NULL,
+    outcome TEXT NOT NULL CHECK(outcome IN ('succeeded', 'failed', 'skipped-unavailable')),
+    error_class TEXT,
+    message TEXT,
+    started_at TEXT NOT NULL,
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    waited_seconds INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_transcription_attempts_recording ON transcription_attempts(recording_id, started_at);
+`
 
 /**
  * Notes, hand-written. Single source of truth for the DDL: migration 55 and the
@@ -3954,6 +4058,12 @@ function repairPhase(): void {
     console.warn('[Database] knowledge_captures table unavailable during structural repair; skipping capture repair')
   }
 
+  database.run(WITHHELD_METADATA_DDL)
+  const summaryColumns = getTableColumns(database, 'knowledge_captures')
+  if (summaryColumns.length && !summaryColumns.includes('summary_source')) {
+    database.run('ALTER TABLE knowledge_captures ADD COLUMN summary_source TEXT')
+  }
+
   // Repair transcription_queue (spec-014: retry persistence and real-time progress)
   const queueInfo = database.exec("PRAGMA table_info(transcription_queue)")
   if (queueInfo.length > 0 && queueInfo[0].values) {
@@ -3961,7 +4071,8 @@ function repairPhase(): void {
     const queueRepairs = [
       { name: 'retry_count', def: 'INTEGER DEFAULT 0' },
       { name: 'progress', def: 'INTEGER DEFAULT 0' },
-      { name: 'provider', def: 'TEXT' }
+      { name: 'provider', def: 'TEXT' },
+      { name: 'owner_requested', def: 'INTEGER NOT NULL DEFAULT 0' }
     ]
     for (const col of queueRepairs) {
       if (!queueCols.includes(col.name)) {
@@ -4065,6 +4176,13 @@ function repairPhase(): void {
     database.run(NOTES_TABLE_DDL)
   } catch (e) {
     console.warn('[Database] notes create skipped:', (e as Error).message)
+  }
+
+  // Transcription attempts (v73), like Notes.
+  try {
+    database.run(TRANSCRIPTION_ATTEMPTS_DDL)
+  } catch (e) {
+    console.warn('[Database] transcription_attempts create skipped:', (e as Error).message)
   }
 
   // Reference labels (v71), like Notes: fresh installs and upgrades share the
@@ -4425,9 +4543,13 @@ function repairPhase(): void {
  * Shared SQLite engine, configured with this app's schema, version, migrations,
  * and structural-repair callback. Owns the sql.js lifecycle and the 4-phase boot.
  */
+/** Set by initializeDatabase from the running app; NULL in rows when unknown. */
+let databaseAppVersion: string | null = null
+
 const engine = new DatabaseEngine({
   betterSqlite3: Database,
   dbPathProvider: getDatabasePath,
+  appVersion: () => databaseAppVersion,
   schemaVersion: SCHEMA_VERSION,
   schema: SCHEMA,
   migrations: MIGRATIONS,
@@ -4438,6 +4560,7 @@ const engine = new DatabaseEngine({
   // Intentional bulk purges use runWithMassDeleteAllowed().
   protectedTables: ['knowledge_captures', 'transcripts', 'recordings', 'meetings', 'contacts'],
   backupOnBoot: { keep: 3 },
+  backupExecutor: runDatabaseBackup,
   deferBackupOnBoot: true,
   externalBackups: listHourlyBackups,
 })
@@ -4483,8 +4606,22 @@ export function runWithMassDeleteAllowed<T>(fn: () => T): T {
  * shared @hidock/database engine, configured above with this app's schema,
  * version, migrations, and repairPhase.
  */
-export async function initializeDatabase(options: { onProgress?: (p: BootProgress) => void } = {}): Promise<void> {
-  await engine.initialize(options)
+export async function initializeDatabase(
+  options: { onProgress?: (p: BootProgress) => void; existingSchemaOnly?: boolean; appVersion?: string } = {}
+): Promise<void> {
+  if (options.appVersion !== undefined) databaseAppVersion = options.appVersion
+  const safety = checkEngineSafety(databaseEngineModule.ENGINE_SAFETY_VERSION)
+  if (options.existingSchemaOnly) {
+    // No schema work on this open, so an old engine cannot migrate anything.
+    if (!safety.ok) console.error(safety.message)
+    engine.initializeExistingWritable()
+    return
+  }
+  if (!safety.ok) {
+    console.error(safety.message)
+    throw new Error(safety.message)
+  }
+  await engine.initialize({ onProgress: options.onProgress })
 }
 
 /**
@@ -4493,12 +4630,34 @@ export async function initializeDatabase(options: { onProgress?: (p: BootProgres
  * with a `SchemaBehindError` from `@hidock/database`.
  */
 export function initializeDatabaseReadOnly(): void {
+  // Read-only never migrates: an old engine is worth a loud line, not a refusal.
+  const safety = checkEngineSafety(databaseEngineModule.ENGINE_SAFETY_VERSION)
+  if (!safety.ok) console.error(safety.message)
   engine.initializeReadOnly()
+}
+
+/**
+ * Check a deletion request before anything is written. Every deletion that
+ * writes deletion_journal or purged_files says who asked (v74).
+ */
+function assertDeletionRequest(request: DeletionRequest | undefined): DeletionRequest {
+  if (!request || !isDeletionOrigin(request.origin)) {
+    throw new Error(`Deletion refused: origin must be 'user', 'system' or 'sync' (got ${JSON.stringify(request?.origin)})`)
+  }
+  if (typeof request.requestedBy !== 'string' || request.requestedBy.trim() === '' || request.requestedBy.length > MAX_REQUESTED_BY_LENGTH) {
+    throw new Error(`Deletion refused: requestedBy must name the caller (1 to ${MAX_REQUESTED_BY_LENGTH} characters)`)
+  }
+  return { origin: request.origin, requestedBy: request.requestedBy.trim() }
 }
 
 /** Invoked by the post-paint boot scheduler; never delays the main window. */
 export async function runDeferredDatabaseBackup(): Promise<void> {
   await engine.runDeferredBackup()
+}
+
+/** Cancels any in-flight backup worker and waits for owned partial cleanup. */
+export function closeDatabaseBackupWorker(): Promise<void> {
+  return closeSqliteBackupWorker()
 }
 
 export function saveDatabase(): void {
@@ -4510,6 +4669,8 @@ export function getDatabase(): SqlJsDatabase {
 }
 
 export function closeDatabase(): void {
+  ownedProcessingRuns.clear()
+  ownedPipelineRuns.clear()
   engine.closeDatabase()
 }
 
@@ -4706,10 +4867,13 @@ export function upsertMeetingsBatch(
 
   // Reconcile occurrence ids against existing rows so a recurring occurrence
   // updates the row already holding its FKs rather than inserting a twin.
-  const existingSlots = queryAll<{ id: string; start_time: string }>(
-    'SELECT id, start_time FROM meetings'
-  )
-  const reconciled = remapOccurrenceIdsToExisting(meetings, existingSlots)
+  // Graph occurrence ids are already stable and account-scoped. Reading every
+  // calendar row for each Outlook page serves only ICS recurrence remapping.
+  const reconciled = meetings.every((meeting) => meeting.id.startsWith('m365:'))
+    ? meetings
+    : remapOccurrenceIdsToExisting(meetings, queryAll<{ id: string; start_time: string }>(
+      'SELECT id, start_time FROM meetings'
+    ))
 
   runInTransaction(() => {
     for (const meeting of reconciled) {
@@ -5235,6 +5399,22 @@ export function getValueExcludedRecordingIds(): Set<string> {
   return new Set(rows.map((r) => r.id))
 }
 
+/** Graph run-start snapshot. Never materializes transcript text or per-row skip logs.
+ * The caller must still point-read eligibility before extraction and in its write transaction.
+ */
+export function getGraphIngestCandidates(): { rows: Array<{ id: string; recording_id: string }>; skipped: number } {
+  const base = `FROM transcripts t JOIN recordings r ON r.id = t.recording_id
+    WHERE COALESCE(r.personal, 0) = 0 AND r.deleted_at IS NULL`
+  const rows = queryAll<{ id: string; recording_id: string }>(`
+    SELECT t.id, t.recording_id ${base}
+    AND NOT EXISTS (SELECT 1 FROM graph_ingested_transcripts g WHERE g.transcript_id = t.id)
+    AND NOT EXISTS (SELECT 1 FROM knowledge_captures kc
+      WHERE kc.source_recording_id = r.id AND kc.deleted_at IS NULL
+        AND ${VALUE_EXCLUSION_PREDICATE})`, [...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS])
+  const total = queryOne<{ n: number }>(`SELECT COUNT(*) AS n ${base}`)?.n ?? 0
+  return { rows, skipped: total - rows.length }
+}
+
 /**
  * Single-recording point-read form of {@link getValueExcludedRecordingIds} —
  * same predicate, scoped to one id. This is the FINAL-eligibility check
@@ -5273,11 +5453,10 @@ export function isRecordingGraphIngestable(recordingId: string): boolean {
   )
   if (!rec) return false
   if (isValueExcludedRecording(recordingId)) return false
-  // A transcript that is invalid, in doubt or incomplete feeds no graph
-  // (validation order, 4-oct-2026); the eligibility boundary says the same.
+  // Gap-only and doubtful transcripts keep their real content; invalid, broken
+  // and density-failed ones feed no graph. The reader boundary uses the same rule.
   const unusable = queryOne<{ x: number }>(
-    `SELECT 1 AS x FROM transcripts t WHERE t.recording_id = ?
-        AND t.validity_status IN ('invalid', 'incomplete', 'doubtful') AND t.integrity_accepted_at IS NULL`,
+    `SELECT 1 AS x FROM transcripts t WHERE t.recording_id = ? AND ${UNUSABLE_TRANSCRIPT_PREDICATE}`,
     [recordingId]
   )
   return !unusable
@@ -5319,7 +5498,7 @@ export function isRecordingProcessable(recordingId: string): boolean {
  * Cross-reference (/simplify S-5): the graph ingest (knowledge-graph-service.ts
  * ingestFromDbTranscripts) composes the SAME two exclusions differently — its
  * base query filters `COALESCE(r.personal,0)=0 AND r.deleted_at IS NULL`
- * directly, then layers value-exclusion on top via the pre-filter Set /
+ * directly, then layers value-exclusion on top via the SQL candidate snapshot /
  * point-read pair above, rather than unioning everything into one Set like
  * this function does for RAG. Same net effect (both exclusions always apply
  * either way); this is a deliberate difference in composition, not drift.
@@ -5368,11 +5547,25 @@ export interface RecordingEligibility {
  * people, summaries and categorization (plan 2026-10-04-validation-order).
  * Transcription itself is exempt: a new transcript is the way out.
  */
+/**
+ * A transcript nothing may be built on, for alias `t`: invalid, text the
+ * integrity check calls broken, or incomplete for a density failure. An
+ * incomplete verdict whose reasons are not a readable array fails closed.
+ * The same rule as transcript-trust.ts isTranscriptUntrusted and the
+ * renderer's isTranscriptTrusted. An owner's acceptance lifts it.
+ * Every comparison is NULL-safe, so it can also be negated (NOT (...)).
+ */
+const UNUSABLE_TRANSCRIPT_PREDICATE = `(COALESCE(t.validity_status, '') = 'invalid'
+          OR COALESCE(t.integrity_status, '') = 'broken'
+          OR (COALESCE(t.validity_status, '') = 'incomplete' AND (
+            COALESCE(CASE WHEN json_valid(t.validity_json) THEN json_type(t.validity_json, '$.reasons') END, '') != 'array'
+            OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(t.validity_json) THEN t.validity_json ELSE '{}' END, '$.reasons') reason
+              WHERE json_extract(reason.value, '$.code') = 'sparse_speech'))))
+        AND t.integrity_accepted_at IS NULL`
+
 const UNUSABLE_TRANSCRIPT_EXCLUSION = `AND NOT EXISTS (
               SELECT 1 FROM transcripts t
-               WHERE t.recording_id = r.id
-                 AND t.validity_status IN ('invalid', 'incomplete', 'doubtful')
-                 AND t.integrity_accepted_at IS NULL)`
+               WHERE t.recording_id = r.id AND ${UNUSABLE_TRANSCRIPT_PREDICATE})`
 
 export function getEligibleRecordingIds(
   candidateIds: Iterable<string>,
@@ -5397,9 +5590,7 @@ export function getEligibleRecordingIds(
                  AND kc.deleted_at IS NULL
                  AND ${VALUE_EXCLUSION_PREDICATE})`}
             ${options.forTranscription ? '' : UNUSABLE_TRANSCRIPT_EXCLUSION}`,
-        options.forTranscription && options.ignoreValueExclusion
-          ? chunk
-          : [...chunk, ...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS]
+        options.forTranscription && options.ignoreValueExclusion ? chunk : [...chunk, ...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS]
       )
       for (const row of rows) eligible.add(row.id)
     }
@@ -5588,24 +5779,102 @@ export function getExcludedRecordingIds(): RecordingExclusion {
  * keep capture). Fails CLOSED by construction: a DB error throws to the caller,
  * which aborts the run (zero provider calls) rather than defaulting open.
  */
-export function getFailedTranscriptsForReanalysis(
-  limit: number
-): Array<{ recording_id: string; full_text: string }> {
-  return queryAll<{ recording_id: string; full_text: string }>(
-    `SELECT t.recording_id AS recording_id, t.full_text AS full_text
-       FROM transcripts t JOIN recordings r ON r.id = t.recording_id
+export async function getFailedTranscriptsForReanalysis(
+  limit: number,
+  { everyMinutes = 120, maxPerWeek = 4, recordingId, neverTried = false }: {
+    /** Wait after a failed summary before it is tried again (Settings > Transcription). */
+    everyMinutes?: number
+    /** Billed failures a week before automatic tries stop. */
+    maxPerWeek?: number
+    /** The owner asked for this recording: no wait and no weekly cap. */
+    recordingId?: string
+    /** Only summaries no provider has failed on yet (the pass after the queue empties). */
+    neverTried?: boolean
+  } = {}
+): Promise<Array<{ recording_id: string; full_text: string }>> {
+  // A summary that keeps failing is not paid for forever (review of #187,
+  // 27-oct-2026): a wait between tries, a weekly cap, and the never-tried and
+  // longest-waiting first so a few stuck rows cannot hold the whole allowance.
+  // Both numbers come from Settings since 28-oct-2026.
+  const now = Date.now()
+  const backoffSince = recordingId ? new Date(now + 60_000).toISOString() : new Date(now - everyMinutes * 60_000).toISOString()
+  const capSince = new Date(now - 7 * 24 * 3_600_000).toISOString()
+  const cap = recordingId ? Number.MAX_SAFE_INTEGER : maxPerWeek
+  // processing_runs is narrow: one grouped read for every recording's failures.
+  const failures = new Map(queryAll<{ recording_id: string; last_failed_at: string | null; failures_this_week: number | null }>(
+    `SELECT recording_id, MAX(started_at) AS last_failed_at,
+            -- A quota or overload refusal cost nothing and does not spend the cap
+            -- (27-oct-2026: four 429s two hours apart locked summaries out for a week).
+            -- Neither does depleted credit, nor a checkpoint that sent nothing (28-oct-2026).
+            SUM(CASE WHEN started_at >= ?
+                      AND COALESCE(error_message, '') NOT LIKE '%429 Too Many Requests%'
+                      AND COALESCE(error_message, '') NOT LIKE '%Rate limit exceeded%'
+                      AND COALESCE(error_message, '') NOT LIKE '%RESOURCE_EXHAUSTED%'
+                      AND COALESCE(error_message, '') NOT LIKE '%experiencing high demand%'
+                      AND COALESCE(error_message, '') NOT LIKE '%[402 Payment Required]%'
+                      AND COALESCE(error_message, '') NOT LIKE 'Provider checkpoint pending:%'
+                     THEN 1 ELSE 0 END) AS failures_this_week
+       FROM processing_runs
+      WHERE stage = 'summary' AND status IN ('failed', 'degraded')
+      GROUP BY recording_id`,
+    [capSince]
+  ).map((row) => [row.recording_id, row] as const))
+  const due = (id: string): boolean => {
+    const f = failures.get(id)
+    if (!f) return true
+    if (neverTried && f.last_failed_at != null) return false
+    if (f.last_failed_at != null && !(f.last_failed_at < backoffSince)) return false
+    return (f.failures_this_week ?? 0) < cap
+  }
+  const eligibility = `FROM transcripts t JOIN recordings r ON r.id = t.recording_id
       WHERE (t.summary IS NULL OR t.summary = 'Analysis failed' OR t.title_suggestion IS NULL)
-        AND t.full_text IS NOT NULL AND TRIM(t.full_text) != ''
         AND r.deleted_at IS NULL AND COALESCE(r.personal, 0) = 0
+        -- A transcript nothing may be built on is never summarized. It used to
+        -- reach the brain and be dropped after, and its 'cancelled' run never
+        -- counted, so it came back every pass (28-oct-2026). Gap-only and
+        -- doubtful transcripts are summarized, as at transcription time.
+        AND NOT (${UNUSABLE_TRANSCRIPT_PREDICATE})
         AND NOT EXISTS (
           SELECT 1 FROM knowledge_captures kc
            WHERE kc.source_recording_id = t.recording_id
              AND kc.deleted_at IS NULL
-             AND ${VALUE_EXCLUSION_PREDICATE})
-      ORDER BY t.created_at DESC
-      LIMIT ?`,
-    [...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS, limit]
-  )
+             AND ${VALUE_EXCLUSION_PREDICATE})`
+  // Snapshot through the primary-key index, then inspect one row per time slice.
+  // A single filtered/sorted SELECT reads the columns stored after full_text, so
+  // it walks every wide transcript's overflow pages in one hold (PR #175).
+  const ids = recordingId
+    ? queryAll<{ id: string }>('SELECT id FROM transcripts WHERE recording_id = ?', [recordingId])
+    : queryAll<{ id: string }>('SELECT id FROM transcripts')
+  const candidates: Array<{ id: string; created_at: string | null; last_failed_at: string | null }> = []
+  const checkpoint = mainThreadBudget('FailedAnalysisCandidates')
+  for (const candidate of ids) {
+    await checkpoint()
+    const row = queryOne<{ id: string; recording_id: string; created_at: string | null }>(
+      `SELECT t.id, t.recording_id, t.created_at ${eligibility} AND t.id = ?`,
+      [...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS, candidate.id]
+    )
+    if (row && due(row.recording_id)) {
+      candidates.push({ id: row.id, created_at: row.created_at, last_failed_at: failures.get(row.recording_id)?.last_failed_at ?? null })
+    }
+  }
+  // Never tried first, then the longest waiting, then the newest transcript.
+  candidates.sort((a, b) =>
+    Number(a.last_failed_at != null) - Number(b.last_failed_at != null) ||
+    (a.last_failed_at ?? '').localeCompare(b.last_failed_at ?? '') ||
+    (b.created_at ?? '').localeCompare(a.created_at ?? ''))
+  const rows: Array<{ recording_id: string; full_text: string }> = []
+  for (const candidate of candidates) {
+    if (limit >= 0 && rows.length >= limit) break
+    await checkpoint()
+    // Fresh gates after every yield; blank text must not consume the eligible limit.
+    const row = queryOne<{ recording_id: string; full_text: string }>(
+      `SELECT t.recording_id AS recording_id, t.full_text AS full_text ${eligibility}
+        AND t.id = ? AND t.full_text IS NOT NULL AND TRIM(t.full_text) != ''`,
+      [...VALUE_EXCLUDED_RATINGS, ...VALUE_KEEP_RATINGS, candidate.id]
+    )
+    if (row) rows.push(row)
+  }
+  return rows
 }
 
 /** All knowledge_capture ids owned by a recording (via source link or migration). */
@@ -6004,8 +6273,9 @@ export interface RecordingDeletionResult {
  */
 export function deleteRecordingCascade(
   recordingId: string,
-  opts: { hard?: boolean; skipGraphCleanup?: boolean } = {}
+  opts: { hard?: boolean; skipGraphCleanup?: boolean } & DeletionRequest
 ): RecordingDeletionResult | undefined {
+  const request = assertDeletionRequest(opts)
   const rec = getRecordingById(recordingId)
   if (!rec) return undefined
 
@@ -6038,9 +6308,9 @@ export function deleteRecordingCascade(
       // persist any further derivatives for this now-trashed recording.
       runNoSave("UPDATE transcription_queue SET status = 'cancelled' WHERE recording_id = ? AND status = 'processing'", [recordingId])
       runNoSave(
-        `INSERT INTO deletion_journal (id, recording_id, mode, recording_snapshot, created_at)
-         VALUES (?, ?, 'soft', ?, ?)`,
-        [randomUUID(), recordingId, JSON.stringify(rec), now]
+        `INSERT INTO deletion_journal (id, recording_id, mode, recording_snapshot, created_at, requested_origin, requested_by, app_version)
+         VALUES (?, ?, 'soft', ?, ?, ?, ?, ?)`,
+        [randomUUID(), recordingId, JSON.stringify(rec), now, request.origin, request.requestedBy, databaseAppVersion]
       )
     })
     return {
@@ -6212,7 +6482,11 @@ export function deleteRecordingCascade(
         purgeTombstones.add(name.replace(/\.(hda|wav)$/i, '.mp3'))
       }
       for (const name of purgeTombstones) {
-        runNoSave('INSERT OR IGNORE INTO purged_files (filename) VALUES (?)', [name])
+        // OR IGNORE: an existing tombstone keeps the request that first wrote it.
+        runNoSave(
+          'INSERT OR IGNORE INTO purged_files (filename, requested_origin, requested_by, app_version) VALUES (?, ?, ?, ?)',
+          [name, request.origin, request.requestedBy, databaseAppVersion]
+        )
       }
       runNoSave('DELETE FROM recording_preassignments WHERE filename = ?', [rec.filename])
       if (rec.original_filename) {
@@ -6282,9 +6556,9 @@ export function deleteRecordingCascade(
           })
         : null
       runNoSave(
-        `INSERT INTO deletion_journal (id, recording_id, mode, recording_snapshot, removed_counts, created_at)
-         VALUES (?, ?, 'hard', ?, NULL, ?)`,
-        [journalId, recordingId, hardSnapshot, new Date().toISOString()]
+        `INSERT INTO deletion_journal (id, recording_id, mode, recording_snapshot, removed_counts, created_at, requested_origin, requested_by, app_version)
+         VALUES (?, ?, 'hard', ?, NULL, ?, ?, ?, ?)`,
+        [journalId, recordingId, hardSnapshot, new Date().toISOString(), request.origin, request.requestedBy, databaseAppVersion]
       )
 
       return {
@@ -6680,15 +6954,18 @@ export function getRecordingsByIds(ids: string[]): Map<string, Recording> {
 // stores the device name in original_filename. Prefer the local canonical row
 // when both exist so a device snapshot cannot create a second shadow row.
 export function getRecordingByFilename(filename: string): Recording | undefined {
-  return queryOne<Recording>(
-    `SELECT * FROM recordings
-      WHERE filename = ? OR original_filename = ?
-      ORDER BY on_local DESC,
-               CASE WHEN filename = ? THEN 0 ELSE 1 END,
-               created_at ASC
-      LIMIT 1`,
-    [filename, filename, filename]
+  const base = filename.replace(/\.(hda|wav|mp3|m4a|aac|ogg|flac)$/i, '')
+  const variants = base === filename ? [filename] : [filename, ...RECORDING_EXTENSIONS.map((ext) => `${base}.${ext}`)]
+  const placeholders = variants.map(() => '?').join(', ')
+  const candidates = queryAll<Recording>(
+    `SELECT * FROM recordings WHERE filename COLLATE NOCASE IN (${placeholders})
+      OR original_filename COLLATE NOCASE IN (${placeholders})`, [...variants, ...variants]
   )
+  if (!/\.hda$/i.test(filename)) {
+    const exact = candidates.filter((row) => row.filename.toLowerCase() === filename.toLowerCase())
+    if (exact.length === 1) return exact[0]
+  }
+  return resolveDeviceRecording(filename, candidates)
 }
 
 // Update recording lifecycle state
@@ -6737,8 +7014,18 @@ export function upsertRecordingFromDevice(deviceFile: {
   duration: number
   dateCreated: Date
 }): Recording {
-  const existing = getRecordingByFilename(deviceFile.filename)
+  // An ambiguous identity (two exact device rows) is not a new recording:
+  // inserting would add another row on every scan. Keep using the oldest.
+  const existing = getRecordingByFilename(deviceFile.filename) ?? queryAll<Recording>(
+    `SELECT * FROM recordings
+      WHERE (filename = ? COLLATE NOCASE OR original_filename = ? COLLATE NOCASE)
+        AND (source IS NULL OR source = 'hidock') AND COALESCE(is_imported, 0) != 1
+      ORDER BY created_at, id LIMIT 1`, [deviceFile.filename, deviceFile.filename]
+  )[0]
   const now = new Date().toISOString()
+  // Custom recordings have no qualified byte-rate estimate before download.
+  // Preserve an existing measurement when the device reports unknown (0).
+  const incomingDuration = Number.isFinite(deviceFile.duration) && deviceFile.duration > 0 ? deviceFile.duration : null
 
   if (existing) {
     // Update the canonical row rather than creating a device-only .hda shadow
@@ -6752,9 +7039,9 @@ export function upsertRecordingFromDevice(deviceFile: {
               location = ?,
               original_filename = ?,
               file_size = CASE WHEN on_local = 1 THEN file_size ELSE ? END,
-              duration_seconds = ?
+              duration_seconds = COALESCE(?, duration_seconds)
         WHERE id = ?`,
-      [now, newLocation, deviceFile.filename, deviceFile.size, deviceFile.duration, existing.id]
+      [now, newLocation, deviceFile.filename, deviceFile.size, incomingDuration, existing.id]
     )
     return getRecordingById(existing.id)!
   } else {
@@ -6764,16 +7051,32 @@ export function upsertRecordingFromDevice(deviceFile: {
       `INSERT INTO recordings (id, filename, original_filename, file_path, file_size, duration_seconds, date_recorded,
         status, location, transcription_status, on_device, device_last_seen, on_local, source, is_imported)
        VALUES (?, ?, ?, NULL, ?, ?, ?, 'none', 'device-only', 'none', 1, ?, 0, 'hidock', 0)`,
-      [id, deviceFile.filename, deviceFile.filename, deviceFile.size, deviceFile.duration, deviceFile.dateCreated.toISOString(), now]
+      [id, deviceFile.filename, deviceFile.filename, deviceFile.size, incomingDuration, deviceFile.dateCreated.toISOString(), now]
     )
     return getRecordingById(id)!
   }
 }
 
 // Mark recordings as no longer on device
-export function markRecordingsNotOnDevice(presentFilenames: string[]): void {
-  if (presentFilenames.length === 0) return
+/** SQLite CURRENT_TIMESTAMP ('YYYY-MM-DD HH:MM:SS', UTC) or ISO text, as epoch ms. */
+function storedTimeMs(value: string | null | undefined): number {
+  if (!value) return Number.NaN
+  return Date.parse(value.includes('T') ? value : `${value.replace(' ', 'T')}Z`)
+}
 
+/**
+ * A complete scan proves absence only for rows that existed before it began.
+ * Rows created or seen on the device since (`scanStartedAt`) are left alone.
+ */
+export function markRecordingsNotOnDevice(presentFilenames: string[], scanStartedAt?: string): void {
+  const cutoff = storedTimeMs(scanStartedAt)
+  // CURRENT_TIMESTAMP has whole seconds: a row stamped in the scan's starting
+  // second may be newer than the scan, so it counts as seen since.
+  const seenSinceScan = (time: string | null | undefined): boolean => {
+    const ms = storedTimeMs(time)
+    if (!Number.isFinite(ms)) return false
+    return ms >= (/\.\d/.test(time!) ? cutoff : Math.floor(cutoff / 1000) * 1000)
+  }
   const presentBases = new Set(
     presentFilenames.map((filename) => filename.replace(/\.(hda|wav|mp3|m4a|aac|ogg|flac)$/i, '').toLowerCase())
   )
@@ -6782,6 +7085,7 @@ export function markRecordingsNotOnDevice(presentFilenames: string[]): void {
   const onDevice = queryAll<Recording>('SELECT * FROM recordings WHERE on_device = 1')
 
   for (const rec of onDevice) {
+    if (Number.isFinite(cutoff) && [rec.device_last_seen, rec.created_at].some(seenSinceScan)) continue
     const deviceIdentity = rec.original_filename || rec.filename
     const base = deviceIdentity.replace(/\.(hda|wav|mp3|m4a|aac|ogg|flac)$/i, '').toLowerCase()
     if (!presentBases.has(base)) {
@@ -6811,17 +7115,7 @@ const RECORDING_EXTENSIONS = RECORDING_AUDIO_EXTENSIONS.map((ext) => ext.slice(1
  * exist under any variant of the same base name.
  */
 export function getRecordingByFilenameVariants(filename: string): Recording | undefined {
-  const exact = getRecordingByFilename(filename)
-  if (exact) return exact
-
-  const base = filename.replace(/\.(hda|wav|mp3|m4a|aac|ogg|flac)$/i, '')
-  for (const ext of RECORDING_EXTENSIONS) {
-    const variant = `${base}.${ext}`
-    if (variant === filename) continue
-    const match = getRecordingByFilename(variant)
-    if (match) return match
-  }
-  return undefined
+  return getRecordingByFilename(filename)
 }
 
 // Mark recording as downloaded.
@@ -6843,6 +7137,7 @@ export function markRecordingDownloaded(
       on_local: 1,
       location: newLocation as Recording['location']
     })
+    measureDownloadedRecording(recording.id)
     return recording.id
   }
 
@@ -6856,7 +7151,20 @@ export function markRecordingDownloaded(
      VALUES (?, ?, ?, ?, ?, NULL, ?, 'none', 'both', 'none', 1, ?, 1, 'hidock', 0)`,
     [id, localBasename, filename, localPath, opts?.fileSize ?? null, opts?.dateRecorded ?? now, now]
   )
+  measureDownloadedRecording(id)
   return id
+}
+
+// The published file is complete, so its length is measured now: the Library
+// backfill runs once per mount and would leave a new download unknown until the
+// next one. An unreadable file leaves the row untouched (no invented duration),
+// and a failure here never turns a saved download into a failed one.
+function measureDownloadedRecording(recordingId: string): void {
+  try {
+    remeasureRecordingDuration(recordingId)
+  } catch (error) {
+    console.warn(`[database] Could not measure the duration of downloaded recording ${recordingId}:`, error)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -6925,7 +7233,8 @@ export type RecordingSplitChild = Omit<Recording, 'created_at' | 'meeting_id' | 
  * The source row, transcript, and original audio stay intact in Trash, so the
  * user can recover from a cut without relying on filesystem undo.
  */
-export function commitRecordingSplit(recordingId: string, children: RecordingSplitChild[]): void {
+export function commitRecordingSplit(recordingId: string, children: RecordingSplitChild[], requestInput: DeletionRequest): void {
+  const request = assertDeletionRequest(requestInput)
   if (children.length !== 2) throw new Error('A recording split must create exactly two children')
   if (new Set(children.map((child) => child.id)).size !== 2) throw new Error('Split child ids must be unique')
 
@@ -6964,9 +7273,9 @@ export function commitRecordingSplit(recordingId: string, children: RecordingSpl
     runNoSave("DELETE FROM transcription_queue WHERE recording_id = ? AND status IN ('pending', 'failed')", [recordingId])
     runNoSave("UPDATE transcription_queue SET status = 'cancelled' WHERE recording_id = ? AND status = 'processing'", [recordingId])
     runNoSave(
-      `INSERT INTO deletion_journal (id, recording_id, mode, recording_snapshot, created_at)
-       VALUES (?, ?, 'soft', ?, ?)`,
-      [randomUUID(), recordingId, JSON.stringify(parent), now]
+      `INSERT INTO deletion_journal (id, recording_id, mode, recording_snapshot, created_at, requested_origin, requested_by, app_version)
+       VALUES (?, ?, 'soft', ?, ?, ?, ?, ?)`,
+      [randomUUID(), recordingId, JSON.stringify(parent), now, request.origin, request.requestedBy, databaseAppVersion]
     )
   })
 }
@@ -7104,10 +7413,12 @@ export function retireGeneratedContentForNoSpeech(recordingId: string): void {
  * never re-touches rows already 'complete', and a second run heals nothing.
  * Returns the number of rows healed.
  */
-export function healRecordingStatusFromTranscripts(): number {
+export function healRecordingStatusFromTranscripts(recordingIds?: readonly string[]): number {
+  if (recordingIds?.length === 0) return 0
+  const scope = recordingIds ? ` AND r.id IN (${recordingIds.map(() => "?").join(",")})` : ""
   const before = queryOne<{ n: number }>(
     `SELECT COUNT(*) AS n FROM recordings r
-       WHERE r.status IS NOT 'complete'
+       WHERE r.status IS NOT 'complete' ${scope}
          AND r.status IS NOT 'deleted'
          AND r.deleted_at IS NULL
          AND EXISTS (
@@ -7115,14 +7426,14 @@ export function healRecordingStatusFromTranscripts(): number {
             WHERE t.recording_id = r.id
               AND t.full_text IS NOT NULL
               AND TRIM(t.full_text) != ''
-         )`
+         )`, recordingIds ? [...recordingIds] : []
   )
   const count = before?.n ?? 0
   if (count === 0) return 0
 
   run(
     `UPDATE recordings SET status = 'complete'
-       WHERE status IS NOT 'complete'
+       WHERE status IS NOT 'complete' ${scope.replaceAll('r.id', 'id')}
          AND status IS NOT 'deleted'
          AND deleted_at IS NULL
          AND EXISTS (
@@ -7130,9 +7441,9 @@ export function healRecordingStatusFromTranscripts(): number {
             WHERE t.recording_id = recordings.id
               AND t.full_text IS NOT NULL
               AND TRIM(t.full_text) != ''
-         )`
+         )`, recordingIds ? [...recordingIds] : []
   )
-  console.log(`[DB] healRecordingStatusFromTranscripts: advanced ${count} recording(s) to status='complete'`)
+  if (!recordingIds) console.log(`[DB] healRecordingStatusFromTranscripts: advanced ${count} recording(s) to status='complete'`)
   return count
 }
 
@@ -7517,29 +7828,101 @@ export function classifyLowValueCaptures(): { scanned: number; markedLowValue: n
   return { scanned: rows.length, markedLowValue: marked }
 }
 
+/**
+ * Correlation methods that record a human decision: an explicit link, or an
+ * explicit "this belongs to no meeting". Only another human method may replace
+ * one. Every other incoming method (ai_transcript_match, jev_content_match,
+ * schedule_candidate, time_overlap, time_proximity, ...) is treated as automatic.
+ */
+const HUMAN_CORRELATION_METHODS = new Set([
+  'manual',
+  'user_override',
+  'user_preassign',
+  'user_standalone',
+  'user_preassign_standalone',
+])
+
+export function isHumanCorrelationMethod(method: string | null | undefined): boolean {
+  return !!method && HUMAN_CORRELATION_METHODS.has(method)
+}
+
+/**
+ * Link a recording to a meeting. Returns true when the link was written and
+ * false when it was refused: either the recording does not exist, or an
+ * automatic method tried to replace a human decision. Callers must not report a
+ * new link when this returns false.
+ *
+ * Recording and captures change in one transaction, so a refused or failed
+ * write leaves both untouched.
+ */
 export function linkRecordingToMeeting(
   recordingId: string,
   meetingId: string,
   confidence: number,
   method: string
-): void {
-  // Update the recording's meeting link
-  run(
-    `UPDATE recordings SET meeting_id = ?, correlation_confidence = ?, correlation_method = ? WHERE id = ?`,
-    [meetingId, confidence, method, recordingId]
-  )
+): boolean {
+  return runInTransaction(() => {
+    const current = queryOne<{ correlation_method: string | null }>(
+      'SELECT correlation_method FROM recordings WHERE id = ?',
+      [recordingId]
+    )
+    if (!current) return false
+    if (!isHumanCorrelationMethod(method) && isHumanCorrelationMethod(current.correlation_method)) return false
 
-  // AUD2-001: Propagate meeting_id to knowledge_captures that reference this recording
-  run(
-    `UPDATE knowledge_captures
-     SET meeting_id = ?,
-         correlation_confidence = ?,
-         correlation_method = ?,
-         updated_at = CURRENT_TIMESTAMP
-     WHERE source_recording_id = ?
-       AND (meeting_id IS NULL OR meeting_id != ?)`,
-    [meetingId, confidence, method, recordingId, meetingId]
-  )
+    runNoSave(
+      `UPDATE recordings SET meeting_id = ?, correlation_confidence = ?, correlation_method = ? WHERE id = ?`,
+      [meetingId, confidence, method, recordingId]
+    )
+
+    // AUD2-001: Propagate meeting_id to knowledge_captures that reference this recording
+    runNoSave(
+      `UPDATE knowledge_captures
+       SET meeting_id = ?,
+           correlation_confidence = ?,
+           correlation_method = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE source_recording_id = ?
+         AND (meeting_id IS NULL OR meeting_id != ?)`,
+      [meetingId, confidence, method, recordingId, meetingId]
+    )
+    return true
+  })
+}
+
+/**
+ * Persist the model's meeting answer: the automatic link (when the gate passed)
+ * and the candidate rows, in one transaction. The link is attempted first and a
+ * candidate is marked selected only when it was written, so a refused link (the
+ * owner chose while the model was answering) never leaves a selected candidate
+ * that contradicts the recording. A candidate the owner confirmed is never
+ * rewritten (addRecordingMeetingCandidate). Returns whether the link was written.
+ */
+export function persistAiMeetingResolution(input: {
+  recordingId: string
+  candidateMeetings: ReadonlyArray<{ id: string }>
+  modelPickId: string | null | undefined
+  modelConfidence: number | null | undefined
+  modelReason: string | null | undefined
+  /** The meeting to link automatically, or null when the gate declined. */
+  linkMeetingId: string | null
+  linkConfidence: number
+}): { linked: boolean } {
+  return runInTransaction(() => {
+    const linked = input.linkMeetingId
+      ? linkRecordingToMeeting(input.recordingId, input.linkMeetingId, input.linkConfidence, 'ai_transcript_match')
+      : false
+    for (const meeting of input.candidateMeetings) {
+      const isModelPick = input.modelPickId === meeting.id
+      addRecordingMeetingCandidate(
+        input.recordingId,
+        meeting.id,
+        isModelPick ? (input.modelConfidence || 0.5) : 0.1,
+        isModelPick ? (input.modelReason || 'Time overlap') : 'Time overlap only',
+        isModelPick && linked
+      )
+    }
+    return { linked }
+  })
 }
 
 /**
@@ -7721,6 +8104,7 @@ export interface Transcript {
 }
 
 export type ProcessingStage =
+  | 'pipeline'
   | 'metadata'
   | 'schedule-match'
   | 'vad'
@@ -7780,6 +8164,28 @@ export interface CreateProcessingRunInput {
   parentRunIds?: string[]
 }
 
+const ownedProcessingRuns = new Map<string, string>()
+const ownedPipelineRuns = new Map<string, string>()
+
+export function getOwnedPipelineRecordings(): string[] {
+  return [...new Set(ownedPipelineRuns.values())]
+}
+
+export function getOwnedProcessingRuns(): Map<string, string> {
+  return new Map(ownedProcessingRuns)
+}
+
+export function getProcessingRevision(): number {
+  run('CREATE TABLE IF NOT EXISTS processing_revision (id INTEGER PRIMARY KEY CHECK (id=1), revision INTEGER NOT NULL)')
+  run('INSERT OR IGNORE INTO processing_revision VALUES (1, 0)')
+  return queryOne<{ revision: number }>('SELECT revision FROM processing_revision WHERE id=1')!.revision
+}
+
+function advanceProcessingRevision(): void {
+  getProcessingRevision()
+  run('UPDATE processing_revision SET revision=revision+1 WHERE id=1')
+}
+
 export function createProcessingRun(input: CreateProcessingRunInput): ProcessingRun {
   const id = randomUUID()
   const startedAt = new Date().toISOString()
@@ -7802,12 +8208,24 @@ export function createProcessingRun(input: CreateProcessingRunInput): Processing
       input.parentRunIds?.length ? JSON.stringify(input.parentRunIds) : null
     ]
   )
+  // Publish the durable ledger stage only to a running queue subscriber.
+  const bus = getEventBus()
+  if (bus.listenerCount('processing:stage-started') > 0) bus.emitDomainEvent({
+    type: 'processing:stage-started', timestamp: startedAt,
+    payload: {recordingId: input.recordingId, stage: input.stage, runId: id}
+  })
+  ownedProcessingRuns.set(id, input.recordingId)
+  if (input.stage === 'pipeline') ownedPipelineRuns.set(id, input.recordingId)
+  registerProcessingRun(id)
+  advanceProcessingRevision()
   return queryOne<ProcessingRun>('SELECT * FROM processing_runs WHERE id = ?', [id])!
 }
 
 export interface CompleteProcessingRunInput {
   status?: Extract<ProcessingRunStatus, 'completed' | 'degraded' | 'cancelled'>
   transcriptId?: string | null
+  /** Who actually did the work, when it was not the provider the run started with. */
+  provider?: string | null
   tool?: string | null
   model?: string | null
   version?: string | null
@@ -7821,9 +8239,10 @@ export interface CompleteProcessingRunInput {
 }
 
 export function completeProcessingRun(id: string, result: CompleteProcessingRunInput = {}): void {
-  run(
+  try {
+    run(
     `UPDATE processing_runs SET status = ?, completed_at = ?, transcript_id = COALESCE(?, transcript_id),
-       tool = COALESCE(?, tool), model = COALESCE(?, model), version = COALESCE(?, version),
+       provider = COALESCE(?, provider), tool = COALESCE(?, tool), model = COALESCE(?, model), version = COALESCE(?, version),
        output_refs = ?, usage_json = ?, estimated_cost_amount = ?, estimated_cost_currency = ?,
        cost_method = ?, quality_status = ?, quality_json = ?, error_message = NULL
      WHERE id = ?`,
@@ -7831,6 +8250,7 @@ export function completeProcessingRun(id: string, result: CompleteProcessingRunI
       result.status ?? 'completed',
       new Date().toISOString(),
       result.transcriptId ?? null,
+      result.provider ?? null,
       result.tool ?? null,
       result.model ?? null,
       result.version ?? null,
@@ -7844,6 +8264,12 @@ export function completeProcessingRun(id: string, result: CompleteProcessingRunI
       id
     ]
   )
+    advanceProcessingRevision()
+  } finally {
+    ownedProcessingRuns.delete(id)
+    ownedPipelineRuns.delete(id)
+    releaseProcessingRun(id)
+  }
 }
 
 /**
@@ -7857,7 +8283,8 @@ export function failProcessingRun(
   cancelled = false,
   usage: Pick<CompleteProcessingRunInput, 'usage' | 'estimatedCostAmount' | 'estimatedCostCurrency' | 'costMethod'> = {}
 ): void {
-  run(
+  try {
+    run(
     `UPDATE processing_runs SET status = ?, completed_at = ?, error_message = ?,
        usage_json = COALESCE(?, usage_json), estimated_cost_amount = COALESCE(?, estimated_cost_amount),
        estimated_cost_currency = COALESCE(?, estimated_cost_currency), cost_method = COALESCE(?, cost_method)
@@ -7873,6 +8300,12 @@ export function failProcessingRun(
       id
     ]
   )
+    advanceProcessingRevision()
+  } finally {
+    ownedProcessingRuns.delete(id)
+    ownedPipelineRuns.delete(id)
+    releaseProcessingRun(id)
+  }
 }
 
 export function getProcessingRunsForRecording(recordingId: string): ProcessingRun[] {
@@ -8067,24 +8500,23 @@ export async function backfillTranscriptIntegrity(
   // In batches, yielding between them: the first launch after v58 labels every
   // transcript in the library, and doing all ~2,000 in one loop froze the main
   // thread for 2.2 s (measured 24-sep, startup benchmark).
-  const batchSize = options.batchSize ?? 100
-  const counts = { checked: 0, ok: 0, suspect: 0, broken: 0 }
-  const seen = new Set<string>()
-  for (;;) {
-    const rows = queryAll<{ id: string; recording_id: string; speakers: string | null; integrity_json: string | null }>(
-      `SELECT t.id, t.recording_id, t.speakers, t.integrity_json FROM transcripts t
-         JOIN recordings r ON r.id = t.recording_id
-        WHERE r.deleted_at IS NULL
-          AND (t.integrity_version IS NULL OR t.integrity_version < ?)
-        LIMIT ?`,
-      [INTEGRITY_VERSION, batchSize]
-    )
-    // A row the update could not move out of this query would come back
-    // forever; stop when a batch holds nothing new.
-    const fresh = rows.filter((row) => !seen.has(row.id))
-    if (fresh.length === 0) break
-    for (const row of fresh) {
-      seen.add(row.id)
+  const release = acquireOrganizationCheckpointBudget()
+  try {
+    // A metadata UPDATE still rewrites a wide transcript row. Give IPC a turn
+    // after each committed row even when the assessment itself was inexpensive.
+    const batchSize = options.batchSize ?? 1
+    const counts = { checked: 0, ok: 0, suspect: 0, broken: 0 }
+    const checkpoint = mainThreadBudget('TranscriptIntegrity')
+    const candidates = queryAll<{ id: string }>('SELECT id FROM transcripts')
+    let processed = 0
+    for (const candidate of candidates) {
+      await checkpoint()
+      const row = queryOne<{ id: string; recording_id: string; speakers: string | null; integrity_json: string | null }>(
+        `SELECT t.id, t.recording_id, t.speakers, t.integrity_json FROM transcripts t
+           JOIN recordings r ON r.id = t.recording_id
+          WHERE t.id = ? AND r.deleted_at IS NULL
+            AND (t.integrity_version IS NULL OR t.integrity_version < ?)`, [candidate.id, INTEGRITY_VERSION])
+      if (!row) continue
       const integrity = assessTranscriptIntegrity(
         row.speakers,
         integrityAudioSeconds(row.recording_id),
@@ -8107,17 +8539,20 @@ export async function backfillTranscriptIntegrity(
       )
       counts.checked++
       counts[integrity.status]++
+      if (++processed % batchSize === 0) {
+        await yieldToEventLoop()
+        checkpoint.reset()
+      }
     }
-    await new Promise<void>((resolve) => setImmediate(resolve))
-  }
-  if (counts.checked > 0) {
-    saveDatabase()
-    console.log(
-      `[transcript-integrity] checked ${counts.checked} transcript(s): ` +
-        `${counts.ok} ok, ${counts.suspect} suspect, ${counts.broken} broken`
-    )
-  }
-  return counts
+    if (counts.checked > 0) {
+      saveDatabase()
+      console.log(
+        `[transcript-integrity] checked ${counts.checked} transcript(s): ` +
+          `${counts.ok} ok, ${counts.suspect} suspect, ${counts.broken} broken`
+      )
+    }
+    return counts
+  } finally { release() }
 }
 
 /**
@@ -8349,6 +8784,7 @@ export function getQueueItems(status?: string): (QueueItem & { filename?: string
 const APP_SESSION_STARTED_AT_ISO = new Date().toISOString()
 
 export type ActionableQueueItem = QueueItem & {
+  stage?: string
   filename?: string
   date_recorded?: string
   /** 1 when a failed row was stamped before this app session started. */
@@ -8361,6 +8797,10 @@ export function getActionableQueueItems(): ActionableQueueItem[] {
   // Pending/processing rows always show; the processor reads getQueueItems.
   return queryAll<ActionableQueueItem>(`
     SELECT tq.*, r.filename, r.date_recorded,
+      (SELECT pr.stage FROM processing_runs pr
+        WHERE pr.recording_id = tq.recording_id AND pr.status = 'running'
+          AND datetime(pr.started_at) >= datetime(tq.started_at)
+        ORDER BY pr.started_at DESC, pr.rowid DESC LIMIT 1) AS stage,
       CASE
         WHEN tq.status = 'failed'
           AND datetime(COALESCE(tq.completed_at, tq.started_at, tq.created_at)) < datetime(?)
@@ -8368,9 +8808,12 @@ export function getActionableQueueItems(): ActionableQueueItem[] {
       END AS from_previous_session
     FROM transcription_queue tq
     LEFT JOIN recordings r ON tq.recording_id = r.id
-    WHERE tq.status IN ('pending', 'processing', 'failed')
+    WHERE (tq.status IN ('pending', 'processing', 'failed') OR (
+        tq.status = 'cancelled' AND tq.error_message LIKE 'Stopped by you%'
+        AND datetime(tq.completed_at) >= datetime('now', '-24 hours')
+      ))
       AND NOT (
-        tq.status = 'failed'
+        tq.status IN ('failed', 'cancelled')
         AND EXISTS (
           SELECT 1
           FROM transcription_queue newer
@@ -8404,7 +8847,7 @@ export function updateQueueItem(id: string, status: string, errorMessage?: strin
        WHERE id = ?`,
       [status, id]
     )
-  } else if (status === 'completed' || status === 'failed') {
+  } else if (status === 'completed' || status === 'failed' || status === 'cancelled') {
     run('UPDATE transcription_queue SET status = ?, completed_at = CURRENT_TIMESTAMP, error_message = ? WHERE id = ?', [
       status,
       errorMessage ?? null,
@@ -8412,6 +8855,8 @@ export function updateQueueItem(id: string, status: string, errorMessage?: strin
     ])
   } else if (status === 'pending') {
     // When retrying, increment retry_count and reset progress
+    // A retry reuses completed stage checkpoints, so Finish processing after a
+    // Stop that came after the transcript was saved sends no audio again.
     run('UPDATE transcription_queue SET status = ?, retry_count = retry_count + 1, progress = 0 WHERE id = ?', [status, id])
   } else {
     run('UPDATE transcription_queue SET status = ? WHERE id = ?', [status, id])
@@ -13625,8 +14070,10 @@ export function enrichRecordingScheduleMetadata(recordingId: string): ScheduleEn
        WHERE recording_id = ? AND is_user_confirmed = 1 LIMIT 1`,
       [recordingId]
     )
-    const explicitStandalone = recording.correlation_method === 'user_preassign_standalone'
-      || recording.correlation_method === 'user_standalone'
+    // A human link (manual, user_override, user_preassign) is as binding as a
+    // human "no meeting": a later schedule pass may rescore candidates but not
+    // replace it. Before this, only the standalone markers were honoured here.
+    const humanChoice = isHumanCorrelationMethod(recording.correlation_method)
     const top = scored[0]
     // Same rule as the time-overlap pass and the re-check: a meeting that covers
     // less than half of the recording is one of several in it.
@@ -13640,7 +14087,7 @@ export function enrichRecordingScheduleMetadata(recordingId: string): ScheduleEn
     ) >= MIN_TIME_LINK_COVERAGE
     const unambiguous = !!top && top.isBestMatch && top.hasOverlap && top.confidenceScore >= 0.75 && coversHalf
     const selectedMeetingId = confirmed?.meeting_id
-      ?? (!explicitStandalone && unambiguous ? top.meetingId : null)
+      ?? (!humanChoice && unambiguous ? top.meetingId : null)
 
     runInTransaction(() => {
       // Stale auto candidates may disappear after a calendar refresh. Preserve
@@ -14046,15 +14493,21 @@ export function resetStuckTranscriptions(
 ): { recordingsReset: number; queueItemsReset: number } {
   const db = getDatabase()
   // The recordings this process is transcribing right now are not stuck.
-  const keep = activeRecordingIds.length > 0 ? activeRecordingIds : ['']
+  const owned = [...new Set([...activeRecordingIds, ...ownedProcessingRuns.values()])]
+  const keep = owned.length > 0 ? owned : ['']
   const marks = keep.map(() => '?').join(', ')
   db.run(
-    `UPDATE recordings SET transcription_status = 'none' WHERE transcription_status IN ('processing', 'pending') AND id NOT IN (${marks})`,
+    `UPDATE recordings SET transcription_status = 'error' WHERE (transcription_status = 'processing' OR (transcription_status = 'pending' AND NOT EXISTS
+      (SELECT 1 FROM transcription_queue q WHERE q.recording_id=recordings.id AND q.status='pending'))) AND id NOT IN (${marks})`,
     keep
   )
   const recordingsReset = db.getRowsModified()
-  db.run(`UPDATE transcription_queue SET status = 'pending' WHERE status = 'processing' AND recording_id NOT IN (${marks})`, keep)
+  db.run(`UPDATE transcription_queue SET status = 'failed', error_message = 'Interrupted: previous process exited; resume saved stages explicitly', completed_at = CURRENT_TIMESTAMP WHERE status = 'processing' AND recording_id NOT IN (${marks})`, keep)
   const queueItemsReset = db.getRowsModified()
+  db.run(`UPDATE processing_runs SET status = 'failed', completed_at = CURRENT_TIMESTAMP,
+    error_message = 'Interrupted: previous coordinator exited; remote ownership retained for reconciliation'
+    WHERE status = 'running' AND recording_id NOT IN (${marks})`, keep)
+  if (recordingsReset || queueItemsReset || db.getRowsModified()) advanceProcessingRevision()
   console.log(`[Database] Reset stuck transcriptions: ${recordingsReset} recordings, ${queueItemsReset} queue items`)
   return { recordingsReset, queueItemsReset }
 }

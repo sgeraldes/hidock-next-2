@@ -35,6 +35,7 @@ type LucideIcon = typeof FileText
 import { toast } from '@/components/ui/toaster'
 import { OperationController } from '@/components/OperationController'
 import { OperationsPanel } from '@/components/layout/OperationsPanel'
+import { OperationsBoundary } from './OperationsBoundary'
 import { useUIStore } from '@/store/ui/useUIStore'
 import { useActionablesPendingCount, useActionablesStore } from '@/store'
 import { useFeatureStore, describeDisableReason, featureForPath } from '@/store/useFeatureStore'
@@ -315,7 +316,7 @@ export function Layout({ children }: LayoutProps) {
   return (
     <div className="flex h-screen flex-col bg-background">
       {/* Background operations controller - never unmounts, handles ALL operations */}
-      <OperationController />
+      <OperationsBoundary><OperationController /></OperationsBoundary>
 
       {/* Office-365-style unified titlebar (window chrome merged with the app). The
           sidebar-collapse handle lives on the sidebar's right edge (below), not here. */}
@@ -372,11 +373,11 @@ export function Layout({ children }: LayoutProps) {
         {/* Navigation — nav px-2.5 (10px) + item px-3 (12px) + half-icon (10px)
             lands every icon centre on the shared 32px rail axis (see TitleBar). */}
         <TooltipProvider delayDuration={200}>
-        <nav className="flex-1 px-2.5 pt-3 pb-2 space-y-4 overflow-y-auto">
+        <nav aria-label="Primary navigation" className="flex min-h-0 flex-1 flex-col gap-4 px-2.5 pt-3 pb-2 overflow-y-auto">
           {/* The sidebar-collapse control now lives as an edge-handle on the
               brand/content divider in the titlebar (see TitleBar), so the nav rail
               starts directly with the KNOWLEDGE section in both states. */}
-          {visibleSections.map((section, sectionIdx) => (
+          {visibleSections.map((section) => (
             <div key={section.title}>
               {/* Section Header. */}
               {sidebarOpen && (
@@ -444,15 +445,11 @@ export function Layout({ children }: LayoutProps) {
                   )
                 })}
               </div>
-              {/* Section Divider (except for last section) */}
-              {sectionIdx < visibleSections.length - 1 && (
-                <div className="mt-3 border-t border-slate-800" />
-              )}
             </div>
           ))}
 
           {/* Settings at bottom - separate from sections */}
-          <div className="pt-2 border-t border-slate-800">
+          <div className="mt-auto pt-2 border-t border-slate-800">
             <RailTooltip collapsed={!sidebarOpen} label="Settings">
             <Link
               to="/settings"
@@ -475,7 +472,7 @@ export function Layout({ children }: LayoutProps) {
         </TooltipProvider>
 
         {/* Operations Panel - Downloads + Transcriptions */}
-        <OperationsPanel sidebarOpen={sidebarOpen} />
+        <OperationsBoundary><OperationsPanel sidebarOpen={sidebarOpen} /></OperationsBoundary>
 
         {/* Activity Log is NOT in the sidebar — it lives ONLY in the titlebar (the
             ⚡ ActivityLogButton owns the single overlay). Removed from here to kill

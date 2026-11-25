@@ -128,23 +128,29 @@ describe('SourceReader — single explicitly controlled waveform', () => {
     expect(screen.getByTestId('waveform-player-full')).toBeInTheDocument()
   })
 
-  it('minimizes to the full-width player pill and still renders ONE element', () => {
-    const restore = mockRegionWidth(800) // wide pane → pill, not scrubber
+  it('minimizes to the one-row dock: controls stay, no graph is drawn', () => {
+    const restore = mockRegionWidth(800)
     render(<SourceReader recording={makeRecording()} />)
     fireEvent.click(screen.getByRole('button', { name: 'Minimize Player' }))
-    const players = screen.getAllByTestId(/^waveform-player-/)
-    expect(players).toHaveLength(1)
-    expect(screen.getByTestId('waveform-player-pill')).toBeInTheDocument()
-    expect(screen.queryByTestId('waveform-player-full')).not.toBeInTheDocument()
+    expect(useLibraryStore.getState().readerSectionModes.player).toBe('compact')
+    // The approved compact player has no graphic of any kind.
+    expect(screen.queryByTestId(/^waveform-player-/)).not.toBeInTheDocument()
+    const dock = screen.getByTestId('reader-dock-player')
+    expect(within(dock).getByRole('button', { name: 'Play' })).toBeInTheDocument()
+    expect(within(dock).getByRole('button', { name: 'Skip back' })).toBeInTheDocument()
+    expect(within(dock).getByRole('button', { name: 'Skip forward' })).toBeInTheDocument()
+    expect(within(dock).getByRole('button', { name: 'Playback speed' })).toBeInTheDocument()
     restore()
   })
 
-  it('uses the scrubber for a minimized player when the reader pane is narrow', () => {
-    const restore = mockRegionWidth(320) // below breakpoint → scrubber
+  it('keeps the same one-row dock when the reader pane is narrow', () => {
+    const restore = mockRegionWidth(320)
     render(<SourceReader recording={makeRecording()} />)
     fireEvent.click(screen.getByRole('button', { name: 'Minimize Player' }))
-    expect(screen.getAllByTestId(/^waveform-player-/)).toHaveLength(1)
-    expect(screen.getByTestId('waveform-player-scrubber')).toBeInTheDocument()
+    expect(screen.queryByTestId(/^waveform-player-/)).not.toBeInTheDocument()
+    const row = screen.getByTestId('reader-dock-controls')
+    expect(row.className).toContain('flex-nowrap')
+    expect(within(row).getByTestId('reader-dock-player')).toBeInTheDocument()
     restore()
   })
 
@@ -170,12 +176,15 @@ describe('SourceReader — docked small player', () => {
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Layout options for Player' }), { button: 0, ctrlKey: false })
     fireEvent.click(await screen.findByText('Dock small player'))
     expect(useLibraryStore.getState().readerSectionModes.player).toBe('docked')
-    expect(screen.getByTestId('waveform-player-pill')).toBeInTheDocument()
+    // Docked is the compact one-row player: controls, no graph.
+    expect(screen.getByTestId('reader-dock-player')).toBeInTheDocument()
+    expect(screen.queryByTestId(/^waveform-player-/)).not.toBeInTheDocument()
     const body = screen.getByTestId('reader-scroll-body')
     Object.defineProperty(body, 'scrollTop', { value: 200, configurable: true })
     fireEvent.scroll(body)
-    expect(screen.getByTestId('waveform-player-pill')).toBeInTheDocument()
-    expect(screen.getAllByTestId(/^waveform-player-/)).toHaveLength(1)
+    expect(screen.getByTestId('reader-dock-player')).toBeInTheDocument()
+    expect(screen.queryByTestId(/^waveform-player-/)).not.toBeInTheDocument()
+    expect(useLibraryStore.getState().readerSectionModes.player).toBe('docked')
     restore()
   })
 
@@ -682,7 +691,7 @@ it('keeps low-confidence manual suggestions including the 48 percent best match 
   await screen.findByText(/Retro Belcorp/)
   expect(screen.getByText('Colegio · 5%')).toBeInTheDocument()
 })
-it.each([undefined, 'invalid', 'incomplete', 'doubtful', 'empty'])('does not request meeting suggestions without usable transcript (%s)', async validity => {
+it.each([undefined, 'invalid', 'incomplete', 'empty'])('does not request meeting suggestions without usable transcript (%s)', async validity => {
   installElectronAPI()
   const getCandidates = vi.fn().mockResolvedValue({ success: true, data: [{ meetingId: 'weak', subject: 'Colegio', confidenceScore: 0.05 }] })
   ;(window.electronAPI.recordings as any).getCandidates = getCandidates
@@ -690,4 +699,24 @@ it.each([undefined, 'invalid', 'incomplete', 'doubtful', 'empty'])('does not req
   await act(async () => { await Promise.resolve() })
   expect(getCandidates).not.toHaveBeenCalled()
   expect(screen.queryByText(/Colegio/)).not.toBeInTheDocument()
+})
+
+it.each([
+  { validity_status: 'doubtful', validity_json: JSON.stringify({ reasons: [{ code: 'no_times' }] }) },
+  { validity_status: 'incomplete', validity_json: JSON.stringify({ reasons: [{ code: 'uncovered_speech' }] }) }
+])('keeps meeting suggestions for retained transcript metadata ($validity_status)', async verdict => {
+  installElectronAPI()
+  const getCandidates = vi.fn().mockResolvedValue({ success: true, data: [{ meetingId: 'weak', subject: 'Colegio', confidenceScore: 0.05 }] })
+  ;(window.electronAPI.recordings as any).getCandidates = getCandidates
+  render(<SourceReader recording={makeRecording()} transcript={{ id: 't', recording_id: 'rec-1', full_text: 'words', ...verdict } as any} />)
+  expect(await screen.findByText('Colegio · 5%')).toBeInTheDocument()
+  expect(getCandidates).toHaveBeenCalledWith('rec-1')
+})
+
+it('keeps a doubtful summary under its caveat (review of #173)', async () => {
+  installElectronAPI()
+  render(<SourceReader recording={makeRecording({ transcriptionStatus: 'complete' })} transcript={{ id: 't', recording_id: 'rec-1', full_text: 'words',
+    summary: 'A summary worth keeping.', validity_status: 'doubtful', validity_json: JSON.stringify({ reasons: [{ code: 'no_times' }] }) } as any} />)
+  expect(await screen.findByText('A summary worth keeping.')).toBeInTheDocument()
+  expect(screen.getByTestId('reader-summary-caveat').textContent).toBe('The transcript is in doubt; parts of the recording may be missing.')
 })

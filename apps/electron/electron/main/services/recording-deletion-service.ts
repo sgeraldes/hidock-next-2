@@ -25,6 +25,7 @@
  */
 
 import { existsSync, unlinkSync } from 'fs'
+import type { DeletionRequest } from '../../../src/shared/deletion-origin'
 import {
   deleteRecordingCascade,
   restoreRecording,
@@ -129,7 +130,8 @@ function isGraphUnavailableMessage(message: string): boolean {
  */
 export async function deleteRecording(
   recordingId: string,
-  opts: { hard?: boolean; skipGraphCleanup?: boolean } = {}
+  // Who asked (v74): written to deletion_journal and purged_files.
+  opts: { hard?: boolean; skipGraphCleanup?: boolean } & DeletionRequest
 ): Promise<DeleteRecordingOutcome | DeletionServiceError> {
   let cascade: RecordingDeletionResult | undefined
   try {

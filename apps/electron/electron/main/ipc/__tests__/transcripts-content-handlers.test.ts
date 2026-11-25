@@ -3,7 +3,11 @@ import { ipcMain } from 'electron'
 import { registerTranscriptsHandlers } from '../transcripts-handlers'
 
 const getTranscriptTiming = vi.hoisted(() => vi.fn())
-vi.mock('../../services/transcript-timing-store', () => ({ getTranscriptTiming }))
+const loadTimingState = vi.hoisted(() => vi.fn())
+vi.mock('../../services/transcript-timing-store', () => ({ getTranscriptTiming, loadTimingState }))
+// The section transcriber is a mock: no test ever reaches a paid provider.
+const transcribeRecordingSection = vi.hoisted(() => vi.fn())
+vi.mock('../../services/transcription', () => ({ transcribeRecordingSection, retrySummary: vi.fn() }))
 
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }))
 
@@ -11,6 +15,7 @@ const db = vi.hoisted(() => ({
   getRecordingById: vi.fn(),
   resolveRecordingId: vi.fn(),
   queryOne: vi.fn(),
+  queryAll: vi.fn(() => []),
   runInTransaction: vi.fn((fn: () => unknown) => fn()),
   runNoSave: vi.fn(),
   run: vi.fn(),
@@ -65,6 +70,61 @@ describe('transcript content editing IPC', () => {
     registerTranscriptsHandlers()
     expect(ipcMain.handle).toHaveBeenCalledWith('transcripts:updateContent', expect.any(Function))
     expect(ipcMain.handle).toHaveBeenCalledWith('transcripts:reindex', expect.any(Function))
+  })
+
+  it('restores immutable stored channel evidence after a one-line edit, ignoring forged renderer evidence', async () => {
+    const stored = [0, 1].map(sourceChannel => ({
+      speaker: `ch${sourceChannel}:speaker0`, start: 1, end: 5, text: `words ${sourceChannel}`,
+      sourceChannel, channelRole: 'unknown', channelProvenance: 'unverified', privateExtra: 'not forwarded'
+    }))
+    db.queryOne.mockReturnValue({ full_text: request.expectedFullText, speakers: JSON.stringify(stored) })
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:updateContent')?.({} as never, {
+      ...request, expectedSegments: stored,
+      segments: stored.map((row, index) => ({ ...row, ...(index === 0 ? { text: 'corrected', start: 2, speaker: 'renamed' } : {}),
+        sourceChannel: 99, channelRole: 'owner', channelProvenance: 'manual-confirmed' }))
+    }) as any
+    expect(result.success).toBe(true)
+    const saved = JSON.parse(db.runNoSave.mock.calls[0][1][1])
+    expect(saved).toEqual(stored.map(({privateExtra: _ignored, ...row}, index) => ({ ...row,
+      ...(index === 0 ? { text: 'corrected', start: 2, speaker: 'renamed' } : {}) })))
+    expect(result.data.segments).toEqual(saved)
+  })
+
+  it.each(['missing-snapshot', 'removed-line', 'reordered-lines'])('rejects ambiguous channel mapping: %s', async mode => {
+    const stored = [0, 1].map(sourceChannel => ({speaker: `ch${sourceChannel}:speaker0`, start: 1, end: 5,
+      text: `words ${sourceChannel}`, sourceChannel, channelRole: 'unknown', channelProvenance: 'unverified'}))
+    db.queryOne.mockReturnValue({ full_text: request.expectedFullText, speakers: JSON.stringify(stored) })
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:updateContent')?.({} as never, {
+      ...request, ...(mode === 'missing-snapshot' ? {} : { expectedSegments: stored }),
+      segments: mode === 'removed-line' ? stored.slice(0, 1) : mode === 'reordered-lines' ? [...stored].reverse() : stored
+    }) as any
+    expect(result).toMatchObject({success:false,error:{code:'VALIDATION_ERROR'}})
+    expect(db.runNoSave).not.toHaveBeenCalled()
+    expect(vectorStore.indexTranscript).not.toHaveBeenCalled()
+  })
+
+  it('does not introduce renderer-supplied channel evidence into a legacy transcript', async () => {
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:updateContent')?.({} as never, {
+      ...request, segments: request.segments.map(row => ({...row, sourceChannel: 0, channelRole: 'owner', channelProvenance: 'forged'}))
+    }) as any
+    expect(result.success).toBe(true)
+    expect(result.data.segments).toEqual(request.segments)
+  })
+
+  it('Retry RAG preserves every existing partition on failure and accepts already-current chunks', async () => {
+    registerTranscriptsHandlers()
+    vectorStore.indexTranscript.mockRejectedValueOnce(new Error('host unavailable'))
+    const failed = await handlerFor('transcripts:reindex')?.({} as never, {recordingId:'rec-1'}) as any
+    expect(failed.success).toBe(false)
+    expect(vectorStore.deleteByRecording).not.toHaveBeenCalled()
+    expect(db.runNoSave).not.toHaveBeenCalled()
+    vectorStore.indexTranscript.mockResolvedValueOnce(0)
+    const unchanged = await handlerFor('transcripts:reindex')?.({} as never, {recordingId:'rec-1'}) as any
+    expect(unchanged).toMatchObject({success:true,data:{indexedChunks:0}})
+    expect(vectorStore.deleteByRecording).not.toHaveBeenCalled()
   })
 
   it('atomically saves both transcript forms, invalidates stale vectors, and reindexes', async () => {
@@ -176,30 +236,106 @@ describe('transcript content editing IPC', () => {
 
 
 describe('timing review persistence', () => {
-  const segments = [{ start: 494.8, end: 505.7, text: 'opening greeting' }, { start: 13, end: 14, text: 'good morning' }]
-  const fingerprint = 'a'.repeat(40)
+  // Rec28's shape: the 8:14 greeting is listed first, the opening speech is at 4.9 s.
+  const segments = [
+    { start: 494.8, end: 505.7, text: 'opening greeting here' },
+    { start: 13, end: 14, text: 'good morning' },
+    { start: 15, end: 16, text: 'how are you' }
+  ]
+  const speakers = JSON.stringify(segments)
+  let fingerprint = ''
+  const speech = [{ start: 4.86, end: 5.61 }, { start: 13, end: 14 }, { start: 15, end: 16 }]
+  const evidence = {
+    hasAudio: (a: number, b: number) => speech.some((s) => s.end > a && s.start < b),
+    spansIn: (a: number, b: number) => speech.map((s) => ({ start: Math.max(a, s.start), end: Math.min(b, s.end) })).filter((s) => s.end > s.start)
+  }
+  async function state(withEvidence = evidence) {
+    const { assessTimingEvidence } = await import('../../services/transcript-timing-evidence')
+    return {
+      transcriptId: 't-1', speakers, segments, durationSeconds: 600, evidence: withEvidence,
+      assessment: { fingerprint, findings: assessTimingEvidence(segments, withEvidence, 600), hiddenIndices: [], fixedRanges: [], sectionRuns: [], reviewed: false, evidence: 'vad' }
+    }
+  }
+  const stored = () => {
+    const update = db.runNoSave.mock.calls.find(([sql]) => sql.startsWith('UPDATE transcripts SET speakers'))
+    return update ? { segments: JSON.parse(update[1][0]), fullText: update[1][1] as string } : null
+  }
   beforeEach(async () => {
+    vi.clearAllMocks()
     const { transcriptFingerprint } = await import('../../services/transcript-validity-store')
-    const realFingerprint = transcriptFingerprint(JSON.stringify(segments))
-    getTranscriptTiming.mockResolvedValue({ fingerprint: realFingerprint, findings: [{ index: 0, classification: 'out_of_place', suggestedStart: 11 }], hiddenIndices: [] })
-    db.queryOne.mockReturnValue({ id: 't-1', speakers: JSON.stringify(segments) })
+    fingerprint = transcriptFingerprint(speakers)
+    loadTimingState.mockResolvedValue(await state())
+    db.queryOne.mockReturnValue({ id: 't-1', speakers })
+    transcribeRecordingSection.mockReset()
   })
-  it('refuses stale review without writing', async () => {
+
+  it('refuses a stale review without writing', async () => {
     registerTranscriptsHandlers()
-    const result = await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint, index: 0, action: 'hide' }) as any
+    const result = await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint: 'a'.repeat(40), action: 'hide', indices: [0] }) as any
     expect(result.success).toBe(false)
     expect(db.runNoSave).not.toHaveBeenCalled()
   })
-  it('stores hidden text with a flag, and leaves the summary untouched', async () => {
-    const { transcriptFingerprint } = await import('../../services/transcript-validity-store')
-    // Trust refresh is covered at the real database boundary in the isolated app.
+
+  it('hides a line with a flag, keeps its text stored, and leaves the summary untouched', async () => {
     registerTranscriptsHandlers()
-    await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint: transcriptFingerprint(JSON.stringify(segments)), index: 0, action: 'hide' })
-    const update = db.runNoSave.mock.calls.find(([sql]) => sql.startsWith('UPDATE transcripts SET speakers'))
-    expect(update).toBeDefined()
-    const stored = JSON.parse(update![1][0])
-    expect(stored[0]).toMatchObject({ text: 'opening greeting', timingHidden: true })
-    expect(update![1][1]).toBe('good morning')
+    const result = await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint, action: 'hide', findingId: 'odd_line:0-0' }) as any
+    expect(result.success).toBe(true)
+    const saved = stored()!
+    expect(saved.segments[0]).toMatchObject({ text: 'opening greeting here', timingHidden: true })
+    expect(saved.fullText).toBe('good morning\nhow are you')
     expect(db.runNoSave.mock.calls.some(([sql]) => /SET summary/.test(sql))).toBe(false)
+  })
+
+  it('fixes times from the speech evidence and keeps the transcriber\'s times for undo', async () => {
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint, action: 'fix_times', findingId: 'odd_line:0-0' }) as any
+    expect(result.success).toBe(true)
+    const line = stored()!.segments[0]
+    expect(line.start).toBeCloseTo(4.86, 2)
+    expect(line).toMatchObject({ timingOriginalStart: 494.8, timingOriginalEnd: 505.7 })
+  })
+
+  it('does not apply a fix the sound cannot support, and says so', async () => {
+    const noSpeech = { hasAudio: () => false, spansIn: () => [] }
+    loadTimingState.mockResolvedValue(await state(noSpeech))
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint, action: 'fix_times', findingId: 'odd_line:0-0' }) as any
+    expect(result.success).toBe(false)
+    expect(result.error.details).toMatchObject({ lowConfidence: true })
+    expect(db.runNoSave).not.toHaveBeenCalled()
+  })
+
+  it('transcribes only the section between the trusted lines (mocked provider) and keeps the old line hidden', async () => {
+    transcribeRecordingSection.mockResolvedValue({ runId: 'run-9', segments: [{ start: 4.9, end: 5.6, text: 'hola manuel' }] })
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:retranscribeSection')?.({} as never, { recordingId: 'rec-1', fingerprint, findingId: 'odd_line:0-0' }) as any
+    expect(result.success).toBe(true)
+    expect(transcribeRecordingSection).toHaveBeenCalledWith('rec-1', 0, 13, 600)
+    const saved = stored()!
+    expect(saved.segments[0]).toMatchObject({ text: 'opening greeting here', timingHidden: true, sectionReplacedBy: 'run-9' })
+    expect(saved.segments[1]).toMatchObject({ text: 'hola manuel', sectionRunId: 'run-9' })
+    expect(saved.fullText.startsWith('hola manuel')).toBe(true)
+  })
+
+  it('refuses a section transcription for lines that only overlap, before any provider call', async () => {
+    const close = [{ start: 10, end: 12, text: 'uno dos tres' }, { start: 9, end: 11, text: 'cuatro cinco' }, { start: 13, end: 14, text: 'seis' }]
+    const { transcriptFingerprint } = await import('../../services/transcript-validity-store')
+    const { assessTimingEvidence } = await import('../../services/transcript-timing-evidence')
+    const fp = transcriptFingerprint(JSON.stringify(close))
+    loadTimingState.mockResolvedValue({ transcriptId: 't-1', speakers: JSON.stringify(close), segments: close, durationSeconds: 60, evidence,
+      assessment: { fingerprint: fp, findings: assessTimingEvidence(close, evidence, 60), hiddenIndices: [], fixedRanges: [], sectionRuns: [], reviewed: false, evidence: 'vad' } })
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:retranscribeSection')?.({} as never, { recordingId: 'rec-1', fingerprint: fp, findingId: 'odd_line:1-1' }) as any
+    expect(result.success).toBe(false)
+    expect(transcribeRecordingSection).not.toHaveBeenCalled()
+  })
+
+  it('writes nothing when the section transcription fails', async () => {
+    transcribeRecordingSection.mockRejectedValue(new Error('Transcribing a section uses Gemini; add its key in Settings first'))
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:retranscribeSection')?.({} as never, { recordingId: 'rec-1', fingerprint, findingId: 'odd_line:0-0' }) as any
+    expect(result.success).toBe(false)
+    expect(result.error.message).toMatch(/Gemini/)
+    expect(db.runNoSave).not.toHaveBeenCalled()
   })
 })

@@ -27,11 +27,14 @@ import { consolidateVoiceIdentityForSpeaker } from '../services/voice-identity-c
 import { getVectorStore } from '../services/vector-store'
 import { exportMeetingWiki } from '../services/meeting-wiki'
 import { syncTrustVerdicts } from '../services/transcript-trust'
+import { getDiarizedSegments } from '../services/diarization-store'
+import { retrySummary } from '../services/transcription'
 import { success, error, Result } from '../types/api'
-import { getTranscriptTiming } from '../services/transcript-timing-store'
-import { applyTimingReview } from '../services/transcript-timing-evidence'
+import { getTranscriptTiming, loadTimingState } from '../services/transcript-timing-store'
+import { applyTimingReview, spliceSection, type TimingReviewRequest } from '../services/transcript-timing-evidence'
+import { alignToSpeech } from '../services/transcript-time-aligner'
 import { transcriptFingerprint } from '../services/transcript-validity-store'
-import type { TimingSegment } from '../../../src/shared/transcript-timing'
+import { OVERLAP_SECONDS, type TimingSegment } from '../../../src/shared/transcript-timing'
 import { UUIDSchema } from '../validation/common'
 
 // Recording ids are UUIDs post-migration, but keep this permissive so a legacy
@@ -79,7 +82,10 @@ const EditableTranscriptSegmentSchema = z
     timingHidden: z.boolean().optional(),
     timingOriginalStart: z.number().finite().min(0).optional(),
     timingOriginalEnd: z.number().finite().min(0).optional(),
-    timingReviewed: z.boolean().optional()
+    timingReviewed: z.boolean().optional(),
+    // A section transcription's own lines and the lines it replaced, kept so it can be undone.
+    sectionRunId: z.string().min(1).max(100).optional(),
+    sectionReplacedBy: z.string().min(1).max(100).optional()
   })
   .refine((segment) => segment.end === undefined || segment.end >= segment.start, {
     message: 'Segment end must not precede its start'
@@ -112,6 +118,31 @@ const UpdateTranscriptRequestSchema = z
   })
 
 type EditableTranscriptSegment = z.infer<typeof EditableTranscriptSegmentSchema>
+
+const CHANNEL_PROVENANCE_KEYS = ['sourceChannel', 'channelRole', 'channelProvenance'] as const
+
+/** The reader edits one line in place. Never accept source evidence from the renderer. */
+function preserveStoredChannelProvenance(
+  submitted: EditableTranscriptSegment[], stored: unknown[] | null, expected: unknown[] | null | undefined
+): EditableTranscriptSegment[] {
+  const rows = (stored ?? []).map(row => row && typeof row === 'object' ? row as Record<string, unknown> : {})
+  if (!rows.some(row => CHANNEL_PROVENANCE_KEYS.some(key => Object.hasOwn(row, key)))) return submitted
+  if (!expected || rows.length !== submitted.length) throw new Error('CHANNEL_EDIT_AMBIGUOUS')
+  let changed = 0
+  for (let index = 0; index < rows.length; index++) {
+    const prior = EditableTranscriptSegmentSchema.safeParse(rows[index])
+    if (!prior.success) throw new Error('CHANNEL_EDIT_AMBIGUOUS')
+    if (JSON.stringify(prior.data) !== JSON.stringify(submitted[index])) changed++
+  }
+  // Without persistent segment IDs, multi-line replacement/reordering has no
+  // trustworthy source-to-row mapping. The existing editor changes one index.
+  if (changed > 1) throw new Error('CHANNEL_EDIT_AMBIGUOUS')
+  return submitted.map((segment, index) => ({
+    ...segment,
+    ...Object.fromEntries(CHANNEL_PROVENANCE_KEYS.filter(key => Object.hasOwn(rows[index], key))
+      .map(key => [key, rows[index][key]]))
+  }))
+}
 
 /** The stored segments as the reader parses them: a non-empty array, or null. */
 function storedSegmentsOf(speakers: string | null): unknown[] | null {
@@ -161,8 +192,75 @@ async function indexCorrectedTranscript(recordingId: string, fullText: string): 
     shouldGenerate: () => isRecordingEligible(recordingId),
     shouldPersist: () => isRecordingEligible(recordingId)
   })
-  if (indexedChunks < 1) throw new Error('No search chunks were generated')
   return indexedChunks
+}
+
+const ReviewTimingRequestSchema = z.object({
+  recordingId: RecordingIdSchema,
+  fingerprint: z.string().length(40),
+  action: z.enum(['fix_times', 'undo_fix', 'hide', 'show', 'undo_section']),
+  findingId: z.string().min(1).max(100).optional(),
+  indices: z.array(z.number().int().min(0).max(50_000)).min(1).max(50_000).optional(),
+  range: z.object({ from: z.number().int().min(0).max(50_000), to: z.number().int().min(0).max(50_000) })
+    .refine((r) => r.to >= r.from, { message: 'Range end must not precede its start' }).optional(),
+  runId: z.string().min(1).max(100).optional()
+})
+
+interface TimingSaveResult {
+  fullText: string
+  segments: TimingSegment[]
+  wordCount: number
+  integrity?: { status: 'ok' | 'suspect' | 'broken'; json: string }
+}
+
+function timingError(err: unknown): Result<never> {
+  const message = safeErrorMessage(err)
+  if (message === 'TRANSCRIPT_CHANGED') return error('RETRYABLE_ERROR', 'The transcript changed; the review was reloaded')
+  if (message === 'RECORDING_INELIGIBLE') return error('RECORDING_INELIGIBLE', 'Recording not available')
+  console.warn('[TranscriptTiming] Review failed:', message)
+  return error('INTERNAL_ERROR', message)
+}
+
+/**
+ * Save reviewed lines, then judge and index them again, as a text edit does.
+ * Hidden lines stay in the stored segments and leave the text and the index.
+ */
+async function saveTimingSegments(recordingId: string, fingerprint: string, segments: TimingSegment[]): Promise<TimingSaveResult> {
+  const fullText = segments.filter((s) => !s.timingHidden).map((s) => (s.speaker ? `${s.speaker}: ${s.text}` : s.text)).join('\n')
+  const wordCount = fullText.split(/\s+/u).filter(Boolean).length
+  const vectorStore = getVectorStore()
+  vectorStore.ensureSchema()
+  let transcriptId = ''
+  runInTransaction(() => {
+    if (!isRecordingEligible(recordingId)) throw new Error('RECORDING_INELIGIBLE')
+    const row = queryOne<{ id: string; speakers: string | null }>('SELECT id, speakers FROM transcripts WHERE recording_id = ?', [recordingId])
+    if (!row || transcriptFingerprint(row.speakers) !== fingerprint) throw new Error('TRANSCRIPT_CHANGED')
+    transcriptId = row.id
+    runNoSave('UPDATE transcripts SET speakers = ?, full_text = ?, word_count = ?, validity_version = NULL WHERE id = ?',
+      [JSON.stringify(segments), fullText, wordCount, row.id])
+    runNoSave('DELETE FROM vector_embeddings WHERE recording_id = ?', [recordingId])
+  })
+  vectorStore.dropByRecordingFromMemory(recordingId)
+  let integrity: TimingSaveResult['integrity']
+  try {
+    const checked = refreshTranscriptIntegrity(transcriptId)
+    if (checked) integrity = { status: checked.status, json: JSON.stringify(checked) }
+    syncTrustVerdicts(recordingId)
+  } catch (err) {
+    console.warn('[TranscriptTiming] Saved; the timing check could not run again:', safeErrorMessage(err))
+  }
+  try {
+    await indexCorrectedTranscript(recordingId, fullText)
+  } catch (err) {
+    console.warn(`[TranscriptTiming] Saved ${recordingId}; RAG reindex pending:`, safeErrorMessage(err))
+  }
+  try {
+    exportMeetingWiki(recordingId)
+  } catch (err) {
+    console.warn('[TranscriptTiming] Meeting wiki refresh failed (non-fatal):', safeErrorMessage(err))
+  }
+  // Summary, actions and title stay as they are until the owner asks for a new summary.
+  return { fullText, segments, wordCount, ...(integrity ? { integrity } : {}) }
 }
 
 export function registerTranscriptsHandlers(): void {
@@ -173,52 +271,89 @@ export function registerTranscriptsHandlers(): void {
     catch (err) { return error('DATABASE_ERROR', safeErrorMessage(err)) }
   })
 
-  ipcMain.handle('transcripts:reviewTiming', async (_, request: unknown) => {
-    const parsed = z.object({ recordingId: RecordingIdSchema, fingerprint: z.string().length(40),
-      index: z.number().int().min(0).max(50000), action: z.enum(['move', 'hide', 'show', 'undo_move']) }).safeParse(request)
-    if (!parsed.success) return error('VALIDATION_ERROR', 'Invalid timing review')
-    const { recordingId, fingerprint, index, action } = parsed.data
+  // The owner's timing review: fix times, hide or show lines, undo a fix or a
+  // section transcription. Each change keeps what it replaced.
+  ipcMain.handle('transcripts:reviewTiming', async (_, request: unknown): Promise<Result<TimingSaveResult>> => {
+    const parsed = ReviewTimingRequestSchema.safeParse(request)
+    if (!parsed.success) return error('VALIDATION_ERROR', 'Invalid timing review', parsed.error.format())
+    const { recordingId, fingerprint, action, findingId, indices, range, runId } = parsed.data
     try {
       if (!isRecordingEligible(recordingId)) return error('RECORDING_INELIGIBLE', 'Recording not available')
-      const assessment = await getTranscriptTiming(recordingId)
-      if (assessment.fingerprint !== fingerprint) return error('INVALID_INPUT', 'Transcript changed; reopen the review')
-      const finding = assessment.findings.find(f => f.index === index)
-      if (action === 'move' && finding?.classification !== 'out_of_place') return error('VALIDATION_ERROR', 'Audio does not support a move')
-      if (action === 'hide' && !finding) return error('VALIDATION_ERROR', 'This line is no longer an outlier')
-      const vectorStore = getVectorStore()
-      vectorStore.ensureSchema()
-      let segments: TimingSegment[] = []
-      let fullText = ''
-      let transcriptId = ''
-      runInTransaction(() => {
-        if (!isRecordingEligible(recordingId)) throw new Error('Recording not available')
-        const row = queryOne<{ id: string; speakers: string | null }>('SELECT id, speakers FROM transcripts WHERE recording_id = ?', [recordingId])
-        if (!row || transcriptFingerprint(row.speakers) !== fingerprint) throw new Error('Transcript changed; reopen the review')
-        segments = applyTimingReview(JSON.parse(row.speakers ?? '[]'), index, action, finding?.suggestedStart ?? undefined)
-        transcriptId = row.id
-        fullText = segments.filter(s => !s.timingHidden).map(s => s.speaker ? `${s.speaker}: ${s.text}` : s.text).join('\n')
-        runNoSave('UPDATE transcripts SET speakers = ?, full_text = ?, word_count = ?, validity_version = NULL WHERE id = ?',
-          [JSON.stringify(segments), fullText, fullText.split(/\s+/u).filter(Boolean).length, row.id])
-        // Never leave hidden text in the searchable semantic index.
-        runNoSave('DELETE FROM vector_embeddings WHERE recording_id = ?', [recordingId])
-      })
-      vectorStore.dropByRecordingFromMemory(recordingId)
-      const checked = refreshTranscriptIntegrity(transcriptId)
-      syncTrustVerdicts(recordingId)
-      // Summary, actions and title remain untouched until the owner asks.
-      return success({ fullText, segments, wordCount: fullText.split(/\s+/u).filter(Boolean).length,
-        ...(checked ? { integrity: { status: checked.status, json: JSON.stringify(checked) } } : {}) })
-    } catch (err) { return error('DATABASE_ERROR', safeErrorMessage(err)) }
+      const state = await loadTimingState(recordingId)
+      if (state.assessment.fingerprint !== fingerprint) return error('RETRYABLE_ERROR', 'The transcript changed; the review was reloaded')
+      const finding = findingId ? state.assessment.findings.find((f) => f.id === findingId) : undefined
+      if (findingId && !finding) return error('RETRYABLE_ERROR', 'This problem is no longer in the transcript')
+      let review: TimingReviewRequest
+      if (action === 'fix_times') {
+        if (!finding || finding.kind === 'duplicate') return error('VALIDATION_ERROR', 'Choose a line or section out of order')
+        if (finding.windowStart === null || finding.windowEnd === null) return error('VALIDATION_ERROR', finding.fix?.reason ?? 'Where these lines belong is unknown')
+        const spans = state.evidence.spansIn(finding.windowStart, finding.windowEnd)
+        if (!spans) return error('VALIDATION_ERROR', 'This recording has no speech evidence to place the lines on')
+        const alignment = alignToSpeech(finding.lines.map((i) => state.segments[i]), { start: finding.windowStart, end: finding.windowEnd }, spans)
+        if (!alignment.ok) return error('VALIDATION_ERROR', alignment.reason, { lowConfidence: true, confidence: alignment.confidence })
+        review = { action, indices: finding.lines, alignment }
+      } else if (action === 'hide' || action === 'show') {
+        const chosen = indices ?? finding?.lines
+        if (!chosen?.length) return error('VALIDATION_ERROR', 'Choose the lines')
+        review = { action, indices: chosen }
+      } else if (action === 'undo_fix') {
+        if (!range) return error('VALIDATION_ERROR', 'Choose the fixed lines')
+        review = { action, range }
+      } else {
+        if (!runId) return error('VALIDATION_ERROR', 'Choose the section transcription')
+        review = { action, runId }
+      }
+      return success(await saveTimingSegments(recordingId, fingerprint, applyTimingReview(state.segments, review)))
+    } catch (err) {
+      return timingError(err)
+    }
   })
 
-  ipcMain.handle('transcripts:regenerateSummary', async (_, request: unknown) => {
-    const parsed = z.object({ recordingId: RecordingIdSchema }).safeParse(request)
-    if (!parsed.success) return error('VALIDATION_ERROR', 'Invalid summary request')
+  // "Transcribe this section again": only after the owner confirmed it in the
+  // reader. Sends only the audio between the trusted lines around the range.
+  ipcMain.handle('transcripts:retranscribeSection', async (_, request: unknown): Promise<Result<TimingSaveResult>> => {
+    const parsed = z.object({ recordingId: RecordingIdSchema, fingerprint: z.string().length(40), findingId: z.string().min(1).max(100) }).safeParse(request)
+    if (!parsed.success) return error('VALIDATION_ERROR', 'Invalid section request', parsed.error.format())
+    const { recordingId, fingerprint, findingId } = parsed.data
     try {
-      const { regenerateTranscriptSummary } = await import('../services/transcription')
-      return success(await regenerateTranscriptSummary(parsed.data.recordingId))
+      if (!isRecordingEligible(recordingId)) return error('RECORDING_INELIGIBLE', 'Recording not available')
+      const state = await loadTimingState(recordingId)
+      if (state.assessment.fingerprint !== fingerprint) return error('RETRYABLE_ERROR', 'The transcript changed; the review was reloaded')
+      const finding = state.assessment.findings.find((f) => f.id === findingId)
+      if (!finding || finding.kind === 'duplicate') return error('RETRYABLE_ERROR', 'This section is no longer out of order')
+      if (finding.windowStart === null || finding.windowEnd === null) return error('VALIDATION_ERROR', 'Where this section belongs is unknown')
+      // Lines a second or two off are speech overlapping; a paid transcription cannot improve them.
+      if ((finding.fix?.displacement ?? 0) < OVERLAP_SECONDS) return error('VALIDATION_ERROR', 'These lines are where they belong, give or take two people talking at once')
+      const { transcribeRecordingSection } = await import('../services/transcription')
+      const section = await transcribeRecordingSection(recordingId, finding.windowStart, finding.windowEnd, state.durationSeconds)
+      return success(await saveTimingSegments(recordingId, fingerprint,
+        spliceSection(state.segments, finding.from, finding.to, section.segments, section.runId)))
+    } catch (err) {
+      return timingError(err)
     }
-    catch (err) { return error('INTERNAL_ERROR', safeErrorMessage(err)) }
+  })
+
+  ipcMain.handle('transcripts:getDiarizedSegments', async (_, request: unknown) => {
+    const parsed = GetSpeakerMapRequestSchema.safeParse(request)
+    if (!parsed.success) return error('VALIDATION_ERROR', 'Invalid recording request')
+    const recording = getRecordingById(parsed.data.recordingId) ?? resolveRecordingId(parsed.data.recordingId)
+    if (!recording) return error('NOT_FOUND', 'Recording not found')
+    try { return success(getDiarizedSegments(recording.id)) }
+    catch (err) { return error('DATABASE_ERROR', 'Could not read diarized segments', err) }
+  })
+
+  // The owner's "Generate summary": the missing summary, title and meeting
+  // choice now, through the same brains and order, without the automatic
+  // retry's wait or weekly cap (28-oct-2026).
+  ipcMain.handle('transcripts:retrySummary', async (_, request: unknown): Promise<Result<{ written: boolean }>> => {
+    const parsed = GetSpeakerMapRequestSchema.safeParse(request)
+    if (!parsed.success) return error('VALIDATION_ERROR', 'Invalid summary retry request', parsed.error.format())
+    try {
+      if (!isRecordingEligible(parsed.data.recordingId)) return error('NOT_FOUND', 'Recording is not available for a summary')
+      return success({ written: await retrySummary(parsed.data.recordingId) })
+    } catch (err) {
+      return error('INTERNAL_ERROR', err instanceof Error ? err.message : 'Summary retry failed', err)
+    }
   })
 
   ipcMain.handle('transcripts:getProcessingRuns', async (_, request: unknown) => {
@@ -325,6 +460,7 @@ export function registerTranscriptsHandlers(): void {
 
         const fullText = canonicalTranscriptText(parsed.data.segments)
         const wordCount = fullText.split(/\s+/u).filter(Boolean).length
+        let savedSegments = parsed.data.segments
         const vectorStore = getVectorStore()
         vectorStore.ensureSchema()
 
@@ -343,9 +479,12 @@ export function registerTranscriptsHandlers(): void {
             throw new Error('TRANSCRIPT_CHANGED')
           }
 
+          savedSegments = preserveStoredChannelProvenance(
+            parsed.data.segments, storedSegmentsOf(current.speakers), parsed.data.expectedSegments
+          )
           runNoSave(
             'UPDATE transcripts SET full_text = ?, speakers = ?, word_count = ? WHERE recording_id = ?',
-            [fullText, JSON.stringify(parsed.data.segments), wordCount, recordingId]
+            [fullText, JSON.stringify(savedSegments), wordCount, recordingId]
           )
           runNoSave('DELETE FROM vector_embeddings WHERE recording_id = ?', [recordingId])
         })
@@ -383,7 +522,7 @@ export function registerTranscriptsHandlers(): void {
 
         return success({
           fullText,
-          segments: parsed.data.segments,
+          segments: savedSegments,
           wordCount,
           indexedChunks,
           ragStatus,
@@ -392,6 +531,9 @@ export function registerTranscriptsHandlers(): void {
         })
       } catch (err) {
         const message = safeErrorMessage(err)
+        if (message === 'CHANNEL_EDIT_AMBIGUOUS') {
+          return error('VALIDATION_ERROR', 'Channel transcript edits must change one existing line without adding, removing or reordering lines. Reload and edit one line at a time.')
+        }
         if (message === 'TRANSCRIPT_CHANGED') {
           return error('RETRYABLE_ERROR', 'The transcript changed while you were editing. Reload it and try again.')
         }
@@ -421,7 +563,7 @@ export function registerTranscriptsHandlers(): void {
         )
         if (!transcript?.full_text.trim()) return error('NOT_FOUND', 'Transcript not found')
 
-        await getVectorStore().deleteByRecording(recordingId)
+        // Replace changed chunks only after their new vectors exist; preserve other providers.
         const indexedChunks = await indexCorrectedTranscript(recordingId, transcript.full_text)
         return success({ indexedChunks })
       } catch (err) {

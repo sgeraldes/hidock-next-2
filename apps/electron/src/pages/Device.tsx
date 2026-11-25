@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Usb, Download, RefreshCw, HardDrive, Mic, AlertCircle, Radio, Battery, Bluetooth, Play, Pause, Square, X, Terminal, ChevronDown, ChevronUp, Check, Copy, RotateCcw, Trash2, Loader2 } from 'lucide-react'
+import { Usb, Download, RefreshCw, HardDrive, Mic, AlertCircle, Radio, Battery, Bluetooth, Play, Pause, Square, X, Terminal, ChevronDown, ChevronUp, Check, Copy, RotateCcw, Trash2, Loader2, Activity } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
@@ -22,24 +22,113 @@ import { formatEta, formatBytes } from '@/utils/formatters'
 import { DeviceFileList, isFilenamePurged } from '@/components/DeviceFileList'
 import { shouldLogQa } from '@/services/qa-monitor'
 import { appLocale } from '@/lib/locale'
+import { DeviceRecordingMarkers } from '@/components/DeviceRecordingMarkers'
+import { DeviceDrivePanel } from '@/components/DeviceDrivePanel'
+import { DeviceNativeRecordingPanel } from '@/components/DeviceNativeRecordingPanel'
+import type { DeviceAudioDiagnosticsState, DeviceAudioStartOptions } from '@/shared/device-audio'
 
 const CONNECTION_TIMEOUT_MS = 10000 // 10 second timeout (BUG-006)
 
-/** Interim lines are keyed by the cable they came in on, not by their label. */
+/** Monitoring listens only: no provider, no saved file. */
+const MONITOR_OPTIONS: DeviceAudioStartOptions = { transcribe: false, saveRecording: false }
+
+const CHANNEL_COMMIT_MS = 250
+const CHANNEL_FRESH_MS = 1500
+const CHANNEL_FULL_SCALE = 32768
+/** Peak of about -60 dB below full scale; below it a channel reads as quiet. */
+const CHANNEL_ACTIVE_PEAK = 33
+const CHANNEL_IDS = ['channel-0', 'channel-1'] as const
+
+interface ChannelWindow { peak: number; sumSquares: number; samples: number }
+interface ChannelTotals { packets: number; bytes: [number, number]; window: [ChannelWindow, ChannelWindow]; lastCommitAtMs: number | null }
+interface ChannelView { packets: number; bytes: [number, number]; peak: [number, number]; rms: [number, number]; seenAt: number }
+type ChannelPanelState = 'idle' | 'paused' | 'live' | 'waiting'
+
+const emptyChannelWindow = (): ChannelWindow => ({ peak: 0, sumSquares: 0, samples: 0 })
+const emptyChannelTotals = (): ChannelTotals => ({ packets: 0, bytes: [0, 0], window: [emptyChannelWindow(), emptyChannelWindow()], lastCommitAtMs: null })
+
+/** Folds one channel's samples into running numbers; the samples themselves are not kept. */
+function addToChannelWindow(window: ChannelWindow, pcm: Uint8Array): void {
+  const view = new DataView(pcm.buffer, pcm.byteOffset, pcm.byteLength)
+  const samples = Math.floor(pcm.byteLength / 2)
+  for (let index = 0; index < samples; index++) {
+    const value = view.getInt16(index * 2, true)
+    const magnitude = Math.abs(value)
+    if (magnitude > window.peak) window.peak = magnitude
+    window.sumSquares += value * value
+  }
+  window.samples += samples
+}
+
+const windowRms = (window: ChannelWindow): number => (window.samples === 0 ? 0 : Math.sqrt(window.sumSquares / window.samples))
+const formatChannelDb = (value: number): string => (value <= 0 ? 'silent' : `${(20 * Math.log10(value / CHANNEL_FULL_SCALE)).toFixed(0)} dB`)
+const channelLevelPercent = (peak: number): number =>
+  peak <= 0 ? 0 : Math.max(0, Math.min(100, Math.round(((20 * Math.log10(peak / CHANNEL_FULL_SCALE) + 90) / 90) * 100)))
+
+const CHANNEL_STATE_TEXT: Record<ChannelPanelState, string> = {
+  idle: 'Idle', paused: 'Paused', live: 'Live', waiting: 'Waiting for audio',
+}
+
+function LiveChannelsPanel({ view, state, monitoring, observer, verifiedLabels }: {
+  view: ChannelView | null
+  state: ChannelPanelState
+  monitoring: boolean
+  observer: boolean
+  verifiedLabels: boolean
+}) {
+  const labels = verifiedLabels ? ['Microphone', 'System audio'] : ['Channel 0', 'Channel 1']
+  return (
+    <section aria-label="Live channels" className="rounded border p-3 text-sm space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <h4 className="font-medium">Live channels</h4>
+        <span role="status" className="text-xs text-muted-foreground">{CHANNEL_STATE_TEXT[state]}</span>
+      </div>
+      {monitoring && <p className="text-xs text-muted-foreground">Monitoring only. Nothing is saved or transcribed.</p>}
+      {observer ? (
+        <p className="text-xs text-muted-foreground">Another window owns this capture. Its channel levels are shown there.</p>
+      ) : view === null ? (
+        <p className="text-xs text-muted-foreground">
+          {state === 'idle' ? 'No audio yet. Monitor channels shows both channels without saving anything.' : 'No audio received yet.'}
+        </p>
+      ) : (
+        <>
+          {labels.map((label, index) => {
+            const percent = channelLevelPercent(view.peak[index])
+            const status = state === 'live' ? (view.peak[index] >= CHANNEL_ACTIVE_PEAK ? 'Active' : 'Quiet') : state === 'paused' ? 'Paused' : 'No new audio'
+            return (
+              <div key={label} className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="font-medium">{label}</span>
+                  <span className="text-xs text-muted-foreground">{status}</span>
+                </div>
+                <div role="meter" aria-label={`${label} level`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} className="h-2 rounded bg-muted">
+                  <div className="h-2 rounded bg-primary" style={{ width: `${percent}%` }} />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Peak {formatChannelDb(view.peak[index])} · level {formatChannelDb(view.rms[index])} · received {formatBytes(view.bytes[index])}
+                </p>
+              </div>
+            )
+          })}
+          <p className="text-xs text-muted-foreground">Audio packets received: {view.packets}</p>
+        </>
+      )}
+      <p className="text-xs text-muted-foreground">
+        {verifiedLabels
+          ? 'Names apply to H1E firmware 6.3.4 in normal USB mode. The channels are separated, not fully isolated: some sound from one can appear in the other.'
+          : 'Which source each channel carries is not confirmed for this device or firmware.'}
+      </p>
+    </section>
+  )
+}
+
+/** Interim lines retain the channel ID reported by the transcription consumer. */
 const channelKey = (channel: 0 | 1 | null | undefined): string =>
   channel === 0 || channel === 1 ? String(channel) : 'mono'
 
-/**
- * What a turn from `channel` is called right now.
- *
- * Derived on every render instead of frozen into the turn, so that when the
- * microphone measurement settles mid-session the turns already on screen are
- * renamed from Speaker 1 / Speaker 2 to You / Them, as the design asks.
- */
-function speakerLabel(channel: 0 | 1 | null, micChannel: 0 | 1 | null | undefined): string {
-  if (channel === null) return 'Speaker'
-  if (micChannel === 0 || micChannel === 1) return channel === micChannel ? 'You' : 'Them'
-  return channel === 0 ? 'Speaker 1' : 'Speaker 2'
+/** Channel identity is known; physical source and speaker identity remain unverified. */
+function speakerLabel(channel: 0 | 1 | null): string {
+  return channel === null ? 'Combined audio' : `Channel ${channel}`
 }
 
 export function Device() {
@@ -76,17 +165,63 @@ export function Device() {
   // DV-09: Ref to track current offset for use in interval callback (avoids stale closure)
   const realtimeDataOffsetRef = useRef(0)
   const [liveTranscriptionStatus, setLiveTranscriptionStatus] = useState('stopped')
-  // One entry per channel: the live transcript is two streams, not one, because
-  // the device sends the microphone and the far side on separate channels.
-  // Keyed and stored by CHANNEL, never by label: the label changes the moment
-  // the microphone measurement settles, and keying by it stranded the old
-  // `speaker-1` interim line on screen forever while `You` started a new one.
+  // Preserve separate consumer streams without attributing channel lanes to physical sources.
   const [liveTranscriptionInterim, setLiveTranscriptionInterim] = useState<Record<string, string>>({})
   const [liveTranscriptionFinal, setLiveTranscriptionFinal] = useState<
     Array<{ channel: 0 | 1 | null; text: string }>
   >([])
-  /** null until measured; null after measuring means the channels were too close. */
-  const [liveMicChannel, setLiveMicChannel] = useState<0 | 1 | null | undefined>(undefined)
+  const [transcribeLive, setTranscribeLive] = useState(false)
+  const [liveProvider, setLiveProvider] = useState<'gemini-live' | 'remote-nemotron'>('gemini-live')
+  const [liveLanguage, setLiveLanguage] = useState<'en' | 'es'>('es')
+  const [remoteLiveAvailable, setRemoteLiveAvailable] = useState(false)
+  const refreshLiveCapability = async () => {
+    try {
+      const result = await window.electronAPI.modelHost.status()
+      setRemoteLiveAvailable(result?.success === true &&
+        result.status?.health?.realtimeAsrModels?.includes('nvidia/nemotron-3.5-asr-streaming-0.6b') === true)
+    } catch { setRemoteLiveAvailable(false) }
+  }
+  useEffect(() => { void refreshLiveCapability() }, [])
+  const [saveLiveRecording, setSaveLiveRecording] = useState(true)
+  const [audioDiagnostics, setAudioDiagnostics] = useState<DeviceAudioDiagnosticsState | null>(null)
+  // Channel monitor: only counters and levels are kept, never the audio of a packet.
+  const [channelView, setChannelView] = useState<ChannelView | null>(null)
+  const [monitorActive, setMonitorActive] = useState(false)
+  const [channelDevice, setChannelDevice] = useState<{ model: string | null; versionNumber: number | null; versionCode: string | null } | null>(null)
+  const monitorRef = useRef(false)
+  const monitorSeenRef = useRef(false)
+  const channelSessionRef = useRef<string | null>(null)
+  const channelTotalsRef = useRef<ChannelTotals>(emptyChannelTotals())
+  const resetChannels = useCallback(() => {
+    channelTotalsRef.current = emptyChannelTotals()
+    setChannelView(null)
+  }, [])
+  const captureLifecycle = useRef({ mounted: true, startedHere: false, startPending: false, observer: false, stopping: null as Promise<void> | null })
+  const observingOtherOwner = audioDiagnostics?.owned === false && audioDiagnostics.session.status !== 'idle'
+  const stopLocalCapture = useCallback(async (explicit = false): Promise<void> => {
+    const lifecycle = captureLifecycle.current
+    if (lifecycle.stopping) return lifecycle.stopping
+    if (!lifecycle.startedHere && !explicit) return
+    lifecycle.startedHere = false
+    const operation = deviceService.stopRealtime().then(success => {
+      if (!success) throw new Error('Failed to stop realtime streaming')
+    }).finally(() => { lifecycle.stopping = null })
+    lifecycle.stopping = operation
+    return operation
+  }, [deviceService])
+  useEffect(() => {
+    const lifecycle = captureLifecycle.current
+    lifecycle.mounted = true
+    return () => {
+      lifecycle.mounted = false
+      if (realtimeIntervalRef.current !== null) window.clearTimeout(realtimeIntervalRef.current)
+      realtimeIntervalRef.current = null
+      // Pending start/resume owns completion cleanup; stopping early would race its response.
+      if (!lifecycle.startPending) void stopLocalCapture().catch(cause => {
+        if (shouldLogQa()) console.error('[Device] Could not finalize owned capture on route exit:', cause)
+      })
+    }
+  }, [stopLocalCapture])
 
   // P1-specific state
   const [batteryStatus, setBatteryStatus] = useState<BatteryStatus | null>(null)
@@ -212,6 +347,8 @@ export function Device() {
         // config:get IPC returns Result wrapper { success, data }
         const config = result?.success ? result.data : result
         if (mounted) {
+          setLiveProvider(config?.transcription?.liveTranscriptionProvider === 'remote-nemotron' ? 'remote-nemotron' : 'gemini-live')
+          setLiveLanguage(config?.transcription?.liveTranscriptionLanguage === 'en' ? 'en' : 'es')
           // Auto-connect - must be loaded here because service loads async and
           // useState may have captured the default before config loaded
           if (config?.device?.autoConnect !== undefined) {
@@ -316,6 +453,10 @@ export function Device() {
         }
         setRealtimeActive(false)
         setRealtimePaused(false)
+        monitorRef.current = false
+        setMonitorActive(false)
+        channelSessionRef.current = null
+        resetChannels()
         // B-DEV-012: Reset BT scan state on disconnect
         setBluetoothScanning(false)
         if (btScanTimeoutRef.current) {
@@ -721,14 +862,32 @@ export function Device() {
   // REALTIME STREAMING HANDLERS
   // ==========================================
 
-  const handleStartRealtime = async () => {
+  // A monitor session keeps its listen-only options through pause and resume until stop.
+  const captureOptions = (): DeviceAudioStartOptions =>
+    monitorRef.current ? MONITOR_OPTIONS : { transcribe: transcribeLive, saveRecording: saveLiveRecording }
+
+  const endMonitor = () => {
+    monitorRef.current = false
+    monitorSeenRef.current = false
+    setMonitorActive(false)
+  }
+
+  const handleStartRealtime = async (monitor = false) => {
+    const lifecycle = captureLifecycle.current
+    if (lifecycle.startPending || lifecycle.observer || lifecycle.stopping) return
+    lifecycle.startPending = true
+    monitorRef.current = monitor
+    monitorSeenRef.current = false
+    setMonitorActive(monitor)
     setError(null)
     setLiveTranscriptionInterim({})
     setLiveTranscriptionFinal([])
-    setLiveMicChannel(undefined)
+    resetChannels()
     try {
-      const success = await deviceService.startRealtime()
+      const success = await deviceService.startRealtime(captureOptions())
       if (success) {
+        lifecycle.startedHere = true
+        if (!lifecycle.mounted) return
         setRealtimeActive(true)
         setRealtimePaused(false)
         setRealtimeDataOffset(0)
@@ -737,14 +896,22 @@ export function Device() {
         // Start polling for realtime data
         startRealtimePolling()
       } else {
+        endMonitor()
         setError('Failed to start realtime streaming')
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to start realtime streaming')
+      endMonitor()
+      if (lifecycle.mounted) setError(e instanceof Error ? e.message : 'Failed to start realtime streaming')
+    } finally {
+      lifecycle.startPending = false
+      if (!lifecycle.mounted) await stopLocalCapture().catch(cause => {
+        if (shouldLogQa()) console.error('[Device] Could not finalize capture after pending start:', cause)
+      })
     }
   }
 
   const handlePauseRealtime = async () => {
+    if (captureLifecycle.current.observer || captureLifecycle.current.startPending) return
     setError(null)
     try {
       const success = await deviceService.pauseRealtime()
@@ -760,26 +927,40 @@ export function Device() {
   }
 
   const handleResumeRealtime = async () => {
+    const lifecycle = captureLifecycle.current
+    if (lifecycle.startPending || lifecycle.observer || lifecycle.stopping) return
+    lifecycle.startPending = true
     setError(null)
     try {
-      const success = await deviceService.startRealtime()
+      const success = await deviceService.startRealtime(captureOptions())
       if (success) {
+        lifecycle.startedHere = true
+        if (!lifecycle.mounted) return
         setRealtimePaused(false)
         startRealtimePolling()
       } else {
         setError('Failed to resume realtime streaming')
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to resume realtime streaming')
+      if (lifecycle.mounted) setError(e instanceof Error ? e.message : 'Failed to resume realtime streaming')
+    } finally {
+      lifecycle.startPending = false
+      if (!lifecycle.mounted) await stopLocalCapture().catch(cause => {
+        if (shouldLogQa()) console.error('[Device] Could not finalize capture after pending resume:', cause)
+      })
     }
   }
 
   const handleStopRealtime = async () => {
+    if (captureLifecycle.current.observer || captureLifecycle.current.startPending) return
     setError(null)
     try {
-      await deviceService.stopRealtime()
+      await stopLocalCapture(true)
+      endMonitor()
+      if (!captureLifecycle.current.mounted) return
       setRealtimeActive(false)
       setRealtimePaused(false)
+      resetChannels()
       stopRealtimePolling()
       setRealtimeDataOffset(0)
       realtimeDataOffsetRef.current = 0
@@ -790,24 +971,28 @@ export function Device() {
   }
 
   const startRealtimePolling = () => {
+    if (!captureLifecycle.current.mounted || captureLifecycle.current.observer) return
     if (realtimeIntervalRef.current) {
       clearInterval(realtimeIntervalRef.current)
     }
     const poll = async () => {
-      if (realtimeIntervalRef.current === null) return
+      if (realtimeIntervalRef.current === null || !captureLifecycle.current.mounted || captureLifecycle.current.observer) return
       let delay = 100
       try {
         // Current firmware treats CMD 34 as a dequeue request and accepts no
         // offset body. Poll serially so requests can never overlap on USB.
         const data = await deviceService.getRealtimeData(0)
+        if (realtimeIntervalRef.current === null || !captureLifecycle.current.mounted || captureLifecycle.current.observer) return
         if (data && data.data) {
           const pcmBytes = Math.max(0, data.data.length - 8)
           realtimeDataOffsetRef.current += pcmBytes
           setRealtimeDataReceived((prev) => prev + pcmBytes)
           setRealtimeDataOffset(realtimeDataOffsetRef.current)
-          delay = data.rest > 1 ? 50 : 100
+          // The first H1E field is sequence-minus-one, not backlog. Drain at
+          // the established fast cadence when PCM arrived; back off on empty.
+          delay = pcmBytes > 0 ? 50 : 100
           if (shouldLogQa()) {
-            console.log(`[QA-MONITOR] Received ${pcmBytes} realtime PCM bytes, queued packets: ${data.rest}`)
+            console.log(`[QA-MONITOR] Received ${pcmBytes} realtime PCM bytes, producer sequence minus one: ${data.sequenceMinusOne ?? data.rest}`)
           }
         }
       } catch (e) {
@@ -819,6 +1004,98 @@ export function Device() {
     }
     realtimeIntervalRef.current = window.setTimeout(poll, 0)
   }
+
+  useEffect(() => {
+    const api = window.electronAPI?.jensen
+    if (!api?.getAudioDiagnostics) return
+    let cancelled = false
+    let requesting = false
+    const receive = (value: DeviceAudioDiagnosticsState) => {
+      if (cancelled) return
+      const sessionId = value.session.status === 'idle' ? null : value.session.sessionId
+      if (sessionId !== channelSessionRef.current) {
+        channelSessionRef.current = sessionId
+        resetChannels()
+      }
+      if (monitorRef.current) {
+        if (value.session.status !== 'idle') monitorSeenRef.current = true
+        else if (monitorSeenRef.current) endMonitor()
+      }
+      captureLifecycle.current.observer = value.owned === false && value.session.status !== 'idle'
+      if (captureLifecycle.current.observer) captureLifecycle.current.startedHere = false
+      if (captureLifecycle.current.observer || value.session.status === 'idle') {
+        if (realtimeIntervalRef.current !== null) window.clearTimeout(realtimeIntervalRef.current)
+        realtimeIntervalRef.current = null
+      }
+      setAudioDiagnostics(value)
+      setRealtimeActive(value.session.status !== 'idle')
+      setRealtimePaused(value.session.status === 'paused')
+      // A listen-only monitor must not overwrite the user's save and transcribe choices.
+      if (value.session.status !== 'idle' && !monitorRef.current) {
+        setTranscribeLive(value.session.transcribe)
+        setSaveLiveRecording(value.session.saveRecording)
+      }
+    }
+    const refresh = async () => {
+      if (requesting || cancelled) return
+      requesting = true
+      try { receive(await api.getAudioDiagnostics()) }
+      catch { /* The connection/status owner displays errors; a diagnostic refresh can retry. */ }
+      finally { requesting = false }
+    }
+    void refresh()
+    const timer = window.setInterval(() => { void refresh() }, 1000)
+    const unsubscribe = api.onAudioDiagnostics?.(receive)
+    return () => { cancelled = true; window.clearInterval(timer); unsubscribe?.() }
+  }, [resetChannels])
+
+  // Device identity decides whether channel names are shown; it comes from the same state the main process publishes.
+  useEffect(() => {
+    const api = window.electronAPI?.jensen
+    if (!api) return
+    let cancelled = false
+    const apply = (state: { connected: boolean; model: string | null; versionNumber: number | null; versionCode: string | null } | null | undefined) => {
+      if (cancelled) return
+      setChannelDevice(state?.connected ? { model: state.model, versionNumber: state.versionNumber, versionCode: state.versionCode } : null)
+    }
+    void api.getState?.().then(apply, () => undefined)
+    const unsubscribe = api.onStateChanged?.(apply)
+    return () => { cancelled = true; unsubscribe?.() }
+  }, [])
+
+  // Both channels arrive on the capture owner's existing read; this adds no read or timer of its own.
+  useEffect(() => {
+    const api = window.electronAPI?.jensen
+    if (!api?.onRealtimeChannels) return
+    const unsubscribe = api.onRealtimeChannels(tap => {
+      const lifecycle = captureLifecycle.current
+      if (!lifecycle.mounted || lifecycle.observer) return
+      if (!tap.sessionId || tap.sessionId !== channelSessionRef.current) return
+      const lanes = CHANNEL_IDS.map(id => tap.channels?.find(channel => channel.id === id)?.pcm)
+      const [lane0, lane1] = lanes
+      if (!(lane0 instanceof Uint8Array) || !(lane1 instanceof Uint8Array)) return
+      const totals = channelTotalsRef.current
+      totals.packets += 1
+      totals.bytes[0] += lane0.byteLength
+      totals.bytes[1] += lane1.byteLength
+      addToChannelWindow(totals.window[0], lane0)
+      addToChannelWindow(totals.window[1], lane1)
+      const last = totals.lastCommitAtMs
+      const elapsed = last === null ? Infinity : tap.receivedAtMs - last
+      if (elapsed >= 0 && elapsed < CHANNEL_COMMIT_MS) return
+      const [w0, w1] = totals.window
+      setChannelView({
+        packets: totals.packets,
+        bytes: [totals.bytes[0], totals.bytes[1]],
+        peak: [w0.peak, w1.peak],
+        rms: [windowRms(w0), windowRms(w1)],
+        seenAt: tap.receivedAtMs,
+      })
+      totals.window = [emptyChannelWindow(), emptyChannelWindow()]
+      totals.lastCommitAtMs = tap.receivedAtMs
+    })
+    return () => { unsubscribe?.(); channelSessionRef.current = null; resetChannels() }
+  }, [resetChannels])
 
   useEffect(() => {
     const api = window.electronAPI?.jensen
@@ -834,13 +1111,12 @@ export function Device() {
         // still be mid-sentence.
         setLiveTranscriptionInterim((current) => ({ ...current, [channelKey(channel)]: '' }))
       }),
-      api.onLiveTranscriptionChannels?.(({ micChannel }) => setLiveMicChannel(micChannel)),
       api.onLiveTranscriptionError(({ error: liveError }) => setError(liveError)),
       api.onRealtimeRecording?.((saved) => {
         if (saved.status === 'saved') {
           const m = Math.floor(saved.seconds / 60)
           const s = Math.round(saved.seconds % 60)
-          toast.success('Live stream saved', `${saved.filename}, ${m}:${String(s).padStart(2, '0')}. It is in the Library and transcribes like any recording.`)
+          toast.success('Live stream saved', `${saved.filename}, ${m}:${String(s).padStart(2, '0')}. Available in the Library.`)
         } else {
           toast.error('The live recording had a problem', saved.message)
         }
@@ -888,6 +1164,13 @@ export function Device() {
   }
 
   // C-004: formatBytes is now imported from @/utils/formatters (deduplicated)
+
+  // Names are shown only for the device and firmware where lane 0 and lane 1 were confirmed with a recorded tone.
+  const verifiedChannelLabels = channelDevice?.model === 'hidock-h1e' && channelDevice.versionNumber === 393988 && channelDevice.versionCode === '6.3.4'
+  // Freshness is read from the last packet's arrival time on each render; the page already re-renders every second.
+  const channelPanelState: ChannelPanelState = !realtimeActive ? 'idle'
+    : realtimePaused ? 'paused'
+    : channelView !== null && Date.now() - channelView.seenAt <= CHANNEL_FRESH_MS ? 'live' : 'waiting'
 
   return (
     <div className="flex flex-col h-full">
@@ -1259,6 +1542,8 @@ export function Device() {
             </CardContent>
           </Card>
 
+          <DeviceDrivePanel connected={deviceState.connected} />
+
           {/* Device File List - Individual file operations */}
           {/* B-DEV-002: Pass onRecordingsRefresh to refresh file list after delete/download */}
           {deviceState.connected && (
@@ -1405,7 +1690,11 @@ export function Device() {
               )}
             </Card>
 
-          {/* Realtime Streaming - Available on ALL devices */}
+          {deviceState.connected && (
+            <DeviceNativeRecordingPanel connected={deviceState.connected} disabled={realtimeActive || storeSyncing} />
+          )}
+
+          {/* Live transport availability is checked by the model/firmware owner. */}
           {deviceState.connected && (
             <Card>
               <CardHeader>
@@ -1419,6 +1708,29 @@ export function Device() {
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
+                  <div className="flex flex-wrap gap-4">
+                    <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={saveLiveRecording} disabled={realtimeActive} onChange={event => setSaveLiveRecording(event.target.checked)} />Save stereo WAV locally</label>
+                    <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={transcribeLive} disabled={realtimeActive} onChange={event => setTranscribeLive(event.target.checked)} />Enable live transcription</label>
+                    <select aria-label="Live transcription provider" disabled={realtimeActive} value={liveProvider}
+                      onChange={async event => {
+                        const value = event.target.value as 'gemini-live' | 'remote-nemotron'
+                        try { const result = await window.electronAPI.config.updateSection('transcription', { liveTranscriptionProvider: value }); if (result?.success === false) throw Error('Save failed'); setLiveProvider(value) }
+                        catch { setError('Could not save live transcription provider') }
+                      }} className="rounded border bg-background p-1 text-sm">
+                      <option value="gemini-live">Gemini Live</option>
+                      <option value="remote-nemotron" disabled={!remoteLiveAvailable}>Remote worker · Nemotron Live{remoteLiveAvailable ? '' : ' (unavailable)'}</option>
+                    </select>
+                    {liveProvider === 'remote-nemotron' && <select aria-label="Live transcription language" disabled={realtimeActive}
+                      value={liveLanguage} onChange={async event => {
+                        const value = event.target.value as 'en' | 'es'
+                        try { const result = await window.electronAPI.config.updateSection('transcription', { liveTranscriptionLanguage: value }); if (result?.success === false) throw Error('Save failed'); setLiveLanguage(value) }
+                        catch { setError('Could not save live transcription language') }
+                      }} className="rounded border bg-background p-1 text-sm">
+                      <option value="es">Español</option><option value="en">English</option>
+                    </select>}
+                    <button type="button" disabled={realtimeActive} onClick={() => void refreshLiveCapability()} className="text-xs underline">Refresh live availability</button>
+                    {liveProvider === 'remote-nemotron' && <p className="text-xs text-muted-foreground">Requires validated remote live support. Audio channels are mixed; speakers are not identified.</p>}
+                  </div>
                   {/* Status indicator */}
                   <div className="flex items-center justify-between p-4 border rounded-lg">
                     <div className="flex items-center gap-3">
@@ -1448,24 +1760,30 @@ export function Device() {
                     </div>
                     <div className="flex items-center gap-2">
                       {!realtimeActive ? (
-                        <Button onClick={handleStartRealtime} size="sm">
-                          <Play className="h-4 w-4 mr-2" />
-                          Start
-                        </Button>
+                        <>
+                          <Button onClick={() => void handleStartRealtime(true)} size="sm" variant="outline" disabled={observingOtherOwner}>
+                            <Activity className="h-4 w-4 mr-2" />
+                            Monitor channels
+                          </Button>
+                          <Button onClick={() => void handleStartRealtime()} size="sm" disabled={observingOtherOwner}>
+                            <Play className="h-4 w-4 mr-2" />
+                            Start
+                          </Button>
+                        </>
                       ) : (
                         <>
                           {realtimePaused ? (
-                            <Button onClick={handleResumeRealtime} size="sm" variant="outline">
+                            <Button onClick={handleResumeRealtime} size="sm" variant="outline" disabled={observingOtherOwner}>
                               <Play className="h-4 w-4 mr-2" />
                               Resume
                             </Button>
                           ) : (
-                            <Button onClick={handlePauseRealtime} size="sm" variant="outline">
+                            <Button onClick={handlePauseRealtime} size="sm" variant="outline" disabled={observingOtherOwner}>
                               <Pause className="h-4 w-4 mr-2" />
                               Pause
                             </Button>
                           )}
-                          <Button onClick={handleStopRealtime} size="sm" variant="destructive">
+                          <Button onClick={handleStopRealtime} size="sm" variant="destructive" disabled={observingOtherOwner}>
                             <Square className="h-4 w-4 mr-2" />
                             Stop
                           </Button>
@@ -1474,12 +1792,25 @@ export function Device() {
                     </div>
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    HiDock sends two channels. Each is transcribed on its own Gemini 3.5 Live
-                    Transcribe session, so turns are attributed by channel rather than guessed —
-                    live transcription has no speaker diarization.
-                    {liveMicChannel === null && ' The two channels sounded alike, so turns stay labelled by channel.'}
+                    Capture can run without a transcription provider.
+                    {verifiedChannelLabels
+                      ? ' On this device (H1E, firmware 6.3.4, normal USB mode) channel 0 carries the microphone and channel 1 the system audio. Each can still pick up some of the other, so they are separated, not fully isolated.'
+                      : ' Channels keep neutral names; which source each carries is not confirmed for this device or firmware.'}
+                    {' '}Saved new capture files can be transcribed manually in the Library.
                   </p>
-                  {(realtimeActive || liveTranscriptionFinal.length > 0) && (
+                  {observingOtherOwner && <p role="status">Another window owns this capture. Diagnostics are read-only.</p>}
+                  <LiveChannelsPanel view={channelView} state={channelPanelState} monitoring={monitorActive && realtimeActive}
+                    observer={observingOtherOwner} verifiedLabels={verifiedChannelLabels} />
+                  {audioDiagnostics && <div className="rounded border p-3 text-xs space-y-2" aria-label="Channel diagnostics">
+                    <p>Expected format: {audioDiagnostics.diagnostics.format.sampleRate} Hz · {audioDiagnostics.diagnostics.format.channels} channels · {audioDiagnostics.diagnostics.format.bitsPerSample} bits. Source isolation unverified.</p>
+                    {audioDiagnostics.diagnostics.channels.map(channel => <p key={channel.id}>{channel.id}: RMS {channel.rms.toFixed(4)} · peak {channel.peak.toFixed(4)} · clipped samples {channel.clippedSamples}</p>)}
+                    <p>Packets {audioDiagnostics.diagnostics.packets} · rejected {audioDiagnostics.diagnostics.rejectedPackets} · discontinuities {audioDiagnostics.diagnostics.discontinuityCount} · maximum arrival gap {Math.round(audioDiagnostics.diagnostics.maximumArrivalGapMs)} ms</p>
+                    <p>Correlation {audioDiagnostics.diagnostics.correlation === null ? 'unavailable' : audioDiagnostics.diagnostics.correlation.toFixed(4)}. Arrival gaps do not prove dropped device samples.</p>
+                    {audioDiagnostics.session.recordingError && <p role="alert">Recording: {audioDiagnostics.session.recordingError}</p>}
+                    {audioDiagnostics.session.transcriptionError && <p role="alert">Transcription: {audioDiagnostics.session.transcriptionError}</p>}
+                  </div>}
+                  {realtimeActive && !observingOtherOwner && audioDiagnostics?.session.sessionId && <DeviceRecordingMarkers subject={{ kind: 'session', id: audioDiagnostics.session.sessionId }} />}
+                  {(transcribeLive && realtimeActive || liveTranscriptionFinal.length > 0) && (
                     <div className="rounded-lg border bg-muted/30 p-4" aria-live="polite">
                       <div className="mb-2 flex items-center justify-between gap-3">
                         <p className="text-sm font-medium">Live transcript</p>
@@ -1489,7 +1820,7 @@ export function Device() {
                         {liveTranscriptionFinal.map((turn, index) => (
                           <p key={`${index}-${turn.text}`}>
                             <span className="mr-2 font-medium text-muted-foreground">
-                              {speakerLabel(turn.channel, liveMicChannel)}
+                              {speakerLabel(turn.channel)}
                             </span>
                             {turn.text}
                           </p>
@@ -1499,7 +1830,7 @@ export function Device() {
                           .map(([key, text]) => (
                             <p key={`interim-${key}`} className="italic text-muted-foreground">
                               <span className="mr-2 font-medium">
-                                {speakerLabel(key === 'mono' ? null : (Number(key) as 0 | 1), liveMicChannel)}
+                                {speakerLabel(key === 'mono' ? null : (Number(key) as 0 | 1))}
                               </span>
                               {text}
                             </p>

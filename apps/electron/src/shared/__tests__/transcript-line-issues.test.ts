@@ -10,7 +10,7 @@ describe('transcript line rules', () => {
       { start: null, end: null, text: 'cuatro' }
     ])
     expect(perLine).toEqual([[], ['repeated_start'], ['backwards_start'], ['untimed_lines']])
-    expect(countLineIssues(perLine)).toEqual({ repeated_start: 1, backwards_start: 1, cramped_lines: 0, untimed_lines: 1 })
+    expect(countLineIssues(perLine)).toEqual({ repeated_start: 1, backwards_start: 1, mistimed_run: 0, duplicate_line: 0, cramped_lines: 0, untimed_lines: 1 })
   })
 
   it('ignores a start less than half a second earlier (jitter)', () => {

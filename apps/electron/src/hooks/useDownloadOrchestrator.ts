@@ -308,7 +308,6 @@ export function useDownloadOrchestrator() {
   const setDeviceSyncState = useAppStore((s) => s.setDeviceSyncState)
   const clearDeviceSyncState = useAppStore((s) => s.clearDeviceSyncState)
   const addToDownloadQueue = useAppStore((s) => s.addToDownloadQueue)
-  const updateDownloadProgress = useAppStore((s) => s.updateDownloadProgress)
   const removeFromDownloadQueue = useAppStore((s) => s.removeFromDownloadQueue)
 
   // ---- Single file download ----
@@ -334,25 +333,20 @@ export function useDownloadOrchestrator() {
     deviceService.log('info', 'Starting download', item.filename)
 
     try {
-      const chunks: Uint8Array[] = []
-      let totalReceived = 0
-
-      const success = await deviceService.downloadRecording(
-        item.filename,
-        item.fileSize,
-        (chunk) => {
-          // Stop promptly on either a queue-wide abort (Cancel-All) or a per-file
-          // user cancel for THIS file (Finding 1) — both are cancellations, not errors.
-          if (signal.aborted || _cancelledDownloads.has(item.filename)) throw new Error('Download cancelled')
-          chunks.push(chunk)
-          totalReceived += chunk.length
-          window.electronAPI.downloadService.updateProgress(item.filename, totalReceived)
-          // C-004: Guard against NaN when fileSize is 0
-          const pct = item.fileSize > 0 ? Math.round((totalReceived / item.fileSize) * 100) : 0
-          updateDownloadProgress(item.filename, Number.isFinite(pct) ? pct : 0)
-        },
-        signal
-      )
+      // Audio stays in main. An older preload must wait for the application
+      // update, not fall back to rebuilding the entire recording in renderer RAM.
+      if (!window.electronAPI.jensen?.downloadToLibrary) {
+        removeFromDownloadQueue(item.filename)
+        return 'gated'
+      }
+      const abort = () => { void window.electronAPI.jensen.cancelDownload() }
+      signal.addEventListener('abort', abort, { once: true })
+      let result: { success: boolean; filePath?: string; error?: string }
+      try {
+        if (signal.aborted) return false
+        result = await window.electronAPI.jensen.downloadToLibrary(item.filename, item.fileSize)
+      } finally { signal.removeEventListener('abort', abort) }
+      const success = result.success
 
       if (!success) {
         // A resolved-false can be a user cancellation that landed as a falsy return
@@ -368,7 +362,7 @@ export function useDownloadOrchestrator() {
           removeFromDownloadQueue(item.filename)
           return false
         }
-        const failed = await window.electronAPI.downloadService.markFailed(item.filename, 'USB transfer failed')
+        const failed = await window.electronAPI.downloadService.markFailed(item.filename, result.error || 'USB transfer failed')
         removeFromDownloadQueue(item.filename)
         if (failed === false) {
           // Main already settled it (a stall the reconnect retries, or a failure
@@ -384,20 +378,6 @@ export function useDownloadOrchestrator() {
         })
         return false
       }
-
-      // Concatenate and save
-      const totalLength = chunks.reduce((sum, c) => sum + c.length, 0)
-      const combined = new Uint8Array(totalLength)
-      let offset = 0
-      for (const chunk of chunks) {
-        combined.set(chunk, offset)
-        offset += chunk.length
-      }
-
-      const result = await window.electronAPI.downloadService.processDownload(
-        item.filename,
-        combined
-      )
 
       removeFromDownloadQueue(item.filename)
 
@@ -457,7 +437,7 @@ export function useDownloadOrchestrator() {
       })
       return false
     }
-  }, [deviceService, addToDownloadQueue, updateDownloadProgress, removeFromDownloadQueue])
+  }, [deviceService, addToDownloadQueue, removeFromDownloadQueue])
 
   // ---- Queue processing ----
 

@@ -24,6 +24,8 @@ interface ConfigSecret {
 /** The secrets in config.json (SECRET_CONFIG_FIELDS in src/shared/secret-fields.ts). */
 export const CONFIG_SECRETS: ConfigSecret[] = [
   { section: 'transcription', key: 'geminiApiKey', label: 'Google Gemini API key', usedFor: 'Transcription, analysis, chat and image descriptions.' },
+  { section: 'transcription', key: 'museVoiceApiKey', label: 'Muse Voice API key', usedFor: 'Cloud transcription with Muse Voice.' },
+  { section: 'transcription', key: 'maiTranscribeApiKey', label: 'MAI Transcribe 2 key', usedFor: 'Cloud transcription with MAI Transcribe 2 (Azure Speech).' },
   { section: 'transcription', key: 'localAsrHfToken', label: 'Hugging Face token', usedFor: 'Downloads the speaker-separation model.' },
   { section: 'transcription', key: 'jevApiKey', label: 'Jev API key', usedFor: 'Ratings, evaluations and meeting matching.' },
   { section: 'transcription', key: 'modelHostToken', label: 'Model host token', usedFor: 'The gamestation that lends its GPU over the network.' },

@@ -26,6 +26,7 @@ import { cn } from '@/lib/utils'
 import { BusyIcon } from '@/components/ui/working'
 import { TranscriptUpgradeButton } from './TranscriptUpgradeButton'
 import { appLocale } from '@/lib/locale'
+import { useConfigStore } from '@/store/domain/useConfigStore'
 
 interface LibraryHeaderProps {
   stats: {
@@ -90,6 +91,7 @@ export function LibraryHeader({
   trashCount,
   onToggleTrash
 }: LibraryHeaderProps) {
+  const automaticTranscriptionOff = useConfigStore((s) => s.config?.transcription?.autoTranscribe === false)
   const queuedDownloadCount = pendingDownloadCount + activeDownloadCount
   const downloadActionLabel = activeDownloadCount > 0
     ? 'Downloading'
@@ -106,6 +108,11 @@ export function LibraryHeader({
             <span className="tabular-nums">
               {stats.total.toLocaleString(appLocale())} source{stats.total !== 1 ? 's' : ''}
             </span>
+            {automaticTranscriptionOff && (
+              <span title="Downloaded recordings are saved without automatic transcription. Use a recording's Transcribe action, or change automatic transcription in Settings.">
+                Automatic transcription off · transcribe manually
+              </span>
+            )}
             {stats.deviceOnly > 0 && (
               <button
                 type="button"

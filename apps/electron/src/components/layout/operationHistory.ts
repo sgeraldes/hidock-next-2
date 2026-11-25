@@ -11,6 +11,46 @@
 
 import { getDisplayTitle } from '@/features/library/utils/getDisplayTitle'
 import type { UnifiedRecording } from '@/types/unified-recording'
+import type { DownloadQueueEntry } from '@/store/useAppStore'
+
+const ACTIVE_DOWNLOAD_STATUSES = new Set(['pending', 'downloading', 'cancelling'])
+
+/**
+ * Merge renderer progress hints into the main-process queue. Once a main queue
+ * snapshot exists, its membership and statuses are authoritative; renderer-only
+ * rows may be stale after a missed terminal update.
+ */
+export function mergeDownloadQueues(
+  rendererItems: Iterable<DownloadQueueEntry>,
+  mainItems: readonly DownloadQueueEntry[],
+  mainIsAuthoritative = true
+): DownloadQueueEntry[] {
+  const rendererByFilename = new Map<string, DownloadQueueEntry>()
+  for (const item of rendererItems) rendererByFilename.set(item.filename, item)
+
+  const mergeItem = (mainItem: DownloadQueueEntry): DownloadQueueEntry => {
+    const rendererItem = rendererByFilename.get(mainItem.filename)
+    const preserveFastProgress = rendererItem?.status === 'downloading' && mainItem.status === 'downloading'
+    return {
+      ...(rendererItem ?? {}),
+      ...mainItem,
+      progress: preserveFastProgress
+        ? Math.max(rendererItem!.progress, mainItem.progress)
+        : mainItem.progress
+    }
+  }
+
+  if (mainIsAuthoritative) return mainItems.map(mergeItem)
+
+  const merged = new Map<string, DownloadQueueEntry>(rendererByFilename)
+  for (const item of mainItems) merged.set(item.filename, mergeItem(item))
+  return Array.from(merged.values())
+}
+
+/** Count only queue rows that are actually pending, transferring, or cancelling. */
+export function countActiveDownloads(items: readonly Pick<DownloadQueueEntry, 'status'>[]): number {
+  return items.filter((item) => ACTIVE_DOWNLOAD_STATUSES.has(item.status)).length
+}
 
 export interface SessionTagged {
   status: string
@@ -43,5 +83,10 @@ export function recordingForDownload(
 
 /** How an operation row names its recording: the display title, never the file name. */
 export function operationLabel(recording: UnifiedRecording | undefined): string {
-  return recording ? getDisplayTitle(recording).primaryText : 'Recording'
+  if (!recording) return 'Recording'
+  const title = getDisplayTitle(recording)
+  const date = recording.dateRecorded
+  return title.source !== 'date' && date instanceof Date && !Number.isNaN(date.getTime())
+    ? `${title.primaryText} · ${date.toLocaleString('en', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}`
+    : title.primaryText
 }

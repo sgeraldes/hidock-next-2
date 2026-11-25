@@ -241,10 +241,11 @@ describe('recording-deletion-handlers', () => {
       deleteRecordingMock.mockResolvedValue({ success: true, mode: 'soft' })
       const handler = getHandler('recordings:deleteCascade')
 
-      const result = await handler(null, 'rec-1', false)
+      const result = await handler(null, 'rec-1', false, { requestedBy: 'library:move-to-trash' })
 
       expect(result).toEqual({ success: true, mode: 'soft' })
-      expect(deleteRecordingMock).toHaveBeenCalledWith('resolved-1', { hard: false })
+      // v74: every renderer deletion is the owner's, named by the feature.
+      expect(deleteRecordingMock).toHaveBeenCalledWith('resolved-1', { hard: false, origin: 'user', requestedBy: 'library:move-to-trash' })
       // Soft deletes never consult graph readiness — no graph coupling at all.
       expect(ensureGraphReadyMock).not.toHaveBeenCalled()
     })
@@ -258,10 +259,10 @@ describe('recording-deletion-handlers', () => {
       deleteRecordingMock.mockResolvedValue({ success: true, mode: 'hard' })
       const handler = getHandler('recordings:deleteCascade')
 
-      const result = await handler(null, 'trashed-rec-id', true)
+      const result = await handler(null, 'trashed-rec-id', true, { requestedBy: 'library:delete-permanently' })
 
       expect(result).toEqual({ success: true, mode: 'hard' })
-      expect(deleteRecordingMock).toHaveBeenCalledWith('resolved-1', { hard: true })
+      expect(deleteRecordingMock).toHaveBeenCalledWith('resolved-1', { hard: true, origin: 'user', requestedBy: 'library:delete-permanently' })
       expect(ensureGraphReadyMock).toHaveBeenCalled()
     })
 
@@ -269,10 +270,33 @@ describe('recording-deletion-handlers', () => {
       resolveRecordingIdMock.mockReturnValue(undefined)
       const handler = getHandler('recordings:deleteCascade')
 
-      const result = await handler(null, 'ghost', true)
+      const result = await handler(null, 'ghost', true, { requestedBy: 'library:delete-permanently' })
 
       expect(result).toEqual({ success: false, error: 'Recording not found' })
       expect(deleteRecordingMock).not.toHaveBeenCalled()
+    })
+
+    // v74: who asked is part of the request, not optional.
+    describe('requestedBy (v74)', () => {
+      it('refuses a call that does not name the feature, without calling the service', async () => {
+        resolveRecordingIdMock.mockReturnValue({ id: 'resolved-1' })
+        const handler = getHandler('recordings:deleteCascade')
+
+        const result: any = await handler(null, 'rec-1', false)
+
+        expect(result.success).toBe(false)
+        expect(deleteRecordingMock).not.toHaveBeenCalled()
+      })
+
+      it('refuses a feature name that is not in the list', async () => {
+        resolveRecordingIdMock.mockReturnValue({ id: 'resolved-1' })
+        const handler = getHandler('recordings:deleteCascade')
+
+        const result: any = await handler(null, 'rec-1', true, { requestedBy: 'brain-api' })
+
+        expect(result.success).toBe(false)
+        expect(deleteRecordingMock).not.toHaveBeenCalled()
+      })
     })
 
     // spec-006/F17 T6 AR3-3(a) — pre-flight graph readiness check for a hard
@@ -283,7 +307,7 @@ describe('recording-deletion-handlers', () => {
         ensureGraphReadyMock.mockReturnValueOnce({ ok: false, error: 'disk I/O error' })
         const handler = getHandler('recordings:deleteCascade')
 
-        const result: any = await handler(null, 'rec-1', true)
+        const result: any = await handler(null, 'rec-1', true, { requestedBy: 'library:delete-permanently' })
 
         expect(result.success).toBe(false)
         expect(result.graphUnavailable).toBe(true)
@@ -296,7 +320,7 @@ describe('recording-deletion-handlers', () => {
         deleteRecordingMock.mockResolvedValue({ success: true, mode: 'soft' })
         const handler = getHandler('recordings:deleteCascade')
 
-        await handler(null, 'rec-1', false)
+        await handler(null, 'rec-1', false, { requestedBy: 'library:move-to-trash' })
 
         expect(ensureGraphReadyMock).not.toHaveBeenCalled()
       })
@@ -309,10 +333,15 @@ describe('recording-deletion-handlers', () => {
         deleteRecordingMock.mockResolvedValue({ success: true, mode: 'hard', graphCleanupSkipped: true })
         const handler = getHandler('recordings:deleteCascade')
 
-        const result = await handler(null, 'rec-1', true, { skipGraphCleanup: true })
+        const result = await handler(null, 'rec-1', true, { skipGraphCleanup: true, requestedBy: 'library:delete-permanently' })
 
         expect(ensureGraphReadyMock).not.toHaveBeenCalled()
-        expect(deleteRecordingMock).toHaveBeenCalledWith('resolved-1', { hard: true, skipGraphCleanup: true })
+        expect(deleteRecordingMock).toHaveBeenCalledWith('resolved-1', {
+          hard: true,
+          origin: 'user',
+          requestedBy: 'library:delete-permanently',
+          skipGraphCleanup: true
+        })
         expect(result).toEqual({ success: true, mode: 'hard', graphCleanupSkipped: true })
       })
 
@@ -321,9 +350,9 @@ describe('recording-deletion-handlers', () => {
         deleteRecordingMock.mockResolvedValue({ success: true, mode: 'hard' })
         const handler = getHandler('recordings:deleteCascade')
 
-        await handler(null, 'rec-1', true, { skipGraphCleanup: false })
+        await handler(null, 'rec-1', true, { skipGraphCleanup: false, requestedBy: 'library:delete-permanently' })
 
-        expect(deleteRecordingMock).toHaveBeenCalledWith('resolved-1', { hard: true })
+        expect(deleteRecordingMock).toHaveBeenCalledWith('resolved-1', { hard: true, origin: 'user', requestedBy: 'library:delete-permanently' })
       })
     })
   })

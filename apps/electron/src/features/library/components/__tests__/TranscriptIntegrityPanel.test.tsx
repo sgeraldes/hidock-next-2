@@ -13,6 +13,17 @@ const issues = (codes: string[]) =>
   JSON.stringify({ issues: codes.map((code) => ({ code, count: 3, detail: `${code} in detail` })) })
 
 describe('TranscriptIntegrityPanel', () => {
+  it('shows completeness reasons even when integrity is also broken, with the existing cost action', () => {
+    const onRetranscribe = vi.fn()
+    render(<TranscriptIntegrityPanel recordingId="rec98" durationSeconds={1565} onRetranscribe={onRetranscribe}
+      transcript={{ integrity_status: 'broken', integrity_json: issues(['too_many_words']), integrity_accepted_at: null,
+        validity_status: 'incomplete', validity_json: JSON.stringify({ reasons: [
+          { code: 'sparse_speech', detail: '17 words for 17.6 minutes of detected speech.' }
+        ] }) }} />)
+    expect(screen.getByText('17 words for 17.6 minutes of detected speech.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Transcribe again (about 0.09 USD)' }))
+    expect(onRetranscribe).toHaveBeenCalledOnce()
+  })
   it('renders nothing for a clean or unchecked transcript', () => {
     const { container, rerender } = render(
       <TranscriptIntegrityPanel recordingId="r1" transcript={{ integrity_status: 'ok', integrity_json: issues([]), integrity_accepted_at: null }} />
@@ -34,7 +45,7 @@ describe('TranscriptIntegrityPanel', () => {
     expect(screen.getByTestId('transcript-integrity')).toHaveAttribute('data-integrity', 'suspect')
     expect(screen.getByText(/The times in this transcript are wrong/)).toBeInTheDocument()
     expect(screen.getByText('Repeated times · 3')).toHaveAttribute('title', 'repeated_start in detail')
-    expect(screen.getByText('Times go backwards · 3')).toBeInTheDocument()
+    expect(screen.getByText('Line out of order · 3')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /Transcribe again/ }))
     expect(onRetranscribe).toHaveBeenCalledTimes(1)

@@ -2,6 +2,35 @@
 
 Each entry is one day of merged work. The Releases page in Settings reads this file.
 
+Device reference: [model/version gates, recordings and native markers](../../docs/devices/README.md). The 11 October firmware documentation describes offline research and local tooling, not an additional merged device-firmware feature. Older release entries retain their dated scope.
+
+## 2026-11-25 | Transcript times that are wrong, shown and fixed
+
+- The timing warning now sits above the transcript, with one button per problem that goes to it. A line out of order is the line itself, not the correct line next to it: in Rec28, "Hola, Manuel" listed at 8:14 is flagged, and the 0:13 line after it is not.
+- Consecutive lines out of order are one section with shifted times, shown once with how many lines it holds, instead of a flag on each line.
+- A line or block of lines the transcriber wrote twice, as where two pieces of audio overlap, is flagged as Written twice; Hide the copy keeps it in the stored transcript and can be undone. A short repeat counts only when one copy is also out of order, so "Uh-huh." or "Buenos días." said again is never flagged.
+- Each problem is judged against the recording's sound (the VAD speech stretches, or the frame envelope): out of place, probable hallucination, or unsure.
+- Fix times lays the existing words back on the speech between the two correct lines around them, on this computer's processor, without a model. The transcriber's times are kept and Undo puts them back. It does not recognise words, so on the owner's library it lands a line within 1 second about half the time, within 2 seconds two thirds of the time; it refuses when the words and the sound do not fit.
+- When it refuses, Transcribe this section again sends only that stretch of audio to Gemini, after a confirmation that says how long it is and that the provider may charge. The old lines stay hidden and Undo brings them back. It is not offered for lines a second or two off, which is two people talking at once.
+
+## 2026-11-24 | Device recordings stay put, and Operations say what they are doing
+
+- Recordings the device may still hold are no longer removed at startup or when the device disconnects, so they stop disappearing and coming back with new ids. Their titles, ratings and meeting links stay with them.
+- A device recording that is already in the Library as a downloaded .wav shows once, as that .wav with its transcript, title and validity, also when the computer's time zone differs from the device clock's.
+- Cancelling a recovered remote transcription sends one cancel request to the Model Host and waits for it to confirm.
+- Every deletion now records who asked for it: the owner, the app itself or a sync, the feature that asked (for example Move to Trash in the Library or a split), and the app version. Deletions from before this update show nothing there.
+- Every update of the library's structure leaves a dated record of the versions it moved between, the app version, and the backup made before it. An app built with an outdated database engine refuses to update the library and says how to fix it, and the app no longer starts or builds when one of its own packages is older than its source.
+- HiDock keeps a local record of each question asked in the chat, Explore and agents, and of what retrieval found for it, so later changes to search can be measured against real use. It is on by default, in `<data folder>\traces\retrieval-traces.db`. Query text is encrypted and erased after 30 days, traces are deleted after 90 days, with a 1 GiB cap. Settings > Assistant has "Record queries" and "Keep the text of my queries"; turning off the second erases stored query text. Nothing leaves the machine through query recording.
+- Operations and Notifications show the current transcription step, progress and elapsed time, with Stop, Retry and queue ordering actions. Recording dates and operation times are clearly separated, and View source opens the transcript or processing status.
+- Stopping transcription aborts provider requests at once, stops local workers at their next check (within half a second), keeps a cancellation reason, and discards unfinished transcript output. Stop after the transcript is saved reads Finish processing and keeps the transcript.
+- Audio checks decode WebM recordings that have no duration header before deciding whether they can be transcribed.
+- Library backfills read transcript text only when needed and yield between committed batches. Fresh search vectors use compact memory storage. Operations errors stay contained, including during development reloads.
+- Graph updates skip recordings already processed or excluded before loading transcript text, and yield between batches so the app stays responsive while transcriptions run.
+
+## 2026-11-22 | Find inside a transcript
+
+- Press Ctrl+F in an open source to find words and phrases in its transcript, speaker names, summary, and actions and decisions. Accents and case are ignored, every match is highlighted, and Enter or F3 moves between them. Click a match's time, or press Alt+Enter, to move the audio there without starting playback. Esc closes the bar. With no source open, Ctrl+F goes to the Library search.
+
 ## 2026-10-04 | The gamestation only helps, and gets out of the way
 
 - Paste files, screenshots, text and links into Library from anywhere outside an editor, or use the header's New menu to paste, import a file or start a note; videos keep their original file and link to extracted audio for transcription.
@@ -11,6 +40,18 @@ pairs with it, gives it the Hugging Face token and decides when it steps aside.
 
 ### Changes
 
+- **Incomplete transcripts are held for review.** HiDock checks how much detected speech
+  reached the text before creating summaries, titles, meeting matches or search context.
+  Recording details explain the problem and offer **Transcribe again** with a cost estimate;
+  the Library includes a **Transcription problems** filter and reasons on hover. Gemini gets
+  one automatic retry with smaller chunks. Existing transcripts are checked again while
+  their text and audio are kept. Acoustic voice segments are now retained for future timelines.
+- **Only text too sparse for its speech, or invalid text, loses what was built on it.**
+  Ratings based on such text are withdrawn; audio and owner ratings remain. Gap-only and
+  doubtful transcripts keep their summaries, titles, meeting links and search content, with
+  a note above the summary and the missing ranges shown for review.
+- **A missing Gemini key pauses transcription instead of failing the queue.** Operations
+  says why it waits, and queued requests run once a key is added.
 - **Record meetings on your PC.** New > Record opens a bar that stays across pages, with separate
   microphone and system levels. Stereo WebM keeps mic on the left and system audio on the right;
   saved and recovered recordings enter the Library through the file-import path.

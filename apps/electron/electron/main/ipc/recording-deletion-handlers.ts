@@ -49,6 +49,7 @@ import {
   queueDeviceDelete
 } from '../services/recording-deletion-service'
 import { reconcileWikiEligibility } from '../services/meeting-wiki'
+import { RENDERER_DELETION_FEATURES } from '../../../src/shared/deletion-origin'
 
 const RecordingIdSchema = z.string().min(1).max(200)
 const MarkPersonalSchema = z.object({ id: RecordingIdSchema, personal: z.boolean() })
@@ -65,7 +66,10 @@ const DeleteCascadeSchema = z.object({
   hard: z.boolean(),
   // spec-006/F17 T6 AR3-3(c) — escape hatch, optional so every prior call
   // shape (id, hard) keeps working unchanged.
-  skipGraphCleanup: z.boolean().optional()
+  skipGraphCleanup: z.boolean().optional(),
+  // v74: the renderer feature that asked. Required, and only known names, so
+  // every deletion row says where it came from.
+  requestedBy: z.enum(RENDERER_DELETION_FEATURES)
 })
 // F16/spec-003: manual per-row value-rating override. Validated + capture-scoped
 // (resolved from the recording id) — distinct from the unvalidated knowledge:update
@@ -166,8 +170,8 @@ export function registerRecordingDeletionHandlers(): void {
   // backstop if this pre-flight is ever bypassed).
   ipcMain.handle('recordings:deleteCascade', async (_, id: unknown, hard: unknown, opts: unknown) => {
     try {
-      const skipGraphCleanup = (opts as { skipGraphCleanup?: unknown } | undefined)?.skipGraphCleanup
-      const parsed = DeleteCascadeSchema.safeParse({ id, hard, skipGraphCleanup })
+      const { skipGraphCleanup, requestedBy } = (opts as { skipGraphCleanup?: unknown; requestedBy?: unknown } | undefined) ?? {}
+      const parsed = DeleteCascadeSchema.safeParse({ id, hard, skipGraphCleanup, requestedBy })
       if (!parsed.success) {
         return { success: false, error: parsed.error.issues[0]?.message || 'Invalid request' }
       }
@@ -187,6 +191,9 @@ export function registerRecordingDeletionHandlers(): void {
 
       return await deleteRecordingCascadeService(rec.id, {
         hard: parsed.data.hard,
+        // Every renderer call is the owner clicking something in the app.
+        origin: 'user',
+        requestedBy: parsed.data.requestedBy,
         ...(parsed.data.skipGraphCleanup ? { skipGraphCleanup: true } : {})
       })
     } catch (e) {

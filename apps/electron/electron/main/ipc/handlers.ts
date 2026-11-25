@@ -25,6 +25,7 @@ import { registerAudioCheckHandlers } from './audio-check-handlers'
 import { registerMaintenanceHandlers } from './maintenance-handlers'
 import { registerSpeakerSetupHandlers } from './speaker-setup-handlers'
 import { registerJensenHandlers } from './jensen-handlers'
+import { registerDeviceRecordingHandlers } from './device-recording-handlers'
 import { registerKnowledgeGraphHandlers } from './knowledge-graph-handlers'
 import { registerDevicePipelineHandlers } from './device-pipeline-handlers'
 import { registerBriefingHandlers } from './briefing-handlers'
@@ -92,6 +93,7 @@ export function registerIpcHandlers(): void {
   registerMaintenanceHandlers()
   registerSpeakerSetupHandlers()
   registerJensenHandlers()
+  registerDeviceRecordingHandlers()
   registerKnowledgeGraphHandlers()
   // Slice 4: DevicePipeline state/action IPC bridge. INERT — the live app still
   // uses the old device path; this only exposes get-state/actions + event bridge.

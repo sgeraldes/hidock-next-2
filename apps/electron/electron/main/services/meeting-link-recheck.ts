@@ -17,9 +17,9 @@
 import { getEventBus } from './event-bus'
 import { recheckTimeLinks } from './database'
 import {
-  autoLinkRecordingsToMeetings,
+  autoLinkRecordingsToMeetingsYielding,
   fillAttendeesFromOutlookTwins,
-  upsertContactsFromMeetings
+  upsertContactsFromMeetingsYielding
 } from './org-reconciler'
 import { runIdentityRules } from './identity-rules'
 
@@ -31,13 +31,13 @@ export function startMeetingLinkRecheck(): () => void {
   let timer: ReturnType<typeof setTimeout> | null = null
   const unsubscribe = getEventBus().onDomainEvent('calendar:synced', () => {
     if (timer) clearTimeout(timer)
-    timer = setTimeout(() => {
+    timer = setTimeout(async () => {
       timer = null
       try {
         // The contact pass reads every meeting; run it only when one gained attendees.
-        if (fillAttendeesFromOutlookTwins().filled > 0) upsertContactsFromMeetings()
+        if (fillAttendeesFromOutlookTwins().filled > 0) await upsertContactsFromMeetingsYielding()
         recheckTimeLinks()
-        autoLinkRecordingsToMeetings()
+        await autoLinkRecordingsToMeetingsYielding()
       } catch (error) {
         console.error('[MeetingLinks] Re-check after calendar sync failed:', error)
       }

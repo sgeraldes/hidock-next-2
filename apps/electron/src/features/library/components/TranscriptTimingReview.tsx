@@ -1,11 +1,16 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { readerTimingIssueLines } from '../utils/transcriptSegmentNavigation'
-import { TIMING_CLASSIFICATION_LABELS, type TimingAssessment, type TimingReviewAction, type TimingSegment, type TimingSummaryResult } from '@/shared/transcript-timing'
+import {
+  OVERLAP_SECONDS, TIMING_CLASSIFICATION_LABELS, TIMING_KIND_LABELS,
+  type TimingAssessment, type TimingFinding, type TimingSegment
+} from '@/shared/transcript-timing'
 import type { TranscriptContentUpdate } from './TranscriptViewer'
+import { formatTimestamp } from '../utils/formatTimestamp'
 
-const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`
-const preciseClock = (seconds: number) => `${clock(seconds)}${Math.round((seconds % 1) * 10) ? `.${Math.round((seconds % 1) * 10)}` : ''}`
+const preciseClock = (seconds: number) => {
+  const tenths = Math.round((seconds % 1) * 10) % 10
+  return tenths ? `${formatTimestamp(seconds)}.${tenths}` : formatTimestamp(seconds)
+}
 
 /** Fetched only for the open reader. Library verdict IPC stays small and text-free. */
 export function useTranscriptTimingReview(recordingId: string | undefined, revision: string | null | undefined) {
@@ -24,7 +29,7 @@ export function useTranscriptTimingReview(recordingId: string | undefined, revis
       if (cancelled) return
       if (result.success) setAssessment(result.data)
       else setFailure(result.error.message)
-    }).catch(err => { if (!cancelled) setFailure(err instanceof Error ? err.message : 'Could not check audio') })
+    }).catch(err => { if (!cancelled) setFailure(err instanceof Error ? err.message : 'Could not check the audio') })
     return () => { cancelled = true }
   }, [recordingId, revision, refresh])
   useEffect(() => { setSelected(null) }, [recordingId])
@@ -35,88 +40,168 @@ type ReviewState = ReturnType<typeof useTranscriptTimingReview>
 interface Props {
   recordingId: string
   segments?: TimingSegment[]
+  /** Kept for the reader's past-the-end mark; the findings come from the main process. */
   pastAudioEnd?: boolean
   review: ReviewState
   onJump: (index: number) => void
   onUpdated: (update: TranscriptContentUpdate) => void
-  onSummaryUpdated: (result: TimingSummaryResult) => void
 }
 
-export function TranscriptTimingReview({ recordingId, segments = [], pastAudioEnd, review, onJump, onUpdated, onSummaryUpdated }: Props) {
-  const flagged = useMemo(() => readerTimingIssueLines(segments.map(s => ({ ...s, end: s.end ?? null })), pastAudioEnd)
-    .flatMap((codes, index) => codes.length ? [index] : []), [segments, pastAudioEnd])
+function chipLabel(finding: TimingFinding): string {
+  const lines = finding.lines.length
+  return `${TIMING_KIND_LABELS[finding.kind]} · ${formatTimestamp(finding.claimedStart)}${lines > 1 ? ` · ${lines} lines` : ''}`
+}
+
+function lineRange(from: number, to: number): string {
+  return from === to ? `line ${from + 1}` : `lines ${from + 1} to ${to + 1}`
+}
+
+export function TranscriptTimingReview({ recordingId, segments = [], review, onJump, onUpdated }: Props) {
   const { assessment, busy, failure } = review
-  const hidden = assessment?.hiddenIndices ?? segments.flatMap((s, i) => s.timingHidden ? [i] : [])
-  const moved = segments.flatMap((s, i) => s.timingOriginalStart !== undefined ? [i] : [])
-  const selected = review.selected !== null && flagged.includes(review.selected) ? review.selected : flagged[0]
-  const finding = assessment?.findings.find(f => f.index === selected)
+  const [confirming, setConfirming] = useState<string | null>(null)
+  const [lowConfidence, setLowConfidence] = useState<string | null>(null)
+  // Chosen by id: a shifted section and a duplicate can start on the same line.
+  const [chosenId, setChosenId] = useState<string | null>(null)
+  useEffect(() => { setConfirming(null); setLowConfidence(null) }, [assessment?.fingerprint])
+  const findings = assessment?.findings ?? []
+  const hidden = assessment?.hiddenIndices ?? []
+  const fixed = assessment?.fixedRanges ?? []
+  const sections = assessment?.sectionRuns ?? []
+  const chosen = findings.find(f => f.id === chosenId)
+  // A jump from elsewhere (the integrity panel's tags) selects the finding on that line.
+  const current = (chosen && (review.selected === null || chosen.from === review.selected || chosen.lines.includes(review.selected) || !!chosen.originals?.includes(review.selected)) ? chosen : undefined)
+    ?? findings.find(f => f.from === review.selected) ?? findings.find(f => f.lines.includes(review.selected ?? -1)) ?? findings[0]
   const jump = (index: number) => { review.setSelected(index); onJump(index) }
+  const choose = (finding: TimingFinding) => { setChosenId(finding.id); jump(finding.from) }
   const step = (direction: number) => {
-    if (!flagged.length) return
-    const position = flagged.indexOf(selected)
-    jump(flagged[(position + direction + flagged.length) % flagged.length])
+    if (!findings.length) return
+    const position = current ? findings.indexOf(current) : -1
+    choose(findings[(position + direction + findings.length) % findings.length])
   }
-  const apply = async (index: number, action: TimingReviewAction) => {
-    if (!assessment || busy) return
+
+  const save = async (call: () => Promise<{ success: true; data: TranscriptContentUpdate } | { success: false; error: { message: string; details?: unknown } }>, onLowConfidence?: string) => {
+    if (busy) return
     review.setBusy(true)
     review.setFailure(null)
     try {
-      const result = await window.electronAPI.transcripts.reviewTiming({ recordingId, fingerprint: assessment.fingerprint, index, action })
-      if (!result.success) review.setFailure(result.error.message)
-      else { onUpdated(result.data); review.reload() }
-    } catch (err) { review.setFailure(err instanceof Error ? err.message : 'Could not save timing review') }
-    finally { review.setBusy(false) }
+      const result = await call()
+      if (result.success) {
+        onUpdated(result.data)
+        review.reload()
+        return
+      }
+      const details = result.error.details as { lowConfidence?: boolean } | undefined
+      if (onLowConfidence && details?.lowConfidence) setLowConfidence(onLowConfidence)
+      review.setFailure(result.error.message)
+    } catch (err) {
+      review.setFailure(err instanceof Error ? err.message : 'Could not save the timing review')
+    } finally {
+      review.setBusy(false)
+    }
   }
-  const regenerate = async () => {
-    review.setBusy(true)
-    review.setFailure(null)
-    try {
-      const result = await window.electronAPI.transcripts.regenerateSummary({ recordingId })
-      if (!result.success) review.setFailure(result.error.message)
-      else onSummaryUpdated(result.data)
-    } catch (err) { review.setFailure(err instanceof Error ? err.message : 'Could not regenerate summary') }
-    finally { review.setBusy(false) }
+  const act = (request: Omit<Parameters<typeof window.electronAPI.transcripts.reviewTiming>[0], 'recordingId' | 'fingerprint'>, onLowConfidence?: string) => {
+    if (!assessment) return
+    void save(() => window.electronAPI.transcripts.reviewTiming({ recordingId, fingerprint: assessment.fingerprint, ...request }), onLowConfidence)
   }
-  if (!flagged.length && !hidden.length && !moved.length && !assessment?.reviewed) return null
+  const retranscribe = (finding: TimingFinding) => {
+    if (!assessment) return
+    setConfirming(null)
+    void save(() => window.electronAPI.transcripts.retranscribeSection({ recordingId, fingerprint: assessment.fingerprint, findingId: finding.id }))
+  }
+
+  if (!assessment) {
+    return <p role="status" className="mb-3 text-xs text-muted-foreground" data-testid="transcript-timing-review">{failure ?? 'Checking the audio for these lines…'}</p>
+  }
+  if (!findings.length && !hidden.length && !fixed.length && !sections.length) return null
+
+  const offerSection = current && current.kind !== 'duplicate' && current.windowStart !== null && current.windowEnd !== null &&
+    (current.fix?.offerSection === true || (lowConfidence === current.id && (current.fix?.displacement ?? Infinity) >= OVERLAP_SECONDS))
   return (
     <div className="mb-3 space-y-2 rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs" data-testid="transcript-timing-review">
-      {flagged.length > 0 && <>
+      {findings.length > 0 && <>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="font-medium">Review flagged lines</span>
-          <Button size="sm" variant="ghost" disabled={busy} onClick={() => step(-1)}>Previous flagged line</Button>
-          <Button size="sm" variant="ghost" disabled={busy} onClick={() => step(1)}>Next flagged line</Button>
-          <span>{flagged.indexOf(selected) + 1} / {flagged.length}</span>
+          <span className="font-medium">{findings.length === 1 ? 'One timing problem' : `${findings.length} timing problems`}</span>
+          {findings.length > 1 && <>
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => step(-1)}>Previous</Button>
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => step(1)}>Next</Button>
+          </>}
         </div>
-        <div className="flex max-h-20 flex-wrap gap-1 overflow-y-auto" aria-label="Flagged transcript lines">
-          {flagged.map(index => <button key={index} type="button" onClick={() => jump(index)}
-            aria-pressed={selected === index} aria-label={`Jump to flagged line ${index + 1} at ${clock(segments[index].start)}`}
-            className="rounded border px-2 py-1 hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring">
-            {clock(segments[index].start)} · line {index + 1}
-          </button>)}
+        <div className="flex max-h-24 flex-wrap gap-1 overflow-y-auto" aria-label="Go to a timing problem">
+          {findings.map(finding => (
+            <button key={finding.id} type="button" onClick={() => choose(finding)} data-finding={finding.id}
+              aria-pressed={current?.id === finding.id}
+              className="rounded border px-2 py-1 hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring aria-pressed:bg-accent">
+              {chipLabel(finding)}
+            </button>
+          ))}
         </div>
-        {finding && <div className="space-y-1" data-testid="timing-outlier-classification">
-          <p className="font-medium">{clock(finding.claimedStart)} · {TIMING_CLASSIFICATION_LABELS[finding.classification]}</p>
-          <p>{finding.detail}</p>
+        {current && <div className="space-y-1" data-testid="timing-outlier-classification" data-kind={current.kind}>
+          <p className="font-medium">
+            {TIMING_KIND_LABELS[current.kind]} at {formatTimestamp(current.claimedStart)}, {lineRange(current.from, current.to)}
+            {current.kind !== 'duplicate' && <> · {TIMING_CLASSIFICATION_LABELS[current.classification]}</>}
+          </p>
+          <p>{current.detail}</p>
           <div className="flex flex-wrap gap-2">
-            {finding.classification === 'out_of_place' && finding.suggestedStart !== null &&
-              <Button size="sm" variant="outline" disabled={busy} onClick={() => void apply(finding.index, 'move')}>Move to {preciseClock(finding.suggestedStart)}</Button>}
-            <Button size="sm" variant="outline" disabled={busy || !assessment} onClick={() => void apply(finding.index, 'hide')}>Hide this line</Button>
+            {current.kind === 'duplicate' ? <>
+              <Button size="sm" variant="outline" disabled={busy} onClick={() => act({ action: 'hide', findingId: current.id })}>
+                Hide the copy
+              </Button>
+              {current.originals && <Button size="sm" variant="ghost" disabled={busy} onClick={() => jump(current.originals![0])}>Go to the first copy</Button>}
+            </> : <>
+              {current.fix?.ok && current.fix.firstStart !== null && lowConfidence !== current.id && (
+                <Button size="sm" variant="outline" disabled={busy}
+                  onClick={() => act({ action: 'fix_times', findingId: current.id }, current.id)}>
+                  Fix times (from {preciseClock(current.fix.firstStart)})
+                </Button>
+              )}
+              {current.classification === 'probable_hallucination' && (
+                <Button size="sm" variant="outline" disabled={busy} onClick={() => act({ action: 'hide', findingId: current.id })}>
+                  Hide {current.lines.length === 1 ? 'this line' : 'these lines'}
+                </Button>
+              )}
+              {offerSection && confirming !== current.id && (
+                <Button size="sm" variant="outline" disabled={busy} onClick={() => setConfirming(current.id)}>
+                  Transcribe this section again
+                </Button>
+              )}
+            </>}
           </div>
+          {current && current.kind !== 'duplicate' && !current.fix?.ok && current.fix?.reason && <p className="text-muted-foreground">{current.fix.reason}</p>}
+          {offerSection && confirming === current.id && current.windowStart !== null && current.windowEnd !== null && (
+            <div role="alertdialog" aria-label="Transcribe this section again" className="space-y-1 rounded border border-border bg-background px-2 py-1.5" data-testid="section-retranscribe-confirm">
+              <p>
+                This sends {Math.round(current.windowEnd - current.windowStart)} s of audio, from {formatTimestamp(current.windowStart)} to {formatTimestamp(current.windowEnd)}, to Gemini to transcribe again.
+                The provider may charge for it. The current lines stay in the transcript, hidden, and Undo brings them back.
+              </p>
+              <div className="flex gap-2">
+                <Button size="sm" disabled={busy} onClick={() => retranscribe(current)}>Transcribe</Button>
+                <Button size="sm" variant="ghost" disabled={busy} onClick={() => setConfirming(null)}>Cancel</Button>
+              </div>
+            </div>
+          )}
         </div>}
-        {!assessment && <p role="status">{failure ?? 'Checking audio evidence…'}</p>}
       </>}
+      {fixed.map(range => (
+        <div key={`fixed-${range.from}`} className="flex flex-wrap items-center gap-2">
+          <span>Times fixed on {lineRange(range.from, range.to)}.</span>
+          <Button size="sm" variant="ghost" disabled={busy} onClick={() => jump(range.from)}>Go there</Button>
+          <Button size="sm" variant="ghost" disabled={busy} onClick={() => act({ action: 'undo_fix', range })}>Undo</Button>
+        </div>
+      ))}
+      {sections.map(run => (
+        <div key={run.runId} className="flex flex-wrap items-center gap-2">
+          <span>Section transcribed again: {lineRange(run.from, run.to)}.</span>
+          <Button size="sm" variant="ghost" disabled={busy} onClick={() => jump(run.from)}>Go there</Button>
+          <Button size="sm" variant="ghost" disabled={busy} onClick={() => act({ action: 'undo_section', runId: run.runId })}>Undo</Button>
+        </div>
+      ))}
       {hidden.length > 0 && <details><summary className="cursor-pointer">Hidden lines ({hidden.length})</summary>
         {hidden.map(index => <div key={index} className="mt-2 space-y-1">
-          <p>{clock(segments[index]?.start ?? 0)} · {segments[index]?.text}</p>
-          <Button size="sm" variant="outline" disabled={busy || !assessment} onClick={() => void apply(index, 'show')}>Show line {index + 1} again</Button>
+          <p>{formatTimestamp(segments[index]?.start ?? 0)} · {segments[index]?.text}</p>
+          <Button size="sm" variant="outline" disabled={busy} onClick={() => act({ action: 'show', indices: [index] })}>Show line {index + 1} again</Button>
         </div>)}
       </details>}
-      {moved.map(index => <Button key={index} size="sm" variant="ghost" disabled={busy || !assessment} onClick={() => void apply(index, 'undo_move')}>Undo move of line {index + 1}</Button>)}
-      {(assessment?.reviewed || segments.some(s => s.timingReviewed)) && <div className="flex flex-wrap items-center gap-2">
-        <span>The summary and actions have not been regenerated from these edits.</span>
-        <Button size="sm" variant="outline" disabled={busy} onClick={() => void regenerate()}>Regenerate summary</Button>
-      </div>}
-      {failure && assessment && <p role="alert" className="text-destructive">{failure}</p>}
+      {failure && <p role="alert" className="text-destructive">{failure}</p>}
     </div>
   )
 }

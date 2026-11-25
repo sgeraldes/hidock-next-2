@@ -113,7 +113,7 @@ export interface EvaluationWarningsUpdatedEvent extends DomainEvent {
 /** Transcript verdicts changed: owner readers refresh only these recordings. */
 export interface TranscriptVerdictsUpdatedEvent extends DomainEvent {
   type: 'transcript:verdicts-updated'
-  payload: { recordingIds: string[] }
+  payload: { recordingIds: string[]; metadataChangedIds?: string[] }
 }
 
 /** The voice backfill finished one recording (voice-backfill.ts): Settings refreshes its progress. */
@@ -193,7 +193,7 @@ class DomainEventBus extends EventEmitter {
   /**
    * Set the main window for broadcasting events to renderer
    */
-  setMainWindow(window: BrowserWindow): void {
+  setMainWindow(window: BrowserWindow | null): void {
     this.mainWindow = window
   }
 
@@ -282,6 +282,6 @@ export function getEventBus(): DomainEventBus {
   return eventBusInstance
 }
 
-export function setMainWindowForEventBus(window: BrowserWindow): void {
+export function setMainWindowForEventBus(window: BrowserWindow | null): void {
   getEventBus().setMainWindow(window)
 }

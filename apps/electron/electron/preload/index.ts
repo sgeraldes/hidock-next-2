@@ -1,7 +1,17 @@
-import type { TimingAssessment, TimingReviewAction, TimingSegment, TimingSummaryResult } from '../../src/shared/transcript-timing'
+import type { TimingAssessment, TimingReviewAction, TimingSegment } from '../../src/shared/transcript-timing'
 import type { RetranscribeResult } from '../../src/shared/retranscribe'
+import type { RendererDeletionFeature } from '../../src/shared/deletion-origin'
+import type { RecordingAudioMetadata } from '../../src/shared/audio-header-metadata'
+import type { DeviceAudioStartOptions, DeviceAudioDiagnosticsState, DeviceAudioTrackExport, DeviceRecordingCapabilities } from '../../src/shared/device-audio'
+import type { DeviceRecordingMarkersAPI } from '../../src/shared/device-recording-markers'
+import type { DeviceScratchAppend, DeviceScratchUploadDescriptor, DeviceScratchUploadResult, DeviceScratchWriteAssurance } from '../../src/shared/device-scratch-upload'
+import type { DeviceRecordingRestoreAppend, DeviceRecordingRestoreAssurance, DeviceRecordingRestoreResult } from '../../src/shared/device-recording-restore'
+import type { DeviceNativeRecordingStatus, NativeRecordingRequest, NativeRecordingDispatch } from '../../src/shared/device-native-recording'
+import type { CustomRecordingProfile, CustomRecordingProfileResponse, CustomRecordingFormat, CustomRecordingFormatResponse, CustomMarkerRules, CustomMarkerRulesResponse } from '@hidock/jensen-protocol'
+import type { FirmwareUpdatePreflight } from '@hidock/jensen-protocol'
 import type { ReferenceLabelSet, ReferenceLabelItem, LabelItemArgs, SaveLabelArgs } from '../../src/shared/decision-labels'
 import type { TranscriptVerdicts } from '../../src/shared/transcript-verdicts'
+import type { EngineAvailability, TranscriptionAttemptView } from '../../src/shared/transcription-engines'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
   ConnectorSummary,
@@ -23,6 +33,8 @@ import type { DecisionConfig, ModelOption, PipelineSettingsState, SaveStepArgs, 
 export type BrainId =
   | 'gemini-api'
   | 'ollama'
+  | 'model-host-embed'
+  | 'model-host-generate'
   | 'local-onnx-embed'
   | 'claude-code'
   | 'codex'
@@ -30,7 +42,7 @@ export type BrainId =
   | 'kiro'
   | 'openai-compatible'
 export type BrainCapability = 'generate' | 'chat' | 'analyzeAudio' | 'embed' | 'agentic'
-export type BrainTask = 'transcribeAnalyze' | 'chat' | 'outputs' | 'handover' | 'embed' | 'suggestions'
+export type BrainTask = 'transcribeAnalyze' | 'chat' | 'outputs' | 'handover' | 'embed' | 'suggestions' | 'summary'
 export interface BrainAuthStatus {
   configured: boolean
   method: 'api-key' | 'cli-login' | 'oauth' | 'none'
@@ -43,6 +55,8 @@ export interface BrainListItem {
   enabled: boolean
   isDefault: boolean
   auth: BrainAuthStatus
+  /** Resting after out-of-credit or out-of-quota until this time; absent when available. */
+  unavailable?: { until: string; reason: string }
 }
 
 /**
@@ -336,6 +350,7 @@ interface MergeJournalEntry {
 
 /** Snapshot of the main-process transcription queue processor (dock reflects this). */
 export interface TranscriptionQueueState {
+  pauseReason?: 'no_gemini_key' | null
   paused: boolean
   isProcessing: boolean
   processingId: string | null
@@ -372,7 +387,41 @@ export interface TruncatedRecoveryCounts {
   deviceListKnown?: boolean
 }
 
+export interface SemanticIndexStatus {
+  hostReady: boolean | null
+  state: 'idle' | 'running' | 'pausing' | 'paused' | 'cancelling' | 'cancelled' | 'completed' | 'failed' | 'interrupted'
+  runId?: string
+  provider?: string
+  spaceId?: string
+  hostUrl?: string
+  completedRecordings: number
+  indexedChunks: number
+  batches: number
+  maxRecordings: number
+  maxBatches: number
+  error?: string
+  activePartitionRows: number
+  otherPartitionRows: number
+}
+
+/** Lines saved by the timing review, checked again. */
+export interface TimingReviewSaved {
+  fullText: string
+  segments: TimingSegment[]
+  wordCount: number
+  integrity?: { status: 'ok' | 'suspect' | 'broken'; json: string }
+}
+
 export interface ElectronAPI {
+  semanticIndex: {
+    status: () => Promise<SemanticIndexStatus>
+    start: (request: { maxRecordings: number; maxBatches: number }) => Promise<SemanticIndexStatus>
+    pause: (request: { runId: string }) => Promise<SemanticIndexStatus>
+    resume: (request: { runId: string }) => Promise<SemanticIndexStatus>
+    cancel: (request: { runId: string }) => Promise<SemanticIndexStatus>
+  }
+  traces: { stats: () => Promise<Result<{ consumers: { chat: number; explore: number; brain: number }; dropped_events: number; write_errors: number; file_bytes: number; pending_erase: boolean }>> }
+
   /**
    * Features that are off for this whole run (disabled when the app started).
    * Their channels reject until the next launch, so the renderer does not call
@@ -526,7 +575,8 @@ export interface ElectronAPI {
     // path; only pass it after an honest graphUnavailable failure and an
     // explicit second user action.
     queueDeviceDelete: (args: { deviceFilename: string; journalId: string }) => Promise<{ success: boolean; deletedNow?: boolean; queued?: boolean; error?: string }>
-    deleteCascade: (id: string, hard: boolean, opts?: { skipGraphCleanup?: boolean }) => Promise<{
+    // requestedBy (v74): the feature that asked, recorded with the deletion.
+    deleteCascade: (id: string, hard: boolean, opts: { requestedBy: RendererDeletionFeature; skipGraphCleanup?: boolean }) => Promise<{
       success: boolean
       mode?: 'soft' | 'hard'
       removed?: {
@@ -627,7 +677,7 @@ export interface ElectronAPI {
     // Transcription
     transcribe: (recordingId: string) => Promise<void>
     addToQueue: (recordingId: string, priority?: boolean) => Promise<string | false | { success: false; error: string }>
-    reprocessWith: (recordingId: string, provider: 'gemini' | 'local-asr' | 'vibevoice') => Promise<{ success: boolean; queueItemId?: string; error?: string }>
+    reprocessWith: (recordingId: string, provider: 'gemini' | 'local-asr' | 'vibevoice' | 'muse-voice' | 'mai-transcribe-2') => Promise<{ success: boolean; queueItemId?: string; error?: string }>
     reDiarize: (recordingId: string) => Promise<{ success: boolean; queueItemId?: string; cleared?: { clearedLabelBindings: number; clearedMentions: number; clearedMarkers: number }; error?: string }>
     repairContradictedLinks: (dryRun?: boolean) => Promise<{ success: boolean; cleared?: Array<{ recordingId: string; filename: string; meetingId: string; correlationMethod: string | null; correlationConfidence: number | null }>; error?: string }>
     // Meeting-timeline data (v39): windowed sentiment + action/decision markers.
@@ -652,6 +702,8 @@ export interface ElectronAPI {
     processQueue: () => Promise<boolean>
     getTranscriptionStatus: () => Promise<{ isProcessing: boolean; pendingCount: number; processingCount: number }>
     getTranscriptionQueue: (actionableOnly?: boolean) => Promise<any[]>
+    resumeTranscription: (recordingId: string) => Promise<{ success: boolean; error?: string }>
+    restartLocalStage: (recordingId: string) => Promise<{ success: boolean; error?: string }>
     cancelTranscription: (recordingId: string) => Promise<{ success: boolean }>
     cancelAllTranscriptions: () => Promise<{ success: boolean; count: number }>
     updateQueueItem: (id: string, status: string, errorMessage?: string) => Promise<boolean>
@@ -662,10 +714,30 @@ export interface ElectronAPI {
     resumeTranscriptionQueue: () => Promise<TranscriptionQueueState>
     reorderTranscription: (recordingId: string, direction: 'up' | 'down') => Promise<TranscriptionQueueState>
     getTranscriptionQueueState: () => Promise<TranscriptionQueueState>
+    /** The engine chain from Settings and whether each engine could run now. */
+    getTranscriptionEngineAvailability: () => Promise<EngineAvailability[]>
+    /** Every engine attempt of one recording, oldest first. */
+    getTranscriptionAttempts: (recordingId: string) => Promise<TranscriptionAttemptView[]>
+    /** Import a receipt for one authenticated, already-completed remote ASR job. This call never creates a job. */
+    importCompletedRemoteJobReceipt: (receipt: {
+      localRecordingId: string
+      expectedRemoteRecordingId: string
+      base: string
+      jobId: string
+      idempotencyKey: string
+      sourceAudioHash: string
+      sourceTrackId: string
+      sourceChannelIndex: 1
+      transformVersion: 'channel-pcm16-16k-v1'
+    }) => Promise<{ success: boolean; recordingId?: string; hostJobId?: string; audioHash?: string; bytes?: number; error?: string }>
   }
 
   // Database - Transcripts
   transcripts: {
+    /** Owner timeline evidence, including held transcripts. Anonymous voices only. */
+    getDiarizedSegments: (request: { recordingId: string }) => Promise<Result<Array<{
+      recording_id: string; run_id: string; segment_index: number; start: number; end: number; voice_label: string
+    }>>>
     getByRecordingId: (recordingId: string) => Promise<any>
     getByRecordingIds: (recordingIds: string[]) => Promise<Record<string, any>>
     /**
@@ -688,10 +760,12 @@ export interface ElectronAPI {
     getSpeakerMap: (request: { recordingId: string }) => Promise<Result<Array<{ speaker_label: string; contact_id: string; name: string }>>>
     unassignSpeaker: (request: { recordingId: string; speakerLabel: string }) => Promise<Result<void>>
     getTiming: (request: { recordingId: string }) => Promise<Result<TimingAssessment>>
-    reviewTiming: (request: { recordingId: string; fingerprint: string; index: number; action: TimingReviewAction }) => Promise<Result<{
-      fullText: string; segments: TimingSegment[]; wordCount: number; integrity?: { status: 'ok' | 'suspect' | 'broken'; json: string }
-    }>>
-    regenerateSummary: (request: { recordingId: string }) => Promise<Result<TimingSummaryResult>>
+    reviewTiming: (request: {
+      recordingId: string; fingerprint: string; action: TimingReviewAction
+      findingId?: string; indices?: number[]; range?: { from: number; to: number }; runId?: string
+    }) => Promise<Result<TimingReviewSaved>>
+    /** Sends only that section's audio to the transcription provider; the reader asks first. */
+    retranscribeSection: (request: { recordingId: string; fingerprint: string; findingId: string }) => Promise<Result<TimingReviewSaved>>
     updateContent: (request: {
       recordingId: string
       expectedFullText: string
@@ -708,6 +782,8 @@ export interface ElectronAPI {
     }>>
     reindex: (request: { recordingId: string }) => Promise<Result<{ indexedChunks: number }>>
     updateExtractedItem: (request: { recordingId: string; kind: 'action' | 'decision'; index: number; content: string }) => Promise<Result<{ kind: 'action' | 'decision'; index: number; content: string }>>
+    /** Write the missing summary, title and meeting choice now (the owner's button). */
+    retrySummary: (request: { recordingId: string }) => Promise<Result<{ written: boolean }>>
     getProcessingRuns: (request: { recordingId: string }) => Promise<Result<Array<{
       id: string
       recording_id: string
@@ -820,6 +896,10 @@ export interface ElectronAPI {
    * to diarize here is made in the main process.
    */
   modelHost: {
+    prepareRole: (request: { role: 'semantic' | 'realtime' | 'generation' }) => Promise<{ success: boolean; error?: string }>
+    prepareAsr: (request: { model: 'CohereLabs/cohere-transcribe-03-2026' | 'microsoft/VibeVoice-ASR' | 'nvidia/parakeet-tdt-0.6b-v3' | 'Qwen/Qwen3-ASR-0.6B' | 'moondream/parakeet-ultra' | 'Qwen/Qwen3-ASR-1.7B' | 'nvidia/nemotron-3.5-asr-streaming-0.6b' | 'OpenMOSS-Team/MOSS-Transcribe-Diarize' | 'Edge0/Audio8-ASR-Infinite' }) => Promise<{ success: boolean; error?: string }>
+    testAudio: (draft?: { provider: string }) => Promise<{ success: boolean; error?: string; route?: { provider: string; model: string; execution: string; host?: string; lastValidatedDevice?: string } }>
+    telemetry: () => Promise<import('../../src/shared/pipeline-telemetry').PipelineTelemetry>
     /** Ask an address now. GPU and acceleration are absent until this machine is paired. */
     check: (request: { url: string }) => Promise<{
       success: boolean
@@ -976,13 +1056,14 @@ export interface ElectronAPI {
     openFile: (filePath: string) => Promise<{ success: boolean; error?: string }>
     revealInFolder: (filePath: string) => Promise<{ success: boolean; error?: string }>
     readRecording: (filePath: string) => Promise<{ success: boolean; data?: string; error?: string }>
+    getAudioMetadata: (recordingId: string) => Promise<{ success: boolean; data?: RecordingAudioMetadata; error?: string }>
     deleteRecording: (filePath: string) => Promise<boolean>
     saveRecording: (filename: string, data: number[], recordingDateIso?: string) => Promise<string>
   }
 
   // Waveform peak cache (disk-backed) — compute peaks once, load instantly thereafter
   waveform: {
-    getCache: (recordingId: string, fileSize?: number) => Promise<{
+    getCache: (recordingId: string, fileSize?: number, requestId?: string) => Promise<{
       version: number
       recordingId: string
       peaks: number[]
@@ -990,11 +1071,13 @@ export interface ElectronAPI {
       sampleCount: number
       duration: number
       fileSize: number
+      sourceFingerprint?: string
       createdAt: string
       /** Drawn from the loudness envelope; the player replaces it with the decoded one. */
       coarse?: boolean
     } | null>
     setCache: (recordingId: string, peaks: number[], duration?: number, fileSize?: number, channels?: number[][]) => Promise<boolean>
+    cancelGeneration: (requestId: string) => Promise<boolean>
     clearCache: (recordingId: string) => Promise<boolean>
   }
 
@@ -1180,6 +1263,11 @@ export interface ElectronAPI {
   // Quality Assessment API
   quality: {
     get: (recordingId: string) => Promise<any>
+    repairContext: (recordingId: string) => Promise<any>
+    confirmParticipation: (recordingId: string, count: number) => Promise<any>
+    repairAdvice: (recordingId: string, requestId: string) => Promise<any>
+    repairSample: (recordingId: string, sampleId: string, fingerprint: string) => Promise<any>
+    confirmRepairSample: (recordingId: string, sampleId: string, fingerprint: string, role: 'owner' | 'other' | 'overlap' | 'unsure') => Promise<any>
     set: (recordingId: string, quality: 'high' | 'medium' | 'low', reason?: string, assessedBy?: string) => Promise<any>
     autoAssess: (recordingId: string) => Promise<any>
     getByQuality: (quality: 'high' | 'medium' | 'low') => Promise<any>
@@ -1408,6 +1496,7 @@ export interface ElectronAPI {
     isP1Device: () => Promise<boolean>
     // Device info & settings
     getDeviceInfo: () => Promise<any>
+    getTime: () => Promise<{ time: string } | null>
     getCardInfo: () => Promise<any>
     getFileCount: () => Promise<{ count: number } | null>
     getSettings: () => Promise<any>
@@ -1415,16 +1504,68 @@ export interface ElectronAPI {
     setAutoRecord: (enabled: boolean) => Promise<any>
     // File operations
     listFiles: () => Promise<any[] | null>
+    listFilesDetailed: () => Promise<import('@hidock/jensen-protocol').FileListingResult>
+    listFilesPage: (firstIndex: number, count: number) => Promise<import('@hidock/jensen-protocol').FileListingPageResult>
+    readFilePrefix: (filename: string, count: number) => Promise<Uint8Array>
+    readFileRange: (filename: string, offset: number, count: number) => Promise<Uint8Array>
+    startFileSystem: () => Promise<import('../../src/shared/device-file-system').DeviceFileSystemStatus>
+    mountDeviceDrive: () => Promise<{ mounted: boolean; drive: string | null; readOnly: true; windowsFileLimitBytes: number | null }>
+    unmountDeviceDrive: () => Promise<{ mounted: boolean; drive: string | null; readOnly: true; windowsFileLimitBytes: number | null }>
+    getDeviceDriveStatus: () => Promise<{ mounted: boolean; drive: string | null; readOnly: true; windowsFileLimitBytes: number | null }>
+    stopFileSystem: () => Promise<import('../../src/shared/device-file-system').DeviceFileSystemStatus>
+    getFileSystemStatus: () => Promise<import('../../src/shared/device-file-system').DeviceFileSystemStatus>
+    getFileSystemDiagnostics: () => Promise<Array<{ method: string; pathKind: 'root' | 'capability' | 'other'; status: number }>>
+    getRecordingBackupPreflight: () => Promise<import('../../src/shared/device-recording-backup-preflight').DeviceRecordingBackupPreflightSummary>
+    getProtocolDiagnostics: () => Promise<import('@hidock/jensen-protocol').ProtocolDiagnostics>
+    getValidationMemory: () => Promise<{ main: { rss: number; heapTotal: number; heapUsed: number; external: number; arrayBuffers?: number }; processes: Array<{ pid: number; type: string; workingSetKB: number; privateKB: number }> } | null>
+    getFirmwareConsoleStatus: (request: import('@hidock/jensen-protocol').FirmwareConsoleRequest) => Promise<import('@hidock/jensen-protocol').FirmwareConsoleStatus | null>
+    beginOwnedScratchUpload: (descriptor: DeviceScratchUploadDescriptor, assurance: DeviceScratchWriteAssurance) => Promise<DeviceScratchUploadResult>
+    appendOwnedScratchUpload: (id: string, request: DeviceScratchAppend, assurance: DeviceScratchWriteAssurance) => Promise<DeviceScratchUploadResult>
+    commitOwnedScratchUpload: (id: string, assurance: DeviceScratchWriteAssurance) => Promise<DeviceScratchUploadResult>
+    abortOwnedScratchUpload: (id: string, assurance: DeviceScratchWriteAssurance) => Promise<DeviceScratchUploadResult>
+    getOwnedScratchUploadStatus: (id: string) => Promise<DeviceScratchUploadResult>
+    beginOwnedRecordingRestore: (recordingId: string, assurance: DeviceRecordingRestoreAssurance) => Promise<DeviceRecordingRestoreResult>
+    appendOwnedRecordingRestore: (id: string, request: DeviceRecordingRestoreAppend, assurance: DeviceRecordingRestoreAssurance) => Promise<DeviceRecordingRestoreResult>
+    verifyOwnedRecordingRestoreStep: (id: string, assurance: DeviceRecordingRestoreAssurance) => Promise<DeviceRecordingRestoreResult>
+    recoverOwnedRecordingRestoreStep: (id: string, assurance: DeviceRecordingRestoreAssurance) => Promise<DeviceRecordingRestoreResult>
+    abortOwnedRecordingRestore: (id: string, assurance: DeviceRecordingRestoreAssurance) => Promise<DeviceRecordingRestoreResult>
+    getOwnedRecordingRestoreStatus: (id: string) => Promise<DeviceRecordingRestoreResult>
+    verifyOwnedRecordingRestoreReadback: (id: string) => Promise<DeviceRecordingRestoreResult>
+    downloadResumableToLibrary: (filename: string, fileSize: number) => Promise<{ success: boolean; filePath?: string; error?: string }>
     downloadFile: (filename: string, fileSize: number) => Promise<boolean | null>
+    downloadToLibrary: (filename: string, fileSize: number) => Promise<{ success: boolean; filePath?: string; error?: string }>
     cancelDownload: () => Promise<void>
     deleteFile: (filename: string) => Promise<any>
     formatCard: () => Promise<any>
     // Realtime
     getRealtimeSettings: () => Promise<any>
-    startRealtime: () => Promise<any>
+    startRealtime: (options?: DeviceAudioStartOptions) => Promise<any>
+    getAudioDiagnostics: () => Promise<DeviceAudioDiagnosticsState>
+    onAudioDiagnostics: (callback: (state: DeviceAudioDiagnosticsState) => void) => () => void
+    getRecordingCapabilities: () => Promise<DeviceRecordingCapabilities>
+    getFirmwareUpdatePreflight: () => Promise<Omit<FirmwareUpdatePreflight, 'serialNumber'> | null>
+    prepareFirmwareInstall: (target?: 'hardened' | 'stock-forward') => Promise<unknown>
+    getFirmwareInstallAttempts: () => Promise<unknown>
+    executeFirmwareInstall: (id: string, sha256: string) => Promise<unknown>
+    observeFirmwareInstall: (id: string) => Promise<unknown>
+    getNativeRecordingStatus: () => Promise<DeviceNativeRecordingStatus>
+    startNativeVerificationRecording: (request: NativeRecordingRequest) => Promise<NativeRecordingDispatch>
+    protectNativeVerificationRecording: (expectedRecording: string) => Promise<{ manualOnly: true }>
+    addNativeMarker: (request: NativeRecordingRequest) => Promise<NativeRecordingDispatch>
+    toggleNativeRecording: (request: NativeRecordingRequest) => Promise<NativeRecordingDispatch>
+    getRecordingProfile: () => Promise<{ status: 'unsupported'; reason: string }>
+    getCustomRecordingProfile: () => Promise<CustomRecordingProfileResponse | null>
+    getCustomRecordingFormat: () => Promise<CustomRecordingFormatResponse | null>
+    setCustomRecordingFormat: (format: CustomRecordingFormat) => Promise<{ result: 'success' | 'failed'; persistence: 'unverified' } | null>
+    getCustomMarkerRules: () => Promise<CustomMarkerRulesResponse | null>
+    setCustomMarkerRules: (rules: CustomMarkerRules) => Promise<{ result: 'success' | 'failed'; persistence: 'unverified' } | null>
+    setCustomRecordingProfile: (profile: CustomRecordingProfile) => Promise<{ result: 'success' | 'failed'; persistence: 'unverified' } | null>
+    setRecordingProfile: (profileId: string) => Promise<{ status: 'unsupported'; reason: string }>
     pauseRealtime: () => Promise<any>
     stopRealtime: () => Promise<any>
     getRealtimeData: (offset: number) => Promise<any>
+    /** Two independent mono PCM16LE lanes (neutral ids) from each accepted CMD34 packet, owning renderer only. */
+    onRealtimeChannels: (callback: (data: import('@hidock/jensen-protocol').RealtimeChannelsTap & { sessionId: string | null; receivedAtMs: number }) => void) => () => void
     /** The realtime stream was saved as a recording, or saving it failed. */
     onRealtimeRecording: (callback: (data: { status: 'saved'; filename: string; seconds: number } | { status: 'error'; message: string; filename?: string }) => void) => () => void
     onLiveTranscriptionStatus: (callback: (data: { status: string; channel?: 0 | 1 }) => void) => () => void
@@ -1458,6 +1599,10 @@ export interface ElectronAPI {
     onScanProgress: (callback: (data: { current: number; total: number }) => void) => () => void
     onRecordingChanged: (callback: (data: { recording: string | null }) => void) => () => void
   }
+
+  // Device Pipeline API (Slice 4) — INERT main→renderer state projection.
+  deviceRecordingMarkers: DeviceRecordingMarkersAPI
+  deviceAudio: { exportTracks: (recordingId: string) => Promise<DeviceAudioTrackExport> }
 
   // Device Pipeline API (Slice 4) — INERT main→renderer state projection.
   // Built + unit-tested but NOT consumed by any page yet; cutover is a later slice.
@@ -1700,9 +1845,10 @@ export interface ElectronAPI {
   onTranscriptionQueued: (callback: (data: { queueItemId: string; recordingId: string; filename?: string }) => void) => () => void
   onTranscriptionStarted: (callback: (data: { queueItemId?: string; recordingId: string }) => void) => () => void
   onTranscriptionProgress: (callback: (data: { queueItemId: string; progress: number; stage: string }) => void) => () => void
+  onTranscriptionTextAvailable: (callback: (data: { recordingId: string }) => void) => () => void
   onTranscriptionCompleted: (callback: (data: { queueItemId?: string; recordingId: string }) => void) => () => void
   onTranscriptionFailed: (callback: (data: { queueItemId?: string; recordingId: string; error: string }) => void) => () => void
-  onTranscriptionCancelled: (callback: (data: { recordingId: string }) => void) => () => void
+  onTranscriptionCancelled: (callback: (data: { recordingId: string; reason?: string }) => void) => () => void
   onTranscriptionAllCancelled: (callback: (data: { count: number }) => void) => () => void
   onTranscriptionQueueState: (callback: (state: TranscriptionQueueState) => void) => () => void
 
@@ -1714,6 +1860,13 @@ export interface ElectronAPI {
 const BOOT_DISABLED_ARG = '--hidock-boot-disabled-features='
 
 const electronAPI: ElectronAPI = {
+  semanticIndex: {
+    status: () => callIPC('semantic-index:status'),
+    start: (request) => callIPC('semantic-index:start', request),
+    pause: (request) => callIPC('semantic-index:pause', request),
+    resume: (request) => callIPC('semantic-index:resume', request),
+    cancel: (request) => callIPC('semantic-index:cancel', request),
+  },
   pcRecorder: {
     resumeUnload: () => callIPC('pc-recorder:resume-unload'),
     start: () => callIPC('pc-recorder:start'),
@@ -1737,6 +1890,7 @@ const electronAPI: ElectronAPI = {
     setQaLogsEnabled: (enabled) => callIPC('qa:set-logs-enabled', enabled)
   },
 
+  traces: { stats: () => callIPC('traces:stats') },
   config: {
     get: () => callIPC('config:get'),
     set: (config) => callIPC('config:set', config),
@@ -1836,6 +1990,8 @@ const electronAPI: ElectronAPI = {
     processQueue: () => callIPC('recordings:processQueue'),
     getTranscriptionStatus: () => callIPC('recordings:getTranscriptionStatus'),
     getTranscriptionQueue: (actionableOnly?: boolean) => callIPC('transcription:getQueue', actionableOnly),
+    resumeTranscription: (recordingId: string) => callIPC('transcription:retry', recordingId),
+    restartLocalStage: (recordingId: string) => callIPC('transcription:restartLocalStage', recordingId),
     cancelTranscription: (recordingId: string) => callIPC('transcription:cancel', recordingId),
     cancelAllTranscriptions: () => callIPC('transcription:cancelAll'),
     updateQueueItem: (id: string, status: string, errorMessage?: string) => callIPC('transcription:updateQueueItem', id, status, errorMessage),
@@ -1843,9 +1999,13 @@ const electronAPI: ElectronAPI = {
     resumeTranscriptionQueue: () => callIPC('transcription:resume'),
     reorderTranscription: (recordingId: string, direction: 'up' | 'down') => callIPC('transcription:reorder', { recordingId, direction }),
     getTranscriptionQueueState: () => callIPC('transcription:queueState'),
+    getTranscriptionEngineAvailability: () => callIPC('transcription:engineAvailability'),
+    getTranscriptionAttempts: (recordingId: string) => callIPC('transcription:attempts', recordingId),
+    importCompletedRemoteJobReceipt: (receipt) => callIPC('transcription:importCompletedRemoteJobReceipt', receipt),
   },
 
   transcripts: {
+    getDiarizedSegments: (request) => callIPC('transcripts:getDiarizedSegments', request),
     getByRecordingId: (recordingId) => callIPC('db:get-transcript', recordingId),
     getByRecordingIds: (recordingIds) => callIPC('db:get-transcripts-by-recording-ids', recordingIds),
     getByRecordingIdOwner: (recordingId) => callIPC('db:get-transcript-owner', recordingId),
@@ -1860,11 +2020,12 @@ const electronAPI: ElectronAPI = {
     unassignSpeaker: (request) => callIPC('transcripts:unassignSpeaker', request),
     getTiming: (request) => callIPC('transcripts:getTiming', request),
     reviewTiming: (request) => callIPC('transcripts:reviewTiming', request),
-    regenerateSummary: (request) => callIPC('transcripts:regenerateSummary', request),
+    retranscribeSection: (request) => callIPC('transcripts:retranscribeSection', request),
     updateContent: (request) => callIPC('transcripts:updateContent', request),
     reindex: (request) => callIPC('transcripts:reindex', request),
     updateExtractedItem: (request) => callIPC('transcripts:updateExtractedItem', request),
-    getProcessingRuns: (request) => callIPC('transcripts:getProcessingRuns', request)
+    getProcessingRuns: (request) => callIPC('transcripts:getProcessingRuns', request),
+    retrySummary: (request) => callIPC('transcripts:retrySummary', request)
   },
 
   transcriptUpgrade: {
@@ -1918,6 +2079,10 @@ const electronAPI: ElectronAPI = {
   },
 
   modelHost: {
+    prepareRole: (request) => callIPC('model-host:prepare-role', request),
+    prepareAsr: (request) => callIPC('model-host:prepare-asr', request),
+    testAudio: (draft) => ipcRenderer.invoke('model-host:test-audio', draft),
+    telemetry: () => callIPC('model-host:telemetry'),
     check: (request) => callIPC('model-host:check', request),
     status: () => callIPC('model-host:status'),
     pair: (request) => callIPC('model-host:pair', request),
@@ -2014,12 +2179,14 @@ const electronAPI: ElectronAPI = {
     openFile: (filePath) => callIPC('storage:open-file', filePath),
     revealInFolder: (filePath) => callIPC('storage:reveal-in-folder', filePath),
     readRecording: (filePath) => callIPC('storage:read-recording', filePath),
+    getAudioMetadata: (recordingId) => callIPC('storage:recording-audio-metadata', recordingId),
     deleteRecording: (filePath) => callIPC('storage:delete-recording', filePath),
     saveRecording: (filename, data, recordingDateIso) => callIPC('storage:save-recording', filename, data, recordingDateIso)
   },
 
   waveform: {
-    getCache: (recordingId, fileSize) => callIPC('waveform:getCache', recordingId, fileSize),
+    getCache: (recordingId, fileSize, requestId) => callIPC('waveform:getCache', recordingId, fileSize, requestId),
+    cancelGeneration: (requestId) => callIPC('waveform:cancelGeneration', requestId),
     setCache: (recordingId, peaks, duration, fileSize, channels) =>
       callIPC('waveform:setCache', recordingId, peaks, duration, fileSize, channels),
     clearCache: (recordingId) => callIPC('waveform:clearCache', recordingId)
@@ -2215,6 +2382,12 @@ const electronAPI: ElectronAPI = {
   // Quality Assessment API
   quality: {
     get: (recordingId: string) => callIPC('quality:get', recordingId),
+    repairContext: (recordingId: string) => callIPC('quality:repair-context', recordingId),
+    confirmParticipation: (recordingId: string, count: number) => callIPC('quality:confirm-participation', recordingId, count),
+    repairAdvice: (recordingId: string, requestId: string) => callIPC('quality:repair-advice', recordingId, requestId),
+    repairSample: (recordingId: string, sampleId: string, fingerprint: string) => callIPC('quality:repair-sample', recordingId, sampleId, fingerprint),
+    confirmRepairSample: (recordingId: string, sampleId: string, fingerprint: string, role: 'owner' | 'other' | 'overlap' | 'unsure') =>
+      callIPC('quality:confirm-sample', recordingId, sampleId, fingerprint, role),
     set: (recordingId: string, quality: 'high' | 'medium' | 'low', reason?: string, assessedBy?: string) =>
       callIPC('quality:set', recordingId, quality, reason, assessedBy),
     autoAssess: (recordingId: string) => callIPC('quality:auto-assess', recordingId),
@@ -2282,6 +2455,7 @@ const electronAPI: ElectronAPI = {
     isP1Device: () => callIPC('jensen:isP1Device'),
     // Device info & settings
     getDeviceInfo: () => callIPC('jensen:getDeviceInfo'),
+    getTime: () => callIPC('jensen:getTime'),
     getCardInfo: () => callIPC('jensen:getCardInfo'),
     getFileCount: () => callIPC('jensen:getFileCount'),
     getSettings: () => callIPC('jensen:getSettings'),
@@ -2289,16 +2463,75 @@ const electronAPI: ElectronAPI = {
     setAutoRecord: (enabled: boolean) => callIPC('jensen:setAutoRecord', { enabled }),
     // File operations
     listFiles: () => callIPC('jensen:listFiles'),
+    listFilesDetailed: () => callIPC('jensen:listFilesDetailed'),
+    listFilesPage: (firstIndex, count) => callIPC('jensen:listFilesPage', firstIndex, count),
+    readFilePrefix: (filename, count) => callIPC('jensen:readFilePrefix', filename, count),
+    readFileRange: (filename, offset, count) => callIPC('jensen:readFileRange', { filename, offset, count }),
+    startFileSystem: () => callIPC('jensen:startFileSystem'),
+    mountDeviceDrive: () => callIPC('jensen:mountDeviceDrive'),
+    unmountDeviceDrive: () => callIPC('jensen:unmountDeviceDrive'),
+    getDeviceDriveStatus: () => callIPC('jensen:getDeviceDriveStatus'),
+    stopFileSystem: () => callIPC('jensen:stopFileSystem'),
+    getFileSystemStatus: () => callIPC('jensen:getFileSystemStatus'),
+    getFileSystemDiagnostics: () => callIPC('jensen:getFileSystemDiagnostics'),
+    getRecordingBackupPreflight: () => callIPC('jensen:getRecordingBackupPreflight'),
+    getProtocolDiagnostics: () => callIPC('jensen:getProtocolDiagnostics'),
+    getValidationMemory: () => callIPC('jensen:getValidationMemory'),
+    getFirmwareConsoleStatus: request => callIPC('jensen:getFirmwareConsoleStatus', request),
+    beginOwnedScratchUpload: (descriptor, assurance) => callIPC('jensen:beginOwnedScratchUpload', descriptor, assurance),
+    appendOwnedScratchUpload: (id, request, assurance) => callIPC('jensen:appendOwnedScratchUpload', id, request, assurance),
+    commitOwnedScratchUpload: (id, assurance) => callIPC('jensen:commitOwnedScratchUpload', id, assurance),
+    abortOwnedScratchUpload: (id, assurance) => callIPC('jensen:abortOwnedScratchUpload', id, assurance),
+    getOwnedScratchUploadStatus: id => callIPC('jensen:getOwnedScratchUploadStatus', id),
+    beginOwnedRecordingRestore: (recordingId, assurance) => callIPC('jensen:beginOwnedRecordingRestore', recordingId, assurance),
+    appendOwnedRecordingRestore: (id, request, assurance) => callIPC('jensen:appendOwnedRecordingRestore', id, request, assurance),
+    verifyOwnedRecordingRestoreStep: (id, assurance) => callIPC('jensen:verifyOwnedRecordingRestoreStep', id, assurance),
+    recoverOwnedRecordingRestoreStep: (id, assurance) => callIPC('jensen:recoverOwnedRecordingRestoreStep', id, assurance),
+    abortOwnedRecordingRestore: (id, assurance) => callIPC('jensen:abortOwnedRecordingRestore', id, assurance),
+    getOwnedRecordingRestoreStatus: id => callIPC('jensen:getOwnedRecordingRestoreStatus', id),
+    verifyOwnedRecordingRestoreReadback: id => callIPC('jensen:verifyOwnedRecordingRestoreReadback', id),
+    downloadResumableToLibrary: (filename, fileSize) => callIPC('jensen:downloadResumableToLibrary', { filename, fileSize }),
     downloadFile: (filename: string, fileSize: number) => callIPC('jensen:downloadFile', { filename, fileSize }),
+    downloadToLibrary: (filename: string, fileSize: number) => callIPC('jensen:downloadToLibrary', { filename, fileSize }),
     cancelDownload: () => callIPC('jensen:cancelDownload'),
     deleteFile: (filename: string) => callIPC('jensen:deleteFile', { filename }),
     formatCard: () => callIPC('jensen:formatCard'),
     // Realtime
     getRealtimeSettings: () => callIPC('jensen:getRealtimeSettings'),
-    startRealtime: () => callIPC('jensen:startRealtime'),
+    startRealtime: (options) => callIPC('jensen:startRealtime', options),
+    getAudioDiagnostics: () => callIPC('jensen:getAudioDiagnostics'),
+    onAudioDiagnostics: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, data: DeviceAudioDiagnosticsState) => callback(data)
+      ipcRenderer.on('jensen:audio-diagnostics', listener)
+      return () => ipcRenderer.removeListener('jensen:audio-diagnostics', listener)
+    },
+    getRecordingCapabilities: () => callIPC('jensen:getRecordingCapabilities'),
+    getFirmwareUpdatePreflight: () => callIPC('jensen:getFirmwareUpdatePreflight'),
+    prepareFirmwareInstall: target => callIPC('jensen:prepareFirmwareInstall', target),
+    getFirmwareInstallAttempts: () => callIPC('jensen:getFirmwareInstallAttempts'),
+    executeFirmwareInstall: (id, sha256) => callIPC('jensen:executeFirmwareInstall', id, sha256),
+    observeFirmwareInstall: id => callIPC('jensen:observeFirmwareInstall', id),
+    getNativeRecordingStatus: () => callIPC('jensen:getNativeRecordingStatus'),
+    startNativeVerificationRecording: (request) => callIPC('jensen:startNativeVerificationRecording', request),
+    protectNativeVerificationRecording: (expectedRecording) => callIPC('jensen:protectNativeVerificationRecording', expectedRecording),
+    addNativeMarker: (request) => callIPC('jensen:addNativeMarker', request),
+    toggleNativeRecording: (request) => callIPC('jensen:toggleNativeRecording', request),
+    getRecordingProfile: () => callIPC('jensen:getRecordingProfile'),
+    getCustomRecordingProfile: () => callIPC('jensen:getCustomRecordingProfile'),
+    getCustomRecordingFormat: () => callIPC('jensen:getCustomRecordingFormat'),
+    setCustomRecordingFormat: format => callIPC('jensen:setCustomRecordingFormat', format),
+    getCustomMarkerRules: () => callIPC('jensen:getCustomMarkerRules'),
+    setCustomMarkerRules: rules => callIPC('jensen:setCustomMarkerRules', rules),
+    setCustomRecordingProfile: profile => callIPC('jensen:setCustomRecordingProfile', profile),
+    setRecordingProfile: (profileId) => callIPC('jensen:setRecordingProfile', profileId),
     pauseRealtime: () => callIPC('jensen:pauseRealtime'),
     stopRealtime: () => callIPC('jensen:stopRealtime'),
     getRealtimeData: (offset: number) => callIPC('jensen:getRealtimeData', { offset }),
+    onRealtimeChannels: (callback: (data: import('@hidock/jensen-protocol').RealtimeChannelsTap & { sessionId: string | null; receivedAtMs: number }) => void) => {
+      const handler = (_event: any, data: import('@hidock/jensen-protocol').RealtimeChannelsTap & { sessionId: string | null; receivedAtMs: number }) => callback(data)
+      ipcRenderer.on('jensen:realtime-channels', handler)
+      return () => ipcRenderer.removeListener('jensen:realtime-channels', handler)
+    },
     onRealtimeRecording: (callback: (data: { status: 'saved'; filename: string; seconds: number } | { status: 'error'; message: string; filename?: string }) => void) => {
       const handler = (_event: any, data: { status: 'saved'; filename: string; seconds: number } | { status: 'error'; message: string; filename?: string }) => callback(data)
       ipcRenderer.on('jensen:realtime-recording', handler)
@@ -2392,6 +2625,14 @@ const electronAPI: ElectronAPI = {
   },
 
   // Device Pipeline API (Slice 4) — INERT main→renderer state projection.
+  deviceRecordingMarkers: {
+    list: (subject) => callIPC('device-markers:list', subject),
+    importNative: (subject) => callIPC('device-markers:import-native', subject),
+    getSettings: (subject) => callIPC('device-markers:get-settings', subject),
+    setAutomation: (subject, enabled) => callIPC('device-markers:set-automation', subject, enabled),
+    add: (request) => callIPC('device-markers:add', request),
+  },
+  deviceAudio: { exportTracks: (recordingId) => callIPC('device-audio:export-tracks', recordingId) },
   devicePipeline: {
     getState: () => callIPC('device-pipeline:get-state'),
     getFiles: () => callIPC('device-pipeline:get-files'),
@@ -2533,6 +2774,11 @@ const electronAPI: ElectronAPI = {
     }
   },
 
+  onTranscriptionTextAvailable: (callback: (data: { recordingId: string }) => void) => {
+    const handler = (_event: unknown, data: { recordingId: string }) => callback(data)
+    ipcRenderer.on('transcription:textAvailable', handler)
+    return () => ipcRenderer.removeListener('transcription:textAvailable', handler)
+  },
   onTranscriptionCompleted: (callback: (data: { queueItemId?: string; recordingId: string }) => void) => {
     const handler = (_event: any, data: { queueItemId?: string; recordingId: string }) => callback(data)
     ipcRenderer.on('transcription:completed', handler)
@@ -2549,7 +2795,7 @@ const electronAPI: ElectronAPI = {
     }
   },
 
-  onTranscriptionCancelled: (callback: (data: { recordingId: string }) => void) => {
+  onTranscriptionCancelled: (callback: (data: { recordingId: string; reason?: string }) => void) => {
     const handler = (_event: any, data: { recordingId: string }) => callback(data)
     ipcRenderer.on('transcription:cancelled', handler)
     return () => {

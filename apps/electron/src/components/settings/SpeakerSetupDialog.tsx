@@ -51,13 +51,16 @@ export function SpeakerSetupDialog(): React.ReactElement | null {
     <Dialog open={open} onOpenChange={close}>
       <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto" data-testid="speaker-setup-dialog">
         <DialogHeader>
-          <DialogTitle>{firstTime ? 'Set up voice recognition' : 'Your hardware changed'}</DialogTitle>
+          <DialogTitle>{firstTime ? 'Set up voice recognition' : 'Hardware or acceleration changed'}</DialogTitle>
           <DialogDescription>
             {firstTime
               ? 'Choose how HiDock learns and recognizes voices on this computer. The recommended option fits the hardware found.'
-              : 'A GPU was added or removed. Check how HiDock should recognize voices on this hardware.'}
+              : 'Available hardware or GPU acceleration changed. Check how HiDock should recognize voices on this computer.'}
           </DialogDescription>
         </DialogHeader>
+        {setup.acceleratorNotice && <p role="status" className="text-sm text-muted-foreground">
+          {setup.acceleratorNotice}
+        </p>}
         <SpeakerSetupPanel initial={setup} onSaved={() => setOpen(false)} />
         <div className="flex justify-end">
           <Button variant="ghost" size="sm" onClick={() => close(false)}>

@@ -9,10 +9,10 @@
  * Keyed by recording id.
  *
  * Invalidation:
- *  - Bump CACHE_VERSION to invalidate every entry after a format change (stale
- *    entries are ignored on read and overwritten on the next compute).
- *  - Callers may pass the current audio file size; if it differs from the cached
- *    size the entry is treated as stale (the recording changed on disk).
+ *  - Keep the cache version stable for additive metadata; legacy complete
+ *    entries remain usable and incomplete coarse entries are repaired lazily.
+ *  - Callers may pass the current size and stable source fingerprint; mismatch
+ *    treats the entry as stale, including same-size replacements.
  *  - `clearWaveformCache(id)` removes a single entry.
  */
 
@@ -20,7 +20,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync } from '
 import { join } from 'path'
 import { getCachePath } from './file-storage'
 
-/** Bump to invalidate all previously written cache entries. */
+/** Version 2 remains compatible; source identity is an additive cache field. */
 export const CACHE_VERSION = 2
 
 export interface WaveformCacheEntry {
@@ -35,6 +35,8 @@ export interface WaveformCacheEntry {
   duration: number
   /** Source audio file size in bytes (0 if unknown) — used for change detection. */
   fileSize: number
+  /** Stable metadata identity of the source file at decode time. */
+  sourceFingerprint?: string
   createdAt: string
   /**
    * Drawn from the stored loudness envelope, not decoded (library-maintenance).
@@ -64,7 +66,7 @@ function entryPath(recordingId: string): string {
  * @param recordingId  Recording id key.
  * @param fileSize     Optional current audio file size for change detection.
  */
-export function getWaveformCache(recordingId: string, fileSize?: number): WaveformCacheEntry | null {
+export function getWaveformCache(recordingId: string, fileSize?: number, sourceFingerprint?: string): WaveformCacheEntry | null {
   if (!recordingId) return null
   try {
     const p = entryPath(recordingId)
@@ -74,6 +76,7 @@ export function getWaveformCache(recordingId: string, fileSize?: number): Wavefo
     if (!Array.isArray(parsed.peaks) || parsed.peaks.length === 0) return null
     // Change detection: if we know both sizes and they differ, the file changed.
     if (fileSize && parsed.fileSize && fileSize !== parsed.fileSize) return null
+    if (sourceFingerprint && parsed.sourceFingerprint && parsed.sourceFingerprint !== sourceFingerprint) return null
     return parsed
   } catch (err) {
     console.warn('[WaveformCache] Failed to read entry:', recordingId, err)
@@ -92,7 +95,8 @@ export function setWaveformCache(
   duration = 0,
   fileSize = 0,
   coarse = false,
-  channels?: number[][]
+  channels?: number[][],
+  sourceFingerprint?: string
 ): boolean {
   if (!recordingId || !Array.isArray(peaks) || peaks.length === 0) return false
   try {
@@ -104,6 +108,7 @@ export function setWaveformCache(
       sampleCount: peaks.length,
       duration: Number.isFinite(duration) ? duration : 0,
       fileSize: Number.isFinite(fileSize) ? fileSize : 0,
+      ...(sourceFingerprint ? { sourceFingerprint } : {}),
       createdAt: new Date().toISOString(),
       ...(coarse ? { coarse: true } : {})
     }

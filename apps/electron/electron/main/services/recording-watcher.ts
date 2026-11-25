@@ -1,5 +1,5 @@
 import { MIN_MEETING_CONFIDENCE } from '../../../src/shared/meeting-confidence'
-import { watch, existsSync, statSync, readdirSync } from 'fs'
+import { watch, existsSync, statSync, readdirSync, openSync, fstatSync, readSync, closeSync } from 'fs'
 import { RECORDING_AUDIO_EXTENSIONS } from '../../../src/shared/audio-extensions'
 import { isPcRecordingFilename } from '../../../src/shared/pc-recording'
 import { join, extname, basename } from 'path'
@@ -18,6 +18,7 @@ import {
 import { BrowserWindow } from 'electron'
 import { queueTranscriptionIfEnabled } from './transcription'
 import { profileNewRecording } from './audio-profile-store'
+import { isNativeFileManualOnly } from './device-native-file-policy'
 
 const AUDIO_EXTENSIONS: readonly string[] = RECORDING_AUDIO_EXTENSIONS
 
@@ -25,7 +26,7 @@ let watcher: ReturnType<typeof watch> | null = null
 let mainWindow: BrowserWindow | null = null
 let isWatching = false
 
-export function setMainWindow(win: BrowserWindow): void {
+export function setMainWindow(win: BrowserWindow | null): void {
   mainWindow = win
 }
 
@@ -150,6 +151,46 @@ export function isPurgedFile(filename: string): boolean {
   return [...variants].some((v) => isFilePurged(v))
 }
 
+/** New captures default to manual offline transcription, independently of the
+ * global auto-transcribe setting. Filename identity survives missing/corrupt
+ * manifests and crash recovery. Legacy device/live files keep their policy. */
+export function shouldAutomaticallyTranscribeRecording(filePath: string): boolean {
+  if (isNativeFileManualOnly(filePath)) return false
+  if (!/\.wav$/i.test(filePath)) return true
+  const newCapture = /-Capture-Live(?:-\d+)?(?:\.channel-\d+)?\.wav$/i.test(basename(filePath))
+  const sidecar = filePath.replace(/\.wav$/i, '.live.json')
+  if (!existsSync(sidecar)) return !newCapture
+  let fd: number | null = null
+  try {
+    fd = openSync(sidecar, 'r')
+    const stat = fstatSync(fd)
+    if (!stat.isFile() || stat.size < 2 || stat.size > 64 * 1024) return !newCapture
+    const bytes = Buffer.alloc(stat.size)
+    let read = 0
+    while (read < bytes.length) {
+      const count = readSync(fd, bytes, read, bytes.length - read, read)
+      if (!count) return !newCapture
+      read += count
+    }
+    const note: unknown = JSON.parse(bytes.toString('utf8'))
+    if (!note || typeof note !== 'object' || Array.isArray(note)) return !newCapture
+    const metadata = note as Record<string, unknown>
+    const capture = metadata.capture && typeof metadata.capture === 'object' && !Array.isArray(metadata.capture)
+      ? metadata.capture as Record<string, unknown> : null
+    const owned = newCapture || typeof metadata.captureSessionId === 'string' || typeof capture?.sessionId === 'string'
+    if (!owned) return true
+    // Only an explicit, internally consistent owner policy can enable automatic
+    // offline work. Live AI opt-in does not imply a second offline provider run.
+    return capture?.schemaVersion === 1 && capture.automaticTranscription === true &&
+      typeof metadata.captureSessionId === 'string' && metadata.captureSessionId.length > 0 &&
+      capture.sessionId === metadata.captureSessionId
+  } catch {
+    return !newCapture
+  } finally {
+    if (fd !== null) closeSync(fd)
+  }
+}
+
 async function processNewRecording(filePath: string): Promise<void> {
   try {
     const filename = basename(filePath)
@@ -222,7 +263,7 @@ async function processNewRecording(filePath: string): Promise<void> {
     notifyRenderer('recording:new', { recording })
 
     try {
-      queueTranscriptionIfEnabled(recordingId)
+      if (shouldAutomaticallyTranscribeRecording(filePath)) queueTranscriptionIfEnabled(recordingId)
     } catch (err) {
       console.error('[RecordingWatcher] Failed to queue transcription:', err)
     }
@@ -289,15 +330,17 @@ function correlateWithMeeting(recordingId: string, recordingDate: Date): void {
     }
 
     if (bestMatch && bestMatch.confidence >= MIN_MEETING_CONFIDENCE) {
-      linkRecordingToMeeting(
+      const linked = linkRecordingToMeeting(
         recordingId,
         bestMatch.meetingId,
         bestMatch.confidence,
         bestMatch.method
       )
-      console.log(
-        `Linked recording ${recordingId} to meeting ${bestMatch.meetingId} (confidence: ${bestMatch.confidence})`
-      )
+      if (linked) {
+        console.log(
+          `Linked recording ${recordingId} to meeting ${bestMatch.meetingId} (confidence: ${bestMatch.confidence})`
+        )
+      }
     }
   } catch (error) {
     console.error('Error correlating recording with meeting:', error)

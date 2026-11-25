@@ -808,3 +808,96 @@ describe('BrainRouter.canServe', () => {
     expect(await build().canServe('codex', 'chat')).toBe(false)
   })
 })
+
+describe('running-operation cancellation', () => {
+  beforeEach(() => { mockBrainsConfig = undefined })
+  it('does not send embeddings to a fallback after Stop', async () => {
+    const controller = new AbortController()
+    const primary = makeBrain('gemini-api', ['embed'], true)
+    const fallback = makeBrain('ollama', ['embed'], true)
+    vi.mocked(primary.embed!).mockImplementationOnce(async () => {
+      controller.abort(new Error('Stopped by you'))
+      throw controller.signal.reason
+    })
+    const router = new BrainRouter(makeRegistry({ 'gemini-api': primary, ollama: fallback }))
+    expect(await router.embed(['source text'], { signal: controller.signal })).toEqual([null])
+    expect(fallback.embed).not.toHaveBeenCalled()
+  })
+  it('does not send speaker text to a fallback after Stop', async () => {
+    const controller = new AbortController()
+    const primary = makeBrain('gemini-api', ['chat'], true)
+    const fallback = makeBrain('ollama', ['chat'], true)
+    vi.mocked(primary.chat).mockImplementationOnce(async () => {
+      controller.abort(new Error('Stopped by you'))
+      throw controller.signal.reason
+    })
+    const router = new BrainRouter(makeRegistry({ 'gemini-api': primary, ollama: fallback }))
+    expect(await router.chat('chat', [{role:'user',content:'source text'}], { signal: controller.signal })).toBeNull()
+    expect(fallback.chat).not.toHaveBeenCalled()
+  })
+})
+
+it('never falls back from an explicitly selected remote semantic role', async () => {
+  const remote = makeBrain('model-host-embed', ['embed'], true)
+  const cloud = makeBrain('gemini-api', ['embed'], true)
+  remote.embed = vi.fn(async () => { throw new Error('space changed') })
+  mockBrainsConfig = { enabled: { 'model-host-embed': true, 'gemini-api': true },
+    taskRouting: { embed: 'model-host-embed' }, modelHostEmbedding: { spaceId: 'bound' } }
+  const router = new BrainRouter(makeRegistry({ 'model-host-embed': remote, 'gemini-api': cloud }))
+  await expect(router.embed(['private'])).rejects.toThrow('space changed')
+  expect(cloud.embed).not.toHaveBeenCalled()
+  await expect(router.embed(['private'], { expectedProviderId: 'model-host-embed:old' })).rejects.toThrow('captured partition')
+  expect(remote.embed).toHaveBeenCalledTimes(1)
+})
+
+it.each(['route', 'default'] as const)('managed generation %s stays closed for unavailable, null and failed responses', async choice => {
+  const remote = makeBrain('model-host-generate', ['generate', 'chat'], true)
+  const paid = makeBrain('gemini-api', ['generate', 'chat'], true)
+  const local = makeBrain('ollama', ['generate', 'chat'], true)
+  mockBrainsConfig = { enabled: { 'model-host-generate': true, 'gemini-api': true, ollama: true },
+    defaultBrain: choice === 'default' ? 'model-host-generate' : 'gemini-api',
+    taskRouting: choice === 'route' ? { chat: 'model-host-generate' } : {} }
+  const router = new BrainRouter(makeRegistry({ 'model-host-generate': remote, 'gemini-api': paid, ollama: local }))
+  remote.authStatus = async () => ({ configured: false, method: 'api-key' })
+  expect(await router.chat('chat', [{ role: 'user', content: 'fixture' }])).toBeNull()
+  await expect(router.resolve('chat', 'generate')).rejects.toThrow('no fallback')
+  remote.authStatus = async () => ({ configured: true, method: 'api-key' })
+  remote.chat = vi.fn(async () => null)
+  expect(await router.chat('chat', [{ role: 'user', content: 'fixture' }])).toBeNull()
+  remote.chat = vi.fn(async () => { throw new Error('managed timeout') })
+  await expect(router.chat('chat', [{ role: 'user', content: 'fixture' }])).rejects.toThrow('managed timeout')
+  expect(paid.chat).not.toHaveBeenCalled(); expect(local.chat).not.toHaveBeenCalled()
+  expect(paid.generate).not.toHaveBeenCalled(); expect(local.generate).not.toHaveBeenCalled()
+})
+
+describe('BrainRouter.chatUntil (summary fallback, 28-oct-2026)', () => {
+  beforeEach(() => {
+    mockBrainsConfig = undefined
+  })
+
+  it('skips excluded brains, moves past a rejected answer, and names the brain that answered', async () => {
+    mockBrainsConfig = { defaultBrain: 'gemini-api', enabled: { 'gemini-api': true, ollama: true, 'claude-code': true } }
+    const gemini = makeBrain('gemini-api', ['generate', 'chat', 'embed'], true)
+    const ollama = makeBrain('ollama', ['generate', 'chat', 'embed'], true)
+    ;(ollama.chat as ReturnType<typeof vi.fn>).mockResolvedValue('not json')
+    const claude = makeBrain('claude-code', ['generate', 'chat', 'agentic'], true)
+    ;(claude.chat as ReturnType<typeof vi.fn>).mockResolvedValue('{"summary":"ok"}')
+    const router = new BrainRouter(makeRegistry({ 'gemini-api': gemini, ollama, 'claude-code': claude }))
+
+    const served = await router.chatUntil('summary', [{ role: 'user', content: 'resume' }], {},
+      { exclude: ['gemini-api'], accept: (answer) => answer.startsWith('{') })
+
+    expect(served).toEqual({ brainId: 'claude-code', answer: '{"summary":"ok"}' })
+    expect(gemini.chat).not.toHaveBeenCalled()
+    expect(ollama.chat).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns null when every answer is rejected', async () => {
+    mockBrainsConfig = { defaultBrain: 'claude-code', enabled: { 'claude-code': true } }
+    const claude = makeBrain('claude-code', ['generate', 'chat', 'agentic'], true)
+    const router = new BrainRouter(makeRegistry({ 'claude-code': claude }))
+
+    expect(await router.chatUntil('summary', [{ role: 'user', content: 'x' }], {}, { accept: () => false })).toBeNull()
+    expect(router.getLastChatFailure()).toEqual({ brainId: 'claude-code', kind: 'null' })
+  })
+})

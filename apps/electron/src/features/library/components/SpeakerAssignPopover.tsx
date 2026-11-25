@@ -39,6 +39,7 @@ import type { Person } from '@/types/knowledge'
 export type AssignScope = 'everywhere' | 'turn' | 'fromHere'
 
 interface SpeakerAssignPopoverProps {
+  findHighlight?: React.ReactNode
   /** The effective speaker label for this turn (raw or split-derived). Display +
    * "everywhere" assignment key. */
   label: string
@@ -208,6 +209,7 @@ function ScopePicker({
 
 export function SpeakerAssignPopover({
   label,
+  findHighlight,
   turnIndex: _turnIndex,
   assignedContactId,
   assignedName,
@@ -319,7 +321,7 @@ export function SpeakerAssignPopover({
                   : 'font-semibold text-foreground/80 hover:text-foreground hover:underline decoration-dotted underline-offset-2 rounded focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/50'
               }
             >
-              {displayText}
+              {findHighlight ?? displayText}
               {mergeSuspected && (
                 <span
                   aria-hidden="true"

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import { useOperations } from '../useOperations'
+import { toast } from '@/components/ui/toaster'
 
 // Mock toast
 vi.mock('@/components/ui/toaster', () => ({
@@ -24,12 +25,13 @@ vi.mock('@/hooks/useDownloadOrchestrator', () => ({
 const mockAddToQueue = vi.fn()
 const mockRemove = vi.fn()
 const mockClear = vi.fn()
+const mockMarkAllStopped = vi.fn()
 vi.mock('@/store/features/useTranscriptionStore', () => ({
   useTranscriptionStore: vi.fn((selector) => {
     const state = {
       addToQueue: mockAddToQueue,
       remove: mockRemove,
-      clear: mockClear,
+      markAllStopped: mockMarkAllStopped, clear: mockClear,
       queue: new Map()
     }
     if (typeof selector === 'function') return selector(state)
@@ -41,7 +43,7 @@ vi.mock('@/store/features/useTranscriptionStore', () => ({
 import { useTranscriptionStore } from '@/store/features/useTranscriptionStore'
 ;(useTranscriptionStore as any).getState = vi.fn(() => ({
   remove: mockRemove,
-  clear: mockClear
+  markAllStopped: mockMarkAllStopped, clear: mockClear
 }))
 
 // Mock electronAPI
@@ -98,6 +100,21 @@ global.window.electronAPI = {
 } as any
 
 describe('useOperations', () => {
+  it('reports a bulk admission rejection instead of promising processing will start', async () => {
+    mockAddToQueueIPC.mockResolvedValueOnce({ success: false, error: 'Recording is personal' })
+    const { result } = renderHook(() => useOperations())
+    await act(async () => {
+      expect(await result.current.queueBulkTranscriptions([{
+        id: 'rejected-recording', filename: 'rejected.wav', location: 'local-only',
+        localPath: 'F:\\Recordings\\rejected.wav', transcriptionStatus: 'none',
+        syncStatus: 'synced', size: 1024, duration: 60, dateRecorded: new Date()
+      }] as any)).toBe(0)
+    })
+    expect(toast).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'No transcriptions queued', description: '1 could not be queued. Recording is personal', variant: 'error'
+    }))
+    expect(mockUpdateStatus).not.toHaveBeenCalled()
+  })
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(window.electronAPI.config.get).mockResolvedValue({
@@ -474,7 +491,7 @@ describe('useOperations', () => {
   })
 
   describe('cancelAllTranscriptions', () => {
-    it('calls IPC and clears store', async () => {
+    it('calls IPC and retains stopped outcomes', async () => {
       const { result } = renderHook(() => useOperations())
 
       await act(async () => {
@@ -482,7 +499,7 @@ describe('useOperations', () => {
       })
 
       expect(mockCancelAllTranscriptions).toHaveBeenCalled()
-      expect(mockClear).toHaveBeenCalled()
+      expect(mockMarkAllStopped).toHaveBeenCalled()
     })
   })
 

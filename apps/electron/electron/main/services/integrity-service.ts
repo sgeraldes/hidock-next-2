@@ -68,7 +68,7 @@ export interface RepairResult {
 // Shared parser (single source of truth) — re-exported here so existing
 // consumers of this module keep working.
 import { parseHiDockFilenameDate } from './hidock-filename'
-import { autoLinkRecordingsToMeetings } from './org-reconciler'
+import { autoLinkRecordingsToMeetingsYielding } from './org-reconciler'
 export { parseHiDockFilenameDate } from './hidock-filename'
 
 /**
@@ -244,15 +244,21 @@ class IntegrityService {
     filename: string | undefined,
     recordingId: string,
     storedPath?: string | null
-  ): 'relinked' | 'unreachable' | 'claimed' | 'gone' {
+  ): 'relinked' | 'unreachable' | 'claimed' | 'retained' | 'gone' {
+    // A row the device may still hold is never erased, and a device row that
+    // never had local audio does not adopt a file by name. A row that had a
+    // path may still be pointed at its moved audio: that writes, never erases.
+    const mayBeOnDevice = this.mayBeOnDevice(recordingId)
+    if (mayBeOnDevice && !storedPath) return 'retained'
     if (this.volumeUnreachable(storedPath)) return 'unreachable'
-    if (!filename) return 'gone'
+    if (!filename) return mayBeOnDevice ? 'retained' : 'gone'
 
     const located = this.locateLocalAudio(filename)
     if (!located) {
       // No audio found — but if the recordings directory itself cannot be read,
       // that is an unmounted drive, not a deletion.
-      return existsSync(getRecordingsPath()) ? 'gone' : 'unreachable'
+      if (!existsSync(getRecordingsPath())) return 'unreachable'
+      return mayBeOnDevice ? 'retained' : 'gone'
     }
     if (this.audioClaimedByAnother(located, recordingId)) return 'claimed'
 
@@ -386,7 +392,7 @@ class IntegrityService {
         relinkedCount++
         continue
       }
-      if (outcome === 'unreachable' || outcome === 'claimed') {
+      if (outcome === 'unreachable' || outcome === 'claimed' || outcome === 'retained') {
         unresolvedCount++
         continue // keep the pointer; this is not evidence of deletion
       }
@@ -571,7 +577,7 @@ class IntegrityService {
       // that arrived with the copy time) get their meeting link now, not on
       // some later calendar sync.
       try {
-        const linked = autoLinkRecordingsToMeetings()
+        const linked = await autoLinkRecordingsToMeetingsYielding()
         if (linked > 0) {
           console.log(`[IntegrityService] Auto-linked ${linked} recording(s) after date repairs`)
         }
@@ -1096,6 +1102,24 @@ class IntegrityService {
   // Repair Methods
   // ==========================================================================
 
+  /**
+   * Local absence says nothing about a disconnected device. Unknown legacy
+   * flags are also insufficient evidence to delete a durable identity.
+   */
+  private mayBeOnDevice(recordingId: string | undefined): boolean {
+    const recording = queryAll<Recording>('SELECT * FROM recordings WHERE id = ?', [recordingId])[0]
+    return !!recording && recording.on_device !== 0
+  }
+
+  private retainedResult(issue: IntegrityIssue): RepairResult {
+    return {
+      issueId: issue.id,
+      success: false,
+      action: 'repair',
+      error: 'The recording may still be on the device — leaving its row and references untouched'
+    }
+  }
+
   private repairOrphanedDownload(issue: IntegrityIssue): RepairResult {
     if (!issue.recordingId) {
       console.error('[IntegrityService] repairOrphanedDownload: No recording ID for issue', issue.id)
@@ -1112,6 +1136,7 @@ class IntegrityService {
         saveDatabase()
         return { issueId: issue.id, success: true, action: 'Re-linked the recording to its audio' }
       }
+      if (outcome === 'retained') return this.retainedResult(issue)
       if (outcome === 'unreachable') {
         return {
           issueId: issue.id,
@@ -1129,8 +1154,7 @@ class IntegrityService {
         }
       }
 
-      // Delete the orphaned recording record - the file is already gone
-      // When device reconnects, a fresh record will be created with correct filename
+      // Only a confirmed local-only orphan may be removed.
       console.log('[IntegrityService] Deleting orphaned recording:', issue.recordingId, issue.filename)
       run(`DELETE FROM recordings WHERE id = ?`, [issue.recordingId])
       saveDatabase()
@@ -1155,6 +1179,7 @@ class IntegrityService {
       saveDatabase()
       return { issueId: issue.id, success: true, action: 'Re-linked to the audio on disk' }
     }
+    if (outcome === 'retained') return this.retainedResult(issue)
     // D-022 — an offline volume and a duplicate shadow row are both reasons to
     // leave everything alone. Falling through here would delete the synced_files
     // row that knows where the audio is, which is the erasure this fix exists
@@ -1300,6 +1325,7 @@ class IntegrityService {
       if (outcome === 'relinked') {
         return { issueId: issue.id, success: true, action: 'Re-linked the recording to its audio' }
       }
+      if (outcome === 'retained') return this.retainedResult(issue)
       if (outcome === 'unreachable' || outcome === 'claimed') {
         return {
           issueId: issue.id,
@@ -1330,6 +1356,7 @@ class IntegrityService {
     if (outcome === 'relinked') {
       return { issueId: issue.id, success: true, action: 'Re-linked to the audio on disk' }
     }
+    if (outcome === 'retained') return this.retainedResult(issue)
     if (outcome === 'unreachable' || outcome === 'claimed') {
       return {
         issueId: issue.id,

@@ -86,6 +86,19 @@ describe('Calendar IPC Handlers', () => {
   })
 
   describe('calendar:sync', () => {
+    it('refreshes an attached backend UI without waiting for an absent boot drain', async () => {
+      const originalArgv = process.argv
+      process.argv = [...originalArgv, '--backend-only']
+      bootGate.settled = false
+      const { syncCalendar } = await import('../../services/calendar-sync')
+      vi.mocked(syncCalendar).mockResolvedValue({ success: true, meetingsCount: 12 })
+      try {
+        expect(await handlers['calendar:sync'](null, 'manual')).toEqual({ success: true, meetingsCount: 12 })
+        expect(bootGate.wait).not.toHaveBeenCalled()
+        expect(syncCalendar).toHaveBeenCalledWith(defaultConfig.calendar.icsUrl, { waitForBootMs: 0 })
+      } finally { process.argv = originalArgv }
+    })
+
     it('should sync calendar when ICS URL is configured', async () => {
       const { syncCalendar } = await import('../../services/calendar-sync')
       const syncResult = { success: true, meetingsCount: 12 }
@@ -123,7 +136,7 @@ describe('Calendar IPC Handlers', () => {
 
       const result = await handlers['calendar:clear-and-sync'](null)
 
-      expect(clearAllMeetings).toHaveBeenCalled()
+      expect(clearAllMeetings).not.toHaveBeenCalled()
       // F15: `fresh` opts out of joining an in-flight sync — a pass that started
       // before the clear would hand back pre-clear data.
       expect(syncCalendar).toHaveBeenCalledWith('https://calendar.example.com/feed.ics', {

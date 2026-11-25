@@ -44,6 +44,9 @@ const deps = vi.hoisted(() => ({
 }))
 
 vi.mock('../database', () => ({
+  runMany: vi.fn(),
+  acquireOrganizationCheckpointBudget: () => () => {},
+  queryOne: () => undefined,
   getDatabase: () => ({
     run: vi.fn(),
     exec: (sql: string) =>

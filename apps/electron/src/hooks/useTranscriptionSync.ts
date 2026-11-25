@@ -6,7 +6,7 @@
  * missed events without transporting the terminal queue history to the renderer.
  */
 
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import { useTranscriptionStore } from '@/store/features/useTranscriptionStore'
 
 export const TRANSCRIPTION_RECONCILE_INTERVAL_MS = 30_000
@@ -39,15 +39,12 @@ export function omitFailuresSupersededByTranscript(
 }
 
 export function useTranscriptionSync() {
-  const initializedRef = useRef(false)
-
   useEffect(() => {
-    if (initializedRef.current) return
-    initializedRef.current = true
-
     const isElectron = !!window.electronAPI?.recordings?.getTranscriptionQueue
 
+    let disposed = false
     const reconcile = async (items: any[]) => {
+      if (disposed) return
       let actionable = items
       const failedRecordingIds = Array.from(new Set(
         items.filter((item) => item.status === 'failed').map((item) => item.recording_id)
@@ -62,7 +59,7 @@ export function useTranscriptionSync() {
           // process projection will reconcile it on a later successful poll.
         }
       }
-      useTranscriptionStore.getState().reconcileQueue(actionable)
+      if (!disposed) useTranscriptionStore.getState().reconcileQueue(actionable)
     }
 
     // Hydrate transcription queue from database on mount
@@ -108,7 +105,7 @@ export function useTranscriptionSync() {
           window.electronAPI.onTranscriptionProgress((data) => {
             const store = useTranscriptionStore.getState()
             if (data.queueItemId) {
-              store.updateProgress(data.queueItemId, data.progress)
+              store.updateProgress(data.queueItemId, data.progress, data.stage)
             }
           })
         )
@@ -150,7 +147,8 @@ export function useTranscriptionSync() {
             const items = Array.from(store.queue.values())
             const item = items.find((i) => i.recordingId === data.recordingId)
             if (item) {
-              store.remove(item.id)
+              if (data.reason) store.markStopped(item.id, data.reason)
+              else store.remove(item.id)
             }
           })
         )
@@ -161,7 +159,7 @@ export function useTranscriptionSync() {
         unsubscribers.push(
           window.electronAPI.onTranscriptionAllCancelled(() => {
             const store = useTranscriptionStore.getState()
-            store.clear()
+            store.markAllStopped()
           })
         )
       }
@@ -183,6 +181,7 @@ export function useTranscriptionSync() {
       : null
 
     return () => {
+      disposed = true
       if (transcriptionInterval) clearInterval(transcriptionInterval)
       // TQ-09 FIX: Cleanup event listeners
       unsubscribers.forEach((unsub) => unsub())

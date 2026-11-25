@@ -1,3 +1,4 @@
+import { modelHostFetch } from './model-host-transport'
 /**
  * Borrow the diarization worker from the machine that has the GPU.
  *
@@ -6,10 +7,8 @@
  * gamestation and returns the same object, so nothing downstream can tell which
  * machine produced a result.
  *
- * Everything here is written so the host being off changes nothing. A host that
- * does not answer, is paused, is busy, or fails mid-job sends the recording
- * back to the local worker, which is what happens today when there is no host
- * at all.
+ * An unavailable host pauses remote work by default. Local fallback requires
+ * an explicit setting and remains bounded by the local resource policy.
  */
 
 import { readFile } from 'fs/promises'
@@ -81,7 +80,13 @@ export class ModelHostUnavailableError extends Error {
 function normalizeBase(url: string): string {
   const trimmed = url.trim().replace(/\/+$/, '')
   if (!trimmed) return ''
-  return /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`
+  const parsed = new URL(/^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`)
+  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' &&
+      ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname))) {
+    throw new Error('Remote worker requires HTTPS outside loopback; configure a trusted host certificate.')
+  }
+  if (parsed.username || parsed.password) throw new Error('Model host credentials must use pairing, not URL credentials.')
+  return parsed.href.replace(/\/+$/, '')
 }
 
 /**
@@ -95,7 +100,8 @@ export async function checkModelHost(
   fetchFn: typeof fetch = fetch,
   options: { forceRefresh?: boolean } = {}
 ): Promise<ModelHostHealth | null> {
-  const base = normalizeBase(settings.url)
+  let base: string
+  try { base = normalizeBase(settings.url) } catch { return null }
   if (!base) return null
 
   const key = `${base}\n${settings.token}`
@@ -108,7 +114,8 @@ export async function checkModelHost(
   const result = (async () => {
     let health: ModelHostHealth | null = null
     try {
-      const response = await fetchFn(`${base}/health`, {
+      const response = await ((url: string, init: RequestInit) => modelHostFetch(url, init, fetchFn))(`${base}/health`, {
+        redirect: 'error',
         // A stranger gets only the version and the state. The GPU, its driver
         // and how many clients are paired are reconnaissance, so the host hands
         // them to a paired client and nobody else.
@@ -141,7 +148,8 @@ export async function pairWithModelHost(
 ): Promise<{ token: string }> {
   const base = normalizeBase(url)
   if (!base) throw new Error('Enter the host address first.')
-  const response = await fetchFn(`${base}/pair`, {
+  const response = await ((url: string, init: RequestInit) => modelHostFetch(url, init, fetchFn))(`${base}/pair`, {
+    redirect: 'error',
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ code: String(code).trim() }),
@@ -162,7 +170,8 @@ async function putToHost<T>(
 ): Promise<T> {
   const base = normalizeBase(settings.url)
   if (!base) throw new Error('No model host is configured.')
-  const response = await fetchFn(`${base}${path}`, {
+  const response = await ((url: string, init: RequestInit) => modelHostFetch(url, init, fetchFn))(`${base}${path}`, {
+    redirect: 'error',
     method: 'PUT',
     headers: { authorization: `Bearer ${settings.token}`, 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -207,8 +216,9 @@ async function callHost<T>(
 ): Promise<T> {
   const base = normalizeBase(settings.url)
   if (!base) throw new Error('No model host is configured.')
-  const response = await fetchFn(`${base}${path}`, {
+  const response = await ((url: string, init: RequestInit) => modelHostFetch(url, init, fetchFn))(`${base}${path}`, {
     method,
+    redirect: 'error',
     headers: { authorization: `Bearer ${settings.token}` },
     ...(body !== undefined ? { body } : {}),
     signal: AbortSignal.timeout(timeoutMs),
@@ -255,6 +265,27 @@ export async function sendModelHostUpdate(
   await callHost(settings, 'PUT', '/update', installer, fetchFn, 5 * 60 * 1000)
 }
 
+export type ModelHostRole = 'semantic' | 'realtime' | 'generation'
+/** Explicit fixed maintenance actions only: never accepts a command or arbitrary route. */
+export async function prepareModelHostRole(settings: ModelHostSettings, role: ModelHostRole,
+  fetchFn: typeof fetch = fetch): Promise<void> {
+  if (!['semantic', 'realtime', 'generation'].includes(role)) throw new Error('Choose a supported model-host role.')
+  const base = normalizeBase(settings.url)
+  if (!base || new URL(base).protocol !== 'https:') throw new Error('Remote role preparation requires HTTPS.')
+  if (!settings.token) throw new Error('Pair with the model host before preparing a role.')
+  try { await callHost(settings, 'POST', `/runtime/prepare-${role}`, undefined, fetchFn) }
+  catch (error) {
+    if (error instanceof Error && error.message.startsWith('The host is older'))
+      throw new Error('Update the Model Host to a version supporting managed role preparation.', { cause: error })
+    throw error
+  }
+}
+
+export async function prepareModelHostAsr(settings: ModelHostSettings, model: string): Promise<void> {
+  if (new URL(settings.url).protocol !== 'https:') throw new Error('Remote model preparation requires HTTPS.')
+  await callHost(settings, 'POST', '/runtime/prepare-asr', JSON.stringify({ model }), fetch)
+}
+
 /** The decision models the host can run: Cloudflare's Clef (27B, 4-bit) and Clef-Flash (9B). */
 export type ModelHostDecisionModel = 'clef' | 'clef-flash'
 
@@ -290,7 +321,8 @@ export async function decideOnModelHost(
 ): Promise<JevResponse> {
   const base = normalizeBase(settings.url)
   if (!base) throw new ModelHostDecisionError('No model host is configured.', 0)
-  const response = await fetchFn(`${base}/v1/systemone`, {
+  const response = await ((url: string, init: RequestInit) => modelHostFetch(url, init, fetchFn))(`${base}/v1/systemone`, {
+    redirect: 'error',
     method: 'POST',
     headers: { authorization: `Bearer ${settings.token}`, 'content-type': 'application/json' },
     body: JSON.stringify(request),
@@ -331,6 +363,7 @@ export async function diarizeOnModelHost(
     shouldContinue?: () => boolean
     /** The voice model the library needs; the host runs this one, with no fallback. */
     model?: string
+    recordingId?: string
   },
   fetchFn: typeof fetch = fetch
 ): Promise<AcousticWorkerResult> {
@@ -342,6 +375,14 @@ export async function diarizeOnModelHost(
 
   const health = await checkModelHost(settings, fetchFn)
   if (!health) throw new ModelHostUnavailableError('The model host did not answer.')
+  if (health.protocolVersion === 1) {
+    if (!options.recordingId) throw new Error('Remote worker requires a recording identity for durable resume')
+    const { runRemoteWorkerJob } = await import('./remote-worker-jobs')
+    const { remoteJobCheckpoints } = await import('./remote-job-checkpoints')
+    return await runRemoteWorkerJob({ recordingId: options.recordingId, path: audioPath, base, token: settings.token,
+      model: options.model || 'pyannote/speaker-diarization-3.1', timeoutMs: options.timeoutMs,
+      shouldContinue: options.shouldContinue, store: remoteJobCheckpoints(options.recordingId), fetchFn }) as AcousticWorkerResult
+  }
   if (!health.capabilities.includes('diarize')) {
     throw new ModelHostUnavailableError('The model host cannot diarize; its setup has not finished.')
   }
@@ -366,14 +407,16 @@ export async function diarizeOnModelHost(
     : null
 
   try {
-    const response = await fetchFn(
+    const response = await ((url: string, init: RequestInit) => modelHostFetch(url, init, fetchFn))(
       `${base}/jobs/diarize?ext=${encodeURIComponent(extname(audioPath) || '.wav')}` +
         (options.model ? `&model=${encodeURIComponent(options.model)}` : ''),
       {
         method: 'POST',
+        redirect: 'error',
         headers: {
           authorization: `Bearer ${settings.token}`,
           'content-type': 'application/octet-stream',
+          ...(options.recordingId ? { 'x-hidock-recording-id': options.recordingId } : {}),
         },
         body: audio,
         signal: controller.signal,

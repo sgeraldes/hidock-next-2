@@ -17,6 +17,7 @@ import { copyFileSync, existsSync, rmSync, readdirSync, statSync, writeFileSync 
 import * as fs from 'fs'
 import Database from 'better-sqlite3'
 import { DatabaseEngine, MassDeleteError, parseDestructiveStatement } from '../src/index.js'
+import { migrationBackupTime } from '../src/engine.js'
 
 vi.mock('fs', { spy: true })
 
@@ -237,6 +238,43 @@ describe('rotating on-boot backup', () => {
     second.closeDatabase()
   })
 
+  it('copies the routine backup in small native steps and flushes the partial file as it grows', async () => {
+    const path = tempDbPath('backup-routine-steps')
+    paths.push(path)
+    const first = makeEngine(path, 3)
+    await first.initialize()
+    first.closeDatabase()
+
+    const real = Database.prototype.backup
+    const stepSizes: Array<number | undefined> = []
+    const backup = vi.spyOn(Database.prototype, 'backup').mockImplementationOnce(async function (
+      this: Database.Database,
+      destination: string,
+      options?: Database.BackupOptions
+    ) {
+      const result = await real.call(this, destination, options)
+      // The test database is a few pages, so SQLite never calls back. Drive the
+      // callback with the sizes a multi-gigabyte copy reports, while the partial exists.
+      stepSizes.push(options?.progress?.({ totalPages: 100000, remainingPages: 99000 }))
+      stepSizes.push(options?.progress?.({ totalPages: 100000, remainingPages: 80000 }))
+      return result
+    })
+    vi.mocked(fs.fsyncSync).mockClear()
+    const second = makeEngine(path, 3, true)
+    try {
+      await second.initialize()
+      await second.runDeferredBackup()
+    } finally {
+      second.closeDatabase()
+      backup.mockRestore()
+    }
+    expect(stepSizes).toEqual([256, 256])
+    // 1,000 pages copied is below the flush threshold; 20,000 crosses it once.
+    expect(vi.mocked(fs.fsyncSync)).toHaveBeenCalledTimes(1)
+    expect(siblingFiles(path).filter((file) => /\.bak-\d{4}-\d{2}-\d{2}$/.test(file))).toHaveLength(1)
+    expect(siblingFiles(path).some((file) => file.endsWith('.partial'))).toBe(false)
+  })
+
   describe('before a migration', () => {
     const extra: string[] = []
     afterEach(() => {
@@ -269,7 +307,7 @@ describe('rotating on-boot backup', () => {
         externalBackups,
       })
     }
-    const todays = (path: string) => siblingFiles(path).filter((f) => /\.bak-pre-v2-\d{8}T\d{9}Z-[\w-]+$/.test(f) && !/-wal$|-shm$/.test(f))
+    const todays = (path: string) => siblingFiles(path).filter((f) => /\.bak-pre-v2-(?:\d{8}T\d{9}Z-[\w-]+|[a-z0-9]+-[a-f0-9]{4})$/.test(f) && !/-wal$|-shm$/.test(f))
 
     it('ignores a stale same-day daily backup and verifies current contents before migration', async () => {
       const path = await v1File('backup-same-day')
@@ -313,7 +351,7 @@ describe('rotating on-boot backup', () => {
 
     it('removes an interrupted owned partial before checking space and recovers without removing other files', async () => {
       const path = await v1File('backup-interrupted')
-      const partial = `${path}.bak-pre-v2.partial`
+      const partial = `${path}.p`
       const unrelated = `${path}.bak-pre-v2-user.partial`
       const otherVersion = `${path}.bak-pre-v1.partial`
       writeFileSync(unrelated, 'user file')
@@ -451,6 +489,27 @@ describe('rotating on-boot backup', () => {
       expect(existsSync(`${path}.bak-pre-v99-20990101T000000000Z-old`)).toBe(false)
     })
 
+    it('orders old ISO and short base-36 snapshot names by their time when pruning (review of #173)', async () => {
+      const path = await v1File('backup-mixed-names')
+      const short = (iso: string) => Date.parse(iso).toString(36)
+      // 21 and 22 November in the short form, 23 November in the old form.
+      copyFileSync(path, `${path}.bak-pre-v99-${short('2026-11-21T10:00:00Z')}-aaaa`)
+      copyFileSync(path, `${path}.bak-pre-v99-${short('2026-11-22T10:00:00Z')}-bbbb`)
+      copyFileSync(path, `${path}.bak-pre-v99-20261123T100000000Z-old`)
+      const e = v2Engine(path)
+      try { await e.initialize() } finally { e.closeDatabase() }
+      expect(existsSync(`${path}.bak-pre-v99-${short('2026-11-21T10:00:00Z')}-aaaa`)).toBe(false)
+      expect(existsSync(`${path}.bak-pre-v99-${short('2026-11-22T10:00:00Z')}-bbbb`)).toBe(true)
+      expect(existsSync(`${path}.bak-pre-v99-20261123T100000000Z-old`)).toBe(true)
+    })
+
+    it('reads a snapshot time from its own suffix, not from a database name that looks like a backup', () => {
+      expect(migrationBackupTime('pre-v75-' + Date.parse('2026-11-22T10:00:00Z').toString(36) + '-bbbb')).toBe(Date.parse('2026-11-22T10:00:00Z'))
+      expect(migrationBackupTime('pre-v74-20261123T100000000Z-old')).toBe(Date.parse('2026-11-23T10:00:00Z'))
+      // The part before the suffix is the database's own name; it is never parsed.
+      expect(migrationBackupTime('pre-v75-mhzk3p0q')).toBe(Number.NEGATIVE_INFINITY)
+    })
+
     it('reports the copy as it goes, then the migration', async () => {
       const path = await v1File('backup-progress')
       const seen: string[] = []
@@ -467,6 +526,27 @@ describe('rotating on-boot backup', () => {
       expect(seen.at(-1)).toBe('migrating')
       expect(last.totalBytes).toBeGreaterThan(0)
       expect(last.copiedBytes).toBe(last.totalBytes)
+      expect(todays(path)).toHaveLength(1)
+    })
+
+    it('keeps the required pre-migration copy in large steps with no periodic flush', async () => {
+      const path = await v1File('backup-migration-steps')
+      const real = Database.prototype.backup
+      const stepSizes: Array<number | undefined> = []
+      const backup = vi.spyOn(Database.prototype, 'backup').mockImplementationOnce(async function (
+        this: Database.Database,
+        destination: string,
+        options?: Database.BackupOptions
+      ) {
+        const result = await real.call(this, destination, options)
+        stepSizes.push(options?.progress?.({ totalPages: 100000, remainingPages: 80000 }))
+        return result
+      })
+      vi.mocked(fs.fsyncSync).mockClear()
+      const e = v2Engine(path)
+      try { await e.initialize() } finally { e.closeDatabase(); backup.mockRestore() }
+      expect(stepSizes).toEqual([2048])
+      expect(vi.mocked(fs.fsyncSync)).not.toHaveBeenCalled()
       expect(todays(path)).toHaveLength(1)
     })
 

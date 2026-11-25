@@ -1,3 +1,4 @@
+import { isFindTypingTarget, type ReaderFindSession } from '@/features/library/components/ReaderFind'
 import { describeRetranscribeSkips } from '../shared/retranscribe'
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, useDeferredValue } from 'react'
 import { isRecordingAudioFile } from '@/shared/audio-extensions'
@@ -174,6 +175,8 @@ function purgeFilenameBase(filename?: string | null): string | null {
 }
 
 export function Library() {
+  // TriPaneLayout remounts the reader when a section is maximized/restored.
+  const findSession = useRef<ReaderFindSession>({ open: false, query: '', position: 0 })
   const navigate = useNavigate()
   const location = useLocation()
   const {
@@ -198,23 +201,28 @@ export function Library() {
     const targets = [...new Set(ids)]
     for (let offset = 0; offset < targets.length; offset += 5000) {
       const verdicts = await window.electronAPI.transcripts.getVerdicts({ recordingIds: targets.slice(offset, offset + 5000) })
-      const merged = new Map(transcriptsRef.current)
-      for (const [id, verdict] of Object.entries(verdicts)) {
-        const transcript = merged.get(id)
-        if (!transcript) continue
-        merged.set(id, {
-          ...transcript,
-          integrity_status: verdict.integrity_status,
-          integrity_json: verdict.integrity_json,
-          integrity_version: verdict.integrity_version,
-          integrity_accepted_at: verdict.integrity_accepted_at,
-          validity_status: verdict.validity_status,
-          validity_json: verdict.validity_json,
-          validity_version: verdict.validity_version,
-        })
+      // Applied onto the latest map, so metadata another reload queued meanwhile
+      // (a restored summary) survives the verdict refresh (review of #173).
+      const apply = (base: Map<string, Transcript>): Map<string, Transcript> => {
+        const merged = new Map(base)
+        for (const [id, verdict] of Object.entries(verdicts)) {
+          const transcript = merged.get(id)
+          if (!transcript) continue
+          merged.set(id, {
+            ...transcript,
+            integrity_status: verdict.integrity_status,
+            integrity_json: verdict.integrity_json,
+            integrity_version: verdict.integrity_version,
+            integrity_accepted_at: verdict.integrity_accepted_at,
+            validity_status: verdict.validity_status,
+            validity_json: verdict.validity_json,
+            validity_version: verdict.validity_version,
+          })
+        }
+        return merged
       }
-      transcriptsRef.current = merged
-      setTranscripts(merged)
+      transcriptsRef.current = apply(transcriptsRef.current)
+      setTranscripts((prev) => apply(prev))
     }
     return transcriptsRef.current
   }, [])
@@ -230,11 +238,15 @@ export function Library() {
     const fresh = new Map<string, Transcript>(
       Object.entries(await window.electronAPI.transcripts.getByRecordingIdsOwner(targets)) as [string, Transcript][]
     )
-    setTranscripts((prev) => {
-      const merged = new Map(prev)
+    const mergeFresh = (base: Map<string, Transcript>): Map<string, Transcript> => {
+      const merged = new Map(base)
       for (const [id, t] of fresh) merged.set(id, t)
       return merged
-    })
+    }
+    // The ref too: a verdict refresh that reads it before the next render
+    // must see this text and metadata.
+    transcriptsRef.current = mergeFresh(transcriptsRef.current)
+    setTranscripts((prev) => mergeFresh(prev))
     return fresh
   }, [])
 
@@ -562,13 +574,15 @@ export function Library() {
   const { message: announcement, announce } = useAnnouncement()
 
   // Handle navigation state for incoming selectedId
+  const [processingFocus, setProcessingFocus] = useState<{ id: string; nonce: number } | null>(null)
   useEffect(() => {
-    const state = location.state as { selectedId?: string } | null
+    const state = location.state as { selectedId?: string; focusProcessing?: boolean } | null
     if (state?.selectedId) {
       // Find the recording with this ID
       const recording = recordings.find((r) => r.id === state.selectedId)
       if (recording) {
         setSelectedSourceId(recording.id)
+        if (state.focusProcessing) setProcessingFocus({ id: recording.id, nonce: Date.now() })
         // Clear the navigation state to prevent re-triggering on refresh
         navigate(location.pathname, { replace: true, state: {} })
       }
@@ -638,12 +652,11 @@ export function Library() {
           const localIds = new Set(recordingsRef.current.filter((rec) => hasLocalPath(rec)).map((rec) => rec.id))
           const checked = await reloadVerdicts([...localIds])
           const flagged = [...checked.entries()].filter(([id, t]) => {
-            const label = integrityLabel(t)
-            return localIds.has(id) && (label === 'suspect' || label === 'broken')
+            return localIds.has(id) && matchesIntegrityFilter(t, 'flagged')
           }).length
           if ((result.integrityChecked ?? 0) > 0 && flagged > 0) {
             toast.warning(
-              `${flagged} transcript${flagged === 1 ? ' has' : 's have'} problems in their timing or text`,
+              `${flagged} transcript${flagged === 1 ? ' is' : 's are'} invalid or incomplete`,
               'Each one is labelled in the list. Filter by Transcript to review them: transcribe again, or accept as is.',
               { duration: 30_000, action: { label: 'Review', onClick: () => setIntegrityFilter('flagged') } }
             )
@@ -760,7 +773,7 @@ export function Library() {
   // Enrichment: Load transcripts and meetings for recordings
   const [meetings, setMeetings] = useState<Map<string, Meeting>>(new Map())
 
-  const refreshCompletedTranscription = useCallback(async (recordingId: string) => {
+  const refreshCompletedTranscription = useCallback(async (recordingId: string, textOnly = false) => {
     const startedAt = performance.now()
     try {
       // ADV13: owner Library management — owner accessor shows the owner their OWN
@@ -788,6 +801,7 @@ export function Library() {
         return next
       })
 
+      if (textOnly) return
       const appState = useAppStore.getState()
       // The transcript match can move the recording to another meeting, so the part numbers are recomputed.
       appState.setUnifiedRecordings(withMeetingParts(appState.unifiedRecordings.map((recording) => {
@@ -825,6 +839,12 @@ export function Library() {
 
   useEffect(() => {
     const unsubscribers: Array<() => void> = []
+
+    if (window.electronAPI.onTranscriptionTextAvailable) {
+      unsubscribers.push(window.electronAPI.onTranscriptionTextAvailable((data) => {
+        void refreshCompletedTranscription(data.recordingId, true)
+      }))
+    }
 
     if (window.electronAPI.onTranscriptionCompleted) {
       unsubscribers.push(window.electronAPI.onTranscriptionCompleted((data) => {
@@ -1022,12 +1042,15 @@ export function Library() {
     const api = window.electronAPI
     if (!api?.onDomainEvent) return
     const pending = new Set<string>()
+    const pendingMetadata = new Set<string>()
     let timer: ReturnType<typeof setTimeout> | undefined
     const unsubscribe = api.onDomainEvent((event) => {
       if (event?.type === 'audio:profiles-updated' || event?.type === 'evaluation:warnings-updated') {
         void refreshLocal?.()
         for (const id of transcriptsRef.current.keys()) pending.add(id)
       } else if (event?.type === 'transcript:verdicts-updated') {
+        for (const id of event.payload?.metadataChangedIds ?? []) pendingMetadata.add(id)
+        if (pendingMetadata.size > 0) void refreshLocal?.()
         for (const id of event.payload?.recordingIds ?? []) pending.add(id)
       } else return
       if (pending.size === 0) return
@@ -1035,7 +1058,15 @@ export function Library() {
       timer = setTimeout(() => {
         const ids = [...pending]
         pending.clear()
-        void reloadVerdicts(ids).catch((error) => console.warn('[Library] Verdict refresh failed:', error))
+        const metadataIds = [...pendingMetadata]
+        pendingMetadata.clear()
+        void (async () => {
+          // A failed metadata read must not skip the verdict refresh.
+          if (metadataIds.length > 0) {
+            await reloadTranscripts(metadataIds).catch((error) => console.warn('[Library] Metadata refresh failed:', error))
+          }
+          await reloadVerdicts(ids)
+        })().catch((error) => console.warn('[Library] Verdict refresh failed:', error))
       }, 1500)
     })
     return () => {
@@ -1043,7 +1074,7 @@ export function Library() {
       clearTimeout(timer)
       pending.clear()
     }
-  }, [refreshLocal, reloadVerdicts])
+  }, [refreshLocal, reloadVerdicts, reloadTranscripts])
 
   // How many transcripts each Transcript-filter value matches, over the same
   // population the other facets count.
@@ -1066,7 +1097,6 @@ export function Library() {
 
   // Automatic path to green for everything the current Transcript filter shows.
   const [retranscribeArmed, setRetranscribeArmed] = useState(false)
-  useEffect(() => setRetranscribeArmed(false), [integrityFilter])
 
   // Filter recordings based on scoped set + search, then sort.
   const filteredRecordings = useMemo(() => {
@@ -1231,6 +1261,9 @@ export function Library() {
   // same database id. A filename-qualified key prevents React from retaining a
   // stale sibling DOM node on the same virtual track while the local rebuild
   // corrects the data.
+  const retranscribeScopeKey = filteredRecordings.map(rec => `${rec.id}:${rec.duration ?? 0}`).join('|')
+  useEffect(() => setRetranscribeArmed(false), [integrityFilter, retranscribeScopeKey])
+
   const itemRenderKeys = useMemo(() => {
     const idCounts = new Map<string, number>()
     for (const recording of displayedRecordings) {
@@ -1537,7 +1570,7 @@ export function Library() {
             if (!ok) throw new Error('Device deletion failed')
           } else {
             // Soft cascade delete: hides + pulls from AI, restorable, no data leak.
-            const res = await window.electronAPI.recordings.deleteCascade(recording.id, false)
+            const res = await window.electronAPI.recordings.deleteCascade(recording.id, false, { requestedBy: 'library:bulk-move-to-trash' })
             if (!res?.success) throw new Error(res?.error || 'Delete failed')
           }
           deletedIds.add(recording.id)
@@ -1721,7 +1754,7 @@ export function Library() {
             }
 
             // Hard purge (v51 tombstones + binary-cache invalidation included).
-            const res = await window.electronAPI.recordings.deleteCascade(recording.id, true)
+            const res = await window.electronAPI.recordings.deleteCascade(recording.id, true, { requestedBy: 'library:bulk-delete-permanently' })
             if (!res?.success) throw new Error(res?.error || 'Purge failed')
             suppressPurgedFilenames(
               recording.filename,
@@ -1973,7 +2006,7 @@ export function Library() {
   const executeDeleteLocal = useCallback(async (recording: UnifiedRecording) => {
     setDeleting(recording.id)
     try {
-      const res = await window.electronAPI.recordings.deleteCascade(recording.id, false)
+      const res = await window.electronAPI.recordings.deleteCascade(recording.id, false, { requestedBy: 'library:move-to-trash' })
       if (!res?.success) throw new Error(res?.error || 'Delete failed')
       await refresh(false)
       // spec-005/F17 T5 §D1 step 7 — keep the Trash count accurate after every
@@ -2047,8 +2080,8 @@ export function Library() {
     announce(`Removing local data for ${nameOf(recording)}`)
     try {
       const res = opts?.skipGraphCleanup
-        ? await window.electronAPI.recordings.deleteCascade(recording.id, true, { skipGraphCleanup: true })
-        : await window.electronAPI.recordings.deleteCascade(recording.id, true)
+        ? await window.electronAPI.recordings.deleteCascade(recording.id, true, { requestedBy: 'library:delete-permanently', skipGraphCleanup: true })
+        : await window.electronAPI.recordings.deleteCascade(recording.id, true, { requestedBy: 'library:delete-permanently' })
 
       if (!res?.success) {
         const graphUnavailable = !!(res as { graphUnavailable?: boolean } | undefined)?.graphUnavailable
@@ -2498,6 +2531,18 @@ export function Library() {
         ? displayedRecordings.find((r) => r.id === selectedSourceId)
         : recordings.find((r) => r.id === selectedSourceId)) ?? null
     : null
+  const readerHasSource = !!selectedRecording && selectedRecordings.length <= 1
+  useEffect(() => {
+    if (readerHasSource) return
+    const handleFind = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || !(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== 'f') return
+      if (isFindTypingTarget(event.target)) return
+      const input = document.querySelector<HTMLInputElement>('input[aria-label="Search the sources shown in this list"]')
+      if (input) { event.preventDefault(); input.focus(); input.select() }
+    }
+    window.addEventListener('keydown', handleFind)
+    return () => window.removeEventListener('keydown', handleFind)
+  }, [readerHasSource])
   const selectionOutsideCurrentView = Boolean(
     selectedRecording && !displayedRecordings.some((recording) => recording.id === selectedRecording.id)
   )
@@ -2905,12 +2950,12 @@ export function Library() {
                 </span>
                 {!retranscribeArmed ? (
                   <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setRetranscribeArmed(true)}>
-                    Transcribe {filteredRecordings.length === 1 ? 'it' : `all ${filteredRecordings.length}`} again
+                    Transcribe {filteredRecordings.length === 1 ? 'it' : `all ${filteredRecordings.length}`} again ({formatTranscriptionCost(filteredRecordings.reduce((sum, rec) => sum + (rec.duration || 0), 0))})
                   </Button>
                 ) : (
                   <>
                     <span>
-                      This sends the audio to the transcription provider again:{' '}
+                      Confirm transcription of {filteredRecordings.length} recordings:{' '}
                       {formatTranscriptionCost(filteredRecordings.reduce((sum, rec) => sum + (rec.duration || 0), 0))} for{' '}
                       {Math.round(filteredRecordings.reduce((sum, rec) => sum + (rec.duration || 0), 0) / 60)} minutes.
                     </span>
@@ -3484,6 +3529,8 @@ export function Library() {
               />
             ) : (
             <SourceReader
+              processingFocus={processingFocus?.id === selectedRecording?.id ? processingFocus?.nonce : undefined}
+              findSession={findSession}
               recording={selectedRecording ?? null}
               transcript={selectedTranscript}
               meeting={selectedMeeting}
@@ -3496,6 +3543,12 @@ export function Library() {
               }}
               onStop={handleStopCallback}
               onClose={() => setSelectedSourceId(null)}
+              onFindSeek={(startMs) => {
+                if (!selectedRecording || !hasLocalPath(selectedRecording)) return
+                const ui = useUIStore.getState()
+                if (ui.currentlyPlayingId === selectedRecording.id) audioControls.seek(startMs / 1000)
+                else void audioControls.play(selectedRecording.id, selectedRecording.localPath, startMs / 1000, false)
+              }}
               onSeek={(startMs) => {
                 if (!selectedRecording || !hasLocalPath(selectedRecording)) return
                 // A time click plays from that point: it starts this recording if

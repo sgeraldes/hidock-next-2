@@ -43,12 +43,21 @@ import {
 } from '@/store/ui/useUIStore'
 import { useOperations } from '@/hooks/useOperations'
 import { useProcessingPause } from '@/hooks/useProcessingPause'
-import { splitBySession, recordingForDownload, operationLabel } from './operationHistory'
+import {
+  countActiveDownloads,
+  mergeDownloadQueues,
+  splitBySession,
+  recordingForDownload,
+  operationLabel
+} from './operationHistory'
 import { isRetryableDownloadItem } from '@/hooks/useDownloadOrchestrator'
 import type { UnifiedRecording } from '@/types/unified-recording'
 import { toast } from '@/components/ui/toaster'
 import { isFeatureOffThisRun } from '@/lib/bootFeatures'
 import { appLocale } from '@/lib/locale'
+import { TranscriptionActivity } from './TranscriptionActivity'
+
+type MainDownloadQueueRow = Omit<DownloadQueueEntry, 'size'> & { fileSize: number }
 
 interface OperationsPanelProps {
   sidebarOpen: boolean
@@ -82,6 +91,8 @@ function transcriptionStatus(status: TranscriptionStatus): React.ReactNode {
       return <StateMark label="Transcribing" />
     case 'completed':
       return 'Done'
+    case 'cancelled':
+      return 'Stopped'
     default:
       return 'Failed'
   }
@@ -177,6 +188,7 @@ export function OperationsPanel({ sidebarOpen }: OperationsPanelProps) {
   const dismissManyItems = useTranscriptionStore((s) => s.dismissMany)
   // One switch for downloads + transcriptions, shared with the Library header.
   const { paused: processingPaused, transcriptionPaused, toggle: toggleProcessing } = useProcessingPause()
+  const pauseReason = useTranscriptionStore((s) => s.pauseReason)
   const applyQueueState = useTranscriptionStore((s) => s.applyQueueState)
   const recordings = useUnifiedRecordings()
   const { cancelTranscription, cancelDownload, cancelAllDownloads, retryFailedDownloads } = useOperations()
@@ -189,43 +201,40 @@ export function OperationsPanel({ sidebarOpen }: OperationsPanelProps) {
   // omitted there so unrelated Download buttons are not disabled; retain a second,
   // read-only projection from the durable main queue for Operations history.
   const [persistedDownloads, setPersistedDownloads] = useState<DownloadQueueEntry[]>([])
+  const [downloadStateReady, setDownloadStateReady] = useState(false)
 
   useEffect(() => {
     if (!window.electronAPI?.downloadService || isFeatureOffThisRun('device-sync')) return
+    let receivedStateUpdate = false
+    const projectQueue = (items: MainDownloadQueueRow[]) => {
+      setPersistedDownloads(items.map((item) => ({
+        filename: item.filename,
+        size: item.fileSize,
+        progress: item.progress,
+        status: item.status,
+        error: item.error,
+        cancelReason: item.cancelReason,
+        fromPreviousSession: item.fromPreviousSession
+      })))
+      setDownloadStateReady(true)
+    }
+    const unsub = window.electronAPI.downloadService.onStateUpdate((state) => {
+      receivedStateUpdate = true
+      projectQueue(state.queue)
+    })
     window.electronAPI.downloadService.getState().then((state) => {
       // Hydrate the download pause after a renderer reload (main keeps it in memory).
       useAppStore.getState().setDownloadsPaused(state?.isPaused === true)
-      setPersistedDownloads((state?.queue ?? []).map((item) => ({
-        filename: item.filename,
-        size: item.fileSize,
-        progress: item.progress,
-        status: item.status,
-        error: item.error,
-        cancelReason: item.cancelReason,
-        fromPreviousSession: item.fromPreviousSession
-      })))
+      if (!receivedStateUpdate) projectQueue(state?.queue ?? [])
     }).catch(() => {})
-    const unsub = window.electronAPI.downloadService.onStateUpdate((state: { queue: Array<{ filename: string; fileSize: number; progress: number; status: DownloadQueueEntry['status']; error?: string; cancelReason?: 'user' | 'interrupted'; fromPreviousSession?: boolean }> }) => {
-      setPersistedDownloads(state.queue.map((item) => ({
-        filename: item.filename,
-        size: item.fileSize,
-        progress: item.progress,
-        status: item.status,
-        error: item.error,
-        cancelReason: item.cancelReason,
-        fromPreviousSession: item.fromPreviousSession
-      })))
-    })
     return unsub
   }, [])
 
   const downloads = useMemo(() => {
-    const merged = new Map(persistedDownloads.map((item) => [item.filename, item]))
-    for (const item of downloadQueue.values()) merged.set(item.filename, item)
-    return Array.from(merged.values())
+    return mergeDownloadQueues(downloadQueue.values(), persistedDownloads, downloadStateReady)
       .filter((item) => item.status !== 'completed')
       .sort((a, b) => downloadStatusRank(a) - downloadStatusRank(b))
-  }, [downloadQueue, persistedDownloads])
+  }, [downloadQueue, persistedDownloads, downloadStateReady])
   // Failures from an earlier app session go to one collapsed group, not the badge.
   const downloadHistory = useMemo(() => splitBySession(downloads), [downloads])
 
@@ -249,7 +258,7 @@ export function OperationsPanel({ sidebarOpen }: OperationsPanelProps) {
       toast.warning('Source unavailable', 'This source is no longer in the Library.')
       return
     }
-    navigate('/library', { state: { selectedId: rec.id } })
+    navigate('/library', { state: { selectedId: rec.id, focusProcessing: true } })
     closeOverlay()
   }, [recordings, navigate, closeOverlay])
 
@@ -280,14 +289,14 @@ export function OperationsPanel({ sidebarOpen }: OperationsPanelProps) {
   }, [dismissDownload, dismissManyItems])
 
   const currentDownloads = downloadHistory.current
-  const activeDownloadCount = currentDownloads.filter((item) => ['pending', 'downloading', 'cancelling'].includes(item.status)).length
+  const activeDownloadCount = countActiveDownloads(currentDownloads)
   const failedDownloadCount = currentDownloads.filter((item) => isRetryableDownloadItem(item)).length
   const hasDownloads = activeDownloadCount > 0
   const hasFailedDownloads = failedDownloadCount > 0
   const hasTranscriptions =
-    transcriptionStats.pending > 0 || transcriptionStats.processing > 0 || transcriptionStats.failed > 0
+    transcriptionStats.pending > 0 || transcriptionStats.processing > 0 || transcriptionStats.failed > 0 || Array.from(transcriptionQueue.values()).some((item) => item.status === 'cancelled')
   // Stay visible while paused, so Resume is always one click away.
-  if (!hasDownloads && !hasFailedDownloads && !hasTranscriptions && downloadHistory.earlier.length === 0 && !processingPaused) return null
+  if (!hasDownloads && !hasFailedDownloads && !hasTranscriptions && downloadHistory.earlier.length === 0 && !processingPaused && !pauseReason) return null
 
   const activeTranscriptions = transcriptionStats.processing + transcriptionStats.pending
   const transcriptionHistory = splitBySession(
@@ -337,9 +346,14 @@ export function OperationsPanel({ sidebarOpen }: OperationsPanelProps) {
           <button
             type="button"
             onClick={openOverlay}
-            aria-label={`Operations: ${activeTranscriptions} transcribing${errorCount ? `, ${errorCount} error(s)` : ''}`}
+            aria-label={`Operations: ${pauseReason === 'no_gemini_key' ? 'Transcription paused: no Gemini key, ' : ''}${activeTranscriptions} transcribing${errorCount ? `, ${errorCount} error(s)` : ''}`}
             className="relative flex w-full flex-col items-center gap-1 rounded-md py-1 text-slate-300 hover:bg-slate-800"
           >
+            {pauseReason === 'no_gemini_key' && (
+              <span className="flex items-center text-amber-400" data-testid="operations-paused-no-key" title="Transcription paused: no Gemini key">
+                <Pause className="h-3 w-3" aria-hidden="true" />
+              </span>
+            )}
             {hasTranscriptions && (
               <span className="flex items-center gap-1 text-[10px] text-purple-400">
                 <Sparkles className={cn('h-3 w-3', activeTranscriptions > 0 && 'animate-pulse')} />
@@ -364,6 +378,7 @@ export function OperationsPanel({ sidebarOpen }: OperationsPanelProps) {
 
   // Expanded sidebar: activity + honest indeterminate stage + error count.
   const primaryLabel =
+    pauseReason === 'no_gemini_key' ? 'Transcription paused: no Gemini key' :
     activeTranscriptions > 0
       ? `${activeTranscriptions} transcribing`
       : hasDownloads
@@ -475,6 +490,7 @@ function OperationsOverlay({
   onDismissDownload,
   onRetryFailedDownloads
 }: OperationsOverlayProps) {
+  const pauseReason = useTranscriptionStore((s) => s.pauseReason)
   const [copiedErrorId, setCopiedErrorId] = useState<string | null>(null)
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set())
   const [earlierOpen, setEarlierOpen] = useState(false)
@@ -532,6 +548,7 @@ function OperationsOverlay({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-6" role="dialog" aria-modal="true" aria-label="Operations detail">
       <button type="button" aria-label="Close" className="absolute inset-0 bg-black/50" onClick={onClose} />
       <div className="relative z-10 flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-slate-700 bg-slate-900 text-slate-100 shadow-2xl">
+        {pauseReason === 'no_gemini_key' && <p className="px-4 py-2 text-xs text-amber-300">Transcription paused: no Gemini key</p>}
         <div className="flex items-center justify-between border-b border-slate-700 px-4 py-3">
           <div className="flex items-center gap-2">
             <Sparkles className="h-4 w-4 text-purple-400" />
@@ -709,7 +726,6 @@ function OperationsOverlay({
                 const startedAt = formatOperationTime(item.startedAt)
                 const failedAt = formatOperationTime(item.completedAt)
                 const queuedAt = formatOperationTime(item.createdAt)
-                const eventTime = isFailed ? failedAt : item.status === 'processing' ? startedAt : queuedAt
                 const isBusy = busyIds.has(item.id)
                 return (
                   <li
@@ -728,8 +744,8 @@ function OperationsOverlay({
                         <div className="truncate text-sm text-slate-100 hover:text-sky-300">{title}</div>
                         <div className="truncate text-[11px] tabular-nums text-slate-400">
                           {transcriptionStatus(item.status)} · {attemptLabel(item)}
-                          {eventTime ? ` · ${eventTime}` : ''}
                         </div>
+                        <TranscriptionActivity item={item} onStop={onCancel} onRetry={item.status === 'cancelled' ? (id) => { void onRetry(id) } : undefined} onDismiss={(id) => { void onDismiss(id) }} />
                       </div>
 
                       <div className="flex shrink-0 items-center gap-1">
@@ -783,11 +799,11 @@ function OperationsOverlay({
                               Dismiss
                             </Button>
                           </>
-                        ) : (
-                          <IconBtn label="Cancel" danger onClick={() => onCancel(item.recordingId)}>
+                        ) : isPending ? (
+                          <IconBtn label="Remove from queue" danger onClick={() => onCancel(item.recordingId)}>
                             <X className="h-4 w-4" />
                           </IconBtn>
-                        )}
+                        ) : null}
                       </div>
                     </div>
 
@@ -796,7 +812,7 @@ function OperationsOverlay({
                         <summary className="flex cursor-pointer list-none items-center gap-2 rounded-md px-3 py-2 text-xs font-medium text-red-200 outline-hidden hover:bg-slate-800/80 focus-visible:ring-1 focus-visible:ring-red-400 [&::-webkit-details-marker]:hidden">
                           <ChevronDown className="h-3.5 w-3.5 shrink-0 transition-transform group-open:rotate-180" />
                           <span>Failure details</span>
-                          {failedAt && <span className="ms-auto tabular-nums font-normal text-slate-400">{failedAt}</span>}
+                          {failedAt && <span className="ms-auto tabular-nums font-normal text-slate-400">Failed {failedAt}</span>}
                         </summary>
                         <div className="space-y-3 px-3 pb-3">
                           <dl className="grid grid-cols-1 gap-1 text-[11px] text-slate-400 sm:grid-cols-2">
@@ -805,9 +821,6 @@ function OperationsOverlay({
                             <div><dt className="inline text-slate-500">First queued: </dt><dd className="inline tabular-nums text-slate-200">{queuedAt ?? 'Unknown'}</dd></div>
                             <div><dt className="inline text-slate-500">Last started: </dt><dd className="inline tabular-nums text-slate-200">{startedAt ?? 'Unknown'}</dd></div>
                           </dl>
-                          <div className="rounded-md bg-red-950/30 px-3 py-2">
-                            <pre className="select-text whitespace-pre-wrap wrap-break-word font-sans text-xs leading-5 text-red-100">{item.error || 'No error details were recorded.'}</pre>
-                          </div>
                           {item.error && (
                             <Button
                               variant="ghost"

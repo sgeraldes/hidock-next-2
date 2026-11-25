@@ -141,7 +141,7 @@ export function registerKnowledgeHandlers(): void {
         values.push(normalized)
       }
       if (updates.title !== undefined) { fields.push('title = ?'); values.push(updates.title); }
-      if (updates.summary !== undefined) { fields.push('summary = ?'); values.push(updates.summary); }
+      if (updates.summary !== undefined) { fields.push('summary = ?', "summary_source = 'user'"); values.push(updates.summary); }
       if (updates.category !== undefined) { fields.push('category = ?'); values.push(updates.category); }
       if (updates.status !== undefined) { fields.push('status = ?'); values.push(updates.status); }
       if (updates.quality !== undefined) {

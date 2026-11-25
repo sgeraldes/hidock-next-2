@@ -31,9 +31,21 @@ describe('assessTranscriptIntegrity', () => {
     expect(r.issues).toContainEqual(expect.objectContaining({ code: 'repeated_start', count: 2 }))
   })
 
-  it('flags the two lines outside the ordered sequence at a chunk seam', () => {
+  it('reports the two lines outside the ordered sequence at a chunk seam as one section', () => {
     const r = assessTranscriptIntegrity(json([seg(6665, 'a'), seg(6669, 'b'), seg(5400, 'c'), seg(5423, 'd')]), 7000)
-    expect(r.issues).toContainEqual(expect.objectContaining({ code: 'backwards_start', count: 2 }))
+    expect(r.issues).toContainEqual(expect.objectContaining({ code: 'mistimed_run', count: 1 }))
+    expect(r.issues.some((i) => i.code === 'backwards_start')).toBe(false)
+    expect(r.status).toBe('suspect')
+  })
+
+  it('flags one odd line, and a line written twice, as their own findings', () => {
+    const r = assessTranscriptIntegrity(json([seg(10, 'uno'), seg(20, 'dos'), seg(900, 'tres'), seg(30, 'cuatro'), seg(40, 'cinco')]), 1000)
+    expect(r.issues).toContainEqual(expect.objectContaining({ code: 'backwards_start', count: 1 }))
+    const twice = JSON.stringify([
+      { start: 10, end: 11, text: 'ciento veinte horas', speaker: 'A' }, { start: 12, end: 13, text: 'otra cosa', speaker: 'B' },
+      { start: 5, end: 6, text: 'ciento veinte horas', speaker: 'A' }, { start: 14, end: 15, text: 'sigue', speaker: 'B' }
+    ])
+    expect(assessTranscriptIntegrity(twice, 100).issues).toContainEqual(expect.objectContaining({ code: 'duplicate_line', count: 1 }))
   })
 
   it('flags a line with more words than its time allows', () => {

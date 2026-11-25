@@ -110,6 +110,22 @@ describe('acquireSingleInstanceLock', () => {
     expect(win.restore).not.toHaveBeenCalled()
   })
 
+  it('requests UI attachment on an owner launch when the backend has no window', () => {
+    mockedApp.requestSingleInstanceLock.mockReturnValue(true)
+    const onShowUi = vi.fn()
+    acquireSingleInstanceLock({ getMainWindow: () => null, onShowUi })
+    mockedApp.__emit('second-instance', {}, ['HiDock.exe'], '', {})
+    expect(onShowUi).toHaveBeenCalledOnce()
+  })
+
+  it('does not open a UI when a second backend launch probes the running instance', () => {
+    mockedApp.requestSingleInstanceLock.mockReturnValue(true)
+    const onShowUi = vi.fn()
+    acquireSingleInstanceLock({ getMainWindow: () => null, onShowUi })
+    mockedApp.__emit('second-instance', {}, ['HiDock.exe', '--backend-only'], '', {})
+    expect(onShowUi).not.toHaveBeenCalled()
+  })
+
   it('restores a minimized main window before focusing it', () => {
     mockedApp.requestSingleInstanceLock.mockReturnValue(true)
     const win = makeWindow({ isMinimized: vi.fn(() => true) })

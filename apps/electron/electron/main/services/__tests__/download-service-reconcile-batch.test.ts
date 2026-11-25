@@ -40,11 +40,12 @@ vi.mock('../database', () => ({
   markRecordingDownloaded: vi.fn(),
   addSyncedFile: vi.fn(),
   isFileSynced: () => false,
-  getSyncedFile: () => undefined,
+  getSyncedFile: vi.fn(() => undefined),
   removeSyncedFile: vi.fn(),
   isFilePurged: (filename: string) => mockIsFilePurged(filename),
   getPurgedFilenames: () => mockGetPurgedFilenames(),
   getRecordingByFilename: vi.fn(() => null),
+  markRecordingsNotOnDevice: vi.fn(),
   upsertRecordingFromDevice: vi.fn((file: DeviceFile) => ({
     id: `id:${file.filename}`,
     filename: file.filename,
@@ -92,6 +93,7 @@ vi.mock('fs', async (importOriginal) => {
 })
 
 import { getDownloadService } from '../download-service'
+import { upsertRecordingFromDevice } from '../database'
 
 type DeviceFile = { filename: string; size: number; duration: number; dateCreated: Date }
 
@@ -105,6 +107,54 @@ function makeFiles(n: number): DeviceFile[] {
 }
 
 describe('device file-list reconcile: one transaction, batched yields, hoisted tombstones', () => {
+  it.each(['wav', 'mp3'])('does not skip device audio because an independent external %s exists on disk', async (extension) => {
+    const { getRecordingByFilename } = await import('../database')
+    vi.mocked(getRecordingByFilename).mockImplementation((name) => name === `Rec01.${extension}`
+      ? { id: 'external', source: 'external', is_imported: 1 } as never : undefined)
+    mockExistsSync.mockReturnValue(true)
+    expect(getDownloadService().isFileAlreadySynced('Rec01.hda').synced).toBe(false)
+    vi.mocked(getRecordingByFilename).mockReturnValue(undefined)
+  })
+  it.each(['wav', 'mp3'])('queues the device take beside an independent external %s import', async (extension) => {
+    const { getRecordingByFilename } = await import('../database')
+    const stem = `Import-${extension}-Rec01` // the service is shared across cases
+    vi.mocked(getRecordingByFilename).mockImplementation((name) => name === `${stem}.${extension}`
+      ? { id: 'external', source: 'external', is_imported: 1 } as never : undefined)
+    mockExistsSync.mockReturnValue(true)
+    const result = getDownloadService().queueDownloads([{ filename: `${stem}.hda`, size: 10 }])
+    expect(result.skipped).toEqual([])
+    vi.mocked(getRecordingByFilename).mockReturnValue(undefined)
+  })
+  it('still finds the downloaded device mp3 when the wav of the same stem is an import', async () => {
+    const { getRecordingByFilename, getSyncedFile } = await import('../database')
+    const stem = 'Mixed-Rec01'
+    vi.mocked(getRecordingByFilename).mockImplementation((name) => name === `${stem}.wav`
+      ? { id: 'external', source: 'external', is_imported: 1 } as never
+      : name === `${stem}.mp3` ? { id: 'device', source: 'hidock', is_imported: 0 } as never : undefined)
+    vi.mocked(getSyncedFile).mockImplementation(((name: string) => name === `${stem}.mp3`
+      ? { original_filename: `${stem}.mp3`, local_filename: `${stem}.mp3`, file_path: `/rec/${stem}.mp3` } : undefined) as never)
+    mockExistsSync.mockReturnValue(true)
+    expect(getDownloadService().isFileAlreadySynced(`${stem}.hda`)).toMatchObject({ synced: true })
+    expect(getDownloadService().queueDownloads([{ filename: `${stem}.hda`, size: 10 }]).skipped)
+      .toEqual([expect.objectContaining({ skip: 'already-synced' })])
+    vi.mocked(getRecordingByFilename).mockReturnValue(undefined)
+    vi.mocked(getSyncedFile).mockImplementation(() => undefined)
+  })
+  it('records absence for a complete current empty scan, never for a cached list', async () => {
+    const { markRecordingsNotOnDevice } = await import('../database')
+    await getDownloadService().getFilesToSyncBatched([], 100, { isCurrent: () => true, complete: false })
+    expect(markRecordingsNotOnDevice).not.toHaveBeenCalled()
+    await getDownloadService().getFilesToSyncBatched([], 100, { isCurrent: () => true, complete: true, startedAt: '2026-11-24T12:00:00.000Z' })
+    // The scan's start bounds which rows its absence can speak for.
+    expect(markRecordingsNotOnDevice).toHaveBeenCalledExactlyOnceWith([], '2026-11-24T12:00:00.000Z')
+  })
+  it('stops metadata writes after a disconnect or session change between chunks', async () => {
+    let current = true
+    mockRunInTransaction.mockImplementationOnce((fn) => { fn(); current = false })
+    await expect(getDownloadService().getFilesToSyncBatched(makeFiles(250), 100, { isCurrent: () => current, complete: true }))
+      .rejects.toThrow('snapshot')
+    expect(mockRunInTransaction).toHaveBeenCalledTimes(1)
+  })
   let service: ReturnType<typeof getDownloadService>
   let logSpy: ReturnType<typeof vi.spyOn>
 
@@ -119,6 +169,32 @@ describe('device file-list reconcile: one transaction, batched yields, hoisted t
 
   afterEach(() => {
     logSpy.mockRestore()
+  })
+
+  it('rejects partial/error detailed listings before any reconciliation transaction', async () => {
+    for (const status of ['partial', 'error'] as const) {
+      const snapshot = { status, files: makeFiles(1), expectedCount: 2, parsedCount: 1, reason: 'stream incomplete' }
+      expect(() => service.getFilesToSync(snapshot)).toThrow('incomplete device listing')
+      await expect(service.getFilesToSyncBatched(snapshot)).rejects.toThrow('incomplete device listing')
+    }
+    expect(mockRunInTransaction).not.toHaveBeenCalled()
+    expect(mockGetPurgedFilenames).not.toHaveBeenCalled()
+  })
+
+  it('retains files with unknown dates without fabricated ingestion or automatic download', async () => {
+    const files = [{ filename: 'unknown.hda', size: 1024, duration: 10, dateCreated: null }]
+    const result = await service.getFilesToSyncBatched({ status: 'complete', files, expectedCount: 1, parsedCount: 1, reason: null })
+    expect(result[0].dateCreated).toBeNull()
+    expect(result[0].skipReason).toContain('manual download only')
+    expect(upsertRecordingFromDevice).not.toHaveBeenCalled()
+  })
+
+  it('rejects inconsistent counts and invalid batch sizes, accepts complete detailed snapshots', async () => {
+    const files = makeFiles(2)
+    await expect(service.getFilesToSyncBatched({ status: 'complete', files, expectedCount: 3, parsedCount: 2, reason: null })).rejects.toThrow('incomplete')
+    await expect(service.getFilesToSyncBatched(files, 0)).rejects.toThrow('batch size')
+    expect(mockRunInTransaction).not.toHaveBeenCalled()
+    expect(await service.getFilesToSyncBatched({ status: 'complete', files, expectedCount: 2, parsedCount: 2, reason: null })).toHaveLength(2)
   })
 
   it('getFilesToSync wraps the whole snapshot in exactly ONE transaction', () => {

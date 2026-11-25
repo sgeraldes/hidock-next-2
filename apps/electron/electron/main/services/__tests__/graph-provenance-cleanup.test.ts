@@ -522,7 +522,7 @@ describe('deleteRecordingCascade — hard purge wired to the REAL removeRecordin
     expect(ingestMarker('tx-hard')).toBeDefined()
 
     setGraphProvenanceCleanup((id, opts) => removeRecordingProvenanceCore(id, opts))
-    const res = deleteRecordingCascade('rec-hard', { hard: true })
+    const res = deleteRecordingCascade('rec-hard', { hard: true, origin: 'user', requestedBy: 'test' })
 
     expect(res?.mode).toBe('hard')
     expect(res?.removed.edgesRemoved).toBeGreaterThan(0)
@@ -543,7 +543,7 @@ describe('deleteRecordingCascade — hard purge wired to the REAL removeRecordin
     expect(dry.ok).toBe(true)
 
     setGraphProvenanceCleanup((id, opts) => removeRecordingProvenanceCore(id, opts))
-    const res = deleteRecordingCascade('rec-est', { hard: true })
+    const res = deleteRecordingCascade('rec-est', { hard: true, origin: 'user', requestedBy: 'test' })
 
     expect(res?.removed.edgesRemoved).toBe(dry.edgesRemoved)
     expect(res?.removed.meetingNodesRemoved).toBe(dry.meetingNodesRemoved)
@@ -554,7 +554,7 @@ describe('deleteRecordingCascade — hard purge wired to the REAL removeRecordin
   it('a recording with NO graph residue still purges cleanly through the real seam (nothing to clean up)', async () => {
     seedRecording('rec-clean')
     setGraphProvenanceCleanup((id, opts) => removeRecordingProvenanceCore(id, opts))
-    const res = deleteRecordingCascade('rec-clean', { hard: true })
+    const res = deleteRecordingCascade('rec-clean', { hard: true, origin: 'user', requestedBy: 'test' })
     expect(res?.mode).toBe('hard')
     expect(res?.removed.edgesRemoved).toBe(0)
     expect(getRecordingById('rec-clean')).toBeUndefined()

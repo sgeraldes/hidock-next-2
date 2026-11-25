@@ -1,6 +1,8 @@
 import { ipcMain } from 'electron'
 import { getQualityAssessmentService } from '../services/quality-assessment'
 import { getStoragePolicyService } from '../services/storage-policy'
+import { confirmRepairParticipation, getRepairContext, getRepairAdvice, getRepairSample,
+  confirmRepairSample } from '../services/quality-repair-service'
 import {
   validateRecordingId,
   validateRecordingIds,
@@ -17,6 +19,39 @@ import {
 export function registerQualityHandlers(): void {
   const qualityService = getQualityAssessmentService()
   const storageService = getStoragePolicyService()
+
+  ipcMain.handle('quality:repair-context', async (_, recordingId: unknown) => {
+    try { return { success: true, data: await getRepairContext(validateRecordingId(recordingId)) } }
+    catch (error) { return { success: false, error: error instanceof Error ? error.message : 'Could not prepare review context' } }
+  })
+  ipcMain.handle('quality:confirm-participation', async (_, recordingId: unknown, count: unknown) => {
+    try {
+      if (typeof count !== 'number') throw new Error('A numeric speaker count is required')
+      return { success: true, data: await confirmRepairParticipation(validateRecordingId(recordingId), count) }
+    } catch (error) { return { success: false, error: error instanceof Error ? error.message : 'Could not save confirmation' } }
+  })
+  ipcMain.handle('quality:repair-advice', async (_, recordingId: unknown, requestId: unknown) => {
+    try {
+      if (typeof requestId !== 'string') throw new Error('Advice request ID is required')
+      return { success: true, data: await getRepairAdvice(validateRecordingId(recordingId), requestId) }
+    } catch (error) { return { success: false, error: error instanceof Error ? error.message : 'Could not evaluate repair options' } }
+  })
+  ipcMain.handle('quality:repair-sample', async (_, recordingId: unknown, sampleId: unknown, fingerprint: unknown) => {
+    try {
+      if (typeof sampleId !== 'string' || sampleId.length > 100 || typeof fingerprint !== 'string'
+        || !/^[a-f0-9]{64}$/.test(fingerprint)) throw new Error('A current review sample is required')
+      return { success: true, data: await getRepairSample(validateRecordingId(recordingId), sampleId, fingerprint) }
+    } catch (error) { return { success: false, error: error instanceof Error ? error.message : 'Could not prepare sample audio' } }
+  })
+  ipcMain.handle('quality:confirm-sample', async (_, recordingId: unknown, sampleId: unknown, fingerprint: unknown, role: unknown) => {
+    try {
+      if (typeof sampleId !== 'string' || sampleId.length > 100 || typeof fingerprint !== 'string'
+        || !/^[a-f0-9]{64}$/.test(fingerprint)
+        || !['owner', 'other', 'overlap', 'unsure'].includes(role as string)) throw new Error('A current sample and supported role are required')
+      return { success: true, data: await confirmRepairSample(validateRecordingId(recordingId), sampleId, fingerprint,
+        role as 'owner' | 'other' | 'overlap' | 'unsure') }
+    } catch (error) { return { success: false, error: error instanceof Error ? error.message : 'Could not save sample confirmation' } }
+  })
 
   // =========================================================================
   // Quality Assessment Handlers

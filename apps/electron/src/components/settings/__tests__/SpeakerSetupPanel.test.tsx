@@ -128,7 +128,7 @@ describe('SpeakerSetupDialog', () => {
   it('says the hardware changed when a setup was confirmed before', async () => {
     getSetup.mockResolvedValue({ success: true, data: { ...SETUP, lastConfirmedAt: '2026-09-01T00:00:00Z' } })
     render(<SpeakerSetupDialog />)
-    expect(await screen.findByText('Your hardware changed')).toBeInTheDocument()
+    expect(await screen.findByText('Hardware or acceleration changed')).toBeInTheDocument()
   })
 
   it('remembers "Decide later" for this hardware', async () => {

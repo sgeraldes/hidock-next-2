@@ -19,15 +19,61 @@ import { getIntegrityService } from './integrity-service'
 import { reconcileOrganizationYielding } from './org-reconciler'
 import { runVoiceLearning } from './voice-learning'
 import { runIdentityRules } from './identity-rules'
-import { backfillKnowledgeCaptures } from './knowledge-capture-backfill'
+import { backfillKnowledgeCapturesYielding } from './knowledge-capture-backfill'
 import { backfillAudioProfiles } from './audio-profile-store'
-import { getQueueState, startTranscriptionProcessor } from './transcription'
+import { getQueueState, onQueueDrained, reanalyzeFailedTranscripts, startTranscriptionProcessor } from './transcription'
+import { getConfig } from './config'
+import { summaryRetrySettings } from '../../../src/shared/summary-retry'
 import { recomputeAudioWarnings } from './value-classification'
 import { scheduleEvaluationCatchup } from './evaluation-catchup'
 import { runKindFallbackPass } from './kind-fallback'
 import { runSamplingPass } from './transcript-sampler'
 import { backfillMeetingWiki } from './meeting-wiki'
 import { getVectorStore } from './vector-store'
+
+let summaryHealRunning = false
+const summaryHealTimers: Array<ReturnType<typeof setTimeout>> = []
+let stopDrainListener: (() => void) | null = null
+let lastAutomaticPass = 0
+
+type SummaryQuery = Parameters<typeof reanalyzeFailedTranscripts>[1]
+
+/**
+ * Fill missing summaries, as many per pass as Settings > Transcription says,
+ * unless the queue is transcribing or another pass is still running (two
+ * passes would pick the same rows).
+ */
+export async function healMissingSummaries(deps: {
+  queueBusy: () => boolean
+  heal: (limit: number, query?: SummaryQuery) => Promise<number>
+} = { queueBusy: () => getQueueState().isProcessing, heal: reanalyzeFailedTranscripts }, query?: SummaryQuery): Promise<number> {
+  if (summaryHealRunning || deps.queueBusy()) return 0
+  summaryHealRunning = true
+  try {
+    return await deps.heal(summaryRetrySettings(getConfig()?.transcription?.summaryRetry).perPass, query)
+  } finally {
+    summaryHealRunning = false
+  }
+}
+
+/**
+ * Whether the automatic retry is due: switched on in Settings, and the minutes
+ * Settings gives have passed since the last automatic pass.
+ */
+export function automaticSummaryRetryDue(now = Date.now(), last = lastAutomaticPass): boolean {
+  const settings = summaryRetrySettings(getConfig()?.transcription?.summaryRetry)
+  return settings.auto && now - last >= settings.everyMinutes * 60_000
+}
+
+/** Cancel the summary passes before the database closes on quit. */
+export function stopSummaryReanalysis(): void {
+  for (const timer of summaryHealTimers.splice(0)) {
+    clearTimeout(timer)
+    clearInterval(timer)
+  }
+  stopDrainListener?.()
+  stopDrainListener = null
+}
 
 export interface GatedBootTask {
   name: string
@@ -99,6 +145,12 @@ export const BOOT_TASK_DEFS: GatedBootTask[] = [
       } catch (e) {
         console.error('[OrgReconciler] error:', e)
       }
+      // Settle invite-count changes in the same boot, before downstream readers.
+      // The Library has already painted; this pass yields between bounded slices.
+      try {
+        const { backfillTranscriptValidity } = await import('./transcript-validity-store')
+        await backfillTranscriptValidity()
+      } catch (e) { console.warn('[TranscriptValidity] post-reconcile check failed:', e) }
       // Learn voices once the attendees are in place (spec 2026-10-03, Phase 2).
       try {
         await runVoiceLearning()
@@ -114,12 +166,28 @@ export const BOOT_TASK_DEFS: GatedBootTask[] = [
     },
   },
   {
+    // Transcript validity — library floor, always runs, so stale verdicts and
+    // what was derived from them settle with Calendar off too (review of #173).
+    // With Calendar on, org-reconcile above already ran this pass after the
+    // invite counts settled; the serialized second call finds nothing stale.
+    name: 'transcript-validity',
+    feature: null,
+    run: async () => {
+      try {
+        const { backfillTranscriptValidity } = await import('./transcript-validity-store')
+        await backfillTranscriptValidity()
+      } catch (e) {
+        console.warn('[TranscriptValidity] startup check failed:', e)
+      }
+    },
+  },
+  {
     // Self-heal the Knowledge Library — library floor, always runs.
     name: 'knowledge-capture-backfill',
     feature: null,
     run: async () => {
       try {
-        backfillKnowledgeCaptures()
+        await backfillKnowledgeCapturesYielding()
       } catch (e) {
         console.error('[KnowledgeCaptureBackfill] error:', e)
       }
@@ -190,6 +258,29 @@ export const BOOT_TASK_DEFS: GatedBootTask[] = [
         void runSamplingPass().catch((e) => console.error('[Sampling] pass error:', e))
       setTimeout(pass, 300_000).unref?.()
       setInterval(pass, 6 * 3_600_000).unref?.()
+    },
+  },
+  {
+    // A transcript whose summary failed is kept without one (#187). Two ways
+    // fill it (28-oct-2026, Sebastián):
+    // - in the queue's flow: when the queue empties, summaries no provider has
+    //   failed on yet run right away;
+    // - the automatic retry Settings > Transcription configures (on or off,
+    //   how often, how many) retries the ones every provider failed on.
+    // The owner's "Generate summary" button retries one at any time.
+    name: 'summary-reanalysis',
+    feature: 'transcription',
+    run: () => {
+      stopDrainListener = onQueueDrained(() =>
+        void healMissingSummaries(undefined, { neverTried: true }).catch((e) => console.error('[Reanalyze] pass error:', e)))
+      const tick = () => {
+        if (!automaticSummaryRetryDue()) return
+        lastAutomaticPass = Date.now()
+        void healMissingSummaries().catch((e) => console.error('[Reanalyze] pass error:', e))
+      }
+      const every = setInterval(tick, 60_000)
+      every.unref?.()
+      summaryHealTimers.push(every)
     },
   },
   {

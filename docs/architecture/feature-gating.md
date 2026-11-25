@@ -5,6 +5,8 @@ The registry is `apps/electron/src/shared/feature-registry.ts`; the main-process
 two processes. The original design is the modular-features spec,
 [2026-07-11-modular-features-spec.md](../superpowers/specs/2026-07-11-modular-features-spec.md).
 
+Device boundary: [the device guide](../devices/README.md#safe-development-and-hardware-validation) records single-owner USB access and model/version capabilities. Enabling a host feature does not add a missing firmware command, restore channel separation in a stored mono MP3, or make native marker import a supported app feature.
+
 ## Two kinds of feature
 
 - **Runtime-toggleable** (transcription, calendar, meeting intelligence, the connectors): the gate

@@ -7,17 +7,19 @@
  * so the stream becomes a Library recording like any device file: the folder
  * watcher imports it, links it to a meeting and queues it for transcription
  * with whatever provider is set, diarization included. Both channels stay in
- * the file (microphone and far side), which is what later attribution needs.
+ * the file; their physical microphone/playback identities remain unverified.
  *
  * The file is written as `<name>.wav.partial` and renamed when the stream
  * stops. The watcher only takes audio extensions, so it never imports a file
  * that is still growing.
  */
-import { closeSync, existsSync, openSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'fs'
+import { closeSync, existsSync, linkSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, truncateSync, writeFileSync, writeSync } from 'fs'
+import { randomUUID } from 'crypto'
 import { join } from 'path'
 import type { RealtimeData } from '@hidock/jensen-protocol'
+import { DeviceAudioDiagnostics } from './device-audio-diagnostics'
 
-/** The realtime stream: 16 kHz, two channels, 16-bit (the rate Gemini Live is sent). */
+/** Current host expectation, not measured device capability: 16 kHz stereo PCM16. */
 export const LIVE_SAMPLE_RATE = 16000
 export const LIVE_CHANNELS = 2
 const BYTES_PER_FRAME = LIVE_CHANNELS * 2
@@ -84,6 +86,16 @@ export interface RecorderDeps {
   now: () => Date
 }
 
+export interface RecorderStartOptions {
+  save?: boolean
+  captureSessionId?: string
+  automaticTranscription?: boolean
+  /** Refuse malformed stereo frames instead of the legacy mono-length heuristic. */
+  strictStereo?: boolean
+  /** Diagnostic-only override; ordinary captures continue to honor mute. */
+  preserveMutedPayload?: boolean
+}
+
 export type RecorderResult =
   | { status: 'saved'; filename: string; seconds: number }
   | { status: 'empty' }
@@ -100,6 +112,17 @@ export class RealtimeRecorder {
   private mono = false
   /** Stereo-length packets in a row while in mono mode. */
   private stereoRun = 0
+  private options: RecorderStartOptions = {}
+  private diagnostics = new DeviceAudioDiagnostics()
+  private inferredMonoPackets = 0
+  private discardedTrailingBytes = 0
+
+  get outputPath(): string | null { return this.fd !== null ? this.finalPath : null }
+  get elapsedMs(): number { return this.dataBytes * 1000 / (LIVE_SAMPLE_RATE * BYTES_PER_FRAME) }
+  get errorMessage(): string | null { return this.error }
+  noteDiscontinuity(reason: string): void {
+    if (this.fd !== null) this.diagnostics.noteDiscontinuity(reason)
+  }
 
   constructor(private readonly deps: RecorderDeps) {}
 
@@ -108,12 +131,13 @@ export class RealtimeRecorder {
   }
 
   /** Open the file for a new stream. Returns why not, or null when recording. */
-  start(): string | null {
+  start(options: RecorderStartOptions = {}): string | null {
     if (this.fd !== null) return null // already recording this stream (resume after pause)
-    if (!this.deps.enabled()) return 'off'
+    if (!(options.save ?? this.deps.enabled())) return 'off'
     if (this.deps.folderMoving()) return 'The recordings folder is being moved; this stream is not saved.'
     const folder = this.deps.recordingsPath()
     let name = liveRecordingName(this.deps.now())
+    if (options.captureSessionId) name = name.replace(/-Live\.wav$/, '-Capture-Live.wav')
     for (let n = 2; existsSync(join(folder, name)) || existsSync(join(folder, `${name}.partial`)); n++) {
       name = name.replace(/-Live(-\d+)?\.wav$/, `-Live-${n}.wav`)
     }
@@ -125,10 +149,15 @@ export class RealtimeRecorder {
     this.pendingMono = []
     this.mono = false
     this.stereoRun = 0
+    this.options = options
+    this.diagnostics.reset()
+    this.inferredMonoPackets = 0
+    this.discardedTrailingBytes = 0
     try {
       this.fd = openSync(this.partialPath, 'wx')
       writeSync(this.fd, wavHeader(0), 0, 44, 0)
     } catch (err) {
+      if (this.fd !== null) closeSync(this.fd)
       this.fd = null
       return `Could not create the recording: ${err instanceof Error ? err.message : String(err)}`
     }
@@ -138,15 +167,25 @@ export class RealtimeRecorder {
   /** Append one device packet. Never throws: the realtime poll must keep draining the device. */
   write(packet: RealtimeData): void {
     if (this.fd === null || this.error) return
+    const aligned = this.diagnostics.observe(packet, this.deps.now().getTime())
     const payload = packet.data.length > 8 ? packet.data.subarray(8) : null
     if (!payload) return
     try {
+      // Qualified H1E packets already contain firmware-applied microphone mute.
+      // Preserve lane B instead of treating that flag as whole-stream silence.
+      const muted = packet.microphoneMuted === undefined && packet.muted && !this.options.preserveMutedPayload
+      if (this.options.strictStereo) {
+        if (!aligned) return
+        this.append(muted ? Buffer.alloc(payload.length) : Buffer.from(payload.buffer, payload.byteOffset, payload.length))
+        return
+      }
       const odd = payload.length % 2 === 0 && payload.length % 4 !== 0
       if (odd && !this.mono) {
         // One odd packet is a truncated read; a run of them is mono firmware.
-        this.pendingMono.push(packet.muted ? new Uint8Array(payload.length) : payload.slice())
+        this.pendingMono.push(muted ? new Uint8Array(payload.length) : payload.slice())
         if (this.pendingMono.length < MONO_RUN) return
         this.mono = true
+        this.inferredMonoPackets += this.pendingMono.length
         for (const p of this.pendingMono.splice(0)) this.append(monoToStereo(p))
         return
       }
@@ -160,9 +199,11 @@ export class RealtimeRecorder {
         else asMono = true
       }
       if (!odd && !this.mono) this.flushPendingAsStereo()
+      if (asMono) this.inferredMonoPackets++
+      else this.discardedTrailingBytes += payload.length % BYTES_PER_FRAME
       const bytes = asMono
-        ? monoToStereo(packet.muted ? new Uint8Array(payload.length) : payload)
-        : packet.muted
+        ? monoToStereo(muted ? new Uint8Array(payload.length) : payload)
+        : muted
           ? Buffer.alloc(payload.length - (payload.length % BYTES_PER_FRAME))
           : Buffer.from(payload.buffer, payload.byteOffset, payload.length - (payload.length % BYTES_PER_FRAME))
       this.append(bytes)
@@ -180,6 +221,10 @@ export class RealtimeRecorder {
     let headerWritten = false
     try {
       if (!this.error) this.flushPendingAsStereo(fd)
+      if (this.dataBytes % BYTES_PER_FRAME) {
+        this.dataBytes -= this.dataBytes % BYTES_PER_FRAME
+        truncateSync(this.partialPath, 44 + this.dataBytes)
+      }
       writeSync(fd, wavHeader(this.dataBytes), 0, 44, 0)
       headerWritten = true
     } catch (err) {
@@ -208,15 +253,19 @@ export class RealtimeRecorder {
         filename: `${this.filename}.partial`
       }
     }
+    let metadataError: string | null
     try {
-      renameSync(this.partialPath, this.finalPath)
-      this.writeChannelNote()
+      // Exclusive publication: a file created after start must never be overwritten.
+      linkSync(this.partialPath, this.finalPath)
+      rmSync(this.partialPath)
+      metadataError = this.writeChannelNote()
     } catch (err) {
       return { status: 'error', message: err instanceof Error ? err.message : String(err), filename: `${this.filename}.partial` }
     }
     const seconds = this.dataBytes / (LIVE_SAMPLE_RATE * BYTES_PER_FRAME)
     // What was written before a disk error is still a usable recording.
     if (this.error) return { status: 'error', message: `Saved the first ${Math.round(seconds)} s only: ${this.error}`, filename: this.filename }
+    if (metadataError) return { status: 'error', message: `Saved audio, but capture metadata could not be written: ${metadataError}`, filename: this.filename }
     return { status: 'saved', filename: this.filename, seconds }
   }
 
@@ -225,13 +274,37 @@ export class RealtimeRecorder {
    * recorded, for naming the owner after transcription. The setting can change
    * before a backlogged file is transcribed, so it is kept with the file.
    */
-  private writeChannelNote(): void {
+  private writeChannelNote(): string | null {
     const mic = this.deps.micChannel?.() ?? null
-    if (mic === null) return
     try {
-      writeFileSync(liveNotePath(this.finalPath), JSON.stringify({ micChannel: mic }))
+      const path = liveNotePath(this.finalPath)
+      const diagnostics = this.diagnostics.snapshot()
+      const existing: unknown = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {}
+      if (!existing || typeof existing !== 'object' || Array.isArray(existing)) throw new Error('Existing live metadata is not an object; preserved unchanged')
+      const content = JSON.stringify({ ...existing, ...(mic === null ? {} : { micChannel: mic }),
+        ...(this.options.captureSessionId ? { captureSessionId: this.options.captureSessionId } : {}), capture: {
+        schemaVersion: 1, format: diagnostics.format, diagnostics,
+        sessionId: this.options.captureSessionId ?? null,
+        automaticTranscription: this.options.automaticTranscription ?? null,
+        framesWritten: this.dataBytes / BYTES_PER_FRAME, elapsedMs: this.elapsedMs,
+        strictStereo: this.options.strictStereo ?? false,
+        mutedPayloadPreserved: this.options.preserveMutedPayload ?? false,
+        inferredMonoPackets: this.inferredMonoPackets, discardedTrailingBytes: this.discardedTrailingBytes,
+        channelInterpretation: this.inferredMonoPackets ? 'includes-inferred-duplicated-mono' : 'host-expected-stereo',
+        micChannelProvenance: mic === null ? 'unknown' : 'host-selection-or-heuristic-unverified',
+        physicalSourceMapping: 'unverified', discontinuitiesDoNotEstimateMissingFrames: true
+      } }, null, 2)
+      const temporary = `${path}.capture-${randomUUID()}.tmp`
+      try {
+        writeFileSync(temporary, content, { flag: 'wx' })
+        renameSync(temporary, path)
+      } finally {
+        rmSync(temporary, { force: true })
+      }
+      return null
     } catch (err) {
       console.warn('[RealtimeRecorder] Could not note the microphone channel:', err)
+      return err instanceof Error ? err.message : String(err)
     }
   }
 
@@ -239,14 +312,21 @@ export class RealtimeRecorder {
     if (fd === null || this.pendingMono.length === 0) return
     for (const p of this.pendingMono.splice(0)) {
       const whole = p.length - (p.length % BYTES_PER_FRAME)
+      this.discardedTrailingBytes += p.length % BYTES_PER_FRAME
       if (whole > 0) this.append(Buffer.from(p.buffer, p.byteOffset, whole), fd)
     }
   }
 
   private append(bytes: Buffer, fd = this.fd): void {
     if (fd === null || bytes.length === 0) return
-    writeSync(fd, bytes, 0, bytes.length, 44 + this.dataBytes)
-    this.dataBytes += bytes.length
+    if (this.dataBytes + bytes.length > 0xffffffff - 36) throw new Error('Recording exceeds standard RIFF WAV size limit')
+    let offset = 0
+    while (offset < bytes.length) {
+      const written = writeSync(fd, bytes, offset, bytes.length - offset, 44 + this.dataBytes)
+      if (!written) throw new Error('Could not write recording samples')
+      offset += written
+      this.dataBytes += written
+    }
   }
 }
 
@@ -270,10 +350,12 @@ export function recoverPartialLiveRecordings(folder: string): string[] {
     try {
       const size = statSync(partial).size
       const dataBytes = Math.max(0, size - 44) - (Math.max(0, size - 44) % BYTES_PER_FRAME)
+      if (dataBytes > 0xffffffff - 36) throw new Error('Partial recording exceeds standard RIFF WAV size limit')
       if (dataBytes === 0) {
         rmSync(partial, { force: true })
         continue
       }
+      truncateSync(partial, 44 + dataBytes)
       let target = final
       for (let n = 2; existsSync(target); n++) target = final.replace(/-Live(-\d+)?\.wav$/, `-Live-${n}.wav`)
       const fd = openSync(partial, 'r+')
@@ -282,7 +364,8 @@ export function recoverPartialLiveRecordings(folder: string): string[] {
       } finally {
         closeSync(fd)
       }
-      renameSync(partial, target)
+      linkSync(partial, target)
+      rmSync(partial)
       saved.push(target)
     } catch (err) {
       console.error(`[RealtimeRecorder] Could not recover ${name}:`, err)

@@ -48,12 +48,18 @@ import type {
 } from '@hidock/knowledge-graph'
 import { complete } from '@hidock/ai-providers'
 import { withCallRecord } from './pipeline/track-call'
+import { mainThreadBudget, yieldToEventLoop } from './event-loop'
+import { providerCheckpoints } from './provider-checkpoints'
+import { inProcessingRunScope } from './processing-run-scope'
 import {
   run,
   runInTransaction,
+  createProcessingRun,
+  completeProcessingRun,
+  failProcessingRun,
   queryAll,
   queryOne,
-  getValueExcludedRecordingIds,
+  getGraphIngestCandidates,
   getEligibleRecordingIds,
   getRecordingsForMeeting,
   isRecordingGraphIngestable,
@@ -222,11 +228,25 @@ export interface IngestResult {
  * keeps the error for that transcript.
  */
 function trackedExtractor(providerConfig: Parameters<typeof complete>[1], recordingId: string | null): LlmExtractor {
-  return (prompt: string) =>
-    withCallRecord({ step: 'graph-extract', recordingId, route: 'direct:ai-sdk' }, () => complete(prompt, providerConfig))
+  return (prompt: string) => {
+    const request = () => withCallRecord({ step: 'graph-extract', recordingId, route: 'direct:ai-sdk' },
+      () => complete(prompt, providerConfig))
+    return recordingId
+      ? providerCheckpoints(recordingId, undefined, () => isRecordingGraphIngestable(recordingId)).execute(
+          JSON.stringify(['graph-extract-v1', providerConfig.provider, providerConfig.model, prompt]), request)
+      : request()
+  }
 }
 
+const transcriptsInFlight = new Set<string>()
+
 export async function ingestFromDbTranscripts(): Promise<IngestResult> {
+  // A debounce timer may inherit the caller's async context. Graph work owns
+  // its own lifetime even when the transcription coordinator finishes first.
+  return inProcessingRunScope(ingestDbTranscripts, id => failProcessingRun(id, 'Graph ingestion interrupted'))
+}
+
+async function ingestDbTranscripts(): Promise<IngestResult> {
   const providerConfig = getGraphProviderConfig()
   if (!providerConfig) {
     throw new Error('No AI provider configured. Please set a provider API key in Settings.')
@@ -234,82 +254,57 @@ export async function ingestFromDbTranscripts(): Promise<IngestResult> {
 
   const store = getKnowledgeGraphStore()
 
-  // Get all transcripts with recording + meeting meta
-  // Cross-reference (/simplify S-5, database.ts's getExcludedRecordingIds):
-  // personal/deleted exclusion is composed differently here than in the RAG
-  // path — filtered directly in this base query, then layered with
-  // value-exclusion below (pre-filter Set + fresh point-read), rather than
-  // unioned into one Set. Same net effect; deliberate, not drift.
-  const rows = queryAll<TranscriptRow>(`
-    SELECT
-      t.id,
-      t.full_text,
-      t.recording_id,
-      r.date_recorded,
-      r.meeting_id,
-      m.subject
-    FROM transcripts t
-    JOIN recordings r ON r.id = t.recording_id
-    LEFT JOIN meetings m ON m.id = r.meeting_id
-    WHERE COALESCE(r.personal, 0) = 0 AND r.deleted_at IS NULL
-  `)
-
+  // SQL run-start snapshot excludes personal/deleted, already claimed and value-excluded
+  // rows without loading their text. Failure falls back to ids only; the fresh
+  // authoritative gate below still fails closed before any provider sees content.
   const result: IngestResult = { ingested: 0, skipped: 0, errors: [] }
-
-  // F16/spec-002 (AR-1, layer 1 of 2): cheap once-per-run PRE-FILTER. A
-  // transcript whose recording is already value-excluded at run start is
-  // skipped BEFORE the LLM extraction call — no LLM cost, no marker (so a
-  // later rating upgrade re-ingests it on a future pass). This snapshot is
-  // what bounds the cost: skipped rows are never marked, so without this
-  // pre-filter every ingest pass (60s-debounced transcript-ready, boot,
-  // manual) would re-run the full extraction for every excluded transcript,
-  // forever. The snapshot may go stale across the loop's awaits — that is
-  // layer 2's job, not this one's. Defensive try/catch (mirrors the RAG
-  // union in getExcludedRecordingIds): a value-query failure degrades to
-  // "no pre-filter" rather than failing the whole ingest pass — layer 2
-  // still gates each row's persistence.
-  let valueExcluded: Set<string>
+  let rows: Array<{ id: string; recording_id: string }>
   try {
-    valueExcluded = getValueExcludedRecordingIds()
+    const candidates = getGraphIngestCandidates()
+    rows = candidates.rows
+    result.skipped = candidates.skipped
   } catch (e) {
-    console.warn('[KnowledgeGraph] Value pre-filter unavailable (per-row transactional check still gates):', e)
-    valueExcluded = new Set<string>()
+    console.warn('[KnowledgeGraph] Candidate pre-filter unavailable (fresh checks still gate):', e)
+    rows = queryAll<{ id: string; recording_id: string }>(`
+      SELECT t.id, t.recording_id FROM transcripts t JOIN recordings r ON r.id = t.recording_id
+      WHERE COALESCE(r.personal, 0) = 0 AND r.deleted_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM graph_ingested_transcripts g WHERE g.transcript_id = t.id)`)
   }
 
-  for (const row of rows) {
-    // Pre-filter (layer 1): excluded at run start — skip without extracting.
-    if (valueExcluded.has(row.recording_id)) {
-      result.skipped++
-      console.log(
-        `[KnowledgeGraph] Skipped value-excluded recording ${row.recording_id} (transcript ${row.id})`
-      )
-      continue
-    }
-
-    // Check if already ingested (incremental)
-    const already = queryOne<{ transcript_id: string }>(
-      'SELECT transcript_id FROM graph_ingested_transcripts WHERE transcript_id = ?',
-      [row.id]
-    )
-    if (already) {
-      result.skipped++
-      continue
-    }
-
+  // Shared OrgReconciler timer budget; never suspend a transaction.
+  const checkpoint = mainThreadBudget('KnowledgeGraph')
+  for (const candidate of rows) {
+    await checkpoint()
+    const row = candidate as TranscriptRow
+    // Claim synchronously before any text load or provider await. Each pass has
+    // a run-start snapshot; another pass may already own or have finished it.
+    let ownsClaim = false
+    let graphRunId: string | undefined
     try {
-      // P1 (round-3, FAIL CLOSED) — the value pre-filter Set above degrades to
-      // EMPTY on a lookup error (fail-open), which would send an excluded
-      // recording's full_text to the LLM. Gate the provider call on an
+      if (transcriptsInFlight.has(row.id) || queryOne(
+        'SELECT transcript_id FROM graph_ingested_transcripts WHERE transcript_id = ?', [row.id]
+      )) { result.skipped++; continue }
+      transcriptsInFlight.add(row.id)
+      ownsClaim = true
+      // P1 (round-3, FAIL CLOSED) — SQL pre-filter failure falls back to IDs,
+      // without proving value eligibility. Gate the provider call on an
       // AUTHORITATIVE fresh point-read (exists AND not deleted AND not personal
       // AND not value-excluded) so a transient exclusion-lookup failure never
       // leaks content to the provider.
       if (!isRecordingGraphIngestable(row.recording_id)) {
         result.skipped++
-        console.log(
-          `[KnowledgeGraph] Skipped ineligible recording ${row.recording_id} before extraction (transcript ${row.id})`
-        )
         continue
       }
+      // Load one body only after the fresh privacy/validity gate succeeds.
+      const transcript = queryOne<TranscriptRow>(`
+        SELECT t.id, t.full_text, t.recording_id, r.date_recorded, r.meeting_id, m.subject
+        FROM transcripts t JOIN recordings r ON r.id = t.recording_id
+        LEFT JOIN meetings m ON m.id = r.meeting_id WHERE t.id = ?`, [row.id])
+      if (!transcript) { result.skipped++; continue }
+      Object.assign(row, transcript)
+      graphRunId = createProcessingRun({ recordingId: row.recording_id, transcriptId: row.id,
+        stage: 'graph-sync', provider: providerConfig.provider, model: providerConfig.model,
+        tool: 'graph-ingest', execution: 'cloud' }).id
       const meta = {
         meetingId: row.meeting_id ?? row.recording_id,
         title: row.subject ?? undefined,
@@ -318,11 +313,14 @@ export async function ingestFromDbTranscripts(): Promise<IngestResult> {
       // The LLM extraction call stays OUTSIDE the transaction (Codex
       // adversarial review AR-1) — it can take seconds and must not hold a
       // DB transaction open.
-      const extraction = await extractGraphFromTranscript(row.full_text, meta, trackedExtractor(providerConfig, row.recording_id))
+      const extraction = await extractGraphFromTranscript(row.full_text, meta, trackedExtractor(providerConfig, row.recording_id)).finally(async () => {
+        await yieldToEventLoop()
+        checkpoint.reset()
+      })
       // F16/spec-002 (AR-1, layer 2 of 2) + F18 (spec-004, Step 6): FINAL
       // eligibility is decided with a FRESH point-read at persistence time,
       // inside the SAME transaction as the graph writes + ingested-marker
-      // insert — the pre-filter Set above is only a run-start snapshot and
+      // insert — the SQL pre-filter above is only a run-start snapshot and
       // can go stale across this loop's awaits. isRecordingGraphIngestable is
       // a strict superset of the old value-only check: it ALSO closes the
       // purge/soft-delete-vs-ingest race (a hard-purged or soft-deleted
@@ -346,9 +344,6 @@ export async function ingestFromDbTranscripts(): Promise<IngestResult> {
       // is impossible, and if one ever happens it must be loud.
       const ingestedNow = runInTransaction(() => {
         if (!isRecordingGraphIngestable(row.recording_id)) {
-          console.log(
-            `[KnowledgeGraph] Skipped non-ingestable recording ${row.recording_id} (transcript ${row.id})`
-          )
           return false
         }
 
@@ -379,14 +374,38 @@ export async function ingestFromDbTranscripts(): Promise<IngestResult> {
         )
         return true
       })
+      completeProcessingRun(graphRunId, { status: ingestedNow ? 'completed' : 'cancelled',
+        outputRefs: { ingested: ingestedNow, transcriptId: row.id } })
+      graphRunId = undefined
       if (ingestedNow) result.ingested++
       else result.skipped++
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
+      // Classify the failure: a row that became ineligible mid-run (rating,
+      // soft-delete, purge) counts as skipped, not an error. The eligibility
+      // re-check reads the exclusion tables, so it can itself throw when the
+      // original failure was those tables being unavailable — never let that
+      // escape the pass. If eligibility cannot be determined, fail closed:
+      // treat the row as a real error (no marker was written, nothing ingested).
+      let excluded = false
+      try {
+        excluded = !isRecordingGraphIngestable(row.recording_id)
+      } catch (classifyError) {
+        console.warn(
+          `[KnowledgeGraph] Eligibility re-check failed for ${row.recording_id} (transcript ${row.id}); failing closed:`,
+          classifyError
+        )
+      }
+      if (graphRunId) failProcessingRun(graphRunId, msg, excluded)
+      if (excluded) { result.skipped++; continue }
       result.errors.push({ transcriptId: row.id, error: msg })
       console.error(`[KnowledgeGraph] Failed to ingest transcript ${row.id}:`, e)
+    } finally {
+      if (ownsClaim) transcriptsInFlight.delete(row.id)
     }
   }
+
+  console.log(`[KnowledgeGraph] Ingested ${result.ingested}; skipped ${result.skipped}; errors ${result.errors.length}`)
 
   // Bring any legacy name-keyed person nodes onto the contact-id identity.
   try {
@@ -1229,8 +1248,8 @@ export function pruneGenericGraphNodes(): { removedNodes: number; removedEdges: 
  * Resolve an arbitrary entity id (graph node id, contact id, meeting id, project
  * id, or a bare name) to a graph node id, so callers can pass a domain id.
  */
-export function resolveEntityToNodeId(entityId: string): string | null {
-  const store = getKnowledgeGraphStore()
+export function resolveEntityToNodeId(entityId: string, initializeSchema = true): string | null {
+  const store = initializeSchema ? getKnowledgeGraphStore() : new KnowledgeGraphStore(graphDbAdapter)
   const db = store.db
 
   // 1. Direct graph node id.
@@ -1787,6 +1806,13 @@ function isNodeVisibleUnderExclusion(
   if (incident.length === 0) return isIsolatedNodeVisible(store, nodeId, exclusion) // node-level provenance
   const suppressed = provenanceSuppressedEdgeIds(store, incident.map((e) => e.id), exclusion)
   return suppressed.size < incident.length // ≥1 edge survived ⇒ visible
+}
+
+/** Trace reads reuse graph visibility without initializing schema in a read-only brain. */
+export function isTraceGraphNodeEligible(nodeId: string): boolean {
+  const store = new KnowledgeGraphStore(graphDbAdapter)
+  if (!store.getNode(nodeId)) return false
+  return isNodeVisibleUnderExclusion(store, nodeId, getGroundingExclusionSet(true))
 }
 
 /**

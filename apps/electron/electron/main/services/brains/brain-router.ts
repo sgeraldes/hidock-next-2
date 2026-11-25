@@ -25,6 +25,7 @@ import type {
   BrainMessage,
   BrainTask,
   GenerateOptions,
+  EmbedOptions,
 } from './types'
 
 /**
@@ -96,6 +97,12 @@ export class BrainRouter {
     }
   }
 
+  /** Capture before awaiting a request: later config changes cannot authorize paid/local fallback. */
+  hasExplicitManagedGeneration(task: BrainTask): boolean {
+    const cfg = this.brainsConfig()
+    return (cfg?.taskRouting?.[task] ?? cfg?.defaultBrain) === 'model-host-generate'
+  }
+
   /** Resolve the brain for a task, or null if none can serve `need`. */
   async resolve(task: BrainTask, need: BrainCapability): Promise<AIBrain | null> {
     const cfg = this.brainsConfig()
@@ -105,12 +112,14 @@ export class BrainRouter {
     if (routed) {
       const brain = this.registry.get(routed)
       if (await this.isUsable(brain, need)) return brain
+      if (routed === 'model-host-generate' && ['generate', 'chat'].includes(need)) throw new Error('Selected managed generation role unavailable; no fallback')
     }
 
     // 2. Global default.
     const def = cfg?.defaultBrain ?? DEFAULT_BRAIN
     const defBrain = this.registry.get(def)
     if (await this.isUsable(defBrain, need)) return defBrain
+    if (def === 'model-host-generate' && ['generate', 'chat'].includes(need)) throw new Error('Selected managed generation default unavailable; no fallback')
 
     // 3. Capability fallback chain.
     for (const id of FALLBACK_CHAINS[need]) {
@@ -188,8 +197,11 @@ export class BrainRouter {
    */
   private async selectChatBrain(task: BrainTask, exclude: ReadonlySet<BrainId>): Promise<AIBrain | null> {
     for (const id of this.chatCandidateOrder(task)) {
-      if (exclude.has(id)) continue
+      if (exclude.has(id)) { if (id === 'model-host-generate') return null; continue }
       const brain = this.registry.get(id)
+      if (id === 'model-host-generate') {
+        return await this.isUsable(brain, 'chat') ? brain : null
+      }
       if (!brain) continue
       if (!this.isEnabled(id)) continue
       if (isBrainCoolingDown(id)) continue // out of quota until its stated reset
@@ -257,8 +269,23 @@ export class BrainRouter {
    * is exposed via getLastChatFailure().
    */
   async chat(task: BrainTask, messages: BrainMessage[], opts: GenerateOptions = {}): Promise<string | null> {
+    return (await this.chatUntil(task, messages, opts))?.answer ?? null
+  }
+
+  /**
+   * chat(), plus the brain that answered. `exclude` leaves brains out of the
+   * chain (the summary fallback skips Gemini, which already failed), and an
+   * answer `accept` rejects counts as that brain's failure, so the next one is
+   * tried (28-oct-2026: an unparseable summary moves on).
+   */
+  async chatUntil(
+    task: BrainTask,
+    messages: BrainMessage[],
+    opts: GenerateOptions = {},
+    { exclude = [], accept = () => true }: { exclude?: Iterable<BrainId>; accept?: (answer: string) => boolean } = {}
+  ): Promise<{ brainId: BrainId; answer: string } | null> {
     this.lastChatFailure = null
-    const tried = new Set<BrainId>()
+    const tried = new Set<BrainId>(exclude)
     let lastFailure: ChatFailure | null = null
 
     for (;;) {
@@ -274,22 +301,26 @@ export class BrainRouter {
       // candidate) rather than send the now-excluded content to this brain.
       // Returns null — the same signal the AbortError path uses — so no fallback
       // provider ever receives content after the source became ineligible.
-      if (!eligibleToGenerate(opts.shouldGenerate)) {
+      if (opts.signal?.aborted || !eligibleToGenerate(opts.shouldGenerate)) {
         console.warn(`[BrainRouter] chat aborted before ${brain.id}: source no longer eligible (fail closed)`)
         return null
       }
 
       try {
+        if (!opts.signal?.aborted) { try { opts.onDispatch?.() } catch { /* telemetry only */ } }
         const answer = await brain.chat(messages, opts)
-        if (answer != null) return answer
+        if (opts.signal?.aborted) return null
+        if (answer != null && accept(answer)) return { brainId: brain.id, answer }
         lastFailure = { brainId: brain.id, kind: 'null' }
-        console.warn(`[BrainRouter] ${brain.id} chat returned null, trying next candidate`)
+        if (brain.id === 'model-host-generate') { this.lastChatFailure = lastFailure; return null }
+        console.warn(`[BrainRouter] ${brain.id} chat ${answer == null ? 'returned null' : 'answer rejected'}, trying next candidate`)
       } catch (e) {
-        if (e instanceof DOMException && e.name === 'AbortError') {
+        if (opts.signal?.aborted || (e instanceof DOMException && e.name === 'AbortError')) {
           console.log('[BrainRouter] chat request was cancelled')
           return null
         }
         lastFailure = { brainId: brain.id, kind: 'threw' }
+        if (brain.id === 'model-host-generate') { this.lastChatFailure = lastFailure; throw e }
         console.error(`[BrainRouter] ${brain.id} chat failed, trying next candidate:`, e)
       }
     }
@@ -306,7 +337,7 @@ export class BrainRouter {
    */
   async embed(
     texts: string[],
-    opts: { shouldGenerate?: () => boolean; purpose?: 'query' | 'passage' } = {}
+    opts: EmbedOptions = {}
   ): Promise<(number[] | null)[]> {
     if (texts.length === 0) return []
 
@@ -317,7 +348,7 @@ export class BrainRouter {
     const ineligible = (): (number[] | null)[] => texts.map(() => null)
 
     // Recheck before the PRIMARY provider attempt.
-    if (!eligibleToGenerate(opts.shouldGenerate)) return ineligible()
+    if (opts.signal?.aborted || !eligibleToGenerate(opts.shouldGenerate)) return ineligible()
 
     // Explicit per-task route to a NON-Gemini brain: honour it DIRECTLY — the
     // fallback chain's ordering must not silently override an explicit choice
@@ -326,10 +357,20 @@ export class BrainRouter {
     // self-reports (a throw means "try the next candidate"; null vectors mean
     // abort/unavailable and are returned as-is).
     const routed = this.brainsConfig()?.taskRouting?.['embed']
+    const remotePartition = `model-host-embed:${this.brainsConfig()?.modelHostEmbedding?.spaceId}`
+    if (opts.expectedProviderId !== undefined && (routed === 'model-host-embed' || opts.expectedProviderId?.startsWith('model-host-embed:'))
+        && (routed !== 'model-host-embed' || opts.expectedProviderId !== remotePartition)) {
+      throw new Error('Embedding selection changed; captured partition must not receive different vectors')
+    }
+    if (routed === 'model-host-embed') {
+      const remote = this.registry.get(routed)
+      if (!remote?.embed || !this.isEnabled(routed)) return ineligible()
+      return remote.embed(texts, opts) // Explicit remote role never falls through to paid/local providers.
+    }
     if (routed && routed !== 'gemini-api') {
       const brain = this.registry.get(routed)
       if (brain && this.isEnabled(routed) && !isBrainCoolingDown(routed) && brain.capabilities().has('embed') && brain.embed) {
-        if (!eligibleToGenerate(opts.shouldGenerate)) return ineligible()
+        if (opts.signal?.aborted || !eligibleToGenerate(opts.shouldGenerate)) return ineligible()
         try {
           return await brain.embed(texts, opts)
         } catch (e) {
@@ -341,7 +382,7 @@ export class BrainRouter {
     const primary = await this.geminiPrimary('embed', 'embed')
     if (primary?.embed) {
       // Recheck AGAIN after the geminiPrimary await, immediately before the call.
-      if (!eligibleToGenerate(opts.shouldGenerate)) return ineligible()
+      if (opts.signal?.aborted || !eligibleToGenerate(opts.shouldGenerate)) return ineligible()
       try {
         // ADV43-2 (round-45) — thread shouldGenerate INTO the adapter so it
         // re-checks before EACH internal batch (GeminiApiBrain.embed loops over
@@ -356,7 +397,7 @@ export class BrainRouter {
     // ADV42-2 (round-44) — recheck before the FALLBACK provider attempt: an
     // exclusion committed while the primary embed was pending or failing must
     // NOT reach the fallback.
-    if (!eligibleToGenerate(opts.shouldGenerate)) return ineligible()
+    if (opts.signal?.aborted || !eligibleToGenerate(opts.shouldGenerate)) return ineligible()
 
     // Iterate the capability chain (was: first-match only via
     // capabilityFallback). A candidate that THROWS (e.g. local-onnx-embed with
@@ -375,7 +416,7 @@ export class BrainRouter {
       if (id === 'gemini-api' || tried.has(id)) continue
       const brain = this.registry.get(id)
       if (!brain || !this.isEnabled(id) || isBrainCoolingDown(id) || !brain.capabilities().has('embed') || !brain.embed) continue
-      if (!eligibleToGenerate(opts.shouldGenerate)) return ineligible()
+      if (opts.signal?.aborted || !eligibleToGenerate(opts.shouldGenerate)) return ineligible()
       try {
         return await brain.embed(texts, opts)
       } catch (e) {
@@ -398,6 +439,7 @@ export class BrainRouter {
   async activeEmbedBrainId(): Promise<BrainId | null> {
     const cfg = this.brainsConfig()
     const routed = cfg?.taskRouting?.['embed']
+    if (routed === 'model-host-embed') return this.isEnabled(routed) && cfg?.modelHostEmbedding?.spaceId ? routed : null
     if (routed && routed !== 'gemini-api') {
       const brain = this.registry.get(routed)
       if (brain && this.isEnabled(routed) && !isBrainCoolingDown(routed) && brain.capabilities().has('embed')) {

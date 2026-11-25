@@ -35,7 +35,7 @@ describe('TranscriptViewer marks lines with problems', () => {
     expect(flagged.map((el) => el.getAttribute('data-line-issues'))).toEqual(['repeated_start', 'backwards_start'])
     expect(flagged[0].textContent).toContain('Misma hora que la anterior.')
     expect(screen.getByText('Repeated times')).toBeInTheDocument()
-    expect(screen.getByText('Times go backwards')).toBeInTheDocument()
+    expect(screen.getByText('Line out of order')).toBeInTheDocument()
   })
 
   it('walks through the flagged lines of one kind and wraps around', () => {

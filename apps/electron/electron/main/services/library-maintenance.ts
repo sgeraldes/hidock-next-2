@@ -22,7 +22,7 @@ import { scanDeviceMp3 } from './audio-profile'
 import { recomputeAudioWarnings } from './value-classification'
 import { getConnectorHost } from './connectors'
 import { getConnectorStore } from './connectors/connector-store'
-import { autoLinkRecordingsToMeetings } from './org-reconciler'
+import { autoLinkRecordingsToMeetingsYielding } from './org-reconciler'
 import { jevMeetingMatchDeps, listMeetingCandidates, toMatchCandidates, toMatchContext } from './meeting-candidate-list'
 import { matchMeetingWithJev, isClearMatch, pickMatchCandidates, matchRequestKey, meetingCopyKey, MEETING_MATCH_VERSION } from './jev-meeting-match'
 import { isClassifierAuthError } from './value-backfill'
@@ -246,7 +246,7 @@ export async function relinkRecordingsToMeetings(): Promise<RelinkResult> {
     }
   }
 
-  result.linked = autoLinkRecordingsToMeetings()
+  result.linked = await autoLinkRecordingsToMeetingsYielding()
   result.unlinkedAfter = unlinkedCount()
   return result
 }
@@ -361,8 +361,11 @@ export async function matchMeetingsWithJev(
       if (recording.meeting_id && sameMeeting(recording.meeting_id, match.topMeetingId)) return
       if (options.dryRun) {
         result.planned!.push({ recordingId, from: recording.meeting_id ?? null, to: match.topMeetingId, probability: match.topProbability })
-      } else {
-        linkRecordingToMeeting(recordingId, match.topMeetingId, match.topProbability, 'jev_content_match')
+      } else if (!linkRecordingToMeeting(recordingId, match.topMeetingId, match.topProbability, 'jev_content_match')) {
+        // The owner chose while Jev was answering, or the recording is gone:
+        // nothing was written, so nothing is counted as linked.
+        result.skipped++
+        return
       }
       if (recording.meeting_id) result.relinked++
       else result.linked++

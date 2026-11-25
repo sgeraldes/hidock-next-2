@@ -19,7 +19,8 @@
  * Spec: docs/superpowers/specs/2026-09-22-reader-sticky-sections-design.md
  */
 
-import { useEffect, useState } from 'react'
+import { FindText, type ReaderFindState } from './ReaderFind'
+import { useEffect, useRef, useState, useMemo } from 'react'
 import { ChevronDown, Pencil, CircleCheck, CircleDashed } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { BusyIcon } from '@/components/ui/working'
@@ -30,7 +31,13 @@ import { cn } from '@/lib/utils'
 import { EVENT_KIND_COLOR, EVENT_KIND_ICON } from '../utils/timelineEventKinds'
 import type { TimelineEvent, TimelineEventDetail, TimelineEventPatch } from './WaveformPlayer'
 
+/** The text a row shows, which is also the text find searches. */
+export function timelineEventText(event: TimelineEvent, detail?: TimelineEventDetail): string {
+  return detail?.fullText ?? (event.label || `${event.kind ?? 'note'} at ${formatTimestamp(event.timeSec)}`)
+}
+
 interface TimelineEventListProps {
+  find?: ReaderFindState
   events: TimelineEvent[]
   eventDetails?: Record<string, TimelineEventDetail>
   onEventUpdate?: (event: TimelineEvent, patch: TimelineEventPatch) => Promise<boolean>
@@ -38,6 +45,12 @@ interface TimelineEventListProps {
   activeEventId?: string | null
   /** Seek to this event and highlight it in both places. */
   onActivate: (event: TimelineEvent) => void
+  /** The row (and its timeline line and chip) to emphasise; keyed by event id. */
+  highlightedEventId?: string | null
+  /** Pointer or keyboard focus entered (id) or left (null) a row. */
+  onHighlightEvent?: (id: string | null) => void
+  /** Event ids whose time is an estimate, not a recorded timestamp. */
+  estimatedIds?: ReadonlySet<string>
   /** Resets the transient expand/edit state when the reader changes recording. */
   recordingId?: string
   className?: string
@@ -45,10 +58,14 @@ interface TimelineEventListProps {
 
 export function TimelineEventList({
   events,
+  find,
   eventDetails,
   onEventUpdate,
   activeEventId = null,
   onActivate,
+  highlightedEventId = null,
+  onHighlightEvent,
+  estimatedIds,
   recordingId,
   className
 }: TimelineEventListProps) {
@@ -57,10 +74,31 @@ export function TimelineEventList({
   const [editDraft, setEditDraft] = useState('')
   const [editSaving, setEditSaving] = useState(false)
 
+  // One canonical order for the rows, the chips and the timeline lines: time, then id.
+  const ordered = useMemo(
+    () => events.slice().sort((a, b) => a.timeSec - b.timeSec || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
+    [events]
+  )
+
   useEffect(() => {
     setExpandedEventId(null)
     setEditingEventId(null)
   }, [recordingId])
+
+  // A new match expands its row once. The effect keys on the match's id and
+  // reads events through a ref: the parent passes a new events array on every
+  // render and the index can rebuild, and neither may reopen a row the user
+  // has since closed.
+  const currentMomentKey = find?.current?.section === 'moments' ? find.current.key : undefined
+  const currentMatchId = find?.current?.section === 'moments' ? find.current.id : undefined
+  const eventsRef = useRef(events)
+  eventsRef.current = events
+  useEffect(() => {
+    if (!currentMomentKey) return
+    const event = eventsRef.current.find(event => currentMomentKey === `event:${event.id}` || currentMomentKey.startsWith(`event:${event.id}:`))
+    if (event) setExpandedEventId(event.id)
+    // currentMatchId distinguishes two matches in the same document.
+  }, [currentMomentKey, currentMatchId])
 
   if (events.length === 0) {
     return (
@@ -74,12 +112,12 @@ export function TimelineEventList({
     <div className={cn('min-w-0', className)}>
       <TooltipProvider delayDuration={300}>
         <ul className="space-y-0.5" data-testid="timeline-events">
-          {events.map((m) => {
+          {ordered.map((m) => {
             const kind = m.kind ?? 'note'
             const Icon = EVENT_KIND_ICON[kind]
             const isActive = activeEventId === m.id
             const detail = eventDetails?.[m.refId ?? m.id]
-            const displayText = detail?.fullText ?? (m.label || `${kind} at ${formatTimestamp(m.timeSec)}`)
+            const displayText = timelineEventText(m, detail)
             const isExpanded = expandedEventId === m.id
             const isEditing = editingEventId === m.id
             const isCompleted = detail?.status === 'completed'
@@ -90,12 +128,20 @@ export function TimelineEventList({
               detail?.status ? `Status: ${detail.status}` : null
             ].filter(Boolean) as string[]
             return (
-              <li key={m.id}>
+              <li key={m.id} data-event-id={m.id}>
                 <div
                   className={cn(
                     'rounded transition-colors',
-                    isActive ? 'bg-primary/10' : 'hover:bg-muted/60'
+                    isActive ? 'bg-primary/10' : 'hover:bg-muted/60',
+                    highlightedEventId === m.id && 'bg-muted/70 ring-1 ring-primary/40'
                   )}
+                  data-highlighted={highlightedEventId === m.id ? 'true' : undefined}
+                  onPointerEnter={() => onHighlightEvent?.(m.id)}
+                  onPointerLeave={() => onHighlightEvent?.(null)}
+                  onFocus={() => onHighlightEvent?.(m.id)}
+                  onBlur={(e) => {
+                    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) onHighlightEvent?.(null)
+                  }}
                 >
                   <div className="flex items-start gap-2 px-1.5 py-1">
                     <button
@@ -159,7 +205,7 @@ export function TimelineEventList({
                                 isCompleted && 'line-through text-muted-foreground'
                               )}
                             >
-                              {displayText}
+                              <FindText find={find} documentKey={`event:${m.id}`} text={displayText} />
                             </span>
                           </TooltipTrigger>
                           <TooltipContent side="top" align="start" className="max-w-md">
@@ -183,10 +229,10 @@ export function TimelineEventList({
                       type="button"
                       onClick={() => onActivate(m)}
                       aria-pressed={isActive}
-                      title={`Seek to ${formatTimestamp(m.timeSec)}`}
+                      title={estimatedIds?.has(m.id) ? `Seek to ${formatTimestamp(m.timeSec)} (estimated position, not a recorded time)` : `Seek to ${formatTimestamp(m.timeSec)}`}
                       className="shrink-0 rounded px-1 tabular-nums text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/40"
                     >
-                      {formatTimestamp(m.timeSec)}
+                      {estimatedIds?.has(m.id) ? `~${formatTimestamp(m.timeSec)}` : formatTimestamp(m.timeSec)}
                     </button>
                   </div>
                   {isExpanded && !isEditing && (
@@ -194,14 +240,14 @@ export function TimelineEventList({
                       {detail?.context && (
                         <p className="whitespace-pre-wrap text-muted-foreground">
                           <span className="font-medium text-foreground">Context: </span>
-                          {detail.context}
+                          <FindText find={find} documentKey={`event:${m.id}:context`} text={detail.context} />
                         </p>
                       )}
                       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground">
                         <span className="font-medium text-foreground capitalize">{kind}</span>
-                        {detail?.status && <span>Status: <span className="capitalize">{detail.status.replace('_', ' ')}</span></span>}
-                        {detail?.assignee && <span>Assignee: {detail.assignee}</span>}
-                        {detail?.dueDate && <span>Due: {detail.dueDate}</span>}
+                        {detail?.status && <span>Status: <span className="capitalize"><FindText find={find} documentKey={`event:${m.id}:status`} text={detail.status.replace('_', ' ')} /></span></span>}
+                        {detail?.assignee && <span>Assignee: <FindText find={find} documentKey={`event:${m.id}:assignee`} text={detail.assignee} /></span>}
+                        {detail?.dueDate && <span>Due: <FindText find={find} documentKey={`event:${m.id}:dueDate`} text={detail.dueDate} /></span>}
                         {detail?.priority && <span>Priority: <span className="capitalize">{detail.priority}</span></span>}
                         {!detail?.editable && <span className="italic">Read-only item</span>}
                       </div>
