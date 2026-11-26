@@ -85,6 +85,8 @@ const EditableTranscriptSegmentSchema = z
     timingOriginalStart: z.number().finite().min(0).optional(),
     timingOriginalEnd: z.number().finite().min(0).optional(),
     timingReviewed: z.boolean().optional(),
+    // How Fix times placed the line, so its "Times fixed ... from" label survives a text edit.
+    timingFixMethod: z.enum(['model-host-words', 'vad', 'envelope', 'decoded']).optional(),
     // A section transcription's own lines and the lines it replaced, kept so it can be undone.
     sectionRunId: z.string().min(1).max(100).optional(),
     sectionReplacedBy: z.string().min(1).max(100).optional()

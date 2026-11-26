@@ -154,6 +154,26 @@ describe('TranscriptTimingReview: Fix times on the model host', () => {
     await waitFor(() => expect(reviewTiming).toHaveBeenCalledWith({ recordingId: 'rec-28', fingerprint: 'f'.repeat(40), action: 'fix_times', findingId: odd.id }))
   })
 
+  it('keeps the untried host button after the computer-only fix refuses (CodeRabbit review of #198)', async () => {
+    getTiming.mockResolvedValue({ success: true, data: assessment({ findings: [{ ...odd, fix: { ...odd.fix!, hostEligible: true } }], wordAlignment: true }) })
+    reviewTiming.mockResolvedValue({ success: false, error: { message: 'The words and the speech do not match.', details: { lowConfidence: true } } })
+    render(<Harness />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Fix times (from 0:04.9)' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('do not match')
+    expect(screen.queryByRole('button', { name: 'Fix times (from 0:04.9)' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Fix times with Parakeet on the model host' })).toBeInTheDocument()
+  })
+
+  it('hides both fixes once the host path refused too, and offers the section instead', async () => {
+    getTiming.mockResolvedValue({ success: true, data: assessment({ findings: [{ ...odd, fix: { ...odd.fix!, hostEligible: true } }], wordAlignment: true }) })
+    reviewTiming.mockResolvedValue({ success: false, error: { message: 'Heard only 0 of these 3 words.', details: { lowConfidence: true } } })
+    render(<Harness />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Fix times with Parakeet on the model host' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Heard only 0')
+    expect(screen.queryByRole('button', { name: /Fix times/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Transcribe this section again' })).toBeInTheDocument()
+  })
+
   it('keeps the computer-only button when no model host can place words', async () => {
     getTiming.mockResolvedValue({ success: true, data: assessment({ findings: [hostRun], wordAlignment: false }) })
     render(<Harness />)

@@ -6,7 +6,7 @@ Device reference: [model/version gates, recordings and native markers](../../doc
 
 ## 2026-11-26 | Fix times hears the words, on the Gamestation
 
-- When the Model Host can do it, the timing warning offers "Fix times with Parakeet on the model host". It sends only the stretch of audio where the lines belong, with a second on each side, never the transcript. Parakeet on the Gamestation says when each word was heard, and each line is moved to where its own words are. A note under the button says how long the stretch is.
+- When the Model Host can do it, the timing warning offers "Fix times with Parakeet on the model host". It sends only the stretch of audio where the lines belong, with a second on each side, never the transcript. Parakeet on the Gamestation says when each word was heard, and each line is moved to where its own words are. A line whose words were not heard is placed in the gap between its neighbours, by its word count. A note under the button says how long the stretch is.
 - If the host is off, stepped aside for a game, still preparing Parakeet, slower than two minutes, or hears too few of the words, Fix times places the lines from the speech on this computer, as before. The computer-only button stays available next to the host's.
 - Each fixed range says how it was placed: from the words Parakeet heard on the model host, or from the speech stretches (or the loudness) on this computer. Undo works the same for both.
 - Model Host 0.6.0 adds word alignment, offered only where Parakeet passed its spoken test. HiDock sends the update to the Gamestation; nothing is done there by hand.

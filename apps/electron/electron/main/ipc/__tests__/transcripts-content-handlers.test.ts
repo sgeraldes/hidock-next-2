@@ -205,6 +205,15 @@ describe('transcript content editing IPC', () => {
     expect(saved).toEqual(segments)
   })
 
+  it('keeps how Fix times placed a line through a text edit (CodeRabbit review of #198)', async () => {
+    const segments = [{ speaker: 'A', start: 4.9, end: 5.6, text: 'Hola, Manuel', timingOriginalStart: 494.8, timingReviewed: true, timingFixMethod: 'model-host-words' }]
+    db.queryOne.mockReturnValue({ full_text: 'A: Hola Manuel' })
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:updateContent')?.({} as never, { recordingId: 'rec-1', expectedFullText: 'A: Hola Manuel', segments }) as any
+    expect(result).toMatchObject({ success: true })
+    expect(JSON.parse(vi.mocked(db.runNoSave).mock.calls[0][1][1] as string)).toEqual(segments)
+  })
+
   it('refuses a save when another editor changed a time since this one loaded', async () => {
     db.queryOne.mockReturnValue({
       full_text: request.expectedFullText,

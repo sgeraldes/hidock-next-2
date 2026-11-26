@@ -59,10 +59,13 @@ function lineRange(from: number, to: number): string {
 export function TranscriptTimingReview({ recordingId, segments = [], review, onJump, onUpdated }: Props) {
   const { assessment, busy, failure } = review
   const [confirming, setConfirming] = useState<string | null>(null)
-  const [lowConfidence, setLowConfidence] = useState<string | null>(null)
+  // Which fix refused for which finding: the computer-only one, or the model host's (which
+  // falls back to the computer-only one, so its refusal means both). CodeRabbit review of #198.
+  const [localRefused, setLocalRefused] = useState<string | null>(null)
+  const [hostRefused, setHostRefused] = useState<string | null>(null)
   // Chosen by id: a shifted section and a duplicate can start on the same line.
   const [chosenId, setChosenId] = useState<string | null>(null)
-  useEffect(() => { setConfirming(null); setLowConfidence(null) }, [assessment?.fingerprint])
+  useEffect(() => { setConfirming(null); setLocalRefused(null); setHostRefused(null) }, [assessment?.fingerprint])
   const currentRecording = useRef(recordingId)
   useEffect(() => { currentRecording.current = recordingId }, [recordingId])
   const findings = assessment?.findings ?? []
@@ -81,7 +84,7 @@ export function TranscriptTimingReview({ recordingId, segments = [], review, onJ
     choose(findings[(position + direction + findings.length) % findings.length])
   }
 
-  const save = async (call: () => Promise<{ success: true; data: TranscriptContentUpdate } | { success: false; error: { message: string; details?: unknown } }>, onLowConfidence?: string) => {
+  const save = async (call: () => Promise<{ success: true; data: TranscriptContentUpdate } | { success: false; error: { message: string; details?: unknown } }>, onLowConfidence?: { id: string; host: boolean }) => {
     if (busy) return
     const startedFor = recordingId
     review.setBusy(true)
@@ -97,7 +100,10 @@ export function TranscriptTimingReview({ recordingId, segments = [], review, onJ
         return
       }
       const details = result.error.details as { lowConfidence?: boolean } | undefined
-      if (onLowConfidence && details?.lowConfidence) setLowConfidence(onLowConfidence)
+      if (onLowConfidence && details?.lowConfidence) {
+        setLocalRefused(onLowConfidence.id)
+        if (onLowConfidence.host) setHostRefused(onLowConfidence.id)
+      }
       review.setFailure(result.error.message)
     } catch (err) {
       review.setFailure(err instanceof Error ? err.message : 'Could not save the timing review')
@@ -105,7 +111,7 @@ export function TranscriptTimingReview({ recordingId, segments = [], review, onJ
       review.setBusy(false)
     }
   }
-  const act = (request: Omit<Parameters<typeof window.electronAPI.transcripts.reviewTiming>[0], 'recordingId' | 'fingerprint'>, onLowConfidence?: string) => {
+  const act = (request: Omit<Parameters<typeof window.electronAPI.transcripts.reviewTiming>[0], 'recordingId' | 'fingerprint'>, onLowConfidence?: { id: string; host: boolean }) => {
     if (!assessment) return
     void save(() => window.electronAPI.transcripts.reviewTiming({ recordingId, fingerprint: assessment.fingerprint, ...request }), onLowConfidence)
   }
@@ -123,7 +129,7 @@ export function TranscriptTimingReview({ recordingId, segments = [], review, onJ
   // The model host hears the words, so it can place lines the sound alone cannot.
   const hostFix = !!assessment.wordAlignment && current?.kind !== 'duplicate' && current?.fix?.hostEligible === true
   const offerSection = current && current.kind !== 'duplicate' && current.windowStart !== null && current.windowEnd !== null &&
-    (current.fix?.offerSection === true || (lowConfidence === current.id && (current.fix?.displacement ?? Infinity) >= OVERLAP_SECONDS))
+    (current.fix?.offerSection === true || ((localRefused === current.id || hostRefused === current.id) && (current.fix?.displacement ?? Infinity) >= OVERLAP_SECONDS))
   return (
     <div className="mb-3 space-y-2 rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs" data-testid="transcript-timing-review">
       {findings.length > 0 && <>
@@ -156,15 +162,15 @@ export function TranscriptTimingReview({ recordingId, segments = [], review, onJ
               </Button>
               {current.originals && <Button size="sm" variant="ghost" disabled={busy} onClick={() => jump(current.originals![0])}>Go to the first copy</Button>}
             </> : <>
-              {hostFix && lowConfidence !== current.id && (
+              {hostFix && hostRefused !== current.id && (
                 <Button size="sm" variant="outline" disabled={busy}
-                  onClick={() => act({ action: 'fix_times', findingId: current.id, useHost: true }, current.id)}>
+                  onClick={() => act({ action: 'fix_times', findingId: current.id, useHost: true }, { id: current.id, host: true })}>
                   Fix times with Parakeet on the model host
                 </Button>
               )}
-              {current.fix?.ok && current.fix.firstStart !== null && lowConfidence !== current.id && (
+              {current.fix?.ok && current.fix.firstStart !== null && localRefused !== current.id && (
                 <Button size="sm" variant="outline" disabled={busy}
-                  onClick={() => act({ action: 'fix_times', findingId: current.id }, current.id)}>
+                  onClick={() => act({ action: 'fix_times', findingId: current.id }, { id: current.id, host: false })}>
                   Fix times (from {preciseClock(current.fix.firstStart)})
                 </Button>
               )}
@@ -180,7 +186,7 @@ export function TranscriptTimingReview({ recordingId, segments = [], review, onJ
               )}
             </>}
           </div>
-          {hostFix && lowConfidence !== current.id && current.windowStart !== null && current.windowEnd !== null && (
+          {hostFix && hostRefused !== current.id && current.windowStart !== null && current.windowEnd !== null && (
             <p className="text-muted-foreground">
               Fix times with Parakeet sends only this stretch of audio, about {Math.round(current.windowEnd - current.windowStart + 2)} s with a second on each side, to the model host, where Parakeet hears the words; the transcript stays here.
               If the host does not answer, the times come from the speech on this computer.
